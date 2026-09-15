@@ -1,6 +1,5 @@
 """Tests for the repository-local Docker environment entry points."""
 
-import json
 import os
 from pathlib import Path
 import subprocess
@@ -62,15 +61,6 @@ def test_common_options_are_normalized():
     assert data["deps"] == "live"
     assert data["bake_target"] == "finn-runtime"
     assert "pytest" in data["command"]
-
-
-def test_sbx_uses_the_sbx_image_variant():
-    proc = invoke(RUN, "--sbx", "--name", "agent-1", "--runtime", "slash", "--print")
-    assert proc.returncode == 0, proc.stderr
-    data = assignments(proc.stdout)
-    assert data["runner"] == "sbx"
-    assert data["bake_target"] == "finn-sbx-runtime"
-    assert data["name"] == "agent-1"
 
 
 def test_name_selects_a_docker_container_name():
@@ -142,28 +132,10 @@ def test_build_rejects_runtime_only_options():
         assert "Unknown option" in proc.stderr
 
 
-def test_notebook_is_docker_only():
-    proc = invoke(RUN, "--sbx", "--notebook", "--print")
-    assert proc.returncode == 2
-    assert "only with Docker" in proc.stderr
-
-
-def test_remove_is_sbx_only():
-    proc = invoke(RUN, "--remove", "--print")
-    assert proc.returncode == 2
-    assert "only with --sbx" in proc.stderr
-
-
 def test_rebuild_and_no_build_are_mutually_exclusive():
     proc = invoke(RUN, "--rebuild", "--no-build", "--print")
     assert proc.returncode == 2
     assert "mutually exclusive" in proc.stderr
-
-
-def test_legacy_user_entrypoints_remain_thin():
-    for rel in ("docker/finn-env",):
-        lines = (REPO / rel).read_text().splitlines()
-        assert len(lines) <= 30, "%s has regained implementation logic" % rel
 
 
 def test_apptainer_runner_is_not_part_of_the_interface():
@@ -189,60 +161,6 @@ def test_user_documentation_does_not_advertise_retired_launchers():
         body = (REPO / rel).read_text()
         assert "./run-docker.sh" not in body, rel
         assert "--backend" not in body, rel
-
-
-def test_native_sbx_launcher_reuses_and_preserves_state_on_failed_remove(tmp_path):
-    binaries = tmp_path / "bin"
-    binaries.mkdir()
-    fake = binaries / "sbx"
-    fake.write_text("""#!/usr/bin/env python3
-import json, os, sys
-from pathlib import Path
-args = sys.argv[1:]
-root = Path(os.environ["FAKE_SBX_ROOT"])
-with (root / "calls").open("a") as log:
-    log.write(json.dumps(args) + "\\n")
-active = root / "active"
-if args[:2] == ["template", "ls"]:
-    print(json.dumps({"images": [{"repository": "docker.io/xilinx/finn", "tag": "sbx-env-test"}]}))
-elif args == ["ls", "--json"]:
-    print(json.dumps({"sandboxes": [{"name": "native-test"}] if active.exists() else []}))
-elif args[:2] == ["env", "create"]:
-    active.touch()
-elif args[:2] == ["env", "exec"]:
-    assert active.exists()
-elif args[:2] == ["env", "rm"]:
-    if os.environ.get("FAIL_REMOVE"):
-        sys.exit(7)
-    active.unlink()
-else:
-    sys.exit("unexpected sbx call: " + str(args))
-""")
-    fake.chmod(0o755)
-    env = {
-        "PATH": str(binaries) + os.pathsep + os.environ["PATH"],
-        "HOME": str(tmp_path),
-        "XDG_STATE_HOME": str(tmp_path / "state"),
-        "FAKE_SBX_ROOT": str(tmp_path),
-        "FINN_IMAGE_REVISION": "env-test",
-    }
-    command = [str(RUN), "--sbx", "--name", "native-test", "--no-build"]
-    for _ in range(2):
-        proc = subprocess.run(command + ["--", "true"], env=env, capture_output=True, text=True)
-        assert proc.returncode == 0, proc.stderr
-    calls = [json.loads(line) for line in (tmp_path / "calls").read_text().splitlines()]
-    assert sum(call[:2] == ["env", "create"] for call in calls) == 1
-    assert sum(call[:2] == ["env", "exec"] for call in calls) == 2
-    bundle = tmp_path / "state/finn/sbxenv/native-test/finn.sbxenv.yaml"
-    assert bundle.exists()
-    env["FAIL_REMOVE"] = "1"
-    proc = subprocess.run(command + ["--remove"], env=env, capture_output=True, text=True)
-    assert proc.returncode != 0
-    assert bundle.exists()
-    del env["FAIL_REMOVE"]
-    proc = subprocess.run(command + ["--remove"], env=env, capture_output=True, text=True)
-    assert proc.returncode == 0, proc.stderr
-    assert not bundle.exists()
 
 
 def test_shared_image_preparation_reuse_rebuild_and_no_build(tmp_path):
@@ -286,7 +204,8 @@ def test_sif_export_uses_caller_directory_and_prepared_image(tmp_path):
     binaries = tmp_path / "bin"
     binaries.mkdir()
     docker = binaries / "docker"
-    docker.write_text("""#!/usr/bin/env python3
+    docker.write_text(
+        """#!/usr/bin/env python3
 import json, sys
 from pathlib import Path
 a = sys.argv[1:]
@@ -298,15 +217,18 @@ elif a[0] == "save":
     Path(a[a.index("-o")+1]).write_text("archive")
 else:
     sys.exit("unexpected docker call: " + str(a))
-""")
+"""
+    )
     apptainer = binaries / "apptainer"
-    apptainer.write_text("""#!/usr/bin/env python3
+    apptainer.write_text(
+        """#!/usr/bin/env python3
 import sys
 from pathlib import Path
 assert sys.argv[1:3] == ["build", "--force"]
 assert Path(sys.argv[4].removeprefix("docker-archive://")).read_text() == "archive"
 Path(sys.argv[3]).write_text("sif")
-""")
+"""
+    )
     for executable in (docker, apptainer):
         executable.chmod(0o755)
     proc = subprocess.run(
@@ -329,3 +251,60 @@ def test_public_image_reference_matches_bake():
     assert proc.returncode == 0, proc.stderr
     assert proc.stdout.strip().startswith("xilinx/finn:sbx-env-")
     assert proc.stdout.strip().endswith(".xrt")
+
+
+def test_removed_sbx_runtime_options_are_unknown():
+    for option in ("--sbx", "--remove"):
+        proc = invoke(RUN, option, "--print")
+        assert proc.returncode == 2
+        assert "Unknown option: " + option in proc.stderr
+
+
+def test_config_aliases_and_generation_are_removed():
+    for path in ("docker/config", "docker/finn-env"):
+        assert not (REPO / path).exists()
+    for args in (("sbx",), ("inspect", "--sbx")):
+        proc = invoke(REPO / "docker/config.py", *args)
+        assert proc.returncode == 2
+
+
+def test_explicit_sbx_preparation_only_builds_and_imports(tmp_path):
+    script = r"""
+set -euo pipefail
+. "$1/docker/lib.sh"
+finn_bake_target () { echo finn-sbx; }
+finn_prepare_image () {
+    [ "$*" = 'finn-sbx build' ]
+    FINN_IMAGE=xilinx/finn:test
+    printf 'build\n' >> "$CALLS"
+}
+docker () {
+    [ "$1" = save ]
+    printf archive > "$3"
+    printf 'save\n' >> "$CALLS"
+}
+sbx () {
+    [ "$1 $2" = 'template load' ]
+    [ "$(cat "$3")" = archive ]
+    printf 'load\n' >> "$CALLS"
+}
+finn_prepare_sbx
+finn_prepare_sbx
+"""
+    calls = tmp_path / "calls"
+    proc = subprocess.run(
+        ["bash", "-c", script, "test", str(REPO)],
+        capture_output=True,
+        text=True,
+        env={
+            "PATH": os.environ["PATH"],
+            "CALLS": str(calls),
+            "FINN_RUNTIMES": "",
+            "FINN_IMAGE_REVISION": "env-test",
+            "FINN_SOURCE_DESCRIBE": "test",
+            "FINN_CONTAINER_NO_BUILD": "1",
+            "FINN_XILINX_PATH": "/invalid/must-not-discover",
+        },
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert calls.read_text() == "build\nsave\nload\n" * 2

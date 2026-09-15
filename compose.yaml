@@ -3,7 +3,7 @@
 # Host-specific identity, workspace, build directory, toolchain and licence
 # mounts are rendered at launch by:
 #
-#   ./docker/config compose --tier dev --service dev
+#   ./docker/config.py compose --tier dev --service dev
 #
 # `docker/run` does this automatically. The Dev Container has a fixed-path
 # dev-only overlay and relies on the Dev Containers uid mapper. This separation

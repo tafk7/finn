@@ -32,7 +32,7 @@
 # in a shell, unquoted, at the start of a word -- never from inside a variable,
 # and never in a Docker Compose env file. `FINN_HOST_BUILD_DIR=~/builds`
 # therefore produced a bind mount into a directory called `~`.
-# docker/finn-env now expands every path it emits; see hostpath() there.
+# docker/config.py now expands every path it emits; see hostpath() there.
 *~
 *.py[cod]
 *.so

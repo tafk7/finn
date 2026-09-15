@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run FINN's Docker-built environment through Docker or sbx.
+# Run FINN's Docker-built environment through Compose.
 
 set -euo pipefail
 
@@ -78,14 +78,14 @@ run_docker () {
         RUN_OPTS+=(-it)
     fi
 
-    ./docker/config inspect --tier "$COMPOSE_TIER" --workspace-policy mirror \
-        --format sh > "$RUN_ENV" || { recho "docker/config inspect failed"; exit 1; }
+    ./docker/config.py inspect --tier "$COMPOSE_TIER" --workspace-policy mirror \
+        --format sh > "$RUN_ENV" || { recho "docker/config.py inspect failed"; exit 1; }
     printf "JUPYTER_PORT='%s'\n" "$JUPYTER_PORT" >> "$RUN_ENV"
     printf "NETRON_PORT='%s'\n" "$NETRON_PORT" >> "$RUN_ENV"
 
-    ./docker/config compose --tier "$COMPOSE_TIER" --workspace-policy mirror \
+    ./docker/config.py compose --tier "$COMPOSE_TIER" --workspace-policy mirror \
         --service "$SERVICE" > "$COMPOSE_OVERRIDE" \
-        || { recho "docker/config compose failed"; exit 1; }
+        || { recho "docker/config.py compose failed"; exit 1; }
 
     finn_prepare_image "$(finn_bake_target "$FINN_RUNTIMES")" || exit 1
 
@@ -99,93 +99,27 @@ run_docker () {
         "${RUN_OPTS[@]}" "$SERVICE" "${CMD[@]}"
 }
 
-run_sbx () {
-    : "${FINN_SBX_AGENT:=shell}"
-    # One sandbox per (tier, checkout). Lowercased; sbx requires it.
-    FINN_SBX_NAME="${FINN_SBX_NAME:-finn-$TIER-$(basename "$REPO")}"
-    FINN_SBX_NAME=$(printf '%s' "$FINN_SBX_NAME" | tr '[:upper:]' '[:lower:]')
-
-    # Outside every mounted workspace: an environment file the agent can edit is a
-    # file the agent can use to widen its own next sandbox.
-    STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/finn/sbxenv/$FINN_SBX_NAME"
-
-    if [ "$REMOVE" = 1 ]; then
-        if [ -f "$STATE_DIR/finn.sbxenv.yaml" ]; then
-            sbx env rm "$STATE_DIR/finn.sbxenv.yaml" --force
-        else
-            sbx rm --force "$FINN_SBX_NAME"
-        fi
-        rm -rf "$STATE_DIR"
-        gecho "Removed $FINN_SBX_NAME"
-        exit 0
-    fi
-
-    finn_prepare_sbx
-    export FINN_SBX_NAME FINN_SBX_TEMPLATE FINN_SBX_AGENT FINN_DEPS
-
-    umask 077
-    mkdir -p "$STATE_DIR"
-    rm -f "$STATE_DIR/base.sbxenv.yaml" "$STATE_DIR/fpga.sbxenv.yaml" "$STATE_DIR/host.sbxenv.yaml"
-    ENV_FILES=(finn.sbxenv.yaml)
-    "$DOCKER_DIR/config" sbx --tier "$TIER" --output-dir "$STATE_DIR" >/dev/null
-    gecho "Native environment: $STATE_DIR/finn.sbxenv.yaml"
-    if [ "$TIER" = "dev" ]; then
-        gecho "dev tier: no Xilinx mount, no licence, no FINN workload egress grants"
-    fi
-
-    cd "$STATE_DIR"
-
-    # --------------------------------------------------------------------------
-    # 3. Native lifecycle
-    # --------------------------------------------------------------------------
-
-    SANDBOXES=$(sbx ls --json)
-    EXISTS=$(python3 -c '
-import json, sys
-print(int(any(s["name"] == sys.argv[1] for s in json.load(sys.stdin)["sandboxes"])))
-' "$FINN_SBX_NAME" <<< "$SANDBOXES")
-    if [ "${FINN_CONTAINER_REBUILD:-0}" = 1 ] && [ "$EXISTS" = 1 ]; then
-        gecho "Removing $FINN_SBX_NAME so the rebuilt template and mounts take effect"
-        sbx env rm finn.sbxenv.yaml --force
-        EXISTS=0
-    fi
-
-    # Interactive run creates or attaches natively. Exec requires a sandbox first.
-    # Remove/recreate when changing image, mounts, or kit permissions.
-    if [ "$#" -gt 0 ]; then
-        if [ "$EXISTS" = 0 ]; then
-            sbx env create "${ENV_FILES[@]}"
-        fi
-        exec sbx env exec "${ENV_FILES[@]}" -- "$@"
-    fi
-    exec sbx env run "${ENV_FILES[@]}"
-}
-
 usage () {
     cat <<'EOF'
 Usage: docker/run [OPTIONS] [-- COMMAND...]
 
 Options:
-  --sbx              run in an sbx sandbox instead of Docker
-  -n, --name NAME    set the Docker container or sbx sandbox name
+  -n, --name NAME    set the Docker container name
   --fpga             grant access to the configured Xilinx toolchain
   --runtime NAME     add image content such as xrt; repeatable
   --deps MODE        frozen (default), live, or auto
   --notebook         start the Docker notebook service
-  --remove           remove the selected sbx sandbox
   --rebuild          rebuild image layers without cache
   --no-build         require an existing prepared artifact
   --print            print the resolved request without running it
   -h, --help         show this help
 
-With no command, Docker opens a shell or sbx attaches to the sandbox.
+With no command, Docker opens a shell.
 EOF
 }
 
-SBX=0
 FPGA=0
 NOTEBOOK=0
-REMOVE=0
 PRINT_ONLY=0
 INSTANCE_NAME=""
 NAME_EXPLICIT=0
@@ -194,7 +128,6 @@ DEPS="${FINN_DEPS:-frozen}"
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
-        --sbx) SBX=1; shift ;;
         -n|--name)
             [ "$#" -ge 2 ] || { echo "$1 needs a value" >&2; exit 2; }
             INSTANCE_NAME=$2; NAME_EXPLICIT=1; shift 2 ;;
@@ -210,7 +143,6 @@ while [ "$#" -gt 0 ]; do
             DEPS=$2; shift 2 ;;
         --deps=*) DEPS=${1#*=}; shift ;;
         --notebook) NOTEBOOK=1; shift ;;
-        --remove) REMOVE=1; shift ;;
         --rebuild) export FINN_CONTAINER_REBUILD=1; shift ;;
         --no-build) export FINN_CONTAINER_NO_BUILD=1; shift ;;
         --print) PRINT_ONLY=1; shift ;;
@@ -225,18 +157,6 @@ case "$DEPS" in
     frozen|live|auto) ;;
     *) echo "Unknown dependency mode: $DEPS" >&2; exit 2 ;;
 esac
-if [ "$NOTEBOOK" = 1 ] && [ "$SBX" = 1 ]; then
-    echo "--notebook is available only with Docker" >&2
-    exit 2
-fi
-if [ "$REMOVE" = 1 ] && [ "$SBX" != 1 ]; then
-    echo "--remove applies only with --sbx" >&2
-    exit 2
-fi
-if [ "$REMOVE" = 1 ] && { [ "$NOTEBOOK" = 1 ] || [ "$#" -gt 0 ]; }; then
-    echo "--remove cannot be combined with a notebook or command" >&2
-    exit 2
-fi
 if [ "$NOTEBOOK" = 1 ] && [ "$#" -gt 0 ]; then
     echo "--notebook does not accept a command" >&2
     exit 2
@@ -251,33 +171,17 @@ finn_set_provenance
 TIER=dev
 [ "$FPGA" = 1 ] && TIER=build
 if [ "$NAME_EXPLICIT" != 1 ]; then
-    if [ "$SBX" = 1 ]; then
-        INSTANCE_NAME="${FINN_SBX_NAME:-}"
-    else
-        INSTANCE_NAME="${FINN_CONTAINER_NAME:-}"
-    fi
+    INSTANCE_NAME="${FINN_CONTAINER_NAME:-}"
 fi
 
 export FINN_RUNTIMES="$RUNTIMES"
 export FINN_DEPS="$DEPS"
 export FINN_DOCKER_TARGET="$TIER"
-if [ "$SBX" = 1 ]; then
-    [ -z "$INSTANCE_NAME" ] || export FINN_SBX_NAME="$INSTANCE_NAME"
-else
-    [ -z "$INSTANCE_NAME" ] || export FINN_CONTAINER_NAME="$INSTANCE_NAME"
-fi
+[ -z "$INSTANCE_NAME" ] || export FINN_CONTAINER_NAME="$INSTANCE_NAME"
 
 if [ "$PRINT_ONLY" = 1 ]; then
-    runner=docker
-    variant=""
-    if [ "$SBX" = 1 ]; then
-        runner=sbx
-        variant=sbx
-    fi
-    target=$(finn_bake_target "$RUNTIMES" "$variant")
-    operation=run
-    [ "$REMOVE" = 1 ] && operation=remove
-    printf 'runner=%s\n' "$runner"
+    target=$(finn_bake_target "$RUNTIMES")
+    printf 'runner=docker\n'
     printf 'tier=%s\n' "$TIER"
     printf 'runtimes=%s\n' "$RUNTIMES"
     printf 'deps=%s\n' "$DEPS"
@@ -286,7 +190,7 @@ if [ "$PRINT_ONLY" = 1 ]; then
     printf 'source_revision=%s\n' "$FINN_SOURCE_REVISION"
     printf 'source_describe=%s\n' "$FINN_SOURCE_DESCRIBE"
     printf 'source_dirty=%s\n' "$FINN_SOURCE_DIRTY"
-    printf 'operation=%s\n' "$operation"
+    printf 'operation=run\n'
     printf 'rebuild=%s\n' "${FINN_CONTAINER_REBUILD:-0}"
     printf 'no_build=%s\n' "${FINN_CONTAINER_NO_BUILD:-0}"
     printf 'name=%s\n' "$INSTANCE_NAME"
@@ -297,8 +201,8 @@ if [ "$PRINT_ONLY" = 1 ]; then
 fi
 
 cd "$REPO"
-if [ "$REMOVE" != 1 ] && [ "${FINN_SKIP_DEP_REPOS:-0}" = 0 ] \
+if [ "${FINN_SKIP_DEP_REPOS:-0}" = 0 ] \
    && { [ "$DEPS" = live ] || [ "${FINN_FETCH_DEPS:-0}" = 1 ]; }; then
     if [ "$TIER" = dev ]; then ./fetch-repos.sh python; else ./fetch-repos.sh; fi
 fi
-if [ "$SBX" = 1 ]; then run_sbx "$@"; else run_docker "$@"; fi
+run_docker "$@"

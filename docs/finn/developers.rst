@@ -64,16 +64,17 @@ The container architecture has a deliberately small operational model:
 * ``docker/Dockerfile.finn`` defines one dependency image, optional accelerator
   runtime packages, and an sbx contract layer.
 * ``docker-bake.hcl`` owns image targets, labels and complete image tags.
-* ``docker/config.py`` owns host discovery. Its CLI wrapper is
-  ``docker/config``.
-* ``compose.yaml`` contains only static service behavior. ``docker/config compose``
+* ``docker/config.py`` is the executable Python host resolver for Docker/native installation.
+* ``compose.yaml`` contains only static service behavior. ``docker/config.py compose``
   renders the host-specific mounts, uid/gid and environment at launch.
-* ``docker/run`` runs the environment with Docker by default or sbx when
-  ``--sbx`` is selected.
+* ``docker/run`` runs the environment with Docker Compose.
 * ``docker/build`` prepares Docker images and sbx templates, or exports a
   Docker-built image as an Apptainer SIF.
-* ``docker/config`` and ``docker/finn-env`` retain the current Python resolver
-  interface; reconsidering that interface is deferred.
+* ``docker/sbx`` supplies copyable native examples. Users and sites own instantiated
+  configuration, agent selection, credentials, mounts and network policy. Native
+  sbx owns composition, approval, execution and lifecycle. FINN carries no Cardinal contract.
+* Host discovery retains its Python implementation and shell/Compose behavior;
+  configuration aliases and sbx generation have been removed.
 * CI prepares shared images explicitly before calling ``docker/run``.
 
 ``dev`` and ``build`` are grant tiers, not image tiers. ``build`` adds the
@@ -147,20 +148,21 @@ tier decides whether a Xilinx toolchain is available to consume it.
 Launch sequence
 ---------------
 
-1. ``docker/run`` normalizes the Docker/sbx choice, FPGA grants, runtime set,
+1. ``docker/run`` normalizes Docker FPGA access, runtime set,
    dependency mode and command.
-2. ``docker/build`` or the selected runner prepares the required artifact.
+2. ``docker/build`` or the Docker runner prepares the required artifact.
    Both use ``docker/lib.sh`` image preparation: ordinary runs reuse the selected
    local image, explicit builds refresh it, and ``--rebuild`` disables build cache.
    Bake builds the underlying image. ``deps.env`` supplies repository pins;
    the shared ``docker/pip-torch.txt and docker/requirements-dev.txt`` files supply Python pins.
-3. ``docker/config`` resolves the workspace, build directory, toolchain, platform,
+3. ``docker/config.py`` resolves the workspace, build directory, toolchain, platform,
    licence, environment and mounts. It stays on the host; it is not installed
    in the image or included in the image-content hash.
-4. ``docker/config compose`` renders an ephemeral Compose override. The static
+4. ``docker/config.py compose`` renders an ephemeral Compose override. The static
    Compose file does not rediscover host state.
-5. Docker runs the image through Compose, while sbx imports its specialized
-   image variant. ``docker/build --export-sif`` is a separate artifact export,
+5. Docker runs the image through Compose. ``docker/build --sbx`` imports its
+   specialized template; users execute copied examples through native sbx.
+   ``docker/build --export-sif`` is a separate artifact export,
    not another runtime backend. The entrypoint handles only runtime state. Python source resolution is
    installed in site-packages, toolchain application is shared by the
    entrypoint/BASH_ENV/tool shims, and ``finn_xsi`` builds on demand.

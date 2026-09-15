@@ -20,7 +20,7 @@
 #
 # There is no profile axis and no tier axis. The profile axis had one member and
 # threaded a variable through ten files to select from it. The tier axis encoded
-# "does this user have Vivado", which is a host fact that docker/config
+# "does this user have Vivado", which is a host fact that docker/config.py
 # resolves at launch -- see the Dockerfile header.
 #
 # Use `.` and not `+` to join runtime names. A Docker tag accepts

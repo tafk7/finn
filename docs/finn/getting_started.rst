@@ -50,8 +50,8 @@ FINN has two setup paths:
     - ``./docker/run``
     - You need a portable dependency environment, agent isolation, or an HPC image
 
-The Docker-built image executes through Docker Compose by default. The
-``--sbx`` option imports it into an agent sandbox. ``docker/build`` can also
+``docker/run`` executes through Docker Compose. Prepare a native sandbox template
+with ``docker/build --sbx``, then use copied native examples. ``docker/build`` can also
 export the image as a SIF for standard Apptainer or Singularity execution.
 
 For the native path, continue with ``./setup-local.sh`` and
@@ -134,12 +134,12 @@ workspace, build directory and capability mounts:
 
   docker compose \
     -f compose.yaml \
-    -f <(./docker/config compose --tier dev --service dev) \
+    -f <(./docker/config.py compose --tier dev --service dev) \
     run --rm dev
 
 The override is generated at launch and should not be committed. The ``dev``
 tier adds no toolchain, licence or secret mounts. Docker networking remains
-open; use ``./docker/run --sbx`` with a verified restrictive native policy
+open; use native sbx with a verified restrictive native policy
 when egress must be denied.
 
 If Docker is new to you, there are good `online resources <https://docker-curriculum.com/>`_.
@@ -285,40 +285,53 @@ machine/organization policy and the selected agent and kits.
 
 .. code-block:: bash
 
-  ./docker/run --sbx                         # repository only
-  ./docker/run --sbx --fpga                  # toolchain and licence
-  ./docker/run --sbx --name agent-1          # a distinct parallel sandbox
-  ./docker/run --sbx -- pytest -m util       # one command
-  ./docker/run --sbx --fpga --remove         # remove the sandbox
+  ./docker/build --sbx
+  TEMPLATE=$(./docker/build --sbx --print-tag)
+  CHECKOUT=$PWD
+  ENV_DIR=$(mktemp -d "$HOME/finn-native.XXXXXX")
+  cp docker/sbx/sbxenv.yaml docker/sbx/fpga.sbxenv.yaml "$ENV_DIR/"
+  cp -R docker/sbx/site-license "$ENV_DIR/"
+  FILES=("$ENV_DIR/sbxenv.yaml")
+  ARGS=(--env-arg name=finn-dev \
+    --env-arg workspace="$CHECKOUT" --env-arg template="$TEMPLATE")
+  sbx env plan "${ARGS[@]}" "${FILES[@]}"
+  sbx env create "${ARGS[@]}" "${FILES[@]}"
+  sbx env exec "${ARGS[@]}" "${FILES[@]}" -- python -c 'import finn'
+  sbx env run "${ARGS[@]}" "${FILES[@]}"
+  sbx env rm "${ARGS[@]}" "${FILES[@]}" --force
 
-Use `sbx <https://docs.docker.com/ai/sandboxes/>`_ 0.42.1 or later and sign in.
-Version 0.42.1 is the integration baseline; native environments and kits remain
-experimental. Remove and recreate a sandbox after changing images, workspaces,
-mounts or kit permissions.
+The base defaults to shell. Add ``--env-arg agent=claude`` before creating a new
+sandbox to select a coding agent. The generic FINN template does not contain
+coding-agent executables: after ``create``, install your client via native
+``sbx env exec`` (see ``docker/sbx/README.md``), or use a site-prepared template.
+For an agent with FPGA tools, also pass the
+copied ``fpga.sbxenv.yaml`` and explicit ``toolchain``, ``vivado``, ``vitis``,
+``hls``, ``license_host`` and ``license_port`` arguments. See
+``docker/sbx/README.md`` for a complete agent-plus-FPGA command and optional
+site-owned network mixin covering the licence-manager and pinned vendor-daemon ports.
+Licence-file and external platform mounts are deliberate site additions.
 
-The ``dev`` tier in a sandbox has no toolchain, no licence and no network
-grant for the FINN workload. It does not inherit build-tier host configuration.
+Keep copied files and kits together outside every mounted workspace. Lists
+concatenate under native composition; use the same files and arguments for every
+lifecycle command. Keep personal agent settings and credentials in user-owned
+native configuration. FINN supplies images and examples; users and sites own
+instantiated environments, while native sbx owns composition, approval and lifecycle.
+
+The examples are validated with sbx client/server 0.42.1. Native environments and
+kits remain experimental. Remove and recreate after changing templates, mounts
+or kit permissions. The base has no toolchain, no licence and no network
+grant for the FINN workload. It does not inherit Docker host discovery settings.
 This does not override existing machine policy or the selected agent's grants.
 sbx may separately use package-repository access while provisioning the microVM.
 
-The command builds and imports the template, then uses native ``sbx env``.
-``docker/config sbx --tier dev --output-dir /path/outside/workspace`` writes a
-native environment and local kits. The build tier additionally includes resolved
-toolchain/platform/licence mounts and a licence-network kit. The launcher prints
-the environment path; it can also be used directly with ``sbx env plan``,
-``create``, ``exec``, ``run`` and ``rm``. See ``docker/README.md`` for the complete
-standalone workflow. No external workspace controller is needed.
-
-The sbx template follows an ``env-<hash>`` of Docker image inputs, not the Git
-revision of the mounted FINN checkout. Committing source therefore reuses the
-same template. ``FINN_SOURCE_REVISION``, ``FINN_SOURCE_DESCRIBE`` and
-``FINN_SOURCE_DIRTY`` record the mounted source separately inside each run.
+Existing generated environment directories remain usable directly with native
+``sbx env`` and are not deleted or migrated. See ``docker/README.md`` for migration.
+Image identity depends on declared image inputs, independently of mounted source.
 
 .. note::
-   Node-locked licences are not verified in a sandbox. FLEXlm connects a
-   node-locked licence to an Ethernet host ID, and a sandbox does not show the
-   host ID of the machine. Floating licences (``port@host``) require site-specific validation, including
-   an actual tool licence checkout.
+   Floating licences (``port@host``) require site-specific validation with an actual
+   tool licence checkout. Policy readback and ``lmstat`` alone are insufficient.
+   Node-locked licences may depend on a host ID unavailable in the sandbox.
 
 Native installation details
 ===========================
@@ -530,7 +543,7 @@ Set the normal FLEXlm variable before launching FINN:
   # or
   export XILINXD_LICENSE_FILE=/path/to/licenses/Xilinx.lic
 
-For a licence file, ``docker/config`` mounts its containing directory read-only. For
+For a licence file, ``docker/config.py`` mounts its containing directory read-only. For
 a floating server, sbx grants the server network access; ordinary Docker uses
 its normal open outbound network.
 

@@ -27,7 +27,7 @@
 # checked two of seven sites. This file is the fix that test was pointing at.
 #
 # NOT A HOST-FACT RESOLVER. Nothing here reads the machine. Host facts stay in
-# docker/config; the toolchain is applied by docker/finn-toolchain.sh. This
+# docker/config.py; the toolchain is applied by docker/finn-toolchain.sh. This
 # file knows only about the build matrix, which is docker-bake.hcl's subject.
 
 # --------------------------------------------------------------------------
@@ -207,46 +207,21 @@ finn_prepare_image () {
     finn_bake_build "$target" "${build_args[@]}"
 }
 
-# Ensure/import the sbx variant; sets FINN_SBX_TEMPLATE.
+# Build/import the sbx variant for docker/build only; sets FINN_SBX_TEMPLATE.
 finn_prepare_sbx () {
-    local mode="${1:-ensure}"
     BAKE_TARGET=$(finn_bake_target "$FINN_RUNTIMES" sbx)
-    FINN_SBX_TEMPLATE=$(finn_bake_tag "$BAKE_TARGET")
-    [ -n "$FINN_SBX_TEMPLATE" ] || { recho "could not resolve a tag for $BAKE_TARGET"; exit 1; }
+    finn_prepare_image "$BAKE_TARGET" build
+    FINN_SBX_TEMPLATE="$FINN_IMAGE"
     gecho "Environment $FINN_IMAGE_REVISION; source $FINN_SOURCE_DESCRIBE"
 
-    # sbx does not resolve the Docker Hub domain implicitly, so its store lists the
-    # template as docker.io/<tag>. Skipping the load when it is already there is
-    # what makes repeat runs fast; only a new tag pays the export.
-    TEMPLATES=$(sbx template ls --json)
-    TEMPLATE_LOADED=$(python3 -c '
-import json, sys
-expected = sys.argv[1]
-print(int(any(i["repository"] + ":" + i["tag"] == expected
-              for i in json.load(sys.stdin)["images"])))
-' "docker.io/$FINN_SBX_TEMPLATE" <<< "$TEMPLATES")
-
-    if [ "${FINN_CONTAINER_NO_BUILD:-0}" = 1 ]; then
-        [ "$TEMPLATE_LOADED" = 1 ] || {
-            recho "No prepared sbx template for $FINN_SBX_TEMPLATE"
-            recho "Run ./docker/build --sbx first, or omit --no-build."
-            exit 1
-        }
-    elif [ "$TEMPLATE_LOADED" != 1 ] || [ "${FINN_CONTAINER_REBUILD:-0}" = 1 ] || [ "$mode" = build ]; then
-        PREPARE_MODE=ensure
-        [ "$mode" != build ] || PREPARE_MODE=build
-        finn_prepare_image "$BAKE_TARGET" "$PREPARE_MODE"
-        if [ "$TEMPLATE_LOADED" = 1 ]; then
-            sbx template rm "docker.io/$FINN_SBX_TEMPLATE" >/dev/null
-        fi
-        gecho "Loading $FINN_SBX_TEMPLATE into the sbx image store (first time is slow)"
-        TAR=$(mktemp -t finn-sbx-XXXXXX.tar)
-        trap 'rm -f "$TAR"' EXIT
-        docker save -o "$TAR" "$FINN_SBX_TEMPLATE" \
-            || { recho "docker save failed"; exit 1; }
-        sbx template load "$TAR" || { recho "sbx template load failed"; exit 1; }
-        rm -f "$TAR"; trap - EXIT
-    else
-        gecho "Template already loaded: $FINN_SBX_TEMPLATE"
-    fi
+    # Loading an existing image is idempotent. Let the native image store update
+    # the selected tag without deleting templates that may have other consumers.
+    local TAR
+    TAR=$(mktemp -t finn-sbx-XXXXXX.tar)
+    trap 'rm -f "$TAR"' EXIT
+    docker save -o "$TAR" "$FINN_SBX_TEMPLATE" \
+        || { recho "docker save failed"; exit 1; }
+    sbx template load "$TAR" || { recho "sbx template load failed"; exit 1; }
+    rm -f "$TAR"
+    trap - EXIT
 }

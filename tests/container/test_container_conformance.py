@@ -13,13 +13,14 @@ import shutil
 import subprocess
 import sys
 import time
+import uuid
 
 import pytest
 
 
 REPO = Path(__file__).resolve().parents[2]
 DOCKER_DIR = REPO / "docker"
-FINN_ENV = DOCKER_DIR / "config"
+FINN_ENV = DOCKER_DIR / "config.py"
 sys.path.insert(0, str(DOCKER_DIR))
 import config as finn_env  # noqa: E402
 
@@ -89,15 +90,11 @@ def ensure_image(target="finn", runtimes=""):
     return tag
 
 
-def resolved(tier, backend="docker", policy="auto", env=None):
+def resolved(tier, policy="auto", env=None):
     child_env = dict(os.environ)
     if env:
         child_env.update(env)
     command = [sys.executable, FINN_ENV, "inspect", "--tier", tier]
-    if backend == "sbx":
-        command.append("--sbx")
-    else:
-        assert backend == "docker"
     command.extend(["--workspace-policy", policy])
     proc = run(command, env=child_env)
     if proc.returncode:
@@ -256,106 +253,185 @@ def test_04_bare_docker_exec(docker_daemon):
         run(["docker", "rm", "-f", name], timeout=60)
 
 
-def test_05_bare_sbx_exec(docker_daemon):
-    """A stock sbx exec works after the wrapper provisions the sandbox."""
+@pytest.mark.parametrize("agent,fpga", [("shell", False), ("claude", False), ("claude", True)])
+def test_05_copied_native_examples(docker_daemon, tmp_path, agent, fpga):
+    """Native composition/lifecycle works outside an isolated mounted checkout.
+
+    Agent installation/selection is exercised without supplying credentials or
+    asking a model to change files. This does not verify authenticated inference.
+    Synthetic FPGA paths and policy readback do not prove licence checkout.
+    """
     require_command("sbx")
-    name = "finn-conformance"
-    child_env = dict(os.environ)
-    command = [REPO / "docker/run", "--sbx", "--name", name]
-    if os.environ.get("FINN_XILINX_PATH"):
-        command.append("--fpga")
-    command.extend(["--", "true"])
+    name = "finn-conformance-" + uuid.uuid4().hex[:12]
+    checkout = tmp_path / "checkout"
+    run(["git", "clone", "--shared", REPO, checkout], check=True)
+    config = tmp_path / "config"
+    shutil.copytree(REPO / "docker/sbx", config)
+    template = os.environ.get("FINN_TEST_SBX_TEMPLATE")
+    if not template:
+        run([REPO / "docker/build", "--sbx"], timeout=3600, check=True)
+        template = run([REPO / "docker/build", "--sbx", "--print-tag"], check=True).stdout.strip()
+    files = [config / "sbxenv.yaml"]
+    args = [
+        "--env-arg",
+        "name=" + name,
+        "--env-arg",
+        "workspace=" + str(checkout),
+        "--env-arg",
+        "template=" + template,
+        "--env-arg",
+        "agent=" + agent,
+    ]
+    if fpga:
+        toolchain = tmp_path / "Xilinx"
+        for tool in ("Vivado", "Vitis", "Vitis_HLS"):
+            (toolchain / tool / "2022.2").mkdir(parents=True)
+        # This is a test-owned site overlay, not a FINN-generated environment.
+        site = config / "license.sbxenv.yaml"
+        site.write_text(
+            json.dumps(
+                {
+                    "args": {"vendor_port": {"required": True}},
+                    "kits": [
+                        {
+                            "source": "./site-license",
+                            "args": {
+                                "host": "${{ env.args.license_host }}",
+                                "manager_port": "${{ env.args.license_port }}",
+                                "vendor_port": "${{ env.args.vendor_port }}",
+                            },
+                        }
+                    ],
+                }
+            )
+        )
+        files.extend([config / "fpga.sbxenv.yaml", site])
+        for key, value in {
+            "toolchain": toolchain,
+            "vivado": toolchain / "Vivado/2022.2",
+            "vitis": toolchain / "Vitis/2022.2",
+            "hls": toolchain / "Vitis_HLS/2022.2",
+            "license_host": "license.example.com",
+            "license_port": "2100",
+            "vendor_port": "2101",
+        }.items():
+            args.extend(["--env-arg", "%s=%s" % (key, value)])
+    args.extend(files)  # env exec requires flags before positional file paths.
+    plan = run(["sbx", "env", "plan", *args], check=True)
+    assert "agent: " + agent in plan.stdout
+    if not fpga:
+        assert "additionalWorkspaces:" not in plan.stdout
+        assert "site-license" not in plan.stdout
+        assert "XILINXD_LICENSE_FILE" not in plan.stdout
     try:
+        run(["sbx", "env", "create", *args, "--auto-approve"], timeout=1200, check=True)
+        run(["sbx", "env", "exec", *args, "--", "python", "-c", "import finn"], check=True)
         run(
-            ["timeout", "2400", *command],
-            env=child_env,
-            timeout=2450,
+            [
+                "sbx",
+                "env",
+                "exec",
+                *args,
+                "--",
+                "sh",
+                "-c",
+                'test "$FINN_BUILD_DIR" = /tmp/finn_build && echo reused > native-marker',
+            ],
             check=True,
         )
-        run(
-            ["timeout", "180", "sbx", "exec", name, "python", "-c", "import finn"],
-            timeout=200,
-            check=True,
-        )
-        if "--fpga" in command:
+        if agent == "claude":
+            # User-owned agent setup: FINN's generic template has no agent binary.
+            # Run the vendor installer only in this test-owned sandbox.
             run(
-                ["timeout", "300", "sbx", "exec", name, "vivado", "-version"],
-                timeout=320,
+                [
+                    "sbx",
+                    "env",
+                    "exec",
+                    *args,
+                    "--",
+                    "bash",
+                    "-o",
+                    "pipefail",
+                    "-c",
+                    "wget -qO- https://claude.ai/install.sh | bash -s -- stable",
+                ],
+                timeout=600,
                 check=True,
             )
-    finally:
-        if os.environ.get("KEEP_SANDBOX") != "1":
             run(
-                [REPO / "docker/run", "--sbx", "--name", name, "--remove"],
-                timeout=120,
+                [
+                    "sbx",
+                    "env",
+                    "exec",
+                    *args,
+                    "--",
+                    "sh",
+                    "-c",
+                    'sudo ln -sf "$HOME/.local/bin/claude" /usr/local/bin/claude',
+                ],
+                check=True,
             )
-
-
-def test_05b_sbx_template_identity_ignores_source_commit(docker_daemon, tmp_path):
-    """An empty mounted-source commit reuses the prepared sbx template."""
-    require_command("sbx")
-    if run(["git", "status", "--porcelain"], timeout=30).stdout.strip():
-        pytest.skip("source-identity worktree check requires a committed tree")
-    name = "finn-conformance-source-identity"
-    checkout = tmp_path / "finn"
-    child_env = dict(os.environ)
-    for variable in (
-        "FINN_IMAGE_REVISION",
-        "FINN_SOURCE_REVISION",
-        "FINN_SOURCE_DESCRIBE",
-        "FINN_SOURCE_DIRTY",
-    ):
-        child_env.pop(variable, None)
-
-    def printed(repo):
-        proc = run(
-            [repo / "docker/run", "--sbx", "--name", name, "--no-build", "--print"],
-            cwd=repo,
-            env=child_env,
-            timeout=120,
-            check=True,
-        )
-        return dict(line.split("=", 1) for line in proc.stdout.splitlines())
-
-    try:
-        # Prepare/import the template, then remove only the sandbox. The sbx
-        # template store is deliberately retained for the source-only retry.
+        run(["sbx", "env", "run", *args, "--auto-approve", "--detached"], check=True)
         run(
-            [REPO / "docker/run", "--sbx", "--name", name, "--", "true"],
-            env=child_env,
-            timeout=2400,
+            ["sbx", "env", "exec", *args, "--", "test", "-f", checkout / "native-marker"],
             check=True,
         )
-        before = printed(REPO)
-        run([REPO / "docker/run", "--sbx", "--name", name, "--remove"], timeout=120)
-
-        run(["git", "worktree", "add", "--detach", checkout, "HEAD"], timeout=120, check=True)
-        run(["git", "config", "user.name", "FINN Conformance"], cwd=checkout, check=True)
-        run(
-            ["git", "config", "user.email", "finn-conformance@example.invalid"],
-            cwd=checkout,
-            check=True,
-        )
-        run(["git", "commit", "--allow-empty", "-m", "source-only"], cwd=checkout, check=True)
-
-        after = printed(checkout)
-        assert before["image_revision"] == after["image_revision"]
-        assert before["source_revision"] != after["source_revision"]
-        assert before["source_describe"] != after["source_describe"]
-        run(
-            [checkout / "docker/run", "--sbx", "--name", name, "--no-build", "--", "true"],
-            cwd=checkout,
-            env=child_env,
-            timeout=600,
-            check=True,
-        )
+        assert (checkout / "native-marker").read_text().strip() == "reused"
+        inventory = json.loads(run(["sbx", "ls", "--json"], check=True).stdout)["sandboxes"]
+        sandbox = next(item for item in inventory if item["name"] == name)
+        assert sandbox["agent"] == agent
+        if agent != "shell":
+            version = run(["sbx", "env", "exec", *args, "--", agent, "--version"], check=True)
+            print("Native agent version:", version.stdout.strip())
+        if fpga:
+            code = (
+                "import os; from pathlib import Path; "
+                "assert os.environ['XILINXD_LICENSE_FILE']=='2100@license.example.com'; "
+                "assert os.environ['XILINX_VIVADO']==os.environ['VIVADO_PATH']; "
+                "assert os.environ['XILINX_VITIS']==os.environ['VITIS_PATH']; "
+                "assert os.environ['XILINX_HLS']==os.environ['HLS_PATH']; "
+                "assert all(Path(os.environ[k]).is_dir() for k in "
+                "('VIVADO_PATH','VITIS_PATH','HLS_PATH'))"
+            )
+            run(["sbx", "env", "exec", *args, "--", "python", "-c", code], check=True)
+            write = run(["sbx", "env", "exec", *args, "--", "touch", toolchain / "must-not-write"])
+            assert write.returncode != 0
+            assert not (toolchain / "must-not-write").exists()
+            policy = run(["sbx", "policy", "ls", name, "--json"], check=True).stdout
+            assert "license.example.com:2100" in policy
+            assert "license.example.com:2101" in policy
     finally:
-        runner = checkout / "docker/run" if checkout.exists() else REPO / "docker/run"
-        run(
-            [runner, "--sbx", "--name", name, "--remove"],
-            cwd=checkout if checkout.exists() else REPO,
-        )
-        run(["git", "worktree", "remove", "--force", checkout], timeout=120)
+        run(["sbx", "env", "rm", *args, "--force"], timeout=120, check=True)
+    inventory = json.loads(run(["sbx", "ls", "--json"], check=True).stdout)["sandboxes"]
+    assert not any(item["name"] == name for item in inventory)
+
+
+def test_05b_sbx_template_identity_ignores_source_commit(tmp_path):
+    """Image preparation identity stays independent of mounted-source commits."""
+    checkout = tmp_path / "checkout"
+    run(["git", "clone", "--shared", REPO, checkout], check=True)
+    # Compare two commits within the same isolated checkout; never set repository config.
+    before = run([checkout / "docker/build", "--sbx", "--print"], cwd=checkout, check=True)
+    run(
+        [
+            "git",
+            "-c",
+            "user.name=FINN Conformance",
+            "-c",
+            "user.email=finn-conformance@example.invalid",
+            "commit",
+            "--allow-empty",
+            "-m",
+            "source-only",
+        ],
+        cwd=checkout,
+        check=True,
+    )
+    after = run([checkout / "docker/build", "--sbx", "--print"], cwd=checkout, check=True)
+    before = dict(line.split("=", 1) for line in before.stdout.splitlines())
+    after = dict(line.split("=", 1) for line in after.stdout.splitlines())
+    assert before["image_revision"] == after["image_revision"]
+    assert before["source_revision"] != after["source_revision"]
 
 
 def test_06_resolved_toolchain_mounts_are_read_only(docker_daemon):
@@ -448,7 +524,7 @@ def test_10_bare_host_toolchain_resolution():
         [
             "bash",
             "-c",
-            'eval "$(./docker/config inspect --tier build --format sh | sed "s/^/export /")"; '
+            'eval "$(./docker/config.py inspect --tier build --format sh | sed "s/^/export /")"; '
             ". ./docker/finn-toolchain.sh; command -v vivado",
         ]
     )

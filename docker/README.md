@@ -20,13 +20,11 @@ Docker image
 ./docker/run --name finn-test -- pytest -m util
 ./docker/run --fpga -- vivado -version
 ./docker/run --fpga --runtime xrt -- build_dataflow project/
-./docker/run --sbx --name agent-1 -- pytest -m util
 ```
 
 With no command, `docker/run` opens an interactive shell. Use `--print` to see
 the normalized request without building or running anything. `-n NAME` and
-`--name NAME` assign the Docker container name or the persistent sbx sandbox
-name.
+`--name NAME` assign the Docker container name.
 
 ## Prepare artifacts
 
@@ -38,8 +36,8 @@ name.
 ./docker/build --runtime xrt --export-sif ./finn-xrt.sif
 ```
 
-Docker and sbx preparation is automatic when a run needs it. `--no-build`
-requires an existing Docker image or sbx template, while `--rebuild` rebuilds
+Docker preparation is automatic when a run needs it. `--no-build`
+requires an existing Docker image, while `--rebuild` rebuilds
 without using the BuildKit cache. Ordinary runs and SIF export reuse a prepared
 Docker image with the selected environment tag; explicit `docker/build` refreshes
 its cached build. SIF export always writes the requested path.
@@ -61,71 +59,45 @@ build remains its Docker image digest or exported SIF checksum.
 
 ## Configuration
 
-`docker/config.py` is the shared host resolver. The `docker/config` command can
-inspect its result or render Docker and sbx configuration:
+`docker/config.py` is the single executable Python host resolver for Docker and
+native installation. It preserves path/layout probing, licence classification,
+UID/GID handling, shell output and Compose output:
 
 ```bash
-./docker/config inspect --tier dev
-./docker/config inspect --tier build --sbx
-./docker/config compose --tier build --service build
-./docker/config sbx --tier build --output-dir /path/outside/workspace/finn-sbx
+./docker/config.py inspect --tier dev
+./docker/config.py inspect --tier build
+./docker/config.py compose --tier build --service build
 ```
+
+Reported network requirements are declarative. Docker does not enforce them.
 
 ## Native sandbox environments
 
-`./docker/run --sbx` is the public FINN sandbox entry point. It prepares a local
-FINN template and writes a native environment bundle outside the mounted checkout.
-Docker and sbx execution are functions in the same launcher. No workspace controller is required.
+Prepare a template with `./docker/build --sbx`; obtain its reference with
+`./docker/build --sbx --print-tag`. Preparation only builds/imports an image.
+It does not create sandboxes, register credentials or configure machine policy.
 
-For direct sbx use, prepare the template, then render a bundle:
+Follow [the native example guide](sbx/README.md) to copy the base, selected FPGA
+overlay and optional site kit together outside all mounted workspaces. Use
+native `sbx env plan / create / run / exec / rm` with the same files and arguments
+for every command. The base defaults to shell; `--env-arg agent=claude` selects
+a coding agent and composes with the explicit FPGA overlay. The generic image
+has no coding-agent executable; follow the guide's user-owned installation step
+before attaching, or provide your own prepared template. Lists concatenate
+under native composition. Personal agent settings and credentials remain in
+user-owned native configuration.
 
-```bash
-./docker/build --sbx
-export FINN_SBX_TEMPLATE=$(./docker/build --sbx --print-tag)
-export FINN_SBX_NAME=finn-native-dev
-./docker/config sbx --tier dev --output-dir "$HOME/.local/state/finn/native-dev"
-sbx env plan "$HOME/.local/state/finn/native-dev/finn.sbxenv.yaml"
-sbx env create "$HOME/.local/state/finn/native-dev/finn.sbxenv.yaml"
-sbx env exec "$HOME/.local/state/finn/native-dev/finn.sbxenv.yaml" -- python -c 'import finn'
-sbx env run "$HOME/.local/state/finn/native-dev/finn.sbxenv.yaml"
-sbx env rm "$HOME/.local/state/finn/native-dev/finn.sbxenv.yaml" --force
-```
+FINN supplies images and examples. Users and sites own instantiated environments,
+mounts and network policy; sbx owns composition, approval and lifecycle. FINN has
+no Cardinal contract. The development example has no optional FPGA mounts or
+site kit, and disables shared writable skills. Effective networking still depends
+on machine/organization policy and the selected agent. Use a real licensed tool
+operation to validate FPGA licensing; policy readback or `lmstat` is insufficient.
 
-First use requires native sbx approval. For a noninteractive job, review
-`sbx env plan` and explicitly use `sbx env create --auto-approve` before invoking
-the FINN runner. The runner does not approve native changes automatically.
-
-The renderer prints the environment as JSON (valid YAML) and writes the same file
-plus local v2 kits into the output directory. It specializes the checked-in
-`docker/sbx/sbxenv.yaml`, which is also directly usable with native environment
-arguments (`name`, `workspace`, `template`, and optional `agent`). For example,
-after preparing the template and setting `FINN_SBX_TEMPLATE` above:
-
-```bash
-sbx env run ./docker/sbx/sbxenv.yaml \
-  --env-arg name=finn-native-dev --env-arg workspace="$PWD" \
-  --env-arg template="$FINN_SBX_TEMPLATE"
-```
-
-Use the same file and arguments for subsequent native commands.
-The native environment supplies FINN defaults; an optional generated licence kit supplies site-specific network
-permissions. The dev tier omits toolchain mounts, licence configuration and FINN
-network grants. Existing machine/organization policy and agent kits still determine
-effective connectivity; absence of grants does not establish a closed network.
-
-Use sbx **0.42.1 or later**; 0.42.1 is the tested integration baseline. For FPGA
-work, set the existing host configuration variables and render `--tier build`.
-FLEXlm grants cover the server host unless the vendor-daemon port is pinned,
-in which case the kit requests the two required ports. Validate a real licence
-checkout at your site; `lmstat` only verifies the licence-manager connection.
-
-Remove and recreate a sandbox after changing its template, mounts or kit
-permissions. Editing the rendered files does not revoke grants on an existing
-sandbox. Keep site paths, licence settings, credentials, personal agent overlays,
-and external controller configuration outside the FINN repository. Shared writable
-agent skills are disabled by default. See Docker's
-[native environments](https://docs.docker.com/ai/sandboxes/configuration/environment-files/)
-and [kit reference](https://docs.docker.com/ai/sandboxes/customize/kit-reference/).
+The examples were validated with client/server 0.42.1, which is a tested version,
+not a claim about the latest release. Native environment and kit interfaces are
+experimental; see the [completion record](../docs/native-sbx-final-shape-plan.md)
+for documentation revision and validation limits.
 
 `compose.yaml` and `docker-bake.hcl` remain usable directly for debugging and
 advanced workflows. A direct Bake invocation must set
@@ -139,8 +111,11 @@ docker/build + Docker/sbx/SIF consumers
     -> docker/lib.sh: finn_prepare_image
         -> docker-bake.hcl -> docker/Dockerfile.finn
 
-docker/config -> config.py                  host only
-    -> Compose overrides / native sbx bundles
+docker/config.py                            host only
+    -> shell assignments / Compose overrides
+
+user-owned copies of docker/sbx examples
+    -> native sbx env composition / approval / lifecycle
 
 image                                      guest only
     -> Dockerfile tool list + toolchain-shim
@@ -176,7 +151,7 @@ hooks because those paths bypass normal startup.
 | Removed interface | Replacement |
 | --- | --- |
 | `docker/run-docker` | `docker/run -- COMMAND` |
-| `docker/run-sbx`, `docker/finn-sbx` | `docker/run --sbx -- COMMAND` |
+| `docker/run-sbx`, `docker/finn-sbx`, `docker/run --sbx` | Copied native examples and `sbx env` |
 | `run-docker.sh` | Explicit CI image preparation, then `docker/run` |
 | `docker/export-sif PATH` | `docker/build --export-sif PATH` |
 | Internal `print-tag sbx-dev` | `docker/build --sbx --print-tag` |
@@ -185,5 +160,20 @@ hooks because those paths bypass normal startup.
 | `build-xrt` grant/image spelling | `--fpga --runtime xrt` |
 | Bake target `finn-xrt-slash` | `finn-slash-xrt` |
 
-The Python configuration interface remains unchanged for this pass:
-`docker/config` and its `docker/finn-env` alias are retained.
+`docker/config` and `docker/finn-env` are removed; use `docker/config.py`.
+The resolver's `sbx` subcommand and `inspect --sbx`, and the launcher's `--sbx`
+and `--remove`, now fail as unknown interfaces.
+
+Existing generated environment directories under
+`${XDG_STATE_HOME:-$HOME/.local/state}/finn/sbxenv` are left intact, since they
+may describe active sandboxes. Use their `finn.sbxenv.yaml` directly with native
+`sbx env` commands, retaining any original overlays and arguments. For example:
+
+```bash
+sbx env plan /existing/environment/finn.sbxenv.yaml
+sbx env exec /existing/environment/finn.sbxenv.yaml -- python -c 'import finn'
+sbx env rm /existing/environment/finn.sbxenv.yaml --force
+```
+
+Alternatively copy the new examples into a user-owned directory. No automatic
+state migration, sandbox removal or global policy/credential changes occur.

@@ -264,7 +264,7 @@ gecho "Step 5: Checking Xilinx tools..."
 XILINX_AVAILABLE=0
 
 if [ -n "$FINN_XILINX_PATH" ] && [ -n "$FINN_XILINX_VERSION" ]; then
-    # Two steps, and the split is the point: docker/config probes the host
+    # Two steps, and the split is the point: docker/config.py probes the host
     # and says WHERE the tools are, docker/finn-toolchain.sh applies them. The
     # image sources that same second file, so every lane applies the toolchain
     # through identical code.
@@ -278,8 +278,8 @@ if [ -n "$FINN_XILINX_PATH" ] && [ -n "$FINN_XILINX_VERSION" ]; then
     # nothing and reported "Vivado not found" at a path the user could see was
     # wrong. That is the same defect that had the sbx backend silently mounting
     # no toolchain -- the fourth instance of one fact being derived in a fourth
-    # place. docker/config probes both layouts rather than assuming either.
-    eval "$("${FINN_ROOT}/docker/config" inspect --tier build --format sh 2>/dev/null | sed 's/^/export /')"
+    # place. docker/config.py probes both layouts rather than assuming either.
+    eval "$("${FINN_ROOT}/docker/config.py" inspect --tier build --format sh 2>/dev/null | sed 's/^/export /')"
 
     if [ -n "${XILINX_VIVADO:-}" ]; then
         gecho "  Found Vivado at $XILINX_VIVADO"

@@ -8,7 +8,7 @@
 #   source scripts/activate.sh
 #
 # RENAMED from scripts/finn-env.sh, which was a near-homograph of
-# docker/config doing an unrelated job -- and did not even wrap it. The two
+# docker/config.py doing an unrelated job -- and did not even wrap it. The two
 # programs it DOES use are named below.
 #
 # This script:
@@ -56,10 +56,10 @@ source "$FINN_ROOT/.venv/bin/activate"
 _finn_gecho "Activated FINN environment at $FINN_ROOT"
 
 # Set FINN environment variables
-# The build directory, from docker/config -- which resolves it and creates it.
+# The build directory, from docker/config.py -- which resolves it and creates it.
 # used to default to /tmp/finn_local_$(whoami), a fifth answer to a question
 # that should have one.
-eval "$("$FINN_ROOT/docker/config" inspect --tier dev --format sh 2>/dev/null \
+eval "$("$FINN_ROOT/docker/config.py" inspect --tier dev --format sh 2>/dev/null \
         | grep '^FINN_HOST_BUILD_DIR=' | sed 's/^/export /')"
 export FINN_BUILD_DIR="$FINN_HOST_BUILD_DIR"
 
@@ -67,7 +67,7 @@ export FINN_BUILD_DIR="$FINN_HOST_BUILD_DIR"
 export FINN_BOARD_FILES_PATH="$FINN_ROOT/deps/board_files"
 
 # Xilinx tools setup
-# The Xilinx toolchain, resolved by docker/config -- the same program the
+# The Xilinx toolchain, resolved by docker/config.py -- the same program the
 # container uses, and the same one setup-local.sh calls.
 #
 # This block used to be a fifth copy of the toolchain logic, and it carried the
@@ -77,16 +77,16 @@ export FINN_BOARD_FILES_PATH="$FINN_ROOT/deps/board_files"
 #
 # which is the PRE-2024.2 directory layout only. AMD reorganised the tree after
 # 2024.2, so on any recent installation this reported "Vivado not found" at a
-# path the user could see was wrong. docker/config probes both layouts.
+# path the user could see was wrong. docker/config.py probes both layouts.
 #
 # It also duplicated the LD_LIBRARY_PATH additions (lib/lnx64.o, fpo_v7_1) and
-# the XRT sourcing, both of which docker/config now owns.
+# the XRT sourcing, both of which docker/config.py now owns.
 if [ -n "$FINN_XILINX_PATH" ] && [ -n "$FINN_XILINX_VERSION" ]; then
-    # Two steps, and the split is the point. docker/config probes the host and says
+    # Two steps, and the split is the point. docker/config.py probes the host and says
     # WHERE the tools are; finn-toolchain.sh takes that and applies it. The
     # image sources the same second file, so the bare host and the container
     # apply the toolchain through identical code.
-    eval "$("$FINN_ROOT/docker/config" inspect --tier build --format sh 2>/dev/null | sed 's/^/export /')"
+    eval "$("$FINN_ROOT/docker/config.py" inspect --tier build --format sh 2>/dev/null | sed 's/^/export /')"
     . "$FINN_ROOT/docker/finn-toolchain.sh"
 
     if [ -n "${XILINX_VIVADO:-}" ]; then

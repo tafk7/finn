@@ -50,7 +50,7 @@ usage () {
 Usage: docker/build [OPTIONS]
 
 Options:
-  --sbx              prepare the sbx image variant and template
+  --sbx              build/import the sbx template (no sandbox configuration)
   --export-sif PATH  export the Docker-built image as an Apptainer SIF
   --runtime NAME     add image content such as xrt; repeatable
   --rebuild          rebuild image layers without cache
@@ -136,7 +136,7 @@ case "$artifact" in
         finn_prepare_image "$target" build
         ;;
     sbx)
-        finn_prepare_sbx build
+        finn_prepare_sbx
         ;;
     sif)
         export_sif

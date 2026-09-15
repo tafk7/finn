@@ -20,7 +20,7 @@
 # vivado -version` against a container where everything else worked.
 #
 # INPUT: XILINX_VIVADO / XILINX_VITIS / XILINX_HLS (or the *_PATH aliases),
-# already resolved. Those come from `docker/config inspect`, which probes the two
+# already resolved. Those come from `docker/config.py inspect`, which probes the two
 # Xilinx directory layouts on the HOST and passes the answer in as process
 # environment. Nothing here probes; there is one layout resolver and it is
 # host-side.

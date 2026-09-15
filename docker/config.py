@@ -1,28 +1,29 @@
 #!/usr/bin/env python3
-"""Resolve host capabilities for FINN's Docker-built environment.
+"""Resolve FINN host configuration for Docker and native installation.
 
 This module is host-side only. It is the sole owner of workspace, toolchain,
-licence, mount and egress discovery. ``compose.yaml`` holds static Docker
-behavior; Compose overrides and complete sbx environment files are rendered here.
+licence, mount and egress discovery for Docker/native callers. ``compose.yaml``
+holds static Docker behavior; this executable renders shell assignments and
+Compose overrides.
+Network descriptions are declarative; Docker does not enforce these permissions.
 Diagnostics go to stderr because stdout is machine-readable data.
 """
 
 import argparse
 import json
 import os
-from pathlib import Path
 import re
 import sys
 
-# A tier is a GRANT profile, not an image. There is one image; what differs
-# between these two is what the launcher mounts and allows.
+# A tier is a host access profile, not an image. There is one image; what differs
+# is what the launcher mounts and which network requirements it reports.
 #
 # `build-xrt` used to be a third tier. It differed from `build` by one mount,
 # and its real content -- XRT -- is now a runtime target baked into the image
 # and named in its tag. See docker/runtimes/README.md.
 TIERS = ("dev", "build")
 
-# Tiers that get a toolchain, a licence and toolchain egress. `dev` deliberately
+# Tiers that get a toolchain, a licence and declared network requirements. `dev`
 # gets none of it: that boundary is the reason the tier exists, and it is
 # enforced here rather than left to whether the caller's shell happens to have
 # FINN_XILINX_PATH set.
@@ -45,7 +46,6 @@ def normalize_runtimes(runtimes=None):
 #           Vivado projects, because add_files writes $::env(FINN_ROOT) into the
 #           .xpr as an absolute path (LIMITATION(finn-root-absolute)), so a
 #           project built under a fixed path cannot be opened in the host GUI.
-#           Also forced by sbx, which has no mount remapping.
 #   fixed   container path == FIXED_WORKSPACE. Better for remote daemons,
 #           reproducible diagnostics and Dev Container config.
 #
@@ -63,11 +63,11 @@ DEFAULT_DEV_WORKSPACE_POLICY = "fixed"
 
 
 def warn(msg):
-    print("docker/config: %s" % msg, file=sys.stderr)
+    print("docker/config.py: %s" % msg, file=sys.stderr)
 
 
 def die(msg, code=1):
-    print("docker/config: error: %s" % msg, file=sys.stderr)
+    print("docker/config.py: error: %s" % msg, file=sys.stderr)
     sys.exit(code)
 
 
@@ -133,7 +133,7 @@ def vendor_daemon_port(files):
     FLEXlm needs TWO connections. lmgrd on the advertised port is a directory
     service; it hands back a second port where the vendor daemon (xilinxd) does
     the actual checkout. That second port is EPHEMERAL by default, which is why
-    the egress grant defaults to the whole host.
+    the declarative network requirement covers the whole host.
 
     It does not have to be ephemeral. A licence admin can pin it:
 
@@ -143,7 +143,8 @@ def vendor_daemon_port(files):
     tells us nothing about the DAEMON line -- FINN_LICENSE_VENDOR_PORT lets the
     user state it.
 
-    Returns None when unknown, and None means "grant the host", not "guess".
+    Returns None when unknown, meaning "report the whole host". Docker does not
+    enforce these network requirements.
     """
     explicit = os.environ.get("FINN_LICENSE_VENDOR_PORT", "").strip()
     if explicit:
@@ -173,7 +174,7 @@ def classify_license(value):
         PORT@HOST     floating server. Nothing to mount; needs TCP egress.
         /path/to.lic  node-locked file. Must be readable inside the container.
 
-    Egress defaults to the whole HOST, because the vendor-daemon port is
+    The declared network requirement covers the whole HOST, because the vendor-daemon port is
     ephemeral unless the site pinned it -- see vendor_daemon_port(). A
     port-scoped rule against an unpinned daemon lets `lmutil lmstat` succeed,
     because lmstat only talks to lmgrd, while every real checkout fails with
@@ -221,17 +222,17 @@ def resolve_tier(tier):
     return "dev"
 
 
-def resolve_workspace(tier, backend, policy="auto"):
+def resolve_workspace(tier, policy="auto"):
     """Resolve the host and container workspace paths."""
     workspace_host = hostpath(
         os.environ.get("FINN_ROOT", os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     )
-    forced_mirror = backend == "sbx" or tier in FPGA_TIERS
+    forced_mirror = tier in FPGA_TIERS
     if policy == "auto":
         policy = "mirror" if forced_mirror else DEFAULT_DEV_WORKSPACE_POLICY
     elif policy == "fixed" and forced_mirror:
         die(
-            "workspace policy 'fixed' is incompatible with backend %r / tier %r" % (backend, tier),
+            "workspace policy 'fixed' is incompatible with tier %r" % tier,
             2,
         )
     workspace_target = workspace_host if policy == "mirror" else FIXED_WORKSPACE
@@ -295,7 +296,7 @@ def add_platform_repo(out, toolchain_root):
 
 
 def add_licenses(out):
-    """Add FLEXlm environment, file mounts and network grants."""
+    """Add FLEXlm environment, file mounts and declarative network requirements."""
     for var in ("XILINXD_LICENSE_FILE", "LM_LICENSE_FILE"):
         value = os.environ.get(var)
         if not value:
@@ -347,18 +348,18 @@ def add_optional_inputs(out):
         warn("IMAGENET_VAL_PATH=%s is not a directory; not mounted" % imagenet)
 
 
-def resolve_host(tier, backend, workspace_policy="auto"):
+def resolve_host(tier, workspace_policy="auto"):
     """Everything a launcher needs, derived from the host exactly once."""
     tier = resolve_tier(tier)
     if tier not in TIERS:
         die("unknown tier %r; expected one of %s" % (tier, ", ".join(TIERS)), 2)
 
     runtimes = normalize_runtimes()
-    workspace = resolve_workspace(tier, backend, workspace_policy)
+    workspace = resolve_workspace(tier, workspace_policy)
 
     out = {
         "tier": tier,
-        "backend": backend,
+        "backend": "docker",
         "runtimes": runtimes,
         "runtime_csv": ",".join(runtimes),
         "platform": "linux/amd64",
@@ -366,7 +367,7 @@ def resolve_host(tier, backend, workspace_policy="auto"):
         "build_dir": resolve_build_dir(create=False),
         "mounts": [],
         "egress": [],
-        "egress_enforcement": "enforced" if backend == "sbx" else "declared",
+        "egress_enforcement": "declared",
         "env": {
             "FINN_ROOT": workspace["target"],
             "FINN_DEPS": os.environ.get("FINN_DEPS", "frozen").lower(),
@@ -480,8 +481,7 @@ def compose_override(data, services):
 
 
 def cmd_inspect(args):
-    backend = "sbx" if args.sbx else "docker"
-    data = resolve_host(args.tier, backend, args.workspace_policy)
+    data = resolve_host(args.tier, args.workspace_policy)
     if args.format == "json":
         json.dump(data, sys.stdout, indent=2, sort_keys=True)
         sys.stdout.write("\n")
@@ -491,82 +491,22 @@ def cmd_inspect(args):
 
 
 def cmd_compose(args):
-    data = resolve_host(args.tier, "docker", args.workspace_policy)
+    data = resolve_host(args.tier, args.workspace_policy)
     services = args.service or [data["tier"]]
     json.dump(compose_override(data, services), sys.stdout, indent=2, sort_keys=True)
     sys.stdout.write("\n")
     return 0
 
 
-def cmd_sbx(args):
-    data = resolve_host(args.tier, "sbx", "mirror")
-    name = os.environ.get("FINN_SBX_NAME")
-    template = os.environ.get("FINN_SBX_TEMPLATE")
-    agent = os.environ.get("FINN_SBX_AGENT", "shell")
-    if not name or not template:
-        die("FINN_SBX_NAME and FINN_SBX_TEMPLATE must be set", 2)
-    output = Path(args.output_dir).expanduser().resolve()
-    for mounted in [data["workspace"]["source"], *[m["source"] for m in data["mounts"]]]:
-        root = Path(mounted).resolve()
-        if output == root or root in output.parents:
-            die("sbx output directory must be outside mounted workspaces", 2)
-    output.mkdir(parents=True, exist_ok=True, mode=0o700)
-    config = json.loads((Path(__file__).parent / "sbx" / "sbxenv.yaml").read_text())
-    config.pop("args")
-    config.update(
-        {
-            "name": name,
-            "agent": agent,
-            "kits": [],
-            "workspace": data["workspace"]["source"],
-            "additionalWorkspaces": [
-                {"path": mount["source"], "readOnly": mount["mode"] == "ro"}
-                for mount in data["mounts"]
-            ],
-            "env": dict(data["env"]),
-        }
-    )
-    config["env"]["FINN_BUILD_DIR"] = "/tmp/finn_build"
-    config["sandboxOptions"]["template"] = template
-    # FLEXlm needs lmgrd and the vendor daemon. Without a pinned vendor
-    # port retain the existing host-wide grant; lmstat alone cannot verify it.
-    allow = []
-    for grant in data["egress"]:
-        host, ports = grant["host"], grant.get("ports") or []
-        allow.extend([f"{host}:{port}" for port in ports] if ports else [host])
-    if allow:
-        network = output / "kits" / "finn-license"
-        network.mkdir(parents=True, exist_ok=True)
-        (network / "spec.yaml").write_text(
-            json.dumps(
-                {
-                    "schemaVersion": "2",
-                    "kind": "mixin",
-                    "name": "finn-license",
-                    "permissions": {"network": {"allow": allow}},
-                },
-                indent=2,
-            )
-            + "\n"
-        )
-        config["kits"].append("./kits/finn-license")
-    (output / "finn.sbxenv.yaml").write_text(json.dumps(config, indent=2, sort_keys=True) + "\n")
-    json.dump(config, sys.stdout, indent=2, sort_keys=True)
-    sys.stdout.write("\n")
-    return 0
-
-
-def add_resolution_arguments(parser, include_sbx=True):
+def add_resolution_arguments(parser):
     parser.add_argument(
         "--tier", default=os.environ.get("FINN_DOCKER_TARGET", "auto"), choices=TIERS + ("auto",)
     )
-    if include_sbx:
-        parser.add_argument("--sbx", action="store_true", help="resolve sbx-specific policy")
     parser.add_argument("--workspace-policy", default="auto", choices=("auto", "fixed", "mirror"))
 
 
 def main():
-    parser = argparse.ArgumentParser(prog="docker/config", description=__doc__.split("\n")[0])
+    parser = argparse.ArgumentParser(prog="docker/config.py", description=__doc__.split("\n")[0])
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     p = sub.add_parser("inspect", help="resolve host configuration")
@@ -575,16 +515,11 @@ def main():
     p.set_defaults(func=cmd_inspect)
 
     p = sub.add_parser("compose", help="render an ephemeral Compose override")
-    add_resolution_arguments(p, include_sbx=False)
+    add_resolution_arguments(p)
     p.add_argument(
         "--service", action="append", help="service to configure; repeat for multiple services"
     )
     p.set_defaults(func=cmd_compose)
-
-    p = sub.add_parser("sbx", help="write a native sbx environment and local kits")
-    p.add_argument("--tier", default="dev", choices=TIERS)
-    p.add_argument("--output-dir", required=True, help="host directory outside mounted workspaces")
-    p.set_defaults(func=cmd_sbx)
 
     args = parser.parse_args()
     sys.exit(args.func(args))

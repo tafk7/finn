@@ -333,7 +333,7 @@ These are the other env vars a job DSL typically sets for a build-pipeline job, 
 | `FINN_XILINX_PATH`    | Path to the Xilinx tools install. The Jenkins compatibility launcher warns when unset, and Vivado/Vitis/HLS steps need it.                                  |
 | `FINN_XILINX_VERSION` | Xilinx tool version (for example `2022.2`).                                                                                                                   |
 | `PLATFORM_REPO_PATHS` | Vitis platform (DSA) files, required for Vitis-based Alveo cards.                                                                                             |
-| `FINN_DOCKER_EXTRA`   | Legacy extra `docker compose run` arguments. The pipeline appends a per-agent `--hostname` and cache mounts to whatever the DSL sets. Prefer adding generally useful host facts to `docker/config` instead. |
+| `FINN_DOCKER_EXTRA`   | Legacy extra `docker compose run` arguments. The pipeline appends a per-agent `--hostname` and cache mounts to whatever the DSL sets. Prefer adding generally useful host facts to `docker/config.py` instead. |
 | `NUM_DEFAULT_WORKERS` | Default xdist worker count for ad-hoc runs. Per-shard worker counts come from `STAGES`, not this.                                                             |
 
 A site that offloads the heavy Xilinx tools to a compute farm (see "Running tools on LSF") needs no pipeline changes. The tool wrapper and its configuration ride into the container through `FINN_DOCKER_EXTRA`, and the only variable FINN itself reads is the shim-directory override below:
