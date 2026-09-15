@@ -2,16 +2,20 @@
   "schemaVersion": "1",
   "args": {
     "name": {
-      "required": true
+      "required": true,
+      "description": "Unique sandbox name"
     },
     "workspace": {
-      "required": true
+      "required": true,
+      "description": "Absolute FINN checkout path"
     },
     "template": {
-      "required": true
+      "required": true,
+      "description": "Image reference from docker/build --sbx --print-tag"
     },
     "agent": {
-      "default": "shell"
+      "default": "shell",
+      "description": "Native agent selection; personal settings belong in user configuration"
     }
   },
   "name": "${{ env.args.name }}",

@@ -1,0 +1,24 @@
+{
+  "schemaVersion": "2",
+  "kind": "mixin",
+  "name": "site-license",
+  "args": {
+    "host": {
+      "required": true
+    },
+    "manager_port": {
+      "required": true
+    },
+    "vendor_port": {
+      "required": true
+    }
+  },
+  "permissions": {
+    "network": {
+      "allow": [
+        "${{ kit.args.host }}:${{ kit.args.manager_port }}",
+        "${{ kit.args.host }}:${{ kit.args.vendor_port }}"
+      ]
+    }
+  }
+}

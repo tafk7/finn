@@ -1,0 +1,44 @@
+{
+  "schemaVersion": "1",
+  "args": {
+    "toolchain": {
+      "required": true,
+      "description": "Absolute host toolchain root, mounted read-only at the same path"
+    },
+    "vivado": {
+      "required": true,
+      "description": "Absolute Vivado installation path within toolchain"
+    },
+    "vitis": {
+      "required": true,
+      "description": "Absolute Vitis installation path within toolchain"
+    },
+    "hls": {
+      "required": true,
+      "description": "Absolute HLS installation path within toolchain"
+    },
+    "license_host": {
+      "required": true,
+      "description": "Floating licence host, for example license.example.com"
+    },
+    "license_port": {
+      "required": true,
+      "description": "Licence-manager port, for example 2100"
+    }
+  },
+  "additionalWorkspaces": [
+    {
+      "path": "${{ env.args.toolchain }}",
+      "readOnly": true
+    }
+  ],
+  "env": {
+    "XILINX_VIVADO": "${{ env.args.vivado }}",
+    "VIVADO_PATH": "${{ env.args.vivado }}",
+    "XILINX_VITIS": "${{ env.args.vitis }}",
+    "VITIS_PATH": "${{ env.args.vitis }}",
+    "XILINX_HLS": "${{ env.args.hls }}",
+    "HLS_PATH": "${{ env.args.hls }}",
+    "XILINXD_LICENSE_FILE": "${{ env.args.license_port }}@${{ env.args.license_host }}"
+  }
+}
