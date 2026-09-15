@@ -31,6 +31,7 @@ from finn.dataflow.conformance import (
 from finn.dataflow.designs import DataflowDesign
 from finn.dataflow.kernels import ModuleBuildRequirements
 from finn.dataflow.artifacts.build import (
+    FixedModuleName,
     prepare_module_build,
     module_source_derivation,
     materialize_module_sources,
@@ -238,6 +239,7 @@ def test_native_reload_to_accepted_mapping_and_portable_artifact(
     assert isinstance(kernel, Decided)
     assert kernel.value.dataflow.accepted_answer == Decided(network.node("replay").region)
     assert dict(spec.parameters) == {"LEN": 2, "REP": 4, "W": 32}
+    assert isinstance(spec.abi.entry_point, FixedModuleName)
     assert spec.abi.entry_point.value == "replay_buffer"
     persisted = {item.path for item in occurrence_persistable(restored)}
     assert {"design.pe", "design.simd"} <= persisted
