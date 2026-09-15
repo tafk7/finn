@@ -142,7 +142,11 @@ def _role_in(record: _Role) -> Role:
     if record.kind == "reset":
         return Reset(active_low=record.active_low, synchronous=record.synchronous)
     named: dict[str, Role] = {"config": Config(), "status": Status(), "interrupt": Interrupt()}
-    return named.get(record.kind, Data())
+    if record.kind == "data":
+        return Data()
+    if record.kind in named:
+        return named[record.kind]
+    raise AbiError(f"unknown descriptor role kind {record.kind!r}")
 
 
 def _role_out_v2(role: Role) -> _RoleV2:
@@ -300,6 +304,8 @@ def decode(data: bytes) -> ComponentABI:
                     Signal(port.name, Direction(port.direction), port.width, _role_in_v2(port.role))
                 )
                 continue
+            if port.kind != "bus":
+                raise AbiError(f"unknown descriptor port kind {port.kind!r}")
             ports_v2.append(
                 Bus(
                     port.name,
@@ -341,6 +347,8 @@ def decode(data: bytes) -> ComponentABI:
                 Signal(port.name, Direction(port.direction), port.width, _role_in(port.role))
             )
             continue
+        if port.kind != "bus":
+            raise AbiError(f"unknown descriptor port kind {port.kind!r}")
         ports.append(
             Bus(
                 port.name,

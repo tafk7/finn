@@ -9,6 +9,7 @@ import subprocess
 import sys
 
 import pytest
+from onnx import checker
 from qonnx.core.modelwrapper import ModelWrapper
 
 import finn.dataflow.artifacts.build as build_module
@@ -17,6 +18,10 @@ from finn.dataflow.artifacts.build import module_source_derivation
 from finn.dataflow.artifacts.store import ArtifactStore
 from finn.dataflow.model.region import BeatSequence
 from finn.dataflow.ops.base import DataflowOpError
+from finn.dataflow.ops.graph_context import (
+    capture_frozen_op_logical,
+    validate_frozen_op_logical,
+)
 from finn.dataflow.ops.mvau.op import MvauDataflowOp
 from finn.dataflow.ops.persistence import CommitmentStage
 from finn.dataflow.ops.physical import (
@@ -47,6 +52,17 @@ def _prepare(op, model, build, context, store):
         template_roots=template_roots(),
         blobs=store,
     )
+
+
+def _make_initializer_overrideable(model: ModelWrapper) -> str:
+    weight = model.graph.node[0].input[1]
+    value_info = next(item for item in model.graph.value_info if item.name == weight)
+    retained = [item for item in model.graph.value_info if item.name != weight]
+    del model.graph.value_info[:]
+    model.graph.value_info.extend(retained)
+    model.graph.input.append(value_info)
+    checker.check_model(model.model)
+    return weight
 
 
 def test_two_committed_occurrences_reuse_one_component_and_keep_distinct_associations(
@@ -132,6 +148,41 @@ def test_precommit_capture_requires_recapture_after_strong_commit_and_can_reuse(
         )
         == component
     )
+
+
+def test_initializer_graph_input_insertion_stales_all_associations_and_commit() -> None:
+    model, build, context = source_model()
+    op = configure(MvauDataflowOp(model.graph.node[0]).bind(model, build, graph_context=context))
+    logical = capture_frozen_op_logical(op)
+    physical = capture_op_physical(op)
+    _make_initializer_overrideable(model)
+    before_commit = model.model.SerializeToString(deterministic=True)
+
+    logical_findings = validate_frozen_op_logical(
+        op,
+        logical,
+        model=model,
+        build=build,
+        graph_context=context,
+    )
+    physical_findings = validate_physical_build_association(
+        op,
+        physical,
+        model=model,
+        build=build,
+        graph_context=context,
+    )
+    assert {item.code for item in logical_findings} == {"graph-context-initializer-overrideable"}
+    assert {item.code for item in physical_findings} == {"graph-context-initializer-overrideable"}
+
+    with pytest.raises(DataflowOpError, match="graph-context-initializer-overrideable"):
+        op.commit(
+            model,
+            build,
+            require_graph=True,
+            graph_context=context,
+        )
+    assert model.model.SerializeToString(deterministic=True) == before_commit
 
 
 def test_changed_context_refuses_before_a_populated_cache_lookup(tmp_path, monkeypatch):

@@ -7,7 +7,7 @@ from dataclasses import replace
 from typing import Any
 
 import pytest
-from onnx import TensorProto, helper  # type: ignore[import-not-found]
+from onnx import TensorProto, checker, helper  # type: ignore[import-not-found]
 from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 from qonnx.core.modelwrapper import ModelWrapper  # type: ignore[import-not-found]
 
@@ -17,13 +17,16 @@ from dataflow.ops.test_conformance import (
     _mvau_model,
     _replay_model,
 )
+from dataflow.physical_fixture import source_model
 from finn.dataflow._engine import Decided
 from finn.dataflow.model.region import BeatSequence
 from finn.dataflow.ops.base import DATAFLOW_DOMAIN, DataflowOpError
 from finn.dataflow.ops.graph_context import (
     ContextRead,
     CurrentGraphContext,
+    ExternalOperandOrigin,
     GraphInputEntry,
+    GraphInputOrigin,
     IncomingGraphContext,
     LogicalBoundaryContract,
     _contract_for_mapping,
@@ -40,6 +43,7 @@ from finn.dataflow.ops.model_effects import (
     ObservationMutationError,
     merge_model_read_sets,
 )
+from finn.dataflow.ops.mvau.op import MvauDataflowOp
 from finn.dataflow.ops.persistence import assign_dataflow_scope_ids
 from finn.dataflow.ops.reconstruction import bind_operations
 
@@ -70,6 +74,17 @@ def _graph_candidate() -> tuple[Any, Any, Build, CurrentGraphContext]:
     return model, candidate, build, context
 
 
+def _make_initializer_overrideable(model: ModelWrapper) -> str:
+    weight = model.graph.node[0].input[1]
+    value_info = next(item for item in model.graph.value_info if item.name == weight)
+    retained = [item for item in model.graph.value_info if item.name != weight]
+    del model.graph.value_info[:]
+    model.graph.value_info.extend(retained)
+    model.graph.input.append(value_info)
+    checker.check_model(model.model)
+    return weight
+
+
 def test_graph_problem_changes_only_the_full_occurrence_identity() -> None:
     _model, candidate, _build, _context = _graph_candidate()
     local = candidate.reconstruct()
@@ -79,6 +94,57 @@ def test_graph_problem_changes_only_the_full_occurrence_identity() -> None:
 
     assert candidate.problem_fingerprint != source_only.problem_fingerprint
     assert candidate.local_problem_fingerprint == source_only.local_problem_fingerprint
+
+
+def test_current_context_distinguishes_fixed_initializer_and_true_graph_input() -> None:
+    model, build, context = source_model()
+    node = model.graph.node[0]
+    answer = context.read_inputs(
+        model,
+        build,
+        consumer_scope_id=context.external_operands[0].consumer_scope_id,
+    )
+
+    assert isinstance(answer, Decided)
+    by_operand = {item.consumer_input.operand_id: item for item in answer.value.incoming.bindings}
+    assert isinstance(by_operand["activation"].origin, GraphInputOrigin)
+    assert isinstance(by_operand["weight"].origin, ExternalOperandOrigin)
+    expectations = answer.value.model_reads.expectations
+    assert (
+        ModelReadExpectation(
+            ModelReadKind.GRAPH_INPUT,
+            node.input[1],
+            None,
+            None,
+        )
+        in expectations
+    )
+    assert (
+        ModelReadExpectation(
+            ModelReadKind.GRAPH_INPUT,
+            node.input[0],
+            None,
+            next(
+                item for item in model.graph.input if item.name == node.input[0]
+            ).SerializeToString(deterministic=True),
+        )
+        in expectations
+    )
+
+
+def test_initial_bind_refuses_overrideable_initializer_without_writing() -> None:
+    model, build, context = source_model()
+    _make_initializer_overrideable(model)
+    before = model.model.SerializeToString(deterministic=True)
+
+    with pytest.raises(DataflowOpError, match="graph-context-initializer-overrideable"):
+        MvauDataflowOp(model.graph.node[0]).bind(
+            model,
+            build,
+            graph_context=context,
+        )
+
+    assert model.model.SerializeToString(deterministic=True) == before
 
 
 def test_local_problem_fingerprint_keeps_exact_replay_and_mvau_vectors() -> None:

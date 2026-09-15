@@ -387,6 +387,12 @@ class CurrentGraphContext:
                 )
             )
             if operand.tensor in initializer_names:
+                if operand.tensor in graph_input_names:
+                    return _unresolved(
+                        "graph-context-initializer-overrideable",
+                        f"initializer input {scope!r}.{key.operand_id!r} is also a graph "
+                        "input and can be overridden by the caller",
+                    )
                 external_entry = external.get((scope, key))
                 if external_entry is None or external_entry.graph_value != operand.tensor:
                     return _unresolved(
@@ -415,6 +421,12 @@ class CurrentGraphContext:
                                 scope,
                                 f"input:{declaration.index}",
                                 digest,
+                            ),
+                            ModelReadExpectation(
+                                ModelReadKind.GRAPH_INPUT,
+                                operand.tensor,
+                                None,
+                                None,
                             ),
                         )
                     )

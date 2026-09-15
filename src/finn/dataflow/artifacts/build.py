@@ -518,6 +518,10 @@ def _template_variables(data: bytes, *, name: str) -> frozenset[str]:
     if dynamic:
         kinds = sorted({type(node).__name__ for node in dynamic})
         raise BuildError(f"template {name!r} uses unsupported dynamic lookup: {kinds!r}")
+    operations = tuple(syntax.find_all((nodes.Filter, nodes.Test)))
+    if operations:
+        kinds = sorted({type(node).__name__ for node in operations})
+        raise BuildError(f"template {name!r} uses an unsupported filter or test: {kinds!r}")
     return frozenset(meta.find_undeclared_variables(syntax))
 
 

@@ -306,6 +306,48 @@ def test_missing_or_duplicate_destination_bits_refuse_at_structure_construction(
         replace(structure, wires=(*structure.wires, structure.wires[0]))
 
 
+def test_lowering_preserves_bit_zero_slices_of_vector_pins() -> None:
+    design = _int3_design()
+    replay, compute = _realizations(design)
+    structure = compose_decomposed(replay=replay, compute=compute)
+    answer = design.physical.accepted_answer
+    network = design.dataflow.accepted_answer
+    assert isinstance(answer, Decided) and isinstance(network, Decided)
+
+    wires: list[PhysicalWire] = []
+    for wire in structure.wires:
+        if (
+            wire.destination.pin == PhysicalPin("u_compute", "s_axis_input_tdata")
+            and wire.destination.bit_offset == 0
+        ):
+            assert wire.destination.bit_width == 3
+            assert isinstance(wire.source, PinSlice)
+            wires.extend(
+                replace(
+                    wire,
+                    destination=replace(wire.destination, bit_offset=bit, bit_width=1),
+                    source=replace(wire.source, bit_offset=bit, bit_width=1),
+                )
+                for bit in range(3)
+            )
+        else:
+            wires.append(wire)
+
+    split = replace(structure, wires=tuple(wires))
+    requirements = _requirements_for_structure(split)
+    validate_design_physical_facts(
+        network.value,
+        split,
+        replace(answer.value, requirements=requirements),
+    )
+
+    assignments = dict(requirements.render_inputs)["ASSIGNMENTS"]
+    assert isinstance(assignments, str)
+    assert "assign n__u_compute__s_axis_input_tdata[0] = n__u_replay__odat[0];" in assignments
+    assert "assign n__u_compute__s_axis_input_tdata = n__u_replay__odat;" not in assignments
+    assert "assign n__u_replay__clk = ap_clk;" in assignments
+
+
 def _requirements_for_structure(structure: PhysicalStructure) -> ModuleBuildRequirements:
     return lower_module_structure(
         structure,

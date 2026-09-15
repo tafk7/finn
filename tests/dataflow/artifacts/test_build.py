@@ -280,6 +280,8 @@ def test_generated_name_is_independent_of_root_labels_and_paths(tmp_path: Path) 
     (
         ("{% include 'other.sv.j2' %}", "template dependency"),
         ("{{ helper() }}", "dynamic lookup"),
+        ("{{ BODY|random }}", "unsupported filter or test"),
+        ("{{ BODY is string }}", "unsupported filter or test"),
         ("{{ UNDECLARED }}", "declared arguments"),
     ),
 )

@@ -1425,10 +1425,10 @@ def _net_name(pin: PhysicalPin) -> str:
     return f"n__{pin.instance_id}__{pin.signal_id}"
 
 
-def _sv_slice(value: PinSlice) -> str:
+def _sv_slice(value: PinSlice, *, pin_width: int) -> str:
     base = _net_name(value.pin)
     if value.bit_width == 1:
-        return base if value.bit_offset == 0 else f"{base}[{value.bit_offset}]"
+        return base if pin_width == 1 else f"{base}[{value.bit_offset}]"
     return f"{base}[{value.bit_offset + value.bit_width - 1}:{value.bit_offset}]"
 
 
@@ -1451,16 +1451,26 @@ def _sv_net_declarations(structure: PhysicalStructure) -> str:
 
 
 def _sv_assignments(structure: PhysicalStructure) -> str:
+    top = _abi_pins(structure.top_abi)
+    children = {
+        instance.instance_id: _abi_pins(instance.requirements.abi)
+        for instance in structure.instances
+    }
+
+    def render_slice(value: PinSlice) -> str:
+        info = _pin_info(value.pin, top=top, children=children)
+        return _sv_slice(value, pin_width=info.width)
+
     lines = []
     for wire in structure.wires:
         source = (
-            _sv_slice(wire.source)
+            render_slice(wire.source)
             if isinstance(wire.source, PinSlice)
             else _sv_constant(wire.source)
         )
         if wire.invert:
             source = f"!{source}"
-        lines.append(f"    assign {_sv_slice(wire.destination)} = {source};")
+        lines.append(f"    assign {render_slice(wire.destination)} = {source};")
     return "\n".join(lines)
 
 

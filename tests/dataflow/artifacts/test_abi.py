@@ -604,3 +604,39 @@ def test_qualified_descriptor_v2_round_trips_domains_and_alignment() -> None:
     encoded = _descriptor.encode(abi)
     assert b'"schema_version":"component-descriptor-v2"' in encoded
     assert _descriptor.decode(encoded) == abi
+
+
+@pytest.mark.parametrize("qualified", (False, True))
+def test_descriptors_refuse_unknown_role_and_port_kinds(qualified: bool) -> None:
+    ports = (
+        Signal("clk", Direction.IN, 1, Clock(Free())),
+        Signal("data", Direction.OUT, 1, Data()),
+        Bus(
+            "s",
+            StandardProtocol.AXIS,
+            (
+                Member("tdata", "s_tdata", 8),
+                Member("tvalid", "s_tvalid"),
+                Member("tready", "s_tready"),
+            ),
+            endpoint=Endpoint.TARGET,
+        ),
+    )
+    if qualified:
+        abi = ComponentABI(
+            "m",
+            (
+                ports[0],
+                Signal("clk2x", Direction.IN, 1, Clock(Derived("clk", 2))),
+                *ports[1:],
+            ),
+            clock_alignments=(ClockAlignment("clk", "clk2x"),),
+        )
+    else:
+        abi = ComponentABI("m", ports)
+    encoded = _descriptor.encode(abi)
+
+    with pytest.raises(AbiError, match="unknown descriptor role kind"):
+        _descriptor.decode(encoded.replace(b'"kind":"data"', b'"kind":"mystery"', 1))
+    with pytest.raises(AbiError, match="unknown descriptor port kind"):
+        _descriptor.decode(encoded.replace(b'"kind":"bus"', b'"kind":"mystery"', 1))
