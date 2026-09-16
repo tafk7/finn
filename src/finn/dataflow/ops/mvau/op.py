@@ -57,7 +57,6 @@ from finn.dataflow.ops.mvau.computation import (
     execute_mvau,
 )
 from finn.dataflow.ops.mvau.numerics import (
-    check_mvau_integer_support,
     check_mvau_integer_support_from_operands,
     execute_mvau_integer,
     integer_graph_profile_fingerprint,
@@ -776,12 +775,15 @@ class MvauDataflowOp(DataflowOp):
                 scope = InvocationScope(
                     self.recorded_scope_id() or f"source-node:{source.domain}:{source.node_name}"
                 )
-                report = check_mvau_integer_support(
-                    source,
+                report = check_mvau_integer_support_from_operands(
+                    source.operand("activation"),
+                    source.operand("weight"),
+                    accumulator_datatype=cast(Any, source.attributes["accumulator_type"]),
+                    output_datatype=cast(Any, source.attributes["output_type"]),
                     invocation_scope=scope,
                     runtime_writable=False,
                     runtime_promise=None,
-                    target=DspBlock.DSP58,
+                    target_max_bits=64,
                 )
                 runtime = False
             try:

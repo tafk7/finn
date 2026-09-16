@@ -527,6 +527,20 @@ def test_source_execution_is_independent_of_target_accumulator_limit() -> None:
     )
 
 
+def test_unbound_source_execution_is_independent_of_target_accumulator_limit() -> None:
+    activation = np.ones((REPETITIONS, MATRIX_WIDTH), dtype=np.float32)
+    weight = np.ones((MATRIX_WIDTH, MATRIX_HEIGHT), dtype=np.float32)
+    model = _model(output_type="INT64", weights=weight)
+    operation = _unbound(model, "mvau0")
+    operation.attach_model(model)
+    context: dict[str, Any] = {"activation": activation, "weight": weight}
+    operation.execute_node(context, model.graph)
+    assert np.array_equal(
+        context["output"],
+        np.full((REPETITIONS, MATRIX_HEIGHT), MATRIX_WIDTH, dtype=np.int32),
+    )
+
+
 # -- verification ---------------------------------------------------------------
 
 

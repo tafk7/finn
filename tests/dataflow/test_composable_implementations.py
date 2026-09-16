@@ -460,6 +460,77 @@ def test_plain_space_completes_source_selection_build_association_and_installati
     assert first.outer_instance_id != second.outer_instance_id
     assert first.component == second.component
 
+    other_model, other_build, other_context = source_model(prefix="other", rows=2)
+    other = configure(
+        MvauDataflowOp(other_model.graph.node[0]).bind(
+            other_model, other_build, graph_context=other_context
+        )
+    )
+    other_logical = (
+        cast(DataflowDesign, other.selected_implementation()).assess_view("logical").accepted_answer
+    )
+    assert isinstance(other_logical, Decided)
+
+    class MismatchedRelation(PlainComposite):
+        id = "mismatched_relation"
+
+        @derived(DesignPhysicalRelation)
+        def wrong_relation() -> DesignPhysicalRelation:
+            return DesignPhysicalRelation(
+                other_logical.value.network,
+                cast(DesignPhysicalRelation, production_relation.relation).physical,
+            )
+
+        physical_relation = Projection(wrong_relation, readiness=PlainComposite.relation_ready)
+
+    mismatched = MismatchedRelation.start({}, namespace="mismatched")
+    with pytest.raises(DataflowOpError, match="differs from the logical"):
+        capture_local_relation(mismatched, capture_local_physical(mismatched))
+
+
+def test_built_component_cannot_cross_physical_choice_points(tmp_path) -> None:
+    model, build, context = source_model()
+    bound = MvauDataflowOp(model.graph.node[0]).bind(model, build, graph_context=context)
+    pumped = configure(bound, pumping=True)
+    unpumped = configure(bound.reconstruct(), pumping=False)
+    pumped_design = cast(DataflowDesign, pumped.selected_implementation())
+    unpumped_design = cast(DataflowDesign, unpumped.selected_implementation())
+    pumped_local = capture_local_physical(pumped_design)
+    unpumped_local = capture_local_physical(unpumped_design)
+    assert pumped_local.physical_fingerprint != unpumped_local.physical_fingerprint
+
+    store = ArtifactStore(tmp_path / "cross-store")
+    prepared = prepare_local_physical(
+        pumped_local,
+        roots={"finnlib": __import__("pathlib").Path("deps/finnlib").resolve()},
+        template_roots=(
+            __import__("pathlib").Path("src/finn/dataflow/designs/templates").resolve(),
+        ),
+        blobs=store,
+    )
+    built = materialize_local_physical(prepared, store=store)
+    relation = capture_local_relation(unpumped_design, unpumped_local)
+    use = associate_physical_use(
+        unpumped,
+        unpumped_design,
+        unpumped_local,
+        relation,
+        model=model,
+        build=build,
+        graph_context=context,
+    )
+    with pytest.raises(DataflowOpError, match="different local capture|requirements differ"):
+        authorize_component_use(
+            unpumped,
+            unpumped_design,
+            use,
+            built,
+            model=model,
+            build=build,
+            graph_context=context,
+            store=store,
+        )
+
 
 def test_parent_physical_hook_is_not_forced_to_build_unused_child_views() -> None:
     class Parent(Space):

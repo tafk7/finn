@@ -153,6 +153,7 @@ class PreparedLocalPhysical:
 @dataclass(frozen=True)
 class BuiltLocalPhysical:
     capture_fingerprint: str
+    requirements_fingerprint: str
     prepared_fingerprint: str
     manifest_fingerprint: str
     prepared: PreparedModuleBuild
@@ -263,7 +264,14 @@ def _physical_dependency_snapshot(implementation: object) -> tuple[CapturedDepen
         raise TypeError("dependency capture requires a Space occurrence")
     declaration = getattr(type(implementation), "physical", None)
     if not isinstance(declaration, Projection):
-        return ()
+        assessment: ProjectionAssessment[Any] = implementation.assess_view("physical")
+        return (
+            CapturedDependency(
+                "capability-output",
+                f"{type(implementation).__name__}.physical",
+                _canonical_answer(cast("Answer[object]", assessment.accepted_answer)),
+            ),
+        )
     runtime = layer_runtime(implementation)
     compiled = runtime.compiled.projection("physical")
     space = runtime.point.design_space
@@ -479,6 +487,18 @@ def capture_local_relation(
         raise TypeError("physical relation capability returned the wrong value")
     if relation.physical.requirements != physical.requirements:
         raise DataflowOpError("physical relation names different local requirements")
+    logical: ProjectionAssessment[Any] = implementation.assess_view("logical")
+    if not isinstance(logical.accepted_answer, Decided):
+        raise DataflowOpError(
+            "logical capability is not accepted for relation capture",
+            getattr(logical.accepted_answer, "findings", ()),
+        )
+    logical_value = logical.accepted_answer.value
+    logical_network = (
+        logical_value.network if isinstance(logical_value, NetworkResult) else logical_value
+    )
+    if relation.network != logical_network:
+        raise DataflowOpError("physical relation Network differs from the logical capability")
     logical_fingerprint = _digest(relation.network)
     relation_fingerprint = _digest(
         physical.point_fingerprint,
@@ -698,6 +718,7 @@ def materialize_local_physical(
     component = portable_module_component(request.prepared, source)
     return BuiltLocalPhysical(
         request.capture.point_fingerprint,
+        request.capture.physical_fingerprint,
         expected.prepared_fingerprint,
         _digest(source),
         request.prepared,
@@ -728,6 +749,8 @@ def authorize_component_use(
         raise DataflowOpError("compiler physical use is stale or invalid", findings)
     if built.capture_fingerprint != use.local.point_fingerprint:
         raise DataflowOpError("built component belongs to a different local capture")
+    if built.requirements_fingerprint != use.local.physical_fingerprint:
+        raise DataflowOpError("built component requirements differ from the compiler use")
     if built.prepared_fingerprint != prepared_module_fingerprint(built.prepared):
         raise DataflowOpError("built component prepared fingerprint is inconsistent")
     source = store.lookup(module_source_derivation(built.prepared))
