@@ -529,7 +529,6 @@ def test_the_two_operations_read_entirely_different_operand_sets() -> None:
         "target_dsp",
         "runtime_writable_weights",
         "runtime_weight_range_contract",
-        "runtime_weight_promise",
         "clock_period_ns",
     ]
     assert [name for name, _ in source_declarations(type(replay))] == [

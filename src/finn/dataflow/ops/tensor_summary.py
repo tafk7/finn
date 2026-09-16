@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -115,7 +116,45 @@ class FrozenInitializer:
         )
 
 
+def encode_frozen_initializer(value: FrozenInitializer) -> CanonicalValue:
+    return {
+        "carrier_dtype": value.carrier_dtype,
+        "numpy_dtype": value.numpy_dtype,
+        "shape": list(value.shape),
+        "contiguous_bytes": value.contiguous_bytes.hex(),
+    }
+
+
+def decode_frozen_initializer(value: object) -> FrozenInitializer:
+    if not isinstance(value, Mapping) or set(value) != {
+        "carrier_dtype",
+        "numpy_dtype",
+        "shape",
+        "contiguous_bytes",
+    }:
+        raise ValueError("unsupported frozen-initializer payload")
+    carrier = value["carrier_dtype"]
+    dtype = value["numpy_dtype"]
+    shape = value["shape"]
+    payload = value["contiguous_bytes"]
+    if type(carrier) is not int or type(dtype) is not str or type(payload) is not str:
+        raise TypeError("frozen-initializer scalar fields have invalid types")
+    if not isinstance(shape, (tuple, list)) or any(type(extent) is not int for extent in shape):
+        raise TypeError("frozen-initializer shape must contain integers")
+    try:
+        raw = bytes.fromhex(payload)
+    except ValueError as error:
+        raise ValueError("frozen-initializer bytes are not hexadecimal") from error
+    array = numpy.frombuffer(raw, dtype=numpy.dtype(dtype)).reshape(tuple(shape))
+    frozen = FrozenInitializer.from_tensor_proto(numpy_helper.from_array(array))
+    if frozen.carrier_dtype != carrier:
+        raise ValueError("frozen-initializer carrier differs from its payload")
+    return frozen
+
+
 __all__ = [
     "FrozenInitializer",
     "TENSOR_VALUE_SUMMARY_CODEC",
+    "decode_frozen_initializer",
+    "encode_frozen_initializer",
 ]

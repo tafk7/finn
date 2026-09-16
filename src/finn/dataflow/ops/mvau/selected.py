@@ -64,6 +64,7 @@ from finn.dataflow.ops.selected import (
     RequiredSupply,
     SelectedConstruction,
     SelectedGraphDeclaration,
+    SelectedGraphError,
     SelectedGraphSnapshot,
     SelectionFacts,
     SourceDirection,
@@ -85,6 +86,7 @@ from finn.dataflow.ops.selected_transforms import (
     TRANSFORM_VERSION,
     SelectedTransformAuthorization,
 )
+from finn.dataflow.ops.tensor_summary import FrozenInitializer, decode_frozen_initializer
 
 MVAU_CONSTRUCTION_FAMILY = "finn.dataflow.selected.mvau.dot_product"
 MVAU_CONSTRUCTION_VERSION = "2"
@@ -107,6 +109,7 @@ class MvauSourceSemantics:
     integer_support_fingerprint: str | None = None
     integer_output_carrier: str | None = None
     integer_premise: object | None = None
+    fixed_weight_payload: object | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -129,6 +132,7 @@ class MvauSelectionParameters:
     integer_support_fingerprint: str | None
     integer_output_carrier: str | None
     integer_premise: DotProductPremise | None
+    fixed_weight_payload: FrozenInitializer | None
 
 
 def encode_mvau_source_semantics(value: MvauSourceSemantics) -> EncodedSourceSemantics:
@@ -141,11 +145,16 @@ def encode_mvau_source_semantics(value: MvauSourceSemantics) -> EncodedSourceSem
             raise ValueError("plain-integer MVAU semantics need a numerical premise fingerprint")
         if value.integer_output_carrier not in {"INT32", "INT64"}:
             raise ValueError("plain-integer MVAU semantics need an INT32 or INT64 carrier")
-        decode_dot_product_premise(value.integer_premise)
+        premise = decode_dot_product_premise(value.integer_premise)
+        if isinstance(premise.weights, FixedWeightPremise):
+            decode_frozen_initializer(value.fixed_weight_payload)
+        elif value.fixed_weight_payload is not None:
+            raise ValueError("unknown/runtime integer weights have no fixed payload")
     elif (
         value.integer_support_fingerprint is not None
         or value.integer_output_carrier is not None
         or value.integer_premise is not None
+        or value.fixed_weight_payload is not None
     ):
         raise ValueError("non-plain-integer MVAU semantics must not claim integer support")
     return EncodedSourceSemantics(
@@ -160,6 +169,7 @@ def encode_mvau_source_semantics(value: MvauSourceSemantics) -> EncodedSourceSem
             "integer_support_fingerprint": value.integer_support_fingerprint,
             "integer_output_carrier": value.integer_output_carrier,
             "integer_premise": value.integer_premise,
+            "fixed_weight_payload": value.fixed_weight_payload,
         },
     )
 
@@ -174,6 +184,7 @@ def decode_mvau_source_semantics(value: EncodedSourceSemantics) -> MvauSourceSem
         "integer_support_fingerprint",
         "integer_output_carrier",
         "integer_premise",
+        "fixed_weight_payload",
     }
     if (
         value.identity != MVAU_SOURCE_SEMANTICS
@@ -190,6 +201,7 @@ def decode_mvau_source_semantics(value: EncodedSourceSemantics) -> MvauSourceSem
     support_fingerprint = value.payload["integer_support_fingerprint"]
     integer_output_carrier = value.payload["integer_output_carrier"]
     integer_premise = value.payload["integer_premise"]
+    fixed_weight_payload = value.payload["fixed_weight_payload"]
     if type(accumulator) is not str or not accumulator or type(output) is not str or not output:
         raise ValueError("MVAU semantic datatypes must be non-empty strings")
     if activation is ActivationMode.NONE:
@@ -202,11 +214,16 @@ def decode_mvau_source_semantics(value: EncodedSourceSemantics) -> MvauSourceSem
             raise ValueError("plain-integer MVAU semantics need a numerical support fingerprint")
         if integer_output_carrier not in {"INT32", "INT64"}:
             raise ValueError("plain-integer MVAU semantics need an INT32 or INT64 carrier")
-        decode_dot_product_premise(integer_premise)
+        premise = decode_dot_product_premise(integer_premise)
+        if isinstance(premise.weights, FixedWeightPremise):
+            decode_frozen_initializer(fixed_weight_payload)
+        elif fixed_weight_payload is not None:
+            raise ValueError("unknown/runtime integer weights have no fixed payload")
     elif (
         support_fingerprint is not None
         or integer_output_carrier is not None
         or integer_premise is not None
+        or fixed_weight_payload is not None
     ):
         raise ValueError("non-plain-integer MVAU semantics must not claim integer support")
     return MvauSourceSemantics(
@@ -218,6 +235,7 @@ def decode_mvau_source_semantics(value: EncodedSourceSemantics) -> MvauSourceSem
         support_fingerprint,
         integer_output_carrier,
         integer_premise,
+        fixed_weight_payload,
     )
 
 
@@ -283,6 +301,28 @@ def _validated_integer_support(
     if isinstance(premise.weights, FixedWeightPremise):
         if weight.initializer_content_digest != premise.weights.content_digest:
             raise ValueError("selected integer MVAU fixed-weight digest differs from source")
+        frozen = decode_frozen_initializer(semantics.fixed_weight_payload)
+        if (
+            frozen.summary.content_digest != premise.weights.content_digest
+            or frozen.shape != premise.weight_shape
+            or carrier_name(frozen.carrier_dtype) != premise.weight_source_carrier
+        ):
+            raise ValueError("selected integer MVAU fixed payload differs from its premise")
+        actual_values = []
+        for raw in frozen.array_copy().reshape(-1):
+            item = raw.item() if hasattr(raw, "item") else raw
+            if isinstance(item, bool):
+                raise ValueError("selected integer MVAU fixed payload contains Boolean values")
+            if isinstance(item, int):
+                actual_values.append(item)
+            elif isinstance(item, float) and item.is_integer():
+                actual_values.append(int(item))
+            else:
+                raise ValueError("selected integer MVAU fixed payload is non-integral")
+        if tuple(actual_values) != premise.weights.values:
+            raise ValueError("selected integer MVAU fixed values differ from authenticated payload")
+    elif semantics.fixed_weight_payload is not None:
+        raise ValueError("selected integer MVAU non-fixed premise carries a fixed payload")
     report = check_integer_dot_product_support(
         premise=premise,
         selected_internal_bits=premise.accumulator_type.bit_width,
@@ -354,6 +394,11 @@ def derive_mvau_facts(
         if semantics.accumulation is AccumulationMode.INTEGER
         else None
     )
+    fixed_weight_payload = (
+        decode_frozen_initializer(semantics.fixed_weight_payload)
+        if integer_premise is not None and isinstance(integer_premise.weights, FixedWeightPremise)
+        else None
+    )
     if semantics.accumulation is AccumulationMode.INTEGER:
         if semantics.integer_output_carrier not in {"INT32", "INT64"}:
             raise ValueError("selected integer MVAU has no checked output carrier")
@@ -406,6 +451,7 @@ def derive_mvau_facts(
         semantics.integer_support_fingerprint,
         semantics.integer_output_carrier,
         integer_premise,
+        fixed_weight_payload,
     )
     return SelectionFacts(identity, source, semantics, choices, parameters)
 
@@ -490,8 +536,22 @@ def construct_mvau_snapshot(
         if integer_path and parameters.integer_output_carrier == "INT64"
         else source_output_carrier
     )
-    required_inputs = () if parameters.weight_supply is WeightSupply.EXTERNAL else (WEIGHT_KEY,)
+    required_inputs = (
+        (WEIGHT_KEY,)
+        if parameters.weight_supply is not WeightSupply.EXTERNAL
+        or parameters.fixed_weight_payload is not None
+        else ()
+    )
     frozen = validate_construction_inputs(facts, construction_inputs, required_inputs)
+    if (
+        parameters.fixed_weight_payload is not None
+        and frozen.get(WEIGHT_KEY) != parameters.fixed_weight_payload
+    ):
+        raise SelectedGraphError(
+            "selected.construction.fixed_value_facts",
+            "construction_inputs.weight",
+            "fixed weight payload differs from authenticated numerical value facts",
+        )
     activation_type = resolve_qonnx_datatype_name(parameters.activation_datatype)
     weight_type = resolve_qonnx_datatype_name(parameters.weight_datatype)
     output_type = resolve_qonnx_datatype_name(parameters.output_datatype)
@@ -1110,7 +1170,9 @@ def verify_mvau_snapshot(
     facts: SelectionFacts[MvauSourceSemantics, MvauSelectionParameters],
 ) -> tuple[Finding, ...]:
     inputs = ConstructionInputs()
-    if facts.parameters.weight_supply is not WeightSupply.EXTERNAL:
+    if facts.parameters.fixed_weight_payload is not None:
+        inputs = ConstructionInputs(((WEIGHT_KEY, facts.parameters.fixed_weight_payload),))
+    elif facts.parameters.weight_supply is not WeightSupply.EXTERNAL:
         frozen = frozen_initializer_for_source(snapshot, WEIGHT_KEY)
         if frozen is None:
             return (

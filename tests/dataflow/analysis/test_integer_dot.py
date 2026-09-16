@@ -9,6 +9,7 @@ import numpy as np
 import pytest
 
 from finn.dataflow.analysis.integer_dot import (
+    DatatypeWeightPremise,
     DotProductPremise,
     FixedWeightPremise,
     IntegerRange,
@@ -208,7 +209,7 @@ def test_n6_and_n8_fixed_identity_uses_values_and_digest() -> None:
     assert left_report.support.premise_fingerprint != right_report.support.premise_fingerprint
 
 
-def test_n7_runtime_promise_is_mandatory_and_valid_control_executes() -> None:
+def test_n7_explicit_runtime_refinement_validates_and_executes() -> None:
     premise = _runtime()
     report = _support(premise)
     assert report.supported and report.support is not None
@@ -218,6 +219,17 @@ def test_n7_runtime_promise_is_mandatory_and_valid_control_executes() -> None:
         report.support,
     )
     assert execute_integer_dot_product(validated, report.support).item() == 2
+
+
+def test_unknown_weights_use_full_logical_datatype_facts_without_a_promise() -> None:
+    premise = _runtime()
+    premise = replace(
+        premise,
+        weights=DatatypeWeightPremise(I8.value_range, 1, W, "FLOAT32"),
+    )
+    report = _support(premise)
+    assert report.supported and report.support is not None
+    assert report.support.bounds.result == IntegerRange(-384, 381)
 
 
 def test_carried_runtime_promise_applicability_source_scope_count_and_carrier() -> None:

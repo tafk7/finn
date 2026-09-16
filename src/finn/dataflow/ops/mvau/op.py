@@ -23,10 +23,10 @@ from typing import Any, ClassVar, cast
 
 from finn.dataflow._engine import ABSENT, Decided
 from finn.dataflow.analysis.integer_dot import (
+    FixedWeightPremise,
     IntegerSupportReport,
     InvocationScope,
     NumericalFinding,
-    RuntimeWeightPromise,
     encode_dot_product_premise,
 )
 from finn.dataflow.model.datatypes import QONNXDataType
@@ -62,6 +62,7 @@ from finn.dataflow.ops.mvau.numerics import (
     integer_graph_profile_fingerprint,
 )
 from finn.dataflow.ops.source import SourceNode, SourceOperand
+from finn.dataflow.ops.tensor_summary import encode_frozen_initializer
 from finn.dataflow.ops.mvau.designs.base import WeightedDotProductDesign
 from finn.dataflow.ops.mvau.designs.batch_interleaved import BatchInterleavedDesign
 from finn.dataflow.ops.mvau.designs.dot_product import DotProductDesign
@@ -125,15 +126,6 @@ def _runtime_weight_range_contract(build: Any) -> bool | None:
 
     value = getattr(build, "runtime_weight_range_contract", None)
     return None if value is None else bool(value)
-
-
-def _runtime_weight_promise(build: Any) -> RuntimeWeightPromise | None:
-    value = getattr(build, "runtime_weight_promise", None)
-    if value is None:
-        return None
-    if not isinstance(value, RuntimeWeightPromise):
-        raise TypeError("runtime_weight_promise must be RuntimeWeightPromise")
-    return value
 
 
 def _numerical_rejection(report: IntegerSupportReport) -> object:
@@ -266,11 +258,6 @@ class MvauDataflowOp(DataflowOp):
     runtime_weight_range_contract = BuildFact(
         bool, accessor=_runtime_weight_range_contract, required=False
     )
-    runtime_weight_promise = BuildFact(
-        RuntimeWeightPromise,
-        accessor=_runtime_weight_promise,
-        required=False,
-    )
     clock_period_ns = BuildFact(float, accessor=lambda build: float(build.synth_clk_period_ns))
 
     invocation_scope = Problem(
@@ -375,7 +362,6 @@ class MvauDataflowOp(DataflowOp):
         profile=profile,
         scope=invocation_scope,
         runtime_writable=allow_absent(runtime_writable_weights),
-        runtime_promise=allow_absent(runtime_weight_promise),
     )
     def source_numerical_report(
         *,
@@ -386,7 +372,6 @@ class MvauDataflowOp(DataflowOp):
         profile: MvauComputationProfile,
         scope: InvocationScope,
         runtime_writable: object,
-        runtime_promise: object,
     ) -> IntegerSupportReport:
         if profile.accumulation is not AccumulationMode.INTEGER or profile.fuses_activation:
             return IntegerSupportReport(None, ())
@@ -408,9 +393,7 @@ class MvauDataflowOp(DataflowOp):
             output_datatype=output,
             invocation_scope=scope,
             runtime_writable=runtime_writable is not ABSENT and bool(runtime_writable),
-            runtime_promise=(
-                runtime_promise if isinstance(runtime_promise, RuntimeWeightPromise) else None
-            ),
+            runtime_promise=None,
             target_max_bits=64,
         )
 
@@ -423,7 +406,6 @@ class MvauDataflowOp(DataflowOp):
         profile=profile,
         scope=invocation_scope,
         runtime_writable=allow_absent(runtime_writable_weights),
-        runtime_promise=allow_absent(runtime_weight_promise),
         target=target_dsp,
     )
     def numerical_support(
@@ -435,7 +417,6 @@ class MvauDataflowOp(DataflowOp):
         profile: MvauComputationProfile,
         scope: InvocationScope,
         runtime_writable: object,
-        runtime_promise: object,
         target: DspBlock,
     ) -> IntegerSupportReport:
         if (
@@ -454,9 +435,7 @@ class MvauDataflowOp(DataflowOp):
             output_datatype=output,
             invocation_scope=scope,
             runtime_writable=runtime_writable is not ABSENT and bool(runtime_writable),
-            runtime_promise=(
-                runtime_promise if isinstance(runtime_promise, RuntimeWeightPromise) else None
-            ),
+            runtime_promise=None,
             target_max_bits=target_accumulator_bits(target),
         )
 
@@ -464,30 +443,25 @@ class MvauDataflowOp(DataflowOp):
         bool,
         excludes_minimum=allow_absent(weight_excludes_minimum),
         runtime_writable=allow_absent(runtime_writable_weights),
-        runtime_range=allow_absent(runtime_weight_range_contract),
     )
-    def effective_narrow_weights(
-        *, excludes_minimum: object, runtime_writable: object, runtime_range: object
-    ) -> object:
+    def effective_narrow_weights(*, excludes_minimum: object, runtime_writable: object) -> object:
         """Whether the weights can be stored one bit narrower.
 
         Two sources, and which one applies is a property of the *weights*, not
         a preference.  A matrix baked in at build time is judged by its own
-        values.  A runtime-writable matrix has no values yet, so the only thing
-        that can promise anything about the range it will hold is the caller's
-        explicit contract -- and reading the initializer analysis for such a
-        node would narrow the hardware on the strength of weights that are
-        about to be overwritten.
+        values. A runtime-writable matrix has no authoritative fixed values, so
+        it uses datatype-only sizing. Reading initializer analysis for such a
+        node would narrow hardware on the strength of values that may be
+        overwritten.
 
-        Absent, on either path, is ``False``: no initializer, values the
-        analysis could not judge, or a runtime-writable matrix with no contract
-        all mean nobody has promised anything, and hardware must not be built
-        on a promise nobody made.
+        Missing or inapplicable narrower facts are ``False``; numerical support
+        independently falls back to the complete logical datatype range.
         """
 
         writable = runtime_writable is not ABSENT and bool(runtime_writable)
-        promised = runtime_range if writable else excludes_minimum
-        return promised is not ABSENT and bool(promised)
+        if writable:
+            return False
+        return excludes_minimum is not ABSENT and bool(excludes_minimum)
 
     @constraint(shape=matrix)
     def weight_is_a_matrix(*, shape: tuple[int, ...]) -> object:
@@ -661,6 +635,7 @@ class MvauDataflowOp(DataflowOp):
         support_fingerprint = None
         integer_output_carrier = None
         integer_premise = None
+        fixed_weight_payload = None
         if profile.accumulation is AccumulationMode.INTEGER and not profile.fuses_activation:
             if any(
                 not self.source.operand(name).datatype_annotated
@@ -686,6 +661,13 @@ class MvauDataflowOp(DataflowOp):
             support_fingerprint = integer_graph_profile_fingerprint(answer.value.support)
             integer_output_carrier = answer.value.support.output_carrier
             integer_premise = encode_dot_product_premise(answer.value.support.premise)
+            if isinstance(answer.value.support.premise.weights, FixedWeightPremise):
+                initializer = self.source.operand("weight").initializer_value
+                if initializer is None:
+                    raise DataflowOpError(
+                        "fixed selected numerical support has no source initializer payload"
+                    )
+                fixed_weight_payload = encode_frozen_initializer(initializer)
         return encode_mvau_source_semantics(
             MvauSourceSemantics(
                 profile.accumulation,
@@ -696,6 +678,7 @@ class MvauDataflowOp(DataflowOp):
                 support_fingerprint,
                 integer_output_carrier,
                 integer_premise,
+                fixed_weight_payload,
             )
         )
 

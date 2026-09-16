@@ -13,6 +13,7 @@ from typing import Any
 from onnx import TensorProto  # type: ignore[import-not-found]
 
 from finn.dataflow.analysis.integer_dot import (
+    DatatypeWeightPremise,
     DotProductPremise,
     FixedWeightPremise,
     IntegerRange,
@@ -157,14 +158,22 @@ def mvau_integer_premise_from_operands(
     output_type = integer_type(output_datatype)
     activation_carrier = carrier_name(activation.carrier_dtype)
     weight_carrier = carrier_name(weight.carrier_dtype)
-    if runtime_writable:
-        if runtime_promise is None:
-            raise ValueError("runtime-writable weights require an explicit range promise")
-        weights: FixedWeightPremise | RuntimeWeightPromise = runtime_promise
+    # Delivery does not determine value knowledge. A non-overrideable source
+    # initializer is authoritative; otherwise the sound fallback is the full
+    # logical datatype range. Legacy caller promises are retained as inputs for
+    # compatibility but do not authorize a narrower range without provenance.
+    del runtime_promise
+    if not runtime_writable and weight.initializer_value is not None:
+        weights: FixedWeightPremise | DatatypeWeightPremise = _fixed_weights(
+            weight.initializer_value, weight_carrier
+        )
     else:
-        if weight.initializer_value is None:
-            raise ValueError("fixed-weight integer support requires an immutable initializer")
-        weights = _fixed_weights(weight.initializer_value, weight_carrier)
+        weights = DatatypeWeightPremise(
+            weight_type.value_range,
+            weight.elements,
+            WEIGHT_IDENTITY,
+            weight_carrier,
+        )
     if len(weight.shape) != 2 or not activation.shape:
         raise ValueError("integer MVAU requires rank-two weights and a ranked activation")
     output_shape = (*activation.shape[:-1], weight.shape[1])

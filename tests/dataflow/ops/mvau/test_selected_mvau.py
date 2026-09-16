@@ -71,7 +71,7 @@ from finn.dataflow.ops.selected import (
     build_selected_snapshot,
     decode_selected_graph,
 )
-from finn.dataflow.ops.tensor_summary import FrozenInitializer
+from finn.dataflow.ops.tensor_summary import FrozenInitializer, encode_frozen_initializer
 
 
 def _case(mode: AccumulationMode):
@@ -142,7 +142,8 @@ def _facts(
         assert mode is AccumulationMode.INTEGER
         expected = activation @ weight
     frozen = FrozenInitializer.from_tensor_proto(numpy_helper.from_array(weight, name="weight"))
-    integer_evidence: tuple[object | None, object | None, object | None] = (
+    integer_evidence: tuple[object | None, object | None, object | None, object | None] = (
+        None,
         None,
         None,
         None,
@@ -182,6 +183,7 @@ def _facts(
             integer_graph_profile_fingerprint(support.support),
             "INT32",
             encode_dot_product_premise(premise),
+            encode_frozen_initializer(frozen),
         )
     semantics = MvauSourceSemantics(
         mode,
@@ -241,9 +243,9 @@ def _facts(
         choices,
     )
     inputs = (
-        ConstructionInputs()
-        if supply is WeightSupply.EXTERNAL
-        else ConstructionInputs(((WEIGHT_KEY, frozen),))
+        ConstructionInputs(((WEIGHT_KEY, frozen),))
+        if supply is not WeightSupply.EXTERNAL or mode is AccumulationMode.INTEGER
+        else ConstructionInputs()
     )
     return facts, inputs, activation, weight, expected
 
@@ -426,15 +428,17 @@ def test_mvau_verifier_rejects_a_wrong_weight_fold_permutation() -> None:
 
 
 def test_weight_modes_enforce_their_exact_construction_input_sets() -> None:
-    external_facts, _empty, _activation, _weight, _expected = _facts(
+    external_facts, external_input, _activation, _weight, _expected = _facts(
         AccumulationMode.INTEGER, WeightSupply.EXTERNAL
     )
     embedded_facts, local, _activation, _weight, _expected = _facts(
         AccumulationMode.INTEGER, WeightSupply.EMBEDDED
     )
-    with pytest.raises(SelectedGraphError) as extra:
-        construct_mvau_snapshot(external_facts, local)
-    assert extra.value.code == "selected.construction.initializer_keys"
+    construct_mvau_snapshot(external_facts, external_input)
+    with pytest.raises(SelectedGraphError) as external_missing:
+        construct_mvau_snapshot(external_facts, ConstructionInputs())
+    assert external_missing.value.code == "selected.construction.initializer_keys"
+    construct_mvau_snapshot(embedded_facts, local)
     with pytest.raises(SelectedGraphError) as missing:
         construct_mvau_snapshot(embedded_facts, ConstructionInputs())
     assert missing.value.code == "selected.construction.initializer_keys"
@@ -548,6 +552,61 @@ def test_detached_selected_integer_admission_revalidates_complete_premise(change
         )
         with pytest.raises(SelectedGraphError):
             decode_selected_graph(broken)
+
+
+def test_fixed_value_facts_are_authenticated_against_initializer_payload() -> None:
+    facts, inputs, _activation, _weight, _expected = _facts(
+        AccumulationMode.INTEGER,
+        WeightSupply.EMBEDDED,
+        activation_override=np.full((1, 8), 127, dtype=np.float32),
+        weight_override=np.ones((8, 4), dtype=np.float32),
+        pe=2,
+        simd=2,
+    )
+    premise = decode_dot_product_premise(facts.source_semantics.integer_premise)
+    assert isinstance(premise.weights, FixedWeightPremise)
+    narrow = integer_type(DataType["INT8"])
+    false_premise = replace(
+        premise,
+        weights=replace(premise.weights, values=(0,) * len(premise.weights.values)),
+        accumulator_type=narrow,
+        result_type=narrow,
+    )
+    report = check_integer_dot_product_support(
+        premise=false_premise,
+        selected_internal_bits=8,
+        selected_output_carrier="INT32",
+        target_max_accumulator_bits=64,
+    )
+    assert report.supported and report.support is not None
+    semantics = replace(
+        facts.source_semantics,
+        accumulator_datatype="INT8",
+        output_datatype="INT8",
+        integer_premise=encode_dot_product_premise(false_premise),
+        integer_support_fingerprint=integer_graph_profile_fingerprint(report.support),
+    )
+    source = SourceProvenance.create(
+        family=facts.source.family,
+        family_version=facts.source.family_version,
+        schema_version=facts.source.schema_version,
+        problem_fingerprint=facts.source.problem_fingerprint,
+        scope_id=facts.source.scope_id,
+        operands=tuple(
+            replace(value, logical_datatype="INT8") if value.key == OUTPUT_KEY else value
+            for value in facts.source.operands
+        ),
+        semantics=encode_mvau_source_semantics(semantics),
+    )
+    with pytest.raises(ValueError, match="fixed values differ from authenticated payload"):
+        derive_mvau_facts(facts.construction, source, semantics, facts.choices)
+
+    snapshot = construct_mvau_snapshot(facts, inputs)
+    broken = build_selected_snapshot(
+        snapshot.model_copy(), replace(snapshot.declaration, source=source)
+    )
+    with pytest.raises(SelectedGraphError, match="fixed values differ"):
+        decode_selected_graph(broken)
 
 
 def test_selected_xnor_refuses_nonbinary_logical_operands() -> None:
@@ -766,6 +825,7 @@ def test_large_external_mvau_construction_and_decode_remain_compact(
         integer_graph_profile_fingerprint(support.support),
         "INT32",
         encode_dot_product_premise(premise),
+        None,
     )
     source = SourceProvenance.create(
         family="finn.dataflow.mvau",

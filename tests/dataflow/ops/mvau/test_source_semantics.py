@@ -35,6 +35,7 @@ from qonnx.custom_op.general.multithreshold import (  # type: ignore[import-not-
 from finn.analysis.verify_custom_nodes import verify_nodes
 from finn.dataflow._engine import Decided
 from finn.dataflow.analysis.integer_dot import (
+    DatatypeWeightPremise,
     IntegerRange,
     InvocationScope,
     OperandIdentity,
@@ -752,7 +753,7 @@ def _narrow(build: Build, *, weights: np.ndarray | None = None) -> Any:
     return operation.answer(MvauDataflowOp.effective_narrow_weights)
 
 
-def test_a_runtime_written_matrix_is_judged_by_its_contract_not_its_initializer() -> None:
+def test_a_runtime_written_matrix_uses_datatype_sizing_not_initializer_or_flag() -> None:
     """The initializer is about to be overwritten; narrowing on it is unsound."""
 
     avoiding = np.full((MATRIX_WIDTH, MATRIX_HEIGHT), -127.0, dtype=np.float32)
@@ -760,21 +761,19 @@ def test_a_runtime_written_matrix_is_judged_by_its_contract_not_its_initializer(
     assert _narrow(Build(), weights=avoiding) == Decided(True)
     assert _narrow(RuntimeBuild(), weights=avoiding) == Decided(False)
     assert _narrow(RuntimeBuild(runtime_weight_range_contract=True), weights=avoiding) == Decided(
-        True
+        False
     )
 
 
-def test_a_runtime_contract_that_promises_nothing_is_not_narrow() -> None:
+def test_a_runtime_narrowness_flag_never_substitutes_for_source_value_facts() -> None:
     using_minimum = np.full((MATRIX_WIDTH, MATRIX_HEIGHT), -128.0, dtype=np.float32)
 
     assert _narrow(
         RuntimeBuild(runtime_weight_range_contract=False), weights=using_minimum
     ) == Decided(False)
-    # And a contract can promise narrowness for weights that do not have it
-    # yet, because the values on the node are not the ones that will be used.
     assert _narrow(
         RuntimeBuild(runtime_weight_range_contract=True), weights=using_minimum
-    ) == Decided(True)
+    ) == Decided(False)
 
 
 def test_the_runtime_facts_are_part_of_the_problem_identity() -> None:
@@ -803,7 +802,7 @@ def _runtime_promise(
     )
 
 
-def test_runtime_weight_promise_must_apply_before_source_execution() -> None:
+def test_unknown_runtime_weights_fall_back_to_full_datatype_bounds() -> None:
     weights = np.ones((MATRIX_WIDTH, MATRIX_HEIGHT), dtype=np.float32)
     activation = np.full((REPETITIONS, MATRIX_WIDTH), 2, dtype=np.float32)
     model = _model(weights=weights)
@@ -817,6 +816,8 @@ def test_runtime_weight_promise_must_apply_before_source_execution() -> None:
     )
     report = valid.answer(MvauDataflowOp.numerical_support)
     assert isinstance(report, Decided) and report.value.supported
+    assert report.value.support is not None
+    assert isinstance(report.value.support.premise.weights, DatatypeWeightPremise)
     context: dict[str, Any] = {"activation": activation, "weight": weights}
     valid.execute_node(context, model.graph)
     assert context["output"].dtype == np.int32
@@ -829,9 +830,8 @@ def test_runtime_weight_promise_must_apply_before_source_execution() -> None:
         model,
         RuntimeBuild(runtime_weight_promise=_runtime_promise("unrelated-invocation-A")),
     )
-    refused = wrong_scope.answer(MvauDataflowOp.numerical_support)
-    assert isinstance(refused, Decided)
-    assert {item.code for item in refused.value.findings} == {"integer-runtime-promise-scope"}
+    scope_fallback = wrong_scope.answer(MvauDataflowOp.numerical_support)
+    assert isinstance(scope_fallback, Decided) and scope_fallback.value.supported
 
     wrong_source = wrapper.bind(
         model,
@@ -842,9 +842,8 @@ def test_runtime_weight_promise_must_apply_before_source_execution() -> None:
             )
         ),
     )
-    refused = wrong_source.answer(MvauDataflowOp.numerical_support)
-    assert isinstance(refused, Decided)
-    assert {item.code for item in refused.value.findings} == {"integer-runtime-promise-source"}
+    source_fallback = wrong_source.answer(MvauDataflowOp.numerical_support)
+    assert isinstance(source_fallback, Decided) and source_fallback.value.supported
 
     broad = wrapper.bind(
         model,
@@ -857,6 +856,23 @@ def test_runtime_weight_promise_must_apply_before_source_execution() -> None:
     )
     accepted = broad.answer(MvauDataflowOp.numerical_support)
     assert isinstance(accepted, Decided) and accepted.value.supported
+    assert scope_fallback.value.support == source_fallback.value.support == accepted.value.support
+
+
+@pytest.mark.parametrize("build", (Build(), RuntimeBuild()))
+def test_unknown_weight_input_uses_full_logical_datatype_range(build: Build) -> None:
+    model = _model(weight_initializer=False)
+    weight_info = next(item for item in model.graph.value_info if item.name == "weight")
+    model.graph.input.append(weight_info)
+    retained = [item for item in model.graph.value_info if item.name != "weight"]
+    del model.graph.value_info[:]
+    model.graph.value_info.extend(retained)
+    operation = _unbound(model, "mvau0").bind(model, build)
+    report = operation.answer(MvauDataflowOp.source_numerical_report)
+    assert isinstance(report, Decided) and report.value.supported
+    assert report.value.support is not None
+    assert isinstance(report.value.support.premise.weights, DatatypeWeightPremise)
+    assert report.value.support.bounds.result == IntegerRange(-130_048, 131_072)
 
 
 # -- provenance ------------------------------------------------------------------

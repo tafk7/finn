@@ -55,9 +55,15 @@ def test_the_effective_narrowness_rule_agrees_with_the_oracle(
     _model, occurrence = bound(_spec(fixture_name), BUILD)
     local_value = encode(occurrence.effective_narrow_weights)
 
-    assert local_value == oracle_value, (
-        f"{fixture_name}: oracle {oracle_value!r}, this stack {local_value!r}"
-    )
+    if fixture_name == "runtime_writable_with_contract":
+        # CK-G2 operand-value-facts correction: a manual flag is not
+        # authenticated narrower value knowledge for unknown runtime weights.
+        assert oracle_value is True
+        assert local_value is False
+    else:
+        assert local_value == oracle_value, (
+            f"{fixture_name}: oracle {oracle_value!r}, this stack {local_value!r}"
+        )
     # And both agree with what the rule says the answer *should* be, so a case
     # where the two stacks were wrong together would still fail.
     assert local_value is expected

@@ -332,7 +332,10 @@ DESIGN_INPUTS = (*SHARED_INPUTS, "initializer_present", "weight_initializer")
 def _local_weight_required(facts: SelectionFacts[object, object]) -> bool:
     if not isinstance(facts.parameters, MvauSelectionParameters):
         raise TypeError("MVAU initializer predicate received the wrong parameters")
-    return facts.parameters.weight_supply is not WeightSupply.EXTERNAL
+    return (
+        facts.parameters.weight_supply is not WeightSupply.EXTERNAL
+        or facts.parameters.fixed_weight_payload is not None
+    )
 
 
 DotProductDesign.selected_graph = SelectedGraph(

@@ -6,6 +6,7 @@
 from finn.dataflow.analysis.integer_dot import (
     DotProductBounds,
     DotProductPremise,
+    DatatypeWeightPremise,
     FixedWeightPremise,
     IntegerRange,
     IntegerSupport,
@@ -28,6 +29,7 @@ from finn.dataflow.analysis.integer_dot import (
 __all__ = [
     "DotProductBounds",
     "DotProductPremise",
+    "DatatypeWeightPremise",
     "FixedWeightPremise",
     "IntegerRange",
     "IntegerSupport",

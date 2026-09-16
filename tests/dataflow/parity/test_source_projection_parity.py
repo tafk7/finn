@@ -236,7 +236,9 @@ def test_both_stacks_verify_the_same_nodes(fixture_name: str) -> None:
     report = verify_nodes(local_model(spec))
     if fixture_name == "no_initializer":
         assert report["MvauDataflowOp"] == [
-            "fixed-weight integer support requires an immutable initializer"
+            "an intermediate can exceed the selected implementation accumulator",
+            "the exact result can exceed accDataType",
+            "the exact result can exceed outputDataType",
         ]
     else:
         assert report["MvauDataflowOp"] == []

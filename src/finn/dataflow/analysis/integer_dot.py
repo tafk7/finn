@@ -152,7 +152,27 @@ class RuntimeWeightPromise:
         return invocation in self.covered_invocations
 
 
-WeightPremise = FixedWeightPremise | RuntimeWeightPromise
+@dataclass(frozen=True, slots=True)
+class DatatypeWeightPremise:
+    """Unknown weights conservatively bounded by their logical datatype."""
+
+    value_range: IntegerRange
+    count: int
+    source_operand: OperandIdentity
+    source_carrier: str
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.value_range, IntegerRange):
+            raise TypeError("datatype weight premise value_range must be IntegerRange")
+        _integer(self.count, "datatype weight count")
+        if self.count < 1:
+            raise ValueError("datatype weight count must be positive")
+        if not isinstance(self.source_operand, OperandIdentity):
+            raise TypeError("datatype weight source_operand must be OperandIdentity")
+        _nonempty(self.source_carrier, "datatype weight source carrier")
+
+
+WeightPremise = FixedWeightPremise | RuntimeWeightPromise | DatatypeWeightPremise
 
 
 @dataclass(frozen=True, slots=True)
@@ -309,7 +329,7 @@ def encode_dot_product_premise(premise: DotProductPremise) -> dict[str, object]:
             "content_digest": premise.weights.content_digest,
             "source_carrier": premise.weights.source_carrier,
         }
-    else:
+    elif isinstance(premise.weights, RuntimeWeightPromise):
         weights = {
             "kind": "runtime",
             "value_range": integer_range(premise.weights.value_range),
@@ -319,6 +339,14 @@ def encode_dot_product_premise(premise: DotProductPremise) -> dict[str, object]:
                 scope.scope_id for scope in premise.weights.covered_invocations
             ],
             "promise_id": premise.weights.promise_id,
+            "source_carrier": premise.weights.source_carrier,
+        }
+    else:
+        weights = {
+            "kind": "datatype",
+            "value_range": integer_range(premise.weights.value_range),
+            "count": premise.weights.count,
+            "source_operand": operand(premise.weights.source_operand),
             "source_carrier": premise.weights.source_carrier,
         }
     return {
@@ -451,6 +479,18 @@ def decode_dot_product_premise(value: object) -> DotProductPremise:
             ),
             string(runtime["promise_id"], "runtime promise id"),
             string(runtime["source_carrier"], "runtime source carrier"),
+        )
+    elif kind == "datatype":
+        datatype = mapping(
+            raw_weights,
+            {"kind", "value_range", "count", "source_operand", "source_carrier"},
+            "datatype weights",
+        )
+        weights = DatatypeWeightPremise(
+            integer_range(datatype["value_range"], "datatype value range"),
+            integer(datatype["count"], "datatype count"),
+            operand(datatype["source_operand"], "datatype source operand"),
+            string(datatype["source_carrier"], "datatype source carrier"),
         )
     else:
         raise ValueError("dot-product premise has an unsupported weight kind")
@@ -599,7 +639,7 @@ def _fingerprint(premise: DotProductPremise) -> str:
             "content_digest": premise.weights.content_digest,
             "source_carrier": premise.weights.source_carrier,
         }
-    else:
+    elif isinstance(premise.weights, RuntimeWeightPromise):
         weights = {
             "kind": "runtime",
             "range": [premise.weights.value_range.minimum, premise.weights.value_range.maximum],
@@ -613,6 +653,18 @@ def _fingerprint(premise: DotProductPremise) -> str:
                 scope.scope_id for scope in premise.weights.covered_invocations
             ],
             "promise_id": premise.weights.promise_id,
+            "source_carrier": premise.weights.source_carrier,
+        }
+    else:
+        weights = {
+            "kind": "datatype",
+            "range": [premise.weights.value_range.minimum, premise.weights.value_range.maximum],
+            "count": premise.weights.count,
+            "source": [
+                premise.weights.source_operand.operand_id,
+                premise.weights.source_operand.direction,
+                premise.weights.source_operand.index,
+            ],
             "source_carrier": premise.weights.source_carrier,
         }
     value = {
@@ -704,7 +756,7 @@ def check_integer_dot_product_support(
                     first=bad[0],
                 )
             )
-    else:
+    elif isinstance(premise.weights, RuntimeWeightPromise):
         promise = premise.weights
         # Applicability is established before range analysis can issue a witness.
         if promise.source_operand != premise.weight_source:
@@ -750,6 +802,36 @@ def check_integer_dot_product_support(
                     "runtime-weight promise exceeds the logical weight datatype",
                 )
             )
+    else:
+        datatype = premise.weights
+        if datatype.source_operand != premise.weight_source:
+            findings.append(
+                _finding(
+                    "integer-datatype-weight-source",
+                    "datatype weight facts name a different source operand",
+                )
+            )
+        if datatype.count != expected_count:
+            findings.append(
+                _finding(
+                    "integer-datatype-weight-count",
+                    "datatype weight count differs from the matrix shape",
+                )
+            )
+        if datatype.source_carrier != premise.weight_source_carrier:
+            findings.append(
+                _finding(
+                    "integer-datatype-weight-carrier",
+                    "datatype weight carrier differs from the source operand",
+                )
+            )
+        if datatype.value_range != premise.weight_logical_type.value_range:
+            findings.append(
+                _finding(
+                    "integer-datatype-weight-range",
+                    "unknown weights must use the full logical datatype range",
+                )
+            )
     activation_carrier = _carrier_range(premise.activation_source_carrier)
     if activation_carrier is None or not activation_carrier.contains_range(
         premise.activation_range
@@ -765,7 +847,7 @@ def check_integer_dot_product_support(
         IntegerRange(min(premise.weights.values), max(premise.weights.values))
         if isinstance(premise.weights, FixedWeightPremise) and premise.weights.values
         else premise.weights.value_range
-        if isinstance(premise.weights, RuntimeWeightPromise)
+        if isinstance(premise.weights, (RuntimeWeightPromise, DatatypeWeightPremise))
         else None
     )
     weight_carrier = _carrier_range(premise.weight_source_carrier)
@@ -952,7 +1034,7 @@ def validate_integer_dot_product_operands(
     activation_values = _runtime_values(activation, premise.activation_range, "activation")
     if isinstance(premise.weights, FixedWeightPremise):
         weight_range = IntegerRange(min(premise.weights.values), max(premise.weights.values))
-    else:
+    elif isinstance(premise.weights, RuntimeWeightPromise):
         promise = premise.weights
         if promise.source_operand != weights.source or not promise.covers(weights.invocation_scope):
             raise ValueError("runtime-weight promise is not applicable to these operands")
@@ -961,6 +1043,15 @@ def validate_integer_dot_product_operands(
         if promise.source_carrier != weights.carrier:
             raise ValueError("runtime-weight promise carrier differs from the supplied tensor")
         weight_range = promise.value_range
+    else:
+        datatype = premise.weights
+        if datatype.source_operand != weights.source:
+            raise ValueError("datatype weight facts do not apply to this operand")
+        if datatype.count != prod(weights.shape):
+            raise ValueError("datatype weight count differs from the supplied tensor")
+        if datatype.source_carrier != weights.carrier:
+            raise ValueError("datatype weight carrier differs from the supplied tensor")
+        weight_range = datatype.value_range
     weight_values = _runtime_values(weights, weight_range, "weights")
     if isinstance(premise.weights, FixedWeightPremise):
         if weight_values != premise.weights.values:
@@ -968,7 +1059,7 @@ def validate_integer_dot_product_operands(
         if weights.content_digest != premise.weights.content_digest:
             raise ValueError("runtime fixed-weight digest differs from the immutable initializer")
     elif len(weight_values) != premise.weights.count:
-        raise ValueError("runtime-weight tensor count differs from its promise")
+        raise ValueError("runtime weight tensor count differs from its value facts")
     return ValidatedDotProductOperands(
         activation_values,
         weight_values,
@@ -1017,6 +1108,7 @@ def execute_integer_dot_product(
 __all__ = [
     "DotProductBounds",
     "DotProductPremise",
+    "DatatypeWeightPremise",
     "FixedWeightPremise",
     "IntegerRange",
     "IntegerSupport",

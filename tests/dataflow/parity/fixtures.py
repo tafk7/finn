@@ -209,7 +209,7 @@ NARROWNESS_ROWS = (
     ("no_initializer", "no_initializer", False),
     ("runtime_no_contract", "runtime_writable", False),
     ("runtime_false_contract", "runtime_writable_false_contract", False),
-    ("runtime_true_contract", "runtime_writable_with_contract", True),
+    ("runtime_true_contract_corrected", "runtime_writable_with_contract", False),
 )
 
 
