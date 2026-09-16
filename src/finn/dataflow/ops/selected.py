@@ -1585,6 +1585,7 @@ def _validate_source_boundary_paths(
     graph_inputs = {item.name for item in model.graph.input}
     graph_outputs = {item.name for item in model.graph.output}
     initializer_names = {item.name for item in model.graph.initializer}
+    initializer_summaries = initializer_value_summaries(model)
     interface_bindings = _binding_map(declaration.interface_bindings)
     supplied_values = {
         interface_bindings[item.required_input].graph_value for item in declaration.supplies
@@ -1680,11 +1681,13 @@ def _validate_source_boundary_paths(
             first = nodes[owner.node_ids[0]]
             root = first.input[0] if first.input else ""
             root_fact = values.get(root)
-            if root not in graph_inputs or root_fact is None:
+            graph_input_root = root in graph_inputs
+            initializer_root = root in initializer_names
+            if (not graph_input_root and not initializer_root) or root_fact is None:
                 _fail(
                     "selected.source.boundary_root",
                     path,
-                    "source-boundary input adapter has no graph-input root",
+                    "source-boundary input adapter has no graph-input or initializer root",
                 )
             if root_fact.shape != binding.relation.source_domain.extents:
                 _fail(
@@ -1693,6 +1696,18 @@ def _validate_source_boundary_paths(
                     "source-boundary graph input differs from the source domain",
                 )
             source_value = source_values[binding.source]
+            if initializer_root:
+                summary = initializer_summaries.get(root)
+                if (
+                    source_value.initializer_content_digest is None
+                    or summary is None
+                    or summary.content_digest != source_value.initializer_content_digest
+                ):
+                    _fail(
+                        "selected.source.boundary_initializer_digest",
+                        path,
+                        "source-boundary initializer differs from retained source identity",
+                    )
             if (
                 root_fact.carrier_dtype != source_value.carrier_dtype
                 or _required_logical_type(root_fact, f"tensor.{root}").name

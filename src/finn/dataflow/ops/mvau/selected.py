@@ -17,6 +17,7 @@ from qonnx.core.modelwrapper import ModelWrapper  # type: ignore[import-not-foun
 
 from finn.dataflow._engine import Finding, FindingKind, QualifiedPath
 from finn.dataflow.analysis.integer_dot import (
+    DatatypeWeightPremise,
     DotProductPremise,
     FixedWeightPremise,
     check_integer_dot_product_support,
@@ -323,6 +324,11 @@ def _validated_integer_support(
             raise ValueError("selected integer MVAU fixed values differ from authenticated payload")
     elif semantics.fixed_weight_payload is not None:
         raise ValueError("selected integer MVAU non-fixed premise carries a fixed payload")
+    if not isinstance(premise.weights, (FixedWeightPremise, DatatypeWeightPremise)):
+        raise ValueError(
+            "selected integer MVAU has unauthenticated narrower runtime value facts; "
+            "use full datatype bounds"
+        )
     report = check_integer_dot_product_support(
         premise=premise,
         selected_internal_bits=premise.accumulator_type.bit_width,
@@ -940,7 +946,10 @@ def construct_mvau_snapshot(
             parameters.source_activation_shape,
         )
     ]
-    if parameters.weight_supply is WeightSupply.EXTERNAL:
+    if (
+        parameters.weight_supply is WeightSupply.EXTERNAL
+        and parameters.fixed_weight_payload is None
+    ):
         graph_inputs.append(
             _tensor(
                 "W_source",
@@ -963,7 +972,10 @@ def construct_mvau_snapshot(
         value_info=[item for item in value_info if item.name not in external_names],
     )
     model = ModelWrapper(helper.make_model(graph, opset_imports=[helper.make_opsetid("", 13)]))
-    if parameters.weight_supply is not WeightSupply.EXTERNAL:
+    if (
+        parameters.weight_supply is not WeightSupply.EXTERNAL
+        or parameters.fixed_weight_payload is not None
+    ):
         set_frozen_initializer(model, "W_source", frozen[WEIGHT_KEY])
     for name, value in constant_values.items():
         model.set_initializer(name, np.asarray(value, dtype=np.int64))

@@ -15,6 +15,7 @@ from dataflow.ops.mvau.test_batch_interleaved import _interleaved_operation, _mv
 from dataflow.ops.test_dataflow_op import Build, _configured_mvau, _unbound
 from finn.dataflow._engine import Absent, Decided
 from finn.dataflow.analysis.integer_dot import (
+    DatatypeWeightPremise,
     DotProductPremise,
     FixedWeightPremise,
     IntegerRange,
@@ -257,7 +258,7 @@ def test_selected_mvau_profiles_and_weight_modes(mode, supply) -> None:
     snapshot = construct_mvau_snapshot(facts, inputs)
     decoded = decode_selected_graph(snapshot, constructions=DEFAULT_SELECTED_CONSTRUCTIONS)
     feeds = {"X": activation}
-    if supply is WeightSupply.EXTERNAL:
+    if supply is WeightSupply.EXTERNAL and facts.parameters.fixed_weight_payload is None:
         feeds["W_source"] = weight
     actual_xr, actual = ReferenceEvaluator(snapshot.model_copy().model).run(["XR", "Y"], feeds)
     assert np.array_equal(actual_xr, np.repeat(activation, 2, axis=0))
@@ -270,7 +271,13 @@ def test_selected_mvau_profiles_and_weight_modes(mode, supply) -> None:
     edge = next(item for item in decoded.network.edges if item.id == "activation_replay")
     assert isinstance(edge.sinks[0].position_map.coordinate_map, IdentityCoordinateMap)
     if supply is WeightSupply.EXTERNAL:
-        assert snapshot.model_copy().get_initializer("W_source") is None
+        selected_model = snapshot.model_copy()
+        if facts.parameters.fixed_weight_payload is None:
+            assert selected_model.get_initializer("W_source") is None
+            assert "W_source" in {item.name for item in selected_model.graph.input}
+        else:
+            assert np.array_equal(selected_model.get_initializer("W_source"), weight)
+            assert "W_source" not in {item.name for item in selected_model.graph.input}
         weight_binding = next(
             item for item in decoded.declaration.source_bindings if item.source == WEIGHT_KEY
         )
@@ -609,6 +616,120 @@ def test_fixed_value_facts_are_authenticated_against_initializer_payload() -> No
         decode_selected_graph(broken)
 
 
+def test_fixed_external_value_facts_bind_the_authenticated_payload() -> None:
+    facts, inputs, activation, weight, expected = _facts(
+        AccumulationMode.INTEGER,
+        WeightSupply.EXTERNAL,
+        activation_override=np.full((1, 8), 127, dtype=np.float32),
+        weight_override=np.zeros((8, 4), dtype=np.float32),
+        pe=2,
+        simd=2,
+    )
+    snapshot = construct_mvau_snapshot(facts, inputs)
+    model = snapshot.model_copy()
+
+    assert "W_source" not in {item.name for item in model.graph.input}
+    assert np.array_equal(model.get_initializer("W_source"), weight)
+    decode_selected_graph(snapshot, constructions=DEFAULT_SELECTED_CONSTRUCTIONS)
+    (actual,) = ReferenceEvaluator(model.model).run(["Y"], {"X": activation})
+    assert np.array_equal(actual, expected)
+
+
+def test_fixed_external_source_boundary_rejects_a_replaced_initializer() -> None:
+    facts, inputs, _activation, weight, _expected = _facts(
+        AccumulationMode.INTEGER,
+        WeightSupply.EXTERNAL,
+        weight_override=np.zeros((6, 4), dtype=np.float32),
+        pe=2,
+        simd=2,
+    )
+    snapshot = construct_mvau_snapshot(facts, inputs)
+    model = snapshot.model_copy()
+    model.set_initializer("W_source", np.ones_like(weight))
+    broken = build_selected_snapshot(model, snapshot.declaration)
+
+    with pytest.raises(SelectedGraphError) as error:
+        decode_selected_graph(broken, constructions=DEFAULT_SELECTED_CONSTRUCTIONS)
+    assert error.value.code == "selected.source.boundary_initializer_digest"
+
+
+def test_detached_selected_integer_rejects_unauthenticated_runtime_range() -> None:
+    facts, _inputs, _activation, _weight, _expected = _facts(
+        AccumulationMode.INTEGER, WeightSupply.EXTERNAL
+    )
+    premise = decode_dot_product_premise(facts.source_semantics.integer_premise)
+    runtime_premise = replace(
+        premise,
+        weights=RuntimeWeightPromise(
+            IntegerRange(0, 0),
+            int(np.prod(premise.weight_shape)),
+            WEIGHT_IDENTITY,
+            (premise.invocation_scope,),
+            "untrusted-narrow-range",
+            premise.weight_source_carrier,
+        ),
+    )
+    report = check_integer_dot_product_support(
+        premise=runtime_premise,
+        selected_internal_bits=runtime_premise.accumulator_type.bit_width,
+        selected_output_carrier="INT32",
+        target_max_accumulator_bits=64,
+    )
+    assert report.supported and report.support is not None
+    semantics = replace(
+        facts.source_semantics,
+        integer_support_fingerprint=integer_graph_profile_fingerprint(report.support),
+        integer_premise=encode_dot_product_premise(runtime_premise),
+        fixed_weight_payload=None,
+    )
+    source = SourceProvenance.create(
+        family=facts.source.family,
+        family_version=facts.source.family_version,
+        schema_version=facts.source.schema_version,
+        problem_fingerprint=facts.source.problem_fingerprint,
+        scope_id=facts.source.scope_id,
+        operands=tuple(
+            replace(value, initializer_content_digest=None) if value.key == WEIGHT_KEY else value
+            for value in facts.source.operands
+        ),
+        semantics=encode_mvau_source_semantics(semantics),
+    )
+    with pytest.raises(ValueError, match="unauthenticated narrower runtime value facts"):
+        derive_mvau_facts(facts.construction, source, semantics, facts.choices)
+
+    valid_premise = replace(
+        runtime_premise,
+        weights=DatatypeWeightPremise(
+            runtime_premise.weight_logical_type.value_range,
+            int(np.prod(runtime_premise.weight_shape)),
+            WEIGHT_IDENTITY,
+            runtime_premise.weight_source_carrier,
+        ),
+    )
+    valid_report = check_integer_dot_product_support(
+        premise=valid_premise,
+        selected_internal_bits=valid_premise.accumulator_type.bit_width,
+        selected_output_carrier="INT32",
+        target_max_accumulator_bits=64,
+    )
+    assert valid_report.supported and valid_report.support is not None
+    valid_semantics = replace(
+        semantics,
+        integer_support_fingerprint=integer_graph_profile_fingerprint(valid_report.support),
+        integer_premise=encode_dot_product_premise(valid_premise),
+    )
+    valid_source = replace(source, semantics=encode_mvau_source_semantics(valid_semantics))
+    valid_facts = derive_mvau_facts(
+        facts.construction, valid_source, valid_semantics, facts.choices
+    )
+    snapshot = construct_mvau_snapshot(valid_facts, ConstructionInputs())
+    broken = build_selected_snapshot(
+        snapshot.model_copy(), replace(snapshot.declaration, source=source)
+    )
+    with pytest.raises(SelectedGraphError, match="unauthenticated narrower runtime value facts"):
+        decode_selected_graph(broken, constructions=DEFAULT_SELECTED_CONSTRUCTIONS)
+
+
 def test_selected_xnor_refuses_nonbinary_logical_operands() -> None:
     model = _mvau_model()
     model.graph.node[0].attribute.extend((helper.make_attribute("binaryXnorMode", 1),))
@@ -661,7 +782,7 @@ def test_selected_mvau_refuses_missing_input_logical_annotations() -> None:
 def test_integer_selected_mvau_handles_r_not_equal_to_f_and_odd_height() -> None:
     activation = np.arange(18, dtype=np.float32).reshape(3, 6) - 7
     weight = np.arange(30, dtype=np.float32).reshape(6, 5) % 7 - 3
-    facts, inputs, activation, weight, expected = _facts(
+    facts, inputs, activation, _weight, expected = _facts(
         AccumulationMode.INTEGER,
         WeightSupply.EXTERNAL,
         activation_override=activation,
@@ -671,7 +792,7 @@ def test_integer_selected_mvau_handles_r_not_equal_to_f_and_odd_height() -> None
     )
     snapshot = construct_mvau_snapshot(facts, inputs)
     actual_xr, actual = ReferenceEvaluator(snapshot.model_copy().model).run(
-        ["XR", "Y"], {"X": activation, "W_source": weight}
+        ["XR", "Y"], {"X": activation}
     )
     assert np.array_equal(actual_xr, np.repeat(activation, 5, axis=0))
     assert np.array_equal(actual, expected)
@@ -694,18 +815,18 @@ def test_integer_selected_mvau_uses_int64_matmul_and_checked_int32_result() -> N
     assert nodes["source.activation.cast"].attribute[0].i == TensorProto.INT64
     assert nodes["weight.to_integer"].attribute[0].i == TensorProto.INT64
     assert nodes["compute.output.cast"].attribute[0].i == TensorProto.INT32
-    (actual,) = ReferenceEvaluator(model.model).run(["Y"], {"X": activation, "W_source": weight})
+    (actual,) = ReferenceEvaluator(model.model).run(["Y"], {"X": activation})
     assert actual.dtype == np.int32
     assert actual.item() == 16_785_409
 
 
 def test_selected_mvau_keeps_explicit_replay_at_one_fold() -> None:
-    facts, inputs, activation, weight, expected = _facts(
+    facts, inputs, activation, _weight, expected = _facts(
         AccumulationMode.INTEGER, WeightSupply.EXTERNAL, pe=4, simd=3
     )
     snapshot = construct_mvau_snapshot(facts, inputs)
     actual_xr, actual = ReferenceEvaluator(snapshot.model_copy().model).run(
-        ["XR", "Y"], {"X": activation, "W_source": weight}
+        ["XR", "Y"], {"X": activation}
     )
     assert np.array_equal(actual_xr, activation)
     assert np.array_equal(actual, expected)
@@ -719,7 +840,7 @@ def test_selected_mvau_keeps_explicit_replay_at_one_fold() -> None:
 def test_selected_mvau_flattens_and_restores_leading_dimensions() -> None:
     activation = np.arange(24, dtype=np.float32).reshape(2, 2, 6) - 5
     weight = np.arange(24, dtype=np.float32).reshape(6, 4) % 5 - 2
-    facts, inputs, activation, weight, expected = _facts(
+    facts, inputs, activation, _weight, expected = _facts(
         AccumulationMode.INTEGER,
         WeightSupply.EXTERNAL,
         activation_override=activation,
@@ -729,7 +850,7 @@ def test_selected_mvau_flattens_and_restores_leading_dimensions() -> None:
     )
     snapshot = construct_mvau_snapshot(facts, inputs)
     actual_xr, actual = ReferenceEvaluator(snapshot.model_copy().model).run(
-        ["XR", "Y_source"], {"X_source": activation, "W_source": weight}
+        ["XR", "Y_source"], {"X_source": activation}
     )
     assert np.array_equal(actual_xr, np.repeat(activation.reshape(4, 6), 2, axis=0))
     assert np.array_equal(actual, expected)
@@ -738,7 +859,7 @@ def test_selected_mvau_flattens_and_restores_leading_dimensions() -> None:
 def test_selected_mvau_preserves_rank_one_source_shapes() -> None:
     activation = np.arange(6, dtype=np.float32) - 2
     weight = np.arange(24, dtype=np.float32).reshape(6, 4) % 5 - 2
-    facts, inputs, activation, weight, expected = _facts(
+    facts, inputs, activation, _weight, expected = _facts(
         AccumulationMode.INTEGER,
         WeightSupply.EXTERNAL,
         activation_override=activation,
@@ -748,7 +869,7 @@ def test_selected_mvau_preserves_rank_one_source_shapes() -> None:
     )
     snapshot = construct_mvau_snapshot(facts, inputs)
     actual_xr, actual = ReferenceEvaluator(snapshot.model_copy().model).run(
-        ["XR", "Y_source"], {"X_source": activation, "W_source": weight}
+        ["XR", "Y_source"], {"X_source": activation}
     )
     assert np.array_equal(actual_xr, np.repeat(activation.reshape(1, 6), 2, axis=0))
     assert np.array_equal(actual, expected)
@@ -792,12 +913,10 @@ def test_large_external_mvau_construction_and_decode_remain_compact(
         "FLOAT32",
         (2, 3),
         ACTIVATION_IDENTITY,
-        RuntimeWeightPromise(
+        DatatypeWeightPremise(
             IntegerRange(-128, 127),
             3 * height,
             WEIGHT_IDENTITY,
-            (InvocationScope("large-scope"),),
-            "large-runtime-weights",
             "FLOAT32",
         ),
         weight_dtype,

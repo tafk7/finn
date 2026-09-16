@@ -27,6 +27,7 @@ from finn.dataflow.analysis.integer_dot import (
     IntegerSupportReport,
     InvocationScope,
     NumericalFinding,
+    RuntimeWeightPromise,
     encode_dot_product_premise,
 )
 from finn.dataflow.model.datatypes import QONNXDataType
@@ -126,6 +127,13 @@ def _runtime_weight_range_contract(build: Any) -> bool | None:
 
     value = getattr(build, "runtime_weight_range_contract", None)
     return None if value is None else bool(value)
+
+
+def _ignored_runtime_weight_promise(build: Any) -> RuntimeWeightPromise | None:
+    """Retain the provisional build-field spelling without consuming its value."""
+
+    del build
+    return None
 
 
 def _numerical_rejection(report: IntegerSupportReport) -> object:
@@ -257,6 +265,11 @@ class MvauDataflowOp(DataflowOp):
     )
     runtime_weight_range_contract = BuildFact(
         bool, accessor=_runtime_weight_range_contract, required=False
+    )
+    runtime_weight_promise = BuildFact(
+        RuntimeWeightPromise,
+        accessor=_ignored_runtime_weight_promise,
+        required=False,
     )
     clock_period_ns = BuildFact(float, accessor=lambda build: float(build.synth_clk_period_ns))
 
