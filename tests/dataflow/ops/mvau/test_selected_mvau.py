@@ -9,10 +9,21 @@ import numpy as np
 import pytest
 from onnx import TensorProto, helper, numpy_helper
 from onnx.reference import ReferenceEvaluator
+from qonnx.core.datatype import DataType
 
 from dataflow.ops.mvau.test_batch_interleaved import _interleaved_operation, _mvau_model
 from dataflow.ops.test_dataflow_op import Build, _configured_mvau, _unbound
 from finn.dataflow._engine import Absent, Decided
+from finn.dataflow.analysis.integer_dot import (
+    DotProductPremise,
+    FixedWeightPremise,
+    IntegerRange,
+    InvocationScope,
+    RuntimeWeightPromise,
+    check_integer_dot_product_support,
+    decode_dot_product_premise,
+    encode_dot_product_premise,
+)
 from finn.dataflow.designs.design import SelectedGraph
 from finn.dataflow.kernels.dotp_axi import BatchInterleavedDotpAxiKernel, DotpAxiKernel
 from finn.dataflow.kernels.memstream import MemstreamKernel
@@ -28,6 +39,12 @@ from finn.dataflow.ops.mvau.designs.batch_interleaved import BatchInterleavedDes
 from finn.dataflow.ops.mvau.designs.base import WeightedDotProductDesign
 from finn.dataflow.ops.mvau.designs.dot_product import DotProductDesign, WeightSupply
 from finn.dataflow.ops.mvau.op import MvauDataflowOp
+from finn.dataflow.ops.mvau.numerics import (
+    ACTIVATION_IDENTITY,
+    WEIGHT_IDENTITY,
+    integer_graph_profile_fingerprint,
+    integer_type,
+)
 from finn.dataflow.ops.mvau.selected import (
     ACTIVATION_KEY,
     MVAU_CONSTRUCTION_FAMILY,
@@ -115,15 +132,57 @@ def _facts(
     activation, weight, expected, activation_type, weight_type = _case(mode)
     if activation_override is not None:
         activation = np.asarray(activation_override, dtype=np.float32)
+        if activation.min() < -128 or activation.max() > 127:
+            activation_type = "INT16"
     if weight_override is not None:
         weight = np.asarray(weight_override, dtype=np.float32)
+        if weight.min() < -128 or weight.max() > 127:
+            weight_type = "INT16"
     if activation_override is not None or weight_override is not None:
         assert mode is AccumulationMode.INTEGER
         expected = activation @ weight
     frozen = FrozenInitializer.from_tensor_proto(numpy_helper.from_array(weight, name="weight"))
-    integer_evidence = (
-        ("test-premise", "INT32") if mode is AccumulationMode.INTEGER else (None, None)
+    integer_evidence: tuple[object | None, object | None, object | None] = (
+        None,
+        None,
+        None,
     )
+    if mode is AccumulationMode.INTEGER:
+        activation_dtype = integer_type(DataType[activation_type])
+        weight_dtype = integer_type(DataType[weight_type])
+        result_dtype = integer_type(DataType["INT32"])
+        premise = DotProductPremise(
+            activation_dtype.value_range,
+            activation_dtype,
+            "FLOAT32",
+            tuple(activation.shape),
+            ACTIVATION_IDENTITY,
+            FixedWeightPremise(
+                tuple(int(item) for item in weight.reshape(-1)),
+                frozen.summary.content_digest,
+                "FLOAT32",
+            ),
+            weight_dtype,
+            "FLOAT32",
+            tuple(weight.shape),
+            WEIGHT_IDENTITY,
+            result_dtype,
+            result_dtype,
+            tuple(expected.shape),
+            InvocationScope("scope"),
+        )
+        support = check_integer_dot_product_support(
+            premise=premise,
+            selected_internal_bits=32,
+            selected_output_carrier="INT32",
+            target_max_accumulator_bits=64,
+        )
+        assert support.supported and support.support is not None
+        integer_evidence = (
+            integer_graph_profile_fingerprint(support.support),
+            "INT32",
+            encode_dot_product_premise(premise),
+        )
     semantics = MvauSourceSemantics(
         mode,
         ActivationMode.NONE,
@@ -430,6 +489,67 @@ def test_selected_mvau_requires_semantically_consistent_choice_records() -> None
         )
 
 
+@pytest.mark.parametrize("change", ("result_type", "carrier", "activation_range"))
+def test_detached_selected_integer_admission_revalidates_complete_premise(change: str) -> None:
+    facts, inputs, _activation, _weight, _expected = _facts(
+        AccumulationMode.INTEGER,
+        WeightSupply.EMBEDDED,
+        activation_override=np.full((1, 8), 127, dtype=np.float32),
+        weight_override=np.ones((8, 4), dtype=np.float32),
+        pe=2,
+        simd=2,
+    )
+    semantics = facts.source_semantics
+    source = facts.source
+    if change == "result_type":
+        semantics = replace(semantics, accumulator_datatype="INT8", output_datatype="INT8")
+        source = replace(
+            source,
+            operands=tuple(
+                replace(value, logical_datatype="INT8") if value.key == OUTPUT_KEY else value
+                for value in source.operands
+            ),
+        )
+    elif change == "carrier":
+        source = replace(
+            source,
+            operands=tuple(
+                replace(value, carrier_dtype=TensorProto.INT32)
+                if value.key == ACTIVATION_KEY
+                else value
+                for value in source.operands
+            ),
+        )
+    else:
+        premise = decode_dot_product_premise(semantics.integer_premise)
+        semantics = replace(
+            semantics,
+            integer_premise=encode_dot_product_premise(
+                replace(premise, activation_range=IntegerRange(0, 1))
+            ),
+        )
+    source = SourceProvenance.create(
+        family=source.family,
+        family_version=source.family_version,
+        schema_version=source.schema_version,
+        problem_fingerprint=source.problem_fingerprint,
+        scope_id=source.scope_id,
+        operands=source.operands,
+        semantics=encode_mvau_source_semantics(semantics),
+    )
+    with pytest.raises(ValueError, match="selected integer MVAU"):
+        derive_mvau_facts(facts.construction, source, semantics, facts.choices)
+
+    if change == "result_type":
+        snapshot = construct_mvau_snapshot(facts, inputs)
+        broken = build_selected_snapshot(
+            snapshot.model_copy(),
+            replace(snapshot.declaration, source=source),
+        )
+        with pytest.raises(SelectedGraphError):
+            decode_selected_graph(broken)
+
+
 def test_selected_xnor_refuses_nonbinary_logical_operands() -> None:
     model = _mvau_model()
     model.graph.node[0].attribute.extend((helper.make_attribute("binaryXnorMode", 1),))
@@ -604,14 +724,48 @@ def test_large_external_mvau_construction_and_decode_remain_compact(
     monkeypatch,
 ) -> None:
     height = 1_048_576
+    activation_dtype = integer_type(DataType["INT8"])
+    weight_dtype = integer_type(DataType["INT8"])
+    result_dtype = integer_type(DataType["INT32"])
+    premise = DotProductPremise(
+        activation_dtype.value_range,
+        activation_dtype,
+        "FLOAT32",
+        (2, 3),
+        ACTIVATION_IDENTITY,
+        RuntimeWeightPromise(
+            IntegerRange(-128, 127),
+            3 * height,
+            WEIGHT_IDENTITY,
+            (InvocationScope("large-scope"),),
+            "large-runtime-weights",
+            "FLOAT32",
+        ),
+        weight_dtype,
+        "FLOAT32",
+        (3, height),
+        WEIGHT_IDENTITY,
+        result_dtype,
+        result_dtype,
+        (2, height),
+        InvocationScope("large-scope"),
+    )
+    support = check_integer_dot_product_support(
+        premise=premise,
+        selected_internal_bits=32,
+        selected_output_carrier="INT32",
+        target_max_accumulator_bits=64,
+    )
+    assert support.supported and support.support is not None
     semantics = MvauSourceSemantics(
         AccumulationMode.INTEGER,
         ActivationMode.NONE,
         "INT32",
         "INT32",
         None,
-        "large-premise",
+        integer_graph_profile_fingerprint(support.support),
         "INT32",
+        encode_dot_product_premise(premise),
     )
     source = SourceProvenance.create(
         family="finn.dataflow.mvau",

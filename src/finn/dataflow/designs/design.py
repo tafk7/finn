@@ -250,6 +250,10 @@ class DataflowDesign(Space):
 
         return assess_design_relation(self)
 
+    @classmethod
+    def capability_names(cls) -> tuple[str, ...]:
+        return tuple(dict.fromkeys((*super().capability_names(), "physical", "physical_relation")))
+
     def physical_implementation(self) -> Answer[DesignPhysicalFacts]:
         """Implement one selected physical profile in a concrete Design.
 

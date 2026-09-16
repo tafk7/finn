@@ -280,6 +280,205 @@ class ValidatedDotProductOperands:
     premise_fingerprint: str
 
 
+def encode_dot_product_premise(premise: DotProductPremise) -> dict[str, object]:
+    """Canonical JSON-shaped form of a complete detached numerical premise."""
+
+    def integer_range(value: IntegerRange) -> list[int]:
+        return [value.minimum, value.maximum]
+
+    def integer_type(value: IntegerType) -> dict[str, object]:
+        return {
+            "name": value.name,
+            "range": integer_range(value.value_range),
+            "bit_width": value.bit_width,
+            "signed": value.signed,
+        }
+
+    def operand(value: OperandIdentity) -> dict[str, object]:
+        return {
+            "operand_id": value.operand_id,
+            "direction": value.direction,
+            "index": value.index,
+        }
+
+    weights: dict[str, object]
+    if isinstance(premise.weights, FixedWeightPremise):
+        weights = {
+            "kind": "fixed",
+            "values": list(premise.weights.values),
+            "content_digest": premise.weights.content_digest,
+            "source_carrier": premise.weights.source_carrier,
+        }
+    else:
+        weights = {
+            "kind": "runtime",
+            "value_range": integer_range(premise.weights.value_range),
+            "count": premise.weights.count,
+            "source_operand": operand(premise.weights.source_operand),
+            "covered_invocations": [
+                scope.scope_id for scope in premise.weights.covered_invocations
+            ],
+            "promise_id": premise.weights.promise_id,
+            "source_carrier": premise.weights.source_carrier,
+        }
+    return {
+        "activation_range": integer_range(premise.activation_range),
+        "activation_logical_type": integer_type(premise.activation_logical_type),
+        "activation_source_carrier": premise.activation_source_carrier,
+        "activation_shape": list(premise.activation_shape),
+        "activation_source": operand(premise.activation_source),
+        "weights": weights,
+        "weight_logical_type": integer_type(premise.weight_logical_type),
+        "weight_source_carrier": premise.weight_source_carrier,
+        "weight_shape": list(premise.weight_shape),
+        "weight_source": operand(premise.weight_source),
+        "accumulator_type": integer_type(premise.accumulator_type),
+        "result_type": integer_type(premise.result_type),
+        "output_shape": list(premise.output_shape),
+        "invocation_scope": premise.invocation_scope.scope_id,
+    }
+
+
+def decode_dot_product_premise(value: object) -> DotProductPremise:
+    """Decode the exact canonical premise form, refusing unknown fields."""
+
+    from collections.abc import Mapping, Sequence  # noqa: PLC0415
+
+    def mapping(raw: object, fields: set[str], name: str) -> Mapping[str, object]:
+        if not isinstance(raw, Mapping) or set(raw) != fields:
+            raise ValueError(f"{name} has unsupported fields")
+        if any(type(key) is not str for key in raw):
+            raise TypeError(f"{name} field names must be strings")
+        return raw
+
+    def integer(raw: object, name: str) -> int:
+        if type(raw) is not int:
+            raise TypeError(f"{name} must be an integer")
+        return raw
+
+    def string(raw: object, name: str) -> str:
+        if type(raw) is not str or not raw:
+            raise TypeError(f"{name} must be a non-empty string")
+        return raw
+
+    def sequence(raw: object, name: str) -> Sequence[object]:
+        if not isinstance(raw, (tuple, list)):
+            raise TypeError(f"{name} must be a sequence")
+        return raw
+
+    def integer_range(raw: object, name: str) -> IntegerRange:
+        items = sequence(raw, name)
+        if len(items) != 2:
+            raise ValueError(f"{name} must contain two endpoints")
+        return IntegerRange(integer(items[0], name), integer(items[1], name))
+
+    def integer_type(raw: object, name: str) -> IntegerType:
+        item = mapping(raw, {"name", "range", "bit_width", "signed"}, name)
+        signed = item["signed"]
+        if type(signed) is not bool:
+            raise TypeError(f"{name}.signed must be bool")
+        return IntegerType(
+            string(item["name"], f"{name}.name"),
+            integer_range(item["range"], f"{name}.range"),
+            integer(item["bit_width"], f"{name}.bit_width"),
+            signed,
+        )
+
+    def operand(raw: object, name: str) -> OperandIdentity:
+        item = mapping(raw, {"operand_id", "direction", "index"}, name)
+        return OperandIdentity(
+            string(item["operand_id"], f"{name}.operand_id"),
+            string(item["direction"], f"{name}.direction"),
+            integer(item["index"], f"{name}.index"),
+        )
+
+    root = mapping(
+        value,
+        {
+            "activation_range",
+            "activation_logical_type",
+            "activation_source_carrier",
+            "activation_shape",
+            "activation_source",
+            "weights",
+            "weight_logical_type",
+            "weight_source_carrier",
+            "weight_shape",
+            "weight_source",
+            "accumulator_type",
+            "result_type",
+            "output_shape",
+            "invocation_scope",
+        },
+        "dot-product premise",
+    )
+    raw_weights = root["weights"]
+    if not isinstance(raw_weights, Mapping):
+        raise TypeError("dot-product premise weights must be a mapping")
+    kind = raw_weights.get("kind")
+    if kind == "fixed":
+        fixed = mapping(
+            raw_weights,
+            {"kind", "values", "content_digest", "source_carrier"},
+            "fixed weights",
+        )
+        weights: WeightPremise = FixedWeightPremise(
+            tuple(integer(item, "fixed weight") for item in sequence(fixed["values"], "values")),
+            string(fixed["content_digest"], "fixed content digest"),
+            string(fixed["source_carrier"], "fixed source carrier"),
+        )
+    elif kind == "runtime":
+        runtime = mapping(
+            raw_weights,
+            {
+                "kind",
+                "value_range",
+                "count",
+                "source_operand",
+                "covered_invocations",
+                "promise_id",
+                "source_carrier",
+            },
+            "runtime weights",
+        )
+        weights = RuntimeWeightPromise(
+            integer_range(runtime["value_range"], "runtime value range"),
+            integer(runtime["count"], "runtime count"),
+            operand(runtime["source_operand"], "runtime source operand"),
+            tuple(
+                InvocationScope(string(item, "covered invocation"))
+                for item in sequence(runtime["covered_invocations"], "covered invocations")
+            ),
+            string(runtime["promise_id"], "runtime promise id"),
+            string(runtime["source_carrier"], "runtime source carrier"),
+        )
+    else:
+        raise ValueError("dot-product premise has an unsupported weight kind")
+    return DotProductPremise(
+        integer_range(root["activation_range"], "activation range"),
+        integer_type(root["activation_logical_type"], "activation logical type"),
+        string(root["activation_source_carrier"], "activation source carrier"),
+        tuple(
+            integer(item, "activation shape")
+            for item in sequence(root["activation_shape"], "activation shape")
+        ),
+        operand(root["activation_source"], "activation source"),
+        weights,
+        integer_type(root["weight_logical_type"], "weight logical type"),
+        string(root["weight_source_carrier"], "weight source carrier"),
+        tuple(
+            integer(item, "weight shape") for item in sequence(root["weight_shape"], "weight shape")
+        ),
+        operand(root["weight_source"], "weight source"),
+        integer_type(root["accumulator_type"], "accumulator type"),
+        integer_type(root["result_type"], "result type"),
+        tuple(
+            integer(item, "output shape") for item in sequence(root["output_shape"], "output shape")
+        ),
+        InvocationScope(string(root["invocation_scope"], "invocation scope")),
+    )
+
+
 def _term_range(left: IntegerRange, right: IntegerRange) -> IntegerRange:
     products = (
         left.minimum * right.minimum,
@@ -310,9 +509,10 @@ def _weight_ranges(premise: DotProductPremise) -> tuple[tuple[IntegerRange, ...]
             )
             for column in range(height)
         )
-    return tuple(
-        tuple(premise.weights.value_range for _row in range(width)) for _column in range(height)
-    )
+    # Runtime promises apply uniformly to every matrix element, so every output
+    # column has the same bound. Retain one distinct column range rather than
+    # allocating O(matrix_height) identical proof objects.
+    return (tuple(premise.weights.value_range for _row in range(width)),)
 
 
 def analyze_integer_dot_product(premise: DotProductPremise) -> DotProductBounds:
@@ -830,6 +1030,8 @@ __all__ = [
     "ValidatedDotProductOperands",
     "analyze_integer_dot_product",
     "check_integer_dot_product_support",
+    "decode_dot_product_premise",
+    "encode_dot_product_premise",
     "execute_integer_dot_product",
     "validate_integer_dot_product_operands",
 ]

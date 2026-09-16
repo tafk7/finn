@@ -16,10 +16,23 @@ from onnx import TensorProto, helper  # type: ignore[import-not-found]
 from qonnx.core.modelwrapper import ModelWrapper  # type: ignore[import-not-found]
 
 from finn.dataflow._engine import Finding, FindingKind, QualifiedPath
+from finn.dataflow.analysis.integer_dot import (
+    DotProductPremise,
+    FixedWeightPremise,
+    check_integer_dot_product_support,
+    decode_dot_product_premise,
+)
 from finn.dataflow.model.datatypes import resolve_qonnx_datatype_name
 from finn.dataflow.model.maps import RectangularDomain
 from finn.dataflow.model.network import DataflowNetwork
 from finn.dataflow.ops.mvau.computation import AccumulationMode, ActivationMode
+from finn.dataflow.ops.mvau.numerics import (
+    ACTIVATION_IDENTITY,
+    WEIGHT_IDENTITY,
+    carrier_name,
+    integer_graph_profile_fingerprint,
+    integer_type,
+)
 from finn.dataflow.ops.mvau.designs.supply import WeightSupply
 from finn.dataflow.ops.mvau.networks import (
     construct_decomposed_mvau_network,
@@ -76,7 +89,7 @@ from finn.dataflow.ops.selected_transforms import (
 MVAU_CONSTRUCTION_FAMILY = "finn.dataflow.selected.mvau.dot_product"
 MVAU_CONSTRUCTION_VERSION = "2"
 MVAU_SOURCE_SEMANTICS = "finn.dataflow.source.mvau"
-MVAU_SOURCE_SEMANTICS_VERSION = 2
+MVAU_SOURCE_SEMANTICS_VERSION = 3
 MVAU_GRAPH_NAME = "selected_mvau_dot_product"
 
 ACTIVATION_KEY = SourceOperandKey("activation", SourceDirection.INPUT, 0)
@@ -93,6 +106,7 @@ class MvauSourceSemantics:
     activation_bias: int | None
     integer_support_fingerprint: str | None = None
     integer_output_carrier: str | None = None
+    integer_premise: object | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -114,6 +128,7 @@ class MvauSelectionParameters:
     source_weight_initializer_digest: str | None
     integer_support_fingerprint: str | None
     integer_output_carrier: str | None
+    integer_premise: DotProductPremise | None
 
 
 def encode_mvau_source_semantics(value: MvauSourceSemantics) -> EncodedSourceSemantics:
@@ -126,7 +141,12 @@ def encode_mvau_source_semantics(value: MvauSourceSemantics) -> EncodedSourceSem
             raise ValueError("plain-integer MVAU semantics need a numerical premise fingerprint")
         if value.integer_output_carrier not in {"INT32", "INT64"}:
             raise ValueError("plain-integer MVAU semantics need an INT32 or INT64 carrier")
-    elif value.integer_support_fingerprint is not None or value.integer_output_carrier is not None:
+        decode_dot_product_premise(value.integer_premise)
+    elif (
+        value.integer_support_fingerprint is not None
+        or value.integer_output_carrier is not None
+        or value.integer_premise is not None
+    ):
         raise ValueError("non-plain-integer MVAU semantics must not claim integer support")
     return EncodedSourceSemantics(
         MVAU_SOURCE_SEMANTICS,
@@ -139,6 +159,7 @@ def encode_mvau_source_semantics(value: MvauSourceSemantics) -> EncodedSourceSem
             "activation_bias": value.activation_bias,
             "integer_support_fingerprint": value.integer_support_fingerprint,
             "integer_output_carrier": value.integer_output_carrier,
+            "integer_premise": value.integer_premise,
         },
     )
 
@@ -152,6 +173,7 @@ def decode_mvau_source_semantics(value: EncodedSourceSemantics) -> MvauSourceSem
         "activation_bias",
         "integer_support_fingerprint",
         "integer_output_carrier",
+        "integer_premise",
     }
     if (
         value.identity != MVAU_SOURCE_SEMANTICS
@@ -167,6 +189,7 @@ def decode_mvau_source_semantics(value: EncodedSourceSemantics) -> MvauSourceSem
     bias = value.payload["activation_bias"]
     support_fingerprint = value.payload["integer_support_fingerprint"]
     integer_output_carrier = value.payload["integer_output_carrier"]
+    integer_premise = value.payload["integer_premise"]
     if type(accumulator) is not str or not accumulator or type(output) is not str or not output:
         raise ValueError("MVAU semantic datatypes must be non-empty strings")
     if activation is ActivationMode.NONE:
@@ -179,7 +202,12 @@ def decode_mvau_source_semantics(value: EncodedSourceSemantics) -> MvauSourceSem
             raise ValueError("plain-integer MVAU semantics need a numerical support fingerprint")
         if integer_output_carrier not in {"INT32", "INT64"}:
             raise ValueError("plain-integer MVAU semantics need an INT32 or INT64 carrier")
-    elif support_fingerprint is not None or integer_output_carrier is not None:
+        decode_dot_product_premise(integer_premise)
+    elif (
+        support_fingerprint is not None
+        or integer_output_carrier is not None
+        or integer_premise is not None
+    ):
         raise ValueError("non-plain-integer MVAU semantics must not claim integer support")
     return MvauSourceSemantics(
         accumulation,
@@ -189,6 +217,7 @@ def decode_mvau_source_semantics(value: EncodedSourceSemantics) -> MvauSourceSem
         bias,
         support_fingerprint,
         integer_output_carrier,
+        integer_premise,
     )
 
 
@@ -204,6 +233,69 @@ def _operand(source: SourceProvenance, key: SourceOperandKey) -> SourceValueRef:
     if len(matches) != 1:
         raise ValueError(f"MVAU source is missing {key.operand_id!r}")
     return matches[0]
+
+
+def _validated_integer_support(
+    source: SourceProvenance,
+    semantics: MvauSourceSemantics,
+) -> DotProductPremise:
+    """Re-establish detached numerical admission from the complete premise."""
+
+    premise = decode_dot_product_premise(semantics.integer_premise)
+    activation = _operand(source, ACTIVATION_KEY)
+    weight = _operand(source, WEIGHT_KEY)
+    output = _operand(source, OUTPUT_KEY)
+    if source.scope_id is None:
+        raise ValueError("selected integer MVAU requires an invocation scope")
+    expected = (
+        (premise.activation_source, ACTIVATION_IDENTITY, "activation source"),
+        (premise.weight_source, WEIGHT_IDENTITY, "weight source"),
+    )
+    for actual, wanted, label in expected:
+        if actual != wanted:
+            raise ValueError(f"selected integer MVAU {label} identity differs")
+    if premise.invocation_scope.scope_id != source.scope_id:
+        raise ValueError("selected integer MVAU premise invocation scope differs")
+    if premise.activation_shape != activation.shape or premise.weight_shape != weight.shape:
+        raise ValueError("selected integer MVAU premise input shapes differ from source")
+    if premise.output_shape != output.shape:
+        raise ValueError("selected integer MVAU premise output shape differs from source")
+    if premise.activation_source_carrier != carrier_name(activation.carrier_dtype):
+        raise ValueError("selected integer MVAU activation carrier differs from source")
+    if premise.weight_source_carrier != carrier_name(weight.carrier_dtype):
+        raise ValueError("selected integer MVAU weight carrier differs from source")
+    activation_type = integer_type(resolve_qonnx_datatype_name(activation.logical_datatype))
+    weight_type = integer_type(resolve_qonnx_datatype_name(weight.logical_datatype))
+    accumulator_type = integer_type(resolve_qonnx_datatype_name(semantics.accumulator_datatype))
+    result_type = integer_type(resolve_qonnx_datatype_name(semantics.output_datatype))
+    if premise.activation_logical_type != activation_type:
+        raise ValueError("selected integer MVAU activation logical type differs from source")
+    if premise.activation_range != activation_type.value_range:
+        raise ValueError("selected integer MVAU activation range is not the full source domain")
+    if premise.weight_logical_type != weight_type:
+        raise ValueError("selected integer MVAU weight logical type differs from source")
+    if premise.accumulator_type != accumulator_type:
+        raise ValueError("selected integer MVAU accumulator type differs from source semantics")
+    if premise.result_type != result_type:
+        raise ValueError("selected integer MVAU result type differs from source semantics")
+    if output.logical_datatype != semantics.output_datatype:
+        raise ValueError("selected integer MVAU output datatype differs from source")
+    if isinstance(premise.weights, FixedWeightPremise):
+        if weight.initializer_content_digest != premise.weights.content_digest:
+            raise ValueError("selected integer MVAU fixed-weight digest differs from source")
+    report = check_integer_dot_product_support(
+        premise=premise,
+        selected_internal_bits=premise.accumulator_type.bit_width,
+        selected_output_carrier=semantics.integer_output_carrier or "",
+        target_max_accumulator_bits=64,
+    )
+    if not report.supported or report.support is None:
+        reasons = ", ".join(item.code for item in report.findings) or "unsupported"
+        raise ValueError(f"selected integer MVAU numerical support refused: {reasons}")
+    expected_fingerprint = integer_graph_profile_fingerprint(report.support)
+    if semantics.integer_support_fingerprint != expected_fingerprint:
+        raise ValueError("selected integer MVAU support fingerprint differs from its premise")
+    return premise
 
 
 def derive_mvau_facts(
@@ -257,6 +349,11 @@ def derive_mvau_facts(
         activation.logical_datatype == "BIPOLAR" and weight.logical_datatype == "BIPOLAR"
     ):
         raise ValueError("BIPOLAR activation and weight operands require bipolar popcount")
+    integer_premise = (
+        _validated_integer_support(source, semantics)
+        if semantics.accumulation is AccumulationMode.INTEGER
+        else None
+    )
     if semantics.accumulation is AccumulationMode.INTEGER:
         if semantics.integer_output_carrier not in {"INT32", "INT64"}:
             raise ValueError("selected integer MVAU has no checked output carrier")
@@ -308,6 +405,7 @@ def derive_mvau_facts(
         weight.initializer_content_digest,
         semantics.integer_support_fingerprint,
         semantics.integer_output_carrier,
+        integer_premise,
     )
     return SelectionFacts(identity, source, semantics, choices, parameters)
 

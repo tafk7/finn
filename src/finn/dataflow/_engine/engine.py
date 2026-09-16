@@ -10,6 +10,7 @@ from collections.abc import Iterable
 from .declarations import DeclarationKind, DesignSpaceSpec
 from .errors import RequestError, ValidationError
 from .evaluation import EvaluationKernel
+from .facts import FactKey, FactKind
 from .points import CommitResult, DesignPoint, ProposalAdoptionResult, make_initial_point
 from .primitives import PathMapping, QualifiedPath
 from .requests import (
@@ -114,6 +115,11 @@ class Engine:
     def query_property(self, point: DesignPoint, path: QualifiedPath | str) -> Answer[object]:
         resolved = self._declaration_path(point, path, DeclarationKind.DERIVED_PROPERTY)
         return self._kernel.query_property(point, resolved)
+
+    def _query_applicability(self, point: DesignPoint, path: QualifiedPath) -> Answer[object]:
+        """Internal frontend seam for dependency-closure capture."""
+
+        return self._kernel.resolve(point, FactKey(FactKind.APPLIES, path))
 
     def commit_assignments(
         self,

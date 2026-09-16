@@ -954,10 +954,25 @@ def evaluate_projection(
             absent: Answer[T] = Absent()
             readiness = ReadinessAssessment(compiled.name, MappingProxyType({}), True)
             return ProjectionAssessment(compiled.name, readiness, (), absent, absent)
-    readiness = engine.check_readiness(point, compiled.readiness_profile)
+    explicit_readiness = engine.check_readiness(point, compiled.readiness_profile)
     output = answer_for(engine, point, compiled.output)
     constraints = tuple(
         engine.evaluate_constraint_set(point, name) for name in compiled.constraint_sets
+    )
+    readiness_answers: dict[QualifiedPath, Answer[object]] = dict(explicit_readiness.answers)
+    readiness_answers.setdefault(compiled.output.path, output)
+    for assessment in constraints:
+        for path, constraint_answer in assessment.answers.items():
+            readiness_answers.setdefault(path, cast(Any, constraint_answer))
+    readiness = ReadinessAssessment(
+        explicit_readiness.profile,
+        MappingProxyType(dict(sorted(readiness_answers.items()))),
+        (
+            None
+            if explicit_readiness.ready is None
+            or any(isinstance(answer, Unresolved) for answer in readiness_answers.values())
+            else True
+        ),
     )
     accepted = _reduce_projection(compiled, readiness, constraints, output)
     return ProjectionAssessment(

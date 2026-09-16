@@ -19,6 +19,8 @@ from finn.dataflow.analysis.integer_dot import (
     ValidatedDotProductOperands,
     analyze_integer_dot_product,
     check_integer_dot_product_support,
+    decode_dot_product_premise,
+    encode_dot_product_premise,
     execute_integer_dot_product,
     validate_integer_dot_product_operands,
 )
@@ -39,6 +41,8 @@ __all__ = [
     "ValidatedDotProductOperands",
     "analyze_integer_dot_product",
     "check_integer_dot_product_support",
+    "decode_dot_product_premise",
+    "encode_dot_product_premise",
     "execute_integer_dot_product",
     "validate_integer_dot_product_operands",
 ]

@@ -12,7 +12,7 @@ from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 from dataflow.kernels.test_module_build_spec import UnavailableModule
 from dataflow.ops.mvau.test_dot_product_design import DESIGN_INPUTS, Problem_, _occurrence
 from dataflow.physical_fixture import configure, source_model
-from finn.dataflow._engine import Absent, Decided, Unresolved
+from finn.dataflow._engine import Absent, Answer, Decided, Unresolved
 from finn.dataflow.artifacts.build import (
     FixedModuleName,
     ModuleABIRequirements,
@@ -20,6 +20,7 @@ from finn.dataflow.artifacts.build import (
 )
 from finn.dataflow.artifacts.store import ArtifactStore
 from finn.dataflow.designs.design import DataflowDesign
+from finn.dataflow.designs.physical import DesignPhysicalRelation
 from finn.dataflow.model.composition import NetworkResult, RegionResult
 from finn.dataflow.ops.base import DataflowOpError
 from finn.dataflow.ops.mvau.designs.base import WeightedDotProductDesign
@@ -33,13 +34,16 @@ from finn.dataflow.ops.mvau.op import MvauDataflowOp
 from finn.dataflow.kernels.dotp_axi import DotpAxiKernel, DspBlock
 from finn.dataflow.ops.physical import (
     associate_physical_use,
+    authorize_component_use,
     capture_local_physical,
     capture_local_relation,
+    install_compiler_physical_component,
     materialize_local_physical,
     prepare_local_physical,
     validate_compiler_physical_use,
 )
 from finn.dataflow.space.capabilities import implementation_identity
+from finn.dataflow.space.occurrence import ProjectionAssessment
 from finn.dataflow.space.declarations import (
     ConstraintGroup,
     Decision,
@@ -106,6 +110,37 @@ def test_third_view_and_lazy_child_input_do_not_block_unrelated_views() -> None:
     assert root.leaf.physical.accepted_answer == Decided(7)
     assert isinstance(root.leaf.cost.accepted_answer, Unresolved)
     assert root.assign(_ViewRoot.estimator, "area").leaf.cost.accepted_answer == Decided("area")
+
+
+class _PendingView(Space):
+    value = Decision(int, values=(1, 2))
+    extra = Readiness()
+    result = Projection(value, readiness=extra)
+
+
+class _PendingConstraintView(Space):
+    value = Problem(int)
+    limit = Decision(int, values=(1, 2))
+
+    @constraint(value=value, limit=limit)
+    def within(*, value: int, limit: int) -> bool:
+        return value <= limit
+
+    accepts = ConstraintGroup(within)
+    extra = Readiness()
+    result = Projection(value, readiness=extra, constraints=accepts)
+
+
+def test_view_readiness_includes_output_and_acceptance_prerequisites() -> None:
+    pending = _PendingView.start({}, namespace="pending").result
+    assert pending.readiness.ready is None
+    assert isinstance(pending.output, Unresolved)
+
+    constrained = _PendingConstraintView.start(
+        {_PendingConstraintView.value: 1}, namespace="constrained"
+    ).result
+    assert constrained.readiness.ready is None
+    assert isinstance(constrained.accepted_answer, Unresolved)
 
 
 class _ConditionalLeaf(Space):
@@ -228,6 +263,48 @@ def test_local_physical_capture_ignores_unresolved_and_rejected_logical_only_cho
     assert relation.logical_fingerprint
 
 
+class _CaptureSpace(Space):
+    id = "capture_dependency"
+    version = "1"
+    supported_mode = Decision(int, values=(1, 2))
+    private_cost = Decision(int, values=(10, 20))
+
+    @derived(ModuleBuildRequirements)
+    def module() -> ModuleBuildRequirements:
+        return ModuleBuildRequirements(
+            "capture_dependency",
+            "1",
+            (),
+            ModuleABIRequirements(FixedModuleName("capture_dependency"), (), ()),
+            (),
+            (),
+        )
+
+    @constraint(mode=supported_mode)
+    def supported(*, mode: int) -> bool:
+        return mode in (1, 2)
+
+    accepts = ConstraintGroup(supported)
+    ready = Readiness(properties=(module,), constraints=accepts)
+    physical = Projection(module, readiness=ready, constraints=accepts)
+
+
+def test_local_capture_tracks_consumed_closure_but_excludes_unrelated_view_choice() -> None:
+    root = _CaptureSpace.start({}, namespace="capture")
+    first = root.assign(_CaptureSpace.supported_mode, 1)
+    second = root.assign(_CaptureSpace.supported_mode, 2)
+    first_capture = capture_local_physical(first)
+    second_capture = capture_local_physical(second)
+    assert first_capture.requirements == second_capture.requirements
+    assert first_capture.point_fingerprint != second_capture.point_fingerprint
+    assert first_capture.dependencies != second_capture.dependencies
+
+    unrelated = first.assign(_CaptureSpace.private_cost, 10)
+    unrelated_capture = capture_local_physical(unrelated)
+    assert unrelated_capture.point_fingerprint == first_capture.point_fingerprint
+    assert unrelated_capture.dependencies == first_capture.dependencies
+
+
 def test_compiler_association_is_per_use_and_revalidates_current_source() -> None:
     model, build, context = source_model()
     left = configure(MvauDataflowOp(model.graph.node[0]).bind(model, build, graph_context=context))
@@ -268,6 +345,120 @@ def test_compiler_association_is_per_use_and_revalidates_current_source() -> Non
         build=build,
         graph_context=context,
     )
+
+
+def test_plain_space_completes_source_selection_build_association_and_installation(
+    tmp_path,
+) -> None:
+    model, build, context = source_model()
+    production = configure(
+        MvauDataflowOp(model.graph.node[0]).bind(model, build, graph_context=context)
+    )
+    production_design = cast(DataflowDesign, production.selected_implementation())
+    production_local = capture_local_physical(production_design)
+    production_relation = capture_local_relation(production_design, production_local)
+    logical = production_design.assess_view("logical").accepted_answer
+    assert isinstance(logical, Decided)
+
+    class PlainComposite(Space):
+        id = "plain_composite"
+        version = "1"
+
+        @derived(ModuleBuildRequirements)
+        def requirements() -> ModuleBuildRequirements:
+            return production_local.requirements
+
+        @derived(NetworkResult)
+        def logical_value() -> NetworkResult:
+            return logical.value
+
+        @derived(DesignPhysicalRelation)
+        def relation_value() -> DesignPhysicalRelation:
+            return cast(DesignPhysicalRelation, production_relation.relation)
+
+        physical_ready = Readiness()
+        logical_ready = Readiness()
+        relation_ready = Readiness()
+        physical = Projection(requirements, readiness=physical_ready)
+        logical = Projection(logical_value, readiness=logical_ready)
+        physical_relation = Projection(relation_value, readiness=relation_ready)
+
+    class PlainSelectedMvau(MvauDataflowOp):
+        implementation = Subspace(PlainComposite)
+
+        @staticmethod
+        def _network_answer(answer: Answer[NetworkResult]) -> Answer[object]:
+            return Decided(answer.value.network) if isinstance(answer, Decided) else answer
+
+        def selected_dataflow(self):
+            assessment = self.implementation.logical
+            return ProjectionAssessment(
+                assessment.projection,
+                assessment.readiness,
+                assessment.constraints,
+                self._network_answer(assessment.output),
+                self._network_answer(assessment.accepted_answer),
+            )
+
+        def selected_implementation(self) -> object:
+            return self.implementation
+
+    operation = PlainSelectedMvau(model.graph.node[0]).bind(model, build, graph_context=context)
+    implementation = operation.selected_implementation()
+    assert isinstance(implementation, PlainComposite)
+    local = capture_local_physical(implementation)
+    relation = capture_local_relation(implementation, local)
+    use = associate_physical_use(
+        operation,
+        implementation,
+        local,
+        relation,
+        model=model,
+        build=build,
+        graph_context=context,
+    )
+    store = ArtifactStore(tmp_path / "plain-store")
+    prepared = prepare_local_physical(
+        local,
+        roots={"finnlib": __import__("pathlib").Path("deps/finnlib").resolve()},
+        template_roots=(
+            __import__("pathlib").Path("src/finn/dataflow/designs/templates").resolve(),
+        ),
+        blobs=store,
+    )
+    built = materialize_local_physical(prepared, store=store)
+    authorized = authorize_component_use(
+        operation,
+        implementation,
+        use,
+        built,
+        model=model,
+        build=build,
+        graph_context=context,
+        store=store,
+    )
+    first = install_compiler_physical_component(
+        operation,
+        implementation,
+        authorized,
+        outer_instance_id="plain_0",
+        model=model,
+        build=build,
+        graph_context=context,
+        store=store,
+    )
+    second = install_compiler_physical_component(
+        operation,
+        implementation,
+        authorized,
+        outer_instance_id="plain_1",
+        model=model,
+        build=build,
+        graph_context=context,
+        store=store,
+    )
+    assert first.outer_instance_id != second.outer_instance_id
+    assert first.component == second.component
 
 
 def test_parent_physical_hook_is_not_forced_to_build_unused_child_views() -> None:

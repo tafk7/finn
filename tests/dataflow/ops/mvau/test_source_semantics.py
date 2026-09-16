@@ -505,6 +505,28 @@ def test_a_bound_occurrence_executes_from_its_frozen_reading() -> None:
     assert np.array_equal(context["output"], np.matmul(activation, weight))
 
 
+def test_source_execution_is_independent_of_target_accumulator_limit() -> None:
+    activation = np.ones((REPETITIONS, MATRIX_WIDTH), dtype=np.float32)
+    weight = np.ones((MATRIX_WIDTH, MATRIX_HEIGHT), dtype=np.float32)
+    model = _model(output_type="INT64", weights=weight)
+    operation = _bound(model)
+    source = operation.answer(MvauDataflowOp.source_numerical_report)
+    target = operation.answer(MvauDataflowOp.numerical_support)
+    assert isinstance(source, Decided) and source.value.supported
+    assert isinstance(target, Decided)
+    assert {finding.code for finding in target.value.findings} == {
+        "integer-target-accumulator-limit"
+    }
+
+    context: dict[str, Any] = {"activation": activation, "weight": weight}
+    operation.execute_node(context, model.graph)
+    assert context["output"].dtype == np.int32
+    assert np.array_equal(
+        context["output"],
+        np.full((REPETITIONS, MATRIX_HEIGHT), MATRIX_WIDTH, dtype=np.int32),
+    )
+
+
 # -- verification ---------------------------------------------------------------
 
 

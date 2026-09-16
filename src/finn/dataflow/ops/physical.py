@@ -10,13 +10,23 @@ contain no operation, model, logical graph or source occurrence identity.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, fields, is_dataclass
+from enum import Enum
 import hashlib
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 from weakref import WeakValueDictionary
 
-from finn.dataflow._engine import Absent, Decided, Finding, FindingKind, QualifiedPath
+from finn.dataflow._engine import (
+    Absent,
+    Answer,
+    Decided,
+    DependencyKind,
+    DependencyRef,
+    Finding,
+    FindingKind,
+    QualifiedPath,
+)
 from finn.dataflow.artifacts.build import (
     BlobSink,
     ModuleBuildRequirements,
@@ -31,7 +41,7 @@ from finn.dataflow.artifacts.packaging import PortableComponent
 from finn.dataflow.artifacts.store import ArtifactStore
 from finn.dataflow.ops.base import DataflowOpError
 from finn.dataflow.space.occurrence import ProjectionAssessment
-from finn.dataflow.model.composition import ImplementationPath
+from finn.dataflow.model.composition import ImplementationPath, NetworkResult
 from finn.dataflow.space.capabilities import ImplementationIdentity, implementation_identity
 from finn.dataflow.space.occurrence import layer_runtime
 
@@ -67,12 +77,20 @@ class PhysicalBuildCapture:
 
 
 @dataclass(frozen=True)
+class CapturedDependency:
+    kind: str
+    path: str
+    value: object
+
+
+@dataclass(frozen=True)
 class LocalPhysicalCapture:
     """Model-free physical evidence for one projected implementation point."""
 
     implementation: ImplementationIdentity
     occurrence_path: ImplementationPath
     occurrence_token: int
+    dependencies: tuple[CapturedDependency, ...]
     point_fingerprint: str
     physical_fingerprint: str
     requirements: ModuleBuildRequirements
@@ -97,6 +115,12 @@ class CompilerPhysicalUse:
     local: LocalPhysicalCapture
     relation: LocalRelationCapture
     association: PhysicalBuildAssociation
+
+
+@dataclass(frozen=True)
+class AuthorizedComponentUse:
+    use: CompilerPhysicalUse
+    built: BuiltLocalPhysical
 
 
 @dataclass(frozen=True)
@@ -131,6 +155,7 @@ class BuiltLocalPhysical:
     capture_fingerprint: str
     prepared_fingerprint: str
     manifest_fingerprint: str
+    prepared: PreparedModuleBuild
     component: PortableComponent
 
 
@@ -162,6 +187,218 @@ def _occurrence_identity(implementation: object) -> tuple[ImplementationPath, in
     runtime = layer_runtime(implementation)
     segments = tuple(runtime.compiled.namespace.split("."))
     return ImplementationPath(segments), id(runtime.engine)
+
+
+def _canonical_dependency_value(value: object) -> object:
+    if value is None or type(value) in (bool, int, str):
+        return value
+    if type(value) is float:
+        return {"float_hex": value.hex()}
+    if isinstance(value, bytes):
+        return {"bytes": value.hex()}
+    if isinstance(value, QualifiedPath):
+        return {"path": value.value}
+    if isinstance(value, Enum):
+        return {
+            "enum": f"{type(value).__module__}.{type(value).__qualname__}",
+            "value": _canonical_dependency_value(value.value),
+        }
+    if is_dataclass(value) and not isinstance(value, type):
+        return {
+            "dataclass": f"{type(value).__module__}.{type(value).__qualname__}",
+            "fields": tuple(
+                (item.name, _canonical_dependency_value(getattr(value, item.name)))
+                for item in fields(value)
+                if item.compare
+            ),
+        }
+    if isinstance(value, Mapping):
+        return {
+            "mapping": tuple(
+                sorted(
+                    (
+                        repr(_canonical_dependency_value(key)),
+                        _canonical_dependency_value(item),
+                    )
+                    for key, item in value.items()
+                )
+            )
+        }
+    if isinstance(value, (tuple, list)):
+        return tuple(_canonical_dependency_value(item) for item in value)
+    if isinstance(value, (set, frozenset)):
+        return {"set": tuple(sorted(repr(_canonical_dependency_value(item)) for item in value))}
+    name = getattr(value, "name", None)
+    if isinstance(name, str) and name:
+        return {"named": f"{type(value).__module__}.{type(value).__qualname__}", "name": name}
+    return {
+        "typed_repr": f"{type(value).__module__}.{type(value).__qualname__}",
+        "value": repr(value),
+    }
+
+
+def _canonical_answer(answer: Answer[object]) -> object:
+    if isinstance(answer, Decided):
+        return {"decided": _canonical_dependency_value(answer.value)}
+    return {
+        "absent" if isinstance(answer, Absent) else "unresolved": tuple(
+            (
+                finding.kind.value,
+                finding.code,
+                finding.path.value,
+                tuple((name, _canonical_dependency_value(value)) for name, value in finding.values),
+            )
+            for finding in answer.findings
+        )
+    }
+
+
+def _physical_dependency_snapshot(implementation: object) -> tuple[CapturedDependency, ...]:
+    """Capture the actual transitive closure of a declared physical Projection."""
+
+    from finn.dataflow.space.declarations import Projection, Space  # noqa: PLC0415
+    from finn.dataflow.space.compiler import _Ref, answer_for  # noqa: PLC0415
+
+    if not isinstance(implementation, Space):
+        raise TypeError("dependency capture requires a Space occurrence")
+    declaration = getattr(type(implementation), "physical", None)
+    if not isinstance(declaration, Projection):
+        return ()
+    runtime = layer_runtime(implementation)
+    compiled = runtime.compiled.projection("physical")
+    space = runtime.point.design_space
+    captured: dict[tuple[str, str], CapturedDependency] = {}
+    visiting: set[tuple[DependencyKind, QualifiedPath]] = set()
+
+    def record(kind: str, path: QualifiedPath, answer: Answer[object]) -> None:
+        captured[(kind, path.value)] = CapturedDependency(
+            kind, path.value, _canonical_answer(answer)
+        )
+
+    def visit_reference(reference: DependencyRef) -> None:
+        key = (reference.kind, reference.path)
+        if key in visiting:
+            return
+        visiting.add(key)
+        path = reference.path
+        if reference.kind is DependencyKind.PROBLEM:
+            answer: Answer[object] = (
+                Decided(runtime.point.problem[path]) if path in runtime.point.problem else Absent()
+            )
+            record("problem", path, answer)
+            return
+        if reference.kind is DependencyKind.DECISION:
+            declaration = space.decisions[path]
+            if declaration.applies_if is not None:
+                for dependency in declaration.applies_if.dependencies:
+                    visit_reference(dependency)
+                applies = runtime.engine._query_applicability(runtime.point, path)
+                record("applicability", path, applies)
+                if not isinstance(applies, Decided) or not applies.value:
+                    return
+            for dependency in declaration.domain.dependencies:
+                visit_reference(dependency)
+            answer = answer_for(
+                runtime.engine,
+                runtime.point,
+                _Ref(path, DependencyKind.DECISION, declaration.value_semantics),
+            )
+            record("decision", path, answer)
+            return
+        property_declaration = space.properties.get(path)
+        if property_declaration is not None:
+            if property_declaration.applies_if is not None:
+                for dependency in property_declaration.applies_if.dependencies:
+                    visit_reference(dependency)
+                applies = runtime.engine._query_applicability(runtime.point, path)
+                record("applicability", path, applies)
+                if not isinstance(applies, Decided) or not applies.value:
+                    return
+            for dependency in property_declaration.evaluator.dependencies:
+                visit_reference(dependency)
+            answer = runtime.engine.query_property(runtime.point, path)
+            record("property", path, answer)
+            return
+        constraint = space.constraints.get(path)
+        if constraint is None:
+            raise DataflowOpError(f"physical dependency {path} is not declared")
+        if constraint.applies_if is not None:
+            for dependency in constraint.applies_if.dependencies:
+                visit_reference(dependency)
+            applies = runtime.engine._query_applicability(runtime.point, path)
+            record("applicability", path, applies)
+            if not isinstance(applies, Decided) or not applies.value:
+                return
+        for dependency in constraint.evaluator.dependencies:
+            visit_reference(dependency)
+        constraint_answer = runtime.engine.evaluate_constraints(runtime.point, (path,)).answers[
+            path
+        ]
+        record("constraint", path, cast(Any, constraint_answer))
+
+    for dependency in compiled.applicability.dependencies if compiled.applicability else ():
+        visit_reference(dependency)
+    visit_reference(
+        DependencyRef(
+            "output",
+            compiled.output.path,
+            compiled.output.kind,
+            compiled.output.semantics,
+        )
+    )
+    readiness = space.readiness_profiles[compiled.readiness_profile]
+    for path in readiness.decisions:
+        declaration = space.decisions[path]
+        visit_reference(
+            DependencyRef("readiness", path, DependencyKind.DECISION, declaration.value_semantics)
+        )
+    for path in readiness.properties:
+        declaration = space.properties[path]
+        visit_reference(
+            DependencyRef("readiness", path, DependencyKind.PROPERTY, declaration.value_semantics)
+        )
+    constraint_paths = set(readiness.constraints)
+    for group in compiled.constraint_sets:
+        constraint_paths.update(space.constraint_sets[group])
+    for path in sorted(constraint_paths):
+        visit_reference(
+            DependencyRef(
+                "constraint",
+                path,
+                DependencyKind.PROPERTY,
+                # Constraint results are Boolean even though DependencyKind has
+                # no separate constraint member.
+                next(iter(space.decisions.values())).value_semantics
+                if space.decisions
+                else compiled.output.semantics,
+            )
+        )
+    visited_paths = {path for _kind, path in captured}
+
+    def implementation_dependencies(compiled_space: object) -> None:
+        namespace = getattr(compiled_space, "namespace", "")
+        owner = getattr(compiled_space, "owner", None)
+        if (
+            namespace
+            and isinstance(owner, type)
+            and any(path == namespace or path.startswith(f"{namespace}.") for path in visited_paths)
+        ):
+            family = getattr(owner, "id", "")
+            version = getattr(owner, "version", "")
+            if isinstance(family, str) and family and isinstance(version, str) and version:
+                captured[("implementation", namespace)] = CapturedDependency(
+                    "implementation",
+                    namespace,
+                    {"family": family, "version": version},
+                )
+        for _name, child in getattr(compiled_space, "children", ()):
+            implementation_dependencies(child)
+        for _name, branch in getattr(compiled_space, "branches", ()):
+            for case in branch.cases:
+                implementation_dependencies(case.compiled)
+
+    implementation_dependencies(runtime.compiled)
+    return tuple(captured[key] for key in sorted(captured))
 
 
 def capture_local_physical(implementation: object) -> LocalPhysicalCapture:
@@ -202,12 +439,14 @@ def capture_local_physical(implementation: object) -> LocalPhysicalCapture:
         requirements = physical
     path, token = _occurrence_identity(implementation)
     identity = implementation_identity(implementation)
+    dependencies = _physical_dependency_snapshot(implementation)
     physical_fingerprint = module_build_fingerprint(requirements)
-    point_fingerprint = _digest(identity, path, physical_fingerprint, physical)
+    point_fingerprint = _digest(identity, path, dependencies)
     return LocalPhysicalCapture(
         identity,
         path,
         token,
+        dependencies,
         point_fingerprint,
         physical_fingerprint,
         requirements,
@@ -221,15 +460,15 @@ def capture_local_relation(
 ) -> LocalRelationCapture:
     """Join a local physical result to an accepted logical view on demand."""
 
-    from finn.dataflow.designs.design import DataflowDesign  # noqa: PLC0415
     from finn.dataflow.designs.physical import DesignPhysicalRelation  # noqa: PLC0415
+    from finn.dataflow.space.declarations import Space  # noqa: PLC0415
 
-    if not isinstance(implementation, DataflowDesign):
-        raise TypeError("the current relation adapter requires a DataflowDesign occurrence")
+    if not isinstance(implementation, Space):
+        raise TypeError("local relation capture requires a Space occurrence")
     current = capture_local_physical(implementation)
     if current != physical:
         raise DataflowOpError("physical capture belongs to a different projected point")
-    assessment = implementation.physical_relation
+    assessment: ProjectionAssessment[Any] = implementation.assess_view("physical_relation")
     if not isinstance(assessment.accepted_answer, Decided):
         raise DataflowOpError(
             "logical/physical relation is not accepted",
@@ -238,6 +477,8 @@ def capture_local_relation(
     relation = assessment.accepted_answer.value
     if not isinstance(relation, DesignPhysicalRelation):
         raise TypeError("physical relation capability returned the wrong value")
+    if relation.physical.requirements != physical.requirements:
+        raise DataflowOpError("physical relation names different local requirements")
     logical_fingerprint = _digest(relation.network)
     relation_fingerprint = _digest(
         physical.point_fingerprint,
@@ -259,8 +500,9 @@ def capture_local_relation(
 
 def op_physical(operation: DataflowOp) -> ProjectionAssessment[PhysicalBuildCapture]:
     """Ask only the selected Design, after frozen graph/source acceptance."""
-    from finn.dataflow.designs.design import DataflowDesign  # noqa: PLC0415
+    from finn.dataflow.designs.physical import DesignPhysicalRelation  # noqa: PLC0415
     from finn.dataflow.ops.graph_context import capture_frozen_op_logical  # noqa: PLC0415
+    from finn.dataflow.space.declarations import Space  # noqa: PLC0415
 
     graph = operation.graph_dataflow
     if not isinstance(graph.accepted_answer, Decided):
@@ -272,19 +514,24 @@ def op_physical(operation: DataflowOp) -> ProjectionAssessment[PhysicalBuildCapt
             cast(Any, graph.accepted_answer),
         )
     design = operation.selected_implementation()
-    if not isinstance(design, DataflowDesign):
-        raise TypeError("selected_design must return the selected DataflowDesign occurrence")
+    if not isinstance(design, Space):
+        raise TypeError("selected_implementation must return a Space occurrence")
     if design.root is not operation.root:
         raise DataflowOpError("selected physical Design belongs to a different operation point")
-    selected_logical = design.dataflow.accepted_answer
-    if (
-        not isinstance(selected_logical, Decided)
-        or selected_logical.value != graph.accepted_answer.value
-    ):
+    selected_logical: Answer[Any] = design.assess_view("logical").accepted_answer
+    selected_network = (
+        selected_logical.value.network
+        if isinstance(selected_logical, Decided)
+        and isinstance(selected_logical.value, NetworkResult)
+        else selected_logical.value
+        if isinstance(selected_logical, Decided)
+        else None
+    )
+    if selected_network != graph.accepted_answer.value:
         raise DataflowOpError(
             "selected physical Design does not realize the accepted operation Network"
         )
-    physical = design.physical
+    physical: ProjectionAssessment[Any] = design.assess_view("physical")
     if not isinstance(physical.accepted_answer, Decided):
         return ProjectionAssessment(
             "physical",
@@ -295,7 +542,7 @@ def op_physical(operation: DataflowOp) -> ProjectionAssessment[PhysicalBuildCapt
         )
     try:
         local = capture_local_physical(design)
-        capture_local_relation(design, local)
+        relation = capture_local_relation(design, local)
     except DataflowOpError as error:
         error_findings = tuple(item for item in error.findings if isinstance(item, Finding))
         blocked = Absent(error_findings or (_rejection("physical-relation", str(error)),))
@@ -306,7 +553,9 @@ def op_physical(operation: DataflowOp) -> ProjectionAssessment[PhysicalBuildCapt
             cast(Any, blocked),
             cast(Any, blocked),
         )
-    facts = physical.accepted_answer.value
+    if not isinstance(relation.relation, DesignPhysicalRelation):
+        raise TypeError("compiler physical use requires DesignPhysicalRelation")
+    facts = relation.relation.physical
     logical = capture_frozen_op_logical(operation)
     capture = PhysicalBuildCapture(
         facts.requirements,
@@ -451,7 +700,74 @@ def materialize_local_physical(
         request.capture.point_fingerprint,
         expected.prepared_fingerprint,
         _digest(source),
+        request.prepared,
         component,
+    )
+
+
+def authorize_component_use(
+    operation: DataflowOp,
+    implementation: object,
+    use: CompilerPhysicalUse,
+    built: BuiltLocalPhysical,
+    *,
+    model: Any,
+    build: object,
+    graph_context: GraphContext,
+    store: ArtifactStore,
+) -> AuthorizedComponentUse:
+    findings = validate_compiler_physical_use(
+        operation,
+        implementation,
+        use,
+        model=model,
+        build=build,
+        graph_context=graph_context,
+    )
+    if findings:
+        raise DataflowOpError("compiler physical use is stale or invalid", findings)
+    if built.capture_fingerprint != use.local.point_fingerprint:
+        raise DataflowOpError("built component belongs to a different local capture")
+    if built.prepared_fingerprint != prepared_module_fingerprint(built.prepared):
+        raise DataflowOpError("built component prepared fingerprint is inconsistent")
+    source = store.lookup(module_source_derivation(built.prepared))
+    if source is None:
+        raise DataflowOpError("built component source artifact is absent from the store")
+    if portable_module_component(built.prepared, source) != built.component:
+        raise DataflowOpError("built component differs from the verified stored source")
+    if _digest(source) != built.manifest_fingerprint:
+        raise DataflowOpError("built component manifest fingerprint differs")
+    return AuthorizedComponentUse(use, built)
+
+
+def install_compiler_physical_component(
+    operation: DataflowOp,
+    implementation: object,
+    authorized: AuthorizedComponentUse,
+    *,
+    outer_instance_id: str,
+    model: Any,
+    build: object,
+    graph_context: GraphContext,
+    store: ArtifactStore,
+) -> PhysicalInstanceAssociation:
+    if not outer_instance_id:
+        raise DataflowOpError("a physical installation needs a non-empty outer instance id")
+    current = authorize_component_use(
+        operation,
+        implementation,
+        authorized.use,
+        authorized.built,
+        model=model,
+        build=build,
+        graph_context=graph_context,
+        store=store,
+    )
+    return PhysicalInstanceAssociation(
+        outer_instance_id,
+        current.built.component,
+        current.use.association,
+        current.built.prepared_fingerprint,
     )
 
 

@@ -589,11 +589,15 @@ class Space:
         declaration: object = (
             getattr(type(self), capability, None) if isinstance(capability, str) else capability
         )
-        if not isinstance(declaration, Projection):
-            raise AuthoringError(
-                f"{type(self).__name__} has no Projection capability {capability!r}"
-            )
-        return self.project(cast("Projection[T]", declaration))
+        if isinstance(declaration, Projection):
+            return self.project(cast("Projection[T]", declaration))
+        if isinstance(capability, str):
+            assessment = getattr(self, capability, None)
+            from finn.dataflow.space.occurrence import ProjectionAssessment  # noqa: PLC0415
+
+            if isinstance(assessment, ProjectionAssessment):
+                return cast("ProjectionAssessment[T]", assessment)
+        raise AuthoringError(f"{type(self).__name__} has no typed capability {capability!r}")
 
     @classmethod
     def capability_names(cls) -> tuple[str, ...]:

@@ -27,6 +27,7 @@ from finn.dataflow.analysis.integer_dot import (
     InvocationScope,
     NumericalFinding,
     RuntimeWeightPromise,
+    encode_dot_product_premise,
 )
 from finn.dataflow.model.datatypes import QONNXDataType
 from finn.dataflow.kernels.dotp_axi import DspBlock
@@ -660,6 +661,7 @@ class MvauDataflowOp(DataflowOp):
         )
         support_fingerprint = None
         integer_output_carrier = None
+        integer_premise = None
         if profile.accumulation is AccumulationMode.INTEGER and not profile.fuses_activation:
             if any(
                 not self.source.operand(name).datatype_annotated
@@ -669,7 +671,7 @@ class MvauDataflowOp(DataflowOp):
                     "selected integer construction requires an explicit logical datatype "
                     "for each source input"
                 )
-            answer = self.answer(type(self).numerical_support)
+            answer = self.answer(type(self).source_numerical_report)
             if not isinstance(answer, Decided) or not answer.value.supported:
                 findings = getattr(answer, "findings", ())
                 if isinstance(answer, Decided):
@@ -684,6 +686,7 @@ class MvauDataflowOp(DataflowOp):
             assert answer.value.support is not None
             support_fingerprint = integer_graph_profile_fingerprint(answer.value.support)
             integer_output_carrier = answer.value.support.output_carrier
+            integer_premise = encode_dot_product_premise(answer.value.support.premise)
         return encode_mvau_source_semantics(
             MvauSourceSemantics(
                 profile.accumulation,
@@ -693,6 +696,7 @@ class MvauDataflowOp(DataflowOp):
                 bias,
                 support_fingerprint,
                 integer_output_carrier,
+                integer_premise,
             )
         )
 
@@ -759,7 +763,7 @@ class MvauDataflowOp(DataflowOp):
         profile = mvau_profile(source)
         if profile.accumulation is AccumulationMode.INTEGER and not profile.fuses_activation:
             if self.is_bound:
-                answer = self.answer(type(self).numerical_support)
+                answer = self.answer(type(self).source_numerical_report)
                 if not isinstance(answer, Decided):
                     raise DataflowOpError(
                         "integer MVAU execution is numerically unsupported",

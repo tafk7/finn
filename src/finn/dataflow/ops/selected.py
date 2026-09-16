@@ -912,13 +912,20 @@ def decode_selected_graph(
             "declaration.source.semantics",
             "source semantics are incompatible with the construction",
         )
-    semantics = construction.decode_source_semantics(encoded)
-    facts = construction.derive_facts(
-        declaration.construction,
-        declaration.source,
-        semantics,
-        decoded_choices,
-    )
+    try:
+        semantics = construction.decode_source_semantics(encoded)
+        facts = construction.derive_facts(
+            declaration.construction,
+            declaration.source,
+            semantics,
+            decoded_choices,
+        )
+    except (TypeError, ValueError) as error:
+        raise SelectedGraphError(
+            "selected.construction.admission",
+            "declaration.construction",
+            str(error),
+        ) from error
     if not _is_deeply_immutable(facts.source_semantics):
         _fail(
             "selected.construction.mutable_semantics",
@@ -1226,12 +1233,27 @@ def _resolve_slot(
 
 
 def _source_semantic_fingerprint(source: SourceProvenance) -> str:
+    semantics = _encode_semantics(source.semantics)
+    if source.semantics.identity == "finn.dataflow.source.mvau" and source.semantics.version == 3:
+        payload = _thaw_json(source.semantics.payload)
+        if isinstance(payload, dict) and isinstance(payload.get("integer_premise"), dict):
+            premise = payload["integer_premise"]
+            premise["invocation_scope"] = "<per-use>"
+            weights = premise.get("weights")
+            if isinstance(weights, dict) and weights.get("kind") == "runtime":
+                weights["covered_invocations"] = ["<per-use>"]
+                weights["promise_id"] = "<per-use>"
+            semantics = {
+                "identity": source.semantics.identity,
+                "version": source.semantics.version,
+                "payload": payload,
+            }
     return _digest_json(
         {
             "family": source.family,
             "family_version": source.family_version,
             "operands": [_encode_source_value(item) for item in source.operands],
-            "semantics": _encode_semantics(source.semantics),
+            "semantics": semantics,
         }
     )
 
