@@ -101,7 +101,7 @@ def computation_profile(
 
     The accumulation is decided here rather than at execution time so that one
     derived fact answers "what does this node compute" for every consumer --
-    the Designs' applicability, the execution, and any later parity record.
+    the Kernels' applicability, the execution, and any later parity record.
     The implicit bipolar case is part of it precisely because it is *not* an
     attribute: two BIPOLAR operands mean a popcount whatever the attributes
     say, and a consumer testing only ``binaryXnorMode`` would miss it.

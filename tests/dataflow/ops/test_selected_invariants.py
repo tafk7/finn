@@ -308,13 +308,13 @@ REGISTRY = ConstructionRegistry({(FAMILY, "1"): CONSTRUCTION})
 _PE_SCHEMA = tuple(
     choice
     for choice in operation_choice_schema(ActivationReplayOp)
-    if choice.choice.path == "design.pe"
+    if choice.choice.path == "kernel.pe"
 )
 assert len(_PE_SCHEMA) == 1
 CHOICE_CONSTRUCTION = replace(
     CONSTRUCTION,
     family=CHOICE_FAMILY,
-    choice_paths=("design.pe",),
+    choice_paths=("kernel.pe",),
 )
 CHOICE_REGISTRY = ConstructionRegistry(
     {(CHOICE_FAMILY, "1"): CHOICE_CONSTRUCTION},
@@ -1308,7 +1308,7 @@ def test_v2_decoded_source_choices_parameters_forms_and_origin_are_deeply_immuta
         identity,
         source,
         source.semantics.payload,
-        (RecordedChoice("design.pe", 2),),
+        (RecordedChoice("kernel.pe", 2),),
         cast(Mapping[str, object], source.semantics.payload)["parameters"],
     ).selection_fingerprint
     payload_shape.append(99)
@@ -1318,7 +1318,7 @@ def test_v2_decoded_source_choices_parameters_forms_and_origin_are_deeply_immuta
     model, _network, declaration = _stream_fixture(
         source=source,
         identity=identity,
-        choices=(RecordedChoice("design.pe", 2),),
+        choices=(RecordedChoice("kernel.pe", 2),),
     )
     decoded = _decode(model, declaration, registry=CHOICE_REGISTRY)
     semantics = decoded.selection_facts.source_semantics

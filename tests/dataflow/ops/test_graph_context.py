@@ -182,7 +182,7 @@ def test_graph_capture_strong_commit_and_rebound_recapture() -> None:
     )
     assert model.model.SerializeToString(deterministic=True) != before
     assert isinstance(rebound.graph_dataflow.accepted_answer, Decided)
-    assert dict(rebound.recorded()) == {"design.pe": 1, "design.simd": 4}
+    assert dict(rebound.recorded()) == {"kernel.pe": 1, "kernel.simd": 4}
 
     fresh = capture_frozen_op_logical(rebound)
     assert (

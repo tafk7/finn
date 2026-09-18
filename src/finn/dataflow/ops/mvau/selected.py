@@ -34,7 +34,7 @@ from finn.dataflow.ops.mvau.numerics import (
     integer_graph_profile_fingerprint,
     integer_type,
 )
-from finn.dataflow.ops.mvau.designs.supply import WeightSupply
+from finn.dataflow.ops.mvau.kernels.supply import WeightSupply
 from finn.dataflow.ops.mvau.networks import (
     construct_decomposed_mvau_network,
     construct_decoupled_mvau_network,
@@ -90,7 +90,7 @@ from finn.dataflow.ops.selected_transforms import (
 from finn.dataflow.ops.tensor_summary import FrozenInitializer, decode_frozen_initializer
 
 MVAU_CONSTRUCTION_FAMILY = "finn.dataflow.selected.mvau.dot_product"
-MVAU_CONSTRUCTION_VERSION = "2"
+MVAU_CONSTRUCTION_VERSION = "3"
 MVAU_SOURCE_SEMANTICS = "finn.dataflow.source.mvau"
 MVAU_SOURCE_SEMANTICS_VERSION = 3
 MVAU_GRAPH_NAME = "selected_mvau_dot_product"
@@ -357,13 +357,13 @@ def derive_mvau_facts(
     ):
         raise ValueError("unsupported MVAU construction identity")
     if semantics.activation is not ActivationMode.NONE:
-        raise ValueError("the selected dot-product Design has no fused activation")
+        raise ValueError("the selected dot-product Kernel has no fused activation")
     if semantics.output_datatype != semantics.accumulator_datatype:
         raise ValueError("unfused MVAU output datatype must equal accumulator datatype")
     if source.family != "finn.dataflow.mvau" or source.family_version != "1":
         raise ValueError("selected MVAU requires operation family version 1")
-    if source.schema_version != 5:
-        raise ValueError("version-2 selected MVAU requires native schema 5")
+    if source.schema_version != 6:
+        raise ValueError("version-3 selected MVAU requires native schema 6")
     activation = _operand(source, ACTIVATION_KEY)
     weight = _operand(source, WEIGHT_KEY)
     output = _operand(source, OUTPUT_KEY)
@@ -419,13 +419,13 @@ def derive_mvau_facts(
         )
     ):
         raise ValueError("selected popcount MVAU supports FLOAT ONNX carriers")
-    design_case = _choice(choices, "design.case")
-    if design_case != "dot_product":
-        raise ValueError("selected MVAU construction requires the dot_product Design")
-    pe = cast(int, _choice(choices, "design.dot_product.pe"))
-    simd = cast(int, _choice(choices, "design.dot_product.simd"))
-    supply_value = _choice(choices, "design.dot_product.weight_supply")
-    compute = cast(str, _choice(choices, "design.dot_product.compute.kernel"))
+    kernel_case = _choice(choices, "kernel.case")
+    if kernel_case != "dot_product":
+        raise ValueError("selected MVAU construction requires the dot_product Kernel")
+    pe = cast(int, _choice(choices, "kernel.dot_product.pe"))
+    simd = cast(int, _choice(choices, "kernel.dot_product.simd"))
+    supply_value = _choice(choices, "kernel.dot_product.weight_supply")
+    compute = cast(str, _choice(choices, "kernel.dot_product.compute.kernel"))
     if not isinstance(supply_value, WeightSupply):
         raise TypeError("MVAU weight supply choice was not decoded nominally")
     supply = supply_value
@@ -1223,11 +1223,11 @@ MVAU_SELECTED_CONSTRUCTION = SelectedConstruction(
     source_semantics_version=MVAU_SOURCE_SEMANTICS_VERSION,
     admitted_forms=("canonical",),
     choice_paths=(
-        "design.case",
-        "design.dot_product.pe",
-        "design.dot_product.simd",
-        "design.dot_product.weight_supply",
-        "design.dot_product.compute.kernel",
+        "kernel.case",
+        "kernel.dot_product.pe",
+        "kernel.dot_product.simd",
+        "kernel.dot_product.weight_supply",
+        "kernel.dot_product.compute.kernel",
     ),
     initializer_inputs=(),
     decode_source_semantics=decode_mvau_source_semantics,

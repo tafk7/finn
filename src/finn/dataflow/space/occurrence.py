@@ -100,7 +100,7 @@ ProblemSource = Mapping[Any, object] | Callable[[], Mapping[Any, object]]
 #: distinction is the whole point: a payload would be readable by every authored
 #: class in the tree, handing a contributor-written Kernel a channel to the
 #: operation's node, model and build configuration.  A factory is consulted for
-#: the root and for successor roots only, so a child Design or Kernel cannot
+#: the root and for successor roots only, so a child Kernel or Kernel cannot
 #: observe anything the caller captured, and ``OccurrenceContext`` gains no
 #: field.
 RootFactory = Callable[[OccurrenceContext], S]
@@ -902,7 +902,7 @@ def evaluate_projection(
     """Run one compiled projection at one point.
 
     The reduction lives here and only here.  A layer that evaluates a compiled
-    fragment directly -- a Design resolving a selected candidate's physical
+    fragment directly -- a Kernel resolving a selected candidate's physical
     projection, say -- calls this rather than reimplementing the ordering, so
     "Unresolved dominates, then absence, then refusal" cannot come to mean two
     slightly different things in two places.  Locking is the caller's, because a
@@ -1201,7 +1201,7 @@ class LayerRuntime:
     """The seam a layer specialization implements its own projection through.
 
     Not the contributor facade and not reachable from it.  ``Kernel`` and
-    ``DataflowDesign`` are written *against* this package, not with it: they
+    ``Kernel`` are written *against* this package, not with it: they
     generate compiled projections during lowering and need the compiled record
     and the point to evaluate them.  Giving that one named, documented seam is
     honest about the dependency; the alternative -- each layer reaching for

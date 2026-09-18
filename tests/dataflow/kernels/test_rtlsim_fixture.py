@@ -58,7 +58,7 @@ def test_replay_synthesis_matrix_is_a_subset_of_the_numeric_matrix() -> None:
     assert set(REPLAY_SYNTH_LABELS) <= set(REPLAY_BY_LABEL)
 
 
-def test_replay_harness_constructs_no_operation_or_design() -> None:
+def test_replay_harness_constructs_no_operation() -> None:
     path = Path(__file__).parent / "rtlsim/replay_buffer_numeric.py"
     tree = ast.parse(path.read_text(), filename=str(path))
     imports = tuple(
@@ -70,7 +70,6 @@ def test_replay_harness_constructs_no_operation_or_design() -> None:
         "finn.dataflow.op",
         "finn.dataflow.ops",
         "finn.dataflow.authoring",
-        "finn.dataflow.designs.design",
     )
     assert not any(
         module == prefix or module.startswith(f"{prefix}.")

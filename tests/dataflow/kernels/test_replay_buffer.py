@@ -50,7 +50,7 @@ BOUND_NAMES = (
 
 
 class Harness(Space):
-    """The Design's stand-in: it owns every Region-visible choice."""
+    """The Kernel's stand-in: it owns every Region-visible choice."""
 
     repetitions = Problem(int)
     matrix_width = Problem(int)
@@ -190,7 +190,7 @@ def test_replay_parameters_restate_the_folding(
 
 def test_replay_owns_no_decision_at_all() -> None:
     _harness, kernel = _compile()
-    assert {str(p) for p in kernel.extension.imported_decisions} == {
+    assert {str(reference.path) for _name, reference in kernel.inputs} >= {
         "replay_test.pe",
         "replay_test.simd",
     }

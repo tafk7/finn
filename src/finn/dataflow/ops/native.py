@@ -492,6 +492,12 @@ def hydrate(operation: Any) -> Any:
             raise DecodeError(
                 "legacy JSON dataflow_state is unsupported; reconstruct native state explicitly"
             )
+        legacy_choices = sorted(name for name in present_names if name.startswith("design__"))
+        if legacy_choices:
+            raise DecodeError(
+                "pre-unified Design choice attributes are unsupported: "
+                f"{legacy_choices!r}; select the Kernel again"
+            )
         metadata = RESERVED_ATTRIBUTES - {SCOPE_ID_ATTRIBUTE}
         has_choices = any(item.name in present_names for item in schema)
         if has_choices or metadata & present_names:

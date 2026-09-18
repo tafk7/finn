@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Real operation/Design/Kernel fixtures for selected-transform lifecycle tests."""
+"""Real operation/Kernel/Kernel fixtures for selected-transform lifecycle tests."""
 
 from __future__ import annotations
 
@@ -16,15 +16,14 @@ from qonnx.core.modelwrapper import ModelWrapper  # type: ignore[import-not-foun
 
 from finn.dataflow._engine import Finding, FindingKind, QualifiedPath
 from finn.dataflow.artifacts.abi import ComponentABI
-from finn.dataflow.designs.design import (
-    DataflowDesign,
+from finn.dataflow.kernels.kernel import (
+    Kernel,
     EdgeSink,
     KernelChoice,
     NetworkBoundary,
     NetworkEdge,
-    SelectedGraph,
 )
-from finn.dataflow.kernels.kernel import Kernel, RegionDeclaration
+from finn.dataflow.kernels.kernel import RegionDeclaration
 from finn.dataflow.model import (
     BeatSequence,
     BoundaryContract,
@@ -250,7 +249,7 @@ class IdentityConsumerKernel(Kernel):
         return ComponentABI("identity_consumer", ())
 
 
-class IdentityChainDesign(DataflowDesign):
+class IdentityChainKernel(Kernel):
     """Four real Regions: producer -> left -> right -> consumer."""
 
     id = "identity_chain"
@@ -312,8 +311,8 @@ class IdentityChainDesign(DataflowDesign):
     result = NetworkBoundary(consumer.output("out"))
 
 
-def _design(root: DataflowOp) -> IdentityChainDesign:
-    return cast(IdentityChainDesign, root.design)
+def _kernel(root: DataflowOp) -> IdentityChainKernel:
+    return cast(IdentityChainKernel, root.kernel)
 
 
 class IdentityChainOp(DataflowOp):
@@ -325,8 +324,8 @@ class IdentityChainOp(DataflowOp):
     result = OpOutput(index=0, operand="value", correspondence=CoordinateMapping.IDENTITY)
     reference_region = Attribute(str, default="none")
 
-    design = Subspace(
-        IdentityChainDesign,
+    kernel = Subspace(
+        IdentityChainKernel,
         shape=activation.shape,
         datatype=activation.datatype,
         activation_initializer=allow_absent(activation.initializer_value),
@@ -334,10 +333,10 @@ class IdentityChainOp(DataflowOp):
     )
 
     def selected_dataflow(self) -> ProjectionAssessment[DataflowNetwork] | None:
-        return _design(self).dataflow
+        return _kernel(self).dataflow
 
-    def selected_design(self) -> object:
-        return _design(self)
+    def selected_kernel(self) -> object:
+        return _kernel(self)
 
     def selected_source_semantics(self) -> object:
         return EncodedSourceSemantics(
@@ -459,8 +458,8 @@ def derive_identity_chain_facts(
         raise ValueError("identity-chain source operands must be matching INT8 vectors")
     if activation.initializer_present != (semantics.reference_region is not None):
         raise ValueError("identity-chain reference supply must match initializer presence")
-    if tuple(item.path for item in choices) != ("design.grouping",):
-        raise ValueError("identity-chain selection requires exactly design.grouping")
+    if tuple(item.path for item in choices) != ("kernel.grouping",):
+        raise ValueError("identity-chain selection requires exactly kernel.grouping")
     grouping = choices[0].value
     if type(grouping) is not int or grouping not in (1, 2):
         raise ValueError("identity-chain grouping must be 1 or 2")
@@ -881,11 +880,11 @@ IDENTITY_CHAIN_SELECTED_CONSTRUCTION = SelectedConstruction(
     source_semantics_identity=IDENTITY_CHAIN_SOURCE_SEMANTICS,
     source_semantics_version=IDENTITY_CHAIN_SOURCE_SEMANTICS_VERSION,
     admitted_forms=("canonical", IDENTITY_ELIDED_FORM),
-    choice_paths=("design.grouping",),
+    choice_paths=("kernel.grouping",),
     initializer_inputs=(
         SelectedInitializerInput(
             ACTIVATION_KEY,
-            IdentityChainDesign.activation_initializer,
+            IdentityChainKernel.activation_initializer,
             _activation_initializer_required,
         ),
     ),
@@ -896,7 +895,7 @@ IDENTITY_CHAIN_SELECTED_CONSTRUCTION = SelectedConstruction(
     verify=verify_identity_chain_snapshot,
 )
 
-IdentityChainDesign.selected_graph = SelectedGraph(IDENTITY_CHAIN_SELECTED_CONSTRUCTION)
+IdentityChainKernel.selected_construction = IDENTITY_CHAIN_SELECTED_CONSTRUCTION
 
 IDENTITY_CHAIN_CONSTRUCTIONS = ConstructionRegistry(
     {
@@ -1021,7 +1020,7 @@ def configured_identity_chain(
         activation=activation,
     )
     bound = IdentityChainOp(model.graph.node[0]).bind(model, None)
-    configured = bound.design.assign(IdentityChainDesign.grouping, grouping).root
+    configured = bound.kernel.assign(IdentityChainKernel.grouping, grouping).root
     if not isinstance(configured, IdentityChainOp):
         raise TypeError("identity-chain configuration returned the wrong root type")
     return model, configured
@@ -1046,7 +1045,7 @@ __all__ = [
     "IDENTITY_CHAIN_SELECTED_CONSTRUCTION",
     "IDENTITY_CHAIN_TRANSFORMS",
     "IDENTITY_ELIDED_FORM",
-    "IdentityChainDesign",
+    "IdentityChainKernel",
     "IdentityChainOp",
     "combined_construction_registry",
     "combined_transform_registry",

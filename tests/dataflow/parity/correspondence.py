@@ -231,8 +231,8 @@ def _tensor(operand: str, *, optional: bool = False) -> Callable[[Any], Any]:
 
     From the source rather than from the association, deliberately.  The
     oracle's description was a *source* projection: it existed whether or not a
-    Design applied.  ``OperandMapping`` is read off a resolved Network, and a
-    node with no applicable Design -- a fused-threshold one, here -- has none.
+    Kernel applied.  ``OperandMapping`` is read off a resolved Network, and a
+    node with no applicable Kernel -- a fused-threshold one, here -- has none.
     Comparing the source reading keeps every fixture in the comparison;
     ``test_the_association_carries_the_same_identities`` then checks that the
     association agrees with it wherever a Network does resolve.
@@ -400,7 +400,7 @@ PROBLEM_TABLE: tuple[Entry, ...] = (
     Entry(
         "external_weight_sequence",
         MOVED_TO,
-        "an external supply sequence is a physical-composition fact and no Design "
+        "an external supply sequence is a physical-composition fact and no Kernel "
         "in this round consumes one",
         target="U6",
     ),

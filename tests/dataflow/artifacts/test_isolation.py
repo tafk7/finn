@@ -27,7 +27,7 @@ from pathlib import Path
 
 import pytest
 
-#: Third-party packages ``artifacts`` may import at runtime (Design 1 §19.1).
+#: Third-party packages ``artifacts`` may import at runtime (Kernel 1 §19.1).
 #:
 #: Each implements a published specification and is confined to a boundary
 #: where replacing it moves no artifact key -- which is §19.1's own test for

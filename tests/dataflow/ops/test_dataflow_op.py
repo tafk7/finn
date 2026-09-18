@@ -5,7 +5,7 @@
 
 Two operations run through the same tests wherever the question is generic --
 binding, freezing, persistence, staleness, association -- because the claim
-being checked is that the layer is not MVAU-shaped.  Where MVAU has a Design
+being checked is that the layer is not MVAU-shaped.  Where MVAU has a Kernel
 alternative and a matrix and the replay op has neither, the tests say so
 separately rather than pretending the difference away.
 """
@@ -43,9 +43,9 @@ from finn.dataflow.ops.base import (
     DataflowOpError,
     source_declarations,
 )
-from finn.dataflow.ops.mvau.designs.base import WeightedDotProductDesign
-from finn.dataflow.ops.mvau.designs.dot_product import (
-    DotProductDesign,
+from finn.dataflow.ops.mvau.kernels.base import WeightedDotProductKernel
+from finn.dataflow.ops.mvau.kernels.dot_product import (
+    DotProductKernel,
     WeightSupply,
 )
 from finn.dataflow.ops.mvau.op import MvauDataflowOp
@@ -55,7 +55,7 @@ from finn.dataflow.ops.persistence import (
     apply_graph_effects,
     assign_dataflow_scope_ids,
 )
-from finn.dataflow.ops.replay.design import ActivationReplayDesign
+from finn.dataflow.ops.replay.kernel import ActivationReplayKernel
 from finn.dataflow.ops.replay.op import ActivationReplayOp
 from finn.dataflow.ops.schema import OpInput, OpOutput
 from finn.dataflow.ops.native import (
@@ -234,17 +234,17 @@ def _configure_mvau_point(
 ) -> MvauDataflowOp:
     """Select an explicit supply and compatible compute candidate."""
 
-    chosen = bound.design.select("dot_product").root
-    design = chosen.design.alternative("dot_product")
-    chosen = design.assign(DotProductDesign.weight_supply, supply).root
+    chosen = bound.kernel.select("dot_product").root
+    design = chosen.kernel.alternative("dot_product")
+    chosen = design.assign(DotProductKernel.weight_supply, supply).root
     candidate = "dotp_axi_embedded" if supply is WeightSupply.EMBEDDED else "dotp_axi"
-    chosen = chosen.design.alternative("dot_product").compute.select(candidate).root
+    chosen = chosen.kernel.alternative("dot_product").compute.select(candidate).root
     for declaration, value in (
-        (WeightedDotProductDesign.pe, pe),
-        (WeightedDotProductDesign.simd, simd),
+        (WeightedDotProductKernel.pe, pe),
+        (WeightedDotProductKernel.simd, simd),
     ):
-        chosen = chosen.design.alternative("dot_product").assign(declaration, value).root
-    kernel = chosen.design.alternative("dot_product").kernel("compute")
+        chosen = chosen.kernel.alternative("dot_product").assign(declaration, value).root
+    kernel = chosen.kernel.alternative("dot_product").child("compute")
     assert isinstance(kernel, Decided)
     return kernel.value.assign(DotpAxiKernel.compute_pumping, pumped).root
 
@@ -274,17 +274,17 @@ def _configured_replay(
     model = model or _replay_model()
     chosen = _unbound(model, "replay0").bind(model, Build())
     for declaration, value in (
-        (ActivationReplayDesign.pe, pe),
-        (ActivationReplayDesign.simd, simd),
+        (ActivationReplayKernel.pe, pe),
+        (ActivationReplayKernel.simd, simd),
     ):
-        chosen = chosen.design.assign(declaration, value).root
+        chosen = chosen.kernel.assign(declaration, value).root
     committed = chosen.commit(model, Build())
     assert isinstance(committed, ActivationReplayOp)
     return model, committed
 
 
 def _replay_build_spec(operation: ActivationReplayOp) -> Any:
-    kernel = operation.design.kernel("replay")
+    kernel = operation.kernel.child("replay")
     assert isinstance(kernel, Decided)
     physical = kernel.value.physical.accepted_answer
     assert isinstance(physical, Decided)
@@ -338,7 +338,7 @@ def test_standalone_replay_preserves_every_requested_copy_across_reload(
     spec = _replay_build_spec(operation)
     assert dict(spec.parameters)["REP"] == folds
     assert dict(spec.parameters)["LEN"] == matrix_width // simd
-    assert dict(operation.recorded()) == {"design.pe": 1, "design.simd": simd}
+    assert dict(operation.recorded()) == {"kernel.pe": 1, "kernel.simd": simd}
 
     path = tmp_path / f"replay-r{repetitions}-w{matrix_width}-f{folds}-s{simd}.onnx"
     model.save(str(path))
@@ -363,7 +363,7 @@ def test_standalone_replay_refuses_an_explicit_pe_greater_than_one() -> None:
     bound = _unbound(model, "replay0").bind(model, Build())
 
     with pytest.raises(RequestError) as caught:
-        bound.design.assign(ActivationReplayDesign.pe, 2)
+        bound.kernel.assign(ActivationReplayKernel.pe, 2)
 
     finding = caught.value.findings[0]
     assert finding.code == "activation-replay-pe-not-one"
@@ -374,7 +374,7 @@ def test_a_saved_standalone_replay_pe_greater_than_one_is_not_reinterpreted(
     tmp_path: Path,
 ) -> None:
     model, _operation = _configured_replay()
-    _replace_attribute(model, "design__pe", 2)
+    _replace_attribute(model, "kernel__pe", 2)
     path = tmp_path / "old-invalid-replay.onnx"
     model.save(str(path))
     restored = ModelWrapper(str(path))
@@ -384,6 +384,17 @@ def test_a_saved_standalone_replay_pe_greater_than_one_is_not_reinterpreted(
         _unbound(restored, "replay0").bind(restored, Build())
 
     assert restored.model.SerializeToString(deterministic=True) == before
+
+
+def test_pre_unified_design_choice_attributes_are_rejected_without_writes() -> None:
+    model, _operation = _configured_replay()
+    model.graph.node[0].attribute.append(helper.make_attribute("design__pe", 1))
+    before = model.model.SerializeToString(deterministic=True)
+
+    with pytest.raises(DataflowOpError, match="pre-unified Design choice attributes"):
+        _unbound(model, "replay0").bind(model, Build())
+
+    assert model.model.SerializeToString(deterministic=True) == before
 
 
 # -- U4a: the operation is the root Space --------------------------------------
@@ -396,7 +407,7 @@ def test_the_operation_class_is_the_space() -> None:
 
     assert isinstance(declarations["activation"], Problem)
     assert isinstance(declarations["weight"], Problem)
-    assert "design" in declarations
+    assert "kernel" in declarations
     assert not hasattr(MvauDataflowOp, "source_space")
     assert not hasattr(MvauDataflowOp, "occurrence")
 
@@ -439,7 +450,7 @@ def test_a_successor_carries_the_same_frozen_binding() -> None:
     model = _mvau_model()
     bound = _unbound(model, "mvau0").bind(model, Build())
 
-    successor = bound.design.select("dot_product").root
+    successor = bound.kernel.select("dot_product").root
 
     assert type(successor) is MvauDataflowOp
     assert successor is not bound
@@ -455,8 +466,8 @@ def test_a_child_design_and_kernel_cannot_reach_the_binding() -> None:
     assert isinstance(bound, MvauDataflowOp)
     chosen = _configure_mvau_point(bound)
 
-    design = chosen.design.alternative("dot_product")
-    kernel = design.kernel("compute")
+    design = chosen.kernel.alternative("dot_product")
+    kernel = design.child("compute")
 
     assert not isinstance(design, DataflowOp)
     assert not hasattr(design, "binding")
@@ -673,7 +684,7 @@ def test_the_replay_source_projects_one_node_and_no_selector() -> None:
     assert {item.id for item in network.value.boundaries} == {"activation", "expanded"}
 
 
-def test_an_unselected_design_is_unresolved_and_not_an_exception() -> None:
+def test_an_unselected_kernel_is_unresolved_and_not_an_exception() -> None:
     """A structural choice not yet made is a point state, not a defect."""
 
     model = _mvau_model()
@@ -743,13 +754,13 @@ def test_an_uncommitted_folding_leaves_the_network_unresolved() -> None:
     model = _mvau_model()
     bound = _unbound(model, "mvau0").bind(model, Build())
     assert isinstance(bound, MvauDataflowOp)
-    chosen = bound.design.select("dot_product").root
+    chosen = bound.kernel.select("dot_product").root
     chosen = (
-        chosen.design.alternative("dot_product")
-        .assign(DotProductDesign.weight_supply, WeightSupply.EXTERNAL)
+        chosen.kernel.alternative("dot_product")
+        .assign(DotProductKernel.weight_supply, WeightSupply.EXTERNAL)
         .root
     )
-    chosen = chosen.design.alternative("dot_product").compute.select("dotp_axi").root
+    chosen = chosen.kernel.alternative("dot_product").compute.select("dotp_axi").root
 
     assert isinstance(chosen.network, Unresolved)
 
@@ -793,25 +804,25 @@ def test_weight_supply_and_compute_choices_can_be_switched_without_stale_state()
         committed = chosen.commit(model, Build())
         recorded = dict(committed.recorded())
         candidate = "dotp_axi_embedded" if supply is WeightSupply.EMBEDDED else "dotp_axi"
-        assert recorded["design.case"] == "dot_product"
-        assert recorded["design.dot_product.weight_supply"] is supply
-        assert recorded["design.dot_product.compute.kernel"] == candidate
-        assert f"design.dot_product.compute.{candidate}.compute_pumping" in recorded
+        assert recorded["kernel.case"] == "dot_product"
+        assert recorded["kernel.dot_product.weight_supply"] is supply
+        assert recorded["kernel.dot_product.compute.kernel"] == candidate
+        assert f"kernel.dot_product.compute.{candidate}.compute_pumping" in recorded
         if previous_candidate is not None and previous_candidate != candidate:
             assert (
-                f"design.dot_product.compute.{previous_candidate}.compute_pumping" not in recorded
+                f"kernel.dot_product.compute.{previous_candidate}.compute_pumping" not in recorded
             )
         previous_candidate = candidate
 
     document = read_attributes(model.graph.node[0])
-    assert document["design__dot_product__weight_supply"].value == "external"
-    assert document["design__dot_product__compute__kernel"].value == "dotp_axi"
-    assert "design__dot_product__compute__dotp_axi_embedded__compute_pumping" not in document
+    assert document["kernel__dot_product__weight_supply"].value == "external"
+    assert document["kernel__dot_product__compute__kernel"].value == "dotp_axi"
+    assert "kernel__dot_product__compute__dotp_axi_embedded__compute_pumping" not in document
 
 
 def test_a_partial_point_may_be_saved(tmp_path: Path) -> None:
     model = _mvau_model()
-    chosen = _unbound(model, "mvau0").bind(model, Build()).design.select("dot_product").root
+    chosen = _unbound(model, "mvau0").bind(model, Build()).kernel.select("dot_product").root
     chosen.commit(model, Build())
 
     path = tmp_path / "partial.onnx"
@@ -819,9 +830,9 @@ def test_a_partial_point_may_be_saved(tmp_path: Path) -> None:
     reloaded = ModelWrapper(str(path))
     restored = _unbound(reloaded, "mvau0").bind(reloaded, Build())
 
-    # Only the Design family is chosen; supply, candidate and folding remain
+    # Only the Kernel family is chosen; supply, candidate and folding remain
     # deliberately unresolved and therefore absent from native state.
-    assert set(restored.recorded()) == {"design.case"}
+    assert set(restored.recorded()) == {"kernel.case"}
     assert isinstance(restored.network, Unresolved)
 
 
@@ -829,11 +840,11 @@ def test_a_refused_point_may_not_be_saved() -> None:
     """Unresolved is a legitimate thing to record; refused is not."""
 
     model = _mvau_model(matrix_height=4)
-    chosen = _unbound(model, "mvau0").bind(model, Build()).design.select("dot_product").root
+    chosen = _unbound(model, "mvau0").bind(model, Build()).kernel.select("dot_product").root
 
     # 3 does not divide a matrix height of 4, so the assignment itself refuses.
     with pytest.raises(Exception):  # noqa: B017 - RequestError from the engine
-        chosen.design.alternative("dot_product").assign(WeightedDotProductDesign.pe, 3)
+        chosen.kernel.alternative("dot_product").assign(WeightedDotProductKernel.pe, 3)
 
 
 def test_source_change_refuses_a_plan_but_node_rename_does_not() -> None:
@@ -864,12 +875,12 @@ def test_choices_are_separate_native_attributes() -> None:
     model, operation = _configured_mvau(pe=2, simd=4)
     attrs = read_attributes(model.graph.node[0])
     assert attrs[FINGERPRINT_ATTRIBUTE].value == operation.local_problem_fingerprint
-    assert attrs[SCHEMA_VERSION_ATTRIBUTE] == NativeAttribute("i", 5)
-    assert attrs["design__case"] == NativeAttribute("s", "dot_product")
-    assert attrs["design__dot_product__pe"] == NativeAttribute("i", 2)
-    assert attrs["design__dot_product__simd"] == NativeAttribute("i", 4)
-    assert attrs["design__dot_product__weight_supply"] == NativeAttribute("s", "external")
-    assert attrs["design__dot_product__compute__kernel"] == NativeAttribute("s", "dotp_axi")
+    assert attrs[SCHEMA_VERSION_ATTRIBUTE] == NativeAttribute("i", 6)
+    assert attrs["kernel__case"] == NativeAttribute("s", "dot_product")
+    assert attrs["kernel__dot_product__pe"] == NativeAttribute("i", 2)
+    assert attrs["kernel__dot_product__simd"] == NativeAttribute("i", 4)
+    assert attrs["kernel__dot_product__weight_supply"] == NativeAttribute("s", "external")
+    assert attrs["kernel__dot_product__compute__kernel"] == NativeAttribute("s", "dotp_axi")
     assert not {"dataflow_state", "dataflow_family", "dataflow_family_version"} & attrs.keys()
 
 
@@ -892,7 +903,7 @@ def test_old_mvau_schema_two_is_refused_without_writes() -> None:
     model, _operation = _configured_mvau()
     _replace_attribute(model, SCHEMA_VERSION_ATTRIBUTE, 2)
     before = model.model.SerializeToString(deterministic=True)
-    with pytest.raises(DataflowOpError, match="writes schema version 5"):
+    with pytest.raises(DataflowOpError, match="writes schema version 6"):
         _unbound(model, "mvau0").bind(model, Build())
     assert model.model.SerializeToString(deterministic=True) == before
 
@@ -963,13 +974,13 @@ def test_commit_returns_a_bound_operation_over_the_committed_graph() -> None:
     """The lifecycle continues across the mutation boundary."""
 
     model = _mvau_model()
-    chosen = _unbound(model, "mvau0").bind(model, Build()).design.select("dot_product").root
+    chosen = _unbound(model, "mvau0").bind(model, Build()).kernel.select("dot_product").root
 
     committed = chosen.commit(model, Build())
 
     assert type(committed) is MvauDataflowOp
     assert committed.is_bound
-    assert dict(committed.recorded())["design.case"] == "dot_product"
+    assert dict(committed.recorded())["kernel.case"] == "dot_product"
 
 
 def test_commitment_stage_is_only_in_the_plan() -> None:
@@ -1059,7 +1070,7 @@ def test_the_scope_id_survives_a_rename_of_the_node() -> None:
 def test_persistence_is_discovered_from_the_model_not_declared_by_the_operation() -> None:
     """Neither operation lists its own choices; both are walked from the point.
 
-    A Decision added to a Design three levels down is persisted without anyone
+    A Decision added to a Kernel three levels down is persisted without anyone
     editing the operation, and two Decisions called the same thing in different
     subspaces cannot collide, because compiled paths cannot.
     """
@@ -1074,30 +1085,30 @@ def test_persistence_is_discovered_from_the_model_not_declared_by_the_operation(
     mvau_paths = set(mvau.recorded())
 
     # No selector at all in the replay op: it has a fixed Subspace.
-    assert replay_paths == {"design.pe", "design.simd"}
+    assert replay_paths == {"kernel.pe", "kernel.simd"}
     # The MVAU op has two nested selectors and Decisions beneath them, all
     # named by compiled path rather than by a friendly alias.
-    assert "design.case" in mvau_paths
-    assert "design.dot_product.pe" in mvau_paths
+    assert "kernel.case" in mvau_paths
+    assert "kernel.dot_product.pe" in mvau_paths
     # Nested three levels down, inside the selected alternative's selected
     # candidate.  No alias could have named it, and nobody listed it.
-    assert "design.dot_product.compute.dotp_axi.compute_pumping" in mvau_paths
+    assert "kernel.dot_product.compute.dotp_axi.compute_pumping" in mvau_paths
 
     # And a segment with a real choice does contribute its selector.
     _third, embedded = _configured_mvau(_mvau_model(), supply=WeightSupply.EMBEDDED)
-    assert "design.dot_product.compute.kernel" in set(embedded.recorded())
+    assert "kernel.dot_product.compute.kernel" in set(embedded.recorded())
 
 
 def test_an_unreachable_recorded_choice_is_refused() -> None:
     model, _operation = _configured_mvau()
-    _replace_attribute(model, "design__dot_product__compute__dotp_axi_embedded__compute_pumping", 0)
+    _replace_attribute(model, "kernel__dot_product__compute__dotp_axi_embedded__compute_pumping", 0)
     with pytest.raises(DataflowOpError):
         _unbound(model, "mvau0").bind(model, Build())
 
 
 def test_a_wrong_native_attribute_kind_is_refused() -> None:
     model, _operation = _configured_mvau()
-    _replace_attribute(model, "design__dot_product__pe", "2")
+    _replace_attribute(model, "kernel__dot_product__pe", "2")
     with pytest.raises(DataflowOpError, match="expected native"):
         _unbound(model, "mvau0").bind(model, Build())
 
@@ -1337,7 +1348,7 @@ def test_successors_do_not_share_one_mutable_node() -> None:
 
     model = _mvau_model()
     bound = _unbound(model, "mvau0").bind(model, Build())
-    successor = bound.design.select("dot_product").root
+    successor = bound.kernel.select("dot_product").root
 
     assert successor.onnx_node is not bound.onnx_node
     assert successor.onnx_node.SerializeToString(
@@ -1442,13 +1453,13 @@ def test_commit_needs_no_build_because_the_occurrence_already_froze_one() -> Non
     """The effects were derived from the frozen facts; so is the rebinding."""
 
     model = _mvau_model()
-    chosen = _unbound(model, "mvau0").bind(model, Build()).design.select("dot_product").root
+    chosen = _unbound(model, "mvau0").bind(model, Build()).kernel.select("dot_product").root
 
     committed = chosen.commit(model)
 
     assert type(committed) is MvauDataflowOp
     assert committed.problem_fingerprint == chosen.problem_fingerprint
-    assert dict(committed.recorded())["design.case"] == "dot_product"
+    assert dict(committed.recorded())["kernel.case"] == "dot_product"
 
 
 def test_a_mismatched_build_at_commit_leaves_the_graph_unchanged() -> None:
@@ -1460,7 +1471,7 @@ def test_a_mismatched_build_at_commit_leaves_the_graph_unchanged() -> None:
     """
 
     model = _mvau_model()
-    chosen = _unbound(model, "mvau0").bind(model, Build()).design.select("dot_product").root
+    chosen = _unbound(model, "mvau0").bind(model, Build()).kernel.select("dot_product").root
     before = model.model.SerializeToString(deterministic=True)
 
     with pytest.raises(DataflowOpError, match="clock_period_ns"):
@@ -1473,11 +1484,11 @@ def test_an_equivalent_build_at_commit_is_accepted() -> None:
     """A caller that passes the same configuration is not being punished."""
 
     model = _mvau_model()
-    chosen = _unbound(model, "mvau0").bind(model, Build()).design.select("dot_product").root
+    chosen = _unbound(model, "mvau0").bind(model, Build()).kernel.select("dot_product").root
 
     committed = chosen.commit(model, Build())
 
-    assert dict(committed.recorded())["design.case"] == "dot_product"
+    assert dict(committed.recorded())["kernel.case"] == "dot_product"
 
 
 def test_changing_the_build_context_is_a_rebinding_not_a_commit() -> None:
@@ -1582,9 +1593,9 @@ def _rank_one_mvau_model(*, matrix_width: int = 8, matrix_height: int = 4) -> Mo
 def test_a_rank_one_activation_is_one_repetition_and_has_an_applicable_design() -> None:
     """The docstring used to claim the opposite; nothing enforced it.
 
-    A restriction has to be argued from the mathematics or from a Design's
+    A restriction has to be argued from the mathematics or from a Kernel's
     structure.  Neither argues for one here: a vector through a matrix is a
-    single repetition, and every Design builds it with no special case.
+    single repetition, and every Kernel builds it with no special case.
     """
 
     model = _rank_one_mvau_model()
@@ -1600,11 +1611,11 @@ def test_a_rank_one_activation_is_one_repetition_and_has_an_applicable_design() 
 
 def test_recorded_is_a_bound_api_and_native_values_are_inspectable() -> None:
     model, operation = _configured_mvau(supply=WeightSupply.EMBEDDED)
-    assert operation.recorded()["design.dot_product.weight_supply"] is WeightSupply.EMBEDDED
+    assert operation.recorded()["kernel.dot_product.weight_supply"] is WeightSupply.EMBEDDED
     with pytest.raises(DataflowOpError, match="not bound"):
         _unbound(model, "mvau0").recorded()
     assert (
-        read_attributes(model.graph.node[0])["design__dot_product__weight_supply"].value
+        read_attributes(model.graph.node[0])["kernel__dot_product__weight_supply"].value
         == "embedded"
     )
 
@@ -1620,7 +1631,7 @@ def _replace_attribute(model: Any, name: str, value: Any) -> None:
 def test_a_concurrent_decision_change_refuses_commit_without_writes() -> None:
     model, operation = _configured_mvau()
     effects = operation.graph_effects()
-    _replace_attribute(model, "design__dot_product__pe", 4)
+    _replace_attribute(model, "kernel__dot_product__pe", 4)
     before = model.model.SerializeToString(deterministic=True)
     with pytest.raises(DataflowOpError, match="source graph effects differ"):
         apply_graph_effects(model, effects)

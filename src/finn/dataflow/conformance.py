@@ -4,7 +4,7 @@
 """One lifecycle check every DataflowOp must pass, whoever wrote it.
 
 The layer's claim is that it is not MVAU-shaped: a contributor adds an
-operation, declares its source schema and its Designs, and gets binding,
+operation, declares its source schema and its Kernels, and gets binding,
 projection, persistence, staleness, verification and execution without writing
 any of them.  A claim like that is worth exactly as much as the check that a
 *third* operation would pass, so the check lives here rather than in the tests

@@ -12,7 +12,7 @@ second token for one domain would silently partition it.
 This is the one module in ``finn.dataflow.space`` that names the dataflow model,
 and it is deliberately explicit about it.  The generic core -- declarations,
 compiler, occurrence, branching, domains, spec algebra -- stays domain-neutral
-and speaks of no Region, Network, Kernel, Design or ONNX concept.  Everything
+and speaks of no Region, Network, Kernel, Kernel or ONNX concept.  Everything
 that knows both sides is here, and ``space.__init__`` does not import it, so
 neither package pulls the other in implicitly.  The dependency runs one way:
 ``space`` may import ``model``; ``model`` never imports ``space`` or ``_engine``.
@@ -29,6 +29,7 @@ from finn.dataflow.model.datatypes import (
 from finn.dataflow.space.declarations import CanonicalValue, CanonicalValueCodec
 from finn.dataflow.model.network import DataflowNetwork, PositionMap
 from finn.dataflow.model.network_validation import NetworkValidationReport
+from finn.dataflow.model.composition import LogicalResult, NetworkResult, RegionResult
 from finn.dataflow.model.region import DataflowRegion
 from finn.dataflow.model.region_validation import RegionValidationReport
 
@@ -88,6 +89,19 @@ DATAFLOW_NETWORK_SEMANTICS = ValueSemantics.immutable_nominal(
     DataflowNetwork,
     name="DataflowNetwork",
 )
+
+
+class _LogicalResultToken:
+    """Identity token for the Region-or-Network result capability."""
+
+
+DATAFLOW_LOGICAL_RESULT_SEMANTICS: ValueSemantics[LogicalResult] = ValueSemantics(
+    type_token=_LogicalResultToken,
+    name="LogicalResult",
+    recognizes=lambda value: isinstance(value, (RegionResult, NetworkResult)),
+    equal=lambda left, right: bool(left == right),
+    snapshot=lambda value: value,
+)
 POSITION_MAP_SEMANTICS = ValueSemantics.immutable_nominal(
     PositionMap,
     name="PositionMap",
@@ -98,6 +112,7 @@ NETWORK_VALIDATION_REPORT_SEMANTICS = ValueSemantics.immutable_nominal(
 )
 
 __all__ = [
+    "DATAFLOW_LOGICAL_RESULT_SEMANTICS",
     "DATAFLOW_REGION_SEMANTICS",
     "QONNX_DATATYPE_CODEC",
     "DATAFLOW_NETWORK_SEMANTICS",

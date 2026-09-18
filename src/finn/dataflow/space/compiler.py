@@ -1126,7 +1126,7 @@ def resolve_value_source(
 ) -> _Ref[object]:
     """Resolve any class-body value declaration to its compiled handle.
 
-    A specialization -- a Kernel ``ModuleParameter``, a Design ``when=`` or position
+    A specialization -- a Kernel ``ModuleParameter``, a Kernel ``when=`` or position
     map -- reads values the generic compiler has already bound, so it resolves
     them here rather than reimplementing the walk.  Each partial copy of this
     was a place where one kind of source silently stopped composing: both
@@ -1164,7 +1164,7 @@ def imported_decisions(
 ) -> tuple[QualifiedPath, ...]:
     """Every committed decision this fragment reads but does not own.
 
-    Provenance, not ownership: a configured Kernel or Design keeps the paths of
+    Provenance, not ownership: a configured Kernel or Kernel keeps the paths of
     the outside choices it was configured against, so a later reader can tell
     which external commitments its values depend on.
     """

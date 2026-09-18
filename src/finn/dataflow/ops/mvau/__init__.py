@@ -1,13 +1,13 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""MVAU: its canonical semantics, its Designs, and its operation.
+"""MVAU: its canonical semantics, its Kernels, and its operation.
 
 ```text
 regions.py   the one authority for MVAU Region construction
 networks.py  the decomposed Network they form
-designs/     shared base, dot_product, batch_interleaved
-op.py        the source node and its two Design alternatives
+kernels/     shared base, dot_product, batch_interleaved
+op.py        the source node and its two Kernel alternatives
 ```
 
 ``regions`` and ``networks`` survived the legacy reset because they were never

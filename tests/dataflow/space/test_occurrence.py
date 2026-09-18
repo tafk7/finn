@@ -654,7 +654,7 @@ def test_an_export_only_edit_is_visible_to_the_next_compilation() -> None:
 def test_declared_values_exist_only_on_an_attached_occurrence() -> None:
     """One protocol.
 
-    U2 and U3 retired the detached *configured* Kernel and Design objects that
+    U2 and U3 retired the detached *configured* Kernel and Kernel objects that
     answered through a second ``_space_value`` hook, so the dispatcher no longer
     has two protocols to choose between and an unattached instance is simply an
     instance with no values.  ``_space_value`` stays reserved: the failure the

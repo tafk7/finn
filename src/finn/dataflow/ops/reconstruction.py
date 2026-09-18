@@ -137,10 +137,10 @@ def bind_operations(
 def bind_sources_only(
     model: Any, build: Any, *, operations: Sequence[DataflowOp] | None = None
 ) -> tuple[DataflowOp, ...]:
-    """Bind current source facts without hydrating any persisted choices.
+    """Bind current source facts without hydrating persisted choices.
 
-    This deliberately narrow entry point exists for explicit legacy migration.
-    Ordinary bind/rebind remains strict and continues to reject old schemas.
+    This is useful for inspecting or repairing a source independently of its
+    recorded selection. Ordinary bind/rebind remains strict.
     """
 
     with source_analysis(model) as summaries:
@@ -160,7 +160,6 @@ def rebind_selected_graph(
     """Validate a detached selected artifact against one current source occurrence."""
 
     from finn.dataflow._engine import Decided  # noqa: PLC0415
-    from finn.dataflow.designs.design import SelectedGraph  # noqa: PLC0415
     from finn.dataflow.ops.base import DataflowOpError  # noqa: PLC0415
     from finn.dataflow.ops.native import (  # noqa: PLC0415
         choice_schema,
@@ -171,6 +170,7 @@ def rebind_selected_graph(
         ConstructionIdentity,
         EncodedSourceSemantics,
         RecordedChoice,
+        SelectedConstruction,
         SelectionFacts,
         SourceProvenance,
         build_selected_snapshot,
@@ -186,11 +186,10 @@ def rebind_selected_graph(
     decoded = decode_selected_graph(snapshot, constructions=registry)
     if not isinstance(operation.dataflow.accepted_answer, Decided):
         raise DataflowOpError("current source has no accepted dataflow projection")
-    selected_design = operation.selected_implementation()
-    declaration = getattr(type(selected_design), "selected_graph", None)
-    if not isinstance(declaration, SelectedGraph):
-        raise DataflowOpError("current source Design has no selected construction")
-    current_construction = declaration.construction
+    selected_kernel = operation.selected_kernel()
+    current_construction = getattr(type(selected_kernel), "selected_construction", None)
+    if not isinstance(current_construction, SelectedConstruction):
+        raise DataflowOpError("current source Kernel has no selected construction")
     if (current_construction.family, current_construction.version) != (
         decoded.declaration.construction.family,
         decoded.declaration.construction.version,

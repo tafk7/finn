@@ -3,7 +3,7 @@
 
 """One segment, one Kernel, two boundaries.
 
-The smallest Design that is still a Design.  Its value here is negative: it has
+The smallest Kernel that is still a Kernel.  Its value here is negative: it has
 no SubspaceChoice, so nothing in the operation layer may assume a selector
 exists; it has one node, so nothing may assume an edge; and it has no weight
 path, so nothing may assume a matrix.
@@ -11,11 +11,10 @@ path, so nothing may assume a matrix.
 
 from __future__ import annotations
 
-from finn.dataflow.designs.design import (
-    DataflowDesign,
+from finn.dataflow.kernels.kernel import (
+    Kernel,
     KernelChoice,
     NetworkBoundary,
-    SelectedGraph,
 )
 from finn.dataflow.kernels.replay_buffer import ReplayBufferKernel
 from finn.dataflow.space.declarations import (
@@ -43,7 +42,7 @@ def _standalone_pe_candidates() -> tuple[object, ...]:
     return (1,)
 
 
-class ActivationReplayDesign(DataflowDesign):
+class ActivationReplayKernel(Kernel):
     """Present each activation row once per neuron fold, and nothing else."""
 
     id = "activation_replay"
@@ -80,9 +79,9 @@ class ActivationReplayDesign(DataflowDesign):
     expanded = NetworkBoundary(replay.output("activation_out"))
 
 
-ActivationReplayDesign.selected_graph = SelectedGraph(REPLAY_SELECTED_CONSTRUCTION)
+ActivationReplayKernel.selected_construction = REPLAY_SELECTED_CONSTRUCTION
 
 
-DESIGN_INPUTS = ("repetitions", "matrix_width", "matrix_height", "activation_type")
+KERNEL_INPUTS = ("repetitions", "matrix_width", "matrix_height", "activation_type")
 
-__all__ = ["DESIGN_INPUTS", "ActivationReplayDesign"]
+__all__ = ["KERNEL_INPUTS", "ActivationReplayKernel"]

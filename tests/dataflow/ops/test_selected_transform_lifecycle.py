@@ -20,7 +20,7 @@ import finn.dataflow.ops.selected_registry as selected_registry_module
 import finn.dataflow.ops.selected_transform_registry as transform_registry_module
 from finn.dataflow._engine import Decided
 from finn.dataflow.ops.mvau.computation import AccumulationMode
-from finn.dataflow.ops.mvau.designs.supply import WeightSupply
+from finn.dataflow.ops.mvau.kernels.supply import WeightSupply
 from finn.dataflow.ops.mvau.op import MvauDataflowOp
 from finn.dataflow.ops.reconstruction import rebind_selected_graph
 from finn.dataflow.ops.replay.op import ActivationReplayOp

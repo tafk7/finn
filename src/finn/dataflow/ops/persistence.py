@@ -57,7 +57,6 @@ from finn.dataflow.space.occurrence import ProjectionAssessment
 
 if TYPE_CHECKING:
     from finn.dataflow.ops.base import DataflowOp
-    from finn.dataflow.ops.legacy import LegacySelection
     from finn.dataflow.ops.selected import (
         DecodedSelectedGraph,
         RecordedChoice,
@@ -138,15 +137,6 @@ class SelectedPublicationPlan:
 class PublishedSelection:
     operation: DataflowOp
     selected: DecodedSelectedGraph[Any, Any]
-
-
-@dataclass(frozen=True, slots=True)
-class SelectionMigrationPlan:
-    source_effects: ModelEffects
-    context: SourcePublicationContext
-    legacy: LegacySelection
-    replacement_choices: tuple[RecordedChoice, ...]
-    selected_candidate: SelectedGraphSnapshot | None
 
 
 def allocate_scope_id() -> str:
@@ -786,17 +776,15 @@ def plan_selected_publication(operation: DataflowOp) -> SelectedPublicationPlan:
     """Freeze one executable selected candidate and its source-side transaction."""
 
     from finn.dataflow.ops.base import DataflowOpError  # noqa: PLC0415
-    from finn.dataflow.designs.design import (  # noqa: PLC0415
-        DataflowDesign,
-        selected_graph_for,
-    )
+    from finn.dataflow.ops.selected import selected_graph_for  # noqa: PLC0415
+    from finn.dataflow.space.declarations import Space  # noqa: PLC0415
 
     captured = capture_decided_choices(operation)
     choice_values = captured_choice_mapping(captured)
-    design = operation.selected_design()
-    if not isinstance(design, DataflowDesign):
-        raise DataflowOpError("selected operation did not resolve a DataflowDesign")
-    selected = selected_graph_for(design, captured_choices=choice_values)
+    kernel = operation.selected_kernel()
+    if not isinstance(kernel, Space):
+        raise DataflowOpError("selected operation did not resolve a Kernel-capable Space")
+    selected = selected_graph_for(kernel, captured_choices=choice_values)
     if not isinstance(selected.accepted_answer, Decided):
         findings = getattr(selected.accepted_answer, "findings", ())
         codes = ", ".join(sorted({item.code for item in findings})) or "not ready"
@@ -869,155 +857,6 @@ def apply_selected_publication(model: Any, plan: SelectedPublicationPlan) -> Pub
     )
 
 
-def plan_selection_migration(
-    operation: DataflowOp,
-    legacy: LegacySelection,
-    assignments: Mapping[str, object],
-    *,
-    publish_selected: bool = False,
-) -> SelectionMigrationPlan:
-    """Validate explicit legacy assignments and prepare one atomic migration."""
-
-    from finn.dataflow.ops.base import DataflowOpError  # noqa: PLC0415
-    from finn.dataflow.ops.legacy import inspect_legacy_selection  # noqa: PLC0415
-    from finn.dataflow.ops.selected import RecordedChoice  # noqa: PLC0415
-
-    inspected = inspect_legacy_selection(operation)
-    if inspected != legacy:
-        raise DataflowOpError("legacy selection changed since it was inspected")
-    missing = {item.path for item in legacy.choices} - set(assignments)
-    if missing:
-        raise DataflowOpError(f"migration assignments omit legacy choices: {sorted(missing)!r}")
-    schema = {item.choice.path: item for item in choice_schema(operation)}
-    unknown = set(assignments) - set(schema)
-    if unknown:
-        raise DataflowOpError(f"migration assignments name unknown choices: {sorted(unknown)!r}")
-    migrated = _apply_expected_choices(
-        operation,
-        tuple(
-            RecordedChoice(
-                path,
-                assignments[path],
-                encode_choice_value(schema[path], assignments[path]),
-            )
-            for path in schema
-            if path in assignments
-        ),
-    )
-    check_commitment(
-        {CommitmentStage.DATAFLOW: migrated.dataflow},
-        CommitmentStage.DATAFLOW,
-    )
-    captured = capture_decided_choices(migrated)
-    effects = _migration_effects(operation, legacy, _captured_records(captured))
-    selected_candidate = None
-    if publish_selected:
-        publication = plan_selected_publication(migrated)
-        selected_candidate = publication.candidate
-    return SelectionMigrationPlan(
-        effects,
-        source_publication_context(operation),
-        legacy,
-        _captured_records(captured),
-        selected_candidate,
-    )
-
-
-def _migration_effects(
-    operation: DataflowOp,
-    legacy: LegacySelection,
-    choices: tuple[RecordedChoice, ...],
-) -> ModelEffects:
-    selected = _apply_expected_choices(operation, choices)
-    effects = cast(
-        ModelEffects,
-        selected.graph_effects(
-            require=CommitmentStage.DATAFLOW,
-            _captured_choices=_captured_for_records(selected, choices),
-        ).model_effects(),
-    )
-    expected_old = dict(legacy.owned_attribute_bytes)
-    scope_id = _source_scope(effects)
-    read_by_key = {
-        (item.kind, item.owner, item.field): item for item in effects.read_set.expectations
-    }
-    for name in legacy.owned_attributes:
-        item = ModelReadExpectation(
-            ModelReadKind.ATTRIBUTE,
-            scope_id,
-            name,
-            expected_old.get(name),
-        )
-        read_by_key[(item.kind, item.owner, item.field)] = item
-    set_names = {name for _owner, name, _value in effects.set_attributes}
-    remove_attributes = {
-        *effects.remove_attributes,
-        *((scope_id, name) for name in legacy.owned_attributes if name not in set_names),
-    }
-    effects = replace(
-        effects,
-        read_set=ModelReadSet(tuple(read_by_key.values())),
-        remove_attributes=tuple(sorted(remove_attributes)),
-    )
-    return effects
-
-
-def apply_selection_migration(
-    model: Any,
-    plan: SelectionMigrationPlan,
-) -> PublishedSelection | DataflowOp:
-    """Apply an explicit native migration, optionally publishing selected v2."""
-
-    from finn.dataflow.ops.base import DataflowOpError  # noqa: PLC0415
-    from finn.dataflow.ops.legacy import inspect_legacy_selection  # noqa: PLC0415
-    from finn.dataflow.ops.reconstruction import rebind_selected_graph  # noqa: PLC0415
-    from finn.dataflow.ops.selected import decode_selected_graph  # noqa: PLC0415
-
-    scope_id = _source_scope(plan.source_effects)
-    original = _source_only_operation(model, plan.context, scope_id)
-    if inspect_legacy_selection(original) != plan.legacy:
-        raise DataflowOpError("legacy source changed since migration was planned")
-    expected_effects = _migration_effects(
-        original,
-        plan.legacy,
-        plan.replacement_choices,
-    )
-    if expected_effects != plan.source_effects:
-        raise DataflowOpError("migration effects differ from the validated migration plan")
-
-    def validate(candidate_model: Any) -> None:
-        source = _source_only_operation(candidate_model, plan.context, scope_id)
-        if source.local_problem_fingerprint != _written_source_fingerprint(plan.source_effects):
-            raise DataflowOpError("migrated source facts differ from the planned problem")
-        migrated = _apply_expected_choices(source, plan.replacement_choices)
-        check_commitment(
-            {CommitmentStage.DATAFLOW: migrated.dataflow},
-            CommitmentStage.DATAFLOW,
-        )
-        hydrated = _hydrate_candidate(migrated)
-        _assert_expected_choices(hydrated, plan.replacement_choices)
-        if plan.selected_candidate is not None:
-            rebind_selected_graph(migrated, plan.selected_candidate, update_origin=False)
-
-    def finish(current: Any) -> PublishedSelection | DataflowOp:
-        source = _source_only_operation(current, plan.context, scope_id)
-        migrated = _apply_expected_choices(source, plan.replacement_choices)
-        hydrated = migrated.rebind(current)
-        _assert_expected_choices(hydrated, plan.replacement_choices)
-        if plan.selected_candidate is None:
-            return cast("DataflowOp", hydrated)
-        decoded = decode_selected_graph(plan.selected_candidate)
-        rebound = rebind_selected_graph(hydrated, decoded.snapshot)
-        return PublishedSelection(hydrated, rebound)
-
-    return apply_model_effects(
-        model,
-        plan.source_effects,
-        validate=validate,
-        finish=finish,
-    )
-
-
 def _text(value: object) -> str:
     return value.decode("utf-8") if isinstance(value, bytes) else str(value)
 
@@ -1046,21 +885,18 @@ __all__ = [
     "ModelReadKind",
     "ModelReadSet",
     "PublishedSelection",
-    "SelectionMigrationPlan",
     "SelectedPublicationPlan",
     "SourcePublicationContext",
     "allocate_scope_id",
     "apply_graph_effects",
     "apply_model_effects",
     "apply_selected_publication",
-    "apply_selection_migration",
     "assign_dataflow_scope_ids",
     "build_values",
     "check_commitment",
     "find_node",
     "freeze_build_facts",
     "plan_selected_publication",
-    "plan_selection_migration",
     "source_publication_context",
     "source_read_set",
 ]

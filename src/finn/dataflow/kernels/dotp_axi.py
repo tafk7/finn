@@ -278,7 +278,7 @@ class DotpAxiKernel(Kernel):
 
     # PE and SIMD change this Region *and* the replay Region it composes with,
     # and the beat contract on the edge between them.  They are therefore owned
-    # once by the enclosing Design and arrive here as facts.
+    # once by the enclosing Kernel and arrive here as facts.
     pe = Input(int)
     simd = Input(int)
 
@@ -564,7 +564,7 @@ class BatchInterleavedDotpAxiKernel(DotpAxiKernel):
 
     ``interleave`` arrives as an **Input**, not as a Decision here.  It is in
     this Region's dependency closure, and a Region-visible choice belongs to the
-    enclosing Design -- the same rule that puts PE and SIMD there.
+    enclosing Kernel -- the same rule that puts PE and SIMD there.
 
     Its physical projection is explicitly unavailable.  No RTL in FinnLib
     accepts a chunked weight stream: ``dotp_axi`` takes one ``PE * SIMD`` tile
@@ -578,7 +578,7 @@ class BatchInterleavedDotpAxiKernel(DotpAxiKernel):
     id = "dotp_axi_batch_interleaved"
     version = "1"
 
-    #: Region-visible, and therefore the Design's to own.
+    #: Region-visible, and therefore the Kernel's to own.
     interleave = Input(int)
 
     region = RegionDeclaration(

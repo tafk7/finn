@@ -159,7 +159,7 @@ def build_artifacts(directory):
                 )
                 packages.append(_package(component, store))
                 for role in ("replay", "compute"):
-                    kernel = operation.selected_design().kernel(role)
+                    kernel = operation.selected_kernel().child(role)
                     assert isinstance(kernel, Decided)
                     facts = capture_kernel_realization(kernel.value)
                     prepared = prepare_module_build(

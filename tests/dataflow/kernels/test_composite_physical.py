@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The selected Design owns a checked, reusable decomposed physical result."""
+"""The selected Kernel owns a checked, reusable decomposed physical result."""
 
 from __future__ import annotations
 
@@ -13,8 +13,8 @@ from typing import ClassVar, cast
 import pytest
 from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 
-from dataflow.ops.mvau.test_dot_product_design import Placed, _occurrence, _unconfigured
-from finn.dataflow._engine import Absent, Answer, Decided, Unresolved
+from dataflow.ops.mvau.test_dot_product_kernel import Placed, _occurrence, _unconfigured
+from finn.dataflow._engine import Absent, Decided, Unresolved
 from finn.dataflow.artifacts.abi import (
     Bus,
     Clock,
@@ -40,12 +40,12 @@ from finn.dataflow.artifacts.build import (
 from finn.dataflow.artifacts.contributions import CopiedSource
 from finn.dataflow.artifacts.store import ArtifactStore
 from finn.dataflow.artifacts.rtl import check_abi
-from finn.dataflow.designs.design import DataflowDesign, KernelChoice, NetworkBoundary
-from finn.dataflow.designs.physical import (
+from finn.dataflow.kernels.kernel import Kernel, KernelChoice, NetworkBoundary
+from finn.dataflow.kernels.physical_composition import (
     ConstantBits,
     DECOMPOSED_PRODUCER,
     DECOMPOSED_WRAPPER_TEMPLATE,
-    DesignPhysicalFacts,
+    CompositePhysicalFacts,
     PhysicalCompositionError,
     PhysicalPin,
     PhysicalStructure,
@@ -54,10 +54,10 @@ from finn.dataflow.designs.physical import (
     SemanticPortBinding,
     compose_decomposed,
     lower_module_structure,
-    selected_kernel_realization,
-    validate_design_physical_facts,
+    selected_child_realization,
+    validate_kernel_physical_facts,
 )
-from finn.dataflow.kernels.kernel import Kernel, RegionDeclaration
+from finn.dataflow.kernels.kernel import RegionDeclaration
 from finn.dataflow.kernels.physical import (
     KernelRealizationFacts,
     KernelStreamBinding,
@@ -74,11 +74,19 @@ from finn.dataflow.model.region import (
     ScheduledOutputAvailability,
     ScheduleLevel,
 )
-from finn.dataflow.ops.mvau.designs.dot_product import DotProductDesign, WeightSupply
-from finn.dataflow.space.declarations import Decision, Input, Problem, Space, Subspace
+from finn.dataflow.ops.mvau.kernels.dot_product import DotProductKernel, WeightSupply
+from finn.dataflow.space.declarations import (
+    Decision,
+    Input,
+    Problem,
+    Space,
+    Subspace,
+    derived,
+    reject,
+)
 
 
-def _int3_design() -> DotProductDesign:
+def _int3_design() -> DotProductKernel:
     return _occurrence(
         repetitions=1,
         matrix_width=4,
@@ -94,10 +102,10 @@ def _int3_design() -> DotProductDesign:
 
 
 def _realizations(
-    design: DotProductDesign,
+    design: DotProductKernel,
 ) -> tuple[KernelRealizationFacts, KernelRealizationFacts]:
-    replay = selected_kernel_realization(design, "replay")
-    compute = selected_kernel_realization(design, "compute")
+    replay = selected_child_realization(design, "replay")
+    compute = selected_child_realization(design, "compute")
     assert isinstance(replay, Decided), replay
     assert isinstance(compute, Decided), compute
     return replay.value, compute.value
@@ -148,7 +156,7 @@ def test_lowering_flattens_sources_and_renders_explicit_padding(
     prepared = prepare_module_build(
         requirements,
         roots={"finnlib": Path("deps/finnlib")},
-        template_roots=(Path("src/finn/dataflow/designs/templates"),),
+        template_roots=(Path("src/finn/dataflow/kernels/templates"),),
         blobs=store,
     )
     assert isinstance(prepared.name, PreparedGeneratedModuleName)
@@ -202,13 +210,13 @@ def test_a_physical_only_unassigned_choice_does_not_block_logical_acceptance() -
     )
     selected_root = cast(
         Placed,
-        design.assign(DotProductDesign.pe, 2)
-        .assign(DotProductDesign.simd, 2)
-        .assign(DotProductDesign.weight_supply, WeightSupply.EXTERNAL)
+        design.assign(DotProductKernel.pe, 2)
+        .assign(DotProductKernel.simd, 2)
+        .assign(DotProductKernel.weight_supply, WeightSupply.EXTERNAL)
         .compute.select("dotp_axi")
         .root,
     )
-    design = selected_root.design
+    design = selected_root.kernel
     assert isinstance(design.dataflow.accepted_answer, Decided)
     assert isinstance(design.physical.accepted_answer, Unresolved)
     assert design.physical.readiness.ready is None
@@ -218,7 +226,12 @@ def test_a_physical_only_unassigned_choice_does_not_block_logical_acceptance() -
 def test_unimplemented_supply_profiles_refuse_normally(supply: WeightSupply) -> None:
     answer = _occurrence(supply).physical.accepted_answer
     assert isinstance(answer, Absent)
-    assert {item.code for item in answer.findings} == {"design-physically-unsupported"}
+    expected = (
+        "branch-selected-case-absent"
+        if supply is WeightSupply.EMBEDDED
+        else "kernel-physically-unsupported"
+    )
+    assert {item.code for item in answer.findings} == {expected}
 
 
 def test_lane_reversal_and_nonzero_padding_are_rejected() -> None:
@@ -258,7 +271,7 @@ def test_lane_reversal_and_nonzero_padding_are_rejected() -> None:
         ),
     )
     with pytest.raises(PhysicalCompositionError, match="does not preserve"):
-        validate_design_physical_facts(network.value, reversed_structure, reversed_facts)
+        validate_kernel_physical_facts(network.value, reversed_structure, reversed_facts)
 
     wires = list(structure.wires)
     padding = next(
@@ -278,7 +291,7 @@ def test_lane_reversal_and_nonzero_padding_are_rejected() -> None:
         ),
     )
     with pytest.raises(PhysicalCompositionError, match="driven to zero"):
-        validate_design_physical_facts(network.value, nonzero_padding, nonzero_facts)
+        validate_kernel_physical_facts(network.value, nonzero_padding, nonzero_facts)
 
     wrong_framing_ports = tuple(
         replace(
@@ -290,7 +303,7 @@ def test_lane_reversal_and_nonzero_padding_are_rejected() -> None:
         for binding in facts.port_bindings
     )
     with pytest.raises(PhysicalCompositionError, match="synapse-fold"):
-        validate_design_physical_facts(
+        validate_kernel_physical_facts(
             network.value,
             structure,
             replace(facts, port_bindings=wrong_framing_ports),
@@ -335,7 +348,7 @@ def test_lowering_preserves_bit_zero_slices_of_vector_pins() -> None:
 
     split = replace(structure, wires=tuple(wires))
     requirements = _requirements_for_structure(split)
-    validate_design_physical_facts(
+    validate_kernel_physical_facts(
         network.value,
         split,
         replace(answer.value, requirements=requirements),
@@ -375,7 +388,7 @@ def test_top_clock_alignment_reset_domains_and_bus_domains_are_required() -> Non
         top_abi=replace(structure.top_abi, ports=free_2x_ports, clock_alignments=()),
     )
     with pytest.raises(PhysicalCompositionError, match="derived ap_clk2x"):
-        validate_design_physical_facts(
+        validate_kernel_physical_facts(
             network.value,
             free_2x,
             replace(answer.value, requirements=_requirements_for_structure(free_2x)),
@@ -399,7 +412,7 @@ def test_top_clock_alignment_reset_domains_and_bus_domains_are_required() -> Non
         top_abi=replace(structure.top_abi, ports=single_domain_ports),
     )
     with pytest.raises(PhysicalCompositionError, match="synchronous to both clocks"):
-        validate_design_physical_facts(
+        validate_kernel_physical_facts(
             network.value,
             single_domain,
             replace(answer.value, requirements=_requirements_for_structure(single_domain)),
@@ -416,7 +429,7 @@ def test_top_clock_alignment_reset_domains_and_bus_domains_are_required() -> Non
         top_abi=replace(structure.top_abi, ports=wrong_bus_ports),
     )
     with pytest.raises(PhysicalCompositionError, match="top stream"):
-        validate_design_physical_facts(
+        validate_kernel_physical_facts(
             network.value,
             wrong_bus,
             replace(answer.value, requirements=_requirements_for_structure(wrong_bus)),
@@ -446,7 +459,7 @@ def test_top_clock_alignment_reset_domains_and_bus_domains_are_required() -> Non
         ),
     )
     with pytest.raises(PhysicalCompositionError, match="Dotp pin/interface inventory"):
-        validate_design_physical_facts(
+        validate_kernel_physical_facts(
             network.value,
             extra_pin,
             replace(answer.value, requirements=_requirements_for_structure(extra_pin)),
@@ -532,78 +545,93 @@ class _ChoiceDependentKernel(_GoodKernel):
     )
 
 
-class _SelectivePhysicalDesign(DataflowDesign):
+def _single_child_physical(
+    *,
+    requirements: ModuleBuildRequirements,
+    streams: tuple[KernelStreamBinding, ...],
+) -> CompositePhysicalFacts:
+    return CompositePhysicalFacts(
+        requirements,
+        (SemanticPortBinding("only", "u_only", streams[0]),),
+        (),
+        (),
+    )
+
+
+class _SelectivePhysicalKernel(Kernel):
     id = "selective_physical"
     width = Input(int)
-    only = KernelChoice(Subspace(_GoodKernel, width=width), Subspace(_TrapKernel, width=width))
+    only = KernelChoice(
+        Subspace(_GoodKernel, width=width),
+        Subspace(_TrapKernel, width=width),
+        outputs=("logical_result", "physical_result", "physical_streams"),
+    )
     result = NetworkBoundary(only.output("output"))
 
-    def physical_implementation(self) -> Answer[DesignPhysicalFacts]:
-        child = selected_kernel_realization(self, "only")
-        if not isinstance(child, Decided):
-            return cast("Answer[DesignPhysicalFacts]", child)
-        return Decided(
-            DesignPhysicalFacts(
-                child.value.requirements,
-                (SemanticPortBinding("only", "u_only", child.value.streams[0]),),
-                (),
-                (),
-            )
-        )
+    physical_result = derived(
+        CompositePhysicalFacts,
+        requirements=only.physical_result,
+        streams=only.physical_streams,
+    )(_single_child_physical)
 
 
 class _SelectiveRoot(Space):
     width = Problem(int)
-    design = Subspace(_SelectivePhysicalDesign, width=width)
+    kernel = Subspace(_SelectivePhysicalKernel, width=width)
 
 
-class _PhysicalChoiceDesign(DataflowDesign):
+class _PhysicalChoiceKernel(Kernel):
     id = "physical_choice"
     width = Input(int)
     physical_mode = Decision(bool, values=(False, True))
-    only = KernelChoice(Subspace(_GoodKernel, width=width))
+    only = KernelChoice(
+        Subspace(_GoodKernel, width=width),
+        outputs=("logical_result", "physical_result", "physical_streams"),
+    )
     result = NetworkBoundary(only.output("output"))
 
-    def physical_implementation(self) -> Answer[DesignPhysicalFacts]:
-        mode = self.answer(type(self).physical_mode)
-        if not isinstance(mode, Decided):
-            return cast("Answer[DesignPhysicalFacts]", mode)
-        return cast(
-            "Answer[DesignPhysicalFacts]",
-            super().physical_implementation(),
-        )
+    @derived(object, mode=physical_mode)
+    def physical_result(*, mode: bool) -> object:
+        del mode
+        return reject("kernel-physically-unsupported", "test physical mode is unsupported")
 
 
 class _PhysicalChoiceRoot(Space):
     width = Problem(int)
-    design = Subspace(_PhysicalChoiceDesign, width=width)
+    kernel = Subspace(_PhysicalChoiceKernel, width=width)
 
 
-class _UnusedBranchChoiceDesign(_SelectivePhysicalDesign):
+class _UnusedBranchChoiceKernel(_SelectivePhysicalKernel):
     id = "unused_branch_choice"
     mode = Decision(bool, values=(False, True))
     only = KernelChoice(
-        Subspace(_GoodKernel, width=_SelectivePhysicalDesign.width),
+        Subspace(_GoodKernel, width=_SelectivePhysicalKernel.width),
         Subspace(
             _ChoiceDependentKernel,
-            width=_SelectivePhysicalDesign.width,
+            width=_SelectivePhysicalKernel.width,
             mode=mode,
         ),
+        outputs=("logical_result", "physical_result", "physical_streams"),
     )
     result = NetworkBoundary(only.output("output"))
+    physical_result = derived(
+        CompositePhysicalFacts,
+        requirements=only.physical_result,
+        streams=only.physical_streams,
+    )(_single_child_physical)
 
 
 class _UnusedBranchChoiceRoot(Space):
     width = Problem(int)
-    design = Subspace(_UnusedBranchChoiceDesign, width=width)
+    kernel = Subspace(_UnusedBranchChoiceKernel, width=width)
 
 
 def test_physical_dispatch_does_not_evaluate_an_unselected_candidate() -> None:
     _TrapKernel.calls = 0
     root = _SelectiveRoot.start({_SelectiveRoot.width: 1}, namespace="selected")
-    design = root.design
+    design = root.kernel
     selected_root = cast(_SelectiveRoot, design.only.select("physical_good").root)
-    selected = selected_root.design
+    selected = selected_root.kernel
     assert isinstance(selected.physical.accepted_answer, Decided)
     assert _TrapKernel.calls == 0
 
@@ -612,21 +640,21 @@ def test_an_unselected_branch_does_not_require_its_design_owned_choice() -> None
     root = _UnusedBranchChoiceRoot.start({_UnusedBranchChoiceRoot.width: 1})
     selected_root = cast(
         _UnusedBranchChoiceRoot,
-        root.design.only.select("physical_good").root,
+        root.kernel.only.select("physical_good").root,
     )
-    design = selected_root.design
+    design = selected_root.kernel
     assert isinstance(design.dataflow.accepted_answer, Decided)
     assert isinstance(design.physical.accepted_answer, Decided)
 
 
 def test_a_design_physical_only_choice_does_not_block_the_network() -> None:
-    design = _PhysicalChoiceRoot.start({_PhysicalChoiceRoot.width: 1}).design
+    design = _PhysicalChoiceRoot.start({_PhysicalChoiceRoot.width: 1}).kernel
     assert isinstance(design.dataflow.accepted_answer, Decided)
     assert isinstance(design.physical.accepted_answer, Unresolved)
 
 
 def test_base_design_dispatch_reports_an_unsupported_profile() -> None:
-    class Unsupported(DataflowDesign):
+    class Unsupported(Kernel):
         id = "unsupported_physical"
         width = Input(int)
         only = KernelChoice(Subspace(_GoodKernel, width=width))
@@ -634,16 +662,16 @@ def test_base_design_dispatch_reports_an_unsupported_profile() -> None:
 
     class Root(Space):
         width = Problem(int)
-        design = Subspace(Unsupported, width=width)
+        kernel = Subspace(Unsupported, width=width)
 
-    answer = Root.start({Root.width: 1}).design.physical.accepted_answer
+    answer = Root.start({Root.width: 1}).kernel.physical.accepted_answer
     assert isinstance(answer, Absent)
-    assert {item.code for item in answer.findings} == {"design-physically-unsupported"}
+    assert {item.code for item in answer.findings} == {"kernel-physically-unsupported"}
 
 
 def test_source_op_fixture_derives_narrow_weights_true() -> None:
     design = _int3_design()
-    compute = selected_kernel_realization(design, "compute")
+    compute = selected_child_realization(design, "compute")
     assert isinstance(compute, Decided)
     assert dict(compute.value.requirements.parameters)["NARROW_WEIGHTS"] is True
 

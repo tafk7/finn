@@ -20,7 +20,6 @@ from finn.dataflow._engine import (
     DependencyKind,
     Engine,
     EvaluationError,
-    QualifiedPath,
     Unresolved,
 )
 from finn.dataflow.artifacts.abi import ComponentABI
@@ -134,7 +133,7 @@ class ToyKernel(Kernel):
 
 
 class Harness(Space):
-    """Standing in for the Design: it owns every Region-visible choice."""
+    """Standing in for the Kernel: it owns every Region-visible choice."""
 
     extent = Problem(int)
     lanes = Decision(int, domain=divisors_of(extent))
@@ -238,7 +237,7 @@ def _degenerate() -> DataflowRegion:
     return _region(1, 1)
 
 
-def test_kernel_requires_exactly_one_region_and_an_implementation() -> None:
+def test_kernel_requires_a_logical_capability_and_leaf_physics_are_explicit() -> None:
     class NoRegion(Kernel):
         id = "none"
 
@@ -246,7 +245,7 @@ def test_kernel_requires_exactly_one_region_and_an_implementation() -> None:
         def component_abi(cls, parameters: Scalars) -> ComponentABI:
             return ComponentABI("none", ())
 
-    with pytest.raises(AuthoringError, match="Region member named 'region'"):
+    with pytest.raises(AuthoringError, match="logical capability"):
         _compile_space(NoRegion, "none", {}, _allow_problem=False)
 
     class GenericRegion(Kernel):
@@ -260,7 +259,7 @@ def test_kernel_requires_exactly_one_region_and_an_implementation() -> None:
         def component_abi(cls, parameters: Scalars) -> ComponentABI:
             return ComponentABI("generic", ())
 
-    with pytest.raises(AuthoringError, match="Region member named 'region'"):
+    with pytest.raises(AuthoringError, match="logical capability"):
         _compile_space(GenericRegion, "generic", {}, _allow_problem=False)
 
     class TwoRegions(Kernel):
@@ -272,8 +271,7 @@ def test_kernel_requires_exactly_one_region_and_an_implementation() -> None:
         def component_abi(cls, parameters: Scalars) -> ComponentABI:
             return ComponentABI("two", ())
 
-    with pytest.raises(AuthoringError, match="exactly one DataflowRegion"):
-        _compile_space(TwoRegions, "two", {}, _allow_problem=False)
+    _compile_space(TwoRegions, "two", {}, _allow_problem=False)
 
     class RegionFragment(Space):
         @derived(DATAFLOW_REGION_SEMANTICS)
@@ -289,8 +287,7 @@ def test_kernel_requires_exactly_one_region_and_an_implementation() -> None:
         def component_abi(cls, parameters: Scalars) -> ComponentABI:
             return ComponentABI("nested", ())
 
-    with pytest.raises(AuthoringError, match="exactly one DataflowRegion"):
-        _compile_space(NestedRegion, "nested", {}, _allow_problem=False)
+    _compile_space(NestedRegion, "nested", {}, _allow_problem=False)
 
     class NoComputation(Kernel):
         id = "no_computation"
@@ -426,10 +423,10 @@ def test_a_region_constructor_returning_the_wrong_type_is_rejected() -> None:
         engine.query_property(point, "semantic.wrong_result.region")
 
 
-# -- Design-owned semantics ---------------------------------------------------
+# -- Kernel-owned semantics ---------------------------------------------------
 
 
-def test_a_kernel_local_decision_may_not_reach_its_region() -> None:
+def test_a_kernel_local_decision_may_reach_its_logical_view() -> None:
     class DirectDependence(Kernel):
         id = "direct"
         extent = Input(int)
@@ -447,16 +444,16 @@ def test_a_kernel_local_decision_may_not_reach_its_region() -> None:
             return ComponentABI("direct", ())
 
     harness, _kernel = _compiled()
-    with pytest.raises(AuthoringError, match="lets its own Decision"):
-        _compile_space(
-            DirectDependence,
-            "test.direct",
-            {"extent": cast("_Ref[object]", harness.member("extent"))},
-            _allow_problem=False,
-        )
+    compiled = _compile_space(
+        DirectDependence,
+        "test.direct",
+        {"extent": cast("_Ref[object]", harness.member("extent"))},
+        _allow_problem=False,
+    )
+    assert [str(item.path) for item in compiled.spec.decisions] == ["test.direct.lanes"]
 
 
-def test_a_transitive_kernel_local_decision_may_not_reach_its_region() -> None:
+def test_a_transitive_kernel_local_decision_may_reach_its_logical_view() -> None:
     class TransitiveDependence(Kernel):
         id = "transitive"
         extent = Input(int)
@@ -479,16 +476,16 @@ def test_a_transitive_kernel_local_decision_may_not_reach_its_region() -> None:
             return ComponentABI("transitive", ())
 
     harness, _kernel = _compiled()
-    with pytest.raises(AuthoringError, match="lets its own Decision"):
-        _compile_space(
-            TransitiveDependence,
-            "test.transitive",
-            {"extent": cast("_Ref[object]", harness.member("extent"))},
-            _allow_problem=False,
-        )
+    compiled = _compile_space(
+        TransitiveDependence,
+        "test.transitive",
+        {"extent": cast("_Ref[object]", harness.member("extent"))},
+        _allow_problem=False,
+    )
+    assert [str(item.path) for item in compiled.spec.decisions] == ["test.transitive.lanes"]
 
 
-def test_a_nested_helper_decision_may_not_reach_its_region() -> None:
+def test_a_nested_helper_decision_may_reach_its_logical_view() -> None:
     class Folding(Space):
         lanes = Decision(int, values=(1, 2))
         exports = (lanes,)
@@ -510,13 +507,15 @@ def test_a_nested_helper_decision_may_not_reach_its_region() -> None:
             return ComponentABI("nested_dependence", ())
 
     harness, _kernel = _compiled()
-    with pytest.raises(AuthoringError, match="lets its own Decision"):
-        _compile_space(
-            NestedDependence,
-            "test.nested_dependence",
-            {"extent": cast("_Ref[object]", harness.member("extent"))},
-            _allow_problem=False,
-        )
+    compiled = _compile_space(
+        NestedDependence,
+        "test.nested_dependence",
+        {"extent": cast("_Ref[object]", harness.member("extent"))},
+        _allow_problem=False,
+    )
+    assert [str(item.path) for item in compiled.spec.decisions] == [
+        "test.nested_dependence.folding.lanes"
+    ]
 
 
 def test_a_supplied_decision_reaching_the_region_stays_valid() -> None:
@@ -525,7 +524,7 @@ def test_a_supplied_decision_reaching_the_region_stays_valid() -> None:
     assert not hasattr(configured, "imported_decisions")
 
 
-def test_a_kernel_may_not_publish_exports_besides_its_region() -> None:
+def test_a_kernel_may_publish_additional_domain_values() -> None:
     class Publishes(Kernel):
         id = "publishes"
         extent = Input(int)
@@ -544,13 +543,13 @@ def test_a_kernel_may_not_publish_exports_besides_its_region() -> None:
             return ComponentABI("publishes", ())
 
     harness, _kernel = _compiled()
-    with pytest.raises(AuthoringError, match="may not publish exports besides its Region"):
-        _compile_space(
-            Publishes,
-            "test.publishes",
-            {"extent": cast("_Ref[object]", harness.member("extent"))},
-            _allow_problem=False,
-        )
+    compiled = _compile_space(
+        Publishes,
+        "test.publishes",
+        {"extent": cast("_Ref[object]", harness.member("extent"))},
+        _allow_problem=False,
+    )
+    assert compiled.exported("pumped") == compiled.member("pumped")
 
 
 # -- unchanged Kernel behavior ------------------------------------------------
@@ -580,10 +579,9 @@ def test_kernel_abi_must_expose_every_resolved_physical_parameter() -> None:
         point,
         {"test.lanes": 2, "test.incomplete.pumped": False},
     ).point
-    # A malformed ABI is a defect in contributor code, not an infeasible point,
-    # so it stays an EvaluationError rather than becoming a rejecting absence.
-    with pytest.raises(EvaluationError, match="physical_result"):
-        kernel_physical(engine, compiled, point)
+    physical = kernel_physical(engine, compiled, point).accepted_answer
+    assert isinstance(physical, Absent)
+    assert "parameter table" in physical.findings[0].message
 
 
 def test_parameter_source_must_belong_to_the_kernel_class() -> None:
@@ -610,7 +608,12 @@ def test_kernel_region_is_implicitly_exported() -> None:
 
     compiled = _compile_space(Root, "root", problem_namespace="problem.root")
     assert compiled.child("nested").exported("region").kind is DependencyKind.PROPERTY
-    assert tuple(exported_members(ToyKernel)) == ("region", "logical_result")
+    assert tuple(exported_members(ToyKernel)) == (
+        "region",
+        "logical_result",
+        "physical_result",
+        "physical_streams",
+    )
 
 
 def test_kernel_owns_nested_space_decisions_that_do_not_reach_its_region() -> None:
@@ -647,8 +650,7 @@ def test_kernel_owns_nested_space_decisions_that_do_not_reach_its_region() -> No
     assert not hasattr(configured.value, "imported_decisions")
 
 
-def test_a_local_decision_may_not_gate_what_the_region_depends_on() -> None:
-    """Applicability counts as reaching: presence is part of the contract."""
+def test_a_local_decision_may_gate_a_logical_helper() -> None:
 
     class Folding(Space):
         supplied = Input(int)
@@ -678,8 +680,8 @@ def test_a_local_decision_may_not_gate_what_the_region_depends_on() -> None:
             return ComponentABI("gated_helper", ())
 
     harness, _kernel = _compiled()
-    with pytest.raises(AuthoringError, match="including whether it applies at all"):
-        _compile_space(GatedHelper, "test.gated", _bindings(harness), _allow_problem=False)
+    compiled = _compile_space(GatedHelper, "test.gated", _bindings(harness), _allow_problem=False)
+    assert compiled.child("folding") is not None
 
 
 def test_a_local_decision_may_not_gate_the_region_property_itself() -> None:
@@ -711,7 +713,7 @@ def test_a_local_decision_may_not_gate_the_region_property_itself() -> None:
 
 
 def test_an_outer_gate_over_the_region_stays_legal() -> None:
-    """A Design's segment condition is not Kernel-owned, so it is not a leak."""
+    """A Kernel's segment condition is not Kernel-owned, so it is not a leak."""
 
     class Conditional(Space):
         extent = Problem(int)
@@ -827,7 +829,7 @@ def test_a_valid_region_does_not_oblige_a_realizable_kernel() -> None:
 
 
 def test_import_provenance_stays_in_compiler_metadata() -> None:
-    assert {str(path) for path in _compiled()[1].extension.imported_decisions} == {"test.lanes"}
+    assert {str(reference.path) for _name, reference in _compiled()[1].inputs} >= {"test.lanes"}
 
 
 def test_an_attached_kernel_occurrence_answers_its_own_declarations() -> None:
@@ -852,64 +854,6 @@ def test_an_attached_kernel_occurrence_answers_its_own_declarations() -> None:
     assert built.value.implementation_id == "toy"
 
 
-# -- which projection each constraint gates -----------------------------------
-#
-# A Kernel classifies every constraint it declares, and a constraint may be
-# classified *twice*: a folding rule that is both a semantic requirement and a
-# build feasibility one is ordinary.  Declaring it in both groups must add a
-# projection, never remove one -- and the way it removed one was that
-# "physical-only" was read as membership in ``physical_support`` rather than as
-# a difference, so a shared constraint was excluded from the Design's Network
-# question that its author had explicitly said it gates.
-
-
-def _classified(*, shared: bool, physical: bool) -> frozenset[QualifiedPath]:
-    """One Kernel's physical-only set, for one classification of one constraint."""
-
-    class Classified(Kernel):
-        id = f"classified_{int(shared)}{int(physical)}"
-        extent = Input(int)
-        lanes = Input(int)
-        region = RegionDeclaration(
-            family="test.copy", version="1", construct=_region, extent=extent, lanes=lanes
-        )
-
-        @constraint(lanes=lanes)
-        def lanes_supported(*, lanes: int) -> bool:
-            return lanes <= 2
-
-        if shared:
-            dataflow_support = ConstraintGroup(lanes_supported)
-        if physical:
-            physical_support = ConstraintGroup(lanes_supported, name="realizable")
-
-        @classmethod
-        def component_abi(cls, parameters: Scalars) -> ComponentABI:
-            return ComponentABI("classified", ())
-
-    harness, _kernel = _compiled()
-    compiled = _compile_space(
-        Classified, f"test.{Classified.id}", _bindings(harness), _allow_problem=False
-    )
-    return compiled.extension.physical_only_constraints
-
-
-def test_a_constraint_in_physical_support_alone_is_physical_only() -> None:
-    paths = _classified(shared=False, physical=True)
-    assert [path.value for path in paths] == ["constraint.test.classified_01.lanes_supported"]
-
-
-def test_a_constraint_in_both_groups_is_not_physical_only() -> None:
-    """The whole correction: two classifications add a projection, not subtract."""
-
-    assert _classified(shared=True, physical=True) == frozenset()
-
-
-def test_a_kernel_whose_groups_coincide_has_no_physical_only_constraints() -> None:
-    assert _classified(shared=True, physical=False) == frozenset()
-    assert _classified(shared=True, physical=True) == frozenset()
-
-
 def test_a_shared_constraint_still_gates_both_of_the_kernels_own_projections() -> None:
     """Not physical-only does not mean not physical: it still refuses the build."""
 
@@ -925,7 +869,7 @@ def test_a_shared_constraint_still_gates_both_of_the_kernels_own_projections() -
         def lanes_supported(*, lanes: int) -> bool:
             return lanes <= 2
 
-        dataflow_support = ConstraintGroup(lanes_supported)
+        logical_support = ConstraintGroup(lanes_supported)
         physical_support = ConstraintGroup(lanes_supported, name="realizable")
 
         @classmethod

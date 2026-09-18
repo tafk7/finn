@@ -611,20 +611,12 @@ class DataflowOp(Space, CustomOp):  # type: ignore[misc]
         return op_physical(self)
 
     def selected_dataflow(self) -> ProjectionAssessment[DataflowNetwork] | None:
-        raise NotImplementedError(f"{type(self).__name__} does not route to a Design")
+        raise NotImplementedError(f"{type(self).__name__} does not route to a Kernel")
 
-    def selected_design(self) -> object:
-        """Compatibility delegate for the selected implementation occurrence."""
+    def selected_kernel(self) -> object:
+        """The selected Kernel-capable Space for compiler-owned use."""
 
-        return self.selected_implementation()
-
-    def selected_implementation(self) -> object:
-        """The selected implementation Space for compiler-owned use."""
-
-        legacy = type(self).selected_design
-        if legacy is not DataflowOp.selected_design:
-            return legacy(self)
-        raise NotImplementedError(f"{type(self).__name__} does not route to an implementation")
+        raise NotImplementedError(f"{type(self).__name__} does not route to a Kernel")
 
     def selected_source_semantics(self) -> object:
         """Encode the operation's normalized source meaning for reconstruction."""
@@ -734,11 +726,11 @@ class DataflowOp(Space, CustomOp):  # type: ignore[misc]
 
     @property
     def selected_graph(self) -> ProjectionAssessment[SelectedGraphSnapshot]:
-        """The selected-graph projection with source and Design obligations."""
+        """The selected-graph projection with source and Kernel obligations."""
 
-        from finn.dataflow.designs.design import selected_graph_for  # noqa: PLC0415
+        from finn.dataflow.ops.selected import selected_graph_for  # noqa: PLC0415
 
-        return selected_graph_for(cast("Any", self.selected_design()))
+        return selected_graph_for(cast("Any", self.selected_kernel()))
 
     @property
     def selected_snapshot(self) -> Answer[SelectedGraphSnapshot]:
@@ -772,7 +764,7 @@ class DataflowOp(Space, CustomOp):  # type: ignore[misc]
     ) -> Mapping[str, tuple[DataflowOperandRef, ...]]:
         """Source members to qualified targets, authored by this operation.
 
-        network has passed the Design dataflow projection. This method supplies
+        network has passed the Kernel dataflow projection. This method supplies
         correspondence only; exposure and position coverage are derived.
         """
         raise NotImplementedError(f"{type(self).__name__} does not declare operand references")
@@ -1008,7 +1000,7 @@ class DataflowOp(Space, CustomOp):  # type: ignore[misc]
 
 
 def _root_projection(operation: DataflowOp) -> ProjectionAssessment[DataflowNetwork]:
-    """Combine the operation's own source semantics with its selected Design's.
+    """Combine the operation's own source semantics with its selected Kernel's.
 
     The reduction is the engine's, not a second one: readiness and constraint
     assessments are concatenated and handed to the same
@@ -1062,7 +1054,7 @@ def _check_constraints_are_classified(
 ) -> None:
     """Every authored operation Constraint gates the source semantics, explicitly.
 
-    The rule the Kernel and Design layers already state, for the reason that
+    The rule the Kernel and Kernel layers already state, for the reason that
     applies identically here: an operation has exactly one group, and a
     constraint outside it is compiled, evaluated, and consulted by nothing --
     so an operation would silently stop refusing what its author wrote a
@@ -1183,7 +1175,7 @@ def _build_value(
     ``build_required`` and not ``Problem.required``: the Problem is always
     absence-tolerant so that an occurrence can start with no build at all, and
     reading that flag here would mean every build fact is optional -- a missing
-    clock period would silently become ``None`` and travel into a Design as an
+    clock period would silently become ``None`` and travel into a Kernel as an
     unresolved Input, reported as a folding problem rather than a
     configuration one.
 

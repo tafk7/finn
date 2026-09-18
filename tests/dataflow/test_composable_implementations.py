@@ -10,7 +10,7 @@ import pytest
 from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 
 from dataflow.kernels.test_module_build_spec import UnavailableModule
-from dataflow.ops.mvau.test_dot_product_design import DESIGN_INPUTS, Problem_, _occurrence
+from dataflow.ops.mvau.test_dot_product_kernel import KERNEL_INPUTS, Problem_, _occurrence
 from dataflow.physical_fixture import configure, source_model
 from finn.dataflow._engine import Absent, Answer, Decided, Unresolved
 from finn.dataflow.artifacts.build import (
@@ -19,12 +19,12 @@ from finn.dataflow.artifacts.build import (
     ModuleBuildRequirements,
 )
 from finn.dataflow.artifacts.store import ArtifactStore
-from finn.dataflow.designs.design import DataflowDesign
-from finn.dataflow.designs.physical import DesignPhysicalRelation
+from finn.dataflow.kernels.kernel import Kernel
+from finn.dataflow.kernels.physical_composition import LogicalPhysicalRelation
 from finn.dataflow.model.composition import NetworkResult, RegionResult
 from finn.dataflow.ops.base import DataflowOpError
-from finn.dataflow.ops.mvau.designs.base import WeightedDotProductDesign
-from finn.dataflow.ops.mvau.designs.dot_product import DotProductDesign, WeightSupply
+from finn.dataflow.ops.mvau.kernels.base import WeightedDotProductKernel
+from finn.dataflow.ops.mvau.kernels.dot_product import DotProductKernel, WeightSupply
 from finn.dataflow.ops.mvau.computation import (
     AccumulationMode,
     ActivationMode,
@@ -32,6 +32,7 @@ from finn.dataflow.ops.mvau.computation import (
 )
 from finn.dataflow.ops.mvau.op import MvauDataflowOp
 from finn.dataflow.kernels.dotp_axi import DotpAxiKernel, DspBlock
+from finn.dataflow.kernels.kernel import LogicalView, PhysicalView
 from finn.dataflow.ops.physical import (
     associate_physical_use,
     authorize_component_use,
@@ -77,7 +78,7 @@ def test_real_replay_dotp_and_composite_publish_typed_logical_capabilities() -> 
         "replay",
         "compute",
     )
-    replay = design.kernel("replay")
+    replay = design.child("replay")
     assert isinstance(replay, Decided)
     leaf = replay.value.assess_view("logical").accepted_answer
     assert isinstance(leaf, Decided) and isinstance(leaf.value, RegionResult)
@@ -91,8 +92,8 @@ class _ViewLeaf(Space):
     value = Input(int)
     estimator = Input(str, allow_absent=True)
     ready = Readiness()
-    logical = Projection(value, readiness=ready)
-    physical = Projection(value, readiness=ready)
+    logical = LogicalView(value, readiness=ready)
+    physical = PhysicalView(value, readiness=ready)
     cost_ready = Readiness()
     cost = Projection(estimator, readiness=cost_ready)
     exports = (value, estimator)
@@ -164,7 +165,7 @@ def test_inactive_child_does_not_resolve_bound_inputs() -> None:
     assert isinstance(active.child.logical.accepted_answer, Unresolved)
 
 
-class _IndependentLogicalDesign(DotProductDesign):
+class _IndependentLogicalKernel(DotProductKernel):
     id = "independent_logical_dot_product"
     logical_mode = Decision(str, values=("accept", "reject"))
 
@@ -172,22 +173,22 @@ class _IndependentLogicalDesign(DotProductDesign):
     def logical_mode_supported(*, mode: str) -> object:
         return True if mode == "accept" else reject("logical-mode-rejected", "logical-only")
 
-    dataflow_support = ConstraintGroup(
-        *DotProductDesign.dataflow_support.constraints,
+    logical_support = ConstraintGroup(
+        *DotProductKernel.logical_support.constraints,
         logical_mode_supported,
         name="logical_support",
     )
 
 
 class _IndependentRoot(Problem_):
-    design = Subspace(
-        _IndependentLogicalDesign,
+    kernel = Subspace(
+        _IndependentLogicalKernel,
         name="dot_product",
-        **{name: cast("object", getattr(Problem_, name)) for name in DESIGN_INPUTS},
+        **{name: cast("object", getattr(Problem_, name)) for name in KERNEL_INPUTS},
     )
 
 
-def _independent_design() -> _IndependentLogicalDesign:
+def _independent_design() -> _IndependentLogicalKernel:
     root = _IndependentRoot.start(
         {
             _IndependentRoot.repetitions: 1,
@@ -207,19 +208,19 @@ def _independent_design() -> _IndependentLogicalDesign:
         },
         namespace="independent",
     )
-    design = cast(_IndependentLogicalDesign, root.design)
+    design = cast(_IndependentLogicalKernel, root.kernel)
     design = cast(
-        _IndependentLogicalDesign,
-        design.assign(WeightedDotProductDesign.pe, 2)
-        .assign(WeightedDotProductDesign.simd, 2)
-        .assign(DotProductDesign.weight_supply, WeightSupply.EXTERNAL),
+        _IndependentLogicalKernel,
+        design.assign(WeightedDotProductKernel.pe, 2)
+        .assign(WeightedDotProductKernel.simd, 2)
+        .assign(DotProductKernel.weight_supply, WeightSupply.EXTERNAL),
     )
-    design = cast(_IndependentLogicalDesign, design.compute.select("dotp_axi").root.design)
-    compute = design.kernel("compute")
+    design = cast(_IndependentLogicalKernel, design.compute.select("dotp_axi").root.kernel)
+    compute = design.child("compute")
     assert isinstance(compute, Decided)
     design = cast(
-        _IndependentLogicalDesign,
-        compute.value.assign(DotpAxiKernel.compute_pumping, False).root.design,
+        _IndependentLogicalKernel,
+        compute.value.assign(DotpAxiKernel.compute_pumping, False).root.kernel,
     )
     return design
 
@@ -234,8 +235,8 @@ def test_local_physical_capture_ignores_unresolved_and_rejected_logical_only_cho
         capture_local_relation(design, unresolved_capture)
 
     rejected = cast(
-        _IndependentLogicalDesign,
-        design.assign(_IndependentLogicalDesign.logical_mode, "reject"),
+        _IndependentLogicalKernel,
+        design.assign(_IndependentLogicalKernel.logical_mode, "reject"),
     )
     rejected_capture = capture_local_physical(rejected)
     assert rejected_capture.point_fingerprint == unresolved_capture.point_fingerprint
@@ -248,7 +249,7 @@ def test_local_physical_capture_ignores_unresolved_and_rejected_logical_only_cho
         unresolved_capture,
         roots={"finnlib": __import__("pathlib").Path("deps/finnlib").resolve()},
         template_roots=(
-            __import__("pathlib").Path("src/finn/dataflow/designs/templates").resolve(),
+            __import__("pathlib").Path("src/finn/dataflow/kernels/templates").resolve(),
         ),
         blobs=store,
     )
@@ -256,8 +257,8 @@ def test_local_physical_capture_ignores_unresolved_and_rejected_logical_only_cho
     assert built.capture_fingerprint == unresolved_capture.point_fingerprint
 
     accepted = cast(
-        _IndependentLogicalDesign,
-        design.assign(_IndependentLogicalDesign.logical_mode, "accept"),
+        _IndependentLogicalKernel,
+        design.assign(_IndependentLogicalKernel.logical_mode, "accept"),
     )
     relation = capture_local_relation(accepted, capture_local_physical(accepted))
     assert relation.logical_fingerprint
@@ -309,8 +310,8 @@ def test_compiler_association_is_per_use_and_revalidates_current_source() -> Non
     model, build, context = source_model()
     left = configure(MvauDataflowOp(model.graph.node[0]).bind(model, build, graph_context=context))
     right = configure(MvauDataflowOp(model.graph.node[1]).bind(model, build, graph_context=context))
-    left_design = cast(DataflowDesign, left.selected_implementation())
-    right_design = cast(DataflowDesign, right.selected_implementation())
+    left_design = cast(Kernel, left.selected_kernel())
+    right_design = cast(Kernel, right.selected_kernel())
     left_local = capture_local_physical(left_design)
     right_local = capture_local_physical(right_design)
     assert left_local != right_local
@@ -354,7 +355,7 @@ def test_plain_space_completes_source_selection_build_association_and_installati
     production = configure(
         MvauDataflowOp(model.graph.node[0]).bind(model, build, graph_context=context)
     )
-    production_design = cast(DataflowDesign, production.selected_implementation())
+    production_design = cast(Kernel, production.selected_kernel())
     production_local = capture_local_physical(production_design)
     production_relation = capture_local_relation(production_design, production_local)
     logical = production_design.assess_view("logical").accepted_answer
@@ -372,9 +373,9 @@ def test_plain_space_completes_source_selection_build_association_and_installati
         def logical_value() -> NetworkResult:
             return logical.value
 
-        @derived(DesignPhysicalRelation)
-        def relation_value() -> DesignPhysicalRelation:
-            return cast(DesignPhysicalRelation, production_relation.relation)
+        @derived(LogicalPhysicalRelation)
+        def relation_value() -> LogicalPhysicalRelation:
+            return cast(LogicalPhysicalRelation, production_relation.relation)
 
         physical_ready = Readiness()
         logical_ready = Readiness()
@@ -400,11 +401,11 @@ def test_plain_space_completes_source_selection_build_association_and_installati
                 self._network_answer(assessment.accepted_answer),
             )
 
-        def selected_implementation(self) -> object:
+        def selected_kernel(self) -> object:
             return self.implementation
 
     operation = PlainSelectedMvau(model.graph.node[0]).bind(model, build, graph_context=context)
-    implementation = operation.selected_implementation()
+    implementation = operation.selected_kernel()
     assert isinstance(implementation, PlainComposite)
     local = capture_local_physical(implementation)
     relation = capture_local_relation(implementation, local)
@@ -422,7 +423,7 @@ def test_plain_space_completes_source_selection_build_association_and_installati
         local,
         roots={"finnlib": __import__("pathlib").Path("deps/finnlib").resolve()},
         template_roots=(
-            __import__("pathlib").Path("src/finn/dataflow/designs/templates").resolve(),
+            __import__("pathlib").Path("src/finn/dataflow/kernels/templates").resolve(),
         ),
         blobs=store,
     )
@@ -466,19 +467,17 @@ def test_plain_space_completes_source_selection_build_association_and_installati
             other_model, other_build, graph_context=other_context
         )
     )
-    other_logical = (
-        cast(DataflowDesign, other.selected_implementation()).assess_view("logical").accepted_answer
-    )
+    other_logical = cast(Kernel, other.selected_kernel()).assess_view("logical").accepted_answer
     assert isinstance(other_logical, Decided)
 
     class MismatchedRelation(PlainComposite):
         id = "mismatched_relation"
 
-        @derived(DesignPhysicalRelation)
-        def wrong_relation() -> DesignPhysicalRelation:
-            return DesignPhysicalRelation(
+        @derived(LogicalPhysicalRelation)
+        def wrong_relation() -> LogicalPhysicalRelation:
+            return LogicalPhysicalRelation(
                 other_logical.value.network,
-                cast(DesignPhysicalRelation, production_relation.relation).physical,
+                cast(LogicalPhysicalRelation, production_relation.relation).physical,
             )
 
         physical_relation = Projection(wrong_relation, readiness=PlainComposite.relation_ready)
@@ -493,8 +492,8 @@ def test_built_component_cannot_cross_physical_choice_points(tmp_path) -> None:
     bound = MvauDataflowOp(model.graph.node[0]).bind(model, build, graph_context=context)
     pumped = configure(bound, pumping=True)
     unpumped = configure(bound.reconstruct(), pumping=False)
-    pumped_design = cast(DataflowDesign, pumped.selected_implementation())
-    unpumped_design = cast(DataflowDesign, unpumped.selected_implementation())
+    pumped_design = cast(Kernel, pumped.selected_kernel())
+    unpumped_design = cast(Kernel, unpumped.selected_kernel())
     pumped_local = capture_local_physical(pumped_design)
     unpumped_local = capture_local_physical(unpumped_design)
     assert pumped_local.physical_fingerprint != unpumped_local.physical_fingerprint
@@ -504,7 +503,7 @@ def test_built_component_cannot_cross_physical_choice_points(tmp_path) -> None:
         pumped_local,
         roots={"finnlib": __import__("pathlib").Path("deps/finnlib").resolve()},
         template_roots=(
-            __import__("pathlib").Path("src/finn/dataflow/designs/templates").resolve(),
+            __import__("pathlib").Path("src/finn/dataflow/kernels/templates").resolve(),
         ),
         blobs=store,
     )

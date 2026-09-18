@@ -169,7 +169,7 @@ def derive_operand_mappings(
 ) -> tuple[OperandMapping, ...]:
     """Direct/synthetic entry point: validate once, then derive every mapping.
 
-    DataflowOp uses its accepted Design projection and calls the private
+    DataflowOp uses its accepted Kernel projection and calls the private
     derivation below without a second whole-Network validation.
     """
 

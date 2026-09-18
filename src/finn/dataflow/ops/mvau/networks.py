@@ -5,9 +5,9 @@
 
 The Region constructors next door say what each half of a decomposed MVAU
 means; this module says how the two halves are wired when they are placed
-together.  It is the reference answer a Design's own Network projection is
+together.  It is the reference answer a Kernel's own Network projection is
 compared against, so it constructs the value directly and consults no
-declaration, decision or Design.
+declaration, decision or Kernel.
 
 The three names below are the canonical node and edge ids of the decomposed
 form.  They are values, not display names: a Network that used different ones

@@ -526,7 +526,7 @@ class Space:
         ``root_factory`` allocates the root occurrence -- and every successor
         root of the same lineage -- for a caller holding context the design
         space has no declaration for.  It is never used for a child, so nothing
-        it captures is reachable from a nested Design or Kernel.
+        it captures is reachable from a nested Kernel or Kernel.
         """
 
         api = _occurrence_api()
@@ -676,7 +676,7 @@ def resolve_declared_value(instance: object, declaration: ValueSource[object]) -
     """The one dispatcher every value descriptor goes through.
 
     There is now one protocol.  U2 and U3 retired the detached *configured*
-    Kernel and Design objects that used to answer through a ``_space_value``
+    Kernel and Kernel objects that used to answer through a ``_space_value``
     hook, so an instance either carries an occurrence runtime or has no values
     at all -- and a bare declaration-only instance saying ``AttributeError`` is
     the right answer for the latter.  ``_space_value`` stays a reserved
@@ -775,7 +775,7 @@ class _AbsenceTolerant(ValueSource[T_co]):
     ``Derived`` or ``Constraint`` names it, and the compiler lowers it to the
     same ``AbsenceMode.ALLOWS_ABSENT`` that ``Input(allow_absent=True)``
     already produces.  The distinction matters because absence tolerance is a
-    property of *this reader*, not of the value: a Design's network constraint
+    property of *this reader*, not of the value: a Kernel's network constraint
     tolerates an inactive segment contributing no Region, while the same Region
     remains required by everything inside the segment that is active.
     """
@@ -805,7 +805,7 @@ def allow_absent(source: ValueSource[T]) -> ValueSource[T]:
 
     Without it a reader of a conditionally-absent value is unwritable: the
     dependency resolves to a final ``Absent`` and the reader propagates it,
-    which is right for a Kernel reading its own Region and wrong for a Design
+    which is right for a Kernel reading its own Region and wrong for a Kernel
     constraint whose whole job is to say "an inactive role contributes no node".
     """
 
@@ -1355,7 +1355,7 @@ class SubspaceChoice:
         The one contextual wrapper around :meth:`validate_candidate`, and the
         only thing any caller invokes.  The compiler calls it while compiling a
         branch; a layer that must consume a candidate *before* compilation --
-        Design projection synthesis asks each candidate for its exported Region,
+        Kernel projection synthesis asks each candidate for its exported Region,
         and "does not export 'region'" is true and useless -- calls the same
         wrapper rather than reimplementing the rule or its attribution.
 

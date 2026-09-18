@@ -21,7 +21,7 @@ It answers nothing about source identity.  Nothing here can tell whether two
 region-local ``W``\\ s are the same tensor, and inferring that from a bare
 operand id is exactly the guess this layer exists to stop.  Cross-stratum
 correspondence -- one source operand to a tuple of qualified targets -- is the
-DataflowOp's, built from its own declarations and its Design's roles and checked
+DataflowOp's, built from its own declarations and its Kernel's roles and checked
 against the selected Network.
 """
 

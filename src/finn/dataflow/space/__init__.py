@@ -15,11 +15,10 @@ SpaceModel[S]  the compiled, reusable model of one authored root
 occurrence     an attached instance of S over one immutable point
 ```
 
-This package is **layer-neutral**.  ``Kernel`` lives in
-``finn.dataflow.kernels``, ``DataflowDesign`` in ``finn.dataflow.designs``, and
-operation-owned Designs with their operation -- each is an ordinary ``Space``
-subclass and none of them is privileged here.  Concrete implementations do not
-incubate in this namespace.
+This package is **layer-neutral**. ``Kernel`` lives in
+``finn.dataflow.kernels`` and operation-owned Kernels live with their
+operation; each is an ordinary ``Space`` subclass and none is privileged here.
+Concrete implementations do not incubate in this namespace.
 
 ``finn.dataflow._engine`` stays the only validator, evaluator, point, answer,
 readiness, and constraint runtime.  Nothing here introduces a nested Engine, a
@@ -44,8 +43,8 @@ specialization's segment.
 
 **Construction hooks, not layer knowledge.**  A specialization customizes
 compilation through ``_finalize_compilation`` and its own declaration types.
-That is how the Kernel layer enforces its Region ownership rule and the Design
-layer builds its Network property, without this package naming either.
+That is how the Kernel layer adds domain conveniences without this package
+naming Regions, Networks, or physical artifacts.
 
 **Boundaries.**  Artifact projection, ONNX lowering, persistence, and
 selection policy are all deliberately absent.

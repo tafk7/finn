@@ -18,7 +18,7 @@ from finn.dataflow.kernels.physical import (
     validate_kernel_stream_bindings,
 )
 
-from dataflow.ops.mvau.test_dot_product_design import _occurrence
+from dataflow.ops.mvau.test_dot_product_kernel import _occurrence
 
 
 def _children():
@@ -34,7 +34,7 @@ def _children():
         pumping=True,
         narrow=True,
     )
-    replay, compute = design.kernel("replay"), design.kernel("compute")
+    replay, compute = design.child("replay"), design.child("compute")
     assert isinstance(replay, Decided) and isinstance(compute, Decided)
     return replay.value, compute.value
 

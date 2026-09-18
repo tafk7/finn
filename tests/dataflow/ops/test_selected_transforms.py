@@ -22,7 +22,7 @@ from dataflow.ops.test_selected_graph import _fixture as _identity_fixture
 from finn.dataflow.model.maps import CoordinateSet, RectangularDomain
 from finn.dataflow.model.region import BeatSequence, InputInterface, ScheduledInputRequirements
 from finn.dataflow.ops.mvau.computation import AccumulationMode
-from finn.dataflow.ops.mvau.designs.supply import WeightSupply
+from finn.dataflow.ops.mvau.kernels.supply import WeightSupply
 from finn.dataflow.ops.mvau.selected import construct_mvau_snapshot
 from finn.dataflow.ops.replay.selected import construct_replay_snapshot
 from finn.dataflow.ops.selected import (

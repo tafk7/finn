@@ -11,8 +11,8 @@ finn.dataflow.space    the generic Space declaration language, compiler and
                        occurrence runtime
 ```
 
-Above them sit ``kernels``, ``designs``, ``ops`` and ``parameters``; below and
-to the side, ``artifacts`` and the private ``_engine``.
+Above them sit ``kernels``, ``ops`` and ``parameters``; below and to the side,
+``artifacts`` and the private ``_engine``.
 
 This module deliberately re-exports nothing.  A value with two importable paths
 looks like a value with two owners, and the whole point of the model/space split

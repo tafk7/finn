@@ -153,7 +153,6 @@ def test_the_facade_names_nothing_from_a_higher_layer() -> None:
         "Decision",
         "RegionDeclaration",
         "Kernel",
-        "DataflowDesign",
         "DataflowOp",
         "ComponentABI",
         "OperandMapping",

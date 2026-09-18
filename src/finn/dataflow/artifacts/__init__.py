@@ -20,5 +20,5 @@ The rule is checked, not merely stated: ``test_package_boundaries`` walks every
 module in this package and refuses an import of ``model``, ``kernels``,
 ``designs``, ``ops`` or ``_engine``.  What crosses *into* it is a detached
 value -- ``ModuleBuildSpec`` today, and whatever U5's composition
-contract settles on for a Design -- never an occurrence.
+contract settles on for a Kernel -- never an occurrence.
 """

@@ -1,11 +1,11 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""What every MVAU Design agrees about before it disagrees about supply.
+"""What every MVAU Kernel agrees about before it disagrees about supply.
 
 The folding and operand facts are authored once and reused by each concrete
-Design. Compilation still gives every occurrence its own root-relative
-coordinates: ``design.dot_product.pe`` and ``design.batch_interleaved.pe`` are
+Kernel. Compilation still gives every occurrence its own root-relative
+coordinates: ``kernel.dot_product.pe`` and ``kernel.batch_interleaved.pe`` are
 distinct persisted Decisions even though both come from the same Python
 declaration object. The shared definition prevents duplicated authoring; it
 does not merge choices across alternatives.
@@ -13,7 +13,7 @@ does not merge choices across alternatives.
 
 from __future__ import annotations
 
-from finn.dataflow.designs.design import DataflowDesign
+from finn.dataflow.kernels.kernel import Kernel
 from finn.dataflow.analysis.integer_dot import IntegerSupportReport
 from finn.dataflow.kernels.dotp_axi import DspBlock
 from finn.dataflow.space.declarations import (
@@ -28,7 +28,7 @@ from finn.dataflow.space.dataflow_value_semantics import QONNX_DATATYPE_VALUE_SE
 from finn.dataflow.ops.mvau.computation import MvauComputationProfile
 
 
-class WeightedDotProductDesign(DataflowDesign):
+class WeightedDotProductKernel(Kernel):
     """The shared operand facts and the two folding choices MVAU owns."""
 
     repetitions = Input(int)
@@ -50,31 +50,31 @@ class WeightedDotProductDesign(DataflowDesign):
 
     @constraint(profile=computation_profile)
     def computes_a_bare_accumulator(*, profile: MvauComputationProfile) -> object:
-        """These Designs build a dot product and stop; they fuse no activation.
+        """These Kernels build a dot product and stop; they fuse no activation.
 
-        A Design limitation, argued from the Design's own structure rather than
+        A Kernel limitation, argued from the Kernel's own structure rather than
         from the mathematics: every alternative below this class declares a
         Network with activation, weight and output boundaries and a compute
         Region that produces the accumulator directly.  There is no threshold
         boundary for the fourth operand to cross and no stage to apply it in,
         so a fused-threshold node has no *composition* here -- while remaining
-        a perfectly valid problem that a later Design may build.
+        a perfectly valid problem that a later Kernel may build.
 
         Refusing it here rather than in the operation is what keeps that true:
         the node still binds, still projects its source facts, and reports an
-        inapplicable Design instead of an unreadable node.
+        inapplicable Kernel instead of an unreadable node.
         """
 
         if not profile.fuses_activation:
             return True
         return reject(
-            "mvau-design-fuses-no-activation",
-            "this Design emits its accumulator directly and has no stage for a fused "
+            "mvau-kernel-fuses-no-activation",
+            "this Kernel emits its accumulator directly and has no stage for a fused "
             f"threshold; this node computes {profile.name}",
             values={"computation_profile": profile.name},
         )
 
-    dataflow_support = ConstraintGroup(computes_a_bare_accumulator)
+    logical_support = ConstraintGroup(computes_a_bare_accumulator)
 
 
 #: Every Input the shared base consumes, for a caller assembling bindings.
@@ -93,4 +93,4 @@ SHARED_INPUTS = (
     "numerical_support",
 )
 
-__all__ = ["SHARED_INPUTS", "WeightedDotProductDesign"]
+__all__ = ["SHARED_INPUTS", "WeightedDotProductKernel"]

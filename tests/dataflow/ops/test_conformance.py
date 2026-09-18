@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""L15: both operations, and every MVAU Design, through one shared harness.
+"""L15: both operations, and every MVAU Kernel, through one shared harness.
 
 The harness is the deliverable, not these cases.  A third operation added later
 gets the whole lifecycle checked by writing a ``DataflowOpConformanceCase`` and
@@ -28,15 +28,15 @@ from finn.dataflow.conformance import (
 )
 from finn.dataflow.kernels.dotp_axi import DotpAxiKernel, DspBlock
 from finn.dataflow.ops.base import DATAFLOW_DOMAIN, DataflowOp
-from finn.dataflow.ops.mvau.designs.base import WeightedDotProductDesign
-from finn.dataflow.ops.mvau.designs.batch_interleaved import BatchInterleavedDesign
-from finn.dataflow.ops.mvau.designs.dot_product import (
-    DotProductDesign,
+from finn.dataflow.ops.mvau.kernels.base import WeightedDotProductKernel
+from finn.dataflow.ops.mvau.kernels.batch_interleaved import BatchInterleavedKernel
+from finn.dataflow.ops.mvau.kernels.dot_product import (
+    DotProductKernel,
     WeightSupply,
 )
 from finn.dataflow.ops.mvau.op import MvauDataflowOp
 from finn.dataflow.ops.persistence import assign_dataflow_scope_ids
-from finn.dataflow.ops.replay.design import ActivationReplayDesign
+from finn.dataflow.ops.replay.kernel import ActivationReplayKernel
 from finn.dataflow.ops.replay.op import ActivationReplayOp
 from finn.dataflow._engine import Decided
 
@@ -126,18 +126,18 @@ def _widen_the_activation(model: Any) -> None:
 
 
 def _configure_dot_product(bound: Any, supply: WeightSupply = WeightSupply.EXTERNAL) -> Any:
-    chosen = bound.design.select("dot_product").root
+    chosen = bound.kernel.select("dot_product").root
     chosen = (
-        chosen.design.alternative("dot_product").assign(DotProductDesign.weight_supply, supply).root
+        chosen.kernel.alternative("dot_product").assign(DotProductKernel.weight_supply, supply).root
     )
     candidate = "dotp_axi_embedded" if supply is WeightSupply.EMBEDDED else "dotp_axi"
-    chosen = chosen.design.alternative("dot_product").compute.select(candidate).root
+    chosen = chosen.kernel.alternative("dot_product").compute.select(candidate).root
     for declaration, value in (
-        (WeightedDotProductDesign.pe, 2),
-        (WeightedDotProductDesign.simd, 2),
+        (WeightedDotProductKernel.pe, 2),
+        (WeightedDotProductKernel.simd, 2),
     ):
-        chosen = chosen.design.alternative("dot_product").assign(declaration, value).root
-    kernel = chosen.design.alternative("dot_product").kernel("compute")
+        chosen = chosen.kernel.alternative("dot_product").assign(declaration, value).root
+    kernel = chosen.kernel.alternative("dot_product").child("compute")
     assert isinstance(kernel, Decided)
     return kernel.value.assign(DotpAxiKernel.compute_pumping, False).root
 
@@ -155,14 +155,14 @@ def _configure_decoupled(bound: Any) -> Any:
 
 
 def _configure_batch_interleaved(bound: Any) -> Any:
-    chosen = bound.design.select("batch_interleaved").root
+    chosen = bound.kernel.select("batch_interleaved").root
     for declaration, value in (
-        (WeightedDotProductDesign.pe, 2),
-        (WeightedDotProductDesign.simd, 2),
-        (BatchInterleavedDesign.interleave, 2),
+        (WeightedDotProductKernel.pe, 2),
+        (WeightedDotProductKernel.simd, 2),
+        (BatchInterleavedKernel.interleave, 2),
     ):
-        chosen = chosen.design.alternative("batch_interleaved").assign(declaration, value).root
-    kernel = chosen.design.alternative("batch_interleaved").kernel("compute")
+        chosen = chosen.kernel.alternative("batch_interleaved").assign(declaration, value).root
+    kernel = chosen.kernel.alternative("batch_interleaved").child("compute")
     assert isinstance(kernel, Decided)
     return kernel.value.assign(DotpAxiKernel.compute_pumping, False).root
 
@@ -170,10 +170,10 @@ def _configure_batch_interleaved(bound: Any) -> Any:
 def _configure_replay(bound: Any) -> Any:
     chosen = bound
     for declaration, value in (
-        (ActivationReplayDesign.pe, 1),
-        (ActivationReplayDesign.simd, 4),
+        (ActivationReplayKernel.pe, 1),
+        (ActivationReplayKernel.simd, 4),
     ):
-        chosen = chosen.design.assign(declaration, value).root
+        chosen = chosen.kernel.assign(declaration, value).root
     return chosen
 
 
@@ -210,7 +210,7 @@ def test_every_mvau_design_alternative_conforms(
             execution_context=_mvau_execution_context(),
         )
     )
-    assert dict(result.committed.recorded())["design.case"] == design
+    assert dict(result.committed.recorded())["kernel.case"] == design
     assert dict(result.restored.recorded()) == dict(result.committed.recorded())
 
 
@@ -228,7 +228,7 @@ def test_the_replay_operation_conforms(tmp_path: Path) -> None:
             mutate_problem=_widen_the_activation,
         )
     )
-    assert dict(result.committed.recorded()) == {"design.pe": 1, "design.simd": 4}
+    assert dict(result.committed.recorded()) == {"kernel.pe": 1, "kernel.simd": 4}
 
 
 def test_the_harness_fails_when_a_promise_is_broken(tmp_path: Path) -> None:
@@ -306,7 +306,7 @@ def _unbound_mvau(model: Any) -> Any:
 
 
 def test_the_case_is_the_only_operation_specific_input() -> None:
-    """The harness names no operation, no Design and no Decision."""
+    """The harness names no operation, no Kernel and no Decision."""
 
     source = Path("src/finn/dataflow/conformance.py").read_text()
     for forbidden in (

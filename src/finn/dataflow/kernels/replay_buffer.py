@@ -9,7 +9,7 @@ input across ``nf``; naming it as its own Region makes it a composable unit and
 leaves the dot-product half with nothing but arithmetic.
 
 It owns no decision at all.  ``LEN``, ``REP``, and ``W`` are the folding restated
-in the buffer's own vocabulary, derived from facts its Design supplies -- a
+in the buffer's own vocabulary, derived from facts its Kernel supplies -- a
 buffer that picked its own depth would be picking a fold.  It is kept even at one
 neuron fold, where it is an identity: eliding the physical buffer is a choice for
 this Kernel's own realization to make, not a reason for the Region to disappear.

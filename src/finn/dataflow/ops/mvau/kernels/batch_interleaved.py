@@ -8,7 +8,7 @@ activation boundary -> compute -> output boundary
         weight boundary --^
 ```
 
-The other two Designs replay the activation so that each weight tile is used
+The other two Kernels replay the activation so that each weight tile is used
 once per row.  This one turns that around: the tile is fetched once and reused
 across ``interleave`` consecutive rows, so the weight stream carries
 ``PE * SIMD / interleave`` elements per beat and the activation is presented
@@ -16,23 +16,23 @@ once, uncompacted and unreplayed.
 
 **It places one node, and that is the finding rather than a simplification.**
 There is no replay Region to compose with, because interleaving removes the
-thing replay existed to supply.  A Design is a composition of KernelChoice, not
+thing replay existed to supply.  A Kernel is a composition of KernelChoice, not
 necessarily of *several* KernelChoice, and the shape of the composition follows the
 arithmetic rather than the other way round.
 
-**``interleave`` remains a Design-owned Decision as a deliberate lift.** It
+**``interleave`` remains a Kernel-owned Decision as a deliberate lift.** It
 changes the compute schedule and the Network's weight boundary, but Region
 visibility alone does not settle ownership. A later audit must consider Kernel
 reuse, forwarding cost, shared-axis duplication and the weight-delivery model
 before any local-semantic-Decision rule moves it. It needs no new persistence:
 the recorded document names
-``design.batch_interleaved.interleave`` because the walk found it, not because
+``kernel.batch_interleaved.interleave`` because the walk found it, not because
 anything here declared how to store it.
 """
 
 from __future__ import annotations
 
-from finn.dataflow.designs.design import NetworkBoundary, KernelChoice
+from finn.dataflow.kernels.kernel import NetworkBoundary, KernelChoice
 from finn.dataflow.kernels.dotp_axi import BatchInterleavedDotpAxiKernel
 from finn.dataflow.space.declarations import (
     ConstraintGroup,
@@ -42,29 +42,29 @@ from finn.dataflow.space.declarations import (
     divisors_of,
     reject,
 )
-from finn.dataflow.ops.mvau.designs.base import SHARED_INPUTS, WeightedDotProductDesign
+from finn.dataflow.ops.mvau.kernels.base import SHARED_INPUTS, WeightedDotProductKernel
 
 
-class BatchInterleavedDesign(WeightedDotProductDesign):
+class BatchInterleavedKernel(WeightedDotProductKernel):
     """The dot product with its weight tile amortized across a batch of rows."""
 
     id = "batch_interleaved"
     version = "1"
 
-    repetitions = WeightedDotProductDesign.repetitions
-    matrix_width = WeightedDotProductDesign.matrix_width
-    matrix_height = WeightedDotProductDesign.matrix_height
-    activation_type = WeightedDotProductDesign.activation_type
-    weight_type = WeightedDotProductDesign.weight_type
-    accumulator_type = WeightedDotProductDesign.accumulator_type
-    output_type = WeightedDotProductDesign.output_type
-    computation_profile = WeightedDotProductDesign.computation_profile
-    numerical_support = WeightedDotProductDesign.numerical_support
-    narrow_weights = WeightedDotProductDesign.narrow_weights
-    target_dsp = WeightedDotProductDesign.target_dsp
-    clock_period_ns = WeightedDotProductDesign.clock_period_ns
-    pe = WeightedDotProductDesign.pe
-    simd = WeightedDotProductDesign.simd
+    repetitions = WeightedDotProductKernel.repetitions
+    matrix_width = WeightedDotProductKernel.matrix_width
+    matrix_height = WeightedDotProductKernel.matrix_height
+    activation_type = WeightedDotProductKernel.activation_type
+    weight_type = WeightedDotProductKernel.weight_type
+    accumulator_type = WeightedDotProductKernel.accumulator_type
+    output_type = WeightedDotProductKernel.output_type
+    computation_profile = WeightedDotProductKernel.computation_profile
+    numerical_support = WeightedDotProductKernel.numerical_support
+    narrow_weights = WeightedDotProductKernel.narrow_weights
+    target_dsp = WeightedDotProductKernel.target_dsp
+    clock_period_ns = WeightedDotProductKernel.clock_period_ns
+    pe = WeightedDotProductKernel.pe
+    simd = WeightedDotProductKernel.simd
 
     #: How many consecutive rows share one weight tile.  A divisor of the row
     #: count, because a batch that did not divide evenly would leave a partial
@@ -96,7 +96,7 @@ class BatchInterleavedDesign(WeightedDotProductDesign):
 
     @constraint(interleave=interleave)
     def interleaving_is_more_than_one(*, interleave: int) -> object:
-        """At one, this Design *is* the streamed one, and says so rather than tying.
+        """At one, this Kernel *is* the streamed one, and says so rather than tying.
 
         Two points that build the same thing are worse than one point fewer:
         a chooser would have no way to prefer either, and evidence gathered
@@ -107,7 +107,7 @@ class BatchInterleavedDesign(WeightedDotProductDesign):
             return True
         return reject(
             "mvau-interleave-degenerate",
-            "an interleave of one is exactly the streamed dot product; use that Design",
+            "an interleave of one is exactly the streamed dot product; use that Kernel",
             values={"interleave": interleave},
         )
 
@@ -132,15 +132,15 @@ class BatchInterleavedDesign(WeightedDotProductDesign):
 
     #: The base class's constraint is carried forward explicitly; overriding the
     #: group without naming it would silently drop it.
-    dataflow_support = ConstraintGroup(
-        *WeightedDotProductDesign.dataflow_support.constraints,
+    logical_support = ConstraintGroup(
+        *WeightedDotProductKernel.logical_support.constraints,
         interleaving_is_more_than_one,
         interleaving_divides_the_weight_tile,
         name="interleave_available",
     )
 
 
-#: Every Input the Design consumes, for a caller assembling the bindings.
-DESIGN_INPUTS = SHARED_INPUTS
+#: Every Input the Kernel consumes, for a caller assembling the bindings.
+KERNEL_INPUTS = SHARED_INPUTS
 
-__all__ = ["DESIGN_INPUTS", "BatchInterleavedDesign"]
+__all__ = ["KERNEL_INPUTS", "BatchInterleavedKernel"]

@@ -61,7 +61,7 @@ from finn.dataflow.ops.selected_transforms import (
 )
 
 REPLAY_CONSTRUCTION_FAMILY = "finn.dataflow.selected.activation_replay"
-REPLAY_CONSTRUCTION_VERSION = "1"
+REPLAY_CONSTRUCTION_VERSION = "2"
 REPLAY_SOURCE_SEMANTICS = "finn.dataflow.source.activation_replay"
 REPLAY_SOURCE_SEMANTICS_VERSION = 1
 REPLAY_GRAPH_NAME = "selected_activation_replay"
@@ -156,8 +156,8 @@ def derive_replay_facts(
         or activation.carrier_dtype != expanded.carrier_dtype
     ):
         raise ValueError("Replay input and output datatypes must agree")
-    pe = cast(int, _choice(choices, "design.pe"))
-    simd = cast(int, _choice(choices, "design.simd"))
+    pe = cast(int, _choice(choices, "kernel.pe"))
+    simd = cast(int, _choice(choices, "kernel.simd"))
     if pe != 1:
         raise ValueError("standalone Replay requires PE=1")
     if simd < 1 or width % simd:
@@ -396,7 +396,7 @@ REPLAY_SELECTED_CONSTRUCTION = SelectedConstruction(
     source_semantics_identity=REPLAY_SOURCE_SEMANTICS,
     source_semantics_version=REPLAY_SOURCE_SEMANTICS_VERSION,
     admitted_forms=("canonical",),
-    choice_paths=("design.pe", "design.simd"),
+    choice_paths=("kernel.pe", "kernel.simd"),
     initializer_inputs=(),
     decode_source_semantics=decode_replay_source_semantics,
     derive_facts=derive_replay_facts,

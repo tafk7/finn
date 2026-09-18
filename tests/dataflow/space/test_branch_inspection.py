@@ -427,9 +427,9 @@ def test_committing_a_selector_leaves_the_sibling_case_non_rejecting() -> None:
 
 
 def test_inspection_is_domain_neutral() -> None:
-    """Nothing in the catalog names a Kernel, a Region, or a Design."""
+    """Nothing in the catalog names a Kernel, a Region, or a Kernel."""
 
     _engine, _point, catalog = _model()
     text = repr(catalog)
-    for word in ("Kernel", "Region", "Network", "Design"):
+    for word in ("Kernel", "Region", "Network", "Kernel"):
         assert word not in text

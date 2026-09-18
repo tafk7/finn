@@ -12,7 +12,7 @@ Three claims, and they are checked separately because they fail separately:
    against ``numpy.matmul``, ``xnorpopcountmatmul`` and ``multithreshold``
    directly, not against a recorded expectation that could have been wrong
    when it was recorded;
-3. a fused-threshold node is a valid *problem* with no applicable Design here,
+3. a fused-threshold node is a valid *problem* with no applicable Kernel here,
    which is a different outcome from an invalid node and must not be confused
    with one.
 """
@@ -50,7 +50,7 @@ from finn.dataflow.ops.mvau.computation import (
     MvauComputationProfile,
     execute_mvau,
 )
-from finn.dataflow.ops.mvau.designs.base import WeightedDotProductDesign
+from finn.dataflow.ops.mvau.kernels.base import WeightedDotProductKernel
 from finn.dataflow.ops.mvau.op import origin_nodes, MvauDataflowOp
 from finn.dataflow.ops.persistence import assign_dataflow_scope_ids
 from finn.dataflow.ops.schema import Attribute, OpInput, OpOutput
@@ -326,7 +326,7 @@ def test_a_thresholded_node_derives_its_output_datatype_from_the_source_attribut
     assert operation.reconciliation() == ()
 
 
-# -- the Designs' applicability -------------------------------------------------
+# -- the Kernels' applicability -------------------------------------------------
 
 
 def test_a_fused_threshold_node_is_valid_and_has_no_applicable_design() -> None:
@@ -338,18 +338,18 @@ def test_a_fused_threshold_node_is_valid_and_has_no_applicable_design() -> None:
     assert _accepts(operation)
 
     chosen = _configure_mvau_point(operation)
-    assert "mvau-design-fuses-no-activation" in _findings(chosen.dataflow.accepted_answer)
+    assert "mvau-kernel-fuses-no-activation" in _findings(chosen.dataflow.accepted_answer)
 
 
 def test_the_refusal_belongs_to_the_design_and_not_to_the_operation() -> None:
     """Named where it is: the mathematics is fine, this composition is not."""
 
     assert any(
-        item is WeightedDotProductDesign.computes_a_bare_accumulator
-        for item in WeightedDotProductDesign.dataflow_support.constraints
+        item is WeightedDotProductKernel.computes_a_bare_accumulator
+        for item in WeightedDotProductKernel.logical_support.constraints
     )
     assert all(
-        item is not WeightedDotProductDesign.computes_a_bare_accumulator
+        item is not WeightedDotProductKernel.computes_a_bare_accumulator
         for item in MvauDataflowOp.source_accepts.constraints
     )
 

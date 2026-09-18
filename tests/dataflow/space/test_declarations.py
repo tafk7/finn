@@ -10,7 +10,6 @@ from enum import Enum
 
 import pytest
 
-import finn.dataflow.designs as designs
 import finn.dataflow.kernels as kernels
 import finn.dataflow.kernels.kernel as kernel
 import finn.dataflow.space as space
@@ -245,9 +244,8 @@ def test_public_space_facade_exposes_only_generic_vocabulary() -> None:
     )
     # No layer specialization either: those are exported by their own package.
     assert not {
-        "DataflowDesign",
-        "DotpAxiKernel",
         "Kernel",
+        "DotpAxiKernel",
         "KernelChoice",
         "RegionDeclaration",
     } & set(space.__all__)
@@ -263,7 +261,15 @@ def test_every_layer_names_its_own_specialization() -> None:
     """A Kernel author declaring a `RegionDeclaration` reaches for the Kernel package."""
 
     assert kernels.RegionDeclaration is kernel.RegionDeclaration
-    for name in ("Kernel", "ModuleParameter", "RegionDeclaration", "kernel_physical"):
+    for name in (
+        "Kernel",
+        "LogicalView",
+        "PhysicalView",
+        "RelationView",
+        "ModuleParameter",
+        "RegionDeclaration",
+        "kernel_physical",
+    ):
         assert name in kernels.__all__
-    for name in ("NetworkBoundary", "NetworkEdge", "DataflowDesign", "KernelChoice", "EdgeSink"):
-        assert name in designs.__all__
+    for name in ("NetworkBoundary", "NetworkEdge", "Kernel", "KernelChoice", "EdgeSink"):
+        assert name in kernels.__all__

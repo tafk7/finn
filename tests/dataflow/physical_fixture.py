@@ -25,8 +25,8 @@ from finn.dataflow.ops.graph_context import (
     GraphInputEntry,
     LogicalBoundaryContract,
 )
-from finn.dataflow.ops.mvau.designs.base import WeightedDotProductDesign
-from finn.dataflow.ops.mvau.designs.dot_product import DotProductDesign, WeightSupply
+from finn.dataflow.ops.mvau.kernels.base import WeightedDotProductKernel
+from finn.dataflow.ops.mvau.kernels.dot_product import DotProductKernel, WeightSupply
 from finn.dataflow.ops.mvau.op import MvauDataflowOp
 from finn.dataflow.ops.selected import SourceDirection, SourceOperandKey
 
@@ -138,20 +138,20 @@ def source_model(
 
 
 def configure(operation: MvauDataflowOp, *, pumping: bool | None = True) -> MvauDataflowOp:
-    chosen = operation.design.select("dot_product").root
+    chosen = operation.kernel.select("dot_product").root
     chosen = (
-        chosen.design.alternative("dot_product")
+        chosen.kernel.alternative("dot_product")
         .assign(
-            DotProductDesign.weight_supply,
+            DotProductKernel.weight_supply,
             WeightSupply.EXTERNAL,
         )
         .root
     )
-    chosen = chosen.design.alternative("dot_product").compute.select("dotp_axi").root
-    for declaration in (WeightedDotProductDesign.pe, WeightedDotProductDesign.simd):
-        chosen = chosen.design.alternative("dot_product").assign(declaration, 2).root
+    chosen = chosen.kernel.alternative("dot_product").compute.select("dotp_axi").root
+    for declaration in (WeightedDotProductKernel.pe, WeightedDotProductKernel.simd):
+        chosen = chosen.kernel.alternative("dot_product").assign(declaration, 2).root
     if pumping is not None:
-        child = chosen.design.alternative("dot_product").kernel("compute")
+        child = chosen.kernel.alternative("dot_product").child("compute")
         assert isinstance(child, Decided)
         chosen = child.value.assign(DotpAxiKernel.compute_pumping, pumping).root
     return chosen
@@ -162,7 +162,7 @@ def roots() -> dict[str, Path]:
 
 
 def template_roots() -> tuple[Path, ...]:
-    return (Path(__file__).resolve().parents[2] / "src/finn/dataflow/designs/templates",)
+    return (Path(__file__).resolve().parents[2] / "src/finn/dataflow/kernels/templates",)
 
 
 def exact_outputs(

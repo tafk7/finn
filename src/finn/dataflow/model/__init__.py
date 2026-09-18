@@ -29,7 +29,7 @@ vocabulary a Region author uses.
 
 The package imports the Python standard library, QONNX datatype identity through
 ``model.datatypes``, and its own siblings.  It imports no Space, no ``_engine``,
-no Kernel, Design, operation, ONNX wrapper, physical value or artifact
+no Kernel, Kernel, operation, ONNX wrapper, physical value or artifact
 capability -- ``test_package_boundaries`` enforces the direction, and
 ``space.dataflow_value_semantics`` is where the engine learns about these values,
 one way.

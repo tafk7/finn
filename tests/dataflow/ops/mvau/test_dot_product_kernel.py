@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""KD7: the real replay-to-DotpAxi Design against the retained MVAU authority."""
+"""KD7: the real replay-to-DotpAxi Kernel against the retained MVAU authority."""
 
 from __future__ import annotations
 
@@ -26,10 +26,10 @@ from finn.dataflow.space.dataflow_value_semantics import (
 from finn.dataflow.space.compiler import _Ref, _compile_space
 from finn.dataflow.space.declarations import Problem, Space, Subspace, ValueSource
 from finn.dataflow.space.occurrence import occurrence_persistable
-from finn.dataflow.designs.design import design_dataflow
-from finn.dataflow.ops.mvau.designs.dot_product import (
-    DESIGN_INPUTS,
-    DotProductDesign,
+from finn.dataflow.kernels.kernel import kernel_dataflow
+from finn.dataflow.ops.mvau.kernels.dot_product import (
+    KERNEL_INPUTS,
+    DotProductKernel,
     WeightSupply,
 )
 from finn.dataflow.kernels.dotp_axi import DotpAxiKernel, DspBlock
@@ -80,27 +80,27 @@ class Problem_(Space):
 
 
 class Placed(Problem_):
-    """The same facts, with the Design placed at the same namespace.
+    """The same facts, with the Kernel placed at the same namespace.
 
     ``Problem_`` alone is the fragment form the topology tests drive directly.
-    Placing the Design as a ``Subspace`` named ``dot_product`` gives the
+    Placing the Kernel as a ``Subspace`` named ``dot_product`` gives the
     occurrence form over identical engine paths, so the two agree by
     construction rather than by two lists of strings staying in step.
     """
 
-    design = Subspace(
-        DotProductDesign,
+    kernel = Subspace(
+        DotProductKernel,
         name="dot_product",
-        **{name: cast("ValueSource[object]", getattr(Problem_, name)) for name in DESIGN_INPUTS},
+        **{name: cast("ValueSource[object]", getattr(Problem_, name)) for name in KERNEL_INPUTS},
     )
 
 
 def _compile(namespace: str = "mvau.dot_product"):
     root = _compile_space(Problem_, "mvau", problem_namespace="problem.mvau")
     design = _compile_space(
-        DotProductDesign,
+        DotProductKernel,
         namespace,
-        {name: cast("_Ref[object]", root.member(name)) for name in DESIGN_INPUTS},
+        {name: cast("_Ref[object]", root.member(name)) for name in KERNEL_INPUTS},
         _allow_problem=False,
     )
     return root, design
@@ -117,8 +117,8 @@ def _unconfigured(
     narrow: bool = False,
     target: DspBlock = DspBlock.DSP58,
     initializer: bool = True,
-) -> DotProductDesign:
-    """One attached DotProductDesign before any Design choices are made."""
+) -> DotProductKernel:
+    """One attached DotProductKernel before any Kernel choices are made."""
 
     root = Placed.start(
         {
@@ -139,7 +139,7 @@ def _unconfigured(
         },
         namespace="mvau",
     )
-    return cast(DotProductDesign, root.design)
+    return cast(DotProductKernel, root.kernel)
 
 
 def _occurrence(
@@ -157,8 +157,8 @@ def _occurrence(
     simd: int = 2,
     pumping: bool = False,
     initializer: bool = True,
-) -> DotProductDesign:
-    """One attached DotProductDesign, specialized through the public API."""
+) -> DotProductKernel:
+    """One attached DotProductKernel, specialized through the public API."""
 
     design = _unconfigured(
         repetitions=repetitions,
@@ -172,29 +172,29 @@ def _occurrence(
         initializer=initializer,
     )
     design = (
-        design.assign(DotProductDesign.pe, pe)
-        .assign(DotProductDesign.simd, simd)
-        .assign(DotProductDesign.weight_supply, supply)
+        design.assign(DotProductKernel.pe, pe)
+        .assign(DotProductKernel.simd, simd)
+        .assign(DotProductKernel.weight_supply, supply)
     )
     candidate = "dotp_axi_embedded" if supply is WeightSupply.EMBEDDED else "dotp_axi"
-    design = cast(DotProductDesign, design.compute.select(candidate).root.design)
+    design = cast(DotProductKernel, design.compute.select(candidate).root.kernel)
     compute = cast(DotpAxiKernel, design.compute.alternative(candidate))
     return cast(
-        DotProductDesign,
-        compute.assign(DotpAxiKernel.compute_pumping, pumping).root.design,
+        DotProductKernel,
+        compute.assign(DotpAxiKernel.compute_pumping, pumping).root.kernel,
     )
 
 
 def _configure(**kwargs: object) -> Answer[DataflowNetwork]:
-    """The accepted Network of one specialized Design."""
+    """The accepted Network of one specialized Kernel."""
 
     return _occurrence(**kwargs).dataflow.accepted_answer  # type: ignore[arg-type]
 
 
 def _built(role: str, **kwargs: object) -> Answer[ModuleBuildRequirements]:
-    """The detached build unit at one role of one specialized Design."""
+    """The detached build unit at one role of one specialized Kernel."""
 
-    kernel = _occurrence(**kwargs).kernel(role)  # type: ignore[arg-type]
+    kernel = _occurrence(**kwargs).child(role)  # type: ignore[arg-type]
     if not isinstance(kernel, Decided):
         return cast("Answer[ModuleBuildRequirements]", kernel)
     return kernel.value.physical.accepted_answer
@@ -272,8 +272,8 @@ def test_the_design_matches_the_retained_decomposed_authority(
         pe,
         simd,
     )
-    assert design.region("replay") == Decided(expected_replay)
-    assert design.region("compute") == Decided(expected_compute)
+    assert design.child_region("replay") == Decided(expected_replay)
+    assert design.child_region("compute") == Decided(expected_compute)
     network = design.dataflow.accepted_answer
     assert network == Decided(construct_decomposed_mvau_network(expected_replay, expected_compute))
     assert isinstance(network, Decided)
@@ -313,10 +313,10 @@ def test_the_design_reports_its_roles_and_active_candidates() -> None:
     assert design.selected("replay") == Decided("replay_buffer")
     assert design.selected("compute") == Decided("dotp_axi")
     assert design.is_active("memory") == Decided(False)
-    assert design.region_family("replay") == Decided(("mvau.activation_replay", "2"))
-    assert design.region_family("compute") == Decided(("mvau.dot_product", "2"))
+    assert design.child_region_family("replay") == Decided(("mvau.activation_replay", "2"))
+    assert design.child_region_family("compute") == Decided(("mvau.dot_product", "2"))
     assert design.node_id("replay") == "replay"
-    replay = design.kernel("replay")
+    replay = design.child("replay")
     assert isinstance(replay, Decided)
     assert isinstance(replay.value, ReplayBufferKernel)
 
@@ -383,7 +383,7 @@ def test_the_physical_parameter_tables_stay_kernel_local() -> None:
         "ACTIVATION_BROADCASTING": 1,
         "FORCE_BEHAVIORAL": 0,
     }
-    # The Design has no parameter table of its own; each build unit owns its.
+    # The Kernel has no parameter table of its own; each build unit owns its.
     assert not hasattr(_occurrence(), "parameters")
 
 
@@ -409,7 +409,7 @@ def test_an_incomplete_or_infeasible_point_refuses() -> None:
             "problem.mvau.initializer_present": True,
         },
     )
-    assert isinstance(design_dataflow(engine, design, point).accepted_answer, Unresolved)
+    assert isinstance(kernel_dataflow(engine, design, point).accepted_answer, Unresolved)
 
     # DotpAxi cannot pump at one SIMD lane.  That is a *physical* refusal now,
     # so the Network is untouched and the build unit is the thing that says no.
@@ -431,9 +431,9 @@ def test_no_kernel_export_coverage_or_binding_object_appears() -> None:
 
 def test_two_occurrences_of_the_design_stay_independent() -> None:
     root = _compile_space(Problem_, "mvau", problem_namespace="problem.mvau")
-    bindings = {name: cast("_Ref[object]", root.member(name)) for name in DESIGN_INPUTS}
-    left = _compile_space(DotProductDesign, "mvau.left", bindings, _allow_problem=False)
-    right = _compile_space(DotProductDesign, "mvau.right", bindings, _allow_problem=False)
+    bindings = {name: cast("_Ref[object]", root.member(name)) for name in KERNEL_INPUTS}
+    left = _compile_space(DotProductKernel, "mvau.left", bindings, _allow_problem=False)
+    right = _compile_space(DotProductKernel, "mvau.right", bindings, _allow_problem=False)
     engine = Engine()
     point = engine.start(
         engine.validate(assemble_specs((root.spec, left.spec, right.spec))),
@@ -469,12 +469,12 @@ def test_two_occurrences_of_the_design_stay_independent() -> None:
             "mvau.right.compute.dotp_axi.compute_pumping": False,
         },
     ).point
-    first = design_dataflow(engine, left, point).accepted_answer
-    second = design_dataflow(engine, right, point).accepted_answer
+    first = kernel_dataflow(engine, left, point).accepted_answer
+    second = kernel_dataflow(engine, right, point).accepted_answer
     assert isinstance(first, Decided) and isinstance(second, Decided)
     assert first.value != second.value
     for compiled, expected in ((left, 2), (right, 4)):
-        segment = compiled.extension.segment("compute")
-        built = kernel_physical(engine, segment.cases[0].compiled, point).accepted_answer
+        compute = compiled.branch("compute")
+        built = kernel_physical(engine, compute.cases[0].compiled, point).accepted_answer
         assert isinstance(built, Decided)
         assert dict(built.value.parameters)["PE"] == expected

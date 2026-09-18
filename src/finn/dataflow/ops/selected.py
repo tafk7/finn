@@ -18,7 +18,7 @@ import json
 import math
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any, Generic, NoReturn, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Generic, NoReturn, TypeVar, cast
 
 from onnx import (  # type: ignore[import-not-found]
     ModelProto,
@@ -61,6 +61,9 @@ from finn.dataflow.ops.native import (
     encode_choice_value,
 )
 from finn.dataflow.space.declarations import ValueSource
+
+if TYPE_CHECKING:
+    from finn.dataflow.space.occurrence import ProjectionAssessment
 
 SELECTED_METADATA_KEY = "finn.dataflow.selected"
 SELECTED_DECLARATION_ID = "finn.dataflow.selected_graph"
@@ -1304,7 +1307,7 @@ def _validate_source_bindings(
         checked_integer_output = (
             binding.source.direction is SourceDirection.OUTPUT
             and declaration.construction.family == "finn.dataflow.selected.mvau.dot_product"
-            and declaration.construction.version == "2"
+            and declaration.construction.version == "3"
             and fact.carrier_dtype in {TensorProto.INT32, TensorProto.INT64}
         )
         if (
@@ -2592,6 +2595,140 @@ def _decode_declaration(value: object) -> SelectedGraphDeclaration:
     )
 
 
+def selected_graph_for(
+    kernel: object,
+    *,
+    captured_choices: Mapping[str, object] | None = None,
+) -> ProjectionAssessment[SelectedGraphSnapshot]:
+    """Resolve one Kernel's operation-owned selected construction capability."""
+
+    from finn.dataflow._engine import (  # noqa: PLC0415
+        Absent,
+        Answer,
+        Decided,
+        Finding,
+        FindingKind,
+        QualifiedPath,
+        ReadinessAssessment,
+        Unresolved,
+    )
+    from finn.dataflow.ops.base import DataflowOp  # noqa: PLC0415
+    from finn.dataflow.ops.native import (  # noqa: PLC0415
+        choice_schema,
+        choice_subset,
+        resolve_choice_subset,
+    )
+    from finn.dataflow.ops.tensor_summary import FrozenInitializer  # noqa: PLC0415
+    from finn.dataflow.space.declarations import AuthoringError, Space, ValueSource  # noqa: PLC0415
+    from finn.dataflow.space.occurrence import ProjectionAssessment  # noqa: PLC0415
+
+    if not isinstance(kernel, Space):
+        raise TypeError("selected graph construction requires a Space occurrence")
+    root = kernel.root
+    base = root.dataflow if isinstance(root, DataflowOp) else kernel.assess_view("dataflow")
+
+    def assessment(answer: Answer[object]) -> ProjectionAssessment[SelectedGraphSnapshot]:
+        readiness = base.readiness
+        if isinstance(answer, Unresolved) and readiness.ready is True:
+            answers = dict(readiness.answers)
+            answers[QualifiedPath("selected_graph.dependency")] = answer
+            readiness = ReadinessAssessment(
+                "selected_graph",
+                MappingProxyType(answers),
+                None,
+            )
+        return ProjectionAssessment(
+            "selected_graph",
+            readiness,
+            base.constraints,
+            cast("Answer[SelectedGraphSnapshot]", answer),
+            cast("Answer[SelectedGraphSnapshot]", answer),
+        )
+
+    if not isinstance(base.accepted_answer, Decided):
+        return assessment(cast("Answer[object]", base.accepted_answer))
+    construction = getattr(type(kernel), "selected_construction", None)
+    if not isinstance(construction, SelectedConstruction):
+        return assessment(
+            Absent(
+                (
+                    Finding(
+                        FindingKind.LIMITATION,
+                        "selected-graph-unsupported-kernel",
+                        QualifiedPath("selected_graph"),
+                        f"Kernel {type(kernel).__name__} has no selected construction",
+                    ),
+                )
+            )
+        )
+    if not isinstance(root, DataflowOp):
+        raise AuthoringError("selected graph construction requires a DataflowOp root")
+    selected_schema = choice_subset(choice_schema(root), construction.choice_paths)
+    choices: list[RecordedChoice] = []
+    if captured_choices is None:
+        for item, answer in resolve_choice_subset(root, selected_schema):
+            if not isinstance(answer, Decided):
+                return assessment(cast("Answer[object]", answer))
+            choices.append(RecordedChoice(item.choice.path, answer.value))
+    else:
+        for item in selected_schema:
+            if item.choice.path not in captured_choices:
+                return assessment(
+                    Unresolved(
+                        (
+                            Finding(
+                                FindingKind.BLOCKER,
+                                "selected-choice-unresolved",
+                                item.choice.reference.path,
+                                "a selected construction choice is not committed",
+                            ),
+                        )
+                    )
+                )
+            choices.append(RecordedChoice(item.choice.path, captured_choices[item.choice.path]))
+    try:
+        encoded_choices = encode_selected_choices(selected_schema, tuple(choices))
+        facts = root.selected_facts(construction, encoded_choices)
+        if not isinstance(facts, SelectionFacts):
+            raise AuthoringError("selected source facts have the wrong type")
+        payloads = []
+        for declared_input in construction.initializer_inputs:
+            if not isinstance(declared_input, SelectedInitializerInput):
+                raise AuthoringError("selected initializer inputs must use typed declarations")
+            if not declared_input.required(facts):
+                continue
+            if not isinstance(declared_input.source, ValueSource):
+                raise AuthoringError("selected initializer input source must be a ValueSource")
+            answer = kernel.answer(declared_input.source)
+            if not isinstance(answer, Decided):
+                return assessment(cast("Answer[object]", answer))
+            if not isinstance(answer.value, FrozenInitializer):
+                raise AuthoringError("selected initializer input did not resolve a frozen value")
+            payloads.append((declared_input.key, answer.value))
+        snapshot = construct_selected_graph(
+            construction,
+            facts,
+            ConstructionInputs(tuple(payloads)),
+            expected_network=base.accepted_answer.value,
+            expected_source=facts.source,
+            choice_schema=selected_schema,
+        )
+    except (SelectedGraphError, TypeError, ValueError) as error:
+        return assessment(
+            Absent(
+                (
+                    Finding(
+                        FindingKind.REJECTION,
+                        "selected-graph-construction-refused",
+                        QualifiedPath("selected_graph"),
+                        str(error),
+                    ),
+                )
+            )
+        )
+    return assessment(Decided(snapshot))
+
+
 __all__ = [
     "ComputationOwner",
     "ConstructionIdentity",
@@ -2619,6 +2756,7 @@ __all__ = [
     "SelectedGraphDeclaration",
     "SelectedGraphError",
     "SelectedGraphSnapshot",
+    "selected_graph_for",
     "SelectedInitializerInput",
     "SourceDirection",
     "SourceOrigin",

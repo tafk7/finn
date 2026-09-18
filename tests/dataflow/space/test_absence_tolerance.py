@@ -5,7 +5,7 @@
 
 ``Input(allow_absent=True)`` already says "this child tolerates an absent
 value".  What had no spelling was the same statement made by a *dependency*: a
-Design constraint that must report "an inactive role contributes no node" while
+Kernel constraint that must report "an inactive role contributes no node" while
 everything inside the active role still requires that node.  Without it such a
 constraint is unwritable -- the absent dependency propagates and the constraint
 answers ``Absent`` instead of ``True``.

@@ -4,7 +4,7 @@
 """The non-MVAU forcing operation.
 
 Written second and deliberately unlike the first.  It has one input operand and
-no optional one, no Design alternatives and therefore no selector attribute, a
+no optional one, no Kernel alternatives and therefore no selector attribute, a
 one-node Network, and an association with two entries rather than three.  Where
 MVAU reconciles two operands against a matrix shape, this one reads a single
 tensor -- and the layer between them does not change.
@@ -28,12 +28,12 @@ from finn.dataflow.ops.mapping import CoordinateMapping
 from finn.dataflow.model.refs import DataflowOperandRef, RegionInputRef, RegionOutputRef
 from finn.dataflow.ops.base import DataflowOp, DataflowOpError
 from finn.dataflow.ops.source import SourceNode
-from finn.dataflow.ops.replay.design import ActivationReplayDesign
+from finn.dataflow.ops.replay.kernel import ActivationReplayKernel
 from finn.dataflow.ops.schema import Attribute, OpInput, OpOutput
 
 
-def _design(root: Space) -> ActivationReplayDesign:
-    return cast(ActivationReplayDesign, root.design)  # type: ignore[attr-defined]
+def _kernel(root: Space) -> ActivationReplayKernel:
+    return cast(ActivationReplayKernel, root.kernel)  # type: ignore[attr-defined]
 
 
 class ActivationReplayOp(DataflowOp):
@@ -41,7 +41,7 @@ class ActivationReplayOp(DataflowOp):
 
     family: ClassVar[str] = "finn.dataflow.activation_replay"
     family_version: ClassVar[str] = "2"
-    schema_version: ClassVar[int] = 3
+    schema_version: ClassVar[int] = 4
 
     activation = OpInput(index=0, operand="X", correspondence=CoordinateMapping.FLATTEN_LEADING)
     expanded = OpOutput(index=0, operand="XR", correspondence=CoordinateMapping.IDENTITY)
@@ -109,8 +109,8 @@ class ActivationReplayOp(DataflowOp):
     #: see ``expected_outputs``.
     source_accepts = ConstraintGroup(at_least_one_fold, activation_is_a_matrix)
 
-    design = Subspace(
-        ActivationReplayDesign,
+    kernel = Subspace(
+        ActivationReplayKernel,
         repetitions=repetitions,
         matrix_width=matrix_width,
         matrix_height=matrix_height,
@@ -120,13 +120,10 @@ class ActivationReplayOp(DataflowOp):
     def selected_dataflow(self) -> ProjectionAssessment[DataflowNetwork] | None:
         """A fixed Subspace, so the child is always selected."""
 
-        return _design(self).dataflow
+        return cast("ProjectionAssessment[DataflowNetwork]", _kernel(self).dataflow)
 
-    def selected_implementation(self) -> object:
-        return _design(self)
-
-    def selected_design(self) -> object:
-        return self.selected_implementation()
+    def selected_kernel(self) -> object:
+        return _kernel(self)
 
     def selected_source_semantics(self) -> object:
         from finn.dataflow.ops.replay.selected import (  # noqa: PLC0415

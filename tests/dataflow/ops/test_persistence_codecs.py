@@ -211,7 +211,7 @@ def test_stable_declaration_names_determine_native_attribute_names():
 
     class Named(DataflowOp):
         family = "test.named"
-        child = Subspace(Child, name="selected_design")
+        child = Subspace(Child, name="selected_kernel")
 
         def selected_dataflow(self):
             return None
@@ -219,8 +219,8 @@ def test_stable_declaration_names_determine_native_attribute_names():
     model = _model(Named)
     root = Named(model.graph.node[0]).bind(model, None)
     committed = root.child.assign(Child.fold, 2).root.commit(model)
-    assert committed.recorded() == {"selected_design.PE": 2}
-    assert read_attributes(model.graph.node[0])["selected_design__PE"] == NativeAttribute("i", 2)
+    assert committed.recorded() == {"selected_kernel.PE": 2}
+    assert read_attributes(model.graph.node[0])["selected_kernel__PE"] == NativeAttribute("i", 2)
 
 
 def test_deterministic_name_encoding_rejects_collisions():

@@ -237,7 +237,7 @@ class OpOutput(TensorDeclaration):
     one.  It is read into the frozen ``SourceNode`` and reconciled there.
 
     The consequence is deliberate: an operation cannot feed its own output
-    annotation into a Design.  If a datatype genuinely defines the operation's
+    annotation into a Kernel.  If a datatype genuinely defines the operation's
     mathematics -- an accumulator width, say -- it is declared as a
     ``DatatypeAttribute`` and *derived onto* the output, not read back off it.
     """

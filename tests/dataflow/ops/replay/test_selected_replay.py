@@ -12,12 +12,11 @@ from onnx import TensorProto
 from onnx.reference import ReferenceEvaluator
 
 from finn.dataflow._engine import Absent, Decided, Finding, FindingKind, QualifiedPath, Unresolved
-from finn.dataflow.designs.design import SelectedGraph
 from finn.dataflow.kernels.replay_buffer import ReplayBufferKernel
 from finn.dataflow.model.maps import CoordinateSet, RectangularDomain
 from finn.dataflow.model.region import BeatSequence
 from finn.dataflow.ops import native
-from finn.dataflow.ops.replay.design import ActivationReplayDesign
+from finn.dataflow.ops.replay.kernel import ActivationReplayKernel
 from finn.dataflow.ops.replay.op import ActivationReplayOp
 from finn.dataflow.ops.replay.selected import (
     ACTIVATION_KEY,
@@ -77,7 +76,7 @@ def _facts(*, source_shape=(2, 6), folds=3, simd=2):
         ),
         source,
         ReplaySourceSemantics(folds),
-        (RecordedChoice("design.pe", 1), RecordedChoice("design.simd", simd)),
+        (RecordedChoice("kernel.pe", 1), RecordedChoice("kernel.simd", simd)),
     )
 
 
@@ -136,9 +135,8 @@ def test_bound_replay_routes_through_the_design_construction_hook() -> None:
 
 def test_selected_graph_is_a_projection_and_rejects_a_constructor_source_swap() -> None:
     _model, operation = _configured_replay(simd=2)
-    declaration = ActivationReplayDesign.selected_graph
-    assert declaration is not None
-    construction = declaration.construction
+    construction = ActivationReplayKernel.selected_construction
+    assert construction is not None
     original = construction.construct
 
     def wrong_source(facts, inputs):
@@ -152,9 +150,9 @@ def test_selected_graph_is_a_projection_and_rejects_a_constructor_source_swap() 
         return original(changed, inputs)
 
     with patch.object(
-        ActivationReplayDesign,
-        "selected_graph",
-        SelectedGraph(replace(construction, construct=wrong_source)),
+        ActivationReplayKernel,
+        "selected_construction",
+        replace(construction, construct=wrong_source),
     ):
         assessment = operation.selected_graph
     assert isinstance(assessment, ProjectionAssessment)
@@ -168,7 +166,7 @@ def test_selected_only_unresolved_dependency_blocks_projection_readiness() -> No
     original = native.occurrence_answer_at
 
     def unresolved(root, reference):
-        if str(reference.path).endswith("design.simd"):
+        if str(reference.path).endswith("kernel.simd"):
             return Unresolved(
                 (
                     Finding(
@@ -237,7 +235,7 @@ def test_selected_replay_requires_nominal_pe() -> None:
             facts.construction,
             facts.source,
             facts.source_semantics,
-            (RecordedChoice("design.pe", 2), facts.choices[1]),
+            (RecordedChoice("kernel.pe", 2), facts.choices[1]),
         )
 
 
@@ -450,7 +448,7 @@ def test_expanded_coordinates_preserve_the_previous_physical_transfer_values() -
 
 def test_standalone_replay_versions_move_together() -> None:
     assert ActivationReplayOp.family_version == "2"
-    assert ActivationReplayOp.schema_version == 3
-    assert ActivationReplayDesign.version == "2"
+    assert ActivationReplayOp.schema_version == 4
+    assert ActivationReplayKernel.version == "2"
     assert ReplayBufferKernel.version == "2"
     assert ReplayBufferKernel.region.version == "2"

@@ -33,7 +33,7 @@ from finn.dataflow.ops.mvau.regions import construct_weight_stream_region
 class MemstreamKernel(Kernel):
     """The decoupled weight supplier as one Region and, later, one module.
 
-    It owns no Decision.  Depth, width and repetition are the Design's folding
+    It owns no Decision.  Depth, width and repetition are the Kernel's folding
     restated in the memory's vocabulary, exactly as the replay buffer's are, and
     a supplier that picked its own depth would be picking a fold.
 

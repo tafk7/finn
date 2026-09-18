@@ -1,11 +1,11 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Checked physical composition below a selected :class:`DataflowDesign`.
+"""Checked physical composition below a selected composite :class:`Kernel`.
 
 The values in this module divide two responsibilities deliberately.  A
-``DesignPhysicalFacts`` retains the semantic correspondence needed by the Op
-that selected the Design.  Its ``ModuleBuildRequirements`` contains only the
+``CompositePhysicalFacts`` retains the semantic correspondence needed by the Op
+that selected the Kernel. Its ``ModuleBuildRequirements`` contains only the
 physical, reusable component description that artifact preparation may see.
 
 The first supported composition is the external-weight decomposed dot product:
@@ -28,8 +28,6 @@ from finn.dataflow._engine import (
     Finding,
     FindingKind,
     QualifiedPath,
-    ReadinessAssessment,
-    Unresolved,
 )
 from finn.dataflow.artifacts.abi import (
     Bus,
@@ -65,7 +63,6 @@ from finn.dataflow.kernels.physical import (
     PeriodicLast,
     UnusedBitPolicy,
     UnusedBitRange,
-    capture_kernel_realization,
     validate_kernel_stream_bindings,
 )
 from finn.dataflow.model.network import (
@@ -75,10 +72,11 @@ from finn.dataflow.model.network import (
     PositionMap,
 )
 from finn.dataflow.model.region import InputInterface, Port, element_width
-from finn.dataflow.space.occurrence import ProjectionAssessment, layer_runtime
+from finn.dataflow.space.declarations import Space, ValueSource
+from finn.dataflow.space.occurrence import layer_runtime
 
 if TYPE_CHECKING:
-    from finn.dataflow.designs.design import DataflowDesign
+    from finn.dataflow.kernels.kernel import Kernel
 
 
 class PhysicalCompositionError(ValueError):
@@ -242,7 +240,7 @@ class PhysicalStructure:
 
 
 @dataclass(frozen=True, slots=True)
-class DesignPhysicalFacts:
+class CompositePhysicalFacts:
     requirements: ModuleBuildRequirements
     port_bindings: tuple[SemanticPortBinding, ...]
     boundary_bindings: tuple[BoundaryBinding, ...]
@@ -256,15 +254,15 @@ class DesignPhysicalFacts:
 
 
 @dataclass(frozen=True, slots=True)
-class DesignPhysicalRelation:
+class LogicalPhysicalRelation:
     network: DataflowNetwork
-    physical: DesignPhysicalFacts
+    physical: CompositePhysicalFacts
 
     def __post_init__(self) -> None:
         if not isinstance(self.network, DataflowNetwork):
             raise TypeError("a physical relation contains one DataflowNetwork")
-        if not isinstance(self.physical, DesignPhysicalFacts):
-            raise TypeError("a physical relation contains DesignPhysicalFacts")
+        if not isinstance(self.physical, CompositePhysicalFacts):
+            raise TypeError("a physical relation contains CompositePhysicalFacts")
 
 
 @dataclass(frozen=True, slots=True)
@@ -1122,10 +1120,10 @@ def _check_payload(
         raise PhysicalCompositionError("payload padding policy disagrees with endpoint direction")
 
 
-def validate_design_physical_facts(
+def validate_kernel_physical_facts(
     network: DataflowNetwork,
     structure: PhysicalStructure,
-    facts: DesignPhysicalFacts,
+    facts: CompositePhysicalFacts,
 ) -> None:
     """Check semantic port, boundary, and edge coverage against one Network."""
 
@@ -1142,7 +1140,7 @@ def validate_design_physical_facts(
         producer=DECOMPOSED_PRODUCER,
         wrapper_template=DECOMPOSED_WRAPPER_TEMPLATE,
     ):
-        raise PhysicalCompositionError("Design facts do not contain this structure's requirements")
+        raise PhysicalCompositionError("Kernel facts do not contain this structure's requirements")
     ports = tuple(facts.port_bindings)
     if {(item.node_id, item.instance_id) for item in ports} != {
         ("replay", "u_replay"),
@@ -1597,91 +1595,63 @@ def lower_module_structure(
     )
 
 
-def design_physical_refusal(design: DataflowDesign, reason: str) -> Absent:
-    namespace = layer_runtime(design).compiled.namespace
+def kernel_physical_refusal(kernel: Kernel, reason: str) -> Absent:
+    namespace = layer_runtime(kernel).compiled.namespace
     return Absent(
         (
             Finding(
                 FindingKind.REJECTION,
-                "design-physically-unsupported",
+                "kernel-physically-unsupported",
                 QualifiedPath(f"{namespace}.physical"),
                 reason,
-                (("design", type(design).id or type(design).__name__),),
+                (("kernel", type(kernel).id or type(kernel).__name__),),
             ),
         )
     )
 
 
-def assess_design_physical(design: DataflowDesign) -> ProjectionAssessment[DesignPhysicalFacts]:
-    """Evaluate only the Design's local physical dependency closure."""
-
-    name = f"{layer_runtime(design).compiled.namespace}.physical"
-    answer = design.physical_implementation()
-    if not isinstance(answer, (Decided, Absent, Unresolved)):
-        raise TypeError("DataflowDesign.physical_implementation must return an Answer")
-    marker = QualifiedPath(name)
-    answers = {marker: cast("Answer[object]", answer)}
-    readiness = ReadinessAssessment(
-        name,
-        MappingProxyType(dict(sorted(answers.items()))),
-        None if isinstance(answer, Unresolved) else True,
-    )
-    return ProjectionAssessment(name, readiness, (), answer, answer)
-
-
-def assess_design_relation(design: DataflowDesign) -> ProjectionAssessment[DesignPhysicalRelation]:
-    """Check correspondence only when a consumer explicitly requests it."""
-
-    name = f"{layer_runtime(design).compiled.namespace}.physical_relation"
-    logical = design.dataflow
-    physical = design.physical
-    constraints = (*logical.constraints, *physical.constraints)
-    if not isinstance(logical.accepted_answer, Decided):
-        blocked = cast("Answer[DesignPhysicalRelation]", logical.accepted_answer)
-        return ProjectionAssessment(name, logical.readiness, constraints, blocked, blocked)
-    if not isinstance(physical.accepted_answer, Decided):
-        blocked = cast("Answer[DesignPhysicalRelation]", physical.accepted_answer)
-        return ProjectionAssessment(name, physical.readiness, constraints, blocked, blocked)
-    try:
-        facts = physical.accepted_answer.value
-        if facts.structure is None:
-            raise PhysicalCompositionError(
-                "the local physical result carries no relation-validation structure"
-            )
-        validate_design_physical_facts(
-            logical.accepted_answer.value,
-            facts.structure,
-            facts,
-        )
-        relation = DesignPhysicalRelation(logical.accepted_answer.value, facts)
-    except (TypeError, ValueError) as error:
-        refused: Answer[DesignPhysicalRelation] = design_physical_refusal(design, str(error))
-        return ProjectionAssessment(name, physical.readiness, constraints, refused, refused)
-    answer: Answer[DesignPhysicalRelation] = Decided(relation)
-    return ProjectionAssessment(name, physical.readiness, constraints, answer, answer)
-
-
-def selected_kernel_realization(
-    design: DataflowDesign, role: str
-) -> Answer[KernelRealizationFacts]:
+def selected_child_realization(kernel: Kernel, role: str) -> Answer[KernelRealizationFacts]:
     """Capture one selected child only, preserving its original point answer."""
 
-    selected = design.kernel(role)
+    selected = kernel.child(role)
     if not isinstance(selected, Decided):
         return cast("Answer[KernelRealizationFacts]", selected)
-    kernel = selected.value
-    physical = kernel.physical.accepted_answer
+    child = selected.value
+    if not isinstance(child, Space):
+        return cast(
+            "Answer[KernelRealizationFacts]",
+            kernel_physical_refusal(kernel, f"child {role!r} is not a Space occurrence"),
+        )
+    physical: Answer[object] = child.assess_view("physical").accepted_answer
     if not isinstance(physical, Decided):
         return cast("Answer[KernelRealizationFacts]", physical)
-    streams = kernel.answer(type(kernel).physical_streams)
+    if not isinstance(physical.value, ModuleBuildRequirements):
+        return cast(
+            "Answer[KernelRealizationFacts]",
+            kernel_physical_refusal(kernel, f"child {role!r} physical capability is not a module"),
+        )
+    streams_declaration = getattr(type(child), "physical_streams", None)
+    if not isinstance(streams_declaration, ValueSource):
+        return cast(
+            "Answer[KernelRealizationFacts]",
+            kernel_physical_refusal(
+                kernel, f"child {role!r} has no physical stream-binding capability"
+            ),
+        )
+    streams = child.answer(streams_declaration)
     if not isinstance(streams, Decided):
         return cast("Answer[KernelRealizationFacts]", streams)
     try:
-        return Decided(capture_kernel_realization(kernel))
-    except PhysicallyUnsupported as error:  # defensive against a changing child point
+        return Decided(
+            KernelRealizationFacts(
+                physical.value,
+                cast("tuple[KernelStreamBinding, ...]", streams.value),
+            )
+        )
+    except (PhysicallyUnsupported, TypeError, ValueError) as error:
         return cast(
             "Answer[KernelRealizationFacts]",
-            design_physical_refusal(design, str(error)),
+            kernel_physical_refusal(kernel, str(error)),
         )
 
 
@@ -1690,8 +1660,8 @@ __all__ = [
     "ConstantBits",
     "DECOMPOSED_PRODUCER",
     "DECOMPOSED_WRAPPER_TEMPLATE",
-    "DesignPhysicalFacts",
-    "DesignPhysicalRelation",
+    "CompositePhysicalFacts",
+    "LogicalPhysicalRelation",
     "EdgeBinding",
     "ModuleInstance",
     "PhysicalCompositionError",
@@ -1701,13 +1671,11 @@ __all__ = [
     "PinSlice",
     "SemanticPortBinding",
     "UnusedOutput",
-    "assess_design_physical",
-    "assess_design_relation",
     "compose_decomposed",
-    "design_physical_refusal",
+    "kernel_physical_refusal",
     "lower_module_structure",
-    "selected_kernel_realization",
+    "selected_child_realization",
     "top_boundary_layout",
-    "validate_design_physical_facts",
+    "validate_kernel_physical_facts",
     "validate_physical_structure",
 ]

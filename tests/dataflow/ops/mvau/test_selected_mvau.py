@@ -25,7 +25,6 @@ from finn.dataflow.analysis.integer_dot import (
     decode_dot_product_premise,
     encode_dot_product_premise,
 )
-from finn.dataflow.designs.design import SelectedGraph
 from finn.dataflow.kernels.dotp_axi import BatchInterleavedDotpAxiKernel, DotpAxiKernel
 from finn.dataflow.kernels.memstream import MemstreamKernel
 from finn.dataflow.kernels.replay_buffer import ReplayBufferKernel
@@ -36,9 +35,9 @@ from finn.dataflow.model.maps import (
 )
 from finn.dataflow.model.region import BeatSequence
 from finn.dataflow.ops.mvau.computation import AccumulationMode, ActivationMode
-from finn.dataflow.ops.mvau.designs.batch_interleaved import BatchInterleavedDesign
-from finn.dataflow.ops.mvau.designs.base import WeightedDotProductDesign
-from finn.dataflow.ops.mvau.designs.dot_product import DotProductDesign, WeightSupply
+from finn.dataflow.ops.mvau.kernels.batch_interleaved import BatchInterleavedKernel
+from finn.dataflow.ops.mvau.kernels.base import WeightedDotProductKernel
+from finn.dataflow.ops.mvau.kernels.dot_product import DotProductKernel, WeightSupply
 from finn.dataflow.ops.mvau.op import MvauDataflowOp
 from finn.dataflow.ops.mvau.numerics import (
     ACTIVATION_IDENTITY,
@@ -197,7 +196,7 @@ def _facts(
     source = SourceProvenance.create(
         family="finn.dataflow.mvau",
         family_version="1",
-        schema_version=5,
+        schema_version=6,
         problem_fingerprint="problem",
         scope_id="scope",
         operands=(
@@ -227,11 +226,11 @@ def _facts(
     )
     compute = "dotp_axi_embedded" if supply is WeightSupply.EMBEDDED else "dotp_axi"
     choices = (
-        RecordedChoice("design.case", "dot_product"),
-        RecordedChoice("design.dot_product.pe", pe),
-        RecordedChoice("design.dot_product.simd", simd),
-        RecordedChoice("design.dot_product.weight_supply", supply, supply.value),
-        RecordedChoice("design.dot_product.compute.kernel", compute),
+        RecordedChoice("kernel.case", "dot_product"),
+        RecordedChoice("kernel.dot_product.pe", pe),
+        RecordedChoice("kernel.dot_product.simd", simd),
+        RecordedChoice("kernel.dot_product.weight_supply", supply, supply.value),
+        RecordedChoice("kernel.dot_product.compute.kernel", compute),
     )
     facts = derive_mvau_facts(
         ConstructionIdentity(
@@ -317,12 +316,12 @@ def test_bound_mvau_routes_through_the_design_construction_hook(supply) -> None:
 
 def test_generic_lowering_interprets_declared_initializer_inputs() -> None:
     _model, operation = _configured_mvau(supply=WeightSupply.EMBEDDED, pe=2, simd=2)
-    declaration = DotProductDesign.selected_graph
+    declaration = DotProductKernel.selected_construction
     assert declaration is not None
     with patch.object(
-        DotProductDesign,
-        "selected_graph",
-        SelectedGraph(replace(declaration.construction, initializer_inputs=())),
+        DotProductKernel,
+        "selected_construction",
+        replace(declaration, initializer_inputs=()),
     ):
         answer = operation.selected_snapshot
     assert isinstance(answer, Absent)
@@ -345,19 +344,19 @@ def test_physical_compute_choice_does_not_change_the_selected_graph() -> None:
 
 def test_unresolved_physical_choice_does_not_block_selected_publication() -> None:
     model = _mvau_model()
-    chosen = _unbound(model, "mvau0").bind(model, Build()).design.select("dot_product").root
-    design = chosen.design.alternative("dot_product")
-    chosen = design.assign(DotProductDesign.weight_supply, WeightSupply.EXTERNAL).root
-    chosen = chosen.design.alternative("dot_product").compute.select("dotp_axi").root
+    chosen = _unbound(model, "mvau0").bind(model, Build()).kernel.select("dot_product").root
+    design = chosen.kernel.alternative("dot_product")
+    chosen = design.assign(DotProductKernel.weight_supply, WeightSupply.EXTERNAL).root
+    chosen = chosen.kernel.alternative("dot_product").compute.select("dotp_axi").root
     for declaration, value in (
-        (WeightedDotProductDesign.pe, 2),
-        (WeightedDotProductDesign.simd, 2),
+        (WeightedDotProductKernel.pe, 2),
+        (WeightedDotProductKernel.simd, 2),
     ):
-        chosen = chosen.design.alternative("dot_product").assign(declaration, value).root
+        chosen = chosen.kernel.alternative("dot_product").assign(declaration, value).root
 
     assert isinstance(chosen.network, Decided)
     assert isinstance(chosen.selected_snapshot, Decided)
-    assert "design.dot_product.compute.dotp_axi.compute_pumping" not in {
+    assert "kernel.dot_product.compute.dotp_axi.compute_pumping" not in {
         item.path for item in chosen.selected_snapshot.value.declaration.choices
     }
 
@@ -493,7 +492,7 @@ def test_selected_mvau_requires_semantically_consistent_choice_records() -> None
             facts.source_semantics,
             tuple(
                 replace(item, value="dotp_axi_embedded")
-                if item.path == "design.dot_product.compute.kernel"
+                if item.path == "kernel.dot_product.compute.kernel"
                 else item
                 for item in facts.choices
             ),
@@ -881,19 +880,19 @@ def test_batch_interleaved_keeps_source_support_and_refuses_selected_constructio
     assert isinstance(operation.network, Decided)
     answer = operation.selected_snapshot
     assert isinstance(answer, Absent)
-    assert {finding.code for finding in answer.findings} == {"selected-graph-unsupported-design"}
+    assert {finding.code for finding in answer.findings} == {"selected-graph-unsupported-kernel"}
 
 
 def test_step_4c_versions_change_only_the_migrated_semantics() -> None:
     assert MvauDataflowOp.family_version == "1"
-    assert MvauDataflowOp.schema_version == 5
-    assert MVAU_CONSTRUCTION_VERSION == "2"
-    assert DotProductDesign.version == "3"
+    assert MvauDataflowOp.schema_version == 6
+    assert MVAU_CONSTRUCTION_VERSION == "3"
+    assert DotProductKernel.version == "3"
     assert ReplayBufferKernel.version == "2"
     assert ReplayBufferKernel.region.version == "2"
     assert DotpAxiKernel.version == "2"
     assert DotpAxiKernel.region.version == "2"
-    assert BatchInterleavedDesign.version == "1"
+    assert BatchInterleavedKernel.version == "1"
     assert BatchInterleavedDotpAxiKernel.version == "1"
     assert BatchInterleavedDotpAxiKernel.region.version == "1"
     assert MemstreamKernel.version == "1"
@@ -949,7 +948,7 @@ def test_large_external_mvau_construction_and_decode_remain_compact(
     source = SourceProvenance.create(
         family="finn.dataflow.mvau",
         family_version="1",
-        schema_version=5,
+        schema_version=6,
         problem_fingerprint="large-problem",
         scope_id="large-scope",
         operands=(
@@ -972,11 +971,11 @@ def test_large_external_mvau_construction_and_decode_remain_compact(
         semantics=encode_mvau_source_semantics(semantics),
     )
     choices = (
-        RecordedChoice("design.case", "dot_product"),
-        RecordedChoice("design.dot_product.pe", 1),
-        RecordedChoice("design.dot_product.simd", 3),
-        RecordedChoice("design.dot_product.weight_supply", WeightSupply.EXTERNAL, "external"),
-        RecordedChoice("design.dot_product.compute.kernel", "dotp_axi"),
+        RecordedChoice("kernel.case", "dot_product"),
+        RecordedChoice("kernel.dot_product.pe", 1),
+        RecordedChoice("kernel.dot_product.simd", 3),
+        RecordedChoice("kernel.dot_product.weight_supply", WeightSupply.EXTERNAL, "external"),
+        RecordedChoice("kernel.dot_product.compute.kernel", "dotp_axi"),
     )
     facts = derive_mvau_facts(
         ConstructionIdentity(

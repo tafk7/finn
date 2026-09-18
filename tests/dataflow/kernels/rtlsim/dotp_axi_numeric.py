@@ -199,8 +199,8 @@ class Harness(Space):
     target_dsp = Problem(DspBlock)
     clock_period_ns = Problem(float)
 
-    # PE and SIMD are Region-visible, so a Design owns them; this fixture is
-    # the Design's stand-in for a Kernel-only run.
+    # PE and SIMD are Region-visible, so a Kernel owns them; this fixture is
+    # the Kernel's stand-in for a Kernel-only run.
     pe = Decision(int, domain=divisors_of(matrix_height))
     simd = Decision(int, domain=divisors_of(matrix_width))
 

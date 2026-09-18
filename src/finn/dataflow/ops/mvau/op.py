@@ -1,17 +1,17 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""MVAU as one source node over a closed set of Designs.
+"""MVAU as one source node over a closed set of Kernels.
 
 The operation is thin on purpose.  Everything below it -- the folding, the
-Regions, the topology, the weight path -- belongs to the Designs and the
+Regions, the topology, the weight path -- belongs to the Kernels and the
 Kernels, and everything above it belongs to the graph.  What lives here is the
-part only this operation can say: which Designs are its alternatives, how a
+part only this operation can say: which Kernels are its alternatives, how a
 matrix-vector node's tensors become the facts they read, and where each of
 those tensors ends up in whichever Network is selected.
 
 The operation *is* the root Space.  Its Problem members are its declared
-tensors and attributes, lowered from the source schema, and its ``design``
+tensors and attributes, lowered from the source schema, and its ``kernel``
 SubspaceChoice is an ordinary structural choice on the same class.  There is no
 separate source Space and no wrapper between the node and the point.
 """
@@ -64,9 +64,9 @@ from finn.dataflow.ops.mvau.numerics import (
 )
 from finn.dataflow.ops.source import SourceNode, SourceOperand
 from finn.dataflow.ops.tensor_summary import encode_frozen_initializer
-from finn.dataflow.ops.mvau.designs.base import WeightedDotProductDesign
-from finn.dataflow.ops.mvau.designs.batch_interleaved import BatchInterleavedDesign
-from finn.dataflow.ops.mvau.designs.dot_product import DotProductDesign
+from finn.dataflow.ops.mvau.kernels.base import WeightedDotProductKernel
+from finn.dataflow.ops.mvau.kernels.batch_interleaved import BatchInterleavedKernel
+from finn.dataflow.ops.mvau.kernels.dot_product import DotProductKernel
 from finn.dataflow.ops.schema import (
     Attribute,
     BuildFact,
@@ -144,35 +144,35 @@ def _numerical_rejection(report: IntegerSupportReport) -> object:
     )
 
 
-def _design_view(root: Space) -> ChoiceView:
-    return cast(ChoiceView, root.design)  # type: ignore[attr-defined]
+def _kernel_view(root: Space) -> ChoiceView:
+    return cast(ChoiceView, root.kernel)  # type: ignore[attr-defined]
 
 
-def _selected_design(root: Space) -> WeightedDotProductDesign:
-    """The live Design occurrence, or a refusal that says the choice is open."""
+def _selected_kernel(root: Space) -> WeightedDotProductKernel:
+    """The live Kernel occurrence, or a refusal that says the choice is open."""
 
-    view = _design_view(root)
+    view = _kernel_view(root)
     chosen = view.selected()
     if not isinstance(chosen, Decided):
         raise DataflowOpError(
-            "the Design alternative is not chosen yet, so nothing beneath it can be "
+            "the Kernel alternative is not chosen yet, so nothing beneath it can be "
             f"named ({unresolved_reason(chosen)})"
         )
-    return cast(WeightedDotProductDesign, view.alternative(chosen.value))
+    return cast(WeightedDotProductKernel, view.alternative(chosen.value))
 
 
 def _compute_segment(root: Space) -> ChoiceView:
-    return cast(ChoiceView, _selected_design(root).compute)  # type: ignore[attr-defined]
+    return cast(ChoiceView, _selected_kernel(root).compute)  # type: ignore[attr-defined]
 
 
 def _compute_kernel(root: Space) -> Space:
-    design = _selected_design(root)
-    kernel = design.kernel("compute")
+    composite = _selected_kernel(root)
+    kernel = composite.child("compute")
     if not isinstance(kernel, Decided):
         raise DataflowOpError(
             f"the compute candidate is not chosen yet ({unresolved_reason(kernel)})"
         )
-    return cast(Space, kernel.value)
+    return kernel.value
 
 
 class MvauDataflowOp(DataflowOp):
@@ -198,19 +198,19 @@ class MvauDataflowOp(DataflowOp):
         Accepted, and deliberately not restricted anywhere.  A shape ``(W,)``
         whose extent matches the matrix width is a single vector through the
         matrix -- ``repetitions`` evaluates to 1 by the same formula every
-        other rank uses, and the Designs need nothing special to build it.
+        other rank uses, and the Kernels need nothing special to build it.
 
         This paragraph previously claimed the opposite: that a rank-1
-        activation had no applicable Design and that
-        ``WeightedDotProductDesign`` rejected it.  No such rejection existed,
+        activation had no applicable Kernel and that
+        ``WeightedDotProductKernel`` rejected it. No such rejection existed,
         and none was added to make the sentence true -- a restriction has to be
-        argued from the mathematics or from a Design's structure, and neither
+        argued from the mathematics or from a Kernel's structure, and neither
         argues for one here.
     """
 
     family: ClassVar[str] = "finn.dataflow.mvau"
     family_version: ClassVar[str] = "1"
-    schema_version: ClassVar[int] = 5
+    schema_version: ClassVar[int] = 6
 
     # -- the source schema ----------------------------------------------------
 
@@ -351,7 +351,7 @@ class MvauDataflowOp(DataflowOp):
     ) -> object:
         """What this node computes, on both of the axes that decide it.
 
-        Derived once and read by everything -- the execution, the Designs'
+        Derived once and read by everything -- the execution, the Kernels'
         applicability, any later parity record -- so a consumer that asked
         ``noActivation`` directly could not come to disagree with it.  The
         operand datatypes are dependencies because the accumulation genuinely
@@ -512,7 +512,7 @@ class MvauDataflowOp(DataflowOp):
         node that says it fuses an activation and supplies no thresholds cannot
         be executed, and one that supplies thresholds while claiming it does
         not fuse would silently ignore them.  The check is on the operation
-        because it is the operation's own mathematics -- no Design has an
+        because it is the operation's own mathematics -- no Kernel has an
         opinion about it.
         """
 
@@ -576,10 +576,10 @@ class MvauDataflowOp(DataflowOp):
 
     # -- the composition ------------------------------------------------------
 
-    design = SubspaceChoice(
+    kernel = SubspaceChoice(
         {
             "dot_product": Subspace(
-                DotProductDesign,
+                DotProductKernel,
                 repetitions=repetitions,
                 matrix_width=matrix_width,
                 matrix_height=matrix_height,
@@ -599,7 +599,7 @@ class MvauDataflowOp(DataflowOp):
                 weight_initializer=allow_absent(weight.initializer_value),
             ),
             "batch_interleaved": Subspace(
-                BatchInterleavedDesign,
+                BatchInterleavedKernel,
                 repetitions=repetitions,
                 matrix_width=matrix_width,
                 matrix_height=matrix_height,
@@ -619,17 +619,17 @@ class MvauDataflowOp(DataflowOp):
     # -- the projections ------------------------------------------------------
 
     def selected_dataflow(self) -> ProjectionAssessment[DataflowNetwork] | None:
-        view = _design_view(self)
+        view = _kernel_view(self)
         chosen = view.selected()
         if not isinstance(chosen, Decided):
             return None
-        return cast(WeightedDotProductDesign, view.alternative(chosen.value)).dataflow
+        return cast(
+            "ProjectionAssessment[DataflowNetwork]",
+            cast(WeightedDotProductKernel, view.alternative(chosen.value)).dataflow,
+        )
 
-    def selected_implementation(self) -> object:
-        return _selected_design(self)
-
-    def selected_design(self) -> object:
-        return self.selected_implementation()
+    def selected_kernel(self) -> object:
+        return _selected_kernel(self)
 
     def selected_source_semantics(self) -> object:
         from finn.dataflow.ops.mvau.selected import (  # noqa: PLC0415

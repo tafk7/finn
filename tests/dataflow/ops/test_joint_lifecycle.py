@@ -17,7 +17,7 @@ import pytest
 from onnx import helper  # type: ignore[import-not-found]
 from qonnx.core.modelwrapper import ModelWrapper  # type: ignore[import-not-found]
 
-import finn.dataflow.designs.design as design_module
+import finn.dataflow.kernels.kernel as design_module
 import finn.dataflow.ops.mapping as mapping_module
 from finn.dataflow._engine import Absent, Decided, Unresolved
 from finn.dataflow.artifacts.derivation import ContentRef, build_key
@@ -28,7 +28,7 @@ from finn.dataflow.conformance import (
     DataflowOpConformanceCase,
     assert_dataflow_op_conforms,
 )
-from finn.dataflow.designs import DataflowDesign
+from finn.dataflow.kernels import Kernel
 from finn.dataflow.kernels import ModuleBuildRequirements
 from finn.dataflow.artifacts.build import (
     FixedModuleName,
@@ -65,10 +65,10 @@ from finn.dataflow.ops.schema import Attribute
 from finn.dataflow.space import Subspace
 from finn.dataflow.space.occurrence import ProjectionAssessment, occurrence_persistable
 
-_projection_fixtures = import_module("dataflow.designs.test_projection_boundary")
+_projection_fixtures = import_module("dataflow.kernels.test_composition_boundary")
 MissingSource: Any = _projection_fixtures.MissingSource
-RefusingDesign: Any = _projection_fixtures.RefusingDesign
-SuppliedDesign: Any = _projection_fixtures.SuppliedDesign
+RefusingKernel: Any = _projection_fixtures.RefusingKernel
+SuppliedKernel: Any = _projection_fixtures.SuppliedKernel
 
 _conformance_fixtures = import_module("dataflow.ops.test_conformance")
 Build: Any = _conformance_fixtures.Build
@@ -127,7 +127,7 @@ def _observe_artifacts(spec: ModuleBuildRequirements) -> _ArtifactObservation:
 
 
 def _replay_spec(operation: Any) -> ModuleBuildRequirements:
-    kernel = operation.design.kernel("replay")
+    kernel = operation.kernel.child("replay")
     assert isinstance(kernel, Decided)
     assert kernel.value.root is operation.root
     physical = kernel.value.physical.accepted_answer
@@ -151,8 +151,8 @@ def test_native_reload_to_accepted_mapping_and_portable_artifact(
     bound = bind_operations(model, build)[0]
     assert isinstance(bound, ActivationReplayOp)
     assert bound.root is bound
-    assert bound.design.root is bound
-    initial_kernel = bound.design.kernel("replay")
+    assert bound.kernel.root is bound
+    initial_kernel = bound.kernel.child("replay")
     assert isinstance(initial_kernel, Decided)
     assert initial_kernel.value.root is bound
     assert isinstance(bound.dataflow.accepted_answer, Unresolved)
@@ -176,19 +176,19 @@ def test_native_reload_to_accepted_mapping_and_portable_artifact(
 
     saved = ModelWrapper(str(reload_path))
     attributes = read_attributes(saved.graph.node[0])
-    assert attributes["design__pe"] == NativeAttribute("i", 1)
-    assert attributes["design__simd"] == NativeAttribute("i", 4)
-    assert attributes[SCHEMA_VERSION_ATTRIBUTE] == NativeAttribute("i", 3)
+    assert attributes["kernel__pe"] == NativeAttribute("i", 1)
+    assert attributes["kernel__simd"] == NativeAttribute("i", 4)
+    assert attributes[SCHEMA_VERSION_ATTRIBUTE] == NativeAttribute("i", 4)
     assert set(attributes) == {
         "neuron_folds",
         SCOPE_ID_ATTRIBUTE,
         FINGERPRINT_ATTRIBUTE,
         SCHEMA_VERSION_ATTRIBUTE,
-        "design__pe",
-        "design__simd",
+        "kernel__pe",
+        "kernel__simd",
     }
     assert "dataflow_state" not in attributes
-    assert dict(result.committed.recorded()) == {"design.pe": 1, "design.simd": 4}
+    assert dict(result.committed.recorded()) == {"kernel.pe": 1, "kernel.simd": 4}
     assert result.committed.problem_fingerprint == result.restored.problem_fingerprint
 
     restored_model = saved.transform(InferShapes())
@@ -235,14 +235,14 @@ def test_native_reload_to_accepted_mapping_and_portable_artifact(
 
     spec = _replay_spec(restored)
     assert not hasattr(spec, "region")
-    kernel = restored.design.kernel("replay")
+    kernel = restored.kernel.child("replay")
     assert isinstance(kernel, Decided)
     assert kernel.value.dataflow.accepted_answer == Decided(network.node("replay").region)
     assert dict(spec.parameters) == {"LEN": 2, "REP": 4, "W": 32}
     assert isinstance(spec.abi.entry_point, FixedModuleName)
     assert spec.abi.entry_point.value == "replay_buffer"
     persisted = {item.path for item in occurrence_persistable(restored)}
-    assert {"design.pe", "design.simd"} <= persisted
+    assert {"kernel.pe", "kernel.simd"} <= persisted
 
     committed_spec = _replay_spec(result.committed)
     assert committed_spec == spec
@@ -274,31 +274,31 @@ class _RefusalProbe(DataflowOp):
 
 class _KernelRefusalOp(_RefusalProbe):
     family: ClassVar[str] = "test.c2.kernel_refusal"
-    design = Subspace(SuppliedDesign, width=_RefusalProbe.width)
+    kernel = Subspace(SuppliedKernel, width=_RefusalProbe.width)
 
     def selected_dataflow(self) -> ProjectionAssessment[DataflowNetwork] | None:
-        return cast(DataflowDesign, self.design).dataflow
+        return cast("ProjectionAssessment[DataflowNetwork]", cast(Kernel, self.kernel).dataflow)
 
 
-class _DesignRefusalOp(_RefusalProbe):
+class _KernelRefusalCompositeOp(_RefusalProbe):
     family: ClassVar[str] = "test.c2.design_refusal"
-    design = Subspace(RefusingDesign, width=_RefusalProbe.width)
+    kernel = Subspace(RefusingKernel, width=_RefusalProbe.width)
 
     def selected_dataflow(self) -> ProjectionAssessment[DataflowNetwork] | None:
-        return cast(DataflowDesign, self.design).dataflow
+        return cast("ProjectionAssessment[DataflowNetwork]", cast(Kernel, self.kernel).dataflow)
 
 
 class _InvalidTopologyOp(_RefusalProbe):
     family: ClassVar[str] = "test.c2.invalid_topology"
-    design = Subspace(MissingSource, width=_RefusalProbe.width)
+    kernel = Subspace(MissingSource, width=_RefusalProbe.width)
 
     def selected_dataflow(self) -> ProjectionAssessment[DataflowNetwork] | None:
-        return cast(DataflowDesign, self.design).dataflow
+        return cast("ProjectionAssessment[DataflowNetwork]", cast(Kernel, self.kernel).dataflow)
 
 
 @pytest.mark.parametrize(
     ("operation_type", "width"),
-    ((_KernelRefusalOp, 1), (_DesignRefusalOp, 2), (_InvalidTopologyOp, 2)),
+    ((_KernelRefusalOp, 1), (_KernelRefusalCompositeOp, 2), (_InvalidTopologyOp, 2)),
 )
 def test_design_rejections_cross_the_operation_boundary_without_presentation(
     operation_type: type[_RefusalProbe],
@@ -327,7 +327,10 @@ def test_design_rejections_cross_the_operation_boundary_without_presentation(
     bound = operation.bind(model, Build())
     selected = bound.selected_dataflow()
     assert selected is not None
-    assert isinstance(selected.output, Decided)
+    if operation_type is _InvalidTopologyOp:
+        assert isinstance(selected.output, Absent)
+    else:
+        assert isinstance(selected.output, Decided)
     assert isinstance(selected.accepted_answer, Absent)
 
     def unexpected_presentation(*_args: object, **_kwargs: object) -> object:

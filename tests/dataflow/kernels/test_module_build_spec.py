@@ -110,7 +110,7 @@ def _built(namespace: str) -> tuple[ModuleBuildRequirements, ModuleRoot]:
     leaf = root.implementation.alternative("first")
     answer = cast(ModuleKernel, leaf).physical.accepted_answer
     assert isinstance(answer, Decided)
-    return answer.value, root
+    return cast(ModuleBuildRequirements, answer.value), root
 
 
 def test_build_spec_has_only_the_locked_detached_fields() -> None:
@@ -191,7 +191,7 @@ class UnavailableModule(ModuleKernel):
     def physical_pipeline(*, pipeline: int) -> bool:
         raise AssertionError("a permanently unavailable implementation must not query physics")
 
-    dataflow_support = ConstraintGroup(semantic_width)
+    logical_support = ConstraintGroup(semantic_width)
     physical_support = ConstraintGroup(semantic_width, physical_pipeline)
 
     @classmethod

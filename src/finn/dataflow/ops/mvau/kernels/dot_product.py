@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The three ways a matrix can reach the production dot-product Design.
+"""The three ways a matrix can reach the production dot-product Kernel.
 
 ```text
 external    activation -> replay -> compute -> output
@@ -22,7 +22,7 @@ and memstream currently have no standalone module, while their Networks still
 resolve.
 
 Initializer presence does not choose the mode. ``initializer_present`` is a
-source fact used only by this Design's admission policy: modes that keep the
+source fact used only by this Kernel's admission policy: modes that keep the
 matrix locally require an initializer. External supply remains available with
 or without one.
 """
@@ -30,28 +30,26 @@ or without one.
 from __future__ import annotations
 
 from dataclasses import replace
-from typing import cast
 
-from finn.dataflow._engine import Answer, Decided
-from finn.dataflow.designs.physical import (
+from finn.dataflow.analysis.integer_dot import IntegerSupportReport
+from finn.dataflow.artifacts.build import ModuleBuildRequirements
+from finn.dataflow.kernels.physical_composition import (
     BoundaryBinding,
     DECOMPOSED_PRODUCER,
     DECOMPOSED_WRAPPER_TEMPLATE,
-    DesignPhysicalFacts,
+    CompositePhysicalFacts,
     EdgeBinding,
     SemanticPortBinding,
     compose_decomposed,
-    design_physical_refusal,
     lower_module_structure,
-    selected_kernel_realization,
     top_boundary_layout,
 )
-from finn.dataflow.designs.design import (
+from finn.dataflow.kernels.physical import KernelRealizationFacts, KernelStreamBinding
+from finn.dataflow.kernels.kernel import (
     EdgeSink,
     KernelChoice,
     NetworkBoundary,
     NetworkEdge,
-    SelectedGraph,
 )
 from finn.dataflow.kernels.dotp_axi import (
     DotpAxiKernel,
@@ -60,8 +58,9 @@ from finn.dataflow.kernels.dotp_axi import (
 )
 from finn.dataflow.kernels.memstream import MemstreamKernel
 from finn.dataflow.kernels.replay_buffer import ReplayBufferKernel
-from finn.dataflow.ops.mvau.designs.base import SHARED_INPUTS, WeightedDotProductDesign
-from finn.dataflow.ops.mvau.designs.supply import WeightSupply
+from finn.dataflow.ops.mvau.kernels.base import SHARED_INPUTS, WeightedDotProductKernel
+from finn.dataflow.ops.mvau.kernels.supply import WeightSupply
+from finn.dataflow.ops.mvau.computation import MvauComputationProfile
 from finn.dataflow.ops.mvau.selected import (
     MVAU_SELECTED_CONSTRUCTION,
     WEIGHT_KEY,
@@ -74,32 +73,33 @@ from finn.dataflow.space.declarations import (
     Decision,
     Input,
     Subspace,
+    allow_absent,
     constraint,
     derived,
     reject,
 )
 
 
-class DotProductDesign(WeightedDotProductDesign):
+class DotProductKernel(WeightedDotProductKernel):
     """Replay and dot product with an explicitly selected weight supply."""
 
     id = "dot_product"
     version = "3"
 
-    repetitions = WeightedDotProductDesign.repetitions
-    matrix_width = WeightedDotProductDesign.matrix_width
-    matrix_height = WeightedDotProductDesign.matrix_height
-    activation_type = WeightedDotProductDesign.activation_type
-    weight_type = WeightedDotProductDesign.weight_type
-    accumulator_type = WeightedDotProductDesign.accumulator_type
-    output_type = WeightedDotProductDesign.output_type
-    computation_profile = WeightedDotProductDesign.computation_profile
-    numerical_support = WeightedDotProductDesign.numerical_support
-    narrow_weights = WeightedDotProductDesign.narrow_weights
-    target_dsp = WeightedDotProductDesign.target_dsp
-    clock_period_ns = WeightedDotProductDesign.clock_period_ns
-    pe = WeightedDotProductDesign.pe
-    simd = WeightedDotProductDesign.simd
+    repetitions = WeightedDotProductKernel.repetitions
+    matrix_width = WeightedDotProductKernel.matrix_width
+    matrix_height = WeightedDotProductKernel.matrix_height
+    activation_type = WeightedDotProductKernel.activation_type
+    weight_type = WeightedDotProductKernel.weight_type
+    accumulator_type = WeightedDotProductKernel.accumulator_type
+    output_type = WeightedDotProductKernel.output_type
+    computation_profile = WeightedDotProductKernel.computation_profile
+    numerical_support = WeightedDotProductKernel.numerical_support
+    narrow_weights = WeightedDotProductKernel.narrow_weights
+    target_dsp = WeightedDotProductKernel.target_dsp
+    clock_period_ns = WeightedDotProductKernel.clock_period_ns
+    pe = WeightedDotProductKernel.pe
+    simd = WeightedDotProductKernel.simd
 
     initializer_present = Input(bool)
     weight_initializer = Input(FrozenInitializer, allow_absent=True)
@@ -123,6 +123,7 @@ class DotProductDesign(WeightedDotProductDesign):
             pe=pe,
             simd=simd,
         ),
+        outputs=("logical_result", "physical_result", "physical_streams"),
     )
 
     compute = KernelChoice(
@@ -156,6 +157,7 @@ class DotProductDesign(WeightedDotProductDesign):
             pe=pe,
             simd=simd,
         ),
+        outputs=("logical_result", "physical_result", "physical_streams"),
     )
 
     memory = KernelChoice(
@@ -198,62 +200,61 @@ class DotProductDesign(WeightedDotProductDesign):
             )
         return True
 
-    dataflow_support = ConstraintGroup(
-        *WeightedDotProductDesign.dataflow_support.constraints,
+    logical_support = ConstraintGroup(
+        *WeightedDotProductKernel.logical_support.constraints,
         local_weights_need_an_initializer,
         name="supply_available",
     )
 
-    def physical_implementation(self) -> Answer[DesignPhysicalFacts]:
+    @derived(
+        CompositePhysicalFacts,
+        profile=computation_profile,
+        numerical=allow_absent(numerical_support),
+        supply=weight_supply,
+        replay_requirements=replay.physical_result,
+        replay_streams=replay.physical_streams,
+        compute_requirements=compute.physical_result,
+        compute_streams=compute.physical_streams,
+    )
+    def physical_result(
+        *,
+        profile: MvauComputationProfile,
+        numerical: object,
+        supply: WeightSupply,
+        replay_requirements: ModuleBuildRequirements,
+        replay_streams: tuple[KernelStreamBinding, ...],
+        compute_requirements: ModuleBuildRequirements,
+        compute_streams: tuple[KernelStreamBinding, ...],
+    ) -> object:
         """Build the selected external Replay/Dotp composition only."""
 
-        profile = self.answer(type(self).computation_profile)
-        if not isinstance(profile, Decided):
-            return cast("Answer[DesignPhysicalFacts]", profile)
-        numerical = self.answer(type(self).numerical_support)
-        report = numerical.value if isinstance(numerical, Decided) else None
+        report = numerical if isinstance(numerical, IntegerSupportReport) else None
         try:
-            require_dotp_axi_numerical_support(report, profile.value)
+            require_dotp_axi_numerical_support(report, profile)
         except ValueError as error:
-            return cast(
-                "Answer[DesignPhysicalFacts]",
-                design_physical_refusal(self, str(error)),
+            return reject("kernel-physically-unsupported", str(error))
+
+        if supply is not WeightSupply.EXTERNAL:
+            return reject(
+                "kernel-physically-unsupported",
+                f"{supply.value} weight supply has no supported composed module",
             )
 
-        supply = self.answer(type(self).weight_supply)
-        if not isinstance(supply, Decided):
-            return cast("Answer[DesignPhysicalFacts]", supply)
-        if supply.value is not WeightSupply.EXTERNAL:
-            return cast(
-                "Answer[DesignPhysicalFacts]",
-                design_physical_refusal(
-                    self,
-                    f"{supply.value.value} weight supply has no supported composed module",
-                ),
-            )
-
-        replay = selected_kernel_realization(self, "replay")
-        if not isinstance(replay, Decided):
-            return cast("Answer[DesignPhysicalFacts]", replay)
-        compute = selected_kernel_realization(self, "compute")
-        if not isinstance(compute, Decided):
-            return cast("Answer[DesignPhysicalFacts]", compute)
+        replay = KernelRealizationFacts(replay_requirements, replay_streams)
+        compute = KernelRealizationFacts(compute_requirements, compute_streams)
 
         try:
-            structure = compose_decomposed(replay=replay.value, compute=compute.value)
+            structure = compose_decomposed(replay=replay, compute=compute)
             requirements = lower_module_structure(
                 structure,
                 producer=DECOMPOSED_PRODUCER,
                 wrapper_template=DECOMPOSED_WRAPPER_TEMPLATE,
             )
             port_bindings = (
-                *(
-                    SemanticPortBinding("replay", "u_replay", binding)
-                    for binding in replay.value.streams
-                ),
+                *(SemanticPortBinding("replay", "u_replay", binding) for binding in replay.streams),
                 *(
                     SemanticPortBinding("compute", "u_compute", binding)
-                    for binding in compute.value.streams
+                    for binding in compute.streams
                 ),
             )
             replay_activation = next(
@@ -271,7 +272,7 @@ class DotProductDesign(WeightedDotProductDesign):
                 for binding in port_bindings
                 if binding.node_id == "compute" and binding.local.region_port_id == "output"
             )
-            facts = DesignPhysicalFacts(
+            facts = CompositePhysicalFacts(
                 requirements,
                 port_bindings,
                 (
@@ -319,14 +320,11 @@ class DotProductDesign(WeightedDotProductDesign):
                 structure,
             )
         except (KeyError, StopIteration, ValueError) as error:
-            return cast(
-                "Answer[DesignPhysicalFacts]",
-                design_physical_refusal(self, str(error)),
-            )
-        return Decided(facts)
+            return reject("kernel-physically-unsupported", str(error))
+        return facts
 
 
-DESIGN_INPUTS = (*SHARED_INPUTS, "initializer_present", "weight_initializer")
+KERNEL_INPUTS = (*SHARED_INPUTS, "initializer_present", "weight_initializer")
 
 
 def _local_weight_required(facts: SelectionFacts[object, object]) -> bool:
@@ -338,17 +336,15 @@ def _local_weight_required(facts: SelectionFacts[object, object]) -> bool:
     )
 
 
-DotProductDesign.selected_graph = SelectedGraph(
-    replace(
-        MVAU_SELECTED_CONSTRUCTION,
-        initializer_inputs=(
-            SelectedInitializerInput(
-                WEIGHT_KEY,
-                DotProductDesign.weight_initializer,
-                _local_weight_required,
-            ),
+DotProductKernel.selected_construction = replace(
+    MVAU_SELECTED_CONSTRUCTION,
+    initializer_inputs=(
+        SelectedInitializerInput(
+            WEIGHT_KEY,
+            DotProductKernel.weight_initializer,
+            _local_weight_required,
         ),
-    )
+    ),
 )
 
-__all__ = ["DESIGN_INPUTS", "DotProductDesign", "WeightSupply"]
+__all__ = ["KERNEL_INPUTS", "DotProductKernel", "WeightSupply"]

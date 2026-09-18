@@ -45,7 +45,7 @@ class Harness(Space):
     target_dsp = Problem(DspBlock)
     clock_period_ns = Problem(float)
 
-    # PE and SIMD change the Region, so a Design owns them.  A standalone Kernel
+    # PE and SIMD change the Region, so a Kernel owns them.  A standalone Kernel
     # fixture needs a harness that owns the same choices.
     pe = Decision(int, domain=divisors_of(matrix_height))
     simd = Decision(int, domain=divisors_of(matrix_width))
@@ -183,7 +183,7 @@ def test_dotp_owns_only_its_physical_decision() -> None:
     configured = _configure(pe=2, simd=4, pumping=True)
     assert isinstance(configured, Decided)
     assert not hasattr(configured.value, "imported_decisions")
-    assert [str(x) for x in _compile()[1].extension.physical_decisions] == [
+    assert [str(x.path) for x in _compile()[1].spec.decisions] == [
         "dotp_test.kernel.compute_pumping"
     ]
 

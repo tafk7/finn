@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING
 
-from finn.dataflow._engine import Decided
+from finn.dataflow._engine import Answer, Decided
 from finn.dataflow.artifacts.abi import Bus, Endpoint, StandardProtocol
 from finn.dataflow.artifacts.build import ModuleABIRequirements, ModuleBuildRequirements
 from finn.dataflow.model.region import DataflowRegion, InputInterface, Port, element_width
@@ -226,10 +226,17 @@ def capture_kernel_realization(kernel: Kernel) -> KernelRealizationFacts:
     """Capture requirements and authored mappings from the same child point."""
     from finn.dataflow.kernels.kernel import PhysicallyUnsupported  # noqa: PLC0415
 
-    physical = kernel.physical.accepted_answer
+    physical: Answer[object] = kernel.assess_view("physical").accepted_answer
     if not isinstance(physical, Decided):
         raise PhysicallyUnsupported(f"Kernel physical projection is not accepted: {physical}")
-    bindings = kernel.answer(type(kernel).physical_streams)
+    if not isinstance(physical.value, ModuleBuildRequirements):
+        raise PhysicallyUnsupported("Kernel physical projection returned the wrong value")
+    from finn.dataflow.space.declarations import ValueSource  # noqa: PLC0415
+
+    streams_declaration = getattr(type(kernel), "physical_streams", None)
+    if not isinstance(streams_declaration, ValueSource):
+        raise PhysicallyUnsupported("Kernel has no physical stream-binding capability")
+    bindings = kernel.answer(streams_declaration)
     if not isinstance(bindings, Decided):
         raise PhysicallyUnsupported(f"Kernel stream bindings are not available: {bindings}")
     return KernelRealizationFacts(physical.value, bindings.value)

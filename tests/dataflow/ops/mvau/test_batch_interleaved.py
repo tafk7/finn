@@ -1,12 +1,12 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""G7: the distinct batch-interleaved Design against the layer as it stands.
+"""G7: the distinct batch-interleaved Kernel against the layer as it stands.
 
 The point of this module is not that batch interleaving works -- the Region
 mathematics was retained from U1.5 and is compared against here, not rewritten.
-Its Design-owned interleave Decision needs no special persistence code or new
-Design mechanism. Every claim below is a claim about that retained alternative.
+Its Kernel-owned interleave Decision needs no special persistence code or new
+Kernel mechanism. Every claim below is a claim about that retained alternative.
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ from qonnx.core.modelwrapper import ModelWrapper  # type: ignore[import-not-foun
 
 from finn.dataflow._engine import Absent, Answer, Decided, QualifiedPath, Unresolved
 from finn.dataflow.analysis.integer_dot import IntegerSupportReport
-from finn.dataflow.designs.design import NetworkBoundary, KernelChoice
+from finn.dataflow.kernels.kernel import NetworkBoundary, KernelChoice
 from finn.dataflow.kernels.dotp_axi import (
     BatchInterleavedDotpAxiKernel,
     DotpAxiKernel,
@@ -48,12 +48,12 @@ from finn.dataflow.ops.mvau.computation import (
     ActivationMode,
     MvauComputationProfile,
 )
-from finn.dataflow.ops.mvau.designs.base import WeightedDotProductDesign
-from finn.dataflow.ops.mvau.designs.batch_interleaved import (
-    DESIGN_INPUTS,
-    BatchInterleavedDesign,
+from finn.dataflow.ops.mvau.kernels.base import WeightedDotProductKernel
+from finn.dataflow.ops.mvau.kernels.batch_interleaved import (
+    KERNEL_INPUTS,
+    BatchInterleavedKernel,
 )
-from finn.dataflow.ops.mvau.designs.dot_product import DotProductDesign, WeightSupply
+from finn.dataflow.ops.mvau.kernels.dot_product import DotProductKernel, WeightSupply
 from finn.dataflow.ops.mvau.op import MvauDataflowOp
 from finn.dataflow.space.declarations import derived
 from finn.dataflow.ops.schema import BuildFact, DatatypeAttribute, OpInput, OpOutput
@@ -76,7 +76,7 @@ class Build:
 
 
 class Problem_(Space):
-    """The graph-side facts, exactly as the other Design tests state them."""
+    """The graph-side facts, exactly as the other Kernel tests state them."""
 
     repetitions = Problem(int)
     matrix_width = Problem(int)
@@ -93,10 +93,10 @@ class Problem_(Space):
 
 
 class Placed(Problem_):
-    design = Subspace(
-        BatchInterleavedDesign,
+    kernel = Subspace(
+        BatchInterleavedKernel,
         name="batch_interleaved",
-        **{name: cast("ValueSource[object]", getattr(Problem_, name)) for name in DESIGN_INPUTS},
+        **{name: cast("ValueSource[object]", getattr(Problem_, name)) for name in KERNEL_INPUTS},
     )
 
 
@@ -112,7 +112,7 @@ def _occurrence(
     pe: int = 2,
     simd: int = 2,
     interleave: int = 2,
-) -> BatchInterleavedDesign:
+) -> BatchInterleavedKernel:
     root = Placed.start(
         {
             Placed.repetitions: repetitions,
@@ -131,12 +131,12 @@ def _occurrence(
         },
         namespace="mvau",
     )
-    design = cast(BatchInterleavedDesign, root.design)
-    design = design.assign(BatchInterleavedDesign.pe, pe)
-    design = design.assign(BatchInterleavedDesign.simd, simd)
+    design = cast(BatchInterleavedKernel, root.kernel)
+    design = design.assign(BatchInterleavedKernel.pe, pe)
+    design = design.assign(BatchInterleavedKernel.simd, simd)
     return cast(
-        BatchInterleavedDesign,
-        design.assign(BatchInterleavedDesign.interleave, interleave),
+        BatchInterleavedKernel,
+        design.assign(BatchInterleavedKernel.interleave, interleave),
     )
 
 
@@ -181,7 +181,7 @@ def test_the_interleaved_region_matches_the_retained_authority(
     interleave: int,
     target: DspBlock,
 ) -> None:
-    """The Design places the U1.5 Region, element for element."""
+    """The Kernel places the U1.5 Region, element for element."""
 
     del label
     design = _occurrence(
@@ -204,7 +204,7 @@ def test_the_interleaved_region_matches_the_retained_authority(
         simd,
         interleave,
     )
-    assert design.region("compute") == Decided(expected)
+    assert design.child_region("compute") == Decided(expected)
 
     network = design.dataflow.accepted_answer
     assert isinstance(network, Decided), network
@@ -318,17 +318,17 @@ def test_a_fused_threshold_node_is_refused_by_the_inherited_constraint() -> None
         },
         namespace="mvau",
     )
-    design = cast(BatchInterleavedDesign, root.design)
-    design = design.assign(BatchInterleavedDesign.pe, 2)
-    design = design.assign(BatchInterleavedDesign.simd, 2)
-    design = design.assign(BatchInterleavedDesign.interleave, 2)
+    design = cast(BatchInterleavedKernel, root.kernel)
+    design = design.assign(BatchInterleavedKernel.pe, 2)
+    design = design.assign(BatchInterleavedKernel.simd, 2)
+    design = design.assign(BatchInterleavedKernel.interleave, 2)
     codes = {
         finding.code
         for answer in design.dataflow.constraints[0].answers.values()
         if isinstance(answer, Absent)
         for finding in answer.findings
     }
-    assert "mvau-design-fuses-no-activation" in codes
+    assert "mvau-kernel-fuses-no-activation" in codes
 
 
 def test_the_build_unit_is_honestly_unavailable() -> None:
@@ -336,7 +336,7 @@ def test_the_build_unit_is_honestly_unavailable() -> None:
 
     design = _occurrence()
     assert isinstance(design.dataflow.accepted_answer, Decided)
-    kernel = design.kernel("compute")
+    kernel = design.child("compute")
     assert isinstance(kernel, Decided)
     built = kernel.value.physical.accepted_answer
     assert isinstance(built, Absent)
@@ -344,15 +344,15 @@ def test_the_build_unit_is_honestly_unavailable() -> None:
 
 
 def test_interleave_is_a_design_decision_and_the_kernel_imports_it() -> None:
-    """The deliberate Design-owned lift remains explicit and imported."""
+    """The deliberate Kernel-owned lift remains explicit and imported."""
 
     root = _compile_space(Problem_, "mvau", problem_namespace="problem.mvau")
     design = _compile_space(
-        BatchInterleavedDesign,
+        BatchInterleavedKernel,
         "mvau.batch_interleaved",
         {
             name: cast(Any, root.member(name))
-            for name in DESIGN_INPUTS  # the Design's Inputs, bound to the problem
+            for name in KERNEL_INPUTS  # the Kernel's Inputs, bound to the problem
         },
         _allow_problem=False,
     )
@@ -413,13 +413,13 @@ def _unbound(model: ModelWrapper) -> DataflowOp:
 
 
 def _interleaved_operation(model: ModelWrapper, *, interleave: int = 2) -> MvauDataflowOp:
-    chosen = _unbound(model).bind(model, Build()).design.select("batch_interleaved").root
+    chosen = _unbound(model).bind(model, Build()).kernel.select("batch_interleaved").root
     for declaration, value in (
-        (WeightedDotProductDesign.pe, 2),
-        (WeightedDotProductDesign.simd, 2),
-        (BatchInterleavedDesign.interleave, interleave),
+        (WeightedDotProductKernel.pe, 2),
+        (WeightedDotProductKernel.simd, 2),
+        (BatchInterleavedKernel.interleave, interleave),
     ):
-        chosen = chosen.design.alternative("batch_interleaved").assign(declaration, value).root
+        chosen = chosen.kernel.alternative("batch_interleaved").assign(declaration, value).root
     committed = chosen.commit(model, Build())
     assert isinstance(committed, MvauDataflowOp)
     return committed
@@ -427,7 +427,7 @@ def _interleaved_operation(model: ModelWrapper, *, interleave: int = 2) -> MvauD
 
 def test_the_operation_offers_two_alternatives() -> None:
     model = _mvau_model()
-    view = _unbound(model).bind(model, Build()).design  # type: ignore[attr-defined]
+    view = _unbound(model).bind(model, Build()).kernel  # type: ignore[attr-defined]
     assert view.alternatives == ("dot_product", "batch_interleaved")
 
 
@@ -437,9 +437,9 @@ def test_the_interleave_decision_persists_without_any_new_persistence_code() -> 
     model = _mvau_model()
     operation = _interleaved_operation(model, interleave=2)
     recorded = dict(operation.recorded())
-    assert recorded["design.case"] == "batch_interleaved"
-    assert recorded["design.batch_interleaved.interleave"] == 2
-    assert recorded["design.batch_interleaved.pe"] == 2
+    assert recorded["kernel.case"] == "batch_interleaved"
+    assert recorded["kernel.batch_interleaved.interleave"] == 2
+    assert recorded["kernel.batch_interleaved.pe"] == 2
 
 
 def test_the_interleaved_choice_survives_a_save_and_reload(tmp_path: Path) -> None:
@@ -467,49 +467,49 @@ def test_an_old_schema_two_batch_record_is_refused_without_writes() -> None:
     )
     schema.i = 2
     before = model.model.SerializeToString(deterministic=True)
-    with pytest.raises(DataflowOpError, match="writes schema version 5"):
+    with pytest.raises(DataflowOpError, match="writes schema version 6"):
         _unbound(model).bind(model, Build())
     assert model.model.SerializeToString(deterministic=True) == before
 
 
 def test_switching_between_design_families_leaves_nothing_behind() -> None:
-    """Changing Design families prunes every choice under the old branch."""
+    """Changing Kernel families prunes every choice under the old branch."""
 
     model = _mvau_model()
     operation = _interleaved_operation(model, interleave=2)
-    assert "design.batch_interleaved.interleave" in dict(operation.recorded())
+    assert "kernel.batch_interleaved.interleave" in dict(operation.recorded())
 
     switched = _unbound(model).bind(model, Build()).reconstruct()
-    switched = switched.design.select("dot_product").root
-    dot_product = switched.design.alternative("dot_product")
+    switched = switched.kernel.select("dot_product").root
+    dot_product = switched.kernel.alternative("dot_product")
     for declaration, value in (
-        (WeightedDotProductDesign.pe, 2),
-        (WeightedDotProductDesign.simd, 2),
-        (DotProductDesign.weight_supply, WeightSupply.EXTERNAL),
+        (WeightedDotProductKernel.pe, 2),
+        (WeightedDotProductKernel.simd, 2),
+        (DotProductKernel.weight_supply, WeightSupply.EXTERNAL),
     ):
         switched = dot_product.assign(declaration, value).root
-        dot_product = switched.design.alternative("dot_product")
+        dot_product = switched.kernel.alternative("dot_product")
     switched = dot_product.compute.select("dotp_axi").root
-    kernel = switched.design.alternative("dot_product").kernel("compute")
+    kernel = switched.kernel.alternative("dot_product").child("compute")
     assert isinstance(kernel, Decided)
     switched = kernel.value.assign(DotpAxiKernel.compute_pumping, False).root
     final = switched.commit(model, Build())
     recorded = dict(final.recorded())
-    assert recorded["design.case"] == "dot_product"
-    assert recorded["design.dot_product.weight_supply"] is WeightSupply.EXTERNAL
-    assert not any(name.startswith("design.batch_interleaved.") for name in recorded)
+    assert recorded["kernel.case"] == "dot_product"
+    assert recorded["kernel.dot_product.weight_supply"] is WeightSupply.EXTERNAL
+    assert not any(name.startswith("kernel.batch_interleaved.") for name in recorded)
 
     back = _unbound(model).bind(model, Build()).reconstruct()
-    back = back.design.select("batch_interleaved").root
+    back = back.kernel.select("batch_interleaved").root
     for declaration, value in (
-        (WeightedDotProductDesign.pe, 2),
-        (WeightedDotProductDesign.simd, 2),
-        (BatchInterleavedDesign.interleave, 4),
+        (WeightedDotProductKernel.pe, 2),
+        (WeightedDotProductKernel.simd, 2),
+        (BatchInterleavedKernel.interleave, 4),
     ):
-        back = back.design.alternative("batch_interleaved").assign(declaration, value).root
+        back = back.kernel.alternative("batch_interleaved").assign(declaration, value).root
     returned = dict(back.commit(model, Build()).recorded())
-    assert returned["design.batch_interleaved.interleave"] == 4
-    assert not any(name.startswith("design.dot_product.") for name in returned)
+    assert returned["kernel.batch_interleaved.interleave"] == 4
+    assert not any(name.startswith("kernel.dot_product.") for name in returned)
 
 
 def test_the_association_reports_the_interleaved_weight_boundary() -> None:
@@ -534,22 +534,22 @@ def test_the_association_reports_the_interleaved_weight_boundary() -> None:
 
 def test_an_unresolved_interleave_leaves_the_network_unresolved() -> None:
     model = _mvau_model()
-    chosen = _unbound(model).bind(model, Build()).design.select("batch_interleaved").root
+    chosen = _unbound(model).bind(model, Build()).kernel.select("batch_interleaved").root
     for declaration, value in (
-        (WeightedDotProductDesign.pe, 2),
-        (WeightedDotProductDesign.simd, 2),
+        (WeightedDotProductKernel.pe, 2),
+        (WeightedDotProductKernel.simd, 2),
     ):
-        chosen = chosen.design.alternative("batch_interleaved").assign(declaration, value).root
+        chosen = chosen.kernel.alternative("batch_interleaved").assign(declaration, value).root
     assert isinstance(chosen.network, Unresolved)
 
 
 # -- an aliased candidate: the id is the slot's, not the class's --------------
 
 
-class _AliasedDesign(WeightedDotProductDesign):
+class _AliasedKernel(WeightedDotProductKernel):
     """One Kernel class filling two candidate slots under names of its own.
 
-    The case generic persistence has to survive and no production Design
+    The case generic persistence has to survive and no production Kernel
     exercises: the recorded selector value is the *candidate id*, so a document
     that stored the Kernel's id instead would replay into the wrong slot -- or,
     with two slots holding the same class, into an ambiguous one.
@@ -558,19 +558,19 @@ class _AliasedDesign(WeightedDotProductDesign):
     id = "aliased"
     version = "1"
 
-    repetitions = WeightedDotProductDesign.repetitions
-    matrix_width = WeightedDotProductDesign.matrix_width
-    matrix_height = WeightedDotProductDesign.matrix_height
-    activation_type = WeightedDotProductDesign.activation_type
-    weight_type = WeightedDotProductDesign.weight_type
-    accumulator_type = WeightedDotProductDesign.accumulator_type
-    output_type = WeightedDotProductDesign.output_type
-    narrow_weights = WeightedDotProductDesign.narrow_weights
-    target_dsp = WeightedDotProductDesign.target_dsp
-    clock_period_ns = WeightedDotProductDesign.clock_period_ns
-    pe = WeightedDotProductDesign.pe
-    simd = WeightedDotProductDesign.simd
-    interleave = BatchInterleavedDesign.interleave
+    repetitions = WeightedDotProductKernel.repetitions
+    matrix_width = WeightedDotProductKernel.matrix_width
+    matrix_height = WeightedDotProductKernel.matrix_height
+    activation_type = WeightedDotProductKernel.activation_type
+    weight_type = WeightedDotProductKernel.weight_type
+    accumulator_type = WeightedDotProductKernel.accumulator_type
+    output_type = WeightedDotProductKernel.output_type
+    narrow_weights = WeightedDotProductKernel.narrow_weights
+    target_dsp = WeightedDotProductKernel.target_dsp
+    clock_period_ns = WeightedDotProductKernel.clock_period_ns
+    pe = WeightedDotProductKernel.pe
+    simd = WeightedDotProductKernel.simd
+    interleave = BatchInterleavedKernel.interleave
 
     compute = KernelChoice(
         Subspace(
@@ -615,10 +615,10 @@ class _AliasedDesign(WeightedDotProductDesign):
 
 
 class _PlacedAliased(Problem_):
-    design = Subspace(
-        _AliasedDesign,
+    kernel = Subspace(
+        _AliasedKernel,
         name="aliased",
-        **{name: cast("ValueSource[object]", getattr(Problem_, name)) for name in DESIGN_INPUTS},
+        **{name: cast("ValueSource[object]", getattr(Problem_, name)) for name in KERNEL_INPUTS},
     )
 
 
@@ -658,11 +658,11 @@ def test_an_aliased_candidate_is_persisted_by_its_slot_name() -> None:
             QualifiedPath("root.aliased.interleave"): 2,
         },
     )
-    design = cast(_AliasedDesign, replayed.design)  # type: ignore[attr-defined]
+    design = cast(_AliasedKernel, replayed.kernel)  # type: ignore[attr-defined]
     assert design.selected("compute") == Decided("second_slot")
     # Both slots hold the same class, so the class name could not have told the
     # two apart; the slot name is what distinguishes them.
-    kernel = design.kernel("compute")
+    kernel = design.child("compute")
     assert isinstance(kernel, Decided)
     assert isinstance(kernel.value, BatchInterleavedDotpAxiKernel)
     assert isinstance(design.dataflow.accepted_answer, Decided)
@@ -680,7 +680,7 @@ def test_the_aliased_slots_are_two_distinct_persistable_subtrees() -> None:
 
 
 class _AliasedOp(DataflowOp):
-    """A whole operation over the aliased Design, so persistence is end to end.
+    """A whole operation over the aliased Kernel, so persistence is end to end.
 
     The path-level tests above prove the two slots have distinct persistable
     identities.  That is necessary and not sufficient: what a caller relies on
@@ -731,8 +731,8 @@ class _AliasedOp(DataflowOp):
         del shape
         return IntegerSupportReport(None, ())
 
-    design = Subspace(
-        _AliasedDesign,
+    kernel = Subspace(
+        _AliasedKernel,
         name="aliased",
         repetitions=repetitions,
         matrix_width=matrix_width,
@@ -749,7 +749,7 @@ class _AliasedOp(DataflowOp):
     )
 
     def selected_dataflow(self) -> Any:
-        return cast(Any, self.design).dataflow  # type: ignore[attr-defined]
+        return cast(Any, self.kernel).dataflow  # type: ignore[attr-defined]
 
 
 def _aliased_model() -> Any:
@@ -796,17 +796,17 @@ def _configure_alias(model: Any, slot: str, *, pumped: bool, fresh: bool = False
     operation = _AliasedOp(model.graph.node[0], 1).bind(model, Build())
     if fresh:
         operation = operation.reconstruct()
-    design = cast(Any, operation.design)
+    design = cast(Any, operation.kernel)
     chosen = design.compute.select(slot).root
-    kernel = cast(Any, chosen.design).kernel("compute")
+    kernel = cast(Any, chosen.kernel).child("compute")
     assert isinstance(kernel, Decided)
     chosen = kernel.value.assign(DotpAxiKernel.compute_pumping, pumped).root
     for declaration, value in (
-        (WeightedDotProductDesign.pe, 2),
-        (WeightedDotProductDesign.simd, 2),
-        (BatchInterleavedDesign.interleave, 2),
+        (WeightedDotProductKernel.pe, 2),
+        (WeightedDotProductKernel.simd, 2),
+        (BatchInterleavedKernel.interleave, 2),
     ):
-        chosen = cast(Any, chosen.design).assign(declaration, value).root
+        chosen = cast(Any, chosen.kernel).assign(declaration, value).root
     return chosen.commit(model, Build())
 
 

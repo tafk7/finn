@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Logical weight-supply choices shared by MVAU construction and its Design."""
+"""Logical weight-supply choices shared by MVAU construction and its Kernel."""
 
 from enum import Enum
 

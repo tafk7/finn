@@ -47,14 +47,14 @@ def test_parent_decision_depending_on_child_export_commits_and_reloads(tmp_path)
 def test_failed_post_write_hydration_rolls_back_attributes_and_output_repairs(monkeypatch):
     model = _mvau_model()
     model.set_tensor_shape("output", [99])
-    chosen = _unbound(model, "mvau0").bind(model, Build()).design.select("dot_product").root
+    chosen = _unbound(model, "mvau0").bind(model, Build()).kernel.select("dot_product").root
     before = model.model.SerializeToString(deterministic=True)
     original_point = dict(chosen.recorded())
     hydrated = []
 
     def fail_after_writes(operation):
         hydrated.append(operation)
-        assert "design__case" in read_attributes(model.graph.node[0])
+        assert "kernel__case" in read_attributes(model.graph.node[0])
         assert model.get_tensor_shape("output") == [2, 4]
         raise DataflowOpError("injected post-write hydration failure")
 

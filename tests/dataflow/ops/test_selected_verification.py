@@ -14,7 +14,7 @@ from qonnx.core.modelwrapper import ModelWrapper
 from finn.dataflow.model.maps import CoordinateSet, RectangularDomain
 from finn.dataflow.model.region import BeatSequence
 from finn.dataflow.ops.mvau.computation import AccumulationMode
-from finn.dataflow.ops.mvau.designs.dot_product import WeightSupply
+from finn.dataflow.ops.mvau.kernels.dot_product import WeightSupply
 from finn.dataflow.ops.mvau.selected import (
     WEIGHT_KEY,
     construct_mvau_snapshot,

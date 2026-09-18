@@ -51,7 +51,7 @@ class RegionRefused(ValueError):
     refuses infeasible folding is telling its supplier something, and the point
     should hear it as a rejecting absence.  A constructor that indexes past the
     end of a tuple is a defect, and turning that into an ordinary infeasible
-    point would hide it: the Design would simply look unsatisfiable at that
+    point would hide it: the Kernel would simply look unsatisfiable at that
     configuration and nobody would look further.  ``RegionDeclaration`` catches
     only this exception; anything else stays an ``EvaluationError``.
 

@@ -4,7 +4,7 @@
 """Fixtures for the artifact substrate, and nothing from anywhere else.
 
 This tree has its own ``conftest`` so that it shares no file with the
-``DataflowDesign`` migration running in parallel.  It deliberately does not
+``Kernel`` migration running in parallel.  It deliberately does not
 reuse ``tests/conftest.py``: that one seeds numpy and torch for tests that
 generate stimulus, and nothing here does.
 """

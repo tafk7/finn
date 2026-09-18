@@ -4,7 +4,7 @@
 """U3c: the three weight-supply modes, as three resolved Networks.
 
 The forcing case.  Every claim below is about *dataflow*: which nodes exist,
-which edges connect them, which boundaries the Design presents.  Two of the
+which edges connect them, which boundaries the Kernel presents.  Two of the
 three modes have no build unit at all at this phase, and every one of them
 resolves a complete Network anyway -- which is the thing U3 is for.
 """
@@ -23,14 +23,14 @@ from finn.dataflow.model.presentation import (
 from finn.dataflow.model.refs import RegionInputRef
 from finn.dataflow.model.region import InputInterface, InternalInput
 from finn.dataflow.kernels.memstream import MemstreamKernel
-from finn.dataflow.ops.mvau.designs.dot_product import (
-    DotProductDesign,
+from finn.dataflow.ops.mvau.kernels.dot_product import (
+    DotProductKernel,
     WeightSupply,
 )
-from dataflow.ops.mvau.test_dot_product_design import _occurrence, _unconfigured
+from dataflow.ops.mvau.test_dot_product_kernel import _occurrence, _unconfigured
 
 
-def _network(design: DotProductDesign):
+def _network(design: DotProductKernel):
     answer = design.dataflow.accepted_answer
     assert isinstance(answer, Decided), answer
     return answer.value
@@ -59,7 +59,7 @@ def test_embedded_supply_gives_the_compute_region_no_weight_port_at_all() -> Non
     compute = network.node("compute")
     assert {item.port.id for item in compute.region.input_interfaces} == {"activation"}
     assert design.selected("compute") == Decided("dotp_axi_embedded")
-    assert design.region_family("compute") == Decided(("mvau.dot_product.embedded", "2"))
+    assert design.child_region_family("compute") == Decided(("mvau.dot_product.embedded", "2"))
 
     # The matrix is still required, and still has no endpoint anywhere.
     weight = RegionInputRef("compute", "W")
@@ -78,12 +78,12 @@ def test_decoupled_supply_gives_the_matrix_its_own_node_and_edge() -> None:
         "activation_replay",
         "weight_supply_edge",
     }
-    # The matrix no longer crosses the Design's boundary; it is produced inside.
+    # The matrix no longer crosses the Kernel's boundary; it is produced inside.
     assert {item.id for item in network.boundaries} == {"activation", "output"}
     edge = next(item for item in network.edges if item.id == "weight_supply_edge")
     assert edge.source.node_id == "memory"
     assert edge.sinks[0].endpoint.node_id == "compute"
-    memory = design.kernel("memory")
+    memory = design.child("memory")
     assert isinstance(memory, Decided)
     assert isinstance(memory.value, MemstreamKernel)
 
@@ -153,13 +153,13 @@ def test_every_mode_resolves_its_network_with_no_build_unit_available() -> None:
         assert assessment.readiness.ready is True
         assert isinstance(assessment.accepted_answer, Decided)
 
-    embedded = _occurrence(WeightSupply.EMBEDDED).kernel("compute")
+    embedded = _occurrence(WeightSupply.EMBEDDED).child("compute")
     assert isinstance(embedded, Decided)
     unavailable = embedded.value.physical.accepted_answer
     assert isinstance(unavailable, Absent)
     assert any(finding.code == "kernel-physically-unsupported" for finding in unavailable.findings)
 
-    memory = _occurrence(WeightSupply.DECOUPLED).kernel("memory")
+    memory = _occurrence(WeightSupply.DECOUPLED).child("memory")
     assert isinstance(memory, Decided)
     assert isinstance(memory.value.physical.accepted_answer, Absent)
 
@@ -186,7 +186,7 @@ def test_an_initializer_neither_forces_nor_forbids_external_streaming() -> None:
 
 def test_the_mode_is_uncommitted_until_it_is_chosen() -> None:
     design = _unconfigured()
-    design = design.assign(DotProductDesign.pe, 2).assign(DotProductDesign.simd, 2)
+    design = design.assign(DotProductKernel.pe, 2).assign(DotProductKernel.simd, 2)
     assert isinstance(design.dataflow.accepted_answer, Unresolved)
     assert design.is_active("memory") == Decided(False) or isinstance(
         design.is_active("memory"), Unresolved
@@ -196,9 +196,9 @@ def test_the_mode_is_uncommitted_until_it_is_chosen() -> None:
 def test_supply_without_a_compute_candidate_is_unresolved() -> None:
     design = _unconfigured()
     design = (
-        design.assign(DotProductDesign.pe, 2)
-        .assign(DotProductDesign.simd, 2)
-        .assign(DotProductDesign.weight_supply, WeightSupply.EXTERNAL)
+        design.assign(DotProductKernel.pe, 2)
+        .assign(DotProductKernel.simd, 2)
+        .assign(DotProductKernel.weight_supply, WeightSupply.EXTERNAL)
     )
     assert isinstance(design.dataflow.accepted_answer, Unresolved)
 
@@ -216,11 +216,11 @@ def test_inconsistent_supply_and_compute_candidates_are_refused(
 ) -> None:
     design = _unconfigured()
     design = (
-        design.assign(DotProductDesign.pe, 2)
-        .assign(DotProductDesign.simd, 2)
-        .assign(DotProductDesign.weight_supply, supply)
+        design.assign(DotProductKernel.pe, 2)
+        .assign(DotProductKernel.simd, 2)
+        .assign(DotProductKernel.weight_supply, supply)
     )
-    design = design.compute.select(candidate).root.design
+    design = design.compute.select(candidate).root.kernel
     answer = design.dataflow.accepted_answer
     assert isinstance(answer, Absent)
     assert answer.findings

@@ -80,7 +80,7 @@ CASES_BY_LABEL = {case.label: case for case in CASES}
 
 
 class Harness(Space):
-    """The Design's stand-in: PE and SIMD are Region-visible, so it owns them."""
+    """The Kernel's stand-in: PE and SIMD are Region-visible, so it owns them."""
 
     repetitions = Problem(int)
     matrix_width = Problem(int)

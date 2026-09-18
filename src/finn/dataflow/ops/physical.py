@@ -46,7 +46,11 @@ from finn.dataflow.space.capabilities import ImplementationIdentity, implementat
 from finn.dataflow.space.occurrence import layer_runtime
 
 if TYPE_CHECKING:
-    from finn.dataflow.designs.physical import BoundaryBinding, EdgeBinding, SemanticPortBinding  # noqa: PLC0415
+    from finn.dataflow.kernels.physical_composition import (  # noqa: PLC0415
+        BoundaryBinding,
+        EdgeBinding,
+        SemanticPortBinding,
+    )
     from finn.dataflow.ops.base import DataflowOp  # noqa: PLC0415
     from finn.dataflow.ops.graph_context import AcceptedLogicalCapture, GraphContext  # noqa: PLC0415
 
@@ -412,39 +416,24 @@ def _physical_dependency_snapshot(implementation: object) -> tuple[CapturedDepen
 def capture_local_physical(implementation: object) -> LocalPhysicalCapture:
     """Capture only the implementation's accepted local physical capability."""
 
-    from finn.dataflow.designs.design import DataflowDesign  # noqa: PLC0415
-    from finn.dataflow.designs.physical import DesignPhysicalFacts  # noqa: PLC0415
-    from finn.dataflow.kernels.kernel import Kernel  # noqa: PLC0415
-    from finn.dataflow.kernels.physical import capture_kernel_realization  # noqa: PLC0415
     from finn.dataflow.space.declarations import Space  # noqa: PLC0415
 
     if not isinstance(implementation, Space):
         raise TypeError("local physical capture requires a Space occurrence")
-    if isinstance(implementation, DataflowDesign):
-        assessment = implementation.physical
-        if not isinstance(assessment.accepted_answer, Decided):
-            raise DataflowOpError(
-                "local physical capability is not accepted",
-                getattr(assessment.accepted_answer, "findings", ()),
-            )
-        physical: object = assessment.accepted_answer.value
-        if not isinstance(physical, DesignPhysicalFacts):
-            raise TypeError("Design physical capability returned the wrong value")
-        requirements = physical.requirements
-    elif isinstance(implementation, Kernel):
-        physical = capture_kernel_realization(implementation)
-        requirements = physical.requirements
-    else:
-        assessment = implementation.assess_view("physical")
-        if not isinstance(assessment.accepted_answer, Decided) or not isinstance(
-            assessment.accepted_answer.value, ModuleBuildRequirements
-        ):
-            raise DataflowOpError(
-                "Space physical capability is not an accepted ModuleBuildRequirements",
-                getattr(assessment.accepted_answer, "findings", ()),
-            )
-        physical = assessment.accepted_answer.value
-        requirements = physical
+    assessment: ProjectionAssessment[Any] = implementation.assess_view("physical")
+    if not isinstance(assessment.accepted_answer, Decided):
+        raise DataflowOpError(
+            "local physical capability is not accepted",
+            getattr(assessment.accepted_answer, "findings", ()),
+        )
+    physical: object = assessment.accepted_answer.value
+    requirements = (
+        physical
+        if isinstance(physical, ModuleBuildRequirements)
+        else getattr(physical, "requirements", None)
+    )
+    if not isinstance(requirements, ModuleBuildRequirements):
+        raise TypeError("physical capability does not expose ModuleBuildRequirements")
     path, token = _occurrence_identity(implementation)
     identity = implementation_identity(implementation)
     dependencies = _physical_dependency_snapshot(implementation)
@@ -468,7 +457,9 @@ def capture_local_relation(
 ) -> LocalRelationCapture:
     """Join a local physical result to an accepted logical view on demand."""
 
-    from finn.dataflow.designs.physical import DesignPhysicalRelation  # noqa: PLC0415
+    from finn.dataflow.kernels.physical_composition import (  # noqa: PLC0415
+        LogicalPhysicalRelation,
+    )
     from finn.dataflow.space.declarations import Space  # noqa: PLC0415
 
     if not isinstance(implementation, Space):
@@ -483,7 +474,7 @@ def capture_local_relation(
             getattr(assessment.accepted_answer, "findings", ()),
         )
     relation = assessment.accepted_answer.value
-    if not isinstance(relation, DesignPhysicalRelation):
+    if not isinstance(relation, LogicalPhysicalRelation):
         raise TypeError("physical relation capability returned the wrong value")
     if relation.physical.requirements != physical.requirements:
         raise DataflowOpError("physical relation names different local requirements")
@@ -519,8 +510,10 @@ def capture_local_relation(
 
 
 def op_physical(operation: DataflowOp) -> ProjectionAssessment[PhysicalBuildCapture]:
-    """Ask only the selected Design, after frozen graph/source acceptance."""
-    from finn.dataflow.designs.physical import DesignPhysicalRelation  # noqa: PLC0415
+    """Ask only the selected Kernel, after frozen graph/source acceptance."""
+    from finn.dataflow.kernels.physical_composition import (  # noqa: PLC0415
+        LogicalPhysicalRelation,
+    )
     from finn.dataflow.ops.graph_context import capture_frozen_op_logical  # noqa: PLC0415
     from finn.dataflow.space.declarations import Space  # noqa: PLC0415
 
@@ -533,12 +526,12 @@ def op_physical(operation: DataflowOp) -> ProjectionAssessment[PhysicalBuildCapt
             cast(Any, graph.accepted_answer),
             cast(Any, graph.accepted_answer),
         )
-    design = operation.selected_implementation()
-    if not isinstance(design, Space):
-        raise TypeError("selected_implementation must return a Space occurrence")
-    if design.root is not operation.root:
-        raise DataflowOpError("selected physical Design belongs to a different operation point")
-    selected_logical: Answer[Any] = design.assess_view("logical").accepted_answer
+    kernel = operation.selected_kernel()
+    if not isinstance(kernel, Space):
+        raise TypeError("selected_kernel must return a Space occurrence")
+    if kernel.root is not operation.root:
+        raise DataflowOpError("selected physical Kernel belongs to a different operation point")
+    selected_logical: Answer[Any] = kernel.assess_view("logical").accepted_answer
     selected_network = (
         selected_logical.value.network
         if isinstance(selected_logical, Decided)
@@ -549,9 +542,9 @@ def op_physical(operation: DataflowOp) -> ProjectionAssessment[PhysicalBuildCapt
     )
     if selected_network != graph.accepted_answer.value:
         raise DataflowOpError(
-            "selected physical Design does not realize the accepted operation Network"
+            "selected physical Kernel does not realize the accepted operation Network"
         )
-    physical: ProjectionAssessment[Any] = design.assess_view("physical")
+    physical: ProjectionAssessment[Any] = kernel.assess_view("physical")
     if not isinstance(physical.accepted_answer, Decided):
         return ProjectionAssessment(
             "physical",
@@ -561,8 +554,8 @@ def op_physical(operation: DataflowOp) -> ProjectionAssessment[PhysicalBuildCapt
             cast(Any, physical.accepted_answer),
         )
     try:
-        local = capture_local_physical(design)
-        relation = capture_local_relation(design, local)
+        local = capture_local_physical(kernel)
+        relation = capture_local_relation(kernel, local)
     except DataflowOpError as error:
         error_findings = tuple(item for item in error.findings if isinstance(item, Finding))
         blocked = Absent(error_findings or (_rejection("physical-relation", str(error)),))
@@ -573,8 +566,8 @@ def op_physical(operation: DataflowOp) -> ProjectionAssessment[PhysicalBuildCapt
             cast(Any, blocked),
             cast(Any, blocked),
         )
-    if not isinstance(relation.relation, DesignPhysicalRelation):
-        raise TypeError("compiler physical use requires DesignPhysicalRelation")
+    if not isinstance(relation.relation, LogicalPhysicalRelation):
+        raise TypeError("compiler physical use requires LogicalPhysicalRelation")
     facts = relation.relation.physical
     logical = capture_frozen_op_logical(operation)
     capture = PhysicalBuildCapture(
@@ -608,7 +601,9 @@ def associate_physical_use(
 ) -> CompilerPhysicalUse:
     """Create the compiler claim over an independently captured local result."""
 
-    from finn.dataflow.designs.physical import DesignPhysicalRelation  # noqa: PLC0415
+    from finn.dataflow.kernels.physical_composition import (  # noqa: PLC0415
+        LogicalPhysicalRelation,
+    )
     from finn.dataflow.ops.graph_context import (  # noqa: PLC0415
         capture_frozen_op_logical,
         validate_frozen_op_logical,
@@ -619,8 +614,8 @@ def associate_physical_use(
     if capture_local_relation(implementation, local) != relation:
         raise DataflowOpError("local relation capture is not current for this occurrence")
     relation_value = relation.relation
-    if not isinstance(relation_value, DesignPhysicalRelation):
-        raise TypeError("compiler use requires a DesignPhysicalRelation")
+    if not isinstance(relation_value, LogicalPhysicalRelation):
+        raise TypeError("compiler use requires a LogicalPhysicalRelation")
     logical = capture_frozen_op_logical(operation)
     findings = validate_frozen_op_logical(
         operation,

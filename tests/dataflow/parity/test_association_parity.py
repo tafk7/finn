@@ -95,35 +95,35 @@ def test_the_association_carries_the_same_identities_where_a_network_resolves() 
 
     Only where a Network resolves, and that restriction is itself a difference
     worth stating: the oracle's description was a source projection that existed
-    whether or not a Design applied, while an association is read off a selected
-    Network.  A fused-threshold node has no applicable Design here, so it has no
+    whether or not a Kernel applied, while an association is read off a selected
+    Network.  A fused-threshold node has no applicable Kernel here, so it has no
     association -- and the fields the description carried are still produced,
     which is what the table above compares.
     """
 
     from finn.dataflow.kernels.dotp_axi import DotpAxiKernel  # noqa: PLC0415
-    from finn.dataflow.ops.mvau.designs.base import WeightedDotProductDesign  # noqa: PLC0415
-    from finn.dataflow.ops.mvau.designs.dot_product import (  # noqa: PLC0415
-        DotProductDesign,
+    from finn.dataflow.ops.mvau.kernels.base import WeightedDotProductKernel  # noqa: PLC0415
+    from finn.dataflow.ops.mvau.kernels.dot_product import (  # noqa: PLC0415
+        DotProductKernel,
         WeightSupply,
     )
     from finn.dataflow._engine import Decided  # noqa: PLC0415
 
     spec = next(item for item in SPECS if item["name"] == "fused_provenance")
     _model, occurrence = bound(spec, BUILD)
-    chosen = occurrence.design.select("dot_product").root
+    chosen = occurrence.kernel.select("dot_product").root
     chosen = (
-        chosen.design.alternative("dot_product")
-        .assign(DotProductDesign.weight_supply, WeightSupply.EXTERNAL)
+        chosen.kernel.alternative("dot_product")
+        .assign(DotProductKernel.weight_supply, WeightSupply.EXTERNAL)
         .root
     )
-    chosen = chosen.design.alternative("dot_product").compute.select("dotp_axi").root
+    chosen = chosen.kernel.alternative("dot_product").compute.select("dotp_axi").root
     for declaration, value in (
-        (WeightedDotProductDesign.pe, 2),
-        (WeightedDotProductDesign.simd, 2),
+        (WeightedDotProductKernel.pe, 2),
+        (WeightedDotProductKernel.simd, 2),
     ):
-        chosen = chosen.design.alternative("dot_product").assign(declaration, value).root
-    kernel = chosen.design.alternative("dot_product").kernel("compute")
+        chosen = chosen.kernel.alternative("dot_product").assign(declaration, value).root
+    kernel = chosen.kernel.alternative("dot_product").child("compute")
     assert isinstance(kernel, Decided)
     chosen = kernel.value.assign(DotpAxiKernel.compute_pumping, False).root
 
