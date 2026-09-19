@@ -12,7 +12,7 @@ from typing import cast
 import pytest
 from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 
-from finn.dataflow._engine import Decided, Engine, QualifiedPath
+from finn.dataflow._engine import Absent, Decided, Engine, QualifiedPath
 from finn.dataflow.artifacts.abi import ComponentABI, Reset, Signal
 from finn.dataflow.artifacts.formats import _descriptor
 from finn.dataflow.artifacts.rtl import Declined, check_abi
@@ -283,7 +283,7 @@ def test_replay_abi_agrees_with_the_selected_finnlib_rtl() -> None:
     assert result == ()
 
 
-def test_replay_refuses_folding_it_cannot_realize() -> None:
+def test_replay_local_module_capture_is_independent_of_invalid_logical_folding() -> None:
     class LooseHarness(Space):
         repetitions = Problem(int)
         matrix_width = Problem(int)
@@ -310,11 +310,12 @@ def test_replay_refuses_folding_it_cannot_realize() -> None:
         },
     )
     point = engine.commit_assignments(point, {"loose.pe": 3, "loose.simd": 3}).point
-    answer = kernel_physical(engine, kernel, point).accepted_answer
-    assert not isinstance(answer, Decided)
-    assert "kernel-region-refused" in {finding.code for finding in answer.findings}
+    assert isinstance(kernel_physical(engine, kernel, point).accepted_answer, Decided)
+    logical = kernel_dataflow(engine, kernel, point).accepted_answer
+    assert isinstance(logical, Absent)
+    assert "kernel-region-refused" in {finding.code for finding in logical.findings}
     assert QualifiedPath("semantic.loose.kernel.region") in {
-        finding.path for finding in answer.findings
+        finding.path for finding in logical.findings
     }
 
 

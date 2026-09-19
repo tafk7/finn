@@ -32,7 +32,7 @@ from finn.dataflow.ops.mvau.computation import (
 )
 from finn.dataflow.ops.mvau.op import MvauDataflowOp
 from finn.dataflow.kernels.dotp_axi import DotpAxiKernel, DspBlock
-from finn.dataflow.kernels.kernel import LogicalView, PhysicalView
+from finn.dataflow.kernels.kernel import PhysicalView
 from finn.dataflow.ops.physical import (
     associate_physical_use,
     authorize_component_use,
@@ -92,7 +92,7 @@ class _ViewLeaf(Space):
     value = Input(int)
     estimator = Input(str, allow_absent=True)
     ready = Readiness()
-    logical = LogicalView(value, readiness=ready)
+    logical = Projection(value, readiness=ready)
     physical = PhysicalView(value, readiness=ready)
     cost_ready = Readiness()
     cost = Projection(estimator, readiness=cost_ready)

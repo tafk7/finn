@@ -27,11 +27,19 @@ from typing import TYPE_CHECKING, ClassVar, Generic, TypeVar, cast
 
 from finn.dataflow._engine import (
     ABSENT,
+    AbsenceMode,
     Absent,
     Answer,
+    Constraint as EngineConstraint,
+    ConstraintSet,
     Decided,
+    DependencyKind,
+    DependencyRef,
+    DependencyView,
+    DerivedProperty,
     DesignPoint,
     Engine,
+    EvaluatorSpec,
     QualifiedPath,
 )
 from finn.dataflow.artifacts.abi import ComponentABI
@@ -114,6 +122,10 @@ class LogicalView(Projection[T_co]):
         constraints: ConstraintGroup | Sequence[ConstraintGroup] = (),
         name: str | None = "logical",
     ) -> None:
+        if output.value_semantics.type_token is not DATAFLOW_LOGICAL_RESULT_SEMANTICS.type_token:
+            raise AuthoringError(
+                "LogicalView output must use the standard LogicalResult value semantics"
+            )
         super().__init__(
             output,
             applicable_if=applicable_if,
@@ -441,6 +453,32 @@ def kernel_choice_members(kernel_type: type[Space]) -> tuple[tuple[str, KernelCh
     )
 
 
+_GENERATED_MEMBERS = "_kernel_generated_members"
+
+
+def _member_owner(kernel_type: type[Kernel], name: str) -> type[object] | None:
+    return next((base for base in kernel_type.__mro__ if name in base.__dict__), None)
+
+
+def _authored_member(kernel_type: type[Kernel], name: str) -> object | None:
+    owner = _member_owner(kernel_type, name)
+    if owner is None:
+        return None
+    generated = owner.__dict__.get(_GENERATED_MEMBERS, frozenset())
+    return None if name in generated else owner.__dict__[name]
+
+
+def _generated_member(
+    kernel_type: type[Kernel],
+    name: str,
+    value: object,
+    generated: set[str],
+) -> object:
+    setattr(kernel_type, name, value)
+    generated.add(name)
+    return value
+
+
 class Kernel(Space):
     """Shared domain authoring for leaf and composite implementations."""
 
@@ -478,6 +516,9 @@ class Kernel(Space):
             _synthesize_leaf_views(cls)
         elif has_children:
             _synthesize_composite_views(cls)
+        else:
+            setattr(cls, _GENERATED_MEMBERS, frozenset())
+        _ensure_logical_view_validation(cls)
 
     @classmethod
     def _finalize_compilation(cls, compiled: object) -> object:
@@ -501,7 +542,9 @@ class Kernel(Space):
         if not any(name == "logical" for name, _projection in compiled.projections):
             raise AuthoringError(f"{cls.__name__} must declare a logical capability")
         return (
-            _include_child_logical_constraints(compiled) if kernel_choice_members(cls) else compiled
+            _include_child_capability_contracts(compiled)
+            if kernel_choice_members(cls)
+            else compiled
         )
 
     @classmethod
@@ -617,58 +660,289 @@ def _choice_role(member_name: str, declaration: KernelChoice) -> str:
     return member_name if declaration.stable_name is None else declaration.stable_name
 
 
-def _include_child_logical_constraints(compiled: _CompiledSpace[K]) -> _CompiledSpace[K]:
-    """Make selected child logical acceptance part of the parent's logical view."""
+def _include_child_capability_contracts(compiled: _CompiledSpace[K]) -> _CompiledSpace[K]:
+    """Preserve child view contracts at each parent capability boundary."""
 
-    local_group = compiled.engine_name(
-        compiled.constraint_set_names, "logical_accepts", "ConstraintGroup"
-    )
-    child_constraints: set[QualifiedPath] = set()
+    result = compiled
+    for parent_view in ("logical", "dataflow"):
+        result = _include_consumed_child_view(
+            result,
+            parent_view=parent_view,
+            child_view="logical",
+            branch_outputs=frozenset({"logical_result"}),
+        )
+    if any(name == "physical" for name, _projection in result.projections):
+        result = _include_consumed_child_view(
+            result,
+            parent_view="physical",
+            child_view="physical",
+            branch_outputs=frozenset({"physical_result", "physical_streams"}),
+        )
+    return result
+
+
+def _value_dependency_closure(
+    compiled: _CompiledSpace[Space], start: QualifiedPath
+) -> frozenset[QualifiedPath]:
+    properties = {item.path: item for item in compiled.spec.properties}
+    decisions = {item.path: item for item in compiled.spec.decisions}
+    pending = [start]
+    visited: set[QualifiedPath] = set()
+    while pending:
+        path = pending.pop()
+        if path in visited:
+            continue
+        visited.add(path)
+        declaration = properties.get(path)
+        if declaration is not None:
+            pending.extend(item.path for item in declaration.evaluator.dependencies)
+            if declaration.applies_if is not None:
+                pending.extend(item.path for item in declaration.applies_if.dependencies)
+            continue
+        decision = decisions.get(path)
+        if decision is not None:
+            pending.extend(item.path for item in decision.domain.dependencies)
+            if decision.applies_if is not None:
+                pending.extend(item.path for item in decision.applies_if.dependencies)
+    return frozenset(visited)
+
+
+def _include_consumed_child_view(
+    compiled: _CompiledSpace[K],
+    *,
+    parent_view: str,
+    child_view: str,
+    branch_outputs: frozenset[str],
+) -> _CompiledSpace[K]:
+    parent = compiled.projection(parent_view)
+    closure = _value_dependency_closure(cast("_CompiledSpace[Space]", compiled), parent.output.path)
     choice_names = {name for name, _choice in kernel_choice_members(compiled.owner)}
+    constraints: set[QualifiedPath] = set()
+    readiness_properties: set[QualifiedPath] = set()
+    readiness_constraints: set[QualifiedPath] = set()
+    applicability_by_output: dict[QualifiedPath, EvaluatorSpec[Answer[bool]]] = {}
+    new_properties = list(compiled.spec.properties)
+    new_constraints = list(compiled.spec.constraints)
+    properties_by_path = {item.path: item for item in compiled.spec.properties}
+    decisions_by_path = {item.path: item for item in compiled.spec.decisions}
+    constraints_by_path = {item.path: item for item in compiled.spec.constraints}
+
+    def contract_segment(member_name: str, case_id: str, suffix: str) -> str:
+        return f"consumed-{parent_view}-{member_name}-{case_id}-{child_view}-{suffix}"
+
+    def gated_constraint(
+        path: QualifiedPath,
+        *,
+        member_name: str,
+        case_id: str,
+        suffix: str,
+        applicability: EvaluatorSpec[Answer[bool]] | None,
+    ) -> QualifiedPath:
+        if applicability is None:
+            return path
+        source = constraints_by_path[path]
+        clone_path = QualifiedPath(
+            f"constraint.{compiled.namespace}.{contract_segment(member_name, case_id, suffix)}"
+        )
+        new_constraints.append(
+            EngineConstraint(
+                clone_path,
+                source.evaluator,
+                _sequential_applicability(applicability, source.applies_if),
+            )
+        )
+        return clone_path
+
     for member_name, branch in compiled.branches:
         if member_name not in choice_names:
             continue
+        consumed_names = {
+            name
+            for name, reference in branch.outputs
+            if name in branch_outputs and reference.path in closure
+        }
+        if not consumed_names:
+            continue
         for case in branch.cases:
-            projection = case.compiled.projection("logical")
+            try:
+                child = case.compiled.projection(child_view)
+            except AuthoringError:
+                raise AuthoringError(
+                    f"{compiled.owner.__name__}.{member_name} consumes {child_view!r}, "
+                    f"but {case.compiled.owner.__name__} does not declare that capability"
+                ) from None
             groups = {item.name: item for item in case.compiled.spec.constraint_sets}
-            for group_name in projection.constraint_sets:
-                child_constraints.update(groups[group_name].constraints)
-    if not child_constraints:
-        return compiled
-    constraint_sets = tuple(
-        replace(
-            group,
-            constraints=tuple(
-                dict.fromkeys((*group.constraints, *sorted(child_constraints, key=str)))
-            ),
+            for group_name in child.constraint_sets:
+                for path in groups[group_name].constraints:
+                    constraints.add(
+                        gated_constraint(
+                            path,
+                            member_name=member_name,
+                            case_id=case.case_id,
+                            suffix=f"accept-{len(new_constraints)}",
+                            applicability=child.applicability,
+                        )
+                    )
+            profiles = {item.name: item for item in case.compiled.spec.readiness_profiles}
+            readiness = profiles[child.readiness_profile]
+            readiness_dependencies: list[DependencyRef] = []
+            for index, path in enumerate(readiness.decisions):
+                decision_declaration = decisions_by_path[path]
+                readiness_dependencies.append(
+                    DependencyRef(
+                        f"decision_{index}",
+                        path,
+                        DependencyKind.DECISION,
+                        decision_declaration.value_semantics,
+                        AbsenceMode.ALLOWS_ABSENT,
+                    )
+                )
+            for index, path in enumerate(readiness.properties):
+                property_declaration = properties_by_path[path]
+                readiness_dependencies.append(
+                    DependencyRef(
+                        f"property_{index}",
+                        path,
+                        DependencyKind.PROPERTY,
+                        property_declaration.value_semantics,
+                        AbsenceMode.ALLOWS_ABSENT,
+                    )
+                )
+            if readiness_dependencies:
+                proxy_path = QualifiedPath(
+                    f"semantic.{compiled.namespace}."
+                    f"{contract_segment(member_name, case.case_id, 'ready')}"
+                )
+
+                def ready(_values: DependencyView) -> Answer[object]:
+                    return Decided(True)
+
+                new_properties.append(
+                    DerivedProperty(
+                        proxy_path,
+                        semantics_for(bool),
+                        EvaluatorSpec(tuple(readiness_dependencies), ready),
+                        child.applicability,
+                    )
+                )
+                readiness_properties.add(proxy_path)
+            for path in readiness.constraints:
+                readiness_constraints.add(
+                    gated_constraint(
+                        path,
+                        member_name=member_name,
+                        case_id=case.case_id,
+                        suffix=f"ready-constraint-{len(new_constraints)}",
+                        applicability=child.applicability,
+                    )
+                )
+            if child.applicability is not None:
+                if child.output.kind is not DependencyKind.PROPERTY:
+                    raise AuthoringError(
+                        f"{case.compiled.owner.__name__}.{child_view} must expose a property "
+                        "when a parent Kernel consumes its applicability"
+                    )
+                applicability_by_output[child.output.path] = child.applicability
+
+    if not any(
+        (
+            constraints,
+            readiness_properties,
+            readiness_constraints,
+            applicability_by_output,
         )
-        if group.name == local_group
-        else group
-        for group in compiled.spec.constraint_sets
-    )
+    ):
+        return compiled
+
+    child_group_name = f"{parent.name}.consumed-{child_view}"
+    constraint_sets = compiled.spec.constraint_sets
+    parent_constraint_sets = parent.constraint_sets
+    if constraints:
+        constraint_sets = (
+            *constraint_sets,
+            ConstraintSet(child_group_name, tuple(sorted(constraints, key=str))),
+        )
+        parent_constraint_sets = (*parent_constraint_sets, child_group_name)
+
     readiness_profiles = tuple(
         replace(
             profile,
+            properties=tuple(
+                dict.fromkeys((*profile.properties, *sorted(readiness_properties, key=str)))
+            ),
             constraints=tuple(
-                dict.fromkeys((*profile.constraints, *sorted(child_constraints, key=str)))
+                dict.fromkeys((*profile.constraints, *sorted(readiness_constraints, key=str)))
             ),
         )
-        if profile.name
-        in {
-            compiled.engine_name(compiled.readiness_names, "logical_ready", "Readiness"),
-            compiled.engine_name(compiled.readiness_names, "dataflow_ready", "Readiness"),
-        }
+        if profile.name == parent.readiness_profile
         else profile
         for profile in compiled.spec.readiness_profiles
+    )
+    properties = tuple(
+        replace(
+            item,
+            applies_if=_sequential_applicability(
+                applicability_by_output[item.path], item.applies_if
+            ),
+        )
+        if item.path in applicability_by_output
+        else item
+        for item in new_properties
+    )
+    projections = tuple(
+        (
+            name,
+            replace(projection, constraint_sets=parent_constraint_sets),
+        )
+        if name == parent_view
+        else (name, projection)
+        for name, projection in compiled.projections
     )
     return replace(
         compiled,
         spec=replace(
             compiled.spec,
+            properties=properties,
+            constraints=tuple(new_constraints),
             constraint_sets=constraint_sets,
             readiness_profiles=readiness_profiles,
         ),
+        projections=projections,
     )
+
+
+def _sequential_applicability(
+    outer: EvaluatorSpec[Answer[bool]],
+    inner: EvaluatorSpec[Answer[bool]] | None,
+) -> EvaluatorSpec[Answer[bool]]:
+    if inner is None:
+        return outer
+    outer_dependencies = tuple(
+        replace(item, name=f"outer_{index}") for index, item in enumerate(outer.dependencies)
+    )
+    inner_dependencies = tuple(
+        replace(item, name=f"inner_{index}") for index, item in enumerate(inner.dependencies)
+    )
+
+    def evaluate(values: DependencyView) -> Answer[bool]:
+        outer_values = DependencyView(
+            {
+                original.name: values[renamed.name]
+                for original, renamed in zip(outer.dependencies, outer_dependencies)
+            }
+        )
+        outer_answer = outer.evaluator(outer_values)
+        if not isinstance(outer_answer, Decided) or not outer_answer.value:
+            return outer_answer
+        inner_values = DependencyView(
+            {
+                original.name: values[renamed.name]
+                for original, renamed in zip(inner.dependencies, inner_dependencies)
+            }
+        )
+        return inner.evaluator(inner_values)
+
+    return EvaluatorSpec((*outer_dependencies, *inner_dependencies), evaluate)
 
 
 def _parameter_members(
@@ -704,6 +978,81 @@ def _physical_names(
     return tuple(result)
 
 
+class _LogicalValidityConstraint(Constraint):
+    """Marker for the canonical validation every LogicalView receives."""
+
+
+def _logical_value_valid(output: ValueSource[object]) -> _LogicalValidityConstraint:
+    def evaluate(*, output: LogicalResult) -> object:
+        if isinstance(output, RegionResult):
+            issues = tuple(
+                (issue.code, issue.message, issue.path)
+                for issue in validate_region(output.region).issues
+            )
+            prefix = "kernel-region"
+        elif isinstance(output, NetworkResult):
+            issues = tuple(
+                (issue.code, issue.message, issue.path)
+                for issue in validate_network(output.network).issues
+            )
+            prefix = "kernel-network"
+        else:
+            return reject(
+                "kernel-logical-result-type",
+                "LogicalView output must be RegionResult or NetworkResult",
+            )
+        if not issues:
+            return True
+        return reject_all(
+            reject(
+                f"{prefix}-{code}",
+                message,
+                values={"logical_path": path},
+            )
+            for code, message, path in issues
+        )
+
+    return _LogicalValidityConstraint((("output", output),), evaluate)
+
+
+def _ensure_logical_view_validation(kernel_type: type[Kernel]) -> None:
+    generated = set(
+        cast("frozenset[str]", kernel_type.__dict__.get(_GENERATED_MEMBERS, frozenset()))
+    )
+    for member_name, declaration in tuple(declared_members(kernel_type)):
+        if not isinstance(declaration, LogicalView):
+            continue
+        if any(
+            isinstance(constraint, _LogicalValidityConstraint)
+            for group in declaration.constraints
+            for constraint in group.constraints
+        ):
+            continue
+        constraint_name = f"{member_name}_structurally_valid"
+        group_name = f"{member_name}_domain_accepts"
+        for name in (constraint_name, group_name):
+            if _authored_member(kernel_type, name) is not None:
+                raise AuthoringError(
+                    f"{kernel_type.__name__}.{name} conflicts with LogicalView domain validation"
+                )
+        validity = _logical_value_valid(cast("ValueSource[object]", declaration.output))
+        group = ConstraintGroup(validity, name=group_name)
+        _generated_member(kernel_type, constraint_name, validity, generated)
+        _generated_member(kernel_type, group_name, group, generated)
+        setattr(
+            kernel_type,
+            member_name,
+            LogicalView(
+                declaration.output,
+                applicable_if=declaration.applicable_if,
+                readiness=declaration.readiness,
+                constraints=(*declaration.constraints, group),
+                name=declaration.stable_name,
+            ),
+        )
+    setattr(kernel_type, _GENERATED_MEMBERS, frozenset(generated))
+
+
 def _region_valid(region: RegionDeclaration) -> Constraint:
     def evaluate(*, region: DataflowRegion) -> object:
         report = validate_region(region)
@@ -718,7 +1067,7 @@ def _region_valid(region: RegionDeclaration) -> Constraint:
             for issue in report.issues
         )
 
-    return Constraint((("region", cast("ValueSource[object]", region)),), evaluate)
+    return _LogicalValidityConstraint((("region", cast("ValueSource[object]", region)),), evaluate)
 
 
 def _leaf_logical_property(region: RegionDeclaration) -> Derived[LogicalResult]:
@@ -735,7 +1084,6 @@ def _leaf_logical_property(region: RegionDeclaration) -> Derived[LogicalResult]:
 
 def _leaf_physical_property(
     kernel_type: type[Kernel],
-    region: RegionDeclaration,
     parameters: tuple[tuple[str, ModuleParameter[object], str], ...],
 ) -> Derived[ModuleBuildRequirements]:
 
@@ -747,9 +1095,7 @@ def _leaf_physical_property(
 
         return Derived(semantics_for(ModuleBuildRequirements), None, (), unavailable)
 
-    dependencies: list[tuple[str, ValueSource[object]]] = [
-        ("region", cast("ValueSource[object]", region))
-    ]
+    dependencies: list[tuple[str, ValueSource[object]]] = []
     for member_name, template, _physical_name in parameters:
         if template.source is not None:
             dependencies.append((f"parameter_{member_name}", template.source))
@@ -846,6 +1192,24 @@ def _physical_refusal(kernel_id: str, reason: str) -> object:
     )
 
 
+def _use_authored_or_generated(
+    kernel_type: type[Kernel],
+    name: str,
+    generated_value: object,
+    expected: type | tuple[type, ...],
+    generated: set[str],
+) -> object:
+    authored = _authored_member(kernel_type, name)
+    if authored is not None:
+        if not isinstance(authored, expected):
+            raise AuthoringError(
+                f"{kernel_type.__name__}.{name} is {type(authored).__name__}; "
+                f"expected {getattr(expected, '__name__', 'the standard declaration type')}"
+            )
+        return authored
+    return _generated_member(kernel_type, name, generated_value, generated)
+
+
 def _synthesize_leaf_views(kernel_type: type[Kernel]) -> None:
     declarations = dict(declared_members(kernel_type))
     region = declarations.get("region")
@@ -863,53 +1227,156 @@ def _synthesize_leaf_views(kernel_type: type[Kernel]) -> None:
         if group is not None and not isinstance(group, ConstraintGroup):
             raise AuthoringError(f"{kernel_type.__name__}.{name} must be a ConstraintGroup")
 
-    region_valid = _region_valid(region)
-    logical_accepts = ConstraintGroup(
-        region_valid,
-        *(logical_support.constraints if isinstance(logical_support, ConstraintGroup) else ()),
-        name="logical_accepts",
-    )
-    logical_result = _leaf_logical_property(region)
-    logical_ready = Readiness(properties=(logical_result,), constraints=logical_accepts)
-    dataflow_ready = Readiness(properties=(region,), constraints=logical_accepts)
-    physical_result = _leaf_physical_property(kernel_type, region, parameters)
-    physical_accepts = ConstraintGroup(
-        *(
-            physical_support.constraints
-            if unavailable is None and isinstance(physical_support, ConstraintGroup)
-            else ()
+    generated: set[str] = set()
+    region_valid = cast(
+        Constraint,
+        _use_authored_or_generated(
+            kernel_type,
+            "region_structurally_valid",
+            _region_valid(region),
+            Constraint,
+            generated,
         ),
-        name="physical_accepts",
     )
-    physical_ready = Readiness(properties=(physical_result,), constraints=physical_accepts)
+    logical_accepts = cast(
+        ConstraintGroup,
+        _use_authored_or_generated(
+            kernel_type,
+            "logical_accepts",
+            ConstraintGroup(
+                region_valid,
+                *(
+                    logical_support.constraints
+                    if isinstance(logical_support, ConstraintGroup)
+                    else ()
+                ),
+                name="logical_accepts",
+            ),
+            ConstraintGroup,
+            generated,
+        ),
+    )
 
-    physical_streams = _leaf_streams_property(kernel_type, region, physical_result)
-    for name, value in (
-        ("region_structurally_valid", region_valid),
-        ("logical_accepts", logical_accepts),
-        ("logical_result", logical_result),
-        ("logical_ready", logical_ready),
-        (
+    authored_logical = _authored_member(kernel_type, "logical")
+    if authored_logical is not None and not isinstance(authored_logical, Projection):
+        raise AuthoringError(f"{kernel_type.__name__}.logical must be a Projection")
+    if authored_logical is None:
+        logical_result = cast(
+            ValueSource[LogicalResult],
+            _use_authored_or_generated(
+                kernel_type,
+                "logical_result",
+                _leaf_logical_property(region),
+                ValueSource,
+                generated,
+            ),
+        )
+        logical_ready = cast(
+            Readiness,
+            _use_authored_or_generated(
+                kernel_type,
+                "logical_ready",
+                Readiness(properties=(logical_result,), constraints=logical_accepts),
+                Readiness,
+                generated,
+            ),
+        )
+        _generated_member(
+            kernel_type,
             "logical",
-            LogicalView(logical_result, readiness=logical_ready, constraints=logical_accepts),
-        ),
-        ("dataflow_ready", dataflow_ready),
-        (
+            LogicalView(
+                logical_result,
+                readiness=logical_ready,
+                constraints=logical_accepts,
+            ),
+            generated,
+        )
+
+    authored_dataflow = _authored_member(kernel_type, "dataflow")
+    if authored_dataflow is not None and not isinstance(authored_dataflow, Projection):
+        raise AuthoringError(f"{kernel_type.__name__}.dataflow must be a Projection")
+    if authored_dataflow is None:
+        dataflow_ready = cast(
+            Readiness,
+            _use_authored_or_generated(
+                kernel_type,
+                "dataflow_ready",
+                Readiness(properties=(region,), constraints=logical_accepts),
+                Readiness,
+                generated,
+            ),
+        )
+        _generated_member(
+            kernel_type,
             "dataflow",
             Projection(
-                region, readiness=dataflow_ready, constraints=logical_accepts, name="dataflow"
+                region,
+                readiness=dataflow_ready,
+                constraints=logical_accepts,
+                name="dataflow",
             ),
-        ),
-        ("physical_result", physical_result),
-        ("physical_streams", physical_streams),
-        ("physical_accepts", physical_accepts),
-        ("physical_ready", physical_ready),
-        (
+            generated,
+        )
+
+    authored_physical = _authored_member(kernel_type, "physical")
+    if authored_physical is not None and not isinstance(authored_physical, Projection):
+        raise AuthoringError(f"{kernel_type.__name__}.physical must be a Projection")
+    if authored_physical is None:
+        physical_result = cast(
+            ValueSource[ModuleBuildRequirements],
+            _use_authored_or_generated(
+                kernel_type,
+                "physical_result",
+                _leaf_physical_property(kernel_type, parameters),
+                ValueSource,
+                generated,
+            ),
+        )
+        _use_authored_or_generated(
+            kernel_type,
+            "physical_streams",
+            _leaf_streams_property(kernel_type, region, physical_result),
+            ValueSource,
+            generated,
+        )
+        physical_accepts = cast(
+            ConstraintGroup,
+            _use_authored_or_generated(
+                kernel_type,
+                "physical_accepts",
+                ConstraintGroup(
+                    *(
+                        physical_support.constraints
+                        if unavailable is None and isinstance(physical_support, ConstraintGroup)
+                        else ()
+                    ),
+                    name="physical_accepts",
+                ),
+                ConstraintGroup,
+                generated,
+            ),
+        )
+        physical_ready = cast(
+            Readiness,
+            _use_authored_or_generated(
+                kernel_type,
+                "physical_ready",
+                Readiness(properties=(physical_result,), constraints=physical_accepts),
+                Readiness,
+                generated,
+            ),
+        )
+        _generated_member(
+            kernel_type,
             "physical",
-            PhysicalView(physical_result, readiness=physical_ready, constraints=physical_accepts),
-        ),
-    ):
-        setattr(kernel_type, name, value)
+            PhysicalView(
+                physical_result,
+                readiness=physical_ready,
+                constraints=physical_accepts,
+            ),
+            generated,
+        )
+    setattr(kernel_type, _GENERATED_MEMBERS, frozenset(generated))
 
 
 def _active(value: object) -> bool:
@@ -1042,7 +1509,9 @@ def _network_valid(network: ValueSource[DataflowNetwork]) -> Constraint:
             for issue in report.issues
         )
 
-    return Constraint((("network", cast("ValueSource[object]", network)),), evaluate)
+    return _LogicalValidityConstraint(
+        (("network", cast("ValueSource[object]", network)),), evaluate
+    )
 
 
 def _unsupported_composite_physical(kernel_type: type[Kernel]) -> Derived[object]:
@@ -1103,60 +1572,228 @@ def _synthesize_composite_views(kernel_type: type[Kernel]) -> None:
     support = declarations.get("logical_support")
     if support is not None and not isinstance(support, ConstraintGroup):
         raise AuthoringError(f"{kernel_type.__name__}.logical_support must be a ConstraintGroup")
-    logical_result = _composite_logical_property(kernel_type)
-    network = _network_property(logical_result)
-    network_valid = _network_valid(network)
-    logical_accepts = ConstraintGroup(
-        network_valid,
-        *(support.constraints if isinstance(support, ConstraintGroup) else ()),
-        name="logical_accepts",
+    generated: set[str] = set()
+    authored_logical = _authored_member(kernel_type, "logical")
+    if authored_logical is not None and not isinstance(authored_logical, Projection):
+        raise AuthoringError(f"{kernel_type.__name__}.logical must be a Projection")
+    if authored_logical is None:
+        logical_result = cast(
+            ValueSource[LogicalResult],
+            _use_authored_or_generated(
+                kernel_type,
+                "logical_result",
+                _composite_logical_property(kernel_type),
+                ValueSource,
+                generated,
+            ),
+        )
+    else:
+        logical_result = cast("ValueSource[LogicalResult]", authored_logical.output)
+    network = cast(
+        ValueSource[DataflowNetwork],
+        _use_authored_or_generated(
+            kernel_type,
+            "network",
+            _network_property(logical_result),
+            ValueSource,
+            generated,
+        ),
     )
-    logical_ready = Readiness(properties=(logical_result,), constraints=logical_accepts)
-    dataflow_ready = Readiness(properties=(network,), constraints=logical_accepts)
-    physical_result = declarations.get("physical_result")
-    if not isinstance(physical_result, Derived):
-        physical_result = _unsupported_composite_physical(kernel_type)
+    network_valid = cast(
+        Constraint,
+        _use_authored_or_generated(
+            kernel_type,
+            "network_structurally_valid",
+            _network_valid(network),
+            Constraint,
+            generated,
+        ),
+    )
+    logical_accepts = cast(
+        ConstraintGroup,
+        _use_authored_or_generated(
+            kernel_type,
+            "logical_accepts",
+            ConstraintGroup(
+                network_valid,
+                *(support.constraints if isinstance(support, ConstraintGroup) else ()),
+                name="logical_accepts",
+            ),
+            ConstraintGroup,
+            generated,
+        ),
+    )
+    if authored_logical is None:
+        logical_ready = cast(
+            Readiness,
+            _use_authored_or_generated(
+                kernel_type,
+                "logical_ready",
+                Readiness(properties=(logical_result,), constraints=logical_accepts),
+                Readiness,
+                generated,
+            ),
+        )
+        _generated_member(
+            kernel_type,
+            "logical",
+            LogicalView(
+                logical_result,
+                readiness=logical_ready,
+                constraints=logical_accepts,
+            ),
+            generated,
+        )
+
+    authored_dataflow = _authored_member(kernel_type, "dataflow")
+    if authored_dataflow is not None and not isinstance(authored_dataflow, Projection):
+        raise AuthoringError(f"{kernel_type.__name__}.dataflow must be a Projection")
+    if authored_dataflow is None:
+        dataflow_ready = cast(
+            Readiness,
+            _use_authored_or_generated(
+                kernel_type,
+                "dataflow_ready",
+                Readiness(properties=(network,), constraints=logical_accepts),
+                Readiness,
+                generated,
+            ),
+        )
+        _generated_member(
+            kernel_type,
+            "dataflow",
+            Projection(
+                network,
+                readiness=dataflow_ready,
+                constraints=logical_accepts,
+                name="dataflow",
+            ),
+            generated,
+        )
+
+    authored_physical = _authored_member(kernel_type, "physical")
+    if authored_physical is not None and not isinstance(authored_physical, Projection):
+        raise AuthoringError(f"{kernel_type.__name__}.physical must be a Projection")
+    if authored_physical is None:
+        physical_result = cast(
+            ValueSource[object],
+            _use_authored_or_generated(
+                kernel_type,
+                "physical_result",
+                _unsupported_composite_physical(kernel_type),
+                ValueSource,
+                generated,
+            ),
+        )
+    else:
+        physical_result = cast("ValueSource[object]", authored_physical.output)
     physical_support = declarations.get("physical_support")
     if physical_support is not None and not isinstance(physical_support, ConstraintGroup):
         raise AuthoringError(f"{kernel_type.__name__}.physical_support must be a ConstraintGroup")
-    physical_accepts = ConstraintGroup(
-        *(physical_support.constraints if isinstance(physical_support, ConstraintGroup) else ()),
-        name="physical_accepts",
-    )
-    physical_ready = Readiness(properties=(physical_result,), constraints=physical_accepts)
-    relation_result = _composite_relation_property(
-        logical_result, cast("ValueSource[object]", physical_result)
-    )
-    relation_ready = Readiness(properties=(relation_result,))
-    for name, value in (
-        ("logical_result", logical_result),
-        ("network", network),
-        ("network_structurally_valid", network_valid),
-        ("logical_accepts", logical_accepts),
-        ("logical_ready", logical_ready),
-        (
-            "logical",
-            LogicalView(logical_result, readiness=logical_ready, constraints=logical_accepts),
-        ),
-        ("dataflow_ready", dataflow_ready),
-        (
-            "dataflow",
-            Projection(
-                network, readiness=dataflow_ready, constraints=logical_accepts, name="dataflow"
+    if authored_physical is None:
+        physical_accepts = cast(
+            ConstraintGroup,
+            _use_authored_or_generated(
+                kernel_type,
+                "physical_accepts",
+                ConstraintGroup(
+                    *(
+                        physical_support.constraints
+                        if isinstance(physical_support, ConstraintGroup)
+                        else ()
+                    ),
+                    name="physical_accepts",
+                ),
+                ConstraintGroup,
+                generated,
             ),
-        ),
-        ("physical_result", physical_result),
-        ("physical_accepts", physical_accepts),
-        ("physical_ready", physical_ready),
-        (
+        )
+        physical_ready = cast(
+            Readiness,
+            _use_authored_or_generated(
+                kernel_type,
+                "physical_ready",
+                Readiness(properties=(physical_result,), constraints=physical_accepts),
+                Readiness,
+                generated,
+            ),
+        )
+        _generated_member(
+            kernel_type,
             "physical",
-            PhysicalView(physical_result, readiness=physical_ready, constraints=physical_accepts),
-        ),
-        ("relation_result", relation_result),
-        ("relation_ready", relation_ready),
-        ("physical_relation", RelationView(relation_result, readiness=relation_ready)),
-    ):
-        setattr(kernel_type, name, value)
+            PhysicalView(
+                physical_result,
+                readiness=physical_ready,
+                constraints=physical_accepts,
+            ),
+            generated,
+        )
+
+    authored_relation = _authored_member(kernel_type, "physical_relation")
+    if authored_relation is not None and not isinstance(authored_relation, Projection):
+        raise AuthoringError(f"{kernel_type.__name__}.physical_relation must be a Projection")
+    if authored_relation is None:
+        logical_view = cast(Projection[object], getattr(kernel_type, "logical"))
+        physical_view = cast(Projection[object], getattr(kernel_type, "physical"))
+        relation_result = cast(
+            ValueSource[object],
+            _use_authored_or_generated(
+                kernel_type,
+                "relation_result",
+                _composite_relation_property(logical_result, physical_result),
+                ValueSource,
+                generated,
+            ),
+        )
+        relation_ready = cast(
+            Readiness,
+            _use_authored_or_generated(
+                kernel_type,
+                "relation_ready",
+                Readiness(
+                    decisions=tuple(
+                        dict.fromkeys(
+                            (
+                                *logical_view.readiness.decisions,
+                                *physical_view.readiness.decisions,
+                            )
+                        )
+                    ),
+                    properties=tuple(
+                        dict.fromkeys(
+                            (
+                                relation_result,
+                                *logical_view.readiness.properties,
+                                *physical_view.readiness.properties,
+                            )
+                        )
+                    ),
+                    constraints=tuple(
+                        dict.fromkeys(
+                            (
+                                *logical_view.readiness.constraints,
+                                *physical_view.readiness.constraints,
+                            )
+                        )
+                    ),
+                ),
+                Readiness,
+                generated,
+            ),
+        )
+        _generated_member(
+            kernel_type,
+            "physical_relation",
+            RelationView(
+                relation_result,
+                readiness=relation_ready,
+                constraints=tuple(
+                    dict.fromkeys((*logical_view.constraints, *physical_view.constraints))
+                ),
+            ),
+            generated,
+        )
+    setattr(kernel_type, _GENERATED_MEMBERS, frozenset(generated))
 
 
 def kernel_dataflow(
