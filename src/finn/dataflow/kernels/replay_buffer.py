@@ -37,12 +37,16 @@ from finn.dataflow.artifacts.abi import (
 )
 from finn.dataflow.artifacts.contributions import CopiedSource
 from finn.dataflow.artifacts.build import ModuleABIRequirements, ScalarTable
-from finn.dataflow.kernels.physical import KernelStreamBinding, PeriodicLast, low_fields_binding
-from finn.dataflow.space.dataflow_value_semantics import QONNX_DATATYPE_VALUE_SEMANTICS
+from finn.dataflow.model.physical.layout import PeriodicLast
+from finn.dataflow.model.relations.values import KernelStreamBinding
+from finn.dataflow.model.relations.view import low_fields_binding
+from finn.dataflow.model.logical.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
 from finn.dataflow.space.declarations import Input, derived
-from finn.dataflow.kernels.kernel import Kernel, ModuleParameter, RegionDeclaration
-from finn.dataflow.model.region import DataflowRegion, NumericElementType, element_width
-from finn.dataflow.ops.mvau.regions import construct_activation_replay_region
+from finn.dataflow.model.kernel import Kernel
+from finn.dataflow.model.logical.authoring import RegionDeclaration
+from finn.dataflow.model.physical.authoring import ModuleParameter
+from finn.dataflow.model.logical.region import DataflowRegion, NumericElementType, element_width
+from finn.dataflow.kernels.matmul.regions import construct_activation_replay_region
 
 FINNLIB_ROOT = "finnlib"
 FINNLIB_SOURCES = ("rtl/infra/replay_buffer.sv",)

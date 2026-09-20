@@ -30,8 +30,14 @@ from finn.dataflow.analysis.integer_dot import (
     RuntimeWeightPromise,
     encode_dot_product_premise,
 )
-from finn.dataflow.model.datatypes import QONNXDataType
-from finn.dataflow.kernels.dotp_axi import DspBlock
+from finn.dataflow.model.logical.datatypes import QONNXDataType
+from finn.dataflow.kernels.matmul.base import (
+    AccumulationMode,
+    DspBlock,
+    MvauComputationProfile,
+    WeightedDotProductKernel,
+    computation_profile,
+)
 from finn.dataflow.space.declarations import (
     ConstraintGroup,
     CanonicalValueCodec,
@@ -46,9 +52,9 @@ from finn.dataflow.space.declarations import (
     reject_all,
 )
 from finn.dataflow.space.occurrence import ChoiceView, ProjectionAssessment
-from finn.dataflow.model.network import DataflowNetwork
+from finn.dataflow.model.logical.network import DataflowNetwork
 from finn.dataflow.ops.mapping import CoordinateMapping
-from finn.dataflow.model.refs import DataflowOperandRef, RegionInputRef, RegionOutputRef
+from finn.dataflow.model.logical.refs import DataflowOperandRef, RegionInputRef, RegionOutputRef
 from qonnx.analysis.tensor_value_summary import TensorValueSummary  # type: ignore[import-not-found]
 from finn.dataflow.ops.base import (
     DataflowOp,
@@ -56,12 +62,7 @@ from finn.dataflow.ops.base import (
     kernel_logical_network,
     unresolved_reason,
 )
-from finn.dataflow.ops.mvau.computation import (
-    AccumulationMode,
-    MvauComputationProfile,
-    computation_profile,
-    execute_mvau,
-)
+from finn.dataflow.ops.mvau.computation import execute_mvau
 from finn.dataflow.ops.mvau.numerics import (
     check_mvau_integer_support_from_operands,
     execute_mvau_integer,
@@ -69,9 +70,8 @@ from finn.dataflow.ops.mvau.numerics import (
 )
 from finn.dataflow.ops.source import SourceNode, SourceOperand
 from finn.dataflow.ops.tensor_summary import encode_frozen_initializer
-from finn.dataflow.ops.mvau.kernels.base import WeightedDotProductKernel
-from finn.dataflow.ops.mvau.kernels.batch_interleaved import BatchInterleavedKernel
-from finn.dataflow.ops.mvau.kernels.dot_product import DotProductKernel
+from finn.dataflow.kernels.matmul.batch_interleaved import BatchInterleavedKernel
+from finn.dataflow.kernels.matmul.dot_product import DotProductKernel
 from finn.dataflow.ops.schema import (
     Attribute,
     BuildFact,
@@ -84,6 +84,15 @@ from finn.dataflow.ops.schema import (
 def _target_dsp(build: Any) -> DspBlock:
     value = getattr(build, "target_dsp", DspBlock.DSP58)
     return value if isinstance(value, DspBlock) else DspBlock(str(value))
+
+
+def _target_dsp_canonical(value: DspBlock) -> dict[str, object]:
+    """Preserve the pre-relocation structural enum encoding."""
+
+    return {
+        "enum": "finn.dataflow.kernels.dotp_axi.DspBlock",
+        "value": value.value,
+    }
 
 
 def mvau_profile(source: SourceNode) -> MvauComputationProfile:
@@ -261,7 +270,11 @@ class MvauDataflowOp(DataflowOp):
     #: logical MVAU, the lineage exists only here.
     source_nodes = Attribute(str, default="", onnx="dataflow_source_nodes")
 
-    target_dsp = BuildFact(DspBlock, accessor=_target_dsp)
+    target_dsp = BuildFact(
+        DspBlock,
+        accessor=_target_dsp,
+        canonical=CanonicalValueCodec("dataflow.structural", 1, _target_dsp_canonical),
+    )
     #: Whether the matrix is written at runtime, and what range the caller
     #: promises it will hold.  Build facts rather than node attributes: both
     #: are decisions of the surrounding build, not properties of the graph.
@@ -601,7 +614,6 @@ class MvauDataflowOp(DataflowOp):
                 target_dsp=target_dsp,
                 clock_period_ns=clock_period_ns,
                 initializer_present=weight.initializer_present,
-                weight_initializer=allow_absent(weight.initializer_value),
             ),
             "batch_interleaved": Subspace(
                 BatchInterleavedKernel,
@@ -634,6 +646,15 @@ class MvauDataflowOp(DataflowOp):
 
     def selected_kernel(self) -> object:
         return _selected_kernel(self)
+
+    def selected_construction(self) -> object:
+        from finn.dataflow.ops.mvau.selected import (  # noqa: PLC0415
+            bind_mvau_selected_construction,
+        )
+
+        if not isinstance(self.selected_kernel(), DotProductKernel):
+            return None
+        return bind_mvau_selected_construction(type(self).weight.initializer_value)
 
     def selected_source_semantics(self) -> object:
         from finn.dataflow.ops.mvau.selected import (  # noqa: PLC0415

@@ -14,7 +14,7 @@ from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
 
 from finn.dataflow._engine import Finding, FindingKind, QualifiedPath
-from finn.dataflow.model import (
+from finn.dataflow.model.logical import (
     BeatSequence,
     BoundaryContract,
     DataflowNetwork,

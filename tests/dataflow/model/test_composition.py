@@ -3,7 +3,7 @@
 
 from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 
-from finn.dataflow.model.composition import (
+from finn.dataflow.model.logical.composition import (
     ImplementationPath,
     NetworkResult,
     ParentBoundary,
@@ -12,10 +12,10 @@ from finn.dataflow.model.composition import (
     compose_network,
     qualify_network,
 )
-from finn.dataflow.model.network import PassCorrespondence
-from finn.dataflow.model.network_validation import validate_network
-from finn.dataflow.ops.mvau.networks import construct_decomposed_mvau_network
-from finn.dataflow.ops.mvau.regions import (
+from finn.dataflow.model.logical.network import PassCorrespondence
+from finn.dataflow.model.logical.network_validation import validate_network
+from finn.dataflow.kernels.matmul.networks import construct_decomposed_mvau_network
+from finn.dataflow.kernels.matmul.regions import (
     construct_activation_replay_region,
     construct_dot_product_region,
 )

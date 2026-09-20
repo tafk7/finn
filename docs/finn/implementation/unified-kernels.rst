@@ -2,9 +2,17 @@ Unified Kernel authoring
 ========================
 
 The experimental dataflow stack uses one domain abstraction for reusable
-implementations: ``finn.dataflow.kernels.Kernel``. A Kernel is a normal
+implementations: ``finn.dataflow.model.kernel.Kernel``. A Kernel is a normal
 ``Space`` and uses the same declarations, immutable points, nested occurrences,
-readiness checks and constraints as every other Space.
+readiness checks and constraints as every other Space. The framework lives in
+``finn.dataflow.model``; ``finn.dataflow.kernels`` is the implementation
+library containing concrete leaves and families.
+
+The detached logical value model is under ``finn.dataflow.model.logical``.
+Generic physical structure, layout and lowering values are under
+``finn.dataflow.model.physical``, while logical-to-physical bindings and their
+validation are under ``finn.dataflow.model.relations``. These lower layers do
+not import concrete Kernels or source operations.
 
 Leaf Kernel
 -----------
@@ -71,7 +79,15 @@ constraint groups. An absent or unresolved optional view does not block an
 unrelated logical or physical query.
 
 Operations own source interpretation and selected ONNX construction. A
-``DataflowOp`` exposes its chosen implementation through ``selected_kernel()``;
-the selected Kernel optionally declares ``selected_construction``. Persisted
-choice paths use the ``kernel`` namespace. Pre-unified ``design__*`` attributes
-and older native schema versions are rejected rather than migrated implicitly.
+``DataflowOp`` exposes its chosen implementation through ``selected_kernel()``
+and binds that implementation to an optional construction through
+``selected_construction()``. Reusable Kernel classes do not import source Ops,
+carry source construction declarations or rely on import-time registration.
+Persisted choice paths use the ``kernel`` namespace. Pre-unified ``design__*``
+attributes and older native schema versions are rejected rather than migrated
+implicitly.
+
+Reusable matrix-multiplication profiles and implementations live under
+``finn.dataflow.kernels.matmul``. Source decoding, initializer capture,
+selected-graph construction and graph effects remain under
+``finn.dataflow.ops.mvau`` and ``finn.dataflow.ops.replay``.

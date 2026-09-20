@@ -15,15 +15,15 @@ from onnx import helper  # type: ignore[import-not-found]
 from qonnx.core.modelwrapper import ModelWrapper  # type: ignore[import-not-found]
 
 from finn.dataflow._engine import Finding, FindingKind, QualifiedPath
-from finn.dataflow.model.datatypes import resolve_qonnx_datatype_name
-from finn.dataflow.model.maps import RectangularDomain
-from finn.dataflow.model.network import (
+from finn.dataflow.model.logical.datatypes import resolve_qonnx_datatype_name
+from finn.dataflow.model.logical.maps import RectangularDomain
+from finn.dataflow.model.logical.network import (
     BoundaryContract,
     DataflowNetwork,
     NetworkNode,
     RegionEndpoint,
 )
-from finn.dataflow.ops.mvau.regions import construct_activation_replay_region
+from finn.dataflow.kernels.matmul.regions import construct_activation_replay_region
 from finn.dataflow.ops.selected import (
     SELECTED_DECLARATION_ID,
     SELECTED_DECLARATION_VERSION,

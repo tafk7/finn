@@ -3,14 +3,14 @@
 
 import pytest
 
-from finn.dataflow.model.maps import RectangularDomain
-from finn.dataflow.model.region import (
+from finn.dataflow.model.logical.maps import RectangularDomain
+from finn.dataflow.model.logical.region import (
     BeatSequence,
     LogicalSchedule,
     ScheduledInputRequirements,
     ScheduledOutputAvailability,
 )
-from finn.dataflow.model.region_profiles import (
+from finn.dataflow.model.logical.region_profiles import (
     CanonicalExtentProfile,
     ProfileCertificationError,
     direct_output_availability,

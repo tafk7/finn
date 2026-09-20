@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from finn.dataflow.model.region import (
+from finn.dataflow.model.logical.region import (
     DataflowRegion,
     InternalInput,
     LogicalSchedule,
@@ -15,7 +15,7 @@ from finn.dataflow.model.region import (
     ScheduledInputRequirements,
     ScheduledOutputAvailability,
 )
-from finn.dataflow.model.maps import MapCapabilityError, OccurrenceAxis
+from finn.dataflow.model.logical.maps import MapCapabilityError, OccurrenceAxis
 
 
 def construct_cyclic_parameter_region(output_port: Port) -> DataflowRegion:

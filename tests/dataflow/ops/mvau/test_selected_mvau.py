@@ -28,16 +28,16 @@ from finn.dataflow.analysis.integer_dot import (
 from finn.dataflow.kernels.dotp_axi import BatchInterleavedDotpAxiKernel, DotpAxiKernel
 from finn.dataflow.kernels.memstream import MemstreamKernel
 from finn.dataflow.kernels.replay_buffer import ReplayBufferKernel
-from finn.dataflow.model.maps import (
+from finn.dataflow.model.logical.maps import (
     CoordinateSet,
     IdentityCoordinateMap,
     RectangularDomain,
 )
-from finn.dataflow.model.region import BeatSequence
-from finn.dataflow.ops.mvau.computation import AccumulationMode, ActivationMode
-from finn.dataflow.ops.mvau.kernels.batch_interleaved import BatchInterleavedKernel
-from finn.dataflow.ops.mvau.kernels.base import WeightedDotProductKernel
-from finn.dataflow.ops.mvau.kernels.dot_product import DotProductKernel, WeightSupply
+from finn.dataflow.model.logical.region import BeatSequence
+from finn.dataflow.kernels.matmul.base import AccumulationMode, ActivationMode
+from finn.dataflow.kernels.matmul.batch_interleaved import BatchInterleavedKernel
+from finn.dataflow.kernels.matmul.base import WeightedDotProductKernel
+from finn.dataflow.kernels.matmul.dot_product import DotProductKernel, WeightSupply
 from finn.dataflow.ops.mvau.op import MvauDataflowOp
 from finn.dataflow.ops.mvau.numerics import (
     ACTIVATION_IDENTITY,
@@ -316,12 +316,13 @@ def test_bound_mvau_routes_through_the_design_construction_hook(supply) -> None:
 
 def test_generic_lowering_interprets_declared_initializer_inputs() -> None:
     _model, operation = _configured_mvau(supply=WeightSupply.EMBEDDED, pe=2, simd=2)
-    declaration = DotProductKernel.selected_construction
+    declaration = operation.selected_construction()
     assert declaration is not None
+    assert declaration.initializer_inputs[0].source is type(operation).weight.initializer_value
     with patch.object(
-        DotProductKernel,
+        type(operation),
         "selected_construction",
-        replace(declaration, initializer_inputs=()),
+        return_value=replace(declaration, initializer_inputs=()),
     ):
         answer = operation.selected_snapshot
     assert isinstance(answer, Absent)
@@ -878,6 +879,7 @@ def test_batch_interleaved_keeps_source_support_and_refuses_selected_constructio
     model = _mvau_model()
     operation = _interleaved_operation(model, interleave=2)
     assert isinstance(operation.network, Decided)
+    assert operation.selected_construction() is None
     answer = operation.selected_snapshot
     assert isinstance(answer, Absent)
     assert {finding.code for finding in answer.findings} == {"selected-graph-unsupported-kernel"}

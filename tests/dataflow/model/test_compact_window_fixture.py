@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 
-from finn.dataflow.model.network import (
+from finn.dataflow.model.logical.network import (
     BoundaryContract,
     DataflowNetwork,
     Edge,
@@ -14,8 +14,8 @@ from finn.dataflow.model.network import (
     RegionEndpoint,
     SinkContract,
 )
-from finn.dataflow.model.network_validation import NetworkValidationReport, validate_network
-from finn.dataflow.model.region import (
+from finn.dataflow.model.logical.network_validation import NetworkValidationReport, validate_network
+from finn.dataflow.model.logical.region import (
     BeatSequence,
     DataflowRegion,
     InputInterface,

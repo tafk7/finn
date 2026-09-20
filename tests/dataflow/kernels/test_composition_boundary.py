@@ -8,17 +8,17 @@ from typing import cast
 
 import pytest
 
-import finn.dataflow.kernels.kernel as design_module
+import finn.dataflow.model.logical.view as design_module
 from finn.dataflow._engine import Absent, Decided
-from finn.dataflow.kernels import (
-    Kernel,
+from finn.dataflow.model.children import KernelChoice
+from finn.dataflow.model.kernel import Kernel
+from finn.dataflow.model.logical.authoring import (
     EdgeSink,
-    KernelChoice,
     NetworkBoundary,
     NetworkEdge,
+    RegionDeclaration,
 )
-from finn.dataflow.kernels import RegionDeclaration
-from finn.dataflow.model import (
+from finn.dataflow.model.logical import (
     DataflowNetwork,
     DataflowRegion,
     InputInterface,
@@ -44,7 +44,7 @@ from finn.dataflow.space import (
     Subspace,
     constraint,
 )
-from finn.dataflow.space.dataflow_value_semantics import DATAFLOW_LOGICAL_RESULT_SEMANTICS
+from finn.dataflow.model.logical.semantics import DATAFLOW_LOGICAL_RESULT_SEMANTICS
 from finn.dataflow.space.declarations import Derived, semantics_for
 
 from dataflow.kernels.test_module_build_spec import ModuleKernel, UnavailableModule, _region

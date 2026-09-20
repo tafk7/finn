@@ -21,8 +21,8 @@ from typing import Any, cast
 import pytest
 from qonnx.core.datatype import BaseDataType, DataType  # type: ignore[import-not-found]
 
-from finn.dataflow.space.dataflow_value_semantics import QONNX_DATATYPE_SEMANTICS
-from finn.dataflow.model.datatypes import (
+from finn.dataflow.model.logical.semantics import QONNX_DATATYPE_SEMANTICS
+from finn.dataflow.model.logical.datatypes import (
     DatatypeError,
     QONNXDataType,
     canonical_qonnx_datatype,
@@ -32,7 +32,7 @@ from finn.dataflow.model.datatypes import (
     is_qonnx_datatype,
     qonnx_datatype_width,
 )
-from finn.dataflow.model.region import Operand, is_element_type
+from finn.dataflow.model.logical.region import Operand, is_element_type
 
 #: Every datatype family the stack could be handed, including the ones the
 #: previous representation could not express at all.

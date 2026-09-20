@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from hashlib import sha256
 from pathlib import Path
 from collections.abc import Mapping
 from typing import ClassVar, cast
@@ -40,31 +41,33 @@ from finn.dataflow.artifacts.build import (
 from finn.dataflow.artifacts.contributions import CopiedSource
 from finn.dataflow.artifacts.store import ArtifactStore
 from finn.dataflow.artifacts.rtl import check_abi
-from finn.dataflow.kernels.kernel import Kernel, KernelChoice, NetworkBoundary
-from finn.dataflow.kernels.physical_composition import (
-    ConstantBits,
+from finn.dataflow.model import Kernel, KernelChoice, NetworkBoundary
+from finn.dataflow.kernels.matmul.physical import (
     DECOMPOSED_PRODUCER,
     DECOMPOSED_WRAPPER_TEMPLATE,
-    CompositePhysicalFacts,
     PhysicalCompositionError,
+    compose_decomposed,
+    validate_decomposed_physical_facts as validate_kernel_physical_facts,
+)
+from finn.dataflow.model.physical.capture import selected_child_realization
+from finn.dataflow.model.physical.layout import PeriodicLast
+from finn.dataflow.model.physical.lowering import lower_module_structure
+from finn.dataflow.model.physical.structure import (
+    ConstantBits,
     PhysicalPin,
     PhysicalStructure,
     PhysicalWire,
     PinSlice,
-    SemanticPortBinding,
-    compose_decomposed,
-    lower_module_structure,
-    selected_child_realization,
-    validate_kernel_physical_facts,
 )
-from finn.dataflow.kernels.kernel import RegionDeclaration
-from finn.dataflow.kernels.physical import (
+from finn.dataflow.model.relations.values import (
+    CompositePhysicalFacts,
     KernelRealizationFacts,
     KernelStreamBinding,
-    PeriodicLast,
-    low_fields_binding,
+    SemanticPortBinding,
 )
-from finn.dataflow.model.region import (
+from finn.dataflow.model import RegionDeclaration
+from finn.dataflow.model.relations.view import low_fields_binding
+from finn.dataflow.model.logical.region import (
     BeatSequence,
     DataflowRegion,
     LogicalSchedule,
@@ -74,7 +77,8 @@ from finn.dataflow.model.region import (
     ScheduledOutputAvailability,
     ScheduleLevel,
 )
-from finn.dataflow.ops.mvau.kernels.dot_product import DotProductKernel, WeightSupply
+from finn.dataflow.kernels.matmul.dot_product import DotProductKernel, WeightSupply
+from finn.dataflow.kernels.matmul.resources import template_root
 from finn.dataflow.space.declarations import (
     Decision,
     Input,
@@ -109,6 +113,15 @@ def _realizations(
     assert isinstance(replay, Decided), replay
     assert isinstance(compute, Decided), compute
     return replay.value, compute.value
+
+
+def test_installed_matmul_template_is_the_accepted_source() -> None:
+    template = template_root() / "decomposed_wrapper.sv.j2"
+
+    assert template.is_file()
+    assert sha256(template.read_bytes()).hexdigest() == (
+        "3115c7181620dac035d6714ac6698723dada0099d980fdb5cefac30341676096"
+    )
 
 
 def test_external_dot_product_produces_the_complete_checked_facts() -> None:
@@ -156,7 +169,7 @@ def test_lowering_flattens_sources_and_renders_explicit_padding(
     prepared = prepare_module_build(
         requirements,
         roots={"finnlib": Path("deps/finnlib")},
-        template_roots=(Path("src/finn/dataflow/kernels/templates"),),
+        template_roots=(template_root(),),
         blobs=store,
     )
     assert isinstance(prepared.name, PreparedGeneratedModuleName)

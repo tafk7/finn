@@ -17,7 +17,7 @@ import pytest
 from onnx import helper  # type: ignore[import-not-found]
 from qonnx.core.modelwrapper import ModelWrapper  # type: ignore[import-not-found]
 
-import finn.dataflow.kernels.kernel as design_module
+import finn.dataflow.model.logical.view as design_module
 import finn.dataflow.ops.mapping as mapping_module
 from finn.dataflow._engine import Absent, Decided, Unresolved
 from finn.dataflow.artifacts.derivation import ContentRef, build_key
@@ -28,8 +28,7 @@ from finn.dataflow.conformance import (
     DataflowOpConformanceCase,
     assert_dataflow_op_conforms,
 )
-from finn.dataflow.kernels import Kernel
-from finn.dataflow.kernels import ModuleBuildRequirements
+from finn.dataflow.artifacts.build import ModuleBuildRequirements
 from finn.dataflow.artifacts.build import (
     FixedModuleName,
     prepare_module_build,
@@ -39,7 +38,7 @@ from finn.dataflow.artifacts.build import (
 )
 from finn.dataflow.artifacts.store import ArtifactStore
 from finn.dataflow.kernels.replay_buffer import FINNLIB_ROOT
-from finn.dataflow.model import (
+from finn.dataflow.model.logical import (
     DataflowNetwork,
     NetworkValidationReport,
     RegionInputRef,
@@ -47,7 +46,8 @@ from finn.dataflow.model import (
     exposing_ports,
     validate_network,
 )
-from finn.dataflow.model.refs import DataflowOperandRef
+from finn.dataflow.model.logical.refs import DataflowOperandRef
+from finn.dataflow.model.kernel import Kernel
 from finn.dataflow.ops.base import DATAFLOW_DOMAIN, DataflowOp, DataflowOpError
 from finn.dataflow.ops.inference import InferDataTypes, InferShapes
 from finn.dataflow.ops.mapping import CoordinateMapping, External

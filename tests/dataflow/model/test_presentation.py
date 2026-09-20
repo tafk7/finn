@@ -20,9 +20,9 @@ from pathlib import Path
 
 import pytest
 
-from finn.dataflow.model import network_validation, presentation
-from finn.dataflow.model.maps import CoordinateSet
-from finn.dataflow.model.network import (
+from finn.dataflow.model.logical import network_validation, presentation
+from finn.dataflow.model.logical.maps import CoordinateSet
+from finn.dataflow.model.logical.network import (
     DataflowNetwork,
     Edge,
     NetworkNode,
@@ -30,16 +30,16 @@ from finn.dataflow.model.network import (
     RegionEndpoint,
     SinkContract,
 )
-from finn.dataflow.model.network_validation import validate_network
-from finn.dataflow.model.presentation import (
+from finn.dataflow.model.logical.network_validation import validate_network
+from finn.dataflow.model.logical.presentation import (
     boundary_presented_position_set,
     edge_presented_position_set,
     exposing_boundaries,
     exposing_ports,
     unpresented_position_set,
 )
-from finn.dataflow.model.refs import NetworkOperandError, RegionInputRef
-from finn.dataflow.model.region import (
+from finn.dataflow.model.logical.refs import NetworkOperandError, RegionInputRef
+from finn.dataflow.model.logical.region import (
     DataflowRegion,
     InputInterface,
     LogicalSchedule,
@@ -49,7 +49,7 @@ from finn.dataflow.model.region import (
     ScheduledOutputAvailability,
     ScheduleLevel,
 )
-from finn.dataflow.model.region_validation import validate_region
+from finn.dataflow.model.logical.region_validation import validate_region
 from dataflow.model.supply_networks import (
     ACTIVATION,
     RESULT,

@@ -20,14 +20,12 @@ from __future__ import annotations
 
 from typing import ClassVar
 
-from finn.dataflow.kernels.kernel import (
-    Kernel,
-    PhysicallyUnsupported,
-    RegionDeclaration,
-)
+from finn.dataflow.model.kernel import Kernel
+from finn.dataflow.model.logical.authoring import RegionDeclaration
+from finn.dataflow.model.physical.authoring import PhysicallyUnsupported
 from finn.dataflow.space.declarations import Input
-from finn.dataflow.space.dataflow_value_semantics import QONNX_DATATYPE_VALUE_SEMANTICS
-from finn.dataflow.ops.mvau.regions import construct_weight_stream_region
+from finn.dataflow.model.logical.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
+from finn.dataflow.kernels.matmul.regions import construct_weight_stream_region
 
 
 class MemstreamKernel(Kernel):

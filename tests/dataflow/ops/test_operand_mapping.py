@@ -15,8 +15,8 @@ from dataflow.model.supply_networks import (
 )
 from dataflow.ops.test_dataflow_op import Build, _configured_mvau, _mvau_model, _unbound
 from finn.dataflow._engine import Decided, Unresolved
-from finn.dataflow.model.network import RegionEndpoint
-from finn.dataflow.model.refs import NetworkOperandError, RegionInputRef
+from finn.dataflow.model.logical.network import RegionEndpoint
+from finn.dataflow.model.logical.refs import NetworkOperandError, RegionInputRef
 from finn.dataflow.ops import mapping
 from finn.dataflow.ops.mapping import (
     CoordinateMapping,

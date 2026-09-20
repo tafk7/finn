@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from math import prod
 from typing import Any, cast
 
@@ -23,10 +23,10 @@ from finn.dataflow.analysis.integer_dot import (
     check_integer_dot_product_support,
     decode_dot_product_premise,
 )
-from finn.dataflow.model.datatypes import resolve_qonnx_datatype_name
-from finn.dataflow.model.maps import RectangularDomain
-from finn.dataflow.model.network import DataflowNetwork
-from finn.dataflow.ops.mvau.computation import AccumulationMode, ActivationMode
+from finn.dataflow.model.logical.datatypes import resolve_qonnx_datatype_name
+from finn.dataflow.model.logical.maps import RectangularDomain
+from finn.dataflow.model.logical.network import DataflowNetwork
+from finn.dataflow.kernels.matmul.base import AccumulationMode, ActivationMode
 from finn.dataflow.ops.mvau.numerics import (
     ACTIVATION_IDENTITY,
     WEIGHT_IDENTITY,
@@ -34,13 +34,13 @@ from finn.dataflow.ops.mvau.numerics import (
     integer_graph_profile_fingerprint,
     integer_type,
 )
-from finn.dataflow.ops.mvau.kernels.supply import WeightSupply
-from finn.dataflow.ops.mvau.networks import (
+from finn.dataflow.kernels.matmul.supply import WeightSupply
+from finn.dataflow.kernels.matmul.networks import (
     construct_decomposed_mvau_network,
     construct_decoupled_mvau_network,
     construct_embedded_mvau_network,
 )
-from finn.dataflow.ops.mvau.regions import (
+from finn.dataflow.kernels.matmul.regions import (
     construct_activation_replay_region,
     construct_dot_product_region,
     construct_embedded_dot_product_region,
@@ -66,6 +66,7 @@ from finn.dataflow.ops.selected import (
     SelectedConstruction,
     SelectedGraphDeclaration,
     SelectedGraphError,
+    SelectedInitializerInput,
     SelectedGraphSnapshot,
     SelectionFacts,
     SourceDirection,
@@ -88,6 +89,7 @@ from finn.dataflow.ops.selected_transforms import (
     SelectedTransformAuthorization,
 )
 from finn.dataflow.ops.tensor_summary import FrozenInitializer, decode_frozen_initializer
+from finn.dataflow.space.declarations import ValueSource
 
 MVAU_CONSTRUCTION_FAMILY = "finn.dataflow.selected.mvau.dot_product"
 MVAU_CONSTRUCTION_VERSION = "3"
@@ -1237,6 +1239,33 @@ MVAU_SELECTED_CONSTRUCTION = SelectedConstruction(
     verify=verify_mvau_snapshot,
 )
 
+
+def _local_weight_required(facts: SelectionFacts[object, object]) -> bool:
+    if not isinstance(facts.parameters, MvauSelectionParameters):
+        raise TypeError("MVAU initializer predicate received the wrong parameters")
+    return (
+        facts.parameters.weight_supply is not WeightSupply.EXTERNAL
+        or facts.parameters.fixed_weight_payload is not None
+    )
+
+
+def bind_mvau_selected_construction(
+    weight_initializer: ValueSource[FrozenInitializer],
+) -> SelectedConstruction[MvauSourceSemantics, MvauSelectionParameters]:
+    """Bind the source-owned initializer payload to the reusable recipe."""
+
+    return replace(
+        MVAU_SELECTED_CONSTRUCTION,
+        initializer_inputs=(
+            SelectedInitializerInput(
+                WEIGHT_KEY,
+                weight_initializer,
+                _local_weight_required,
+            ),
+        ),
+    )
+
+
 MVAU_SELECTED_TRANSFORM_AUTHORIZATIONS = (
     SelectedTransformAuthorization(
         READABLE_NAMES_TRANSFORM,
@@ -1272,6 +1301,7 @@ __all__ = [
     "WEIGHT_KEY",
     "MvauSelectionParameters",
     "MvauSourceSemantics",
+    "bind_mvau_selected_construction",
     "construct_mvau_snapshot",
     "decode_mvau_source_semantics",
     "derive_mvau_facts",

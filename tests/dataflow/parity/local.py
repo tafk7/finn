@@ -20,7 +20,7 @@ from onnx import TensorProto, helper  # type: ignore[import-not-found]
 from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 from qonnx.core.modelwrapper import ModelWrapper  # type: ignore[import-not-found]
 
-from finn.dataflow.kernels.dotp_axi import DspBlock
+from finn.dataflow.kernels.matmul.base import DspBlock
 from finn.dataflow.ops.base import DATAFLOW_DOMAIN
 from finn.dataflow.ops.mvau.op import MvauDataflowOp
 from finn.dataflow.ops.persistence import assign_dataflow_scope_ids

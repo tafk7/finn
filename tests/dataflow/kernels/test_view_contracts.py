@@ -22,7 +22,7 @@ from finn.dataflow.artifacts.build import (
     ModuleABIRequirements,
     ModuleBuildRequirements,
 )
-from finn.dataflow.kernels import (
+from finn.dataflow.model import (
     Kernel,
     KernelChoice,
     LogicalView,
@@ -32,7 +32,7 @@ from finn.dataflow.kernels import (
     RegionDeclaration,
 )
 from finn.dataflow.kernels.dotp_axi import DotpAxiKernel
-from finn.dataflow.model import (
+from finn.dataflow.model.logical import (
     BoundaryContract,
     DataflowNetwork,
     NetworkNode,
@@ -41,11 +41,11 @@ from finn.dataflow.model import (
     RegionResult,
 )
 from finn.dataflow.ops.base import DataflowOpError
-from finn.dataflow.ops.mvau.kernels.dot_product import DotProductKernel, WeightSupply
+from finn.dataflow.kernels.matmul.dot_product import DotProductKernel, WeightSupply
 from finn.dataflow.ops.physical import capture_local_physical
 from finn.dataflow.ops.persistence import plan_selected_publication
 from finn.dataflow.ops.reconstruction import rebind_selected_graph
-from finn.dataflow.ops.replay.kernel import ActivationReplayKernel
+from finn.dataflow.kernels.replay import ActivationReplayKernel
 from finn.dataflow.ops.replay.op import ActivationReplayOp
 from finn.dataflow.space import (
     ConstraintGroup,
@@ -60,7 +60,8 @@ from finn.dataflow.space import (
     derived,
     reject,
 )
-from finn.dataflow.space.dataflow_value_semantics import DATAFLOW_LOGICAL_RESULT_SEMANTICS
+from finn.dataflow.space.occurrence import layer_runtime
+from finn.dataflow.model.logical.semantics import DATAFLOW_LOGICAL_RESULT_SEMANTICS
 
 
 def _configured_dotp(activation: str) -> DotProductKernel:
@@ -301,6 +302,15 @@ def test_composite_physical_preserves_child_applicability_readiness_and_acceptan
     answer = rejected.kernel.physical.accepted_answer
     assert isinstance(answer, Absent)
     assert {finding.code for finding in answer.findings} == {"physical-contract-rejected"}
+
+
+def test_consumed_stream_capability_keeps_its_pre_kp_dependency_path() -> None:
+    root = _physical_contract_root(enabled=True, supported=True)
+    paths = {item.path.value for item in layer_runtime(root.kernel).compiled.spec.properties}
+    assert (
+        "semantic.root.kernel.child_node.contract_physical_leaf.accepted-physical-streams" in paths
+    )
+    assert not any(path.endswith("accepted-physical_streams") for path in paths)
 
 
 class GuardedLeaf(ModuleKernel):

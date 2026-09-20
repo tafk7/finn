@@ -1,17 +1,17 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-from finn.dataflow.ops.mvau.regions import (
+from finn.dataflow.kernels.matmul.regions import (
     construct_batch_interleaved_streamed_mvau_region,
     construct_standard_streamed_mvau_region,
 )
 import pytest
 
-from finn.dataflow.model.maps import CoordinateSet, MapCapabilityError, RectangularDomain
+from finn.dataflow.model.logical.maps import CoordinateSet, MapCapabilityError, RectangularDomain
 from finn.dataflow.parameters.cyclic.region import construct_cyclic_parameter_region
 from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 
-from finn.dataflow.model.region import (
+from finn.dataflow.model.logical.region import (
     BeatSequence,
     DataflowRegion,
     InternalInput,
@@ -22,7 +22,7 @@ from finn.dataflow.model.region import (
     ScheduledOutputAvailability,
     ScheduleLevel,
 )
-from finn.dataflow.model.region_validation import RegionValidationReport, validate_region
+from finn.dataflow.model.logical.region_validation import RegionValidationReport, validate_region
 
 INT8 = DataType["INT8"]
 INT16 = DataType["INT16"]

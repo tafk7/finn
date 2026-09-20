@@ -3,16 +3,20 @@
 
 """The dataflow stack, as a namespace and nothing more.
 
-Two packages carry the vocabulary, and each owns exactly what its name says:
+The packages form a one-way responsibility stack:
 
 ```text
-finn.dataflow.model    the detached DataflowRegion and DataflowNetwork model
-finn.dataflow.space    the generic Space declaration language, compiler and
-                       occurrence runtime
+finn.dataflow.space      generic declarations, compilation and occurrences
+finn.dataflow.model      Kernel-domain framework and detached value subpackages
+finn.dataflow.kernels    concrete reusable implementations and resources
+finn.dataflow.ops        source interpretation and compiler integration
 ```
 
-Above them sit ``kernels``, ``ops`` and ``parameters``; below and to the side,
-``artifacts`` and the private ``_engine``.
+Logical values live under ``model.logical``; generic physical structures and
+lowering under ``model.physical``; and logical-to-physical correspondence under
+``model.relations``. Portable build schemas and services remain in
+``artifacts``. The private ``_engine`` and generic ``space`` package do not
+depend on the Kernel domain, concrete library or source adapters.
 
 This module deliberately re-exports nothing.  A value with two importable paths
 looks like a value with two owners, and the whole point of the model/space split

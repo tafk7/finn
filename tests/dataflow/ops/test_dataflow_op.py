@@ -25,7 +25,8 @@ from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 from qonnx.core.modelwrapper import ModelWrapper  # type: ignore[import-not-found]
 
 from finn.dataflow._engine import Decided, RequestError, Unresolved
-from finn.dataflow.kernels.dotp_axi import DotpAxiKernel, DspBlock
+from finn.dataflow.kernels.dotp_axi import DotpAxiKernel
+from finn.dataflow.kernels.matmul.base import DspBlock
 from finn.dataflow.space.declarations import (
     AuthoringError,
     ConstraintGroup,
@@ -43,8 +44,8 @@ from finn.dataflow.ops.base import (
     DataflowOpError,
     source_declarations,
 )
-from finn.dataflow.ops.mvau.kernels.base import WeightedDotProductKernel
-from finn.dataflow.ops.mvau.kernels.dot_product import (
+from finn.dataflow.kernels.matmul.base import WeightedDotProductKernel
+from finn.dataflow.kernels.matmul.dot_product import (
     DotProductKernel,
     WeightSupply,
 )
@@ -55,7 +56,7 @@ from finn.dataflow.ops.persistence import (
     apply_graph_effects,
     assign_dataflow_scope_ids,
 )
-from finn.dataflow.ops.replay.kernel import ActivationReplayKernel
+from finn.dataflow.kernels.replay import ActivationReplayKernel
 from finn.dataflow.ops.replay.op import ActivationReplayOp
 from finn.dataflow.ops.schema import OpInput, OpOutput
 from finn.dataflow.ops.native import (

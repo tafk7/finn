@@ -22,7 +22,7 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any
 
-from finn.dataflow.model.datatypes import (
+from finn.dataflow.model.logical.datatypes import (
     QONNXDataType,
     canonical_qonnx_datatype,
     resolve_qonnx_datatype_name,

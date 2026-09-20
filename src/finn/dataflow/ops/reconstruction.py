@@ -180,14 +180,14 @@ def rebind_selected_graph(
     from finn.dataflow.ops.selected_registry import (  # noqa: PLC0415
         DEFAULT_SELECTED_CONSTRUCTIONS,
     )
-    from finn.dataflow.model.network_validation import validate_network  # noqa: PLC0415
+    from finn.dataflow.model.logical.network_validation import validate_network  # noqa: PLC0415
 
     registry = DEFAULT_SELECTED_CONSTRUCTIONS if constructions is None else constructions
     decoded = decode_selected_graph(snapshot, constructions=registry)
     if not isinstance(operation.dataflow.accepted_answer, Decided):
         raise DataflowOpError("current source has no accepted dataflow projection")
-    selected_kernel = operation.selected_kernel()
-    current_construction = getattr(type(selected_kernel), "selected_construction", None)
+    operation.selected_kernel()
+    current_construction = operation.selected_construction()
     if not isinstance(current_construction, SelectedConstruction):
         raise DataflowOpError("current source Kernel has no selected construction")
     if (current_construction.family, current_construction.version) != (

@@ -23,45 +23,45 @@ from qonnx.core.modelwrapper import ModelWrapper  # type: ignore[import-not-foun
 
 from finn.dataflow._engine import Absent, Answer, Decided, QualifiedPath, Unresolved
 from finn.dataflow.analysis.integer_dot import IntegerSupportReport
-from finn.dataflow.kernels.kernel import NetworkBoundary, KernelChoice
+from finn.dataflow.model import NetworkBoundary, KernelChoice
 from finn.dataflow.kernels.dotp_axi import (
     BatchInterleavedDotpAxiKernel,
     DotpAxiKernel,
-    DspBlock,
 )
+from finn.dataflow.kernels.matmul.base import DspBlock
 from finn.dataflow.space.compiler import _compile_space
 from finn.dataflow.space.declarations import Problem, Space, Subspace, ValueSource
 from finn.dataflow.space.occurrence import (
     occurrence_commit_paths,
     occurrence_persistable,
 )
-from finn.dataflow.space.dataflow_value_semantics import (
+from finn.dataflow.model.logical.semantics import (
     QONNX_DATATYPE_CODEC,
     QONNX_DATATYPE_VALUE_SEMANTICS,
 )
-from finn.dataflow.model.network import DataflowNetwork
-from finn.dataflow.model.network_validation import validate_network
+from finn.dataflow.model.logical.network import DataflowNetwork
+from finn.dataflow.model.logical.network_validation import validate_network
 from finn.dataflow.ops.mapping import External
 from finn.dataflow.ops.base import DATAFLOW_DOMAIN, DataflowOp, DataflowOpError
-from finn.dataflow.ops.mvau.computation import (
+from finn.dataflow.kernels.matmul.base import (
     AccumulationMode,
     ActivationMode,
     MvauComputationProfile,
 )
-from finn.dataflow.ops.mvau.kernels.base import WeightedDotProductKernel
-from finn.dataflow.ops.mvau.kernels.batch_interleaved import (
+from finn.dataflow.kernels.matmul.base import WeightedDotProductKernel
+from finn.dataflow.kernels.matmul.batch_interleaved import (
     KERNEL_INPUTS,
     BatchInterleavedKernel,
 )
-from finn.dataflow.ops.mvau.kernels.dot_product import DotProductKernel, WeightSupply
+from finn.dataflow.kernels.matmul.dot_product import DotProductKernel, WeightSupply
 from finn.dataflow.ops.mvau.op import MvauDataflowOp
 from finn.dataflow.space.declarations import derived
 from finn.dataflow.ops.schema import BuildFact, DatatypeAttribute, OpInput, OpOutput
 from finn.dataflow.ops.native import SCHEMA_VERSION_ATTRIBUTE, read_attributes
-from finn.dataflow.ops.mvau.regions import (
+from finn.dataflow.kernels.matmul.regions import (
     construct_batch_interleaved_mvau_weight_port as baseline_weight_port,
 )
-from finn.dataflow.ops.mvau.regions import (
+from finn.dataflow.kernels.matmul.regions import (
     construct_batch_interleaved_streamed_mvau_region as baseline_region,
 )
 from finn.dataflow.ops.persistence import assign_dataflow_scope_ids

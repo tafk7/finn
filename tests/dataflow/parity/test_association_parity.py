@@ -102,8 +102,8 @@ def test_the_association_carries_the_same_identities_where_a_network_resolves() 
     """
 
     from finn.dataflow.kernels.dotp_axi import DotpAxiKernel  # noqa: PLC0415
-    from finn.dataflow.ops.mvau.kernels.base import WeightedDotProductKernel  # noqa: PLC0415
-    from finn.dataflow.ops.mvau.kernels.dot_product import (  # noqa: PLC0415
+    from finn.dataflow.kernels.matmul.base import WeightedDotProductKernel  # noqa: PLC0415
+    from finn.dataflow.kernels.matmul.dot_product import (  # noqa: PLC0415
         DotProductKernel,
         WeightSupply,
     )

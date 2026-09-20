@@ -1,25 +1,19 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""MVAU: its canonical semantics, its Kernels, and its operation.
+"""MVAU source interpretation and compiler-facing lifecycle.
 
 ```text
-regions.py   the one authority for MVAU Region construction
-networks.py  the decomposed Network they form
-kernels/     shared base, dot_product, batch_interleaved
-op.py        the source node and its two Kernel alternatives
+op.py           source declarations and the choice of reusable implementation
+computation.py  source execution against the shared mathematical profile
+numerics.py     source/selected numerical-support evidence
+selected.py     source-owned selected construction and verification
 ```
 
-``regions`` and ``networks`` survived the legacy reset because they were never
-an experiment: they are the reference semantics every later MVAU implementation
-is measured against, and they depend on nothing but ``model.region`` and
-``model.network``.
-
-``regions`` is now the sole production authority, not merely the reference one.
-Each Kernel used to carry its own copy of the constructor its
-``RegionDeclaration`` named -- value-identical, and a second place for one
-semantic contract to live.  A Kernel declares candidates and physics; the
-Region family it realizes comes from here.
+Reusable profiles, Region/Network recipes, implementations and physical
+assembly live under ``finn.dataflow.kernels.matmul``. This source adapter binds
+node facts to that library and owns ONNX construction, persistence and graph
+effects; the implementation library never imports this package back.
 
 This namespace performs no eager import; ``finn.custom_op.dataflow`` is where
 the operation is registered for QONNX to find.

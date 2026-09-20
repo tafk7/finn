@@ -41,16 +41,16 @@ from finn.dataflow.analysis.integer_dot import (
     OperandIdentity,
     RuntimeWeightPromise,
 )
-from finn.dataflow.kernels.dotp_axi import DspBlock
+from finn.dataflow.kernels.matmul.base import DspBlock
 from finn.dataflow.space.declarations import AuthoringError
 from finn.dataflow.ops.base import DATAFLOW_DOMAIN, DataflowOp, DataflowOpError
-from finn.dataflow.ops.mvau.computation import (
+from finn.dataflow.kernels.matmul.base import (
     AccumulationMode,
     ActivationMode,
     MvauComputationProfile,
-    execute_mvau,
 )
-from finn.dataflow.ops.mvau.kernels.base import WeightedDotProductKernel
+from finn.dataflow.ops.mvau.computation import execute_mvau
+from finn.dataflow.kernels.matmul.base import WeightedDotProductKernel
 from finn.dataflow.ops.mvau.op import origin_nodes, MvauDataflowOp
 from finn.dataflow.ops.persistence import assign_dataflow_scope_ids
 from finn.dataflow.ops.schema import Attribute, OpInput, OpOutput
@@ -977,6 +977,22 @@ def test_a_valid_build_still_binds() -> None:
     model = _model()
 
     assert _unbound(model, "mvau0").bind(model, Build()).is_bound
+
+
+def test_dsp_type_relocation_preserves_the_source_problem_identity() -> None:
+    operation = _bound(_model())
+    codec = MvauDataflowOp.target_dsp.canonical
+    value = operation.problem_snapshot[MvauDataflowOp.target_dsp]
+
+    assert (codec.identity, codec.version) == ("dataflow.structural", 1)
+    assert codec.encode(value) == {
+        "enum": "finn.dataflow.kernels.dotp_axi.DspBlock",
+        "value": "DSP58",
+    }
+    assert (
+        operation.local_problem_fingerprint
+        == "cecb1852f3e07d777b4b0c881c5767f5e4122249e6205c539a4dc4cdb900aaf4"
+    )
 
 
 def test_an_optional_build_fact_that_is_absent_becomes_an_absent_problem() -> None:

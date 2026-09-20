@@ -28,7 +28,7 @@ from finn.dataflow.analysis.integer_dot import (
     execute_integer_dot_product,
     validate_integer_dot_product_operands,
 )
-from finn.dataflow.model.datatypes import QONNXDataType
+from finn.dataflow.model.logical.datatypes import QONNXDataType
 from finn.dataflow.ops.source import SourceNode, SourceOperand
 from finn.dataflow.ops.tensor_summary import FrozenInitializer
 

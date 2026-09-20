@@ -7,32 +7,32 @@ import pytest
 
 from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 
-from finn.dataflow.model.maps import (
+from finn.dataflow.model.logical.maps import (
     CoordinateSet,
     MaterializationLimitError,
     RectangularDomain,
     encode_coordinate_map,
 )
-from finn.dataflow.model.network_validation import (
+from finn.dataflow.model.logical.network_validation import (
     NetworkValidationReport,
     validate_network,
 )
-from finn.dataflow.model.presentation import (
+from finn.dataflow.model.logical.presentation import (
     boundary_presented_position_set,
     unpresented_position_set,
 )
-from finn.dataflow.model.refs import RegionInputRef
-from finn.dataflow.model.region import BeatSequence
-from finn.dataflow.model.region_validation import (
+from finn.dataflow.model.logical.refs import RegionInputRef
+from finn.dataflow.model.logical.region import BeatSequence
+from finn.dataflow.model.logical.region_validation import (
     RegionValidationReport,
     validate_region,
 )
-from finn.dataflow.ops.mvau.networks import construct_decomposed_mvau_network
-from finn.dataflow.ops.mvau.regions import (
+from finn.dataflow.kernels.matmul.networks import construct_decomposed_mvau_network
+from finn.dataflow.kernels.matmul.regions import (
     construct_activation_replay_region,
     construct_dot_product_region,
 )
-from finn.dataflow.space.dataflow_value_semantics import (
+from finn.dataflow.model.logical.semantics import (
     DATAFLOW_NETWORK_SEMANTICS,
     DATAFLOW_REGION_SEMANTICS,
 )

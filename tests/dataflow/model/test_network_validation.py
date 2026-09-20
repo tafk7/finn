@@ -10,11 +10,11 @@ from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 from dataclasses import replace
 from typing import cast
 
-from finn.dataflow.ops.mvau.regions import (
+from finn.dataflow.kernels.matmul.regions import (
     construct_batch_interleaved_streamed_mvau_region,
     construct_standard_streamed_mvau_region,
 )
-from finn.dataflow.model.network import (
+from finn.dataflow.model.logical.network import (
     BoundaryContract,
     ChannelSpec,
     DataflowNetwork,
@@ -27,20 +27,20 @@ from finn.dataflow.model.network import (
     RegionEndpoint,
     SinkContract,
 )
-from finn.dataflow.model.network_validation import (
+from finn.dataflow.model.logical.network_validation import (
     NetworkValidationBudget,
     NetworkValidationReport,
     validate_network,
 )
-from finn.dataflow.model.maps import (
+from finn.dataflow.model.logical.maps import (
     CoordinateSet,
     ExplicitCoordinateMap,
     RectangularDomain,
     ValidationCapabilityError,
 )
 from finn.dataflow.parameters.cyclic.region import construct_cyclic_parameter_region
-from finn.dataflow.space.dataflow_value_semantics import DATAFLOW_NETWORK_SEMANTICS
-from finn.dataflow.model.region import (
+from finn.dataflow.model.logical.semantics import DATAFLOW_NETWORK_SEMANTICS
+from finn.dataflow.model.logical.region import (
     BeatSequence,
     Coordinate,
     DataflowRegion,

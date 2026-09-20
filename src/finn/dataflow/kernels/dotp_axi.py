@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-from enum import Enum
 from math import ceil, floor
 from collections.abc import Mapping
 from typing import ClassVar, cast
@@ -27,8 +26,10 @@ from finn.dataflow.artifacts.abi import (
 from finn.dataflow.analysis.integer_dot import IntegerSupportReport
 from finn.dataflow.artifacts.contributions import CopiedSource
 from finn.dataflow.artifacts.build import ModuleABIRequirements, ScalarTable
-from finn.dataflow.kernels.physical import KernelStreamBinding, PeriodicLast, low_fields_binding
-from finn.dataflow.space.dataflow_value_semantics import QONNX_DATATYPE_VALUE_SEMANTICS
+from finn.dataflow.model.physical.layout import PeriodicLast
+from finn.dataflow.model.relations.values import KernelStreamBinding
+from finn.dataflow.model.relations.view import low_fields_binding
+from finn.dataflow.model.logical.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
 from finn.dataflow.space.declarations import (
     ConstraintGroup,
     Decision,
@@ -38,19 +39,16 @@ from finn.dataflow.space.declarations import (
     reject,
     unresolved,
 )
-from finn.dataflow.kernels.kernel import (
-    Kernel,
-    ModuleParameter,
-    PhysicallyUnsupported,
-    RegionDeclaration,
-)
-from finn.dataflow.model.region import DataflowRegion, NumericElementType, element_width
-from finn.dataflow.ops.mvau.regions import (
+from finn.dataflow.model.kernel import Kernel
+from finn.dataflow.model.logical.authoring import RegionDeclaration
+from finn.dataflow.model.physical.authoring import ModuleParameter, PhysicallyUnsupported
+from finn.dataflow.kernels.matmul.base import AccumulationMode, DspBlock, MvauComputationProfile
+from finn.dataflow.model.logical.region import DataflowRegion, NumericElementType, element_width
+from finn.dataflow.kernels.matmul.regions import (
     construct_batch_interleaved_streamed_mvau_region,
     construct_dot_product_region,
     construct_embedded_dot_product_region,
 )
-from finn.dataflow.ops.mvau.computation import AccumulationMode, MvauComputationProfile
 
 FINNLIB_ROOT = "finnlib"
 FINNLIB_SOURCES = (
@@ -60,14 +58,6 @@ FINNLIB_SOURCES = (
     "rtl/linalg/dotp.sv",
     "rtl/linalg/dotp_axi.sv",
 )
-
-
-class DspBlock(str, Enum):
-    """DSP generation selected by the target platform."""
-
-    DSP48E1 = "DSP48E1"
-    DSP48E2 = "DSP48E2"
-    DSP58 = "DSP58"
 
 
 _DSP_VERSION = {
@@ -604,7 +594,6 @@ class BatchInterleavedDotpAxiKernel(DotpAxiKernel):
 
 __all__ = [
     "BatchInterleavedDotpAxiKernel",
-    "DspBlock",
     "DotpAxiKernel",
     "EmbeddedDotpAxiKernel",
     "FINNLIB_ROOT",

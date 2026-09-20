@@ -19,7 +19,7 @@ from dataflow.ops.test_conformance import (
 )
 from dataflow.physical_fixture import source_model
 from finn.dataflow._engine import Decided
-from finn.dataflow.model.region import BeatSequence
+from finn.dataflow.model.logical.region import BeatSequence
 from finn.dataflow.ops.base import DATAFLOW_DOMAIN, DataflowOpError
 from finn.dataflow.ops.graph_context import (
     ContextRead,

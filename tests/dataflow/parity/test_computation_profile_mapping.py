@@ -76,7 +76,7 @@ def test_each_of_the_six_combinations_maps_and_executes_alike(
         assert oracle_profile == "accumulator_integer"
         assert profile.accumulation.name == "BIPOLAR_POPCOUNT"
     else:
-        from finn.dataflow.ops.mvau.computation import AccumulationMode, ActivationMode  # noqa: PLC0415
+        from finn.dataflow.kernels.matmul.base import AccumulationMode, ActivationMode  # noqa: PLC0415
 
         assert oracle_profile == old_value.lower()
         expected = _PROFILE_CORRESPONDENCE[oracle_profile]

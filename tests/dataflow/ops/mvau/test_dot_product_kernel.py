@@ -19,38 +19,40 @@ from finn.dataflow._engine import (
     Unresolved,
 )
 from finn.dataflow.analysis.integer_dot import IntegerSupportReport
-from finn.dataflow.space.dataflow_value_semantics import (
+from finn.dataflow.model.logical.semantics import (
     QONNX_DATATYPE_CODEC,
     QONNX_DATATYPE_VALUE_SEMANTICS,
 )
 from finn.dataflow.space.compiler import _Ref, _compile_space
 from finn.dataflow.space.declarations import Problem, Space, Subspace, ValueSource
 from finn.dataflow.space.occurrence import occurrence_persistable
-from finn.dataflow.kernels.kernel import kernel_dataflow
-from finn.dataflow.ops.mvau.kernels.dot_product import (
+from finn.dataflow.model import kernel_dataflow
+from finn.dataflow.kernels.matmul.dot_product import (
     KERNEL_INPUTS,
     DotProductKernel,
     WeightSupply,
 )
-from finn.dataflow.kernels.dotp_axi import DotpAxiKernel, DspBlock
-from finn.dataflow.kernels.kernel import ModuleBuildRequirements, kernel_physical
+from finn.dataflow.kernels.dotp_axi import DotpAxiKernel
+from finn.dataflow.kernels.matmul.base import DspBlock
+from finn.dataflow.artifacts.build import ModuleBuildRequirements
+from finn.dataflow.model import kernel_physical
 from finn.dataflow.kernels.replay_buffer import ReplayBufferKernel
-from finn.dataflow.model.network import (
+from finn.dataflow.model.logical.network import (
     DataflowNetwork,
     DirectConnection,
     FanoutMode,
     PassCorrespondence,
 )
-from finn.dataflow.model.network_validation import validate_network
-from finn.dataflow.ops.mvau.regions import (
+from finn.dataflow.model.logical.network_validation import validate_network
+from finn.dataflow.kernels.matmul.regions import (
     construct_activation_replay_region as baseline_replay,
 )
 from finn.dataflow.ops.tensor_summary import FrozenInitializer
-from finn.dataflow.ops.mvau.regions import (
+from finn.dataflow.kernels.matmul.regions import (
     construct_dot_product_region as baseline_dot_product,
 )
-from finn.dataflow.ops.mvau.networks import construct_decomposed_mvau_network
-from finn.dataflow.ops.mvau.computation import (
+from finn.dataflow.kernels.matmul.networks import construct_decomposed_mvau_network
+from finn.dataflow.kernels.matmul.base import (
     AccumulationMode,
     ActivationMode,
     MvauComputationProfile,

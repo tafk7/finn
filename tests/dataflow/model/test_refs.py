@@ -11,22 +11,22 @@ is the point of ``model.refs`` versus ``model.presentation``.
 import pytest
 from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 
-from finn.dataflow.model.network import DataflowNetwork, NetworkNode
-from finn.dataflow.model.network_validation import validate_network
-from finn.dataflow.model.refs import (
+from finn.dataflow.model.logical.network import DataflowNetwork, NetworkNode
+from finn.dataflow.model.logical.network_validation import validate_network
+from finn.dataflow.model.logical.refs import (
     NetworkOperandError,
     RegionInputRef,
     RegionOutputRef,
     resolve_input,
     resolve_output,
 )
-from finn.dataflow.model.region import (
+from finn.dataflow.model.logical.region import (
     DataflowRegion,
     InternalInput,
     Operand,
     ScheduledInputRequirements,
 )
-from finn.dataflow.model.region_validation import validate_region
+from finn.dataflow.model.logical.region_validation import validate_region
 from dataflow.model.supply_networks import (
     SCHEDULE,
     WEIGHT,

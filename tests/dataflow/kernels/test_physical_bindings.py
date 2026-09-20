@@ -8,15 +8,15 @@ from dataclasses import replace
 import pytest
 
 from finn.dataflow._engine import Decided
-from finn.dataflow.kernels.physical import (
+from finn.dataflow.model.physical.capture import capture_kernel_realization
+from finn.dataflow.model.physical.layout import (
     FieldPlacement,
     PackedBeatLayout,
     PeriodicLast,
     UnusedBitPolicy,
     UnusedBitRange,
-    capture_kernel_realization,
-    validate_kernel_stream_bindings,
 )
+from finn.dataflow.model.relations.validation import validate_kernel_stream_bindings
 
 from dataflow.ops.mvau.test_dot_product_kernel import _occurrence
 

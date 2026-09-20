@@ -5,8 +5,8 @@ from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 
 import pytest
 
-from finn.dataflow.model.maps import MapCapabilityError, RectangularDomain
-from finn.dataflow.model.region import (
+from finn.dataflow.model.logical.maps import MapCapabilityError, RectangularDomain
+from finn.dataflow.model.logical.region import (
     BeatSequence,
     DataflowRegion,
     InputInterface,
@@ -18,7 +18,7 @@ from finn.dataflow.model.region import (
     ScheduledOutputAvailability,
     InternalInput,
 )
-from finn.dataflow.model.region_validation import validate_region
+from finn.dataflow.model.logical.region_validation import validate_region
 
 ELEMENT_TYPE = DataType["INT8"]
 

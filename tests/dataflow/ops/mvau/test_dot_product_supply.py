@@ -14,16 +14,16 @@ from __future__ import annotations
 import pytest
 
 from finn.dataflow._engine import Absent, Decided, Unresolved
-from finn.dataflow.model.presentation import (
+from finn.dataflow.model.logical.presentation import (
     boundary_presented_position_set,
     edge_presented_position_set,
     exposing_ports,
     unpresented_position_set,
 )
-from finn.dataflow.model.refs import RegionInputRef
-from finn.dataflow.model.region import InputInterface, InternalInput
+from finn.dataflow.model.logical.refs import RegionInputRef
+from finn.dataflow.model.logical.region import InputInterface, InternalInput
 from finn.dataflow.kernels.memstream import MemstreamKernel
-from finn.dataflow.ops.mvau.kernels.dot_product import (
+from finn.dataflow.kernels.matmul.dot_product import (
     DotProductKernel,
     WeightSupply,
 )

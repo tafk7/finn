@@ -15,6 +15,7 @@ from finn.dataflow._engine import Absent, Decided, QualifiedPath, Unresolved
 from finn.dataflow.artifacts.abi import ComponentABI
 from finn.dataflow.artifacts.build import (
     BuildError,
+    ModuleBuildRequirements,
     RenderedSourceRequirement,
     SELF_CONTAINED_JINJA_RENDERER,
     prepare_module_build,
@@ -22,14 +23,10 @@ from finn.dataflow.artifacts.build import (
 )
 from finn.dataflow.artifacts.store import ArtifactStore
 from finn.dataflow.artifacts.derivation import Scalar, build_key
-from finn.dataflow.kernels import (
-    Kernel,
-    ModuleBuildRequirements,
-    ModuleParameter,
-    PhysicallyUnsupported,
-    RegionDeclaration,
-)
-from finn.dataflow.model import (
+from finn.dataflow.model.kernel import Kernel
+from finn.dataflow.model.logical.authoring import RegionDeclaration
+from finn.dataflow.model.physical.authoring import ModuleParameter, PhysicallyUnsupported
+from finn.dataflow.model.logical import (
     BeatSequence,
     DataflowRegion,
     InternalInput,

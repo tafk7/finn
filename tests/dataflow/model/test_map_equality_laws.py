@@ -7,7 +7,7 @@ from itertools import permutations
 
 from qonnx.core.datatype import DataType
 
-from finn.dataflow.model.maps import (
+from finn.dataflow.model.logical.maps import (
     CoordinateSet,
     OccurrenceAxis,
     RectangularDomain,
@@ -16,8 +16,8 @@ from finn.dataflow.model.maps import (
     decode_requirement_rule,
     encode_requirement_rule,
 )
-from finn.dataflow.model.network import PositionMap
-from finn.dataflow.model.region import (
+from finn.dataflow.model.logical.network import PositionMap
+from finn.dataflow.model.logical.region import (
     BeatSequence,
     DataflowRegion,
     InternalInput,
@@ -27,8 +27,8 @@ from finn.dataflow.model.region import (
     ScheduledOutputAvailability,
     ScheduleLevel,
 )
-from finn.dataflow.model.region_validation import validate_region
-from finn.dataflow.space.dataflow_value_semantics import POSITION_MAP_SEMANTICS
+from finn.dataflow.model.logical.region_validation import validate_region
+from finn.dataflow.model.logical.semantics import POSITION_MAP_SEMANTICS
 
 
 def _assert_equivalence_laws(values: tuple[object, ...]) -> None:

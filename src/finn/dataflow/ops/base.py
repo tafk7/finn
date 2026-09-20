@@ -42,9 +42,9 @@ from finn.dataflow.space.occurrence import (
     occurrence_answer_at,
     occurrence_persistable,
 )
-from finn.dataflow.model.network import DataflowNetwork
-from finn.dataflow.model.composition import NetworkResult
-from finn.dataflow.model.refs import DataflowOperandRef, NetworkOperandError
+from finn.dataflow.model.logical.network import DataflowNetwork
+from finn.dataflow.model.logical.composition import NetworkResult
+from finn.dataflow.model.logical.refs import DataflowOperandRef, NetworkOperandError
 from finn.dataflow.ops.mapping import OperandMapping, _derive_operand_mappings
 from finn.dataflow.ops.native import (
     AttributeCodec,
@@ -619,6 +619,11 @@ class DataflowOp(Space, CustomOp):  # type: ignore[misc]
 
         raise NotImplementedError(f"{type(self).__name__} does not route to a Kernel")
 
+    def selected_construction(self) -> object:
+        """Return the optional source-owned recipe binding for the selected Kernel."""
+
+        return None
+
     def selected_source_semantics(self) -> object:
         """Encode the operation's normalized source meaning for reconstruction."""
 
@@ -1143,7 +1148,7 @@ def _raw_attribute(node: Any, name: str) -> Any | None:
 
 
 def _datatype_attribute(node: Any, member_name: str, declaration: DatatypeAttribute) -> object:
-    from finn.dataflow.model.datatypes import canonical_qonnx_datatype  # noqa: PLC0415 - cycle
+    from finn.dataflow.model.logical.datatypes import canonical_qonnx_datatype  # noqa: PLC0415 - cycle
     from qonnx.core.datatype import DataType  # type: ignore[import-not-found] # noqa: PLC0415
 
     raw = _raw_attribute(node, attribute_name(member_name, declaration))

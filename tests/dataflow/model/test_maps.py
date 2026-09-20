@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import pytest
 
-from finn.dataflow.model.maps import (
+from finn.dataflow.model.logical.maps import (
     AffineRankMap,
     CoordinateSet,
     ExplicitCoordinateMap,

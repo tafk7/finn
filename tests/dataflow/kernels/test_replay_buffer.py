@@ -17,10 +17,11 @@ from finn.dataflow.artifacts.abi import ComponentABI, Reset, Signal
 from finn.dataflow.artifacts.formats import _descriptor
 from finn.dataflow.artifacts.rtl import Declined, check_abi
 from finn.dataflow.artifacts.store import ArtifactStore
-from finn.dataflow.space.dataflow_value_semantics import QONNX_DATATYPE_VALUE_SEMANTICS
+from finn.dataflow.model.logical.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
 from finn.dataflow.space.compiler import _Ref, _compile_space
 from finn.dataflow.space.declarations import Decision, Problem, Space, divisors_of
-from finn.dataflow.kernels.kernel import ModuleBuildRequirements, kernel_physical, kernel_dataflow
+from finn.dataflow.artifacts.build import ModuleBuildRequirements
+from finn.dataflow.model import kernel_dataflow, kernel_physical
 from finn.dataflow.artifacts.build import (
     prepare_module_build,
     module_source_derivation,
@@ -32,11 +33,11 @@ from finn.dataflow.kernels.replay_buffer import (
     FINNLIB_SOURCES,
     ReplayBufferKernel,
 )
-from finn.dataflow.ops.mvau import regions as mvau_regions
-from finn.dataflow.ops.mvau.regions import (
+from finn.dataflow.kernels.matmul import regions as mvau_regions
+from finn.dataflow.kernels.matmul.regions import (
     construct_activation_replay_region as baseline_region,
 )
-from finn.dataflow.model.region_validation import validate_region
+from finn.dataflow.model.logical.region_validation import validate_region
 from finn.dataflow.space.spec_algebra import assemble_specs
 
 BOUND_NAMES = (
@@ -354,6 +355,6 @@ def test_replay_packages_into_a_portable_component(tmp_path: Path) -> None:
 
 
 def test_the_replay_kernel_declares_the_one_semantic_constructor_authority() -> None:
-    """The Kernel-local copy is gone; the declaration names `ops.mvau.regions`."""
+    """The leaf uses the family-owned canonical Region constructor."""
 
     assert ReplayBufferKernel.region.construct is mvau_regions.construct_activation_replay_region

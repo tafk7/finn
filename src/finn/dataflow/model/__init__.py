@@ -1,276 +1,86 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The canonical dataflow model: what a Region and a Network *are*.
+"""Kernel-domain values and authoring framework.
 
-Detached, immutable values and pure operations over them.  A ``DataflowRegion``
-here is a finished statement about one logical schedule, its operands and its
-boundary; a ``DataflowNetwork`` is a finished statement about how several of them
-are wired.  Neither knows how it was authored, which design point produced it, or
-what will be built from it.
-
-```text
-model/datatypes           QONNX datatype identity at the model boundary
-model/maps                detached finite domains and compact map algebra
-model/region              operands, schedules, requirements, ports, inputs
-model/region_profiles     construction profiles contributors build Regions from
-model/region_validation   Region semantic validation
-model/network             nodes, edges, boundaries, position maps
-model/network_validation  Network semantic validation
-model/refs                qualified RegionInputRef / RegionOutputRef resolution
-model/presentation        exposure and edge/boundary/unpresented queries
-```
-
-The facade is deliberately small: the values and the operations over them, and
-nothing that only the engine bridge needs.  ``QONNX_DATATYPE_TOKEN`` and
-``DATATYPE_PAYLOAD_KEY`` stay in ``model.datatypes`` for that reason -- they are
-codec plumbing that ``space.dataflow_value_semantics`` imports directly, not
-vocabulary a Region author uses.
-
-The package imports the Python standard library, QONNX datatype identity through
-``model.datatypes``, and its own siblings.  It imports no Space, no ``_engine``,
-no Kernel, Kernel, operation, ONNX wrapper, physical value or artifact
-capability -- ``test_package_boundaries`` enforces the direction, and
-``space.dataflow_value_semantics`` is where the engine learns about these values,
-one way.
-
-Not to be confused with ``finn.dataflow.space``, which owns the generic
-declaration language that *produces* these values.  ``RegionDeclaration`` is a
-Kernel's recipe; ``DataflowRegion`` is what the recipe yields.
+The package root is intentionally lightweight. Detached logical values live in
+:mod:`finn.dataflow.model.logical`; importing them must not load the Space
+runtime or Kernel authoring adapters.
 """
 
-from finn.dataflow.model.datatypes import (
-    DatatypeError,
-    QONNXDataType,
-    canonical_qonnx_datatype,
-    decode_datatype,
-    encode_datatype,
-    is_qonnx_datatype,
-    qonnx_datatype_width,
-    resolve_qonnx_datatype_name,
-)
-from finn.dataflow.model.composition import (
-    CompositionError,
-    ImplementationPath,
-    LogicalResult,
-    NetworkFragment,
-    NetworkResult,
-    ParentBoundary,
-    ParentConnection,
-    QualifiedChildResult,
-    RegionResult,
-    compose_network,
-    qualify_logical,
-    qualify_network,
-    qualify_region,
-)
-from finn.dataflow.model.maps import (
-    AffineRankMap,
-    Coordinate,
-    CoordinateSet,
-    ExplicitCoordinateMap,
-    FiniteCoordinateSet,
-    IdentityCoordinateMap,
-    InvalidMapError,
-    MapCapabilityError,
-    MaterializationLimitError,
-    MaterializationRequired,
-    OccurrenceAxis,
-    RectangularDomain,
-    SeparableAffineRequirements,
-    UnboundDomainError,
-    UnsupportedMapEncoding,
-    ValidationCapabilityError,
-    decode_coordinate_map,
-    decode_coordinate_set,
-    decode_requirement_rule,
-    encode_coordinate_map,
-    encode_coordinate_set,
-    encode_requirement_rule,
-)
-from finn.dataflow.model.region import (
-    BeatSequence,
-    BeatType,
-    DataflowRegion,
-    InputInterface,
-    InternalInput,
-    LogicalSchedule,
-    NumericElementType,
-    Operand,
-    OutputInterface,
-    Port,
-    RegionInput,
-    RegionRefused,
-    ScheduledInputRequirements,
-    ScheduledOutputAvailability,
-    ScheduleLevel,
-    element_width,
-    is_element_type,
-)
-from finn.dataflow.model.region_profiles import (
-    CanonicalExtentProfile,
-    ProfileCertificationError,
-    ProfileCertificationIssue,
-    direct_output_availability,
-    explicit_beat_sequence,
-    lexicographic_occurrence_to_field,
-)
-from finn.dataflow.model.region_validation import (
-    RegionValidationIssue,
-    RegionValidationReport,
-    is_structurally_well_formed,
-    validate_region,
-)
-from finn.dataflow.model.network import (
-    BoundaryContract,
-    ChannelSpec,
-    DataflowNetwork,
-    DirectConnection,
-    Edge,
-    EdgeTransport,
-    FanoutMode,
-    NetworkNode,
-    OrderedChannel,
-    PassCorrespondence,
-    PositionMap,
-    RegionEndpoint,
-    SinkContract,
-)
-from finn.dataflow.model.network_validation import (
-    NetworkValidationBudget,
-    NetworkValidationIssue,
-    NetworkValidationReport,
-    is_network_structurally_well_formed,
-    validate_network,
-)
-from finn.dataflow.model.refs import (
-    DataflowOperandRef,
-    NetworkOperandError,
-    RegionInputRef,
-    RegionOutputRef,
-    resolve_input,
-    resolve_output,
-)
-from finn.dataflow.model.presentation import (
-    boundary_presented_position_set,
-    boundary_presented_positions,
-    edge_presented_position_set,
-    edge_presented_positions,
-    exposing_boundaries,
-    exposing_ports,
-    unpresented_position_set,
-    unpresented_positions,
-)
+from importlib import import_module
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from finn.dataflow.model.children import KernelChoice
+    from finn.dataflow.model.identity import ImplementationIdentity, implementation_identity
+    from finn.dataflow.model.kernel import Kernel
+    from finn.dataflow.model.logical.authoring import (
+        EdgeSink,
+        KernelEndpoint,
+        NetworkBoundary,
+        NetworkEdge,
+        RegionDeclaration,
+    )
+    from finn.dataflow.model.logical.view import LogicalView, kernel_dataflow
+    from finn.dataflow.model.physical.authoring import ModuleParameter, PhysicallyUnsupported
+    from finn.dataflow.model.physical.view import PhysicalView, kernel_physical
+    from finn.dataflow.model.relations.view import RelationView
+
+_LAZY_EXPORTS = {
+    "Kernel": ("finn.dataflow.model.kernel", "Kernel"),
+    "KernelChoice": ("finn.dataflow.model.children", "KernelChoice"),
+    "LogicalView": ("finn.dataflow.model.logical.view", "LogicalView"),
+    "RegionDeclaration": ("finn.dataflow.model.logical.authoring", "RegionDeclaration"),
+    "KernelEndpoint": ("finn.dataflow.model.logical.authoring", "KernelEndpoint"),
+    "EdgeSink": ("finn.dataflow.model.logical.authoring", "EdgeSink"),
+    "NetworkEdge": ("finn.dataflow.model.logical.authoring", "NetworkEdge"),
+    "NetworkBoundary": ("finn.dataflow.model.logical.authoring", "NetworkBoundary"),
+    "ModuleParameter": ("finn.dataflow.model.physical.authoring", "ModuleParameter"),
+    "PhysicallyUnsupported": (
+        "finn.dataflow.model.physical.authoring",
+        "PhysicallyUnsupported",
+    ),
+    "PhysicalView": ("finn.dataflow.model.physical.view", "PhysicalView"),
+    "RelationView": ("finn.dataflow.model.relations.view", "RelationView"),
+    "ImplementationIdentity": (
+        "finn.dataflow.model.identity",
+        "ImplementationIdentity",
+    ),
+    "implementation_identity": (
+        "finn.dataflow.model.identity",
+        "implementation_identity",
+    ),
+    "kernel_dataflow": ("finn.dataflow.model.logical.view", "kernel_dataflow"),
+    "kernel_physical": ("finn.dataflow.model.physical.view", "kernel_physical"),
+}
+
+
+def __getattr__(name: str) -> object:
+    target = _LAZY_EXPORTS.get(name)
+    if target is None:
+        raise AttributeError(name)
+    module_name, attribute_name = target
+    value = getattr(import_module(module_name), attribute_name)
+    globals()[name] = value
+    return value
+
 
 __all__ = [
-    # the datatype boundary
-    "DatatypeError",
-    "QONNXDataType",
-    "CompositionError",
-    "ImplementationPath",
-    "LogicalResult",
-    "NetworkFragment",
-    "NetworkResult",
-    "ParentBoundary",
-    "ParentConnection",
-    "QualifiedChildResult",
-    "RegionResult",
-    "canonical_qonnx_datatype",
-    "compose_network",
-    "decode_datatype",
-    "encode_datatype",
-    "is_qonnx_datatype",
-    "qonnx_datatype_width",
-    "qualify_logical",
-    "qualify_network",
-    "qualify_region",
-    "resolve_qonnx_datatype_name",
-    # the Region model
-    "AffineRankMap",
-    "BeatSequence",
-    "BeatType",
-    "Coordinate",
-    "CoordinateSet",
-    "DataflowRegion",
-    "InputInterface",
-    "InternalInput",
-    "ExplicitCoordinateMap",
-    "FiniteCoordinateSet",
-    "IdentityCoordinateMap",
-    "InvalidMapError",
-    "LogicalSchedule",
-    "NumericElementType",
-    "MapCapabilityError",
-    "MaterializationLimitError",
-    "MaterializationRequired",
-    "OccurrenceAxis",
-    "Operand",
-    "OutputInterface",
-    "Port",
-    "RegionInput",
-    "RegionRefused",
-    "RectangularDomain",
-    "ScheduleLevel",
-    "ScheduledInputRequirements",
-    "ScheduledOutputAvailability",
-    "SeparableAffineRequirements",
-    "UnboundDomainError",
-    "UnsupportedMapEncoding",
-    "ValidationCapabilityError",
-    "decode_coordinate_map",
-    "decode_coordinate_set",
-    "decode_requirement_rule",
-    "encode_coordinate_map",
-    "encode_coordinate_set",
-    "encode_requirement_rule",
-    "element_width",
-    "is_element_type",
-    # construction profiles
-    "CanonicalExtentProfile",
-    "ProfileCertificationError",
-    "ProfileCertificationIssue",
-    "direct_output_availability",
-    "explicit_beat_sequence",
-    "lexicographic_occurrence_to_field",
-    # Region validation
-    "RegionValidationIssue",
-    "RegionValidationReport",
-    "is_structurally_well_formed",
-    "validate_region",
-    # the Network model
-    "BoundaryContract",
-    "ChannelSpec",
-    "DataflowNetwork",
-    "DirectConnection",
-    "Edge",
-    "EdgeTransport",
-    "FanoutMode",
-    "NetworkNode",
-    "OrderedChannel",
-    "PassCorrespondence",
-    "PositionMap",
-    "RegionEndpoint",
-    "SinkContract",
-    # Network validation
-    "NetworkValidationBudget",
-    "NetworkValidationIssue",
-    "NetworkValidationReport",
-    "is_network_structurally_well_formed",
-    "validate_network",
-    # qualified references
-    "DataflowOperandRef",
-    "NetworkOperandError",
-    "RegionInputRef",
-    "RegionOutputRef",
-    "resolve_input",
-    "resolve_output",
-    # exposure and presentation
-    "boundary_presented_position_set",
-    "boundary_presented_positions",
-    "edge_presented_position_set",
-    "edge_presented_positions",
-    "exposing_boundaries",
-    "exposing_ports",
-    "unpresented_position_set",
-    "unpresented_positions",
+    "EdgeSink",
+    "ImplementationIdentity",
+    "Kernel",
+    "KernelChoice",
+    "KernelEndpoint",
+    "LogicalView",
+    "ModuleParameter",
+    "NetworkBoundary",
+    "NetworkEdge",
+    "PhysicalView",
+    "PhysicallyUnsupported",
+    "RegionDeclaration",
+    "RelationView",
+    "implementation_identity",
+    "kernel_dataflow",
+    "kernel_physical",
 ]

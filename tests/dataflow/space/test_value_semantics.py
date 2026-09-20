@@ -22,11 +22,11 @@ from finn.dataflow._engine import (
     ReadinessProfile,
     as_object_semantics,
 )
-from finn.dataflow.space.dataflow_value_semantics import (
+from finn.dataflow.model.logical.semantics import (
     DATAFLOW_REGION_SEMANTICS,
     REGION_VALIDATION_REPORT_SEMANTICS,
 )
-from finn.dataflow.model.region import (
+from finn.dataflow.model.logical.region import (
     BeatSequence,
     DataflowRegion,
     InputInterface,
@@ -40,11 +40,11 @@ from finn.dataflow.model.region import (
     ScheduledOutputAvailability,
     ScheduleLevel,
 )
-from finn.dataflow.model.region_validation import (
+from finn.dataflow.model.logical.region_validation import (
     RegionValidationReport,
     validate_region,
 )
-from finn.dataflow.ops.mvau.regions import construct_activation_replay_region
+from finn.dataflow.kernels.matmul.regions import construct_activation_replay_region
 from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 
 

@@ -26,14 +26,14 @@ from finn.dataflow._engine import (
     RequestError,
     Unresolved,
 )
-from finn.dataflow.model.datatypes import (
+from finn.dataflow.model.logical.datatypes import (
     QONNXDataType,
     canonical_qonnx_datatype,
     encode_datatype,
 )
-from finn.dataflow.model.maps import RectangularDomain
-from finn.dataflow.model.network import DataflowNetwork, PassCorrespondence
-from finn.dataflow.model.region import BeatSequence
+from finn.dataflow.model.logical.maps import RectangularDomain
+from finn.dataflow.model.logical.network import DataflowNetwork, PassCorrespondence
+from finn.dataflow.model.logical.region import BeatSequence
 from finn.dataflow.ops.mapping import External, OperandMapping
 from finn.dataflow.ops.model_effects import (
     ModelReadExpectation,

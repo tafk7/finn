@@ -19,20 +19,22 @@ from finn.dataflow.artifacts.build import (
     ModuleBuildRequirements,
 )
 from finn.dataflow.artifacts.store import ArtifactStore
-from finn.dataflow.kernels.kernel import Kernel
-from finn.dataflow.kernels.physical_composition import LogicalPhysicalRelation
-from finn.dataflow.model.composition import NetworkResult, RegionResult
+from finn.dataflow.model import Kernel
+from finn.dataflow.model.relations.values import LogicalPhysicalRelation
+from finn.dataflow.model.logical.composition import NetworkResult, RegionResult
 from finn.dataflow.ops.base import DataflowOpError
-from finn.dataflow.ops.mvau.kernels.base import WeightedDotProductKernel
-from finn.dataflow.ops.mvau.kernels.dot_product import DotProductKernel, WeightSupply
-from finn.dataflow.ops.mvau.computation import (
+from finn.dataflow.kernels.matmul.base import WeightedDotProductKernel
+from finn.dataflow.kernels.matmul.dot_product import DotProductKernel, WeightSupply
+from finn.dataflow.kernels.matmul.resources import template_root
+from finn.dataflow.kernels.matmul.base import (
     AccumulationMode,
     ActivationMode,
     MvauComputationProfile,
 )
 from finn.dataflow.ops.mvau.op import MvauDataflowOp
-from finn.dataflow.kernels.dotp_axi import DotpAxiKernel, DspBlock
-from finn.dataflow.kernels.kernel import PhysicalView
+from finn.dataflow.kernels.dotp_axi import DotpAxiKernel
+from finn.dataflow.kernels.matmul.base import DspBlock
+from finn.dataflow.model import PhysicalView
 from finn.dataflow.ops.physical import (
     associate_physical_use,
     authorize_component_use,
@@ -43,7 +45,7 @@ from finn.dataflow.ops.physical import (
     prepare_local_physical,
     validate_compiler_physical_use,
 )
-from finn.dataflow.space.capabilities import implementation_identity
+from finn.dataflow.model.identity import implementation_identity
 from finn.dataflow.space.occurrence import ProjectionAssessment
 from finn.dataflow.space.declarations import (
     ConstraintGroup,
@@ -248,9 +250,7 @@ def test_local_physical_capture_ignores_unresolved_and_rejected_logical_only_cho
     prepared = prepare_local_physical(
         unresolved_capture,
         roots={"finnlib": __import__("pathlib").Path("deps/finnlib").resolve()},
-        template_roots=(
-            __import__("pathlib").Path("src/finn/dataflow/kernels/templates").resolve(),
-        ),
+        template_roots=(template_root(),),
         blobs=store,
     )
     built = materialize_local_physical(prepared, store=store)
@@ -422,9 +422,7 @@ def test_plain_space_completes_source_selection_build_association_and_installati
     prepared = prepare_local_physical(
         local,
         roots={"finnlib": __import__("pathlib").Path("deps/finnlib").resolve()},
-        template_roots=(
-            __import__("pathlib").Path("src/finn/dataflow/kernels/templates").resolve(),
-        ),
+        template_roots=(template_root(),),
         blobs=store,
     )
     built = materialize_local_physical(prepared, store=store)
@@ -502,9 +500,7 @@ def test_built_component_cannot_cross_physical_choice_points(tmp_path) -> None:
     prepared = prepare_local_physical(
         pumped_local,
         roots={"finnlib": __import__("pathlib").Path("deps/finnlib").resolve()},
-        template_roots=(
-            __import__("pathlib").Path("src/finn/dataflow/kernels/templates").resolve(),
-        ),
+        template_roots=(template_root(),),
         blobs=store,
     )
     built = materialize_local_physical(prepared, store=store)

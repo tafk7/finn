@@ -70,7 +70,7 @@ from finn.dataflow.space.declarations import (
     reject,
     semantics_for,
 )
-from finn.dataflow.space.dataflow_value_semantics import (
+from finn.dataflow.model.logical.semantics import (
     QONNX_DATATYPE_CODEC,
     QONNX_DATATYPE_VALUE_SEMANTICS,
 )
@@ -330,10 +330,11 @@ class BuildFact(Problem[Any]):
         accessor: Callable[[Any], T | None],
         default: T | None = None,
         required: bool = True,
+        canonical: CanonicalValueCodec[Any] | None = None,
     ) -> None:
         if not callable(accessor):
             raise AuthoringError("a BuildFact needs a callable accessor")
-        Problem.__init__(self, value_type, required=False)
+        Problem.__init__(self, value_type, required=False, canonical=canonical)
         object.__setattr__(self, "value_type", value_type)
         object.__setattr__(self, "accessor", accessor)
         object.__setattr__(self, "default", default)

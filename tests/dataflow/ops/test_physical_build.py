@@ -16,7 +16,7 @@ import finn.dataflow.artifacts.build as build_module
 from finn.dataflow._engine import Decided, Unresolved
 from finn.dataflow.artifacts.build import module_source_derivation
 from finn.dataflow.artifacts.store import ArtifactStore
-from finn.dataflow.model.region import BeatSequence
+from finn.dataflow.model.logical.region import BeatSequence
 from finn.dataflow.ops.base import DataflowOpError
 from finn.dataflow.ops.graph_context import (
     capture_frozen_op_logical,

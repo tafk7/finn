@@ -11,7 +11,7 @@ from enum import Enum
 import pytest
 
 import finn.dataflow.kernels as kernels
-import finn.dataflow.kernels.kernel as kernel
+import finn.dataflow.model as kernel
 import finn.dataflow.space as space
 from finn.dataflow.space.declarations import (
     AuthoringError,
@@ -211,7 +211,6 @@ def test_public_space_facade_exposes_only_generic_vocabulary() -> None:
         "ConstraintGroup",
         "Decision",
         "Input",
-        "ImplementationIdentity",
         "OccurrenceContext",
         "OccurrenceDiagnostic",
         "PersistentCodec",
@@ -235,7 +234,6 @@ def test_public_space_facade_exposes_only_generic_vocabulary() -> None:
         "divisors_of",
         "domain",
         "finite",
-        "implementation_identity",
         "reject",
         "unresolved",
     }
@@ -259,9 +257,8 @@ def test_every_named_export_resolves() -> None:
 
 
 def test_every_layer_names_its_own_specialization() -> None:
-    """A Kernel author declaring a `RegionDeclaration` reaches for the Kernel package."""
+    """The domain framework and implementation library expose separate concepts."""
 
-    assert kernels.RegionDeclaration is kernel.RegionDeclaration
     for name in (
         "Kernel",
         "LogicalView",
@@ -271,6 +268,13 @@ def test_every_layer_names_its_own_specialization() -> None:
         "RegionDeclaration",
         "kernel_physical",
     ):
-        assert name in kernels.__all__
+        assert name in kernel.__all__
     for name in ("NetworkBoundary", "NetworkEdge", "Kernel", "KernelChoice", "EdgeSink"):
-        assert name in kernels.__all__
+        assert name in kernel.__all__
+    assert not {
+        "Kernel",
+        "KernelChoice",
+        "LogicalView",
+        "ModuleParameter",
+        "RegionDeclaration",
+    } & set(kernels.__all__)

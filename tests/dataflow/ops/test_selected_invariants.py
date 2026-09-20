@@ -20,7 +20,7 @@ from qonnx.analysis.tensor_value_summary import (  # type: ignore[import-not-fou
 from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 from qonnx.core.modelwrapper import ModelWrapper  # type: ignore[import-not-found]
 
-from finn.dataflow.model import (
+from finn.dataflow.model.logical import (
     AffineRankMap,
     BeatSequence,
     BoundaryContract,

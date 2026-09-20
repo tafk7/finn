@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The exact public surface of `finn.dataflow.model`, pinned.
+"""The exact public surface of `finn.dataflow.model.logical`, pinned.
 
 C1.5 made this facade permanent and deliberately decided what it does *not*
 carry, and a decision that lives only in a commit message is a decision that
@@ -12,8 +12,8 @@ accidentally dropped one both show up as a set difference.
 
 from __future__ import annotations
 
-import finn.dataflow.model as model
-from finn.dataflow.model import datatypes
+import finn.dataflow.model.logical as model
+from finn.dataflow.model.logical import datatypes
 
 
 def test_the_model_facade_is_exactly_this_set() -> None:

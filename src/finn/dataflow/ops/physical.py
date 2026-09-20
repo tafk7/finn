@@ -10,8 +10,7 @@ contain no operation, model, logical graph or source occurrence identity.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, fields, is_dataclass
-from enum import Enum
+from dataclasses import dataclass
 import hashlib
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
@@ -21,8 +20,6 @@ from finn.dataflow._engine import (
     Absent,
     Answer,
     Decided,
-    DependencyKind,
-    DependencyRef,
     Finding,
     FindingKind,
     QualifiedPath,
@@ -41,13 +38,19 @@ from finn.dataflow.artifacts.packaging import PortableComponent
 from finn.dataflow.artifacts.store import ArtifactStore
 from finn.dataflow.ops.base import DataflowOpError
 from finn.dataflow.space.occurrence import ProjectionAssessment
-from finn.dataflow.model.composition import ImplementationPath, NetworkResult
-from finn.dataflow.space.capabilities import ImplementationIdentity, implementation_identity
-from finn.dataflow.space.declarations import semantics_for
-from finn.dataflow.space.occurrence import layer_runtime
+from finn.dataflow.model.logical.composition import NetworkResult
+from finn.dataflow.model.physical.capture import (
+    LocalPhysicalCapture,
+    PhysicalCaptureError,
+    capture_local_physical as _capture_local_physical,
+)
+from finn.dataflow.model.relations.capture import (
+    LocalRelationCapture,
+    capture_local_relation as _capture_local_relation,
+)
 
 if TYPE_CHECKING:
-    from finn.dataflow.kernels.physical_composition import (  # noqa: PLC0415
+    from finn.dataflow.model.relations.values import (
         BoundaryBinding,
         EdgeBinding,
         SemanticPortBinding,
@@ -79,40 +82,6 @@ class PhysicalBuildCapture:
             raise TypeError("physical capture requires model-free module requirements")
         if not isinstance(self.association, PhysicalBuildAssociation):
             raise TypeError("physical capture requires its logical association")
-
-
-@dataclass(frozen=True)
-class CapturedDependency:
-    kind: str
-    path: str
-    value: object
-
-
-@dataclass(frozen=True)
-class LocalPhysicalCapture:
-    """Model-free physical evidence for one projected implementation point."""
-
-    implementation: ImplementationIdentity
-    occurrence_path: ImplementationPath
-    occurrence_token: int
-    dependencies: tuple[CapturedDependency, ...]
-    point_fingerprint: str
-    physical_fingerprint: str
-    requirements: ModuleBuildRequirements
-    physical: object
-
-
-@dataclass(frozen=True)
-class LocalRelationCapture:
-    """A separately requested logical/physical correspondence claim."""
-
-    implementation: ImplementationIdentity
-    occurrence_path: ImplementationPath
-    occurrence_token: int
-    physical_point_fingerprint: str
-    relation_fingerprint: str
-    logical_fingerprint: str
-    relation: object
 
 
 @dataclass(frozen=True)
@@ -185,332 +154,25 @@ def _digest(*values: object) -> str:
     return hashlib.sha256("\n".join(repr(value) for value in values).encode("utf-8")).hexdigest()
 
 
-def _occurrence_identity(implementation: object) -> tuple[ImplementationPath, int]:
-    from finn.dataflow.space.declarations import Space  # noqa: PLC0415
-
-    if not isinstance(implementation, Space):
-        raise TypeError("local physical capture requires a Space occurrence")
-    runtime = layer_runtime(implementation)
-    segments = tuple(runtime.compiled.namespace.split("."))
-    return ImplementationPath(segments), id(runtime.engine)
-
-
-def _canonical_dependency_value(value: object) -> object:
-    if value is None or type(value) in (bool, int, str):
-        return value
-    if type(value) is float:
-        return {"float_hex": value.hex()}
-    if isinstance(value, bytes):
-        return {"bytes": value.hex()}
-    if isinstance(value, QualifiedPath):
-        return {"path": value.value}
-    if isinstance(value, Enum):
-        return {
-            "enum": f"{type(value).__module__}.{type(value).__qualname__}",
-            "value": _canonical_dependency_value(value.value),
-        }
-    if is_dataclass(value) and not isinstance(value, type):
-        return {
-            "dataclass": f"{type(value).__module__}.{type(value).__qualname__}",
-            "fields": tuple(
-                (item.name, _canonical_dependency_value(getattr(value, item.name)))
-                for item in fields(value)
-                if item.compare
-            ),
-        }
-    if isinstance(value, Mapping):
-        return {
-            "mapping": tuple(
-                sorted(
-                    (
-                        repr(_canonical_dependency_value(key)),
-                        _canonical_dependency_value(item),
-                    )
-                    for key, item in value.items()
-                )
-            )
-        }
-    if isinstance(value, (tuple, list)):
-        return tuple(_canonical_dependency_value(item) for item in value)
-    if isinstance(value, (set, frozenset)):
-        return {"set": tuple(sorted(repr(_canonical_dependency_value(item)) for item in value))}
-    name = getattr(value, "name", None)
-    if isinstance(name, str) and name:
-        return {"named": f"{type(value).__module__}.{type(value).__qualname__}", "name": name}
-    return {
-        "typed_repr": f"{type(value).__module__}.{type(value).__qualname__}",
-        "value": repr(value),
-    }
-
-
-def _canonical_answer(answer: Answer[object]) -> object:
-    if isinstance(answer, Decided):
-        return {"decided": _canonical_dependency_value(answer.value)}
-    return {
-        "absent" if isinstance(answer, Absent) else "unresolved": tuple(
-            (
-                finding.kind.value,
-                finding.code,
-                finding.path.value,
-                tuple((name, _canonical_dependency_value(value)) for name, value in finding.values),
-            )
-            for finding in answer.findings
-        )
-    }
-
-
-def _physical_dependency_snapshot(implementation: object) -> tuple[CapturedDependency, ...]:
-    """Capture the actual transitive closure of a declared physical Projection."""
-
-    from finn.dataflow.space.declarations import Projection, Space  # noqa: PLC0415
-    from finn.dataflow.space.compiler import _Ref, answer_for  # noqa: PLC0415
-
-    if not isinstance(implementation, Space):
-        raise TypeError("dependency capture requires a Space occurrence")
-    declaration = getattr(type(implementation), "physical", None)
-    if not isinstance(declaration, Projection):
-        assessment: ProjectionAssessment[Any] = implementation.assess_view("physical")
-        return (
-            CapturedDependency(
-                "capability-output",
-                f"{type(implementation).__name__}.physical",
-                _canonical_answer(cast("Answer[object]", assessment.accepted_answer)),
-            ),
-        )
-    runtime = layer_runtime(implementation)
-    compiled = runtime.compiled.projection("physical")
-    space = runtime.point.design_space
-    captured: dict[tuple[str, str], CapturedDependency] = {}
-    visiting: set[tuple[DependencyKind, QualifiedPath]] = set()
-
-    def record(kind: str, path: QualifiedPath, answer: Answer[object]) -> None:
-        captured[(kind, path.value)] = CapturedDependency(
-            kind, path.value, _canonical_answer(answer)
-        )
-
-    def visit_reference(reference: DependencyRef) -> None:
-        key = (reference.kind, reference.path)
-        if key in visiting:
-            return
-        visiting.add(key)
-        path = reference.path
-        if reference.kind is DependencyKind.PROBLEM:
-            answer: Answer[object] = (
-                Decided(runtime.point.problem[path]) if path in runtime.point.problem else Absent()
-            )
-            record("problem", path, answer)
-            return
-        if reference.kind is DependencyKind.DECISION:
-            declaration = space.decisions[path]
-            if declaration.applies_if is not None:
-                for dependency in declaration.applies_if.dependencies:
-                    visit_reference(dependency)
-                applies = runtime.engine._query_applicability(runtime.point, path)
-                record("applicability", path, applies)
-                if not isinstance(applies, Decided) or not applies.value:
-                    return
-            for dependency in declaration.domain.dependencies:
-                visit_reference(dependency)
-            answer = answer_for(
-                runtime.engine,
-                runtime.point,
-                _Ref(path, DependencyKind.DECISION, declaration.value_semantics),
-            )
-            record("decision", path, answer)
-            return
-        property_declaration = space.properties.get(path)
-        if property_declaration is not None:
-            if property_declaration.applies_if is not None:
-                for dependency in property_declaration.applies_if.dependencies:
-                    visit_reference(dependency)
-                applies = runtime.engine._query_applicability(runtime.point, path)
-                record("applicability", path, applies)
-                if not isinstance(applies, Decided) or not applies.value:
-                    return
-            for dependency in property_declaration.evaluator.dependencies:
-                visit_reference(dependency)
-            answer = runtime.engine.query_property(runtime.point, path)
-            record("property", path, answer)
-            return
-        constraint = space.constraints.get(path)
-        if constraint is None:
-            raise DataflowOpError(f"physical dependency {path} is not declared")
-        if constraint.applies_if is not None:
-            for dependency in constraint.applies_if.dependencies:
-                visit_reference(dependency)
-            applies = runtime.engine._query_applicability(runtime.point, path)
-            record("applicability", path, applies)
-            if not isinstance(applies, Decided) or not applies.value:
-                return
-        for dependency in constraint.evaluator.dependencies:
-            visit_reference(dependency)
-        constraint_answer = runtime.engine.evaluate_constraints(runtime.point, (path,)).answers[
-            path
-        ]
-        record("constraint", path, cast(Any, constraint_answer))
-
-    for dependency in compiled.applicability.dependencies if compiled.applicability else ():
-        visit_reference(dependency)
-    visit_reference(
-        DependencyRef(
-            "output",
-            compiled.output.path,
-            compiled.output.kind,
-            compiled.output.semantics,
-        )
-    )
-    readiness = space.readiness_profiles[compiled.readiness_profile]
-    for path in readiness.decisions:
-        declaration = space.decisions[path]
-        visit_reference(
-            DependencyRef("readiness", path, DependencyKind.DECISION, declaration.value_semantics)
-        )
-    for path in readiness.properties:
-        declaration = space.properties[path]
-        visit_reference(
-            DependencyRef("readiness", path, DependencyKind.PROPERTY, declaration.value_semantics)
-        )
-    constraint_paths = set(readiness.constraints)
-    for group in compiled.constraint_sets:
-        constraint_paths.update(space.constraint_sets[group])
-    for path in sorted(constraint_paths):
-        visit_reference(
-            DependencyRef(
-                "constraint",
-                path,
-                DependencyKind.CONSTRAINT,
-                semantics_for(bool),
-            )
-        )
-    visited_paths = {path for _kind, path in captured}
-
-    def implementation_dependencies(compiled_space: object) -> None:
-        namespace = getattr(compiled_space, "namespace", "")
-        owner = getattr(compiled_space, "owner", None)
-        if (
-            namespace
-            and isinstance(owner, type)
-            and any(path == namespace or path.startswith(f"{namespace}.") for path in visited_paths)
-        ):
-            family = getattr(owner, "id", "")
-            version = getattr(owner, "version", "")
-            if isinstance(family, str) and family and isinstance(version, str) and version:
-                captured[("implementation", namespace)] = CapturedDependency(
-                    "implementation",
-                    namespace,
-                    {"family": family, "version": version},
-                )
-        for _name, child in getattr(compiled_space, "children", ()):
-            implementation_dependencies(child)
-        for _name, branch in getattr(compiled_space, "branches", ()):
-            for case in branch.cases:
-                implementation_dependencies(case.compiled)
-
-    implementation_dependencies(runtime.compiled)
-    return tuple(captured[key] for key in sorted(captured))
-
-
 def capture_local_physical(implementation: object) -> LocalPhysicalCapture:
-    """Capture only the implementation's accepted local physical capability."""
-
-    from finn.dataflow.space.declarations import Space  # noqa: PLC0415
-
-    if not isinstance(implementation, Space):
-        raise TypeError("local physical capture requires a Space occurrence")
-    assessment: ProjectionAssessment[Any] = implementation.assess_view("physical")
-    if not isinstance(assessment.accepted_answer, Decided):
-        raise DataflowOpError(
-            "local physical capability is not accepted",
-            getattr(assessment.accepted_answer, "findings", ()),
-        )
-    physical: object = assessment.accepted_answer.value
-    requirements = (
-        physical
-        if isinstance(physical, ModuleBuildRequirements)
-        else getattr(physical, "requirements", None)
-    )
-    if not isinstance(requirements, ModuleBuildRequirements):
-        raise TypeError("physical capability does not expose ModuleBuildRequirements")
-    path, token = _occurrence_identity(implementation)
-    identity = implementation_identity(implementation)
-    dependencies = _physical_dependency_snapshot(implementation)
-    physical_fingerprint = module_build_fingerprint(requirements)
-    point_fingerprint = _digest(identity, path, dependencies)
-    return LocalPhysicalCapture(
-        identity,
-        path,
-        token,
-        dependencies,
-        point_fingerprint,
-        physical_fingerprint,
-        requirements,
-        physical,
-    )
+    try:
+        return _capture_local_physical(implementation)
+    except PhysicalCaptureError as error:
+        raise DataflowOpError(str(error), error.findings) from error
 
 
 def capture_local_relation(
-    implementation: object,
-    physical: LocalPhysicalCapture,
+    implementation: object, physical: LocalPhysicalCapture
 ) -> LocalRelationCapture:
-    """Join a local physical result to an accepted logical view on demand."""
-
-    from finn.dataflow.kernels.physical_composition import (  # noqa: PLC0415
-        LogicalPhysicalRelation,
-    )
-    from finn.dataflow.space.declarations import Space  # noqa: PLC0415
-
-    if not isinstance(implementation, Space):
-        raise TypeError("local relation capture requires a Space occurrence")
-    current = capture_local_physical(implementation)
-    if current != physical:
-        raise DataflowOpError("physical capture belongs to a different projected point")
-    assessment: ProjectionAssessment[Any] = implementation.assess_view("physical_relation")
-    if not isinstance(assessment.accepted_answer, Decided):
-        raise DataflowOpError(
-            "logical/physical relation is not accepted",
-            getattr(assessment.accepted_answer, "findings", ()),
-        )
-    relation = assessment.accepted_answer.value
-    if not isinstance(relation, LogicalPhysicalRelation):
-        raise TypeError("physical relation capability returned the wrong value")
-    if relation.physical.requirements != physical.requirements:
-        raise DataflowOpError("physical relation names different local requirements")
-    logical: ProjectionAssessment[Any] = implementation.assess_view("logical")
-    if not isinstance(logical.accepted_answer, Decided):
-        raise DataflowOpError(
-            "logical capability is not accepted for relation capture",
-            getattr(logical.accepted_answer, "findings", ()),
-        )
-    logical_value = logical.accepted_answer.value
-    logical_network = (
-        logical_value.network if isinstance(logical_value, NetworkResult) else logical_value
-    )
-    if relation.network != logical_network:
-        raise DataflowOpError("physical relation Network differs from the logical capability")
-    logical_fingerprint = _digest(relation.network)
-    relation_fingerprint = _digest(
-        physical.point_fingerprint,
-        logical_fingerprint,
-        relation.physical.port_bindings,
-        relation.physical.boundary_bindings,
-        relation.physical.edge_bindings,
-    )
-    return LocalRelationCapture(
-        physical.implementation,
-        physical.occurrence_path,
-        physical.occurrence_token,
-        physical.point_fingerprint,
-        relation_fingerprint,
-        logical_fingerprint,
-        relation,
-    )
+    try:
+        return _capture_local_relation(implementation, physical)
+    except PhysicalCaptureError as error:
+        raise DataflowOpError(str(error), error.findings) from error
 
 
 def op_physical(operation: DataflowOp) -> ProjectionAssessment[PhysicalBuildCapture]:
     """Ask only the selected Kernel, after frozen graph/source acceptance."""
-    from finn.dataflow.kernels.physical_composition import (  # noqa: PLC0415
-        LogicalPhysicalRelation,
-    )
+    from finn.dataflow.model.relations.values import LogicalPhysicalRelation  # noqa: PLC0415
     from finn.dataflow.ops.graph_context import capture_frozen_op_logical  # noqa: PLC0415
     from finn.dataflow.space.declarations import Space  # noqa: PLC0415
 
@@ -598,9 +260,7 @@ def associate_physical_use(
 ) -> CompilerPhysicalUse:
     """Create the compiler claim over an independently captured local result."""
 
-    from finn.dataflow.kernels.physical_composition import (  # noqa: PLC0415
-        LogicalPhysicalRelation,
-    )
+    from finn.dataflow.model.relations.values import LogicalPhysicalRelation  # noqa: PLC0415
     from finn.dataflow.ops.graph_context import (  # noqa: PLC0415
         capture_frozen_op_logical,
         validate_frozen_op_logical,

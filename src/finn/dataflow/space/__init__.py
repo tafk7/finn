@@ -16,9 +16,9 @@ occurrence     an attached instance of S over one immutable point
 ```
 
 This package is **layer-neutral**. ``Kernel`` lives in
-``finn.dataflow.kernels`` and operation-owned Kernels live with their
-operation; each is an ordinary ``Space`` subclass and none is privileged here.
-Concrete implementations do not incubate in this namespace.
+``finn.dataflow.model.kernel``; each Kernel is an ordinary ``Space`` subclass
+and none is privileged here. Concrete implementations live in
+``finn.dataflow.kernels`` and do not incubate in this namespace.
 
 ``finn.dataflow._engine`` stays the only validator, evaluator, point, answer,
 readiness, and constraint runtime.  Nothing here introduces a nested Engine, a
@@ -53,7 +53,7 @@ selection policy are all deliberately absent.
 ``DataflowRegion`` and a ``DataflowNetwork`` *are*; this package owns the
 language a contributor authors a design space in.  The core modules below name
 neither, and this facade exports no Region, Network, physical, ONNX or artifact
-value.  The one place the two meet is ``space.dataflow_value_semantics``, an
+value. The one place the two meet is ``model.logical.semantics``, an
 explicit bridge module that teaches the engine about canonical model values.  It
 is deliberately not imported here: importing ``finn.dataflow.space`` must not
 drag the dataflow model in behind it.
@@ -66,11 +66,7 @@ from finn.dataflow.space.branching import (
     CaseInfo,
 )
 from finn.dataflow.space.compiler import SpaceModel, compile_space, compile_space_model
-from finn.dataflow.space.capabilities import (
-    ImplementationIdentity,
-    View,
-    implementation_identity,
-)
+from finn.dataflow.space.capabilities import View
 from finn.dataflow.space.declarations import (
     RESERVED_LIFECYCLE_NAMES,
     RESERVED_PROTOCOL_NAMES,
@@ -112,7 +108,6 @@ __all__ = [
     "ConstraintGroup",
     "Decision",
     "Input",
-    "ImplementationIdentity",
     "CanonicalValueCodec",
     "OccurrenceContext",
     "OccurrenceDiagnostic",
@@ -135,7 +130,6 @@ __all__ = [
     "divisors_of",
     "domain",
     "finite",
-    "implementation_identity",
     "reject",
     "unresolved",
     # lowering, and the policy-neutral seam specialization code reads

@@ -34,7 +34,7 @@ from finn.dataflow.artifacts.request import (
     ResourceRequirements,
     ToolchainIdentity,
 )
-from finn.dataflow.kernels.dotp_axi import DspBlock
+from finn.dataflow.kernels.matmul.base import DspBlock
 from finn.dataflow.artifacts.build import (
     prepare_module_build,
     materialize_module_sources,

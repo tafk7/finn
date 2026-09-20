@@ -16,13 +16,12 @@ from dataflow.ops.test_dataflow_op import (
 )
 from dataflow.ops.test_selected_verification import _renamed
 from finn.dataflow._engine import Decided
-from finn.dataflow.kernels.dotp_axi import DspBlock
-from finn.dataflow.model import DataflowNetwork
+from finn.dataflow.kernels.matmul.base import DspBlock
+from finn.dataflow.model.logical import DataflowNetwork
 from finn.dataflow.ops import selected
 from finn.dataflow.ops import native
 from finn.dataflow.ops.base import DataflowOpError
-from finn.dataflow.ops.mvau.kernels.dot_product import WeightSupply
-from finn.dataflow.ops.mvau.kernels.dot_product import DotProductKernel
+from finn.dataflow.kernels.matmul.dot_product import WeightSupply
 from finn.dataflow.ops.native import NativeAttribute
 from finn.dataflow.ops.persistence import (
     apply_graph_effects,
@@ -30,7 +29,7 @@ from finn.dataflow.ops.persistence import (
     plan_selected_publication,
 )
 from finn.dataflow.ops.reconstruction import bind_sources_only, rebind_selected_graph
-from finn.dataflow.ops.replay.kernel import ActivationReplayKernel
+from finn.dataflow.kernels.replay import ActivationReplayKernel
 from finn.dataflow.ops.selected import SELECTED_METADATA_KEY, SelectedGraphError
 
 
@@ -95,7 +94,7 @@ def test_publication_inference_preserves_stable_ids_for_renamed_recipe_output() 
     operation = _configure_mvau_point(
         _unbound(model, "mvau0").bind(model, NondefaultBuild()), pe=2, simd=2
     )
-    construction = DotProductKernel.selected_construction
+    construction = operation.selected_construction()
     assert construction is not None
     original = construction.construct
 
@@ -103,9 +102,9 @@ def test_publication_inference_preserves_stable_ids_for_renamed_recipe_output() 
         return _renamed(original(facts, inputs), reorder=False)
 
     with patch.object(
-        DotProductKernel,
+        type(operation),
         "selected_construction",
-        replace(construction, construct=renamed),
+        return_value=replace(construction, construct=renamed),
     ):
         plan = plan_selected_publication(operation)
     assert plan.candidate.declaration.graph_nodes
@@ -231,13 +230,13 @@ def test_rebind_accepts_source_rename_and_rejects_changed_choice_or_weight() -> 
 def test_rebind_rejects_changed_or_malformed_current_projector() -> None:
     model, _build, _operation, plan = _planned_mvau()
     current = apply_selected_publication(model, plan).operation
-    construction = DotProductKernel.selected_construction
+    construction = current.selected_construction()
     assert construction is not None
 
     with patch.object(
-        DotProductKernel,
+        type(current),
         "selected_construction",
-        replace(construction, project=lambda _facts: DataflowNetwork((), (), ())),
+        return_value=replace(construction, project=lambda _facts: DataflowNetwork((), (), ())),
     ):
         with pytest.raises(DataflowOpError, match="different artifact Network"):
             rebind_selected_graph(current, plan.candidate)
@@ -245,9 +244,9 @@ def test_rebind_rejects_changed_or_malformed_current_projector() -> None:
     node = current.network.value.nodes[0]  # type: ignore[union-attr]
     malformed = DataflowNetwork((node, node), (), ())
     with patch.object(
-        DotProductKernel,
+        type(current),
         "selected_construction",
-        replace(construction, project=lambda _facts: malformed),
+        return_value=replace(construction, project=lambda _facts: malformed),
     ):
         with pytest.raises(DataflowOpError, match="invalid Network"):
             rebind_selected_graph(current, plan.candidate)

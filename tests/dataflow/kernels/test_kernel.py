@@ -23,8 +23,9 @@ from finn.dataflow._engine import (
     Unresolved,
 )
 from finn.dataflow.artifacts.abi import ComponentABI
+from finn.dataflow.artifacts.build import ModuleBuildRequirements
 from finn.dataflow.space.occurrence import is_attached_occurrence
-from finn.dataflow.space.dataflow_value_semantics import DATAFLOW_REGION_SEMANTICS
+from finn.dataflow.model.logical.semantics import DATAFLOW_REGION_SEMANTICS
 from finn.dataflow.space.compiler import _Ref, _compile_space
 from finn.dataflow.space.declarations import (
     AuthoringError,
@@ -39,17 +40,15 @@ from finn.dataflow.space.declarations import (
     divisors_of,
     exported_members,
 )
-from finn.dataflow.kernels.kernel import (
+from finn.dataflow.model import (
     Kernel,
-    ModuleBuildRequirements,
     ModuleParameter,
     PhysicallyUnsupported,
     RegionDeclaration,
-    RegionRefused,
     kernel_dataflow,
     kernel_physical,
 )
-from finn.dataflow.model.region import (
+from finn.dataflow.model.logical.region import (
     BeatSequence,
     DataflowRegion,
     InputInterface,
@@ -57,6 +56,7 @@ from finn.dataflow.model.region import (
     Operand,
     OutputInterface,
     Port,
+    RegionRefused,
     ScheduledInputRequirements,
     ScheduledOutputAvailability,
     ScheduleLevel,

@@ -13,10 +13,11 @@ from onnx.reference import ReferenceEvaluator
 
 from finn.dataflow._engine import Absent, Decided, Finding, FindingKind, QualifiedPath, Unresolved
 from finn.dataflow.kernels.replay_buffer import ReplayBufferKernel
-from finn.dataflow.model.maps import CoordinateSet, RectangularDomain
-from finn.dataflow.model.region import BeatSequence
+from finn.dataflow.model.logical.maps import CoordinateSet, RectangularDomain
+from finn.dataflow.model.logical.region import BeatSequence
 from finn.dataflow.ops import native
-from finn.dataflow.ops.replay.kernel import ActivationReplayKernel
+from finn.dataflow.ops.base import DataflowOp
+from finn.dataflow.kernels.replay import ActivationReplayKernel
 from finn.dataflow.ops.replay.op import ActivationReplayOp
 from finn.dataflow.ops.replay.selected import (
     ACTIVATION_KEY,
@@ -133,9 +134,17 @@ def test_bound_replay_routes_through_the_design_construction_hook() -> None:
     assert decoded.network == operation.network.value
 
 
+def test_default_optional_construction_binding_reports_unsupported() -> None:
+    _model, operation = _configured_replay(simd=2)
+    with patch.object(type(operation), "selected_construction", DataflowOp.selected_construction):
+        answer = operation.selected_snapshot
+    assert isinstance(answer, Absent)
+    assert {finding.code for finding in answer.findings} == {"selected-graph-unsupported-kernel"}
+
+
 def test_selected_graph_is_a_projection_and_rejects_a_constructor_source_swap() -> None:
     _model, operation = _configured_replay(simd=2)
-    construction = ActivationReplayKernel.selected_construction
+    construction = operation.selected_construction()
     assert construction is not None
     original = construction.construct
 
@@ -150,9 +159,9 @@ def test_selected_graph_is_a_projection_and_rejects_a_constructor_source_swap() 
         return original(changed, inputs)
 
     with patch.object(
-        ActivationReplayKernel,
+        type(operation),
         "selected_construction",
-        replace(construction, construct=wrong_source),
+        return_value=replace(construction, construct=wrong_source),
     ):
         assessment = operation.selected_graph
     assert isinstance(assessment, ProjectionAssessment)

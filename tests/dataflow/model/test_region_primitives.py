@@ -7,8 +7,8 @@ from dataclasses import FrozenInstanceError
 
 from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 
-from finn.dataflow.model.maps import RectangularDomain
-from finn.dataflow.model.region import (
+from finn.dataflow.model.logical.maps import RectangularDomain
+from finn.dataflow.model.logical.region import (
     BeatSequence,
     DataflowRegion,
     InputInterface,

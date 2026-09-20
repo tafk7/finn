@@ -23,7 +23,7 @@ from finn.dataflow.artifacts.formats import RtlModuleDirectory
 from finn.dataflow.artifacts.formats.rtl_module import RtlModuleOptions
 from finn.dataflow.artifacts.packaging import Target, plan_package
 from finn.dataflow.artifacts.store import ArtifactStore
-from finn.dataflow.kernels.physical import capture_kernel_realization
+from finn.dataflow.model.physical.capture import capture_kernel_realization
 from finn.dataflow.ops.mvau.op import MvauDataflowOp
 from finn.dataflow.ops.persistence import CommitmentStage
 from finn.dataflow.ops.physical import (

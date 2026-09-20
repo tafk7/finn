@@ -3,19 +3,15 @@
 
 """The production selected-construction catalogue."""
 
-from typing import cast
-
-from finn.dataflow.ops.mvau.kernels.dot_product import DotProductKernel
 from finn.dataflow.ops.mvau.op import MvauDataflowOp
+from finn.dataflow.ops.mvau.selected import MVAU_SELECTED_CONSTRUCTION
 from finn.dataflow.ops.native import operation_choice_schema
-from finn.dataflow.ops.replay.kernel import ActivationReplayKernel
 from finn.dataflow.ops.replay.op import ActivationReplayOp
-from finn.dataflow.ops.selected import ConstructionRegistry, SelectedConstruction
+from finn.dataflow.ops.replay.selected import REPLAY_SELECTED_CONSTRUCTION
+from finn.dataflow.ops.selected import ConstructionRegistry
 
-assert ActivationReplayKernel.selected_construction is not None
-assert DotProductKernel.selected_construction is not None
-_REPLAY = cast(SelectedConstruction[object, object], ActivationReplayKernel.selected_construction)
-_MVAU = cast(SelectedConstruction[object, object], DotProductKernel.selected_construction)
+_REPLAY = REPLAY_SELECTED_CONSTRUCTION
+_MVAU = MVAU_SELECTED_CONSTRUCTION
 
 DEFAULT_SELECTED_CONSTRUCTIONS = ConstructionRegistry(
     {

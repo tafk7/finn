@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, ClassVar, cast
 
 import numpy as np  # type: ignore[import-not-found]
@@ -16,15 +16,15 @@ from qonnx.core.modelwrapper import ModelWrapper  # type: ignore[import-not-foun
 
 from finn.dataflow._engine import Finding, FindingKind, QualifiedPath
 from finn.dataflow.artifacts.abi import ComponentABI
-from finn.dataflow.kernels.kernel import (
+from finn.dataflow.model import (
     Kernel,
     EdgeSink,
     KernelChoice,
     NetworkBoundary,
     NetworkEdge,
 )
-from finn.dataflow.kernels.kernel import RegionDeclaration
-from finn.dataflow.model import (
+from finn.dataflow.model import RegionDeclaration
+from finn.dataflow.model.logical import (
     BeatSequence,
     BoundaryContract,
     DataflowNetwork,
@@ -44,7 +44,7 @@ from finn.dataflow.model import (
     ScheduledOutputAvailability,
     SinkContract,
 )
-from finn.dataflow.model.refs import DataflowOperandRef, RegionInputRef, RegionOutputRef
+from finn.dataflow.model.logical.refs import DataflowOperandRef, RegionInputRef, RegionOutputRef
 from finn.dataflow.ops.base import DATAFLOW_DOMAIN, DataflowOp, DataflowOpError
 from finn.dataflow.ops.mapping import CoordinateMapping
 from finn.dataflow.ops.native import operation_choice_schema
@@ -97,7 +97,7 @@ from finn.dataflow.ops.selected_verification import (
     verify_normalized_selected_snapshot,
 )
 from finn.dataflow.ops.tensor_summary import FrozenInitializer
-from finn.dataflow.space.dataflow_value_semantics import QONNX_DATATYPE_VALUE_SEMANTICS
+from finn.dataflow.model.logical.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
 from finn.dataflow.space.declarations import Decision, Input, Subspace, allow_absent, derived
 from finn.dataflow.space.occurrence import ProjectionAssessment
 
@@ -337,6 +337,18 @@ class IdentityChainOp(DataflowOp):
 
     def selected_kernel(self) -> object:
         return _kernel(self)
+
+    def selected_construction(self) -> object:
+        return replace(
+            IDENTITY_CHAIN_SELECTED_CONSTRUCTION,
+            initializer_inputs=(
+                SelectedInitializerInput(
+                    ACTIVATION_KEY,
+                    type(self).activation.initializer_value,
+                    _activation_initializer_required,
+                ),
+            ),
+        )
 
     def selected_source_semantics(self) -> object:
         return EncodedSourceSemantics(
@@ -881,21 +893,13 @@ IDENTITY_CHAIN_SELECTED_CONSTRUCTION = SelectedConstruction(
     source_semantics_version=IDENTITY_CHAIN_SOURCE_SEMANTICS_VERSION,
     admitted_forms=("canonical", IDENTITY_ELIDED_FORM),
     choice_paths=("kernel.grouping",),
-    initializer_inputs=(
-        SelectedInitializerInput(
-            ACTIVATION_KEY,
-            IdentityChainKernel.activation_initializer,
-            _activation_initializer_required,
-        ),
-    ),
+    initializer_inputs=(),
     decode_source_semantics=decode_identity_chain_semantics,
     derive_facts=derive_identity_chain_facts,
     project=project_identity_chain_network,
     construct=construct_identity_chain_snapshot,
     verify=verify_identity_chain_snapshot,
 )
-
-IdentityChainKernel.selected_construction = IDENTITY_CHAIN_SELECTED_CONSTRUCTION
 
 IDENTITY_CHAIN_CONSTRUCTIONS = ConstructionRegistry(
     {

@@ -13,9 +13,14 @@ from typing import Any, NoReturn, cast
 from onnx import ModelProto, TensorProto  # type: ignore[import-not-found]
 from qonnx.core.modelwrapper import ModelWrapper  # type: ignore[import-not-found]
 
-from finn.dataflow.model.maps import IdentityCoordinateMap
-from finn.dataflow.model.network import DataflowNetwork, DirectConnection, Edge, RegionEndpoint
-from finn.dataflow.model.region import InputInterface
+from finn.dataflow.model.logical.maps import IdentityCoordinateMap
+from finn.dataflow.model.logical.network import (
+    DataflowNetwork,
+    DirectConnection,
+    Edge,
+    RegionEndpoint,
+)
+from finn.dataflow.model.logical.region import InputInterface
 from finn.dataflow.ops.model_effects import (
     ModelEffects,
     ModelReadExpectation,

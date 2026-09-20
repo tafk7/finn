@@ -32,8 +32,8 @@ from qonnx.analysis.tensor_value_summary import (  # type: ignore[import-not-fou
 from qonnx.core.modelwrapper import ModelWrapper  # type: ignore[import-not-found]
 
 from finn.dataflow._engine import Finding
-from finn.dataflow.model.datatypes import QONNXDataType, resolve_qonnx_datatype_name
-from finn.dataflow.model.maps import (
+from finn.dataflow.model.logical.datatypes import QONNXDataType, resolve_qonnx_datatype_name
+from finn.dataflow.model.logical.maps import (
     AffineRankMap,
     CoordinateMap,
     CoordinateSet,
@@ -44,12 +44,12 @@ from finn.dataflow.model.maps import (
     encode_coordinate_map,
     encoding_is_json_shaped,
 )
-from finn.dataflow.model.network import (
+from finn.dataflow.model.logical.network import (
     DataflowNetwork,
     RegionEndpoint,
 )
-from finn.dataflow.model.network_validation import validate_network
-from finn.dataflow.model.region import (
+from finn.dataflow.model.logical.network_validation import validate_network
+from finn.dataflow.model.logical.region import (
     InputInterface,
     InternalInput,
 )
@@ -2647,7 +2647,7 @@ def selected_graph_for(
 
     if not isinstance(base.accepted_answer, Decided):
         return assessment(cast("Answer[object]", base.accepted_answer))
-    construction = getattr(type(kernel), "selected_construction", None)
+    construction = root.selected_construction() if isinstance(root, DataflowOp) else None
     if not isinstance(construction, SelectedConstruction):
         return assessment(
             Absent(
@@ -2699,7 +2699,7 @@ def selected_graph_for(
                 continue
             if not isinstance(declared_input.source, ValueSource):
                 raise AuthoringError("selected initializer input source must be a ValueSource")
-            answer = kernel.answer(declared_input.source)
+            answer = root.answer(declared_input.source)
             if not isinstance(answer, Decided):
                 return assessment(cast("Answer[object]", answer))
             if not isinstance(answer.value, FrozenInitializer):

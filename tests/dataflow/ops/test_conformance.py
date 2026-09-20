@@ -26,17 +26,18 @@ from finn.dataflow.conformance import (
     DataflowOpConformanceCase,
     assert_dataflow_op_conforms,
 )
-from finn.dataflow.kernels.dotp_axi import DotpAxiKernel, DspBlock
+from finn.dataflow.kernels.dotp_axi import DotpAxiKernel
+from finn.dataflow.kernels.matmul.base import DspBlock
 from finn.dataflow.ops.base import DATAFLOW_DOMAIN, DataflowOp
-from finn.dataflow.ops.mvau.kernels.base import WeightedDotProductKernel
-from finn.dataflow.ops.mvau.kernels.batch_interleaved import BatchInterleavedKernel
-from finn.dataflow.ops.mvau.kernels.dot_product import (
+from finn.dataflow.kernels.matmul.base import WeightedDotProductKernel
+from finn.dataflow.kernels.matmul.batch_interleaved import BatchInterleavedKernel
+from finn.dataflow.kernels.matmul.dot_product import (
     DotProductKernel,
     WeightSupply,
 )
 from finn.dataflow.ops.mvau.op import MvauDataflowOp
 from finn.dataflow.ops.persistence import assign_dataflow_scope_ids
-from finn.dataflow.ops.replay.kernel import ActivationReplayKernel
+from finn.dataflow.kernels.replay import ActivationReplayKernel
 from finn.dataflow.ops.replay.op import ActivationReplayOp
 from finn.dataflow._engine import Decided
 

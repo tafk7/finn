@@ -1,26 +1,12 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""What an MVAU node *computes*, as distinct from what is built for it.
+"""Source-operation execution for MVAU nodes.
 
-Three things live here and nothing else: the profile that says what a node
-computes, the numerical reference for each combination, and the one initializer
-analysis MVAU declares.  They are together because they are the same subject --
-the mathematics of the source operation -- and apart from ``op.py`` because
-that module is about the design space over it.
-
-**The profile is two axes, not one enum.**  How the products are accumulated
-and what happens to the accumulator afterwards are independent: an XNOR
-popcount followed by a multithreshold is an ordinary node, and collapsing the
-two into one exclusive value makes it unrepresentable -- silently, as a plain
-matrix product that is then thresholded.  So the profile carries both, and
-every consumer reads the axis it is about.
-
-**It is a fact about the node, not a mode switch.**  Every consumer reads the
-derivation rather than re-testing the attributes, because the accumulation also
-depends on the operand *datatypes* -- two BIPOLAR operands mean a popcount
-whatever ``binaryXnorMode`` says -- and a reader that checked only the
-attribute would disagree with this one.
+The reusable mathematical profile and its derivation live in
+``finn.dataflow.kernels.matmul.base`` because both the implementation family
+and source adapter consume them. This module retains the source execution
+reference that interprets that profile against ONNX/QONNX tensor values.
 
 **The execution reference is the oracle's, deliberately.**  ``execute_node``
 exists so a FINN model containing these nodes can be run in ONNX, and its
@@ -33,93 +19,10 @@ are ported as behaviour rather than reasoned about again.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from enum import Enum
 from typing import Any
 
-from finn.dataflow.model.datatypes import QONNXDataType
-
-
-class AccumulationMode(str, Enum):
-    """How the products are accumulated."""
-
-    #: An ordinary integer matrix product.
-    INTEGER = "integer"
-    #: ``binaryXnorMode``: an XNOR popcount over operands already in {0, 1}.
-    XNOR_POPCOUNT = "xnor_popcount"
-    #: The same popcount, reached because *both operands are BIPOLAR* rather
-    #: than because an attribute said so.  The operands arrive in {-1, +1} and
-    #: are mapped before the popcount, which is why it is a third value and not
-    #: a flag on the second.
-    BIPOLAR_POPCOUNT = "bipolar_popcount"
-
-
-class ActivationMode(str, Enum):
-    """What happens to the accumulator afterwards."""
-
-    NONE = "none"
-    MULTITHRESHOLD = "multithreshold"
-
-
-@dataclass(frozen=True, slots=True)
-class MvauComputationProfile:
-    """What one MVAU node computes, on the two axes that are independent.
-
-    These *are* two axes and were briefly modelled as one three-valued enum,
-    which silently lost a real combination: ``binaryXnorMode`` with a fused
-    threshold is an XNOR popcount **and then** a multithreshold, and an
-    exclusive enum forced the threshold to win and the popcount to be dropped.
-    The node computed a plain matrix product and thresholded that, which is a
-    different function of the same graph.
-
-    So the accumulation and the post-operation are carried separately, and
-    every consumer reads whichever axis it is about.
-    """
-
-    accumulation: AccumulationMode
-    activation: ActivationMode
-
-    @property
-    def fuses_activation(self) -> bool:
-        return self.activation is ActivationMode.MULTITHRESHOLD
-
-    @property
-    def name(self) -> str:
-        """A stable label, for a message or a parity record."""
-
-        return f"{self.accumulation.value}+{self.activation.value}"
-
-
-def computation_profile(
-    *,
-    no_activation: bool,
-    binary_xnor: bool,
-    activation_type: QONNXDataType | None = None,
-    weight_type: QONNXDataType | None = None,
-) -> MvauComputationProfile:
-    """The profile, from the attributes and the operand datatypes that decide it.
-
-    The accumulation is decided here rather than at execution time so that one
-    derived fact answers "what does this node compute" for every consumer --
-    the Kernels' applicability, the execution, and any later parity record.
-    The implicit bipolar case is part of it precisely because it is *not* an
-    attribute: two BIPOLAR operands mean a popcount whatever the attributes
-    say, and a consumer testing only ``binaryXnorMode`` would miss it.
-    """
-
-    from qonnx.core.datatype import DataType  # type: ignore[import-not-found]  # noqa: PLC0415
-
-    bipolar = DataType["BIPOLAR"]
-    if binary_xnor:
-        accumulation = AccumulationMode.XNOR_POPCOUNT
-    elif activation_type == bipolar and weight_type == bipolar:
-        accumulation = AccumulationMode.BIPOLAR_POPCOUNT
-    else:
-        accumulation = AccumulationMode.INTEGER
-    return MvauComputationProfile(
-        accumulation,
-        ActivationMode.NONE if no_activation else ActivationMode.MULTITHRESHOLD,
-    )
+from finn.dataflow.kernels.matmul.base import AccumulationMode, MvauComputationProfile
+from finn.dataflow.model.logical.datatypes import QONNXDataType
 
 
 def execute_mvau(
@@ -141,7 +44,7 @@ def execute_mvau(
 
     import numpy  # type: ignore[import-not-found]  # noqa: PLC0415 - heavy import
     import qonnx.custom_op.general.xnorpopcount as xnor  # type: ignore[import-not-found] # noqa: PLC0415
-    from qonnx.core.datatype import DataType  # noqa: PLC0415
+    from qonnx.core.datatype import DataType  # type: ignore[import-not-found]  # noqa: PLC0415
     from qonnx.custom_op.general.multithreshold import (  # type: ignore[import-not-found] # noqa: PLC0415
         multithreshold,
     )
@@ -181,9 +84,5 @@ def execute_mvau(
 
 
 __all__ = [
-    "AccumulationMode",
-    "ActivationMode",
-    "MvauComputationProfile",
-    "computation_profile",
     "execute_mvau",
 ]

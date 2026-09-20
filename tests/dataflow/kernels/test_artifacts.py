@@ -42,7 +42,7 @@ from finn.dataflow.artifacts.formats.rtl_module import RtlModuleOptions
 from finn.dataflow.artifacts.packaging import Target, plan_package
 from finn.dataflow.artifacts.store import ArtifactStore, StoredArtifact
 from finn.dataflow.kernels.dotp_axi import FINNLIB_ROOT
-from finn.dataflow.kernels.kernel import (
+from finn.dataflow.model import (
     Kernel,
     ModuleParameter,
     RegionDeclaration,
