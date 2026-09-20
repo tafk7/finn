@@ -15,6 +15,7 @@ with GitHub Pages, that has moved to the [github-pages branch](https://github.co
 
 Runtime implementation guides:
 
+* [Implementation branch handoff and starting state](container-runtime-handoff.md)
 * [Approved container/runtime implementation plan](container-runtime-implementation-plan.md)
 * [Installation and development](installation.md)
 * [Remaining legacy environment obligations](legacy-build-env-ledger.md)

@@ -94,10 +94,14 @@ soon as their own replacement gates pass.
 
 **3. P0 — Establish the baseline and integration boundaries**
 
+The local checkpoint and initial triage are recorded in
+[the implementation handoff](container-runtime-handoff.md).
+
 Deliverables:
 
-- [ ] Record the starting revision, working-tree changes and existing untracked
-  design inputs. Preserve the user's work; do not reset the repository.
+- [x] Record the starting revision, working-tree changes and existing untracked
+  design inputs. Preserve the user's work; do not reset the repository. See the
+  archive checkpoint and exact inventory in the handoff.
 - [ ] Classify existing changes as retain, revise, integrate later or delete.
   Retain the resource consumer migrations, package entry-point work, inspection
   command and scoped execution foundation where their tests support them.
