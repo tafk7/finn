@@ -12,10 +12,10 @@ nothing.
 
 import json
 import os
-from pathlib import Path
 import shutil
 import subprocess
 import sys
+from pathlib import Path
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 DOCKER_DIR = os.path.join(REPO, "docker")
@@ -565,7 +565,7 @@ def test_emitted_paths_have_no_tilde(tmp_path):
 # checked the JSON output while Compose reads the sh output.
 
 
-def test_sh_output_defaults_deps_to_frozen(tmp_path):
+def test_sh_output_does_not_select_python_imports(tmp_path):
     """The resolver default must match the image and all launchers."""
     proc = subprocess.run(
         [FINN_ENV, "inspect", "--tier", "dev", "--format", "sh"],
@@ -573,7 +573,7 @@ def test_sh_output_defaults_deps_to_frozen(tmp_path):
         text=True,
         env={"PATH": os.environ["PATH"], "HOME": "/home/someone"},
     )
-    assert "FINN_DEPS='frozen'" in proc.stdout
+    assert "FINN_DEPS=" not in proc.stdout
 
 
 def test_sh_output_carries_the_canonical_runtime_set():
@@ -825,11 +825,8 @@ def test_image_input_manifest_covers_dockerfile_sources():
         "deps.env",
         "fetch-repos.sh",
         "docker/Dockerfile.finn",
-        "docker/finn_paths.py",
-        "docker/finn-live.pth",
         "docker/finn_entrypoint.sh",
         "docker/quicktest.sh",
-        "docker/build_dataflow",
         "docker/toolchain-shim",
         "docker/finn-bashenv.sh",
         "docker/finn-toolchain.sh",
@@ -840,7 +837,8 @@ def test_image_input_manifest_covers_dockerfile_sources():
     patterns = {
         line.lstrip("?") for line in manifest.splitlines() if line and not line.startswith("#")
     }
-    assert not any(path.startswith("src/") for path in patterns)
+    assert "src/**/*.py" in patterns
+    assert "finn-rtllib/**/*" in patterns
     assert "docker/config.py" not in patterns
     assert "docker/finn-env" not in patterns
     assert "docker/run" not in patterns

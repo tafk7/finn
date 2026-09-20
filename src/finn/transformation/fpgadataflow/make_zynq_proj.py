@@ -49,12 +49,14 @@ from finn.transformation.fpgadataflow.insert_fifo import InsertFIFO
 from finn.transformation.fpgadataflow.insert_iodma import InsertIODMA
 from finn.transformation.fpgadataflow.prepare_ip import PrepareIP
 from finn.transformation.fpgadataflow.specialize_layers import SpecializeLayers
+from finn.util._legacy_build_env import external_path
 from finn.util.basic import (
     make_build_dir,
     pynq_native_port_width,
     pynq_part_map,
     resolve_xilinx_tool,
 )
+from finn.util.resources import resource_path, tcl_quote
 
 from . import templates
 
@@ -84,7 +86,7 @@ def collect_ip_dirs(model, ipstitch_path):
     ip_dirs += [ipstitch_path + "/ip"]
     if need_memstreamer:
         # add RTL streamer IP
-        ip_dirs.append("$::env(FINN_ROOT)/finn-rtllib/memstream")
+        ip_dirs.append(resource_path("rtllib", "memstream"))
     return ip_dirs
 
 
@@ -134,7 +136,7 @@ class MakeZYNQProject(Transformation):
 
             ip_dirs = ["list"]
             ip_dirs += collect_ip_dirs(kernel_model, ipstitch_path)
-            ip_dirs_str = "[%s]" % (" ".join(ip_dirs))
+            ip_dirs_str = "[%s]" % ("list " + " ".join(tcl_quote(p) for p in ip_dirs[1:]))
             config.append(
                 "set_property ip_repo_paths "
                 "[concat [get_property ip_repo_paths [current_project]] %s] "
@@ -252,7 +254,9 @@ class MakeZYNQProject(Transformation):
             num_workers = mp.cpu_count()
         with open(ipcfg, "w") as f:
             f.write(
-                templates.custom_zynq_shell_template
+                templates.custom_zynq_shell_template.replace(
+                    "$BOARD_FILES$", tcl_quote(external_path("boards"))
+                )
                 % (
                     fclk_mhz,
                     axilite_idx,

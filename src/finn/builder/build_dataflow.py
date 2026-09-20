@@ -31,6 +31,7 @@ import json
 import logging
 import os
 import pdb  # NOQA
+import subprocess
 import sys
 import time
 import traceback
@@ -50,6 +51,7 @@ from finn.builder.build_dataflow_steps import (
     _maybe_enable_verify_behavioral,
     build_dataflow_step_lookup,
 )
+from finn.util._legacy_build_env import build_directory, build_environment
 
 
 # adapted from https://stackoverflow.com/a/39215961
@@ -220,7 +222,7 @@ def build_dataflow_cfg(model_filename, cfg: DataflowBuildConfig):
         )
         model = ModelWrapper(intermediate_model_filename)
     assert type(model) is ModelWrapper
-    finn_build_dir = os.environ["FINN_BUILD_DIR"]
+    finn_build_dir = build_directory()
 
     print("Intermediate outputs will be generated in " + finn_build_dir)
     print("Final outputs will be generated in " + cfg.output_dir)
@@ -294,21 +296,34 @@ def build_dataflow_directory(path_to_cfg_dir: str):
     json_filename = path_to_cfg_dir + "/dataflow_build_config.json"
     assert os.path.isfile(onnx_filename), "ONNX not found: " + onnx_filename
     assert os.path.isfile(json_filename), "Build config not found: " + json_filename
-    with open(json_filename, "r") as f:
-        json_str = f.read()
-    build_cfg = DataflowBuildConfig.from_json(json_str)
-    old_wd = os.getcwd()
-    # change into build dir to resolve relative paths
-    os.chdir(path_to_cfg_dir)
-    ret = build_dataflow_cfg(onnx_filename, build_cfg)
-    os.chdir(old_wd)
-    return ret
+    # Isolate cwd and the pre-start native loader environment for this worker
+    # tree. Relative config paths retain their historical directory semantics.
+    child = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys; from finn.builder.build_dataflow import build_dataflow_cfg; "
+            "from finn.builder.build_dataflow_config import DataflowBuildConfig; "
+            "sys.exit(build_dataflow_cfg('model.onnx', "
+            "DataflowBuildConfig.from_json(open('dataflow_build_config.json').read())))",
+        ],
+        cwd=path_to_cfg_dir,
+        env=build_environment(),
+    )
+    return child.returncode
 
 
 def main():
     """Entry point for dataflow builds. Invokes `build_dataflow_directory` using
     command line arguments"""
-    clize.run(build_dataflow_directory)
+
+    def cli(path_to_cfg_dir: str):
+        """Build the model and configuration in path_to_cfg_dir."""
+        status = build_dataflow_directory(path_to_cfg_dir)
+        if status:
+            raise SystemExit(status)
+
+    clize.run(cli)
 
 
 if __name__ == "__main__":

@@ -35,7 +35,106 @@
     PyScaffold helps you to put up the scaffold of your new Python project.
     Learn more under: https://pyscaffold.org/
 """
-from setuptools import setup
+from setuptools import find_namespace_packages, setup
+from setuptools.command.build_py import build_py
+from setuptools.command.sdist import sdist
+
+import json
+import subprocess
+from pathlib import Path
+
+# Explicit data lists keep wheels identical whether built from Git or an sdist.
+# These private packages retain the established source layout for RTL developers.
+RESOURCE_DIRS = {
+    "_finn_rtllib": "finn-rtllib",
+    "_finn_custom_hls": "custom_hls",
+    "_finn_xsi": "finn_xsi",
+    "_finn_qnn_data": "src/finn/qnn-data",
+}
+
+
+def resource_files(directory):
+    allowed = {
+        ".v",
+        ".sv",
+        ".vh",
+        ".svh",
+        ".tcl",
+        ".xml",
+        ".cpp",
+        ".hpp",
+        ".h",
+        ".template",
+        ".dat",
+        ".mem",
+        ".abc",
+        ".mdd",
+        ".mld",
+    }
+    result = []
+    for path in Path(directory).rglob("*"):
+        rel = path.relative_to(directory)
+        if directory.endswith("qnn-data") and rel.parts[0] not in {
+            "cpp",
+            "templates",
+            "mdd-data",
+            "verilog",
+        }:
+            continue
+        notice = any(x in path.name.lower() for x in ("license", "licence", "notice", "copying"))
+        if not path.is_file() or any(
+            x in rel.parts for x in ("test", "tests", "testcase", "tb", "__pycache__", "build")
+        ):
+            continue
+        if "_tb." in path.name or ("sim" in rel.parts and rel.parts[:2] != ("sim", "hdl")):
+            continue
+        if notice or path.suffix in allowed or directory.endswith("qnn-data"):
+            if path.suffix not in {".pyc", ".so"}:
+                result.append(rel.as_posix())
+    return sorted(result)
+
+
+def provenance():
+    saved = Path("FINN_BUILD_INFO.json")
+    if saved.exists():
+        return json.loads(saved.read_text())
+    info = {"version": Path("VERSION").read_text().strip(), "revision": None, "dirty": None}
+    if Path(".git").exists():
+        try:
+            info["revision"] = subprocess.check_output(
+                ["git", "rev-parse", "HEAD"], text=True
+            ).strip()
+            info["dirty"] = bool(
+                subprocess.check_output(["git", "status", "--porcelain"], text=True)
+            )
+        except (OSError, subprocess.CalledProcessError):
+            pass
+    return info
+
+
+class BuildPy(build_py):
+    def run(self):
+        super().run()
+        path = Path(self.build_lib) / "finn" / "_build_info.json"
+        path.write_text(json.dumps(provenance(), sort_keys=True) + "\n")
+
+
+class Sdist(sdist):
+    def make_release_tree(self, base_dir, files):
+        super().make_release_tree(base_dir, files)
+        (Path(base_dir) / "FINN_BUILD_INFO.json").write_text(
+            json.dumps(provenance(), sort_keys=True) + "\n"
+        )
+
 
 if __name__ == "__main__":
-    setup()
+    packages = find_namespace_packages("src", exclude=["finn.qnn-data", "finn.qnn-data.*"])
+    setup(
+        cmdclass={"build_py": BuildPy, "sdist": Sdist},
+        version=Path("VERSION").read_text().strip(),
+        packages=packages + list(RESOURCE_DIRS) + ["finn_xsi"],
+        package_dir={"": "src", **RESOURCE_DIRS, "finn_xsi": "finn_xsi/finn_xsi"},
+        package_data={
+            **{name: resource_files(path) for name, path in RESOURCE_DIRS.items()},
+        },
+    )

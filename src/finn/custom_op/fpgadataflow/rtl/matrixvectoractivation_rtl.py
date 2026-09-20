@@ -33,6 +33,7 @@ from finn.custom_op.fpgadataflow.matrixvectoractivation import MVAU
 from finn.custom_op.fpgadataflow.rtlbackend import RTLBackend
 from finn.util.basic import get_dsp_block
 from finn.util.data_packing import npy_to_rtlsim_input, rtlsim_output_to_npy
+from finn.util.resources import resource_path, tcl_quote
 
 # ONNX i/o tensor shape assumptions for MatrixVectorActivation_rtl:
 # input 0 is the input tensor, shape (.., i_size) = (..., MW)
@@ -179,7 +180,7 @@ class MVAU_rtl(MVAU, RTLBackend):
         theight = self.get_nodeattr("TH")
 
         if theight > 1:
-            rtllib_dir = os.path.join(os.environ["FINN_ROOT"], "finn-rtllib/mvu_tiled/")
+            rtllib_dir = resource_path("rtllib", "mvu_tiled") + "/"
             sourcefiles = [
                 "../skid/skid.sv",
                 "../mvu/mvu_pkg.sv",
@@ -191,7 +192,7 @@ class MVAU_rtl(MVAU, RTLBackend):
                 "weights_buff_tile.sv",
             ]
         else:
-            rtllib_dir = os.path.join(os.environ["FINN_ROOT"], "finn-rtllib/mvu/")
+            rtllib_dir = resource_path("rtllib", "mvu") + "/"
             sourcefiles = [
                 "mvu_pkg.sv",
                 "mvu_vvu_axi.sv",
@@ -205,7 +206,7 @@ class MVAU_rtl(MVAU, RTLBackend):
         ] + [rtllib_dir + _ for _ in sourcefiles]
 
         for f in sourcefiles:
-            cmd.append("add_files -norecurse %s" % (f))
+            cmd.append("add_files -norecurse %s" % tcl_quote(f))
         if self.get_nodeattr("mem_mode") in [
             "internal_decoupled",
             "dynamic",
@@ -341,11 +342,9 @@ class MVAU_rtl(MVAU, RTLBackend):
 
     def prepare_codegen_default(self, fpgapart, clk):
         if self.get_nodeattr("TH") > 1:
-            template_path = (
-                os.environ["FINN_ROOT"] + "/finn-rtllib/mvu_tiled/mvu_tiled_axi_wrapper.v"
-            )
+            template_path = resource_path("rtllib", "mvu_tiled/mvu_tiled_axi_wrapper.v")
         else:
-            template_path = os.environ["FINN_ROOT"] + "/finn-rtllib/mvu/mvu_vvu_axi_wrapper.v"
+            template_path = resource_path("rtllib", "mvu/mvu_vvu_axi_wrapper.v")
 
         # check if settings are valid
         pumped_compute = self.get_nodeattr("pumpedCompute")
@@ -415,9 +414,9 @@ class MVAU_rtl(MVAU, RTLBackend):
         if abspath:
             code_gen_dir = self.get_nodeattr("code_gen_dir_ipgen") + "/"
             if self.get_nodeattr("TH") > 1:
-                rtllib_dir = os.path.join(os.environ["FINN_ROOT"], "finn-rtllib/mvu_tiled/")
+                rtllib_dir = resource_path("rtllib", "mvu_tiled") + "/"
             else:
-                rtllib_dir = os.path.join(os.environ["FINN_ROOT"], "finn-rtllib/mvu/")
+                rtllib_dir = resource_path("rtllib", "mvu") + "/"
         else:
             code_gen_dir = ""
             rtllib_dir = ""
@@ -454,7 +453,7 @@ class MVAU_rtl(MVAU, RTLBackend):
     def get_verilog_paths(self):
         verilog_paths = super().get_verilog_paths()
         if self.get_nodeattr("TH") > 1:
-            verilog_paths.append(os.environ["FINN_ROOT"] + "/finn-rtllib/mvu_tiled")
+            verilog_paths.append(resource_path("rtllib", "mvu_tiled") + "/")
         else:
-            verilog_paths.append(os.environ["FINN_ROOT"] + "/finn-rtllib/mvu")
+            verilog_paths.append(resource_path("rtllib", "mvu") + "/")
         return verilog_paths

@@ -343,3 +343,13 @@ A site that offloads the heavy Xilinx tools to a compute farm (see "Running tool
 | `FINN_TOOL_DIR_OVERRIDE` | Shim directory. `finn.util.basic.resolve_xilinx_tool()` resolves `vivado`/`v++`/`vitis_hls`/`vitis-run`/`xelab`/`slashkit` to `<dir>/<tool>` when set.        |
 
 The wrapper's own variables are deployment-specific.
+
+### Installed runtime identity
+
+Application image inputs now include FINN code and package resources. CI uses the
+installed distribution; a workspace mount supplies tests/artifacts and does not
+shadow imports. `FINN_DEPS` modes have been removed. For an intentionally editable
+CI job, create a writable venv and run explicit `pip install -e` commands in its
+preparation stage; use that venv consistently for the shard. Normal Python startup
+never installs or repairs paths. See `docs/installation.md` and the runtime
+validation record for available versus installation/licence-backed coverage.

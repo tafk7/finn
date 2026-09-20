@@ -43,6 +43,7 @@ from qonnx.util.basic import (
 from finn.custom_op.fpgadataflow.hwcustomop import HWCustomOp
 from finn.util.basic import fifo_rtl_files, is_versal
 from finn.util.data_packing import numpy_to_hls_code, pack_innermost_dim_as_hex_string
+from finn.util.resources import resource_path, tcl_quote
 
 # ONNX i/o tensor shape assumptions for MatrixVectorActivation:
 # input 0 is the input tensor, shape (.., i_size) = (..., MW)
@@ -1069,9 +1070,7 @@ class MVAU(HWCustomOp):
                     )
 
                     # dynamic loader
-                    dyn_rtllib_dir = os.path.join(
-                        os.environ["FINN_ROOT"], "finn-rtllib/dynload/hdl/"
-                    )
+                    dyn_rtllib_dir = resource_path("rtllib", "dynload/hdl") + "/"
                     file_suffix = "_dynamic_load_wrapper.v"
                     # automatically find memstream verilog component in code generation directory
                     for fname in os.listdir(code_gen_dir):
@@ -1083,7 +1082,10 @@ class MVAU(HWCustomOp):
                         dyn_rtllib_dir + "dynamic_load.sv",
                     ]
                     for f in sourcefiles:
-                        cmd += ["add_files -copy_to %s -norecurse %s" % (source_target, f)]
+                        cmd += [
+                            "add_files -copy_to %s -norecurse %s"
+                            % (tcl_quote(source_target), tcl_quote(f))
+                        ]
                     strm_inst = node_name + "_wdynld"
                     strm_out_name = "m_axis_0"
 
@@ -1109,11 +1111,9 @@ class MVAU(HWCustomOp):
                             )
 
                     # instantiate a fetch weights component and connect it to the IP
-                    reg_rtllib_dir = os.path.join(os.environ["FINN_ROOT"], "finn-rtllib/skid/")
-                    fwg_rtllib_dir = os.path.join(
-                        os.environ["FINN_ROOT"], "finn-rtllib/fetch_weights/"
-                    )
-                    dma_rtllib_dir = os.path.join(os.environ["FINN_ROOT"], "finn-rtllib/cdma/")
+                    reg_rtllib_dir = resource_path("rtllib", "skid") + "/"
+                    fwg_rtllib_dir = resource_path("rtllib", "fetch_weights") + "/"
+                    dma_rtllib_dir = resource_path("rtllib", "cdma") + "/"
                     file_suffix = "_fetch_weights_wrapper.v"
                     # automatically find memstream verilog component in code generation directory
                     for fname in os.listdir(code_gen_dir):
@@ -1163,7 +1163,10 @@ class MVAU(HWCustomOp):
                         if file.endswith(".sv") or file.endswith(".svh"):
                             sourcefiles.append(os.path.join(dma_rtllib_dir + "cdma_x/", file))
                     for f in sourcefiles:
-                        cmd += ["add_files -copy_to %s -norecurse %s" % (source_target, f)]
+                        cmd += [
+                            "add_files -copy_to %s -norecurse %s"
+                            % (tcl_quote(source_target), tcl_quote(f))
+                        ]
                     strm_inst = node_name + "_fetch_weights"
                     strm_out_name = "out0_V"
                     # update intf dict to remove weights input and replace with index/tap input
@@ -1173,10 +1176,8 @@ class MVAU(HWCustomOp):
                 # Memstream instantiation
                 case "internal_decoupled":
                     # instantiate a streamer and connect it to the IP
-                    axi_dir = os.path.join(os.environ["FINN_ROOT"], "finn-rtllib/axi/hdl/")
-                    ms_rtllib_dir = os.path.join(
-                        os.environ["FINN_ROOT"], "finn-rtllib/memstream/hdl/"
-                    )
+                    axi_dir = resource_path("rtllib", "axi/hdl") + "/"
+                    ms_rtllib_dir = resource_path("rtllib", "memstream/hdl") + "/"
                     file_suffix = "_memstream_wrapper.v"
                     # automatically find memstream verilog component in code generation directory
                     for fname in os.listdir(code_gen_dir):
@@ -1190,7 +1191,10 @@ class MVAU(HWCustomOp):
                         ms_rtllib_dir + "memstream.sv",
                     ]
                     for f in sourcefiles:
-                        cmd += ["add_files -copy_to %s -norecurse %s" % (source_target, f)]
+                        cmd += [
+                            "add_files -copy_to %s -norecurse %s"
+                            % (tcl_quote(source_target), tcl_quote(f))
+                        ]
                     strm_inst = node_name + "_wstrm"
                     strm_out_name = "m_axis_0"
 

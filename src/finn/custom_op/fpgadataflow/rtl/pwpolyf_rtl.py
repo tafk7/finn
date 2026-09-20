@@ -16,6 +16,7 @@ from finn.custom_op.general.pwpolyfunction import (
 )
 from finn.util.basic import fifo_rtl_files
 from finn.util.data_packing import array2hexstring
+from finn.util.resources import resource_path, tcl_quote
 
 
 def _generate_coeffs_pkg_data(K, degree=2, num_samples=1000):
@@ -101,7 +102,7 @@ class PWPolyF_rtl(PWPolyF, RTLBackend):
         return _generate_coeffs_pkg_data(K, degree=degree, num_samples=num_samples)
 
     def generate_hdl(self, model, fpgapart, clk):
-        rtllib_dir = os.path.join(os.environ["FINN_ROOT"], "finn-rtllib/pwpolyf/hdl/")
+        rtllib_dir = resource_path("rtllib", "pwpolyf/hdl") + "/"
         template_path = rtllib_dir + "pwpolyf_template_wrapper.v"
         code_gen_dir = self.get_nodeattr("code_gen_dir_ipgen")
 
@@ -142,7 +143,7 @@ class PWPolyF_rtl(PWPolyF, RTLBackend):
     def get_rtl_file_list(self, abspath=False):
         if abspath:
             code_gen_dir = self.get_nodeattr("code_gen_dir_ipgen") + "/"
-            rtllib_dir = os.path.join(os.environ["FINN_ROOT"], "finn-rtllib/pwpolyf/hdl/")
+            rtllib_dir = resource_path("rtllib", "pwpolyf/hdl") + "/"
         else:
             code_gen_dir = ""
             rtllib_dir = ""
@@ -174,7 +175,7 @@ class PWPolyF_rtl(PWPolyF, RTLBackend):
 
         cmd = []
         for f in sourcefiles:
-            cmd += ["add_files -norecurse %s" % (f)]
+            cmd += ["add_files -norecurse %s" % tcl_quote(f)]
         cmd += [
             "create_bd_cell -type module -reference %s %s"
             % (self.get_nodeattr("gen_top_module"), self.onnx_node.name)

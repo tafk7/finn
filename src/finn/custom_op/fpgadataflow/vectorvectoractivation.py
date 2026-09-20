@@ -42,6 +42,7 @@ from qonnx.util.basic import (
 
 from finn.custom_op.fpgadataflow.hwcustomop import HWCustomOp
 from finn.util.data_packing import numpy_to_hls_code, pack_innermost_dim_as_hex_string
+from finn.util.resources import resource_path, tcl_quote
 
 
 class VVAU(HWCustomOp):
@@ -819,8 +820,8 @@ class VVAU(HWCustomOp):
 
             # Instantiate a streamer and connect it to the IP
             code_gen_dir = self.get_nodeattr("code_gen_dir_ipgen")
-            axi_dir = os.path.join(os.environ["FINN_ROOT"], "finn-rtllib/axi/hdl/")
-            ms_rtllib_dir = os.path.join(os.environ["FINN_ROOT"], "finn-rtllib/memstream/hdl/")
+            axi_dir = resource_path("rtllib", "axi/hdl") + "/"
+            ms_rtllib_dir = resource_path("rtllib", "memstream/hdl") + "/"
             file_suffix = "_memstream_wrapper.v"
             # automatically find memstream verilog component in code generation directory
             for fname in os.listdir(code_gen_dir):
@@ -834,7 +835,9 @@ class VVAU(HWCustomOp):
                 ms_rtllib_dir + "memstream.sv",
             ]
             for f in sourcefiles:
-                cmd += ["add_files -copy_to %s -norecurse %s" % (source_target, f)]
+                cmd += [
+                    "add_files -copy_to %s -norecurse %s" % (tcl_quote(source_target), tcl_quote(f))
+                ]
             strm_inst = node_name + "_wstrm"
             cmd.append(
                 "create_bd_cell -type hier -reference %s /%s/%s"

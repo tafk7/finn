@@ -36,21 +36,17 @@ fi
 mkdir -p "$HOME"
 export USER="${USER:-$(id -un 2>/dev/null || echo finn)}"
 export LOGNAME="${LOGNAME:-$USER}"
-export FINN_ROOT="${FINN_ROOT:-${WORKSPACE_DIR:-$PWD}}"
-export FINN_BUILD_DIR="${FINN_BUILD_DIR:-/tmp/finn_build_$(id -u)}"
-mkdir -p "$FINN_BUILD_DIR"
 export PATH="$PATH:$HOME/.local/bin"
 
 # Tool commands initialize through the shared shell hook or bare-exec shim.
 # Preserve optional mounted beta-device Tcl initialization across starts.
-if [ -d "$FINN_ROOT/.Xilinx" ] && [ ! -f "$HOME/.Xilinx/.finn-seeded" ]; then
+if [ -n "${FINN_SITE_TCL_DIR:-}" ] && [ -d "$FINN_SITE_TCL_DIR" ]; then
     mkdir -p "$HOME/.Xilinx"
     for script in HLS_init.tcl Vivado/Vivado_init.tcl; do
-        if [ -f "$FINN_ROOT/.Xilinx/$script" ]; then
+        if [ -f "$FINN_SITE_TCL_DIR/$script" ]; then
             mkdir -p "$(dirname "$HOME/.Xilinx/$script")"
-            cp "$FINN_ROOT/.Xilinx/$script" "$HOME/.Xilinx/$script"
+            cp "$FINN_SITE_TCL_DIR/$script" "$HOME/.Xilinx/$script"
         fi
     done
-    touch "$HOME/.Xilinx/.finn-seeded"
 fi
 exec "$@"

@@ -12,3 +12,10 @@ Sphinx either by:
 
 If you're looking for content that was hosted on the FINN project page
 with GitHub Pages, that has moved to the [github-pages branch](https://github.com/Xilinx/finn/tree/github-pages).
+
+Runtime implementation guides:
+
+* [Approved container/runtime implementation plan](container-runtime-implementation-plan.md)
+* [Installation and development](installation.md)
+* [Remaining legacy environment obligations](legacy-build-env-ledger.md)
+* [Runtime validation record](runtime-validation.md)

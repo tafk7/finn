@@ -21,6 +21,7 @@ from finn.util.data_packing import (
     pack_innermost_dim_as_hex_string,
     rtlsim_output_to_npy,
 )
+from finn.util.resources import resource_path, tcl_quote
 
 
 class ElementwiseBinary_rtl(ElementwiseBinaryOperation, RTLBackend):
@@ -139,7 +140,7 @@ class ElementwiseBinary_rtl(ElementwiseBinaryOperation, RTLBackend):
         if has_const:
             self.generate_params(model, code_gen_dir)
 
-        rtlsrc = f'{os.environ["FINN_ROOT"]}/finn-rtllib/eltwise'
+        rtlsrc = resource_path("rtllib", "eltwise") + "/"
         template_path = f"{rtlsrc}/eltwise_template.v"
         pe = self.get_nodeattr("PE")
 
@@ -185,7 +186,7 @@ class ElementwiseBinary_rtl(ElementwiseBinaryOperation, RTLBackend):
     def get_rtl_file_list(self, abspath=False):
         if abspath:
             code_gen_dir = f"{self.get_nodeattr('code_gen_dir_ipgen')}/"
-            rtllib_dir = f'{os.environ["FINN_ROOT"]}/finn-rtllib/eltwise/'
+            rtllib_dir = resource_path("rtllib", "eltwise") + "/"
         else:
             code_gen_dir = ""
             rtllib_dir = ""
@@ -299,8 +300,8 @@ class ElementwiseBinary_rtl(ElementwiseBinaryOperation, RTLBackend):
             code_gen_dir = self.get_nodeattr("code_gen_dir_ipgen")
             runtime_writable = self.get_nodeattr("runtime_writeable_weights") == 1
 
-            axi_dir = os.path.join(os.environ["FINN_ROOT"], "finn-rtllib/axi/hdl/")
-            ms_rtllib_dir = os.path.join(os.environ["FINN_ROOT"], "finn-rtllib/memstream/hdl/")
+            axi_dir = resource_path("rtllib", "axi/hdl") + "/"
+            ms_rtllib_dir = resource_path("rtllib", "memstream/hdl") + "/"
             file_suffix = "_memstream_wrapper.v"
 
             strm_tmpl = None
@@ -319,7 +320,9 @@ class ElementwiseBinary_rtl(ElementwiseBinaryOperation, RTLBackend):
                 ms_rtllib_dir + "memstream.sv",
             ]
             for f in sourcefiles:
-                cmd += ["add_files -copy_to %s -norecurse %s" % (source_target, f)]
+                cmd += [
+                    "add_files -copy_to %s -norecurse %s" % (tcl_quote(source_target), tcl_quote(f))
+                ]
             strm_inst = node_name + "_wstrm"
             cmd.append(
                 "create_bd_cell -type hier -reference %s /%s/%s"
@@ -371,7 +374,9 @@ class ElementwiseBinary_rtl(ElementwiseBinaryOperation, RTLBackend):
         sourcefiles = self.get_rtl_file_list(abspath=True)
 
         for f in sourcefiles:
-            cmd.append("add_files -copy_to %s -norecurse %s" % (source_target, f))
+            cmd.append(
+                "add_files -copy_to %s -norecurse %s" % (tcl_quote(source_target), tcl_quote(f))
+            )
 
         # Always create the core inside the hierarchical wrapper
         cmd.append(

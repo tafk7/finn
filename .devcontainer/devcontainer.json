@@ -42,18 +42,8 @@
     "storage": "32gb"
   },
 
-  "containerEnv": {
-    "FINN_ROOT": "/workspace/finn",
-    // frozen, not auto: an editor or agent session should get exactly the
-    // dependency commits the image was built with, not whatever happens to be
-    // checked out under deps/. Co-developing qonnx or brevitas is an explicit
-    // FINN_DEPS=live choice.
-    "FINN_DEPS": "frozen"
-  },
-
-  // Nothing here installs software or requires network access. Docker itself
-  // does not enforce closed egress; use the sbx lane when that is required.
-  "postCreateCommand": "python -c 'import finn; print(\"FINN import OK\")'",
+  // One-time preparation in a writable venv, using the image's dependency set.
+  "postCreateCommand": "python -m venv --system-site-packages --without-pip .venv && .venv/bin/python -m pip install --use-pep517 --config-settings editable_mode=strict --no-deps --no-build-isolation -e .",
 
   "customizations": {
     "vscode": {
@@ -62,7 +52,7 @@
         "ms-toolsai.jupyter"
       ],
       "settings": {
-        "python.defaultInterpreterPath": "/usr/bin/python3"
+        "python.defaultInterpreterPath": "/workspace/finn/.venv/bin/python"
       }
     }
   }

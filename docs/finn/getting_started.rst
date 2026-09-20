@@ -214,7 +214,7 @@ The common choices are command-line options:
 * ``--fpga`` adds the host Xilinx toolchain and licence configuration.
 * ``--runtime NAME`` selects image content such as XRT; repeat the option for
   multiple runtimes.
-* ``--deps frozen|live|auto`` selects dependency source behavior.
+* Install selected development checkouts explicitly with ``python -m pip install -e /path/to/checkout`` in a writable environment.
 * ``--sbx`` runs the image in an sbx sandbox instead of Docker.
 * ``--rebuild`` rebuilds without the BuildKit cache.
 * ``--no-build`` requires an already prepared artifact.
@@ -237,7 +237,7 @@ legacy callers. The most relevant are:
 * (optional) ``FINN_DOCKER_RUN_AS_ROOT`` (default 0) if set to 1 then run Docker container as root, default is the current user.
 * (optional) ``FINN_DOCKER_EXTRA`` (default "") passes extra arguments to ``docker compose run``.
 * (optional) ``FINN_SKIP_DEP_REPOS`` (default "0") skips the download of FINN dependency repos (uses the ones already downloaded under deps/.
-* (optional) ``FINN_DEPS`` (default "frozen") selects the source of qonnx, brevitas and finn-experimental. ``frozen`` uses the wheels in the image, at the versions in ``deps.env``. ``live`` uses the checkouts in ``deps/``, so your edits take effect immediately; if a checkout is missing, FINN stops and tells you which one. ``auto`` uses a checkout if it is present, and the wheel if it is not.
+* Python imports follow installed package metadata. ``FINN_DEPS`` and ``--deps`` have been removed; opening a checkout never changes package selection.
 * (optional) ``QONNX_COMMIT``, ``BREVITAS_COMMIT``, ``FINN_EXP_COMMIT``, and the other pins in ``deps.env`` override the dependency ref to fetch. Any git ref works - a SHA, a tag or a branch name. A dependency with a dirty working tree is never moved.
 * (optional) ``FINN_HLSLIB_PATH`` / ``FINN_BOARD_FILES_PATH`` override where the HLS headers and Vivado board files are read from. Default to ``$FINN_ROOT/deps/finn-hlslib`` and ``$FINN_ROOT/deps/board_files``.
 
@@ -326,7 +326,7 @@ sbx may separately use package-repository access while provisioning the microVM.
 
 Existing generated environment directories remain usable directly with native
 ``sbx env`` and are not deleted or migrated. See ``docker/README.md`` for migration.
-Image identity depends on declared image inputs, independently of mounted source.
+Application image identity includes the selected FINN code and resources. Mounted source does not shadow the installation.
 
 .. note::
    Floating licences (``port@host``) require site-specific validation with an actual
@@ -434,7 +434,6 @@ the image directly:
     --cleanenv \
     --bind "$PWD:$PWD" \
     --pwd "$PWD" \
-    --env FINN_ROOT="$PWD" \
     /path/to/finn.sif \
     python -c 'import finn'
 
@@ -578,3 +577,18 @@ strong hardware:
   You can override this location by using the ``FINN_HOST_BUILD_DIR`` environment
   variable.
   Mapping the generated file dir to a fast SSD will result in quicker builds.
+
+Installed resources and explicit development
+-------------------------------------------
+
+FINN wheels contain the RTL, C++ support, Tcl and driver templates needed by
+ordinary resource operations. These work without ``FINN_ROOT``. For editable
+work, create a writable environment once and explicitly install FINN and selected
+dependencies with pip. Application images contain installed FINN; the Dockerfile
+``base`` stage remains a reusable dependency environment. Read-only SIF execution
+performs no installation.
+
+See ``docs/installation.md`` in the source distribution for offline preparation,
+package/import inspection, site tool routes, and installed-resource lifetime.
+Generated projects and checkpoints still retain absolute paths; keep their build
+trees and installations in place, and regenerate after incompatible changes.

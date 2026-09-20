@@ -5,12 +5,25 @@
 # neither is used by the build - the image fetches its own pinned copies of the
 # Python deps rather than consuming the host checkout.
 #
-# FINN's own src/ is deliberately absent. It is never baked: the image ships the
-# dependency closure and console scripts, and $FINN_ROOT/src is resolved from the
-# mounted workspace at import time (see docker/finn_paths.py).
+# Application images include the selected FINN code and resources.
 *
 
 !requirements.txt
 !docker/
 !deps.env
 !fetch-repos.sh
+
+!setup.py
+!setup.cfg
+!MANIFEST.in
+!VERSION
+!README.md
+!LICENSE.txt
+!src/
+!finn-rtllib/
+!custom_hls/
+!finn_xsi/
+**/__pycache__/
+**/*.pyc
+**/*.so
+**/*.egg-info/

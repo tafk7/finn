@@ -48,6 +48,7 @@ from finn.transformation.fpgadataflow.annotate_cycles import AnnotateCycles
 from finn.util.basic import make_build_dir, resolve_xilinx_tool
 from finn.util.create import adjacency_list
 from finn.util.data_packing import npy_to_rtlsim_input, rtlsim_output_to_npy
+from finn.util.resources import resource_path, tcl_quote
 from finn.util.rtlsim import dat_file_to_numpy_array, mlo_prehook_func_factory
 
 finnxsi = xsi if xsi.is_available() else None
@@ -71,7 +72,7 @@ def collect_ip_dirs(model, ipstitch_path):
     ip_dirs += [ipstitch_path + "/ip"]
     if need_memstreamer:
         # add RTL streamer IP
-        ip_dirs.append("$::env(FINN_ROOT)/finn-rtllib/memstream")
+        ip_dirs.append(resource_path("rtllib", "memstream"))
     return ip_dirs
 
 
@@ -398,7 +399,7 @@ class FINNLoop(HWCustomOp, RTLBackend):
             str(input_bytes_rounded_to_power_of_2)
         ]  # need to get correct value
 
-        template_path = os.environ["FINN_ROOT"] + "/finn-rtllib/mlo/loop_control_wrapper.v"
+        template_path = resource_path("rtllib", "mlo/loop_control_wrapper.v")
         with open(template_path, "r") as f:
             template_wrapper = f.read()
         for key, value in code_gen_dict.items():
@@ -414,7 +415,7 @@ class FINNLoop(HWCustomOp, RTLBackend):
             f.write(template_wrapper)
 
         if get_by_name(self.onnx_node.attribute, "address_offset") is not None:
-            ac_template_path = os.environ["FINN_ROOT"] + "/finn-rtllib/mlo/address_config_wrapper.v"
+            ac_template_path = resource_path("rtllib", "mlo/address_config_wrapper.v")
             ac_module_name = self.onnx_node.name + "_address_config_wrapper"
             with open(ac_template_path, "r") as f:
                 ac_wrapper = f.read()
@@ -576,9 +577,7 @@ class FINNLoop(HWCustomOp, RTLBackend):
 
     def generate_hdl_stream_tap(self):
         """Helper function to generate verilog code for stream tap components."""
-        template_path = (
-            os.environ["FINN_ROOT"] + "/finn-rtllib/stream_tap/hdl/stream_tap_wrapper_template.v"
-        )
+        template_path = resource_path("rtllib", "stream_tap/hdl/stream_tap_wrapper_template.v")
         code_gen_dir = self.get_nodeattr("code_gen_dir_ipgen")
         iteration = self.get_nodeattr("iteration")
         loop_body = self.get_nodeattr("body")
@@ -669,14 +668,14 @@ class FINNLoop(HWCustomOp, RTLBackend):
         # add all the generated IP dirs to ip_repo_paths
         ip_dirs = ["list"]
         # add RTL streamer IP
-        ip_dirs.append("$::env(FINN_ROOT)/finn-rtllib/memstream")
+        ip_dirs.append(resource_path("rtllib", "memstream"))
         loop_model = self.get_nodeattr("body")
         for node in loop_model.graph.node:
             node_inst = getCustomOp(node)
             ip_dir_value = node_inst.get_nodeattr("ip_path")
             assert os.path.isdir(ip_dir_value), "IP generation directory doesn't exist."
             ip_dirs += [ip_dir_value]
-        ip_dirs_str = " ".join(ip_dirs)
+        ip_dirs_str = "list " + " ".join(tcl_quote(p) for p in ip_dirs[1:])
         cmd.append("set_property ip_repo_paths [%s] [current_project]" % ip_dirs_str)
         cmd.append("update_ip_catalog")
 
@@ -779,8 +778,8 @@ class FINNLoop(HWCustomOp, RTLBackend):
                 "-vlnv xilinx.com:interface:axis_rtl:1.0 /%s/m_axis_%d" % (bd_name, id + 1)
             )
         # get stream tap (+ skid)  components
-        skid_file = os.path.join(os.environ["FINN_ROOT"], "finn-rtllib/skid/skid.sv")
-        stream_tap_dir = os.path.join(os.environ["FINN_ROOT"], "finn-rtllib/stream_tap/hdl/")
+        skid_file = resource_path("rtllib", "skid/skid.sv")
+        stream_tap_dir = resource_path("rtllib", "stream_tap/hdl") + "/"
         file_suffix = "_stream_tap_wrapper.v"
         # automatically find stream tap verilog components in code generation directory
         st_tmpl_names = []
@@ -791,7 +790,9 @@ class FINNLoop(HWCustomOp, RTLBackend):
                 st_tmpl_names.append(fname[:-2])
         sourcefiles = st_verilog_files + [stream_tap_dir + "stream_tap.sv", skid_file]
         for f in sourcefiles:
-            cmd += ["add_files -copy_to %s -norecurse %s" % (source_target, f)]
+            cmd += [
+                "add_files -copy_to %s -norecurse %s" % (tcl_quote(source_target), tcl_quote(f))
+            ]
 
         adj_list = adjacency_list(
             loop_body,
@@ -1041,7 +1042,7 @@ class FINNLoop(HWCustomOp, RTLBackend):
         loop_body_intf_names = eval(loop_body.get_metadata_prop("vivado_stitch_ifnames"))
         ip_dirs = ["list"]
         ip_dirs += collect_ip_dirs(loop_body, loop_body_ipstitch_path)
-        ip_dirs_str = "[%s]" % (" ".join(ip_dirs))
+        ip_dirs_str = "[%s]" % ("list " + " ".join(tcl_quote(p) for p in ip_dirs[1:]))
         cmd.append(
             "set_property ip_repo_paths "
             "[concat [get_property ip_repo_paths [current_project]] %s] "
@@ -1205,7 +1206,7 @@ class FINNLoop(HWCustomOp, RTLBackend):
             "set_property value_resolve_type user [ipx::get_bus_parameters "
             "-of [ipx::get_bus_interfaces -of [ipx::current_core ]]]"
         )
-        example_data_dir = os.environ["FINN_ROOT"] + "/src/finn/qnn-data/mdd-data"
+        example_data_dir = resource_path("qnn-data", "mdd-data")
         shutil.copytree(example_data_dir, vivado_stitch_proj_dir + "/data")
 
         template = templates.ip_gen_loop_op
@@ -1288,7 +1289,7 @@ class FINNLoop(HWCustomOp, RTLBackend):
         loop_body = self.get_nodeattr("body")
         loop_body_ipstitch_path = loop_body.get_metadata_prop("vivado_stitch_proj")
         ip_dirs += collect_ip_dirs(loop_body, loop_body_ipstitch_path)
-        ip_dirs_str = " ".join(ip_dirs)
+        ip_dirs_str = "list " + " ".join(tcl_quote(p) for p in ip_dirs[1:])
         cmd.append(
             "set_property ip_repo_paths "
             "[concat [get_property ip_repo_paths [current_project]] %s] "

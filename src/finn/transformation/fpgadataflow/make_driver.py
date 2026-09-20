@@ -47,6 +47,7 @@ from typing import Dict, Tuple
 import finn.util
 from finn.util.basic import get_driver_shapes, make_build_dir
 from finn.util.data_packing import to_external_tensor
+from finn.util.resources import resource_path
 from finn.util.rtlsim import dat_file_to_numpy_array
 
 from . import template_driver
@@ -366,9 +367,7 @@ class MakePYNQDriver(Transformation):
         model.set_metadata_prop("pynq_driver_dir", pynq_driver_dir)
 
         # create the base FINN driver -- same for all accels
-        driver_base_template = (
-            os.environ["FINN_ROOT"] + "/src/finn/qnn-data/templates/driver/driver_base.py"
-        )
+        driver_base_template = resource_path("qnn-data", "templates/driver/driver_base.py")
         driver_base_py = pynq_driver_dir + "/driver_base.py"
         shutil.copy(driver_base_template, driver_base_py)
         # driver depends on qonnx and finn packages
@@ -564,9 +563,7 @@ class MakePYNQDriver(Transformation):
 
         # add validate.py to run full top-1 test (only for suitable networks)
         validate_py = pynq_driver_dir + "/validate.py"
-        validate_template = (
-            os.environ["FINN_ROOT"] + "/src/finn/qnn-data/templates/driver/validate.py"
-        )
+        validate_template = resource_path("qnn-data", "templates/driver/validate.py")
         shutil.copy(validate_template, validate_py)
 
         # generate weight files for runtime-writable layers

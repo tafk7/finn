@@ -28,52 +28,44 @@
 
 
 import os
-import re
-import subprocess
+import shlex
+import sys
+from pathlib import Path
 
-from finn.util.basic import resolve_xilinx_tool
+from finn.util._legacy_build_env import toolchain as legacy_toolchain
 
 
 class CallHLS:
-    """Call vitis_hls to run HLS build tcl scripts."""
+    """Execute a deliberately selected HLS frontend with child-scoped settings."""
 
-    def __init__(self):
+    def __init__(self, toolchain=None):
+        self.toolchain = toolchain
         self.tcl_script = ""
         self.ipgen_path = ""
         self.code_gen_dir = ""
         self.ipgen_script = ""
 
     def append_tcl(self, tcl_script):
-        """Sets the tcl script to be executed."""
         self.tcl_script = tcl_script
 
     def set_ipgen_path(self, path):
-        """Sets member variable ipgen_path to given path."""
         self.ipgen_path = path
 
     def build(self, code_gen_dir):
-        """Builds the bash script with given parameters and saves it in given folder.
-        To guarantee the generation in the correct folder the bash script contains a
-        cd command."""
-        vivado_path = os.environ.get("XILINX_VIVADO")
-        # xsi kernel lib name depends on Vivado version (renamed in 2024.2)
-        match = re.search(r"\b(20\d{2})\.(1|2)\b", vivado_path)
-        year, minor = int(match.group(1)), int(match.group(2))
-        if (year, minor) > (2024, 2):
-            tool = resolve_xilinx_tool("vitis-run")
-            vitis_cmd = "%s --mode hls --tcl %s\n" % (tool, self.tcl_script)
-        else:
-            tool = resolve_xilinx_tool("vitis_hls")
-            vitis_cmd = "%s %s\n" % (tool, self.tcl_script)
-        self.code_gen_dir = code_gen_dir
-        self.ipgen_script = str(self.code_gen_dir) + "/ipgen.sh"
-        working_dir = os.environ["PWD"]
-        f = open(self.ipgen_script, "w")
-        f.write("#!/bin/bash \n")
-        f.write("cd {}\n".format(code_gen_dir))
-        f.write(vitis_cmd)
-        f.write("cd {}\n".format(working_dir))
-        f.close()
-        bash_command = ["bash", self.ipgen_script]
-        process_compile = subprocess.Popen(bash_command, stdout=subprocess.PIPE)
-        process_compile.communicate()
+        toolchain = self.toolchain or legacy_toolchain()
+        self.code_gen_dir = os.path.abspath(code_gen_dir)
+        frontend, args = toolchain.hls_command(self.tcl_script)
+        self.ipgen_script = str(Path(self.code_gen_dir) / "ipgen.sh")
+        # Retain the useful replay artifact. It requires the selected tool's
+        # environment, but contains neither secrets nor an environment snapshot.
+        Path(self.ipgen_script).write_text(
+            "#!/bin/bash\nset -e\ncd "
+            + shlex.quote(self.code_gen_dir)
+            + "\nexec "
+            + shlex.join(toolchain.command(frontend, *args))
+            + "\n"
+        )
+        result = toolchain.run(frontend, args, cwd=self.code_gen_dir, check=False)
+        sys.stdout.write(result.stdout.decode("utf-8", errors="replace"))
+        sys.stderr.write(result.stderr.decode("utf-8", errors="replace"))
+        result.check_returncode()

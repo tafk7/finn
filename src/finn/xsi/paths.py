@@ -5,34 +5,19 @@
 # SPDX-License-Identifier: BSD-3-Clause
 #
 # ##########################################################################
-"""Path policy for the finn_xsi extension.
-
-``$FINN_ROOT/finn_xsi`` holds two different kinds of thing: the C++ sources and
-the ``finn_xsi`` Python package (both source, both under version control), and
-historically also ``xsi.so`` (a build artifact).
-
-Writing the artifact back into the source tree makes the checkout stateful: a
-mounted workspace gets mutated by merely starting a container, two containers
-racing the same tree can interleave writes, and the artifact outlives the Vivado
-version it was compiled against. So the artifact now lands in a build directory
-instead, and only the sources stay in the workspace.
-
-A pre-existing ``xsi.so`` in the source tree is still honoured, so checkouts
-built before this split keep working without a forced rebuild.
-"""
+"""Installed XSI sources and external, writable native build artifacts."""
 
 import os
 from pathlib import Path
 from typing import Optional
 
+from finn.util._legacy_build_env import build_directory
+from finn.util.resources import resource_path
+
 
 def xsi_source_dir() -> Path:
-    """Directory holding the finn_xsi C++ sources and Python package.
-
-    LIMITATION(finn-root-absolute): reached through FINN_ROOT because the
-    workspace has no fixed path. See docker/finn_paths.py.
-    """
-    return Path(os.environ["FINN_ROOT"]) / "finn_xsi"
+    """Stable installed C++ sources, never a destination for generated files."""
+    return Path(resource_path("xsi"))
 
 
 def xsi_artifact_dir() -> Path:
@@ -44,20 +29,10 @@ def xsi_artifact_dir() -> Path:
     override = os.environ.get("FINN_XSI_BUILD_DIR")
     if override:
         return Path(override)
-    build_dir = os.environ.get("FINN_BUILD_DIR")
-    if build_dir:
-        return Path(build_dir) / "finn_xsi"
-    return Path("/tmp/finn_xsi")
+    return Path(build_directory()) / "finn_xsi"
 
 
 def find_xsi_so() -> Optional[Path]:
-    """Return the usable ``xsi.so``, or None if it has not been built.
-
-    The artifact directory wins over the legacy in-tree location, so a stale
-    ``xsi.so`` left in a workspace by an older FINN cannot shadow a freshly
-    built one.
-    """
-    for candidate in (xsi_artifact_dir() / "xsi.so", xsi_source_dir() / "xsi.so"):
-        if candidate.exists():
-            return candidate
-    return None
+    """Return the selected compiled extension, or None if it has not been built."""
+    candidate = xsi_artifact_dir() / "xsi.so"
+    return candidate if candidate.is_file() else None

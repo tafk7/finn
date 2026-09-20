@@ -107,7 +107,6 @@ Options:
   -n, --name NAME    set the Docker container name
   --fpga             grant access to the configured Xilinx toolchain
   --runtime NAME     add image content such as xrt; repeatable
-  --deps MODE        frozen (default), live, or auto
   --notebook         start the Docker notebook service
   --rebuild          rebuild image layers without cache
   --no-build         require an existing prepared artifact
@@ -124,7 +123,7 @@ PRINT_ONLY=0
 INSTANCE_NAME=""
 NAME_EXPLICIT=0
 RUNTIMES="${FINN_RUNTIMES:-}"
-DEPS="${FINN_DEPS:-frozen}"
+
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -138,10 +137,9 @@ while [ "$#" -gt 0 ]; do
             RUNTIMES="${RUNTIMES:+$RUNTIMES,}$2"; shift 2 ;;
         --runtime=*)
             value=${1#*=}; RUNTIMES="${RUNTIMES:+$RUNTIMES,}$value"; shift ;;
-        --deps)
-            [ "$#" -ge 2 ] || { echo "--deps needs a value" >&2; exit 2; }
-            DEPS=$2; shift 2 ;;
-        --deps=*) DEPS=${1#*=}; shift ;;
+        --deps|--deps=*)
+            echo "--deps was replaced by explicit pip installs; see docs/installation.md" >&2
+            exit 2 ;;
         --notebook) NOTEBOOK=1; shift ;;
         --rebuild) export FINN_CONTAINER_REBUILD=1; shift ;;
         --no-build) export FINN_CONTAINER_NO_BUILD=1; shift ;;
@@ -153,10 +151,10 @@ while [ "$#" -gt 0 ]; do
     esac
 done
 
-case "$DEPS" in
-    frozen|live|auto) ;;
-    *) echo "Unknown dependency mode: $DEPS" >&2; exit 2 ;;
-esac
+if [ -n "${FINN_DEPS:-}" ]; then
+    echo "FINN_DEPS no longer selects imports; use an explicit installed or editable environment" >&2
+    exit 2
+fi
 if [ "$NOTEBOOK" = 1 ] && [ "$#" -gt 0 ]; then
     echo "--notebook does not accept a command" >&2
     exit 2
@@ -175,7 +173,6 @@ if [ "$NAME_EXPLICIT" != 1 ]; then
 fi
 
 export FINN_RUNTIMES="$RUNTIMES"
-export FINN_DEPS="$DEPS"
 export FINN_DOCKER_TARGET="$TIER"
 [ -z "$INSTANCE_NAME" ] || export FINN_CONTAINER_NAME="$INSTANCE_NAME"
 
@@ -184,7 +181,6 @@ if [ "$PRINT_ONLY" = 1 ]; then
     printf 'runner=docker\n'
     printf 'tier=%s\n' "$TIER"
     printf 'runtimes=%s\n' "$RUNTIMES"
-    printf 'deps=%s\n' "$DEPS"
     printf 'bake_target=%s\n' "$target"
     printf 'image_revision=%s\n' "$FINN_IMAGE_REVISION"
     printf 'source_revision=%s\n' "$FINN_SOURCE_REVISION"
@@ -202,7 +198,7 @@ fi
 
 cd "$REPO"
 if [ "${FINN_SKIP_DEP_REPOS:-0}" = 0 ] \
-   && { [ "$DEPS" = live ] || [ "${FINN_FETCH_DEPS:-0}" = 1 ]; }; then
+   && [ "${FINN_FETCH_DEPS:-0}" = 1 ]; then
     if [ "$TIER" = dev ]; then ./fetch-repos.sh python; else ./fetch-repos.sh; fi
 fi
 run_docker "$@"

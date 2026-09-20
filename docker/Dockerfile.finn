@@ -231,10 +231,8 @@ COPY deps.env fetch-repos.sh /opt/finn-src/
 # Fetch and install the three importable deps as ordinary wheels, then drop the
 # checkouts - brevitas alone is 222 MB of git history that the image never needs.
 #
-# These wheels are what FINN_DEPS=frozen pins to, and what auto (the default)
-# and live shadow with the mounted workspace. Their job is to carry the dependency
-# closure, the metadata and the 19 console scripts, so that a container can
-# start with no network and no pip install.
+# Prepared dependencies carry their real metadata and entry points. Application
+# layers install FINN; editable development is an explicit writable preparation.
 RUN cd /opt/finn-src && \
     ./fetch-repos.sh python && \
     pip install --no-cache-dir \
@@ -259,35 +257,6 @@ RUN cd /opt/finn-src && \
 ENV FINN_HLSLIB_PATH=/opt/finn-src/deps/finn-hlslib \
     FINN_BOARD_FILES_PATH=/opt/finn-src/deps/board_files
 
-# Resolve FINN and, in live mode, the deps from the mounted workspace. Installed
-# into site-packages so it applies to every interpreter start, including ones
-# the entrypoint never sees (docker exec, Jupyter kernels, pytest workers).
-COPY docker/finn_paths.py docker/finn-live.pth /tmp/finnpaths/
-RUN SITE_PACKAGES=$(python -c 'import site; print(site.getsitepackages()[0])') && \
-    install -m 644 /tmp/finnpaths/finn_paths.py "$SITE_PACKAGES/finn_paths.py" && \
-    install -m 644 /tmp/finnpaths/finn-live.pth "$SITE_PACKAGES/finn-live.pth" && \
-    rm -rf /tmp/finnpaths && \
-    python -c 'import finn_paths' && \
-    echo "finn_paths installed into $SITE_PACKAGES"
-
-# Keep deps.env the single place a Python dependency is declared. finn_paths.py
-# holds its own readable copy of the layout so it works outside the image; this
-# asserts the two agree and fails the build if a dep is added to one and not the
-# other, which would otherwise fail silently as an unresolvable import at run
-# time in live mode.
-RUN . /opt/finn-src/deps.env && \
-    expected=$(for d in $FINN_DEP_GROUP_PYTHON; do \
-        eval "dir=\$${d}_DIR"; echo "deps/$dir/src"; \
-    done | sort | tr '\n' ' ') && \
-    actual=$(python -c 'import finn_paths; print("\n".join(finn_paths.DEP_SRC_DIRS))' | sort | tr '\n' ' ') && \
-    if [ "$expected" != "$actual" ]; then \
-        echo "ERROR: finn_paths.DEP_SRC_DIRS is out of sync with deps.env" >&2; \
-        echo "  deps.env expects: $expected" >&2; \
-        echo "  finn_paths has  : $actual" >&2; \
-        exit 1; \
-    fi; \
-    echo "finn_paths.DEP_SRC_DIRS agrees with deps.env: $actual"
-
 # Fail the build on an inconsistent environment rather than shipping one. pip
 # reports resolver conflicts as a warning and exits 0, so without this a layer
 # that upgrades a pinned transitive dep produces a working-looking image whose
@@ -311,10 +280,9 @@ print('env consistent: numpy', numpy.__version__, '| torch', torch.__version__, 
 # incompatibility is a runtime import failure with no metadata conflict, so pip
 # check passes while every pytest invocation dies at plugin load.
 
-COPY docker/finn_entrypoint.sh docker/quicktest.sh docker/build_dataflow /usr/local/bin/
+COPY docker/finn_entrypoint.sh docker/quicktest.sh /usr/local/bin/
 RUN chmod 755 /usr/local/bin/finn_entrypoint.sh \
-              /usr/local/bin/quicktest.sh \
-              /usr/local/bin/build_dataflow
+              /usr/local/bin/quicktest.sh
 
 # Transparent vendor-tool shims.
 #
@@ -355,7 +323,6 @@ ENV VIVADO_IP_CACHE="/tmp/vivado_ip_cache" \
     NUM_DEFAULT_WORKERS=4 \
     LOCALHOST_URL="localhost" \
     SHELL=/bin/bash \
-    FINN_DEPS=frozen \
     XILINX_LOCAL_USER_DATA=no
 # TORCH_HOME / HF_HOME are deliberately NOT set here, though §3.4 grouped them
 # with the static tier. They point into /finn_cache, which exists only when
@@ -400,15 +367,9 @@ RUN set -eu; \
 #   NPM_CONFIG_PREFIX must be paired with its bin dir on PATH. Setting the
 #   prefix alone relocates `npm install -g` somewhere unreachable, so installing
 #   a CLI appears to succeed and then `command -v <cli>` fails with 127.
-# BASH_ENV points at finn-bashenv.sh, NOT straight at /etc/sandbox-persistent.sh.
-# That file is sbx-managed and must still be sourced -- finn-bashenv.sh sources
-# it first, then adds the toolchain environment that shells would otherwise miss.
-# Pointing BASH_ENV directly at the sbx file, as this used to, left `bash -c`
-# sessions with no Xilinx tools.
-#
-# The shim directory is early on PATH but AFTER npm-global, so it shadows the
-# mounted toolchain's own bin (which settings64.sh prepends at source time)
-# without shadowing tools installed by the selected sandbox agent.
+# Preserve native sbx's persistent environment integration. This hook performs
+# no FINN activation; bare tools use the documented shim and FINN operations
+# prepare their own child settings.
 ENV NO_PROXY=localhost,127.0.0.1,::1,172.17.0.0/16 \
     no_proxy=localhost,127.0.0.1,::1,172.17.0.0/16 \
     BASH_ENV=/etc/finn-bashenv.sh \
@@ -429,7 +390,7 @@ RUN mkdir -p /usr/local/share/npm-global/bin && chmod -R a+rX /usr/local/share/n
 # An earlier revision set CMD to `sleep infinity` believing a bash with no TTY
 # was what killed the sandbox. It was not - the entrypoint's fatal "no FINN
 # source" check was, because sbx starts PID 1 with cwd=/. That check is now a
-# warning, and CMD is irrelevant to sbx either way.
+# removed, and CMD is irrelevant to sbx either way.
 ENTRYPOINT ["/usr/bin/tini", "--", "finn_entrypoint.sh"]
 CMD ["bash"]
 
@@ -481,6 +442,9 @@ ENV LD_PRELOAD=/lib/x86_64-linux-gnu/libudev.so.1
 # Stages below re-assert USER root for their install steps and restore this at
 # the end. A stage that forgets will fail loudly on the first apt-get, which is
 # the desired failure mode.
+# Prepared editable environments need pip config-settings / PEP 660 support.
+# Ubuntu ensurepip copies older tools; overlay venvs inherit this with --without-pip.
+RUN python -m pip install --no-cache-dir pip==24.3.1
 USER agent
 
 # --- runtime: + the accelerator stacks named in FINN_RUNTIMES. ---------------
@@ -497,7 +461,20 @@ USER agent
 # The manifests and any supplied packages arrive through a bind mount rather
 # than COPY, so an unselected runtime's deb never ends up in a layer and the
 # image does not carry packages it did not install.
-FROM base AS runtime
+# `base` is a reusable dependency environment. Application layers include FINN
+# and are identified by source/resource content in docker/image-inputs.txt.
+FROM base AS application
+USER root
+COPY setup.py setup.cfg MANIFEST.in VERSION README.md LICENSE.txt /tmp/finn-package/
+COPY src /tmp/finn-package/src
+COPY finn-rtllib /tmp/finn-package/finn-rtllib
+COPY custom_hls /tmp/finn-package/custom_hls
+COPY finn_xsi /tmp/finn-package/finn_xsi
+RUN python -m pip install --no-deps --no-build-isolation /tmp/finn-package && \
+    rm -rf /tmp/finn-package
+USER agent
+
+FROM application AS runtime
 USER root
 
 ARG FINN_RUNTIMES=""

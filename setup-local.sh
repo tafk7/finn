@@ -250,7 +250,7 @@ python -m pip install -e "${FINN_ROOT}/deps/brevitas"
 gecho "  Installed brevitas"
 
 # Install FINN itself
-python -m pip install -e "${FINN_ROOT}"
+python -m pip install --use-pep517 -e "${FINN_ROOT}"
 gecho "  Installed finn"
 
 python -m pip check
@@ -319,8 +319,8 @@ echo ""
 if [ "$SKIP_XSI" -eq 0 ] && [ "$XILINX_AVAILABLE" -eq 1 ]; then
     gecho "Step 6: Building finn_xsi..."
 
-    if [ -f "${FINN_ROOT}/finn_xsi/xsi.so" ]; then
-        gecho "  Found existing finn_xsi at ${FINN_ROOT}/finn_xsi/xsi.so"
+    if python -m finn.xsi.setup --check >/dev/null 2>&1; then
+        gecho "  Found existing finn_xsi build artifact"
     else
         python -m finn.xsi.setup --quiet
         gecho "  finn_xsi built successfully"

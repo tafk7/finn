@@ -77,6 +77,7 @@ finn_image_revision () {
 
     (
         cd "$repo" || exit 1
+        shopt -s globstar
         printf 'finn-image-inputs-v1\n'
         while IFS= read -r pattern || [ -n "$pattern" ]; do
             case "$pattern" in ""|\#*) continue ;; esac
@@ -85,6 +86,7 @@ finn_image_revision () {
             found=0
             while IFS= read -r path; do
                 [ -f "$path" ] || continue
+                case "$path" in */__pycache__/*|*.pyc|*.so|*.egg-info/*) continue ;; esac
                 found=1
                 printf 'path=%s mode=%s sha256=' "$path" "$(stat -c '%a' "$path")"
                 sha256sum "$path" | awk '{print $1}'

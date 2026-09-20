@@ -1,0 +1,107 @@
+"""FINN_LEGACY_COMPAT: remaining legacy inputs, interpreted only on demand.
+
+See docs/legacy-build-env-ledger.md. No function mutates the parent environment.
+"""
+import os
+import re
+import tempfile
+from pathlib import Path
+
+from finn.util._toolchain import Selection
+
+
+def checkout_root(root=None, environ=None):
+    env = os.environ if environ is None else environ
+    value = root if root is not None else env.get("FINN_ROOT")
+    if not value:
+        raise RuntimeError("This legacy checkout operation requires an explicit root or FINN_ROOT")
+    return str(Path(value).resolve())
+
+
+def build_directory(path=None, environ=None):
+    env = os.environ if environ is None else environ
+    value = path if path is not None else env.get("FINN_BUILD_DIR")
+    return str(Path(value or Path(tempfile.gettempdir()) / f"finn_build_{os.getuid()}").resolve())
+
+
+def external_path(kind, path=None, *, root=None, environ=None):
+    env = os.environ if environ is None else environ
+    variable, directory = {
+        "hlslib": ("FINN_HLSLIB_PATH", "finn-hlslib"),
+        "boards": ("FINN_BOARD_FILES_PATH", "board_files"),
+    }[kind]
+    value = path
+    if value is None and root is not None:
+        value = Path(root) / "deps" / directory
+    if value is None:
+        value = env.get(variable)
+    if value is None and env.get("FINN_ROOT"):
+        value = Path(env["FINN_ROOT"]) / "deps" / directory
+    if not value or not Path(value).is_dir():
+        raise FileNotFoundError(f"Set {variable} to the installed, versioned {directory} directory")
+    return str(Path(value).resolve())
+
+
+def toolchain(environ=None):
+    """Translate legacy tool inputs once for unmigrated public operations."""
+    env = dict(os.environ if environ is None else environ)
+    frontend = env.get("FINN_HLS_FRONTEND")
+    if frontend is None:
+        match = re.search(
+            r"\b(20\d{2})\.(\d+)\b", env.get("XILINX_VIVADO", env.get("VIVADO_PATH", ""))
+        )
+        version = tuple(map(int, match.groups())) if match else None
+        frontend = "vitis-run" if version and version > (2024, 2) else "vitis_hls"
+    scripts = []
+    # Site command-directory wrappers own their activation. Do not turn them
+    # into local tools or require a local AMD installation before dispatching.
+    command_dir = env.get("FINN_TOOL_DIR_OVERRIDE", "")
+    if not command_dir:
+        for primary, alias in (
+            ("XILINX_VITIS", "VITIS_PATH"),
+            ("XILINX_VIVADO", "VIVADO_PATH"),
+            ("XILINX_HLS", "HLS_PATH"),
+        ):
+            root = env.get(primary, env.get(alias))
+            if root:
+                script = str(Path(root) / "settings64.sh")
+                if Path(script).is_file() and script not in scripts:
+                    scripts.append(script)
+    selection = Selection(settings=tuple(scripts), command_dir=command_dir, hls_frontend=frontend)
+    # Legacy ambient mode accepts its inherited base; explicit Selection.prepare
+    # has a clean default base instead. This does not claim to unsource anything.
+    return selection.prepare(env)
+
+
+def build_environment(environ=None, *, root=None, build_dir=None):
+    """Prepare the child tree of an explicit legacy build entry point."""
+    env = dict(os.environ if environ is None else environ)
+    if root is not None:
+        env["FINN_ROOT"] = checkout_root(root)
+    env["FINN_BUILD_DIR"] = build_directory(build_dir, env)
+    Path(env["FINN_BUILD_DIR"]).mkdir(parents=True, exist_ok=True)
+    # Loader paths must exist BEFORE Python starts. Retain the XSI limitation
+    # here; ordinary imports and resource operations never call this function.
+    env = dict(toolchain(env).environment)
+    for primary, alias in (
+        ("XILINX_VIVADO", "VIVADO_PATH"),
+        ("XILINX_VITIS", "VITIS_PATH"),
+        ("XILINX_HLS", "HLS_PATH"),
+    ):
+        if env.get(primary):
+            env.setdefault(alias, env[primary])
+    libraries = []
+    for variable, suffix in (
+        ("XILINX_VIVADO", "lib/lnx64.o"),
+        ("XILINX_VITIS", "lnx64/tools/fpo_v7_1"),
+        ("XILINX_HLS", "lnx64/tools/fpo_v7_1"),
+    ):
+        if env.get(variable):
+            directory = Path(env[variable]) / suffix
+            if directory.is_dir():
+                libraries.append(str(directory))
+    if libraries:
+        env["LD_LIBRARY_PATH"] = ":".join(
+            libraries + ([env["LD_LIBRARY_PATH"]] if env.get("LD_LIBRARY_PATH") else [])
+        )
+    return env

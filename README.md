@@ -19,14 +19,15 @@ For more general information about FINN, please visit the [project page](https:/
 
 ## Getting Started
 
-FINN supports two setup paths. See the
+FINN supports ordinary [installed and editable Python environments](docs/installation.md),
+as well as the two complete setup paths below. See the
 [Getting Started](https://finn.readthedocs.io/en/latest/getting_started.html)
 page for the complete guide.
 
 | Setup | Command | Use it when |
 |---|---|---|
 | **Native** | `./setup-local.sh` | You have the supported Ubuntu/Python environment and want one local installation |
-| **Docker-built environment** | `./docker/run` | You need a portable dependency environment, agent isolation, or an HPC image |
+| **Docker-built environment** | `./docker/run` | You need a installed application, agent isolation, or an HPC image |
 
 Native quickstart:
 

@@ -1,9 +1,8 @@
 """Tests for the repository-local Docker environment entry points."""
 
 import os
-from pathlib import Path
 import subprocess
-
+from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
 RUN = REPO / "docker/run"
@@ -25,7 +24,7 @@ def test_default_is_the_docker_dev_environment():
     assert data["runner"] == "docker"
     assert data["tier"] == "dev"
     assert data["runtimes"] == ""
-    assert data["deps"] == "frozen"
+    assert "deps" not in data
     assert data["operation"] == "run"
     assert data["image_revision"].startswith("env-")
     assert (
@@ -46,8 +45,6 @@ def test_common_options_are_normalized():
         "--runtime=slash",
         "--runtime",
         "xrt",
-        "--deps",
-        "live",
         "--print",
         "--",
         "pytest",
@@ -58,7 +55,7 @@ def test_common_options_are_normalized():
     data = assignments(proc.stdout)
     assert data["tier"] == "build"
     assert data["runtimes"] == "slash,xrt"
-    assert data["deps"] == "live"
+    assert "deps" not in data
     assert data["bake_target"] == "finn-runtime"
     assert "pytest" in data["command"]
 
@@ -308,3 +305,9 @@ finn_prepare_sbx
     )
     assert proc.returncode == 0, proc.stderr
     assert calls.read_text() == "build\nsave\nload\n" * 2
+
+
+def test_removed_dependency_modes_are_actionable():
+    proc = invoke(RUN, "--deps", "live", "--print")
+    assert proc.returncode == 2
+    assert "explicit pip installs" in proc.stderr

@@ -22,7 +22,7 @@ import logging
 import sys
 from typing import Any, Optional
 
-from finn.xsi.paths import find_xsi_so, xsi_source_dir
+from finn.xsi.paths import find_xsi_so
 
 
 def is_available() -> bool:
@@ -56,11 +56,8 @@ def _load_modules() -> bool:
     if xsi_so is None:
         return False
 
-    # The compiled `xsi` extension and the `finn_xsi` Python package now live in
-    # separate directories, so both have to be importable. When the artifact was
-    # found in its legacy in-tree location these two coincide, and the set
-    # collapses back to a single entry.
-    import_paths = [str(xsi_so.parent), str(xsi_source_dir())]
+    # The Python adapter is installed normally; only the native artifact is external.
+    import_paths = [str(xsi_so.parent)]
     added_paths = [p for p in dict.fromkeys(import_paths) if p not in sys.path]
     for p in reversed(added_paths):
         sys.path.insert(0, p)
@@ -68,9 +65,10 @@ def _load_modules() -> bool:
     try:
         # Imports must be inside function: modules require dynamic path setup
         # and may not exist if finn_xsi extension is not built
+        import xsi  # noqa: PLC0415
+
         import finn_xsi.adapter  # noqa: PLC0415
         import finn_xsi.sim_engine  # noqa: PLC0415
-        import xsi  # noqa: PLC0415
 
         _xsi_module = xsi
         _adapter_module = finn_xsi.adapter

@@ -30,6 +30,7 @@ import os
 from finn.custom_op.fpgadataflow.rtlbackend import RTLBackend
 from finn.custom_op.fpgadataflow.streamingfifo import StreamingFIFO
 from finn.util.basic import fifo_rtl_files
+from finn.util.resources import resource_path, tcl_quote
 
 
 class StreamingFIFO_rtl(StreamingFIFO, RTLBackend):
@@ -50,7 +51,7 @@ class StreamingFIFO_rtl(StreamingFIFO, RTLBackend):
         return ret
 
     def generate_hdl(self, model, fpgapart, clk):
-        rtlsrc = os.environ["FINN_ROOT"] + "/finn-rtllib/fifo/hdl"
+        rtlsrc = resource_path("rtllib", "fifo/hdl")
         template_path = rtlsrc + "/fifo_template.v"
 
         # save top module name so we can refer to it after this node has been renamed
@@ -98,7 +99,9 @@ class StreamingFIFO_rtl(StreamingFIFO, RTLBackend):
         self.set_nodeattr("ip_path", code_gen_dir)
 
     def code_generation_ipi(self):
-        cmd = ["add_files -norecurse %s" % f for f in self.get_rtl_file_list(abspath=True)]
+        cmd = [
+            "add_files -norecurse %s" % tcl_quote(f) for f in self.get_rtl_file_list(abspath=True)
+        ]
         cmd += [
             "create_bd_cell -type module -reference %s %s"
             % (self.get_nodeattr("gen_top_module"), self.onnx_node.name)

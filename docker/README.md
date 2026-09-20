@@ -48,12 +48,13 @@ outputs. Run a SIF with the standard tool, for example:
 
 ```bash
 apptainer exec --cleanenv --bind "$PWD:$PWD" --pwd "$PWD" \
-  --env FINN_ROOT="$PWD" ./finn.sif python -c 'import finn'
+  ./finn.sif python -c 'from finn.util.basic import fifo_rtl_files; print(fifo_rtl_files())'
 ```
 
 Image tags contain an ``env-<hash>`` revision derived from the declared image
-inputs in ``docker/image-inputs.txt``. Mounted FINN source is not an image
-input: its commit, description and dirty state are passed separately as
+inputs in ``docker/image-inputs.txt``, including the FINN code and resources
+installed in the application. The mounted checkout's commit, description and dirty
+state are passed separately as
 ``FINN_SOURCE_*`` runtime provenance. The immutable identity of a concrete
 build remains its Docker image digest or exported SIF checksum.
 
@@ -120,7 +121,7 @@ user-owned copies of docker/sbx examples
 image                                      guest only
     -> Dockerfile tool list + toolchain-shim
     -> finn_entrypoint.sh / finn-bashenv.sh / finn-toolchain.sh
-    -> finn-live.pth / finn_paths.py
+    -> installed FINN distribution and generated console entry points
 
 Jenkins common helper -> shared-image loader -> docker/run
 ```
@@ -177,3 +178,22 @@ sbx env rm /existing/environment/finn.sbxenv.yaml --force
 
 Alternatively copy the new examples into a user-owned directory. No automatic
 state migration, sandbox removal or global policy/credential changes occur.
+
+## Explicit development preparation
+
+Images run installed FINN. A mounted checkout does not select imports, and
+`--deps`/`FINN_DEPS` import modes have been removed. In a writable container or
+native sbx session, prepare a venv once:
+
+```bash
+python -m venv --system-site-packages --without-pip /writable/finn-dev
+/writable/finn-dev/bin/python -m pip install --use-pep517 --config-settings editable_mode=strict --no-deps --no-build-isolation -e /path/to/finn
+# Optional explicit co-development:
+/writable/finn-dev/bin/python -m pip install --use-pep517 --config-settings editable_mode=strict --no-deps --no-build-isolation -e /path/to/qonnx
+```
+
+Use that venv's executables for subsequent commands. The Dev Container prepares
+`.venv` in its creation step. Read-only SIF execution uses installed code; editable
+HPC work requires an explicitly writable environment. See
+[installation and tool selection](../docs/installation.md) for offline preparation,
+metadata inspection, resource lifetimes and remaining native loader requirements.

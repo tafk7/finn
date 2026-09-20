@@ -5,27 +5,10 @@
 #
 # e.g.  ci/scripts/build-images.sh finn-xrt "$IMAGE_DIR"
 #
-# WHY A DIGEST IS NOT ENOUGH ON ITS OWN
-# -------------------------------------
-# CI previously passed a recomputed mutable TAG to each test shard and trusted
-# that two shards resolving the same tag got the same image. A digest fixes
-# that half of the problem.
-#
-# It does not fix the other half. FINN source is MOUNTED, not baked, so the
-# digest identifies the environment and says nothing about the code under test.
-# Two shards on one digest can still execute different code if the workspace or
-# the dependency checkouts differ. Hence the full tuple:
-#
-#     finn_commit      what mounted src/finn was
-#     image_revision   which environment inputs selected the reusable tag
-#     image_digest     what the environment was
-#     target           which image (base, plus any runtime targets)
-#     deps             the resolved dependency commits, not branch names
-#     finn_deps_mode   frozen, or the run is not reproducible at all
-#
-# FINN_DEPS=frozen is therefore not a preference here, it is load-bearing: in
-# auto or live the mounted checkouts shadow the baked wheels and the digest
-# stops meaning anything.
+# Application identity includes the installed FINN source/resources, dependency
+# pins and runtime selection. The digest identifies exact image contents;
+# source revision/dirty metadata additionally describes the selected checkout.
+# Explicit editable jobs must record their preparation separately.
 
 set -euo pipefail
 
@@ -41,16 +24,10 @@ cd "$(dirname "$0")/../.."
 finn_set_provenance
 FINN_COMMIT="$FINN_SOURCE_REVISION"
 
-# FINN_DEPS is load-bearing for this record, not a preference: in `auto` or
-# `live` the mounted checkouts shadow the baked wheels and the digest stops
-# describing what ran. This used to be hardcoded to "frozen" in the output --
-# a claim rather than a measurement, which is the same shape as the
-# `egress: false` defect the design record already fixed once. Record what is
-# actually set, and refuse to record a value that invalidates the artifact.
-FINN_DEPS_MODE="${FINN_DEPS:-frozen}"
-if [ "$FINN_DEPS_MODE" != "frozen" ]; then
-    recho "FINN_DEPS=$FINN_DEPS_MODE, so the image digest does not describe what will run."
-    recho "Provenance would be misleading. Build with FINN_DEPS=frozen."
+# FINN and its dependency metadata are installed in the application image.
+FINN_DEPS_MODE=installed
+if [ -n "${FINN_DEPS:-}" ]; then
+    recho "FINN_DEPS was removed; prepare explicit installations instead."
     exit 1
 fi
 

@@ -15,6 +15,7 @@ from typing import Optional
 from finn.custom_op.fpgadataflow.inner_shuffle import InnerShuffle
 from finn.custom_op.fpgadataflow.rtlbackend import RTLBackend
 from finn.util.basic import fifo_rtl_files
+from finn.util.resources import resource_path, tcl_quote
 
 
 def auto_size_simd(I_dim: int, SIMD: int) -> Optional[int]:
@@ -77,7 +78,7 @@ class InnerShuffle_rtl(InnerShuffle, RTLBackend):
         return code_gen_dict
 
     def generate_hdl(self, model, fpgapart, clk):
-        rtlsrc = f'{os.environ["FINN_ROOT"]}/finn-rtllib/inner_shuffle'
+        rtlsrc = resource_path("rtllib", "inner_shuffle")
         template_path = f"{rtlsrc}/inner_shuffle_template.v"
         code_gen_dir = self.get_nodeattr("code_gen_dir_ipgen")
         dt = DataType[self.get_nodeattr("data_type")]
@@ -113,7 +114,7 @@ class InnerShuffle_rtl(InnerShuffle, RTLBackend):
     def get_rtl_file_list(self, abspath=False):
         if abspath:
             code_gen_dir = f"{self.get_nodeattr('code_gen_dir_ipgen')}/"
-            rtllib_dir = f'{os.environ["FINN_ROOT"]}/finn-rtllib/inner_shuffle'
+            rtllib_dir = resource_path("rtllib", "inner_shuffle")
         else:
             code_gen_dir = ""
             rtllib_dir = ""
@@ -140,7 +141,7 @@ class InnerShuffle_rtl(InnerShuffle, RTLBackend):
 
         cmd = []
         for vf in sourcefiles:
-            cmd += [f"add_files -norecurse {vf}"]
+            cmd += [f"add_files -norecurse {tcl_quote(vf)}"]
         cmd += [f"create_bd_cell -type module -reference {top_module} {self.onnx_node.name}"]
         return cmd
 

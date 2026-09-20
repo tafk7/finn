@@ -40,24 +40,11 @@ def normalize_runtimes(runtimes=None):
     return sorted(set(n for n in runtimes.replace(",", " ").split() if n))
 
 
-# D4: the workspace path policy.
-#
-#   mirror  container path == host path. Required for anything that generates
-#           Vivado projects, because add_files writes $::env(FINN_ROOT) into the
-#           .xpr as an absolute path (LIMITATION(finn-root-absolute)), so a
-#           project built under a fixed path cannot be opened in the host GUI.
-#   fixed   container path == FIXED_WORKSPACE. Better for remote daemons,
-#           reproducible diagnostics and Dev Container config.
-#
-# dev defaults to "fixed" and the FPGA tiers to "mirror". dev is Python-only and
-# generates no Vivado projects, so mirroring buys it nothing while costing
-# remote-daemon support, reproducible diagnostic paths, and simple Dev Container
-# config. The FPGA tiers generate projects and so must mirror.
-#
-# CONSEQUENCE: FINN_ROOT differs between dev and the FPGA tiers on one host, so
-# the workspace path moves when you switch tiers. finn_paths.py resolves either
-# correctly, but it surprises people; it is called out in compose.yaml and the
-# docs for that reason.
+# Workspace mount policy is independent of Python package selection. Preserve
+# the FPGA mirror policy for existing absolute build/checkpoint paths. Installed
+# resource paths additionally require the same installation when replaying a
+# project outside its original runtime; mirroring a checkout cannot supply it.
+# The dev fixed path remains useful for remote daemons and Dev Containers.
 FIXED_WORKSPACE = "/workspace/finn"
 DEFAULT_DEV_WORKSPACE_POLICY = "fixed"
 
@@ -370,7 +357,6 @@ def resolve_host(tier, workspace_policy="auto"):
         "egress_enforcement": "declared",
         "env": {
             "FINN_ROOT": workspace["target"],
-            "FINN_DEPS": os.environ.get("FINN_DEPS", "frozen").lower(),
         },
     }
     for variable in (

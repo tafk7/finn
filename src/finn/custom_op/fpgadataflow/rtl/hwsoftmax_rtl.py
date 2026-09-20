@@ -14,6 +14,7 @@ import shutil
 from finn.custom_op.fpgadataflow.hwsoftmax import HWSoftmax
 from finn.custom_op.fpgadataflow.rtlbackend import RTLBackend
 from finn.util.basic import fifo_rtl_files
+from finn.util.resources import resource_path, tcl_quote
 
 
 class HWSoftmax_rtl(HWSoftmax, RTLBackend):
@@ -42,7 +43,7 @@ class HWSoftmax_rtl(HWSoftmax, RTLBackend):
         ]
 
     def generate_hdl(self, model, fpgapart, clk):
-        rtllib_dir = os.path.join(os.environ["FINN_ROOT"], "finn-rtllib/softmax_rtl/")
+        rtllib_dir = resource_path("rtllib", "softmax_rtl") + "/"
         template_path = rtllib_dir + "softmax_wrapper_template.v"
         simd = self.get_nodeattr("SIMD")
         topname = self.get_verilog_top_module_name()
@@ -93,7 +94,7 @@ class HWSoftmax_rtl(HWSoftmax, RTLBackend):
     def get_rtl_file_list(self, abspath=False):
         if abspath:
             code_gen_dir = self.get_nodeattr("code_gen_dir_ipgen") + "/"
-            rtllib_dir = os.path.join(os.environ["FINN_ROOT"], "finn-rtllib/softmax_rtl/")
+            rtllib_dir = resource_path("rtllib", "softmax_rtl") + "/"
         else:
             code_gen_dir = ""
             rtllib_dir = ""
@@ -112,7 +113,7 @@ class HWSoftmax_rtl(HWSoftmax, RTLBackend):
 
         cmd = []
         for f in sourcefiles:
-            cmd += ["add_files -norecurse %s" % (f)]
+            cmd += ["add_files -norecurse %s" % tcl_quote(f)]
         cmd += [
             "create_bd_cell -type module -reference %s %s"
             % (self.get_nodeattr("gen_top_module"), self.onnx_node.name)

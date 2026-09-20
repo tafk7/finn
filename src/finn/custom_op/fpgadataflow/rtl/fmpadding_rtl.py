@@ -33,6 +33,7 @@ from qonnx.util.basic import roundup_to_integer_multiple
 
 from finn.custom_op.fpgadataflow.fmpadding import FMPadding
 from finn.custom_op.fpgadataflow.rtlbackend import RTLBackend
+from finn.util.resources import resource_path, tcl_quote
 
 
 class FMPadding_rtl(FMPadding, RTLBackend):
@@ -108,7 +109,7 @@ class FMPadding_rtl(FMPadding, RTLBackend):
         return config
 
     def generate_hdl(self, model, fpgapart, clk):
-        rtlsrc = os.environ["FINN_ROOT"] + "/finn-rtllib/fmpadding/hdl"
+        rtlsrc = resource_path("rtllib", "fmpadding/hdl") + "/"
         template_path = rtlsrc + "/fmpadding_template.v"
         dims = self.get_nodeattr("ImgDim")
         pads = self.get_nodeattr("Padding")
@@ -145,7 +146,7 @@ class FMPadding_rtl(FMPadding, RTLBackend):
     def get_rtl_file_list(self, abspath=False):
         if abspath:
             code_gen_dir = self.get_nodeattr("code_gen_dir_ipgen") + "/"
-            rtllib_dir = os.path.join(os.environ["FINN_ROOT"], "finn-rtllib/fmpadding/hdl/")
+            rtllib_dir = resource_path("rtllib", "fmpadding/hdl") + "/"
         else:
             code_gen_dir = ""
             rtllib_dir = ""
@@ -173,7 +174,7 @@ class FMPadding_rtl(FMPadding, RTLBackend):
 
         cmd = []
         for f in sourcefiles:
-            cmd += ["add_files -norecurse %s" % (f)]
+            cmd += ["add_files -norecurse %s" % tcl_quote(f)]
         cmd += [
             "create_bd_cell -type module -reference %s %s"
             % (self.get_nodeattr("gen_top_module"), self.onnx_node.name)

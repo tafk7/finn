@@ -6,10 +6,11 @@ import shutil
 
 from finn.custom_op.fpgadataflow.hwwhere import HWWhere
 from finn.custom_op.fpgadataflow.rtlbackend import RTLBackend
+from finn.util.resources import resource_path, tcl_quote
 
 
 def _rtlsrc_dir():
-    return os.environ["FINN_ROOT"] + "/finn-rtllib/where/hdl"
+    return resource_path("rtllib", "where/hdl")
 
 
 class HWWhere_rtl(HWWhere, RTLBackend):
@@ -118,7 +119,7 @@ class HWWhere_rtl(HWWhere, RTLBackend):
 
         cmd = []
         for f in sourcefiles:
-            cmd += ["add_files -norecurse %s" % f]
+            cmd += ["add_files -norecurse %s" % tcl_quote(f)]
         cmd += [
             "create_bd_cell -type module -reference %s %s"
             % (self.get_nodeattr("gen_top_module"), self.onnx_node.name)

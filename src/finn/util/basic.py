@@ -39,33 +39,10 @@ from qonnx.custom_op.registry import getCustomOp
 from qonnx.util.basic import gen_finn_dt_tensor, roundup_to_integer_multiple
 from typing import Dict, Optional, Tuple
 
+from finn.util._legacy_build_env import build_directory, checkout_root
+from finn.util._toolchain import Selection, run_process
 from finn.util.data_packing import finnpy_to_packed_bytearray
-
-# Locations of the non-Python build dependencies: finn-hlslib's C++ headers and
-# the Vivado board definitions. These are data, never imported, and are reached
-# from generated Tcl and from g++ include flags rather than from Python.
-#
-# They default to the historical deps/ layout, so a checkout populated by
-# fetch-repos.sh behaves exactly as before. In the image they point at the baked
-# dependency data outside the mounted workspace.
-#
-# setdefault (not assignment) at import time: any subprocess FINN launches -
-# Vivado, Vitis HLS, g++ - inherits the resolved values, so the generated Tcl
-# can reference $::env(...) without needing its own fallback logic.
-#
-# LIMITATION(finn-root-absolute): the defaults are relative to FINN_ROOT because
-# the workspace has no fixed path. With a fixed path these become constants and
-# the env vars are only needed for images that relocate the data out of the
-# workspace. See docker/finn_paths.py.
-def _default_dep_path(env_var: str, *relative_parts: str) -> str:
-    finn_root = os.environ.get("FINN_ROOT")
-    if finn_root:
-        os.environ.setdefault(env_var, os.path.join(finn_root, *relative_parts))
-    return os.environ.get(env_var, "")
-
-
-_default_dep_path("FINN_HLSLIB_PATH", "deps", "finn-hlslib")
-_default_dep_path("FINN_BOARD_FILES_PATH", "deps", "board_files")
+from finn.util.resources import resource_path
 
 # mapping from PYNQ board names to FPGA part names
 pynq_part_map = dict()
@@ -154,16 +131,8 @@ def get_rtlsim_trace_depth():
 
 
 def get_finn_root():
-    "Return the root directory that FINN is cloned into."
-
-    try:
-        return os.environ["FINN_ROOT"]
-    except KeyError:
-        raise Exception(
-            """Environment variable FINN_ROOT must be set
-        correctly. Please ensure you have launched the Docker contaier correctly.
-        """
-        )
+    """Legacy checkout-only API; package data uses resource_path instead."""
+    return checkout_root()
 
 
 def fifo_rtl_files(abspath=True, gauge=False):
@@ -172,7 +141,7 @@ def fifo_rtl_files(abspath=True, gauge=False):
     names = (["fifo_gauge.sv"] if gauge else []) + ["fifo.sv"]
     if not abspath:
         return names
-    rtlsrc = os.path.join(get_finn_root(), "finn-rtllib", "fifo", "hdl")
+    rtlsrc = resource_path("rtllib", "fifo/hdl")
     return [os.path.join(rtlsrc, n) for n in names]
 
 
@@ -232,14 +201,7 @@ def make_build_dir(prefix=""):
     """Creates a folder with given prefix to be used as a build dir.
     Use this function instead of tempfile.mkdtemp to ensure any generated files
     will survive on the host after the FINN Docker container exits."""
-    try:
-        build_dir = os.environ["FINN_BUILD_DIR"]
-    except KeyError:
-        raise Exception(
-            """Environment variable FINN_BUILD_DIR must be set
-        correctly. Please ensure you have launched the Docker container correctly.
-        """
-        )
+    build_dir = build_directory()
     os.makedirs(build_dir, exist_ok=True)
     new_dir = tempfile.mkdtemp(prefix=prefix, dir=build_dir)
     os.chmod(new_dir, 0o755)
@@ -314,7 +276,7 @@ class CppBuilder:
         process_compile.communicate()
 
 
-def launch_process_helper(args, proc_env=None, cwd=None, check=False):
+def launch_process_helper(args, proc_env=None, cwd=None, check=False, timeout=None, cancel=None):
     """Launch a process and capture its output for logging with Python loggers.
 
     Returns ``(cmd_out, cmd_err)`` as UTF-8 strings, with undecodable bytes in
@@ -327,17 +289,9 @@ def launch_process_helper(args, proc_env=None, cwd=None, check=False):
     log is still visible on failure. That is why the return code is checked by
     hand rather than relying on ``subprocess.run(check=True)``.
     """
-    if proc_env is None:
-        proc_env = os.environ.copy()
-    proc = subprocess.run(
-        args,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        env=proc_env,
-        cwd=cwd,
-        encoding="utf-8",
-        errors="replace",
-    )
+    proc = run_process(args, env=proc_env, cwd=cwd, check=False, timeout=timeout, cancel=cancel)
+    proc.stdout = proc.stdout.decode("utf-8", errors="replace")
+    proc.stderr = proc.stderr.decode("utf-8", errors="replace")
     cmd_out = proc.stdout
     cmd_err = proc.stderr
     sys.stdout.write(cmd_out)
@@ -390,15 +344,8 @@ def resolve_xilinx_tool(tool_name):
     bare tool names. Raises FileNotFoundError when the resolved command is
     not found, so all the default names must have a corresponding shim filename.
     """
-    dir_override = os.environ.get(_XILINX_TOOL_DIR_ENV)
-    tool = os.path.join(dir_override, tool_name) if dir_override else tool_name
-    if which(tool) is None:
-        if dir_override:
-            raise FileNotFoundError(
-                "%s not found (%s=%r)" % (tool, _XILINX_TOOL_DIR_ENV, dir_override)
-            )
-        raise FileNotFoundError("%s not found in PATH" % tool)
-    return tool
+    selection = Selection(command_dir=os.environ.get(_XILINX_TOOL_DIR_ENV, ""))
+    return selection.prepare().command(tool_name)[0]
 
 
 mem_primitives_versal = {

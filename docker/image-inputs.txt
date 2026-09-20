@@ -14,11 +14,8 @@ docker/Dockerfile.finn
 docker/pip-constraints.txt
 docker/pip-torch.txt
 docker/requirements-dev.txt
-docker/finn_paths.py
-docker/finn-live.pth
 docker/finn_entrypoint.sh
 docker/quicktest.sh
-docker/build_dataflow
 docker/toolchain-shim
 docker/finn-bashenv.sh
 docker/finn-toolchain.sh
@@ -26,3 +23,16 @@ docker/install-runtimes.sh
 docker/runtimes/*.env
 ?docker/packages/*.deb
 ?docker/packages/*.rpm
+
+# Installed application identity (base dependency layers remain reusable).
+setup.py
+setup.cfg
+MANIFEST.in
+VERSION
+README.md
+LICENSE.txt
+src/**/*.py
+src/finn/qnn-data/**/*
+finn-rtllib/**/*
+custom_hls/*
+finn_xsi/**/*

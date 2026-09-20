@@ -141,3 +141,22 @@ no automatic state migration or sandbox removal.
 
 References: [native environments](https://docs.docker.com/ai/sandboxes/configuration/environment-files/)
 and [kit schema](https://docs.docker.com/ai/sandboxes/customize/kit-reference/).
+
+## Select an editable installation explicitly
+
+The template contains installed FINN. Mounting a checkout does not activate its
+code. After native creation, use an explicit preparation command in the writable
+environment to create a venv and install the selected checkout:
+
+```bash
+sbx env exec "${ARGS[@]}" "${FILES[@]}" -- bash -c \
+  'python -m venv --system-site-packages --without-pip /tmp/finn-dev && /tmp/finn-dev/bin/python -m pip install --use-pep517 --config-settings editable_mode=strict --no-deps --no-build-isolation -e "$1"' \
+  finn-prepare "$CHECKOUT"
+```
+
+Use `/tmp/finn-dev/bin/python` or its console scripts in later native exec calls.
+The environment's lifetime owns this temporary venv. Select additional dependency
+checkouts with separate `pip install -e` commands; no nearby checkout is discovered.
+Use [the installation guide](../../docs/installation.md) for persistent writable
+locations and offline prerequisites. The Bash startup hook only integrates sbx's
+persistent environment; it does not activate FINN or source vendor settings.

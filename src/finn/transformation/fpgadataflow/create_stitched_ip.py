@@ -30,7 +30,8 @@
 import json
 import multiprocessing as mp
 import os
-import subprocess
+import shlex
+import sys
 import warnings
 from qonnx.custom_op.registry import getCustomOp
 from qonnx.transformation.base import Transformation
@@ -40,8 +41,10 @@ from shutil import copytree
 from finn.transformation.fpgadataflow.replace_verilog_relpaths import (
     ReplaceVerilogRelPaths,
 )
-from finn.util.basic import make_build_dir, resolve_xilinx_tool
+from finn.util._legacy_build_env import toolchain as legacy_toolchain
+from finn.util.basic import make_build_dir
 from finn.util.fpgadataflow import is_hls_node, is_rtl_node
+from finn.util.resources import resource_path, tcl_quote
 
 
 def is_external_input(model, node, i):
@@ -87,9 +90,17 @@ class CreateStitchedIP(Transformation):
     """
 
     def __init__(
-        self, fpgapart, clk_ns, ip_name="finn_design", run_synth=False, run_pnr=False, signature=[]
+        self,
+        fpgapart,
+        clk_ns,
+        ip_name="finn_design",
+        run_synth=False,
+        run_pnr=False,
+        signature=[],
+        toolchain=None,
     ):
         super().__init__()
+        self.toolchain = toolchain
         self.fpgapart = fpgapart
         self.clk_ns = clk_ns
         self.ip_name = ip_name
@@ -391,9 +402,9 @@ class CreateStitchedIP(Transformation):
         self.connect_cmds.append("assign_bd_address")
 
     def insert_sim_ctrl(self):
-        sim_ctrl_src = "$::env(FINN_ROOT)/finn-rtllib/sim/hdl/sim_ctrl.v"
+        sim_ctrl_src = resource_path("rtllib", "sim/hdl/sim_ctrl.v")
         sim_ctrl_name = "sim_ctrl_0"
-        self.create_cmds.append("add_files -norecurse %s" % sim_ctrl_src)
+        self.create_cmds.append("add_files -norecurse %s" % tcl_quote(sim_ctrl_src))
         self.create_cmds.append(
             "create_bd_cell -type module -reference sim_ctrl %s" % sim_ctrl_name
         )
@@ -410,9 +421,9 @@ class CreateStitchedIP(Transformation):
         model = model.transform(ReplaceVerilogRelPaths())
         ip_dirs = ["list"]
         # add RTL streamer IP
-        ip_dirs.append("$::env(FINN_ROOT)/finn-rtllib/memstream")
+        ip_dirs.append(resource_path("rtllib", "memstream"))
         if self.signature:
-            ip_dirs.append("$::env(FINN_ROOT)/finn-rtllib/axi_info")
+            ip_dirs.append(resource_path("rtllib", "axi_info"))
         if model.graph.node[0].op_type not in ["StreamingFIFO_rtl", "IODMA_hls"]:
             warnings.warn(
                 """First node is not StreamingFIFO or IODMA.
@@ -490,7 +501,7 @@ class CreateStitchedIP(Transformation):
         # no warnings on long module names
         tcl.append("set_msg_config -id {[BD 41-1753]} -suppress")
         # add all the generated IP dirs to ip_repo_paths
-        ip_dirs_str = " ".join(ip_dirs)
+        ip_dirs_str = "list " + " ".join(tcl_quote(p) for p in ip_dirs[1:])
         tcl.append("set_property ip_repo_paths [%s] [current_project]" % ip_dirs_str)
         tcl.append("update_ip_catalog")
         # create block design and instantiate all layers
@@ -520,7 +531,7 @@ class CreateStitchedIP(Transformation):
         bd_filename = "%s/%s.bd" % (bd_base, block_name)
         tcl.append("make_wrapper -files [get_files %s] -top" % bd_filename)
         wrapper_filename = "%s/hdl/%s_wrapper.v" % (bd_base, block_name)
-        tcl.append("add_files -norecurse %s" % wrapper_filename)
+        tcl.append("add_files -norecurse %s" % tcl_quote(wrapper_filename))
         model.set_metadata_prop("wrapper_filename", wrapper_filename)
         tcl.append("set_property top %s_wrapper [current_fileset]" % block_name)
         # synthesize to DCP and export stub, DCP and constraints
@@ -662,7 +673,7 @@ class CreateStitchedIP(Transformation):
                 "[ipx::get_file_groups xilinx_simulationcheckpoint]" % block_name
             )
         # add a rudimentary driver mdd to get correct ranges in xparameters.h later on
-        example_data_dir = os.environ["FINN_ROOT"] + "/src/finn/qnn-data/mdd-data"
+        example_data_dir = resource_path("qnn-data", "mdd-data")
         copytree(example_data_dir, vivado_stitch_proj_dir + "/data")
 
         #####
@@ -760,16 +771,16 @@ close $ofile
             f.write(tcl_string)
         # create a shell script and call Vivado
         make_project_sh = vivado_stitch_proj_dir + "/make_project.sh"
-        working_dir = os.environ["PWD"]
-        vivado_cmd = resolve_xilinx_tool("vivado")
+        toolchain = self.toolchain or legacy_toolchain()
+        toolchain.probe("vivado")
+        args = ["-mode", "batch", "-source", "make_project.tcl"]
         with open(make_project_sh, "w") as f:
-            f.write("#!/bin/bash \n")
-            f.write("cd {}\n".format(vivado_stitch_proj_dir))
-            f.write("{} -mode batch -source make_project.tcl\n".format(vivado_cmd))
-            f.write("cd {}\n".format(working_dir))
-        bash_command = ["bash", make_project_sh]
-        process_compile = subprocess.Popen(bash_command, stdout=subprocess.PIPE)
-        process_compile.communicate()
+            f.write("#!/bin/bash\nset -e\ncd " + shlex.quote(vivado_stitch_proj_dir) + "\n")
+            f.write("exec " + shlex.join(toolchain.command("vivado", *args)) + "\n")
+        result = toolchain.run("vivado", args, cwd=vivado_stitch_proj_dir, check=False)
+        sys.stdout.write(result.stdout.decode("utf-8", errors="replace"))
+        sys.stderr.write(result.stderr.decode("utf-8", errors="replace"))
+        result.check_returncode()
         # wrapper may be created in different location depending on Vivado version
         if not os.path.isfile(wrapper_filename):
             # check in alternative location (.gen instead of .srcs)

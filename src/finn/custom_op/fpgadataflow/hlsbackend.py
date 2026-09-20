@@ -30,6 +30,7 @@ import glob
 import numpy as np
 import os
 import re
+import shlex
 import subprocess
 import warnings
 from abc import ABC, abstractmethod
@@ -37,9 +38,11 @@ from qonnx.core.datatype import DataType
 
 from finn import xsi
 from finn.custom_op.fpgadataflow import templates
+from finn.util._legacy_build_env import external_path
 from finn.util.basic import CppBuilder, make_build_dir
 from finn.util.data_packing import npy_to_rtlsim_input, rtlsim_output_to_npy
 from finn.util.hls import CallHLS
+from finn.util.resources import resource_path, tcl_quote
 
 finnxsi = xsi if xsi.is_available() else None
 
@@ -162,7 +165,9 @@ class HLSBackend(ABC):
         self.code_gen_dict["$DEFAULT_DIRECTIVES$"] = self.ipgen_default_directives()
         self.code_gen_dict["$EXTRA_DIRECTIVES$"] = self.ipgen_extra_directives()
 
-        template = templates.ipgentcl_template
+        template = templates.ipgentcl_template.replace(
+            "$HLSLIB$", tcl_quote(external_path("hlslib"))[1:-1]
+        )
 
         for key in self.code_gen_dict:
             # transform list into long string separated by '\n'
@@ -264,14 +269,14 @@ class HLSBackend(ABC):
         builder = CppBuilder()
         # to enable additional debug features please uncommand the next line
         # builder.append_includes("-DDEBUG")
-        builder.append_includes("-I$FINN_ROOT/src/finn/qnn-data/cpp")
-        builder.append_includes("-I$FINN_HLSLIB_PATH")
-        builder.append_includes("-I$FINN_ROOT/custom_hls")
+        builder.append_includes("-I" + shlex.quote(resource_path("qnn-data", "cpp")))
+        builder.append_includes("-I" + shlex.quote(external_path("hlslib")))
+        builder.append_includes("-I" + shlex.quote(resource_path("custom_hls")))
         builder.append_includes(f"-I{hls_path}/include")
         builder.append_includes("--std=c++17")
         builder.append_includes("-O3")
         builder.append_sources(code_gen_dir + "/*.cpp")
-        builder.append_sources("$FINN_ROOT/src/finn/qnn-data/cpp/cnpy.cpp")
+        builder.append_sources(shlex.quote(resource_path("qnn-data", "cpp/cnpy.cpp")))
         builder.append_includes("-lz")
         builder.append_includes("-fno-builtin -fno-inline")
         builder.append_includes(f'-Wl,-rpath,"{hls_path}/lnx64/lib/csim"')

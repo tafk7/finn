@@ -64,7 +64,8 @@ eval "$("$FINN_ROOT/docker/config.py" inspect --tier dev --format sh 2>/dev/null
 export FINN_BUILD_DIR="$FINN_HOST_BUILD_DIR"
 
 # Board files path
-export FINN_BOARD_FILES_PATH="$FINN_ROOT/deps/board_files"
+export FINN_BOARD_FILES_PATH="${FINN_BOARD_FILES_PATH:-$FINN_ROOT/deps/board_files}"
+export FINN_HLSLIB_PATH="${FINN_HLSLIB_PATH:-$FINN_ROOT/deps/finn-hlslib}"
 
 # Xilinx tools setup
 # The Xilinx toolchain, resolved by docker/config.py -- the same program the
@@ -101,23 +102,11 @@ fi
 
 export XILINX_LOCAL_USER_DATA=no
 
-# Handle Xilinx init scripts if present
-if [ -d "$FINN_ROOT/.Xilinx" ]; then
-    if [ ! -d "$HOME/.Xilinx" ]; then
-        mkdir -p "$HOME/.Xilinx"
-    fi
-    if [ -f "$FINN_ROOT/.Xilinx/HLS_init.tcl" ]; then
-        cp "$FINN_ROOT/.Xilinx/HLS_init.tcl" "$HOME/.Xilinx/"
-    fi
-    if [ -f "$FINN_ROOT/.Xilinx/Vivado/Vivado_init.tcl" ]; then
-        mkdir -p "$HOME/.Xilinx/Vivado"
-        cp "$FINN_ROOT/.Xilinx/Vivado/Vivado_init.tcl" "$HOME/.Xilinx/Vivado/"
-    fi
-fi
+# Site Tcl initialization is an explicit preparation action; activation only
+# selects the environment. Copy selected site scripts during setup if needed.
 
 # Vivado IP cache directory
 export VIVADO_IP_CACHE="${VIVADO_IP_CACHE:-$FINN_BUILD_DIR/vivado_ip_cache}"
-mkdir -p "$VIVADO_IP_CACHE"
 
 echo ""
 _finn_gecho "FINN environment ready!"

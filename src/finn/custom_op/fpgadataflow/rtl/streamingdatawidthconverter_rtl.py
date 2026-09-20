@@ -33,6 +33,7 @@ from finn.custom_op.fpgadataflow.rtlbackend import RTLBackend
 from finn.custom_op.fpgadataflow.streamingdatawidthconverter import (
     StreamingDataWidthConverter,
 )
+from finn.util.resources import resource_path, tcl_quote
 
 
 class StreamingDataWidthConverter_rtl(StreamingDataWidthConverter, RTLBackend):
@@ -82,7 +83,7 @@ class StreamingDataWidthConverter_rtl(StreamingDataWidthConverter, RTLBackend):
         return code_gen_dict
 
     def generate_hdl(self, model, fpgapart, clk):
-        rtlsrc = os.environ["FINN_ROOT"] + "/finn-rtllib/dwc/hdl"
+        rtlsrc = resource_path("rtllib", "dwc/hdl") + "/"
         template_path = rtlsrc + "/dwc_template.v"
         code_gen_dict = self.get_template_values()
         # save top module name so we can refer to it after this node has been renamed
@@ -114,7 +115,7 @@ class StreamingDataWidthConverter_rtl(StreamingDataWidthConverter, RTLBackend):
     def get_rtl_file_list(self, abspath=False):
         if abspath:
             code_gen_dir = self.get_nodeattr("code_gen_dir_ipgen") + "/"
-            rtllib_dir = os.path.join(os.environ["FINN_ROOT"], "finn-rtllib/dwc/hdl/")
+            rtllib_dir = resource_path("rtllib", "dwc/hdl") + "/"
         else:
             code_gen_dir = ""
             rtllib_dir = ""
@@ -141,7 +142,7 @@ class StreamingDataWidthConverter_rtl(StreamingDataWidthConverter, RTLBackend):
 
         cmd = []
         for f in sourcefiles:
-            cmd += ["add_files -norecurse %s" % (f)]
+            cmd += ["add_files -norecurse %s" % tcl_quote(f)]
         cmd += [
             "create_bd_cell -type module -reference %s %s"
             % (self.get_nodeattr("gen_top_module"), self.onnx_node.name)

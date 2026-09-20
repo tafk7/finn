@@ -18,6 +18,7 @@ import shutil
 from finn.custom_op.fpgadataflow.layernorm import LayerNorm
 from finn.custom_op.fpgadataflow.rtlbackend import RTLBackend
 from finn.util.basic import fifo_rtl_files
+from finn.util.resources import resource_path, tcl_quote
 
 
 class LayerNorm_rtl(LayerNorm, RTLBackend):
@@ -35,7 +36,7 @@ class LayerNorm_rtl(LayerNorm, RTLBackend):
         return my_attrs
 
     def generate_hdl(self, model, fpgapart, clk):
-        rtllib_dir = os.path.join(os.environ["FINN_ROOT"], "finn-rtllib/layernorm/")
+        rtllib_dir = resource_path("rtllib", "layernorm") + "/"
         template_path = rtllib_dir + "layernorm_wrapper_template.v"
         simd = self.get_nodeattr("SIMD")
         topname = self.get_verilog_top_module_name()
@@ -78,7 +79,7 @@ class LayerNorm_rtl(LayerNorm, RTLBackend):
     def get_rtl_file_list(self, abspath=False):
         if abspath:
             code_gen_dir = self.get_nodeattr("code_gen_dir_ipgen") + "/"
-            rtllib_dir = os.path.join(os.environ["FINN_ROOT"], "finn-rtllib/layernorm/")
+            rtllib_dir = resource_path("rtllib", "layernorm") + "/"
         else:
             code_gen_dir = ""
             rtllib_dir = ""
@@ -107,7 +108,7 @@ class LayerNorm_rtl(LayerNorm, RTLBackend):
 
         cmd = []
         for f in sourcefiles:
-            cmd += ["add_files -norecurse %s" % (f)]
+            cmd += ["add_files -norecurse %s" % tcl_quote(f)]
         cmd += [
             "create_bd_cell -type module -reference %s %s"
             % (self.get_nodeattr("gen_top_module"), self.onnx_node.name)

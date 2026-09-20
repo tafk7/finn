@@ -5,18 +5,17 @@ Unavailable runtimes or host resources are reported as pytest skips. Static
 resolver behavior belongs in ``tests/util/test_container_config.py``.
 """
 
-from functools import lru_cache
+import pytest
+
 import json
 import os
-from pathlib import Path
 import shutil
 import subprocess
 import sys
 import time
 import uuid
-
-import pytest
-
+from functools import lru_cache
+from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
 DOCKER_DIR = REPO / "docker"
@@ -598,3 +597,29 @@ def test_13_missing_supplied_runtime_fails_with_its_path(docker_daemon):
     )
     assert proc.returncode != 0
     assert "docker/packages/slash.deb" in proc.stdout + proc.stderr
+
+
+def test_installed_resources_without_checkout(docker_daemon):
+    """The application image can generate RTL/driver outputs with no checkout."""
+    tag = ensure_image("finn")
+    script = Path(REPO) / "tests/util/runtime_resource_smoke.py"
+    proc = run(
+        [
+            "docker",
+            "run",
+            "--rm",
+            "--workdir",
+            "/tmp",
+            "--user",
+            "12345:12345",
+            "-v",
+            f"{script}:/tmp/smoke.py:ro",
+            tag,
+            "python",
+            "/tmp/smoke.py",
+            "/tmp/rtl-output",
+        ],
+        timeout=180,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert '"driver":' in proc.stdout

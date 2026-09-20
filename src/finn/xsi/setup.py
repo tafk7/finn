@@ -206,9 +206,7 @@ def verify_installation() -> bool:
         print(f"\n✗ Compiled extension xsi.so not found in {xsi_artifact_dir()}")
         return False
 
-    # Temporarily add to path: the artifact and the Python package are in
-    # separate directories, so both are needed to import finn_xsi.adapter.
-    sys.path.insert(0, str(xsi_source_dir()))
+    # The adapter is installed normally; only the native artifact needs a path.
     sys.path.insert(0, str(xsi_so.parent))
 
     try:
@@ -237,10 +235,9 @@ def verify_installation() -> bool:
 
 def clean_build() -> bool:
     """Clean build artifacts."""
-    # Clean both the artifact directory and any legacy in-tree copy, so a stale
-    # xsi.so left in a workspace by an older FINN is removed too.
+    # Only clean the explicitly writable artifact directory.
     removed = False
-    for xsi_so in (xsi_artifact_dir() / "xsi.so", xsi_source_dir() / "xsi.so"):
+    for xsi_so in (xsi_artifact_dir() / "xsi.so",):
         if not xsi_so.exists():
             continue
         try:

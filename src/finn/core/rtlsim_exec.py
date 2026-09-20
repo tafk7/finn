@@ -29,11 +29,11 @@
 import json
 import numpy as np
 import os
+import shlex
 from qonnx.custom_op.registry import getCustomOp
 
 from finn import xsi
 from finn.util.basic import (
-    get_finn_root,
     get_rtlsim_timeout_error_message,
     get_vivado_root,
     get_watchdog_timeout_cycles,
@@ -41,6 +41,7 @@ from finn.util.basic import (
     make_build_dir,
 )
 from finn.util.data_packing import npy_to_rtlsim_input, rtlsim_output_to_npy
+from finn.util.resources import resource_path
 from finn.util.rtlsim import dat_file_to_numpy_array, mlo_prehook_func_factory
 
 finnxsi = xsi if xsi.is_available() else None
@@ -200,7 +201,7 @@ def rtlsim_exec_cppxsi(
         sim_base, sim_rel = rtlsim_so.split("xsim.dir")
         sim_rel = "xsim.dir" + sim_rel
     # prepare the C++ sim driver template
-    finnxsi_dir = get_finn_root() + "/finn_xsi"
+    finnxsi_dir = resource_path("xsi")
     fifosim_config_fname = finnxsi_dir + "/rtlsim_config.hpp.template"
     with open(fifosim_config_fname, "r") as f:
         fifsom_config_template = f.read()
@@ -294,7 +295,7 @@ def rtlsim_exec_cppxsi(
     ]
     # write compilation command to a file for easy re-running/debugging
     with open(sim_base + "/compile_rtlsim.sh", "w") as f:
-        f.write(" ".join(build_cmd))
+        f.write(shlex.join(build_cmd) + "\n")
     launch_process_helper(build_cmd, cwd=sim_base)
     assert os.path.isfile(sim_base + "/rtlsim_xsi"), "Failed to compile rtlsim executable"
 
@@ -306,7 +307,7 @@ def rtlsim_exec_cppxsi(
     with open(sim_base + "/run_rtlsim.sh", "w") as f:
         ld_path = runsim_env["LD_LIBRARY_PATH"]
         f.write(
-            f"LD_LIBRARY_PATH={ld_path}"
+            f"LD_LIBRARY_PATH={shlex.quote(ld_path)}"
             " ./rtlsim_xsi > rtlsim_xsi_log.txt"
             " 2> rtlsim_xsi_stderr.log"
         )
