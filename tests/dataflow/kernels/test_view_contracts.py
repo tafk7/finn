@@ -14,9 +14,14 @@ import pytest
 from dataflow.kernels.test_composition_boundary import PlainChildComposite, PlainLogicalLeaf
 from dataflow.kernels.test_module_build_spec import ModuleKernel, _region
 from dataflow.ops.mvau.test_dot_product_kernel import _unconfigured
+from dataflow.ops.test_dataflow_op import Build, _configured_replay, _replay_model
 from finn.dataflow._engine import Absent, Decided, Unresolved
 from finn.dataflow.artifacts.abi import ComponentABI
-from finn.dataflow.artifacts.build import ModuleBuildRequirements
+from finn.dataflow.artifacts.build import (
+    FixedModuleName,
+    ModuleABIRequirements,
+    ModuleBuildRequirements,
+)
 from finn.dataflow.kernels import (
     Kernel,
     KernelChoice,
@@ -38,6 +43,10 @@ from finn.dataflow.model import (
 from finn.dataflow.ops.base import DataflowOpError
 from finn.dataflow.ops.mvau.kernels.dot_product import DotProductKernel, WeightSupply
 from finn.dataflow.ops.physical import capture_local_physical
+from finn.dataflow.ops.persistence import plan_selected_publication
+from finn.dataflow.ops.reconstruction import rebind_selected_graph
+from finn.dataflow.ops.replay.kernel import ActivationReplayKernel
+from finn.dataflow.ops.replay.op import ActivationReplayOp
 from finn.dataflow.space import (
     ConstraintGroup,
     Decision,
@@ -547,3 +556,250 @@ def test_leaf_physical_requirements_track_only_consumed_dependencies(
         root.assign(Root.semantic_extent, 2).kernel.physical.accepted_answer,
         Decided,
     )
+
+
+class SharedValueChild(PlainLogicalLeaf):
+    id = "shared_value_child"
+    enabled = Input(bool)
+    logical_ready = Readiness(properties=(PlainLogicalLeaf.logical_result,))
+    logical = Projection(
+        PlainLogicalLeaf.logical_result,
+        applicable_if=enabled,
+        readiness=logical_ready,
+    )
+
+    @derived(ModuleBuildRequirements, logical=PlainLogicalLeaf.logical_result)
+    def physical_result(*, logical: RegionResult) -> ModuleBuildRequirements:
+        width = logical.region.outputs[0].port.beat_sequence.elements_per_beat
+        return ModuleBuildRequirements(
+            "shared-fixed",
+            "1",
+            (("WIDTH", width),),
+            ModuleABIRequirements(FixedModuleName("shared_fixed"), (), (("WIDTH", str(width)),)),
+            (),
+            (),
+        )
+
+    physical_ready = Readiness(properties=(physical_result,))
+    physical = Projection(physical_result, readiness=physical_ready)
+    exports = (PlainLogicalLeaf.logical_result, physical_result)
+
+
+class SharedValueParent(Kernel):
+    id = "shared_value_parent"
+    width = Input(int)
+    enabled = Input(bool)
+    child_node = KernelChoice(
+        Subspace(SharedValueChild, width=width, enabled=enabled),
+        outputs=("logical_result", "physical_result"),
+    )
+    source = NetworkBoundary(child_node.input("in"))
+    result = NetworkBoundary(child_node.output("out"))
+
+    @derived(ModuleBuildRequirements, child=child_node.physical_result)
+    def physical_result(*, child: ModuleBuildRequirements) -> ModuleBuildRequirements:
+        return child
+
+
+def test_nesting_does_not_attach_logical_applicability_to_raw_physical_values() -> None:
+    class DirectRoot(Space):
+        width = Problem(int)
+        enabled = Problem(bool)
+        child = Subspace(SharedValueChild, width=width, enabled=enabled)
+
+    class NestedRoot(Space):
+        width = Problem(int)
+        enabled = Problem(bool)
+        kernel = Subspace(SharedValueParent, width=width, enabled=enabled)
+
+    for enabled in (True, False):
+        direct = DirectRoot.start({DirectRoot.width: 2, DirectRoot.enabled: enabled})
+        nested = NestedRoot.start({NestedRoot.width: 2, NestedRoot.enabled: enabled})
+        assert isinstance(direct.child.physical.accepted_answer, Decided)
+        child = nested.kernel.child("child_node")
+        assert isinstance(child, Decided)
+        assert isinstance(child.value.assess_view("physical").accepted_answer, Decided)
+        assert isinstance(nested.kernel.physical.accepted_answer, Decided)
+
+
+class OutputConditionalChild(PlainLogicalLeaf):
+    id = "output_conditional_child"
+
+    @derived(bool, value=PlainLogicalLeaf.logical_result)
+    def enabled(*, value: RegionResult) -> bool:
+        return bool(value.region.outputs)
+
+    ready = Readiness(properties=(PlainLogicalLeaf.logical_result,))
+    logical = Projection(
+        PlainLogicalLeaf.logical_result,
+        applicable_if=enabled,
+        readiness=ready,
+    )
+
+
+class OutputConditionalParent(Kernel):
+    id = "output_conditional_parent"
+    width = Input(int)
+    child_node = KernelChoice(Subspace(OutputConditionalChild, width=width))
+    source = NetworkBoundary(child_node.input("in"))
+    result = NetworkBoundary(child_node.output("out"))
+
+
+def test_output_dependent_applicability_remains_acyclic_when_nested() -> None:
+    class Root(Space):
+        width = Problem(int)
+        kernel = Subspace(OutputConditionalParent, width=width)
+
+    root = Root.start({Root.width: 2})
+    assert isinstance(root.kernel.logical.accepted_answer, Decided)
+
+
+class AlternatePhysicalOutput(ModuleKernel):
+    id = "alternate_physical_output"
+    enabled = Input(bool)
+
+    @derived(ModuleBuildRequirements, original=ModuleKernel.physical_result)
+    def actual_output(*, original: ModuleBuildRequirements) -> ModuleBuildRequirements:
+        return replace(original, implementation_id="actual-view-value")
+
+    ready = Readiness(properties=(actual_output,))
+    physical = PhysicalView(actual_output, applicable_if=enabled, readiness=ready)
+
+
+class AlternatePhysicalParent(Kernel):
+    id = "alternate_physical_parent"
+    width = Input(int)
+    enabled = Input(bool)
+    child_node = KernelChoice(
+        Subspace(AlternatePhysicalOutput, width=width, enabled=enabled),
+        outputs=("logical_result", "physical_result"),
+    )
+    result = NetworkBoundary(child_node.output("out"))
+
+    @derived(ModuleBuildRequirements, child=child_node.physical_result)
+    def physical_result(*, child: ModuleBuildRequirements) -> ModuleBuildRequirements:
+        return child
+
+
+def test_kernel_choice_forwards_the_authored_physical_view_output() -> None:
+    class Root(Space):
+        width = Problem(int)
+        enabled = Problem(bool)
+        kernel = Subspace(AlternatePhysicalParent, width=width, enabled=enabled)
+
+    enabled = Root.start({Root.width: 2, Root.enabled: True})
+    answer = enabled.kernel.physical.accepted_answer
+    assert isinstance(answer, Decided)
+    assert answer.value.implementation_id == "actual-view-value"
+
+    disabled = Root.start({Root.width: 2, Root.enabled: False})
+    assert isinstance(disabled.kernel.physical.accepted_answer, Absent)
+
+
+class GuardedReplay(ActivationReplayKernel):
+    @derived(bool)
+    def available() -> bool:
+        return False
+
+    logical = LogicalView(
+        ActivationReplayKernel.logical_result,
+        applicable_if=available,
+        readiness=ActivationReplayKernel.logical_ready,
+        constraints=ActivationReplayKernel.logical_accepts,
+    )
+
+
+class PendingReplay(ActivationReplayKernel):
+    permission = Decision(bool, values=(False, True))
+    pending_ready = Readiness(
+        decisions=(permission,),
+        properties=(ActivationReplayKernel.logical_result,),
+    )
+    logical = LogicalView(
+        ActivationReplayKernel.logical_result,
+        readiness=pending_ready,
+        constraints=ActivationReplayKernel.logical_accepts,
+    )
+
+
+class RejectedReplay(ActivationReplayKernel):
+    @constraint()
+    def rejected() -> object:
+        return reject("guarded-replay-rejected", "logical view rejected")
+
+    rejected_accepts = ConstraintGroup(rejected)
+    logical = LogicalView(
+        ActivationReplayKernel.logical_result,
+        readiness=ActivationReplayKernel.logical_ready,
+        constraints=(ActivationReplayKernel.logical_accepts, rejected_accepts),
+    )
+
+
+class GuardedReplayOp(ActivationReplayOp):
+    kernel = Subspace(
+        GuardedReplay,
+        repetitions=ActivationReplayOp.repetitions,
+        matrix_width=ActivationReplayOp.matrix_width,
+        matrix_height=ActivationReplayOp.matrix_height,
+        activation_type=ActivationReplayOp.activation.datatype,
+    )
+
+
+class PendingReplayOp(ActivationReplayOp):
+    kernel = Subspace(
+        PendingReplay,
+        repetitions=ActivationReplayOp.repetitions,
+        matrix_width=ActivationReplayOp.matrix_width,
+        matrix_height=ActivationReplayOp.matrix_height,
+        activation_type=ActivationReplayOp.activation.datatype,
+    )
+
+
+class RejectedReplayOp(ActivationReplayOp):
+    kernel = Subspace(
+        RejectedReplay,
+        repetitions=ActivationReplayOp.repetitions,
+        matrix_width=ActivationReplayOp.matrix_width,
+        matrix_height=ActivationReplayOp.matrix_height,
+        activation_type=ActivationReplayOp.activation.datatype,
+    )
+
+
+def _configured_replay_type(operation_type: type[ActivationReplayOp]) -> ActivationReplayOp:
+    model = _replay_model()
+    operation = operation_type(model.graph.node[0]).bind(model, Build())
+    return cast(
+        ActivationReplayOp,
+        operation.kernel.assign(ActivationReplayKernel.pe, 1)
+        .assign(ActivationReplayKernel.simd, 2)
+        .root,
+    )
+
+
+@pytest.mark.parametrize(
+    ("operation_type", "answer_type"),
+    (
+        (GuardedReplayOp, Absent),
+        (PendingReplayOp, Unresolved),
+        (RejectedReplayOp, Absent),
+    ),
+)
+def test_selected_construction_and_publication_require_authored_logical_acceptance(
+    operation_type: type[ActivationReplayOp],
+    answer_type: type[object],
+) -> None:
+    _control_model, control = _configured_replay(simd=2)
+    assert isinstance(control.selected_snapshot, Decided)
+    candidate = control.selected_snapshot.value
+
+    operation = _configured_replay_type(operation_type)
+    kernel = operation.selected_kernel()
+    assert isinstance(kernel, Kernel)
+    assert isinstance(kernel.logical.accepted_answer, answer_type)
+    assert isinstance(kernel.dataflow.accepted_answer, answer_type)
+    assert isinstance(operation.dataflow.accepted_answer, answer_type)
+    assert isinstance(operation.selected_snapshot, answer_type)
+    with pytest.raises(DataflowOpError, match="selected publication is unavailable"):
+        plan_selected_publication(operation)
+    with pytest.raises(DataflowOpError, match="current source has no accepted dataflow"):
+        rebind_selected_graph(operation, candidate)

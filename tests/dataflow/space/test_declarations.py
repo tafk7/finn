@@ -227,6 +227,7 @@ def test_public_space_facade_exposes_only_generic_vocabulary() -> None:
         "View",
         "ChoiceView",
         "allow_absent",
+        "allow_inapplicable",
         "compile_space",
         "compile_space_model",
         "constraint",

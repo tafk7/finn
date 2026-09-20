@@ -783,8 +783,9 @@ class _AbsenceTolerant(ValueSource[T_co]):
     # Defaulted only because ``ValueSource`` defaults ``stable_name`` above it;
     # ``init=False`` means the real value always arrives through ``__init__``.
     source: ValueSource[Any] = cast("ValueSource[Any]", None)
+    absence: AbsenceMode = AbsenceMode.ALLOWS_ABSENT
 
-    def __init__(self, source: ValueSource[T_co]) -> None:
+    def __init__(self, source: ValueSource[T_co], absence: AbsenceMode) -> None:
         if not isinstance(source, ValueSource):
             raise AuthoringError("allow_absent() takes one value declaration")
         if isinstance(source, _AbsenceTolerant):
@@ -792,6 +793,7 @@ class _AbsenceTolerant(ValueSource[T_co]):
         object.__setattr__(self, "value_semantics", source.value_semantics)
         object.__setattr__(self, "stable_name", source.stable_name)
         object.__setattr__(self, "source", source)
+        object.__setattr__(self, "absence", absence)
 
     def __set_name__(self, owner: type[object], name: str) -> None:
         raise AuthoringError(
@@ -809,7 +811,16 @@ def allow_absent(source: ValueSource[T]) -> ValueSource[T]:
     constraint whose whole job is to say "an inactive role contributes no node".
     """
 
-    return cast("ValueSource[T]", _AbsenceTolerant(source))
+    return cast("ValueSource[T]", _AbsenceTolerant(source, AbsenceMode.ALLOWS_ABSENT))
+
+
+def allow_inapplicable(source: ValueSource[T]) -> ValueSource[T]:
+    """Tolerate final inapplicability while preserving rejecting absence."""
+
+    return cast(
+        "ValueSource[T]",
+        _AbsenceTolerant(source, AbsenceMode.ALLOWS_INAPPLICABLE),
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -1576,6 +1587,7 @@ __all__ = [
     "ValueSource",
     "SubspaceChoice",
     "allow_absent",
+    "allow_inapplicable",
     "check_canonical",
     "check_reserved_names",
     "constraint",

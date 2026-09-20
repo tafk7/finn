@@ -327,7 +327,7 @@ def test_design_rejections_cross_the_operation_boundary_without_presentation(
     bound = operation.bind(model, Build())
     selected = bound.selected_dataflow()
     assert selected is not None
-    if operation_type is _InvalidTopologyOp:
+    if operation_type in (_KernelRefusalOp, _InvalidTopologyOp):
         assert isinstance(selected.output, Absent)
     else:
         assert isinstance(selected.output, Decided)

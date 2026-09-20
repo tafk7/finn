@@ -124,6 +124,8 @@ def _fact_for_dependency(ref: DependencyRef) -> FactKey | None:
         return FactKey(FactKind.VALUE, ref.path)
     if ref.kind is DependencyKind.PROPERTY:
         return FactKey(FactKind.PROPERTY, ref.path)
+    if ref.kind is DependencyKind.CONSTRAINT:
+        return FactKey(FactKind.CONSTRAINT, ref.path)
     return None
 
 

@@ -20,12 +20,15 @@ R = TypeVar("R")
 class AbsenceMode(str, Enum):
     REQUIRES_APPLICABLE = "requires_applicable"
     ALLOWS_ABSENT = "allows_absent"
+    ALLOWS_INAPPLICABLE = "allows_inapplicable"
+    PRESERVES_ANSWER = "preserves_answer"
 
 
 class DependencyKind(str, Enum):
     DECISION = "decision"
     PROPERTY = "derived_property"
     PROBLEM = "problem_field"
+    CONSTRAINT = "constraint"
 
 
 class DeclarationKind(str, Enum):

@@ -226,12 +226,7 @@ def test_a_physical_only_unassigned_choice_does_not_block_logical_acceptance() -
 def test_unimplemented_supply_profiles_refuse_normally(supply: WeightSupply) -> None:
     answer = _occurrence(supply).physical.accepted_answer
     assert isinstance(answer, Absent)
-    expected = (
-        "branch-selected-case-absent"
-        if supply is WeightSupply.EMBEDDED
-        else "kernel-physically-unsupported"
-    )
-    assert {item.code for item in answer.findings} == {expected}
+    assert {item.code for item in answer.findings} == {"kernel-physically-unsupported"}
 
 
 def test_lane_reversal_and_nonzero_padding_are_rejected() -> None:

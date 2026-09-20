@@ -182,10 +182,13 @@ def test_canonical_validation_alone_does_not_accept_a_semantically_refused_netwo
     design_type: type[Kernel], width: int
 ) -> None:
     projection = _design(design_type, width).dataflow
-    assert isinstance(projection.output, Decided)
-    assert not validate_network(cast(DataflowNetwork, projection.output.value)).issues
     assert isinstance(projection.accepted_answer, Absent)
-    assert any(assessment.verdict is False for assessment in projection.constraints)
+    if design_type is SuppliedKernel:
+        assert isinstance(projection.output, Absent)
+    else:
+        assert isinstance(projection.output, Decided)
+        assert not validate_network(cast(DataflowNetwork, projection.output.value)).issues
+        assert any(assessment.verdict is False for assessment in projection.constraints)
 
 
 class NestedCompositeKernel(Kernel):

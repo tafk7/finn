@@ -130,7 +130,13 @@ class EvaluationKernel:
             ) from None
 
     def _dependency_answer(self, point: DesignPoint, ref: DependencyRef) -> Answer[object]:
-        kind = FactKind.VALUE if ref.kind is DependencyKind.DECISION else FactKind.PROPERTY
+        kind = (
+            FactKind.VALUE
+            if ref.kind is DependencyKind.DECISION
+            else FactKind.CONSTRAINT
+            if ref.kind is DependencyKind.CONSTRAINT
+            else FactKind.PROPERTY
+        )
         key = FactKey(kind, ref.path)
         try:
             return self._cache(point).facts[key]
@@ -151,8 +157,27 @@ class EvaluationKernel:
         for ref in dependencies:
             if ref.kind is DependencyKind.PROBLEM:
                 if ref.path in point.problem:
-                    values[ref.name] = point.problem[ref.path]
-                elif ref.absence is AbsenceMode.ALLOWS_ABSENT:
+                    value = point.problem[ref.path]
+                    values[ref.name] = (
+                        Decided(value) if ref.absence is AbsenceMode.PRESERVES_ANSWER else value
+                    )
+                elif ref.absence is AbsenceMode.PRESERVES_ANSWER:
+                    values[ref.name] = Unresolved(
+                        (
+                            _finding(
+                                FindingKind.LIMITATION,
+                                "problem-field-unavailable",
+                                ref.path,
+                                "an omitted problem field is unavailable for this "
+                                "immutable problem",
+                                trace=(owner,),
+                            ),
+                        )
+                    )
+                elif ref.absence in (
+                    AbsenceMode.ALLOWS_ABSENT,
+                    AbsenceMode.ALLOWS_INAPPLICABLE,
+                ):
                     values[ref.name] = ABSENT
                 else:
                     unresolved.append(
@@ -166,11 +191,15 @@ class EvaluationKernel:
                     )
                 continue
             answer = _traced(self._dependency_answer(point, ref), owner)
-            if isinstance(answer, Decided):
+            if ref.absence is AbsenceMode.PRESERVES_ANSWER:
+                values[ref.name] = answer
+            elif isinstance(answer, Decided):
                 values[ref.name] = answer.value
             elif isinstance(answer, Unresolved):
                 unresolved.extend(answer.findings)
-            elif ref.absence is AbsenceMode.ALLOWS_ABSENT:
+            elif ref.absence is AbsenceMode.ALLOWS_ABSENT or (
+                ref.absence is AbsenceMode.ALLOWS_INAPPLICABLE and not answer.is_rejection
+            ):
                 values[ref.name] = ABSENT
             else:
                 absent.extend(
@@ -370,7 +399,13 @@ class EvaluationKernel:
         for ref in dependencies:
             if ref.kind is DependencyKind.PROBLEM:
                 continue
-            kind = FactKind.VALUE if ref.kind is DependencyKind.DECISION else FactKind.PROPERTY
+            kind = (
+                FactKind.VALUE
+                if ref.kind is DependencyKind.DECISION
+                else FactKind.CONSTRAINT
+                if ref.kind is DependencyKind.CONSTRAINT
+                else FactKind.PROPERTY
+            )
             self.resolve(point, FactKey(kind, ref.path))
 
     def check_candidate(

@@ -19,9 +19,12 @@ from finn.dataflow._engine import ABSENT, Absent, Decided
 from finn.dataflow.space import (
     AuthoringError,
     ConstraintGroup,
+    Input,
     Problem,
     Space,
+    Subspace,
     allow_absent,
+    allow_inapplicable,
     constraint,
     derived,
 )
@@ -106,3 +109,48 @@ def test_the_marker_refuses_a_non_declaration():
 def test_the_marker_refuses_to_stack():
     with pytest.raises(AuthoringError, match="already applied"):
         allow_absent(allow_absent(Conditional.present))
+
+
+class InapplicabilityOnly(Space):
+    present = Problem(bool)
+
+    @derived(bool, present=present)
+    def maybe(*, present: bool) -> object:
+        return True if present else reject("rejected-value", "the value was rejected")
+
+    @derived(str, value=allow_inapplicable(maybe))
+    def reader(*, value: object) -> str:
+        return "absent" if value is ABSENT else str(value)
+
+
+def test_allow_inapplicable_does_not_swallow_a_rejection() -> None:
+    answer = InapplicabilityOnly.start({InapplicabilityOnly.present: False}).answer(
+        InapplicabilityOnly.reader
+    )
+    assert isinstance(answer, Absent)
+    assert {finding.code for finding in answer.findings} == {"rejected-value"}
+
+
+class OptionalValue(Space):
+    value = Input(int)
+
+    @derived(int, value=value)
+    def forwarded(*, value: int) -> int:
+        return value
+
+    exports = (forwarded,)
+
+
+class InactiveReader(Space):
+    enabled = Problem(bool)
+    value = Problem(int)
+    child = Subspace(OptionalValue, when=enabled, value=value)
+
+    @derived(str, value=allow_inapplicable(child.forwarded))
+    def reader(*, value: object) -> str:
+        return "absent" if value is ABSENT else str(value)
+
+
+def test_allow_inapplicable_tolerates_nonrejecting_absence() -> None:
+    root = InactiveReader.start({InactiveReader.enabled: False, InactiveReader.value: 7})
+    assert root.answer(InactiveReader.reader) == Decided("absent")

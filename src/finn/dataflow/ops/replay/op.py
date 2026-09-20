@@ -26,7 +26,7 @@ from finn.dataflow.space.occurrence import ProjectionAssessment
 from finn.dataflow.model.network import DataflowNetwork
 from finn.dataflow.ops.mapping import CoordinateMapping
 from finn.dataflow.model.refs import DataflowOperandRef, RegionInputRef, RegionOutputRef
-from finn.dataflow.ops.base import DataflowOp, DataflowOpError
+from finn.dataflow.ops.base import DataflowOp, DataflowOpError, kernel_logical_network
 from finn.dataflow.ops.source import SourceNode
 from finn.dataflow.ops.replay.kernel import ActivationReplayKernel
 from finn.dataflow.ops.schema import Attribute, OpInput, OpOutput
@@ -120,7 +120,7 @@ class ActivationReplayOp(DataflowOp):
     def selected_dataflow(self) -> ProjectionAssessment[DataflowNetwork] | None:
         """A fixed Subspace, so the child is always selected."""
 
-        return cast("ProjectionAssessment[DataflowNetwork]", _kernel(self).dataflow)
+        return kernel_logical_network(_kernel(self))
 
     def selected_kernel(self) -> object:
         return _kernel(self)

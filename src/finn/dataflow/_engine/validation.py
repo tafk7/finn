@@ -8,6 +8,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
+from typing import cast
 
 from .declarations import (
     Constraint,
@@ -186,16 +187,19 @@ def _check_references(
 ) -> list[Finding]:
     errors: list[Finding] = []
     indexes: dict[
-        DependencyKind, Mapping[QualifiedPath, Decision | DerivedProperty | ProblemField]
+        DependencyKind,
+        Mapping[QualifiedPath, Decision | DerivedProperty | Constraint | ProblemField],
     ] = {
         DependencyKind.DECISION: decisions,
         DependencyKind.PROPERTY: properties,
         DependencyKind.PROBLEM: fields,
+        DependencyKind.CONSTRAINT: constraints,
     }
     labels = {
         DependencyKind.DECISION: "decision",
         DependencyKind.PROPERTY: "derived property",
         DependencyKind.PROBLEM: "problem field",
+        DependencyKind.CONSTRAINT: "constraint",
     }
     all_paths = {
         **{path: "decision" for path in decisions},
@@ -229,7 +233,17 @@ def _check_references(
                     code = "wrong-reference-kind"
                 errors.append(_authoring(code, owner, message))
                 continue
-            semantics = target.value_semantics
+            if ref.kind is DependencyKind.CONSTRAINT:
+                if ref.value_semantics.type_token is not bool:
+                    errors.append(
+                        _authoring(
+                            "constraint-dependency-semantics",
+                            owner,
+                            f"{role} constraint dependency {ref.name!r} must be Boolean",
+                        )
+                    )
+                continue
+            semantics = cast("Decision | DerivedProperty | ProblemField", target).value_semantics
             if not ref.value_semantics.is_compatible_with(semantics):
                 errors.append(
                     _authoring(

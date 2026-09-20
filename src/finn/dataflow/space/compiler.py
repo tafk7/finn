@@ -510,7 +510,7 @@ class _Compilation:
             # trace path resolve through this method too.
             return replace(
                 self._source_ref(cast("ValueSource[object]", source.source)),
-                absence=AbsenceMode.ALLOWS_ABSENT,
+                absence=source.absence,
             )
         if isinstance(source, BranchOutput):
             branch = source.choice
@@ -1103,6 +1103,11 @@ def answer_for(
                 )
             )
         return Decided(point.assignments[reference.path])
+    if reference.kind is DependencyKind.CONSTRAINT:
+        return cast(
+            "Answer[object]",
+            engine.evaluate_constraints(point, (reference.path,)).answers[reference.path],
+        )
     try:
         return engine.query_property(point, reference.path)
     except RequestError as error:
@@ -1189,6 +1194,13 @@ def imported_decisions(
         if dependency.kind is DependencyKind.DECISION:
             if dependency.path not in owned and dependency.path in point.assignments:
                 found.append(dependency.path)
+            continue
+        if dependency.kind is DependencyKind.CONSTRAINT:
+            declared_constraint = point.design_space.constraints.get(dependency.path)
+            if declared_constraint is not None:
+                pending.extend(declared_constraint.evaluator.dependencies)
+                if declared_constraint.applies_if is not None:
+                    pending.extend(declared_constraint.applies_if.dependencies)
             continue
         if dependency.kind is not DependencyKind.PROPERTY:
             continue

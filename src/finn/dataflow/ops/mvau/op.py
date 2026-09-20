@@ -50,7 +50,12 @@ from finn.dataflow.model.network import DataflowNetwork
 from finn.dataflow.ops.mapping import CoordinateMapping
 from finn.dataflow.model.refs import DataflowOperandRef, RegionInputRef, RegionOutputRef
 from qonnx.analysis.tensor_value_summary import TensorValueSummary  # type: ignore[import-not-found]
-from finn.dataflow.ops.base import DataflowOp, DataflowOpError, unresolved_reason
+from finn.dataflow.ops.base import (
+    DataflowOp,
+    DataflowOpError,
+    kernel_logical_network,
+    unresolved_reason,
+)
 from finn.dataflow.ops.mvau.computation import (
     AccumulationMode,
     MvauComputationProfile,
@@ -623,9 +628,8 @@ class MvauDataflowOp(DataflowOp):
         chosen = view.selected()
         if not isinstance(chosen, Decided):
             return None
-        return cast(
-            "ProjectionAssessment[DataflowNetwork]",
-            cast(WeightedDotProductKernel, view.alternative(chosen.value)).dataflow,
+        return kernel_logical_network(
+            cast(WeightedDotProductKernel, view.alternative(chosen.value))
         )
 
     def selected_kernel(self) -> object:

@@ -43,6 +43,7 @@ from finn.dataflow.space.occurrence import (
     occurrence_persistable,
 )
 from finn.dataflow.model.network import DataflowNetwork
+from finn.dataflow.model.composition import NetworkResult
 from finn.dataflow.model.refs import DataflowOperandRef, NetworkOperandError
 from finn.dataflow.ops.mapping import OperandMapping, _derive_operand_mappings
 from finn.dataflow.ops.native import (
@@ -1251,6 +1252,27 @@ def unresolved_reason(answer: Answer[Any]) -> str:
     return f"{kind}: {codes}"
 
 
+def kernel_logical_network(kernel: Space) -> ProjectionAssessment[DataflowNetwork]:
+    """Unwrap a Kernel's assessed logical Network without bypassing its view."""
+
+    logical: ProjectionAssessment[Any] = kernel.assess_view("logical")
+
+    def unwrap(answer: Answer[Any]) -> Answer[DataflowNetwork]:
+        if not isinstance(answer, Decided):
+            return cast("Answer[DataflowNetwork]", answer)
+        if not isinstance(answer.value, NetworkResult):
+            raise DataflowOpError("selected Kernel logical capability is not a NetworkResult")
+        return Decided(answer.value.network)
+
+    return ProjectionAssessment(
+        logical.projection,
+        logical.readiness,
+        logical.constraints,
+        unwrap(logical.output),
+        unwrap(logical.accepted_answer),
+    )
+
+
 class _FrozenBuildConfiguration:
     """Accessor-independent view of one occurrence's already frozen build facts."""
 
@@ -1312,6 +1334,7 @@ __all__ = [
     "AttributeCodec",
     "DataflowOp",
     "DataflowOpError",
+    "kernel_logical_network",
     "source_declarations",
     "unresolved_reason",
 ]

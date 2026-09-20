@@ -43,6 +43,7 @@ from finn.dataflow.ops.base import DataflowOpError
 from finn.dataflow.space.occurrence import ProjectionAssessment
 from finn.dataflow.model.composition import ImplementationPath, NetworkResult
 from finn.dataflow.space.capabilities import ImplementationIdentity, implementation_identity
+from finn.dataflow.space.declarations import semantics_for
 from finn.dataflow.space.occurrence import layer_runtime
 
 if TYPE_CHECKING:
@@ -377,12 +378,8 @@ def _physical_dependency_snapshot(implementation: object) -> tuple[CapturedDepen
             DependencyRef(
                 "constraint",
                 path,
-                DependencyKind.PROPERTY,
-                # Constraint results are Boolean even though DependencyKind has
-                # no separate constraint member.
-                next(iter(space.decisions.values())).value_semantics
-                if space.decisions
-                else compiled.output.semantics,
+                DependencyKind.CONSTRAINT,
+                semantics_for(bool),
             )
         )
     visited_paths = {path for _kind, path in captured}

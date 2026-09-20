@@ -23,15 +23,13 @@ from dataclasses import dataclass, replace
 from functools import wraps
 from inspect import Parameter as _SignatureParameter, Signature, signature
 from types import MappingProxyType
-from typing import TYPE_CHECKING, ClassVar, Generic, TypeVar, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Generic, TypeVar, cast
 
 from finn.dataflow._engine import (
     ABSENT,
     AbsenceMode,
     Absent,
     Answer,
-    Constraint as EngineConstraint,
-    ConstraintSet,
     Decided,
     DependencyKind,
     DependencyRef,
@@ -40,7 +38,10 @@ from finn.dataflow._engine import (
     DesignPoint,
     Engine,
     EvaluatorSpec,
+    Finding,
+    FindingKind,
     QualifiedPath,
+    Unresolved,
 )
 from finn.dataflow.artifacts.abi import ComponentABI
 from finn.dataflow.artifacts.build import (
@@ -66,7 +67,7 @@ from finn.dataflow.model.network import DataflowNetwork, PositionMap
 from finn.dataflow.model.network_validation import validate_network
 from finn.dataflow.model.region import DataflowRegion, RegionRefused
 from finn.dataflow.model.region_validation import validate_region
-from finn.dataflow.space.compiler import _CompiledSpace
+from finn.dataflow.space.compiler import _CompiledSpace, _Ref
 from finn.dataflow.space.dataflow_value_semantics import (
     DATAFLOW_LOGICAL_RESULT_SEMANTICS,
     DATAFLOW_NETWORK_SEMANTICS,
@@ -86,6 +87,7 @@ from finn.dataflow.space.declarations import (
     ValueSource,
     _declaration_name,
     allow_absent,
+    allow_inapplicable,
     declared_members,
     exported_members,
     reject,
@@ -300,6 +302,14 @@ class KernelChoice(SubspaceChoice):
     """A parent-owned lazy choice between Kernel-capable child Spaces."""
 
     selector_name: ClassVar[str] = "kernel"
+    capability_outputs: ClassVar[Mapping[str, str]] = MappingProxyType(
+        {
+            "logical_result": "logical",
+            "physical_result": "physical",
+            "physical_streams": "physical",
+            "relation_result": "physical_relation",
+        }
+    )
     node_id: str | None
 
     __slots__ = ("node_id",)
@@ -349,6 +359,11 @@ class KernelChoice(SubspaceChoice):
 
     def default_outputs(self) -> tuple[str, ...]:
         return ("logical_result",)
+
+    def capability_for_output(self, output_name: str) -> str | None:
+        """The assessed child capability represented by one forwarded output."""
+
+        return self.capability_outputs.get(output_name)
 
     @property
     def logical_result(self) -> ValueSource[object]:
@@ -519,6 +534,7 @@ class Kernel(Space):
         else:
             setattr(cls, _GENERATED_MEMBERS, frozenset())
         _ensure_logical_view_validation(cls)
+        _synchronize_generated_dataflow(cls)
 
     @classmethod
     def _finalize_compilation(cls, compiled: object) -> object:
@@ -661,288 +677,237 @@ def _choice_role(member_name: str, declaration: KernelChoice) -> str:
 
 
 def _include_child_capability_contracts(compiled: _CompiledSpace[K]) -> _CompiledSpace[K]:
-    """Preserve child view contracts at each parent capability boundary."""
+    """Make KernelChoice standard outputs explicit assessed-capability values."""
 
-    result = compiled
-    for parent_view in ("logical", "dataflow"):
-        result = _include_consumed_child_view(
-            result,
-            parent_view=parent_view,
-            child_view="logical",
-            branch_outputs=frozenset({"logical_result"}),
-        )
-    if any(name == "physical" for name, _projection in result.projections):
-        result = _include_consumed_child_view(
-            result,
-            parent_view="physical",
-            child_view="physical",
-            branch_outputs=frozenset({"physical_result", "physical_streams"}),
-        )
-    return result
-
-
-def _value_dependency_closure(
-    compiled: _CompiledSpace[Space], start: QualifiedPath
-) -> frozenset[QualifiedPath]:
-    properties = {item.path: item for item in compiled.spec.properties}
-    decisions = {item.path: item for item in compiled.spec.decisions}
-    pending = [start]
-    visited: set[QualifiedPath] = set()
-    while pending:
-        path = pending.pop()
-        if path in visited:
-            continue
-        visited.add(path)
-        declaration = properties.get(path)
-        if declaration is not None:
-            pending.extend(item.path for item in declaration.evaluator.dependencies)
-            if declaration.applies_if is not None:
-                pending.extend(item.path for item in declaration.applies_if.dependencies)
-            continue
-        decision = decisions.get(path)
-        if decision is not None:
-            pending.extend(item.path for item in decision.domain.dependencies)
-            if decision.applies_if is not None:
-                pending.extend(item.path for item in decision.applies_if.dependencies)
-    return frozenset(visited)
-
-
-def _include_consumed_child_view(
-    compiled: _CompiledSpace[K],
-    *,
-    parent_view: str,
-    child_view: str,
-    branch_outputs: frozenset[str],
-) -> _CompiledSpace[K]:
-    parent = compiled.projection(parent_view)
-    closure = _value_dependency_closure(cast("_CompiledSpace[Space]", compiled), parent.output.path)
     choice_names = {name for name, _choice in kernel_choice_members(compiled.owner)}
-    constraints: set[QualifiedPath] = set()
-    readiness_properties: set[QualifiedPath] = set()
-    readiness_constraints: set[QualifiedPath] = set()
-    applicability_by_output: dict[QualifiedPath, EvaluatorSpec[Answer[bool]]] = {}
-    new_properties = list(compiled.spec.properties)
-    new_constraints = list(compiled.spec.constraints)
+    properties = list(compiled.spec.properties)
     properties_by_path = {item.path: item for item in compiled.spec.properties}
     decisions_by_path = {item.path: item for item in compiled.spec.decisions}
-    constraints_by_path = {item.path: item for item in compiled.spec.constraints}
+    accepted: dict[tuple[str, str], _Ref[object]] = {}
 
-    def contract_segment(member_name: str, case_id: str, suffix: str) -> str:
-        return f"consumed-{parent_view}-{member_name}-{case_id}-{child_view}-{suffix}"
-
-    def gated_constraint(
-        path: QualifiedPath,
-        *,
-        member_name: str,
-        case_id: str,
-        suffix: str,
-        applicability: EvaluatorSpec[Answer[bool]] | None,
-    ) -> QualifiedPath:
-        if applicability is None:
-            return path
-        source = constraints_by_path[path]
-        clone_path = QualifiedPath(
-            f"constraint.{compiled.namespace}.{contract_segment(member_name, case_id, suffix)}"
-        )
-        new_constraints.append(
-            EngineConstraint(
-                clone_path,
-                source.evaluator,
-                _sequential_applicability(applicability, source.applies_if),
+    def accepted_view(case: object, view_name: str) -> _Ref[object]:
+        compiled_case = cast("Any", case).compiled
+        key = (compiled_case.namespace, view_name)
+        if key in accepted:
+            return accepted[key]
+        try:
+            view = compiled_case.projection(view_name)
+        except AuthoringError:
+            raise AuthoringError(
+                f"{compiled_case.owner.__name__} does not declare consumed capability {view_name!r}"
+            ) from None
+        path = QualifiedPath(f"semantic.{compiled_case.namespace}.accepted-{view_name}")
+        dependencies: list[DependencyRef] = [
+            replace(view.output, absence=AbsenceMode.PRESERVES_ANSWER).dependency("output")
+        ]
+        readiness_names: list[str] = []
+        acceptance_witnesses: list[tuple[str, QualifiedPath]] = []
+        profiles = {item.name: item for item in compiled_case.spec.readiness_profiles}
+        readiness = profiles[view.readiness_profile]
+        for index, decision_path in enumerate(readiness.decisions):
+            decision = decisions_by_path[decision_path]
+            dependencies.append(
+                DependencyRef(
+                    f"ready_decision_{index}",
+                    decision_path,
+                    DependencyKind.DECISION,
+                    decision.value_semantics,
+                    AbsenceMode.PRESERVES_ANSWER,
+                )
+            )
+            readiness_names.append(f"ready_decision_{index}")
+        for index, property_path in enumerate(readiness.properties):
+            declaration = properties_by_path[property_path]
+            dependencies.append(
+                DependencyRef(
+                    f"ready_property_{index}",
+                    property_path,
+                    DependencyKind.PROPERTY,
+                    declaration.value_semantics,
+                    AbsenceMode.PRESERVES_ANSWER,
+                )
+            )
+            readiness_names.append(f"ready_property_{index}")
+        for index, constraint_path in enumerate(readiness.constraints):
+            name = f"ready_constraint_{index}"
+            dependencies.append(
+                DependencyRef(
+                    name,
+                    constraint_path,
+                    DependencyKind.CONSTRAINT,
+                    semantics_for(bool),
+                    AbsenceMode.PRESERVES_ANSWER,
+                )
+            )
+            readiness_names.append(name)
+        groups = {item.name: item for item in compiled_case.spec.constraint_sets}
+        acceptance_paths = tuple(
+            dict.fromkeys(
+                path
+                for group_name in view.constraint_sets
+                for path in groups[group_name].constraints
             )
         )
-        return clone_path
+        for index, constraint_path in enumerate(acceptance_paths):
+            name = f"accept_constraint_{index}"
+            dependencies.append(
+                DependencyRef(
+                    name,
+                    constraint_path,
+                    DependencyKind.CONSTRAINT,
+                    semantics_for(bool),
+                    AbsenceMode.PRESERVES_ANSWER,
+                )
+            )
+            acceptance_witnesses.append((name, constraint_path))
 
-    for member_name, branch in compiled.branches:
-        if member_name not in choice_names:
-            continue
-        consumed_names = {
-            name
-            for name, reference in branch.outputs
-            if name in branch_outputs and reference.path in closure
-        }
-        if not consumed_names:
-            continue
-        for case in branch.cases:
-            try:
-                child = case.compiled.projection(child_view)
-            except AuthoringError:
-                raise AuthoringError(
-                    f"{compiled.owner.__name__}.{member_name} consumes {child_view!r}, "
-                    f"but {case.compiled.owner.__name__} does not declare that capability"
-                ) from None
-            groups = {item.name: item for item in case.compiled.spec.constraint_sets}
-            for group_name in child.constraint_sets:
-                for path in groups[group_name].constraints:
-                    constraints.add(
-                        gated_constraint(
+        def evaluate(values: DependencyView) -> Answer[object]:
+            output = cast("Answer[object]", values["output"])
+            readiness_answers = [cast("Answer[object]", values[name]) for name in readiness_names]
+            acceptance_answers = [
+                (cast("Answer[bool]", values[name]), constraint_path)
+                for name, constraint_path in acceptance_witnesses
+            ]
+            unresolved = tuple(
+                finding
+                for answer in (
+                    output,
+                    *readiness_answers,
+                    *(item[0] for item in acceptance_answers),
+                )
+                if isinstance(answer, Unresolved)
+                for finding in answer.findings
+            )
+            if unresolved:
+                return Unresolved(unresolved)
+            if isinstance(output, Absent):
+                return output
+            refusals: list[Finding] = []
+            for answer, constraint_path in acceptance_answers:
+                if isinstance(answer, Absent):
+                    if answer.is_rejection:
+                        refusals.extend(answer.findings)
+                    continue
+                if isinstance(answer, Decided) and answer.value is False:
+                    refusals.append(
+                        Finding(
+                            FindingKind.REJECTION,
+                            "projection-constraint-refused",
                             path,
-                            member_name=member_name,
-                            case_id=case.case_id,
-                            suffix=f"accept-{len(new_constraints)}",
-                            applicability=child.applicability,
+                            "a consumed capability constraint refused this point",
+                            (("constraint", constraint_path),),
+                            (constraint_path,),
                         )
                     )
-            profiles = {item.name: item for item in case.compiled.spec.readiness_profiles}
-            readiness = profiles[child.readiness_profile]
-            readiness_dependencies: list[DependencyRef] = []
-            for index, path in enumerate(readiness.decisions):
-                decision_declaration = decisions_by_path[path]
-                readiness_dependencies.append(
-                    DependencyRef(
-                        f"decision_{index}",
-                        path,
-                        DependencyKind.DECISION,
-                        decision_declaration.value_semantics,
-                        AbsenceMode.ALLOWS_ABSENT,
-                    )
+            if refusals:
+                return Absent(tuple(refusals))
+            if not isinstance(output, Decided):
+                raise AuthoringError("a consumed capability returned an invalid output answer")
+            return Decided(output.value)
+
+        properties.append(
+            DerivedProperty(
+                path,
+                view.output.semantics,
+                EvaluatorSpec(tuple(dependencies), evaluate),
+                view.applicability,
+            )
+        )
+        reference: _Ref[object] = _Ref(path, DependencyKind.PROPERTY, view.output.semantics)
+        accepted[key] = reference
+        return reference
+
+    def capability_bound_value(
+        *,
+        case: object,
+        output_name: str,
+        view_name: str,
+        raw: _Ref[object],
+    ) -> _Ref[object]:
+        capability = accepted_view(case, view_name)
+        if output_name != "physical_streams":
+            if not raw.semantics.is_compatible_with(capability.semantics):
+                raise AuthoringError(
+                    f"{cast('Any', case).compiled.owner.__name__}.{view_name} output "
+                    f"is incompatible with KernelChoice output {output_name!r}"
                 )
-            for index, path in enumerate(readiness.properties):
-                property_declaration = properties_by_path[path]
-                readiness_dependencies.append(
-                    DependencyRef(
-                        f"property_{index}",
-                        path,
-                        DependencyKind.PROPERTY,
-                        property_declaration.value_semantics,
-                        AbsenceMode.ALLOWS_ABSENT,
-                    )
+            return capability
+        path = QualifiedPath(
+            f"semantic.{cast('Any', case).compiled.namespace}.accepted-physical-streams"
+        )
+
+        def evaluate(values: DependencyView) -> Answer[object]:
+            physical = cast("Answer[object]", values["physical"])
+            if not isinstance(physical, Decided):
+                return physical
+            value = cast("Answer[object]", values["value"])
+            return value
+
+        properties.append(
+            DerivedProperty(
+                path,
+                raw.semantics,
+                EvaluatorSpec(
+                    (
+                        replace(capability, absence=AbsenceMode.PRESERVES_ANSWER).dependency(
+                            "physical"
+                        ),
+                        replace(raw, absence=AbsenceMode.PRESERVES_ANSWER).dependency("value"),
+                    ),
+                    evaluate,
+                ),
+            )
+        )
+        return _Ref(path, DependencyKind.PROPERTY, raw.semantics)
+
+    for member_name, branch in compiled.branches:
+        declaration = dict(kernel_choice_members(compiled.owner)).get(member_name)
+        if member_name not in choice_names or declaration is None:
+            continue
+        for output_name, selected_output in branch.outputs:
+            view_name = declaration.capability_for_output(output_name)
+            if view_name is None:
+                continue
+            selected_property = properties_by_path[selected_output.path]
+            replacements: dict[str, _Ref[object]] = {}
+            for case in branch.cases:
+                raw = case.compiled.exported(output_name)
+                replacements[f"case@{case.case_id}"] = capability_bound_value(
+                    case=case,
+                    output_name=output_name,
+                    view_name=view_name,
+                    raw=raw,
                 )
-            if readiness_dependencies:
-                proxy_path = QualifiedPath(
-                    f"semantic.{compiled.namespace}."
-                    f"{contract_segment(member_name, case.case_id, 'ready')}"
+            dependencies = tuple(
+                replace(replacements[item.name], absence=AbsenceMode.PRESERVES_ANSWER).dependency(
+                    item.name
                 )
+                if item.name in replacements
+                else item
+                for item in selected_property.evaluator.dependencies
+            )
 
-                def ready(_values: DependencyView) -> Answer[object]:
-                    return Decided(True)
+            selector = branch.selector
+            only_case = branch.cases[0].case_id
 
-                new_properties.append(
-                    DerivedProperty(
-                        proxy_path,
-                        semantics_for(bool),
-                        EvaluatorSpec(tuple(readiness_dependencies), ready),
-                        child.applicability,
-                    )
-                )
-                readiness_properties.add(proxy_path)
-            for path in readiness.constraints:
-                readiness_constraints.add(
-                    gated_constraint(
-                        path,
-                        member_name=member_name,
-                        case_id=case.case_id,
-                        suffix=f"ready-constraint-{len(new_constraints)}",
-                        applicability=child.applicability,
-                    )
-                )
-            if child.applicability is not None:
-                if child.output.kind is not DependencyKind.PROPERTY:
-                    raise AuthoringError(
-                        f"{case.compiled.owner.__name__}.{child_view} must expose a property "
-                        "when a parent Kernel consumes its applicability"
-                    )
-                applicability_by_output[child.output.path] = child.applicability
+            def select(
+                values: DependencyView,
+                selector: object = selector,
+                only_case: str = only_case,
+            ) -> Answer[object]:
+                if selector is not None:
+                    chosen = cast(str, values["selector"])
+                    return cast("Answer[object]", values[f"case@{chosen}"])
+                return cast("Answer[object]", values[f"case@{only_case}"])
 
-    if not any(
-        (
-            constraints,
-            readiness_properties,
-            readiness_constraints,
-            applicability_by_output,
-        )
-    ):
-        return compiled
+            replacement = replace(
+                selected_property,
+                evaluator=EvaluatorSpec(dependencies, select),
+            )
+            properties[properties.index(selected_property)] = replacement
+            properties_by_path[selected_output.path] = replacement
 
-    child_group_name = f"{parent.name}.consumed-{child_view}"
-    constraint_sets = compiled.spec.constraint_sets
-    parent_constraint_sets = parent.constraint_sets
-    if constraints:
-        constraint_sets = (
-            *constraint_sets,
-            ConstraintSet(child_group_name, tuple(sorted(constraints, key=str))),
-        )
-        parent_constraint_sets = (*parent_constraint_sets, child_group_name)
-
-    readiness_profiles = tuple(
-        replace(
-            profile,
-            properties=tuple(
-                dict.fromkeys((*profile.properties, *sorted(readiness_properties, key=str)))
-            ),
-            constraints=tuple(
-                dict.fromkeys((*profile.constraints, *sorted(readiness_constraints, key=str)))
-            ),
-        )
-        if profile.name == parent.readiness_profile
-        else profile
-        for profile in compiled.spec.readiness_profiles
-    )
-    properties = tuple(
-        replace(
-            item,
-            applies_if=_sequential_applicability(
-                applicability_by_output[item.path], item.applies_if
-            ),
-        )
-        if item.path in applicability_by_output
-        else item
-        for item in new_properties
-    )
-    projections = tuple(
-        (
-            name,
-            replace(projection, constraint_sets=parent_constraint_sets),
-        )
-        if name == parent_view
-        else (name, projection)
-        for name, projection in compiled.projections
-    )
-    return replace(
-        compiled,
-        spec=replace(
-            compiled.spec,
-            properties=properties,
-            constraints=tuple(new_constraints),
-            constraint_sets=constraint_sets,
-            readiness_profiles=readiness_profiles,
-        ),
-        projections=projections,
-    )
-
-
-def _sequential_applicability(
-    outer: EvaluatorSpec[Answer[bool]],
-    inner: EvaluatorSpec[Answer[bool]] | None,
-) -> EvaluatorSpec[Answer[bool]]:
-    if inner is None:
-        return outer
-    outer_dependencies = tuple(
-        replace(item, name=f"outer_{index}") for index, item in enumerate(outer.dependencies)
-    )
-    inner_dependencies = tuple(
-        replace(item, name=f"inner_{index}") for index, item in enumerate(inner.dependencies)
-    )
-
-    def evaluate(values: DependencyView) -> Answer[bool]:
-        outer_values = DependencyView(
-            {
-                original.name: values[renamed.name]
-                for original, renamed in zip(outer.dependencies, outer_dependencies)
-            }
-        )
-        outer_answer = outer.evaluator(outer_values)
-        if not isinstance(outer_answer, Decided) or not outer_answer.value:
-            return outer_answer
-        inner_values = DependencyView(
-            {
-                original.name: values[renamed.name]
-                for original, renamed in zip(inner.dependencies, inner_dependencies)
-            }
-        )
-        return inner.evaluator(inner_values)
-
-    return EvaluatorSpec((*outer_dependencies, *inner_dependencies), evaluate)
+    return replace(compiled, spec=replace(compiled.spec, properties=tuple(properties)))
 
 
 def _parameter_members(
@@ -1050,6 +1015,53 @@ def _ensure_logical_view_validation(kernel_type: type[Kernel]) -> None:
                 name=declaration.stable_name,
             ),
         )
+    setattr(kernel_type, _GENERATED_MEMBERS, frozenset(generated))
+
+
+def _synchronize_generated_dataflow(kernel_type: type[Kernel]) -> None:
+    generated = set(
+        cast("frozenset[str]", kernel_type.__dict__.get(_GENERATED_MEMBERS, frozenset()))
+    )
+    if "dataflow" not in generated:
+        return
+    logical = getattr(kernel_type, "logical", None)
+    if not isinstance(logical, Projection):
+        raise AuthoringError(f"{kernel_type.__name__} generated dataflow without logical view")
+    composite = bool(kernel_choice_members(kernel_type))
+
+    def evaluate(*, logical: LogicalResult) -> object:
+        if composite and isinstance(logical, NetworkResult):
+            return logical.network
+        if not composite and isinstance(logical, RegionResult):
+            return logical.region
+        return reject(
+            "kernel-dataflow-logical-type",
+            "dataflow extraction does not match the authored logical capability",
+        )
+
+    dataflow_semantics = (
+        semantics_for(DATAFLOW_NETWORK_SEMANTICS)
+        if composite
+        else semantics_for(DATAFLOW_REGION_SEMANTICS)
+    )
+    dataflow_result: Derived[object] = Derived(
+        dataflow_semantics,
+        None,
+        (("logical", cast("ValueSource[object]", logical.output)),),
+        evaluate,
+    )
+    _generated_member(kernel_type, "dataflow_result", dataflow_result, generated)
+    setattr(
+        kernel_type,
+        "dataflow",
+        Projection(
+            dataflow_result,
+            applicable_if=logical.applicable_if,
+            readiness=logical.readiness,
+            constraints=logical.constraints,
+            name="dataflow",
+        ),
+    )
     setattr(kernel_type, _GENERATED_MEMBERS, frozenset(generated))
 
 
@@ -1394,7 +1406,10 @@ def _composite_logical_property(kernel_type: type[Kernel]) -> Derived[LogicalRes
         key = f"child_{index}"
         choice_keys[id(declaration)] = (role, node_id, key)
         dependencies.append(
-            (key, allow_absent(cast("ValueSource[object]", declaration.logical_result)))
+            (
+                key,
+                allow_inapplicable(cast("ValueSource[object]", declaration.logical_result)),
+            )
         )
     topology_plan: list[tuple[str, TopologyDeclaration, str | None, tuple[str | None, ...]]] = []
     for index, (member_name, topology_declaration) in enumerate(topology):
