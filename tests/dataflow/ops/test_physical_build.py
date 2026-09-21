@@ -22,7 +22,6 @@ from finn.dataflow.ops.graph_context import (
     capture_frozen_op_logical,
     validate_frozen_op_logical,
 )
-from finn.dataflow.ops.mvau.op import MvauDataflowOp
 from finn.dataflow.ops.persistence import CommitmentStage
 from finn.dataflow.ops.physical import (
     capture_op_physical,
@@ -79,9 +78,18 @@ def test_two_committed_occurrences_reuse_one_component_and_keep_distinct_associa
 
     monkeypatch.setattr(build_module, "render_module_sources", counted)
     requests, components, instances = [], [], []
-    for index, node in enumerate(list(model.graph.node)):
-        op = configure(MvauDataflowOp(node).bind(model, build, graph_context=context))
-        op = op.commit(model, build, require=CommitmentStage.PHYSICAL, graph_context=context)
+    for index in range(len(model.graph.node)):
+        # A successful transaction replaces graph objects; fetch the current
+        # model-owned node before each factory call.
+        node = model.graph.node[index]
+        op = configure(
+            model.get_customop_wrapper(node).set_context(build, graph_context=context).space
+        )
+        op = (
+            model.get_customop_wrapper(node)
+            .set_context(build, graph_context=context)
+            .save_space(op, require=CommitmentStage.PHYSICAL)
+        )
         request = _prepare(op, model, build, context, store)
         component = materialize_build_request(
             op, request, model=model, build=build, graph_context=context, store=store
@@ -109,7 +117,7 @@ def test_two_committed_occurrences_reuse_one_component_and_keep_distinct_associa
     model.save(str(path))
     restored = ModelWrapper(str(path))
     for index, node in enumerate(restored.graph.node):
-        op = MvauDataflowOp(node).bind(restored, build, graph_context=context)
+        op = restored.get_customop_wrapper(node).set_context(build, graph_context=context).space
         assert capture_op_physical(op).requirements == requests[index].capture.requirements
         rebound_request = _prepare(op, restored, build, context, store)
         assert (
@@ -124,12 +132,20 @@ def test_two_committed_occurrences_reuse_one_component_and_keep_distinct_associa
 def test_precommit_capture_requires_recapture_after_strong_commit_and_can_reuse(tmp_path):
     model, build, context = source_model()
     store = ArtifactStore(tmp_path / "store")
-    op = configure(MvauDataflowOp(model.graph.node[0]).bind(model, build, graph_context=context))
+    op = configure(
+        model.get_customop_wrapper(model.graph.node[0])
+        .set_context(build, graph_context=context)
+        .space
+    )
     old = _prepare(op, model, build, context, store)
     component = materialize_build_request(
         op, old, model=model, build=build, graph_context=context, store=store
     )
-    op = op.commit(model, build, require_graph=True, graph_context=context)
+    op = (
+        model.get_customop_wrapper(model.graph.node[0])
+        .set_context(build, graph_context=context)
+        .save_space(op, require_graph=True)
+    )
     assert validate_physical_build_association(
         op, old.capture, model=model, build=build, graph_context=context
     )
@@ -149,7 +165,11 @@ def test_precommit_capture_requires_recapture_after_strong_commit_and_can_reuse(
 
 def test_initializer_graph_input_insertion_stales_all_associations_and_commit() -> None:
     model, build, context = source_model()
-    op = configure(MvauDataflowOp(model.graph.node[0]).bind(model, build, graph_context=context))
+    op = configure(
+        model.get_customop_wrapper(model.graph.node[0])
+        .set_context(build, graph_context=context)
+        .space
+    )
     logical = capture_frozen_op_logical(op)
     physical = capture_op_physical(op)
     _make_initializer_overrideable(model)
@@ -173,19 +193,20 @@ def test_initializer_graph_input_insertion_stales_all_associations_and_commit() 
     assert {item.code for item in physical_findings} == {"graph-context-initializer-overrideable"}
 
     with pytest.raises(DataflowOpError, match="graph-context-initializer-overrideable"):
-        op.commit(
-            model,
-            build,
-            require_graph=True,
-            graph_context=context,
-        )
+        model.get_customop_wrapper(model.graph.node[0]).set_context(
+            build, graph_context=context
+        ).save_space(op, require_graph=True)
     assert model.model.SerializeToString(deterministic=True) == before_commit
 
 
 def test_changed_context_refuses_before_a_populated_cache_lookup(tmp_path, monkeypatch):
     model, build, context = source_model()
     store = ArtifactStore(tmp_path / "store")
-    op = configure(MvauDataflowOp(model.graph.node[0]).bind(model, build, graph_context=context))
+    op = configure(
+        model.get_customop_wrapper(model.graph.node[0])
+        .set_context(build, graph_context=context)
+        .space
+    )
     request = _prepare(op, model, build, context, store)
     materialize_build_request(
         op, request, model=model, build=build, graph_context=context, store=store
@@ -218,9 +239,16 @@ def test_changed_context_refuses_before_a_populated_cache_lookup(tmp_path, monke
 def test_mixed_prepared_request_and_component_refuse(tmp_path):
     model, build, context = source_model()
     store = ArtifactStore(tmp_path / "store")
-    left = configure(MvauDataflowOp(model.graph.node[0]).bind(model, build, graph_context=context))
+    left = configure(
+        model.get_customop_wrapper(model.graph.node[0])
+        .set_context(build, graph_context=context)
+        .space
+    )
     right = configure(
-        MvauDataflowOp(model.graph.node[1]).bind(model, build, graph_context=context), pumping=False
+        model.get_customop_wrapper(model.graph.node[1])
+        .set_context(build, graph_context=context)
+        .space,
+        pumping=False,
     )
     first, second = (_prepare(op, model, build, context, store) for op in (left, right))
     a = materialize_build_request(
@@ -260,7 +288,9 @@ def test_external_weights_are_invariant_only_with_equal_consumed_physical_facts(
     for kwargs in ({}, {"weights": ALTERNATE_WEIGHTS}, {"weights": narrow_changed}):
         model, build, context = source_model(**kwargs)
         op = configure(
-            MvauDataflowOp(model.graph.node[0]).bind(model, build, graph_context=context)
+            model.get_customop_wrapper(model.graph.node[0])
+            .set_context(build, graph_context=context)
+            .space
         )
         request = _prepare(op, model, build, context, store)
         captures.append(request.capture)
@@ -275,7 +305,10 @@ def test_external_weights_are_invariant_only_with_equal_consumed_physical_facts(
 def test_physical_choice_unset_keeps_graph_logical_acceptance():
     model, build, context = source_model()
     op = configure(
-        MvauDataflowOp(model.graph.node[0]).bind(model, build, graph_context=context), pumping=None
+        model.get_customop_wrapper(model.graph.node[0])
+        .set_context(build, graph_context=context)
+        .space,
+        pumping=None,
     )
     assert isinstance(op.graph_dataflow.accepted_answer, Decided)
     assert isinstance(op.physical.accepted_answer, Unresolved)
@@ -284,7 +317,11 @@ def test_physical_choice_unset_keeps_graph_logical_acceptance():
 def test_prepared_production_component_renders_in_fresh_process_without_compiler_reads(tmp_path):
     model, build, context = source_model()
     store = ArtifactStore(tmp_path / "store")
-    op = configure(MvauDataflowOp(model.graph.node[0]).bind(model, build, graph_context=context))
+    op = configure(
+        model.get_customop_wrapper(model.graph.node[0])
+        .set_context(build, graph_context=context)
+        .space
+    )
     request = _prepare(op, model, build, context, store)
     payload = tmp_path / "prepared.pkl"
     payload.write_bytes(pickle.dumps(request.prepared))

@@ -8,9 +8,10 @@ from onnx import TensorProto, helper
 from qonnx.core.modelwrapper import ModelWrapper
 
 from dataflow.ops.test_dataflow_op import Build, _mvau_model, _unbound
-from dataflow.ops.test_persistence_codecs import NativeOp, _model
-from finn.dataflow.ops import base
-from finn.dataflow.ops.base import DataflowOp, DataflowOpError
+from dataflow.ops.test_persistence_codecs import _model, _op
+from finn.dataflow.ops.space import DataflowSpace
+from finn.dataflow.ops import native
+from finn.dataflow.ops.base import DataflowOpError
 from finn.dataflow.ops.native import DecodeError, read_attributes
 from finn.dataflow.space import Decision, Space, Subspace, divisors_of
 
@@ -20,7 +21,7 @@ class Extent(Space):
     exports = (extent,)
 
 
-class DependentOp(DataflowOp):
+class DependentSpace(DataflowSpace):
     family = "test.dependent"
     child = Subspace(Extent)
     lanes = Decision(int, domain=divisors_of(child.extent))
@@ -30,16 +31,16 @@ class DependentOp(DataflowOp):
 
 
 def test_parent_decision_depending_on_child_export_commits_and_reloads(tmp_path):
-    model = _model(DependentOp)
-    root = DependentOp(model.graph.node[0]).bind(model, None)
-    chosen = root.child.assign(Extent.extent, 8).root.assign(DependentOp.lanes, 4)
+    model = _model(DependentSpace)
+    root = _op(model, DependentSpace).space
+    chosen = root.child.assign(Extent.extent, 8).root.assign(DependentSpace.lanes, 4)
     assert chosen.recorded() == {"lanes": 4, "child.extent": 8}
-    committed = chosen.commit(model)
+    committed = _op(model, DependentSpace).save_space(chosen)
     assert committed.recorded() == chosen.recorded()
     path = tmp_path / "dependent.onnx"
     model.save(str(path))
     restored_model = ModelWrapper(str(path))
-    restored = DependentOp(restored_model.graph.node[0]).bind(restored_model, None)
+    restored = _op(restored_model, DependentSpace).space
     assert restored.recorded() == chosen.recorded()
     assert restored.problem_fingerprint == committed.problem_fingerprint
 
@@ -47,25 +48,30 @@ def test_parent_decision_depending_on_child_export_commits_and_reloads(tmp_path)
 def test_failed_post_write_hydration_rolls_back_attributes_and_output_repairs(monkeypatch):
     model = _mvau_model()
     model.set_tensor_shape("output", [99])
-    chosen = _unbound(model, "mvau0").bind(model, Build()).kernel.select("dot_product").root
+    op = _unbound(model, "mvau0").set_context(Build())
+    chosen = op.space.kernel.select("dot_product").root
     before = model.model.SerializeToString(deterministic=True)
     original_point = dict(chosen.recorded())
     hydrated = []
 
+    original_hydrate = native.hydrate
+
     def fail_after_writes(operation):
+        if "kernel__case" not in read_attributes(model.graph.node[0]):
+            return original_hydrate(operation)
         hydrated.append(operation)
         assert "kernel__case" in read_attributes(model.graph.node[0])
         assert model.get_tensor_shape("output") == [2, 4]
         raise DataflowOpError("injected post-write hydration failure")
 
     with monkeypatch.context() as patch:
-        patch.setattr(base, "hydrate", fail_after_writes)
+        patch.setattr(native, "hydrate", fail_after_writes)
         with pytest.raises(DataflowOpError, match="post-write hydration failure"):
-            chosen.commit(model)
+            op.save_space(chosen)
     assert len(hydrated) == 1
     assert model.model.SerializeToString(deterministic=True) == before
     assert chosen.recorded() == original_point
-    assert chosen.commit(model).recorded() == original_point
+    assert op.save_space(chosen).recorded() == original_point
 
 
 def _tensor_attribute(name="flag"):
@@ -75,7 +81,7 @@ def _tensor_attribute(name="flag"):
 @pytest.mark.parametrize("order", ["tensor_int", "int_tensor", "tensor_tensor"])
 def test_duplicate_names_are_refused_before_native_kind_filtering(order):
     model = _model()
-    NativeOp(model.graph.node[0]).bind(model, None).commit(model)
+    _op(model).save_space()
     attributes = {
         "tensor_int": (_tensor_attribute(), helper.make_attribute("flag", 1)),
         "int_tensor": (helper.make_attribute("flag", 1), _tensor_attribute()),
@@ -86,13 +92,13 @@ def test_duplicate_names_are_refused_before_native_kind_filtering(order):
     with pytest.raises(DecodeError, match="duplicate node attribute 'flag'"):
         read_attributes(model.graph.node[0])
     with pytest.raises(DataflowOpError, match="duplicate node attribute 'flag'"):
-        NativeOp(model.graph.node[0]).bind(model, None)
+        _op(model).space
     assert model.model.SerializeToString(deterministic=True) == before
 
 
 def test_a_single_unsupported_kind_for_a_decision_is_refused():
     model = _model()
-    NativeOp(model.graph.node[0]).bind(model, None).commit(model)
+    _op(model).save_space()
     model.graph.node[0].attribute.append(_tensor_attribute())
     with pytest.raises(DataflowOpError, match="unsupported ONNX kind for flag"):
-        NativeOp(model.graph.node[0]).bind(model, None)
+        _op(model).space

@@ -12,11 +12,9 @@ from qonnx.core.modelwrapper import ModelWrapper
 
 from finn.dataflow._engine import Absent, Decided, Unresolved
 from finn.dataflow.ops.infer import InferDataflowMatMul
-from finn.dataflow.ops.mvau.op import MvauDataflowOp
 from finn.dataflow.ops.native import serialize_choices
 from finn.dataflow.kernels.matmul.base import DspBlock
 from finn.dataflow.artifacts.store import ArtifactStore
-from finn.dataflow.ops.persistence import apply_graph_effects
 from dataflow.physical_fixture import configure, template_roots
 from finn.dataflow.ops.physical import (
     capture_op_physical,
@@ -58,17 +56,18 @@ def test_conditional_matmul_entry_preserves_computation_and_sparse_native_graph(
     assert isinstance(transform.admissions[0].result_type, Decided)
     assert len(model.graph.node) == 1
     assert model.graph.node[0].op_type == "MvauDataflowOp"
-    use = MvauDataflowOp(model.graph.node[0]).hydrate(model)
+    operation = model.get_customop_wrapper(model.graph.node[0])
+    use = operation.space
     assert isinstance(use.resolve_implementation(), Unresolved)
     assert serialize_choices(use.root) == {}
     activation = np.array([[1, -2, 3, 0]], dtype=np.float32)
     context = {"x": activation, "w": weights, "y": np.zeros((1, 4), dtype=np.float32)}
-    use.root.execute_node(context, model.graph)
+    operation.execute_node(context, model.graph)
     np.testing.assert_array_equal(context["y"], activation @ weights)
     path = tmp_path / "native.onnx"
     model.save(path)
     restored = ModelWrapper(str(path))
-    rehydrated = MvauDataflowOp(restored.graph.node[0]).hydrate(restored)
+    rehydrated = restored.get_customop_wrapper(restored.graph.node[0]).space
     assert rehydrated.operand_type("result") == use.operand_type("result")
     assert serialize_choices(rehydrated.root) == {}
     assert not any(item.name.startswith("kernel__") for item in restored.graph.node[0].attribute)
@@ -113,14 +112,13 @@ def test_inferred_native_checkpoint_commits_choices_and_prepares_physical_use(tm
     model, changed = InferDataflowMatMul().apply(model)
     assert changed
     build = Build()
-    configured = configure(
-        MvauDataflowOp(model.graph.node[0]).hydrate(model, build).root, pumping=False
-    )
-    apply_graph_effects(model, configured.graph_effects())
+    operation = model.get_customop_wrapper(model.graph.node[0]).set_context(build=build)
+    configured = configure(operation.space, pumping=False)
+    operation.save_space(configured)
     path = tmp_path / "chosen-native.onnx"
     model.save(path)
     loaded = ModelWrapper(str(path))
-    use = MvauDataflowOp(loaded.graph.node[0]).hydrate(loaded, build)
+    use = loaded.get_customop_wrapper(loaded.graph.node[0]).set_context(build=build).space
     capture = capture_op_physical(use)
     store = ArtifactStore(tmp_path / "artifacts")
     request = prepare_build_request(

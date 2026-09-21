@@ -110,7 +110,8 @@ def bound(spec: dict[str, Any], build: dict[str, Any]) -> tuple[Any, Any]:
     model = local_model(spec)
     operation = model.get_customop_wrapper(model.graph.node[0])
     assert isinstance(operation, MvauDataflowOp)
-    return model, operation.bind(model, build_for(spec, build))
+    operation.set_context(build=build_for(spec, build))
+    return model, operation.space
 
 
 def execute(spec: dict[str, Any]) -> list[list[float]] | None:

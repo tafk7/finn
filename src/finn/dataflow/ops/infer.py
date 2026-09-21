@@ -156,8 +156,10 @@ class InferDataflowMatMul(Transformation):  # type: ignore[misc]
         if not any(item.domain == DATAFLOW_DOMAIN for item in candidate.model.opset_import):
             candidate.model.opset_import.append(helper.make_opsetid(DATAFLOW_DOMAIN, 1))
         candidate.set_tensor_shape(node.output[0], (*shape[:-1], weights.shape[1]))
-        use = MvauDataflowOp(candidate.graph.node[index]).hydrate(candidate)
-        accepted = cast("Answer[QONNXDataType]", use.operand_type("result"))
+        operation = candidate.get_customop_wrapper(candidate.graph.node[index])
+        if not isinstance(operation, MvauDataflowOp):
+            raise TypeError("the registry did not construct the admitted DataflowOp")
+        accepted = cast("Answer[QONNXDataType]", operation.space.operand_type("result"))
         if not isinstance(accepted, Decided):
             return None, accepted
         candidate.set_tensor_datatype(node.output[0], accepted.value)

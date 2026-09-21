@@ -39,7 +39,7 @@ finished.  Lowering therefore only *binds* -- it writes each facet onto the
 class under its generated name.
 
 **Lowering is explicit and lives here.**  Nothing is added to ``model/`` for
-it; the expansion runs in ``DataflowOp.__init_subclass__``, the same mechanism
+it; the expansion runs in ``DataflowSpace.__init_subclass__``, the same mechanism
 ``Kernel.__init_subclass__`` already uses.  There is no generic "declaration
 provider" protocol, because a protocol would let any Space grow members by side
 effect.

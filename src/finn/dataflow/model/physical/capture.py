@@ -30,7 +30,14 @@ from finn.dataflow.model.identity import (
 from finn.dataflow.model.logical.composition import ImplementationPath
 from finn.dataflow.model.physical.authoring import PhysicallyUnsupported
 from finn.dataflow.model.physical.interface import KernelRealizationFacts, KernelStreamBinding
-from finn.dataflow.space.declarations import Projection, Space, ValueSource, semantics_for
+from finn.dataflow.space.declarations import (
+    ConstraintGroup,
+    Projection,
+    Space,
+    ValueSource,
+    declared_members,
+    semantics_for,
+)
 from finn.dataflow.space.occurrence import ProjectionAssessment, layer_runtime
 
 
@@ -138,20 +145,40 @@ def _canonical_answer(answer: Answer[object]) -> object:
 
 
 def _physical_dependency_snapshot(implementation: Space) -> tuple[CapturedDependency, ...]:
+    return capture_assessment_dependencies(implementation, "physical")
+
+
+def capture_assessment_dependencies(
+    implementation: Space, assessment: str | Projection[Any] | ConstraintGroup
+) -> tuple[CapturedDependency, ...]:
+    """Capture the actual scoped dependency closure of one existing assessment.
+
+    Codegen capture requests only its physical Projection. A consumer that also
+    assesses a narrow interface or constraint group can account for those premises
+    separately, without adding them to local codegen or evaluating a full graph.
+    """
     from finn.dataflow.space.compiler import _Ref, answer_for  # noqa: PLC0415
 
-    declaration = getattr(type(implementation), "physical", None)
-    if not isinstance(declaration, Projection):
-        assessment: ProjectionAssessment[Any] = implementation.assess_view("physical")
+    name = (
+        assessment
+        if isinstance(assessment, str)
+        else next(
+            name
+            for name, declaration in declared_members(type(implementation))
+            if declaration is assessment
+        )
+    )
+    declaration = getattr(type(implementation), name, None)
+    if not isinstance(declaration, (Projection, ConstraintGroup)):
+        projected: ProjectionAssessment[Any] = implementation.assess_view(name)
         return (
             CapturedDependency(
                 "capability-output",
-                f"{type(implementation).__name__}.physical",
-                _canonical_answer(cast("Answer[object]", assessment.accepted_answer)),
+                f"{type(implementation).__name__}.{name}",
+                _canonical_answer(cast("Answer[object]", projected.accepted_answer)),
             ),
         )
     runtime = layer_runtime(implementation)
-    compiled = runtime.compiled.projection("physical")
     space = runtime.point.design_space
     captured: dict[tuple[str, str], CapturedDependency] = {}
     visiting: set[tuple[DependencyKind, QualifiedPath]] = set()
@@ -210,7 +237,7 @@ def _physical_dependency_snapshot(implementation: Space) -> tuple[CapturedDepend
             return
         constraint = space.constraints.get(path)
         if constraint is None:
-            raise ValueError(f"physical dependency {path} is not declared")
+            raise ValueError(f"assessment dependency {path} is not declared")
         if constraint.applies_if is not None:
             for dependency in constraint.applies_if.dependencies:
                 visit(dependency)
@@ -226,29 +253,39 @@ def _physical_dependency_snapshot(implementation: Space) -> tuple[CapturedDepend
             cast(Any, runtime.engine.evaluate_constraints(runtime.point, (path,)).answers[path]),
         )
 
-    for dependency in compiled.applicability.dependencies if compiled.applicability else ():
-        visit(dependency)
-    visit(
-        DependencyRef(
-            "output", compiled.output.path, compiled.output.kind, compiled.output.semantics
-        )
-    )
-    readiness = space.readiness_profiles[compiled.readiness_profile]
-    for path in readiness.decisions:
+    if isinstance(declaration, ConstraintGroup):
+        constraint_paths = set(implementation.assess(declaration).answers)
+    else:
+        compiled = runtime.compiled.projection(name)
+        for dependency in compiled.applicability.dependencies if compiled.applicability else ():
+            visit(dependency)
         visit(
             DependencyRef(
-                "readiness", path, DependencyKind.DECISION, space.decisions[path].value_semantics
+                "output", compiled.output.path, compiled.output.kind, compiled.output.semantics
             )
         )
-    for path in readiness.properties:
-        visit(
-            DependencyRef(
-                "readiness", path, DependencyKind.PROPERTY, space.properties[path].value_semantics
+        readiness = space.readiness_profiles[compiled.readiness_profile]
+        for path in readiness.decisions:
+            visit(
+                DependencyRef(
+                    "readiness",
+                    path,
+                    DependencyKind.DECISION,
+                    space.decisions[path].value_semantics,
+                )
             )
-        )
-    constraint_paths = set(readiness.constraints)
-    for group in compiled.constraint_sets:
-        constraint_paths.update(space.constraint_sets[group])
+        for path in readiness.properties:
+            visit(
+                DependencyRef(
+                    "readiness",
+                    path,
+                    DependencyKind.PROPERTY,
+                    space.properties[path].value_semantics,
+                )
+            )
+        constraint_paths = set(readiness.constraints)
+        for group in compiled.constraint_sets:
+            constraint_paths.update(space.constraint_sets[group])
     for path in sorted(constraint_paths):
         visit(DependencyRef("constraint", path, DependencyKind.CONSTRAINT, semantics_for(bool)))
     visited_paths = {path for _kind, path in captured}
@@ -389,6 +426,7 @@ __all__ = [
     "canonical_dependency_value",
     "capture_kernel_realization",
     "capture_local_physical",
+    "capture_assessment_dependencies",
     "kernel_physical_refusal",
     "selected_child_realization",
 ]

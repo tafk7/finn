@@ -36,6 +36,9 @@ from finn.dataflow.space.declarations import (
 )
 from finn.dataflow.space.occurrence import ProjectionAssessment
 from finn.dataflow.ops.mapping import CoordinateMapping, External, Internal
+from finn.dataflow.ops.space import DataflowSpace
+from dataflow.ops.factory import make_op, make_space
+from finn.dataflow.ops.persistence import find_node
 from finn.dataflow.ops.base import (
     DATAFLOW_DOMAIN,
     SCOPE_ID_ATTRIBUTE,
@@ -48,7 +51,7 @@ from finn.dataflow.kernels.matmul.dot_product import (
     DotProductKernel,
     WeightSupply,
 )
-from finn.dataflow.ops.mvau.op import MvauDataflowOp
+from finn.dataflow.ops.mvau.op import MvauSpace
 from finn.dataflow.ops.persistence import (
     AssignDataflowScopeIds,
     CommitmentStage,
@@ -56,7 +59,7 @@ from finn.dataflow.ops.persistence import (
     assign_dataflow_scope_ids,
 )
 from finn.dataflow.kernels.replay import ActivationReplayKernel
-from finn.dataflow.ops.replay.op import ActivationReplayOp
+from finn.dataflow.ops.replay.op import ReplaySpace
 from finn.dataflow.ops.schema import OpInput, OpOutput
 from finn.dataflow.ops.native import (
     NativeAttribute,
@@ -224,14 +227,47 @@ def _unbound(model: ModelWrapper, name: str) -> DataflowOp:
     return operation
 
 
+def _space_for(adapter, model, build=None, *, graph_context=None):
+    return make_space(
+        model,
+        find_node(model, adapter.recorded_scope_id())
+        if adapter.recorded_scope_id()
+        else adapter.onnx_node,
+        build=build,
+        graph_context=graph_context,
+    )
+
+
+def _save(space, model, build=None, **kwargs):
+    graph_context = kwargs.pop("graph_context", None)
+    adapter = make_op(
+        model,
+        find_node(model, space.recorded_scope_id()),
+        space_type=type(space),
+        build=build,
+        graph_context=graph_context,
+    )
+    return adapter.save_space(space, **kwargs)
+
+
+def _rebind(space, model, build=None, **kwargs):
+    return make_space(
+        model,
+        find_node(model, space.recorded_scope_id()),
+        space_type=type(space),
+        build=Build() if build is None else build,
+        **kwargs,
+    )
+
+
 def _configure_mvau_point(
-    bound: MvauDataflowOp,
+    bound: MvauSpace,
     *,
     supply: WeightSupply = WeightSupply.EXTERNAL,
     pe: int = 2,
     simd: int = 2,
     pumped: bool = False,
-) -> MvauDataflowOp:
+) -> MvauSpace:
     """Select an explicit supply and compatible compute candidate."""
 
     chosen = bound.kernel.select("dot_product").root
@@ -256,34 +292,34 @@ def _configured_mvau(
     pe: int = 2,
     simd: int = 2,
     pumped: bool = False,
-) -> tuple[ModelWrapper, MvauDataflowOp]:
+) -> tuple[ModelWrapper, MvauSpace]:
     """Bind, choose, and record -- the whole lifecycle a caller actually runs."""
 
     model = model or _mvau_model()
-    operation = _unbound(model, "mvau0").bind(model, Build())
-    assert isinstance(operation, MvauDataflowOp)
+    operation = _space_for(_unbound(model, "mvau0"), model, Build())
+    assert isinstance(operation, MvauSpace)
     chosen = _configure_mvau_point(operation, supply=supply, pe=pe, simd=simd, pumped=pumped)
-    committed = chosen.commit(model, Build())
-    assert isinstance(committed, MvauDataflowOp)
+    committed = _save(chosen, model, Build())
+    assert isinstance(committed, MvauSpace)
     return model, committed
 
 
 def _configured_replay(
     model: ModelWrapper | None = None, *, pe: int = 1, simd: int = 4
-) -> tuple[ModelWrapper, ActivationReplayOp]:
+) -> tuple[ModelWrapper, ReplaySpace]:
     model = model or _replay_model()
-    chosen = _unbound(model, "replay0").bind(model, Build())
+    chosen = _space_for(_unbound(model, "replay0"), model, Build())
     for declaration, value in (
         (ActivationReplayKernel.pe, pe),
         (ActivationReplayKernel.simd, simd),
     ):
         chosen = chosen.kernel.assign(declaration, value).root
-    committed = chosen.commit(model, Build())
-    assert isinstance(committed, ActivationReplayOp)
+    committed = _save(chosen, model, Build())
+    assert isinstance(committed, ReplaySpace)
     return model, committed
 
 
-def _replay_build_spec(operation: ActivationReplayOp) -> Any:
+def _replay_build_spec(operation: ReplaySpace) -> Any:
     kernel = operation.kernel.child("replay")
     assert isinstance(kernel, Decided)
     physical = kernel.value.physical.accepted_answer
@@ -316,7 +352,9 @@ def test_standalone_replay_preserves_every_requested_copy_across_reload(
         repetitions, matrix_width
     )
     context: dict[str, Any] = {"activation": activation}
-    operation.execute_node(context, model.graph)
+    adapter = _unbound(model, "replay0")
+    adapter.space = operation
+    adapter.execute_node(context, model.graph)
 
     network = operation.network
     assert isinstance(network, Decided)
@@ -343,8 +381,8 @@ def test_standalone_replay_preserves_every_requested_copy_across_reload(
     path = tmp_path / f"replay-r{repetitions}-w{matrix_width}-f{folds}-s{simd}.onnx"
     model.save(str(path))
     restored_model = ModelWrapper(str(path))
-    restored = _unbound(restored_model, "replay0").bind(restored_model, Build())
-    assert isinstance(restored, ActivationReplayOp)
+    restored = _space_for(_unbound(restored_model, "replay0"), restored_model, Build())
+    assert isinstance(restored, ReplaySpace)
     assert dict(restored.recorded()) == dict(operation.recorded())
     restored_spec = _replay_build_spec(restored)
     assert restored_spec.parameters == spec.parameters
@@ -360,7 +398,7 @@ def test_standalone_replay_preserves_every_requested_copy_across_reload(
 
 def test_standalone_replay_refuses_an_explicit_pe_greater_than_one() -> None:
     model = _replay_model(folds=4)
-    bound = _unbound(model, "replay0").bind(model, Build())
+    bound = _space_for(_unbound(model, "replay0"), model, Build())
 
     with pytest.raises(RequestError) as caught:
         bound.kernel.assign(ActivationReplayKernel.pe, 2)
@@ -381,7 +419,7 @@ def test_a_saved_standalone_replay_pe_greater_than_one_is_not_reinterpreted(
     before = restored.model.SerializeToString(deterministic=True)
 
     with pytest.raises(DataflowOpError, match="standalone activation replay requires PE=1"):
-        _unbound(restored, "replay0").bind(restored, Build())
+        _space_for(_unbound(restored, "replay0"), restored, Build())
 
     assert restored.model.SerializeToString(deterministic=True) == before
 
@@ -392,7 +430,7 @@ def test_pre_unified_design_choice_attributes_are_rejected_without_writes() -> N
     before = model.model.SerializeToString(deterministic=True)
 
     with pytest.raises(DataflowOpError, match="pre-unified Design choice attributes"):
-        _unbound(model, "replay0").bind(model, Build())
+        _space_for(_unbound(model, "replay0"), model, Build())
 
     assert model.model.SerializeToString(deterministic=True) == before
 
@@ -403,13 +441,13 @@ def test_pre_unified_design_choice_attributes_are_rejected_without_writes() -> N
 def test_the_operation_class_is_the_space() -> None:
     """No wrapper, no separate source Space, no ``.occurrence()``."""
 
-    declarations = dict(declared_members(MvauDataflowOp))
+    declarations = dict(declared_members(MvauSpace))
 
     assert isinstance(declarations["activation"], Problem)
     assert isinstance(declarations["weight"], Problem)
     assert "kernel" in declarations
-    assert not hasattr(MvauDataflowOp, "source_space")
-    assert not hasattr(MvauDataflowOp, "occurrence")
+    assert not hasattr(MvauSpace, "source_space")
+    assert not hasattr(MvauSpace, "occurrence")
 
 
 def test_qonnx_constructs_the_unbound_instance_through_its_own_registry() -> None:
@@ -418,15 +456,16 @@ def test_qonnx_constructs_the_unbound_instance_through_its_own_registry() -> Non
     model = _mvau_model()
     bare = getCustomOp(model.graph.node[0])
 
-    assert isinstance(bare, MvauDataflowOp)
-    assert not bare.is_bound
+    assert isinstance(bare, DataflowOp)
+    with pytest.raises(DataflowOpError, match="creation has not completed"):
+        _ = bare.space
 
 
 def test_wants_model_is_a_class_attribute_and_attach_is_the_qonnx_protocol() -> None:
     """A method here would be accidentally truthy for an operation meaning no."""
 
-    assert MvauDataflowOp.wants_model is True
-    assert not callable(MvauDataflowOp.__dict__.get("wants_model", True))
+    assert DataflowOp.wants_model is True
+    assert not callable(DataflowOp.__dict__["wants_model"])
 
     model = _mvau_model()
     operation = _unbound(model, "mvau0")
@@ -439,20 +478,20 @@ def test_wants_model_is_a_class_attribute_and_attach_is_the_qonnx_protocol() -> 
 def test_binding_returns_the_same_concrete_class_attached() -> None:
     model = _mvau_model()
 
-    bound = _unbound(model, "mvau0").bind(model, Build())
+    bound = _space_for(_unbound(model, "mvau0"), model, Build())
 
-    assert type(bound) is MvauDataflowOp
+    assert type(bound) is MvauSpace
     assert bound.is_bound
     assert bound.root is bound
 
 
 def test_a_successor_carries_the_same_frozen_binding() -> None:
     model = _mvau_model()
-    bound = _unbound(model, "mvau0").bind(model, Build())
+    bound = _space_for(_unbound(model, "mvau0"), model, Build())
 
     successor = bound.kernel.select("dot_product").root
 
-    assert type(successor) is MvauDataflowOp
+    assert type(successor) is MvauSpace
     assert successor is not bound
     assert successor.problem_snapshot is bound.problem_snapshot
     assert successor.problem_fingerprint == bound.problem_fingerprint
@@ -462,8 +501,8 @@ def test_a_child_design_and_kernel_cannot_reach_the_binding() -> None:
     """The capability boundary the root factory exists to keep."""
 
     model = _mvau_model()
-    bound = _unbound(model, "mvau0").bind(model, Build())
-    assert isinstance(bound, MvauDataflowOp)
+    bound = _space_for(_unbound(model, "mvau0"), model, Build())
+    assert isinstance(bound, MvauSpace)
     chosen = _configure_mvau_point(bound)
 
     design = chosen.kernel.alternative("dot_product")
@@ -477,7 +516,7 @@ def test_a_child_design_and_kernel_cannot_reach_the_binding() -> None:
 
 def test_a_live_node_edit_does_not_change_a_bound_answer() -> None:
     model = _mvau_model()
-    bound = _unbound(model, "mvau0").bind(model, Build())
+    bound = _space_for(_unbound(model, "mvau0"), model, Build())
     fingerprint = bound.problem_fingerprint
 
     model.set_tensor_datatype("activation", DataType["INT4"])
@@ -485,17 +524,17 @@ def test_a_live_node_edit_does_not_change_a_bound_answer() -> None:
 
     assert bound.problem_fingerprint == fingerprint
     assert bound.source.node_name == "mvau0"
-    assert bound.onnx_node.name == "mvau0"
+    assert bound.node_snapshot().name == "mvau0"
 
 
 def test_rebinding_observes_the_edit() -> None:
     model = _mvau_model()
-    bound = _unbound(model, "mvau0").bind(model, Build())
+    bound = _space_for(_unbound(model, "mvau0"), model, Build())
     fingerprint = bound.problem_fingerprint
 
     model.set_tensor_datatype("activation", DataType["INT4"])
 
-    assert bound.rebind(model, Build()).problem_fingerprint != fingerprint
+    assert _rebind(bound, model, Build()).problem_fingerprint != fingerprint
 
 
 def test_a_missing_shape_or_datatype_is_a_source_refusal() -> None:
@@ -503,10 +542,10 @@ def test_a_missing_shape_or_datatype_is_a_source_refusal() -> None:
     model.graph.node[0].input[1] = "unknown_tensor"
 
     with pytest.raises(SourceError, match="has no shape"):
-        _unbound(model, "mvau0").bind(model, Build())
+        _space_for(_unbound(model, "mvau0"), model, Build())
 
 
-def test_binding_without_a_scope_id_names_the_upgrade_transaction() -> None:
+def test_factory_without_scope_id_does_not_create_identity() -> None:
     """Identity belongs to whoever constructs the node, never to a read."""
 
     model = _mvau_model()
@@ -518,8 +557,9 @@ def test_binding_without_a_scope_id_names_the_upgrade_transaction() -> None:
     operation = _unbound(model, "mvau0")
 
     assert operation.recorded_scope_id() is None
-    with pytest.raises(SourceError, match="AssignDataflowScopeIds"):
-        operation.bind(model, Build())
+    before = model.model.SerializeToString(deterministic=True)
+    assert operation.space.operand_type("result") == Decided(DataType["INT32"])
+    assert model.model.SerializeToString(deterministic=True) == before
 
 
 def test_the_two_operations_read_entirely_different_operand_sets() -> None:
@@ -554,7 +594,7 @@ def test_the_two_operations_read_entirely_different_operand_sets() -> None:
 
 
 def test_a_tensor_lowers_to_explicit_named_facets() -> None:
-    declarations = dict(declared_members(MvauDataflowOp))
+    declarations = dict(declared_members(MvauSpace))
 
     assert "weight__shape" in declarations
     assert "weight__rank" in declarations
@@ -570,12 +610,12 @@ def test_a_tensor_lowers_to_explicit_named_facets() -> None:
 
 
 def test_a_facet_accessor_returns_the_generated_declaration() -> None:
-    declarations = dict(declared_members(MvauDataflowOp))
+    declarations = dict(declared_members(MvauSpace))
 
-    assert MvauDataflowOp.__dict__["weight"].shape is declarations["weight__shape"]
+    assert MvauSpace.__dict__["weight"].shape is declarations["weight__shape"]
 
     with pytest.raises(AttributeError, match="no facet"):
-        _ = MvauDataflowOp.__dict__["weight"].nonsense
+        _ = MvauSpace.__dict__["weight"].nonsense
 
 
 def test_an_optional_operand_gets_a_presence_facet_and_absent_facets_refuse() -> None:
@@ -601,25 +641,25 @@ def test_an_output_observation_never_reaches_the_point() -> None:
 
     assert isinstance(OpInput(index=0), Problem)
     assert not isinstance(OpOutput(index=0), Problem)
-    assert "output" not in dict(declared_members(MvauDataflowOp))
-    assert isinstance(dict(declared_members(MvauDataflowOp))["accumulator_type"], Problem)
+    assert "output" not in dict(declared_members(MvauSpace))
+    assert isinstance(dict(declared_members(MvauSpace))["accumulator_type"], Problem)
 
     model = _mvau_model()
-    before = _unbound(model, "mvau0").bind(model, Build()).problem_fingerprint
+    before = _space_for(_unbound(model, "mvau0"), model, Build()).problem_fingerprint
     model.set_tensor_datatype("output", DataType["INT16"])
 
-    assert _unbound(model, "mvau0").bind(model, Build()).problem_fingerprint == before
+    assert _space_for(_unbound(model, "mvau0"), model, Build()).problem_fingerprint == before
 
 
 def test_a_tensor_rename_does_not_change_the_problem_identity() -> None:
     """An operation does not depend on what its input is called."""
 
     model = _mvau_model()
-    before = _unbound(model, "mvau0").bind(model, Build()).problem_fingerprint
+    before = _space_for(_unbound(model, "mvau0"), model, Build()).problem_fingerprint
 
     model.rename_tensor("weight", "the_matrix")
 
-    assert _unbound(model, "mvau0").bind(model, Build()).problem_fingerprint == before
+    assert _space_for(_unbound(model, "mvau0"), model, Build()).problem_fingerprint == before
 
 
 def test_the_initializer_values_move_the_identity_where_declared() -> None:
@@ -628,15 +668,15 @@ def test_the_initializer_values_move_the_identity_where_declared() -> None:
     right.set_initializer("weight", np.ones((8, 4), dtype=np.float32))
 
     assert (
-        _unbound(left, "mvau0").bind(left, Build()).problem_fingerprint
-        != _unbound(right, "mvau0").bind(right, Build()).problem_fingerprint
+        _space_for(_unbound(left, "mvau0"), left, Build()).problem_fingerprint
+        != _space_for(_unbound(right, "mvau0"), right, Build()).problem_fingerprint
     )
 
 
 def test_a_generated_facet_name_may_not_be_shadowed() -> None:
     with pytest.raises(AuthoringError, match="collides"):
 
-        class Shadowing(DataflowOp):
+        class Shadowing(DataflowSpace):
             family = "test.shadowing"
             weight = OpInput(index=0)
             weight__shape = OpInput(index=1)
@@ -688,7 +728,7 @@ def test_an_unselected_kernel_is_unresolved_and_not_an_exception() -> None:
     """A structural choice not yet made is a point state, not a defect."""
 
     model = _mvau_model()
-    bound = _unbound(model, "mvau0").bind(model, Build())
+    bound = _space_for(_unbound(model, "mvau0"), model, Build())
 
     assessment = bound.dataflow
 
@@ -706,7 +746,7 @@ def test_the_operations_own_constraints_gate_its_projection() -> None:
     # A rank-1 matrix: mathematically not a matrix-vector multiplication.
     model.set_tensor_shape("weight", [8])
     model.set_initializer("weight", np.zeros((8,), dtype=np.float32))
-    bound = _unbound(model, "mvau0").bind(model, Build())
+    bound = _space_for(_unbound(model, "mvau0"), model, Build())
 
     assessment = bound.dataflow
 
@@ -724,9 +764,9 @@ def test_a_malformed_shape_gives_a_finding_not_a_crash() -> None:
     model = _mvau_model()
     model.set_tensor_shape("weight", [8])
     model.set_initializer("weight", np.zeros((8,), dtype=np.float32))
-    bound = _unbound(model, "mvau0").bind(model, Build())
+    bound = _space_for(_unbound(model, "mvau0"), model, Build())
 
-    answer = bound.answer(MvauDataflowOp.matrix_height)
+    answer = bound.answer(MvauSpace.matrix_height)
 
     assert not isinstance(answer, Decided)
     assert {finding.code for finding in answer.findings} >= {"mvau-weight-not-a-matrix"}
@@ -737,14 +777,14 @@ def test_a_repairable_output_annotation_is_a_difference_not_a_rejection() -> Non
 
     model = _mvau_model()
     model.set_tensor_shape("output", [2, 99])
-    bound = _unbound(model, "mvau0").bind(model, Build())
-    assert isinstance(bound, MvauDataflowOp)
+    bound = _space_for(_unbound(model, "mvau0"), model, Build())
+    assert isinstance(bound, MvauSpace)
     chosen = _configure_mvau_point(bound)
 
     assert isinstance(chosen.dataflow.accepted_answer, Decided)
     assert any("output" in item for item in chosen.reconciliation())
 
-    committed = chosen.commit(model, Build())
+    committed = _save(chosen, model, Build())
 
     assert tuple(model.get_tensor_shape("output")) == (2, 4)
     assert committed.reconciliation() == ()
@@ -752,8 +792,8 @@ def test_a_repairable_output_annotation_is_a_difference_not_a_rejection() -> Non
 
 def test_an_uncommitted_folding_leaves_the_network_unresolved() -> None:
     model = _mvau_model()
-    bound = _unbound(model, "mvau0").bind(model, Build())
-    assert isinstance(bound, MvauDataflowOp)
+    bound = _space_for(_unbound(model, "mvau0"), model, Build())
+    assert isinstance(bound, MvauSpace)
     chosen = bound.kernel.select("dot_product").root
     chosen = (
         chosen.kernel.alternative("dot_product")
@@ -776,7 +816,7 @@ def test_choices_survive_a_save_and_reload_exactly(tmp_path: Path) -> None:
     path = tmp_path / "mvau.onnx"
     model.save(str(path))
     reloaded = ModelWrapper(str(path))
-    restored = _unbound(reloaded, "mvau0").bind(reloaded, Build())
+    restored = _space_for(_unbound(reloaded, "mvau0"), reloaded, Build())
 
     assert dict(restored.recorded()) == dict(operation.recorded())
     after = restored.network
@@ -798,10 +838,10 @@ def test_weight_supply_and_compute_choices_can_be_switched_without_stale_state()
         WeightSupply.DECOUPLED,
         WeightSupply.EXTERNAL,
     ):
-        rebound = _unbound(model, "mvau0").bind(model, Build())
-        assert isinstance(rebound, MvauDataflowOp)
+        rebound = _space_for(_unbound(model, "mvau0"), model, Build())
+        assert isinstance(rebound, MvauSpace)
         chosen = _configure_mvau_point(rebound.reconstruct(), supply=supply)
-        committed = chosen.commit(model, Build())
+        committed = _save(chosen, model, Build())
         recorded = dict(committed.recorded())
         candidate = "dotp_axi_embedded" if supply is WeightSupply.EMBEDDED else "dotp_axi"
         assert recorded["kernel.case"] == "dot_product"
@@ -822,13 +862,13 @@ def test_weight_supply_and_compute_choices_can_be_switched_without_stale_state()
 
 def test_a_partial_point_may_be_saved(tmp_path: Path) -> None:
     model = _mvau_model()
-    chosen = _unbound(model, "mvau0").bind(model, Build()).kernel.select("dot_product").root
-    chosen.commit(model, Build())
+    chosen = _space_for(_unbound(model, "mvau0"), model, Build()).kernel.select("dot_product").root
+    _save(chosen, model, Build())
 
     path = tmp_path / "partial.onnx"
     model.save(str(path))
     reloaded = ModelWrapper(str(path))
-    restored = _unbound(reloaded, "mvau0").bind(reloaded, Build())
+    restored = _space_for(_unbound(reloaded, "mvau0"), reloaded, Build())
 
     # Only the Kernel family is chosen; supply, candidate and folding remain
     # deliberately unresolved and therefore absent from native state.
@@ -840,7 +880,7 @@ def test_a_refused_point_may_not_be_saved() -> None:
     """Unresolved is a legitimate thing to record; refused is not."""
 
     model = _mvau_model(matrix_height=4)
-    chosen = _unbound(model, "mvau0").bind(model, Build()).kernel.select("dot_product").root
+    chosen = _space_for(_unbound(model, "mvau0"), model, Build()).kernel.select("dot_product").root
 
     # 3 does not divide a matrix height of 4, so the assignment itself refuses.
     with pytest.raises(Exception):  # noqa: B017 - RequestError from the engine
@@ -852,7 +892,7 @@ def test_source_change_refuses_a_plan_but_node_rename_does_not() -> None:
     effects = operation.graph_effects()
     model.graph.node[0].name = "renamed"
     apply_graph_effects(model, effects)
-    effects = operation.rebind(model).graph_effects()
+    effects = _rebind(operation, model).graph_effects()
     model.set_initializer("weight", np.ones((8, 4), dtype=np.float32))
     before = model.model.SerializeToString(deterministic=True)
     with pytest.raises(DataflowOpError, match="initializer_content|different problem"):
@@ -896,7 +936,7 @@ def test_an_unknown_native_schema_version_is_refused() -> None:
     model, _operation = _configured_mvau()
     _replace_attribute(model, SCHEMA_VERSION_ATTRIBUTE, 99)
     with pytest.raises(DataflowOpError, match="this build writes"):
-        _unbound(model, "mvau0").bind(model, Build())
+        _space_for(_unbound(model, "mvau0"), model, Build())
 
 
 def test_old_mvau_schema_two_is_refused_without_writes() -> None:
@@ -904,7 +944,7 @@ def test_old_mvau_schema_two_is_refused_without_writes() -> None:
     _replace_attribute(model, SCHEMA_VERSION_ATTRIBUTE, 2)
     before = model.model.SerializeToString(deterministic=True)
     with pytest.raises(DataflowOpError, match="writes schema version 8"):
-        _unbound(model, "mvau0").bind(model, Build())
+        _space_for(_unbound(model, "mvau0"), model, Build())
     assert model.model.SerializeToString(deterministic=True) == before
 
 
@@ -930,12 +970,12 @@ def test_reconstruct_refuses_an_arbitrary_problem() -> None:
 
 def test_changed_source_stales_old_evaluation_but_choices_replay_on_current_facts() -> None:
     model, operation = _configured_mvau()
-    assert not operation.is_stale((model, Build()))
+    assert not operation.is_stale(_rebind(operation, model, Build()).problem_snapshot)
 
     model.set_tensor_datatype("activation", DataType["INT4"])
 
-    assert operation.is_stale((model, Build()))
-    current = _unbound(model, "mvau0").bind(model, Build())
+    assert operation.is_stale(_rebind(operation, model, Build()).problem_snapshot)
+    current = _space_for(_unbound(model, "mvau0"), model, Build())
     assert current.recorded() == operation.recorded()
     assert current.source.operand("activation").datatype == DataType["INT4"]
 
@@ -947,7 +987,7 @@ def test_an_incomplete_native_metadata_envelope_is_refused() -> None:
     del node.attribute[:]
     node.attribute.extend(kept)
     with pytest.raises(DataflowOpError, match="schema version"):
-        _unbound(model, "mvau0").bind(model, Build())
+        _space_for(_unbound(model, "mvau0"), model, Build())
 
 
 def test_a_partly_applied_transaction_restores_the_whole_model() -> None:
@@ -975,11 +1015,11 @@ def test_commit_returns_a_bound_operation_over_the_committed_graph() -> None:
     """The lifecycle continues across the mutation boundary."""
 
     model = _mvau_model()
-    chosen = _unbound(model, "mvau0").bind(model, Build()).kernel.select("dot_product").root
+    chosen = _space_for(_unbound(model, "mvau0"), model, Build()).kernel.select("dot_product").root
 
-    committed = chosen.commit(model, Build())
+    committed = _save(chosen, model, Build())
 
-    assert type(committed) is MvauDataflowOp
+    assert type(committed) is MvauSpace
     assert committed.is_bound
     assert dict(committed.recorded())["kernel.case"] == "dot_product"
 
@@ -1059,7 +1099,7 @@ def test_the_scope_id_survives_a_rename_of_the_node() -> None:
     model, operation = _configured_mvau()
     scope = operation.recorded_scope_id()
     model.graph.node[0].name = "renamed"
-    renamed = operation.rebind(model)
+    renamed = _rebind(operation, model)
     assert renamed.recorded_scope_id() == scope
     assert renamed.source.node_name == "renamed"
     assert operation.operand_mapping == renamed.operand_mapping
@@ -1076,8 +1116,8 @@ def test_persistence_is_discovered_from_the_model_not_declared_by_the_operation(
     subspaces cannot collide, because compiled paths cannot.
     """
 
-    assert not hasattr(MvauDataflowOp, "attributes")
-    assert not hasattr(ActivationReplayOp, "attributes")
+    assert not hasattr(MvauSpace, "attributes")
+    assert not hasattr(ReplaySpace, "attributes")
 
     _model, replay = _configured_replay()
     _other, mvau = _configured_mvau()
@@ -1104,21 +1144,21 @@ def test_an_unreachable_recorded_choice_is_refused() -> None:
     model, _operation = _configured_mvau()
     _replace_attribute(model, "kernel__dot_product__compute__dotp_axi_embedded__compute_pumping", 0)
     with pytest.raises(DataflowOpError):
-        _unbound(model, "mvau0").bind(model, Build())
+        _space_for(_unbound(model, "mvau0"), model, Build())
 
 
 def test_a_wrong_native_attribute_kind_is_refused() -> None:
     model, _operation = _configured_mvau()
     _replace_attribute(model, "kernel__dot_product__pe", "2")
     with pytest.raises(DataflowOpError, match="expected native"):
-        _unbound(model, "mvau0").bind(model, Build())
+        _space_for(_unbound(model, "mvau0"), model, Build())
 
 
 def test_legacy_json_state_is_refused_without_a_migration_reader() -> None:
     model = _mvau_model()
     _replace_attribute(model, "dataflow_state", "{}")
     with pytest.raises(DataflowOpError, match="legacy JSON"):
-        _unbound(model, "mvau0").bind(model, Build())
+        _space_for(_unbound(model, "mvau0"), model, Build())
 
 
 def test_both_operations_use_the_same_persistence_authority(tmp_path: Path) -> None:
@@ -1127,7 +1167,7 @@ def test_both_operations_use_the_same_persistence_authority(tmp_path: Path) -> N
         path = tmp_path / f"{name}.onnx"
         model.save(str(path))
         reloaded = ModelWrapper(str(path))
-        restored = _unbound(reloaded, name).bind(reloaded, Build())
+        restored = _space_for(_unbound(reloaded, name), reloaded, Build())
         assert dict(restored.recorded()) == dict(operation.recorded())
 
 
@@ -1199,7 +1239,7 @@ def test_a_cloned_node_is_given_a_distinct_identity() -> None:
     clone = model.graph.node.add()
     clone.CopyFrom(original)
     clone.name = "mvau1"
-    shared = _unbound(model, "mvau0").recorded_scope_id()
+    shared = read_attributes(original)[SCOPE_ID_ATTRIBUTE].value
 
     assigned = AssignDataflowScopeIds(DATAFLOW_DOMAIN).normalize(model)
 
@@ -1216,8 +1256,8 @@ def test_binding_refuses_a_graph_that_still_contains_duplicates() -> None:
     clone.CopyFrom(model.graph.node[0])
     clone.name = "mvau1"
 
-    with pytest.raises(SourceError, match="carry dataflow scope id"):
-        _unbound(model, "mvau0").bind(model, Build())
+    with pytest.raises(DataflowOpError, match="carry dataflow scope id"):
+        _space_for(_unbound(model, "mvau0"), model, Build())
 
 
 def test_a_rename_preserves_identity() -> None:
@@ -1239,13 +1279,13 @@ def test_rebinding_reads_the_live_node_not_the_frozen_copy() -> None:
     """
 
     model = _mvau_model()
-    bound = _unbound(model, "mvau0").bind(model, Build())
+    bound = _space_for(_unbound(model, "mvau0"), model, Build())
 
     model.graph.node[0].name = "renamed"
     model.rename_tensor("activation", "a2")
     _set_attribute(model.graph.node[0], "binaryXnorMode", 1)
 
-    fresh = bound.rebind(model, Build())
+    fresh = _rebind(bound, model, Build())
 
     assert fresh.source.node_name == "renamed"
     assert fresh.source.operand("activation").tensor == "a2"
@@ -1258,9 +1298,9 @@ def test_rebinding_reads_the_live_node_not_the_frozen_copy() -> None:
 
 def test_rebinding_notices_a_changed_build_fact() -> None:
     model = _mvau_model()
-    bound = _unbound(model, "mvau0").bind(model, Build())
+    bound = _space_for(_unbound(model, "mvau0"), model, Build())
 
-    fresh = bound.rebind(model, Build(synth_clk_period_ns=10.0))
+    fresh = _rebind(bound, model, Build(synth_clk_period_ns=10.0))
 
     assert fresh.problem_fingerprint != bound.problem_fingerprint
 
@@ -1270,7 +1310,7 @@ def test_declared_operand_indices_must_be_contiguous() -> None:
 
     with pytest.raises(AuthoringError, match="contiguous from zero"):
 
-        class Sparse(DataflowOp):
+        class Sparse(DataflowSpace):
             family = "test.sparse"
             first = OpInput(index=0)
             third = OpInput(index=2)
@@ -1336,9 +1376,9 @@ def test_the_replay_operation_infers_through_the_same_passes() -> None:
 def test_the_bound_and_unbound_paths_use_one_formula() -> None:
     model = _mvau_model()
     unbound = _unbound(model, "mvau0")
-    bound = unbound.bind(model, Build())
+    bound = _space_for(unbound, model, Build())
 
-    assert unbound.expected_for(unbound.source_snapshot(model)) == bound.expected_outputs()
+    assert unbound.space.expected_outputs() == bound.expected_outputs()
 
 
 # -- U4i: the frozen snapshot is actually frozen --------------------------------
@@ -1348,23 +1388,25 @@ def test_successors_do_not_share_one_mutable_node() -> None:
     """A frozen dataclass holding a live protobuf is not frozen."""
 
     model = _mvau_model()
-    bound = _unbound(model, "mvau0").bind(model, Build())
+    bound = _space_for(_unbound(model, "mvau0"), model, Build())
     successor = bound.kernel.select("dot_product").root
 
-    assert successor.onnx_node is not bound.onnx_node
-    assert successor.onnx_node.SerializeToString(
+    assert successor.node_snapshot() is not bound.node_snapshot()
+    assert successor.node_snapshot().SerializeToString(
         deterministic=True
-    ) == bound.onnx_node.SerializeToString(deterministic=True)
+    ) == bound.node_snapshot().SerializeToString(deterministic=True)
 
 
 def test_a_bound_occurrence_refuses_node_mutation() -> None:
     """The write would appear to succeed and change nothing that matters."""
 
     model = _mvau_model()
-    bound = _unbound(model, "mvau0").bind(model, Build())
+    bound = _space_for(_unbound(model, "mvau0"), model, Build())
 
-    with pytest.raises(DataflowOpError, match="frozen snapshot"):
-        bound.set_nodeattr("binaryXnorMode", 1)
+    assert not hasattr(bound, "set_nodeattr")
+    snapshot = bound.node_snapshot()
+    snapshot.name = "changed-copy"
+    assert bound.node_snapshot().name == "mvau0"
 
     # The unbound wrapper is an ordinary CustomOp and still writes.
     _unbound(model, "mvau0").set_nodeattr("binaryXnorMode", 1)
@@ -1382,7 +1424,7 @@ def test_binding_resolves_the_node_from_the_supplied_model() -> None:
         if item.name == SCOPE_ID_ATTRIBUTE:
             item.s = scope.encode("utf-8")
 
-    bound = _unbound(left, "mvau0").bind(right, Build())
+    bound = _space_for(_unbound(left, "mvau0"), right, Build())
 
     assert bound.source.operand("activation").shape == (2, 16)
 
@@ -1428,9 +1470,9 @@ def test_a_zero_extent_gives_a_finding_not_a_division_by_zero() -> None:
     model = _mvau_model()
     model.set_tensor_shape("weight", [0, 4])
     model.set_initializer("weight", np.zeros((0, 4), dtype=np.float32))
-    bound = _unbound(model, "mvau0").bind(model, Build())
+    bound = _space_for(_unbound(model, "mvau0"), model, Build())
 
-    answer = bound.answer(MvauDataflowOp.repetitions)
+    answer = bound.answer(MvauSpace.repetitions)
 
     assert not isinstance(answer, Decided)
     assert {finding.code for finding in answer.findings} >= {"mvau-degenerate-extent"}
@@ -1439,9 +1481,9 @@ def test_a_zero_extent_gives_a_finding_not_a_division_by_zero() -> None:
 def test_a_zero_extent_replay_activation_gives_a_finding() -> None:
     model = _replay_model()
     model.set_tensor_shape("activation", [2, 0])
-    bound = _unbound(model, "replay0").bind(model, Build())
+    bound = _space_for(_unbound(model, "replay0"), model, Build())
 
-    answer = bound.answer(ActivationReplayOp.repetitions)
+    answer = bound.answer(ReplaySpace.repetitions)
 
     assert not isinstance(answer, Decided)
     assert {finding.code for finding in answer.findings} >= {"replay-degenerate-extent"}
@@ -1454,14 +1496,14 @@ def test_partial_commit_without_build_does_not_copy_old_build_facts() -> None:
     """Unrelated hardware facts may stay unavailable in a logical checkpoint."""
 
     model = _mvau_model()
-    chosen = _unbound(model, "mvau0").bind(model, Build()).kernel.select("dot_product").root
+    chosen = _space_for(_unbound(model, "mvau0"), model, Build()).kernel.select("dot_product").root
 
-    committed = chosen.commit(model)
+    committed = _save(chosen, model)
 
-    assert type(committed) is MvauDataflowOp
-    assert MvauDataflowOp.target_dsp not in committed.problem_snapshot
-    assert MvauDataflowOp.clock_period_ns not in committed.problem_snapshot
-    assert MvauDataflowOp.target_dsp in chosen.problem_snapshot
+    assert type(committed) is MvauSpace
+    assert MvauSpace.target_dsp not in committed.problem_snapshot
+    assert MvauSpace.clock_period_ns not in committed.problem_snapshot
+    assert MvauSpace.target_dsp in chosen.problem_snapshot
     assert dict(committed.recorded())["kernel.case"] == "dot_product"
 
 
@@ -1469,10 +1511,10 @@ def test_fresh_commit_revalidates_proposals_against_current_build_facts() -> Non
     """Proposal ancestry does not override explicitly supplied current facts."""
 
     model = _mvau_model()
-    chosen = _unbound(model, "mvau0").bind(model, Build()).kernel.select("dot_product").root
-    current = chosen.commit(model, Build(synth_clk_period_ns=10.0))
-    assert current.problem_snapshot[MvauDataflowOp.clock_period_ns] == 10.0
-    assert chosen.problem_snapshot[MvauDataflowOp.clock_period_ns] == 4.0
+    chosen = _space_for(_unbound(model, "mvau0"), model, Build()).kernel.select("dot_product").root
+    current = _save(chosen, model, Build(synth_clk_period_ns=10.0))
+    assert current.problem_snapshot[MvauSpace.clock_period_ns] == 10.0
+    assert chosen.problem_snapshot[MvauSpace.clock_period_ns] == 4.0
     assert current.recorded() == chosen.recorded()
 
 
@@ -1480,9 +1522,9 @@ def test_an_equivalent_build_at_commit_is_accepted() -> None:
     """A caller that passes the same configuration is not being punished."""
 
     model = _mvau_model()
-    chosen = _unbound(model, "mvau0").bind(model, Build()).kernel.select("dot_product").root
+    chosen = _space_for(_unbound(model, "mvau0"), model, Build()).kernel.select("dot_product").root
 
-    committed = chosen.commit(model, Build())
+    committed = _save(chosen, model, Build())
 
     assert dict(committed.recorded())["kernel.case"] == "dot_product"
 
@@ -1491,10 +1533,10 @@ def test_changing_the_build_context_is_a_rebinding_not_a_commit() -> None:
     """And it reads the graph rather than writing it."""
 
     model = _mvau_model()
-    bound = _unbound(model, "mvau0").bind(model, Build())
+    bound = _space_for(_unbound(model, "mvau0"), model, Build())
     before = model.model.SerializeToString(deterministic=True)
 
-    fresh = bound.rebind(model, Build(synth_clk_period_ns=10.0))
+    fresh = _rebind(bound, model, Build(synth_clk_period_ns=10.0))
 
     assert fresh.problem_fingerprint != bound.problem_fingerprint
     assert model.model.SerializeToString(deterministic=True) == before
@@ -1502,9 +1544,9 @@ def test_changing_the_build_context_is_a_rebinding_not_a_commit() -> None:
 
 def test_rebinding_without_a_build_reuses_the_frozen_facts() -> None:
     model = _mvau_model()
-    bound = _unbound(model, "mvau0").bind(model, Build())
+    bound = _space_for(_unbound(model, "mvau0"), model, Build())
 
-    assert bound.rebind(model).problem_fingerprint == bound.problem_fingerprint
+    assert _rebind(bound, model).problem_fingerprint == bound.problem_fingerprint
 
 
 # -- constraint classification -------------------------------------------------
@@ -1515,7 +1557,7 @@ def test_an_operation_constraint_must_be_classified() -> None:
 
     with pytest.raises(AuthoringError, match="outside source_accepts"):
 
-        class Unclassified(DataflowOp):
+        class Unclassified(DataflowSpace):
             family = "test.unclassified"
             activation = OpInput(index=0)
             result = OpOutput(index=0)
@@ -1526,7 +1568,7 @@ def test_an_operation_constraint_must_be_classified() -> None:
 
 
 def test_a_classified_operation_constraint_is_accepted() -> None:
-    class Classified(DataflowOp):
+    class Classified(DataflowSpace):
         family = "test.classified"
         activation = OpInput(index=0)
         result = OpOutput(index=0)
@@ -1543,7 +1585,7 @@ def test_a_classified_operation_constraint_is_accepted() -> None:
 def test_source_accepts_must_be_a_constraint_group() -> None:
     with pytest.raises(AuthoringError, match="names one ConstraintGroup"):
 
-        class Broken(DataflowOp):
+        class Broken(DataflowSpace):
             family = "test.broken-group"
             activation = OpInput(index=0)
             result = OpOutput(index=0)
@@ -1595,9 +1637,9 @@ def test_a_rank_one_activation_is_one_repetition_and_has_an_applicable_design() 
     """
 
     model = _rank_one_mvau_model()
-    bound = _unbound(model, "mvau0").bind(model, Build())
+    bound = _space_for(_unbound(model, "mvau0"), model, Build())
 
-    assert bound.answer(MvauDataflowOp.repetitions) == Decided(1)
+    assert bound.answer(MvauSpace.repetitions) == Decided(1)
 
     _model, operation = _configured_mvau(model)
     assert isinstance(operation.network, Decided)
@@ -1608,8 +1650,9 @@ def test_a_rank_one_activation_is_one_repetition_and_has_an_applicable_design() 
 def test_recorded_is_a_bound_api_and_native_values_are_inspectable() -> None:
     model, operation = _configured_mvau(supply=WeightSupply.EMBEDDED)
     assert operation.recorded()["kernel.dot_product.weight_supply"] is WeightSupply.EMBEDDED
-    with pytest.raises(DataflowOpError, match="not bound"):
-        _unbound(model, "mvau0").recorded()
+    adapter = _unbound(model, "mvau0")
+    assert not hasattr(adapter, "recorded")
+    assert adapter.space.recorded() == operation.recorded()
     assert (
         read_attributes(model.graph.node[0])["kernel__dot_product__weight_supply"].value
         == "embedded"

@@ -18,6 +18,7 @@ Three claims, and they are checked separately because they fail separately:
 """
 
 from __future__ import annotations
+from finn.dataflow.space.declarations import Space
 
 from dataclasses import dataclass
 from typing import Any
@@ -43,7 +44,9 @@ from finn.dataflow.analysis.integer_dot import (
 )
 from finn.dataflow.kernels.matmul.base import DspBlock
 from finn.dataflow.space.declarations import AuthoringError
-from finn.dataflow.ops.base import DATAFLOW_DOMAIN, DataflowOp, DataflowOpError
+from finn.dataflow.ops.base import DATAFLOW_DOMAIN, DataflowOpError
+from finn.dataflow.ops.space import DataflowSpace
+from finn.dataflow.ops.mvau.op import MvauDataflowOp
 from finn.dataflow.kernels.matmul.base import (
     AccumulationMode,
     ActivationMode,
@@ -51,11 +54,13 @@ from finn.dataflow.kernels.matmul.base import (
 )
 from finn.dataflow.ops.mvau.computation import execute_mvau
 from finn.dataflow.kernels.matmul.base import WeightedDotProductKernel
-from finn.dataflow.ops.mvau.op import origin_nodes, MvauDataflowOp
+from finn.dataflow.ops.mvau.op import origin_nodes, MvauSpace
 from finn.dataflow.ops.persistence import assign_dataflow_scope_ids
 from finn.dataflow.ops.schema import Attribute, OpInput, OpOutput
 
 from dataflow.ops.test_dataflow_op import (
+    _space_for,
+    _rebind,
     Build,
     _configured_mvau,
     _configure_mvau_point,
@@ -137,9 +142,9 @@ def _model(
     return model
 
 
-def _bound(model: ModelWrapper) -> MvauDataflowOp:
-    operation = _unbound(model, "mvau0").bind(model, Build())
-    assert isinstance(operation, MvauDataflowOp)
+def _bound(model: ModelWrapper) -> MvauSpace:
+    operation = _space_for(_unbound(model, "mvau0"), model, Build())
+    assert isinstance(operation, MvauSpace)
     return operation
 
 
@@ -147,16 +152,16 @@ def _findings(answer: Any) -> set[str]:
     return {finding.code for finding in getattr(answer, "findings", ())}
 
 
-def _accepts(operation: MvauDataflowOp) -> bool:
+def _accepts(operation: MvauSpace) -> bool:
     """Whether this node's own semantics are consistent."""
 
-    return operation.assess(MvauDataflowOp.source_accepts).verdict is True
+    return operation.assess(MvauSpace.source_accepts).verdict is True
 
 
-def _refusals(operation: MvauDataflowOp) -> set[str]:
+def _refusals(operation: MvauSpace) -> set[str]:
     """Every code the operation's own constraints reported."""
 
-    assessment = operation.assess(MvauDataflowOp.source_accepts)
+    assessment = operation.assess(MvauSpace.source_accepts)
     return {
         finding.code
         for answer in assessment.answers.values()
@@ -188,7 +193,7 @@ def test_the_profile_carries_both_axes_independently(
     thresholds = None if no_activation else np.zeros((MATRIX_HEIGHT, 1), dtype=np.float32)
     model = _model(no_activation=no_activation, binary_xnor=binary_xnor, thresholds=thresholds)
 
-    assert _bound(model).answer(MvauDataflowOp.profile) == Decided(
+    assert _bound(model).answer(MvauSpace.profile) == Decided(
         MvauComputationProfile(accumulation, activation)
     )
 
@@ -198,7 +203,7 @@ def test_bipolar_operands_are_a_popcount_whatever_the_attribute_says() -> None:
 
     model = _model(activation_type="BIPOLAR", weight_type="BIPOLAR")
 
-    assert _bound(model).answer(MvauDataflowOp.profile) == Decided(
+    assert _bound(model).answer(MvauSpace.profile) == Decided(
         MvauComputationProfile(AccumulationMode.BIPOLAR_POPCOUNT, ActivationMode.NONE)
     )
 
@@ -211,7 +216,7 @@ def test_a_thresholded_node_reads_its_threshold_operand() -> None:
     operation = _bound(_model(no_activation=False, thresholds=thresholds))
 
     assert operation.source.has("threshold")
-    assert operation.answer(MvauDataflowOp.threshold__present) == Decided(True)
+    assert operation.answer(MvauSpace.threshold__present) == Decided(True)
     assert operation.source.operand("threshold").shape == (MATRIX_HEIGHT, 1)
 
 
@@ -219,7 +224,7 @@ def test_a_plain_node_has_no_threshold_operand_and_that_is_not_a_refusal() -> No
     operation = _bound(_model())
 
     assert not operation.source.has("threshold")
-    assert operation.answer(MvauDataflowOp.threshold__present) == Decided(False)
+    assert operation.answer(MvauSpace.threshold__present) == Decided(False)
     assert _accepts(operation)
 
 
@@ -259,10 +264,10 @@ def test_narrow_weights_is_read_from_the_matrix_not_asserted_about_it() -> None:
     avoiding_it = np.full((MATRIX_WIDTH, MATRIX_HEIGHT), -127.0, dtype=np.float32)
 
     assert _bound(_model(weights=avoiding_it)).answer(
-        MvauDataflowOp.effective_narrow_weights
+        MvauSpace.effective_narrow_weights
     ) == Decided(True)
     assert _bound(_model(weights=using_minimum)).answer(
-        MvauDataflowOp.effective_narrow_weights
+        MvauSpace.effective_narrow_weights
     ) == Decided(False)
 
 
@@ -271,8 +276,8 @@ def test_a_matrix_with_no_initializer_is_not_promised_to_be_narrow() -> None:
 
     operation = _bound(_model(weight_initializer=False))
 
-    assert not isinstance(operation.answer(MvauDataflowOp.weight.value_summary), Decided)
-    assert operation.answer(MvauDataflowOp.effective_narrow_weights) == Decided(False)
+    assert not isinstance(operation.answer(MvauSpace.weight.value_summary), Decided)
+    assert operation.answer(MvauSpace.effective_narrow_weights) == Decided(False)
 
 
 def test_the_analysis_keeps_only_its_scalar_result() -> None:
@@ -280,7 +285,7 @@ def test_the_analysis_keeps_only_its_scalar_result() -> None:
 
     operation = _bound(_model(weights=np.full((MATRIX_WIDTH, MATRIX_HEIGHT), 3.0)))
 
-    assert operation.answer(MvauDataflowOp.weight_excludes_minimum) == Decided(True)
+    assert operation.answer(MvauSpace.weight_excludes_minimum) == Decided(True)
     assert all(not isinstance(value, np.ndarray) for value in operation.problem_snapshot.values())
 
 
@@ -296,7 +301,7 @@ def test_the_analysis_keeps_only_its_scalar_result() -> None:
 def test_the_analysis_says_nothing_when_it_cannot_ask(
     values: np.ndarray, expected: bool | None
 ) -> None:
-    answer = _bound(_model(weights=values)).answer(MvauDataflowOp.weight_excludes_minimum)
+    answer = _bound(_model(weights=values)).answer(MvauSpace.weight_excludes_minimum)
     if expected is None:
         assert not isinstance(answer, Decided)
     else:
@@ -350,7 +355,7 @@ def test_the_refusal_belongs_to_the_design_and_not_to_the_operation() -> None:
     )
     assert all(
         item is not WeightedDotProductKernel.computes_a_bare_accumulator
-        for item in MvauDataflowOp.source_accepts.constraints
+        for item in MvauSpace.source_accepts.constraints
     )
 
 
@@ -361,7 +366,12 @@ def _executed(model: ModelWrapper, **values: np.ndarray) -> np.ndarray:
     operation = _unbound(model, "mvau0")
     operation.attach_model(model)
     context: dict[str, Any] = dict(values)
-    operation.execute_node(context, model.graph)
+    if isinstance(operation, Space):
+        adapter = _unbound(model, "mvau0")
+        adapter.space = operation
+        adapter.execute_node(context, model.graph)
+    else:
+        operation.execute_node(context, model.graph)
     return np.asarray(context["output"])
 
 
@@ -488,7 +498,7 @@ def test_execution_without_a_model_refuses_rather_than_guessing_a_datatype() -> 
     model = _model()
     operation = MvauDataflowOp(model.graph.node[0], 1)
 
-    with pytest.raises(DataflowOpError, match="no model attached"):
+    with pytest.raises(DataflowOpError, match="creation has not completed"):
         operation.execute_node({}, model.graph)
 
 
@@ -501,7 +511,12 @@ def test_a_bound_occurrence_executes_from_its_frozen_reading() -> None:
     operation = _bound(model)
 
     context: dict[str, Any] = {"activation": activation, "weight": weight}
-    operation.execute_node(context, model.graph)
+    if isinstance(operation, Space):
+        adapter = _unbound(model, "mvau0")
+        adapter.space = operation
+        adapter.execute_node(context, model.graph)
+    else:
+        operation.execute_node(context, model.graph)
 
     assert np.array_equal(context["output"], np.matmul(activation, weight))
 
@@ -511,8 +526,8 @@ def test_source_execution_is_independent_of_target_accumulator_limit() -> None:
     weight = np.ones((MATRIX_WIDTH, MATRIX_HEIGHT), dtype=np.float32)
     model = _model(output_type="INT64", weights=weight)
     operation = _bound(model)
-    source = operation.answer(MvauDataflowOp.source_numerical_report)
-    target = operation.answer(MvauDataflowOp.numerical_support)
+    source = operation.answer(MvauSpace.source_numerical_report)
+    target = operation.answer(MvauSpace.numerical_support)
     assert isinstance(source, Decided) and source.value.supported
     assert isinstance(target, Decided)
     assert {finding.code for finding in target.value.findings} == {
@@ -520,7 +535,12 @@ def test_source_execution_is_independent_of_target_accumulator_limit() -> None:
     }
 
     context: dict[str, Any] = {"activation": activation, "weight": weight}
-    operation.execute_node(context, model.graph)
+    if isinstance(operation, Space):
+        adapter = _unbound(model, "mvau0")
+        adapter.space = operation
+        adapter.execute_node(context, model.graph)
+    else:
+        operation.execute_node(context, model.graph)
     assert context["output"].dtype == np.int32
     assert np.array_equal(
         context["output"],
@@ -535,7 +555,12 @@ def test_unbound_source_execution_is_independent_of_target_accumulator_limit() -
     operation = _unbound(model, "mvau0")
     operation.attach_model(model)
     context: dict[str, Any] = {"activation": activation, "weight": weight}
-    operation.execute_node(context, model.graph)
+    if isinstance(operation, Space):
+        adapter = _unbound(model, "mvau0")
+        adapter.space = operation
+        adapter.execute_node(context, model.graph)
+    else:
+        operation.execute_node(context, model.graph)
     assert np.array_equal(
         context["output"],
         np.full((REPETITIONS, MATRIX_HEIGHT), MATRIX_WIDTH, dtype=np.int32),
@@ -548,9 +573,9 @@ def test_unbound_source_execution_is_independent_of_target_accumulator_limit() -
 def test_verify_node_reports_what_the_projection_would_refuse() -> None:
     """One set of checks, two audiences -- never two sets that can disagree."""
 
-    assert _bound(_model()).verify_node() == []
+    assert _unbound(_model(), "mvau0").verify_node() == []
 
-    broken = _bound(_model(no_activation=False))
+    broken = _unbound(_model(no_activation=False), "mvau0")
     messages = broken.verify_node()
 
     assert messages and any("threshold" in message for message in messages)
@@ -569,7 +594,7 @@ def test_the_node_attributes_keep_the_names_finns_graphs_already_use() -> None:
 def test_two_members_may_not_read_one_node_attribute() -> None:
     with pytest.raises(AuthoringError, match="one graph attribute is one source fact"):
 
-        class Doubled(DataflowOp):
+        class Doubled(DataflowSpace):
             family = "test.doubled"
             activation = OpInput(index=0)
             result = OpOutput(index=0)
@@ -589,17 +614,22 @@ def test_the_replay_operation_executes_its_own_semantics() -> None:
     activation = np.arange(2 * 8, dtype=np.float32).reshape(2, 8)
 
     context: dict[str, Any] = {"activation": activation}
-    operation.execute_node(context, model.graph)
+    if isinstance(operation, Space):
+        adapter = _unbound(model, "mvau0")
+        adapter.space = operation
+        adapter.execute_node(context, model.graph)
+    else:
+        operation.execute_node(context, model.graph)
 
     assert np.array_equal(context["expanded"], np.repeat(activation, 4, axis=0))
 
 
 def test_the_replay_operation_verifies_its_own_semantics() -> None:
     model = _replay_model()
-    assert _unbound(model, "replay0").bind(model, Build()).verify_node() == []
+    assert _unbound(model, "replay0").verify_node() == []
 
     model.set_tensor_shape("activation", [8])
-    broken = _unbound(model, "replay0").bind(model, Build())
+    broken = _unbound(model, "replay0")
 
     assert any("matrix-shaped" in message for message in broken.verify_node())
 
@@ -614,9 +644,9 @@ def test_a_stale_output_annotation_is_still_not_a_verification_failure() -> None
 
     model = _replay_model()
     model.set_tensor_shape("expanded", [99, 8])
-    operation = _unbound(model, "replay0").bind(model, Build())
+    operation = _space_for(_unbound(model, "replay0"), model, Build())
 
-    assert operation.verify_node() == []
+    assert _unbound(model, "replay0").verify_node() == []
     assert operation.reconciliation() != ()
 
 
@@ -692,7 +722,7 @@ def _fused(output_type: str = "UINT4") -> Any:
 def test_a_fused_output_datatype_is_in_the_problem_and_its_fingerprint() -> None:
     """It decides the scale and bias, so it decides the numbers."""
 
-    assert _fused("UINT4").answer(MvauDataflowOp.output_type) == Decided(DataType["UINT4"])
+    assert _fused("UINT4").answer(MvauSpace.output_type) == Decided(DataType["UINT4"])
     assert _fused("UINT4").problem_fingerprint != _fused("BIPOLAR").problem_fingerprint
 
 
@@ -706,7 +736,7 @@ def test_a_plain_node_does_not_take_its_output_annotation_as_a_fact() -> None:
     other_model.set_tensor_datatype("output", DataType["UINT8"])
     other = _bound(other_model)
 
-    assert plain.answer(MvauDataflowOp.output_type) == Decided(DataType["INT32"])
+    assert plain.answer(MvauSpace.output_type) == Decided(DataType["INT32"])
     assert plain.problem_fingerprint == other.problem_fingerprint
 
 
@@ -749,8 +779,8 @@ class RuntimeBuild(Build):
 
 def _narrow(build: Build, *, weights: np.ndarray | None = None) -> Any:
     model = _model(weights=weights)
-    operation = _unbound(model, "mvau0").bind(model, build)
-    return operation.answer(MvauDataflowOp.effective_narrow_weights)
+    operation = _space_for(_unbound(model, "mvau0"), model, build)
+    return operation.answer(MvauSpace.effective_narrow_weights)
 
 
 def test_a_runtime_written_matrix_uses_datatype_sizing_not_initializer_or_flag() -> None:
@@ -780,8 +810,8 @@ def test_the_runtime_facts_are_part_of_the_problem_identity() -> None:
     """They change what is built, so a recorded choice must not outlive them."""
 
     model = _model()
-    plain = _unbound(model, "mvau0").bind(model, Build())
-    runtime = _unbound(model, "mvau0").bind(model, RuntimeBuild())
+    plain = _space_for(_unbound(model, "mvau0"), model, Build())
+    runtime = _space_for(_unbound(model, "mvau0"), model, RuntimeBuild())
 
     assert plain.problem_fingerprint != runtime.problem_fingerprint
 
@@ -810,30 +840,30 @@ def test_unknown_runtime_weights_fall_back_to_full_datatype_bounds() -> None:
     scope = wrapper.recorded_scope_id()
     assert scope is not None
 
-    valid = wrapper.bind(
-        model,
-        RuntimeBuild(runtime_weight_promise=_runtime_promise(scope)),
-    )
-    report = valid.answer(MvauDataflowOp.numerical_support)
+    valid = _space_for(wrapper, model, RuntimeBuild(runtime_weight_promise=_runtime_promise(scope)))
+    report = valid.answer(MvauSpace.numerical_support)
     assert isinstance(report, Decided) and report.value.supported
     assert report.value.support is not None
     assert isinstance(report.value.support.premise.weights, DatatypeWeightPremise)
     context: dict[str, Any] = {"activation": activation, "weight": weights}
-    valid.execute_node(context, model.graph)
+    wrapper.space = valid
+    wrapper.execute_node(context, model.graph)
     assert context["output"].dtype == np.int32
     assert np.array_equal(
         context["output"],
         np.full((REPETITIONS, MATRIX_HEIGHT), 2 * MATRIX_WIDTH, dtype=np.int32),
     )
 
-    wrong_scope = wrapper.bind(
+    wrong_scope = _space_for(
+        wrapper,
         model,
         RuntimeBuild(runtime_weight_promise=_runtime_promise("unrelated-invocation-A")),
     )
-    scope_fallback = wrong_scope.answer(MvauDataflowOp.numerical_support)
+    scope_fallback = wrong_scope.answer(MvauSpace.numerical_support)
     assert isinstance(scope_fallback, Decided) and scope_fallback.value.supported
 
-    wrong_source = wrapper.bind(
+    wrong_source = _space_for(
+        wrapper,
         model,
         RuntimeBuild(
             runtime_weight_promise=_runtime_promise(
@@ -842,10 +872,11 @@ def test_unknown_runtime_weights_fall_back_to_full_datatype_bounds() -> None:
             )
         ),
     )
-    source_fallback = wrong_source.answer(MvauDataflowOp.numerical_support)
+    source_fallback = wrong_source.answer(MvauSpace.numerical_support)
     assert isinstance(source_fallback, Decided) and source_fallback.value.supported
 
-    broad = wrapper.bind(
+    broad = _space_for(
+        wrapper,
         model,
         RuntimeBuild(
             runtime_weight_promise=_runtime_promise(
@@ -854,7 +885,7 @@ def test_unknown_runtime_weights_fall_back_to_full_datatype_bounds() -> None:
             )
         ),
     )
-    accepted = broad.answer(MvauDataflowOp.numerical_support)
+    accepted = broad.answer(MvauSpace.numerical_support)
     assert isinstance(accepted, Decided) and accepted.value.supported
     assert scope_fallback.value.support == source_fallback.value.support == accepted.value.support
 
@@ -867,8 +898,8 @@ def test_unknown_weight_input_uses_full_logical_datatype_range(build: Build) -> 
     retained = [item for item in model.graph.value_info if item.name != "weight"]
     del model.graph.value_info[:]
     model.graph.value_info.extend(retained)
-    operation = _unbound(model, "mvau0").bind(model, build)
-    report = operation.answer(MvauDataflowOp.source_numerical_report)
+    operation = _space_for(_unbound(model, "mvau0"), model, build)
+    report = operation.answer(MvauSpace.source_numerical_report)
     assert isinstance(report, Decided) and report.value.supported
     assert report.value.support is not None
     assert isinstance(report.value.support.premise.weights, DatatypeWeightPremise)
@@ -925,7 +956,7 @@ def test_verifying_needs_no_build_configuration() -> None:
     operation = _unbound(_model(), "mvau0")
 
     assert operation.verify_node() == []
-    assert operation.assess_source().verdict is True
+    assert operation.space.assess_source().verdict is True
 
 
 def test_verification_does_not_replay_recorded_choices() -> None:
@@ -960,8 +991,8 @@ def test_missing_build_fact_leaves_physical_input_unresolved() -> None:
 
     model = _model()
 
-    operation = _unbound(model, "mvau0").bind(model, NoClockBuild())
-    assert MvauDataflowOp.clock_period_ns not in operation.problem_snapshot
+    operation = _space_for(_unbound(model, "mvau0"), model, NoClockBuild())
+    assert MvauSpace.clock_period_ns not in operation.problem_snapshot
     assert operation.expected_outputs()["output"][1] == DataType["INT32"]
 
 
@@ -970,21 +1001,21 @@ def test_build_fact_supplied_as_none_remains_unavailable() -> None:
 
     model = _model()
 
-    operation = _unbound(model, "mvau0").bind(model, EmptyClockBuild())
-    assert MvauDataflowOp.clock_period_ns not in operation.problem_snapshot
+    operation = _space_for(_unbound(model, "mvau0"), model, EmptyClockBuild())
+    assert MvauSpace.clock_period_ns not in operation.problem_snapshot
     assert operation.expected_outputs()["output"][1] == DataType["INT32"]
 
 
 def test_a_valid_build_still_binds() -> None:
     model = _model()
 
-    assert _unbound(model, "mvau0").bind(model, Build()).is_bound
+    assert _space_for(_unbound(model, "mvau0"), model, Build()).is_bound
 
 
 def test_dsp_codec_stays_stable_while_oh_source_schema_identity_changes() -> None:
     operation = _bound(_model())
-    codec = MvauDataflowOp.target_dsp.canonical
-    value = operation.problem_snapshot[MvauDataflowOp.target_dsp]
+    codec = MvauSpace.target_dsp.canonical
+    value = operation.problem_snapshot[MvauSpace.target_dsp]
 
     assert (codec.identity, codec.version) == ("dataflow.structural", 1)
     assert codec.encode(value) == {
@@ -993,7 +1024,7 @@ def test_dsp_codec_stays_stable_while_oh_source_schema_identity_changes() -> Non
     }
     assert (
         operation.local_problem_fingerprint
-        == "5bd4ec2a7bd4ae41fbd642449bf57290ca1ca1449d8d6feac65d19c306e859ea"
+        == "c57ed799923038b5982420500f83dfeabd9adb027601126aa95617c53e0438f9"
     )
 
 
@@ -1002,9 +1033,9 @@ def test_an_optional_build_fact_that_is_absent_becomes_an_absent_problem() -> No
 
     operation = _bound(_model())
 
-    assert not isinstance(operation.answer(MvauDataflowOp.runtime_weight_range_contract), Decided)
+    assert not isinstance(operation.answer(MvauSpace.runtime_weight_range_contract), Decided)
     # The optional fact that *does* declare a default uses it.
-    assert operation.answer(MvauDataflowOp.runtime_writable_weights) == Decided(False)
+    assert operation.answer(MvauSpace.runtime_writable_weights) == Decided(False)
 
 
 def test_verification_still_needs_no_build_at_all() -> None:
@@ -1022,7 +1053,7 @@ def test_output_annotations_are_observations_even_for_fused_nodes(fused: bool) -
     original_fingerprint = bound.problem_fingerprint
     model.set_tensor_datatype("output", DataType["BIPOLAR"])
     model.set_tensor_shape("output", [999])
-    fresh = bound.rebind(model)
+    fresh = _rebind(bound, model)
     assert fresh.problem_fingerprint == original_fingerprint
     assert len(fresh.reconciliation()) == 2
     assert fresh.expected_outputs()["output"][1] == DataType[expected]

@@ -22,7 +22,7 @@ from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 from qonnx.core.modelwrapper import ModelWrapper  # type: ignore[import-not-found]
 
 from finn.dataflow._engine import Absent, Answer, Decided, QualifiedPath, Unresolved
-from finn.dataflow.analysis.integer_dot import IntegerSupportReport
+from finn.dataflow.analysis.integer_dot import DotProductBounds, IntegerSupportReport
 from finn.dataflow.model import NetworkBoundary, KernelChoice
 from finn.dataflow.kernels.dotp_axi import (
     BatchInterleavedDotpAxiKernel,
@@ -43,6 +43,8 @@ from finn.dataflow.model.logical.network import DataflowNetwork
 from finn.dataflow.model.logical.network_validation import validate_network
 from finn.dataflow.ops.mapping import External
 from finn.dataflow.ops.base import DATAFLOW_DOMAIN, DataflowOp, DataflowOpError
+from finn.dataflow.ops.space import DataflowSpace
+from dataflow.ops.factory import make_op, make_space
 from finn.dataflow.kernels.matmul.base import (
     AccumulationMode,
     ActivationMode,
@@ -54,7 +56,7 @@ from finn.dataflow.kernels.matmul.batch_interleaved import (
     BatchInterleavedKernel,
 )
 from finn.dataflow.kernels.matmul.dot_product import DotProductKernel, WeightSupply
-from finn.dataflow.ops.mvau.op import MvauDataflowOp
+from finn.dataflow.ops.mvau.op import MvauSpace
 from finn.dataflow.space.declarations import derived
 from finn.dataflow.ops.schema import BuildFact, DatatypeAttribute, OpInput, OpOutput
 from finn.dataflow.ops.native import SCHEMA_VERSION_ATTRIBUTE, read_attributes
@@ -90,6 +92,7 @@ class Problem_(Space):
     clock_period_ns = Problem(float)
     computation_profile = Problem(MvauComputationProfile)
     numerical_support = Problem(IntegerSupportReport, required=False)
+    integer_bounds = Problem(DotProductBounds, required=False)
 
 
 class Placed(Problem_):
@@ -412,22 +415,24 @@ def _unbound(model: ModelWrapper) -> DataflowOp:
     return operation
 
 
-def _interleaved_operation(model: ModelWrapper, *, interleave: int = 2) -> MvauDataflowOp:
-    chosen = _unbound(model).bind(model, Build()).kernel.select("batch_interleaved").root
+def _interleaved_operation(model: ModelWrapper, *, interleave: int = 2) -> MvauSpace:
+    chosen = (
+        _unbound(model).set_context(build=Build()).space.kernel.select("batch_interleaved").root
+    )
     for declaration, value in (
         (WeightedDotProductKernel.pe, 2),
         (WeightedDotProductKernel.simd, 2),
         (BatchInterleavedKernel.interleave, interleave),
     ):
         chosen = chosen.kernel.alternative("batch_interleaved").assign(declaration, value).root
-    committed = chosen.commit(model, Build())
-    assert isinstance(committed, MvauDataflowOp)
+    committed = _unbound(model).set_context(build=Build()).save_space(chosen)
+    assert isinstance(committed, MvauSpace)
     return committed
 
 
 def test_the_operation_offers_two_alternatives() -> None:
     model = _mvau_model()
-    view = _unbound(model).bind(model, Build()).kernel  # type: ignore[attr-defined]
+    view = _unbound(model).set_context(build=Build()).space.kernel  # type: ignore[attr-defined]
     assert view.alternatives == ("dot_product", "batch_interleaved")
 
 
@@ -451,7 +456,7 @@ def test_the_interleaved_choice_survives_a_save_and_reload(tmp_path: Path) -> No
     path = tmp_path / "interleaved.onnx"
     model.save(str(path))
     reloaded = ModelWrapper(str(path))
-    restored = _unbound(reloaded).bind(reloaded, Build())
+    restored = _unbound(reloaded).set_context(build=Build()).space
 
     assert dict(restored.recorded()) == dict(operation.recorded())
     after = restored.network
@@ -467,8 +472,8 @@ def test_an_old_schema_two_batch_record_is_refused_without_writes() -> None:
     )
     schema.i = 2
     before = model.model.SerializeToString(deterministic=True)
-    with pytest.raises(DataflowOpError, match="writes schema version 6"):
-        _unbound(model).bind(model, Build())
+    with pytest.raises(DataflowOpError, match="writes schema version 8"):
+        _unbound(model).set_context(build=Build()).space
     assert model.model.SerializeToString(deterministic=True) == before
 
 
@@ -479,7 +484,7 @@ def test_switching_between_design_families_leaves_nothing_behind() -> None:
     operation = _interleaved_operation(model, interleave=2)
     assert "kernel.batch_interleaved.interleave" in dict(operation.recorded())
 
-    switched = _unbound(model).bind(model, Build()).reconstruct()
+    switched = _unbound(model).set_context(build=Build()).space.reconstruct()
     switched = switched.kernel.select("dot_product").root
     dot_product = switched.kernel.alternative("dot_product")
     for declaration, value in (
@@ -493,13 +498,13 @@ def test_switching_between_design_families_leaves_nothing_behind() -> None:
     kernel = switched.kernel.alternative("dot_product").child("compute")
     assert isinstance(kernel, Decided)
     switched = kernel.value.assign(DotpAxiKernel.compute_pumping, False).root
-    final = switched.commit(model, Build())
+    final = _unbound(model).set_context(build=Build()).save_space(switched)
     recorded = dict(final.recorded())
     assert recorded["kernel.case"] == "dot_product"
     assert recorded["kernel.dot_product.weight_supply"] is WeightSupply.EXTERNAL
     assert not any(name.startswith("kernel.batch_interleaved.") for name in recorded)
 
-    back = _unbound(model).bind(model, Build()).reconstruct()
+    back = _unbound(model).set_context(build=Build()).space.reconstruct()
     back = back.kernel.select("batch_interleaved").root
     for declaration, value in (
         (WeightedDotProductKernel.pe, 2),
@@ -507,7 +512,7 @@ def test_switching_between_design_families_leaves_nothing_behind() -> None:
         (BatchInterleavedKernel.interleave, 4),
     ):
         back = back.kernel.alternative("batch_interleaved").assign(declaration, value).root
-    returned = dict(back.commit(model, Build()).recorded())
+    returned = dict(_unbound(model).set_context(build=Build()).save_space(back).recorded())
     assert returned["kernel.batch_interleaved.interleave"] == 4
     assert not any(name.startswith("kernel.dot_product.") for name in returned)
 
@@ -534,7 +539,9 @@ def test_the_association_reports_the_interleaved_weight_boundary() -> None:
 
 def test_an_unresolved_interleave_leaves_the_network_unresolved() -> None:
     model = _mvau_model()
-    chosen = _unbound(model).bind(model, Build()).kernel.select("batch_interleaved").root
+    chosen = (
+        _unbound(model).set_context(build=Build()).space.kernel.select("batch_interleaved").root
+    )
     for declaration, value in (
         (WeightedDotProductKernel.pe, 2),
         (WeightedDotProductKernel.simd, 2),
@@ -679,7 +686,7 @@ def test_the_aliased_slots_are_two_distinct_persistable_subtrees() -> None:
 # -- and the same aliasing, persisted through a real node --------------------
 
 
-class _AliasedOp(DataflowOp):
+class _AliasedSpace(DataflowSpace):
     """A whole operation over the aliased Kernel, so persistence is end to end.
 
     The path-level tests above prove the two slots have distinct persistable
@@ -698,6 +705,7 @@ class _AliasedOp(DataflowOp):
     output = OpOutput(index=0)
 
     accumulator_type = DatatypeAttribute(default="INT32", onnx="accDataType")
+    integer_bounds = Problem(DotProductBounds, required=False)
     target_dsp = BuildFact(DspBlock, accessor=lambda build: build.target_dsp)
     clock_period_ns = BuildFact(float, accessor=lambda build: float(build.synth_clk_period_ns))
 
@@ -746,6 +754,7 @@ class _AliasedOp(DataflowOp):
         clock_period_ns=clock_period_ns,
         computation_profile=profile,
         numerical_support=numerical_support,
+        integer_bounds=integer_bounds,
     )
 
     def selected_dataflow(self) -> Any:
@@ -793,7 +802,8 @@ def _configure_alias(model: Any, slot: str, *, pumped: bool, fresh: bool = False
     switching slots means a point that never had the first one.
     """
 
-    operation = _AliasedOp(model.graph.node[0], 1).bind(model, Build())
+    adapter = make_op(model, space_type=_AliasedSpace, build=Build())
+    operation = adapter.space
     if fresh:
         operation = operation.reconstruct()
     design = cast(Any, operation.kernel)
@@ -807,7 +817,7 @@ def _configure_alias(model: Any, slot: str, *, pumped: bool, fresh: bool = False
         (BatchInterleavedKernel.interleave, 2),
     ):
         chosen = cast(Any, chosen.kernel).assign(declaration, value).root
-    return chosen.commit(model, Build())
+    return adapter.save_space(chosen)
 
 
 @pytest.mark.parametrize("slot", ["first_slot", "second_slot"])
@@ -823,7 +833,7 @@ def test_an_aliased_slot_survives_a_real_save_and_reload(slot: str, tmp_path: Pa
     path = tmp_path / f"{slot}.onnx"
     model.save(str(path))
     reloaded = ModelWrapper(str(path))
-    restored = _AliasedOp(reloaded.graph.node[0], 1).bind(reloaded, Build())
+    restored = make_space(reloaded, space_type=_AliasedSpace, build=Build())
     returned = dict(restored.recorded())
 
     assert returned == recorded

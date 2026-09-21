@@ -18,7 +18,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from qonnx.analysis.tensor_value_summary import TensorValueSummary  # type: ignore[import-not-found]
 
@@ -26,7 +26,116 @@ from finn.dataflow.ops.tensor_summary import FrozenInitializer
 
 if TYPE_CHECKING:
     from finn.dataflow.ops.base import DataflowOp
+    from finn.dataflow.ops.space import DataflowSpace
     from finn.dataflow.ops.source import SourceNode
+
+
+def build_space(
+    space_type: type[DataflowSpace],
+    model: Any,
+    node: Any,
+    *,
+    build: Any = None,
+    graph_context: Any = None,
+    recorded: bool = True,
+    opset_version: int = 1,
+    fresh: bool = False,
+    frozen_build: Mapping[Any, object] | None = None,
+    context_read: Any = None,
+) -> DataflowSpace:
+    """Freeze one current graph invocation into the existing immutable runtime."""
+    from finn.dataflow.ops.space import (  # noqa: PLC0415
+        _BoundNode,
+        _attribute,
+        _datatype_attribute,
+        _plain_attribute,
+        _build_value,
+        _value_info_bytes,
+        _annotation_bytes,
+        _positional,
+        source_declarations,
+    )
+    from finn.dataflow.ops.schema import OpInput, OpOutput, Attribute, DatatypeAttribute, BuildFact  # noqa: PLC0415
+    from finn.dataflow.ops.source import read_source_node  # noqa: PLC0415
+    from finn.dataflow.ops.native import SCOPE_ID_ATTRIBUTE, hydrate  # noqa: PLC0415
+
+    scope_attribute = _attribute(node, SCOPE_ID_ATTRIBUTE)
+    scope = "" if scope_attribute is None else scope_attribute.s.decode("utf-8")
+    inputs: list[tuple[int, str]] = []
+    outputs: list[tuple[int, str]] = []
+    optional: list[str] = []
+    attributes: dict[str, object] = {}
+    declarations = source_declarations(space_type)
+    for name, declaration in declarations:
+        if isinstance(declaration, (OpInput, OpOutput)):
+            (outputs if declaration.output else inputs).append((declaration.index, name))
+            if isinstance(declaration, OpInput) and declaration.optional:
+                optional.append(name)
+        elif isinstance(declaration, DatatypeAttribute):
+            attributes[name] = _datatype_attribute(node, name, declaration)
+        elif isinstance(declaration, Attribute):
+            attributes[name] = _plain_attribute(node, name, declaration)
+    if graph_context is not None:
+        from finn.dataflow.ops.graph_context import require_context_read  # noqa: PLC0415
+
+        context_read = require_context_read(graph_context, model, build, consumer_scope_id=scope)
+    with source_analysis(model, fresh=fresh) as analysis:
+        source = read_source_node(
+            model,
+            node,
+            inputs=_positional(inputs),
+            outputs=_positional(outputs),
+            optional_inputs=optional,
+            attributes=attributes,
+            summaries=analysis,
+            initializers=analysis.initializers,
+        )
+        state = _BoundNode(
+            node.SerializeToString(deterministic=True),
+            scope,
+            opset_version,
+            next(
+                (
+                    int(item.version)
+                    for item in model.model.opset_import
+                    if item.domain == node.domain
+                ),
+                None,
+            ),
+            source.outputs,
+            tuple(_value_info_bytes(model, item.tensor) for item in source.outputs),
+            tuple(_annotation_bytes(model, item.tensor) for item in source.outputs),
+            context_read,
+        )
+        values = (
+            dict(frozen_build)
+            if frozen_build is not None
+            else {
+                declaration: value
+                for name, declaration in declarations
+                if isinstance(declaration, BuildFact)
+                if (value := _build_value(space_type, name, declaration, build)) is not None
+            }
+        )
+        values.update(space_type._additional_problem_values(source, scope_id=scope))
+        if context_read is not None:
+            values[space_type.incoming_graph_context] = context_read.incoming
+        for name, declaration in declarations:
+            if isinstance(declaration, OpInput) and source.has(name):
+                operand = source.operand(name)
+                values[declaration] = operand
+                if operand.tensor in analysis:
+                    values[declaration.value_summary] = analysis[operand.tensor]
+            elif isinstance(declaration, (Attribute, DatatypeAttribute)):
+                values[declaration] = source.attributes[name]
+        space = space_type._start_frozen(values, state)
+    if recorded:
+        space = hydrate(space)
+    if getattr(space_type, "implementation_binding", None) is not None:
+        from finn.dataflow.ops.binding import validate_bindings  # noqa: PLC0415
+
+        validate_bindings(space)
+    return cast("DataflowSpace", space)
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,7 +196,9 @@ def _operations(model: Any, operations: Sequence[DataflowOp] | None) -> Sequence
     result = []
     for node in model.graph.node:
         if node.domain == DATAFLOW_DOMAIN:
-            operation = model.get_customop_wrapper(node)
+            from qonnx.custom_op.registry import getCustomOp  # type: ignore[import-not-found] # noqa: PLC0415
+
+            operation = getCustomOp(node)
             if isinstance(operation, DataflowOp):
                 result.append(operation)
     return result
@@ -95,69 +206,49 @@ def _operations(model: Any, operations: Sequence[DataflowOp] | None) -> Sequence
 
 def bind_operations(
     model: Any,
-    build: Any,
+    build: Any = None,
     *,
     operations: Sequence[DataflowOp] | None = None,
     graph_context: Any = None,
-) -> tuple[DataflowOp, ...]:
-    """Reconstruct all selected operations against one initializer analysis."""
-
-    with source_analysis(model) as summaries:
-        result = []
-        for op in _operations(model, operations):
-            context_read = None
-            if graph_context is not None:
-                from finn.dataflow.ops.graph_context import require_context_read  # noqa: PLC0415
-
-                scope = op.recorded_scope_id()
-                if not scope:
-                    from finn.dataflow.ops.base import DataflowOpError  # noqa: PLC0415
-
-                    raise DataflowOpError(
-                        f"{op.onnx_node.name!r} has no dataflow scope id; "
-                        "run AssignDataflowScopeIds first"
-                    )
-                context_read = require_context_read(
-                    graph_context,
-                    model,
-                    build,
-                    consumer_scope_id=scope,
-                )
-            result.append(
-                op._bind_with(
-                    model,
-                    op._build_values(build),
-                    summaries,
-                    context_read=context_read,
-                )
+) -> tuple[DataflowSpace, ...]:
+    """Build source Spaces for a pass using one initializer analysis."""
+    with source_analysis(model):
+        return tuple(
+            build_space(
+                op.space_type,
+                model,
+                op._live_node(model),
+                build=build,
+                graph_context=graph_context,
+                opset_version=op.onnx_opset_version,
             )
-        return tuple(result)
+            for op in _operations(model, operations)
+        )
 
 
 def bind_sources_only(
-    model: Any, build: Any, *, operations: Sequence[DataflowOp] | None = None
-) -> tuple[DataflowOp, ...]:
-    """Bind current source facts without hydrating persisted choices.
-
-    This is useful for inspecting or repairing a source independently of its
-    recorded selection. Ordinary bind/rebind remains strict.
-    """
-
-    with source_analysis(model) as summaries:
+    model: Any,
+    build: Any = None,
+    *,
+    operations: Sequence[DataflowOp] | None = None,
+) -> tuple[DataflowSpace, ...]:
+    """Read current source facts without applying saved assignments."""
+    with source_analysis(model):
         return tuple(
-            op._bind_with(model, op._build_values(build), summaries, recorded=False)
+            build_space(
+                op.space_type,
+                model,
+                op._live_node(model),
+                build=build,
+                recorded=False,
+                opset_version=op.onnx_opset_version,
+            )
             for op in _operations(model, operations)
         )
 
 
 def analyze_sources(model: Any) -> tuple[SourceNode, ...]:
-    """Read the logical sources of the model without a build or hydration."""
-
-    with source_analysis(model) as summaries:
-        return tuple(
-            op._read_source(model, op._live_node(model), summaries)
-            for op in _operations(model, None)
-        )
+    return tuple(space.source for space in bind_sources_only(model))
 
 
 __all__ = [
@@ -165,6 +256,7 @@ __all__ = [
     "analyze_sources",
     "bind_operations",
     "bind_sources_only",
+    "build_space",
     "initializer_facts",
     "source_analysis",
 ]

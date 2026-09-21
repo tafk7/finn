@@ -33,14 +33,21 @@ from finn.dataflow.artifacts.build import (
 from finn.dataflow.artifacts.packaging import PortableComponent
 from finn.dataflow.artifacts.store import ArtifactStore
 from finn.dataflow.model.physical.capture import (
+    CapturedDependency,
     LocalPhysicalCapture,
     PhysicalCaptureError,
     capture_local_physical as _capture_local_physical,
+    capture_assessment_dependencies,
 )
 from finn.dataflow.model.physical.interface import PhysicalPort, PhysicalResult
 from finn.dataflow.model.logical.region import element_width
-from finn.dataflow.ops.base import DataflowOp, DataflowOpError
-from finn.dataflow.ops.model_effects import ModelReadKind, ModelReadSet, validate_model_read_set
+from finn.dataflow.ops.space import DataflowSpace, DataflowOpError
+from finn.dataflow.ops.model_effects import (
+    ModelReadExpectation,
+    ModelReadKind,
+    ModelReadSet,
+    validate_model_read_set,
+)
 from finn.dataflow.ops.source_values import SourceDirection, SourceOperandKey
 from finn.dataflow.space.occurrence import ProjectionAssessment, layer_runtime
 
@@ -135,10 +142,10 @@ def _digest(*values: object) -> str:
     return hashlib.sha256("\n".join(repr(value) for value in values).encode("utf-8")).hexdigest()
 
 
-def _use(subject: DataflowOp) -> DataflowOp:
-    if not isinstance(subject, DataflowOp):
-        raise TypeError("physical node actions require a bound DataflowOp")
-    subject._bound_node()
+def _use(subject: DataflowSpace) -> DataflowSpace:
+    if not isinstance(subject, DataflowSpace):
+        raise TypeError("physical node actions require a frozen DataflowSpace")
+    subject.recorded_scope_id()
     return subject
 
 
@@ -166,7 +173,7 @@ def _check_local(capture: LocalPhysicalCapture) -> None:
         raise DataflowOpError("local physical requirements are inconsistent")
 
 
-def _association(use: DataflowOp, local: LocalPhysicalCapture) -> PhysicalBuildAssociation:
+def _association(use: DataflowSpace, local: LocalPhysicalCapture) -> PhysicalBuildAssociation:
     """The sole complete derivation of every retained node-use field."""
     _check_local(local)
     result = local.physical
@@ -228,10 +235,41 @@ def _association(use: DataflowOp, local: LocalPhysicalCapture) -> PhysicalBuildA
     )
 
 
-def _physical_choice_names(operation: DataflowOp, local: LocalPhysicalCapture) -> set[str]:
+def _association_dependencies(
+    operation: DataflowSpace, local: LocalPhysicalCapture
+) -> tuple[CapturedDependency, ...]:
+    """Union precisely the codegen and narrow interface claims consumed above."""
+    from finn.dataflow.model.logical.interface_authoring import operand_declaration  # noqa: PLC0415
+
+    route = getattr(type(operation), "interface_binding", None) or getattr(
+        type(operation), "implementation_binding"
+    )
+    target = route.resolve(operation)
+    if not isinstance(target, Decided):
+        raise DataflowOpError("required public interface is unresolved", target.findings)
+    present = {operand.id for operand in (*operation.source.inputs, *operation.source.outputs)}
+    dependencies = {(item.kind, item.path): item for item in local.dependencies}
+    output_type_consumed = False
+    for binding in type(operation).operand_bindings:
+        if binding.source not in present:
+            continue
+        declaration = operand_declaration(target.value, binding.role)
+        for facet in (declaration.datatype, declaration.domain):
+            for item in capture_assessment_dependencies(target.value, facet):
+                dependencies[item.kind, item.path] = item
+        output_type_consumed |= binding.output
+    if output_type_consumed:
+        for item in capture_assessment_dependencies(operation, type(operation).type_source_accepts):
+            dependencies[item.kind, item.path] = item
+    return tuple(dependencies[key] for key in sorted(dependencies))
+
+
+def _consumed_choice_names(
+    operation: DataflowSpace, dependencies: tuple[CapturedDependency, ...]
+) -> set[str]:
     from finn.dataflow.ops.native import choice_schema  # noqa: PLC0415
 
-    paths = {dependency.path for dependency in local.dependencies if dependency.kind == "decision"}
+    paths = {dependency.path for dependency in dependencies if dependency.kind == "decision"}
     return {
         entry.name
         for entry in choice_schema(operation)
@@ -239,36 +277,57 @@ def _physical_choice_names(operation: DataflowOp, local: LocalPhysicalCapture) -
     }
 
 
-def _physical_source_reads(operation: DataflowOp, local: LocalPhysicalCapture) -> ModelReadSet:
-    """Read actual physical choice keys and source facts, excluding output caches."""
-    from finn.dataflow.ops.base import source_declarations  # noqa: PLC0415
+def _physical_source_reads(operation: DataflowSpace, local: LocalPhysicalCapture) -> ModelReadSet:
+    """Read codegen and assessed interface premises, excluding output caches."""
+    from finn.dataflow.ops.space import source_declarations  # noqa: PLC0415
     from finn.dataflow.ops.persistence import source_read_set  # noqa: PLC0415
-    from finn.dataflow.ops.schema import Attribute, DatatypeAttribute, attribute_name  # noqa: PLC0415
+    from finn.dataflow.ops.schema import Attribute, DatatypeAttribute, OpInput, attribute_name  # noqa: PLC0415
 
-    names = _physical_choice_names(operation, local)
-    paths = {dependency.path for dependency in local.dependencies if dependency.kind == "problem"}
+    dependencies = _association_dependencies(operation, local)
+    names = _consumed_choice_names(operation, dependencies)
+    paths = {dependency.path for dependency in dependencies if dependency.kind == "problem"}
     compiled = layer_runtime(operation).compiled
+    scope = operation.recorded_scope_id()
+    absent_inputs = []
     for name, declaration in source_declarations(type(operation)):
         if (
             isinstance(declaration, (Attribute, DatatypeAttribute))
             and compiled.member(name).path.value in paths
         ):
             names.add(attribute_name(name, declaration))
+        elif (
+            isinstance(declaration, OpInput)
+            and compiled.member(name).path.value in paths
+            and not operation.source.has(name)
+        ):
+            absent_inputs.append(
+                ModelReadExpectation(
+                    ModelReadKind.OPERAND_SLOT,
+                    scope,
+                    f"input:{declaration.index}",
+                    None,
+                )
+            )
     reads = source_read_set(
         operation,
         expected_attributes={name: None for name in names},
         include_output_annotations=False,
     )
     return ModelReadSet(
-        tuple(
-            item
-            for item in reads.expectations
-            if item.kind is not ModelReadKind.ATTRIBUTE or item.field in names
+        (
+            *tuple(
+                item
+                for item in reads.expectations
+                if item.kind is not ModelReadKind.ATTRIBUTE
+                or item.owner != scope
+                or item.field in names
+            ),
+            *absent_inputs,
         )
     )
 
 
-def op_physical(subject: DataflowOp) -> ProjectionAssessment[PhysicalBuildCapture]:
+def op_physical(subject: DataflowSpace) -> ProjectionAssessment[PhysicalBuildCapture]:
     """Assess codegen and its concrete node interface, without full graph acceptance."""
     use = _use(subject)
     selected = use.resolve_implementation()
@@ -297,7 +356,7 @@ def op_physical(subject: DataflowOp) -> ProjectionAssessment[PhysicalBuildCaptur
     )
 
 
-def capture_op_physical(subject: DataflowOp) -> PhysicalBuildCapture:
+def capture_op_physical(subject: DataflowSpace) -> PhysicalBuildCapture:
     answer = op_physical(subject).accepted_answer
     if not isinstance(answer, Decided):
         raise DataflowOpError("operation codegen projection is not accepted", answer.findings)
@@ -305,7 +364,7 @@ def capture_op_physical(subject: DataflowOp) -> PhysicalBuildCapture:
 
 
 def validate_physical_build_association(
-    subject: DataflowOp,
+    subject: DataflowSpace,
     capture: PhysicalBuildCapture,
     *,
     model: Any,
@@ -322,9 +381,20 @@ def validate_physical_build_association(
                 _rejection("physical-capture-mismatch", "capture differs from the exact node use"),
             )
         validate_model_read_set(model, capture.association.source_reads)
-        fresh = use.rebind(model, build, graph_context=graph_context)
+        from finn.dataflow.ops.reconstruction import build_space  # noqa: PLC0415
+        from finn.dataflow.ops.persistence import find_node  # noqa: PLC0415
+
+        fresh = build_space(
+            type(use),
+            model,
+            find_node(model, use.recorded_scope_id()),
+            build=build,
+            graph_context=graph_context,
+            opset_version=use.source_opset_version,
+            frozen_build=use._frozen_build_values() if build is None else None,
+        )
         current_keys = set(serialize_choices(fresh))
-        physical_keys = _physical_choice_names(use, capture.local)
+        physical_keys = _consumed_choice_names(use, _association_dependencies(use, capture.local))
         choices = {
             entry.name: value
             for entry, value in capture_decided_choices(use)
@@ -352,7 +422,7 @@ def validate_physical_build_association(
 
 
 def _require_valid(
-    subject: DataflowOp,
+    subject: DataflowSpace,
     capture: PhysicalBuildCapture,
     *,
     model: Any,
@@ -367,7 +437,7 @@ def _require_valid(
 
 
 def associate_physical_use(
-    subject: DataflowOp,
+    subject: DataflowSpace,
     local: LocalPhysicalCapture,
     *,
     model: Any,
@@ -382,7 +452,7 @@ def associate_physical_use(
 
 
 def validate_compiler_physical_use(
-    subject: DataflowOp,
+    subject: DataflowSpace,
     use: PhysicalBuildCapture,
     *,
     model: Any,
@@ -454,7 +524,7 @@ def materialize_local_physical(
 
 
 def prepare_build_request(
-    subject: DataflowOp,
+    subject: DataflowSpace,
     capture: PhysicalBuildCapture,
     *,
     model: Any,
@@ -472,7 +542,7 @@ def prepare_build_request(
 
 
 def materialize_build_request(
-    subject: DataflowOp,
+    subject: DataflowSpace,
     request: PreparedBuildRequest,
     *,
     model: Any,
@@ -487,7 +557,7 @@ def materialize_build_request(
 
 
 def authorize_component_use(
-    subject: DataflowOp,
+    subject: DataflowSpace,
     use: PhysicalBuildCapture,
     built: BuiltLocalPhysical,
     *,
@@ -517,7 +587,7 @@ def authorize_component_use(
 
 
 def install_compiler_physical_component(
-    subject: DataflowOp,
+    subject: DataflowSpace,
     authorized: AuthorizedComponentUse,
     *,
     outer_instance_id: str,
@@ -544,7 +614,7 @@ def install_compiler_physical_component(
 
 
 def install_physical_component(
-    subject: DataflowOp,
+    subject: DataflowSpace,
     request: PreparedBuildRequest,
     component: PortableComponent,
     *,
@@ -569,7 +639,7 @@ def install_physical_component(
     )
 
 
-def _require_graph_connections(subject: DataflowOp, graph_context: object | None) -> None:
+def _require_graph_connections(subject: DataflowSpace, graph_context: object | None) -> None:
     if graph_context is None:
         return
     answer = subject.graph_dataflow.accepted_answer

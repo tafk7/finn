@@ -33,7 +33,8 @@ from finn.dataflow.kernels.matmul.base import (
     ActivationMode,
     MvauComputationProfile,
 )
-from finn.dataflow.ops.mvau.op import MvauDataflowOp
+from finn.dataflow.ops.mvau.op import MvauSpace
+from finn.dataflow.ops.reconstruction import build_space
 from finn.dataflow.kernels.dotp_axi import DotpAxiKernel
 from finn.dataflow.kernels.matmul.base import DspBlock
 from finn.dataflow.model import PhysicalView
@@ -305,8 +306,16 @@ def test_local_capture_tracks_consumed_closure_but_excludes_unrelated_view_choic
 
 def test_compiler_association_is_per_use_and_revalidates_current_source() -> None:
     model, build, context = source_model()
-    left = configure(MvauDataflowOp(model.graph.node[0]).bind(model, build, graph_context=context))
-    right = configure(MvauDataflowOp(model.graph.node[1]).bind(model, build, graph_context=context))
+    left = configure(
+        model.get_customop_wrapper(model.graph.node[0])
+        .set_context(build, graph_context=context)
+        .space
+    )
+    right = configure(
+        model.get_customop_wrapper(model.graph.node[1])
+        .set_context(build, graph_context=context)
+        .space
+    )
     left_design = cast(Kernel, left.selected_kernel())
     right_design = cast(Kernel, right.selected_kernel())
     left_local = capture_local_physical(left_design)
@@ -344,7 +353,7 @@ def test_plain_space_completes_source_selection_build_association_and_installati
     tmp_path,
 ) -> None:
     model, build, context = source_model()
-    production = configure(MvauDataflowOp(model.graph.node[0]).bind(model, build))
+    production = configure(model.get_customop_wrapper(model.graph.node[0]).set_context(build).space)
     production_local = capture_local_physical(production.require_implementation())
 
     class PlainComposite(MatmulInterface):
@@ -358,22 +367,22 @@ def test_plain_space_completes_source_selection_build_association_and_installati
         physical_ready = Readiness()
         physical = Projection(requirements, readiness=physical_ready)
 
-    class PlainSelectedMvau(MvauDataflowOp):
+    class PlainPhysicalSpace(MvauSpace):
         implementation_binding = ImplementationBinding(("implementation",))
         implementation = Subspace(
             PlainComposite,
-            repetitions=MvauDataflowOp.repetitions,
-            matrix_width=MvauDataflowOp.matrix_width,
-            matrix_height=MvauDataflowOp.matrix_height,
-            activation_type=MvauDataflowOp.activation.datatype,
-            weight_type=MvauDataflowOp.weight.datatype,
-            accumulator_type=MvauDataflowOp.accumulator_type,
-            output_type=MvauDataflowOp.output_type,
-            computation_profile=MvauDataflowOp.profile,
-            integer_bounds=MvauDataflowOp.integer_bounds,
+            repetitions=MvauSpace.repetitions,
+            matrix_width=MvauSpace.matrix_width,
+            matrix_height=MvauSpace.matrix_height,
+            activation_type=MvauSpace.activation.datatype,
+            weight_type=MvauSpace.weight.datatype,
+            accumulator_type=MvauSpace.accumulator_type,
+            output_type=MvauSpace.output_type,
+            computation_profile=MvauSpace.profile,
+            integer_bounds=MvauSpace.integer_bounds,
         )
 
-    operation = PlainSelectedMvau(model.graph.node[0]).bind(model, build)
+    operation = build_space(PlainPhysicalSpace, model, model.graph.node[0], build=build)
     node_use = operation
     implementation = node_use.require_implementation()
     assert isinstance(implementation, PlainComposite)
@@ -414,7 +423,11 @@ def test_plain_space_completes_source_selection_build_association_and_installati
 
 def test_built_component_cannot_cross_physical_choice_points(tmp_path) -> None:
     model, build, context = source_model()
-    bound = MvauDataflowOp(model.graph.node[0]).bind(model, build, graph_context=context)
+    bound = (
+        model.get_customop_wrapper(model.graph.node[0])
+        .set_context(build, graph_context=context)
+        .space
+    )
     pumped = configure(bound, pumping=True)
     unpumped = configure(bound.reconstruct(), pumping=False)
     pumped_design = cast(Kernel, pumped.selected_kernel())

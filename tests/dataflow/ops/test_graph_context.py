@@ -43,9 +43,10 @@ from finn.dataflow.ops.model_effects import (
     ObservationMutationError,
     merge_model_read_sets,
 )
-from finn.dataflow.ops.mvau.op import MvauDataflowOp
+from dataflow.ops.factory import make_op, make_space
 from finn.dataflow.ops.persistence import assign_dataflow_scope_ids
 from finn.dataflow.ops.reconstruction import bind_operations
+from finn.dataflow.ops.persistence import apply_graph_effects
 
 
 def _prepared_replay() -> tuple[Any, Any, Build, LogicalBoundaryContract]:
@@ -138,9 +139,9 @@ def test_initial_bind_refuses_overrideable_initializer_without_writing() -> None
     before = model.model.SerializeToString(deterministic=True)
 
     with pytest.raises(DataflowOpError, match="graph-context-initializer-overrideable"):
-        MvauDataflowOp(model.graph.node[0]).bind(
+        make_op(
             model,
-            build,
+            build=build,
             graph_context=context,
         )
 
@@ -149,8 +150,8 @@ def test_initial_bind_refuses_overrideable_initializer_without_writing() -> None
 
 def test_local_problem_fingerprint_pins_oh_native_schema_vectors() -> None:
     expected = {
-        "ActivationReplayOp": "39bb8712a6e657facf821db17fef11b0e9c9a8de92ffde3147eae9b38a3e0e95",
-        "MvauDataflowOp": "6c7256baf268cabcf33a3dc96697a69ea83b106bfe093bf6a6f353e588b1e5ae",
+        "ReplaySpace": "b5b12fcbf6ac02fe6c03b15e9e0306d7abc0982703d191b17f3f241a2ae05515",
+        "MvauSpace": "fe1dca5910a789071ab5690089b9e84cbf2e128ac6c2ababb076c0d835a242cb",
     }
     build = Build()
     for make_model in (_replay_model, _mvau_model):
@@ -174,11 +175,8 @@ def test_graph_capture_strong_commit_and_rebound_recapture() -> None:
         )
         == ()
     )
-    rebound = candidate.commit(
-        model,
-        build,
-        require_graph=True,
-        graph_context=context,
+    rebound = make_op(model, build=build, graph_context=context).save_space(
+        candidate, require_graph=True
     )
     assert model.model.SerializeToString(deterministic=True) != before
     assert isinstance(rebound.graph_dataflow.accepted_answer, Decided)
@@ -213,11 +211,8 @@ def test_graph_commit_can_publish_derived_output_while_repairing_its_annotation(
     outgoing = candidate.outgoing_logical_contracts
     assert isinstance(outgoing, Decided)
     assert outgoing.value[0].contract.source_shape == (8, 8)
-    rebound = candidate.commit(
-        model,
-        build,
-        require_graph=True,
-        graph_context=context,
+    rebound = make_op(model, build=build, graph_context=context).save_space(
+        candidate, require_graph=True
     )
     assert model.get_tensor_shape("expanded") == [8, 8]
     assert isinstance(rebound.graph_dataflow.accepted_answer, Decided)
@@ -242,10 +237,10 @@ def test_strong_commit_refuses_changed_complete_context_without_writing() -> Non
     )
 
     with pytest.raises(DataflowOpError, match="current incoming graph contracts differ"):
-        candidate.commit(
+        apply_graph_effects(
             model,
-            build,
-            require_graph=True,
+            candidate.graph_effects(require_graph=True),
+            build=build,
             graph_context=changed_context,
         )
     assert model.model.SerializeToString(deterministic=True) == before
@@ -313,7 +308,7 @@ def test_failed_return_hydration_rolls_back_a_strong_commit() -> None:
             consumer_scope_id: str,
         ) -> Any:
             self.calls += 1
-            if self.calls == 2:
+            if model.model.SerializeToString(deterministic=True) != before:
                 raise RuntimeError("finish read failed")
             return context.read_inputs(
                 detached,
@@ -322,14 +317,10 @@ def test_failed_return_hydration_rolls_back_a_strong_commit() -> None:
             )
 
     provider = FailsDuringFinish()
+    operation = make_op(model, build=build, graph_context=provider)
     with pytest.raises(RuntimeError, match="finish read failed"):
-        candidate.commit(
-            model,
-            build,
-            require_graph=True,
-            graph_context=provider,
-        )
-    assert provider.calls == 2
+        operation.save_space(candidate, require_graph=True)
+    assert provider.calls >= 2
     assert model.model.SerializeToString(deterministic=True) == before
 
 
@@ -401,9 +392,9 @@ def test_current_provider_proves_transitive_freshness_without_cached_annotations
     model, build = _replay_chain()
     producer, consumer = bind_operations(model, build)
     producer = _configure_replay(producer)
-    producer = producer.commit(model, build)
-    consumer = _configure_replay(consumer.rebind(model, build))
-    consumer.commit(model, build)
+    producer = make_op(model, build=build).save_space(producer)
+    consumer = _configure_replay(make_space(model, model.graph.node[1], build=build))
+    make_op(model, model.graph.node[1], build=build).save_space(consumer)
 
     mappings = producer.operand_mapping
     assert isinstance(mappings, Decided)
@@ -415,7 +406,7 @@ def test_current_provider_proves_transitive_freshness_without_cached_annotations
         output=False,
     ).contract
     context = CurrentGraphContext((GraphInputEntry("X", "entry.X", entry_contract),))
-    current_consumer = consumer.rebind(model, build, graph_context=context)
+    current_consumer = make_space(model, model.graph.node[1], build=build, graph_context=context)
     assert isinstance(current_consumer.graph_dataflow.accepted_answer, Decided)
 
     incompatible = replace(

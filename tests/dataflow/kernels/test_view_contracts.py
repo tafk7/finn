@@ -44,7 +44,8 @@ from finn.dataflow.ops.base import DataflowOpError
 from finn.dataflow.kernels.matmul.dot_product import DotProductKernel, WeightSupply
 from finn.dataflow.ops.physical import capture_local_physical
 from finn.dataflow.kernels.replay import ActivationReplayKernel
-from finn.dataflow.ops.replay.op import ActivationReplayOp
+from finn.dataflow.ops.replay.op import ReplaySpace
+from dataflow.ops.factory import make_space
 from finn.dataflow.ops.binding import ChoiceBinding
 from finn.dataflow.space import (
     ConstraintGroup,
@@ -744,45 +745,45 @@ class RejectedReplay(ActivationReplayKernel):
     )
 
 
-class GuardedReplayOp(ActivationReplayOp):
+class GuardedReplayOp(ReplaySpace):
     kernel = Subspace(
         GuardedReplay,
-        repetitions=ActivationReplayOp.repetitions,
-        matrix_width=ActivationReplayOp.matrix_width,
-        matrix_height=ActivationReplayOp.matrix_height,
-        activation_type=ActivationReplayOp.activation.datatype,
+        repetitions=ReplaySpace.repetitions,
+        matrix_width=ReplaySpace.matrix_width,
+        matrix_height=ReplaySpace.matrix_height,
+        activation_type=ReplaySpace.activation.datatype,
     )
 
 
-class PendingReplayOp(ActivationReplayOp):
+class PendingReplayOp(ReplaySpace):
     choice_bindings = (
-        *ActivationReplayOp.choice_bindings,
+        *ReplaySpace.choice_bindings,
         ChoiceBinding("kernel_permission", ("kernel",), "permission"),
     )
     kernel = Subspace(
         PendingReplay,
-        repetitions=ActivationReplayOp.repetitions,
-        matrix_width=ActivationReplayOp.matrix_width,
-        matrix_height=ActivationReplayOp.matrix_height,
-        activation_type=ActivationReplayOp.activation.datatype,
+        repetitions=ReplaySpace.repetitions,
+        matrix_width=ReplaySpace.matrix_width,
+        matrix_height=ReplaySpace.matrix_height,
+        activation_type=ReplaySpace.activation.datatype,
     )
 
 
-class RejectedReplayOp(ActivationReplayOp):
+class RejectedReplayOp(ReplaySpace):
     kernel = Subspace(
         RejectedReplay,
-        repetitions=ActivationReplayOp.repetitions,
-        matrix_width=ActivationReplayOp.matrix_width,
-        matrix_height=ActivationReplayOp.matrix_height,
-        activation_type=ActivationReplayOp.activation.datatype,
+        repetitions=ReplaySpace.repetitions,
+        matrix_width=ReplaySpace.matrix_width,
+        matrix_height=ReplaySpace.matrix_height,
+        activation_type=ReplaySpace.activation.datatype,
     )
 
 
-def _configured_replay_type(operation_type: type[ActivationReplayOp]) -> ActivationReplayOp:
+def _configured_replay_type(operation_type: type[ReplaySpace]) -> ReplaySpace:
     model = _replay_model()
-    operation = operation_type(model.graph.node[0]).bind(model, Build())
+    operation = make_space(model, space_type=operation_type, build=Build())
     return cast(
-        ActivationReplayOp,
+        ReplaySpace,
         operation.kernel.assign(ActivationReplayKernel.pe, 1)
         .assign(ActivationReplayKernel.simd, 2)
         .root,
@@ -798,7 +799,7 @@ def _configured_replay_type(operation_type: type[ActivationReplayOp]) -> Activat
     ),
 )
 def test_node_logical_mapping_requires_authored_logical_acceptance(
-    operation_type: type[ActivationReplayOp],
+    operation_type: type[ReplaySpace],
     answer_type: type[object],
 ) -> None:
     operation = _configured_replay_type(operation_type)

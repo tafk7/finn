@@ -18,6 +18,9 @@ from qonnx.core.modelwrapper import ModelWrapper
 
 from finn.dataflow.ops import reconstruction
 from finn.dataflow.ops.base import DATAFLOW_DOMAIN, DataflowOp
+from finn.dataflow.ops.space import DataflowSpace
+from dataflow.ops.factory import make_op, make_space
+from finn.custom_op.dataflow import custom_op
 from finn.dataflow.ops.persistence import assign_dataflow_scope_ids, apply_graph_effects
 from finn.dataflow.ops.schema import OpInput
 from finn.dataflow.ops.tensor_summary import set_frozen_initializer
@@ -26,12 +29,16 @@ from finn.dataflow.space import Problem, Space
 from finn.dataflow._engine import Decided
 
 
-class SummaryOp(DataflowOp):
+class SummarySpace(DataflowSpace):
     family = "test.summary"
     value = OpInput(index=0)
 
     def selected_dataflow(self):
         return None
+
+
+class SummaryOp(DataflowOp):
+    space_type = SummarySpace
 
 
 class SummaryProblem(Space):
@@ -71,21 +78,21 @@ SUMMARY_CLASSES = [
 @pytest.mark.parametrize("values", SUMMARY_CLASSES, ids=["finite", "infinite", "all_nan", "empty"])
 def test_summary_fingerprints_and_real_save_reload(values, tmp_path):
     model = model_with(values)
-    op = SummaryOp(model.graph.node[0]).bind(model, None)
+    op = make_space(model, space_type=SummarySpace)
     summary = summarize_tensor_values(values)
-    assert op.answer(SummaryOp.value.value_summary) == Decided(summary)
-    assert SummaryOp.value.value_summary.canonical is TENSOR_VALUE_SUMMARY_CODEC
+    assert op.answer(SummarySpace.value.value_summary) == Decided(summary)
+    assert SummarySpace.value.value_summary.canonical is TENSOR_VALUE_SUMMARY_CODEC
     encoded = TENSOR_VALUE_SUMMARY_CODEC.encode(summary)
     json.dumps(encoded, allow_nan=False)  # no non-finite JSON number, including nested extrema
     assert fingerprint(summary) == fingerprint(replace(summary))
-    chosen = op.commit(model)
+    chosen = make_op(model, space_type=SummarySpace).save_space(op)
     path = tmp_path / "summary.onnx"
     model.save(str(path))
     restored_model = ModelWrapper(str(path))
-    restored = SummaryOp(restored_model.graph.node[0]).bind(restored_model, None)
+    restored = make_space(restored_model, space_type=SummarySpace)
     assert restored.problem_fingerprint == chosen.problem_fingerprint
-    assert restored.answer(SummaryOp.value.value_summary) == op.answer(
-        SummaryOp.value.value_summary
+    assert restored.answer(SummarySpace.value.value_summary) == op.answer(
+        SummarySpace.value.value_summary
     )
     assert restored.reconstruct().problem_fingerprint == op.problem_fingerprint
     assert not any("summary" in item.name for item in model.graph.node[0].attribute)
@@ -147,7 +154,7 @@ def test_model_level_binding_analysis_and_reconstruction_each_use_one_bulk_pass(
         return real(current)
 
     monkeypatch.setattr(reconstruction, "initializer_facts", counted)
-    monkeypatch.setattr(model, "get_customop_wrapper", lambda node: SummaryOp(node))
+    monkeypatch.setitem(custom_op, "SummaryOp", SummaryOp)
     monkeypatch.setattr(
         model, "get_initializer", lambda *_: pytest.fail("array lookup during reconstruction")
     )
@@ -156,7 +163,7 @@ def test_model_level_binding_analysis_and_reconstruction_each_use_one_bulk_pass(
     reconstruction.analyze_sources(model)
     assert len(calls) == 2
     with reconstruction.source_analysis(model):
-        fresh = tuple(op.rebind(model) for op in bound)
+        fresh = reconstruction.bind_operations(model, None)
     assert len(calls) == 3
     assert [op.problem_fingerprint for op in bound] == [op.problem_fingerprint for op in fresh]
     for op in bound:
@@ -173,8 +180,8 @@ def test_model_level_binding_analysis_and_reconstruction_each_use_one_bulk_pass(
 def test_initializer_payload_is_frozen_with_the_same_one_pass_source_analysis():
     values = np.array([[3.0, -2.0], [7.0, 5.0]], dtype=np.float32)
     model = model_with(values)
-    op = SummaryOp(model.graph.node[0]).bind(model, None)
-    answer = op.answer(SummaryOp.value.initializer_value)
+    op = make_space(model, space_type=SummarySpace)
+    answer = op.answer(SummarySpace.value.initializer_value)
     assert isinstance(answer, Decided)
     frozen = answer.value
     assert isinstance(frozen, FrozenInitializer)
@@ -182,14 +189,14 @@ def test_initializer_payload_is_frozen_with_the_same_one_pass_source_analysis():
     assert frozen.summary == summarize_tensor_values(values)
     model.set_initializer("value", np.zeros_like(values))
     assert np.array_equal(frozen.array_copy(), values)
-    assert op.answer(SummaryOp.value.initializer_value) == Decided(frozen)
+    assert op.answer(SummarySpace.value.initializer_value) == Decided(frozen)
 
 
 def test_scalar_initializer_rank_survives_capture_copy_and_graph_round_trip():
     values = np.array(7, dtype=np.int64)
     model = model_with(values)
-    op = SummaryOp(model.graph.node[0]).bind(model, None)
-    answer = op.answer(SummaryOp.value.initializer_value)
+    op = make_space(model, space_type=SummarySpace)
+    answer = op.answer(SummarySpace.value.initializer_value)
     assert isinstance(answer, Decided)
     frozen = answer.value
     assert frozen.shape == ()
@@ -214,7 +221,7 @@ def test_model_analysis_refuses_an_unsupported_present_initializer_even_if_unuse
 def test_commit_rechecks_current_values_even_inside_an_earlier_analysis_pass():
     model = model_with(np.ones(2, dtype=np.float32))
     with reconstruction.source_analysis(model):
-        op = SummaryOp(model.graph.node[0]).bind(model, None)
+        op = make_space(model, space_type=SummarySpace)
         effects = op.graph_effects()
         model.set_initializer("value", np.zeros(2, dtype=np.float32))
         before = model.model.SerializeToString(deterministic=True)

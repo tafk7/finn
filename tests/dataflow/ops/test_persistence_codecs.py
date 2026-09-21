@@ -5,6 +5,10 @@
 
 from dataclasses import dataclass
 from enum import Enum
+from unittest.mock import patch
+from finn.custom_op.dataflow import custom_op
+from qonnx.custom_op import registry
+from finn.dataflow.ops.space import DataflowSpace
 from typing import Any
 
 import pytest
@@ -68,7 +72,7 @@ def _tile(value: Any) -> Tile:
 TILE_CODEC = AttributeCodec("test.tile", 1, lambda value: [value.rows, value.cols], _tile, "ints")
 
 
-class NativeOp(DataflowOp):
+class NativeSpace(DataflowSpace):
     family = "test.native"
     flag = Decision(bool, values=(False, True))
     count = Decision(int, values=(-2, 4))
@@ -84,39 +88,52 @@ class NativeOp(DataflowOp):
         return None
 
 
-def _model(operation=NativeOp):
-    node = helper.make_node(operation.__name__, [], [], domain=DATAFLOW_DOMAIN, name="native")
+def _model(operation=NativeSpace):
+    node = helper.make_node("TestOp", [], [], domain=DATAFLOW_DOMAIN, name="native")
     model = ModelWrapper(helper.make_model(helper.make_graph([node], "native", [], [])))
     assign_dataflow_scope_ids(model, domain=DATAFLOW_DOMAIN)
     return model
 
 
+def _op(model, space_type=NativeSpace):
+    definition = space_type
+
+    class TestOp(DataflowOp):
+        space_type = definition
+
+    with (
+        patch.dict(registry._OP_REGISTRY, {}, clear=True),
+        patch.dict(custom_op, {"TestOp": TestOp}),
+    ):
+        return model.get_customop_wrapper(model.graph.node[0])
+
+
 @pytest.mark.parametrize(
     "declaration,value,kind,encoded",
     [
-        (NativeOp.flag, True, "i", 1),
-        (NativeOp.flag, False, "i", 0),
-        (NativeOp.count, -2, "i", -2),
-        (NativeOp.fraction, 0.5, "f", 0.5),
-        (NativeOp.label, "", "s", ""),
-        (NativeOp.colour, Colour.BLUE, "s", "blue"),
-        (NativeOp.enum_count, Count.TWO, "s", "2"),
-        (NativeOp.enum_fraction, Fraction.QUARTER, "s", (0.25).hex()),
-        (NativeOp.shape, (), "ints", ()),
-        (NativeOp.shape, (2, 4), "ints", (2, 4)),
-        (NativeOp.tile, Tile(2, 4), "ints", (2, 4)),
+        (NativeSpace.flag, True, "i", 1),
+        (NativeSpace.flag, False, "i", 0),
+        (NativeSpace.count, -2, "i", -2),
+        (NativeSpace.fraction, 0.5, "f", 0.5),
+        (NativeSpace.label, "", "s", ""),
+        (NativeSpace.colour, Colour.BLUE, "s", "blue"),
+        (NativeSpace.enum_count, Count.TWO, "s", "2"),
+        (NativeSpace.enum_fraction, Fraction.QUARTER, "s", (0.25).hex()),
+        (NativeSpace.shape, (), "ints", ()),
+        (NativeSpace.shape, (2, 4), "ints", (2, 4)),
+        (NativeSpace.tile, Tile(2, 4), "ints", (2, 4)),
     ],
 )
 def test_native_values_round_trip_through_onnx(declaration, value, kind, encoded, tmp_path):
     model = _model()
-    chosen = NativeOp(model.graph.node[0]).bind(model, None).assign(declaration, value)
-    committed = chosen.commit(model)
+    chosen = _op(model).space.assign(declaration, value)
+    committed = _op(model).save_space(chosen)
     key = next(iter(committed.recorded()))
     assert read_attributes(model.graph.node[0])[key] == NativeAttribute(kind, encoded)
     path = tmp_path / "native.onnx"
     model.save(str(path))
     restored_model = ModelWrapper(str(path))
-    restored = NativeOp(restored_model.graph.node[0]).bind(restored_model, None)
+    restored = _op(restored_model).space
     assert restored.recorded()[key] == value
     assert type(restored.recorded()[key]) is type(value)
     assert not any("codec" in item.name for item in model.graph.node[0].attribute)
@@ -124,15 +141,15 @@ def test_native_values_round_trip_through_onnx(declaration, value, kind, encoded
 
 def test_captured_native_values_share_compiled_nominal_and_custom_codecs() -> None:
     model = _model()
-    operation = NativeOp(model.graph.node[0]).bind(model, None)
+    operation = _op(model).space
     for declaration, value in (
-        (NativeOp.colour, Colour.BLUE),
-        (NativeOp.enum_fraction, Fraction.QUARTER),
-        (NativeOp.tile, Tile(2, 4)),
+        (NativeSpace.colour, Colour.BLUE),
+        (NativeSpace.enum_fraction, Fraction.QUARTER),
+        (NativeSpace.tile, Tile(2, 4)),
     ):
         operation = operation.assign(declaration, value)
     paths = ("colour", "enum_fraction", "tile")
-    schema = choice_subset(operation_choice_schema(NativeOp), paths)
+    schema = choice_subset(operation_choice_schema(NativeSpace), paths)
     resolved = resolve_choice_subset(operation, choice_subset(tuple(schema), paths))
     choices = tuple(
         (item, answer.value) for item, answer in resolved if isinstance(answer, Decided)
@@ -157,7 +174,7 @@ def test_captured_native_values_share_compiled_nominal_and_custom_codecs() -> No
 
 @pytest.mark.parametrize("encoded", ([1, True], [1.0, float("inf")], [1, 2.0]))
 def test_native_tuple_codec_refuses_unrepresentable_values(encoded) -> None:
-    schema = choice_subset(operation_choice_schema(NativeOp), ("shape",))
+    schema = choice_subset(operation_choice_schema(NativeSpace), ("shape",))
     with pytest.raises((ValueError, TypeError), match="homogeneous|finite"):
         decode_choice_value(schema[0], encoded)
 
@@ -175,34 +192,34 @@ def test_native_tuple_codec_refuses_unrepresentable_values(encoded) -> None:
 )
 def test_native_decoding_does_not_coerce_alternate_representations(name, value):
     model = _model()
-    NativeOp(model.graph.node[0]).bind(model, None).commit(model)
+    _op(model).save_space()
     model.graph.node[0].attribute.append(helper.make_attribute(name, value))
     with pytest.raises(DataflowOpError, match="cannot decode"):
-        NativeOp(model.graph.node[0]).bind(model, None)
+        _op(model).space
 
 
 def test_float32_precision_loss_requires_an_explicit_codec():
     model = _model()
-    chosen = NativeOp(model.graph.node[0]).bind(model, None).assign(NativeOp.fraction, 0.1)
+    chosen = _op(model).space.assign(NativeSpace.fraction, 0.1)
     with pytest.raises(AuthoringError, match="loses precision"):
         chosen.graph_effects()
 
 
 def test_a_structured_decision_without_an_attribute_codec_is_refused_at_binding():
-    class Uncoded(DataflowOp):
+    class Uncoded(DataflowSpace):
         family = "test.uncoded"
         tile = Decision(Tile, values=(Tile(2, 4),))
 
     model = _model(Uncoded)
     with pytest.raises(AuthoringError, match="canonical=AttributeCodec"):
-        Uncoded(model.graph.node[0]).bind(model, None)
+        _op(model, Uncoded).space
 
 
 def test_stable_declaration_names_determine_native_attribute_names():
     class Child(Space):
         fold = Decision(int, values=(2,), name="PE")
 
-    class Named(DataflowOp):
+    class Named(DataflowSpace):
         family = "test.named"
         child = Subspace(Child, name="selected_kernel")
 
@@ -210,8 +227,8 @@ def test_stable_declaration_names_determine_native_attribute_names():
             return None
 
     model = _model(Named)
-    root = Named(model.graph.node[0]).bind(model, None)
-    committed = root.child.assign(Child.fold, 2).root.commit(model)
+    root = _op(model, Named).space
+    committed = _op(model, Named).save_space(root.child.assign(Child.fold, 2).root)
     assert committed.recorded() == {"selected_kernel.PE": 2}
     assert read_attributes(model.graph.node[0])["selected_kernel__PE"] == NativeAttribute("i", 2)
 
@@ -220,7 +237,7 @@ def test_deterministic_name_encoding_rejects_collisions():
     class Child(Space):
         axis = Decision(int, values=(2,))
 
-    class Collision(DataflowOp):
+    class Collision(DataflowSpace):
         family = "test.collision"
         child = Subspace(Child)
         flat = Decision(int, values=(2,), name="child__axis")
@@ -229,15 +246,15 @@ def test_deterministic_name_encoding_rejects_collisions():
     with pytest.raises(AuthoringError, match="collision"):
         compile_space(Collision, "unrelated_root")
     with pytest.raises(AuthoringError, match="collision"):
-        Collision(model.graph.node[0]).bind(model, None)
+        _op(model, Collision).space
 
 
 def test_source_and_decision_names_cannot_share_an_attribute():
-    class Collision(DataflowOp):
+    class Collision(DataflowSpace):
         family = "test.source_collision"
         source = Attribute(int, default=2, onnx="PE")
         fold = Decision(int, values=(2,), name="PE")
 
     model = _model(Collision)
     with pytest.raises(AuthoringError):
-        Collision(model.graph.node[0]).bind(model, None)
+        _op(model, Collision).space

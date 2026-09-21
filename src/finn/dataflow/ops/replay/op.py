@@ -24,13 +24,13 @@ from finn.dataflow.space.declarations import (
 )
 from finn.dataflow.ops.mapping import CoordinateMapping
 from finn.dataflow.ops.base import DataflowOp, DataflowOpError
-from finn.dataflow.ops.source import SourceNode
+from finn.dataflow.ops.space import DataflowSpace
 from finn.dataflow.ops.binding import ChoiceBinding, ImplementationBinding, OperandBinding
 from finn.dataflow.kernels.replay import ActivationReplayKernel
 from finn.dataflow.ops.schema import Attribute, OpInput, OpOutput
 
 
-class ActivationReplayOp(DataflowOp):
+class ReplaySpace(DataflowSpace):
     """Repeat each activation row once per neuron fold."""
 
     family: ClassVar[str] = "finn.dataflow.activation_replay"
@@ -121,6 +121,27 @@ class ActivationReplayOp(DataflowOp):
         activation_type=activation.datatype,
     )
 
+    # ``verify_node`` is deliberately *not* overridden.  This class used to
+    # carry a copy that called ``assess`` directly, which requires an attached
+    # occurrence -- so verification crashed on the path FINN actually takes,
+    # where ``verify_nodes(model)`` holds an ordinary unbound wrapper.  The
+    # generic form on DataflowOp goes through ``assess_source()``, which answers
+    # bound or not, and there is no reason for an operation to have its own.
+
+    def expected_outputs(self) -> dict[str, tuple[tuple[int, ...] | None, Any]]:
+        use = self
+        datatype, domain = use.operand_type("result"), use.operand_domain("result")
+        return {
+            "expanded": (
+                domain.value.extents if isinstance(domain, Decided) else None,
+                datatype.value if isinstance(datatype, Decided) else None,
+            )
+        }
+
+
+class ActivationReplayOp(DataflowOp):
+    space_type = ReplaySpace
+
     def execute_node(self, context: Any, graph: Any) -> None:
         """Repeat each activation row once per neuron fold.
 
@@ -132,32 +153,15 @@ class ActivationReplayOp(DataflowOp):
         del graph
         import numpy  # type: ignore[import-not-found]  # noqa: PLC0415 - heavy import
 
-        source = self.attached_source()
-        node = self.onnx_node
+        source = self.space.source
+        node = self.space.node_snapshot()
         activation = numpy.asarray(context[node.input[0]])
         folds = int(cast(int, source.attributes["neuron_folds"]))
-        expected = self.expected_for(source).get("expanded", (None, None))[0]
+        expected = self.space.expected_outputs().get("expanded", (None, None))[0]
         if expected is None:
             raise DataflowOpError(f"{node.name} cannot state the shape of its own output")
         rows = activation.reshape(-1, activation.shape[-1])
         context[node.output[0]] = numpy.repeat(rows, folds, axis=0).reshape(expected)
 
-    # ``verify_node`` is deliberately *not* overridden.  This class used to
-    # carry a copy that called ``assess`` directly, which requires an attached
-    # occurrence -- so verification crashed on the path FINN actually takes,
-    # where ``verify_nodes(model)`` holds an ordinary unbound wrapper.  The
-    # generic form on DataflowOp goes through ``assess_source()``, which answers
-    # bound or not, and there is no reason for an operation to have its own.
 
-    def expected_for(self, source: SourceNode) -> dict[str, tuple[tuple[int, ...] | None, Any]]:
-        use = self.use_for_source(source)
-        datatype, domain = use.operand_type("result"), use.operand_domain("result")
-        return {
-            "expanded": (
-                domain.value.extents if isinstance(domain, Decided) else None,
-                datatype.value if isinstance(datatype, Decided) else None,
-            )
-        }
-
-
-__all__ = ["ActivationReplayOp"]
+__all__ = ["ReplaySpace", "ActivationReplayOp"]

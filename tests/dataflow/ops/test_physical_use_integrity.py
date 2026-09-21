@@ -15,16 +15,19 @@ from finn.dataflow.artifacts.abi import Bus
 from finn.dataflow.artifacts.build import FixedModuleName
 from finn.dataflow.kernels.matmul.base import MatmulInterface
 from finn.dataflow.model.physical.interface import PhysicalResult
+from finn.dataflow.model.logical.interface_authoring import PublicOperandDeclaration
 from finn.dataflow.model.logical.region import BeatSequence
 from finn.dataflow.ops.base import DataflowOpError
 from finn.dataflow.ops.binding import ChoiceBinding, ImplementationBinding
 from finn.dataflow.ops.native import NativeAttribute, SCHEMA_VERSION_ATTRIBUTE, serialize_choices
 from finn.dataflow.ops.schema import Attribute
 from finn.dataflow.ops.model_effects import ModelReadSet
-from finn.dataflow.ops.mvau.op import MvauDataflowOp
+from finn.dataflow.ops.mvau.op import MvauSpace
+from finn.dataflow.ops.reconstruction import build_space
 from finn.dataflow.ops.physical import (
     authorize_component_use,
     capture_op_physical,
+    capture_local_physical,
     install_compiler_physical_component,
     install_physical_component,
     materialize_build_request,
@@ -33,12 +36,23 @@ from finn.dataflow.ops.physical import (
     prepare_local_physical,
     validate_physical_build_association,
 )
-from finn.dataflow.space.declarations import Decision, Projection, Readiness, Subspace, derived
+from finn.dataflow.space.declarations import (
+    ConstraintGroup,
+    Decision,
+    Input,
+    Projection,
+    Readiness,
+    Subspace,
+    constraint,
+    derived,
+)
 
 
 def _point(index=0):
     model, build, _context = source_model()
-    operation = configure(MvauDataflowOp(model.graph.node[index]).bind(model, build))
+    operation = configure(
+        model.get_customop_wrapper(model.graph.node[index]).set_context(build).space
+    )
     return model, build, operation
 
 
@@ -106,7 +120,7 @@ def test_altered_meaningful_capture_fields_refuse_before_preparation(field, tmp_
 
 def test_one_built_artifact_is_reusable_by_distinct_valid_node_uses_without_context(tmp_path):
     model, build, left = _point()
-    right = configure(MvauDataflowOp(model.graph.node[1]).bind(model, build))
+    right = configure(model.get_customop_wrapper(model.graph.node[1]).set_context(build).space)
     first, second = capture_op_physical(left), capture_op_physical(right)
     assert first.local.point_fingerprint != second.local.point_fingerprint
     assert first.requirements == second.requirements
@@ -146,7 +160,9 @@ def test_supplied_graph_connection_claim_is_checked_at_installation_not_codegen(
         ),
     )
     operation = configure(
-        MvauDataflowOp(model.graph.node[0]).bind(model, build, graph_context=incompatible)
+        model.get_customop_wrapper(model.graph.node[0])
+        .set_context(build, graph_context=incompatible)
+        .space
     )
     capture = capture_op_physical(operation)
     store = ArtifactStore(tmp_path / "connection")
@@ -177,23 +193,23 @@ def test_supplied_graph_connection_claim_is_checked_at_installation_not_codegen(
 
 
 def test_unconsumed_native_choice_and_output_annotation_cache_do_not_stale_codegen_use():
-    class DiagnosticChoice(MvauDataflowOp):
+    class DiagnosticChoice(MvauSpace):
         diagnostic = Decision(bool, values=(False, True))
         diagnostic_tag = Attribute(int, default=0)
         choice_bindings = (
-            *MvauDataflowOp.choice_bindings,
+            *MvauSpace.choice_bindings,
             ChoiceBinding("diagnostic", (), "diagnostic"),
         )
 
     model, build, _context = source_model()
     node = model.graph.node[0]
-    configured = configure(DiagnosticChoice(node).bind(model, build)).assign(
+    configured = configure(build_space(DiagnosticChoice, model, node, build=build)).assign(
         DiagnosticChoice.diagnostic, False
     )
     encoded = serialize_choices(configured)
     encoded[SCHEMA_VERSION_ATTRIBUTE] = NativeAttribute("i", DiagnosticChoice.schema_version)
     node.attribute.extend(value.proto(key) for key, value in encoded.items())
-    operation = DiagnosticChoice(node).bind(model, build)
+    operation = build_space(DiagnosticChoice, model, node, build=build)
     capture = capture_op_physical(operation)
     assert not any(
         item.field == "diagnostic" for item in capture.association.source_reads.expectations
@@ -204,7 +220,7 @@ def test_unconsumed_native_choice_and_output_annotation_cache_do_not_stale_codeg
     model.set_tensor_datatype(node.output[0], DataType["INT8"])
     model.set_tensor_shape(node.output[0], (99, 99))
     assert not validate_physical_build_association(operation, capture, model=model, build=build)
-    current = DiagnosticChoice(node).bind(model, build)
+    current = build_space(DiagnosticChoice, model, node, build=build)
     assert current.answer(DiagnosticChoice.diagnostic).value is True
     assert capture_op_physical(current).requirements == capture.requirements
     physical_key = "kernel__dot_product__simd"
@@ -236,7 +252,7 @@ def test_tampered_built_artifact_fields_refuse(field, tmp_path):
         )
 
 
-def test_unported_required_value_cannot_disappear_from_the_use_record(tmp_path):
+def _constant_physical_interface_point():
     """Abstract interface fixture only; no additional generator/profile is emitted."""
     model, build, production = _point()
     original = capture_op_physical(production).local.physical
@@ -271,23 +287,94 @@ def test_unported_required_value_cannot_disappear_from_the_use_record(tmp_path):
 
         ready = Readiness()
         physical = Projection(result, readiness=ready)
+        interface_mode = Decision(int, values=(0, 1))
+        interface_ready = Decision(bool, values=(False, True))
+        interface_present = Decision(bool, values=(False, True))
+        domain_requirement = Input(int)
 
-    class RequiredValueOp(MvauDataflowOp):
-        implementation_binding = ImplementationBinding(("implementation",))
-        implementation = Subspace(
-            RequiredValueCore,
-            repetitions=MvauDataflowOp.repetitions,
-            matrix_width=MvauDataflowOp.matrix_width,
-            matrix_height=MvauDataflowOp.matrix_height,
-            activation_type=MvauDataflowOp.activation.datatype,
-            weight_type=MvauDataflowOp.weight.datatype,
-            accumulator_type=MvauDataflowOp.accumulator_type,
-            output_type=MvauDataflowOp.output_type,
-            computation_profile=MvauDataflowOp.profile,
-            integer_bounds=MvauDataflowOp.integer_bounds,
+        @constraint(mode=interface_mode)
+        def mode_supported(*, mode):
+            return mode == 0
+
+        mode_accepts = ConstraintGroup(mode_supported)
+
+        @constraint(policy=domain_requirement)
+        def domain_supported(*, policy):
+            return policy == 0
+
+        domain_accepts = ConstraintGroup(domain_supported)
+        domain_readiness = Readiness(properties=(MatmulInterface.result_domain,))
+        public_result_domain = Projection(
+            MatmulInterface.result_domain,
+            readiness=domain_readiness,
+            constraints=domain_accepts,
+        )
+        interface_readiness = Readiness(
+            properties=(MatmulInterface.result_type,),
+            decisions=(interface_ready,),
+            constraints=MatmulInterface.type_support,
+        )
+        public_result_type = Projection(
+            MatmulInterface.result_type,
+            readiness=interface_readiness,
+            applicable_if=interface_present,
+            constraints=(MatmulInterface.type_support, mode_accepts),
+        )
+        public_operands = (
+            *MatmulInterface.public_operands[:2],
+            PublicOperandDeclaration("result", "output", public_result_type, public_result_domain),
         )
 
-    operation = RequiredValueOp(model.graph.node[0]).bind(model, build)
+    class RequiredValueSpace(MvauSpace):
+        implementation_binding = ImplementationBinding(("implementation",))
+        interface_binding = None
+        choice_bindings = (
+            *MvauSpace.choice_bindings,
+            ChoiceBinding("interface_mode", ("implementation",), "interface_mode"),
+            ChoiceBinding("interface_ready", ("implementation",), "interface_ready"),
+            ChoiceBinding("interface_present", ("implementation",), "interface_present"),
+        )
+        source_type_limit = Attribute(int, default=1)
+        domain_requirement = Attribute(int, default=0)
+
+        @constraint(limit=source_type_limit)
+        def source_type_supported(*, limit):
+            return limit > 0
+
+        type_source_accepts = ConstraintGroup(
+            *MvauSpace.type_source_accepts.constraints,
+            source_type_supported,
+        )
+        implementation = Subspace(
+            RequiredValueCore,
+            repetitions=MvauSpace.repetitions,
+            matrix_width=MvauSpace.matrix_width,
+            matrix_height=MvauSpace.matrix_height,
+            activation_type=MvauSpace.activation.datatype,
+            weight_type=MvauSpace.weight.datatype,
+            accumulator_type=MvauSpace.accumulator_type,
+            output_type=MvauSpace.output_type,
+            computation_profile=MvauSpace.profile,
+            integer_bounds=MvauSpace.integer_bounds,
+            domain_requirement=domain_requirement,
+        )
+
+    node = model.graph.node[0]
+    operation = build_space(RequiredValueSpace, model, node, build=build).commit_choices(
+        {
+            "interface_mode": 0,
+            "interface_ready": True,
+            "interface_present": True,
+        }
+    )
+    encoded = serialize_choices(operation)
+    encoded[SCHEMA_VERSION_ATTRIBUTE] = NativeAttribute("i", RequiredValueSpace.schema_version)
+    node.attribute.extend(value.proto(key) for key, value in encoded.items())
+    return model, build, build_space(RequiredValueSpace, model, node, build=build)
+
+
+def test_unported_required_value_cannot_disappear_from_the_use_record(tmp_path):
+    model, build, operation = _constant_physical_interface_point()
     capture = capture_op_physical(operation)
     weights = next(item for item in capture.association.operands if item.role == "weights")
     assert weights.port is None
@@ -310,3 +397,52 @@ def test_unported_required_value_cannot_disappear_from_the_use_record(tmp_path):
             template_roots=template_roots(),
             blobs=ArtifactStore(tmp_path / "not-generated"),
         )
+
+
+@pytest.mark.parametrize(
+    "name,value",
+    [
+        ("accDataType", "INT32"),
+        ("outputDataType", "INT32"),
+        ("noActivation", 0),
+        ("source_type_limit", 0),
+        ("domain_requirement", 1),
+        ("interface_mode", 1),
+        ("interface_ready", None),
+        ("interface_present", 0),
+    ],
+)
+def test_interface_only_type_readiness_constraint_and_source_type_reads_are_retained(name, value):
+    model, build, operation = _constant_physical_interface_point()
+    capture = capture_op_physical(operation)
+    assert not any(item.kind in {"problem", "decision"} for item in capture.local.dependencies)
+    attributes = {item.field for item in capture.association.source_reads.expectations}
+    assert {
+        "accDataType",
+        "outputDataType",
+        "noActivation",
+        "binaryXnorMode",
+        "source_type_limit",
+        "domain_requirement",
+        "interface_mode",
+        "interface_ready",
+        "interface_present",
+    } <= attributes
+    assert any(
+        item.field == "input:2" and item.expected is None
+        for item in capture.association.source_reads.expectations
+    )  # output type acceptance consumed the absence of optional thresholds
+    node = model.graph.node[0]
+    retained = [attribute for attribute in node.attribute if attribute.name != name]
+    del node.attribute[:]
+    node.attribute.extend(retained)
+    if value is not None:
+        node.attribute.append(helper.make_attribute(name, value))
+    assert validate_physical_build_association(operation, capture, model=model, build=build)
+    # The local codegen query remains constant: these are exclusively the extra
+    # interface/source-type premises consumed at the compiler association boundary.
+    current = build_space(type(operation), model, node, build=build)
+    assert (
+        capture_local_physical(current.require_implementation()).dependencies
+        == capture.local.dependencies
+    )

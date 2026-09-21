@@ -54,7 +54,7 @@ from finn.dataflow.space.declarations import Problem
 from finn.dataflow.space.occurrence import ProjectionAssessment
 
 if TYPE_CHECKING:
-    from finn.dataflow.ops.base import DataflowOp
+    from finn.dataflow.ops.space import DataflowSpace
 
 T = TypeVar("T")
 
@@ -78,7 +78,7 @@ class FrozenBuildFact:
 class SourcePublicationContext:
     """The nonserializable context needed to reconstruct one source operation."""
 
-    operation_type: type[DataflowOp]
+    operation_type: type[DataflowSpace]
     opset_version: int
     build_facts: tuple[FrozenBuildFact, ...]
 
@@ -93,7 +93,7 @@ class GraphEffects:
     expected_attributes: Mapping[str, bytes | None]
     remove_attributes: tuple[str, ...]
     set_attributes: Mapping[str, NativeAttribute]
-    operation_type: type[DataflowOp]
+    operation_type: type[DataflowSpace]
     opset_version: int
     build_facts: tuple[FrozenBuildFact, ...]
     expected_operator: tuple[str, str]
@@ -119,6 +119,67 @@ class GraphEffects:
 
 def allocate_scope_id() -> str:
     return f"dataflow_{uuid4().hex}"
+
+
+def save_unidentified_space(
+    adapter: Any,
+    proposal: Any,
+    *,
+    require: Any = None,
+    require_graph: bool = False,
+) -> DataflowSpace:
+    """First-save identity transaction for exactly the supplied unidentified node."""
+    from finn.dataflow.ops.model_effects import _wrapper_from_bytes  # noqa: PLC0415
+    from finn.dataflow.ops.reconstruction import build_space  # noqa: PLC0415
+    from finn.dataflow.ops.base import DataflowOpError  # noqa: PLC0415
+
+    model = adapter._attached_model()
+    indices = [index for index, node in enumerate(model.graph.node) if node is adapter.onnx_node]
+    if len(indices) != 1:
+        raise DataflowOpError("first save requires the exact supplied node in the attached model")
+    index = indices[0]
+    original = model.model.SerializeToString(deterministic=True)
+    try:
+        candidate = _wrapper_from_bytes(model, original)
+        node = candidate.graph.node[index]
+        scope = allocate_scope_id()
+        _write_string(node, SCOPE_ID_ATTRIBUTE, scope)
+        staged = type(adapter)(node, adapter.onnx_opset_version)
+        staged._model = candidate
+        staged._build, staged._graph_context = adapter._build, adapter._graph_context
+        staged._space = build_space(
+            adapter.space_type,
+            candidate,
+            node,
+            build=adapter._build,
+            graph_context=adapter._graph_context,
+            recorded=False,
+            opset_version=adapter.onnx_opset_version,
+            fresh=True,
+        )
+        staged.save_space(proposal, require=require, require_graph=require_graph)
+        prepared = candidate.model.SerializeToString(deterministic=True)
+        if model.model.SerializeToString(deterministic=True) != original:
+            raise DataflowOpError("the current graph changed during first-save validation")
+        model.model.ParseFromString(prepared)
+        saved = build_space(
+            adapter.space_type,
+            model,
+            model.graph.node[index],
+            build=adapter._build,
+            graph_context=adapter._graph_context,
+            opset_version=adapter.onnx_opset_version,
+            fresh=True,
+        )
+        if model.model.SerializeToString(deterministic=True) != prepared:
+            raise DataflowOpError("first-save final hydration mutated the graph")
+        return saved
+    except Exception:
+        if model.model.SerializeToString(deterministic=True) != original:
+            model.model.ParseFromString(original)
+        # ParseFromString invalidates protobuf child references even after rollback.
+        adapter.onnx_node = model.graph.node[index]
+        raise
 
 
 def find_node(model: Any, scope_id: str) -> Any:
@@ -525,17 +586,19 @@ def _apply_graph_effects(
 
     def validate(candidate: Any) -> None:
         from finn.dataflow.ops.base import DataflowOpError  # noqa: PLC0415
-        from finn.dataflow.ops.reconstruction import source_analysis  # noqa: PLC0415
+        from finn.dataflow.ops.reconstruction import build_space  # noqa: PLC0415
 
         node = find_node(candidate, effects.scope_id)
-        with source_analysis(candidate, fresh=True) as summaries:
-            fresh = effects.operation_type(node, context.opset_version)._bind_with(
-                candidate,
-                build_values(context),
-                summaries,
-                recorded=False,
-                context_read=current_read,
-            )
+        fresh = build_space(
+            effects.operation_type,
+            candidate,
+            node,
+            frozen_build=build_values(context),
+            recorded=False,
+            context_read=current_read,
+            opset_version=context.opset_version,
+            fresh=True,
+        )
         if fresh.local_problem_fingerprint != effects.expected_source_fingerprint:
             raise DataflowOpError(
                 "source facts now describe a different problem; rebind and plan again"
@@ -637,7 +700,7 @@ def _source_only_operation(
     *,
     incoming: object | None = None,
 ) -> Any:
-    from finn.dataflow.ops.reconstruction import source_analysis  # noqa: PLC0415
+    from finn.dataflow.ops.reconstruction import build_space  # noqa: PLC0415
 
     node = find_node(model, scope_id)
     context_read = None
@@ -652,14 +715,16 @@ def _source_only_operation(
 
             raise DataflowOpError("graph effects contain an invalid incoming context")
         context_read = ContextRead(incoming, ModelReadSet())
-    with source_analysis(model, fresh=True) as summaries:
-        return context.operation_type(node, context.opset_version)._bind_with(
-            model,
-            build_values(context),
-            summaries,
-            recorded=False,
-            context_read=context_read,
-        )
+    return build_space(
+        context.operation_type,
+        model,
+        node,
+        frozen_build=build_values(context),
+        recorded=False,
+        context_read=context_read,
+        opset_version=context.opset_version,
+        fresh=True,
+    )
 
 
 class _FrozenBuildConfiguration:
@@ -674,8 +739,8 @@ def _frozen_build_configuration(context: SourcePublicationContext) -> object:
 
 
 def _apply_expected_choices(
-    operation: DataflowOp, choices: tuple[RecordedChoice, ...]
-) -> DataflowOp:
+    operation: DataflowSpace, choices: tuple[RecordedChoice, ...]
+) -> DataflowSpace:
     from finn.dataflow.ops.base import DataflowOpError  # noqa: PLC0415
     from finn.dataflow.space.occurrence import occurrence_commit_paths  # noqa: PLC0415
 
@@ -696,7 +761,7 @@ def _apply_expected_choices(
     return committed
 
 
-def _assert_expected_choices(operation: DataflowOp, choices: tuple[RecordedChoice, ...]) -> None:
+def _assert_expected_choices(operation: DataflowSpace, choices: tuple[RecordedChoice, ...]) -> None:
     from finn.dataflow.ops.base import DataflowOpError  # noqa: PLC0415
 
     actual = tuple(operation.recorded().items())
@@ -710,10 +775,10 @@ def _assert_expected_choices(operation: DataflowOp, choices: tuple[RecordedChoic
         raise DataflowOpError("written native choices differ from the publication plan")
 
 
-def _hydrate_candidate(operation: DataflowOp) -> DataflowOp:
+def _hydrate_candidate(operation: DataflowSpace) -> DataflowSpace:
     from finn.dataflow.ops.native import hydrate  # noqa: PLC0415
 
-    return cast("DataflowOp", hydrate(operation))
+    return cast("DataflowSpace", hydrate(operation))
 
 
 def _text(value: object) -> str:

@@ -4,6 +4,8 @@
 """One actual graph binding survives Region normalization and private renesting."""
 
 import numpy as np
+import pytest
+from dataclasses import replace
 
 from finn.dataflow._engine import Absent, Decided
 from finn.dataflow.analysis.integer_dot import DotProductBounds
@@ -21,10 +23,13 @@ from finn.dataflow.model.logical.composition import RegionResult, logical_networ
 from finn.dataflow.model.logical.interface import OperandExport, OperandTarget
 from finn.dataflow.model.logical.interface_authoring import PublicOperandDeclaration
 from finn.dataflow.model.logical.network import PositionMap, RegionEndpoint
+from finn.dataflow.model.logical.maps import ExplicitCoordinateMap, RectangularDomain
 from finn.dataflow.model.logical.refs import RegionInputRef, RegionOutputRef
 from finn.dataflow.model.logical.region import InputInterface
 from finn.dataflow.model.physical.authoring import PhysicallyUnsupported
-from finn.dataflow.ops.base import DataflowOp
+from finn.dataflow.ops.space import DataflowSpace
+from finn.dataflow.ops.base import DataflowOpError
+from dataflow.ops.factory import make_op, make_space
 from finn.dataflow.ops.binding import ImplementationBinding, OperandBinding
 from finn.dataflow.ops.mapping import CoordinateMapping, Internal, derive_public_operand_mappings
 from finn.dataflow.ops.schema import DatatypeAttribute, OpInput, OpOutput
@@ -133,7 +138,7 @@ class ExtraEnclosure(MatmulInterface):
     )
 
 
-class MatrixBindingOp(DataflowOp):
+class MatrixBindingSpace(DataflowSpace):
     """A test node with a fixed bare MatMul contract and ordinary graph operands."""
 
     family = "test.public_matrix_binding"
@@ -197,8 +202,8 @@ class MatrixBindingOp(DataflowOp):
         integer_bounds=integer_bounds,
     )
 
-    def expected_for(self, source):
-        use = self.use_for_source(source)
+    def expected_outputs(self):
+        use = self
         datatype, domain = use.operand_type("result"), use.operand_domain("result")
         return {
             "output": (
@@ -210,23 +215,68 @@ class MatrixBindingOp(DataflowOp):
 
 _OP_INPUTS = {
     name: (
-        MatrixBindingOp.activation.datatype
+        MatrixBindingSpace.activation.datatype
         if name == "activation_type"
-        else MatrixBindingOp.weight.datatype
+        else MatrixBindingSpace.weight.datatype
         if name == "weight_type"
-        else getattr(MatrixBindingOp, name)
+        else getattr(MatrixBindingSpace, name)
     )
     for name in _INPUT_NAMES
 }
 
 
-class CompositeBindingOp(MatrixBindingOp):
+class CompositeBindingSpace(MatrixBindingSpace):
     kernel = Subspace(OldMatrix, **_OP_INPUTS)
 
 
-class RenestedBindingOp(MatrixBindingOp):
+class RenestedBindingSpace(MatrixBindingSpace):
     kernel = Subspace(ExtraEnclosure, **_OP_INPUTS)
     implementation_binding = ImplementationBinding(("kernel", "renamed"))
+
+
+_WEIGHT_SLICE = ExplicitCoordinateMap(
+    (((k, n), (k - 1, n)) for k in range(1, 4) for n in range(2)),
+    source_domain=RectangularDomain((4, 2)),
+    target_domain=RectangularDomain((3, 2)),
+)
+
+
+class SlicedMatrixSpace(MatrixBindingSpace):
+    """This source operation explicitly consumes only weight rows one to three."""
+
+    operand_bindings = (
+        MatrixBindingSpace.operand_bindings[0],
+        replace(MatrixBindingSpace.operand_bindings[1], adapter=_WEIGHT_SLICE),
+        MatrixBindingSpace.operand_bindings[2],
+    )
+
+    @derived(int, shape=MatrixBindingSpace.weight.shape)
+    def matrix_width(*, shape):
+        return shape[0] - 1
+
+    @constraint(
+        activation_shape=MatrixBindingSpace.activation.shape,
+        weight_shape=MatrixBindingSpace.weight.shape,
+    )
+    def admitted_matrix_shapes(*, activation_shape, weight_shape):
+        return tuple(activation_shape) == (2, 3) and tuple(weight_shape) == (4, 2)
+
+    source_accepts = ConstraintGroup(admitted_matrix_shapes)
+    kernel = Subspace(DirectMatrixKernel, **{**_OP_INPUTS, "matrix_width": matrix_width})
+
+
+_INCOMPLETE_RESULT = ExplicitCoordinateMap(
+    (((r, n), (r, n)) for r in range(2) for n in range(2)),
+    source_domain=RectangularDomain((3, 2)),
+    target_domain=RectangularDomain((2, 2)),
+)
+
+
+class IncompleteResultSpace(SlicedMatrixSpace):
+    operand_bindings = (
+        *SlicedMatrixSpace.operand_bindings[:2],
+        replace(SlicedMatrixSpace.operand_bindings[2], adapter=_INCOMPLETE_RESULT),
+    )
 
 
 def _model():
@@ -234,6 +284,46 @@ def _model():
     model.graph.node[0].op_type = "MatrixBindingFixtureOp"
     model.set_initializer("weight", np.asarray([[1, -2], [3, 4], [-5, 6]], dtype=np.float32))
     return model
+
+
+def _slice_model():
+    model = _model()
+    model.set_initializer(
+        "weight", np.asarray([[99, -99], [1, -2], [3, 4], [-5, 6]], dtype=np.float32)
+    )
+    return model
+
+
+def test_explicit_input_slice_composes_with_internal_transpose_without_inventing_values():
+    model = _slice_model()
+    before = model.model.SerializeToString(deterministic=True)
+    operation = make_op(model, space_type=SlicedMatrixSpace)
+    space = operation.space
+    assert space.operand_domain("weights") == Decided(RectangularDomain((3, 2)))
+    _, mappings = _mapped(space)
+    mapping, values = _body_weights(space, mappings)
+    assert mapping.source_shape == (4, 2)
+    assert mapping.semantic_shape == (2, 3)
+    assert PositionMap.from_coordinate_map(mapping.coordinate_map).source_set.cardinality == 6
+    with pytest.raises(KeyError):
+        mapping.coordinate_map.mapped((0, 0))
+    np.testing.assert_array_equal(values, [[1, 3, -5], [-2, 4, 6]])
+    assert mapping.placement == Internal("root", "W")
+    assert model.model.SerializeToString(deterministic=True) == before
+
+
+def test_output_slice_cannot_omit_required_graph_result_positions():
+    model = _slice_model()
+    operation = make_op(model, space_type=IncompleteResultSpace)
+    result = operation.space.operand_domain("result")
+    assert isinstance(result, Absent)
+    assert any("omits required graph result" in finding.message for finding in result.findings)
+    before = model.model.SerializeToString(deterministic=True)
+    original = operation.space
+    with pytest.raises(DataflowOpError):
+        operation.save_space()
+    assert operation.space is original
+    assert model.model.SerializeToString(deterministic=True) == before
 
 
 def _mapped(use):
@@ -261,7 +351,8 @@ def _body_weights(use, mappings):
     assert initializer is not None
     source_values = initializer.array_copy()
     body_values = np.empty(mapping.semantic_shape, dtype=source_values.dtype)
-    for source_position in np.ndindex(source_values.shape):
+    positions = PositionMap.from_coordinate_map(mapping.coordinate_map).source_set
+    for source_position in positions.materialize(max_points=128):
         body_values[mapping.coordinate_map.mapped(source_position)] = source_values[source_position]
     return mapping, body_values
 
@@ -269,9 +360,9 @@ def _body_weights(use, mappings):
 def test_actual_graph_binding_combines_private_rename_renest_and_weight_transpose():
     model = _model()
     graph_bytes = model.model.SerializeToString(deterministic=True)
-    old = CompositeBindingOp(model.graph.node[0]).hydrate(model)
-    renamed = RenestedBindingOp(model.graph.node[0]).hydrate(model)
-    assert old.operand_bindings == renamed.operand_bindings == MatrixBindingOp.operand_bindings
+    old = make_space(model, space_type=CompositeBindingSpace)
+    renamed = make_space(model, space_type=RenestedBindingSpace)
+    assert old.operand_bindings == renamed.operand_bindings == MatrixBindingSpace.operand_bindings
     assert old.source == renamed.source
     _, old_maps = _mapped(old)
     _, renamed_maps = _mapped(renamed)
@@ -291,7 +382,7 @@ def test_actual_graph_binding_combines_private_rename_renest_and_weight_transpos
 
 def test_actual_dataflow_node_binds_a_direct_region_with_required_unported_weights():
     model = _model()
-    use = MatrixBindingOp(model.graph.node[0]).hydrate(model)
+    use = make_space(model, space_type=MatrixBindingSpace)
     logical, mappings = _mapped(use)
     assert isinstance(logical, RegionResult)
     mapping, body_values = _body_weights(use, mappings)

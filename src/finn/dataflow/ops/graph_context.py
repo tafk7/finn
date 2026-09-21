@@ -13,7 +13,6 @@ from __future__ import annotations
 from collections.abc import Mapping
 from contextvars import ContextVar
 from dataclasses import dataclass
-from math import prod
 from typing import TYPE_CHECKING, Any, Protocol, cast
 
 from finn.dataflow._engine import (
@@ -32,7 +31,7 @@ from finn.dataflow.model.logical.datatypes import (
     encode_datatype,
 )
 from finn.dataflow.model.logical.maps import RectangularDomain
-from finn.dataflow.model.logical.network import DataflowNetwork, PassCorrespondence
+from finn.dataflow.model.logical.network import DataflowNetwork, PassCorrespondence, PositionMap
 from finn.dataflow.model.logical.region import BeatSequence
 from finn.dataflow.ops.mapping import External, OperandMapping
 from finn.dataflow.ops.model_effects import (
@@ -57,7 +56,7 @@ from finn.dataflow.space.declarations import AuthoringError
 from finn.dataflow.space.occurrence import ProjectionAssessment
 
 if TYPE_CHECKING:
-    from finn.dataflow.ops.base import DataflowOp
+    from finn.dataflow.ops.space import DataflowSpace
 
 
 _CONTEXT_PATH = QualifiedPath("op.graph_context")
@@ -322,9 +321,10 @@ class CurrentGraphContext:
             _active_provider_scopes.reset(token)
 
     def _read_current(self, model: Any, build: object, scope: str) -> Answer[ContextRead]:
-        from finn.dataflow.ops.base import DataflowOp, source_declarations  # noqa: PLC0415
+        from finn.dataflow.ops.base import DataflowOp  # noqa: PLC0415
+        from finn.dataflow.ops.space import source_declarations  # noqa: PLC0415
         from finn.dataflow.ops.persistence import find_node  # noqa: PLC0415
-        from finn.dataflow.ops.reconstruction import source_analysis  # noqa: PLC0415
+        from finn.dataflow.ops.reconstruction import build_space  # noqa: PLC0415
         from finn.dataflow.ops.schema import OpInput  # noqa: PLC0415
 
         try:
@@ -335,13 +335,14 @@ class CurrentGraphContext:
                     "graph-context-consumer-not-dataflow",
                     f"scope {scope!r} does not resolve to a DataflowOp",
                 )
-            with source_analysis(model) as summaries:
-                consumer = unbound._bind_with(
-                    model,
-                    unbound._build_values(build),
-                    summaries,
-                    recorded=False,
-                )
+            consumer = build_space(
+                unbound.space_type,
+                model,
+                node,
+                build=build,
+                recorded=False,
+                opset_version=unbound.onnx_opset_version,
+            )
         except ObservationMutationError:
             raise
         except (RequestError, ValueError, KeyError) as error:
@@ -455,7 +456,7 @@ class CurrentGraphContext:
                         f"producer of {operand.tensor!r} has no dataflow scope id",
                     )
                 try:
-                    bound = producer.bind(model, build, graph_context=self)
+                    bound = producer.set_context(build=build, graph_context=self).space
                     accepted_network = bound.graph_dataflow.accepted_answer
                     mappings = bound.operand_mapping
                 except ObservationMutationError:
@@ -631,14 +632,14 @@ def require_context_read(
     )
     if isinstance(answer, Decided):
         return answer.value
-    from finn.dataflow.ops.base import DataflowOpError  # noqa: PLC0415
+    from finn.dataflow.ops.space import DataflowOpError  # noqa: PLC0415
 
     findings = answer.findings
     codes = ", ".join(sorted({item.code for item in findings})) or "not decided"
     raise DataflowOpError(f"graph context is unavailable ({codes})", findings)
 
 
-def graph_dataflow_assessment(operation: DataflowOp) -> ProjectionAssessment[DataflowNetwork]:
+def graph_dataflow_assessment(operation: DataflowSpace) -> ProjectionAssessment[DataflowNetwork]:
     local = operation.dataflow
     answer = local.accepted_answer
     if not isinstance(answer, Decided):
@@ -659,7 +660,7 @@ def graph_dataflow_assessment(operation: DataflowOp) -> ProjectionAssessment[Dat
 
 
 def outgoing_logical_contracts(
-    operation: DataflowOp,
+    operation: DataflowSpace,
 ) -> Answer[tuple[OutputLogicalContract, ...]]:
     accepted = operation.graph_dataflow.accepted_answer
     if not isinstance(accepted, Decided):
@@ -676,10 +677,10 @@ def outgoing_logical_contracts(
         )
 
 
-def capture_frozen_op_logical(operation: DataflowOp) -> AcceptedLogicalCapture:
+def capture_frozen_op_logical(operation: DataflowSpace) -> AcceptedLogicalCapture:
     """Strictly capture one graph-qualified logical candidate at one point."""
 
-    from finn.dataflow.ops.base import DataflowOpError  # noqa: PLC0415
+    from finn.dataflow.ops.space import DataflowOpError  # noqa: PLC0415
     from finn.dataflow.ops.native import capture_decided_choices, encode_choice_value  # noqa: PLC0415
 
     graph = operation.graph_dataflow.accepted_answer
@@ -718,7 +719,7 @@ def capture_frozen_op_logical(operation: DataflowOp) -> AcceptedLogicalCapture:
 
 
 def validate_frozen_op_logical(
-    operation: DataflowOp,
+    operation: DataflowSpace,
     capture: AcceptedLogicalCapture,
     *,
     model: Any,
@@ -731,7 +732,18 @@ def validate_frozen_op_logical(
 
     try:
         validate_model_read_set(model, capture.source_reads)
-        current = operation.rebind(model, build, graph_context=graph_context)
+        from finn.dataflow.ops.reconstruction import build_space  # noqa: PLC0415
+        from finn.dataflow.ops.persistence import find_node  # noqa: PLC0415
+
+        current = build_space(
+            type(operation),
+            model,
+            find_node(model, operation.recorded_scope_id()),
+            build=build,
+            graph_context=graph_context,
+            opset_version=operation.source_opset_version,
+            frozen_build=operation._frozen_build_values() if build is None else None,
+        )
         candidate = _apply_expected_choices(current.reconstruct(), capture.expected_choices)
         actual = capture_frozen_op_logical(candidate)
         if actual != capture:
@@ -751,7 +763,7 @@ def validate_frozen_op_logical(
 
 
 def _validate_graph_contracts(
-    operation: DataflowOp,
+    operation: DataflowSpace,
     network: DataflowNetwork,
     incoming: IncomingGraphContext,
 ) -> Answer[DataflowNetwork]:
@@ -791,7 +803,7 @@ def _validate_graph_contracts(
 
 
 def _output_contracts(
-    operation: DataflowOp,
+    operation: DataflowSpace,
     network: DataflowNetwork,
     mappings: tuple[OperandMapping, ...],
     *,
@@ -825,7 +837,7 @@ def _output_contracts(
 
 
 def _contract_for_mapping(
-    operation: DataflowOp,
+    operation: DataflowSpace,
     network: DataflowNetwork,
     mapping: OperandMapping,
     *,
@@ -885,14 +897,15 @@ def _source_coordinate_sequence(
     *,
     max_fields: int,
 ) -> BeatSequence:
-    count = prod(mapping.source_shape)
+    positions = PositionMap.from_coordinate_map(mapping.coordinate_map).source_set
+    count = positions.cardinality
     if count > max_fields or sequence.delivered_field_count > max_fields:
         raise ValueError(
             f"logical contract needs more than {max_fields} positions for exact source mapping"
         )
     domain = RectangularDomain(mapping.source_shape)
     inverse: dict[tuple[int, ...], tuple[int, ...]] = {}
-    for source in domain.iter_coordinates():
+    for source in positions.materialize(max_points=max_fields):
         target = mapping.coordinate_map.mapped(source)
         if target in inverse:
             raise ValueError("source correspondence is not invertible")
@@ -909,8 +922,8 @@ def _source_coordinate_sequence(
     return BeatSequence(sequence.elements_per_beat, beats).bind_position_domain(domain)
 
 
-def _source_keys(operation: DataflowOp) -> Mapping[str, SourceOperandKey]:
-    from finn.dataflow.ops.base import source_declarations  # noqa: PLC0415
+def _source_keys(operation: DataflowSpace) -> Mapping[str, SourceOperandKey]:
+    from finn.dataflow.ops.space import source_declarations  # noqa: PLC0415
     from finn.dataflow.ops.schema import OpInput, OpOutput  # noqa: PLC0415
 
     present = {item.id for item in (*operation.source.inputs, *operation.source.outputs)}
@@ -925,11 +938,11 @@ def _source_keys(operation: DataflowOp) -> Mapping[str, SourceOperandKey]:
     }
 
 
-def _operation_current_reads(operation: DataflowOp) -> ModelReadSet:
+def _operation_current_reads(operation: DataflowSpace) -> ModelReadSet:
     from finn.dataflow.ops.native import RESERVED_ATTRIBUTES, choice_schema  # noqa: PLC0415
     from finn.dataflow.ops.persistence import source_read_set  # noqa: PLC0415
 
-    node = operation._bound_node().materialize()
+    node = operation.node_snapshot()
     names = {item.name for item in choice_schema(operation)} | RESERVED_ATTRIBUTES
     encoded = {
         item.name: item.SerializeToString(deterministic=True)

@@ -10,10 +10,8 @@ from qonnx.core.datatype import DataType
 from dataflow.ops.test_dataflow_op import _mvau_model
 from finn.dataflow._engine import Decided
 from finn.dataflow.ops.base import DATAFLOW_DOMAIN, DataflowOpError
-from finn.dataflow.ops.mvau.op import MvauDataflowOp
 from finn.dataflow.ops.native import SCHEMA_VERSION_ATTRIBUTE
 from finn.dataflow.ops.persistence import apply_graph_effects, assign_dataflow_scope_ids
-from finn.dataflow.ops.replay.op import ActivationReplayOp
 from finn.dataflow.ops.type_context import producer_type
 
 
@@ -51,13 +49,13 @@ def _precision(model, name):
 
 def test_raw_producer_edit_does_not_authorize_stale_annotation_and_queries_are_pure():
     model = _chain()
-    old = ActivationReplayOp(model.graph.node[1]).hydrate(model)
+    old = model.get_customop_wrapper(model.graph.node[1]).space
     assert old.operand_type("result") == Decided(DataType["INT32"])
     _precision(model, "INT16")
     before = model.model.SerializeToString(deterministic=True)
     assert model.get_tensor_datatype("output") == DataType["INT32"]
     for node in model.graph.node[1:]:
-        use = ActivationReplayOp(node).hydrate(model)
+        use = model.get_customop_wrapper(node).space
         assert use.operand_type("activation") == Decided(DataType["INT16"])
         assert use.operand_type("result") == Decided(DataType["INT16"])
     assert old.operand_type("result") == Decided(DataType["INT32"])
@@ -67,12 +65,12 @@ def test_raw_producer_edit_does_not_authorize_stale_annotation_and_queries_are_p
 def test_checked_update_invalidates_both_consumers_and_preserves_choices():
     model = _chain()
     for node in model.graph.node[1:]:
-        bound = ActivationReplayOp(node).hydrate(model).root
+        bound = model.get_customop_wrapper(node).space
         node.attribute.append(helper.make_attribute("kernel__simd", 2))
         node.attribute.append(helper.make_attribute(SCHEMA_VERSION_ATTRIBUTE, bound.schema_version))
     _precision(model, "INT16")
-    producer = MvauDataflowOp(model.graph.node[0]).rehydrate_current(model)
-    apply_graph_effects(model, producer.graph_effects())
+    producer = model.get_customop_wrapper(model.graph.node[0])
+    producer.save_space()
     assert model.get_tensor_datatype("output") == DataType["INT16"]
     for index, node in enumerate(model.graph.node[1:]):
         assert any(item.name == "kernel__simd" and item.i == 2 for item in node.attribute)
@@ -93,14 +91,14 @@ def test_rejected_producer_type_remains_rejected_through_consumer():
             attribute.s = b"INT8"
     produced = producer_type(model, "output")
     assert not isinstance(produced, Decided)
-    use = ActivationReplayOp(model.graph.node[1]).hydrate(model)
+    use = model.get_customop_wrapper(model.graph.node[1]).space
     assert not isinstance(use.operand_type("result"), Decided)
     assert use.source.inputs[0].datatype is None
 
 
 def test_producer_change_invalidates_a_consumer_write_plan_atomically():
     model = _chain()
-    consumer = ActivationReplayOp(model.graph.node[1]).hydrate(model).root
+    consumer = model.get_customop_wrapper(model.graph.node[1]).space
     effects = consumer.graph_effects()
     _precision(model, "INT16")
     before = model.model.SerializeToString(deterministic=True)

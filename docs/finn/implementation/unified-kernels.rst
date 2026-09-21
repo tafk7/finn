@@ -98,9 +98,14 @@ not change the Op operand binding.
 Native graph hydration
 ----------------------
 
-The DataflowOp ONNX graph is the durable sparse design state. ``op.hydrate(model)``
-returns the normal bound DataflowOp Space occurrence, with frozen current inputs.
-There is no separate use record or bound-Op hierarchy. ``space.resolve_implementation()``
+The DataflowOp ONNX graph is the durable sparse design state.
+``op = model.get_customop_wrapper(node)`` returns a graph-facing DataflowOp
+whose ``op.space`` is already initialized. DataflowOp inherits CustomOp;
+DataflowSpace inherits Space and holds the frozen inputs and immutable point.
+Concrete adapters name explicit ``MvauSpace`` or ``ReplaySpace`` definitions.
+QONNX's generic model-attachment hook performs this construction; no separate
+public hydration step, forwarding facade or second runtime is involved.
+``space.resolve_implementation()``
 returns the existing Answer, including Unresolved before an implementation choice.
 Queries and normal Space successors never alter old points or read live mutable
 graph state. ``space.operand_type("result")`` may resolve before unrelated folding/target facts.
@@ -108,7 +113,12 @@ Known raw values cannot bypass the relevant support constraints.
 
 Native keys bind explicitly to occurrence-aware Decisions, including selectors.
 Omitted choices remain uncommitted; false and zero remain explicit values.
-``target_op.save_space(model, proposal)`` extracts only the proposed selected
+``op.set_context(build=..., graph_context=...)`` constructs fresh facts while
+preserving the current proposal's choices, without a logical or physical acceptance
+gate. Invalid replay leaves the adapter and graph unchanged. Callers may assign
+an immutable successor to ``op.space`` or pass it explicitly when saving.
+``target_op.save_space(proposal)`` uses the adapter's attached current model and
+extracts only the proposed selected
 values, checks compatible family/schema/key codecs, rehydrates current target
 facts and validates the choices before writing atomically. Valid choices can be
 reused from another origin or after a source change. The proposal's old weights,
@@ -147,6 +157,11 @@ backend. Native schema versions whose meaning changed are explicitly rejected;
 saved user files are not silently migrated. Scheduling/FIFO validation, broad
 fusion/routing and an extensive RTL authorship-validation campaign remain future
 work.
+
+Factory queries require no persistent node ID and never mutate the graph to add
+one. When necessary, the first successful save establishes identity only for the
+explicitly supplied node as part of the atomic transaction. Failed saving leaves
+both the graph and the adapter's Space pointer unchanged.
 
 Reusable matrix profiles, type rules and implementations live under
 ``finn.dataflow.kernels.matmul``. Source decoding, initializer capture, native

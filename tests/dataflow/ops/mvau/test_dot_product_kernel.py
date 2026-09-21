@@ -422,14 +422,17 @@ def test_an_incomplete_or_infeasible_point_refuses() -> None:
     assert "dotp-axi" in str(refused.findings) or refused.findings
 
 
-def test_no_kernel_export_coverage_or_binding_object_appears() -> None:
+def test_canonical_network_does_not_embed_source_or_export_state() -> None:
     answer = _configure()
     assert isinstance(answer, Decided)
     configured = answer.value
     for name in ("coverage", "bindings", "regions", "covers"):
         assert not hasattr(configured, name)
-    assert DotpAxiKernel.exports == ()
-    assert ReplayBufferKernel.exports == ()
+    assert {operand.key for operand in DotProductKernel.public_operands} == {
+        "activation",
+        "weights",
+        "result",
+    }
 
 
 def test_two_occurrences_of_the_design_stay_independent() -> None:

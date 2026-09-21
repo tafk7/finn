@@ -34,7 +34,7 @@ from finn.dataflow.space.occurrence import (
 )
 
 if TYPE_CHECKING:
-    from finn.dataflow.ops.base import DataflowOp
+    from finn.dataflow.ops.space import DataflowSpace
 
 SCOPE_ID_ATTRIBUTE = "dataflow_scope_id"
 # Recognized only to remove obsolete ancestry stamps on a checked save.
@@ -348,7 +348,7 @@ def choice_schema(operation: Any) -> tuple[ChoiceAttribute, ...]:
 
 
 def compiled_choice_schema(
-    operation_type: type[DataflowOp], compiled: object
+    operation_type: type[DataflowSpace], compiled: object
 ) -> tuple[ChoiceAttribute, ...]:
     """Operation specialization hook over the existing compiled Space walk."""
 
@@ -363,7 +363,7 @@ def compiled_choice_schema(
     return _choice_schema(operation_type, (*selectors, *decisions))
 
 
-def operation_choice_schema(operation_type: type[DataflowOp]) -> tuple[ChoiceAttribute, ...]:
+def operation_choice_schema(operation_type: type[DataflowSpace]) -> tuple[ChoiceAttribute, ...]:
     """Compile one operation class into a detached, explicitly held schema."""
 
     from finn.dataflow.space.compiler import compile_space_model  # noqa: PLC0415
@@ -378,7 +378,7 @@ def operation_choice_schema(operation_type: type[DataflowOp]) -> tuple[ChoiceAtt
 
 
 def _choice_schema(
-    operation_type: type[DataflowOp], choices: tuple[PersistableChoice, ...]
+    operation_type: type[DataflowSpace], choices: tuple[PersistableChoice, ...]
 ) -> tuple[ChoiceAttribute, ...]:
     from finn.dataflow.ops.schema import Attribute, DatatypeAttribute, attribute_name as source_name  # noqa: PLC0415
     from finn.dataflow.ops.base import source_declarations  # noqa: PLC0415
@@ -557,41 +557,63 @@ def proposed_choice_values(target: Any, proposal: Any) -> dict[str, object]:
     return result
 
 
+def _decode_native_choices(
+    node: Any,
+    schema: tuple[ChoiceAttribute, ...],
+    schema_version: int,
+) -> dict[QualifiedPath, object]:
+    """Check the stored encoding without applying old choices to current domains."""
+    written = read_attributes(node)
+    present_names = {item.name for item in node.attribute}
+    if "dataflow_state" in present_names:
+        raise DecodeError(
+            "legacy JSON dataflow_state is unsupported; reconstruct native state explicitly"
+        )
+    legacy_choices = sorted(name for name in present_names if name.startswith("design__"))
+    if legacy_choices:
+        raise DecodeError(
+            "pre-unified Design choice attributes are unsupported: "
+            f"{legacy_choices!r}; select the Kernel again"
+        )
+    metadata = RESERVED_ATTRIBUTES - {SCOPE_ID_ATTRIBUTE}
+    has_choices = any(item.name in present_names for item in schema)
+    if has_choices or metadata & present_names:
+        version = written.get(SCHEMA_VERSION_ATTRIBUTE)
+        if version != NativeAttribute("i", schema_version):
+            raise DecodeError(f"this build writes schema version {schema_version}, found {version}")
+    values: dict[QualifiedPath, object] = {}
+    for item in schema:
+        if item.name not in present_names:
+            continue
+        if item.name not in written:
+            raise DecodeError(f"unsupported ONNX kind for {item.name}")
+        try:
+            values[item.choice.reference.path] = item.decode(written[item.name])
+        except (ValueError, TypeError) as error:
+            raise DecodeError(f"cannot decode {item.name}: {error}") from error
+    return values
+
+
+def validate_native_encoding(operation_type: Any, node: Any) -> None:
+    """Refuse unsupported or malformed target state before replacing its choices."""
+    from finn.dataflow.ops.base import DataflowOpError  # noqa: PLC0415
+
+    try:
+        _decode_native_choices(
+            node, operation_choice_schema(operation_type), operation_type.schema_version
+        )
+    except (DecodeError, UnicodeError) as error:
+        raise DataflowOpError(f"{node.name}: {error}") from error
+
+
 def hydrate(operation: Any) -> Any:
     from finn.dataflow.ops.base import DataflowOpError  # noqa: PLC0415
 
     try:
-        written = read_attributes(operation.onnx_node)
         schema = choice_schema(operation)
-        present_names = {item.name for item in operation.onnx_node.attribute}
-        if "dataflow_state" in present_names:
-            raise DecodeError(
-                "legacy JSON dataflow_state is unsupported; reconstruct native state explicitly"
-            )
-        legacy_choices = sorted(name for name in present_names if name.startswith("design__"))
-        if legacy_choices:
-            raise DecodeError(
-                "pre-unified Design choice attributes are unsupported: "
-                f"{legacy_choices!r}; select the Kernel again"
-            )
-        metadata = RESERVED_ATTRIBUTES - {SCOPE_ID_ATTRIBUTE}
-        has_choices = any(item.name in present_names for item in schema)
-        if has_choices or metadata & present_names:
-            version = written.get(SCHEMA_VERSION_ATTRIBUTE)
-            if version != NativeAttribute("i", operation.schema_version):
-                raise DecodeError(
-                    f"this build writes schema version {operation.schema_version}, found {version}"
-                )
-        values: dict[QualifiedPath, object] = {}
-        for item in schema:
-            if item.name not in present_names:
-                continue
-            if item.name not in written:
-                raise DecodeError(f"unsupported ONNX kind for {item.name}")
-            try:
-                values[item.choice.reference.path] = item.decode(written[item.name])
-            except (ValueError, TypeError) as error:
-                raise DecodeError(f"cannot decode {item.name}: {error}") from error
+        node = operation.node_snapshot()
+        present_names = {item.name for item in node.attribute}
+        values = _decode_native_choices(node, schema, operation.schema_version)
         # The declaration walk is an inventory, not an assignment order. The
         # engine orders this compatible batch by its dependency graph, including
         # selectors, applicability and domains that read child exports.
@@ -611,7 +633,7 @@ def hydrate(operation: Any) -> Any:
             raise DecodeError("recorded Decision is not reachable in the selected point")
         return operation
     except (DecodeError, UnicodeError) as error:
-        raise DataflowOpError(f"{operation.onnx_node.name}: {error}") from error
+        raise DataflowOpError(f"{operation.node_snapshot().name}: {error}") from error
 
 
 __all__ = [

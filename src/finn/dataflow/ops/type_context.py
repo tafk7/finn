@@ -48,7 +48,8 @@ def producer_type_facts(
     or a carrier-type fallback. Recursion is scoped to this synchronous query.
     """
 
-    from finn.dataflow.ops.base import DATAFLOW_DOMAIN, DataflowOp, source_declarations  # noqa: PLC0415
+    from finn.dataflow.ops.base import DATAFLOW_DOMAIN, DataflowOp  # noqa: PLC0415
+    from finn.dataflow.ops.space import source_declarations  # noqa: PLC0415
     from finn.dataflow.ops.schema import OpOutput  # noqa: PLC0415
 
     producers = tuple(node for node in model.graph.node if tensor in node.output)
@@ -75,7 +76,7 @@ def producer_type_facts(
             ), None
         outputs = tuple(
             name
-            for name, declaration in source_declarations(type(operation))
+            for name, declaration in source_declarations(operation.space_type)
             if isinstance(declaration, OpOutput)
             and declaration.index < len(node.output)
             and node.output[declaration.index] == tensor
@@ -87,7 +88,9 @@ def producer_type_facts(
             ), None
         from finn.dataflow.ops.persistence import source_read_set  # noqa: PLC0415
 
-        current = operation.rehydrate_current(model, build)
+        if build is not None:
+            operation.set_context(build=build)
+        current = operation.space
         answer = cast("Answer[QONNXDataType]", current.operand_type(outputs[0]))
         # Source type rules can consume semantic attributes and authenticated
         # initializer contents. Include their frozen reads recursively, without

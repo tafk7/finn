@@ -48,15 +48,16 @@ def _assessment(
 
 def test_valid_partial_mvau_saves_and_reloads_only_its_decided_choice(tmp_path: Path) -> None:
     model = _mvau_model()
-    chosen = _unbound(model, "mvau0").bind(model, Build()).kernel.select("dot_product").root
+    operation = _unbound(model, "mvau0").set_context(build=Build())
+    chosen = operation.space.kernel.select("dot_product").root
 
-    committed = chosen.commit(model, Build())
+    committed = operation.save_space(chosen)
     assert dict(committed.recorded()) == {"kernel.case": "dot_product"}
 
     path = tmp_path / "partial.onnx"
     model.save(str(path))
     restored_model = ModelWrapper(str(path))
-    restored = _unbound(restored_model, "mvau0").bind(restored_model, Build())
+    restored = _unbound(restored_model, "mvau0").set_context(build=Build()).space
 
     assert dict(restored.recorded()) == {"kernel.case": "dot_product"}
     assert isinstance(restored.dataflow.accepted_answer, Unresolved)
@@ -66,12 +67,13 @@ def test_rank_one_mvau_refuses_partial_save_without_mutating_model_or_point() ->
     model = _mvau_model()
     model.set_tensor_shape("weight", [8])
     model.set_initializer("weight", np.zeros((8,), dtype=np.float32))
-    chosen = _unbound(model, "mvau0").bind(model, Build()).kernel.select("dot_product").root
+    operation = _unbound(model, "mvau0").set_context(build=Build())
+    chosen = operation.space.kernel.select("dot_product").root
     before_model = model.model.SerializeToString(deterministic=True)
     before_point = dict(chosen.recorded())
 
     with pytest.raises(DataflowOpError, match="dataflow projection refuses") as caught:
-        chosen.commit(model, Build())
+        operation.save_space(chosen)
 
     assert model.model.SerializeToString(deterministic=True) == before_model
     assert dict(chosen.recorded()) == before_point

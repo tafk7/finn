@@ -63,6 +63,7 @@ from finn.dataflow.ops.mvau.numerics import (
     execute_mvau_integer,
     mvau_integer_premise_from_operands,
 )
+from finn.dataflow.ops.space import DataflowSpace
 from finn.dataflow.ops.source import SourceNode, SourceOperand
 from finn.dataflow.ops.binding import ChoiceBinding, ImplementationBinding, OperandBinding
 from finn.dataflow.kernels.matmul.batch_interleaved import BatchInterleavedKernel
@@ -153,7 +154,7 @@ def _numerical_rejection(report: IntegerSupportReport) -> object:
     )
 
 
-class MvauDataflowOp(DataflowOp):
+class MvauSpace(DataflowSpace):
     """One matrix-vector node, projected onto the unified Space stack.
 
     **Ownership.**  Each restriction below is written where something can argue
@@ -304,11 +305,12 @@ class MvauDataflowOp(DataflowOp):
         ),
     )
 
+    @classmethod
     def _additional_problem_values(
-        self, source: SourceNode, *, scope_id: str
+        cls, source: SourceNode, *, scope_id: str
     ) -> Mapping[Problem[Any], object]:
         stable_scope = scope_id or f"source-node:{source.domain}:{source.node_name}"
-        return {type(self).invocation_scope: InvocationScope(stable_scope)}
+        return {cls.invocation_scope: InvocationScope(stable_scope)}
 
     # -- what the composition below reads -------------------------------------
 
@@ -697,8 +699,9 @@ class MvauDataflowOp(DataflowOp):
 
     # -- what this operation is authoritative for -----------------------------
 
-    def expected_for(self, source: SourceNode) -> dict[str, tuple[tuple[int, ...] | None, Any]]:
-        use = self.use_for_source(source)
+    def expected_outputs(self) -> dict[str, tuple[tuple[int, ...] | None, Any]]:
+        source = self.source
+        use = self
         datatype, domain = use.operand_type("result"), use.operand_domain("result")
         shape = None
         if isinstance(domain, Decided):
@@ -708,42 +711,30 @@ class MvauDataflowOp(DataflowOp):
 
     # -- executing the source semantics ----------------------------------------
 
+
+class MvauDataflowOp(DataflowOp):
+    space_type = MvauSpace
+
     def execute_node(self, context: Any, graph: Any) -> None:
         """Compute this node in ONNX, on both of its semantic axes."""
 
         del graph
-        source = self.attached_source()
-        node = self.onnx_node
+        source = self.space.source
+        node = self.space.node_snapshot()
         thresholds = (
             context[node.input[2]] if source.has("threshold") and len(node.input) > 2 else None
         )
         profile = mvau_profile(source)
         if profile.accumulation is AccumulationMode.INTEGER and not profile.fuses_activation:
-            if self.is_bound:
-                answer = self.answer(type(self).source_numerical_report)
-                if not isinstance(answer, Decided):
-                    raise DataflowOpError(
-                        "integer MVAU execution is numerically unsupported",
-                        getattr(answer, "findings", ()),
-                    )
-                report = answer.value
-                writable = self.answer(type(self).runtime_writable_weights)
-                runtime = isinstance(writable, Decided) and bool(writable.value)
-            else:
-                scope = InvocationScope(
-                    self.recorded_scope_id() or f"source-node:{source.domain}:{source.node_name}"
+            answer = self.space.answer(self.space_type.source_numerical_report)
+            if not isinstance(answer, Decided):
+                raise DataflowOpError(
+                    "integer MVAU execution is numerically unsupported",
+                    getattr(answer, "findings", ()),
                 )
-                report = check_mvau_integer_support_from_operands(
-                    source.operand("activation"),
-                    source.operand("weight"),
-                    accumulator_datatype=cast(Any, source.attributes["accumulator_type"]),
-                    output_datatype=cast(Any, source.attributes["output_type"]),
-                    invocation_scope=scope,
-                    runtime_writable=False,
-                    runtime_promise=None,
-                    target_max_bits=64,
-                )
-                runtime = False
+            report = answer.value
+            writable = self.space.answer(self.space_type.runtime_writable_weights)
+            runtime = isinstance(writable, Decided) and bool(writable.value)
             try:
                 result = execute_mvau_integer(
                     activation=context[node.input[0]],
@@ -764,10 +755,10 @@ class MvauDataflowOp(DataflowOp):
                 output_type=cast(Any, source.attributes["output_type"]),
                 activation_bias=int(cast(int, source.attributes["activation_bias"])),
             )
-        expected = self.expected_for(source)["output"][0]
+        expected = self.space.expected_outputs()["output"][0]
         if expected is None:
             raise DataflowOpError(f"{node.name} cannot state the shape of its own output")
         context[node.output[0]] = result.reshape(expected)
 
 
-__all__ = ["MvauDataflowOp", "mvau_profile", "origin_nodes"]
+__all__ = ["MvauSpace", "MvauDataflowOp", "mvau_profile", "origin_nodes"]

@@ -58,8 +58,9 @@ from finn.dataflow.ops.native import (
     read_attributes,
 )
 from finn.dataflow.ops.persistence import assign_dataflow_scope_ids
-from finn.dataflow.ops.reconstruction import bind_operations
-from finn.dataflow.ops.replay.op import ActivationReplayOp
+from finn.dataflow.ops.reconstruction import build_space
+from finn.dataflow.ops.replay.op import ActivationReplayOp, ReplaySpace
+from finn.dataflow.ops.space import DataflowSpace
 from finn.dataflow.ops.schema import Attribute
 from finn.dataflow.space import Subspace
 from finn.dataflow.space.occurrence import ProjectionAssessment, occurrence_persistable
@@ -134,7 +135,7 @@ def _replay_spec(operation: Any) -> ModuleBuildRequirements:
     return cast(ModuleBuildRequirements, physical.value)
 
 
-class _NestedActivationReplayOp(ActivationReplayOp):
+class _NestedReplaySpace(ReplaySpace):
     root_namespace: ClassVar[str] = "deeply.nested.replay"
 
 
@@ -147,8 +148,10 @@ def test_native_reload_to_accepted_mapping_and_portable_artifact(
     model = model.transform(InferDataTypes())
     before = model.model.SerializeToString(deterministic=True)
 
-    bound = bind_operations(model, build)[0]
-    assert isinstance(bound, ActivationReplayOp)
+    adapter = model.get_customop_wrapper(model.graph.node[0]).set_context(build)
+    assert isinstance(adapter, ActivationReplayOp)
+    bound = adapter.space
+    assert isinstance(bound, ReplaySpace)
     assert bound.root is bound
     assert bound.kernel.root is bound
     initial_kernel = bound.kernel.child("replay")
@@ -177,9 +180,7 @@ def test_native_reload_to_accepted_mapping_and_portable_artifact(
     attributes = read_attributes(saved.graph.node[0])
     assert attributes["kernel__pe"] == NativeAttribute("i", 1)
     assert attributes["kernel__simd"] == NativeAttribute("i", 4)
-    assert attributes[SCHEMA_VERSION_ATTRIBUTE] == NativeAttribute(
-        "i", ActivationReplayOp.schema_version
-    )
+    assert attributes[SCHEMA_VERSION_ATTRIBUTE] == NativeAttribute("i", ReplaySpace.schema_version)
     assert set(attributes) == {
         "neuron_folds",
         SCOPE_ID_ATTRIBUTE,
@@ -200,7 +201,9 @@ def test_native_reload_to_accepted_mapping_and_portable_artifact(
         return validate_network(network)
 
     monkeypatch.setattr(design_module, "validate_network", counted_validation)
-    restored = bind_operations(restored_model, build)[0]
+    restored = (
+        restored_model.get_customop_wrapper(restored_model.graph.node[0]).set_context(build).space
+    )
     accepted = restored.dataflow.accepted_answer
     assert isinstance(accepted, Decided)
     network = accepted.value
@@ -253,15 +256,16 @@ def test_native_reload_to_accepted_mapping_and_portable_artifact(
     nested_model = _replay_model(repetitions=2, matrix_width=8, folds=4)
     nested_model = nested_model.transform(InferShapes())
     nested_model = nested_model.transform(InferDataTypes())
-    nested_unbound = _NestedActivationReplayOp(nested_model.graph.node[0])
-    nested = _configure_replay(nested_unbound.bind(nested_model, build))
+    nested = _configure_replay(
+        build_space(_NestedReplaySpace, nested_model, nested_model.graph.node[0], build=build)
+    )
     nested_spec = _replay_spec(nested)
     assert not hasattr(nested_spec, "imported_decisions")
     assert {item.path for item in occurrence_persistable(nested)} == persisted
     assert _observe_artifacts(nested_spec) == restored_artifacts
 
 
-class _RefusalProbe(DataflowOp):
+class _RefusalProbe(DataflowSpace):
     family: ClassVar[str] = "test.c2.refusal_probe"
     width = Attribute(int, default=2)
 
@@ -305,8 +309,11 @@ def test_design_rejections_cross_the_operation_boundary_without_presentation(
     width: int,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    class ProbeAdapter(DataflowOp):
+        space_type = operation_type
+
     node = helper.make_node(
-        operation_type.__name__,
+        "ProbeAdapter",
         [],
         [],
         domain=DATAFLOW_DOMAIN,
@@ -323,8 +330,8 @@ def test_design_rejections_cross_the_operation_boundary_without_presentation(
         )
     )
     assign_dataflow_scope_ids(model, domain=DATAFLOW_DOMAIN)
-    operation = operation_type(model.graph.node[0])
-    bound = operation.bind(model, Build())
+    adapter = ProbeAdapter(model.graph.node[0]).attach_model(model)
+    bound = adapter.space
     selected = bound.selected_dataflow()
     assert selected is not None
     if operation_type in (_KernelRefusalOp, _InvalidTopologyOp):
@@ -349,5 +356,5 @@ def test_design_rejections_cross_the_operation_boundary_without_presentation(
     assert isinstance(bound.dataflow.accepted_answer, Absent)
     assert isinstance(bound.operand_mapping, Absent)
     with pytest.raises(DataflowOpError, match="dataflow projection refuses"):
-        bound.commit(model, Build())
+        adapter.save_space(bound)
     assert model.model.SerializeToString(deterministic=True) == before

@@ -263,25 +263,39 @@ def operand_facet(operation: Any, key: str, name: str) -> Answer[Any]:
     else:
         answer = cast("Answer[Any]", getattr(interface_authoring, name)(target.value, key))
     if name == "operand_domain" and isinstance(answer, Decided):
-        from math import prod
-        from finn.dataflow.ops.mapping import CoordinateMapping
+        from finn.dataflow.ops.mapping import CoordinateMapping, checked_boundary_map
+        from finn.dataflow.model.logical.maps import (
+            IdentityCoordinateMap,
+            AffineRankMap,
+            ExplicitCoordinateMap,
+        )
+        from finn.dataflow.model.logical.network import PositionMap
         from finn.dataflow._engine import Absent, Finding, FindingKind, QualifiedPath
 
-        if not binding.output:
-            shape = operation.source.operand(binding.source).shape
-            expected = shape
-            if binding.adapter == CoordinateMapping.FLATTEN_LEADING and shape:
-                expected = (prod(shape[:-1]), shape[-1])
-            elif binding.adapter == CoordinateMapping.TRANSPOSE_2D and len(shape) == 2:
-                expected = (shape[1], shape[0])
-            if answer.value.extents != expected:
+        explicit = isinstance(
+            binding.adapter, (IdentityCoordinateMap, AffineRankMap, ExplicitCoordinateMap)
+        )
+        if not binding.output or explicit:
+            shape = (
+                PositionMap.from_coordinate_map(binding.adapter).source_set.ambient.extents
+                if binding.output and explicit
+                else operation.source.operand(binding.source).shape
+            )
+            try:
+                checked_boundary_map(
+                    binding.adapter or CoordinateMapping.IDENTITY,
+                    shape,
+                    answer.value.extents,
+                    output=binding.output,
+                )
+            except (TypeError, ValueError) as error:
                 return Absent(
                     (
                         Finding(
                             FindingKind.REJECTION,
                             "operand-domain-binding",
                             QualifiedPath(key),
-                            "source boundary adapter does not match the public operand domain",
+                            str(error),
                         ),
                     )
                 )

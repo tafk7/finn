@@ -29,6 +29,8 @@ from finn.dataflow.conformance import (
 from finn.dataflow.kernels.dotp_axi import DotpAxiKernel
 from finn.dataflow.kernels.matmul.base import DspBlock
 from finn.dataflow.ops.base import DATAFLOW_DOMAIN, DataflowOp
+from finn.dataflow.ops.space import DataflowSpace
+from finn.dataflow.space.declarations import Space
 from finn.dataflow.kernels.matmul.base import WeightedDotProductKernel
 from finn.dataflow.kernels.matmul.batch_interleaved import BatchInterleavedKernel
 from finn.dataflow.kernels.matmul.dot_product import (
@@ -235,11 +237,16 @@ def test_the_replay_operation_conforms(tmp_path: Path) -> None:
 def test_the_harness_fails_when_a_promise_is_broken(tmp_path: Path) -> None:
     """Otherwise a harness that asserted nothing would pass everything."""
 
-    class _Silent(MvauDataflowOp):
-        """An operation whose ``recorded()`` answers on an unbound wrapper."""
+    class _BrokenSave(MvauDataflowOp):
+        """A successful save incorrectly retains the old adapter Space pointer."""
 
-        def recorded(self) -> Any:
-            return {}
+        def save_space(
+            self, proposal: Any = None, *, require: Any = None, require_graph: bool = False
+        ) -> DataflowSpace:
+            original = self.space
+            saved = super().save_space(proposal, require=require, require_graph=require_graph)
+            self._space = original
+            return saved
 
     case = DataflowOpConformanceCase(
         model=_mvau_model(),
@@ -250,7 +257,7 @@ def test_the_harness_fails_when_a_promise_is_broken(tmp_path: Path) -> None:
         reload_path=tmp_path / "broken.onnx",
     )
     node = case.model.graph.node[0]
-    silent = _Silent(node)
+    silent = _BrokenSave(node)
     silent.attach_model(case.model)
 
     original = ModelWrapper.get_customop_wrapper
@@ -261,7 +268,7 @@ def test_the_harness_fails_when_a_promise_is_broken(tmp_path: Path) -> None:
 
     ModelWrapper.get_customop_wrapper = _return_silent  # type: ignore[method-assign]
     try:
-        with pytest.raises(ConformanceFailure, match="recorded"):
+        with pytest.raises(ConformanceFailure, match="Space pointer"):
             assert_dataflow_op_conforms(case)
     finally:
         ModelWrapper.get_customop_wrapper = original  # type: ignore[method-assign]
@@ -277,18 +284,19 @@ def test_the_harness_runs_verification_through_finns_own_path() -> None:
     assert set(report) == {"MvauDataflowOp"}
     assert report["MvauDataflowOp"] == []
 
-    # The wrapper that pass used is unbound, and stays that way.
+    # Factory construction initializes a separate Space even without build facts.
     operation = model.get_customop_wrapper(model.graph.node[0])
     assert isinstance(operation, DataflowOp)
-    assert not operation.is_bound
+    assert not isinstance(operation, Space)
+    assert isinstance(operation.space, DataflowSpace)
 
 
-def test_verification_does_not_replay_recorded_choices(tmp_path: Path) -> None:
-    """A document made against a different problem must not make a node invalid."""
+def test_verification_uses_current_source_with_valid_recorded_choices(tmp_path: Path) -> None:
+    """Compatible saved choices remain inspectable against a widened current source."""
 
     model = _mvau_model()
-    bound = _unbound_mvau(model).bind(model, Build())
-    _configure_external(bound).commit(model, Build())
+    adapter = _factory_mvau(model).set_context(build=Build())
+    adapter.save_space(_configure_external(adapter.space))
     model.save(str(tmp_path / "recorded.onnx"))
 
     stale = ModelWrapper(str(tmp_path / "recorded.onnx"))
@@ -300,7 +308,7 @@ def test_verification_does_not_replay_recorded_choices(tmp_path: Path) -> None:
     assert report["MvauDataflowOp"] == []
 
 
-def _unbound_mvau(model: Any) -> Any:
+def _factory_mvau(model: Any) -> Any:
     operation = model.get_customop_wrapper(model.graph.node[0])
     assert isinstance(operation, MvauDataflowOp)
     return operation
@@ -323,7 +331,7 @@ def test_the_case_is_the_only_operation_specific_input() -> None:
 def test_replacing_the_case_build_does_not_disturb_the_frozen_one(
     tmp_path: Path,
 ) -> None:
-    """``other_build`` is genuinely different, so the refusal it checks is real."""
+    """Different build facts exercise current-target validation without changing the case."""
 
     case = DataflowOpConformanceCase(
         model=_mvau_model(),
@@ -352,7 +360,7 @@ def test_the_replay_association_reads_the_ports_a_region_actually_has() -> None:
 
     model = _replay_model()
     node = next(item for item in model.graph.node if item.name == "replay0")
-    chosen = _configure_replay(model.get_customop_wrapper(node).bind(model, Build()))
+    chosen = _configure_replay(model.get_customop_wrapper(node).set_context(build=Build()).space)
     answer = chosen.operand_mapping
 
     assert isinstance(answer, Decided)

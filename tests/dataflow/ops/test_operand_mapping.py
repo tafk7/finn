@@ -114,7 +114,7 @@ def test_operation_uses_accepted_projection_and_does_not_revalidate(monkeypatch)
 
 def test_unresolved_operation_never_queries_presentation(monkeypatch):
     model = _mvau_model()
-    op = _unbound(model, "mvau0").bind(model, Build())
+    op = _unbound(model, "mvau0").set_context(build=Build()).space
     monkeypatch.setattr(
         mapping, "exposing_ports", lambda *_: pytest.fail("queried unresolved Network")
     )

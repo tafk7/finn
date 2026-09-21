@@ -14,6 +14,7 @@ from finn.dataflow.model.logical.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
 from finn.dataflow.model.logical.interface_authoring import PublicOperandDeclaration
 from finn.dataflow.model.logical.maps import RectangularDomain
 from finn.dataflow.ops.base import DATAFLOW_DOMAIN, DataflowOp
+from finn.dataflow.ops.space import DataflowSpace
 from finn.dataflow.ops.binding import ChoiceBinding, ImplementationBinding, OperandBinding
 from finn.dataflow.ops.mapping import CoordinateMapping
 from finn.dataflow.ops.native import (
@@ -22,7 +23,6 @@ from finn.dataflow.ops.native import (
     serialize_choices,
 )
 from finn.dataflow.ops.persistence import assign_dataflow_scope_ids
-from finn.dataflow.ops.replay.op import ActivationReplayOp
 from finn.dataflow.ops.schema import OpInput, OpOutput
 from finn.dataflow.ops.type_context import producer_type
 from finn.dataflow.space.declarations import (
@@ -80,7 +80,7 @@ class _FixedTypeInterface(_Interface):
     )
 
 
-class _PartialOp(DataflowOp):
+class _PartialSpace(DataflowSpace):
     """Test-only type authoring fixture; it makes no logical/codegen claim."""
 
     family = "test.partial_type"
@@ -92,8 +92,9 @@ class _PartialOp(DataflowOp):
         OperandBinding("output", "result", 0, output=True, adapter=CoordinateMapping.IDENTITY),
     )
 
-    def expected_for(self, source):
-        use = self.use_for_source(source)
+    def expected_outputs(self):
+        source = self.source
+        use = self
         datatype = use.operand_type("result")
         return {
             "output": (
@@ -103,16 +104,16 @@ class _PartialOp(DataflowOp):
         }
 
 
-class DecisionTypeOp(_PartialOp):
+class DecisionTypeSpace(_PartialSpace):
     kernel = Subspace(
         _PrecisionInterface,
-        activation_type=_PartialOp.activation.datatype,
-        shape=_PartialOp.activation.shape,
+        activation_type=_PartialSpace.activation.datatype,
+        shape=_PartialSpace.activation.shape,
     )
     choice_bindings = (ChoiceBinding("precision", ("kernel",), "precision"),)
 
 
-class AlternativeTypeOp(_PartialOp):
+class AlternativeTypeSpace(_PartialSpace):
     @derived(QONNX_DATATYPE_VALUE_SEMANTICS)
     def narrow():
         return DataType["INT8"]
@@ -125,19 +126,27 @@ class AlternativeTypeOp(_PartialOp):
         {
             "narrow": Subspace(
                 _FixedTypeInterface,
-                activation_type=_PartialOp.activation.datatype,
-                shape=_PartialOp.activation.shape,
+                activation_type=_PartialSpace.activation.datatype,
+                shape=_PartialSpace.activation.shape,
                 result_type=narrow,
             ),
             "wide": Subspace(
                 _FixedTypeInterface,
-                activation_type=_PartialOp.activation.datatype,
-                shape=_PartialOp.activation.shape,
+                activation_type=_PartialSpace.activation.datatype,
+                shape=_PartialSpace.activation.shape,
                 result_type=wide,
             ),
         }
     )
     choice_bindings = (ChoiceBinding("implementation", ("kernel",), "case"),)
+
+
+class DecisionTypeOp(DataflowOp):
+    space_type = DecisionTypeSpace
+
+
+class AlternativeTypeOp(DataflowOp):
+    space_type = AlternativeTypeSpace
 
 
 def _chain(operation_type):
@@ -196,13 +205,13 @@ def test_unresolved_producer_type_propagates_and_later_choice_resolves(
     monkeypatch.setitem(custom_op, operation_type.__name__, operation_type)
     model = _chain(operation_type)
     before = model.model.SerializeToString(deterministic=True)
-    initial = operation_type(model.graph.node[0]).hydrate(model)
+    initial = model.get_customop_wrapper(model.graph.node[0]).space
     assert isinstance(initial.operand_type("result"), Unresolved)
     if operation_type is DecisionTypeOp:
         assert isinstance(initial.resolve_implementation(), Decided)
     else:
         assert isinstance(initial.resolve_implementation(), Unresolved)
-    old_consumers = [ActivationReplayOp(node).hydrate(model) for node in model.graph.node[1:]]
+    old_consumers = [model.get_customop_wrapper(node).space for node in model.graph.node[1:]]
     for name in ("middle", "downstream0", "downstream1"):
         assert isinstance(producer_type(model, name), Unresolved)
         assert model.get_tensor_datatype(name) == DataType["INT32"]
@@ -223,7 +232,7 @@ def test_unresolved_producer_type_propagates_and_later_choice_resolves(
         assert producer_type(model, name) == Decided(DataType["INT16"])
         assert model.get_tensor_datatype(name) == DataType["INT32"]
     for node in model.graph.node[1:]:
-        assert ActivationReplayOp(node).hydrate(model).operand_type("result") == Decided(
+        assert model.get_customop_wrapper(node).space.operand_type("result") == Decided(
             DataType["INT16"]
         )
     assert isinstance(initial.operand_type("result"), Unresolved)

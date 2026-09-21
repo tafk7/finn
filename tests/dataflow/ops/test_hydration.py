@@ -10,10 +10,9 @@ from dataclasses import replace
 from onnx import helper
 from qonnx.core.datatype import DataType
 
-from dataflow.ops.test_dataflow_op import _mvau_model, _replay_model
+from dataflow.ops.test_dataflow_op import Build, _mvau_model, _replay_model
 from dataflow.ops.mvau.test_source_semantics import (
     _model as _semantic_mvau_model,
-    _bound as _semantic_mvau_bound,
     _configure_mvau_point,
     MATRIX_HEIGHT,
 )
@@ -32,19 +31,20 @@ from finn.dataflow.space.declarations import (
     AuthoringError,
 )
 from finn.dataflow.kernels.replay import ActivationReplayKernel
-from finn.dataflow.ops.mvau.op import MvauDataflowOp
+from finn.dataflow.ops.mvau.op import MvauSpace
 from finn.dataflow.ops.native import (
     serialize_choices,
     SCHEMA_VERSION_ATTRIBUTE,
     NativeAttribute,
 )
-from finn.dataflow.ops.replay.op import ActivationReplayOp
+from finn.dataflow.ops.replay.op import ReplaySpace
+from finn.dataflow.ops.reconstruction import build_space
 from finn.dataflow.ops.source import SourceError
 
 
 def test_partial_mvau_type_is_common_family_contract_without_target_or_selection():
     model = _mvau_model()
-    use = MvauDataflowOp(model.graph.node[0]).hydrate(model)
+    use = model.get_customop_wrapper(model.graph.node[0]).space
     assert isinstance(use.resolve_implementation(), Unresolved)
     assert use.operand_type("result") == Decided(DataType["INT32"])
     assert use.operand_domain("result").value.extents == (2, 4)
@@ -54,7 +54,7 @@ def test_partial_mvau_type_is_common_family_contract_without_target_or_selection
 
 def test_fixed_replay_type_and_domain_do_not_choose_folding():
     model = _replay_model()
-    use = ActivationReplayOp(model.graph.node[0]).hydrate(model)
+    use = model.get_customop_wrapper(model.graph.node[0]).space
     assert isinstance(use.resolve_implementation(), Decided)
     assert use.operand_type("result") == use.operand_type("activation")
     assert use.operand_domain("result").value.extents == (8, 8)
@@ -63,7 +63,7 @@ def test_fixed_replay_type_and_domain_do_not_choose_folding():
 
 def test_successors_keep_old_point_and_refuse_mixed_or_inactive_occurrences():
     model = _mvau_model()
-    original = MvauDataflowOp(model.graph.node[0]).hydrate(model)
+    original = model.get_customop_wrapper(model.graph.node[0]).space
     selected = original.commit_choices({"kernel__case": "dot_product"})
     assert isinstance(original.resolve_implementation(), Unresolved)
     kernel = selected.require_implementation()
@@ -80,10 +80,8 @@ def test_successors_keep_old_point_and_refuse_mixed_or_inactive_occurrences():
 
 def test_choice_nominal_types_and_inactive_branch_refuse():
     model = _mvau_model()
-    use = (
-        MvauDataflowOp(model.graph.node[0])
-        .hydrate(model)
-        .commit_choices({"kernel__case": "dot_product"})
+    use = model.get_customop_wrapper(model.graph.node[0]).space.commit_choices(
+        {"kernel__case": "dot_product"}
     )
     with pytest.raises((TypeError, ValueError)):
         use.commit_choices({"kernel__dot_product__pe": True})
@@ -93,15 +91,13 @@ def test_choice_nominal_types_and_inactive_branch_refuse():
 
 def test_native_partial_roundtrip_uses_explicit_keys():
     model = _mvau_model()
-    use = (
-        MvauDataflowOp(model.graph.node[0])
-        .hydrate(model)
-        .commit_choices({"kernel__case": "dot_product"})
+    use = model.get_customop_wrapper(model.graph.node[0]).space.commit_choices(
+        {"kernel__case": "dot_product"}
     )
     values = serialize_choices(use)
     values[SCHEMA_VERSION_ATTRIBUTE] = NativeAttribute("i", use.schema_version)
     model.graph.node[0].attribute.extend(value.proto(key) for key, value in values.items())
-    restored = MvauDataflowOp(model.graph.node[0]).hydrate(model)
+    restored = model.get_customop_wrapper(model.graph.node[0]).space
     assert (
         restored.resolve_implementation().value.__class__
         is use.resolve_implementation().value.__class__
@@ -110,43 +106,41 @@ def test_native_partial_roundtrip_uses_explicit_keys():
     assert restored.operand_type("result") == use.operand_type("result")
 
 
-def test_bound_op_is_the_space_and_unbound_queries_refuse():
+def test_factory_returns_adapter_and_separate_space():
     model = _mvau_model()
-    wrapper = MvauDataflowOp(model.graph.node[0])
-    with pytest.raises(DataflowOpError, match="not bound"):
-        wrapper.operand_type("result")
-    operation = wrapper.hydrate(model)
+    operation = model.get_customop_wrapper(model.graph.node[0])
     assert isinstance(operation, DataflowOp)
-    assert isinstance(operation, Space)
-    assert not hasattr(operation, "hydrated_use")
-    assert not hasattr(operation, "successor")
+    assert not isinstance(operation, Space)
+    assert isinstance(operation.space, MvauSpace)
+    assert not hasattr(operation, "hydrate")
+    assert not hasattr(operation.space, "onnx_node")
 
 
 def test_malformed_authored_source_bindings_refuse():
-    class SwappedSources(MvauDataflowOp):
+    class SwappedSources(MvauSpace):
         operand_bindings = (
-            replace(MvauDataflowOp.operand_bindings[0], role="weights"),
-            replace(MvauDataflowOp.operand_bindings[1], role="activation"),
-            MvauDataflowOp.operand_bindings[2],
+            replace(MvauSpace.operand_bindings[0], role="weights"),
+            replace(MvauSpace.operand_bindings[1], role="activation"),
+            MvauSpace.operand_bindings[2],
         )
 
     model = _mvau_model()
     with pytest.raises(AuthoringError, match="different sources"):
-        SwappedSources(model.graph.node[0]).hydrate(model)
+        build_space(SwappedSources, model, model.graph.node[0])
 
 
-class TwinReplay(ActivationReplayOp):
+class TwinReplay(ReplaySpace):
     mirror = Subspace(
         ActivationReplayKernel,
-        repetitions=ActivationReplayOp.repetitions,
-        matrix_width=ActivationReplayOp.matrix_width,
-        matrix_height=ActivationReplayOp.matrix_height,
-        activation_type=ActivationReplayOp.activation.datatype,
+        repetitions=ReplaySpace.repetitions,
+        matrix_width=ReplaySpace.matrix_width,
+        matrix_height=ReplaySpace.matrix_height,
+        activation_type=ReplaySpace.activation.datatype,
     )
     enabled = Decision(bool, values=(False, True))
     offset = Decision(int, values=(0, 1))
     choice_bindings = (
-        *ActivationReplayOp.choice_bindings,
+        *ReplaySpace.choice_bindings,
         ChoiceBinding("mirror_pe", ("mirror",), "pe"),
         ChoiceBinding("mirror_simd", ("mirror",), "simd"),
         ChoiceBinding("enabled", (), "enabled"),
@@ -156,7 +150,7 @@ class TwinReplay(ActivationReplayOp):
 
 def test_repeated_definition_choices_and_false_zero_remain_distinct():
     model = _replay_model()
-    use = TwinReplay(model.graph.node[0]).hydrate(model)
+    use = build_space(TwinReplay, model, model.graph.node[0])
     selected = use.commit_choices(
         {"kernel__simd": 2, "mirror_simd": 4, "enabled": False, "offset": 0}
     )
@@ -171,7 +165,7 @@ def test_repeated_definition_choices_and_false_zero_remain_distinct():
     persisted = dict(encoded)
     persisted[SCHEMA_VERSION_ATTRIBUTE] = NativeAttribute("i", selected.schema_version)
     model.graph.node[0].attribute.extend(value.proto(key) for key, value in persisted.items())
-    restored = TwinReplay(model.graph.node[0]).hydrate(model)
+    restored = build_space(TwinReplay, model, model.graph.node[0])
     assert serialize_choices(restored) == encoded
     assert restored.answer(TwinReplay.enabled).value is False
     assert restored.answer(TwinReplay.offset).value == 0
@@ -193,7 +187,7 @@ def test_fixed_conditional_target_preserves_unresolved_and_inactive_answers():
 
 
 def test_optional_rejecting_op_query_does_not_gate_source_or_public_type():
-    class OptionalCheck(ActivationReplayOp):
+    class OptionalCheck(ReplaySpace):
         @derived(int)
         def diagnostic_value():
             return 1
@@ -211,7 +205,7 @@ def test_optional_rejecting_op_query_does_not_gate_source_or_public_type():
         )
 
     model = _replay_model()
-    use = OptionalCheck(model.graph.node[0]).hydrate(model)
+    use = build_space(OptionalCheck, model, model.graph.node[0])
     assert use.assess_source().verdict is True
     assert isinstance(use.operand_type("result"), Decided)
     assert isinstance(use.assess_view(OptionalCheck.optional_query).accepted_answer, Absent)
@@ -220,20 +214,20 @@ def test_optional_rejecting_op_query_does_not_gate_source_or_public_type():
 def test_datatype_inference_clears_an_unaccepted_cached_result_type():
     model = _mvau_model()
     model.graph.node[0].attribute.append(helper.make_attribute("accDataType", "INT8"))
-    operation = MvauDataflowOp(model.graph.node[0])
-    assert isinstance(operation.hydrate(model).operand_type("result"), Absent)
+    operation = model.get_customop_wrapper(model.graph.node[0])
+    assert isinstance(operation.space.operand_type("result"), Absent)
     operation.infer_node_datatype(model)
     assert not any(
         annotation.tensor_name == "output" and entry.key == "finn_datatype"
         for annotation in model.graph.quantization_annotation
         for entry in annotation.quant_parameter_tensor_names
     )
-    assert isinstance(operation.hydrate(model).operand_type("result"), Absent)
+    assert isinstance(operation.space.operand_type("result"), Absent)
 
 
 def test_fused_type_checks_source_thresholds_without_claiming_bare_kernel_support():
     missing = _semantic_mvau_model(no_activation=False, output_type="UINT4")
-    missing_use = MvauDataflowOp(missing.graph.node[0]).hydrate(missing)
+    missing_use = missing.get_customop_wrapper(missing.graph.node[0]).space
     assert isinstance(missing_use.operand_type("activation"), Decided)
     rejected = missing_use.operand_type("result")
     assert isinstance(rejected, Absent)
@@ -241,9 +235,11 @@ def test_fused_type_checks_source_thresholds_without_claiming_bare_kernel_suppor
 
     thresholds = np.zeros((MATRIX_HEIGHT, 1), dtype=np.float32)
     model = _semantic_mvau_model(no_activation=False, thresholds=thresholds, output_type="UINT4")
-    use = MvauDataflowOp(model.graph.node[0]).hydrate(model)
+    use = model.get_customop_wrapper(model.graph.node[0]).space
     assert use.operand_type("result") == Decided(DataType["UINT4"])
-    chosen = _configure_mvau_point(_semantic_mvau_bound(model))
+    chosen = _configure_mvau_point(
+        model.get_customop_wrapper(model.graph.node[0]).set_context(Build()).space
+    )
     logical = chosen.dataflow.accepted_answer
     assert isinstance(logical, Absent)
     assert any(f.code == "mvau-kernel-fuses-no-activation" for f in logical.findings)
@@ -280,4 +276,4 @@ def test_duplicate_source_logical_annotations_refuse_at_source_capture():
     original = model.graph.quantization_annotation[0]
     model.graph.quantization_annotation.add().CopyFrom(original)
     with pytest.raises(SourceError, match="duplicate logical datatype annotations"):
-        ActivationReplayOp(model.graph.node[0]).hydrate(model)
+        model.get_customop_wrapper(model.graph.node[0]).space

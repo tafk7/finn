@@ -29,7 +29,7 @@ from finn.dataflow.ops.graph_context import (
 from finn.dataflow.kernels.matmul.base import WeightedDotProductKernel
 from finn.dataflow.kernels.matmul.dot_product import DotProductKernel, WeightSupply
 from finn.dataflow.kernels.matmul.resources import template_root
-from finn.dataflow.ops.mvau.op import MvauDataflowOp
+from finn.dataflow.ops.mvau.op import MvauSpace
 from finn.dataflow.ops.source_values import SourceDirection, SourceOperandKey
 
 WEIGHTS = (
@@ -139,7 +139,7 @@ def source_model(
     return model, Build(), CurrentGraphContext(tuple(graph_entries), tuple(external_entries))
 
 
-def configure(operation: MvauDataflowOp, *, pumping: bool | None = True) -> MvauDataflowOp:
+def configure(operation: MvauSpace, *, pumping: bool | None = True) -> MvauSpace:
     chosen = operation.kernel.select("dot_product").root
     chosen = (
         chosen.kernel.alternative("dot_product")

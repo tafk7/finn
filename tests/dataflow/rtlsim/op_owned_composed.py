@@ -24,7 +24,6 @@ from finn.dataflow.artifacts.formats.rtl_module import RtlModuleOptions
 from finn.dataflow.artifacts.packaging import Target, plan_package
 from finn.dataflow.artifacts.store import ArtifactStore
 from finn.dataflow.model.physical.capture import capture_kernel_realization
-from finn.dataflow.ops.mvau.op import MvauDataflowOp
 from finn.dataflow.ops.persistence import CommitmentStage
 from finn.dataflow.ops.physical import (
     capture_op_physical,
@@ -114,12 +113,13 @@ def build_artifacts(directory):
         for invocation, weights in enumerate((WEIGHTS, ALTERNATE_WEIGHTS)):
             prefix = f"r{rows}_inv{invocation}"
             model, build, context = source_model(prefix=prefix, rows=rows, weights=weights)
-            for index, node in enumerate(list(model.graph.node)):
-                operation = configure(
-                    MvauDataflowOp(node).bind(model, build, graph_context=context)
+            for index in range(len(model.graph.node)):
+                node = model.graph.node[index]
+                adapter = model.get_customop_wrapper(node).set_context(
+                    build=build, graph_context=context
                 )
-                operation = operation.commit(
-                    model, build, require=CommitmentStage.PHYSICAL, graph_context=context
+                operation = adapter.save_space(
+                    configure(adapter.space), require=CommitmentStage.PHYSICAL
                 )
                 capture = capture_op_physical(operation)
                 request = prepare_build_request(

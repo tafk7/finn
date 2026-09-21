@@ -30,7 +30,7 @@ TEST_DOMAIN = "test.model_effects"
 def test_native_graph_effects_reject_written_choice_different_from_plan() -> None:
     """A forged native payload cannot contradict the separately captured choices."""
     model = _mvau_model()
-    operation = _configure_mvau_point(_unbound(model, "mvau0").bind(model, Build()))
+    operation = _configure_mvau_point(_unbound(model, "mvau0").set_context(Build()).space)
     effects = operation.graph_effects()
     key = "kernel__dot_product__compute__dotp_axi__compute_pumping"
     assert effects.set_attributes[key] == NativeAttribute("i", 0)
