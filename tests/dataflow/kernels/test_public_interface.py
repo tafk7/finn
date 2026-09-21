@@ -145,6 +145,11 @@ def test_matrix_export_owns_transpose_and_unported_weights(supply):
     kernel = kernel.assign(DotProductKernel.weight_supply, supply)
     candidate = "dotp_axi_embedded" if supply is WeightSupply.EMBEDDED else "dotp_axi"
     kernel = kernel.compute.select(candidate).root.kernel
+    assert isinstance(kernel.logical.accepted_answer, Decided)
+    if supply is WeightSupply.EMBEDDED:
+        assert isinstance(kernel.physical.accepted_answer, Absent)
+    else:
+        assert isinstance(kernel.physical.accepted_answer, Unresolved)
     answer = operand_export(kernel, "weights")
     assert isinstance(answer, Decided), answer
     export = answer.value
