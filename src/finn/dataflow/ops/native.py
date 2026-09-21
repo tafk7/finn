@@ -363,9 +363,23 @@ def _choice_schema(
             if isinstance(decl, (Attribute, DatatypeAttribute))
         }
     )
+    bindings = getattr(operation_type, "choice_bindings", None)
+    explicit = None
+    if bindings is not None:
+        explicit = {}
+        for binding in bindings:
+            if binding.path in explicit:
+                raise AuthoringError(f"duplicate choice target {binding.path!r}")
+            explicit[binding.path] = binding.key
+        paths = {choice.path for choice in choices}
+        if set(explicit) != paths:
+            raise AuthoringError(
+                f"choice bindings must cover exactly the compiled choices: "
+                f"missing={paths - explicit.keys()}, extra={explicit.keys() - paths}"
+            )
     result = []
     for choice in choices:
-        name = attribute_name(choice.path)
+        name = attribute_name(choice.path) if explicit is None else explicit[choice.path]
         if name in names:
             raise AuthoringError(
                 f"native attribute collision: {choice.path!r} and {names[name]!r} "
@@ -481,7 +495,7 @@ def captured_choice_mapping(
     return result
 
 
-def hydrate(operation: Any) -> Any:
+def hydrate(operation: Any, *, require_identity: bool = True) -> Any:
     from finn.dataflow.ops.base import DataflowOpError  # noqa: PLC0415
 
     try:
@@ -507,7 +521,9 @@ def hydrate(operation: Any) -> Any:
                     f"this build writes schema version {operation.schema_version}, found {version}"
                 )
             fingerprint = written.get(FINGERPRINT_ATTRIBUTE)
-            if fingerprint != NativeAttribute("s", operation.local_problem_fingerprint):
+            if require_identity and fingerprint != NativeAttribute(
+                "s", operation.local_problem_fingerprint
+            ):
                 raise DecodeError(
                     "node stores choices made against a different problem; reconstruct explicitly"
                 )

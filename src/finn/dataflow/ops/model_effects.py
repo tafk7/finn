@@ -40,6 +40,7 @@ class ModelReadKind(str, Enum):
     GRAPH_INPUT = "graph_input"
     VALUE_INFO = "value_info"
     TENSOR_FACT = "tensor_fact"
+    VALUE_USERS = "value_users"
     QUANTIZATION_ANNOTATION = "quantization_annotation"
     INITIALIZER_CONTENT = "initializer_content"
     METADATA = "metadata"
@@ -815,6 +816,17 @@ def _read_expectation(
     kind = expectation.kind
     owner = expectation.owner
     field = expectation.field
+    if kind is ModelReadKind.VALUE_USERS:
+        if field is not None:
+            raise DataflowOpError("VALUE_USERS reads have no field")
+        return json.dumps(
+            sorted(
+                (tuple(node.input), tuple(node.output))
+                for node in model.graph.node
+                if owner in node.input
+            ),
+            separators=(",", ":"),
+        )
     if kind is ModelReadKind.NODE:
         node = _node_for_id(model, node_ids, owner)
         if field == "operator":

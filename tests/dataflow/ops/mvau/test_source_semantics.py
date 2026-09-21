@@ -955,22 +955,24 @@ class EmptyClockBuild(Build):
     synth_clk_period_ns: Any = None
 
 
-def test_a_required_build_fact_that_is_missing_fails_loudly() -> None:
-    """The Problem is absence-tolerant; the *configuration* is not let off."""
+def test_missing_build_fact_leaves_physical_input_unresolved() -> None:
+    """Independent type facts do not require a generation clock."""
 
     model = _model()
 
-    with pytest.raises(DataflowOpError, match="clock_period_ns"):
-        _unbound(model, "mvau0").bind(model, NoClockBuild())
+    operation = _unbound(model, "mvau0").bind(model, NoClockBuild())
+    assert MvauDataflowOp.clock_period_ns not in operation.problem_snapshot
+    assert operation.expected_outputs()["output"][1] == DataType["INT32"]
 
 
-def test_a_required_build_fact_supplied_as_none_fails_the_same_way() -> None:
+def test_build_fact_supplied_as_none_remains_unavailable() -> None:
     """Supplying the attribute and setting it to nothing has supplied nothing."""
 
     model = _model()
 
-    with pytest.raises(DataflowOpError, match="clock_period_ns"):
-        _unbound(model, "mvau0").bind(model, EmptyClockBuild())
+    operation = _unbound(model, "mvau0").bind(model, EmptyClockBuild())
+    assert MvauDataflowOp.clock_period_ns not in operation.problem_snapshot
+    assert operation.expected_outputs()["output"][1] == DataType["INT32"]
 
 
 def test_a_valid_build_still_binds() -> None:
@@ -979,7 +981,7 @@ def test_a_valid_build_still_binds() -> None:
     assert _unbound(model, "mvau0").bind(model, Build()).is_bound
 
 
-def test_dsp_type_relocation_preserves_the_source_problem_identity() -> None:
+def test_dsp_codec_stays_stable_while_oh_source_schema_identity_changes() -> None:
     operation = _bound(_model())
     codec = MvauDataflowOp.target_dsp.canonical
     value = operation.problem_snapshot[MvauDataflowOp.target_dsp]
@@ -991,7 +993,7 @@ def test_dsp_type_relocation_preserves_the_source_problem_identity() -> None:
     }
     assert (
         operation.local_problem_fingerprint
-        == "cecb1852f3e07d777b4b0c881c5767f5e4122249e6205c539a4dc4cdb900aaf4"
+        == "5bd4ec2a7bd4ae41fbd642449bf57290ca1ca1449d8d6feac65d19c306e859ea"
     )
 
 

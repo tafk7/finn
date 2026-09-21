@@ -13,6 +13,7 @@ tensor -- and the layer between them does not change.
 from __future__ import annotations
 
 from typing import Any, ClassVar, cast
+from finn.dataflow._engine import Decided
 
 from finn.dataflow.space.declarations import (
     ConstraintGroup,
@@ -25,9 +26,9 @@ from finn.dataflow.space.declarations import (
 from finn.dataflow.space.occurrence import ProjectionAssessment
 from finn.dataflow.model.logical.network import DataflowNetwork
 from finn.dataflow.ops.mapping import CoordinateMapping
-from finn.dataflow.model.logical.refs import DataflowOperandRef, RegionInputRef, RegionOutputRef
 from finn.dataflow.ops.base import DataflowOp, DataflowOpError, kernel_logical_network
 from finn.dataflow.ops.source import SourceNode
+from finn.dataflow.ops.binding import ChoiceBinding, ImplementationBinding, OperandBinding
 from finn.dataflow.kernels.replay import ActivationReplayKernel
 from finn.dataflow.ops.schema import Attribute, OpInput, OpOutput
 
@@ -41,7 +42,17 @@ class ActivationReplayOp(DataflowOp):
 
     family: ClassVar[str] = "finn.dataflow.activation_replay"
     family_version: ClassVar[str] = "2"
-    schema_version: ClassVar[int] = 4
+    schema_version: ClassVar[int] = 5
+
+    implementation_binding = ImplementationBinding(("kernel",))
+    operand_bindings = (
+        OperandBinding("activation", "activation", 0, adapter=CoordinateMapping.FLATTEN_LEADING),
+        OperandBinding("expanded", "result", 0, output=True, adapter=CoordinateMapping.IDENTITY),
+    )
+    choice_bindings = (
+        ChoiceBinding("kernel__pe", ("kernel",), "pe"),
+        ChoiceBinding("kernel__simd", ("kernel",), "simd"),
+    )
 
     activation = OpInput(index=0, operand="X", correspondence=CoordinateMapping.FLATTEN_LEADING)
     expanded = OpOutput(index=0, operand="XR", correspondence=CoordinateMapping.IDENTITY)
@@ -154,14 +165,6 @@ class ActivationReplayOp(DataflowOp):
             "canonical",
         )
 
-    def operand_references(
-        self, network: DataflowNetwork
-    ) -> dict[str, tuple[DataflowOperandRef, ...]]:
-        return {
-            "activation": (RegionInputRef("replay", "X"),),
-            "expanded": (RegionOutputRef("replay", "XR"),),
-        }
-
     def execute_node(self, context: Any, graph: Any) -> None:
         """Repeat each activation row once per neuron fold.
 
@@ -191,14 +194,14 @@ class ActivationReplayOp(DataflowOp):
     # bound or not, and there is no reason for an operation to have its own.
 
     def expected_for(self, source: SourceNode) -> dict[str, tuple[tuple[int, ...] | None, Any]]:
-        activation = source.operand("activation")
-        if len(activation.shape) < 2:
-            return {}
-        leading = 1
-        for extent in activation.shape[:-1]:
-            leading *= extent
-        folds = int(cast(int, source.attributes["neuron_folds"]))
-        return {"expanded": ((leading * folds, activation.shape[-1]), activation.datatype)}
+        use = self.use_for_source(source)
+        datatype, domain = use.operand_type("result"), use.operand_domain("result")
+        return {
+            "expanded": (
+                domain.value.extents if isinstance(domain, Decided) else None,
+                datatype.value if isinstance(datatype, Decided) else None,
+            )
+        }
 
 
 __all__ = ["ActivationReplayOp"]

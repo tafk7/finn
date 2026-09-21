@@ -312,13 +312,9 @@ def build_values(context: SourcePublicationContext) -> Mapping[Problem[Any], obj
     unknown = set(provided) - set(by_name)
     if unknown:
         raise DataflowOpError(f"frozen build facts name unknown members: {sorted(unknown)!r}")
-    missing = {
-        name
-        for name, declaration in by_name.items()
-        if declaration.build_required and name not in provided
-    }
-    if missing:
-        raise DataflowOpError(f"frozen build facts omit required members: {sorted(missing)!r}")
+    # A sparse checkpoint may omit target/build facts. The consuming physical
+    # query reports their unavailability; independent logical/type commits do
+    # not synthesize defaults or require unrelated generation inputs.
     result: dict[Problem[Any], object] = {}
     for item in context.build_facts:
         declaration = by_name[item.member_name]
@@ -344,6 +340,7 @@ def source_read_set(
     operation: Any,
     *,
     expected_attributes: Mapping[str, bytes | None],
+    include_output_annotations: bool = True,
 ) -> ModelReadSet:
     """Capture only source facts and write targets used by a source plan."""
 
@@ -414,7 +411,11 @@ def source_read_set(
                     ModelReadKind.TENSOR_FACT,
                     state.scope_id,
                     f"input:{index}:logical_datatype",
-                    item.datatype.name if item.datatype_annotated else None,
+                    item.datatype_annotation
+                    if item.producer_reads is not None
+                    else item.datatype.name
+                    if item.datatype_annotated and item.datatype is not None
+                    else None,
                 ),
                 ModelReadExpectation(
                     ModelReadKind.INITIALIZER_CONTENT,
@@ -425,6 +426,16 @@ def source_read_set(
             )
         )
     for index, item in enumerate(source.outputs):
+        if not include_output_annotations:
+            expectations.append(
+                ModelReadExpectation(
+                    ModelReadKind.OPERAND_SLOT,
+                    state.scope_id,
+                    f"output:{index}",
+                    item.tensor,
+                )
+            )
+            continue
         expectations.extend(
             (
                 ModelReadExpectation(
@@ -447,7 +458,14 @@ def source_read_set(
                 ),
             )
         )
-    return ModelReadSet(tuple(expectations))
+    return merge_model_read_sets(
+        ModelReadSet(tuple(expectations)),
+        *(
+            item.producer_reads
+            for item in source.inputs
+            if isinstance(item.producer_reads, ModelReadSet)
+        ),
+    )
 
 
 def apply_graph_effects(
@@ -572,11 +590,61 @@ def _apply_graph_effects(
                     getattr(physical_answer, "findings", ()),
                 )
 
+    model_effects = effects.model_effects(read_set=combined_reads)
+    model_effects = _invalidate_downstream_types(model, model_effects)
     return apply_model_effects(
         model,
-        effects.model_effects(read_set=combined_reads),
+        model_effects,
         validate=validate,
         finish=finish,
+    )
+
+
+def _invalidate_downstream_types(model: Any, effects: ModelEffects) -> ModelEffects:
+    """Clear dependent derived annotations in the same checked transaction.
+
+    A later consumer rehydrates producer contracts. Its independent decisions
+    stay untouched. The topology reads protect this closure against an added or
+    rewired consumer between planning and application.
+    """
+
+    from dataclasses import replace  # noqa: PLC0415
+    from finn.dataflow.ops.model_effects import _logical_datatype  # noqa: PLC0415
+
+    datatypes = dict(effects.tensor_datatypes)
+    pending = [
+        tensor
+        for tensor, datatype in datatypes.items()
+        if _logical_datatype(model, tensor) != (None if datatype is None else datatype.name)
+    ]
+    visited: set[str] = set()
+    reads: list[ModelReadExpectation] = []
+    while pending:
+        tensor = pending.pop()
+        if tensor in visited:
+            continue
+        visited.add(tensor)
+        users = tuple(node for node in model.graph.node if tensor in node.input)
+        reads.append(
+            ModelReadExpectation(
+                ModelReadKind.VALUE_USERS,
+                tensor,
+                None,
+                json.dumps(
+                    sorted((tuple(node.input), tuple(node.output)) for node in users),
+                    separators=(",", ":"),
+                ),
+            )
+        )
+        for node in users:
+            for output in node.output:
+                if output and output not in datatypes:
+                    datatypes[output] = None
+                    pending.append(output)
+    return replace(
+        effects,
+        tensor_datatypes=tuple(sorted(datatypes.items())),
+        read_set=merge_model_read_sets(effects.read_set, ModelReadSet(tuple(reads))),
     )
 
 

@@ -43,6 +43,11 @@ from finn.dataflow.model.kernel import Kernel
 from finn.dataflow.model.logical.authoring import RegionDeclaration
 from finn.dataflow.model.physical.authoring import ModuleParameter, PhysicallyUnsupported
 from finn.dataflow.kernels.matmul.base import AccumulationMode, DspBlock, MvauComputationProfile
+from finn.dataflow.kernels.target import dsp_widths
+from finn.dataflow.kernels.typing import (
+    operand_types_supported as _operand_types_supported,
+    operand_widths_supported as _operand_widths_supported,
+)
 from finn.dataflow.model.logical.region import DataflowRegion, NumericElementType, element_width
 from finn.dataflow.kernels.matmul.regions import (
     construct_batch_interleaved_streamed_mvau_region,
@@ -65,13 +70,6 @@ _DSP_VERSION = {
     DspBlock.DSP48E2: 2,
     DspBlock.DSP58: 3,
 }
-_DSP_WIDTHS = {
-    DspBlock.DSP48E1: (25, 18, 48),
-    DspBlock.DSP48E2: (27, 18, 48),
-    DspBlock.DSP58: (27, 24, 58),
-}
-_MULTIPLIABLE_FAMILIES = ("INT", "UINT")
-_SIGNED_ROLES = frozenset({"weight", "accumulator", "output"})
 _SEGMENT_BASE_DELAY_NS = 0.741
 _SEGMENT_STAGE_DELAY_NS = 0.605
 
@@ -92,58 +90,6 @@ def require_dotp_axi_numerical_support(
         raise PhysicallyUnsupported(f"integer execution is unsupported: {reasons}")
 
 
-def _is_twos_complement_integer(datatype: NumericElementType) -> bool:
-    name = datatype.name
-    return any(
-        name.startswith(prefix) and name[len(prefix) :].isdigit()
-        for prefix in _MULTIPLIABLE_FAMILIES
-    )
-
-
-def _operand_types_supported(
-    activation: NumericElementType,
-    weight: NumericElementType,
-    accumulator: NumericElementType,
-    output: NumericElementType,
-) -> object:
-    rejected: dict[str, str] = {}
-    for role, datatype in (
-        ("activation", activation),
-        ("weight", weight),
-        ("accumulator", accumulator),
-        ("output", output),
-    ):
-        if not _is_twos_complement_integer(datatype):
-            rejected[role] = f"{datatype.name} is not a two's-complement integer"
-        elif role in _SIGNED_ROLES and not datatype.signed():
-            rejected[role] = f"{datatype.name} is unsigned; the core declares this role signed"
-    if "accumulator" not in rejected and "output" not in rejected and output != accumulator:
-        rejected["output"] = (
-            f"{output.name} is not the accumulator {accumulator.name}; "
-            "the core drives the accumulator straight out"
-        )
-    if rejected:
-        return reject(
-            "dotp-axi-numeric-types-unsupported",
-            "this dot-product core multiplies two's-complement integers",
-            values=rejected,
-        )
-    return True
-
-
-def _operand_widths_supported(activation: NumericElementType, weight: NumericElementType) -> object:
-    if element_width(activation) < 2 or element_width(weight) < 2:
-        return reject(
-            "dotp-axi-operands-too-narrow",
-            "the dot-product core needs at least two bits of each operand",
-            values={
-                "activation": element_width(activation),
-                "weight": element_width(weight),
-            },
-        )
-    return True
-
-
 def _width_supported(
     target: DspBlock,
     activation: NumericElementType,
@@ -151,7 +97,7 @@ def _width_supported(
     accumulator: NumericElementType,
     output: NumericElementType,
 ) -> bool:
-    a_width, b_width, p_width = _DSP_WIDTHS[target]
+    a_width, b_width, p_width = dsp_widths(target)
     return (
         element_width(weight) <= a_width
         and element_width(activation) <= b_width
@@ -180,7 +126,7 @@ def _narrow_weights_supported(
     weight: NumericElementType,
     narrow: bool,
 ) -> object:
-    a_width = _DSP_WIDTHS[target][0]
+    a_width = dsp_widths(target)[0]
     weight_bits = element_width(weight)
     if weight_bits > a_width:
         return True

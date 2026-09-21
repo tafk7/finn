@@ -147,10 +147,10 @@ def test_initial_bind_refuses_overrideable_initializer_without_writing() -> None
     assert model.model.SerializeToString(deterministic=True) == before
 
 
-def test_local_problem_fingerprint_keeps_exact_replay_and_mvau_vectors() -> None:
+def test_local_problem_fingerprint_pins_oh_native_schema_vectors() -> None:
     expected = {
-        "ActivationReplayOp": "97bd329c6cc31bd10a7e2616962d136ec9628809ac1d2d4b044a0ab4e513f11e",
-        "MvauDataflowOp": "f290cf9b0fdb3ab3cf6a13c9e3f5921d44160b84ea7133a7d5118abab52f9dde",
+        "ActivationReplayOp": "39bb8712a6e657facf821db17fef11b0e9c9a8de92ffde3147eae9b38a3e0e95",
+        "MvauDataflowOp": "6c7256baf268cabcf33a3dc96697a69ea83b106bfe093bf6a6f353e588b1e5ae",
     }
     build = Build()
     for make_model in (_replay_model, _mvau_model):

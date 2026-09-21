@@ -14,6 +14,7 @@ from finn.dataflow.model.logical.maps import (
     CoordinateMap,
     CoordinateSet,
     IdentityCoordinateMap,
+    ExplicitCoordinateMap,
     MaterializationRequired,
     RectangularDomain,
 )
@@ -35,6 +36,7 @@ from finn.dataflow.model.logical.refs import (
 )
 from finn.dataflow.model.logical.region import Coordinate, InputInterface
 from finn.dataflow.ops.source import SourceNode
+from finn.dataflow.model.logical.interface import OperandExport, validate_operand_export
 
 
 class CoordinateMapping(str, Enum):
@@ -186,6 +188,7 @@ def _derive_operand_mappings(
     source: SourceNode,
     references: Mapping[str, tuple[DataflowOperandRef, ...]],
     correspondences: Mapping[str, CoordinateMapping],
+    coordinate_maps: Mapping[tuple[str, DataflowOperandRef], CoordinateMap] | None = None,
 ) -> tuple[OperandMapping, ...]:
     """Requires the caller's accepted projection or explicit validation."""
 
@@ -234,7 +237,11 @@ def _derive_operand_mappings(
                     correspondences[name],
                     operand.shape,
                     tuple(shape),
-                    _checked_coordinate_map(correspondences[name], operand.shape, tuple(shape)),
+                    coordinate_maps[(name, ref)]
+                    if coordinate_maps is not None
+                    else _checked_coordinate_map(
+                        correspondences[name], operand.shape, tuple(shape)
+                    ),
                     edge_presented,
                     boundary_presented,
                     unpresented,
@@ -242,6 +249,69 @@ def _derive_operand_mappings(
                 )
             )
     return tuple(result)
+
+
+def _compose_maps(first: CoordinateMap, second: CoordinateMap) -> CoordinateMap:
+    """Compose the common compact boundary views without enumerating tensors."""
+
+    if isinstance(first, IdentityCoordinateMap):
+        return second
+    if isinstance(second, IdentityCoordinateMap):
+        return first
+    if isinstance(first, AffineRankMap) and first.offset == 0 and first.coefficients == (1,):
+        if isinstance(second, AffineRankMap):
+            return AffineRankMap(
+                first.source, second.view_extents, second.target, second.offset, second.coefficients
+            )
+    source = first.source if isinstance(first, AffineRankMap) else first.source_domain
+    target = second.target if isinstance(second, AffineRankMap) else second.target_domain
+    if source is None or target is None:
+        raise NetworkOperandError("composed maps require explicit coordinate domains")
+    if source.cardinality > 1_000_000:
+        raise MaterializationRequired("this boundary map composition needs an explicit size budget")
+    return ExplicitCoordinateMap(
+        (
+            (source.coordinate_at(rank), second.mapped(first.mapped(source.coordinate_at(rank))))
+            for rank in range(source.cardinality)
+        ),
+        source_domain=source,
+        target_domain=target,
+    )
+
+
+def derive_public_operand_mappings(
+    network: DataflowNetwork,
+    source: SourceNode,
+    exports: Mapping[str, OperandExport],
+    correspondences: Mapping[str, CoordinateMapping],
+) -> tuple[OperandMapping, ...]:
+    """Bind source values through checked public exports to the actual body.
+
+    The caller supplies an accepted logical Network. Kernel export maps own body
+    organization; only the first map adapts the graph coordinate convention.
+    """
+
+    expected = {operand.id for operand in (*source.inputs, *source.outputs)}
+    if set(exports) != expected:
+        raise NetworkOperandError("public bindings must cover every present graph operand")
+    references: dict[str, tuple[DataflowOperandRef, ...]] = {}
+    maps: dict[tuple[str, DataflowOperandRef], CoordinateMap] = {}
+    for name, export in exports.items():
+        validate_operand_export(network, export)
+        operand = source.operand(name)
+        if operand.datatype != export.operand.element_type:
+            raise NetworkOperandError(f"{name!r} boundary binding cannot convert datatype")
+        if (operand in source.inputs) != (export.operand.direction == "input"):
+            raise NetworkOperandError(f"{name!r} boundary binding has the wrong direction")
+        boundary = _checked_coordinate_map(
+            correspondences[name], operand.shape, export.operand.domain.extents
+        )
+        references[name] = tuple(target.ref for target in export.targets)
+        for target in export.targets:
+            if len(target.presentations) > 1:
+                raise NetworkOperandError("stream mapping needs an explicit presentation selection")
+            maps[name, target.ref] = _compose_maps(boundary, target.position_map.coordinate_map)
+    return _derive_operand_mappings(network, source, references, correspondences, maps)
 
 
 __all__ = [
@@ -253,4 +323,5 @@ __all__ = [
     "OperandMapping",
     "OperandPlacement",
     "derive_operand_mappings",
+    "derive_public_operand_mappings",
 ]

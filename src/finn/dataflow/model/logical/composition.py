@@ -83,6 +83,15 @@ class NetworkResult:
 LogicalResult: TypeAlias = RegionResult | NetworkResult
 
 
+def logical_network(result: LogicalResult) -> DataflowNetwork:
+    """Normalize a logical result using the stable actual Region identity ``root``."""
+    if isinstance(result, NetworkResult):
+        return result.network
+    if isinstance(result, RegionResult):
+        return qualify_region(ImplementationPath(("root",)), result).network
+    raise TypeError("logical normalization requires a RegionResult or NetworkResult")
+
+
 @dataclass(frozen=True, slots=True)
 class NetworkFragment:
     use_path: ImplementationPath
@@ -309,6 +318,7 @@ def compose_network(
 
 
 __all__ = [
+    "logical_network",
     "CompositionError",
     "ImplementationPath",
     "LogicalResult",

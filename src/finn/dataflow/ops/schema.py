@@ -116,7 +116,17 @@ def _encode_operand(value: object) -> CanonicalValue:
     return {
         "operand": operand.id,
         "shape": list(operand.shape),
-        "datatype": operand.datatype.name,
+        "datatype": operand.datatype.name if operand.datatype is not None else None,
+        "datatype_answer": (
+            None
+            if operand.datatype_answer is None
+            else {
+                "kind": type(operand.datatype_answer).__name__,
+                "findings": [
+                    str(item) for item in getattr(operand.datatype_answer, "findings", ())
+                ],
+            }
+        ),
         "datatype_annotated": operand.datatype_annotated,
         "carrier_dtype": operand.carrier_dtype,
         "initializer": operand.initializer,
@@ -125,7 +135,7 @@ def _encode_operand(value: object) -> CanonicalValue:
 
 
 SOURCE_OPERAND_CODEC: CanonicalValueCodec[object] = CanonicalValueCodec(
-    "finn.dataflow.source_operand", 3, _encode_operand
+    "finn.dataflow.source_operand", 4, _encode_operand
 )
 
 SOURCE_OPERAND_SEMANTICS = semantics_for(SourceOperand)
@@ -311,16 +321,8 @@ class BuildFact(Problem[Any]):
     accessor: Callable[[Any], Any] = bool
     default: Any = None
     member_name: str = ""
-    #: Whether the *build configuration* must supply this fact.
-    #:
-    #: Deliberately a second field, and not ``Problem.required``.  They are two
-    #: different claims about two different things, and collapsing them loses
-    #: one of the two: as one flag it must be ``False`` so that an occurrence
-    #: can start with no build at all -- which QONNX's shape, datatype and
-    #: verification passes need -- and a ``False`` read back at extraction time
-    #: turns a missing ``synth_clk_period_ns`` from a loud refusal into a
-    #: silent ``None``.  So the Problem is always absence-tolerant and this
-    #: says what the configuration owes.
+    #: Legacy authoring metadata. Hydration allows unavailable build facts;
+    #: individual View dependencies determine whether an action needs them.
     build_required: bool = True
 
     def __init__(
@@ -399,7 +401,11 @@ def _tensor_facets(declaration: OpInput) -> dict[str, Derived[Any]]:
         "shape": facet("shape", tuple, lambda operand: operand.shape),
         "rank": facet("rank", int, lambda operand: len(operand.shape)),
         "datatype": facet(
-            "datatype", QONNX_DATATYPE_VALUE_SEMANTICS, lambda operand: operand.datatype
+            "datatype",
+            QONNX_DATATYPE_VALUE_SEMANTICS,
+            lambda operand: (
+                operand.datatype_answer if operand.datatype_answer is not None else operand.datatype
+            ),
         ),
         "initializer_present": facet(
             "initializer_present", bool, lambda operand: operand.initializer

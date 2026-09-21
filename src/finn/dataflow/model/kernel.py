@@ -9,7 +9,7 @@ from collections.abc import Mapping
 from types import MappingProxyType
 from typing import TYPE_CHECKING, ClassVar, cast
 
-from finn.dataflow._engine import Absent, Answer, Decided
+from finn.dataflow._engine import Absent, Answer, Decided, Finding, FindingKind, QualifiedPath
 from finn.dataflow.artifacts.abi import ComponentABI
 from finn.dataflow.artifacts.build import (
     ModuleABIRequirements,
@@ -26,6 +26,7 @@ from finn.dataflow.model.children import (
 from finn.dataflow.model.logical.authoring import RegionDeclaration
 from finn.dataflow.model.logical.composition import RegionResult
 from finn.dataflow.model.logical.region import DataflowRegion
+from finn.dataflow.model.logical.interface_authoring import attach_public_interface
 from finn.dataflow.model.logical.view import (
     attach_composite_logical,
     attach_leaf_logical,
@@ -77,10 +78,6 @@ class Kernel(Space):
         declarations = dict(declared_members(cls))
         has_region = isinstance(declarations.get("region"), RegionDeclaration)
         has_children = bool(kernel_choice_members(cls))
-        if has_region and has_children:
-            raise AuthoringError(
-                f"{cls.__name__} declares both a leaf Region and composite Kernel children"
-            )
         generated: set[str] = set()
         if has_region:
             attach_leaf_logical(cls, generated)
@@ -91,7 +88,8 @@ class Kernel(Space):
             attach_composite_relation(cls, generated)
         setattr(cls, GENERATED_MEMBERS, frozenset(generated))
         ensure_logical_view_validation(cls)
-        synchronize_generated_dataflow(cls, composite=has_children)
+        attach_public_interface(cls)
+        synchronize_generated_dataflow(cls, composite=has_children and not has_region)
 
     @classmethod
     def _finalize_compilation(cls, compiled: object) -> object:
@@ -195,6 +193,17 @@ class Kernel(Space):
         logical: Answer[object] = child.value.assess_view("logical").accepted_answer
         if isinstance(logical, Decided) and isinstance(logical.value, RegionResult):
             return Decided(logical.value.region)
+        if isinstance(logical, Decided):
+            return Absent(
+                (
+                    Finding(
+                        FindingKind.LIMITATION,
+                        "kernel-child-not-region",
+                        QualifiedPath("kernel.child_region"),
+                        f"child {role!r} exposes a Network, not a Region",
+                    ),
+                )
+            )
         return cast("Answer[DataflowRegion]", logical)
 
     def child_region_family(self, role: str) -> Answer[tuple[str, str]]:

@@ -29,6 +29,7 @@ from finn.dataflow.analysis.integer_dot import (
     validate_integer_dot_product_operands,
 )
 from finn.dataflow.model.logical.datatypes import QONNXDataType
+from finn.dataflow.kernels.target import target_accumulator_bits
 from finn.dataflow.ops.source import SourceNode, SourceOperand
 from finn.dataflow.ops.tensor_summary import FrozenInitializer
 
@@ -98,14 +99,6 @@ def integer_type(datatype: QONNXDataType) -> IntegerType:
     )
 
 
-def target_accumulator_bits(target: object) -> int:
-    name = getattr(target, "value", str(target))
-    try:
-        return {"DSP48E1": 48, "DSP48E2": 48, "DSP58": 58}[str(name)]
-    except KeyError as error:
-        raise ValueError(f"unsupported target DSP {name!r}") from error
-
-
 def integer_graph_profile_fingerprint(support: IntegerSupport) -> str:
     """Identity of selected arithmetic bytes, excluding per-use applicability."""
 
@@ -152,6 +145,8 @@ def mvau_integer_premise_from_operands(
     runtime_writable: bool,
     runtime_promise: RuntimeWeightPromise | None,
 ) -> DotProductPremise:
+    if activation.datatype is None or weight.datatype is None:
+        raise ValueError("integer operand types are unresolved")
     activation_type = integer_type(activation.datatype)
     weight_type = integer_type(weight.datatype)
     accumulator_type = integer_type(accumulator_datatype)

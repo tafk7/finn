@@ -21,6 +21,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any
+from finn.dataflow._engine import Answer, Decided
 
 from finn.dataflow.model.logical.datatypes import (
     QONNXDataType,
@@ -51,7 +52,7 @@ class SourceOperand:
     id: str
     tensor: str
     shape: tuple[int, ...]
-    datatype: QONNXDataType
+    datatype: QONNXDataType | None
     initializer: bool = False
     initializer_digest: str | None = None
     initializer_value: FrozenInitializer | None = None
@@ -67,6 +68,16 @@ class SourceOperand:
     #: Whether the QONNX logical datatype came from one explicit canonical
     #: finn_datatype annotation rather than ModelWrapper's carrier fallback.
     datatype_annotated: bool = True
+    #: A producer's unresolved/rejected type is retained, never its stale cache.
+    datatype_answer: Answer[Any] | None = None
+    datatype_annotation: str | None = None
+    producer_reads: object | None = None
+
+    @property
+    def datatype_established(self) -> bool:
+        return self.datatype is not None and (
+            self.datatype_annotated or self.producer_reads is not None
+        )
 
     def __post_init__(self) -> None:
         if type(self.datatype_annotated) is not bool:
@@ -146,6 +157,7 @@ def read_source_node(
         raise SourceError(f"{node.name} has {len(node.output)} outputs; declares {len(outputs)}")
 
     def read(tensor: str, operand_id: str, *, output: bool) -> SourceOperand:
+        datatype: QONNXDataType | None
         shape = model.get_tensor_shape(tensor)
         if shape is None and not output:
             raise SourceError(f"{node.name} operand {operand_id!r} has no shape")
@@ -183,6 +195,17 @@ def read_source_node(
             from qonnx.core.datatype import DataType  # type: ignore[import-not-found] # noqa: PLC0415
 
             datatype = DataType["FLOAT32"]
+        datatype_answer = None
+        producer_reads = None
+        if not output:
+            from finn.dataflow.ops.type_context import producer_type_facts  # noqa: PLC0415
+
+            produced, producer_reads = producer_type_facts(model, tensor)
+            if isinstance(produced, Decided):
+                datatype = produced.value
+            elif produced is not None:
+                datatype = None
+                datatype_answer = produced
         summary = None if output else summaries.get(tensor)
         initializer_value = None if output or initializers is None else initializers.get(tensor)
         value_info = model.get_tensor_valueinfo(tensor)
@@ -201,13 +224,16 @@ def read_source_node(
             id=operand_id,
             tensor=tensor,
             shape=() if shape is None else tuple(int(extent) for extent in shape),
-            datatype=canonical_qonnx_datatype(datatype),
+            datatype=canonical_qonnx_datatype(datatype) if datatype is not None else None,
             initializer=summary is not None,
             initializer_digest=None if summary is None else summary.content_digest,
             initializer_value=initializer_value,
             annotated=shape is not None,
             carrier_dtype=carrier_dtype,
             datatype_annotated=datatype_annotated,
+            datatype_answer=datatype_answer,
+            datatype_annotation=datatype_annotations[0] if datatype_annotations else None,
+            producer_reads=producer_reads,
         )
 
     read_inputs: list[SourceOperand] = []

@@ -21,9 +21,11 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any, ClassVar, cast
 
-from finn.dataflow._engine import ABSENT, Decided
+from finn.dataflow._engine import ABSENT, Absent, Decided
 from finn.dataflow.analysis.integer_dot import (
     FixedWeightPremise,
+    DotProductBounds,
+    analyze_integer_dot_product,
     IntegerSupportReport,
     InvocationScope,
     NumericalFinding,
@@ -35,6 +37,7 @@ from finn.dataflow.kernels.matmul.base import (
     AccumulationMode,
     DspBlock,
     MvauComputationProfile,
+    MatmulInterface,
     WeightedDotProductKernel,
     computation_profile,
 )
@@ -54,7 +57,6 @@ from finn.dataflow.space.declarations import (
 from finn.dataflow.space.occurrence import ChoiceView, ProjectionAssessment
 from finn.dataflow.model.logical.network import DataflowNetwork
 from finn.dataflow.ops.mapping import CoordinateMapping
-from finn.dataflow.model.logical.refs import DataflowOperandRef, RegionInputRef, RegionOutputRef
 from qonnx.analysis.tensor_value_summary import TensorValueSummary  # type: ignore[import-not-found]
 from finn.dataflow.ops.base import (
     DataflowOp,
@@ -67,8 +69,10 @@ from finn.dataflow.ops.mvau.numerics import (
     check_mvau_integer_support_from_operands,
     execute_mvau_integer,
     integer_graph_profile_fingerprint,
+    mvau_integer_premise_from_operands,
 )
 from finn.dataflow.ops.source import SourceNode, SourceOperand
+from finn.dataflow.ops.binding import ChoiceBinding, ImplementationBinding, OperandBinding
 from finn.dataflow.ops.tensor_summary import encode_frozen_initializer
 from finn.dataflow.kernels.matmul.batch_interleaved import BatchInterleavedKernel
 from finn.dataflow.kernels.matmul.dot_product import DotProductKernel
@@ -82,7 +86,7 @@ from finn.dataflow.ops.schema import (
 
 
 def _target_dsp(build: Any) -> DspBlock:
-    value = getattr(build, "target_dsp", DspBlock.DSP58)
+    value = build.target_dsp
     return value if isinstance(value, DspBlock) else DspBlock(str(value))
 
 
@@ -224,12 +228,52 @@ class MvauDataflowOp(DataflowOp):
 
     family: ClassVar[str] = "finn.dataflow.mvau"
     family_version: ClassVar[str] = "1"
-    schema_version: ClassVar[int] = 6
+    schema_version: ClassVar[int] = 7
+
+    implementation_binding = ImplementationBinding(("kernel",))
+    operand_bindings = (
+        OperandBinding("activation", "activation", 0, adapter=CoordinateMapping.FLATTEN_LEADING),
+        OperandBinding("weight", "weights", 1, adapter=CoordinateMapping.IDENTITY),
+        OperandBinding(
+            "output", "result", 0, output=True, adapter=CoordinateMapping.FLATTEN_LEADING
+        ),
+    )
+    choice_bindings = (
+        ChoiceBinding("kernel__case", ("kernel",), "case"),
+        ChoiceBinding(
+            "kernel__dot_product__compute__kernel", ("kernel", "dot_product", "compute"), "kernel"
+        ),
+        ChoiceBinding("kernel__dot_product__pe", ("kernel", "dot_product"), "pe"),
+        ChoiceBinding("kernel__dot_product__simd", ("kernel", "dot_product"), "simd"),
+        ChoiceBinding(
+            "kernel__dot_product__weight_supply", ("kernel", "dot_product"), "weight_supply"
+        ),
+        ChoiceBinding(
+            "kernel__dot_product__compute__dotp_axi__compute_pumping",
+            ("kernel", "dot_product", "compute", "dotp_axi"),
+            "compute_pumping",
+        ),
+        ChoiceBinding(
+            "kernel__dot_product__compute__dotp_axi_embedded__compute_pumping",
+            ("kernel", "dot_product", "compute", "dotp_axi_embedded"),
+            "compute_pumping",
+        ),
+        ChoiceBinding("kernel__batch_interleaved__pe", ("kernel", "batch_interleaved"), "pe"),
+        ChoiceBinding("kernel__batch_interleaved__simd", ("kernel", "batch_interleaved"), "simd"),
+        ChoiceBinding(
+            "kernel__batch_interleaved__interleave", ("kernel", "batch_interleaved"), "interleave"
+        ),
+        ChoiceBinding(
+            "kernel__batch_interleaved__compute__dotp_axi_batch_interleaved__compute_pumping",
+            ("kernel", "batch_interleaved", "compute", "dotp_axi_batch_interleaved"),
+            "compute_pumping",
+        ),
+    )
 
     # -- the source schema ----------------------------------------------------
 
     activation = OpInput(index=0, operand="X", correspondence=CoordinateMapping.FLATTEN_LEADING)
-    weight = OpInput(index=1, operand="W", correspondence=CoordinateMapping.TRANSPOSE_2D)
+    weight = OpInput(index=1, operand="W", correspondence=CoordinateMapping.IDENTITY)
     #: Present exactly when the node fuses an activation.  Optional rather than
     #: conditional-by-declaration: presence is *emergent* -- it is read from the
     #: graph -- and the agreement between it and ``no_activation`` is a
@@ -406,7 +450,7 @@ class MvauDataflowOp(DataflowOp):
     ) -> IntegerSupportReport:
         if profile.accumulation is not AccumulationMode.INTEGER or profile.fuses_activation:
             return IntegerSupportReport(None, ())
-        if not activation.datatype_annotated or not weight.datatype_annotated:
+        if not activation.datatype_established or not weight.datatype_established:
             return IntegerSupportReport(
                 None,
                 (
@@ -453,8 +497,8 @@ class MvauDataflowOp(DataflowOp):
         if (
             profile.accumulation is not AccumulationMode.INTEGER
             or profile.fuses_activation
-            or not activation.datatype_annotated
-            or not weight.datatype_annotated
+            or not activation.datatype_established
+            or not weight.datatype_established
         ):
             return IntegerSupportReport(None, ())
         from finn.dataflow.ops.mvau.numerics import target_accumulator_bits  # noqa: PLC0415
@@ -591,8 +635,65 @@ class MvauDataflowOp(DataflowOp):
         threshold_shape_supported,
         source_integer_numerically_supported,
     )
+    type_source_accepts = ConstraintGroup(
+        weight_is_a_matrix,
+        activation_matches_the_matrix,
+        threshold_present_iff_activated,
+        threshold_shape_supported,
+        source_integer_numerically_supported,
+    )
 
     # -- the composition ------------------------------------------------------
+
+    @derived(
+        DotProductBounds,
+        activation=activation,
+        weight=weight,
+        accumulator=accumulator_type,
+        output=output_type,
+        profile=profile,
+        scope=invocation_scope,
+        runtime_writable=allow_absent(runtime_writable_weights),
+    )
+    def integer_bounds(
+        *,
+        activation: SourceOperand,
+        weight: SourceOperand,
+        accumulator: QONNXDataType,
+        output: QONNXDataType,
+        profile: MvauComputationProfile,
+        scope: InvocationScope,
+        runtime_writable: object,
+    ) -> object:
+        if profile.accumulation is not AccumulationMode.INTEGER or profile.fuses_activation:
+            return Absent()
+        try:
+            premise = mvau_integer_premise_from_operands(
+                activation,
+                weight,
+                accumulator_datatype=accumulator,
+                output_datatype=output,
+                invocation_scope=scope,
+                runtime_writable=runtime_writable is not ABSENT and bool(runtime_writable),
+                runtime_promise=None,
+            )
+            return analyze_integer_dot_product(premise)
+        except ValueError as error:
+            return reject("mvau-integer-premise", str(error))
+
+    family_interface = Subspace(
+        MatmulInterface,
+        repetitions=repetitions,
+        matrix_width=matrix_width,
+        matrix_height=matrix_height,
+        activation_type=activation.datatype,
+        weight_type=weight.datatype,
+        accumulator_type=accumulator_type,
+        output_type=output_type,
+        computation_profile=profile,
+        integer_bounds=integer_bounds,
+    )
+    interface_binding = ImplementationBinding(("family_interface",))
 
     kernel = SubspaceChoice(
         {
@@ -614,6 +715,7 @@ class MvauDataflowOp(DataflowOp):
                 target_dsp=target_dsp,
                 clock_period_ns=clock_period_ns,
                 initializer_present=weight.initializer_present,
+                integer_bounds=integer_bounds,
             ),
             "batch_interleaved": Subspace(
                 BatchInterleavedKernel,
@@ -629,6 +731,7 @@ class MvauDataflowOp(DataflowOp):
                 numerical_support=numerical_support,
                 target_dsp=target_dsp,
                 clock_period_ns=clock_period_ns,
+                integer_bounds=integer_bounds,
             ),
         },
     )
@@ -676,7 +779,7 @@ class MvauDataflowOp(DataflowOp):
         fixed_weight_payload = None
         if profile.accumulation is AccumulationMode.INTEGER and not profile.fuses_activation:
             if any(
-                not self.source.operand(name).datatype_annotated
+                not self.source.operand(name).datatype_established
                 for name in ("activation", "weight")
             ):
                 raise DataflowOpError(
@@ -736,38 +839,16 @@ class MvauDataflowOp(DataflowOp):
             "canonical",
         )
 
-    def operand_references(
-        self, network: DataflowNetwork
-    ) -> dict[str, tuple[DataflowOperandRef, ...]]:
-        # Roles are operation-owned. In decoupled supply the source matrix
-        # enters memory.W, not the downstream compute.W stream.
-        nodes = {node.id for node in network.nodes}
-        return {
-            "activation": (RegionInputRef("replay" if "replay" in nodes else "compute", "X"),),
-            "weight": (RegionInputRef("memory" if "memory" in nodes else "compute", "W"),),
-            "output": (RegionOutputRef("compute", "Y"),),
-        }
-
     # -- what this operation is authoritative for -----------------------------
 
     def expected_for(self, source: SourceNode) -> dict[str, tuple[tuple[int, ...] | None, Any]]:
-        """The output contract, from the reading alone.
-
-        Takes the reading rather than ``self`` so QONNX's shape and datatype
-        passes -- which run on an unbound wrapper and have no synthesis
-        configuration -- reach the same formula the graph effects do.
-        """
-
-        activation = source.operand("activation")
-        weight = source.operand("weight")
-        if len(weight.shape) != 2 or not activation.shape:
-            return {}
-        return {
-            "output": (
-                (*activation.shape[:-1], weight.shape[1]),
-                cast(Any, source.attributes["output_type"]),
-            )
-        }
+        use = self.use_for_source(source)
+        datatype, domain = use.operand_type("result"), use.operand_domain("result")
+        shape = None
+        if isinstance(domain, Decided):
+            # Public matrix rows flatten the source leading coordinates.
+            shape = (*source.operand("activation").shape[:-1], domain.value.extents[-1])
+        return {"output": (shape, datatype.value if isinstance(datatype, Decided) else None)}
 
     # -- executing the source semantics ----------------------------------------
 

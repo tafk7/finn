@@ -23,6 +23,7 @@ from qonnx.custom_op.base import CustomOp  # type: ignore[import-not-found]
 from finn.dataflow._engine import (
     Answer,
     Decided,
+    ReadinessAssessment,
     Unresolved,
     ValueSemantics,
 )
@@ -34,6 +35,8 @@ from finn.dataflow.space.declarations import (
     ConstraintGroup,
     OccurrenceContext,
     Problem,
+    Projection,
+    Readiness,
     Space,
     declared_members,
 )
@@ -43,9 +46,9 @@ from finn.dataflow.space.occurrence import (
     occurrence_persistable,
 )
 from finn.dataflow.model.logical.network import DataflowNetwork
-from finn.dataflow.model.logical.composition import NetworkResult
+from finn.dataflow.model.logical.composition import NetworkResult, RegionResult, logical_network
 from finn.dataflow.model.logical.refs import DataflowOperandRef, NetworkOperandError
-from finn.dataflow.ops.mapping import OperandMapping, _derive_operand_mappings
+from finn.dataflow.ops.mapping import OperandMapping
 from finn.dataflow.ops.native import (
     AttributeCodec,
     SCOPE_ID_ATTRIBUTE,
@@ -141,6 +144,7 @@ class DataflowOp(Space, CustomOp):  # type: ignore[misc]
     root_namespace: ClassVar[str] = "op"
     wants_model: ClassVar[bool] = True
     source_accepts: ClassVar[Any] = ConstraintGroup()
+    type_source_accepts: ClassVar[Any] = ConstraintGroup()
     incoming_graph_context: ClassVar[Problem[Any]]
 
     @classmethod
@@ -185,7 +189,7 @@ class DataflowOp(Space, CustomOp):  # type: ignore[misc]
         instance._bound = state
         return instance
 
-    def bind(self, model: Any, build: Any, *, graph_context: Any = None) -> Any:
+    def bind(self, model: Any, build: Any = None, *, graph_context: Any = None) -> Any:
         """Reconstruct this operation through the model-level pass owner.
 
         For several operations use bind_operations(model, build), or wrap the
@@ -197,6 +201,55 @@ class DataflowOp(Space, CustomOp):  # type: ignore[misc]
             operations=(self,),
             graph_context=graph_context,
         )[0]
+
+    def hydrate(self, model: Any, build: Any = None, *, graph_context: Any = None) -> Any:
+        """Freeze relevant source facts and return its exact immutable node use."""
+        return self.bind(model, build, graph_context=graph_context).hydrated_use()
+
+    def hydrated_use(self) -> Any:
+        from finn.dataflow.ops.binding import HydratedUse, ImplementationBinding  # noqa: PLC0415
+
+        implementation = getattr(type(self), "implementation_binding", None)
+        if not isinstance(implementation, ImplementationBinding):
+            raise AuthoringError("DataflowOp must declare its exact implementation binding")
+        return HydratedUse(
+            self,
+            implementation,
+            tuple(getattr(type(self), "operand_bindings", ())),
+            tuple(getattr(type(self), "choice_bindings", ())),
+            getattr(type(self), "interface_binding", None),
+        )
+
+    def rehydrate_current(self, model: Any, build: Any = None) -> Any:
+        """Explicitly replay saved choices under fresh source facts and domains."""
+        with source_analysis(model) as summaries:
+            current = self._bind_with(model, self._build_values(build), summaries, recorded=False)
+            return hydrate(current, require_identity=False)
+
+    def use_for_source(self, source: SourceNode) -> Any:
+        """Query an already frozen source reading, without rereading a graph."""
+        if self.is_bound and source == self.source:
+            return self.hydrated_use()
+        state = _BoundNode(
+            self.onnx_node.SerializeToString(deterministic=True),
+            self.recorded_scope_id() or "",
+            int(self.onnx_opset_version),
+            None,
+            source.outputs,
+            tuple(None for _ in source.outputs),
+            tuple(None for _ in source.outputs),
+        )
+        values = dict(self._build_values(None))
+        values.update(self._additional_problem_values(source, scope_id=state.scope_id))
+        for name, declaration in source_declarations(type(self)):
+            if isinstance(declaration, OpInput) and source.has(name):
+                operand = source.operand(name)
+                values[declaration] = operand
+                if operand.initializer_value is not None:
+                    values[declaration.value_summary] = operand.initializer_value.summary
+            elif isinstance(declaration, (Attribute, DatatypeAttribute)):
+                values[declaration] = source.attributes[name]
+        return type(self)._start_frozen(values, state).hydrated_use()
 
     def _build_values(self, build: Any) -> Mapping[Problem[Any], object]:
         return MappingProxyType(
@@ -554,7 +607,7 @@ class DataflowOp(Space, CustomOp):  # type: ignore[misc]
     def infer_node_datatype(self, model: Any) -> None:
         source = self.source_snapshot(model)
         for name, (_, datatype) in self.expected_for(source).items():
-            if datatype is not None and source.has(name):
+            if source.has(name):
                 model.set_tensor_datatype(source.operand(name).tensor, datatype)
 
     def assess_source(self, model: Any = None) -> Any:
@@ -612,12 +665,23 @@ class DataflowOp(Space, CustomOp):  # type: ignore[misc]
         return op_physical(self)
 
     def selected_dataflow(self) -> ProjectionAssessment[DataflowNetwork] | None:
-        raise NotImplementedError(f"{type(self).__name__} does not route to a Kernel")
+        target = self.hydrated_use().resolve()
+        if not isinstance(target, Decided):
+            return ProjectionAssessment(
+                "logical",
+                ReadinessAssessment(
+                    "implementation", {}, None if isinstance(target, Unresolved) else True
+                ),
+                (),
+                target,
+                target,
+            )
+        return kernel_logical_network(target.value)
 
     def selected_kernel(self) -> object:
         """The selected Kernel-capable Space for compiler-owned use."""
 
-        raise NotImplementedError(f"{type(self).__name__} does not route to a Kernel")
+        return self.hydrated_use().require_implementation()
 
     def selected_construction(self) -> object:
         """Return the optional source-owned recipe binding for the selected Kernel."""
@@ -663,7 +727,7 @@ class DataflowOp(Space, CustomOp):  # type: ignore[misc]
             if not self.source.has(name):
                 continue
             operand = self.source.operand(name)
-            if not declaration.output and not operand.datatype_annotated:
+            if not declaration.output and not operand.datatype_established:
                 raise ValueError(
                     f"selected source input {name!r} has no explicit logical datatype annotation"
                 )
@@ -678,6 +742,8 @@ class DataflowOp(Space, CustomOp):  # type: ignore[misc]
                 if declaration.output and expected_datatype is not None
                 else operand.datatype
             )
+            if datatype is None:
+                raise DataflowOpError("source operand datatype is unresolved")
             operands.append(
                 SourceValueRef(
                     SourceOperandKey(
@@ -773,27 +839,34 @@ class DataflowOp(Space, CustomOp):  # type: ignore[misc]
         network has passed the Kernel dataflow projection. This method supplies
         correspondence only; exposure and position coverage are derived.
         """
-        raise NotImplementedError(f"{type(self).__name__} does not declare operand references")
+        del network
+        result = {}
+        use = self.hydrated_use()
+        for binding in use.operands:
+            exported = use.operand_export(binding.role)
+            if not isinstance(exported, Decided):
+                raise DataflowOpError("public operand export is unavailable", exported.findings)
+            result[binding.source] = tuple(target.ref for target in exported.value.targets)
+        return result
 
     @property
     def operand_mapping(self) -> Answer[tuple[OperandMapping, ...]]:
         answer = self.network
         if not isinstance(answer, Decided):
             return cast("Answer[tuple[OperandMapping, ...]]", answer)
-        references = self.operand_references(answer.value)
-        declarations = {
-            name: decl
-            for name, decl in source_declarations(type(self))
-            if isinstance(decl, (OpInput, OpOutput))
-        }
+        from finn.dataflow.ops.mapping import derive_public_operand_mappings  # noqa: PLC0415
+
+        use = self.hydrated_use()
+        exports = {}
+        for binding in use.operands:
+            exported = use.operand_export(binding.role)
+            if not isinstance(exported, Decided):
+                return cast("Answer[tuple[OperandMapping, ...]]", exported)
+            exports[binding.source] = exported.value
         source = self.source
         expected = {item.id for item in (*source.inputs, *source.outputs)}
-        if set(references) != expected or any(not refs for refs in references.values()):
+        if set(exports) != expected:
             raise NetworkOperandError("operand references must cover every present source operand")
-        for name, refs in references.items():
-            semantic_id = declarations[name].operand
-            if semantic_id and any(ref.operand_id != semantic_id for ref in refs):
-                raise NetworkOperandError(f"{name!r} declares semantic operand {semantic_id!r}")
         expected_outputs = self.expected_outputs()
 
         def expected_shape(operand: SourceOperand) -> tuple[int, ...]:
@@ -820,11 +893,11 @@ class DataflowOp(Space, CustomOp):  # type: ignore[misc]
             source.attributes,
         )
         return Decided(
-            _derive_operand_mappings(
+            derive_public_operand_mappings(
                 answer.value,
                 mapping_source,
-                references,
-                {name: decl.correspondence for name, decl in declarations.items()},
+                exports,
+                {binding.source: binding.adapter for binding in use.operands},
             )
         )
 
@@ -849,7 +922,8 @@ class DataflowOp(Space, CustomOp):  # type: ignore[misc]
                 )
             if datatype is not None and observed.datatype != datatype:
                 differences.append(
-                    f"{name}: the graph annotates datatype {observed.datatype.name}, "
+                    f"{name}: the graph annotates datatype "
+                    f"{observed.datatype.name if observed.datatype is not None else 'unresolved'}, "
                     f"this operation produces {datatype.name}"
                 )
         return tuple(differences)
@@ -918,7 +992,7 @@ class DataflowOp(Space, CustomOp):  # type: ignore[misc]
                 {
                     source.operand(name).tensor: datatype
                     for name, (_, datatype) in self.expected_outputs().items()
-                    if datatype is not None and source.has(name)
+                    if source.has(name)
                 }
             ),
             tensor_shapes=MappingProxyType(
@@ -1058,18 +1132,11 @@ def _check_indices(operation_type: type, schema: Mapping[str, Any]) -> None:
 def _check_constraints_are_classified(
     operation_type: type[DataflowOp], declarations: Mapping[str, object]
 ) -> None:
-    """Every authored operation Constraint gates the source semantics, explicitly.
+    """Name each constraint's consumer without forcing one global acceptance.
 
-    The rule the Kernel and Kernel layers already state, for the reason that
-    applies identically here: an operation has exactly one group, and a
-    constraint outside it is compiled, evaluated, and consulted by nothing --
-    so an operation would silently stop refusing what its author wrote a
-    refusal for.  ``source_accepts`` is small enough that omitting a name from
-    it is easy and invisible, which is why it is checked rather than trusted.
-
-    An *output* observation deliberately has no place here: it is a
-    reconciliation difference, not a verdict, and a constraint is not how it is
-    reported.
+    Independent groups and projections are valid scoped consumers. A forgotten
+    bare constraint still receives an authoring diagnostic rather than silently
+    claiming an obligation that no query consumes.
     """
 
     group = declarations.get("source_accepts")
@@ -1078,9 +1145,17 @@ def _check_constraints_are_classified(
             f"{operation_type.__name__}.source_accepts is a {type(group).__name__}; it names "
             "one ConstraintGroup of the constraints that gate this operation's own semantics"
         )
-    grouped = (
-        {id(item) for item in group.constraints} if isinstance(group, ConstraintGroup) else set()
-    )
+    grouped: set[int] = set()
+    for base in operation_type.__mro__:
+        for member in vars(base).values():
+            if isinstance(member, ConstraintGroup):
+                grouped.update(id(item) for item in member.constraints)
+            elif isinstance(member, Readiness):
+                grouped.update(id(item) for item in member.constraints)
+            elif isinstance(member, Projection):
+                grouped.update(id(item) for item in member.readiness.constraints)
+                for consumer in member.constraints:
+                    grouped.update(id(item) for item in consumer.constraints)
     ungrouped = sorted(
         name
         for name, declaration in declarations.items()
@@ -1089,7 +1164,7 @@ def _check_constraints_are_classified(
     if ungrouped:
         raise AuthoringError(
             f"{operation_type.__name__} declares Constraint {ungrouped[0]!r} outside "
-            "source_accepts; an operation says which projection each of its constraints "
+            "source_accepts or any scoped consumer; an operation says which query its constraints "
             "gates, because a constraint in no group refuses nothing"
         )
 
@@ -1176,38 +1251,23 @@ def _build_value(
     declaration: BuildFact,
     build: Any,
 ) -> object:
-    """One build scalar, or a refusal naming what the configuration owes.
+    """Freeze a supplied scalar; unavailable hardware facts remain unavailable.
 
-    ``build_required`` and not ``Problem.required``: the Problem is always
-    absence-tolerant so that an occurrence can start with no build at all, and
-    reading that flag here would mean every build fact is optional -- a missing
-    clock period would silently become ``None`` and travel into a Kernel as an
-    unresolved Input, reported as a folding problem rather than a
-    configuration one.
-
-    A ``None`` result is checked as strictly as a raising accessor: a
-    configuration that supplies the attribute and sets it to nothing has
-    supplied nothing.
+    Hydration does not require all build inputs. The View consuming a missing
+    fact reports its unavailable dependency at that action's actual scope.
+    Only explicitly declared semantic defaults are applied here.
     """
 
+    if build is None:
+        return declaration.default
     frozen = getattr(build, "_dataflow_frozen_build_values", None)
     if isinstance(frozen, Mapping) and member_name in frozen:
         return frozen[member_name]
     try:
         value = declaration.accessor(build)
-    except (AttributeError, KeyError, TypeError) as error:
-        if declaration.build_required and declaration.default is None:
-            raise DataflowOpError(
-                f"{operation_type.__name__} needs build fact {member_name!r}, and this "
-                f"build configuration does not supply it: {error}"
-            ) from error
+    except (AttributeError, KeyError, TypeError):
         return declaration.default
     if value is None:
-        if declaration.build_required and declaration.default is None:
-            raise DataflowOpError(
-                f"{operation_type.__name__} needs build fact {member_name!r}, and this "
-                "build configuration supplies nothing for it"
-            )
         return declaration.default
     return value
 
@@ -1265,9 +1325,9 @@ def kernel_logical_network(kernel: Space) -> ProjectionAssessment[DataflowNetwor
     def unwrap(answer: Answer[Any]) -> Answer[DataflowNetwork]:
         if not isinstance(answer, Decided):
             return cast("Answer[DataflowNetwork]", answer)
-        if not isinstance(answer.value, NetworkResult):
-            raise DataflowOpError("selected Kernel logical capability is not a NetworkResult")
-        return Decided(answer.value.network)
+        if not isinstance(answer.value, (NetworkResult, RegionResult)):
+            raise DataflowOpError("selected Kernel logical capability is not a logical result")
+        return Decided(logical_network(answer.value))
 
     return ProjectionAssessment(
         logical.projection,

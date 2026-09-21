@@ -868,6 +868,8 @@ def _contract_for_mapping(
         mapping.semantic_operand.operand_id,
         mapping.placement.port_id,
     )
+    if element_type is None:
+        raise ValueError("graph operand type is unresolved")
     contract = LogicalBoundaryContract(
         mapping.source_shape,
         element_type,

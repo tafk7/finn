@@ -18,7 +18,7 @@ from finn.dataflow._engine import (
     QualifiedPath,
     Unresolved,
 )
-from finn.dataflow.analysis.integer_dot import IntegerSupportReport
+from finn.dataflow.analysis.integer_dot import DotProductBounds, IntegerSupportReport
 from finn.dataflow.model.logical.semantics import (
     QONNX_DATATYPE_CODEC,
     QONNX_DATATYPE_VALUE_SEMANTICS,
@@ -77,6 +77,7 @@ class Problem_(Space):
     clock_period_ns = Problem(float)
     computation_profile = Problem(MvauComputationProfile)
     numerical_support = Problem(IntegerSupportReport, required=False)
+    integer_bounds = Problem(DotProductBounds, required=False)
     initializer_present = Problem(bool)
     weight_initializer = Problem(FrozenInitializer, required=False)
 

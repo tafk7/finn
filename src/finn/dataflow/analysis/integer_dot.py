@@ -564,13 +564,23 @@ def analyze_integer_dot_product(premise: DotProductPremise) -> DotProductBounds:
     if premise.output_shape != (*premise.activation_shape[:-1], height):
         raise ValueError("output shape does not match the matrix product")
     columns = _weight_ranges(premise)
+    return analyze_integer_dot_ranges(premise.activation_range, columns)
+
+
+def analyze_integer_dot_ranges(
+    activation: IntegerRange, columns: tuple[tuple[IntegerRange, ...], ...]
+) -> DotProductBounds:
+    """Canonical numerical bounds without source, target or carrier assumptions."""
+
+    if not columns or any(not column for column in columns):
+        raise ValueError("dot-product bounds require nonempty weight columns")
     output_ranges: list[IntegerRange] = []
     product_min: int | None = None
     product_max: int | None = None
     intermediate_min: int | None = None
     intermediate_max: int | None = None
     for column in columns:
-        terms = tuple(_term_range(premise.activation_range, weight) for weight in column)
+        terms = tuple(_term_range(activation, weight) for weight in column)
         result = IntegerRange(
             sum(term.minimum for term in terms),
             sum(term.maximum for term in terms),
@@ -1121,6 +1131,7 @@ __all__ = [
     "RuntimeWeightPromise",
     "ValidatedDotProductOperands",
     "analyze_integer_dot_product",
+    "analyze_integer_dot_ranges",
     "check_integer_dot_product_support",
     "decode_dot_product_premise",
     "encode_dot_product_premise",

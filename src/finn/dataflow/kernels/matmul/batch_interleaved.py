@@ -81,7 +81,7 @@ class BatchInterleavedKernel(WeightedDotProductKernel):
             activation_type=activation_type,
             weight_type=weight_type,
             accumulator_type=accumulator_type,
-            output_type=output_type,
+            output_type=WeightedDotProductKernel.result_type,
             narrow_weights=narrow_weights,
             target_dsp=target_dsp,
             clock_period_ns=clock_period_ns,
