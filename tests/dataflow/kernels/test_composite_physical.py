@@ -47,7 +47,7 @@ from finn.dataflow.kernels.matmul.physical import (
     DECOMPOSED_WRAPPER_TEMPLATE,
     PhysicalCompositionError,
     compose_decomposed,
-    validate_decomposed_physical_facts as validate_kernel_physical_facts,
+    validate_decomposed_structure,
 )
 from finn.dataflow.model.physical.capture import selected_child_realization
 from finn.dataflow.model.physical.layout import PeriodicLast
@@ -59,14 +59,14 @@ from finn.dataflow.model.physical.structure import (
     PhysicalWire,
     PinSlice,
 )
-from finn.dataflow.model.relations.values import (
-    CompositePhysicalFacts,
+from finn.dataflow.model.physical.interface import (
+    PhysicalResult,
     KernelRealizationFacts,
     KernelStreamBinding,
-    SemanticPortBinding,
+    PhysicalPort,
 )
 from finn.dataflow.model import RegionDeclaration
-from finn.dataflow.model.relations.view import low_fields_binding
+from finn.dataflow.model.physical.interface import low_fields_binding
 from finn.dataflow.model.logical.region import (
     BeatSequence,
     DataflowRegion,
@@ -135,21 +135,9 @@ def test_external_dot_product_produces_the_complete_checked_facts() -> None:
     assert requirements.implementation_version == "1"
     assert requirements.parameters == ()
     assert requirements.abi.entry_point == GeneratedModuleName("finn_mvau_external")
-    assert tuple(item.node_id for item in facts.port_bindings) == (
-        "replay",
-        "replay",
-        "compute",
-        "compute",
-        "compute",
-    )
-    assert tuple(item.boundary_id for item in facts.boundary_bindings) == (
-        "activation",
-        "weight",
-        "output",
-    )
-    assert facts.edge_bindings[0].edge_id == "activation_replay"
-
-    activation = facts.boundary_bindings[0].payload
+    assert tuple(item.role for item in facts.ports) == ("activation", "weights", "result")
+    assert tuple(item.bus_id for item in facts.ports) == ("in0_V", "in1_V", "out0_V")
+    activation = facts.ports[0].payload
     assert tuple(
         (item.field_index, item.bit_offset, item.bit_width) for item in activation.fields
     ) == (
@@ -248,7 +236,6 @@ def test_lane_reversal_and_nonzero_padding_are_rejected() -> None:
     structure = compose_decomposed(replay=replay, compute=compute)
     accepted = design.physical.accepted_answer
     assert isinstance(accepted, Decided)
-    facts = accepted.value
     network = design.dataflow.accepted_answer
     assert isinstance(network, Decided)
 
@@ -270,16 +257,8 @@ def test_lane_reversal_and_nonzero_padding_are_rejected() -> None:
     wires[first] = replace(wires[first], source=second_source)
     wires[second] = replace(wires[second], source=first_source)
     reversed_structure = replace(structure, wires=tuple(wires))
-    reversed_facts = replace(
-        facts,
-        requirements=lower_module_structure(
-            reversed_structure,
-            producer=DECOMPOSED_PRODUCER,
-            wrapper_template=DECOMPOSED_WRAPPER_TEMPLATE,
-        ),
-    )
     with pytest.raises(PhysicalCompositionError, match="does not preserve"):
-        validate_kernel_physical_facts(network.value, reversed_structure, reversed_facts)
+        validate_decomposed_structure(reversed_structure, replay, compute)
 
     wires = list(structure.wires)
     padding = next(
@@ -290,32 +269,18 @@ def test_lane_reversal_and_nonzero_padding_are_rejected() -> None:
     )
     wires[padding] = replace(wires[padding], source=ConstantBits(2, 3))
     nonzero_padding = replace(structure, wires=tuple(wires))
-    nonzero_facts = replace(
-        facts,
-        requirements=lower_module_structure(
-            nonzero_padding,
-            producer=DECOMPOSED_PRODUCER,
-            wrapper_template=DECOMPOSED_WRAPPER_TEMPLATE,
+    with pytest.raises(PhysicalCompositionError, match="driven to zero"):
+        validate_decomposed_structure(nonzero_padding, replay, compute)
+
+    wrong_replay = replace(
+        replay,
+        streams=tuple(
+            replace(binding, framing=PeriodicLast("tlast", 1, 0)) if binding.framing else binding
+            for binding in replay.streams
         ),
     )
-    with pytest.raises(PhysicalCompositionError, match="driven to zero"):
-        validate_kernel_physical_facts(network.value, nonzero_padding, nonzero_facts)
-
-    wrong_framing_ports = tuple(
-        replace(
-            binding,
-            local=replace(binding.local, framing=PeriodicLast("tlast", 1, 0)),
-        )
-        if binding.local.framing is not None
-        else binding
-        for binding in facts.port_bindings
-    )
     with pytest.raises(PhysicalCompositionError, match="synapse-fold"):
-        validate_kernel_physical_facts(
-            network.value,
-            structure,
-            replace(facts, port_bindings=wrong_framing_ports),
-        )
+        compose_decomposed(replay=wrong_replay, compute=compute)
 
 
 def test_missing_or_duplicate_destination_bits_refuse_at_structure_construction() -> None:
@@ -356,11 +321,7 @@ def test_lowering_preserves_bit_zero_slices_of_vector_pins() -> None:
 
     split = replace(structure, wires=tuple(wires))
     requirements = _requirements_for_structure(split)
-    validate_kernel_physical_facts(
-        network.value,
-        split,
-        replace(answer.value, requirements=requirements),
-    )
+    validate_decomposed_structure(split, replay, compute)
 
     assignments = dict(requirements.render_inputs)["ASSIGNMENTS"]
     assert isinstance(assignments, str)
@@ -396,11 +357,7 @@ def test_top_clock_alignment_reset_domains_and_bus_domains_are_required() -> Non
         top_abi=replace(structure.top_abi, ports=free_2x_ports, clock_alignments=()),
     )
     with pytest.raises(PhysicalCompositionError, match="derived ap_clk2x"):
-        validate_kernel_physical_facts(
-            network.value,
-            free_2x,
-            replace(answer.value, requirements=_requirements_for_structure(free_2x)),
-        )
+        validate_decomposed_structure(free_2x, replay, compute)
 
     single_domain_ports = tuple(
         replace(
@@ -420,11 +377,7 @@ def test_top_clock_alignment_reset_domains_and_bus_domains_are_required() -> Non
         top_abi=replace(structure.top_abi, ports=single_domain_ports),
     )
     with pytest.raises(PhysicalCompositionError, match="synchronous to both clocks"):
-        validate_kernel_physical_facts(
-            network.value,
-            single_domain,
-            replace(answer.value, requirements=_requirements_for_structure(single_domain)),
-        )
+        validate_decomposed_structure(single_domain, replay, compute)
 
     wrong_bus_ports = tuple(
         replace(port, associated_clock="ap_clk2x")
@@ -437,11 +390,7 @@ def test_top_clock_alignment_reset_domains_and_bus_domains_are_required() -> Non
         top_abi=replace(structure.top_abi, ports=wrong_bus_ports),
     )
     with pytest.raises(PhysicalCompositionError, match="top stream"):
-        validate_kernel_physical_facts(
-            network.value,
-            wrong_bus,
-            replace(answer.value, requirements=_requirements_for_structure(wrong_bus)),
-        )
+        validate_decomposed_structure(wrong_bus, replay, compute)
 
     replay_instance, compute_instance = structure.instances
     extra_compute_abi = replace(
@@ -466,12 +415,8 @@ def test_top_clock_alignment_reset_domains_and_bus_domains_are_required() -> Non
             ),
         ),
     )
-    with pytest.raises(PhysicalCompositionError, match="Dotp pin/interface inventory"):
-        validate_kernel_physical_facts(
-            network.value,
-            extra_pin,
-            replace(answer.value, requirements=_requirements_for_structure(extra_pin)),
-        )
+    with pytest.raises(PhysicalCompositionError, match="physical modules and ABI"):
+        validate_decomposed_structure(extra_pin, replay, compute)
 
 
 def _single_output_region(width: int) -> DataflowRegion:
@@ -557,12 +502,10 @@ def _single_child_physical(
     *,
     requirements: ModuleBuildRequirements,
     streams: tuple[KernelStreamBinding, ...],
-) -> CompositePhysicalFacts:
-    return CompositePhysicalFacts(
+) -> PhysicalResult:
+    return PhysicalResult(
         requirements,
-        (SemanticPortBinding("only", "u_only", streams[0]),),
-        (),
-        (),
+        (PhysicalPort("result", streams[0].abi_bus_id, streams[0].payload, streams[0].framing),),
     )
 
 
@@ -577,7 +520,7 @@ class _SelectivePhysicalKernel(Kernel):
     result = NetworkBoundary(only.output("output"))
 
     physical_result = derived(
-        CompositePhysicalFacts,
+        PhysicalResult,
         requirements=only.physical_result,
         streams=only.physical_streams,
     )(_single_child_physical)
@@ -623,7 +566,7 @@ class _UnusedBranchChoiceKernel(_SelectivePhysicalKernel):
     )
     result = NetworkBoundary(only.output("output"))
     physical_result = derived(
-        CompositePhysicalFacts,
+        PhysicalResult,
         requirements=only.physical_result,
         streams=only.physical_streams,
     )(_single_child_physical)

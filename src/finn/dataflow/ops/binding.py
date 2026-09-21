@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Exact immutable node uses over the existing Space occurrence runtime."""
+"""Authored binding helpers for a DataflowOp at its ordinary Space point."""
 
 # Source/native imports are delayed to keep the source authoring boundary acyclic.
 # ruff: noqa: PLC0415
@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from collections.abc import Mapping
 from typing import Any, cast
 
 from finn.dataflow._engine import Answer, Decided
@@ -167,189 +168,161 @@ def same_occurrence(left: Space, right: Space) -> bool:
     return a.runtime is b.runtime and a.compiled is b.compiled and a.scope == b.scope
 
 
-@dataclass(frozen=True, slots=True)
-class HydratedUse:
-    root: Any
-    implementation: ImplementationBinding
-    operands: tuple[OperandBinding, ...]
-    choices: tuple[ChoiceBinding, ...]
-    interface: ImplementationBinding | None = None
+def validate_bindings(operation: Any) -> None:
+    """Validate the Op's authored bindings, without copying its point or schema."""
+    operation._bound_node()
+    implementation = getattr(type(operation), "implementation_binding", None)
+    if not isinstance(implementation, ImplementationBinding):
+        raise AuthoringError("DataflowOp must declare its exact implementation binding")
+    operands = tuple(getattr(type(operation), "operand_bindings", ()))
+    interface = getattr(type(operation), "interface_binding", None)
+    if interface is not None and not isinstance(interface, ImplementationBinding):
+        raise AuthoringError("interface binding must name an authored implementation route")
+    if any(not isinstance(binding, OperandBinding) for binding in operands):
+        raise AuthoringError("operand bindings must be authored OperandBinding declarations")
+    from finn.dataflow.ops.base import source_declarations
+    from finn.dataflow.ops.schema import OpInput, OpOutput
 
-    def __post_init__(self) -> None:
-        # Freeze association to the actual source occurrence, not an arbitrary
-        # externally supplied SourceNode with coincidentally equal fields.
-        self.root._bound_node()
-        object.__setattr__(self, "operands", tuple(self.operands))
-        object.__setattr__(self, "choices", tuple(self.choices))
-        self._validate_association()
-        from finn.dataflow.ops.base import source_declarations
-        from finn.dataflow.ops.schema import OpInput, OpOutput
+    declarations = dict(source_declarations(type(operation)))
+    sources, roles = set(), set()
+    for binding in operands:
+        declaration = declarations.get(binding.source)
+        if not isinstance(declaration, (OpInput, OpOutput)):
+            raise AuthoringError(f"unknown source operand {binding.source!r}")
+        if declaration.index != binding.index or declaration.output != binding.output:
+            raise AuthoringError("source operand binding disagrees with its declaration")
+        if binding.source in sources or binding.role in roles:
+            raise AuthoringError("source and public operand bindings must be unique")
+        sources.add(binding.source)
+        roles.add(binding.role)
+    from finn.dataflow.model.logical.interface_authoring import public_operand_declarations
 
-        declarations = dict(source_declarations(type(self.root)))
-        sources, roles = set(), set()
-        for binding in self.operands:
-            declaration = declarations.get(binding.source)
-            if not isinstance(declaration, (OpInput, OpOutput)):
-                raise AuthoringError(f"unknown source operand {binding.source!r}")
-            if declaration.index != binding.index or declaration.output != binding.output:
-                raise AuthoringError("source operand binding disagrees with its declaration")
-            if binding.source in sources or binding.role in roles:
-                raise AuthoringError("source and public operand bindings must be unique")
-            sources.add(binding.source)
-            roles.add(binding.role)
-        from finn.dataflow.model.logical.interface_authoring import public_operand_declarations
-
-        targets = self.implementation.authored_targets(type(self.root))
-        if self.interface is not None:
-            targets += self.interface.authored_targets(type(self.root))
-        for target_type, inputs in targets:
-            public = {item.key: item for item in public_operand_declarations(target_type)}
-            for binding in self.operands:
-                if binding.role not in public:
-                    raise AuthoringError(f"implementation has no public role {binding.role!r}")
-                export = public[binding.role]
-                if (export.direction == "output") != binding.output:
-                    raise AuthoringError("public operand binding direction disagrees with source")
-                if not binding.output:
-                    source = cast(OpInput, declarations[binding.source])
-                    # Direct tensor datatype bindings have one canonical source.
-                    # Repeated equal datatypes cannot hide a wrong source operand.
-                    supplied = inputs.get(id(export.datatype.output))
-                    if supplied is not None and supplied is not source.datatype:
-                        raise AuthoringError(
-                            "operand facts and public value binding name different sources"
-                        )
-
-    @property
-    def source(self) -> Any:
-        return self.root.source
-
-    def _validate_association(self) -> None:
-        from finn.dataflow.ops.base import DataflowOpError
-
-        definition = type(self.root)
-        if (
-            self.implementation != getattr(definition, "implementation_binding", None)
-            or self.interface != getattr(definition, "interface_binding", None)
-            or self.operands != tuple(getattr(definition, "operand_bindings", ()))
-            or self.choices != tuple(getattr(definition, "choice_bindings", ()))
-        ):
-            raise DataflowOpError("use binding contradicts its source definition")
-
-    def resolve(self) -> Answer[Space]:
-        self._validate_association()
-        return self.implementation.resolve(self.root)
-
-    def require_implementation(self, occurrence: Space | None = None) -> Space:
-        from finn.dataflow.ops.base import DataflowOpError
-
-        answer = self.resolve()
-        if not isinstance(answer, Decided):
-            raise DataflowOpError("implementation is not selected", answer.findings)
-        if occurrence is not None and not same_occurrence(answer.value, occurrence):
-            raise DataflowOpError("implementation is not this exact node occurrence and point")
-        return answer.value
-
-    def _facet(self, key: str, name: str) -> Answer[Any]:
-        from finn.dataflow.model.logical import interface_authoring
-
-        self._validate_association()
-        key = next((binding.role for binding in self.operands if binding.source == key), key)
-        if key not in {binding.role for binding in self.operands}:
-            raise AuthoringError(f"unknown bound public operand {key!r}")
-        target = (self.interface or self.implementation).resolve(self.root)
-        if not isinstance(target, Decided):
-            return target
-        binding = next(item for item in self.operands if item.role == key)
-        answer: Answer[Any]
-        if name == "operand_type" and binding.output:
-            from finn.dataflow.space.occurrence import combine_assessments
-
-            declaration = interface_authoring.operand_declaration(target.value, key)
-            facet = target.value.assess_view(declaration.datatype)
-            semantic = self.root.assess(type(self.root).type_source_accepts)
-            answer = combine_assessments(
-                "type_source", (semantic, *facet.constraints), facet
-            ).accepted_answer
-        else:
-            answer = cast("Answer[Any]", getattr(interface_authoring, name)(target.value, key))
-        if name == "operand_domain" and isinstance(answer, Decided):
-            from math import prod
-            from finn.dataflow.ops.mapping import CoordinateMapping
-            from finn.dataflow._engine import Absent, Finding, FindingKind, QualifiedPath
-
+    targets = implementation.authored_targets(type(operation))
+    if interface is not None:
+        targets += interface.authored_targets(type(operation))
+    for target_type, inputs in targets:
+        public = {item.key: item for item in public_operand_declarations(target_type)}
+        for binding in operands:
+            if binding.role not in public:
+                raise AuthoringError(f"implementation has no public role {binding.role!r}")
+            export = public[binding.role]
+            if (export.direction == "output") != binding.output:
+                raise AuthoringError("public operand binding direction disagrees with source")
             if not binding.output:
-                shape = self.source.operand(binding.source).shape
-                expected = shape
-                if binding.adapter == CoordinateMapping.FLATTEN_LEADING and shape:
-                    expected = (prod(shape[:-1]), shape[-1])
-                elif binding.adapter == CoordinateMapping.TRANSPOSE_2D and len(shape) == 2:
-                    expected = (shape[1], shape[0])
-                if answer.value.extents != expected:
-                    return Absent(
-                        (
-                            Finding(
-                                FindingKind.REJECTION,
-                                "operand-domain-binding",
-                                QualifiedPath(key),
-                                "source boundary adapter does not match the public operand domain",
-                            ),
-                        )
+                source = cast(OpInput, declarations[binding.source])
+                # Direct tensor datatype bindings have one canonical source.
+                # Repeated equal datatypes cannot hide a wrong source operand.
+                supplied = inputs.get(id(export.datatype.output))
+                if supplied is not None and supplied is not source.datatype:
+                    raise AuthoringError(
+                        "operand facts and public value binding name different sources"
                     )
-        return answer
 
-    def operand_type(self, key: str) -> Answer[Any]:
-        return self._facet(key, "operand_type")
 
-    def operand_domain(self, key: str) -> Answer[Any]:
-        return self._facet(key, "operand_domain")
+def resolve_implementation(operation: Any) -> Answer[Space]:
+    validate_bindings(operation)
+    binding = cast(ImplementationBinding, type(operation).implementation_binding)
+    return binding.resolve(operation)
 
-    def operand_export(self, key: str) -> Answer[Any]:
-        from finn.dataflow.model.logical.interface_authoring import operand_export
 
-        key = next((binding.role for binding in self.operands if binding.source == key), key)
-        target = self.resolve()
-        if not isinstance(target, Decided):
-            return target
-        return operand_export(target.value, key)
+def require_implementation(operation: Any, occurrence: Space | None = None) -> Space:
+    from finn.dataflow.ops.base import DataflowOpError
 
-    def successor(self, root: Any) -> HydratedUse:
-        from finn.dataflow.ops.base import DataflowOpError
+    answer = resolve_implementation(operation)
+    if not isinstance(answer, Decided):
+        raise DataflowOpError("implementation is not selected", answer.findings)
+    if occurrence is not None and not same_occurrence(answer.value, occurrence):
+        raise DataflowOpError("implementation is not this exact node occurrence and point")
+    return answer.value
 
-        old, new = _occurrence_state(self.root), _occurrence_state(root)
-        if (
-            old.runtime.lineage is not new.runtime.lineage
-            or old.compiled is not new.compiled
-            or old.scope != new.scope
-            or root._bound_node() is not self.root._bound_node()
-        ):
-            raise DataflowOpError("successor does not share this source occurrence association")
-        return HydratedUse(root, self.implementation, self.operands, self.choices, self.interface)
 
-    def commit(self, values: dict[str, object]) -> HydratedUse:
-        """Commit stable native keys using the compiled schema and engine batch."""
-        from finn.dataflow.ops.native import choice_schema, encode_choice_value
+def operand_facet(operation: Any, key: str, name: str) -> Answer[Any]:
+    from finn.dataflow.model.logical import interface_authoring
 
-        schema = {entry.name: entry for entry in choice_schema(self.root)}
-        unknown = values.keys() - schema.keys()
-        if unknown:
-            raise AuthoringError(f"unknown native choice keys: {sorted(unknown)}")
-        assignments = {}
-        for key, value in values.items():
-            entry = schema[key]
-            encode_choice_value(entry, value)  # exact nominal/selector codec checks
-            assignments[entry.choice.reference.path] = value
-        root = occurrence_commit_paths(self.root, assignments)
-        result = self.successor(root)
-        from finn.dataflow.ops.native import serialize_choices
+    validate_bindings(operation)
+    operands = tuple(getattr(type(operation), "operand_bindings", ()))
+    implementation = type(operation).implementation_binding
+    interface = getattr(type(operation), "interface_binding", None)
+    key = next((binding.role for binding in operands if binding.source == key), key)
+    if key not in {binding.role for binding in operands}:
+        raise AuthoringError(f"unknown bound public operand {key!r}")
+    target: Answer[Space] = (interface or implementation).resolve(operation)
+    if not isinstance(target, Decided):
+        return target
+    binding = next(item for item in operands if item.role == key)
+    answer: Answer[Any]
+    if name == "operand_type" and binding.output:
+        from finn.dataflow.space.occurrence import combine_assessments
 
-        reachable = serialize_choices(root)
-        if any(key not in reachable for key in values):
-            raise AuthoringError("choice is not reachable in this implementation point")
-        return result
+        declaration = interface_authoring.operand_declaration(target.value, key)
+        facet = target.value.assess_view(declaration.datatype)
+        semantic = operation.assess(type(operation).type_source_accepts)
+        answer = combine_assessments(
+            "type_source", (semantic, *facet.constraints), facet
+        ).accepted_answer
+    else:
+        answer = cast("Answer[Any]", getattr(interface_authoring, name)(target.value, key))
+    if name == "operand_domain" and isinstance(answer, Decided):
+        from math import prod
+        from finn.dataflow.ops.mapping import CoordinateMapping
+        from finn.dataflow._engine import Absent, Finding, FindingKind, QualifiedPath
 
-    def rebind(self, model: Any, build: Any = None, *, graph_context: Any = None) -> HydratedUse:
-        return cast(
-            "HydratedUse",
-            self.root.rebind(model, build, graph_context=graph_context).hydrated_use(),
-        )
+        if not binding.output:
+            shape = operation.source.operand(binding.source).shape
+            expected = shape
+            if binding.adapter == CoordinateMapping.FLATTEN_LEADING and shape:
+                expected = (prod(shape[:-1]), shape[-1])
+            elif binding.adapter == CoordinateMapping.TRANSPOSE_2D and len(shape) == 2:
+                expected = (shape[1], shape[0])
+            if answer.value.extents != expected:
+                return Absent(
+                    (
+                        Finding(
+                            FindingKind.REJECTION,
+                            "operand-domain-binding",
+                            QualifiedPath(key),
+                            "source boundary adapter does not match the public operand domain",
+                        ),
+                    )
+                )
+    return answer
+
+
+def bound_operand_export(operation: Any, key: str) -> Answer[Any]:
+    from finn.dataflow.model.logical.interface_authoring import operand_export
+
+    key = next(
+        (
+            binding.role
+            for binding in getattr(type(operation), "operand_bindings", ())
+            if binding.source == key
+        ),
+        key,
+    )
+    target = resolve_implementation(operation)
+    if not isinstance(target, Decided):
+        return target
+    return operand_export(target.value, key)
+
+
+def commit_choices(operation: Any, values: Mapping[str, object]) -> Any:
+    """Commit stable native keys using the compiled schema and engine batch."""
+    from finn.dataflow.ops.native import choice_schema, encode_choice_value
+
+    operation._bound_node()
+    schema = {entry.name: entry for entry in choice_schema(operation)}
+    unknown = values.keys() - schema.keys()
+    if unknown:
+        raise AuthoringError(f"unknown native choice keys: {sorted(unknown)}")
+    assignments = {}
+    for key, value in values.items():
+        entry = schema[key]
+        encode_choice_value(entry, value)  # exact nominal/selector codec checks
+        assignments[entry.choice.reference.path] = value
+    root = occurrence_commit_paths(operation, assignments)
+    from finn.dataflow.ops.native import serialize_choices
+
+    reachable = serialize_choices(root)
+    if any(key not in reachable for key in values):
+        raise AuthoringError("choice is not reachable in this implementation point")
+    return root

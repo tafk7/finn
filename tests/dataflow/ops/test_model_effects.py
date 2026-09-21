@@ -8,8 +8,8 @@ import pytest
 from onnx import TensorAnnotation, TensorProto, helper, numpy_helper
 from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
+from dataflow.ops.test_dataflow_op import Build, _configure_mvau_point, _mvau_model, _unbound
 
-from dataflow.ops.test_selected_graph import _fixture as _selected_fixture
 from finn.dataflow.ops.base import DataflowOpError
 from finn.dataflow.ops.model_effects import (
     MODEL_READ_PRESENT,
@@ -21,10 +21,33 @@ from finn.dataflow.ops.model_effects import (
     model_snapshot_digest,
 )
 from finn.dataflow.ops.native import NativeAttribute, read_attributes
-from finn.dataflow.ops.selected import build_selected_snapshot
 from finn.dataflow.ops.tensor_summary import FrozenInitializer
+from finn.dataflow.ops.persistence import apply_graph_effects
 
 TEST_DOMAIN = "test.model_effects"
+
+
+def test_native_graph_effects_reject_written_choice_different_from_plan() -> None:
+    """A forged native payload cannot contradict the separately captured choices."""
+    model = _mvau_model()
+    operation = _configure_mvau_point(_unbound(model, "mvau0").bind(model, Build()))
+    effects = operation.graph_effects()
+    key = "kernel__dot_product__compute__dotp_axi__compute_pumping"
+    assert effects.set_attributes[key] == NativeAttribute("i", 0)
+    changed = tuple(
+        (owner, name, NativeAttribute("i", 1)) if name == key else (owner, name, value)
+        for owner, name, value in effects.model_effects().set_attributes
+    )
+    model_effects = replace(effects.model_effects(), set_attributes=changed)
+    forged = replace(
+        effects,
+        set_attributes={name: value for _owner, name, value in model_effects.set_attributes},
+    )
+    assert forged.expected_choices == effects.expected_choices
+    before = model.model.SerializeToString(deterministic=True)
+    with pytest.raises(DataflowOpError, match="effects differ|written native choices differ"):
+        apply_graph_effects(model, forged)
+    assert model.model.SerializeToString(deterministic=True) == before
 
 
 def _tensor(name: str, shape: tuple[int, ...]):
@@ -611,19 +634,18 @@ def test_display_name_is_not_a_node_identity() -> None:
         )
 
 
-def test_selected_v2_node_id_resolves_only_through_binding_index() -> None:
-    _network, declaration, selected_model = _selected_fixture()
-    selected = build_selected_snapshot(selected_model, declaration).model_copy()
-    replacement = helper.make_node("Identity", ["X"], ["Y"], name="new-display")
+def test_native_node_id_survives_display_name_change() -> None:
+    model = _model()
+    replacement = _node("new-display", ("X",), "Y", "producer")
     apply_model_effects(
-        selected,
+        model,
         ModelEffects(
-            replace_nodes=(("identity", replacement.SerializeToString(deterministic=True)),)
+            replace_nodes=(("producer", replacement.SerializeToString(deterministic=True)),)
         ),
         validate=lambda _model: None,
         finish=lambda _model: None,
     )
-    assert selected.graph.node[0].name == "new-display"
+    assert model.graph.node[0].name == "new-display"
 
 
 def test_graph_output_producer_change_refuses_before_live_mutation() -> None:

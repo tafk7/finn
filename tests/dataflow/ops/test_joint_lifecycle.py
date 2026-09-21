@@ -52,7 +52,6 @@ from finn.dataflow.ops.base import DATAFLOW_DOMAIN, DataflowOp, DataflowOpError
 from finn.dataflow.ops.inference import InferDataTypes, InferShapes
 from finn.dataflow.ops.mapping import CoordinateMapping, External
 from finn.dataflow.ops.native import (
-    FINGERPRINT_ATTRIBUTE,
     SCHEMA_VERSION_ATTRIBUTE,
     SCOPE_ID_ATTRIBUTE,
     NativeAttribute,
@@ -178,11 +177,12 @@ def test_native_reload_to_accepted_mapping_and_portable_artifact(
     attributes = read_attributes(saved.graph.node[0])
     assert attributes["kernel__pe"] == NativeAttribute("i", 1)
     assert attributes["kernel__simd"] == NativeAttribute("i", 4)
-    assert attributes[SCHEMA_VERSION_ATTRIBUTE] == NativeAttribute("i", 4)
+    assert attributes[SCHEMA_VERSION_ATTRIBUTE] == NativeAttribute(
+        "i", ActivationReplayOp.schema_version
+    )
     assert set(attributes) == {
         "neuron_folds",
         SCOPE_ID_ATTRIBUTE,
-        FINGERPRINT_ATTRIBUTE,
         SCHEMA_VERSION_ATTRIBUTE,
         "kernel__pe",
         "kernel__simd",

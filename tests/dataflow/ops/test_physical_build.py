@@ -104,10 +104,7 @@ def test_two_committed_occurrences_reuse_one_component_and_keep_distinct_associa
     assert requests[0].capture.requirements == requests[1].capture.requirements
     assert components[0] == components[1]
     assert instances[0].outer_instance_id != instances[1].outer_instance_id
-    assert (
-        instances[0].association.logical.source_origin
-        != instances[1].association.logical.source_origin
-    )
+    assert instances[0].association.scope_id != instances[1].association.scope_id
     path = tmp_path / "source.onnx"
     model.save(str(path))
     restored = ModelWrapper(str(path))
@@ -268,7 +265,7 @@ def test_external_weights_are_invariant_only_with_equal_consumed_physical_facts(
         request = _prepare(op, model, build, context, store)
         captures.append(request.capture)
         prepared.append(request.prepared)
-    assert captures[0].association.logical.incoming != captures[1].association.logical.incoming
+    assert captures[0].association.incoming_context != captures[1].association.incoming_context
     assert captures[0].requirements == captures[1].requirements
     assert prepared[0] == prepared[1]
     assert captures[1].requirements != captures[2].requirements

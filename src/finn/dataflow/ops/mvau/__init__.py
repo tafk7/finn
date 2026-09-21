@@ -6,13 +6,12 @@
 ```text
 op.py           source declarations and the choice of reusable implementation
 computation.py  source execution against the shared mathematical profile
-numerics.py     source/selected numerical-support evidence
-selected.py     source-owned selected construction and verification
+numerics.py     source numerical-support evidence using shared pure rules
 ```
 
 Reusable profiles, Region/Network recipes, implementations and physical
 assembly live under ``finn.dataflow.kernels.matmul``. This source adapter binds
-node facts to that library and owns ONNX construction, persistence and graph
+node facts to that library and owns native hydration, persistence and graph
 effects; the implementation library never imports this package back.
 
 This namespace performs no eager import; ``finn.custom_op.dataflow`` is where

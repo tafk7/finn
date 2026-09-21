@@ -24,8 +24,8 @@ from finn.dataflow.model._authoring import (
 from finn.dataflow.model.logical.authoring import RegionDeclaration
 from finn.dataflow.model.logical.region import DataflowRegion
 from finn.dataflow.model.physical.view import PhysicalView
-from finn.dataflow.model.relations.validation import validate_kernel_stream_bindings
-from finn.dataflow.model.relations.values import KernelStreamBinding
+from finn.dataflow.model.physical.interface import validate_kernel_stream_bindings
+from finn.dataflow.model.physical.interface import KernelStreamBinding
 from finn.dataflow.space.declarations import (
     AuthoringError,
     ConstraintGroup,
@@ -46,7 +46,7 @@ _MISSING = object()
 
 
 class PhysicallyUnsupported(ValueError):
-    """The logical Kernel is valid but this physical realization is absent."""
+    """The declared generator does not support this physical configuration."""
 
 
 @dataclass(frozen=True, slots=True, eq=False, init=False)

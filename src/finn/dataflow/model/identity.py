@@ -27,26 +27,11 @@ TYPE_IDENTITY_RELOCATIONS = {
     "finn.dataflow.model.physical.layout.UnusedBitRange": (
         "finn.dataflow.kernels.physical.UnusedBitRange"
     ),
-    "finn.dataflow.model.relations.values.KernelRealizationFacts": (
+    "finn.dataflow.model.physical.interface.KernelRealizationFacts": (
         "finn.dataflow.kernels.physical.KernelRealizationFacts"
     ),
-    "finn.dataflow.model.relations.values.KernelStreamBinding": (
+    "finn.dataflow.model.physical.interface.KernelStreamBinding": (
         "finn.dataflow.kernels.physical.KernelStreamBinding"
-    ),
-    "finn.dataflow.model.relations.values.BoundaryBinding": (
-        "finn.dataflow.kernels.physical_composition.BoundaryBinding"
-    ),
-    "finn.dataflow.model.relations.values.CompositePhysicalFacts": (
-        "finn.dataflow.kernels.physical_composition.CompositePhysicalFacts"
-    ),
-    "finn.dataflow.model.relations.values.EdgeBinding": (
-        "finn.dataflow.kernels.physical_composition.EdgeBinding"
-    ),
-    "finn.dataflow.model.relations.values.LogicalPhysicalRelation": (
-        "finn.dataflow.kernels.physical_composition.LogicalPhysicalRelation"
-    ),
-    "finn.dataflow.model.relations.values.SemanticPortBinding": (
-        "finn.dataflow.kernels.physical_composition.SemanticPortBinding"
     ),
     "finn.dataflow.kernels.matmul.base.AccumulationMode": (
         "finn.dataflow.ops.mvau.computation.AccumulationMode"
@@ -80,10 +65,8 @@ MODULE_IDENTITY_RELOCATIONS = {
     "finn.dataflow.model.logical.view": "finn.dataflow.kernels.kernel",
     "finn.dataflow.model.physical.authoring": "finn.dataflow.kernels.kernel",
     "finn.dataflow.model.physical.view": "finn.dataflow.kernels.kernel",
-    "finn.dataflow.model.relations.view": "finn.dataflow.kernels.kernel",
     "finn.dataflow.model.physical.structure": "finn.dataflow.kernels.physical_composition",
     "finn.dataflow.model.physical.capture": "finn.dataflow.ops.physical",
-    "finn.dataflow.model.relations.capture": "finn.dataflow.ops.physical",
 }
 
 

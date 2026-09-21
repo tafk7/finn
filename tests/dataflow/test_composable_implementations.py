@@ -12,7 +12,7 @@ from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 from dataflow.kernels.test_module_build_spec import UnavailableModule
 from dataflow.ops.mvau.test_dot_product_kernel import KERNEL_INPUTS, Problem_, _occurrence
 from dataflow.physical_fixture import configure, source_model
-from finn.dataflow._engine import Absent, Answer, Decided, Unresolved
+from finn.dataflow._engine import Absent, Decided, Unresolved
 from finn.dataflow.artifacts.build import (
     FixedModuleName,
     ModuleABIRequirements,
@@ -20,7 +20,9 @@ from finn.dataflow.artifacts.build import (
 )
 from finn.dataflow.artifacts.store import ArtifactStore
 from finn.dataflow.model import Kernel
-from finn.dataflow.model.relations.values import LogicalPhysicalRelation
+from finn.dataflow.model.physical.interface import PhysicalResult
+from finn.dataflow.ops.binding import ImplementationBinding
+from finn.dataflow.kernels.matmul.base import MatmulInterface
 from finn.dataflow.model.logical.composition import NetworkResult, RegionResult
 from finn.dataflow.ops.base import DataflowOpError
 from finn.dataflow.kernels.matmul.base import WeightedDotProductKernel
@@ -39,14 +41,12 @@ from finn.dataflow.ops.physical import (
     associate_physical_use,
     authorize_component_use,
     capture_local_physical,
-    capture_local_relation,
     install_compiler_physical_component,
     materialize_local_physical,
     prepare_local_physical,
     validate_compiler_physical_use,
 )
 from finn.dataflow.model.identity import implementation_identity
-from finn.dataflow.space.occurrence import ProjectionAssessment
 from finn.dataflow.space.declarations import (
     ConstraintGroup,
     Decision,
@@ -233,8 +233,7 @@ def test_local_physical_capture_ignores_unresolved_and_rejected_logical_only_cho
     design = _independent_design()
     unresolved_capture = capture_local_physical(design)
     assert isinstance(design.dataflow.accepted_answer, Unresolved)
-    with pytest.raises(DataflowOpError, match="relation"):
-        capture_local_relation(design, unresolved_capture)
+    assert "physical_relation" not in type(design).capability_names()
 
     rejected = cast(
         _IndependentLogicalKernel,
@@ -243,8 +242,7 @@ def test_local_physical_capture_ignores_unresolved_and_rejected_logical_only_cho
     rejected_capture = capture_local_physical(rejected)
     assert rejected_capture.point_fingerprint == unresolved_capture.point_fingerprint
     assert isinstance(rejected.dataflow.accepted_answer, Absent)
-    with pytest.raises(DataflowOpError, match="relation"):
-        capture_local_relation(rejected, rejected_capture)
+    assert "physical_relation" not in type(design).capability_names()
 
     store = ArtifactStore(tmp_path / "store")
     prepared = prepare_local_physical(
@@ -254,14 +252,13 @@ def test_local_physical_capture_ignores_unresolved_and_rejected_logical_only_cho
         blobs=store,
     )
     built = materialize_local_physical(prepared, store=store)
-    assert built.capture_fingerprint == unresolved_capture.point_fingerprint
+    assert built.requirements_fingerprint == unresolved_capture.physical_fingerprint
 
     accepted = cast(
         _IndependentLogicalKernel,
         design.assign(_IndependentLogicalKernel.logical_mode, "accept"),
     )
-    relation = capture_local_relation(accepted, capture_local_physical(accepted))
-    assert relation.logical_fingerprint
+    assert capture_local_physical(accepted).requirements == unresolved_capture.requirements
 
 
 class _CaptureSpace(Space):
@@ -316,12 +313,9 @@ def test_compiler_association_is_per_use_and_revalidates_current_source() -> Non
     right_local = capture_local_physical(right_design)
     assert left_local != right_local
     assert left_local.physical_fingerprint == right_local.physical_fingerprint
-    left_relation = capture_local_relation(left_design, left_local)
     use = associate_physical_use(
         left,
-        left_design,
         left_local,
-        left_relation,
         model=model,
         build=build,
         graph_context=context,
@@ -329,7 +323,6 @@ def test_compiler_association_is_per_use_and_revalidates_current_source() -> Non
     assert (
         validate_compiler_physical_use(
             left,
-            left_design,
             use,
             model=model,
             build=build,
@@ -340,7 +333,6 @@ def test_compiler_association_is_per_use_and_revalidates_current_source() -> Non
     model.set_initializer("pair_left_W", np.zeros((4, 4), dtype=np.float32))
     assert validate_compiler_physical_use(
         left,
-        left_design,
         use,
         model=model,
         build=build,
@@ -352,72 +344,43 @@ def test_plain_space_completes_source_selection_build_association_and_installati
     tmp_path,
 ) -> None:
     model, build, context = source_model()
-    production = configure(
-        MvauDataflowOp(model.graph.node[0]).bind(model, build, graph_context=context)
-    )
-    production_design = cast(Kernel, production.selected_kernel())
-    production_local = capture_local_physical(production_design)
-    production_relation = capture_local_relation(production_design, production_local)
-    logical = production_design.assess_view("logical").accepted_answer
-    assert isinstance(logical, Decided)
+    production = configure(MvauDataflowOp(model.graph.node[0]).bind(model, build))
+    production_local = capture_local_physical(production.require_implementation())
 
-    class PlainComposite(Space):
+    class PlainComposite(MatmulInterface):
         id = "plain_composite"
         version = "1"
 
-        @derived(ModuleBuildRequirements)
-        def requirements() -> ModuleBuildRequirements:
-            return production_local.requirements
-
-        @derived(NetworkResult)
-        def logical_value() -> NetworkResult:
-            return logical.value
-
-        @derived(LogicalPhysicalRelation)
-        def relation_value() -> LogicalPhysicalRelation:
-            return cast(LogicalPhysicalRelation, production_relation.relation)
+        @derived(PhysicalResult)
+        def requirements() -> PhysicalResult:
+            return cast(PhysicalResult, production_local.physical)
 
         physical_ready = Readiness()
-        logical_ready = Readiness()
-        relation_ready = Readiness()
         physical = Projection(requirements, readiness=physical_ready)
-        logical = Projection(logical_value, readiness=logical_ready)
-        physical_relation = Projection(relation_value, readiness=relation_ready)
 
     class PlainSelectedMvau(MvauDataflowOp):
-        implementation = Subspace(PlainComposite)
+        implementation_binding = ImplementationBinding(("implementation",))
+        implementation = Subspace(
+            PlainComposite,
+            repetitions=MvauDataflowOp.repetitions,
+            matrix_width=MvauDataflowOp.matrix_width,
+            matrix_height=MvauDataflowOp.matrix_height,
+            activation_type=MvauDataflowOp.activation.datatype,
+            weight_type=MvauDataflowOp.weight.datatype,
+            accumulator_type=MvauDataflowOp.accumulator_type,
+            output_type=MvauDataflowOp.output_type,
+            computation_profile=MvauDataflowOp.profile,
+            integer_bounds=MvauDataflowOp.integer_bounds,
+        )
 
-        @staticmethod
-        def _network_answer(answer: Answer[NetworkResult]) -> Answer[object]:
-            return Decided(answer.value.network) if isinstance(answer, Decided) else answer
-
-        def selected_dataflow(self):
-            assessment = self.implementation.logical
-            return ProjectionAssessment(
-                assessment.projection,
-                assessment.readiness,
-                assessment.constraints,
-                self._network_answer(assessment.output),
-                self._network_answer(assessment.accepted_answer),
-            )
-
-        def selected_kernel(self) -> object:
-            return self.implementation
-
-    operation = PlainSelectedMvau(model.graph.node[0]).bind(model, build, graph_context=context)
-    implementation = operation.selected_kernel()
+    operation = PlainSelectedMvau(model.graph.node[0]).bind(model, build)
+    node_use = operation
+    implementation = node_use.require_implementation()
     assert isinstance(implementation, PlainComposite)
     local = capture_local_physical(implementation)
-    relation = capture_local_relation(implementation, local)
-    use = associate_physical_use(
-        operation,
-        implementation,
-        local,
-        relation,
-        model=model,
-        build=build,
-        graph_context=context,
-    )
+    use = associate_physical_use(node_use, local, model=model, build=build)
+    with pytest.raises(DataflowOpError, match="exact node occurrence"):
+        associate_physical_use(node_use, production_local, model=model, build=build)
     store = ArtifactStore(tmp_path / "plain-store")
     prepared = prepare_local_physical(
         local,
@@ -427,62 +390,26 @@ def test_plain_space_completes_source_selection_build_association_and_installati
     )
     built = materialize_local_physical(prepared, store=store)
     authorized = authorize_component_use(
-        operation,
-        implementation,
-        use,
-        built,
-        model=model,
-        build=build,
-        graph_context=context,
-        store=store,
+        node_use, use, built, model=model, build=build, store=store
     )
     first = install_compiler_physical_component(
-        operation,
-        implementation,
+        node_use,
         authorized,
         outer_instance_id="plain_0",
         model=model,
         build=build,
-        graph_context=context,
         store=store,
     )
     second = install_compiler_physical_component(
-        operation,
-        implementation,
+        node_use,
         authorized,
         outer_instance_id="plain_1",
         model=model,
         build=build,
-        graph_context=context,
         store=store,
     )
     assert first.outer_instance_id != second.outer_instance_id
     assert first.component == second.component
-
-    other_model, other_build, other_context = source_model(prefix="other", rows=2)
-    other = configure(
-        MvauDataflowOp(other_model.graph.node[0]).bind(
-            other_model, other_build, graph_context=other_context
-        )
-    )
-    other_logical = cast(Kernel, other.selected_kernel()).assess_view("logical").accepted_answer
-    assert isinstance(other_logical, Decided)
-
-    class MismatchedRelation(PlainComposite):
-        id = "mismatched_relation"
-
-        @derived(LogicalPhysicalRelation)
-        def wrong_relation() -> LogicalPhysicalRelation:
-            return LogicalPhysicalRelation(
-                other_logical.value.network,
-                cast(LogicalPhysicalRelation, production_relation.relation).physical,
-            )
-
-        physical_relation = Projection(wrong_relation, readiness=PlainComposite.relation_ready)
-
-    mismatched = MismatchedRelation.start({}, namespace="mismatched")
-    with pytest.raises(DataflowOpError, match="differs from the logical"):
-        capture_local_relation(mismatched, capture_local_physical(mismatched))
 
 
 def test_built_component_cannot_cross_physical_choice_points(tmp_path) -> None:
@@ -504,12 +431,9 @@ def test_built_component_cannot_cross_physical_choice_points(tmp_path) -> None:
         blobs=store,
     )
     built = materialize_local_physical(prepared, store=store)
-    relation = capture_local_relation(unpumped_design, unpumped_local)
     use = associate_physical_use(
         unpumped,
-        unpumped_design,
         unpumped_local,
-        relation,
         model=model,
         build=build,
         graph_context=context,
@@ -517,7 +441,6 @@ def test_built_component_cannot_cross_physical_choice_points(tmp_path) -> None:
     with pytest.raises(DataflowOpError, match="different local capture|requirements differ"):
         authorize_component_use(
             unpumped,
-            unpumped_design,
             use,
             built,
             model=model,

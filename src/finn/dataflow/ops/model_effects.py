@@ -3,8 +3,8 @@
 
 """One bounded transaction engine for ONNX model effects.
 
-The records in this module are detached and operation-neutral. Source commit,
-selected publication, migration, and selected transforms lower their own plans
+The records in this module are detached and operation-neutral. Native source
+commits and graph transformations lower their own plans
 to :class:`ModelEffects`; this module owns the one implementation that checks
 their reads, preflights the prepared final graph, applies the writes, and keeps
 final hydration or decoding inside complete-model rollback.
@@ -55,7 +55,7 @@ MODEL_READ_PRESENT = b"__finn_model_read_present_v1__"
 class ModelReadExpectation:
     """One exact fact read while a mutation plan was prepared.
 
-    Node-owned reads use a stable source scope id or selected-v2 node id.
+    Node-owned reads use an explicitly assigned stable source scope id.
     ``OPERAND_SLOT`` fields are ``input:N`` or ``output:N``. Ordinal tensor
     reads use ``input:N:shape``, ``input:N:carrier_dtype``, or
     ``input:N:logical_datatype`` so a coherent input rename can remain valid.
@@ -339,7 +339,7 @@ def _freeze_shape(value: object) -> tuple[int, ...] | None:
 
 
 def model_snapshot_digest(model: Any) -> str:
-    """The immutable selected-input stale guard used by ``SNAPSHOT_DIGEST``."""
+    """The immutable whole-model stale guard used by ``SNAPSHOT_DIGEST``."""
 
     encoded = model.model.SerializeToString(deterministic=True)
     return hashlib.sha256(encoded).hexdigest()
@@ -933,31 +933,6 @@ def _node_id_indices(model: Any) -> dict[str, int]:
         if ids:
             _add_node_id(result, by_index, ids[0], index)
 
-    try:
-        from finn.dataflow.ops.selected import (  # noqa: PLC0415
-            SELECTED_METADATA_KEY,
-            decode_selected_declaration,
-        )
-
-        selected_values = [
-            item.value for item in model.graph.metadata_props if item.key == SELECTED_METADATA_KEY
-        ]
-        if len(selected_values) > 1:
-            raise DataflowOpError("selected metadata is duplicated")
-        if selected_values:
-            declaration = decode_selected_declaration(selected_values[0])
-            if len(declaration.graph_nodes) != len(model.graph.node):
-                raise DataflowOpError("selected stable node bindings do not cover the graph")
-            for record in declaration.graph_nodes:
-                if record.index < 0 or record.index >= len(model.graph.node):
-                    raise DataflowOpError(
-                        f"selected node id {record.node_id!r} has an invalid index"
-                    )
-                _add_node_id(result, by_index, record.node_id, record.index)
-    except DataflowOpError:
-        raise
-    except Exception as error:
-        raise DataflowOpError(f"cannot resolve selected stable node ids: {error}") from error
     return result
 
 

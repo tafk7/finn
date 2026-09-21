@@ -17,24 +17,17 @@ from finn.dataflow._engine import Decided
 
 from finn.dataflow.space.declarations import (
     ConstraintGroup,
-    Space,
     Subspace,
     constraint,
     derived,
     reject,
 )
-from finn.dataflow.space.occurrence import ProjectionAssessment
-from finn.dataflow.model.logical.network import DataflowNetwork
 from finn.dataflow.ops.mapping import CoordinateMapping
-from finn.dataflow.ops.base import DataflowOp, DataflowOpError, kernel_logical_network
+from finn.dataflow.ops.base import DataflowOp, DataflowOpError
 from finn.dataflow.ops.source import SourceNode
 from finn.dataflow.ops.binding import ChoiceBinding, ImplementationBinding, OperandBinding
 from finn.dataflow.kernels.replay import ActivationReplayKernel
 from finn.dataflow.ops.schema import Attribute, OpInput, OpOutput
-
-
-def _kernel(root: Space) -> ActivationReplayKernel:
-    return cast(ActivationReplayKernel, root.kernel)  # type: ignore[attr-defined]
 
 
 class ActivationReplayOp(DataflowOp):
@@ -42,7 +35,7 @@ class ActivationReplayOp(DataflowOp):
 
     family: ClassVar[str] = "finn.dataflow.activation_replay"
     family_version: ClassVar[str] = "2"
-    schema_version: ClassVar[int] = 5
+    schema_version: ClassVar[int] = 6
 
     implementation_binding = ImplementationBinding(("kernel",))
     operand_bindings = (
@@ -127,43 +120,6 @@ class ActivationReplayOp(DataflowOp):
         matrix_height=matrix_height,
         activation_type=activation.datatype,
     )
-
-    def selected_dataflow(self) -> ProjectionAssessment[DataflowNetwork] | None:
-        """A fixed Subspace, so the child is always selected."""
-
-        return kernel_logical_network(_kernel(self))
-
-    def selected_kernel(self) -> object:
-        return _kernel(self)
-
-    def selected_construction(self) -> object:
-        from finn.dataflow.ops.replay.selected import REPLAY_SELECTED_CONSTRUCTION  # noqa: PLC0415
-
-        return REPLAY_SELECTED_CONSTRUCTION
-
-    def selected_source_semantics(self) -> object:
-        from finn.dataflow.ops.replay.selected import (  # noqa: PLC0415
-            ReplaySourceSemantics,
-            encode_replay_source_semantics,
-        )
-
-        return encode_replay_source_semantics(
-            ReplaySourceSemantics(int(cast(int, self.source.attributes["neuron_folds"])))
-        )
-
-    def selected_construction_identity(self, semantics: object) -> object:
-        del semantics
-        from finn.dataflow.ops.replay.selected import (  # noqa: PLC0415
-            REPLAY_CONSTRUCTION_FAMILY,
-            REPLAY_CONSTRUCTION_VERSION,
-        )
-        from finn.dataflow.ops.selected import ConstructionIdentity  # noqa: PLC0415
-
-        return ConstructionIdentity(
-            REPLAY_CONSTRUCTION_FAMILY,
-            REPLAY_CONSTRUCTION_VERSION,
-            "canonical",
-        )
 
     def execute_node(self, context: Any, graph: Any) -> None:
         """Repeat each activation row once per neuron fold.

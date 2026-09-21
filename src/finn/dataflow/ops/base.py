@@ -52,7 +52,7 @@ from finn.dataflow.ops.mapping import OperandMapping
 from finn.dataflow.ops.native import (
     AttributeCodec,
     SCOPE_ID_ATTRIBUTE,
-    FINGERPRINT_ATTRIBUTE,
+    OBSOLETE_ATTRIBUTES,
     SCHEMA_VERSION_ATTRIBUTE,
     RESERVED_ATTRIBUTES,
     NativeAttribute,
@@ -89,12 +89,6 @@ from finn.dataflow.ops.reconstruction import (
 if TYPE_CHECKING:
     from onnx import NodeProto  # type: ignore[import-not-found]
 
-    from finn.dataflow.ops.selected import (
-        RecordedChoice,
-        SelectedConstruction,
-        SelectedGraphSnapshot,
-        SelectionFacts,
-    )
 
 DATAFLOW_DOMAIN = "finn.custom_op.dataflow"
 
@@ -145,6 +139,7 @@ class DataflowOp(Space, CustomOp):  # type: ignore[misc]
     wants_model: ClassVar[bool] = True
     source_accepts: ClassVar[Any] = ConstraintGroup()
     type_source_accepts: ClassVar[Any] = ConstraintGroup()
+    operand_bindings: ClassVar[tuple[Any, ...]] = ()
     incoming_graph_context: ClassVar[Problem[Any]]
 
     @classmethod
@@ -202,34 +197,54 @@ class DataflowOp(Space, CustomOp):  # type: ignore[misc]
             graph_context=graph_context,
         )[0]
 
-    def hydrate(self, model: Any, build: Any = None, *, graph_context: Any = None) -> Any:
-        """Freeze relevant source facts and return its exact immutable node use."""
-        return self.bind(model, build, graph_context=graph_context).hydrated_use()
+    def hydrate(self, model: Any, build: Any = None, *, graph_context: Any = None) -> DataflowOp:
+        """Return the ordinary immutable Space with this Op's frozen source inputs."""
+        from finn.dataflow.ops.binding import validate_bindings  # noqa: PLC0415
 
-    def hydrated_use(self) -> Any:
-        from finn.dataflow.ops.binding import HydratedUse, ImplementationBinding  # noqa: PLC0415
+        operation = self.bind(model, build, graph_context=graph_context)
+        validate_bindings(operation)
+        return cast("DataflowOp", operation)
 
-        implementation = getattr(type(self), "implementation_binding", None)
-        if not isinstance(implementation, ImplementationBinding):
-            raise AuthoringError("DataflowOp must declare its exact implementation binding")
-        return HydratedUse(
-            self,
-            implementation,
-            tuple(getattr(type(self), "operand_bindings", ())),
-            tuple(getattr(type(self), "choice_bindings", ())),
-            getattr(type(self), "interface_binding", None),
-        )
+    def resolve_implementation(self) -> Answer[Space]:
+        from finn.dataflow.ops.binding import resolve_implementation  # noqa: PLC0415
+
+        return resolve_implementation(self)
+
+    def require_implementation(self, occurrence: Space | None = None) -> Space:
+        from finn.dataflow.ops.binding import require_implementation  # noqa: PLC0415
+
+        return require_implementation(self, occurrence)
+
+    def operand_type(self, key: str) -> Answer[Any]:
+        from finn.dataflow.ops.binding import operand_facet  # noqa: PLC0415
+
+        return operand_facet(self, key, "operand_type")
+
+    def operand_domain(self, key: str) -> Answer[Any]:
+        from finn.dataflow.ops.binding import operand_facet  # noqa: PLC0415
+
+        return operand_facet(self, key, "operand_domain")
+
+    def operand_export(self, key: str) -> Answer[Any]:
+        from finn.dataflow.ops.binding import bound_operand_export  # noqa: PLC0415
+
+        return bound_operand_export(self, key)
+
+    def commit_choices(self, values: Mapping[str, object]) -> DataflowOp:
+        from finn.dataflow.ops.binding import commit_choices  # noqa: PLC0415
+
+        return cast("DataflowOp", commit_choices(self, values))
 
     def rehydrate_current(self, model: Any, build: Any = None) -> Any:
         """Explicitly replay saved choices under fresh source facts and domains."""
         with source_analysis(model) as summaries:
             current = self._bind_with(model, self._build_values(build), summaries, recorded=False)
-            return hydrate(current, require_identity=False)
+            return hydrate(current)
 
     def use_for_source(self, source: SourceNode) -> Any:
         """Query an already frozen source reading, without rereading a graph."""
         if self.is_bound and source == self.source:
-            return self.hydrated_use()
+            return self
         state = _BoundNode(
             self.onnx_node.SerializeToString(deterministic=True),
             self.recorded_scope_id() or "",
@@ -249,7 +264,7 @@ class DataflowOp(Space, CustomOp):  # type: ignore[misc]
                     values[declaration.value_summary] = operand.initializer_value.summary
             elif isinstance(declaration, (Attribute, DatatypeAttribute)):
                 values[declaration] = source.attributes[name]
-        return type(self)._start_frozen(values, state).hydrated_use()
+        return type(self)._start_frozen(values, state)
 
     def _build_values(self, build: Any) -> Mapping[Problem[Any], object]:
         return MappingProxyType(
@@ -557,7 +572,6 @@ class DataflowOp(Space, CustomOp):  # type: ignore[misc]
     def get_nodeattr_types(self) -> Mapping[str, tuple[str, bool, object]]:
         result: dict[str, tuple[str, bool, object]] = {
             SCOPE_ID_ATTRIBUTE: ("s", False, ""),
-            FINGERPRINT_ATTRIBUTE: ("s", False, ""),
             SCHEMA_VERSION_ATTRIBUTE: ("i", False, 0),
         }
         for name, declaration in source_declarations(type(self)):
@@ -665,7 +679,7 @@ class DataflowOp(Space, CustomOp):  # type: ignore[misc]
         return op_physical(self)
 
     def selected_dataflow(self) -> ProjectionAssessment[DataflowNetwork] | None:
-        target = self.hydrated_use().resolve()
+        target = self.resolve_implementation()
         if not isinstance(target, Decided):
             return ProjectionAssessment(
                 "logical",
@@ -681,155 +695,7 @@ class DataflowOp(Space, CustomOp):  # type: ignore[misc]
     def selected_kernel(self) -> object:
         """The selected Kernel-capable Space for compiler-owned use."""
 
-        return self.hydrated_use().require_implementation()
-
-    def selected_construction(self) -> object:
-        """Return the optional source-owned recipe binding for the selected Kernel."""
-
-        return None
-
-    def selected_source_semantics(self) -> object:
-        """Encode the operation's normalized source meaning for reconstruction."""
-
-        raise NotImplementedError(
-            f"{type(self).__name__} does not define selected source semantics"
-        )
-
-    def selected_construction_identity(self, semantics: object) -> object:
-        """Name the selected construction profile and admitted graph form."""
-
-        del semantics
-        raise NotImplementedError(
-            f"{type(self).__name__} does not define a selected construction identity"
-        )
-
-    def selected_source_provenance(self, semantics: object) -> object:
-        """Freeze the source facts a selected artifact retains."""
-
-        from finn.dataflow.ops.selected import (  # noqa: PLC0415
-            EncodedSourceSemantics,
-            SourceDirection,
-            SourceOperandKey,
-            SourceProvenance,
-            SourceValueRef,
-        )
-
-        if not isinstance(semantics, EncodedSourceSemantics):
-            raise TypeError("selected_source_semantics must return EncodedSourceSemantics")
-        declarations = {
-            name: declaration
-            for name, declaration in source_declarations(type(self))
-            if isinstance(declaration, (OpInput, OpOutput))
-        }
-        expected_outputs = self.expected_outputs()
-        operands = []
-        for name, declaration in declarations.items():
-            if not self.source.has(name):
-                continue
-            operand = self.source.operand(name)
-            if not declaration.output and not operand.datatype_established:
-                raise ValueError(
-                    f"selected source input {name!r} has no explicit logical datatype annotation"
-                )
-            expected_shape, expected_datatype = expected_outputs.get(name, (None, None))
-            shape = (
-                tuple(expected_shape)
-                if declaration.output and expected_shape is not None
-                else operand.shape
-            )
-            datatype = (
-                expected_datatype
-                if declaration.output and expected_datatype is not None
-                else operand.datatype
-            )
-            if datatype is None:
-                raise DataflowOpError("source operand datatype is unresolved")
-            operands.append(
-                SourceValueRef(
-                    SourceOperandKey(
-                        name,
-                        SourceDirection.OUTPUT if declaration.output else SourceDirection.INPUT,
-                        declaration.index,
-                    ),
-                    shape,
-                    operand.carrier_dtype,
-                    datatype.name,
-                    operand.initializer_digest,
-                )
-            )
-        return SourceProvenance.create(
-            family=type(self).family,
-            family_version=type(self).family_version,
-            schema_version=type(self).schema_version,
-            problem_fingerprint=self.local_problem_fingerprint,
-            scope_id=self.recorded_scope_id(),
-            operands=operands,
-            semantics=semantics,
-        )
-
-    def selected_facts(
-        self,
-        construction: SelectedConstruction[Any, Any],
-        choices: tuple[RecordedChoice, ...],
-    ) -> SelectionFacts[Any, Any]:
-        """Derive reconstructible construction facts from the frozen source."""
-
-        from finn.dataflow.ops.selected import (  # noqa: PLC0415
-            ConstructionIdentity,
-            EncodedSourceSemantics,
-            SelectionFacts,
-            SourceProvenance,
-        )
-
-        encoded = self.selected_source_semantics()
-        if not isinstance(encoded, EncodedSourceSemantics):
-            raise TypeError("selected source semantics have the wrong type")
-        source = self.selected_source_provenance(encoded)
-        if not isinstance(source, SourceProvenance):
-            raise TypeError("selected source provenance has the wrong type")
-        semantics = construction.decode_source_semantics(encoded)
-        identity = self.selected_construction_identity(semantics)
-        if not isinstance(identity, ConstructionIdentity):
-            raise TypeError("selected construction identity has the wrong type")
-        facts = construction.derive_facts(identity, source, semantics, choices)
-        if not isinstance(facts, SelectionFacts):
-            raise TypeError("selected construction derived the wrong facts type")
-        return facts
-
-    @property
-    def selected_graph(self) -> ProjectionAssessment[SelectedGraphSnapshot]:
-        """The selected-graph projection with source and Kernel obligations."""
-
-        from finn.dataflow.ops.selected import selected_graph_for  # noqa: PLC0415
-
-        return selected_graph_for(cast("Any", self.selected_kernel()))
-
-    @property
-    def selected_snapshot(self) -> Answer[SelectedGraphSnapshot]:
-        return self.selected_graph.accepted_answer
-
-    def plan_selected_publication(self) -> Any:
-        """Freeze a detached selected candidate and atomic source update plan."""
-
-        from finn.dataflow.ops.persistence import plan_selected_publication  # noqa: PLC0415
-
-        return plan_selected_publication(self)
-
-    def publish_selected(self, model: Any) -> Any:
-        """Plan and atomically publish this operation's current selection."""
-
-        from finn.dataflow.ops.persistence import (  # noqa: PLC0415
-            apply_selected_publication,
-        )
-
-        return apply_selected_publication(model, self.plan_selected_publication())
-
-    def rebind_selected(self, snapshot: SelectedGraphSnapshot) -> Any:
-        """Validate a detached selected artifact against this current source."""
-
-        from finn.dataflow.ops.reconstruction import rebind_selected_graph  # noqa: PLC0415
-
-        return rebind_selected_graph(self, snapshot)
+        return self.require_implementation()
 
     def operand_references(
         self, network: DataflowNetwork
@@ -841,9 +707,8 @@ class DataflowOp(Space, CustomOp):  # type: ignore[misc]
         """
         del network
         result = {}
-        use = self.hydrated_use()
-        for binding in use.operands:
-            exported = use.operand_export(binding.role)
+        for binding in self.operand_bindings:
+            exported = self.operand_export(binding.role)
             if not isinstance(exported, Decided):
                 raise DataflowOpError("public operand export is unavailable", exported.findings)
             result[binding.source] = tuple(target.ref for target in exported.value.targets)
@@ -856,10 +721,9 @@ class DataflowOp(Space, CustomOp):  # type: ignore[misc]
             return cast("Answer[tuple[OperandMapping, ...]]", answer)
         from finn.dataflow.ops.mapping import derive_public_operand_mappings  # noqa: PLC0415
 
-        use = self.hydrated_use()
         exports = {}
-        for binding in use.operands:
-            exported = use.operand_export(binding.role)
+        for binding in self.operand_bindings:
+            exported = self.operand_export(binding.role)
             if not isinstance(exported, Decided):
                 return cast("Answer[tuple[OperandMapping, ...]]", exported)
             exports[binding.source] = exported.value
@@ -897,7 +761,7 @@ class DataflowOp(Space, CustomOp):  # type: ignore[misc]
                 answer.value,
                 mapping_source,
                 exports,
-                {binding.source: binding.adapter for binding in use.operands},
+                {binding.source: binding.adapter for binding in self.operand_bindings},
             )
         )
 
@@ -972,11 +836,10 @@ class DataflowOp(Space, CustomOp):  # type: ignore[misc]
         written.update(
             {
                 SCOPE_ID_ATTRIBUTE: NativeAttribute("s", state.scope_id),
-                FINGERPRINT_ATTRIBUTE: NativeAttribute("s", self.local_problem_fingerprint),
                 SCHEMA_VERSION_ATTRIBUTE: NativeAttribute("i", self.schema_version),
             }
         )
-        names = {item.name for item in schema} | RESERVED_ATTRIBUTES
+        names = {item.name for item in schema} | RESERVED_ATTRIBUTES | OBSOLETE_ATTRIBUTES
         node = state.materialize()
         current = {item.name: item.SerializeToString(deterministic=True) for item in node.attribute}
         source = self.source
@@ -1013,6 +876,75 @@ class DataflowOp(Space, CustomOp):  # type: ignore[misc]
             expected_incoming=expected_incoming,
         )
 
+    def save_space(
+        self,
+        model: Any,
+        proposal: Space,
+        build: Any = None,
+        *,
+        require: Any = None,
+        require_graph: bool = False,
+        graph_context: Any = None,
+    ) -> DataflowOp:
+        """Validate proposed choices against this current graph target, then save.
+
+        The proposal contributes choices only. Inputs, semantic attributes and
+        target facts come from the current target and explicit build context.
+        Deferred GraphEffects retain their independent stale-read protection.
+        """
+        from finn.dataflow.ops.native import proposed_choice_values  # noqa: PLC0415
+        from finn.dataflow.ops.persistence import (  # noqa: PLC0415
+            CommitmentStage,
+            _apply_graph_effects,
+            find_node,
+        )
+
+        if not isinstance(proposal, Space):
+            raise TypeError("save_space requires a Space proposal")
+        strong = require_graph or require is CommitmentStage.PHYSICAL
+        if strong and graph_context is None:
+            raise DataflowOpError("graph-required save needs a GraphContext")
+        context_read = None
+        if graph_context is not None:
+            from finn.dataflow.ops.graph_context import require_context_read  # noqa: PLC0415
+
+            scope = self.recorded_scope_id()
+            if not scope:
+                raise DataflowOpError("a current graph target requires an explicit scope id")
+            context_read = require_context_read(
+                graph_context,
+                model,
+                build,
+                consumer_scope_id=scope,
+            )
+        with source_analysis(model, fresh=True) as summaries:
+            current = self._bind_with(
+                model,
+                self._build_values(build),
+                summaries,
+                recorded=False,
+                context_read=context_read,
+            )
+        values = proposed_choice_values(current, proposal)
+        candidate = current.commit_choices(values)
+        effects = candidate.graph_effects(require=require, require_graph=require_graph)
+        scope = candidate._bound_node().scope_id
+
+        def finish(updated: Any) -> Any:
+            target = type(self)(find_node(updated, scope), candidate.onnx_opset_version)
+            return target.bind(updated, build, graph_context=graph_context)
+
+        return cast(
+            "DataflowOp",
+            _apply_graph_effects(
+                model,
+                effects,
+                finish,
+                graph_context=graph_context,
+                build=build,
+            ),
+        )
+
     def commit(
         self,
         model: Any,
@@ -1021,47 +953,15 @@ class DataflowOp(Space, CustomOp):  # type: ignore[misc]
         require: Any = None,
         require_graph: bool = False,
         graph_context: Any = None,
-    ) -> Any:
-        from finn.dataflow.ops.persistence import _apply_graph_effects  # noqa: PLC0415
-
-        if build is not None:
-            offered = self._build_values(build)
-            frozen = self._frozen_build_values()
-            if dict(offered) != dict(frozen):
-                names = [
-                    name
-                    for name, declaration in source_declarations(type(self))
-                    if isinstance(declaration, BuildFact)
-                    and offered.get(declaration) != frozen.get(declaration)
-                ]
-                raise DataflowOpError(
-                    f"build facts differ at commit ({', '.join(names)}); rebind first"
-                )
-        from finn.dataflow.ops.persistence import CommitmentStage  # noqa: PLC0415
-
-        strong = require_graph or require is CommitmentStage.PHYSICAL
-        if strong and graph_context is None:
-            raise DataflowOpError("graph-required commit needs a GraphContext")
-        effective_build = _FrozenBuildConfiguration(self) if build is None else build
-        if strong:
-
-            def finish(current: Any) -> Any:
-                return self.rebind(
-                    current,
-                    effective_build,
-                    graph_context=graph_context,
-                )
-        else:
-
-            def finish(current: Any) -> Any:
-                return self.rebind(current)
-
-        return _apply_graph_effects(
+    ) -> DataflowOp:
+        """Save this Space's proposed choices to its explicit current graph node."""
+        return self.save_space(
             model,
-            self.graph_effects(require=require, require_graph=require_graph),
-            finish,
+            self,
+            build,
+            require=require,
+            require_graph=require_graph,
             graph_context=graph_context,
-            build=effective_build,
         )
 
     def recorded(self) -> Mapping[str, object]:
@@ -1195,7 +1095,7 @@ def _check_attribute_names(operation_type: type[DataflowOp]) -> None:
         if not isinstance(declaration, (Attribute, DatatypeAttribute)):
             continue
         name = attribute_name(member_name, declaration)
-        if name in RESERVED_ATTRIBUTES:
+        if name in RESERVED_ATTRIBUTES | OBSOLETE_ATTRIBUTES:
             raise AuthoringError(
                 f"{operation_type.__name__} declares source attribute {name!r}, which the "
                 "dataflow layer owns"
@@ -1392,7 +1292,6 @@ def _incoming_graph_problem() -> Problem[Any]:
 
 __all__ = [
     "DATAFLOW_DOMAIN",
-    "FINGERPRINT_ATTRIBUTE",
     "RESERVED_ATTRIBUTES",
     "SCOPE_ID_ATTRIBUTE",
     "SCHEMA_VERSION_ATTRIBUTE",

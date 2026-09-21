@@ -23,14 +23,12 @@ from typing import Any, ClassVar, cast
 
 from finn.dataflow._engine import ABSENT, Absent, Decided
 from finn.dataflow.analysis.integer_dot import (
-    FixedWeightPremise,
     DotProductBounds,
     analyze_integer_dot_product,
     IntegerSupportReport,
     InvocationScope,
     NumericalFinding,
     RuntimeWeightPromise,
-    encode_dot_product_premise,
 )
 from finn.dataflow.model.logical.datatypes import QONNXDataType
 from finn.dataflow.kernels.matmul.base import (
@@ -38,14 +36,13 @@ from finn.dataflow.kernels.matmul.base import (
     DspBlock,
     MvauComputationProfile,
     MatmulInterface,
-    WeightedDotProductKernel,
     computation_profile,
+    matrix_result_requirement,
 )
 from finn.dataflow.space.declarations import (
     ConstraintGroup,
     CanonicalValueCodec,
     Problem,
-    Space,
     Subspace,
     SubspaceChoice,
     allow_absent,
@@ -54,26 +51,20 @@ from finn.dataflow.space.declarations import (
     reject,
     reject_all,
 )
-from finn.dataflow.space.occurrence import ChoiceView, ProjectionAssessment
-from finn.dataflow.model.logical.network import DataflowNetwork
 from finn.dataflow.ops.mapping import CoordinateMapping
 from qonnx.analysis.tensor_value_summary import TensorValueSummary  # type: ignore[import-not-found]
 from finn.dataflow.ops.base import (
     DataflowOp,
     DataflowOpError,
-    kernel_logical_network,
-    unresolved_reason,
 )
 from finn.dataflow.ops.mvau.computation import execute_mvau
 from finn.dataflow.ops.mvau.numerics import (
     check_mvau_integer_support_from_operands,
     execute_mvau_integer,
-    integer_graph_profile_fingerprint,
     mvau_integer_premise_from_operands,
 )
 from finn.dataflow.ops.source import SourceNode, SourceOperand
 from finn.dataflow.ops.binding import ChoiceBinding, ImplementationBinding, OperandBinding
-from finn.dataflow.ops.tensor_summary import encode_frozen_initializer
 from finn.dataflow.kernels.matmul.batch_interleaved import BatchInterleavedKernel
 from finn.dataflow.kernels.matmul.dot_product import DotProductKernel
 from finn.dataflow.ops.schema import (
@@ -162,37 +153,6 @@ def _numerical_rejection(report: IntegerSupportReport) -> object:
     )
 
 
-def _kernel_view(root: Space) -> ChoiceView:
-    return cast(ChoiceView, root.kernel)  # type: ignore[attr-defined]
-
-
-def _selected_kernel(root: Space) -> WeightedDotProductKernel:
-    """The live Kernel occurrence, or a refusal that says the choice is open."""
-
-    view = _kernel_view(root)
-    chosen = view.selected()
-    if not isinstance(chosen, Decided):
-        raise DataflowOpError(
-            "the Kernel alternative is not chosen yet, so nothing beneath it can be "
-            f"named ({unresolved_reason(chosen)})"
-        )
-    return cast(WeightedDotProductKernel, view.alternative(chosen.value))
-
-
-def _compute_segment(root: Space) -> ChoiceView:
-    return cast(ChoiceView, _selected_kernel(root).compute)  # type: ignore[attr-defined]
-
-
-def _compute_kernel(root: Space) -> Space:
-    composite = _selected_kernel(root)
-    kernel = composite.child("compute")
-    if not isinstance(kernel, Decided):
-        raise DataflowOpError(
-            f"the compute candidate is not chosen yet ({unresolved_reason(kernel)})"
-        )
-    return kernel.value
-
-
 class MvauDataflowOp(DataflowOp):
     """One matrix-vector node, projected onto the unified Space stack.
 
@@ -228,7 +188,7 @@ class MvauDataflowOp(DataflowOp):
 
     family: ClassVar[str] = "finn.dataflow.mvau"
     family_version: ClassVar[str] = "1"
-    schema_version: ClassVar[int] = 7
+    schema_version: ClassVar[int] = 8
 
     implementation_binding = ImplementationBinding(("kernel",))
     operand_bindings = (
@@ -612,12 +572,9 @@ class MvauDataflowOp(DataflowOp):
     def unactivated_output_matches_accumulator(
         *, no_activation: bool, output: QONNXDataType, accumulator: QONNXDataType
     ) -> object:
-        if no_activation and output != accumulator:
-            return reject(
-                "output-accumulator-mismatch",
-                "noActivation requires outputDataType == accDataType",
-            )
-        return True
+        return matrix_result_requirement(
+            no_activation=no_activation, output=output, accumulator=accumulator
+        )
 
     @constraint(report=source_numerical_report, profile=profile)
     def source_integer_numerically_supported(
@@ -737,107 +694,6 @@ class MvauDataflowOp(DataflowOp):
     )
 
     # -- the projections ------------------------------------------------------
-
-    def selected_dataflow(self) -> ProjectionAssessment[DataflowNetwork] | None:
-        view = _kernel_view(self)
-        chosen = view.selected()
-        if not isinstance(chosen, Decided):
-            return None
-        return kernel_logical_network(
-            cast(WeightedDotProductKernel, view.alternative(chosen.value))
-        )
-
-    def selected_kernel(self) -> object:
-        return _selected_kernel(self)
-
-    def selected_construction(self) -> object:
-        from finn.dataflow.ops.mvau.selected import (  # noqa: PLC0415
-            bind_mvau_selected_construction,
-        )
-
-        if not isinstance(self.selected_kernel(), DotProductKernel):
-            return None
-        return bind_mvau_selected_construction(type(self).weight.initializer_value)
-
-    def selected_source_semantics(self) -> object:
-        from finn.dataflow.ops.mvau.selected import (  # noqa: PLC0415
-            MvauSourceSemantics,
-            encode_mvau_source_semantics,
-        )
-
-        profile = mvau_profile(self.source)
-        accumulator = cast(Any, self.source.attributes["accumulator_type"])
-        output = cast(Any, self.source.attributes["output_type"])
-        bias = (
-            None
-            if profile.activation.value == "none"
-            else int(cast(int, self.source.attributes["activation_bias"]))
-        )
-        support_fingerprint = None
-        integer_output_carrier = None
-        integer_premise = None
-        fixed_weight_payload = None
-        if profile.accumulation is AccumulationMode.INTEGER and not profile.fuses_activation:
-            if any(
-                not self.source.operand(name).datatype_established
-                for name in ("activation", "weight")
-            ):
-                raise DataflowOpError(
-                    "selected integer construction requires an explicit logical datatype "
-                    "for each source input"
-                )
-            answer = self.answer(type(self).source_numerical_report)
-            if not isinstance(answer, Decided) or not answer.value.supported:
-                findings = getattr(answer, "findings", ())
-                if isinstance(answer, Decided):
-                    detail = ", ".join(item.code for item in answer.value.findings)
-                    raise DataflowOpError(
-                        f"selected integer construction is numerically unsupported: {detail}"
-                    )
-                raise DataflowOpError(
-                    "selected integer construction has no numerical support witness",
-                    findings,
-                )
-            assert answer.value.support is not None
-            support_fingerprint = integer_graph_profile_fingerprint(answer.value.support)
-            integer_output_carrier = answer.value.support.output_carrier
-            integer_premise = encode_dot_product_premise(answer.value.support.premise)
-            if isinstance(answer.value.support.premise.weights, FixedWeightPremise):
-                initializer = self.source.operand("weight").initializer_value
-                if initializer is None:
-                    raise DataflowOpError(
-                        "fixed selected numerical support has no source initializer payload"
-                    )
-                fixed_weight_payload = encode_frozen_initializer(initializer)
-        return encode_mvau_source_semantics(
-            MvauSourceSemantics(
-                profile.accumulation,
-                profile.activation,
-                accumulator.name,
-                output.name,
-                bias,
-                support_fingerprint,
-                integer_output_carrier,
-                integer_premise,
-                fixed_weight_payload,
-            )
-        )
-
-    def selected_construction_identity(self, semantics: object) -> object:
-        from finn.dataflow.ops.mvau.selected import (  # noqa: PLC0415
-            MVAU_CONSTRUCTION_FAMILY,
-            MVAU_CONSTRUCTION_VERSION,
-            MvauSourceSemantics,
-        )
-        from finn.dataflow.ops.selected import ConstructionIdentity  # noqa: PLC0415
-
-        if not isinstance(semantics, MvauSourceSemantics):
-            raise TypeError("MVAU selected semantics have the wrong type")
-        return ConstructionIdentity(
-            MVAU_CONSTRUCTION_FAMILY,
-            MVAU_CONSTRUCTION_VERSION,
-            "canonical",
-        )
 
     # -- what this operation is authoritative for -----------------------------
 

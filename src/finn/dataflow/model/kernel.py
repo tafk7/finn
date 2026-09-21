@@ -38,13 +38,12 @@ from finn.dataflow.model.physical.authoring import (
     attach_composite_physical,
     attach_leaf_physical,
 )
-from finn.dataflow.model.relations.view import attach_composite_relation
 from finn.dataflow.space.compiler import _CompiledSpace
 from finn.dataflow.space.declarations import AuthoringError, Problem, Space, declared_members
 from finn.dataflow.space.occurrence import ChoiceView, layer_runtime
 
 if TYPE_CHECKING:
-    from finn.dataflow.model.relations.values import KernelStreamBinding
+    from finn.dataflow.model.physical.interface import KernelStreamBinding
     from finn.dataflow.model.logical.composition import LogicalResult
     from finn.dataflow.space.declarations import Derived, Projection
 
@@ -62,7 +61,6 @@ class Kernel(Space):
         logical: Projection[LogicalResult]
         logical_result: Derived[LogicalResult]
         physical: Projection[object]
-        physical_relation: Projection[object]
         physical_streams: Derived[tuple[KernelStreamBinding, ...]]
 
     _implicit_exports = (
@@ -85,7 +83,6 @@ class Kernel(Space):
         elif has_children:
             attach_composite_logical(cls, generated)
             attach_composite_physical(cls, generated)
-            attach_composite_relation(cls, generated)
         setattr(cls, GENERATED_MEMBERS, frozenset(generated))
         ensure_logical_view_validation(cls)
         attach_public_interface(cls)

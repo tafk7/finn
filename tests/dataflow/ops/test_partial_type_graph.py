@@ -17,7 +17,6 @@ from finn.dataflow.ops.base import DATAFLOW_DOMAIN, DataflowOp
 from finn.dataflow.ops.binding import ChoiceBinding, ImplementationBinding, OperandBinding
 from finn.dataflow.ops.mapping import CoordinateMapping
 from finn.dataflow.ops.native import (
-    FINGERPRINT_ATTRIBUTE,
     SCHEMA_VERSION_ATTRIBUTE,
     NativeAttribute,
     serialize_choices,
@@ -200,9 +199,9 @@ def test_unresolved_producer_type_propagates_and_later_choice_resolves(
     initial = operation_type(model.graph.node[0]).hydrate(model)
     assert isinstance(initial.operand_type("result"), Unresolved)
     if operation_type is DecisionTypeOp:
-        assert isinstance(initial.resolve(), Decided)
+        assert isinstance(initial.resolve_implementation(), Decided)
     else:
-        assert isinstance(initial.resolve(), Unresolved)
+        assert isinstance(initial.resolve_implementation(), Unresolved)
     old_consumers = [ActivationReplayOp(node).hydrate(model) for node in model.graph.node[1:]]
     for name in ("middle", "downstream0", "downstream1"):
         assert isinstance(producer_type(model, name), Unresolved)
@@ -214,11 +213,10 @@ def test_unresolved_producer_type_propagates_and_later_choice_resolves(
         assert isinstance(use.source.inputs[0].datatype_answer, Unresolved)
     assert model.model.SerializeToString(deterministic=True) == before
 
-    successor = initial.commit(choices)
+    successor = initial.commit_choices(choices)
     assert successor.operand_type("result") == Decided(DataType["INT16"])
-    saved = serialize_choices(successor.root)
-    saved[FINGERPRINT_ATTRIBUTE] = NativeAttribute("s", successor.root.local_problem_fingerprint)
-    saved[SCHEMA_VERSION_ATTRIBUTE] = NativeAttribute("i", successor.root.schema_version)
+    saved = serialize_choices(successor)
+    saved[SCHEMA_VERSION_ATTRIBUTE] = NativeAttribute("i", successor.schema_version)
     model.graph.node[0].attribute.extend(value.proto(key) for key, value in saved.items())
     after_choice = model.model.SerializeToString(deterministic=True)
     for name in ("middle", "downstream0", "downstream1"):

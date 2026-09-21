@@ -50,7 +50,6 @@ class KernelChoice(SubspaceChoice):
                 forwards_accepted_value=False,
                 accepted_output_name="physical-streams",
             ),
-            "relation_result": AssessedCapabilityOutput("physical_relation"),
         }
     )
     node_id: str | None

@@ -38,13 +38,11 @@ from finn.dataflow.kernels.matmul.physical import (
     top_boundary_layout,
 )
 from finn.dataflow.model.physical.lowering import lower_module_structure
-from finn.dataflow.model.relations.values import (
-    BoundaryBinding,
-    CompositePhysicalFacts,
-    EdgeBinding,
+from finn.dataflow.model.physical.interface import (
+    PhysicalResult,
+    PhysicalPort,
     KernelRealizationFacts,
     KernelStreamBinding,
-    SemanticPortBinding,
 )
 from finn.dataflow.model.children import KernelChoice
 from finn.dataflow.model.logical.authoring import EdgeSink, NetworkBoundary, NetworkEdge
@@ -199,7 +197,7 @@ class DotProductKernel(WeightedDotProductKernel):
     )
 
     @derived(
-        CompositePhysicalFacts,
+        PhysicalResult,
         profile=computation_profile,
         numerical=allow_absent(numerical_support),
         supply=weight_supply,
@@ -242,74 +240,35 @@ class DotProductKernel(WeightedDotProductKernel):
                 producer=DECOMPOSED_PRODUCER,
                 wrapper_template=DECOMPOSED_WRAPPER_TEMPLATE,
             )
-            port_bindings = (
-                *(SemanticPortBinding("replay", "u_replay", binding) for binding in replay.streams),
-                *(
-                    SemanticPortBinding("compute", "u_compute", binding)
-                    for binding in compute.streams
-                ),
-            )
             replay_activation = next(
-                binding.local
-                for binding in port_bindings
-                if binding.node_id == "replay" and binding.local.region_port_id == "activation_in"
+                item for item in replay.streams if item.region_port_id == "activation_in"
             )
             compute_weight = next(
-                binding.local
-                for binding in port_bindings
-                if binding.node_id == "compute" and binding.local.region_port_id == "weight"
+                item for item in compute.streams if item.region_port_id == "weight"
             )
             compute_output = next(
-                binding.local
-                for binding in port_bindings
-                if binding.node_id == "compute" and binding.local.region_port_id == "output"
+                item for item in compute.streams if item.region_port_id == "output"
             )
-            facts = CompositePhysicalFacts(
+            facts = PhysicalResult(
                 requirements,
-                port_bindings,
                 (
-                    BoundaryBinding(
+                    PhysicalPort(
                         "activation",
                         "in0_V",
                         top_boundary_layout(structure.top_abi, "in0_V", replay_activation),
-                        "u_replay",
-                        replay_activation.abi_bus_id,
                     ),
-                    BoundaryBinding(
-                        "weight",
+                    PhysicalPort(
+                        "weights",
                         "in1_V",
                         top_boundary_layout(structure.top_abi, "in1_V", compute_weight),
-                        "u_compute",
-                        compute_weight.abi_bus_id,
                     ),
-                    BoundaryBinding(
-                        "output",
+                    PhysicalPort(
+                        "result",
                         "out0_V",
                         top_boundary_layout(structure.top_abi, "out0_V", compute_output),
-                        "u_compute",
-                        compute_output.abi_bus_id,
                     ),
                 ),
-                (
-                    EdgeBinding(
-                        "activation_replay",
-                        "u_replay",
-                        next(
-                            binding.local.abi_bus_id
-                            for binding in port_bindings
-                            if binding.node_id == "replay"
-                            and binding.local.region_port_id == "activation_out"
-                        ),
-                        "u_compute",
-                        next(
-                            binding.local.abi_bus_id
-                            for binding in port_bindings
-                            if binding.node_id == "compute"
-                            and binding.local.region_port_id == "activation"
-                        ),
-                    ),
-                ),
-                structure,
+                structure=structure,
             )
         except (KeyError, StopIteration, ValueError) as error:
             return reject("kernel-physically-unsupported", str(error))

@@ -38,8 +38,8 @@ from finn.dataflow.artifacts.abi import (
 from finn.dataflow.artifacts.contributions import CopiedSource
 from finn.dataflow.artifacts.build import ModuleABIRequirements, ScalarTable
 from finn.dataflow.model.physical.layout import PeriodicLast
-from finn.dataflow.model.relations.values import KernelStreamBinding
-from finn.dataflow.model.relations.view import low_fields_binding
+from finn.dataflow.model.physical.interface import KernelStreamBinding
+from finn.dataflow.model.physical.interface import low_fields_binding
 from finn.dataflow.model.logical.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
 from finn.dataflow.space.declarations import Input, derived
 from finn.dataflow.model.kernel import Kernel

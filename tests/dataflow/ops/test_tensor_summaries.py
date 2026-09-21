@@ -20,7 +20,7 @@ from finn.dataflow.ops import reconstruction
 from finn.dataflow.ops.base import DATAFLOW_DOMAIN, DataflowOp
 from finn.dataflow.ops.persistence import assign_dataflow_scope_ids, apply_graph_effects
 from finn.dataflow.ops.schema import OpInput
-from finn.dataflow.ops.selected import set_frozen_initializer
+from finn.dataflow.ops.tensor_summary import set_frozen_initializer
 from finn.dataflow.ops.tensor_summary import FrozenInitializer, TENSOR_VALUE_SUMMARY_CODEC
 from finn.dataflow.space import Problem, Space
 from finn.dataflow._engine import Decided
@@ -185,7 +185,7 @@ def test_initializer_payload_is_frozen_with_the_same_one_pass_source_analysis():
     assert op.answer(SummaryOp.value.initializer_value) == Decided(frozen)
 
 
-def test_scalar_initializer_rank_survives_capture_copy_and_selected_round_trip():
+def test_scalar_initializer_rank_survives_capture_copy_and_graph_round_trip():
     values = np.array(7, dtype=np.int64)
     model = model_with(values)
     op = SummaryOp(model.graph.node[0]).bind(model, None)

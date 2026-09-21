@@ -88,7 +88,7 @@ def producer_type_facts(
         from finn.dataflow.ops.persistence import source_read_set  # noqa: PLC0415
 
         current = operation.rehydrate_current(model, build)
-        answer = cast("Answer[QONNXDataType]", current.hydrated_use().operand_type(outputs[0]))
+        answer = cast("Answer[QONNXDataType]", current.operand_type(outputs[0]))
         # Source type rules can consume semantic attributes and authenticated
         # initializer contents. Include their frozen reads recursively, without
         # promoting cached producer output annotations into dependencies.

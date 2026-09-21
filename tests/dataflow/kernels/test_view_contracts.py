@@ -14,7 +14,7 @@ import pytest
 from dataflow.kernels.test_composition_boundary import PlainChildComposite, PlainLogicalLeaf
 from dataflow.kernels.test_module_build_spec import ModuleKernel, _region
 from dataflow.ops.mvau.test_dot_product_kernel import _unconfigured
-from dataflow.ops.test_dataflow_op import Build, _configured_replay, _replay_model
+from dataflow.ops.test_dataflow_op import Build, _replay_model
 from finn.dataflow._engine import Absent, Decided, Unresolved
 from finn.dataflow.artifacts.abi import ComponentABI
 from finn.dataflow.artifacts.build import (
@@ -43,10 +43,9 @@ from finn.dataflow.model.logical import (
 from finn.dataflow.ops.base import DataflowOpError
 from finn.dataflow.kernels.matmul.dot_product import DotProductKernel, WeightSupply
 from finn.dataflow.ops.physical import capture_local_physical
-from finn.dataflow.ops.persistence import plan_selected_publication
-from finn.dataflow.ops.reconstruction import rebind_selected_graph
 from finn.dataflow.kernels.replay import ActivationReplayKernel
 from finn.dataflow.ops.replay.op import ActivationReplayOp
+from finn.dataflow.ops.binding import ChoiceBinding
 from finn.dataflow.space import (
     ConstraintGroup,
     Decision,
@@ -756,6 +755,10 @@ class GuardedReplayOp(ActivationReplayOp):
 
 
 class PendingReplayOp(ActivationReplayOp):
+    choice_bindings = (
+        *ActivationReplayOp.choice_bindings,
+        ChoiceBinding("kernel_permission", ("kernel",), "permission"),
+    )
     kernel = Subspace(
         PendingReplay,
         repetitions=ActivationReplayOp.repetitions,
@@ -794,22 +797,14 @@ def _configured_replay_type(operation_type: type[ActivationReplayOp]) -> Activat
         (RejectedReplayOp, Absent),
     ),
 )
-def test_selected_construction_and_publication_require_authored_logical_acceptance(
+def test_node_logical_mapping_requires_authored_logical_acceptance(
     operation_type: type[ActivationReplayOp],
     answer_type: type[object],
 ) -> None:
-    _control_model, control = _configured_replay(simd=2)
-    assert isinstance(control.selected_snapshot, Decided)
-    candidate = control.selected_snapshot.value
-
     operation = _configured_replay_type(operation_type)
-    kernel = operation.selected_kernel()
+    kernel = operation.require_implementation()
     assert isinstance(kernel, Kernel)
     assert isinstance(kernel.logical.accepted_answer, answer_type)
     assert isinstance(kernel.dataflow.accepted_answer, answer_type)
     assert isinstance(operation.dataflow.accepted_answer, answer_type)
-    assert isinstance(operation.selected_snapshot, answer_type)
-    with pytest.raises(DataflowOpError, match="selected publication is unavailable"):
-        plan_selected_publication(operation)
-    with pytest.raises(DataflowOpError, match="current source has no accepted dataflow"):
-        rebind_selected_graph(operation, candidate)
+    assert isinstance(operation.operand_mapping, answer_type)

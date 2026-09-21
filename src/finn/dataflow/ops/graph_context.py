@@ -4,7 +4,7 @@
 """Frozen logical graph contracts and a current-model context provider.
 
 The values in this module are compiler values.  They are deliberately absent
-from the native and selected persistence formats: a graph-qualified operation
+from native persistence: a graph-qualified operation
 must obtain them again from a current :class:`GraphContext` before use.
 """
 
@@ -44,10 +44,10 @@ from finn.dataflow.ops.model_effects import (
     merge_model_read_sets,
     validate_model_read_set,
 )
-from finn.dataflow.ops.selected import (
+from finn.dataflow.ops.native import RecordedChoice
+from finn.dataflow.ops.source_values import (
     InterfaceDirection,
     QualifiedInterfaceRef,
-    RecordedChoice,
     SourceDirection,
     SourceOperandKey,
     SourceOrigin,

@@ -1,17 +1,17 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Source persistence and selected-publication lifecycle.
+"""Native source checkpoint planning and checked graph transactions.
 
 All model mutation is delegated to :mod:`finn.dataflow.ops.model_effects`.
 This module owns source-specific planning, validation, reconstruction context,
-and the public native/selected lifecycle APIs.
+and the public native lifecycle APIs.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from enum import Enum
 import json
 from types import MappingProxyType
@@ -40,10 +40,8 @@ from finn.dataflow.ops.model_effects import (
 from finn.dataflow.ops.native import (
     SCOPE_ID_ATTRIBUTE,
     NativeAttribute,
-    capture_decided_choices,
-    captured_choice_mapping,
+    RecordedChoice,
     choice_schema,
-    encode_choice_value,
 )
 from finn.dataflow.ops.schema import (
     Attribute,
@@ -57,11 +55,6 @@ from finn.dataflow.space.occurrence import ProjectionAssessment
 
 if TYPE_CHECKING:
     from finn.dataflow.ops.base import DataflowOp
-    from finn.dataflow.ops.selected import (
-        DecodedSelectedGraph,
-        RecordedChoice,
-        SelectedGraphSnapshot,
-    )
 
 T = TypeVar("T")
 
@@ -122,21 +115,6 @@ class GraphEffects:
             tensor_datatypes=tuple(sorted(self.tensor_datatypes.items())),
             tensor_shapes=tuple(sorted(self.tensor_shapes.items())),
         )
-
-
-@dataclass(frozen=True, slots=True)
-class SelectedPublicationPlan:
-    source_effects: ModelEffects
-    context: SourcePublicationContext
-    expected_problem_fingerprint: str
-    expected_choices: tuple[RecordedChoice, ...]
-    candidate: SelectedGraphSnapshot
-
-
-@dataclass(frozen=True, slots=True)
-class PublishedSelection:
-    operation: DataflowOp
-    selected: DecodedSelectedGraph[Any, Any]
 
 
 def allocate_scope_id() -> str:
@@ -648,43 +626,8 @@ def _invalidate_downstream_types(model: Any, effects: ModelEffects) -> ModelEffe
     )
 
 
-def _captured_records(
-    captured: tuple[tuple[Any, object], ...],
-) -> tuple[RecordedChoice, ...]:
-    from finn.dataflow.ops.selected import RecordedChoice  # noqa: PLC0415
-
-    return tuple(
-        RecordedChoice(item.choice.path, value, encode_choice_value(item, value))
-        for item, value in captured
-    )
-
-
 def _recorded_choices(values: tuple[tuple[str, object], ...]) -> tuple[RecordedChoice, ...]:
-    from finn.dataflow.ops.selected import RecordedChoice  # noqa: PLC0415
-
     return tuple(RecordedChoice(path, value) for path, value in values)
-
-
-def _source_scope(effects: ModelEffects) -> str:
-    owners = {owner for owner, name, _value in effects.set_attributes if name == SCOPE_ID_ATTRIBUTE}
-    if len(owners) != 1:
-        from finn.dataflow.ops.base import DataflowOpError  # noqa: PLC0415
-
-        raise DataflowOpError("source effects do not identify one source scope")
-    return next(iter(owners))
-
-
-def _written_source_fingerprint(effects: ModelEffects) -> str:
-    values = tuple(
-        value.value
-        for _owner, name, value in effects.set_attributes
-        if name == "dataflow_problem_fingerprint"
-    )
-    if len(values) != 1 or type(values[0]) is not str:
-        from finn.dataflow.ops.base import DataflowOpError  # noqa: PLC0415
-
-        raise DataflowOpError("source effects do not contain one problem fingerprint")
-    return values[0]
 
 
 def _source_only_operation(
@@ -773,158 +716,6 @@ def _hydrate_candidate(operation: DataflowOp) -> DataflowOp:
     return cast("DataflowOp", hydrate(operation))
 
 
-def _captured_for_records(
-    operation: DataflowOp, choices: tuple[RecordedChoice, ...]
-) -> tuple[tuple[Any, object], ...]:
-    schema = {item.choice.path: item for item in choice_schema(operation)}
-    return tuple((schema[item.path], item.value) for item in choices)
-
-
-def _canonical_publication_effects(
-    operation: DataflowOp,
-    choices: tuple[RecordedChoice, ...],
-) -> ModelEffects:
-    selected = _apply_expected_choices(operation, choices)
-    return cast(
-        ModelEffects,
-        selected.graph_effects(
-            require=CommitmentStage.DATAFLOW,
-            _captured_choices=_captured_for_records(selected, choices),
-        ).model_effects(),
-    )
-
-
-def _infer_selected_candidate(snapshot: SelectedGraphSnapshot) -> SelectedGraphSnapshot:
-    from finn.dataflow.ops.inference import InferDataTypes, InferShapes  # noqa: PLC0415
-    from finn.dataflow.ops.selected import (  # noqa: PLC0415
-        build_selected_snapshot,
-        decode_selected_graph,
-    )
-
-    model = snapshot.model_copy()
-    original_docs = {
-        item.node_id: (
-            model.graph.node[item.index].HasField("doc_string"),
-            model.graph.node[item.index].doc_string,
-        )
-        for item in snapshot.declaration.graph_nodes
-    }
-    marker_prefix = "__finn_selected_inference_node__:"
-    for item in snapshot.declaration.graph_nodes:
-        model.graph.node[item.index].doc_string = marker_prefix + item.node_id
-    model = model.transform(InferShapes())
-    model = model.transform(InferDataTypes())
-    by_id = {
-        node.doc_string[len(marker_prefix) :]: index
-        for index, node in enumerate(model.graph.node)
-        if node.doc_string.startswith(marker_prefix)
-    }
-    if len(by_id) != len(model.graph.node) or set(by_id) != set(original_docs):
-        from finn.dataflow.ops.base import DataflowOpError  # noqa: PLC0415
-
-        raise DataflowOpError("selected inference lost stable construction node identities")
-    for node_id, index in by_id.items():
-        present, value = original_docs[node_id]
-        if present:
-            model.graph.node[index].doc_string = value
-        else:
-            model.graph.node[index].ClearField("doc_string")
-    declaration = replace(
-        snapshot.declaration,
-        graph_nodes=tuple(
-            replace(item, index=by_id[item.node_id]) for item in snapshot.declaration.graph_nodes
-        ),
-    )
-    inferred = build_selected_snapshot(model, declaration)
-    decode_selected_graph(inferred)
-    return inferred
-
-
-def plan_selected_publication(operation: DataflowOp) -> SelectedPublicationPlan:
-    """Freeze one executable selected candidate and its source-side transaction."""
-
-    from finn.dataflow.ops.base import DataflowOpError  # noqa: PLC0415
-    from finn.dataflow.ops.selected import selected_graph_for  # noqa: PLC0415
-    from finn.dataflow.space.declarations import Space  # noqa: PLC0415
-
-    captured = capture_decided_choices(operation)
-    choice_values = captured_choice_mapping(captured)
-    kernel = operation.selected_kernel()
-    if not isinstance(kernel, Space):
-        raise DataflowOpError("selected operation did not resolve a Kernel-capable Space")
-    selected = selected_graph_for(kernel, captured_choices=choice_values)
-    if not isinstance(selected.accepted_answer, Decided):
-        findings = getattr(selected.accepted_answer, "findings", ())
-        codes = ", ".join(sorted({item.code for item in findings})) or "not ready"
-        raise DataflowOpError(f"selected publication is unavailable ({codes})", findings)
-    candidate = _infer_selected_candidate(selected.accepted_answer.value)
-    decoded = candidate.declaration
-    if decoded.source.problem_fingerprint != operation.local_problem_fingerprint:
-        raise DataflowOpError("selected candidate source differs from the publication source")
-    graph_effects = operation.graph_effects(
-        require=CommitmentStage.DATAFLOW,
-        _captured_choices=captured,
-    )
-    return SelectedPublicationPlan(
-        graph_effects.model_effects(),
-        source_publication_context(operation),
-        operation.local_problem_fingerprint,
-        _captured_records(captured),
-        candidate,
-    )
-
-
-def apply_selected_publication(model: Any, plan: SelectedPublicationPlan) -> PublishedSelection:
-    """Atomically commit native choices and finish with fresh source/selected decode."""
-
-    from finn.dataflow.ops.base import DataflowOpError  # noqa: PLC0415
-    from finn.dataflow.ops.reconstruction import rebind_selected_graph  # noqa: PLC0415
-    from finn.dataflow.ops.selected import decode_selected_graph  # noqa: PLC0415
-
-    scope_id = _source_scope(plan.source_effects)
-    current = _source_only_operation(model, plan.context, scope_id)
-    if current.local_problem_fingerprint != plan.expected_problem_fingerprint:
-        raise DataflowOpError(
-            "source facts now describe a different problem; rebind and plan again"
-        )
-    if _canonical_publication_effects(current, plan.expected_choices) != plan.source_effects:
-        raise DataflowOpError("publication effects differ from the validated source plan")
-
-    def validate(candidate_model: Any) -> None:
-        source = _source_only_operation(candidate_model, plan.context, scope_id)
-        if source.local_problem_fingerprint != plan.expected_problem_fingerprint:
-            raise DataflowOpError(
-                "source facts now describe a different problem; rebind and plan again"
-            )
-        selected_source = _apply_expected_choices(source, plan.expected_choices)
-        check_commitment(
-            {CommitmentStage.DATAFLOW: selected_source.dataflow},
-            CommitmentStage.DATAFLOW,
-        )
-        hydrated = _hydrate_candidate(source)
-        _assert_expected_choices(hydrated, plan.expected_choices)
-        rebind_selected_graph(selected_source, plan.candidate, update_origin=False)
-
-    def finish(current: Any) -> PublishedSelection:
-        source = _source_only_operation(current, plan.context, scope_id)
-        source = _apply_expected_choices(source, plan.expected_choices)
-        hydrated = cast("DataflowOp", source.rebind(current))
-        _assert_expected_choices(hydrated, plan.expected_choices)
-        selected = decode_selected_graph(plan.candidate)
-        rebound = rebind_selected_graph(hydrated, selected.snapshot)
-        return PublishedSelection(hydrated, rebound)
-
-    return cast(
-        "PublishedSelection | DataflowOp",
-        apply_model_effects(
-            model,
-            plan.source_effects,
-            validate=validate,
-            finish=finish,
-        ),
-    )
-
-
 def _text(value: object) -> str:
     return value.decode("utf-8") if isinstance(value, bytes) else str(value)
 
@@ -952,19 +743,15 @@ __all__ = [
     "ModelReadExpectation",
     "ModelReadKind",
     "ModelReadSet",
-    "PublishedSelection",
-    "SelectedPublicationPlan",
     "SourcePublicationContext",
     "allocate_scope_id",
     "apply_graph_effects",
     "apply_model_effects",
-    "apply_selected_publication",
     "assign_dataflow_scope_ids",
     "build_values",
     "check_commitment",
     "find_node",
     "freeze_build_facts",
-    "plan_selected_publication",
     "source_publication_context",
     "source_read_set",
 ]

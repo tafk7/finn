@@ -242,16 +242,16 @@ def _mapped(use):
     assert isinstance(logical, Decided), logical
     network = logical_network(logical.value)
     exports = {}
-    for binding in use.operands:
+    for binding in use.operand_bindings:
         answer = use.operand_export(binding.role)
         assert isinstance(answer, Decided), answer
         exports[binding.source] = answer.value
     mappings = derive_public_operand_mappings(
-        network, use.source, exports, {item.source: item.adapter for item in use.operands}
+        network, use.source, exports, {item.source: item.adapter for item in use.operand_bindings}
     )
     # Exercise the actual node consumer as well as its pure mapping service.
     # In particular a direct Region must not need an artificial wrapper Kernel.
-    assert use.root.operand_mapping == Decided(mappings)
+    assert use.operand_mapping == Decided(mappings)
     return logical.value, mappings
 
 
@@ -271,7 +271,7 @@ def test_actual_graph_binding_combines_private_rename_renest_and_weight_transpos
     graph_bytes = model.model.SerializeToString(deterministic=True)
     old = CompositeBindingOp(model.graph.node[0]).hydrate(model)
     renamed = RenestedBindingOp(model.graph.node[0]).hydrate(model)
-    assert old.operands == renamed.operands == MatrixBindingOp.operand_bindings
+    assert old.operand_bindings == renamed.operand_bindings == MatrixBindingOp.operand_bindings
     assert old.source == renamed.source
     _, old_maps = _mapped(old)
     _, renamed_maps = _mapped(renamed)
@@ -303,4 +303,4 @@ def test_actual_dataflow_node_binds_a_direct_region_with_required_unported_weigh
     # Input facts and output inference are the same public contract even before
     # a consumer chooses whether it needs the normalized Network description.
     assert use.operand_domain("weights").value.extents == (3, 2)
-    assert use.root.expected_outputs()["output"][0] == (2, 2)
+    assert use.expected_outputs()["output"][0] == (2, 2)

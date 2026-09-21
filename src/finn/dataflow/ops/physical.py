@@ -1,29 +1,24 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
-
-"""Checked source-Op physical capture, preparation and component association.
-
-Logical/source evidence stays in these per-use values. Reusable module inputs
-contain no operation, model, logical graph or source occurrence identity.
-"""
+"""Codegen requests and exact current node/artifact uses, without paired Views."""
 
 from __future__ import annotations
-
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import hashlib
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
+from typing import Any, cast
 from weakref import WeakValueDictionary
-
 from finn.dataflow._engine import (
     Absent,
-    Answer,
     Decided,
     Finding,
     FindingKind,
     QualifiedPath,
+    ReadinessAssessment,
+    Unresolved,
 )
+from finn.dataflow.artifacts.abi import Bus, Endpoint
 from finn.dataflow.artifacts.build import (
     BlobSink,
     ModuleBuildRequirements,
@@ -33,68 +28,52 @@ from finn.dataflow.artifacts.build import (
     portable_module_component,
     prepare_module_build,
     prepared_module_fingerprint,
+    materialize_module_sources,
 )
 from finn.dataflow.artifacts.packaging import PortableComponent
 from finn.dataflow.artifacts.store import ArtifactStore
-from finn.dataflow.ops.base import DataflowOpError
-from finn.dataflow.space.occurrence import ProjectionAssessment
-from finn.dataflow.model.logical.composition import NetworkResult
 from finn.dataflow.model.physical.capture import (
     LocalPhysicalCapture,
     PhysicalCaptureError,
     capture_local_physical as _capture_local_physical,
 )
-from finn.dataflow.model.relations.capture import (
-    LocalRelationCapture,
-    capture_local_relation as _capture_local_relation,
-)
+from finn.dataflow.model.physical.interface import PhysicalPort, PhysicalResult
+from finn.dataflow.model.logical.region import element_width
+from finn.dataflow.ops.base import DataflowOp, DataflowOpError
+from finn.dataflow.ops.model_effects import ModelReadKind, ModelReadSet, validate_model_read_set
+from finn.dataflow.ops.source_values import SourceDirection, SourceOperandKey
+from finn.dataflow.space.occurrence import ProjectionAssessment, layer_runtime
 
-if TYPE_CHECKING:
-    from finn.dataflow.model.relations.values import (
-        BoundaryBinding,
-        EdgeBinding,
-        SemanticPortBinding,
-    )
-    from finn.dataflow.ops.base import DataflowOp  # noqa: PLC0415
-    from finn.dataflow.ops.graph_context import AcceptedLogicalCapture, GraphContext  # noqa: PLC0415
+
+@dataclass(frozen=True)
+class PhysicalOperandBinding:
+    source: SourceOperandKey
+    tensor: str
+    role: str
+    port: PhysicalPort | None
 
 
 @dataclass(frozen=True)
 class PhysicalBuildAssociation:
-    logical: AcceptedLogicalCapture
+    scope_id: str
+    schema_version: int
+    source_reads: ModelReadSet
+    incoming_context: object | None
     requirements_fingerprint: str
-    port_bindings: tuple[SemanticPortBinding, ...]
-    boundary_bindings: tuple[BoundaryBinding, ...]
-    edge_bindings: tuple[EdgeBinding, ...]
+    operands: tuple[PhysicalOperandBinding, ...]
 
     def __post_init__(self) -> None:
-        for field in ("port_bindings", "boundary_bindings", "edge_bindings"):
-            object.__setattr__(self, field, tuple(getattr(self, field)))
+        object.__setattr__(self, "operands", tuple(self.operands))
 
 
 @dataclass(frozen=True)
 class PhysicalBuildCapture:
-    requirements: ModuleBuildRequirements
-    association: PhysicalBuildAssociation
-
-    def __post_init__(self) -> None:
-        if not isinstance(self.requirements, ModuleBuildRequirements):
-            raise TypeError("physical capture requires model-free module requirements")
-        if not isinstance(self.association, PhysicalBuildAssociation):
-            raise TypeError("physical capture requires its logical association")
-
-
-@dataclass(frozen=True)
-class CompilerPhysicalUse:
     local: LocalPhysicalCapture
-    relation: LocalRelationCapture
     association: PhysicalBuildAssociation
 
-
-@dataclass(frozen=True)
-class AuthorizedComponentUse:
-    use: CompilerPhysicalUse
-    built: BuiltLocalPhysical
+    @property
+    def requirements(self) -> ModuleBuildRequirements:
+        return self.local.requirements
 
 
 @dataclass(frozen=True)
@@ -103,10 +82,6 @@ class PreparationReceipt:
     prepared_fingerprint: str
 
 
-# Receipts are transient service evidence, not persisted acceptance or cache
-# identity. A pair enters this weak table only after actual checked preparation.
-# Equal reconstituted values are allowed while the issuing request is alive;
-# inventing a capture-A/prepared-B pair cannot manufacture preparation evidence.
 _issued_receipts: WeakValueDictionary[tuple[str, str], PreparationReceipt] = WeakValueDictionary()
 
 
@@ -126,12 +101,18 @@ class PreparedLocalPhysical:
 
 @dataclass(frozen=True)
 class BuiltLocalPhysical:
-    capture_fingerprint: str
     requirements_fingerprint: str
     prepared_fingerprint: str
     manifest_fingerprint: str
     prepared: PreparedModuleBuild
     component: PortableComponent
+    receipt: PreparationReceipt
+
+
+@dataclass(frozen=True)
+class AuthorizedComponentUse:
+    use: PhysicalBuildCapture
+    built: BuiltLocalPhysical
 
 
 @dataclass(frozen=True)
@@ -154,6 +135,13 @@ def _digest(*values: object) -> str:
     return hashlib.sha256("\n".join(repr(value) for value in values).encode("utf-8")).hexdigest()
 
 
+def _use(subject: DataflowOp) -> DataflowOp:
+    if not isinstance(subject, DataflowOp):
+        raise TypeError("physical node actions require a bound DataflowOp")
+    subject._bound_node()
+    return subject
+
+
 def capture_local_physical(implementation: object) -> LocalPhysicalCapture:
     try:
         return _capture_local_physical(implementation)
@@ -161,169 +149,278 @@ def capture_local_physical(implementation: object) -> LocalPhysicalCapture:
         raise DataflowOpError(str(error), error.findings) from error
 
 
-def capture_local_relation(
-    implementation: object, physical: LocalPhysicalCapture
-) -> LocalRelationCapture:
-    try:
-        return _capture_local_relation(implementation, physical)
-    except PhysicalCaptureError as error:
-        raise DataflowOpError(str(error), error.findings) from error
+def _check_local(capture: LocalPhysicalCapture) -> None:
+    if module_build_fingerprint(capture.requirements) != capture.physical_fingerprint:
+        raise DataflowOpError("local requirements fingerprint is inconsistent")
+    if (
+        _digest(capture.implementation, capture.occurrence_path, capture.dependencies)
+        != capture.point_fingerprint
+    ):
+        raise DataflowOpError("local dependency fingerprint is inconsistent")
+    requirements = (
+        capture.physical
+        if isinstance(capture.physical, ModuleBuildRequirements)
+        else getattr(capture.physical, "requirements", None)
+    )
+    if requirements != capture.requirements:
+        raise DataflowOpError("local physical requirements are inconsistent")
 
 
-def op_physical(operation: DataflowOp) -> ProjectionAssessment[PhysicalBuildCapture]:
-    """Ask only the selected Kernel, after frozen graph/source acceptance."""
-    from finn.dataflow.model.relations.values import LogicalPhysicalRelation  # noqa: PLC0415
-    from finn.dataflow.ops.graph_context import capture_frozen_op_logical  # noqa: PLC0415
-    from finn.dataflow.space.declarations import Space  # noqa: PLC0415
+def _association(use: DataflowOp, local: LocalPhysicalCapture) -> PhysicalBuildAssociation:
+    """The sole complete derivation of every retained node-use field."""
+    _check_local(local)
+    result = local.physical
+    if not isinstance(result, PhysicalResult):
+        raise DataflowOpError("node physical use requires a declared public physical interface")
+    ports = {port.role: port for port in result.ports}
+    present = {operand.id for operand in (*use.source.inputs, *use.source.outputs)}
+    bindings = tuple(binding for binding in type(use).operand_bindings if binding.source in present)
+    if {binding.role for binding in bindings} != set(ports) | set(result.required_values):
+        raise DataflowOpError("physical interface must cover every required node operand exactly")
+    scope = use.recorded_scope_id()
+    if not scope:
+        raise DataflowOpError("a physical node use requires a source scope identity")
+    buses = {port.name: port for port in result.requirements.abi.ports if isinstance(port, Bus)}
+    operands = []
+    for binding in bindings:
+        source = use.source.operand(binding.source)
+        datatype = use.operand_type(binding.role)
+        domain = use.operand_domain(binding.role)
+        if not isinstance(datatype, Decided) or not isinstance(domain, Decided):
+            findings = (
+                *(datatype.findings if not isinstance(datatype, Decided) else ()),
+                *(domain.findings if not isinstance(domain, Decided) else ()),
+            )
+            raise DataflowOpError("required public interface facts are not accepted", findings)
+        if not binding.output and source.datatype != datatype.value:
+            raise DataflowOpError("physical binding cannot convert the source datatype")
+        port = ports.get(binding.role)
+        if port is None:
+            if binding.output:
+                raise DataflowOpError("an output cannot be an unported required input value")
+        elif buses[port.bus_id].endpoint is not (
+            Endpoint.INITIATOR if binding.output else Endpoint.TARGET
+        ):
+            raise DataflowOpError("physical port direction differs from its public operand")
+        if port is not None and any(
+            field.bit_width != element_width(datatype.value) for field in port.payload.fields
+        ):
+            raise DataflowOpError("physical payload field width differs from its public datatype")
+        operands.append(
+            PhysicalOperandBinding(
+                SourceOperandKey(
+                    binding.source,
+                    SourceDirection.OUTPUT if binding.output else SourceDirection.INPUT,
+                    binding.index,
+                ),
+                source.tensor,
+                binding.role,
+                port,
+            )
+        )
+    return PhysicalBuildAssociation(
+        scope,
+        type(use).schema_version,
+        _physical_source_reads(use, local),
+        use._frozen_incoming_context(),
+        local.physical_fingerprint,
+        tuple(operands),
+    )
 
-    graph = operation.graph_dataflow
-    if not isinstance(graph.accepted_answer, Decided):
+
+def _physical_choice_names(operation: DataflowOp, local: LocalPhysicalCapture) -> set[str]:
+    from finn.dataflow.ops.native import choice_schema  # noqa: PLC0415
+
+    paths = {dependency.path for dependency in local.dependencies if dependency.kind == "decision"}
+    return {
+        entry.name
+        for entry in choice_schema(operation)
+        if entry.choice.reference.path.value in paths
+    }
+
+
+def _physical_source_reads(operation: DataflowOp, local: LocalPhysicalCapture) -> ModelReadSet:
+    """Read actual physical choice keys and source facts, excluding output caches."""
+    from finn.dataflow.ops.base import source_declarations  # noqa: PLC0415
+    from finn.dataflow.ops.persistence import source_read_set  # noqa: PLC0415
+    from finn.dataflow.ops.schema import Attribute, DatatypeAttribute, attribute_name  # noqa: PLC0415
+
+    names = _physical_choice_names(operation, local)
+    paths = {dependency.path for dependency in local.dependencies if dependency.kind == "problem"}
+    compiled = layer_runtime(operation).compiled
+    for name, declaration in source_declarations(type(operation)):
+        if (
+            isinstance(declaration, (Attribute, DatatypeAttribute))
+            and compiled.member(name).path.value in paths
+        ):
+            names.add(attribute_name(name, declaration))
+    reads = source_read_set(
+        operation,
+        expected_attributes={name: None for name in names},
+        include_output_annotations=False,
+    )
+    return ModelReadSet(
+        tuple(
+            item
+            for item in reads.expectations
+            if item.kind is not ModelReadKind.ATTRIBUTE or item.field in names
+        )
+    )
+
+
+def op_physical(subject: DataflowOp) -> ProjectionAssessment[PhysicalBuildCapture]:
+    """Assess codegen and its concrete node interface, without full graph acceptance."""
+    use = _use(subject)
+    selected = use.resolve_implementation()
+    if not isinstance(selected, Decided):
         return ProjectionAssessment(
             "physical",
-            graph.readiness,
-            graph.constraints,
-            cast(Any, graph.accepted_answer),
-            cast(Any, graph.accepted_answer),
+            ReadinessAssessment(
+                "implementation", {}, None if isinstance(selected, Unresolved) else True
+            ),
+            (),
+            cast(Any, selected),
+            cast(Any, selected),
         )
-    kernel = operation.selected_kernel()
-    if not isinstance(kernel, Space):
-        raise TypeError("selected_kernel must return a Space occurrence")
-    if kernel.root is not operation.root:
-        raise DataflowOpError("selected physical Kernel belongs to a different operation point")
-    selected_logical: Answer[Any] = kernel.assess_view("logical").accepted_answer
-    selected_network = (
-        selected_logical.value.network
-        if isinstance(selected_logical, Decided)
-        and isinstance(selected_logical.value, NetworkResult)
-        else selected_logical.value
-        if isinstance(selected_logical, Decided)
-        else None
-    )
-    if selected_network != graph.accepted_answer.value:
-        raise DataflowOpError(
-            "selected physical Kernel does not realize the accepted operation Network"
-        )
-    physical: ProjectionAssessment[Any] = kernel.assess_view("physical")
+    physical: ProjectionAssessment[Any] = selected.value.assess_view("physical")
     if not isinstance(physical.accepted_answer, Decided):
-        return ProjectionAssessment(
-            "physical",
-            physical.readiness,
-            (*graph.constraints, *physical.constraints),
-            cast(Any, physical.output),
-            cast(Any, physical.accepted_answer),
-        )
+        return cast("ProjectionAssessment[PhysicalBuildCapture]", physical)
     try:
-        local = capture_local_physical(kernel)
-        relation = capture_local_relation(kernel, local)
-    except DataflowOpError as error:
-        error_findings = tuple(item for item in error.findings if isinstance(item, Finding))
-        blocked = Absent(error_findings or (_rejection("physical-relation", str(error)),))
-        return ProjectionAssessment(
-            "physical",
-            physical.readiness,
-            (*graph.constraints, *physical.constraints),
-            cast(Any, blocked),
-            cast(Any, blocked),
+        local = capture_local_physical(selected.value)
+        answer: Any = Decided(PhysicalBuildCapture(local, _association(use, local)))
+    except (TypeError, ValueError) as error:
+        answer = Absent(
+            tuple(getattr(error, "findings", ())) or (_rejection("physical-interface", str(error)),)
         )
-    if not isinstance(relation.relation, LogicalPhysicalRelation):
-        raise TypeError("compiler physical use requires LogicalPhysicalRelation")
-    facts = relation.relation.physical
-    logical = capture_frozen_op_logical(operation)
-    capture = PhysicalBuildCapture(
-        facts.requirements,
-        PhysicalBuildAssociation(
-            logical,
-            module_build_fingerprint(facts.requirements),
-            facts.port_bindings,
-            facts.boundary_bindings,
-            facts.edge_bindings,
-        ),
-    )
     return ProjectionAssessment(
-        "physical",
-        physical.readiness,
-        (*graph.constraints, *physical.constraints),
-        Decided(capture),
-        Decided(capture),
+        "physical", physical.readiness, physical.constraints, answer, answer
     )
+
+
+def capture_op_physical(subject: DataflowOp) -> PhysicalBuildCapture:
+    answer = op_physical(subject).accepted_answer
+    if not isinstance(answer, Decided):
+        raise DataflowOpError("operation codegen projection is not accepted", answer.findings)
+    return answer.value
+
+
+def validate_physical_build_association(
+    subject: DataflowOp,
+    capture: PhysicalBuildCapture,
+    *,
+    model: Any,
+    build: object = None,
+    graph_context: Any = None,
+) -> tuple[Finding, ...]:
+    """Check canonical all-field association, then actual source/target freshness."""
+    from finn.dataflow.ops.native import capture_decided_choices, serialize_choices  # noqa: PLC0415
+
+    try:
+        use = _use(subject)
+        if capture != capture_op_physical(use):
+            return (
+                _rejection("physical-capture-mismatch", "capture differs from the exact node use"),
+            )
+        validate_model_read_set(model, capture.association.source_reads)
+        fresh = use.rebind(model, build, graph_context=graph_context)
+        current_keys = set(serialize_choices(fresh))
+        physical_keys = _physical_choice_names(use, capture.local)
+        choices = {
+            entry.name: value
+            for entry, value in capture_decided_choices(use)
+            if entry.name in physical_keys or entry.name not in current_keys
+        }
+        fresh = fresh.commit_choices(choices)
+        current = capture_op_physical(fresh)
+        # Fresh reads get a fresh process-local engine token; actual dependencies,
+        # source reads, required operands and construction contents must all agree.
+        comparable = replace(
+            current, local=replace(current.local, occurrence_token=capture.local.occurrence_token)
+        )
+        if comparable != capture:
+            return (
+                _rejection(
+                    "physical-source-changed",
+                    "current source, target or required interface changed",
+                ),
+            )
+        return ()
+    except (TypeError, ValueError, KeyError) as error:
+        return cast("tuple[Finding, ...]", tuple(getattr(error, "findings", ()))) or (
+            _rejection("physical-use-validation", str(error)),
+        )
+
+
+def _require_valid(
+    subject: DataflowOp,
+    capture: PhysicalBuildCapture,
+    *,
+    model: Any,
+    build: object = None,
+    graph_context: Any = None,
+) -> None:
+    findings = validate_physical_build_association(
+        subject, capture, model=model, build=build, graph_context=graph_context
+    )
+    if findings:
+        raise DataflowOpError("physical build association is stale or invalid", findings)
 
 
 def associate_physical_use(
-    operation: DataflowOp,
-    implementation: object,
+    subject: DataflowOp,
     local: LocalPhysicalCapture,
-    relation: LocalRelationCapture,
     *,
     model: Any,
-    build: object,
-    graph_context: GraphContext,
-) -> CompilerPhysicalUse:
-    """Create the compiler claim over an independently captured local result."""
-
-    from finn.dataflow.model.relations.values import LogicalPhysicalRelation  # noqa: PLC0415
-    from finn.dataflow.ops.graph_context import (  # noqa: PLC0415
-        capture_frozen_op_logical,
-        validate_frozen_op_logical,
-    )
-
-    if capture_local_physical(implementation) != local:
-        raise DataflowOpError("local physical capture is not current for this occurrence")
-    if capture_local_relation(implementation, local) != relation:
-        raise DataflowOpError("local relation capture is not current for this occurrence")
-    relation_value = relation.relation
-    if not isinstance(relation_value, LogicalPhysicalRelation):
-        raise TypeError("compiler use requires a LogicalPhysicalRelation")
-    logical = capture_frozen_op_logical(operation)
-    findings = validate_frozen_op_logical(
-        operation,
-        logical,
-        model=model,
-        build=build,
-        graph_context=graph_context,
-    )
-    if findings:
-        raise DataflowOpError("compiler logical association is not current", findings)
-    if logical.network != relation_value.network:
-        raise DataflowOpError("local relation does not realize the operation's logical Network")
-    facts = relation_value.physical
-    association = PhysicalBuildAssociation(
-        logical,
-        local.physical_fingerprint,
-        facts.port_bindings,
-        facts.boundary_bindings,
-        facts.edge_bindings,
-    )
-    return CompilerPhysicalUse(local, relation, association)
+    build: object = None,
+    graph_context: Any = None,
+) -> PhysicalBuildCapture:
+    capture = capture_op_physical(subject)
+    if capture.local != local:
+        raise DataflowOpError("local physical capture is not this exact node occurrence")
+    _require_valid(subject, capture, model=model, build=build, graph_context=graph_context)
+    return capture
 
 
 def validate_compiler_physical_use(
-    operation: DataflowOp,
-    implementation: object,
-    use: CompilerPhysicalUse,
+    subject: DataflowOp,
+    use: PhysicalBuildCapture,
     *,
     model: Any,
-    build: object,
-    graph_context: GraphContext,
+    build: object = None,
+    graph_context: Any = None,
 ) -> tuple[Finding, ...]:
-    from finn.dataflow.ops.graph_context import validate_frozen_op_logical  # noqa: PLC0415
-
-    findings = validate_frozen_op_logical(
-        operation,
-        use.association.logical,
-        model=model,
-        build=build,
-        graph_context=graph_context,
+    return validate_physical_build_association(
+        subject, use, model=model, build=build, graph_context=graph_context
     )
-    if findings:
-        return findings
-    try:
-        if capture_local_physical(implementation) != use.local:
-            return (_rejection("physical-local-changed", "local physical capture changed"),)
-        if capture_local_relation(implementation, use.local) != use.relation:
-            return (_rejection("physical-relation-changed", "local relation capture changed"),)
-    except (TypeError, ValueError) as error:
-        return (_rejection("physical-use-validation", str(error)),)
-    return ()
+
+
+def _receipt(
+    requirements: ModuleBuildRequirements, prepared: PreparedModuleBuild
+) -> PreparationReceipt:
+    receipt = PreparationReceipt(
+        module_build_fingerprint(requirements), prepared_module_fingerprint(prepared)
+    )
+    return _issued_receipts.setdefault(
+        (receipt.requirements_fingerprint, receipt.prepared_fingerprint), receipt
+    )
+
+
+def _validate_receipt(
+    requirements: ModuleBuildRequirements,
+    prepared: PreparedModuleBuild,
+    receipt: PreparationReceipt,
+) -> None:
+    expected = PreparationReceipt(
+        module_build_fingerprint(requirements), prepared_module_fingerprint(prepared)
+    )
+    if (
+        receipt != expected
+        or _issued_receipts.get((expected.requirements_fingerprint, expected.prepared_fingerprint))
+        != receipt
+    ):
+        raise DataflowOpError(
+            "request is not the requirements/prepared pair issued by checked preparation"
+        )
 
 
 def prepare_local_physical(
@@ -333,82 +430,86 @@ def prepare_local_physical(
     template_roots: Sequence[Path],
     blobs: BlobSink,
 ) -> PreparedLocalPhysical:
+    _check_local(capture)
     prepared = prepare_module_build(
-        capture.requirements,
-        roots=roots,
-        template_roots=template_roots,
-        blobs=blobs,
+        capture.requirements, roots=roots, template_roots=template_roots, blobs=blobs
     )
-    receipt = PreparationReceipt(
-        capture.physical_fingerprint,
-        prepared_module_fingerprint(prepared),
-    )
-    receipt = _issued_receipts.setdefault(
-        (receipt.requirements_fingerprint, receipt.prepared_fingerprint), receipt
-    )
-    return PreparedLocalPhysical(capture, prepared, receipt)
+    return PreparedLocalPhysical(capture, prepared, _receipt(capture.requirements, prepared))
 
 
 def materialize_local_physical(
-    request: PreparedLocalPhysical,
-    *,
-    store: ArtifactStore,
+    request: PreparedLocalPhysical, *, store: ArtifactStore
 ) -> BuiltLocalPhysical:
-    from finn.dataflow.artifacts.build import materialize_module_sources  # noqa: PLC0415
-
-    expected = PreparationReceipt(
-        request.capture.physical_fingerprint,
-        prepared_module_fingerprint(request.prepared),
-    )
-    if (
-        request.receipt != expected
-        or _issued_receipts.get((expected.requirements_fingerprint, expected.prepared_fingerprint))
-        != request.receipt
-    ):
-        raise DataflowOpError("local preparation receipt does not match capture and build")
+    _check_local(request.capture)
+    _validate_receipt(request.capture.requirements, request.prepared, request.receipt)
     source = materialize_module_sources(request.prepared, store)
-    component = portable_module_component(request.prepared, source)
     return BuiltLocalPhysical(
-        request.capture.point_fingerprint,
         request.capture.physical_fingerprint,
-        expected.prepared_fingerprint,
+        request.receipt.prepared_fingerprint,
         _digest(source),
         request.prepared,
-        component,
+        portable_module_component(request.prepared, source),
+        request.receipt,
     )
+
+
+def prepare_build_request(
+    subject: DataflowOp,
+    capture: PhysicalBuildCapture,
+    *,
+    model: Any,
+    roots: Mapping[str, Path],
+    template_roots: Sequence[Path],
+    blobs: BlobSink,
+    build: object = None,
+    graph_context: Any = None,
+) -> PreparedBuildRequest:
+    _require_valid(subject, capture, model=model, build=build, graph_context=graph_context)
+    local = prepare_local_physical(
+        capture.local, roots=roots, template_roots=template_roots, blobs=blobs
+    )
+    return PreparedBuildRequest(capture, local.prepared, local.receipt)
+
+
+def materialize_build_request(
+    subject: DataflowOp,
+    request: PreparedBuildRequest,
+    *,
+    model: Any,
+    store: ArtifactStore,
+    build: object = None,
+    graph_context: Any = None,
+) -> PortableComponent:
+    _require_valid(subject, request.capture, model=model, build=build, graph_context=graph_context)
+    return materialize_local_physical(
+        PreparedLocalPhysical(request.capture.local, request.prepared, request.receipt), store=store
+    ).component
 
 
 def authorize_component_use(
-    operation: DataflowOp,
-    implementation: object,
-    use: CompilerPhysicalUse,
+    subject: DataflowOp,
+    use: PhysicalBuildCapture,
     built: BuiltLocalPhysical,
     *,
     model: Any,
-    build: object,
-    graph_context: GraphContext,
     store: ArtifactStore,
+    build: object = None,
+    graph_context: Any = None,
 ) -> AuthorizedComponentUse:
-    findings = validate_compiler_physical_use(
-        operation,
-        implementation,
-        use,
-        model=model,
-        build=build,
-        graph_context=graph_context,
-    )
-    if findings:
-        raise DataflowOpError("compiler physical use is stale or invalid", findings)
-    if built.capture_fingerprint != use.local.point_fingerprint:
-        raise DataflowOpError("built component belongs to a different local capture")
-    if built.requirements_fingerprint != use.local.physical_fingerprint:
-        raise DataflowOpError("built component requirements differ from the compiler use")
+    """Authorize current artifact use; explicit context additionally claims graph compatibility."""
+    _require_valid(subject, use, model=model, build=build, graph_context=graph_context)
+    _require_graph_connections(subject, graph_context)
+    if built.requirements_fingerprint != module_build_fingerprint(use.requirements):
+        raise DataflowOpError("built component requirements differ from this use")
     if built.prepared_fingerprint != prepared_module_fingerprint(built.prepared):
         raise DataflowOpError("built component prepared fingerprint is inconsistent")
+    _validate_receipt(
+        use.requirements,
+        built.prepared,
+        built.receipt,
+    )
     source = store.lookup(module_source_derivation(built.prepared))
-    if source is None:
-        raise DataflowOpError("built component source artifact is absent from the store")
-    if portable_module_component(built.prepared, source) != built.component:
+    if source is None or portable_module_component(built.prepared, source) != built.component:
         raise DataflowOpError("built component differs from the verified stored source")
     if _digest(source) != built.manifest_fingerprint:
         raise DataflowOpError("built component manifest fingerprint differs")
@@ -416,21 +517,17 @@ def authorize_component_use(
 
 
 def install_compiler_physical_component(
-    operation: DataflowOp,
-    implementation: object,
+    subject: DataflowOp,
     authorized: AuthorizedComponentUse,
     *,
     outer_instance_id: str,
     model: Any,
-    build: object,
-    graph_context: GraphContext,
     store: ArtifactStore,
+    build: object = None,
+    graph_context: Any = None,
 ) -> PhysicalInstanceAssociation:
-    if not outer_instance_id:
-        raise DataflowOpError("a physical installation needs a non-empty outer instance id")
     current = authorize_component_use(
-        operation,
-        implementation,
+        subject,
         authorized.use,
         authorized.built,
         model=model,
@@ -446,156 +543,23 @@ def install_compiler_physical_component(
     )
 
 
-def capture_op_physical(operation: DataflowOp) -> PhysicalBuildCapture:
-    answer = operation.physical.accepted_answer
-    if not isinstance(answer, Decided):
-        raise DataflowOpError("operation physical projection is not accepted", answer.findings)
-    return cast(PhysicalBuildCapture, answer.value)
-
-
-def validate_physical_build_association(
-    operation: DataflowOp,
-    capture: PhysicalBuildCapture,
-    *,
-    model: Any,
-    build: object,
-    graph_context: GraphContext,
-) -> tuple[Finding, ...]:
-    from finn.dataflow.ops.graph_context import validate_frozen_op_logical  # noqa: PLC0415
-
-    findings = validate_frozen_op_logical(
-        operation,
-        capture.association.logical,
-        model=model,
-        build=build,
-        graph_context=graph_context,
-    )
-    if findings:
-        return findings
-    if (
-        module_build_fingerprint(capture.requirements)
-        != capture.association.requirements_fingerprint
-    ):
-        return (
-            _rejection(
-                "physical-requirements-mismatch",
-                "requirements differ from the captured association",
-            ),
-        )
-    answer = operation.physical.accepted_answer
-    if not isinstance(answer, Decided):
-        return cast("tuple[Finding, ...]", answer.findings)
-    if answer.value != capture:
-        return (
-            _rejection(
-                "physical-capture-mismatch",
-                "capture is not the operation's same-point physical result",
-            ),
-        )
-    return ()
-
-
-def _require_valid(
-    operation: DataflowOp,
-    capture: PhysicalBuildCapture,
-    *,
-    model: Any,
-    build: object,
-    graph_context: GraphContext,
-) -> None:
-    findings = validate_physical_build_association(
-        operation,
-        capture,
-        model=model,
-        build=build,
-        graph_context=graph_context,
-    )
-    if findings:
-        raise DataflowOpError("physical build association is stale or invalid", findings)
-
-
-def prepare_build_request(
-    operation: DataflowOp,
-    capture: PhysicalBuildCapture,
-    *,
-    model: Any,
-    build: object,
-    graph_context: GraphContext,
-    roots: Mapping[str, Path],
-    template_roots: Sequence[Path],
-    blobs: BlobSink,
-) -> PreparedBuildRequest:
-    _require_valid(operation, capture, model=model, build=build, graph_context=graph_context)
-    prepared = prepare_module_build(
-        capture.requirements,
-        roots=roots,
-        template_roots=template_roots,
-        blobs=blobs,
-    )
-    receipt = PreparationReceipt(
-        module_build_fingerprint(capture.requirements),
-        prepared_module_fingerprint(prepared),
-    )
-    key = (receipt.requirements_fingerprint, receipt.prepared_fingerprint)
-    receipt = _issued_receipts.setdefault(key, receipt)
-    return PreparedBuildRequest(capture, prepared, receipt)
-
-
-def _validate_receipt(request: PreparedBuildRequest) -> None:
-    expected = PreparationReceipt(
-        module_build_fingerprint(request.capture.requirements),
-        prepared_module_fingerprint(request.prepared),
-    )
-    if (
-        request.receipt != expected
-        or _issued_receipts.get((expected.requirements_fingerprint, expected.prepared_fingerprint))
-        != request.receipt
-    ):
-        raise DataflowOpError(
-            "request is not the requirements/prepared pair issued by checked preparation"
-        )
-
-
-def materialize_build_request(
-    operation: DataflowOp,
-    request: PreparedBuildRequest,
-    *,
-    model: Any,
-    build: object,
-    graph_context: GraphContext,
-    store: ArtifactStore,
-) -> PortableComponent:
-    """Revalidate the occurrence immediately before source cache lookup/build."""
-    from finn.dataflow.artifacts.build import materialize_module_sources  # noqa: PLC0415
-
-    _require_valid(
-        operation, request.capture, model=model, build=build, graph_context=graph_context
-    )
-    _validate_receipt(request)
-    source = materialize_module_sources(request.prepared, store)
-    return portable_module_component(request.prepared, source)
-
-
 def install_physical_component(
-    operation: DataflowOp,
+    subject: DataflowOp,
     request: PreparedBuildRequest,
     component: PortableComponent,
     *,
     outer_instance_id: str,
     model: Any,
-    build: object,
-    graph_context: GraphContext,
     store: ArtifactStore,
+    build: object = None,
+    graph_context: Any = None,
 ) -> PhysicalInstanceAssociation:
-    _require_valid(
-        operation, request.capture, model=model, build=build, graph_context=graph_context
-    )
-    _validate_receipt(request)
+    """Associate an artifact; supplied graph context also requests stream-connection checks."""
+    _require_valid(subject, request.capture, model=model, build=build, graph_context=graph_context)
+    _require_graph_connections(subject, graph_context)
+    _validate_receipt(request.capture.requirements, request.prepared, request.receipt)
     source = store.lookup(module_source_derivation(request.prepared))
-    if source is None:
-        raise DataflowOpError("prepared source artifact is not present in the supplied store")
-    expected = portable_module_component(request.prepared, source)
-    if component != expected:
+    if source is None or portable_module_component(request.prepared, source) != component:
         raise DataflowOpError("component differs from the store-verified prepared source and ABI")
     return PhysicalInstanceAssociation(
         outer_instance_id,
@@ -603,3 +567,11 @@ def install_physical_component(
         request.capture.association,
         request.receipt.prepared_fingerprint,
     )
+
+
+def _require_graph_connections(subject: DataflowOp, graph_context: object | None) -> None:
+    if graph_context is None:
+        return
+    answer = subject.graph_dataflow.accepted_answer
+    if not isinstance(answer, Decided):
+        raise DataflowOpError("graph stream connections are not accepted", answer.findings)

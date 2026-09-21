@@ -38,7 +38,6 @@ from finn.dataflow.space.occurrence import ProjectionAssessment
 from finn.dataflow.ops.mapping import CoordinateMapping, External, Internal
 from finn.dataflow.ops.base import (
     DATAFLOW_DOMAIN,
-    FINGERPRINT_ATTRIBUTE,
     SCOPE_ID_ATTRIBUTE,
     DataflowOp,
     DataflowOpError,
@@ -697,7 +696,7 @@ def test_an_unselected_kernel_is_unresolved_and_not_an_exception() -> None:
     assert isinstance(assessment.accepted_answer, Unresolved)
     assert assessment.readiness.ready is None
     codes = {finding.code for finding in assessment.accepted_answer.findings}
-    assert "projection-alternative-unselected" in codes
+    assert "kernel-decision-unassigned" in codes
 
 
 def test_the_operations_own_constraints_gate_its_projection() -> None:
@@ -875,8 +874,8 @@ def test_a_plan_addressed_to_another_graph_is_refused() -> None:
 def test_choices_are_separate_native_attributes() -> None:
     model, operation = _configured_mvau(pe=2, simd=4)
     attrs = read_attributes(model.graph.node[0])
-    assert attrs[FINGERPRINT_ATTRIBUTE].value == operation.local_problem_fingerprint
-    assert attrs[SCHEMA_VERSION_ATTRIBUTE] == NativeAttribute("i", 7)
+    assert "dataflow_problem_fingerprint" not in attrs
+    assert attrs[SCHEMA_VERSION_ATTRIBUTE] == NativeAttribute("i", 8)
     assert attrs["kernel__case"] == NativeAttribute("s", "dot_product")
     assert attrs["kernel__dot_product__pe"] == NativeAttribute("i", 2)
     assert attrs["kernel__dot_product__simd"] == NativeAttribute("i", 4)
@@ -904,7 +903,7 @@ def test_old_mvau_schema_two_is_refused_without_writes() -> None:
     model, _operation = _configured_mvau()
     _replace_attribute(model, SCHEMA_VERSION_ATTRIBUTE, 2)
     before = model.model.SerializeToString(deterministic=True)
-    with pytest.raises(DataflowOpError, match="writes schema version 7"):
+    with pytest.raises(DataflowOpError, match="writes schema version 8"):
         _unbound(model, "mvau0").bind(model, Build())
     assert model.model.SerializeToString(deterministic=True) == before
 
@@ -929,24 +928,25 @@ def test_reconstruct_refuses_an_arbitrary_problem() -> None:
         operation.reconstruct({})
 
 
-def test_a_changed_problem_makes_the_recorded_choices_stale() -> None:
+def test_changed_source_stales_old_evaluation_but_choices_replay_on_current_facts() -> None:
     model, operation = _configured_mvau()
     assert not operation.is_stale((model, Build()))
 
     model.set_tensor_datatype("activation", DataType["INT4"])
 
     assert operation.is_stale((model, Build()))
-    with pytest.raises(DataflowOpError, match="different problem"):
-        _unbound(model, "mvau0").bind(model, Build())
+    current = _unbound(model, "mvau0").bind(model, Build())
+    assert current.recorded() == operation.recorded()
+    assert current.source.operand("activation").datatype == DataType["INT4"]
 
 
 def test_an_incomplete_native_metadata_envelope_is_refused() -> None:
     model, _operation = _configured_mvau()
     node = model.graph.node[0]
-    kept = [item for item in node.attribute if item.name != FINGERPRINT_ATTRIBUTE]
+    kept = [item for item in node.attribute if item.name != SCHEMA_VERSION_ATTRIBUTE]
     del node.attribute[:]
     node.attribute.extend(kept)
-    with pytest.raises(DataflowOpError, match="different problem"):
+    with pytest.raises(DataflowOpError, match="schema version"):
         _unbound(model, "mvau0").bind(model, Build())
 
 
@@ -1447,11 +1447,11 @@ def test_a_zero_extent_replay_activation_gives_a_finding() -> None:
     assert {finding.code for finding in answer.findings} >= {"replay-degenerate-extent"}
 
 
-# -- the commit boundary: one build, and it is the frozen one ------------------
+# -- fresh saves use current explicitly supplied facts -----------------------
 
 
-def test_commit_needs_no_build_because_the_occurrence_already_froze_one() -> None:
-    """The effects were derived from the frozen facts; so is the rebinding."""
+def test_partial_commit_without_build_does_not_copy_old_build_facts() -> None:
+    """Unrelated hardware facts may stay unavailable in a logical checkpoint."""
 
     model = _mvau_model()
     chosen = _unbound(model, "mvau0").bind(model, Build()).kernel.select("dot_product").root
@@ -1459,26 +1459,21 @@ def test_commit_needs_no_build_because_the_occurrence_already_froze_one() -> Non
     committed = chosen.commit(model)
 
     assert type(committed) is MvauDataflowOp
-    assert committed.problem_fingerprint == chosen.problem_fingerprint
+    assert MvauDataflowOp.target_dsp not in committed.problem_snapshot
+    assert MvauDataflowOp.clock_period_ns not in committed.problem_snapshot
+    assert MvauDataflowOp.target_dsp in chosen.problem_snapshot
     assert dict(committed.recorded())["kernel.case"] == "dot_product"
 
 
-def test_a_mismatched_build_at_commit_leaves_the_graph_unchanged() -> None:
-    """Equivalence is proved before anything is written, not after.
-
-    The failure this forbids is specific: apply effects derived from build A,
-    then fail while rebinding under build B, and the graph is left holding
-    choices whose author has already been told the operation failed.
-    """
+def test_fresh_commit_revalidates_proposals_against_current_build_facts() -> None:
+    """Proposal ancestry does not override explicitly supplied current facts."""
 
     model = _mvau_model()
     chosen = _unbound(model, "mvau0").bind(model, Build()).kernel.select("dot_product").root
-    before = model.model.SerializeToString(deterministic=True)
-
-    with pytest.raises(DataflowOpError, match="clock_period_ns"):
-        chosen.commit(model, Build(synth_clk_period_ns=10.0))
-
-    assert model.model.SerializeToString(deterministic=True) == before
+    current = chosen.commit(model, Build(synth_clk_period_ns=10.0))
+    assert current.problem_snapshot[MvauDataflowOp.clock_period_ns] == 10.0
+    assert chosen.problem_snapshot[MvauDataflowOp.clock_period_ns] == 4.0
+    assert current.recorded() == chosen.recorded()
 
 
 def test_an_equivalent_build_at_commit_is_accepted() -> None:

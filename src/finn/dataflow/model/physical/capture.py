@@ -29,7 +29,7 @@ from finn.dataflow.model.identity import (
 )
 from finn.dataflow.model.logical.composition import ImplementationPath
 from finn.dataflow.model.physical.authoring import PhysicallyUnsupported
-from finn.dataflow.model.relations.values import KernelRealizationFacts, KernelStreamBinding
+from finn.dataflow.model.physical.interface import KernelRealizationFacts, KernelStreamBinding
 from finn.dataflow.space.declarations import Projection, Space, ValueSource, semantics_for
 from finn.dataflow.space.occurrence import ProjectionAssessment, layer_runtime
 
@@ -56,7 +56,7 @@ class LocalPhysicalCapture:
 
 
 class PhysicalCaptureError(ValueError):
-    """An accepted local physical or relation capability could not be captured."""
+    """An accepted local codegen capability could not be captured."""
 
     def __init__(self, message: str, findings: tuple[Finding, ...] = ()) -> None:
         super().__init__(message)

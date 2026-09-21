@@ -12,11 +12,10 @@ finn.dataflow.kernels    concrete reusable implementations and resources
 finn.dataflow.ops        source interpretation and compiler integration
 ```
 
-Logical values live under ``model.logical``; generic physical structures and
-lowering under ``model.physical``; and logical-to-physical correspondence under
-``model.relations``. Portable build schemas and services remain in
-``artifacts``. The private ``_engine`` and generic ``space`` package do not
-depend on the Kernel domain, concrete library or source adapters.
+Logical values and public operand exports live under ``model.logical``; physical
+structures, interfaces and lowering live under ``model.physical``. Portable build
+schemas and services remain in ``artifacts``. The private ``_engine`` and generic
+``space`` package do not depend on the Kernel domain, concrete library or source adapters.
 
 This module deliberately re-exports nothing.  A value with two importable paths
 looks like a value with two owners, and the whole point of the model/space split

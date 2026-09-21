@@ -11,7 +11,7 @@ from dataflow.ops.test_dataflow_op import _mvau_model
 from finn.dataflow._engine import Decided
 from finn.dataflow.ops.base import DATAFLOW_DOMAIN, DataflowOpError
 from finn.dataflow.ops.mvau.op import MvauDataflowOp
-from finn.dataflow.ops.native import FINGERPRINT_ATTRIBUTE, SCHEMA_VERSION_ATTRIBUTE
+from finn.dataflow.ops.native import SCHEMA_VERSION_ATTRIBUTE
 from finn.dataflow.ops.persistence import apply_graph_effects, assign_dataflow_scope_ids
 from finn.dataflow.ops.replay.op import ActivationReplayOp
 from finn.dataflow.ops.type_context import producer_type
@@ -70,9 +70,6 @@ def test_checked_update_invalidates_both_consumers_and_preserves_choices():
         bound = ActivationReplayOp(node).hydrate(model).root
         node.attribute.append(helper.make_attribute("kernel__simd", 2))
         node.attribute.append(helper.make_attribute(SCHEMA_VERSION_ATTRIBUTE, bound.schema_version))
-        node.attribute.append(
-            helper.make_attribute(FINGERPRINT_ATTRIBUTE, bound.local_problem_fingerprint)
-        )
     _precision(model, "INT16")
     producer = MvauDataflowOp(model.graph.node[0]).rehydrate_current(model)
     apply_graph_effects(model, producer.graph_effects())

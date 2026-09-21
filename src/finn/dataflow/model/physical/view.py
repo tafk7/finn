@@ -17,7 +17,11 @@ T_co = TypeVar("T_co", covariant=True)
 
 
 class PhysicalView(Projection[T_co]):
-    """A typed physical capability using the common Projection runtime."""
+    """Codegen preconditions and detached requirements at the requested scope.
+
+    Acceptance establishes declared generator, target and interface conditions.
+    It does not imply logical graph acceptance, synthesis, timing or RTL execution.
+    """
 
     def __init__(
         self,

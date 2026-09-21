@@ -28,8 +28,8 @@ assertion failed:
     before and after.
 
 ``commit``
-    Returns a bound occurrence over the *post-commit* graph, and refuses a build
-    that differs from the frozen one before mutating anything.
+    Returns a bound occurrence over the *post-commit* graph after revalidating
+    proposed choices against current target facts.
 
 ``save`` / ``reload``
     Decoded values, not just canonical bytes: an Enum that came back as its
@@ -54,7 +54,7 @@ from typing import Any
 from finn.dataflow._engine import Decided
 from finn.dataflow.space.occurrence import ProjectionAssessment
 from finn.dataflow.ops.base import DataflowOp, DataflowOpError
-from finn.dataflow.ops.native import read_attributes, FINGERPRINT_ATTRIBUTE
+from finn.dataflow.ops.native import read_attributes, SCHEMA_VERSION_ATTRIBUTE
 
 
 @dataclass(frozen=True)
@@ -154,13 +154,13 @@ def assert_dataflow_op_conforms(
     )
 
     _effects_write_nothing(model, configured)
-    _a_mismatched_build_cannot_change_the_graph(model, configured, case)
+    _a_current_build_is_revalidated(model, configured, case)
     _a_fresh_rebind_reads_the_graph_again(case, bound)
 
     committed = configured.commit(model, case.build)
     _require(committed.is_bound, "commit returns a bound occurrence")
     _require(
-        FINGERPRINT_ATTRIBUTE in read_attributes(_node(model, case.node_name)),
+        SCHEMA_VERSION_ATTRIBUTE in read_attributes(_node(model, case.node_name)),
         "the commit wrote native attributes to the node",
     )
     _the_committed_occurrence_describes_the_post_commit_node(case, model, committed)
@@ -289,23 +289,31 @@ def _effects_write_nothing(model: Any, configured: Any) -> None:
     )
 
 
-def _a_mismatched_build_cannot_change_the_graph(
+def _a_current_build_is_revalidated(
     model: Any, configured: Any, case: DataflowOpConformanceCase
 ) -> None:
-    """A build that differs from the frozen one is refused *before* any mutation."""
+    """A proposed choice point cannot overwrite current target build facts."""
 
     if case.other_build is None:
         return
-    before = model.model.SerializeToString(deterministic=True)
+    from qonnx.core.modelwrapper import ModelWrapper  # noqa: PLC0415
+
+    candidate = ModelWrapper(model.model, make_deepcopy=True)
+    before = candidate.model.SerializeToString(deterministic=True)
     try:
-        configured.commit(model, case.other_build)
+        current = _unbound(candidate, case.node_name).save_space(
+            candidate, configured, case.other_build
+        )
     except DataflowOpError:
         _require(
-            model.model.SerializeToString(deterministic=True) == before,
+            candidate.model.SerializeToString(deterministic=True) == before,
             "a refused commit left the graph byte-identical",
         )
         return
-    raise ConformanceFailure("committing under a different build is refused")
+    _require(
+        dict(current._frozen_build_values()) == dict(configured._build_values(case.other_build)),
+        "a fresh save uses current build facts rather than proposal facts",
+    )
 
 
 def _survives_a_save_and_reload(case: DataflowOpConformanceCase, committed: Any) -> Any:
@@ -338,6 +346,7 @@ def _staleness_is_reported_and_a_stale_plan_changes_nothing(
     from qonnx.core.modelwrapper import ModelWrapper  # noqa: PLC0415
 
     committed = _unbound(model, case.node_name).bind(model, case.build)
+    effects = committed.graph_effects()
     stale_model = ModelWrapper(model.model, make_deepcopy=True)
     case.mutate_problem(stale_model)
     _require(
@@ -345,18 +354,20 @@ def _staleness_is_reported_and_a_stale_plan_changes_nothing(
         "an occurrence whose graph changed under it reports itself stale",
     )
 
-    # And native choices written against the old problem is refused on the way in,
-    # with the graph untouched -- a stale plan does not half-apply.
+    # Deferred effects carry reads; unlike a fresh save, they cannot reuse stale
+    # computed writes merely because the choice values might still be legal.
+    from finn.dataflow.ops.persistence import apply_graph_effects  # noqa: PLC0415
+
     before = stale_model.model.SerializeToString(deterministic=True)
     try:
-        _unbound(stale_model, case.node_name).bind(stale_model, case.build)
+        apply_graph_effects(stale_model, effects)
     except DataflowOpError as error:
         _require(
             "different problem" in str(error),
             f"the refusal says the problem changed, got {error}",
         )
     else:
-        raise ConformanceFailure("binding refuses native choices made against another problem")
+        raise ConformanceFailure("applying a stale precomputed effect plan is refused")
     _require(
         stale_model.model.SerializeToString(deterministic=True) == before,
         "the refused binding left the graph byte-identical",

@@ -21,6 +21,14 @@ from qonnx.analysis.tensor_value_summary import (  # type: ignore[import-not-fou
 from finn.dataflow.space.declarations import AuthoringError, CanonicalValue, CanonicalValueCodec
 
 
+def set_frozen_initializer(model: Any, graph_value: str, value: FrozenInitializer) -> None:
+    """Copy a detached authenticated payload without changing its carrier."""
+    model.set_initializer(graph_value, value.array_copy())
+    matches = [item for item in model.graph.initializer if item.name == graph_value]
+    if len(matches) != 1 or int(matches[0].data_type) != value.carrier_dtype:
+        raise ValueError("copied initializer carrier dtype changed")
+
+
 def _extremum(value: int | float | None) -> CanonicalValue:
     if value is None:
         return {"kind": "none"}
@@ -157,4 +165,5 @@ __all__ = [
     "TENSOR_VALUE_SUMMARY_CODEC",
     "decode_frozen_initializer",
     "encode_frozen_initializer",
+    "set_frozen_initializer",
 ]

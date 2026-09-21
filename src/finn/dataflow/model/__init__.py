@@ -25,7 +25,8 @@ if TYPE_CHECKING:
     from finn.dataflow.model.logical.view import LogicalView, kernel_dataflow
     from finn.dataflow.model.physical.authoring import ModuleParameter, PhysicallyUnsupported
     from finn.dataflow.model.physical.view import PhysicalView, kernel_physical
-    from finn.dataflow.model.relations.view import RelationView
+    from finn.dataflow.model.logical.interface import PublicOperand, OperandExport, OperandTarget
+    from finn.dataflow.model.logical.interface_authoring import PublicOperandDeclaration
 
 _LAZY_EXPORTS = {
     "Kernel": ("finn.dataflow.model.kernel", "Kernel"),
@@ -42,7 +43,13 @@ _LAZY_EXPORTS = {
         "PhysicallyUnsupported",
     ),
     "PhysicalView": ("finn.dataflow.model.physical.view", "PhysicalView"),
-    "RelationView": ("finn.dataflow.model.relations.view", "RelationView"),
+    "PublicOperand": ("finn.dataflow.model.logical.interface", "PublicOperand"),
+    "OperandExport": ("finn.dataflow.model.logical.interface", "OperandExport"),
+    "OperandTarget": ("finn.dataflow.model.logical.interface", "OperandTarget"),
+    "PublicOperandDeclaration": (
+        "finn.dataflow.model.logical.interface_authoring",
+        "PublicOperandDeclaration",
+    ),
     "ImplementationIdentity": (
         "finn.dataflow.model.identity",
         "ImplementationIdentity",
@@ -79,7 +86,10 @@ __all__ = [
     "PhysicalView",
     "PhysicallyUnsupported",
     "RegionDeclaration",
-    "RelationView",
+    "PublicOperand",
+    "OperandExport",
+    "OperandTarget",
+    "PublicOperandDeclaration",
     "implementation_identity",
     "kernel_dataflow",
     "kernel_physical",

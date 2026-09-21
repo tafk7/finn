@@ -16,7 +16,7 @@ from finn.dataflow.model.physical.layout import (
     UnusedBitPolicy,
     UnusedBitRange,
 )
-from finn.dataflow.model.relations.validation import validate_kernel_stream_bindings
+from finn.dataflow.model.physical.interface import validate_kernel_stream_bindings
 
 from dataflow.ops.mvau.test_dot_product_kernel import _occurrence
 

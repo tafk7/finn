@@ -13,7 +13,9 @@ from __future__ import annotations
 
 import math
 import struct
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from collections.abc import Mapping
+from types import MappingProxyType
 from enum import Enum
 from typing import Any, cast, TYPE_CHECKING
 
@@ -35,15 +37,44 @@ if TYPE_CHECKING:
     from finn.dataflow.ops.base import DataflowOp
 
 SCOPE_ID_ATTRIBUTE = "dataflow_scope_id"
-FINGERPRINT_ATTRIBUTE = "dataflow_problem_fingerprint"
+# Recognized only to remove obsolete ancestry stamps on a checked save.
+OBSOLETE_FINGERPRINT_ATTRIBUTE = "dataflow_problem_fingerprint"
+OBSOLETE_ATTRIBUTES = frozenset({OBSOLETE_FINGERPRINT_ATTRIBUTE})
 SCHEMA_VERSION_ATTRIBUTE = "dataflow_schema_version"
-RESERVED_ATTRIBUTES = frozenset(
-    {SCOPE_ID_ATTRIBUTE, FINGERPRINT_ATTRIBUTE, SCHEMA_VERSION_ATTRIBUTE}
-)
+RESERVED_ATTRIBUTES = frozenset({SCOPE_ID_ATTRIBUTE, SCHEMA_VERSION_ATTRIBUTE})
 
 
 class DecodeError(ValueError):
     """A native attribute does not match its declaration's encoding."""
+
+
+def _freeze_encoding(value: object) -> object:
+    if isinstance(value, Mapping):
+        if any(type(key) is not str for key in value):
+            raise TypeError("choice encoding mapping keys must be strings")
+        return MappingProxyType({key: _freeze_encoding(item) for key, item in value.items()})
+    if isinstance(value, (list, tuple)):
+        return tuple(_freeze_encoding(item) for item in value)
+    if value is None or type(value) in (str, int, bool):
+        return value
+    if type(value) is float and math.isfinite(value):
+        return value
+    raise TypeError("choice encoding must be finite canonical data")
+
+
+@dataclass(frozen=True, slots=True)
+class RecordedChoice:
+    """A captured native choice; its schema owns the value codec."""
+
+    path: str
+    value: object
+    encoding: object | None = field(default=None, compare=False)
+
+    def __post_init__(self) -> None:
+        if not self.path:
+            raise ValueError("recorded choice path must be non-empty")
+        if self.encoding is not None:
+            object.__setattr__(self, "encoding", _freeze_encoding(self.encoding))
 
 
 @dataclass(frozen=True, slots=True)
@@ -182,9 +213,8 @@ class ChoiceAttribute:
 def encode_choice_value(choice: ChoiceAttribute, value: object) -> CanonicalValue:
     """Encode one semantic Decision value with its declaration-owned codec.
 
-    The result is transport-neutral canonical data. Native ONNX attributes and
-    selected declarations add only their own container representation around
-    this value, so both persistence paths share nominal checks and codecs.
+    Native attributes and detached choice records consume this same canonical
+    value, with one nominal check and declaration-owned codec.
     """
 
     semantics = choice.choice.reference.semantics
@@ -297,13 +327,11 @@ def choice_subset(
     """Resolve an ordered exact subset from one compiled choice schema."""
 
     if len(paths) != len(set(paths)):
-        raise AuthoringError("selected choice_paths must be unique")
+        raise AuthoringError("choice paths must be unique")
     by_path = {item.choice.path: item for item in schema}
     missing = tuple(path for path in paths if path not in by_path)
     if missing:
-        raise AuthoringError(
-            f"selected choice_paths are absent from the compiled schema: {missing}"
-        )
+        raise AuthoringError(f"choice paths are absent from the compiled schema: {missing}")
     return tuple(by_path[path] for path in paths)
 
 
@@ -355,7 +383,7 @@ def _choice_schema(
     from finn.dataflow.ops.schema import Attribute, DatatypeAttribute, attribute_name as source_name  # noqa: PLC0415
     from finn.dataflow.ops.base import source_declarations  # noqa: PLC0415
 
-    names = {name: "metadata" for name in RESERVED_ATTRIBUTES}
+    names = {name: "metadata" for name in RESERVED_ATTRIBUTES | OBSOLETE_ATTRIBUTES}
     names.update(
         {
             source_name(name, decl): "source"
@@ -495,7 +523,41 @@ def captured_choice_mapping(
     return result
 
 
-def hydrate(operation: Any, *, require_identity: bool = True) -> Any:
+def proposed_choice_values(target: Any, proposal: Any) -> dict[str, object]:
+    """Interpret only proposed choices through the current target's schema."""
+    from finn.dataflow.ops.base import DataflowOpError  # noqa: PLC0415
+
+    for member in ("family", "family_version", "schema_version"):
+        if getattr(type(proposal), member, None) != getattr(type(target), member, None):
+            raise DataflowOpError(f"proposal {member} is incompatible with the current target")
+    current = {item.name: item for item in choice_schema(target)}
+    offered = {item.name: item for item in choice_schema(proposal)}
+    if current.keys() != offered.keys():
+        raise DataflowOpError("proposal choice schema keys differ from the current target")
+
+    def codec_identity(item: ChoiceAttribute) -> object:
+        codec = item.codec
+        return None if codec is None else (codec.identity, codec.version, codec.kind)
+
+    for key, item in current.items():
+        other = offered[key]
+        if (
+            item.token != other.token
+            or item.choice.selector != other.choice.selector
+            or codec_identity(item) != codec_identity(other)
+        ):
+            raise DataflowOpError(f"proposal choice codec is incompatible for {key!r}")
+    result = {}
+    for item, value in capture_decided_choices(proposal):
+        encoded = item.encode(value)
+        decoded = current[item.name].decode(encoded)
+        if current[item.name].encode(decoded) != encoded:
+            raise DataflowOpError(f"proposal choice codec disagrees for {item.name!r}")
+        result[item.name] = decoded
+    return result
+
+
+def hydrate(operation: Any) -> Any:
     from finn.dataflow.ops.base import DataflowOpError  # noqa: PLC0415
 
     try:
@@ -519,13 +581,6 @@ def hydrate(operation: Any, *, require_identity: bool = True) -> Any:
             if version != NativeAttribute("i", operation.schema_version):
                 raise DecodeError(
                     f"this build writes schema version {operation.schema_version}, found {version}"
-                )
-            fingerprint = written.get(FINGERPRINT_ATTRIBUTE)
-            if require_identity and fingerprint != NativeAttribute(
-                "s", operation.local_problem_fingerprint
-            ):
-                raise DecodeError(
-                    "node stores choices made against a different problem; reconstruct explicitly"
                 )
         values: dict[QualifiedPath, object] = {}
         for item in schema:
@@ -563,6 +618,7 @@ __all__ = [
     "AttributeCodec",
     "DecodeError",
     "NativeAttribute",
+    "RecordedChoice",
     "attribute_name",
     "capture_decided_choices",
     "captured_choice_mapping",
@@ -571,6 +627,7 @@ __all__ = [
     "decode_choice_value",
     "encode_choice_value",
     "operation_choice_schema",
+    "proposed_choice_values",
     "read_attributes",
     "resolve_choice_subset",
     "serialize_choice_values",

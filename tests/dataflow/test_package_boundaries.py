@@ -34,6 +34,14 @@ DATAFLOW = SOURCE / "dataflow"
 #: what they now contain rather than for absence, because "this name exists
 #: again" and "the old implementation came back" are different claims.
 RETIRED_MODULES = (
+    "finn.dataflow.model.relations",
+    "finn.dataflow.ops.selected",
+    "finn.dataflow.ops.selected_registry",
+    "finn.dataflow.ops.selected_verification",
+    "finn.dataflow.ops.selected_transforms",
+    "finn.dataflow.ops.selected_transform_registry",
+    "finn.dataflow.ops.mvau.selected",
+    "finn.dataflow.ops.replay.selected",
     "finn.dataflow.computation",
     "finn.dataflow.parameters.cyclic.computation",
     "finn.dataflow.ops.association",
@@ -242,6 +250,7 @@ def test_the_final_package_boundaries_are_the_approved_ones() -> None:
 
 
 def test_s2b_removes_the_old_declarations_without_aliases() -> None:
+    assert not hasattr(import_module("finn.dataflow.model"), "RelationView")
     for module in ("finn.dataflow.kernels", "finn.dataflow.model"):
         for name in ("Kernels", "Boundary", "Connection", "Sink", "ComputationContract"):
             assert not hasattr(import_module(module), name), (module, name)
@@ -282,7 +291,7 @@ def test_pure_logical_values_import_nothing_above_or_beside_them() -> None:
         "finn.dataflow.artifacts",
         "onnx",
     )
-    adapters = {"authoring.py", "semantics.py", "view.py"}
+    adapters = {"authoring.py", "interface_authoring.py", "semantics.py", "view.py"}
     for path in (DATAFLOW / "model" / "logical").rglob("*.py"):
         if path.name in adapters:
             continue
@@ -290,7 +299,7 @@ def test_pure_logical_values_import_nothing_above_or_beside_them() -> None:
         assert not any(_within(name, package) for name in named for package in forbidden), path
 
 
-def test_pure_physical_and_relation_values_keep_one_way_dependencies() -> None:
+def test_pure_physical_and_public_interface_values_keep_one_way_dependencies() -> None:
     forbidden = (
         "finn.dataflow.space",
         "finn.dataflow._engine",
@@ -302,8 +311,8 @@ def test_pure_physical_and_relation_values_keep_one_way_dependencies() -> None:
         DATAFLOW / "model" / "physical" / "structure.py",
         DATAFLOW / "model" / "physical" / "validation.py",
         DATAFLOW / "model" / "physical" / "lowering.py",
-        DATAFLOW / "model" / "relations" / "values.py",
-        DATAFLOW / "model" / "relations" / "validation.py",
+        DATAFLOW / "model" / "physical" / "interface.py",
+        DATAFLOW / "model" / "logical" / "interface.py",
     )
     for path in pure:
         named = _imported_modules(path)
@@ -327,7 +336,7 @@ def test_domain_facades_and_pure_value_modules_are_lazy() -> None:
         ("finn.dataflow.space", "finn.dataflow._engine", "finn.dataflow.kernels"),
     )
     _assert_fresh_import_avoids(
-        "finn.dataflow.model.relations.values",
+        "finn.dataflow.model.physical.interface",
         ("finn.dataflow.space", "finn.dataflow._engine", "finn.dataflow.kernels"),
     )
 

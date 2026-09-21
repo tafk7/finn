@@ -27,8 +27,8 @@ from finn.dataflow.analysis.integer_dot import IntegerSupportReport
 from finn.dataflow.artifacts.contributions import CopiedSource
 from finn.dataflow.artifacts.build import ModuleABIRequirements, ScalarTable
 from finn.dataflow.model.physical.layout import PeriodicLast
-from finn.dataflow.model.relations.values import KernelStreamBinding
-from finn.dataflow.model.relations.view import low_fields_binding
+from finn.dataflow.model.physical.interface import KernelStreamBinding
+from finn.dataflow.model.physical.interface import low_fields_binding
 from finn.dataflow.model.logical.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
 from finn.dataflow.space.declarations import (
     ConstraintGroup,
@@ -81,7 +81,7 @@ def require_dotp_axi_numerical_support(
     """Consume an invocation proof when a compiler-owned use supplies one."""
 
     if profile.accumulation is not AccumulationMode.INTEGER or profile.fuses_activation:
-        return
+        raise PhysicallyUnsupported("dotp_axi generates only a bare integer accumulator")
     if report is None:
         # A standalone reusable core has no source invocation to prove.
         return

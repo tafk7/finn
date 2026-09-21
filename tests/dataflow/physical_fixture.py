@@ -30,7 +30,7 @@ from finn.dataflow.kernels.matmul.base import WeightedDotProductKernel
 from finn.dataflow.kernels.matmul.dot_product import DotProductKernel, WeightSupply
 from finn.dataflow.kernels.matmul.resources import template_root
 from finn.dataflow.ops.mvau.op import MvauDataflowOp
-from finn.dataflow.ops.selected import SourceDirection, SourceOperandKey
+from finn.dataflow.ops.source_values import SourceDirection, SourceOperandKey
 
 WEIGHTS = (
     (1, 0, -1, 2),

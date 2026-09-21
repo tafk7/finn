@@ -16,7 +16,7 @@ from finn.dataflow.model.identity import (
 )
 from finn.dataflow.model.logical.region import DataflowRegion
 from finn.dataflow.model.physical.layout import PackedBeatLayout
-from finn.dataflow.model.relations.values import KernelStreamBinding
+from finn.dataflow.model.physical.interface import KernelStreamBinding
 
 
 class ExampleKernel(Kernel):
@@ -38,7 +38,10 @@ def test_model_facade_exposes_only_domain_framework_vocabulary() -> None:
         "PhysicalView",
         "PhysicallyUnsupported",
         "RegionDeclaration",
-        "RelationView",
+        "PublicOperand",
+        "OperandExport",
+        "OperandTarget",
+        "PublicOperandDeclaration",
         "implementation_identity",
         "kernel_dataflow",
         "kernel_physical",

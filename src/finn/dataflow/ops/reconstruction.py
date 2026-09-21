@@ -16,7 +16,7 @@ from __future__ import annotations
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any
 
@@ -150,145 +150,6 @@ def bind_sources_only(
         )
 
 
-def rebind_selected_graph(
-    operation: DataflowOp,
-    snapshot: Any,
-    *,
-    constructions: Any = None,
-    update_origin: bool = True,
-) -> Any:
-    """Validate a detached selected artifact against one current source occurrence."""
-
-    from finn.dataflow._engine import Decided  # noqa: PLC0415
-    from finn.dataflow.ops.base import DataflowOpError  # noqa: PLC0415
-    from finn.dataflow.ops.native import (  # noqa: PLC0415
-        choice_schema,
-        choice_subset,
-        resolve_choice_subset,
-    )
-    from finn.dataflow.ops.selected import (  # noqa: PLC0415
-        ConstructionIdentity,
-        EncodedSourceSemantics,
-        RecordedChoice,
-        SelectedConstruction,
-        SelectionFacts,
-        SourceProvenance,
-        build_selected_snapshot,
-        decode_selected_graph,
-        encode_selected_choices,
-    )
-    from finn.dataflow.ops.selected_registry import (  # noqa: PLC0415
-        DEFAULT_SELECTED_CONSTRUCTIONS,
-    )
-    from finn.dataflow.model.logical.network_validation import validate_network  # noqa: PLC0415
-
-    registry = DEFAULT_SELECTED_CONSTRUCTIONS if constructions is None else constructions
-    decoded = decode_selected_graph(snapshot, constructions=registry)
-    if not isinstance(operation.dataflow.accepted_answer, Decided):
-        raise DataflowOpError("current source has no accepted dataflow projection")
-    operation.selected_kernel()
-    current_construction = operation.selected_construction()
-    if not isinstance(current_construction, SelectedConstruction):
-        raise DataflowOpError("current source Kernel has no selected construction")
-    if (current_construction.family, current_construction.version) != (
-        decoded.declaration.construction.family,
-        decoded.declaration.construction.version,
-    ):
-        raise DataflowOpError("selected construction family or version changed")
-    artifact_identity = decoded.declaration.construction
-    if artifact_identity.form not in current_construction.admitted_forms:
-        raise DataflowOpError("current selected construction does not admit the artifact form")
-
-    encoded = operation.selected_source_semantics()
-    if not isinstance(encoded, EncodedSourceSemantics):
-        raise DataflowOpError("current source returned invalid selected semantics")
-    if (
-        encoded.identity != current_construction.source_semantics_identity
-        or encoded.version != current_construction.source_semantics_version
-    ):
-        raise DataflowOpError("current source-semantics codec differs from the construction")
-    current_source = operation.selected_source_provenance(encoded)
-    if not isinstance(current_source, SourceProvenance):
-        raise DataflowOpError("current source returned invalid selected provenance")
-    intrinsic_current = (
-        current_source.family,
-        current_source.family_version,
-        current_source.operands,
-        current_source.semantics,
-    )
-    intrinsic_selected = (
-        decoded.declaration.source.family,
-        decoded.declaration.source.family_version,
-        decoded.declaration.source.operands,
-        decoded.declaration.source.semantics,
-    )
-    if intrinsic_current != intrinsic_selected:
-        raise DataflowOpError("selected artifact source semantics differ from current source")
-
-    schema = choice_subset(choice_schema(operation), current_construction.choice_paths)
-    selected_choices = []
-    for item, answer in resolve_choice_subset(operation, schema):
-        if not isinstance(answer, Decided):
-            raise DataflowOpError(f"current source choice {item.choice.path!r} is unresolved")
-        selected_choices.append(RecordedChoice(item.choice.path, answer.value))
-    selected_choices = list(encode_selected_choices(schema, tuple(selected_choices)))
-    if tuple(selected_choices) != decoded.selection_facts.choices:
-        raise DataflowOpError("selected artifact logical choices differ from current source")
-
-    semantics = current_construction.decode_source_semantics(encoded)
-    current_identity = operation.selected_construction_identity(semantics)
-    if not isinstance(current_identity, ConstructionIdentity) or (
-        current_identity.family,
-        current_identity.version,
-    ) != (artifact_identity.family, artifact_identity.version):
-        raise DataflowOpError("current source resolves a different selected construction")
-    facts = current_construction.derive_facts(
-        artifact_identity,
-        current_source,
-        semantics,
-        tuple(selected_choices),
-    )
-    if not isinstance(facts, SelectionFacts):
-        raise DataflowOpError("current selected construction returned invalid facts")
-    verification_facts = replace(facts, source=decoded.declaration.source)
-    try:
-        projected = current_construction.project(verification_facts)
-    except (TypeError, ValueError, KeyError) as error:
-        raise DataflowOpError(
-            f"current selected construction rejects the artifact form: {error}"
-        ) from error
-    report = validate_network(projected)
-    if report.issues:
-        issue = report.issues[0]
-        raise DataflowOpError(
-            f"current selected construction projects an invalid Network: "
-            f"{issue.path}: {issue.message} [{issue.code}]"
-        )
-    if projected != decoded.network:
-        raise DataflowOpError("current selected construction projects a different artifact Network")
-    findings = current_construction.verify(snapshot, verification_facts)
-    if findings:
-        first = findings[0]
-        raise DataflowOpError(
-            f"current selected construction rejects the artifact graph: "
-            f"{first.path}: {first.message} [{first.code}]"
-        )
-    if (
-        facts.source_semantics != decoded.selection_facts.source_semantics
-        or facts.choices != decoded.selection_facts.choices
-        or facts.parameters != decoded.selection_facts.parameters
-        or facts.selection_fingerprint != decoded.selection_facts.selection_fingerprint
-    ):
-        raise DataflowOpError("selected artifact facts differ from current source")
-    if not update_origin or current_source.origin == decoded.declaration.source.origin:
-        return decoded
-    rebound = build_selected_snapshot(
-        decoded.snapshot.model_copy(),
-        replace(decoded.declaration, source=current_source),
-    )
-    return decode_selected_graph(rebound, constructions=registry)
-
-
 def analyze_sources(model: Any) -> tuple[SourceNode, ...]:
     """Read the logical sources of the model without a build or hydration."""
 
@@ -305,6 +166,5 @@ __all__ = [
     "bind_operations",
     "bind_sources_only",
     "initializer_facts",
-    "rebind_selected_graph",
     "source_analysis",
 ]

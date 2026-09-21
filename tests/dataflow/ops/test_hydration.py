@@ -5,6 +5,7 @@
 
 import pytest
 import numpy as np
+import importlib.util
 from dataclasses import replace
 from onnx import helper
 from qonnx.core.datatype import DataType
@@ -17,7 +18,7 @@ from dataflow.ops.mvau.test_source_semantics import (
     MATRIX_HEIGHT,
 )
 from finn.dataflow._engine import Absent, Decided, Unresolved, RequestError
-from finn.dataflow.ops.base import DataflowOpError
+from finn.dataflow.ops.base import DataflowOp, DataflowOpError
 from finn.dataflow.ops.binding import ImplementationBinding, ChoiceBinding
 from finn.dataflow.space.declarations import (
     Decision,
@@ -28,90 +29,110 @@ from finn.dataflow.space.declarations import (
     Projection,
     constraint,
     derived,
+    AuthoringError,
 )
 from finn.dataflow.kernels.replay import ActivationReplayKernel
 from finn.dataflow.ops.mvau.op import MvauDataflowOp
 from finn.dataflow.ops.native import (
     serialize_choices,
-    FINGERPRINT_ATTRIBUTE,
     SCHEMA_VERSION_ATTRIBUTE,
     NativeAttribute,
 )
 from finn.dataflow.ops.replay.op import ActivationReplayOp
+from finn.dataflow.ops.source import SourceError
 
 
 def test_partial_mvau_type_is_common_family_contract_without_target_or_selection():
     model = _mvau_model()
     use = MvauDataflowOp(model.graph.node[0]).hydrate(model)
-    assert isinstance(use.resolve(), Unresolved)
+    assert isinstance(use.resolve_implementation(), Unresolved)
     assert use.operand_type("result") == Decided(DataType["INT32"])
     assert use.operand_domain("result").value.extents == (2, 4)
-    assert serialize_choices(use.root) == {}
-    assert use.root.expected_outputs()["output"] == ((2, 4), DataType["INT32"])
+    assert serialize_choices(use) == {}
+    assert use.expected_outputs()["output"] == ((2, 4), DataType["INT32"])
 
 
 def test_fixed_replay_type_and_domain_do_not_choose_folding():
     model = _replay_model()
     use = ActivationReplayOp(model.graph.node[0]).hydrate(model)
-    assert isinstance(use.resolve(), Decided)
+    assert isinstance(use.resolve_implementation(), Decided)
     assert use.operand_type("result") == use.operand_type("activation")
     assert use.operand_domain("result").value.extents == (8, 8)
-    assert serialize_choices(use.root) == {}
+    assert serialize_choices(use) == {}
 
 
 def test_successors_keep_old_point_and_refuse_mixed_or_inactive_occurrences():
     model = _mvau_model()
     original = MvauDataflowOp(model.graph.node[0]).hydrate(model)
-    selected = original.commit({"kernel__case": "dot_product"})
-    assert isinstance(original.resolve(), Unresolved)
+    selected = original.commit_choices({"kernel__case": "dot_product"})
+    assert isinstance(original.resolve_implementation(), Unresolved)
     kernel = selected.require_implementation()
-    next_use = selected.commit({"kernel__dot_product__pe": 1})
+    next_use = selected.commit_choices({"kernel__dot_product__pe": 1})
     with pytest.raises(DataflowOpError, match="exact node occurrence"):
         next_use.require_implementation(kernel)
-    sibling = selected.root.kernel.alternative("batch_interleaved")
+    sibling = selected.kernel.alternative("batch_interleaved")
     with pytest.raises(DataflowOpError, match="exact node occurrence"):
         selected.require_implementation(sibling)
     assert not isinstance(
-        ImplementationBinding(("kernel", "batch_interleaved")).resolve(selected.root), Decided
+        ImplementationBinding(("kernel", "batch_interleaved")).resolve(selected), Decided
     )
-    other = MvauDataflowOp(model.graph.node[0]).hydrate(model)
-    with pytest.raises(DataflowOpError, match="association"):
-        selected.successor(other.root)
 
 
 def test_choice_nominal_types_and_inactive_branch_refuse():
     model = _mvau_model()
-    use = MvauDataflowOp(model.graph.node[0]).hydrate(model).commit({"kernel__case": "dot_product"})
+    use = (
+        MvauDataflowOp(model.graph.node[0])
+        .hydrate(model)
+        .commit_choices({"kernel__case": "dot_product"})
+    )
     with pytest.raises((TypeError, ValueError)):
-        use.commit({"kernel__dot_product__pe": True})
+        use.commit_choices({"kernel__dot_product__pe": True})
     with pytest.raises((TypeError, ValueError, RequestError)):
-        use.commit({"kernel__batch_interleaved__pe": 1})
+        use.commit_choices({"kernel__batch_interleaved__pe": 1})
 
 
 def test_native_partial_roundtrip_uses_explicit_keys():
     model = _mvau_model()
-    use = MvauDataflowOp(model.graph.node[0]).hydrate(model).commit({"kernel__case": "dot_product"})
-    values = serialize_choices(use.root)
-    values[FINGERPRINT_ATTRIBUTE] = NativeAttribute("s", use.root.local_problem_fingerprint)
-    values[SCHEMA_VERSION_ATTRIBUTE] = NativeAttribute("i", use.root.schema_version)
+    use = (
+        MvauDataflowOp(model.graph.node[0])
+        .hydrate(model)
+        .commit_choices({"kernel__case": "dot_product"})
+    )
+    values = serialize_choices(use)
+    values[SCHEMA_VERSION_ATTRIBUTE] = NativeAttribute("i", use.schema_version)
     model.graph.node[0].attribute.extend(value.proto(key) for key, value in values.items())
     restored = MvauDataflowOp(model.graph.node[0]).hydrate(model)
-    assert restored.resolve().value.__class__ is use.resolve().value.__class__
-    assert serialize_choices(restored.root) == serialize_choices(use.root)
+    assert (
+        restored.resolve_implementation().value.__class__
+        is use.resolve_implementation().value.__class__
+    )
+    assert serialize_choices(restored) == serialize_choices(use)
     assert restored.operand_type("result") == use.operand_type("result")
 
 
-def test_use_cannot_substitute_its_authored_implementation_interface_or_operands():
+def test_bound_op_is_the_space_and_unbound_queries_refuse():
     model = _mvau_model()
-    use = MvauDataflowOp(model.graph.node[0]).hydrate(model)
-    with pytest.raises(DataflowOpError, match="contradicts"):
-        replace(use, implementation=ImplementationBinding(("family_interface",)))
-    with pytest.raises(DataflowOpError, match="contradicts"):
-        replace(use, interface=ImplementationBinding(("kernel",)))
-    with pytest.raises(DataflowOpError, match="contradicts"):
-        replace(use, operands=(replace(use.operands[0], role="weights"), *use.operands[1:]))
-    with pytest.raises(DataflowOpError, match="contradicts"):
-        replace(use, choices=())
+    wrapper = MvauDataflowOp(model.graph.node[0])
+    with pytest.raises(DataflowOpError, match="not bound"):
+        wrapper.operand_type("result")
+    operation = wrapper.hydrate(model)
+    assert isinstance(operation, DataflowOp)
+    assert isinstance(operation, Space)
+    assert not hasattr(operation, "hydrated_use")
+    assert not hasattr(operation, "successor")
+
+
+def test_malformed_authored_source_bindings_refuse():
+    class SwappedSources(MvauDataflowOp):
+        operand_bindings = (
+            replace(MvauDataflowOp.operand_bindings[0], role="weights"),
+            replace(MvauDataflowOp.operand_bindings[1], role="activation"),
+            MvauDataflowOp.operand_bindings[2],
+        )
+
+    model = _mvau_model()
+    with pytest.raises(AuthoringError, match="different sources"):
+        SwappedSources(model.graph.node[0]).hydrate(model)
 
 
 class TwinReplay(ActivationReplayOp):
@@ -136,23 +157,24 @@ class TwinReplay(ActivationReplayOp):
 def test_repeated_definition_choices_and_false_zero_remain_distinct():
     model = _replay_model()
     use = TwinReplay(model.graph.node[0]).hydrate(model)
-    selected = use.commit({"kernel__simd": 2, "mirror_simd": 4, "enabled": False, "offset": 0})
-    encoded = serialize_choices(selected.root)
+    selected = use.commit_choices(
+        {"kernel__simd": 2, "mirror_simd": 4, "enabled": False, "offset": 0}
+    )
+    encoded = serialize_choices(selected)
     assert encoded["kernel__simd"] == NativeAttribute("i", 2)
     assert encoded["mirror_simd"] == NativeAttribute("i", 4)
     assert encoded["enabled"] == NativeAttribute("i", 0)
     assert encoded["offset"] == NativeAttribute("i", 0)
     with pytest.raises(DataflowOpError, match="exact node occurrence"):
-        selected.require_implementation(selected.root.mirror)
-    assert serialize_choices(use.root) == {}
+        selected.require_implementation(selected.mirror)
+    assert serialize_choices(use) == {}
     persisted = dict(encoded)
-    persisted[FINGERPRINT_ATTRIBUTE] = NativeAttribute("s", selected.root.local_problem_fingerprint)
-    persisted[SCHEMA_VERSION_ATTRIBUTE] = NativeAttribute("i", selected.root.schema_version)
+    persisted[SCHEMA_VERSION_ATTRIBUTE] = NativeAttribute("i", selected.schema_version)
     model.graph.node[0].attribute.extend(value.proto(key) for key, value in persisted.items())
     restored = TwinReplay(model.graph.node[0]).hydrate(model)
-    assert serialize_choices(restored.root) == encoded
-    assert restored.root.answer(TwinReplay.enabled).value is False
-    assert restored.root.answer(TwinReplay.offset).value == 0
+    assert serialize_choices(restored) == encoded
+    assert restored.answer(TwinReplay.enabled).value is False
+    assert restored.answer(TwinReplay.offset).value == 0
 
 
 def test_fixed_conditional_target_preserves_unresolved_and_inactive_answers():
@@ -190,9 +212,9 @@ def test_optional_rejecting_op_query_does_not_gate_source_or_public_type():
 
     model = _replay_model()
     use = OptionalCheck(model.graph.node[0]).hydrate(model)
-    assert use.root.assess_source().verdict is True
+    assert use.assess_source().verdict is True
     assert isinstance(use.operand_type("result"), Decided)
-    assert isinstance(use.root.assess_view(OptionalCheck.optional_query).accepted_answer, Absent)
+    assert isinstance(use.assess_view(OptionalCheck.optional_query).accepted_answer, Absent)
 
 
 def test_datatype_inference_clears_an_unaccepted_cached_result_type():
@@ -225,3 +247,37 @@ def test_fused_type_checks_source_thresholds_without_claiming_bare_kernel_suppor
     logical = chosen.dataflow.accepted_answer
     assert isinstance(logical, Absent)
     assert any(f.code == "mvau-kernel-fuses-no-activation" for f in logical.findings)
+
+
+def test_selected_expansion_api_is_removed_and_not_a_wrong_target_route():
+    for name in (
+        "selected_graph",
+        "selected_snapshot",
+        "selected_construction",
+        "selected_facts",
+        "selected_source_provenance",
+        "selected_source_semantics",
+        "selected_construction_identity",
+        "plan_selected_publication",
+        "publish_selected",
+        "rebind_selected",
+    ):
+        assert not hasattr(DataflowOp, name)
+    for module in (
+        "selected",
+        "selected_registry",
+        "selected_transform_registry",
+        "selected_transforms",
+        "selected_verification",
+        "mvau.selected",
+        "replay.selected",
+    ):
+        assert importlib.util.find_spec(f"finn.dataflow.ops.{module}") is None
+
+
+def test_duplicate_source_logical_annotations_refuse_at_source_capture():
+    model = _replay_model()
+    original = model.graph.quantization_annotation[0]
+    model.graph.quantization_annotation.add().CopyFrom(original)
+    with pytest.raises(SourceError, match="duplicate logical datatype annotations"):
+        ActivationReplayOp(model.graph.node[0]).hydrate(model)

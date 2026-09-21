@@ -24,7 +24,7 @@ from finn.dataflow.analysis.integer_dot import (
     IntegerSupportReport,
     analyze_integer_dot_ranges,
 )
-from finn.dataflow.model.logical.datatypes import QONNXDataType
+from finn.dataflow.model.logical.datatypes import QONNXDataType, resolve_qonnx_datatype_name
 from finn.dataflow.model.logical.composition import LogicalResult, logical_network
 from finn.dataflow.model.logical.interface import (
     PublicOperand,
@@ -117,6 +117,29 @@ def computation_profile(
     )
 
 
+def matrix_result_requirement(
+    *, no_activation: bool, output: QONNXDataType, accumulator: QONNXDataType
+) -> object:
+    """The single bare-result precision requirement consumed by source and Kernel."""
+
+    if no_activation and output != accumulator:
+        return reject(
+            "output-accumulator-mismatch",
+            "noActivation requires outputDataType == accDataType",
+        )
+    return True
+
+
+def accumulator_type_for_bounds(bounds: DotProductBounds) -> QONNXDataType:
+    """Smallest exact signed requirement covering all justified partial sums.
+
+    This is a semantic precision derivation for an admitted source conversion,
+    not a folding proposal or a promise that any particular DSP can realize it.
+    """
+
+    return resolve_qonnx_datatype_name(f"INT{bounds.minimum_signed_accumulator_bits}")
+
+
 class MatmulInterface(Space):
     """Common matrix facts, independent of implementation selection or folding."""
 
@@ -148,14 +171,9 @@ class MatmulInterface(Space):
     def result_requirement(
         *, accumulator: QONNXDataType, output: QONNXDataType, profile: MvauComputationProfile
     ) -> object:
-        if profile.fuses_activation:
-            return True
-        if output != accumulator:
-            return reject(
-                "output-accumulator-mismatch",
-                "bare matrix output must equal the accumulator requirement",
-            )
-        return True
+        return matrix_result_requirement(
+            no_activation=not profile.fuses_activation, output=output, accumulator=accumulator
+        )
 
     @constraint(
         activation=activation_type,
@@ -393,4 +411,6 @@ __all__ = [
     "SHARED_INPUTS",
     "WeightedDotProductKernel",
     "computation_profile",
+    "matrix_result_requirement",
+    "accumulator_type_for_bounds",
 ]

@@ -33,9 +33,6 @@ from finn.dataflow.model.physical.layout import (
     UnusedBitPolicy,
     UnusedBitRange,
 )
-from finn.dataflow.model.physical.lowering import (
-    lower_module_structure as _lower_module_structure,
-)
 from finn.dataflow.model.physical.structure import (
     ConstantBits,
     ModuleInstance,
@@ -46,10 +43,7 @@ from finn.dataflow.model.physical.structure import (
     UnusedOutput,
     PhysicalStructureError,
 )
-from finn.dataflow.model.logical.network import DataflowNetwork, PassCorrespondence
-from finn.dataflow.model.relations.validation import validate_logical_physical_relation
-from finn.dataflow.model.relations.values import (
-    CompositePhysicalFacts,
+from finn.dataflow.model.physical.interface import (
     KernelRealizationFacts,
     KernelStreamBinding,
 )
@@ -397,6 +391,12 @@ def compose_decomposed(
     compute_weight = _stream(compute, "weight")
     compute_output = _stream(compute, "output")
 
+    period = dict(replay.requirements.parameters)["LEN"]
+    if not isinstance(period, int) or isinstance(period, bool):
+        raise PhysicalCompositionError("replay length must be an integer")
+    if replay_out.framing != PeriodicLast("tlast", period, period - 1):
+        raise PhysicalCompositionError("internal tlast must frame each synapse-fold group")
+
     replay_in_bus = _bus(replay_abi, replay_in.abi_bus_id, Endpoint.TARGET)
     replay_out_bus = _bus(replay_abi, replay_out.abi_bus_id, Endpoint.INITIATOR)
     compute_activation_bus = _bus(compute_abi, compute_activation.abi_bus_id, Endpoint.TARGET)
@@ -415,6 +415,13 @@ def compose_decomposed(
     activation_width = ((_low_field_layout(replay_in.payload, label="activation") + 7) // 8) * 8
     weight_width = _member(compute_weight_bus, "tdata").width
     output_width = _member(compute_output_bus, "tdata").width
+    for label, layout, carrier in (
+        ("weights", compute_weight.payload, weight_width),
+        ("result", compute_output.payload, output_width),
+    ):
+        logical_width = _low_field_layout(layout, label=label)
+        if carrier != ((logical_width + 7) // 8) * 8:
+            raise PhysicalCompositionError("a top payload carrier must be byte-aligned exactly")
     activation_top_layout = _layout_for_carrier(
         replay_in.payload, activation_width, policy=UnusedBitPolicy.IGNORE_ON_RECEIVE
     )
@@ -558,92 +565,45 @@ def compose_decomposed(
     )
 
 
-def validate_decomposed_physical_facts(
-    network: DataflowNetwork,
-    structure: PhysicalStructure,
-    facts: CompositePhysicalFacts,
+def validate_decomposed_structure(
+    structure: PhysicalStructure, replay: KernelRealizationFacts, compute: KernelRealizationFacts
 ) -> None:
-    """Validate generic correspondence plus the fixed family control contract."""
+    """Optional construction diagnostic; no logical View or paired model is involved.
 
-    validate_logical_physical_relation(network, structure, facts)
-    instances = {item.instance_id: item for item in structure.instances}
-    if set(instances) != {"u_replay", "u_compute"}:
-        raise PhysicalCompositionError("the decomposed profile has u_replay and u_compute")
-    replay = instances["u_replay"]
-    compute = instances["u_compute"]
+    Runtime construction already uses these same checked field/control helpers.
+    Tests can independently corrupt a structure and check the actual wiring.
+    """
     _validate_decomposed_control_contract(
-        structure.top_abi,
-        replay.requirements.abi,
-        compute.requirements.abi,
+        structure.top_abi, replay.requirements.abi, compute.requirements.abi
     )
-    if facts.requirements != _lower_module_structure(
-        structure,
-        producer=DECOMPOSED_PRODUCER,
-        wrapper_template=DECOMPOSED_WRAPPER_TEMPLATE,
-    ):
-        raise PhysicalCompositionError("Kernel facts do not contain this structure's requirements")
-    if {(item.node_id, item.instance_id) for item in facts.port_bindings} != {
-        ("replay", "u_replay"),
-        ("compute", "u_compute"),
-    }:
-        raise PhysicalCompositionError("semantic nodes must map to their canonical instances")
-    for item in facts.port_bindings:
-        _low_field_layout(item.local.payload, label="the first composition profile")
-
-    top_buses = {port.name: port for port in structure.top_abi.ports if isinstance(port, Bus)}
-    boundaries = {item.id: item for item in network.boundaries}
-    for binding in facts.boundary_bindings:
-        top_bus = top_buses[binding.top_bus_id]
-        logical_width = _low_field_layout(binding.payload, label="the first composition profile")
-        if _member(top_bus, "tdata").width != ((logical_width + 7) // 8) * 8:
-            raise PhysicalCompositionError("a top payload carrier must be byte-aligned exactly")
-        boundary = boundaries[binding.boundary_id]
-        if boundary.pass_correspondence is not PassCorrespondence.ONE_TO_ONE:
-            raise PhysicalCompositionError("the first profile requires one-to-one boundaries")
-
-    by_port = {
-        (item.node_id, item.local.region_port_id): item.local for item in facts.port_bindings
-    }
-    for edge in network.edges:
-        source = by_port[(edge.source.node_id, edge.source.port_id)]
-        sink_endpoint = edge.sinks[0].endpoint
-        sink = by_port[(sink_endpoint.node_id, sink_endpoint.port_id)]
-        sink_region = network.node(sink_endpoint.node_id).region
-        sf_levels = tuple(
-            level.extent for level in sink_region.schedule.levels if level.name == "sf"
-        )
-        if (
-            len(sf_levels) != 1
-            or source.framing != sink.framing
-            or source.framing != PeriodicLast("tlast", sf_levels[0], sf_levels[0] - 1)
-        ):
-            raise PhysicalCompositionError("internal tlast must frame each synapse-fold group")
-
-    wiring: dict[tuple[PhysicalPin, int], tuple[PhysicalPin, int, bool]] = {}
-    for wire in structure.wires:
-        if not isinstance(wire.source, PinSlice):
-            continue
-        for index in range(wire.destination.bit_width):
-            wiring[(wire.destination.pin, wire.destination.bit_offset + index)] = (
-                wire.source.pin,
-                wire.source.bit_offset + index,
-                wire.invert,
-            )
-
-    def expect(destination: PhysicalPin, source: PhysicalPin, *, invert: bool = False) -> None:
-        if wiring.get((destination, 0)) != (source, 0, invert):
-            raise PhysicalCompositionError(
-                f"physical wire for {destination.signal_id}[0] does not preserve "
-                "the required source bit"
-            )
-
-    expect(PhysicalPin("u_replay", "clk"), PhysicalPin(None, "ap_clk"))
-    expect(PhysicalPin("u_replay", "rst"), PhysicalPin(None, "ap_rst_n"), invert=True)
-    expect(PhysicalPin("u_compute", "ap_clk"), PhysicalPin(None, "ap_clk"))
-    expect(PhysicalPin("u_compute", "ap_clk2x"), PhysicalPin(None, "ap_clk2x"))
-    expect(PhysicalPin("u_compute", "ap_rst_n"), PhysicalPin(None, "ap_rst_n"))
-    if {item.pin for item in structure.unused_outputs} != {PhysicalPin("u_replay", "ofin")}:
+    expected = compose_decomposed(replay=replay, compute=compute)
+    if structure.top_abi != expected.top_abi or structure.instances != expected.instances:
+        raise PhysicalCompositionError("physical modules and ABI differ from construction inputs")
+    if structure.unused_outputs != expected.unused_outputs:
         raise PhysicalCompositionError("only u_replay.ofin may be deliberately open")
+    if structure.ignored_top_input_bits != expected.ignored_top_input_bits:
+        raise PhysicalCompositionError("ignored top bits must match declared input padding")
+
+    def bits(value: PhysicalStructure) -> dict[tuple[PhysicalPin, int], object]:
+        result: dict[tuple[PhysicalPin, int], object] = {}
+        for wire in value.wires:
+            for index in range(wire.destination.bit_width):
+                source = (
+                    ("constant", (wire.source.value >> index) & 1, wire.invert)
+                    if isinstance(wire.source, ConstantBits)
+                    else ("pin", wire.source.pin, wire.source.bit_offset + index, wire.invert)
+                )
+                result[wire.destination.pin, wire.destination.bit_offset + index] = source
+        return result
+
+    actual_bits, expected_bits = bits(structure), bits(expected)
+    for destination, source in expected_bits.items():
+        if actual_bits.get(destination) != source:
+            raise PhysicalCompositionError(
+                "physical wire does not preserve its required source bit or padding driven to zero"
+            )
+    if actual_bits.keys() != expected_bits.keys():
+        raise PhysicalCompositionError("physical wire destinations differ from construction inputs")
 
 
 PORT_DECLARATIONS = "PORT_DECLARATIONS"
@@ -667,5 +627,5 @@ __all__ = [
     "PhysicalCompositionError",
     "compose_decomposed",
     "top_boundary_layout",
-    "validate_decomposed_physical_facts",
+    "validate_decomposed_structure",
 ]
