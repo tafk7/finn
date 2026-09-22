@@ -24,13 +24,14 @@ from onnx import TensorProto, helper  # type: ignore[import-not-found]
 from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 from qonnx.core.modelwrapper import ModelWrapper  # type: ignore[import-not-found]
 
-from finn.dataflow._engine import Decided, RequestError, Unresolved
+from finn.dataflow._engine import Absent, Decided, Unresolved
 from finn.dataflow.kernels.dotp_axi import DotpAxiKernel
 from finn.dataflow.kernels.matmul.base import DspBlock
 from finn.dataflow.space.declarations import (
     AuthoringError,
     ConstraintGroup,
     Problem,
+    Space,
     constraint,
     declared_members,
 )
@@ -305,15 +306,11 @@ def _configured_mvau(
 
 
 def _configured_replay(
-    model: ModelWrapper | None = None, *, pe: int = 1, simd: int = 4
+    model: ModelWrapper | None = None, *, simd: int = 4
 ) -> tuple[ModelWrapper, ReplaySpace]:
     model = model or _replay_model()
     chosen = _space_for(_unbound(model, "replay0"), model, Build())
-    for declaration, value in (
-        (ActivationReplayKernel.pe, pe),
-        (ActivationReplayKernel.simd, simd),
-    ):
-        chosen = chosen.kernel.assign(declaration, value).root
+    chosen = chosen.kernel.assign(ActivationReplayKernel.simd, simd).root
     committed = _save(chosen, model, Build())
     assert isinstance(committed, ReplaySpace)
     return model, committed
@@ -376,7 +373,7 @@ def test_standalone_replay_preserves_every_requested_copy_across_reload(
     spec = _replay_build_spec(operation)
     assert dict(spec.parameters)["REP"] == folds
     assert dict(spec.parameters)["LEN"] == matrix_width // simd
-    assert dict(operation.recorded()) == {"kernel.pe": 1, "kernel.simd": simd}
+    assert dict(operation.recorded()) == {"kernel.simd": simd}
 
     path = tmp_path / f"replay-r{repetitions}-w{matrix_width}-f{folds}-s{simd}.onnx"
     model.save(str(path))
@@ -396,32 +393,50 @@ def test_standalone_replay_preserves_every_requested_copy_across_reload(
     )
 
 
-def test_standalone_replay_refuses_an_explicit_pe_greater_than_one() -> None:
+def test_standalone_replay_requires_only_its_real_simd_choice() -> None:
     model = _replay_model(folds=4)
     bound = _space_for(_unbound(model, "replay0"), model, Build())
+    assert not hasattr(ActivationReplayKernel, "pe")
+    chosen = bound.kernel.assign(ActivationReplayKernel.simd, 2).root
+    assert isinstance(chosen.network, Decided)
+    assert chosen.kernel.answer(ActivationReplayKernel.processing_elements) == Decided(1)
+    assert dict(chosen.recorded()) == {"kernel.simd": 2}
+    assert isinstance(chosen.physical.accepted_answer, Absent)
 
-    with pytest.raises(RequestError) as caught:
-        bound.kernel.assign(ActivationReplayKernel.pe, 2)
 
-    finding = caught.value.findings[0]
-    assert finding.code == "activation-replay-pe-not-one"
-    assert finding.message == "standalone activation replay requires PE=1"
-
-
-def test_a_saved_standalone_replay_pe_greater_than_one_is_not_reinterpreted(
+@pytest.mark.parametrize(("version", "pe"), ((6, 1), (6, 2), (7, 1), (7, 2)))
+def test_removed_standalone_replay_pe_records_refuse_without_reinterpretation(
+    version: int,
+    pe: int,
     tmp_path: Path,
 ) -> None:
     model, _operation = _configured_replay()
-    _replace_attribute(model, "kernel__pe", 2)
-    path = tmp_path / "old-invalid-replay.onnx"
+    _replace_attribute(model, "kernel__pe", pe)
+    _replace_attribute(model, "dataflow_schema_version", version)
+    path = tmp_path / "unsupported-replay.onnx"
     model.save(str(path))
     restored = ModelWrapper(str(path))
     before = restored.model.SerializeToString(deterministic=True)
-
-    with pytest.raises(DataflowOpError, match="standalone activation replay requires PE=1"):
+    expected = "schema version 7" if version == 6 else "retired native choice.*kernel__pe"
+    with pytest.raises(DataflowOpError, match=expected):
         _space_for(_unbound(restored, "replay0"), restored, Build())
-
     assert restored.model.SerializeToString(deterministic=True) == before
+
+
+def test_saving_refuses_a_removed_pe_key_even_under_the_current_schema() -> None:
+    model, proposal = _configured_replay()
+    adapter = model.get_customop_wrapper(model.graph.node[0])
+    original = adapter.space
+    effects = proposal.graph_effects()
+    _replace_attribute(model, "kernel__pe", 1)
+    before = model.model.SerializeToString(deterministic=True)
+    with pytest.raises(DataflowOpError, match="retired native choice.*kernel__pe"):
+        adapter.save_space(proposal)
+    assert model.model.SerializeToString(deterministic=True) == before
+    assert adapter.space is original
+    with pytest.raises(DataflowOpError, match="retired native choice.*kernel__pe"):
+        apply_graph_effects(model, effects)
+    assert model.model.SerializeToString(deterministic=True) == before
 
 
 def test_pre_unified_design_choice_attributes_are_rejected_without_writes() -> None:
@@ -435,14 +450,16 @@ def test_pre_unified_design_choice_attributes_are_rejected_without_writes() -> N
     assert model.model.SerializeToString(deterministic=True) == before
 
 
-# -- U4a: the operation is the root Space --------------------------------------
+# -- Model-facing adapters own separate immutable source Spaces ----------------
 
 
-def test_the_operation_class_is_the_space() -> None:
-    """No wrapper, no separate source Space, no ``.occurrence()``."""
+def test_adapter_and_source_space_have_separate_responsibilities() -> None:
+    """Source declarations belong to Space; the QONNX adapter is not a Space."""
 
     declarations = dict(declared_members(MvauSpace))
 
+    assert issubclass(MvauSpace, Space)
+    assert not issubclass(DataflowOp, Space)
     assert isinstance(declarations["activation"], Problem)
     assert isinstance(declarations["weight"], Problem)
     assert "kernel" in declarations
@@ -450,7 +467,7 @@ def test_the_operation_class_is_the_space() -> None:
     assert not hasattr(MvauSpace, "occurrence")
 
 
-def test_qonnx_constructs_the_unbound_instance_through_its_own_registry() -> None:
+def test_bare_registry_construction_is_staging_until_model_attachment() -> None:
     from qonnx.custom_op.registry import getCustomOp  # noqa: PLC0415 - the bare path
 
     model = _mvau_model()
@@ -475,12 +492,14 @@ def test_wants_model_is_a_class_attribute_and_attach_is_the_qonnx_protocol() -> 
     assert model.graph.node[0].SerializeToString(deterministic=True) == before
 
 
-def test_binding_returns_the_same_concrete_class_attached() -> None:
+def test_model_creation_exposes_the_concrete_frozen_source_space() -> None:
     model = _mvau_model()
 
-    bound = _space_for(_unbound(model, "mvau0"), model, Build())
+    adapter = make_op(model, build=Build())
+    bound = adapter.space
 
     assert type(bound) is MvauSpace
+    assert bound is not adapter
     assert bound.is_bound
     assert bound.root is bound
 
@@ -1011,7 +1030,7 @@ def test_a_partly_applied_transaction_restores_the_whole_model() -> None:
     assert model.model.SerializeToString(deterministic=True) == before
 
 
-def test_commit_returns_a_bound_operation_over_the_committed_graph() -> None:
+def test_save_returns_a_frozen_space_over_the_saved_graph() -> None:
     """The lifecycle continues across the mutation boundary."""
 
     model = _mvau_model()
@@ -1126,7 +1145,7 @@ def test_persistence_is_discovered_from_the_model_not_declared_by_the_operation(
     mvau_paths = set(mvau.recorded())
 
     # No selector at all in the replay op: it has a fixed Subspace.
-    assert replay_paths == {"kernel.pe", "kernel.simd"}
+    assert replay_paths == {"kernel.simd"}
     # The MVAU op has two nested selectors and Decisions beneath them, all
     # named by compiled path rather than by a friendly alias.
     assert "kernel.case" in mvau_paths
@@ -1408,7 +1427,7 @@ def test_a_bound_occurrence_refuses_node_mutation() -> None:
     snapshot.name = "changed-copy"
     assert bound.node_snapshot().name == "mvau0"
 
-    # The unbound wrapper is an ordinary CustomOp and still writes.
+    # Graph-facing attribute writes belong to the adapter, never the frozen Space.
     _unbound(model, "mvau0").set_nodeattr("binaryXnorMode", 1)
     assert bound.source.attributes["binary_xnor"] is False
 

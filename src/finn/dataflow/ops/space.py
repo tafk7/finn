@@ -555,8 +555,8 @@ class DataflowSpace(Space):
     def recorded(self) -> Mapping[str, object]:
         if not self.is_bound:
             raise DataflowOpError(
-                "operation is not bound; call bind(model, build) or inspect native attributes "
-                "with read_attributes(node)"
+                "Space has no frozen source context; create it through the model-aware Op "
+                "factory or inspect native attributes with read_attributes(node)"
             )
         return MappingProxyType(
             {

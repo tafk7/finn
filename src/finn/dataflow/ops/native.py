@@ -561,6 +561,7 @@ def _decode_native_choices(
     node: Any,
     schema: tuple[ChoiceAttribute, ...],
     schema_version: int,
+    retired_choice_keys: frozenset[str] = frozenset(),
 ) -> dict[QualifiedPath, object]:
     """Check the stored encoding without applying old choices to current domains."""
     written = read_attributes(node)
@@ -581,6 +582,9 @@ def _decode_native_choices(
         version = written.get(SCHEMA_VERSION_ATTRIBUTE)
         if version != NativeAttribute("i", schema_version):
             raise DecodeError(f"this build writes schema version {schema_version}, found {version}")
+    retired = sorted(present_names & retired_choice_keys)
+    if retired:
+        raise DecodeError(f"retired native choice attributes are unsupported: {retired!r}")
     values: dict[QualifiedPath, object] = {}
     for item in schema:
         if item.name not in present_names:
@@ -600,7 +604,10 @@ def validate_native_encoding(operation_type: Any, node: Any) -> None:
 
     try:
         _decode_native_choices(
-            node, operation_choice_schema(operation_type), operation_type.schema_version
+            node,
+            operation_choice_schema(operation_type),
+            operation_type.schema_version,
+            getattr(operation_type, "retired_choice_keys", frozenset()),
         )
     except (DecodeError, UnicodeError) as error:
         raise DataflowOpError(f"{node.name}: {error}") from error
@@ -613,7 +620,12 @@ def hydrate(operation: Any) -> Any:
         schema = choice_schema(operation)
         node = operation.node_snapshot()
         present_names = {item.name for item in node.attribute}
-        values = _decode_native_choices(node, schema, operation.schema_version)
+        values = _decode_native_choices(
+            node,
+            schema,
+            operation.schema_version,
+            getattr(type(operation), "retired_choice_keys", frozenset()),
+        )
         # The declaration walk is an inventory, not an assignment order. The
         # engine orders this compatible batch by its dependency graph, including
         # selectors, applicability and domains that read child exports.

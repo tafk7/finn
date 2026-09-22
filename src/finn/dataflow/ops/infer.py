@@ -27,11 +27,16 @@ from finn.dataflow._engine import (
     Unresolved,
 )
 from finn.dataflow.analysis.integer_dot import IntegerRange, analyze_integer_dot_ranges
-from finn.dataflow.kernels.matmul.base import accumulator_type_for_bounds
+from finn.dataflow.kernels.matmul.base import (
+    AccumulationMode,
+    MatmulInterface,
+    accumulator_type_for_bounds,
+    computation_profile,
+)
 from finn.dataflow.model.logical.datatypes import QONNXDataType
 from finn.dataflow.ops.base import DATAFLOW_DOMAIN
 from finn.dataflow.ops.mvau.numerics import integer_type
-from finn.dataflow.ops.mvau.op import MvauDataflowOp
+from finn.dataflow.ops.mvau.op import MvauDataflowOp, MvauSpace
 from finn.dataflow.ops.persistence import allocate_scope_id
 from finn.dataflow.ops.tensor_summary import FrozenInitializer
 from finn.dataflow.ops.type_context import producer_type
@@ -116,6 +121,18 @@ class InferDataflowMatMul(Transformation):  # type: ignore[misc]
             else model.get_tensor_datatype(node.input[0])
         )
         weight_type = model.get_tensor_datatype(node.input[1])
+        profile = computation_profile(
+            no_activation=True,
+            binary_xnor=False,
+            activation_type=activation_type,
+            weight_type=weight_type,
+        )
+        if profile.accumulation is not AccumulationMode.INTEGER:
+            return None, _answer(
+                "infer-matmul-computation-profile",
+                "these operand types select popcount semantics in the DataflowOp; "
+                "ordinary MatMul requires product accumulation",
+            )
         try:
             activation = integer_type(activation_type)
             integer_type(weight_type)
@@ -159,9 +176,18 @@ class InferDataflowMatMul(Transformation):  # type: ignore[misc]
         operation = candidate.get_customop_wrapper(candidate.graph.node[index])
         if not isinstance(operation, MvauDataflowOp):
             raise TypeError("the registry did not construct the admitted DataflowOp")
-        accepted = cast("Answer[QONNXDataType]", operation.space.operand_type("result"))
+        space = operation.space
+        if not isinstance(space, MvauSpace):
+            raise TypeError("the admitted DataflowOp did not construct its declared Space")
+        accepted = cast("Answer[QONNXDataType]", space.operand_type("result"))
         if not isinstance(accepted, Decided):
             return None, accepted
+        interface = space.interface_binding.resolve(space)
+        if not isinstance(interface, Decided):
+            return None, cast("Answer[QONNXDataType]", interface)
+        eligible = interface.value.assess_view(MatmulInterface.integer_type_profile).accepted_answer
+        if not isinstance(eligible, Decided):
+            return None, eligible
         candidate.set_tensor_datatype(node.output[0], accepted.value)
         return candidate, accepted
 

@@ -34,6 +34,7 @@ class ModelReadKind(str, Enum):
     """One supported address form for a plan's live-model preconditions."""
 
     NODE = "node"
+    NODE_BY_OUTPUT = "node_by_output"
     NODE_ORDER = "node_order"
     ATTRIBUTE = "attribute"
     OPERAND_SLOT = "operand_slot"
@@ -60,6 +61,9 @@ class ModelReadExpectation:
     reads use ``input:N:shape``, ``input:N:carrier_dtype``, or
     ``input:N:logical_datatype`` so a coherent input rename can remain valid.
     ``INITIALIZER_CONTENT`` likewise uses an ``input:N`` field.
+    ``NODE_BY_OUTPUT`` is a transient read-only address for an unscoped producer:
+    owner is its unique output tensor and field encodes the underlying node read.
+    It never establishes a persistent identity or a mutation target.
     """
 
     kind: ModelReadKind
@@ -816,6 +820,34 @@ def _read_expectation(
     kind = expectation.kind
     owner = expectation.owner
     field = expectation.field
+    if kind is ModelReadKind.NODE_BY_OUTPUT:
+        if not owner or not isinstance(field, str):
+            raise DataflowOpError("producer-output reads require a tensor and encoded node field")
+        try:
+            address = json.loads(field)
+            if not isinstance(address, list) or len(address) != 2:
+                raise ValueError("expected a node read kind and field")
+            nested_kind = ModelReadKind(address[0])
+            if nested_kind not in {
+                ModelReadKind.NODE,
+                ModelReadKind.ATTRIBUTE,
+                ModelReadKind.OPERAND_SLOT,
+                ModelReadKind.TENSOR_FACT,
+                ModelReadKind.INITIALIZER_CONTENT,
+            }:
+                raise ValueError("only node-owned reads may use a producer-output address")
+            nested = ModelReadExpectation(nested_kind, owner, address[1], expectation.expected)
+        except (TypeError, ValueError) as error:
+            raise DataflowOpError(f"invalid producer-output read address: {error}") from error
+        producers = [index for index, node in enumerate(model.graph.node) if owner in node.output]
+        if len(producers) != 1:
+            raise DataflowOpError(
+                f"producer-output read for {owner!r} requires exactly one producer, "
+                f"found {len(producers)}"
+            )
+        # This mapping exists only during this read. It assigns no graph identity
+        # and does not authorize writes through the output tensor address.
+        return _read_expectation(model, {owner: producers[0]}, nested)
     if kind is ModelReadKind.VALUE_USERS:
         if field is not None:
             raise DataflowOpError("VALUE_USERS reads have no field")

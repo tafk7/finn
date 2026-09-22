@@ -141,7 +141,6 @@ class TwinReplay(ReplaySpace):
     offset = Decision(int, values=(0, 1))
     choice_bindings = (
         *ReplaySpace.choice_bindings,
-        ChoiceBinding("mirror_pe", ("mirror",), "pe"),
         ChoiceBinding("mirror_simd", ("mirror",), "simd"),
         ChoiceBinding("enabled", (), "enabled"),
         ChoiceBinding("offset", (), "offset"),

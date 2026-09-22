@@ -171,13 +171,7 @@ def _configure_batch_interleaved(bound: Any) -> Any:
 
 
 def _configure_replay(bound: Any) -> Any:
-    chosen = bound
-    for declaration, value in (
-        (ActivationReplayKernel.pe, 1),
-        (ActivationReplayKernel.simd, 4),
-    ):
-        chosen = chosen.kernel.assign(declaration, value).root
-    return chosen
+    return bound.kernel.assign(ActivationReplayKernel.simd, 4).root
 
 
 def _mvau_execution_context() -> dict[str, Any]:
@@ -231,7 +225,7 @@ def test_the_replay_operation_conforms(tmp_path: Path) -> None:
             mutate_problem=_widen_the_activation,
         )
     )
-    assert dict(result.committed.recorded()) == {"kernel.pe": 1, "kernel.simd": 4}
+    assert dict(result.committed.recorded()) == {"kernel.simd": 4}
 
 
 def test_the_harness_fails_when_a_promise_is_broken(tmp_path: Path) -> None:

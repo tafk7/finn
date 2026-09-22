@@ -89,6 +89,14 @@ A required value without a stream port remains an operand without a fabricated
 endpoint. Multiple presentations require an explicit stream presentation choice.
 Canonical ordered beats and OneToOne pass rules still apply after lowering.
 
+Family result typing describes the admitted source computation, including valid
+integer and popcount type/precision rules. It does not inherit a particular DSP
+core's encoding limits. ``MatmulInterface.integer_type_profile`` separately checks
+the shared integer-core datatype profile without selecting an implementation or
+claiming full codegen feasibility. Infer consumes both that eligibility and the
+canonical ordinary-INTEGER computation contract; valid source popcount typing
+does not authorize replacing ordinary bipolar MatMul with a popcount operation.
+
 The matrix family exposes activation ``[R,K]``, weights ``[K,N]`` and result
 ``[R,N]``. Kernel owns any transpose to private ``W[N,K]`` and internal child
 qualification. A graph adapter only supplies its own coordinate convention, such
@@ -162,6 +170,13 @@ Factory queries require no persistent node ID and never mutate the graph to add
 one. When necessary, the first successful save establishes identity only for the
 explicitly supplied node as part of the atomic transaction. Failed saving leaves
 both the graph and the adapter's Space pointer unchanged.
+Unidentified upstream nodes are addressed for transient reads through their unique
+produced tensor; saving a consumer does not assign IDs to its producers.
+
+Standalone Replay owns its meaningful SIMD choice. Its processing-element count
+is fixed at 1 by construction, rather than a singleton native choice. Replay
+schema 7 explicitly refuses the removed ``kernel__pe`` key; this adds no standalone
+physical generator support. Matrix kernels retain their real PE decisions.
 
 Reusable matrix profiles, type rules and implementations live under
 ``finn.dataflow.kernels.matmul``. Source decoding, initializer capture, native

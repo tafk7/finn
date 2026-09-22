@@ -140,6 +140,44 @@ def accumulator_type_for_bounds(bounds: DotProductBounds) -> QONNXDataType:
     return resolve_qonnx_datatype_name(f"INT{bounds.minimum_signed_accumulator_bits}")
 
 
+def _popcount_types_supported(
+    profile: MvauComputationProfile,
+    activation: QONNXDataType,
+    weight: QONNXDataType,
+    accumulator: QONNXDataType,
+) -> object:
+    """Operand meaning and count representation, independent of any Dotp generator."""
+    expected = "BINARY" if profile.accumulation is AccumulationMode.XNOR_POPCOUNT else "BIPOLAR"
+    if activation.name != expected or weight.name != expected:
+        return reject(
+            "mvau-popcount-operands",
+            f"{profile.accumulation.value} requires two {expected} operands",
+            values={"activation": activation.name, "weight": weight.name},
+        )
+    # BIPOLAR has an integer range but cannot represent the zero count.
+    if not accumulator.is_integer() or accumulator.name == "BIPOLAR":
+        return reject(
+            "mvau-popcount-accumulator-type",
+            "a popcount accumulator must represent integer counts including zero",
+            values={"accumulator": accumulator.name},
+        )
+    return True
+
+
+def _integer_types_supported(
+    activation: QONNXDataType, weight: QONNXDataType, accumulator: QONNXDataType
+) -> object:
+    """Semantic integer arithmetic, without generator encoding or lane limits."""
+    if not all(datatype.is_integer() for datatype in (activation, weight, accumulator)):
+        return reject("mvau-integer-types", "integer accumulation requires integer element types")
+    if accumulator.name == "BIPOLAR":
+        return reject(
+            "mvau-integer-accumulator-type",
+            "an integer accumulator must represent zero and all bounded intermediate sums",
+        )
+    return True
+
+
 class MatmulInterface(Space):
     """Common matrix facts, independent of implementation selection or folding."""
 
@@ -193,12 +231,17 @@ class MatmulInterface(Space):
         profile: MvauComputationProfile,
     ) -> object:
         if profile.accumulation is not AccumulationMode.INTEGER:
+            supported = _popcount_types_supported(profile, activation, weight, accumulator)
+            if supported is not True:
+                return supported
+            if accumulator.min() > 0 or accumulator.max() < width:
+                return reject(
+                    "mvau-accumulator-precision",
+                    "accumulator cannot contain every count from zero through the matrix width",
+                    values={"minimum": 0, "maximum": width, "accumulator": accumulator.name},
+                )
             return True
-        if not all(datatype.is_integer() for datatype in (activation, weight, accumulator)):
-            return reject(
-                "mvau-integer-types", "integer accumulation requires integer element types"
-            )
-        supported = operand_types_supported(activation, weight, accumulator, accumulator)
+        supported = _integer_types_supported(activation, weight, accumulator)
         if supported is not True:
             return supported
         low: int | float
@@ -237,10 +280,9 @@ class MatmulInterface(Space):
         output: QONNXDataType,
         profile: MvauComputationProfile,
     ) -> object:
-        supported = operand_types_supported(
-            activation, weight, accumulator, accumulator if profile.fuses_activation else output
-        )
-        return operand_widths_supported(activation, weight) if supported is True else supported
+        if profile.accumulation is not AccumulationMode.INTEGER:
+            return _popcount_types_supported(profile, activation, weight, accumulator)
+        return _integer_types_supported(activation, weight, accumulator)
 
     type_support = ConstraintGroup(
         result_requirement, accumulator_precision, element_types_supported
@@ -253,6 +295,41 @@ class MatmulInterface(Space):
     public_result_type = Projection(
         result_type, readiness=result_type_ready, constraints=type_support
     )
+
+    @constraint(
+        activation=activation_type,
+        weight=weight_type,
+        accumulator=accumulator_type,
+        output=output_type,
+    )
+    def primitive_integer_types_supported(
+        *,
+        activation: QONNXDataType,
+        weight: QONNXDataType,
+        accumulator: QONNXDataType,
+        output: QONNXDataType,
+    ) -> object:
+        supported = operand_types_supported(activation, weight, accumulator, output)
+        return operand_widths_supported(activation, weight) if supported is True else supported
+
+    @constraint(profile=computation_profile)
+    def bare_integer_profile(*, profile: MvauComputationProfile) -> object:
+        if profile.accumulation is AccumulationMode.INTEGER and not profile.fuses_activation:
+            return True
+        return reject(
+            "mvau-integer-type-profile", "this type profile requires bare integer products"
+        )
+
+    primitive_integer_support = ConstraintGroup(
+        primitive_integer_types_supported, bare_integer_profile
+    )
+    integer_type_profile = Projection(
+        result_type,
+        readiness=result_type_ready,
+        constraints=(type_support, primitive_integer_support),
+    )
+    # This projection establishes only the shared generator type profile. It
+    # neither selects a Kernel nor establishes target, folding or codegen readiness.
 
     @derived(RectangularDomain, rows=repetitions, width=matrix_width)
     def activation_domain(*, rows: int, width: int) -> RectangularDomain:
@@ -358,7 +435,10 @@ class WeightedDotProductKernel(Kernel, MatmulInterface):
 
     @constraint(profile=computation_profile)
     def computes_a_bare_accumulator(*, profile: MvauComputationProfile) -> object:
-        """These Kernels build a dot product and stop; they fuse no activation.
+        """These Kernels multiply integers and stop; they fuse no activation.
+
+        Equality-count profiles likewise need a different implementation, even
+        when their independently assessed family result type is available.
 
         A Kernel limitation, argued from the Kernel's own structure rather than
         from the mathematics: every alternative below this class declares a
@@ -373,16 +453,25 @@ class WeightedDotProductKernel(Kernel, MatmulInterface):
         inapplicable Kernel instead of an unreadable node.
         """
 
-        if not profile.fuses_activation:
-            return True
-        return reject(
-            "mvau-kernel-fuses-no-activation",
-            "this Kernel emits its accumulator directly and has no stage for a fused "
-            f"threshold; this node computes {profile.name}",
-            values={"computation_profile": profile.name},
-        )
+        if profile.fuses_activation:
+            return reject(
+                "mvau-kernel-fuses-no-activation",
+                "this Kernel emits its accumulator directly and has no stage for a fused "
+                f"threshold; this node computes {profile.name}",
+                values={"computation_profile": profile.name},
+            )
+        if profile.accumulation is not AccumulationMode.INTEGER:
+            return reject(
+                "mvau-kernel-accumulation-unsupported",
+                "this Kernel computes integer products, not equality counts",
+                values={"computation_profile": profile.name},
+            )
+        return True
 
-    logical_support = ConstraintGroup(computes_a_bare_accumulator)
+    logical_support = ConstraintGroup(
+        computes_a_bare_accumulator,
+        *MatmulInterface.primitive_integer_support.constraints,
+    )
 
 
 #: Every Input the shared base consumes, for a caller assembling bindings.

@@ -3,8 +3,8 @@
 
 """The source schema: what an operation declares about the node it reads.
 
-An operation is the root Space of its own design space, so the graph facts it
-depends on are its ``Problem`` members.  Each declaration here *is* one -- an
+A DataflowSpace is the source-aware root of one immutable design point; graph
+facts become its ``Problem`` members. Each declaration here *is* one -- an
 ``OpInput`` is a ``Problem[SourceOperand]`` that also knows its ONNX index
 -- so nothing has to translate between a schema and a design space, and the
 generic compiler needs no new concept to see them.

@@ -35,17 +35,15 @@ class ReplaySpace(DataflowSpace):
 
     family: ClassVar[str] = "finn.dataflow.activation_replay"
     family_version: ClassVar[str] = "2"
-    schema_version: ClassVar[int] = 6
+    schema_version: ClassVar[int] = 7
+    retired_choice_keys: ClassVar[frozenset[str]] = frozenset({"kernel__pe"})
 
     implementation_binding = ImplementationBinding(("kernel",))
     operand_bindings = (
         OperandBinding("activation", "activation", 0, adapter=CoordinateMapping.FLATTEN_LEADING),
         OperandBinding("expanded", "result", 0, output=True, adapter=CoordinateMapping.IDENTITY),
     )
-    choice_bindings = (
-        ChoiceBinding("kernel__pe", ("kernel",), "pe"),
-        ChoiceBinding("kernel__simd", ("kernel",), "simd"),
-    )
+    choice_bindings = (ChoiceBinding("kernel__simd", ("kernel",), "simd"),)
 
     activation = OpInput(index=0, operand="X", correspondence=CoordinateMapping.FLATTEN_LEADING)
     expanded = OpOutput(index=0, operand="XR", correspondence=CoordinateMapping.IDENTITY)
@@ -121,12 +119,8 @@ class ReplaySpace(DataflowSpace):
         activation_type=activation.datatype,
     )
 
-    # ``verify_node`` is deliberately *not* overridden.  This class used to
-    # carry a copy that called ``assess`` directly, which requires an attached
-    # occurrence -- so verification crashed on the path FINN actually takes,
-    # where ``verify_nodes(model)`` holds an ordinary unbound wrapper.  The
-    # generic form on DataflowOp goes through ``assess_source()``, which answers
-    # bound or not, and there is no reason for an operation to have its own.
+    # QONNX verification belongs to the adapter and consumes this initialized
+    # Space's source assessment; the family needs no separate verification hook.
 
     def expected_outputs(self) -> dict[str, tuple[tuple[int, ...] | None, Any]]:
         use = self

@@ -1,12 +1,11 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""One segment, one Kernel, two boundaries.
+"""Standalone activation replay with one meaningful SIMD choice.
 
-The smallest Kernel that is still a Kernel.  Its value here is negative: it has
-no SubspaceChoice, so nothing in the operation layer may assume a selector
-exists; it has one node, so nothing may assume an edge; and it has no weight
-path, so nothing may assume a matrix.
+The logical wrapper exposes one ReplayBuffer child without an implementation
+selector. Its matrix height denotes the requested copies directly, so the child
+receives one processing element as a semantic constant.
 """
 
 from __future__ import annotations
@@ -29,23 +28,8 @@ from finn.dataflow.space.declarations import (
     Readiness,
     derived,
     divisors_of,
-    domain,
-    reject,
 )
 from finn.dataflow.model.logical.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
-
-
-def _standalone_pe(*, candidate: object) -> object:
-    if type(candidate) is int and candidate == 1:
-        return True
-    return reject(
-        "activation-replay-pe-not-one",
-        "standalone activation replay requires PE=1",
-    )
-
-
-def _standalone_pe_candidates() -> tuple[object, ...]:
-    return (1,)
 
 
 def _replay_export(public: PublicOperand, logical: LogicalResult) -> OperandExport:
@@ -107,14 +91,11 @@ class ActivationReplayKernel(Kernel):
         ),
     )
 
-    # The standalone operation's matrix height is the requested replay count,
-    # not an MVAU output height to fold across processing elements.  Keeping
-    # this Decision in the persisted shape preserves the existing path while
-    # making every accepted point spell that contract exactly.
-    pe = Decision(
-        int,
-        domain=domain(accepts=_standalone_pe, candidates=_standalone_pe_candidates),
-    )
+    @derived(int)
+    def processing_elements() -> int:
+        """Standalone matrix height already denotes the number of requested copies."""
+        return 1
+
     simd = Decision(int, domain=divisors_of(matrix_width))
 
     replay = KernelChoice(
@@ -124,7 +105,7 @@ class ActivationReplayKernel(Kernel):
             matrix_width=matrix_width,
             matrix_height=matrix_height,
             activation_type=activation_type,
-            pe=pe,
+            pe=processing_elements,
             simd=simd,
         ),
     )

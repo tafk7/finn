@@ -102,6 +102,35 @@ def test_unmatched_dynamic_weights_are_left_unchanged():
     assert model.model.SerializeToString(deterministic=True) == before
 
 
+def test_ordinary_bipolar_matmul_does_not_become_popcount():
+    model, weights = _model()
+    model.set_tensor_datatype("x", DataType["BIPOLAR"])
+    model.set_tensor_datatype("w", DataType["BIPOLAR"])
+    model.set_initializer("w", np.where(weights < 0, -1.0, 1.0).astype(np.float32))
+    before = model.model.SerializeToString(deterministic=True)
+    transform = InferDataflowMatMul()
+    _, changed = transform.apply(model)
+    assert not changed
+    result = transform.admissions[0].result_type
+    assert isinstance(result, Absent)
+    assert any(item.code == "infer-matmul-computation-profile" for item in result.findings)
+    assert model.model.SerializeToString(deterministic=True) == before
+
+
+def test_source_valid_unsigned_weights_still_need_declared_integer_type_eligibility():
+    model, weights = _model()
+    model.set_tensor_datatype("w", DataType["UINT4"])
+    model.set_initializer("w", np.abs(weights))
+    before = model.model.SerializeToString(deterministic=True)
+    transform = InferDataflowMatMul()
+    _, changed = transform.apply(model)
+    assert not changed
+    result = transform.admissions[0].result_type
+    assert isinstance(result, Absent)
+    assert any(item.code == "dotp-axi-numeric-types-unsupported" for item in result.findings)
+    assert model.model.SerializeToString(deterministic=True) == before
+
+
 def test_inferred_native_checkpoint_commits_choices_and_prepares_physical_use(tmp_path):
     @dataclass(frozen=True)
     class Build:

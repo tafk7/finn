@@ -3,17 +3,11 @@
 
 """MVAU as one source node over a closed set of Kernels.
 
-The operation is thin on purpose.  Everything below it -- the folding, the
-Regions, the topology, the weight path -- belongs to the Kernels and the
-Kernels, and everything above it belongs to the graph.  What lives here is the
-part only this operation can say: which Kernels are its alternatives, how a
-matrix-vector node's tensors become the facts they read, and where each of
-those tensors ends up in whichever Network is selected.
-
-The operation *is* the root Space.  Its Problem members are its declared
-tensors and attributes, lowered from the source schema, and its ``kernel``
-SubspaceChoice is an ordinary structural choice on the same class.  There is no
-separate source Space and no wrapper between the node and the point.
+MvauSpace declares frozen graph facts, public operand bindings and sparse choices
+using the ordinary Space machinery. Kernels own folding, Regions, topology and
+internal value maps. The small MvauDataflowOp adapter supplies model-aware QONNX
+construction and execution, and owns a separate immutable ``space`` occurrence.
+No live model is retained by that Space or by any Kernel evaluator.
 """
 
 from __future__ import annotations

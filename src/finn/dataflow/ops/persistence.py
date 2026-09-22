@@ -380,10 +380,11 @@ def source_read_set(
     *,
     expected_attributes: Mapping[str, bytes | None],
     include_output_annotations: bool = True,
+    node_output_address: str | None = None,
 ) -> ModelReadSet:
     """Capture only source facts and write targets used by a source plan."""
 
-    from finn.dataflow.ops.base import source_declarations  # noqa: PLC0415
+    from finn.dataflow.ops.space import DataflowOpError, source_declarations  # noqa: PLC0415
 
     state = operation._bound_node()
     node = state.materialize()
@@ -497,6 +498,28 @@ def source_read_set(
                 ),
             )
         )
+    if not state.scope_id:
+        output_address = node_output_address or next((name for name in node.output if name), None)
+        if output_address is None or output_address not in node.output:
+            raise DataflowOpError("an unidentified source read needs a produced tensor address")
+        node_kinds = {
+            ModelReadKind.NODE,
+            ModelReadKind.ATTRIBUTE,
+            ModelReadKind.OPERAND_SLOT,
+            ModelReadKind.TENSOR_FACT,
+            ModelReadKind.INITIALIZER_CONTENT,
+        }
+        expectations = [
+            ModelReadExpectation(
+                ModelReadKind.NODE_BY_OUTPUT,
+                output_address,
+                json.dumps([item.kind.value, item.field], separators=(",", ":")),
+                item.expected,
+            )
+            if item.owner == "" and item.kind in node_kinds
+            else item
+            for item in expectations
+        ]
     return merge_model_read_sets(
         ModelReadSet(tuple(expectations)),
         *(

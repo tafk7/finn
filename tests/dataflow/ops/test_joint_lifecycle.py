@@ -178,18 +178,16 @@ def test_native_reload_to_accepted_mapping_and_portable_artifact(
 
     saved = ModelWrapper(str(reload_path))
     attributes = read_attributes(saved.graph.node[0])
-    assert attributes["kernel__pe"] == NativeAttribute("i", 1)
     assert attributes["kernel__simd"] == NativeAttribute("i", 4)
     assert attributes[SCHEMA_VERSION_ATTRIBUTE] == NativeAttribute("i", ReplaySpace.schema_version)
     assert set(attributes) == {
         "neuron_folds",
         SCOPE_ID_ATTRIBUTE,
         SCHEMA_VERSION_ATTRIBUTE,
-        "kernel__pe",
         "kernel__simd",
     }
     assert "dataflow_state" not in attributes
-    assert dict(result.committed.recorded()) == {"kernel.pe": 1, "kernel.simd": 4}
+    assert dict(result.committed.recorded()) == {"kernel.simd": 4}
     assert result.committed.problem_fingerprint == result.restored.problem_fingerprint
 
     restored_model = saved.transform(InferShapes())
@@ -245,7 +243,7 @@ def test_native_reload_to_accepted_mapping_and_portable_artifact(
     assert isinstance(spec.abi.entry_point, FixedModuleName)
     assert spec.abi.entry_point.value == "replay_buffer"
     persisted = {item.path for item in occurrence_persistable(restored)}
-    assert {"kernel.pe", "kernel.simd"} <= persisted
+    assert {"kernel.simd"} <= persisted
 
     committed_spec = _replay_spec(result.committed)
     assert committed_spec == spec

@@ -34,7 +34,7 @@ from qonnx.custom_op.general.multithreshold import (  # type: ignore[import-not-
 )
 
 from finn.analysis.verify_custom_nodes import verify_nodes
-from finn.dataflow._engine import Decided
+from finn.dataflow._engine import Absent, Decided, Unresolved
 from finn.dataflow.analysis.integer_dot import (
     DatatypeWeightPremise,
     IntegerRange,
@@ -51,6 +51,7 @@ from finn.dataflow.kernels.matmul.base import (
     AccumulationMode,
     ActivationMode,
     MvauComputationProfile,
+    MatmulInterface,
 )
 from finn.dataflow.ops.mvau.computation import execute_mvau
 from finn.dataflow.kernels.matmul.base import WeightedDotProductKernel
@@ -329,6 +330,125 @@ def test_a_thresholded_node_derives_its_output_datatype_from_the_source_attribut
     assert shape == (REPETITIONS, MATRIX_HEIGHT)
     assert datatype == DataType["UINT4"]
     assert operation.reconciliation() == ()
+
+
+@pytest.mark.parametrize("operand_type,binary_xnor", [("BINARY", True), ("BIPOLAR", False)])
+@pytest.mark.parametrize("fused", [False, True])
+def test_popcount_source_typing_survives_inference_without_admitting_a_kernel(
+    operand_type: str,
+    binary_xnor: bool,
+    fused: bool,
+) -> None:
+    output = "UINT4" if fused else "INT32"
+    model = _model(
+        no_activation=not fused,
+        binary_xnor=binary_xnor,
+        activation_type=operand_type,
+        weight_type=operand_type,
+        weights=np.ones((MATRIX_WIDTH, MATRIX_HEIGHT), dtype=np.float32),
+        output_type=output,
+        thresholds=np.zeros((MATRIX_HEIGHT, 1), dtype=np.float32) if fused else None,
+    )
+    operation = _bound(model)
+    assert _accepts(operation)
+    assert operation.operand_type("result") == Decided(DataType[output])
+    wrapper = _unbound(model, "mvau0")
+    wrapper.infer_node_datatype(model)
+    assert model.get_tensor_datatype("output") == DataType[output]
+    chosen = _configure_mvau_point(operation)
+    assert isinstance(chosen.dataflow.accepted_answer, Absent)
+    expected = (
+        "mvau-kernel-fuses-no-activation" if fused else "mvau-kernel-accumulation-unsupported"
+    )
+    assert expected in _findings(chosen.dataflow.accepted_answer)
+    assert isinstance(chosen.physical.accepted_answer, Absent)
+
+
+@pytest.mark.parametrize("operand_type,binary_xnor", [("BINARY", True), ("BIPOLAR", False)])
+@pytest.mark.parametrize("accumulator", ["INT4", "UINT3", "FLOAT32"])
+def test_popcount_precision_rejects_unrepresentable_counts_and_clears_stale_annotations(
+    operand_type: str,
+    binary_xnor: bool,
+    accumulator: str,
+) -> None:
+    model = _model(
+        binary_xnor=binary_xnor,
+        activation_type=operand_type,
+        weight_type=operand_type,
+        output_type=accumulator,
+        weights=np.ones((MATRIX_WIDTH, MATRIX_HEIGHT), dtype=np.float32),
+    )
+    operation = _bound(model)
+    answer = operation.operand_type("result")
+    assert isinstance(answer, Absent)
+    expected = (
+        "mvau-popcount-accumulator-type"
+        if accumulator == "FLOAT32"
+        else "mvau-accumulator-precision"
+    )
+    assert expected in _findings(answer)
+    model.set_tensor_datatype("output", DataType["INT32"])
+    _unbound(model, "mvau0").infer_node_datatype(model)
+    assert not any(
+        item.tensor_name == "output" and entry.key == "finn_datatype"
+        for item in model.graph.quantization_annotation
+        for entry in item.quant_parameter_tensor_names
+    )
+
+
+@pytest.mark.parametrize(
+    "activation,weight", [("INT8", "BINARY"), ("BINARY", "INT8"), ("BIPOLAR", "BIPOLAR")]
+)
+def test_xnor_profile_rejects_nonbinary_operand_semantics(activation: str, weight: str) -> None:
+    model = _model(
+        binary_xnor=True,
+        activation_type=activation,
+        weight_type=weight,
+        weights=np.ones((MATRIX_WIDTH, MATRIX_HEIGHT), dtype=np.float32),
+    )
+    answer = _bound(model).operand_type("result")
+    assert isinstance(answer, Absent)
+    assert "mvau-popcount-operands" in _findings(answer)
+
+
+@pytest.mark.parametrize(
+    "activation,weight,eligible",
+    [
+        ("INT4", "UINT4", False),
+        ("BINARY", "INT4", False),
+        ("INT4", "BINARY", False),
+        ("TERNARY", "INT4", False),
+        ("INT1", "INT4", False),
+        ("INT4", "INT4", True),
+    ],
+)
+def test_semantic_integer_type_inference_is_separate_from_primitive_type_eligibility(
+    activation: str,
+    weight: str,
+    eligible: bool,
+) -> None:
+    model = _model(
+        activation_type=activation,
+        weight_type=weight,
+        weights=np.ones((MATRIX_WIDTH, MATRIX_HEIGHT), dtype=np.float32),
+    )
+    wrapper = _unbound(model, "mvau0")
+    operation = wrapper.space  # no target facts and no implementation/folding selection
+    assert _accepts(operation)
+    assert isinstance(operation.resolve_implementation(), Unresolved)
+    assert operation.operand_type("result") == Decided(DataType["INT32"])
+    family = operation.interface_binding.resolve(operation)
+    assert isinstance(family, Decided)
+    profile = family.value.assess_view(MatmulInterface.integer_type_profile).accepted_answer
+    assert isinstance(profile, Decided) is eligible
+    if not eligible:
+        assert isinstance(profile, Absent)
+    wrapper.infer_node_datatype(model)
+    assert model.get_tensor_datatype("output") == DataType["INT32"]
+    if not eligible:
+        chosen = _configure_mvau_point(_bound(model))
+        assert isinstance(chosen.dataflow.accepted_answer, Absent)
+        assert isinstance(chosen.physical.accepted_answer, Absent)
 
 
 # -- the Kernels' applicability -------------------------------------------------

@@ -48,7 +48,7 @@ def producer_type_facts(
     or a carrier-type fallback. Recursion is scoped to this synchronous query.
     """
 
-    from finn.dataflow.ops.base import DATAFLOW_DOMAIN, DataflowOp  # noqa: PLC0415
+    from finn.dataflow.ops.base import DATAFLOW_DOMAIN, DataflowOp, DataflowOpError  # noqa: PLC0415
     from finn.dataflow.ops.space import source_declarations  # noqa: PLC0415
     from finn.dataflow.ops.schema import OpOutput  # noqa: PLC0415
 
@@ -56,9 +56,9 @@ def producer_type_facts(
     if not any(node.domain == DATAFLOW_DOMAIN for node in producers):
         return None, None
     if len(producers) != 1:
-        return _unavailable(
-            "producer-type-ambiguous", f"graph tensor {tensor!r} has multiple producers"
-        ), None
+        raise DataflowOpError(
+            f"graph tensor {tensor!r} requires exactly one producer, found {len(producers)}"
+        )
     node = producers[0]
     active = _active_types.get()
     key = (id(model), tensor)
@@ -96,7 +96,10 @@ def producer_type_facts(
         # initializer contents. Include their frozen reads recursively, without
         # promoting cached producer output annotations into dependencies.
         return answer, source_read_set(
-            current, expected_attributes={}, include_output_annotations=False
+            current,
+            expected_attributes={},
+            include_output_annotations=False,
+            node_output_address=tensor,
         )
     finally:
         _active_types.reset(token)

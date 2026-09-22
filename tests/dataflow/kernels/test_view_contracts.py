@@ -784,9 +784,7 @@ def _configured_replay_type(operation_type: type[ReplaySpace]) -> ReplaySpace:
     operation = make_space(model, space_type=operation_type, build=Build())
     return cast(
         ReplaySpace,
-        operation.kernel.assign(ActivationReplayKernel.pe, 1)
-        .assign(ActivationReplayKernel.simd, 2)
-        .root,
+        operation.kernel.assign(ActivationReplayKernel.simd, 2).root,
     )
 
 

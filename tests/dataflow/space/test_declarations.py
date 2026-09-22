@@ -263,7 +263,7 @@ def test_every_layer_names_its_own_specialization() -> None:
         "Kernel",
         "LogicalView",
         "PhysicalView",
-        "RelationView",
+        "PublicOperandDeclaration",
         "ModuleParameter",
         "RegionDeclaration",
         "kernel_physical",

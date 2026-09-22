@@ -89,18 +89,26 @@ class MatrixHarness(MatrixFacts):
     )
 
 
-def matrix_point(accumulator="INT32", output=None, bounds=None):
+def matrix_point(
+    accumulator="INT32",
+    output=None,
+    bounds=None,
+    *,
+    activation="INT8",
+    weight="INT8",
+    profile=None,
+    width=8,
+):
     facts = {
         MatrixHarness.repetitions: 2,
-        MatrixHarness.matrix_width: 8,
+        MatrixHarness.matrix_width: width,
         MatrixHarness.matrix_height: 4,
-        MatrixHarness.activation_type: DataType["INT8"],
-        MatrixHarness.weight_type: DataType["INT8"],
+        MatrixHarness.activation_type: DataType[activation],
+        MatrixHarness.weight_type: DataType[weight],
         MatrixHarness.accumulator_type: DataType[accumulator],
         MatrixHarness.output_type: DataType[output or accumulator],
-        MatrixHarness.computation_profile: MvauComputationProfile(
-            AccumulationMode.INTEGER, ActivationMode.NONE
-        ),
+        MatrixHarness.computation_profile: profile
+        or MvauComputationProfile(AccumulationMode.INTEGER, ActivationMode.NONE),
         MatrixHarness.initializer_present: True,
     }
     if bounds is not None:
@@ -113,8 +121,50 @@ def test_common_family_type_and_domains_without_folding_target_or_candidate():
     for occurrence in (root.family, root.kernel):
         assert operand_type(occurrence, "result") == Decided(DataType["INT32"])
         assert operand_domain(occurrence, "weights") == Decided(RectangularDomain((8, 4)))
+    assert root.family.assess_view(MatmulInterface.integer_type_profile).accepted_answer == Decided(
+        DataType["INT32"]
+    )
     assert isinstance(root.kernel.assess_view("logical").accepted_answer, Unresolved)
     assert not isinstance(root.kernel.assess_view("physical").accepted_answer, Decided)
+
+
+@pytest.mark.parametrize(
+    "mode,expected",
+    [
+        (AccumulationMode.XNOR_POPCOUNT, "BINARY"),
+        (AccumulationMode.BIPOLAR_POPCOUNT, "BIPOLAR"),
+    ],
+)
+def test_popcount_family_owns_operand_semantics_and_unsigned_count_precision(mode, expected):
+    profile = MvauComputationProfile(mode, ActivationMode.NONE)
+    valid = matrix_point(accumulator="UINT4", activation=expected, weight=expected, profile=profile)
+    assert operand_type(valid.family, "result") == Decided(DataType["UINT4"])
+    assert isinstance(
+        valid.family.assess_view(MatmulInterface.integer_type_profile).accepted_answer, Absent
+    )
+    for activation, weight in (("INT8", expected), (expected, "INT8")):
+        invalid = matrix_point(activation=activation, weight=weight, profile=profile)
+        answer = operand_type(invalid.family, "result")
+        assert isinstance(answer, Absent)
+        assert "mvau-popcount-operands" in {finding.code for finding in answer.findings}
+    missing_zero = matrix_point(
+        accumulator="BIPOLAR",
+        activation=expected,
+        weight=expected,
+        profile=profile,
+        width=1,
+    )
+    answer = operand_type(missing_zero.family, "result")
+    assert isinstance(answer, Absent)
+    assert "mvau-popcount-accumulator-type" in {finding.code for finding in answer.findings}
+    one_bit_count = matrix_point(
+        accumulator="BINARY",
+        activation=expected,
+        weight=expected,
+        profile=profile,
+        width=1,
+    )
+    assert operand_type(one_bit_count.family, "result") == Decided(DataType["BINARY"])
 
 
 def test_known_result_type_does_not_bypass_output_requirement_or_precision():
@@ -405,4 +455,13 @@ def test_replay_type_and_result_domain_do_not_require_simd():
     ).replay
     assert operand_type(replay, "result") == Decided(DataType["INT4"])
     assert operand_domain(replay, "result") == Decided(RectangularDomain((6, 8)))
+    assert isinstance(replay.logical.accepted_answer, Unresolved)
+    chosen = replay.assign(ActivationReplayKernel.simd, 2)
+    logical = chosen.logical.accepted_answer
+    assert isinstance(logical, Decided), logical
+    assert chosen.answer(ActivationReplayKernel.processing_elements) == Decided(1)
+    assert logical.value.network.node("replay").region.output_interface(
+        "activation_out"
+    ).port.operand.shape == (6, 8)
+    assert isinstance(chosen.physical.accepted_answer, Absent)
     assert isinstance(replay.logical.accepted_answer, Unresolved)
