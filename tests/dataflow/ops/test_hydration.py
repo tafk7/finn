@@ -9,6 +9,7 @@ import importlib.util
 from dataclasses import replace
 from onnx import helper
 from qonnx.core.datatype import DataType
+from qonnx.core.modelwrapper import ModelWrapper
 
 from dataflow.ops.test_dataflow_op import Build, _mvau_model, _replay_model
 from dataflow.ops.mvau.test_source_semantics import (
@@ -21,6 +22,7 @@ from finn.dataflow.ops.base import DataflowOp, DataflowOpError
 from finn.dataflow.ops.binding import ImplementationBinding, ChoiceBinding
 from finn.dataflow.space.declarations import (
     Decision,
+    Input,
     Subspace,
     Space,
     ConstraintGroup,
@@ -33,6 +35,7 @@ from finn.dataflow.space.declarations import (
 from finn.dataflow.kernels.replay import ActivationReplayKernel
 from finn.dataflow.ops.mvau.op import MvauSpace
 from finn.dataflow.ops.native import (
+    choice_schema,
     serialize_choices,
     SCHEMA_VERSION_ATTRIBUTE,
     NativeAttribute,
@@ -40,6 +43,8 @@ from finn.dataflow.ops.native import (
 from finn.dataflow.ops.replay.op import ReplaySpace
 from finn.dataflow.ops.reconstruction import build_space
 from finn.dataflow.ops.source import SourceError
+from finn.dataflow.model.logical.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
+from dataflow.ops.factory import make_op
 
 
 def test_partial_mvau_type_is_common_family_contract_without_target_or_selection():
@@ -168,6 +173,60 @@ def test_repeated_definition_choices_and_false_zero_remain_distinct():
     assert serialize_choices(restored) == encoded
     assert restored.answer(TwinReplay.enabled).value is False
     assert restored.answer(TwinReplay.offset).value == 0
+
+
+class ReplayEnclosure(Space):
+    repetitions = Input(int)
+    matrix_width = Input(int)
+    matrix_height = Input(int)
+    activation_type = Input(QONNX_DATATYPE_VALUE_SEMANTICS)
+    renamed = Subspace(
+        ActivationReplayKernel,
+        repetitions=repetitions,
+        matrix_width=matrix_width,
+        matrix_height=matrix_height,
+        activation_type=activation_type,
+    )
+
+
+class RenestedReplay(ReplaySpace):
+    kernel = Subspace(
+        ReplayEnclosure,
+        repetitions=ReplaySpace.repetitions,
+        matrix_width=ReplaySpace.matrix_width,
+        matrix_height=ReplaySpace.matrix_height,
+        activation_type=ReplaySpace.activation.datatype,
+    )
+    implementation_binding = ImplementationBinding(("kernel", "renamed"))
+    choice_bindings = (ChoiceBinding("kernel__simd", ("kernel", "renamed"), "simd"),)
+
+
+def test_native_semantic_choice_survives_private_implementation_renesting(tmp_path):
+    model = _replay_model()
+    original = make_op(model)
+    selected = original.space.commit_choices({"kernel__simd": 2})
+    original.save_space(selected)
+    encoded = serialize_choices(original.space)
+    original_path = choice_schema(original.space)[0].choice.reference.path
+
+    renamed = make_op(model, space_type=RenestedReplay)
+    assert renamed.space.family == original.space.family
+    assert renamed.space.schema_version == original.space.schema_version
+    assert serialize_choices(renamed.space) == encoded == {"kernel__simd": NativeAttribute("i", 2)}
+    renamed_path = choice_schema(renamed.space)[0].choice.reference.path
+    assert renamed_path != original_path
+    assert renamed.space.require_implementation().answer(ActivationReplayKernel.simd) == Decided(2)
+    renamed.save_space(selected)
+
+    path = tmp_path / "renested-replay.onnx"
+    model.save(str(path))
+    restored_model = ModelWrapper(str(path))
+    restored = make_op(restored_model, space_type=RenestedReplay)
+    assert serialize_choices(restored.space) == encoded
+    assert choice_schema(restored.space)[0].choice.reference.path == renamed_path
+    assert restored.space.require_implementation().answer(ActivationReplayKernel.simd) == Decided(2)
+    assert restored.space.operand_type("result") == original.space.operand_type("result")
+    assert restored.space.operand_domain("result") == original.space.operand_domain("result")
 
 
 def test_fixed_conditional_target_preserves_unresolved_and_inactive_answers():

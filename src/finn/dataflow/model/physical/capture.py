@@ -149,7 +149,7 @@ def _physical_dependency_snapshot(implementation: Space) -> tuple[CapturedDepend
 
 
 def capture_assessment_dependencies(
-    implementation: Space, assessment: str | Projection[Any] | ConstraintGroup
+    implementation: Space, assessment: str | Projection[Any] | ConstraintGroup | DependencyRef
 ) -> tuple[CapturedDependency, ...]:
     """Capture the actual scoped dependency closure of one existing assessment.
 
@@ -159,8 +159,11 @@ def capture_assessment_dependencies(
     """
     from finn.dataflow.space.compiler import _Ref, answer_for  # noqa: PLC0415
 
+    reference_subject = assessment if isinstance(assessment, DependencyRef) else None
     name = (
-        assessment
+        ""
+        if reference_subject is not None
+        else assessment
         if isinstance(assessment, str)
         else next(
             name
@@ -169,7 +172,7 @@ def capture_assessment_dependencies(
         )
     )
     declaration = getattr(type(implementation), name, None)
-    if not isinstance(declaration, (Projection, ConstraintGroup)):
+    if reference_subject is None and not isinstance(declaration, (Projection, ConstraintGroup)):
         projected: ProjectionAssessment[Any] = implementation.assess_view(name)
         return (
             CapturedDependency(
@@ -253,7 +256,10 @@ def capture_assessment_dependencies(
             cast(Any, runtime.engine.evaluate_constraints(runtime.point, (path,)).answers[path]),
         )
 
-    if isinstance(declaration, ConstraintGroup):
+    if reference_subject is not None:
+        visit(reference_subject)
+        constraint_paths = set()
+    elif isinstance(declaration, ConstraintGroup):
         constraint_paths = set(implementation.assess(declaration).answers)
     else:
         compiled = runtime.compiled.projection(name)
