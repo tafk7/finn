@@ -4,6 +4,7 @@
 """Read-only producer addresses let a consumer save before upstream nodes do."""
 
 from copy import deepcopy
+import json
 
 import pytest
 from onnx import TensorProto, helper
@@ -159,6 +160,13 @@ class FacetTypeOp(DataflowOp):
     space_type = FacetTypeSpace
 
 
+def _read_fields(reads):
+    return {
+        json.loads(item.field)[1] if item.kind is ModelReadKind.NODE_BY_OUTPUT else item.field
+        for item in reads.expectations
+    }
+
+
 def _set_native(node, name, value):
     kept = [item for item in node.attribute if item.name != name]
     del node.attribute[:]
@@ -217,7 +225,7 @@ def test_direct_type_read_set_excludes_unrelated_native_choice(monkeypatch, scop
     )
     answer, reads = producer_type_facts(model, "middle")
     assert answer == Decided(DataType["INT16"])
-    assert not any(item.field == "diagnostic" for item in reads.expectations)
+    assert "diagnostic" not in _read_fields(reads)
     _set_native(model.graph.node[0], "diagnostic", 1)
     validate_model_read_set(model, reads)
 
@@ -258,7 +266,7 @@ def test_unresolved_and_inactive_when_routes_capture_gate_without_child_choices(
     model = _type_model(monkeypatch, WhenTypeOp, scoped, {"enabled": enabled})
     answer, reads = producer_type_facts(model, "middle")
     assert isinstance(answer, Unresolved if enabled is None else Absent)
-    assert not any(item.field == "precision" for item in reads.expectations)
+    assert "precision" not in _read_fields(reads)
     _set_native(model.graph.node[0], "enabled", 1)
     with pytest.raises(DataflowOpError):
         validate_model_read_set(model, reads)
@@ -269,10 +277,7 @@ def test_branch_when_route_stops_before_selector_and_inactive_alternatives(monke
     model = _type_model(monkeypatch, BranchWhenTypeOp, False, {"enabled": enabled})
     answer, reads = producer_type_facts(model, "middle")
     assert isinstance(answer, Unresolved if enabled is None else Absent)
-    assert not any(
-        item.field in {"implementation", "precision_a", "precision_b"}
-        for item in reads.expectations
-    )
+    assert not (_read_fields(reads) & {"implementation", "precision_a", "precision_b"})
     _set_native(model.graph.node[0], "enabled", 1)
     with pytest.raises(DataflowOpError):
         validate_model_read_set(model, reads)
