@@ -9,7 +9,7 @@ from typing import cast
 import pytest
 
 import finn.dataflow.model.logical.view_authoring as design_module
-from finn.dataflow._engine import Absent, Decided
+from finn.kernels._engine import Absent, Decided
 from finn.dataflow.model.children import KernelChoice
 from finn.dataflow.model.kernel import Kernel
 from finn.dataflow.model.logical.authoring import (
@@ -34,7 +34,7 @@ from finn.dataflow.model.logical import (
     unpresented_positions,
     validate_network,
 )
-from finn.dataflow.space import (
+from finn.kernels.space import (
     ConstraintGroup,
     Input,
     Problem,
@@ -45,7 +45,7 @@ from finn.dataflow.space import (
     constraint,
 )
 from finn.dataflow.model.logical.semantics import DATAFLOW_LOGICAL_RESULT_SEMANTICS
-from finn.dataflow.space.declarations import Derived, semantics_for
+from finn.kernels.space.declarations import Derived, semantics_for
 
 from dataflow.kernels.test_module_build_spec import ModuleKernel, UnavailableModule, _region
 

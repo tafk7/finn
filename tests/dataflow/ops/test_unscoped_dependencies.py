@@ -21,14 +21,14 @@ from dataflow.ops.test_partial_type_graph import (
     _chain,
 )
 from finn.custom_op.dataflow import custom_op
-from finn.dataflow._engine import Absent, Decided, Unresolved
+from finn.kernels._engine import Absent, Decided, Unresolved
 from finn.dataflow.ops.base import DATAFLOW_DOMAIN, DataflowOp, DataflowOpError
 from finn.dataflow.ops.binding import ChoiceBinding
 from finn.dataflow.ops.model_effects import ModelReadKind, validate_model_read_set
 from finn.dataflow.ops.native import SCHEMA_VERSION_ATTRIBUTE, SCOPE_ID_ATTRIBUTE
 from finn.dataflow.ops.persistence import apply_graph_effects
 from finn.dataflow.ops.type_context import producer_type_facts
-from finn.dataflow.space.declarations import (
+from finn.kernels.space.declarations import (
     ConstraintGroup,
     Decision,
     Projection,

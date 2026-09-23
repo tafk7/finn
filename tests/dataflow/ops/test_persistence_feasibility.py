@@ -12,7 +12,7 @@ import pytest
 from dataflow.ops.test_dataflow_op import Build, _mvau_model, _unbound
 from qonnx.core.modelwrapper import ModelWrapper  # type: ignore[import-not-found]
 
-from finn.dataflow._engine import (
+from finn.kernels._engine import (
     Absent,
     ConstraintAssessment,
     Decided,
@@ -24,7 +24,7 @@ from finn.dataflow._engine import (
 )
 from finn.dataflow.ops.base import DataflowOpError
 from finn.dataflow.ops.persistence import CommitmentStage, check_commitment
-from finn.dataflow.space.occurrence import ProjectionAssessment
+from finn.kernels.space.occurrence import ProjectionAssessment
 
 
 def _blocker(path: QualifiedPath) -> Finding:

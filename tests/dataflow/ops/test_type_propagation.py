@@ -8,7 +8,7 @@ from onnx import TensorProto, helper
 from qonnx.core.datatype import DataType
 
 from dataflow.ops.test_dataflow_op import _mvau_model
-from finn.dataflow._engine import Decided
+from finn.kernels._engine import Decided
 from finn.dataflow.ops.base import DATAFLOW_DOMAIN, DataflowOpError
 from finn.dataflow.ops.native import SCHEMA_VERSION_ATTRIBUTE
 from finn.dataflow.ops.persistence import apply_graph_effects, assign_dataflow_scope_ids

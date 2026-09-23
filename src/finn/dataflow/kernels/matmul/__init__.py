@@ -1,7 +1,12 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Lightweight facade for reusable matrix-multiplication Kernels."""
+"""Matrix model adapters, shared target values and assembly template resolution.
+
+Physical dotp and MVAU construction are owned by ``finn.kernels``. This facade
+serves the retained logical matrix models; its target and template exports refer
+to the same objects used by the physical library.
+"""
 
 from importlib import import_module
 from typing import TYPE_CHECKING
@@ -36,7 +41,7 @@ _LAZY_EXPORTS.update(
         ),
         "DotProductKernel": ("finn.dataflow.kernels.matmul.dot_product", "DotProductKernel"),
         "WeightSupply": ("finn.dataflow.kernels.matmul.supply", "WeightSupply"),
-        "template_root": ("finn.dataflow.kernels.matmul.resources", "template_root"),
+        "template_root": ("finn.kernels.resources", "template_root"),
     }
 )
 

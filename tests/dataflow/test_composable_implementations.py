@@ -12,13 +12,13 @@ from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 from dataflow.kernels.test_module_build_spec import UnavailableModule
 from dataflow.ops.mvau.test_dot_product_kernel import KERNEL_INPUTS, Problem_, _occurrence
 from dataflow.physical_fixture import configure, source_model
-from finn.dataflow._engine import Absent, Decided, Unresolved
-from finn.dataflow.artifacts.build import (
+from finn.kernels._engine import Absent, Decided, Unresolved
+from finn.kernels.artifacts.build import (
     FixedModuleName,
     ModuleABIRequirements,
     ModuleBuildRequirements,
 )
-from finn.dataflow.artifacts.store import ArtifactStore
+from finn.kernels.artifacts.store import ArtifactStore
 from finn.dataflow.model import Kernel
 from finn.dataflow.model.physical.interface import PhysicalResult
 from finn.dataflow.ops.binding import ImplementationBinding
@@ -27,7 +27,7 @@ from finn.dataflow.model.logical.composition import NetworkResult, RegionResult
 from finn.dataflow.ops.base import DataflowOpError
 from finn.dataflow.kernels.matmul.base import WeightedDotProductKernel
 from finn.dataflow.kernels.matmul.dot_product import DotProductKernel, WeightSupply
-from finn.dataflow.kernels.matmul.resources import template_root
+from finn.kernels.resources import template_root
 from finn.dataflow.kernels.matmul.base import (
     AccumulationMode,
     ActivationMode,
@@ -48,7 +48,7 @@ from finn.dataflow.ops.physical import (
     validate_compiler_physical_use,
 )
 from finn.dataflow.model.identity import implementation_identity
-from finn.dataflow.space.declarations import (
+from finn.kernels.space.declarations import (
     ConstraintGroup,
     Decision,
     Input,

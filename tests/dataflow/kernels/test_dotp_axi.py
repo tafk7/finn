@@ -11,13 +11,13 @@ from typing import cast
 import pytest
 from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 
-from finn.dataflow._engine import Absent, Decided, Engine
-from finn.dataflow.artifacts.abi import ComponentABI, Reset, Signal
-from finn.dataflow.artifacts.formats import _descriptor
-from finn.dataflow.artifacts.rtl import Declined, check_abi
+from finn.kernels._engine import Absent, Decided, Engine
+from finn.kernels.artifacts.abi import ComponentABI, Reset, Signal
+from finn.kernels.artifacts.formats import _descriptor
+from finn.kernels.artifacts.rtl import Declined, check_abi
 from finn.dataflow.model.logical.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
-from finn.dataflow.space.compiler import _Ref, _compile_space
-from finn.dataflow.space.declarations import Decision, Problem, Space, divisors_of
+from finn.kernels.space.compiler import _Ref, _compile_space
+from finn.kernels.space.declarations import Decision, Problem, Space, divisors_of
 from finn.dataflow.kernels.dotp_axi import (
     BatchInterleavedDotpAxiKernel,
     DotpAxiKernel,
@@ -30,7 +30,7 @@ from finn.dataflow.kernels.matmul import regions as mvau_regions
 from finn.dataflow.kernels.matmul.regions import (
     construct_dot_product_region as baseline_region,
 )
-from finn.dataflow.space.spec_algebra import assemble_specs
+from finn.kernels.space.spec_algebra import assemble_specs
 
 
 class Harness(Space):

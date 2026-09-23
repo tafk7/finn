@@ -9,7 +9,7 @@ import hashlib
 from pathlib import Path
 from typing import Any, cast
 from weakref import WeakValueDictionary
-from finn.dataflow._engine import (
+from finn.kernels._engine import (
     Absent,
     Decided,
     Finding,
@@ -18,8 +18,8 @@ from finn.dataflow._engine import (
     ReadinessAssessment,
     Unresolved,
 )
-from finn.dataflow.artifacts.abi import Bus, Endpoint
-from finn.dataflow.artifacts.build import (
+from finn.kernels.artifacts.abi import Bus, Endpoint
+from finn.kernels.artifacts.build import (
     BlobSink,
     ModuleBuildRequirements,
     PreparedModuleBuild,
@@ -30,8 +30,8 @@ from finn.dataflow.artifacts.build import (
     prepared_module_fingerprint,
     materialize_module_sources,
 )
-from finn.dataflow.artifacts.packaging import PortableComponent
-from finn.dataflow.artifacts.store import ArtifactStore
+from finn.kernels.artifacts.packaging import PortableComponent
+from finn.kernels.artifacts.store import ArtifactStore
 from finn.dataflow.model.physical.capture import (
     CapturedDependency,
     LocalPhysicalCapture,
@@ -49,7 +49,7 @@ from finn.dataflow.ops.model_effects import (
     validate_model_read_set,
 )
 from finn.dataflow.ops.source_values import SourceDirection, SourceOperandKey
-from finn.dataflow.space.occurrence import ProjectionAssessment, layer_runtime
+from finn.kernels.space.occurrence import ProjectionAssessment, layer_runtime
 
 
 @dataclass(frozen=True)

@@ -7,7 +7,7 @@ import pytest
 
 from dataclasses import FrozenInstanceError
 
-from finn.dataflow._engine import (
+from finn.kernels._engine import (
     Answer,
     Constraint,
     ConstraintSet,

@@ -8,7 +8,7 @@ from dataclasses import replace
 import pytest
 from qonnx.core.datatype import DataType
 
-from finn.dataflow._engine import Absent, Decided, Unresolved
+from finn.kernels._engine import Absent, Decided, Unresolved
 from finn.dataflow.analysis.integer_dot import DotProductBounds, IntegerRange, IntegerSupportReport
 from finn.dataflow.kernels.matmul.base import (
     AccumulationMode,
@@ -43,7 +43,7 @@ from finn.dataflow.model.logical.semantics import (
     QONNX_DATATYPE_VALUE_SEMANTICS,
     QONNX_DATATYPE_CODEC,
 )
-from finn.dataflow.space.declarations import (
+from finn.kernels.space.declarations import (
     Input,
     Problem,
     Projection,

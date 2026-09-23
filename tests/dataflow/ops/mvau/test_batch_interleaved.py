@@ -21,7 +21,7 @@ from onnx import TensorProto, helper  # type: ignore[import-not-found]
 from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 from qonnx.core.modelwrapper import ModelWrapper  # type: ignore[import-not-found]
 
-from finn.dataflow._engine import Absent, Answer, Decided, QualifiedPath, Unresolved
+from finn.kernels._engine import Absent, Answer, Decided, QualifiedPath, Unresolved
 from finn.dataflow.analysis.integer_dot import DotProductBounds, IntegerSupportReport
 from finn.dataflow.model import NetworkBoundary, KernelChoice
 from finn.dataflow.kernels.dotp_axi import (
@@ -29,9 +29,9 @@ from finn.dataflow.kernels.dotp_axi import (
     DotpAxiKernel,
 )
 from finn.dataflow.kernels.matmul.base import DspBlock
-from finn.dataflow.space.compiler import _compile_space
-from finn.dataflow.space.declarations import Problem, Space, Subspace, ValueSource
-from finn.dataflow.space.occurrence import (
+from finn.kernels.space.compiler import _compile_space
+from finn.kernels.space.declarations import Problem, Space, Subspace, ValueSource
+from finn.kernels.space.occurrence import (
     occurrence_commit_paths,
     occurrence_persistable,
 )
@@ -57,7 +57,7 @@ from finn.dataflow.kernels.matmul.batch_interleaved import (
 )
 from finn.dataflow.kernels.matmul.dot_product import DotProductKernel, WeightSupply
 from finn.dataflow.ops.mvau.op import MvauSpace
-from finn.dataflow.space.declarations import derived
+from finn.kernels.space.declarations import derived
 from finn.dataflow.ops.schema import BuildFact, DatatypeAttribute, OpInput, OpOutput
 from finn.dataflow.ops.native import SCHEMA_VERSION_ATTRIBUTE, read_attributes
 from finn.dataflow.kernels.matmul.regions import (

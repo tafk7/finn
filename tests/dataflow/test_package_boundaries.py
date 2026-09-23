@@ -58,9 +58,10 @@ def _assert_fresh_import_avoids(module: str, forbidden: tuple[str, ...]) -> None
 
 
 def test_the_final_package_boundaries_are_the_approved_ones() -> None:
+    assert tuple(import_module("finn.dataflow.kernels").__all__) == ()
     assert tuple(import_module("finn.dataflow.ops").__all__) == ()
     assert tuple(import_module("finn.dataflow.ops.mvau").__all__) == ()
-    assert set(import_module("finn.dataflow.kernels").__all__) == {
+    assert set(import_module("finn.kernels").__all__) == {
         "DotpAxiKernel",
         "DspBlock",
         "MVAU",
@@ -86,21 +87,7 @@ def test_the_final_package_boundaries_are_the_approved_ones() -> None:
         "kernel_dataflow",
         "kernel_physical",
     ):
-        assert not hasattr(import_module("finn.dataflow.kernels"), framework_name)
-
-
-def test_the_generic_substrate_does_not_import_a_layer() -> None:
-    """``space`` is layer-neutral: it names no Kernel, Kernel or operation.
-
-    Domain value semantics now live with the domain, so there is no exception
-    beneath ``space``.
-    """
-
-    layers = ("finn.dataflow.kernels", "finn.dataflow.ops")
-    for path in (DATAFLOW / "space").rglob("*.py"):
-        named = _imported_modules(path)
-        assert not any(_within(name, layer) for name in named for layer in layers), path
-        assert not any(_within(name, "finn.dataflow.model") for name in named), path
+        assert not hasattr(import_module("finn.kernels"), framework_name)
 
 
 def test_pure_logical_values_import_nothing_above_or_beside_them() -> None:
@@ -113,12 +100,12 @@ def test_pure_logical_values_import_nothing_above_or_beside_them() -> None:
     """
 
     forbidden = (
-        "finn.dataflow.space",
-        "finn.dataflow._engine",
+        "finn.kernels.space",
+        "finn.kernels._engine",
         "finn.dataflow.kernels",
         "finn.dataflow.ops",
         "finn.dataflow.parameters",
-        "finn.dataflow.artifacts",
+        "finn.kernels.artifacts",
         "onnx",
     )
     adapters = {
@@ -143,16 +130,16 @@ def test_pure_logical_values_import_nothing_above_or_beside_them() -> None:
 
 def test_pure_physical_and_public_interface_values_keep_one_way_dependencies() -> None:
     forbidden = (
-        "finn.dataflow.space",
-        "finn.dataflow._engine",
+        "finn.kernels.space",
+        "finn.kernels._engine",
         "finn.dataflow.kernels",
         "finn.dataflow.ops",
     )
     pure = (
-        DATAFLOW / "model" / "physical" / "layout.py",
-        DATAFLOW / "model" / "physical" / "structure.py",
-        DATAFLOW / "model" / "physical" / "validation.py",
-        DATAFLOW / "model" / "physical" / "lowering.py",
+        SOURCE / "kernels" / "physical" / "layout.py",
+        SOURCE / "kernels" / "physical" / "structure.py",
+        SOURCE / "kernels" / "physical" / "validation.py",
+        SOURCE / "kernels" / "physical" / "lowering.py",
         DATAFLOW / "model" / "physical" / "interface.py",
         DATAFLOW / "model" / "logical" / "interface.py",
     )
@@ -169,23 +156,23 @@ def test_domain_facades_and_pure_value_modules_are_lazy() -> None:
             "finn.dataflow.model.logical",
             "finn.dataflow.model.physical",
             "finn.dataflow.model.relations",
-            "finn.dataflow.space",
-            "finn.dataflow._engine",
+            "finn.kernels.space",
+            "finn.kernels._engine",
         ),
     )
     _assert_fresh_import_avoids(
-        "finn.dataflow.model.physical.structure",
-        ("finn.dataflow.space", "finn.dataflow._engine", "finn.dataflow.kernels"),
+        "finn.kernels.physical.structure",
+        ("finn.kernels.space", "finn.kernels._engine", "finn.dataflow.kernels"),
     )
     _assert_fresh_import_avoids(
         "finn.dataflow.model.physical.interface",
-        ("finn.dataflow.space", "finn.dataflow._engine", "finn.dataflow.kernels"),
+        ("finn.kernels.space", "finn.kernels._engine", "finn.dataflow.kernels"),
     )
 
 
 def test_minimal_dotp_does_not_load_historical_authoring_or_build_processing() -> None:
     _assert_fresh_import_avoids(
-        "finn.dataflow.kernels.dotp_axi_minimal",
+        "finn.kernels.dotp",
         (
             "finn.dataflow.kernels.matmul",
             "finn.dataflow.parameters",
@@ -198,24 +185,24 @@ def test_minimal_dotp_does_not_load_historical_authoring_or_build_processing() -
             "finn.dataflow.model.physical.axi_stream_binding",
             "finn.dataflow.model.physical.interface",
             "finn.dataflow.model.physical.authoring",
-            "finn.dataflow.artifacts.build",
-            "finn.dataflow.artifacts.contributions",
-            "finn.dataflow.artifacts.render",
-            "finn.dataflow.artifacts.packaging",
-            "finn.dataflow.artifacts.store",
+            "finn.kernels.artifacts.build",
+            "finn.kernels.artifacts.contributions",
+            "finn.kernels.artifacts.render",
+            "finn.kernels.artifacts.packaging",
+            "finn.kernels.artifacts.store",
         ),
     )
 
 
 def test_axi_declarations_do_not_load_regions_or_composition_adapters() -> None:
     _assert_fresh_import_avoids(
-        "finn.dataflow.model.physical.axi_stream",
+        "finn.kernels.physical.axi_stream",
         (
             "finn.dataflow.model.logical.region",
             "finn.dataflow.model.logical.composition",
             "finn.dataflow.model.physical.interface",
             "finn.dataflow.model.physical.axi_stream_binding",
-            "finn.dataflow.artifacts.build",
+            "finn.kernels.artifacts.build",
             "finn.dataflow.kernels",
         ),
     )
@@ -228,23 +215,23 @@ def test_logical_facade_loads_no_model_until_a_public_name_is_requested() -> Non
             "finn.dataflow.model.logical.region",
             "finn.dataflow.model.logical.network",
             "finn.dataflow.model.logical.composition",
-            "finn.dataflow.model.logical.datatypes",
+            "finn.kernels.datatypes.values",
         ),
     )
 
 
 def test_module_requirements_are_independent_of_build_processing() -> None:
     _assert_fresh_import_avoids(
-        "finn.dataflow.artifacts.requirements",
+        "finn.kernels.artifacts.requirements",
         (
-            "finn.dataflow.artifacts.build",
-            "finn.dataflow.artifacts.contributions",
-            "finn.dataflow.artifacts.render",
-            "finn.dataflow.artifacts.store",
-            "finn.dataflow.artifacts.packaging",
+            "finn.kernels.artifacts.build",
+            "finn.kernels.artifacts.contributions",
+            "finn.kernels.artifacts.render",
+            "finn.kernels.artifacts.store",
+            "finn.kernels.artifacts.packaging",
             "finn.dataflow.model",
-            "finn.dataflow.space",
-            "finn.dataflow._engine",
+            "finn.kernels.space",
+            "finn.kernels._engine",
         ),
     )
 
@@ -276,60 +263,42 @@ def test_neither_package_is_re_exported_from_the_dataflow_root() -> None:
         assert not hasattr(root, name), name
 
 
-def test_artifact_projection_stays_one_way() -> None:
-    """Layers project into artifacts; artifacts never reach back up."""
-
-    upstream = (
-        "finn.dataflow.model",
-        "finn.dataflow.space",
-        "finn.dataflow.kernels",
-        "finn.dataflow.ops",
-        "finn.dataflow._engine",
-        "onnx",
-        "qonnx.core.modelwrapper",
-    )
-    for path in (DATAFLOW / "artifacts").rglob("*.py"):
-        named = _imported_modules(path)
-        assert not any(_within(name, package) for name in named for package in upstream), path
-    _assert_fresh_import_avoids("finn.dataflow.artifacts.packaging", upstream)
-
-
 def test_canonical_values_stay_importable_without_the_engine() -> None:
-    _assert_fresh_import_avoids("finn.dataflow.model.logical.region", ("finn.dataflow._engine",))
-    _assert_fresh_import_avoids("finn.dataflow.model.logical.network", ("finn.dataflow._engine",))
+    _assert_fresh_import_avoids("finn.dataflow.model.logical.region", ("finn.kernels._engine",))
+    _assert_fresh_import_avoids("finn.dataflow.model.logical.network", ("finn.kernels._engine",))
     _assert_fresh_import_avoids(
         "finn.dataflow.model.logical.refs",
-        ("finn.dataflow._engine", "finn.dataflow.ops", "finn.dataflow.kernels"),
+        ("finn.kernels._engine", "finn.dataflow.ops", "finn.dataflow.kernels"),
     )
     _assert_fresh_import_avoids(
         "finn.dataflow.model",
         (
-            "finn.dataflow.space",
-            "finn.dataflow._engine",
+            "finn.kernels.space",
+            "finn.kernels._engine",
             "finn.dataflow.kernels",
             "finn.dataflow.ops",
-            "finn.dataflow.artifacts",
+            "finn.kernels.artifacts",
         ),
     )
     _assert_fresh_import_avoids(
         "finn.dataflow.model.logical",
         (
-            "finn.dataflow.space",
-            "finn.dataflow._engine",
+            "finn.kernels.space",
+            "finn.kernels._engine",
             "finn.dataflow.kernels",
             "finn.dataflow.ops",
-            "finn.dataflow.artifacts",
+            "finn.kernels.artifacts",
         ),
     )
-    _assert_fresh_import_avoids("finn.dataflow.kernels.matmul.regions", ("finn.dataflow._engine",))
-    _assert_fresh_import_avoids("finn.dataflow.kernels.matmul.networks", ("finn.dataflow._engine",))
+    _assert_fresh_import_avoids("finn.dataflow.kernels.matmul.regions", ("finn.kernels._engine",))
+    _assert_fresh_import_avoids("finn.dataflow.kernels.matmul.networks", ("finn.kernels._engine",))
 
 
 def test_the_space_facade_does_not_drag_in_the_dataflow_model() -> None:
     """The bridge is opt-in.  ``space.__init__`` does not import it."""
 
     _assert_fresh_import_avoids(
-        "finn.dataflow.space",
+        "finn.kernels.space",
         ("finn.dataflow.model",),
     )
 
@@ -349,23 +318,14 @@ def test_layer_facades_do_not_eagerly_load_their_implementations() -> None:
     )
 
 
-def test_the_private_engine_imports_no_finn_module() -> None:
-    forbidden: set[str] = set()
-    for path in (DATAFLOW / "_engine").glob("*.py"):
-        forbidden.update(
-            name for name in _imported_modules(path) if name == "finn" or name.startswith("finn.")
-        )
-    assert forbidden == set()
-
-
 def test_pure_dot_product_does_not_load_physical_or_composition_frameworks() -> None:
     _assert_fresh_import_avoids(
         "finn.dataflow.kernels.dot_product",
         (
             "finn.dataflow.model.physical.axi_stream_contract",
             "finn.dataflow.model.physical.view",
-            "finn.dataflow.artifacts.build",
-            "finn.dataflow.kernels.target",
+            "finn.kernels.artifacts.build",
+            "finn.kernels.target",
             "finn.dataflow.model.logical.view",
             "finn.dataflow.model.logical.composition",
         ),
@@ -374,9 +334,9 @@ def test_pure_dot_product_does_not_load_physical_or_composition_frameworks() -> 
 
 def test_physical_component_path_does_not_load_logical_models_or_compiler_nodes() -> None:
     for module in (
-        "finn.dataflow.kernels.dotp_axi_minimal",
-        "finn.dataflow.kernels.streaming",
-        "finn.dataflow.kernels.mvau",
+        "finn.kernels.dotp",
+        "finn.kernels.streaming",
+        "finn.kernels.mvau",
     ):
         _assert_fresh_import_avoids(
             module,

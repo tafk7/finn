@@ -96,7 +96,7 @@ def test_no_contract_and_a_false_contract_reach_the_same_answer_by_different_rou
 
     # The contract fact itself still distinguishes them: absent on one side,
     # present and False on the other.
-    from finn.dataflow._engine import RequestError  # noqa: PLC0415
+    from finn.kernels._engine import RequestError  # noqa: PLC0415
 
     try:
         contract = silent.runtime_weight_range_contract

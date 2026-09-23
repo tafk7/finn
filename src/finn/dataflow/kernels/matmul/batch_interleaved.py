@@ -35,7 +35,7 @@ from __future__ import annotations
 from finn.dataflow.model.children import KernelChoice
 from finn.dataflow.model.logical.authoring import NetworkBoundary
 from finn.dataflow.kernels.dotp_axi import BatchInterleavedDotpAxiKernel
-from finn.dataflow.space.declarations import (
+from finn.kernels.space.declarations import (
     ConstraintGroup,
     Decision,
     Subspace,

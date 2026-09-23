@@ -9,7 +9,7 @@ from math import ceil, floor
 from collections.abc import Mapping
 from typing import ClassVar, cast
 
-from finn.dataflow.artifacts.abi import (
+from finn.kernels.artifacts.abi import (
     Bus,
     Clock,
     ClockAlignment,
@@ -24,13 +24,13 @@ from finn.dataflow.artifacts.abi import (
     StandardProtocol,
 )
 from finn.dataflow.analysis.integer_dot import IntegerSupportReport
-from finn.dataflow.artifacts.contributions import CopiedSource
-from finn.dataflow.artifacts.build import ModuleABIRequirements, ScalarTable
-from finn.dataflow.model.physical.layout import PeriodicLast
+from finn.kernels.artifacts.contributions import CopiedSource
+from finn.kernels.artifacts.build import ModuleABIRequirements, ScalarTable
+from finn.kernels.physical.layout import PeriodicLast
 from finn.dataflow.model.physical.interface import KernelStreamBinding
 from finn.dataflow.model.physical.interface import low_fields_binding
 from finn.dataflow.model.logical.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
-from finn.dataflow.space.declarations import (
+from finn.kernels.space.declarations import (
     ConstraintGroup,
     Decision,
     Input,
@@ -43,7 +43,7 @@ from finn.dataflow.model.kernel import Kernel
 from finn.dataflow.model.logical.authoring import RegionDeclaration
 from finn.dataflow.model.physical.authoring import ModuleParameter, PhysicallyUnsupported
 from finn.dataflow.kernels.matmul.base import AccumulationMode, DspBlock, MvauComputationProfile
-from finn.dataflow.kernels.target import dsp_widths
+from finn.kernels.target import dsp_widths
 from finn.dataflow.kernels.typing import (
     operand_types_supported as _operand_types_supported,
     operand_widths_supported as _operand_widths_supported,

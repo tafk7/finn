@@ -14,8 +14,8 @@ from __future__ import annotations
 from contextvars import ContextVar
 from typing import TYPE_CHECKING, Any, cast
 
-from finn.dataflow._engine import Answer, Finding, FindingKind, QualifiedPath, Unresolved
-from finn.dataflow.model.logical.datatypes import QONNXDataType
+from finn.kernels._engine import Answer, Finding, FindingKind, QualifiedPath, Unresolved
+from finn.kernels.datatypes.values import QONNXDataType
 
 if TYPE_CHECKING:
     from finn.dataflow.ops.model_effects import ModelReadSet
@@ -41,20 +41,20 @@ def producer_type(
 
 def _type_choice_reads(operation: DataflowSpace, source_name: str) -> set[str]:
     """Native keys consumed by target resolution and the accepted type query."""
-    from finn.dataflow._engine import Decided, DependencyRef  # noqa: PLC0415
+    from finn.kernels._engine import Decided, DependencyRef  # noqa: PLC0415
     from finn.dataflow.model.logical.interface_authoring import operand_declaration  # noqa: PLC0415
     from finn.dataflow.model.physical.capture import capture_assessment_dependencies  # noqa: PLC0415
     from finn.dataflow.ops.binding import ImplementationBinding, OperandBinding  # noqa: PLC0415
     from finn.dataflow.ops.native import choice_schema  # noqa: PLC0415
-    from finn.dataflow.space.compiler import _Ref, resolve_value_source  # noqa: PLC0415
-    from finn.dataflow.space.declarations import (  # noqa: PLC0415
+    from finn.kernels.space.compiler import _Ref, resolve_value_source  # noqa: PLC0415
+    from finn.kernels.space.declarations import (  # noqa: PLC0415
         ConstraintGroup,
         Projection,
         Space,
         Subspace,
         SubspaceChoice,
     )
-    from finn.dataflow.space.occurrence import (  # noqa: PLC0415
+    from finn.kernels.space.occurrence import (  # noqa: PLC0415
         layer_runtime,
         occurrence_answer_at,
         occurrence_child,

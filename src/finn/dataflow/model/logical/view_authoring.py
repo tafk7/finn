@@ -28,7 +28,7 @@ from finn.dataflow.model.logical.semantics import (
     DATAFLOW_NETWORK_SEMANTICS,
     DATAFLOW_REGION_SEMANTICS,
 )
-from finn.dataflow.space.declarations import (
+from finn.kernels.space.declarations import (
     AuthoringError,
     Constraint,
     ConstraintGroup,

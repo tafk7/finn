@@ -1,0 +1,53 @@
+# Copyright (C) 2026, Advanced Micro Devices, Inc.
+# SPDX-License-Identifier: BSD-3-Clause
+
+"""Physical components and the supported explicit MVAU assembly.
+
+The public construction path needs no dataflow model or compiler node.
+Logical modeling experiments remain in :mod:`finn.dataflow`.
+"""
+
+from importlib import import_module
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from finn.kernels.dotp import DotpAxiKernel
+    from finn.kernels.mvau import MVAU, MVAUAssembly, WeightDelivery, mvau_assembly
+    from finn.kernels.streaming import (
+        cyclic_stream_requirements,
+        replay_buffer_requirements,
+    )
+    from finn.kernels.target import DspBlock
+
+_LAZY_EXPORTS = {
+    "DotpAxiKernel": ("finn.kernels.dotp", "DotpAxiKernel"),
+    "MVAU": ("finn.kernels.mvau", "MVAU"),
+    "MVAUAssembly": ("finn.kernels.mvau", "MVAUAssembly"),
+    "WeightDelivery": ("finn.kernels.mvau", "WeightDelivery"),
+    "mvau_assembly": ("finn.kernels.mvau", "mvau_assembly"),
+    "replay_buffer_requirements": ("finn.kernels.streaming", "replay_buffer_requirements"),
+    "cyclic_stream_requirements": ("finn.kernels.streaming", "cyclic_stream_requirements"),
+    "DspBlock": ("finn.kernels.target", "DspBlock"),
+}
+
+
+def __getattr__(name: str) -> object:
+    target = _LAZY_EXPORTS.get(name)
+    if target is None:
+        raise AttributeError(name)
+    module_name, attribute_name = target
+    value = getattr(import_module(module_name), attribute_name)
+    globals()[name] = value
+    return value
+
+
+__all__ = [
+    "DotpAxiKernel",
+    "MVAU",
+    "MVAUAssembly",
+    "WeightDelivery",
+    "mvau_assembly",
+    "replay_buffer_requirements",
+    "cyclic_stream_requirements",
+    "DspBlock",
+]

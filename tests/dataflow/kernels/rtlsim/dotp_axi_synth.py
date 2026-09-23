@@ -14,7 +14,7 @@ from pathlib import Path
 
 import numpy as np  # type: ignore[import-not-found]
 
-from finn.dataflow.artifacts.derivation import (
+from finn.kernels.artifacts.derivation import (
     ArtifactRef,
     ContentRef,
     Derivation,
@@ -24,31 +24,32 @@ from finn.dataflow.artifacts.derivation import (
     ToolRequirement,
     build_key,
 )
-from finn.dataflow.artifacts.formats import RtlModuleDirectory
-from finn.dataflow.artifacts.formats.rtl_module import RtlModuleOptions
-from finn.dataflow.artifacts.packaging import Target, plan_package
-from finn.dataflow.artifacts.projection import content_digest
-from finn.dataflow.artifacts.request import (
+from finn.kernels.artifacts.formats import RtlModuleDirectory
+from finn.kernels.artifacts.formats.rtl_module import RtlModuleOptions
+from finn.kernels.artifacts.packaging import Target, plan_package
+from finn.kernels.artifacts.projection import content_digest
+from finn.kernels.artifacts.request import (
     LogicalMount,
     PreparedToolRun,
     ResourceRequirements,
     ToolchainIdentity,
 )
 from finn.dataflow.kernels.matmul.base import DspBlock
-from finn.dataflow.artifacts.build import (
+from finn.kernels.artifacts.build import (
     prepare_module_build,
     materialize_module_sources,
     portable_module_component,
 )
-from finn.dataflow.artifacts.store import ArtifactStore
+from finn.kernels.artifacts.store import ArtifactStore
 from finn.util.basic import get_vivado_version
 
 from dataflow.kernels.rtlsim.dotp_axi_numeric import (
     CASES_BY_LABEL,
-    Case,
     _configure,
     record_identity,
 )
+
+from kernels.rtlsim.dotp_support import Case
 
 PASS, FAIL, SKIP = 0, 1, 2
 DEFAULT_LABELS = ("dsp48e1", "signed_random_softvec", "identity")

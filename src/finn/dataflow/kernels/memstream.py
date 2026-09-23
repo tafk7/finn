@@ -23,7 +23,7 @@ from typing import ClassVar
 from finn.dataflow.model.kernel import Kernel
 from finn.dataflow.model.logical.authoring import RegionDeclaration
 from finn.dataflow.model.physical.authoring import PhysicallyUnsupported
-from finn.dataflow.space.declarations import Input
+from finn.kernels.space.declarations import Input
 from finn.dataflow.model.logical.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
 from finn.dataflow.kernels.matmul.regions import construct_weight_stream_region
 

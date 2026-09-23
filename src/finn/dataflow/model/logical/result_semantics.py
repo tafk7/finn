@@ -3,7 +3,7 @@
 
 """Shared value semantics for explicit logical Region/Network results."""
 
-from finn.dataflow._engine import ValueSemantics
+from finn.kernels._engine import ValueSemantics
 from finn.dataflow.model.logical.results import LogicalResult, RegionResult, NetworkResult
 
 

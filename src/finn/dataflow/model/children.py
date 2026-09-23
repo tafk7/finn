@@ -10,12 +10,12 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING
 
 from finn.dataflow.model.logical.semantics import DATAFLOW_LOGICAL_RESULT_SEMANTICS
-from finn.dataflow.space.capabilities import (
+from finn.kernels.space.capabilities import (
     AssessedCapabilityOutput,
     canonicalize_assessed_capability_outputs,
 )
-from finn.dataflow.space.compiler import _CompiledSpace
-from finn.dataflow.space.declarations import (
+from finn.kernels.space.compiler import _CompiledSpace
+from finn.kernels.space.declarations import (
     AuthoringError,
     Projection,
     Space,

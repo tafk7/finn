@@ -8,10 +8,10 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any, TypeVar
 
-from finn.dataflow._engine import DesignPoint, Engine
-from finn.dataflow.space.compiler import _CompiledSpace
-from finn.dataflow.space.declarations import ConstraintGroup, Projection, Readiness, ValueSource
-from finn.dataflow.space.occurrence import ProjectionAssessment, evaluate_projection
+from finn.kernels._engine import DesignPoint, Engine
+from finn.kernels.space.compiler import _CompiledSpace
+from finn.kernels.space.declarations import ConstraintGroup, Projection, Readiness, ValueSource
+from finn.kernels.space.occurrence import ProjectionAssessment, evaluate_projection
 
 T_co = TypeVar("T_co", covariant=True)
 

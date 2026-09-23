@@ -10,17 +10,17 @@ from dataclasses import dataclass
 import re
 from typing import Literal, cast
 
-from finn.dataflow._engine import Answer, Decided
+from finn.kernels._engine import Answer, Decided
 from finn.dataflow.model._authoring import GENERATED_MEMBERS, generated_member
 from finn.dataflow.model.logical.composition import LogicalResult, logical_network
-from finn.dataflow.model.logical.datatypes import QONNXDataType, QONNX_DATATYPE_TOKEN
+from finn.kernels.datatypes.values import QONNXDataType, QONNX_DATATYPE_TOKEN
 from finn.dataflow.model.logical.interface import (
     OperandExport,
     PublicOperand,
     validate_operand_export,
 )
 from finn.dataflow.model.logical.maps import RectangularDomain
-from finn.dataflow.space.declarations import (
+from finn.kernels.space.declarations import (
     AuthoringError,
     Constraint,
     ConstraintGroup,

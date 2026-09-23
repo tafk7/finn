@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, cast, TypeVar
 
-from finn.dataflow.model.logical.datatypes import canonical_qonnx_datatype
+from finn.kernels.datatypes.values import canonical_qonnx_datatype
 from finn.dataflow.ops.base import DataflowOpError
 from finn.dataflow.ops.native import NativeAttribute, SCOPE_ID_ATTRIBUTE, read_attributes
 

@@ -14,7 +14,7 @@ from dataflow.ops.test_persistence_codecs import _model as _codec_model, _op as 
 from dataflow.ops.factory import make_op, make_space
 from finn.dataflow.ops.space import DataflowSpace
 from finn.custom_op.dataflow import custom_op
-from finn.dataflow._engine import Decided, RequestError, Unresolved
+from finn.kernels._engine import Decided, RequestError, Unresolved
 from finn.dataflow.ops.base import DataflowOpError
 from finn.dataflow.ops.mvau.op import MvauSpace
 from finn.dataflow.ops.native import (
@@ -25,7 +25,7 @@ from finn.dataflow.ops.native import (
 )
 from finn.dataflow.ops.persistence import apply_graph_effects
 from finn.dataflow.ops.type_context import producer_type
-from finn.dataflow.space.declarations import Decision
+from finn.kernels.space.declarations import Decision
 from finn.dataflow.ops import reconstruction
 
 

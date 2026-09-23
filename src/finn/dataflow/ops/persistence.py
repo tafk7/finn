@@ -18,7 +18,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, TypeVar, cast
 from uuid import uuid4
 
-from finn.dataflow._engine import (
+from finn.kernels._engine import (
     Absent,
     Answer,
     Decided,
@@ -27,7 +27,7 @@ from finn.dataflow._engine import (
     QualifiedPath,
     Unresolved,
 )
-from finn.dataflow._engine.results import ordered_findings
+from finn.kernels._engine.results import ordered_findings
 from finn.dataflow.ops.model_effects import (
     MODEL_READ_PRESENT,
     ModelEffects,
@@ -50,8 +50,8 @@ from finn.dataflow.ops.schema import (
     OpInput,
     attribute_name,
 )
-from finn.dataflow.space.declarations import Problem
-from finn.dataflow.space.occurrence import ProjectionAssessment
+from finn.kernels.space.declarations import Problem
+from finn.kernels.space.occurrence import ProjectionAssessment
 
 if TYPE_CHECKING:
     from finn.dataflow.ops.space import DataflowSpace
@@ -629,7 +629,7 @@ def _apply_graph_effects(
         schema = {item.choice.path: item for item in choice_schema(fresh)}
         if any(path not in schema for path, _value in effects.expected_choices):
             raise DataflowOpError("recorded choice path is absent from the current schema")
-        from finn.dataflow.space.occurrence import occurrence_commit_paths  # noqa: PLC0415
+        from finn.kernels.space.occurrence import occurrence_commit_paths  # noqa: PLC0415
 
         committed = occurrence_commit_paths(
             fresh,
@@ -765,7 +765,7 @@ def _apply_expected_choices(
     operation: DataflowSpace, choices: tuple[RecordedChoice, ...]
 ) -> DataflowSpace:
     from finn.dataflow.ops.base import DataflowOpError  # noqa: PLC0415
-    from finn.dataflow.space.occurrence import occurrence_commit_paths  # noqa: PLC0415
+    from finn.kernels.space.occurrence import occurrence_commit_paths  # noqa: PLC0415
 
     schema = {item.choice.path: item for item in choice_schema(operation)}
     unknown = tuple(item.path for item in choices if item.path not in schema)

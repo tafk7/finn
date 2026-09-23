@@ -6,19 +6,19 @@
 import pytest
 from qonnx.core.datatype import DataType
 
-from dataflow.model.contract_helpers import point_for, value
-from finn.dataflow._engine import (
+from kernels.helpers import point_for, value
+from finn.kernels._engine import (
     Absent,
     Decided,
     Unresolved,
 )
-from finn.dataflow.artifacts.abi import Bus, Clock, Direction, Free, Reset, Signal
-from finn.dataflow.artifacts.requirements import (
+from finn.kernels.artifacts.abi import Bus, Clock, Direction, Free, Reset, Signal
+from finn.kernels.artifacts.requirements import (
     FixedModuleName,
     ModuleABIRequirements,
     ModuleBuildRequirements,
 )
-from finn.dataflow.model.kernel_base import Kernel
+from finn.kernels.base import Kernel
 from finn.dataflow.model.logical.contract_authoring import (
     Count,
     Final,
@@ -29,7 +29,7 @@ from finn.dataflow.model.logical.contract_authoring import (
     Presentation,
 )
 from finn.dataflow.model.logical.contract_expressions import Index, Schedule, integer
-from finn.dataflow.model.logical.datatype_semantics import QONNX_DATATYPE_VALUE_SEMANTICS
+from finn.kernels.datatypes.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
 from finn.dataflow.model.logical.maps import RectangularDomain
 from finn.dataflow.model.physical.authoring import PhysicallyUnsupported
 from finn.dataflow.model.physical.axi_stream_contract import (
@@ -44,8 +44,8 @@ from finn.dataflow.model.physical.capture import (
     capture_local_physical,
     selected_child_realization,
 )
-from finn.dataflow.space import Input, Space, derived
-from finn.dataflow.space.declarations import AuthoringError
+from finn.kernels.space import Input, Space, derived
+from finn.kernels.space.declarations import AuthoringError
 
 
 def kernel_type(*, swapped=False, early=False, mismatch_fields=False, detached_completion=False):

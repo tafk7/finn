@@ -14,7 +14,7 @@ from typing import cast
 import pytest
 from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 
-from finn.dataflow._engine import (
+from finn.kernels._engine import (
     Absent,
     Decided,
     DependencyKind,
@@ -22,12 +22,12 @@ from finn.dataflow._engine import (
     EvaluationError,
     Unresolved,
 )
-from finn.dataflow.artifacts.abi import ComponentABI
-from finn.dataflow.artifacts.build import ModuleBuildRequirements
-from finn.dataflow.space.occurrence import is_attached_occurrence
+from finn.kernels.artifacts.abi import ComponentABI
+from finn.kernels.artifacts.build import ModuleBuildRequirements
+from finn.kernels.space.occurrence import is_attached_occurrence
 from finn.dataflow.model.logical.semantics import DATAFLOW_REGION_SEMANTICS
-from finn.dataflow.space.compiler import _Ref, _compile_space
-from finn.dataflow.space.declarations import (
+from finn.kernels.space.compiler import _Ref, _compile_space
+from finn.kernels.space.declarations import (
     AuthoringError,
     ConstraintGroup,
     Decision,
@@ -61,7 +61,7 @@ from finn.dataflow.model.logical.region import (
     ScheduledOutputAvailability,
     ScheduleLevel,
 )
-from finn.dataflow.space.spec_algebra import assemble_specs
+from finn.kernels.space.spec_algebra import assemble_specs
 
 #: What ``component_abi`` is handed: the resolved physical parameter table.
 Scalars = Mapping[str, bool | int | float | str]

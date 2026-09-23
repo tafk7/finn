@@ -9,16 +9,16 @@ from collections.abc import Mapping
 from types import MappingProxyType
 from typing import TYPE_CHECKING, ClassVar, cast
 
-from finn.dataflow._engine import Absent, Answer, Decided, Finding, FindingKind, QualifiedPath
-from finn.dataflow.artifacts.abi import ComponentABI
-from finn.dataflow.artifacts.build import (
+from finn.kernels._engine import Absent, Answer, Decided, Finding, FindingKind, QualifiedPath
+from finn.kernels.artifacts.abi import ComponentABI
+from finn.kernels.artifacts.build import (
     ModuleABIRequirements,
     RequirementContribution,
     ScalarTable,
 )
-from finn.dataflow.artifacts.derivation import Scalar
+from finn.kernels.artifacts.derivation import Scalar
 from finn.dataflow.model._authoring import GENERATED_MEMBERS
-from finn.dataflow.model.kernel_base import Kernel as KernelBase
+from finn.kernels.base import Kernel as KernelBase
 from finn.dataflow.model.logical.view import ensure_logical_view_validation
 from finn.dataflow.model.children import (
     canonicalize_kernel_child_capabilities,
@@ -39,14 +39,14 @@ from finn.dataflow.model.physical.authoring import (
     attach_composite_physical,
     attach_leaf_physical,
 )
-from finn.dataflow.space.compiler import _CompiledSpace
-from finn.dataflow.space.declarations import AuthoringError, Space, declared_members
-from finn.dataflow.space.occurrence import ChoiceView, layer_runtime
+from finn.kernels.space.compiler import _CompiledSpace
+from finn.kernels.space.declarations import AuthoringError, Space, declared_members
+from finn.kernels.space.occurrence import ChoiceView, layer_runtime
 
 if TYPE_CHECKING:
     from finn.dataflow.model.physical.interface import KernelStreamBinding
     from finn.dataflow.model.logical.composition import LogicalResult
-    from finn.dataflow.space.declarations import Derived, Projection
+    from finn.kernels.space.declarations import Derived, Projection
 
 
 class Kernel(KernelBase):

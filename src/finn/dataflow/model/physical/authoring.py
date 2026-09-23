@@ -10,8 +10,8 @@ from inspect import Parameter as _SignatureParameter, Signature
 from types import MappingProxyType
 from typing import Generic, TypeVar, cast
 
-from finn.dataflow.artifacts.abi import ComponentABI
-from finn.dataflow.artifacts.build import (
+from finn.kernels.artifacts.abi import ComponentABI
+from finn.kernels.artifacts.build import (
     FixedModuleName,
     ModuleABIRequirements,
     ModuleBuildRequirements,
@@ -26,7 +26,7 @@ from finn.dataflow.model.logical.region import DataflowRegion
 from finn.dataflow.model.physical.view import PhysicalView
 from finn.dataflow.model.physical.interface import validate_kernel_stream_bindings
 from finn.dataflow.model.physical.interface import KernelStreamBinding
-from finn.dataflow.space.declarations import (
+from finn.kernels.space.declarations import (
     AuthoringError,
     ConstraintGroup,
     Derived,

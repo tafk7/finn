@@ -58,8 +58,8 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any, TypeVar, cast
 
-from finn.dataflow._engine import ValueSemantics
-from finn.dataflow.space.declarations import (
+from finn.kernels._engine import ValueSemantics
+from finn.kernels.space.declarations import (
     AuthoringError,
     CanonicalValue,
     CanonicalValueCodec,

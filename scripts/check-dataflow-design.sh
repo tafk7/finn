@@ -63,6 +63,8 @@ else
     printf 'oracle   parity optional; pass --require-parity for gate evidence\n'
 fi
 
+PYTHON_BIN="$PYTHON_BIN" RUFF_BIN="$RUFF_BIN" MYPY_BIN="$MYPY_BIN" bash scripts/check-kernels.sh
+
 PYTHONPATH="$RUN_PYTHONPATH" "$PYTHON_BIN" -m pytest -q --confcutdir=tests/dataflow tests/dataflow
 PYTHONPATH="$RUN_PYTHONPATH" "$PYTHON_BIN" -m pytest -q tests/fpgadataflow/test_mvau_cycle_estimate.py
 
@@ -92,7 +94,6 @@ env -u PYTHONPATH MYPYPATH=src:tests "$MYPY_BIN" \
     --strict \
     --explicit-package-bases \
     src/finn/analysis/verify_custom_nodes.py \
-    tests/dataflow/engine \
     tests/dataflow/parameters \
     tests/dataflow/typing \
     tests/dataflow/kernels/test_module_build_spec.py \

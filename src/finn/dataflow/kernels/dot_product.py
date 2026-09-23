@@ -18,7 +18,7 @@ implied. Weights describe one matrix, presented again for each repetition.
 from collections.abc import Sequence
 
 from finn.dataflow.analysis.integer_dot import ExactIntegerDot, IntegerRange
-from finn.dataflow.model.kernel_base import Kernel
+from finn.kernels.base import Kernel
 from finn.dataflow.model.logical.contract_authoring import (
     Count,
     Final,
@@ -29,15 +29,15 @@ from finn.dataflow.model.logical.contract_authoring import (
     Presentation,
 )
 from finn.dataflow.model.logical.contract_expressions import ExactQuotient, Index, Schedule, integer
-from finn.dataflow.model.logical.datatype_domains import Integer
-from finn.dataflow.model.logical.datatype_semantics import QONNX_DATATYPE_VALUE_SEMANTICS
-from finn.dataflow.model.logical.datatypes import (
+from finn.kernels.datatypes.domains import Integer
+from finn.kernels.datatypes.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
+from finn.kernels.datatypes.values import (
     DatatypeError,
     QONNXDataType,
     ordinary_integer_bounds,
     resolve_qonnx_datatype_name,
 )
-from finn.dataflow.space import Decision, Input, derived, divisors_of, reject
+from finn.kernels.space import Decision, Input, derived, divisors_of, reject
 
 
 class DotProduct(Kernel):

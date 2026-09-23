@@ -17,7 +17,7 @@ from typing import Any, cast
 from onnx import helper  # type: ignore[import-not-found]
 from qonnx.transformation.base import Transformation  # type: ignore[import-not-found]
 
-from finn.dataflow._engine import (
+from finn.kernels._engine import (
     Absent,
     Answer,
     Decided,
@@ -33,7 +33,7 @@ from finn.dataflow.kernels.matmul.base import (
     accumulator_type_for_bounds,
     computation_profile,
 )
-from finn.dataflow.model.logical.datatypes import QONNXDataType
+from finn.kernels.datatypes.values import QONNXDataType
 from finn.dataflow.ops.base import DATAFLOW_DOMAIN
 from finn.dataflow.ops.mvau.numerics import integer_type
 from finn.dataflow.ops.mvau.op import MvauDataflowOp, MvauSpace

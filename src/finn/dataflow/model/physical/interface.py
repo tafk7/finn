@@ -6,17 +6,17 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from finn.dataflow.artifacts.abi import Bus, Endpoint, StandardProtocol
-from finn.dataflow.artifacts.build import ModuleABIRequirements, ModuleBuildRequirements
+from finn.kernels.artifacts.abi import Bus, Endpoint, StandardProtocol
+from finn.kernels.artifacts.build import ModuleABIRequirements, ModuleBuildRequirements
 from finn.dataflow.model.logical.region import DataflowRegion, InputInterface, Port, element_width
-from finn.dataflow.model.physical.layout import (
+from finn.kernels.physical.layout import (
     FieldPlacement,
     PackedBeatLayout,
     PeriodicLast,
     UnusedBitPolicy,
     UnusedBitRange,
 )
-from finn.dataflow.model.physical.structure import PhysicalStructure
+from finn.kernels.physical.structure import PhysicalStructure
 
 
 @dataclass(frozen=True)

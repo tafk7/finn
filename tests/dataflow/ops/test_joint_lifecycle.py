@@ -19,24 +19,24 @@ from qonnx.core.modelwrapper import ModelWrapper  # type: ignore[import-not-foun
 
 import finn.dataflow.model.logical.view_authoring as design_module
 import finn.dataflow.ops.mapping as mapping_module
-from finn.dataflow._engine import Absent, Decided, Unresolved
-from finn.dataflow.artifacts.derivation import ContentRef, build_key
-from finn.dataflow.artifacts.formats import RtlModuleDirectory
-from finn.dataflow.artifacts.formats.rtl_module import RtlModuleOptions
-from finn.dataflow.artifacts.packaging import Target, plan_package
+from finn.kernels._engine import Absent, Decided, Unresolved
+from finn.kernels.artifacts.derivation import ContentRef, build_key
+from finn.kernels.artifacts.formats import RtlModuleDirectory
+from finn.kernels.artifacts.formats.rtl_module import RtlModuleOptions
+from finn.kernels.artifacts.packaging import Target, plan_package
 from finn.dataflow.conformance import (
     DataflowOpConformanceCase,
     assert_dataflow_op_conforms,
 )
-from finn.dataflow.artifacts.build import ModuleBuildRequirements
-from finn.dataflow.artifacts.build import (
+from finn.kernels.artifacts.build import ModuleBuildRequirements
+from finn.kernels.artifacts.build import (
     FixedModuleName,
     prepare_module_build,
     module_source_derivation,
     materialize_module_sources,
     portable_module_component,
 )
-from finn.dataflow.artifacts.store import ArtifactStore
+from finn.kernels.artifacts.store import ArtifactStore
 from finn.dataflow.kernels.replay_buffer import FINNLIB_ROOT
 from finn.dataflow.model.logical import (
     DataflowNetwork,
@@ -62,8 +62,8 @@ from finn.dataflow.ops.reconstruction import build_space
 from finn.dataflow.ops.replay.op import ActivationReplayOp, ReplaySpace
 from finn.dataflow.ops.space import DataflowSpace
 from finn.dataflow.ops.schema import Attribute
-from finn.dataflow.space import Subspace
-from finn.dataflow.space.occurrence import ProjectionAssessment, occurrence_persistable
+from finn.kernels.space import Subspace
+from finn.kernels.space.occurrence import ProjectionAssessment, occurrence_persistable
 
 _projection_fixtures = import_module("dataflow.kernels.test_composition_boundary")
 MissingSource: Any = _projection_fixtures.MissingSource

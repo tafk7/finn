@@ -7,20 +7,18 @@ import pytest
 from dataclasses import replace
 from qonnx.core.datatype import DataType
 
-from finn.dataflow.artifacts.abi import Direction, Endpoint
-from finn.dataflow.artifacts.build import FixedModuleName, ModuleABIRequirements
+from finn.kernels.artifacts.abi import Endpoint
+from finn.kernels.artifacts.build import FixedModuleName, ModuleABIRequirements
 from finn.dataflow.kernels.matmul.regions import construct_dot_product_region
-from finn.dataflow.model.physical.axi_stream import AxiStream
+from finn.kernels.physical.axi_stream import AxiStream
 from finn.dataflow.model.physical.axi_stream_binding import axi_stream_from_port, bind_axi_stream
 from finn.dataflow.model.physical.interface import (
     low_fields_binding,
     validate_kernel_stream_bindings,
 )
-from finn.dataflow.model.physical.layout import (
-    FieldPlacement,
+from finn.kernels.physical.layout import (
     PeriodicLast,
     UnusedBitPolicy,
-    UnusedBitRange,
 )
 
 
@@ -35,29 +33,6 @@ def region():
         output_element_type=DataType["INT3"],
         pe=1,
         simd=2,
-    )
-
-
-@pytest.mark.parametrize("endpoint", tuple(Endpoint))
-def test_subbyte_scalars_pack_tightly_and_padding_follows_direction(endpoint):
-    stream = AxiStream("data", DataType["INT3"], 2, endpoint=endpoint)
-    assert stream.data_width == 8
-    assert stream.payload.fields == (FieldPlacement(0, 0, 3), FieldPlacement(1, 3, 3))
-    assert stream.payload.unused == (
-        UnusedBitRange(
-            6,
-            2,
-            UnusedBitPolicy.IGNORE_ON_RECEIVE
-            if endpoint is Endpoint.TARGET
-            else UnusedBitPolicy.UNSPECIFIED,
-        ),
-    )
-    directions = dict(stream.bus().member_directions())
-    assert directions["data_tdata"] is (
-        Direction.IN if endpoint is Endpoint.TARGET else Direction.OUT
-    )
-    assert directions["data_tready"] is (
-        Direction.OUT if endpoint is Endpoint.TARGET else Direction.IN
     )
 
 
@@ -124,18 +99,3 @@ def test_binding_requires_consistent_explicit_framing(region, last, framing):
     stream = axi_stream_from_port("data", region, "activation", last=last)
     with pytest.raises(ValueError, match="framing"):
         bind_axi_stream(stream, region, "activation", framing=framing)
-
-
-def test_dtype_is_a_snapshot_not_a_mutable_caller_reference():
-    dtype = DataType["INT3"]
-    stream = AxiStream("data", dtype, 2, endpoint=Endpoint.TARGET)
-    dtype._bitwidth = 8
-    stream.dtype._bitwidth = 16
-    assert stream.dtype == DataType["INT3"]
-    assert stream.data_width == 8
-
-
-@pytest.mark.parametrize("lanes", (0, -1, True))
-def test_invalid_beat_size_refuses(lanes):
-    with pytest.raises(ValueError, match="positive integer"):
-        AxiStream("data", DataType["INT3"], lanes, endpoint=Endpoint.TARGET)

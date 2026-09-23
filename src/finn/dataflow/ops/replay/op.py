@@ -13,9 +13,9 @@ tensor -- and the layer between them does not change.
 from __future__ import annotations
 
 from typing import Any, ClassVar, cast
-from finn.dataflow._engine import Decided
+from finn.kernels._engine import Decided
 
-from finn.dataflow.space.declarations import (
+from finn.kernels.space.declarations import (
     ConstraintGroup,
     Subspace,
     constraint,

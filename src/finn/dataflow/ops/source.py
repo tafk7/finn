@@ -21,9 +21,9 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any
-from finn.dataflow._engine import Answer, Decided
+from finn.kernels._engine import Answer, Decided
 
-from finn.dataflow.model.logical.datatypes import (
+from finn.kernels.datatypes.values import (
     QONNXDataType,
     canonical_qonnx_datatype,
     resolve_qonnx_datatype_name,

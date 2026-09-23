@@ -15,8 +15,8 @@ import pytest
 from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 
 from dataflow.ops.mvau.test_dot_product_kernel import Placed, _occurrence, _unconfigured
-from finn.dataflow._engine import Absent, Decided, Unresolved
-from finn.dataflow.artifacts.abi import (
+from finn.kernels._engine import Absent, Decided, Unresolved
+from finn.kernels.artifacts.abi import (
     Bus,
     Clock,
     ComponentABI,
@@ -28,7 +28,7 @@ from finn.dataflow.artifacts.abi import (
     Signal,
     StandardProtocol,
 )
-from finn.dataflow.artifacts.build import (
+from finn.kernels.artifacts.build import (
     GeneratedModuleName,
     ModuleABIRequirements,
     ModuleBuildRequirements,
@@ -38,9 +38,9 @@ from finn.dataflow.artifacts.build import (
     prepare_module_build,
     render_module_sources,
 )
-from finn.dataflow.artifacts.contributions import CopiedSource
-from finn.dataflow.artifacts.store import ArtifactStore
-from finn.dataflow.artifacts.rtl import check_abi
+from finn.kernels.artifacts.contributions import CopiedSource
+from finn.kernels.artifacts.store import ArtifactStore
+from finn.kernels.artifacts.rtl import check_abi
 from finn.dataflow.model import Kernel, KernelChoice, NetworkBoundary
 from finn.dataflow.kernels.matmul.physical import (
     DECOMPOSED_PRODUCER,
@@ -50,9 +50,9 @@ from finn.dataflow.kernels.matmul.physical import (
     validate_decomposed_structure,
 )
 from finn.dataflow.model.physical.capture import selected_child_realization
-from finn.dataflow.model.physical.layout import PeriodicLast
-from finn.dataflow.model.physical.lowering import lower_module_structure
-from finn.dataflow.model.physical.structure import (
+from finn.kernels.physical.layout import PeriodicLast
+from finn.kernels.physical.lowering import lower_module_structure
+from finn.kernels.physical.structure import (
     ConstantBits,
     PhysicalPin,
     PhysicalStructure,
@@ -78,8 +78,8 @@ from finn.dataflow.model.logical.region import (
     ScheduleLevel,
 )
 from finn.dataflow.kernels.matmul.dot_product import DotProductKernel, WeightSupply
-from finn.dataflow.kernels.matmul.resources import template_root
-from finn.dataflow.space.declarations import (
+from finn.kernels.resources import template_root
+from finn.kernels.space.declarations import (
     Decision,
     Input,
     Problem,

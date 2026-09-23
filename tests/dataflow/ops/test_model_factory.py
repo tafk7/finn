@@ -10,12 +10,12 @@ from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.base import CustomOp
 
-from finn.dataflow._engine import Decided, RequestError
+from finn.kernels._engine import Decided, RequestError
 from finn.dataflow.ops.base import DATAFLOW_DOMAIN, DataflowOp, DataflowOpError
 from finn.dataflow.ops.persistence import assign_dataflow_scope_ids
 from finn.dataflow.ops.replay.op import ReplaySpace
 from finn.dataflow.ops.space import DataflowSpace
-from finn.dataflow.space.declarations import Space
+from finn.kernels.space.declarations import Space
 
 
 def _model():

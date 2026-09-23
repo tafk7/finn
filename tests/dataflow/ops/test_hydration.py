@@ -17,10 +17,10 @@ from dataflow.ops.mvau.test_source_semantics import (
     _configure_mvau_point,
     MATRIX_HEIGHT,
 )
-from finn.dataflow._engine import Absent, Decided, Unresolved, RequestError
+from finn.kernels._engine import Absent, Decided, Unresolved, RequestError
 from finn.dataflow.ops.base import DataflowOp, DataflowOpError
 from finn.dataflow.ops.binding import ImplementationBinding, ChoiceBinding
-from finn.dataflow.space.declarations import (
+from finn.kernels.space.declarations import (
     Decision,
     Input,
     Subspace,

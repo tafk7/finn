@@ -16,7 +16,7 @@ from onnx import helper
 from qonnx.core.modelwrapper import ModelWrapper
 
 from finn.dataflow.ops.base import DATAFLOW_DOMAIN, DataflowOp, DataflowOpError
-from finn.dataflow._engine import Decided
+from finn.kernels._engine import Decided
 from finn.dataflow.ops.native import (
     AttributeCodec,
     NativeAttribute,
@@ -28,10 +28,10 @@ from finn.dataflow.ops.native import (
     decode_choice_value,
 )
 from finn.dataflow.ops.persistence import assign_dataflow_scope_ids
-from finn.dataflow.space import Decision, Subspace, Space
+from finn.kernels.space import Decision, Subspace, Space
 from finn.dataflow.ops.schema import Attribute
-from finn.dataflow.space.declarations import AuthoringError
-from finn.dataflow.space.compiler import compile_space
+from finn.kernels.space.declarations import AuthoringError
+from finn.kernels.space.compiler import compile_space
 
 
 class Colour(Enum):

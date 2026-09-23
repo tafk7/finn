@@ -8,12 +8,12 @@ from itertools import product
 import pytest
 from qonnx.core.datatype import DataType
 
-from dataflow.model.contract_helpers import point_for, value
-from finn.dataflow._engine import Absent, RequestError, Unresolved
+from kernels.helpers import point_for, value
+from finn.kernels._engine import Absent, RequestError, Unresolved
 from finn.dataflow.kernels.dot_product import DotProduct
 from finn.dataflow.model.logical.maps import RectangularDomain
-from finn.dataflow.space import Decision, Input
-from finn.dataflow.space.declarations import declared_members
+from finn.kernels.space import Decision, Input
+from finn.kernels.space.declarations import declared_members
 
 
 def facts(**updates):

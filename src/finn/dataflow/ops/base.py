@@ -9,7 +9,7 @@ from collections.abc import Mapping
 from typing import Any, ClassVar
 
 from qonnx.custom_op.base import CustomOp  # type: ignore[import-not-found]
-from finn.dataflow.space.declarations import Space
+from finn.kernels.space.declarations import Space
 from finn.dataflow.ops.space import (
     DATAFLOW_DOMAIN,
     DataflowSpace,

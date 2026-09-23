@@ -9,7 +9,7 @@ from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
 
 from finn.custom_op.dataflow import custom_op
-from finn.dataflow._engine import Decided, Unresolved
+from finn.kernels._engine import Decided, Unresolved
 from finn.dataflow.model.logical.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
 from finn.dataflow.model.logical.interface_authoring import PublicOperandDeclaration
 from finn.dataflow.model.logical.maps import RectangularDomain
@@ -25,7 +25,7 @@ from finn.dataflow.ops.native import (
 from finn.dataflow.ops.persistence import assign_dataflow_scope_ids
 from finn.dataflow.ops.schema import OpInput, OpOutput
 from finn.dataflow.ops.type_context import producer_type
-from finn.dataflow.space.declarations import (
+from finn.kernels.space.declarations import (
     Decision,
     Input,
     Projection,

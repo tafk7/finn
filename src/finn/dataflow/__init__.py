@@ -1,21 +1,24 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The dataflow stack, as a namespace and nothing more.
+"""Logical dataflow modeling and compiler integration.
 
-The packages form a one-way responsibility stack:
+These consumers use the shared physical kernel package:
 
 ```text
-finn.dataflow.space      generic declarations, compilation and occurrences
-finn.dataflow.model      Kernel-domain framework and detached value subpackages
-finn.dataflow.kernels    concrete reusable implementations and resources
+finn.kernels             physical components, Space, artifacts and shared values
+        ^
+        |
+finn.dataflow.model      logical models and physical binding adapters
+finn.dataflow.kernels    modeling experiments and compiler-facing kernel adapters
 finn.dataflow.ops        source interpretation and compiler integration
 ```
 
-Logical values and public operand exports live under ``model.logical``; physical
-structures, interfaces and lowering live under ``model.physical``. Portable build
-schemas and services remain in ``artifacts``. The private ``_engine`` and generic
-``space`` package do not depend on the Kernel domain, concrete library or source adapters.
+Logical values and public operand exports live under ``model.logical``. Region
+bindings and conventional physical View adapters live under ``model.physical``.
+Detached physical structures, lowering and portable build services are owned by
+``finn.kernels``. Its private engine and generic Space remain independent of
+concrete components and dataflow models.
 
 This module deliberately re-exports nothing.  A value with two importable paths
 looks like a value with two owners, and the whole point of the model/space split

@@ -8,9 +8,9 @@ from itertools import product
 import pytest
 from qonnx.core.datatype import DataType
 
-from dataflow.model.contract_helpers import assess, point_for, value
-from finn.dataflow._engine import Absent, Unresolved
-from finn.dataflow.model.kernel_base import Kernel
+from kernels.helpers import assess, point_for, value
+from finn.kernels._engine import Absent, Unresolved
+from finn.kernels.base import Kernel
 from finn.dataflow.model.logical.contract_authoring import (
     Count,
     Final,
@@ -22,11 +22,11 @@ from finn.dataflow.model.logical.contract_authoring import (
     Selection,
 )
 from finn.dataflow.model.logical.contract_expressions import ExactQuotient, Index, Schedule
-from finn.dataflow.model.logical.datatype_semantics import QONNX_DATATYPE_VALUE_SEMANTICS
+from finn.kernels.datatypes.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
 from finn.dataflow.model.logical.maps import RectangularDomain
 from finn.dataflow.model.logical.region_validation import validate_region
-from finn.dataflow.space import Input
-from finn.dataflow.space.declarations import AuthoringError, declared_members
+from finn.kernels.space import Input
+from finn.kernels.space.declarations import AuthoringError, declared_members
 
 
 class Identity(Kernel):

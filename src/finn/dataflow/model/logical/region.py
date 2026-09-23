@@ -15,7 +15,7 @@ from bisect import bisect_left
 from dataclasses import dataclass
 from typing import Iterable, Iterator, Mapping, Optional, Tuple
 
-from finn.dataflow.model.logical.datatypes import (
+from finn.kernels.datatypes.values import (
     DatatypeError,
     QONNXDataType,
     canonical_qonnx_datatype,
@@ -123,7 +123,7 @@ def _nonnegative_domain(extents: Tuple[int, ...]) -> RectangularDomain | None:
 #:
 #: There is no FINN-local datatype value.  The name is kept as an alias because
 #: it is what the canon calls the concept and what several hundred annotations
-#: already say; ``finn.dataflow.model.logical.datatypes`` owns the identity, the recognition,
+#: already say; ``finn.kernels.datatypes.values`` owns the identity, the recognition,
 #: and the canonicalization.
 NumericElementType = QONNXDataType
 

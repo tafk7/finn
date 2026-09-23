@@ -16,12 +16,13 @@ from finn.dataflow.model.identity import (
     implementation_identity,
 )
 from finn.dataflow.model.logical.region import DataflowRegion
-from finn.dataflow.model.physical.layout import PackedBeatLayout
+from finn.kernels.physical.layout import PackedBeatLayout
 from finn.dataflow.model.physical.interface import KernelStreamBinding
-from finn.dataflow.artifacts import build, contribution_types, contributions, requirements
-from finn.dataflow.kernels import target
+from finn.kernels.artifacts import build, contribution_types, contributions, requirements
+from finn.kernels import target
 from finn.dataflow.model.logical import composition, results, semantics
-from finn.dataflow.model.logical import datatype_semantics, result_semantics
+from finn.kernels.datatypes import semantics as datatype_semantics
+from finn.dataflow.model.logical import result_semantics
 
 
 class ExampleKernel(Kernel):
@@ -69,7 +70,7 @@ def test_implementation_identity_is_owned_by_the_domain() -> None:
             MvauComputationProfile,
             "finn.dataflow.ops.mvau.computation.MvauComputationProfile",
         ),
-        (DspBlock, "finn.dataflow.kernels.dotp_axi.DspBlock"),
+        (DspBlock, "finn.kernels.target.DspBlock"),
         (WeightSupply, "finn.dataflow.ops.mvau.kernels.supply.WeightSupply"),
     ),
 )
@@ -105,7 +106,7 @@ def test_unmoved_type_keeps_its_real_identity() -> None:
 @pytest.mark.parametrize(
     "current,compatibility,module",
     [
-        (target.DspBlock, DspBlock, "finn.dataflow.kernels.matmul.base"),
+        (target.DspBlock, DspBlock, "finn.kernels.target"),
         (results.RegionResult, composition.RegionResult, "finn.dataflow.model.logical.composition"),
         (
             results.NetworkResult,
@@ -115,17 +116,17 @@ def test_unmoved_type_keeps_its_real_identity() -> None:
         (
             requirements.ModuleBuildRequirements,
             build.ModuleBuildRequirements,
-            "finn.dataflow.artifacts.build",
+            "finn.kernels.artifacts.build",
         ),
         (
             requirements.ModuleABIRequirements,
             build.ModuleABIRequirements,
-            "finn.dataflow.artifacts.build",
+            "finn.kernels.artifacts.build",
         ),
         (
             contribution_types.CopiedSource,
             contributions.CopiedSource,
-            "finn.dataflow.artifacts.contributions",
+            "finn.kernels.artifacts.contributions",
         ),
     ],
 )

@@ -7,9 +7,9 @@ from dataclasses import replace
 
 import pytest
 
-from finn.dataflow._engine import Decided
+from finn.kernels._engine import Decided
 from finn.dataflow.model.physical.capture import capture_kernel_realization
-from finn.dataflow.model.physical.layout import (
+from finn.kernels.physical.layout import (
     FieldPlacement,
     PackedBeatLayout,
     PeriodicLast,

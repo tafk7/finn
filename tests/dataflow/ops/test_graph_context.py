@@ -18,7 +18,7 @@ from dataflow.ops.test_conformance import (
     _replay_model,
 )
 from dataflow.physical_fixture import source_model
-from finn.dataflow._engine import Decided
+from finn.kernels._engine import Decided
 from finn.dataflow.model.logical.region import BeatSequence
 from finn.dataflow.ops.base import DATAFLOW_DOMAIN, DataflowOpError
 from finn.dataflow.ops.graph_context import (
@@ -149,9 +149,10 @@ def test_initial_bind_refuses_overrideable_initializer_without_writing() -> None
 
 
 def test_local_problem_fingerprint_pins_oh_native_schema_vectors() -> None:
+    # MVAU result datatypes use the relocated QONNX codec identity.
     expected = {
         "ReplaySpace": "b5b12fcbf6ac02fe6c03b15e9e0306d7abc0982703d191b17f3f241a2ae05515",
-        "MvauSpace": "fe1dca5910a789071ab5690089b9e84cbf2e128ac6c2ababb076c0d835a242cb",
+        "MvauSpace": "23b4ad5d41a4498308cb52216591f7c3e84ddea6bb1b6cc747d199b8d083eaac",
     }
     build = Build()
     for make_model in (_replay_model, _mvau_model):

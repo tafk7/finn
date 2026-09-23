@@ -9,7 +9,7 @@ outputs at the last synapse fold. This is a dataflow/schedule description; the
 multiply-accumulate arithmetic is implemented by the referenced dotp RTL.
 """
 
-from finn.dataflow.model.logical.datatypes import QONNXDataType
+from finn.kernels.datatypes.values import QONNXDataType
 from finn.dataflow.model.logical.maps import OccurrenceAxis, RectangularDomain
 from finn.dataflow.model.logical.region import (
     BeatSequence,

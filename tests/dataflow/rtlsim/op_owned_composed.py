@@ -12,17 +12,17 @@ from dataclasses import fields, is_dataclass
 from enum import Enum
 from pathlib import Path
 
-from finn.dataflow._engine import Decided
-from finn.dataflow.artifacts.build import (
+from finn.kernels._engine import Decided
+from finn.kernels.artifacts.build import (
     materialize_module_sources,
     module_source_derivation,
     portable_module_component,
     prepare_module_build,
 )
-from finn.dataflow.artifacts.formats import RtlModuleDirectory
-from finn.dataflow.artifacts.formats.rtl_module import RtlModuleOptions
-from finn.dataflow.artifacts.packaging import Target, plan_package
-from finn.dataflow.artifacts.store import ArtifactStore
+from finn.kernels.artifacts.formats import RtlModuleDirectory
+from finn.kernels.artifacts.formats.rtl_module import RtlModuleOptions
+from finn.kernels.artifacts.packaging import Target, plan_package
+from finn.kernels.artifacts.store import ArtifactStore
 from finn.dataflow.model.physical.capture import capture_kernel_realization
 from finn.dataflow.ops.persistence import CommitmentStage
 from finn.dataflow.ops.physical import (
@@ -45,7 +45,7 @@ from dataflow.physical_fixture import (
     source_model,
     template_roots,
 )
-from dataflow.rtlsim.rtl_transport import drive_observed
+from kernels.rtlsim.rtl_transport import drive_observed
 
 
 def _record(value):

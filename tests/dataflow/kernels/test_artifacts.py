@@ -11,9 +11,9 @@ from pathlib import Path
 
 import pytest
 
-from finn.dataflow._engine import Decided, Engine
-from finn.dataflow.artifacts.abi import ComponentABI, Reset, Signal
-from finn.dataflow.artifacts.build import (
+from finn.kernels._engine import Decided, Engine
+from finn.kernels.artifacts.abi import ComponentABI, Reset, Signal
+from finn.kernels.artifacts.build import (
     SELF_CONTAINED_JINJA_RENDERER,
     BuildError,
     FixedModuleName,
@@ -28,8 +28,8 @@ from finn.dataflow.artifacts.build import (
     portable_module_component,
     prepare_module_build,
 )
-from finn.dataflow.artifacts.contributions import CopiedSource
-from finn.dataflow.artifacts.derivation import (
+from finn.kernels.artifacts.contributions import CopiedSource
+from finn.kernels.artifacts.derivation import (
     ArtifactRef,
     Derivation,
     OutputLayout,
@@ -37,10 +37,10 @@ from finn.dataflow.artifacts.derivation import (
     Scalar,
     build_key,
 )
-from finn.dataflow.artifacts.formats import RtlModuleDirectory
-from finn.dataflow.artifacts.formats.rtl_module import RtlModuleOptions
-from finn.dataflow.artifacts.packaging import Target, plan_package
-from finn.dataflow.artifacts.store import ArtifactStore, StoredArtifact
+from finn.kernels.artifacts.formats import RtlModuleDirectory
+from finn.kernels.artifacts.formats.rtl_module import RtlModuleOptions
+from finn.kernels.artifacts.packaging import Target, plan_package
+from finn.kernels.artifacts.store import ArtifactStore, StoredArtifact
 from finn.dataflow.kernels.dotp_axi import FINNLIB_ROOT
 from finn.dataflow.model import (
     Kernel,
@@ -48,9 +48,9 @@ from finn.dataflow.model import (
     RegionDeclaration,
     kernel_physical,
 )
-from finn.dataflow.space.compiler import _compile_space
-from finn.dataflow.space.declarations import Decision, Input, Problem, Space
-from finn.dataflow.space.spec_algebra import assemble_specs
+from finn.kernels.space.compiler import _compile_space
+from finn.kernels.space.declarations import Decision, Input, Problem, Space
+from finn.kernels.space.spec_algebra import assemble_specs
 
 from dataflow.kernels.test_dotp_axi import _configure as _configure_dotp
 from dataflow.kernels.test_kernel import _region

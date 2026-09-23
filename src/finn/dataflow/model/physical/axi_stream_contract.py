@@ -15,8 +15,8 @@ from dataclasses import dataclass
 from math import prod
 from typing import TYPE_CHECKING, cast, overload
 
-from finn.dataflow.artifacts.abi import Bus, Endpoint
-from finn.dataflow.artifacts.requirements import ModuleBuildRequirements
+from finn.kernels.artifacts.abi import Bus, Endpoint
+from finn.kernels.artifacts.requirements import ModuleBuildRequirements
 from finn.dataflow.model.logical._contract_support import (
     Dependencies,
     condition_node,
@@ -25,13 +25,13 @@ from finn.dataflow.model.logical._contract_support import (
 )
 from finn.dataflow.model.logical.contract_authoring import LocalContract, PortDeclaration
 from finn.dataflow.model.logical.contract_expressions import Index
-from finn.dataflow.model.logical.datatypes import QONNXDataType
+from finn.kernels.datatypes.values import QONNXDataType
 from finn.dataflow.model.logical.maps import AffineRankMap, RectangularDomain
 from finn.dataflow.model.logical.region import DataflowRegion
-from finn.dataflow.model.physical.axi_stream import AxiStream
-from finn.dataflow.model.physical.layout import PeriodicLast
+from finn.kernels.physical.axi_stream import AxiStream
+from finn.kernels.physical.layout import PeriodicLast
 from finn.dataflow.model.physical.view import PhysicalView
-from finn.dataflow.space.declarations import (
+from finn.kernels.space.declarations import (
     AuthoringError,
     Constraint,
     ConstraintGroup,

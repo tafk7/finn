@@ -15,7 +15,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol, cast
 
-from finn.dataflow._engine import (
+from finn.kernels._engine import (
     Absent,
     Answer,
     Decided,
@@ -25,7 +25,7 @@ from finn.dataflow._engine import (
     RequestError,
     Unresolved,
 )
-from finn.dataflow.model.logical.datatypes import (
+from finn.kernels.datatypes.values import (
     QONNXDataType,
     canonical_qonnx_datatype,
     encode_datatype,
@@ -51,9 +51,9 @@ from finn.dataflow.ops.source_values import (
     SourceOperandKey,
     SourceOrigin,
 )
-from finn.dataflow.space.declarations import CanonicalValue, CanonicalValueCodec
-from finn.dataflow.space.declarations import AuthoringError
-from finn.dataflow.space.occurrence import ProjectionAssessment
+from finn.kernels.space.declarations import CanonicalValue, CanonicalValueCodec
+from finn.kernels.space.declarations import AuthoringError
+from finn.kernels.space.occurrence import ProjectionAssessment
 
 if TYPE_CHECKING:
     from finn.dataflow.ops.space import DataflowSpace

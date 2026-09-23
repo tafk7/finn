@@ -8,13 +8,13 @@ facade re-exports the same objects and declares the remaining Region, Network
 and validation-report domains. No alternative tokens are created by the split.
 """
 
-from finn.dataflow._engine import ValueSemantics
+from finn.kernels._engine import ValueSemantics
 from finn.dataflow.model.logical.network import DataflowNetwork, PositionMap
 from finn.dataflow.model.logical.network_validation import NetworkValidationReport
 from finn.dataflow.model.logical.region import DataflowRegion
 from finn.dataflow.model.logical.region_validation import RegionValidationReport
 
-from finn.dataflow.model.logical.datatype_semantics import (
+from finn.kernels.datatypes.semantics import (
     QONNX_DATATYPE_CODEC,
     QONNX_DATATYPE_SEMANTICS,
     QONNX_DATATYPE_VALUE_SEMANTICS,

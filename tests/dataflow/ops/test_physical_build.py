@@ -12,10 +12,10 @@ import pytest
 from onnx import checker
 from qonnx.core.modelwrapper import ModelWrapper
 
-import finn.dataflow.artifacts.build as build_module
-from finn.dataflow._engine import Decided, Unresolved
-from finn.dataflow.artifacts.build import module_source_derivation
-from finn.dataflow.artifacts.store import ArtifactStore
+import finn.kernels.artifacts.build as build_module
+from finn.kernels._engine import Decided, Unresolved
+from finn.kernels.artifacts.build import module_source_derivation
+from finn.kernels.artifacts.store import ArtifactStore
 from finn.dataflow.model.logical.region import BeatSequence
 from finn.dataflow.ops.base import DataflowOpError
 from finn.dataflow.ops.graph_context import (
@@ -329,15 +329,15 @@ def test_prepared_production_component_renders_in_fresh_process_without_compiler
 import builtins, pathlib, pickle, sys
 original_import = builtins.__import__
 forbidden = ('finn.dataflow.ops', 'finn.dataflow.kernels', 'finn.dataflow.designs',
-             'finn.dataflow.model', 'finn.dataflow.space', 'finn.dataflow._engine',
+             'finn.dataflow.model', 'finn.kernels.space', 'finn.kernels._engine',
              'onnx', 'qonnx')
 def guarded_import(name, *args, **kwargs):
     if any(name == prefix or name.startswith(prefix + '.') for prefix in forbidden):
         raise AssertionError('compiler import during detached rendering: ' + name)
     return original_import(name, *args, **kwargs)
 builtins.__import__ = guarded_import
-from finn.dataflow.artifacts.build import render_module_sources
-from finn.dataflow.artifacts.store import ArtifactStore
+from finn.kernels.artifacts.build import render_module_sources
+from finn.kernels.artifacts.store import ArtifactStore
 prepared = pickle.loads(pathlib.Path(sys.argv[1]).read_bytes())
 store_root = pathlib.Path(sys.argv[2]).resolve()
 original_read = pathlib.Path.read_bytes

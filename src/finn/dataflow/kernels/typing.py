@@ -4,7 +4,7 @@
 """Canonical integer operand support for the admitted dot-product families."""
 
 from finn.dataflow.model.logical.region import NumericElementType, element_width
-from finn.dataflow.space.declarations import reject
+from finn.kernels.space.declarations import reject
 
 _MULTIPLIABLE_FAMILIES = ("INT", "UINT")
 _SIGNED_ROLES = frozenset({"weight", "accumulator", "output"})

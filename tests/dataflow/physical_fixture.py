@@ -14,7 +14,7 @@ from onnx import TensorProto, helper
 from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
 
-from finn.dataflow._engine import Decided
+from finn.kernels._engine import Decided
 from finn.dataflow.kernels.dotp_axi import DotpAxiKernel
 from finn.dataflow.kernels.matmul.base import DspBlock
 from finn.dataflow.model.logical.network import PassCorrespondence
@@ -28,7 +28,7 @@ from finn.dataflow.ops.graph_context import (
 )
 from finn.dataflow.kernels.matmul.base import WeightedDotProductKernel
 from finn.dataflow.kernels.matmul.dot_product import DotProductKernel, WeightSupply
-from finn.dataflow.kernels.matmul.resources import template_root
+from finn.kernels.resources import template_root
 from finn.dataflow.ops.mvau.op import MvauSpace
 from finn.dataflow.ops.source_values import SourceDirection, SourceOperandKey
 

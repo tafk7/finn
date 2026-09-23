@@ -11,9 +11,9 @@ from typing import ClassVar, cast
 import pytest
 from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 
-from finn.dataflow._engine import Absent, Decided, QualifiedPath, Unresolved
-from finn.dataflow.artifacts.abi import ComponentABI
-from finn.dataflow.artifacts.build import (
+from finn.kernels._engine import Absent, Decided, QualifiedPath, Unresolved
+from finn.kernels.artifacts.abi import ComponentABI
+from finn.kernels.artifacts.build import (
     BuildError,
     ModuleBuildRequirements,
     RenderedSourceRequirement,
@@ -21,8 +21,8 @@ from finn.dataflow.artifacts.build import (
     prepare_module_build,
     module_source_derivation,
 )
-from finn.dataflow.artifacts.store import ArtifactStore
-from finn.dataflow.artifacts.derivation import Scalar, build_key
+from finn.kernels.artifacts.store import ArtifactStore
+from finn.kernels.artifacts.derivation import Scalar, build_key
 from finn.dataflow.model.kernel import Kernel
 from finn.dataflow.model.logical.authoring import RegionDeclaration
 from finn.dataflow.model.physical.authoring import ModuleParameter, PhysicallyUnsupported
@@ -37,7 +37,7 @@ from finn.dataflow.model.logical import (
     ScheduledInputRequirements,
     ScheduledOutputAvailability,
 )
-from finn.dataflow.space import (
+from finn.kernels.space import (
     AuthoringError,
     ConstraintGroup,
     Decision,
@@ -47,7 +47,7 @@ from finn.dataflow.space import (
     SubspaceChoice,
     constraint,
 )
-from finn.dataflow.space.occurrence import occurrence_persistable
+from finn.kernels.space.occurrence import occurrence_persistable
 
 
 def _region(width: int) -> DataflowRegion:

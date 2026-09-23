@@ -18,7 +18,7 @@ from finn.dataflow.model.logical._contract_support import (
     install_members,
     property_node,
 )
-from finn.dataflow.space.declarations import (
+from finn.kernels.space.declarations import (
     AuthoringError,
     Constraint,
     Derived,

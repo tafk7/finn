@@ -10,11 +10,11 @@ from onnx import TensorProto, helper
 from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
 
-from finn.dataflow._engine import Absent, Decided, Unresolved
+from finn.kernels._engine import Absent, Decided, Unresolved
 from finn.dataflow.ops.infer import InferDataflowMatMul
 from finn.dataflow.ops.native import serialize_choices
 from finn.dataflow.kernels.matmul.base import DspBlock
-from finn.dataflow.artifacts.store import ArtifactStore
+from finn.kernels.artifacts.store import ArtifactStore
 from dataflow.physical_fixture import configure, template_roots
 from finn.dataflow.ops.physical import (
     capture_op_physical,

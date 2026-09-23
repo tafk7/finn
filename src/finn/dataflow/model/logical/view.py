@@ -6,15 +6,15 @@
 from __future__ import annotations
 from collections.abc import Sequence
 from typing import TypeVar, cast
-from finn.dataflow._engine import DesignPoint, Engine
+from finn.kernels._engine import DesignPoint, Engine
 from finn.dataflow.model._authoring import GENERATED_MEMBERS, authored_member, generated_member
 from finn.dataflow.model.logical.results import LogicalResult, NetworkResult, RegionResult
 from finn.dataflow.model.logical.network import DataflowNetwork
 from finn.dataflow.model.logical.region import DataflowRegion
 from finn.dataflow.model.logical.region_validation import validate_region
 from finn.dataflow.model.logical.result_semantics import DATAFLOW_LOGICAL_RESULT_SEMANTICS
-from finn.dataflow.space.compiler import _CompiledSpace
-from finn.dataflow.space.declarations import (
+from finn.kernels.space.compiler import _CompiledSpace
+from finn.kernels.space.declarations import (
     AuthoringError,
     Constraint,
     ConstraintGroup,
@@ -26,7 +26,7 @@ from finn.dataflow.space.declarations import (
     reject,
     reject_all,
 )
-from finn.dataflow.space.occurrence import ProjectionAssessment, evaluate_projection
+from finn.kernels.space.occurrence import ProjectionAssessment, evaluate_projection
 
 T_co = TypeVar("T_co", covariant=True)
 

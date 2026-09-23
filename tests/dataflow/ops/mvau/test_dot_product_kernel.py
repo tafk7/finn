@@ -10,7 +10,7 @@ from typing import cast
 import pytest
 from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 
-from finn.dataflow._engine import (
+from finn.kernels._engine import (
     Absent,
     Answer,
     Decided,
@@ -23,9 +23,9 @@ from finn.dataflow.model.logical.semantics import (
     QONNX_DATATYPE_CODEC,
     QONNX_DATATYPE_VALUE_SEMANTICS,
 )
-from finn.dataflow.space.compiler import _Ref, _compile_space
-from finn.dataflow.space.declarations import Problem, Space, Subspace, ValueSource
-from finn.dataflow.space.occurrence import occurrence_persistable
+from finn.kernels.space.compiler import _Ref, _compile_space
+from finn.kernels.space.declarations import Problem, Space, Subspace, ValueSource
+from finn.kernels.space.occurrence import occurrence_persistable
 from finn.dataflow.model import kernel_dataflow
 from finn.dataflow.kernels.matmul.dot_product import (
     KERNEL_INPUTS,
@@ -34,7 +34,7 @@ from finn.dataflow.kernels.matmul.dot_product import (
 )
 from finn.dataflow.kernels.dotp_axi import DotpAxiKernel
 from finn.dataflow.kernels.matmul.base import DspBlock
-from finn.dataflow.artifacts.build import ModuleBuildRequirements
+from finn.kernels.artifacts.build import ModuleBuildRequirements
 from finn.dataflow.model import kernel_physical
 from finn.dataflow.kernels.replay_buffer import ReplayBufferKernel
 from finn.dataflow.model.logical.network import (
@@ -57,7 +57,7 @@ from finn.dataflow.kernels.matmul.base import (
     ActivationMode,
     MvauComputationProfile,
 )
-from finn.dataflow.space.spec_algebra import assemble_specs
+from finn.kernels.space.spec_algebra import assemble_specs
 
 CLOCK_PERIOD_NS = 4.0
 

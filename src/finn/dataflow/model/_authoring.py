@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import cast
 
-from finn.dataflow.space.declarations import AuthoringError
+from finn.kernels.space.declarations import AuthoringError
 
 GENERATED_MEMBERS = "_kernel_generated_members"
 

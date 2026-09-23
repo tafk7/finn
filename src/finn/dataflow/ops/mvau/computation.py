@@ -22,7 +22,7 @@ from __future__ import annotations
 from typing import Any
 
 from finn.dataflow.kernels.matmul.base import AccumulationMode, MvauComputationProfile
-from finn.dataflow.model.logical.datatypes import QONNXDataType
+from finn.kernels.datatypes.values import QONNXDataType
 
 
 def execute_mvau(

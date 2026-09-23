@@ -15,9 +15,9 @@ from dataflow.kernels.test_composition_boundary import PlainChildComposite, Plai
 from dataflow.kernels.test_module_build_spec import ModuleKernel, _region
 from dataflow.ops.mvau.test_dot_product_kernel import _unconfigured
 from dataflow.ops.test_dataflow_op import Build, _replay_model
-from finn.dataflow._engine import Absent, Decided, Unresolved
-from finn.dataflow.artifacts.abi import ComponentABI
-from finn.dataflow.artifacts.build import (
+from finn.kernels._engine import Absent, Decided, Unresolved
+from finn.kernels.artifacts.abi import ComponentABI
+from finn.kernels.artifacts.build import (
     FixedModuleName,
     ModuleABIRequirements,
     ModuleBuildRequirements,
@@ -47,7 +47,7 @@ from finn.dataflow.kernels.replay import ActivationReplayKernel
 from finn.dataflow.ops.replay.op import ReplaySpace
 from dataflow.ops.factory import make_space
 from finn.dataflow.ops.binding import ChoiceBinding
-from finn.dataflow.space import (
+from finn.kernels.space import (
     ConstraintGroup,
     Decision,
     Input,
@@ -60,7 +60,7 @@ from finn.dataflow.space import (
     derived,
     reject,
 )
-from finn.dataflow.space.occurrence import layer_runtime
+from finn.kernels.space.occurrence import layer_runtime
 from finn.dataflow.model.logical.semantics import DATAFLOW_LOGICAL_RESULT_SEMANTICS
 
 

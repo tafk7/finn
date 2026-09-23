@@ -20,7 +20,7 @@ from finn.dataflow.model.logical.maps import RectangularDomain
 from finn.dataflow.model.logical.network import PositionMap
 from finn.dataflow.model.logical.refs import DataflowOperandRef, RegionInputRef, RegionOutputRef
 from finn.dataflow.kernels.replay_buffer import ReplayBufferKernel
-from finn.dataflow.space.declarations import (
+from finn.kernels.space.declarations import (
     Decision,
     Input,
     Subspace,

@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from finn.dataflow.artifacts.abi import (
+from finn.kernels.artifacts.abi import (
     Bus,
     Clock,
     ClockAlignment,
@@ -18,7 +18,7 @@ from finn.dataflow.artifacts.abi import (
     Signal,
     StandardProtocol,
 )
-from finn.dataflow.artifacts.build import (
+from finn.kernels.artifacts.build import (
     EntryPointSourceName,
     FixedModuleName,
     GeneratedModuleName,
@@ -26,14 +26,14 @@ from finn.dataflow.artifacts.build import (
     RenderedSourceRequirement,
     SELF_CONTAINED_JINJA_RENDERER,
 )
-from finn.dataflow.artifacts.derivation import ProducerIdentity
-from finn.dataflow.model.physical.layout import (
+from finn.kernels.artifacts.derivation import ProducerIdentity
+from finn.kernels.physical.layout import (
     PackedBeatLayout,
     PeriodicLast,
     UnusedBitPolicy,
     UnusedBitRange,
 )
-from finn.dataflow.model.physical.structure import (
+from finn.kernels.physical.structure import (
     ConstantBits,
     ModuleInstance,
     PhysicalPin,

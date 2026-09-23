@@ -11,7 +11,7 @@ from functools import wraps
 from inspect import Parameter as _SignatureParameter, Signature, signature
 from typing import cast
 
-from finn.dataflow._engine import ABSENT
+from finn.kernels._engine import ABSENT
 from finn.dataflow.model.children import KernelChoice, choice_role, kernel_choice_members
 from finn.dataflow.model.logical.composition import (
     CompositionError,
@@ -31,7 +31,7 @@ from finn.dataflow.model.logical.semantics import (
     DATAFLOW_NETWORK_SEMANTICS,
     DATAFLOW_REGION_SEMANTICS,
 )
-from finn.dataflow.space.declarations import (
+from finn.kernels.space.declarations import (
     AuthoringError,
     Derived,
     Space,

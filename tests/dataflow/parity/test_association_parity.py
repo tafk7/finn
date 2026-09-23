@@ -107,7 +107,7 @@ def test_the_association_carries_the_same_identities_where_a_network_resolves() 
         DotProductKernel,
         WeightSupply,
     )
-    from finn.dataflow._engine import Decided  # noqa: PLC0415
+    from finn.kernels._engine import Decided  # noqa: PLC0415
 
     spec = next(item for item in SPECS if item["name"] == "fused_provenance")
     _model, occurrence = bound(spec, BUILD)

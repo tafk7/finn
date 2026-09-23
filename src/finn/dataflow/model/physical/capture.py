@@ -11,7 +11,7 @@ from enum import Enum
 import hashlib
 from typing import Any, cast
 
-from finn.dataflow._engine import (
+from finn.kernels._engine import (
     Absent,
     Answer,
     Decided,
@@ -21,7 +21,7 @@ from finn.dataflow._engine import (
     FindingKind,
     QualifiedPath,
 )
-from finn.dataflow.artifacts.build import ModuleBuildRequirements, module_build_fingerprint
+from finn.kernels.artifacts.build import ModuleBuildRequirements, module_build_fingerprint
 from finn.dataflow.model.identity import (
     ImplementationIdentity,
     comparison_type_identity,
@@ -30,7 +30,7 @@ from finn.dataflow.model.identity import (
 from finn.dataflow.model.logical.composition import ImplementationPath
 from finn.dataflow.model.physical.authoring import PhysicallyUnsupported
 from finn.dataflow.model.physical.interface import KernelRealizationFacts, KernelStreamBinding
-from finn.dataflow.space.declarations import (
+from finn.kernels.space.declarations import (
     ConstraintGroup,
     Projection,
     Space,
@@ -38,7 +38,7 @@ from finn.dataflow.space.declarations import (
     declared_members,
     semantics_for,
 )
-from finn.dataflow.space.occurrence import ProjectionAssessment, layer_runtime
+from finn.kernels.space.occurrence import ProjectionAssessment, layer_runtime
 
 
 @dataclass(frozen=True)
@@ -157,7 +157,7 @@ def capture_assessment_dependencies(
     assesses a narrow interface or constraint group can account for those premises
     separately, without adding them to local codegen or evaluating a full graph.
     """
-    from finn.dataflow.space.compiler import _Ref, answer_for  # noqa: PLC0415
+    from finn.kernels.space.compiler import _Ref, answer_for  # noqa: PLC0415
 
     reference_subject = assessment if isinstance(assessment, DependencyRef) else None
     name = (

@@ -17,6 +17,12 @@ The framework is fully open-source in order to give a higher degree of flexibili
 We have a separate repository [finn-examples](https://github.com/Xilinx/finn-examples) that houses pre-built examples for several neural networks.
 For more general information about FINN, please visit the [project page](https://xilinx.github.io/finn/) and check out the [publications](https://xilinx.github.io/finn/publications).
 
+For physical component development, start with [finn.kernels](src/finn/kernels/README.md):
+dotp, replay/cyclic streams, explicit MVAU assembly, and the shared Space/artifact
+support. Run `scripts/check-kernels.sh` for its independent checks. The
+[package extraction record](docs/kernel-package-extraction/RESULTS.md) documents
+ownership, validation, and intentional identity changes.
+
 ## Getting Started
 
 Please see the [Getting Started](https://finn.readthedocs.io/en/latest/getting_started.html) page for more information on requirements, installation, and how to run FINN in different modes. Due to the complex nature of the dependencies of the project, **we only support Docker-based execution of the FINN compiler at this time**.

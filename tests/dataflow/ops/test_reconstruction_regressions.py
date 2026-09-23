@@ -13,7 +13,7 @@ from finn.dataflow.ops.space import DataflowSpace
 from finn.dataflow.ops import native
 from finn.dataflow.ops.base import DataflowOpError
 from finn.dataflow.ops.native import DecodeError, read_attributes
-from finn.dataflow.space import Decision, Space, Subspace, divisors_of
+from finn.kernels.space import Decision, Space, Subspace, divisors_of
 
 
 class Extent(Space):

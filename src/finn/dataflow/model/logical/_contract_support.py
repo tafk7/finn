@@ -10,8 +10,8 @@ from dataclasses import dataclass, field
 from inspect import Parameter, Signature
 from typing import TypeVar
 
-from finn.dataflow._engine import ValueSemantics
-from finn.dataflow.space.declarations import (
+from finn.kernels._engine import ValueSemantics
+from finn.kernels.space.declarations import (
     AuthoringError,
     Constraint,
     ConstraintGroup,

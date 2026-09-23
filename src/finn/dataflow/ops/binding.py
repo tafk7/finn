@@ -12,9 +12,9 @@ from dataclasses import dataclass
 from collections.abc import Mapping
 from typing import Any, cast
 
-from finn.dataflow._engine import Answer, Decided
-from finn.dataflow.space.declarations import AuthoringError, Space, Subspace, SubspaceChoice
-from finn.dataflow.space.occurrence import (
+from finn.kernels._engine import Answer, Decided
+from finn.kernels.space.declarations import AuthoringError, Space, Subspace, SubspaceChoice
+from finn.kernels.space.occurrence import (
     _occurrence_state,
     occurrence_child,
     occurrence_choice,
@@ -48,7 +48,7 @@ class ImplementationBinding:
                     if not isinstance(active, Decided):
                         return cast("Answer[Space]", active)
                     if not active.value:
-                        from finn.dataflow._engine import Absent
+                        from finn.kernels._engine import Absent
 
                         return Absent()
                 current = occurrence_child(current, declaration)
@@ -59,7 +59,7 @@ class ImplementationBinding:
                     return cast("Answer[Space]", selected)
                 explicit = next(remaining, None)
                 if explicit is not None and explicit != selected.value:
-                    from finn.dataflow._engine import Absent
+                    from finn.kernels._engine import Absent
 
                     return Absent()
                 alternative = dict(declaration.alternatives)[selected.value]
@@ -68,7 +68,7 @@ class ImplementationBinding:
                     if not isinstance(active, Decided):
                         return cast("Answer[Space]", active)
                     if not active.value:
-                        from finn.dataflow._engine import Absent
+                        from finn.kernels._engine import Absent
 
                         return Absent()
                 current = choice.alternative(selected.value)
@@ -252,7 +252,7 @@ def operand_facet(operation: Any, key: str, name: str) -> Answer[Any]:
     binding = next(item for item in operands if item.role == key)
     answer: Answer[Any]
     if name == "operand_type" and binding.output:
-        from finn.dataflow.space.occurrence import combine_assessments
+        from finn.kernels.space.occurrence import combine_assessments
 
         declaration = interface_authoring.operand_declaration(target.value, key)
         facet = target.value.assess_view(declaration.datatype)
@@ -270,7 +270,7 @@ def operand_facet(operation: Any, key: str, name: str) -> Answer[Any]:
             ExplicitCoordinateMap,
         )
         from finn.dataflow.model.logical.network import PositionMap
-        from finn.dataflow._engine import Absent, Finding, FindingKind, QualifiedPath
+        from finn.kernels._engine import Absent, Finding, FindingKind, QualifiedPath
 
         explicit = isinstance(
             binding.adapter, (IdentityCoordinateMap, AffineRankMap, ExplicitCoordinateMap)

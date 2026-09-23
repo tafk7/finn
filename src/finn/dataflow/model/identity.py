@@ -10,21 +10,19 @@ from dataclasses import dataclass
 
 TYPE_IDENTITY_RELOCATIONS = {
     "finn.dataflow.model.identity.ImplementationIdentity": (
-        "finn.dataflow.space.capabilities.ImplementationIdentity"
+        "finn.kernels.space.capabilities.ImplementationIdentity"
     ),
-    "finn.dataflow.model.physical.layout.FieldPlacement": (
+    "finn.kernels.physical.layout.FieldPlacement": (
         "finn.dataflow.kernels.physical.FieldPlacement"
     ),
-    "finn.dataflow.model.physical.layout.PackedBeatLayout": (
+    "finn.kernels.physical.layout.PackedBeatLayout": (
         "finn.dataflow.kernels.physical.PackedBeatLayout"
     ),
-    "finn.dataflow.model.physical.layout.PeriodicLast": (
-        "finn.dataflow.kernels.physical.PeriodicLast"
-    ),
-    "finn.dataflow.model.physical.layout.UnusedBitPolicy": (
+    "finn.kernels.physical.layout.PeriodicLast": ("finn.dataflow.kernels.physical.PeriodicLast"),
+    "finn.kernels.physical.layout.UnusedBitPolicy": (
         "finn.dataflow.kernels.physical.UnusedBitPolicy"
     ),
-    "finn.dataflow.model.physical.layout.UnusedBitRange": (
+    "finn.kernels.physical.layout.UnusedBitRange": (
         "finn.dataflow.kernels.physical.UnusedBitRange"
     ),
     "finn.dataflow.model.physical.interface.KernelRealizationFacts": (
@@ -50,7 +48,7 @@ TYPE_IDENTITY_RELOCATIONS = {
 
 MODULE_IDENTITY_RELOCATIONS = {
     "finn.dataflow.model.logical.composition": "finn.dataflow.model.composition",
-    "finn.dataflow.model.logical.datatypes": "finn.dataflow.model.datatypes",
+    "finn.kernels.datatypes.values": "finn.dataflow.model.datatypes",
     "finn.dataflow.model.logical.maps": "finn.dataflow.model.maps",
     "finn.dataflow.model.logical.network": "finn.dataflow.model.network",
     "finn.dataflow.model.logical.network_validation": "finn.dataflow.model.network_validation",
@@ -65,7 +63,7 @@ MODULE_IDENTITY_RELOCATIONS = {
     "finn.dataflow.model.logical.view": "finn.dataflow.kernels.kernel",
     "finn.dataflow.model.physical.authoring": "finn.dataflow.kernels.kernel",
     "finn.dataflow.model.physical.view": "finn.dataflow.kernels.kernel",
-    "finn.dataflow.model.physical.structure": "finn.dataflow.kernels.physical_composition",
+    "finn.kernels.physical.structure": "finn.dataflow.kernels.physical_composition",
     "finn.dataflow.model.physical.capture": "finn.dataflow.ops.physical",
 }
 

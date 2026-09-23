@@ -19,14 +19,14 @@ from types import MappingProxyType
 from enum import Enum
 from typing import Any, cast, TYPE_CHECKING
 
-from finn.dataflow._engine import Answer, Decided, QualifiedPath, RequestError
-from finn.dataflow.space.declarations import (
+from finn.kernels._engine import Answer, Decided, QualifiedPath, RequestError
+from finn.kernels.space.declarations import (
     AuthoringError,
     CanonicalValue,
     PersistentCodec,
     check_canonical,
 )
-from finn.dataflow.space.occurrence import (
+from finn.kernels.space.occurrence import (
     PersistableChoice,
     occurrence_answer_at,
     occurrence_commit_paths,
@@ -352,8 +352,8 @@ def compiled_choice_schema(
 ) -> tuple[ChoiceAttribute, ...]:
     """Operation specialization hook over the existing compiled Space walk."""
 
-    from finn.dataflow.space.compiler import _CompiledSpace  # noqa: PLC0415
-    from finn.dataflow.space.occurrence import _collect_persistable  # noqa: PLC0415
+    from finn.kernels.space.compiler import _CompiledSpace  # noqa: PLC0415
+    from finn.kernels.space.occurrence import _collect_persistable  # noqa: PLC0415
 
     if not isinstance(compiled, _CompiledSpace):
         raise AuthoringError("native choice attributes require a compiled Space")
@@ -366,7 +366,7 @@ def compiled_choice_schema(
 def operation_choice_schema(operation_type: type[DataflowSpace]) -> tuple[ChoiceAttribute, ...]:
     """Compile one operation class into a detached, explicitly held schema."""
 
-    from finn.dataflow.space.compiler import compile_space_model  # noqa: PLC0415
+    from finn.kernels.space.compiler import compile_space_model  # noqa: PLC0415
 
     namespace = operation_type.root_namespace
     model = compile_space_model(

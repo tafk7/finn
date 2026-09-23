@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import pytest
 
-from finn.dataflow._engine import Absent, Decided, Unresolved
+from finn.kernels._engine import Absent, Decided, Unresolved
 from finn.dataflow.model.logical.presentation import (
     boundary_presented_position_set,
     edge_presented_position_set,

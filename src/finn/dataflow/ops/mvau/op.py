@@ -15,7 +15,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any, ClassVar, cast
 
-from finn.dataflow._engine import ABSENT, Absent, Decided
+from finn.kernels._engine import ABSENT, Absent, Decided
 from finn.dataflow.analysis.integer_dot import (
     DotProductBounds,
     analyze_integer_dot_product,
@@ -24,7 +24,7 @@ from finn.dataflow.analysis.integer_dot import (
     NumericalFinding,
     RuntimeWeightPromise,
 )
-from finn.dataflow.model.logical.datatypes import QONNXDataType
+from finn.kernels.datatypes.values import QONNXDataType
 from finn.dataflow.kernels.matmul.base import (
     AccumulationMode,
     DspBlock,
@@ -33,7 +33,7 @@ from finn.dataflow.kernels.matmul.base import (
     computation_profile,
     matrix_result_requirement,
 )
-from finn.dataflow.space.declarations import (
+from finn.kernels.space.declarations import (
     ConstraintGroup,
     CanonicalValueCodec,
     Problem,

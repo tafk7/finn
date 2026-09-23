@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 from dataclasses import replace
 
-from finn.dataflow._engine import Absent, Decided
+from finn.kernels._engine import Absent, Decided
 from finn.dataflow.analysis.integer_dot import DotProductBounds
 from finn.dataflow.kernels.matmul.base import (
     AccumulationMode,
@@ -33,7 +33,7 @@ from dataflow.ops.factory import make_op, make_space
 from finn.dataflow.ops.binding import ImplementationBinding, OperandBinding
 from finn.dataflow.ops.mapping import CoordinateMapping, Internal, derive_public_operand_mappings
 from finn.dataflow.ops.schema import DatatypeAttribute, OpInput, OpOutput
-from finn.dataflow.space.declarations import (
+from finn.kernels.space.declarations import (
     ConstraintGroup,
     Input,
     Subspace,

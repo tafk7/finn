@@ -16,9 +16,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
-from finn.dataflow._engine import Decided, RequestError
-from finn.dataflow.space.declarations import Space
-from finn.dataflow.space.occurrence import ProjectionAssessment
+from finn.kernels._engine import Decided, RequestError
+from finn.kernels.space.declarations import Space
+from finn.kernels.space.occurrence import ProjectionAssessment
 from finn.dataflow.ops.base import DataflowOp
 from finn.dataflow.ops.space import DataflowSpace, DataflowOpError
 from finn.dataflow.ops.native import (

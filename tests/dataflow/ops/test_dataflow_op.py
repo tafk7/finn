@@ -24,10 +24,10 @@ from onnx import TensorProto, helper  # type: ignore[import-not-found]
 from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 from qonnx.core.modelwrapper import ModelWrapper  # type: ignore[import-not-found]
 
-from finn.dataflow._engine import Absent, Decided, Unresolved
+from finn.kernels._engine import Absent, Decided, Unresolved
 from finn.dataflow.kernels.dotp_axi import DotpAxiKernel
 from finn.dataflow.kernels.matmul.base import DspBlock
-from finn.dataflow.space.declarations import (
+from finn.kernels.space.declarations import (
     AuthoringError,
     ConstraintGroup,
     Problem,
@@ -35,7 +35,7 @@ from finn.dataflow.space.declarations import (
     constraint,
     declared_members,
 )
-from finn.dataflow.space.occurrence import ProjectionAssessment
+from finn.kernels.space.occurrence import ProjectionAssessment
 from finn.dataflow.ops.mapping import CoordinateMapping, External, Internal
 from finn.dataflow.ops.space import DataflowSpace
 from dataflow.ops.factory import make_op, make_space

@@ -30,14 +30,14 @@ or without one.
 from __future__ import annotations
 
 from finn.dataflow.analysis.integer_dot import IntegerSupportReport
-from finn.dataflow.artifacts.build import ModuleBuildRequirements
+from finn.kernels.artifacts.build import ModuleBuildRequirements
 from finn.dataflow.kernels.matmul.physical import (
     DECOMPOSED_PRODUCER,
     DECOMPOSED_WRAPPER_TEMPLATE,
     compose_decomposed,
     top_boundary_layout,
 )
-from finn.dataflow.model.physical.lowering import lower_module_structure
+from finn.kernels.physical.lowering import lower_module_structure
 from finn.dataflow.model.physical.interface import (
     PhysicalResult,
     PhysicalPort,
@@ -59,7 +59,7 @@ from finn.dataflow.kernels.matmul.base import (
     WeightedDotProductKernel,
 )
 from finn.dataflow.kernels.matmul.supply import WeightSupply
-from finn.dataflow.space.declarations import (
+from finn.kernels.space.declarations import (
     ConstraintGroup,
     Decision,
     Input,

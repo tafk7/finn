@@ -18,7 +18,7 @@ Three claims, and they are checked separately because they fail separately:
 """
 
 from __future__ import annotations
-from finn.dataflow.space.declarations import Space
+from finn.kernels.space.declarations import Space
 
 from dataclasses import dataclass
 from typing import Any
@@ -34,7 +34,7 @@ from qonnx.custom_op.general.multithreshold import (  # type: ignore[import-not-
 )
 
 from finn.analysis.verify_custom_nodes import verify_nodes
-from finn.dataflow._engine import Absent, Decided, Unresolved
+from finn.kernels._engine import Absent, Decided, Unresolved
 from finn.dataflow.analysis.integer_dot import (
     DatatypeWeightPremise,
     IntegerRange,
@@ -43,7 +43,7 @@ from finn.dataflow.analysis.integer_dot import (
     RuntimeWeightPromise,
 )
 from finn.dataflow.kernels.matmul.base import DspBlock
-from finn.dataflow.space.declarations import AuthoringError
+from finn.kernels.space.declarations import AuthoringError
 from finn.dataflow.ops.base import DATAFLOW_DOMAIN, DataflowOpError
 from finn.dataflow.ops.space import DataflowSpace
 from finn.dataflow.ops.mvau.op import MvauDataflowOp
@@ -1142,9 +1142,11 @@ def test_dsp_codec_stays_stable_while_oh_source_schema_identity_changes() -> Non
         "enum": "finn.dataflow.kernels.dotp_axi.DspBlock",
         "value": "DSP58",
     }
+    # The shared datatype codec now identifies finn.kernels.
+    # The dataflow-owned DSP persistence payload above remains unchanged.
     assert (
         operation.local_problem_fingerprint
-        == "c57ed799923038b5982420500f83dfeabd9adb027601126aa95617c53e0438f9"
+        == "53a078177783974f90cec6ace924f122199064f25f139bcedd12cb7681fb9a8e"
     )
 
 

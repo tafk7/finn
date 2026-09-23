@@ -25,8 +25,8 @@ from finn.dataflow.ops.persistence import assign_dataflow_scope_ids, apply_graph
 from finn.dataflow.ops.schema import OpInput
 from finn.dataflow.ops.tensor_summary import set_frozen_initializer
 from finn.dataflow.ops.tensor_summary import FrozenInitializer, TENSOR_VALUE_SUMMARY_CODEC
-from finn.dataflow.space import Problem, Space
-from finn.dataflow._engine import Decided
+from finn.kernels.space import Problem, Space
+from finn.kernels._engine import Decided
 
 
 class SummarySpace(DataflowSpace):

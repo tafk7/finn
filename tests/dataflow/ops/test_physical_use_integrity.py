@@ -10,9 +10,9 @@ from onnx import helper
 from qonnx.core.datatype import DataType
 
 from dataflow.physical_fixture import configure, roots, source_model, template_roots
-from finn.dataflow.artifacts.store import ArtifactStore
-from finn.dataflow.artifacts.abi import Bus
-from finn.dataflow.artifacts.build import FixedModuleName
+from finn.kernels.artifacts.store import ArtifactStore
+from finn.kernels.artifacts.abi import Bus
+from finn.kernels.artifacts.build import FixedModuleName
 from finn.dataflow.kernels.matmul.base import MatmulInterface
 from finn.dataflow.model.physical.interface import PhysicalResult
 from finn.dataflow.model.logical.interface_authoring import PublicOperandDeclaration
@@ -36,7 +36,7 @@ from finn.dataflow.ops.physical import (
     prepare_local_physical,
     validate_physical_build_association,
 )
-from finn.dataflow.space.declarations import (
+from finn.kernels.space.declarations import (
     ConstraintGroup,
     Decision,
     Input,

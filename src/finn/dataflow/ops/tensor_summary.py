@@ -18,7 +18,7 @@ from qonnx.analysis.tensor_value_summary import (  # type: ignore[import-not-fou
     summarize_tensor_values,
 )
 
-from finn.dataflow.space.declarations import AuthoringError, CanonicalValue, CanonicalValueCodec
+from finn.kernels.space.declarations import AuthoringError, CanonicalValue, CanonicalValueCodec
 
 
 def set_frozen_initializer(model: Any, graph_value: str, value: FrozenInitializer) -> None:

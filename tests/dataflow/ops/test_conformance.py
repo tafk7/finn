@@ -30,7 +30,7 @@ from finn.dataflow.kernels.dotp_axi import DotpAxiKernel
 from finn.dataflow.kernels.matmul.base import DspBlock
 from finn.dataflow.ops.base import DATAFLOW_DOMAIN, DataflowOp
 from finn.dataflow.ops.space import DataflowSpace
-from finn.dataflow.space.declarations import Space
+from finn.kernels.space.declarations import Space
 from finn.dataflow.kernels.matmul.base import WeightedDotProductKernel
 from finn.dataflow.kernels.matmul.batch_interleaved import BatchInterleavedKernel
 from finn.dataflow.kernels.matmul.dot_product import (
@@ -41,7 +41,7 @@ from finn.dataflow.ops.mvau.op import MvauDataflowOp
 from finn.dataflow.ops.persistence import assign_dataflow_scope_ids
 from finn.dataflow.kernels.replay import ActivationReplayKernel
 from finn.dataflow.ops.replay.op import ActivationReplayOp
-from finn.dataflow._engine import Decided
+from finn.kernels._engine import Decided
 
 
 @dataclass(frozen=True)

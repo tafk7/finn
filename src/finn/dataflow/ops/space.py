@@ -19,14 +19,14 @@ from types import MappingProxyType
 from typing import Any, ClassVar, cast
 
 
-from finn.dataflow._engine import (
+from finn.kernels._engine import (
     Answer,
     Decided,
     ReadinessAssessment,
     Unresolved,
     ValueSemantics,
 )
-from finn.dataflow.space.declarations import (
+from finn.kernels.space.declarations import (
     AuthoringError,
     CanonicalValue,
     CanonicalValueCodec,
@@ -39,7 +39,7 @@ from finn.dataflow.space.declarations import (
     Space,
     declared_members,
 )
-from finn.dataflow.space.occurrence import (
+from finn.kernels.space.occurrence import (
     ProjectionAssessment,
     occurrence_answer_at,
     occurrence_persistable,
@@ -277,7 +277,7 @@ class DataflowSpace(Space):
                 if declaration in snapshot
                 else {"absent": True}
             )
-            from finn.dataflow.space.declarations import check_canonical  # noqa: PLC0415
+            from finn.kernels.space.declarations import check_canonical  # noqa: PLC0415
 
             if declaration in snapshot:
                 wrapped = {
@@ -577,12 +577,12 @@ def _root_projection(operation: DataflowSpace) -> ProjectionAssessment[DataflowN
     slightly different things in two places.
     """
 
-    from finn.dataflow.space.occurrence import (  # noqa: PLC0415 - see graph_effects
+    from finn.kernels.space.occurrence import (  # noqa: PLC0415 - see graph_effects
         combine_assessments,
     )
 
     source = operation.assess(type(operation).source_accepts)
-    from finn.dataflow._engine import Absent, ConstraintAssessment, QualifiedPath  # noqa: PLC0415
+    from finn.kernels._engine import Absent, ConstraintAssessment, QualifiedPath  # noqa: PLC0415
 
     boundary_constraints = []
     for binding in operation.operand_bindings:
@@ -733,7 +733,7 @@ def _raw_attribute(node: Any, name: str) -> Any | None:
 
 
 def _datatype_attribute(node: Any, member_name: str, declaration: DatatypeAttribute) -> object:
-    from finn.dataflow.model.logical.datatypes import canonical_qonnx_datatype  # noqa: PLC0415 - cycle
+    from finn.kernels.datatypes.values import canonical_qonnx_datatype  # noqa: PLC0415 - cycle
     from qonnx.core.datatype import DataType  # type: ignore[import-not-found] # noqa: PLC0415
 
     raw = _raw_attribute(node, attribute_name(member_name, declaration))
