@@ -41,6 +41,7 @@ from .declarations import (
 )
 from .domains import Domain, finite
 from .errors import DefinitionError, RequestError
+from .expressions import Expr, INTEGER_SEMANTICS, IntOperator, apply_integer, evaluator
 from .ir import Argument, Choice, LinkedModel, Node, NodeKind, Scope
 from .semantics import ValueSemantics, default_semantics
 
@@ -192,6 +193,15 @@ class _GuardTask:
     condition: ValueRef[bool]
 
 
+@dataclass(frozen=True)
+class _ExpressionTask:
+    index: int
+    scope: int
+    owner: str
+    operator: IntOperator
+    operands: tuple[int | ValueRef[int], ...]
+
+
 def _key(scope: str, member: str) -> str:
     return f"{scope}.{member}" if scope else member
 
@@ -219,6 +229,10 @@ class _Linker:
         self.members: list[_MemberTask] = []
         self.guards: list[_GuardTask] = []
         self.argument_checks: list[tuple[BoundArgument, int, str]] = []
+        self.expression_nodes: dict[tuple[int, Expr], int] = {}
+        self.expression_tasks: list[_ExpressionTask] = []
+        self.expression_operators: dict[int, IntOperator] = {}
+        self.expression_counts: dict[str, int] = {}
         self.scopes: tuple[Scope, ...] = ()
         self.choices: tuple[Choice, ...] = ()
 
@@ -345,7 +359,7 @@ class _Linker:
                 kind = "const"
             elif isinstance(declaration, Decision):
                 kind = "decision"
-            elif isinstance(declaration, Derived):
+            elif isinstance(declaration, (Derived, Expr)):
                 kind = "derived"
             elif isinstance(declaration, Constraint):
                 kind = "constraint"
@@ -471,10 +485,136 @@ class _Linker:
         self.choices = tuple(choice.freeze() for choice in self.choice_drafts)
 
     def reference(self, scope: int, source: object, *, owner: str) -> int:
+        if isinstance(source, Expr) and source.owner is None:
+            return self.expression(scope, source, owner=owner)
         try:
             return resolve_reference(self.nodes, self.scopes, self.choices, scope, source)
         except RequestError as cause:
             raise DefinitionError(f"{owner}: {cause}") from cause
+
+    def expression(
+        self,
+        scope: int,
+        source: Expr,
+        *,
+        owner: str,
+        index: int | None = None,
+    ) -> int:
+        """Register each source expression once per instantiated scope.
+
+        A named expression owns its authored node. Anonymous shared expressions
+        use their first consumer's source owner; every later consumer retains
+        its own dependency edge and therefore its demanded evidence path.
+        Their applicability comes from the scope, never the first consumer.
+        """
+
+        identity = (scope, source)
+        previous = self.expression_nodes.get(identity)
+        if previous is not None:
+            return previous
+        if index is None:
+            number = self.expression_counts.get(owner, 0)
+            self.expression_counts[owner] = number + 1
+            index = self.reserve(
+                scope,
+                f"{owner}.$expr.{number}",
+                "derived",
+                cast(ValueSemantics[object], INTEGER_SEMANTICS),
+                guard=self.drafts[scope].guard,
+                source_owner=owner,
+            )
+        self.expression_nodes[identity] = index
+        self.expression_tasks.append(
+            _ExpressionTask(index, scope, owner, source.operator, tuple(source.operands))
+        )
+        return index
+
+    def link_expressions(self) -> None:
+        cursor = 0
+        while cursor < len(self.expression_tasks):
+            task = self.expression_tasks[cursor]
+            cursor += 1
+            if task.operator not in {"add", "sub", "mul", "floordiv", "mod", "neg"}:
+                raise DefinitionError(f"{task.owner}: unsupported integer expression operator")
+            names = ("operand",) if task.operator == "neg" else ("left", "right")
+            if len(task.operands) != len(names):
+                raise DefinitionError(f"{task.owner}: invalid integer expression arity")
+            arguments: list[Argument] = []
+            for name, operand in zip(names, task.operands):
+                if type(operand) is int:
+                    literal = self.reserve(
+                        task.scope,
+                        f"{self.nodes[task.index].key}.$literal.{name}",
+                        "const",
+                        cast(ValueSemantics[object], INTEGER_SEMANTICS),
+                        source_owner=task.owner,
+                    )
+                    self.nodes[literal] = replace(self.nodes[literal], value=operand)
+                    target = literal
+                elif isinstance(operand, Const) and operand.owner is None:
+                    semantics = cast(ValueSemantics[object], operand.semantics)
+                    target = self.reserve(
+                        task.scope,
+                        f"{self.nodes[task.index].key}.$literal.{name}",
+                        "const",
+                        semantics,
+                        source_owner=task.owner,
+                    )
+                    try:
+                        value = semantics.freeze(operand.value)
+                    except Exception as cause:
+                        raise DefinitionError(f"{task.owner}: constant snapshot failed") from cause
+                    self.nodes[target] = replace(self.nodes[target], value=value)
+                elif isinstance(operand, ValueRef):
+                    target = self.reference(task.scope, operand, owner=task.owner)
+                else:
+                    raise DefinitionError(
+                        f"{task.owner}: integer expressions reject non-int literals"
+                    )
+                arguments.append(Argument(name, target))
+            self.nodes[task.index] = replace(
+                self.nodes[task.index],
+                arguments=tuple(arguments),
+                function=evaluator(task.operator),
+            )
+            self.expression_operators[task.index] = task.operator
+
+    def fold_expressions(self, order: tuple[int, ...]) -> None:
+        """Fold successful builtin arithmetic on unguarded definition constants."""
+
+        for index in order:
+            operator = self.expression_operators.get(index)
+            if operator is None:
+                continue
+            node = self.nodes[index]
+            operands = tuple(self.nodes[argument.node] for argument in node.arguments)
+            if any(
+                operand.semantics is None or operand.semantics.type_token is not int
+                for operand in operands
+            ):
+                raise DefinitionError(
+                    f"{node.owner}: integer expression operands require int value semantics"
+                )
+            if not all(
+                operand.kind == "const" and operand.guard is None and type(operand.value) is int
+                for operand in operands
+            ):
+                continue
+            try:
+                value = apply_integer(
+                    operator, tuple(cast(int, operand.value) for operand in operands)
+                )
+            except ArithmeticError:
+                # Invalid arithmetic is a contextual runtime error only if its
+                # body is demanded. Inactive guarded expressions remain safe.
+                continue
+            assert node.semantics is not None
+            self.nodes[index] = replace(
+                node,
+                kind="const",
+                value=node.semantics.freeze(value),
+                function=None,
+            )
 
     def arguments(self, scope: int, function: BoundFunction, *, owner: str) -> tuple[Argument, ...]:
         arguments: list[Argument] = []
@@ -584,6 +724,8 @@ class _Linker:
                 source_scope, declaration, node.semantics, owner=node.key
             )
             node = replace(node, domain=domain, domain_arguments=arguments)
+        elif isinstance(declaration, Expr):
+            self.expression(scope.index, declaration, owner=node.key, index=node.index)
         elif isinstance(declaration, (Derived, Constraint)):
             function = scope.effective.functions[task.name]
             node = replace(
@@ -751,8 +893,10 @@ class _Linker:
                 ),
             )
         self.link_choices()
+        self.link_expressions()
         order = self.validate(tuple(self.nodes))
         self.check_semantics(order)
+        self.fold_expressions(order)
         nodes = tuple(self.nodes)
         keys = {node.key: node.index for node in nodes}
         if len(keys) != len(nodes):

@@ -14,7 +14,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable, Mapping, Sequence
 import re
 from types import MappingProxyType
-from typing import ClassVar, Generic, Literal, TypeVar, cast, overload
+from typing import TYPE_CHECKING, ClassVar, Generic, Literal, TypeVar, cast, overload
 
 from typing_extensions import Self
 
@@ -31,6 +31,9 @@ from .results import (
     ViewAssessment,
 )
 from .semantics import ValueSemantics, semantics_for
+
+if TYPE_CHECKING:
+    from .expressions import Expr
 
 T = TypeVar("T")
 T_co = TypeVar("T_co", covariant=True)
@@ -72,6 +75,61 @@ class ValueRef(Declaration, Generic[T_co]):
     @property
     def value_semantics(self) -> ValueSemantics[T_co] | None:
         return self.semantics
+
+    def __add__(self: ValueRef[int], other: int | ValueRef[int]) -> Expr:
+        from .expressions import Expr
+
+        return Expr("add", self, other)
+
+    def __radd__(self: ValueRef[int], other: int | ValueRef[int]) -> Expr:
+        from .expressions import Expr
+
+        return Expr("add", other, self)
+
+    def __sub__(self: ValueRef[int], other: int | ValueRef[int]) -> Expr:
+        from .expressions import Expr
+
+        return Expr("sub", self, other)
+
+    def __rsub__(self: ValueRef[int], other: int | ValueRef[int]) -> Expr:
+        from .expressions import Expr
+
+        return Expr("sub", other, self)
+
+    def __mul__(self: ValueRef[int], other: int | ValueRef[int]) -> Expr:
+        from .expressions import Expr
+
+        return Expr("mul", self, other)
+
+    def __rmul__(self: ValueRef[int], other: int | ValueRef[int]) -> Expr:
+        from .expressions import Expr
+
+        return Expr("mul", other, self)
+
+    def __floordiv__(self: ValueRef[int], other: int | ValueRef[int]) -> Expr:
+        from .expressions import Expr
+
+        return Expr("floordiv", self, other)
+
+    def __rfloordiv__(self: ValueRef[int], other: int | ValueRef[int]) -> Expr:
+        from .expressions import Expr
+
+        return Expr("floordiv", other, self)
+
+    def __mod__(self: ValueRef[int], other: int | ValueRef[int]) -> Expr:
+        from .expressions import Expr
+
+        return Expr("mod", self, other)
+
+    def __rmod__(self: ValueRef[int], other: int | ValueRef[int]) -> Expr:
+        from .expressions import Expr
+
+        return Expr("mod", other, self)
+
+    def __neg__(self: ValueRef[int]) -> Expr:
+        from .expressions import Expr
+
+        return Expr("neg", self)
 
 
 class ValueDecl(ValueRef[T_co], Generic[T_co]):

@@ -31,6 +31,7 @@ from .declarations import (
     local_name,
 )
 from .errors import DefinitionError
+from .expressions import Expr
 from .results import Decided, Inapplicable, MissingInput, NotApplicable, Rejected, Unresolved
 from .semantics import ValueSemantics, default_semantics
 
@@ -217,6 +218,8 @@ def _output_semantics(
     origin = get_origin(value_type)
     nominal_type = origin if origin is not None else value_type
     if semantics is None:
+        if getattr(nominal_type, "_is_protocol", False):
+            raise DefinitionError(f"{owner}: Protocol outputs require explicit semantics=")
         if origin in (Union, types.UnionType) or not isinstance(nominal_type, type):
             raise DefinitionError(f"{owner}: output annotation needs explicit semantics=")
         try:
@@ -227,6 +230,7 @@ def _output_semantics(
         origin not in (Union, types.UnionType)
         and isinstance(nominal_type, type)
         and isinstance(semantics.type_token, type)
+        and not getattr(nominal_type, "_is_protocol", False)
     ):
         if nominal_type is not semantics.type_token:
             raise DefinitionError(
@@ -254,6 +258,8 @@ def _resolve_source(source: object, effective: EffectiveSpace, owner: str) -> Va
     if isinstance(source, (ScopedValueRef, AcceptedViewRef)):
         if isinstance(source, DecisionRef):
             resolve_decision_ref(source)
+        return source
+    if isinstance(source, Expr) and source.owner is None:
         return source
     raise DefinitionError(f"{owner}: dependency is not declared in this effective scope")
 
@@ -321,8 +327,14 @@ def _annotation_accepts(annotation: object, value_type: type[object]) -> bool:
     if origin in (Union, types.UnionType):
         return any(_annotation_accepts(option, value_type) for option in get_args(annotation))
     if isinstance(origin, type):
+        if getattr(origin, "_is_protocol", False):
+            return True
         return issubclass(value_type, origin)
     if isinstance(annotation, type):
+        if getattr(annotation, "_is_protocol", False):
+            # Non-runtime Protocols cannot be checked with issubclass. The
+            # explicit adapter semantics determines admissible runtime values.
+            return True
         return issubclass(value_type, annotation)
     return True
 

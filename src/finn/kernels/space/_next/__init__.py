@@ -49,10 +49,12 @@ from .results import (
     reject,
 )
 from .semantics import ValueSemantics, default_semantics
-from . import codecs, inspection, selections
+from . import codecs, extensions, inspection, selections
 from .codecs import CodecBinding, JSONValue, SelectionSchema, ValueCodec, codec_for
 from .references import DecisionHandle, ValueHandle
 from .selections import Selection, SelectionChange, SelectionEntry
+from .extensions import ScopeBuilder
+from .expressions import Expr
 
 __all__ = [
     "AcceptedViewRef",
@@ -77,6 +79,7 @@ __all__ = [
     "EditOutcome",
     "EditRequest",
     "EvaluationError",
+    "Expr",
     "Finding",
     "FindingKind",
     "Inapplicable",
@@ -88,6 +91,7 @@ __all__ = [
     "ReadinessAssessment",
     "RefinementReport",
     "Rejected",
+    "ScopeBuilder",
     "Selection",
     "SelectionChange",
     "SelectionEntry",
@@ -114,6 +118,7 @@ __all__ = [
     "divisors_of",
     "domain",
     "finite",
+    "extensions",
     "full_answer",
     "inspection",
     "optional",
