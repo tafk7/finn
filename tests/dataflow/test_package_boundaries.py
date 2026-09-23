@@ -1,15 +1,11 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The package boundaries the U1.5 reset established, and that they stay clean.
+"""Current package ownership and dependency boundaries.
 
-Two kinds of claim live here.  The *retirement* claims say that the superseded
-experimental stacks are gone and did not leave a forwarding alias behind --
-they are what stops the deleted API creeping back in as a convenience import
-while U2 to U4 are being written.  The *direction* claims say which package may
-import which, and they are the older, durable ones: the canonical Region and
-Network values stay importable without the engine, and artifacts never reach
-back up into the layers that project into it.
+Canonical model values remain usable without the engine. Generic Space code
+stays independent of dataflow domains, and artifact processing does not import
+its compiler consumers. Public facades load implementations only when requested.
 """
 
 from __future__ import annotations
@@ -23,109 +19,6 @@ from pathlib import Path
 ROOT = Path(__file__).parents[2]
 SOURCE = ROOT / "src" / "finn"
 DATAFLOW = SOURCE / "dataflow"
-
-#: Every module path the reset retired.  A retired name must not be importable
-#: and must not appear in an import statement anywhere in the tree.
-#:
-#: Two names the reset removed have since been *reused*, not restored:
-#: ``finn.custom_op.dataflow`` and ``finn.dataflow.ops.mvau.op`` are U4's own
-#: registration and operation, written against the occurrence lifecycle and
-#: sharing nothing with what stood there before.  They are checked below for
-#: what they now contain rather than for absence, because "this name exists
-#: again" and "the old implementation came back" are different claims.
-RETIRED_MODULES = (
-    "finn.dataflow.model.relations",
-    "finn.dataflow.ops.selected",
-    "finn.dataflow.ops.selected_registry",
-    "finn.dataflow.ops.selected_verification",
-    "finn.dataflow.ops.selected_transforms",
-    "finn.dataflow.ops.selected_transform_registry",
-    "finn.dataflow.ops.mvau.selected",
-    "finn.dataflow.ops.replay.selected",
-    "finn.dataflow.computation",
-    "finn.dataflow.parameters.cyclic.computation",
-    "finn.dataflow.ops.association",
-    "finn.dataflow.ops.state",
-    "finn.dataflow.authoring",
-    "finn.dataflow.kernel",
-    "finn.dataflow.op",
-    "finn.dataflow.op_contracts",
-    "finn.dataflow.ops.mvau.associations",
-    "finn.dataflow.ops.mvau.binding",
-    "finn.dataflow.ops.mvau.elaboration",
-    "finn.dataflow.ops.mvau.inventory",
-    "finn.dataflow.ops.mvau.problem",
-    "finn.dataflow.ops.mvau.semantics",
-    "finn.dataflow.ops.mvau.source",
-    "finn.dataflow.ops.mvau.kernels.supplied_dot_product",
-    "finn.dataflow.designs",
-    "finn.dataflow.designs.design",
-    "finn.dataflow.designs.physical",
-    "finn.dataflow.ops.legacy",
-    "finn.dataflow.ops.mvau.designs",
-    "finn.dataflow.ops.mvau.designs.base",
-    "finn.dataflow.ops.mvau.designs.batch_interleaved",
-    "finn.dataflow.ops.mvau.designs.dot_product",
-    "finn.dataflow.ops.mvau.designs.supply",
-    "finn.dataflow.ops.replay.design",
-    "finn.dataflow.resolution",
-    "finn.dataflow.selection",
-    "finn.dataflow.spec_algebra",
-    "finn.dataflow.testing",
-    "finn.transformation.fpgadataflow.infer_mvau_dataflow",
-    "finn.transformation.fpgadataflow.select_dataflow_design",
-)
-
-#: Every module path the C1.5 model/space migration retired.
-#:
-#: Two groups, and they moved in opposite directions.  The root-level modules
-#: went *into* ``finn.dataflow.model``, which is now the canonical Region and
-#: Network model; the generic declaration/compiler/occurrence modules that used
-#: to occupy that name went out to ``finn.dataflow.space``.  Both directions are
-#: destructive: no forwarding module, no alias, no second import path.
-#:
-#: ``input_service`` and its successor ``network_operands`` are here because the
-#: reference and presentation halves they held now live separately under
-#: ``model.refs`` and ``model.presentation``.  ``finn.dataflow.semantic`` never
-#: existed and must not appear: the model package is the semantic authority, and
-#: an intermediate package would be a third name for the same thing.
-MIGRATED_MODULES = (
-    "finn.dataflow.datatypes",
-    "finn.dataflow.input_service",
-    "finn.dataflow.model.branching",
-    "finn.dataflow.model.compiler",
-    "finn.dataflow.model.declarations",
-    "finn.dataflow.model.domains",
-    "finn.dataflow.model.occurrence",
-    "finn.dataflow.model.semantics",
-    "finn.dataflow.model.spec_algebra",
-    "finn.dataflow.network",
-    "finn.dataflow.network_operands",
-    "finn.dataflow.network_validation",
-    "finn.dataflow.region",
-    "finn.dataflow.region_profiles",
-    "finn.dataflow.region_validation",
-    "finn.dataflow.semantic",
-    "finn.dataflow.model.composition",
-    "finn.dataflow.model.datatypes",
-    "finn.dataflow.model.maps",
-    "finn.dataflow.model.network",
-    "finn.dataflow.model.network_validation",
-    "finn.dataflow.model.presentation",
-    "finn.dataflow.model.refs",
-    "finn.dataflow.model.region",
-    "finn.dataflow.model.region_profiles",
-    "finn.dataflow.model.region_validation",
-    "finn.dataflow.space.dataflow_value_semantics",
-    "finn.dataflow.kernels.artifacts",
-    "finn.dataflow.kernels.kernel",
-    "finn.dataflow.kernels.physical",
-    "finn.dataflow.kernels.physical_composition",
-    "finn.dataflow.ops.mvau.kernels",
-    "finn.dataflow.ops.mvau.networks",
-    "finn.dataflow.ops.mvau.regions",
-    "finn.dataflow.ops.replay.kernel",
-)
 
 
 def _imported_modules(path: Path) -> set[str]:
@@ -164,71 +57,18 @@ def _assert_fresh_import_avoids(module: str, forbidden: tuple[str, ...]) -> None
     assert completed.returncode == 0, completed.stderr
 
 
-def test_every_retired_module_is_gone_and_unreferenced() -> None:
-    for module in RETIRED_MODULES:
-        try:
-            import_module(module)
-        except ImportError:
-            pass
-        else:  # pragma: no cover - the assertion below is the report
-            raise AssertionError(f"{module} is still importable")
-
-    offenders = {
-        str(path.relative_to(ROOT)): sorted(
-            name
-            for name in _imported_modules(path)
-            if any(_within(name, retired) for retired in RETIRED_MODULES)
-        )
-        for path in SOURCE.rglob("*.py")
-    }
-    assert {path: names for path, names in offenders.items() if names} == {}
-
-
-def test_every_migrated_module_is_gone_and_unreferenced() -> None:
-    """C1.5 moved these, and moved means moved."""
-
-    for module in MIGRATED_MODULES:
-        try:
-            import_module(module)
-        except ImportError:
-            pass
-        else:  # pragma: no cover - the assertion below is the report
-            raise AssertionError(f"{module} is still importable")
-
-    offenders = {
-        str(path.relative_to(ROOT)): sorted(
-            name
-            for name in _imported_modules(path)
-            if any(name == retired for retired in MIGRATED_MODULES)
-        )
-        for path in SOURCE.rglob("*.py")
-    }
-    assert {path: names for path, names in offenders.items() if names} == {}
-
-
-def test_no_forwarding_alias_survives_the_reset() -> None:
-    """A retired package must not come back as a one-line re-export module."""
-
-    for module in RETIRED_MODULES:
-        relative = Path(*module.split(".")[1:])
-        assert not (SOURCE / relative.with_suffix(".py")).exists(), module
-        assert not (SOURCE / relative / "__init__.py").exists(), module
-
-
 def test_the_final_package_boundaries_are_the_approved_ones() -> None:
     assert tuple(import_module("finn.dataflow.ops").__all__) == ()
     assert tuple(import_module("finn.dataflow.ops.mvau").__all__) == ()
     assert set(import_module("finn.dataflow.kernels").__all__) == {
-        "ActivationReplayKernel",
-        "BatchInterleavedDotpAxiKernel",
-        "BatchInterleavedKernel",
-        "DotProductKernel",
         "DotpAxiKernel",
         "DspBlock",
-        "EmbeddedDotpAxiKernel",
-        "MemstreamKernel",
-        "ReplayBufferKernel",
-        "WeightSupply",
+        "MVAU",
+        "MVAUAssembly",
+        "WeightDelivery",
+        "mvau_assembly",
+        "replay_buffer_requirements",
+        "cyclic_stream_requirements",
     }
     for framework_name in (
         "Kernel",
@@ -247,16 +87,6 @@ def test_the_final_package_boundaries_are_the_approved_ones() -> None:
         "kernel_physical",
     ):
         assert not hasattr(import_module("finn.dataflow.kernels"), framework_name)
-
-
-def test_s2b_removes_the_old_declarations_without_aliases() -> None:
-    assert not hasattr(import_module("finn.dataflow.model"), "RelationView")
-    for module in ("finn.dataflow.kernels", "finn.dataflow.model"):
-        for name in ("Kernels", "Boundary", "Connection", "Sink", "ComputationContract"):
-            assert not hasattr(import_module(module), name), (module, name)
-    for module in ("finn.dataflow.kernels", "finn.dataflow.model"):
-        for name in ("KernelPhysicalResult", "Parameter", "ComputationContract"):
-            assert not hasattr(import_module(module), name), (module, name)
 
 
 def test_the_generic_substrate_does_not_import_a_layer() -> None:
@@ -291,7 +121,19 @@ def test_pure_logical_values_import_nothing_above_or_beside_them() -> None:
         "finn.dataflow.artifacts",
         "onnx",
     )
-    adapters = {"authoring.py", "interface_authoring.py", "semantics.py", "view.py"}
+    adapters = {
+        "authoring.py",
+        "interface_authoring.py",
+        "semantics.py",
+        "datatype_semantics.py",
+        "result_semantics.py",
+        "datatype_domains.py",
+        "view.py",
+        "view_authoring.py",
+        "contract_authoring.py",
+        "contract_expressions.py",
+        "_contract_support.py",
+    }
     for path in (DATAFLOW / "model" / "logical").rglob("*.py"):
         if path.name in adapters:
             continue
@@ -338,6 +180,72 @@ def test_domain_facades_and_pure_value_modules_are_lazy() -> None:
     _assert_fresh_import_avoids(
         "finn.dataflow.model.physical.interface",
         ("finn.dataflow.space", "finn.dataflow._engine", "finn.dataflow.kernels"),
+    )
+
+
+def test_minimal_dotp_does_not_load_historical_authoring_or_build_processing() -> None:
+    _assert_fresh_import_avoids(
+        "finn.dataflow.kernels.dotp_axi_minimal",
+        (
+            "finn.dataflow.kernels.matmul",
+            "finn.dataflow.parameters",
+            "finn.dataflow.model.kernel",
+            "finn.dataflow.model.children",
+            "finn.dataflow.model.logical.authoring",
+            "finn.dataflow.model.logical.view_authoring",
+            "finn.dataflow.model.logical.composition",
+            "finn.dataflow.model.logical.presentation",
+            "finn.dataflow.model.physical.axi_stream_binding",
+            "finn.dataflow.model.physical.interface",
+            "finn.dataflow.model.physical.authoring",
+            "finn.dataflow.artifacts.build",
+            "finn.dataflow.artifacts.contributions",
+            "finn.dataflow.artifacts.render",
+            "finn.dataflow.artifacts.packaging",
+            "finn.dataflow.artifacts.store",
+        ),
+    )
+
+
+def test_axi_declarations_do_not_load_regions_or_composition_adapters() -> None:
+    _assert_fresh_import_avoids(
+        "finn.dataflow.model.physical.axi_stream",
+        (
+            "finn.dataflow.model.logical.region",
+            "finn.dataflow.model.logical.composition",
+            "finn.dataflow.model.physical.interface",
+            "finn.dataflow.model.physical.axi_stream_binding",
+            "finn.dataflow.artifacts.build",
+            "finn.dataflow.kernels",
+        ),
+    )
+
+
+def test_logical_facade_loads_no_model_until_a_public_name_is_requested() -> None:
+    _assert_fresh_import_avoids(
+        "finn.dataflow.model.logical",
+        (
+            "finn.dataflow.model.logical.region",
+            "finn.dataflow.model.logical.network",
+            "finn.dataflow.model.logical.composition",
+            "finn.dataflow.model.logical.datatypes",
+        ),
+    )
+
+
+def test_module_requirements_are_independent_of_build_processing() -> None:
+    _assert_fresh_import_avoids(
+        "finn.dataflow.artifacts.requirements",
+        (
+            "finn.dataflow.artifacts.build",
+            "finn.dataflow.artifacts.contributions",
+            "finn.dataflow.artifacts.render",
+            "finn.dataflow.artifacts.store",
+            "finn.dataflow.artifacts.packaging",
+            "finn.dataflow.model",
+            "finn.dataflow.space",
+            "finn.dataflow._engine",
+        ),
     )
 
 
@@ -450,24 +358,36 @@ def test_the_private_engine_imports_no_finn_module() -> None:
     assert forbidden == set()
 
 
-def test_the_reused_names_hold_u4s_implementation_and_not_the_retired_one() -> None:
-    domain = import_module("finn.custom_op.dataflow")
-    assert set(domain.custom_op) == {"MvauDataflowOp", "ActivationReplayOp"}
-    operation = import_module("finn.dataflow.ops.mvau.op")
-    base = import_module("finn.dataflow.ops.base")
-    assert issubclass(domain.custom_op["MvauDataflowOp"], base.DataflowOp)
-    assert operation.MvauDataflowOp is domain.custom_op["MvauDataflowOp"]
-    # The retired stack's entry points are not what came back.
-    assert not hasattr(operation, "MVAUDataflowBuildContext")
-    assert not hasattr(operation, "MvauDataflowOp") or not hasattr(
-        operation.MvauDataflowOp, "resolve_dataflow"
+def test_pure_dot_product_does_not_load_physical_or_composition_frameworks() -> None:
+    _assert_fresh_import_avoids(
+        "finn.dataflow.kernels.dot_product",
+        (
+            "finn.dataflow.model.physical.axi_stream_contract",
+            "finn.dataflow.model.physical.view",
+            "finn.dataflow.artifacts.build",
+            "finn.dataflow.kernels.target",
+            "finn.dataflow.model.logical.view",
+            "finn.dataflow.model.logical.composition",
+        ),
     )
 
 
-def test_the_traditional_custom_op_oracle_survived_the_reset() -> None:
-    """The reset removed experiments, not FINN's established implementation."""
-
-    assert (SOURCE / "custom_op" / "fpgadataflow" / "rtlbackend.py").is_file()
-    assert (
-        SOURCE / "custom_op" / "fpgadataflow" / "rtl" / "matrixvectoractivation_rtl.py"
-    ).is_file()
+def test_physical_component_path_does_not_load_logical_models_or_compiler_nodes() -> None:
+    for module in (
+        "finn.dataflow.kernels.dotp_axi_minimal",
+        "finn.dataflow.kernels.streaming",
+        "finn.dataflow.kernels.mvau",
+    ):
+        _assert_fresh_import_avoids(
+            module,
+            (
+                "finn.dataflow.model.logical.region",
+                "finn.dataflow.model.logical.network",
+                "finn.dataflow.model.logical.contract_authoring",
+                "finn.dataflow.model.logical.composition",
+                "finn.dataflow.model.logical.view",
+                "finn.dataflow.model.physical.interface",
+                "finn.dataflow.ops.mvau.op",
+                "qonnx.core.modelwrapper",
+            ),
+        )

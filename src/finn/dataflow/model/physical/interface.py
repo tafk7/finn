@@ -124,12 +124,12 @@ def validate_payload(bus: Bus, layout: PackedBeatLayout, framing: PeriodicLast |
         occupied |= bits
     if occupied != set(range(members["tdata"].width)):
         raise ValueError("every carrier bit needs an explicit field/padding disposition")
-    policy = (
-        UnusedBitPolicy.IGNORE_ON_RECEIVE
+    policies = (
+        (UnusedBitPolicy.IGNORE_ON_RECEIVE,)
         if bus.endpoint is Endpoint.TARGET
-        else UnusedBitPolicy.DRIVE_ZERO
+        else (UnusedBitPolicy.DRIVE_ZERO, UnusedBitPolicy.UNSPECIFIED)
     )
-    if any(item.policy is not policy for item in layout.unused):
+    if any(item.policy not in policies for item in layout.unused):
         raise ValueError("padding policy disagrees with stream direction")
 
 
@@ -185,12 +185,12 @@ def validate_kernel_stream_bindings(
             occupied |= bits
         if occupied != set(range(width)):
             raise ValueError("payload carrier bits need an explicit field/padding disposition")
-        expected_policy = (
-            UnusedBitPolicy.IGNORE_ON_RECEIVE
+        expected_policies = (
+            (UnusedBitPolicy.IGNORE_ON_RECEIVE,)
             if direction is Endpoint.TARGET
-            else UnusedBitPolicy.DRIVE_ZERO
+            else (UnusedBitPolicy.DRIVE_ZERO, UnusedBitPolicy.UNSPECIFIED)
         )
-        if any(item.policy is not expected_policy for item in binding.payload.unused):
+        if any(item.policy not in expected_policies for item in binding.payload.unused):
             raise ValueError("padding policy disagrees with stream direction")
         if (
             binding.framing is not None

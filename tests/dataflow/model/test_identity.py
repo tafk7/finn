@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 from dataclasses import dataclass
+import pickle
 
 import pytest
 
@@ -17,6 +18,10 @@ from finn.dataflow.model.identity import (
 from finn.dataflow.model.logical.region import DataflowRegion
 from finn.dataflow.model.physical.layout import PackedBeatLayout
 from finn.dataflow.model.physical.interface import KernelStreamBinding
+from finn.dataflow.artifacts import build, contribution_types, contributions, requirements
+from finn.dataflow.kernels import target
+from finn.dataflow.model.logical import composition, results, semantics
+from finn.dataflow.model.logical import datatype_semantics, result_semantics
 
 
 class ExampleKernel(Kernel):
@@ -95,3 +100,48 @@ def test_unmoved_type_keeps_its_real_identity() -> None:
         value: int
 
     assert comparison_type_identity(Local) == f"{Local.__module__}.{Local.__qualname__}"
+
+
+@pytest.mark.parametrize(
+    "current,compatibility,module",
+    [
+        (target.DspBlock, DspBlock, "finn.dataflow.kernels.matmul.base"),
+        (results.RegionResult, composition.RegionResult, "finn.dataflow.model.logical.composition"),
+        (
+            results.NetworkResult,
+            composition.NetworkResult,
+            "finn.dataflow.model.logical.composition",
+        ),
+        (
+            requirements.ModuleBuildRequirements,
+            build.ModuleBuildRequirements,
+            "finn.dataflow.artifacts.build",
+        ),
+        (
+            requirements.ModuleABIRequirements,
+            build.ModuleABIRequirements,
+            "finn.dataflow.artifacts.build",
+        ),
+        (
+            contribution_types.CopiedSource,
+            contributions.CopiedSource,
+            "finn.dataflow.artifacts.contributions",
+        ),
+    ],
+)
+def test_split_contracts_preserve_nominal_and_serialized_identity(current, compatibility, module):
+    assert current is compatibility
+    assert current.__module__ == module
+    assert pickle.loads(pickle.dumps(current)) is current
+
+
+def test_split_semantics_reexport_the_same_tokens_and_codecs() -> None:
+    assert (
+        semantics.QONNX_DATATYPE_VALUE_SEMANTICS
+        is datatype_semantics.QONNX_DATATYPE_VALUE_SEMANTICS
+    )
+    assert semantics.QONNX_DATATYPE_CODEC is datatype_semantics.QONNX_DATATYPE_CODEC
+    assert (
+        semantics.DATAFLOW_LOGICAL_RESULT_SEMANTICS
+        is result_semantics.DATAFLOW_LOGICAL_RESULT_SEMANTICS
+    )

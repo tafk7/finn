@@ -170,12 +170,17 @@ def drive_observed(
     stalls: bool,
     directory: Path,
     drain_cycles: int = LIVENESS,
+    input_stalls: bool | None = None,
+    backpressure_ticks: int = BACKPRESSURE_TICKS,
 ) -> dict[str, Any]:
     """Run an observed production artifact, retaining request, response and compile files.
 
     Stream names are complete ABI bus names. Each observation names actual
     read-only data/valid/ready pins and optionally last; absent pins refuse.
+    input_stalls=False keeps producers continuous while output stalls remain enabled.
     """
+    if type(backpressure_ticks) is not int or backpressure_ticks < 0:
+        raise ValueError("backpressure_ticks must be a nonnegative integer")
     directory.mkdir(parents=True, exist_ok=False)
     request = directory / "request.json"
     response = directory / "response.json"
@@ -188,6 +193,8 @@ def drive_observed(
                 "expected_outputs": expected_outputs,
                 "observations": observations,
                 "stalls": stalls,
+                "input_stalls": stalls if input_stalls is None else input_stalls,
+                "backpressure_ticks": backpressure_ticks,
                 "work_directory": str(directory / "compile"),
                 "drain_cycles": drain_cycles,
             },
@@ -245,7 +252,11 @@ def _simulate_observed(sim_dir: str, so_rel: str, request: dict[str, Any]) -> di
         }:
             raise ValueError("an observation names exactly data/valid/ready and optional last")
     for index, (name, values) in enumerate(stimulus.items()):
-        throttle = (2 + index % 2, 3 + index % 3) if request["stalls"] else (float("inf"), 0)
+        throttle = (
+            (2 + index % 2, 3 + index % 3)
+            if request.get("input_stalls", request["stalls"])
+            else (float("inf"), 0)
+        )
         sim.stream_input(name, iter(f"{value:x}" for value in values), throttle=throttle)
     watchdogs = {name: sim.create_watchdog(f"{name} timeout", LIVENESS) for name in outputs}
 
@@ -308,7 +319,7 @@ def _simulate_observed(sim_dir: str, so_rel: str, request: dict[str, Any]) -> di
                     if len(self.outputs[name]) == expected[name]:
                         sim.remove_watchdog(watchdogs[name])
                     elif request["stalls"]:
-                        self.stall[name] = BACKPRESSURE_TICKS
+                        self.stall[name] = request.get("backpressure_ticks", BACKPRESSURE_TICKS)
                 # Keep ready high after the expected prefix to observe extras.
                 if len(self.outputs[name]) >= expected[name]:
                     self.stall[name] = 0

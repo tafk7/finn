@@ -46,6 +46,7 @@ Three hazards it exists to close, each verified against the pinned QONNX:
 from __future__ import annotations
 
 from collections.abc import Callable
+import re
 from typing import Protocol, TypeGuard, cast
 
 from qonnx.core.datatype import (  # type: ignore[import-not-found]
@@ -62,6 +63,7 @@ __all__ = [
     "decode_datatype",
     "encode_datatype",
     "is_qonnx_datatype",
+    "ordinary_integer_bounds",
     "qonnx_datatype_width",
     "resolve_qonnx_datatype_name",
 ]
@@ -111,6 +113,22 @@ class QONNXDataType(Protocol):
 
 class DatatypeError(ValueError):
     """A value was offered as a datatype and is not one this stack can hold."""
+
+
+def ordinary_integer_bounds(value: QONNXDataType) -> tuple[int, int]:
+    """Exact INT/UINT bounds; special integer-valued encodings are distinct.
+
+    Compute from the ordinary encoding instead of third-party range methods,
+    which may use floating point for very wide types. No datatype is converted.
+    """
+    if value.name != "BINARY" and re.fullmatch(r"U?INT\d+", value.name) is None:
+        raise DatatypeError(f"{value.name} is not an ordinary INT/UINT encoding")
+    bits = qonnx_datatype_width(value)
+    if bits < 1:
+        raise DatatypeError("ordinary integer width must be positive")
+    if value.name.startswith("INT"):
+        return -(1 << (bits - 1)), (1 << (bits - 1)) - 1
+    return 0, (1 << bits) - 1
 
 
 def _guarded(describe: str, call: Callable[[], object]) -> object:

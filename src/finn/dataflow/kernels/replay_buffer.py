@@ -1,7 +1,10 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Declarative one-Region model of FinnLib's ``replay_buffer``.
+"""Optional Region adapter for the physical replay component.
+
+Native interface and source authorship belongs to ``kernels.streaming``.
+The direct physical assembly path does not import this analysis adapter.
 
 The buffer presents each activation row once per neuron fold.  That expansion is
 what the monolithic MVAU Region performed implicitly by scheduling its activation
@@ -24,18 +27,8 @@ from collections.abc import Mapping
 from typing import cast
 
 from finn.dataflow.artifacts.abi import (
-    Bus,
-    Clock,
     ComponentABI,
-    Direction,
-    Endpoint,
-    Free,
-    Member,
-    Reset,
-    Signal,
-    StandardProtocol,
 )
-from finn.dataflow.artifacts.contributions import CopiedSource
 from finn.dataflow.artifacts.build import ModuleABIRequirements, ScalarTable
 from finn.dataflow.model.physical.layout import PeriodicLast
 from finn.dataflow.model.physical.interface import KernelStreamBinding
@@ -47,6 +40,8 @@ from finn.dataflow.model.logical.authoring import RegionDeclaration
 from finn.dataflow.model.physical.authoring import ModuleParameter
 from finn.dataflow.model.logical.region import DataflowRegion, NumericElementType, element_width
 from finn.dataflow.kernels.matmul.regions import construct_activation_replay_region
+from finn.dataflow.kernels.streaming import REPLAY_BUFFER_SOURCES, replay_buffer_requirements
+from finn.dataflow.artifacts.requirements import FixedModuleName
 
 FINNLIB_ROOT = "finnlib"
 FINNLIB_SOURCES = ("rtl/infra/replay_buffer.sv",)
@@ -93,13 +88,7 @@ class ReplayBufferKernel(Kernel):
     REP = ModuleParameter(replay_count)
     W = ModuleParameter(data_width)
 
-    sources = (
-        CopiedSource(
-            FINNLIB_ROOT,
-            FINNLIB_SOURCES[0],
-            provides=("module:replay_buffer",),
-        ),
-    )
+    sources = REPLAY_BUFFER_SOURCES
 
     @classmethod
     def local_stream_bindings(
@@ -125,48 +114,14 @@ class ReplayBufferKernel(Kernel):
 
     @classmethod
     def component_abi(cls, parameters: Mapping[str, bool | int | float | str]) -> ComponentABI:
-        width = cast(int, parameters["W"])
-        return ComponentABI(
-            "replay_buffer",
-            (
-                Signal("clk", Direction.IN, 1, Clock(Free())),
-                Signal(
-                    "rst",
-                    Direction.IN,
-                    1,
-                    Reset(active_low=False, synchronous=True, synchronous_to=("clk",)),
-                ),
-                Bus(
-                    "in0",
-                    StandardProtocol.AXIS,
-                    (
-                        Member("tdata", "idat", width),
-                        Member("tvalid", "ivld"),
-                        Member("tready", "irdy"),
-                    ),
-                    endpoint=Endpoint.TARGET,
-                    associated_clock="clk",
-                    associated_reset="rst",
-                ),
-                Bus(
-                    "out0",
-                    StandardProtocol.AXIS,
-                    (
-                        Member("tdata", "odat", width),
-                        Member("tvalid", "ovld"),
-                        Member("tready", "ordy"),
-                        Member("tlast", "olast"),
-                    ),
-                    endpoint=Endpoint.INITIATOR,
-                    associated_clock="clk",
-                    associated_reset="rst",
-                ),
-                # `ofin` marks the end of the whole replayed run rather than of
-                # one sequence, so it is not an AXI-Stream member of `out0`.
-                Signal("ofin", Direction.OUT, 1),
-            ),
-            tuple((name, str(value)) for name, value in parameters.items()),
+        requirements = replay_buffer_requirements(
+            word_bits=cast(int, parameters["W"]),
+            sequence_length=cast(int, parameters["LEN"]),
+            replay_count=cast(int, parameters["REP"]),
         )
+        abi = requirements.abi
+        assert isinstance(abi.entry_point, FixedModuleName)
+        return ComponentABI(abi.entry_point.value, abi.ports, abi.parameters, abi.clock_alignments)
 
 
 __all__ = [

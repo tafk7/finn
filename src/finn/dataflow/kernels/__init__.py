@@ -1,62 +1,37 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Reusable concrete Kernel implementations.
+"""Physical components and the supported explicit MVAU assembly.
 
-The common Kernel contract and view authoring API live in
-:mod:`finn.dataflow.model`. This package contains only implementation leaves,
-composites, family definitions and their resources.
+The public construction path needs no Region, Network or compiler node.
+Logical modeling experiments remain available in their individual modules.
 """
 
 from importlib import import_module
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from finn.dataflow.kernels.dotp_axi import (
-        BatchInterleavedDotpAxiKernel,
-        DotpAxiKernel,
-        EmbeddedDotpAxiKernel,
+    from finn.dataflow.kernels.dotp_axi_minimal import DotpAxiKernel
+    from finn.dataflow.kernels.mvau import MVAU, MVAUAssembly, WeightDelivery, mvau_assembly
+    from finn.dataflow.kernels.streaming import (
+        cyclic_stream_requirements,
+        replay_buffer_requirements,
     )
-    from finn.dataflow.kernels.matmul.base import DspBlock
-    from finn.dataflow.kernels.matmul.batch_interleaved import BatchInterleavedKernel
-    from finn.dataflow.kernels.matmul.dot_product import DotProductKernel
-    from finn.dataflow.kernels.matmul.supply import WeightSupply
-    from finn.dataflow.kernels.memstream import MemstreamKernel
-    from finn.dataflow.kernels.replay import ActivationReplayKernel
-    from finn.dataflow.kernels.replay_buffer import ReplayBufferKernel
+    from finn.dataflow.kernels.target import DspBlock
 
 _LAZY_EXPORTS = {
-    "ActivationReplayKernel": ("finn.dataflow.kernels.replay", "ActivationReplayKernel"),
-    "BatchInterleavedDotpAxiKernel": (
-        "finn.dataflow.kernels.dotp_axi",
-        "BatchInterleavedDotpAxiKernel",
-    ),
-    "BatchInterleavedKernel": (
-        "finn.dataflow.kernels.matmul.batch_interleaved",
-        "BatchInterleavedKernel",
-    ),
-    "DotProductKernel": (
-        "finn.dataflow.kernels.matmul.dot_product",
-        "DotProductKernel",
-    ),
-    "DotpAxiKernel": ("finn.dataflow.kernels.dotp_axi", "DotpAxiKernel"),
-    "DspBlock": ("finn.dataflow.kernels.matmul.base", "DspBlock"),
-    "EmbeddedDotpAxiKernel": (
-        "finn.dataflow.kernels.dotp_axi",
-        "EmbeddedDotpAxiKernel",
-    ),
-    "MemstreamKernel": ("finn.dataflow.kernels.memstream", "MemstreamKernel"),
-    "ReplayBufferKernel": (
-        "finn.dataflow.kernels.replay_buffer",
-        "ReplayBufferKernel",
-    ),
-    "WeightSupply": ("finn.dataflow.kernels.matmul.supply", "WeightSupply"),
+    "DotpAxiKernel": ("finn.dataflow.kernels.dotp_axi_minimal", "DotpAxiKernel"),
+    "MVAU": ("finn.dataflow.kernels.mvau", "MVAU"),
+    "MVAUAssembly": ("finn.dataflow.kernels.mvau", "MVAUAssembly"),
+    "WeightDelivery": ("finn.dataflow.kernels.mvau", "WeightDelivery"),
+    "mvau_assembly": ("finn.dataflow.kernels.mvau", "mvau_assembly"),
+    "replay_buffer_requirements": ("finn.dataflow.kernels.streaming", "replay_buffer_requirements"),
+    "cyclic_stream_requirements": ("finn.dataflow.kernels.streaming", "cyclic_stream_requirements"),
+    "DspBlock": ("finn.dataflow.kernels.target", "DspBlock"),
 }
 
 
 def __getattr__(name: str) -> object:
-    """Load a concrete implementation only when it is named."""
-
     target = _LAZY_EXPORTS.get(name)
     if target is None:
         raise AttributeError(name)
@@ -67,14 +42,12 @@ def __getattr__(name: str) -> object:
 
 
 __all__ = [
-    "ActivationReplayKernel",
-    "BatchInterleavedDotpAxiKernel",
-    "BatchInterleavedKernel",
-    "DotProductKernel",
     "DotpAxiKernel",
+    "MVAU",
+    "MVAUAssembly",
+    "WeightDelivery",
+    "mvau_assembly",
+    "replay_buffer_requirements",
+    "cyclic_stream_requirements",
     "DspBlock",
-    "EmbeddedDotpAxiKernel",
-    "MemstreamKernel",
-    "ReplayBufferKernel",
-    "WeightSupply",
 ]

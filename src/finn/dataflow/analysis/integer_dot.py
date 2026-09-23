@@ -11,6 +11,7 @@ has one implementation and no knowledge of the hierarchy around it.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 import hashlib
 import json
@@ -370,7 +371,7 @@ def encode_dot_product_premise(premise: DotProductPremise) -> dict[str, object]:
 def decode_dot_product_premise(value: object) -> DotProductPremise:
     """Decode the exact canonical premise form, refusing unknown fields."""
 
-    from collections.abc import Mapping, Sequence  # noqa: PLC0415
+    from collections.abc import Mapping  # noqa: PLC0415
 
     def mapping(raw: object, fields: set[str], name: str) -> Mapping[str, object]:
         if not isinstance(raw, Mapping) or set(raw) != fields:
@@ -534,6 +535,45 @@ def _signed_bits(value_range: IntegerRange) -> int:
     while value_range.minimum < -(1 << (bits - 1)) or value_range.maximum > (1 << (bits - 1)) - 1:
         bits += 1
     return bits
+
+
+@dataclass(frozen=True, slots=True)
+class ExactIntegerDot:
+    """The mathematical sum of paired integer products, with uniform ranges.
+
+    Bounds take constant space regardless of vector length. ``evaluate`` is a
+    mathematical reference, with no folding, clocks, storage or handshakes.
+    """
+
+    activation: IntegerRange
+    weight: IntegerRange
+    terms: int
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.activation, IntegerRange) or not isinstance(
+            self.weight, IntegerRange
+        ):
+            raise TypeError("dot-product inputs need integer ranges")
+        if _integer(self.terms, "dot-product length") <= 0:
+            raise ValueError("dot-product length must be positive")
+
+    @property
+    def result_range(self) -> IntegerRange:
+        term = _term_range(self.activation, self.weight)
+        return IntegerRange(self.terms * term.minimum, self.terms * term.maximum)
+
+    @property
+    def result_bits(self) -> int:
+        """The smallest signed integer width containing every possible result."""
+        return _signed_bits(self.result_range)
+
+    def evaluate(self, activation: Sequence[int], weight: Sequence[int]) -> int:
+        if len(activation) != self.terms or len(weight) != self.terms:
+            raise ValueError("dot-product vectors must have the declared length")
+        for values, admitted in ((activation, self.activation), (weight, self.weight)):
+            if any(type(value) is not int or not admitted.contains(value) for value in values):
+                raise ValueError("dot-product values are outside the declared integer ranges")
+        return sum(a * w for a, w in zip(activation, weight))
 
 
 def _weight_ranges(premise: DotProductPremise) -> tuple[tuple[IntegerRange, ...], ...]:

@@ -1,169 +1,285 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The canonical dataflow model: what a Region and a Network *are*.
+"""Lazy facade for canonical logical values and their pure operations.
 
-Detached, immutable values and pure operations over them.  A ``DataflowRegion``
-here is a finished statement about one logical schedule, its operands and its
-boundary; a ``DataflowNetwork`` is a finished statement about how several of them
-are wired.  Neither knows how it was authored, which design point produced it, or
-what will be built from it.
-
-```text
-model/logical/datatypes           QONNX datatype identity at the model boundary
-model/logical/maps                detached finite domains and compact map algebra
-model/logical/region              operands, schedules, requirements, ports, inputs
-model/logical/region_profiles     construction profiles contributors build Regions from
-model/logical/region_validation   Region semantic validation
-model/logical/network             nodes, edges, boundaries, position maps
-model/logical/network_validation  Network semantic validation
-model/logical/refs                qualified RegionInputRef / RegionOutputRef resolution
-model/logical/presentation        exposure and edge/boundary/unpresented queries
-```
-
-The facade is deliberately small: the values and the operations over them, and
-nothing that only the engine bridge needs.  ``QONNX_DATATYPE_TOKEN`` and
-``DATATYPE_PAYLOAD_KEY`` stay in ``model.logical.datatypes`` for that reason -- they are
-codec plumbing that ``model.logical.semantics`` imports directly, not
-vocabulary a Region author uses.
-
-The package imports the Python standard library, QONNX datatype identity through
-``model.logical.datatypes``, and its own siblings.  It imports no Space, no ``_engine``,
-no Kernel, Kernel, operation, ONNX wrapper, physical value or artifact
-capability -- ``test_package_boundaries`` enforces the direction, and
-``model.logical.semantics`` is where the engine learns about these values,
-one way.
-
-Not to be confused with ``finn.dataflow.space``, which owns the generic
-declaration language that *produces* these values.  ``RegionDeclaration`` is a
-Kernel's recipe; ``DataflowRegion`` is what the recipe yields.
+Importing a scalar datatype or a Region must not also load composition,
+validation and presentation algorithms. Public names retain their existing
+identity and load their owning module only when requested.
 """
 
-from finn.dataflow.model.logical.datatypes import (
-    DatatypeError,
-    QONNXDataType,
-    canonical_qonnx_datatype,
-    decode_datatype,
-    encode_datatype,
-    is_qonnx_datatype,
-    qonnx_datatype_width,
-    resolve_qonnx_datatype_name,
-)
-from finn.dataflow.model.logical.composition import (
-    CompositionError,
-    ImplementationPath,
-    LogicalResult,
-    NetworkFragment,
-    NetworkResult,
-    ParentBoundary,
-    ParentConnection,
-    QualifiedChildResult,
-    RegionResult,
-    compose_network,
-    qualify_logical,
-    qualify_network,
-    qualify_region,
-)
-from finn.dataflow.model.logical.maps import (
-    AffineRankMap,
-    Coordinate,
-    CoordinateSet,
-    ExplicitCoordinateMap,
-    FiniteCoordinateSet,
-    IdentityCoordinateMap,
-    InvalidMapError,
-    MapCapabilityError,
-    MaterializationLimitError,
-    MaterializationRequired,
-    OccurrenceAxis,
-    RectangularDomain,
-    SeparableAffineRequirements,
-    UnboundDomainError,
-    UnsupportedMapEncoding,
-    ValidationCapabilityError,
-    decode_coordinate_map,
-    decode_coordinate_set,
-    decode_requirement_rule,
-    encode_coordinate_map,
-    encode_coordinate_set,
-    encode_requirement_rule,
-)
-from finn.dataflow.model.logical.region import (
-    BeatSequence,
-    BeatType,
-    DataflowRegion,
-    InputInterface,
-    InternalInput,
-    LogicalSchedule,
-    NumericElementType,
-    Operand,
-    OutputInterface,
-    Port,
-    RegionInput,
-    RegionRefused,
-    ScheduledInputRequirements,
-    ScheduledOutputAvailability,
-    ScheduleLevel,
-    element_width,
-    is_element_type,
-)
-from finn.dataflow.model.logical.region_profiles import (
-    CanonicalExtentProfile,
-    ProfileCertificationError,
-    ProfileCertificationIssue,
-    direct_output_availability,
-    explicit_beat_sequence,
-    lexicographic_occurrence_to_field,
-)
-from finn.dataflow.model.logical.region_validation import (
-    RegionValidationIssue,
-    RegionValidationReport,
-    is_structurally_well_formed,
-    validate_region,
-)
-from finn.dataflow.model.logical.network import (
-    BoundaryContract,
-    ChannelSpec,
-    DataflowNetwork,
-    DirectConnection,
-    Edge,
-    EdgeTransport,
-    FanoutMode,
-    NetworkNode,
-    OrderedChannel,
-    PassCorrespondence,
-    PositionMap,
-    RegionEndpoint,
-    SinkContract,
-)
-from finn.dataflow.model.logical.network_validation import (
-    NetworkValidationBudget,
-    NetworkValidationIssue,
-    NetworkValidationReport,
-    is_network_structurally_well_formed,
-    validate_network,
-)
-from finn.dataflow.model.logical.refs import (
-    DataflowOperandRef,
-    NetworkOperandError,
-    RegionInputRef,
-    RegionOutputRef,
-    resolve_input,
-    resolve_output,
-)
-from finn.dataflow.model.logical.presentation import (
-    boundary_presented_position_set,
-    boundary_presented_positions,
-    edge_presented_position_set,
-    edge_presented_positions,
-    exposing_boundaries,
-    exposing_ports,
-    unpresented_position_set,
-    unpresented_positions,
-)
+from importlib import import_module
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from finn.dataflow.model.logical.datatypes import (
+        DatatypeError,
+        QONNXDataType,
+        canonical_qonnx_datatype,
+        decode_datatype,
+        encode_datatype,
+        is_qonnx_datatype,
+        qonnx_datatype_width,
+        resolve_qonnx_datatype_name,
+    )
+    from finn.dataflow.model.logical.composition import (
+        NetworkFragment,
+        ParentBoundary,
+        ParentConnection,
+        compose_network,
+        qualify_logical,
+        qualify_network,
+        qualify_region,
+    )
+    from finn.dataflow.model.logical.maps import (
+        AffineRankMap,
+        Coordinate,
+        CoordinateSet,
+        ExplicitCoordinateMap,
+        FiniteCoordinateSet,
+        IdentityCoordinateMap,
+        InvalidMapError,
+        MapCapabilityError,
+        MaterializationLimitError,
+        MaterializationRequired,
+        OccurrenceAxis,
+        RectangularDomain,
+        SeparableAffineRequirements,
+        UnboundDomainError,
+        UnsupportedMapEncoding,
+        ValidationCapabilityError,
+        decode_coordinate_map,
+        decode_coordinate_set,
+        decode_requirement_rule,
+        encode_coordinate_map,
+        encode_coordinate_set,
+        encode_requirement_rule,
+    )
+    from finn.dataflow.model.logical.region import (
+        BeatSequence,
+        BeatType,
+        DataflowRegion,
+        InputInterface,
+        InternalInput,
+        LogicalSchedule,
+        NumericElementType,
+        Operand,
+        OutputInterface,
+        Port,
+        RegionInput,
+        RegionRefused,
+        ScheduledInputRequirements,
+        ScheduledOutputAvailability,
+        ScheduleLevel,
+        element_width,
+        is_element_type,
+    )
+    from finn.dataflow.model.logical.region_profiles import (
+        CanonicalExtentProfile,
+        ProfileCertificationError,
+        ProfileCertificationIssue,
+        direct_output_availability,
+        explicit_beat_sequence,
+        lexicographic_occurrence_to_field,
+    )
+    from finn.dataflow.model.logical.region_validation import (
+        RegionValidationIssue,
+        RegionValidationReport,
+        is_structurally_well_formed,
+        validate_region,
+    )
+    from finn.dataflow.model.logical.network import (
+        BoundaryContract,
+        ChannelSpec,
+        DataflowNetwork,
+        DirectConnection,
+        Edge,
+        EdgeTransport,
+        FanoutMode,
+        NetworkNode,
+        OrderedChannel,
+        PassCorrespondence,
+        PositionMap,
+        RegionEndpoint,
+        SinkContract,
+    )
+    from finn.dataflow.model.logical.network_validation import (
+        NetworkValidationBudget,
+        NetworkValidationIssue,
+        NetworkValidationReport,
+        is_network_structurally_well_formed,
+        validate_network,
+    )
+    from finn.dataflow.model.logical.refs import (
+        DataflowOperandRef,
+        NetworkOperandError,
+        RegionInputRef,
+        RegionOutputRef,
+        resolve_input,
+        resolve_output,
+    )
+    from finn.dataflow.model.logical.presentation import (
+        boundary_presented_position_set,
+        boundary_presented_positions,
+        edge_presented_position_set,
+        edge_presented_positions,
+        exposing_boundaries,
+        exposing_ports,
+        unpresented_position_set,
+        unpresented_positions,
+    )
+    from finn.dataflow.model.logical.results import (
+        CompositionError,
+        ImplementationPath,
+        LogicalResult,
+        NetworkResult,
+        QualifiedChildResult,
+        RegionResult,
+    )
+
+_EXPORT_GROUPS = {
+    "finn.dataflow.model.logical.datatypes": (
+        "DatatypeError",
+        "QONNXDataType",
+        "canonical_qonnx_datatype",
+        "decode_datatype",
+        "encode_datatype",
+        "is_qonnx_datatype",
+        "qonnx_datatype_width",
+        "resolve_qonnx_datatype_name",
+    ),
+    "finn.dataflow.model.logical.composition": (
+        "NetworkFragment",
+        "ParentBoundary",
+        "ParentConnection",
+        "compose_network",
+        "qualify_logical",
+        "qualify_network",
+        "qualify_region",
+    ),
+    "finn.dataflow.model.logical.maps": (
+        "AffineRankMap",
+        "Coordinate",
+        "CoordinateSet",
+        "ExplicitCoordinateMap",
+        "FiniteCoordinateSet",
+        "IdentityCoordinateMap",
+        "InvalidMapError",
+        "MapCapabilityError",
+        "MaterializationLimitError",
+        "MaterializationRequired",
+        "OccurrenceAxis",
+        "RectangularDomain",
+        "SeparableAffineRequirements",
+        "UnboundDomainError",
+        "UnsupportedMapEncoding",
+        "ValidationCapabilityError",
+        "decode_coordinate_map",
+        "decode_coordinate_set",
+        "decode_requirement_rule",
+        "encode_coordinate_map",
+        "encode_coordinate_set",
+        "encode_requirement_rule",
+    ),
+    "finn.dataflow.model.logical.region": (
+        "BeatSequence",
+        "BeatType",
+        "DataflowRegion",
+        "InputInterface",
+        "InternalInput",
+        "LogicalSchedule",
+        "NumericElementType",
+        "Operand",
+        "OutputInterface",
+        "Port",
+        "RegionInput",
+        "RegionRefused",
+        "ScheduledInputRequirements",
+        "ScheduledOutputAvailability",
+        "ScheduleLevel",
+        "element_width",
+        "is_element_type",
+    ),
+    "finn.dataflow.model.logical.region_profiles": (
+        "CanonicalExtentProfile",
+        "ProfileCertificationError",
+        "ProfileCertificationIssue",
+        "direct_output_availability",
+        "explicit_beat_sequence",
+        "lexicographic_occurrence_to_field",
+    ),
+    "finn.dataflow.model.logical.region_validation": (
+        "RegionValidationIssue",
+        "RegionValidationReport",
+        "is_structurally_well_formed",
+        "validate_region",
+    ),
+    "finn.dataflow.model.logical.network": (
+        "BoundaryContract",
+        "ChannelSpec",
+        "DataflowNetwork",
+        "DirectConnection",
+        "Edge",
+        "EdgeTransport",
+        "FanoutMode",
+        "NetworkNode",
+        "OrderedChannel",
+        "PassCorrespondence",
+        "PositionMap",
+        "RegionEndpoint",
+        "SinkContract",
+    ),
+    "finn.dataflow.model.logical.network_validation": (
+        "NetworkValidationBudget",
+        "NetworkValidationIssue",
+        "NetworkValidationReport",
+        "is_network_structurally_well_formed",
+        "validate_network",
+    ),
+    "finn.dataflow.model.logical.refs": (
+        "DataflowOperandRef",
+        "NetworkOperandError",
+        "RegionInputRef",
+        "RegionOutputRef",
+        "resolve_input",
+        "resolve_output",
+    ),
+    "finn.dataflow.model.logical.presentation": (
+        "boundary_presented_position_set",
+        "boundary_presented_positions",
+        "edge_presented_position_set",
+        "edge_presented_positions",
+        "exposing_boundaries",
+        "exposing_ports",
+        "unpresented_position_set",
+        "unpresented_positions",
+    ),
+    "finn.dataflow.model.logical.results": (
+        "CompositionError",
+        "ImplementationPath",
+        "LogicalResult",
+        "NetworkResult",
+        "QualifiedChildResult",
+        "RegionResult",
+    ),
+}
+_EXPORTS = {name: module for module, names in _EXPORT_GROUPS.items() for name in names}
+
+
+def __getattr__(name: str) -> object:
+    module_name = _EXPORTS.get(name)
+    if module_name is None:
+        raise AttributeError(name)
+    value = getattr(import_module(module_name), name)
+    globals()[name] = value
+    return value
+
+
+def __dir__() -> list[str]:
+    return sorted(set(globals()) | set(__all__))
+
 
 __all__ = [
-    # the datatype boundary
     "DatatypeError",
     "QONNXDataType",
     "CompositionError",
@@ -185,7 +301,6 @@ __all__ = [
     "qualify_network",
     "qualify_region",
     "resolve_qonnx_datatype_name",
-    # the Region model
     "AffineRankMap",
     "BeatSequence",
     "BeatType",
@@ -225,19 +340,16 @@ __all__ = [
     "encode_requirement_rule",
     "element_width",
     "is_element_type",
-    # construction profiles
     "CanonicalExtentProfile",
     "ProfileCertificationError",
     "ProfileCertificationIssue",
     "direct_output_availability",
     "explicit_beat_sequence",
     "lexicographic_occurrence_to_field",
-    # Region validation
     "RegionValidationIssue",
     "RegionValidationReport",
     "is_structurally_well_formed",
     "validate_region",
-    # the Network model
     "BoundaryContract",
     "ChannelSpec",
     "DataflowNetwork",
@@ -251,20 +363,17 @@ __all__ = [
     "PositionMap",
     "RegionEndpoint",
     "SinkContract",
-    # Network validation
     "NetworkValidationBudget",
     "NetworkValidationIssue",
     "NetworkValidationReport",
     "is_network_structurally_well_formed",
     "validate_network",
-    # qualified references
     "DataflowOperandRef",
     "NetworkOperandError",
     "RegionInputRef",
     "RegionOutputRef",
     "resolve_input",
     "resolve_output",
-    # exposure and presentation
     "boundary_presented_position_set",
     "boundary_presented_positions",
     "edge_presented_position_set",

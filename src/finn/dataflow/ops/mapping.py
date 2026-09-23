@@ -34,7 +34,7 @@ from finn.dataflow.model.logical.refs import (
     resolve_input,
     resolve_output,
 )
-from finn.dataflow.model.logical.region import Coordinate, InputInterface
+from finn.dataflow.model.logical.region import Coordinate
 from finn.dataflow.ops.source import SourceNode
 from finn.dataflow.model.logical.interface import OperandExport, validate_operand_export
 
@@ -85,27 +85,6 @@ class OperandMapping:
     edge_presented_set: CoordinateSet
     boundary_presented_set: CoordinateSet
     unpresented_set: CoordinateSet
-    _presentation_is_explicit: bool = False
-
-    @property
-    def edge_presented(self) -> frozenset[Coordinate]:
-        return self._legacy_set(self.edge_presented_set, "edge_presented")
-
-    @property
-    def boundary_presented(self) -> frozenset[Coordinate]:
-        return self._legacy_set(self.boundary_presented_set, "boundary_presented")
-
-    @property
-    def unpresented(self) -> frozenset[Coordinate]:
-        return self._legacy_set(self.unpresented_set, "unpresented")
-
-    def _legacy_set(self, value: CoordinateSet, field_name: str) -> frozenset[Coordinate]:
-        if not self._presentation_is_explicit:
-            raise MaterializationRequired(
-                f"OperandMapping.{field_name} requires materialize_presentation("
-                "max_positions_per_set=...)"
-            )
-        return frozenset(value.materialize(max_points=value.cardinality))
 
     def materialize_presentation(
         self, *, max_positions_per_set: int
@@ -259,9 +238,6 @@ def _derive_operand_mappings(
                 edge_presented = edge_presented_position_set(network, ref)
                 boundary_presented = boundary_presented_position_set(network, ref)
                 unpresented = unpresented_position_set(network, ref)
-                presentation_is_explicit = item.requirements.is_explicit and (
-                    not isinstance(item, InputInterface) or item.port.beat_sequence.is_explicit
-                )
             else:
                 output = resolve_output(network, ref)
                 shape = output.port.operand.shape
@@ -269,7 +245,6 @@ def _derive_operand_mappings(
                 edge_presented = empty
                 boundary_presented = empty
                 unpresented = empty
-                presentation_is_explicit = True
             result.append(
                 OperandMapping(
                     name,
@@ -287,7 +262,6 @@ def _derive_operand_mappings(
                     edge_presented,
                     boundary_presented,
                     unpresented,
-                    presentation_is_explicit,
                 )
             )
     return tuple(result)

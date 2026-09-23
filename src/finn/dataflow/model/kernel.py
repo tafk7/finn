@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The small shared contract for leaf and composite Kernels."""
+"""Conventional Kernel authoring and child APIs over the explicit Kernel base."""
 
 from __future__ import annotations
 
@@ -18,6 +18,8 @@ from finn.dataflow.artifacts.build import (
 )
 from finn.dataflow.artifacts.derivation import Scalar
 from finn.dataflow.model._authoring import GENERATED_MEMBERS
+from finn.dataflow.model.kernel_base import Kernel as KernelBase
+from finn.dataflow.model.logical.view import ensure_logical_view_validation
 from finn.dataflow.model.children import (
     canonicalize_kernel_child_capabilities,
     choice_role,
@@ -27,10 +29,9 @@ from finn.dataflow.model.logical.authoring import RegionDeclaration
 from finn.dataflow.model.logical.composition import RegionResult
 from finn.dataflow.model.logical.region import DataflowRegion
 from finn.dataflow.model.logical.interface_authoring import attach_public_interface
-from finn.dataflow.model.logical.view import (
+from finn.dataflow.model.logical.view_authoring import (
     attach_composite_logical,
     attach_leaf_logical,
-    ensure_logical_view_validation,
     synchronize_generated_dataflow,
 )
 from finn.dataflow.model.physical.authoring import (
@@ -39,7 +40,7 @@ from finn.dataflow.model.physical.authoring import (
     attach_leaf_physical,
 )
 from finn.dataflow.space.compiler import _CompiledSpace
-from finn.dataflow.space.declarations import AuthoringError, Problem, Space, declared_members
+from finn.dataflow.space.declarations import AuthoringError, Space, declared_members
 from finn.dataflow.space.occurrence import ChoiceView, layer_runtime
 
 if TYPE_CHECKING:
@@ -48,8 +49,8 @@ if TYPE_CHECKING:
     from finn.dataflow.space.declarations import Derived, Projection
 
 
-class Kernel(Space):
-    """Shared domain contract for leaf and composite implementations."""
+class Kernel(KernelBase):
+    """Conventional leaf/composite authoring over the explicit Kernel contract."""
 
     id: ClassVar[str] = ""
     version: ClassVar[str] = "1"
@@ -71,8 +72,8 @@ class Kernel(Space):
         "physical_streams",
     )
 
-    def __init_subclass__(cls, **kwargs: object) -> None:
-        super().__init_subclass__(**kwargs)
+    @classmethod
+    def _configure_views(cls) -> None:
         declarations = dict(declared_members(cls))
         has_region = isinstance(declarations.get("region"), RegionDeclaration)
         has_children = bool(kernel_choice_members(cls))
@@ -90,16 +91,8 @@ class Kernel(Space):
 
     @classmethod
     def _finalize_compilation(cls, compiled: object) -> object:
-        if not isinstance(compiled, _CompiledSpace):
-            raise AuthoringError(f"{cls.__name__} received an invalid Space compilation")
-        if not cls.id:
-            raise AuthoringError(f"{cls.__name__} must declare a non-empty id")
-        if not cls.version:
-            raise AuthoringError(f"{cls.__name__} must declare a non-empty version")
-        if any(isinstance(item, Problem) for _name, item in declared_members(cls)):
-            raise AuthoringError(
-                f"{cls.__name__} must consume external facts through Input declarations"
-            )
+        compiled = super()._finalize_compilation(compiled)
+        assert isinstance(compiled, _CompiledSpace)
         declarations = dict(declared_members(cls))
         if (
             isinstance(declarations.get("region"), RegionDeclaration)

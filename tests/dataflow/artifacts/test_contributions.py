@@ -11,7 +11,6 @@ say "this entry is rendered".  Once it can, the special case has nothing to do.
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 import pytest
@@ -47,6 +46,14 @@ CONTEXT: dict[str, object] = {
 SLOT = DataSlot("weights", DataSlotSpec(32, 1024, "row-major", "weights.dat"))
 
 
+@pytest.fixture
+def source_root(tmp_path: Path) -> Path:
+    source = tmp_path / "rtl/infra/replay_buffer.sv"
+    source.parent.mkdir(parents=True)
+    source.write_text("module replay_buffer; endmodule\n")
+    return tmp_path
+
+
 def _manifest(*, with_slot: bool = True) -> tuple[object, ...]:
     entries: list[object] = [
         CopiedSource("finnlib", "rtl/infra/replay_buffer.sv", provides=("replay_buffer",)),
@@ -57,10 +64,9 @@ def _manifest(*, with_slot: bool = True) -> tuple[object, ...]:
     return tuple(entries)
 
 
-def _resolve(finn_root: Path, **overrides: object) -> object:
-    finnlib_root = Path(os.environ.get("FINNLIB_ROOT", finn_root / "deps/finnlib"))
+def _resolve(source_root: Path, **overrides: object) -> object:
     arguments: dict[str, object] = {
-        "roots": {"finnlib": finnlib_root},
+        "roots": {"finnlib": source_root},
         "template_roots": [TEMPLATES],
         "context": CONTEXT,
         "origin": "decomposed",
@@ -72,36 +78,35 @@ def _resolve(finn_root: Path, **overrides: object) -> object:
 # -- the manifest says which entries are rendered ------------------------------
 
 
-def test_a_rendered_entry_needs_no_filename_test_to_be_recognised(finn_root: Path) -> None:
-    resolved = _resolve(finn_root)
+def test_a_rendered_entry_needs_no_filename_test_to_be_recognised(source_root: Path) -> None:
+    resolved = _resolve(source_root)
     paths = [source.path for source in resolved.definition.files]  # type: ignore[attr-defined]
     assert paths == ["rtl/infra/replay_buffer.sv", "mvau_decomposed.sv"]
 
 
-def test_declared_order_survives_resolution_exactly(finn_root: Path) -> None:
+def test_declared_order_survives_resolution_exactly(source_root: Path) -> None:
     """Nothing here sorts.  The manifest already declared the order."""
 
-    resolved = _resolve(finn_root)
+    resolved = _resolve(source_root)
     files = resolved.definition.files  # type: ignore[attr-defined]
     assert files[0].language is Language.SYSTEMVERILOG
     assert files[0].role is Role.SOURCE
     assert files[1].path == "mvau_decomposed.sv"
 
 
-def test_a_copied_source_is_keyed_by_its_content(finn_root: Path) -> None:
-    resolved = _resolve(finn_root)
-    finnlib_root = Path(os.environ.get("FINNLIB_ROOT", finn_root / "deps/finnlib"))
-    on_disk = (finnlib_root / "rtl/infra/replay_buffer.sv").read_bytes()
+def test_a_copied_source_is_keyed_by_its_content(source_root: Path) -> None:
+    resolved = _resolve(source_root)
+    on_disk = (source_root / "rtl/infra/replay_buffer.sv").read_bytes()
     assert resolved.definition.files[0].content == ContentRef(  # type: ignore[attr-defined]
         content_digest(on_disk)
     )
 
 
-def test_a_rendered_source_is_keyed_by_the_bytes_it_produced(finn_root: Path) -> None:
+def test_a_rendered_source_is_keyed_by_the_bytes_it_produced(source_root: Path) -> None:
     """Not by its template: two contexts over one template are two artifacts."""
 
-    first = _resolve(finn_root)
-    other = _resolve(finn_root, context=dict(CONTEXT, module_name="other"))
+    first = _resolve(source_root)
+    other = _resolve(source_root, context=dict(CONTEXT, module_name="other"))
     assert (
         first.definition.files[1].content  # type: ignore[attr-defined]
         != other.definition.files[1].content  # type: ignore[attr-defined]
@@ -109,34 +114,34 @@ def test_a_rendered_source_is_keyed_by_the_bytes_it_produced(finn_root: Path) ->
 
 
 def test_the_template_digest_is_reported_for_the_pre_render_plan_key(
-    finn_root: Path,
+    source_root: Path,
 ) -> None:
     """§9.2: two template revisions of one configuration need two names."""
 
-    resolved = _resolve(finn_root)
+    resolved = _resolve(source_root)
     digests = dict(resolved.template_digests)  # type: ignore[attr-defined]
     assert digests[WRAPPER] == ContentRef(content_digest((TEMPLATES / WRAPPER).read_bytes()))
 
 
-def test_an_unresolvable_root_is_refused_by_name(finn_root: Path) -> None:
+def test_an_unresolvable_root_is_refused_by_name(source_root: Path) -> None:
     with pytest.raises(ContributionError, match="does not resolve"):
-        _resolve(finn_root, roots={})
+        _resolve(source_root, roots={})
 
 
-def test_a_template_outside_every_declared_root_is_refused(finn_root: Path) -> None:
+def test_a_template_outside_every_declared_root_is_refused(source_root: Path) -> None:
     with pytest.raises(ContributionError, match="not under any declared template root"):
-        _resolve(finn_root, template_roots=[finn_root / "docs"])
+        _resolve(source_root, template_roots=[source_root / "docs"])
 
 
 # -- the slot is a hole, and the structural closure is complete without it -----
 
 
 def test_a_data_slot_contributes_no_file_to_the_structural_closure(
-    finn_root: Path,
+    source_root: Path,
 ) -> None:
     """The independence is structural.  A slot in the closure would be in its key."""
 
-    with_slot = _resolve(finn_root)
+    with_slot = _resolve(source_root)
     assert SLOT in with_slot.slots  # type: ignore[attr-defined]
     assert all(
         source.path != "weights.dat"

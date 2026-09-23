@@ -5,6 +5,21 @@
 
 from __future__ import annotations
 
+from enum import Enum
+
+
+class DspBlock(str, Enum):
+    """DSP generation selected by the target platform."""
+
+    DSP48E1 = "DSP48E1"
+    DSP48E2 = "DSP48E2"
+    DSP58 = "DSP58"
+
+
+# Preserve existing serialized enum identities; matmul.base re-exports this
+# exact class. Its implementation and capacity data now belong to this module.
+DspBlock.__module__ = "finn.dataflow.kernels.matmul.base"
+
 
 _DSP_WIDTHS = {
     "DSP48E1": (25, 18, 48),
@@ -27,4 +42,4 @@ def target_accumulator_bits(target: object) -> int:
     return dsp_widths(target)[2]
 
 
-__all__ = ["dsp_widths", "target_accumulator_bits"]
+__all__ = ["DspBlock", "dsp_widths", "target_accumulator_bits"]

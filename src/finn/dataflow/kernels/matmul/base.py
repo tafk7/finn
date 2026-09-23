@@ -38,6 +38,7 @@ from finn.dataflow.model.logical.network import PositionMap, RegionEndpoint
 from finn.dataflow.model.logical.refs import DataflowOperandRef, RegionInputRef, RegionOutputRef
 from finn.dataflow.model.logical.region import InputInterface
 from finn.dataflow.kernels.typing import operand_types_supported, operand_widths_supported
+from finn.dataflow.kernels.target import DspBlock
 from finn.dataflow.space.declarations import (
     ConstraintGroup,
     Decision,
@@ -52,14 +53,6 @@ from finn.dataflow.space.declarations import (
     reject,
 )
 from finn.dataflow.model.logical.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
-
-
-class DspBlock(str, Enum):
-    """DSP generation selected by the target platform."""
-
-    DSP48E1 = "DSP48E1"
-    DSP48E2 = "DSP48E2"
-    DSP58 = "DSP58"
 
 
 class AccumulationMode(str, Enum):

@@ -17,6 +17,7 @@ def _natural(value: int, name: str, *, positive: bool = False) -> None:
 class UnusedBitPolicy(Enum):
     DRIVE_ZERO = "drive_zero"
     IGNORE_ON_RECEIVE = "ignore_on_receive"
+    UNSPECIFIED = "unspecified"  # Output padding carries no logical value or fill guarantee.
 
 
 @dataclass(frozen=True)

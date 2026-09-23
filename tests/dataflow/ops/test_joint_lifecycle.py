@@ -17,7 +17,7 @@ import pytest
 from onnx import helper  # type: ignore[import-not-found]
 from qonnx.core.modelwrapper import ModelWrapper  # type: ignore[import-not-found]
 
-import finn.dataflow.model.logical.view as design_module
+import finn.dataflow.model.logical.view_authoring as design_module
 import finn.dataflow.ops.mapping as mapping_module
 from finn.dataflow._engine import Absent, Decided, Unresolved
 from finn.dataflow.artifacts.derivation import ContentRef, build_key

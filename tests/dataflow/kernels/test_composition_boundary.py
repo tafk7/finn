@@ -8,7 +8,7 @@ from typing import cast
 
 import pytest
 
-import finn.dataflow.model.logical.view as design_module
+import finn.dataflow.model.logical.view_authoring as design_module
 from finn.dataflow._engine import Absent, Decided
 from finn.dataflow.model.children import KernelChoice
 from finn.dataflow.model.kernel import Kernel
