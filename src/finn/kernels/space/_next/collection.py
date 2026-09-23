@@ -7,7 +7,7 @@ from __future__ import annotations
 import inspect
 import types
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Literal, Union, cast, get_args, get_origin, get_type_hints
 
@@ -22,6 +22,7 @@ from .declarations import (
     ScopedValueRef,
     Space,
     Subspace,
+    SubspaceChoice,
     Param,
     ValueKey,
     ValueRef,
@@ -46,6 +47,7 @@ _RESERVED = frozenset(
         "_state",
         "_scope",
         "exports",
+        "when",
     }
 )
 
@@ -81,6 +83,9 @@ class EffectiveSpace:
     semantics: Mapping[Declaration, ValueSemantics[object]]
     aliases: Mapping[Declaration, str]
     exports: Mapping[ValueKey[object] | ViewKey[object], Declaration]
+    guards: Mapping[Declaration, ValueRef[bool]] = field(
+        default_factory=lambda: MappingProxyType({})
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -247,20 +252,85 @@ def _resolve_source(source: object, effective: EffectiveSpace, owner: str) -> Va
 
 
 def _source_semantics(
-    source: ValueRef[object], effective: EffectiveSpace
+    source: ValueRef[object] | View[object],
+    effective: EffectiveSpace,
+    known_spaces: Mapping[type[Space], EffectiveSpace] | None = None,
 ) -> ValueSemantics[object] | None:
-    semantics = effective.semantics.get(source, source.semantics)
-    if semantics is not None:
-        return semantics
-    if isinstance(source, (ScopedValueRef, AcceptedViewRef)):
-        member = source.member
-        if isinstance(member, (Derived, View)) and member.function is not None:
-            member_owner = member.owner
-            if isinstance(member_owner, type) and issubclass(member_owner, Space):
-                owner = f"{member_owner.__qualname__}.{member.name}"
-                hints = _hints(member.function, _namespace(member_owner), owner)
-                return _output_semantics(member, hints, owner)[1]
+    """Read already collected types iteratively; the linker checks unresolved edges."""
+    current: Declaration = source
+    seen: set[tuple[int, int]] = set()
+    while (id(current), id(effective)) not in seen:
+        seen.add((id(current), id(effective)))
+        if isinstance(current, (ValueRef, View)):
+            semantics = effective.semantics.get(current, current.semantics)
+            if semantics is not None:
+                return semantics
+        if isinstance(current, (ScopedValueRef, AcceptedViewRef)):
+            placement = current.placement
+            if not isinstance(placement, Subspace) or known_spaces is None:
+                return None
+            child = known_spaces.get(placement.space_type)
+            if child is None:
+                return None
+            member = current.member
+            if isinstance(member, (ValueKey, ViewKey)):
+                resolved = child.exports.get(member)
+            else:
+                name = child.aliases.get(member)
+                resolved = child.members[name].declaration if name is not None else None
+            if resolved is None:
+                return None
+            current, effective = resolved, child
+        elif isinstance(current, View) and current.source is not None:
+            current = current.source
+        else:
+            return None
     return None
+
+
+def _argument_value_type(argument: BoundArgument, owner: str) -> object:
+    annotation = argument.annotation
+    if argument.mode == "answer":
+        value_type = _answer_value_type(annotation)
+        if value_type is None:
+            raise DefinitionError(f"{owner}: full_answer dependency requires Answer[T]")
+        return value_type
+    if argument.mode == "optional":
+        options = get_args(annotation)
+        if MissingInput not in options or NotApplicable not in options:
+            raise DefinitionError(
+                f"{owner}: optional dependency annotation must include MissingInput "
+                "and NotApplicable"
+            )
+        value_types = tuple(x for x in options if x not in (MissingInput, NotApplicable))
+        return value_types
+    return annotation
+
+
+def _annotation_accepts(annotation: object, value_type: type[object]) -> bool:
+    if isinstance(annotation, type):
+        return issubclass(value_type, annotation)
+    if isinstance(annotation, tuple):
+        return any(_annotation_accepts(option, value_type) for option in annotation)
+    origin = get_origin(annotation)
+    if origin in (Union, types.UnionType):
+        return any(_annotation_accepts(option, value_type) for option in get_args(annotation))
+    if isinstance(origin, type):
+        return issubclass(value_type, origin)
+    return True
+
+
+def validate_argument(
+    argument: BoundArgument, semantics: ValueSemantics[object], *, owner: str
+) -> None:
+    """Check one linked supplier using the same dependency-mode policy as collection."""
+    value_type = _argument_value_type(argument, owner)
+    if isinstance(semantics.type_token, type) and not _annotation_accepts(
+        value_type, semantics.type_token
+    ):
+        raise DefinitionError(
+            f"{owner}: annotation {argument.annotation!r} cannot consume {semantics.name}"
+        )
 
 
 def bind_function(
@@ -270,6 +340,7 @@ def bind_function(
     name: str,
     namespace: Mapping[str, object] | None = None,
     annotations: Mapping[str, object] | None = None,
+    known_spaces: Mapping[type[Space], EffectiveSpace] | None = None,
 ) -> BoundFunction:
     """Bind all arguments against one complete table, respecting overrides."""
     owner = f"{effective.space_type.__qualname__}.{name}"
@@ -293,6 +364,8 @@ def bind_function(
         label = f"{owner} argument {parameter.name}"
         if parameter.name in ("self", "cls"):
             raise DefinitionError(f"{label}: implicit self/cls is unsupported")
+        if parameter.name == "when":
+            raise DefinitionError(f"{label}: when is a reserved authoring control argument")
         if parameter.kind not in (
             inspect.Parameter.POSITIONAL_OR_KEYWORD,
             inspect.Parameter.KEYWORD_ONLY,
@@ -315,36 +388,20 @@ def bind_function(
             mode = source.mode
             source = source.source
         resolved = _resolve_source(source, effective, label)
-        source_semantics = _source_semantics(resolved, effective)
+        source_semantics = _source_semantics(resolved, effective, known_spaces)
         input_type = hints[parameter.name]
-        accepted_type = input_type
-        if mode == "answer":
-            accepted_type = _answer_value_type(input_type)
-            if accepted_type is None:
-                raise DefinitionError(f"{label}: full_answer dependency requires Answer[T]")
-        elif mode == "optional":
-            options = get_args(input_type)
-            if MissingInput not in options or NotApplicable not in options:
-                raise DefinitionError(
-                    f"{label}: optional dependency annotation must include MissingInput "
-                    "and NotApplicable"
-                )
-            value_types = tuple(x for x in options if x not in (MissingInput, NotApplicable))
-            accepted_type = value_types[0] if len(value_types) == 1 else object
-        if (
-            source_semantics is not None
-            and isinstance(accepted_type, type)
-            and isinstance(source_semantics.type_token, type)
-            and not issubclass(source_semantics.type_token, accepted_type)
-        ):
-            raise DefinitionError(
-                f"{label}: annotation {input_type!r} cannot consume {source_semantics.name}"
-            )
-        arguments.append(BoundArgument(parameter.name, resolved, mode, input_type))
+        argument = BoundArgument(parameter.name, resolved, mode, input_type)
+        if source_semantics is not None:
+            validate_argument(argument, source_semantics, owner=label)
+        else:
+            _argument_value_type(argument, label)
+        arguments.append(argument)
     return BoundFunction(function, tuple(arguments), annotation, semantics)
 
 
-def collect_space(space_type: type[Space]) -> EffectiveSpace:
+def collect_space(
+    space_type: type[Space], *, known_spaces: Mapping[type[Space], EffectiveSpace] | None = None
+) -> EffectiveSpace:
     """Collect one scope and snapshot its signatures; child linking is separate."""
     if not isinstance(space_type, type) or not issubclass(space_type, Space):
         raise DefinitionError("collect_space expects a Space subclass")
@@ -440,7 +497,44 @@ def collect_space(space_type: type[Space]) -> EffectiveSpace:
                 name=name,
                 namespace=namespace,
                 annotations=hint_cache[id(_function(record.declaration))],
+                known_spaces=known_spaces,
             )
+    guard_candidates: list[tuple[str, Declaration]] = [
+        (name, record.declaration) for name, record in members.items()
+    ]
+    for name, record in members.items():
+        declaration = record.declaration
+        placements: tuple[tuple[str, Subspace[Space]], ...] = ()
+        if isinstance(declaration, Subspace):
+            placements = ((name, declaration),)
+        elif isinstance(declaration, SubspaceChoice):
+            placements = tuple(
+                (f"{name}.{case}", placement)
+                for case, placement in declaration.alternatives.items()
+            )
+            guard_candidates.extend(placements)
+        for placement_name, placement in placements:
+            plan = collect_placement(placement)
+            guard_candidates.extend(
+                (f"{placement_name}.{parameter}", binding.supplier)
+                for parameter, binding in plan.bindings.items()
+                if binding.kind == "local-decision" and isinstance(binding.supplier, Decision)
+            )
+    guards: dict[Declaration, ValueRef[bool]] = {}
+    for name, declaration in guard_candidates:
+        if declaration.when is None:
+            continue
+        owner = f"{space_type.__qualname__}.{name} guard"
+        guard = _resolve_source(declaration.when, preliminary, owner)
+        guard_semantics = _source_semantics(guard, preliminary, known_spaces)
+        if guard_semantics is not None and guard_semantics.type_token is not bool:
+            raise DefinitionError(f"{owner}: when= requires Boolean value semantics")
+        guards[declaration] = cast(ValueRef[bool], guard)
+    for record in members.values():
+        if isinstance(record.declaration, View):
+            inferred = _source_semantics(record.declaration, preliminary, known_spaces)
+            if inferred is not None:
+                semantics[record.declaration] = inferred
     exports: dict[ValueKey[object] | ViewKey[object], Declaration] = {}
     declared_exports = namespace.get("exports", {})
     if not isinstance(declared_exports, Mapping):
@@ -469,8 +563,10 @@ def collect_space(space_type: type[Space]) -> EffectiveSpace:
             and isinstance(resolved, View)
             and resolved.source is not None
         ):
-            exported_semantics = _source_semantics(resolved.source, preliminary)
-        if exported_semantics is None or not key.semantics.is_compatible_with(exported_semantics):
+            exported_semantics = _source_semantics(resolved.source, preliminary, known_spaces)
+        if exported_semantics is not None and not key.semantics.is_compatible_with(
+            exported_semantics
+        ):
             raise DefinitionError(
                 f"{space_type.__qualname__}: export {key.name} has incompatible semantics"
             )
@@ -482,4 +578,5 @@ def collect_space(space_type: type[Space]) -> EffectiveSpace:
         MappingProxyType(semantics),
         MappingProxyType(aliases),
         MappingProxyType(exports),
+        MappingProxyType(guards),
     )

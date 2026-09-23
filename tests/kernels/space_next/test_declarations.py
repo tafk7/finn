@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import cast
+from typing import cast, get_type_hints
 
 import pytest
 
@@ -19,7 +19,9 @@ from finn.kernels.space._next import (
     Param,
     Space,
     Subspace,
+    SubspaceChoice,
     ValueKey,
+    ValueRef,
     ValueSemantics,
     View,
     ViewKey,
@@ -30,9 +32,11 @@ from finn.kernels.space._next import (
     view,
 )
 from finn.kernels.space._next.collection import (
+    BoundArgument,
     collect_placement,
     collect_space,
     resolve_decision_ref,
+    validate_argument,
 )
 from finn.kernels.space._next.declarations import Declaration, DecisionRef
 
@@ -302,3 +306,178 @@ def test_child_omissions_and_incompatible_bindings_are_not_implicit_exposure() -
         collect_placement(Subspace(Child, width=8, optional_width=9, typo=1))
     with pytest.raises(DefinitionError, match="incompatible value semantics"):
         collect_placement(Subspace(Child, width=Param(str), optional_width=9))
+
+
+def test_guards_are_collected_separately_and_respect_inherited_overrides() -> None:
+    class Child(Space):
+        value = Param(int)
+
+    class Guarded(Space):
+        enabled = Param(bool)
+        selected = Decision(int, values=(1, 2), when=enabled)
+
+        @derived(when=enabled)
+        def result(*, selected: int) -> int:
+            raise AssertionError("must not execute")
+
+        @constraint(when=enabled)
+        def support(*, selected: int) -> bool:
+            raise AssertionError("must not execute")
+
+        @view(when=enabled)
+        def authored(*, selected: int) -> int:
+            raise AssertionError("must not execute")
+
+        physical = View(result, constraints=(support,), when=enabled)
+        child = Subspace(Child, value=1, when=enabled)
+        implementation = SubspaceChoice({"only": Subspace(Child, value=1)}, when=enabled)
+
+    class OverrideGuard(Guarded):
+        enabled = Param(bool)
+
+    effective = collect_space(OverrideGuard)
+    guarded = (
+        Guarded.selected,
+        Guarded.result,
+        Guarded.support,
+        Guarded.authored,
+        Guarded.physical,
+        Guarded.child,
+        Guarded.implementation,
+    )
+    assert all(effective.guards[declaration] is OverrideGuard.enabled for declaration in guarded)
+    assert [arg.name for arg in effective.functions["result"].dependencies] == ["selected"]
+    assert "when" not in Guarded.result.aliases
+    assert "when" not in Guarded.child.bindings
+
+
+def test_guards_on_fresh_local_choices_and_alternatives_use_the_placement_scope() -> None:
+    class Child(Space):
+        value = Param(int)
+
+    class Parent(Space):
+        enabled = Param(bool)
+        child = Subspace(Child, value=Decision(int, values=(1,), when=enabled))
+        choice = SubspaceChoice(
+            {
+                "one": Subspace(Child, value=1, when=enabled),
+            }
+        )
+
+    effective = collect_space(Parent)
+    decision = cast(Decision[object], Parent.child.bindings["value"])
+    assert effective.guards[decision] is Parent.enabled
+    assert effective.guards[Parent.choice.alternatives["one"]] is Parent.enabled
+
+
+def test_nonboolean_and_foreign_guards_fail_during_collection() -> None:
+    class Wrong(Space):
+        count = Param(int)
+        choice = Decision(int, values=(1,), when=cast(ValueRef[bool], count))
+
+    with pytest.raises(DefinitionError, match="Wrong.choice guard.*Boolean"):
+        collect_space(Wrong)
+
+    class Foreign(Space):
+        enabled = Param(bool)
+
+    class Unrelated(Space):
+        choice = Decision(int, values=(1,), when=Foreign.enabled)
+
+    with pytest.raises(DefinitionError, match="Unrelated.choice guard.*effective scope"):
+        collect_space(Unrelated)
+
+
+def test_when_is_an_authoring_control_argument() -> None:
+    class Wrong(Space):
+        active = Param(bool)
+
+        @derived(when=active)
+        def value(*, when: bool) -> int:
+            return 1
+
+    with pytest.raises(DefinitionError, match="reserved authoring control argument"):
+        collect_space(Wrong)
+
+
+def test_cached_child_records_supply_inferred_types_without_mutating_declarations() -> None:
+    boolean_view = ViewKey("admitted", bool)
+
+    class Child(Space):
+        size = Param(int)
+
+        @derived
+        def enabled(*, size: int) -> bool:
+            raise AssertionError("must not execute")
+
+        admitted = View(enabled)
+        exports = {boolean_view: admitted}
+
+    child_record = collect_space(Child)
+
+    class Parent(Space):
+        child = Subspace(Child, size=1)
+
+        @derived(when=child.ref(Child.enabled))
+        def value() -> int:
+            raise AssertionError("must not execute")
+
+        copied = View(child.accepted(Child.admitted))
+        exports = {boolean_view: copied}
+
+    effective = collect_space(Parent, known_spaces={Child: child_record})
+    assert effective.semantics[Parent.copied].type_token is bool
+    assert effective.guards[Parent.value] is Parent.value.when
+    assert Child.enabled.semantics is None
+    assert Child.admitted.semantics is None
+    assert Parent.copied.semantics is None
+
+    class Wrong(Space):
+        child = Subspace(Child, size=1)
+
+        @derived(flag=child.ref(Child.enabled))
+        def value(*, flag: str) -> int:
+            raise AssertionError("must not execute")
+
+    with pytest.raises(DefinitionError, match="cannot consume bool"):
+        collect_space(Wrong, known_spaces={Child: child_record})
+
+
+def test_collection_does_not_descend_into_deep_child_hierarchies() -> None:
+    current: type[Space] = Space
+    for index in range(1500):
+        current = type(f"Nested{index}", (Space,), {"child": Subspace(current)})
+    effective = collect_space(current)
+    assert tuple(effective.members) == ("child",)
+
+
+def test_linker_argument_validation_shares_dependency_mode_policy() -> None:
+    def annotations(integer: Answer[int], text: Answer[str]) -> None:
+        pass
+
+    hints: dict[str, object] = get_type_hints(annotations)
+    source = cast(ValueRef[object], Param(int))
+    integer = cast(ValueSemantics[object], ValueSemantics.immutable_nominal(int))
+    validate_argument(BoundArgument("item", source, "required", int), integer, owner="reader.item")
+    validate_argument(
+        BoundArgument("item", source, "answer", hints["integer"]), integer, owner="reader.item"
+    )
+    validate_argument(
+        BoundArgument("item", source, "optional", int | MissingInput | NotApplicable),
+        integer,
+        owner="reader.item",
+    )
+    with pytest.raises(DefinitionError, match="full_answer dependency requires"):
+        validate_argument(
+            BoundArgument("item", source, "answer", int), integer, owner="reader.item"
+        )
+    with pytest.raises(DefinitionError, match="cannot consume int"):
+        validate_argument(
+            BoundArgument("item", source, "answer", hints["text"]), integer, owner="reader.item"
+        )
+    with pytest.raises(DefinitionError, match="cannot consume int"):
+        validate_argument(
+            BoundArgument("item", source, "optional", str | float | MissingInput | NotApplicable),
+            integer,
+            owner="reader.item",
+        )

@@ -97,7 +97,7 @@ def _argument_value(
         return True, _clone(source, answer.value, owner=owner, role="dependency snapshot")
     if argument.mode == "optional":
         if isinstance(answer, Inapplicable):
-            return True, NotApplicable(source.key)
+            return True, NotApplicable(source.owner)
         supplier = source
         while supplier.kind == "alias" and supplier.output is not None:
             supplier = linked.nodes[supplier.output]
@@ -106,11 +106,11 @@ def _argument_value(
             and supplier.kind == "param"
             and not supplier.required
             and all(
-                finding.code == "input-missing" and finding.owner == supplier.key
+                finding.code == "input-missing" and finding.owner == supplier.owner
                 for finding in answer.findings
             )
         ):
-            return True, MissingInput(supplier.key)
+            return True, MissingInput(supplier.owner)
     return False, answer
 
 
@@ -133,7 +133,7 @@ def _guard_result(node: Node, answer: Answer[object]) -> NonValue | None:
     if not isinstance(answer, Decided):
         return answer
     if type(answer.value) is not bool:
-        raise EvaluationError(node.key, "applicability", "guard must return bool")
+        raise EvaluationError(node.owner, "applicability", "guard must return bool")
     return None if answer.value else Inapplicable()
 
 
@@ -181,7 +181,7 @@ def _frame(snapshot: Snapshot, node: Node) -> Generator[int, Answer[object], Eva
                     Finding(
                         FindingKind.LIMITATION,
                         "input-missing",
-                        node.key,
+                        node.owner,
                         "optional input was omitted at start",
                     ),
                 )
@@ -198,7 +198,7 @@ def _frame(snapshot: Snapshot, node: Node) -> Generator[int, Answer[object], Eva
                     Finding(
                         FindingKind.BLOCKER,
                         "decision-unassigned",
-                        node.key,
+                        node.owner,
                         "decision requires a commitment",
                     ),
                 )
@@ -206,12 +206,12 @@ def _frame(snapshot: Snapshot, node: Node) -> Generator[int, Answer[object], Eva
         )
     if node.kind in {"alias", "guard"}:
         if node.output is None:
-            raise EvaluationError(node.key, node.kind, "missing output reference")
+            raise EvaluationError(node.owner, node.kind, "missing output reference")
         return Evaluation((yield node.output))
     if node.kind == "select":
         if node.selector is None:
             if len(node.alternatives) != 1:
-                raise EvaluationError(node.key, "selection", "missing selector")
+                raise EvaluationError(node.owner, "selection", "missing selector")
             selected = node.alternatives[0][1]
         else:
             selector = yield node.selector
@@ -219,12 +219,12 @@ def _frame(snapshot: Snapshot, node: Node) -> Generator[int, Answer[object], Eva
                 return Evaluation(selector)
             matches = [target for key, target in node.alternatives if key == selector.value]
             if not matches:
-                raise EvaluationError(node.key, "selection", "selector is not a declared case")
+                raise EvaluationError(node.owner, "selection", "selector is not a declared case")
             selected = matches[0]
         return Evaluation((yield selected))
     if node.kind == "view":
         if node.output is None:
-            raise EvaluationError(node.key, "view", "missing output reference")
+            raise EvaluationError(node.owner, "view", "missing output reference")
         output = yield node.output
         constraints: dict[str, Answer[bool]] = {}
         for reference in node.constraints:
@@ -251,25 +251,25 @@ def _frame(snapshot: Snapshot, node: Node) -> Generator[int, Answer[object], Eva
         readiness = assess_readiness(obligations)
         return Evaluation(cast(Answer[object], readiness.answer), assessment=readiness)
 
-    arguments, failure = yield from _arguments(snapshot.linked, node.arguments, node.key)
+    arguments, failure = yield from _arguments(snapshot.linked, node.arguments, node.owner)
     if failure is not None:
         return Evaluation(failure, assessment=_guard_assessment(node, failure))
     if node.function is None:
-        raise EvaluationError(node.key, node.kind, "missing callback")
+        raise EvaluationError(node.owner, node.kind, "missing callback")
     try:
         result = node.function(**arguments)
         if node.kind == "constraint":
-            normalized = constraint_answer(cast(bool | Answer[bool], result), node.key)
+            normalized = constraint_answer(cast(bool | Answer[bool], result), node.owner)
             assessment = ConstraintAssessment({node.key: normalized}, normalized)
             return Evaluation(cast(Answer[object], normalized), assessment=assessment)
         if isinstance(result, (Inapplicable, Rejected, Unresolved)):
-            return Evaluation(owned_answer(result, node.key))
+            return Evaluation(owned_answer(result, node.owner))
         value = result.value if isinstance(result, Decided) else result
         if node.semantics is None:
             raise TypeError("derived output has no value semantics")
         return Evaluation(Decided(node.semantics.freeze(value)))
     except Exception as cause:
-        raise EvaluationError(node.key, node.kind, str(cause)) from cause
+        raise EvaluationError(node.owner, node.kind, str(cause)) from cause
 
 
 @dataclass(slots=True)
@@ -313,7 +313,7 @@ def evaluate(snapshot: Snapshot, node_index: int) -> Evaluation:
             else:
                 if demanded in active:
                     raise EvaluationError(
-                        snapshot.linked.nodes[demanded].key, "dependency", "cyclic evaluation"
+                        snapshot.linked.nodes[demanded].owner, "dependency", "cyclic evaluation"
                     )
                 active.add(demanded)
                 tasks.append(_Task(demanded, _frame(snapshot, snapshot.linked.nodes[demanded])))
@@ -330,16 +330,18 @@ def decision_state(snapshot: Snapshot, node_index: int) -> Answer[DecisionState[
     with snapshot.lock:
         node = snapshot.linked.nodes[node_index]
         if node.kind != "decision":
-            raise EvaluationError(node.key, "decision state", "reference is not an owning decision")
+            raise EvaluationError(
+                node.owner, "decision state", "reference is not an owning decision"
+            )
         inactive = _applicability(snapshot, node)
         if inactive is not None:
             return inactive
         if node_index not in snapshot.assignments:
-            return Decided(DecisionState(node.key))
+            return Decided(DecisionState(node.owner))
         value = _clone(
-            node, snapshot.assignments[node_index], owner=node.key, role="decision state"
+            node, snapshot.assignments[node_index], owner=node.owner, role="decision state"
         )
-        return Decided(DecisionState(node.key, "committed", value, "explicit"))
+        return Decided(DecisionState(node.owner, "committed", value, "explicit"))
 
 
 def _domain_inputs(snapshot: Snapshot, node: Node) -> tuple[dict[str, object], NonValue | None]:
@@ -350,7 +352,7 @@ def _domain_inputs(snapshot: Snapshot, node: Node) -> tuple[dict[str, object], N
     failures: list[Answer[object]] = []
     for argument in node.domain_arguments:
         answer = evaluate(snapshot, argument.node).answer
-        available, value = _argument_value(snapshot.linked, argument, answer, node.key)
+        available, value = _argument_value(snapshot.linked, argument, answer, node.owner)
         if available:
             values[argument.name] = value
         else:
@@ -363,27 +365,29 @@ def candidate_values(snapshot: Snapshot, node_index: int) -> Answer[tuple[object
         node = snapshot.linked.nodes[node_index]
         if node.domain is None or node.semantics is None:
             raise EvaluationError(
-                node.key, "domain enumeration", "reference has no decision domain"
+                node.owner, "domain enumeration", "reference has no decision domain"
             )
         arguments, failure = _domain_inputs(snapshot, node)
         if failure is not None:
             return failure
         if node.domain.candidates is None:
             return None
-        return node.domain.enumerate(arguments, semantics=node.semantics, owner=node.key)
+        return node.domain.enumerate(arguments, semantics=node.semantics, owner=node.owner)
 
 
 def membership(snapshot: Snapshot, node_index: int, value: object) -> Answer[bool]:
     with snapshot.lock:
         node = snapshot.linked.nodes[node_index]
         if node.domain is None or node.semantics is None:
-            raise EvaluationError(node.key, "domain membership", "reference has no decision domain")
+            raise EvaluationError(
+                node.owner, "domain membership", "reference has no decision domain"
+            )
         arguments, failure = _domain_inputs(snapshot, node)
         if failure is not None:
             return failure
-        candidate = _clone(node, value, owner=node.key, role="domain candidate snapshot")
+        candidate = _clone(node, value, owner=node.owner, role="domain candidate snapshot")
         return node.domain.membership(
-            candidate, arguments, semantics=node.semantics, owner=node.key
+            candidate, arguments, semantics=node.semantics, owner=node.owner
         )
 
 
@@ -394,7 +398,11 @@ def copy_answer(snapshot: Snapshot, node_index: int, answer: Answer[object]) -> 
         return answer
     with snapshot.lock:
         node = snapshot.linked.nodes[node_index]
-        return Decided(_clone(node, answer.value, owner=node.key, role="public value snapshot"))
+        if node.kind in {"group", "readiness"} and type(answer.value) is bool:
+            # Aggregate verdicts are intrinsic immutable booleans; these
+            # declarations need no separate user-owned value semantics.
+            return answer
+        return Decided(_clone(node, answer.value, owner=node.owner, role="public value snapshot"))
 
 
 def _copy_readiness(snapshot: Snapshot, assessment: ReadinessAssessment) -> ReadinessAssessment:
@@ -405,7 +413,7 @@ def _copy_readiness(snapshot: Snapshot, assessment: ReadinessAssessment) -> Read
             state = answer.value
             node = snapshot.linked.nodes[index]
             if state.status == "committed":
-                value = _clone(node, state.value, owner=node.key, role="public state snapshot")
+                value = _clone(node, state.value, owner=node.owner, role="public state snapshot")
                 state = replace(state, value=value)
             answers[key] = Decided(state)
         else:

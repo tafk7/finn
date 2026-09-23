@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from types import MappingProxyType
-from typing import Generic, Literal, TypeVar, cast, overload
+from typing import ClassVar, Generic, Literal, TypeVar, cast, overload
 
 from typing_extensions import Self
 
@@ -42,6 +42,7 @@ class Declaration:
 
     name: str | None = None
     owner: type[object] | None = None
+    when: ValueRef[bool] | None = None
 
     def __set_name__(self, owner: type[object], name: str) -> None:
         if self.owner is not None and (self.owner is not owner or self.name != name):
@@ -129,10 +130,12 @@ class Decision(ValueDecl[T], Generic[T]):
         domain: Domain[T] | None = None,
         values: Iterable[T] | None = None,
         semantics: ValueSemantics[T] | None = None,
+        when: ValueRef[bool] | None = None,
     ) -> None:
         if (domain is None) == (values is None):
             raise DefinitionError("a Decision needs exactly one of domain= or values=")
         self.semantics = semantics if semantics is not None else semantics_for(value_type)
+        self.when = when
         self.domain = (
             domain.with_semantics(self.semantics)
             if domain is not None
@@ -149,26 +152,33 @@ class Derived(ValueDecl[T], Generic[T]):
         *,
         semantics: ValueSemantics[T] | None = None,
         aliases: Mapping[str, object] | None = None,
+        when: ValueRef[bool] | None = None,
     ) -> None:
         self.function = function
         self.semantics = semantics
         self.aliases = MappingProxyType(dict(aliases or {}))
+        self.when = when
 
 
 class _DerivedDecorator:
-    def __init__(self, aliases: Mapping[str, object]) -> None:
-        self.aliases = aliases
+    def __init__(self, aliases: Mapping[str, object], when: ValueRef[bool] | None) -> None:
+        self.aliases, self.when = aliases, when
 
     def __call__(self, function: Callable[..., T]) -> Derived[T]:
-        return Derived(function, aliases=self.aliases)
+        return Derived(function, aliases=self.aliases, when=self.when)
 
 
 class _SemanticDerivedDecorator(Generic[T]):
-    def __init__(self, semantics: ValueSemantics[T], aliases: Mapping[str, object]) -> None:
-        self.semantics, self.aliases = semantics, aliases
+    def __init__(
+        self,
+        semantics: ValueSemantics[T],
+        aliases: Mapping[str, object],
+        when: ValueRef[bool] | None,
+    ) -> None:
+        self.semantics, self.aliases, self.when = semantics, aliases, when
 
     def __call__(self, function: Callable[..., T | Answer[T]]) -> Derived[T]:
-        return Derived(function, semantics=self.semantics, aliases=self.aliases)
+        return Derived(function, semantics=self.semantics, aliases=self.aliases, when=self.when)
 
 
 @overload
@@ -176,11 +186,15 @@ def derived(function: Callable[..., T], /) -> Derived[T]: ...
 
 
 @overload
-def derived(*, semantics: ValueSemantics[T], **aliases: object) -> _SemanticDerivedDecorator[T]: ...
+def derived(
+    *, semantics: ValueSemantics[T], when: ValueRef[bool] | None = None, **aliases: object
+) -> _SemanticDerivedDecorator[T]: ...
 
 
 @overload
-def derived(*, semantics: None = None, **aliases: object) -> _DerivedDecorator: ...
+def derived(
+    *, semantics: None = None, when: ValueRef[bool] | None = None, **aliases: object
+) -> _DerivedDecorator: ...
 
 
 def derived(
@@ -188,15 +202,16 @@ def derived(
     /,
     *,
     semantics: object = None,
+    when: ValueRef[bool] | None = None,
     **aliases: object,
 ) -> object:
     if function is not None:
-        return Derived(function, aliases=aliases)
+        return Derived(function, aliases=aliases, when=when)
     if semantics is not None:
         if not isinstance(semantics, ValueSemantics):
             raise DefinitionError("semantics= must be a ValueSemantics")
-        return _SemanticDerivedDecorator(semantics, aliases)
-    return _DerivedDecorator(aliases)
+        return _SemanticDerivedDecorator(semantics, aliases, when)
+    return _DerivedDecorator(aliases, when)
 
 
 class Constraint(Declaration):
@@ -205,18 +220,20 @@ class Constraint(Declaration):
         function: Callable[..., bool | Answer[bool]],
         *,
         aliases: Mapping[str, object] | None = None,
+        when: ValueRef[bool] | None = None,
     ) -> None:
         self.function = function
         self.aliases = MappingProxyType(dict(aliases or {}))
         self.semantics = semantics_for(bool)
+        self.when = when
 
 
 class _ConstraintDecorator:
-    def __init__(self, aliases: Mapping[str, object]) -> None:
-        self.aliases = aliases
+    def __init__(self, aliases: Mapping[str, object], when: ValueRef[bool] | None) -> None:
+        self.aliases, self.when = aliases, when
 
     def __call__(self, function: Callable[..., bool | Answer[bool]]) -> Constraint:
-        return Constraint(function, aliases=self.aliases)
+        return Constraint(function, aliases=self.aliases, when=self.when)
 
 
 @overload
@@ -224,15 +241,21 @@ def constraint(function: Callable[..., bool | Answer[bool]], /) -> Constraint: .
 
 
 @overload
-def constraint(**aliases: object) -> _ConstraintDecorator: ...
+def constraint(
+    *, when: ValueRef[bool] | None = None, **aliases: object
+) -> _ConstraintDecorator: ...
 
 
 def constraint(
-    function: Callable[..., bool | Answer[bool]] | None = None, /, **aliases: object
+    function: Callable[..., bool | Answer[bool]] | None = None,
+    /,
+    *,
+    when: ValueRef[bool] | None = None,
+    **aliases: object,
 ) -> Constraint | _ConstraintDecorator:
     if function is not None:
-        return Constraint(function, aliases=aliases)
-    return _ConstraintDecorator(aliases)
+        return Constraint(function, aliases=aliases, when=when)
+    return _ConstraintDecorator(aliases, when)
 
 
 class ConstraintGroup(Declaration):
@@ -262,6 +285,7 @@ class View(Declaration, Generic[T]):
         *,
         constraints: Sequence[Constraint | ConstraintGroup] = (),
         requires: Sequence[ValueRef[object] | Constraint | ConstraintGroup | Readiness] = (),
+        when: ValueRef[bool] | None = None,
     ) -> None:
         self.source: ValueRef[T] | None = source
         self.function: Callable[..., T | Answer[T]] | None = None
@@ -269,6 +293,7 @@ class View(Declaration, Generic[T]):
         self.semantics: ValueSemantics[T] | None = source.semantics
         self.constraints = tuple(constraints)
         self.requires = tuple(requires)
+        self.when = when
 
     @classmethod
     def from_function(
@@ -279,6 +304,7 @@ class View(Declaration, Generic[T]):
         aliases: Mapping[str, object],
         constraints: Sequence[Constraint | ConstraintGroup],
         requires: Sequence[ValueRef[object] | Constraint | ConstraintGroup | Readiness],
+        when: ValueRef[bool] | None = None,
     ) -> View[T]:
         result = cls.__new__(cls)
         result.source = None
@@ -286,6 +312,7 @@ class View(Declaration, Generic[T]):
         result.aliases = MappingProxyType(dict(aliases))
         result.semantics = semantics
         result.constraints, result.requires = tuple(constraints), tuple(requires)
+        result.when = when
         return result
 
     @overload
@@ -306,8 +333,10 @@ class _ViewDecorator:
         aliases: Mapping[str, object],
         constraints: Sequence[Constraint | ConstraintGroup],
         requires: Sequence[ValueRef[object] | Constraint | ConstraintGroup | Readiness],
+        when: ValueRef[bool] | None,
     ) -> None:
         self.aliases, self.constraints, self.requires = aliases, constraints, requires
+        self.when = when
 
     def __call__(self, function: Callable[..., T]) -> View[T]:
         return View.from_function(
@@ -316,6 +345,7 @@ class _ViewDecorator:
             aliases=self.aliases,
             constraints=self.constraints,
             requires=self.requires,
+            when=self.when,
         )
 
 
@@ -330,6 +360,7 @@ class _SemanticViewDecorator(Generic[T]):
             aliases=self.decorator.aliases,
             constraints=self.decorator.constraints,
             requires=self.decorator.requires,
+            when=self.decorator.when,
         )
 
 
@@ -341,6 +372,7 @@ def view(function: Callable[..., T], /) -> View[T]: ...
 def view(
     *,
     semantics: ValueSemantics[T],
+    when: ValueRef[bool] | None = None,
     constraints: Sequence[Constraint | ConstraintGroup] = (),
     requires: Sequence[ValueRef[object] | Constraint | ConstraintGroup | Readiness] = (),
     **aliases: object,
@@ -351,6 +383,7 @@ def view(
 def view(
     *,
     semantics: None = None,
+    when: ValueRef[bool] | None = None,
     constraints: Sequence[Constraint | ConstraintGroup] = (),
     requires: Sequence[ValueRef[object] | Constraint | ConstraintGroup | Readiness] = (),
     **aliases: object,
@@ -362,11 +395,12 @@ def view(
     /,
     *,
     semantics: object = None,
+    when: ValueRef[bool] | None = None,
     constraints: Sequence[Constraint | ConstraintGroup] = (),
     requires: Sequence[ValueRef[object] | Constraint | ConstraintGroup | Readiness] = (),
     **aliases: object,
 ) -> object:
-    decorator = _ViewDecorator(aliases, constraints, requires)
+    decorator = _ViewDecorator(aliases, constraints, requires, when)
     if function is not None:
         return decorator(function)
     if semantics is not None:
@@ -411,9 +445,12 @@ class AcceptedViewRef(ValueRef[T], Generic[T]):
 
 
 class Subspace(Declaration, Generic[S_co]):
-    def __init__(self, space_type: type[S_co], **bindings: object) -> None:
+    def __init__(
+        self, space_type: type[S_co], *, when: ValueRef[bool] | None = None, **bindings: object
+    ) -> None:
         self.space_type = space_type
         self.bindings = MappingProxyType(dict(bindings))
+        self.when = when
 
     @overload
     def __get__(self, instance: None, owner: type[object] | None = None) -> Self: ...
@@ -444,7 +481,9 @@ class ChoiceView:
 
     @property
     def alternatives(self) -> tuple[str, ...]:
-        return tuple(self.declaration.alternatives)
+        from .occurrence import choice_alternatives
+
+        return choice_alternatives(self)
 
     def select(self, case: str) -> ChoiceView:
         from .occurrence import select
@@ -463,11 +502,13 @@ class SubspaceChoice(Declaration):
         alternatives: Mapping[str, Subspace[Space]],
         *,
         exports: Sequence[ValueKey[object] | ViewKey[object]] = (),
+        when: ValueRef[bool] | None = None,
     ) -> None:
         if not alternatives:
             raise DefinitionError("a SubspaceChoice requires at least one alternative")
         self.alternatives = MappingProxyType(dict(alternatives))
         self.exports = tuple(exports)
+        self.when = when
 
     @overload
     def __get__(self, instance: None, owner: type[object] | None = None) -> Self: ...
@@ -496,6 +537,9 @@ class Space:
 
     _state: object
     _scope: int
+    exports: ClassVar[Mapping[ValueKey[object] | ViewKey[object], Declaration]] = MappingProxyType(
+        {}
+    )
 
     @classmethod
     def start(cls, parameters: Mapping[object, object] | None = None) -> Self:

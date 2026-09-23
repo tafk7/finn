@@ -114,6 +114,39 @@ class Assembly(Space):
         return width * 2
 
 
+class GuardedAssembly(Space):
+    enabled = Param(bool)
+    slots = Decision(int, values=(1, 2), when=enabled)
+    fifo = Subspace(Fifo, word_bits=8, depth=4, when=enabled)
+    choice = SubspaceChoice(
+        {"fifo": Subspace(Fifo, word_bits=8, depth=4)},
+        exports=(PHYSICAL,),
+        when=enabled,
+    )
+
+    @derived(when=enabled)
+    def value(*, slots: int) -> int:
+        return slots
+
+    @derived(semantics=INT, when=enabled)
+    def answer_value(*, slots: int) -> Answer[int]:
+        return Decided(slots)
+
+    @constraint(when=enabled)
+    def supported(*, slots: int) -> bool:
+        return slots > 0
+
+    physical = View(value, constraints=(supported,), when=enabled)
+
+    @view(when=enabled)
+    def decorated(*, slots: int) -> int:
+        return slots
+
+    @view(semantics=INT, when=enabled)
+    def answer_view(*, slots: int) -> Answer[int]:
+        return Decided(slots)
+
+
 def check(point: Fifo, assembly: Assembly, eltwise: Eltwise) -> None:
     assert_type(Fifo.word_bits, Param[int])
     assert_type(Fifo.ram_style, Decision[str])
@@ -152,3 +185,8 @@ def check(point: Fifo, assembly: Assembly, eltwise: Eltwise) -> None:
     assert_type(Assembly.implementation.accepted(PHYSICAL), ValueRef[int])
     assert_type(assembly.implementation, ChoiceView)
     assert_type(Assembly.start({Assembly.width: 8}), Assembly)
+    assert_type(GuardedAssembly.value, Derived[int])
+    assert_type(GuardedAssembly.answer_value, Derived[int])
+    assert_type(GuardedAssembly.physical, View[int])
+    assert_type(GuardedAssembly.decorated, View[int])
+    assert_type(GuardedAssembly.answer_view, View[int])

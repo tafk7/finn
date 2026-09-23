@@ -26,11 +26,13 @@ from .declarations import (
 )
 from .edits import Edit, EditOutcome, EditRequest, RefinementReport
 from .errors import RefinementError, RequestError
+from .ir import Choice
 from .results import (
     Answer,
     ConstraintAssessment,
     Decided,
     DecisionState,
+    Inapplicable,
     ReadinessAssessment,
     ViewAssessment,
     reject,
@@ -273,12 +275,68 @@ def child(point: Space, placement: Subspace[S]) -> S:
 
 
 def choice(point: Space, declaration: SubspaceChoice) -> ChoiceView:
-    raise RequestError("structural choices are not linked in the flat implementation slice")
+    view = ChoiceView(point, declaration)
+    _choice_record(view)
+    return view
+
+
+def _choice_record(view: ChoiceView) -> tuple[OccurrenceState, Choice]:
+    current = state(view.occurrence)
+    scope = current.model.linked.scopes[view.occurrence._scope]
+    try:
+        index = scope.choices[view.declaration]
+    except (KeyError, TypeError) as cause:
+        raise RequestError("choice is not part of this compiled scope") from cause
+    return current, current.model.linked.choices[index]
+
+
+def choice_alternatives(view: ChoiceView) -> tuple[str, ...]:
+    _, declaration = _choice_record(view)
+    return tuple(key for key, _ in declaration.cases)
+
+
+def _case_scope(declaration: Choice, case: str) -> int:
+    if type(case) is not str:
+        raise RequestError("a choice case must be a string key")
+    for key, scope in declaration.cases:
+        if key == case:
+            return scope
+    raise RequestError(f"{declaration.key}: unknown choice case {case!r}")
 
 
 def select(view: ChoiceView, case: str) -> ChoiceView:
-    raise RequestError("structural choices are not linked in the flat implementation slice")
+    current, declaration = _choice_record(view)
+    _case_scope(declaration, case)
+    if declaration.selector is None:
+        # A singleton case is structurally selected, but an enclosing guard
+        # still determines whether selection applies at this snapshot.
+        if declaration.guard is not None:
+            guard = _runtime.evaluate(current.snapshot, declaration.guard).answer
+            if not isinstance(guard, Decided) or guard.value is not True:
+                refusal: Answer[bool] = (
+                    Inapplicable() if isinstance(guard, Decided) else cast(Answer[bool], guard)
+                )
+                report = RefinementReport(
+                    root(view.occurrence),
+                    False,
+                    (EditOutcome(declaration.key, refusal, "refused"),),
+                )
+                raise RefinementError(report)
+        return view
+    selector = current.model.linked.nodes[declaration.selector]
+    report = refine(
+        root(view.occurrence),
+        Edit(current.snapshot, selector.scope, selector.index, case),
+    )
+    if not report.accepted:
+        raise RefinementError(report)
+    successor = state(report.point)
+    if successor.snapshot is current.snapshot:
+        return view
+    owner = _attach(successor, view.occurrence._scope)
+    return ChoiceView(owner, view.declaration)
 
 
 def alternative(view: ChoiceView, case: str) -> Space:
-    raise RequestError("structural choices are not linked in the flat implementation slice")
+    current, declaration = _choice_record(view)
+    return _attach(current, _case_scope(declaration, case))

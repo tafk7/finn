@@ -177,3 +177,15 @@ def test_grouped_view_obligations_keep_refusals_visible_while_waiting() -> None:
     committed = point.assign(Grouped.lanes, 1)
     assert isinstance(committed.physical().accepted_answer, Rejected)
     assert committed.assess(Grouped.ready).ready is True
+
+
+def test_empty_named_obligations_can_be_assessed_without_value_semantics() -> None:
+    class Empty(Space):
+        output = Const(4)
+        group = ConstraintGroup()
+        ready = Readiness()
+        physical = View(output, requires=(group, ready))
+
+    point = Empty.start()
+    assert point.physical().accepted_answer == Decided(4)
+    assert point.assess(Empty.ready).ready is True

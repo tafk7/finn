@@ -62,6 +62,12 @@ class Node:
     requires: tuple[int, ...] = ()
     alternatives: tuple[tuple[str, int], ...] = ()
     selector: int | None = None
+    source_owner: str | None = None
+
+    @property
+    def owner(self) -> str:
+        """Authored owner for diagnostics from generated computation nodes."""
+        return self.source_owner if self.source_owner is not None else self.key
 
     @property
     def dependencies(self) -> tuple[int, ...]:
@@ -90,10 +96,25 @@ class Scope:
     named_members: Mapping[str, int] = field(default_factory=dict)
     named_children: Mapping[str, int] = field(default_factory=dict)
     guard: int | None = None
+    choices: Mapping[object, int] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        for attr in ("members", "children", "named_members", "named_children"):
+        for attr in ("members", "children", "named_members", "named_children", "choices"):
             object.__setattr__(self, attr, MappingProxyType(dict(getattr(self, attr))))
+
+
+@dataclass(frozen=True, slots=True)
+class Choice:
+    index: int
+    scope: int
+    key: str
+    selector: int | None
+    cases: tuple[tuple[str, int], ...]
+    exports: Mapping[object, int]
+    guard: int | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "exports", MappingProxyType(dict(self.exports)))
 
 
 @dataclass(frozen=True, slots=True)
@@ -104,6 +125,7 @@ class LinkedModel:
     parameters: tuple[int, ...]
     decisions: tuple[int, ...]
     keys: Mapping[str, int]
+    choices: tuple[Choice, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "keys", MappingProxyType(dict(self.keys)))
