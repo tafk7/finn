@@ -24,6 +24,33 @@ Space -> accepted physical View -> ModuleBuildRequirements
                          explicit roots + artifact store -> RTL sources
 ```
 
+The flat authoring comparison now also includes:
+
+| Declaration | File | Native interface and authoring concern |
+|---|---|---|
+| `FifoKernel` | `fifo.py` | Opaque unpadded words; depth and RAM-style choice |
+| `InputGeneratorKernel` | `input_generator.py` | Immutable extent/stride vectors; native multi-bit loop markers |
+| `ThresholdingAxiKernel` | `thresholding.py` | Integer threshold tables, derived output encoding, AXI-Lite and set selection |
+| `EltwiseKernel` | `eltwise.py` | Two integer/float operands, dependent type constraints, unpadded ready/valid words |
+| `IntToFp32Kernel` | `int_to_fp32.py` | Combinational pins and a fixed FLOAT32 result; no clock or stream |
+| `MemStreamHlsKernel` | `memstream_hls.py` | C++ type and memory/interface declarations before HLS synthesis |
+
+Together with `DotpAxiKernel`, these are seven independent, flat declarations.
+ReplayBuffer remains a companion example. No new interface-authoring DSL or
+kernel-composition hierarchy is introduced by this pass. See
+[`docs/kernel-authoring-pass/README.md`](../../../docs/kernel-authoring-pass/README.md)
+for the supported profiles, native-source findings, and the comparison to use
+when refining the authoring API.
+
+The six RTL examples return `ModuleBuildRequirements` from their accepted
+physical View. MemStreamHLS returns `HlsSourceRequirements`: C++ interfaces and
+source generation are known, while RTL pins are established by synthesis.
+Render its source bundle with `finn.kernels.artifacts.hls.render_hls_sources`,
+supplying the same explicit FinnLib and template roots. The returned paths are
+relative to a staging directory; retain that layout and use the declared
+`include_directories`. Its AXI-Lite memory and `ap_ctrl_hs` registers share the
+`control` bundle; software must enable start/auto-restart for continuous output.
+
 `MVAU` owns matrix geometry, PE/SIMD folding, result precision and weight
 delivery. Its `compute` child is a bound `DotpAxiKernel`; assembly requires that
 child's accepted physical View. `mvau_assembly` binds this same Space for callers
@@ -72,3 +99,8 @@ integration experiments. The canonical physical definitions and shared support
 belong here. Keep the local RTL byte-preserved during package changes; review
 the pinned upstream source and correction recorded in `resources/dotp_axi.sv`
 when updating FinnLib.
+
+`resources/axilite.sv` contains one additional pinned correction: `snk_re` is
+declared before its first use, preserving the original continuous assignment.
+Thresholding uses this source because Vivado rejects the upstream declaration
+order. Both local corrections record their upstream revision and hash.

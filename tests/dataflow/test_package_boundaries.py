@@ -61,7 +61,8 @@ def test_the_final_package_boundaries_are_the_approved_ones() -> None:
     assert tuple(import_module("finn.dataflow.kernels").__all__) == ()
     assert tuple(import_module("finn.dataflow.ops").__all__) == ()
     assert tuple(import_module("finn.dataflow.ops.mvau").__all__) == ()
-    assert set(import_module("finn.kernels").__all__) == {
+    physical_library = import_module("finn.kernels")
+    assert {
         "DotpAxiKernel",
         "DspBlock",
         "MVAU",
@@ -70,7 +71,11 @@ def test_the_final_package_boundaries_are_the_approved_ones() -> None:
         "mvau_assembly",
         "replay_buffer_requirements",
         "cyclic_stream_requirements",
-    }
+    } <= set(physical_library.__all__)
+    # The concrete library can grow; every public member must retain its owner
+    # in the physical package rather than introducing a dataflow back-edge.
+    for name in physical_library.__all__:
+        assert getattr(physical_library, name).__module__.startswith("finn.kernels.")
     for framework_name in (
         "Kernel",
         "KernelChoice",

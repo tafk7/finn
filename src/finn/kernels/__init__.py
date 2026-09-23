@@ -12,6 +12,12 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from finn.kernels.dotp import DotpAxiKernel
+    from finn.kernels.eltwise import EltwiseKernel
+    from finn.kernels.fifo import FifoKernel
+    from finn.kernels.input_generator import InputGeneratorKernel
+    from finn.kernels.int_to_fp32 import IntToFp32Kernel
+    from finn.kernels.memstream_hls import MemStreamHlsKernel
+    from finn.kernels.thresholding import ThresholdingAxiKernel
     from finn.kernels.mvau import MVAU, MVAUAssembly, WeightDelivery, mvau_assembly
     from finn.kernels.streaming import (
         cyclic_stream_requirements,
@@ -21,6 +27,12 @@ if TYPE_CHECKING:
 
 _LAZY_EXPORTS = {
     "DotpAxiKernel": ("finn.kernels.dotp", "DotpAxiKernel"),
+    "EltwiseKernel": ("finn.kernels.eltwise", "EltwiseKernel"),
+    "FifoKernel": ("finn.kernels.fifo", "FifoKernel"),
+    "InputGeneratorKernel": ("finn.kernels.input_generator", "InputGeneratorKernel"),
+    "IntToFp32Kernel": ("finn.kernels.int_to_fp32", "IntToFp32Kernel"),
+    "MemStreamHlsKernel": ("finn.kernels.memstream_hls", "MemStreamHlsKernel"),
+    "ThresholdingAxiKernel": ("finn.kernels.thresholding", "ThresholdingAxiKernel"),
     "MVAU": ("finn.kernels.mvau", "MVAU"),
     "MVAUAssembly": ("finn.kernels.mvau", "MVAUAssembly"),
     "WeightDelivery": ("finn.kernels.mvau", "WeightDelivery"),
@@ -43,6 +55,12 @@ def __getattr__(name: str) -> object:
 
 __all__ = [
     "DotpAxiKernel",
+    "EltwiseKernel",
+    "FifoKernel",
+    "InputGeneratorKernel",
+    "IntToFp32Kernel",
+    "MemStreamHlsKernel",
+    "ThresholdingAxiKernel",
     "MVAU",
     "MVAUAssembly",
     "WeightDelivery",

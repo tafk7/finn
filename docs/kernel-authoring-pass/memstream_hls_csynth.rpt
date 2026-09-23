@@ -1,0 +1,133 @@
+
+
+================================================================
+== Vitis HLS Report for 'memstream_hls'
+================================================================
+* Date:           Wed Sep 23 14:18:35 2026
+
+* Version:        2025.2 (Build 6295257 on Nov 14 2025)
+* Project:        project
+* Solution:       solution (Vivado IP Flow Target)
+* Product family: zynq
+* Target device:  xc7z020-clg400-1
+
+
+================================================================
+== Performance Estimates
+================================================================
++ Timing: 
+    * Summary: 
+    +--------+----------+----------+------------+
+    |  Clock |  Target  | Estimated| Uncertainty|
+    +--------+----------+----------+------------+
+    |ap_clk  |  10.00 ns|  3.130 ns|     2.70 ns|
+    +--------+----------+----------+------------+
+
++ Latency: 
+    * Summary: 
+    +---------+---------+-----------+-----------+-----+-----+----------+
+    |  Latency (cycles) |   Latency (absolute)  |  Interval | Pipeline |
+    |   min   |   max   |    min    |    max    | min | max |   Type   |
+    +---------+---------+-----------+-----------+-----+-----+----------+
+    |        2|        2|  20.000 ns|  20.000 ns|    1|    1|  dataflow|
+    +---------+---------+-----------+-----------+-----+-----+----------+
+
+    + Detail: 
+        * Instance: 
+        +--------------------------+-------------------------+---------+---------+-----------+-----------+-----+-----+----------+
+        |                          |                         |  Latency (cycles) |   Latency (absolute)  |  Interval | Pipeline |
+        |         Instance         |          Module         |   min   |   max   |    min    |    max    | min | max |   Type   |
+        +--------------------------+-------------------------+---------+---------+-----------+-----------+-----+-----+----------+
+        |memstream_3u_ap_int_9_U0  |memstream_3u_ap_int_9_s  |        2|        2|  20.000 ns|  20.000 ns|    1|    1|  yes(flp)|
+        +--------------------------+-------------------------+---------+---------+-----------+-----------+-----+-----+----------+
+
+        * Loop: 
+        N/A
+
+
+
+================================================================
+== Utilization Estimates
+================================================================
+* Summary: 
++-----------------+---------+-----+--------+-------+-----+
+|       Name      | BRAM_18K| DSP |   FF   |  LUT  | URAM|
++-----------------+---------+-----+--------+-------+-----+
+|DSP              |        -|    -|       -|      -|    -|
+|Expression       |        -|    -|       -|      -|    -|
+|FIFO             |        -|    -|       -|      -|    -|
+|Instance         |        0|    -|     142|    185|    -|
+|Memory           |        -|    -|       -|      -|    -|
+|Multiplexer      |        -|    -|       -|      -|    -|
+|Register         |        -|    -|       -|      -|    -|
++-----------------+---------+-----+--------+-------+-----+
+|Total            |        0|    0|     142|    185|    0|
++-----------------+---------+-----+--------+-------+-----+
+|Available        |      280|  220|  106400|  53200|    0|
++-----------------+---------+-----+--------+-------+-----+
+|Utilization (%)  |        0|    0|      ~0|     ~0|    0|
++-----------------+---------+-----+--------+-------+-----+
+
++ Detail: 
+    * Instance: 
+    +--------------------------+-------------------------+---------+----+-----+-----+-----+
+    |         Instance         |          Module         | BRAM_18K| DSP|  FF | LUT | URAM|
+    +--------------------------+-------------------------+---------+----+-----+-----+-----+
+    |control_s_axi_U           |control_s_axi            |        0|   0|  134|  111|    0|
+    |memstream_3u_ap_int_9_U0  |memstream_3u_ap_int_9_s  |        0|   0|    8|   74|    0|
+    +--------------------------+-------------------------+---------+----+-----+-----+-----+
+    |Total                     |                         |        0|   0|  142|  185|    0|
+    +--------------------------+-------------------------+---------+----+-----+-----+-----+
+
+    * DSP: 
+    N/A
+
+    * Memory: 
+    N/A
+
+    * FIFO: 
+    N/A
+
+    * Expression: 
+    N/A
+
+    * Multiplexer: 
+    N/A
+
+    * Register: 
+    N/A
+
+
+
+================================================================
+== Interface
+================================================================
+* Summary: 
++-----------------------+-----+-----+------------+---------------+--------------+
+|       RTL Ports       | Dir | Bits|  Protocol  | Source Object |    C Type    |
++-----------------------+-----+-----+------------+---------------+--------------+
+|s_axi_control_AWVALID  |   in|    1|       s_axi|        control|         array|
+|s_axi_control_AWREADY  |  out|    1|       s_axi|        control|         array|
+|s_axi_control_AWADDR   |   in|    5|       s_axi|        control|         array|
+|s_axi_control_WVALID   |   in|    1|       s_axi|        control|         array|
+|s_axi_control_WREADY   |  out|    1|       s_axi|        control|         array|
+|s_axi_control_WDATA    |   in|   32|       s_axi|        control|         array|
+|s_axi_control_WSTRB    |   in|    4|       s_axi|        control|         array|
+|s_axi_control_ARVALID  |   in|    1|       s_axi|        control|         array|
+|s_axi_control_ARREADY  |  out|    1|       s_axi|        control|         array|
+|s_axi_control_ARADDR   |   in|    5|       s_axi|        control|         array|
+|s_axi_control_RVALID   |  out|    1|       s_axi|        control|         array|
+|s_axi_control_RREADY   |   in|    1|       s_axi|        control|         array|
+|s_axi_control_RDATA    |  out|   32|       s_axi|        control|         array|
+|s_axi_control_RRESP    |  out|    2|       s_axi|        control|         array|
+|s_axi_control_BVALID   |  out|    1|       s_axi|        control|         array|
+|s_axi_control_BREADY   |   in|    1|       s_axi|        control|         array|
+|s_axi_control_BRESP    |  out|    2|       s_axi|        control|         array|
+|ap_clk                 |   in|    1|  ap_ctrl_hs|  memstream_hls|  return value|
+|ap_rst_n               |   in|    1|  ap_ctrl_hs|  memstream_hls|  return value|
+|interrupt              |  out|    1|  ap_ctrl_hs|  memstream_hls|  return value|
+|dst_TDATA              |  out|   16|        axis|            dst|       pointer|
+|dst_TVALID             |  out|    1|        axis|            dst|       pointer|
+|dst_TREADY             |   in|    1|        axis|            dst|       pointer|
++-----------------------+-----+-----+------------+---------------+--------------+
+
