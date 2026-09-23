@@ -1,0 +1,54 @@
+Vivado Simulator v2025.2
+Copyright 1986-2022 Xilinx, Inc. All Rights Reserved.
+Copyright 2022-2025 Advanced Micro Devices, Inc. All Rights Reserved.
+Running: /home/tkeller/Xilinx/2025.2/Vivado/bin/unwrapped/lnx64.o/xelab work.glbl work.observe_mvau -relax -prj rtlsim.prj -dll -s observe_mvau --mt 2 -define FINN_SIMULATION -L smartconnect_v1_0 -L axi_protocol_checker_v1_1_12 -L axi_protocol_checker_v1_1_13 -L axis_protocol_checker_v1_1_11 -L axis_protocol_checker_v1_1_12 -L xil_defaultlib -L unisims_ver -L xpm -L floating_point_v7_1_16 -L floating_point_v7_0_21 -L floating_point_v7_1_18 -L floating_point_v7_1_15 -L floating_point_v7_1_19 -L floating_point_v7_1_21 -L floating_point_v7_0_26 
+Using 2 slave threads.
+WARNING: [XSIM 43-3431] One or more environment variables have been detected which affect the operation of the C compiler. These are typically not set in standard installations and are not tested by AMD, however they may be appropriate for your system, so the flow will attempt to continue.  If errors occur, try running xelab with the "-mt off -v 1" switches to see more information from the C compiler. The following environment variables have been detected:
+INFO: [VRFC 10-2263] Analyzing Verilog file "/home/tkeller/Xilinx/2025.2/data/verilog/src/glbl.v" into library work
+INFO: [VRFC 10-311] analyzing module glbl
+INFO: [VRFC 10-2263] Analyzing SystemVerilog file "/tmp/kernel-extraction-rtl-ICkDVH/mvau/packed_external/store/objects/module-source/7f/7f0ea044df661646f79a8d52f2893c0e32f7dbd6bdbd9b6555fffd1b8cf18a3c/rtl/arith/add_multi_pkg.sv" into library work
+INFO: [VRFC 10-2263] Analyzing SystemVerilog file "/tmp/kernel-extraction-rtl-ICkDVH/mvau/packed_external/store/objects/module-source/7f/7f0ea044df661646f79a8d52f2893c0e32f7dbd6bdbd9b6555fffd1b8cf18a3c/rtl/infra/replay_buffer.sv" into library work
+INFO: [VRFC 10-311] analyzing module replay_buffer
+INFO: [VRFC 10-2263] Analyzing SystemVerilog file "/tmp/kernel-extraction-rtl-ICkDVH/mvau/packed_external/store/objects/module-source/7f/7f0ea044df661646f79a8d52f2893c0e32f7dbd6bdbd9b6555fffd1b8cf18a3c/rtl/arith/add_multi.sv" into library work
+INFO: [VRFC 10-311] analyzing module add_multi
+INFO: [VRFC 10-2263] Analyzing SystemVerilog file "/tmp/kernel-extraction-rtl-ICkDVH/mvau/packed_external/store/objects/module-source/7f/7f0ea044df661646f79a8d52f2893c0e32f7dbd6bdbd9b6555fffd1b8cf18a3c/rtl/linalg/dotp_8sx9_dsp58.sv" into library work
+INFO: [VRFC 10-311] analyzing module dotp_8sx9_dsp58
+INFO: [VRFC 10-2263] Analyzing SystemVerilog file "/tmp/kernel-extraction-rtl-ICkDVH/mvau/packed_external/store/objects/module-source/7f/7f0ea044df661646f79a8d52f2893c0e32f7dbd6bdbd9b6555fffd1b8cf18a3c/rtl/linalg/dotp.sv" into library work
+INFO: [VRFC 10-311] analyzing module dotp
+INFO: [VRFC 10-2263] Analyzing SystemVerilog file "/tmp/kernel-extraction-rtl-ICkDVH/mvau/packed_external/store/objects/module-source/7f/7f0ea044df661646f79a8d52f2893c0e32f7dbd6bdbd9b6555fffd1b8cf18a3c/dotp_axi.sv" into library work
+INFO: [VRFC 10-311] analyzing module dotp_axi
+INFO: [VRFC 10-2263] Analyzing SystemVerilog file "/tmp/kernel-extraction-rtl-ICkDVH/mvau/packed_external/store/objects/module-source/7f/7f0ea044df661646f79a8d52f2893c0e32f7dbd6bdbd9b6555fffd1b8cf18a3c/finn_mvau_external__67f6e080700e40f9e1a0ae0f3b98045278d492db333bb32c67e05d21edf61f97.sv" into library work
+INFO: [VRFC 10-311] analyzing module finn_mvau_external__67f6e080700e40f9e1a0ae0f3b98045278d492db333bb32c67e05d21edf61f97
+INFO: [VRFC 10-2263] Analyzing SystemVerilog file "/tmp/kernel-extraction-rtl-ICkDVH/mvau/packed_external/observe_mvau.sv" into library work
+INFO: [VRFC 10-311] analyzing module observe_mvau
+Starting static elaboration
+Pass Through NonSizing Optimizer
+Completed static elaboration
+Starting simulation data flow analysis
+WARNING: [XSIM 43-4099] "/tmp/kernel-extraction-rtl-ICkDVH/mvau/packed_external/store/objects/module-source/7f/7f0ea044df661646f79a8d52f2893c0e32f7dbd6bdbd9b6555fffd1b8cf18a3c/rtl/arith/add_multi_pkg.sv" Line 9. Module add_multi_pkg doesn't have a timescale but at least one module in design has a timescale.
+WARNING: [XSIM 43-4099] "/tmp/kernel-extraction-rtl-ICkDVH/mvau/packed_external/observe_mvau.sv" Line 1. Module observe_mvau doesn't have a timescale but at least one module in design has a timescale.
+WARNING: [XSIM 43-4099] "/tmp/kernel-extraction-rtl-ICkDVH/mvau/packed_external/store/objects/module-source/7f/7f0ea044df661646f79a8d52f2893c0e32f7dbd6bdbd9b6555fffd1b8cf18a3c/finn_mvau_external__67f6e080700e40f9e1a0ae0f3b98045278d492db333bb32c67e05d21edf61f97.sv" Line 3. Module finn_mvau_external__67f6e080700e40f9e1a0ae0f3b98045278d492db333bb32c67e05d21edf61f97 doesn't have a timescale but at least one module in design has a timescale.
+WARNING: [XSIM 43-4099] "/tmp/kernel-extraction-rtl-ICkDVH/mvau/packed_external/store/objects/module-source/7f/7f0ea044df661646f79a8d52f2893c0e32f7dbd6bdbd9b6555fffd1b8cf18a3c/rtl/infra/replay_buffer.sv" Line 49. Module replay_buffer(LEN=32'b011,REP=32'b010,W=32'b0110) doesn't have a timescale but at least one module in design has a timescale.
+WARNING: [XSIM 43-4099] "/tmp/kernel-extraction-rtl-ICkDVH/mvau/packed_external/store/objects/module-source/7f/7f0ea044df661646f79a8d52f2893c0e32f7dbd6bdbd9b6555fffd1b8cf18a3c/dotp_axi.sv" Line 25. Module dotp_axi(VERSION=32'b010,ACTIVATION_BROADCASTING=1'b1,PE=32'b011,SIMD=32'b010,ACTIVATION_WIDTH=32'b011,WEIGHT_WIDTH=32'b011,ACCU_WIDTH=32'b01000,SIGNED_ACTIVATIONS=1'b1) doesn't have a timescale but at least one module in design has a timescale.
+WARNING: [XSIM 43-4099] "/tmp/kernel-extraction-rtl-ICkDVH/mvau/packed_external/store/objects/module-source/7f/7f0ea044df661646f79a8d52f2893c0e32f7dbd6bdbd9b6555fffd1b8cf18a3c/rtl/linalg/dotp.sv" Line 11. Module dotp(VERSION=32'b010,PE=32'b011,SIMD=32'b010,WEIGHT_WIDTH=32'b011,ACTIVATION_WIDTH=32'b011,ACCU_WIDTH=32'b01000,SIGNED_ACTIVATIONS=1'b1) doesn't have a timescale but at least one module in design has a timescale.
+WARNING: [XSIM 43-4099] "/tmp/kernel-extraction-rtl-ICkDVH/mvau/packed_external/store/objects/module-source/7f/7f0ea044df661646f79a8d52f2893c0e32f7dbd6bdbd9b6555fffd1b8cf18a3c/rtl/arith/add_multi.sv" Line 9. Module add_multi(N=32'b010,DEPTH=32'b0,ARG_WIDTH=32'b010,ARG_LO=-1,ARG_HI=1) doesn't have a timescale but at least one module in design has a timescale.
+WARNING: [XSIM 43-4099] "/tmp/kernel-extraction-rtl-ICkDVH/mvau/packed_external/store/objects/module-source/7f/7f0ea044df661646f79a8d52f2893c0e32f7dbd6bdbd9b6555fffd1b8cf18a3c/rtl/arith/add_multi.sv" Line 9. Module add_multi(N=32'b010,DEPTH=32'b01,ARG_WIDTH=32'b0110,RESET_ZERO=1'b0) doesn't have a timescale but at least one module in design has a timescale.
+WARNING: [XSIM 43-4099] "/tmp/kernel-extraction-rtl-ICkDVH/mvau/packed_external/store/objects/module-source/7f/7f0ea044df661646f79a8d52f2893c0e32f7dbd6bdbd9b6555fffd1b8cf18a3c/rtl/arith/add_multi.sv" Line 9. Module add_multi(N=32'b010,DEPTH=32'b0,ARG_WIDTH=32'b010,ARG_LO=-1,ARG_HI=1) doesn't have a timescale but at least one module in design has a timescale.
+WARNING: [XSIM 43-4099] "/tmp/kernel-extraction-rtl-ICkDVH/mvau/packed_external/store/objects/module-source/7f/7f0ea044df661646f79a8d52f2893c0e32f7dbd6bdbd9b6555fffd1b8cf18a3c/rtl/arith/add_multi.sv" Line 9. Module add_multi(N=32'b010,DEPTH=32'b01,ARG_WIDTH=32'b0101,RESET_ZERO=1'b0) doesn't have a timescale but at least one module in design has a timescale.
+WARNING: [XSIM 43-4099] "/tmp/kernel-extraction-rtl-ICkDVH/mvau/packed_external/store/objects/module-source/7f/7f0ea044df661646f79a8d52f2893c0e32f7dbd6bdbd9b6555fffd1b8cf18a3c/rtl/arith/add_multi.sv" Line 9. Module add_multi(N=32'b010,DEPTH=32'b01,ARG_WIDTH=32'b01000,RESET_ZERO=1'b0) doesn't have a timescale but at least one module in design has a timescale.
+Completed simulation data flow analysis
+Time Resolution for simulation is 1ps
+Compiling package work.add_multi_pkg
+Compiling module work.glbl
+Compiling module work.replay_buffer(LEN=32'b011,REP=32...
+Compiling module unisims_ver.LUT6_2(INIT=64'b0110101011000000...
+Compiling module unisims_ver.DSP48E2(ACASCREG=0,ALUMODEREG=0,...
+Compiling module work.add_multi(N=32'b010,DEPTH=32'b0,...
+Compiling module work.add_multi(N=32'b010,DEPTH=32'b01...
+Compiling module work.add_multi(N=32'b010,DEPTH=32'b01...
+Compiling module work.add_multi(N=32'b010,DEPTH=32'b01...
+Compiling module work.dotp(VERSION=32'b010,PE=32'b011,...
+Compiling module work.dotp_axi(VERSION=32'b010,ACTIVAT...
+Compiling module work.finn_mvau_external__67f6e080700e...
+Compiling module work.observe_mvau
+Built XSI simulation shared library xsim.dir/observe_mvau/xsimk.so

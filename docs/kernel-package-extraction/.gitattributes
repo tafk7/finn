@@ -1,0 +1,2 @@
+# Preserve original compiler transcripts, including their trailing spaces.
+rtl/**/*.log -whitespace
