@@ -28,6 +28,7 @@ from .declarations import (
     ValueRef,
     View,
     ViewKey,
+    local_name,
 )
 from .errors import DefinitionError
 from .results import Decided, Inapplicable, MissingInput, NotApplicable, Rejected, Unresolved
@@ -213,17 +214,23 @@ def _output_semantics(
     if answer_type is not None and semantics is None:
         raise DefinitionError(f"{owner}: Answer[T] returns require explicit semantics=")
     value_type = answer_type if answer_type is not None else annotation
+    origin = get_origin(value_type)
+    nominal_type = origin if origin is not None else value_type
     if semantics is None:
-        if not isinstance(value_type, type):
+        if origin in (Union, types.UnionType) or not isinstance(nominal_type, type):
             raise DefinitionError(f"{owner}: output annotation needs explicit semantics=")
         try:
-            semantics = default_semantics(value_type)
+            semantics = default_semantics(nominal_type)
         except (TypeError, ValueError) as exc:
             raise DefinitionError(f"{owner}: {exc}") from exc
-    if isinstance(value_type, type) and isinstance(semantics.type_token, type):
-        if value_type is not semantics.type_token:
+    if (
+        origin not in (Union, types.UnionType)
+        and isinstance(nominal_type, type)
+        and isinstance(semantics.type_token, type)
+    ):
+        if nominal_type is not semantics.type_token:
             raise DefinitionError(
-                f"{owner}: output annotation {value_type.__name__} is incompatible with "
+                f"{owner}: output annotation {nominal_type.__name__} is incompatible with "
                 f"{semantics.name} semantics"
             )
     return annotation, semantics
@@ -308,8 +315,6 @@ def _argument_value_type(argument: BoundArgument, owner: str) -> object:
 
 
 def _annotation_accepts(annotation: object, value_type: type[object]) -> bool:
-    if isinstance(annotation, type):
-        return issubclass(value_type, annotation)
     if isinstance(annotation, tuple):
         return any(_annotation_accepts(option, value_type) for option in annotation)
     origin = get_origin(annotation)
@@ -317,6 +322,8 @@ def _annotation_accepts(annotation: object, value_type: type[object]) -> bool:
         return any(_annotation_accepts(option, value_type) for option in get_args(annotation))
     if isinstance(origin, type):
         return issubclass(value_type, origin)
+    if isinstance(annotation, type):
+        return issubclass(value_type, annotation)
     return True
 
 
@@ -420,6 +427,7 @@ def collect_space(
     for base in reversed(space_type.__mro__):
         for name, value in vars(base).items():
             if isinstance(value, Declaration):
+                local_name(name, "declaration name")
                 if name in _RESERVED or name.startswith("__"):
                     raise DefinitionError(f"{base.__qualname__}.{name}: reserved occurrence name")
                 if value.owner is not base or value.name != name:

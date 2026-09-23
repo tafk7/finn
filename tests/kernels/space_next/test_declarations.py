@@ -481,3 +481,15 @@ def test_linker_argument_validation_shares_dependency_mode_policy() -> None:
             integer,
             owner="reader.item",
         )
+
+
+def test_generic_list_annotations_validate_their_nominal_origin() -> None:
+    class Vector(Space):
+        values: Param[list[int]] = Param(list)
+
+        @derived
+        def total(*, values: list[int]) -> int:
+            return sum(values)
+
+    effective = collect_space(Vector)
+    assert effective.functions["total"].dependencies[0].source is Vector.values

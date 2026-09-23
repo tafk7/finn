@@ -126,6 +126,19 @@ class LinkedModel:
     decisions: tuple[int, ...]
     keys: Mapping[str, int]
     choices: tuple[Choice, ...] = ()
+    selector_choices: Mapping[int, int] = field(init=False, repr=False)
+    ranks: tuple[int, ...] = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "keys", MappingProxyType(dict(self.keys)))
+        ranks = [0] * len(self.nodes)
+        for rank, index in enumerate(self.order):
+            ranks[index] = rank
+        object.__setattr__(self, "ranks", tuple(ranks))
+        object.__setattr__(
+            self,
+            "selector_choices",
+            MappingProxyType(
+                {item.selector: item.index for item in self.choices if item.selector is not None}
+            ),
+        )

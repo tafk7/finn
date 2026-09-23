@@ -157,3 +157,23 @@ def test_concurrent_reads_and_successors_are_deterministic():
         outputs = list(pool.map(run, styles))
     assert outputs == [Decided(FifoShape(13, 8, style)) for style in styles]
     assert isinstance(base.answer(Fifo.ram_style), Unresolved)
+
+
+def test_generic_container_outputs_infer_nominal_snapshot_semantics():
+    class Collections(Space):
+        count = Param(int)
+
+        @derived
+        def indices(*, count: int) -> tuple[int, ...]:
+            return tuple(range(count))
+
+        @view
+        def materialized(*, indices: tuple[int, ...]) -> list[int]:
+            return list(indices)
+
+    point = Collections.start({Collections.count: 3})
+    assert point.indices == (0, 1, 2)
+    first = point.materialized().accepted_answer
+    assert isinstance(first, Decided)
+    first.value.append(99)
+    assert point.materialized().accepted_answer == Decided([0, 1, 2])

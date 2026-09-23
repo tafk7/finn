@@ -49,12 +49,17 @@ from .results import (
     reject,
 )
 from .semantics import ValueSemantics, default_semantics
+from . import codecs, inspection, selections
+from .codecs import CodecBinding, JSONValue, SelectionSchema, ValueCodec, codec_for
+from .references import DecisionHandle, ValueHandle
+from .selections import Selection, SelectionChange, SelectionEntry
 
 __all__ = [
     "AcceptedViewRef",
     "Answer",
     "BoundView",
     "ChoiceView",
+    "CodecBinding",
     "Const",
     "Constraint",
     "ConstraintAssessment",
@@ -62,6 +67,7 @@ __all__ = [
     "Decided",
     "Decision",
     "DecisionRef",
+    "DecisionHandle",
     "DecisionState",
     "DefinitionError",
     "Dependency",
@@ -74,6 +80,7 @@ __all__ = [
     "Finding",
     "FindingKind",
     "Inapplicable",
+    "JSONValue",
     "MissingInput",
     "NotApplicable",
     "Param",
@@ -81,18 +88,26 @@ __all__ = [
     "ReadinessAssessment",
     "RefinementReport",
     "Rejected",
+    "Selection",
+    "SelectionChange",
+    "SelectionEntry",
+    "SelectionSchema",
     "Space",
     "SpaceModel",
     "Subspace",
     "SubspaceChoice",
     "Unresolved",
     "ValueKey",
+    "ValueCodec",
+    "ValueHandle",
     "ValueRef",
     "ValueSemantics",
     "View",
     "ViewAssessment",
     "ViewKey",
     "compile_space",
+    "codec_for",
+    "codecs",
     "constraint",
     "default_semantics",
     "derived",
@@ -100,7 +115,9 @@ __all__ = [
     "domain",
     "finite",
     "full_answer",
+    "inspection",
     "optional",
     "reject",
+    "selections",
     "view",
 ]

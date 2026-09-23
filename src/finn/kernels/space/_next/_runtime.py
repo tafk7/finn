@@ -64,6 +64,46 @@ class Snapshot:
         return Snapshot(self.linked, self.parameters, assignments, self.lock)
 
 
+class _TrialSnapshot(Snapshot):
+    """Unpublished state used only inside one locked atomic refinement.
+
+    Edits are admitted in conservative dependency order. Every decision that a
+    previously evaluated node could depend on has therefore already been
+    processed. Admitting the next edit cannot invalidate the trial's cache.
+    Self-dependent domains/guards are rejected as cycles during compilation.
+
+    The backing assignment map is private and is never installed in a public
+    snapshot. Publication copies it once and starts a separate empty cache.
+    """
+
+    __slots__ = ("_pending", "_published")
+
+    _pending: dict[int, object]
+    _published: bool
+
+    def __init__(self, base: Snapshot) -> None:
+        pending = dict(base.assignments)
+        super().__init__(base.linked, base.parameters, {}, base.lock)
+        object.__setattr__(self, "assignments", MappingProxyType(pending))
+        object.__setattr__(self, "_pending", pending)
+        object.__setattr__(self, "_published", False)
+
+    def admit(self, node_index: int, value: object) -> None:
+        if self._published:
+            raise RuntimeError("a published refinement trial is closed")
+        if node_index in self._pending or node_index in self.cache:
+            raise RuntimeError(
+                "refinement dependency order admitted a previously resolved decision"
+            )
+        self._pending[node_index] = value
+
+    def publish(self) -> Snapshot:
+        if self._published:
+            raise RuntimeError("a refinement trial can only be published once")
+        object.__setattr__(self, "_published", True)
+        return Snapshot(self.linked, self.parameters, self._pending, self.lock)
+
+
 def _blocked(answers: list[Answer[object]]) -> NonValue | None:
     """Required inputs retain all findings of the highest-precedence nonvalue."""
 

@@ -12,6 +12,7 @@ and collection do not depend on an evaluator or an existing compiled model.
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping, Sequence
+import re
 from types import MappingProxyType
 from typing import ClassVar, Generic, Literal, TypeVar, cast, overload
 
@@ -35,6 +36,13 @@ T = TypeVar("T")
 T_co = TypeVar("T_co", covariant=True)
 S = TypeVar("S", bound="Space")
 S_co = TypeVar("S_co", bound="Space", covariant=True)
+
+
+def local_name(value: str, role: str) -> str:
+    """Keep authored identity segments disjoint from generated node names."""
+    if not isinstance(value, str) or re.fullmatch(r"[A-Za-z0-9_-]+", value) is None:
+        raise DefinitionError(f"{role} must be one nonempty ASCII name segment")
+    return value
 
 
 class Declaration:
@@ -414,12 +422,12 @@ class ValueKey(Generic[T_co]):
     """A typed export contract independent of a concrete child class."""
 
     def __init__(self, name: str, value_type: type[T_co] | ValueSemantics[T_co]) -> None:
-        self.name, self.semantics = name, semantics_for(value_type)
+        self.name, self.semantics = local_name(name, "export name"), semantics_for(value_type)
 
 
 class ViewKey(Generic[T_co]):
     def __init__(self, name: str, value_type: type[T_co] | ValueSemantics[T_co]) -> None:
-        self.name, self.semantics = name, semantics_for(value_type)
+        self.name, self.semantics = local_name(name, "export name"), semantics_for(value_type)
 
 
 class ScopedValueRef(ValueRef[T], Generic[T]):
@@ -448,6 +456,8 @@ class Subspace(Declaration, Generic[S_co]):
     def __init__(
         self, space_type: type[S_co], *, when: ValueRef[bool] | None = None, **bindings: object
     ) -> None:
+        if not isinstance(space_type, type) or not issubclass(space_type, Space):
+            raise DefinitionError("a Subspace requires a Space subclass")
         self.space_type = space_type
         self.bindings = MappingProxyType(dict(bindings))
         self.when = when
@@ -504,10 +514,21 @@ class SubspaceChoice(Declaration):
         exports: Sequence[ValueKey[object] | ViewKey[object]] = (),
         when: ValueRef[bool] | None = None,
     ) -> None:
-        if not alternatives:
+        if not isinstance(alternatives, Mapping) or not alternatives:
             raise DefinitionError("a SubspaceChoice requires at least one alternative")
+        for key, placement in alternatives.items():
+            local_name(key, "case name")
+            if not isinstance(placement, Subspace):
+                raise DefinitionError(f"case {key}: expected a Subspace placement")
         self.alternatives = MappingProxyType(dict(alternatives))
         self.exports = tuple(exports)
+        names: set[str] = set()
+        for export in self.exports:
+            if not isinstance(export, (ValueKey, ViewKey)):
+                raise DefinitionError("a choice export requires a typed value or view key")
+            if export.name in names:
+                raise DefinitionError(f"duplicate choice export {export.name}")
+            names.add(export.name)
         self.when = when
 
     @overload

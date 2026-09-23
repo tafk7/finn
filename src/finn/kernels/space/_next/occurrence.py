@@ -25,8 +25,8 @@ from .declarations import (
     View,
 )
 from .edits import Edit, EditOutcome, EditRequest, RefinementReport
-from .errors import RefinementError, RequestError
-from .ir import Choice
+from .errors import EvaluationError, RefinementError, RequestError
+from .ir import Choice, Node
 from .results import (
     Answer,
     ConstraintAssessment,
@@ -63,6 +63,24 @@ def _attach(current: OccurrenceState, scope: int) -> Space:
     return instance
 
 
+def _recognize_request_value(node: Node, value: object, role: str) -> None:
+    assert node.semantics is not None
+    try:
+        recognized = node.semantics.accepts(value)
+    except Exception as cause:
+        raise EvaluationError(node.owner, f"{role} recognition", str(cause)) from cause
+    if not recognized:
+        raise RequestError(f"{node.key}: expected value of nominal type {node.semantics.name}")
+
+
+def _snapshot_request_value(node: Node, value: object, role: str) -> object:
+    assert node.semantics is not None
+    try:
+        return node.semantics.freeze(value)
+    except Exception as cause:
+        raise EvaluationError(node.owner, f"{role} snapshot", str(cause)) from cause
+
+
 def start(model: SpaceModel[S], parameters: Mapping[object, object]) -> S:
     """Validate all bindings and freeze external values before any evaluation."""
     if not isinstance(parameters, Mapping):
@@ -83,14 +101,14 @@ def start(model: SpaceModel[S], parameters: Mapping[object, object]) -> S:
     ]
     if missing:
         raise RequestError(f"missing required parameters: {', '.join(missing)}")
-    frozen: dict[int, object] = {}
+    # Validate every nominal value before invoking snapshot adapters. A bad
+    # later binding cannot start freezing an otherwise valid earlier binding.
     for index, value in pending.items():
-        node = model.linked.nodes[index]
-        assert node.semantics is not None
-        try:
-            frozen[index] = node.semantics.freeze(value)
-        except Exception as error:
-            raise RequestError(f"{node.key}: {error}") from error
+        _recognize_request_value(model.linked.nodes[index], value, "parameter")
+    frozen = {
+        index: _snapshot_request_value(model.linked.nodes[index], value, "parameter")
+        for index, value in pending.items()
+    }
     snapshot = _runtime.Snapshot(model.linked, frozen)
     return cast(S, _attach(OccurrenceState(cast(SpaceModel[Space], model), snapshot), 0))
 
@@ -179,11 +197,12 @@ def edit(point: Space, reference: Decision[T] | DecisionRef[T], value: T) -> Edi
 def refine(point: S, *edits: EditRequest) -> RefinementReport[S]:
     """Normalize a complete batch, trial it in graph order, publish atomically."""
     current = state(point)
-    if point._scope != 0:
+    if type(point._scope) is not int or point._scope != 0:
         raise RequestError("atomic refinement is a root operation")
-    prepared: dict[int, object] = {}
-    # This loop does no semantic evaluation. Even the last malformed request
-    # prevents the first user evaluator from running.
+    pending: dict[int, object] = {}
+    # Validate structure for the entire batch before invoking any value adapter.
+    # In particular, a foreign or duplicate final edit cannot run the first
+    # candidate's snapshot or membership callback.
     for item in edits:
         if not isinstance(item, Edit):
             raise RequestError("refine expects scoped Edit requests")
@@ -196,50 +215,56 @@ def refine(point: S, *edits: EditRequest) -> RefinementReport[S]:
         node = current.model.linked.nodes[item.node]
         if node.kind != "decision" or node.scope != item.scope:
             raise RequestError("edit does not identify an owned decision in its scope")
-        if item.node in prepared:
+        if item.node in pending:
             raise RequestError(f"duplicate edit for {node.key}")
-        assert node.semantics is not None
-        try:
-            prepared[item.node] = node.semantics.freeze(item.value)
-        except Exception as error:
-            raise RequestError(f"{node.key}: {error}") from error
+        pending[item.node] = item.value
     with current.snapshot.lock:
-        assignments = dict(current.snapshot.assignments)
-        trial = current.snapshot
+        for index, value in pending.items():
+            _recognize_request_value(current.model.linked.nodes[index], value, "candidate")
+        prepared = {
+            index: _snapshot_request_value(current.model.linked.nodes[index], value, "candidate")
+            for index, value in pending.items()
+        }
+        trial = _runtime._TrialSnapshot(current.snapshot)
+        changed = False
         outcomes: dict[int, EditOutcome] = {}
-        for index in current.model.linked.order:
-            if index not in prepared:
-                continue
+        for index in sorted(prepared, key=current.model.linked.ranks.__getitem__):
             node = current.model.linked.nodes[index]
             candidate = prepared[index]
             assert node.semantics is not None
-            if index in assignments:
-                if node.semantics.values_equal(assignments[index], candidate):
-                    outcomes[index] = EditOutcome(node.key, Decided(True), "unchanged")
+            if index in trial.assignments:
+                try:
+                    prior = node.semantics.freeze(trial.assignments[index])
+                    comparison = node.semantics.freeze(candidate)
+                    equal = node.semantics.values_equal(prior, comparison)
+                except Exception as cause:
+                    raise EvaluationError(node.owner, "commitment equality", str(cause)) from cause
+                if equal:
+                    outcomes[index] = EditOutcome(node.owner, Decided(True), "unchanged")
                 else:
                     outcomes[index] = EditOutcome(
-                        node.key,
+                        node.owner,
                         reject(
                             "commitment-conflict",
                             "a committed decision cannot change",
-                            owner=node.key,
+                            owner=node.owner,
                         ),
                         "refused",
                     )
                 continue
             admissible = _runtime.membership(trial, index, candidate)
             if isinstance(admissible, Decided) and admissible.value is True:
-                assignments[index] = candidate
-                trial = current.snapshot.successor(assignments)
-                outcomes[index] = EditOutcome(node.key, admissible, "provisional")
+                trial.admit(index, candidate)
+                changed = True
+                outcomes[index] = EditOutcome(node.owner, admissible, "provisional")
             else:
-                outcomes[index] = EditOutcome(node.key, admissible, "refused")
+                outcomes[index] = EditOutcome(node.owner, admissible, "refused")
         accepted = all(item.status != "refused" for item in outcomes.values())
         if len(outcomes) != len(prepared):
             raise RequestError("compiled refinement order is incomplete")
         published = point
-        if accepted and trial is not current.snapshot:
-            published = cast(S, _attach(OccurrenceState(current.model, trial), 0))
+        if accepted and changed:
+            published = cast(S, _attach(OccurrenceState(current.model, trial.publish()), 0))
         ordered = tuple(outcomes[item.node] for item in edits)
         if accepted:
             ordered = tuple(

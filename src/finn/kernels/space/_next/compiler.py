@@ -11,9 +11,10 @@ from typing import Generic, TypeVar
 
 from ._linker import link_space, resolve_reference
 from .declarations import Space
-from .errors import DefinitionError
+from .errors import DefinitionError, RequestError
 from .ir import LinkedModel, Node
 from .results import Finding, FindingKind
+from .references import ValueHandle
 
 S = TypeVar("S", bound=Space)
 
@@ -28,6 +29,10 @@ class SpaceModel(Generic[S]):
     def resolve(self, scope: int, reference: object) -> int:
         """Resolve a declaration in this exact scope without consulting its class."""
 
+        if isinstance(reference, ValueHandle):
+            if type(scope) is not int or not 0 <= scope < len(self.linked.scopes):
+                raise RequestError("reference scope does not belong to this model")
+            return reference._resolve(self.linked)
         return resolve_reference(
             self.linked.nodes, self.linked.scopes, self.linked.choices, scope, reference
         )
