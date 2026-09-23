@@ -14,29 +14,28 @@ from finn.kernels.artifacts.requirements import (
     ModuleABIRequirements,
     ModuleBuildRequirements,
 )
-from finn.kernels.base import Kernel
-from finn.kernels.datatypes.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
+from finn.kernels._next_base import Kernel
+from finn.kernels.datatypes._next_semantics import QONNX_DATATYPE_VALUE_SEMANTICS
 from finn.kernels.datatypes.values import (
     DatatypeError,
     QONNXDataType,
     ordinary_integer_bounds,
     resolve_qonnx_datatype_name,
 )
-from finn.kernels.space import ConstraintGroup, Input, Readiness, View, constraint, derived, reject
+from finn.kernels.space._next import Const, Param, Rejected, constraint, reject, view
 
 
 class IntToFp32Kernel(Kernel):
     id = "finnlib.int_to_fp32"
     version = "1"
 
-    input_dtype = Input(QONNX_DATATYPE_VALUE_SEMANTICS)
-
-    @derived(QONNX_DATATYPE_VALUE_SEMANTICS)
-    def result_dtype() -> QONNXDataType:
-        return resolve_qonnx_datatype_name("FLOAT32")
+    input_dtype = Param(QONNX_DATATYPE_VALUE_SEMANTICS)
+    result_dtype = Const(
+        resolve_qonnx_datatype_name("FLOAT32"), semantics=QONNX_DATATYPE_VALUE_SEMANTICS
+    )
 
     @constraint(dtype=input_dtype)
-    def input_supported(*, dtype: QONNXDataType) -> object:
+    def input_supported(*, dtype: QONNXDataType) -> bool | Rejected:
         try:
             ordinary_integer_bounds(dtype)
         except DatatypeError as error:
@@ -47,8 +46,8 @@ class IntToFp32Kernel(Kernel):
             )
         return True
 
-    @derived(ModuleBuildRequirements, dtype=input_dtype, result=result_dtype)
-    def codegen(*, dtype: QONNXDataType, result: QONNXDataType) -> ModuleBuildRequirements:
+    @view(constraints=(input_supported,), dtype=input_dtype, result=result_dtype)
+    def physical(*, dtype: QONNXDataType, result: QONNXDataType) -> ModuleBuildRequirements:
         parameters = (("SIGNED", int(dtype.signed())), ("WIDTH", dtype.bitwidth()))
         return ModuleBuildRequirements(
             IntToFp32Kernel.id,
@@ -68,10 +67,6 @@ class IntToFp32Kernel(Kernel):
                 ),
             ),
         )
-
-    support = ConstraintGroup(input_supported)
-    physical_ready = Readiness()
-    physical = View(codegen, readiness=physical_ready, constraints=support)
 
 
 __all__ = ["IntToFp32Kernel"]

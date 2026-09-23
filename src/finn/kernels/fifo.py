@@ -15,16 +15,15 @@ from finn.kernels.artifacts.requirements import (
     ModuleABIRequirements,
     ModuleBuildRequirements,
 )
-from finn.kernels.base import Kernel
-from finn.kernels.space import (
-    ConstraintGroup,
+from finn.kernels._next_base import Kernel
+from finn.kernels.space._next import (
     Decision,
-    Input,
-    Readiness,
-    View,
+    Param,
+    Rejected,
     constraint,
-    derived,
+    default_semantics,
     reject,
+    view,
 )
 
 
@@ -32,18 +31,25 @@ class FifoKernel(Kernel):
     id = "finnlib.fifo"
     version = "1"
 
-    word_bits = Input(int)
-    depth = Input(int)
-    ram_style = Decision(str, values=("auto", "shift", "distributed", "block", "ultra"))
+    word_bits = Param(int)
+    depth = Param(int)
 
     @constraint(bits=word_bits, depth=depth)
-    def geometry_supported(*, bits: int, depth: int) -> object:
+    def geometry_supported(*, bits: int, depth: int) -> bool | Rejected:
         if bits < 1 or depth < 2 or max(bits, depth) > 0xFFFFFFFF:
             return reject("fifo-geometry", "word_bits must be positive and depth at least two")
         return True
 
-    @derived(ModuleBuildRequirements, bits=word_bits, depth=depth, ram=ram_style)
-    def codegen(*, bits: int, depth: int, ram: str) -> object:
+    ram_style = Decision(str, values=("auto", "shift", "distributed", "block", "ultra"))
+
+    @view(
+        semantics=default_semantics(ModuleBuildRequirements),
+        constraints=(geometry_supported,),
+        bits=word_bits,
+        depth=depth,
+        ram=ram_style,
+    )
+    def physical(*, bits: int, depth: int, ram: str) -> ModuleBuildRequirements | Rejected:
         if bits < 1:
             return reject("fifo-interface", "word_bits must be positive")
         parameters = (("DATA_WIDTH", bits), ("DEPTH", depth), ("RAM_STYLE", f'"{ram}"'))
@@ -73,10 +79,6 @@ class FifoKernel(Kernel):
             abi,
             (CopiedSource("finnlib", "rtl/infra/fifo.sv", provides=("module:fifo",)),),
         )
-
-    support = ConstraintGroup(geometry_supported)
-    physical_ready = Readiness()
-    physical = View(codegen, readiness=physical_ready, constraints=support)
 
 
 __all__ = ["FifoKernel"]

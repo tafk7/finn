@@ -24,15 +24,23 @@ from finn.kernels.artifacts.requirements import (
     ModuleBuildRequirements,
     ScalarTable,
 )
-from finn.kernels.base import Kernel
-from finn.kernels.datatypes.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
+from finn.kernels._next_base import Kernel
+from finn.kernels.datatypes._next_semantics import QONNX_DATATYPE_VALUE_SEMANTICS
 from finn.kernels.datatypes.values import (
     DatatypeError,
     QONNXDataType,
     ordinary_integer_bounds,
     resolve_qonnx_datatype_name,
 )
-from finn.kernels.space import ConstraintGroup, Input, Readiness, View, constraint, derived, reject
+from finn.kernels.space._next import (
+    Param,
+    Rejected,
+    constraint,
+    default_semantics,
+    derived,
+    reject,
+    view,
+)
 from finn.kernels.target import DspBlock
 
 
@@ -40,15 +48,25 @@ class EltwiseKernel(Kernel):
     id = "finnlib.eltwise"
     version = "1"
 
-    operation = Input(str)
-    pe = Input(int)
-    lhs_dtype = Input(QONNX_DATATYPE_VALUE_SEMANTICS)
-    rhs_dtype = Input(QONNX_DATATYPE_VALUE_SEMANTICS)
-    b_scale = Input(float)
-    target_dsp = Input(DspBlock)
+    operation = Param(str)
+    pe = Param(int)
+    lhs_dtype = Param(QONNX_DATATYPE_VALUE_SEMANTICS)
+    rhs_dtype = Param(QONNX_DATATYPE_VALUE_SEMANTICS)
 
-    @derived(float, scale=b_scale)
-    def native_scale(*, scale: float) -> object:
+    @derived(
+        semantics=QONNX_DATATYPE_VALUE_SEMANTICS, operation=operation, a=lhs_dtype, b=rhs_dtype
+    )
+    def result_dtype(*, operation: str, a: QONNXDataType, b: QONNXDataType) -> QONNXDataType:
+        if a.name == "FLOAT32" or b.name == "FLOAT32":
+            return resolve_qonnx_datatype_name("FLOAT32")
+        bits = 2 * a.bitwidth() if operation == "MUL" else a.bitwidth() + 1
+        signed = a.signed() or operation in ("SUB", "SBR")
+        return resolve_qonnx_datatype_name(f"{'INT' if signed else 'UINT'}{bits}")
+
+    b_scale = Param(float)
+
+    @derived(semantics=default_semantics(float), scale=b_scale)
+    def native_scale(*, scale: float) -> float | Rejected:
         try:
             rounded = float(struct.unpack("!f", struct.pack("!f", scale))[0])
         except (OverflowError, struct.error) as error:
@@ -56,6 +74,8 @@ class EltwiseKernel(Kernel):
         if not math.isfinite(rounded):
             return reject("eltwise-scale", "B_SCALE must be finite binary32")
         return rounded
+
+    target_dsp = Param(DspBlock)
 
     @constraint(
         operation=operation, pe=pe, a=lhs_dtype, b=rhs_dtype, scale=native_scale, target=target_dsp
@@ -68,7 +88,7 @@ class EltwiseKernel(Kernel):
         b: QONNXDataType,
         scale: float,
         target: DspBlock,
-    ) -> object:
+    ) -> bool | Rejected:
         if operation not in ("ADD", "SUB", "SBR", "MUL") or not 1 <= pe <= 0xFFFFFFFF:
             return reject("eltwise-operation", "positive PE and ADD, SUB, SBR or MUL are required")
         for dtype in (a, b):
@@ -94,16 +114,9 @@ class EltwiseKernel(Kernel):
             return reject("eltwise-target", "native floating-point arithmetic requires DSP58")
         return True
 
-    @derived(QONNX_DATATYPE_VALUE_SEMANTICS, operation=operation, a=lhs_dtype, b=rhs_dtype)
-    def result_dtype(*, operation: str, a: QONNXDataType, b: QONNXDataType) -> QONNXDataType:
-        if a.name == "FLOAT32" or b.name == "FLOAT32":
-            return resolve_qonnx_datatype_name("FLOAT32")
-        bits = 2 * a.bitwidth() if operation == "MUL" else a.bitwidth() + 1
-        signed = a.signed() or operation in ("SUB", "SBR")
-        return resolve_qonnx_datatype_name(f"{'INT' if signed else 'UINT'}{bits}")
-
-    @derived(
-        ModuleBuildRequirements,
+    @view(
+        semantics=default_semantics(ModuleBuildRequirements),
+        constraints=(implementation_supported,),
         operation=operation,
         pe=pe,
         a=lhs_dtype,
@@ -111,7 +124,7 @@ class EltwiseKernel(Kernel):
         result=result_dtype,
         scale=native_scale,
     )
-    def codegen(
+    def physical(
         *,
         operation: str,
         pe: int,
@@ -119,7 +132,7 @@ class EltwiseKernel(Kernel):
         b: QONNXDataType,
         result: QONNXDataType,
         scale: float,
-    ) -> object:
+    ) -> ModuleBuildRequirements | Rejected:
         if pe < 1:
             return reject("eltwise-interface", "PE must be positive")
         parameter_values: dict[str, Scalar] = {
@@ -174,10 +187,6 @@ class EltwiseKernel(Kernel):
         return ModuleBuildRequirements(
             EltwiseKernel.id, EltwiseKernel.version, parameters, abi, sources
         )
-
-    support = ConstraintGroup(implementation_supported)
-    physical_ready = Readiness()
-    physical = View(codegen, readiness=physical_ready, constraints=support)
 
 
 __all__ = ["EltwiseKernel"]
