@@ -512,12 +512,22 @@ class AcceptedViewRef(ValueRef[T], Generic[T]):
 
 class Subspace(Declaration, Generic[S_co]):
     def __init__(
-        self, space_type: type[S_co], *, when: ValueRef[bool] | None = None, **bindings: object
+        self,
+        space_type: type[S_co],
+        *,
+        when: ValueRef[bool] | None = None,
+        bindings: Mapping[ValueRef[object], object] | None = None,
+        **parameters: object,
     ) -> None:
         if not isinstance(space_type, type) or not issubclass(space_type, Space):
             raise DefinitionError("a Subspace requires a Space subclass")
         self.space_type = space_type
-        self.bindings = MappingProxyType(dict(bindings))
+        if bindings is not None and not isinstance(bindings, Mapping):
+            raise DefinitionError("bindings= requires a declaration-keyed mapping")
+        if bindings is not None and any(not isinstance(key, ValueRef) for key in bindings):
+            raise DefinitionError("binding keys must be direct or scoped Param references")
+        self.bindings = MappingProxyType(dict(parameters))
+        self.parameter_bindings = MappingProxyType(dict(bindings if bindings is not None else {}))
         self.when = when
 
     @overload

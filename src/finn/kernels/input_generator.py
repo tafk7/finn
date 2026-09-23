@@ -10,7 +10,7 @@ of loop i and all inner loops, aligned with the output transfer. It is a native
 multi-bit marker, not AXI TLAST. Input and output words are opaque bits.
 """
 
-from finn.kernels._engine import ValueSemantics
+from finn.kernels._next_base import Kernel
 from finn.kernels.artifacts.abi import Clock, Direction, Reset, Signal
 from finn.kernels.artifacts.contribution_types import CopiedSource
 from finn.kernels.artifacts.requirements import (
@@ -18,25 +18,15 @@ from finn.kernels.artifacts.requirements import (
     ModuleABIRequirements,
     ModuleBuildRequirements,
 )
-from finn.kernels.base import Kernel
-from finn.kernels.space import (
-    ConstraintGroup,
+from finn.kernels.datatypes._next_semantics import INTEGER_VECTOR, IntegerVector
+from finn.kernels.space._next import (
     Decision,
-    Input,
-    Readiness,
-    View,
+    Param,
+    Rejected,
     constraint,
-    derived,
+    default_semantics,
     reject,
-)
-
-IntegerVector = tuple[int, ...]
-INTEGER_VECTOR: ValueSemantics[IntegerVector] = ValueSemantics(
-    IntegerVector,
-    "integer vector",
-    lambda value: type(value) is tuple and all(type(item) is int for item in value),
-    lambda left, right: left == right,
-    lambda value: value,
+    view,
 )
 
 
@@ -44,16 +34,15 @@ class InputGeneratorKernel(Kernel):
     id = "finnlib.input_generator"
     version = "1"
 
-    word_bits = Input(int)
-    frame_words = Input(int)
-    extents = Input(INTEGER_VECTOR)
-    strides = Input(INTEGER_VECTOR)
-    ram_style = Decision(str, values=("auto", "distributed", "block", "ultra"))
+    word_bits = Param(int)
+    frame_words = Param(int)
+    extents = Param(INTEGER_VECTOR)
+    strides = Param(INTEGER_VECTOR)
 
     @constraint(bits=word_bits, frame=frame_words, extents=extents, strides=strides)
     def traversal_supported(
         *, bits: int, frame: int, extents: IntegerVector, strides: IntegerVector
-    ) -> object:
+    ) -> bool | Rejected:
         if bits < 1 or frame < 1 or not extents or len(extents) != len(strides):
             return reject(
                 "input-generator-shape",
@@ -73,17 +62,20 @@ class InputGeneratorKernel(Kernel):
             )
         return True
 
-    @derived(
-        ModuleBuildRequirements,
+    ram_style = Decision(str, values=("auto", "distributed", "block", "ultra"))
+
+    @view(
+        semantics=default_semantics(ModuleBuildRequirements),
+        constraints=(traversal_supported,),
         bits=word_bits,
         frame=frame_words,
         extents=extents,
         strides=strides,
         ram=ram_style,
     )
-    def codegen(
+    def physical(
         *, bits: int, frame: int, extents: IntegerVector, strides: IntegerVector, ram: str
-    ) -> object:
+    ) -> ModuleBuildRequirements | Rejected:
         if bits < 1 or not extents:
             return reject(
                 "input-generator-interface", "positive word width and nonempty extents are required"
@@ -123,10 +115,6 @@ class InputGeneratorKernel(Kernel):
             abi,
             (CopiedSource("finnlib", "rtl/shape/input_gen.sv", provides=("module:input_gen",)),),
         )
-
-    support = ConstraintGroup(traversal_supported)
-    physical_ready = Readiness()
-    physical = View(codegen, readiness=physical_ready, constraints=support)
 
 
 __all__ = ["InputGeneratorKernel"]

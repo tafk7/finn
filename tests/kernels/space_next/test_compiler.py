@@ -26,6 +26,7 @@ from finn.kernels.space._next.declarations import (
 )
 from finn.kernels.space._next.domains import domain, divisors_of
 from finn.kernels.space._next.errors import DefinitionError, RequestError
+from finn.kernels.space._next.semantics import ValueSemantics
 
 
 def test_compile_links_forward_dependencies_without_executing_callbacks() -> None:
@@ -307,3 +308,26 @@ def test_missing_binding_names_fail_before_any_callback() -> None:
 
     with pytest.raises(DefinitionError, match="no declaration"):
         compile_space(Family)
+
+
+def test_generic_alias_adapter_tokens_keep_identity_for_input_and_output_annotations() -> None:
+    token = tuple[int, ...]
+    vector: ValueSemantics[tuple[int, ...]] = ValueSemantics(
+        token,
+        "integer vector",
+        lambda value: type(value) is tuple and all(type(item) is int for item in value),
+        lambda left, right: left == right,
+        lambda value: value,
+    )
+
+    class Family(Space):
+        source = Param(vector)
+
+        @derived(semantics=vector)
+        def result(*, source: tuple[int, ...]) -> tuple[int, ...]:
+            return source + (3,)
+
+    model = compile_space(Family)
+    assert model.start({Family.source: (1, 2)}).result == (1, 2, 3)
+    semantics = model.linked.nodes[model.resolve(0, Family.result)].semantics
+    assert semantics is not None and semantics.type_token is token

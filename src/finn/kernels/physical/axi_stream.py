@@ -11,7 +11,6 @@ the interface of a core, not a converter that changes its RTL implementation.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import cast, overload
 
 from finn.kernels.artifacts.abi import Bus, Endpoint, Member, StandardProtocol
 from finn.kernels.datatypes.values import (
@@ -20,26 +19,32 @@ from finn.kernels.datatypes.values import (
     canonical_qonnx_datatype,
     resolve_qonnx_datatype_name,
 )
-from finn.kernels.datatypes.domains import DatatypeDomain
-from finn.kernels.datatypes.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
+from finn.kernels.datatypes._next_domains import DatatypeDomain, Integer
+from finn.kernels.datatypes._next_semantics import QONNX_DATATYPE_VALUE_SEMANTICS
 from finn.kernels.physical.layout import (
     FieldPlacement,
     PackedBeatLayout,
     UnusedBitPolicy,
     UnusedBitRange,
 )
-from finn.kernels.space.declarations import (
-    AuthoringError,
+from finn.kernels.space._next import (
+    Answer,
     Constraint,
     ConstraintGroup,
-    Derived,
-    Input,
+    Decided,
+    DefinitionError,
+    Param,
+    Rejected,
+    ScopeBuilder,
     Space,
-    ValueSource,
+    Subspace,
+    ValueRef,
+    View,
+    ViewKey,
     constraint,
+    default_semantics,
     derived,
     reject,
-    resolve_declared_value,
 )
 
 
@@ -61,12 +66,14 @@ class AxiStream:
     @staticmethod
     def input(
         name: str,
-        elements_per_beat: int | ValueSource[int],
+        elements_per_beat: int | ValueRef[int],
         valid_types: DatatypeDomain,
         *,
         last: bool = False,
     ) -> AxiStreamInterface:
         """Declare one input, its dtype admission and its physical stream."""
+        if valid_types is None:
+            raise DefinitionError("an AXIS input declares an admitted datatype domain")
         return AxiStreamInterface(
             name, elements_per_beat, Endpoint.TARGET, last, valid_types=valid_types
         )
@@ -74,8 +81,8 @@ class AxiStream:
     @staticmethod
     def output(
         name: str,
-        elements_per_beat: int | ValueSource[int],
-        dtype: ValueSource[QONNXDataType],
+        elements_per_beat: int | ValueRef[int],
+        dtype: ValueRef[QONNXDataType],
         *,
         last: bool = False,
     ) -> AxiStreamInterface:
@@ -165,148 +172,199 @@ class AxiStream:
         )
 
 
-@dataclass(frozen=True, eq=False, init=False)
-class AxiStreamInterface:
-    """Authoring aggregate whose members are ordinary Space declarations.
+class AxiStreamScope(Space):
+    """One interface occurrence with independent raw fields and admission."""
 
-    An input member ``activation`` installs ``activation_dtype`` as its bindable
-    Input. An output references an existing dtype source. Both install their
-    named derived properties and constraints. Class-level access exposes these
-    declarations; occurrence access resolves the stream value.
-    Partial queries use the usual ``point.answer(Kernel.activation.dtype)`` or
-    ``point.assess(Kernel.activation.constraints)`` APIs.
+    name = Param(str)
+    dtype = Param(QONNX_DATATYPE_VALUE_SEMANTICS)
+    elements_per_beat = Param(int)
+    endpoint = Param(Endpoint)
+    last = Param(bool)
+    error_code = Param(str)
+
+    @derived
+    def element_bits(*, dtype: QONNXDataType) -> int:
+        return qonnx_datatype_width(dtype)
+
+    @derived
+    def payload_bits(*, element_bits: int, elements_per_beat: int) -> int:
+        return element_bits * elements_per_beat
+
+    @derived
+    def carrier_bits(*, payload_bits: int) -> int:
+        return (payload_bits + 7) // 8 * 8
+
+    @constraint
+    def elements_valid(*, elements_per_beat: int) -> bool | Rejected:
+        if elements_per_beat <= 0:
+            return reject("interface-elements", "elements per beat must be positive")
+        return True
+
+    @constraint
+    def element_bits_valid(*, element_bits: int) -> bool | Rejected:
+        if element_bits <= 0:
+            return reject("interface-element-bits", "output elements must have positive width")
+        return True
+
+    @derived(semantics=default_semantics(AxiStream))
+    def stream(
+        *,
+        name: str,
+        dtype: QONNXDataType,
+        elements_per_beat: int,
+        endpoint: Endpoint,
+        last: bool,
+        error_code: str,
+    ) -> Answer[AxiStream]:
+        try:
+            return Decided(AxiStream(name, dtype, elements_per_beat, endpoint=endpoint, last=last))
+        except ValueError as error:
+            return reject(error_code, str(error))
+
+    @derived
+    def payload(*, stream: AxiStream) -> PackedBeatLayout:
+        return stream.payload
+
+    def bus(self, *, clock: str | None = None, reset: str | None = None) -> Bus:
+        """Lower the raw physical description, without asserting admission."""
+        return self.stream.bus(clock=clock, reset=reset)
+
+
+STREAM_VIEW = ViewKey("stream", AxiStream)
+
+
+def _local_domain(domain: DatatypeDomain, builder: ScopeBuilder[AxiStreamScope]) -> DatatypeDomain:
+    """Give dynamic integer bounds ordinary formal parameters in this scope."""
+    if not isinstance(domain, Integer):
+        return domain
+
+    def bound(name: str, value: int | ValueRef[int]) -> int | ValueRef[int]:
+        if not isinstance(value, ValueRef):
+            return value
+        parameter = builder.param(name, int)
+        builder.bind(parameter, value)
+        return parameter
+
+    minimum = bound("minimum_bits", domain.min_bits)
+    maximum = None if domain.max_bits is None else bound("maximum_bits", domain.max_bits)
+    return Integer(minimum, maximum, signed=domain.signed)
+
+
+class AxiStreamInterface(Subspace[AxiStreamScope]):
+    """Place a typed AXIS interface without adding members to its parent class.
+
+    Narrow handles read raw fields. The accepted_stream handle reads exactly
+    the accepted result of view(); assess that view on the child occurrence.
+    Input factories expose a dtype Param, while output factories bind an
+    existing dtype supplier. Explicit fresh Params and Decisions also work.
     """
-
-    dtype: ValueSource[QONNXDataType]
-    elements_per_beat: ValueSource[int]
-    element_bits: Derived[int]
-    payload_bits: Derived[int]
-    carrier_bits: Derived[int]
-    constraints: ConstraintGroup
-    stream: Derived[AxiStream]
-    _members: tuple[tuple[str, object], ...]
 
     def __init__(
         self,
         name: str,
-        elements_per_beat: int | ValueSource[int],
+        elements_per_beat: int | ValueRef[int],
         endpoint: Endpoint,
         last: bool,
         *,
         valid_types: DatatypeDomain | None = None,
-        dtype: ValueSource[QONNXDataType] | None = None,
+        dtype: ValueRef[QONNXDataType] | None = None,
+        error_code: str = "axi-stream",
     ) -> None:
         if not isinstance(name, str) or not name or type(last) is not bool:
-            raise AuthoringError("an AXIS interface needs a name and a boolean last flag")
-        local: list[tuple[str, object]] = []
-        if isinstance(elements_per_beat, ValueSource):
-            if elements_per_beat.value_semantics.type_token is not int:
-                raise AuthoringError("elements per beat requires an integer declaration")
-            elements = elements_per_beat
-        else:
-            if type(elements_per_beat) is not int or elements_per_beat <= 0:
-                raise AuthoringError("elements per beat must be a positive integer")
-            elements = derived(int)(lambda: elements_per_beat)
-            local.append(("elements_per_beat", elements))
+            raise DefinitionError("an AXIS interface needs a name and a boolean last flag")
+        if not isinstance(endpoint, Endpoint):
+            raise DefinitionError("an AXIS interface needs an Endpoint")
+        if type(error_code) is not str or not error_code:
+            raise DefinitionError("an AXIS interface needs a nonempty refusal code")
+        if isinstance(elements_per_beat, ValueRef):
+            semantics = elements_per_beat.semantics
+            if semantics is not None and semantics.type_token is not int:
+                raise DefinitionError("elements per beat requires an integer declaration")
+        elif type(elements_per_beat) is not int or elements_per_beat <= 0:
+            raise DefinitionError("elements per beat must be a positive integer")
 
-        if endpoint is Endpoint.TARGET:
-            if valid_types is None or dtype is not None:
-                raise AuthoringError("an AXIS input declares an admitted datatype domain")
-            dtype = Input(QONNX_DATATYPE_VALUE_SEMANTICS)
-            local.append(("dtype", dtype))
-            type_conditions = tuple(
-                (f"dtype_{key}", value) for key, value in valid_types.constraints(dtype)
+        if dtype is None and endpoint is Endpoint.TARGET:
+            dtype = Param(QONNX_DATATYPE_VALUE_SEMANTICS)
+        if not isinstance(dtype, ValueRef) or (
+            dtype.semantics is not None
+            and dtype.semantics.type_token is not QONNX_DATATYPE_VALUE_SEMANTICS.type_token
+        ):
+            raise DefinitionError("an AXIS output requires a QONNX datatype value reference")
+        if endpoint is Endpoint.INITIATOR and valid_types is not None:
+            raise DefinitionError(
+                "an AXIS output reuses its supplied dtype without an input domain"
             )
-        else:
-            if (
-                valid_types is not None
-                or not isinstance(dtype, ValueSource)
-                or dtype.value_semantics.type_token is not QONNX_DATATYPE_VALUE_SEMANTICS.type_token
-            ):
-                raise AuthoringError("an AXIS output requires a QONNX datatype ValueSource")
-            type_conditions = ()
 
-        @derived(int, datatype=dtype)
-        def element_bits(*, datatype: QONNXDataType) -> int:
-            return qonnx_datatype_width(datatype)
-
-        @derived(int, bits=element_bits, elements=elements)
-        def payload_bits(*, bits: int, elements: int) -> int:
-            return bits * elements
-
-        @derived(int, bits=payload_bits)
-        def carrier_bits(*, bits: int) -> int:
-            return (bits + 7) // 8 * 8
-
-        @constraint(elements=elements)
-        def elements_valid(*, elements: int) -> object:
-            if elements <= 0:
-                return reject("interface-elements", "elements per beat must be positive")
-            return True
-
-        @constraint(bits=element_bits)
-        def element_bits_valid(*, bits: int) -> object:
-            if bits <= 0:
-                return reject("interface-element-bits", "output elements must have positive width")
-            return True
-
-        conditions: tuple[tuple[str, Constraint], ...] = (
-            *type_conditions,
-            *(
-                (("element_bits_valid", element_bits_valid),)
-                if endpoint is Endpoint.INITIATOR
-                else ()
-            ),
-            ("elements_valid", elements_valid),
+        builder = ScopeBuilder(AxiStreamScope, name="AxiStreamBoundary")
+        conditions: list[Constraint] = []
+        if valid_types is not None:
+            admitted = _local_domain(valid_types, builder)
+            for key, condition in admitted.constraints(AxiStreamScope.dtype):
+                conditions.append(builder.add(f"dtype_{key}", condition))
+        if endpoint is Endpoint.INITIATOR:
+            conditions.append(AxiStreamScope.element_bits_valid)
+        conditions.append(AxiStreamScope.elements_valid)
+        group = builder.add("admission", ConstraintGroup(*conditions))
+        accepted = builder.view("physical", AxiStreamScope.stream, constraints=(group,))
+        builder.export(STREAM_VIEW).view(accepted)
+        builder.bind(AxiStreamScope.name, name)
+        builder.bind(AxiStreamScope.dtype, dtype)
+        builder.bind(AxiStreamScope.elements_per_beat, elements_per_beat)
+        builder.bind(AxiStreamScope.endpoint, endpoint)
+        builder.bind(AxiStreamScope.last, last)
+        builder.bind(AxiStreamScope.error_code, error_code)
+        placement = builder.place()
+        super().__init__(
+            placement.space_type,
+            when=placement.when,
+            bindings=placement.parameter_bindings,
+            **placement.bindings,
         )
-        constraints = ConstraintGroup(*(value for _, value in conditions))
+        self._conditions = group
+        self._views = (accepted,)
 
-        @derived(AxiStream, datatype=dtype, elements=elements)
-        def stream(*, datatype: QONNXDataType, elements: int) -> object:
-            try:
-                return AxiStream(name, datatype, elements, endpoint=endpoint, last=last)
-            except ValueError as error:
-                return reject("axi-stream", str(error))
+    @property
+    def dtype(self) -> ValueRef[QONNXDataType]:
+        return self.ref(AxiStreamScope.dtype)
 
-        members = (
-            *local,
-            ("element_bits", element_bits),
-            ("payload_bits", payload_bits),
-            ("carrier_bits", carrier_bits),
-            *conditions,
-            ("constraints", constraints),
-            ("stream", stream),
-        )
-        for key, value in members:
-            if key in self.__dataclass_fields__:
-                object.__setattr__(self, key, value)
-        object.__setattr__(self, "dtype", dtype)
-        object.__setattr__(self, "elements_per_beat", elements)
-        object.__setattr__(self, "_members", members)
+    @property
+    def elements_per_beat(self) -> ValueRef[int]:
+        return self.ref(AxiStreamScope.elements_per_beat)
 
-    def __set_name__(self, owner: type[object], name: str) -> None:
-        if not issubclass(owner, Space):
-            raise AuthoringError("AxiStream interfaces must be declared on a Space")
-        if sum(value is self for value in owner.__dict__.values()) != 1:
-            raise AuthoringError("each AXIS interface must have exactly one class member name")
-        for suffix, value in self._members:
-            member = f"{name}_{suffix}"
-            if any(member in base.__dict__ for base in owner.__mro__):
-                raise AuthoringError(f"AXIS interface {name!r} conflicts with member {member!r}")
-            setattr(owner, member, value)
+    @property
+    def lanes(self) -> ValueRef[int]:
+        return self.elements_per_beat
 
-    @overload
-    def __get__(self, instance: None, owner: type[object]) -> AxiStreamInterface: ...
+    @property
+    def element_bits(self) -> ValueRef[int]:
+        return self.ref(AxiStreamScope.element_bits)
 
-    @overload
-    def __get__(self, instance: object, owner: type[object]) -> AxiStream: ...
+    @property
+    def payload_bits(self) -> ValueRef[int]:
+        return self.ref(AxiStreamScope.payload_bits)
 
-    def __get__(
-        self, instance: object | None, owner: type[object]
-    ) -> AxiStreamInterface | AxiStream:
-        if instance is None:
-            return self
-        return cast("AxiStream", resolve_declared_value(instance, self.stream))
+    @property
+    def carrier_bits(self) -> ValueRef[int]:
+        return self.ref(AxiStreamScope.carrier_bits)
+
+    @property
+    def payload(self) -> ValueRef[PackedBeatLayout]:
+        return self.ref(AxiStreamScope.payload)
+
+    @property
+    def constraints(self) -> ConstraintGroup:
+        return self._conditions
+
+    @property
+    def stream(self) -> ValueRef[AxiStream]:
+        return self.ref(AxiStreamScope.stream)
+
+    @property
+    def accepted_stream(self) -> ValueRef[AxiStream]:
+        return self.accepted(STREAM_VIEW)
+
+    def view(self) -> View[AxiStream]:
+        return self._views[0]
 
 
-__all__ = ["AxiStream", "AxiStreamInterface"]
+__all__ = ["AxiStream", "AxiStreamInterface", "AxiStreamScope", "STREAM_VIEW"]

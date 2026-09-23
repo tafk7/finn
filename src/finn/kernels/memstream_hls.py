@@ -15,21 +15,28 @@ The first datatype profile covers ordinary integers and IEEE FLOAT32.
 from finn.kernels.artifacts.contribution_types import CopiedSource, RenderedSource
 from finn.kernels.artifacts.hls import HlsInterface, HlsSourceRequirements
 from finn.kernels.artifacts.sources import CompileOptions, Language, Role
-from finn.kernels.base import Kernel
-from finn.kernels.datatypes.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
+from finn.kernels._next_base import Kernel
+from finn.kernels.datatypes._next_semantics import QONNX_DATATYPE_VALUE_SEMANTICS
 from finn.kernels.datatypes.values import DatatypeError, QONNXDataType, ordinary_integer_bounds
-from finn.kernels.space import ConstraintGroup, Input, Readiness, View, constraint, derived, reject
+from finn.kernels.space._next import (
+    Param,
+    Rejected,
+    constraint,
+    default_semantics,
+    derived,
+    reject,
+    view,
+)
 
 
 class MemStreamHlsKernel(Kernel):
     id = "finnlib.memstream.hls"
     version = "1"
 
-    element_dtype = Input(QONNX_DATATYPE_VALUE_SEMANTICS)
-    depth = Input(int)
+    element_dtype = Param(QONNX_DATATYPE_VALUE_SEMANTICS)
 
-    @derived(str, dtype=element_dtype)
-    def cpp_type(*, dtype: QONNXDataType) -> object:
+    @derived(semantics=default_semantics(str), dtype=element_dtype)
+    def cpp_type(*, dtype: QONNXDataType) -> str | Rejected:
         if dtype.name == "FLOAT32":
             return "float"
         try:
@@ -42,8 +49,10 @@ class MemStreamHlsKernel(Kernel):
             )
         return f"{'ap_int' if dtype.signed() else 'ap_uint'}<{dtype.bitwidth()}>"
 
+    depth = Param(int)
+
     @constraint(depth=depth)
-    def depth_supported(*, depth: int) -> object:
+    def depth_supported(*, depth: int) -> bool | Rejected:
         # memstream.hpp uses ap_uint<clog2(N)> for its pointer: N=1 is zero bits.
         if not 2 <= depth <= 0xFFFFFFFF:
             return reject(
@@ -51,8 +60,8 @@ class MemStreamHlsKernel(Kernel):
             )
         return True
 
-    @derived(HlsSourceRequirements, cpp=cpp_type, depth=depth)
-    def codegen(*, cpp: str, depth: int) -> HlsSourceRequirements:
+    @view(constraints=(depth_supported,), cpp=cpp_type, depth=depth)
+    def physical(*, cpp: str, depth: int) -> HlsSourceRequirements:
         includes = ("hls/util", "hls/infra")
         return HlsSourceRequirements(
             MemStreamHlsKernel.id,
@@ -92,10 +101,6 @@ class MemStreamHlsKernel(Kernel):
             (("CPP_TYPE", cpp), ("DEPTH", depth)),
             includes,
         )
-
-    support = ConstraintGroup(depth_supported)
-    physical_ready = Readiness()
-    physical = View(codegen, readiness=physical_ready, constraints=support)
 
 
 __all__ = ["MemStreamHlsKernel"]

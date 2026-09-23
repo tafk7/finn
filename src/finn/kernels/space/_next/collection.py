@@ -98,75 +98,170 @@ class PlacementBinding:
 
 
 @dataclass(frozen=True, slots=True)
+class PlacementTarget:
+    path: tuple[Subspace[Space], ...]
+    member: Param[object] | Decision[object]
+    name: str
+
+
+@dataclass(frozen=True, slots=True)
+class NestedBinding:
+    reference: ValueRef[object]
+    target: PlacementTarget
+    binding: PlacementBinding
+
+
+@dataclass(frozen=True, slots=True)
 class PlacementPlan:
     placement: Subspace[Space]
     bindings: Mapping[str, PlacementBinding]
+    nested_bindings: tuple[NestedBinding, ...] = ()
+
+
+class _TargetResolver:
+    """Resolve concrete typed paths without recursive template compilation."""
+
+    def __init__(self) -> None:
+        self.tables: dict[type[Space], tuple[dict[str, object], dict[int, str]]] = {}
+
+    def member(self, space_type: type[Space], reference: object) -> tuple[str, object]:
+        if space_type not in self.tables:
+            names = {
+                id(value): name
+                for base in reversed(space_type.__mro__)
+                for name, value in vars(base).items()
+                if isinstance(value, Declaration)
+            }
+            self.tables[space_type] = (_namespace(space_type), names)
+        namespace, names = self.tables[space_type]
+        name = names.get(id(reference))
+        if name is None:
+            raise DefinitionError("binding reference is not a member of this child family")
+        return name, namespace[name]
+
+    def resolve(
+        self,
+        space_type: type[Space],
+        reference: object,
+        *,
+        allow_decision_refs: bool = False,
+    ) -> PlacementTarget:
+        path: list[Subspace[Space]] = []
+        seen: set[tuple[type[Space], int]] = set()
+        while isinstance(reference, ScopedValueRef):
+            if isinstance(reference, DecisionRef) and not allow_decision_refs:
+                raise DefinitionError("binding targets require Param references, not DecisionRef")
+            identity = (space_type, id(reference))
+            if identity in seen:
+                raise DefinitionError("cyclic scoped parameter reference")
+            seen.add(identity)
+            _, placement = self.member(space_type, reference.placement)
+            if not isinstance(placement, Subspace):
+                raise DefinitionError("binding targets require concrete child placements")
+            path.append(placement)
+            space_type, reference = placement.space_type, reference.member
+        name, member = self.member(space_type, reference)
+        if not isinstance(member, (Param, Decision)):
+            raise DefinitionError("binding target is not a Param declaration")
+        return PlacementTarget(tuple(path), member, name)
+
+
+def _placement_binding(parameter: Param[object], supplier: object, label: str) -> PlacementBinding:
+    kind: Literal["literal", "reference", "exposed-param", "local-decision"]
+    if isinstance(supplier, Param) and supplier.owner is None:
+        kind = "exposed-param"
+    elif isinstance(supplier, Decision) and supplier.owner is None:
+        kind = "local-decision"
+    elif isinstance(supplier, ValueRef):
+        kind = "reference"
+    else:
+        kind = "literal"
+    assert parameter.semantics is not None
+    if isinstance(supplier, ValueRef):
+        if supplier.semantics is not None and not parameter.semantics.is_compatible_with(
+            supplier.semantics
+        ):
+            raise DefinitionError(f"{label}: binding has incompatible value semantics")
+    else:
+        try:
+            supplier = parameter.semantics.freeze(supplier)
+        except (TypeError, ValueError) as error:
+            raise DefinitionError(f"{label}: {error}") from error
+    return PlacementBinding(parameter, supplier, kind)
 
 
 def collect_placement(placement: Subspace[Space]) -> PlacementPlan:
-    """Validate one placement's four binding forms without descending into children."""
+    """Validate named/direct bindings and explicitly targeted nested Params.
+
+    Nested target exposure is checked against the allocated scopes before any
+    callbacks are linked. It is not inferred by flattening child definitions.
+    """
     namespace = _namespace(placement.space_type)
     parameters = {name: value for name, value in namespace.items() if isinstance(value, Param)}
     label = placement.name or placement.space_type.__qualname__
-    missing = parameters.keys() - placement.bindings.keys()
-    extra = placement.bindings.keys() - parameters.keys()
-    if missing:
-        raise DefinitionError(f"{label}: missing child parameter bindings {sorted(missing)}")
+    named = dict(placement.bindings)
+    extra = named.keys() - parameters.keys()
     if extra:
         raise DefinitionError(f"{label}: unknown child parameter bindings {sorted(extra)}")
-    bindings: dict[str, PlacementBinding] = {}
-    for name, parameter in parameters.items():
-        supplier = placement.bindings[name]
-        kind: Literal["literal", "reference", "exposed-param", "local-decision"]
-        if isinstance(supplier, Param) and supplier.owner is None:
-            kind = "exposed-param"
-        elif isinstance(supplier, Decision) and supplier.owner is None:
-            kind = "local-decision"
-        elif isinstance(supplier, ValueRef):
-            kind = "reference"
+    resolver = _TargetResolver()
+    nested: list[NestedBinding] = []
+    targets: set[tuple[tuple[Subspace[Space], ...], str]] = set()
+    for reference, supplier in placement.parameter_bindings.items():
+        target = resolver.resolve(placement.space_type, reference)
+        if not isinstance(target.member, Param):
+            raise DefinitionError(f"{label}: binding target is not a Param declaration")
+        identity = (target.path, target.name)
+        if identity in targets:
+            raise DefinitionError(f"{label}: duplicate parameter binding")
+        targets.add(identity)
+        if not target.path:
+            if target.name in named:
+                raise DefinitionError(f"{label}.{target.name}: duplicate named and mapped binding")
+            named[target.name] = supplier
         else:
-            kind = "literal"
-        assert parameter.semantics is not None
-        if isinstance(supplier, ValueRef):
-            if supplier.semantics is not None and not parameter.semantics.is_compatible_with(
-                supplier.semantics
-            ):
-                raise DefinitionError(f"{label}.{name}: binding has incompatible value semantics")
-        else:
-            try:
-                supplier = parameter.semantics.freeze(supplier)
-            except (TypeError, ValueError) as error:
-                raise DefinitionError(f"{label}.{name}: {error}") from error
-        bindings[name] = PlacementBinding(parameter, supplier, kind)
-    return PlacementPlan(placement, MappingProxyType(bindings))
+            nested.append(
+                NestedBinding(
+                    reference,
+                    target,
+                    _placement_binding(target.member, supplier, f"{label}.{target.name}"),
+                )
+            )
+    missing = parameters.keys() - named.keys()
+    if missing:
+        raise DefinitionError(f"{label}: missing child parameter bindings {sorted(missing)}")
+    bindings = {
+        name: _placement_binding(parameter, named[name], f"{label}.{name}")
+        for name, parameter in parameters.items()
+    }
+    return PlacementPlan(placement, MappingProxyType(bindings), tuple(nested))
 
 
 def resolve_decision_ref(reference: DecisionRef[object]) -> Decision[object]:
-    """Check local choice ownership, including a fresh Decision bound to a Param."""
+    """Resolve the final owning choice across concrete nested parameter bindings."""
     placement = reference.placement
     if not isinstance(placement, Subspace):
         raise DefinitionError("a DecisionRef requires a concrete child placement")
-    namespace = _namespace(placement.space_type)
-    member = reference.member
-    member_name: str | None = None
-    for base in placement.space_type.__mro__:
-        for name, value in vars(base).items():
-            if value is member:
-                member_name = name
-                break
-        if member_name is not None:
-            break
-    if member_name is None:
-        raise DefinitionError("DecisionRef member is not part of this child family")
-    effective = namespace[member_name]
-    if isinstance(effective, Decision):
-        return effective
-    if isinstance(effective, Param):
-        binding = collect_placement(placement).bindings[member_name]
-        if binding.kind == "local-decision" and isinstance(binding.supplier, Decision):
-            return binding.supplier
+    target = _TargetResolver().resolve(
+        placement.space_type,
+        reference.member,
+        allow_decision_refs=True,
+    )
+    if isinstance(target.member, Decision):
+        return target.member
+    chain = (placement, *target.path)
+    binding = collect_placement(chain[-1]).bindings[target.name]
+    for index in range(len(chain) - 2, -1, -1):
+        plan = collect_placement(chain[index])
+        remaining = target.path[index:]
+        for nested in plan.nested_bindings:
+            if nested.target.path == remaining and nested.target.member is target.member:
+                if binding.kind != "exposed-param":
+                    raise DefinitionError("nested parameter target is not deliberately exposed")
+                binding = nested.binding
+    if binding.kind == "local-decision" and isinstance(binding.supplier, Decision):
+        return binding.supplier
     raise DefinitionError(
-        f"{placement.name or placement.space_type.__qualname__}.{member_name}: "
+        f"{placement.name or placement.space_type.__qualname__}.{target.name}: "
         "a Param alias is not a locally owned Decision"
     )
 
@@ -226,13 +321,15 @@ def _output_semantics(
             semantics = default_semantics(nominal_type)
         except (TypeError, ValueError) as exc:
             raise DefinitionError(f"{owner}: {exc}") from exc
+    token_origin = get_origin(semantics.type_token)
+    nominal_token = semantics.type_token if token_origin is None else token_origin
     if (
         origin not in (Union, types.UnionType)
         and isinstance(nominal_type, type)
-        and isinstance(semantics.type_token, type)
+        and isinstance(nominal_token, type)
         and not getattr(nominal_type, "_is_protocol", False)
     ):
-        if nominal_type is not semantics.type_token:
+        if nominal_type is not nominal_token:
             raise DefinitionError(
                 f"{owner}: output annotation {nominal_type.__name__} is incompatible with "
                 f"{semantics.name} semantics"
@@ -344,9 +441,9 @@ def validate_argument(
 ) -> None:
     """Check one linked supplier using the same dependency-mode policy as collection."""
     value_type = _argument_value_type(argument, owner)
-    if isinstance(semantics.type_token, type) and not _annotation_accepts(
-        value_type, semantics.type_token
-    ):
+    token_origin = get_origin(semantics.type_token)
+    nominal_token = semantics.type_token if token_origin is None else token_origin
+    if isinstance(nominal_token, type) and not _annotation_accepts(value_type, nominal_token):
         raise DefinitionError(
             f"{owner}: annotation {argument.annotation!r} cannot consume {semantics.name}"
         )

@@ -23,6 +23,7 @@ from .declarations import (
     Derived,
     Param,
     Readiness,
+    ScopedValueRef,
     Space,
     Subspace,
     ValueKey,
@@ -45,6 +46,20 @@ class _ExportRecorder(Protocol):
     def _record_export(
         self, key: ValueKey[object] | ViewKey[object], source: Declaration
     ) -> None: ...
+
+
+class _BindingRecorder(Protocol):
+    def _bind_reference(self, parameter: ValueRef[object], supplier: object) -> None: ...
+
+
+class BindingTarget(Generic[T]):
+    """Fix the nested slot's type before accepting its supplied value."""
+
+    def __init__(self, builder: _BindingRecorder, parameter: ValueRef[T]) -> None:
+        self._builder, self._parameter = builder, parameter
+
+    def to(self, supplier: T | ValueRef[T]) -> None:
+        self._builder._bind_reference(self._parameter, supplier)
 
 
 class ValueExport(Generic[T]):
@@ -87,6 +102,7 @@ class ScopeBuilder(Generic[S]):
         self._members: dict[str, Declaration] = {}
         self._exports = dict(effective.exports)
         self._bindings: dict[str, object] = {}
+        self._parameter_bindings: dict[ValueRef[object], object] = {}
         self._sealed = False
         self._template: type[S] | None = None
         self._failure: Exception | None = None
@@ -238,7 +254,39 @@ class ScopeBuilder(Generic[S]):
         self._exports[key] = source
 
     def bind(self, parameter: Param[T], supplier: T | ValueRef[T]) -> None:
+        """Bind an invariant direct Param declaration."""
+        self._bind_reference(parameter, supplier)
+
+    def binding(self, parameter: ValueRef[T]) -> BindingTarget[T]:
+        """Bind a typed nested slot with ``builder.binding(target).to(value)``."""
         self._open()
+        if not isinstance(parameter, (Param, ScopedValueRef)):
+            raise DefinitionError("extension bindings require direct or scoped Param references")
+        return BindingTarget(self, parameter)
+
+    def _bind_reference(self, parameter: ValueRef[object], supplier: object) -> None:
+        self._open()
+        if isinstance(parameter, ScopedValueRef):
+            if parameter in self._parameter_bindings:
+                raise DefinitionError(f"{self._name}: parameter is already bound")
+            semantics = parameter.semantics
+            if semantics is not None:
+                if isinstance(supplier, ValueRef):
+                    if supplier.semantics is not None and not semantics.is_compatible_with(
+                        cast(ValueSemantics[object], supplier.semantics)
+                    ):
+                        raise DefinitionError(
+                            f"{self._name}: incompatible supplier value semantics"
+                        )
+                else:
+                    try:
+                        supplier = semantics.freeze(supplier)
+                    except Exception as cause:
+                        raise DefinitionError(
+                            f"{self._name}: invalid nested literal binding"
+                        ) from cause
+            self._parameter_bindings[parameter] = supplier
+            return
         if not isinstance(parameter, Param):
             raise DefinitionError("extension bindings require a Param declaration")
         name = self._names_by_identity.get(id(parameter))
@@ -308,9 +356,14 @@ class ScopeBuilder(Generic[S]):
                 raise DefinitionError(
                     f"{self._name}.{name}: invalid literal binding: {cause}"
                 ) from cause
-        placement = Subspace(template, when=when, **bindings)
+        placement = Subspace(
+            template,
+            when=when,
+            bindings=self._parameter_bindings,
+            **bindings,
+        )
         collect_placement(placement)
         return placement
 
 
-__all__ = ["ScopeBuilder", "ValueExport", "ViewExport"]
+__all__ = ["BindingTarget", "ScopeBuilder", "ValueExport", "ViewExport"]

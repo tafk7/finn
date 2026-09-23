@@ -35,21 +35,21 @@ from finn.kernels.artifacts.requirements import (
     ModuleBuildRequirements,
 )
 from finn.kernels.target import DspBlock, dsp_widths
-from finn.kernels.base import Kernel
-from finn.kernels.datatypes.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
+from finn.kernels._next_base import Kernel
+from finn.kernels.datatypes._next_semantics import QONNX_DATATYPE_VALUE_SEMANTICS
 from finn.kernels.datatypes.values import (
     DatatypeError,
     QONNXDataType,
     ordinary_integer_bounds,
     qonnx_datatype_width,
 )
-from finn.kernels.physical.axi_stream import AxiStream
-from finn.kernels.space import (
+from finn.kernels.physical.axi_stream import AxiStream, AxiStreamInterface
+from finn.kernels.space._next import (
     ConstraintGroup,
     Decision,
-    Input,
+    Param,
+    Rejected,
     View,
-    Readiness,
     constraint,
     derived,
     reject,
@@ -69,52 +69,53 @@ class DotpAxiKernel(Kernel):
     id = "exact_integer_dot_product_axi"
     version = "2"
 
-    pe = Input(int)
-    simd = Input(int)
-    activation_dtype = Input(QONNX_DATATYPE_VALUE_SEMANTICS)
-    weights_dtype = Input(QONNX_DATATYPE_VALUE_SEMANTICS)
-    result_dtype = Input(QONNX_DATATYPE_VALUE_SEMANTICS)
-    target_dsp = Input(DspBlock)
-    segment_length = Input(int)
+    pe = Param(int)
+    simd = Param(int)
+    target_dsp = Param(DspBlock)
+    segment_length = Param(int)
     compute_pumping = Decision(bool, values=(False, True))
 
-    @derived(AxiStream, dtype=activation_dtype, simd=simd)
-    def activation(*, dtype: QONNXDataType, simd: int) -> object:
-        try:
-            return AxiStream("s_axis_input", dtype, simd, endpoint=Endpoint.TARGET, last=True)
-        except ValueError as error:
-            return reject("dotp-interface", str(error))
-
-    @derived(AxiStream, dtype=weights_dtype, pe=pe, simd=simd)
-    def weights(*, dtype: QONNXDataType, pe: int, simd: int) -> object:
-        try:
-            return AxiStream("s_axis_weights", dtype, pe * simd, endpoint=Endpoint.TARGET)
-        except ValueError as error:
-            return reject("dotp-interface", str(error))
-
-    @derived(AxiStream, dtype=result_dtype, pe=pe)
-    def result(*, dtype: QONNXDataType, pe: int) -> object:
-        try:
-            return AxiStream("m_axis_output", dtype, pe, endpoint=Endpoint.INITIATOR)
-        except ValueError as error:
-            return reject("dotp-interface", str(error))
+    activation = AxiStreamInterface(
+        "s_axis_input",
+        simd,
+        Endpoint.TARGET,
+        True,
+        dtype=Param(QONNX_DATATYPE_VALUE_SEMANTICS),
+        error_code="dotp-interface",
+    )
+    weights = AxiStreamInterface(
+        "s_axis_weights",
+        pe * simd,
+        Endpoint.TARGET,
+        False,
+        dtype=Param(QONNX_DATATYPE_VALUE_SEMANTICS),
+        error_code="dotp-interface",
+    )
+    result = AxiStreamInterface(
+        "m_axis_output",
+        pe,
+        Endpoint.INITIATOR,
+        False,
+        dtype=Param(QONNX_DATATYPE_VALUE_SEMANTICS),
+        error_code="dotp-interface",
+    )
 
     @constraint(target=target_dsp)
-    def target_supported(*, target: DspBlock) -> object:
+    def target_supported(*, target: DspBlock) -> bool | Rejected:
         if target not in _DSP_VERSION:
             return reject("dotp-target", "the RTL has no implementation for this DSP target")
         return True
 
     @constraint(pe=pe, simd=simd)
-    def geometry_supported(*, pe: int, simd: int) -> object:
+    def geometry_supported(*, pe: int, simd: int) -> bool | Rejected:
         if pe < 1 or simd < 1:
             return reject("dotp-geometry", "PE and SIMD must be positive integers")
         return True
 
-    @constraint(target=target_dsp, activation=activation_dtype, weight=weights_dtype)
+    @constraint(target=target_dsp, activation=activation.dtype, weight=weights.dtype)
     def input_types_supported(
         *, target: DspBlock, activation: QONNXDataType, weight: QONNXDataType
-    ) -> object:
+    ) -> bool | Rejected:
         try:
             ordinary_integer_bounds(activation)
         except DatatypeError as error:
@@ -137,8 +138,8 @@ class DotpAxiKernel(Kernel):
             )
         return True
 
-    @constraint(result=result_dtype, target=target_dsp)
-    def accumulator_width_supported(*, result: QONNXDataType, target: DspBlock) -> object:
+    @constraint(result=result.dtype, target=target_dsp)
+    def accumulator_width_supported(*, result: QONNXDataType, target: DspBlock) -> bool | Rejected:
         if not result.name.startswith("INT"):
             return reject(
                 "dotp-result-type", "the accumulator requires an ordinary signed INT dtype"
@@ -153,7 +154,7 @@ class DotpAxiKernel(Kernel):
         return True
 
     @constraint(pumping=compute_pumping, simd=simd)
-    def pumping_supported(*, pumping: bool, simd: int) -> object:
+    def pumping_supported(*, pumping: bool, simd: int) -> bool | Rejected:
         if pumping and simd < 2:
             return reject("dotp-pumping", "pumping must be boolean and requires SIMD >= 2")
         return True
@@ -161,7 +162,7 @@ class DotpAxiKernel(Kernel):
     @constraint(target=target_dsp, segment=segment_length, simd=simd, pumping=compute_pumping)
     def segment_length_supported(
         *, target: DspBlock, segment: int, simd: int, pumping: bool
-    ) -> object:
+    ) -> bool | Rejected:
         products_per_stage = 6 if pumping else 3
         chain_length = (simd + products_per_stage - 1) // products_per_stage
         if segment < 0 or (target is DspBlock.DSP58 and segment > chain_length):
@@ -178,12 +179,11 @@ class DotpAxiKernel(Kernel):
     )
 
     @derived(
-        ModuleBuildRequirements,
         pe=pe,
         simd=simd,
-        activation=activation,
-        weights=weights,
-        result=result,
+        activation=activation.accepted_stream,
+        weights=weights.accepted_stream,
+        result=result.accepted_stream,
         target_dsp=target_dsp,
         segment_length=segment_length,
         compute_pumping=compute_pumping,
@@ -274,8 +274,7 @@ class DotpAxiKernel(Kernel):
             DotpAxiKernel.id, DotpAxiKernel.version, parameters, abi, sources
         )
 
-    physical_ready = Readiness()
-    physical = View(codegen, readiness=physical_ready, constraints=support)
+    physical = View(codegen, constraints=(support,))
 
 
 __all__ = ["DotpAxiKernel"]

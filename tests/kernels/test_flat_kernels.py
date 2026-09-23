@@ -14,7 +14,7 @@ from qonnx.core.datatype import DataType
 import pyslang
 from pyslang import ast, syntax
 
-from kernels.helpers import point_for, value
+from kernels._next_helpers import point_for, value
 from finn.kernels import (
     EltwiseKernel,
     FifoKernel,
@@ -23,7 +23,6 @@ from finn.kernels import (
     MemStreamHlsKernel,
     ThresholdingAxiKernel,
 )
-from finn.kernels._engine import Absent, RequestError, Unresolved
 from finn.kernels.artifacts.abi import Bus
 from finn.kernels.artifacts.build import prepare_module_build, render_module_sources
 from finn.kernels.artifacts.contribution_types import CopiedSource
@@ -31,8 +30,9 @@ from finn.kernels.artifacts.hls import render_hls_sources
 from finn.kernels.artifacts.rtl import TOLERATED_DIAGNOSTICS
 from finn.kernels.artifacts.store import ArtifactStore
 from finn.kernels.resources import resource_root, template_root
-from finn.kernels.space import AuthoringError, Subspace, SubspaceChoice
-from finn.kernels.space.declarations import declared_members
+from finn.kernels.datatypes._next_semantics import QONNX_DATATYPE_VALUE_SEMANTICS
+from finn.kernels.space._next import Param, Rejected, Space, Subspace, Unresolved
+from finn.kernels.space._next.errors import RequestError
 from finn.kernels.target import DspBlock
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -151,7 +151,7 @@ def native_ports(requirements, tmp_path):
 )
 def test_native_rtl_pin_names_directions_and_widths(factory, tmp_path):
     point = factory()
-    requirements = value(point.physical.accepted_answer)
+    requirements = value(point.physical().accepted_answer)
     observed = native_ports(requirements, tmp_path)
     declared = {}
     for port in requirements.abi.ports:
@@ -211,12 +211,13 @@ def test_native_rtl_pin_names_directions_and_widths(factory, tmp_path):
     ],
 )
 def test_unsupported_cases_are_refused_without_constructing_invalid_interfaces(factory):
-    assert isinstance(factory().physical.accepted_answer, Absent)
+    assert isinstance(factory().physical().accepted_answer, Rejected)
 
 
 def test_typed_integer_vectors_and_tables_reject_mutable_or_mistyped_payloads():
-    with pytest.raises(AuthoringError, match="finite"):
-        eltwise(b_scale=float("nan"))
+    invalid_scale = eltwise(b_scale=float("nan"))
+    assert isinstance(invalid_scale.answer(EltwiseKernel.native_scale), Rejected)
+    assert isinstance(invalid_scale.physical().accepted_answer, Rejected)
     for bad in ([3, 6], (3, True), (3, [6])):
         with pytest.raises(RequestError):
             generator(extents=bad)
@@ -238,26 +239,26 @@ def test_typed_integer_vectors_and_tables_reject_mutable_or_mistyped_payloads():
 )
 def test_elementwise_output_encoding_follows_operation_and_operand_types(operation, a, b, result):
     point = eltwise(operation=operation, lhs_dtype=DataType[a], rhs_dtype=DataType[b])
-    value(point.physical.accepted_answer)
+    value(point.physical().accepted_answer)
     assert point.result_dtype == DataType[result]
 
 
 def test_rounding_of_scale_is_explicit_and_precedes_native_support_checks():
     point = eltwise(b_scale=1.0 + 2**-30)
     assert point.native_scale == 1.0
-    assert dict(value(point.physical.accepted_answer).parameters)["B_SCALE"] == "1.0"
+    assert dict(value(point.physical().accepted_answer).parameters)["B_SCALE"] == "1.0"
 
 
 def test_threshold_initialization_is_owned_and_changes_the_build_requirements():
-    a = value(threshold().physical.accepted_answer)
-    b = value(threshold(thresholds=(((-2, 0, 2), (-1, 1, 4)),)).physical.accepted_answer)
+    a = value(threshold().physical().accepted_answer)
+    b = value(threshold(thresholds=(((-2, 0, 2), (-1, 1, 4)),)).physical().accepted_answer)
     assert dict(a.parameters)["THRESHOLDS"] == "'{'{'{5'h1e, 5'h0, 5'h3}, '{5'h1f, 5'h1, 5'h4}}}"
     assert a != b
     assert threshold().result_dtype == DataType["INT3"]
     assert threshold(bias=0).result_dtype == DataType["UINT2"]
 
 
-def test_kernels_are_flat_and_partial_queries_do_not_require_unrelated_values():
+def test_required_root_bindings_and_explicit_optional_inputs_preserve_partial_queries():
     for kernel in (
         FifoKernel,
         InputGeneratorKernel,
@@ -266,17 +267,22 @@ def test_kernels_are_flat_and_partial_queries_do_not_require_unrelated_values():
         ThresholdingAxiKernel,
         MemStreamHlsKernel,
     ):
-        assert not any(
-            isinstance(member, (Subspace, SubspaceChoice)) for _, member in declared_members(kernel)
+        with pytest.raises(RequestError):
+            point_for(kernel, {})
+
+    class OptionalConverter(Space):
+        converter = Subspace(
+            IntToFp32Kernel,
+            input_dtype=Param(QONNX_DATATYPE_VALUE_SEMANTICS, required=False),
         )
-        assert not hasattr(kernel, "region")
-    point = point_for(IntToFp32Kernel, {})
+
+    point = OptionalConverter.start().converter
     assert point.result_dtype == DataType["FLOAT32"]
-    assert isinstance(point.physical.accepted_answer, Unresolved)
+    assert isinstance(point.physical().accepted_answer, Unresolved)
     assert all(
-        not isinstance(port, Bus) for port in value(fifo().physical.accepted_answer).abi.ports
+        not isinstance(port, Bus) for port in value(fifo().physical().accepted_answer).abi.ports
     )
-    assert {port.name for port in value(converter().physical.accepted_answer).abi.ports} == {
+    assert {port.name for port in value(converter().physical().accepted_answer).abi.ports} == {
         "ival",
         "fval",
     }
@@ -295,7 +301,7 @@ def test_hls_sources_have_native_function_interfaces_and_complete_header_closure
     dtype, cpp, tmp_path
 ):
     point = memstream(dtype=dtype)
-    requirements = value(point.physical.accepted_answer)
+    requirements = value(point.physical().accepted_answer)
     assert point.cpp_type == cpp
     assert not hasattr(requirements, "abi")
     assert [(p.name, p.cpp_type, p.shape, p.mode) for p in requirements.interfaces] == [
@@ -315,7 +321,7 @@ def test_hls_sources_have_native_function_interfaces_and_complete_header_closure
 
 
 def test_generated_hls_top_executes_signed_values_and_wraps_with_real_vendor_headers(tmp_path):
-    requirements = value(memstream().physical.accepted_answer)
+    requirements = value(memstream().physical().accepted_answer)
     files = render_hls_sources(
         requirements, roots={"finnlib": FINNLIB}, template_roots=(template_root(),)
     )
@@ -475,7 +481,7 @@ def flow_case(case):
 @pytest.mark.parametrize("case", ("fifo", "generator", "threshold", "integer", "float"))
 def test_generated_rtl_preserves_values_sequences_and_backpressure(case, tmp_path):
     point, a_width, b_width, o_width, a, b, expected, extra, connections = flow_case(case)
-    requirements = value(point.physical.accepted_answer)
+    requirements = value(point.physical().accepted_answer)
 
     def array(values, width):
         return "'{" + ",".join(f"{width}'h{item:x}" for item in values) + "}"
@@ -531,7 +537,7 @@ endmodule
     reason="Vivado simulation is unavailable",
 )
 def test_combinational_conversion_uses_round_toward_zero(tmp_path):
-    requirements = value(converter("INT32").physical.accepted_answer)
+    requirements = value(converter("INT32").physical().accepted_answer)
     body = """module numeric;
     logic [31:0] ival; wire [31:0] fval;
     @DUT@ dut(.ival, .fval);

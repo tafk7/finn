@@ -119,7 +119,7 @@ def resolve_reference(
             raise RequestError("a Param alias is not a locally owned Decision")
     if require_view and node.kind != "view":
         raise RequestError("an accepted reference must name a view")
-    if decision_scope is not None and (node.kind != "decision" or node.scope != decision_scope):
+    if decision_scope is not None and (node.kind != "decision" or node.scope != scope):
         raise RequestError("a Param alias is not a locally owned Decision")
     return index
 
@@ -184,6 +184,15 @@ class _MemberTask:
     name: str
     declaration: Declaration
     binding: PlacementBinding | None
+    binding_scope: int | None = None
+
+
+@dataclass(frozen=True)
+class _ParameterOverride:
+    scope: int
+    source_scope: int
+    reference: ValueRef[object]
+    binding: PlacementBinding
 
 
 @dataclass(frozen=True)
@@ -227,6 +236,8 @@ class _Linker:
         self.drafts: list[_ScopeDraft] = []
         self.choice_drafts: list[_ChoiceDraft] = []
         self.members: list[_MemberTask] = []
+        self.member_positions: dict[int, int] = {}
+        self.parameter_overrides: list[_ParameterOverride] = []
         self.guards: list[_GuardTask] = []
         self.argument_checks: list[tuple[BoundArgument, int, str]] = []
         self.expression_nodes: dict[tuple[int, Expr], int] = {}
@@ -328,7 +339,8 @@ class _Linker:
         placement: Subspace[Space] | None = None,
     ) -> int:
         index = len(self.drafts)
-        bindings = collect_placement(placement).bindings if placement is not None else {}
+        plan = collect_placement(placement) if placement is not None else None
+        bindings = plan.bindings if plan is not None else {}
         draft = _ScopeDraft(
             index,
             parent,
@@ -339,6 +351,11 @@ class _Linker:
             bindings,
         )
         self.drafts.append(draft)
+        if plan is not None:
+            self.parameter_overrides.extend(
+                _ParameterOverride(index, draft.source_scope, item.reference, item.binding)
+                for item in plan.nested_bindings
+            )
         for member_name, record in draft.effective.members.items():
             declaration = record.declaration
             if isinstance(declaration, (Subspace, SubspaceChoice)):
@@ -381,6 +398,7 @@ class _Linker:
                 guard=guard,
             )
             draft.named_members[member_name] = node
+            self.member_positions[node] = len(self.members)
             self.members.append(_MemberTask(node, index, member_name, declaration, binding))
         for declaration, member_name in draft.effective.aliases.items():
             if member_name in draft.named_members:
@@ -483,6 +501,43 @@ class _Linker:
                     self.choice(scope, name, declaration)
         self.scopes = tuple(draft.freeze() for draft in self.drafts)
         self.choices = tuple(choice.freeze() for choice in self.choice_drafts)
+
+    def apply_parameter_overrides(self) -> None:
+        """Bind exposed leaf slots from inner definitions to enclosing placements.
+
+        Node and scope identities are already allocated. Only binding records
+        change here, before domain/evaluator linking. Each supplier retains the
+        scope where its outer placement was authored.
+        """
+
+        seen: set[tuple[int, int]] = set()
+        for override in sorted(self.parameter_overrides, key=lambda item: item.scope, reverse=True):
+            owner = self.scopes[override.scope].name
+            target = self.reference(override.scope, override.reference, owner=owner)
+            identity = (override.scope, target)
+            if identity in seen:
+                raise DefinitionError(f"{owner}: duplicate nested parameter binding")
+            seen.add(identity)
+            node = self.nodes[target]
+            if node.kind != "param":
+                raise DefinitionError(f"{node.key}: nested target is not deliberately exposed")
+            position = self.member_positions[target]
+            task = self.members[position]
+            self.members[position] = replace(
+                task,
+                binding=override.binding,
+                binding_scope=override.source_scope,
+            )
+            kind = cast(
+                NodeKind,
+                {
+                    "literal": "const",
+                    "reference": "alias",
+                    "exposed-param": "param",
+                    "local-decision": "decision",
+                }[override.binding.kind],
+            )
+            self.nodes[target] = replace(node, kind=kind)
 
     def reference(self, scope: int, source: object, *, owner: str) -> int:
         if isinstance(source, Expr) and source.owner is None:
@@ -684,7 +739,7 @@ class _Linker:
         source_scope = scope.index
         if task.binding is not None:
             binding = task.binding
-            source_scope = scope.source_scope
+            source_scope = scope.source_scope if task.binding_scope is None else task.binding_scope
             if binding.kind == "literal":
                 self.nodes[node.index] = replace(node, value=binding.supplier)
                 return
@@ -882,6 +937,7 @@ class _Linker:
     def build(self) -> LinkedModel:
         self.collect()
         self.allocate()
+        self.apply_parameter_overrides()
         for task in self.members:
             self.link_member(task)
         for guard_task in self.guards:

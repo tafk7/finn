@@ -37,13 +37,9 @@ from finn.kernels.artifacts.build import (
 )
 from finn.kernels.artifacts.derivation import ProducerIdentity
 from finn.kernels.dotp import DotpAxiKernel
-from finn.kernels._engine import Decided, RequestError
 from finn.kernels.streaming import cyclic_stream_requirements, replay_buffer_requirements
 from finn.kernels.target import DspBlock
-from finn.kernels.datatypes.semantics import (
-    QONNX_DATATYPE_VALUE_SEMANTICS,
-    QONNX_DATATYPE_CODEC,
-)
+from finn.kernels.datatypes._next_semantics import QONNX_DATATYPE_VALUE_SEMANTICS
 from finn.kernels.datatypes.values import (
     QONNXDataType,
     canonical_qonnx_datatype,
@@ -60,11 +56,12 @@ from finn.kernels.physical.structure import (
     PinSlice,
     UnusedOutput,
 )
-from finn.kernels.space import (
+from finn.kernels.space._next import (
+    Answer,
     ConstraintGroup,
+    Decided,
     Decision,
-    Input,
-    Problem,
+    Param,
     Space,
     Subspace,
     constraint,
@@ -72,6 +69,7 @@ from finn.kernels.space import (
     divisors_of,
     reject,
 )
+from finn.kernels.space._next.errors import RequestError
 
 
 class WeightDelivery(Enum):
@@ -360,48 +358,47 @@ def _wire_mvau(
 
 
 class MVAU(Space):
-    """Workload inputs, folding/delivery choices, and a bound dotp child Space."""
+    """Workload parameters, folding/delivery choices, and a bound dotp child Space."""
 
-    repetitions = Input(int)
-    matrix_width = Input(int)
-    matrix_height = Input(int)
-    activation_dtype = Input(QONNX_DATATYPE_VALUE_SEMANTICS)
-    weights_dtype = Input(QONNX_DATATYPE_VALUE_SEMANTICS)
-    target_dsp = Input(DspBlock)
-    segment_length = Input(int)
+    repetitions = Param(int)
+    matrix_width = Param(int)
+    matrix_height = Param(int)
+    activation_dtype = Param(QONNX_DATATYPE_VALUE_SEMANTICS)
+    weights_dtype = Param(QONNX_DATATYPE_VALUE_SEMANTICS)
+    target_dsp = Param(DspBlock)
+    segment_length = Param(int)
     pe = Decision(int, domain=divisors_of(matrix_height))
     simd = Decision(int, domain=divisors_of(matrix_width))
     weight_delivery = Decision(WeightDelivery, values=tuple(WeightDelivery))
 
-    @derived(
-        QONNX_DATATYPE_VALUE_SEMANTICS,
-        width=matrix_width,
-        activation=activation_dtype,
-        weights=weights_dtype,
-    )
-    def result_type(*, width: int, activation: QONNXDataType, weights: QONNXDataType) -> object:
+    @derived(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
+    def result_type(
+        *, matrix_width: int, activation_dtype: QONNXDataType, weights_dtype: QONNXDataType
+    ) -> Answer[QONNXDataType]:
         try:
-            return exact_result_dtype(width, activation, weights)
+            return Decided(exact_result_dtype(matrix_width, activation_dtype, weights_dtype))
         except ValueError as error:
             return reject("mvau-arithmetic", str(error))
 
-    @constraint(repetitions=repetitions, width=matrix_width, height=matrix_height, pe=pe, simd=simd)
+    @constraint
     def dimensions_supported(
-        *, repetitions: int, width: int, height: int, pe: int, simd: int
-    ) -> object:
+        *, repetitions: int, matrix_width: int, matrix_height: int, pe: int, simd: int
+    ) -> Answer[bool]:
         try:
-            _Traversal(repetitions, width, height, pe, simd)
+            _Traversal(repetitions, matrix_width, matrix_height, pe, simd)
         except ValueError as error:
             return reject("mvau-folding", str(error))
-        return True
+        return Decided(True)
 
     compute = Subspace(
         DotpAxiKernel,
+        bindings={
+            DotpAxiKernel.activation.dtype: activation_dtype,
+            DotpAxiKernel.weights.dtype: weights_dtype,
+            DotpAxiKernel.result.dtype: result_type,
+        },
         pe=pe,
         simd=simd,
-        activation_dtype=activation_dtype,
-        weights_dtype=weights_dtype,
-        result_dtype=result_type,
         target_dsp=target_dsp,
         segment_length=segment_length,
     )
@@ -409,7 +406,7 @@ class MVAU(Space):
     dimensions = ConstraintGroup(dimensions_supported)
 
     def assemble(self, weights: Sequence[Sequence[int]] | None = None) -> MVAUAssembly:
-        accepted = self.compute.physical.accepted_answer
+        accepted = self.compute.physical().accepted_answer
         if not isinstance(accepted, Decided):
             details = "; ".join(
                 f"{finding.code}: {finding.message}" for finding in accepted.findings
@@ -430,28 +427,6 @@ class MVAU(Space):
         )
 
 
-class _MVAURequest(Space):
-    """Concrete external facts for the ordinary assembly entry point."""
-
-    repetitions = Problem(int)
-    matrix_width = Problem(int)
-    matrix_height = Problem(int)
-    activation_dtype = Problem(QONNX_DATATYPE_VALUE_SEMANTICS, canonical=QONNX_DATATYPE_CODEC)
-    weights_dtype = Problem(QONNX_DATATYPE_VALUE_SEMANTICS, canonical=QONNX_DATATYPE_CODEC)
-    target_dsp = Problem(DspBlock)
-    segment_length = Problem(int)
-    kernel = Subspace(
-        MVAU,
-        repetitions=repetitions,
-        matrix_width=matrix_width,
-        matrix_height=matrix_height,
-        activation_dtype=activation_dtype,
-        weights_dtype=weights_dtype,
-        target_dsp=target_dsp,
-        segment_length=segment_length,
-    )
-
-
 def mvau_assembly(
     *,
     repetitions: int,
@@ -467,30 +442,36 @@ def mvau_assembly(
     weight_delivery: WeightDelivery = WeightDelivery.EXTERNAL,
     weights: Sequence[Sequence[int]] | None = None,
 ) -> MVAUAssembly:
-    """Bind the MVAU Space, select its dotp child, and wire the accepted physical View."""
+    """Bind workload and folding choices, then wire the accepted dotp implementation."""
     try:
-        point = _MVAURequest.start(
+        point = MVAU.start(
             {
-                _MVAURequest.repetitions: repetitions,
-                _MVAURequest.matrix_width: matrix_width,
-                _MVAURequest.matrix_height: matrix_height,
-                _MVAURequest.activation_dtype: activation_dtype,
-                _MVAURequest.weights_dtype: weights_dtype,
-                _MVAURequest.target_dsp: target_dsp,
-                _MVAURequest.segment_length: segment_length,
+                MVAU.repetitions: repetitions,
+                MVAU.matrix_width: matrix_width,
+                MVAU.matrix_height: matrix_height,
+                MVAU.activation_dtype: activation_dtype,
+                MVAU.weights_dtype: weights_dtype,
+                MVAU.target_dsp: target_dsp,
+                MVAU.segment_length: segment_length,
             }
-        ).kernel
-        point = point.assign(MVAU.pe, pe).assign(MVAU.simd, simd)
-        point = point.assign(MVAU.weight_delivery, weight_delivery)
-        point = cast(
-            _MVAURequest,
-            point.compute.assign(DotpAxiKernel.compute_pumping, compute_pumping).root,
-        ).kernel
+        )
+        report = point.refine(
+            point.edit(MVAU.pe, pe),
+            point.edit(MVAU.simd, simd),
+            point.edit(MVAU.weight_delivery, weight_delivery),
+            point.compute.edit(DotpAxiKernel.compute_pumping, compute_pumping),
+        )
     except RequestError as error:
-        raise ValueError(
-            "; ".join(f"{finding.code}: {finding.message}" for finding in error.findings)
-        ) from error
-    return point.assemble(weights)
+        raise ValueError(str(error)) from error
+    if not report.accepted:
+        details = "; ".join(
+            f"{finding.code}: {finding.message}"
+            for outcome in report.outcomes
+            if not isinstance(outcome.answer, Decided)
+            for finding in outcome.answer.findings
+        )
+        raise ValueError(f"MVAU choices are not accepted: {details}")
+    return report.point.assemble(weights)
 
 
 __all__ = ["MVAU", "MVAUAssembly", "WeightDelivery", "exact_result_dtype", "mvau_assembly"]

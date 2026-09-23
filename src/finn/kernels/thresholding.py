@@ -18,7 +18,7 @@ Biases below -N-1 are refused: the native unsigned width expression creates a
 33-bit output, but the result addition zero-extends the negative 32-bit bias.
 """
 
-from finn.kernels._engine import ValueSemantics
+from finn.kernels._next_base import Kernel
 from finn.kernels.artifacts.abi import (
     Bus,
     Clock,
@@ -37,8 +37,11 @@ from finn.kernels.artifacts.requirements import (
     ModuleBuildRequirements,
     ScalarTable,
 )
-from finn.kernels.base import Kernel
-from finn.kernels.datatypes.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
+from finn.kernels.datatypes._next_semantics import (
+    QONNX_DATATYPE_VALUE_SEMANTICS,
+    THRESHOLD_TABLE,
+    ThresholdTable,
+)
 from finn.kernels.datatypes.values import (
     DatatypeError,
     QONNXDataType,
@@ -46,34 +49,15 @@ from finn.kernels.datatypes.values import (
     resolve_qonnx_datatype_name,
 )
 from finn.kernels.physical.axi_stream import AxiStream
-from finn.kernels.space import (
-    ConstraintGroup,
+from finn.kernels.space._next import (
     Decision,
-    Input,
-    Readiness,
-    View,
+    Param,
+    Rejected,
     constraint,
+    default_semantics,
     derived,
     reject,
-)
-
-ThresholdTable = tuple[tuple[tuple[int, ...], ...], ...]
-
-
-def _is_table(value: object) -> bool:
-    return type(value) is tuple and all(
-        type(table) is tuple
-        and all(type(row) is tuple and all(type(item) is int for item in row) for row in table)
-        for table in value
-    )
-
-
-THRESHOLD_TABLE: ValueSemantics[ThresholdTable] = ValueSemantics(
-    ThresholdTable,
-    "integer threshold table",
-    _is_table,
-    lambda left, right: left == right,
-    lambda value: value,
+    view,
 )
 
 
@@ -81,15 +65,30 @@ class ThresholdingAxiKernel(Kernel):
     id = "finnlib.thresholding_axi.integer"
     version = "1"
 
-    input_dtype = Input(QONNX_DATATYPE_VALUE_SEMANTICS)
-    threshold_dtype = Input(QONNX_DATATYPE_VALUE_SEMANTICS)
-    thresholds = Input(THRESHOLD_TABLE)
-    pe = Input(int)
-    bias = Input(int)
+    input_dtype = Param(QONNX_DATATYPE_VALUE_SEMANTICS)
+    threshold_dtype = Param(QONNX_DATATYPE_VALUE_SEMANTICS)
+    thresholds = Param(THRESHOLD_TABLE)
+    bias = Param(int)
+
+    @derived(semantics=QONNX_DATATYPE_VALUE_SEMANTICS, table=thresholds, bias=bias)
+    def result_dtype(*, table: ThresholdTable, bias: int) -> QONNXDataType | Rejected:
+        if not table or not table[0] or not table[0][0]:
+            return reject("threshold-shape", "a nonempty threshold table is required")
+        count = len(table[0][0])
+        if bias >= 0:
+            bits = max(1, (count + bias).bit_length())
+            return resolve_qonnx_datatype_name(f"UINT{bits}")
+        # N is unsigned in the native expression. Preserve its 32-bit arithmetic,
+        # including the extra output bits when the whole result range is negative.
+        candidate = max((-bias) & 0xFFFFFFFF, (count + bias + 1) & 0xFFFFFFFF)
+        bits = 1 + (candidate - 1).bit_length()
+        return resolve_qonnx_datatype_name(f"INT{bits}")
+
+    pe = Param(int)
     use_axilite = Decision(bool, values=(False, True))
     deep_pipeline = Decision(bool, values=(False, True))
-    depth_trigger_bram = Input(int)
-    depth_trigger_uram = Input(int)
+    depth_trigger_bram = Param(int)
+    depth_trigger_uram = Param(int)
 
     @constraint(
         table=thresholds,
@@ -111,7 +110,7 @@ class ThresholdingAxiKernel(Kernel):
         bram: int,
         uram: int,
         bias: int,
-    ) -> object:
+    ) -> bool | Rejected:
         if not table or not table[0] or not table[0][0] or pe < 1:
             return reject(
                 "threshold-shape", "nonempty sets/channels/thresholds and positive PE are required"
@@ -159,22 +158,9 @@ class ThresholdingAxiKernel(Kernel):
             )
         return True
 
-    @derived(QONNX_DATATYPE_VALUE_SEMANTICS, table=thresholds, bias=bias)
-    def result_dtype(*, table: ThresholdTable, bias: int) -> object:
-        if not table or not table[0] or not table[0][0]:
-            return reject("threshold-shape", "a nonempty threshold table is required")
-        count = len(table[0][0])
-        if bias >= 0:
-            bits = max(1, (count + bias).bit_length())
-            return resolve_qonnx_datatype_name(f"UINT{bits}")
-        # N is unsigned in the native expression. Preserve its 32-bit arithmetic,
-        # including the extra output bits when the whole result range is negative.
-        candidate = max((-bias) & 0xFFFFFFFF, (count + bias + 1) & 0xFFFFFFFF)
-        bits = 1 + (candidate - 1).bit_length()
-        return resolve_qonnx_datatype_name(f"INT{bits}")
-
-    @derived(
-        ModuleBuildRequirements,
+    @view(
+        semantics=default_semantics(ModuleBuildRequirements),
+        constraints=(implementation_supported,),
         table=thresholds,
         pe=pe,
         a=input_dtype,
@@ -186,7 +172,7 @@ class ThresholdingAxiKernel(Kernel):
         bram=depth_trigger_bram,
         uram=depth_trigger_uram,
     )
-    def codegen(
+    def physical(
         *,
         table: ThresholdTable,
         pe: int,
@@ -198,7 +184,7 @@ class ThresholdingAxiKernel(Kernel):
         deep: bool,
         bram: int,
         uram: int,
-    ) -> object:
+    ) -> ModuleBuildRequirements | Rejected:
         if pe < 1:
             return reject("threshold-interface", "PE must be positive")
         sets, channels, count = len(table), len(table[0]), len(table[0][0])
@@ -308,10 +294,6 @@ class ThresholdingAxiKernel(Kernel):
         return ModuleBuildRequirements(
             ThresholdingAxiKernel.id, ThresholdingAxiKernel.version, parameters, abi, sources
         )
-
-    support = ConstraintGroup(implementation_supported)
-    physical_ready = Readiness()
-    physical = View(codegen, readiness=physical_ready, constraints=support)
 
 
 __all__ = ["ThresholdingAxiKernel"]

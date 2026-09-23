@@ -8,14 +8,14 @@ from pathlib import Path
 import pytest
 from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 
-from kernels.helpers import assess, point_for, value
-from finn.kernels._engine import Absent, Decided, Unresolved
+from kernels._next_helpers import assess, point_for, value
+from finn.kernels.space._next import Decided, Rejected, Unresolved
 from finn.kernels.artifacts.abi import Bus
 from finn.kernels.artifacts.build import prepare_module_build, render_module_sources
 from finn.kernels.artifacts.store import ArtifactStore
 from finn.kernels.mvau import MVAU, WeightDelivery, exact_result_dtype, mvau_assembly
 from finn.kernels.dotp import DotpAxiKernel
-from finn.kernels.space import ConstraintGroup, Projection, constraint, reject
+from finn.kernels.space._next import Subspace, View, constraint, reject
 from finn.kernels.target import DspBlock
 from finn.kernels.physical.structure import ConstantBits, PhysicalPin, PinSlice
 from finn.kernels.resources import resource_root, template_root
@@ -118,8 +118,8 @@ def test_precision_covers_full_ranges_and_is_minimal(activation, weight, length,
 @pytest.mark.parametrize(
     "changes,match",
     [
-        ({"pe": 3}, "candidate-outside-domain"),
-        ({"simd": 3}, "candidate-outside-domain"),
+        ({"pe": 3}, "domain-membership"),
+        ({"simd": 3}, "domain-membership"),
         ({"repetitions": 0}, "positive"),
         ({"matrix_width": 1 << 48}, "dotp-accumulator-width"),
         ({"weight_delivery": "external"}, "WeightDelivery"),
@@ -150,19 +150,17 @@ def test_space_selects_folding_and_constructs_without_a_logical_contract():
         weight_delivery=WeightDelivery.EXTERNAL,
     )
     point = base.assign(MVAU.simd, 2)
-    assert isinstance(point.compute.physical.accepted_answer, Unresolved)
-    point = point.compute.assign(DotpAxiKernel.compute_pumping, False).root.kernel
+    assert isinstance(point.compute.physical().accepted_answer, Unresolved)
+    point = point.compute.assign(DotpAxiKernel.compute_pumping, False).root
     assert point.result_type == DataType["INT8"]
     assert value(assess(point, MVAU.dimensions_supported)) is True
     assert point.compute.pe == point.pe
-    assert point.compute.result_dtype == point.result_type
-    value(point.compute.physical.accepted_answer)
+    assert point.compute.result.dtype == point.result_type
+    value(point.compute.physical().accepted_answer)
     assert point.assemble().result_beats == 4
     assert not hasattr(MVAU, "contract")
-    refused = (
-        base.assign(MVAU.simd, 1).compute.assign(DotpAxiKernel.compute_pumping, True).root.kernel
-    )
-    assert isinstance(refused.compute.physical.accepted_answer, Absent)
+    refused = base.assign(MVAU.simd, 1).compute.assign(DotpAxiKernel.compute_pumping, True).root
+    assert isinstance(refused.compute.physical().accepted_answer, Rejected)
     with pytest.raises(ValueError, match="dotp-pumping"):
         refused.assemble()
 
@@ -198,24 +196,31 @@ def test_build_is_complete_and_initializer_changes_identity(tmp_path, delivery):
 
 
 def test_mvau_honors_the_child_physical_view_not_just_its_raw_module(monkeypatch):
-    @constraint()
-    def view_only_rule():
-        return reject("test-view-only", "this physical View refuses the selected implementation")
+    class RestrictedDotp(DotpAxiKernel):
+        @constraint
+        def view_only_rule() -> bool | Rejected:
+            return reject(
+                "test-view-only", "this physical View refuses the selected implementation"
+            )
 
-    checks = ConstraintGroup(view_only_rule)
-    monkeypatch.setattr(DotpAxiKernel, "view_only_rule", view_only_rule, raising=False)
-    monkeypatch.setattr(DotpAxiKernel, "view_only_checks", checks, raising=False)
-    monkeypatch.setattr(
-        DotpAxiKernel,
-        "physical",
-        Projection(
-            DotpAxiKernel.codegen,
-            readiness=DotpAxiKernel.physical_ready,
-            constraints=(DotpAxiKernel.support, checks),
-        ),
-    )
+        physical = View(DotpAxiKernel.codegen, constraints=(DotpAxiKernel.support, view_only_rule))
+
+    class RestrictedMVAU(MVAU):
+        compute = Subspace(
+            RestrictedDotp,
+            bindings={
+                RestrictedDotp.activation.dtype: MVAU.activation_dtype,
+                RestrictedDotp.weights.dtype: MVAU.weights_dtype,
+                RestrictedDotp.result.dtype: MVAU.result_type,
+            },
+            pe=MVAU.pe,
+            simd=MVAU.simd,
+            target_dsp=MVAU.target_dsp,
+            segment_length=MVAU.segment_length,
+        )
+
     point = point_for(
-        MVAU,
+        RestrictedMVAU,
         dict(
             repetitions=2,
             matrix_width=4,
@@ -229,10 +234,13 @@ def test_mvau_honors_the_child_physical_view_not_just_its_raw_module(monkeypatch
         simd=2,
         weight_delivery=WeightDelivery.EXTERNAL,
     )
-    point = point.compute.assign(DotpAxiKernel.compute_pumping, False).root.kernel
+    point = point.compute.assign(DotpAxiKernel.compute_pumping, False).root
     assert isinstance(point.compute.answer(DotpAxiKernel.codegen), Decided)
-    assert isinstance(point.compute.physical.accepted_answer, Absent)
+    assert isinstance(point.compute.physical().accepted_answer, Rejected)
     with pytest.raises(ValueError, match="test-view-only"):
         point.assemble()
+    # Substitute a fully authored family to exercise the convenience entry
+    # point through the same accepted-view path, without mutating declarations.
+    monkeypatch.setattr("finn.kernels.mvau.MVAU", RestrictedMVAU)
     with pytest.raises(ValueError, match="test-view-only"):
         assembly()
