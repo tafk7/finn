@@ -343,14 +343,16 @@ class BoundView(Generic[T]):
     def __init__(self, instance: Space, declaration: View[T]) -> None:
         self.instance, self.declaration = instance, declaration
 
-    def __call__(self) -> ViewAssessment[T]:
-        return self.instance.assess(self.declaration)
+    def __call__(self) -> T:
+        from .occurrence import read_value
 
-    def assess(self) -> ViewAssessment[T]:
-        return self()
+        return read_value(self.instance, self.declaration)
 
-    def result(self) -> QueryResult[T]:
-        return self().accepted_result
+    def inspect(self) -> ViewAssessment[T]:
+        return self.instance.inspect(self.declaration)
+
+    def query(self) -> QueryResult[T]:
+        return self.instance.query(self.declaration)
 
 
 class BoundValue(Generic[T]):
@@ -359,7 +361,12 @@ class BoundValue(Generic[T]):
     def __init__(self, instance: Space, reference: ValueRef[T]) -> None:
         self.instance, self.reference = instance, reference
 
-    def result(self) -> QueryResult[T]:
+    def get(self) -> T:
+        from .occurrence import read_value
+
+        return read_value(self.instance, self.reference)
+
+    def query(self) -> QueryResult[T]:
         return self.instance.query(self.reference)
 
 
@@ -390,11 +397,16 @@ class BoundViewField(Generic[T]):
     def __init__(self, instance: Space, reference: View[T]) -> None:
         self.instance, self.reference = instance, reference
 
-    def assess(self) -> ViewAssessment[T]:
-        return self.instance.assess(self.reference)
+    def get(self) -> T:
+        from .occurrence import read_value
 
-    def result(self) -> QueryResult[T]:
-        return self.assess().accepted_result
+        return read_value(self.instance, self.reference)
+
+    def inspect(self) -> ViewAssessment[T]:
+        return self.instance.inspect(self.reference)
+
+    def query(self) -> QueryResult[T]:
+        return self.instance.query(self.reference)
 
 
 class View(Declaration, Generic[T]):
@@ -763,20 +775,25 @@ class Space(metaclass=SpaceMeta):
         return query(self, value)
 
     @overload
-    def assess(self, view: View[T]) -> ViewAssessment[T]: ...
+    def inspect(self, view: View[T]) -> ViewAssessment[T]: ...
 
     @overload
-    def assess(self, view: Constraint | ConstraintGroup) -> ConstraintAssessment: ...
+    def inspect(self, view: Constraint | ConstraintGroup) -> ConstraintAssessment: ...
 
     @overload
-    def assess(self, view: Readiness) -> ReadinessAssessment: ...
+    def inspect(self, view: Readiness) -> ReadinessAssessment: ...
 
-    def assess(
+    def inspect(
         self, view: View[T] | Constraint | ConstraintGroup | Readiness
     ) -> ViewAssessment[T] | ConstraintAssessment | ReadinessAssessment:
-        from .occurrence import assess
+        from .occurrence import inspect
 
-        return assess(self, view)
+        return inspect(self, view)
+
+    def view(self, reference: View[T]) -> BoundView[T]:
+        from .occurrence import bind_view
+
+        return bind_view(self, reference)
 
     @overload
     def field(self, reference: Decision[T] | DecisionRef[T]) -> BoundDecision[T]: ...

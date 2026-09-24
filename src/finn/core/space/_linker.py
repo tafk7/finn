@@ -786,6 +786,7 @@ class _Linker:
             node = replace(
                 node,
                 function=function.function,
+                call_style=function.call_style,
                 arguments=self.arguments(scope.index, function, owner=node.key),
             )
         elif isinstance(declaration, ConstraintGroup):
@@ -824,6 +825,7 @@ class _Linker:
                 self.nodes[output] = replace(
                     self.nodes[output],
                     function=function.function,
+                    call_style=function.call_style,
                     arguments=self.arguments(scope.index, function, owner=node.key),
                 )
             node = replace(

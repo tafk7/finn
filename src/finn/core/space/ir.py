@@ -53,6 +53,7 @@ class Node:
     guard: int | None = None
     arguments: tuple[Argument, ...] = ()
     function: Callable[..., object] | None = None
+    call_style: Literal["explicit", "self"] = "explicit"
     value: object = None
     required: bool = True
     domain: Domain[object] | None = None
@@ -80,7 +81,7 @@ class Node:
 
     @property
     def dependencies(self) -> tuple[int, ...]:
-        """Conservative direct dependencies; never a transitive closure."""
+        """Known structural/explicit edges; self-method reads are observed at runtime."""
         refs = [arg.node for arg in (*self.arguments, *self.domain_arguments)]
         if self.guard is not None:
             refs.append(self.guard)

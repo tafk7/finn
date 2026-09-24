@@ -10,6 +10,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Literal, Union, cast, get_args, get_origin, get_type_hints
+from typing_extensions import Self
 
 from .declarations import (
     AcceptedViewRef,
@@ -37,7 +38,8 @@ from .semantics import ValueSemantics, default_semantics
 
 _RESERVED = frozenset(
     {
-        "assess",
+        "inspect",
+        "view",
         "field",
         "query",
         "root",
@@ -65,6 +67,7 @@ class BoundFunction:
     dependencies: tuple[BoundArgument, ...]
     return_type: object
     semantics: ValueSemantics[object]
+    call_style: Literal["explicit", "self"] = "explicit"
 
 
 @dataclass(frozen=True, slots=True)
@@ -271,6 +274,13 @@ def _namespace(space_type: type[Space]) -> dict[str, object]:
     return namespace
 
 
+def _annotation_namespace(space_type: type[Space]) -> dict[str, object]:
+    """Resolve local family/base annotations without adding structural members."""
+    namespace: dict[str, object] = {base.__name__: base for base in reversed(space_type.__mro__)}
+    namespace.update(_namespace(space_type))
+    return namespace
+
+
 def _hints(
     function: Callable[..., object], namespace: Mapping[str, object], owner: str
 ) -> dict[str, object]:
@@ -464,11 +474,41 @@ def bind_function(
     if hints is None:
         hints = _hints(
             function,
-            namespace if namespace is not None else _namespace(effective.space_type),
+            namespace if namespace is not None else _annotation_namespace(effective.space_type),
             owner,
         )
     annotation, semantics = _output_semantics(declaration, hints, owner)
     signature = inspect.signature(function)
+    parameters = tuple(signature.parameters.values())
+    if (
+        inspect.isgeneratorfunction(function)
+        or inspect.iscoroutinefunction(function)
+        or inspect.isasyncgenfunction(function)
+    ):
+        raise DefinitionError(f"{owner}: computations must be ordinary synchronous functions")
+    if parameters and parameters[0].name == "self":
+        parameter = parameters[0]
+        if (
+            len(parameters) != 1
+            or declaration.aliases
+            or parameter.kind
+            not in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
+            or parameter.default is not inspect.Parameter.empty
+        ):
+            raise DefinitionError(
+                f"{owner}: self methods cannot declare dependency arguments or aliases"
+            )
+        receiver = hints.get("self", Self)
+        if receiver is not Self and not (
+            isinstance(receiver, type)
+            and issubclass(receiver, Space)
+            and issubclass(effective.space_type, receiver)
+        ):
+            raise DefinitionError(
+                f"{owner}: receiver annotation {receiver!r} cannot accept "
+                f"{effective.space_type.__qualname__}"
+            )
+        return BoundFunction(function, (), annotation, semantics, "self")
     extra = declaration.aliases.keys() - signature.parameters.keys()
     if extra:
         raise DefinitionError(f"{owner}: aliases name unknown arguments {sorted(extra)}")
@@ -519,12 +559,13 @@ def collect_space(
     if not isinstance(space_type, type) or not issubclass(space_type, Space):
         raise DefinitionError("collect_space expects a Space subclass")
     namespace = _namespace(space_type)
+    annotation_namespace = _annotation_namespace(space_type)
     hint_cache: dict[int, dict[str, object]] = {}
 
     def hints_for(function: Callable[..., object], owner: str) -> dict[str, object]:
         key = id(function)
         if key not in hint_cache:
-            hint_cache[key] = _hints(function, namespace, owner)
+            hint_cache[key] = _hints(function, annotation_namespace, owner)
         return hint_cache[key]
 
     members: dict[str, MemberRecord] = {}
@@ -611,7 +652,7 @@ def collect_space(
                 cast("Derived[object] | Constraint | View[object]", record.declaration),
                 preliminary,
                 name=name,
-                namespace=namespace,
+                namespace=annotation_namespace,
                 annotations=hint_cache[id(_function(record.declaration))],
                 known_spaces=known_spaces,
             )

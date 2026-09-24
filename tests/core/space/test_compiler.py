@@ -19,6 +19,7 @@ from finn.core.space.declarations import (
     Param,
     Readiness,
     Space,
+    Subspace,
     View,
     constraint,
     derived,
@@ -66,6 +67,47 @@ def test_compile_links_forward_dependencies_without_executing_callbacks() -> Non
     assert model.linked.parameters == (model.resolve(0, Family.extent),)
     assert model.linked.decisions == (model.resolve(0, Family.lanes),)
     assert nodes[model.resolve(0, Family.result)].semantics is not None
+
+
+def test_self_invocation_is_preserved_for_nested_functions_and_view_outputs() -> None:
+    class Child(Space):
+        source = Param(int)
+
+        @derived
+        def scalar(self) -> int:
+            raise AssertionError("preparation must not execute self methods")
+
+        @constraint
+        def supported(self) -> bool:
+            raise AssertionError("preparation must not execute self methods")
+
+        @view(constraints=(supported,))
+        def physical(self) -> int:
+            raise AssertionError("preparation must not execute self methods")
+
+        @derived
+        def explicit(*, source: int) -> int:
+            raise AssertionError("preparation must not execute explicit providers")
+
+    class Parent(Space):
+        child = Subspace(Child, source=4)
+
+    model = compile_space(Parent)
+    nodes = model.linked.nodes
+    child_scope = model.linked.scopes[0].children[Parent.child]
+    scalar = nodes[model.resolve(child_scope, Child.scalar)]
+    supported = nodes[model.resolve(child_scope, Child.supported)]
+    physical = nodes[model.resolve(child_scope, Child.physical)]
+    assert physical.output is not None
+    for node in (scalar, supported, nodes[physical.output]):
+        assert node.call_style == "self"
+        assert node.scope == child_scope
+        assert node.arguments == ()
+    assert set(physical.dependencies) == {supported.index, physical.output}
+    explicit = nodes[model.resolve(child_scope, Child.explicit)]
+    assert explicit.call_style == "explicit"
+    assert len(explicit.arguments) == 1
+    assert explicit.arguments[0].node == model.resolve(child_scope, Child.source)
 
 
 def test_function_and_value_views_have_an_explicit_raw_output() -> None:

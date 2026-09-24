@@ -22,7 +22,7 @@ S = TypeVar("S", bound=Space)
 
 @dataclass(frozen=True, slots=True)
 class SpaceModel(Generic[S]):
-    """A reusable family. Its frozen indexes remain authoritative after compile."""
+    """A prepared definition with frozen indexes and a typed configuration factory."""
 
     space_type: type[S]
     linked: LinkedModel
@@ -97,7 +97,11 @@ def _definition_families(space_types: tuple[type[Space], ...]) -> tuple[type[Spa
 
 
 def _validated_order(nodes: tuple[Node, ...]) -> tuple[int, ...]:
-    """Iterative Kosaraju validation and dependency-first order in O(V + E)."""
+    """Validate known structural/explicit edges and order them in O(V + E).
+
+    Arbitrary self-method dependencies are discovered when their reads execute.
+    Their reached cycles belong to evaluation, rather than this static check.
+    """
 
     dependencies = tuple(node.dependencies for node in nodes)
     reverse: list[list[int]] = [[] for _ in nodes]
@@ -157,7 +161,7 @@ def _validated_order(nodes: tuple[Node, ...]) -> tuple[int, ...]:
 
 
 def compile_space(space_type: type[S]) -> SpaceModel[S]:
-    """Return the canonical prepared model for one root family."""
+    """Return the canonical prepared definition for one root family."""
 
     if not isinstance(space_type, type) or not issubclass(space_type, Space):
         raise DefinitionError("compile_space requires a Space subclass")
