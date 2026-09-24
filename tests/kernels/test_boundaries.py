@@ -70,15 +70,15 @@ def imported_modules(path: Path) -> set[str]:
     "source",
     (
         'importlib.import_module("..artifacts", __package__)',
-        'importlib.import_module("..artifacts", "finn.kernels.space")',
-        'import_module("..artifacts", package="finn.kernels.space")',
+        'importlib.import_module("..artifacts", "finn.core.space")',
+        'import_module("..artifacts", package="finn.core.space")',
     ),
 )
 def test_relative_dynamic_imports_cannot_escape_layer_checks(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, source: str
 ) -> None:
     monkeypatch.setattr(sys.modules[__name__], "ROOT", tmp_path)
-    path = tmp_path / "src/finn/kernels/space/example.py"
+    path = tmp_path / "src/finn/core/space/example.py"
     path.parent.mkdir(parents=True)
     path.write_text(source)
     assert "finn.kernels.artifacts" in imported_modules(path)
@@ -110,7 +110,7 @@ def test_kernel_sources_and_tests_have_no_dataflow_dependency() -> None:
 @pytest.mark.parametrize(
     "layer,allowed",
     [
-        ("space", ("finn.kernels.space",)),
+        ("space", ("finn.core.space",)),
         ("artifacts", ("finn.kernels.artifacts",)),
     ],
 )
@@ -144,7 +144,7 @@ class RejectDataflow(importlib.abc.MetaPathFinder):
 
 sys.meta_path.insert(0, RejectDataflow())
 from finn.kernels import DotpAxiKernel, DspBlock, WeightDelivery, mvau_assembly
-from finn.kernels.space import Available
+from finn.core.space import Available
 from finn.kernels.artifacts.requirements import ModuleBuildRequirements
 from finn.kernels.physical.axi_stream import AxiStream
 from qonnx.core.datatype import DataType

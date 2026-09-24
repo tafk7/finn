@@ -31,8 +31,8 @@ from finn.kernels.artifacts.rtl import TOLERATED_DIAGNOSTICS
 from finn.kernels.artifacts.store import ArtifactStore
 from finn.kernels.resources import resource_root, template_root
 from finn.kernels.datatypes.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
-from finn.kernels.space import Param, Rejected, Space, Subspace, Unresolved
-from finn.kernels.space.errors import RequestError
+from finn.core.space import Param, Rejected, Space, Subspace, Unresolved
+from finn.core.space.errors import RequestError
 from finn.kernels.target import DspBlock
 
 ROOT = Path(__file__).resolve().parents[2]

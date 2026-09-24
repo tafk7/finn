@@ -23,7 +23,7 @@ env -u PYTHONPATH MYPYPATH=src:tests "$MYPY_BIN" \
     --no-incremental --strict --explicit-package-bases -p finn.kernels
 env -u PYTHONPATH MYPYPATH=src:tests "$MYPY_BIN" \
     --no-incremental --strict --explicit-package-bases \
-    tests/kernels/space tests/kernels/typing tests/kernels/helpers.py \
+    tests/core/space tests/kernels/typing tests/kernels/helpers.py \
     tests/kernels/test_boundaries.py tests/kernels/test_datatypes.py \
     tests/kernels/artifacts/conftest.py tests/kernels/artifacts/test_isolation.py \
     tests/kernels/test_installed_package.py

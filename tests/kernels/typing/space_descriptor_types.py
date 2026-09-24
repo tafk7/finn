@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from typing_extensions import assert_type
 
-from finn.kernels.space import (
+from finn.core.space import (
     QueryResult,
     BoundView,
     Const,

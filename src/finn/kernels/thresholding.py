@@ -49,7 +49,7 @@ from finn.kernels.datatypes.values import (
     resolve_qonnx_datatype_name,
 )
 from finn.kernels.physical.axi_stream import AxiStream
-from finn.kernels.space import (
+from finn.core.space import (
     Decision,
     Param,
     Rejected,

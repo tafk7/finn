@@ -533,7 +533,7 @@ def markdown(report: dict[str, object]) -> str:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--module", default="finn.kernels.space")
+    parser.add_argument("--module", default="finn.core.space")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--markdown", type=Path)
     parser.add_argument("--flat", type=int, default=5000)

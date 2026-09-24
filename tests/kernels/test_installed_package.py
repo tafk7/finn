@@ -48,7 +48,7 @@ class RejectGraphDependencies(importlib.abc.MetaPathFinder):
 sys.meta_path.insert(0, RejectGraphDependencies())
 
 from finn.kernels import DotpAxiKernel, DspBlock, WeightDelivery, mvau_assembly
-from finn.kernels.space import Available
+from finn.core.space import Available
 from finn.kernels.artifacts import build, contributions, contribution_types, requirements
 from finn.kernels.artifacts.manifest import decode
 from finn.kernels.artifacts.store import ArtifactStore

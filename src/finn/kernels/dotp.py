@@ -44,7 +44,7 @@ from finn.kernels.datatypes.values import (
     qonnx_datatype_width,
 )
 from finn.kernels.physical.axi_stream import AxiStream, AxiStreamInterface
-from finn.kernels.space import (
+from finn.core.space import (
     ConstraintGroup,
     Decision,
     Param,

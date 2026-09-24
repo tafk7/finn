@@ -32,7 +32,7 @@ from finn.kernels.datatypes.values import (
     ordinary_integer_bounds,
     resolve_qonnx_datatype_name,
 )
-from finn.kernels.space import (
+from finn.core.space import (
     Param,
     Rejected,
     constraint,

@@ -15,8 +15,8 @@ from finn.kernels.datatypes.values import (
     encode_datatype,
     is_qonnx_datatype,
 )
-from finn.kernels.space import ValueSemantics
-from finn.kernels.space.codecs import JSONValue, ValueCodec
+from finn.core.space import ValueSemantics
+from finn.core.space.codecs import JSONValue, ValueCodec
 
 QONNX_DATATYPE_VALUE_SEMANTICS: ValueSemantics[QONNXDataType] = ValueSemantics(
     type_token=QONNX_DATATYPE_TOKEN,

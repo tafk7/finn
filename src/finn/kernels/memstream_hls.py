@@ -18,7 +18,7 @@ from finn.kernels.artifacts.sources import CompileOptions, Language, Role
 from finn.kernels.base import Kernel
 from finn.kernels.datatypes.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
 from finn.kernels.datatypes.values import DatatypeError, QONNXDataType, ordinary_integer_bounds
-from finn.kernels.space import (
+from finn.core.space import (
     Param,
     Rejected,
     constraint,

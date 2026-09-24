@@ -9,13 +9,13 @@ import pytest
 from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 
 from kernels.helpers import assess, point_for, value
-from finn.kernels.space import Available, Rejected, Unresolved
+from finn.core.space import Available, Rejected, Unresolved
 from finn.kernels.artifacts.abi import Bus
 from finn.kernels.artifacts.build import prepare_module_build, render_module_sources
 from finn.kernels.artifacts.store import ArtifactStore
 from finn.kernels.mvau import MVAU, WeightDelivery, exact_result_dtype, mvau_assembly
 from finn.kernels.dotp import DotpAxiKernel
-from finn.kernels.space import Subspace, View, constraint, reject
+from finn.core.space import Subspace, View, constraint, reject
 from finn.kernels.target import DspBlock
 from finn.kernels.physical.structure import ConstantBits, PhysicalPin, PinSlice
 from finn.kernels.resources import resource_root, template_root

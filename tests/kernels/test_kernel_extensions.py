@@ -24,7 +24,7 @@ from finn.kernels.datatypes.values import (
     encode_datatype,
     resolve_qonnx_datatype_name,
 )
-from finn.kernels.space import (
+from finn.core.space import (
     ConstraintGroup,
     Available,
     Decision,
@@ -42,8 +42,8 @@ from finn.kernels.space import (
     selections,
     view,
 )
-from finn.kernels.space.errors import DefinitionError, RequestError
-from finn.kernels.space.extensions import ScopeBuilder
+from finn.core.space.errors import DefinitionError, RequestError
+from finn.core.space.extensions import ScopeBuilder
 
 
 @dataclass(frozen=True)

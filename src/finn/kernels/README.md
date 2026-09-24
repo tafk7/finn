@@ -1,12 +1,12 @@
 # Physical kernels
 
-The supported authoring API is `finn.kernels.space`. A kernel declares the
+The supported authoring API is `finn.core.space`. A kernel declares the
 facts it consumes, its implementation decisions, and the typed views it can
 answer. Bind Params directly, commit choices, and call the view:
 
 ```python
 from finn.kernels import FifoKernel
-from finn.kernels.space import Available, compile_space
+from finn.core.space import Available, compile_space
 
 fifo_model = compile_space(FifoKernel)
 fifo_base = fifo_model.bind(word_bits=16, depth=32)

@@ -16,8 +16,8 @@ from finn.kernels.datatypes.values import resolve_qonnx_datatype_name
 from finn.kernels.eltwise import EltwiseKernel
 from finn.kernels.fifo import FifoKernel
 from finn.kernels.int_to_fp32 import IntToFp32Kernel
-from finn.kernels.space import QueryResult, Available, Param, Rejected, Space, Subspace, Unresolved
-from finn.kernels.space.errors import RequestError
+from finn.core.space import QueryResult, Available, Param, Rejected, Space, Subspace, Unresolved
+from finn.core.space.errors import RequestError
 from finn.kernels.target import DspBlock
 
 T = TypeVar("T")

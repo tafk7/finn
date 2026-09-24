@@ -7,9 +7,9 @@ from __future__ import annotations
 
 from typing import ClassVar
 
-from finn.kernels.space import Space
-from finn.kernels.space.errors import DefinitionError
-from finn.kernels.space.inspection import NodeInfo, members
+from finn.core.space import Space
+from finn.core.space.errors import DefinitionError
+from finn.core.space.inspection import NodeInfo, members
 
 
 class Kernel(Space):

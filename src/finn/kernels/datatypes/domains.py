@@ -10,7 +10,7 @@ import re
 from typing import Protocol
 
 from finn.kernels.datatypes.values import QONNXDataType, qonnx_datatype_width
-from finn.kernels.space import Constraint, Rejected, ValueRef, constraint, reject
+from finn.core.space import Constraint, Rejected, ValueRef, constraint, reject
 
 BitBound = int | ValueRef[int]
 

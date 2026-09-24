@@ -1,6 +1,6 @@
 # Space authoring and immutable specialization
 
-`finn.kernels.space` provides the supported language and runtime for kernel
+`finn.core.space` provides the supported language and runtime for kernel
 families. A Space class describes facts, choices, computations and views. Its
 compiled model can create many independently bound configurations. Parent and
 child configurations share one immutable specialization snapshot.
@@ -8,7 +8,7 @@ child configurations share one immutable specialization snapshot.
 ## A runnable family
 
 ```python
-from finn.kernels.space import (
+from finn.core.space import (
     Const, Available, Decision, Inapplicable, Param, Space, Subspace,
     Unresolved, View, ViewKey, compile_space, constraint, derived,
     divisors_of, view,
@@ -83,7 +83,7 @@ when element recognition or domain equality is stronger than that policy.
 
 ```python
 from dataclasses import dataclass
-from finn.kernels.space import QueryResult, ValueSemantics, reject
+from finn.core.space import QueryResult, ValueSemantics, reject
 
 
 @dataclass(frozen=True)
@@ -216,7 +216,7 @@ assert isinstance(disabled.implementation.query(Tiles.factor), Inapplicable)
 alternatives. It needs no common concrete child class:
 
 ```python
-from finn.kernels.space import SubspaceChoice
+from finn.core.space import SubspaceChoice
 
 OUTPUT = ViewKey("output", int)
 
@@ -259,7 +259,7 @@ also accepts ordinary declaration objects. Typed export helpers fix the key's
 type before accepting a value or view.
 
 ```python
-from finn.kernels.space import ScopeBuilder, ValueKey
+from finn.core.space import ScopeBuilder, ValueKey
 
 LATENCY = ValueKey("latency", int)
 
@@ -323,7 +323,7 @@ Search and conformance code uses the advanced monotone service. A `Change`
 retains its exact base snapshot, and `refinement.commit` only adds choices:
 
 ```python
-from finn.kernels.space import refinement
+from finn.core.space import refinement
 
 change = refinement.change(tile_base, Tiles.factor, 3)
 report = refinement.commit(tile_base, change)
@@ -338,7 +338,7 @@ committed owning Decision and nontrivial selector once, including a value equal
 to the first candidate. It omits aliases, derived values and evaluator state:
 
 ```python
-from finn.kernels.space import selections
+from finn.core.space import selections
 
 saved = selections.capture(tile_configuration)
 edited = saved.with_changes([saved.edit(Tiles.factor, 4)])
@@ -358,7 +358,7 @@ for every saved choice. No codec, fingerprint or global registry is needed to
 start, query or capture an ordinary model:
 
 ```python
-from finn.kernels.space import JSONValue, SelectionSchema, ValueCodec, codec_for, codecs
+from finn.core.space import JSONValue, SelectionSchema, ValueCodec, codec_for, codecs
 
 
 def decode_integer(value: JSONValue) -> int:

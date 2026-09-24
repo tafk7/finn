@@ -56,7 +56,7 @@ from finn.kernels.physical.structure import (
     PinSlice,
     UnusedOutput,
 )
-from finn.kernels.space import (
+from finn.core.space import (
     QueryResult,
     ConstraintGroup,
     Available,
@@ -69,7 +69,7 @@ from finn.kernels.space import (
     divisors_of,
     reject,
 )
-from finn.kernels.space.errors import RequestError
+from finn.core.space.errors import RequestError
 
 
 class WeightDelivery(Enum):

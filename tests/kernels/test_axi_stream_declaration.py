@@ -6,15 +6,15 @@
 import pytest
 from qonnx.core.datatype import DataType
 
-from finn.kernels.space import Available, Rejected, Unresolved, compile_space, inspection
+from finn.core.space import Available, Rejected, Unresolved, compile_space, inspection
 from finn.kernels.datatypes.domains import Integer, SignedInteger
 from finn.kernels.datatypes.semantics import (
     QONNX_DATATYPE_VALUE_SEMANTICS,
 )
 from finn.kernels.datatypes.values import QONNXDataType
 from finn.kernels.physical.axi_stream import AxiStream
-from finn.kernels.space import Param, Space, Subspace, derived
-from finn.kernels.space.errors import DefinitionError
+from finn.core.space import Param, Space, Subspace, derived
+from finn.core.space.errors import DefinitionError
 
 
 class Ports(Space):

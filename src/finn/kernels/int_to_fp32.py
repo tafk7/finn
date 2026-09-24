@@ -22,7 +22,7 @@ from finn.kernels.datatypes.values import (
     ordinary_integer_bounds,
     resolve_qonnx_datatype_name,
 )
-from finn.kernels.space import Const, Param, Rejected, constraint, reject, view
+from finn.core.space import Const, Param, Rejected, constraint, reject, view
 
 
 class IntToFp32Kernel(Kernel):

@@ -19,7 +19,7 @@ from finn.kernels.artifacts.requirements import (
     ModuleBuildRequirements,
 )
 from finn.kernels.datatypes.semantics import INTEGER_VECTOR, IntegerVector
-from finn.kernels.space import (
+from finn.core.space import (
     Decision,
     Param,
     Rejected,

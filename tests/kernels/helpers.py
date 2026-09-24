@@ -9,11 +9,11 @@ partial evaluation uses explicit optional-Param or unresolved-Decision fixtures.
 from collections.abc import Mapping
 from typing import TypeVar
 
-from finn.kernels.space import Space, compile_space
-from finn.kernels.space.declarations import Constraint
-from finn.kernels.space.errors import ConfigurationError, RequestError
-from finn.kernels.space.inspection import decisions, members
-from finn.kernels.space.results import QueryResult, Available
+from finn.core.space import Space, compile_space
+from finn.core.space.declarations import Constraint
+from finn.core.space.errors import ConfigurationError, RequestError
+from finn.core.space.inspection import decisions, members
+from finn.core.space.results import QueryResult, Available
 
 T = TypeVar("T")
 S = TypeVar("S", bound=Space)

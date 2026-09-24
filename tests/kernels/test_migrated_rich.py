@@ -17,8 +17,8 @@ from finn.kernels.datatypes.values import resolve_qonnx_datatype_name
 from finn.kernels.input_generator import InputGeneratorKernel
 from finn.kernels.memstream_hls import MemStreamHlsKernel
 from finn.kernels.resources import template_root
-from finn.kernels.space import QueryResult, Available, Param, Rejected, Space, Subspace, Unresolved
-from finn.kernels.space.errors import RequestError
+from finn.core.space import QueryResult, Available, Param, Rejected, Space, Subspace, Unresolved
+from finn.core.space.errors import RequestError
 from finn.kernels.thresholding import ThresholdingAxiKernel
 
 T = TypeVar("T")

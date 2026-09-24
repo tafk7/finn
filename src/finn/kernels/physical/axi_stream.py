@@ -27,7 +27,7 @@ from finn.kernels.physical.layout import (
     UnusedBitPolicy,
     UnusedBitRange,
 )
-from finn.kernels.space import (
+from finn.core.space import (
     QueryResult,
     Constraint,
     ConstraintGroup,

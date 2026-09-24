@@ -9,7 +9,7 @@ import pytest
 from qonnx.core.datatype import DataType
 
 from kernels.helpers import assess, point_for, value
-from finn.kernels.space import (
+from finn.core.space import (
     Available,
     Rejected,
     Unresolved,
@@ -18,7 +18,7 @@ from finn.kernels.space import (
     Subspace,
     inspection,
 )
-from finn.kernels.space.errors import RequestError
+from finn.core.space.errors import RequestError
 from finn.kernels.datatypes.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
 from finn.kernels.artifacts.abi import Clock, Data, Derived as DerivedClock
 from finn.kernels.artifacts.build import materialize_module_sources, prepare_module_build
