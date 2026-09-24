@@ -1,12 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Datatype admission declarations lowered to independent Space constraints.
-
-Integer bounds are inclusive storage-bit bounds over a supplied QONNX dtype.
-Membership never enumerates types or values, and never selects or converts a
-datatype. Special encodings such as BIPOLAR and TERNARY are distinct families.
-"""
+"""Datatype admission declarations with explicit family and bit-bound dependencies."""
 
 from __future__ import annotations
 
@@ -15,23 +10,19 @@ import re
 from typing import Protocol
 
 from finn.kernels.datatypes.values import QONNXDataType, qonnx_datatype_width
-from finn.kernels.space.declarations import Constraint, ValueSource, constraint, reject
+from finn.kernels.space import Constraint, Rejected, ValueRef, constraint, reject
 
-BitBound = int | ValueSource[int]
+BitBound = int | ValueRef[int]
 
 
 class DatatypeDomain(Protocol):
-    """An interface domain supplies separately assessable membership conditions."""
-
     def constraints(
-        self, datatype: ValueSource[QONNXDataType]
+        self, datatype: ValueRef[QONNXDataType]
     ) -> tuple[tuple[str, Constraint], ...]: ...
 
 
-def _bit_bound(
-    datatype: ValueSource[QONNXDataType], bound: BitBound, *, minimum: bool
-) -> Constraint:
-    def check(dtype: QONNXDataType, limit: int) -> object:
+def _bit_bound(datatype: ValueRef[QONNXDataType], bound: BitBound, *, minimum: bool) -> Constraint:
+    def check(dtype: QONNXDataType, limit: int) -> bool | Rejected:
         if type(limit) is not int or limit < 1:
             return reject("dtype-bound-invalid", "a storage-bit bound must be a positive integer")
         actual = qonnx_datatype_width(dtype)
@@ -44,16 +35,16 @@ def _bit_bound(
             )
         return True
 
-    if isinstance(bound, ValueSource):
+    if isinstance(bound, ValueRef):
 
         @constraint(datatype=datatype, bound=bound)
-        def dynamic(*, datatype: QONNXDataType, bound: int) -> object:
+        def dynamic(*, datatype: QONNXDataType, bound: int) -> bool | Rejected:
             return check(datatype, bound)
 
         return dynamic
 
     @constraint(datatype=datatype)
-    def fixed(*, datatype: QONNXDataType) -> object:
+    def fixed(*, datatype: QONNXDataType) -> bool | Rejected:
         return check(datatype, bound)
 
     return fixed
@@ -61,13 +52,7 @@ def _bit_bound(
 
 @dataclass(frozen=True)
 class Integer:
-    """Ordinary INT/UINT encodings, including canonical BINARY (UINT1).
-
-    ``signed=None`` admits either ordinary signedness. Fixed/scaled integers,
-    BIPOLAR and TERNARY are not members even when integer-valued. Dynamic bounds
-    are existing ValueSource declarations, so their normal partial assessment
-    and dependency tracking apply.
-    """
+    """Ordinary INT/UINT encodings, including canonical BINARY, with bit bounds."""
 
     min_bits: BitBound = 1
     max_bits: BitBound | None = None
@@ -75,22 +60,22 @@ class Integer:
 
     def __post_init__(self) -> None:
         for bound in (self.min_bits, self.max_bits):
-            if bound is not None and not isinstance(bound, ValueSource):
+            if bound is not None and not isinstance(bound, ValueRef):
                 if type(bound) is not int or bound < 1:
-                    raise ValueError("integer bit bounds must be positive integers or ValueSources")
-            elif isinstance(bound, ValueSource) and bound.value_semantics.type_token is not int:
-                raise TypeError("integer bit bounds require integer ValueSources")
+                    raise ValueError("integer bit bounds must be positive integers or ValueRefs")
+            elif isinstance(bound, ValueRef):
+                semantics = bound.semantics
+                if semantics is not None and semantics.type_token is not int:
+                    raise TypeError("integer bit bounds require integer ValueRefs")
         if type(self.min_bits) is int and type(self.max_bits) is int:
             if self.min_bits > self.max_bits:
                 raise ValueError("minimum bit width exceeds maximum bit width")
         if self.signed is not None and type(self.signed) is not bool:
             raise TypeError("signed must be True, False or None")
 
-    def constraints(
-        self, datatype: ValueSource[QONNXDataType]
-    ) -> tuple[tuple[str, Constraint], ...]:
+    def constraints(self, datatype: ValueRef[QONNXDataType]) -> tuple[tuple[str, Constraint], ...]:
         @constraint(datatype=datatype)
-        def family(*, datatype: QONNXDataType) -> object:
+        def family(*, datatype: QONNXDataType) -> bool | Rejected:
             name = datatype.name
             ordinary = name == "BINARY" or re.fullmatch(r"U?INT-?\d+", name) is not None
             is_signed = name.startswith("INT")
@@ -117,8 +102,6 @@ class Integer:
 
 
 class SignedInteger(Integer):
-    """The signed-only spelling of Integer with the same inclusive bounds."""
-
     def __init__(self, min_bits: BitBound = 1, max_bits: BitBound | None = None) -> None:
         super().__init__(min_bits, max_bits, signed=True)
 

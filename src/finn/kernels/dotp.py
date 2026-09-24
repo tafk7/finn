@@ -35,8 +35,8 @@ from finn.kernels.artifacts.requirements import (
     ModuleBuildRequirements,
 )
 from finn.kernels.target import DspBlock, dsp_widths
-from finn.kernels._next_base import Kernel
-from finn.kernels.datatypes._next_semantics import QONNX_DATATYPE_VALUE_SEMANTICS
+from finn.kernels.base import Kernel
+from finn.kernels.datatypes.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
 from finn.kernels.datatypes.values import (
     DatatypeError,
     QONNXDataType,
@@ -44,7 +44,7 @@ from finn.kernels.datatypes.values import (
     qonnx_datatype_width,
 )
 from finn.kernels.physical.axi_stream import AxiStream, AxiStreamInterface
-from finn.kernels.space._next import (
+from finn.kernels.space import (
     ConstraintGroup,
     Decision,
     Param,

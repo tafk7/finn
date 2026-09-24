@@ -1,5 +1,11 @@
 # Flat FinnLib kernel authoring pass
 
+> Historical baseline: this document records the earlier flat authoring pass.
+> Its Space/Problem syntax and validation results describe that source state.
+> Use the [current Space API](../design-space.md) and
+> [physical-kernel guide](../../src/finn/kernels/README.md) for the delivered
+> runtime. The experimental dataflow port remains deferred.
+
 This pass supplies concrete examples before designing another authoring API.
 Each class owns its identity, supplied inputs, implementation decisions,
 derivations, constraints, native interfaces and source requirements. The

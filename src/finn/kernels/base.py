@@ -1,44 +1,38 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Kernel identity over Space; each kernel declares the questions it can answer."""
+"""Kernel identity and optional view discovery over Space."""
 
 from __future__ import annotations
 
 from typing import ClassVar
 
-from finn.kernels.space.compiler import _CompiledSpace
-from finn.kernels.space.declarations import AuthoringError, Problem, Space, declared_members
+from finn.kernels.space import Space
+from finn.kernels.space.errors import DefinitionError
+from finn.kernels.space.inspection import NodeInfo, members
 
 
 class Kernel(Space):
-    """A named kernel design space with explicitly assessed declarations."""
+    """A named family with explicitly declared, independently typed views.
+
+    A kernel may describe plain pins, a stream boundary, source requirements,
+    or other values. Identity does not imply any particular interface or view.
+    """
 
     id: ClassVar[str] = ""
     version: ClassVar[str] = "1"
-    _implicit_exports: tuple[str, ...] = ()
 
     def __init_subclass__(cls, **kwargs: object) -> None:
         super().__init_subclass__(**kwargs)
-        cls._configure_views()
+        for name in ("id", "version"):
+            value = getattr(cls, name)
+            if type(value) is not str or not value:
+                raise DefinitionError(f"{cls.__qualname__} must declare a nonempty string {name}")
 
-    @classmethod
-    def _configure_views(cls) -> None:
-        """Extension point for the conventional authoring adapter."""
+    def capabilities(self) -> tuple[NodeInfo, ...]:
+        """Inspect authored views in this scope and its children without evaluating."""
 
-    @classmethod
-    def _finalize_compilation(cls, compiled: object) -> object:
-        if not isinstance(compiled, _CompiledSpace):
-            raise AuthoringError(f"{cls.__name__} received an invalid Space compilation")
-        if not cls.id:
-            raise AuthoringError(f"{cls.__name__} must declare a non-empty id")
-        if not cls.version:
-            raise AuthoringError(f"{cls.__name__} must declare a non-empty version")
-        if any(isinstance(item, Problem) for _, item in declared_members(cls)):
-            raise AuthoringError(
-                f"{cls.__name__} must consume external facts through Input declarations"
-            )
-        return compiled
+        return tuple(member for member in members(self) if member.kind == "view")
 
 
 __all__ = ["Kernel"]

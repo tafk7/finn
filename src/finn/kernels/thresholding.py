@@ -18,7 +18,7 @@ Biases below -N-1 are refused: the native unsigned width expression creates a
 33-bit output, but the result addition zero-extends the negative 32-bit bias.
 """
 
-from finn.kernels._next_base import Kernel
+from finn.kernels.base import Kernel
 from finn.kernels.artifacts.abi import (
     Bus,
     Clock,
@@ -37,7 +37,7 @@ from finn.kernels.artifacts.requirements import (
     ModuleBuildRequirements,
     ScalarTable,
 )
-from finn.kernels.datatypes._next_semantics import (
+from finn.kernels.datatypes.semantics import (
     QONNX_DATATYPE_VALUE_SEMANTICS,
     THRESHOLD_TABLE,
     ThresholdTable,
@@ -49,7 +49,7 @@ from finn.kernels.datatypes.values import (
     resolve_qonnx_datatype_name,
 )
 from finn.kernels.physical.axi_stream import AxiStream
-from finn.kernels.space._next import (
+from finn.kernels.space import (
     Decision,
     Param,
     Rejected,

@@ -110,8 +110,7 @@ def test_kernel_sources_and_tests_have_no_dataflow_dependency() -> None:
 @pytest.mark.parametrize(
     "layer,allowed",
     [
-        ("_engine", ("finn.kernels._engine",)),
-        ("space", ("finn.kernels.space", "finn.kernels._engine")),
+        ("space", ("finn.kernels.space",)),
         ("artifacts", ("finn.kernels.artifacts",)),
     ],
 )
@@ -135,53 +134,38 @@ import sys
 
 class RejectDataflow(importlib.abc.MetaPathFinder):
     def find_spec(self, fullname, path=None, target=None):
-        forbidden = ("finn.dataflow", "finn.custom_op.dataflow", "qonnx.core.modelwrapper")
+        forbidden = (
+            "finn.dataflow", "finn.custom_op.dataflow",
+            "qonnx.core.modelwrapper", "finn.kernels._engine",
+        )
         if any(fullname == name or fullname.startswith(name + ".") for name in forbidden):
             raise AssertionError("forbidden dependency: " + fullname)
 
 
 sys.meta_path.insert(0, RejectDataflow())
 from finn.kernels import DotpAxiKernel, DspBlock, WeightDelivery, mvau_assembly
-from finn.kernels.space import Problem, Space, Subspace
-from finn.kernels.datatypes.semantics import QONNX_DATATYPE_VALUE_SEMANTICS, QONNX_DATATYPE_CODEC
+from finn.kernels.space import Decided
 from finn.kernels.artifacts.requirements import ModuleBuildRequirements
 from finn.kernels.physical.axi_stream import AxiStream
-from finn.kernels._engine import Decided
 from qonnx.core.datatype import DataType
 
 
-class Request(Space):
-    pe = Problem(int)
-    simd = Problem(int)
-    dtype = Problem(QONNX_DATATYPE_VALUE_SEMANTICS, canonical=QONNX_DATATYPE_CODEC)
-    result = Problem(QONNX_DATATYPE_VALUE_SEMANTICS, canonical=QONNX_DATATYPE_CODEC)
-    target = Problem(DspBlock)
-    segment = Problem(int)
-    compute = Subspace(
-        DotpAxiKernel,
-        pe=pe,
-        simd=simd,
-        activation_dtype=dtype,
-        weights_dtype=dtype,
-        result_dtype=result,
-        target_dsp=target,
-        segment_length=segment,
-    )
-
-
-point = Request.start(
+point = DotpAxiKernel.start(
     {
-        Request.pe: 2,
-        Request.simd: 2,
-        Request.dtype: DataType["INT3"],
-        Request.result: DataType["INT8"],
-        Request.target: DspBlock.DSP48E2,
-        Request.segment: 0,
+        DotpAxiKernel.pe: 2,
+        DotpAxiKernel.simd: 2,
+        DotpAxiKernel.activation.dtype: DataType["INT3"],
+        DotpAxiKernel.weights.dtype: DataType["INT3"],
+        DotpAxiKernel.result.dtype: DataType["INT8"],
+        DotpAxiKernel.target_dsp: DspBlock.DSP48E2,
+        DotpAxiKernel.segment_length: 0,
     }
-).compute.assign(DotpAxiKernel.compute_pumping, False)
-assert isinstance(point.physical.accepted_answer, Decided)
-assert isinstance(point.physical.accepted_answer.value, ModuleBuildRequirements)
-assert isinstance(point.activation, AxiStream)
+).assign(DotpAxiKernel.compute_pumping, False)
+answer = point.physical().accepted_answer
+assert isinstance(answer, Decided)
+assert isinstance(answer.value, ModuleBuildRequirements)
+assert isinstance(point.activation.stream, AxiStream)
+assert point.activation.payload_bits == 6
 for mode in WeightDelivery:
     options = (
         {"weights": [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]]}
@@ -204,8 +188,44 @@ for mode in WeightDelivery:
     )
     assert assembly.result_dtype == DataType["INT8"]
     assert assembly.requirements.contributions
+assert not any(
+    name.startswith("finn.kernels.") and ("._engine" in name or "._next" in name)
+    for name in sys.modules
+)
 """
     result = subprocess.run([sys.executable, "-c", script], text=True, capture_output=True)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_kernel_runtime_has_no_legacy_or_staging_modules() -> None:
+    assert not (PACKAGE / "_engine").exists()
+    assert not (PACKAGE / "space/_next").exists()
+    for path in PACKAGE.rglob("*.py"):
+        assert not path.name.startswith("_next"), path
+        for name in imported_modules(path):
+            assert not within(name, "finn.kernels._engine"), (path, name)
+            assert not any(part.startswith("_next") for part in name.split(".")), (path, name)
+
+
+@pytest.mark.parametrize("layer", ("space", "artifacts"))
+def test_cold_layer_import_loads_only_its_own_kernel_modules(layer: str) -> None:
+    script = r"""
+import importlib
+import importlib.abc
+import sys
+
+target = "finn.kernels." + sys.argv[1]
+class RejectOtherLayers(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname.startswith(("qonnx", "onnx", "finn.dataflow", "finn.custom_op.dataflow")):
+            raise AssertionError("unexpected dependency: " + fullname)
+
+sys.meta_path.insert(0, RejectOtherLayers())
+importlib.import_module(target)
+loaded = {name for name in sys.modules if name.startswith("finn.kernels.")}
+assert all(name == target or name.startswith(target + ".") for name in loaded), loaded
+"""
+    result = subprocess.run([sys.executable, "-c", script, layer], text=True, capture_output=True)
     assert result.returncode == 0, result.stdout + result.stderr
 
 

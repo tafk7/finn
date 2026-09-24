@@ -6,6 +6,3 @@ exclude = [
 
 [lint]
 select = ["E", "F", "PLC"]
-
-[lint.per-file-ignores]
-"tests/kernels/engine/**/*.py" = ["PLC0415"]

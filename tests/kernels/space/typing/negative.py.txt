@@ -1,0 +1,53 @@
+from finn.kernels.space import (
+    Decision, Param, Space, Subspace, ValueKey, ViewKey, constraint, derived, view,
+    ValueSemantics, Answer, Decided, View, SubspaceChoice,
+)
+
+class Child(Space):
+    width = Param(int)
+    lanes = Decision(int, values=(1, 2))
+
+    @view
+    def physical(*, width: int) -> int:
+        return width
+
+class Parent(Space):
+    child = Subspace(Child, width=4)
+
+def bad(point: Child, parent: Parent) -> None:
+    wrong_value: str = point.width  # E
+    wrong_descriptor: int = Child.width  # E
+    point.assign(Child.lanes, "two")  # E
+    point.assign(Child.width, 2)  # E
+    parent.assign(Parent.child.ref(Child.lanes), 2)  # E
+    point.physical(3)  # E
+    wrong_assessment: int = point.physical()  # E
+    Parent.child.accepted(Child.width)  # E
+    Parent.child.ref(ViewKey("view", int))  # E
+    Parent.child.accepted(ValueKey("value", int))  # E
+    point.refine("not an edit")  # E
+
+@constraint  # E
+def wrong_constraint() -> str:
+    return "yes"
+
+@derived(semantics=ValueSemantics.immutable_nominal(int))  # E
+def wrong_answer() -> Answer[str]:
+    return Decided("bad")
+
+bad_guard = Decision(int, values=(1,), when=Child.width)  # E
+bad_child = Subspace(Child, width=4, when=Child.width)  # E
+bad_choice = SubspaceChoice({"one": Subspace(Child, width=4)}, when=Child.width)  # E
+bad_view = View(Child.width, when=Child.width)  # E
+
+@derived(when=Child.width)  # E
+def wrong_derived_guard() -> int:
+    return 1
+
+@view(when=Child.width)  # E
+def wrong_view_guard() -> int:
+    return 1
+
+@constraint(when=Child.width)  # E
+def wrong_constraint_guard() -> bool:
+    return True

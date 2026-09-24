@@ -8,7 +8,7 @@ from finn.kernels.datatypes.values import QONNXDataType
 from finn.kernels.dotp import DotpAxiKernel
 from finn.kernels.physical.axi_stream import AxiStream, AxiStreamInterface, AxiStreamScope
 from finn.kernels.physical.layout import PackedBeatLayout
-from finn.kernels.space._next import ValueRef, View, ViewAssessment
+from finn.kernels.space import ValueRef, View, ViewAssessment
 
 
 def check(point: DotpAxiKernel) -> None:

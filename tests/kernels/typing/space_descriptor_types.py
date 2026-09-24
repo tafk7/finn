@@ -16,58 +16,74 @@ from __future__ import annotations
 from typing_extensions import assert_type
 
 from finn.kernels.space import (
+    Answer,
+    BoundView,
+    Const,
     Decision,
-    Input,
-    Problem,
+    Derived,
+    Param,
     Space,
+    SpaceModel,
     Subspace,
     SubspaceChoice,
     ChoiceView,
-    compile_space_model,
+    ValueKey,
+    ValueRef,
+    View,
+    ViewAssessment,
+    compile_space,
     derived,
 )
-from finn.kernels.space.compiler import SpaceModel
+
+RESULT = ValueKey("result", int)
 
 
 class FixedImplementation(Space):
-    size = Input(int)
+    size = Param(int)
     lanes = Decision(int, values=(1, 2, 4))
+    minimum = Const(1)
 
-    @derived(int, size=size, lanes=lanes)
+    @derived
     def result(*, size: int, lanes: int) -> int:
         return size // lanes
 
-    exports = (result,)
+    physical = View(result)
+    exports = {RESULT: result}
 
 
 class SmallImplementation(Space):
-    size = Input(int)
+    size = Param(int)
 
-    @derived(int, size=size)
+    @derived
     def result(*, size: int) -> int:
         return size
 
-    exports = (result,)
+    exports = {RESULT: result}
 
 
 class Pipeline(Space):
-    size = Problem(int)
+    size = Param(int)
     fixed = Subspace(FixedImplementation, size=size)
     implementation = SubspaceChoice(
         {
             "fast": Subspace(FixedImplementation, size=size),
             "small": Subspace(SmallImplementation, size=size),
         },
-        outputs=("result",),
+        exports=(RESULT,),
     )
 
 
 # Class access is the declaration; the Subspace keeps its concrete child type.
 assert_type(Pipeline.fixed, Subspace[FixedImplementation])
 assert_type(Pipeline.implementation, SubspaceChoice)
+assert_type(Pipeline.size, Param[int])
+assert_type(FixedImplementation.minimum, Const[int])
+assert_type(FixedImplementation.result, Derived[int])
+assert_type(FixedImplementation.physical, View[int])
+assert_type(Pipeline.implementation.ref(RESULT), ValueRef[int])
 
 # The compiler service preserves the authored root class through the model.
-model = compile_space_model(Pipeline, "root", problem_namespace="problem.root")
+model = compile_space(Pipeline)
 assert_type(model, SpaceModel[Pipeline])
 assert_type(model.start({Pipeline.size: 8}), Pipeline)
 
@@ -87,3 +103,6 @@ assert_type(pipeline.implementation.alternative("fast"), Space)
 # A declared value read through an occurrence has its declared type.
 assert_type(pipeline.fixed.result, int)
 assert_type(pipeline.fixed.assign(FixedImplementation.lanes, 2), FixedImplementation)
+assert_type(pipeline.fixed.physical, BoundView[int])
+assert_type(pipeline.fixed.physical(), ViewAssessment[int])
+assert_type(pipeline.fixed.answer(FixedImplementation.result), Answer[int])

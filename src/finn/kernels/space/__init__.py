@@ -1,137 +1,129 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
+"""Typed design-space authoring, immutable specialization and public services."""
 
-"""The generic declarative frontend for design spaces.
-
-One authoring language, one compiler, one occurrence lifecycle, lowering to one
-flat ``DesignSpaceSpec``:
-
-```text
-Space          ordinary declarations, direct Subspace composition,
-               and SubspaceChoice structural choice
-   |
-SpaceModel[S]  the compiled, reusable model of one authored root
-   |
-occurrence     an attached instance of S over one immutable point
-```
-
-This package is **layer-neutral**. ``finn.kernels.base.Kernel`` is an ordinary
-``Space`` subclass. Concrete components live in ``finn.kernels.dotp`` and
-``finn.kernels.mvau``; this frontend imports neither those components nor the
-artifact and modeling layers that consume its declarations.
-
-``finn.kernels._engine`` stays the only validator, evaluator, point, answer,
-readiness, and constraint runtime.  Nothing here introduces a nested Engine, a
-nested DesignPoint, or a second answer lattice.
-
-**Fixed child versus structural choice.**  `Subspace(Child, ...)` used directly
-as a class member places one child Space; the same declaration used inside
-`SubspaceChoice({"a": Subspace(A, ...), "b": Subspace(B, ...)})` places exactly
-one of several, keyed by the alternative id the mapping already gives it.  Several
-alternatives add one ordinary selector `Decision` over those ids and gate every
-alternative fragment through it.  A singleton adds no selector but keeps the
-same selected-output paths, so adding an alternative later renames nothing that
-already existed.  Both are descriptors: `pipeline.fixed` is the child
-occurrence and `pipeline.implementation` is its bound `ChoiceView`.
-
-**Selection policy is not here.**  A SubspaceChoice declaration stores no search
-callback.  The compiler publishes a `BranchCatalog` of paths and case structure;
-an external algorithm reads it, trials immutable successor points, and commits
-the ordinary selector.  `BranchInfo` carries no evaluator, point, cost, or
-measurement service, and works the same for a plain Space branch and a layer
-specialization's segment.
-
-**Construction hooks, not layer knowledge.**  A specialization customizes
-compilation through ``_finalize_compilation`` and its own declaration types.
-That is how the Kernel layer adds domain conveniences without this package
-naming Regions, Networks, or physical artifacts.
-
-**Boundaries.**  ``View`` assesses a declared value through generic Space
-readiness and constraints. The consumer owns the value's meaning and any
-artifact generation. Domain value semantics, graph lowering, persistence, and
-selection policy are supplied by consumers; importing this frontend loads none
-of those layers.
-"""
-
-from finn.kernels.space.branching import (
-    BranchCatalog,
-    BranchInfo,
-    BranchOutputInfo,
-    CaseInfo,
-)
-from finn.kernels.space.compiler import SpaceModel, compile_space, compile_space_model
-from finn.kernels.space.capabilities import View
-from finn.kernels.space.declarations import (
-    RESERVED_LIFECYCLE_NAMES,
-    RESERVED_PROTOCOL_NAMES,
-    AuthoringError,
-    CanonicalValueCodec,
+from .declarations import (
+    AcceptedViewRef,
+    BoundView,
+    ChoiceView,
+    Const,
+    Constraint,
     ConstraintGroup,
     Decision,
-    Input,
-    OccurrenceContext,
-    PersistentCodec,
-    Problem,
-    Projection,
+    DecisionRef,
+    Dependency,
+    Derived,
+    Param,
     Readiness,
     Space,
     Subspace,
     SubspaceChoice,
-    allow_absent,
-    allow_inapplicable,
+    ValueKey,
+    ValueRef,
+    View,
+    ViewKey,
     constraint,
     derived,
-    divisors_of,
-    domain,
-    finite,
+    full_answer,
+    optional,
+    view,
+)
+from .compiler import SpaceModel, compile_space
+from .domains import Domain, divisors_of, domain, finite
+from .edits import Edit, EditOutcome, EditRequest, RefinementReport
+from .errors import DefinitionError, EvaluationError
+from .results import (
+    Answer,
+    ConstraintAssessment,
+    Decided,
+    DecisionState,
+    Finding,
+    FindingKind,
+    Inapplicable,
+    MissingInput,
+    NotApplicable,
+    ReadinessAssessment,
+    Rejected,
+    Unresolved,
+    ViewAssessment,
     reject,
-    unresolved,
 )
-from finn.kernels.space.occurrence import (
-    OccurrenceDiagnostic,
-    ProjectionAssessment,
-    RootFactory,
-    ChoiceView,
-)
+from .semantics import ValueSemantics, default_semantics
+from . import codecs, conformance, extensions, inspection, selections
+from .codecs import CodecBinding, JSONValue, SelectionSchema, ValueCodec, codec_for
+from .references import DecisionHandle, ValueHandle
+from .selections import Selection, SelectionChange, SelectionEntry
+from .extensions import ScopeBuilder
+from .expressions import Expr
 
 __all__ = [
-    # authoring vocabulary shared by every layer
-    "RESERVED_LIFECYCLE_NAMES",
-    "RESERVED_PROTOCOL_NAMES",
-    "AuthoringError",
-    "ConstraintGroup",
-    "Decision",
-    "Input",
-    "CanonicalValueCodec",
-    "OccurrenceContext",
-    "OccurrenceDiagnostic",
-    # the contributor-facing half of Decision(..., canonical=...)
-    "PersistentCodec",
-    "Problem",
-    "Projection",
-    "ProjectionAssessment",
-    "Readiness",
-    "Space",
-    "Subspace",
-    "RootFactory",
-    "SubspaceChoice",
-    "View",
+    "conformance",
+    "AcceptedViewRef",
+    "Answer",
+    "BoundView",
     "ChoiceView",
-    "allow_absent",
-    "allow_inapplicable",
+    "CodecBinding",
+    "Const",
+    "Constraint",
+    "ConstraintAssessment",
+    "ConstraintGroup",
+    "Decided",
+    "Decision",
+    "DecisionRef",
+    "DecisionHandle",
+    "DecisionState",
+    "DefinitionError",
+    "Dependency",
+    "Derived",
+    "Domain",
+    "Edit",
+    "EditOutcome",
+    "EditRequest",
+    "EvaluationError",
+    "Expr",
+    "Finding",
+    "FindingKind",
+    "Inapplicable",
+    "JSONValue",
+    "MissingInput",
+    "NotApplicable",
+    "Param",
+    "Readiness",
+    "ReadinessAssessment",
+    "RefinementReport",
+    "Rejected",
+    "ScopeBuilder",
+    "Selection",
+    "SelectionChange",
+    "SelectionEntry",
+    "SelectionSchema",
+    "Space",
+    "SpaceModel",
+    "Subspace",
+    "SubspaceChoice",
+    "Unresolved",
+    "ValueKey",
+    "ValueCodec",
+    "ValueHandle",
+    "ValueRef",
+    "ValueSemantics",
+    "View",
+    "ViewAssessment",
+    "ViewKey",
+    "compile_space",
+    "codec_for",
+    "codecs",
     "constraint",
+    "default_semantics",
     "derived",
     "divisors_of",
     "domain",
     "finite",
+    "extensions",
+    "full_answer",
+    "inspection",
+    "optional",
     "reject",
-    "unresolved",
-    # lowering, and the policy-neutral seam specialization code reads
-    "BranchCatalog",
-    "BranchInfo",
-    "BranchOutputInfo",
-    "CaseInfo",
-    "SpaceModel",
-    "compile_space",
-    "compile_space_model",
+    "selections",
+    "view",
 ]

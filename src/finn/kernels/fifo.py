@@ -15,8 +15,8 @@ from finn.kernels.artifacts.requirements import (
     ModuleABIRequirements,
     ModuleBuildRequirements,
 )
-from finn.kernels._next_base import Kernel
-from finn.kernels.space._next import (
+from finn.kernels.base import Kernel
+from finn.kernels.space import (
     Decision,
     Param,
     Rejected,

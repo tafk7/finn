@@ -8,8 +8,8 @@ from pathlib import Path
 import pytest
 from qonnx.core.datatype import DataType
 
-from kernels._next_helpers import assess, point_for, value
-from finn.kernels.space._next import (
+from kernels.helpers import assess, point_for, value
+from finn.kernels.space import (
     Decided,
     Rejected,
     Unresolved,
@@ -18,15 +18,15 @@ from finn.kernels.space._next import (
     Subspace,
     inspection,
 )
-from finn.kernels.space._next.errors import RequestError
-from finn.kernels.datatypes._next_semantics import QONNX_DATATYPE_VALUE_SEMANTICS
+from finn.kernels.space.errors import RequestError
+from finn.kernels.datatypes.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
 from finn.kernels.artifacts.abi import Clock, Data, Derived as DerivedClock
 from finn.kernels.artifacts.build import materialize_module_sources, prepare_module_build
 from finn.kernels.artifacts.store import ArtifactStore
 import finn.kernels.dotp as dotp_axi
 from finn.kernels.dotp import DotpAxiKernel
 from finn.kernels.target import DspBlock
-from finn.kernels._next_base import Kernel
+from finn.kernels.base import Kernel
 from finn.kernels.physical.layout import UnusedBitPolicy
 from finn.kernels.resources import resource_root
 

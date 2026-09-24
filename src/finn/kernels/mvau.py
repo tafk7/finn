@@ -39,7 +39,7 @@ from finn.kernels.artifacts.derivation import ProducerIdentity
 from finn.kernels.dotp import DotpAxiKernel
 from finn.kernels.streaming import cyclic_stream_requirements, replay_buffer_requirements
 from finn.kernels.target import DspBlock
-from finn.kernels.datatypes._next_semantics import QONNX_DATATYPE_VALUE_SEMANTICS
+from finn.kernels.datatypes.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
 from finn.kernels.datatypes.values import (
     QONNXDataType,
     canonical_qonnx_datatype,
@@ -56,7 +56,7 @@ from finn.kernels.physical.structure import (
     PinSlice,
     UnusedOutput,
 )
-from finn.kernels.space._next import (
+from finn.kernels.space import (
     Answer,
     ConstraintGroup,
     Decided,
@@ -69,7 +69,7 @@ from finn.kernels.space._next import (
     divisors_of,
     reject,
 )
-from finn.kernels.space._next.errors import RequestError
+from finn.kernels.space.errors import RequestError
 
 
 class WeightDelivery(Enum):

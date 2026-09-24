@@ -15,10 +15,10 @@ The first datatype profile covers ordinary integers and IEEE FLOAT32.
 from finn.kernels.artifacts.contribution_types import CopiedSource, RenderedSource
 from finn.kernels.artifacts.hls import HlsInterface, HlsSourceRequirements
 from finn.kernels.artifacts.sources import CompileOptions, Language, Role
-from finn.kernels._next_base import Kernel
-from finn.kernels.datatypes._next_semantics import QONNX_DATATYPE_VALUE_SEMANTICS
+from finn.kernels.base import Kernel
+from finn.kernels.datatypes.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
 from finn.kernels.datatypes.values import DatatypeError, QONNXDataType, ordinary_integer_bounds
-from finn.kernels.space._next import (
+from finn.kernels.space import (
     Param,
     Rejected,
     constraint,

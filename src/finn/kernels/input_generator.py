@@ -10,7 +10,7 @@ of loop i and all inner loops, aligned with the output transfer. It is a native
 multi-bit marker, not AXI TLAST. Input and output words are opaque bits.
 """
 
-from finn.kernels._next_base import Kernel
+from finn.kernels.base import Kernel
 from finn.kernels.artifacts.abi import Clock, Direction, Reset, Signal
 from finn.kernels.artifacts.contribution_types import CopiedSource
 from finn.kernels.artifacts.requirements import (
@@ -18,8 +18,8 @@ from finn.kernels.artifacts.requirements import (
     ModuleABIRequirements,
     ModuleBuildRequirements,
 )
-from finn.kernels.datatypes._next_semantics import INTEGER_VECTOR, IntegerVector
-from finn.kernels.space._next import (
+from finn.kernels.datatypes.semantics import INTEGER_VECTOR, IntegerVector
+from finn.kernels.space import (
     Decision,
     Param,
     Rejected,

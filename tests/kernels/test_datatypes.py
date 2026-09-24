@@ -110,7 +110,7 @@ def test_a_canonical_name_is_not_a_datatype_value() -> None:
         canonical_qonnx_datatype("INT8")
 
 
-def test_the_engine_does_not_admit_a_string_into_the_datatype_domain() -> None:
+def test_value_semantics_do_not_admit_a_string_into_the_datatype_domain() -> None:
     assert QONNX_DATATYPE_SEMANTICS.accepts(DataType["INT8"]) is True
     assert QONNX_DATATYPE_SEMANTICS.accepts("INT8") is False
 

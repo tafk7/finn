@@ -19,15 +19,15 @@ from finn.kernels.datatypes.values import (
     canonical_qonnx_datatype,
     resolve_qonnx_datatype_name,
 )
-from finn.kernels.datatypes._next_domains import DatatypeDomain, Integer
-from finn.kernels.datatypes._next_semantics import QONNX_DATATYPE_VALUE_SEMANTICS
+from finn.kernels.datatypes.domains import DatatypeDomain, Integer
+from finn.kernels.datatypes.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
 from finn.kernels.physical.layout import (
     FieldPlacement,
     PackedBeatLayout,
     UnusedBitPolicy,
     UnusedBitRange,
 )
-from finn.kernels.space._next import (
+from finn.kernels.space import (
     Answer,
     Constraint,
     ConstraintGroup,

@@ -14,7 +14,7 @@ from qonnx.core.datatype import DataType
 import pyslang
 from pyslang import ast, syntax
 
-from kernels._next_helpers import point_for, value
+from kernels.helpers import point_for, value
 from finn.kernels import (
     EltwiseKernel,
     FifoKernel,
@@ -30,9 +30,9 @@ from finn.kernels.artifacts.hls import render_hls_sources
 from finn.kernels.artifacts.rtl import TOLERATED_DIAGNOSTICS
 from finn.kernels.artifacts.store import ArtifactStore
 from finn.kernels.resources import resource_root, template_root
-from finn.kernels.datatypes._next_semantics import QONNX_DATATYPE_VALUE_SEMANTICS
-from finn.kernels.space._next import Param, Rejected, Space, Subspace, Unresolved
-from finn.kernels.space._next.errors import RequestError
+from finn.kernels.datatypes.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
+from finn.kernels.space import Param, Rejected, Space, Subspace, Unresolved
+from finn.kernels.space.errors import RequestError
 from finn.kernels.target import DspBlock
 
 ROOT = Path(__file__).resolve().parents[2]

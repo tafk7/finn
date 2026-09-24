@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Candidate-API behavior of the first migrated physical kernels."""
+"""Public authoring behavior of FIFO, conversion and elementwise kernels."""
 
 from __future__ import annotations
 
@@ -11,13 +11,13 @@ import pytest
 
 from finn.kernels.artifacts.abi import Direction, Signal
 from finn.kernels.artifacts.contribution_types import CopiedSource
-from finn.kernels.datatypes._next_semantics import QONNX_DATATYPE_VALUE_SEMANTICS
+from finn.kernels.datatypes.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
 from finn.kernels.datatypes.values import resolve_qonnx_datatype_name
 from finn.kernels.eltwise import EltwiseKernel
 from finn.kernels.fifo import FifoKernel
 from finn.kernels.int_to_fp32 import IntToFp32Kernel
-from finn.kernels.space._next import Answer, Decided, Param, Rejected, Space, Subspace, Unresolved
-from finn.kernels.space._next.errors import RequestError
+from finn.kernels.space import Answer, Decided, Param, Rejected, Space, Subspace, Unresolved
+from finn.kernels.space.errors import RequestError
 from finn.kernels.target import DspBlock
 
 T = TypeVar("T")

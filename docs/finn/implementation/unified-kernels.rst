@@ -1,6 +1,13 @@
 Unified Kernel authoring
 ========================
 
+.. note::
+
+   Historical experimental dataflow contract. This page retains the graph-specific
+   design that consumed the retired runtime; its dataflow port is deferred.
+   Current independent-kernel authoring uses the
+   `Space API guide <../../design-space.md>`_.
+
 The experimental dataflow stack uses one domain abstraction for reusable
 implementations: ``finn.dataflow.model.kernel.Kernel``. A Kernel is a normal
 ``Space`` and uses the same declarations, immutable points, nested occurrences,

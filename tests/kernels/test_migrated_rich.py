@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Candidate API checks for traversal, threshold tables and HLS source views."""
+"""Public API checks for traversal, threshold tables and HLS source views."""
 
 from __future__ import annotations
 
@@ -12,13 +12,13 @@ import pytest
 
 from finn.kernels.artifacts.abi import Bus, Signal
 from finn.kernels.artifacts.hls import HlsSourceRequirements, render_hls_sources
-from finn.kernels.datatypes._next_semantics import IntegerVector, ThresholdTable
+from finn.kernels.datatypes.semantics import IntegerVector, ThresholdTable
 from finn.kernels.datatypes.values import resolve_qonnx_datatype_name
 from finn.kernels.input_generator import InputGeneratorKernel
 from finn.kernels.memstream_hls import MemStreamHlsKernel
 from finn.kernels.resources import template_root
-from finn.kernels.space._next import Answer, Decided, Param, Rejected, Space, Subspace, Unresolved
-from finn.kernels.space._next.errors import RequestError
+from finn.kernels.space import Answer, Decided, Param, Rejected, Space, Subspace, Unresolved
+from finn.kernels.space.errors import RequestError
 from finn.kernels.thresholding import ThresholdingAxiKernel
 
 T = TypeVar("T")

@@ -1,351 +1,333 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""K2b/K2c: declarative classes lower exactly to the existing engine."""
+"""Compiler invariants independent of the old flat-spec adaptation machinery."""
 
 from __future__ import annotations
 
-import ast
-import sys
-from concurrent.futures import ThreadPoolExecutor
-from importlib.util import resolve_name
-from pathlib import Path
 from typing import cast
 
 import pytest
 
-from finn.kernels._engine import (
-    Absent,
-    Answer,
-    Decided,
-    Decision as EngineDecision,
-    DecisionDomain,
-    DependencyKind,
-    DependencyRef,
-    DependencyView,
-    DerivedProperty,
-    DesignSpaceSpec,
-    Engine,
-    EvaluatorSpec,
-    ProblemField,
-    ProblemSchema,
-    QualifiedPath,
-    ReadinessProfile,
-)
-from finn.kernels.space.compiler import _Ref, _compile_space, compile_space
+from finn.kernels.space.compiler import compile_space
 from finn.kernels.space.declarations import (
-    AuthoringError,
+    Const,
+    Constraint,
     ConstraintGroup,
     Decision,
-    Input,
-    Problem,
+    Derived,
+    Param,
     Readiness,
     Space,
-    Subspace,
+    View,
     constraint,
     derived,
-    divisors_of,
-    semantics_for,
+    view,
 )
+from finn.kernels.space.domains import domain, divisors_of
+from finn.kernels.space.errors import DefinitionError, RequestError
+from finn.kernels.space.semantics import ValueSemantics
 
 
-class FoldingSweep(Space):
-    extent = Problem(int)
-    parallelism = Decision(int, domain=divisors_of(extent))
+def test_compile_links_forward_dependencies_without_executing_callbacks() -> None:
+    calls: list[str] = []
 
-    @derived(int, extent=extent, parallelism=parallelism)
-    def cycles(*, extent: int, parallelism: int) -> int:
-        return extent // parallelism
+    class Family(Space):
+        @derived
+        def cycles(*, extent: int, lanes: int) -> int:
+            calls.append("cycles")
+            return extent // lanes
 
-    ready = Readiness(decisions=(parallelism,), properties=(cycles,))
-    exports = (parallelism, cycles)
+        extent = Param(int)
+        lanes = Decision(int, domain=divisors_of(extent))
+        label = Const("flat family")
 
+        @constraint
+        def supported(*, extent: int) -> bool:
+            calls.append("supported")
+            return extent > 0
 
-class Tiled(Space):
-    extent = Input(int)
-    tile = Decision(int, domain=divisors_of(extent))
+        ready = Readiness(lanes)
+        admitted = ConstraintGroup(supported)
+        result = View(cycles, constraints=(admitted,), requires=(ready,))
 
-    @derived(int, extent=extent, tile=tile)
-    def tiles(*, extent: int, tile: int) -> int:
-        return extent // tile
-
-    @constraint(tile=tile)
-    def positive(*, tile: int) -> bool:
-        return tile > 0
-
-    legal = ConstraintGroup(positive)
-    ready = Readiness(decisions=(tile,), properties=(tiles,), constraints=legal)
-    exports = (tile, tiles)
-
-
-class ThreeSources(Space):
-    extent = Problem(int)
-    choice = Decision(int, values=(4,))
-
-    @derived(int, extent=extent)
-    def copied(*, extent: int) -> int:
-        return extent
-
-    from_problem = Subspace(Tiled, extent=extent)
-    from_decision = Subspace(Tiled, extent=choice)
-    from_property = Subspace(Tiled, extent=copied)
-
-    @derived(
-        int,
-        first=from_problem.tiles,
-        second=from_decision.tiles,
-        third=from_property.tiles,
+    model = compile_space(Family)
+    assert calls == []
+    nodes = model.linked.nodes
+    cycles = nodes[model.resolve(0, Family.cycles)]
+    assert {argument.name for argument in cycles.arguments} == {"extent", "lanes"}
+    position = {index: offset for offset, index in enumerate(model.linked.order)}
+    assert all(
+        position[dependency] < position[node.index]
+        for node in nodes
+        for dependency in node.dependencies
     )
-    def total(*, first: int, second: int, third: int) -> int:
-        return first + second + third
+    assert model.linked.parameters == (model.resolve(0, Family.extent),)
+    assert model.linked.decisions == (model.resolve(0, Family.lanes),)
+    assert nodes[model.resolve(0, Family.result)].semantics is not None
 
 
-def test_constraint_free_space_lowers_to_expected_raw_shape_and_behavior() -> None:
-    compiled = _compile_space(
-        FoldingSweep,
-        "folding",
-        problem_namespace="problem.folding",
-    )
-    spec = compiled.spec
-    assert tuple(field.path.value for field in spec.problem_schema.fields) == (
-        "problem.folding.extent",
-    )
-    assert tuple(item.path.value for item in spec.decisions) == ("folding.parallelism",)
-    assert tuple(item.path.value for item in spec.properties) == ("semantic.folding.cycles",)
-    assert spec.constraints == ()
-    assert spec.constraint_sets == ()
-    assert tuple(item.name for item in spec.readiness_profiles) == ("folding.ready",)
-    assert spec.decisions[0].domain.dependencies == (
-        compiled.member("extent").dependency("extent"),
-    )
-    assert spec.properties[0].evaluator.dependencies == (
-        compiled.member("extent").dependency("extent"),
-        compiled.member("parallelism").dependency("parallelism"),
-    )
+def test_function_and_value_views_have_an_explicit_raw_output() -> None:
+    class Family(Space):
+        size = Param(int)
 
-    engine = Engine()
-    point = engine.start(engine.validate(spec), {"problem.folding.extent": 16})
-    assert engine.enumerate_candidates(point, "folding.parallelism") == Decided((1, 2, 4, 8, 16))
-    point = engine.commit_assignments(point, {"folding.parallelism": 4}).point
-    assert engine.query_property(point, "semantic.folding.cycles") == Decided(4)
+        @derived
+        def doubled(*, size: int) -> int:
+            return size * 2
+
+        value_view = View(doubled)
+
+        @view
+        def function_view(*, size: int) -> int:
+            return size * 2
+
+    model = compile_space(Family)
+    for declaration in (Family.value_view, Family.function_view):
+        node = model.linked.nodes[model.resolve(0, declaration)]
+        assert node.kind == "view"
+        assert node.output is not None
+        assert model.linked.nodes[node.output].kind == "derived"
+        assert node.requires == ()
 
 
-def test_space_exposes_root_specification_without_a_compiler_object() -> None:
-    spec = compile_space(FoldingSweep, "folding", problem_namespace="problem.folding")
-    assert tuple(item.path.value for item in spec.decisions) == ("folding.parallelism",)
+def test_a_transitive_triangle_is_acyclic_and_cycles_name_only_their_members() -> None:
+    class Triangle(Space):
+        first = Param(int)
+
+        @derived
+        def second(*, first: int) -> int:
+            return first
+
+        @derived
+        def third(*, first: int, second: int) -> int:
+            return first + second
+
+    compile_space(Triangle)
+
+    class Cyclic(Space):
+        @derived
+        def first(*, second: int) -> int:
+            return second
+
+        @derived
+        def second(*, first: int) -> int:
+            return first
+
+        @derived
+        def user(*, first: int) -> int:
+            return first
+
+        @derived
+        def self_cycle(*, self_cycle: int) -> int:
+            return self_cycle
+
+        unrelated = Const(1)
+
+    with pytest.raises(DefinitionError) as error:
+        compile_space(Cyclic)
+    assert [dict(finding.details)["members"] for finding in error.value.findings] == [
+        ("first", "second"),
+        ("self_cycle",),
+    ]
+    assert all(finding.code == "cyclic-dependency" for finding in error.value.findings)
 
 
-def test_space_matches_a_hand_authored_raw_spec() -> None:
-    compiled = compile_space(FoldingSweep, "folding", problem_namespace="problem.folding")
-    problem_semantics = compiled.problem_schema.fields[0].value_semantics
-    decision_semantics = compiled.decisions[0].value_semantics
-    property_semantics = compiled.properties[0].value_semantics
-    extent = DependencyRef.problem("extent", "problem.folding.extent", problem_semantics)
-    parallelism = DependencyRef.decision("parallelism", "folding.parallelism", decision_semantics)
+def test_twenty_thousand_dependencies_compile_without_recursive_traversal() -> None:
+    def step(*, previous: int) -> int:
+        return previous + 1
 
-    def accepts(candidate: object, values: DependencyView) -> Answer[bool]:
-        value = cast(int, values["extent"])
-        return Decided(type(candidate) is int and candidate > 0 and value % candidate == 0)
-
-    def candidates(values: DependencyView) -> Answer[tuple[object, ...]]:
-        value = cast(int, values["extent"])
-        return Decided(tuple(item for item in range(1, value + 1) if value % item == 0))
-
-    def cycles(values: DependencyView) -> Answer[object]:
-        return Decided(cast(int, values["extent"]) // cast(int, values["parallelism"]))
-
-    raw = DesignSpaceSpec(
-        ProblemSchema((ProblemField(QualifiedPath("problem.folding.extent"), problem_semantics),)),
-        (
-            EngineDecision(
-                QualifiedPath("folding.parallelism"),
-                decision_semantics,
-                DecisionDomain(
-                    (extent,),
-                    accepts,
-                    EvaluatorSpec((extent,), candidates),
-                ),
-            ),
-        ),
-        (
-            DerivedProperty(
-                QualifiedPath("semantic.folding.cycles"),
-                property_semantics,
-                EvaluatorSpec((extent, parallelism), cycles),
-            ),
-        ),
-        readiness_profiles=(
-            ReadinessProfile(
-                "folding.ready",
-                (QualifiedPath("folding.parallelism"),),
-                (QualifiedPath("semantic.folding.cycles"),),
-            ),
-        ),
-    )
-
-    assert compiled.problem_schema == raw.problem_schema
-    assert tuple(
-        (item.path, item.value_semantics, item.domain.dependencies) for item in compiled.decisions
-    ) == tuple(
-        (item.path, item.value_semantics, item.domain.dependencies) for item in raw.decisions
-    )
-    assert tuple(
-        (item.path, item.value_semantics, item.evaluator.dependencies)
-        for item in compiled.properties
-    ) == tuple(
-        (item.path, item.value_semantics, item.evaluator.dependencies) for item in raw.properties
-    )
-    assert compiled.constraints == raw.constraints
-    assert compiled.constraint_sets == raw.constraint_sets
-    assert compiled.readiness_profiles == raw.readiness_profiles
-
-    engine = Engine()
-    compiled_point = engine.start(engine.validate(compiled), {"problem.folding.extent": 16})
-    raw_point = engine.start(engine.validate(raw), {"problem.folding.extent": 16})
-    assert engine.enumerate_candidates(compiled_point, "folding.parallelism") == (
-        engine.enumerate_candidates(raw_point, "folding.parallelism")
-    )
-    compiled_point = engine.commit_assignments(compiled_point, {"folding.parallelism": 4}).point
-    raw_point = engine.commit_assignments(raw_point, {"folding.parallelism": 4}).point
-    assert engine.query_property(compiled_point, "semantic.folding.cycles") == (
-        engine.query_property(raw_point, "semantic.folding.cycles")
-    )
-
-
-def test_input_may_bind_to_problem_decision_or_property() -> None:
-    compiled = _compile_space(
-        ThreeSources,
-        "root",
-        problem_namespace="problem.root",
-    )
-    engine = Engine()
-    point = engine.start(engine.validate(compiled.spec), {"problem.root.extent": 8})
-    point = engine.commit_assignments(
-        point,
-        {
-            "root.choice": 4,
-            "root.from_problem.tile": 2,
-            "root.from_decision.tile": 2,
-            "root.from_property.tile": 4,
-        },
-    ).point
-    assert engine.query_property(point, "semantic.root.total") == Decided(8)
-
-
-def test_input_mapping_is_exact_and_typed() -> None:
-    integer = _Ref(QualifiedPath("problem.x"), DependencyKind.PROBLEM, semantics_for(int))
-    string = _Ref(QualifiedPath("problem.x"), DependencyKind.PROBLEM, semantics_for(str))
-    with pytest.raises(AuthoringError, match=r"missing \['extent'\]"):
-        _compile_space(Tiled, "child")
-    with pytest.raises(AuthoringError, match=r"extra \['other'\]"):
-        _compile_space(Tiled, "child", {"extent": integer, "other": integer})
-    with pytest.raises(AuthoringError, match="expects int, got str"):
-        _compile_space(Tiled, "child", {"extent": string})
-
-
-def test_nested_space_cannot_introduce_problem_fields() -> None:
-    class ChildWithProblem(Space):
-        value = Problem(int)
-
-    class Broken(Space):
-        nested = Subspace(ChildWithProblem, name="child")
-
-    with pytest.raises(AuthoringError, match="inside a reusable child Space"):
-        _compile_space(Broken, "broken", problem_namespace="problem.broken")
-
-
-def test_recursive_subspace_cycle_is_an_authoring_error() -> None:
-    class Left(Space):
-        pass
-
-    class Right(Space):
-        left = Subspace(Left)
-
-    Left.right = Subspace(Right)
-
-    with pytest.raises(AuthoringError, match=r"Subspace cycle: Left -> Right -> Left"):
-        _compile_space(Left, "left")
-
-
-def test_repeated_uses_are_rebased_without_mutating_templates() -> None:
-    class Root(Space):
-        extent = Problem(int)
-        left = Subspace(Tiled, extent=extent)
-        right = Subspace(Tiled, extent=extent)
-
-    before = (Tiled.tile.stable_name, Tiled.tiles.stable_name)
-    compiled = _compile_space(Root, "root", problem_namespace="problem.root")
-    assert tuple(item.path.value for item in compiled.spec.decisions) == (
-        "root.left.tile",
-        "root.right.tile",
-    )
-    assert tuple(item.path.value for item in compiled.spec.properties) == (
-        "semantic.root.left.tiles",
-        "semantic.root.right.tiles",
-    )
-    assert (Tiled.tile.stable_name, Tiled.tiles.stable_name) == before == (None, None)
-
-
-def test_gated_use_uses_existing_engine_applicability() -> None:
-    class Root(Space):
-        extent = Problem(int)
-        enabled = Problem(bool)
-        nested = Subspace(Tiled, extent=extent, when=enabled, name="child")
-
-    compiled = _compile_space(Root, "root", problem_namespace="problem.root")
-    engine = Engine()
-    space = engine.validate(compiled.spec)
-    disabled = engine.start(
-        space,
-        {"problem.root.extent": 8, "problem.root.enabled": False},
-    )
-    assert isinstance(engine.query_property(disabled, "semantic.root.child.tiles"), Absent)
-    enabled = engine.start(
-        space,
-        {"problem.root.extent": 8, "problem.root.enabled": True},
-    )
-    enabled = engine.commit_assignments(enabled, {"root.child.tile": 2}).point
-    assert engine.query_property(enabled, "semantic.root.child.tiles") == Decided(4)
-
-
-def test_compilation_is_repeatable_and_thread_safe() -> None:
-    def compile_at(index: int) -> tuple[str, ...]:
-        compiled = _compile_space(
-            FoldingSweep,
-            f"folding_{index}",
-            problem_namespace=f"problem.folding_{index}",
+    members: dict[str, object] = {"value0": Const(0)}
+    for number in range(1, 20_001):
+        members[f"value{number}"] = Derived(
+            step, aliases={"previous": members[f"value{number - 1}"]}
         )
-        return tuple(
-            item.path.value for item in (*compiled.spec.decisions, *compiled.spec.properties)
-        )
-
-    with ThreadPoolExecutor(max_workers=4) as pool:
-        results = tuple(pool.map(compile_at, range(8)))
-    assert len(set(results)) == 8
-    assert FoldingSweep.parallelism.stable_name is None
-    assert FoldingSweep.cycles.stable_name is None
+    family = cast(type[Space], type("Deep", (Space,), members))
+    model = compile_space(family)
+    assert len(model.linked.order) == 20_001
+    assert len(model.linked.nodes[-1].dependencies) == 1
+    assert model.linked.order[-1] == model.resolve(0, members["value20000"])
 
 
-def test_frontend_remains_domain_free() -> None:
-    root = Path(__file__).parents[3] / "src/finn/kernels/space"
-    files = tuple(root.glob("*.py"))
-    assert files
-    allowed = ("finn.kernels.space", "finn.kernels._engine")
-    for path in files:
-        tree = ast.parse(path.read_text(), filename=str(path))
-        imports: set[str] = set()
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Import):
-                imports.update(alias.name for alias in node.names)
-            elif isinstance(node, ast.ImportFrom):
-                module = resolve_name("." * node.level + (node.module or ""), "finn.kernels.space")
-                imports.update(f"{module}.{alias.name}" for alias in node.names)
-        unexpected = {
-            imported
-            for imported in imports
-            if imported.split(".")[0] not in sys.stdlib_module_names | {"typing_extensions"}
-            and not any(
-                imported == prefix or imported.startswith(f"{prefix}.") for prefix in allowed
-            )
-        }
-        assert not unexpected, (path, unexpected)
+def test_compiled_handles_do_not_follow_later_class_rebinding() -> None:
+    class Family(Space):
+        value = Param(int)
+
+    original = Family.value
+    old = compile_space(Family)
+    replacement = Param(str)
+    replacement.__set_name__(Family, "value")
+    Family.value = replacement  # type: ignore[assignment]
+    new = compile_space(Family)
+
+    old_semantics = old.linked.nodes[old.resolve(0, original)].semantics
+    new_semantics = new.linked.nodes[new.resolve(0, replacement)].semantics
+    assert old_semantics is not None and old_semantics.type_token is int
+    assert new_semantics is not None and new_semantics.type_token is str
+    with pytest.raises(RequestError, match="compiled scope"):
+        old.resolve(0, replacement)
+    with pytest.raises(RequestError, match="compiled scope"):
+        new.resolve(0, original)
+    with pytest.raises(RequestError, match="scope"):
+        old.resolve(1, original)
+
+
+def test_inherited_dependencies_bind_to_overrides_without_mutating_base() -> None:
+    class Base(Space):
+        size = Const(4)
+
+        @derived
+        def doubled(*, size: int) -> int:
+            return size * 2
+
+    class Child(Base):
+        size = Const(8)
+
+    original = compile_space(Base)
+    child = compile_space(Child)
+    assert child.resolve(0, Base.size) == child.resolve(0, Child.size)
+    original_node = original.linked.nodes[original.resolve(0, Base.size)]
+    child_node = child.linked.nodes[child.resolve(0, Child.size)]
+    assert (original_node.value, child_node.value) == (4, 8)
+    assert child.linked.nodes[child.resolve(0, Base.doubled)].arguments[0].node == child_node.index
+
+
+def test_compile_snapshots_values_domains_and_callback_references() -> None:
+    values = [[1], [2]]
+
+    def first(*, value: int) -> int:
+        return value + 1
+
+    def second(*, value: int) -> int:
+        return value + 2
+
+    class Family(Space):
+        value = Param(int)
+        constant = Const([1])
+        choice = Decision[list[int]](list, values=values)
+        calculated = Derived(first)
+
+    old = compile_space(Family)
+    Family.constant.value.append(2)
+    finite_values = Family.choice.domain._finite_values
+    assert finite_values is not None
+    finite_values[0].append(3)
+    Family.calculated.function = second
+    new = compile_space(Family)
+    old_constant = old.linked.nodes[old.resolve(0, Family.constant)]
+    old_choice = old.linked.nodes[old.resolve(0, Family.choice)]
+    old_function = old.linked.nodes[old.resolve(0, Family.calculated)]
+    assert old_constant.value == [1]
+    assert old_choice.domain is not None
+    assert old_choice.domain._finite_values == ([1], [2])
+    assert old_function.function is first
+    assert new.linked.nodes[new.resolve(0, Family.calculated)].function is second
+
+
+def test_foreign_value_and_obligation_references_are_definition_errors() -> None:
+    class Other(Space):
+        value = Const(1)
+
+        @constraint
+        def valid(*, value: int) -> bool:
+            return value > 0
+
+    class ForeignView(Space):
+        result = View(Other.value)
+
+    class ForeignConstraint(Space):
+        own = Const(1)
+        result = View(own, constraints=(Other.valid,))
+
+    class WrongKind(Space):
+        own = Const(1)
+        result = View(own, constraints=(cast(Constraint, own),))
+
+    for family in (ForeignView, ForeignConstraint, WrongKind):
+        with pytest.raises(DefinitionError):
+            compile_space(family)
+
+
+def test_domain_binding_is_validated_without_invocation() -> None:
+    calls: list[str] = []
+
+    def membership(*, candidate: int, maximum: int) -> bool:
+        calls.append("membership")
+        return candidate <= maximum
+
+    class Family(Space):
+        maximum = Param(int)
+        choice = Decision(int, domain=domain(accepts=membership, maximum=maximum))
+
+    model = compile_space(Family)
+    assert calls == []
+    assert model.linked.nodes[model.resolve(0, Family.choice)].domain_arguments[
+        0
+    ].node == model.resolve(0, Family.maximum)
+
+    class WrongSignature(Space):
+        maximum = Param(int)
+        choice = Decision(int, domain=domain(accepts=membership, misspelled=maximum))
+
+    with pytest.raises(DefinitionError, match="domain membership signature"):
+        compile_space(WrongSignature)
+
+    class ForeignDomain(Space):
+        choice = Decision(int, domain=domain(accepts=membership, maximum=Family.maximum))
+
+    with pytest.raises(DefinitionError, match="not a member"):
+        compile_space(ForeignDomain)
+
+
+@pytest.mark.parametrize("name", ["answer", "assign", "root", "_state"])
+def test_reserved_names_are_not_declarations(name: str) -> None:
+    with pytest.raises(DefinitionError, match="reserved"):
+        compile_space(type("Reserved", (Space,), {name: Const(1)}))
+
+
+def test_incompatible_inferred_derived_override_is_rejected() -> None:
+    class Base(Space):
+        @derived
+        def output() -> int:
+            return 1
+
+    def output() -> str:
+        return "different"
+
+    changed = cast(type[Space], type("Changed", (Base,), {"output": Derived(output)}))
+
+    with pytest.raises(DefinitionError, match="semantics"):
+        compile_space(changed)
+
+
+def test_missing_binding_names_fail_before_any_callback() -> None:
+    def invalid(*, unknown: int) -> int:
+        raise AssertionError("a compiler must never discover dependencies by execution")
+
+    class Family(Space):
+        result = Derived(invalid)
+
+    with pytest.raises(DefinitionError, match="no declaration"):
+        compile_space(Family)
+
+
+def test_generic_alias_adapter_tokens_keep_identity_for_input_and_output_annotations() -> None:
+    token = tuple[int, ...]
+    vector: ValueSemantics[tuple[int, ...]] = ValueSemantics(
+        token,
+        "integer vector",
+        lambda value: type(value) is tuple and all(type(item) is int for item in value),
+        lambda left, right: left == right,
+        lambda value: value,
+    )
+
+    class Family(Space):
+        source = Param(vector)
+
+        @derived(semantics=vector)
+        def result(*, source: tuple[int, ...]) -> tuple[int, ...]:
+            return source + (3,)
+
+    model = compile_space(Family)
+    assert model.start({Family.source: (1, 2)}).result == (1, 2, 3)
+    semantics = model.linked.nodes[model.resolve(0, Family.result)].semantics
+    assert semantics is not None and semantics.type_token is token

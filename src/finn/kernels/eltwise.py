@@ -24,15 +24,15 @@ from finn.kernels.artifacts.requirements import (
     ModuleBuildRequirements,
     ScalarTable,
 )
-from finn.kernels._next_base import Kernel
-from finn.kernels.datatypes._next_semantics import QONNX_DATATYPE_VALUE_SEMANTICS
+from finn.kernels.base import Kernel
+from finn.kernels.datatypes.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
 from finn.kernels.datatypes.values import (
     DatatypeError,
     QONNXDataType,
     ordinary_integer_bounds,
     resolve_qonnx_datatype_name,
 )
-from finn.kernels.space._next import (
+from finn.kernels.space import (
     Param,
     Rejected,
     constraint,

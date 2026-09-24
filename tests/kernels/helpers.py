@@ -1,54 +1,39 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Test harness using the actual Space binding and assessment machinery."""
+"""Test harness using public model binding and typed discovery.
+
+Supplied facts use exposed parameter keys. Required omissions are errors;
+partial evaluation uses explicit optional-Param or unresolved-Decision fixtures."""
 
 from collections.abc import Mapping
-from typing import Any, TypeVar, cast
+from typing import TypeVar
 
-from finn.kernels._engine import Answer, Decided
-from finn.kernels.datatypes.semantics import (
-    QONNX_DATATYPE_CODEC,
-    QONNX_DATATYPE_VALUE_SEMANTICS,
-)
-from finn.kernels.space import ConstraintGroup, Decision, Input, Problem, Space, Subspace
-from finn.kernels.space.declarations import Constraint, declared_members
+from finn.kernels.space import Space, compile_space
+from finn.kernels.space.declarations import Constraint
+from finn.kernels.space.errors import RefinementError, RequestError
+from finn.kernels.space.inspection import decisions, members
+from finn.kernels.space.results import Answer, Decided
 
 T = TypeVar("T")
+S = TypeVar("S", bound=Space)
 
 
-def point_for(
-    kernel: type[Space],
-    facts: Mapping[str, object],
-    **choices: object,
-) -> Space:
-    inputs: dict[str, Problem[object]] = {}
-    for name, declaration in declared_members(kernel):
-        if isinstance(declaration, Input):
-            codec = (
-                QONNX_DATATYPE_CODEC
-                if (
-                    declaration.value_semantics.type_token
-                    is QONNX_DATATYPE_VALUE_SEMANTICS.type_token
-                )
-                else None
-            )
-            inputs[name] = Problem(declaration.value_semantics, required=False, canonical=codec)
-    unknown = set(facts) - set(inputs)
-    assert not unknown, unknown
-    members: dict[str, object] = {
-        "__module__": __name__,
-        **inputs,
-        "kernel": Subspace(kernel, **cast("dict[str, Any]", inputs)),
-    }
-    host = cast("type[Space]", type("ContractHost", (Space,), members))
-    root = host.start({inputs[name]: value for name, value in facts.items()})
-    point = cast("Space", getattr(root, "kernel"))
-    for name, value in choices.items():
-        declaration = getattr(kernel, name)
-        assert isinstance(declaration, Decision)
-        point = point.assign(declaration, value)
-    return point
+def point_for(kernel: type[S], facts: Mapping[str, object], **choices: object) -> S:
+    model = compile_space(kernel)
+    parameters = {item.key: item.reference for item in members(model) if item.kind == "param"}
+    unknown = facts.keys() - parameters.keys()
+    if unknown:
+        raise RequestError(f"unknown supplied facts: {sorted(unknown)}")
+    point = model.start({parameters[name]: value for name, value in facts.items()})
+    owned = {item.key: item.reference for item in decisions(model)}
+    unknown_choices = choices.keys() - owned.keys()
+    if unknown_choices:
+        raise RequestError(f"unknown choices: {sorted(unknown_choices)}")
+    report = point.refine(*(point.edit(owned[name], value) for name, value in choices.items()))
+    if not report.accepted:
+        raise RefinementError(report)
+    return report.point
 
 
 def value(answer: Answer[T]) -> T:
@@ -57,15 +42,4 @@ def value(answer: Answer[T]) -> T:
 
 
 def assess(point: Space, condition: Constraint) -> Answer[bool]:
-    members = declared_members(type(point))
-    name = next(name for name, member in members if member is condition)
-    group = next(
-        member
-        for _, member in members
-        if isinstance(member, ConstraintGroup) and condition in member.constraints
-    )
-    return next(
-        answer
-        for path, answer in point.assess(group).answers.items()
-        if str(path).rsplit(".", 1)[-1] == name
-    )
+    return point.assess(condition).answer

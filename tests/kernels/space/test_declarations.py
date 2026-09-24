@@ -1,254 +1,495 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
-
-"""K2a: immutable declarations before any engine lowering exists."""
+"""DS1 structure and signature checks; no evaluator is mocked here."""
 
 from __future__ import annotations
 
-from dataclasses import FrozenInstanceError
-from enum import Enum
+from collections.abc import Callable
+from typing import cast, get_type_hints
 
 import pytest
 
-import finn.kernels.space as space
-from finn.kernels.space.declarations import (
-    AuthoringError,
-    Constraint,
-    ConstraintGroup,
+from finn.kernels.space import (
+    Answer,
+    Const,
     Decision,
-    Derived,
-    Input,
-    Problem,
-    Projection,
-    Readiness,
+    DefinitionError,
+    MissingInput,
+    NotApplicable,
+    Param,
     Space,
     Subspace,
     SubspaceChoice,
+    ValueKey,
+    ValueRef,
+    ValueSemantics,
+    View,
+    ViewKey,
     constraint,
-    declared_members,
     derived,
-    divisors_of,
-    exported_members,
-    finite,
+    full_answer,
+    optional,
+    view,
 )
+from finn.kernels.space.collection import (
+    BoundArgument,
+    collect_placement,
+    collect_space,
+    resolve_decision_ref,
+    validate_argument,
+)
+from finn.kernels.space.declarations import Declaration, DecisionRef
 
 
-class Mode(str, Enum):
-    NARROW = "narrow"
-    WIDE = "wide"
+class Base(Space):
+    extent = Param(int)
+
+    @derived
+    def doubled(*, extent: int) -> int:
+        raise AssertionError("collection must not execute author callbacks")
+
+    @derived(source=extent)
+    def aliased(*, source: int) -> int:
+        raise AssertionError("collection must not execute author callbacks")
 
 
-class Child(Space):
-    extent = Input(int)
-    tile = Decision(int, domain=divisors_of(extent))
-
-    @derived(int, extent=extent, tile=tile)
-    def count(*, extent: int, tile: int) -> int:
-        return extent // tile
-
-    @constraint(tile=tile)
-    def positive(*, tile: int) -> bool:
-        return tile > 0
-
-    legal = ConstraintGroup(positive)
-    ready = Readiness(decisions=(tile,), properties=(count,), constraints=legal)
-    exports = (tile, count)
+class Override(Base):
+    extent = Param(int)
 
 
-class Parent(Space):
-    extent = Problem(int)
-    first = Subspace(Child, extent=extent)
-    second = Subspace(Child, extent=extent)
+def test_effective_collection_resolves_inherited_names_and_explicit_aliases() -> None:
+    collected = collect_space(Override)
+    assert collected.members["extent"].declaration is Override.extent
+    assert collected.functions["doubled"].dependencies[0].source is Override.extent
+    assert collected.functions["aliased"].dependencies[0].source is Override.extent
+    assert collected.aliases[Base.extent] == "extent"
+    assert collected.functions["doubled"].semantics.type_token is int
+    assert Base.doubled.semantics is None
 
 
-def test_declaration_members_are_direct_class_values() -> None:
-    members = dict(declared_members(Child))
-    assert isinstance(members["extent"], Input)
-    assert isinstance(members["tile"], Decision)
-    assert isinstance(members["count"], Derived)
-    assert isinstance(members["positive"], Constraint)
-    assert isinstance(members["legal"], ConstraintGroup)
-    assert isinstance(members["ready"], Readiness)
+def test_forward_members_and_postponed_class_annotations() -> None:
+    class Example(Space):
+        class Quantity:
+            pass
+
+        @derived
+        def result(*, later: Quantity) -> Quantity:
+            raise AssertionError("must not run")
+
+        later = Param(Quantity)
+
+    collected = collect_space(Example)
+    assert collected.functions["result"].dependencies[0].source is Example.later
+    assert collected.functions["result"].semantics.type_token is Example.Quantity
 
 
-def test_finite_domain_preserves_declared_order() -> None:
-    values = finite((Mode.WIDE, Mode.NARROW))
-    assert values.dependencies == ()
-    assert values.candidates is not None
-    assert values.candidates() == (Mode.WIDE, Mode.NARROW)
-    assert values.accepts(candidate=Mode.NARROW) is True
+def test_value_and_function_views_are_distinct_declarations_with_same_type() -> None:
+    class Example(Space):
+        value = Const(5)
+
+        @constraint
+        def supported(*, value: int) -> bool:
+            raise AssertionError("must not run")
+
+        @view(constraints=(supported,))
+        def function(*, value: int) -> int:
+            raise AssertionError("must not run")
+
+        detached = View(value, constraints=(supported,))
+
+    collected = collect_space(Example)
+    assert collected.functions["function"].semantics.type_token is int
+    assert collected.semantics[Example.detached].type_token is int
+    assert Example.function.source is None
+    assert Example.detached.source is Example.value
+    assert Example.function.requires == Example.detached.requires == ()
 
 
-def test_use_exposes_only_explicit_exports() -> None:
-    assert Parent.first.tile.value_semantics.type_token is int
-    assert Parent.first.count.value_semantics.type_token is int
-    with pytest.raises(AttributeError, match="does not export 'positive'"):
-        _ = Parent.first.positive
+def test_nested_alias_and_typed_exports() -> None:
+    width = ValueKey("width", int)
+    physical = ViewKey("physical", int)
+
+    class Child(Space):
+        extent = Param(int)
+
+        @view
+        def result(*, extent: int) -> int:
+            return extent
+
+        exports = {width: extent, physical: result}
+
+    class Parent(Space):
+        child = Subspace(Child, extent=Param(int))
+
+        @derived(size=child.ref(Child.extent))
+        def total(*, size: int) -> int:
+            return size * 2
+
+    collected = collect_space(Child)
+    assert collected.exports[width] is Child.extent
+    assert collected.exports[physical] is Child.result
+    assert collect_space(Parent).functions["total"].dependencies[0].source.semantics is not None
+    assert set(vars(Parent)) >= {"child", "total"}
+    assert "extent" not in vars(Parent)
 
 
-def test_two_subspaces_are_distinct_immutable_templates() -> None:
-    assert Parent.first is not Parent.second
-    assert Parent.first.tile.subspace is Parent.first
-    assert Parent.second.tile.subspace is Parent.second
-    with pytest.raises(FrozenInstanceError):
-        Parent.first.stable_name = "moved"  # type: ignore[misc]
+def test_explicit_answer_semantics_and_dependency_modes() -> None:
+    class Example(Space):
+        value = Param(int, required=False)
+
+        @derived(input=optional(value))
+        def missing(*, input: int | MissingInput | NotApplicable) -> bool:
+            return isinstance(input, MissingInput)
+
+        @derived(input=full_answer(value), semantics=ValueSemantics.immutable_nominal(int))
+        def forwarded(*, input: Answer[int]) -> Answer[int]:
+            return input
+
+    collected = collect_space(Example)
+    assert collected.functions["missing"].dependencies[0].mode == "optional"
+    assert collected.functions["forwarded"].dependencies[0].mode == "answer"
+    assert collected.functions["forwarded"].semantics.type_token is int
 
 
-def test_inherited_override_keeps_position_and_checks_category() -> None:
-    class Base(Space):
-        first = Input(int)
-        second = Decision(int, values=(1, 2))
-
-    class Leaf(Base):
-        first = Input(int, allow_absent=True)
-        third = Input(str)
-
-    assert tuple(name for name, _ in declared_members(Leaf)) == ("first", "second", "third")
-
-    class Broken(Base):
-        first = Decision(int, values=(1,))
-
-    with pytest.raises(AuthoringError, match="Broken.first changes declaration category"):
-        declared_members(Broken)
-
-
-def test_incompatible_value_override_is_rejected() -> None:
-    class Base(Space):
-        value = Input(int)
-
-    class Broken(Base):
-        value = Input(str)
-
-    with pytest.raises(AuthoringError, match="changes value semantics"):
-        declared_members(Broken)
+@pytest.mark.parametrize(
+    ("function_source", "message"),
+    [
+        ("def result(value: int = 1) -> int: return value", "cannot have defaults"),
+        ("def result(value: int, /) -> int: return value", "positional-only"),
+        ("def result(*value: int) -> int: return 1", "variadic"),
+        ("def result(**value: int) -> int: return 1", "variadic"),
+        ("def result(self: int) -> int: return self", "implicit self/cls"),
+        ("def result(cls: int) -> int: return cls", "implicit self/cls"),
+        ("def result(unknown: int) -> int: return unknown", "no declaration"),
+        ("def result(value) -> int: return value", "annotation is required"),
+        ("def result(value: int): return value", "return annotation"),
+        ("def result(value: str) -> str: return value", "cannot consume"),
+    ],
+)
+def test_bad_signatures_fail_without_invocation(function_source: str, message: str) -> None:
+    namespace: dict[str, object] = {}
+    exec(function_source, namespace)
+    function = cast(Callable[..., object], namespace["result"])
+    example = type("BadSignature", (Space,), {"value": Param(int), "result": derived(function)})
+    with pytest.raises(DefinitionError, match=message):
+        collect_space(example)
 
 
-def test_a_non_declaration_cannot_silently_hide_an_inherited_declaration() -> None:
-    class Base(Space):
-        value = Input(int)
+def test_extra_alias_and_answer_without_semantics_are_rejected() -> None:
+    class Extra(Space):
+        value = Param(int)
 
-    class Broken(Base):
-        value = 3
+        @derived(typo=value)
+        def result(*, value: int) -> int:
+            return value
 
-    with pytest.raises(AuthoringError, match="replaces a declaration with int"):
-        declared_members(Broken)
+    with pytest.raises(DefinitionError, match="unknown arguments.*typo"):
+        collect_space(Extra)
 
+    class NoSemantics(Space):
+        @derived
+        def result() -> Answer[int]:
+            raise AssertionError("must not run")
 
-def test_export_must_name_an_effective_value_member() -> None:
-    orphan = Input(int)
-
-    class Broken(Space):
-        value = Input(int)
-        exports = (orphan,)
-
-    with pytest.raises(AuthoringError, match="not an effective class member"):
-        exported_members(Broken)
+    with pytest.raises(DefinitionError, match="Answer.*explicit semantics"):
+        collect_space(NoSemantics)
 
 
-def test_inherited_export_follows_a_compatible_override() -> None:
-    class Base(Space):
-        value = Input(int)
-        exports = (value,)
+def test_incompatible_override_collision_and_reserved_names() -> None:
+    different = type("Different", (Base,), {"extent": Param(str)})
+    with pytest.raises(DefinitionError, match="Different.extent.*semantics"):
+        collect_space(different)
+    changed_kind = type("ChangedKind", (Base,), {"extent": Const(2)})
+    with pytest.raises(DefinitionError, match="declaration kind"):
+        collect_space(changed_kind)
+    hidden = type("Hidden", (Base,), {"extent": 3})
+    with pytest.raises(DefinitionError, match="hides an inherited declaration"):
+        collect_space(hidden)
 
-    class Leaf(Base):
-        value = Input(int, allow_absent=True)
+    class Other(Space):
+        extent = Param(int)
 
-    assert exported_members(Leaf) == {"value": Leaf.value}
+    collision = type("Collision", (Base, Other), {})
+    with pytest.raises(DefinitionError, match="conflicting inherited"):
+        collect_space(collision)
+    reserved = type("Reserved", (Space,), {"assign": Param(int)})
+    with pytest.raises(DefinitionError, match="reserved occurrence name"):
+        collect_space(reserved)
 
 
-def test_decision_requires_exactly_one_domain_form() -> None:
-    with pytest.raises(AuthoringError, match="exactly one"):
+def test_duplicate_declaration_reuse_is_attributable() -> None:
+    value = Param(int)
+    with pytest.raises(RuntimeError) as exc:
+        type("Duplicate", (Space,), {"one": value, "two": value})
+    assert isinstance(exc.value.__cause__, DefinitionError)
+    assert "Duplicate.two" in str(exc.value.__cause__)
+
+
+def test_unbound_late_declarations_and_bad_exports_are_rejected() -> None:
+    class Example(Space):
+        pass
+
+    setattr(Example, "late", Param(int))
+    with pytest.raises(DefinitionError, match="not bound at class creation"):
+        collect_space(Example)
+    wrong = type(
+        "WrongExport",
+        (Space,),
+        {"value": Param(int)},
+    )
+    wrong_member = cast(Declaration, vars(wrong)["value"])
+    setattr(wrong, "exports", {ViewKey("physical", int): wrong_member})
+    with pytest.raises(DefinitionError, match="wrong kind"):
+        collect_space(wrong)
+
+
+def test_definition_constants_snapshot_and_decision_domain_contract() -> None:
+    source = [1, 2]
+    constant = Const(source)
+    source.append(3)
+    assert constant.value == [1, 2]
+    with pytest.raises(DefinitionError, match="exactly one"):
         Decision(int)
-    with pytest.raises(AuthoringError, match="exactly one"):
-        Decision(int, values=(1,), domain=finite((1,)))
+    with pytest.raises(TypeError, match="truth value"):
+        bool(Param(int))
 
 
-def _named_declaration_factories():
-    return (
-        ("Problem", lambda name: Problem(int, name=name)),
-        ("Input", lambda name: Input(int, name=name)),
-        ("Decision", lambda name: Decision(int, values=(1,), name=name)),
-        ("Derived", lambda name: derived(int, name=name)(lambda: 1)),
-        ("Constraint", lambda name: constraint(name=name)(lambda: True)),
-        ("ConstraintGroup", lambda name: ConstraintGroup(name=name)),
-        ("Readiness", lambda name: Readiness(name=name)),
-        (
-            "Projection",
-            lambda name: Projection(Decision(int, values=(1,)), readiness=Readiness(), name=name),
-        ),
-        ("Subspace", lambda name: Subspace(Child, extent=Input(int), name=name)),
-        (
-            "SubspaceChoice",
-            lambda name: SubspaceChoice({"child": Subspace(Child, extent=Input(int))}, name=name),
-        ),
+def test_inferred_derived_override_cannot_change_value_type() -> None:
+    @derived
+    def text(*, extent: int) -> str:
+        return str(extent)
+
+    changed = type("Changed", (Base,), {"doubled": text})
+    with pytest.raises(DefinitionError, match="override changes value semantics"):
+        collect_space(changed)
+
+
+def test_four_binding_forms_and_local_edit_ownership() -> None:
+    class Child(Space):
+        size = Param(int)
+        internal = Decision(str, values=("auto", "block"))
+
+    class Parent(Space):
+        supplied = Decision(int, values=(1, 2))
+        literal = Subspace(Child, size=4)
+        alias = Subspace(Child, size=supplied)
+        exposed = Subspace(Child, size=Param(int))
+        local = Subspace(Child, size=Decision(int, values=(4, 8)))
+
+    plans = [
+        collect_placement(placement)
+        for placement in (Parent.literal, Parent.alias, Parent.exposed, Parent.local)
+    ]
+    assert [plan.bindings["size"].kind for plan in plans] == [
+        "literal",
+        "reference",
+        "exposed-param",
+        "local-decision",
+    ]
+    local = cast(DecisionRef[object], Parent.local.decision_ref(Child.size))
+    assert resolve_decision_ref(local) is Parent.local.bindings["size"]
+    internal = cast(DecisionRef[object], Parent.alias.decision_ref(Child.internal))
+    assert resolve_decision_ref(internal) is Child.internal
+    for placement in (Parent.literal, Parent.alias, Parent.exposed):
+        with pytest.raises(DefinitionError, match="not a locally owned Decision"):
+            resolve_decision_ref(cast(DecisionRef[object], placement.decision_ref(Child.size)))
+
+
+def test_child_omissions_and_incompatible_bindings_are_not_implicit_exposure() -> None:
+    class Child(Space):
+        width = Param(int)
+        optional_width = Param(int, required=False)
+
+    with pytest.raises(DefinitionError, match="missing child parameter"):
+        collect_placement(Subspace(Child, width=8))
+    with pytest.raises(DefinitionError, match="unknown child parameter"):
+        collect_placement(Subspace(Child, width=8, optional_width=9, typo=1))
+    with pytest.raises(DefinitionError, match="incompatible value semantics"):
+        collect_placement(Subspace(Child, width=Param(str), optional_width=9))
+
+
+def test_guards_are_collected_separately_and_respect_inherited_overrides() -> None:
+    class Child(Space):
+        value = Param(int)
+
+    class Guarded(Space):
+        enabled = Param(bool)
+        selected = Decision(int, values=(1, 2), when=enabled)
+
+        @derived(when=enabled)
+        def result(*, selected: int) -> int:
+            raise AssertionError("must not execute")
+
+        @constraint(when=enabled)
+        def support(*, selected: int) -> bool:
+            raise AssertionError("must not execute")
+
+        @view(when=enabled)
+        def authored(*, selected: int) -> int:
+            raise AssertionError("must not execute")
+
+        physical = View(result, constraints=(support,), when=enabled)
+        child = Subspace(Child, value=1, when=enabled)
+        implementation = SubspaceChoice({"only": Subspace(Child, value=1)}, when=enabled)
+
+    class OverrideGuard(Guarded):
+        enabled = Param(bool)
+
+    effective = collect_space(OverrideGuard)
+    guarded = (
+        Guarded.selected,
+        Guarded.result,
+        Guarded.support,
+        Guarded.authored,
+        Guarded.physical,
+        Guarded.child,
+        Guarded.implementation,
     )
+    assert all(effective.guards[declaration] is OverrideGuard.enabled for declaration in guarded)
+    assert [arg.name for arg in effective.functions["result"].dependencies] == ["selected"]
+    assert "when" not in Guarded.result.aliases
+    assert "when" not in Guarded.child.bindings
 
 
-@pytest.mark.parametrize("label,factory", _named_declaration_factories())
-@pytest.mark.parametrize("name", ["", "nested.name", "not a segment", "non_ascii_é"])
-def test_every_explicit_declaration_name_is_one_nonempty_path_segment(label, factory, name) -> None:
-    with pytest.raises(AuthoringError, match="name must be one"):
-        factory(name)
+def test_guards_on_fresh_local_choices_and_alternatives_use_the_placement_scope() -> None:
+    class Child(Space):
+        value = Param(int)
+
+    class Parent(Space):
+        enabled = Param(bool)
+        child = Subspace(Child, value=Decision(int, values=(1,), when=enabled))
+        choice = SubspaceChoice(
+            {
+                "one": Subspace(Child, value=1, when=enabled),
+            }
+        )
+
+    effective = collect_space(Parent)
+    decision = cast(Decision[object], Parent.child.bindings["value"])
+    assert effective.guards[decision] is Parent.enabled
+    assert effective.guards[Parent.choice.alternatives["one"]] is Parent.enabled
 
 
-@pytest.mark.parametrize("_label,factory", _named_declaration_factories())
-def test_none_remains_the_only_member_name_fallback(_label, factory) -> None:
-    assert factory(None).stable_name is None
+def test_nonboolean_and_foreign_guards_fail_during_collection() -> None:
+    class Wrong(Space):
+        count = Param(int)
+        choice = Decision(int, values=(1,), when=cast(ValueRef[bool], count))
+
+    with pytest.raises(DefinitionError, match="Wrong.choice guard.*Boolean"):
+        collect_space(Wrong)
+
+    class Foreign(Space):
+        enabled = Param(bool)
+
+    class Unrelated(Space):
+        choice = Decision(int, values=(1,), when=Foreign.enabled)
+
+    with pytest.raises(DefinitionError, match="Unrelated.choice guard.*effective scope"):
+        collect_space(Unrelated)
 
 
-def test_public_space_facade_exposes_only_generic_vocabulary() -> None:
-    assert set(space.__all__) == {
-        "AuthoringError",
-        "RESERVED_LIFECYCLE_NAMES",
-        "RESERVED_PROTOCOL_NAMES",
-        "BranchCatalog",
-        "BranchInfo",
-        "BranchOutputInfo",
-        "CanonicalValueCodec",
-        "CaseInfo",
-        "ConstraintGroup",
-        "Decision",
-        "Input",
-        "OccurrenceContext",
-        "OccurrenceDiagnostic",
-        "PersistentCodec",
-        "Problem",
-        "Projection",
-        "ProjectionAssessment",
-        "Readiness",
-        "RootFactory",
-        "Space",
-        "SpaceModel",
-        "Subspace",
-        "SubspaceChoice",
-        "View",
-        "ChoiceView",
-        "allow_absent",
-        "allow_inapplicable",
-        "compile_space",
-        "compile_space_model",
-        "constraint",
-        "derived",
-        "divisors_of",
-        "domain",
-        "finite",
-        "reject",
-        "unresolved",
-    }
-    # No private compiler record, engine declaration, or `_Ref` reaches an author.
-    assert not {"Constraint", "Derived", "Domain", "BranchOutput", "SegmentEndpoint"} & set(
-        space.__all__
+def test_when_is_an_authoring_control_argument() -> None:
+    class Wrong(Space):
+        active = Param(bool)
+
+        @derived(when=active)
+        def value(*, when: bool) -> int:
+            return 1
+
+    with pytest.raises(DefinitionError, match="reserved authoring control argument"):
+        collect_space(Wrong)
+
+
+def test_cached_child_records_supply_inferred_types_without_mutating_declarations() -> None:
+    boolean_view = ViewKey("admitted", bool)
+
+    class Child(Space):
+        size = Param(int)
+
+        @derived
+        def enabled(*, size: int) -> bool:
+            raise AssertionError("must not execute")
+
+        admitted = View(enabled)
+        exports = {boolean_view: admitted}
+
+    child_record = collect_space(Child)
+
+    class Parent(Space):
+        child = Subspace(Child, size=1)
+
+        @derived(when=child.ref(Child.enabled))
+        def value() -> int:
+            raise AssertionError("must not execute")
+
+        copied = View(child.accepted(Child.admitted))
+        exports = {boolean_view: copied}
+
+    effective = collect_space(Parent, known_spaces={Child: child_record})
+    assert effective.semantics[Parent.copied].type_token is bool
+    assert effective.guards[Parent.value] is Parent.value.when
+    assert Child.enabled.semantics is None
+    assert Child.admitted.semantics is None
+    assert Parent.copied.semantics is None
+
+    class Wrong(Space):
+        child = Subspace(Child, size=1)
+
+        @derived(flag=child.ref(Child.enabled))
+        def value(*, flag: str) -> int:
+            raise AssertionError("must not execute")
+
+    with pytest.raises(DefinitionError, match="cannot consume bool"):
+        collect_space(Wrong, known_spaces={Child: child_record})
+
+
+def test_collection_does_not_descend_into_deep_child_hierarchies() -> None:
+    current: type[Space] = Space
+    for index in range(1500):
+        current = type(f"Nested{index}", (Space,), {"child": Subspace(current)})
+    effective = collect_space(current)
+    assert tuple(effective.members) == ("child",)
+
+
+def test_linker_argument_validation_shares_dependency_mode_policy() -> None:
+    def annotations(integer: Answer[int], text: Answer[str]) -> None:
+        pass
+
+    hints: dict[str, object] = get_type_hints(annotations)
+    source = cast(ValueRef[object], Param(int))
+    integer = cast(ValueSemantics[object], ValueSemantics.immutable_nominal(int))
+    validate_argument(BoundArgument("item", source, "required", int), integer, owner="reader.item")
+    validate_argument(
+        BoundArgument("item", source, "answer", hints["integer"]), integer, owner="reader.item"
     )
-    # No layer specialization either: those are exported by their own package.
-    assert not {
-        "Kernel",
-        "DotpAxiKernel",
-        "KernelChoice",
-        "RegionDeclaration",
-    } & set(space.__all__)
-    assert all(not name.startswith("_") for name in space.__all__)
+    validate_argument(
+        BoundArgument("item", source, "optional", int | MissingInput | NotApplicable),
+        integer,
+        owner="reader.item",
+    )
+    with pytest.raises(DefinitionError, match="full_answer dependency requires"):
+        validate_argument(
+            BoundArgument("item", source, "answer", int), integer, owner="reader.item"
+        )
+    with pytest.raises(DefinitionError, match="cannot consume int"):
+        validate_argument(
+            BoundArgument("item", source, "answer", hints["text"]), integer, owner="reader.item"
+        )
+    with pytest.raises(DefinitionError, match="cannot consume int"):
+        validate_argument(
+            BoundArgument("item", source, "optional", str | float | MissingInput | NotApplicable),
+            integer,
+            owner="reader.item",
+        )
 
 
-def test_every_named_export_resolves() -> None:
-    for name in space.__all__:
-        assert getattr(space, name) is not None
+def test_generic_list_annotations_validate_their_nominal_origin() -> None:
+    class Vector(Space):
+        values: Param[list[int]] = Param(list)
+
+        @derived
+        def total(*, values: list[int]) -> int:
+            return sum(values)
+
+    effective = collect_space(Vector)
+    assert effective.functions["total"].dependencies[0].source is Vector.values

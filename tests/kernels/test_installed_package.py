@@ -48,45 +48,38 @@ class RejectGraphDependencies(importlib.abc.MetaPathFinder):
 sys.meta_path.insert(0, RejectGraphDependencies())
 
 from finn.kernels import DotpAxiKernel, DspBlock, WeightDelivery, mvau_assembly
-from finn.kernels._engine import Decided
+from finn.kernels.space import Decided
 from finn.kernels.artifacts import build, contributions, contribution_types, requirements
 from finn.kernels.artifacts.manifest import decode
 from finn.kernels.artifacts.store import ArtifactStore
-from finn.kernels.datatypes.semantics import QONNX_DATATYPE_CODEC, QONNX_DATATYPE_VALUE_SEMANTICS
 from finn.kernels.resources import resource_root, template_root
-from finn.kernels.space import Problem, Space, Subspace
 from qonnx.core.datatype import DataType
 
 resources = resource_root()
 assert resources == template_root()
 assert resources.is_relative_to(installed)
 assert (installed / "finn/kernels/py.typed").is_file()
+assert not (installed / "finn/kernels/_engine").exists()
+assert not (installed / "finn/kernels/space/_next").exists()
 assert sha256((resources / "dotp_axi.sv").read_bytes()).hexdigest() == config["wrapper_sha256"]
 assert build.ModuleBuildRequirements is requirements.ModuleBuildRequirements
 assert contributions.CopiedSource is contribution_types.CopiedSource
 assert requirements.ModuleBuildRequirements.__module__ == "finn.kernels.artifacts.build"
 assert contribution_types.CopiedSource.__module__ == "finn.kernels.artifacts.contributions"
 
-class DotpRequest(Space):
-    pe = Problem(int)
-    simd = Problem(int)
-    dtype = Problem(QONNX_DATATYPE_VALUE_SEMANTICS, canonical=QONNX_DATATYPE_CODEC)
-    result = Problem(QONNX_DATATYPE_VALUE_SEMANTICS, canonical=QONNX_DATATYPE_CODEC)
-    target = Problem(DspBlock)
-    segment = Problem(int)
-    compute = Subspace(
-        DotpAxiKernel, pe=pe, simd=simd, activation_dtype=dtype, weights_dtype=dtype,
-        result_dtype=result, target_dsp=target, segment_length=segment,
-    )
-
-dotp = DotpRequest.start({
-    DotpRequest.pe: 2, DotpRequest.simd: 2, DotpRequest.dtype: DataType["INT3"],
-    DotpRequest.result: DataType["INT8"], DotpRequest.target: DspBlock.DSP48E2,
-    DotpRequest.segment: 0,
-}).compute.assign(DotpAxiKernel.compute_pumping, False)
-answer = dotp.physical.accepted_answer
+dotp = DotpAxiKernel.start({
+    DotpAxiKernel.pe: 2, DotpAxiKernel.simd: 2,
+    DotpAxiKernel.activation.dtype: DataType["INT3"],
+    DotpAxiKernel.weights.dtype: DataType["INT3"],
+    DotpAxiKernel.result.dtype: DataType["INT8"],
+    DotpAxiKernel.target_dsp: DspBlock.DSP48E2,
+    DotpAxiKernel.segment_length: 0,
+}).assign(DotpAxiKernel.compute_pumping, False)
+answer = dotp.physical().accepted_answer
 assert isinstance(answer, Decided), answer
 assert dict(answer.value.parameters)["ACCU_WIDTH"] == 8
+assert dotp.activation.dtype.name == "INT3"
+assert dotp.activation.payload_bits == 6
 
 dotp_sources = {
     "rtl/arith/add_multi_pkg.sv", "rtl/arith/add_multi.sv",
@@ -148,6 +141,7 @@ for delivery in WeightDelivery:
 # Catch namespace or editable-install leakage even if the import was permitted.
 for name, module in tuple(sys.modules.items()):
     if name == "finn" or name.startswith("finn."):
+        assert "._engine" not in name and "._next" not in name, name
         location = getattr(module, "__file__", None)
         if location is not None:
             assert Path(location).resolve().is_relative_to(installed), (name, location)
@@ -200,11 +194,15 @@ def test_installed_wheel_materializes_independent_kernel_builds(tmp_path: Path) 
     with zipfile.ZipFile(wheel) as archive:
         assert {
             "finn/kernels/py.typed",
-            "finn/kernels/_engine/py.typed",
             "finn/kernels/resources/dotp_axi.sv",
             "finn/kernels/resources/cyclic_stream.sv",
             "finn/kernels/resources/decomposed_wrapper.sv.j2",
         } <= set(archive.namelist())
+        assert not any(
+            name.startswith("finn/kernels/_engine/")
+            or any(part.startswith("_next") for part in name.split("/"))
+            for name in archive.namelist()
+        )
         assert not any(name.startswith("finn/dataflow/artifacts/") for name in archive.namelist())
     installed = tmp_path / "installed"
     _run(
