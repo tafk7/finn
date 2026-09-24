@@ -8,7 +8,7 @@ Only direct concrete placements and nominal value types are supported here.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Generator, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar, copy_context
 from dataclasses import dataclass, field
@@ -16,11 +16,26 @@ import importlib
 import inspect
 from threading import RLock
 from types import MappingProxyType
-from typing import Generic, Literal, Protocol, TypeVar, cast, get_origin, get_type_hints, overload
+from typing import (
+    NoReturn,
+    Generic,
+    Literal,
+    Protocol,
+    TypeVar,
+    cast,
+    get_origin,
+    get_type_hints,
+    overload,
+)
 
 from typing_extensions import Self
 
-from .errors import DefinitionError, EvaluationError, RequestError, ValueUnavailableError
+from .errors import (
+    DefinitionError,
+    EvaluationError,
+    RequestError,
+    ValueUnavailableError,
+)
 from .results import (
     Available,
     Finding,
@@ -330,10 +345,10 @@ class Model(Generic[S]):
         if set(parameters) != expected:
             raise RequestError(f"parameters must be exactly {sorted(expected)}")
         for key, value in parameters.items():
-            if not self.nodes[key].declaration.semantics.accepts(value):
+            if not _recognize_value(self.nodes[key], value, "parameter recognition"):
                 raise RequestError(f"{key}: invalid nominal parameter type")
         frozen = {
-            key: self.nodes[key].declaration.semantics.freeze(value)
+            key: _snapshot_value(self.nodes[key].declaration, value, "parameter snapshot", key)
             for key, value in parameters.items()
         }
         snapshot = _Snapshot(
@@ -352,7 +367,10 @@ def _check_signature(function: Callable[..., object], count: int, owner: str) ->
         len(parameters) != count
         or any(
             parameter.kind
-            not in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
+            not in (
+                inspect.Parameter.POSITIONAL_ONLY,
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            )
             or parameter.default is not inspect.Parameter.empty
             for parameter in parameters
         )
@@ -401,7 +419,13 @@ def prepare(family: type[S]) -> Model[S]:
                 if isinstance(item, Subspace):
                     children[(scope, name)] = key
                     pending.append(
-                        (key, item.family, dict(item.bindings), (*ancestors, current), scope)
+                        (
+                            key,
+                            item.family,
+                            dict(item.bindings),
+                            (*ancestors, current),
+                            scope,
+                        )
                     )
                     continue
                 if not isinstance(item, (Value, View)):
@@ -505,11 +529,14 @@ class _Suspend(BaseException):
         self.key = key
 
 
-@dataclass
+@dataclass(slots=True)
 class _Context:
     snapshot: _Snapshot
     key: str
-    request: Callable[[str], None]
+    request: Callable[[str], None] | None = None
+    native_parent: _Greenlet | None = None
+    native_started: bool = False
+    failure: _Failure | None = None
     reads: dict[str, None] = field(default_factory=dict)
     blocked: QueryResult[object] | None = None
     fault: EvaluationError | None = None
@@ -520,15 +547,17 @@ class _Context:
 def _driver_only(role: str) -> None:
     active = _ACTIVE.get()
     if active is not None:
-        active.fault = EvaluationError(active.key, role, "driver-only API during computation")
-        raise active.fault
+        error = EvaluationError(active.key, role, "driver-only API during computation")
+        _native_fault(active, error)
+        raise error
 
 
 def _same_snapshot(point: Space) -> None:
     active = _ACTIVE.get()
     if active is not None and active.snapshot is not point._snapshot:
-        active.fault = EvaluationError(active.key, "field read", "cross-snapshot access")
-        raise active.fault
+        error = EvaluationError(active.key, "field read", "cross-snapshot access")
+        _native_fault(active, error)
+        raise error
 
 
 def _key(point: Space, declaration: Declaration) -> str:
@@ -545,11 +574,29 @@ def _attach(snapshot: _Snapshot, scope: str) -> Space:
     return point
 
 
+def _snapshot_value(
+    declaration: Value[T] | View[T], value: object, role: str, owner: str | None = None
+) -> T:
+    try:
+        return declaration.semantics.freeze(value)
+    except Exception as cause:
+        raise EvaluationError(owner or declaration.name, role, str(cause)) from cause
+
+
+def _recognize_value(node: _Node, value: object, role: str) -> bool:
+    try:
+        return node.declaration.semantics.accepts(value)
+    except Exception as cause:
+        raise EvaluationError(node.key, role, str(cause)) from cause
+
+
 def _copy_result(
-    declaration: Value[T] | View[T], answer: QueryResult[object]
+    declaration: Value[T] | View[T],
+    answer: QueryResult[object],
+    owner: str | None = None,
 ) -> QueryResult[object]:
     return (
-        Available(declaration.semantics.freeze(answer.value))
+        Available(_snapshot_value(declaration, answer.value, "value snapshot", owner))
         if isinstance(answer, Available)
         else answer
     )
@@ -583,13 +630,22 @@ def _read(point: Space, declaration: Value[T] | View[T]) -> object:
     else:
         active.reads[key] = None
         if key not in snapshot.cache:
-            active.pending = key
-            active.request(key)
-            active.pending = None
+            if active.native_parent is not None:
+                outcome = cast(_Entry | _Failure, active.native_parent.switch(key))
+                if isinstance(outcome, _Failure):
+                    _remember_failure(active, outcome)
+                    _raise_native_failure(outcome)
+            else:
+                active.pending = key
+                assert active.request is not None
+                active.request(key)
+                active.pending = None
         answer = snapshot.cache[key].result
         if not isinstance(answer, Available):
             active.blocked = answer
-    return require_value(_copy_result(declaration, answer), context=key)
+            if active.failure is not None:
+                active.failure.add(CleanupFailure(key, "cleanup read", result=answer))
+    return require_value(_copy_result(declaration, answer, key), context=key)
 
 
 def _raw_read(point: Space, declaration: Value[object]) -> QueryResult[object]:
@@ -600,6 +656,7 @@ def _raw_read(point: Space, declaration: Value[object]) -> QueryResult[object]:
     active.reads[key] = None
     if key not in point._snapshot.cache:
         active.pending = key
+        assert active.request is not None
         active.request(key)
         active.pending = None
     return point._snapshot.cache[key].result
@@ -710,12 +767,10 @@ def _evaluate(snapshot: _Snapshot, key: str) -> _Entry:
         if key in snapshot.cache:
             return snapshot.cache[key]
         mode = _MODE.get()
+        if mode == "greenlet":
+            return _native_evaluate(snapshot, key)
         active: dict[str, _Context] = {}
         stack: list[str] = []
-        continuations: dict[str, _Greenlet] = {}
-        if mode == "greenlet":
-            module = importlib.import_module("greenlet")
-            parent = cast(_Greenlet, module.getcurrent())
 
         def request(dependency: str) -> None:
             if dependency in active:
@@ -728,8 +783,6 @@ def _evaluate(snapshot: _Snapshot, key: str) -> _Entry:
             snapshot.work.suspensions += 1
             if mode == "recursive":
                 visit(dependency)
-            elif mode == "greenlet":
-                parent.switch(dependency)
             else:
                 raise _Suspend(dependency)
 
@@ -745,7 +798,6 @@ def _evaluate(snapshot: _Snapshot, key: str) -> _Entry:
             snapshot.cache[current] = entry
             stack.pop()
             active.pop(current)
-            continuations.pop(current, None)
 
         def visit(current: str) -> None:
             context = begin(current)
@@ -755,47 +807,366 @@ def _evaluate(snapshot: _Snapshot, key: str) -> _Entry:
             visit(key)
             return snapshot.cache[key]
         begin(key)
+        while stack:
+            current = stack[-1]
+            context = active[current]
+            try:
+                context.pending = None
+                finish(current, _attempt(context))
+            except _Suspend as signal:
+                begin(signal.key)
+        return snapshot.cache[key]
+
+
+@dataclass(frozen=True, slots=True)
+class CleanupFailure:
+    """One secondary cleanup error/nonvalue, in deterministic encounter order."""
+
+    owner: str
+    role: str
+    error: EvaluationError | None = None
+    result: QueryResult[object] | None = None
+
+
+@dataclass(slots=True)
+class _Failure:
+    primary: EvaluationError
+    cancellation: BaseException | None = None
+    cleanup: list[CleanupFailure] = field(default_factory=list)
+    observed: set[tuple[str, int]] = field(default_factory=set)
+
+    def add(self, issue: CleanupFailure) -> None:
+        identity = (
+            issue.owner,
+            id(issue.error if issue.error is not None else issue.result),
+        )
+        if identity not in self.observed:
+            self.observed.add(identity)
+            self.cleanup.append(issue)
+
+
+class NativeEvaluationError(EvaluationError):
+    """Sticky native query failure; primary cause and cleanup issues stay separate."""
+
+    def __init__(self, failure: _Failure) -> None:
+        primary = failure.primary
+        super().__init__(primary.owner, primary.role, primary.detail)
+        self.primary = primary
+        self.cleanup_failures = tuple(failure.cleanup)
+        self._failure = failure
+        self.__cause__ = primary.__cause__
+
+
+@dataclass(frozen=True, slots=True)
+class NativeCancellationDetails:
+    """Structured diagnostics attached to an original control-flow exception."""
+
+    primary: EvaluationError
+    cleanup_failures: tuple[CleanupFailure, ...]
+
+
+def cancellation_details(error: BaseException) -> NativeCancellationDetails | None:
+    details = getattr(error, "space_cancellation", None)
+    return details if isinstance(details, NativeCancellationDetails) else None
+
+
+def _raise_native_failure(failure: _Failure) -> NoReturn:
+    if failure.cancellation is not None:
+        cancellation = failure.cancellation
+        setattr(
+            cancellation,
+            "space_cancellation",
+            NativeCancellationDetails(failure.primary, tuple(failure.cleanup)),
+        )
+        raise cancellation
+    raise NativeEvaluationError(failure)
+
+
+def _remember_failure(context: _Context, incoming: _Failure) -> _Failure:
+    if context.failure is None:
+        context.failure = incoming
+    elif context.failure is not incoming:
+        if context.failure.cancellation is None:
+            context.failure.cancellation = incoming.cancellation
+        context.failure.add(
+            CleanupFailure(incoming.primary.owner, incoming.primary.role, error=incoming.primary)
+        )
+        for issue in incoming.cleanup:
+            context.failure.add(issue)
+    return context.failure
+
+
+def _native_fault(context: _Context, error: EvaluationError) -> None:
+    context.fault = error
+    if context.native_parent is not None:
+        _remember_failure(context, _Failure(error))
+
+
+def _remember_exception(context: _Context, cause: BaseException) -> _Failure | None:
+    # Python retains an exception raised by the body as __context__ when finally
+    # raises another error. Preserve that chronological chain, including semantic
+    # cleanup blockers, without repeatedly attaching transported engine failures.
+    chain: list[BaseException] = []
+    seen: set[int] = set()
+    current: BaseException | None = cause
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        chain.append(current)
+        current = current.__context__
+    for item in reversed(chain):
+        if isinstance(item, NativeEvaluationError):
+            _remember_failure(context, item._failure)
+        elif isinstance(item, ValueUnavailableError):
+            if context.failure is not None:
+                context.failure.add(
+                    CleanupFailure(str(item.context), "cleanup read", result=item.result)
+                )
+        else:
+            if context.failure is not None and item is context.failure.cancellation:
+                continue
+            if item is context.fault and context.failure is not None:
+                continue
+            if isinstance(item, EvaluationError):
+                error = item
+            else:
+                error = EvaluationError(context.key, context.role, str(item))
+                error.__cause__ = item
+            cancellation = (
+                item if isinstance(item, (KeyboardInterrupt, SystemExit, GeneratorExit)) else None
+            )
+            _remember_failure(context, _Failure(error, cancellation=cancellation))
+    return context.failure
+
+
+@dataclass(frozen=True, slots=True)
+class _Call:
+    function: Callable[..., object]
+    arguments: tuple[object, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _Returned:
+    value: object
+
+
+def _native_invoke(context: _Context, call: _Call) -> _Returned | _Entry | _Failure:
+    """Only authored execution and its exception boundary occupy a native stack."""
+    context.native_started = True
+    token = _ACTIVE.set(context)
+    try:
+        if context.failure is not None:
+            return context.failure
+        context.snapshot.work.callback_starts += 1
         try:
-            while stack:
-                current = stack[-1]
-                context = active[current]
-                try:
-                    if mode == "greenlet":
-                        continuation = continuations.get(current)
-                        if continuation is None:
-                            continuation = cast(
-                                _Greenlet,
-                                module.greenlet(
-                                    lambda context=context: _attempt(context), parent=parent
-                                ),
-                            )
-                            continuation.gr_context = copy_context()
-                            continuations[current] = continuation
-                        output = continuation.switch()
-                        if not continuation.dead:
-                            begin(cast(str, output))
-                            continue
-                        entry = cast(_Entry, output)
-                    else:
-                        # Retain reads across attempts; clear only transient suspension state.
-                        context.pending = None
-                        entry = _attempt(context)
-                    finish(current, entry)
-                except _Suspend as signal:
-                    begin(signal.key)
-            return snapshot.cache[key]
-        finally:
-            # Explicitly unwind suspended ordinary frames on error; no live task cache.
-            for continuation in tuple(continuations.values()):
-                if not continuation.dead:
-                    try:
-                        continuation.throw(GeneratorExit)
-                    except GeneratorExit:
-                        pass
+            value = call.function(*call.arguments)
+        except BaseException as cause:
+            failure = _remember_exception(context, cause)
+            if failure is not None:
+                return failure
+            if context.blocked is not None:
+                return _Entry(context.blocked)
+            # A manually raised unavailable exception is a programmer failure.
+            error = EvaluationError(context.key, context.role, str(cause))
+            error.__cause__ = cause
+            return _remember_failure(context, _Failure(error))
+        if context.failure is not None:
+            return context.failure
+        if context.blocked is not None:
+            return _Entry(context.blocked)
+        return _Returned(value)
+    finally:
+        _ACTIVE.reset(token)
+
+
+def _native_steps(
+    context: _Context,
+) -> Generator[str | _Call, object, _Entry | _Failure]:
+    """Driver-owned resumable bookkeeping, never an author generator."""
+    snapshot = context.snapshot
+    node = snapshot.model.nodes[context.key]
+    declaration = node.declaration
+    point = _attach(snapshot, node.scope)
+    if declaration.when is not None:
+        context.role = "applicability"
+        guard = cast(_Entry | _Failure, (yield _key(point, declaration.when)))
+        if isinstance(guard, _Failure):
+            return guard
+        if not isinstance(guard.result, Available):
+            return guard
+        if guard.result.value is False:
+            return _Entry(Inapplicable())
+    if node.alias is not None:
+        return cast(_Entry | _Failure, (yield node.alias))
+    if isinstance(declaration, Param):
+        return _Entry(
+            Available(node.literal if node.bound_literal else snapshot.parameters[node.key])
+        )
+    if isinstance(declaration, Decision):
+        if node.key not in snapshot.candidates:
+            return _Entry(
+                Unresolved(
+                    (
+                        Finding(
+                            FindingKind.BLOCKER,
+                            "decision-unassigned",
+                            node.key,
+                            "decision requires a commitment",
+                        ),
+                    )
+                )
+            )
+        context.role = "admission/domain"
+        candidate = declaration.semantics.freeze(snapshot.candidates[node.key])
+        outcome = yield _Call(declaration.domain.accepts, (point, candidate))
+        if not isinstance(outcome, _Returned):
+            return cast(_Entry | _Failure, outcome)
+        if type(outcome.value) is not bool:
+            raise TypeError("domain must return bool")
+        if not outcome.value:
+            return _Entry(reject("domain-refused", "candidate outside domain", owner=node.key))
+        return _Entry(Available(snapshot.candidates[node.key]))
+    assert isinstance(declaration, (Derived, View))
+    context.role = "view" if isinstance(declaration, View) else "derived"
+    outcome = yield _Call(declaration.function, (point,))
+    if not isinstance(outcome, _Returned):
+        return cast(_Entry | _Failure, outcome)
+    value = outcome.value
+    answer = Available(declaration.semantics.freeze(value))
+    if isinstance(declaration, Constraint):
+        return _Entry(cast(QueryResult[object], constraint_result(cast(bool, value), node.key)))
+    if isinstance(declaration, View):
+        constraints: dict[str, QueryResult[bool]] = {}
+        for item in declaration.constraints:
+            key = _key(point, item)
+            assessed = cast(_Entry | _Failure, (yield key))
+            if isinstance(assessed, _Failure):
+                return assessed
+            constraints[key] = cast(QueryResult[bool], assessed.result)
+        assessment = assess_view(answer, owner=node.key, constraints=constraints)
+        return _Entry(assessment.accepted_result, assessment=assessment)
+    return _Entry(answer)
+
+
+@dataclass(slots=True)
+class _NativeTask:
+    context: _Context
+    frame: Generator[str | _Call, object, _Entry | _Failure]
+    continuation: _Greenlet | None = None
+    call: _Call | None = None
+    incoming: object = None
+    started: bool = False
+
+
+def _native_evaluate(snapshot: _Snapshot, key: str) -> _Entry:
+    module = importlib.import_module("greenlet")
+    parent = cast(_Greenlet, module.getcurrent())
+    tasks: list[_NativeTask] = []
+    active: dict[str, _NativeTask] = {}
+    failures: dict[str, _Failure] = {}
+
+    def begin(current: str) -> None:
+        context = _Context(snapshot, current, native_parent=parent)
+        task = _NativeTask(context, _native_steps(context))
+        tasks.append(task)
+        active[current] = task
+        snapshot.work.nodes_started += 1
+        snapshot.work.max_pending = max(snapshot.work.max_pending, len(tasks))
+
+    def finish(task: _NativeTask, outcome: _Entry | _Failure) -> None:
+        context = task.context
+        if isinstance(outcome, _Failure):
+            failures[context.key] = outcome
+        else:
+            declaration = snapshot.model.nodes[context.key].declaration
+            assessment = outcome.assessment
+            if isinstance(declaration, View) and assessment is None:
+                assessment = assess_view(outcome.result, owner=context.key)
+            outcome = _Entry(outcome.result, tuple(context.reads), assessment)
+            snapshot.cache[context.key] = outcome
+        tasks.pop()
+        active.pop(context.key)
+        task.frame.close()
+        if tasks:
+            tasks[-1].incoming = outcome
+
+    begin(key)
+    while tasks:
+        task = tasks[-1]
+        context = task.context
+        try:
+            if task.continuation is not None:
+                continuation = task.continuation
+                if not context.native_started:
+                    call = task.call
+                    assert call is not None
+                    demanded = continuation.switch(context, call)
+                    task.call = None
+                else:
+                    demanded = continuation.switch(task.incoming)
+                task.incoming = None
+                if continuation.dead:
+                    task.continuation = None
+                    task.incoming = demanded
+                    continue
+                snapshot.work.suspensions += 1
+            else:
+                if task.started:
+                    demanded = task.frame.send(task.incoming)
+                else:
+                    task.started = True
+                    demanded = next(task.frame)
+                task.incoming = None
+                if isinstance(demanded, _Call):
+                    task.call = demanded
+                    task.continuation = cast(
+                        _Greenlet, module.greenlet(_native_invoke, parent=parent)
+                    )
+                    task.continuation.gr_context = copy_context()
+                    continue
+            dependency = cast(str, demanded)
+            context.reads[dependency] = None
+            if dependency in snapshot.cache:
+                task.incoming = snapshot.cache[dependency]
+            elif dependency in failures:
+                task.incoming = failures[dependency]
+            elif dependency in active:
+                roles = [f"{item.context.key} ({item.context.role})" for item in tasks]
+                error = EvaluationError(
+                    dependency, "dependency cycle", " -> ".join((*roles, dependency))
+                )
+                task.incoming = _Failure(error)
+            else:
+                begin(dependency)
+        except StopIteration as completion:
+            finish(task, cast(_Entry | _Failure, completion.value))
+        except BaseException as cause:
+            failure = _remember_exception(context, cause)
+            assert failure is not None
+            # Native callbacks capture and return their own failures. Engine-side
+            # errors occur with no running child stack and use the same completion path.
+            if task.continuation is not None and not task.continuation.dead:
+                task.incoming = failure
+            else:
+                finish(task, failure)
+    if key in failures:
+        _raise_native_failure(failures[key])
+    return snapshot.cache[key]
+
+
+def _equal_snapshot_values(node: _Node, left: object, right: object) -> bool:
+    semantics = node.declaration.semantics
+    try:
+        return semantics.values_equal(semantics.freeze(left), semantics.freeze(right))
+    except Exception as cause:
+        raise EvaluationError(node.key, "configuration equality", str(cause)) from cause
 
 
 def _update(
-    point: S, changes: tuple[Change[object], ...], choices: Mapping[str, object], *, monotone: bool
+    point: S,
+    changes: tuple[Change[object], ...],
+    choices: Mapping[str, object],
+    *,
+    monotone: bool,
 ) -> Update[S]:
     _driver_only("configuration update")
     snapshot = point._snapshot
@@ -814,11 +1185,16 @@ def _update(
             raise RequestError("duplicate change")
         if change.remove and monotone:
             raise RequestError("monotone operation cannot clear")
-        if not change.remove and not node.declaration.semantics.accepts(change.value):
+        if not change.remove and not _recognize_value(node, change.value, "candidate recognition"):
             raise RequestError(f"{change.key}: invalid nominal candidate type")
         pending[change.key] = change
     prepared = {
-        key: snapshot.model.nodes[key].declaration.semantics.freeze(change.value)
+        key: _snapshot_value(
+            snapshot.model.nodes[key].declaration,
+            change.value,
+            "candidate snapshot",
+            key,
+        )
         for key, change in pending.items()
         if not change.remove
     }
@@ -830,8 +1206,8 @@ def _update(
             if (
                 monotone
                 and key in merged
-                and not snapshot.model.nodes[key].declaration.semantics.values_equal(
-                    merged[key], prepared[key]
+                and not _equal_snapshot_values(
+                    snapshot.model.nodes[key], merged[key], prepared[key]
                 )
             ):
                 return Update(
@@ -840,17 +1216,16 @@ def _update(
                     MappingProxyType(
                         {
                             key: reject(
-                                "commitment-conflict", "cannot revise monotone choice", owner=key
+                                "commitment-conflict",
+                                "cannot revise monotone choice",
+                                owner=key,
                             )
                         }
                     ),
                 )
             merged[key] = prepared[key]
     if merged.keys() == snapshot.candidates.keys() and all(
-        snapshot.model.nodes[key].declaration.semantics.values_equal(
-            snapshot.model.nodes[key].declaration.semantics.freeze(value),
-            snapshot.model.nodes[key].declaration.semantics.freeze(snapshot.candidates[key]),
-        )
+        _equal_snapshot_values(snapshot.model.nodes[key], value, snapshot.candidates[key])
         for key, value in merged.items()
     ):
         return Update(point, True, MappingProxyType({}))
@@ -869,7 +1244,15 @@ def capture(point: Space) -> tuple[tuple[str, object], ...]:
     """Bounded in-process same-family representation: sparse detached choices only."""
     _driver_only("choice capture")
     return tuple(
-        (key, point._snapshot.model.nodes[key].declaration.semantics.freeze(value))
+        (
+            key,
+            _snapshot_value(
+                point._snapshot.model.nodes[key].declaration,
+                value,
+                "capture snapshot",
+                key,
+            ),
+        )
         for key, value in sorted(point._snapshot.candidates.items())
     )
 
