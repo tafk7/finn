@@ -213,7 +213,8 @@ def test_invalid_prerequisite_never_crosses_getter_or_reaches_division(scheduler
         assert not report.accepted
         assert isinstance(report.outcomes["divisor"], Rejected)
         assert isinstance(report.outcomes["output"], Rejected)
-    assert starts and divisions == []
+    assert len(starts) == (3 if scheduler == "replay" else 2)
+    assert divisions == []
 
 
 def test_complete_request_validation_and_snapshot_before_callbacks(scheduler):

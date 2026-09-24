@@ -14,6 +14,7 @@ import time
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--output", type=Path, required=True)
+parser.add_argument("--only-narrow", action="store_true")
 args = parser.parse_args()
 fixtures = [
     ("chain", 20000),
@@ -36,6 +37,8 @@ cases += [
     for scheduler in ("replay", "recursive")
     for kind, size in (("chain", 20000), ("fanin", 64), ("narrow", 500))
 ]
+if args.only_narrow:
+    cases = [case for case in cases if case[1] == "narrow"]
 revision = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
 dirty = bool(subprocess.check_output(["git", "status", "--porcelain"], text=True).strip())
 source_hashes = {

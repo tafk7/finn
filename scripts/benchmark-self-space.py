@@ -49,7 +49,7 @@ def self_fixture(kind: str, size: int, work: Counter[str]):
             work["leaf_body"] += 1
             return 1
 
-    names = tuple(f"child{i}" for i in range(size))
+    names = tuple(f"child{i}" for i in range(size + (kind == "narrow")))
     members = {name: candidate.Subspace(Leaf) for name in names}
     if kind == "narrow":
         names = names[:1]
@@ -89,7 +89,7 @@ def baseline_fixture(kind: str, size: int, work: Counter[str]):
             work["leaf_body"] += 1
             return 1
 
-    placements = {f"child{i}": baseline.Subspace(Leaf) for i in range(size)}
+    placements = {f"child{i}": baseline.Subspace(Leaf) for i in range(size + (kind == "narrow"))}
     selected = tuple(placements)[:1] if kind == "narrow" else tuple(placements)
     aliases = {f"v{i}": placements[name].ref(Leaf.value) for i, name in enumerate(selected)}
     parameters = ", ".join(f"{name}: int" for name in aliases)
