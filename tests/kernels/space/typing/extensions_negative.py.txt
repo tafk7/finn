@@ -1,5 +1,5 @@
 from finn.kernels.space import (
-    Param, ScopeBuilder, Space, ValueKey, ViewKey, Answer, Decided, ValueSemantics,
+    Param, ScopeBuilder, Space, ValueKey, ViewKey, QueryResult, Available, ValueSemantics,
 )
 
 builder = ScopeBuilder(Space)
@@ -12,7 +12,7 @@ builder.export(ViewKey("complete", str)).view(view)  # E
 builder.export(ValueKey("value", int)).value(view)  # E
 builder.export(ViewKey("view", int)).view(number)  # E
 
-def wrong(*, number: int) -> Answer[str]:
-    return Decided(str(number))
+def wrong(*, number: int) -> QueryResult[str]:
+    return Available(str(number))
 
 builder.derived("wrong", wrong, semantics=ValueSemantics.immutable_nominal(int))  # E

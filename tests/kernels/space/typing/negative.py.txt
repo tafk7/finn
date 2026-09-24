@@ -1,6 +1,6 @@
 from finn.kernels.space import (
     Decision, Param, Space, Subspace, ValueKey, ViewKey, constraint, derived, view,
-    ValueSemantics, Answer, Decided, View, SubspaceChoice,
+    ValueSemantics, QueryResult, Available, View, SubspaceChoice, refinement,
 )
 
 class Child(Space):
@@ -17,23 +17,23 @@ class Parent(Space):
 def bad(point: Child, parent: Parent) -> None:
     wrong_value: str = point.width  # E
     wrong_descriptor: int = Child.width  # E
-    point.assign(Child.lanes, "two")  # E
-    point.assign(Child.width, 2)  # E
-    parent.assign(Parent.child.ref(Child.lanes), 2)  # E
+    point.field(Child.lanes).change("two")  # E
+    point.field(Child.width).change(2)  # E
+    parent.field(Parent.child.ref(Child.lanes)).change(2)  # E
     point.physical(3)  # E
     wrong_assessment: int = point.physical()  # E
     Parent.child.accepted(Child.width)  # E
     Parent.child.ref(ViewKey("view", int))  # E
     Parent.child.accepted(ValueKey("value", int))  # E
-    point.refine("not an edit")  # E
+    refinement.commit(point, "not a change")  # E
 
 @constraint  # E
 def wrong_constraint() -> str:
     return "yes"
 
 @derived(semantics=ValueSemantics.immutable_nominal(int))  # E
-def wrong_answer() -> Answer[str]:
-    return Decided("bad")
+def wrong_answer() -> QueryResult[str]:
+    return Available("bad")
 
 bad_guard = Decision(int, values=(1,), when=Child.width)  # E
 bad_child = Subspace(Child, width=4, when=Child.width)  # E

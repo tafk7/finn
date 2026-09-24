@@ -8,17 +8,20 @@ from dataclasses import dataclass
 from typing_extensions import assert_type
 
 from finn.kernels.space import (
-    Answer,
+    QueryResult,
+    BoundDecision,
+    BoundValue,
     BoundView,
+    BoundViewField,
     ChoiceView,
     Const,
-    Decided,
+    Available,
     Decision,
     DecisionRef,
     Derived,
-    Edit,
+    Change,
+    CommitmentReport,
     Param,
-    RefinementReport,
     Space,
     Subspace,
     SubspaceChoice,
@@ -30,6 +33,7 @@ from finn.kernels.space import (
     ViewKey,
     constraint,
     derived,
+    refinement,
     view,
 )
 
@@ -73,12 +77,12 @@ class Eltwise(Space):
     weight = Param(DTYPE)
 
     @derived(a=activation, b=weight, semantics=DTYPE)
-    def result_dtype(*, a: DType, b: DType) -> Answer[DType]:
-        return Decided(DType(max(a.bits, b.bits) + 1))
+    def result_dtype(*, a: DType, b: DType) -> QueryResult[DType]:
+        return Available(DType(max(a.bits, b.bits) + 1))
 
     @view(semantics=INT)
-    def physical(*, result_dtype: DType) -> Answer[int]:
-        return Decided(result_dtype.bits)
+    def physical(*, result_dtype: DType) -> QueryResult[int]:
+        return Available(result_dtype.bits)
 
     @derived
     def width(*, result_dtype: DType) -> int:
@@ -129,8 +133,8 @@ class GuardedAssembly(Space):
         return slots
 
     @derived(semantics=INT, when=enabled)
-    def answer_value(*, slots: int) -> Answer[int]:
-        return Decided(slots)
+    def answer_value(*, slots: int) -> QueryResult[int]:
+        return Available(slots)
 
     @constraint(when=enabled)
     def supported(*, slots: int) -> bool:
@@ -143,8 +147,8 @@ class GuardedAssembly(Space):
         return slots
 
     @view(semantics=INT, when=enabled)
-    def answer_view(*, slots: int) -> Answer[int]:
-        return Decided(slots)
+    def answer_view(*, slots: int) -> QueryResult[int]:
+        return Available(slots)
 
 
 def check(point: Fifo, assembly: Assembly, eltwise: Eltwise) -> None:
@@ -161,14 +165,24 @@ def check(point: Fifo, assembly: Assembly, eltwise: Eltwise) -> None:
     assert_type(point.physical, BoundView[int])
     assert_type(point.physical(), ViewAssessment[int])
     assert_type(point.assess(Fifo.physical), ViewAssessment[int])
-    assert_type(point.assign(Fifo.ram_style, "auto"), Fifo)
-    assert_type(point.edit(Fifo.ram_style, "block"), Edit[str])
-    assert_type(point.refine(point.edit(Fifo.ram_style, "block")), RefinementReport[Fifo])
+    assert_type(point.with_choices(ram_style="auto"), Fifo)
+    assert_type(point.field(Fifo.capacity), BoundValue[int])
+    assert_type(point.field(Fifo.ram_style), BoundDecision[str])
+    assert_type(point.field(Fifo.physical), BoundViewField[int])
+    assert_type(point.field(Fifo.ram_style).change("block"), Change[str])
     assert_type(
-        point.refine(point.edit(Fifo.ram_style, "block"), point.edit(Fifo.banks, 2)),
-        RefinementReport[Fifo],
+        refinement.commit(point, point.field(Fifo.ram_style).change("block")),
+        CommitmentReport[Fifo],
     )
-    assert_type(point.answer(Fifo.capacity), Answer[int])
+    assert_type(
+        refinement.commit(
+            point,
+            point.field(Fifo.ram_style).change("block"),
+            point.field(Fifo.banks).change(2),
+        ),
+        CommitmentReport[Fifo],
+    )
+    assert_type(point.query(Fifo.capacity), QueryResult[int])
     assert_type(Eltwise.result_dtype, Derived[DType])
     assert_type(eltwise.result_dtype, DType)
     assert_type(Eltwise.physical, View[int])
@@ -179,12 +193,12 @@ def check(point: Fifo, assembly: Assembly, eltwise: Eltwise) -> None:
     assert_type(Assembly.second.ref(Fifo.depth), ValueRef[int])
     assert_type(Assembly.second.decision_ref(Fifo.depth), DecisionRef[int])
     assert_type(assembly.first, Fifo)
-    assert_type(assembly.first.assign(Fifo.ram_style, "block"), Fifo)
+    assert_type(assembly.first.with_choices(ram_style="block"), Fifo)
     assert_type(Assembly.first.accepted(Fifo.physical), ValueRef[int])
     assert_type(Assembly.implementation.ref(WIDTH), ValueRef[int])
     assert_type(Assembly.implementation.accepted(PHYSICAL), ValueRef[int])
     assert_type(assembly.implementation, ChoiceView)
-    assert_type(Assembly.start({Assembly.width: 8}), Assembly)
+    assert_type(Assembly(width=8), Assembly)
     assert_type(GuardedAssembly.value, Derived[int])
     assert_type(GuardedAssembly.answer_value, Derived[int])
     assert_type(GuardedAssembly.physical, View[int])

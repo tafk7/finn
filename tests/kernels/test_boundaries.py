@@ -144,13 +144,13 @@ class RejectDataflow(importlib.abc.MetaPathFinder):
 
 sys.meta_path.insert(0, RejectDataflow())
 from finn.kernels import DotpAxiKernel, DspBlock, WeightDelivery, mvau_assembly
-from finn.kernels.space import Decided
+from finn.kernels.space import Available
 from finn.kernels.artifacts.requirements import ModuleBuildRequirements
 from finn.kernels.physical.axi_stream import AxiStream
 from qonnx.core.datatype import DataType
 
 
-point = DotpAxiKernel.start(
+point = DotpAxiKernel(
     {
         DotpAxiKernel.pe: 2,
         DotpAxiKernel.simd: 2,
@@ -160,9 +160,9 @@ point = DotpAxiKernel.start(
         DotpAxiKernel.target_dsp: DspBlock.DSP48E2,
         DotpAxiKernel.segment_length: 0,
     }
-).assign(DotpAxiKernel.compute_pumping, False)
-answer = point.physical().accepted_answer
-assert isinstance(answer, Decided)
+).with_choices(compute_pumping=False)
+answer = point.build_requirements().accepted_result
+assert isinstance(answer, Available)
 assert isinstance(answer.value, ModuleBuildRequirements)
 assert isinstance(point.activation.stream, AxiStream)
 assert point.activation.payload_bits == 6

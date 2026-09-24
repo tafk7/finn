@@ -10,7 +10,7 @@ from typing import cast, get_type_hints
 import pytest
 
 from finn.kernels.space import (
-    Answer,
+    QueryResult,
     Const,
     Decision,
     DefinitionError,
@@ -27,7 +27,7 @@ from finn.kernels.space import (
     ViewKey,
     constraint,
     derived,
-    full_answer,
+    full_result,
     optional,
     view,
 )
@@ -141,13 +141,13 @@ def test_explicit_answer_semantics_and_dependency_modes() -> None:
         def missing(*, input: int | MissingInput | NotApplicable) -> bool:
             return isinstance(input, MissingInput)
 
-        @derived(input=full_answer(value), semantics=ValueSemantics.immutable_nominal(int))
-        def forwarded(*, input: Answer[int]) -> Answer[int]:
+        @derived(input=full_result(value), semantics=ValueSemantics.immutable_nominal(int))
+        def forwarded(*, input: QueryResult[int]) -> QueryResult[int]:
             return input
 
     collected = collect_space(Example)
     assert collected.functions["missing"].dependencies[0].mode == "optional"
-    assert collected.functions["forwarded"].dependencies[0].mode == "answer"
+    assert collected.functions["forwarded"].dependencies[0].mode == "result"
     assert collected.functions["forwarded"].semantics.type_token is int
 
 
@@ -188,10 +188,10 @@ def test_extra_alias_and_answer_without_semantics_are_rejected() -> None:
 
     class NoSemantics(Space):
         @derived
-        def result() -> Answer[int]:
+        def result() -> QueryResult[int]:
             raise AssertionError("must not run")
 
-    with pytest.raises(DefinitionError, match="Answer.*explicit semantics"):
+    with pytest.raises(DefinitionError, match="QueryResult.*explicit semantics"):
         collect_space(NoSemantics)
 
 
@@ -212,8 +212,8 @@ def test_incompatible_override_collision_and_reserved_names() -> None:
     collision = type("Collision", (Base, Other), {})
     with pytest.raises(DefinitionError, match="conflicting inherited"):
         collect_space(collision)
-    reserved = type("Reserved", (Space,), {"assign": Param(int)})
-    with pytest.raises(DefinitionError, match="reserved occurrence name"):
+    reserved = type("Reserved", (Space,), {"query": Param(int)})
+    with pytest.raises(DefinitionError, match="reserved configuration name"):
         collect_space(reserved)
 
 
@@ -452,7 +452,7 @@ def test_collection_does_not_descend_into_deep_child_hierarchies() -> None:
 
 
 def test_linker_argument_validation_shares_dependency_mode_policy() -> None:
-    def annotations(integer: Answer[int], text: Answer[str]) -> None:
+    def annotations(integer: QueryResult[int], text: QueryResult[str]) -> None:
         pass
 
     hints: dict[str, object] = get_type_hints(annotations)
@@ -460,20 +460,20 @@ def test_linker_argument_validation_shares_dependency_mode_policy() -> None:
     integer = cast(ValueSemantics[object], ValueSemantics.immutable_nominal(int))
     validate_argument(BoundArgument("item", source, "required", int), integer, owner="reader.item")
     validate_argument(
-        BoundArgument("item", source, "answer", hints["integer"]), integer, owner="reader.item"
+        BoundArgument("item", source, "result", hints["integer"]), integer, owner="reader.item"
     )
     validate_argument(
         BoundArgument("item", source, "optional", int | MissingInput | NotApplicable),
         integer,
         owner="reader.item",
     )
-    with pytest.raises(DefinitionError, match="full_answer dependency requires"):
+    with pytest.raises(DefinitionError, match="full_result dependency requires"):
         validate_argument(
-            BoundArgument("item", source, "answer", int), integer, owner="reader.item"
+            BoundArgument("item", source, "result", int), integer, owner="reader.item"
         )
     with pytest.raises(DefinitionError, match="cannot consume int"):
         validate_argument(
-            BoundArgument("item", source, "answer", hints["text"]), integer, owner="reader.item"
+            BoundArgument("item", source, "result", hints["text"]), integer, owner="reader.item"
         )
     with pytest.raises(DefinitionError, match="cannot consume int"):
         validate_argument(

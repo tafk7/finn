@@ -10,13 +10,13 @@ from typing import TypeVar, cast
 
 from .compiler import SpaceModel
 from .declarations import Decision, DecisionRef, Space
-from .edits import RefinementReport
+from .edits import CommitmentReport
 from .errors import EvaluationError, RequestError
 from .inspection import DecisionInfo, decision_info, decisions
 from .occurrence import state
 from .references import DecisionHandle
-from .results import Decided
 from .semantics import ValueSemantics
+from . import refinement
 
 T = TypeVar("T")
 S = TypeVar("S", bound=Space)
@@ -176,24 +176,21 @@ class Selection:
 def capture(point: Space) -> Selection:
     """Capture the shared root's committed owners, without querying unrelated work."""
     current = state(point)
-    root = point.root
     values: list[tuple[DecisionInfo[object], object]] = []
     with current.snapshot.lock:
-        committed = set(current.snapshot.assignments)
         for info in decisions(current.model):
-            if current.model.resolve(0, info.reference) not in committed:
+            index = current.model.resolve(0, info.reference)
+            if index not in current.snapshot.assignments:
                 continue
-            answer = root.decision_state(info.reference)
-            if isinstance(answer, Decided) and answer.value.status == "committed":
-                values.append((info, answer.value.value))
+            values.append((info, current.snapshot.assignments[index]))
     return Selection._from_values(current.model, values)
 
 
-def restore(base: S, selection: Selection) -> RefinementReport[S]:
+def restore(base: S, selection: Selection) -> CommitmentReport[S]:
     """Validate a detached request and atomically replay it on a root checkpoint."""
     current = state(base)
     if base._scope != 0:
-        raise RequestError("selection restore requires a root occurrence")
+        raise RequestError("selection restore requires a root configuration")
     if not isinstance(selection, Selection):
         raise RequestError("restore requires a Selection")
     if selection._model.linked is not current.model.linked:
@@ -205,7 +202,9 @@ def restore(base: S, selection: Selection) -> RefinementReport[S]:
             raise RequestError(f"duplicate or incompatible selection key {info.key!r}")
         seen.add(info.key)
     entries = selection.entries
-    return base.refine(*(base.edit(entry.reference, entry.value) for entry in entries))
+    return refinement.commit(
+        base, *(refinement.change(base, entry.reference, entry.value) for entry in entries)
+    )
 
 
 def replace_owned(

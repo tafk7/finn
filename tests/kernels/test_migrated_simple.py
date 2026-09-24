@@ -16,24 +16,24 @@ from finn.kernels.datatypes.values import resolve_qonnx_datatype_name
 from finn.kernels.eltwise import EltwiseKernel
 from finn.kernels.fifo import FifoKernel
 from finn.kernels.int_to_fp32 import IntToFp32Kernel
-from finn.kernels.space import Answer, Decided, Param, Rejected, Space, Subspace, Unresolved
+from finn.kernels.space import QueryResult, Available, Param, Rejected, Space, Subspace, Unresolved
 from finn.kernels.space.errors import RequestError
 from finn.kernels.target import DspBlock
 
 T = TypeVar("T")
 
 
-def decided(answer: Answer[T]) -> T:
-    assert isinstance(answer, Decided), answer
+def decided(answer: QueryResult[T]) -> T:
+    assert isinstance(answer, Available), answer
     return answer.value
 
 
 def test_fifo_start_commit_and_callable_view_keep_opaque_word_geometry() -> None:
-    base = FifoKernel.start({FifoKernel.word_bits: 13, FifoKernel.depth: 8})
-    assert isinstance(base.physical().accepted_answer, Unresolved)
-    assert decided(base.decision_state(FifoKernel.ram_style)).status == "unassigned"
-    chosen = base.assign(FifoKernel.ram_style, "auto")
-    requirements = decided(chosen.physical().accepted_answer)
+    base = FifoKernel(word_bits=13, depth=8)
+    assert isinstance(base.build_requirements().accepted_result, Unresolved)
+    assert decided(base.field(FifoKernel.ram_style).state).status == "unassigned"
+    chosen = base.with_choices(ram_style="auto")
+    requirements = decided(chosen.build_requirements().accepted_result)
     assert requirements.parameters == (("DATA_WIDTH", 13), ("DEPTH", 8), ("RAM_STYLE", '"auto"'))
     assert [
         (port.name, port.direction, port.width)
@@ -49,27 +49,28 @@ def test_fifo_start_commit_and_callable_view_keep_opaque_word_geometry() -> None
         ("ovld", Direction.OUT, 1),
         ("ordy", Direction.IN, 1),
     ]
-    assert chosen.assess(FifoKernel.physical) == chosen.physical()
-    assert isinstance(base.answer(FifoKernel.ram_style), Unresolved)
+    assert chosen.assess(FifoKernel.build_requirements) == chosen.build_requirements()
+    assert isinstance(base.query(FifoKernel.ram_style), Unresolved)
 
 
 @pytest.mark.parametrize("style", ("auto", "shift", "distributed", "block", "ultra"))
 def test_fifo_ram_styles_remain_explicit_and_preserve_native_parameter_values(style: str) -> None:
-    point = FifoKernel.start({FifoKernel.word_bits: 17, FifoKernel.depth: 64}).assign(
-        FifoKernel.ram_style, style
+    point = FifoKernel(word_bits=17, depth=64).with_choices(ram_style=style)
+    assert (
+        dict(decided(point.build_requirements().accepted_result).parameters)["RAM_STYLE"]
+        == f'"{style}"'
     )
-    assert dict(decided(point.physical().accepted_answer).parameters)["RAM_STYLE"] == f'"{style}"'
 
 
 @pytest.mark.parametrize(("bits", "depth"), ((0, 8), (13, 1), (1 << 32, 8), (13, 1 << 32)))
 def test_fifo_geometry_refusal_remains_visible_before_and_after_ram_choice(
     bits: int, depth: int
 ) -> None:
-    base = FifoKernel.start({FifoKernel.word_bits: bits, FifoKernel.depth: depth})
-    assert base.physical().constraints.refused == ("geometry_supported",)
-    assert isinstance(base.physical().accepted_answer, Unresolved)
+    base = FifoKernel(word_bits=bits, depth=depth)
+    assert base.build_requirements().constraints.refused == ("geometry_supported",)
+    assert isinstance(base.build_requirements().accepted_result, Unresolved)
     assert isinstance(
-        base.assign(FifoKernel.ram_style, "auto").physical().accepted_answer, Rejected
+        base.with_choices(ram_style="auto").build_requirements().accepted_result, Rejected
     )
 
 
@@ -77,9 +78,9 @@ def test_fifo_geometry_refusal_remains_visible_before_and_after_ram_choice(
     ("name", "width", "signed"), (("INT9", 9, 1), ("BINARY", 1, 0), ("INT128", 128, 1))
 )
 def test_converter_has_only_native_combinational_pins(name: str, width: int, signed: int) -> None:
-    point = IntToFp32Kernel.start({IntToFp32Kernel.input_dtype: resolve_qonnx_datatype_name(name)})
+    point = IntToFp32Kernel(input_dtype=resolve_qonnx_datatype_name(name))
     assert point.result_dtype.name == "FLOAT32"
-    requirements = decided(point.physical().accepted_answer)
+    requirements = decided(point.build_requirements().accepted_result)
     assert requirements.parameters == (("SIGNED", signed), ("WIDTH", width))
     assert [
         (port.name, port.direction, port.width)
@@ -90,17 +91,17 @@ def test_converter_has_only_native_combinational_pins(name: str, width: int, sig
 
 @pytest.mark.parametrize("name", ("FLOAT32", "BIPOLAR", "TERNARY", "INT129"))
 def test_converter_refuses_unsupported_encodings_and_widths(name: str) -> None:
-    point = IntToFp32Kernel.start({IntToFp32Kernel.input_dtype: resolve_qonnx_datatype_name(name)})
-    assert isinstance(point.physical().accepted_answer, Rejected)
+    point = IntToFp32Kernel(input_dtype=resolve_qonnx_datatype_name(name))
+    assert isinstance(point.build_requirements().accepted_result, Rejected)
 
 
 def test_required_root_inputs_fail_binding_and_optional_parent_exposure_keeps_partial_read() -> (
     None
 ):
     with pytest.raises(RequestError):
-        FifoKernel.start({FifoKernel.word_bits: 13})
+        FifoKernel(word_bits=13)
     with pytest.raises(RequestError):
-        IntToFp32Kernel.start()
+        IntToFp32Kernel()
 
     class OptionalConverter(Space):
         converter = Subspace(
@@ -108,9 +109,9 @@ def test_required_root_inputs_fail_binding_and_optional_parent_exposure_keeps_pa
             input_dtype=Param(QONNX_DATATYPE_VALUE_SEMANTICS, required=False),
         )
 
-    point = OptionalConverter.start()
+    point = OptionalConverter()
     assert point.converter.result_dtype.name == "FLOAT32"
-    assert isinstance(point.converter.physical().accepted_answer, Unresolved)
+    assert isinstance(point.converter.build_requirements().accepted_result, Unresolved)
 
 
 def eltwise(
@@ -122,7 +123,7 @@ def eltwise(
     scale: float = 1.0,
     target: DspBlock = DspBlock.DSP58,
 ) -> EltwiseKernel:
-    return EltwiseKernel.start(
+    return EltwiseKernel(
         {
             EltwiseKernel.operation: operation,
             EltwiseKernel.pe: pe,
@@ -150,7 +151,7 @@ def test_eltwise_preserves_integer_growth_unsigned_subtraction_and_float_convers
     operation: str, lhs: str, rhs: str, result: str
 ) -> None:
     point = eltwise(operation=operation, lhs=lhs, rhs=rhs)
-    requirements = decided(point.physical().accepted_answer)
+    requirements = decided(point.build_requirements().accepted_result)
     assert point.result_dtype.name == result
     widths = {port.name: port.width for port in requirements.abi.ports if isinstance(port, Signal)}
     assert widths["adat"] == 2 * resolve_qonnx_datatype_name(lhs).bitwidth()
@@ -161,7 +162,7 @@ def test_eltwise_preserves_integer_growth_unsigned_subtraction_and_float_convers
 def test_eltwise_preserves_binary32_scale_rounding_and_source_order() -> None:
     integer = eltwise(scale=1.0 + 2**-30)
     assert integer.native_scale == 1.0
-    requirements = decided(integer.physical().accepted_answer)
+    requirements = decided(integer.build_requirements().accepted_result)
     assert dict(requirements.parameters)["B_SCALE"] == "1.0"
     assert all(isinstance(source, CopiedSource) for source in requirements.contributions)
     assert [
@@ -174,7 +175,9 @@ def test_eltwise_preserves_binary32_scale_rounding_and_source_order() -> None:
         "rtl/arith/eltwise.sv",
     ]
     floating = eltwise(lhs="FLOAT32", rhs="FLOAT32", scale=0.25)
-    assert dict(decided(floating.physical().accepted_answer).parameters)["B_SCALE"] == "0.25"
+    assert (
+        dict(decided(floating.build_requirements().accepted_result).parameters)["B_SCALE"] == "0.25"
+    )
 
 
 @pytest.mark.parametrize("scale", (1e100, float("inf"), float("nan")))
@@ -182,8 +185,8 @@ def test_eltwise_nonfinite_or_unrepresentable_native_scale_is_an_explicit_refusa
     scale: float,
 ) -> None:
     point = eltwise(scale=scale)
-    assert isinstance(point.answer(EltwiseKernel.native_scale), Rejected)
-    assert isinstance(point.physical().accepted_answer, Rejected)
+    assert isinstance(point.query(EltwiseKernel.native_scale), Rejected)
+    assert isinstance(point.build_requirements().accepted_result, Rejected)
 
 
 def test_eltwise_retains_supported_profile_restrictions() -> None:
@@ -196,7 +199,9 @@ def test_eltwise_retains_supported_profile_restrictions() -> None:
         eltwise(operation="MUL", lhs="FLOAT32", scale=0.5),
         eltwise(lhs="FLOAT32", target=DspBlock.DSP48E2),
     )
-    assert all(isinstance(point.physical().accepted_answer, Rejected) for point in refused)
+    assert all(
+        isinstance(point.build_requirements().accepted_result, Rejected) for point in refused
+    )
 
 
 def test_eltwise_narrow_result_stays_known_with_optional_parent_target_omission() -> None:
@@ -211,8 +216,8 @@ def test_eltwise_narrow_result_stays_known_with_optional_parent_target_omission(
             target_dsp=Param(DspBlock, required=False),
         )
 
-    point = OptionalTarget.start()
+    point = OptionalTarget()
     assert point.arithmetic.result_dtype.name == "INT4"
-    assessment = point.arithmetic.physical()
-    assert isinstance(assessment.output_answer, Decided)
-    assert isinstance(assessment.accepted_answer, Unresolved)
+    assessment = point.arithmetic.build_requirements()
+    assert isinstance(assessment.output_result, Available)
+    assert isinstance(assessment.accepted_result, Unresolved)

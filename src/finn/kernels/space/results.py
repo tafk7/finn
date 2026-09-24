@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Answers, deterministic causal findings and the shared assessment reducer."""
+"""Query results, deterministic causal findings and the shared assessment reducer."""
 
 from __future__ import annotations
 
@@ -50,7 +50,7 @@ class Finding:
     """One reason, its semantic owner, and the reasons that caused it.
 
     An empty owner is allowed in authored callback results; evaluation assigns
-    that owner before publishing the answer. Existing cause owners are retained.
+    that owner before publishing the result. Existing cause owners are retained.
     """
 
     kind: FindingKind
@@ -93,7 +93,7 @@ def ordered_findings(findings: Iterable[Finding]) -> tuple[Finding, ...]:
 
 
 @dataclass(frozen=True, slots=True)
-class Decided(NoTruthValue, Generic[T]):
+class Available(NoTruthValue, Generic[T]):
     value: T
 
 
@@ -125,7 +125,7 @@ class Unresolved(NoTruthValue):
         object.__setattr__(self, "findings", ordered_findings(self.findings))
 
 
-Answer: TypeAlias = Decided[T] | Inapplicable | Rejected | Unresolved
+QueryResult: TypeAlias = Available[T] | Inapplicable | Rejected | Unresolved
 NonValue: TypeAlias = Inapplicable | Rejected | Unresolved
 
 
@@ -151,10 +151,10 @@ def reject(
     )
 
 
-def owned_answer(answer: Answer[T], owner: str) -> Answer[T]:
+def owned_result(answer: QueryResult[T], owner: str) -> QueryResult[T]:
     """Attach the evaluator owner to authored findings without rebasing causes."""
 
-    if isinstance(answer, Decided):
+    if isinstance(answer, Available):
         return answer
     findings = tuple(
         replace(finding, owner=owner) if not finding.owner else finding
@@ -163,19 +163,19 @@ def owned_answer(answer: Answer[T], owner: str) -> Answer[T]:
     return type(answer)(findings)
 
 
-def constraint_answer(answer: bool | Answer[bool], owner: str) -> Answer[bool]:
+def constraint_result(answer: bool | QueryResult[bool], owner: str) -> QueryResult[bool]:
     """Normalize bare false and explicit refusal to the same constraint meaning."""
 
     if type(answer) is bool:
-        answer = Decided(answer)
-    if not isinstance(answer, (Decided, Inapplicable, Rejected, Unresolved)):
-        raise TypeError("a constraint must return bool or Answer[bool]")
-    if isinstance(answer, Decided):
+        answer = Available(answer)
+    if not isinstance(answer, (Available, Inapplicable, Rejected, Unresolved)):
+        raise TypeError("a constraint must return bool or QueryResult[bool]")
+    if isinstance(answer, Available):
         if type(answer.value) is not bool:
-            raise TypeError("a constraint must return bool or Answer[bool]")
+            raise TypeError("a constraint must return bool or QueryResult[bool]")
         if not answer.value:
             return reject("constraint-false", "constraint returned False", owner=owner)
-    return owned_answer(answer, owner)
+    return owned_result(answer, owner)
 
 
 @dataclass(frozen=True, slots=True)
@@ -212,7 +212,7 @@ class DecisionState(Generic[T]):
             raise ValueError("an unassigned decision has no value")
 
 
-def _unresolved(answers: Iterable[Answer[object]]) -> Unresolved | None:
+def _unresolved(answers: Iterable[QueryResult[object]]) -> Unresolved | None:
     findings = tuple(
         finding
         for answer in answers
@@ -222,7 +222,7 @@ def _unresolved(answers: Iterable[Answer[object]]) -> Unresolved | None:
     return Unresolved(findings) if findings else None
 
 
-def _rejected(answers: Iterable[Answer[object]]) -> Rejected | None:
+def _rejected(answers: Iterable[QueryResult[object]]) -> Rejected | None:
     findings = tuple(
         finding for answer in answers if isinstance(answer, Rejected) for finding in answer.findings
     )
@@ -231,60 +231,64 @@ def _rejected(answers: Iterable[Answer[object]]) -> Rejected | None:
 
 @dataclass(frozen=True, slots=True)
 class ConstraintAssessment:
-    answers: Mapping[str, Answer[bool]]
-    answer: Answer[bool]
+    results: Mapping[str, QueryResult[bool]]
+    result: QueryResult[bool]
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "answers", MappingProxyType(dict(sorted(self.answers.items()))))
+        object.__setattr__(self, "results", MappingProxyType(dict(sorted(self.results.items()))))
 
     @property
     def verdict(self) -> bool | None:
-        if isinstance(self.answer, Decided):
-            return self.answer.value
-        return False if isinstance(self.answer, Rejected) else None
+        if isinstance(self.result, Available):
+            return self.result.value
+        return False if isinstance(self.result, Rejected) else None
 
     @property
     def refused(self) -> tuple[str, ...]:
         return tuple(
-            owner for owner, answer in self.answers.items() if isinstance(answer, Rejected)
+            owner for owner, answer in self.results.items() if isinstance(answer, Rejected)
         )
 
     @property
     def not_applicable(self) -> tuple[str, ...]:
         return tuple(
-            owner for owner, answer in self.answers.items() if isinstance(answer, Inapplicable)
+            owner for owner, answer in self.results.items() if isinstance(answer, Inapplicable)
         )
 
 
 @dataclass(frozen=True, slots=True)
 class ReadinessAssessment:
-    answers: Mapping[str, Answer[object]]
-    answer: Answer[bool]
+    results: Mapping[str, QueryResult[object]]
+    result: QueryResult[bool]
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "answers", MappingProxyType(dict(sorted(self.answers.items()))))
+        object.__setattr__(self, "results", MappingProxyType(dict(sorted(self.results.items()))))
 
     @property
     def ready(self) -> bool | None:
-        return self.answer.value if isinstance(self.answer, Decided) else None
+        return self.result.value if isinstance(self.result, Available) else None
 
 
-def assess_constraints(answers: Mapping[str, Answer[bool]]) -> ConstraintAssessment:
-    normalized = {owner: constraint_answer(answer, owner) for owner, answer in answers.items()}
-    values = tuple(cast(Answer[object], answer) for answer in normalized.values())
+def assess_constraints(answers: Mapping[str, QueryResult[bool]]) -> ConstraintAssessment:
+    normalized = {owner: constraint_result(answer, owner) for owner, answer in answers.items()}
+    values = tuple(cast(QueryResult[object], answer) for answer in normalized.values())
     unresolved = _unresolved(values)
     refused = _rejected(values)
-    result: Answer[bool] = (
-        unresolved if unresolved is not None else refused if refused is not None else Decided(True)
+    result: QueryResult[bool] = (
+        unresolved
+        if unresolved is not None
+        else refused
+        if refused is not None
+        else Available(True)
     )
     return ConstraintAssessment(normalized, result)
 
 
-def assess_readiness(answers: Mapping[str, Answer[object]]) -> ReadinessAssessment:
-    normalized: dict[str, Answer[object]] = {}
+def assess_readiness(answers: Mapping[str, QueryResult[object]]) -> ReadinessAssessment:
+    normalized: dict[str, QueryResult[object]] = {}
     for owner, answer in answers.items():
         if (
-            isinstance(answer, Decided)
+            isinstance(answer, Available)
             and isinstance(answer.value, DecisionState)
             and answer.value.status == "unassigned"
         ):
@@ -301,28 +305,41 @@ def assess_readiness(answers: Mapping[str, Answer[object]]) -> ReadinessAssessme
         else:
             normalized[owner] = answer
     unresolved = _unresolved(normalized.values())
-    return ReadinessAssessment(normalized, unresolved if unresolved is not None else Decided(True))
+    return ReadinessAssessment(
+        normalized, unresolved if unresolved is not None else Available(True)
+    )
 
 
 @dataclass(frozen=True, slots=True)
 class ViewAssessment(Generic[T]):
-    output_answer: Answer[T]
+    output_result: QueryResult[T]
     readiness: ReadinessAssessment
     constraints: ConstraintAssessment
-    accepted_answer: Answer[T]
+    accepted_result: QueryResult[T]
 
-    @property
-    def raw_answer(self) -> Answer[T]:
-        return self.output_answer
+    def require_value(self) -> T:
+        """Return the accepted value or raise with this assessment as context."""
+
+        return require_value(self.accepted_result, context=self)
+
+
+def require_value(result: QueryResult[T], *, context: object | None = None) -> T:
+    """Return an available value and preserve the unavailable result on failure."""
+
+    if isinstance(result, Available):
+        return result.value
+    from .errors import ValueUnavailableError  # noqa: PLC0415 - avoid an error/result cycle
+
+    raise ValueUnavailableError(result, context=context)
 
 
 def assess_view(
-    output_answer: Answer[T],
+    output_result: QueryResult[T],
     *,
     owner: str,
-    requires: Mapping[str, Answer[object]] | None = None,
-    constraints: Mapping[str, Answer[bool]] | None = None,
-    applicability: Answer[bool] = Decided(True),
+    requires: Mapping[str, QueryResult[object]] | None = None,
+    constraints: Mapping[str, QueryResult[bool]] | None = None,
+    applicability: QueryResult[bool] = Available(True),
 ) -> ViewAssessment[T]:
     """Reduce raw output and obligations identically for every view form.
 
@@ -333,31 +350,32 @@ def assess_view(
     constraint_results = assess_constraints(constraints if constraints is not None else {})
     required = dict(requires if requires is not None else {})
     required.update(
-        (name, cast(Answer[object], answer)) for name, answer in constraint_results.answers.items()
+        (name, cast(QueryResult[object], answer))
+        for name, answer in constraint_results.results.items()
     )
     # The compiler owns the names and rejects member collisions. The raw view
     # output is always included even when no extra readiness was requested.
-    required[owner] = cast(Answer[object], output_answer)
+    required[owner] = cast(QueryResult[object], output_result)
     readiness = assess_readiness(required)
-    accepted: Answer[T]
-    if not isinstance(applicability, Decided):
+    accepted: QueryResult[T]
+    if not isinstance(applicability, Available):
         accepted = applicability
     elif applicability.value is False:
         accepted = Inapplicable()
-    elif isinstance(readiness.answer, Unresolved):
-        accepted = readiness.answer
-    elif isinstance(output_answer, Inapplicable):
-        accepted = output_answer
+    elif isinstance(readiness.result, Unresolved):
+        accepted = readiness.result
+    elif isinstance(output_result, Inapplicable):
+        accepted = output_result
     else:
         refusal = _rejected(required.values())
-        accepted = refusal if refusal is not None else output_answer
-    return ViewAssessment(output_answer, readiness, constraint_results, accepted)
+        accepted = refusal if refusal is not None else output_result
+    return ViewAssessment(output_result, readiness, constraint_results, accepted)
 
 
 __all__ = [
-    "Answer",
+    "QueryResult",
     "ConstraintAssessment",
-    "Decided",
+    "Available",
     "DecisionState",
     "Finding",
     "FindingKind",
@@ -374,9 +392,10 @@ __all__ = [
     "assess_constraints",
     "assess_readiness",
     "assess_view",
-    "constraint_answer",
+    "constraint_result",
     "finding_sort_key",
     "ordered_findings",
-    "owned_answer",
+    "owned_result",
     "reject",
+    "require_value",
 ]

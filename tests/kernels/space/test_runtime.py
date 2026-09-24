@@ -17,12 +17,12 @@ from finn.kernels.space import (
     compile_space,
     constraint,
     derived,
+    refinement,
     view,
 )
 from finn.kernels.space.domains import divisors_of
-from finn.kernels.space.errors import EvaluationError, RefinementError, RequestError
-from finn.kernels.space.occurrence import candidates, decision_state, edit, refine
-from finn.kernels.space.results import Answer, Decided, Rejected, Unresolved
+from finn.kernels.space.errors import EvaluationError, RequestError
+from finn.kernels.space.results import QueryResult, Available, Rejected, Unresolved
 
 
 @dataclass(frozen=True)
@@ -49,32 +49,31 @@ class Fifo(Space):
 
 def test_fifo_compile_start_commit_assess_is_immutable() -> None:
     model = compile_space(Fifo)
-    base = model.start({Fifo.word_bits: 13, Fifo.depth: 8})
+    base = model.bind(word_bits=13, depth=8)
     assert base.family == "fifo"
-    assert isinstance(base.physical().accepted_answer, Unresolved)
-    state = decision_state(base, Fifo.ram_style)
-    assert isinstance(state, Decided)
+    assert isinstance(base.physical().accepted_result, Unresolved)
+    state = base.field(Fifo.ram_style).state
+    assert isinstance(state, Available)
     assert state.value.status == "unassigned"
-    assert isinstance(base.answer(Fifo.ram_style), Unresolved)
-    assert candidates(base, Fifo.ram_style) == Decided(("auto", "block", "shift"))
-    chosen = base.assign(Fifo.ram_style, "block")
-    assert chosen.physical().accepted_answer == Decided(FifoShape(13, 8, "block"))
+    assert isinstance(base.query(Fifo.ram_style), Unresolved)
+    assert base.field(Fifo.ram_style).candidates() == Available(("auto", "block", "shift"))
+    chosen = base.with_choices(ram_style="block")
+    assert chosen.physical().accepted_result == Available(FifoShape(13, 8, "block"))
     assert chosen.assess(Fifo.physical) == chosen.physical()
-    assert isinstance(base.answer(Fifo.ram_style), Unresolved)
-    assert chosen.assign(Fifo.ram_style, "block") is chosen
-    with pytest.raises(RefinementError):
-        chosen.assign(Fifo.ram_style, "shift")
-    other = model.start({Fifo.word_bits: 7, Fifo.depth: 4}).assign(Fifo.ram_style, "shift")
-    assert other.physical().accepted_answer == Decided(FifoShape(7, 4, "shift"))
+    assert isinstance(base.query(Fifo.ram_style), Unresolved)
+    assert chosen.with_choices(ram_style="block") is chosen
+    assert chosen.with_choices(ram_style="shift").ram_style == "shift"
+    other = model.bind(word_bits=7, depth=4).with_choices(ram_style="shift")
+    assert other.physical().accepted_result == Available(FifoShape(7, 4, "shift"))
 
 
 def test_final_constraint_refusal_remains_visible_while_output_unresolved() -> None:
-    base = Fifo.start({Fifo.word_bits: 0, Fifo.depth: 8})
+    base = Fifo(word_bits=0, depth=8)
     assessment = base.physical()
-    assert isinstance(assessment.accepted_answer, Unresolved)
+    assert isinstance(assessment.accepted_result, Unresolved)
     assert assessment.constraints.refused == ("supported",)
-    ready = base.assign(Fifo.ram_style, "auto").physical()
-    assert isinstance(ready.accepted_answer, Rejected)
+    ready = base.with_choices(ram_style="auto").physical()
+    assert isinstance(ready.accepted_result, Rejected)
 
 
 def test_atomic_refinement_follows_dependencies_and_never_publishes_partial_state() -> None:
@@ -82,18 +81,30 @@ def test_atomic_refinement_follows_dependencies_and_never_publishes_partial_stat
         extent = Decision(int, values=(8, 12))
         lanes = Decision(int, domain=divisors_of(extent))
 
-    base = Tiles.start()
-    report = refine(base, edit(base, Tiles.lanes, 4), edit(base, Tiles.extent, 12))
+    base = Tiles()
+    report = refinement.commit(
+        base,
+        refinement.change(base, Tiles.lanes, 4),
+        refinement.change(base, Tiles.extent, 12),
+    )
     assert report.accepted
-    assert report.point.lanes == 4
-    assert report.point.extent == 12
-    failure = refine(base, edit(base, Tiles.lanes, 5), edit(base, Tiles.extent, 12))
+    assert report.instance.lanes == 4
+    assert report.instance.extent == 12
+    failure = refinement.commit(
+        base,
+        refinement.change(base, Tiles.lanes, 5),
+        refinement.change(base, Tiles.extent, 12),
+    )
     assert not failure.accepted
-    assert failure.point is base
-    assert {x.status for x in failure.outcomes} == {"refused", "provisional"}
-    assert isinstance(base.answer(Tiles.extent), Unresolved)
+    assert failure.instance is base
+    assert {x.status for x in failure.outcomes} == {"refused", "admissible"}
+    assert isinstance(base.query(Tiles.extent), Unresolved)
     with pytest.raises(RequestError):
-        refine(base, edit(base, Tiles.extent, 8), edit(report.point, Tiles.lanes, 4))
+        refinement.commit(
+            base,
+            refinement.change(base, Tiles.extent, 8),
+            refinement.change(report.instance, Tiles.lanes, 4),
+        )
 
 
 def test_binding_and_callback_values_are_snapshots_without_requiring_a_codec() -> None:
@@ -112,26 +123,26 @@ def test_binding_and_callback_values_are_snapshots_without_requiring_a_codec() -
 
     original = [1, 2]
     model = compile_space(Mutable)
-    base = model.start({Mutable.payload: original})
+    base = model.bind(payload=original)
     original.append(3)
     assert base.length == 3
     assert base.payload == [1, 2]
     base.payload.append(4)
     assert base.payload == [1, 2]
-    assert base.physical().accepted_answer == Decided(3)
+    assert base.physical().accepted_result == Available(3)
     assert calls == [2]
-    other = model.start({Mutable.payload: [8]})
+    other = model.bind(payload=[8])
     assert other.length == 2
     assert calls == [2, 1]
 
 
 def test_missing_required_parameters_and_malformed_commitments_fail_at_boundary() -> None:
     with pytest.raises(RequestError, match="depth"):
-        Fifo.start({Fifo.word_bits: 13})
+        Fifo(word_bits=13)
     with pytest.raises(RequestError):
-        Fifo.start({Fifo.word_bits: True, Fifo.depth: 8})
+        Fifo(word_bits=True, depth=8)
     with pytest.raises(RequestError):
-        Fifo.start({Fifo.word_bits: 13, Fifo.depth: 8, Fifo.ram_style: "auto"})
+        Fifo({Fifo.ram_style: "auto"}, word_bits=13, depth=8)
 
 
 def test_programmer_failure_keeps_owner_and_cause() -> None:
@@ -143,22 +154,22 @@ def test_programmer_failure_keeps_owner_and_cause() -> None:
             return 10 // denominator
 
     with pytest.raises(EvaluationError) as caught:
-        Broken.start({Broken.denominator: 0}).answer(Broken.quotient)
+        Broken(denominator=0).query(Broken.quotient)
     assert caught.value.owner == "quotient"
     assert isinstance(caught.value.__cause__, ZeroDivisionError)
 
 
 def test_concurrent_reads_and_successors_are_deterministic() -> None:
-    base = Fifo.start({Fifo.word_bits: 13, Fifo.depth: 8})
+    base = Fifo(word_bits=13, depth=8)
 
-    def run(style: str) -> Answer[FifoShape]:
-        return base.assign(Fifo.ram_style, style).physical().accepted_answer
+    def run(style: str) -> QueryResult[FifoShape]:
+        return base.with_choices(ram_style=style).physical().accepted_result
 
     styles = ["auto", "block", "shift"] * 10
     with ThreadPoolExecutor(max_workers=4) as pool:
         outputs = list(pool.map(run, styles))
-    assert outputs == [Decided(FifoShape(13, 8, style)) for style in styles]
-    assert isinstance(base.answer(Fifo.ram_style), Unresolved)
+    assert outputs == [Available(FifoShape(13, 8, style)) for style in styles]
+    assert isinstance(base.query(Fifo.ram_style), Unresolved)
 
 
 def test_generic_container_outputs_infer_nominal_snapshot_semantics() -> None:
@@ -173,9 +184,9 @@ def test_generic_container_outputs_infer_nominal_snapshot_semantics() -> None:
         def materialized(*, indices: tuple[int, ...]) -> list[int]:
             return list(indices)
 
-    point = Collections.start({Collections.count: 3})
+    point = Collections(count=3)
     assert point.indices == (0, 1, 2)
-    first = point.materialized().accepted_answer
-    assert isinstance(first, Decided)
+    first = point.materialized().accepted_result
+    assert isinstance(first, Available)
     first.value.append(99)
-    assert point.materialized().accepted_answer == Decided([0, 1, 2])
+    assert point.materialized().accepted_result == Available([0, 1, 2])

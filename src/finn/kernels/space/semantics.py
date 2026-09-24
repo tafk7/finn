@@ -14,7 +14,7 @@ T = TypeVar("T")
 
 
 class NoTruthValue:
-    """Semantic answers require an explicit inspection of their variant."""
+    """Semantic results require an explicit inspection of their variant."""
 
     __slots__ = ()
 

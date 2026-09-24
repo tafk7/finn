@@ -5,8 +5,8 @@
 from typing_extensions import assert_type
 
 from finn.kernels.space import (
-    Answer,
-    Decided,
+    QueryResult,
+    Available,
     Derived,
     Param,
     ScopeBuilder,
@@ -34,8 +34,8 @@ def doubled(*, lanes: int) -> int:
     return lanes * 2
 
 
-def answer(*, lanes: int) -> Answer[int]:
-    return Decided(lanes)
+def answer(*, lanes: int) -> QueryResult[int]:
+    return Available(lanes)
 
 
 builder = ScopeBuilder(Shape)

@@ -9,13 +9,13 @@ from typing import cast
 import pytest
 
 from finn.kernels.space._runtime import Snapshot, decision_state, evaluate
-from finn.kernels.space.errors import EvaluationError, RefinementError, RequestError
+from finn.kernels.space.errors import EvaluationError, ConfigurationError, RequestError
 from finn.kernels.space.ir import Argument, LinkedModel, Node
 from finn.kernels.space.results import (
     MISSING,
     NOT_APPLICABLE,
-    Answer,
-    Decided,
+    QueryResult,
+    Available,
     DecisionState,
     Finding,
     FindingKind,
@@ -27,9 +27,9 @@ from finn.kernels.space.results import (
     assess_constraints,
     assess_readiness,
     assess_view,
-    constraint_answer,
+    constraint_result,
     ordered_findings,
-    owned_answer,
+    owned_result,
     reject,
 )
 from finn.kernels.space.semantics import ValueSemantics, default_semantics
@@ -40,7 +40,7 @@ def blocker(owner: str = "lanes") -> Unresolved:
 
 
 def test_answers_and_optional_markers_have_no_truth_value() -> None:
-    values: tuple[object, ...] = (Decided(False), Inapplicable(), reject("no", "no"), blocker())
+    values: tuple[object, ...] = (Available(False), Inapplicable(), reject("no", "no"), blocker())
     for value in (*values, MISSING, NOT_APPLICABLE):
         with pytest.raises(TypeError, match="no truth value"):
             bool(value)
@@ -51,7 +51,7 @@ def test_findings_freeze_details_and_have_deterministic_owned_causes() -> None:
     cause = Finding(FindingKind.LIMITATION, "missing-input", "child.width", "no width")
     rejection = reject("bad", "unsupported", values=details, causes=(cause,))
     details["shape"] = [9]
-    owned: Answer[object] = owned_answer(rejection, "physical")
+    owned: QueryResult[object] = owned_result(rejection, "physical")
     assert isinstance(owned, Rejected)
     assert owned.findings[0].owner == "physical"
     assert owned.findings[0].causes == (cause,)
@@ -115,11 +115,11 @@ def test_snapshot_must_preserve_declared_value_type() -> None:
 
 
 def test_only_constraints_convert_false_to_refusal() -> None:
-    assert Decided(False).value is False
-    result = constraint_answer(False, "supported")
+    assert Available(False).value is False
+    result = constraint_result(False, "supported")
     assert isinstance(result, Rejected)
     assert result.findings[0].owner == "supported"
-    assert constraint_answer(True, "supported") == Decided(True)
+    assert constraint_result(True, "supported") == Available(True)
 
 
 def test_unresolved_constraints_keep_individual_refusal_inspectable() -> None:
@@ -130,50 +130,50 @@ def test_unresolved_constraints_keep_individual_refusal_inspectable() -> None:
     assert assessment.verdict is None
     assert assessment.refused == ("width",)
     assert assessment.not_applicable == ("unused",)
-    assert assessment.answers["width"] is not None
-    assert assessment.answers["width"] == refused
+    assert assessment.results["width"] is not None
+    assert assessment.results["width"] == refused
 
 
 def test_readiness_requires_assignment_but_does_not_erase_refusal() -> None:
     unassigned: DecisionState[int] = DecisionState("lanes")
-    waiting = assess_readiness({"lanes": Decided(unassigned)})
+    waiting = assess_readiness({"lanes": Available(unassigned)})
     assert waiting.ready is None
-    assert isinstance(waiting.answer, Unresolved)
-    assert waiting.answer.findings[0].owner == "lanes"
+    assert isinstance(waiting.result, Unresolved)
+    assert waiting.result.findings[0].owner == "lanes"
     final = assess_readiness({"supported": reject("no", "unsupported"), "off": Inapplicable()})
     assert final.ready is True
 
 
 def test_view_reducer_obeys_readiness_output_and_refusal_precedence() -> None:
-    raw: Answer[int] = Decided(4)
+    raw: QueryResult[int] = Available(4)
     refused = reject("geometry", "too wide", owner="width")
     waiting = assess_view(
         raw, owner="physical", requires={"lanes": blocker()}, constraints={"width": refused}
     )
-    assert waiting.output_answer == raw
-    assert isinstance(waiting.accepted_answer, Unresolved)
+    assert waiting.output_result == raw
+    assert isinstance(waiting.accepted_result, Unresolved)
     assert waiting.constraints.refused == ("width",)
     inactive: ViewAssessment[int] = assess_view(
         Inapplicable(), owner="physical", constraints={"width": refused}
     )
-    assert isinstance(inactive.accepted_answer, Inapplicable)
+    assert isinstance(inactive.accepted_result, Inapplicable)
     denied = assess_view(raw, owner="physical", constraints={"width": refused})
-    assert denied.accepted_answer == refused
+    assert denied.accepted_result == refused
     accepted = assess_view(raw, owner="physical")
     assert accepted.readiness.ready is True
-    assert accepted.accepted_answer == raw
+    assert accepted.accepted_result == raw
 
 
 def test_view_applicability_precedes_unresolved_requirements() -> None:
     result: ViewAssessment[int] = assess_view(
-        blocker(), owner="physical", applicability=Decided(False), requires={"lanes": blocker()}
+        blocker(), owner="physical", applicability=Available(False), requires={"lanes": blocker()}
     )
-    assert isinstance(result.accepted_answer, Inapplicable)
+    assert isinstance(result.accepted_result, Inapplicable)
 
 
 def test_errors_keep_boundary_and_programming_failures_distinct() -> None:
     report = object()
-    assert RefinementError(report).report is report
+    assert ConfigurationError(report).report is report
     assert isinstance(RequestError("missing input"), ValueError)
     cause = ZeroDivisionError("bad formula")
     try:
@@ -225,7 +225,7 @@ def test_iterative_evaluation_demands_only_a_deep_query_closure() -> None:
     nodes.append(Node(6001, 0, "unrelated", "derived", semantics=INT, function=unrelated))
     snapshot = Snapshot(linked(*nodes), {})
     result = evaluate(snapshot, 6000)
-    assert result.answer == Decided(6000)
+    assert result.result == Available(6000)
     assert result.dependencies == (5999,)
     assert len(calls) == 6000
     assert evaluate(snapshot, 6000) is result
@@ -244,14 +244,14 @@ def test_guard_suppresses_callbacks_and_both_decision_queries_agree() -> None:
         Node(3, 0, "active", "decision", semantics=INT),
     )
     snapshot = Snapshot(model, {})
-    assert isinstance(evaluate(snapshot, 1).answer, Inapplicable)
+    assert isinstance(evaluate(snapshot, 1).result, Inapplicable)
     assert isinstance(decision_state(snapshot, 1), Inapplicable)
-    assert isinstance(evaluate(snapshot, 2).answer, Inapplicable)
+    assert isinstance(evaluate(snapshot, 2).result, Inapplicable)
     assert evaluate(snapshot, 2).dependencies == (0,)
     state = decision_state(snapshot, 3)
-    assert isinstance(state, Decided)
+    assert isinstance(state, Available)
     assert state.value.status == "unassigned"
-    assert isinstance(evaluate(snapshot, 3).answer, Unresolved)
+    assert isinstance(evaluate(snapshot, 3).result, Unresolved)
 
 
 def test_optional_missing_input_differs_from_supplied_none_and_preserves_refusal() -> None:
@@ -260,7 +260,7 @@ def test_optional_missing_input_differs_from_supplied_none_and_preserves_refusal
     def is_missing(*, source: object) -> bool:
         return isinstance(source, MissingInput)
 
-    def refused() -> Answer[object]:
+    def refused() -> QueryResult[object]:
         return reject("unsupported", "unsupported value")
 
     model = linked(
@@ -287,10 +287,10 @@ def test_optional_missing_input_differs_from_supplied_none_and_preserves_refusal
     )
     absent = Snapshot(model, {})
     supplied = Snapshot(model, {0: None})
-    assert evaluate(absent, 1).answer == Decided(True)
-    assert evaluate(supplied, 1).answer == Decided(False)
-    assert isinstance(evaluate(absent, 0).answer, Unresolved)
-    propagated = evaluate(absent, 3).answer
+    assert evaluate(absent, 1).result == Available(True)
+    assert evaluate(supplied, 1).result == Available(False)
+    assert isinstance(evaluate(absent, 0).result, Unresolved)
+    propagated = evaluate(absent, 3).result
     assert isinstance(propagated, Rejected)
     assert propagated.findings[0].owner == "refused"
 
@@ -316,9 +316,9 @@ def test_callback_arguments_are_detached_from_snapshot_values() -> None:
     )
     first = Snapshot(model, {0: [1]})
     second = Snapshot(model, {0: [2, 3]})
-    assert evaluate(first, 1).answer == Decided(2)
-    assert evaluate(first, 0).answer == Decided([1])
-    assert evaluate(second, 1).answer == Decided(3)
+    assert evaluate(first, 1).result == Available(2)
+    assert evaluate(first, 0).result == Available([1])
+    assert evaluate(second, 1).result == Available(3)
     successor = first.successor({})
     assert successor.parameters is first.parameters
     assert successor.lock is first.lock
@@ -329,7 +329,7 @@ def test_callback_arguments_are_detached_from_snapshot_values() -> None:
 def test_selection_preserves_selected_refusal_and_skips_other_callback() -> None:
     string = cast(ValueSemantics[object], default_semantics(str))
 
-    def refused() -> Answer[object]:
+    def refused() -> QueryResult[object]:
         return reject("geometry", "selected implementation refused")
 
     def inactive() -> int:
@@ -351,8 +351,8 @@ def test_selection_preserves_selected_refusal_and_skips_other_callback() -> None
     )
     snapshot = Snapshot(model, {})
     selected = evaluate(snapshot, 3)
-    assert selected.answer == evaluate(snapshot, 1).answer
-    assert isinstance(selected.answer, Rejected)
+    assert selected.result == evaluate(snapshot, 1).result
+    assert isinstance(selected.result, Rejected)
     assert selected.dependencies == (0, 1)
     assert 2 not in snapshot.cache
 
@@ -368,10 +368,10 @@ def test_view_callback_and_accepted_dependency_share_the_cached_assessment() -> 
     parent = evaluate(snapshot, 3)
     direct = evaluate(snapshot, 2)
     assert isinstance(direct.assessment, ViewAssessment)
-    assert parent.answer is direct.answer
-    assert direct.assessment.accepted_answer == direct.answer
-    assert isinstance(direct.answer, Rejected)
-    assert direct.answer.findings[0].owner == "support"
+    assert parent.result is direct.result
+    assert direct.assessment.accepted_result == direct.result
+    assert isinstance(direct.result, Rejected)
+    assert direct.result.findings[0].owner == "support"
 
 
 def test_bad_callback_output_raises_contextual_programming_error() -> None:
@@ -403,6 +403,6 @@ def test_optional_alias_uses_canonical_missing_parameter_owner() -> None:
         ),
     )
     snapshot = Snapshot(model, {})
-    assert evaluate(snapshot, 2).answer == Decided(1)
+    assert evaluate(snapshot, 2).result == Available(1)
     assert evaluate(snapshot, 2).dependencies == (1,)
     assert evaluate(snapshot, 1).dependencies == (0,)

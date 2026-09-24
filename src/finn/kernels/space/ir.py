@@ -33,7 +33,7 @@ NodeKind = Literal[
     "readiness",
     "group",
 ]
-DependencyMode = Literal["required", "optional", "answer"]
+DependencyMode = Literal["required", "optional", "result"]
 
 
 @dataclass(frozen=True, slots=True)

@@ -117,7 +117,7 @@ def run(configuration: Configuration, evidence: Path, *, backpressure_ticks: int
             compute_pumping=c.pumping,
         ),
     )
-    module = value(point.physical.accepted_answer)
+    module = value(point.build_requirements().accepted_result)
     case = Case(
         c.label,
         c.target,

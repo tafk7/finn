@@ -12,7 +12,7 @@ import pytest
 
 from finn.kernels.space import (
     Const,
-    Decided,
+    Available,
     Decision,
     Inapplicable,
     Param,
@@ -27,9 +27,10 @@ from finn.kernels.space import (
     constraint,
     derived,
     divisors_of,
+    refinement,
     view,
 )
-from finn.kernels.space.errors import EvaluationError, RefinementError, RequestError
+from finn.kernels.space.errors import EvaluationError, ConfigurationError, RequestError
 from finn.kernels.space import inspection
 
 PHYSICAL = ViewKey("physical", int)
@@ -52,20 +53,20 @@ def test_two_child_placements_have_independent_choices_and_immutable_roots() -> 
         first = Subspace(Tile, extent=extent)
         second = Subspace(Tile, extent=extent)
 
-    base = Pair.start({Pair.extent: 12})
-    first = base.first.assign(Tile.lanes, 3)
+    base = Pair({Pair.extent: 12})
+    first = base.first.with_choices(lanes=3)
     assert isinstance(first, Tile)
-    assert first.physical().accepted_answer == Decided(4)
+    assert first.physical().accepted_result == Available(4)
     successor = cast(Pair, first.root)
     assert successor.first.lanes == 3
-    assert isinstance(successor.second.answer(Tile.lanes), Unresolved)
-    assert isinstance(base.first.answer(Tile.lanes), Unresolved)
-    second = successor.second.assign(Tile.lanes, 4)
+    assert isinstance(successor.second.query(Tile.lanes), Unresolved)
+    assert isinstance(base.first.query(Tile.lanes), Unresolved)
+    second = successor.second.with_choices(lanes=4)
     final = cast(Pair, second.root)
-    assert final.first.physical().accepted_answer == Decided(4)
-    assert final.second.physical().accepted_answer == Decided(3)
-    assert isinstance(successor.second.answer(Tile.lanes), Unresolved)
-    assert final.answer(Pair.first.ref(Tile.extent)) == Decided(12)
+    assert final.first.physical().accepted_result == Available(4)
+    assert final.second.physical().accepted_result == Available(3)
+    assert isinstance(successor.second.query(Tile.lanes), Unresolved)
+    assert final.query(Pair.first.ref(Tile.extent)) == Available(12)
 
 
 def test_false_outer_scope_suppresses_inner_commitments_and_callbacks() -> None:
@@ -86,14 +87,14 @@ def test_false_outer_scope_suppresses_inner_commitments_and_callbacks() -> None:
         enabled = Const(False)
         child = Subspace(Guarded, when=enabled)
 
-    point = Outer.start()
-    assert isinstance(point.child.answer(Guarded.lanes), Inapplicable)
-    assert isinstance(point.child.decision_state(Guarded.lanes), Inapplicable)
-    assert isinstance(point.child.answer(Guarded.raw), Inapplicable)
-    assert isinstance(point.child.physical().accepted_answer, Inapplicable)
+    point = Outer()
+    assert isinstance(point.child.query(Guarded.lanes), Inapplicable)
+    assert isinstance(point.child.field(Guarded.lanes).state, Inapplicable)
+    assert isinstance(point.child.query(Guarded.raw), Inapplicable)
+    assert isinstance(point.child.physical().accepted_result, Inapplicable)
     assert calls == []
-    with pytest.raises(RefinementError):
-        point.child.assign(Guarded.lanes, 1)
+    with pytest.raises(ConfigurationError):
+        point.child.with_choices(lanes=1)
     assert calls == []
 
 
@@ -126,22 +127,21 @@ def test_selected_view_preserves_direct_refusal_and_skips_other_alternatives() -
         accepted = implementation.accepted(PHYSICAL)
         physical = View(accepted)
 
-    base = Root.start()
-    assert isinstance(base.answer(Root.accepted), Unresolved)
+    base = Root()
+    assert isinstance(base.query(Root.accepted), Unresolved)
     selected = base.implementation.select("refused")
-    point = cast(Root, selected.occurrence.root)
+    point = cast(Root, selected.instance.root)
     child = selected.alternative("refused")
-    direct = child.assess(Refused.physical).accepted_answer
+    direct = child.assess(Refused.physical).accepted_result
     assert isinstance(direct, Rejected)
-    assert point.answer(Root.accepted) == direct
-    assert point.physical().accepted_answer == direct
+    assert point.query(Root.accepted) == direct
+    assert point.physical().accepted_result == direct
     assert selected.select("refused") is selected
-    with pytest.raises(RefinementError):
-        selected.select("explodes")
+    selected.select("explodes")
     assert isinstance(
-        selected.alternative("explodes").assess(Explodes.physical).accepted_answer, Inapplicable
+        selected.alternative("explodes").assess(Explodes.physical).accepted_result, Inapplicable
     )
-    assert isinstance(base.answer(Root.accepted), Unresolved)
+    assert isinstance(base.query(Root.accepted), Unresolved)
     assert calls == []
 
 
@@ -156,14 +156,14 @@ def test_singleton_choice_needs_no_commitment_and_respects_its_outer_guard() -> 
         implementation = SubspaceChoice({"only": Subspace(Only)}, exports=(PHYSICAL,), when=enabled)
         accepted = implementation.accepted(PHYSICAL)
 
-    active = Root.start({Root.enabled: True})
-    assert active.answer(Root.accepted) == Decided(7)
+    active = Root({Root.enabled: True})
+    assert active.query(Root.accepted) == Available(7)
     selected = active.implementation
     assert selected.alternatives == ("only",)
     assert selected.select("only") is selected
-    inactive = Root.start({Root.enabled: False})
-    assert isinstance(inactive.answer(Root.accepted), Inapplicable)
-    with pytest.raises(RefinementError):
+    inactive = Root({Root.enabled: False})
+    assert isinstance(inactive.query(Root.accepted), Inapplicable)
+    with pytest.raises(ConfigurationError):
         inactive.implementation.select("only")
 
 
@@ -181,13 +181,13 @@ def test_nested_choice_selection_retains_its_owning_scope() -> None:
         first = Subspace(Family)
         second = Subspace(Family)
 
-    base = Root.start()
+    base = Root()
     selected = base.first.implementation.select("a")
-    assert isinstance(selected.occurrence, Family)
-    assert selected.alternative("a").answer(A.value) == Decided(1)
-    successor = cast(Root, selected.occurrence.root)
-    assert isinstance(successor.second.implementation.alternative("a").answer(A.value), Unresolved)
-    assert isinstance(base.first.implementation.alternative("a").answer(A.value), Unresolved)
+    assert isinstance(selected.instance, Family)
+    assert selected.alternative("a").query(A.value) == Available(1)
+    successor = cast(Root, selected.instance.root)
+    assert isinstance(successor.second.implementation.alternative("a").query(A.value), Unresolved)
+    assert isinstance(base.first.implementation.alternative("a").query(A.value), Unresolved)
 
 
 def test_choice_metadata_and_handles_retain_the_compiled_definition() -> None:
@@ -201,12 +201,12 @@ def test_choice_metadata_and_handles_retain_the_compiled_definition() -> None:
         implementation = SubspaceChoice({"a": Subspace(A), "b": Subspace(B)})
 
     model = compile_space(Root)
-    base = model.start()
+    base = model.bind()
     saved = base.implementation
     Root.implementation.alternatives = MappingProxyType({"renamed": Subspace(A)})
     assert saved.alternatives == ("a", "b")
     chosen = saved.select("b")
-    assert chosen.alternative("b").answer(B.value) == Decided(2)
+    assert chosen.alternative("b").query(B.value) == Available(2)
     with pytest.raises(RequestError, match="unknown choice case"):
         saved.select("renamed")
     with pytest.raises(RequestError, match="unknown choice case"):
@@ -220,7 +220,7 @@ def test_function_view_failure_names_its_authored_owner() -> None:
             raise ZeroDivisionError("broken calculation")
 
     with pytest.raises(EvaluationError) as raised:
-        Broken.start().physical()
+        Broken().physical()
     assert raised.value.owner == "physical"
     assert isinstance(raised.value.__cause__, ZeroDivisionError)
 
@@ -237,16 +237,16 @@ def test_exposed_inputs_local_decisions_and_supplier_aliases_keep_distinct_right
         exposed = Subspace(Child, width=Param(int))
 
     model = compile_space(Root)
-    base = model.start({Root.exposed.ref(Child.width): 9})
-    assert base.exposed.physical().accepted_answer == Decided(9)
-    chosen = base.assign(Root.supplier, 4)
+    base = model.bind({Root.exposed.ref(Child.width): 9})
+    assert base.exposed.physical().accepted_result == Available(9)
+    chosen = base.with_choices(supplier=4)
     assert chosen.aliased.width == 4
     with pytest.raises(RequestError):
-        chosen.aliased.assign(cast(Decision[int], Child.width), 2)
-    local = chosen.assign(Root.local.decision_ref(Child.width), 6)
+        refinement.change(chosen.aliased, cast(Decision[int], Child.width), 2)
+    local = chosen.with_choices(chosen.field(Root.local.decision_ref(Child.width)).change(6))
     assert local.local.width == 6
     assert local.aliased.width == 4
-    assert isinstance(chosen.local.answer(Child.width), Unresolved)
+    assert isinstance(chosen.local.query(Child.width), Unresolved)
 
 
 def test_wide_selected_outputs_keep_frozen_case_order_and_exact_targets() -> None:
@@ -279,9 +279,9 @@ def test_wide_selected_outputs_keep_frozen_case_order_and_exact_targets() -> Non
     )
     assert calls == []
     Root.implementation.alternatives = MappingProxyType({"changed": Subspace(Leaf, value=-1)})
-    base = model.start()
+    base = model.bind()
     assert metadata.selector is not None
     for index in (0, 64, 127):
-        point = base.assign(metadata.selector, f"case{index}")
-        assert point.answer(output) == Decided(index)
+        point = base.with_choices(base.field(metadata.selector).change(f"case{index}"))
+        assert point.query(output) == Available(index)
     assert calls == [0, 64, 127]

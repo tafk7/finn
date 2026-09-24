@@ -64,7 +64,7 @@ def test_partial_document_replays_on_another_compilation_using_explicit_schema_i
         version=2,
         bindings=(codec_for(Family.factor, INTEGER), codec_for(Family.style, STRING)),
     )
-    point = first.start({Family.extent: 12}).assign(Family.factor, 3)
+    point = first.bind({Family.extent: 12}).with_choices(factor=3)
     document = codecs.encode(selections.capture(point), schema)
     assert [entry["key"] for entry in _entries(document)] == ["factor"]
     assert _entries(document)[0]["codec"] == "integer"
@@ -78,10 +78,10 @@ def test_partial_document_replays_on_another_compilation_using_explicit_schema_i
         bindings=(codec_for(Family.factor, INTEGER), codec_for(Family.style, STRING)),
     )
     restored = selections.restore(
-        second.start({Family.extent: 12}), codecs.decode(json.loads(serialized), second_schema)
+        second.bind({Family.extent: 12}), codecs.decode(json.loads(serialized), second_schema)
     )
-    assert restored.accepted and restored.point.factor == 3
-    assert selections.capture(restored.point).keys == ("factor",)
+    assert restored.accepted and restored.instance.factor == 3
+    assert selections.capture(restored.instance).keys == ("factor",)
 
 
 def test_entry_order_does_not_control_dependent_replay() -> None:
@@ -96,12 +96,12 @@ def test_entry_order_does_not_control_dependent_replay() -> None:
         version=1,
         bindings=(codec_for(Family.extent, INTEGER), codec_for(Family.factor, INTEGER)),
     )
-    base = model.start()
-    point = base.assign(Family.extent, 12).assign(Family.factor, 3)
+    base = model.bind()
+    point = base.with_choices(extent=12).with_choices(factor=3)
     document = codecs.encode(selections.capture(point), schema)
     _entries(document).reverse()
     report = selections.restore(base, codecs.decode(document, schema))
-    assert report.accepted and report.point.extent == 12 and report.point.factor == 3
+    assert report.accepted and report.instance.extent == 12 and report.instance.factor == 3
 
 
 @dataclass
@@ -139,13 +139,13 @@ def test_custom_unhashable_values_round_trip_by_declared_equality_and_detach_doc
         version=1,
         bindings=(codec_for(Family.bag, ValueCodec("bag", 1, _encode_bag, _decode_bag)),),
     )
-    point = model.start().assign(Family.bag, Bag([2, 1]))
+    point = model.bind().with_choices(bag=Bag([2, 1]))
     selection = selections.capture(point)
     document = codecs.encode(selection, schema)
     decoded = codecs.decode(document, schema)
     assert decoded.value(Family.bag).items == [1, 2]
     assert decoded == selection
-    assert selections.restore(point, decoded).point is point
+    assert selections.restore(point, decoded).instance is point
     payload = _entries(document)[0]["value"]
     assert isinstance(payload, list)
     payload.append(9)
@@ -174,7 +174,7 @@ def test_all_schema_and_key_errors_are_found_before_any_decoder_runs() -> None:
         version=1,
         bindings=(codec_for(Family.a, codec), codec_for(Family.b, codec)),
     )
-    point = model.start().assign(Family.a, 1).assign(Family.b, 2)
+    point = model.bind().with_choices(a=1).with_choices(b=2)
     selection = selections.capture(point)
     mutations: tuple[Callable[[dict[str, JSONValue]], None], ...] = (
         lambda document: document.__setitem__("family", "different"),
@@ -201,9 +201,9 @@ def test_missing_codecs_and_invalid_decoded_values_do_not_silently_drop_entries(
         factor = Decision(int, values=(1,))
 
     model = compile_space(Family)
-    point = model.start().assign(Family.factor, 1)
+    point = model.bind().with_choices(factor=1)
     incomplete = SelectionSchema(model, family="one", version=1, bindings=())
-    assert codecs.encode(selections.capture(model.start()), incomplete)["entries"] == []
+    assert codecs.encode(selections.capture(model.bind()), incomplete)["entries"] == []
     with pytest.raises(RequestError, match="explicit codec"):
         codecs.encode(selections.capture(point), incomplete)
     schema = SelectionSchema(
@@ -234,8 +234,8 @@ def test_selected_case_identity_is_authored_and_unknown_cases_are_diagnosed() ->
     schema = SelectionSchema(
         model, family="implementations", version=1, bindings=(codec_for(selector, STRING),)
     )
-    base = model.start()
-    point = base.assign(selector, "fast")
+    base = model.bind()
+    point = base.with_choices(base.field(selector).change("fast"))
     document = codecs.encode(selections.capture(point), schema)
     assert _entries(document)[0]["key"] == "implementation"
     assert _entries(document)[0]["value"] == "fast"
@@ -267,7 +267,7 @@ def test_nonportable_payloads_cycles_and_duplicate_schema_bindings_are_rejected(
     schema = SelectionSchema(
         model, family="one", version=1, bindings=(codec_for(Family.factor, INTEGER),)
     )
-    point = model.start().assign(Family.factor, 1)
+    point = model.bind().with_choices(factor=1)
     for malformed in (float("nan"), {"value": object()}, {1: "bad-key"}):
         with pytest.raises(RequestError):
             codecs.decode(malformed, schema)
@@ -275,11 +275,15 @@ def test_nonportable_payloads_cycles_and_duplicate_schema_bindings_are_rejected(
     cyclic.append(cyclic)
     with pytest.raises(RequestError, match="cycle"):
         codecs.decode(cyclic, schema)
+
+    class Other(Space):
+        factor = Decision(int, values=(1,))
+
     other_schema = SelectionSchema(
-        compile_space(Family),
+        compile_space(Other),
         family="one",
         version=1,
-        bindings=(codec_for(Family.factor, INTEGER),),
+        bindings=(codec_for(Other.factor, INTEGER),),
     )
     with pytest.raises(RequestError, match="different compiled models"):
         codecs.encode(selections.capture(point), other_schema)
@@ -291,7 +295,7 @@ def test_lossy_codecs_are_refused_and_encoding_callbacks_get_detached_values() -
         bag = Decision(BAG, values=(Bag([1, 2]),))
 
     model = compile_space(Family)
-    point = model.start().assign(Family.factor, 2)
+    point = model.bind().with_choices(factor=2)
     lossy = ValueCodec[int]("lossy", 1, lambda value: 1, _integer)
     schema = SelectionSchema(
         model, family="lossy", version=1, bindings=(codec_for(Family.factor, lossy),)
@@ -308,7 +312,7 @@ def test_lossy_codecs_are_refused_and_encoding_callbacks_get_detached_values() -
     bag_schema = SelectionSchema(
         model, family="bags", version=1, bindings=(codec_for(Family.bag, bag_codec),)
     )
-    original = selections.capture(model.start().assign(Family.bag, Bag([1, 2])))
+    original = selections.capture(model.bind().with_choices(bag=Bag([1, 2])))
     encoded = codecs.encode(original, bag_schema)
     assert _entries(encoded)[0]["value"] == [1, 2]
     assert original.value(Family.bag).items == [1, 2]
@@ -322,12 +326,12 @@ def test_encoded_stale_case_entries_are_rejected_by_atomic_replay() -> None:
         implementation = SubspaceChoice({"left": Subspace(Child), "right": Subspace(Child)})
 
     model = compile_space(Family)
-    base = model.start()
+    base = model.bind()
     selector = inspection.choices(model)[0].selector
     assert selector is not None
     selected = base.implementation.select("left").alternative("left")
     lanes = inspection.decision_handle(selected, Child.lanes)
-    point = selected.assign(Child.lanes, 1).root
+    point = selected.with_choices(lanes=1).root
     schema = SelectionSchema(
         model,
         family="cases",
@@ -339,7 +343,7 @@ def test_encoded_stale_case_entries_are_rejected_by_atomic_replay() -> None:
         "right"
     )
     refused = selections.restore(base, codecs.decode(document, schema))
-    assert not refused.accepted and refused.point is base
+    assert not refused.accepted and refused.instance is base
     assert selections.capture(base).keys == ()
 
 
@@ -355,7 +359,7 @@ def test_roundtrip_decoder_failure_keeps_codec_context_and_original_cause() -> N
     schema = SelectionSchema(
         model, family="failures", version=1, bindings=(codec_for(Family.factor, codec),)
     )
-    selection = selections.capture(model.start().assign(Family.factor, 1))
+    selection = selections.capture(model.bind().with_choices(factor=1))
     with pytest.raises(RequestError, match="factor.*broken.*round-trip") as raised:
         codecs.encode(selection, schema)
     assert isinstance(raised.value.__cause__, RuntimeError)

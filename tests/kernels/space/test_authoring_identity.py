@@ -47,4 +47,4 @@ def test_case_ids_can_use_hyphens_without_becoming_paths() -> None:
     class Root(Space):
         implementation = SubspaceChoice({"low-area": Subspace(Space)})
 
-    assert Root.start().implementation.alternatives == ("low-area",)
+    assert Root().implementation.alternatives == ("low-area",)

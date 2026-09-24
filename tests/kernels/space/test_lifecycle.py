@@ -8,8 +8,16 @@ from dataclasses import dataclass
 import gc
 from weakref import ReferenceType, ref
 
-from finn.kernels.space import Decision, Param, Space, ValueSemantics, compile_space, derived
-from finn.kernels.space.results import Decided
+from finn.kernels.space import (
+    Decision,
+    Param,
+    Space,
+    ValueSemantics,
+    compile_space,
+    derived,
+    refinement,
+)
+from finn.kernels.space.results import Available
 
 
 @dataclass(frozen=True)
@@ -33,12 +41,12 @@ def test_discarded_candidate_snapshots_release_the_actual_cached_callback_output
             return payload
 
     model = compile_space(Family)
-    base = model.start()
+    base = model.bind()
 
     def population() -> list[Family]:
-        points = [base.assign(Family.factor, value) for value in range(16)]
+        points = [base.with_choices(factor=value) for value in range(16)]
         for point in points:
-            point.answer(Family.output)
+            point.query(Family.output)
         return points
 
     candidates = population()
@@ -50,7 +58,7 @@ def test_discarded_candidate_snapshots_release_the_actual_cached_callback_output
     del candidates
     gc.collect()
     assert all(reference() is None for reference in produced)
-    assert model.start().refine().accepted
+    assert refinement.commit(model.bind()).accepted
 
 
 def test_successor_does_not_retain_its_predecessors_output_cache() -> None:
@@ -66,14 +74,14 @@ def test_successor_does_not_retain_its_predecessors_output_cache() -> None:
             produced.append(ref(payload))
             return payload
 
-    earlier = Family.start().assign(Family.factor, 1)
-    earlier.answer(Family.output)
-    later = earlier.assign(Family.extra, 3)
+    earlier = Family().with_choices(factor=1)
+    earlier.query(Family.output)
+    later = earlier.with_choices(extra=3)
     assert produced[0]() is not None
     del earlier
     gc.collect()
     assert produced[0]() is None
-    assert later.answer(Family.output) == Decided(Payload(1))
+    assert later.query(Family.output) == Available(Payload(1))
     assert len(produced) == 2
     assert produced[1]() is not None
 
@@ -91,8 +99,8 @@ def test_concurrent_reads_evaluate_one_cached_output_per_snapshot() -> None:
             return payload
 
     model = compile_space(Family)
-    first = model.start({Family.source: 1})
-    second = model.start({Family.source: 2})
+    first = model.bind({Family.source: 1})
+    second = model.bind({Family.source: 2})
 
     def read_first(_: int) -> Payload:
         return first.output
@@ -118,10 +126,10 @@ def test_concurrent_successors_keep_independent_commitments_and_caches() -> None
             produced.append(ref(payload))
             return payload
 
-    base = Family.start()
+    base = Family()
 
     def explore(value: int) -> Family:
-        point = base.assign(Family.factor, value)
+        point = base.with_choices(factor=value)
         assert point.output == Payload(value)
         return point
 
@@ -129,8 +137,8 @@ def test_concurrent_successors_keep_independent_commitments_and_caches() -> None
         candidates = list(pool.map(explore, range(16)))
     assert [point.output.value for point in candidates] == list(range(16))
     assert len(produced) == 16
-    state = base.decision_state(Family.factor)
-    assert isinstance(state, Decided)
+    state = base.field(Family.factor).state
+    assert isinstance(state, Available)
     assert state.value.status == "unassigned"
 
 
@@ -147,9 +155,9 @@ def test_independent_root_bindings_remain_frozen_when_model_is_reused() -> None:
 
     model = compile_space(Family)
     original = [1, 2]
-    first = model.start({Family.values: original})
+    first = model.bind({Family.values: original})
     original.append(3)
-    second = model.start({Family.values: original})
+    second = model.bind({Family.values: original})
     original.clear()
     assert first.total == 3
     assert second.total == 6

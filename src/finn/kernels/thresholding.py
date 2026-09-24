@@ -172,7 +172,7 @@ class ThresholdingAxiKernel(Kernel):
         bram=depth_trigger_bram,
         uram=depth_trigger_uram,
     )
-    def physical(
+    def build_requirements(
         *,
         table: ThresholdTable,
         pe: int,

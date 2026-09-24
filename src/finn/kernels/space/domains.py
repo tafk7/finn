@@ -11,7 +11,15 @@ from math import isqrt
 from typing import Generic, TypeVar, cast
 
 from .errors import DefinitionError, EvaluationError
-from .results import Answer, Decided, Inapplicable, Rejected, Unresolved, owned_answer, reject
+from .results import (
+    QueryResult,
+    Available,
+    Inapplicable,
+    Rejected,
+    Unresolved,
+    owned_result,
+    reject,
+)
 from .semantics import ValueSemantics, default_semantics
 
 T = TypeVar("T")
@@ -27,8 +35,8 @@ class Domain(Generic[T]):
     """
 
     dependencies: tuple[tuple[str, object], ...]
-    accepts: Callable[..., bool | Answer[bool]]
-    candidates: Callable[..., Iterable[T] | Answer[Iterable[T]]] | None = None
+    accepts: Callable[..., bool | QueryResult[bool]]
+    candidates: Callable[..., Iterable[T] | QueryResult[Iterable[T]]] | None = None
     value_semantics: ValueSemantics[T] | None = None
     _finite_values: tuple[T, ...] | None = None
 
@@ -65,30 +73,30 @@ class Domain(Generic[T]):
         *,
         semantics: ValueSemantics[T],
         owner: str,
-    ) -> Answer[bool]:
+    ) -> QueryResult[bool]:
         """Evaluate membership and preserve explicit semantic refusal/nonvalues."""
 
         try:
             if not semantics.accepts(candidate):
                 raise TypeError(f"expected candidate of nominal type {semantics.name}")
             if self._finite_values is not None:
-                result: bool | Answer[bool] = any(
+                result: bool | QueryResult[bool] = any(
                     semantics.values_equal(candidate, allowed) for allowed in self._finite_values
                 )
             else:
                 result = self.accepts(candidate=candidate, **dependency_values)
             if type(result) is bool:
-                result = Decided(result)
-            if not isinstance(result, (Decided, Inapplicable, Rejected, Unresolved)):
-                raise TypeError("domain membership must return bool or Answer[bool]")
-            if isinstance(result, Decided):
+                result = Available(result)
+            if not isinstance(result, (Available, Inapplicable, Rejected, Unresolved)):
+                raise TypeError("domain membership must return bool or QueryResult[bool]")
+            if isinstance(result, Available):
                 if type(result.value) is not bool:
-                    raise TypeError("domain membership must return bool or Answer[bool]")
+                    raise TypeError("domain membership must return bool or QueryResult[bool]")
                 if result.value is False:
                     return reject(
                         "domain-membership", "candidate is outside the domain", owner=owner
                     )
-            return owned_answer(result, owner)
+            return owned_result(result, owner)
         except Exception as cause:
             raise EvaluationError(owner, "domain membership", str(cause)) from cause
 
@@ -98,7 +106,7 @@ class Domain(Generic[T]):
         *,
         semantics: ValueSemantics[T],
         owner: str,
-    ) -> Answer[tuple[T, ...]]:
+    ) -> QueryResult[tuple[T, ...]]:
         """Read the optional candidate provider without adopting any value."""
 
         if self.candidates is None:
@@ -106,9 +114,9 @@ class Domain(Generic[T]):
         try:
             result = self.candidates(**dependency_values)
             if isinstance(result, (Inapplicable, Rejected, Unresolved)):
-                return owned_answer(result, owner)
-            values = result.value if isinstance(result, Decided) else result
-            return Decided(tuple(semantics.freeze(value) for value in values))
+                return owned_result(result, owner)
+            values = result.value if isinstance(result, Available) else result
+            return Available(tuple(semantics.freeze(value) for value in values))
         except Exception as cause:
             raise EvaluationError(owner, "domain enumeration", str(cause)) from cause
 
@@ -141,8 +149,8 @@ def finite(values: Iterable[T], semantics: ValueSemantics[T] | None = None) -> D
 
 def domain(
     *,
-    accepts: Callable[..., bool | Answer[bool]],
-    candidates: Callable[..., Iterable[T] | Answer[Iterable[T]]] | None = None,
+    accepts: Callable[..., bool | QueryResult[bool]],
+    candidates: Callable[..., Iterable[T] | QueryResult[Iterable[T]]] | None = None,
     semantics: ValueSemantics[T] | None = None,
     **dependencies: object,
 ) -> Domain[T]:
@@ -172,7 +180,7 @@ def divisors_of(extent: object) -> Domain[int]:
 
     return domain(
         accepts=accepts,
-        candidates=cast(Callable[..., Iterable[int] | Answer[Iterable[int]]], candidates),
+        candidates=cast(Callable[..., Iterable[int] | QueryResult[Iterable[int]]], candidates),
         semantics=default_semantics(int),
         extent=extent,
     )

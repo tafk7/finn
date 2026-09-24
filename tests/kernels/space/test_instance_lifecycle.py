@@ -44,13 +44,13 @@ def test_freeze_restore_explore_capture_rebind_and_replace_owned_sparse_keys() -
         owned_keys=("retired-choice",),
     )
     facts: dict[object, object] = {Family.extent: 12}
-    base = model.start(facts)
+    base = model.bind(facts)
     facts[Family.extent] = 10
-    initial = base.assign(Family.factor, 3).assign(Family.buffers, 1)
+    initial = base.with_choices(factor=3).with_choices(buffers=1)
     captured = selections.capture(initial)
     encoded = codecs.encode(captured, schema)
     checkpoint = selections.restore(base, codecs.decode(encoded, schema))
-    assert checkpoint.accepted and checkpoint.point.extent == 12
+    assert checkpoint.accepted and checkpoint.instance.extent == 12
     alternative = captured.with_changes(
         [
             captured.edit(Family.factor, 4),
@@ -58,11 +58,11 @@ def test_freeze_restore_explore_capture_rebind_and_replace_owned_sparse_keys() -
         ]
     )
     explored = selections.restore(base, alternative)
-    assert explored.accepted and explored.point.factor == 4
+    assert explored.accepted and explored.instance.factor == 4
     assert initial.factor == 3 and initial.buffers == 1
-    rebound = model.start(facts)
-    refused = selections.restore(rebound, selections.capture(explored.point))
-    assert not refused.accepted and refused.point is rebound
+    rebound = model.bind(facts)
+    refused = selections.restore(rebound, selections.capture(explored.instance))
+    assert not refused.accepted and refused.instance is rebound
     assert selections.capture(rebound).keys == ()
     stored: dict[str, object] = {
         "factor": 3,

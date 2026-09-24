@@ -10,7 +10,7 @@ from qonnx.core.datatype import DataType
 
 from kernels.helpers import assess, point_for, value
 from finn.kernels.space import (
-    Decided,
+    Available,
     Rejected,
     Unresolved,
     Param,
@@ -91,8 +91,10 @@ def test_component_groups_its_interfaces_and_keeps_one_root_physical_output():
     assert DotpAxiKernel.__bases__ == (Kernel,)
     assert not hasattr(dotp_axi, "dotp_axi_requirements")
     point = kernel()
-    assert tuple(item.key for item in point.capabilities() if item.scope == "") == ("physical",)
-    value(point.physical().accepted_answer)
+    assert tuple(item.key for item in point.capabilities() if item.scope == "") == (
+        "build_requirements",
+    )
+    value(point.build_requirements().accepted_result)
     inputs = {item.key for item in inspection.members(point) if item.kind == "param"}
     assert inputs == {
         "pe",
@@ -113,7 +115,7 @@ def test_component_groups_its_interfaces_and_keeps_one_root_physical_output():
 def test_assessed_view_preserves_geometry_and_clocks(target, pumping):
     settings = parameters(target_dsp=target, compute_pumping=pumping)
     point = kernel(**settings)
-    requirements = value(point.physical().accepted_answer)
+    requirements = value(point.build_requirements().accepted_result)
     rtl = dict(requirements.parameters)
     assert rtl["ACCU_WIDTH"] == 9
     assert rtl["PE"] == 2 and rtl["SIMD"] == 4
@@ -135,7 +137,7 @@ def test_assessed_view_preserves_geometry_and_clocks(target, pumping):
 
 def test_physical_framing_has_no_workload_period_and_only_activation_has_last():
     point = kernel(pe=3, simd=5)
-    value(point.physical().accepted_answer)
+    value(point.build_requirements().accepted_result)
     assert point.activation.elements_per_beat == 5
     assert point.weights.elements_per_beat == 15
     assert point.result.elements_per_beat == 3
@@ -148,14 +150,16 @@ def test_physical_framing_has_no_workload_period_and_only_activation_has_last():
 @pytest.mark.parametrize("segment", (0, 2))
 def test_segment_length_is_explicit_and_reaches_rtl(segment):
     requirements = value(
-        kernel(simd=7, segment_length=segment, compute_pumping=True).physical().accepted_answer
+        kernel(simd=7, segment_length=segment, compute_pumping=True)
+        .build_requirements()
+        .accepted_result
     )
     assert dict(requirements.abi.parameters)["SEGMENTLEN"] == str(segment)
 
 
 def test_dsp48_segment_length_is_ignored_by_rtl_but_preserved_as_supplied():
     requirements = value(
-        kernel(target_dsp=DspBlock.DSP48E2, segment_length=100).physical().accepted_answer
+        kernel(target_dsp=DspBlock.DSP48E2, segment_length=100).build_requirements().accepted_result
     )
     assert dict(requirements.parameters)["SEGMENTLEN"] == 100
 
@@ -194,12 +198,12 @@ def test_dsp48_segment_length_is_ignored_by_rtl_but_preserved_as_supplied():
     ],
 )
 def test_physical_view_preserves_support_refusals(updates, code):
-    physical = kernel(**updates).physical()
-    refused = physical.accepted_answer
+    physical = kernel(**updates).build_requirements()
+    refused = physical.accepted_result
     assert isinstance(refused, Rejected), refused
     assert code in {
         finding.code
-        for answer in physical.constraints.answers.values()
+        for answer in physical.constraints.results.values()
         if isinstance(answer, Rejected)
         for finding in answer.findings
     }
@@ -224,11 +228,11 @@ def test_space_rejects_mistyped_values_at_binding(updates):
 
 def test_constraints_gate_acceptance_without_revalidating_raw_codegen():
     point = kernel(weights_dtype=DataType["UINT3"], segment_length=-1)
-    physical = point.physical()
-    assert isinstance(physical.output_answer, Decided)
-    assert physical.output_answer.value == value(point.answer(DotpAxiKernel.codegen))
-    assert dict(physical.output_answer.value.parameters)["SEGMENTLEN"] == -1
-    refused = physical.accepted_answer
+    physical = point.build_requirements()
+    assert isinstance(physical.output_result, Available)
+    assert physical.output_result.value == value(point.query(DotpAxiKernel.codegen))
+    assert dict(physical.output_result.value.parameters)["SEGMENTLEN"] == -1
+    refused = physical.accepted_result
     assert isinstance(refused, Rejected)
     assert {finding.code for finding in refused.findings} == {"dotp-weight-type", "dotp-segment"}
 
@@ -236,10 +240,10 @@ def test_constraints_gate_acceptance_without_revalidating_raw_codegen():
 @pytest.mark.parametrize("updates,stream", [({"simd": 0}, "activation"), ({"pe": 0}, "result")])
 def test_invalid_native_interface_is_a_rejection_not_a_callback_failure(updates, stream):
     point = kernel(**updates)
-    answer = point.answer(getattr(DotpAxiKernel, stream).stream)
+    answer = point.query(getattr(DotpAxiKernel, stream).stream)
     assert isinstance(answer, Rejected)
     assert {finding.code for finding in answer.findings} == {"dotp-interface"}
-    assert isinstance(point.physical().accepted_answer, Rejected)
+    assert isinstance(point.build_requirements().accepted_result, Rejected)
 
 
 def test_physical_constraints_can_report_before_other_inputs_resolve():
@@ -260,12 +264,12 @@ def test_result_dtype_and_pumping_are_required_without_any_workload_dimensions()
     facts.pop("result_dtype")
     facts.pop("compute_pumping")
     point = partial(facts)
-    assert isinstance(point.physical().accepted_answer, Unresolved)
+    assert isinstance(point.build_requirements().accepted_result, Unresolved)
     assert point.activation.element_bits == 3
     assert point.weights.elements_per_beat == 8
     facts["result_dtype"] = DataType["INT12"]
     point = point_for(DotpAxiKernel, _supplied(facts))
-    assert isinstance(point.physical().accepted_answer, Unresolved)
+    assert isinstance(point.build_requirements().accepted_result, Unresolved)
 
 
 @pytest.mark.parametrize("missing", tuple(parameters()))
@@ -277,7 +281,7 @@ def test_required_physical_facts_reject_omission_and_decision_remains_unresolved
         choices["compute_pumping"] = facts.pop("compute_pumping")
     if missing == "compute_pumping":
         point = point_for(DotpAxiKernel, _supplied(facts))
-        assert isinstance(point.physical().accepted_answer, Unresolved)
+        assert isinstance(point.build_requirements().accepted_result, Unresolved)
     else:
         with pytest.raises(RequestError, match="missing required parameters"):
             point_for(DotpAxiKernel, _supplied(facts), **choices)
@@ -287,7 +291,7 @@ def test_required_physical_facts_reject_omission_and_decision_remains_unresolved
 def test_caller_selects_accumulator_capacity_and_owns_the_reduction_bound(bits):
     point = kernel(result_dtype=DataType[f"INT{bits}"])
     assert point.result.dtype == DataType[f"INT{bits}"]
-    assert dict(value(point.physical().accepted_answer).parameters)["ACCU_WIDTH"] == bits
+    assert dict(value(point.build_requirements().accepted_result).parameters)["ACCU_WIDTH"] == bits
 
 
 @pytest.mark.parametrize(
@@ -308,14 +312,14 @@ def test_supported_signed_and_unsigned_dsp_boundaries(target, activation, weight
             weights_dtype=DataType[weight],
             result_dtype=DataType["INT48"],
         )
-        .physical()
-        .accepted_answer
+        .build_requirements()
+        .accepted_result
     )
     assert dict(requirements.parameters)["SIGNED_ACTIVATIONS"] == int(DataType[activation].signed())
 
 
 def test_sources_materialize_from_the_assessed_requirements(tmp_path):
-    requirements = value(kernel(compute_pumping=True).physical().accepted_answer)
+    requirements = value(kernel(compute_pumping=True).build_requirements().accepted_result)
     store = ArtifactStore(tmp_path / "store")
     finnlib = Path(__file__).resolve().parents[2] / "deps" / "finnlib"
     if not (finnlib / "rtl/linalg/dotp_axi.sv").is_file():
@@ -354,7 +358,7 @@ def test_subbyte_result_padding_has_no_zero_fill_promise():
         weights_dtype=DataType["INT2"],
         result_dtype=DataType["INT4"],
     )
-    value(point.physical().accepted_answer)
+    value(point.build_requirements().accepted_result)
     assert point.result.payload_bits == 4 and point.result.carrier_bits == 8
     assert point.result.payload.unused[0].policy is UnusedBitPolicy.UNSPECIFIED
     assert point.activation.payload.unused[0].policy is UnusedBitPolicy.IGNORE_ON_RECEIVE

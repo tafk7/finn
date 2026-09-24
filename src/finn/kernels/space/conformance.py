@@ -12,14 +12,14 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Literal, TypeAlias, cast
 
-from . import inspection
+from . import inspection, refinement
 from .declarations import Space
-from .edits import Edit, EditRequest
+from .edits import Change, ChangeRequest
 from .errors import EvaluationError, RequestError
-from .results import Answer, Decided, DecisionState, Unresolved, ViewAssessment
+from .results import QueryResult, Available, DecisionState, Unresolved, ViewAssessment
 from .semantics import ValueSemantics, default_semantics
 
-Sample: TypeAlias = EditRequest | Iterable[EditRequest]
+Sample: TypeAlias = ChangeRequest | Iterable[ChangeRequest]
 Category = Literal[
     "value", "decision_state", "constraint", "view", "view_output", "readiness", "candidates"
 ]
@@ -67,7 +67,7 @@ class _Observation:
     key: str
     owner: str
     category: Category
-    answer: Answer[object]
+    result: QueryResult[object]
     semantics: ValueSemantics[object] | None
 
 
@@ -89,7 +89,7 @@ def _observe(point: Space) -> tuple[_Observation, ...]:
         if category == "view":
             evidence = inspection.explain(point, member.reference)
             observations.append(
-                _Observation(member.key, member.owner, category, evidence.answer, semantics)
+                _Observation(member.key, member.owner, category, evidence.result, semantics)
             )
             assessment = evidence.assessment
             if isinstance(assessment, ViewAssessment):
@@ -98,7 +98,7 @@ def _observe(point: Space) -> tuple[_Observation, ...]:
                         member.key,
                         member.owner,
                         "view_output",
-                        assessment.output_answer,
+                        assessment.output_result,
                         semantics,
                     )
                 )
@@ -107,7 +107,7 @@ def _observe(point: Space) -> tuple[_Observation, ...]:
                         member.key,
                         member.owner,
                         "readiness",
-                        cast(Answer[object], assessment.readiness.answer),
+                        cast(QueryResult[object], assessment.readiness.result),
                         _BOOL,
                     )
                 )
@@ -117,7 +117,7 @@ def _observe(point: Space) -> tuple[_Observation, ...]:
                     member.key,
                     member.owner,
                     category,
-                    point.answer(member.reference),
+                    point.query(member.reference),
                     semantics,
                 )
             )
@@ -127,35 +127,35 @@ def _observe(point: Space) -> tuple[_Observation, ...]:
                 decision.key,
                 decision.owner,
                 "decision_state",
-                cast(Answer[object], point.decision_state(decision.reference)),
+                cast(QueryResult[object], point.field(decision.reference).state),
                 decision.reference.semantics,
             )
         )
-        candidates = point.candidates(decision.reference)
+        candidates = point.field(decision.reference).candidates()
         if candidates is not None:
             observations.append(
                 _Observation(
                     decision.key,
                     decision.owner,
                     "candidates",
-                    cast(Answer[object], candidates),
+                    cast(QueryResult[object], candidates),
                     decision.reference.semantics,
                 )
             )
     return tuple(sorted(observations, key=lambda item: (item.key, item.category)))
 
 
-def _settled(answer: Answer[object]) -> bool:
+def _settled(answer: QueryResult[object]) -> bool:
     return not isinstance(answer, Unresolved) and not (
-        isinstance(answer, Decided)
+        isinstance(answer, Available)
         and isinstance(answer.value, DecisionState)
         and answer.value.status == "unassigned"
     )
 
 
 def _equal(before: _Observation, after: _Observation) -> bool:
-    left, right = before.answer, after.answer
-    if not isinstance(left, Decided) or not isinstance(right, Decided):
+    left, right = before.result, after.result
+    if not isinstance(left, Available) or not isinstance(right, Available):
         return left == right
     semantics = before.semantics
     if semantics is None:
@@ -200,7 +200,7 @@ class MonotonicityHarness:
 
     def verify(self, base: Space, samples: Iterable[Sample]) -> ConformanceResult:
         if base.root is not base:
-            raise RequestError("conformance refinement samples require a root occurrence")
+            raise RequestError("conformance refinement samples require a root configuration")
         supplied = tuple(samples)
         if not supplied:
             return ConformanceResult(0, (), ())
@@ -209,18 +209,18 @@ class MonotonicityHarness:
         violations: list[MonotonicityViolation] = []
         checked = 0
         for index, sample in enumerate(supplied):
-            if isinstance(sample, Edit):
-                batch: tuple[EditRequest, ...] = (sample,)
+            if isinstance(sample, Change):
+                batch: tuple[ChangeRequest, ...] = (sample,)
             else:
                 try:
-                    batch = tuple(cast(Iterable[EditRequest], sample))
+                    batch = tuple(cast(Iterable[ChangeRequest], sample))
                 except TypeError:
                     outcomes.append(
                         SampleOutcome(index, "skipped", "sample is neither an edit nor a batch")
                     )
                     continue
             try:
-                report = base.refine(*batch)
+                report = refinement.commit(base, *batch)
             except RequestError as error:
                 outcomes.append(
                     SampleOutcome(index, "skipped", f"invalid refinement request: {error}")
@@ -229,14 +229,14 @@ class MonotonicityHarness:
             if not report.accepted:
                 outcomes.append(SampleOutcome(index, "skipped", "refinement refused"))
                 continue
-            if report.point is base:
+            if report.instance is base:
                 outcomes.append(SampleOutcome(index, "noop", "refinement made no commitments"))
                 continue
             checked += 1
             outcomes.append(SampleOutcome(index, "checked", "compared sampled successor"))
-            successor = {(item.key, item.category): item for item in _observe(report.point)}
+            successor = {(item.key, item.category): item for item in _observe(report.instance)}
             for observation in baseline:
-                if _settled(observation.answer) and not _equal(
+                if _settled(observation.result) and not _equal(
                     observation, successor[(observation.key, observation.category)]
                 ):
                     violations.append(

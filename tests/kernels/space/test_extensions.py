@@ -16,7 +16,7 @@ import pytest
 
 from finn.kernels.space import (
     Const,
-    Decided,
+    Available,
     Decision,
     DecisionRef,
     DefinitionError,
@@ -164,26 +164,29 @@ def test_stream_shape_places_independent_choices_and_keeps_narrow_fields_availab
 
     assert "left_dtype" not in vars(Pair) and "maximum_bits" not in vars(Pair)
     model = compile_space(Pair)
-    missing = model.start({Pair.left.dtype: Encoding(3), Pair.right.dtype: Encoding(6)})
-    first = missing.assign(Pair.left.lane_choice, 2)
+    missing = model.bind({Pair.left.dtype: Encoding(3), Pair.right.dtype: Encoding(6)})
+    first = missing.with_choices(missing.field(Pair.left.lane_choice).change(2))
     assert first.left.bits == 6
     assert first.right.element_bits == 6
-    assert isinstance(first.right.answer(StreamShape.lanes), Unresolved)
-    assert isinstance(first.answer(Pair.left.stream), Unresolved)
-    assert isinstance(missing.left.answer(StreamShape.lanes), Unresolved)
+    assert isinstance(first.right.query(StreamShape.lanes), Unresolved)
+    assert isinstance(first.query(Pair.left.stream), Unresolved)
+    assert isinstance(missing.left.query(StreamShape.lanes), Unresolved)
 
-    admitted = model.start(
+    admitted = model.bind(
         {
             Pair.left.dtype: Encoding(3),
             Pair.right.dtype: Encoding(6),
             Pair.limit: 4,
         }
     )
-    selected = admitted.assign(Pair.left.lane_choice, 2).assign(Pair.right.lane_choice, 1)
+    selected = admitted.with_choices(
+        admitted.field(Pair.left.lane_choice).change(2),
+        admitted.field(Pair.right.lane_choice).change(1),
+    )
     assert selected.left.bits == selected.right.bits == 6
     assert selected.assess(Pair.balanced).verdict is True
-    assert selected.answer(Pair.left.stream) == Decided(StreamValue(Encoding(3), 2, 6))
-    refused = selected.answer(Pair.right.stream)
+    assert selected.query(Pair.left.stream) == Available(StreamValue(Encoding(3), 2, 6))
+    refused = selected.query(Pair.right.stream)
     assert isinstance(refused, Rejected)
     assert any("right" in finding.owner for finding in refused.findings)
 
@@ -211,11 +214,11 @@ def test_builder_finish_is_pure_repeatable_and_placements_share_only_the_templat
         second = builder.place()
 
     assert Parent.first.space_type is Parent.second.space_type is template
-    point = Parent.start()
-    selected = point.assign(Parent.first.decision_ref(choice), 2)
-    assert selected.answer(Parent.first.ref(key)) == Decided(6)
-    assert isinstance(selected.second.answer(choice), Unresolved)
-    assert isinstance(point.first.answer(choice), Unresolved)
+    point = Parent()
+    selected = point.with_choices(point.field(Parent.first.decision_ref(choice)).change(2))
+    assert selected.query(Parent.first.ref(key)) == Available(6)
+    assert isinstance(selected.second.query(choice), Unresolved)
+    assert isinstance(point.first.query(choice), Unresolved)
     assert calls == [3]
 
 
@@ -310,7 +313,7 @@ def test_builder_literal_bindings_snapshot_before_sealing_and_each_placement() -
     class Parent(Space):
         vector = builder.place()
 
-    assert Parent.start().vector.values == [1, 2]
+    assert Parent().vector.values == [1, 2]
 
 
 def test_extension_typing_fixture(tmp_path: Path) -> None:

@@ -10,7 +10,7 @@ import pytest
 from finn.kernels.space import (
     Const,
     ConstraintGroup,
-    Decided,
+    Available,
     Decision,
     Param,
     Readiness,
@@ -59,56 +59,56 @@ class Mutable(Space):
 
 def test_value_and_function_views_detach_all_public_assessment_payloads() -> None:
     original = Bag([1])
-    point = compile_space(Mutable).start({Mutable.source: original})
+    point = compile_space(Mutable).bind({Mutable.source: original})
     original.values.append(9)
     for declaration in (Mutable.physical, Mutable.computed):
         assessment = point.assess(declaration)
-        assert isinstance(assessment.output_answer, Decided)
-        assert isinstance(assessment.accepted_answer, Decided)
-        assessment.output_answer.value.values.append(2)
-        assessment.accepted_answer.value.values.append(3)
-        for answer in assessment.readiness.answers.values():
-            if isinstance(answer, Decided) and isinstance(answer.value, Bag):
+        assert isinstance(assessment.output_result, Available)
+        assert isinstance(assessment.accepted_result, Available)
+        assessment.output_result.value.values.append(2)
+        assessment.accepted_result.value.values.append(3)
+        for answer in assessment.readiness.results.values():
+            if isinstance(answer, Available) and isinstance(answer.value, Bag):
                 answer.value.values.append(4)
         again = point.assess(declaration)
-        assert isinstance(again.output_answer, Decided)
-        assert isinstance(again.accepted_answer, Decided)
-        assert again.output_answer.value == Bag([1])
-        assert again.accepted_answer.value == Bag([1])
-        for answer in again.readiness.answers.values():
-            if isinstance(answer, Decided) and isinstance(answer.value, Bag):
+        assert isinstance(again.output_result, Available)
+        assert isinstance(again.accepted_result, Available)
+        assert again.output_result.value == Bag([1])
+        assert again.accepted_result.value == Bag([1])
+        for answer in again.readiness.results.values():
+            if isinstance(answer, Available) and isinstance(answer.value, Bag):
                 assert answer.value == Bag([1])
     assert point.source == Bag([1])
     assert point.raw == Bag([1])
 
 
 def test_standalone_readiness_returns_detached_required_values() -> None:
-    point = Mutable.start({Mutable.source: Bag([1])})
+    point = Mutable({Mutable.source: Bag([1])})
     readiness = point.assess(Mutable.ready)
-    raw = readiness.answers["raw"]
-    assert isinstance(raw, Decided)
+    raw = readiness.results["raw"]
+    assert isinstance(raw, Available)
     assert isinstance(raw.value, Bag)
     raw.value.values.append(2)
-    again = point.assess(Mutable.ready).answers["raw"]
-    assert isinstance(again, Decided)
+    again = point.assess(Mutable.ready).results["raw"]
+    assert isinstance(again, Available)
     assert again.value == Bag([1])
 
 
 def test_decision_reads_and_candidates_cannot_mutate_frozen_commitments() -> None:
-    base = Mutable.start({Mutable.source: Bag([1])})
-    candidates = base.candidates(Mutable.choice)
-    assert isinstance(candidates, Decided)
+    base = Mutable({Mutable.source: Bag([1])})
+    candidates = base.field(Mutable.choice).candidates()
+    assert isinstance(candidates, Available)
     candidates.value[0].values.append(9)
-    point = base.assign(Mutable.choice, Bag([3]))
-    state = point.decision_state(Mutable.choice)
-    assert isinstance(state, Decided)
+    point = base.with_choices(choice=Bag([3]))
+    state = point.field(Mutable.choice).state
+    assert isinstance(state, Available)
     assert state.value.value is not None
     state.value.value.values.append(8)
-    answer = point.answer(Mutable.choice)
-    assert isinstance(answer, Decided)
+    answer = point.query(Mutable.choice)
+    assert isinstance(answer, Available)
     answer.value.values.append(7)
     assert point.choice == Bag([3])
-    assert point.assign(Mutable.choice, Bag([3])) is point
+    assert point.with_choices(choice=Bag([3])) is point
 
 
 def test_public_snapshot_failure_retains_declaration_role_and_cause() -> None:
@@ -125,11 +125,11 @@ def test_public_snapshot_failure_retains_declaration_role_and_cause() -> None:
         source = Param(semantics)
         physical = View(source)
 
-    point = Failing.start({Failing.source: Bag([1])})
+    point = Failing({Failing.source: Bag([1])})
     point.physical()
     fail = True
     with pytest.raises(EvaluationError) as answer_error:
-        point.answer(Failing.source)
+        point.query(Failing.source)
     assert answer_error.value.owner == "source"
     assert answer_error.value.role == "public value snapshot"
     assert isinstance(answer_error.value.__cause__, RuntimeError)
@@ -157,25 +157,25 @@ def test_grouped_view_obligations_keep_refusals_visible_while_waiting() -> None:
         physical = View(output, constraints=(support,))
         ready_view = View(output, requires=(ready,))
 
-    point = Grouped.start()
+    point = Grouped()
     grouped = point.assess(Grouped.support)
     for _ in range(2):
         assessment = point.physical()
-        assert isinstance(assessment.accepted_answer, Unresolved)
+        assert isinstance(assessment.accepted_result, Unresolved)
         assert assessment.constraints.refused == ("refused",)
-        assert assessment.constraints.answers == grouped.answers
-        refused = assessment.constraints.answers["refused"]
+        assert assessment.constraints.results == grouped.results
+        refused = assessment.constraints.results["refused"]
         assert isinstance(refused, Rejected)
         assert refused.findings[0].owner == "refused"
-        assert isinstance(assessment.constraints.answers["pending"], Unresolved)
+        assert isinstance(assessment.constraints.results["pending"], Unresolved)
         readiness = point.assess(Grouped.ready)
         assert readiness.ready is None
-        assert isinstance(readiness.answers["refused"], Rejected)
+        assert isinstance(readiness.results["refused"], Rejected)
         via_readiness = point.ready_view()
-        assert isinstance(via_readiness.accepted_answer, Unresolved)
-        assert isinstance(via_readiness.readiness.answers["refused"], Rejected)
-    committed = point.assign(Grouped.lanes, 1)
-    assert isinstance(committed.physical().accepted_answer, Rejected)
+        assert isinstance(via_readiness.accepted_result, Unresolved)
+        assert isinstance(via_readiness.readiness.results["refused"], Rejected)
+    committed = point.with_choices(lanes=1)
+    assert isinstance(committed.physical().accepted_result, Rejected)
     assert committed.assess(Grouped.ready).ready is True
 
 
@@ -186,6 +186,6 @@ def test_empty_named_obligations_can_be_assessed_without_value_semantics() -> No
         ready = Readiness()
         physical = View(output, requires=(group, ready))
 
-    point = Empty.start()
-    assert point.physical().accepted_answer == Decided(4)
+    point = Empty()
+    assert point.physical().accepted_result == Available(4)
     assert point.assess(Empty.ready).ready is True

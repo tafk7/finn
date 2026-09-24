@@ -29,9 +29,9 @@ from .ir import Choice, LinkedModel, NodeKind
 from .occurrence import state
 from .references import DecisionHandle, ValueHandle
 from .results import (
-    Answer,
+    QueryResult,
     ConstraintAssessment,
-    Decided,
+    Available,
     DecisionState,
     ReadinessAssessment,
     ViewAssessment,
@@ -91,10 +91,10 @@ class EvidenceNode:
     """
 
     declaration: NodeInfo
-    answer: Answer[object]
+    result: QueryResult[object]
     dependencies: tuple[ValueHandle[object], ...]
     input_presence: Literal["supplied", "omitted"] | None = None
-    decision_state: Answer[DecisionState[object]] | None = None
+    decision_state: QueryResult[DecisionState[object]] | None = None
     selector: bool = False
     is_guard: bool = False
 
@@ -102,7 +102,7 @@ class EvidenceNode:
 @dataclass(frozen=True, slots=True)
 class QueryEvidence(Generic[T]):
     query: NodeInfo
-    answer: Answer[T]
+    result: QueryResult[T]
     nodes: tuple[EvidenceNode, ...]
     assessment: ViewAssessment[T] | ConstraintAssessment | ReadinessAssessment | None = None
 
@@ -150,7 +150,7 @@ def _context(subject: Space | SpaceModel[S]) -> tuple[SpaceModel[Space], int]:
     if isinstance(subject, Space):
         current = state(subject)
         return current.model, subject._scope
-    raise RequestError("inspection requires a compiled model or attached occurrence")
+    raise RequestError("inspection requires a compiled model or attached configuration")
 
 
 def _scope_set(linked: LinkedModel, root: int) -> set[int]:
@@ -343,15 +343,15 @@ def explain(point: Space, reference: object) -> object:
             node, entry = linked.nodes[index], snapshot.cache[index]
             active = True
             if node.guard is not None:
-                guard = snapshot.cache[node.guard].answer
-                active = isinstance(guard, Decided) and guard.value is True
+                guard = snapshot.cache[node.guard].result
+                active = isinstance(guard, Available) and guard.value is True
             presence: Literal["supplied", "omitted"] | None = None
             if node.kind == "param" and active:
                 presence = "supplied" if index in snapshot.parameters else "omitted"
             evidence.append(
                 EvidenceNode(
                     _node_info(linked, index),
-                    _runtime.copy_answer(snapshot, index, entry.answer),
+                    _runtime.copy_result(snapshot, index, entry.result),
                     tuple(ValueHandle[object](linked, target) for target in entry.dependencies),
                     presence,
                     _runtime.decision_state(snapshot, index) if node.kind == "decision" else None,
@@ -366,7 +366,7 @@ def explain(point: Space, reference: object) -> object:
         )
         return QueryEvidence(
             _node_info(linked, root),
-            _runtime.copy_answer(snapshot, root, result.answer),
+            _runtime.copy_result(snapshot, root, result.result),
             tuple(evidence),
             assessment,
         )

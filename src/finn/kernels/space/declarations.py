@@ -19,10 +19,10 @@ from typing import TYPE_CHECKING, ClassVar, Generic, Literal, TypeVar, cast, ove
 from typing_extensions import Self
 
 from .domains import Domain, finite
-from .edits import Edit, EditRequest, RefinementReport
+from .edits import Change, ChangeRequest, ConfigurationResult
 from .errors import DefinitionError
 from .results import (
-    Answer,
+    QueryResult,
     ConstraintAssessment,
     DecisionState,
     MissingInput,
@@ -152,7 +152,7 @@ class ValueDecl(ValueRef[T_co], Generic[T_co]):
 class Dependency(Generic[T_co]):
     """A use-site mode; it does not create or change a value declaration."""
 
-    def __init__(self, source: ValueRef[object], mode: Literal["optional", "answer"]) -> None:
+    def __init__(self, source: ValueRef[object], mode: Literal["optional", "result"]) -> None:
         self.source, self.mode = source, mode
 
 
@@ -160,8 +160,8 @@ def optional(source: ValueRef[T]) -> Dependency[T | MissingInput | NotApplicable
     return Dependency(source, "optional")
 
 
-def full_answer(source: ValueRef[T]) -> Dependency[Answer[T]]:
-    return Dependency(source, "answer")
+def full_result(source: ValueRef[T]) -> Dependency[QueryResult[T]]:
+    return Dependency(source, "result")
 
 
 class Param(ValueDecl[T], Generic[T]):
@@ -208,13 +208,18 @@ class Decision(ValueDecl[T], Generic[T]):
             else finite(cast(Iterable[T], values), self.semantics)
         )
 
+    def _choice_type(self) -> T:
+        """Static marker used by typed change construction; never evaluated."""
+
+        raise RuntimeError("choice type markers are not runtime operations")
+
 
 class Derived(ValueDecl[T], Generic[T]):
     """A function whose dependencies are bound after effective collection."""
 
     def __init__(
         self,
-        function: Callable[..., T | Answer[T]],
+        function: Callable[..., T | QueryResult[T]],
         *,
         semantics: ValueSemantics[T] | None = None,
         aliases: Mapping[str, object] | None = None,
@@ -243,7 +248,7 @@ class _SemanticDerivedDecorator(Generic[T]):
     ) -> None:
         self.semantics, self.aliases, self.when = semantics, aliases, when
 
-    def __call__(self, function: Callable[..., T | Answer[T]]) -> Derived[T]:
+    def __call__(self, function: Callable[..., T | QueryResult[T]]) -> Derived[T]:
         return Derived(function, semantics=self.semantics, aliases=self.aliases, when=self.when)
 
 
@@ -283,7 +288,7 @@ def derived(
 class Constraint(Declaration):
     def __init__(
         self,
-        function: Callable[..., bool | Answer[bool]],
+        function: Callable[..., bool | QueryResult[bool]],
         *,
         aliases: Mapping[str, object] | None = None,
         when: ValueRef[bool] | None = None,
@@ -298,12 +303,12 @@ class _ConstraintDecorator:
     def __init__(self, aliases: Mapping[str, object], when: ValueRef[bool] | None) -> None:
         self.aliases, self.when = aliases, when
 
-    def __call__(self, function: Callable[..., bool | Answer[bool]]) -> Constraint:
+    def __call__(self, function: Callable[..., bool | QueryResult[bool]]) -> Constraint:
         return Constraint(function, aliases=self.aliases, when=self.when)
 
 
 @overload
-def constraint(function: Callable[..., bool | Answer[bool]], /) -> Constraint: ...
+def constraint(function: Callable[..., bool | QueryResult[bool]], /) -> Constraint: ...
 
 
 @overload
@@ -313,7 +318,7 @@ def constraint(
 
 
 def constraint(
-    function: Callable[..., bool | Answer[bool]] | None = None,
+    function: Callable[..., bool | QueryResult[bool]] | None = None,
     /,
     *,
     when: ValueRef[bool] | None = None,
@@ -335,11 +340,61 @@ class Readiness(Declaration):
 
 
 class BoundView(Generic[T]):
-    def __init__(self, occurrence: Space, declaration: View[T]) -> None:
-        self.occurrence, self.declaration = occurrence, declaration
+    def __init__(self, instance: Space, declaration: View[T]) -> None:
+        self.instance, self.declaration = instance, declaration
 
     def __call__(self) -> ViewAssessment[T]:
-        return self.occurrence.assess(self.declaration)
+        return self.instance.assess(self.declaration)
+
+    def assess(self) -> ViewAssessment[T]:
+        return self()
+
+    def result(self) -> QueryResult[T]:
+        return self().accepted_result
+
+
+class BoundValue(Generic[T]):
+    """A typed value reference bound to one configuration snapshot."""
+
+    def __init__(self, instance: Space, reference: ValueRef[T]) -> None:
+        self.instance, self.reference = instance, reference
+
+    def result(self) -> QueryResult[T]:
+        return self.instance.query(self.reference)
+
+
+class BoundDecision(BoundValue[T], Generic[T]):
+    @property
+    def state(self) -> QueryResult[DecisionState[T]]:
+        from .occurrence import decision_state
+
+        return decision_state(self.instance, cast(Decision[T] | DecisionRef[T], self.reference))
+
+    def candidates(self) -> QueryResult[tuple[T, ...]] | None:
+        from .occurrence import candidates
+
+        return candidates(self.instance, cast(Decision[T] | DecisionRef[T], self.reference))
+
+    def change(self, value: T) -> Change[T]:
+        from .occurrence import change
+
+        return change(self.instance, cast(Decision[T] | DecisionRef[T], self.reference), value)
+
+    def clear(self) -> Change[T]:
+        from .occurrence import clear
+
+        return clear(self.instance, cast(Decision[T] | DecisionRef[T], self.reference))
+
+
+class BoundViewField(Generic[T]):
+    def __init__(self, instance: Space, reference: View[T]) -> None:
+        self.instance, self.reference = instance, reference
+
+    def assess(self) -> ViewAssessment[T]:
+        return self.instance.assess(self.reference)
+
+    def result(self) -> QueryResult[T]:
+        return self.assess().accepted_result
 
 
 class View(Declaration, Generic[T]):
@@ -354,7 +409,7 @@ class View(Declaration, Generic[T]):
         when: ValueRef[bool] | None = None,
     ) -> None:
         self.source: ValueRef[T] | None = source
-        self.function: Callable[..., T | Answer[T]] | None = None
+        self.function: Callable[..., T | QueryResult[T]] | None = None
         self.aliases: Mapping[str, object] = MappingProxyType({})
         self.semantics: ValueSemantics[T] | None = source.semantics
         self.constraints = tuple(constraints)
@@ -364,7 +419,7 @@ class View(Declaration, Generic[T]):
     @classmethod
     def from_function(
         cls,
-        function: Callable[..., T | Answer[T]],
+        function: Callable[..., T | QueryResult[T]],
         *,
         semantics: ValueSemantics[T] | None,
         aliases: Mapping[str, object],
@@ -419,7 +474,7 @@ class _SemanticViewDecorator(Generic[T]):
     def __init__(self, semantics: ValueSemantics[T], decorator: _ViewDecorator) -> None:
         self.semantics, self.decorator = semantics, decorator
 
-    def __call__(self, function: Callable[..., T | Answer[T]]) -> View[T]:
+    def __call__(self, function: Callable[..., T | QueryResult[T]]) -> View[T]:
         return View.from_function(
             function,
             semantics=self.semantics,
@@ -501,6 +556,11 @@ class ScopedValueRef(ValueRef[T], Generic[T]):
 class DecisionRef(ScopedValueRef[T], Generic[T]):
     """Editable handle; compilation verifies that this placement owns a choice."""
 
+    def _choice_type(self) -> T:
+        """Static marker used by typed change construction; never evaluated."""
+
+        raise RuntimeError("choice type markers are not runtime operations")
+
 
 class AcceptedViewRef(ValueRef[T], Generic[T]):
     def __init__(
@@ -554,8 +614,8 @@ class Subspace(Declaration, Generic[S_co]):
 
 
 class ChoiceView:
-    def __init__(self, occurrence: Space, declaration: SubspaceChoice) -> None:
-        self.occurrence, self.declaration = occurrence, declaration
+    def __init__(self, instance: Space, declaration: SubspaceChoice) -> None:
+        self.instance, self.declaration = instance, declaration
 
     @property
     def alternatives(self) -> tuple[str, ...]:
@@ -621,8 +681,46 @@ class SubspaceChoice(Declaration):
         return AcceptedViewRef(self, member)
 
 
-class Space:
-    """Authored family and scoped occurrence type over an immutable runtime state."""
+class SpaceMeta(type):
+    """Construct configurations and protect prepared declaration structure."""
+
+    def __call__(
+        cls: SpaceMeta,
+        parameters: Mapping[object, object] | None = None,
+        /,
+        **keyword_parameters: object,
+    ) -> Space:
+        from .compiler import compile_space
+
+        return compile_space(cast(type[Space], cls)).bind(parameters, **keyword_parameters)
+
+    def __setattr__(cls, name: str, value: object) -> None:
+        if cls.__dict__.get("_space_definition_finalized", False) and not name.startswith(
+            "_space_"
+        ):
+            existing = cls.__dict__.get(name)
+            if (
+                name == "exports"
+                or isinstance(existing, Declaration)
+                or isinstance(value, Declaration)
+            ):
+                raise DefinitionError(
+                    f"{cls.__qualname__}.{name}: prepared declaration structure is finalized"
+                )
+        super().__setattr__(name, value)
+
+    def __delattr__(cls, name: str) -> None:
+        if cls.__dict__.get("_space_definition_finalized", False):
+            existing = getattr(cls, name, None)
+            if name == "exports" or isinstance(existing, Declaration):
+                raise DefinitionError(
+                    f"{cls.__qualname__}.{name}: prepared declaration structure is finalized"
+                )
+        super().__delattr__(name)
+
+
+class Space(metaclass=SpaceMeta):
+    """Authored family and scoped configuration type over an immutable runtime state."""
 
     _state: object
     _scope: int
@@ -630,21 +728,34 @@ class Space:
         {}
     )
 
-    @classmethod
-    def start(cls, parameters: Mapping[object, object] | None = None) -> Self:
-        from .compiler import compile_space
+    def __init__(
+        self,
+        parameters: Mapping[object, object] | None = None,
+        /,
+        **keyword_parameters: object,
+    ) -> None:
+        """Typing signature only; SpaceMeta performs framework-owned construction."""
 
-        return compile_space(cls).start(parameters if parameters is not None else {})
+    def __setattr__(self, name: str, value: object) -> None:
+        if name in {"_state", "_scope"} and name not in self.__dict__:
+            object.__setattr__(self, name, value)
+            return
+        current = getattr(self, "_state", None)
+        scope_index = getattr(self, "_scope", None)
+        if current is not None and type(scope_index) is int:
+            from .occurrence import state
 
-    def answer(self, value: ValueRef[T]) -> Answer[T]:
-        from .occurrence import answer
+            scope = state(self).model.linked.scopes[scope_index]
+            if name in scope.named_members or name in scope.named_children:
+                raise AttributeError(
+                    f"{name} is an immutable configuration field; use with_choices()"
+                )
+        object.__setattr__(self, name, value)
 
-        return answer(self, value)
+    def query(self, value: ValueRef[T] | View[T]) -> QueryResult[T]:
+        from .occurrence import query
 
-    def assign(self, decision: Decision[T] | DecisionRef[T], value: T) -> Self:
-        from .occurrence import assign
-
-        return assign(self, decision, value)
+        return query(self, value)
 
     @overload
     def assess(self, view: View[T]) -> ViewAssessment[T]: ...
@@ -662,25 +773,33 @@ class Space:
 
         return assess(self, view)
 
-    def decision_state(self, decision: Decision[T] | DecisionRef[T]) -> Answer[DecisionState[T]]:
-        from .occurrence import decision_state
+    @overload
+    def field(self, reference: Decision[T] | DecisionRef[T]) -> BoundDecision[T]: ...
 
-        return decision_state(self, decision)
+    @overload
+    def field(self, reference: View[T]) -> BoundViewField[T]: ...
 
-    def candidates(self, decision: Decision[T] | DecisionRef[T]) -> Answer[tuple[T, ...]] | None:
-        from .occurrence import candidates
+    @overload
+    def field(self, reference: ValueRef[T]) -> BoundValue[T]: ...
 
-        return candidates(self, decision)
+    def field(
+        self, reference: ValueRef[T] | View[T]
+    ) -> BoundValue[T] | BoundDecision[T] | BoundViewField[T]:
+        from .occurrence import bind_field
 
-    def edit(self, decision: Decision[T] | DecisionRef[T], value: T) -> Edit[T]:
-        from .occurrence import edit
+        return bind_field(self, reference)
 
-        return edit(self, decision, value)
+    def with_choices(self, *changes: ChangeRequest, **choices: object) -> Self:
+        from .occurrence import with_choices
 
-    def refine(self, *edits: EditRequest) -> RefinementReport[Self]:
-        from .occurrence import refine
+        return with_choices(self, *changes, **choices)
 
-        return refine(self, *edits)
+    def try_with_choices(
+        self, *changes: ChangeRequest, **choices: object
+    ) -> ConfigurationResult[Self]:
+        from .occurrence import try_with_choices
+
+        return try_with_choices(self, *changes, **choices)
 
     @property
     def root(self) -> Space:

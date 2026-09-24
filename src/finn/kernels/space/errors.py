@@ -9,7 +9,7 @@ from collections.abc import Iterable
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from .results import Finding
+    from .results import Finding, QueryResult
 
 
 class SpaceError(Exception):
@@ -48,19 +48,38 @@ class EvaluationError(SpaceError):
         super().__init__(f"{owner} ({role}): {detail}")
 
 
-class RefinementError(SpaceError):
-    """Strict assignment refused a well-formed candidate; inspect its report."""
+class ValueUnavailableError(SpaceError):
+    """A value read reached a valid non-value query result."""
+
+    def __init__(self, result: QueryResult[object], *, context: object | None = None) -> None:
+        self.result = result
+        self.context = context
+        super().__init__(f"value is unavailable: {type(result).__name__}")
+
+
+class ConfigurationError(SpaceError):
+    """A well-formed configuration replacement could not be published."""
 
     def __init__(self, report: object) -> None:
         self.report = report
-        super().__init__("assignment refused; inspect the refinement report")
+        super().__init__("configuration change refused; inspect the report")
+
+
+class CommitmentError(SpaceError):
+    """A well-formed monotone commitment could not be published."""
+
+    def __init__(self, report: object) -> None:
+        self.report = report
+        super().__init__("commitment refused; inspect the report")
 
 
 __all__ = [
     "AuthoringError",
     "DefinitionError",
     "EvaluationError",
-    "RefinementError",
+    "CommitmentError",
+    "ConfigurationError",
     "RequestError",
     "SpaceError",
+    "ValueUnavailableError",
 ]

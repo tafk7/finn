@@ -34,7 +34,7 @@ from .declarations import (
 )
 from .domains import Domain
 from .errors import DefinitionError
-from .results import Answer
+from .results import QueryResult
 from .semantics import ValueSemantics
 
 T = TypeVar("T")
@@ -181,7 +181,7 @@ class ScopeBuilder(Generic[S]):
     def derived(
         self,
         name: str,
-        function: Callable[..., T | Answer[T]],
+        function: Callable[..., T | QueryResult[T]],
         *,
         semantics: ValueSemantics[T],
         when: ValueRef[bool] | None = None,
@@ -205,7 +205,7 @@ class ScopeBuilder(Generic[S]):
     def constraint(
         self,
         name: str,
-        function: Callable[..., bool | Answer[bool]],
+        function: Callable[..., bool | QueryResult[bool]],
         *,
         when: ValueRef[bool] | None = None,
         **aliases: object,

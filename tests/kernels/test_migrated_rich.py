@@ -17,7 +17,7 @@ from finn.kernels.datatypes.values import resolve_qonnx_datatype_name
 from finn.kernels.input_generator import InputGeneratorKernel
 from finn.kernels.memstream_hls import MemStreamHlsKernel
 from finn.kernels.resources import template_root
-from finn.kernels.space import Answer, Decided, Param, Rejected, Space, Subspace, Unresolved
+from finn.kernels.space import QueryResult, Available, Param, Rejected, Space, Subspace, Unresolved
 from finn.kernels.space.errors import RequestError
 from finn.kernels.thresholding import ThresholdingAxiKernel
 
@@ -25,8 +25,8 @@ T = TypeVar("T")
 TABLE: ThresholdTable = (((-2, 0, 3), (-1, 1, 4)),)
 
 
-def decided(answer: Answer[T]) -> T:
-    assert isinstance(answer, Decided), answer
+def decided(answer: QueryResult[T]) -> T:
+    assert isinstance(answer, Available), answer
     return answer.value
 
 
@@ -37,14 +37,14 @@ def generator(
     extents: IntegerVector = (3, 6),
     strides: IntegerVector = (0, 1),
 ) -> InputGeneratorKernel:
-    return InputGeneratorKernel.start(
+    return InputGeneratorKernel(
         {
             InputGeneratorKernel.word_bits: bits,
             InputGeneratorKernel.frame_words: frame,
             InputGeneratorKernel.extents: extents,
             InputGeneratorKernel.strides: strides,
         }
-    ).assign(InputGeneratorKernel.ram_style, "auto")
+    ).with_choices(ram_style="auto")
 
 
 def threshold_base(
@@ -57,7 +57,7 @@ def threshold_base(
     bram: int = 0,
     uram: int = 0,
 ) -> ThresholdingAxiKernel:
-    return ThresholdingAxiKernel.start(
+    return ThresholdingAxiKernel(
         {
             ThresholdingAxiKernel.input_dtype: resolve_qonnx_datatype_name(input_dtype),
             ThresholdingAxiKernel.threshold_dtype: resolve_qonnx_datatype_name(threshold_dtype),
@@ -91,16 +91,13 @@ def threshold(
         bram=bram,
         uram=uram,
     )
-    report = base.refine(
-        base.edit(ThresholdingAxiKernel.use_axilite, axilite),
-        base.edit(ThresholdingAxiKernel.deep_pipeline, deep),
-    )
+    report = base.try_with_choices(use_axilite=axilite, deep_pipeline=deep)
     assert report.accepted
-    return report.point
+    return report.instance
 
 
 def memstream(dtype: str = "INT9", depth: int = 3) -> MemStreamHlsKernel:
-    return MemStreamHlsKernel.start(
+    return MemStreamHlsKernel(
         {
             MemStreamHlsKernel.element_dtype: resolve_qonnx_datatype_name(dtype),
             MemStreamHlsKernel.depth: depth,
@@ -110,7 +107,7 @@ def memstream(dtype: str = "INT9", depth: int = 3) -> MemStreamHlsKernel:
 
 def test_generator_preserves_zero_stride_replay_and_multibit_native_markers() -> None:
     point = generator()
-    requirements = decided(point.physical().accepted_answer)
+    requirements = decided(point.build_requirements().accepted_result)
     assert requirements.parameters == (
         ("COEFS", "'{0, 1}"),
         ("D", 2),
@@ -124,7 +121,7 @@ def test_generator_preserves_zero_stride_replay_and_multibit_native_markers() ->
     assert widths["olst"] == 2
     assert all(isinstance(port, Signal) for port in requirements.abi.ports)
     ranked = generator(frame=56, extents=(3, 4, 2, 3), strides=(16, 1, 16, 2))
-    ports = decided(ranked.physical().accepted_answer).abi.ports
+    ports = decided(ranked.build_requirements().accepted_result).abi.ports
     assert (
         next(port.width for port in ports if isinstance(port, Signal) and port.name == "olst") == 4
     )
@@ -138,7 +135,7 @@ def test_generator_refuses_invalid_loop_geometry(
     extents: IntegerVector, strides: IntegerVector
 ) -> None:
     assert isinstance(
-        generator(extents=extents, strides=strides).physical().accepted_answer, Rejected
+        generator(extents=extents, strides=strides).build_requirements().accepted_result, Rejected
     )
 
 
@@ -150,7 +147,7 @@ def test_generator_requires_exact_immutable_integer_vectors(bad: object) -> None
 
 def test_threshold_output_initialization_and_configuration_profiles_are_preserved() -> None:
     point = threshold()
-    requirements = decided(point.physical().accepted_answer)
+    requirements = decided(point.build_requirements().accepted_result)
     assert point.result_dtype.name == "INT3"
     assert (
         dict(requirements.parameters)["THRESHOLDS"]
@@ -160,11 +157,11 @@ def test_threshold_output_initialization_and_configuration_profiles_are_preserve
     assert threshold(bias=-4).result_dtype.name == "INT3"
     narrow_negative = threshold(bias=-5)
     assert narrow_negative.result_dtype.name == "INT33"
-    assert isinstance(narrow_negative.physical().accepted_answer, Rejected)
-    enabled = decided(threshold(axilite=True, deep=True).physical().accepted_answer)
+    assert isinstance(narrow_negative.build_requirements().accepted_result, Rejected)
+    enabled = decided(threshold(axilite=True, deep=True).build_requirements().accepted_result)
     assert dict(enabled.parameters)["USE_AXILITE"] == 1
     assert dict(enabled.parameters)["DEEP_PIPELINE"] == 1
-    assert dict(decided(threshold(pe=4).physical().accepted_answer).parameters)["PE"] == 4
+    assert dict(decided(threshold(pe=4).build_requirements().accepted_result).parameters)["PE"] == 4
     config = next(
         port
         for port in requirements.abi.ports
@@ -178,7 +175,7 @@ def test_threshold_output_initialization_and_configuration_profiles_are_preserve
 def test_threshold_multiple_sets_keep_selector_bus_and_refuse_axilite_addressing() -> None:
     table: ThresholdTable = (((-2, 0, 3), (-1, 1, 4)), ((-3, 0, 5), (-2, 0, 6)))
     point = threshold(table=table)
-    requirements = decided(point.physical().accepted_answer)
+    requirements = decided(point.build_requirements().accepted_result)
     assert dict(requirements.parameters)["SETS"] == 2
     selector = next(
         port
@@ -186,15 +183,17 @@ def test_threshold_multiple_sets_keep_selector_bus_and_refuse_axilite_addressing
         if isinstance(port, Bus) and port.name == "s_axis_set"
     )
     assert next(signal.width for signal in selector.signals if signal.logical == "tdata") == 8
-    assert isinstance(threshold(table=table, axilite=True).physical().accepted_answer, Rejected)
+    assert isinstance(
+        threshold(table=table, axilite=True).build_requirements().accepted_result, Rejected
+    )
 
 
 def test_threshold_partial_dtype_query_does_not_adopt_implementation_decisions() -> None:
     base = threshold_base()
     assert base.result_dtype.name == "INT3"
-    assert isinstance(base.answer(ThresholdingAxiKernel.use_axilite), Unresolved)
-    assert isinstance(base.answer(ThresholdingAxiKernel.deep_pipeline), Unresolved)
-    assert isinstance(base.physical().accepted_answer, Unresolved)
+    assert isinstance(base.query(ThresholdingAxiKernel.use_axilite), Unresolved)
+    assert isinstance(base.query(ThresholdingAxiKernel.deep_pipeline), Unresolved)
+    assert isinstance(base.build_requirements().accepted_result, Unresolved)
 
 
 def test_threshold_rejects_existing_unsupported_profiles_and_malformed_tables() -> None:
@@ -210,7 +209,9 @@ def test_threshold_rejects_existing_unsupported_profiles_and_malformed_tables() 
         threshold(bias=-10),
         threshold(bram=-1),
     )
-    assert all(isinstance(point.physical().accepted_answer, Rejected) for point in profiles)
+    assert all(
+        isinstance(point.build_requirements().accepted_result, Rejected) for point in profiles
+    )
     with pytest.raises(RequestError):
         threshold(table=cast(ThresholdTable, (([-2, 0, 3],),)))
 
@@ -226,7 +227,7 @@ def test_threshold_rejects_existing_unsupported_profiles_and_malformed_tables() 
 )
 def test_hls_view_preserves_cpp_types_interfaces_and_header_closure(dtype: str, cpp: str) -> None:
     point = memstream(dtype)
-    requirements = decided(point.physical().accepted_answer)
+    requirements = decided(point.build_requirements().accepted_result)
     assert isinstance(requirements, HlsSourceRequirements)
     assert point.cpp_type == cpp
     assert not hasattr(requirements, "abi")
@@ -251,13 +252,13 @@ def test_hls_view_preserves_cpp_types_interfaces_and_header_closure(dtype: str, 
 
 @pytest.mark.parametrize(("dtype", "depth"), (("BIPOLAR", 3), ("INT1025", 3), ("INT9", 1)))
 def test_hls_native_type_and_depth_limits_remain_explicit_refusals(dtype: str, depth: int) -> None:
-    assert isinstance(memstream(dtype, depth).physical().accepted_answer, Rejected)
+    assert isinstance(memstream(dtype, depth).build_requirements().accepted_result, Rejected)
 
 
 def test_rich_roots_require_parameters_and_optional_parent_depth_permits_narrow_hls_type() -> None:
     for family in (InputGeneratorKernel, ThresholdingAxiKernel, MemStreamHlsKernel):
         with pytest.raises(RequestError):
-            family.start()
+            family()
 
     class OptionalMemory(Space):
         memory = Subspace(
@@ -266,6 +267,6 @@ def test_rich_roots_require_parameters_and_optional_parent_depth_permits_narrow_
             depth=Param(int, required=False),
         )
 
-    point = OptionalMemory.start()
+    point = OptionalMemory()
     assert point.memory.cpp_type == "ap_int<9>"
-    assert isinstance(point.memory.physical().accepted_answer, Unresolved)
+    assert isinstance(point.memory.build_requirements().accepted_result, Unresolved)

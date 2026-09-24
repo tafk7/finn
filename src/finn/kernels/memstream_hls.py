@@ -61,7 +61,7 @@ class MemStreamHlsKernel(Kernel):
         return True
 
     @view(constraints=(depth_supported,), cpp=cpp_type, depth=depth)
-    def physical(*, cpp: str, depth: int) -> HlsSourceRequirements:
+    def build_requirements(*, cpp: str, depth: int) -> HlsSourceRequirements:
         includes = ("hls/util", "hls/infra")
         return HlsSourceRequirements(
             MemStreamHlsKernel.id,

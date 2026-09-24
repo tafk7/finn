@@ -16,7 +16,7 @@ from __future__ import annotations
 from typing_extensions import assert_type
 
 from finn.kernels.space import (
-    Answer,
+    QueryResult,
     BoundView,
     Const,
     Decision,
@@ -85,10 +85,10 @@ assert_type(Pipeline.implementation.ref(RESULT), ValueRef[int])
 # The compiler service preserves the authored root class through the model.
 model = compile_space(Pipeline)
 assert_type(model, SpaceModel[Pipeline])
-assert_type(model.start({Pipeline.size: 8}), Pipeline)
+assert_type(model.bind({Pipeline.size: 8}), Pipeline)
 
 # So does the one-shot entry, and so does an immutable successor.
-pipeline = Pipeline.start({Pipeline.size: 8})
+pipeline = Pipeline({Pipeline.size: 8})
 assert_type(pipeline, Pipeline)
 
 # Instance access binds the exact use site.
@@ -102,7 +102,7 @@ assert_type(pipeline.implementation.alternative("fast"), Space)
 
 # A declared value read through an occurrence has its declared type.
 assert_type(pipeline.fixed.result, int)
-assert_type(pipeline.fixed.assign(FixedImplementation.lanes, 2), FixedImplementation)
+assert_type(pipeline.fixed.with_choices(lanes=2), FixedImplementation)
 assert_type(pipeline.fixed.physical, BoundView[int])
 assert_type(pipeline.fixed.physical(), ViewAssessment[int])
-assert_type(pipeline.fixed.answer(FixedImplementation.result), Answer[int])
+assert_type(pipeline.fixed.query(FixedImplementation.result), QueryResult[int])

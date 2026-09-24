@@ -26,7 +26,7 @@ from finn.kernels.space.declarations import (
 )
 from finn.kernels.space.domains import domain, divisors_of
 from finn.kernels.space.errors import DefinitionError, RequestError
-from finn.kernels.space.results import Decided
+from finn.kernels.space.results import Available
 from finn.kernels.space.semantics import ValueSemantics
 
 
@@ -147,7 +147,7 @@ def test_twenty_thousand_dependencies_compile_and_evaluate_iteratively() -> None
     assert len(model.linked.order) == 20_001
     assert len(model.linked.nodes[-1].dependencies) == 1
     assert model.linked.order[-1] == model.resolve(0, members["value20000"])
-    assert model.start().answer(cast(Derived[int], members["value20000"])) == Decided(20_000)
+    assert model.bind().query(cast(Derived[int], members["value20000"])) == Available(20_000)
 
 
 def test_compiled_handles_do_not_follow_later_class_rebinding() -> None:
@@ -158,17 +158,16 @@ def test_compiled_handles_do_not_follow_later_class_rebinding() -> None:
     old = compile_space(Family)
     replacement = Param(str)
     replacement.__set_name__(Family, "value")
-    Family.value = replacement  # type: ignore[assignment]
+    with pytest.raises(DefinitionError, match="finalized"):
+        Family.value = replacement  # type: ignore[assignment]
     new = compile_space(Family)
 
     old_semantics = old.linked.nodes[old.resolve(0, original)].semantics
-    new_semantics = new.linked.nodes[new.resolve(0, replacement)].semantics
     assert old_semantics is not None and old_semantics.type_token is int
-    assert new_semantics is not None and new_semantics.type_token is str
+    assert new is old
     with pytest.raises(RequestError, match="compiled scope"):
         old.resolve(0, replacement)
-    with pytest.raises(RequestError, match="compiled scope"):
-        new.resolve(0, original)
+    assert new.resolve(0, original) == old.resolve(0, original)
     with pytest.raises(RequestError, match="scope"):
         old.resolve(1, original)
 
@@ -222,7 +221,8 @@ def test_compile_snapshots_values_domains_and_callback_references() -> None:
     assert old_choice.domain is not None
     assert old_choice.domain._finite_values == ([1], [2])
     assert old_function.function is first
-    assert new.linked.nodes[new.resolve(0, Family.calculated)].function is second
+    assert new is old
+    assert new.linked.nodes[new.resolve(0, Family.calculated)].function is first
 
 
 def test_foreign_value_and_obligation_references_are_definition_errors() -> None:
@@ -280,7 +280,7 @@ def test_domain_binding_is_validated_without_invocation() -> None:
         compile_space(ForeignDomain)
 
 
-@pytest.mark.parametrize("name", ["answer", "assign", "root", "_state"])
+@pytest.mark.parametrize("name", ["query", "field", "with_choices", "root", "_state"])
 def test_reserved_names_are_not_declarations(name: str) -> None:
     with pytest.raises(DefinitionError, match="reserved"):
         compile_space(type("Reserved", (Space,), {name: Const(1)}))
@@ -330,6 +330,6 @@ def test_generic_alias_adapter_tokens_keep_identity_for_input_and_output_annotat
             return source + (3,)
 
     model = compile_space(Family)
-    assert model.start({Family.source: (1, 2)}).result == (1, 2, 3)
+    assert model.bind({Family.source: (1, 2)}).result == (1, 2, 3)
     semantics = model.linked.nodes[model.resolve(0, Family.result)].semantics
     assert semantics is not None and semantics.type_token is token

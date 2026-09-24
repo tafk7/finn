@@ -9,7 +9,7 @@ import pytest
 
 from finn.kernels.space.domains import Domain, divisors_of, domain, finite
 from finn.kernels.space.errors import DefinitionError, EvaluationError
-from finn.kernels.space.results import Answer, Decided, Inapplicable, Rejected, reject
+from finn.kernels.space.results import QueryResult, Available, Inapplicable, Rejected, reject
 from finn.kernels.space.semantics import ValueSemantics, default_semantics
 
 INT = default_semantics(int)
@@ -26,15 +26,15 @@ def test_finite_unhashable_values_use_declared_equality_and_snapshot_values() ->
     source = [1, 2]
     allowed = finite((source,)).with_semantics(semantics)
     source.append(3)
-    assert allowed.membership([2, 1], {}, semantics=semantics, owner="lanes") == Decided(True)
+    assert allowed.membership([2, 1], {}, semantics=semantics, owner="lanes") == Available(True)
     assert isinstance(
         allowed.membership([1, 2, 3], {}, semantics=semantics, owner="lanes"), Rejected
     )
     first = allowed.enumerate({}, semantics=semantics, owner="lanes")
-    assert isinstance(first, Decided)
+    assert isinstance(first, Available)
     first.value[0].append(9)
     second = allowed.enumerate({}, semantics=semantics, owner="lanes")
-    assert second == Decided(([1, 2],))
+    assert second == Available(([1, 2],))
 
 
 def test_domain_construction_and_binding_do_not_execute_callbacks() -> None:
@@ -52,9 +52,9 @@ def test_domain_construction_and_binding_do_not_execute_callbacks() -> None:
     choices = domain(accepts=accepts, candidates=candidates, extent=extent).with_semantics(INT)
     assert choices.dependencies == (("extent", extent),)
     assert calls == []
-    assert choices.membership(3, {"extent": 2}, semantics=INT, owner="lanes") != Decided(True)
+    assert choices.membership(3, {"extent": 2}, semantics=INT, owner="lanes") != Available(True)
     assert calls == ["membership"]
-    assert choices.enumerate({"extent": 2}, semantics=INT, owner="lanes") == Decided((1, 2))
+    assert choices.enumerate({"extent": 2}, semantics=INT, owner="lanes") == Available((1, 2))
     assert calls == ["membership", "enumeration"]
 
 
@@ -64,7 +64,7 @@ def test_enumeration_is_optional_and_does_not_approve_candidates() -> None:
     with_bad_candidate: Domain[int] = domain(
         accepts=lambda *, candidate: candidate > 0, candidates=lambda: (-1, 1)
     )
-    assert with_bad_candidate.enumerate({}, semantics=INT, owner="lanes") == Decided((-1, 1))
+    assert with_bad_candidate.enumerate({}, semantics=INT, owner="lanes") == Available((-1, 1))
     assert isinstance(with_bad_candidate.membership(-1, {}, semantics=INT, owner="lanes"), Rejected)
 
 
@@ -72,19 +72,19 @@ def test_divisor_domains_require_positive_extent_and_return_ordered_values() -> 
     reference = object()
     choices = divisors_of(reference)
     assert choices.dependencies == (("extent", reference),)
-    assert choices.enumerate({"extent": 36}, semantics=INT, owner="lanes") == Decided(
+    assert choices.enumerate({"extent": 36}, semantics=INT, owner="lanes") == Available(
         (1, 2, 3, 4, 6, 9, 12, 18, 36)
     )
-    assert choices.membership(6, {"extent": 36}, semantics=INT, owner="lanes") == Decided(True)
+    assert choices.membership(6, {"extent": 36}, semantics=INT, owner="lanes") == Available(True)
     for extent in (0, -2):
-        assert choices.enumerate({"extent": extent}, semantics=INT, owner="lanes") == Decided(())
+        assert choices.enumerate({"extent": extent}, semantics=INT, owner="lanes") == Available(())
         assert isinstance(
             choices.membership(1, {"extent": extent}, semantics=INT, owner="lanes"), Rejected
         )
 
 
 def test_refusal_gets_domain_owner_and_programmer_exception_keeps_cause() -> None:
-    def refused(*, candidate: int) -> Answer[bool]:
+    def refused(*, candidate: int) -> QueryResult[bool]:
         return reject("target", "unsupported target")
 
     choices: Domain[int] = domain(accepts=refused)

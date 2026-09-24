@@ -47,7 +47,9 @@ class IntToFp32Kernel(Kernel):
         return True
 
     @view(constraints=(input_supported,), dtype=input_dtype, result=result_dtype)
-    def physical(*, dtype: QONNXDataType, result: QONNXDataType) -> ModuleBuildRequirements:
+    def build_requirements(
+        *, dtype: QONNXDataType, result: QONNXDataType
+    ) -> ModuleBuildRequirements:
         parameters = (("SIGNED", int(dtype.signed())), ("WIDTH", dtype.bitwidth()))
         return ModuleBuildRequirements(
             IntToFp32Kernel.id,

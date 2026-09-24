@@ -274,7 +274,7 @@ class DotpAxiKernel(Kernel):
             DotpAxiKernel.id, DotpAxiKernel.version, parameters, abi, sources
         )
 
-    physical = View(codegen, constraints=(support,))
+    build_requirements = View(codegen, constraints=(support,))
 
 
 __all__ = ["DotpAxiKernel"]

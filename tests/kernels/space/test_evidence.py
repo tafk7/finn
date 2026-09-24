@@ -11,7 +11,7 @@ import weakref
 
 from finn.kernels.space import (
     Const,
-    Decided,
+    Available,
     Decision,
     Inapplicable,
     MissingInput,
@@ -71,17 +71,17 @@ def test_static_alternatives_and_demanded_evidence_are_separate() -> None:
         "implementation.bad.physical",
     }
     assert calls == []
-    base = model.start({Root.size: 12})
+    base = model.bind({Root.size: 12})
     choice = inspection.choices(base)[0]
     assert choice.selector is not None
-    point = base.assign(choice.selector, "good")
+    point = base.with_choices(base.field(choice.selector).change("good"))
     first = inspection.explain(point, output)
     second = inspection.explain(point, output)
     assert first == second
-    assert first.answer == Decided(12)
+    assert first.result == Available(12)
     assert calls == ["good"]
     assert not any(".bad." in node.declaration.key for node in first.nodes)
-    assert any(node.selector and node.answer == Decided("good") for node in first.nodes)
+    assert any(node.selector and node.result == Available("good") for node in first.nodes)
     assert any(node.is_guard for node in first.nodes)
     assert any(
         node.declaration.key == "size" and node.input_presence == "supplied" for node in first.nodes
@@ -105,17 +105,17 @@ def test_optional_input_presence_distinguishes_omission_from_supplied_none() -> 
         nil = Param(type(None), required=False)
         child = Subspace(Child, size=size)
 
-    point = Root.start({Root.nil: None})
+    point = Root({Root.nil: None})
     missing = inspection.explain(point.child, Child.fallback)
-    assert missing.answer == Decided(7)
+    assert missing.result == Available(7)
     facts = [node for node in missing.nodes if node.input_presence is not None]
     assert len(facts) == 1
     assert facts[0].declaration.key == "size"
     assert facts[0].input_presence == "omitted"
-    assert isinstance(facts[0].answer, Unresolved)
+    assert isinstance(facts[0].result, Unresolved)
     nil = inspection.explain(point, Root.nil)
     assert nil.nodes[0].input_presence == "supplied"
-    assert nil.nodes[0].answer == Decided(None)
+    assert nil.nodes[0].result == Available(None)
 
 
 def test_inactive_parameter_evidence_does_not_expose_unused_bound_value() -> None:
@@ -126,12 +126,12 @@ def test_inactive_parameter_evidence_does_not_expose_unused_bound_value() -> Non
         enabled = Const(False)
         child = Subspace(Child, value=Param(int), when=enabled)
 
-    point = Root.start({Root.child.ref(Child.value): 12345})
+    point = Root({Root.child.ref(Child.value): 12345})
     evidence = inspection.explain(point.child, Child.value)
-    assert isinstance(evidence.answer, Inapplicable)
+    assert isinstance(evidence.result, Inapplicable)
     param = next(node for node in evidence.nodes if node.declaration.kind == "param")
     assert param.input_presence is None
-    assert isinstance(param.answer, Inapplicable)
+    assert isinstance(param.result, Inapplicable)
 
 
 def test_refusal_causes_stay_visible_while_another_obligation_is_unresolved() -> None:
@@ -145,15 +145,15 @@ def test_refusal_causes_stay_visible_while_another_obligation_is_unresolved() ->
 
         physical = View(value, constraints=(supported,), requires=(chosen,))
 
-    point = Family.start()
+    point = Family()
     evidence = inspection.explain(point, Family.physical)
-    assert isinstance(evidence.answer, Unresolved)
+    assert isinstance(evidence.result, Unresolved)
     assert evidence.assessment is not None
     refused = next(node for node in evidence.nodes if node.declaration.key == "supported")
-    assert isinstance(refused.answer, Rejected)
-    assert refused.answer.findings[0].owner == "supported"
+    assert isinstance(refused.result, Rejected)
+    assert refused.result.findings[0].owner == "supported"
     choice = next(node for node in evidence.nodes if node.declaration.key == "chosen")
-    assert isinstance(choice.decision_state, Decided)
+    assert isinstance(choice.decision_state, Available)
     assert choice.decision_state.value.status == "unassigned"
     assert inspection.explain(point, Family.physical) == evidence
 
@@ -164,16 +164,16 @@ def test_evidence_values_are_detached_from_frozen_inputs_and_caches() -> None:
         physical = View(source)
 
     source = [1, 2]
-    point = Family.start({Family.source: source})
+    point = Family({Family.source: source})
     source.append(99)
     first = inspection.explain(point, Family.physical)
-    assert isinstance(first.answer, Decided)
-    first.answer.value.append(3)
+    assert isinstance(first.result, Available)
+    first.result.value.append(3)
     node = next(node for node in first.nodes if node.declaration.key == "source")
-    assert isinstance(node.answer, Decided)
-    cast(list[int], node.answer.value).append(4)
+    assert isinstance(node.result, Available)
+    cast(list[int], node.result.value).append(4)
     second = inspection.explain(point, Family.physical)
-    assert second.answer == Decided([1, 2])
+    assert second.result == Available([1, 2])
     assert point.source == [1, 2]
 
 
@@ -181,10 +181,10 @@ def test_evidence_retains_no_occurrence_or_snapshot_lifetime() -> None:
     class Family(Space):
         value = Const(2)
 
-    point = Family.start()
+    point = Family()
     reference = weakref.ref(point)
     evidence = inspection.explain(point, Family.value)
     del point
     gc.collect()
     assert reference() is None
-    assert evidence.answer == Decided(2)
+    assert evidence.result == Available(2)

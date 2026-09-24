@@ -2,14 +2,14 @@
 
 `finn.kernels.space` provides the supported language and runtime for kernel
 families. A Space class describes facts, choices, computations and views. Its
-compiled model can create many independently bound occurrences. Parent and
-child occurrences share one immutable specialization snapshot.
+compiled model can create many independently bound configurations. Parent and
+child configurations share one immutable specialization snapshot.
 
 ## A runnable family
 
 ```python
 from finn.kernels.space import (
-    Const, Decided, Decision, Inapplicable, Param, Space, Subspace,
+    Const, Available, Decision, Inapplicable, Param, Space, Subspace,
     Unresolved, View, ViewKey, compile_space, constraint, derived,
     divisors_of, view,
 )
@@ -33,31 +33,37 @@ class Tiles(Space):
 
 
 tile_model = compile_space(Tiles)
-tile_base = tile_model.start({Tiles.extent: 12})
-assert isinstance(tile_base.answer(Tiles.factor), Unresolved)
-tile_point = tile_base.assign(Tiles.factor, 3)
-assert tile_point.cycles == 4
-assert tile_point.shape().accepted_answer == Decided((3, 4))
+tile_base = tile_model.bind(extent=12)
+assert isinstance(tile_base.query(Tiles.factor), Unresolved)
+tile_configuration = tile_base.with_choices(factor=3)
+assert tile_configuration.cycles == 4
+assert tile_configuration.shape().accepted_result == Available((3, 4))
 ```
 
-`Tiles.start(parameters)` is the one-shot equivalent. Retain a model for repeated
-starts with different inputs. Compilation validates structure without running
-author callbacks. It freezes the meaning of its references; later class edits
-cannot rewrite an existing model.
+`Tiles(extent=12)` is the normal one-shot form. Retain a model and call `bind`
+for repeated construction with different inputs. Both paths reuse the same
+prepared model. Preparation validates structure without running author callbacks
+and finalizes declaration structure for that family.
 
-| Declaration | Class access | Occurrence access |
+| Declaration | Class access | Configuration access |
 |---|---|---|
 | `Param[T]` | Typed binding/reference handle | Supplied `T` |
 | `Const[T]` | Typed definition-owned value handle | Frozen `T` |
 | `Decision[T]` | Typed owning choice | Committed `T` |
 | `Derived[T]` | Typed computation handle | Computed `T` |
 | `View[T]` | Typed assessment declaration | Callable bound view returning `ViewAssessment[T]` |
-| `Subspace[S]` | Typed placement and member references | Child occurrence of type `S` |
+| `Subspace[S]` | Typed placement and member references | Child configuration of type `S` |
 
-Use `point.answer(reference)` when a value may be unresolved, inapplicable or
-refused. Direct descriptor reads require a decided value. A decision-state query
-can return a decided **unassigned state** while the corresponding value query is
-unresolved. Queries never choose a candidate or adopt a default.
+Use `configuration.query(reference)` when a value may be unresolved, inapplicable or
+refused. `configuration.field(reference)` binds typed inspection to the current snapshot:
+its `result()`, decision `state`, `candidates()`, `change(value)`, and `clear()`
+operations avoid repeating the configuration at each call. Direct descriptor
+reads require an available value. `require_value(result)` provides the same
+explicit unwrap and raises `ValueUnavailableError` for a non-value result.
+
+The proposed `configuration.fields.member` namespace cannot preserve arbitrary authored
+member types with standard Python typing alone. This release uses the generic
+typed `field(reference)` accessor rather than publishing an `Any`-typed proxy.
 
 ## Signatures and value semantics
 
@@ -77,7 +83,7 @@ when element recognition or domain equality is stronger than that policy.
 
 ```python
 from dataclasses import dataclass
-from finn.kernels.space import Answer, ValueSemantics, reject
+from finn.kernels.space import QueryResult, ValueSemantics, reject
 
 
 @dataclass(frozen=True)
@@ -92,10 +98,10 @@ class Encoded(Space):
     source = Param(ENCODING)
 
     @derived(semantics=ENCODING)
-    def result(*, source: Encoding) -> Answer[Encoding]:
+    def result(*, source: Encoding) -> QueryResult[Encoding]:
         if source.bits <= 0:
             return reject("encoding-width", "an encoding needs positive width")
-        return Decided(source)
+        return Available(source)
 ```
 
 Explicit semantics retain the underlying `T` for answer-returning functions;
@@ -107,6 +113,20 @@ Integer references support `+`, `-`, `*`, `//`, `%`, unary `-`, and reflected
 literal forms. They create ordinary dependency nodes and reject symbolic
 truthiness. Only this bounded integer vocabulary is folded; arbitrary Python
 callbacks are not traced or executed during compilation.
+
+Ordinary pure Python remains available inside declared functions:
+
+```python
+class Geometry(Space):
+    depth = Param(int)
+
+    @derived
+    def address_bits(*, depth: int) -> int:
+        return max(1, (depth - 1).bit_length())
+
+
+assert Geometry(depth=17).address_bits == 5
+```
 
 ## Binding and reusable scopes
 
@@ -126,11 +146,13 @@ class Pair(Space):
     second = Subspace(Tiles, extent=Param(int))
 
 
-pair = Pair.start({Pair.extent: 12, Pair.second.ref(Tiles.extent): 18})
-first_selected = pair.assign(Pair.first.decision_ref(Tiles.factor), 3)
+pair = Pair({Pair.second.ref(Tiles.extent): 18}, extent=12)
+first_selected = pair.with_choices(
+    pair.field(Pair.first.decision_ref(Tiles.factor)).change(3)
+)
 assert first_selected.first.cycles == 4
-assert isinstance(first_selected.second.answer(Tiles.factor), Unresolved)
-assert isinstance(pair.first.answer(Tiles.factor), Unresolved)
+assert isinstance(first_selected.second.query(Tiles.factor), Unresolved)
+assert isinstance(pair.first.query(Tiles.factor), Unresolved)
 ```
 
 `placement.ref(Child.member)` preserves the member's value type.
@@ -155,7 +177,7 @@ class Board(Space):
     )
 
 
-board = Board.start({Board.size: 12})
+board = Board(size=12)
 assert board.block.tile.extent == 12
 ```
 
@@ -166,13 +188,13 @@ retain independent local choices and share only their explicitly supplied values
 ## Views, guards and choices
 
 `View(value, constraints=(condition,))` and `@view(...)` share one reducer. An
-assessment exposes `output_answer`, `readiness`, `constraints`, and
-`accepted_answer`. Output and acceptance prerequisites are always included;
+assessment exposes `output_result`, `readiness`, `constraints`, and
+`accepted_result`. Output and acceptance prerequisites are always included;
 additional `requires=` obligations default to empty. Named `Readiness` and
 `ConstraintGroup` declarations are optional reuse mechanisms.
 
-Known constraint refusals remain visible in `assessment.constraints.answers`
-while other unresolved obligations may keep `accepted_answer` unresolved. A raw
+Known constraint refusals remain visible in `assessment.constraints.results`
+while other unresolved obligations may keep `accepted_result` unresolved. A raw
 output is not a claim of acceptance. `placement.accepted(Child.view)` consumes
 the exact accepted answer used by a direct child view call.
 
@@ -186,8 +208,8 @@ class OptionalTiles(Space):
     implementation = Subspace(Tiles, extent=12, when=enabled)
 
 
-disabled = OptionalTiles.start({OptionalTiles.enabled: False})
-assert isinstance(disabled.implementation.answer(Tiles.factor), Inapplicable)
+disabled = OptionalTiles(enabled=False)
+assert isinstance(disabled.implementation.query(Tiles.factor), Inapplicable)
 ```
 
 `SubspaceChoice` uses typed export keys to share contracts across heterogeneous
@@ -219,9 +241,9 @@ class Implementation(Space):
     physical = View(choice.accepted(OUTPUT))
 
 
-implementation = Implementation.start()
+implementation = Implementation()
 selected = implementation.choice.select("wide")
-assert selected.occurrence.assess(Implementation.physical).accepted_answer == Decided(8)
+assert selected.instance.assess(Implementation.physical).accepted_result == Available(8)
 ```
 
 Only the selected alternative is demanded. Rejection from its accepted view is
@@ -260,45 +282,56 @@ class TileArray(Space):
     second = builder.place()
 
 
-array = TileArray.start({
+array = TileArray({
     TileArray.first.ref(Tiles.extent): 12,
     TileArray.second.ref(Tiles.extent): 18,
 })
-array = array.assign(TileArray.first.decision_ref(Tiles.factor), 3)
-assert array.answer(TileArray.first.ref(LATENCY)) == Decided(5)
+array = array.with_choices(array.field(TileArray.first.decision_ref(Tiles.factor)).change(3))
+assert array.query(TileArray.first.ref(LATENCY)) == Available(5)
 ```
 
 Finishing seals mutations; repeated placements reuse the template and own
-independent occurrence state. Inherited fields retain the base Space's static
+independent configuration state. Inherited fields retain the base Space's static
 type. Wrapper properties may delegate to standard `ref` and `accepted` handles.
 Use `.binding(nested_parameter_ref).to(supplier)` for a builder's nested binding.
 Dynamic admission limits must be local Params with explicit suppliers. Capturing
 a parent reference in a child callback does not create a dependency binding.
 The builder has no runtime access and cannot replace compiled records.
 
-## Atomic refinement and sparse replay
+## Configuration replacement, monotone refinement, and sparse replay
 
-Edits retain their exact base snapshot. All requests are checked and snapshotted
-before evaluators run; dependent edits are assessed in dependency order, not
-the submitted order. Publication is atomic:
+`with_choices` creates a revised configuration over the same frozen facts. It
+can add, replace, or clear choices in one order-independent batch. The original
+configuration remains intact, retained choices are revalidated, and views stay
+lazy:
 
 ```python
-batch = pair.refine(
-    pair.edit(Pair.first.decision_ref(Tiles.factor), 3),
-    pair.edit(Pair.second.decision_ref(Tiles.factor), 6),
+configured = pair.with_choices(
+    pair.field(Pair.first.decision_ref(Tiles.factor)).change(3),
+    pair.field(Pair.second.decision_ref(Tiles.factor)).change(6),
 )
-assert batch.accepted
-assert batch.point.first.cycles == 4
-assert batch.point.second.cycles == 3
+assert configured.first.cycles == 4
+assert configured.second.cycles == 3
 ```
 
-`RefinementReport.outcomes` distinguishes unchanged, provisional, refused and
-committed items. A refused batch retains the base point; equal recommits are
-no-ops and changed recommits conflict. The strict `assign` convenience raises
-`RefinementError` with its report for a refused candidate. Malformed binding or
-edit requests raise `RequestError`; programmer failures remain `EvaluationError`
-with owner, evaluator role and original cause. These exceptions are available
-from `finn.kernels.space.errors`.
+`try_with_choices` returns a `ConfigurationResult`; strict `with_choices` raises
+`ConfigurationError` with the same report on refusal. Malformed request keys,
+foreign snapshots, duplicates, and nominal type errors raise `RequestError`
+before domain evaluators run.
+
+Search and conformance code uses the advanced monotone service. A `Change`
+retains its exact base snapshot, and `refinement.commit` only adds choices:
+
+```python
+from finn.kernels.space import refinement
+
+change = refinement.change(tile_base, Tiles.factor, 3)
+report = refinement.commit(tile_base, change)
+assert report.accepted and report.instance.factor == 3
+```
+
+Equal recommits are no-ops and changed recommits conflict. Replacement and
+monotone commitment deliberately have different contracts.
 
 Selections are detached, immutable sparse commitments. Capture includes each
 committed owning Decision and nontrivial selector once, including a value equal
@@ -307,11 +340,11 @@ to the first candidate. It omits aliases, derived values and evaluator state:
 ```python
 from finn.kernels.space import selections
 
-saved = selections.capture(tile_point)
+saved = selections.capture(tile_configuration)
 edited = saved.with_changes([saved.edit(Tiles.factor, 4)])
 replayed = selections.restore(tile_base, edited)
-assert replayed.accepted and replayed.point.factor == 4
-changed_inputs = tile_model.start({Tiles.extent: 10})
+assert replayed.accepted and replayed.instance.factor == 4
+changed_inputs = tile_model.bind({Tiles.extent: 10})
 assert not selections.restore(changed_inputs, edited).accepted
 ```
 
@@ -351,15 +384,15 @@ values and codec inputs are detached snapshots. `selections.replace_owned`
 returns a mapping with explicitly owned current/obsolete keys replaced while
 preserving unrelated entries. It performs no external write or graph transaction.
 
-## Answers and inspection
+## Results and inspection
 
-`Answer[T]` is `Decided[T] | Inapplicable | Rejected | Unresolved`. Scalar answers
+`QueryResult[T]` is `Available[T] | Inapplicable | Rejected | Unresolved`. Scalar answers
 reject Boolean coercion. Inspect their variant and findings. Unresolved findings
 distinguish missing immutable inputs from commitment blockers.
 
 Ordinary dependencies require values. `optional(source)` admits explicit
 `MissingInput` / `NotApplicable` markers while preserving rejection;
-`full_answer(source)` supplies the entire `Answer[T]`. Advanced answer-aware
+`full_result(source)` supplies the entire `QueryResult[T]`. Advanced answer-aware
 callbacks still owe deterministic, monotone behavior. A decided fallback that
 later changes after commitment violates that contract.
 
@@ -372,7 +405,7 @@ constraint causes. Cached reads retain the same evidence. `statistics(model)`
 reports structural counts without evaluating the model.
 
 The optional `conformance.MonotonicityHarness().verify(base, samples)` compares
-settled observations across caller-provided edits/batches. It reports violations,
+settled observations across caller-provided changes/batches. It reports violations,
 skipped samples and no-ops using declared equality, including unhashable values.
 It is empirical checking, not a general proof or a solver.
 

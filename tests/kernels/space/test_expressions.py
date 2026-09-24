@@ -16,7 +16,7 @@ import pytest
 
 from finn.kernels.space import (
     Const,
-    Decided,
+    Available,
     Decision,
     Inapplicable,
     Param,
@@ -49,7 +49,7 @@ def test_integer_and_reflected_operators_preserve_python_integer_results() -> No
         reflected_div = 20 // right
         reflected_mod = 20 % right
 
-    point = Arithmetic.start({Arithmetic.left: -7, Arithmetic.right: 3})
+    point = Arithmetic({Arithmetic.left: -7, Arithmetic.right: 3})
     assert (point.added, point.subtracted, point.multiplied) == (-4, -10, -21)
     assert (point.divided, point.remainder, point.negated) == (-3, 2, 7)
     assert (point.reflected_add, point.reflected_sub, point.reflected_mul) == (-5, 9, -14)
@@ -71,7 +71,7 @@ def test_an_inferred_derived_integer_remains_an_ordinary_callback() -> None:
 
     model = compile_space(Family)
     assert calls == []
-    point = model.start({Family.extent: 4})
+    point = model.bind({Family.extent: 4})
     assert point.result == 11
     assert calls == ["doubled"]
     assert point.result == 11
@@ -90,11 +90,11 @@ def test_literal_and_const_folding_preserves_static_ownership_dependencies() -> 
     metadata = {item.key: item for item in inspection.members(model)}
     assert metadata["folded"].kind == "const"
     assert metadata["anonymous"].kind == "const"
-    point = model.start()
+    point = model.bind()
     assert (point.folded, point.anonymous) == (14, 4)
     assert inspection.dependencies(model, Family.folded)
     evidence = inspection.explain(point, Family.folded)
-    assert evidence.answer == Decided(14)
+    assert evidence.result == Available(14)
     assert len(evidence.nodes) == 1
     assert evidence.nodes[0].declaration.owner == "folded"
 
@@ -113,10 +113,10 @@ def test_anonymous_expressions_work_in_aliases_domains_and_child_bindings() -> N
         def result(*, value: int) -> int:
             return value + 1
 
-    point = Root.start({Root.extent: 5})
+    point = Root({Root.extent: 5})
     assert point.result == 16
-    assert point.candidates(Root.factor) == Decided((1, 2, 5, 10))
-    assert point.child.physical().accepted_answer == Decided(12)
+    assert point.field(Root.factor).candidates() == Available((1, 2, 5, 10))
+    assert point.child.physical().accepted_result == Available(12)
 
 
 def test_failed_folding_defers_errors_until_guarded_expression_is_demanded() -> None:
@@ -125,12 +125,12 @@ def test_failed_folding_defers_errors_until_guarded_expression_is_demanded() -> 
         physical = View(Const(1) // 0, when=enabled)
 
     model = compile_space(Family)
-    inactive = model.start({Family.enabled: False})
-    assert isinstance(inactive.physical().accepted_answer, Inapplicable)
+    inactive = model.bind({Family.enabled: False})
+    assert isinstance(inactive.physical().accepted_result, Inapplicable)
     evidence = inspection.explain(inactive, Family.physical)
     assert not any(".$expr." in node.declaration.key for node in evidence.nodes)
     with pytest.raises(EvaluationError) as error:
-        model.start({Family.enabled: True}).physical()
+        model.bind({Family.enabled: True}).physical()
     assert error.value.owner == "physical"
     assert isinstance(error.value.__cause__, ZeroDivisionError)
 
@@ -146,10 +146,10 @@ def test_repeated_placements_keep_expression_values_and_guards_independent() -> 
         second = Subspace(Child, size=3)
         unused = Subspace(Child, size=0, when=disabled)
 
-    point = Root.start()
+    point = Root()
     assert (point.first.result, point.second.result) == (6, 4)
-    assert isinstance(point.unused.answer(Child.result), Inapplicable)
-    assert point.answer(Root.first.ref(Child.result)) == Decided(6)
+    assert isinstance(point.unused.query(Child.result), Inapplicable)
+    assert point.query(Root.first.ref(Child.result)) == Available(6)
 
 
 def test_expression_truthiness_and_non_integer_operands_are_rejected() -> None:
@@ -185,7 +185,7 @@ def test_expression_dags_and_deep_chains_are_linked_iteratively() -> None:
         value = value + 1
     family = cast(type[Space], type("DeepExpression", (Space,), {"source": source, "value": value}))
     model = compile_space(family)
-    assert model.start({source: 2}).answer(value) == Decided(1_502)
+    assert model.bind({source: 2}).query(value) == Available(1_502)
 
     source = Param(int)
     value = source
@@ -196,7 +196,7 @@ def test_expression_dags_and_deep_chains_are_linked_iteratively() -> None:
     )
     shared_model = compile_space(shared)
     assert inspection.statistics(shared_model).nodes <= 42
-    assert shared_model.start({source: 3}).answer(value) == Decided(3 * 2**20)
+    assert shared_model.bind({source: 3}).query(value) == Available(3 * 2**20)
 
 
 def test_a_compiled_expression_keeps_its_operator_after_declaration_mutation() -> None:
@@ -207,8 +207,9 @@ def test_a_compiled_expression_keeps_its_operator_after_declaration_mutation() -
     old = compile_space(Family)
     Family.value.operator = "mul"
     new = compile_space(Family)
-    assert old.start({Family.source: 3}).value == 4
-    assert new.start({Family.source: 3}).value == 3
+    assert old.bind({Family.source: 3}).value == 4
+    assert new is old
+    assert new.bind({Family.source: 3}).value == 4
 
 
 def test_shared_expression_prefix_is_not_duplicated_across_consumers() -> None:
@@ -235,9 +236,9 @@ def test_shared_expression_prefix_is_not_duplicated_across_consumers() -> None:
     source = cast(ValueRef[int], getattr(large_type, "source"))
     first = cast(View[int], getattr(large_type, "consumer0"))
     last = cast(View[int], getattr(large_type, "consumer39"))
-    point = large.start({source: 2})
-    assert isinstance(point.assess(first).accepted_answer, Inapplicable)
-    assert point.assess(last).accepted_answer == Decided(202)
+    point = large.bind({source: 2})
+    assert isinstance(point.assess(first).accepted_result, Inapplicable)
+    assert point.assess(last).accepted_result == Available(202)
     # The source owner names the first mention; the actual demand still starts
     # at the later enabled consumer. No first-consumer guard contaminates it.
     evidence = inspection.explain(point, last)

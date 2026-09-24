@@ -15,7 +15,7 @@ import pytest
 
 from finn.kernels.space import (
     Const,
-    Decided,
+    Available,
     Decision,
     Inapplicable,
     Param,
@@ -58,15 +58,17 @@ def test_outer_params_and_decisions_supply_interface_slots_without_new_choices()
             bindings={Reusable.port.ref(Port.dtype): dtype, Reusable.port.ref(Port.lanes): lanes},
         )
 
-    base = Parent.start({Parent.dtype: "INT8"})
+    base = Parent({Parent.dtype: "INT8"})
     assert base.kernel.port.dtype == "INT8"
-    assert isinstance(base.kernel.port.answer(Port.lanes), Unresolved)
-    chosen = base.assign(Parent.lanes, 2)
-    assert chosen.kernel.port.physical().accepted_answer == Decided(("INT8", 2))
+    assert isinstance(base.kernel.port.query(Port.lanes), Unresolved)
+    chosen = base.with_choices(lanes=2)
+    assert chosen.kernel.port.physical().accepted_result == Available(("INT8", 2))
     assert [item.key for item in inspection.decisions(chosen)] == ["lanes"]
     assert len(selections.capture(chosen).entries) == 1
     with pytest.raises(RequestError, match="Param alias"):
-        chosen.assign(Parent.kernel.decision_ref(Reusable.port.ref(Port.lanes)), 1)
+        chosen.with_choices(
+            chosen.field(Parent.kernel.decision_ref(Reusable.port.ref(Port.lanes))).change(1)
+        )
     evidence = inspection.explain(chosen.kernel.port, Port.description)
     assert any(
         node.declaration.key == "dtype" and node.input_presence == "supplied"
@@ -97,16 +99,16 @@ def test_fresh_nested_decision_uses_outer_domain_and_guard_sources() -> None:
         def folded(*, lanes: int) -> int:
             return lanes * 2
 
-    base = Parent.start({Parent.extent: 12, Parent.enabled: True})
+    base = Parent({Parent.extent: 12, Parent.enabled: True})
     handle = Parent.kernel.decision_ref(Reusable.port.ref(Port.lanes))
-    assert base.candidates(handle) == Decided((1, 2, 3, 4, 6, 12))
-    chosen = base.assign(handle, 3)
+    assert base.field(handle).candidates() == Available((1, 2, 3, 4, 6, 12))
+    chosen = base.with_choices(base.field(handle).change(3))
     assert chosen.folded == 6
     assert chosen.kernel.port.lanes == 3
     assert [item.key for item in inspection.decisions(chosen)] == ["kernel.port.lanes"]
-    inactive = Parent.start({Parent.extent: 12, Parent.enabled: False})
-    assert isinstance(inactive.decision_state(handle), Inapplicable)
-    assert isinstance(inactive.kernel.port.answer(Port.lanes), Inapplicable)
+    inactive = Parent({Parent.extent: 12, Parent.enabled: False})
+    assert isinstance(inactive.field(handle).state, Inapplicable)
+    assert isinstance(inactive.kernel.port.query(Port.lanes), Inapplicable)
 
 
 def test_repeated_placements_keep_mapped_choices_independent() -> None:
@@ -128,11 +130,13 @@ def test_repeated_placements_keep_mapped_choices_independent() -> None:
             },
         )
 
-    base = Pair.start()
-    chosen = base.assign(Pair.first.decision_ref(Reusable.port.ref(Port.lanes)), 2)
-    assert chosen.first.port.physical().accepted_answer == Decided(("INT4", 2))
-    assert isinstance(chosen.second.port.answer(Port.lanes), Unresolved)
-    assert isinstance(base.first.port.answer(Port.lanes), Unresolved)
+    base = Pair()
+    chosen = base.with_choices(
+        base.field(Pair.first.decision_ref(Reusable.port.ref(Port.lanes))).change(2)
+    )
+    assert chosen.first.port.physical().accepted_result == Available(("INT4", 2))
+    assert isinstance(chosen.second.port.query(Port.lanes), Unresolved)
+    assert isinstance(base.first.port.query(Port.lanes), Unresolved)
 
 
 def test_unbound_deliberate_exposure_remains_a_scoped_root_parameter() -> None:
@@ -140,11 +144,11 @@ def test_unbound_deliberate_exposure_remains_a_scoped_root_parameter() -> None:
         kernel = Subspace(Reusable, count=1, bindings={Reusable.port.ref(Port.dtype): "INT8"})
 
     model = compile_space(Parent)
-    omitted = model.start()
+    omitted = model.bind()
     assert omitted.kernel.port.dtype == "INT8"
-    assert isinstance(omitted.kernel.port.answer(Port.lanes), Unresolved)
-    supplied = model.start({Parent.kernel.ref(Reusable.port.ref(Port.lanes)): 3})
-    assert supplied.kernel.port.physical().accepted_answer == Decided(("INT8", 3))
+    assert isinstance(omitted.kernel.port.query(Port.lanes), Unresolved)
+    supplied = model.bind({Parent.kernel.ref(Reusable.port.ref(Port.lanes)): 3})
+    assert supplied.kernel.port.physical().accepted_result == Available(("INT8", 3))
 
 
 def test_reexposed_nested_slot_can_be_bound_again_by_an_outer_placement() -> None:
@@ -167,10 +171,10 @@ def test_reexposed_nested_slot_can_be_bound_again_by_an_outer_placement() -> Non
             },
         )
 
-    point = Outer.start()
+    point = Outer()
     decision = Outer.middle.decision_ref(Middle.kernel.ref(Reusable.port.ref(Port.lanes)))
-    chosen = point.assign(decision, 4)
-    assert chosen.middle.kernel.port.physical().accepted_answer == Decided(("INT3", 4))
+    chosen = point.with_choices(point.field(decision).change(4))
+    assert chosen.middle.kernel.port.physical().accepted_result == Available(("INT3", 4))
 
 
 @pytest.mark.parametrize("kind", ["literal", "alias", "decision"])
@@ -220,7 +224,7 @@ def test_direct_parameter_keys_and_duplicate_or_foreign_targets_are_checked() ->
             Reusable, bindings={Reusable.count: 2, Reusable.port.ref(Port.dtype): "INT8"}
         )
 
-    assert Parent.start().child.count == 2
+    assert Parent().child.count == 2
 
     class DuplicateDirect(Space):
         child = Subspace(Reusable, count=1, bindings={Reusable.count: 2})
@@ -268,10 +272,10 @@ def test_compiled_nested_binding_keeps_original_supplier_after_source_map_change
         Reusable, count=1, bindings={Reusable.port.ref(Port.dtype): Parent.second}
     )
     Parent.kernel.parameter_bindings = replacement.parameter_bindings
-    old = model.start({Parent.first: "INT3", Parent.second: "INT7"})
-    new = compile_space(Parent).start({Parent.first: "INT3", Parent.second: "INT7"})
-    assert old.answer(reference) == Decided("INT3")
-    assert new.answer(reference) == Decided("INT7")
+    old = model.bind({Parent.first: "INT3", Parent.second: "INT7"})
+    new = compile_space(Parent).bind({Parent.first: "INT3", Parent.second: "INT7"})
+    assert old.query(reference) == Available("INT3")
+    assert new.query(reference) == Available("INT3")
 
 
 def test_nested_extension_binding_preserves_scope_and_slot_type() -> None:
@@ -285,7 +289,7 @@ def test_nested_extension_binding_preserves_scope_and_slot_type() -> None:
     class Parent(Space):
         child = placement
 
-    assert Parent.start().child.port.physical().accepted_answer == Decided(("INT8", 2))
+    assert Parent().child.port.physical().accepted_result == Available(("INT8", 2))
 
 
 def test_nested_decision_reference_can_traverse_concrete_reference_layers() -> None:
@@ -299,10 +303,11 @@ def test_nested_decision_reference_can_traverse_concrete_reference_layers() -> N
         middle = Subspace(Middle)
 
     reference = Outer.middle.decision_ref(Middle.leaf.ref(Leaf.value))
-    point = Outer.start().assign(reference, 2)
+    base = Outer()
+    point = base.with_choices(base.field(reference).change(2))
     assert point.middle.leaf.value == 2
     nested = Outer.middle.decision_ref(Middle.leaf.decision_ref(Leaf.value))
-    assert point.decision_state(nested) == point.decision_state(reference)
+    assert point.field(nested).state == point.field(reference).state
 
 
 def test_nested_binder_typing_rejects_a_supplier_of_the_wrong_type(tmp_path: Path) -> None:

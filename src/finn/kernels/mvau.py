@@ -57,9 +57,9 @@ from finn.kernels.physical.structure import (
     UnusedOutput,
 )
 from finn.kernels.space import (
-    Answer,
+    QueryResult,
     ConstraintGroup,
-    Decided,
+    Available,
     Decision,
     Param,
     Space,
@@ -374,21 +374,21 @@ class MVAU(Space):
     @derived(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
     def result_type(
         *, matrix_width: int, activation_dtype: QONNXDataType, weights_dtype: QONNXDataType
-    ) -> Answer[QONNXDataType]:
+    ) -> QueryResult[QONNXDataType]:
         try:
-            return Decided(exact_result_dtype(matrix_width, activation_dtype, weights_dtype))
+            return Available(exact_result_dtype(matrix_width, activation_dtype, weights_dtype))
         except ValueError as error:
             return reject("mvau-arithmetic", str(error))
 
     @constraint
     def dimensions_supported(
         *, repetitions: int, matrix_width: int, matrix_height: int, pe: int, simd: int
-    ) -> Answer[bool]:
+    ) -> QueryResult[bool]:
         try:
             _Traversal(repetitions, matrix_width, matrix_height, pe, simd)
         except ValueError as error:
             return reject("mvau-folding", str(error))
-        return Decided(True)
+        return Available(True)
 
     compute = Subspace(
         DotpAxiKernel,
@@ -406,8 +406,8 @@ class MVAU(Space):
     dimensions = ConstraintGroup(dimensions_supported)
 
     def assemble(self, weights: Sequence[Sequence[int]] | None = None) -> MVAUAssembly:
-        accepted = self.compute.physical().accepted_answer
-        if not isinstance(accepted, Decided):
+        accepted = self.compute.build_requirements().accepted_result
+        if not isinstance(accepted, Available):
             details = "; ".join(
                 f"{finding.code}: {finding.message}" for finding in accepted.findings
             )
@@ -444,22 +444,20 @@ def mvau_assembly(
 ) -> MVAUAssembly:
     """Bind workload and folding choices, then wire the accepted dotp implementation."""
     try:
-        point = MVAU.start(
-            {
-                MVAU.repetitions: repetitions,
-                MVAU.matrix_width: matrix_width,
-                MVAU.matrix_height: matrix_height,
-                MVAU.activation_dtype: activation_dtype,
-                MVAU.weights_dtype: weights_dtype,
-                MVAU.target_dsp: target_dsp,
-                MVAU.segment_length: segment_length,
-            }
+        point = MVAU(
+            repetitions=repetitions,
+            matrix_width=matrix_width,
+            matrix_height=matrix_height,
+            activation_dtype=activation_dtype,
+            weights_dtype=weights_dtype,
+            target_dsp=target_dsp,
+            segment_length=segment_length,
         )
-        report = point.refine(
-            point.edit(MVAU.pe, pe),
-            point.edit(MVAU.simd, simd),
-            point.edit(MVAU.weight_delivery, weight_delivery),
-            point.compute.edit(DotpAxiKernel.compute_pumping, compute_pumping),
+        report = point.try_with_choices(
+            point.compute.field(DotpAxiKernel.compute_pumping).change(compute_pumping),
+            pe=pe,
+            simd=simd,
+            weight_delivery=weight_delivery,
         )
     except RequestError as error:
         raise ValueError(str(error)) from error
@@ -467,11 +465,11 @@ def mvau_assembly(
         details = "; ".join(
             f"{finding.code}: {finding.message}"
             for outcome in report.outcomes
-            if not isinstance(outcome.answer, Decided)
-            for finding in outcome.answer.findings
+            if not isinstance(outcome.result, Available)
+            for finding in outcome.result.findings
         )
         raise ValueError(f"MVAU choices are not accepted: {details}")
-    return report.point.assemble(weights)
+    return report.instance.assemble(weights)
 
 
 __all__ = ["MVAU", "MVAUAssembly", "WeightDelivery", "exact_result_dtype", "mvau_assembly"]

@@ -32,20 +32,17 @@ from .declarations import (
 )
 from .errors import DefinitionError
 from .expressions import Expr
-from .results import Decided, Inapplicable, MissingInput, NotApplicable, Rejected, Unresolved
+from .results import Available, Inapplicable, MissingInput, NotApplicable, Rejected, Unresolved
 from .semantics import ValueSemantics, default_semantics
 
 _RESERVED = frozenset(
     {
-        "start",
-        "answer",
-        "assign",
         "assess",
+        "field",
+        "query",
         "root",
-        "edit",
-        "refine",
-        "decision_state",
-        "candidates",
+        "try_with_choices",
+        "with_choices",
         "_state",
         "_scope",
         "exports",
@@ -58,7 +55,7 @@ _RESERVED = frozenset(
 class BoundArgument:
     name: str
     source: ValueRef[object]
-    mode: Literal["required", "optional", "answer"] = "required"
+    mode: Literal["required", "optional", "result"] = "required"
     annotation: object = object
 
 
@@ -288,9 +285,9 @@ def _answer_value_type(annotation: object) -> object | None:
     if origin not in (Union, types.UnionType):
         return None
     arguments = get_args(annotation)
-    value_types = [get_args(arg)[0] for arg in arguments if get_origin(arg) is Decided]
+    value_types = [get_args(arg)[0] for arg in arguments if get_origin(arg) is Available]
     if len(value_types) == 1 and all(
-        get_origin(arg) is Decided or arg in (Inapplicable, Rejected, Unresolved)
+        get_origin(arg) is Available or arg in (Inapplicable, Rejected, Unresolved)
         for arg in arguments
     ):
         return cast(object, value_types[0])
@@ -308,7 +305,7 @@ def _output_semantics(
     answer_type = _answer_value_type(annotation)
     semantics = cast("ValueSemantics[object] | None", declaration.semantics)
     if answer_type is not None and semantics is None:
-        raise DefinitionError(f"{owner}: Answer[T] returns require explicit semantics=")
+        raise DefinitionError(f"{owner}: QueryResult[T] returns require explicit semantics=")
     value_type = answer_type if answer_type is not None else annotation
     origin = get_origin(value_type)
     nominal_type = origin if origin is not None else value_type
@@ -400,10 +397,10 @@ def _source_semantics(
 
 def _argument_value_type(argument: BoundArgument, owner: str) -> object:
     annotation = argument.annotation
-    if argument.mode == "answer":
+    if argument.mode == "result":
         value_type = _answer_value_type(annotation)
         if value_type is None:
-            raise DefinitionError(f"{owner}: full_answer dependency requires Answer[T]")
+            raise DefinitionError(f"{owner}: full_result dependency requires QueryResult[T]")
         return value_type
     if argument.mode == "optional":
         options = get_args(annotation)
@@ -499,7 +496,7 @@ def bind_function(
             if record is None:
                 raise DefinitionError(f"{label}: no declaration with this name")
             source = record.declaration
-        mode: Literal["required", "optional", "answer"] = "required"
+        mode: Literal["required", "optional", "result"] = "required"
         if isinstance(source, Dependency):
             mode = source.mode
             source = source.source
@@ -538,7 +535,9 @@ def collect_space(
             if isinstance(value, Declaration):
                 local_name(name, "declaration name")
                 if name in _RESERVED or name.startswith("__"):
-                    raise DefinitionError(f"{base.__qualname__}.{name}: reserved occurrence name")
+                    raise DefinitionError(
+                        f"{base.__qualname__}.{name}: reserved configuration name"
+                    )
                 if value.owner is not base or value.name != name:
                     raise DefinitionError(
                         f"{base.__qualname__}.{name}: declaration was not bound at class creation"

@@ -73,7 +73,7 @@ class InputGeneratorKernel(Kernel):
         strides=strides,
         ram=ram_style,
     )
-    def physical(
+    def build_requirements(
         *, bits: int, frame: int, extents: IntegerVector, strides: IntegerVector, ram: str
     ) -> ModuleBuildRequirements | Rejected:
         if bits < 1 or not extents:

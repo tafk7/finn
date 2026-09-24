@@ -7,11 +7,14 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
-from typing import TypeVar, cast, overload
+from typing import Literal, TypeVar, cast, overload
 
 from . import _runtime
 from .compiler import SpaceModel
 from .declarations import (
+    BoundDecision,
+    BoundValue,
+    BoundViewField,
     ChoiceView,
     Constraint,
     ConstraintGroup,
@@ -24,18 +27,25 @@ from .declarations import (
     ValueRef,
     View,
 )
-from .edits import Edit, EditOutcome, EditRequest, RefinementReport
-from .errors import EvaluationError, RefinementError, RequestError
+from .edits import (
+    Change,
+    ChangeOutcome,
+    ChangeRequest,
+    CommitmentReport,
+    ConfigurationResult,
+)
+from .errors import ConfigurationError, EvaluationError, RequestError
 from .ir import Choice, Node
 from .results import (
-    Answer,
+    QueryResult,
     ConstraintAssessment,
-    Decided,
+    Available,
     DecisionState,
     Inapplicable,
     ReadinessAssessment,
     ViewAssessment,
     reject,
+    require_value,
 )
 
 T = TypeVar("T")
@@ -51,15 +61,15 @@ class OccurrenceState:
 def state(point: Space) -> OccurrenceState:
     current = getattr(point, "_state", None)
     if not isinstance(current, OccurrenceState):
-        raise RequestError("an occurrence must be created by SpaceModel.start")
+        raise RequestError("an instance must be created by Space construction or SpaceModel.bind")
     return current
 
 
 def _attach(current: OccurrenceState, scope: int) -> Space:
     space_type = current.model.linked.scopes[scope].space_type
     instance = object.__new__(space_type)
-    instance._state = current
-    instance._scope = scope
+    object.__setattr__(instance, "_state", current)
+    object.__setattr__(instance, "_scope", scope)
     return instance
 
 
@@ -81,7 +91,11 @@ def _snapshot_request_value(node: Node, value: object, role: str) -> object:
         raise EvaluationError(node.owner, f"{role} snapshot", str(cause)) from cause
 
 
-def start(model: SpaceModel[S], parameters: Mapping[object, object]) -> S:
+def bind(
+    model: SpaceModel[S],
+    parameters: Mapping[object, object],
+    keyword_parameters: Mapping[str, object],
+) -> S:
     """Validate all bindings and freeze external values before any evaluation."""
     if not isinstance(parameters, Mapping):
         raise RequestError("parameters must be a declaration-keyed mapping")
@@ -94,6 +108,17 @@ def start(model: SpaceModel[S], parameters: Mapping[object, object]) -> S:
         if index in pending:
             raise RequestError(f"{node.key} is bound more than once")
         pending[index] = value
+    root_scope = model.linked.scopes[0]
+    for name, value in keyword_parameters.items():
+        keyword_index = root_scope.named_members.get(name)
+        if keyword_index is None:
+            raise RequestError(f"unknown parameter {name!r}")
+        node = model.linked.nodes[keyword_index]
+        if node.kind != "param" or keyword_index not in model.linked.parameters:
+            raise RequestError(f"{node.key} is not an exposed parameter")
+        if keyword_index in pending:
+            raise RequestError(f"{node.key} is bound more than once")
+        pending[keyword_index] = value
     missing = [
         model.linked.nodes[i].key
         for i in model.linked.parameters
@@ -113,18 +138,15 @@ def start(model: SpaceModel[S], parameters: Mapping[object, object]) -> S:
     return cast(S, _attach(OccurrenceState(cast(SpaceModel[Space], model), snapshot), 0))
 
 
-def answer(point: Space, reference: ValueRef[T]) -> Answer[T]:
+def query(point: Space, reference: ValueRef[T] | View[T]) -> QueryResult[T]:
     current = state(point)
     index = current.model.resolve(point._scope, reference)
-    result = _runtime.evaluate(current.snapshot, index).answer
-    return cast(Answer[T], _runtime.copy_answer(current.snapshot, index, result))
+    result = _runtime.evaluate(current.snapshot, index).result
+    return cast(QueryResult[T], _runtime.copy_result(current.snapshot, index, result))
 
 
 def read_value(point: Space, reference: ValueRef[T]) -> T:
-    result = answer(point, reference)
-    if not isinstance(result, Decided):
-        raise RequestError(f"value is {type(result).__name__}; inspect point.answer(reference)")
-    return result.value
+    return require_value(query(point, reference), context=(point, reference))
 
 
 @overload
@@ -157,13 +179,13 @@ def assess(
 def decision_state(
     point: Space,
     reference: Decision[T] | DecisionRef[T],
-) -> Answer[DecisionState[T]]:
+) -> QueryResult[DecisionState[T]]:
     current = state(point)
     index = _decision(point, reference)
     # Runtime state reads already snapshot committed values and contextualize
     # adapter failures before crossing this boundary.
     result = _runtime.decision_state(current.snapshot, index)
-    return cast(Answer[DecisionState[T]], result)
+    return cast(QueryResult[DecisionState[T]], result)
 
 
 def _decision(point: Space, reference: object) -> int:
@@ -180,44 +202,72 @@ def _decision(point: Space, reference: object) -> int:
 def candidates(
     point: Space,
     reference: Decision[T] | DecisionRef[T],
-) -> Answer[tuple[T, ...]] | None:
+) -> QueryResult[tuple[T, ...]] | None:
     current = state(point)
     return cast(
-        Answer[tuple[T, ...]] | None,
+        QueryResult[tuple[T, ...]] | None,
         _runtime.candidate_values(current.snapshot, _decision(point, reference)),
     )
 
 
-def edit(point: Space, reference: Decision[T] | DecisionRef[T], value: T) -> Edit[T]:
+def change(point: Space, reference: Decision[T] | DecisionRef[T], value: T) -> Change[T]:
     current = state(point)
     index = _decision(point, reference)
-    return Edit(current.snapshot, current.model.linked.nodes[index].scope, index, value)
+    return Change(current.snapshot, current.model.linked.nodes[index].scope, index, value)
 
 
-def refine(point: S, *edits: EditRequest) -> RefinementReport[S]:
-    """Normalize a complete batch, trial it in graph order, publish atomically."""
+def clear(point: Space, reference: Decision[T] | DecisionRef[T]) -> Change[T]:
     current = state(point)
-    if type(point._scope) is not int or point._scope != 0:
-        raise RequestError("atomic refinement is a root operation")
-    pending: dict[int, object] = {}
-    # Validate structure for the entire batch before invoking any value adapter.
-    # In particular, a foreign or duplicate final edit cannot run the first
-    # candidate's snapshot or membership callback.
-    for item in edits:
-        if not isinstance(item, Edit):
-            raise RequestError("refine expects scoped Edit requests")
+    index = _decision(point, reference)
+    return Change(current.snapshot, current.model.linked.nodes[index].scope, index, remove=True)
+
+
+def bind_field(
+    point: Space, reference: ValueRef[T] | View[T]
+) -> BoundValue[T] | BoundDecision[T] | BoundViewField[T]:
+    current = state(point)
+    index = current.model.resolve(point._scope, reference)
+    node = current.model.linked.nodes[index]
+    if isinstance(reference, View):
+        return BoundViewField(point, reference)
+    if node.kind == "decision" and isinstance(reference, (Decision, DecisionRef)):
+        return BoundDecision(point, reference)
+    return BoundValue(point, reference)
+
+
+def _normalize_changes(
+    point: Space, changes: tuple[ChangeRequest, ...]
+) -> dict[int, Change[object]]:
+    current = state(point)
+    pending: dict[int, Change[object]] = {}
+    for item in changes:
+        if not isinstance(item, Change):
+            raise RequestError("changes must come from a bound field or refinement.change()")
         if item.base is not current.snapshot:
-            raise RequestError("all edits must target this exact base snapshot")
+            raise RequestError("all changes must target this exact base snapshot")
         if type(item.scope) is not int or not 0 <= item.scope < len(current.model.linked.scopes):
-            raise RequestError("edit scope does not belong to this model")
+            raise RequestError("change scope does not belong to this model")
         if type(item.node) is not int or not 0 <= item.node < len(current.model.linked.nodes):
-            raise RequestError("edit node does not belong to this model")
+            raise RequestError("change node does not belong to this model")
         node = current.model.linked.nodes[item.node]
         if node.kind != "decision" or node.scope != item.scope:
-            raise RequestError("edit does not identify an owned decision in its scope")
+            raise RequestError("change does not identify an owned decision in its scope")
         if item.node in pending:
-            raise RequestError(f"duplicate edit for {node.key}")
-        pending[item.node] = item.value
+            raise RequestError(f"duplicate change for {node.key}")
+        pending[item.node] = cast(Change[object], item)
+    return pending
+
+
+def commit(point: S, *changes: ChangeRequest) -> CommitmentReport[S]:
+    """Atomically add monotone commitments without revising existing choices."""
+
+    current = state(point)
+    normalized = _normalize_changes(point, changes)
+    if any(item.remove for item in normalized.values()):
+        raise RequestError("monotone commitment does not accept removal requests")
+    pending: dict[int, object] = {}
+    for index, item in normalized.items():
+        pending[index] = item.value
     with current.snapshot.lock:
         for index, value in pending.items():
             _recognize_request_value(current.model.linked.nodes[index], value, "candidate")
@@ -227,7 +277,7 @@ def refine(point: S, *edits: EditRequest) -> RefinementReport[S]:
         }
         trial = _runtime._TrialSnapshot(current.snapshot)
         changed = False
-        outcomes: dict[int, EditOutcome] = {}
+        outcomes: dict[int, ChangeOutcome] = {}
         for index in sorted(prepared, key=current.model.linked.ranks.__getitem__):
             node = current.model.linked.nodes[index]
             candidate = prepared[index]
@@ -240,9 +290,9 @@ def refine(point: S, *edits: EditRequest) -> RefinementReport[S]:
                 except Exception as cause:
                     raise EvaluationError(node.owner, "commitment equality", str(cause)) from cause
                 if equal:
-                    outcomes[index] = EditOutcome(node.owner, Decided(True), "unchanged")
+                    outcomes[index] = ChangeOutcome(node.owner, Available(True), "unchanged")
                 else:
-                    outcomes[index] = EditOutcome(
+                    outcomes[index] = ChangeOutcome(
                         node.owner,
                         reject(
                             "commitment-conflict",
@@ -253,36 +303,175 @@ def refine(point: S, *edits: EditRequest) -> RefinementReport[S]:
                     )
                 continue
             admissible = _runtime.membership(trial, index, candidate)
-            if isinstance(admissible, Decided) and admissible.value is True:
+            if isinstance(admissible, Available) and admissible.value is True:
                 trial.admit(index, candidate)
                 changed = True
-                outcomes[index] = EditOutcome(node.owner, admissible, "provisional")
+                outcomes[index] = ChangeOutcome(node.owner, admissible, "admissible")
             else:
-                outcomes[index] = EditOutcome(node.owner, admissible, "refused")
+                outcomes[index] = ChangeOutcome(node.owner, admissible, "refused")
         accepted = all(item.status != "refused" for item in outcomes.values())
         if len(outcomes) != len(prepared):
             raise RequestError("compiled refinement order is incomplete")
         published = point
         if accepted and changed:
             published = cast(S, _attach(OccurrenceState(current.model, trial.publish()), 0))
-        ordered = tuple(outcomes[item.node] for item in edits)
+        ordered = tuple(outcomes[item.node] for item in changes)
         if accepted:
             ordered = tuple(
-                replace(item, status="committed") if item.status == "provisional" else item
+                replace(item, status="committed") if item.status == "admissible" else item
                 for item in ordered
             )
-        return RefinementReport(published, accepted, ordered)
+        if state(published).snapshot is not current.snapshot and point._scope != 0:
+            published = cast(S, _attach(state(published), point._scope))
+        return CommitmentReport(published, accepted, ordered)
 
 
-def assign(point: S, reference: Decision[T] | DecisionRef[T], value: T) -> S:
+def _keyword_change(point: Space, name: str, value: object) -> Change[object]:
     current = state(point)
-    report = refine(root(point), cast(Edit[object], edit(point, reference, value)))
+    scope = current.model.linked.scopes[point._scope]
+    index = scope.named_members.get(name)
+    if index is None:
+        for declaration, choice_index in scope.choices.items():
+            if isinstance(declaration, SubspaceChoice) and declaration.name == name:
+                choice = current.model.linked.choices[choice_index]
+                if choice.selector is None:
+                    if type(value) is not str or value not in tuple(
+                        case for case, _ in choice.cases
+                    ):
+                        raise RequestError(f"{choice.key}: unknown choice case {value!r}")
+                    raise RequestError(f"{choice.key} is a singleton structural choice")
+                index = choice.selector
+                break
+    if index is None:
+        raise RequestError(f"unknown direct choice {name!r}")
+    node = current.model.linked.nodes[index]
+    if node.kind != "decision" or node.scope != point._scope:
+        raise RequestError(f"{node.key} is not a direct owned choice in this scope")
+    return Change(current.snapshot, node.scope, index, value)
+
+
+def _values_equal(node: Node, left: object, right: object) -> bool:
+    assert node.semantics is not None
+    try:
+        return node.semantics.values_equal(
+            node.semantics.freeze(left), node.semantics.freeze(right)
+        )
+    except Exception as cause:
+        raise EvaluationError(node.owner, "configuration equality", str(cause)) from cause
+
+
+def try_with_choices(
+    point: S, *changes: ChangeRequest, **choices: object
+) -> ConfigurationResult[S]:
+    """Build and validate a replacement choice set over the same frozen facts."""
+
+    current = state(point)
+    keyword_changes = tuple(_keyword_change(point, name, value) for name, value in choices.items())
+    all_changes = (*changes, *keyword_changes)
+    normalized = _normalize_changes(point, all_changes)
+    with current.snapshot.lock:
+        for index, item in normalized.items():
+            if not item.remove:
+                _recognize_request_value(current.model.linked.nodes[index], item.value, "choice")
+        prepared = {
+            index: (
+                item
+                if item.remove
+                else replace(
+                    item,
+                    value=_snapshot_request_value(
+                        current.model.linked.nodes[index], item.value, "choice"
+                    ),
+                )
+            )
+            for index, item in normalized.items()
+        }
+        merged = dict(current.snapshot.assignments)
+        for index, item in prepared.items():
+            if item.remove:
+                merged.pop(index, None)
+            else:
+                merged[index] = item.value
+
+        semantically_same = len(merged) == len(current.snapshot.assignments) and all(
+            index in current.snapshot.assignments
+            and _values_equal(
+                current.model.linked.nodes[index], value, current.snapshot.assignments[index]
+            )
+            for index, value in merged.items()
+        )
+        if semantically_same:
+            no_op_outcomes = tuple(
+                ChangeOutcome(
+                    current.model.linked.nodes[item.node].owner,
+                    Available(True),
+                    "unchanged",
+                )
+                for item in all_changes
+            )
+            return ConfigurationResult(point, True, no_op_outcomes)
+
+        base = _runtime.Snapshot(
+            current.model.linked, current.snapshot.parameters, {}, current.snapshot.lock
+        )
+        trial = _runtime._TrialSnapshot(base)
+        validation: dict[int, QueryResult[bool]] = {}
+        for index in sorted(merged, key=current.model.linked.ranks.__getitem__):
+            candidate = merged[index]
+            admissible = _runtime.membership(trial, index, candidate)
+            validation[index] = admissible
+            if isinstance(admissible, Available) and admissible.value is True:
+                trial.admit(index, candidate)
+
+        refused = {
+            index
+            for index, result in validation.items()
+            if not (isinstance(result, Available) and result.value is True)
+        }
+        outcomes: list[ChangeOutcome] = []
+        requested_nodes = set(normalized)
+        for request in all_changes:
+            item = normalized[request.node]
+            node = current.model.linked.nodes[item.node]
+            result = validation.get(item.node, Available(True))
+            status: Literal["refused", "admissible"] = (
+                "refused" if item.node in refused else "admissible"
+            )
+            outcomes.append(ChangeOutcome(node.owner, result, status))
+        for index in sorted(refused - requested_nodes, key=current.model.linked.ranks.__getitem__):
+            node = current.model.linked.nodes[index]
+            outcomes.append(
+                ChangeOutcome(node.owner, validation[index], "refused", requested=False)
+            )
+        if refused:
+            return ConfigurationResult(point, False, tuple(outcomes))
+
+        snapshot = trial.publish()
+        successor = cast(S, _attach(OccurrenceState(current.model, snapshot), point._scope))
+        published: list[ChangeOutcome] = []
+        for request, outcome in zip(all_changes, outcomes):
+            item = prepared[request.node]
+            if item.remove and item.node in current.snapshot.assignments:
+                final_status: Literal["removed", "unchanged", "changed"] = "removed"
+            elif item.remove:
+                final_status = "unchanged"
+            elif item.node in current.snapshot.assignments and _values_equal(
+                current.model.linked.nodes[item.node],
+                item.value,
+                current.snapshot.assignments[item.node],
+            ):
+                final_status = "unchanged"
+            else:
+                final_status = "changed"
+            published.append(replace(outcome, status=final_status))
+        return ConfigurationResult(successor, True, tuple(published))
+
+
+def with_choices(point: S, *changes: ChangeRequest, **choices: object) -> S:
+    report = try_with_choices(point, *changes, **choices)
     if not report.accepted:
-        raise RefinementError(report)
-    successor = state(report.point)
-    if successor.snapshot is current.snapshot:
-        return point
-    return cast(S, _attach(successor, point._scope))
+        raise ConfigurationError(report)
+    return report.instance
 
 
 def root(point: Space) -> Space:
@@ -306,8 +495,8 @@ def choice(point: Space, declaration: SubspaceChoice) -> ChoiceView:
 
 
 def _choice_record(view: ChoiceView) -> tuple[OccurrenceState, Choice]:
-    current = state(view.occurrence)
-    scope = current.model.linked.scopes[view.occurrence._scope]
+    current = state(view.instance)
+    scope = current.model.linked.scopes[view.instance._scope]
     try:
         index = scope.choices[view.declaration]
     except (KeyError, TypeError) as cause:
@@ -336,29 +525,31 @@ def select(view: ChoiceView, case: str) -> ChoiceView:
         # A singleton case is structurally selected, but an enclosing guard
         # still determines whether selection applies at this snapshot.
         if declaration.guard is not None:
-            guard = _runtime.evaluate(current.snapshot, declaration.guard).answer
-            if not isinstance(guard, Decided) or guard.value is not True:
-                refusal: Answer[bool] = (
-                    Inapplicable() if isinstance(guard, Decided) else cast(Answer[bool], guard)
+            guard = _runtime.evaluate(current.snapshot, declaration.guard).result
+            if not isinstance(guard, Available) or guard.value is not True:
+                refusal: QueryResult[bool] = (
+                    Inapplicable()
+                    if isinstance(guard, Available)
+                    else cast(QueryResult[bool], guard)
                 )
-                report = RefinementReport(
-                    root(view.occurrence),
+                report = ConfigurationResult(
+                    root(view.instance),
                     False,
-                    (EditOutcome(declaration.key, refusal, "refused"),),
+                    (ChangeOutcome(declaration.key, refusal, "refused"),),
                 )
-                raise RefinementError(report)
+                raise ConfigurationError(report)
         return view
     selector = current.model.linked.nodes[declaration.selector]
-    report = refine(
-        root(view.occurrence),
-        Edit(current.snapshot, selector.scope, selector.index, case),
+    report = try_with_choices(
+        root(view.instance),
+        Change(current.snapshot, selector.scope, selector.index, case),
     )
     if not report.accepted:
-        raise RefinementError(report)
-    successor = state(report.point)
+        raise ConfigurationError(report)
+    successor = state(report.instance)
     if successor.snapshot is current.snapshot:
         return view
-    owner = _attach(successor, view.occurrence._scope)
+    owner = _attach(successor, view.instance._scope)
     return ChoiceView(owner, view.declaration)
 
 

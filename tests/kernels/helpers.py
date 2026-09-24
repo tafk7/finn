@@ -11,9 +11,9 @@ from typing import TypeVar
 
 from finn.kernels.space import Space, compile_space
 from finn.kernels.space.declarations import Constraint
-from finn.kernels.space.errors import RefinementError, RequestError
+from finn.kernels.space.errors import ConfigurationError, RequestError
 from finn.kernels.space.inspection import decisions, members
-from finn.kernels.space.results import Answer, Decided
+from finn.kernels.space.results import QueryResult, Available
 
 T = TypeVar("T")
 S = TypeVar("S", bound=Space)
@@ -25,21 +25,23 @@ def point_for(kernel: type[S], facts: Mapping[str, object], **choices: object) -
     unknown = facts.keys() - parameters.keys()
     if unknown:
         raise RequestError(f"unknown supplied facts: {sorted(unknown)}")
-    point = model.start({parameters[name]: value for name, value in facts.items()})
+    point = model.bind({parameters[name]: value for name, value in facts.items()})
     owned = {item.key: item.reference for item in decisions(model)}
     unknown_choices = choices.keys() - owned.keys()
     if unknown_choices:
         raise RequestError(f"unknown choices: {sorted(unknown_choices)}")
-    report = point.refine(*(point.edit(owned[name], value) for name, value in choices.items()))
+    report = point.try_with_choices(
+        *(point.field(owned[name]).change(value) for name, value in choices.items())
+    )
     if not report.accepted:
-        raise RefinementError(report)
-    return report.point
+        raise ConfigurationError(report)
+    return report.instance
 
 
-def value(answer: Answer[T]) -> T:
-    assert isinstance(answer, Decided), answer
+def value(answer: QueryResult[T]) -> T:
+    assert isinstance(answer, Available), answer
     return answer.value
 
 
-def assess(point: Space, condition: Constraint) -> Answer[bool]:
-    return point.assess(condition).answer
+def assess(point: Space, condition: Constraint) -> QueryResult[bool]:
+    return point.assess(condition).result

@@ -47,8 +47,9 @@ def test_capture_child_keeps_each_committed_root_owner_once_and_includes_first_v
             return factor * 2
 
     model = compile_space(Family)
-    base = model.start()
-    point = base.assign(Family.factor, 1).assign(Family.left.decision_ref(Child.local), "auto")
+    base = model.bind()
+    first = base.with_choices(factor=1)
+    point = first.with_choices(first.field(Family.left.decision_ref(Child.local)).change("auto"))
     assert point.doubled == 2
     captured = selections.capture(point.left)
     assert captured.keys == ("factor", "left.local")
@@ -56,8 +57,8 @@ def test_capture_child_keeps_each_committed_root_owner_once_and_includes_first_v
     assert selections.capture(base).keys == ()
     replay = selections.restore(base, captured)
     assert replay.accepted
-    assert selections.capture(replay.point) == captured
-    assert isinstance(replay.point.right.answer(Child.local), Unresolved)
+    assert selections.capture(replay.instance) == captured
+    assert isinstance(replay.instance.right.query(Child.local), Unresolved)
 
 
 def test_detached_replacement_and_removal_do_not_overwrite_live_points() -> None:
@@ -65,8 +66,8 @@ def test_detached_replacement_and_removal_do_not_overwrite_live_points() -> None
         factor = Decision(int, values=(1, 2))
         style = Decision(str, values=("small", "fast"))
 
-    base = Family.start()
-    point = base.assign(Family.factor, 1).assign(Family.style, "small")
+    base = Family()
+    point = base.with_choices(factor=1).with_choices(style="small")
     original = selections.capture(point)
     edited = original.with_changes(
         [
@@ -79,12 +80,12 @@ def test_detached_replacement_and_removal_do_not_overwrite_live_points() -> None
     assert original.value(Family.factor) == 1
     assert edited.value(Family.factor) == 2
     report = selections.restore(base, edited)
-    assert report.accepted and report.point.factor == 2
+    assert report.accepted and report.instance.factor == 2
     assert point.factor == 1 and point.style == "small"
     conflict = selections.restore(point, edited)
-    assert not conflict.accepted and conflict.point is point
+    assert not conflict.accepted and conflict.instance is point
     assert conflict.outcomes[0].status == "refused"
-    assert selections.restore(point, original).point is point
+    assert selections.restore(point, original).instance is point
     with pytest.raises(KeyError, match="style"):
         edited.value(Family.style)
 
@@ -96,10 +97,10 @@ def test_rebound_inputs_can_refuse_an_earlier_selection_without_partial_publicat
         style = Decision(str, values=("auto", "block"))
 
     model = compile_space(Family)
-    first = model.start({Family.extent: 12}).assign(Family.factor, 4).assign(Family.style, "block")
-    changed = model.start({Family.extent: 10})
+    first = model.bind({Family.extent: 12}).with_choices(factor=4).with_choices(style="block")
+    changed = model.bind({Family.extent: 10})
     report = selections.restore(changed, selections.capture(first))
-    assert not report.accepted and report.point is changed
+    assert not report.accepted and report.instance is changed
     assert selections.capture(changed).keys == ()
     assert first.factor == 4 and first.extent == 12
 
@@ -112,25 +113,25 @@ def test_selector_change_retains_stale_case_commitments_until_explicit_removal()
         implementation = SubspaceChoice({"left": Subspace(Child), "right": Subspace(Child)})
 
     model = compile_space(Family)
-    base = model.start()
+    base = model.bind()
     selector = inspection.choices(model)[0].selector
     assert selector is not None
     chosen = base.implementation.select("left")
     child = chosen.alternative("left")
     left_lanes = inspection.decision_handle(child, Child.lanes)
-    point = child.assign(Child.lanes, 1).root
+    point = child.with_choices(lanes=1).root
     captured = selections.capture(point)
     assert "implementation" in captured.keys
     assert all("$" not in key for key in captured.keys)
     edited = captured.with_changes([captured.edit(selector, "right")])
     assert edited.keys == captured.keys
     refused = selections.restore(base, edited)
-    assert not refused.accepted and refused.point is base
+    assert not refused.accepted and refused.instance is base
     assert selections.capture(base).keys == ()
     cleaned = edited.with_changes([edited.remove(left_lanes)])
     accepted = selections.restore(base, cleaned)
     assert accepted.accepted
-    assert selections.capture(accepted.point).keys == ("implementation",)
+    assert selections.capture(accepted.instance).keys == ("implementation",)
 
 
 def test_singleton_choices_do_not_create_persisted_selectors() -> None:
@@ -140,7 +141,7 @@ def test_singleton_choices_do_not_create_persisted_selectors() -> None:
     class Family(Space):
         implementation = SubspaceChoice({"only": Subspace(Child)})
 
-    point = Family.start().implementation.alternative("only").assign(Child.lanes, 1)
+    point = Family().implementation.alternative("only").with_choices(lanes=1)
     captured = selections.capture(point)
     assert len(captured.entries) == 1
     assert captured.entries[0].key.endswith("lanes")
@@ -165,9 +166,9 @@ def test_capture_edit_and_public_entries_detach_mutable_payloads() -> None:
     class Family(Space):
         payload = Decision(PAYLOAD, values=(Payload([1, 2]), Payload([3])))
 
-    base = Family.start()
+    base = Family()
     source = Payload([2, 1])
-    point = base.assign(Family.payload, source)
+    point = base.with_choices(payload=source)
     captured = selections.capture(point)
     source.values.append(99)
     public = captured.entries[0].value
@@ -180,7 +181,7 @@ def test_capture_edit_and_public_entries_detach_mutable_payloads() -> None:
     replacement.values.append(99)
     edited = captured.with_changes([change])
     assert edited.value(Family.payload).values == [3]
-    assert selections.restore(base, edited).point.payload.values == [3]
+    assert selections.restore(base, edited).instance.payload.values == [3]
     assert point.payload.values == [2, 1]
     equal = captured.with_changes([captured.edit(Family.payload, Payload([1, 2]))])
     assert equal == captured
@@ -194,19 +195,24 @@ def test_foreign_models_invalid_changes_and_child_restore_are_rejected() -> None
         first = Subspace(Child)
         second = Subspace(Child)
 
+    class OtherFamily(Space):
+        first = Subspace(Child)
+        second = Subspace(Child)
+
     first_model = compile_space(Family)
-    point = first_model.start().assign(Family.first.decision_ref(Child.value), 1)
+    point = first_model.bind()
+    point = point.with_choices(point.field(Family.first.decision_ref(Child.value)).change(1))
     selection = selections.capture(point)
-    other = compile_space(Family).start()
+    other = compile_space(OtherFamily).bind()
     with pytest.raises(RequestError, match="different compiled model"):
         selections.restore(other, selection)
-    with pytest.raises(RequestError, match="root occurrence"):
+    with pytest.raises(RequestError, match="root configuration"):
         selections.restore(point.first, selection)
     with pytest.raises(RequestError):
         selection.edit(Child.value, 2)
     with pytest.raises(RequestError, match="different compiled model"):
         selection.with_changes(
-            [selections.capture(other).edit(Family.first.decision_ref(Child.value), 2)]
+            [selections.capture(other).edit(OtherFamily.first.decision_ref(Child.value), 2)]
         )
     with pytest.raises(RequestError, match="duplicate"):
         selection.with_changes(
@@ -229,7 +235,7 @@ def test_capture_does_not_evaluate_unrelated_uncommitted_guard_callbacks() -> No
 
         unrelated = Decision(int, values=(1,), when=explosive)
 
-    point = Family.start().assign(Family.committed, 1)
+    point = Family().with_choices(committed=1)
     assert selections.capture(point).keys == ("committed",)
 
 
@@ -240,7 +246,7 @@ def test_selection_edits_and_codec_bindings_have_strict_value_types(tmp_path: Pa
     common = """from typing_extensions import assert_type
 from finn.kernels.space import (
     Decision, Param, Space, ValueCodec, JSONValue, codec_for, compile_space,
-    selections, Selection, SelectionChange, RefinementReport,
+    selections, Selection, SelectionChange, CommitmentReport,
 )
 
 class Family(Space):
@@ -254,7 +260,7 @@ def integer(value: JSONValue) -> int:
     return value
 
 integer_codec: ValueCodec[int] = ValueCodec("integer", 1, lambda value: value, integer)
-base = compile_space(Family).start({Family.extent: 4})
+base = compile_space(Family).bind({Family.extent: 4})
 selected = selections.capture(base)
 """
     positive = (
@@ -264,7 +270,7 @@ assert_type(selected.with_changes([
     selected.edit(Family.factor, 2), selected.edit(Family.style, "block"),
 ]), Selection)
 assert_type(selected.value(Family.factor), int)
-assert_type(selections.restore(base, selected), RefinementReport[Family])
+assert_type(selections.restore(base, selected), CommitmentReport[Family])
 codec_for(Family.factor, integer_codec)
 """
     )

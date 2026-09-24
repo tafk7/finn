@@ -1,16 +1,14 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Typed scoped requests and atomic refinement outcomes."""
+"""Typed configuration changes and checked publication reports."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Generic, Literal, Protocol, TypeVar
 
-from typing_extensions import NamedTuple
-
-from .results import Answer
+from .results import QueryResult
 
 if TYPE_CHECKING:
     from .declarations import Space
@@ -19,9 +17,7 @@ T_co = TypeVar("T_co", covariant=True)
 S = TypeVar("S", bound="Space")
 
 
-class EditRequest(Protocol):
-    """Read-only shape of a typed edit, allowing heterogeneous atomic batches."""
-
+class ChangeRequest(Protocol):
     @property
     def base(self) -> object: ...
 
@@ -32,27 +28,49 @@ class EditRequest(Protocol):
     def node(self) -> int: ...
 
     @property
+    def remove(self) -> bool: ...
+
+    @property
     def value(self) -> object: ...
 
 
-class Edit(NamedTuple, Generic[T_co]):
-    """One scoped candidate tied to an exact immutable base snapshot."""
+@dataclass(frozen=True, slots=True)
+class Change(Generic[T_co]):
+    """One typed choice patch tied to an exact immutable base snapshot."""
 
-    base: object
+    base: object = field(repr=False)
     scope: int
     node: int
-    value: T_co
+    value: T_co | None = field(default=None, repr=False)
+    remove: bool = False
 
 
 @dataclass(frozen=True, slots=True)
-class EditOutcome:
+class ChangeOutcome:
     owner: str
-    answer: Answer[bool]
-    status: Literal["unchanged", "provisional", "refused", "committed"]
+    result: QueryResult[bool]
+    status: Literal["unchanged", "admissible", "refused", "changed", "removed", "committed"]
+    requested: bool = True
 
 
 @dataclass(frozen=True, slots=True)
-class RefinementReport(Generic[S]):
-    point: S
+class CommitmentReport(Generic[S]):
+    instance: S
     accepted: bool
-    outcomes: tuple[EditOutcome, ...]
+    outcomes: tuple[ChangeOutcome, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class ConfigurationResult(Generic[S]):
+    instance: S
+    accepted: bool
+    outcomes: tuple[ChangeOutcome, ...]
+
+
+__all__ = [
+    "Change",
+    "ChangeOutcome",
+    "ChangeRequest",
+    "CommitmentReport",
+    "ConfigurationResult",
+]

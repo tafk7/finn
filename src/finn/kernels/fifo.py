@@ -49,7 +49,9 @@ class FifoKernel(Kernel):
         depth=depth,
         ram=ram_style,
     )
-    def physical(*, bits: int, depth: int, ram: str) -> ModuleBuildRequirements | Rejected:
+    def build_requirements(
+        *, bits: int, depth: int, ram: str
+    ) -> ModuleBuildRequirements | Rejected:
         if bits < 1:
             return reject("fifo-interface", "word_bits must be positive")
         parameters = (("DATA_WIDTH", bits), ("DEPTH", depth), ("RAM_STYLE", f'"{ram}"'))

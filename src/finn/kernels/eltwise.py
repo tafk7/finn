@@ -124,7 +124,7 @@ class EltwiseKernel(Kernel):
         result=result_dtype,
         scale=native_scale,
     )
-    def physical(
+    def build_requirements(
         *,
         operation: str,
         pe: int,

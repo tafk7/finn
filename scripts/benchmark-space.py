@@ -111,19 +111,25 @@ def compilation(api, label: str, count: int, factory) -> dict[str, object]:
     compile_seconds = time.perf_counter() - started
     counts = asdict(api.inspection.statistics(timed_model))
     del timed_model
+    del family
     gc.collect()
 
     # Measure a separate compile, so tracemalloc overhead does not contaminate
     # the reported ordinary compile time. Keep the model alive through GC.
+    retained_family = factory(api, count)
     tracemalloc.start()
     before = tracemalloc.get_traced_memory()[0]
     started = time.perf_counter()
-    retained_model = api.compile_space(family)
+    retained_model = api.compile_space(retained_family)
     memory_compile_seconds = time.perf_counter() - started
     gc.collect()
     current, peak = tracemalloc.get_traced_memory()
     tracemalloc.stop()
     assert asdict(api.inspection.statistics(retained_model)) == counts
+    started = time.perf_counter()
+    reused_model = api.compile_space(retained_family)
+    reuse_seconds = time.perf_counter() - started
+    assert reused_model is retained_model
     return {
         "fixture": label,
         "size": count,
@@ -133,6 +139,8 @@ def compilation(api, label: str, count: int, factory) -> dict[str, object]:
         "traced_compile_seconds": memory_compile_seconds,
         "retained_compile_bytes": current - before,
         "peak_compile_bytes": peak - before,
+        "reuse_seconds": reuse_seconds,
+        "canonical_reuse": True,
     }
 
 
@@ -161,22 +169,24 @@ def batch_refinement(api, count: int, *, dependent: bool) -> dict[str, object]:
             previous = decision
     family = type("DependentBatch" if dependent else "IndependentBatch", (api.Space,), members)
     model = api.compile_space(family)
-    base = model.start()
-    edits = [base.edit(reference, value) for reference, value in reversed(requests)]
+    base = model.bind()
+    changes = [
+        api.refinement.change(base, reference, value) for reference, value in reversed(requests)
+    ]
     started = time.perf_counter()
-    report = base.refine(*edits)
+    report = api.refinement.commit(base, *changes)
     seconds = time.perf_counter() - started
     assert report.accepted
     assert len(report.outcomes) == count
     assert work["membership"] == count
     assert work["prerequisite"] == count
     started = time.perf_counter()
-    selection = api.selections.capture(report.point)
+    selection = api.selections.capture(report.instance)
     capture_seconds = time.perf_counter() - started
     assert len(selection.entries) == count
     return {
         "fixture": "dependent" if dependent else "independent",
-        "edits": count,
+        "changes": count,
         "submitted_order": "reverse declaration order",
         "statistics": asdict(api.inspection.statistics(model)),
         "refine_seconds": seconds,
@@ -184,6 +194,37 @@ def batch_refinement(api, count: int, *, dependent: bool) -> dict[str, object]:
         "prerequisite_calls": work["prerequisite"],
         "captured_choices": len(selection.entries),
         "capture_seconds": capture_seconds,
+    }
+
+
+def replacement_validation(api, count: int) -> dict[str, object]:
+    work = Counter()
+
+    def membership(*, candidate: int) -> bool:
+        work["membership"] += 1
+        return candidate in {0, 1}
+
+    members = {
+        f"choice{index}": api.Decision(int, domain=api.domain(accepts=membership))
+        for index in range(count)
+    }
+    family = type("ReplacementValidation", (api.Space,), members)
+    base = family()
+    configured = base.with_choices(
+        *(base.field(reference).change(0) for reference in members.values())
+    )
+    work.clear()
+    first = next(iter(members.values()))
+    started = time.perf_counter()
+    revised = configured.with_choices(configured.field(first).change(1))
+    seconds = time.perf_counter() - started
+    assert revised is not configured
+    assert work["membership"] == count
+    return {
+        "choices": count,
+        "changed": 1,
+        "validated": work["membership"],
+        "seconds": seconds,
     }
 
 
@@ -223,18 +264,18 @@ def narrow_query(api, branches: int) -> dict[str, object]:
     family = type("NarrowQuery", (api.Space,), members)
     model = api.compile_space(family)
     assert work == Counter()
-    base = model.start({source: 7})
+    base = model.bind({source: 7})
     selector = api.inspection.choices(model)[0].selector
     assert selector is not None and first is not None
-    point = base.assign(selector, "selected")
+    point = base.with_choices(base.field(selector).change("selected"))
     output = first.accepted(physical_key)
     started = time.perf_counter()
-    answer = point.answer(output)
+    answer = point.query(output)
     miss_seconds = time.perf_counter() - started
     started = time.perf_counter()
-    cached = point.answer(output)
+    cached = point.query(output)
     hit_seconds = time.perf_counter() - started
-    assert answer == cached == api.Decided(8)
+    assert answer == cached == api.Available(8)
     evidence = api.inspection.explain(point, output)
     assert work["selected"] == 1 and work["inactive"] == 0
     return {
@@ -272,12 +313,16 @@ def wide_choice(api, alternatives: int, trials: int = 30) -> dict[str, object]:
     output = choice.accepted(physical_key)
     measurements = []
     for _ in range(trials):
-        base = model.start()
-        point = base if selector is None else base.assign(selector, f"case{alternatives - 1}")
+        base = model.bind()
+        point = (
+            base
+            if selector is None
+            else base.with_choices(base.field(selector).change(f"case{alternatives - 1}"))
+        )
         started = time.perf_counter()
-        answer = point.answer(output)
+        answer = point.query(output)
         measurements.append(time.perf_counter() - started)
-        assert answer == api.Decided(1)
+        assert answer == api.Available(1)
     assert work["leaf"] == trials
     return {
         "alternatives": alternatives,
@@ -309,32 +354,32 @@ def cache_reclamation(api, population: int) -> dict[str, object]:
             return payload
 
     model = api.compile_space(Family)
-    base = model.start()
-    points = []
+    base = model.bind()
+    configurations = []
     started = time.perf_counter()
     for candidate in range(population):
-        point = base.assign(Family.choice, candidate)
-        point.answer(Family.output)
-        points.append(point)
+        point = base.with_choices(choice=candidate)
+        point.query(Family.output)
+        configurations.append(point)
     creation_seconds = time.perf_counter() - started
     del point
     gc.collect()
     while_held = sum(reference() is not None for reference in created)
     assert len(created) == population and while_held == population
-    points.clear()
+    configurations.clear()
     started = time.perf_counter()
     gc.collect()
     reclamation_seconds = time.perf_counter() - started
     after_release = sum(reference() is not None for reference in created)
     assert after_release == 0
     # Both compilation and the original choice-free root are still alive here.
-    assert isinstance(base.decision_state(Family.choice), api.Decided)
+    assert isinstance(base.field(Family.choice).state, api.Available)
     return {
         "population": population,
         "payload_bytes_per_object": 1024,
         "callback_created_objects": len(created),
-        "alive_with_points_held": while_held,
-        "alive_after_points_released": after_release,
+        "alive_with_configurations_held": while_held,
+        "alive_after_configurations_released": after_release,
         "creation_seconds": creation_seconds,
         "collection_seconds_after_release": reclamation_seconds,
         "snapshot_policy": (
@@ -368,36 +413,44 @@ def markdown(report: dict[str, object]) -> str:
         "from that declaration count. Potential edges are direct, not transitive closures.",
         "",
         "| Family | Size | Declarations | Scopes | Nodes | Edges | "
-        "Compile seconds | Retained MiB | Peak MiB |",
-        "|---|---:|---:|---:|---:|---:|---:|---:|---:|",
+        "Compile seconds | Cached prepare µs | Retained MiB | Peak MiB |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for item in report["compilation"]:
         counts = item["statistics"]
         lines.append(
             f"| {item['fixture']} | {item['size']} | {counts['authored_declarations']} | "
             f"{counts['scopes']} | {counts['nodes']} | {counts['potential_edges']} | "
-            f"{item['compile_seconds']:.6f} | {item['retained_compile_bytes'] / 2**20:.3f} | "
+            f"{item['compile_seconds']:.6f} | {item['reuse_seconds'] * 1e6:.2f} | "
+            f"{item['retained_compile_bytes'] / 2**20:.3f} | "
             f"{item['peak_compile_bytes'] / 2**20:.3f} |"
         )
     lines += [
         "",
-        "## Atomic refinement",
+        "## Atomic monotone commitment",
         "",
         "Both batches are submitted in reverse declaration order. Each decision has an explicit "
         "prerequisite callback and membership callback. Dependent decisions consume the preceding "
         "decision; independent decisions each consume the same constant source through separate "
         "prerequisite declarations.",
         "",
-        "| Batch | Edits | Membership calls | Prerequisite calls | "
-        "Refine seconds | Capture seconds |",
+        "| Batch | Changes | Membership calls | Prerequisite calls | "
+        "Commit seconds | Capture seconds |",
         "|---|---:|---:|---:|---:|---:|",
     ]
     for item in report["refinement"]:
         lines.append(
-            f"| {item['fixture']} | {item['edits']} | {item['membership_calls']} | "
+            f"| {item['fixture']} | {item['changes']} | {item['membership_calls']} | "
             f"{item['prerequisite_calls']} | {item['refine_seconds']:.6f} | "
             f"{item['capture_seconds']:.6f} |"
         )
+    replacement = report["replacement_validation"]
+    lines += [
+        "",
+        "Configuration replacement revalidates every retained commitment before publication. "
+        f"Changing 1 of {replacement['choices']} choices validated "
+        f"{replacement['validated']} memberships in {replacement['seconds']:.6f} seconds.",
+    ]
     lines += [
         "",
         "## Narrow query work",
@@ -420,10 +473,11 @@ def markdown(report: dict[str, object]) -> str:
         "",
         "## Choice dispatch",
         "",
-        "The final alternative is selected in each independent start. Timings include only the "
-        "cold accepted-output query, excluding start and selector membership. Each query invokes "
+        "The final alternative is selected in each independent configuration. Timings include "
+        "only the cold accepted-output query, excluding construction and selector membership. "
+        "Each query invokes "
         "exactly one leaf evaluator. Median/minimum/maximum are observations over "
-        "30 starts, not thresholds.",
+        "30 configurations, not thresholds.",
         "",
         "| Alternatives | Median µs | Minimum µs | Maximum µs | Callbacks per query |",
         "|---|---:|---:|---:|---:|",
@@ -442,8 +496,10 @@ def markdown(report: dict[str, object]) -> str:
         f"{cache['callback_created_objects']} callback-created immutable payloads each contain "
         f"{cache['payload_bytes_per_object']} bytes. "
         "Weak references were created inside the callback. "
-        f"{cache['alive_with_points_held']} remained alive while their points were held; "
-        f"{cache['alive_after_points_released']} remained after releasing the points "
+        f"{cache['alive_with_configurations_held']} remained alive while their configurations "
+        "were held; "
+        f"{cache['alive_after_configurations_released']} remained after releasing the "
+        "configurations "
         "and collecting. The compiled model and original choice-free root remained alive. "
         "This checks actual cached "
         "outputs, rather than weak references to discarded public copies.",
@@ -519,6 +575,7 @@ def main() -> None:
             batch_refinement(api, arguments.batch, dependent=False),
             batch_refinement(api, arguments.batch, dependent=True),
         ],
+        "replacement_validation": replacement_validation(api, arguments.batch),
         "narrow_queries": [narrow_query(api, 1), narrow_query(api, arguments.branches)],
         "wide_choices": [wide_choice(api, 2), wide_choice(api, max(2, arguments.branches))],
         "cache_reclamation": cache_reclamation(api, arguments.population),

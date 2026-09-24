@@ -10,9 +10,9 @@ from typing import cast
 import pytest
 
 from finn.kernels.space import (
-    Answer,
+    QueryResult,
     Const,
-    Decided,
+    Available,
     Decision,
     Param,
     Readiness,
@@ -24,7 +24,8 @@ from finn.kernels.space import (
     constraint,
     derived,
     divisors_of,
-    full_answer,
+    full_result,
+    refinement,
 )
 from finn.kernels.space.conformance import MonotonicityHarness, Sample
 from finn.kernels.space.errors import EvaluationError, RequestError
@@ -44,37 +45,40 @@ def test_conforming_values_states_views_constraints_and_candidates() -> None:
         ready = Readiness(factor)
         physical = View(fixed, constraints=(supported,), requires=(factor,))
 
-    base = Family.start()
+    base = Family()
     report = MonotonicityHarness().verify(
         base,
         [
-            base.edit(Family.extent, 4),
-            (base.edit(Family.factor, 2), base.edit(Family.extent, 8)),
+            refinement.change(base, Family.extent, 4),
+            (
+                refinement.change(base, Family.factor, 2),
+                refinement.change(base, Family.extent, 8),
+            ),
         ],
     )
     assert report.conformant is True
     assert report.checked_successors == 2
     assert report.violations == ()
     assert [outcome.status for outcome in report.outcomes] == ["checked", "checked"]
-    assert isinstance(base.answer(Family.extent), Unresolved)
+    assert isinstance(base.query(Family.extent), Unresolved)
 
 
-def test_full_answer_callback_which_changes_a_settled_value_is_reported() -> None:
+def test_full_result_callback_which_changes_a_settled_value_is_reported() -> None:
     class Family(Space):
         choice = Decision(int, values=(1, 2))
 
-        @derived(observed=full_answer(choice))
-        def optimistic(*, observed: Answer[int]) -> int:
-            return observed.value if isinstance(observed, Decided) else 0
+        @derived(observed=full_result(choice))
+        def optimistic(*, observed: QueryResult[int]) -> int:
+            return observed.value if isinstance(observed, Available) else 0
 
-        @constraint(observed=full_answer(choice))
-        def unstable_admission(*, observed: Answer[int]) -> bool:
+        @constraint(observed=full_result(choice))
+        def unstable_admission(*, observed: QueryResult[int]) -> bool:
             return isinstance(observed, Unresolved)
 
         physical = View(optimistic, constraints=(unstable_admission,))
 
-    base = Family.start()
-    result = MonotonicityHarness().verify(base, [base.edit(Family.choice, 1)])
+    base = Family()
+    result = MonotonicityHarness().verify(base, [refinement.change(base, Family.choice, 1)])
     assert result.conformant is False
     assert {(item.key, item.category) for item in result.violations} == {
         ("optimistic", "value"),
@@ -115,8 +119,10 @@ def test_unhashable_values_and_candidates_use_declared_equality() -> None:
 
         physical = View(reordered)
 
-    base = Family.start()
-    result = MonotonicityHarness().verify(base, [base.edit(Family.candidate, Bag([2, 1]))])
+    base = Family()
+    result = MonotonicityHarness().verify(
+        base, [refinement.change(base, Family.candidate, Bag([2, 1]))]
+    )
     assert result.conformant is True
     assert result.violations == ()
     assert calls == 2
@@ -126,13 +132,13 @@ def test_skipped_and_noop_samples_are_distinct_and_never_claim_success() -> None
     class Family(Space):
         choice = Decision(int, values=(1, 2))
 
-    point = Family.start().assign(Family.choice, 1)
-    different_base = Family.start()
+    point = Family().with_choices(choice=1)
+    different_base = Family()
     samples: list[Sample] = [
-        point.edit(Family.choice, 1),
+        refinement.change(point, Family.choice, 1),
         (),
-        point.edit(Family.choice, 2),
-        different_base.edit(Family.choice, 1),
+        refinement.change(point, Family.choice, 2),
+        refinement.change(different_base, Family.choice, 1),
         cast(Sample, object()),
     ]
     result = MonotonicityHarness().verify(point, samples)
@@ -153,30 +159,33 @@ def test_candidate_refusals_are_skipped_without_publication() -> None:
         a = Decision(int, values=(1,))
         b = Decision(int, values=(2,))
 
-    base = Family.start()
+    base = Family()
     report = MonotonicityHarness().verify(
         base,
         [
-            (base.edit(Family.a, 1), base.edit(Family.b, 3)),
+            (
+                refinement.change(base, Family.a, 1),
+                refinement.change(base, Family.b, 3),
+            ),
         ],
     )
     assert report.conformant is None and report.skipped[0].reason == "refinement refused"
-    assert isinstance(base.answer(Family.a), Unresolved)
+    assert isinstance(base.query(Family.a), Unresolved)
 
 
 def test_programmer_failures_remain_contextual_exceptions() -> None:
     class Family(Space):
         choice = Decision(int, values=(1,))
 
-        @derived(observed=full_answer(choice))
-        def failure(*, observed: Answer[int]) -> int:
-            if isinstance(observed, Decided):
+        @derived(observed=full_result(choice))
+        def failure(*, observed: QueryResult[int]) -> int:
+            if isinstance(observed, Available):
                 raise RuntimeError("callback failed")
             return 0
 
-    base = Family.start()
+    base = Family()
     with pytest.raises(EvaluationError) as raised:
-        MonotonicityHarness().verify(base, [base.edit(Family.choice, 1)])
+        MonotonicityHarness().verify(base, [refinement.change(base, Family.choice, 1)])
     assert raised.value.owner == "failure"
     assert isinstance(raised.value.__cause__, RuntimeError)
 
@@ -188,6 +197,6 @@ def test_child_base_is_rejected_without_guessing_root_sample_scope() -> None:
     class Family(Space):
         child = Subspace(Child)
 
-    point = Family.start().child
-    with pytest.raises(RequestError, match="root occurrence"):
-        MonotonicityHarness().verify(point, [point.edit(Child.choice, 1)])
+    point = Family().child
+    with pytest.raises(RequestError, match="root configuration"):
+        MonotonicityHarness().verify(point, [refinement.change(point, Child.choice, 1)])

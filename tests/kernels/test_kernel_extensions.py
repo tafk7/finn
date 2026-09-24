@@ -26,7 +26,7 @@ from finn.kernels.datatypes.values import (
 )
 from finn.kernels.space import (
     ConstraintGroup,
-    Decided,
+    Available,
     Decision,
     Derived,
     Param,
@@ -70,7 +70,7 @@ def test_kernel_identity_is_validated_at_class_creation() -> None:
         id = "test.empty"
 
     assert Empty.version == "1"
-    assert Empty.start().capabilities() == ()
+    assert Empty().capabilities() == ()
 
 
 def test_kernel_capabilities_have_independent_output_types_and_no_implicit_abi() -> None:
@@ -111,19 +111,19 @@ def test_kernel_capabilities_have_independent_output_types_and_no_implicit_abi()
                 (),
             )
 
-    opaque = OpaqueWord.start({OpaqueWord.bits: 13})
+    opaque = OpaqueWord({OpaqueWord.bits: 13})
     capabilities = opaque.capabilities()
     assert [entry.key for entry in capabilities] == ["pins"]
     assert calls == []
-    assert opaque.pins().accepted_answer == Decided(Pins((("word", 13),), (("result", 13),)))
-    answer = opaque.answer(capabilities[0].reference)
-    assert isinstance(answer, Decided)
+    assert opaque.pins().accepted_result == Available(Pins((("word", 13),), (("result", 13),)))
+    answer = opaque.query(capabilities[0].reference)
+    assert isinstance(answer, Available)
     assert answer.value == Pins((("word", 13),), (("result", 13),))
-    axis = Axis.start({Axis.bits: 13, Axis.lanes: 3})
-    assert axis.stream().accepted_answer == Decided(AxisShape(39, 40))
-    hls = Hls.start()
-    result = hls.sources().accepted_answer
-    assert isinstance(result, Decided)
+    axis = Axis({Axis.bits: 13, Axis.lanes: 3})
+    assert axis.stream().accepted_result == Available(AxisShape(39, 40))
+    hls = Hls()
+    result = hls.sources().accepted_result
+    assert isinstance(result, Available)
     assert isinstance(result.value, HlsSourceRequirements)
     assert [entry.key for entry in hls.capabilities()] == ["sources"]
     assert not hasattr(result.value, "abi")
@@ -177,8 +177,8 @@ def test_dtype_portable_selection_is_optional_and_uses_exact_canonical_encoding(
         )
 
     model = compile_space(DtypeKernel)
-    base = model.start()
-    point = base.assign(DtypeKernel.dtype, resolve_qonnx_datatype_name("TERNARY"))
+    base = model.bind()
+    point = base.with_choices(dtype=resolve_qonnx_datatype_name("TERNARY"))
     schema = SelectionSchema(
         model,
         family=DtypeKernel.id,
@@ -188,12 +188,12 @@ def test_dtype_portable_selection_is_optional_and_uses_exact_canonical_encoding(
     stored = codecs.encode(selections.capture(point), schema)
     restored = selections.restore(base, codecs.decode(stored, schema))
     assert restored.accepted
-    assert restored.point.dtype.name == "TERNARY"
+    assert restored.instance.dtype.name == "TERNARY"
     assert not QONNX_DATATYPE_VALUE_SEMANTICS.values_equal(
-        restored.point.dtype, resolve_qonnx_datatype_name("INT2")
+        restored.instance.dtype, resolve_qonnx_datatype_name("INT2")
     )
     with pytest.raises(RequestError):
-        base.assign(DtypeKernel.dtype, cast(QONNXDataType, "TERNARY"))
+        base.with_choices(dtype=cast(QONNXDataType, "TERNARY"))
 
 
 def test_integer_admission_retains_dynamic_bounds_and_inspectable_family_refusal() -> None:
@@ -223,13 +223,13 @@ def test_integer_admission_retains_dynamic_bounds_and_inspectable_family_refusal
         ),
     )
     model = compile_space(Family)
-    unknown = model.start({dtype: resolve_qonnx_datatype_name("TERNARY")})
-    raw = unknown.answer(dtype)
-    assert isinstance(raw, Decided)
+    unknown = model.bind({dtype: resolve_qonnx_datatype_name("TERNARY")})
+    raw = unknown.query(dtype)
+    assert isinstance(raw, Available)
     assert raw.value.name == "TERNARY"
     assessment = unknown.assess(support)
     assert assessment.refused == ("family",)
-    assert isinstance(assessment.answer, Unresolved)
+    assert isinstance(assessment.result, Unresolved)
     for name, accepted in (
         ("UINT8", True),
         ("BINARY", True),
@@ -237,10 +237,12 @@ def test_integer_admission_retains_dynamic_bounds_and_inspectable_family_refusal
         ("UINT16", False),
         ("BIPOLAR", False),
     ):
-        point = model.start({dtype: resolve_qonnx_datatype_name(name)}).assign(width, 8)
+        point = model.bind({dtype: resolve_qonnx_datatype_name(name)})
+        point = point.with_choices(point.field(width).change(8))
         assert point.assess(support).verdict is accepted
-    invalid = model.start({dtype: resolve_qonnx_datatype_name("UINT8")}).assign(width, 0)
-    refused = invalid.assess(support).answers["maximum_bits"]
+    invalid = model.bind({dtype: resolve_qonnx_datatype_name("UINT8")})
+    invalid = invalid.with_choices(invalid.field(width).change(0))
+    refused = invalid.assess(support).results["maximum_bits"]
     assert isinstance(refused, Rejected)
     assert refused.findings[0].code == "dtype-bound-invalid"
     assert SignedInteger(max_bits=8).signed is True
@@ -273,14 +275,14 @@ def test_explicit_dtype_semantics_support_typed_protocol_results_and_detached_va
         physical = View(result)
 
     original = resolve_qonnx_datatype_name("INT8")
-    point = Typed.start({Typed.dtype: original})
+    point = Typed({Typed.dtype: original})
     setattr(original, "_bitwidth", 16)
     assert point.dtype.name == "INT8"
     returned = point.result
     setattr(returned, "_bitwidth", 32)
     assert point.result.name == "INT8"
-    result = point.physical().accepted_answer
-    assert isinstance(result, Decided)
+    result = point.physical().accepted_result
+    assert isinstance(result, Available)
     assert result.value.name == "INT8"
 
 
@@ -316,13 +318,13 @@ def test_builder_extends_kernel_with_typed_optional_views_and_independent_scopes
         activation = builder.place()
         weights = builder.place()
 
-    point = Pair.start(
+    point = Pair(
         {
             Pair.activation.ref(dtype): resolve_qonnx_datatype_name("INT4"),
             Pair.weights.ref(dtype): resolve_qonnx_datatype_name("INT16"),
         }
     )
-    assert point.answer(Pair.activation.accepted(key)) == Decided(Pins((("word", 8),), ()))
-    assert isinstance(point.answer(Pair.weights.accepted(key)), Rejected)
-    assert point.answer(Pair.weights.ref(payload)) == Decided(32)
+    assert point.query(Pair.activation.accepted(key)) == Available(Pins((("word", 8),), ()))
+    assert isinstance(point.query(Pair.weights.accepted(key)), Rejected)
+    assert point.query(Pair.weights.ref(payload)) == Available(32)
     assert [info.key for info in point.capabilities()] == ["activation.ports", "weights.ports"]

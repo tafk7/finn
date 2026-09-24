@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from threading import RLock
 from typing import Generic, TypeVar
 
 from ._linker import link_space, resolve_reference
@@ -37,10 +38,18 @@ class SpaceModel(Generic[S]):
             self.linked.nodes, self.linked.scopes, self.linked.choices, scope, reference
         )
 
-    def start(self, parameters: Mapping[object, object] | None = None) -> S:
-        from .occurrence import start  # noqa: PLC0415 - keep compilation evaluator-independent
+    def bind(
+        self,
+        parameters: Mapping[object, object] | None = None,
+        /,
+        **keyword_parameters: object,
+    ) -> S:
+        from .occurrence import bind  # noqa: PLC0415 - keep compilation evaluator-independent
 
-        return start(self, parameters if parameters is not None else {})
+        return bind(self, parameters if parameters is not None else {}, keyword_parameters)
+
+
+_PREPARATION_LOCK = RLock()
 
 
 def _validated_order(nodes: tuple[Node, ...]) -> tuple[int, ...]:
@@ -104,9 +113,35 @@ def _validated_order(nodes: tuple[Node, ...]) -> tuple[int, ...]:
 
 
 def compile_space(space_type: type[S]) -> SpaceModel[S]:
-    """Validate the family once. No user evaluator runs while linking it."""
+    """Return the canonical prepared model for one root family."""
 
-    return SpaceModel(space_type, link_space(space_type, _validated_order))
+    if not isinstance(space_type, type) or not issubclass(space_type, Space):
+        raise DefinitionError("compile_space requires a Space subclass")
+    with _PREPARATION_LOCK:
+        cached = space_type.__dict__.get("_space_prepared_model")
+        if cached is not None:
+            if not isinstance(cached, SpaceModel) or cached.space_type is not space_type:
+                raise DefinitionError("invalid prepared-model cache on Space family")
+            return cached
+        for base in space_type.__mro__:
+            if base is Space:
+                break
+            if "__init__" in base.__dict__:
+                raise DefinitionError(
+                    f"{base.__qualname__}: custom instance __init__ is unsupported; "
+                    "use declarations and ordinary helper methods"
+                )
+            if "__new__" in base.__dict__:
+                raise DefinitionError(
+                    f"{base.__qualname__}: custom instance __new__ is unsupported"
+                )
+        linked = link_space(space_type, _validated_order)
+        model = SpaceModel(space_type, linked)
+        # Publication happens only after the complete definition linked successfully.
+        for scope in linked.scopes:
+            type.__setattr__(scope.space_type, "_space_definition_finalized", True)
+        type.__setattr__(space_type, "_space_prepared_model", model)
+        return model
 
 
 __all__ = ["SpaceModel", "compile_space"]

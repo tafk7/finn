@@ -28,10 +28,10 @@ from finn.kernels.physical.layout import (
     UnusedBitRange,
 )
 from finn.kernels.space import (
-    Answer,
+    QueryResult,
     Constraint,
     ConstraintGroup,
-    Decided,
+    Available,
     DefinitionError,
     Param,
     Rejected,
@@ -215,9 +215,11 @@ class AxiStreamScope(Space):
         endpoint: Endpoint,
         last: bool,
         error_code: str,
-    ) -> Answer[AxiStream]:
+    ) -> QueryResult[AxiStream]:
         try:
-            return Decided(AxiStream(name, dtype, elements_per_beat, endpoint=endpoint, last=last))
+            return Available(
+                AxiStream(name, dtype, elements_per_beat, endpoint=endpoint, last=last)
+            )
         except ValueError as error:
             return reject(error_code, str(error))
 

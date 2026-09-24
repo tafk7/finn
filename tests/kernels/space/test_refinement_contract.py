@@ -7,10 +7,10 @@ from typing import cast
 
 import pytest
 
-from finn.kernels.space import Decision, Space, ValueSemantics
+from finn.kernels.space import Decision, Space, ValueSemantics, refinement
 from finn.kernels.space.domains import Domain
 from finn.kernels.space.errors import RequestError
-from finn.kernels.space.results import Decided, Unresolved
+from finn.kernels.space.results import Available, Unresolved
 
 
 def test_all_candidate_snapshots_precede_membership_callbacks() -> None:
@@ -32,13 +32,17 @@ def test_all_candidate_snapshots_precede_membership_callbacks() -> None:
         first = Decision(int, domain=Domain((), first_membership))
         second: Decision[list[int]] = Decision(list, domain=Domain((), second_membership))
 
-    base = Trial.start()
-    result = base.refine(base.edit(Trial.first, 1), base.edit(Trial.second, payload))
+    base = Trial()
+    result = refinement.commit(
+        base,
+        refinement.change(base, Trial.first, 1),
+        refinement.change(base, Trial.second, payload),
+    )
     assert result.accepted
     assert seen == [(1,)]
-    assert result.point.second == [1]
+    assert result.instance.second == [1]
     assert payload == [1, 2]
-    assert isinstance(base.answer(Trial.second), Unresolved)
+    assert isinstance(base.query(Trial.second), Unresolved)
 
 
 def test_malformed_last_candidate_prevents_first_membership_callback() -> None:
@@ -52,11 +56,15 @@ def test_malformed_last_candidate_prevents_first_membership_callback() -> None:
         first = Decision(int, domain=Domain((), membership))
         second = Decision(int, values=(1, 2))
 
-    base = Trial.start()
+    base = Trial()
     with pytest.raises(RequestError):
-        base.refine(base.edit(Trial.first, 1), base.edit(Trial.second, cast(int, "bad")))
+        refinement.commit(
+            base,
+            refinement.change(base, Trial.first, 1),
+            refinement.change(base, Trial.second, cast(int, "bad")),
+        )
     assert calls == []
-    assert isinstance(base.answer(Trial.first), Unresolved)
+    assert isinstance(base.query(Trial.first), Unresolved)
 
 
 def test_unhashable_finite_domain_uses_declared_equality_and_detaches_reads() -> None:
@@ -73,15 +81,15 @@ def test_unhashable_finite_domain_uses_declared_equality_and_detaches_reads() ->
         bag = Decision(semantics, values=(allowed,))
 
     allowed.append(3)
-    base = Bags.start()
-    candidates = base.candidates(Bags.bag)
-    assert candidates == Decided(([1, 2],))
-    assert isinstance(candidates, Decided)
+    base = Bags()
+    candidates = base.field(Bags.bag).candidates()
+    assert candidates == Available(([1, 2],))
+    assert isinstance(candidates, Available)
     candidates.value[0].append(4)
-    assert base.candidates(Bags.bag) == Decided(([1, 2],))
-    chosen = base.assign(Bags.bag, [2, 1])
+    assert base.field(Bags.bag).candidates() == Available(([1, 2],))
+    chosen = base.with_choices(bag=[2, 1])
     assert chosen.bag == [2, 1]
-    assert chosen.assign(Bags.bag, [1, 2]) is chosen
-    failed = base.refine(base.edit(Bags.bag, [1, 2, 3]))
+    assert chosen.with_choices(bag=[1, 2]) is chosen
+    failed = refinement.commit(base, refinement.change(base, Bags.bag, [1, 2, 3]))
     assert not failed.accepted
-    assert failed.point is base
+    assert failed.instance is base

@@ -11,7 +11,7 @@ import pytest
 
 from finn.kernels.space import (
     Const,
-    Decided,
+    Available,
     Decision,
     Inapplicable,
     Param,
@@ -29,7 +29,7 @@ from finn.kernels.space import (
     divisors_of,
 )
 from finn.kernels.space.declarations import ScopedValueRef
-from finn.kernels.space.errors import DefinitionError, RefinementError, RequestError
+from finn.kernels.space.errors import ConfigurationError, DefinitionError
 
 PHYSICAL = ViewKey("physical", int)
 WIDTH = ValueKey("width", int)
@@ -77,19 +77,19 @@ def test_composite_keeps_narrow_fields_available_and_reuses_accepted_children() 
 
         physical = View(implementation.accepted(PHYSICAL))
 
-    base = Composite.start()
+    base = Composite()
     assert base.narrow == 12
-    assert isinstance(base.activation.physical().accepted_answer, Unresolved)
-    assert isinstance(base.weights.physical().accepted_answer, Unresolved)
-    assert isinstance(base.optional.answer(Interface.lanes), Inapplicable)
-    assert isinstance(base.optional.decision_state(Interface.lanes), Inapplicable)
+    assert isinstance(base.activation.physical().accepted_result, Unresolved)
+    assert isinstance(base.weights.physical().accepted_result, Unresolved)
+    assert isinstance(base.optional.query(Interface.lanes), Inapplicable)
+    assert isinstance(base.optional.field(Interface.lanes).state, Inapplicable)
     selected = base.implementation.select("refused")
-    successor = cast(Composite, selected.occurrence.root)
-    direct = selected.alternative("refused").assess(Refused.physical).accepted_answer
+    successor = cast(Composite, selected.instance.root)
+    direct = selected.alternative("refused").assess(Refused.physical).accepted_result
     assert isinstance(direct, Rejected)
-    assert successor.physical().accepted_answer == direct
-    assert successor.answer(Composite.implementation.ref(WIDTH)) == Decided(-1)
-    assert isinstance(base.physical().accepted_answer, Unresolved)
+    assert successor.physical().accepted_result == direct
+    assert successor.query(Composite.implementation.ref(WIDTH)) == Available(-1)
+    assert isinstance(base.physical().accepted_result, Unresolved)
 
 
 def test_local_decision_domain_uses_parent_suppliers_and_exposure_is_explicit() -> None:
@@ -103,14 +103,16 @@ def test_local_decision_domain_uses_parent_suppliers_and_exposure_is_explicit() 
         exposed = Subspace(Child, value=Param(int, required=False))
 
     model = compile_space(Root)
-    base = model.start({Root.extent: 12})
-    assert base.candidates(Root.owned.decision_ref(Child.value)) == Decided((1, 2, 3, 4, 6, 12))
-    chosen = base.assign(Root.owned.decision_ref(Child.value), 3)
-    assert chosen.owned.physical().accepted_answer == Decided(3)
-    assert isinstance(chosen.exposed.answer(Child.value), Unresolved)
-    with pytest.raises(RefinementError):
-        base.assign(Root.owned.decision_ref(Child.value), 5)
-    supplied = model.start({Root.extent: 12, Root.exposed.ref(Child.value): 7})
+    base = model.bind({Root.extent: 12})
+    assert base.field(Root.owned.decision_ref(Child.value)).candidates() == Available(
+        (1, 2, 3, 4, 6, 12)
+    )
+    chosen = base.with_choices(base.field(Root.owned.decision_ref(Child.value)).change(3))
+    assert chosen.owned.physical().accepted_result == Available(3)
+    assert isinstance(chosen.exposed.query(Child.value), Unresolved)
+    with pytest.raises(ConfigurationError):
+        base.with_choices(base.field(Root.owned.decision_ref(Child.value)).change(5))
+    supplied = model.bind({Root.extent: 12, Root.exposed.ref(Child.value): 7})
     assert supplied.exposed.value == 7
 
     with pytest.raises(DefinitionError, match="missing child parameter"):
@@ -132,22 +134,22 @@ def test_nested_handles_and_named_aliases_keep_frozen_interpretations() -> None:
     original_placement = Middle.inner
     original_accepted = Root.accepted
     model = compile_space(Root)
-    base = model.start()
-    assert base.answer(Root.outer.ref(Middle.inner.ref(Leaf.value))) == Decided(5)
-    assert base.answer(original_accepted) == Decided(5)
+    base = model.bind()
+    assert base.query(Root.outer.ref(Middle.inner.ref(Leaf.value))) == Available(5)
+    assert base.query(original_accepted) == Available(5)
 
     replacement = Subspace(Leaf)
     replacement.__set_name__(Middle, "inner")
-    Middle.inner = replacement
-    assert base.answer(Root.outer.ref(original_placement.ref(Leaf.value))) == Decided(5)
-    with pytest.raises(RequestError, match="placement"):
-        base.answer(Root.outer.ref(Middle.inner.ref(Leaf.value)))
+    with pytest.raises(DefinitionError, match="finalized"):
+        Middle.inner = replacement
+    assert base.query(Root.outer.ref(original_placement.ref(Leaf.value))) == Available(5)
+    assert base.query(Root.outer.ref(Middle.inner.ref(Leaf.value))) == Available(5)
 
     # A declared alias is interpreted by its frozen compiled entry. Mutating
     # the source wrapper later cannot retarget that old compiled reference.
     handle = cast(ScopedValueRef[int], original_accepted)
     handle.member = replacement.accepted(Leaf.physical)
-    assert base.answer(original_accepted) == Decided(5)
+    assert base.query(original_accepted) == Available(5)
 
 
 def test_two_thousand_guarded_scopes_compile_and_query_iteratively() -> None:
@@ -167,10 +169,10 @@ def test_two_thousand_guarded_scopes_compile_and_query_iteratively() -> None:
         )
     model = compile_space(family)
     assert len(model.linked.scopes) == 2_001
-    leaf = model.start()
+    leaf = model.bind()
     for _ in range(2_000):
         leaf = cast(Space, getattr(leaf, "inner"))
-    assert leaf.answer(Leaf.value) == Decided(9)
+    assert leaf.query(Leaf.value) == Available(9)
 
 
 def test_recursive_structure_is_rejected_before_occurrence_allocation() -> None:
@@ -237,6 +239,6 @@ def test_false_choice_guard_does_not_demand_selector_or_case_condition() -> None
             when=disabled,
         )
 
-    point = Root.start()
-    assert isinstance(point.choice.alternative("a").answer(Leaf.value), Inapplicable)
-    assert isinstance(point.choice.alternative("b").answer(Leaf.value), Inapplicable)
+    point = Root()
+    assert isinstance(point.choice.alternative("a").query(Leaf.value), Inapplicable)
+    assert isinstance(point.choice.alternative("b").query(Leaf.value), Inapplicable)

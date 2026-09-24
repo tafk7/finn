@@ -4,7 +4,10 @@
 
 from .declarations import (
     AcceptedViewRef,
+    BoundDecision,
+    BoundValue,
     BoundView,
+    BoundViewField,
     ChoiceView,
     Const,
     Constraint,
@@ -24,18 +27,25 @@ from .declarations import (
     ViewKey,
     constraint,
     derived,
-    full_answer,
+    full_result,
     optional,
     view,
 )
 from .compiler import SpaceModel, compile_space
 from .domains import Domain, divisors_of, domain, finite
-from .edits import Edit, EditOutcome, EditRequest, RefinementReport
-from .errors import DefinitionError, EvaluationError
+from .edits import Change, ChangeOutcome, ChangeRequest, CommitmentReport, ConfigurationResult
+from .errors import (
+    CommitmentError,
+    ConfigurationError,
+    DefinitionError,
+    EvaluationError,
+    RequestError,
+    ValueUnavailableError,
+)
 from .results import (
-    Answer,
+    QueryResult,
     ConstraintAssessment,
-    Decided,
+    Available,
     DecisionState,
     Finding,
     FindingKind,
@@ -47,9 +57,10 @@ from .results import (
     Unresolved,
     ViewAssessment,
     reject,
+    require_value,
 )
 from .semantics import ValueSemantics, default_semantics
-from . import codecs, conformance, extensions, inspection, selections
+from . import codecs, conformance, extensions, inspection, refinement, selections
 from .codecs import CodecBinding, JSONValue, SelectionSchema, ValueCodec, codec_for
 from .references import DecisionHandle, ValueHandle
 from .selections import Selection, SelectionChange, SelectionEntry
@@ -59,15 +70,18 @@ from .expressions import Expr
 __all__ = [
     "conformance",
     "AcceptedViewRef",
-    "Answer",
+    "QueryResult",
+    "BoundDecision",
+    "BoundValue",
     "BoundView",
+    "BoundViewField",
     "ChoiceView",
     "CodecBinding",
     "Const",
     "Constraint",
     "ConstraintAssessment",
     "ConstraintGroup",
-    "Decided",
+    "Available",
     "Decision",
     "DecisionRef",
     "DecisionHandle",
@@ -76,9 +90,13 @@ __all__ = [
     "Dependency",
     "Derived",
     "Domain",
-    "Edit",
-    "EditOutcome",
-    "EditRequest",
+    "Change",
+    "ChangeOutcome",
+    "ChangeRequest",
+    "CommitmentError",
+    "CommitmentReport",
+    "ConfigurationError",
+    "ConfigurationResult",
     "EvaluationError",
     "Expr",
     "Finding",
@@ -90,7 +108,7 @@ __all__ = [
     "Param",
     "Readiness",
     "ReadinessAssessment",
-    "RefinementReport",
+    "RequestError",
     "Rejected",
     "ScopeBuilder",
     "Selection",
@@ -110,6 +128,7 @@ __all__ = [
     "View",
     "ViewAssessment",
     "ViewKey",
+    "ValueUnavailableError",
     "compile_space",
     "codec_for",
     "codecs",
@@ -120,10 +139,12 @@ __all__ = [
     "domain",
     "finite",
     "extensions",
-    "full_answer",
+    "full_result",
     "inspection",
     "optional",
     "reject",
+    "refinement",
+    "require_value",
     "selections",
     "view",
 ]

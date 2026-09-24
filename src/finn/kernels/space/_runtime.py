@@ -14,9 +14,9 @@ from typing import TypeAlias, cast
 from .errors import EvaluationError
 from .ir import Argument, LinkedModel, Node
 from .results import (
-    Answer,
+    QueryResult,
     ConstraintAssessment,
-    Decided,
+    Available,
     DecisionState,
     Finding,
     FindingKind,
@@ -31,8 +31,8 @@ from .results import (
     assess_constraints,
     assess_readiness,
     assess_view,
-    constraint_answer,
-    owned_answer,
+    constraint_result,
+    owned_result,
 )
 
 Assessment: TypeAlias = ViewAssessment[object] | ConstraintAssessment | ReadinessAssessment
@@ -40,7 +40,7 @@ Assessment: TypeAlias = ViewAssessment[object] | ConstraintAssessment | Readines
 
 @dataclass(frozen=True, slots=True)
 class Evaluation:
-    answer: Answer[object]
+    result: QueryResult[object]
     dependencies: tuple[int, ...] = ()
     assessment: Assessment | None = None
 
@@ -104,7 +104,7 @@ class _TrialSnapshot(Snapshot):
         return Snapshot(self.linked, self.parameters, self._pending, self.lock)
 
 
-def _blocked(answers: list[Answer[object]]) -> NonValue | None:
+def _blocked(answers: list[QueryResult[object]]) -> NonValue | None:
     """Required inputs retain all findings of the highest-precedence nonvalue."""
 
     for variant in (Unresolved, Rejected, Inapplicable):
@@ -124,16 +124,16 @@ def _clone(node: Node, value: object, *, owner: str, role: str) -> object:
 
 
 def _argument_value(
-    linked: LinkedModel, argument: Argument, answer: Answer[object], owner: str
+    linked: LinkedModel, argument: Argument, answer: QueryResult[object], owner: str
 ) -> tuple[bool, object]:
     source = linked.nodes[argument.node]
-    if argument.mode == "answer":
-        if isinstance(answer, Decided):
-            return True, Decided(
+    if argument.mode == "result":
+        if isinstance(answer, Available):
+            return True, Available(
                 _clone(source, answer.value, owner=owner, role="dependency snapshot")
             )
         return True, answer
-    if isinstance(answer, Decided):
+    if isinstance(answer, Available):
         return True, _clone(source, answer.value, owner=owner, role="dependency snapshot")
     if argument.mode == "optional":
         if isinstance(answer, Inapplicable):
@@ -156,21 +156,21 @@ def _argument_value(
 
 def _arguments(
     linked: LinkedModel, arguments: tuple[Argument, ...], owner: str
-) -> Generator[int, Answer[object], tuple[dict[str, object], NonValue | None]]:
+) -> Generator[int, QueryResult[object], tuple[dict[str, object], NonValue | None]]:
     values: dict[str, object] = {}
-    failures: list[Answer[object]] = []
+    failures: list[QueryResult[object]] = []
     for argument in arguments:
         answer = yield argument.node
         available, value = _argument_value(linked, argument, answer, owner)
         if available:
             values[argument.name] = value
         else:
-            failures.append(cast(Answer[object], value))
+            failures.append(cast(QueryResult[object], value))
     return values, _blocked(failures)
 
 
-def _guard_result(node: Node, answer: Answer[object]) -> NonValue | None:
-    if not isinstance(answer, Decided):
+def _guard_result(node: Node, answer: QueryResult[object]) -> NonValue | None:
+    if not isinstance(answer, Available):
         return answer
     if type(answer.value) is not bool:
         raise EvaluationError(node.owner, "applicability", "guard must return bool")
@@ -188,24 +188,24 @@ def _guard_assessment(node: Node, answer: NonValue) -> Assessment | None:
 
 
 def _constraint_members(
-    snapshot: Snapshot, reference: int, answer: Answer[object]
-) -> Mapping[str, Answer[bool]]:
+    snapshot: Snapshot, reference: int, answer: QueryResult[object]
+) -> Mapping[str, QueryResult[bool]]:
     assessment = snapshot.cache[reference].assessment
-    if isinstance(assessment, ConstraintAssessment) and assessment.answers:
-        return assessment.answers
-    return {snapshot.linked.nodes[reference].key: cast(Answer[bool], answer)}
+    if isinstance(assessment, ConstraintAssessment) and assessment.results:
+        return assessment.results
+    return {snapshot.linked.nodes[reference].key: cast(QueryResult[bool], answer)}
 
 
 def _readiness_members(
-    snapshot: Snapshot, reference: int, answer: Answer[object]
-) -> Mapping[str, Answer[object]]:
+    snapshot: Snapshot, reference: int, answer: QueryResult[object]
+) -> Mapping[str, QueryResult[object]]:
     assessment = snapshot.cache[reference].assessment
-    if isinstance(assessment, (ConstraintAssessment, ReadinessAssessment)) and assessment.answers:
-        return {key: cast(Answer[object], value) for key, value in assessment.answers.items()}
+    if isinstance(assessment, (ConstraintAssessment, ReadinessAssessment)) and assessment.results:
+        return {key: cast(QueryResult[object], value) for key, value in assessment.results.items()}
     return {snapshot.linked.nodes[reference].key: answer}
 
 
-def _frame(snapshot: Snapshot, node: Node) -> Generator[int, Answer[object], Evaluation]:
+def _frame(snapshot: Snapshot, node: Node) -> Generator[int, QueryResult[object], Evaluation]:
     if node.guard is not None:
         guard = yield node.guard
         inactive = _guard_result(node, guard)
@@ -214,7 +214,7 @@ def _frame(snapshot: Snapshot, node: Node) -> Generator[int, Answer[object], Eva
 
     if node.kind == "param":
         if node.index in snapshot.parameters:
-            return Evaluation(Decided(snapshot.parameters[node.index]))
+            return Evaluation(Available(snapshot.parameters[node.index]))
         return Evaluation(
             Unresolved(
                 (
@@ -228,10 +228,10 @@ def _frame(snapshot: Snapshot, node: Node) -> Generator[int, Answer[object], Eva
             )
         )
     if node.kind == "const":
-        return Evaluation(Decided(node.value))
+        return Evaluation(Available(node.value))
     if node.kind == "decision":
         if node.index in snapshot.assignments:
-            return Evaluation(Decided(snapshot.assignments[node.index]))
+            return Evaluation(Available(snapshot.assignments[node.index]))
         return Evaluation(
             Unresolved(
                 (
@@ -255,7 +255,7 @@ def _frame(snapshot: Snapshot, node: Node) -> Generator[int, Answer[object], Eva
             selected = node.alternatives[0][1]
         else:
             selector = yield node.selector
-            if not isinstance(selector, Decided):
+            if not isinstance(selector, Available):
                 return Evaluation(selector)
             case = selector.value
             if type(case) is not str:
@@ -274,30 +274,30 @@ def _frame(snapshot: Snapshot, node: Node) -> Generator[int, Answer[object], Eva
         if node.output is None:
             raise EvaluationError(node.owner, "view", "missing output reference")
         output = yield node.output
-        constraints: dict[str, Answer[bool]] = {}
+        constraints: dict[str, QueryResult[bool]] = {}
         for reference in node.constraints:
             answer = yield reference
             constraints.update(_constraint_members(snapshot, reference, answer))
-        requires: dict[str, Answer[object]] = {}
+        requires: dict[str, QueryResult[object]] = {}
         for reference in node.requires:
             answer = yield reference
             requires.update(_readiness_members(snapshot, reference, answer))
         view = assess_view(output, owner=node.key, requires=requires, constraints=constraints)
-        return Evaluation(view.accepted_answer, assessment=view)
+        return Evaluation(view.accepted_result, assessment=view)
     if node.kind == "group":
-        answers: dict[str, Answer[bool]] = {}
+        answers: dict[str, QueryResult[bool]] = {}
         for reference in node.constraints:
             answer = yield reference
             answers.update(_constraint_members(snapshot, reference, answer))
         group = assess_constraints(answers)
-        return Evaluation(cast(Answer[object], group.answer), assessment=group)
+        return Evaluation(cast(QueryResult[object], group.result), assessment=group)
     if node.kind == "readiness":
-        obligations: dict[str, Answer[object]] = {}
+        obligations: dict[str, QueryResult[object]] = {}
         for reference in node.requires:
             answer = yield reference
             obligations.update(_readiness_members(snapshot, reference, answer))
         readiness = assess_readiness(obligations)
-        return Evaluation(cast(Answer[object], readiness.answer), assessment=readiness)
+        return Evaluation(cast(QueryResult[object], readiness.result), assessment=readiness)
 
     arguments, failure = yield from _arguments(snapshot.linked, node.arguments, node.owner)
     if failure is not None:
@@ -307,15 +307,15 @@ def _frame(snapshot: Snapshot, node: Node) -> Generator[int, Answer[object], Eva
     try:
         result = node.function(**arguments)
         if node.kind == "constraint":
-            normalized = constraint_answer(cast(bool | Answer[bool], result), node.owner)
+            normalized = constraint_result(cast(bool | QueryResult[bool], result), node.owner)
             assessment = ConstraintAssessment({node.key: normalized}, normalized)
-            return Evaluation(cast(Answer[object], normalized), assessment=assessment)
+            return Evaluation(cast(QueryResult[object], normalized), assessment=assessment)
         if isinstance(result, (Inapplicable, Rejected, Unresolved)):
-            return Evaluation(owned_answer(result, node.owner))
-        value = result.value if isinstance(result, Decided) else result
+            return Evaluation(owned_result(result, node.owner))
+        value = result.value if isinstance(result, Available) else result
         if node.semantics is None:
             raise TypeError("derived output has no value semantics")
-        return Evaluation(Decided(node.semantics.freeze(value)))
+        return Evaluation(Available(node.semantics.freeze(value)))
     except Exception as cause:
         raise EvaluationError(node.owner, node.kind, str(cause)) from cause
 
@@ -323,9 +323,9 @@ def _frame(snapshot: Snapshot, node: Node) -> Generator[int, Answer[object], Eva
 @dataclass(slots=True)
 class _Task:
     index: int
-    frame: Generator[int, Answer[object], Evaluation]
+    frame: Generator[int, QueryResult[object], Evaluation]
     dependencies: list[int] = field(default_factory=list)
-    incoming: Answer[object] | None = None
+    incoming: QueryResult[object] | None = None
 
 
 def evaluate(snapshot: Snapshot, node_index: int) -> Evaluation:
@@ -352,12 +352,12 @@ def evaluate(snapshot: Snapshot, node_index: int) -> Evaluation:
                 tasks.pop()
                 active.remove(task.index)
                 if tasks:
-                    tasks[-1].incoming = result.answer
+                    tasks[-1].incoming = result.result
                 continue
             task.dependencies.append(demanded)
             found = snapshot.cache.get(demanded)
             if found is not None:
-                task.incoming = found.answer
+                task.incoming = found.result
             else:
                 if demanded in active:
                     raise EvaluationError(
@@ -371,10 +371,10 @@ def evaluate(snapshot: Snapshot, node_index: int) -> Evaluation:
 def _applicability(snapshot: Snapshot, node: Node) -> NonValue | None:
     if node.guard is None:
         return None
-    return _guard_result(node, evaluate(snapshot, node.guard).answer)
+    return _guard_result(node, evaluate(snapshot, node.guard).result)
 
 
-def decision_state(snapshot: Snapshot, node_index: int) -> Answer[DecisionState[object]]:
+def decision_state(snapshot: Snapshot, node_index: int) -> QueryResult[DecisionState[object]]:
     with snapshot.lock:
         node = snapshot.linked.nodes[node_index]
         if node.kind != "decision":
@@ -385,11 +385,11 @@ def decision_state(snapshot: Snapshot, node_index: int) -> Answer[DecisionState[
         if inactive is not None:
             return inactive
         if node_index not in snapshot.assignments:
-            return Decided(DecisionState(node.owner))
+            return Available(DecisionState(node.owner))
         value = _clone(
             node, snapshot.assignments[node_index], owner=node.owner, role="decision state"
         )
-        return Decided(DecisionState(node.owner, "committed", value, "explicit"))
+        return Available(DecisionState(node.owner, "committed", value, "explicit"))
 
 
 def _domain_inputs(snapshot: Snapshot, node: Node) -> tuple[dict[str, object], NonValue | None]:
@@ -397,18 +397,18 @@ def _domain_inputs(snapshot: Snapshot, node: Node) -> tuple[dict[str, object], N
     if inactive is not None:
         return {}, inactive
     values: dict[str, object] = {}
-    failures: list[Answer[object]] = []
+    failures: list[QueryResult[object]] = []
     for argument in node.domain_arguments:
-        answer = evaluate(snapshot, argument.node).answer
+        answer = evaluate(snapshot, argument.node).result
         available, value = _argument_value(snapshot.linked, argument, answer, node.owner)
         if available:
             values[argument.name] = value
         else:
-            failures.append(cast(Answer[object], value))
+            failures.append(cast(QueryResult[object], value))
     return values, _blocked(failures)
 
 
-def candidate_values(snapshot: Snapshot, node_index: int) -> Answer[tuple[object, ...]] | None:
+def candidate_values(snapshot: Snapshot, node_index: int) -> QueryResult[tuple[object, ...]] | None:
     with snapshot.lock:
         node = snapshot.linked.nodes[node_index]
         if node.domain is None or node.semantics is None:
@@ -423,7 +423,7 @@ def candidate_values(snapshot: Snapshot, node_index: int) -> Answer[tuple[object
         return node.domain.enumerate(arguments, semantics=node.semantics, owner=node.owner)
 
 
-def membership(snapshot: Snapshot, node_index: int, value: object) -> Answer[bool]:
+def membership(snapshot: Snapshot, node_index: int, value: object) -> QueryResult[bool]:
     with snapshot.lock:
         node = snapshot.linked.nodes[node_index]
         if node.domain is None or node.semantics is None:
@@ -439,10 +439,12 @@ def membership(snapshot: Snapshot, node_index: int, value: object) -> Answer[boo
         )
 
 
-def copy_answer(snapshot: Snapshot, node_index: int, answer: Answer[object]) -> Answer[object]:
+def copy_result(
+    snapshot: Snapshot, node_index: int, answer: QueryResult[object]
+) -> QueryResult[object]:
     """Detach a public answer from cached values using its declared semantics."""
 
-    if not isinstance(answer, Decided):
+    if not isinstance(answer, Available):
         return answer
     with snapshot.lock:
         node = snapshot.linked.nodes[node_index]
@@ -450,23 +452,23 @@ def copy_answer(snapshot: Snapshot, node_index: int, answer: Answer[object]) -> 
             # Aggregate verdicts are intrinsic immutable booleans; these
             # declarations need no separate user-owned value semantics.
             return answer
-        return Decided(_clone(node, answer.value, owner=node.owner, role="public value snapshot"))
+        return Available(_clone(node, answer.value, owner=node.owner, role="public value snapshot"))
 
 
 def _copy_readiness(snapshot: Snapshot, assessment: ReadinessAssessment) -> ReadinessAssessment:
-    answers: dict[str, Answer[object]] = {}
-    for key, answer in assessment.answers.items():
+    answers: dict[str, QueryResult[object]] = {}
+    for key, answer in assessment.results.items():
         index = snapshot.linked.keys[key]
-        if isinstance(answer, Decided) and isinstance(answer.value, DecisionState):
+        if isinstance(answer, Available) and isinstance(answer.value, DecisionState):
             state = answer.value
             node = snapshot.linked.nodes[index]
             if state.status == "committed":
                 value = _clone(node, state.value, owner=node.owner, role="public state snapshot")
                 state = replace(state, value=value)
-            answers[key] = Decided(state)
+            answers[key] = Available(state)
         else:
-            answers[key] = copy_answer(snapshot, index, answer)
-    return ReadinessAssessment(answers, assessment.answer)
+            answers[key] = copy_result(snapshot, index, answer)
+    return ReadinessAssessment(answers, assessment.result)
 
 
 def copy_assessment(snapshot: Snapshot, node_index: int, assessment: Assessment) -> Assessment:
@@ -481,11 +483,11 @@ def copy_assessment(snapshot: Snapshot, node_index: int, assessment: Assessment)
             return _copy_readiness(snapshot, assessment)
         node = snapshot.linked.nodes[node_index]
         output_index = node.output if node.output is not None else node_index
-        output = copy_answer(snapshot, output_index, assessment.output_answer)
+        output = copy_result(snapshot, output_index, assessment.output_result)
         accepted = (
             output
-            if assessment.accepted_answer is assessment.output_answer
-            else copy_answer(snapshot, node_index, assessment.accepted_answer)
+            if assessment.accepted_result is assessment.output_result
+            else copy_result(snapshot, node_index, assessment.accepted_result)
         )
         return ViewAssessment(
             output,
@@ -499,7 +501,7 @@ __all__ = [
     "Evaluation",
     "Snapshot",
     "candidate_values",
-    "copy_answer",
+    "copy_result",
     "copy_assessment",
     "decision_state",
     "evaluate",

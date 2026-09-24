@@ -48,7 +48,7 @@ class RejectGraphDependencies(importlib.abc.MetaPathFinder):
 sys.meta_path.insert(0, RejectGraphDependencies())
 
 from finn.kernels import DotpAxiKernel, DspBlock, WeightDelivery, mvau_assembly
-from finn.kernels.space import Decided
+from finn.kernels.space import Available
 from finn.kernels.artifacts import build, contributions, contribution_types, requirements
 from finn.kernels.artifacts.manifest import decode
 from finn.kernels.artifacts.store import ArtifactStore
@@ -67,16 +67,15 @@ assert contributions.CopiedSource is contribution_types.CopiedSource
 assert requirements.ModuleBuildRequirements.__module__ == "finn.kernels.artifacts.build"
 assert contribution_types.CopiedSource.__module__ == "finn.kernels.artifacts.contributions"
 
-dotp = DotpAxiKernel.start({
-    DotpAxiKernel.pe: 2, DotpAxiKernel.simd: 2,
+dotp = DotpAxiKernel({
     DotpAxiKernel.activation.dtype: DataType["INT3"],
     DotpAxiKernel.weights.dtype: DataType["INT3"],
     DotpAxiKernel.result.dtype: DataType["INT8"],
-    DotpAxiKernel.target_dsp: DspBlock.DSP48E2,
-    DotpAxiKernel.segment_length: 0,
-}).assign(DotpAxiKernel.compute_pumping, False)
-answer = dotp.physical().accepted_answer
-assert isinstance(answer, Decided), answer
+}, pe=2, simd=2, target_dsp=DspBlock.DSP48E2, segment_length=0).with_choices(
+    compute_pumping=False
+)
+answer = dotp.build_requirements().accepted_result
+assert isinstance(answer, Available), answer
 assert dict(answer.value.parameters)["ACCU_WIDTH"] == 8
 assert dotp.activation.dtype.name == "INT3"
 assert dotp.activation.payload_bits == 6

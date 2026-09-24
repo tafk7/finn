@@ -4,7 +4,7 @@
 """Immutable typed references to nodes of one compiled Space family.
 
 Use the factories in :mod:`inspection` to bind authored references or discover
-handles. Handles retain compilation, never a point, assignments or caches.
+handles. Handles retain compilation, never a configuration, assignments or caches.
 """
 
 from __future__ import annotations

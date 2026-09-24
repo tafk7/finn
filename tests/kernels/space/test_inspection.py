@@ -13,7 +13,7 @@ from typing_extensions import assert_type
 
 from finn.kernels.space import (
     Const,
-    Decided,
+    Available,
     Decision,
     DecisionRef,
     Param,
@@ -57,7 +57,7 @@ def test_inspection_does_not_run_domains_or_evaluators() -> None:
         physical = View(cost)
 
     model = compile_space(Family)
-    point = model.start()
+    point = model.bind()
     decisions = inspection.decisions(point)
     assert [item.key for item in decisions] == ["lanes"]
     assert {item.key for item in inspection.members(model)} == {"lanes", "cost", "physical"}
@@ -68,18 +68,18 @@ def test_inspection_does_not_run_domains_or_evaluators() -> None:
     # The policy is ordinary external code. Discovery and queries never adopt
     # a candidate on its behalf, and every trial uses validated assignment.
     handle = decisions[0].reference
-    options = point.candidates(handle)
-    assert isinstance(options, Decided)
+    options = point.field(handle).candidates()
+    assert isinstance(options, Available)
     scores: list[tuple[int, object]] = []
     for value in options.value:
-        trial = point.assign(handle, value)
-        result = trial.physical().accepted_answer
-        assert isinstance(result, Decided)
+        trial = point.with_choices(point.field(handle).change(value))
+        result = trial.physical().accepted_result
+        assert isinstance(result, Available)
         scores.append((result.value, value))
     assert min(scores, key=lambda item: item[0]) == (3, 4)
     assert calls.count("membership") == 3
     assert calls.count("candidates") == 1
-    assert isinstance(point.answer(Family.lanes), Unresolved)
+    assert isinstance(point.query(Family.lanes), Unresolved)
 
 
 def test_discovery_reports_owning_decisions_and_author_names_for_selectors() -> None:
@@ -94,7 +94,7 @@ def test_discovery_reports_owning_decisions_and_author_names_for_selectors() -> 
             {"a": Subspace(Child, supplied=1), "b": Subspace(Child, supplied=2)}
         )
 
-    point = Root.start()
+    point = Root()
     decisions = inspection.decisions(point)
     assert {item.key for item in decisions} == {
         "source",
@@ -111,8 +111,8 @@ def test_discovery_reports_owning_decisions_and_author_names_for_selectors() -> 
     choice = inspection.choices(point)[0]
     assert choice.selector is not None
     assert_type(choice.selector, DecisionHandle[str])
-    chosen = point.assign(choice.selector, "b")
-    assert chosen.implementation.alternative("b").answer(Child.supplied) == Decided(2)
+    chosen = point.with_choices(point.field(choice.selector).change("b"))
+    assert chosen.implementation.alternative("b").query(Child.supplied) == Available(2)
     assert [(case.name, case.scope) for case in choice.cases] == [
         ("a", "implementation.a"),
         ("b", "implementation.b"),
@@ -128,14 +128,14 @@ def test_typed_handles_preserve_types_and_match_repeated_discovery() -> None:
             return lanes
 
     model = compile_space(Family)
-    point = model.start()
+    point = model.bind()
     decision = inspection.decision_handle(model, Family.lanes)
     value = inspection.value_handle(model, Family.physical)
     assert_type(decision, DecisionHandle[int])
     assert_type(value, ValueHandle[int])
     as_decision: DecisionRef[int] = decision
-    trial = point.assign(as_decision, 2)
-    assert trial.answer(value) == Decided(2)
+    trial = point.with_choices(point.field(as_decision).change(2))
+    assert trial.query(value) == Available(2)
     assert decision == inspection.decision_info(point, Family.lanes).reference
     assert hash(decision) == hash(inspection.decisions(point)[0].reference)
     with pytest.raises(FrozenInstanceError):
@@ -156,16 +156,19 @@ def test_foreign_handles_fail_before_callbacks_and_aliases_cannot_be_upgraded() 
         choice = Decision(int, domain=domain(accepts=membership))
         child = Subspace(Child, supplied=choice)
 
+    class OtherFamily(Family):
+        pass
+
     first_model = compile_space(Family)
-    second_model = compile_space(Family)
-    first = first_model.start()
+    second_model = compile_space(OtherFamily)
+    first = first_model.bind()
     foreign = inspection.decision_handle(second_model, Family.choice)
     with pytest.raises(RequestError, match="different compiled model"):
-        first.assign(foreign, 1)
+        first.with_choices(first.field(foreign).change(1))
     with pytest.raises(RequestError, match="different compiled model"):
-        first.edit(foreign, 1)
+        first.field(foreign).change(1)
     with pytest.raises(RequestError, match="different compiled model"):
-        first.answer(foreign)
+        first.query(foreign)
     assert calls == []
     with pytest.raises(RequestError, match="parameter alias"):
         inspection.decision_handle(first.child, cast(Decision[int], Child.supplied))
@@ -179,13 +182,13 @@ def test_handles_follow_model_identity_across_starts_without_retaining_point_sta
         lanes = Decision(int, values=(1, 2))
 
     model = compile_space(Family)
-    first, second = model.start({Family.source: 4}), model.start({Family.source: 8})
+    first, second = model.bind({Family.source: 4}), model.bind({Family.source: 8})
     source = inspection.value_handle(model, Family.source)
     decision = inspection.decision_handle(first, Family.lanes)
-    assert first.answer(source) == Decided(4)
-    assert second.answer(source) == Decided(8)
-    assert second.assign(decision, 2).answer(decision) == Decided(2)
-    assert isinstance(first.answer(decision), Unresolved)
+    assert first.query(source) == Available(4)
+    assert second.query(source) == Available(8)
+    assert second.with_choices(second.field(decision).change(2)).query(decision) == Available(2)
+    assert isinstance(first.query(decision), Unresolved)
 
 
 def test_singleton_choice_metadata_exposes_no_editable_selector() -> None:

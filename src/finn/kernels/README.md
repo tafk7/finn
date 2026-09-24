@@ -6,18 +6,18 @@ answer. Bind Params directly, commit choices, and call the view:
 
 ```python
 from finn.kernels import FifoKernel
-from finn.kernels.space import Decided, compile_space
+from finn.kernels.space import Available, compile_space
 
 fifo_model = compile_space(FifoKernel)
-fifo_base = fifo_model.start({FifoKernel.word_bits: 16, FifoKernel.depth: 32})
-fifo_point = fifo_base.assign(FifoKernel.ram_style, "block")
-assessment = fifo_point.physical()
-assert isinstance(assessment.accepted_answer, Decided)
-requirements = assessment.accepted_answer.value
+fifo_base = fifo_model.bind(word_bits=16, depth=32)
+fifo_configuration = fifo_base.with_choices(ram_style="block")
+assessment = fifo_configuration.build_requirements()
+assert isinstance(assessment.accepted_result, Available)
+requirements = assessment.accepted_result.value
 ```
 
-The model can start many independent roots; each start freezes its own inputs.
-Assignments return immutable successors. The raw output in an assessment does
+The model can bind many independent configurations; each one freezes its own inputs.
+Choice replacement returns immutable successors. The raw output in an assessment does
 not establish that its constraints and readiness obligations are accepted.
 See the [Space API guide](../../../docs/design-space.md) for signature binding,
 scopes, guarded choices, atomic refinement, inspection, and sparse selections.
@@ -25,7 +25,7 @@ scopes, guarded choices, atomic refinement, inspection, and sparse selections.
 ```text
 base.py                  neutral Kernel identity and capability metadata
 space/                   one language, compiler, runtime and public services
-dotp.py                  activation/weights/result scopes and physical view
+dotp.py                  activation/weights/result scopes and build requirements
 mvau.py                  parent-owned folding/delivery and accepted dotp child
 streaming.py             replay and initialized cyclic word delivery
 target.py                DSP targets and port capacities
@@ -34,7 +34,7 @@ datatypes/               QONNX scalar semantics, admission constraints and codec
 artifacts/               requirements, source resolution, rendering and builds
 resources/               corrected dotp RTL, cyclic RTL, assembly template
 
-Space -> accepted physical view -> ModuleBuildRequirements
+Space -> accepted build_requirements view -> ModuleBuildRequirements
                                          |
                                          v
                          explicit roots + artifact store -> RTL sources
@@ -62,7 +62,7 @@ binding syntax and validation counts are historical evidence, not current API
 instructions or a new dataflow compatibility claim.
 
 The six RTL examples return `ModuleBuildRequirements` from their accepted
-physical View. MemStreamHLS returns `HlsSourceRequirements`: C++ interfaces and
+`build_requirements` View. MemStreamHLS returns `HlsSourceRequirements`: C++ interfaces and
 source generation are known, while RTL pins are established by synthesis.
 Render its source bundle with `finn.kernels.artifacts.hls.render_hls_sources`,
 supplying the same explicit FinnLib and template roots. The returned paths are
@@ -72,7 +72,7 @@ relative to a staging directory; retain that layout and use the declared
 
 `MVAU` owns matrix geometry, PE/SIMD folding, result precision and weight
 delivery. Its `compute` child is a bound `DotpAxiKernel`; assembly requires that
-child's accepted physical View. `mvau_assembly` binds this same Space for callers
+child's accepted `build_requirements` View. `mvau_assembly` binds this same Space for callers
 with a complete configuration:
 
 ```python

@@ -9,7 +9,7 @@ import pytest
 from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 
 from kernels.helpers import assess, point_for, value
-from finn.kernels.space import Decided, Rejected, Unresolved
+from finn.kernels.space import Available, Rejected, Unresolved
 from finn.kernels.artifacts.abi import Bus
 from finn.kernels.artifacts.build import prepare_module_build, render_module_sources
 from finn.kernels.artifacts.store import ArtifactStore
@@ -149,18 +149,18 @@ def test_space_selects_folding_and_constructs_without_a_logical_contract():
         pe=2,
         weight_delivery=WeightDelivery.EXTERNAL,
     )
-    point = base.assign(MVAU.simd, 2)
-    assert isinstance(point.compute.physical().accepted_answer, Unresolved)
-    point = point.compute.assign(DotpAxiKernel.compute_pumping, False).root
+    point = base.with_choices(simd=2)
+    assert isinstance(point.compute.build_requirements().accepted_result, Unresolved)
+    point = point.compute.with_choices(compute_pumping=False).root
     assert point.result_type == DataType["INT8"]
     assert value(assess(point, MVAU.dimensions_supported)) is True
     assert point.compute.pe == point.pe
     assert point.compute.result.dtype == point.result_type
-    value(point.compute.physical().accepted_answer)
+    value(point.compute.build_requirements().accepted_result)
     assert point.assemble().result_beats == 4
     assert not hasattr(MVAU, "contract")
-    refused = base.assign(MVAU.simd, 1).compute.assign(DotpAxiKernel.compute_pumping, True).root
-    assert isinstance(refused.compute.physical().accepted_answer, Rejected)
+    refused = base.with_choices(simd=1).compute.with_choices(compute_pumping=True).root
+    assert isinstance(refused.compute.build_requirements().accepted_result, Rejected)
     with pytest.raises(ValueError, match="dotp-pumping"):
         refused.assemble()
 
@@ -203,7 +203,9 @@ def test_mvau_honors_the_child_physical_view_not_just_its_raw_module(monkeypatch
                 "test-view-only", "this physical View refuses the selected implementation"
             )
 
-        physical = View(DotpAxiKernel.codegen, constraints=(DotpAxiKernel.support, view_only_rule))
+        build_requirements = View(
+            DotpAxiKernel.codegen, constraints=(DotpAxiKernel.support, view_only_rule)
+        )
 
     class RestrictedMVAU(MVAU):
         compute = Subspace(
@@ -234,9 +236,9 @@ def test_mvau_honors_the_child_physical_view_not_just_its_raw_module(monkeypatch
         simd=2,
         weight_delivery=WeightDelivery.EXTERNAL,
     )
-    point = point.compute.assign(DotpAxiKernel.compute_pumping, False).root
-    assert isinstance(point.compute.answer(DotpAxiKernel.codegen), Decided)
-    assert isinstance(point.compute.physical().accepted_answer, Rejected)
+    point = point.compute.with_choices(compute_pumping=False).root
+    assert isinstance(point.compute.query(DotpAxiKernel.codegen), Available)
+    assert isinstance(point.compute.build_requirements().accepted_result, Rejected)
     with pytest.raises(ValueError, match="test-view-only"):
         point.assemble()
     # Substitute a fully authored family to exercise the convenience entry

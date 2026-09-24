@@ -6,7 +6,7 @@
 import pytest
 from qonnx.core.datatype import DataType
 
-from finn.kernels.space import Decided, Rejected, Unresolved, compile_space, inspection
+from finn.kernels.space import Available, Rejected, Unresolved, compile_space, inspection
 from finn.kernels.datatypes.domains import Integer, SignedInteger
 from finn.kernels.datatypes.semantics import (
     QONNX_DATATYPE_VALUE_SEMANTICS,
@@ -40,11 +40,11 @@ def point(dtype=None, limit=8):
         facts[Harness.datatype] = DataType[dtype]
     if limit is not None:
         facts[Harness.limit] = limit
-    return Harness.start(facts).ports
+    return Harness(facts).ports
 
 
 def answers(assessment):
-    return {str(path).rsplit(".", 1)[-1]: value for path, value in assessment.answers.items()}
+    return {str(path).rsplit(".", 1)[-1]: value for path, value in assessment.results.items()}
 
 
 @pytest.mark.parametrize(
@@ -84,17 +84,17 @@ def test_known_family_refusal_survives_a_missing_dynamic_bound():
     atomic = answers(assessment)
     assert assessment.verdict is None
     assert isinstance(atomic["dtype_family"], Rejected)
-    assert atomic["dtype_minimum_bits"] == Decided(True)
+    assert atomic["dtype_minimum_bits"] == Available(True)
     assert isinstance(atomic["dtype_maximum_bits"], Unresolved)
     assert "dtype-family" in {finding.code for finding in atomic["dtype_family"].findings}
 
 
 def test_geometry_and_actual_dtype_do_not_wait_for_the_admission_bound():
     ports = point("INT3", limit=None)
-    assert ports.answer(Ports.values.dtype) == Decided(DataType["INT3"])
-    assert ports.answer(Ports.values.element_bits) == Decided(3)
-    assert ports.answer(Ports.values.payload_bits) == Decided(6)
-    assert ports.answer(Ports.values.carrier_bits) == Decided(8)
+    assert ports.query(Ports.values.dtype) == Available(DataType["INT3"])
+    assert ports.query(Ports.values.element_bits) == Available(3)
+    assert ports.query(Ports.values.payload_bits) == Available(6)
+    assert ports.query(Ports.values.carrier_bits) == Available(8)
     assert ports.values.dtype == DataType["INT3"]
     assert ports.values.payload_bits == 6
     assert ports.values.carrier_bits == 8
@@ -103,8 +103,8 @@ def test_geometry_and_actual_dtype_do_not_wait_for_the_admission_bound():
 
 def test_domain_does_not_select_a_dtype_when_none_was_supplied():
     ports = point()
-    assert isinstance(ports.answer(Ports.values.dtype), Unresolved)
-    assert isinstance(ports.answer(Ports.values.stream), Unresolved)
+    assert isinstance(ports.query(Ports.values.dtype), Unresolved)
+    assert isinstance(ports.query(Ports.values.stream), Unresolved)
     assert ports.values.assess(Ports.values.constraints).verdict is None
 
 
@@ -146,7 +146,7 @@ def test_scoped_members_do_not_overwrite_authored_parent_inputs():
         values_dtype = Param(int)
         values = AxiStream.input("values", 2, Integer(1, 8))
 
-    point = Independent.start(
+    point = Independent(
         {
             Independent.values_dtype: 99,
             Independent.values.dtype: DataType["INT3"],
@@ -196,16 +196,16 @@ class DerivedHarness(Space):
 
 
 def test_output_tracks_a_derived_type_and_remains_unresolved_until_its_source_is_known():
-    incomplete = DerivedHarness.start({}).producer
-    assert isinstance(incomplete.answer(DerivedOutput.result.dtype), Unresolved)
-    assert isinstance(incomplete.answer(DerivedOutput.result.stream), Unresolved)
+    incomplete = DerivedHarness({}).producer
+    assert isinstance(incomplete.query(DerivedOutput.result.dtype), Unresolved)
+    assert isinstance(incomplete.query(DerivedOutput.result.stream), Unresolved)
     parameters = {
         member.key
         for member in inspection.members(compile_space(DerivedOutput))
         if member.kind == "param"
     }
     assert parameters == {"bits"}
-    complete = DerivedHarness.start({DerivedHarness.bits: 5}).producer
+    complete = DerivedHarness({DerivedHarness.bits: 5}).producer
     assert complete.result.dtype == DataType["INT5"]
     assert complete.result.payload_bits == 10
     assert complete.result.carrier_bits == 16
@@ -229,6 +229,6 @@ def test_output_structural_constraints_reject_zero_width_elements():
 def test_direct_and_parent_consumed_accepted_views_share_admission():
     ports = point("INT3", limit=None)
     direct = ports.values.assess(Ports.values.view())
-    assert isinstance(direct.accepted_answer, Unresolved)
-    assert ports.answer(Ports.values.accepted_stream) == direct.accepted_answer
-    assert isinstance(ports.answer(Ports.values.stream), Decided)
+    assert isinstance(direct.accepted_result, Unresolved)
+    assert ports.query(Ports.values.accepted_stream) == direct.accepted_result
+    assert isinstance(ports.query(Ports.values.stream), Available)
