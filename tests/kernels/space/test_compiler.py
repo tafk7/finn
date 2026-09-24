@@ -26,6 +26,7 @@ from finn.kernels.space.declarations import (
 )
 from finn.kernels.space.domains import domain, divisors_of
 from finn.kernels.space.errors import DefinitionError, RequestError
+from finn.kernels.space.results import Decided
 from finn.kernels.space.semantics import ValueSemantics
 
 
@@ -132,7 +133,7 @@ def test_a_transitive_triangle_is_acyclic_and_cycles_name_only_their_members() -
     assert all(finding.code == "cyclic-dependency" for finding in error.value.findings)
 
 
-def test_twenty_thousand_dependencies_compile_without_recursive_traversal() -> None:
+def test_twenty_thousand_dependencies_compile_and_evaluate_iteratively() -> None:
     def step(*, previous: int) -> int:
         return previous + 1
 
@@ -146,6 +147,7 @@ def test_twenty_thousand_dependencies_compile_without_recursive_traversal() -> N
     assert len(model.linked.order) == 20_001
     assert len(model.linked.nodes[-1].dependencies) == 1
     assert model.linked.order[-1] == model.resolve(0, members["value20000"])
+    assert model.start().answer(cast(Derived[int], members["value20000"])) == Decided(20_000)
 
 
 def test_compiled_handles_do_not_follow_later_class_rebinding() -> None:
