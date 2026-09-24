@@ -243,13 +243,22 @@ def test_require_value_preserves_result_and_view_context() -> None:
     with pytest.raises(ValueUnavailableError) as caught:
         require_value(unresolved)
     assert caught.value.result is unresolved
-    assessment = base.result()
+    with pytest.raises(ValueUnavailableError) as call_error:
+        base.result()
+    assert call_error.value.result == base.result.query()
+    with pytest.raises(ValueUnavailableError):
+        base.field(Family.choice).get()
+    assert base.field(Family.choice).query() == unresolved
+    assessment = base.result.inspect()
     with pytest.raises(ValueUnavailableError) as view_error:
         assessment.require_value()
     assert view_error.value.context is assessment
     configured = base.with_choices(choice=0)
     assert require_value(configured.query(Family.choice)) == 0
-    assert configured.result().require_value() == 0
+    assert configured.result() == 0
+    assert configured.result.inspect().require_value() == 0
+    assert configured.field(Family.choice).get() == 0
+    assert configured.field(Family.choice).query() == Available(0)
 
 
 def test_child_replacement_returns_child_and_revalidates_the_whole_root() -> None:
@@ -293,12 +302,12 @@ def test_replacement_reuses_frozen_facts_keeps_views_lazy_and_starts_a_fresh_cac
     first = Family(source=source).with_choices(choice=1)
     source.append(2)
     assert calls == []
-    assert first.result().require_value() == 2
+    assert first.result() == 2
     revised = first.with_choices(choice=2)
     assert calls == [1]
     assert state(revised).snapshot.parameters is state(first).snapshot.parameters
     assert state(revised).snapshot.cache == {}
-    assert revised.result().require_value() == 3
+    assert revised.result() == 3
     assert calls == [1, 2]
 
 

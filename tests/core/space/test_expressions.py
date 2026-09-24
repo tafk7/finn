@@ -116,7 +116,7 @@ def test_anonymous_expressions_work_in_aliases_domains_and_child_bindings() -> N
     point = Root({Root.extent: 5})
     assert point.result == 16
     assert point.field(Root.factor).candidates() == Available((1, 2, 5, 10))
-    assert point.child.physical().accepted_result == Available(12)
+    assert point.child.physical() == 12
 
 
 def test_failed_folding_defers_errors_until_guarded_expression_is_demanded() -> None:
@@ -126,7 +126,7 @@ def test_failed_folding_defers_errors_until_guarded_expression_is_demanded() -> 
 
     model = compile_space(Family)
     inactive = model.bind({Family.enabled: False})
-    assert isinstance(inactive.physical().accepted_result, Inapplicable)
+    assert isinstance(inactive.physical.inspect().accepted_result, Inapplicable)
     evidence = inspection.explain(inactive, Family.physical)
     assert not any(".$expr." in node.declaration.key for node in evidence.nodes)
     with pytest.raises(EvaluationError) as error:
@@ -237,8 +237,8 @@ def test_shared_expression_prefix_is_not_duplicated_across_consumers() -> None:
     first = cast(View[int], getattr(large_type, "consumer0"))
     last = cast(View[int], getattr(large_type, "consumer39"))
     point = large.bind({source: 2})
-    assert isinstance(point.assess(first).accepted_result, Inapplicable)
-    assert point.assess(last).accepted_result == Available(202)
+    assert isinstance(point.inspect(first).accepted_result, Inapplicable)
+    assert point.inspect(last).accepted_result == Available(202)
     # The source owner names the first mention; the actual demand still starts
     # at the later enabled consumer. No first-consumer guard contaminates it.
     evidence = inspection.explain(point, last)

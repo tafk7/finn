@@ -56,15 +56,15 @@ def test_two_child_placements_have_independent_choices_and_immutable_roots() -> 
     base = Pair({Pair.extent: 12})
     first = base.first.with_choices(lanes=3)
     assert isinstance(first, Tile)
-    assert first.physical().accepted_result == Available(4)
+    assert first.physical() == 4
     successor = cast(Pair, first.root)
     assert successor.first.lanes == 3
     assert isinstance(successor.second.query(Tile.lanes), Unresolved)
     assert isinstance(base.first.query(Tile.lanes), Unresolved)
     second = successor.second.with_choices(lanes=4)
     final = cast(Pair, second.root)
-    assert final.first.physical().accepted_result == Available(4)
-    assert final.second.physical().accepted_result == Available(3)
+    assert final.first.physical() == 4
+    assert final.second.physical() == 3
     assert isinstance(successor.second.query(Tile.lanes), Unresolved)
     assert final.query(Pair.first.ref(Tile.extent)) == Available(12)
 
@@ -91,7 +91,7 @@ def test_false_outer_scope_suppresses_inner_commitments_and_callbacks() -> None:
     assert isinstance(point.child.query(Guarded.lanes), Inapplicable)
     assert isinstance(point.child.field(Guarded.lanes).state, Inapplicable)
     assert isinstance(point.child.query(Guarded.raw), Inapplicable)
-    assert isinstance(point.child.physical().accepted_result, Inapplicable)
+    assert isinstance(point.child.physical.inspect().accepted_result, Inapplicable)
     assert calls == []
     with pytest.raises(ConfigurationError):
         point.child.with_choices(lanes=1)
@@ -132,14 +132,14 @@ def test_selected_view_preserves_direct_refusal_and_skips_other_alternatives() -
     selected = base.implementation.select("refused")
     point = cast(Root, selected.instance.root)
     child = selected.alternative("refused")
-    direct = child.assess(Refused.physical).accepted_result
+    direct = child.inspect(Refused.physical).accepted_result
     assert isinstance(direct, Rejected)
     assert point.query(Root.accepted) == direct
-    assert point.physical().accepted_result == direct
+    assert point.physical.inspect().accepted_result == direct
     assert selected.select("refused") is selected
     selected.select("explodes")
     assert isinstance(
-        selected.alternative("explodes").assess(Explodes.physical).accepted_result, Inapplicable
+        selected.alternative("explodes").inspect(Explodes.physical).accepted_result, Inapplicable
     )
     assert isinstance(base.query(Root.accepted), Unresolved)
     assert calls == []
@@ -238,7 +238,7 @@ def test_exposed_inputs_local_decisions_and_supplier_aliases_keep_distinct_right
 
     model = compile_space(Root)
     base = model.bind({Root.exposed.ref(Child.width): 9})
-    assert base.exposed.physical().accepted_result == Available(9)
+    assert base.exposed.physical() == 9
     chosen = base.with_choices(supplier=4)
     assert chosen.aliased.width == 4
     with pytest.raises(RequestError):

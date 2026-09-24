@@ -8,11 +8,19 @@ class Child(Space):
     lanes = Decision(int, values=(1, 2))
 
     @view
-    def physical(*, width: int) -> int:
-        return width
+    def physical(self) -> int:
+        return self.width
 
 class Parent(Space):
     child = Subspace(Child, width=4)
+
+    @derived
+    def invalid_child_read(self) -> str:
+        return self.child.width  # E
+
+    @derived
+    def invalid_scalar_read(self) -> str:
+        return self.child.lanes  # E
 
 def bad(point: Child, parent: Parent) -> None:
     wrong_value: str = point.width  # E
@@ -22,7 +30,14 @@ def bad(point: Child, parent: Parent) -> None:
     point.field(Child.width).change(2)  # E
     parent.field(Parent.child.ref(Child.lanes)).change(2)  # E
     point.physical(3)  # E
-    wrong_assessment: int = point.physical()  # E
+    wrong_assessment: int = point.physical.inspect()  # E
+    wrong_output: str = point.physical()  # E
+    wrong_view_output: str = point.view(Child.physical)()  # E
+    wrong_field: str = point.field(Child.width).get()  # E
+    point.physical.assess()  # E
+    point.physical.result()  # E
+    point.assess(Child.physical)  # E
+    point.field(Child.width).result()  # E
     Parent.child.accepted(Child.width)  # E
     Parent.child.ref(ViewKey("view", int))  # E
     Parent.child.accepted(ValueKey("value", int))  # E

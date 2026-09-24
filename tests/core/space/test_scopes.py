@@ -79,17 +79,17 @@ def test_composite_keeps_narrow_fields_available_and_reuses_accepted_children() 
 
     base = Composite()
     assert base.narrow == 12
-    assert isinstance(base.activation.physical().accepted_result, Unresolved)
-    assert isinstance(base.weights.physical().accepted_result, Unresolved)
+    assert isinstance(base.activation.physical.inspect().accepted_result, Unresolved)
+    assert isinstance(base.weights.physical.inspect().accepted_result, Unresolved)
     assert isinstance(base.optional.query(Interface.lanes), Inapplicable)
     assert isinstance(base.optional.field(Interface.lanes).state, Inapplicable)
     selected = base.implementation.select("refused")
     successor = cast(Composite, selected.instance.root)
-    direct = selected.alternative("refused").assess(Refused.physical).accepted_result
+    direct = selected.alternative("refused").inspect(Refused.physical).accepted_result
     assert isinstance(direct, Rejected)
-    assert successor.physical().accepted_result == direct
+    assert successor.physical.inspect().accepted_result == direct
     assert successor.query(Composite.implementation.ref(WIDTH)) == Available(-1)
-    assert isinstance(base.physical().accepted_result, Unresolved)
+    assert isinstance(base.physical.inspect().accepted_result, Unresolved)
 
 
 def test_local_decision_domain_uses_parent_suppliers_and_exposure_is_explicit() -> None:
@@ -108,7 +108,7 @@ def test_local_decision_domain_uses_parent_suppliers_and_exposure_is_explicit() 
         (1, 2, 3, 4, 6, 12)
     )
     chosen = base.with_choices(base.field(Root.owned.decision_ref(Child.value)).change(3))
-    assert chosen.owned.physical().accepted_result == Available(3)
+    assert chosen.owned.physical() == 3
     assert isinstance(chosen.exposed.query(Child.value), Unresolved)
     with pytest.raises(ConfigurationError):
         base.with_choices(base.field(Root.owned.decision_ref(Child.value)).change(5))

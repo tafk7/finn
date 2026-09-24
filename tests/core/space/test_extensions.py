@@ -184,7 +184,7 @@ def test_stream_shape_places_independent_choices_and_keeps_narrow_fields_availab
         admitted.field(Pair.right.lane_choice).change(1),
     )
     assert selected.left.bits == selected.right.bits == 6
-    assert selected.assess(Pair.balanced).verdict is True
+    assert selected.inspect(Pair.balanced).verdict is True
     assert selected.query(Pair.left.stream) == Available(StreamValue(Encoding(3), 2, 6))
     refused = selected.query(Pair.right.stream)
     assert isinstance(refused, Rejected)

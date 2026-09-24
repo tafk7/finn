@@ -39,40 +39,44 @@ class Fifo(Space):
     family = Const("fifo")
 
     @constraint
-    def supported(*, word_bits: int, depth: int) -> bool:
-        return word_bits > 0 and depth >= 2
+    def supported(self) -> bool:
+        return self.word_bits > 0 and self.depth >= 2
 
     @view(constraints=(supported,))
-    def physical(*, word_bits: int, depth: int, ram_style: str) -> FifoShape:
-        return FifoShape(word_bits, depth, ram_style)
+    def physical(self) -> FifoShape:
+        return FifoShape(self.word_bits, self.depth, self.ram_style)
 
 
-def test_fifo_compile_start_commit_assess_is_immutable() -> None:
+def test_fifo_compile_bind_replace_and_inspect_is_immutable() -> None:
     model = compile_space(Fifo)
     base = model.bind(word_bits=13, depth=8)
     assert base.family == "fifo"
-    assert isinstance(base.physical().accepted_result, Unresolved)
+    assert isinstance(base.physical.inspect().accepted_result, Unresolved)
     state = base.field(Fifo.ram_style).state
     assert isinstance(state, Available)
     assert state.value.status == "unassigned"
     assert isinstance(base.query(Fifo.ram_style), Unresolved)
     assert base.field(Fifo.ram_style).candidates() == Available(("auto", "block", "shift"))
     chosen = base.with_choices(ram_style="block")
-    assert chosen.physical().accepted_result == Available(FifoShape(13, 8, "block"))
-    assert chosen.assess(Fifo.physical) == chosen.physical()
+    assert chosen.physical() == FifoShape(13, 8, "block")
+    assert chosen.inspect(Fifo.physical) == chosen.physical.inspect()
+    assert chosen.view(Fifo.physical)() == FifoShape(13, 8, "block")
+    assert chosen.physical.query() == Available(FifoShape(13, 8, "block"))
+    assert chosen.field(Fifo.ram_style).get() == "block"
+    assert chosen.field(Fifo.ram_style).query() == Available("block")
     assert isinstance(base.query(Fifo.ram_style), Unresolved)
     assert chosen.with_choices(ram_style="block") is chosen
     assert chosen.with_choices(ram_style="shift").ram_style == "shift"
     other = model.bind(word_bits=7, depth=4).with_choices(ram_style="shift")
-    assert other.physical().accepted_result == Available(FifoShape(7, 4, "shift"))
+    assert other.physical() == FifoShape(7, 4, "shift")
 
 
 def test_final_constraint_refusal_remains_visible_while_output_unresolved() -> None:
     base = Fifo(word_bits=0, depth=8)
-    assessment = base.physical()
+    assessment = base.physical.inspect()
     assert isinstance(assessment.accepted_result, Unresolved)
     assert assessment.constraints.refused == ("supported",)
-    ready = base.with_choices(ram_style="auto").physical()
+    ready = base.with_choices(ram_style="auto").physical.inspect()
     assert isinstance(ready.accepted_result, Rejected)
 
 
@@ -129,7 +133,7 @@ def test_binding_and_callback_values_are_snapshots_without_requiring_a_codec() -
     assert base.payload == [1, 2]
     base.payload.append(4)
     assert base.payload == [1, 2]
-    assert base.physical().accepted_result == Available(3)
+    assert base.physical() == 3
     assert calls == [2]
     other = model.bind(payload=[8])
     assert other.length == 2
@@ -163,7 +167,7 @@ def test_concurrent_reads_and_successors_are_deterministic() -> None:
     base = Fifo(word_bits=13, depth=8)
 
     def run(style: str) -> QueryResult[FifoShape]:
-        return base.with_choices(ram_style=style).physical().accepted_result
+        return base.with_choices(ram_style=style).physical.inspect().accepted_result
 
     styles = ["auto", "block", "shift"] * 10
     with ThreadPoolExecutor(max_workers=4) as pool:
@@ -186,7 +190,7 @@ def test_generic_container_outputs_infer_nominal_snapshot_semantics() -> None:
 
     point = Collections(count=3)
     assert point.indices == (0, 1, 2)
-    first = point.materialized().accepted_result
-    assert isinstance(first, Available)
-    first.value.append(99)
-    assert point.materialized().accepted_result == Available([0, 1, 2])
+    first = point.materialized()
+    first.append(99)
+    assert point.materialized() == [0, 1, 2]
+    assert point.materialized.query() == Available([0, 1, 2])

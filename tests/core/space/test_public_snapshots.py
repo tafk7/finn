@@ -62,7 +62,15 @@ def test_value_and_function_views_detach_all_public_assessment_payloads() -> Non
     point = compile_space(Mutable).bind({Mutable.source: original})
     original.values.append(9)
     for declaration in (Mutable.physical, Mutable.computed):
-        assessment = point.assess(declaration)
+        bound = point.view(declaration)
+        value = bound()
+        value.values.append(10)
+        assert bound() == Bag([1])
+        queried = bound.query()
+        assert isinstance(queried, Available)
+        queried.value.values.append(11)
+        assert bound.query() == Available(Bag([1]))
+        assessment = point.inspect(declaration)
         assert isinstance(assessment.output_result, Available)
         assert isinstance(assessment.accepted_result, Available)
         assessment.output_result.value.values.append(2)
@@ -70,7 +78,7 @@ def test_value_and_function_views_detach_all_public_assessment_payloads() -> Non
         for answer in assessment.readiness.results.values():
             if isinstance(answer, Available) and isinstance(answer.value, Bag):
                 answer.value.values.append(4)
-        again = point.assess(declaration)
+        again = point.inspect(declaration)
         assert isinstance(again.output_result, Available)
         assert isinstance(again.accepted_result, Available)
         assert again.output_result.value == Bag([1])
@@ -84,12 +92,12 @@ def test_value_and_function_views_detach_all_public_assessment_payloads() -> Non
 
 def test_standalone_readiness_returns_detached_required_values() -> None:
     point = Mutable({Mutable.source: Bag([1])})
-    readiness = point.assess(Mutable.ready)
+    readiness = point.inspect(Mutable.ready)
     raw = readiness.results["raw"]
     assert isinstance(raw, Available)
     assert isinstance(raw.value, Bag)
     raw.value.values.append(2)
-    again = point.assess(Mutable.ready).results["raw"]
+    again = point.inspect(Mutable.ready).results["raw"]
     assert isinstance(again, Available)
     assert again.value == Bag([1])
 
@@ -134,7 +142,7 @@ def test_public_snapshot_failure_retains_declaration_role_and_cause() -> None:
     assert answer_error.value.role == "public value snapshot"
     assert isinstance(answer_error.value.__cause__, RuntimeError)
     with pytest.raises(EvaluationError) as assessment_error:
-        point.physical()
+        point.physical.inspect()
     assert assessment_error.value.owner == "source"
     assert isinstance(assessment_error.value.__cause__, RuntimeError)
 
@@ -158,9 +166,9 @@ def test_grouped_view_obligations_keep_refusals_visible_while_waiting() -> None:
         ready_view = View(output, requires=(ready,))
 
     point = Grouped()
-    grouped = point.assess(Grouped.support)
+    grouped = point.inspect(Grouped.support)
     for _ in range(2):
-        assessment = point.physical()
+        assessment = point.physical.inspect()
         assert isinstance(assessment.accepted_result, Unresolved)
         assert assessment.constraints.refused == ("refused",)
         assert assessment.constraints.results == grouped.results
@@ -168,15 +176,15 @@ def test_grouped_view_obligations_keep_refusals_visible_while_waiting() -> None:
         assert isinstance(refused, Rejected)
         assert refused.findings[0].owner == "refused"
         assert isinstance(assessment.constraints.results["pending"], Unresolved)
-        readiness = point.assess(Grouped.ready)
+        readiness = point.inspect(Grouped.ready)
         assert readiness.ready is None
         assert isinstance(readiness.results["refused"], Rejected)
-        via_readiness = point.ready_view()
+        via_readiness = point.ready_view.inspect()
         assert isinstance(via_readiness.accepted_result, Unresolved)
         assert isinstance(via_readiness.readiness.results["refused"], Rejected)
     committed = point.with_choices(lanes=1)
-    assert isinstance(committed.physical().accepted_result, Rejected)
-    assert committed.assess(Grouped.ready).ready is True
+    assert isinstance(committed.physical.inspect().accepted_result, Rejected)
+    assert committed.inspect(Grouped.ready).ready is True
 
 
 def test_empty_named_obligations_can_be_assessed_without_value_semantics() -> None:
@@ -187,5 +195,5 @@ def test_empty_named_obligations_can_be_assessed_without_value_semantics() -> No
         physical = View(output, requires=(group, ready))
 
     point = Empty()
-    assert point.physical().accepted_result == Available(4)
-    assert point.assess(Empty.ready).ready is True
+    assert point.physical() == 4
+    assert point.inspect(Empty.ready).ready is True

@@ -73,7 +73,7 @@ def test_inspection_does_not_run_domains_or_evaluators() -> None:
     scores: list[tuple[int, object]] = []
     for value in options.value:
         trial = point.with_choices(point.field(handle).change(value))
-        result = trial.physical().accepted_result
+        result = trial.physical.inspect().accepted_result
         assert isinstance(result, Available)
         scores.append((result.value, value))
     assert min(scores, key=lambda item: item[0]) == (3, 4)

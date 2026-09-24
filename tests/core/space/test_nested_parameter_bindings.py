@@ -62,7 +62,7 @@ def test_outer_params_and_decisions_supply_interface_slots_without_new_choices()
     assert base.kernel.port.dtype == "INT8"
     assert isinstance(base.kernel.port.query(Port.lanes), Unresolved)
     chosen = base.with_choices(lanes=2)
-    assert chosen.kernel.port.physical().accepted_result == Available(("INT8", 2))
+    assert chosen.kernel.port.physical() == ("INT8", 2)
     assert [item.key for item in inspection.decisions(chosen)] == ["lanes"]
     assert len(selections.capture(chosen).entries) == 1
     with pytest.raises(RequestError, match="Param alias"):
@@ -134,7 +134,7 @@ def test_repeated_placements_keep_mapped_choices_independent() -> None:
     chosen = base.with_choices(
         base.field(Pair.first.decision_ref(Reusable.port.ref(Port.lanes))).change(2)
     )
-    assert chosen.first.port.physical().accepted_result == Available(("INT4", 2))
+    assert chosen.first.port.physical() == ("INT4", 2)
     assert isinstance(chosen.second.port.query(Port.lanes), Unresolved)
     assert isinstance(base.first.port.query(Port.lanes), Unresolved)
 
@@ -148,7 +148,7 @@ def test_unbound_deliberate_exposure_remains_a_scoped_root_parameter() -> None:
     assert omitted.kernel.port.dtype == "INT8"
     assert isinstance(omitted.kernel.port.query(Port.lanes), Unresolved)
     supplied = model.bind({Parent.kernel.ref(Reusable.port.ref(Port.lanes)): 3})
-    assert supplied.kernel.port.physical().accepted_result == Available(("INT8", 3))
+    assert supplied.kernel.port.physical() == ("INT8", 3)
 
 
 def test_reexposed_nested_slot_can_be_bound_again_by_an_outer_placement() -> None:
@@ -174,7 +174,7 @@ def test_reexposed_nested_slot_can_be_bound_again_by_an_outer_placement() -> Non
     point = Outer()
     decision = Outer.middle.decision_ref(Middle.kernel.ref(Reusable.port.ref(Port.lanes)))
     chosen = point.with_choices(point.field(decision).change(4))
-    assert chosen.middle.kernel.port.physical().accepted_result == Available(("INT3", 4))
+    assert chosen.middle.kernel.port.physical() == ("INT3", 4)
 
 
 @pytest.mark.parametrize("kind", ["literal", "alias", "decision"])
@@ -289,7 +289,7 @@ def test_nested_extension_binding_preserves_scope_and_slot_type() -> None:
     class Parent(Space):
         child = placement
 
-    assert Parent().child.port.physical().accepted_result == Available(("INT8", 2))
+    assert Parent().child.port.physical() == ("INT8", 2)
 
 
 def test_nested_decision_reference_can_traverse_concrete_reference_layers() -> None:

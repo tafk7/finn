@@ -57,16 +57,16 @@ class Fifo(Space):
     minimum_depth = Const(2)
 
     @constraint
-    def supported(*, depth: int, minimum_depth: int) -> bool:
-        return depth >= minimum_depth
+    def supported(self) -> bool:
+        return self.depth >= self.minimum_depth
 
     @derived
-    def capacity(*, word_bits: int, depth: int) -> int:
-        return word_bits * depth
+    def capacity(self) -> int:
+        return self.word_bits * self.depth
 
     @view(constraints=(supported,))
-    def physical(*, capacity: int, ram_style: str) -> int:
-        return capacity + len(ram_style)
+    def physical(self) -> int:
+        return self.capacity + len(self.ram_style)
 
     detached = View(capacity, constraints=(supported,))
     exports = {WIDTH: word_bits, PHYSICAL: physical}
@@ -113,9 +113,11 @@ class Assembly(Space):
         exports=(WIDTH, PHYSICAL),
     )
 
-    @derived(width=first.width)
-    def twice_width(*, width: int) -> int:
-        return width * 2
+    @derived
+    def twice_width(self) -> int:
+        assert_type(self.first, Fifo)
+        assert_type(self.first.word_bits, int)
+        return self.first.word_bits * 2
 
 
 class GuardedAssembly(Space):
@@ -163,8 +165,16 @@ def check(point: Fifo, assembly: Assembly, eltwise: Eltwise) -> None:
     assert_type(point.minimum_depth, int)
     assert_type(point.capacity, int)
     assert_type(point.physical, BoundView[int])
-    assert_type(point.physical(), ViewAssessment[int])
-    assert_type(point.assess(Fifo.physical), ViewAssessment[int])
+    assert_type(point.physical(), int)
+    assert_type(point.physical.inspect(), ViewAssessment[int])
+    assert_type(point.physical.query(), QueryResult[int])
+    assert_type(point.view(Fifo.physical), BoundView[int])
+    assert_type(point.view(Fifo.physical)(), int)
+    assert_type(point.field(Fifo.capacity).get(), int)
+    assert_type(point.field(Fifo.capacity).query(), QueryResult[int])
+    assert_type(point.field(Fifo.ram_style).get(), str)
+    assert_type(point.field(Fifo.ram_style).query(), QueryResult[str])
+    assert_type(point.inspect(Fifo.physical), ViewAssessment[int])
     assert_type(point.with_choices(ram_style="auto"), Fifo)
     assert_type(point.field(Fifo.capacity), BoundValue[int])
     assert_type(point.field(Fifo.ram_style), BoundDecision[str])
@@ -187,7 +197,8 @@ def check(point: Fifo, assembly: Assembly, eltwise: Eltwise) -> None:
     assert_type(Eltwise.result_dtype, Derived[DType])
     assert_type(eltwise.result_dtype, DType)
     assert_type(Eltwise.physical, View[int])
-    assert_type(eltwise.physical(), ViewAssessment[int])
+    assert_type(eltwise.physical(), int)
+    assert_type(eltwise.physical.inspect(), ViewAssessment[int])
     assert_type(Assembly.first, FifoInterface)
     assert_type(Assembly.first.width, ValueRef[int])
     assert_type(Assembly.first.style, DecisionRef[str])
