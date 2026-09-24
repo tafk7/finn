@@ -34,24 +34,21 @@ class FifoKernel(Kernel):
     word_bits = Param(int)
     depth = Param(int)
 
-    @constraint(bits=word_bits, depth=depth)
-    def geometry_supported(*, bits: int, depth: int) -> bool | Rejected:
+    @constraint
+    def geometry_supported(self) -> bool | Rejected:
+        bits = self.word_bits
+        depth = self.depth
         if bits < 1 or depth < 2 or max(bits, depth) > 0xFFFFFFFF:
             return reject("fifo-geometry", "word_bits must be positive and depth at least two")
         return True
 
     ram_style = Decision(str, values=("auto", "shift", "distributed", "block", "ultra"))
 
-    @view(
-        semantics=default_semantics(ModuleBuildRequirements),
-        constraints=(geometry_supported,),
-        bits=word_bits,
-        depth=depth,
-        ram=ram_style,
-    )
-    def build_requirements(
-        *, bits: int, depth: int, ram: str
-    ) -> ModuleBuildRequirements | Rejected:
+    @view(semantics=default_semantics(ModuleBuildRequirements), constraints=(geometry_supported,))
+    def build_requirements(self) -> ModuleBuildRequirements | Rejected:
+        bits = self.word_bits
+        depth = self.depth
+        ram = self.ram_style
         if bits < 1:
             return reject("fifo-interface", "word_bits must be positive")
         parameters = (("DATA_WIDTH", bits), ("DEPTH", depth), ("RAM_STYLE", f'"{ram}"'))

@@ -57,11 +57,11 @@ from finn.kernels.physical.structure import (
     UnusedOutput,
 )
 from finn.core.space import (
-    QueryResult,
     ConstraintGroup,
     Available,
     Decision,
     Param,
+    Rejected,
     Space,
     Subspace,
     constraint,
@@ -69,7 +69,7 @@ from finn.core.space import (
     divisors_of,
     reject,
 )
-from finn.core.space.errors import RequestError
+from finn.core.space.errors import RequestError, ValueUnavailableError
 
 
 class WeightDelivery(Enum):
@@ -372,23 +372,27 @@ class MVAU(Space):
     weight_delivery = Decision(WeightDelivery, values=tuple(WeightDelivery))
 
     @derived(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
-    def result_type(
-        *, matrix_width: int, activation_dtype: QONNXDataType, weights_dtype: QONNXDataType
-    ) -> QueryResult[QONNXDataType]:
+    def result_type(self) -> QONNXDataType | Rejected:
+        matrix_width = self.matrix_width
+        activation_dtype = self.activation_dtype
+        weights_dtype = self.weights_dtype
         try:
-            return Available(exact_result_dtype(matrix_width, activation_dtype, weights_dtype))
+            return exact_result_dtype(matrix_width, activation_dtype, weights_dtype)
         except ValueError as error:
             return reject("mvau-arithmetic", str(error))
 
     @constraint
-    def dimensions_supported(
-        *, repetitions: int, matrix_width: int, matrix_height: int, pe: int, simd: int
-    ) -> QueryResult[bool]:
+    def dimensions_supported(self) -> bool | Rejected:
+        repetitions = self.repetitions
+        matrix_width = self.matrix_width
+        matrix_height = self.matrix_height
+        pe = self.pe
+        simd = self.simd
         try:
             _Traversal(repetitions, matrix_width, matrix_height, pe, simd)
         except ValueError as error:
             return reject("mvau-folding", str(error))
-        return Available(True)
+        return True
 
     compute = Subspace(
         DotpAxiKernel,
@@ -406,12 +410,13 @@ class MVAU(Space):
     dimensions = ConstraintGroup(dimensions_supported)
 
     def assemble(self, weights: Sequence[Sequence[int]] | None = None) -> MVAUAssembly:
-        accepted = self.compute.build_requirements().accepted_result
-        if not isinstance(accepted, Available):
+        try:
+            compute = self.compute.build_requirements()
+        except ValueUnavailableError as error:
             details = "; ".join(
-                f"{finding.code}: {finding.message}" for finding in accepted.findings
+                f"{finding.code}: {finding.message}" for finding in error.result.findings
             )
-            raise ValueError(f"dotp physical View is not accepted: {details}")
+            raise ValueError(f"dotp physical View is not accepted: {details}") from error
         return _wire_mvau(
             repetitions=self.repetitions,
             matrix_width=self.matrix_width,
@@ -420,7 +425,7 @@ class MVAU(Space):
             weights_dtype=self.weights_dtype,
             pe=self.pe,
             simd=self.simd,
-            compute=accepted.value,
+            compute=compute,
             result_dtype=self.result_type,
             weight_delivery=self.weight_delivery,
             weights=weights,

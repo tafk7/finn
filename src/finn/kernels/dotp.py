@@ -39,11 +39,10 @@ from finn.kernels.base import Kernel
 from finn.kernels.datatypes.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
 from finn.kernels.datatypes.values import (
     DatatypeError,
-    QONNXDataType,
     ordinary_integer_bounds,
     qonnx_datatype_width,
 )
-from finn.kernels.physical.axi_stream import AxiStream, AxiStreamInterface
+from finn.kernels.physical.axi_stream import AxiStreamInterface
 from finn.core.space import (
     ConstraintGroup,
     Decision,
@@ -100,22 +99,26 @@ class DotpAxiKernel(Kernel):
         error_code="dotp-interface",
     )
 
-    @constraint(target=target_dsp)
-    def target_supported(*, target: DspBlock) -> bool | Rejected:
+    @constraint
+    def target_supported(self) -> bool | Rejected:
+        target = self.target_dsp
         if target not in _DSP_VERSION:
             return reject("dotp-target", "the RTL has no implementation for this DSP target")
         return True
 
-    @constraint(pe=pe, simd=simd)
-    def geometry_supported(*, pe: int, simd: int) -> bool | Rejected:
+    @constraint
+    def geometry_supported(self) -> bool | Rejected:
+        pe = self.pe
+        simd = self.simd
         if pe < 1 or simd < 1:
             return reject("dotp-geometry", "PE and SIMD must be positive integers")
         return True
 
-    @constraint(target=target_dsp, activation=activation.dtype, weight=weights.dtype)
-    def input_types_supported(
-        *, target: DspBlock, activation: QONNXDataType, weight: QONNXDataType
-    ) -> bool | Rejected:
+    @constraint
+    def input_types_supported(self) -> bool | Rejected:
+        target = self.target_dsp
+        activation = self.activation.dtype
+        weight = self.weights.dtype
         try:
             ordinary_integer_bounds(activation)
         except DatatypeError as error:
@@ -138,8 +141,10 @@ class DotpAxiKernel(Kernel):
             )
         return True
 
-    @constraint(result=result.dtype, target=target_dsp)
-    def accumulator_width_supported(*, result: QONNXDataType, target: DspBlock) -> bool | Rejected:
+    @constraint
+    def accumulator_width_supported(self) -> bool | Rejected:
+        result = self.result.dtype
+        target = self.target_dsp
         if not result.name.startswith("INT"):
             return reject(
                 "dotp-result-type", "the accumulator requires an ordinary signed INT dtype"
@@ -153,16 +158,20 @@ class DotpAxiKernel(Kernel):
             )
         return True
 
-    @constraint(pumping=compute_pumping, simd=simd)
-    def pumping_supported(*, pumping: bool, simd: int) -> bool | Rejected:
+    @constraint
+    def pumping_supported(self) -> bool | Rejected:
+        pumping = self.compute_pumping
+        simd = self.simd
         if pumping and simd < 2:
             return reject("dotp-pumping", "pumping must be boolean and requires SIMD >= 2")
         return True
 
-    @constraint(target=target_dsp, segment=segment_length, simd=simd, pumping=compute_pumping)
-    def segment_length_supported(
-        *, target: DspBlock, segment: int, simd: int, pumping: bool
-    ) -> bool | Rejected:
+    @constraint
+    def segment_length_supported(self) -> bool | Rejected:
+        target = self.target_dsp
+        segment = self.segment_length
+        simd = self.simd
+        pumping = self.compute_pumping
         products_per_stage = 6 if pumping else 3
         chain_length = (simd + products_per_stage - 1) // products_per_stage
         if segment < 0 or (target is DspBlock.DSP58 and segment > chain_length):
@@ -178,27 +187,16 @@ class DotpAxiKernel(Kernel):
         segment_length_supported,
     )
 
-    @derived(
-        pe=pe,
-        simd=simd,
-        activation=activation.accepted_stream,
-        weights=weights.accepted_stream,
-        result=result.accepted_stream,
-        target_dsp=target_dsp,
-        segment_length=segment_length,
-        compute_pumping=compute_pumping,
-    )
-    def codegen(
-        *,
-        pe: int,
-        simd: int,
-        activation: AxiStream,
-        weights: AxiStream,
-        result: AxiStream,
-        target_dsp: DspBlock,
-        segment_length: int,
-        compute_pumping: bool,
-    ) -> ModuleBuildRequirements:
+    @derived
+    def codegen(self) -> ModuleBuildRequirements:
+        pe = self.pe
+        simd = self.simd
+        activation = self.activation.view(DotpAxiKernel.activation.view())()
+        weights = self.weights.view(DotpAxiKernel.weights.view())()
+        result = self.result.view(DotpAxiKernel.result.view())()
+        target_dsp = self.target_dsp
+        segment_length = self.segment_length
+        compute_pumping = self.compute_pumping
         parameters = tuple(
             sorted(
                 {

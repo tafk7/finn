@@ -18,7 +18,7 @@ from finn.kernels.artifacts.requirements import (
     ModuleABIRequirements,
     ModuleBuildRequirements,
 )
-from finn.kernels.datatypes.semantics import INTEGER_VECTOR, IntegerVector
+from finn.kernels.datatypes.semantics import INTEGER_VECTOR
 from finn.core.space import (
     Decision,
     Param,
@@ -39,10 +39,12 @@ class InputGeneratorKernel(Kernel):
     extents = Param(INTEGER_VECTOR)
     strides = Param(INTEGER_VECTOR)
 
-    @constraint(bits=word_bits, frame=frame_words, extents=extents, strides=strides)
-    def traversal_supported(
-        *, bits: int, frame: int, extents: IntegerVector, strides: IntegerVector
-    ) -> bool | Rejected:
+    @constraint
+    def traversal_supported(self) -> bool | Rejected:
+        bits = self.word_bits
+        frame = self.frame_words
+        extents = self.extents
+        strides = self.strides
         if bits < 1 or frame < 1 or not extents or len(extents) != len(strides):
             return reject(
                 "input-generator-shape",
@@ -64,18 +66,13 @@ class InputGeneratorKernel(Kernel):
 
     ram_style = Decision(str, values=("auto", "distributed", "block", "ultra"))
 
-    @view(
-        semantics=default_semantics(ModuleBuildRequirements),
-        constraints=(traversal_supported,),
-        bits=word_bits,
-        frame=frame_words,
-        extents=extents,
-        strides=strides,
-        ram=ram_style,
-    )
-    def build_requirements(
-        *, bits: int, frame: int, extents: IntegerVector, strides: IntegerVector, ram: str
-    ) -> ModuleBuildRequirements | Rejected:
+    @view(semantics=default_semantics(ModuleBuildRequirements), constraints=(traversal_supported,))
+    def build_requirements(self) -> ModuleBuildRequirements | Rejected:
+        bits = self.word_bits
+        frame = self.frame_words
+        extents = self.extents
+        strides = self.strides
+        ram = self.ram_style
         if bits < 1 or not extents:
             return reject(
                 "input-generator-interface", "positive word width and nonempty extents are required"

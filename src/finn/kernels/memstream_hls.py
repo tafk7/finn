@@ -17,7 +17,7 @@ from finn.kernels.artifacts.hls import HlsInterface, HlsSourceRequirements
 from finn.kernels.artifacts.sources import CompileOptions, Language, Role
 from finn.kernels.base import Kernel
 from finn.kernels.datatypes.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
-from finn.kernels.datatypes.values import DatatypeError, QONNXDataType, ordinary_integer_bounds
+from finn.kernels.datatypes.values import DatatypeError, ordinary_integer_bounds
 from finn.core.space import (
     Param,
     Rejected,
@@ -35,8 +35,9 @@ class MemStreamHlsKernel(Kernel):
 
     element_dtype = Param(QONNX_DATATYPE_VALUE_SEMANTICS)
 
-    @derived(semantics=default_semantics(str), dtype=element_dtype)
-    def cpp_type(*, dtype: QONNXDataType) -> str | Rejected:
+    @derived(semantics=default_semantics(str))
+    def cpp_type(self) -> str | Rejected:
+        dtype = self.element_dtype
         if dtype.name == "FLOAT32":
             return "float"
         try:
@@ -51,17 +52,20 @@ class MemStreamHlsKernel(Kernel):
 
     depth = Param(int)
 
-    @constraint(depth=depth)
-    def depth_supported(*, depth: int) -> bool | Rejected:
+    @constraint
+    def depth_supported(self) -> bool | Rejected:
         # memstream.hpp uses ap_uint<clog2(N)> for its pointer: N=1 is zero bits.
+        depth = self.depth
         if not 2 <= depth <= 0xFFFFFFFF:
             return reject(
                 "memstream-hls-depth", "native memstream requires depth >= 2 fitting unsigned int"
             )
         return True
 
-    @view(constraints=(depth_supported,), cpp=cpp_type, depth=depth)
-    def build_requirements(*, cpp: str, depth: int) -> HlsSourceRequirements:
+    @view(constraints=(depth_supported,))
+    def build_requirements(self) -> HlsSourceRequirements:
+        cpp = self.cpp_type
+        depth = self.depth
         includes = ("hls/util", "hls/infra")
         return HlsSourceRequirements(
             MemStreamHlsKernel.id,

@@ -150,17 +150,17 @@ def test_space_selects_folding_and_constructs_without_a_logical_contract():
         weight_delivery=WeightDelivery.EXTERNAL,
     )
     point = base.with_choices(simd=2)
-    assert isinstance(point.compute.build_requirements().accepted_result, Unresolved)
+    assert isinstance(point.compute.build_requirements.inspect().accepted_result, Unresolved)
     point = point.compute.with_choices(compute_pumping=False).root
     assert point.result_type == DataType["INT8"]
     assert value(assess(point, MVAU.dimensions_supported)) is True
     assert point.compute.pe == point.pe
     assert point.compute.result.dtype == point.result_type
-    value(point.compute.build_requirements().accepted_result)
+    point.compute.build_requirements()
     assert point.assemble().result_beats == 4
     assert not hasattr(MVAU, "contract")
     refused = base.with_choices(simd=1).compute.with_choices(compute_pumping=True).root
-    assert isinstance(refused.compute.build_requirements().accepted_result, Rejected)
+    assert isinstance(refused.compute.build_requirements.inspect().accepted_result, Rejected)
     with pytest.raises(ValueError, match="dotp-pumping"):
         refused.assemble()
 
@@ -198,7 +198,7 @@ def test_build_is_complete_and_initializer_changes_identity(tmp_path, delivery):
 def test_mvau_honors_the_child_physical_view_not_just_its_raw_module(monkeypatch):
     class RestrictedDotp(DotpAxiKernel):
         @constraint
-        def view_only_rule() -> bool | Rejected:
+        def view_only_rule(self) -> bool | Rejected:
             return reject(
                 "test-view-only", "this physical View refuses the selected implementation"
             )
@@ -238,7 +238,7 @@ def test_mvau_honors_the_child_physical_view_not_just_its_raw_module(monkeypatch
     )
     point = point.compute.with_choices(compute_pumping=False).root
     assert isinstance(point.compute.query(DotpAxiKernel.codegen), Available)
-    assert isinstance(point.compute.build_requirements().accepted_result, Rejected)
+    assert isinstance(point.compute.build_requirements.inspect().accepted_result, Rejected)
     with pytest.raises(ValueError, match="test-view-only"):
         point.assemble()
     # Substitute a fully authored family to exercise the convenience entry

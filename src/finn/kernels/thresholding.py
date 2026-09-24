@@ -40,7 +40,6 @@ from finn.kernels.artifacts.requirements import (
 from finn.kernels.datatypes.semantics import (
     QONNX_DATATYPE_VALUE_SEMANTICS,
     THRESHOLD_TABLE,
-    ThresholdTable,
 )
 from finn.kernels.datatypes.values import (
     DatatypeError,
@@ -70,8 +69,10 @@ class ThresholdingAxiKernel(Kernel):
     thresholds = Param(THRESHOLD_TABLE)
     bias = Param(int)
 
-    @derived(semantics=QONNX_DATATYPE_VALUE_SEMANTICS, table=thresholds, bias=bias)
-    def result_dtype(*, table: ThresholdTable, bias: int) -> QONNXDataType | Rejected:
+    @derived(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
+    def result_dtype(self) -> QONNXDataType | Rejected:
+        table = self.thresholds
+        bias = self.bias
         if not table or not table[0] or not table[0][0]:
             return reject("threshold-shape", "a nonempty threshold table is required")
         count = len(table[0][0])
@@ -90,27 +91,16 @@ class ThresholdingAxiKernel(Kernel):
     depth_trigger_bram = Param(int)
     depth_trigger_uram = Param(int)
 
-    @constraint(
-        table=thresholds,
-        pe=pe,
-        a=input_dtype,
-        t=threshold_dtype,
-        axilite=use_axilite,
-        bram=depth_trigger_bram,
-        uram=depth_trigger_uram,
-        bias=bias,
-    )
-    def implementation_supported(
-        *,
-        table: ThresholdTable,
-        pe: int,
-        a: QONNXDataType,
-        t: QONNXDataType,
-        axilite: bool,
-        bram: int,
-        uram: int,
-        bias: int,
-    ) -> bool | Rejected:
+    @constraint
+    def implementation_supported(self) -> bool | Rejected:
+        table = self.thresholds
+        pe = self.pe
+        a = self.input_dtype
+        t = self.threshold_dtype
+        axilite = self.use_axilite
+        bram = self.depth_trigger_bram
+        uram = self.depth_trigger_uram
+        bias = self.bias
         if not table or not table[0] or not table[0][0] or pe < 1:
             return reject(
                 "threshold-shape", "nonempty sets/channels/thresholds and positive PE are required"
@@ -161,30 +151,18 @@ class ThresholdingAxiKernel(Kernel):
     @view(
         semantics=default_semantics(ModuleBuildRequirements),
         constraints=(implementation_supported,),
-        table=thresholds,
-        pe=pe,
-        a=input_dtype,
-        t=threshold_dtype,
-        result=result_dtype,
-        bias=bias,
-        axilite=use_axilite,
-        deep=deep_pipeline,
-        bram=depth_trigger_bram,
-        uram=depth_trigger_uram,
     )
-    def build_requirements(
-        *,
-        table: ThresholdTable,
-        pe: int,
-        a: QONNXDataType,
-        t: QONNXDataType,
-        result: QONNXDataType,
-        bias: int,
-        axilite: bool,
-        deep: bool,
-        bram: int,
-        uram: int,
-    ) -> ModuleBuildRequirements | Rejected:
+    def build_requirements(self) -> ModuleBuildRequirements | Rejected:
+        table = self.thresholds
+        pe = self.pe
+        a = self.input_dtype
+        t = self.threshold_dtype
+        result = self.result_dtype
+        bias = self.bias
+        axilite = self.use_axilite
+        deep = self.deep_pipeline
+        bram = self.depth_trigger_bram
+        uram = self.depth_trigger_uram
         if pe < 1:
             return reject("threshold-interface", "PE must be positive")
         sets, channels, count = len(table), len(table[0]), len(table[0][0])

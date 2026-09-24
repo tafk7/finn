@@ -53,10 +53,11 @@ class EltwiseKernel(Kernel):
     lhs_dtype = Param(QONNX_DATATYPE_VALUE_SEMANTICS)
     rhs_dtype = Param(QONNX_DATATYPE_VALUE_SEMANTICS)
 
-    @derived(
-        semantics=QONNX_DATATYPE_VALUE_SEMANTICS, operation=operation, a=lhs_dtype, b=rhs_dtype
-    )
-    def result_dtype(*, operation: str, a: QONNXDataType, b: QONNXDataType) -> QONNXDataType:
+    @derived(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
+    def result_dtype(self) -> QONNXDataType:
+        operation = self.operation
+        a = self.lhs_dtype
+        b = self.rhs_dtype
         if a.name == "FLOAT32" or b.name == "FLOAT32":
             return resolve_qonnx_datatype_name("FLOAT32")
         bits = 2 * a.bitwidth() if operation == "MUL" else a.bitwidth() + 1
@@ -65,8 +66,9 @@ class EltwiseKernel(Kernel):
 
     b_scale = Param(float)
 
-    @derived(semantics=default_semantics(float), scale=b_scale)
-    def native_scale(*, scale: float) -> float | Rejected:
+    @derived(semantics=default_semantics(float))
+    def native_scale(self) -> float | Rejected:
+        scale = self.b_scale
         try:
             rounded = float(struct.unpack("!f", struct.pack("!f", scale))[0])
         except (OverflowError, struct.error) as error:
@@ -77,18 +79,14 @@ class EltwiseKernel(Kernel):
 
     target_dsp = Param(DspBlock)
 
-    @constraint(
-        operation=operation, pe=pe, a=lhs_dtype, b=rhs_dtype, scale=native_scale, target=target_dsp
-    )
-    def implementation_supported(
-        *,
-        operation: str,
-        pe: int,
-        a: QONNXDataType,
-        b: QONNXDataType,
-        scale: float,
-        target: DspBlock,
-    ) -> bool | Rejected:
+    @constraint
+    def implementation_supported(self) -> bool | Rejected:
+        operation = self.operation
+        pe = self.pe
+        a = self.lhs_dtype
+        b = self.rhs_dtype
+        scale = self.native_scale
+        target = self.target_dsp
         if operation not in ("ADD", "SUB", "SBR", "MUL") or not 1 <= pe <= 0xFFFFFFFF:
             return reject("eltwise-operation", "positive PE and ADD, SUB, SBR or MUL are required")
         for dtype in (a, b):
@@ -117,22 +115,14 @@ class EltwiseKernel(Kernel):
     @view(
         semantics=default_semantics(ModuleBuildRequirements),
         constraints=(implementation_supported,),
-        operation=operation,
-        pe=pe,
-        a=lhs_dtype,
-        b=rhs_dtype,
-        result=result_dtype,
-        scale=native_scale,
     )
-    def build_requirements(
-        *,
-        operation: str,
-        pe: int,
-        a: QONNXDataType,
-        b: QONNXDataType,
-        result: QONNXDataType,
-        scale: float,
-    ) -> ModuleBuildRequirements | Rejected:
+    def build_requirements(self) -> ModuleBuildRequirements | Rejected:
+        operation = self.operation
+        pe = self.pe
+        a = self.lhs_dtype
+        b = self.rhs_dtype
+        result = self.result_dtype
+        scale = self.native_scale
         if pe < 1:
             return reject("eltwise-interface", "PE must be positive")
         parameter_values: dict[str, Scalar] = {

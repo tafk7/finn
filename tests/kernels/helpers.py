@@ -44,4 +44,4 @@ def value(answer: QueryResult[T]) -> T:
 
 
 def assess(point: Space, condition: Constraint) -> QueryResult[bool]:
-    return point.assess(condition).result
+    return point.inspect(condition).result

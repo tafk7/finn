@@ -28,10 +28,8 @@ from finn.kernels.physical.layout import (
     UnusedBitRange,
 )
 from finn.core.space import (
-    QueryResult,
     Constraint,
     ConstraintGroup,
-    Available,
     DefinitionError,
     Param,
     Rejected,
@@ -183,49 +181,47 @@ class AxiStreamScope(Space):
     error_code = Param(str)
 
     @derived
-    def element_bits(*, dtype: QONNXDataType) -> int:
-        return qonnx_datatype_width(dtype)
+    def element_bits(self) -> int:
+        return qonnx_datatype_width(self.dtype)
 
     @derived
-    def payload_bits(*, element_bits: int, elements_per_beat: int) -> int:
-        return element_bits * elements_per_beat
+    def payload_bits(self) -> int:
+        return self.element_bits * self.elements_per_beat
 
     @derived
-    def carrier_bits(*, payload_bits: int) -> int:
-        return (payload_bits + 7) // 8 * 8
+    def carrier_bits(self) -> int:
+        return (self.payload_bits + 7) // 8 * 8
 
     @constraint
-    def elements_valid(*, elements_per_beat: int) -> bool | Rejected:
+    def elements_valid(self) -> bool | Rejected:
+        elements_per_beat = self.elements_per_beat
         if elements_per_beat <= 0:
             return reject("interface-elements", "elements per beat must be positive")
         return True
 
     @constraint
-    def element_bits_valid(*, element_bits: int) -> bool | Rejected:
+    def element_bits_valid(self) -> bool | Rejected:
+        element_bits = self.element_bits
         if element_bits <= 0:
             return reject("interface-element-bits", "output elements must have positive width")
         return True
 
     @derived(semantics=default_semantics(AxiStream))
-    def stream(
-        *,
-        name: str,
-        dtype: QONNXDataType,
-        elements_per_beat: int,
-        endpoint: Endpoint,
-        last: bool,
-        error_code: str,
-    ) -> QueryResult[AxiStream]:
+    def stream(self) -> AxiStream | Rejected:
+        name = self.name
+        dtype = self.dtype
+        elements_per_beat = self.elements_per_beat
+        endpoint = self.endpoint
+        last = self.last
+        error_code = self.error_code
         try:
-            return Available(
-                AxiStream(name, dtype, elements_per_beat, endpoint=endpoint, last=last)
-            )
+            return AxiStream(name, dtype, elements_per_beat, endpoint=endpoint, last=last)
         except ValueError as error:
             return reject(error_code, str(error))
 
     @derived
-    def payload(*, stream: AxiStream) -> PackedBeatLayout:
-        return stream.payload
+    def payload(self) -> PackedBeatLayout:
+        return self.stream.payload
 
     def bus(self, *, clock: str | None = None, reset: str | None = None) -> Bus:
         """Lower the raw physical description, without asserting admission."""
@@ -256,7 +252,7 @@ class AxiStreamInterface(Subspace[AxiStreamScope]):
     """Place a typed AXIS interface without adding members to its parent class.
 
     Narrow handles read raw fields. The accepted_stream handle reads exactly
-    the accepted result of view(); assess that view on the child occurrence.
+    the accepted result of view(); inspect that view on the child occurrence.
     Input factories expose a dtype Param, while output factories bind an
     existing dtype supplier. Explicit fresh Params and Decisions also work.
     """

@@ -74,13 +74,13 @@ def test_integer_domains_use_encoding_family_and_inclusive_width_bounds(
     dtype, unsigned_ok, signed_ok
 ):
     ports = point(dtype)
-    assert ports.values.assess(Ports.values.constraints).verdict is unsigned_ok
-    assert ports.signed_values.assess(Ports.signed_values.constraints).verdict is signed_ok
+    assert ports.values.inspect(Ports.values.constraints).verdict is unsigned_ok
+    assert ports.signed_values.inspect(Ports.signed_values.constraints).verdict is signed_ok
 
 
 def test_known_family_refusal_survives_a_missing_dynamic_bound():
     ports = point("TERNARY", limit=None)
-    assessment = ports.values.assess(Ports.values.constraints)
+    assessment = ports.values.inspect(Ports.values.constraints)
     atomic = answers(assessment)
     assert assessment.verdict is None
     assert isinstance(atomic["dtype_family"], Rejected)
@@ -98,18 +98,18 @@ def test_geometry_and_actual_dtype_do_not_wait_for_the_admission_bound():
     assert ports.values.dtype == DataType["INT3"]
     assert ports.values.payload_bits == 6
     assert ports.values.carrier_bits == 8
-    assert ports.values.assess(Ports.values.constraints).verdict is None
+    assert ports.values.inspect(Ports.values.constraints).verdict is None
 
 
 def test_domain_does_not_select_a_dtype_when_none_was_supplied():
     ports = point()
     assert isinstance(ports.query(Ports.values.dtype), Unresolved)
     assert isinstance(ports.query(Ports.values.stream), Unresolved)
-    assert ports.values.assess(Ports.values.constraints).verdict is None
+    assert ports.values.inspect(Ports.values.constraints).verdict is None
 
 
 def test_invalid_dynamic_bound_is_a_named_refusal():
-    assessment = point("INT3", limit=0).values.assess(Ports.values.constraints)
+    assessment = point("INT3", limit=0).values.inspect(Ports.values.constraints)
     assert assessment.verdict is False
     failure = answers(assessment)["dtype_maximum_bits"]
     assert isinstance(failure, Rejected)
@@ -125,7 +125,7 @@ def test_membership_does_not_use_value_admission_or_backend_methods(monkeypatch)
     # admission needs that existing identity boundary, but no value/backend APIs.
     for method in ("allowed", "get_num_possible_values", "get_hls_datatype_str"):
         monkeypatch.setattr(integer_type, method, unavailable)
-    assert point("INT128", limit=256).values.assess(Ports.values.constraints).verdict is True
+    assert point("INT128", limit=256).values.inspect(Ports.values.constraints).verdict is True
 
 
 def test_declarations_are_scoped_and_preserved_when_the_space_is_inherited():
@@ -177,14 +177,15 @@ def test_output_reuses_the_supplied_type_source_without_creating_an_input():
     ports = point("UINT3", limit=None)
     assert ports.results.dtype == ports.values.dtype
     assert ports.results.payload_bits == 3
-    assert ports.results.assess(Ports.results.constraints).verdict is True
+    assert ports.results.inspect(Ports.results.constraints).verdict is True
 
 
 class DerivedOutput(Space):
     bits = Param(int)
 
-    @derived(semantics=QONNX_DATATYPE_VALUE_SEMANTICS, bits=bits)
-    def produced_type(*, bits: int) -> QONNXDataType:
+    @derived(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
+    def produced_type(self) -> QONNXDataType:
+        bits = self.bits
         return DataType[f"INT{bits}"]
 
     result = AxiStream.output("result", 2, produced_type)
@@ -219,7 +220,7 @@ def test_output_requires_a_datatype_value_source_not_a_domain_or_literal(source)
 
 def test_output_structural_constraints_reject_zero_width_elements():
     ports = point("INT0", limit=None)
-    assessment = ports.results.assess(Ports.results.constraints)
+    assessment = ports.results.inspect(Ports.results.constraints)
     assert assessment.verdict is False
     failure = answers(assessment)["element_bits_valid"]
     assert isinstance(failure, Rejected)
@@ -228,7 +229,7 @@ def test_output_structural_constraints_reject_zero_width_elements():
 
 def test_direct_and_parent_consumed_accepted_views_share_admission():
     ports = point("INT3", limit=None)
-    direct = ports.values.assess(Ports.values.view())
+    direct = ports.values.inspect(Ports.values.view())
     assert isinstance(direct.accepted_result, Unresolved)
     assert ports.query(Ports.values.accepted_stream) == direct.accepted_result
     assert isinstance(ports.query(Ports.values.stream), Available)

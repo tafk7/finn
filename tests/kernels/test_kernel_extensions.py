@@ -81,7 +81,8 @@ def test_kernel_capabilities_have_independent_output_types_and_no_implicit_abi()
         bits = Param(int)
 
         @view
-        def pins(*, bits: int) -> Pins:
+        def pins(self) -> Pins:
+            bits = self.bits
             calls.append("pins")
             return Pins((("word", bits),), (("result", bits),))
 
@@ -91,7 +92,9 @@ def test_kernel_capabilities_have_independent_output_types_and_no_implicit_abi()
         lanes = Param(int)
 
         @view
-        def stream(*, bits: int, lanes: int) -> AxisShape:
+        def stream(self) -> AxisShape:
+            bits = self.bits
+            lanes = self.lanes
             payload = bits * lanes
             return AxisShape(payload, 8 * ((payload + 7) // 8))
 
@@ -99,7 +102,7 @@ def test_kernel_capabilities_have_independent_output_types_and_no_implicit_abi()
         id = "test.hls"
 
         @view
-        def sources() -> HlsSourceRequirements:
+        def sources(self) -> HlsSourceRequirements:
             return HlsSourceRequirements(
                 "test.hls",
                 "1",
@@ -115,18 +118,17 @@ def test_kernel_capabilities_have_independent_output_types_and_no_implicit_abi()
     capabilities = opaque.capabilities()
     assert [entry.key for entry in capabilities] == ["pins"]
     assert calls == []
-    assert opaque.pins().accepted_result == Available(Pins((("word", 13),), (("result", 13),)))
+    assert opaque.pins() == Pins((("word", 13),), (("result", 13),))
     answer = opaque.query(capabilities[0].reference)
     assert isinstance(answer, Available)
     assert answer.value == Pins((("word", 13),), (("result", 13),))
     axis = Axis({Axis.bits: 13, Axis.lanes: 3})
-    assert axis.stream().accepted_result == Available(AxisShape(39, 40))
+    assert axis.stream() == AxisShape(39, 40)
     hls = Hls()
-    result = hls.sources().accepted_result
-    assert isinstance(result, Available)
-    assert isinstance(result.value, HlsSourceRequirements)
+    result = hls.sources()
+    assert isinstance(result, HlsSourceRequirements)
     assert [entry.key for entry in hls.capabilities()] == ["sources"]
-    assert not hasattr(result.value, "abi")
+    assert not hasattr(result, "abi")
 
     class Invalid(Hls):
         id = "test.invalid"
@@ -227,7 +229,7 @@ def test_integer_admission_retains_dynamic_bounds_and_inspectable_family_refusal
     raw = unknown.query(dtype)
     assert isinstance(raw, Available)
     assert raw.value.name == "TERNARY"
-    assessment = unknown.assess(support)
+    assessment = unknown.inspect(support)
     assert assessment.refused == ("family",)
     assert isinstance(assessment.result, Unresolved)
     for name, accepted in (
@@ -239,10 +241,10 @@ def test_integer_admission_retains_dynamic_bounds_and_inspectable_family_refusal
     ):
         point = model.bind({dtype: resolve_qonnx_datatype_name(name)})
         point = point.with_choices(point.field(width).change(8))
-        assert point.assess(support).verdict is accepted
+        assert point.inspect(support).verdict is accepted
     invalid = model.bind({dtype: resolve_qonnx_datatype_name("UINT8")})
     invalid = invalid.with_choices(invalid.field(width).change(0))
-    refused = invalid.assess(support).results["maximum_bits"]
+    refused = invalid.inspect(support).results["maximum_bits"]
     assert isinstance(refused, Rejected)
     assert refused.findings[0].code == "dtype-bound-invalid"
     assert SignedInteger(max_bits=8).signed is True
@@ -269,8 +271,8 @@ def test_explicit_dtype_semantics_support_typed_protocol_results_and_detached_va
         dtype = Param(QONNX_DATATYPE_VALUE_SEMANTICS)
 
         @derived(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
-        def result(*, dtype: QONNXDataType) -> QONNXDataType:
-            return dtype
+        def result(self) -> QONNXDataType:
+            return self.dtype
 
         physical = View(result)
 
@@ -281,9 +283,8 @@ def test_explicit_dtype_semantics_support_typed_protocol_results_and_detached_va
     returned = point.result
     setattr(returned, "_bitwidth", 32)
     assert point.result.name == "INT8"
-    result = point.physical().accepted_result
-    assert isinstance(result, Available)
-    assert result.value.name == "INT8"
+    result = point.physical()
+    assert result.name == "INT8"
 
 
 def test_builder_extends_kernel_with_typed_optional_views_and_independent_scopes() -> None:

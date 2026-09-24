@@ -18,7 +18,6 @@ from finn.kernels.base import Kernel
 from finn.kernels.datatypes.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
 from finn.kernels.datatypes.values import (
     DatatypeError,
-    QONNXDataType,
     ordinary_integer_bounds,
     resolve_qonnx_datatype_name,
 )
@@ -34,8 +33,9 @@ class IntToFp32Kernel(Kernel):
         resolve_qonnx_datatype_name("FLOAT32"), semantics=QONNX_DATATYPE_VALUE_SEMANTICS
     )
 
-    @constraint(dtype=input_dtype)
-    def input_supported(*, dtype: QONNXDataType) -> bool | Rejected:
+    @constraint
+    def input_supported(self) -> bool | Rejected:
+        dtype = self.input_dtype
         try:
             ordinary_integer_bounds(dtype)
         except DatatypeError as error:
@@ -46,10 +46,10 @@ class IntToFp32Kernel(Kernel):
             )
         return True
 
-    @view(constraints=(input_supported,), dtype=input_dtype, result=result_dtype)
-    def build_requirements(
-        *, dtype: QONNXDataType, result: QONNXDataType
-    ) -> ModuleBuildRequirements:
+    @view(constraints=(input_supported,))
+    def build_requirements(self) -> ModuleBuildRequirements:
+        dtype = self.input_dtype
+        result = self.result_dtype
         parameters = (("SIGNED", int(dtype.signed())), ("WIDTH", dtype.bitwidth()))
         return ModuleBuildRequirements(
             IntToFp32Kernel.id,

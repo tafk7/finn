@@ -28,7 +28,7 @@ from kernels.rtlsim.dotp_support import (
     _weight_beats,
     _wrapper,
 )
-from kernels.helpers import point_for, value
+from kernels.helpers import point_for
 from kernels.rtlsim.rtl_transport import drive_observed
 from finn.kernels.artifacts.contribution_types import CopiedSource
 from finn.kernels.dotp import DotpAxiKernel
@@ -117,7 +117,7 @@ def run(configuration: Configuration, evidence: Path, *, backpressure_ticks: int
             compute_pumping=c.pumping,
         ),
     )
-    module = value(point.build_requirements().accepted_result)
+    module = point.build_requirements()
     case = Case(
         c.label,
         c.target,
