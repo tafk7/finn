@@ -9,7 +9,7 @@ from collections.abc import Iterable
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from .results import Finding, QueryResult
+    from .results import Finding, NonValue
 
 
 class SpaceError(Exception):
@@ -51,7 +51,7 @@ class EvaluationError(SpaceError):
 class ValueUnavailableError(SpaceError):
     """A value read reached a valid non-value query result."""
 
-    def __init__(self, result: QueryResult[object], *, context: object | None = None) -> None:
+    def __init__(self, result: NonValue, *, context: object | None = None) -> None:
         self.result = result
         self.context = context
         super().__init__(f"value is unavailable: {type(result).__name__}")
