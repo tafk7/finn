@@ -38,6 +38,8 @@ def bad(point: Child, parent: Parent) -> None:
     point.physical.result()  # E
     point.assess(Child.physical)  # E
     point.field(Child.width).result()  # E
+    point.field(Child.physical).result()  # E
+    point.field(Child.physical).assess()  # E
     Parent.child.accepted(Child.width)  # E
     Parent.child.ref(ViewKey("view", int))  # E
     Parent.child.accepted(ValueKey("value", int))  # E

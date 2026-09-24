@@ -179,6 +179,9 @@ def check(point: Fifo, assembly: Assembly, eltwise: Eltwise) -> None:
     assert_type(point.field(Fifo.capacity), BoundValue[int])
     assert_type(point.field(Fifo.ram_style), BoundDecision[str])
     assert_type(point.field(Fifo.physical), BoundViewField[int])
+    assert_type(point.field(Fifo.physical).get(), int)
+    assert_type(point.field(Fifo.physical).query(), QueryResult[int])
+    assert_type(point.field(Fifo.physical).inspect(), ViewAssessment[int])
     assert_type(point.field(Fifo.ram_style).change("block"), Change[str])
     assert_type(refinement.change(point, Fifo.ram_style, "block"), Change[str])
     assert_type(

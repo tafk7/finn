@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from typing import cast, get_type_hints
+from typing_extensions import Self
 
 import pytest
 
@@ -158,8 +159,8 @@ def test_explicit_answer_semantics_and_dependency_modes() -> None:
         ("def result(value: int, /) -> int: return value", "positional-only"),
         ("def result(*value: int) -> int: return 1", "variadic"),
         ("def result(**value: int) -> int: return 1", "variadic"),
-        ("def result(self: int) -> int: return self", "implicit self/cls"),
-        ("def result(cls: int) -> int: return cls", "implicit self/cls"),
+        ("def result(self: int) -> int: return self", "receiver annotation"),
+        ("def result(cls: int) -> int: return cls", "cls"),
         ("def result(unknown: int) -> int: return unknown", "no declaration"),
         ("def result(value) -> int: return value", "annotation is required"),
         ("def result(value: int): return value", "return annotation"),
@@ -173,6 +174,49 @@ def test_bad_signatures_fail_without_invocation(function_source: str, message: s
     example = type("BadSignature", (Space,), {"value": Param(int), "result": derived(function)})
     with pytest.raises(DefinitionError, match=message):
         collect_space(example)
+
+
+def test_self_receivers_are_collected_without_executing_or_inventing_dependencies() -> None:
+    class Parent(Space):
+        value = Param(int)
+
+    class Example(Parent):
+        @derived
+        def implicit(self) -> int:
+            raise AssertionError("collection must not execute a self method")
+
+        @derived
+        def concrete(self: Example) -> int:
+            raise AssertionError("collection must not execute a self method")
+
+        @derived
+        def base(self: Parent) -> int:
+            raise AssertionError("collection must not execute a self method")
+
+        @derived
+        def generic(self: Space) -> int:
+            raise AssertionError("collection must not execute a self method")
+
+        @derived
+        def self_type(self: Self) -> int:
+            raise AssertionError("collection must not execute a self method")
+
+    collected = collect_space(Example)
+    for name in ("implicit", "concrete", "base", "generic", "self_type"):
+        assert collected.functions[name].dependencies == ()
+        assert collected.functions[name].semantics.type_token is int
+
+
+def test_self_receiver_and_explicit_argument_aliases_are_ambiguous() -> None:
+    class Ambiguous(Space):
+        value = Param(int)
+
+        @derived(value=value)
+        def result(self) -> int:
+            raise AssertionError("ambiguous declarations must not be evaluated")
+
+    with pytest.raises(DefinitionError, match="self.*alias|alias.*self"):
+        collect_space(Ambiguous)
 
 
 def test_extra_alias_and_answer_without_semantics_are_rejected() -> None:
