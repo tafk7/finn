@@ -259,9 +259,13 @@ def test_installed_wheel_materializes_independent_kernel_builds(tmp_path: Path) 
     shutil.copytree(qonnx / "src/qonnx", dependency_root / "qonnx")
     # Include real dependency directories from this interpreter, including an
     # explicitly shared environment. Do not execute .pth files or add source
-    # roots. The child verifies every loaded FINN module came from the wheel.
-    dependency_paths = sorted(
-        {str(Path(path).resolve()) for path in sys.path if Path(path).name == "site-packages"}
+    # roots. Preserve overlay precedence so the native dependency comes from
+    # the same environment as the test. The child verifies every loaded FINN
+    # module came from the wheel.
+    dependency_paths = list(
+        dict.fromkeys(
+            str(Path(path).resolve()) for path in sys.path if Path(path).name == "site-packages"
+        )
     )
     assert dependency_paths
     config = {
