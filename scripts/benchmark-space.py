@@ -7,7 +7,7 @@
 Example after installing the checkout or setting PYTHONPATH=src:
     python scripts/benchmark-space.py --output /tmp/space-performance.json
 
---module allows a candidate public facade to be measured before its final move.
+Native self-read and real-kernel workloads run in fresh subprocesses.
 Time and memory are observations, not CI thresholds. Semantic work assertions
 check what was evaluated and that discarded point populations release caches.
 """
@@ -24,6 +24,7 @@ import importlib
 import json
 from pathlib import Path
 import platform
+import resource
 import statistics
 import subprocess
 import sys
@@ -236,15 +237,15 @@ def narrow_query(api, branches: int) -> dict[str, object]:
         value = api.Param(int)
 
         @api.view
-        def physical(*, value: int) -> int:
+        def physical(self) -> int:
             work["selected"] += 1
-            return value + 1
+            return self.value + 1
 
         exports = {physical_key: physical}
 
     class Inactive(api.Space):
         @api.view
-        def physical() -> int:
+        def physical(self) -> int:
             work["inactive"] += 1
             raise AssertionError("an inactive alternative was demanded")
 
@@ -297,7 +298,7 @@ def wide_choice(api, alternatives: int, trials: int = 30) -> dict[str, object]:
 
     class Leaf(api.Space):
         @api.view
-        def physical() -> int:
+        def physical(self) -> int:
             work["leaf"] += 1
             return 1
 
@@ -347,8 +348,8 @@ def cache_reclamation(api, population: int) -> dict[str, object]:
         choice = api.Decision(int, domain=api.domain(accepts=member))
 
         @api.derived(semantics=payload_semantics)
-        def output(*, choice: int) -> CachedPayload:
-            payload = CachedPayload(choice, bytes((choice % 256,)) * 1024)
+        def output(self) -> CachedPayload:
+            payload = CachedPayload(self.choice, bytes((self.choice % 256,)) * 1024)
             # Track the callback-created object, not a detached public copy.
             created.append(weakref.ref(payload))
             return payload
@@ -388,144 +389,417 @@ def cache_reclamation(api, population: int) -> dict[str, object]:
     }
 
 
+def rss_bytes() -> int:
+    """Current Linux resident set; includes native continuation allocations."""
+    for line in Path("/proc/self/status").read_text().splitlines():
+        if line.startswith("VmRSS:"):
+            return int(line.split()[1]) * 1024
+    raise RuntimeError("Linux VmRSS is required for the native-memory benchmark")
+
+
+def peak_rss_bytes() -> int:
+    return int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss) * 1024
+
+
+def self_workload(api, shape: str, depth: int, width: int) -> dict[str, object]:
+    """Every graph edge is an ordinary self read, with no declared aliases."""
+    work = Counter()
+    members = {"source": api.Const(1)}
+
+    def computation(name: str, dependency: str):
+        def evaluate(self) -> int:
+            work[name] += 1
+            return getattr(self, dependency) + 1
+
+        return api.derived(evaluate)
+
+    if shape in ("chain", "mixed"):
+        previous = "source"
+        for index in range(depth):
+            name = f"step{index}"
+            members[name] = computation(name, previous)
+            previous = name
+    if shape in ("fan_in", "mixed"):
+        for index in range(width):
+            name = f"leaf{index}"
+            members[name] = computation(name, "source")
+
+    def output(self) -> int:
+        work["output"] += 1
+        # Mixed work reads a previously cached wide prefix before starting the
+        # cold deep dependency. The prefix must not be replayed on suspension.
+        total = (
+            sum(getattr(self, f"leaf{index}") for index in range(width)) if shape != "chain" else 0
+        )
+        return total + (getattr(self, f"step{depth - 1}") if shape != "fan_in" else 0)
+
+    members["output"] = api.view(output)
+    family = type("Self" + shape.title(), (api.Space,), members)
+    started = time.perf_counter()
+    model = api.compile_space(family)
+    prepare_seconds = time.perf_counter() - started
+    expected = (2 * width if shape != "chain" else 0) + (depth + 1 if shape != "fan_in" else 0)
+    callback_count = 1 + (width if shape != "chain" else 0) + (depth if shape != "fan_in" else 0)
+
+    def prepare_point():
+        work.clear()
+        point = model.bind()
+        if shape == "mixed":
+            for index in range(width):
+                assert getattr(point, f"leaf{index}") == 2
+        return point
+
+    point = prepare_point()
+    before_rss = rss_bytes()
+    started = time.perf_counter()
+    assert point.output() == expected
+    cold_seconds = time.perf_counter() - started
+    after_rss = rss_bytes()
+    assert len(work) == callback_count and all(value == 1 for value in work.values()), work
+    before_hits = work.copy()
+    hits = []
+    for _ in range(30):
+        started = time.perf_counter()
+        assert point.output() == expected
+        hits.append(time.perf_counter() - started)
+    assert work == before_hits
+    peak = peak_rss_bytes()
+    del point
+    gc.collect()
+    after_release_rss = rss_bytes()
+
+    # Repeat separately for Python allocation measurements. Native process
+    # high-water and ordinary timing above exclude allocation tracing.
+    point = prepare_point()
+    tracemalloc.start()
+    assert point.output() == expected
+    traced_live, traced_peak = tracemalloc.get_traced_memory()
+    tracemalloc.stop()
+    assert len(work) == callback_count and all(value == 1 for value in work.values()), work
+    return {
+        "shape": shape,
+        "depth": depth if shape != "fan_in" else 0,
+        "width": width if shape != "chain" else 0,
+        "prepare_seconds": prepare_seconds,
+        "cold_view_seconds": cold_seconds,
+        "cached_view_seconds_median": statistics.median(hits),
+        "callback_count_including_cached_prefix": callback_count,
+        "cold_callbacks_per_second": (callback_count - (width if shape == "mixed" else 0))
+        / cold_seconds,
+        "cached_prefix_callbacks": width if shape == "mixed" else 0,
+        "rss_before_query_bytes": before_rss,
+        "rss_after_query_bytes": after_rss,
+        "rss_after_release_bytes": after_release_rss,
+        "ordinary_process_peak_rss_bytes": peak,
+        "query_traced_live_bytes": traced_live,
+        "query_traced_peak_bytes": traced_peak,
+        "all_callbacks_run_once": True,
+    }
+
+
+def kernel_workload(api, name: str, trials: int) -> dict[str, object]:
+    """Measure repeated replacement, cold/cached accepted views and retention."""
+    kernels = importlib.import_module("finn.kernels")
+    DotpAxiKernel, DspBlock, FifoKernel, MVAU, WeightDelivery = (
+        kernels.DotpAxiKernel,
+        kernels.DspBlock,
+        kernels.FifoKernel,
+        kernels.MVAU,
+        kernels.WeightDelivery,
+    )
+    dtype = importlib.import_module("finn.kernels.datatypes.values").resolve_qonnx_datatype_name
+    if name == "fifo":
+        base = FifoKernel(word_bits=16, depth=32)
+
+        def configure(point, index):
+            return point.with_choices(ram_style=("block", "distributed")[index % 2])
+
+        def accepted(point):
+            return point.build_requirements()
+
+    elif name == "dotp":
+        base = DotpAxiKernel(
+            {
+                DotpAxiKernel.activation.dtype: dtype("INT3"),
+                DotpAxiKernel.weights.dtype: dtype("INT3"),
+                DotpAxiKernel.result.dtype: dtype("INT8"),
+            },
+            pe=2,
+            simd=2,
+            target_dsp=DspBlock.DSP48E2,
+            segment_length=0,
+        )
+
+        def configure(point, index):
+            return point.with_choices(compute_pumping=bool(index % 2))
+
+        def accepted(point):
+            return point.build_requirements()
+
+    else:
+        assert name == "mvau"
+        base = MVAU(
+            repetitions=2,
+            matrix_width=4,
+            matrix_height=4,
+            activation_dtype=dtype("INT3"),
+            weights_dtype=dtype("INT3"),
+            target_dsp=DspBlock.DSP48E2,
+            segment_length=0,
+        )
+
+        def configure(point, index):
+            return point.with_choices(
+                point.compute.field(DotpAxiKernel.compute_pumping).change(False),
+                pe=(1, 2)[index % 2],
+                simd=2,
+                weight_delivery=WeightDelivery.EXTERNAL,
+            )
+
+        def accepted(point):
+            return point.compute.build_requirements()
+
+    # Warm compilation/import allocations before reporting exploration costs.
+    warm = configure(base, 0)
+    accepted(warm)
+    del warm
+    gc.collect()
+    before_rss = rss_bytes()
+    times = {"replacement": [], "cold_view": [], "cached_view": []}
+    root_refs = []
+    point = base
+    for index in range(trials):
+        started = time.perf_counter()
+        point = configure(point, index)
+        times["replacement"].append(time.perf_counter() - started)
+        root_refs.append(weakref.ref(point))
+        started = time.perf_counter()
+        result = accepted(point)
+        times["cold_view"].append(time.perf_counter() - started)
+        assert result.contributions
+        started = time.perf_counter()
+        cached = accepted(point)
+        times["cached_view"].append(time.perf_counter() - started)
+        assert cached == result
+    del point, result, cached
+    gc.collect()
+    assert all(reference() is None for reference in root_refs)
+    repeated_rss = rss_bytes()
+    ordinary_peak = peak_rss_bytes()
+
+    # Hold an independent population, then release it with base/model retained.
+    tracemalloc.start()
+    population = []
+    for index in range(trials):
+        point = configure(base, index)
+        accepted(point)
+        population.append(point)
+    del point
+    gc.collect()
+    held_bytes, peak_bytes = tracemalloc.get_traced_memory()
+    held_rss = rss_bytes()
+    population_refs = [weakref.ref(point) for point in population]
+    population.clear()
+    gc.collect()
+    released_bytes = tracemalloc.get_traced_memory()[0]
+    released_rss = rss_bytes()
+    tracemalloc.stop()
+    assert all(reference() is None for reference in population_refs)
+    return {
+        "kernel": name,
+        "trials": trials,
+        "view": "compute.build_requirements" if name == "mvau" else "build_requirements",
+        "seconds": {
+            label: {"median": statistics.median(values), "min": min(values), "max": max(values)}
+            for label, values in times.items()
+        },
+        "configurations_per_second": trials / sum(times["replacement"] + times["cold_view"]),
+        "rss_before_exploration_bytes": before_rss,
+        "rss_after_repeated_exploration_bytes": repeated_rss,
+        "ordinary_process_peak_rss_bytes": ordinary_peak,
+        "held_population_rss_bytes": held_rss,
+        "released_population_rss_bytes": released_rss,
+        "held_population_traced_bytes": held_bytes,
+        "peak_population_traced_bytes": peak_bytes,
+        "released_population_traced_bytes": released_bytes,
+        "retained_old_configuration_count": sum(reference() is not None for reference in root_refs),
+        "retained_population_count": sum(reference() is not None for reference in population_refs),
+    }
+
+
+def isolated_workload(kind: str, name: str, sizes: dict[str, int]) -> dict[str, object]:
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(Path(__file__).resolve()),
+            "--worker",
+            f"{kind}:{name}",
+            "--worker-config",
+            json.dumps(sizes),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode:
+        raise RuntimeError(f"{kind}:{name} failed:\n{result.stdout}{result.stderr}")
+    return json.loads(result.stdout)
+
+
 def markdown(report: dict[str, object]) -> str:
     environment = report["environment"]
     lines = [
         "# Space performance measurements",
         "",
-        f"Recorded {report['recorded_at_utc']}. All semantic work assertions passed.",
+        f"Recorded {report['recorded_at_utc']}; suite `{report['suite']}`. "
+        "All semantic work assertions passed.",
         "",
-        f"Python: `{environment['python']}`. Platform: `{environment['platform']}`.",
+        f"Python: `{environment['python']}`; greenlet `{environment['greenlet']}`.",
+        f"Platform: `{environment['platform']}`.",
         f"Source revision: `{environment['repository']['revision']}`; "
         f"dirty: `{environment['repository']['dirty']}`.",
         f"Space source SHA-256: `{environment['space_source_sha256']}`.",
         "",
-        "## Compilation",
-        "",
-        "Time is measured without allocation tracing. Memory comes from a separate compile: "
-        "net traced live Python allocation after garbage collection, with the compiled model held. "
-        "Source declarations were created before tracing. This excludes prior allocations and RSS; "
-        "it can include retained library allocations made during compilation. Peak is the traced "
-        "compile high-water mark. Neither number is a recursive size estimate of the model.",
-        "",
-        "Authored declarations count effective members per instantiated scope, child placements "
-        "including choice cases, and structural choices. Generated computation nodes are excluded "
-        "from that declaration count. Potential edges are direct, not transitive closures.",
-        "",
-        "| Family | Size | Declarations | Scopes | Nodes | Edges | "
-        "Compile seconds | Cached prepare µs | Retained MiB | Peak MiB |",
-        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
-    for item in report["compilation"]:
-        counts = item["statistics"]
-        lines.append(
-            f"| {item['fixture']} | {item['size']} | {counts['authored_declarations']} | "
-            f"{counts['scopes']} | {counts['nodes']} | {counts['potential_edges']} | "
-            f"{item['compile_seconds']:.6f} | {item['reuse_seconds'] * 1e6:.2f} | "
-            f"{item['retained_compile_bytes'] / 2**20:.3f} | "
-            f"{item['peak_compile_bytes'] / 2**20:.3f} |"
-        )
+    if "compilation" in report:
+        lines += [
+            "## Preparation",
+            "",
+            "Ordinary timing excludes allocation tracing. Memory comes from a separate "
+            "preparation with declarations already allocated and the prepared definition held. "
+            "Traced Python allocation excludes native continuation stacks and RSS.",
+            "",
+            "| Family | Size | Nodes | Known edges | Prepare s | Reuse µs | "
+            "Retained MiB | Peak MiB |",
+            "|---|---:|---:|---:|---:|---:|---:|---:|",
+        ]
+        for item in report["compilation"]:
+            counts = item["statistics"]
+            lines.append(
+                f"| {item['fixture']} | {item['size']} | {counts['nodes']} | "
+                f"{counts['potential_edges']} | {item['compile_seconds']:.6f} | "
+                f"{item['reuse_seconds'] * 1e6:.2f} | "
+                f"{item['retained_compile_bytes'] / 2**20:.3f} | "
+                f"{item['peak_compile_bytes'] / 2**20:.3f} |"
+            )
+        lines += [
+            "",
+            "## Admission and query work",
+            "",
+            "Both explicit-input batches use reverse declaration order.",
+            "",
+            "| Batch | Changes | Membership calls | Prerequisite calls | Commit s | Capture s |",
+            "|---|---:|---:|---:|---:|---:|",
+        ]
+        for item in report["refinement"]:
+            lines.append(
+                f"| {item['fixture']} | {item['changes']} | {item['membership_calls']} | "
+                f"{item['prerequisite_calls']} | {item['refine_seconds']:.6f} | "
+                f"{item['capture_seconds']:.6f} |"
+            )
+        replacement = report["replacement_validation"]
+        lines += [
+            "",
+            f"Replacing 1 of {replacement['choices']} choices revalidated "
+            f"{replacement['validated']} memberships in {replacement['seconds']:.6f} s.",
+            "",
+            "| Choices | Selected callbacks | Inactive callbacks | "
+            "Demanded nodes | Edges | Cold µs | Cached µs |",
+            "|---|---:|---:|---:|---:|---:|---:|",
+        ]
+        for item in report["narrow_queries"]:
+            lines.append(
+                f"| {item['branches']} | {item['selected_callbacks']} | "
+                f"{item['inactive_callbacks']} | {item['demanded_nodes']} | "
+                f"{item['demanded_edges']} | "
+                f"{item['miss_seconds'] * 1e6:.2f} | {item['hit_seconds'] * 1e6:.2f} |"
+            )
+        lines += [
+            "",
+            "| Alternatives | Median cold µs | Minimum µs | Maximum µs | Calls/query |",
+            "|---|---:|---:|---:|---:|",
+        ]
+        for item in report["wide_choices"]:
+            lines.append(
+                f"| {item['alternatives']} | {item['query_seconds_median'] * 1e6:.2f} | "
+                f"{item['query_seconds_min'] * 1e6:.2f} | {item['query_seconds_max'] * 1e6:.2f} | "
+                f"{item['leaf_callbacks_per_query']:g} |"
+            )
+        cache = report["cache_reclamation"]
+        lines += [
+            "",
+            f"Cache reclamation tracked {cache['callback_created_objects']} "
+            f"callback-created immutable payloads of {cache['payload_bytes_per_object']} "
+            f"bytes each. {cache['alive_with_configurations_held']} were alive with "
+            f"configurations held; {cache['alive_after_configurations_released']} remained "
+            "after release and collection, with the base and prepared definition retained.",
+            "",
+        ]
+    if "self_workloads" in report:
+        lines += [
+            "## Ordinary self reads",
+            "",
+            "Each scenario runs in a fresh subprocess. Every callback runs once, and cached "
+            "view calls run no callbacks. Mixed work warms the wide prefix before a cold "
+            "view reads that prefix and enters a deep chain.",
+            "",
+            "| Work | Depth | Width | Cold view s | Cached µs | Callback count | "
+            "Process peak MiB | Traced query peak MiB |",
+            "|---|---:|---:|---:|---:|---:|---:|---:|",
+        ]
+        for item in report["self_workloads"]:
+            lines.append(
+                f"| {item['shape']} | {item['depth']} | {item['width']} | "
+                f"{item['cold_view_seconds']:.6f} | "
+                f"{item['cached_view_seconds_median'] * 1e6:.2f} | "
+                f"{item['callback_count_including_cached_prefix']} | "
+                f"{item['ordinary_process_peak_rss_bytes'] / 2**20:.3f} | "
+                f"{item['query_traced_peak_bytes'] / 2**20:.3f} |"
+            )
+        lines.append("")
+    if "kernel_workloads" in report:
+        lines += [
+            "## Repeated kernel configurations",
+            "",
+            "Choices alternate on each immutable replacement. MVAU measures its accepted "
+            "compute child requirements; FIFO and Dotp measure their direct requirements "
+            "views. Timings exclude source rendering and hardware execution. A separate "
+            "allocation run holds an independent population and then releases it.",
+            "",
+            "| Kernel | Trials | Replacement µs | Cold view µs | Cached view µs | Configs/s | "
+            "Held traced MiB | Released traced MiB | Old configs retained |",
+            "|---|---:|---:|---:|---:|---:|---:|---:|---:|",
+        ]
+        for item in report["kernel_workloads"]:
+            times = item["seconds"]
+            lines.append(
+                f"| {item['kernel']} | {item['trials']} | "
+                f"{times['replacement']['median'] * 1e6:.2f} | "
+                f"{times['cold_view']['median'] * 1e6:.2f} | "
+                f"{times['cached_view']['median'] * 1e6:.2f} | "
+                f"{item['configurations_per_second']:.1f} | "
+                f"{item['held_population_traced_bytes'] / 2**20:.3f} | "
+                f"{item['released_population_traced_bytes'] / 2**20:.3f} | "
+                f"{item['retained_old_configuration_count']} |"
+            )
+        lines.append("")
     lines += [
-        "",
-        "## Atomic monotone commitment",
-        "",
-        "Both batches are submitted in reverse declaration order. Each decision has an explicit "
-        "prerequisite callback and membership callback. Dependent decisions consume the preceding "
-        "decision; independent decisions each consume the same constant source through separate "
-        "prerequisite declarations.",
-        "",
-        "| Batch | Changes | Membership calls | Prerequisite calls | "
-        "Commit seconds | Capture seconds |",
-        "|---|---:|---:|---:|---:|---:|",
-    ]
-    for item in report["refinement"]:
-        lines.append(
-            f"| {item['fixture']} | {item['changes']} | {item['membership_calls']} | "
-            f"{item['prerequisite_calls']} | {item['refine_seconds']:.6f} | "
-            f"{item['capture_seconds']:.6f} |"
-        )
-    replacement = report["replacement_validation"]
-    lines += [
-        "",
-        "Configuration replacement revalidates every retained commitment before publication. "
-        f"Changing 1 of {replacement['choices']} choices validated "
-        f"{replacement['validated']} memberships in {replacement['seconds']:.6f} seconds.",
-    ]
-    lines += [
-        "",
-        "## Narrow query work",
-        "",
-        "One selected output is queried twice, then explained through the public evidence service. "
-        "Other choices remain unresolved, and the unselected evaluator raises if demanded.",
-        "",
-        "| Choices | Model nodes | Selected callbacks | Inactive callbacks | "
-        "Demanded nodes | Demanded edges | Miss µs | Hit µs |",
-        "|---|---:|---:|---:|---:|---:|---:|---:|",
-    ]
-    for item in report["narrow_queries"]:
-        lines.append(
-            f"| {item['branches']} | {item['statistics']['nodes']} | "
-            f"{item['selected_callbacks']} | "
-            f"{item['inactive_callbacks']} | {item['demanded_nodes']} | {item['demanded_edges']} | "
-            f"{item['miss_seconds'] * 1e6:.2f} | {item['hit_seconds'] * 1e6:.2f} |"
-        )
-    lines += [
-        "",
-        "## Choice dispatch",
-        "",
-        "The final alternative is selected in each independent configuration. Timings include "
-        "only the cold accepted-output query, excluding construction and selector membership. "
-        "Each query invokes "
-        "exactly one leaf evaluator. Median/minimum/maximum are observations over "
-        "30 configurations, not thresholds.",
-        "",
-        "| Alternatives | Median µs | Minimum µs | Maximum µs | Callbacks per query |",
-        "|---|---:|---:|---:|---:|",
-    ]
-    for item in report["wide_choices"]:
-        lines.append(
-            f"| {item['alternatives']} | {item['query_seconds_median'] * 1e6:.2f} | "
-            f"{item['query_seconds_min'] * 1e6:.2f} | {item['query_seconds_max'] * 1e6:.2f} | "
-            f"{item['leaf_callbacks_per_query']:g} |"
-        )
-    cache = report["cache_reclamation"]
-    lines += [
-        "",
-        "## Cache reclamation",
-        "",
-        f"{cache['callback_created_objects']} callback-created immutable payloads each contain "
-        f"{cache['payload_bytes_per_object']} bytes. "
-        "Weak references were created inside the callback. "
-        f"{cache['alive_with_configurations_held']} remained alive while their configurations "
-        "were held; "
-        f"{cache['alive_after_configurations_released']} remained after releasing the "
-        "configurations "
-        "and collecting. The compiled model and original choice-free root remained alive. "
-        "This checks actual cached "
-        "outputs, rather than weak references to discarded public copies.",
-        "",
         "## Interpretation and limits",
         "",
-        "Compilation includes all declared alternatives. "
-        "The narrow-query callback and evidence counts "
-        "measure demanded work separately. No cross-snapshot cache reuse is introduced or assumed. "
-        "Arbitrary user-defined membership is not claimed to be constant time. Deep scopes include "
-        "their full relative diagnostic names in the measured allocation.",
+        "Timings are observations on this machine, not CI thresholds. No cross-snapshot cache "
+        "sharing is assumed. Runtime/kernel subprocess RSS includes the interpreter, imports, "
+        "prepared definitions and native allocations. Its ordinary process peak is captured "
+        "before the separate tracing run; it is not an attribution of all bytes to greenlets. "
+        "Current RSS can stay high after objects are reclaimed because allocators retain pages. "
+        "Weak-reference assertions establish configuration/payload reclamation, not complete "
+        "release of the process resident set. Deep scope names retain their existing storage cost.",
         "",
-        "Deep scope chains retain increasingly long relative names at each level, even though "
-        "each scope and node has one compiled record. This name-storage cost remains in the "
-        "current representation. Selected outputs use a compiled lookup while retaining the "
-        "ordered alternatives for structural inspection.",
+        "JSON contains per-scenario current/peak RSS, traced allocation, throughput and "
+        "minimum/median/maximum view timings. Native stack peaks are visible in process RSS, "
+        "not necessarily in tracemalloc. These workloads supplement semantic failure, cleanup "
+        "and cancellation tests; they do not prove a universal memory bound.",
         "",
-        "These are one-process measurements on the recorded machine. "
-        "Timing and memory do not establish CI performance thresholds. "
-        "Existing 20,000-node chain and 2,000-scope tests supply separate "
-        "iterative correctness evidence; this report does not replace them.",
-        "",
-        "Reproduce with `scripts/benchmark-space.py --output <report.json> "
-        "--markdown <PERFORMANCE.md>` "
-        "and the fixture sizes recorded in the JSON configuration. The client uses only supported "
-        "Space, inspection, and selection operations.",
+        "Reproduce with `scripts/benchmark-space.py --suite all --output <report.json> "
+        "--markdown <PERFORMANCE.md>` and the sizes in the JSON configuration.",
         "",
     ]
     return "\n".join(lines)
@@ -533,8 +807,10 @@ def markdown(report: dict[str, object]) -> str:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--module", default="finn.core.space")
-    parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--suite", choices=("all", "generic", "runtime", "kernels"), default="all")
+    parser.add_argument("--worker", help=argparse.SUPPRESS)
+    parser.add_argument("--worker-config", help=argparse.SUPPRESS)
+    parser.add_argument("--output", type=Path)
     parser.add_argument("--markdown", type=Path)
     parser.add_argument("--flat", type=int, default=5000)
     parser.add_argument("--children", type=int, default=500)
@@ -542,47 +818,88 @@ def main() -> None:
     parser.add_argument("--batch", type=int, default=200)
     parser.add_argument("--branches", type=int, default=500)
     parser.add_argument("--population", type=int, default=200)
+    parser.add_argument("--self-depth", type=int, default=20000)
+    parser.add_argument("--fan-in", type=int, default=2000)
+    parser.add_argument("--kernel-trials", type=int, default=100)
     arguments = parser.parse_args()
+    api = importlib.import_module("finn.core.space")
+    if arguments.worker:
+        kind, name = arguments.worker.split(":", 1)
+        sizes = json.loads(arguments.worker_config)
+        result = (
+            self_workload(api, name, sizes["self_depth"], sizes["fan_in"])
+            if kind == "runtime"
+            else kernel_workload(api, name, sizes["kernel_trials"])
+        )
+        print(json.dumps(result))
+        return
+    if arguments.output is None:
+        parser.error("--output is required")
     sizes = {
         name: getattr(arguments, name)
-        for name in ("flat", "children", "depth", "batch", "branches", "population")
+        for name in (
+            "flat",
+            "children",
+            "depth",
+            "batch",
+            "branches",
+            "population",
+            "self_depth",
+            "fan_in",
+            "kernel_trials",
+        )
     }
     if any(value < 1 for value in sizes.values()):
         parser.error("fixture sizes must be positive")
-    api = importlib.import_module(arguments.module)
     api.compile_space(type("Warmup", (api.Space,), {}))
     root = Path(__file__).resolve().parents[1]
     report = {
-        "schema_version": 1,
+        "schema_version": 2,
+        "suite": arguments.suite,
         "recorded_at_utc": datetime.now(timezone.utc).isoformat(),
         "environment": {
             "python": sys.version,
             "executable": sys.executable,
             "platform": platform.platform(),
             "machine": platform.machine(),
-            "module": arguments.module,
+            "module": "finn.core.space",
+            "greenlet": importlib.import_module("greenlet").__version__,
             "repository": repository_state(root),
             "space_source_sha256": source_digest(Path(api.__file__).parent),
+            "kernel_source_sha256": source_digest(root / "src/finn/kernels"),
             "benchmark_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
         },
         "configuration": sizes,
-        "compilation": [
-            compilation(api, "flat", arguments.flat, flat_family),
-            compilation(api, "repeated children", arguments.children, repeated_family),
-            compilation(api, "guarded scope depth", arguments.depth, deep_family),
-        ],
-        "refinement": [
-            batch_refinement(api, arguments.batch, dependent=False),
-            batch_refinement(api, arguments.batch, dependent=True),
-        ],
-        "replacement_validation": replacement_validation(api, arguments.batch),
-        "narrow_queries": [narrow_query(api, 1), narrow_query(api, arguments.branches)],
-        "wide_choices": [wide_choice(api, 2), wide_choice(api, max(2, arguments.branches))],
-        "cache_reclamation": cache_reclamation(api, arguments.population),
     }
-    first, second = report["narrow_queries"]
-    assert first["demanded_nodes"] == second["demanded_nodes"]
-    assert first["demanded_edges"] == second["demanded_edges"]
+    if arguments.suite in ("all", "generic"):
+        report.update(
+            {
+                "compilation": [
+                    compilation(api, "flat", arguments.flat, flat_family),
+                    compilation(api, "repeated children", arguments.children, repeated_family),
+                    compilation(api, "guarded scope depth", arguments.depth, deep_family),
+                ],
+                "refinement": [
+                    batch_refinement(api, arguments.batch, dependent=False),
+                    batch_refinement(api, arguments.batch, dependent=True),
+                ],
+                "replacement_validation": replacement_validation(api, arguments.batch),
+                "narrow_queries": [narrow_query(api, 1), narrow_query(api, arguments.branches)],
+                "wide_choices": [wide_choice(api, 2), wide_choice(api, max(2, arguments.branches))],
+                "cache_reclamation": cache_reclamation(api, arguments.population),
+            }
+        )
+        first, second = report["narrow_queries"]
+        assert first["demanded_nodes"] == second["demanded_nodes"]
+        assert first["demanded_edges"] == second["demanded_edges"]
+    if arguments.suite in ("all", "runtime"):
+        report["self_workloads"] = [
+            isolated_workload("runtime", name, sizes) for name in ("chain", "fan_in", "mixed")
+        ]
+    if arguments.suite in ("all", "kernels"):
+        report["kernel_workloads"] = [
+            isolated_workload("kernels", name, sizes) for name in ("fifo", "dotp", "mvau")
+        ]
     arguments.output.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
     if arguments.markdown is not None:
         arguments.markdown.write_text(markdown(report))

@@ -1,8 +1,8 @@
 # Space authoring and immutable specialization
 
 `finn.core.space` provides the supported language and runtime for kernel
-families. A Space class describes facts, choices, computations and views. Its
-compiled model can create many independently bound configurations. Parent and
+families and other consumers. A Space class describes facts, choices, computations
+and views. Its prepared definition can create many independently bound configurations. Parent and
 child configurations share one immutable specialization snapshot.
 
 ## A runnable family
@@ -20,16 +20,16 @@ class Tiles(Space):
     factor = Decision(int, domain=divisors_of(extent))
 
     @derived
-    def cycles(*, extent: int, factor: int) -> int:
-        return extent // factor
+    def cycles(self) -> int:
+        return self.extent // self.factor
 
     @constraint
-    def supported(*, extent: int) -> bool:
-        return extent > 0
+    def supported(self) -> bool:
+        return self.extent > 0
 
     @view(constraints=(supported,))
-    def shape(*, factor: int, cycles: int) -> tuple[int, int]:
-        return factor, cycles
+    def shape(self) -> tuple[int, int]:
+        return self.factor, self.cycles
 
 
 tile_model = compile_space(Tiles)
@@ -37,12 +37,16 @@ tile_base = tile_model.bind(extent=12)
 assert isinstance(tile_base.query(Tiles.factor), Unresolved)
 tile_configuration = tile_base.with_choices(factor=3)
 assert tile_configuration.cycles == 4
-assert tile_configuration.shape().accepted_result == Available((3, 4))
+assert tile_configuration.shape() == (3, 4)
+assert tile_configuration.shape.inspect().accepted_result == Available((3, 4))
+assert tile_configuration.view(Tiles.shape)() == (3, 4)
+assert tile_configuration.field(Tiles.cycles).get() == 4
+assert tile_configuration.field(Tiles.factor).query() == Available(3)
 ```
 
-`Tiles(extent=12)` is the normal one-shot form. Retain a model and call `bind`
+`Tiles(extent=12)` is the normal one-shot form. Retain a prepared definition and call `bind`
 for repeated construction with different inputs. Both paths reuse the same
-prepared model. Preparation validates structure without running author callbacks
+prepared definition. Preparation validates structure without running author callbacks
 and finalizes declaration structure for that family.
 
 | Declaration | Class access | Configuration access |
@@ -51,13 +55,14 @@ and finalizes declaration structure for that family.
 | `Const[T]` | Typed definition-owned value handle | Frozen `T` |
 | `Decision[T]` | Typed owning choice | Committed `T` |
 | `Derived[T]` | Typed computation handle | Computed `T` |
-| `View[T]` | Typed assessment declaration | Callable bound view returning `ViewAssessment[T]` |
+| `View[T]` | Typed output declaration | Callable bound view returning accepted `T` |
 | `Subspace[S]` | Typed placement and member references | Child configuration of type `S` |
 
 Use `configuration.query(reference)` when a value may be unresolved, inapplicable or
 refused. `configuration.field(reference)` binds typed inspection to the current snapshot:
-its `result()`, decision `state`, `candidates()`, `change(value)`, and `clear()`
-operations avoid repeating the configuration at each call. Direct descriptor
+its `get()` returns a value and `query()` returns a structured result. Decisions
+also expose `state`, `candidates()`, `change(value)`, and `clear()` on that bound
+field. These operations avoid repeating the configuration at each call. Direct descriptor
 reads require an available value. `require_value(result)` provides the same
 explicit unwrap and raises `ValueUnavailableError` for a non-value result.
 
@@ -67,16 +72,25 @@ typed `field(reference)` accessor rather than publishing an `Any`-typed proxy.
 
 ## Signatures and value semantics
 
-Derived functions, constraints and function-authored views bind arguments by
-name after effective inherited members have been collected. Explicit aliases,
-such as `@derived(a=activation.dtype, b=weights.dtype)`, override those names.
-Postponed annotations are resolved with the function module and effective class
-namespace. Arguments cannot have defaults, positional-only parameters, variadic
-parameters or implicit `self`/`cls`.
+Derived computations, constraints and views are ordinary methods with `self`.
+Read declared values through `self.member`; a child such as `self.first` has its
+concrete authored Space type. Reads schedule prerequisites as they are reached.
+No dependency list, symbolic-value proxy or type-checker plugin is needed.
+Postponed annotations resolve using the function module and effective class
+namespace.
+
+Generic builders and domain providers also support explicit-input pure
+functions. Their arguments bind by name after inherited members have been
+collected; explicit aliases such as `@derived(a=activation.dtype)` override the
+names. This advanced construction facility uses the same evaluator. Combining
+`self` binding with explicit argument aliases is an error. Explicit-input
+functions cannot have argument defaults or variadic parameters.
 
 Ordinary return annotations retain their value types. Custom values use an
 explicit `ValueSemantics[T]` containing a compatibility token, name, recognition,
-equality and snapshot callbacks. Snapshot callbacks must detach mutable state.
+equality and snapshot callbacks. Recognition and snapshot hooks are pure transformations of supplied values;
+they must not read configuration state. Snapshot callbacks must detach mutable
+state without changing the input. Equality receives defensive copies.
 The default nominal policy copies values; generic return annotations such as
 `tuple[int, ...]` use their nominal container origin. Supply custom semantics
 when element recognition or domain equality is stronger than that policy.
@@ -98,10 +112,10 @@ class Encoded(Space):
     source = Param(ENCODING)
 
     @derived(semantics=ENCODING)
-    def result(*, source: Encoding) -> QueryResult[Encoding]:
-        if source.bits <= 0:
+    def result(self) -> QueryResult[Encoding]:
+        if self.source.bits <= 0:
             return reject("encoding-width", "an encoding needs positive width")
-        return Available(source)
+        return Available(self.source)
 ```
 
 Explicit semantics retain the underlying `T` for answer-returning functions;
@@ -121,8 +135,8 @@ class Geometry(Space):
     depth = Param(int)
 
     @derived
-    def address_bits(*, depth: int) -> int:
-        return max(1, (depth - 1).bit_length())
+    def address_bits(self) -> int:
+        return max(1, (self.depth - 1).bit_length())
 
 
 assert Geometry(depth=17).address_bits == 5
@@ -187,8 +201,11 @@ retain independent local choices and share only their explicitly supplied values
 
 ## Views, guards and choices
 
-`View(value, constraints=(condition,))` and `@view(...)` share one reducer. An
-assessment exposes `output_result`, `readiness`, `constraints`, and
+`View(value, constraints=(condition,))` and `@view(...)` share one reducer. A bound view
+call returns its accepted value or raises `ValueUnavailableError`. Use
+`configuration.member.inspect()` or `configuration.inspect(ViewReference)` for
+an assessment; `configuration.view(ViewReference)` binds a view generically.
+The assessment exposes `output_result`, `readiness`, `constraints`, and
 `accepted_result`. Output and acceptance prerequisites are always included;
 additional `requires=` obligations default to empty. Named `Readiness` and
 `ConstraintGroup` declarations are optional reuse mechanisms.
@@ -243,13 +260,15 @@ class Implementation(Space):
 
 implementation = Implementation()
 selected = implementation.choice.select("wide")
-assert selected.instance.assess(Implementation.physical).accepted_result == Available(8)
+assert selected.instance.view(Implementation.physical)() == 8
+assert selected.instance.inspect(Implementation.physical).accepted_result == Available(8)
 ```
 
 Only the selected alternative is demanded. Rejection from its accepted view is
 preserved. A singleton choice needs no selector commitment. Choices, fields and
-views retain source ownership for diagnostics; potential dependencies are still
-validated conservatively for cycles.
+views retain source ownership for diagnostics. Preparation validates known
+structural references and explicit dependencies. Cycles reached through method
+body reads fail during evaluation with scoped context.
 
 ## Extension authoring
 
@@ -303,7 +322,8 @@ The builder has no runtime access and cannot replace compiled records.
 `with_choices` creates a revised configuration over the same frozen facts. It
 can add, replace, or clear choices in one order-independent batch. The original
 configuration remains intact, retained choices are revalidated, and views stay
-lazy:
+lazy. Equal updates return the original receiver. Child updates return the same
+scoped type over a new root snapshot:
 
 ```python
 configured = pair.with_choices(
@@ -317,7 +337,10 @@ assert configured.second.cycles == 3
 `try_with_choices` returns a `ConfigurationResult`; strict `with_choices` raises
 `ConfigurationError` with the same report on refusal. Malformed request keys,
 foreign snapshots, duplicates, and nominal type errors raise `RequestError`
-before domain evaluators run.
+before domain evaluators run. A replacement is published only when every
+retained and new choice is admitted; failed or inactive retained choices are
+not silently removed. New snapshots have independent caches and preserve the
+exact frozen facts and prepared definition.
 
 Search and conformance code uses the advanced monotone service. A `Change`
 retains its exact base snapshot, and `refinement.commit` only adds choices:
@@ -392,16 +415,21 @@ distinguish missing immutable inputs from commitment blockers.
 
 Ordinary dependencies require values. `optional(source)` admits explicit
 `MissingInput` / `NotApplicable` markers while preserving rejection;
-`full_result(source)` supplies the entire `QueryResult[T]`. Advanced answer-aware
-callbacks still owe deterministic, monotone behavior. A decided fallback that
+`full_result(source)` supplies the entire `QueryResult[T]`. Advanced result-aware
+callbacks still owe deterministic, monotone behavior. Ordinary self methods
+consume settled values: status inspection, configuration updates and reads from
+a different snapshot inside a computation fail contextually. Catching such a
+failure cannot turn a blocked read into a settled fallback. A decided fallback that
 later changes after commitment violates that contract.
 
 `inspection.members`, `decisions` and `choices` discover frozen metadata without
 running evaluators. Typed `value_handle` and `decision_handle` references belong
-to exactly one compiled model. `inspection.dependencies` reports static direct
-dependencies; `inspection.explain` evaluates a query and returns its demanded
-evidence, including parameter presence, owning decisions, guards/selectors and
-constraint causes. Cached reads retain the same evidence. `statistics(model)`
+to exactly one compiled model. `inspection.dependencies` reports known structural and explicit direct
+dependencies; it cannot predict every read in an arbitrary method body.
+`inspection.explain` evaluates a query and returns observed demanded evidence,
+including parameter presence, owning decisions, guards/selectors and constraint
+causes. Observed reads include cache hits and do not claim a complete static
+dependency graph. `statistics(model)`
 reports structural counts without evaluating the model.
 
 The optional `conformance.MonotonicityHarness().verify(base, samples)` compares
@@ -420,10 +448,23 @@ physical algorithms remain in their existing layers.
 The old `_engine` runtime, `Engine`/`DesignPoint`/`DesignSpaceSpec`,
 `Input`/`Problem`/`Projection` spellings, property-style view access, root-factory
 reconstruction hooks and compiled-record replacement hooks have been retired.
-There is one supported runtime. Proposal scheduling, solvers, cross-snapshot
+`finn.kernels.space`, `assess`, bound-view `result`, and bound-value `result`
+are also retired; use `inspect`, `query`, and value reads as described above.
+There is one supported runtime under `finn.core.space`, with its own `py.typed`
+marker and a declared native dependency on `greenlet==3.2.4`. No public scheduler
+selection is exposed. The generic package depends only on Python, typing support
+and that continuation dependency; hardware and QONNX adapters stay in kernels. Proposal scheduling, solvers, cross-snapshot
 cache sharing and graph integration are outside this delivery.
 
-The experimental `finn.dataflow` consumers still require an intentional port.
+The experimental `finn.dataflow` consumers still import the removed
+`finn.kernels.space` path and use incompatible retired interfaces. They require
+an intentional future port; no alias or copied legacy runtime is provided.
+Existing core graph-execution modules are outside this migration.
 ONNX parsing, graph staleness checks, nodeattr writes and graph transactions are
 adapter responsibilities. The independent kernel gate and historical dataflow
 validation records do not establish post-cutover dataflow compatibility.
+
+Run `scripts/check-kernels.sh` for the independent generic Space and kernel
+gates, strict typing, formatting, import/wheel boundaries and these executable
+examples. It does not run or skip the parked dataflow/graph tests and makes no
+full-repository compatibility claim.

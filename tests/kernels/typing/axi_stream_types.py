@@ -8,7 +8,7 @@ from finn.kernels.datatypes.values import QONNXDataType
 from finn.kernels.dotp import DotpAxiKernel
 from finn.kernels.physical.axi_stream import AxiStream, AxiStreamInterface, AxiStreamScope
 from finn.kernels.physical.layout import PackedBeatLayout
-from finn.core.space import ValueRef, View, ViewAssessment
+from finn.core.space import BoundView, QueryResult, ValueRef, View, ViewAssessment
 
 
 def check(point: DotpAxiKernel) -> None:
@@ -22,4 +22,13 @@ def check(point: DotpAxiKernel) -> None:
     assert_type(point.activation.dtype, QONNXDataType)
     assert_type(point.activation.payload_bits, int)
     assert_type(point.activation.payload, PackedBeatLayout)
-    assert_type(point.activation.assess(DotpAxiKernel.activation.view()), ViewAssessment[AxiStream])
+    assert_type(
+        point.activation.inspect(DotpAxiKernel.activation.view()), ViewAssessment[AxiStream]
+    )
+
+    assert_type(point.activation.view(DotpAxiKernel.activation.view()), BoundView[AxiStream])
+    assert_type(point.activation.view(DotpAxiKernel.activation.view())(), AxiStream)
+    assert_type(point.activation.field(DotpAxiKernel.activation.payload_bits).get(), int)
+    assert_type(
+        point.activation.field(DotpAxiKernel.activation.payload_bits).query(), QueryResult[int]
+    )

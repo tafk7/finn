@@ -33,6 +33,8 @@ from finn.core.space import (
     ViewAssessment,
     compile_space,
     derived,
+    view,
+    constraint,
 )
 
 RESULT = ValueKey("result", int)
@@ -44,8 +46,8 @@ class FixedImplementation(Space):
     minimum = Const(1)
 
     @derived
-    def result(*, size: int, lanes: int) -> int:
-        return size // lanes
+    def result(self) -> int:
+        return self.size // self.lanes
 
     physical = View(result)
     exports = {RESULT: result}
@@ -55,8 +57,8 @@ class SmallImplementation(Space):
     size = Param(int)
 
     @derived
-    def result(*, size: int) -> int:
-        return size
+    def result(self) -> int:
+        return self.size
 
     exports = {RESULT: result}
 
@@ -64,6 +66,21 @@ class SmallImplementation(Space):
 class Pipeline(Space):
     size = Param(int)
     fixed = Subspace(FixedImplementation, size=size)
+
+    @derived
+    def cycles(self) -> int:
+        assert_type(self.fixed, FixedImplementation)
+        assert_type(self.fixed.result, int)
+        return self.fixed.result
+
+    @constraint
+    def supported(self) -> bool:
+        return self.size > 0
+
+    @view(constraints=(supported,))
+    def output(self) -> int:
+        return self.cycles
+
     implementation = SubspaceChoice(
         {
             "fast": Subspace(FixedImplementation, size=size),
@@ -104,5 +121,15 @@ assert_type(pipeline.implementation.alternative("fast"), Space)
 assert_type(pipeline.fixed.result, int)
 assert_type(pipeline.fixed.with_choices(lanes=2), FixedImplementation)
 assert_type(pipeline.fixed.physical, BoundView[int])
-assert_type(pipeline.fixed.physical(), ViewAssessment[int])
+assert_type(pipeline.fixed.physical(), int)
+assert_type(pipeline.fixed.physical.inspect(), ViewAssessment[int])
+assert_type(pipeline.fixed.physical.query(), QueryResult[int])
+assert_type(pipeline.fixed.inspect(FixedImplementation.physical), ViewAssessment[int])
+assert_type(pipeline.fixed.view(FixedImplementation.physical), BoundView[int])
+assert_type(pipeline.fixed.view(FixedImplementation.physical)(), int)
+assert_type(pipeline.fixed.field(FixedImplementation.result).get(), int)
+assert_type(pipeline.fixed.field(FixedImplementation.result).query(), QueryResult[int])
+assert_type(pipeline.fixed.field(FixedImplementation.lanes).get(), int)
+assert_type(pipeline.fixed.field(FixedImplementation.lanes).query(), QueryResult[int])
+assert_type(pipeline.output(), int)
 assert_type(pipeline.fixed.query(FixedImplementation.result), QueryResult[int])

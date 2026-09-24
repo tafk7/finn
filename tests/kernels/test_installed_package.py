@@ -11,7 +11,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
-import sysconfig
+from email.parser import BytesParser
 import zipfile
 
 
@@ -37,7 +37,11 @@ sys.dont_write_bytecode = True
 
 class RejectGraphDependencies(importlib.abc.MetaPathFinder):
     def find_spec(self, fullname, path=None, target=None):
-        forbidden = ("finn.dataflow", "finn.custom_op.dataflow", "onnx")
+        forbidden = (
+            "finn.dataflow", "finn.custom_op.dataflow", "onnx",
+            "finn.kernels.space", "finn.core.modelwrapper", "finn.core.onnx_exec",
+            "finn.core.rtlsim_exec",
+        )
         if any(fullname == name or fullname.startswith(name + ".") for name in forbidden):
             raise AssertionError("forbidden dependency: " + fullname)
         if fullname.startswith("qonnx") and fullname not in (
@@ -48,7 +52,27 @@ class RejectGraphDependencies(importlib.abc.MetaPathFinder):
 sys.meta_path.insert(0, RejectGraphDependencies())
 
 from finn.kernels import DotpAxiKernel, DspBlock, WeightDelivery, mvau_assembly
-from finn.core.space import Available
+from finn.core.space import Decision, Param, Space, derived, divisors_of, view
+import greenlet
+
+assert greenlet.__version__ == "3.2.4"
+
+class Tiles(Space):
+    extent = Param(int)
+    lanes = Decision(int, domain=divisors_of(extent))
+
+    @derived
+    def cycles(self) -> int:
+        return self.extent // self.lanes
+
+    @view
+    def shape(self) -> tuple[int, int]:
+        return self.lanes, self.cycles
+
+tile = Tiles(extent=12).with_choices(lanes=3)
+assert tile.shape() == (3, 4)
+assert tile.view(Tiles.shape)() == (3, 4)
+assert tile.field(Tiles.cycles).get() == 4
 from finn.kernels.artifacts import build, contributions, contribution_types, requirements
 from finn.kernels.artifacts.manifest import decode
 from finn.kernels.artifacts.store import ArtifactStore
@@ -60,7 +84,8 @@ assert resources == template_root()
 assert resources.is_relative_to(installed)
 assert (installed / "finn/kernels/py.typed").is_file()
 assert not (installed / "finn/kernels/_engine").exists()
-assert not (installed / "finn/kernels/space/_next").exists()
+assert (installed / "finn/core/space/py.typed").is_file()
+assert not (installed / "finn/kernels/space").exists()
 assert sha256((resources / "dotp_axi.sv").read_bytes()).hexdigest() == config["wrapper_sha256"]
 assert build.ModuleBuildRequirements is requirements.ModuleBuildRequirements
 assert contributions.CopiedSource is contribution_types.CopiedSource
@@ -74,9 +99,9 @@ dotp = DotpAxiKernel({
 }, pe=2, simd=2, target_dsp=DspBlock.DSP48E2, segment_length=0).with_choices(
     compute_pumping=False
 )
-answer = dotp.build_requirements().accepted_result
-assert isinstance(answer, Available), answer
-assert dict(answer.value.parameters)["ACCU_WIDTH"] == 8
+answer = dotp.build_requirements()
+assert isinstance(answer, requirements.ModuleBuildRequirements), answer
+assert dict(answer.parameters)["ACCU_WIDTH"] == 8
 assert dotp.activation.dtype.name == "INT3"
 assert dotp.activation.payload_bits == 6
 
@@ -115,7 +140,7 @@ def materialize(module, expected):
             assert (directory / source.path).read_bytes() == original
     return directory / (prepared.abi.entry_point + ".sv")
 
-materialize(answer.value, dotp_sources)
+materialize(answer, dotp_sources)
 for delivery in WeightDelivery:
     options = {}
     expected = dotp_sources | {"rtl/infra/replay_buffer.sv"}
@@ -193,16 +218,25 @@ def test_installed_wheel_materializes_independent_kernel_builds(tmp_path: Path) 
     with zipfile.ZipFile(wheel) as archive:
         assert {
             "finn/kernels/py.typed",
+            "finn/core/space/py.typed",
             "finn/kernels/resources/dotp_axi.sv",
             "finn/kernels/resources/cyclic_stream.sv",
             "finn/kernels/resources/decomposed_wrapper.sv.j2",
         } <= set(archive.namelist())
         assert not any(
             name.startswith("finn/kernels/_engine/")
+            or name.startswith("finn/kernels/space/")
             or any(part.startswith("_next") for part in name.split("/"))
             for name in archive.namelist()
         )
         assert not any(name.startswith("finn/dataflow/artifacts/") for name in archive.namelist())
+        (metadata_name,) = (
+            name for name in archive.namelist() if name.endswith(".dist-info/METADATA")
+        )
+        metadata = BytesParser().parsebytes(archive.read(metadata_name))
+        requirements = metadata.get_all("Requires-Dist", [])
+        assert "greenlet==3.2.4" in {value.replace(" ", "") for value in requirements}
+        assert any(value.startswith("typing_extensions") for value in requirements)
     installed = tmp_path / "installed"
     _run(
         [
@@ -223,12 +257,18 @@ def test_installed_wheel_materializes_independent_kernel_builds(tmp_path: Path) 
     )
     dependency_root = tmp_path / "dependency"
     shutil.copytree(qonnx / "src/qonnx", dependency_root / "qonnx")
-    paths = sysconfig.get_paths()
+    # Include real dependency directories from this interpreter, including an
+    # explicitly shared environment. Do not execute .pth files or add source
+    # roots. The child verifies every loaded FINN module came from the wheel.
+    dependency_paths = sorted(
+        {str(Path(path).resolve()) for path in sys.path if Path(path).name == "site-packages"}
+    )
+    assert dependency_paths
     config = {
         "installed": str(installed),
         "qonnx": str(dependency_root),
         "finnlib": str(finnlib),
-        "site_packages": sorted({paths["purelib"], paths["platlib"]}),
+        "site_packages": dependency_paths,
         "store": str(tmp_path / "store"),
         "wrapper_sha256": CORRECTED_WRAPPER_SHA256,
     }

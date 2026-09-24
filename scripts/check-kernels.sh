@@ -16,11 +16,17 @@ if [ -d "$FINN_ROOT/deps/qonnx/src" ]; then
     RUN_PYTHONPATH="$RUN_PYTHONPATH:$FINN_ROOT/deps/qonnx/src"
 fi
 "$PYTHON_BIN" --version
+# These are independent Space/kernel gates. Parked dataflow/graph tests remain
+# outside this command; their compatibility is not claimed.
+PYTHONPATH="$RUN_PYTHONPATH" "$PYTHON_BIN" -m pytest -q --confcutdir=tests/core/space tests/core/space
 PYTHONPATH="$RUN_PYTHONPATH" "$PYTHON_BIN" -m pytest -q --confcutdir=tests/kernels tests/kernels
-"$RUFF_BIN" format --check src/finn/kernels tests/kernels
-"$RUFF_BIN" check src/finn/kernels tests/kernels
+PYTHONPATH="$RUN_PYTHONPATH" "$PYTHON_BIN" scripts/check-space-examples.py
+"$RUFF_BIN" format --check src/finn/core/space src/finn/kernels tests/core/space tests/kernels \
+    scripts/benchmark-space.py scripts/check-space-examples.py
+"$RUFF_BIN" check src/finn/core/space src/finn/kernels tests/core/space tests/kernels \
+    scripts/benchmark-space.py scripts/check-space-examples.py
 env -u PYTHONPATH MYPYPATH=src:tests "$MYPY_BIN" \
-    --no-incremental --strict --explicit-package-bases -p finn.kernels
+    --no-incremental --strict --explicit-package-bases -p finn.core.space -p finn.kernels
 env -u PYTHONPATH MYPYPATH=src:tests "$MYPY_BIN" \
     --no-incremental --strict --explicit-package-bases \
     tests/core/space tests/kernels/typing tests/kernels/helpers.py \

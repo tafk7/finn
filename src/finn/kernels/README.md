@@ -11,20 +11,21 @@ from finn.core.space import Available, compile_space
 fifo_model = compile_space(FifoKernel)
 fifo_base = fifo_model.bind(word_bits=16, depth=32)
 fifo_configuration = fifo_base.with_choices(ram_style="block")
-assessment = fifo_configuration.build_requirements()
+requirements = fifo_configuration.build_requirements()
+assessment = fifo_configuration.build_requirements.inspect()
 assert isinstance(assessment.accepted_result, Available)
-requirements = assessment.accepted_result.value
+assert fifo_configuration.view(FifoKernel.build_requirements)() == requirements
+assert fifo_configuration.field(FifoKernel.ram_style).get() == "block"
 ```
 
-The model can bind many independent configurations; each one freezes its own inputs.
+The prepared definition can bind many independent configurations; each one freezes its own inputs.
 Choice replacement returns immutable successors. The raw output in an assessment does
 not establish that its constraints and readiness obligations are accepted.
-See the [Space API guide](../../../docs/design-space.md) for signature binding,
+See the [Space API guide](../../../docs/design-space.md) for ordinary self methods,
 scopes, guarded choices, atomic refinement, inspection, and sparse selections.
 
 ```text
 base.py                  neutral Kernel identity and capability metadata
-space/                   one language, compiler, runtime and public services
 dotp.py                  activation/weights/result scopes and build requirements
 mvau.py                  parent-owned folding/delivery and accepted dotp child
 streaming.py             replay and initialized cyclic word delivery
@@ -107,14 +108,17 @@ package. Local source paths are relative to the resource directory; no source
 checkout layout is assumed.
 
 Run `scripts/check-kernels.sh` from the repository root for the independent
-kernel checks. Explicit XSI checks live in `tests/kernels/rtlsim`; run, for
+generic Space and kernel checks, including executable guide examples. The
+generic package has its own `py.typed` marker and uses the declared
+`greenlet==3.2.4` runtime dependency. Explicit XSI checks live in `tests/kernels/rtlsim`; run, for
 example, `python -m kernels.rtlsim.mvau_assembly_numeric --case packed` with
 `PYTHONPATH=src:tests:deps/qonnx/src`, `FINN_ROOT`, `FINNLIB_ROOT` and the Vivado
 library path configured. `pure_dot_product_numeric --stress` exercises sustained
 one-beat reductions with long output stalls.
 
-The experimental code under `finn.dataflow` still consumes retired runtime
-interfaces and requires a separate port. Graph inference, nodeattr persistence,
+The experimental code under `finn.dataflow` still imports the removed
+`finn.kernels.space` package and consumes incompatible retired interfaces. It
+requires a separate port to `finn.core.space`; there is no compatibility alias. Graph inference, nodeattr persistence,
 source reconstruction and graph transactions are outside this kernel API.
 The independent kernel gate does not claim those consumers work. The canonical
 physical definitions and shared support belong here. Keep local RTL unchanged

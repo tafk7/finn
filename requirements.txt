@@ -1,6 +1,7 @@
 bitstring==4.2.3
 clize==5.0.1
 dataclasses-json==0.5.7
+greenlet==3.2.4
 gspread==3.6.0
 hypothesis==6.167.1
 importlib-resources==6.1.0
