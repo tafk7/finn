@@ -52,6 +52,50 @@ class SpaceModel(Generic[S]):
 _PREPARATION_LOCK = RLock()
 
 
+def _constructor_families(space_type: type[Space]) -> tuple[type[object], ...]:
+    """Return every class whose constructor protocol affects this family."""
+
+    result: list[type[object]] = []
+    for base in space_type.__mro__:
+        if base is Space:
+            break
+        result.append(base)
+    return tuple(result)
+
+
+def _validate_constructors(space_types: tuple[type[Space], ...]) -> None:
+    checked: set[type[object]] = set()
+    for space_type in space_types:
+        for base in _constructor_families(space_type):
+            if base in checked:
+                continue
+            checked.add(base)
+            if "__init__" in base.__dict__:
+                raise DefinitionError(
+                    f"{base.__qualname__}: custom instance __init__ is unsupported; "
+                    "use declarations and ordinary helper methods"
+                )
+            if "__new__" in base.__dict__:
+                raise DefinitionError(
+                    f"{base.__qualname__}: custom instance __new__ is unsupported"
+                )
+
+
+def _definition_families(space_types: tuple[type[Space], ...]) -> tuple[type[Space], ...]:
+    """Include concrete families and Space bases contributing effective declarations."""
+
+    result: list[type[Space]] = []
+    seen: set[type[Space]] = set()
+    for space_type in space_types:
+        for base in space_type.__mro__:
+            if base is Space:
+                break
+            if issubclass(base, Space) and base not in seen:
+                seen.add(base)
+                result.append(base)
+    return tuple(result)
+
+
 def _validated_order(nodes: tuple[Node, ...]) -> tuple[int, ...]:
     """Iterative Kosaraju validation and dependency-first order in O(V + E)."""
 
@@ -123,23 +167,13 @@ def compile_space(space_type: type[S]) -> SpaceModel[S]:
             if not isinstance(cached, SpaceModel) or cached.space_type is not space_type:
                 raise DefinitionError("invalid prepared-model cache on Space family")
             return cached
-        for base in space_type.__mro__:
-            if base is Space:
-                break
-            if "__init__" in base.__dict__:
-                raise DefinitionError(
-                    f"{base.__qualname__}: custom instance __init__ is unsupported; "
-                    "use declarations and ordinary helper methods"
-                )
-            if "__new__" in base.__dict__:
-                raise DefinitionError(
-                    f"{base.__qualname__}: custom instance __new__ is unsupported"
-                )
         linked = link_space(space_type, _validated_order)
+        scope_types = tuple(dict.fromkeys(scope.space_type for scope in linked.scopes))
+        _validate_constructors(scope_types)
         model = SpaceModel(space_type, linked)
         # Publication happens only after the complete definition linked successfully.
-        for scope in linked.scopes:
-            type.__setattr__(scope.space_type, "_space_definition_finalized", True)
+        for family in _definition_families(scope_types):
+            type.__setattr__(family, "_space_definition_finalized", True)
         type.__setattr__(space_type, "_space_prepared_model", model)
         return model
 

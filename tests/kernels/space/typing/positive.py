@@ -170,8 +170,9 @@ def check(point: Fifo, assembly: Assembly, eltwise: Eltwise) -> None:
     assert_type(point.field(Fifo.ram_style), BoundDecision[str])
     assert_type(point.field(Fifo.physical), BoundViewField[int])
     assert_type(point.field(Fifo.ram_style).change("block"), Change[str])
+    assert_type(refinement.change(point, Fifo.ram_style, "block"), Change[str])
     assert_type(
-        refinement.commit(point, point.field(Fifo.ram_style).change("block")),
+        refinement.commit(point, refinement.change(point, Fifo.ram_style, "block")),
         CommitmentReport[Fifo],
     )
     assert_type(

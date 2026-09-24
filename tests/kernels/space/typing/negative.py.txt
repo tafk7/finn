@@ -18,6 +18,7 @@ def bad(point: Child, parent: Parent) -> None:
     wrong_value: str = point.width  # E
     wrong_descriptor: int = Child.width  # E
     point.field(Child.lanes).change("two")  # E
+    refinement.change(point, Child.lanes, "two")  # E
     point.field(Child.width).change(2)  # E
     parent.field(Parent.child.ref(Child.lanes)).change(2)  # E
     point.physical(3)  # E

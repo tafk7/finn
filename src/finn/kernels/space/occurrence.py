@@ -361,7 +361,7 @@ def _values_equal(node: Node, left: object, right: object) -> bool:
 
 
 def try_with_choices(
-    point: S, *changes: ChangeRequest, **choices: object
+    point: S, /, *changes: ChangeRequest, **choices: object
 ) -> ConfigurationResult[S]:
     """Build and validate a replacement choice set over the same frozen facts."""
 
@@ -467,7 +467,7 @@ def try_with_choices(
         return ConfigurationResult(successor, True, tuple(published))
 
 
-def with_choices(point: S, *changes: ChangeRequest, **choices: object) -> S:
+def with_choices(point: S, /, *changes: ChangeRequest, **choices: object) -> S:
     report = try_with_choices(point, *changes, **choices)
     if not report.accepted:
         raise ConfigurationError(report)

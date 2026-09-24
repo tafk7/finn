@@ -30,9 +30,6 @@ class ChangeRequest(Protocol):
     @property
     def remove(self) -> bool: ...
 
-    @property
-    def value(self) -> object: ...
-
 
 @dataclass(frozen=True, slots=True)
 class Change(Generic[T_co]):

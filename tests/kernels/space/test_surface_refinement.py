@@ -10,10 +10,12 @@ from weakref import ReferenceType, ref
 import pytest
 
 from finn.kernels.space import (
+    Available,
     Decision,
     Param,
     Space,
     Subspace,
+    SubspaceChoice,
     Unresolved,
     ValueSemantics,
     View,
@@ -83,6 +85,28 @@ def test_prepared_structure_and_configuration_fields_are_immutable() -> None:
     assert getattr(instance, "note") == "ordinary metadata"
 
 
+def test_prepared_inherited_declarations_and_their_owners_are_immutable() -> None:
+    class Base(Space):
+        value = Param(int)
+
+    class Family(Base):
+        pass
+
+    instance = Family(value=1)
+    reference = Family.value
+    with pytest.raises(DefinitionError, match="finalized"):
+        Family.value = 99  # type: ignore[assignment]
+    with pytest.raises(DefinitionError, match="finalized"):
+        Base.value = 99  # type: ignore[assignment]
+    assert instance.value == 1
+    assert instance.query(reference) == Available(1)
+
+    class Variant(Base):
+        value = Param(int, required=False)
+
+    assert Variant(value=2).value == 2
+
+
 def test_custom_instance_initialization_is_rejected_at_preparation() -> None:
     class Stateful(Space):
         value = Param(int)
@@ -92,6 +116,51 @@ def test_custom_instance_initialization_is_rejected_at_preparation() -> None:
 
     with pytest.raises(DefinitionError, match="custom instance __init__"):
         compile_space(Stateful)
+
+
+def test_nested_custom_instance_initialization_is_rejected() -> None:
+    class Child(Space):
+        value = Param(int)
+
+        def __init__(self, **parameters: object) -> None:
+            self.saved = parameters
+
+    class Parent(Space):
+        child = Subspace(Child, value=1)
+
+    with pytest.raises(DefinitionError, match="custom instance __init__"):
+        compile_space(Parent)
+
+    class ChoiceParent(Space):
+        child = SubspaceChoice({"only": Subspace(Child, value=1)})
+
+    with pytest.raises(DefinitionError, match="custom instance __init__"):
+        compile_space(ChoiceParent)
+
+
+def test_structural_choices_cannot_be_shadowed_on_instances() -> None:
+    class Family(Space):
+        implementation = SubspaceChoice({"a": Subspace(Space), "b": Subspace(Space)})
+        singleton = SubspaceChoice({"only": Subspace(Space)})
+
+    instance = Family().with_choices(implementation="a")
+    with pytest.raises(AttributeError, match="immutable configuration field"):
+        instance.implementation = "b"  # type: ignore[assignment]
+    with pytest.raises(AttributeError, match="immutable configuration field"):
+        instance.singleton = "only"  # type: ignore[assignment]
+
+
+@pytest.mark.parametrize("method", ["with_choices", "try_with_choices"])
+@pytest.mark.parametrize("name", ["self", "point"])
+def test_choice_keywords_do_not_collide_with_receiver_arguments(method: str, name: str) -> None:
+    class Family(Space):
+        self = Decision(int, values=(1, 2))
+        point = Decision(int, values=(1, 2))
+
+    instance = Family()
+    result = getattr(instance, method)(**{name: 1})
+    revised = result if method == "with_choices" else result.instance
+    assert getattr(revised, name) == 1
 
 
 def test_constructor_keywords_do_not_steal_parameter_names_and_duplicates_precede_snapshots() -> (

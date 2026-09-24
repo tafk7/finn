@@ -13,15 +13,14 @@ from .occurrence import change as _change
 from .occurrence import commit as _commit
 
 T = TypeVar("T")
-T_co = TypeVar("T_co", covariant=True)
 S = TypeVar("S", bound=Space)
 
 
-class _EditableReference(Protocol[T_co]):
-    def _choice_type(self) -> T_co: ...
+class _EditableReference(Protocol[T]):
+    def _choice_type(self, value: T, /) -> T: ...
 
 
-def change(instance: Space, reference: _EditableReference[T], value: object) -> Change[T]:
+def change(instance: Space, reference: _EditableReference[T], value: T) -> Change[T]:
     result: Change[object] = _change(
         instance, cast(Decision[object] | DecisionRef[object], reference), value
     )

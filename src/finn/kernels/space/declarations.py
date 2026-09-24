@@ -208,7 +208,7 @@ class Decision(ValueDecl[T], Generic[T]):
             else finite(cast(Iterable[T], values), self.semantics)
         )
 
-    def _choice_type(self) -> T:
+    def _choice_type(self, _value: T, /) -> T:
         """Static marker used by typed change construction; never evaluated."""
 
         raise RuntimeError("choice type markers are not runtime operations")
@@ -556,7 +556,7 @@ class ScopedValueRef(ValueRef[T], Generic[T]):
 class DecisionRef(ScopedValueRef[T], Generic[T]):
     """Editable handle; compilation verifies that this placement owns a choice."""
 
-    def _choice_type(self) -> T:
+    def _choice_type(self, _value: T, /) -> T:
         """Static marker used by typed change construction; never evaluated."""
 
         raise RuntimeError("choice type markers are not runtime operations")
@@ -698,7 +698,7 @@ class SpaceMeta(type):
         if cls.__dict__.get("_space_definition_finalized", False) and not name.startswith(
             "_space_"
         ):
-            existing = cls.__dict__.get(name)
+            existing = getattr(cls, name, None)
             if (
                 name == "exports"
                 or isinstance(existing, Declaration)
@@ -746,7 +746,12 @@ class Space(metaclass=SpaceMeta):
             from .occurrence import state
 
             scope = state(self).model.linked.scopes[scope_index]
-            if name in scope.named_members or name in scope.named_children:
+            choice_names = {
+                declaration.name
+                for declaration in scope.choices
+                if isinstance(declaration, SubspaceChoice)
+            }
+            if name in scope.named_members or name in scope.named_children or name in choice_names:
                 raise AttributeError(
                     f"{name} is an immutable configuration field; use with_choices()"
                 )
@@ -789,13 +794,13 @@ class Space(metaclass=SpaceMeta):
 
         return bind_field(self, reference)
 
-    def with_choices(self, *changes: ChangeRequest, **choices: object) -> Self:
+    def with_choices(self, /, *changes: ChangeRequest, **choices: object) -> Self:
         from .occurrence import with_choices
 
         return with_choices(self, *changes, **choices)
 
     def try_with_choices(
-        self, *changes: ChangeRequest, **choices: object
+        self, /, *changes: ChangeRequest, **choices: object
     ) -> ConfigurationResult[Self]:
         from .occurrence import try_with_choices
 
