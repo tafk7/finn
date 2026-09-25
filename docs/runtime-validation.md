@@ -11,13 +11,18 @@ commit. Same host as below.
 | Lock | Reproduces upstream's pinned versions (numpy 1.26.4, onnx 1.22.0, onnxruntime 1.28.0, scipy 1.11.4, pytest 7.4.4, pytest-html 4.1.1, pandas 2.1.4, QONNX `4c1f9b44`, ...), torch 2.8.0 CPU; unchanged when the temporary pins are removed. |
 | Python range | 3.10 does not resolve (QONNX caps onnx at 1.17 on 3.10; onnxruntime 1.28 requires 3.11). On 3.11 at the locked versions the unit suites pass (2028 passed). Chosen: `>=3.11,<3.13`. |
 | Native, 3.12 | `tests/util` and `tests/transformation` without Vivado: 2028 passed. The whole suite (33410 tests) collects. |
-| Image | `ubuntu:noble-20240605`, Python 3.12.3, g++ 13.3, no ncurses 5; 3.65 GB; build-time check over 191 packages; `agent` at uid 1000 with the base's `ubuntu` user removed. XRT 24.04 package checksum recorded (18.8 MB, `5e76278a...`); not installed here. |
+| Image | `ubuntu:noble-20240605`, Python 3.12.3, g++ 13.3, no ncurses 5; 3.65 GB (3.82 GB with XRT); build-time check over 191 packages; `agent` at uid 1000 with the base's `ubuntu` user removed. |
 | Container | uid 1001: FINN editable from the checkout, hlslib from the submodule, the moved `requantf` library found; runtime tests inside the image: 115 passed. |
 | Found and fixed | `onnxoptimizer` restored (Brevitas export imports it; dropped earlier because the transformation tests had not been run); three tests that still used `FINN_ROOT/finn-rtllib`; the portable-RTL export's detection of RTL library files; `tcl_quote` in upstream's new `add_files` code. |
 
-Not run here: the container conformance suite (disk space), anything needing
-AMD tools (including Vivado 2024.2 on 24.04 without ncurses 5), the XRT install,
-and the CI pipelines themselves (the new 3.11 job's steps were run locally).
+Container conformance suite on the 24.04 image, against real Docker and sbx: 14
+passed, 4 skipped (Xilinx toolchain, node-locked licence, Apptainer). This builds
+the XRT variant: the 24.04 XRT package (2.18.179) downloads, matches its checksum
+and installs.
+
+Not run here: anything needing AMD tools (including Vivado 2024.2 on 24.04
+without ncurses 5, and XRT against a device), and the CI pipelines themselves
+(the new 3.11 job's steps were run locally).
 
 ## Environment simplification (2026-09-25)
 
