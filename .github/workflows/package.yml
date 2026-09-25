@@ -1,0 +1,82 @@
+name: Package
+
+# Development and the images use FINN editable, which hides packaging mistakes
+# (a resource missing from the wheel, a broken entry point). This builds the
+# wheels and uses them from a clean environment, with no checkout on the path.
+
+on:
+  pull_request:
+    branches: [ dev ]
+  push:
+    branches: [ dev ]
+  workflow_dispatch:
+    inputs:
+      lowest:
+        description: "Also test the lowest versions the dependency ranges allow"
+        type: boolean
+        default: false
+
+jobs:
+
+  wheel:
+    name: Build and use the wheels
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.10.0"
+
+      - name: Build wheels
+        run: |
+          uv build --out-dir dist .
+          uv build --out-dir dist packages/finn-hlslib
+
+      - name: Install the wheels into a clean environment
+        # Dependencies at the locked versions; FINN and finn-hlslib from the wheels.
+        run: |
+          UV_PROJECT_ENVIRONMENT=/tmp/finn-wheel uv sync --frozen --no-default-groups \
+            --no-install-workspace --extra hw
+          uv pip install --python /tmp/finn-wheel/bin/python --no-deps dist/*.whl
+
+      - name: Use the installed package outside the checkout
+        working-directory: /tmp
+        run: |
+          /tmp/finn-wheel/bin/python -I "$GITHUB_WORKSPACE/tests/util/runtime_resource_smoke.py" /tmp/smoke
+          /tmp/finn-wheel/bin/build_dataflow --help
+          /tmp/finn-wheel/bin/python -I -c \
+            "from finn.util.external import hlslib_path; import finn; print(hlslib_path())"
+
+      - name: Published metadata resolves
+        # What `pip install finn` would need from PyPI (resolution only).
+        run: |
+          uv venv --python 3.10 /tmp/finn-pypi
+          uv pip install --python /tmp/finn-pypi/bin/python --dry-run dist/finn-*.whl
+
+  lowest:
+    name: Lowest allowed dependency versions
+    if: github.event_name == 'workflow_dispatch' && inputs.lowest
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.10.0"
+
+      - name: Resolve the bottom of the ranges and run the unit tests
+        run: |
+          uv lock --resolution lowest-direct
+          uv sync
+          uv run pytest -q -m "util or transform or streamline" -k "not vivado"
