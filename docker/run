@@ -107,8 +107,6 @@ Usage: docker/run [OPTIONS] [-- COMMAND...]
 Options:
   -n, --name NAME    set the Docker container name
   --fpga             grant access to the configured Xilinx toolchain
-  --dependencies     select the dependency artifact for explicit development setup
-  --venv PATH        mount an existing host environment directory at /env/venv
   --volume SPEC      pass an explicit Compose volume (repeatable)
   --runtime NAME     add image content such as xrt; repeatable
   --notebook         start the Docker notebook service
@@ -127,7 +125,6 @@ PRINT_ONLY=0
 INSTANCE_NAME=""
 NAME_EXPLICIT=0
 RUNTIMES="${FINN_RUNTIMES:-}"
-export FINN_ARTIFACT=application
 VOLUMES=()
 
 
@@ -138,10 +135,6 @@ while [ "$#" -gt 0 ]; do
             INSTANCE_NAME=$2; NAME_EXPLICIT=1; shift 2 ;;
         --name=*) INSTANCE_NAME=${1#*=}; NAME_EXPLICIT=1; shift ;;
         --fpga) FPGA=1; shift ;;
-        --dependencies) export FINN_ARTIFACT=dependencies; shift ;;
-        --venv)
-            [ "$#" -ge 2 ] || { echo "--venv needs a host directory" >&2; exit 2; }
-            export FINN_DEV_ENVIRONMENT="$2"; shift 2 ;;
         --volume)
             [ "$#" -ge 2 ] || { echo "--volume needs a mount specification" >&2; exit 2; }
             VOLUMES+=("$2"); shift 2 ;;
@@ -150,8 +143,8 @@ while [ "$#" -gt 0 ]; do
             RUNTIMES="${RUNTIMES:+$RUNTIMES,}$2"; shift 2 ;;
         --runtime=*)
             value=${1#*=}; RUNTIMES="${RUNTIMES:+$RUNTIMES,}$value"; shift ;;
-        --deps|--deps=*)
-            echo "--deps was replaced by explicit pip installs; see docs/installation.md" >&2
+        --deps|--deps=*|--dependencies|--venv)
+            echo "$1 was removed: the container installs the mounted checkout; see docs/installation.md" >&2
             exit 2 ;;
         --notebook) NOTEBOOK=1; shift ;;
         --rebuild) export FINN_CONTAINER_REBUILD=1; shift ;;
@@ -165,7 +158,7 @@ while [ "$#" -gt 0 ]; do
 done
 
 if [ -n "${FINN_DEPS:-}" ]; then
-    echo "FINN_DEPS no longer selects imports; use an explicit installed or editable environment" >&2
+    echo "FINN_DEPS was removed: dependencies come from uv.lock; see docs/installation.md" >&2
     exit 2
 fi
 if [ "$NOTEBOOK" = 1 ] && [ "$#" -gt 0 ]; then
@@ -199,9 +192,6 @@ if [ "$PRINT_ONLY" = 1 ]; then
     printf 'tier=%s\n' "$TIER"
     printf 'runtimes=%s\n' "$RUNTIMES"
     printf 'bake_target=%s\n' "$target"
-    printf 'package_artifact=%s\n' "$FINN_ARTIFACT"
-    printf 'dependency_revision=%s\n' "$FINN_DEPENDENCY_REVISION"
-    printf 'application_revision=%s\n' "$FINN_APPLICATION_REVISION"
     printf 'image_revision=%s\n' "$FINN_IMAGE_REVISION"
     printf 'source_revision=%s\n' "$FINN_SOURCE_REVISION"
     printf 'source_describe=%s\n' "$FINN_SOURCE_DESCRIBE"
@@ -217,8 +207,4 @@ if [ "$PRINT_ONLY" = 1 ]; then
 fi
 
 cd "$REPO"
-if [ "${FINN_SKIP_DEP_REPOS:-0}" = 0 ] \
-   && [ "${FINN_FETCH_DEPS:-0}" = 1 ]; then
-    if [ "$TIER" = dev ]; then ./fetch-repos.sh python; else ./fetch-repos.sh; fi
-fi
 run_docker "$@"

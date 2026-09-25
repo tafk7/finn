@@ -61,6 +61,14 @@ def bake_tag(target="finn", *, runtimes="", image_revision="env-CONFORMANCE"):
     ][0]
 
 
+def wait_ready(exec_prefix, timeout=300):
+    """Wait for the entrypoint's startup sync; exec does not wait for the entrypoint."""
+    deadline = time.monotonic() + timeout
+    while run([*exec_prefix, "test", "-e", "/tmp/finn-ready"], timeout=60).returncode:
+        assert time.monotonic() < deadline, "container never became ready"
+        time.sleep(1)
+
+
 def require_command(name):
     if not shutil.which(name):
         pytest.skip("%s is not installed" % name)
@@ -220,7 +228,8 @@ def test_04_bare_docker_exec(docker_daemon):
     """docker exec reaches Python and vendor tools without running ENTRYPOINT."""
     name = "finn-conformance-%d" % os.getpid()
     have_xilinx = os.path.isdir(os.environ.get("FINN_XILINX_PATH", ""))
-    data = resolved("build" if have_xilinx else "dev")
+    # Mirrored like docker/run, so FINN_ROOT names the mounted checkout.
+    data = resolved("build" if have_xilinx else "dev", "mirror")
     tag = ensure_image("finn")
     args = [
         "docker",
@@ -244,7 +253,7 @@ def test_04_bare_docker_exec(docker_daemon):
     args.extend([tag, "sleep", "infinity"])
     try:
         run(args, timeout=180, check=True)
-        time.sleep(2)
+        wait_ready(["docker", "exec", name])
         run(["docker", "exec", name, "python", "-c", "import finn"], timeout=180, check=True)
         if have_xilinx:
             run(["docker", "exec", name, "vivado", "-version"], timeout=300, check=True)
@@ -324,6 +333,7 @@ def test_05_copied_native_examples(docker_daemon, tmp_path, agent, fpga):
         assert "XILINXD_LICENSE_FILE" not in plan.stdout
     try:
         run(["sbx", "env", "create", *args, "--auto-approve"], timeout=1200, check=True)
+        wait_ready(["sbx", "env", "exec", *args, "--"])
         run(["sbx", "env", "exec", *args, "--", "python", "-c", "import finn"], check=True)
         run(
             [
@@ -405,13 +415,13 @@ def test_05_copied_native_examples(docker_daemon, tmp_path, agent, fpga):
     assert not any(item["name"] == name for item in inventory)
 
 
-def test_05b_dependency_sbx_identity_ignores_mounted_source_commit(tmp_path):
+def test_05b_sbx_identity_ignores_mounted_source_commit(tmp_path):
     """Image preparation identity stays independent of mounted-source commits."""
     checkout = tmp_path / "checkout"
     run(["git", "clone", "--shared", REPO, checkout], check=True)
     # Compare two commits within the same isolated checkout; never set repository config.
     environment = {**os.environ, "FINN_SOURCE_ROOT": str(checkout)}
-    command = [REPO / "docker/build", "--dependencies", "--sbx", "--print"]
+    command = [REPO / "docker/build", "--sbx", "--print"]
     before = run(command, env=environment, check=True)
     run(
         [
@@ -582,7 +592,7 @@ def test_12_bake_owns_runtime_tags_and_custom_flavors():
         config = bake_config(target, runtimes=runtimes)
         assert config["target"][target]["tags"][0] == expected
         labels = config["target"][target]["labels"]
-        assert labels["dev.finn.environment-revision"] == "env-CONFORMANCE"
+        assert labels["dev.finn.image-revision"] == "env-CONFORMANCE"
         assert "org.opencontainers.image.revision" not in labels
     proc = run(["bash", "-c", ". ./docker/lib.sh; finn_bake_target xrt,slash"])
     assert proc.stdout == "finn-runtime"
@@ -602,8 +612,8 @@ def test_13_missing_supplied_runtime_fails_with_its_path(docker_daemon):
 
 
 def test_installed_resources_without_checkout(docker_daemon):
-    """The application image can generate RTL/driver outputs with no checkout."""
-    tag = ensure_image("finn")
+    """The release image can generate RTL/driver outputs with no checkout."""
+    tag = ensure_image("finn-release")
     script = Path(REPO) / "tests/util/runtime_resource_smoke.py"
     proc = run(
         [

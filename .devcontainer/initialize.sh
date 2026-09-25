@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# Resolve/reuse the dependency artifact through the same Bake entry point.
+# Resolve (and build if missing) the FINN image through the same Bake entry point
+# as docker/run, and point the Dev Container at it.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 . ./docker/lib.sh
-export FINN_ARTIFACT=dependencies FINN_RUNTIMES=""
+export FINN_RUNTIMES=""
 finn_set_provenance
 finn_prepare_image "$(finn_bake_target "")"
 python3 - <<'PY'

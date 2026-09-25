@@ -1,7 +1,7 @@
-# FINN's build matrix. The authoritative definition of what images exist, what
-# they are called, and what goes into them.
+# FINN's build matrix: what images exist, what they are called, and what goes
+# into them.
 #
-#   docker buildx bake -f docker-bake.hcl                 the base image
+#   docker buildx bake -f docker-bake.hcl                 the FINN image
 #   docker buildx bake -f docker-bake.hcl finn-xrt        + XRT
 #   docker buildx bake -f docker-bake.hcl supported       everything CI gates on
 #   docker buildx bake -f docker-bake.hcl --print finn    resolved config, no build
@@ -9,267 +9,160 @@
 # Always pass -f docker-bake.hcl. Without it, bake also auto-loads compose.yaml
 # and fails on its interpolation before any target builds.
 #
-# THE SHAPE
-# ---------
-# Dependency and application artifacts, plus two orthogonal variants:
+# One image, with two orthogonal variants:
 #
-#   axis            values                     appears in the tag as
-#   artifact        dependencies/application   deps-<hash> / app-<hash>
-#   runtime target  a set: xrt, slash, slashkit   .slash.xrt   (sorted, dot-joined)
-#   sbx contract    boolean                    sbx- prefix
+#   axis            values                        appears in the tag as
+#   runtime target  a set: xrt, slash, slashkit   .slash.xrt  (sorted, dot-joined)
+#   sbx contract    boolean                       sbx- prefix
 #
-# There is no profile axis and no tier axis. The profile axis had one member and
-# threaded a variable through ten files to select from it. The tier axis encoded
-# "does this user have Vivado", which is a host fact that docker/config.py
-# resolves at launch -- see the Dockerfile header.
+# plus the release image, which installs a FINN wheel for read-only use.
 #
-# Use `.` and not `+` to join runtime names. A Docker tag accepts
-# [\w][\w.-]{0,127}; `+` gives "invalid reference format".
-#
-# ENUMERATE SUPPORT; PARAMETERIZE EVERYTHING ELSE
-# ------------------------------------------------
-# Named targets below declare the combinations FINN keeps green. The generic
-# finn-runtime / finn-sbx-runtime targets accept any manifest set without
-# generating a powerset of named targets:
-#
-#   FINN_RUNTIMES=xrt,slash,slashkit docker buildx bake -f docker-bake.hcl finn-runtime
-#
-# WHAT IS *NOT* HERE
-# ------------------
-# Dependency commits. deps.env is COPYed into the build context and read by
-# fetch-repos.sh inside the image, so it is already authoritative and a change
-# to it already invalidates the layer. The *_COMMIT args below exist only as
-# one-off overrides and default to empty; do not populate them from a second
-# copy of the pins.
-#
-# Runtime package versions. Those live in docker/runtimes/<name>.env, which the
-# build reads directly. HCL has no file() function, so duplicating them here is
-# the codegen-goes-stale trap that removed the profile matrix in the first
-# place. The tag carries the runtime NAME; the label carries the version.
+# The tag is FINN_IMAGE_REVISION, a hash of docker/image-inputs.txt computed by
+# docker/lib.sh. Package versions come from uv.lock and runtime versions from
+# docker/runtimes/*.env; neither is restated here.
 
-# ---------------------------------------------------------------------------
-# Variables
-# ---------------------------------------------------------------------------
-
-# Injected by launchers/CI from the target-specific input manifests.
-variable "FINN_IMAGE_REVISION" { default = "app-unresolved" }
-variable "FINN_DEPENDENCY_REVISION" { default = "deps-unresolved" }
-variable "FINN_APPLICATION_REVISION" { default = "app-unresolved" }
+variable "FINN_IMAGE_REVISION" { default = "unresolved" }
 variable "FINN_SOURCE_REVISION" { default = "unknown" }
 variable "FINN_SOURCE_DIRTY" { default = "unknown" }
 
 variable "REGISTRY" { default = "xilinx/finn" }
 
-# Runtime set for the two generic launcher targets. Named, supported targets
-# below remain fixed so CI can build the supported matrix in one invocation.
+# Runtime set for the parameterized targets.
 variable "FINN_RUNTIMES" { default = "" }
 
 # The Ubuntu base. Date-pinned, never the rolling tag.
 variable "UBUNTU_TAG" { default = "jammy-20230126" }
 
-# One-off dependency overrides. Empty means "use deps.env from the context".
-variable "QONNX_COMMIT" { default = "" }
-variable "FINN_EXP_COMMIT" { default = "" }
-variable "BREVITAS_COMMIT" { default = "" }
-variable "DATASET_LOADING_COMMIT" { default = "" }
-variable "HLSLIB_COMMIT" { default = "" }
-variable "AVNET_BDF_COMMIT" { default = "" }
-variable "XIL_BDF_COMMIT" { default = "" }
-variable "RFSOC4x2_BDF_COMMIT" { default = "" }
-variable "KV260_BDF_COMMIT" { default = "" }
-variable "AUPZU3_BDF_COMMIT" { default = "" }
-
-# ---------------------------------------------------------------------------
-# Tags
-# ---------------------------------------------------------------------------
-
-# runtimes: a comma-separated list, or "". sbx: true or false.
-#
-#   ""          -> xilinx/finn:<environment>
-#   "xrt"       -> xilinx/finn:<environment>.xrt
-#   "xrt,slash" -> xilinx/finn:<environment>.slash.xrt
-#   sbx         -> xilinx/finn:sbx-<environment>[...]
-#
-# The runtime part is a function of the SET, so sort before joining. Otherwise
-# `xrt,slash` and `slash,xrt` are the same image under two names.
+# The runtime part of the tag is a function of the SET, so `xrt,slash` and
+# `slash,xrt` are one image.
 function "runtime_set" {
   params = [runtimes]
   result = runtimes == "" ? "" : join(",", distinct(sort(compact(split(",", runtimes)))))
 }
 
-function "tag" {
-  params = [runtimes, sbx, dependencies]
-  result = join("", [
-    "${REGISTRY}:",
-    sbx ? "sbx-" : "",
-    dependencies ? FINN_DEPENDENCY_REVISION : FINN_IMAGE_REVISION,
-    runtime_set(runtimes) == "" ? "" : ".${join(".", split(",", runtime_set(runtimes)))}",
-  ])
+function "runtime_suffix" {
+  params = [runtimes]
+  result = runtime_set(runtimes) == "" ? "" : ".${join(".", split(",", runtime_set(runtimes)))}"
 }
 
-# ---------------------------------------------------------------------------
-# Common target body
-# ---------------------------------------------------------------------------
+function "tag" {
+  params = [runtimes, sbx]
+  result = "${REGISTRY}:${sbx ? "sbx-" : ""}${FINN_IMAGE_REVISION}${runtime_suffix(runtimes)}"
+}
 
 target "_common" {
   dockerfile = "docker/Dockerfile.finn"
   context    = "."
-  # linux/amd64 only, and declared rather than assumed. XRT and Vivado are
-  # x86-64 only, and parts of the image (the LSB loader symlink, the ncurses 5
-  # backport) carry explicit x86-64 assumptions.
+  # XRT and Vivado are x86-64 only; so is the LSB loader alias in the image.
   platforms = ["linux/amd64"]
   args = {
-    UBUNTU_TAG          = UBUNTU_TAG
-    QONNX_COMMIT        = QONNX_COMMIT
-    FINN_EXP_COMMIT     = FINN_EXP_COMMIT
-    BREVITAS_COMMIT     = BREVITAS_COMMIT
-    DATASET_LOADING_COMMIT = DATASET_LOADING_COMMIT
+    UBUNTU_TAG           = UBUNTU_TAG
     FINN_SOURCE_REVISION = FINN_SOURCE_REVISION
-    FINN_SOURCE_DIRTY = FINN_SOURCE_DIRTY
-    HLSLIB_COMMIT       = HLSLIB_COMMIT
-    AVNET_BDF_COMMIT    = AVNET_BDF_COMMIT
-    XIL_BDF_COMMIT      = XIL_BDF_COMMIT
-    RFSOC4x2_BDF_COMMIT = RFSOC4x2_BDF_COMMIT
-    KV260_BDF_COMMIT    = KV260_BDF_COMMIT
-    AUPZU3_BDF_COMMIT   = AUPZU3_BDF_COMMIT
+    FINN_SOURCE_DIRTY    = FINN_SOURCE_DIRTY
   }
 }
 
-# OCI labels, so the image describes itself to anything that inspects it.
-#
-# These are descriptive, NOT a requirements protocol. There is no OCI convention
-# for declaring egress allowlists or mount requirements, and FINN should not
-# invent labels that imply a standard exists. What a LANE needs is resolved at
-# launch by `finn-env inspect`; what these say is what the image IS.
-#
-# dev.finn.runtimes carries the names the tag also carries. The exact package
-# versions are NOT here, because they live in docker/runtimes/*.env and HCL
-# cannot read a file -- restating them would be the stale-copy trap. Read the
-# manifest included in the environment revision, or `dpkg -l` inside the image.
+# Descriptive labels. What a launch needs is resolved by docker/config.py; these
+# say what the image is.
 function "labels" {
-  params = [runtimes, sbx, dependencies]
+  params = [runtimes, sbx]
   result = {
     "org.opencontainers.image.title"       = "FINN"
     "org.opencontainers.image.description" = "FINN dataflow compiler, Ubuntu 22.04 / Python 3.10"
     "org.opencontainers.image.source"      = "https://github.com/Xilinx/finn"
-    "org.opencontainers.image.version"     = dependencies ? FINN_DEPENDENCY_REVISION : FINN_IMAGE_REVISION
-    "dev.finn.environment-revision"        = dependencies ? FINN_DEPENDENCY_REVISION : FINN_IMAGE_REVISION
-    "dev.finn.artifact" = dependencies ? "dependencies" : "application"
-    "dev.finn.dependency-revision" = FINN_DEPENDENCY_REVISION
+    "org.opencontainers.image.version"     = FINN_IMAGE_REVISION
+    "dev.finn.image-revision"              = FINN_IMAGE_REVISION
     "dev.finn.runtimes"                    = runtime_set(runtimes)
-    # Whether the image grants NOPASSWD root INSIDE the container. This is not
-    # host privilege -- no devices, no capabilities, no privileged mode -- but
-    # it is a real difference between two otherwise identical images, and the
-    # whole reason the sbx variant is a separate target.
+    # NOPASSWD root inside the container (not host privilege). The reason the
+    # sbx variant is a separate target.
     "dev.finn.in-container-root" = sbx ? "true" : "false"
   }
 }
-
-# ---------------------------------------------------------------------------
-# Targets
-# ---------------------------------------------------------------------------
 
 target "finn" {
   inherits = ["_common"]
   target   = "runtime"
   args     = { FINN_RUNTIMES = "" }
-  labels   = labels("", false, false)
-  tags     = [tag("", false, false)]
+  labels   = labels("", false)
+  tags     = [tag("", false)]
 }
 
-# Generic targets used by launchers for arbitrary manifest combinations. Bake
-# remains authoritative for args, labels and the complete image tag; launchers
-# no longer manufacture a target name from a runtime string.
+# Parameterized over FINN_RUNTIMES, for any manifest set.
 target "finn-runtime" {
   inherits = ["_common"]
   target   = "runtime"
   args     = { FINN_RUNTIMES = runtime_set(FINN_RUNTIMES) }
-  labels   = labels(runtime_set(FINN_RUNTIMES), false, false)
-  tags     = [tag(FINN_RUNTIMES, false, false)]
+  labels   = labels(FINN_RUNTIMES, false)
+  tags     = [tag(FINN_RUNTIMES, false)]
 }
 
 target "finn-xrt" {
   inherits = ["_common"]
   target   = "runtime"
   args     = { FINN_RUNTIMES = "xrt" }
-  labels   = labels("xrt", false, false)
-  tags     = [tag("xrt", false, false)]
+  labels   = labels("xrt", false)
+  tags     = [tag("xrt", false)]
 }
 
 target "finn-sbx" {
   inherits = ["_common"]
   target   = "sbx"
   args     = { FINN_RUNTIMES = "" }
-  labels   = labels("", true, false)
-  tags     = [tag("", true, false)]
+  labels   = labels("", true)
+  tags     = [tag("", true)]
 }
 
 target "finn-sbx-runtime" {
   inherits = ["_common"]
   target   = "sbx"
   args     = { FINN_RUNTIMES = runtime_set(FINN_RUNTIMES) }
-  labels   = labels(runtime_set(FINN_RUNTIMES), true, false)
-  tags     = [tag(FINN_RUNTIMES, true, false)]
+  labels   = labels(FINN_RUNTIMES, true)
+  tags     = [tag(FINN_RUNTIMES, true)]
 }
 
 target "finn-sbx-xrt" {
   inherits = ["_common"]
   target   = "sbx"
   args     = { FINN_RUNTIMES = "xrt" }
-  labels   = labels("xrt", true, false)
-  tags     = [tag("xrt", true, false)]
+  labels   = labels("xrt", true)
+  tags     = [tag("xrt", true)]
 }
 
 # Deliberately outside every group. SLASH is SOURCE=supply: it needs
-# docker/packages/slash.deb, which FINN does not ship and CI cannot produce, so
-# a group containing this target would fail on any machine without the file.
-# Build it explicitly once you have the package.
+# docker/packages/slash.deb, which FINN does not ship and CI cannot produce.
 target "finn-slash-xrt" {
   inherits = ["_common"]
   target   = "runtime"
   args     = { FINN_RUNTIMES = "slash,xrt" }
-  labels   = labels("slash,xrt", false, false)
-  tags     = [tag("xrt,slash", false, false)]
+  labels   = labels("slash,xrt", false)
+  tags     = [tag("slash,xrt", false)]
 }
 
 target "finn-slashkit-xrt" {
   inherits = ["_common"]
   target   = "runtime"
   args     = { FINN_RUNTIMES = "slash,slashkit,xrt" }
-  labels   = labels("slash,slashkit,xrt", false, false)
-  tags     = [tag("slash,slashkit,xrt", false, false)]
+  labels   = labels("slash,slashkit,xrt", false)
+  tags     = [tag("slash,slashkit,xrt", false)]
 }
 
-# Explicit development artifacts; runtime additions and sbx remain orthogonal.
-target "finn-dependencies-runtime" {
+# FINN installed from wheels built from this checkout; the source for SIF
+# exports. Tagged by the source revision, since FINN's code is part of it.
+target "finn-release" {
   inherits = ["_common"]
-  target = "runtime"
-  args = { FINN_ARTIFACT = "dependencies", FINN_RUNTIMES = runtime_set(FINN_RUNTIMES) }
-  labels = labels(FINN_RUNTIMES, false, true)
-  tags = [tag(FINN_RUNTIMES, false, true)]
-}
-target "finn-dependencies-sbx-runtime" {
-  inherits = ["_common"]
-  target = "sbx"
-  args = { FINN_ARTIFACT = "dependencies", FINN_RUNTIMES = runtime_set(FINN_RUNTIMES) }
-  labels = labels(FINN_RUNTIMES, true, true)
-  tags = [tag(FINN_RUNTIMES, true, true)]
+  target   = "release"
+  args     = { FINN_RUNTIMES = runtime_set(FINN_RUNTIMES) }
+  labels   = labels(FINN_RUNTIMES, false)
+  tags     = ["${REGISTRY}:release-${substr(FINN_SOURCE_REVISION, 0, 12)}${FINN_SOURCE_DIRTY == "1" ? "-dirty" : ""}${runtime_suffix(FINN_RUNTIMES)}"]
 }
 
-# ---------------------------------------------------------------------------
-# Groups
-# ---------------------------------------------------------------------------
-
-# The base image, not an accelerator variant. The old default was Jenkins
-# history: the largest tier with the widest host exposure, for work that mostly
-# does not need it.
+# Everything that must build on any machine, with no supplied packages.
 group "default" {
   targets = ["finn"]
 }
 
-# Everything that must build, on any machine, with no supplied packages.
 group "supported" {
-  targets = ["finn", "finn-xrt", "finn-sbx", "finn-sbx-xrt", "finn-dependencies-runtime", "finn-dependencies-sbx-runtime"]
+  targets = ["finn", "finn-xrt", "finn-sbx", "finn-sbx-xrt"]
 }
 
 group "docker" {

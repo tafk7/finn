@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Build a FINN Docker image, prepare its sbx variant, or export it as a SIF.
+# Build the FINN Docker image, its sbx variant, or the release image (optionally
+# exported as a SIF).
 
 set -euo pipefail
 
@@ -51,8 +52,8 @@ Usage: docker/build [OPTIONS]
 
 Options:
   --sbx              build/import the sbx template (no sandbox configuration)
-  --export-sif PATH  export the Docker-built image as an Apptainer SIF
-  --dependencies     select the dependency artifact for explicit development setup
+  --release          build the release image: FINN installed from this checkout
+  --export-sif PATH  build the release image and export it as an Apptainer SIF
   --runtime NAME     add image content such as xrt; repeatable
   --rebuild          rebuild image layers without cache
   --print-tag        print the image reference without building
@@ -62,21 +63,21 @@ EOF
 }
 
 SBX=0
+RELEASE=0
 SIF_OUTPUT=""
 SIF_REQUESTED=0
 RUNTIMES="${FINN_RUNTIMES:-}"
-export FINN_ARTIFACT=application
 PRINT_ONLY=0
 PRINT_TAG=0
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
         --sbx) SBX=1; shift ;;
+        --release) RELEASE=1; shift ;;
         --export-sif)
             [ "$#" -ge 2 ] || { echo "--export-sif needs a path" >&2; exit 2; }
             SIF_OUTPUT=$2; SIF_REQUESTED=1; shift 2 ;;
         --export-sif=*) SIF_OUTPUT=${1#*=}; SIF_REQUESTED=1; shift ;;
-        --dependencies) export FINN_ARTIFACT=dependencies; shift ;;
         --runtime)
             [ "$#" -ge 2 ] || { echo "--runtime needs a value" >&2; exit 2; }
             RUNTIMES="${RUNTIMES:+$RUNTIMES,}$2"; shift 2 ;;
@@ -97,8 +98,8 @@ done
     echo "--export-sif needs a path" >&2
     exit 2
 }
-[ "$SIF_REQUESTED" != 1 ] || [ "$SBX" != 1 ] || {
-    echo "--sbx and --export-sif are mutually exclusive" >&2
+[ "$SBX" != 1 ] || { [ "$SIF_REQUESTED" != 1 ] && [ "$RELEASE" != 1 ]; } || {
+    echo "--sbx cannot be combined with --release or --export-sif" >&2
     exit 2
 }
 
@@ -113,6 +114,9 @@ if [ "$SBX" = 1 ]; then
     variant=sbx
 elif [ "$SIF_REQUESTED" = 1 ]; then
     artifact=sif
+    variant=release
+elif [ "$RELEASE" = 1 ]; then
+    variant=release
 fi
 target=$(finn_bake_target "$RUNTIMES" "$variant")
 
@@ -126,9 +130,6 @@ if [ "$PRINT_ONLY" = 1 ]; then
     printf 'artifact=%s\n' "$artifact"
     printf 'runtimes=%s\n' "$RUNTIMES"
     printf 'bake_target=%s\n' "$target"
-    printf 'package_artifact=%s\n' "$FINN_ARTIFACT"
-    printf 'dependency_revision=%s\n' "$FINN_DEPENDENCY_REVISION"
-    printf 'application_revision=%s\n' "$FINN_APPLICATION_REVISION"
     printf 'image_revision=%s\n' "$FINN_IMAGE_REVISION"
     printf 'source_revision=%s\n' "$FINN_SOURCE_REVISION"
     printf 'rebuild=%s\n' "${FINN_CONTAINER_REBUILD:-0}"

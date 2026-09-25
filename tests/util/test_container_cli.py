@@ -26,7 +26,7 @@ def test_default_is_the_docker_dev_environment():
     assert data["runtimes"] == ""
     assert "deps" not in data
     assert data["operation"] == "run"
-    assert data["image_revision"].startswith("app-")
+    assert data["image_revision"].startswith("img-")
     assert (
         data["source_revision"]
         == subprocess.run(
@@ -82,25 +82,16 @@ def test_build_defaults_to_the_docker_image():
     assert data["artifact"] == "docker"
     assert data["bake_target"] == "finn"
     assert data["output"] == ""
-    assert data["image_revision"].startswith("app-")
+    assert data["image_revision"].startswith("img-")
     assert data["source_revision"]
 
 
-def test_explicit_dependency_artifact_with_runtime_and_transport():
-    for path, options, target in (
-        (RUN, [], "finn-dependencies-runtime"),
-        (BUILD, [], "finn-dependencies-runtime"),
-        (BUILD, ["--sbx"], "finn-dependencies-sbx-runtime"),
-        (BUILD, ["--export-sif", "dev.sif"], "finn-dependencies-runtime"),
-    ):
-        proc = invoke(path, "--dependencies", "--runtime", "xrt", *options, "--print")
+def test_release_image_is_selected_explicitly():
+    for options in (["--release"], ["--export-sif", "finn.sif"]):
+        proc = invoke(BUILD, "--runtime", "xrt", *options, "--print")
         assert proc.returncode == 0, proc.stderr
         data = assignments(proc.stdout)
-        assert data["package_artifact"] == "dependencies"
-        assert data["bake_target"] == target
-        assert data["image_revision"] == data["dependency_revision"]
-        assert data["image_revision"].startswith("deps-")
-        assert data["application_revision"].startswith("app-")
+        assert data["bake_target"] == "finn-release"
         assert data["runtimes"] == "xrt"
 
 
@@ -117,15 +108,16 @@ def test_build_can_export_a_sif():
     assert proc.returncode == 0, proc.stderr
     data = assignments(proc.stdout)
     assert data["artifact"] == "sif"
-    assert data["bake_target"] == "finn-xrt"
+    assert data["bake_target"] == "finn-release"
     assert data["runtimes"] == "xrt"
     assert data["output"] == "out/finn.sif"
 
 
-def test_build_rejects_sbx_sif_combination():
-    proc = invoke(BUILD, "--sbx", "--export-sif", "finn.sif")
-    assert proc.returncode == 2
-    assert "mutually exclusive" in proc.stderr
+def test_build_rejects_sbx_release_combinations():
+    for options in (["--export-sif", "finn.sif"], ["--release"]):
+        proc = invoke(BUILD, "--sbx", *options)
+        assert proc.returncode == 2
+        assert "cannot be combined" in proc.stderr
 
 
 def test_build_requires_a_sif_output_path():
@@ -264,7 +256,7 @@ Path(sys.argv[3]).write_text("sif")
 def test_public_image_reference_matches_bake():
     proc = invoke(BUILD, "--sbx", "--runtime", "xrt", "--print-tag")
     assert proc.returncode == 0, proc.stderr
-    assert proc.stdout.strip().startswith("xilinx/finn:sbx-app-")
+    assert proc.stdout.strip().startswith("xilinx/finn:sbx-img-")
     assert proc.stdout.strip().endswith(".xrt")
 
 
@@ -326,6 +318,7 @@ finn_prepare_sbx
 
 
 def test_removed_dependency_modes_are_actionable():
-    proc = invoke(RUN, "--deps", "live", "--print")
-    assert proc.returncode == 2
-    assert "explicit pip installs" in proc.stderr
+    for option in ("--deps", "--dependencies", "--venv"):
+        proc = invoke(RUN, option, "value", "--print")
+        assert proc.returncode == 2
+        assert "installs the mounted checkout" in proc.stderr

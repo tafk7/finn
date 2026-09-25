@@ -10,10 +10,11 @@ was developed on, and that is exactly where the sbx mount silently resolved to
 nothing.
 """
 
-import pytest
 
+import fnmatch
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -767,9 +768,7 @@ def _provenance(image_root, source_root=None, extra_env=None):
 def _make_image_input_fixture(tmp_path):
     root = tmp_path / "image-root"
     (root / "docker").mkdir(parents=True)
-    manifest = root / "docker/dependency-inputs.txt"
-    manifest.write_text("docker/dependency-inputs.txt\nimage.txt\n")
-    (root / "docker/image-inputs.txt").write_text("docker/image-inputs.txt\n")
+    (root / "docker/image-inputs.txt").write_text("docker/image-inputs.txt\nimage.txt\n")
     (root / "image.txt").write_text("environment\n")
     (root / "src").mkdir()
     (root / "src/finn.py").write_text("source v1\n")
@@ -784,35 +783,12 @@ def test_image_revision_ignores_mounted_source_changes(tmp_path):
     assert before == after
 
 
-def test_application_edits_do_not_change_dependency_identity(tmp_path):
-    root = _make_image_input_fixture(tmp_path)
-    (root / "docker/image-inputs.txt").write_text("docker/image-inputs.txt\nsrc/**/*\n")
-    (root / "src/fifo.sv").write_text("// original RTL\n")
-
-    def identities():
-        return (
-            _provenance(root, extra_env={"FINN_ARTIFACT": "dependencies"})[0],
-            _provenance(root)[0],
-        )
-
-    original = identities()
-    for path in (root / "src/finn.py", root / "src/fifo.sv"):
-        path.write_text(path.read_text() + "\n// edited\n")
-        changed = identities()
-        assert changed[0] == original[0]
-        assert changed[1] != original[1]
-        original = changed
-    (root / "image.txt").write_text("changed dependency pin\n")
-    changed = identities()
-    assert changed[0] != original[0] and changed[1] != original[1]
-
-
 def test_image_revision_changes_with_image_inputs_and_build_args(tmp_path):
     root = _make_image_input_fixture(tmp_path)
     original = _provenance(root)[0]
     (root / "image.txt").write_text("changed environment\n")
     changed_file = _provenance(root)[0]
-    changed_arg = _provenance(root, extra_env={"QONNX_COMMIT": "override"})[0]
+    changed_arg = _provenance(root, extra_env={"UBUNTU_TAG": "jammy-override"})[0]
     assert original != changed_file
     assert changed_file != changed_arg
 
@@ -845,14 +821,14 @@ def test_source_commit_changes_without_changing_image_revision(tmp_path):
 
 
 def test_image_input_manifest_covers_dockerfile_sources():
-    manifest = "\n".join(
-        (Path(REPO) / "docker" / name).read_text()
-        for name in ("image-inputs.txt", "dependency-inputs.txt")
-    )
+    manifest = (Path(REPO) / "docker/image-inputs.txt").read_text()
+    patterns = {
+        line.lstrip("?") for line in manifest.splitlines() if line and not line.startswith("#")
+    }
     for path in (
-        "requirements.txt",
-        "deps.env",
-        "fetch-repos.sh",
+        "pyproject.toml",
+        "uv.lock",
+        "src/finn/util/external.py",
         "docker/Dockerfile.finn",
         "docker/finn_entrypoint.sh",
         "docker/quicktest.sh",
@@ -862,33 +838,16 @@ def test_image_input_manifest_covers_dockerfile_sources():
         "docker/install-runtimes.sh",
         "docker/runtimes/*.env",
     ):
-        assert path in manifest
-    patterns = {
-        line.lstrip("?") for line in manifest.splitlines() if line and not line.startswith("#")
-    }
-    assert "src/**/*.py" in patterns
-    assert "src/finn/_data/**/*" in patterns
-    assert "docker/config.py" not in patterns
-    assert "docker/finn-env" not in patterns
-    assert "docker/run" not in patterns
-    assert "docs/finn/getting_started.rst" not in patterns
-
-
-def test_development_mount_is_explicit_and_never_repaired(tmp_path, monkeypatch):
-    environment = tmp_path / "environment with spaces"
-    monkeypatch.setenv("FINN_DEV_ENVIRONMENT", str(environment))
-    with pytest.raises(SystemExit):
-        finn_env.resolve_host("dev", "mirror")
-    assert not environment.exists()
-    environment.mkdir(mode=0o700)
-    before = environment.stat()
-    data = finn_env.resolve_host("dev", "mirror")
-    mount = next(m for m in data["mounts"] if m["reason"] == "development-venv")
-    assert mount["source"] == str(environment)
-    assert mount["target"] == "/env/venv"
-    assert "PATH" not in data["env"]
-    assert environment.stat().st_mode == before.st_mode
-    assert environment.stat().st_uid == before.st_uid
+        assert path in patterns
+    # Every file the Dockerfile reads from the context is an input.
+    dockerfile = (Path(REPO) / "docker/Dockerfile.finn").read_text()
+    for source in re.findall(r"--mount=type=bind,source=([^,\s]+),target", dockerfile):
+        if source != ".":
+            assert any(fnmatch.fnmatch(source, p) or p.startswith(source) for p in patterns), source
+    # FINN's own sources are installed from the mounted checkout, not baked.
+    assert not any(p.startswith("src/") and p != "src/finn/util/external.py" for p in patterns)
+    for launcher in ("docker/config.py", "docker/run", "docs/finn/getting_started.rst"):
+        assert launcher not in patterns
 
 
 def test_shell_inspection_never_allocates_scratch(tmp_path):

@@ -361,8 +361,6 @@ def resolve_host(tier, workspace_policy="auto"):
     }
     for variable in (
         "FINN_IMAGE_REVISION",
-        "FINN_DEPENDENCY_REVISION",
-        "FINN_ARTIFACT",
         "FINN_SOURCE_REVISION",
         "FINN_SOURCE_DESCRIBE",
         "FINN_SOURCE_DIRTY",
@@ -370,16 +368,6 @@ def resolve_host(tier, workspace_policy="auto"):
         if os.environ.get(variable):
             out["env"][variable] = os.environ[variable]
     add_optional_inputs(out)
-    venv = hostpath(os.environ.get("FINN_DEV_ENVIRONMENT"))
-    if venv:
-        if not os.path.isdir(venv):
-            die(
-                "Prepare FINN_DEV_ENVIRONMENT/--venv as a user-owned host directory first: " + venv,
-                2,
-            )
-        out["mounts"].append(
-            {"source": venv, "target": "/env/venv", "mode": "rw", "reason": "development-venv"}
-        )
 
     if tier == "dev":
         out["dev_contract"] = {

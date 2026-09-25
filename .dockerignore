@@ -1,18 +1,10 @@
-# Build-context allowlist.
-#
-# Exclude everything, then re-include exactly what docker/Dockerfile.finn reads.
-# A denylist would silently regrow: deps/ alone is 1.2 GB and .git 97 MB, and
-# neither is used by the build - the image fetches its own pinned copies of the
-# Python deps rather than consuming the host checkout.
-#
-# Application images include the selected FINN code and resources.
+# Build-context allowlist: exclude everything, then re-include exactly what
+# docker/Dockerfile.finn reads. The dependency layers use only pyproject.toml,
+# uv.lock and src/finn/util/external.py; the release stage also builds wheels from
+# the sources below.
 *
 
-!requirements.txt
 !docker/
-!deps.env
-!fetch-repos.sh
-
 !pyproject.toml
 !uv.lock
 !setup.py
@@ -22,7 +14,9 @@
 !README.md
 !LICENSE.txt
 !src/
+!packages/
 **/__pycache__/
 **/*.pyc
 **/*.so
 **/*.egg-info/
+**/.git

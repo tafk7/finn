@@ -62,8 +62,10 @@ def python_env(path):
     # Create it from the base interpreter: on Python 3.10 a venv created from inside
     # another venv records the outer venv as its home, which relocatable (e.g.
     # uv-managed) interpreters cannot start from.
+    # Without pip: the caller's own pip and build backend are linked in below, so
+    # the environment has exactly the caller's tested versions.
     base = Path(sys.base_prefix) / "bin" / ("python%d.%d" % sys.version_info[:2])
-    subprocess.run([base, "-m", "venv", path], check=True)
+    subprocess.run([base, "-m", "venv", "--without-pip", path], check=True)
     site = next((path / "lib").glob("python*/site-packages"))
     for item in Path(sysconfig.get_path("purelib")).iterdir():
         if (

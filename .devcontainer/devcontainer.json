@@ -15,11 +15,6 @@
     "memory": "8gb",
     "storage": "32gb"
   },
-  "postCreateCommand": "python -m venv /home/agent/.venvs/finn-dev && /home/agent/.venvs/finn-dev/bin/python -m pip install --no-index --find-links /opt/finn/wheels -r /opt/finn/development-requirements.txt && /home/agent/.venvs/finn-dev/bin/python /workspace/finn/scripts/prepare-editables /workspace/finn/editable-requirements.txt",
-  "remoteEnv": {
-    "VIRTUAL_ENV": "/home/agent/.venvs/finn-dev",
-    "PATH": "/home/agent/.venvs/finn-dev/bin:${containerEnv:PATH}"
-  },
   "customizations": {
     "vscode": {
       "extensions": [
@@ -27,7 +22,7 @@
         "ms-toolsai.jupyter"
       ],
       "settings": {
-        "python.defaultInterpreterPath": "/home/agent/.venvs/finn-dev/bin/python"
+        "python.defaultInterpreterPath": "/opt/venv/bin/python"
       }
     }
   }

@@ -27,6 +27,7 @@
     "shareSkills": false
   },
   "env": {
-    "FINN_BUILD_DIR": "/tmp/finn_build"
+    "FINN_BUILD_DIR": "/tmp/finn_build",
+    "FINN_ROOT": "${{ env.args.workspace }}"
   }
 }

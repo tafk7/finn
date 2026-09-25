@@ -28,16 +28,55 @@
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-# Runtime-private home and process identity only; no installation or tool activation.
+# Container start: a usable HOME, then the mounted FINN checkout linked into the
+# image's environment, then the command. Nothing here is fatal: a container must
+# start even without a checkout (sbx starts PID 1 before any workspace is used).
 set -e
 if [ -z "${HOME:-}" ] || [ "$HOME" = / ] || ! mkdir -p "$HOME" 2>/dev/null || [ ! -w "$HOME" ]; then
     HOME="/tmp/finn-home-$(id -u)"
     export HOME
 fi
 mkdir -p "$HOME"
-export USER="${USER:-$(id -un 2>/dev/null || echo finn)}"
+# `id -un` prints the numeric uid (and fails) for a uid with no passwd entry.
+if [ -z "${USER:-}" ]; then
+    USER=$(id -un 2>/dev/null) || true
+    USER="${USER:-finn}"
+fi
+export USER
 export LOGNAME="${LOGNAME:-$USER}"
 export PATH="$PATH:$HOME/.local/bin"
+# Keep uv's cache in the build directory, which outlives the container, so the
+# editable builds below are reused instead of redone on every start.
+if [ -z "${UV_CACHE_DIR:-}" ] && [ -n "${FINN_BUILD_DIR:-}" ] \
+   && mkdir -p "$FINN_BUILD_DIR/.uv-cache" 2>/dev/null; then
+    export UV_CACHE_DIR="$FINN_BUILD_DIR/.uv-cache"
+fi
 
-# Site Tcl files are explicit mounts into the selected user's .Xilinx directory.
+# Install the checkout at FINN_ROOT editable into /opt/venv, with its workspace
+# members and any difference between its uv.lock and the image. This follows the
+# committed lock exactly; set FINN_SYNC=0 to skip it.
+finn_sync() {
+    [ "${FINN_SYNC:-1}" != 0 ] || return 0
+    root="${FINN_ROOT:-}"
+    if [ -z "$root" ] || [ ! -f "$root/uv.lock" ]; then
+        echo "finn: no FINN checkout at FINN_ROOT; using the image environment" >&2
+        return 0
+    fi
+    if [ -d "$root/.git" ] && git -C "$root" submodule status 2>/dev/null | grep -q '^-'; then
+        echo "finn: uninitialized submodules in $root; run: git submodule update --init" >&2
+    fi
+    set -- uv sync --frozen --inexact --quiet --project "$root" \
+        --no-build-isolation-package finn --no-build-isolation-package finn-hlslib
+    # Offline first: normally nothing needs downloading. Online only when the
+    # checkout's uv.lock asks for packages the image does not have.
+    "$@" --offline 2>/dev/null || "$@" || {
+        echo "finn: could not install $root into the image environment (see above)." >&2
+        echo "finn: rebuild the image (docker/build), or run uv sync with network access." >&2
+    }
+}
+finn_sync || true
+# Readiness marker: docker exec and sbx exec do not wait for the entrypoint, so
+# scripts that exec into a just-started container can wait for this file.
+touch /tmp/finn-ready 2>/dev/null || true
+
 exec "$@"

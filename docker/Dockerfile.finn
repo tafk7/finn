@@ -28,44 +28,37 @@
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-# Image stages: system -> wheels; system -> base -> dependencies/application -> runtime -> sbx.
+# Stages: system -> python -> runtime -> sbx, and runtime -> release.
 #
-# `dev` and `build` are runtime grant tiers, not image stages. XRT/SLASH are
-# distro-specific userspace packages and remain image content selected through
-# FINN_RUNTIMES. The sbx stage adds its explicit in-container privilege contract.
+#   system   OS packages and the fixes Xilinx tools need. Changes rarely.
+#   python   uv and /opt/venv with FINN's locked dependencies (uv.lock), always
+#            active. FINN itself is not installed: the entrypoint installs the
+#            mounted checkout editable when a container starts.
+#   runtime  accelerator userspace selected by FINN_RUNTIMES (XRT, SLASH).
+#   sbx      the runtime image plus the in-container privileges sbx needs.
+#   release  the runtime image with a FINN wheel installed, for read-only use
+#            (SIF/HPC); no checkout is needed.
+#
+# The image is x86-64 only (Vivado and XRT are).
 
-# Ubuntu base for every stage. Not free to choose once a runtime target is
-# selected: it must match the release that target's packages were built for.
-# Each manifest may declare EXPECT_OS, and docker/install-runtimes.sh fails the
-# build when it disagrees with this base.
-#
-# A date-pinned base gives rebuilds a stable starting point. apt and pip inputs
-# are intentionally refreshed when layers rebuild, so the image digest -- not
-# the human-readable FINN tag -- is the immutable identity of a particular
-# build.
+# Must match the Ubuntu release the runtime manifests were built for; each
+# manifest may declare EXPECT_OS, which docker/install-runtimes.sh checks.
 ARG UBUNTU_TAG=jammy-20230126
-ARG FINN_ARTIFACT=application
 
 
-# --- system: OS packages, locale, timezone. Changes ~never. ------------------
+# --- system ------------------------------------------------------------------
 FROM ubuntu:${UBUNTU_TAG} AS system
 LABEL maintainer="Jakoba Petri-Koenig <jakoba.petri-koenig@amd.com>, Thomas Preusser <thomas.preusser@amd.com>"
 
-# some Vitis deps require a timezone to be specified, which hangs in Docker
-# use workaround from https://grigorkh.medium.com/fix-tzdata-hangs-docker-image-build-cdb52cc3360d
+# Some Vitis dependencies prompt for a timezone during installation.
 ENV TZ="Europe/Dublin"
-# ARG, not ENV: this is a build-time concern and should not leak into the
-# runtime environment of every container started from the image.
 ARG DEBIAN_FRONTEND=noninteractive
 RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
 
-# Recommends are left on deliberately. The size win in this redesign comes from
-# the tier split, not from trimming the base OS, and --no-install-recommends
-# here would be a behaviour change to the Vivado/XRT runtime that is difficult
-# to validate without a full synthesis run.
-#
-# The ncurses 5 ABI is NOT in this list; it is handled separately below, because
-# it does not exist on every supported release.
+# Recommends stay on: dropping them changes the Vivado/XRT runtime in ways that
+# only a full synthesis run would show. python3-dev provides Python.h for the
+# XSI extension build; python3-venv lets users and tests create further venvs;
+# tcsh is required by LSF esub scripts (/bin/csh shebang).
 RUN apt-get update && \
     apt-get upgrade -y && \
     apt-get install -y \
@@ -93,10 +86,9 @@ RUN apt-get update && \
     locales \
     lsb-release \
     python3 \
-    python-is-python3 \
-    python3-pip \
-    python3-setuptools-scm \
+    python3-dev \
     python3-venv \
+    python-is-python3 \
     pybind11-dev \
     libfmt-dev \
     libboost-dev \
@@ -104,31 +96,21 @@ RUN apt-get update && \
     libgetdata-dev \
     g++-10 \
     cmake \
-    tcsh && \
+    tcsh \
+    tini && \
     rm -rf /var/lib/apt/lists/*
-# tcsh: required by LSF esub scripts (they ship with a /bin/csh shebang).
 
-# ncurses 5 ABI, which Vivado links against.
-#
-# focal and jammy ship libtinfo5/libncurses5; noble dropped them for the
-# ncurses 6 ABI. Rather than pin the package list to one release, ask apt what
-# it has and backport the jammy packages when it has nothing - which is exactly
-# the workaround used to run Vivado on a noble host, and is validated there.
-#
-# Checksummed because this is an unauthenticated fetch installed as root, and
-# taken from the archive pool rather than a PPA so there is no third party in
-# the trust path. ~200 KB for both.
+# ncurses 5 ABI, which Vivado links against. focal and jammy ship it; noble
+# dropped it, so there the jammy packages are installed from the Ubuntu archive
+# pool, checksummed because this is an unauthenticated fetch installed as root.
 ARG NCURSES5_VERSION=6.3-2ubuntu0.2
 ARG LIBTINFO5_SHA256=b9bb64e716a7d9de05b1b33992763142ca81bcae3a7f8ce7e29fa3c6fd32f1e8
 ARG LIBNCURSES5_SHA256=91d18fcc4165a40d27e8181eb282bcaf89c2a5e6c6dc182b37df33827407361c
 RUN set -eu; \
     apt-get update; \
     if apt-cache show libtinfo5 2>/dev/null | grep -q '^Package:'; then \
-        echo "ncurses 5 ABI available from the distro"; \
         apt-get install -y libtinfo5 libncurses5; \
     else \
-        . /etc/os-release; \
-        echo "ncurses 5 ABI absent on $VERSION_ID, backporting from the jammy pool"; \
         pool=http://archive.ubuntu.com/ubuntu/pool/universe/n/ncurses; \
         arch=$(dpkg --print-architecture); \
         wget -q "$pool/libtinfo5_${NCURSES5_VERSION}_${arch}.deb"   -O /tmp/libtinfo5.deb; \
@@ -141,396 +123,182 @@ RUN set -eu; \
     rm -rf /var/lib/apt/lists/*; \
     ldconfig; \
     test -e /usr/lib/$(uname -m)-linux-gnu/libtinfo.so.5 || \
-        { echo "ERROR: libtinfo.so.5 missing after install" >&2; exit 1; }; \
-    echo "ncurses 5 ABI present: $(readlink -f /usr/lib/$(uname -m)-linux-gnu/libtinfo.so.5)"
+        { echo "ERROR: libtinfo.so.5 missing after install" >&2; exit 1; }
 
-# LSB loader for Xilinx's LSB-linked binaries.
-#
-# lmutil and several tool wrappers request the interpreter
-# /lib64/ld-lsb-x86-64.so.3. Without it they fail to exec with "No such file or
-# directory" naming a file that plainly exists -- the classic missing-ELF-
-# interpreter error, and a confusing one to chase.
-#
-# The original Dockerfile got this from `lsb-core`, which no longer exists on
-# noble, so this image installs `lsb-release` (metadata only) and creates the
-# loader symlink directly. It is only ever an alias for the normal loader.
-# Note the naming mismatch that makes this fiddly: `uname -m` reports x86_64
-# with an underscore, while the loader is ld-linux-x86-64.so.2 with a hyphen.
-# Xilinx tooling is amd64-only, so this resolves the real loader by glob rather
-# than by constructing the name.
+# LSB loader. lmutil and several Xilinx tool wrappers request the interpreter
+# /lib64/ld-lsb-x86-64.so.3; without it they fail with a misleading "No such file
+# or directory". It is an alias for the normal loader.
 RUN set -eu; \
     loader=$(ls /lib/*-linux-gnu/ld-linux-x86-64.so.2 2>/dev/null | head -1); \
     [ -n "$loader" ] || { echo "ERROR: no ld-linux-x86-64.so.2 found" >&2; exit 1; }; \
     mkdir -p /lib64; \
     ln -sf "$loader" /lib64/ld-lsb-x86-64.so.3; \
-    test -e /lib64/ld-lsb-x86-64.so.3 || \
-        { echo "ERROR: LSB loader symlink dangling; Xilinx lmutil will not exec" >&2; exit 1; }; \
-    echo "LSB loader: $(readlink -f /lib64/ld-lsb-x86-64.so.3)"
+    test -e /lib64/ld-lsb-x86-64.so.3
 
 RUN echo "StrictHostKeyChecking no" >> /etc/ssh/ssh_config
 RUN locale-gen "en_US.UTF-8"
-
-# Locale is set once, here, rather than re-exported by the entrypoint on every
-# container start as it used to be.
 ENV LANG="en_US.UTF-8" \
     LC_ALL="en_US.UTF-8" \
     LANGUAGE="en_US:en"
 
-# PEP 668: noble and later mark the system Python externally managed, so a
-# system-wide `pip install` refuses outright. That warning is aimed at a shared
-# machine whose package manager owns site-packages - in a single-purpose,
-# disposable container the Python environment IS the deliverable, so there is no
-# system to protect and a venv would only add indirection.
-#
-# jammy has no EXTERNALLY-MANAGED marker and its pip 22.0.2 accepts the variable
-# as a no-op, so this is inert on the currently validated base.
-ENV PIP_BREAK_SYSTEM_PACKAGES=1
+# FLEXlm workaround. Licence checkout fingerprints the host through libudev and
+# corrupts the heap doing it ("realloc(): invalid pointer"); preloading the system
+# libudev avoids it. Set as image ENV so docker exec and sbx exec inherit it. The
+# check fails the build if a new base moves the library.
+RUN test -e /lib/x86_64-linux-gnu/libudev.so.1 || \
+    { echo "ERROR: libudev.so.1 is not at the preloaded path; update LD_PRELOAD" >&2; exit 1; }
+ENV LD_PRELOAD=/lib/x86_64-linux-gnu/libudev.so.1
 
-
-# Resolve and build the complete offline wheel set independently of FINN.
-FROM system AS wheels
-COPY docker/pip-constraints.txt docker/pip-torch.txt docker/requirements-build.txt /tmp/pip/
-ENV PIP_CONSTRAINT=/tmp/pip/pip-constraints.txt
-RUN python -m pip install --no-cache-dir -r /tmp/pip/requirements-build.txt
-RUN python -m pip wheel --no-deps --wheel-dir /opt/finn/wheels -r /tmp/pip/pip-torch.txt && \
-    sed '/^--index-url /d' /tmp/pip/pip-torch.txt > /tmp/pip/torch-requirements.txt
-COPY requirements.txt /tmp/requirements.txt
-COPY docker/requirements-dev.txt /tmp/pip/
-ARG QONNX_COMMIT
-ARG FINN_EXP_COMMIT
-ARG BREVITAS_COMMIT
-ARG DATASET_LOADING_COMMIT
-COPY deps.env fetch-repos.sh /opt/finn-src/
-RUN cd /opt/finn-src && ./fetch-repos.sh python && \
-    python -m pip wheel --wheel-dir /opt/finn/wheels --find-links /opt/finn/wheels \
-        -r /tmp/requirements.txt -r /tmp/pip/requirements-dev.txt \
-        -r /tmp/pip/torch-requirements.txt \
-        -r /tmp/pip/requirements-build.txt \
-        ./deps/qonnx ./deps/finn-experimental ./deps/brevitas ./deps/dataset_loading
-COPY docker/wheelhouse.py /tmp/wheelhouse.py
-RUN python /tmp/wheelhouse.py /opt/finn /opt/finn-src/deps
-
-# The shared installed dependency environment does not retain the wheelhouse.
-FROM system AS base
-COPY docker/pip-constraints.txt /etc/finn-pip-constraints.txt
-ENV PIP_CONSTRAINT=/etc/finn-pip-constraints.txt
-COPY --from=wheels /opt/finn/development-requirements.txt /opt/finn/development-requirements.txt
-COPY --from=wheels /opt/finn/wheelhouse.json /opt/finn/wheelhouse.json
-RUN --mount=from=wheels,source=/opt/finn/wheels,target=/opt/finn/wheels \
-    python -m pip install --no-index --find-links /opt/finn/wheels \
-        -r /opt/finn/development-requirements.txt
-ARG HLSLIB_COMMIT
-ARG AVNET_BDF_COMMIT
-ARG XIL_BDF_COMMIT
-ARG RFSOC4x2_BDF_COMMIT
-ARG KV260_BDF_COMMIT
-ARG AUPZU3_BDF_COMMIT
-COPY deps.env fetch-repos.sh /opt/finn-src/
-
-# HLS C++ headers and Vivado board definitions. Never imported, reached through
-# FINN_HLSLIB_PATH / FINN_BOARD_FILES_PATH from generated Tcl and g++ include
-# flags. 530 MB after the .git strip.
-#
-# These used to live in a separate `build` stage, so that the `dev` image could
-# skip them. That saved 18% of the image and cost a second, disagreeing
-# encoding of "does this user have Vivado" -- see the header. A user with no
-# toolchain now carries headers nothing will read, which is inert: without a
-# Vivado mount there is nothing to include them.
-RUN cd /opt/finn-src && \
-    ./fetch-repos.sh data && \
-    rm -rf /opt/finn-src/deps/*/.git
-
-ENV FINN_HLSLIB_PATH=/opt/finn-src/deps/finn-hlslib \
-    FINN_BOARD_FILES_PATH=/opt/finn-src/deps/board_files
-
-# Fail the build on an inconsistent environment rather than shipping one. pip
-# reports resolver conflicts as a warning and exits 0, so without this a layer
-# that upgrades a pinned transitive dep produces a working-looking image whose
-# ONNX runtime is broken.
-#
-# finnexperimental is deliberately absent from the import list. Its setup.cfg
-# uses `packages = find:` over a namespace package with no __init__.py, so it
-# finds zero packages and the wheel is metadata-only - it has only ever resolved
-# through the path entry, never through the install. That is an upstream
-# packaging bug, and harmless here: FINN imports finnexperimental nowhere, and
-# the wheel still pulls deap/mip/networkx, which is the reason to install it.
-RUN pip check && \
-    python -c "import numpy, scipy, onnx, onnxruntime, torch, qonnx, brevitas, deap, mip, networkx; \
-print('env consistent: numpy', numpy.__version__, '| torch', torch.__version__, '| onnxruntime', onnxruntime.__version__)" && \
-    mkdir -p /tmp/pytest-probe && \
-    printf 'def test_probe():\n    assert True\n' > /tmp/pytest-probe/test_probe.py && \
-    (cd /tmp/pytest-probe && pytest -q >/dev/null) && \
-    rm -rf /tmp/pytest-probe && \
-    echo "pytest loads its plugins and runs a test cleanly"
-# The pytest collection is not redundant with pip check. The jupyter/anyio/pytest
-# incompatibility is a runtime import failure with no metadata conflict, so pip
-# check passes while every pytest invocation dies at plugin load.
-
-COPY docker/finn_entrypoint.sh docker/quicktest.sh /usr/local/bin/
-RUN chmod 755 /usr/local/bin/finn_entrypoint.sh \
-              /usr/local/bin/quicktest.sh
-
-# Transparent vendor-tool shims.
-#
-# Neither `docker exec` nor `sbx exec` runs the image ENTRYPOINT, so a bare
-#
-#     docker exec <container> vivado -version
-#
-# saw none of the toolchain environment. An explicit `finn-env exec` wrapper
-# does not fix that: a generic agent or CI system issues the bare command and
-# has no reason to know FINN's calling convention. The shim directory goes
-# EARLY on PATH so the bare command works with no caller cooperation.
-#
-# The tool list is guest build data; the host resolver is not installed.
+# Vendor tool shims. docker exec and sbx exec do not run the entrypoint, so bare
+# vendor commands (e.g. `vivado -version`) go through a shim early on PATH that
+# applies the selected toolchain environment.
 COPY docker/toolchain-shim /usr/local/lib/finn/toolchain-shim
-# The toolchain application itself: pure shell, sourced by all three delivery
-# mechanisms and by the entrypoint. It used to be `finn-env print --format sh`,
-# which spawned Python to spawn a bash to source the same scripts and diff the
-# result -- 124 ms against 7 ms for sourcing directly, measured in this image.
 COPY docker/finn-toolchain.sh /etc/finn-toolchain.sh
 RUN set -eu; \
     chmod 755 /usr/local/lib/finn/toolchain-shim; \
     chmod 644 /etc/finn-toolchain.sh; \
     mkdir -p /usr/local/lib/finn/toolchain-bin; \
     for t in vivado vitis vitis_hls vitis-run v++ slashkit xelab xsim xvlog xsc lmutil xsct; do \
-        ln -sf /usr/local/lib/finn/toolchain-shim \
-               /usr/local/lib/finn/toolchain-bin/"$t"; \
-    done; \
-    echo "shimmed: $(ls /usr/local/lib/finn/toolchain-bin | tr '\n' ' ')"; \
-    test -L /usr/local/lib/finn/toolchain-bin/vivado
+        ln -sf /usr/local/lib/finn/toolchain-shim /usr/local/lib/finn/toolchain-bin/"$t"; \
+    done
 
-# Static environment. Everything here used to be passed as -e on every docker
-# run, which meant it could not reach a runtime with no create-time env
-# injection seam - notably sbx, whose microVM create path has none. Only genuine
-# host bindings
-# (FINN_XILINX_PATH, VIVADO_PATH, FINN_BUILD_DIR, licences, ports) stay runtime.
+# XILINX_LOCAL_USER_DATA=no lets several Vivado instances run at once
+# (https://adaptivesupport.amd.com/s/article/63253). TORCH_HOME/HF_HOME are set by
+# docker/run only when it mounts a cache.
 ENV VIVADO_IP_CACHE="/tmp/vivado_ip_cache" \
     NUM_DEFAULT_WORKERS=4 \
     LOCALHOST_URL="localhost" \
     SHELL=/bin/bash \
     XILINX_LOCAL_USER_DATA=no
-# TORCH_HOME / HF_HOME are deliberately NOT set here, though §3.4 grouped them
-# with the static tier. They point into /finn_cache, which exists only when
-# FINN_DOCKER_CACHE_DIR is mounted; baking them would make torch.hub try to
-# create /finn_cache as a non-root user and fail whenever the cache is absent.
-# The Docker backend sets them alongside the mount, and without it torch falls back
-# to ~/.cache, which always works.
-# XILINX_LOCAL_USER_DATA=no: workaround for running multiple Vivado instances
-# simultaneously, see https://adaptivesupport.amd.com/s/article/63253
-#
-# LD_PRELOAD is set further down, after the assertion that finds the library.
 
-# A non-root default identity, and PID 1 that reaps.
-#
-# These are generic good practice, not sbx-specific, so they belong in the
-# image everyone uses. The parts of the sbx template contract that grant actual
-# privilege -- NOPASSWD sudo above all -- live in the sbx-* targets at the
-# bottom of this file, so that a tag says which privilege model you got.
-#
-#   agent uid 1000     a stable, non-root identity. The Docker backend
-#                      overrides it with --user $UID:$GID.
-#   /home/agent 0755   with .claude/.local/.npm/.cache/workspace present. A bare
-#                      0750 home fails sbx setup with "cannot create
-#                      .../settings.json: Permission denied". That requirement
-#                      is in no documentation; it came from diffing a stock
-#                      template. Harmless here, and keeping the home layout in
-#                      one place avoids a second chown -R in the sbx layer.
-#   tini as PID 1      reaps zombies. Also what the former launcher's --init provided
-#                      for Vivado, so that flag is now redundant.
-RUN set -eu; \
-    useradd --create-home --uid 1000 --shell /bin/bash agent 2>/dev/null || true; \
-    chmod 0755 /home/agent; \
-    mkdir -p /home/agent/.claude /home/agent/.local/bin /home/agent/.npm \
-             /home/agent/.cache /home/agent/workspace; \
-    chown -R agent:agent /home/agent; \
-    if ! command -v tini >/dev/null; then \
-        apt-get update && \
-        apt-get install -y --no-install-recommends tini && \
-        rm -rf /var/lib/apt/lists/*; \
-    fi
+# A stable non-root default user. docker/run overrides it with --user $UID:$GID.
+RUN useradd --create-home --uid 1000 --shell /bin/bash agent && \
+    chmod 0755 /home/agent && \
+    mkdir -p /home/agent/.local/bin /home/agent/.cache && \
+    chown -R agent:agent /home/agent
 
-#   NPM_CONFIG_PREFIX must be paired with its bin dir on PATH. Setting the
-#   prefix alone relocates `npm install -g` somewhere unreachable, so installing
-#   a CLI appears to succeed and then `command -v <cli>` fails with 127.
-# Preserve native sbx's persistent environment integration. This hook performs
-# no FINN activation; bare tools use the documented shim and FINN operations
-# prepare their own child settings.
-ENV NO_PROXY=localhost,127.0.0.1,::1,172.17.0.0/16 \
-    no_proxy=localhost,127.0.0.1,::1,172.17.0.0/16 \
-    NPM_CONFIG_PREFIX=/usr/local/share/npm-global \
-    PATH=/usr/local/share/npm-global/bin:/usr/local/lib/finn/toolchain-bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
-RUN mkdir -p /usr/local/share/npm-global/bin && chmod -R a+rX /usr/local/share/npm-global
+# --- python ------------------------------------------------------------------
+FROM system AS python
 
-# tini is PID 1; finn_entrypoint.sh still runs and still execs the command.
-#
-# CMD stays `bash` - the interactive default a bare `docker run -it` expects.
-#
-# sbx does NOT use this CMD: it runs the image ENTRYPOINT but substitutes its
-# own keep-alive command, so PID 1 in a sandbox reads
-#
-#   /usr/bin/tini -- finn_entrypoint.sh sh -c 'trap ...; sleep infinity & wait'
-#
-# An earlier revision set CMD to `sleep infinity` believing a bash with no TTY
-# was what killed the sandbox. It was not - the entrypoint's fatal "no FINN
-# source" check was, because sbx starts PID 1 with cwd=/. That check is now a
-# removed, and CMD is irrelevant to sbx either way.
+COPY --from=ghcr.io/astral-sh/uv:0.10.0 /uv /uvx /usr/local/bin/
+
+# /opt/venv is active for every process (docker exec and sbx exec included), not
+# only for login shells. It uses the distro Python; uv never downloads one.
+ENV VIRTUAL_ENV=/opt/venv \
+    UV_PROJECT_ENVIRONMENT=/opt/venv \
+    UV_PYTHON_DOWNLOADS=never \
+    UV_LINK_MODE=copy \
+    PATH=/opt/venv/bin:/usr/local/lib/finn/toolchain-bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+# FINN's locked dependencies. FINN and the workspace members (packages/*) are not
+# installed here; the entrypoint installs them editable from the mounted checkout.
+# The venv is writable by any user because containers run as the caller's uid and
+# the entrypoint installs into it; each container's writable layer is its own.
+RUN --mount=type=bind,source=pyproject.toml,target=/tmp/finn-lock/pyproject.toml \
+    --mount=type=bind,source=uv.lock,target=/tmp/finn-lock/uv.lock \
+    --mount=type=cache,target=/root/.cache/uv \
+    uv venv --python /usr/bin/python3.10 /opt/venv && \
+    cd /tmp/finn-lock && \
+    uv sync --frozen --no-install-workspace && \
+    chmod -R a+rwX /opt/venv
+
+# Fail the build on an inconsistent environment. The pytest run is not redundant
+# with the metadata check: a plugin import failure (as with jupyter/anyio) has no
+# metadata conflict.
+RUN test "$(uv pip list --format freeze | wc -l)" -gt 100 && \
+    uv pip check && \
+    python -c "import numpy, scipy, onnx, onnxruntime, torch, qonnx, brevitas" && \
+    mkdir -p /tmp/pytest-probe && \
+    printf 'def test_probe():\n    assert True\n' > /tmp/pytest-probe/test_probe.py && \
+    (cd /tmp/pytest-probe && pytest -q -p no:cacheprovider >/dev/null) && \
+    rm -rf /tmp/pytest-probe
+
+# Board files, fetched from upstream at the pins in finn/util/external.py.
+RUN --mount=type=bind,source=src/finn/util/external.py,target=/tmp/external.py \
+    python /tmp/external.py fetch-boards --dest /opt/finn/board-files && \
+    rm -f /opt/finn/.board-files.lock
+ENV FINN_BOARD_FILES_PATH=/opt/finn/board-files
+
+COPY docker/finn_entrypoint.sh docker/quicktest.sh /usr/local/bin/
+RUN chmod 755 /usr/local/bin/finn_entrypoint.sh /usr/local/bin/quicktest.sh
+
+# tini reaps zombies as PID 1. sbx runs this ENTRYPOINT with its own keep-alive
+# command instead of CMD.
 ENTRYPOINT ["/usr/bin/tini", "--", "finn_entrypoint.sh"]
 CMD ["bash"]
-
-# The FLEXlm/libudev workaround, baked.
-#
-# Without it a licence checkout dies with "realloc(): invalid pointer" inside
-# udev_enumerate_scan_devices. FLEXlm fingerprints the host through libudev
-# during checkout and corrupts the heap doing it; preloading the system libudev
-# avoids it. Reproduced on plain docker, so this is NOT microVM-specific -- an
-# earlier comment in docker/finn.kit/spec.yaml claimed it was, and was wrong.
-#
-# WHY BAKED RATHER THAN RESOLVED AT RUNTIME. finn-env used to probe for this
-# per process. The probe was doing very little: the library is in the base image
-# at a fixed path, on the only architecture this image supports (bake declares
-# platforms = ["linux/amd64"], and XRT and Vivado are x86-64 only). Baking it
-# moves the value from run-time to CREATE-time, so a bare `docker exec` or
-# `sbx exec` inherits it with no hook at all -- neither runs the ENTRYPOINT, and
-# a Vivado launched that way is exactly how this went missing and took synthesis
-# down with it.
-#
-# This used to live in the `build` stage, so the narrow `dev` image did not
-# carry it. With one base image it applies everywhere, which is measured
-# harmless -- git, pip and apt are unaffected. The reason for keeping it out of
-# `dev` was that the narrow tier stays narrow on principle; that principle is
-# now enforced by the runtime grants (no toolchain mount, no licence, no
-# egress), which is where it was always doing the real work.
-#
-# The assertion is the point of baking it. If a future base changes distro and
-# the library moves, this fails the BUILD. Left to runtime, ld.so instead prints
-# "cannot be preloaded: ignored" on every single exec, which looks like a FINN
-# bug; and before that, a failed probe returned nothing at all and Vivado
-# aborted at licence checkout with a heap error pointing nowhere near the cause.
-RUN set -eu; \
-    libudev=$(ls /lib/*-linux-gnu/libudev.so.1 2>/dev/null | head -1); \
-    [ -n "$libudev" ] || { echo "ERROR: libudev.so.1 not found; the FLEXlm workaround cannot be applied" >&2; exit 1; }; \
-    echo "libudev for LD_PRELOAD: $libudev"; \
-    test "$libudev" = /lib/x86_64-linux-gnu/libudev.so.1 || \
-        { echo "ERROR: libudev is at $libudev, not the baked path below. Update the ENV." >&2; exit 1; }
-ENV LD_PRELOAD=/lib/x86_64-linux-gnu/libudev.so.1
-
-# The image's default user. This was missing entirely: `agent` was created but
-# never selected, so every consumer that did not pass --user got ROOT. That
-# included plain `docker run`, `docker exec`, and any orchestrator reading the
-# image's own metadata to decide who to run as.
-#
-# The Docker backend passes --user $UID:$GID and so is unaffected; this fixes
-# the default for everyone who does not.
-#
-# Stages below re-assert USER root for their install steps and restore this at
-# the end. A stage that forgets will fail loudly on the first apt-get, which is
-# the desired failure mode.
 USER agent
 
-# --- runtime: + the accelerator stacks named in FINN_RUNTIMES. ---------------
-#
-# Empty by default, so this stage is a no-op and the base image is what you get.
-#
-#   FINN_RUNTIMES=xrt          Vitis / Alveo
-#   FINN_RUNTIMES=xrt,slash    plus the V80
-#
-# The names are file names in docker/runtimes/. Add a target by writing one
-# manifest there; nothing in this Dockerfile changes. See that README for the
-# format, for the admission test, and for why kernel modules are not here.
-#
-# The manifests and any supplied packages arrive through a bind mount rather
-# than COPY, so an unselected runtime's deb never ends up in a layer and the
-# image does not carry packages it did not install.
-# Development artifact: offline wheels, no FINN installation.
-FROM base AS dependencies
-COPY --from=wheels /opt/finn/wheels /opt/finn/wheels
 
-FROM base AS application-wheel
+# --- runtime -----------------------------------------------------------------
+# FINN_RUNTIMES names manifests in docker/runtimes/ (e.g. "xrt" or "xrt,slash");
+# empty by default. Manifests and packages are bind-mounted, so an unselected
+# runtime's package never lands in a layer. See docker/runtimes/README.md.
+FROM python AS runtime
 USER root
-COPY pyproject.toml setup.py setup.cfg MANIFEST.in VERSION README.md LICENSE.txt deps.env /tmp/finn-package/
-COPY src /tmp/finn-package/src
-ARG FINN_SOURCE_REVISION=unknown
-ARG FINN_SOURCE_DIRTY=unknown
-RUN cd /tmp/finn-package && \
-    python -c 'import json,os; from pathlib import Path; Path("FINN_BUILD_INFO.json").write_text(json.dumps({"version":Path("VERSION").read_text().strip(),"revision":os.environ["FINN_SOURCE_REVISION"],"dirty":os.environ["FINN_SOURCE_DIRTY"] == "1" if os.environ["FINN_SOURCE_DIRTY"] in {"0","1"} else None}))' && \
-    python -m build --no-isolation --wheel --outdir /opt/finn/application
-
-FROM base AS application
-USER root
-RUN --mount=from=application-wheel,source=/opt/finn/application,target=/tmp/application \
-    python -m pip install --no-index --no-deps /tmp/application/*.whl && \
-    sha256sum /tmp/application/*.whl > /opt/finn/application-wheel.sha256 && \
-    python -m pip check
-USER agent
-
-FROM ${FINN_ARTIFACT} AS runtime
-USER root
-
 ARG FINN_RUNTIMES=""
 ENV FINN_RUNTIMES=${FINN_RUNTIMES}
-
 RUN --mount=type=bind,source=docker/runtimes,target=/tmp/runtimes \
     --mount=type=bind,source=docker/packages,target=/tmp/packages \
     --mount=type=bind,source=docker/install-runtimes.sh,target=/tmp/install-runtimes.sh \
     sh /tmp/install-runtimes.sh
-
 USER agent
 
 
-# =============================================================================
-# sbx: the generic image plus the privileged half of the sbx template contract.
-#
-# WHY A SEPARATE TARGET AND NOT A BUILD ARGUMENT
-# ----------------------------------------------
-# NOPASSWD sudo is a real capability. Gating it behind a build argument would
-# produce two images with materially different privilege that are
-# indistinguishable by tag -- a hidden variant. A named target puts the
-# privilege model in the tag, where anything reading the image can see it.
-#
-# WHY NOT A SEPARATE DOCKERFILE
-# -----------------------------
-# Inheritance ENFORCES behavioural equivalence with the generic image; a second
-# Dockerfile only hopes for it. BuildKit shares every lower layer, so the
-# marginal cost is one thin layer, not a second image.
-#
-# This used to be three targets, one per tier, which is why the contract lives
-# in a script: a change could otherwise be applied to two of the three. With one
-# base image there is one sbx target, and the script keeps its own reason to
-# exist -- it is still the only place that knows the contract.
-#
-# WHAT SBX NEEDS THAT THE GENERIC IMAGE DELIBERATELY WITHHOLDS
-# ------------------------------------------------------------
-#   NOPASSWD sudo    sbx kits run as `agent` and install software.
-#   proxy env_keep   Ubuntu ships these commented out. Without them anything
-#                    the agent runs under sudo silently loses its proxy config
-#                    and its network calls fail looking like an egress denial.
-#   /etc/sandbox-persistent.sh
-#                    sbx-managed; the image must never WRITE it, but the file
-#                    has to exist for BASH_ENV to source on the first shell.
-#
-# In-container root here is NOT a violation of the narrow tier's "no privileges"
-# contract, which is about HOST exposure: no devices, no added capabilities, no
-# privileged mode, no sensitive writable mounts. The conformance suite asserts
-# both readings separately.
-#
-# Reverse-engineered from bisecting real create failures, therefore breakable
-# by an sbx release. Verified by creating a sandbox with plain `sbx`, no
-# wrapper.
-# =============================================================================
+# --- release -----------------------------------------------------------------
+# FINN and finn-hlslib installed from wheels built from this context. For
+# read-only images (SIF/HPC): no checkout, no startup install.
+FROM runtime AS release-wheels
+USER root
+ARG FINN_SOURCE_REVISION=unknown
+ARG FINN_SOURCE_DIRTY=unknown
+RUN --mount=type=bind,source=.,target=/tmp/context \
+    cp -r /tmp/context /tmp/finn && \
+    cd /tmp/finn && \
+    python -c 'import json,os; from pathlib import Path; d=os.environ["FINN_SOURCE_DIRTY"]; Path("FINN_BUILD_INFO.json").write_text(json.dumps({"version": Path("VERSION").read_text().strip(), "revision": os.environ["FINN_SOURCE_REVISION"], "dirty": d == "1" if d in {"0", "1"} else None}))' && \
+    uv build --wheel --no-build-isolation --out-dir /opt/finn/wheels . && \
+    uv build --wheel --no-build-isolation --out-dir /opt/finn/wheels packages/finn-hlslib
 
+FROM runtime AS release
+USER root
+RUN --mount=type=bind,from=release-wheels,source=/opt/finn/wheels,target=/tmp/wheels \
+    uv pip install --no-deps /tmp/wheels/*.whl && \
+    sha256sum /tmp/wheels/*.whl > /opt/finn/release-wheels.sha256 && \
+    uv pip check
+# The installed FINN is the one to use; do not replace it with a mounted checkout.
+ENV FINN_SYNC=0
+USER agent
+
+
+# --- sbx ---------------------------------------------------------------------
+# The sbx template contract. A separate target, not a build argument, so the
+# in-container privilege model (NOPASSWD sudo) is visible in the tag. This is
+# in-container root only: no devices, capabilities or privileged mode.
+# Reverse-engineered from sbx create failures, so an sbx release can break it.
+#
+#   NOPASSWD sudo    sbx kits run as `agent` and install software.
+#   proxy env_keep   without it, commands under sudo lose the sandbox proxy.
+#   home layout      sbx setup writes into these directories and needs 0755 home.
+#   npm prefix       global npm installs land in a directory that is on PATH.
+#   /etc/sandbox-persistent.sh
+#                    sbx-managed; it must exist for BASH_ENV to source.
 FROM runtime AS sbx
 USER root
 COPY docker/finn-bashenv.sh /etc/finn-bashenv.sh
-ENV BASH_ENV=/etc/finn-bashenv.sh
+ENV BASH_ENV=/etc/finn-bashenv.sh \
+    NO_PROXY=localhost,127.0.0.1,::1,172.17.0.0/16 \
+    no_proxy=localhost,127.0.0.1,::1,172.17.0.0/16 \
+    NPM_CONFIG_PREFIX=/usr/local/share/npm-global \
+    PATH=/usr/local/share/npm-global/bin:/opt/venv/bin:/usr/local/lib/finn/toolchain-bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 RUN set -eu; \
     usermod -aG sudo agent; \
     echo "agent ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/agent; \
     echo 'Defaults:%sudo env_keep += "http_proxy https_proxy ftp_proxy all_proxy no_proxy HTTP_PROXY HTTPS_PROXY NO_PROXY SSL_CERT_FILE NODE_EXTRA_CA_CERTS REQUESTS_CA_BUNDLE JAVA_TOOL_OPTIONS"' >> /etc/sudoers.d/agent; \
     chmod 0440 /etc/sudoers.d/agent; \
+    mkdir -p /home/agent/.claude /home/agent/.npm /home/agent/workspace \
+             /usr/local/share/npm-global/bin; \
+    chown -R agent:agent /home/agent; \
+    chmod -R a+rX /usr/local/share/npm-global; \
     touch /etc/sandbox-persistent.sh; \
-    chmod 0644 /etc/sandbox-persistent.sh; \
-    id -nG agent | tr ' ' '\n' | grep -qx sudo; \
-    test -r /etc/sandbox-persistent.sh; \
-    echo "sbx template contract applied"
+    chmod 0644 /etc/sandbox-persistent.sh
 USER agent
