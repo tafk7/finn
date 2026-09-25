@@ -13,16 +13,14 @@ framing stay stable while a valid transfer is stalled.
 from collections.abc import Sequence
 
 from finn.kernels.artifacts.abi import (
-    Bus,
     Clock,
     Direction,
     Endpoint,
     Free,
-    Member,
     Reset,
     Signal,
-    StandardProtocol,
 )
+from finn.kernels.physical.stream import ReadyValidStream, StreamMarker, MarkerKind
 from finn.kernels.artifacts.contribution_types import CopiedSource
 from finn.kernels.artifacts.requirements import (
     FixedModuleName,
@@ -31,13 +29,13 @@ from finn.kernels.artifacts.requirements import (
 )
 
 REPLAY_BUFFER_SOURCES = (
-    CopiedSource("finnlib", "rtl/infra/replay_buffer.sv", provides=("module:replay_buffer",)),
+    CopiedSource("finnlib", "rtl/replay_buffer.sv", provides=("module:replay_buffer",)),
 )
 
 
 def _positive(name: str, value: int) -> None:
-    if type(value) is not int or value < 1:
-        raise ValueError(f"{name} must be a positive integer")
+    if type(value) is not int or not 1 <= value <= 0xFFFFFFFF:
+        raise ValueError(f"{name} must be a positive native unsigned integer")
 
 
 def _clock_reset() -> tuple[Signal, Signal]:
@@ -52,19 +50,29 @@ def _clock_reset() -> tuple[Signal, Signal]:
     )
 
 
-def _output(word_bits: int, *, last: bool = False) -> Bus:
-    return Bus(
-        "out0",
-        StandardProtocol.AXIS,
-        (
-            Member("tdata", "odat", word_bits),
-            Member("tvalid", "ovld"),
-            Member("tready", "ordy"),
-            *((Member("tlast", "olast"),) if last else ()),
+def replay_buffer_interfaces(*, word_bits: int) -> tuple[ReadyValidStream, ...]:
+    """Native opaque streams with sequence-end and final-replay markers."""
+    _positive("word_bits", word_bits)
+    return (
+        ReadyValidStream("input", word_bits, Endpoint.TARGET, "idat", "ivld", "irdy", "clk", "rst"),
+        ReadyValidStream(
+            "output",
+            word_bits,
+            Endpoint.INITIATOR,
+            "odat",
+            "ovld",
+            "ordy",
+            "clk",
+            "rst",
+            (StreamMarker("olast", MarkerKind.LAST), StreamMarker("ofin", MarkerKind.REPLAY_END)),
         ),
-        endpoint=Endpoint.INITIATOR,
-        associated_clock="clk",
-        associated_reset="rst",
+    )
+
+
+def cyclic_stream_interface(*, word_bits: int) -> ReadyValidStream:
+    _positive("word_bits", word_bits)
+    return ReadyValidStream(
+        "output", word_bits, Endpoint.INITIATOR, "odat", "ovld", "ordy", "clk", "rst"
     )
 
 
@@ -95,20 +103,11 @@ def replay_buffer_requirements(
             FixedModuleName("replay_buffer"),
             (
                 *_clock_reset(),
-                Bus(
-                    "in0",
-                    StandardProtocol.AXIS,
-                    (
-                        Member("tdata", "idat", word_bits),
-                        Member("tvalid", "ivld"),
-                        Member("tready", "irdy"),
-                    ),
-                    endpoint=Endpoint.TARGET,
-                    associated_clock="clk",
-                    associated_reset="rst",
+                *(
+                    pin
+                    for stream in replay_buffer_interfaces(word_bits=word_bits)
+                    for pin in stream.pins()
                 ),
-                _output(word_bits, last=True),
-                Signal("ofin", Direction.OUT, 1),
             ),
             tuple((name, str(value)) for name, value in parameters),
         ),
@@ -150,7 +149,7 @@ def cyclic_stream_requirements(
         parameters,
         ModuleABIRequirements(
             FixedModuleName("cyclic_stream"),
-            (*_clock_reset(), _output(word_bits)),
+            (*_clock_reset(), *cyclic_stream_interface(word_bits=word_bits).pins()),
             tuple((name, str(value)) for name, value in parameters),
         ),
         (
@@ -163,4 +162,9 @@ def cyclic_stream_requirements(
     )
 
 
-__all__ = ["replay_buffer_requirements", "cyclic_stream_requirements"]
+__all__ = [
+    "replay_buffer_requirements",
+    "cyclic_stream_requirements",
+    "replay_buffer_interfaces",
+    "cyclic_stream_interface",
+]

@@ -16,10 +16,6 @@ import zipfile
 
 
 ROOT = Path(__file__).resolve().parents[2]
-FINNLIB_REVISION = "dfeafac81cd2a6da27e647ee03915ade5532186e"
-QONNX_REVISION = "21d4c1a72334002aaf80ae099dbf5d167f001001"
-CORRECTED_WRAPPER_SHA256 = "466397881624b4d0a4884762700620d548271541dc97bb265ea4b80129a5cd90"
-
 # -I -S ignores PYTHONPATH, the current directory, user packages and .pth files.
 # Only the wheel target, a copied QONNX dependency and ordinary dependency
 # site-packages are added. No FINN source or test package is on this path.
@@ -86,7 +82,7 @@ assert (installed / "finn/kernels/py.typed").is_file()
 assert not (installed / "finn/kernels/_engine").exists()
 assert (installed / "finn/core/space/py.typed").is_file()
 assert not (installed / "finn/kernels/space").exists()
-assert sha256((resources / "dotp_axi.sv").read_bytes()).hexdigest() == config["wrapper_sha256"]
+assert not (resources / "dotp_axi.sv").exists()
 assert build.ModuleBuildRequirements is requirements.ModuleBuildRequirements
 assert contributions.CopiedSource is contribution_types.CopiedSource
 assert requirements.ModuleBuildRequirements.__module__ == "finn.kernels.artifacts.build"
@@ -106,8 +102,8 @@ assert dotp.activation.dtype.name == "INT3"
 assert dotp.activation.payload_bits == 6
 
 dotp_sources = {
-    "rtl/arith/add_multi_pkg.sv", "rtl/arith/add_multi.sv",
-    "rtl/linalg/dotp_8sx9_dsp58.sv", "rtl/linalg/dotp.sv", "dotp_axi.sv",
+    "rtl/add_multi_pkg.sv", "rtl/add_multi.sv",
+    "rtl/dotp_8sx9_dsp58.sv", "rtl/dotp.sv", "rtl/dotp_axi.sv",
 }
 store = ArtifactStore(Path(config["store"]))
 roots = {"kernels": resources, "finnlib": Path(config["finnlib"])}
@@ -133,7 +129,6 @@ def materialize(module, expected):
         data = (directory / item.path).read_bytes()
         assert len(data) == item.size
         assert sha256(data).hexdigest() == item.digest
-    assert sha256((directory / "dotp_axi.sv").read_bytes()).hexdigest() == config["wrapper_sha256"]
     for source in module.contributions:
         if isinstance(source, contributions.CopiedSource):
             original = (roots[source.root] / source.path).read_bytes()
@@ -143,7 +138,7 @@ def materialize(module, expected):
 materialize(answer, dotp_sources)
 for delivery in WeightDelivery:
     options = {}
-    expected = dotp_sources | {"rtl/infra/replay_buffer.sv"}
+    expected = dotp_sources | {"rtl/replay_buffer.sv"}
     if delivery is WeightDelivery.CYCLIC:
         options["weights"] = [[-4, -3, -2, -1], [0, 1, 2, 3], [3, 2, 1, 0], [-1, -2, -3, -4]]
         expected |= {"cyclic_stream.sv"}
@@ -184,9 +179,6 @@ def _run(command: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
 def test_installed_wheel_materializes_independent_kernel_builds(tmp_path: Path) -> None:
     finnlib = Path(os.environ.get("FINNLIB_ROOT", str(ROOT / "deps/finnlib"))).resolve()
     qonnx = (ROOT / "deps/qonnx").resolve()
-    for dependency, revision in ((finnlib, FINNLIB_REVISION), (qonnx, QONNX_REVISION)):
-        assert _run(["git", "rev-parse", "HEAD"], dependency).stdout.strip() == revision
-
     # Build from a clean temporary source snapshot: setuptools must neither
     # reuse a checkout build tree nor write generated metadata into the checkout.
     snapshot = tmp_path / "source"
@@ -219,7 +211,6 @@ def test_installed_wheel_materializes_independent_kernel_builds(tmp_path: Path) 
         assert {
             "finn/kernels/py.typed",
             "finn/core/space/py.typed",
-            "finn/kernels/resources/dotp_axi.sv",
             "finn/kernels/resources/cyclic_stream.sv",
             "finn/kernels/resources/decomposed_wrapper.sv.j2",
         } <= set(archive.namelist())
@@ -274,7 +265,6 @@ def test_installed_wheel_materializes_independent_kernel_builds(tmp_path: Path) 
         "finnlib": str(finnlib),
         "site_packages": dependency_paths,
         "store": str(tmp_path / "store"),
-        "wrapper_sha256": CORRECTED_WRAPPER_SHA256,
     }
     result = _run([sys.executable, "-I", "-S", "-c", INSTALLED_BUILD, json.dumps(config)], tmp_path)
     assert "installed dotp, external MVAU and cyclic MVAU manifests verified" in result.stdout

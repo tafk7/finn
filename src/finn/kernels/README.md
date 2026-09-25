@@ -35,9 +35,9 @@ mvau.py                  parent-owned folding/delivery and accepted dotp child
 streaming.py             replay and initialized cyclic word delivery
 target.py                DSP targets and port capacities
 physical/                AXI scopes, detached packing, wiring and lowering
-datatypes/               QONNX scalar semantics, admission constraints and codecs
+datatypes/               QONNX identity, reusable policies, scalar scopes and codecs
 artifacts/               requirements, source resolution, rendering and builds
-resources/               corrected dotp RTL, cyclic RTL, assembly template
+resources/               cyclic RTL and source-generation templates
 
 Space -> accepted build_requirements view -> ModuleBuildRequirements
                                          |
@@ -60,6 +60,7 @@ Dotp's supplied dtype handles are `DotpAxiKernel.activation.dtype`,
 exposes narrow dtype/width fields independently of its accepted complete stream.
 The interface aggregate expands through `ScopeBuilder` and ordinary
 `Subspace` placement; it does not inject members into its parent class.
+Datatype policies may constrain both input and caller-selected output encodings.
 
 The [original authoring-pass notes](../../../docs/kernel-authoring-pass/README.md)
 retain the adopted physical profiles and native-source findings. Their old
@@ -127,12 +128,36 @@ The experimental code under `finn.dataflow` still imports the removed
 requires a separate port to `finn.core.space`; there is no compatibility alias. Graph inference, nodeattr persistence,
 source reconstruction and graph transactions are outside this kernel API.
 The independent kernel gate does not claim those consumers work. The canonical
-physical definitions and shared support belong here. Keep local RTL unchanged
-during package changes; review
-the pinned upstream source and correction recorded in `resources/dotp_axi.sv`
-when updating FinnLib.
+physical definitions and shared support belong here.
 
-`resources/axilite.sv` contains one additional pinned correction: `snk_re` is
-declared before its first use, preserving the original continuous assignment.
-Thresholding uses this source because Vivado rejects the upstream declaration
-order. Both local corrections record their upstream revision and hash.
+The source baseline now uses FinnLib's flat `rtl/` and `hls/` layout at
+`b17eae6a074ea678c633598fa42e7751e6cea194` (branch
+`kernel-contract-refinement-20260925`). Dotp output-buffer and AXI-Lite
+declaration-order corrections are in FinnLib; there are no private copies in
+`resources`. Replay is also supplied by FinnLib. Eltwise's source closure
+includes its native `queue` module. Record and validate source revisions when
+updating this dependency; matching filenames do not establish compatibility.
+
+`Integer(...).constraints(dtype)` and `Integer(...).domain()` share a policy
+for supplied facts and owned choices. `Scalar(dtype, valid_types)` places an
+accepted scalar encoding independently of any stream or implementation language.
+Conversion and thresholding consume these accepted scalar views before building
+pins. Type-family refusals and dynamic bit bounds remain independently visible.
+
+`ReadyValidStream` describes native transfer pins, markers and clock/reset
+associations. `pins()` preserves their exact widths. `axis_bus()` requires
+byte-aligned data and at most one LAST marker; it does not pad words or relabel
+loop/replay completion markers. `AxiStream` uses this same transport lowering
+while retaining its typed packing. FIFO, input generation and eltwise expose
+accepted `interfaces()` views; replay and cyclic delivery use the same native
+records rather than publishing unpadded words as AXI buses.
+
+FIFO's `ram_style` remains a native preference. Its accepted `storage()` view
+reports both the effective backing and capacity, including output storage.
+For example, `FifoKernel(word_bits=13, depth=2).with_choices(ram_style="ultra")`
+reports shift storage and capacity five. This is native implementation
+information, not a synthesis resource measurement.
+
+See the [refinement review](../../../docs/kernel-refinement-2026-09-25/REVIEW.md)
+for examples, validation, source-baseline details, and the intentionally
+remaining architecture/composition work.

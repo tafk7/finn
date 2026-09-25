@@ -6,46 +6,67 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from collections.abc import Callable, Iterable
 import re
 from typing import Protocol
 
 from finn.kernels.datatypes.values import QONNXDataType, qonnx_datatype_width
-from finn.core.space import Constraint, Rejected, ValueRef, constraint, reject
+from finn.core.space import Constraint, Domain, Rejected, ValueRef, constraint, domain, reject
+from finn.kernels.datatypes.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
+from finn.kernels.datatypes.values import resolve_qonnx_datatype_name
 
 BitBound = int | ValueRef[int]
 
 
 class DatatypeDomain(Protocol):
+    def rebind(self, bind: Callable[[str, BitBound], BitBound]) -> DatatypeDomain:
+        """Place policy dependencies in a consumer's scope, without knowing that consumer."""
+        ...
+
     def constraints(
         self, datatype: ValueRef[QONNXDataType]
     ) -> tuple[tuple[str, Constraint], ...]: ...
 
 
+def _check_bound(dtype: QONNXDataType, limit: int, *, minimum: bool) -> bool | Rejected:
+    if type(limit) is not int or limit < 1:
+        return reject("dtype-bound-invalid", "a storage-bit bound must be a positive integer")
+    actual = qonnx_datatype_width(dtype)
+    if (actual < limit) if minimum else (actual > limit):
+        relation = "at least" if minimum else "at most"
+        return reject(
+            "dtype-minimum-bits" if minimum else "dtype-maximum-bits",
+            f"{dtype.name} uses {actual} bits; this encoding requires {relation} {limit}",
+            values={"datatype": dtype.name, "actual_bits": actual, "bound": limit},
+        )
+    return True
+
+
+def _check_family(dtype: QONNXDataType, signed: bool | None) -> bool | Rejected:
+    ordinary = dtype.name == "BINARY" or re.fullmatch(r"U?INT-?\d+", dtype.name) is not None
+    if not ordinary or (signed is not None and dtype.name.startswith("INT") != signed):
+        expected = {None: "INT/UINT", True: "signed INT", False: "unsigned UINT"}[signed]
+        return reject(
+            "dtype-family",
+            f"{dtype.name} is outside the {expected} datatype domain",
+            values={"datatype": dtype.name, "expected": expected},
+        )
+    return True
+
+
 def _bit_bound(datatype: ValueRef[QONNXDataType], bound: BitBound, *, minimum: bool) -> Constraint:
-    def check(dtype: QONNXDataType, limit: int) -> bool | Rejected:
-        if type(limit) is not int or limit < 1:
-            return reject("dtype-bound-invalid", "a storage-bit bound must be a positive integer")
-        actual = qonnx_datatype_width(dtype)
-        if (actual < limit) if minimum else (actual > limit):
-            relation = "at least" if minimum else "at most"
-            return reject(
-                "dtype-minimum-bits" if minimum else "dtype-maximum-bits",
-                f"{dtype.name} uses {actual} bits; this interface requires {relation} {limit}",
-                values={"datatype": dtype.name, "actual_bits": actual, "bound": limit},
-            )
-        return True
 
     if isinstance(bound, ValueRef):
 
         @constraint(datatype=datatype, bound=bound)
         def dynamic(*, datatype: QONNXDataType, bound: int) -> bool | Rejected:
-            return check(datatype, bound)
+            return _check_bound(datatype, bound, minimum=minimum)
 
         return dynamic
 
     @constraint(datatype=datatype)
     def fixed(*, datatype: QONNXDataType) -> bool | Rejected:
-        return check(datatype, bound)
+        return _check_bound(datatype, bound, minimum=minimum)
 
     return fixed
 
@@ -76,19 +97,7 @@ class Integer:
     def constraints(self, datatype: ValueRef[QONNXDataType]) -> tuple[tuple[str, Constraint], ...]:
         @constraint(datatype=datatype)
         def family(*, datatype: QONNXDataType) -> bool | Rejected:
-            name = datatype.name
-            ordinary = name == "BINARY" or re.fullmatch(r"U?INT-?\d+", name) is not None
-            is_signed = name.startswith("INT")
-            if not ordinary or (self.signed is not None and is_signed != self.signed):
-                expected = {None: "INT/UINT", True: "signed INT", False: "unsigned UINT"}[
-                    self.signed
-                ]
-                return reject(
-                    "dtype-family",
-                    f"{name} is outside this interface's {expected} datatype domain",
-                    values={"datatype": name, "expected": expected},
-                )
-            return True
+            return _check_family(datatype, self.signed)
 
         return (
             ("family", family),
@@ -98,6 +107,68 @@ class Integer:
                 if self.max_bits is not None
                 else ()
             ),
+        )
+
+    def rebind(self, bind: Callable[[str, BitBound], BitBound]) -> Integer:
+        return Integer(
+            bind("minimum_bits", self.min_bits),
+            None if self.max_bits is None else bind("maximum_bits", self.max_bits),
+            signed=self.signed,
+        )
+
+    def check(self, dtype: QONNXDataType) -> bool | Rejected:
+        """Check a concrete policy; dynamic bounds are resolved by the Space adapters."""
+        if isinstance(self.min_bits, ValueRef) or isinstance(self.max_bits, ValueRef):
+            raise TypeError("check requires concrete bit bounds; use constraints() or domain()")
+        family = _check_family(dtype, self.signed)
+        if isinstance(family, Rejected):
+            return family
+        minimum = _check_bound(dtype, self.min_bits, minimum=True)
+        if isinstance(minimum, Rejected):
+            return minimum
+        return True if self.max_bits is None else _check_bound(dtype, self.max_bits, minimum=False)
+
+    def domain(self) -> Domain[QONNXDataType]:
+        """Use the same policy for owned dtype choices; bounded policies enumerate widths."""
+        dependencies = {
+            name: value
+            for name, value in (("minimum", self.min_bits), ("maximum", self.max_bits))
+            if isinstance(value, ValueRef)
+        }
+
+        def resolved(bounds: dict[str, int]) -> Integer:
+            low = bounds["minimum"] if isinstance(self.min_bits, ValueRef) else self.min_bits
+            high = bounds["maximum"] if isinstance(self.max_bits, ValueRef) else self.max_bits
+            return Integer(low, high, signed=self.signed)
+
+        def accepts(*, candidate: QONNXDataType, **bounds: int) -> bool | Rejected:
+            # Invalid supplied bounds are semantic refusals, like constraints().
+            try:
+                policy = resolved(bounds)
+            except ValueError as error:
+                return reject("dtype-bound-invalid", str(error))
+            return policy.check(candidate)
+
+        def candidates(**bounds: int) -> Iterable[QONNXDataType] | Rejected:
+            try:
+                policy = resolved(bounds)
+            except ValueError as error:
+                return reject("dtype-bound-invalid", str(error))
+            assert type(policy.min_bits) is int and type(policy.max_bits) is int
+            prefixes = (
+                ("INT", "UINT") if self.signed is None else (("INT",) if self.signed else ("UINT",))
+            )
+            return tuple(
+                resolve_qonnx_datatype_name(f"{prefix}{bits}")
+                for bits in range(policy.min_bits, policy.max_bits + 1)
+                for prefix in prefixes
+            )
+
+        return domain(
+            accepts=accepts,
+            candidates=None if self.max_bits is None else candidates,
+            semantics=QONNX_DATATYPE_VALUE_SEMANTICS,
+            **dependencies,
         )
 
 

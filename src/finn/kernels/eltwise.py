@@ -15,7 +15,7 @@ interchangeable implementation choices.
 import math
 import struct
 
-from finn.kernels.artifacts.abi import Clock, Direction, Reset, Signal
+from finn.kernels.artifacts.abi import Clock, Direction, Endpoint, Reset, Signal
 from finn.kernels.artifacts.contribution_types import CopiedSource
 from finn.kernels.artifacts.derivation import Scalar
 from finn.kernels.artifacts.requirements import (
@@ -26,10 +26,10 @@ from finn.kernels.artifacts.requirements import (
 )
 from finn.kernels.base import Kernel
 from finn.kernels.datatypes.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
+from finn.kernels.datatypes.domains import Integer
+from finn.kernels.physical.stream import STREAM_INTERFACES, ReadyValidStream
 from finn.kernels.datatypes.values import (
-    DatatypeError,
     QONNXDataType,
-    ordinary_integer_bounds,
     resolve_qonnx_datatype_name,
 )
 from finn.core.space import (
@@ -91,14 +91,9 @@ class EltwiseKernel(Kernel):
             return reject("eltwise-operation", "positive PE and ADD, SUB, SBR or MUL are required")
         for dtype in (a, b):
             if dtype.name != "FLOAT32":
-                try:
-                    ordinary_integer_bounds(dtype)
-                except DatatypeError as error:
-                    return reject("eltwise-type", str(error))
-                if not 1 <= dtype.bitwidth() <= 128:
-                    return reject(
-                        "eltwise-width", "this profile supports integer widths from 1 to 128"
-                    )
+                admitted = Integer(1, 128).check(dtype)
+                if isinstance(admitted, Rejected):
+                    return admitted
         both_int = a.name != "FLOAT32" and b.name != "FLOAT32"
         if both_int and (a.bitwidth() != b.bitwidth() or a.signed() != b.signed()):
             return reject(
@@ -112,6 +107,36 @@ class EltwiseKernel(Kernel):
             return reject("eltwise-target", "native floating-point arithmetic requires DSP58")
         return True
 
+    @view(semantics=STREAM_INTERFACES)
+    def interfaces(self) -> tuple[ReadyValidStream, ...] | Rejected:
+        pe = self.pe
+        a, b = self.lhs_dtype, self.rhs_dtype
+        if not 1 <= pe <= 0xFFFFFFFF:
+            return reject("eltwise-interface", "PE must be positive and fit native unsigned int")
+        for dtype in (a, b):
+            if dtype.name != "FLOAT32":
+                admitted = Integer(1, 128).check(dtype)
+                if isinstance(admitted, Rejected):
+                    return admitted
+        return (
+            ReadyValidStream(
+                "lhs", pe * a.bitwidth(), Endpoint.TARGET, "adat", "avld", "ardy", "clk", "rst"
+            ),
+            ReadyValidStream(
+                "rhs", pe * b.bitwidth(), Endpoint.TARGET, "bdat", "bvld", "brdy", "clk", "rst"
+            ),
+            ReadyValidStream(
+                "result",
+                pe * self.result_dtype.bitwidth(),
+                Endpoint.INITIATOR,
+                "odat",
+                "ovld",
+                "ordy",
+                "clk",
+                "rst",
+            ),
+        )
+
     @view(
         semantics=default_semantics(ModuleBuildRequirements),
         constraints=(implementation_supported,),
@@ -121,10 +146,8 @@ class EltwiseKernel(Kernel):
         pe = self.pe
         a = self.lhs_dtype
         b = self.rhs_dtype
-        result = self.result_dtype
         scale = self.native_scale
-        if pe < 1:
-            return reject("eltwise-interface", "PE must be positive")
+        streams = self.interfaces()
         parameter_values: dict[str, Scalar] = {
             "OP": f'"{operation}"',
             "PE": pe,
@@ -148,29 +171,21 @@ class EltwiseKernel(Kernel):
                     1,
                     Reset(active_low=False, synchronous=True, synchronous_to=("clk",)),
                 ),
-                Signal("adat", Direction.IN, pe * a.bitwidth()),
-                Signal("avld", Direction.IN, 1),
-                Signal("ardy", Direction.OUT, 1),
-                Signal("bdat", Direction.IN, pe * b.bitwidth()),
-                Signal("bvld", Direction.IN, 1),
-                Signal("brdy", Direction.OUT, 1),
-                Signal("odat", Direction.OUT, pe * result.bitwidth()),
-                Signal("ovld", Direction.OUT, 1),
-                Signal("ordy", Direction.IN, 1),
+                *(pin for stream in streams for pin in stream.pins()),
             ),
             tuple((key, str(value)) for key, value in parameters),
         )
         sources = tuple(
             CopiedSource("finnlib", path, provides=(f"module:{name}",), requires=requires)
             for path, name, requires in (
-                ("rtl/arith/binopi.sv", "binopi", ()),
-                ("rtl/arith/binopf.sv", "binopf", ()),
-                ("rtl/arith/int_to_fp32.sv", "int_to_fp32", ()),
-                ("rtl/infra/fifo.sv", "fifo", ()),
+                ("rtl/binopi.sv", "binopi", ()),
+                ("rtl/binopf.sv", "binopf", ()),
+                ("rtl/int_to_fp32.sv", "int_to_fp32", ()),
+                ("rtl/queue.sv", "queue", ()),
                 (
-                    "rtl/arith/eltwise.sv",
+                    "rtl/eltwise.sv",
                     "eltwise",
-                    ("module:binopi", "module:binopf", "module:int_to_fp32", "module:fifo"),
+                    ("module:binopi", "module:binopf", "module:int_to_fp32", "module:queue"),
                 ),
             )
         )

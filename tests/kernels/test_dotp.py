@@ -221,14 +221,14 @@ def test_space_rejects_mistyped_values_at_binding(updates):
 
 
 def test_constraints_gate_acceptance_without_revalidating_raw_codegen():
-    point = kernel(weights_dtype=DataType["UINT3"], segment_length=-1)
+    point = kernel(segment_length=-1)
     physical = point.build_requirements.inspect()
     assert isinstance(physical.output_result, Available)
     assert physical.output_result.value == value(point.query(DotpAxiKernel.codegen))
     assert dict(physical.output_result.value.parameters)["SEGMENTLEN"] == -1
     refused = physical.accepted_result
     assert isinstance(refused, Rejected)
-    assert {finding.code for finding in refused.findings} == {"dotp-weight-type", "dotp-segment"}
+    assert {finding.code for finding in refused.findings} == {"dotp-segment"}
 
 
 @pytest.mark.parametrize("updates,stream", [({"simd": 0}, "activation"), ({"pe": 0}, "result")])
@@ -312,7 +312,7 @@ def test_sources_materialize_from_the_assessed_requirements(tmp_path):
     requirements = kernel(compute_pumping=True).build_requirements()
     store = ArtifactStore(tmp_path / "store")
     finnlib = Path(__file__).resolve().parents[2] / "deps" / "finnlib"
-    if not (finnlib / "rtl/linalg/dotp_axi.sv").is_file():
+    if not (finnlib / "rtl/dotp_axi.sv").is_file():
         pytest.skip("FinnLib sources are unavailable")
     prepared = prepare_module_build(
         requirements,
@@ -322,20 +322,21 @@ def test_sources_materialize_from_the_assessed_requirements(tmp_path):
     )
     materialized = materialize_module_sources(prepared, store)
     upstream = {
-        "rtl/arith/add_multi_pkg.sv",
-        "rtl/arith/add_multi.sv",
-        "rtl/linalg/dotp_8sx9_dsp58.sv",
-        "rtl/linalg/dotp.sv",
+        "rtl/add_multi_pkg.sv",
+        "rtl/add_multi.sv",
+        "rtl/dotp_8sx9_dsp58.sv",
+        "rtl/dotp.sv",
+        "rtl/dotp_axi.sv",
     }
-    local = "dotp_axi.sv"
-    expected = upstream | {local}
+    expected = upstream
     emitted = {Path(name).name: Path(materialized.directory) / name for name in materialized.files}
     assert set(emitted) == {Path(name).name for name in expected}
     for path in upstream:
         assert emitted[Path(path).name].read_bytes() == (finnlib / path).read_bytes()
-    assert emitted["dotp_axi.sv"].read_bytes() == (resource_root() / local).read_bytes()
-    wrapper = next(source for source in requirements.contributions if source.path == local)
-    assert wrapper.root == "kernels"
+    wrapper = next(
+        source for source in requirements.contributions if source.path == "rtl/dotp_axi.sv"
+    )
+    assert wrapper.root == "finnlib"
     assert wrapper.provides == ("module:dotp_axi",)
     assert wrapper.requires == ("module:dotp", "module:dotp_8sx9_dsp58")
 

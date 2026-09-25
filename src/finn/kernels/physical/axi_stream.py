@@ -29,8 +29,10 @@ from finn.core.space import (
     derived,
     reject,
 )
-from finn.kernels.artifacts.abi import Bus, Endpoint, Member, StandardProtocol
-from finn.kernels.datatypes.domains import DatatypeDomain, Integer
+from finn.kernels.artifacts.abi import Bus, Endpoint
+from finn.kernels.datatypes.domains import DatatypeDomain
+from finn.kernels.datatypes.scalar import type_constraints
+from finn.kernels.physical.stream import ReadyValidStream, StreamMarker, MarkerKind
 from finn.kernels.datatypes.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
 from finn.kernels.datatypes.values import (
     QONNXDataType,
@@ -83,9 +85,12 @@ class AxiStream:
         dtype: ValueRef[QONNXDataType],
         *,
         last: bool = False,
+        valid_types: DatatypeDomain | None = None,
     ) -> AxiStreamInterface:
         """Expose a kernel-owned dtype source without declaring another Input."""
-        return AxiStreamInterface(name, elements_per_beat, Endpoint.INITIATOR, last, dtype=dtype)
+        return AxiStreamInterface(
+            name, elements_per_beat, Endpoint.INITIATOR, last, dtype=dtype, valid_types=valid_types
+        )
 
     def __init__(
         self,
@@ -155,18 +160,20 @@ class AxiStream:
 
     def bus(self, *, clock: str | None = None, reset: str | None = None) -> Bus:
         """Lower to the existing, purely physical ABI representation."""
-        members = (
-            Member("tdata", f"{self.name}_tdata", self.data_width),
-            Member("tvalid", f"{self.name}_tvalid"),
-            Member("tready", f"{self.name}_tready"),
-        )
-        return Bus(
+        return self.native(clock=clock, reset=reset).axis_bus()
+
+    def native(self, *, clock: str | None = None, reset: str | None = None) -> ReadyValidStream:
+        """The native transport underlying this typed, padded AXI profile."""
+        return ReadyValidStream(
             self.name,
-            StandardProtocol.AXIS,
-            (*members, Member("tlast", f"{self.name}_tlast")) if self.last else members,
-            endpoint=self.endpoint,
-            associated_clock=clock,
-            associated_reset=reset,
+            self.data_width,
+            self.endpoint,
+            f"{self.name}_tdata",
+            f"{self.name}_tvalid",
+            f"{self.name}_tready",
+            clock,
+            reset,
+            (StreamMarker(f"{self.name}_tlast", MarkerKind.LAST),) if self.last else (),
         )
 
 
@@ -231,23 +238,6 @@ class AxiStreamScope(Space):
 STREAM_VIEW = ViewKey("stream", AxiStream)
 
 
-def _local_domain(domain: DatatypeDomain, builder: ScopeBuilder[AxiStreamScope]) -> DatatypeDomain:
-    """Give dynamic integer bounds ordinary formal parameters in this scope."""
-    if not isinstance(domain, Integer):
-        return domain
-
-    def bound(name: str, value: int | ValueRef[int]) -> int | ValueRef[int]:
-        if not isinstance(value, ValueRef):
-            return value
-        parameter = builder.add(name, Param(int))
-        builder.bind(parameter, value)
-        return parameter
-
-    minimum = bound("minimum_bits", domain.min_bits)
-    maximum = None if domain.max_bits is None else bound("maximum_bits", domain.max_bits)
-    return Integer(minimum, maximum, signed=domain.signed)
-
-
 class AxiStreamInterface(Subspace[AxiStreamScope]):
     """Place a typed AXIS interface without adding members to its parent class.
 
@@ -288,17 +278,11 @@ class AxiStreamInterface(Subspace[AxiStreamScope]):
             and dtype.semantics.type_token is not QONNX_DATATYPE_VALUE_SEMANTICS.type_token
         ):
             raise DefinitionError("an AXIS output requires a QONNX datatype value reference")
-        if endpoint is Endpoint.INITIATOR and valid_types is not None:
-            raise DefinitionError(
-                "an AXIS output reuses its supplied dtype without an input domain"
-            )
 
         builder = ScopeBuilder(AxiStreamScope, name="AxiStreamBoundary")
         conditions: list[Constraint] = []
         if valid_types is not None:
-            admitted = _local_domain(valid_types, builder)
-            for key, condition in admitted.constraints(AxiStreamScope.dtype):
-                conditions.append(builder.add(f"dtype_{key}", condition))
+            conditions.extend(type_constraints(builder, AxiStreamScope.dtype, valid_types))
         if endpoint is Endpoint.INITIATOR:
             conditions.append(AxiStreamScope.element_bits_valid)
         conditions.append(AxiStreamScope.elements_valid)

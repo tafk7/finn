@@ -37,6 +37,7 @@ from finn.kernels.artifacts.requirements import (
 from finn.kernels.target import DspBlock, dsp_widths
 from finn.kernels.base import Kernel
 from finn.kernels.datatypes.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
+from finn.kernels.datatypes.domains import Integer, SignedInteger
 from finn.kernels.datatypes.values import (
     DatatypeError,
     ordinary_integer_bounds,
@@ -51,6 +52,7 @@ from finn.core.space import (
     View,
     constraint,
     derived,
+    default_semantics,
     reject,
 )
 
@@ -80,6 +82,7 @@ class DotpAxiKernel(Kernel):
         Endpoint.TARGET,
         True,
         dtype=Param(QONNX_DATATYPE_VALUE_SEMANTICS),
+        valid_types=Integer(min_bits=2),
         error_code="dotp-interface",
     )
     weights = AxiStreamInterface(
@@ -88,6 +91,7 @@ class DotpAxiKernel(Kernel):
         Endpoint.TARGET,
         False,
         dtype=Param(QONNX_DATATYPE_VALUE_SEMANTICS),
+        valid_types=SignedInteger(min_bits=2),
         error_code="dotp-interface",
     )
     result = AxiStreamInterface(
@@ -96,6 +100,7 @@ class DotpAxiKernel(Kernel):
         Endpoint.INITIATOR,
         False,
         dtype=Param(QONNX_DATATYPE_VALUE_SEMANTICS),
+        valid_types=SignedInteger(),
         error_code="dotp-interface",
     )
 
@@ -110,8 +115,16 @@ class DotpAxiKernel(Kernel):
     def geometry_supported(self) -> bool | Rejected:
         pe = self.pe
         simd = self.simd
-        if pe < 1 or simd < 1:
-            return reject("dotp-geometry", "PE and SIMD must be positive integers")
+        if not 1 <= pe <= 0xFFFFFFFF or not 1 <= simd <= 0xFFFFFFFF:
+            return reject("dotp-geometry", "PE and SIMD must be positive native unsigned integers")
+        return True
+
+    @constraint
+    def stream_widths_supported(self) -> bool | Rejected:
+        # The native payload and byte-aligned carrier localparams are uint32.
+        widths = (self.activation.carrier_bits, self.weights.carrier_bits, self.result.carrier_bits)
+        if any(width > 0xFFFFFFFF for width in widths):
+            return reject("dotp-stream-width", "packed stream widths must fit native unsigned int")
         return True
 
     @constraint
@@ -181,19 +194,24 @@ class DotpAxiKernel(Kernel):
     support = ConstraintGroup(
         target_supported,
         geometry_supported,
+        stream_widths_supported,
         input_types_supported,
         accumulator_width_supported,
         pumping_supported,
         segment_length_supported,
     )
 
-    @derived
-    def codegen(self) -> ModuleBuildRequirements:
+    @derived(semantics=default_semantics(ModuleBuildRequirements))
+    def codegen(self) -> ModuleBuildRequirements | Rejected:
         pe = self.pe
         simd = self.simd
+        if not 1 <= pe <= 0xFFFFFFFF or not 1 <= simd <= 0xFFFFFFFF:
+            return reject("dotp-geometry", "PE and SIMD must be positive native unsigned integers")
         activation = self.activation.view(DotpAxiKernel.activation.view())()
         weights = self.weights.view(DotpAxiKernel.weights.view())()
         result = self.result.view(DotpAxiKernel.result.view())()
+        if any(stream.carrier_bits > 0xFFFFFFFF for stream in (activation, weights, result)):
+            return reject("dotp-stream-width", "packed stream widths must fit native unsigned int")
         target_dsp = self.target_dsp
         segment_length = self.segment_length
         compute_pumping = self.compute_pumping
@@ -246,23 +264,23 @@ class DotpAxiKernel(Kernel):
         sources = tuple(
             CopiedSource(root, path, provides=(symbol,), requires=requires)
             for root, path, symbol, requires in (
-                ("finnlib", "rtl/arith/add_multi_pkg.sv", "package:add_multi_pkg", ()),
+                ("finnlib", "rtl/add_multi_pkg.sv", "package:add_multi_pkg", ()),
                 (
                     "finnlib",
-                    "rtl/arith/add_multi.sv",
+                    "rtl/add_multi.sv",
                     "module:add_multi",
                     ("package:add_multi_pkg",),
                 ),
-                ("finnlib", "rtl/linalg/dotp_8sx9_dsp58.sv", "module:dotp_8sx9_dsp58", ()),
+                ("finnlib", "rtl/dotp_8sx9_dsp58.sv", "module:dotp_8sx9_dsp58", ()),
                 (
                     "finnlib",
-                    "rtl/linalg/dotp.sv",
+                    "rtl/dotp.sv",
                     "module:dotp",
                     ("package:add_multi_pkg", "module:add_multi"),
                 ),
                 (
-                    "kernels",
-                    "dotp_axi.sv",
+                    "finnlib",
+                    "rtl/dotp_axi.sv",
                     "module:dotp_axi",
                     ("module:dotp", "module:dotp_8sx9_dsp58"),
                 ),

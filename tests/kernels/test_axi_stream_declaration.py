@@ -233,3 +233,14 @@ def test_direct_and_parent_consumed_accepted_views_share_admission():
     assert isinstance(direct.accepted_result, Unresolved)
     assert ports.query(Ports.values.accepted_stream) == direct.accepted_result
     assert isinstance(ports.query(Ports.values.stream), Available)
+
+
+def test_output_policy_can_constrain_a_caller_supplied_encoding():
+    class Producer(Space):
+        dtype = Param(QONNX_DATATYPE_VALUE_SEMANTICS)
+        output = AxiStream.output("result", 2, dtype, valid_types=SignedInteger(1, 8))
+
+    supported = Producer(dtype=DataType["INT4"])
+    refused = Producer(dtype=DataType["UINT4"])
+    assert isinstance(supported.query(Producer.output.accepted_stream), Available)
+    assert isinstance(refused.query(Producer.output.accepted_stream), Rejected)

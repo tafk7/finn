@@ -16,12 +16,12 @@ from finn.kernels.artifacts.requirements import (
 )
 from finn.kernels.base import Kernel
 from finn.kernels.datatypes.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
+from finn.kernels.datatypes.domains import Integer
+from finn.kernels.datatypes.scalar import Scalar
 from finn.kernels.datatypes.values import (
-    DatatypeError,
-    ordinary_integer_bounds,
     resolve_qonnx_datatype_name,
 )
-from finn.core.space import Const, Param, Rejected, constraint, reject, view
+from finn.core.space import Const, Param, view
 
 
 class IntToFp32Kernel(Kernel):
@@ -29,28 +29,16 @@ class IntToFp32Kernel(Kernel):
     version = "1"
 
     input_dtype = Param(QONNX_DATATYPE_VALUE_SEMANTICS)
+    input = Scalar(input_dtype, Integer(1, 128))
     result_dtype = Const(
         resolve_qonnx_datatype_name("FLOAT32"), semantics=QONNX_DATATYPE_VALUE_SEMANTICS
     )
 
-    @constraint
-    def input_supported(self) -> bool | Rejected:
-        dtype = self.input_dtype
-        try:
-            ordinary_integer_bounds(dtype)
-        except DatatypeError as error:
-            return reject("int-to-fp32-type", str(error))
-        if not 1 <= dtype.bitwidth() <= 128:
-            return reject(
-                "int-to-fp32-width", "the finite-result profile supports 1 through 128 input bits"
-            )
-        return True
-
-    @view(constraints=(input_supported,))
+    @view
     def build_requirements(self) -> ModuleBuildRequirements:
-        dtype = self.input_dtype
+        encoding = self.input.view(IntToFp32Kernel.input.view())()
         result = self.result_dtype
-        parameters = (("SIGNED", int(dtype.signed())), ("WIDTH", dtype.bitwidth()))
+        parameters = (("SIGNED", int(encoding.signed)), ("WIDTH", encoding.bits))
         return ModuleBuildRequirements(
             IntToFp32Kernel.id,
             IntToFp32Kernel.version,
@@ -58,16 +46,12 @@ class IntToFp32Kernel(Kernel):
             ModuleABIRequirements(
                 FixedModuleName("int_to_fp32"),
                 (
-                    Signal("ival", Direction.IN, dtype.bitwidth()),
+                    Signal("ival", Direction.IN, encoding.bits),
                     Signal("fval", Direction.OUT, result.bitwidth()),
                 ),
                 tuple((key, str(value)) for key, value in parameters),
             ),
-            (
-                CopiedSource(
-                    "finnlib", "rtl/arith/int_to_fp32.sv", provides=("module:int_to_fp32",)
-                ),
-            ),
+            (CopiedSource("finnlib", "rtl/int_to_fp32.sv", provides=("module:int_to_fp32",)),),
         )
 
 

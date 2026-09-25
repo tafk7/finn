@@ -9,7 +9,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from finn.kernels.artifacts.abi import Bus, ComponentABI, Endpoint, Reset, Signal
+from finn.kernels.artifacts.abi import Bus, ComponentABI, Reset, Signal
 from finn.kernels.artifacts.build import (
     materialize_module_sources,
     module_build_fingerprint,
@@ -23,6 +23,7 @@ from finn.kernels.artifacts.store import ArtifactStore
 from finn.kernels.streaming import (
     cyclic_stream_requirements,
     replay_buffer_requirements,
+    replay_buffer_interfaces,
 )
 from finn.kernels.resources import resource_root
 
@@ -39,19 +40,17 @@ def test_replay_requirements_match_native_rtl(bits, length, repeats):
     abi = ComponentABI(
         requirements.abi.entry_point.value, requirements.abi.ports, requirements.abi.parameters
     )
-    buses = {port.name: port for port in abi.ports if isinstance(port, Bus)}
-    assert buses["in0"].endpoint is Endpoint.TARGET
-    assert buses["out0"].endpoint is Endpoint.INITIATOR
-    assert {member.logical: member.physical for member in buses["out0"].signals} == {
-        "tdata": "odat",
-        "tvalid": "ovld",
-        "tready": "ordy",
-        "tlast": "olast",
-    }
+    assert not any(isinstance(port, Bus) for port in abi.ports)
+    streams = replay_buffer_interfaces(word_bits=bits)
+    assert streams[0].data_width == streams[1].data_width == bits
+    assert [(marker.signal, marker.kind.value) for marker in streams[1].markers] == [
+        ("olast", "last"),
+        ("ofin", "replay_end"),
+    ]
     reset = next(port for port in abi.ports if isinstance(port, Signal) and port.name == "rst")
     assert reset.role == Reset(False, True, ("clk",))
     result = check_abi(
-        abi, [ROOTS["finnlib"] / "rtl/infra/replay_buffer.sv"], abi.entry_point, abi.parameters
+        abi, [ROOTS["finnlib"] / "rtl/replay_buffer.sv"], abi.entry_point, abi.parameters
     )
     assert not isinstance(result, Declined), result
     assert result == ()
@@ -265,7 +264,7 @@ def test_rtl_streams_preserve_words_framing_stalls_and_reset(tmp_path):
     testbench = tmp_path / "stream_test.sv"
     testbench.write_text("`timescale 1ns/1ps\n" + _CYCLIC_TESTBENCH)
     sources = [
-        ROOTS["finnlib"] / "rtl/infra/replay_buffer.sv",
+        ROOTS["finnlib"] / "rtl/replay_buffer.sv",
         resource_root() / "cyclic_stream.sv",
         testbench,
     ]

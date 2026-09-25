@@ -11,7 +11,13 @@ multi-bit marker, not AXI TLAST. Input and output words are opaque bits.
 """
 
 from finn.kernels.base import Kernel
-from finn.kernels.artifacts.abi import Clock, Direction, Reset, Signal
+from finn.kernels.artifacts.abi import Clock, Direction, Endpoint, Reset, Signal
+from finn.kernels.physical.stream import (
+    STREAM_INTERFACES,
+    MarkerKind,
+    ReadyValidStream,
+    StreamMarker,
+)
 from finn.kernels.artifacts.contribution_types import CopiedSource
 from finn.kernels.artifacts.requirements import (
     FixedModuleName,
@@ -66,6 +72,28 @@ class InputGeneratorKernel(Kernel):
 
     ram_style = Decision(str, values=("auto", "distributed", "block", "ultra"))
 
+    @view(semantics=STREAM_INTERFACES)
+    def interfaces(self) -> tuple[ReadyValidStream, ...] | Rejected:
+        bits, rank = self.word_bits, len(self.extents)
+        if not 1 <= bits <= 0xFFFFFFFF or rank < 1:
+            return reject(
+                "input-generator-interface", "positive native word width and rank are required"
+            )
+        return (
+            ReadyValidStream("input", bits, Endpoint.TARGET, "idat", "ivld", "irdy", "clk", "rst"),
+            ReadyValidStream(
+                "output",
+                bits,
+                Endpoint.INITIATOR,
+                "odat",
+                "ovld",
+                "ordy",
+                "clk",
+                "rst",
+                (StreamMarker("olst", MarkerKind.LOOP_END, rank),),
+            ),
+        )
+
     @view(semantics=default_semantics(ModuleBuildRequirements), constraints=(traversal_supported,))
     def build_requirements(self) -> ModuleBuildRequirements | Rejected:
         bits = self.word_bits
@@ -73,10 +101,7 @@ class InputGeneratorKernel(Kernel):
         extents = self.extents
         strides = self.strides
         ram = self.ram_style
-        if bits < 1 or not extents:
-            return reject(
-                "input-generator-interface", "positive word width and nonempty extents are required"
-            )
+        streams = self.interfaces()
         parameters = (
             ("COEFS", "'{" + ", ".join(map(str, strides)) + "}"),
             ("D", len(extents)),
@@ -95,13 +120,7 @@ class InputGeneratorKernel(Kernel):
                     1,
                     Reset(active_low=False, synchronous=True, synchronous_to=("clk",)),
                 ),
-                Signal("idat", Direction.IN, bits),
-                Signal("ivld", Direction.IN, 1),
-                Signal("irdy", Direction.OUT, 1),
-                Signal("odat", Direction.OUT, bits),
-                Signal("ovld", Direction.OUT, 1),
-                Signal("olst", Direction.OUT, len(extents)),
-                Signal("ordy", Direction.IN, 1),
+                *(pin for stream in streams for pin in stream.pins()),
             ),
             tuple((key, str(value)) for key, value in parameters),
         )
@@ -110,7 +129,7 @@ class InputGeneratorKernel(Kernel):
             InputGeneratorKernel.version,
             parameters,
             abi,
-            (CopiedSource("finnlib", "rtl/shape/input_gen.sv", provides=("module:input_gen",)),),
+            (CopiedSource("finnlib", "rtl/input_gen.sv", provides=("module:input_gen",)),),
         )
 
 

@@ -237,8 +237,8 @@ def test_hls_view_preserves_cpp_types_interfaces_and_header_closure(dtype: str, 
         template_roots=(template_root(),),
     )
     assert [name for name, _ in rendered] == [
-        "hls/util/util.hpp",
-        "hls/infra/memstream.hpp",
+        "hls/util.hpp",
+        "hls/memstream.hpp",
         "memstream_hls.cpp",
     ]
     top = dict(rendered)["memstream_hls.cpp"].decode()

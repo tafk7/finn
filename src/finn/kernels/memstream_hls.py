@@ -17,7 +17,7 @@ from finn.kernels.artifacts.hls import HlsInterface, HlsSourceRequirements
 from finn.kernels.artifacts.sources import CompileOptions, Language, Role
 from finn.kernels.base import Kernel
 from finn.kernels.datatypes.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
-from finn.kernels.datatypes.values import DatatypeError, ordinary_integer_bounds
+from finn.kernels.datatypes.domains import Integer
 from finn.core.space import (
     Param,
     Rejected,
@@ -40,14 +40,9 @@ class MemStreamHlsKernel(Kernel):
         dtype = self.element_dtype
         if dtype.name == "FLOAT32":
             return "float"
-        try:
-            ordinary_integer_bounds(dtype)
-        except DatatypeError as error:
-            return reject("memstream-hls-type", str(error))
-        if not 1 <= dtype.bitwidth() <= 1024:
-            return reject(
-                "memstream-hls-width", "the default HLS ap_int profile supports 1 through 1024 bits"
-            )
+        admitted = Integer(1, 1024).check(dtype)
+        if isinstance(admitted, Rejected):
+            return admitted
         return f"{'ap_int' if dtype.signed() else 'ap_uint'}<{dtype.bitwidth()}>"
 
     depth = Param(int)
@@ -66,7 +61,7 @@ class MemStreamHlsKernel(Kernel):
     def build_requirements(self) -> HlsSourceRequirements:
         cpp = self.cpp_type
         depth = self.depth
-        includes = ("hls/util", "hls/infra")
+        includes = ("hls",)
         return HlsSourceRequirements(
             MemStreamHlsKernel.id,
             MemStreamHlsKernel.version,
@@ -79,14 +74,14 @@ class MemStreamHlsKernel(Kernel):
             (
                 CopiedSource(
                     "finnlib",
-                    "hls/util/util.hpp",
+                    "hls/util.hpp",
                     language=Language.CPP,
                     role=Role.HEADER,
                     provides=("header:util.hpp",),
                 ),
                 CopiedSource(
                     "finnlib",
-                    "hls/infra/memstream.hpp",
+                    "hls/memstream.hpp",
                     language=Language.CPP,
                     role=Role.HEADER,
                     provides=("header:memstream.hpp",),

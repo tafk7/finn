@@ -25,7 +25,8 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import cast
 
-from finn.kernels.artifacts.abi import Bus, Endpoint, Member, StandardProtocol
+from finn.kernels.artifacts.abi import Bus, Endpoint
+from finn.kernels.physical.stream import ReadyValidStream
 from finn.kernels.artifacts.build import (
     EntryPointSourceName,
     FixedModuleName,
@@ -177,18 +178,16 @@ def _slice(owner: str | None, name: str, bits: int = 1, offset: int = 0) -> PinS
 
 
 def _axis(name: str, bits: int, endpoint: Endpoint) -> Bus:
-    return Bus(
+    return ReadyValidStream(
         name,
-        StandardProtocol.AXIS,
-        (
-            Member("tdata", name + "_tdata", bits),
-            Member("tvalid", name + "_tvalid"),
-            Member("tready", name + "_tready"),
-        ),
-        endpoint=endpoint,
-        associated_clock="ap_clk",
-        associated_reset="ap_rst_n",
-    )
+        bits,
+        endpoint,
+        name + "_tdata",
+        name + "_tvalid",
+        name + "_tready",
+        "ap_clk",
+        "ap_rst_n",
+    ).axis_bus()
 
 
 def _wire_mvau(

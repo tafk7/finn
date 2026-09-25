@@ -61,18 +61,18 @@ DOTP_PARAMETERS = (
 
 #: The declared FinnLib closure for ``dotp_axi``, in its declared order.
 FINNLIB_CLOSURE = (
-    "rtl/arith/add_multi_pkg.sv",
-    "rtl/arith/add_multi.sv",
-    "rtl/linalg/dotp_8sx9_dsp58.sv",
-    "rtl/linalg/dotp.sv",
-    "rtl/linalg/dotp_axi.sv",
+    "rtl/add_multi_pkg.sv",
+    "rtl/add_multi.sv",
+    "rtl/dotp_8sx9_dsp58.sv",
+    "rtl/dotp.sv",
+    "rtl/dotp_axi.sv",
 )
 
 
 @pytest.fixture(name="replay")
 def _replay(finn_root: Path) -> Path:
     finnlib_root = Path(os.environ.get("FINNLIB_ROOT", finn_root / "deps/finnlib"))
-    path = finnlib_root / "rtl/infra/replay_buffer.sv"
+    path = finnlib_root / "rtl/replay_buffer.sv"
     if not path.is_file():
         pytest.skip("FinnLib is not fetched; set FINNLIB_ROOT or run fetch-repos.sh")
     return path

@@ -30,7 +30,7 @@ from finn.kernels.artifacts.abi import (
     StandardProtocol,
 )
 from finn.kernels.artifacts.contribution_types import CopiedSource
-from finn.kernels.artifacts.derivation import Scalar
+from finn.kernels.artifacts.derivation import Scalar as BuildScalar
 from finn.kernels.artifacts.requirements import (
     FixedModuleName,
     ModuleABIRequirements,
@@ -41,6 +41,8 @@ from finn.kernels.datatypes.semantics import (
     QONNX_DATATYPE_VALUE_SEMANTICS,
     THRESHOLD_TABLE,
 )
+from finn.kernels.datatypes.domains import Integer
+from finn.kernels.datatypes.scalar import Scalar
 from finn.kernels.datatypes.values import (
     DatatypeError,
     QONNXDataType,
@@ -49,6 +51,7 @@ from finn.kernels.datatypes.values import (
 )
 from finn.kernels.physical.axi_stream import AxiStream
 from finn.core.space import (
+    ConstraintGroup,
     Decision,
     Param,
     Rejected,
@@ -66,6 +69,8 @@ class ThresholdingAxiKernel(Kernel):
 
     input_dtype = Param(QONNX_DATATYPE_VALUE_SEMANTICS)
     threshold_dtype = Param(QONNX_DATATYPE_VALUE_SEMANTICS)
+    input_encoding = Scalar(input_dtype, Integer())
+    threshold_encoding = Scalar(threshold_dtype, Integer())
     thresholds = Param(THRESHOLD_TABLE)
     bias = Param(int)
 
@@ -92,19 +97,23 @@ class ThresholdingAxiKernel(Kernel):
     depth_trigger_uram = Param(int)
 
     @constraint
-    def implementation_supported(self) -> bool | Rejected:
-        table = self.thresholds
-        pe = self.pe
-        a = self.input_dtype
-        t = self.threshold_dtype
-        axilite = self.use_axilite
-        bram = self.depth_trigger_bram
-        uram = self.depth_trigger_uram
-        bias = self.bias
-        if not table or not table[0] or not table[0][0] or pe < 1:
+    def types_supported(self) -> bool | Rejected:
+        a, t = self.input_dtype, self.threshold_dtype
+        for dtype in (a, t):
+            admitted = Integer().check(dtype)
+            if isinstance(admitted, Rejected):
+                return admitted
+        if a.signed() != t.signed():
             return reject(
-                "threshold-shape", "nonempty sets/channels/thresholds and positive PE are required"
+                "threshold-type", "input and threshold encodings must have the same signedness"
             )
+        return True
+
+    @constraint
+    def table_supported(self) -> bool | Rejected:
+        table = self.thresholds
+        if not table or not table[0] or not table[0][0]:
+            return reject("threshold-shape", "nonempty sets/channels/thresholds are required")
         channels, count = len(table[0]), len(table[0][0])
         if any(
             len(group) != channels or any(len(row) != count for row in group) for group in table
@@ -113,17 +122,10 @@ class ThresholdingAxiKernel(Kernel):
                 "threshold-shape",
                 "thresholds must be a rectangular (sets, channels, thresholds) table",
             )
-        if channels % pe and pe % channels:
-            return reject("threshold-folding", "channels must divide PE or PE must divide channels")
         try:
-            ordinary_integer_bounds(a)
-            minimum, maximum = ordinary_integer_bounds(t)
+            minimum, maximum = ordinary_integer_bounds(self.threshold_dtype)
         except DatatypeError as error:
             return reject("threshold-type", str(error))
-        if a.signed() != t.signed():
-            return reject(
-                "threshold-type", "input and threshold encodings must have the same signedness"
-            )
         if any(not minimum <= item <= maximum for group in table for row in group for item in row):
             return reject("threshold-value", "every threshold must fit threshold_dtype")
         if any(
@@ -132,21 +134,59 @@ class ThresholdingAxiKernel(Kernel):
             for row in group
         ):
             return reject("threshold-order", "threshold rows must be sorted in nondecreasing order")
-        if min(bram, uram) < 0 or max(bram, uram, pe) > 0xFFFFFFFF:
-            return reject("threshold-memory", "memory triggers and PE must fit native unsigned int")
+        return True
+
+    @constraint
+    def folding_supported(self) -> bool | Rejected:
+        table, pe = self.thresholds, self.pe
+        if not table or not table[0] or not 1 <= pe <= 0xFFFFFFFF:
+            return reject(
+                "threshold-shape", "nonempty channels and positive native PE are required"
+            )
+        channels = len(table[0])
+        if channels % pe and pe % channels:
+            return reject("threshold-folding", "channels must divide PE or PE must divide channels")
+        return True
+
+    @constraint
+    def memory_supported(self) -> bool | Rejected:
+        if not all(
+            0 <= value <= 0xFFFFFFFF for value in (self.depth_trigger_bram, self.depth_trigger_uram)
+        ):
+            return reject("threshold-memory", "memory triggers must fit native unsigned int")
+        return True
+
+    @constraint
+    def bias_supported(self) -> bool | Rejected:
+        bias, table = self.bias, self.thresholds
+        if not table or not table[0] or not table[0][0]:
+            return reject("threshold-shape", "a nonempty threshold table is required")
         if not -(1 << 31) <= bias < (1 << 31):
             return reject("threshold-bias", "BIAS must fit native signed int")
-        if bias < -count - 1:
+        if bias < -len(table[0][0]) - 1:
             return reject(
                 "threshold-negative-range",
-                "the pinned RTL does not sign-extend BIAS correctly below -N-1",
-            )
-        if axilite and len(table) > 1:
-            return reject(
-                "threshold-config-sets",
-                "the pinned AXI wrapper does not address multiple configuration sets",
+                "native RTL does not sign-extend BIAS correctly below -N-1",
             )
         return True
+
+    @constraint
+    def configuration_supported(self) -> bool | Rejected:
+        if self.use_axilite and len(self.thresholds) > 1:
+            return reject(
+                "threshold-config-sets",
+                "the native AXI wrapper does not address multiple configuration sets",
+            )
+        return True
+
+    implementation_supported = ConstraintGroup(
+        types_supported,
+        table_supported,
+        folding_supported,
+        memory_supported,
+        bias_supported,
+        configuration_supported,
+    )
 
     @view(
         semantics=default_semantics(ModuleBuildRequirements),
@@ -155,8 +195,8 @@ class ThresholdingAxiKernel(Kernel):
     def build_requirements(self) -> ModuleBuildRequirements | Rejected:
         table = self.thresholds
         pe = self.pe
-        a = self.input_dtype
-        t = self.threshold_dtype
+        a = self.input_encoding.view(ThresholdingAxiKernel.input_encoding.view())().dtype
+        t = self.threshold_encoding.view(ThresholdingAxiKernel.threshold_encoding.view())().dtype
         result = self.result_dtype
         bias = self.bias
         axilite = self.use_axilite
@@ -181,7 +221,7 @@ class ThresholdingAxiKernel(Kernel):
             )
             + "}"
         )
-        parameter_values: dict[str, Scalar] = {
+        parameter_values: dict[str, BuildScalar] = {
             "WI": a.bitwidth(),
             "WT": bits,
             "N": count,
@@ -258,13 +298,11 @@ class ThresholdingAxiKernel(Kernel):
             tuple((key, str(value)) for key, value in parameters),
         )
         sources = (
-            CopiedSource("kernels", "axilite.sv", provides=("module:axilite",)),
-            CopiedSource(
-                "finnlib", "rtl/nonlin/thresholding.sv", provides=("module:thresholding",)
-            ),
+            CopiedSource("finnlib", "rtl/axilite.sv", provides=("module:axilite",)),
+            CopiedSource("finnlib", "rtl/thresholding.sv", provides=("module:thresholding",)),
             CopiedSource(
                 "finnlib",
-                "rtl/nonlin/thresholding_axi.sv",
+                "rtl/thresholding_axi.sv",
                 provides=("module:thresholding_axi",),
                 requires=("module:axilite", "module:thresholding"),
             ),
