@@ -13,7 +13,7 @@ cd "$FINN_ROOT"
 
 "$PYTHON_BIN" --version
 PYTHONPATH=src:tests "$PYTHON_BIN" -m pytest -q --confcutdir=tests/core/space tests/core/space
-PYTHONPATH=src:tests "$PYTHON_BIN" scripts/check-space-examples.py docs/design-space.md
+# Documentation examples are checked separately in scratchpad/space/.
 "$RUFF_BIN" format --check src/finn/core/space tests/core/space
 "$RUFF_BIN" check --extend-select I src/finn/core/space tests/core/space
 env -u PYTHONPATH MYPYPATH=src:tests "$MYPY_BIN" \

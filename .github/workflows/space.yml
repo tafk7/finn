@@ -6,7 +6,6 @@ on:
       - "src/finn/core/space/**"
       - "tests/core/space/**"
       - "scripts/check-space*"
-      - "docs/design-space.md"
       - "requirements-space-test.txt"
       - "setup.cfg"
       - ".ruff.toml"

@@ -3,7 +3,7 @@
 > Historical evidence: the counts, commands and dataflow passes below belong
 > to the source revision named here. They are not validation of the later
 > Space refactor or its dataflow compatibility. Current authoring is documented
-> in [the Space API guide](../design-space.md); the original physical evidence
+> in [the Space API guide](../../../scratchpad/space/AUTHORING.md); the original physical evidence
 > is retained unchanged below.
 
 Implemented in `finn-kernels-extraction` on top of `37cc2aa6d`.

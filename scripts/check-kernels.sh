@@ -19,11 +19,10 @@ fi
 # outside this command; their compatibility is not claimed.
 PYTHON_BIN="$PYTHON_BIN" RUFF_BIN="$RUFF_BIN" MYPY_BIN="$MYPY_BIN" bash scripts/check-space.sh
 PYTHONPATH="$RUN_PYTHONPATH" "$PYTHON_BIN" -m pytest -q --confcutdir=tests/kernels tests/kernels
-PYTHONPATH="$RUN_PYTHONPATH" "$PYTHON_BIN" scripts/check-space-examples.py src/finn/kernels/README.md
 "$RUFF_BIN" format --check src/finn/kernels tests/kernels \
-    scripts/benchmark-space.py scripts/check-space-examples.py
+    scripts/benchmark-space.py
 "$RUFF_BIN" check src/finn/kernels tests/kernels \
-    scripts/benchmark-space.py scripts/check-space-examples.py
+    scripts/benchmark-space.py
 env -u PYTHONPATH MYPYPATH=src:tests "$MYPY_BIN" \
     --no-incremental --strict --explicit-package-bases -p finn.kernels
 env -u PYTHONPATH MYPYPATH=src:tests "$MYPY_BIN" \
