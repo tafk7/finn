@@ -7,7 +7,9 @@
 # ##########################################################################
 """Installed XSI sources and external, writable native build artifacts."""
 
+import hashlib
 import os
+import sysconfig
 from pathlib import Path
 from typing import Optional
 
@@ -21,18 +23,23 @@ def xsi_source_dir() -> Path:
 
 
 def xsi_artifact_dir() -> Path:
-    """Directory the compiled ``xsi.so`` is written to and loaded from.
+    """Directory the compiled ``xsi.so`` for the selected toolchain lives in.
 
-    Defaults under ``$FINN_BUILD_DIR`` so the artifact is scoped to the same
-    build tree as everything else FINN generates, and never to the workspace.
+    One directory per Vivado installation and Python ABI, under
+    ``$FINN_BUILD_DIR/finn_xsi``, so switching between them reuses each build
+    instead of rebuilding. FINN_XSI_BUILD_DIR selects an exact directory instead.
     """
     override = os.environ.get("FINN_XSI_BUILD_DIR")
     if override:
         return Path(override)
-    return Path(build_directory()) / "finn_xsi"
+    vivado = os.environ.get("XILINX_VIVADO", "")
+    vivado = os.path.realpath(vivado) if vivado else "none"
+    abi = sysconfig.get_config_var("SOABI") or "unknown"
+    key = hashlib.sha256(f"{vivado}\0{abi}".encode()).hexdigest()[:16]
+    return Path(build_directory()) / "finn_xsi" / f"{abi}-{key}"
 
 
 def find_xsi_so() -> Optional[Path]:
-    """Return the selected compiled extension, or None if it has not been built."""
+    """Return the compiled extension for the selected toolchain, if it was built."""
     candidate = xsi_artifact_dir() / "xsi.so"
     return candidate if candidate.is_file() else None

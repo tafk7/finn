@@ -18,9 +18,14 @@ Options:
     --force    Force rebuild even if already built
     --clean    Clean build artifacts
     --check    Only check build prerequisites; does not inspect the extension
+
+RTL simulation builds the extension on first use (ensure_built); running this
+module only builds it ahead of time.
 """
 
 import argparse
+import fcntl
+import json
 import os
 import shutil
 import sys
@@ -29,7 +34,7 @@ from pathlib import Path
 from typing import List, Tuple
 
 from finn.util._toolchain import Selection, run_process
-from finn.xsi._artifacts import tool_identity, validate_record, write_record
+from finn.xsi._artifacts import validate_record, write_record
 from finn.xsi.paths import find_xsi_so, xsi_artifact_dir, xsi_source_dir
 
 
@@ -108,110 +113,93 @@ def check_prerequisites() -> List[str]:
     return errors
 
 
-def build_xsi(force: bool = False, verbose: bool = True) -> bool:
-    """Build the finn_xsi extension module using direct g++ compilation.
+SOURCE_FILES = ["xsi_bind.cpp", "xsi_finn.cpp"]
 
-    Args:
-        force: Force rebuild even if already built
-        verbose: Print build output
 
-    Returns:
-        bool: True if build successful
-    """
-    xsi_path = xsi_source_dir()
-    out_dir = xsi_artifact_dir()
-    toolchain = Selection().prepare()
-    identity = tool_identity(toolchain)
+def bridge_identity() -> str:
+    """The toolchain an xsi.so is built against: the selected Vivado installation."""
+    vivado = os.environ.get("XILINX_VIVADO", "")
+    return json.dumps({"installation": os.path.realpath(vivado) if vivado else ""})
 
-    if not xsi_path.exists():
-        print(f"Error: finn_xsi source not found at {xsi_path}")
+
+def _usable(artifact: Path) -> bool:
+    if not artifact.is_file():
         return False
+    try:
+        validate_record(artifact, kind="bridge", tool=bridge_identity())
+    except (OSError, ValueError, KeyError):
+        return False
+    return True
 
-    # Check if already built
-    if not force:
-        xsi_so = find_xsi_so()
-        if xsi_so is not None:
-            try:
-                validate_record(xsi_so, kind="bridge", tool=identity)
-            except (OSError, ValueError, KeyError):
-                xsi_so = None
-        if xsi_so is not None:
-            # Try importing to see if it works
-            sys.path.insert(0, str(xsi_so.parent))
-            try:
-                import xsi
 
-                sys.path.pop(0)
-                if verbose:
-                    print(f"xsi.so is already built and working ({xsi_so}).")
-                return True
-            except ImportError:
-                sys.path.pop(0)
-                if verbose:
-                    print("xsi.so exists but failed to import, rebuilding...")
-        # else: Need to build
-
-    # Never write the artifact into the mounted workspace; see finn.xsi.paths.
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    if verbose:
-        print(f"Building finn_xsi in {xsi_path}...")
-
-    # Get build configuration
+def _compile(artifact: Path, verbose: bool) -> None:
+    """Compile xsi.so to artifact, atomically, and record its inputs."""
+    xsi_path = xsi_source_dir()
+    toolchain = Selection().prepare()
     include_dirs, compiler, compile_args = get_build_paths()
-
-    # Source files
-    source_files = ["xsi_bind.cpp", "xsi_finn.cpp"]
-
-    # Build command
-    cmd = [compiler] + compile_args
-
-    # Add include directories
+    partial = artifact.with_name(f".{artifact.name}.{os.getpid()}")
+    cmd = [compiler, *compile_args]
     for inc_dir in include_dirs:
         cmd.extend(["-I", inc_dir])
-
-    # Output file, written outside the source tree
-    cmd.extend(["-o", str(out_dir / "xsi.so")])
-
-    # Source files
-    cmd.extend(source_files)
-
-    # Link libraries
-    cmd.extend(["-ldl", "-lrt"])
-
+    cmd.extend(["-o", str(partial), *SOURCE_FILES, "-ldl", "-lrt"])
     if verbose:
-        print(f"Build command: {' '.join(cmd)}")
-
-    # Run the compilation
+        print(f"Building finn_xsi: {' '.join(cmd)}")
     result = run_process(cmd, cwd=xsi_path, env=toolchain.environment, check=False)
-
     if result.returncode != 0:
-        print("Build failed!")
-        if result.stderr:
-            print("Error output:", result.stderr)
-        if result.stdout:
-            print("Build output:", result.stdout)
-        print("\nBuild command was:")
-        print(" ".join(cmd))
-        print("\nCommon issues:")
-        print("  - Ensure Xilinx Vivado is properly sourced")
-        print("  - Check that pybind11 is installed in your Python environment")
-        print("  - Verify C++ compiler is installed")
-        return False
-
-    if verbose and result.stdout:
-        print(result.stdout)
-
-    if verbose:
-        print("Build completed successfully.")
-    sources = [xsi_path / name for name in source_files] + list(xsi_path.glob("*.hpp"))
+        partial.unlink(missing_ok=True)
+        raise RuntimeError(
+            "Building the finn_xsi extension failed:\n"
+            + (result.stderr or result.stdout or b"").decode(errors="replace")
+            + "\nCommand: "
+            + " ".join(cmd)
+        )
+    os.replace(partial, artifact)
+    sources = [xsi_path / name for name in SOURCE_FILES] + list(xsi_path.glob("*.hpp"))
     sources += [
         path
         for directory in include_dirs
         for path in Path(directory).rglob("*")
         if path.suffix in {".h", ".hpp"} and path.is_file()
     ]
-    write_record(out_dir / "xsi.so", kind="bridge", tool=identity, sources=sources, arguments=cmd)
+    write_record(artifact, kind="bridge", tool=bridge_identity(), sources=sources, arguments=cmd)
+
+
+def ensure_built(verbose: bool = False, force: bool = False) -> Path:
+    """Return the xsi.so for the selected toolchain, building it on first use.
+
+    Safe for concurrent callers (e.g. pytest-xdist workers): one builds, the
+    others wait and reuse its result.
+    """
+    artifact = xsi_artifact_dir() / "xsi.so"
+    if not force and _usable(artifact):
+        return artifact
+    errors = check_prerequisites()
+    if errors:
+        raise RuntimeError(
+            "RTL simulation needs the finn_xsi extension, which cannot be built here:\n  "
+            + "\n  ".join(errors)
+        )
+    artifact.parent.mkdir(parents=True, exist_ok=True)
+    with open(artifact.parent / ".lock", "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        if force or not _usable(artifact):
+            _compile(artifact, verbose)
+    return artifact
+
+
+def build_xsi(force: bool = False, verbose: bool = True) -> bool:
+    """Build (or reuse) the finn_xsi extension; report failures instead of raising."""
+    try:
+        artifact = ensure_built(verbose=verbose, force=force)
+    except RuntimeError as error:
+        print(error)
+        print("\nCommon issues:")
+        print("  - Ensure Xilinx Vivado is properly sourced")
+        print("  - Check that pybind11 is installed in your Python environment")
+        print("  - Verify C++ compiler is installed")
+        return False
+    if verbose:
+        print(f"finn_xsi is built: {artifact}")
     return True
 
 

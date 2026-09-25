@@ -8,35 +8,29 @@
 # ##########################################################################
 """FINN XSI (Xilinx Simulation Interface) support module
 
-This module provides utilities for RTL simulation support via finn_xsi.
-The finn_xsi extension must be built separately using the setup command.
+This module provides utilities for RTL simulation support via finn_xsi. The
+finn_xsi C++ extension is built against the selected Vivado on first use;
+``python -m finn.xsi.setup`` builds it ahead of time.
 
 Usage:
-    # Check if XSI support is available
     from finn import xsi  # noqa: PLC0415
     if xsi.is_available():
-        import finn_xsi.adapter
+        sim = xsi.SimEngine(...)
 """
 
-import logging
 import sys
 from typing import Any, Optional
 
-from finn.xsi.paths import find_xsi_so
-
 
 def is_available() -> bool:
-    """Check if XSI (RTL simulation) support is available.
+    """Whether RTL simulation can be used here: the finn_xsi extension can be built.
 
-    Returns:
-        bool: True if finn_xsi can be imported, False otherwise
+    Cheap: checks prerequisites (a selected Vivado with XSim headers, a C++
+    compiler, pybind11) without building, importing or running anything.
     """
-    # Check if xsi.so exists
-    if find_xsi_so() is None:
-        return False
+    from finn.xsi.setup import check_prerequisites  # noqa: PLC0415
 
-    # Try loading the modules (this will cache them if successful)
-    return _load_modules()
+    return not check_prerequisites()
 
 
 # Cache for loaded modules
@@ -45,26 +39,23 @@ _sim_engine_module: Optional[Any] = None
 _xsi_module: Optional[Any] = None
 
 
-def _load_modules() -> bool:
-    """Load finn_xsi modules if available."""
+def _load_modules() -> None:
+    """Build finn_xsi if needed and import it; raise with the reason if impossible."""
     global _adapter_module, _sim_engine_module, _xsi_module
 
     if _adapter_module is not None:
-        return True
+        return
 
-    xsi_so = find_xsi_so()
-    if xsi_so is None:
-        return False
+    from finn.xsi.setup import ensure_built  # noqa: PLC0415
 
+    xsi_so = ensure_built()
     # The Python adapter is installed normally; only the native artifact is external.
-    import_paths = [str(xsi_so.parent)]
-    added_paths = [p for p in dict.fromkeys(import_paths) if p not in sys.path]
-    for p in reversed(added_paths):
-        sys.path.insert(0, p)
-
+    added = str(xsi_so.parent) not in sys.path
+    if added:
+        sys.path.insert(0, str(xsi_so.parent))
     try:
-        # Imports must be inside function: modules require dynamic path setup
-        # and may not exist if finn_xsi extension is not built
+        # Imports must be inside function: the native module is only importable
+        # from the artifact directory.
         import xsi  # noqa: PLC0415
 
         import finn_xsi.adapter  # noqa: PLC0415
@@ -73,23 +64,9 @@ def _load_modules() -> bool:
         _xsi_module = xsi
         _adapter_module = finn_xsi.adapter
         _sim_engine_module = finn_xsi.sim_engine
-
-        return True
-    except ImportError as e:
-        # Log the specific import error for debugging
-        logging.debug(f"Failed to import finn_xsi modules: {e}")
-        return False
-    except Exception as e:
-        # Catch any unexpected errors during module loading
-        logging.warning(f"Unexpected error loading finn_xsi: {type(e).__name__}: {e}")
-        return False
     finally:
-        # Remove whatever we added, leaving any pre-existing entries alone
-        for p in added_paths:
-            try:
-                sys.path.remove(p)
-            except ValueError:
-                pass  # Path was already removed somehow
+        if added:
+            sys.path.remove(str(xsi_so.parent))
 
 
 # List of functions to wrap from finn_xsi.adapter
@@ -113,8 +90,7 @@ def __getattr__(name: str) -> Any:
     if name in _ADAPTER_FUNCTIONS:
 
         def wrapper(*args, **kwargs):
-            if not _load_modules():
-                raise ImportError("finn_xsi not available. Run: python -m finn.xsi.setup")
+            _load_modules()
             return getattr(_adapter_module, name)(*args, **kwargs)
 
         wrapper.__name__ = name
@@ -128,8 +104,7 @@ class SimEngine:
     """Wrapper for finn_xsi.sim_engine.SimEngine."""
 
     def __init__(self, *args, **kwargs):
-        if not _load_modules():
-            raise ImportError("finn_xsi not available. Run: python -m finn.xsi.setup")
+        _load_modules()
         self._engine = _sim_engine_module.SimEngine(*args, **kwargs)
 
     def __getattr__(self, name):
