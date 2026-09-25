@@ -104,7 +104,7 @@ MVAU
 ```
 
 The families are genuinely different. External delivery has an `in1_V` top-level
-stream, three instances and no initializer. Cyclic delivery has no weight port,
+stream, two instances (replay and compute) and no initializer. Cyclic delivery has no weight port,
 a `u_weights` ROM instance, an embedded image and the `rom_style` choice.
 Asserting the common export type does not make their ABIs interchangeable; the
 tests assert the differing port sets. The dimension constraint group is now
@@ -201,8 +201,10 @@ derived value, and the requirements embed it in `INIT_DATA`. As a result:
 - The selector ergonomics above are recorded, not changed.
 - External delivery has no local choices. Weight-stream buffering or FIFOs
   belong to graph-level insertion, not to this family.
-- Typed ports carry no markers, because no typed consumer needs them. Marker
-  streams (replay, input generator) stay opaque.
+- Typed AXIS ports can declare a LAST pin, but no stream value states what a
+  marker means (period or loop level), and none records beat order. Marker
+  streams (replay, input generator) stay opaque. See the roster pass's
+  `STREAMS.md` for the proposed minimal contract.
 - The scratchpad `space/MVAU-EXAMPLE.md` and its script are pinned to
   `b2d01750a`, which still has `MVAU.weight_delivery`. They are valid for that
   revision, not for this one. Against this revision the script fails at
