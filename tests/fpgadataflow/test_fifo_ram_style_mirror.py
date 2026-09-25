@@ -12,10 +12,10 @@
 
 import pytest
 
-import os
 import re
 
 from finn.util.resource_models import _resolve
+from finn.util.resources import resource_path
 
 # fifo.sv spells the SRL backing "shift"; FINN's vocabulary calls it "srl" (translated
 # back at the codegen boundary in streamingfifo_rtl.py).
@@ -25,7 +25,7 @@ RTL_TO_FINN = {"shift": "srl"}
 def _read_ram_style_eff():
     """Return the ordered (condition_source, result_token) branches of fifo.sv's
     RAM_STYLE_EFF selection, or fail loudly if it cannot be located/parsed."""
-    sv_path = os.path.join(os.environ["FINN_ROOT"], "finn-rtllib", "fifo", "hdl", "fifo.sv")
+    sv_path = resource_path("rtllib", "fifo/hdl/fifo.sv")
     with open(sv_path, "r") as f:
         sv_text = f.read()
     m = re.search(r"localparam\s+RAM_STYLE_EFF\s*=(.*?);", sv_text, re.S)

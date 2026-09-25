@@ -4,7 +4,6 @@
 import pytest
 
 import numpy as np
-import os
 import re
 import tempfile
 import torch
@@ -27,7 +26,7 @@ from finn.transformation.fpgadataflow.prepare_rtlsim import PrepareRTLSim
 from finn.transformation.fpgadataflow.set_exec_mode import SetExecMode
 from finn.transformation.fpgadataflow.set_fifo_depths import InsertAndSetFIFODepths
 from finn.transformation.fpgadataflow.specialize_layers import SpecializeLayers
-from finn.util.basic import get_finn_root
+from finn.util.resources import resource_path
 from finn.util.torch_hw_modules import PWPolyFActivation
 
 TEST_FPGA_PART = "xcvc1902-vsva2197-2MP-e-S"
@@ -293,7 +292,7 @@ def test_fpgadataflow_pwpolyf_specialize_rejects_non_versal():
 @pytest.mark.fpgadataflow
 def test_fpgadataflow_pwpolyf_rtl_constants_match():
     """Verify that constants hardcoded in pwpolyf.sv match the Python definitions."""
-    rtl_path = os.path.join(get_finn_root(), "finn-rtllib", "pwpolyf", "hdl", "pwpolyf.sv")
+    rtl_path = resource_path("rtllib", "pwpolyf/hdl/pwpolyf.sv")
 
     with open(rtl_path, "r") as f:
         rtl_content = f.read()

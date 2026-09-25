@@ -51,6 +51,7 @@ from finn.transformation.fpgadataflow.set_fifo_depths import (
 )
 from finn.transformation.fpgadataflow.specialize_layers import SpecializeLayers
 from finn.util.basic import make_build_dir, robust_rmtree
+from finn.util.resources import resource_path
 from finn.util.test import get_trained_network_and_ishape
 
 FPGAPART = "xc7z020clg400-1"
@@ -317,7 +318,7 @@ def test_fifo_gauge_overflow_sentinel_matches_rtl():
     is exactly the class of bug this guard exists to catch. This parses the two HDL
     sources so any drift trips the test instead of passing quietly.
     """
-    hdl_dir = os.environ["FINN_ROOT"] + "/finn-rtllib/fifo/hdl"
+    hdl_dir = resource_path("rtllib", "fifo/hdl")
     with open(os.path.join(hdl_dir, "fifo_gauge.sv")) as f:
         gauge = f.read()
     with open(os.path.join(hdl_dir, "fifo_template.v")) as f:
