@@ -1,50 +1,25 @@
 {
-  // FINN's portable development contract, for Dev Containers, Codespaces and
-  // any agent tooling that reads this format.
-  //
-  // It points at compose's `dev` service deliberately. That service is held to
-  // a hard contract: only the workspace is mounted from the host, and there is
-  // no toolchain, licence, secret or device. Docker networking remains open;
-  // the portable contract is about host mounts and capabilities, not egress.
-  //
-  // Vivado, Vitis and HLS work is NOT available here, and that is the point.
-  // Those need host paths and a licence, which is explicit capability
-  // escalation a human opts into:
-  //
-  //   ./docker/run --fpga
-  //
-  // There is deliberately no second devcontainer.json for the FPGA tiers. Dev
-  // Containers is the right format for the portable default; a profile whose
-  // whole nature is host-specific escalation is not portable, and pretending
-  // otherwise in this file would just produce a config that fails on every
-  // machine but one.
   "name": "FINN (dev)",
-
-  "initializeCommand": "mkdir -p .finn-build",
+  "initializeCommand": "bash .devcontainer/initialize.sh",
   "dockerComposeFile": [
     "../compose.yaml",
-    "compose.yaml"
+    "compose.yaml",
+    "image.compose.json"
   ],
   "service": "dev",
   "workspaceFolder": "/workspace/finn",
-
-  // docker/run renders the host uid into its Compose override. Dev Containers
-  // performs its own uid mapping against the image's `agent` identity.
   "remoteUser": "agent",
   "updateRemoteUserUID": true,
-
-  // Declared, not assumed: XRT and Vivado are x86-64 only, and the image
-  // carries explicit x86-64 assumptions (the LSB loader symlink, the ncurses 5
-  // backport).
   "hostRequirements": {
     "cpus": 4,
     "memory": "8gb",
     "storage": "32gb"
   },
-
-  // One-time preparation in a writable venv, using the image's dependency set.
-  "postCreateCommand": "python -m venv --system-site-packages --without-pip .venv && .venv/bin/python -m pip install --use-pep517 --config-settings editable_mode=strict --no-deps --no-build-isolation -e .",
-
+  "postCreateCommand": "python -m venv /home/agent/.venvs/finn-dev && /home/agent/.venvs/finn-dev/bin/python -m pip install --no-index --find-links /opt/finn/wheels -r /opt/finn/development-requirements.txt && /home/agent/.venvs/finn-dev/bin/python /workspace/finn/scripts/prepare-editables /workspace/finn/editable-requirements.txt",
+  "remoteEnv": {
+    "VIRTUAL_ENV": "/home/agent/.venvs/finn-dev",
+    "PATH": "/home/agent/.venvs/finn-dev/bin:${containerEnv:PATH}"
+  },
   "customizations": {
     "vscode": {
       "extensions": [
@@ -52,7 +27,7 @@
         "ms-toolsai.jupyter"
       ],
       "settings": {
-        "python.defaultInterpreterPath": "/workspace/finn/.venv/bin/python"
+        "python.defaultInterpreterPath": "/home/agent/.venvs/finn-dev/bin/python"
       }
     }
   }

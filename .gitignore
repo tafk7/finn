@@ -115,6 +115,7 @@ MANIFEST
 
 # Build scratch used by the Dev Container.
 /.finn-build/
+/.devcontainer/image.compose.json
 
 # Vendor runtime packages: supplied by the user, never redistributed by FINN.
 # See docker/runtimes/README.md.

@@ -54,11 +54,10 @@ finn_normalize_runtimes () {
     printf '%s' "${1:-}" | tr ',' '\n' | sed '/^$/d' | sort -u | paste -sd, -
 }
 
-# A source-neutral revision for the Docker-built environment. FINN source is
-# mounted at run time, so its commit must not change this value. The hash covers
-# every declared image input plus build-argument overrides; the final image ID
-# remains the immutable identity of one concrete build.
-finn_image_revision () {
+# Dependency identity excludes FINN code/resources; application identity includes
+# their content. Image IDs still identify the actual resolved build artifacts.
+finn_image_revision () (
+    set -o pipefail
     if [ -n "${FINN_IMAGE_REVISION:-}" ]; then
         case "$FINN_IMAGE_REVISION" in
             *[!A-Za-z0-9_.-]*|"")
@@ -70,15 +69,20 @@ finn_image_revision () {
         return 0
     fi
 
-    local repo manifest pattern optional path found value name
+    local repo manifest pattern optional path found value name kind="${1:-${FINN_ARTIFACT:-application}}"
+    case "$kind" in dependencies|application) ;; *) recho "Unknown package artifact: $kind"; return 2 ;; esac
     repo="${FINN_IMAGE_INPUT_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
-    manifest="$repo/docker/image-inputs.txt"
+    manifest="$repo/docker/dependency-inputs.txt"
     [ -f "$manifest" ] || { recho "image input manifest not found: $manifest"; return 2; }
+    if [ "$kind" = application ] && [ ! -f "$repo/docker/image-inputs.txt" ]; then
+        recho "application input manifest not found: $repo/docker/image-inputs.txt"
+        return 2
+    fi
 
     (
         cd "$repo" || exit 1
         shopt -s globstar
-        printf 'finn-image-inputs-v1\n'
+        printf 'finn-image-inputs-v2:%s\n' "$kind"
         while IFS= read -r pattern || [ -n "$pattern" ]; do
             case "$pattern" in ""|\#*) continue ;; esac
             optional=0
@@ -95,20 +99,20 @@ finn_image_revision () {
                 recho "image input pattern matched no files: $pattern"
                 exit 2
             fi
-        done < "$manifest"
+        done < <(cat "$manifest"; if [ "$kind" = application ]; then cat "$repo/docker/image-inputs.txt"; fi)
 
         # These are the Bake variables that can change image contents without
         # changing a file. Runtime selection is already represented in the tag
         # suffix, so it is intentionally not duplicated here.
-        for name in UBUNTU_TAG QONNX_COMMIT FINN_EXP_COMMIT BREVITAS_COMMIT \
+        for name in UBUNTU_TAG QONNX_COMMIT FINN_EXP_COMMIT BREVITAS_COMMIT DATASET_LOADING_COMMIT \
                     HLSLIB_COMMIT AVNET_BDF_COMMIT XIL_BDF_COMMIT \
                     RFSOC4x2_BDF_COMMIT KV260_BDF_COMMIT AUPZU3_BDF_COMMIT; do
             value="${!name-}"
             [ "$name" != UBUNTU_TAG ] || value="${value:-jammy-20230126}"
             printf 'arg=%s=%s\n' "$name" "$value"
         done
-    ) | sha256sum | awk '{print "env-" substr($1, 1, 16)}'
-}
+    ) | sha256sum | awk -v kind="$kind" '{print (kind == "dependencies" ? "deps-" : "app-") substr($1, 1, 16)}'
+)
 
 finn_source_revision () {
     local repo="${FINN_SOURCE_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
@@ -127,7 +131,10 @@ finn_source_dirty () {
 }
 
 finn_set_provenance () {
+    FINN_DEPENDENCY_REVISION=$(FINN_IMAGE_REVISION='' finn_image_revision dependencies) || return
+    FINN_APPLICATION_REVISION=$(FINN_IMAGE_REVISION='' finn_image_revision application) || return
     FINN_IMAGE_REVISION=$(finn_image_revision) || return
+    export FINN_DEPENDENCY_REVISION FINN_APPLICATION_REVISION
     FINN_SOURCE_REVISION=$(finn_source_revision)
     FINN_SOURCE_DESCRIBE=$(finn_source_describe)
     FINN_SOURCE_DIRTY=$(finn_source_dirty)
@@ -145,6 +152,11 @@ finn_set_provenance () {
 # set uses a parameterized target; Bake computes its args, labels and tag.
 finn_bake_target () {
     local runtimes variant="${2:-}"
+    if [ "${FINN_ARTIFACT:-application}" = dependencies ]; then
+        if [ "$variant" = sbx ]; then printf %s finn-dependencies-sbx-runtime;
+        else printf %s finn-dependencies-runtime; fi
+        return
+    fi
     runtimes=$(finn_normalize_runtimes "${1:-}")
     case "$variant:$runtimes" in
         :)       printf '%s' finn ;;

@@ -10,13 +10,9 @@ from pathlib import Path
 
 def resource_path(family, *parts):
     """Return an existing path in rtllib, custom_hls, xsi or qnn-data."""
-    package = {
-        "rtllib": "_finn_rtllib",
-        "custom_hls": "_finn_custom_hls",
-        "xsi": "_finn_xsi",
-        "qnn-data": "_finn_qnn_data",
-    }[family]
-    root = files(package)
+    if family not in {"rtllib", "custom_hls", "xsi", "qnn-data"}:
+        raise KeyError(family)
+    root = files("finn._data").joinpath(family)
     if any(Path(part).is_absolute() or ".." in Path(part).parts for part in parts):
         raise ValueError("Resource paths must stay inside their resource family")
     resource = root.joinpath(*parts)

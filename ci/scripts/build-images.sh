@@ -20,12 +20,13 @@ cd "$(dirname "$0")/../.."
 # shellcheck source=docker/lib.sh
 . ./docker/lib.sh
 
-# Image identity and mounted-source provenance are deliberately independent.
+# Explicit artifact selection; Bake remains authoritative for tags/targets.
+export FINN_ARTIFACT=application
+case "$TARGET" in finn-dependencies*) export FINN_ARTIFACT=dependencies ;; esac
 finn_set_provenance
 FINN_COMMIT="$FINN_SOURCE_REVISION"
 
 # FINN and its dependency metadata are installed in the application image.
-FINN_DEPS_MODE=installed
 if [ -n "${FINN_DEPS:-}" ]; then
     recho "FINN_DEPS was removed; prepare explicit installations instead."
     exit 1
@@ -53,47 +54,35 @@ TAG="$FINN_IMAGE"
 # OCI-archive transport rather than a registry.
 DIGEST=$(docker image inspect --format '{{.Id}}' "$TAG")
 
-# Resolve dependency refs to commits. deps.env may name a branch or tag, and a
-# branch is not a provenance record -- it resolves differently tomorrow.
-DEPS_JSON=$(
-  # `set -a` matters: sourcing alone leaves the variables shell-local, so the
-  # python below sees an empty environment and silently records no dependencies
-  # at all -- a provenance file that looks complete and says nothing.
-  set -a
-  # shellcheck disable=SC1091
-  . ./deps.env
-  set +a
-  # No "$@": the program below reads only the environment `set -a` exported.
-  python3 <<'PY'
-import os, subprocess, sys, json
-out = {}
-for key, value in sorted(os.environ.items()):
-    if not key.endswith("_COMMIT"):
-        continue
-    entry = {"ref": value}
-    if not all(c in "0123456789abcdef" for c in value.lower()) or len(value) < 7:
-        # A branch or tag. Record that it is unresolved rather than pretending
-        # a moving ref is provenance.
-        entry["resolved"] = False
-    else:
-        entry["resolved"] = True
-    out[key] = entry
-json.dump(out, sys.stdout)
-PY
-)
-
-PROVENANCE=$(python3 - <<PY
+# Read exact resolved dependency wheels/source commits from the built artifact.
+# Do not substitute requested refs or the caller's edited checkout for image facts.
+PROVENANCE_TMP=$(mktemp -d -t finn-provenance-XXXXXX)
+trap 'rm -rf "$PROVENANCE_TMP"' EXIT
+docker run --rm --network none --entrypoint cat "$TAG" /opt/finn/wheelhouse.json > "$PROVENANCE_TMP/dependencies.json"
+: > "$PROVENANCE_TMP/application.sha256"
+if [ "$FINN_ARTIFACT" = application ]; then
+    docker run --rm --network none --entrypoint cat "$TAG" /opt/finn/application-wheel.sha256 > "$PROVENANCE_TMP/application.sha256"
+fi
+export TARGET TAG DIGEST FINN_COMMIT
+PROVENANCE=$(python3 - "$PROVENANCE_TMP" <<'PY'
 import json
+import os
+import sys
+from pathlib import Path
+records = Path(sys.argv[1])
+values = os.environ
 print(json.dumps({
-    "target": "$TARGET",
-    "tag": "$TAG",
-    "image_digest": "$DIGEST",
-    "image_revision": "$FINN_IMAGE_REVISION",
-    "finn_commit": "$FINN_COMMIT",
-    "git_describe": "$FINN_SOURCE_DESCRIBE",
-    "source_dirty": $([ "$FINN_SOURCE_DIRTY" = 1 ] && echo True || echo False),
-    "finn_deps_mode": "$FINN_DEPS_MODE",
-    "deps": json.loads('''$DEPS_JSON'''),
+    "target": values["TARGET"],
+    "tag": values["TAG"],
+    "image_digest": values["DIGEST"],
+    "image_revision": values["FINN_IMAGE_REVISION"],
+    "dependency_revision": values["FINN_DEPENDENCY_REVISION"],
+    "artifact": values["FINN_ARTIFACT"],
+    "application_wheel": (records / "application.sha256").read_text().strip() or None,
+    "finn_commit": values["FINN_COMMIT"],
+    "git_describe": values["FINN_SOURCE_DESCRIBE"],
+    "source_dirty": values["FINN_SOURCE_DIRTY"] == "1",
+    "resolved_dependencies": json.loads((records / "dependencies.json").read_text()),
 }, indent=2, sort_keys=True))
 PY
 )

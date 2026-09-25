@@ -11,10 +11,10 @@
 #
 # THE SHAPE
 # ---------
-# One base image, plus two orthogonal layers:
+# Dependency and application artifacts, plus two orthogonal variants:
 #
 #   axis            values                     appears in the tag as
-#   base            one                        <environment revision>
+#   artifact        dependencies/application   deps-<hash> / app-<hash>
 #   runtime target  a set: xrt, slash, slashkit   .slash.xrt   (sorted, dot-joined)
 #   sbx contract    boolean                    sbx- prefix
 #
@@ -51,10 +51,12 @@
 # Variables
 # ---------------------------------------------------------------------------
 
-# Injected by the launchers / CI from docker/image-inputs.txt. FINN source is
-# mounted, not baked, so its commit and dirty state are runtime provenance and
-# never part of this value. A bare Bake invocation uses the explicit fallback.
-variable "FINN_IMAGE_REVISION" { default = "env-unresolved" }
+# Injected by launchers/CI from the target-specific input manifests.
+variable "FINN_IMAGE_REVISION" { default = "app-unresolved" }
+variable "FINN_DEPENDENCY_REVISION" { default = "deps-unresolved" }
+variable "FINN_APPLICATION_REVISION" { default = "app-unresolved" }
+variable "FINN_SOURCE_REVISION" { default = "unknown" }
+variable "FINN_SOURCE_DIRTY" { default = "unknown" }
 
 variable "REGISTRY" { default = "xilinx/finn" }
 
@@ -69,6 +71,7 @@ variable "UBUNTU_TAG" { default = "jammy-20230126" }
 variable "QONNX_COMMIT" { default = "" }
 variable "FINN_EXP_COMMIT" { default = "" }
 variable "BREVITAS_COMMIT" { default = "" }
+variable "DATASET_LOADING_COMMIT" { default = "" }
 variable "HLSLIB_COMMIT" { default = "" }
 variable "AVNET_BDF_COMMIT" { default = "" }
 variable "XIL_BDF_COMMIT" { default = "" }
@@ -95,11 +98,11 @@ function "runtime_set" {
 }
 
 function "tag" {
-  params = [runtimes, sbx]
+  params = [runtimes, sbx, dependencies]
   result = join("", [
     "${REGISTRY}:",
     sbx ? "sbx-" : "",
-    FINN_IMAGE_REVISION,
+    dependencies ? FINN_DEPENDENCY_REVISION : FINN_IMAGE_REVISION,
     runtime_set(runtimes) == "" ? "" : ".${join(".", split(",", runtime_set(runtimes)))}",
   ])
 }
@@ -120,6 +123,9 @@ target "_common" {
     QONNX_COMMIT        = QONNX_COMMIT
     FINN_EXP_COMMIT     = FINN_EXP_COMMIT
     BREVITAS_COMMIT     = BREVITAS_COMMIT
+    DATASET_LOADING_COMMIT = DATASET_LOADING_COMMIT
+    FINN_SOURCE_REVISION = FINN_SOURCE_REVISION
+    FINN_SOURCE_DIRTY = FINN_SOURCE_DIRTY
     HLSLIB_COMMIT       = HLSLIB_COMMIT
     AVNET_BDF_COMMIT    = AVNET_BDF_COMMIT
     XIL_BDF_COMMIT      = XIL_BDF_COMMIT
@@ -141,13 +147,15 @@ target "_common" {
 # cannot read a file -- restating them would be the stale-copy trap. Read the
 # manifest included in the environment revision, or `dpkg -l` inside the image.
 function "labels" {
-  params = [runtimes, sbx]
+  params = [runtimes, sbx, dependencies]
   result = {
     "org.opencontainers.image.title"       = "FINN"
     "org.opencontainers.image.description" = "FINN dataflow compiler, Ubuntu 22.04 / Python 3.10"
     "org.opencontainers.image.source"      = "https://github.com/Xilinx/finn"
-    "org.opencontainers.image.version"     = FINN_IMAGE_REVISION
-    "dev.finn.environment-revision"        = FINN_IMAGE_REVISION
+    "org.opencontainers.image.version"     = dependencies ? FINN_DEPENDENCY_REVISION : FINN_IMAGE_REVISION
+    "dev.finn.environment-revision"        = dependencies ? FINN_DEPENDENCY_REVISION : FINN_IMAGE_REVISION
+    "dev.finn.artifact" = dependencies ? "dependencies" : "application"
+    "dev.finn.dependency-revision" = FINN_DEPENDENCY_REVISION
     "dev.finn.runtimes"                    = runtime_set(runtimes)
     # Whether the image grants NOPASSWD root INSIDE the container. This is not
     # host privilege -- no devices, no capabilities, no privileged mode -- but
@@ -165,8 +173,8 @@ target "finn" {
   inherits = ["_common"]
   target   = "runtime"
   args     = { FINN_RUNTIMES = "" }
-  labels   = labels("", false)
-  tags     = [tag("", false)]
+  labels   = labels("", false, false)
+  tags     = [tag("", false, false)]
 }
 
 # Generic targets used by launchers for arbitrary manifest combinations. Bake
@@ -176,40 +184,40 @@ target "finn-runtime" {
   inherits = ["_common"]
   target   = "runtime"
   args     = { FINN_RUNTIMES = runtime_set(FINN_RUNTIMES) }
-  labels   = labels(runtime_set(FINN_RUNTIMES), false)
-  tags     = [tag(FINN_RUNTIMES, false)]
+  labels   = labels(runtime_set(FINN_RUNTIMES), false, false)
+  tags     = [tag(FINN_RUNTIMES, false, false)]
 }
 
 target "finn-xrt" {
   inherits = ["_common"]
   target   = "runtime"
   args     = { FINN_RUNTIMES = "xrt" }
-  labels   = labels("xrt", false)
-  tags     = [tag("xrt", false)]
+  labels   = labels("xrt", false, false)
+  tags     = [tag("xrt", false, false)]
 }
 
 target "finn-sbx" {
   inherits = ["_common"]
   target   = "sbx"
   args     = { FINN_RUNTIMES = "" }
-  labels   = labels("", true)
-  tags     = [tag("", true)]
+  labels   = labels("", true, false)
+  tags     = [tag("", true, false)]
 }
 
 target "finn-sbx-runtime" {
   inherits = ["_common"]
   target   = "sbx"
   args     = { FINN_RUNTIMES = runtime_set(FINN_RUNTIMES) }
-  labels   = labels(runtime_set(FINN_RUNTIMES), true)
-  tags     = [tag(FINN_RUNTIMES, true)]
+  labels   = labels(runtime_set(FINN_RUNTIMES), true, false)
+  tags     = [tag(FINN_RUNTIMES, true, false)]
 }
 
 target "finn-sbx-xrt" {
   inherits = ["_common"]
   target   = "sbx"
   args     = { FINN_RUNTIMES = "xrt" }
-  labels   = labels("xrt", true)
-  tags     = [tag("xrt", true)]
+  labels   = labels("xrt", true, false)
+  tags     = [tag("xrt", true, false)]
 }
 
 # Deliberately outside every group. SLASH is SOURCE=supply: it needs
@@ -220,16 +228,32 @@ target "finn-slash-xrt" {
   inherits = ["_common"]
   target   = "runtime"
   args     = { FINN_RUNTIMES = "slash,xrt" }
-  labels   = labels("slash,xrt", false)
-  tags     = [tag("xrt,slash", false)]
+  labels   = labels("slash,xrt", false, false)
+  tags     = [tag("xrt,slash", false, false)]
 }
 
 target "finn-slashkit-xrt" {
   inherits = ["_common"]
   target   = "runtime"
   args     = { FINN_RUNTIMES = "slash,slashkit,xrt" }
-  labels   = labels("slash,slashkit,xrt", false)
-  tags     = [tag("slash,slashkit,xrt", false)]
+  labels   = labels("slash,slashkit,xrt", false, false)
+  tags     = [tag("slash,slashkit,xrt", false, false)]
+}
+
+# Explicit development artifacts; runtime additions and sbx remain orthogonal.
+target "finn-dependencies-runtime" {
+  inherits = ["_common"]
+  target = "runtime"
+  args = { FINN_ARTIFACT = "dependencies", FINN_RUNTIMES = runtime_set(FINN_RUNTIMES) }
+  labels = labels(FINN_RUNTIMES, false, true)
+  tags = [tag(FINN_RUNTIMES, false, true)]
+}
+target "finn-dependencies-sbx-runtime" {
+  inherits = ["_common"]
+  target = "sbx"
+  args = { FINN_ARTIFACT = "dependencies", FINN_RUNTIMES = runtime_set(FINN_RUNTIMES) }
+  labels = labels(FINN_RUNTIMES, true, true)
+  tags = [tag(FINN_RUNTIMES, true, true)]
 }
 
 # ---------------------------------------------------------------------------
@@ -245,7 +269,7 @@ group "default" {
 
 # Everything that must build, on any machine, with no supplied packages.
 group "supported" {
-  targets = ["finn", "finn-xrt", "finn-sbx", "finn-sbx-xrt"]
+  targets = ["finn", "finn-xrt", "finn-sbx", "finn-sbx-xrt", "finn-dependencies-runtime", "finn-dependencies-sbx-runtime"]
 }
 
 group "docker" {

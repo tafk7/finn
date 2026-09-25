@@ -29,7 +29,6 @@
 
 import multiprocessing as mp
 import os
-import subprocess
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.registry import getCustomOp
 from qonnx.transformation.base import Transformation
@@ -50,12 +49,8 @@ from finn.transformation.fpgadataflow.insert_iodma import InsertIODMA
 from finn.transformation.fpgadataflow.prepare_ip import PrepareIP
 from finn.transformation.fpgadataflow.specialize_layers import SpecializeLayers
 from finn.util._legacy_build_env import external_path
-from finn.util.basic import (
-    make_build_dir,
-    pynq_native_port_width,
-    pynq_part_map,
-    resolve_xilinx_tool,
-)
+from finn.util._legacy_build_env import toolchain as legacy_toolchain
+from finn.util.basic import make_build_dir, pynq_native_port_width, pynq_part_map
 from finn.util.resources import resource_path, tcl_quote
 
 from . import templates
@@ -104,8 +99,9 @@ class MakeZYNQProject(Transformation):
     value.
     """
 
-    def __init__(self, platform, period_ns, enable_debug=False):
+    def __init__(self, platform, period_ns, enable_debug=False, toolchain=None):
         super().__init__()
+        self.toolchain = toolchain
         self.platform = platform
         self.period_ns = period_ns
         self.enable_debug = 1 if enable_debug else 0
@@ -271,18 +267,13 @@ class MakeZYNQProject(Transformation):
 
         # create a TCL recipe for the project
         synth_project_sh = vivado_pynq_proj_dir + "/synth_project.sh"
-        working_dir = os.environ["PWD"]
-        vivado_cmd = resolve_xilinx_tool("vivado")
-        with open(synth_project_sh, "w") as f:
-            f.write("#!/bin/bash \n")
-            f.write("cd {}\n".format(vivado_pynq_proj_dir))
-            f.write("%s -mode batch -source %s\n" % (vivado_cmd, ipcfg))
-            f.write("cd {}\n".format(working_dir))
-
-        # call the synthesis script
-        bash_command = ["bash", synth_project_sh]
-        process_compile = subprocess.Popen(bash_command, stdout=subprocess.PIPE)
-        process_compile.communicate()
+        toolchain = self.toolchain or legacy_toolchain()
+        toolchain.run(
+            "vivado",
+            ["-mode", "batch", "-source", ipcfg],
+            cwd=vivado_pynq_proj_dir,
+            replay=synth_project_sh,
+        )
         bitfile_name = vivado_pynq_proj_dir + "/finn_zynq_link.runs/impl_1/top_wrapper.bit"
         if not os.path.isfile(bitfile_name):
             raise Exception(

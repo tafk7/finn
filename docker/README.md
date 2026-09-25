@@ -30,6 +30,7 @@ the normalized request without building or running anything. `-n NAME` and
 
 ```bash
 ./docker/build
+./docker/build --dependencies
 ./docker/build --runtime xrt
 ./docker/build --sbx
 ./docker/build --export-sif ./finn.sif
@@ -51,9 +52,10 @@ apptainer exec --cleanenv --bind "$PWD:$PWD" --pwd "$PWD" \
   ./finn.sif python -c 'from finn.util.basic import fifo_rtl_files; print(fifo_rtl_files())'
 ```
 
-Image tags contain an ``env-<hash>`` revision derived from the declared image
-inputs in ``docker/image-inputs.txt``, including the FINN code and resources
-installed in the application. The mounted checkout's commit, description and dirty
+Dependency tags use ``deps-<hash>`` from ``docker/dependency-inputs.txt``.
+Application tags use ``app-<hash>`` and additionally hash ``docker/image-inputs.txt``,
+including the FINN code and resources installed in the application.
+The mounted checkout's commit, description and dirty
 state are passed separately as
 ``FINN_SOURCE_*`` runtime provenance. The immutable identity of a concrete
 build remains its Docker image digest or exported SIF checksum.
@@ -181,19 +183,23 @@ state migration, sandbox removal or global policy/credential changes occur.
 
 ## Explicit development preparation
 
-Images run installed FINN. A mounted checkout does not select imports, and
-`--deps`/`FINN_DEPS` import modes have been removed. In a writable container or
-native sbx session, prepare a venv once:
+The default image runs installed FINN. A mounted checkout does not select imports.
+`./docker/build --dependencies` and `./docker/run --dependencies` select the offline
+development artifact, which contains wheels and no FINN installation. Its identity
+excludes FINN code/resources; application identity adds their content. Both artifacts
+support runtime additions and the native sbx variant.
 
-```bash
-python -m venv --system-site-packages --without-pip /writable/finn-dev
-/writable/finn-dev/bin/python -m pip install --use-pep517 --config-settings editable_mode=strict --no-deps --no-build-isolation -e /path/to/finn
-# Optional explicit co-development:
-/writable/finn-dev/bin/python -m pip install --use-pep517 --config-settings editable_mode=strict --no-deps --no-build-isolation -e /path/to/qonnx
-```
+Prepare an isolated writable venv once using `/opt/finn/wheels` and
+`/opt/finn/development-requirements.txt`, then explicitly install selected checkouts.
+`docker/run --venv /host/environment` mounts an existing user-owned directory at
+`/env/venv` across disposable runs. Use `--volume` for additional source mounts.
+The Dev Container prepares its private `/home/agent/.venvs/finn-dev` on creation;
+reopening performs no pip operations. Native sbx keeps its own sandbox-private venv.
+See [installation and tool selection](../docs/installation.md) for preparation and
+reuse commands, editable QONNX, native/offline setup and artifact lifetime.
 
-Use that venv's executables for subsequent commands. The Dev Container prepares
-`.venv` in its creation step. Read-only SIF execution uses installed code; editable
-HPC work requires an explicitly writable environment. See
-[installation and tool selection](../docs/installation.md) for offline preparation,
-metadata inspection, resource lifetimes and remaining native loader requirements.
+Generic images have no Bash activation hook. Only the sbx variant sources native
+persistent environment configuration. Site Tcl initialization uses explicit mounts
+into the chosen user's `.Xilinx` directory. Bare vendor shims and global libudev
+preload remain pending actual licensed/native validation; FINN vendor operations
+are being migrated to scoped argv/cwd/environment execution.

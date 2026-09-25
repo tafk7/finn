@@ -584,9 +584,12 @@ Installed resources and explicit development
 FINN wheels contain the RTL, C++ support, Tcl and driver templates needed by
 ordinary resource operations. These work without ``FINN_ROOT``. For editable
 work, create a writable environment once and explicitly install FINN and selected
-dependencies with pip. Application images contain installed FINN; the Dockerfile
-``base`` stage remains a reusable dependency environment. Read-only SIF execution
-performs no installation.
+dependencies with pip. Application images contain installed FINN. Select
+``docker/build --dependencies`` for the offline wheelhouse, then use
+``docker/run --dependencies --venv /host/environment`` to reuse an explicitly
+prepared isolated environment across disposable containers. Dev Containers and
+native sbx use their own writable venvs. Read-only SIF execution performs no
+installation.
 
 See ``docs/installation.md`` in the source distribution for offline preparation,
 package/import inspection, site tool routes, and installed-resource lifetime.

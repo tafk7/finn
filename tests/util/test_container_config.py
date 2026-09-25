@@ -10,6 +10,8 @@ was developed on, and that is exactly where the sbx mount silently resolved to
 nothing.
 """
 
+import pytest
+
 import json
 import os
 import shutil
@@ -765,8 +767,9 @@ def _provenance(image_root, source_root=None, extra_env=None):
 def _make_image_input_fixture(tmp_path):
     root = tmp_path / "image-root"
     (root / "docker").mkdir(parents=True)
-    manifest = root / "docker/image-inputs.txt"
-    manifest.write_text("docker/image-inputs.txt\nimage.txt\n")
+    manifest = root / "docker/dependency-inputs.txt"
+    manifest.write_text("docker/dependency-inputs.txt\nimage.txt\n")
+    (root / "docker/image-inputs.txt").write_text("docker/image-inputs.txt\n")
     (root / "image.txt").write_text("environment\n")
     (root / "src").mkdir()
     (root / "src/finn.py").write_text("source v1\n")
@@ -779,6 +782,29 @@ def test_image_revision_ignores_mounted_source_changes(tmp_path):
     (root / "src/finn.py").write_text("source v2\n")
     after = _provenance(root)[0]
     assert before == after
+
+
+def test_application_edits_do_not_change_dependency_identity(tmp_path):
+    root = _make_image_input_fixture(tmp_path)
+    (root / "docker/image-inputs.txt").write_text("docker/image-inputs.txt\nsrc/**/*\n")
+    (root / "src/fifo.sv").write_text("// original RTL\n")
+
+    def identities():
+        return (
+            _provenance(root, extra_env={"FINN_ARTIFACT": "dependencies"})[0],
+            _provenance(root)[0],
+        )
+
+    original = identities()
+    for path in (root / "src/finn.py", root / "src/fifo.sv"):
+        path.write_text(path.read_text() + "\n// edited\n")
+        changed = identities()
+        assert changed[0] == original[0]
+        assert changed[1] != original[1]
+        original = changed
+    (root / "image.txt").write_text("changed dependency pin\n")
+    changed = identities()
+    assert changed[0] != original[0] and changed[1] != original[1]
 
 
 def test_image_revision_changes_with_image_inputs_and_build_args(tmp_path):
@@ -819,7 +845,10 @@ def test_source_commit_changes_without_changing_image_revision(tmp_path):
 
 
 def test_image_input_manifest_covers_dockerfile_sources():
-    manifest = (Path(REPO) / "docker/image-inputs.txt").read_text()
+    manifest = "\n".join(
+        (Path(REPO) / "docker" / name).read_text()
+        for name in ("image-inputs.txt", "dependency-inputs.txt")
+    )
     for path in (
         "requirements.txt",
         "deps.env",
@@ -838,11 +867,41 @@ def test_image_input_manifest_covers_dockerfile_sources():
         line.lstrip("?") for line in manifest.splitlines() if line and not line.startswith("#")
     }
     assert "src/**/*.py" in patterns
-    assert "finn-rtllib/**/*" in patterns
+    assert "src/finn/_data/**/*" in patterns
     assert "docker/config.py" not in patterns
     assert "docker/finn-env" not in patterns
     assert "docker/run" not in patterns
     assert "docs/finn/getting_started.rst" not in patterns
+
+
+def test_development_mount_is_explicit_and_never_repaired(tmp_path, monkeypatch):
+    environment = tmp_path / "environment with spaces"
+    monkeypatch.setenv("FINN_DEV_ENVIRONMENT", str(environment))
+    with pytest.raises(SystemExit):
+        finn_env.resolve_host("dev", "mirror")
+    assert not environment.exists()
+    environment.mkdir(mode=0o700)
+    before = environment.stat()
+    data = finn_env.resolve_host("dev", "mirror")
+    mount = next(m for m in data["mounts"] if m["reason"] == "development-venv")
+    assert mount["source"] == str(environment)
+    assert mount["target"] == "/env/venv"
+    assert "PATH" not in data["env"]
+    assert environment.stat().st_mode == before.st_mode
+    assert environment.stat().st_uid == before.st_uid
+
+
+def test_shell_inspection_never_allocates_scratch(tmp_path):
+    scratch = tmp_path / "scratch"
+    proc = subprocess.run(
+        [FINN_ENV, "inspect", "--tier", "dev", "--format", "sh"],
+        env={"PATH": os.environ["PATH"], "FINN_HOST_BUILD_DIR": str(scratch)},
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert str(scratch) in proc.stdout
+    assert not scratch.exists()
 
 
 def test_compose_override_consumes_resolved_mounts(tmp_path):
@@ -892,7 +951,7 @@ def test_compose_override_uses_the_bake_resolved_image(tmp_path):
     assert proc.returncode == 0, proc.stderr
     service = json.loads(proc.stdout)["services"]["dev"]
     assert service["image"] == "xilinx/finn:test.xrt"
-    assert service["build"]["args"]["FINN_RUNTIMES"] == "xrt"
+    assert "build" not in service  # The Bake-resolved image is authoritative.
     assert service["environment"]["FINN_IMAGE_REVISION"] == "env-test"
     assert service["environment"]["FINN_SOURCE_REVISION"] == "abc123"
 
@@ -988,7 +1047,7 @@ def test_native_callers_execute_resolver_in_an_isolated_installation(tmp_path):
             "bash",
             "-c",
             'source "$FINN_ROOT/scripts/activate.sh"; '
-            'test "$XILINX_VIVADO" = "$1" && test -d "$FINN_BUILD_DIR"',
+            'test "$XILINX_VIVADO" = "$1" && test ! -e "$FINN_BUILD_DIR"',
             "test",
             expected,
         ],

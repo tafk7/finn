@@ -43,17 +43,9 @@ import json
 import subprocess
 from pathlib import Path
 
-# Explicit data lists keep wheels identical whether built from Git or an sdist.
-# These private packages retain the established source layout for RTL developers.
-RESOURCE_DIRS = {
-    "_finn_rtllib": "finn-rtllib",
-    "_finn_custom_hls": "custom_hls",
-    "_finn_xsi": "finn_xsi",
-    "_finn_qnn_data": "src/finn/qnn-data",
-}
-
 
 def resource_files(directory):
+    """Ship source resources and notices, excluding tests and native artifacts."""
     allowed = {
         ".v",
         ".sv",
@@ -74,21 +66,16 @@ def resource_files(directory):
     result = []
     for path in Path(directory).rglob("*"):
         rel = path.relative_to(directory)
-        if directory.endswith("qnn-data") and rel.parts[0] not in {
-            "cpp",
-            "templates",
-            "mdd-data",
-            "verilog",
-        }:
-            continue
         notice = any(x in path.name.lower() for x in ("license", "licence", "notice", "copying"))
         if not path.is_file() or any(
             x in rel.parts for x in ("test", "tests", "testcase", "tb", "__pycache__", "build")
         ):
             continue
-        if "_tb." in path.name or ("sim" in rel.parts and rel.parts[:2] != ("sim", "hdl")):
+        if "_tb." in path.name or (
+            "sim" in rel.parts and rel.parts[:3] != ("rtllib", "sim", "hdl")
+        ):
             continue
-        if notice or path.suffix in allowed or directory.endswith("qnn-data"):
+        if notice or path.suffix in allowed or rel.parts[0] == "qnn-data":
             if path.suffix not in {".pyc", ".so"}:
                 result.append(rel.as_posix())
     return sorted(result)
@@ -128,13 +115,13 @@ class Sdist(sdist):
 
 
 if __name__ == "__main__":
-    packages = find_namespace_packages("src", exclude=["finn.qnn-data", "finn.qnn-data.*"])
+    packages = find_namespace_packages(
+        "src", exclude=["finn.qnn-data", "finn.qnn-data.*", "finn._data.*"]
+    )
     setup(
         cmdclass={"build_py": BuildPy, "sdist": Sdist},
         version=Path("VERSION").read_text().strip(),
-        packages=packages + list(RESOURCE_DIRS) + ["finn_xsi"],
-        package_dir={"": "src", **RESOURCE_DIRS, "finn_xsi": "finn_xsi/finn_xsi"},
-        package_data={
-            **{name: resource_files(path) for name, path in RESOURCE_DIRS.items()},
-        },
+        packages=packages,
+        package_dir={"": "src"},
+        package_data={"finn._data": resource_files("src/finn/_data")},
     )

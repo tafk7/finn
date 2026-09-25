@@ -44,7 +44,7 @@ from finn.util.data_packing import npy_to_rtlsim_input, rtlsim_output_to_npy
 from finn.util.resources import resource_path
 from finn.util.rtlsim import dat_file_to_numpy_array, mlo_prehook_func_factory
 
-finnxsi = xsi if xsi.is_available() else None
+finnxsi = xsi  # Native prerequisites are checked when simulation is requested.
 
 
 def prep_rtlsim_io_dict(model, execution_context):

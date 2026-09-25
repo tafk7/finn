@@ -1,10 +1,202 @@
 # Runtime implementation validation
 
+## Approved implementation: P0 baseline (2026-09-20)
+
+Starting revision `97eb24645`, clean worktree on
+`refactor/container-runtime-implementation`. The exact 92-path prototype disposition
+is in [container-runtime-inventory.md](container-runtime-inventory.md); the actual
+consumer audit is in [legacy-build-env-ledger.md](legacy-build-env-ledger.md).
+Private build-engine interfaces remain unavailable; no builder implementation was changed.
+
+Infrastructure checked now: Docker daemon 29.8.0 responds; native sbx v0.42.1
+(`cc6e400a4a3ce3ce5e0b2b77b8ee352aac854c64`) is installed and `/dev/kvm` exists.
+Existing `finn-runtime-plan:validation` (`9f27e41796af`) and `:sbx`
+(`f80eed01a233`) images are historical artifacts, not newly validated deliverables.
+No AMD executable is on PATH, no configured vendor/licence variable is set, and
+`/opt/Xilinx`, `/tools/Xilinx`, `/opt/amd`, `/tools/amd` are absent.
+Apptainer/Singularity are absent. Licensed builds, native XSI and SIF remain open.
+
+Baseline uses the existing isolated `/tmp/finn-runtime-venv` with CPython 3.12.3,
+FINN 0.11.0.dev0 editable at this checkout, QONNX
+`f5c9819bd00f01f41e70639b8461c8e4b39432f7`, pytest 9.1.1, setuptools 84.0.0,
+wheel 0.48.0 and build 1.6.1. This is supplemental host coverage, not the supported
+Python 3.10 image environment. No implicit dependency provisioning occurred.
+
+```bash
+/tmp/finn-runtime-venv/bin/python -m pytest -q \
+  tests/util/test_runtime_toolchain.py tests/util/test_runtime_codegen.py \
+  tests/util/test_resolve_xilinx_tool.py tests/util/test_xsi_pkg_ordering.py \
+  tests/util/test_container_config.py tests/util/test_container_cli.py \
+  tests/util/test_ci_container_transport.py
+```
+
+150 passed in 41.73 s (`/tmp/finn-p0-focused.log`). The pre-existing suite includes
+prototype worker assertions: passing them does not endorse that architecture, and
+new components must not depend on it. Installation journeys initially passed four
+tests; the explicitly selected `deps/qonnx` checkout did not exist. Provisioned
+`/tmp/finn-implementation-qonnx` at the exact revision above for the editable test.
+The initial command used two nonexistent test filenames and collected no tests;
+the corrected command above is the measured baseline.
+
+Independent setup correction: `setup-local.sh` now invokes normal XSI setup, which
+checks/reuses or builds the extension and verifies it. `--check` only tests
+prerequisites. Removed obsolete `FINN_DEPS` from Dev Container Compose.
+
+## Independent implementation delivery (2026-09-20)
+
+P0 inventory is complete; exact private-branch overlap is still conditional on
+that branch becoming available. The corrected QONNX baseline retry passed in
+11.23 s, for 155 baseline tests in total. P1 then passed 86 focused tests, including
+wheel/sdist resource, metadata and Git-provenance equality, hidden source copies,
+read-only package data, unrelated cwd and explicit editable FINN/QONNX selection.
+
+The final combined run passed **181 tests in 115.70 s**: runtime installation,
+codegen/toolchain, resolver, XSI source ordering and session tests, SLASH dispatch,
+wheelhouse closure, Docker configuration/CLI, CI transport, plus two non-vendor
+container conformance checks. After removing the duplicate Compose build surface,
+the affected Docker/CI suites passed **117 tests in 40.60 s**. The final read-only
+inspection/activation fix passed **65 resolver tests in 3.55 s**, including the
+new no-scratch-allocation regression. This is 182 distinct tested cases overall. Ruff 0.15.10,
+Black 23.3.0, isort 5.12.0, shell syntax, ShellCheck and whitespace checks were used
+on delivered implementation files. Logs are local evidence, not shipped artifacts:
+`/tmp/finn-implementation-final-tests.log` and
+`/tmp/finn-implementation-final-compose-tests.log` and
+`/tmp/finn-implementation-inspection-tests.log`. A real host g++ compilation and
+execution with literal spaces/substitution characters in paths also passed with
+unchanged parent cwd/environment.
+
+```bash
+FINN_TEST_QONNX_CHECKOUT=/tmp/finn-implementation-qonnx \
+/tmp/finn-runtime-venv/bin/python -m pytest -q \
+  tests/util/test_runtime_installation.py tests/util/test_runtime_toolchain.py \
+  tests/util/test_runtime_codegen.py tests/util/test_resolve_xilinx_tool.py \
+  tests/util/test_xsi_pkg_ordering.py tests/util/test_xsi_session.py \
+  tests/util/test_slash_link.py tests/util/test_wheelhouse_manifest.py \
+  tests/util/test_container_config.py tests/util/test_container_cli.py \
+  tests/util/test_ci_container_transport.py \
+  tests/container/test_container_conformance.py::test_05b_dependency_sbx_identity_ignores_mounted_source_commit \
+  tests/container/test_container_conformance.py::test_12_bake_owns_runtime_tags_and_custom_flavors
+```
+
+### Built artifacts and actual identities
+
+Bake built the application, application+XRT, dependencies and dependency+sbx targets.
+The input revision tags are not immutable build outputs; the IDs below are.
+A final manifest EOF normalization changed only identity metadata: Docker inspection
+confirmed identical rootfs layers and runtime environment to the runtime-tested
+`app-928cd39692c62436[.xrt]`, `deps-928baf60bf600cfd` and
+`sbx-deps-928baf60bf600cfd` images. Evidence:
+`/tmp/finn-final-artifact-equivalence.json`. Plain Docker exec was also tested
+directly against the final application tag (`/tmp/finn-final-docker-exec.log`).
+
+| Image | Image ID |
+| --- | --- |
+| `xilinx/finn:app-0bf7ac24bf131246` | `sha256:2266bc3edcdb99f7b9abd9489f480239814695e21334bfd91db48ce38ed65523` |
+| `xilinx/finn:app-0bf7ac24bf131246.xrt` | `sha256:01c2af859b675edecc778596529f05bcfd554e9181189a174dc526ca8a3c4502` |
+| `xilinx/finn:deps-1d3775474e8454c3` | `sha256:91655e6103251f2cb9753c313c36118c1a0703da3a1a69dc6e9e74c9ae38ccdf` |
+| `xilinx/finn:sbx-deps-1d3775474e8454c3` | `sha256:6880d087228ad59d1702a756d529da8acbea8b8ddc5eda842105e46cc35f8776` |
+
+`ci/scripts/build-images.sh finn /tmp/finn-delivery-provenance` completed and
+recorded the actual artifact/wheel/dependency provenance. The application wheel SHA256
+is `4e1ba446eb52317fece62801089b987bd673d4a7ae372b5e5f40703bbdf567c0`.
+The wheelhouse contains **220 wheels**, checksum-pinned in the offline development
+manifest, including pip 24.3.1, setuptools 68.2.2, wheel 0.45.1, build 1.2.2.post1
+and setuptools-scm 8.1.0. Python is 3.10 in these images. FINN is absent from the
+dependency closure; finn-experimental's pinned wheel remains metadata-only due to
+its existing upstream package configuration. Exact Python Git source revisions:
+
+- `brevitas`: `aad4d5a293db6f2ec622a92a5d3278e47072453e`
+- `dataset_loading`: `5b9faa226e5f7c857579d31cdd9acde8cdfb816f`
+- `finn-experimental`: `0724be21111a21f0d81a072fccc1c446e053f851`
+- `qonnx`: `f5c9819bd00f01f41e70639b8461c8e4b39432f7`
+
+### Runtime journeys
+
+- Installed application: final image, no checkout mount, network disabled,
+  read-only root filesystem, writable `/tmp`, UID/GID 12345, unrelated cwd, and
+  unset root/resource variables. FIFO RTL and Python drivers generated correctly.
+  Entrypoint-bypassing Python inspection and generated `build_dataflow --help`
+  worked; the application has no `/opt/finn/wheels`. Evidence:
+  `/tmp/finn-implementation-release-smoke.log`.
+- Docker development: created a user-owned `/tmp/finn-implementation-docker-venv`,
+  mounted at `/env/venv`, and prepared it with ordinary package commands under
+  `docker run --network none`. FINN was absent before explicit editable install.
+  Installed FINN plus pinned QONNX offline; subsequent disposable containers reused
+  both mounts without installation. The actual `docker/run --dependencies
+  --no-build --venv ... --volume ...` path also resolved both selected packages.
+  An omitted QONNX source mount produced metadata with no import path, as intended;
+  restoring that explicit mount restored imports without reinstalling.
+  Evidence: `/tmp/finn-p3-offline.log`, `/tmp/finn-p3-launcher-reuse.log`.
+- Dev Container: tested with Dev Containers CLI 0.89.0, Docker Compose 5.5.1 and
+  Node 24.21.0. Creation prepares `/home/agent/.venvs/finn-dev`; native CLI exec
+  selects that exact interpreter and `/workspace/finn/src/finn/_data` resources.
+  Reopening reused the same container with no pip/postCreate operation. The initial
+  test exposed Compose rebuilding the Bake image: Compose now consumes prepared
+  references and contains no competing build definition. Source `.venv` is not used.
+  Evidence: `/tmp/finn-p3-devcontainer-final-reopen.log` and final-image creation
+  `/tmp/finn-implementation-release-devcontainer.log`, with interpreter and final
+  reopen evidence in `/tmp/finn-implementation-release-devcontainer-exec.log` and
+  `/tmp/finn-delivery-devcontainer-reopen.log`.
+- Native sbx: native plan/create, explicit sandbox-private venv preparation,
+  repeated exec with selected Python/console scripts, resource generation and
+  removal passed. Recreated from `sbx-deps-928baf60bf600cfd`, confirmed that its
+  private venv was gone, then explicitly prepared FINN plus pinned QONNX offline.
+  Native PATH/VIRTUAL_ENV configuration selected the correct interpreter in plain
+  `sbx env exec -- python` and later Bash/console-script exec. Both editable import
+  paths, unrelated-cwd resource generation and console entry points passed.
+  Configurations stay under `/tmp/finn-implementation-sbx-config`, outside both
+  explicitly mounted source trees. No custom lifecycle manager or automatic
+  agent/credential/network setup was introduced. Evidence:
+  `/tmp/finn-p3-sbx-final-prepare.log`, `/tmp/finn-p3-sbx-final-reuse.log`.
+- XRT: application variant installed XRT 2.18.179 (2024.2,
+  build `3ade2e671e5ab463400813fc2846c57edf82bb10`). An actual scoped settings capture
+  and `xclbinutil --version` operation preserved the parent environment. This is an
+  installed-runtime probe, not FPGA/licence validation.
+  Evidence: `/tmp/finn-implementation-release-xrt-probe.log`.
+- Native host: setup now uses isolated venvs and ordinary prepared PEP 517 backends;
+  the XSI prerequisite/build decision is corrected. This host's Python 3.12 tests
+  supplement the reference Python 3.10 image journeys; full Ubuntu 22.04 native
+  provisioning and vendor extension building were not performed on this host.
+
+### Open integration and native gates
+
+The direct XSI session mechanism passed synthetic isolation, wide-word data
+round-trip, concurrent output separation, lifecycle, failure/crash, cancellation,
+wall timeout, stale-result and source/tool/ABI compatibility tests. It loads the
+bridge/kernel/design only after exec with the selected environment and uses explicit
+custom testbench files, not parent closures. No actual AMD XSI session was run.
+Real output/cycle/trace equivalence, AXI/external-memory/MLO/characterization cases,
+concurrent native reuse and workload/startup/transfer measurements remain open.
+
+`src/finn/builder/` and `_legacy_build_env.py` remain unchanged from the handoff.
+P6 must integrate the actual private build-engine implementation and retire/reconcile
+the whole-build worker. The existing C++ performance harness and its legacy command/
+loader seam remain integration-sensitive; broad path/config/allocation/logging
+cleanup was not duplicated. Bare vendor shims and libudev preload remain until
+licensed/native replacement gates pass. No AMD Vivado/HLS/licence access,
+FPGA hardware or Apptainer/Singularity was available. The complete runtime/optional
+proprietary package matrix and P8 release approval remain open.
+
+Test-created sandboxes and Dev Containers were removed after validation. Prepared
+local images and `/tmp` logs/environments remain available as explicit validation
+artifacts; no user sandbox or pre-existing image was removed.
+
+The delivered-file list is
+[container-runtime-implementation-files.txt](container-runtime-implementation-files.txt).
+The archive and historical inputs remain preserved. No commit, merge or push was
+performed; new-file intent entries only make the resource renames reviewable in
+`git diff`.
+
+## Historical prototype validation (superseded architecture)
+
+The record below describes the archived prototype. Inherited-package editable
+overlays and the whole-build worker are not the approved final architecture.
+
 Date: 2026-09-16. Implements `high-value-runtime-plan.md`; the earlier redesign
 and information inventories remain historical inputs. No merge or push performed.
 The working-tree delivery inventory is in `runtime-changed-files.txt`.
 
-## Delivered behavior
+### Delivered behavior
 
 - Explicit wheel/sdist data for FINN-owned RTL, custom HLS/C++, XSI sources and
   adapter, Tcl and driver templates; notices retained and test/generated data
@@ -23,7 +215,7 @@ The working-tree delivery inventory is in `runtime-changed-files.txt`.
   pre-start loader environment, worker inheritance, documented in-process limits.
   The sbx hook keeps native integration only. Site Tcl copying is opt-in.
 
-## Checks and results
+### Checks and results
 
 Host validation used Python 3.12, an explicit editable FINN install and QONNX
 revision `f5c9819bd00f01f41e70639b8461c8e4b39432f7`. The image uses the existing
@@ -60,7 +252,22 @@ Python 3.10 dependency pins and now supplies pip 24.3.1 for explicit editable se
   members excluding RECORD, including source revision/dirty provenance. Static
   Ruff, Python compilation, shell syntax and whitespace checks passed.
 
-## Coverage limits and release gates
+### Explicit editable preparation helper
+
+`scripts/prepare-editables` was checked with three focused tests using real pip:
+wheel replacement with live/atomic source edits and console scripts, manifest
+paths containing spaces from an unrelated working directory, ignored pip install
+redirection settings, dependency incompatibility, and a missing manifest.
+All three passed on host Python 3.12. Formatting and lint checks passed.
+
+A disposable Python 3.10 container with networking disabled additionally installed
+regular FINN/QONNX wheels into a writable isolated environment, then replaced both
+through the helper. Import paths and editable metadata selected the mounted
+checkouts, `pip check` passed, and `build_dataflow --help` worked. This used the
+uv spike's experimental dependency image as a fixture; it does not migrate the
+production images to a writable baked environment or change their storage model.
+
+### Coverage limits and release gates
 
 No AMD installations, licence server, FPGA hardware or Apptainer/Singularity are
 available here. Installation-backed AMD probes, licensed Vivado/HLS operations,

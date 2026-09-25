@@ -36,5 +36,4 @@ setuptools==68.2.2
 jupyter==1.0.0
 matplotlib==3.7.0
 
-# Small third-party package not published through FINN's normal requirements.
--e git+https://github.com/fbcotter/dataset_loading.git@0.0.4#egg=dataset_loading
+# dataset_loading is built from its exact deps.env revision.

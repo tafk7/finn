@@ -18,47 +18,51 @@ class SimEngine:
     # Life Cycle
     def __init__(self, kernel, design, log=None, wdb=None):
         top = xsi.Design(xsi.Kernel(kernel), design, log, wdb)
-        clk = top.getPort("ap_clk")
-        clk2x = top.getPort("ap_clk2x")
-        for p in top.ports():
-            if p.isInput():
-                p.clear().write_back()
+        try:
+            clk = top.getPort("ap_clk")
+            clk2x = top.getPort("ap_clk2x")
+            for p in top.ports():
+                if p.isInput():
+                    p.clear().write_back()
 
-        def half_cycle_2x(run_first):
-            # Complete one slow half-cycle while the fast clock goes high->low.
-            # run_first reserves the stimulus tick after the active edge (2499)
-            # for the leading half; the trailing half uses the full 2500.
-            top.run(run_first)
-            clk2x.set(0).write_back()
-            top.run(2500)
+            def half_cycle_2x(run_first):
+                # Complete one slow half-cycle while the fast clock goes high->low.
+                # run_first reserves the stimulus tick after the active edge (2499)
+                # for the leading half; the trailing half uses the full 2500.
+                top.run(run_first)
+                clk2x.set(0).write_back()
+                top.run(2500)
 
-        def cycle(updates):
-            # Start the cycle on the active (rising) edge.
-            clk.set(1).write_back()
-            if clk2x is not None:
-                clk2x.set(1).write_back()
-            # Apply stimulus one tick after the active edge so inputs are stable
-            # across the whole slow cycle (both fast beats). Required for the
-            # double-pumped DSP58 datapath, which samples on the clk2x rising
-            # edges; mutating stimulus on a clk2x edge corrupts the 2nd beat.
-            top.run(1)
-            for port, update in updates.items():
-                port.set_hexstr(update).write_back()
-            if clk2x is None:
-                top.run(4999)
-                clk.set(0).write_back()
-                top.run(5000)
-            else:
-                half_cycle_2x(2499)  # finish the clk-high half
-                clk.set(0).write_back()
-                clk2x.set(1).write_back()
-                half_cycle_2x(2500)  # finish the clk-low half
+            def cycle(updates):
+                # Start the cycle on the active (rising) edge.
+                clk.set(1).write_back()
+                if clk2x is not None:
+                    clk2x.set(1).write_back()
+                # Apply stimulus one tick after the active edge so inputs are stable
+                # across the whole slow cycle (both fast beats). Required for the
+                # double-pumped DSP58 datapath, which samples on the clk2x rising
+                # edges; mutating stimulus on a clk2x edge corrupts the 2nd beat.
+                top.run(1)
+                for port, update in updates.items():
+                    port.set_hexstr(update).write_back()
+                if clk2x is None:
+                    top.run(4999)
+                    clk.set(0).write_back()
+                    top.run(5000)
+                else:
+                    half_cycle_2x(2499)  # finish the clk-high half
+                    clk.set(0).write_back()
+                    clk2x.set(1).write_back()
+                    half_cycle_2x(2500)  # finish the clk-low half
 
-        self.top = top
-        self.cycle = cycle
-        self.ticks = 0
-        self.tasks = []
-        self.watchdogs = []
+            self.top = top
+            self.cycle = cycle
+            self.ticks = 0
+            self.tasks = []
+            self.watchdogs = []
+        except BaseException:
+            top.close()
+            raise
 
     # ------------------------------------------------------------------------
     # Utility
@@ -141,7 +145,7 @@ class SimEngine:
 
     # ------------------------------------------------------------------------
     # Standard Tasks
-    def do_reset(self):
+    def do_reset(self, n_cycles=16):
         "Schedule a reset sequence."
 
         class Reset:
@@ -155,9 +159,9 @@ class SimEngine:
 
                 if cnt == 0:
                     return {self.rst_n: "0"}
-                if cnt < 16:
+                if cnt < n_cycles:
                     return {}
-                if cnt == 16:
+                if cnt == n_cycles:
                     return {self.rst_n: "1"}
                 return None
 

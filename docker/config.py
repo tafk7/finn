@@ -15,7 +15,7 @@ import os
 import re
 import sys
 
-# A tier is a host access profile, not an image. There is one image; what differs
+# A tier is a host access profile, independent of the package artifact. What differs
 # is what the launcher mounts and which network requirements it reports.
 #
 # `build-xrt` used to be a third tier. It differed from `build` by one mount,
@@ -361,6 +361,8 @@ def resolve_host(tier, workspace_policy="auto"):
     }
     for variable in (
         "FINN_IMAGE_REVISION",
+        "FINN_DEPENDENCY_REVISION",
+        "FINN_ARTIFACT",
         "FINN_SOURCE_REVISION",
         "FINN_SOURCE_DESCRIBE",
         "FINN_SOURCE_DIRTY",
@@ -368,6 +370,16 @@ def resolve_host(tier, workspace_policy="auto"):
         if os.environ.get(variable):
             out["env"][variable] = os.environ[variable]
     add_optional_inputs(out)
+    venv = hostpath(os.environ.get("FINN_DEV_ENVIRONMENT"))
+    if venv:
+        if not os.path.isdir(venv):
+            die(
+                "Prepare FINN_DEV_ENVIRONMENT/--venv as a user-owned host directory first: " + venv,
+                2,
+            )
+        out["mounts"].append(
+            {"source": venv, "target": "/env/venv", "mode": "rw", "reason": "development-venv"}
+        )
 
     if tier == "dev":
         out["dev_contract"] = {
@@ -453,7 +465,6 @@ def compose_override(data, services):
         }
     )
     service = {
-        "build": {"args": {"FINN_RUNTIMES": data["runtime_csv"]}},
         "environment": environment,
         "user": "%d:%d" % (os.getuid(), os.getgid()),
         "volumes": volumes,
@@ -472,7 +483,9 @@ def cmd_inspect(args):
         json.dump(data, sys.stdout, indent=2, sort_keys=True)
         sys.stdout.write("\n")
     else:
-        sys.stdout.write(sh_assignments(data))
+        # Inspection is also used by native shell activation. Allocation belongs
+        # to explicit Compose preparation or the build operation, not inspection.
+        sys.stdout.write(sh_assignments(data, create_build_dir=False))
     return 0
 
 

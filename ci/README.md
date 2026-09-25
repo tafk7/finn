@@ -349,7 +349,16 @@ The wrapper's own variables are deployment-specific.
 Application image inputs now include FINN code and package resources. CI uses the
 installed distribution; a workspace mount supplies tests/artifacts and does not
 shadow imports. `FINN_DEPS` modes have been removed. For an intentionally editable
-CI job, create a writable venv and run explicit `pip install -e` commands in its
+CI job, select `finn-dependencies-runtime` (or `finn-dependencies-sbx-runtime`),
+populate an isolated venv from `/opt/finn/wheels` and the resolved development
+manifest, and run explicit offline `pip install -e` commands in its
 preparation stage; use that venv consistently for the shard. Normal Python startup
 never installs or repairs paths. See `docs/installation.md` and the runtime
 validation record for available versus installation/licence-backed coverage.
+
+Bake owns targets, tags and labels; Compose consumes prepared image references.
+CI provenance records the actual image digest, artifact kind, dependency revision,
+application wheel checksum and the image's resolved wheel/source-revision manifest.
+Requested Git refs are not substituted for the revisions actually built. Edited
+application code in an explicit development environment needs its own runtime
+provenance alongside the immutable image identity.

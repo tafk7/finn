@@ -1,7 +1,12 @@
 # FINN container/runtime implementation plan
 
 Date: 2026-09-20.
-Status: architecture approved; implementation work and integration remain.
+Status: P0/P1 delivered; independent P2-P5 implementation and runtime validation
+recorded below. P6/private build-engine integration and vendor/HPC gates remain open.
+
+Implementation evidence: [runtime-validation.md](runtime-validation.md),
+[prototype disposition](container-runtime-inventory.md), and
+[delivered file inventory](container-runtime-implementation-files.txt).
 
 This plan executes the approved [container/runtime direction](container-runtime-refactor-proposal.md).
 It incorporates the [XSI investigation](xsi-process-boundary-investigation.md).
@@ -102,15 +107,15 @@ Deliverables:
 - [x] Record the starting revision, working-tree changes and existing untracked
   design inputs. Preserve the user's work; do not reset the repository. See the
   archive checkpoint and exact inventory in the handoff.
-- [ ] Classify existing changes as retain, revise, integrate later or delete.
+- [x] Classify existing changes as retain, revise, integrate later or delete.
   Retain the resource consumer migrations, package entry-point work, inspection
   command and scoped execution foundation where their tests support them.
-- [ ] Inventory remaining root/resource interpretation, vendor subprocesses,
+- [x] Inventory remaining root/resource interpretation, vendor subprocesses,
   native imports and startup side effects. Record actual consumers in the existing
   ledger; distinguish legitimate vendor-variable forwarding from interpretation.
 - [ ] Identify shared files with the private branch when that information becomes
   available. Avoid speculative plumbing until then.
-- [ ] Record available infrastructure: Docker, native sbx, AMD installations,
+- [x] Record available infrastructure: Docker, native sbx, AMD installations,
   licence access and Apptainer/Singularity. Keep unavailable coverage explicit.
 
 Current known corrections include the whole-build worker, the single image-input
@@ -130,30 +135,30 @@ Primary files: `setup.py`, `setup.cfg`, `MANIFEST.in`, `VERSION`,
 sources and their consumers; `tests/util/test_runtime_installation.py` and
 `tests/util/test_runtime_codegen.py`.
 
-- [ ] Consolidate FINN-owned data into a conventional package data tree, with a
+- [x] Consolidate FINN-owned data into a conventional package data tree, with a
   real package anchor (proposed location: `src/finn/_data/`). Preserve the small
   `resource_path(family, ...)` interface while simplifying package mappings.
-- [ ] Include RTL, custom HLS/C++, Tcl, driver templates, XSI sources and required
+- [x] Include RTL, custom HLS/C++, Tcl, driver templates, XSI sources and required
   notices. Exclude test fixtures, generated files and compiled native artifacts.
-- [ ] Update Python consumers, generated recipes, source-build references and tests
+- [x] Update Python consumers, generated recipes, source-build references and tests
   together. Do not retain a synthetic checkout or resource-discovery hook.
-- [ ] Keep finn-hlslib and board definitions as versioned external inputs with
+- [x] Keep finn-hlslib and board definitions as versioned external inputs with
   explicit locations and documented image defaults.
-- [ ] Preserve meaningful package version/provenance through wheel and sdist builds.
+- [x] Preserve meaningful package version/provenance through wheel and sdist builds.
   Inspect actual import locations and metadata for installed and editable packages.
-- [ ] Ensure generated work never writes into installed resource directories.
+- [x] Ensure generated work never writes into installed resource directories.
   Document the lifetime of absolute resource references in saved projects.
 
 Acceptance:
 
-- [ ] Compare a checkout-built wheel with a wheel built from its sdist, including
+- [x] Compare a checkout-built wheel with a wheel built from its sdist, including
   relevant resources, version and provenance.
-- [ ] Install in isolation; make the source checkout unavailable; unset root/resource
+- [x] Install in isolation; make the source checkout unavailable; unset root/resource
   variables; run from unrelated cwd. Generate representative RTL and driver outputs
   and inspect generated HLS/Tcl references.
-- [ ] Repeat resource operations with an editable install. Observe code/resource
+- [x] Repeat resource operations with an editable install. Observe code/resource
   edits and verify selected code agrees with installed metadata.
-- [ ] Ordinary imports create no scratch directory, install nothing and do not
+- [x] Ordinary imports create no scratch directory, install nothing and do not
   modify process environment. Test read-only package resources.
 
 Do not describe these as checkpoint/project relocation tests.
@@ -165,36 +170,36 @@ Primary files: `docker/Dockerfile.finn`, `docker-bake.hcl`, `.dockerignore`,
 `docker/build`, `docker/run`, `deps.env`, dependency requirement/constraint files,
 `ci/scripts/build-images.sh` and associated CLI/identity tests.
 
-- [ ] Produce the resolved dependency wheel set, including pip, setuptools, wheel
+- [x] Produce the resolved dependency wheel set, including pip, setuptools, wheel
   and build requirements for supported editable dependencies. Record exact source
   revisions for dependencies built from Git and provide wheel checksums.
-- [ ] Inspect dependency closure so it cannot silently install FINN transitively
+- [x] Inspect dependency closure so it cannot silently install FINN transitively
   into the development base. Arrange packages requiring FINN at the appropriate
   application/development installation step.
-- [ ] Ship the development dependency artifact with Python/system prerequisites,
+- [x] Ship the development dependency artifact with Python/system prerequisites,
   `/opt/finn/wheels`, and `/opt/finn/development-requirements.txt`.
   The resolved manifest excludes FINN itself and is usable without network access.
-- [ ] Build FINN into a wheel and install it in the application artifact. Install
+- [x] Build FINN into a wheel and install it in the application artifact. Install
   dependencies from the same prepared set; avoid retaining the development
   wheelhouse in the final application image where build-stage mounts suffice.
-- [ ] Retain optional accelerator-runtime additions and a thin native-sbx variant
+- [x] Retain optional accelerator-runtime additions and a thin native-sbx variant
   for the selected artifact. AMD installations remain external read-only inputs.
-- [ ] Split dependency/application identities. Dependency inputs exclude FINN
+- [x] Split dependency/application identities. Dependency inputs exclude FINN
   application code/resources; application identity additionally includes its
   wheel/content digest. Runtime additions and sbx variations identify themselves.
-- [ ] Add `--dependencies` to existing build/run entry points. Default remains the
+- [x] Add `--dependencies` to existing build/run entry points. Default remains the
   installed application. Preserve `--runtime`, sbx preparation and SIF export
   semantics; image selection never triggers editable installation.
-- [ ] Make Bake authoritative for tags/targets and update CI provenance accordingly.
+- [x] Make Bake authoritative for tags/targets and update CI provenance accordingly.
   Distinguish the immutable image from edited application code at runtime.
 
 Acceptance:
 
-- [ ] Editing FINN code/resources changes application identity without changing
+- [x] Editing FINN code/resources changes application identity without changing
   dependency identity. Dependency pin changes affect the relevant artifacts.
-- [ ] From the dependency artifact, prepare an isolated venv entirely offline.
+- [x] From the dependency artifact, prepare an isolated venv entirely offline.
   No FINN application is selected until explicitly installed.
-- [ ] Run the application image without a checkout mount; imports, packaged
+- [x] Run the application image without a checkout mount; imports, packaged
   resources and generated console commands work.
 - [ ] Verify relevant combinations of artifact kind, runtime additions and sbx
   variant. Keep supplied/proprietary runtime packages an explicit prerequisite.
@@ -231,42 +236,42 @@ manager. Optional overlay environments require their own import-precedence tests
 
 Docker deliverables:
 
-- [ ] Explicitly prepare the host environment directory/volume with suitable
+- [x] Explicitly prepare the host environment directory/volume with suitable
   ownership. Use the selected UID/GID; do not repair ownership on every command.
-- [ ] Provide one preparation command and later-run examples that reuse the same
+- [x] Provide one preparation command and later-run examples that reuse the same
   source/environment mounts. Later commands invoke `/env/venv/bin/python` or its
   console scripts and perform no pip operations.
-- [ ] Wire the existing launcher/Compose surface to pass explicit mounts without
+- [x] Wire the existing launcher/Compose surface to pass explicit mounts without
   command-name detection or automatic source selection.
-- [ ] Select the dependency artifact in Dev Containers. Prepare once at creation
+- [x] Select the dependency artifact in Dev Containers. Prepare once at creation
   and select its interpreter; do not silently share a host-native `.venv`.
-- [ ] Remove stale import-mode settings, including the current `FINN_DEPS` entry
+- [x] Remove stale import-mode settings, including the current `FINN_DEPS` entry
   in the Dev Container Compose override.
 
 Native sbx deliverables:
 
-- [ ] Use the dependency-image sbx variant with native environment creation and
+- [x] Use the dependency-image sbx variant with native environment creation and
   user-owned configuration outside mounted workspaces.
-- [ ] After creation, explicitly prepare the sandbox-private venv against the
+- [x] After creation, explicitly prepare the sandbox-private venv against the
   actual mounted checkout path. Do not assume Docker's `/workspace/finn` alias.
-- [ ] Later native exec commands reuse the venv. Use explicit executable paths
+- [x] Later native exec commands reuse the venv. Use explicit executable paths
   or native PATH/editor configuration; no installer runs from a shell hook.
-- [ ] Document deletion/recreation behavior and the optional separately mounted
+- [x] Document deletion/recreation behavior and the optional separately mounted
   environment directory. Keep source, environment and artifact mounts explicit.
-- [ ] Preserve native composition, lifecycle, network and credential ownership.
+- [x] Preserve native composition, lifecycle, network and credential ownership.
   Do not add a FINN sandbox runner or automatic site setup.
 
 Common deliverables and acceptance:
 
-- [ ] Select editable QONNX/Brevitas/other supported checkouts explicitly, with
+- [x] Select editable QONNX/Brevitas/other supported checkouts explicitly, with
   their build requirements already provisioned for offline preparation.
-- [ ] Document stable runtime paths, environment recreation after incompatible
+- [x] Document stable runtime paths, environment recreation after incompatible
   base changes, metadata/entry-point reinstall requirements and native rebuilds.
-- [ ] Verify a Docker environment prepared in one disposable container works in
+- [x] Verify a Docker environment prepared in one disposable container works in
   a second without reinstalling; verify multiple sbx exec sessions likewise.
-- [ ] Verify FINN-plus-QONNX editable behavior, unrelated cwd, atomic source edits
+- [x] Verify FINN-plus-QONNX editable behavior, unrelated cwd, atomic source edits
   and two independent environments. Opening another checkout does not select it.
-- [ ] Verify shell, noninteractive exec and editor/agent interpreter selection.
+- [x] Verify shell, noninteractive exec and editor/agent interpreter selection.
   Reopening a prepared environment does not install packages or repair directories.
 
 **7. P4 — Complete scoped tool execution**
@@ -275,87 +280,87 @@ Primary files: `src/finn/util/_toolchain.py`, the process/resolution seams in
 `src/finn/util/basic.py`, `src/finn/util/hls.py`, concrete vendor callers and
 `tests/util/test_runtime_toolchain.py`. Avoid private-branch-owned build plumbing.
 
-- [ ] Keep selection separate from prepared environment and execution route.
+- [x] Keep selection separate from prepared environment and execution route.
   Support explicit local settings, explicitly accepted configured environments,
   command-directory overrides and site launcher prefixes.
-- [ ] Define the local base environment. Capture vendor settings in child Bash
+- [x] Define the local base environment. Capture vendor settings in child Bash
   using positional arguments and NUL-delimited output; control BASH_ENV and other
   inherited startup inputs. Never mutate the caller or attempt to unsource tools.
-- [ ] Defensively copy mappings. Pass serializable selections to workers; keep
+- [x] Defensively copy mappings. Pass serializable selections to workers; keep
   secret-bearing snapshots out of ordinary provenance.
-- [ ] Use argv, explicit cwd/env, useful captured output and reliable status.
+- [x] Use argv, explicit cwd/env, useful captured output and reliable status.
   Define timeout/cancellation of local process groups and the remote wrapper's
   responsibility. Document treatment of partial logs on cancellation.
-- [ ] Probe identities through the same route as real operations with bounded
+- [x] Probe identities through the same route as real operations with bounded
   timeouts. Keep frontend selection, capability evidence, codegen compatibility
   and licensed-operation success distinct.
 - [ ] Migrate the known remaining callers: Zynq project creation, Alveo/Vitis
   packaging/linking, xelab and C++ simulation compilation/execution. Audit the rest
   of the source for additional real consumers before retiring tool shims.
-- [ ] Preserve correctly quoted replay scripts and site command-directory routing;
+- [x] Preserve correctly quoted replay scripts and site command-directory routing;
   never replace remote tool names with local executable paths.
 
 Known caller files include `make_zynq_proj.py`, `alveo_build.py`, `hlsbackend.py`,
-`rtlbackend.py`, `finn_xsi/finn_xsi/adapter.py` and `CppBuilder`. `CallHLS` and
+`rtlbackend.py`, `src/finn_xsi/adapter.py` and `CppBuilder`. `CallHLS` and
 `CreateStitchedIP` are existing representative migrations to retain and review.
 Other supported site/runtime commands must be accounted for before removing their
 old dispatch path. Defer overlapping constructor/configuration plumbing to P6.
 
 Acceptance:
 
-- [ ] Fake tools/settings exercise spaces, substitution characters, argv fidelity,
+- [x] Fake tools/settings exercise spaces, substitution characters, argv fidelity,
   inherited Bash hooks, failures, timeout, cancellation and concurrent selections.
-- [ ] Verify site override plus launcher composition and route-preserving probes.
-- [ ] Direct operation tests preserve parent cwd/environment and do no eager probing
+- [x] Verify site override plus launcher composition and route-preserving probes.
+- [x] Direct operation tests preserve parent cwd/environment and do no eager probing
   on import. Record logs without environment/credential dumps.
 - [ ] Validate actual installations and representative licensed Vivado/HLS/linking
   operations separately. Only claim tool versions whose relevant flows pass.
 
 **8. P5 — Implement the native simulation-session boundary**
 
-Primary files: `src/finn/xsi/`, the Python driver under `finn_xsi/finn_xsi/`,
-`finn_xsi/xsi_finn.*`, `finn_xsi/xsi_bind.cpp`, the C++ harness,
+Primary files: `src/finn/xsi/`, the Python driver under `src/finn_xsi/`,
+`src/finn/_data/xsi/xsi_finn.*`, `src/finn/_data/xsi/xsi_bind.cpp`, the C++ harness,
 `src/finn/core/rtlsim_exec.py`, and dedicated session tests. Inspect overlap with
 private-branch changes before changing shared orchestration.
 
-- [ ] Separate pure compilation/discovery helpers from native bridge loading.
+- [x] Separate pure compilation/discovery helpers from native bridge loading.
   Launching xelab or inspecting paths must not require an imported XSI extension.
-- [ ] Remove import-time native availability decisions from migrated simulation
+- [x] Remove import-time native availability decisions from migrated simulation
   consumers. Check actual prerequisites when the operation is requested.
-- [ ] Specify the smallest concrete internal request/result contract for a first
+- [x] Specify the smallest concrete internal request/result contract for a first
   functional simulation: selected compiled design/tool identity, input buffers,
   streams/clock/reset configuration, tracing and execution limits; output buffers,
   metrics, status and artifact paths. Avoid a generic simulation framework.
-- [ ] Start a fresh executable image with the selected environment supplied before
+- [x] Start a fresh executable image with the selected environment supplied before
   exec. Do not use a forked vendor-loaded interpreter or change loader paths only
   after a Python worker has started.
-- [ ] Keep the complete testbench, Python driver, kernel, design and port handles
+- [x] Keep the complete testbench, Python driver, kernel, design and port handles
   inside the session. Exchange data in bulk; begin with existing file/array formats
   and a small control/result record, not per-cycle RPC.
 - [ ] Use independent session outputs/logs so concurrent runs do not overwrite each
   other. Preserve compiled artifact locations and validate any vendor requirements
   for working-directory-relative design inputs on real installations.
-- [ ] Keep stdout/stderr logs separate from structured results. Publish a successful
+- [x] Keep stdout/stderr logs separate from structured results. Publish a successful
   result only after the session completes; reject stale/incomplete result files.
-- [ ] Guarantee deterministic close on recoverable exceptions. Add an external
+- [x] Guarantee deterministic close on recoverable exceptions. Add an external
   wall-clock limit alongside cycle watchdogs; report native crashes and potentially
   partial waveforms on forced termination.
-- [ ] Keep the current C++ harness for supported workloads; do not treat its
+- [x] Keep the current C++ harness for supported workloads; do not treat its
   dummy-input-only implementation as complete functional-simulation support.
 - [ ] Cover FINN's own AXI initialization/readback, external memory, MLO, stream
   characterization and tracing as subsequent concrete session cases. Custom
   testbench code executes inside the session with explicit arguments/results;
   do not silently serialize arbitrary parent closures or preserve another
   library's live-object API as a requirement.
-- [ ] Verify native bridge/design compatibility before reuse, using small adjacent
+- [x] Verify native bridge/design compatibility before reuse, using small adjacent
   records if needed: relevant sources, ABI, selected headers/tool identity and
   compile inputs. Do not redesign cache layouts or checkpoint schemas.
-- [ ] For site-routed execution, require a valid site Python/driver command and
+- [x] For site-routed execution, require a valid site Python/driver command and
   accessible paths; do not assume local absolute sys.executable is usable remotely.
 
 Acceptance and decision gate:
 
-- [ ] Synthetic tests prove process isolation, selection, data round-trip, failure
+- [x] Synthetic tests prove process isolation, selection, data round-trip, failure
   propagation, timeout/cancellation and cleanup without importing AMD libraries
   into the parent. Existing loader experiments are supporting evidence only.
 - [ ] Compare a representative real simulation with the current engine for outputs,
@@ -421,13 +426,13 @@ requires the relevant native and licensed-operation evidence.
 | Broad `_legacy_build_env` activation | Explicit inputs and integrated build engine; no public replacement wrapper. |
 | Entrypoint FINN/vendor/Tcl behavior | Explicit preparation or mounts. Retain only justified UID/home/exec behavior. |
 
-- [ ] Verify installed operations work through execution paths that bypass the
+- [x] Verify installed operations work through execution paths that bypass the
   entrypoint, including Docker exec and native sbx exec.
-- [ ] Keep arbitrary-UID home behavior bounded to runtime-private writable storage.
+- [x] Keep arbitrary-UID home behavior bounded to runtime-private writable storage.
   Do not install packages, repair build directories or source tools there.
-- [ ] Provide site Tcl initialization through explicit mounts/preparation. Keep
+- [x] Provide site Tcl initialization through explicit mounts/preparation. Keep
   credentials and network configuration site-owned.
-- [ ] Update image inputs, Compose, Dev Containers, native setup/activation, sbx
+- [x] Update image inputs, Compose, Dev Containers, native setup/activation, sbx
   examples and CI together. Remove stale comments and environment assignments;
   do not move universal startup repair into another hook.
 
@@ -453,10 +458,10 @@ selected package/tool versions, outcomes and unavailable coverage without secret
 
 - [ ] Re-run the relevant focused tests after changes, then the complete journeys
   for affected release artifacts. Do not keep repeating unaffected broad suites.
-- [ ] Update `docs/installation.md`, runtime guides, CI instructions,
+- [x] Update `docs/installation.md`, runtime guides, CI instructions,
   `docs/legacy-build-env-ledger.md`, `docs/runtime-validation.md` and the delivered
   file inventory to describe the final implementation.
-- [ ] Remove stale claims that the earlier whole-build worker is the permanent
+- [x] Remove stale claims that the earlier whole-build worker is the permanent
   architecture or that synthetic tests establish licensed/native support.
 - [ ] Mark work complete only when its gates pass. Explicitly distinguish delivered
   packaging/development improvements from any remaining vendor-validation gate.

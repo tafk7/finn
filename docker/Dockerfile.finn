@@ -28,7 +28,7 @@
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-# Image stages: system -> python -> base -> runtime -> sbx.
+# Image stages: system -> wheels; system -> base -> dependencies/application -> runtime -> sbx.
 #
 # `dev` and `build` are runtime grant tiers, not image stages. XRT/SLASH are
 # distro-specific userspace packages and remain image content selected through
@@ -44,6 +44,7 @@
 # the human-readable FINN tag -- is the immutable identity of a particular
 # build.
 ARG UBUNTU_TAG=jammy-20230126
+ARG FINN_ARTIFACT=application
 
 
 # --- system: OS packages, locale, timezone. Changes ~never. ------------------
@@ -186,60 +187,45 @@ ENV LANG="en_US.UTF-8" \
 ENV PIP_BREAK_SYSTEM_PACKAGES=1
 
 
-# --- python: the interpreter environment. Changes with requirements. ---------
-FROM system AS python
-
-# Torch first and alone: it is the largest and most stable pin in the tree, so it
-# belongs in a layer that edits to requirements.txt cannot invalidate. The pin
-# file is shared with setup-local.sh.
-#
-# CPU build, not cu126. The CUDA wheels pull ~5 GB of nvidia/* and triton that
-# nothing here can reach: FINN's src and tests contain no .cuda(), no
-# torch.cuda, not even an is_available() guard, and the Docker backend never passes
-# --gpus (NVIDIA_VISIBLE_DEVICES is set and then unused), so no container can
-# see a device in the first place. This removes dead weight, not capability.
-#
-# Restoring GPU support means adding the --gpus plumbing AND a separate
-# cuda-variant image tag - not flipping this index back, which would only make
-# every image 5 GB larger while remaining unable to reach a device.
-COPY docker/pip-constraints.txt docker/pip-torch.txt /tmp/pip/
-RUN cp /tmp/pip/pip-constraints.txt /etc/finn-pip-constraints.txt
-ENV PIP_CONSTRAINT=/etc/finn-pip-constraints.txt
-RUN python -m pip install --no-cache-dir -r /tmp/pip/pip-torch.txt
-
+# Resolve and build the complete offline wheel set independently of FINN.
+FROM system AS wheels
+COPY docker/pip-constraints.txt docker/pip-torch.txt docker/requirements-build.txt /tmp/pip/
+ENV PIP_CONSTRAINT=/tmp/pip/pip-constraints.txt
+RUN python -m pip install --no-cache-dir -r /tmp/pip/requirements-build.txt
+RUN python -m pip wheel --no-deps --wheel-dir /opt/finn/wheels -r /tmp/pip/pip-torch.txt && \
+    sed '/^--index-url /d' /tmp/pip/pip-torch.txt > /tmp/pip/torch-requirements.txt
 COPY requirements.txt /tmp/requirements.txt
 COPY docker/requirements-dev.txt /tmp/pip/
-RUN python -m pip install --no-cache-dir -r /tmp/requirements.txt -r /tmp/pip/requirements-dev.txt
-
-# --- base: FINN's dependency closure and build data. The publishable image. ---
-FROM python AS base
-
-# Pins come from deps.env, the same file fetch-repos.sh reads, so the commit
-# baked here and the commit checked out on the host cannot drift apart. Each is
-# overridable at build time exactly as it is at fetch time.
 ARG QONNX_COMMIT
 ARG FINN_EXP_COMMIT
 ARG BREVITAS_COMMIT
+ARG DATASET_LOADING_COMMIT
+COPY deps.env fetch-repos.sh /opt/finn-src/
+RUN cd /opt/finn-src && ./fetch-repos.sh python && \
+    python -m pip wheel --wheel-dir /opt/finn/wheels --find-links /opt/finn/wheels \
+        -r /tmp/requirements.txt -r /tmp/pip/requirements-dev.txt \
+        -r /tmp/pip/torch-requirements.txt \
+        -r /tmp/pip/requirements-build.txt \
+        ./deps/qonnx ./deps/finn-experimental ./deps/brevitas ./deps/dataset_loading
+COPY docker/wheelhouse.py /tmp/wheelhouse.py
+RUN python /tmp/wheelhouse.py /opt/finn /opt/finn-src/deps
+
+# The shared installed dependency environment does not retain the wheelhouse.
+FROM system AS base
+COPY docker/pip-constraints.txt /etc/finn-pip-constraints.txt
+ENV PIP_CONSTRAINT=/etc/finn-pip-constraints.txt
+COPY --from=wheels /opt/finn/development-requirements.txt /opt/finn/development-requirements.txt
+COPY --from=wheels /opt/finn/wheelhouse.json /opt/finn/wheelhouse.json
+RUN --mount=from=wheels,source=/opt/finn/wheels,target=/opt/finn/wheels \
+    python -m pip install --no-index --find-links /opt/finn/wheels \
+        -r /opt/finn/development-requirements.txt
 ARG HLSLIB_COMMIT
 ARG AVNET_BDF_COMMIT
 ARG XIL_BDF_COMMIT
 ARG RFSOC4x2_BDF_COMMIT
 ARG KV260_BDF_COMMIT
 ARG AUPZU3_BDF_COMMIT
-
 COPY deps.env fetch-repos.sh /opt/finn-src/
-# Fetch and install the three importable deps as ordinary wheels, then drop the
-# checkouts - brevitas alone is 222 MB of git history that the image never needs.
-#
-# Prepared dependencies carry their real metadata and entry points. Application
-# layers install FINN; editable development is an explicit writable preparation.
-RUN cd /opt/finn-src && \
-    ./fetch-repos.sh python && \
-    pip install --no-cache-dir \
-        ./deps/qonnx \
-        ./deps/finn-experimental \
-        ./deps/brevitas && \
-    rm -rf /opt/finn-src/deps
 
 # HLS C++ headers and Vivado board definitions. Never imported, reached through
 # FINN_HLSLIB_PATH / FINN_BOARD_FILES_PATH from generated Tcl and g++ include
@@ -297,7 +283,6 @@ RUN chmod 755 /usr/local/bin/finn_entrypoint.sh \
 #
 # The tool list is guest build data; the host resolver is not installed.
 COPY docker/toolchain-shim /usr/local/lib/finn/toolchain-shim
-COPY docker/finn-bashenv.sh /etc/finn-bashenv.sh
 # The toolchain application itself: pure shell, sourced by all three delivery
 # mechanisms and by the entrypoint. It used to be `finn-env print --format sh`,
 # which spawned Python to spawn a bash to source the same scripts and diff the
@@ -305,7 +290,7 @@ COPY docker/finn-bashenv.sh /etc/finn-bashenv.sh
 COPY docker/finn-toolchain.sh /etc/finn-toolchain.sh
 RUN set -eu; \
     chmod 755 /usr/local/lib/finn/toolchain-shim; \
-    chmod 644 /etc/finn-bashenv.sh /etc/finn-toolchain.sh; \
+    chmod 644 /etc/finn-toolchain.sh; \
     mkdir -p /usr/local/lib/finn/toolchain-bin; \
     for t in vivado vitis vitis_hls vitis-run v++ slashkit xelab xsim xvlog xsc lmutil xsct; do \
         ln -sf /usr/local/lib/finn/toolchain-shim \
@@ -372,7 +357,6 @@ RUN set -eu; \
 # prepare their own child settings.
 ENV NO_PROXY=localhost,127.0.0.1,::1,172.17.0.0/16 \
     no_proxy=localhost,127.0.0.1,::1,172.17.0.0/16 \
-    BASH_ENV=/etc/finn-bashenv.sh \
     NPM_CONFIG_PREFIX=/usr/local/share/npm-global \
     PATH=/usr/local/share/npm-global/bin:/usr/local/lib/finn/toolchain-bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
@@ -442,9 +426,6 @@ ENV LD_PRELOAD=/lib/x86_64-linux-gnu/libudev.so.1
 # Stages below re-assert USER root for their install steps and restore this at
 # the end. A stage that forgets will fail loudly on the first apt-get, which is
 # the desired failure mode.
-# Prepared editable environments need pip config-settings / PEP 660 support.
-# Ubuntu ensurepip copies older tools; overlay venvs inherit this with --without-pip.
-RUN python -m pip install --no-cache-dir pip==24.3.1
 USER agent
 
 # --- runtime: + the accelerator stacks named in FINN_RUNTIMES. ---------------
@@ -461,20 +442,29 @@ USER agent
 # The manifests and any supplied packages arrive through a bind mount rather
 # than COPY, so an unselected runtime's deb never ends up in a layer and the
 # image does not carry packages it did not install.
-# `base` is a reusable dependency environment. Application layers include FINN
-# and are identified by source/resource content in docker/image-inputs.txt.
+# Development artifact: offline wheels, no FINN installation.
+FROM base AS dependencies
+COPY --from=wheels /opt/finn/wheels /opt/finn/wheels
+
+FROM base AS application-wheel
+USER root
+COPY setup.py setup.cfg MANIFEST.in VERSION README.md LICENSE.txt deps.env /tmp/finn-package/
+COPY src /tmp/finn-package/src
+ARG FINN_SOURCE_REVISION=unknown
+ARG FINN_SOURCE_DIRTY=unknown
+RUN cd /tmp/finn-package && \
+    python -c 'import json,os; from pathlib import Path; Path("FINN_BUILD_INFO.json").write_text(json.dumps({"version":Path("VERSION").read_text().strip(),"revision":os.environ["FINN_SOURCE_REVISION"],"dirty":os.environ["FINN_SOURCE_DIRTY"] == "1" if os.environ["FINN_SOURCE_DIRTY"] in {"0","1"} else None}))' && \
+    python -m build --no-isolation --wheel --outdir /opt/finn/application
+
 FROM base AS application
 USER root
-COPY setup.py setup.cfg MANIFEST.in VERSION README.md LICENSE.txt /tmp/finn-package/
-COPY src /tmp/finn-package/src
-COPY finn-rtllib /tmp/finn-package/finn-rtllib
-COPY custom_hls /tmp/finn-package/custom_hls
-COPY finn_xsi /tmp/finn-package/finn_xsi
-RUN python -m pip install --no-deps --no-build-isolation /tmp/finn-package && \
-    rm -rf /tmp/finn-package
+RUN --mount=from=application-wheel,source=/opt/finn/application,target=/tmp/application \
+    python -m pip install --no-index --no-deps /tmp/application/*.whl && \
+    sha256sum /tmp/application/*.whl > /opt/finn/application-wheel.sha256 && \
+    python -m pip check
 USER agent
 
-FROM application AS runtime
+FROM ${FINN_ARTIFACT} AS runtime
 USER root
 
 ARG FINN_RUNTIMES=""
@@ -531,6 +521,8 @@ USER agent
 
 FROM runtime AS sbx
 USER root
+COPY docker/finn-bashenv.sh /etc/finn-bashenv.sh
+ENV BASH_ENV=/etc/finn-bashenv.sh
 RUN set -eu; \
     usermod -aG sudo agent; \
     echo "agent ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/agent; \

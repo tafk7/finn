@@ -44,24 +44,19 @@ else
 fi
 
 # Check if virtual environment exists
-if [ ! -d "$FINN_ROOT/.venv" ]; then
-    echo "ERROR: Virtual environment not found at $FINN_ROOT/.venv"
+if [ ! -d "${FINN_VENV:-$FINN_ROOT/.venv}" ]; then
+    echo "ERROR: Virtual environment not found at ${FINN_VENV:-$FINN_ROOT/.venv}"
     echo "Please run ./setup-local.sh first."
     return 1
 fi
 
 # Activate virtual environment
 # shellcheck source=/dev/null
-source "$FINN_ROOT/.venv/bin/activate"
+source "${FINN_VENV:-$FINN_ROOT/.venv}/bin/activate"
 _finn_gecho "Activated FINN environment at $FINN_ROOT"
 
-# Set FINN environment variables
-# The build directory, from docker/config.py -- which resolves it and creates it.
-# used to default to /tmp/finn_local_$(whoami), a fifth answer to a question
-# that should have one.
-eval "$("$FINN_ROOT/docker/config.py" inspect --tier dev --format sh 2>/dev/null \
-        | grep '^FINN_HOST_BUILD_DIR=' | sed 's/^/export /')"
-export FINN_BUILD_DIR="$FINN_HOST_BUILD_DIR"
+# Select scratch without creating/repairing directories on shell activation.
+export FINN_BUILD_DIR="${FINN_HOST_BUILD_DIR:-/tmp/finn_build_$(id -u)}"
 
 # Board files path
 export FINN_BOARD_FILES_PATH="${FINN_BOARD_FILES_PATH:-$FINN_ROOT/deps/board_files}"

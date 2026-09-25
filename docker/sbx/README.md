@@ -142,21 +142,56 @@ no automatic state migration or sandbox removal.
 References: [native environments](https://docs.docker.com/ai/sandboxes/configuration/environment-files/)
 and [kit schema](https://docs.docker.com/ai/sandboxes/customize/kit-reference/).
 
-## Select an editable installation explicitly
+## Prepare an isolated development environment
 
-The template contains installed FINN. Mounting a checkout does not activate its
-code. After native creation, use an explicit preparation command in the writable
-environment to create a venv and install the selected checkout:
+Select the dependency template when constructing the native request above:
 
 ```bash
-sbx env exec "${ARGS[@]}" "${FILES[@]}" -- bash -c \
-  'python -m venv --system-site-packages --without-pip /tmp/finn-dev && /tmp/finn-dev/bin/python -m pip install --use-pep517 --config-settings editable_mode=strict --no-deps --no-build-isolation -e "$1"' \
-  finn-prepare "$CHECKOUT"
+./docker/build --dependencies --sbx
+TEMPLATE=$(./docker/build --dependencies --sbx --print-tag)
+ARGS=(--env-arg name=finn-dev \
+  --env-arg workspace="$CHECKOUT" --env-arg template="$TEMPLATE")
+sbx env plan "${ARGS[@]}" "${FILES[@]}"
+sbx env create "${ARGS[@]}" "${FILES[@]}"
 ```
 
-Use `/tmp/finn-dev/bin/python` or its console scripts in later native exec calls.
-The environment's lifetime owns this temporary venv. Select additional dependency
-checkouts with separate `pip install -e` commands; no nearby checkout is discovered.
-Use [the installation guide](../../docs/installation.md) for persistent writable
-locations and offline prerequisites. The Bash startup hook only integrates sbx's
-persistent environment; it does not activate FINN or source vendor settings.
+After native creation, explicitly prepare against the actual absolute mounted
+checkout path (the Docker `/workspace/finn` alias is not used):
+
+```bash
+sbx env exec "${ARGS[@]}" "${FILES[@]}" -- bash -c '
+  python -m venv "$HOME/.venvs/finn-dev" &&
+  "$HOME/.venvs/finn-dev/bin/python" -m pip install --no-index \
+    --find-links /opt/finn/wheels -r /opt/finn/development-requirements.txt &&
+  "$HOME/.venvs/finn-dev/bin/python" "$1/scripts/prepare-editables" "$1/editable-requirements.txt"
+' finn-prepare "$CHECKOUT"
+# Independent later execs reuse the environment; no pip commands run:
+sbx env exec "${ARGS[@]}" "${FILES[@]}" -- bash -c \
+  'exec "$HOME/.venvs/finn-dev/bin/python" -m finn.util.installation'
+sbx env exec "${ARGS[@]}" "${FILES[@]}" -- bash -c \
+  'exec "$HOME/.venvs/finn-dev/bin/build_dataflow" --help'
+```
+
+Use the selected Python path in editor/agent settings, or declare its directory
+first in native PATH configuration. For the image's `/home/agent` user that path
+is `/home/agent/.venvs/finn-dev/bin`. A user-owned overlay, added to `FILES`
+before native creation, can declare it for plain exec and editor/agent commands:
+
+```yaml
+env:
+  VIRTUAL_ENV: /home/agent/.venvs/finn-dev
+  PATH: /home/agent/.venvs/finn-dev/bin:/usr/local/share/npm-global/bin:/usr/local/lib/finn/toolchain-bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+# For explicitly co-developed QONNX, add its actual host path:
+additionalWorkspaces:
+  - path: /absolute/path/to/qonnx
+    readOnly: false
+```
+
+Shell startup never installs packages.
+Select additional dependency checkouts in `editable-requirements.txt`, mount their
+paths and rerun `scripts/prepare-editables`. Native composition, lifecycle,
+network and credential handling stay with sbx. Deleting the sandbox deletes its
+private venv; recreate and prepare it
+again. For longer lifetime, explicitly mount a user-owned environment directory
+at a stable sandbox path, separately from source and artifacts. Recreate it when
+the selected base/Python ABI changes. See [installation](../../docs/installation.md).

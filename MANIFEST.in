@@ -9,15 +9,15 @@ global-exclude *_tb.v *_tb.sv
 prune finn_xsi/testcase
 
 # Keep source archives free of resource test fixtures as well.
-prune finn-rtllib/axi/sim
-prune finn-rtllib/dwc/sim
-prune finn-rtllib/layernorm/tb
-prune finn-rtllib/memstream/sim
-prune finn-rtllib/mvu/tb
-prune finn-rtllib/mvu_tiled/tb
-prune finn-rtllib/requant/sim
-prune finn-rtllib/stream_tap/tb
-prune finn-rtllib/thresholding/sim
+prune src/finn/_data/rtllib/axi/sim
+prune src/finn/_data/rtllib/dwc/sim
+prune src/finn/_data/rtllib/layernorm/tb
+prune src/finn/_data/rtllib/memstream/sim
+prune src/finn/_data/rtllib/mvu/tb
+prune src/finn/_data/rtllib/mvu_tiled/tb
+prune src/finn/_data/rtllib/requant/sim
+prune src/finn/_data/rtllib/stream_tap/tb
+prune src/finn/_data/rtllib/thresholding/sim
 prune src/finn/qnn-data/build_dataflow
 prune src/finn/qnn-data/cifar10
 prune src/finn/qnn-data/cybsec-mlp

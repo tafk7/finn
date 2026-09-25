@@ -13,7 +13,7 @@ The finn_xsi extension must be built separately using the setup command.
 
 Usage:
     # Check if XSI support is available
-    from finn import xsi
+    from finn import xsi  # noqa: PLC0415
     if xsi.is_available():
         import finn_xsi.adapter
 """
@@ -106,6 +106,10 @@ _ADAPTER_FUNCTIONS = [
 
 def __getattr__(name: str) -> Any:
     """Dynamically wrap finn_xsi.adapter functions."""
+    if name in {"locate_glbl", "compile_sim_obj", "get_simkernel_so"}:
+        from finn.xsi import compile as compilation  # noqa: PLC0415
+
+        return getattr(compilation, name)
     if name in _ADAPTER_FUNCTIONS:
 
         def wrapper(*args, **kwargs):

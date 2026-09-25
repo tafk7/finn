@@ -29,6 +29,7 @@
 import errno
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -233,7 +234,8 @@ class CppBuilder:
     """Builds the g++ compiler command to produces the executable of the c++ code
     in code_gen_dir which is passed to the function build() of this class."""
 
-    def __init__(self):
+    def __init__(self, toolchain=None):
+        self.toolchain = toolchain
         self.include_paths = []
         self.cpp_files = []
         self.executable_path = ""
@@ -241,39 +243,32 @@ class CppBuilder:
         self.compile_components = []
         self.compile_script = ""
 
-    def append_includes(self, library_path):
-        """Adds given library path to include_paths list."""
-        self.include_paths.append(library_path)
+    def append_includes(self, flags):
+        """Append argv flags, or a shell-quoted flag string for existing callers."""
+        self.include_paths.extend(shlex.split(flags) if isinstance(flags, str) else flags)
 
     def append_sources(self, cpp_file):
-        """Adds given c++ file to cpp_files list."""
-        self.cpp_files.append(cpp_file)
+        """Append one literal source path; callers expand source globs explicitly."""
+        self.cpp_files.append(os.fspath(cpp_file))
 
     def set_executable_path(self, path):
-        """Sets member variable "executable_path" to given path."""
-        self.executable_path = path
+        self.executable_path = os.fspath(path)
 
-    def build(self, code_gen_dir):
-        """Builds the g++ compiler command according to entries in include_paths
-        and cpp_files lists. Saves it in bash script in given folder and
-        executes it."""
-        # raise error if includes are empty
-        self.code_gen_dir = code_gen_dir
-        self.compile_components.append("g++ -o " + str(self.executable_path))
-        for cpp_file in self.cpp_files:
-            self.compile_components.append(cpp_file)
-        for lib in self.include_paths:
-            self.compile_components.append(lib)
-        bash_compile = ""
-        for component in self.compile_components:
-            bash_compile += str(component) + " "
-        self.compile_script = str(self.code_gen_dir) + "/compile.sh"
-        with open(self.compile_script, "w") as f:
-            f.write("#!/bin/bash \n")
-            f.write(bash_compile + "\n")
-        bash_command = ["bash", self.compile_script]
-        process_compile = subprocess.Popen(bash_command, stdout=subprocess.PIPE)
-        process_compile.communicate()
+    def build(self, code_gen_dir, *, timeout=None, cancel=None):
+        """Compile with argv, explicit cwd/environment, checked status and replay logs."""
+        self.code_gen_dir = os.fspath(code_gen_dir)
+        self.compile_script = os.path.join(self.code_gen_dir, "compile.sh")
+        toolchain = self.toolchain or Selection().prepare()
+        args = ["-o", self.executable_path, *self.cpp_files, *self.include_paths]
+        self.compile_components = toolchain.command("g++", *args)
+        return toolchain.run(
+            "g++",
+            args,
+            cwd=self.code_gen_dir,
+            replay=self.compile_script,
+            timeout=timeout,
+            cancel=cancel,
+        )
 
 
 def launch_process_helper(args, proc_env=None, cwd=None, check=False, timeout=None, cancel=None):

@@ -26,7 +26,7 @@ def test_default_is_the_docker_dev_environment():
     assert data["runtimes"] == ""
     assert "deps" not in data
     assert data["operation"] == "run"
-    assert data["image_revision"].startswith("env-")
+    assert data["image_revision"].startswith("app-")
     assert (
         data["source_revision"]
         == subprocess.run(
@@ -82,8 +82,26 @@ def test_build_defaults_to_the_docker_image():
     assert data["artifact"] == "docker"
     assert data["bake_target"] == "finn"
     assert data["output"] == ""
-    assert data["image_revision"].startswith("env-")
+    assert data["image_revision"].startswith("app-")
     assert data["source_revision"]
+
+
+def test_explicit_dependency_artifact_with_runtime_and_transport():
+    for path, options, target in (
+        (RUN, [], "finn-dependencies-runtime"),
+        (BUILD, [], "finn-dependencies-runtime"),
+        (BUILD, ["--sbx"], "finn-dependencies-sbx-runtime"),
+        (BUILD, ["--export-sif", "dev.sif"], "finn-dependencies-runtime"),
+    ):
+        proc = invoke(path, "--dependencies", "--runtime", "xrt", *options, "--print")
+        assert proc.returncode == 0, proc.stderr
+        data = assignments(proc.stdout)
+        assert data["package_artifact"] == "dependencies"
+        assert data["bake_target"] == target
+        assert data["image_revision"] == data["dependency_revision"]
+        assert data["image_revision"].startswith("deps-")
+        assert data["application_revision"].startswith("app-")
+        assert data["runtimes"] == "xrt"
 
 
 def test_build_can_prepare_the_sbx_variant():
@@ -246,7 +264,7 @@ Path(sys.argv[3]).write_text("sif")
 def test_public_image_reference_matches_bake():
     proc = invoke(BUILD, "--sbx", "--runtime", "xrt", "--print-tag")
     assert proc.returncode == 0, proc.stderr
-    assert proc.stdout.strip().startswith("xilinx/finn:sbx-env-")
+    assert proc.stdout.strip().startswith("xilinx/finn:sbx-app-")
     assert proc.stdout.strip().endswith(".xrt")
 
 

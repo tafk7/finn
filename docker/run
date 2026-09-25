@@ -40,6 +40,7 @@ run_docker () {
     # compose cannot conditionally omit a bind mount and a `${VAR:-/dev/null}`
     # placeholder is worse than an explicit flag.
     RUN_OPTS=()
+    for volume in "${VOLUMES[@]}"; do RUN_OPTS+=(--volume "$volume"); done
     [ "$FINN_DOCKER_RUN_AS_ROOT" = "1" ] && RUN_OPTS+=(--user 0:0)
     [ -z "${FINN_CONTAINER_NAME:-}" ] || RUN_OPTS+=(--name "$FINN_CONTAINER_NAME")
     if [ -n "$FINN_SSH_KEY_DIR" ] && [ -d "$FINN_SSH_KEY_DIR" ]; then
@@ -106,6 +107,9 @@ Usage: docker/run [OPTIONS] [-- COMMAND...]
 Options:
   -n, --name NAME    set the Docker container name
   --fpga             grant access to the configured Xilinx toolchain
+  --dependencies     select the dependency artifact for explicit development setup
+  --venv PATH        mount an existing host environment directory at /env/venv
+  --volume SPEC      pass an explicit Compose volume (repeatable)
   --runtime NAME     add image content such as xrt; repeatable
   --notebook         start the Docker notebook service
   --rebuild          rebuild image layers without cache
@@ -123,6 +127,8 @@ PRINT_ONLY=0
 INSTANCE_NAME=""
 NAME_EXPLICIT=0
 RUNTIMES="${FINN_RUNTIMES:-}"
+export FINN_ARTIFACT=application
+VOLUMES=()
 
 
 while [ "$#" -gt 0 ]; do
@@ -132,6 +138,13 @@ while [ "$#" -gt 0 ]; do
             INSTANCE_NAME=$2; NAME_EXPLICIT=1; shift 2 ;;
         --name=*) INSTANCE_NAME=${1#*=}; NAME_EXPLICIT=1; shift ;;
         --fpga) FPGA=1; shift ;;
+        --dependencies) export FINN_ARTIFACT=dependencies; shift ;;
+        --venv)
+            [ "$#" -ge 2 ] || { echo "--venv needs a host directory" >&2; exit 2; }
+            export FINN_DEV_ENVIRONMENT="$2"; shift 2 ;;
+        --volume)
+            [ "$#" -ge 2 ] || { echo "--volume needs a mount specification" >&2; exit 2; }
+            VOLUMES+=("$2"); shift 2 ;;
         --runtime)
             [ "$#" -ge 2 ] || { echo "--runtime needs a value" >&2; exit 2; }
             RUNTIMES="${RUNTIMES:+$RUNTIMES,}$2"; shift 2 ;;
@@ -159,6 +172,10 @@ if [ "$NOTEBOOK" = 1 ] && [ "$#" -gt 0 ]; then
     echo "--notebook does not accept a command" >&2
     exit 2
 fi
+if [ "$NOTEBOOK" = 1 ] && [ "${#VOLUMES[@]}" -gt 0 ]; then
+    echo "--notebook volumes belong in a Compose override; --volume applies to run" >&2
+    exit 2
+fi
 if [ "${FINN_CONTAINER_REBUILD:-0}" = 1 ] && [ "${FINN_CONTAINER_NO_BUILD:-0}" = 1 ]; then
     echo "--rebuild and --no-build are mutually exclusive" >&2
     exit 2
@@ -182,6 +199,9 @@ if [ "$PRINT_ONLY" = 1 ]; then
     printf 'tier=%s\n' "$TIER"
     printf 'runtimes=%s\n' "$RUNTIMES"
     printf 'bake_target=%s\n' "$target"
+    printf 'package_artifact=%s\n' "$FINN_ARTIFACT"
+    printf 'dependency_revision=%s\n' "$FINN_DEPENDENCY_REVISION"
+    printf 'application_revision=%s\n' "$FINN_APPLICATION_REVISION"
     printf 'image_revision=%s\n' "$FINN_IMAGE_REVISION"
     printf 'source_revision=%s\n' "$FINN_SOURCE_REVISION"
     printf 'source_describe=%s\n' "$FINN_SOURCE_DESCRIBE"

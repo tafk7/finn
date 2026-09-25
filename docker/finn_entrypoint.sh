@@ -28,25 +28,16 @@
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-# Runtime-only setup: arbitrary UIDs, writable home, scratch and optional Tcl.
+# Runtime-private home and process identity only; no installation or tool activation.
 set -e
 if [ -z "${HOME:-}" ] || [ "$HOME" = / ] || ! mkdir -p "$HOME" 2>/dev/null || [ ! -w "$HOME" ]; then
-    export HOME=/tmp/home_dir
+    HOME="/tmp/finn-home-$(id -u)"
+    export HOME
 fi
 mkdir -p "$HOME"
 export USER="${USER:-$(id -un 2>/dev/null || echo finn)}"
 export LOGNAME="${LOGNAME:-$USER}"
 export PATH="$PATH:$HOME/.local/bin"
 
-# Tool commands initialize through the shared shell hook or bare-exec shim.
-# Preserve optional mounted beta-device Tcl initialization across starts.
-if [ -n "${FINN_SITE_TCL_DIR:-}" ] && [ -d "$FINN_SITE_TCL_DIR" ]; then
-    mkdir -p "$HOME/.Xilinx"
-    for script in HLS_init.tcl Vivado/Vivado_init.tcl; do
-        if [ -f "$FINN_SITE_TCL_DIR/$script" ]; then
-            mkdir -p "$(dirname "$HOME/.Xilinx/$script")"
-            cp "$FINN_SITE_TCL_DIR/$script" "$HOME/.Xilinx/$script"
-        fi
-    done
-fi
+# Site Tcl files are explicit mounts into the selected user's .Xilinx directory.
 exec "$@"

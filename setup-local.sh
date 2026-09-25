@@ -45,7 +45,7 @@ export FINN_ROOT="$SCRIPTPATH"
 SKIP_XSI=0
 SKIP_DEPS=0
 CHECK_ONLY=0
-VENV_DIR="$FINN_ROOT/.venv"
+VENV_DIR="${FINN_VENV:-$FINN_ROOT/.venv}"
 
 # Parse arguments
 print_usage() {
@@ -205,7 +205,7 @@ source "$VENV_DIR/bin/activate"
 gecho "  Activated virtual environment"
 
 # Upgrade pip and install essential build tools
-python -m pip install --upgrade pip setuptools wheel > /dev/null
+python -m pip install -r "$FINN_ROOT/docker/requirements-build.txt" > /dev/null
 gecho "  Upgraded pip, setuptools, wheel"
 
 echo ""
@@ -223,35 +223,13 @@ gecho "  Installed PyTorch (CPU)"
 python -m pip install -r "${FINN_ROOT}/requirements.txt" -r "$PIN_DIR/requirements-dev.txt"
 gecho "  Installed FINN and development requirements"
 
-# Install qonnx (with pyproject.toml workaround)
-# See: https://github.com/pypa/pip/issues/7953
-QONNX_PYPROJECT="${FINN_ROOT}/deps/qonnx/pyproject.toml"
-QONNX_PYPROJECT_TMP="${FINN_ROOT}/deps/qonnx/pyproject.tmp"
-if [ ! -f "$QONNX_PYPROJECT" ] && [ -f "$QONNX_PYPROJECT_TMP" ]; then
-    mv "$QONNX_PYPROJECT_TMP" "$QONNX_PYPROJECT"
-fi
-if [ -f "$QONNX_PYPROJECT" ]; then
-    mv "$QONNX_PYPROJECT" "$QONNX_PYPROJECT_TMP"
-    trap 'mv "$QONNX_PYPROJECT_TMP" "$QONNX_PYPROJECT"' EXIT
-    python -m pip install -e "${FINN_ROOT}/deps/qonnx"
-    mv "$QONNX_PYPROJECT_TMP" "$QONNX_PYPROJECT"
-    trap - EXIT
-else
-    python -m pip install -e "${FINN_ROOT}/deps/qonnx"
-fi
-gecho "  Installed qonnx"
-
-# Install finn-experimental (use --no-build-isolation to avoid pkg_resources issues)
-python -m pip install --no-build-isolation -e "${FINN_ROOT}/deps/finn-experimental"
-gecho "  Installed finn-experimental"
-
-# Install brevitas
-python -m pip install -e "${FINN_ROOT}/deps/brevitas"
-gecho "  Installed brevitas"
-
-# Install FINN itself
-python -m pip install --use-pep517 -e "${FINN_ROOT}"
-gecho "  Installed finn"
+# Install the explicitly selected checkouts with their prepared PEP 517 backends.
+# No pyproject renames or import hooks are needed.
+python -m pip install --use-pep517 --no-build-isolation \
+    -e "${FINN_ROOT}/deps/qonnx" -e "${FINN_ROOT}/deps/finn-experimental" \
+    -e "${FINN_ROOT}/deps/brevitas" -e "${FINN_ROOT}/deps/dataset_loading" \
+    -e "${FINN_ROOT}"
+gecho "  Installed selected dependency checkouts and FINN"
 
 python -m pip check
 gecho "  Dependency metadata is consistent"
@@ -319,12 +297,10 @@ echo ""
 if [ "$SKIP_XSI" -eq 0 ] && [ "$XILINX_AVAILABLE" -eq 1 ]; then
     gecho "Step 6: Building finn_xsi..."
 
-    if python -m finn.xsi.setup --check >/dev/null 2>&1; then
-        gecho "  Found existing finn_xsi build artifact"
-    else
-        python -m finn.xsi.setup --quiet
-        gecho "  finn_xsi built successfully"
-    fi
+    # Setup checks/reuses a working extension and builds a missing one.
+    # --check only validates prerequisites; it cannot prove a build exists.
+    python -m finn.xsi.setup
+    gecho "  finn_xsi setup and verification completed"
 elif [ "$SKIP_XSI" -eq 1 ]; then
     yecho "Step 6: Skipping finn_xsi build (--skip-xsi)"
 else

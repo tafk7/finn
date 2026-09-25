@@ -17,17 +17,19 @@ Usage:
 Options:
     --force    Force rebuild even if already built
     --clean    Clean build artifacts
-    --check    Only check if build is needed
+    --check    Only check build prerequisites; does not inspect the extension
 """
 
 import argparse
 import os
 import shutil
-import subprocess
 import sys
 import sysconfig
+from pathlib import Path
 from typing import List, Tuple
 
+from finn.util._toolchain import Selection, run_process
+from finn.xsi._artifacts import tool_identity, validate_record, write_record
 from finn.xsi.paths import find_xsi_so, xsi_artifact_dir, xsi_source_dir
 
 
@@ -118,6 +120,8 @@ def build_xsi(force: bool = False, verbose: bool = True) -> bool:
     """
     xsi_path = xsi_source_dir()
     out_dir = xsi_artifact_dir()
+    toolchain = Selection().prepare()
+    identity = tool_identity(toolchain)
 
     if not xsi_path.exists():
         print(f"Error: finn_xsi source not found at {xsi_path}")
@@ -126,6 +130,11 @@ def build_xsi(force: bool = False, verbose: bool = True) -> bool:
     # Check if already built
     if not force:
         xsi_so = find_xsi_so()
+        if xsi_so is not None:
+            try:
+                validate_record(xsi_so, kind="bridge", tool=identity)
+            except (OSError, ValueError, KeyError):
+                xsi_so = None
         if xsi_so is not None:
             # Try importing to see if it works
             sys.path.insert(0, str(xsi_so.parent))
@@ -174,7 +183,7 @@ def build_xsi(force: bool = False, verbose: bool = True) -> bool:
         print(f"Build command: {' '.join(cmd)}")
 
     # Run the compilation
-    result = subprocess.run(cmd, cwd=xsi_path, capture_output=True, text=True)
+    result = run_process(cmd, cwd=xsi_path, env=toolchain.environment, check=False)
 
     if result.returncode != 0:
         print("Build failed!")
@@ -195,6 +204,14 @@ def build_xsi(force: bool = False, verbose: bool = True) -> bool:
 
     if verbose:
         print("Build completed successfully.")
+    sources = [xsi_path / name for name in source_files] + list(xsi_path.glob("*.hpp"))
+    sources += [
+        path
+        for directory in include_dirs
+        for path in Path(directory).rglob("*")
+        if path.suffix in {".h", ".hpp"} and path.is_file()
+    ]
+    write_record(out_dir / "xsi.so", kind="bridge", tool=identity, sources=sources, arguments=cmd)
     return True
 
 
@@ -237,7 +254,7 @@ def clean_build() -> bool:
     """Clean build artifacts."""
     # Only clean the explicitly writable artifact directory.
     removed = False
-    for xsi_so in (xsi_artifact_dir() / "xsi.so",):
+    for xsi_so in (xsi_artifact_dir() / "xsi.so", xsi_artifact_dir() / "xsi.so.finn.json"):
         if not xsi_so.exists():
             continue
         try:

@@ -29,9 +29,6 @@
 import glob
 import numpy as np
 import os
-import re
-import shlex
-import subprocess
 import warnings
 from abc import ABC, abstractmethod
 from qonnx.core.datatype import DataType
@@ -39,12 +36,14 @@ from qonnx.core.datatype import DataType
 from finn import xsi
 from finn.custom_op.fpgadataflow import templates
 from finn.util._legacy_build_env import external_path
+from finn.util._legacy_build_env import toolchain as legacy_toolchain
+from finn.util._toolchain import run_process
 from finn.util.basic import CppBuilder, make_build_dir
 from finn.util.data_packing import npy_to_rtlsim_input, rtlsim_output_to_npy
 from finn.util.hls import CallHLS
 from finn.util.resources import resource_path, tcl_quote
 
-finnxsi = xsi if xsi.is_available() else None
+finnxsi = xsi  # Native prerequisites are checked when simulation is requested.
 
 
 class HLSBackend(ABC):
@@ -254,36 +253,49 @@ class HLSBackend(ABC):
         cmd = ["create_bd_cell -type ip -vlnv %s %s" % (vlnv, self.onnx_node.name)]
         return cmd
 
-    def compile_singlenode_code(self):
+    def compile_singlenode_code(self, toolchain=None, hls_path=None):
         """Builds the bash script for compilation using the CppBuilder from
         finn.util.basic and executes the script to produce the executable."""
         code_gen_dir = self.get_nodeattr("code_gen_dir_cppsim")
-        vivado_path = os.environ.get("XILINX_VIVADO")
-        # xsi kernel lib name depends on Vivado version (renamed in 2024.2)
-        match = re.search(r"\b(20\d{2})\.(1|2)\b", vivado_path)
-        year, minor = int(match.group(1)), int(match.group(2))
-        if (year, minor) < (2024, 2):
-            hls_path = os.environ["HLS_PATH"]
-        else:
-            hls_path = os.environ["VITIS_PATH"]
-        builder = CppBuilder()
-        # to enable additional debug features please uncommand the next line
-        # builder.append_includes("-DDEBUG")
-        builder.append_includes("-I" + shlex.quote(resource_path("qnn-data", "cpp")))
-        builder.append_includes("-I" + shlex.quote(external_path("hlslib")))
-        builder.append_includes("-I" + shlex.quote(resource_path("custom_hls")))
-        builder.append_includes(f"-I{hls_path}/include")
-        builder.append_includes("--std=c++17")
-        builder.append_includes("-O3")
-        builder.append_sources(code_gen_dir + "/*.cpp")
-        builder.append_sources(shlex.quote(resource_path("qnn-data", "cpp/cnpy.cpp")))
-        builder.append_includes("-lz")
-        builder.append_includes("-fno-builtin -fno-inline")
-        builder.append_includes(f'-Wl,-rpath,"{hls_path}/lnx64/lib/csim"')
-        builder.append_includes(f"-L{hls_path}/lnx64/lib/csim -lhlsmc++-GCC46")
-        builder.append_includes(f'-Wl,-rpath,"{hls_path}/lnx64/tools/fpo_v7_1"')
-        builder.append_includes(f"-L{hls_path}/lnx64/tools/fpo_v7_1 -lgmp -lmpfr")
-        builder.append_includes("-lIp_floating_point_v7_1_bitacc_cmodel")
+        toolchain = toolchain or legacy_toolchain()
+        environment = toolchain.environment
+        hls_path = hls_path or next(
+            (
+                environment[k]
+                for k in ("XILINX_HLS", "HLS_PATH", "XILINX_VITIS", "VITIS_PATH")
+                if environment.get(k)
+            ),
+            None,
+        )
+        if not hls_path:
+            raise RuntimeError(
+                "Select the HLS installation providing C++ simulation headers/libraries"
+            )
+        builder = CppBuilder(toolchain=toolchain)
+        builder.append_includes(
+            [
+                "-I" + resource_path("qnn-data", "cpp"),
+                "-I" + external_path("hlslib"),
+                "-I" + resource_path("custom_hls"),
+                "-I" + hls_path + "/include",
+                "--std=c++17",
+                "-O3",
+                "-lz",
+                "-fno-builtin",
+                "-fno-inline",
+                "-Wl,-rpath," + hls_path + "/lnx64/lib/csim",
+                "-L" + hls_path + "/lnx64/lib/csim",
+                "-lhlsmc++-GCC46",
+                "-Wl,-rpath," + hls_path + "/lnx64/tools/fpo_v7_1",
+                "-L" + hls_path + "/lnx64/tools/fpo_v7_1",
+                "-lgmp",
+                "-lmpfr",
+                "-lIp_floating_point_v7_1_bitacc_cmodel",
+            ]
+        )
+        for source in sorted(glob.glob(os.path.join(code_gen_dir, "*.cpp"))):
+            builder.append_sources(source)
+        builder.append_sources(resource_path("qnn-data", "cpp/cnpy.cpp"))
         builder.set_executable_path(code_gen_dir + "/node_model")
         builder.build(code_gen_dir)
         self.set_nodeattr("executable_path", builder.executable_path)
@@ -298,7 +310,7 @@ class HLSBackend(ABC):
             exp_shape = self.get_normal_output_shape(o)
             context[outp] = output.reshape(exp_shape)
 
-    def exec_precompiled_singlenode_model(self):
+    def exec_precompiled_singlenode_model(self, toolchain=None):
         """Executes precompiled executable."""
         executable_path = self.get_nodeattr("executable_path")
         if executable_path == "":
@@ -308,8 +320,11 @@ Found no executable for this node, did you run the codegen and
 compilation transformations?
             """
             )
-        process_execute = subprocess.Popen(executable_path, stdout=subprocess.PIPE)
-        process_execute.communicate()
+        run_process(
+            [*(toolchain.selection.launcher if toolchain else ()), executable_path],
+            cwd=self.get_nodeattr("code_gen_dir_cppsim"),
+            env=toolchain.environment if toolchain else None,
+        )
 
     def fold_input_for_npy(self, inp_val, ind):
         """Lay an input tensor out into the folded shape written to the npy that

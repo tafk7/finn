@@ -405,12 +405,14 @@ def test_05_copied_native_examples(docker_daemon, tmp_path, agent, fpga):
     assert not any(item["name"] == name for item in inventory)
 
 
-def test_05b_sbx_template_identity_ignores_source_commit(tmp_path):
+def test_05b_dependency_sbx_identity_ignores_mounted_source_commit(tmp_path):
     """Image preparation identity stays independent of mounted-source commits."""
     checkout = tmp_path / "checkout"
     run(["git", "clone", "--shared", REPO, checkout], check=True)
     # Compare two commits within the same isolated checkout; never set repository config.
-    before = run([checkout / "docker/build", "--sbx", "--print"], cwd=checkout, check=True)
+    environment = {**os.environ, "FINN_SOURCE_ROOT": str(checkout)}
+    command = [REPO / "docker/build", "--dependencies", "--sbx", "--print"]
+    before = run(command, env=environment, check=True)
     run(
         [
             "git",
@@ -426,7 +428,7 @@ def test_05b_sbx_template_identity_ignores_source_commit(tmp_path):
         cwd=checkout,
         check=True,
     )
-    after = run([checkout / "docker/build", "--sbx", "--print"], cwd=checkout, check=True)
+    after = run(command, env=environment, check=True)
     before = dict(line.split("=", 1) for line in before.stdout.splitlines())
     after = dict(line.split("=", 1) for line in after.stdout.splitlines())
     assert before["image_revision"] == after["image_revision"]

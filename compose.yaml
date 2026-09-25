@@ -13,12 +13,7 @@
 x-image: &image
   image: ${FINN_IMAGE:-xilinx/finn:local}
   platform: linux/amd64
-  build:
-    context: .
-    dockerfile: docker/Dockerfile.finn
-    target: runtime
-    args:
-      FINN_RUNTIMES: ${FINN_RUNTIMES:-}
+  # Images are prepared by Bake through docker/build or docker/run.
 
 x-common: &common
   <<: *image

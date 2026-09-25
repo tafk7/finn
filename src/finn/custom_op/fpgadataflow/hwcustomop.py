@@ -37,7 +37,7 @@ from finn import xsi
 from finn.util.basic import get_watchdog_timeout_cycles, is_versal
 from finn.util.resources import resource_path
 
-finnxsi = xsi if xsi.is_available() else None
+finnxsi = xsi  # Native prerequisites are checked when simulation is requested.
 
 
 class HWCustomOp(CustomOp):

@@ -1,0 +1,5 @@
+# Source projects selected by explicit development preparation.
+# Paths are relative to this file when using scripts/prepare-editables.
+-e .
+# To co-develop a dependency, add its selected path, for example:
+# -e ../qonnx

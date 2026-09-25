@@ -8,7 +8,7 @@ import shutil
 import signal
 import subprocess
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
 
@@ -69,7 +69,7 @@ def run_process(argv, *, env=None, cwd=None, timeout=None, cancel=None, check=Tr
         except ProcessLookupError:
             pass
         out, err = proc.communicate()
-        if isinstance(exc, subprocess.TimeoutExpired):
+        if isinstance(exc, (subprocess.TimeoutExpired, InterruptedError, KeyboardInterrupt)):
             exc.output, exc.stderr = out, err
         _LOG.warning(
             "command stopped duration=%.3fs result=%s",
@@ -103,6 +103,7 @@ class Selection:
     def __post_init__(self):
         object.__setattr__(self, "settings", tuple(map(os.fspath, self.settings)))
         object.__setattr__(self, "launcher", tuple(map(os.fspath, self.launcher)))
+        object.__setattr__(self, "command_dir", os.fspath(self.command_dir))
         if self.launcher and self.settings:
             raise ValueError(
                 "Site routes own activation; do not combine launcher and local settings"
@@ -159,7 +160,7 @@ class Selection:
 @dataclass(frozen=True)
 class Toolchain:
     selection: Selection
-    environment: object
+    environment: object = field(repr=False)
 
     def __post_init__(self):
         object.__setattr__(
@@ -182,23 +183,49 @@ class Toolchain:
             )
         return [*selection.launcher, executable, *map(os.fspath, args)]
 
-    def run(self, tool, args=(), *, cwd=None, env=None, timeout=None, cancel=None, check=True):
+    def run(
+        self,
+        tool,
+        args=(),
+        *,
+        cwd=None,
+        env=None,
+        timeout=None,
+        cancel=None,
+        check=True,
+        replay=None,
+    ):
         environment = dict(self.environment)
         environment.update({} if env is None else dict(env))
+        command = self.command(tool, *args)
+        if replay is not None:
+            # Replay in the same prepared environment; never persist its secrets.
+            Path(replay).write_text(
+                "#!/bin/bash\nset -e\n"
+                + ("cd -- " + shlex.quote(os.fspath(cwd)) + "\n" if cwd is not None else "")
+                + "exec "
+                + shlex.join(command)
+                + "\n"
+            )
         _LOG.info(
             "route=%s settings=%s tool=%s",
             self.selection.launcher or "local",
             self.selection.settings or "configured environment",
             tool,
         )
-        return run_process(
-            self.command(tool, *args),
-            env=environment,
-            cwd=cwd,
-            timeout=timeout,
-            cancel=cancel,
-            check=check,
-        )
+        try:
+            result = run_process(
+                command, env=environment, cwd=cwd, timeout=timeout, cancel=cancel, check=check
+            )
+        except (subprocess.SubprocessError, InterruptedError, KeyboardInterrupt) as exc:
+            if replay is not None:
+                Path(str(replay) + ".stdout.log").write_bytes(getattr(exc, "output", None) or b"")
+                Path(str(replay) + ".stderr.log").write_bytes(getattr(exc, "stderr", None) or b"")
+            raise
+        if replay is not None:
+            Path(str(replay) + ".stdout.log").write_bytes(result.stdout)
+            Path(str(replay) + ".stderr.log").write_bytes(result.stderr)
+        return result
 
     def probe(self, tool, timeout=10):
         """Query identity through exactly the execution route. Not a licence test."""

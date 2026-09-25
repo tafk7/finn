@@ -20,9 +20,6 @@
 !README.md
 !LICENSE.txt
 !src/
-!finn-rtllib/
-!custom_hls/
-!finn_xsi/
 **/__pycache__/
 **/*.pyc
 **/*.so

@@ -23,6 +23,153 @@ def executable(path, body):
     return path
 
 
+def test_cpp_builder_argv_and_failures(tmp_path):
+    from finn.util.basic import CppBuilder  # noqa: PLC0415
+
+    tools = tmp_path / "tool dir"
+    tools.mkdir()
+    log = tmp_path / "compiler.json"
+    executable(
+        tools / "g++",
+        "import json,sys\n" + f"open({str(log)!r}, 'w').write(json.dumps(sys.argv[1:]))\n",
+    )
+    tc = Selection(command_dir=str(tools)).prepare()
+    builder = CppBuilder(toolchain=tc)
+    source = tmp_path / "source $ (literal).cpp"
+    source.write_text("int main() { return 0; }\n")
+    builder.append_sources(source)
+    builder.append_includes(["-I" + str(tmp_path / "headers $ [1]"), "-O3"])
+    builder.set_executable_path(tmp_path / "result program")
+    builder.build(tmp_path)
+    assert json.loads(log.read_text()) == [
+        "-o",
+        str(tmp_path / "result program"),
+        str(source),
+        "-I" + str(tmp_path / "headers $ [1]"),
+        "-O3",
+    ]
+    executable(tools / "g++", 'import sys; print("compile failed"); sys.exit(17)\n')
+    with pytest.raises(subprocess.CalledProcessError) as exc:
+        builder.build(tmp_path)
+    assert exc.value.returncode == 17
+    assert "compile failed" in (tmp_path / "compile.sh.stdout.log").read_text()
+
+
+def test_zynq_and_vitis_direct_operations_preserve_scope(tmp_path, monkeypatch):
+    import onnx.helper as oh  # noqa: PLC0415
+    from qonnx.core.modelwrapper import ModelWrapper  # noqa: PLC0415
+
+    from finn.transformation.fpgadataflow import (  # noqa: PLC0415
+        alveo_build,
+        make_zynq_proj,
+    )
+
+    project = tmp_path / "project $ [1]"
+    project.mkdir()
+    tools = tmp_path / "tools"
+    tools.mkdir()
+    log = tmp_path / "calls.jsonl"
+    body = (
+        "import sys,json; from pathlib import Path\n"
+        f"with open({str(log)!r}, 'a') as f: f.write(json.dumps(sys.argv[1:])+'\\n')\n"
+        "if '-version' in sys.argv: print('AMD Vivado v2024.2'); sys.exit(0)\n"
+        "for name in ['finn_zynq_link.runs/impl_1/top_wrapper.bit', "
+        "'finn_zynq_link.gen/sources_1/bd/top/hw_handoff/top.hwh', "
+        "'kernel.xo', 'a.xclbin', 'synth_report.xml']:\n"
+        " p=Path(name); p.parent.mkdir(parents=True,exist_ok=True); p.write_text('artifact')\n"
+    )
+    executable(tools / "vivado", body)
+    executable(tools / "v++", body)
+    wrapper = tmp_path / "site wrapper"
+    wrapper.write_text('#!/bin/bash\nexec "$@"\n')
+    wrapper.chmod(0o755)
+    tc = Selection(command_dir=str(tools), launcher=(str(wrapper),)).prepare(
+        {
+            "PATH": os.defpath,
+            "XILINX_VITIS": "/selected/vitis",
+            "XILINX_XRT": "/selected/xrt",
+            "PLATFORM_REPO_PATHS": "/selected/platforms",
+        }
+    )
+    monkeypatch.setattr(make_zynq_proj, "make_build_dir", lambda **_: str(project))
+    monkeypatch.setattr(alveo_build, "make_build_dir", lambda **_: str(project))
+    monkeypatch.setenv("FINN_BOARD_FILES_PATH", str(tmp_path))
+    before = dict(os.environ), os.getcwd()
+    model = ModelWrapper(oh.make_model(oh.make_graph([], "empty", [], [])))
+    make_zynq_proj.MakeZYNQProject("Pynq-Z1", 10, toolchain=tc).apply(model)
+    model.set_metadata_prop("vivado_stitch_proj", str(project))
+    model.set_metadata_prop(
+        "vivado_stitch_ifnames",
+        json.dumps(
+            {
+                "axilite": [],
+                "aximm": [],
+                "s_axis": [],
+                "m_axis": [],
+            }
+        ),
+    )
+    alveo_build.CreateVitisXO("kernel", toolchain=tc).apply(model)
+    alveo_build.VitisLink("platform $ literal", 10, toolchain=tc).apply(model)
+    calls = [json.loads(line) for line in log.read_text().splitlines()]
+    link = next(call for call in calls if "--link" in call)
+    assert link[link.index("--platform") + 1] == "platform $ literal"
+    assert (dict(os.environ), os.getcwd()) == before
+    for script in ("synth_project.sh", "gen_xo.sh", "run_vitis_link.sh", "gen_report_xml.sh"):
+        assert shlex.quote(str(wrapper)) in (project / script).read_text()
+
+
+def test_xelab_compiles_without_native_import(tmp_path):
+    from finn.xsi.compile import compile_sim_obj  # noqa: PLC0415
+
+    tools = tmp_path / "tools"
+    tools.mkdir()
+    executable(tools / "vivado", "print('AMD Vivado v2024.2')\n")
+    executable(
+        tools / "xelab",
+        "from pathlib import Path\n"
+        "p=Path('xsim.dir/top/xsimk.so'); p.parent.mkdir(parents=True); p.write_bytes(b'design')\n",
+    )
+    source = tmp_path / "input.sv"
+    source.write_text("module top(); endmodule\n")
+    modules = set(sys.modules)
+    directory, relative = compile_sim_obj(
+        "top",
+        [str(source)],
+        str(tmp_path),
+        toolchain=Selection(command_dir=str(tools)).prepare(),
+    )
+    assert Path(directory, relative).is_file()
+    assert Path(directory, relative + ".finn.json").is_file()
+    assert "xsi" not in set(sys.modules) - modules
+
+
+def test_xclbin_inspection_uses_selected_route(tmp_path, monkeypatch):
+    import onnx.helper as oh  # noqa: PLC0415
+    from qonnx.core.modelwrapper import ModelWrapper  # noqa: PLC0415
+
+    from finn.transformation.fpgadataflow import make_driver  # noqa: PLC0415
+
+    tool = executable(
+        tmp_path / "xclbinutil",
+        "import json,sys; from pathlib import Path\n"
+        "Path('argv.json').write_text(json.dumps(sys.argv[1:]))\n"
+        "Path('ip_layout.json').write_text(json.dumps({'ip_layout':{'m_ip_data':[]}}))\n",
+    )
+    tc = Selection(command_dir=str(tool.parent)).prepare()
+    model = ModelWrapper(oh.make_model(oh.make_graph([], "empty", [], [])))
+    bitfile = tmp_path / "kernel $ [1].xclbin"
+    bitfile.write_bytes(b"synthetic")
+    model.set_metadata_prop("bitfile", str(bitfile))
+    monkeypatch.setattr(
+        make_driver, "get_driver_shapes", lambda _: {"idma_names": [], "odma_names": []}
+    )
+    before = dict(os.environ), os.getcwd()
+    make_driver.MakeCPPDriver("vitis-xrt", "HEAD", toolchain=tc)._build_vitis_config(model)
+    assert json.loads((tmp_path / "argv.json").read_text())[1] == str(bitfile)
+    assert (dict(os.environ), os.getcwd()) == before
+
+
 def test_settings_are_scoped_and_disable_bash_startup(tmp_path, monkeypatch):
     bad = tmp_path / "bashenv"
     bad.write_text("echo startup-ran > " + shlex.quote(str(tmp_path / "bad")) + "\nexit 51\n")

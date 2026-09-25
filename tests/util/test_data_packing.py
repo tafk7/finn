@@ -101,8 +101,8 @@ def test_npy2apintstream(test_shape, dtype):
     with open(test_dir + "/test.cpp", "w") as f:
         f.write("\n".join(test_app_string))
     cmd_compile = """
-g++ -o test_npy2apintstream test.cpp $FINN_ROOT/src/finn/qnn-data/cpp/cnpy.cpp \
--I{}/include -I{}/include -I$FINN_ROOT/src/finn/qnn-data/cpp \
+g++ -o test_npy2apintstream test.cpp $FINN_ROOT/src/finn/_data/qnn-data/cpp/cnpy.cpp \
+-I{}/include -I{}/include -I$FINN_ROOT/src/finn/_data/qnn-data/cpp \
 -I$FINN_ROOT/deps/finn-hlslib \
 --std=c++17 -lz""".format(
         os.environ["HLS_PATH"], os.environ["VITIS_PATH"]

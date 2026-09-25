@@ -1,0 +1,63 @@
+#!/usr/bin/env python3
+"""Explicitly attach selected source projects to an already-prepared Python environment."""
+
+import argparse
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "requirements",
+        nargs="?",
+        default="editable-requirements.txt",
+        help="pip requirements file; local paths are relative to this file's directory",
+    )
+    args = parser.parse_args(argv)
+    requirements = Path(args.requirements).resolve()
+    if not requirements.is_file():
+        parser.error(f"Requirements file not found: {requirements}")
+
+    # Keep package selection in this explicit operation. User pip configuration
+    # must not redirect installation into a different prefix/target or user site.
+    environment = {key: value for key, value in os.environ.items() if not key.startswith("PIP_")}
+    environment.update(PIP_CONFIG_FILE=os.devnull, PIP_USER="false")
+    pip = [sys.executable, "-I", "-m", "pip", "--disable-pip-version-check", "--no-cache-dir"]
+    help_result = subprocess.run(
+        [*pip, "install", "--help"], env=environment, text=True, capture_output=True
+    )
+    if help_result.returncode:
+        print(help_result.stderr, file=sys.stderr, end="")
+        print(
+            "Select a prepared Python environment with pip and build requirements.", file=sys.stderr
+        )
+        return help_result.returncode
+
+    options = ["--no-index", "--no-deps", "--no-build-isolation"]
+    # Older supported pip needs this to select PEP 660 for setup.py projects.
+    # New pip uses PEP 517 unconditionally and has removed the switch.
+    if "--use-pep517" in help_result.stdout:
+        options.append("--use-pep517")
+    print(f"Preparing editables with {sys.executable}", flush=True)
+    result = subprocess.run(
+        [*pip, "install", *options, "-r", str(requirements)],
+        cwd=requirements.parent,
+        env=environment,
+    )
+    if result.returncode:
+        return result.returncode
+    result = subprocess.run([*pip, "check"], cwd=requirements.parent, env=environment)
+    if result.returncode:
+        print(
+            "The selected projects need a compatible dependency baseline; "
+            "preparation did not install or update their dependencies.",
+            file=sys.stderr,
+        )
+    return result.returncode
+
+
+if __name__ == "__main__":
+    sys.exit(main())

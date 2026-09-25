@@ -45,6 +45,8 @@ from string import Template
 from typing import Dict, Tuple
 
 import finn.util
+from finn.util._legacy_build_env import toolchain as legacy_toolchain
+from finn.util._toolchain import run_process
 from finn.util.basic import get_driver_shapes, make_build_dir
 from finn.util.data_packing import to_external_tensor
 from finn.util.resources import resource_path
@@ -134,9 +136,11 @@ class MakeCPPDriver(Transformation):
         self,
         platform: str,
         version: str,
+        toolchain=None,
     ):
         super().__init__()
         self.platform: str = platform
+        self.toolchain = toolchain
         assert platform in [
             "vitis-xrt",
             "slash-vrt",
@@ -157,11 +161,9 @@ class MakeCPPDriver(Transformation):
     # Get the base C++ driver repo
     def _run_command(self, command, cwd=None, debug=False):
         try:
-            result = subprocess.run(
-                shlex.split(command), cwd=cwd, check=True, text=True, capture_output=True
-            )
+            result = run_process(shlex.split(command), cwd=cwd)
             if debug:
-                print(result.stdout)  # Print the output for debugging purposes
+                print(result.stdout.decode(errors="replace"))
         except subprocess.CalledProcessError as e:
             print(f"Error running command: {command}")
             print(f"Output:{e.stdout}; Error:{e.stderr}")
@@ -176,14 +178,12 @@ class MakeCPPDriver(Transformation):
 
         # Path of the xclbin in the finn compiler project
         # Get kernel names using xclbinutil
-        if shutil.which("xclbinutil") is None:
-            raise RuntimeError(
-                "xclbinutil not in PATH or not installed.\
-                Required to read kernel names for driver config!"
-            )
-        self._run_command(
-            f"xclbinutil -i {bitfile_path} --dump-section IP_LAYOUT:JSON:ip_layout.json --force",
+        toolchain = self.toolchain or legacy_toolchain()
+        toolchain.run(
+            "xclbinutil",
+            ["-i", bitfile_path, "--dump-section", "IP_LAYOUT:JSON:ip_layout.json", "--force"],
             cwd=os.path.dirname(bitfile_path),
+            replay=os.path.join(os.path.dirname(bitfile_path), "inspect_xclbin.sh"),
         )
         ips = None
         with open(os.path.join(os.path.dirname(bitfile_path), "ip_layout.json")) as f:
