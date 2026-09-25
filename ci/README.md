@@ -344,21 +344,17 @@ A site that offloads the heavy Xilinx tools to a compute farm (see "Running tool
 
 The wrapper's own variables are deployment-specific.
 
-### Installed runtime identity
+### Runtime identity
 
-Application image inputs now include FINN code and package resources. CI uses the
-installed distribution; a workspace mount supplies tests/artifacts and does not
-shadow imports. `FINN_DEPS` modes have been removed. For an intentionally editable
-CI job, select `finn-dependencies-runtime` (or `finn-dependencies-sbx-runtime`),
-populate an isolated venv from `/opt/finn/wheels` and the resolved development
-manifest, and run explicit offline `pip install -e` commands in its
-preparation stage; use that venv consistently for the shard. Normal Python startup
-never installs or repairs paths. See `docs/installation.md` and the runtime
+The image holds the locked dependencies (`uv.lock`) in `/opt/venv`; its tag hashes
+the image inputs, including the lock but not FINN's sources. CI mounts the checkout
+under test, and the container entrypoint installs it (with its workspace members)
+editable at start, so a shard always runs the commit it checked out. Checkouts
+initialize submodules. The Package workflow separately builds the wheels and uses
+them from a clean environment. See `docs/installation.md` and the runtime
 validation record for available versus installation/licence-backed coverage.
 
 Bake owns targets, tags and labels; Compose consumes prepared image references.
-CI provenance records the actual image digest, artifact kind, dependency revision,
-application wheel checksum and the image's resolved wheel/source-revision manifest.
-Requested Git refs are not substituted for the revisions actually built. Edited
-application code in an explicit development environment needs its own runtime
-provenance alongside the immutable image identity.
+CI provenance records the actual image digest, image revision, `uv.lock` hash and
+the packages installed in the built image (read from the image, not the checkout),
+with the source commit and dirty state of the checkout the image was built from.

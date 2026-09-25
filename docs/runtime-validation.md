@@ -1,10 +1,36 @@
 # Runtime implementation validation
 
+## Environment simplification (2026-09-25)
+
+Migration from the dependency/application image split and offline wheelhouse to
+`pyproject.toml` + `uv.lock`, one image with an active venv, and a startup editable
+install; design in [environment.md](environment.md). Commits `33a749f7a` through
+the documentation commit on `refactor/container-runtime-implementation`, after the
+checkpoint `5dd9df9bc`. Host: Ubuntu 24.04 VM, 2 CPUs, Docker 29.8.0, sbx v0.42.1,
+uv 0.10.0; no AMD tools, Apptainer or Dev Container CLI.
+
+| Check | Result |
+| --- | --- |
+| Lock versus the previous image | `uv.lock` reproduces every version installed in `xilinx/finn:app-a86b006396bd9277`; the only differences are packages nothing imports, removed on purpose (finn-experimental, deap, mip, gspread, psutil, toposort, vcdvcd, onnxoptimizer, torchaudio, pyscaffold, setupext-janitor, build tools). |
+| Native | `setup-local.sh` on the checkout and on a fresh clone (about 12 s with a warm uv cache; `.venv` 1.5 GB); FINN and finn-hlslib editable; `scripts/activate.sh`. |
+| Wheels | finn wheel: 328 files, 132 under `finn/_data`, build provenance, `build_dataflow` entry point. finn-hlslib wheel: 191 files, no git metadata. Both used from a clean lock-synced venv with no checkout (resource smoke test, entry point, `hlslib_path`). Published metadata resolves from PyPI (dry run); note it resolves QONNX 1.0.0, not the development commit. |
+| Board files | Sparse single-commit fetches in about 6 s; the assembled tree is byte-identical to the one `fetch-repos.sh` produced (258 files, digest `89ebe804...`). |
+| Image | 3.62 GB (previous application image 5.02 GB). Build-time `uv pip check` over 199 packages, import smoke test and pytest probe. |
+| Container start | uid 1001 (no passwd entry): FINN editable from the mounted checkout, hlslib from the submodule, board files from the image. Start with `FINN_SYNC=0` 0.4 s; with sync 4 s cold, 0.6-1.1 s with the uv cache in `FINN_BUILD_DIR`. Changed `uv.lock`: installs the difference online; offline warns and starts. No checkout: note, starts. Uninitialized submodule: warning at start, actionable error at use. |
+| Dev Container | Compose service from `initialize.sh` (without the extension's uid remapping): ready in about 4 s, `/opt/venv/bin/python`, FINN from `/workspace/finn`. |
+| Tests, native | `tests/util`: all pass except tests needing Vivado/HLS (npy stream C++ tests, end-to-end `build_dataflow`, the FPGA flow tutorial, C++ simulation). New: external data, XSI first-use build (including four concurrent first uses building once). |
+| Tests, containers | Conformance suite against real Docker and sbx: 14 passed, 4 skipped (need a Xilinx toolchain or Apptainer). Runtime tests inside the image pass (a host-only `docker buildx` test excepted). |
+
+Not validated here: anything needing AMD tools (HLS, synthesis, XSI build and
+simulation, licences), SIF export and execution, the Dev Container through VS Code,
+the GitHub/Jenkins/Read the Docs pipelines themselves (their steps were run
+locally), and the Brevitas CI job.
+
 ## Approved implementation: P0 baseline (2026-09-20)
 
 Starting revision `97eb24645`, clean worktree on
 `refactor/container-runtime-implementation`. The exact 92-path prototype disposition
-is in [container-runtime-inventory.md](container-runtime-inventory.md); the actual
+is in `docs/container-runtime-inventory.md` (removed; in history at `5dd9df9bc`); the actual
 consumer audit is in [legacy-build-env-ledger.md](legacy-build-env-ledger.md).
 Private build-engine interfaces remain unavailable; no builder implementation was changed.
 
@@ -182,7 +208,7 @@ local images and `/tmp` logs/environments remain available as explicit validatio
 artifacts; no user sandbox or pre-existing image was removed.
 
 The delivered-file list is
-[container-runtime-implementation-files.txt](container-runtime-implementation-files.txt).
+`docs/container-runtime-implementation-files.txt` (removed; in history at `5dd9df9bc`).
 The archive and historical inputs remain preserved. No commit, merge or push was
 performed; new-file intent entries only make the resource renames reviewable in
 `git diff`.
@@ -192,9 +218,9 @@ performed; new-file intent entries only make the resource renames reviewable in
 The record below describes the archived prototype. Inherited-package editable
 overlays and the whole-build worker are not the approved final architecture.
 
-Date: 2026-09-16. Implements `high-value-runtime-plan.md`; the earlier redesign
+Date: 2026-09-16. Implements `high-value-runtime-plan.md` (removed; in history at `5dd9df9bc`); the earlier redesign
 and information inventories remain historical inputs. No merge or push performed.
-The working-tree delivery inventory is in `runtime-changed-files.txt`.
+The working-tree delivery inventory was `runtime-changed-files.txt` (removed).
 
 ### Delivered behavior
 

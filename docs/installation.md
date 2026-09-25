@@ -1,183 +1,140 @@
-# Installed and editable FINN
+# Installing and developing FINN
 
-FINN resources ship in its wheel. Normal imports and resource generation need
-neither a checkout nor `FINN_ROOT`. The reference image/native setup uses Ubuntu
-22.04 and Python 3.10; the package metadata permits Python 3.9+. Installations must
-be unpacked, as pip normally installs them.
+FINN is a Python package. The Python side is managed with standard tools
+(`pyproject.toml` and `uv.lock`); the containers add what pip cannot provide, such
+as the OS libraries Xilinx tools need and XRT. The design, and the reasoning behind
+it, is in [environment.md](environment.md).
 
-## Application and dependency artifacts
-
-`./docker/build` builds the installed application. `./docker/build --dependencies`
-builds the development dependency artifact. Both support `--runtime NAME`, `--sbx`
-and SIF export. `--print-tag` resolves the tag through Bake without building.
-Application tags include FINN source/resource content; dependency tags exclude it.
-The actual image ID and application wheel checksum identify the built artifacts.
-Changing a mounted checkout does not change the installed application.
-
-The dependency artifact provides `/opt/finn/wheels`, a checksum-pinned
-`/opt/finn/development-requirements.txt` and `/opt/finn/wheelhouse.json`, with exact
-Git dependency revisions and wheel checksums. The manifest contains no FINN.
-It includes pip, setuptools, wheel, build and the supported editable backends.
-The application installs the same resolved wheels but does not retain the wheelhouse.
-The pinned finn-experimental wheel is metadata-only due to its upstream package
-configuration; select its checkout explicitly if you need its Python modules.
-
-## Select editable checkouts with one command
-
-In a prepared, writable Python environment, run:
+## Use FINN
 
 ```bash
-./scripts/prepare-editables
+pip install finn          # Python-only use (Python 3.10-3.12, Linux x86-64)
+pip install "finn[hw]"    # plus finn-hlslib, for HLS simulation and synthesis
 ```
 
-The command uses the Python selected on PATH and reads `editable-requirements.txt`
-from the current directory. The checked-in file selects FINN; add any other local
-projects using ordinary pip requirements syntax:
+Hardware flows additionally need Vivado/Vitis (selected with `FINN_XILINX_PATH`
+and `FINN_XILINX_VERSION`, or by sourcing AMD's `settings64.sh`) and a licence.
+Board files are fetched from their upstream repositories on first use and cached
+(see [external build data](#external-build-data)). The `finn_xsi` simulation
+extension is built against your Vivado on first use.
 
-```text
--e .
--e ../qonnx
-```
+## Develop FINN
 
-Paths resolve relative to the requirements file. Quote paths containing spaces.
-An optional filename selects a different list: `./scripts/prepare-editables my-editables.txt`.
-The helper applies the pip options for editable builds using the environment's
-existing build tools, disables package indexes and dependency installation, and
-runs `pip check`. It prevents pip configuration from redirecting installation to
-a different environment or user site. An incompatible dependency baseline causes
-a failure; the operation is not transactional and may already have installed the
-selected editables before the compatibility check fails.
+Every modality uses the same lock and ends up with the same thing: an active venv
+with FINN and its workspace members (`packages/*`, currently finn-hlslib) installed
+editable, and every other dependency at its locked version.
 
-The same command works in native, Docker and sbx environments. Container paths
-must refer to mounted checkouts, and the selected Python environment must be
-writable. Each of three FINN/QONNX pairs gets its own environment and requirements
-file. Code edits need no preparation; rerun after changing the selected checkouts,
-package metadata or entry points. Removing an entry does not restore its baked
-package; recreate the environment to return to the baseline. Ordinary startup
-never runs this command.
-
-## Docker development: prepare once, reuse after container removal
-
-Create a separate directory as the same UID/GID that will run the container:
+**Native host:**
 
 ```bash
-CHECKOUT=/absolute/path/to/finn
-ENV_DIR="$HOME/.venvs/finn-docker-deps"
-mkdir -p "$ENV_DIR"
-cd "$CHECKOUT"
-./docker/build --dependencies
-./docker/run --dependencies --venv "$ENV_DIR" -- bash -c '
-  python -m venv /env/venv &&
-  /env/venv/bin/python -m pip install --no-index --find-links /opt/finn/wheels \
-    -r /opt/finn/development-requirements.txt &&
-  /env/venv/bin/python "$1/scripts/prepare-editables" "$1/editable-requirements.txt"
-' finn-prepare "$CHECKOUT"
-# The first container was removed. Reuse both mounts, with no installation:
-./docker/run --dependencies --venv "$ENV_DIR" -- /env/venv/bin/python -m finn.util.installation
-./docker/run --dependencies --venv "$ENV_DIR" -- /env/venv/bin/build_dataflow --help
+git clone --recurse-submodules https://github.com/Xilinx/finn.git && cd finn
+./setup-local.sh              # checks, then `uv sync` into .venv, optional XSI build
+source scripts/activate.sh    # activates .venv and the Xilinx toolchain, if configured
 ```
 
-The launcher mirrors the explicit checkout's absolute path. `--venv` only mounts
-an already-created host directory at `/env/venv`; it never installs or repairs
-ownership. Keep this directory separate from a native-host `.venv`. Use `--volume`
-for explicitly selected additional source mounts, including paths containing spaces.
-For a network-disabled validation run, use a Compose network override or direct
-`docker run --network none` with the same source/environment mounts.
+`setup-local.sh` wraps `git submodule update --init && uv sync`; that is all a
+Python-only developer needs. After pulling a change to `uv.lock` or a submodule,
+run `git submodule update --init && uv sync` again.
 
-Add QONNX to `editable-requirements.txt`, then prepare this same environment with
-the checkout mounted at its stable path:
+**Docker:**
 
 ```bash
-QONNX=/absolute/path/to/qonnx
-./docker/run --dependencies --venv "$ENV_DIR" --volume "$QONNX:$QONNX" -- \
-  /env/venv/bin/python "$CHECKOUT/scripts/prepare-editables" "$CHECKOUT/editable-requirements.txt"
+./docker/run                           # shell; /opt/venv is active
+./docker/run -- pytest -m util
+./docker/run --fpga -- vivado -version # with FINN_XILINX_PATH/VERSION set
 ```
 
-The same requirements file can select Brevitas and finn-experimental checkouts.
-Their build requirements are prepared already. Repeat every additional source
-mount on later runs; editable dependency metadata can remain present even when
-its source is unmounted and cannot be imported. `fetch-repos.sh` fetches the pinned
-sources in `deps.env`; fetching and mounting never select Python imports.
+The image holds the locked dependencies in `/opt/venv`, active for every process.
+When a container starts, its entrypoint installs the mounted checkout editable
+(`uv sync --frozen --inexact` against `FINN_ROOT`, about a second with a warm
+cache). If `uv.lock` has changed since the image was built, the start installs the
+difference, or `docker/run` builds a new image, since the lock is an image input.
+Editing FINN never requires a new image.
 
-## Dev Container, sbx and native host
+**Dev Container:** open the repository in VS Code and reopen in the container. The
+interpreter is `/opt/venv/bin/python`; there is no setup step.
 
-The Dev Container resolves/reuses its dependency image through Bake, prepares
-`/home/agent/.venvs/finn-dev` during creation, and selects that interpreter for
-editor and terminal commands. Reopening runs no pip operations. Rebuilding the
-container recreates its private environment. It never shares a host-native `.venv`.
+**sbx:** see [the sbx guide](../docker/sbx/README.md). The same entrypoint installs
+the workspace checkout when the sandbox starts.
 
-Native sbx uses the dependency sbx variant, native environment files stored outside
-all mounted workspaces, and `$HOME/.venvs/finn-dev` inside the sandbox. See the
-[concrete native preparation and repeated-exec commands](../docker/sbx/README.md).
-Sandbox deletion deletes that venv unless you explicitly mount separate persistent
-storage. Native lifecycle, networking, credentials and editor/agent settings remain
-site-owned; no FINN installer runs from a shell hook.
+`docker exec` and `sbx exec` do not wait for the entrypoint. A script that execs
+into a container it has just started can wait for `/tmp/finn-ready`.
 
-`setup-local.sh` creates a native isolated venv (`FINN_VENV`, default `.venv`),
-installs the reference requirements and explicitly selected checkouts, and builds
-XSI when requested and available. Normal XSI setup checks an existing extension or
-builds a missing one and verifies it; `python -m finn.xsi.setup --check` checks only
-prerequisites. `scripts/activate.sh` selects the environment and existing legacy
-vendor shell setup without installing or creating scratch directories.
+## Co-develop QONNX, Brevitas or another dependency
 
-Native/offline preparation uses ordinary package commands, with a wheelhouse and
-manifest built for that host's Python/platform (container wheels are Python 3.10
-Linux x86-64):
+Point the dependency's source at your checkout, locally (do not commit this):
+
+```toml
+# pyproject.toml
+[tool.uv.sources]
+qonnx = { path = "../qonnx", editable = true }
+```
+
+Then run `uv sync` (natively, or inside a running container). In Docker, mount the
+checkout at the same relative place, e.g. `./docker/run --volume "$PWD/../qonnx:$PWD/../qonnx"`.
+uv also updates `uv.lock`; do not commit either change.
+
+## Add a dependency
+
+Everything goes through `pyproject.toml` and `uv.lock`; no Dockerfile or setup
+script changes.
+
+* **Python package:** add it to `[project] dependencies` (or a dependency group),
+  with a `[tool.uv.sources]` git entry if it is unreleased, then `uv lock`.
+* **Build data** (headers, board files, Tcl libraries): wrap it as a data-only
+  Python package and treat it as above; register its lookup in
+  `finn.util.external`.
+* **Developed in lockstep with FINN** (always editable for everyone): add its
+  repository as a git submodule under `packages/`, give it a `pyproject.toml`
+  there if upstream has none (see `packages/finn-hlslib`), and mark it
+  `{ workspace = true }` in `[tool.uv.sources]`. Each member must also be
+  released to PyPI for `pip install finn` users.
+
+## Inspect an environment
 
 ```bash
-python3 -m venv "$VENV"
-"$VENV/bin/python" -m pip install --no-index --find-links "$WHEELHOUSE" -r "$MANIFEST"
-"$VENV/bin/python" "$CHECKOUT/scripts/prepare-editables" "$CHECKOUT/editable-requirements.txt"
+python -m finn.util.installation finn qonnx brevitas finn-hlslib
 ```
 
-SIF applications run from the installed read-only image. Editable use needs a
-separately prepared writable environment, source and scratch mounts at stable
-paths; SIF execution has not been validated here.
-
-## Environment lifetime and inspection
-
-Keep the image/platform, Python minor version, source mount paths and venv mount
-path stable. Recreate the venv after incompatible dependency/image changes. Each
-venv has its own explicit editable selection: opening another checkout does not
-select it. Atomic code/resource edits are visible; reinstall after metadata or
-entry-point changes and rebuild native extensions after source, ABI or tool changes.
-There are no import modes, automatic installers or source-discovery hooks.
-
-```bash
-/path/to/venv/bin/python -m finn.util.installation finn qonnx brevitas finn-experimental
-```
-
-This reports selected import locations, distribution versions and installation
-metadata. FINN wheel provenance preserves Git revision/dirty state through its
-sdist. Archive-only builds report unknown revision. `VERSION` is the package
-version. Preserve image/wheel digests to distinguish immutable artifacts from
-subsequently edited application code.
+This reports import locations, versions and installation metadata. FINN wheel
+provenance preserves the Git revision and dirty state through its sdist.
 
 ## Package resources and external build data
 
 `finn.util.resources.resource_path(family, *parts)` resolves stable read-only
-paths in `rtllib`, `custom_hls`, `xsi`, or `qnn-data`. Their conventional package
-anchor is `finn._data`, under `src/finn/_data/` in a checkout. The Python XSI driver
-lives at `src/finn_xsi/`; it keeps its existing import name. Editable installations
-observe changes directly in these source/resource directories.
-Test vectors, testbenches, generated binaries and compilation caches are excluded.
-Generated RTL, driver files and compiled XSI extensions belong in writable build
-storage, never in the installed distribution.
+paths in `rtllib`, `custom_hls`, `xsi`, or `qnn-data`, under `finn._data`
+(`src/finn/_data/` in a checkout). The Python XSI driver lives at `src/finn_xsi/`.
+Editable installations observe changes to these directly. Generated RTL, driver
+files and compiled XSI extensions belong in writable build storage, never in the
+installed distribution.
 
-`finn-hlslib` and board definitions remain external, versioned inputs. Their pins
-and the assembled board-data checksum are in `deps.env`. Set
-`FINN_HLSLIB_PATH=/absolute/path/to/finn-hlslib` and
-`FINN_BOARD_FILES_PATH=/absolute/path/to/board_files`. Reference images install
-these at `/opt/finn-src/deps/finn-hlslib` and `/opt/finn-src/deps/board_files`.
-Legacy checkout builds may still use `FINN_ROOT/deps/...` through the internal
-adapter. Generated HLS/Tcl references resolve these inputs when generated.
+### External build data
+
+* **finn-hlslib** is the `finn-hlslib` package (`finn[hw]`), a workspace member
+  wrapping the upstream repository as a submodule at its pinned commit.
+* **Board files** come from third-party repositories that FINN does not
+  redistribute. `finn.util.external` fetches the pinned commits on first use
+  (sparse, single-commit fetches), verifies a content digest and caches the result
+  under `${XDG_CACHE_HOME:-~/.cache}/finn`. Images and `setup-local.sh` (with
+  Vivado) fetch them ahead of time; `python -m finn.util.external fetch-boards`
+  does so explicitly.
+
+`FINN_HLSLIB_PATH` and `FINN_BOARD_FILES_PATH` override either location.
 
 Saved projects contain absolute installed-resource and intermediate-artifact
 paths. Keep the selected installation, external data and build directories in
 place. Moving directories, replacing/upgrading FINN or changing toolchains can
 invalidate generated projects, compiled simulations and checkpoints. Regenerate
 those artifacts rather than assuming a checkpoint is a self-contained export.
-Resource packaging is not a relocation guarantee.
+
+## RTL simulation (finn_xsi)
+
+RTL simulation builds the `finn_xsi` extension against the selected Vivado the
+first time it is needed, into `$FINN_BUILD_DIR/finn_xsi/<abi>-<key>` (one build
+per Vivado installation and Python ABI; `FINN_XSI_BUILD_DIR` selects an exact
+directory). Concurrent first uses build once. Without a usable toolchain,
+simulation fails with the missing prerequisites. `python -m finn.xsi.setup`
+builds ahead of time; `--check` only checks prerequisites.
 
 ## Tools and build boundaries
 
@@ -235,7 +192,8 @@ watchdogs. Custom testbenches are explicit Python files defining
 `run(sim, io, request) -> metrics`, with JSON arguments; parent closures and native
 handles never cross the process boundary.
 
-Bridge/design compilation now writes adjacent `.finn.json` records of tool identity,
+The `finn_xsi` bridge is built against the selected Vivado on first use (see
+above). Bridge/design compilation writes adjacent `.finn.json` records of tool identity,
 source/header hashes, ABI where applicable and compile arguments. Sessions reject
 changed or incompatible artifacts and recheck after exec. Older artifacts need a
 rebuild to supply these records. Site execution requires an explicit site Python

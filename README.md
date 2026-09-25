@@ -19,19 +19,22 @@ For more general information about FINN, please visit the [project page](https:/
 
 ## Getting Started
 
-FINN supports ordinary [installed and editable Python environments](docs/installation.md),
-as well as the two complete setup paths below. See the
+FINN is a Python package: `pip install finn` for Python-only use, `pip install
+"finn[hw]"` for hardware flows (with Vivado). For development, there are the two
+setup paths below; both use the same locked environment
+([installation and development](docs/installation.md)). See the
 [Getting Started](https://finn.readthedocs.io/en/latest/getting_started.html)
 page for the complete guide.
 
 | Setup | Command | Use it when |
 |---|---|---|
-| **Native** | `./setup-local.sh` | You have the supported Ubuntu/Python environment and want one local installation |
-| **Docker-built environment** | `./docker/run` | You need a installed application, agent isolation, or an HPC image |
+| **Native** | `./setup-local.sh` | You work on the host (uv provides Python 3.10) |
+| **Docker-built environment** | `./docker/run` | You want the reference OS environment, agent isolation, or an HPC image |
 
 Native quickstart:
 
 ```bash
+git clone --recurse-submodules https://github.com/Xilinx/finn.git && cd finn
 ./setup-local.sh
 source scripts/activate.sh
 ```

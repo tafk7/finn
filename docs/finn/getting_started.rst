@@ -214,8 +214,7 @@ The common choices are command-line options:
 * ``--fpga`` adds the host Xilinx toolchain and licence configuration.
 * ``--runtime NAME`` selects image content such as XRT; repeat the option for
   multiple runtimes.
-* Install selected development checkouts explicitly with ``python -m pip install -e /path/to/checkout`` in a writable environment.
-* ``--sbx`` runs the image in an sbx sandbox instead of Docker.
+* ``--volume SPEC`` adds a mount, for example a co-developed QONNX checkout.
 * ``--rebuild`` rebuilds without the BuildKit cache.
 * ``--no-build`` requires an already prepared artifact.
 
@@ -236,10 +235,8 @@ legacy callers. The most relevant are:
 * (optional) ``IMAGENET_VAL_PATH`` specifies the path to the ImageNet validation directory for tests.
 * (optional) ``FINN_DOCKER_RUN_AS_ROOT`` (default 0) if set to 1 then run Docker container as root, default is the current user.
 * (optional) ``FINN_DOCKER_EXTRA`` (default "") passes extra arguments to ``docker compose run``.
-* (optional) ``FINN_SKIP_DEP_REPOS`` (default "0") skips the download of FINN dependency repos (uses the ones already downloaded under deps/.
-* Python imports follow installed package metadata. ``FINN_DEPS`` and ``--deps`` have been removed; opening a checkout never changes package selection.
-* (optional) ``QONNX_COMMIT``, ``BREVITAS_COMMIT``, ``FINN_EXP_COMMIT``, and the other pins in ``deps.env`` override the dependency ref to fetch. Any git ref works - a SHA, a tag or a branch name. A dependency with a dirty working tree is never moved.
-* (optional) ``FINN_HLSLIB_PATH`` / ``FINN_BOARD_FILES_PATH`` override where the HLS headers and Vivado board files are read from. Default to ``$FINN_ROOT/deps/finn-hlslib`` and ``$FINN_ROOT/deps/board_files``.
+* (optional) ``FINN_SYNC`` (default 1) set to 0 to skip installing the mounted checkout when a container starts.
+* (optional) ``FINN_HLSLIB_PATH`` / ``FINN_BOARD_FILES_PATH`` override where the HLS headers and Vivado board files are read from. By default they come from the ``finn-hlslib`` package and from board files fetched on first use.
 
 General FINN Docker tips
 ************************
@@ -362,14 +359,12 @@ Quick Start
 
 3. Clone FINN and run the local setup script::
 
-    git clone https://github.com/Xilinx/finn.git
+    git clone --recurse-submodules https://github.com/Xilinx/finn.git
     cd finn
     ./setup-local.sh
 
-   If your system Python is not 3.10, set ``FINN_PYTHON`` to point to a Python 3.10 interpreter::
-
-    export FINN_PYTHON=/path/to/python3.10
-    ./setup-local.sh
+   The script needs `uv <https://docs.astral.sh/uv/>`_, which provides Python 3.10
+   if the host lacks it.
 
 4. Activate the FINN environment::
 
@@ -387,7 +382,6 @@ The ``setup-local.sh`` script supports several options:
 * ``--help``: Show usage information
 * ``--check``: Validate the supported host, Python and required commands without installing
 * ``--skip-xsi``: Skip building finn_xsi (Vivado Python interface)
-* ``--skip-deps``: Skip fetching git dependencies (if already run)
 
 Validation Test Modes
 *********************
@@ -456,7 +450,7 @@ support with the move to Vivado 2024.2. AUP-ZU3 is the recommended supported
 replacement for academic use. The old board mappings remain available, but
 their board files are no longer downloaded or exercised by CI. Re-enabling
 them requires removing the boards from ``retired_pynq_boards`` and restoring
-their downloads in ``fetch-repos.sh``.
+their sources in ``BOARD_SOURCES`` in ``finn/util/external.py``.
 
 PYNQ board first-time setup
 ****************************
@@ -578,18 +572,14 @@ strong hardware:
   variable.
   Mapping the generated file dir to a fast SSD will result in quicker builds.
 
-Installed resources and explicit development
--------------------------------------------
+Installed resources and development
+-----------------------------------
 
 FINN wheels contain the RTL, C++ support, Tcl and driver templates needed by
-ordinary resource operations. These work without ``FINN_ROOT``. For editable
-work, create a writable environment once and explicitly install FINN and selected
-dependencies with pip. Application images contain installed FINN. Select
-``docker/build --dependencies`` for the offline wheelhouse, then use
-``docker/run --dependencies --venv /host/environment`` to reuse an explicitly
-prepared isolated environment across disposable containers. Dev Containers and
-native sbx use their own writable venvs. Read-only SIF execution performs no
-installation.
+ordinary resource operations. These work without ``FINN_ROOT``. For development,
+``uv sync`` (natively) or the container entrypoint installs the checkout editable
+into a venv holding the locked dependencies. The release image and the SIF
+exported from it contain an installed FINN and perform no installation.
 
 See ``docs/installation.md`` in the source distribution for offline preparation,
 package/import inspection, site tool routes, and installed-resource lifetime.

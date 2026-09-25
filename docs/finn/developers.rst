@@ -101,60 +101,39 @@ launcher must not reconstruct those independently.
 Dependency handling
 -------------------
 
-Pins for all dependency repos live in ``deps.env``, which both ``fetch-repos.sh``
-and the Dockerfile read, so the commit checked out on the host and the commit
-baked into the image cannot disagree. Every pin is env-overridable and accepts
-any git ref - a SHA, a tag or a branch:
+Python dependencies are declared in ``pyproject.toml`` and locked in ``uv.lock``,
+which native development, CI and the images all use. Unreleased dependencies
+(currently QONNX, Brevitas and dataset_loading) are pinned by commit in
+``[tool.uv.sources]``. The image holds the locked dependencies in ``/opt/venv``;
+when a container starts, FINN and its workspace members are installed editable
+from the mounted checkout, so FINN is never baked into the development image.
 
-.. code-block:: bash
+To co-develop a dependency, point its source at a local checkout (without
+committing it) and run ``uv sync``:
 
-  QONNX_COMMIT=my-feature-branch ./docker/run
-  BREVITAS_COMMIT=v0.11.0 ./docker/run -- quicktest.sh
+.. code-block:: toml
 
-``fetch-repos.sh`` will not move a dependency whose working tree is dirty, so
-in-progress edits to qonnx or brevitas survive a container launch.
+  [tool.uv.sources]
+  qonnx = { path = "../qonnx", editable = true }
 
-Inside the image, qonnx, brevitas and finn-experimental are installed as
-ordinary wheels, which carry their dependency closure, metadata and console
-scripts. ``FINN_DEPS`` selects which source wins:
+To test against another commit, change its ``rev`` and run
+``uv lock --upgrade-package NAME``.
 
-.. list-table::
-  :header-rows: 1
-
-  * - Value
-    - Effect
-  * - ``frozen``
-    - Use the wheels in the image. This is the **default**. The dependency
-      commits are the commits in ``deps.env``.
-  * - ``live``
-    - Use the checkouts in ``$FINN_ROOT/deps/*/src``. Your edits take effect
-      immediately. If a checkout is missing, FINN stops and tells you which one.
-  * - ``auto``
-    - Use a checkout if it is present. If it is not present, use the wheel.
-
-The default was ``live`` in earlier versions. That default fell back to the
-wheels without a message when a checkout was missing. An unattended run could
-therefore use either source, and the output did not say which. ``frozen`` is
-also necessary for reproducible CI: FINN mounts its source, so the image digest
-identifies the environment but not the code.
-
-FINN's own ``src`` always comes from the workspace. FINN is never baked into
-the image.
-
-The non-Python build data is reached through ``FINN_HLSLIB_PATH`` and
-``FINN_BOARD_FILES_PATH`` and is present in the common image. The runtime grant
-tier decides whether a Xilinx toolchain is available to consume it.
+finn-hlslib is the ``finn-hlslib`` package in ``packages/finn-hlslib``, a
+workspace member wrapping the upstream repository as a git submodule, so it is
+always editable in a development environment. Board files are fetched from
+their pinned upstream commits on first use (``finn.util.external``).
+``FINN_HLSLIB_PATH`` and ``FINN_BOARD_FILES_PATH`` override either location.
+See ``docs/environment.md`` for the design.
 
 Launch sequence
 ---------------
 
-1. ``docker/run`` normalizes Docker FPGA access, runtime set,
-   dependency mode and command.
+1. ``docker/run`` normalizes Docker FPGA access, runtime set and command.
 2. ``docker/build`` or the Docker runner prepares the required artifact.
    Both use ``docker/lib.sh`` image preparation: ordinary runs reuse the selected
    local image, explicit builds refresh it, and ``--rebuild`` disables build cache.
-   Bake builds the underlying image. ``deps.env`` supplies repository pins;
-   the shared ``docker/pip-torch.txt and docker/requirements-dev.txt`` files supply Python pins.
+   Bake builds the underlying image; ``uv.lock`` supplies the Python environment.
 3. ``docker/config.py`` resolves the workspace, build directory, toolchain, platform,
    licence, environment and mounts. It stays on the host; it is not installed
    in the image or included in the image-content hash.

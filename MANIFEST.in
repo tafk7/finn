@@ -6,7 +6,6 @@ prune build
 prune dist
 global-exclude *.pyc *.so
 global-exclude *_tb.v *_tb.sv
-prune finn_xsi/testcase
 
 # Keep source archives free of resource test fixtures as well.
 prune src/finn/_data/rtllib/axi/sim

@@ -1,12 +1,13 @@
 # Remaining legacy build environment obligations
 
-## Current implementation obligations (2026-09-20)
+## Current implementation obligations (2026-09-25)
 
 Package resources now live under `src/finn/_data/`, with a real `finn._data`
 anchor. `src/finn_xsi/` is the installed Python driver. There is no synthetic
-resource package or checkout-discovery hook. External HLS/board data still uses
-explicit locations or the existing legacy boundary; scratch/configuration and
-whole-build worker reconciliation remain private-branch integration work.
+resource package or checkout-discovery hook. External HLS/board data comes from
+the `finn-hlslib` package and on-demand board-file fetching (`finn.util.external`);
+scratch/configuration and whole-build worker reconciliation remain private-branch
+integration work.
 
 | Remaining input/mechanism | Current consumers | Gate for further removal |
 | --- | --- | --- |
@@ -39,7 +40,7 @@ whole-build worker slated for removal in P6. It does not endorse that architectu
 P0 re-audit (2026-09-20): the descriptions below record prototype behavior.
 The approved destination is in-process orchestration from the private build-engine
 branch and a native simulation-session process; the whole-build worker is temporary.
-See [the file disposition](container-runtime-inventory.md) for ownership boundaries.
+The file disposition that recorded ownership boundaries is in history at `5dd9df9bc`.
 
 | Remaining mechanism | Actual consumers found in P0 | Replacement gate |
 | --- | --- | --- |
@@ -64,9 +65,9 @@ No Python import, generic startup hook or command-name detector activates it.
 
 | Assignment/input | Actual consumers and enabling input | Tests | Deletion condition |
 | --- | --- | --- | --- |
-| `FINN_ROOT` | `get_finn_root()` checkout-only API; default external data under `deps/` when explicit data paths are absent. An explicit `root` or data path wins. No FINN-owned resource consumer reads it. | resource installation journeys; legacy precedence test; interpretation allowlist | External callers stop using the checkout API and all HLS/board users supply installed external data paths. |
+| `FINN_ROOT` | `get_finn_root()` checkout-only API. No FINN-owned resource or external-data consumer reads it; the container entrypoint uses it only to find the checkout to install. | resource installation journeys; legacy precedence test; interpretation allowlist | External callers stop using the checkout API. |
 | `FINN_BUILD_DIR` | `make_build_dir`, dataflow intermediate-output reporting, XSI artifact default. Explicit directory build boundaries create child scratch; default is `/tmp/finn_build_<uid>`. Direct allocation creates scratch on demand, never on import. | worker inheritance, import-no-repair, installed driver generation | A separately specified build allocation API replaces these consumers; this change does not redesign allocation. |
-| `FINN_HLSLIB_PATH`, `FINN_BOARD_FILES_PATH` | HLS C++/Tcl generation, Zynq project generation. Paths are resolved and validated when generating code; versions remain in `deps.env`. | generated HLS references and external input errors | Callers consistently pass external data selection explicitly. |
+| `FINN_HLSLIB_PATH`, `FINN_BOARD_FILES_PATH` | Optional overrides in `finn.util.external` for HLS C++/Tcl generation and Zynq project generation. Defaults are the `finn-hlslib` package and board files fetched on first use (pins and digest in `finn.util.external`). | external data tests; generated HLS references | None required: these are supported overrides, not legacy inputs. |
 | `XILINX_*` / `*_PATH`, `FINN_HLS_FRONTEND`, `FINN_TOOL_DIR_OVERRIDE` | Existing `CallHLS` and `CreateStitchedIP` callers translate once to `Selection`; path-version fallback only when no frontend is requested. Site overrides skip local activation. Child builds also supply missing `VIVADO_PATH`/`VITIS_PATH`/`HLS_PATH` aliases for `HLSBackend.compile_singlenode_code` and existing Alveo checks. Other existing vendor callers still use the ambient resolver/shim. | settings isolation, routing, frontend compatibility, fake Vivado/HLS operations | All remaining callers accept permanent tool selections; remove legacy translation only then. |
 | `LD_LIBRARY_PATH` before Python startup | Directory build worker's XSI kernel and floating-point library loading. Also preserved by explicit native activation and existing image loader settings. `build_environment` prepares only the child mapping. | child inheritance; actual XSI simulation unavailable in this environment | Fresh-worker XSI experiment passes correctness, loader, cleanup, cancellation and timing tests on supported installations. |
 | Image `LD_PRELOAD` and shell tool shim | Existing FLEXlm/libudev workaround and bare vendor convenience. These are retained, not evidence of a general settings model. | existing synthetic shell tests; licensed checkout unavailable | Actual licensed-operation and native-simulation checks prove scoped replacements sufficient. |

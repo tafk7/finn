@@ -1,7 +1,8 @@
 # FINN Docker-built environment
 
-FINN has two setup paths: native installation through `setup-local.sh`, or the
-Docker-built reference environment described here.
+FINN has two development setups: native (`setup-local.sh`), or the Docker-built
+environment described here. Both use the same `uv.lock`; see
+[installation](../docs/installation.md) and [the design](../docs/environment.md).
 
 The image is always built with Docker Buildx. Docker runs it directly, sbx
 imports a specialized image variant, and Apptainer consumes an exported SIF:
@@ -22,17 +23,19 @@ Docker image
 ./docker/run --fpga --runtime xrt -- build_dataflow project/
 ```
 
-With no command, `docker/run` opens an interactive shell. Use `--print` to see
-the normalized request without building or running anything. `-n NAME` and
-`--name NAME` assign the Docker container name.
+With no command, `docker/run` opens an interactive shell. `/opt/venv` is active,
+with FINN and its workspace members installed editable from the checkout when the
+container starts. Use `--print` to see the normalized request without building or
+running anything. `-n NAME` and `--name NAME` assign the Docker container name;
+`--volume` adds a mount, for example a co-developed QONNX checkout.
 
 ## Prepare artifacts
 
 ```bash
 ./docker/build
-./docker/build --dependencies
 ./docker/build --runtime xrt
 ./docker/build --sbx
+./docker/build --release
 ./docker/build --export-sif ./finn.sif
 ./docker/build --runtime xrt --export-sif ./finn-xrt.sif
 ```
@@ -52,13 +55,13 @@ apptainer exec --cleanenv --bind "$PWD:$PWD" --pwd "$PWD" \
   ./finn.sif python -c 'from finn.util.basic import fifo_rtl_files; print(fifo_rtl_files())'
 ```
 
-Dependency tags use ``deps-<hash>`` from ``docker/dependency-inputs.txt``.
-Application tags use ``app-<hash>`` and additionally hash ``docker/image-inputs.txt``,
-including the FINN code and resources installed in the application.
-The mounted checkout's commit, description and dirty
-state are passed separately as
-``FINN_SOURCE_*`` runtime provenance. The immutable identity of a concrete
-build remains its Docker image digest or exported SIF checksum.
+Image tags are ``img-<hash>`` of the files in ``docker/image-inputs.txt``, which
+include ``pyproject.toml`` and ``uv.lock`` but not FINN's sources: a change to the
+lock produces a new image, an edit to FINN does not. The release image (and the
+SIF exported from it) installs FINN from wheels and is tagged by source revision.
+The mounted checkout's commit, description and dirty state are passed separately
+as ``FINN_SOURCE_*`` runtime provenance. The immutable identity of a concrete build
+remains its Docker image digest or exported SIF checksum.
 
 ## Configuration
 
@@ -99,8 +102,7 @@ operation to validate FPGA licensing; policy readback or `lmstat` is insufficien
 
 The examples were validated with client/server 0.42.1, which is a tested version,
 not a claim about the latest release. Native environment and kit interfaces are
-experimental; see the [completion record](../docs/native-sbx-final-shape-plan.md)
-for documentation revision and validation limits.
+experimental.
 
 `compose.yaml` and `docker-bake.hcl` remain usable directly for debugging and
 advanced workflows. A direct Bake invocation must set
@@ -140,13 +142,12 @@ Commands after `--` are passed verbatim: use `pytest` and `quicktest.sh` explici
 For external dataflow directories, supply an explicit mount through
 `FINN_DOCKER_EXTRA`; the launcher no longer interprets workload command names.
 
-Python dependencies use FINN's `requirements.txt` plus `docker/requirements-dev.txt`.
-`docker/pip-torch.txt` retains the CPU wheel source and pins; the shared
-`docker/pip-constraints.txt` applies to all installation steps. Native installation
-uses the same declarations. No packaging-format migration is required.
+Python dependencies come from `pyproject.toml` and `uv.lock`, the same lock native
+development uses. The image installs them into `/opt/venv` at build time.
 
-The small guest entrypoint provides writable home/scratch directories and optional
-mounted Tcl initialization. Bash and bare vendor commands retain their respective
+The guest entrypoint provides writable home/scratch directories, installs the
+mounted checkout into `/opt/venv` (never fatal; `FINN_SYNC=0` skips it) and writes
+`/tmp/finn-ready`. Bash and bare vendor commands retain their respective
 hooks because those paths bypass normal startup.
 
 ## Command migration
@@ -162,6 +163,8 @@ hooks because those paths bypass normal startup.
 | `build_custom` shortcut | Explicit directory mount, working directory, and Python command |
 | `build-xrt` grant/image spelling | `--fpga --runtime xrt` |
 | Bake target `finn-xrt-slash` | `finn-slash-xrt` |
+| `--dependencies`, `--venv`, `--deps`, `FINN_DEPS` | The dev image installs the mounted checkout at start |
+| `fetch-repos.sh`, `deps.env` | `pyproject.toml`/`uv.lock`, the finn-hlslib submodule, board files fetched on first use |
 
 `docker/config` and `docker/finn-env` are removed; use `docker/config.py`.
 The resolver's `sbx` subcommand and `inspect --sbx`, and the launcher's `--sbx`
@@ -181,25 +184,21 @@ sbx env rm /existing/environment/finn.sbxenv.yaml --force
 Alternatively copy the new examples into a user-owned directory. No automatic
 state migration, sandbox removal or global policy/credential changes occur.
 
-## Explicit development preparation
+## Development environment
 
-The default image runs installed FINN. A mounted checkout does not select imports.
-`./docker/build --dependencies` and `./docker/run --dependencies` select the offline
-development artifact, which contains wheels and no FINN installation. Its identity
-excludes FINN code/resources; application identity adds their content. Both artifacts
-support runtime additions and the native sbx variant.
+The dev image runs the mounted checkout, not an installed FINN. At container start
+the entrypoint runs `uv sync --frozen --inexact` against `FINN_ROOT`: FINN and the
+workspace members (`packages/*`) are installed editable, plus any difference
+between the checkout's `uv.lock` and the image, offline where possible. uv's cache
+is kept in `$FINN_BUILD_DIR/.uv-cache`, so later starts reuse the editable builds.
+`docker exec` and `sbx exec` skip the entrypoint but join a container where it has
+run; scripts that exec into a new container can wait for `/tmp/finn-ready`.
 
-Prepare an isolated writable venv once using `/opt/finn/wheels` and
-`/opt/finn/development-requirements.txt`, then explicitly install selected checkouts.
-`docker/run --venv /host/environment` mounts an existing user-owned directory at
-`/env/venv` across disposable runs. Use `--volume` for additional source mounts.
-The Dev Container prepares its private `/home/agent/.venvs/finn-dev` on creation;
-reopening performs no pip operations. Native sbx keeps its own sandbox-private venv.
-See [installation and tool selection](../docs/installation.md) for preparation and
-reuse commands, editable QONNX, native/offline setup and artifact lifetime.
+The Dev Container uses the same image and entrypoint at the fixed path
+`/workspace/finn`; its interpreter is `/opt/venv/bin/python`.
 
 Generic images have no Bash activation hook. Only the sbx variant sources native
 persistent environment configuration. Site Tcl initialization uses explicit mounts
 into the chosen user's `.Xilinx` directory. Bare vendor shims and global libudev
 preload remain pending actual licensed/native validation; FINN vendor operations
-are being migrated to scoped argv/cwd/environment execution.
+use scoped argv/cwd/environment execution.
