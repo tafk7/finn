@@ -16,7 +16,7 @@ from .inspection import DecisionInfo, decision_info, decisions
 from .occurrence import state
 from .references import DecisionHandle
 from .semantics import ValueSemantics
-from . import refinement
+from . import _execution, refinement
 
 T = TypeVar("T")
 S = TypeVar("S", bound=Space)
@@ -175,6 +175,7 @@ class Selection:
 
 def capture(point: Space) -> Selection:
     """Capture the shared root's committed owners, without querying unrelated work."""
+    _execution.driver_only("selection capture")
     current = state(point)
     values: list[tuple[DecisionInfo[object], object]] = []
     with current.snapshot.lock:
@@ -188,6 +189,7 @@ def capture(point: Space) -> Selection:
 
 def restore(base: S, selection: Selection) -> CommitmentReport[S]:
     """Validate a detached request and atomically replay it on a root checkpoint."""
+    _execution.driver_only("selection restore")
     current = state(base)
     if base._scope != 0:
         raise RequestError("selection restore requires a root configuration")

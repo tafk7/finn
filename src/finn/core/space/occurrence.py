@@ -9,10 +9,11 @@ from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from typing import Literal, TypeVar, cast, overload
 
-from . import _runtime
+from . import _runtime, _execution
 from .compiler import SpaceModel
 from .declarations import (
     BoundDecision,
+    BoundView,
     BoundValue,
     BoundViewField,
     ChoiceView,
@@ -97,6 +98,7 @@ def bind(
     keyword_parameters: Mapping[str, object],
 ) -> S:
     """Validate all bindings and freeze external values before any evaluation."""
+    _execution.driver_only("configuration binding")
     if not isinstance(parameters, Mapping):
         raise RequestError("parameters must be a declaration-keyed mapping")
     pending: dict[int, object] = {}
@@ -134,37 +136,74 @@ def bind(
         index: _snapshot_request_value(model.linked.nodes[index], value, "parameter")
         for index, value in pending.items()
     }
-    snapshot = _runtime.Snapshot(model.linked, frozen)
+    snapshot = _runtime.Snapshot(model.linked, frozen, model=cast(SpaceModel[Space], model))
     return cast(S, _attach(OccurrenceState(cast(SpaceModel[Space], model), snapshot), 0))
 
 
 def query(point: Space, reference: ValueRef[T] | View[T]) -> QueryResult[T]:
+    _execution.driver_only("query inspection")
     current = state(point)
     index = current.model.resolve(point._scope, reference)
     result = _runtime.evaluate(current.snapshot, index).result
     return cast(QueryResult[T], _runtime.copy_result(current.snapshot, index, result))
 
 
-def read_value(point: Space, reference: ValueRef[T]) -> T:
-    return require_value(query(point, reference), context=(point, reference))
+def read_value(point: Space, reference: ValueRef[T] | View[T]) -> T:
+    active = _execution.current()
+    try:
+        return _read_value(point, reference)
+    except BaseException as cause:
+        if active is not None:
+            _execution._remember_exception(active, cause)
+        raise
+
+
+def _read_value(point: Space, reference: ValueRef[T] | View[T]) -> T:
+    current = state(point)
+    snapshot = current.snapshot
+    _execution.check_snapshot(snapshot)
+    index = current.model.resolve(point._scope, reference)
+    snapshot.work.getter_attempts += 1
+    active = _execution.current()
+    if active is None:
+        entry = _runtime.evaluate(snapshot, index)
+    else:
+        active.dependencies[index] = None
+        if index in snapshot.cache:
+            outcome: object = snapshot.cache[index]
+        else:
+            outcome = active.native_parent.switch(index)
+        entry = _execution.accept_read(active, index, outcome)
+    answer = _runtime.copy_result(snapshot, index, entry.result)
+    return cast(T, require_value(answer, context=current.model.linked.nodes[index].owner))
+
+
+def bind_view(point: Space, reference: View[T]) -> BoundView[T]:
+    current = state(point)
+    _execution.check_snapshot(current.snapshot)
+    index = current.model.resolve(point._scope, reference)
+    if current.model.linked.nodes[index].kind != "view":
+        raise RequestError("view binding requires a View declaration")
+    return BoundView(point, reference)
 
 
 @overload
-def assess(point: Space, reference: View[T]) -> ViewAssessment[T]: ...
+def inspect(point: Space, reference: View[T]) -> ViewAssessment[T]: ...
 
 
 @overload
-def assess(point: Space, reference: Constraint | ConstraintGroup) -> ConstraintAssessment: ...
+def inspect(point: Space, reference: Constraint | ConstraintGroup) -> ConstraintAssessment: ...
 
 
 @overload
-def assess(point: Space, reference: Readiness) -> ReadinessAssessment: ...
+def inspect(point: Space, reference: Readiness) -> ReadinessAssessment: ...
 
 
-def assess(
+def inspect(
     point: Space,
     reference: View[T] | Constraint | ConstraintGroup | Readiness,
 ) -> ViewAssessment[T] | ConstraintAssessment | ReadinessAssessment:
+    _execution.driver_only("assessment inspection")
     current = state(point)
     index = current.model.resolve(point._scope, reference)
     entry = _runtime.evaluate(current.snapshot, index)
@@ -180,6 +219,7 @@ def decision_state(
     point: Space,
     reference: Decision[T] | DecisionRef[T],
 ) -> QueryResult[DecisionState[T]]:
+    _execution.driver_only("decision state")
     current = state(point)
     index = _decision(point, reference)
     # Runtime state reads already snapshot committed values and contextualize
@@ -203,6 +243,7 @@ def candidates(
     point: Space,
     reference: Decision[T] | DecisionRef[T],
 ) -> QueryResult[tuple[T, ...]] | None:
+    _execution.driver_only("domain enumeration")
     current = state(point)
     return cast(
         QueryResult[tuple[T, ...]] | None,
@@ -211,12 +252,14 @@ def candidates(
 
 
 def change(point: Space, reference: Decision[T] | DecisionRef[T], value: T) -> Change[T]:
+    _execution.driver_only("change construction")
     current = state(point)
     index = _decision(point, reference)
     return Change(current.snapshot, current.model.linked.nodes[index].scope, index, value)
 
 
 def clear(point: Space, reference: Decision[T] | DecisionRef[T]) -> Change[T]:
+    _execution.driver_only("clear construction")
     current = state(point)
     index = _decision(point, reference)
     return Change(current.snapshot, current.model.linked.nodes[index].scope, index, remove=True)
@@ -226,6 +269,7 @@ def bind_field(
     point: Space, reference: ValueRef[T] | View[T]
 ) -> BoundValue[T] | BoundDecision[T] | BoundViewField[T]:
     current = state(point)
+    _execution.check_snapshot(current.snapshot)
     index = current.model.resolve(point._scope, reference)
     node = current.model.linked.nodes[index]
     if isinstance(reference, View):
@@ -261,6 +305,7 @@ def _normalize_changes(
 def commit(point: S, *changes: ChangeRequest) -> CommitmentReport[S]:
     """Atomically add monotone commitments without revising existing choices."""
 
+    _execution.driver_only("monotone commitment")
     current = state(point)
     normalized = _normalize_changes(point, changes)
     if any(item.remove for item in normalized.values()):
@@ -275,16 +320,16 @@ def commit(point: S, *changes: ChangeRequest) -> CommitmentReport[S]:
             index: _snapshot_request_value(current.model.linked.nodes[index], value, "candidate")
             for index, value in pending.items()
         }
-        trial = _runtime._TrialSnapshot(current.snapshot)
+        trial = _runtime._TrialSnapshot(current.snapshot, prepared)
         changed = False
         outcomes: dict[int, ChangeOutcome] = {}
         for index in sorted(prepared, key=current.model.linked.ranks.__getitem__):
             node = current.model.linked.nodes[index]
             candidate = prepared[index]
             assert node.semantics is not None
-            if index in trial.assignments:
+            if index in current.snapshot.assignments:
                 try:
-                    prior = node.semantics.freeze(trial.assignments[index])
+                    prior = node.semantics.freeze(current.snapshot.assignments[index])
                     comparison = node.semantics.freeze(candidate)
                     equal = node.semantics.values_equal(prior, comparison)
                 except Exception as cause:
@@ -302,9 +347,13 @@ def commit(point: S, *changes: ChangeRequest) -> CommitmentReport[S]:
                         "refused",
                     )
                 continue
-            admissible = _runtime.membership(trial, index, candidate)
+            value_result = _runtime.evaluate(trial, index).result
+            admissible = (
+                Available(True)
+                if isinstance(value_result, Available)
+                else cast(QueryResult[bool], value_result)
+            )
             if isinstance(admissible, Available) and admissible.value is True:
-                trial.admit(index, candidate)
                 changed = True
                 outcomes[index] = ChangeOutcome(node.owner, admissible, "admissible")
             else:
@@ -365,6 +414,7 @@ def try_with_choices(
 ) -> ConfigurationResult[S]:
     """Build and validate a replacement choice set over the same frozen facts."""
 
+    _execution.driver_only("configuration replacement")
     current = state(point)
     keyword_changes = tuple(_keyword_change(point, name, value) for name, value in choices.items())
     all_changes = (*changes, *keyword_changes)
@@ -412,16 +462,22 @@ def try_with_choices(
             return ConfigurationResult(point, True, no_op_outcomes)
 
         base = _runtime.Snapshot(
-            current.model.linked, current.snapshot.parameters, {}, current.snapshot.lock
+            current.model.linked,
+            current.snapshot.parameters,
+            {},
+            current.snapshot.lock,
+            model=current.model,
         )
-        trial = _runtime._TrialSnapshot(base)
+        trial = _runtime._TrialSnapshot(base, merged)
         validation: dict[int, QueryResult[bool]] = {}
         for index in sorted(merged, key=current.model.linked.ranks.__getitem__):
-            candidate = merged[index]
-            admissible = _runtime.membership(trial, index, candidate)
+            value_result = _runtime.evaluate(trial, index).result
+            admissible = (
+                Available(True)
+                if isinstance(value_result, Available)
+                else cast(QueryResult[bool], value_result)
+            )
             validation[index] = admissible
-            if isinstance(admissible, Available) and admissible.value is True:
-                trial.admit(index, candidate)
 
         refused = {
             index
@@ -475,11 +531,14 @@ def with_choices(point: S, /, *changes: ChangeRequest, **choices: object) -> S:
 
 
 def root(point: Space) -> Space:
-    return point if point._scope == 0 else _attach(state(point), 0)
+    current = state(point)
+    _execution.check_snapshot(current.snapshot)
+    return point if point._scope == 0 else _attach(current, 0)
 
 
 def child(point: Space, placement: Subspace[S]) -> S:
     current = state(point)
+    _execution.check_snapshot(current.snapshot)
     scope = current.model.linked.scopes[point._scope]
     try:
         child_scope = scope.children[placement]
@@ -489,6 +548,7 @@ def child(point: Space, placement: Subspace[S]) -> S:
 
 
 def choice(point: Space, declaration: SubspaceChoice) -> ChoiceView:
+    _execution.check_snapshot(state(point).snapshot)
     view = ChoiceView(point, declaration)
     _choice_record(view)
     return view
@@ -519,6 +579,7 @@ def _case_scope(declaration: Choice, case: str) -> int:
 
 
 def select(view: ChoiceView, case: str) -> ChoiceView:
+    _execution.driver_only("configuration selection")
     current, declaration = _choice_record(view)
     _case_scope(declaration, case)
     if declaration.selector is None:
@@ -555,4 +616,5 @@ def select(view: ChoiceView, case: str) -> ChoiceView:
 
 def alternative(view: ChoiceView, case: str) -> Space:
     current, declaration = _choice_record(view)
+    _execution.check_snapshot(current.snapshot)
     return _attach(current, _case_scope(declaration, case))

@@ -10,7 +10,7 @@ from dataclasses import dataclass, replace
 from math import isqrt
 from typing import Generic, TypeVar, cast
 
-from .errors import DefinitionError, EvaluationError
+from .errors import DefinitionError, EvaluationError, ValueUnavailableError
 from .results import (
     QueryResult,
     Available,
@@ -81,7 +81,8 @@ class Domain(Generic[T]):
                 raise TypeError(f"expected candidate of nominal type {semantics.name}")
             if self._finite_values is not None:
                 result: bool | QueryResult[bool] = any(
-                    semantics.values_equal(candidate, allowed) for allowed in self._finite_values
+                    semantics.values_equal(semantics.freeze(candidate), semantics.freeze(allowed))
+                    for allowed in self._finite_values
                 )
             else:
                 result = self.accepts(candidate=candidate, **dependency_values)
@@ -97,6 +98,8 @@ class Domain(Generic[T]):
                         "domain-membership", "candidate is outside the domain", owner=owner
                     )
             return owned_result(result, owner)
+        except (EvaluationError, ValueUnavailableError):
+            raise
         except Exception as cause:
             raise EvaluationError(owner, "domain membership", str(cause)) from cause
 
@@ -117,6 +120,8 @@ class Domain(Generic[T]):
                 return owned_result(result, owner)
             values = result.value if isinstance(result, Available) else result
             return Available(tuple(semantics.freeze(value) for value in values))
+        except (EvaluationError, ValueUnavailableError):
+            raise
         except Exception as cause:
             raise EvaluationError(owner, "domain enumeration", str(cause)) from cause
 
@@ -137,7 +142,10 @@ def finite(values: Iterable[T], semantics: ValueSemantics[T] | None = None) -> D
             raise DefinitionError(
                 "a finite domain must be bound to value semantics before evaluation"
             )
-        return any(semantics.values_equal(candidate, allowed) for allowed in ordered)
+        return any(
+            semantics.values_equal(semantics.freeze(candidate), semantics.freeze(allowed))
+            for allowed in ordered
+        )
 
     def candidates() -> tuple[T, ...]:
         # The public enumeration method snapshots each result. The callback is

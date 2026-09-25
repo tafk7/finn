@@ -51,20 +51,29 @@ class ValueSemantics(Generic[T]):
         )
 
     def accepts(self, value: object) -> bool:
-        return bool(self.recognizes(value))
+        from . import _execution  # noqa: PLC0415 - semantics/execution boundary
+
+        with _execution.transformation("value recognition"):
+            return bool(self.recognizes(value))
 
     def freeze(self, value: object) -> T:
-        if not self.accepts(value):
-            raise TypeError(f"expected value of nominal type {self.name}")
-        frozen = self.snapshot(cast(T, value))
-        if not self.accepts(frozen):
-            raise TypeError(f"snapshot for {self.name} changed its nominal value type")
-        return frozen
+        from . import _execution  # noqa: PLC0415 - semantics/execution boundary
+
+        with _execution.transformation("value snapshot"):
+            if not self.accepts(value):
+                raise TypeError(f"expected value of nominal type {self.name}")
+            frozen = self.snapshot(cast(T, value))
+            if not self.accepts(frozen):
+                raise TypeError(f"snapshot for {self.name} changed its nominal value type")
+            return frozen
 
     def values_equal(self, left: object, right: object) -> bool:
-        if not self.accepts(left) or not self.accepts(right):
-            return False
-        return bool(self.equal(cast(T, left), cast(T, right)))
+        from . import _execution  # noqa: PLC0415 - semantics/execution boundary
+
+        with _execution.transformation("value equality"):
+            if not self.accepts(left) or not self.accepts(right):
+                return False
+            return bool(self.equal(cast(T, left), cast(T, right)))
 
     def is_compatible_with(self, other: ValueSemantics[object]) -> bool:
         return self.type_token is other.type_token

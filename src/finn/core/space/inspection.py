@@ -12,7 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Generic, Literal, TypeVar, cast, overload
 
-from . import _runtime
+from . import _execution, _runtime
 from .compiler import SpaceModel
 from .declarations import (
     Constraint,
@@ -300,7 +300,7 @@ def dependencies(
     subject: Space | SpaceModel[S],
     reference: object,
 ) -> tuple[NodeInfo, ...]:
-    """Return conservative direct dependencies without evaluating any node."""
+    """Return known structural inputs; self-method reads are discovered at runtime."""
 
     model, scope = _context(subject)
     node = model.linked.nodes[model.resolve(scope, reference)]
@@ -321,6 +321,7 @@ def explain(
 def explain(point: Space, reference: object) -> object:
     """Evaluate a query and detach evidence of exactly its demanded computation."""
 
+    _execution.driver_only("dependency inspection")
     current = state(point)
     linked, snapshot = current.model.linked, current.snapshot
     root = current.model.resolve(point._scope, reference)
