@@ -16,7 +16,6 @@ from dataclasses import dataclass
 import os
 from pathlib import Path
 import tempfile
-from typing import cast
 
 import numpy as np  # type: ignore[import-not-found]
 from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
@@ -28,7 +27,6 @@ from kernels.rtlsim.dotp_support import (
     _weight_beats,
     _wrapper,
 )
-from kernels.helpers import point_for
 from kernels.rtlsim.rtl_transport import drive_observed
 from finn.kernels.artifacts.contribution_types import CopiedSource
 from finn.kernels.dotp import DotpAxiKernel
@@ -101,22 +99,17 @@ def run(configuration: Configuration, evidence: Path, *, backpressure_ticks: int
     while min(endpoints) < -(1 << (result_bits - 1)) or max(endpoints) >= (1 << (result_bits - 1)):
         result_bits += 1
     result_type = DataType[f"INT{result_bits}"]
-    point = cast(
-        DotpAxiKernel,
-        point_for(
-            DotpAxiKernel,
-            dict(
-                pe=c.pe,
-                simd=c.simd,
-                activation_dtype=a_type,
-                weights_dtype=w_type,
-                result_dtype=result_type,
-                target_dsp=c.target,
-                segment_length=c.segment,
-            ),
-            compute_pumping=c.pumping,
-        ),
-    )
+    point = DotpAxiKernel(
+        {
+            DotpAxiKernel.pe: c.pe,
+            DotpAxiKernel.simd: c.simd,
+            DotpAxiKernel.activation.dtype: a_type,
+            DotpAxiKernel.weights.dtype: w_type,
+            DotpAxiKernel.result.dtype: result_type,
+            DotpAxiKernel.target_dsp: c.target,
+            DotpAxiKernel.segment_length: c.segment,
+        }
+    ).with_choices(compute_pumping=c.pumping)
     module = point.build_requirements()
     case = Case(
         c.label,
