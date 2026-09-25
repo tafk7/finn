@@ -98,14 +98,18 @@ relative to a staging directory; retain that layout and use the declared
 `MVAU` owns matrix geometry, PE/SIMD folding and result precision. Its
 `compute` child is a bound `DotpAxiKernel`. Weight delivery is the structural
 choice `implementation` between two families. `ExternalWeights` has a top-level
-weight stream and no initializer. `CyclicWeights` has no weight port; it owns a
-`rom_style` choice and consumes the optional `weights` fact, embedding the packed
-image in its requirements. Both export typed `assembly` and `build_requirements`
-views, which the parent's views accept. Only the selected family is evaluated:
+weight stream and no initializer. `CyclicWeights` has no weight port: it places a
+reusable `CyclicDelivery` kernel as its `source`, giving it the optional `weights`
+fact and the tile form dotp reads. The source owns the `rom_style` choice and
+embeds the packed image in its requirements. Both families export typed
+`assembly` and `build_requirements` views, which the parent's views accept, and
+wire replay, compute and the weight source only through checked stream
+contracts (below). Only the selected family is evaluated:
 
 ```python
 from finn.core.space import Unresolved, inspection, selections
 from finn.kernels import MVAU
+from finn.kernels.delivery import CyclicDelivery
 from finn.kernels.mvau import CyclicWeights
 
 base = MVAU(
@@ -122,7 +126,7 @@ base = MVAU(
 family = base.implementation.alternative("cyclic")
 point = base.with_choices(
     base.field(choice.selector).change("cyclic"),
-    family.field(CyclicWeights.rom_style).change("block"),
+    family.field(CyclicWeights.source.decision_ref(CyclicDelivery.rom_style)).change("block"),
     base.compute.field(DotpAxiKernel.compute_pumping).change(False),
     pe=2,
     simd=2,
@@ -143,8 +147,8 @@ replayed = selections.restore(MVAU(**facts), saved).instance  # weights omitted
 assert isinstance(replayed.assembly.query(), Unresolved)
 ```
 
-Changing the selector does not discard the old family's choices: clear
-`rom_style` in the same batch when switching to external delivery. The
+Changing the selector does not discard the old family's choices: clear the
+source's `rom_style` in the same batch when switching to external delivery. The
 `mvau_assembly` adapter binds this same Space for callers with a complete
 configuration:
 
@@ -221,9 +225,37 @@ byte-aligned data and at most one LAST marker; it does not pad words or relabel
 loop/replay completion markers. `AxiStream` uses this same transport lowering
 while retaining its typed packing. Typed ports (`native_stream`, `axi_stream`)
 produce these records from lanes of an accepted scalar. Opaque words need no
-scalar: FIFO, input generation, replay and cyclic delivery construct
-`ReadyValidStream` values directly rather than publishing unpadded words as AXI
-buses.
+scalar: FIFO, input generation and replay construct `ReadyValidStream` values
+directly rather than publishing unpadded words as AXI buses.
+
+A `StreamContract` (`physical/contract.py`) adds the logical sequence to a
+transport: the element encoding, a beat `form` (`physical/forms.py`: `Fold`,
+`Tile`, `Repeat`, `Batch`) naming which operand positions each beat carries in
+which field order, a `Repetition` (`ONCE`, or `CYCLIC` for a free-running
+source whose form repeats into the consumer's pass), and periodic marker rules
+(`Every(k)`). `compatibility(source, sink)` refuses logical mismatches (element,
+lanes, form, repetition, marker rules) that only a sequence-changing kernel
+could repair; physical and protocol differences that keep the sequence are
+realized by `Composition.connect`, which also checks clock domains and emits
+every data, padding, handshake and marker wire. Equal widths are not enough:
+`Tile(4, 4, 1, 4)` and `Tile(4, 4, 4, 1)` have the same lanes and word width
+but carry different positions, and cannot connect.
+
+`CyclicDelivery` streams a constant integer operand in whatever form its
+consumer reads, from an initialized ROM. Its `output` view is a cyclic stream
+contract, so the same kernel feeds MVAU weight tiles or an eltwise channel
+vector, placed inside an operation kernel or beside one:
+
+```python
+from finn.kernels import CyclicDelivery
+from finn.kernels.physical.forms import Fold, Repeat, Repetition
+
+vector = CyclicDelivery(dtype=dtype("INT4"), form=Fold(4, 2), values=(1, -2, 7, -8))
+rhs = vector.with_choices(rom_style="distributed")
+assert rhs.output().repetition is Repetition.CYCLIC
+assert rhs.image == (0xE1, 0x87)
+assert Repeat(rhs.output().form, 3).beats == 6  # a consumer pass of three vectors
+```
 
 FIFO's `ram_style` remains a native preference. Its accepted `storage()` view
 reports both the effective backing and capacity, including output storage.

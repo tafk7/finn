@@ -31,6 +31,7 @@ from finn.core.space.errors import RequestError
 from finn.kernels.artifacts.abi import Bus
 from finn.kernels.artifacts.build import ModuleBuildRequirements, prepare_module_build
 from finn.kernels.artifacts.store import ArtifactStore
+from finn.kernels.delivery import CyclicDelivery
 from finn.kernels.dotp import DotpAxiKernel
 from finn.kernels.mvau import (
     CyclicWeights,
@@ -43,6 +44,8 @@ from finn.kernels.resources import resource_root, template_root
 from finn.kernels.target import DspBlock
 
 ROOT = Path(__file__).resolve().parents[2]
+IMAGE = CyclicWeights.source.ref(CyclicDelivery.image)
+ROM_STYLE = CyclicWeights.source.decision_ref(CyclicDelivery.rom_style)
 WEIGHTS = ((-4, -3, -2, -1), (0, 1, 2, 3), (3, 2, 1, 0), (-1, -2, -3, -4))
 FACTS = dict(
     repetitions=3,
@@ -66,9 +69,8 @@ def selector(point):
 
 
 def rom_style(point):
-    return inspection.decision_handle(
-        point.implementation.alternative("cyclic"), CyclicWeights.rom_style
-    )
+    family = point.implementation.alternative("cyclic")
+    return inspection.decision_handle(family.source, CyclicDelivery.rom_style)
 
 
 def configured(point, case, *, style=None, pe=2, simd=2):
@@ -120,8 +122,8 @@ def test_the_inactive_family_is_never_demanded():
     assert not any(key.startswith("implementation.cyclic.") for key in visited)
     assert "weights" not in visited
     inactive = point.implementation.alternative("cyclic")
-    assert isinstance(inactive.query(CyclicWeights.image), Inapplicable)
-    assert isinstance(inactive.field(CyclicWeights.rom_style).query(), Inapplicable)
+    assert isinstance(inactive.query(IMAGE), Inapplicable)
+    assert isinstance(inactive.source.field(CyclicDelivery.rom_style).query(), Inapplicable)
 
 
 def test_case_local_choices_are_owned_by_their_family():
@@ -131,22 +133,21 @@ def test_case_local_choices_are_owned_by_their_family():
         "simd",
         "compute.compute_pumping",
         "implementation",
-        "implementation.cyclic.rom_style",
+        "implementation.cyclic.source.rom_style",
     }
     assert records["implementation"].selector
     assert records["implementation"].cases == ("external", "cyclic")
-    local = records["implementation.cyclic.rom_style"]
-    assert local.scope == "implementation.cyclic" and not local.selector
+    local = records["implementation.cyclic.source.rom_style"]
+    # The choice belongs to the reusable delivery kernel placed by the family.
+    assert local.scope == "implementation.cyclic.source" and not local.selector
     cases = {case.name: case.space_type for case in inspection.choices(base())[0].cases}
     assert cases == {"external": ExternalWeights, "cyclic": CyclicWeights}
     # Applicability of a case-local choice waits for the selector, and names it.
-    unselected = base().implementation.alternative("cyclic").field(CyclicWeights.rom_style)
+    unselected = base().implementation.alternative("cyclic").field(ROM_STYLE)
     pending = unselected.candidates()
     assert isinstance(pending, Unresolved) and owners(pending) == {"implementation"}
     selected = base().implementation.select("cyclic").alternative("cyclic")
-    assert selected.field(CyclicWeights.rom_style).candidates() == Available(
-        ("auto", "distributed", "block")
-    )
+    assert selected.field(ROM_STYLE).candidates() == Available(("auto", "distributed", "block"))
 
 
 def test_missing_cyclic_weights_leave_only_the_selected_family_unresolved():
@@ -154,8 +155,8 @@ def test_missing_cyclic_weights_leave_only_the_selected_family_unresolved():
     assert isinstance(external.assembly.query(), Available)
     cyclic = configured(base(), "cyclic", style="distributed")
     family = cyclic.implementation.alternative("cyclic")
-    assert family.rom_style == "distributed"
-    assert isinstance(family.query(CyclicWeights.image), Unresolved)
+    assert family.source.rom_style == "distributed"
+    assert isinstance(family.query(IMAGE), Unresolved)
     assessment = cyclic.assembly.inspect()
     assert isinstance(assessment.accepted_result, Unresolved)
     assert assessment.constraints.verdict is True
@@ -172,8 +173,8 @@ def test_cyclic_family_needs_its_own_rom_choice_and_refuses_bad_weights():
     bad = configured(base(weights=((4,) * 4,) * 4), "cyclic", style="auto")
     refused = bad.assembly.query()
     assert isinstance(refused, Rejected)
-    assert keys(refused) == {"mvau-weights"}
-    assert owners(refused) == {"implementation.cyclic.image"}
+    assert keys(refused) == {"cyclic-values"}
+    assert owners(refused) == {"implementation.cyclic.source.image"}
     # A shape error is refused the same way, and never demanded by external delivery.
     wrong = configured(base(weights=((0,),)), "cyclic", style="auto").assembly.query()
     assert isinstance(wrong, Rejected) and "shape" in wrong.findings[0].message
@@ -232,7 +233,7 @@ def test_selector_and_case_choices_round_trip_through_an_empty_root():
     assert saved.keys == (
         "compute.compute_pumping",
         "implementation",
-        "implementation.cyclic.rom_style",
+        "implementation.cyclic.source.rom_style",
         "pe",
         "simd",
     )
@@ -265,8 +266,8 @@ def test_switching_families_is_atomic_and_requires_clearing_stale_case_choices()
     stale = cyclic.try_with_choices(cyclic.field(selector(cyclic)).change("external"))
     assert not stale.accepted and stale.instance is cyclic
     refused = {outcome.owner: outcome for outcome in stale.outcomes if outcome.status == "refused"}
-    assert set(refused) == {"implementation.cyclic.rom_style"}
-    assert isinstance(refused["implementation.cyclic.rom_style"].result, Inapplicable)
+    assert set(refused) == {"implementation.cyclic.source.rom_style"}
+    assert isinstance(refused["implementation.cyclic.source.rom_style"].result, Inapplicable)
     assert cyclic.assembly().weight_delivery is WeightDelivery.CYCLIC
     switched = cyclic.with_choices(
         cyclic.field(selector(cyclic)).change("external"),

@@ -82,6 +82,10 @@ def test_component_groups_its_interfaces_and_keeps_one_root_physical_output():
     point = kernel()
     assert tuple(item.key for item in point.capabilities() if item.scope == "") == (
         "build_requirements",
+        "interfaces",
+    )
+    assert point.interfaces() == tuple(
+        port.stream() for port in (point.activation, point.weights, point.result)
     )
     point.build_requirements()
     inputs = {item.key for item in inspection.members(point) if item.kind == "param"}

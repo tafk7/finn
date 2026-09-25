@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Physical packing and framing value types."""
+"""Physical packing value types. Marker rules live with logical forms."""
 
 from __future__ import annotations
 
@@ -59,25 +59,9 @@ class PackedBeatLayout:
             raise TypeError("payload padding must be UnusedBitRange values")
 
 
-@dataclass(frozen=True)
-class PeriodicLast:
-    member: str
-    period_beats: int
-    asserted_index: int
-
-    def __post_init__(self) -> None:
-        if self.member != "tlast":
-            raise ValueError("first-profile framing requires tlast")
-        _natural(self.period_beats, "last period", positive=True)
-        _natural(self.asserted_index, "last index")
-        if self.asserted_index >= self.period_beats:
-            raise ValueError("last index must be within period")
-
-
 __all__ = [
     "FieldPlacement",
     "PackedBeatLayout",
-    "PeriodicLast",
     "UnusedBitPolicy",
     "UnusedBitRange",
 ]

@@ -20,6 +20,9 @@ from finn.kernels.artifacts.abi import (
     Reset,
     Signal,
 )
+from finn.kernels.datatypes.scalar import ScalarEncoding
+from finn.kernels.physical.contract import StreamContract
+from finn.kernels.physical.forms import Batch, BeatForm, Every, Repeat
 from finn.kernels.physical.stream import ReadyValidStream, StreamMarker, MarkerKind
 from finn.kernels.artifacts.contribution_types import CopiedSource
 from finn.kernels.artifacts.requirements import (
@@ -65,6 +68,31 @@ def replay_buffer_interfaces(*, word_bits: int) -> tuple[ReadyValidStream, ...]:
             "clk",
             "rst",
             (StreamMarker("olast", MarkerKind.LAST), StreamMarker("ofin", MarkerKind.REPLAY_END)),
+        ),
+    )
+
+
+def replay_buffer_contracts(
+    element: ScalarEncoding, form: BeatForm, *, replay_count: int
+) -> tuple[StreamContract, StreamContract]:
+    """Input and output contracts of a replay over ``Batch(sequence, n)`` input.
+
+    Each ``sequence`` pass is presented ``replay_count`` times: the output form is
+    ``Batch(Repeat(sequence, replay_count), n)``. ``olast`` closes every sequence
+    and ``ofin`` its final repetition, so both are periodic marker rules.
+    """
+    if not isinstance(form, Batch):
+        raise ValueError("replay input is a Batch of independent sequences")
+    _positive("replay_count", replay_count)
+    length = form.form.beats
+    source, sink = replay_buffer_interfaces(word_bits=form.lanes * element.bits)
+    return (
+        StreamContract(source, element, form),
+        StreamContract(
+            sink,
+            element,
+            Batch(Repeat(form.form, replay_count), form.count),
+            markers={"olast": Every(length), "ofin": Every(length * replay_count)},
         ),
     )
 
@@ -175,6 +203,7 @@ def cyclic_stream_requirements(
 
 __all__ = [
     "CYCLIC_ROM_STYLES",
+    "replay_buffer_contracts",
     "replay_buffer_requirements",
     "cyclic_stream_requirements",
     "replay_buffer_interfaces",

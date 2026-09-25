@@ -44,7 +44,7 @@ from finn.kernels.datatypes.values import (
     qonnx_datatype_width,
 )
 from finn.kernels.datatypes.scalar import integer_scalar
-from finn.kernels.physical.axi_stream import axi_stream
+from finn.kernels.physical.axi_stream import AxiStream, axi_stream
 from finn.core.space import (
     ConstraintGroup,
     Decision,
@@ -55,6 +55,7 @@ from finn.core.space import (
     derived,
     default_semantics,
     reject,
+    view,
 )
 
 _DSP_VERSION = {DspBlock.DSP48E1: 1, DspBlock.DSP48E2: 2, DspBlock.DSP58: 3}
@@ -274,6 +275,11 @@ class DotpAxiKernel(Kernel):
         )
 
     build_requirements = View(codegen, constraints=(support,))
+
+    @view(semantics=default_semantics(tuple))
+    def interfaces(self) -> tuple[AxiStream, ...]:
+        """Accepted (activation, weights, result) ports; framing is the caller's."""
+        return (self.activation.stream(), self.weights.stream(), self.result.stream())
 
 
 __all__ = ["DotpAxiKernel"]

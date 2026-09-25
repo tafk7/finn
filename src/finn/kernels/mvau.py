@@ -30,7 +30,6 @@ from enum import Enum
 from typing import Any, cast
 
 from finn.kernels.artifacts.abi import Bus, Endpoint
-from finn.kernels.physical.stream import ReadyValidStream
 from finn.kernels.artifacts.build import (
     EntryPointSourceName,
     FixedModuleName,
@@ -41,35 +40,32 @@ from finn.kernels.artifacts.build import (
     SELF_CONTAINED_JINJA_RENDERER,
 )
 from finn.kernels.artifacts.derivation import ProducerIdentity
-from finn.kernels.dotp import DotpAxiKernel
-from finn.kernels.streaming import (
-    CYCLIC_ROM_STYLES,
-    cyclic_stream_requirements,
-    replay_buffer_requirements,
-)
-from finn.kernels.target import DspBlock
-from finn.kernels.datatypes.semantics import (
-    INTEGER_MATRIX,
-    INTEGER_VECTOR,
-    QONNX_DATATYPE_VALUE_SEMANTICS,
-    IntegerVector,
-)
+from finn.kernels.datatypes.scalar import ScalarEncoding
+from finn.kernels.datatypes.semantics import INTEGER_TENSOR, QONNX_DATATYPE_VALUE_SEMANTICS
 from finn.kernels.datatypes.values import (
     QONNXDataType,
     canonical_qonnx_datatype,
     ordinary_integer_bounds,
     resolve_qonnx_datatype_name,
 )
-from finn.kernels.physical.lowering import lower_module_structure
-from finn.kernels.physical.structure import (
-    ConstantBits,
-    ModuleInstance,
-    PhysicalPin,
-    PhysicalStructure,
-    PhysicalWire,
-    PinSlice,
-    UnusedOutput,
+from finn.kernels.delivery import CyclicDelivery
+from finn.kernels.dotp import DotpAxiKernel
+from finn.kernels.physical.axi_stream import AxiStream
+from finn.kernels.physical.composition import Composition, StreamEnd
+from finn.kernels.physical.contract import StreamContract, StreamMismatch
+from finn.kernels.physical.forms import (
+    BEAT_FORM,
+    Batch,
+    BeatForm,
+    Every,
+    Fold,
+    Repeat,
+    Tile,
 )
+from finn.kernels.physical.lowering import lower_module_structure
+from finn.kernels.physical.structure import PhysicalStructure
+from finn.kernels.streaming import replay_buffer_contracts, replay_buffer_requirements
+from finn.kernels.target import DspBlock
 from finn.core.space import (
     Available,
     ChangeRequest,
@@ -152,34 +148,6 @@ class _Traversal:
     def result_beats(self) -> int:
         return self.repetitions * self.neuron_folds
 
-    def weight_image(
-        self, weights: Sequence[Sequence[int]], dtype: QONNXDataType
-    ) -> tuple[int, ...]:
-        """Pack one row-major W image; word order is (neuron fold, synapse fold)."""
-        if len(weights) != self.matrix_height or any(
-            len(row) != self.matrix_width for row in weights
-        ):
-            raise ValueError("weights must have shape (matrix_height, matrix_width)")
-        minimum, maximum = ordinary_integer_bounds(dtype)
-        if any(
-            type(value) is not int or not minimum <= value <= maximum
-            for row in weights
-            for value in row
-        ):
-            raise ValueError("every weight must be an integer admitted by weights_dtype")
-        bits = dtype.bitwidth()
-        mask = (1 << bits) - 1
-        return tuple(
-            sum(
-                (weights[nf * self.pe + p][sf * self.simd + s] & mask)
-                << ((p * self.simd + s) * bits)
-                for p in range(self.pe)
-                for s in range(self.simd)
-            )
-            for nf in range(self.neuron_folds)
-            for sf in range(self.synapse_folds)
-        )
-
 
 @dataclass(frozen=True, slots=True)
 class MVAUAssembly:
@@ -193,23 +161,6 @@ class MVAUAssembly:
     initializer: tuple[int, ...]
 
 
-def _slice(owner: str | None, name: str, bits: int = 1, offset: int = 0) -> PinSlice:
-    return PinSlice(PhysicalPin(owner, name), offset, bits)
-
-
-def _axis(name: str, bits: int, endpoint: Endpoint) -> Bus:
-    return ReadyValidStream(
-        name,
-        bits,
-        endpoint,
-        name + "_tdata",
-        name + "_tvalid",
-        name + "_tready",
-        "ap_clk",
-        "ap_rst_n",
-    ).axis_bus()
-
-
 def _wire_mvau(
     *,
     traversal: _Traversal,
@@ -217,117 +168,81 @@ def _wire_mvau(
     weights_dtype: QONNXDataType,
     result_dtype: QONNXDataType,
     compute: ModuleBuildRequirements,
-    weight_source: ModuleBuildRequirements | None,
+    ports: tuple[AxiStream, ...],
+    weight_source: tuple[ModuleBuildRequirements, StreamContract] | None,
     initializer: tuple[int, ...] = (),
 ) -> MVAUAssembly:
-    """Wire accepted component requirements; without a weight source, weights are a port."""
-    pe, simd = traversal.pe, traversal.simd
-    activation_dtype = canonical_qonnx_datatype(activation_dtype)
-    weights_dtype = canonical_qonnx_datatype(weights_dtype)
+    """Compose replay, compute and an optional weight source through checked streams.
+
+    The forms state the MVAU traversal: activation vectors are replayed once per
+    neuron fold, and weight tiles repeat once per vector. Without a weight source,
+    the weight stream is a top-level port. ``ports`` are dotp's accepted streams.
+    """
+    x, w, y = (ScalarEncoding(dtype) for dtype in (activation_dtype, weights_dtype, result_dtype))
+    t = traversal
     external = weight_source is None
     weight_delivery = WeightDelivery.EXTERNAL if external else WeightDelivery.CYCLIC
-    a_bits, w_bits, y_bits = (
-        activation_dtype.bitwidth(),
-        weights_dtype.bitwidth(),
-        result_dtype.bitwidth(),
-    )
-    a_payload, w_payload, y_payload = simd * a_bits, pe * simd * w_bits, pe * y_bits
-    a_carrier, w_carrier, y_carrier = (
-        (bits + 7) // 8 * 8 for bits in (a_payload, w_payload, y_payload)
-    )
-    replay = replay_buffer_requirements(
-        word_bits=a_payload,
-        sequence_length=traversal.synapse_folds,
-        replay_count=traversal.neuron_folds,
-    )
-    instances = [ModuleInstance("u_replay", replay), ModuleInstance("u_compute", compute)]
-    if weight_source is not None:
-        instances.append(ModuleInstance("u_weights", weight_source))
+    clocking = dict(clock="ap_clk", reset="ap_rst_n")
+
+    def top(
+        name: str, element: ScalarEncoding, form: BeatForm, endpoint: Endpoint
+    ) -> StreamContract:
+        stream = AxiStream(name, element.dtype, form.lanes, endpoint=endpoint)
+        return StreamContract(stream.native(**clocking), element, form)
+
+    x_form = Batch(Fold(t.matrix_width, t.simd), t.repetitions)
+    w_form = Repeat(Tile(t.matrix_height, t.matrix_width, t.pe, t.simd), t.repetitions)
+    y_form = Batch(Fold(t.matrix_height, t.pe), t.repetitions)
+    x_top = top("in0_V", x, x_form, Endpoint.TARGET)
+    w_top = top("in1_V", w, w_form, Endpoint.TARGET)
+    y_top = top("out0_V", y, y_form, Endpoint.INITIATOR)
+    replay_in, replay_out = replay_buffer_contracts(x, x_form, replay_count=t.neuron_folds)
+    activation, weights, result = (port.native(**clocking) for port in ports)
+
     top_abi = ModuleABIRequirements(
         GeneratedModuleName("finn_mvau_" + weight_delivery.value),
         (
             *(port for port in compute.abi.ports if not isinstance(port, Bus)),
-            _axis("in0_V", a_carrier, Endpoint.TARGET),
-            *((_axis("in1_V", w_carrier, Endpoint.TARGET),) if external else ()),
-            _axis("out0_V", y_carrier, Endpoint.INITIATOR),
+            *(c.transport.axis_bus() for c in (x_top, *((w_top,) if external else ()), y_top)),
         ),
         (),
         compute.abi.clock_alignments,
     )
-    wires: list[PhysicalWire] = []
-    ignored: list[PinSlice] = []
+    composition = Composition(top_abi)
+    composition.add("u_replay", _replay(x, t))
+    composition.add("u_compute", compute)
+    for pin in ("ap_clk", "ap_clk2x", "ap_rst_n"):
+        composition.drive("u_compute", pin, pin)
+    children = ("u_replay",) if external else ("u_replay", "u_weights")
+    if weight_source is not None:
+        composition.add("u_weights", weight_source[0])
+    for owner in children:
+        composition.drive(owner, "clk", "ap_clk")
+        composition.drive(owner, "rst", "ap_rst_n")
 
-    def connect(destination: PinSlice, source: PinSlice, *, invert: bool = False) -> None:
-        wires.append(PhysicalWire(destination, source, invert=invert))
-
-    def fields(
-        destination: tuple[str | None, str], source: tuple[str | None, str], count: int, bits: int
-    ) -> None:
-        for index in range(count):
-            connect(_slice(*destination, bits, index * bits), _slice(*source, bits, index * bits))
-
-    def zero_padding(owner: str | None, name: str, payload: int, carrier: int) -> None:
-        if carrier > payload:
-            wires.append(
-                PhysicalWire(
-                    _slice(owner, name, carrier - payload, payload),
-                    ConstantBits(carrier - payload, 0),
-                )
-            )
-
-    def controls(
-        destination: tuple[str | None, str, str], source: tuple[str | None, str, str]
-    ) -> None:
-        connect(_slice(destination[0], destination[1]), _slice(source[0], source[1]))
-        connect(_slice(source[0], source[2]), _slice(destination[0], destination[2]))
-
-    for name in ("ap_clk", "ap_clk2x", "ap_rst_n"):
-        connect(_slice("u_compute", name), _slice(None, name))
-    for owner in ("u_replay",) + (() if external else ("u_weights",)):
-        connect(_slice(owner, "clk"), _slice(None, "ap_clk"))
-        connect(_slice(owner, "rst"), _slice(None, "ap_rst_n"), invert=True)
-    fields(("u_replay", "idat"), (None, "in0_V_tdata"), simd, a_bits)
-    controls(("u_replay", "ivld", "irdy"), (None, "in0_V_tvalid", "in0_V_tready"))
-    fields(("u_compute", "s_axis_input_tdata"), ("u_replay", "odat"), simd, a_bits)
-    controls(
-        ("u_compute", "s_axis_input_tvalid", "s_axis_input_tready"), ("u_replay", "ovld", "ordy")
-    )
-    connect(_slice("u_compute", "s_axis_input_tlast"), _slice("u_replay", "olast"))
-    zero_padding("u_compute", "s_axis_input_tdata", a_payload, a_carrier)
-    source = (None, "in1_V_tdata") if external else ("u_weights", "odat")
-    fields(("u_compute", "s_axis_weights_tdata"), source, pe * simd, w_bits)
-    controls(
-        ("u_compute", "s_axis_weights_tvalid", "s_axis_weights_tready"),
-        (None, "in1_V_tvalid", "in1_V_tready") if external else ("u_weights", "ovld", "ordy"),
-    )
-    zero_padding("u_compute", "s_axis_weights_tdata", w_payload, w_carrier)
-    fields((None, "out0_V_tdata"), ("u_compute", "m_axis_output_tdata"), pe, y_bits)
-    if y_carrier > y_payload:
-        connect(
-            _slice(None, "out0_V_tdata", y_carrier - y_payload, y_payload),
-            _slice("u_compute", "m_axis_output_tdata", y_carrier - y_payload, y_payload),
-        )
-    controls(
-        (None, "out0_V_tvalid", "out0_V_tready"),
-        ("u_compute", "m_axis_output_tvalid", "m_axis_output_tready"),
-    )
-    for name, payload, carrier in (("in0_V_tdata", a_payload, a_carrier),) + (
-        (("in1_V_tdata", w_payload, w_carrier),) if external else ()
-    ):
-        if carrier > payload:
-            ignored.append(_slice(None, name, carrier - payload, payload))
-    structure = PhysicalStructure(
-        top_abi,
-        tuple(instances),
-        tuple(wires),
-        (
-            UnusedOutput(
-                PhysicalPin("u_replay", "ofin"),
-                "olast closes each accumulation; top stream lengths follow the workload extents",
+    composition.connect(StreamEnd(None, x_top), StreamEnd("u_replay", replay_in))
+    composition.connect(
+        StreamEnd("u_replay", replay_out),
+        StreamEnd(
+            "u_compute",
+            StreamContract(
+                activation,
+                x,
+                replay_out.form,
+                markers={activation.markers[0].signal: Every(t.synapse_folds)},
             ),
         ),
-        tuple(ignored),
     )
+    composition.connect(
+        StreamEnd(None, w_top)
+        if weight_source is None
+        else StreamEnd("u_weights", weight_source[1]),
+        StreamEnd("u_compute", StreamContract(weights, w, w_form)),
+    )
+    composition.connect(
+        StreamEnd("u_compute", StreamContract(result, y, y_form)), StreamEnd(None, y_top)
+    )
+    structure = composition.finish()
     wrapper = RenderedSourceRequirement(
         EntryPointSourceName(),
         "decomposed_wrapper.sv.j2",
@@ -335,7 +250,7 @@ def _wire_mvau(
         SELF_CONTAINED_JINJA_RENDERER,
         requires=tuple(
             "module:" + cast(FixedModuleName, instance.requirements.abi.entry_point).value
-            for instance in instances
+            for instance in structure.instances
         ),
         provides_entry_point=True,
     )
@@ -345,9 +260,9 @@ def _wire_mvau(
         wrapper_template=wrapper,
     )
     return MVAUAssembly(
-        traversal.activation_beats,
-        traversal.weight_beats,
-        traversal.result_beats,
+        t.activation_beats,
+        t.weight_beats,
+        t.result_beats,
         result_dtype,
         weight_delivery,
         structure,
@@ -356,9 +271,18 @@ def _wire_mvau(
     )
 
 
+def _replay(element: ScalarEncoding, traversal: _Traversal) -> ModuleBuildRequirements:
+    return replay_buffer_requirements(
+        word_bits=traversal.simd * element.bits,
+        sequence_length=traversal.synapse_folds,
+        replay_count=traversal.neuron_folds,
+    )
+
+
 TRAVERSAL = default_semantics(_Traversal)
 MODULE_BUILD = default_semantics(ModuleBuildRequirements)
 ASSEMBLY = default_semantics(MVAUAssembly)
+AXI_PORTS = default_semantics(tuple)
 ASSEMBLY_VIEW = ViewKey("assembly", ASSEMBLY)
 BUILD_VIEW = ViewKey("build_requirements", MODULE_BUILD)
 
@@ -366,8 +290,8 @@ BUILD_VIEW = ViewKey("build_requirements", MODULE_BUILD)
 class WeightDeliveryFamily(Space):
     """Facts shared by the weight-delivery families: accepted folding and compute.
 
-    ``compute`` is the parent's accepted dotp requirements, so a family cannot
-    wire a compute core whose own physical View was refused.
+    ``compute`` and ``ports`` are the parent's accepted dotp requirements and
+    streams, so a family cannot wire a compute core whose physical View was refused.
     """
 
     traversal = Param(TRAVERSAL)
@@ -375,21 +299,34 @@ class WeightDeliveryFamily(Space):
     weights_dtype = Param(QONNX_DATATYPE_VALUE_SEMANTICS)
     result_dtype = Param(QONNX_DATATYPE_VALUE_SEMANTICS)
     compute = Param(MODULE_BUILD)
+    ports = Param(AXI_PORTS)
+
+    def _assemble(
+        self,
+        weight_source: tuple[ModuleBuildRequirements, StreamContract] | None,
+        initializer: tuple[int, ...] = (),
+    ) -> MVAUAssembly | Rejected:
+        try:
+            return _wire_mvau(
+                traversal=self.traversal,
+                activation_dtype=self.activation_dtype,
+                weights_dtype=self.weights_dtype,
+                result_dtype=self.result_dtype,
+                compute=self.compute,
+                ports=self.ports,
+                weight_source=weight_source,
+                initializer=initializer,
+            )
+        except StreamMismatch as error:
+            return reject("mvau-stream", str(error))
 
 
 class ExternalWeights(WeightDeliveryFamily):
     """Weights arrive on the top-level ``in1_V`` stream, once per repetition."""
 
     @view(semantics=ASSEMBLY)
-    def assembly(self) -> MVAUAssembly:
-        return _wire_mvau(
-            traversal=self.traversal,
-            activation_dtype=self.activation_dtype,
-            weights_dtype=self.weights_dtype,
-            result_dtype=self.result_dtype,
-            compute=self.compute,
-            weight_source=None,
-        )
+    def assembly(self) -> MVAUAssembly | Rejected:
+        return self._assemble(None)
 
     @view(semantics=MODULE_BUILD)
     def build_requirements(self) -> ModuleBuildRequirements:
@@ -399,44 +336,30 @@ class ExternalWeights(WeightDeliveryFamily):
 
 
 class CyclicWeights(WeightDeliveryFamily):
-    """An initialized on-chip ROM replays the weight image; there is no weight port.
+    """A reusable ``CyclicDelivery`` kernel streams the weight tiles; there is no weight port.
 
-    The weight values are a fact of this family only. Without them the family's
-    image and views stay unresolved; the image is embedded in the requirements,
-    so the build needs no initialization file or data slot.
+    The family supplies the weight values and the tile form dotp reads; the
+    delivery kernel owns packing, its ``rom_style`` choice and its build. The
+    connection to dotp is checked by stream contract, not wired by hand. Without
+    weights the source's image and this family's views stay unresolved.
     """
 
-    weights = Param(INTEGER_MATRIX)
-    rom_style = Decision(str, values=CYCLIC_ROM_STYLES)
+    weights = Param(INTEGER_TENSOR)
 
-    @derived(semantics=INTEGER_VECTOR)
-    def image(self) -> IntegerVector | Rejected:
-        try:
-            return self.traversal.weight_image(self.weights, self.weights_dtype)
-        except ValueError as error:
-            return reject("mvau-weights", str(error))
+    @derived(semantics=BEAT_FORM)
+    def weight_form(self) -> BeatForm:
+        t = self.traversal
+        return Tile(t.matrix_height, t.matrix_width, t.pe, t.simd)
 
-    @derived(semantics=MODULE_BUILD)
-    def weight_source(self) -> ModuleBuildRequirements:
-        traversal = self.traversal
-        image = self.image
-        return cyclic_stream_requirements(
-            word_bits=traversal.pe * traversal.simd * self.weights_dtype.bitwidth(),
-            depth=len(image),
-            image=image,
-            rom_style=self.rom_style,
-        )
+    source = Subspace(
+        CyclicDelivery, dtype=WeightDeliveryFamily.weights_dtype, form=weight_form, values=weights
+    )
 
     @view(semantics=ASSEMBLY)
-    def assembly(self) -> MVAUAssembly:
-        return _wire_mvau(
-            traversal=self.traversal,
-            activation_dtype=self.activation_dtype,
-            weights_dtype=self.weights_dtype,
-            result_dtype=self.result_dtype,
-            compute=self.compute,
-            weight_source=self.weight_source,
-            initializer=self.image,
+    def assembly(self) -> MVAUAssembly | Rejected:
+        source = self.source
+        return self._assemble(
+            (source.build_requirements(), source.output()), initializer=source.image
         )
 
     @view(semantics=MODULE_BUILD)
@@ -461,7 +384,7 @@ class MVAU(Space):
     weights_dtype = Param(QONNX_DATATYPE_VALUE_SEMANTICS)
     target_dsp = Param(DspBlock)
     segment_length = Param(int)
-    weights = Param(INTEGER_MATRIX, required=False)
+    weights = Param(INTEGER_TENSOR, required=False)
     pe = Decision(int, domain=divisors_of(matrix_height))
     simd = Decision(int, domain=divisors_of(matrix_width))
 
@@ -500,6 +423,7 @@ class MVAU(Space):
     )
 
     compute_requirements = compute.accepted(DotpAxiKernel.build_requirements)
+    compute_ports = compute.accepted(DotpAxiKernel.interfaces)
     implementation = SubspaceChoice(
         {
             WeightDelivery.EXTERNAL.value: Subspace(
@@ -509,6 +433,7 @@ class MVAU(Space):
                 weights_dtype=weights_dtype,
                 result_dtype=result_type,
                 compute=compute_requirements,
+                ports=compute_ports,
             ),
             WeightDelivery.CYCLIC.value: Subspace(
                 CyclicWeights,
@@ -517,6 +442,7 @@ class MVAU(Space):
                 weights_dtype=weights_dtype,
                 result_dtype=result_type,
                 compute=compute_requirements,
+                ports=compute_ports,
                 weights=weights,
             ),
         },
@@ -525,6 +451,9 @@ class MVAU(Space):
 
     assembly = View(implementation.accepted(ASSEMBLY_VIEW), constraints=(dimensions,))
     build_requirements = View(implementation.accepted(BUILD_VIEW), constraints=(dimensions,))
+
+
+CYCLIC_ROM_STYLE = CyclicWeights.source.decision_ref(CyclicDelivery.rom_style)
 
 
 def _findings(results: Sequence[QueryResult[Any]]) -> str:
@@ -582,7 +511,7 @@ def mvau_assembly(
         ]
         if cyclic:
             family = point.implementation.alternative(case)
-            changes.append(family.field(CyclicWeights.rom_style).change(rom_style))
+            changes.append(family.field(CYCLIC_ROM_STYLE).change(rom_style))
         report = point.try_with_choices(*changes, pe=pe, simd=simd)
     except (RequestError, ConfigurationError) as error:
         raise ValueError(str(error)) from error

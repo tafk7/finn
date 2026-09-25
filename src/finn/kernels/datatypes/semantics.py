@@ -45,14 +45,30 @@ INTEGER_VECTOR: ValueSemantics[IntegerVector] = ValueSemantics(
     lambda value: value,
 )
 
-IntegerMatrix = tuple[tuple[int, ...], ...]
-INTEGER_MATRIX: ValueSemantics[IntegerMatrix] = ValueSemantics(
-    IntegerMatrix,
-    "integer matrix",
-    lambda value: (
-        type(value) is tuple
-        and all(type(row) is tuple and all(type(item) is int for item in row) for row in value)
-    ),
+IntegerTensor = tuple[object, ...]
+
+
+def _is_tensor(value: object) -> bool:
+    """A nonempty rectangular nest of tuples with int leaves (rank at least one)."""
+
+    def shape(item: object) -> tuple[int, ...] | None:
+        if type(item) is int:
+            return ()
+        if type(item) is not tuple or not item:
+            return None
+        inner = {shape(element) for element in item}
+        if len(inner) != 1 or None in inner:
+            return None
+        (common,) = inner
+        return None if common is None else (len(item), *common)
+
+    return type(value) is tuple and bool(shape(value))
+
+
+INTEGER_TENSOR: ValueSemantics[IntegerTensor] = ValueSemantics(
+    IntegerTensor,
+    "integer tensor",
+    _is_tensor,
     lambda left, right: left == right,
     lambda value: value,
 )
@@ -78,9 +94,9 @@ THRESHOLD_TABLE: ValueSemantics[ThresholdTable] = ValueSemantics(
 
 
 __all__ = [
-    "INTEGER_MATRIX",
+    "INTEGER_TENSOR",
     "INTEGER_VECTOR",
-    "IntegerMatrix",
+    "IntegerTensor",
     "IntegerVector",
     "QONNX_DATATYPE_CODEC",
     "QONNX_DATATYPE_SEMANTICS",
