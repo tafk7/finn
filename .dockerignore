@@ -13,6 +13,8 @@
 !deps.env
 !fetch-repos.sh
 
+!pyproject.toml
+!uv.lock
 !setup.py
 !setup.cfg
 !MANIFEST.in

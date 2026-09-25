@@ -13,7 +13,7 @@ def main():
         except importlib.metadata.PackageNotFoundError:
             print(json.dumps({"distribution": name, "installed": False}))
             continue
-        module = {"finn-experimental": "finnexperimental"}.get(name, name.replace("-", "_"))
+        module = name.replace("-", "_")
         spec = importlib.util.find_spec(module)
         locations = (
             [

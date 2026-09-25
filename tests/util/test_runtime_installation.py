@@ -9,7 +9,6 @@ import subprocess
 import sys
 import sysconfig
 import tarfile
-import venv
 import zipfile
 from pathlib import Path
 
@@ -39,6 +38,7 @@ def clean_env():
 
 def snapshot(destination):
     for name in (
+        "pyproject.toml",
         "setup.py",
         "setup.cfg",
         "MANIFEST.in",
@@ -59,7 +59,11 @@ def snapshot(destination):
 def python_env(path):
     # Prepare this environment from the caller's installed dependency set,
     # excluding FINN and startup hooks. No network or nearby-checkout lookup.
-    venv.EnvBuilder(with_pip=True).create(path)
+    # Create it from the base interpreter: on Python 3.10 a venv created from inside
+    # another venv records the outer venv as its home, which relocatable (e.g.
+    # uv-managed) interpreters cannot start from.
+    base = Path(sys.base_prefix) / "bin" / ("python%d.%d" % sys.version_info[:2])
+    subprocess.run([base, "-m", "venv", path], check=True)
     site = next((path / "lib").glob("python*/site-packages"))
     for item in Path(sysconfig.get_path("purelib")).iterdir():
         if (

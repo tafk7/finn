@@ -448,7 +448,7 @@ COPY --from=wheels /opt/finn/wheels /opt/finn/wheels
 
 FROM base AS application-wheel
 USER root
-COPY setup.py setup.cfg MANIFEST.in VERSION README.md LICENSE.txt deps.env /tmp/finn-package/
+COPY pyproject.toml setup.py setup.cfg MANIFEST.in VERSION README.md LICENSE.txt deps.env /tmp/finn-package/
 COPY src /tmp/finn-package/src
 ARG FINN_SOURCE_REVISION=unknown
 ARG FINN_SOURCE_DIRTY=unknown

@@ -27,13 +27,9 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 # -*- coding: utf-8 -*-
-"""
-    Setup file for finn.
-    Use setup.cfg to configure your project.
+"""Build hooks for FINN: package data and source provenance.
 
-    This file was generated with PyScaffold 3.2.1.
-    PyScaffold helps you to put up the scaffold of your new Python project.
-    Learn more under: https://pyscaffold.org/
+Project metadata and dependencies are declared in pyproject.toml.
 """
 from setuptools import find_namespace_packages, setup
 from setuptools.command.build_py import build_py

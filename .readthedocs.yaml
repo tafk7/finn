@@ -37,13 +37,20 @@ build:
   os: ubuntu-22.04
   tools:
     python: "3.10"
+  # Install the locked docs environment (FINN plus the docs dependency group).
+  jobs:
+    pre_create_environment:
+      - asdf plugin add uv
+      - asdf install uv 0.10.0
+      - asdf global uv 0.10.0
+    create_environment:
+      - uv venv "${READTHEDOCS_VIRTUALENV_PATH}"
+    install:
+      - UV_PROJECT_ENVIRONMENT="${READTHEDOCS_VIRTUALENV_PATH}" uv sync --frozen --no-default-groups --group docs
 
 sphinx:
    configuration: docs/finn/conf.py
 
-python:
-   install:
-        - requirements: docs/requirements.txt
 
 formats:
   - pdf

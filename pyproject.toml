@@ -1,0 +1,145 @@
+[build-system]
+requires = ["setuptools>=68.2.2"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "finn"
+description = "A Framework for Fast, Scalable Quantized Neural Network Inference"
+readme = "README.md"
+license = { text = "BSD-3-Clause" }
+authors = [
+    { name = "Yaman Umuroglu" },
+    { name = "Jakoba Petri-Koenig", email = "jakoba.petri-koenig@amd.com" },
+]
+# numpy<2 has no wheels beyond Python 3.12.
+requires-python = ">=3.10,<3.13"
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Programming Language :: Python",
+    "Operating System :: POSIX :: Linux",
+]
+dynamic = ["version"]
+# What FINN itself imports. Ranges start at the tested versions; uv.lock records
+# the exact environment used for development, CI and the images.
+dependencies = [
+    "bitstring>=4.2.3,<5",
+    "clize>=5.0.1,<6",
+    "dataclasses-json>=0.5.7,<0.7",
+    "numpy>=1.24.1,<2",
+    "onnx>=1.17.0,<1.18",
+    "onnx-ir>=1.0.0,<2",
+    "onnxruntime>=1.18.1,<1.19",
+    "onnxscript>=0.6.2,<0.7",
+    "pybind11>=2.10.0,<3",
+    "qonnx>=0.4.0",
+    "scipy>=1.10.1,<2",
+    "torch>=2.8.0,<3",
+]
+
+[project.urls]
+Homepage = "https://xilinx.github.io/finn/"
+Documentation = "https://finn.readthedocs.io/"
+Source = "https://github.com/Xilinx/finn"
+
+[project.scripts]
+build_dataflow = "finn.builder.build_dataflow:main"
+
+[dependency-groups]
+test = [
+    # Packaging tests build FINN wheels without isolation.
+    "build>=1.2.2",
+    "setuptools>=68.2.2",
+    "wheel>=0.45.1",
+    "brevitas",
+    "dataset-loading",
+    "importlib-resources>=6.1.0",
+    "nbconvert>=7",
+    "nbformat>=5",
+    "pillow",
+    "pytest==6.2.5",
+    "pytest-cov==4.1.0",
+    "pytest-dependency==0.5.1",
+    "pytest-html==3.0.0",
+    "pytest-html-merger==0.0.8",
+    "pytest-metadata==1.7.0",
+    "pytest-parallel==0.1.1",
+    "pytest-xdist[setproctitle]==3.2.0",
+    "torchvision>=0.23.0,<1",
+    "wget>=3.2",
+]
+notebooks = [
+    "ipykernel>=6.21.2",
+    "ipython>=8.12.2",
+    "jupyter>=1.0.0",
+    "matplotlib>=3.7.0",
+    "netron",
+    "pandas>=1.5.3,<2",
+    "scikit-learn>=1.2.1",
+    "tqdm>=4.64.1",
+]
+# autodoc imports every module, including test and notebook helpers.
+docs = [
+    { include-group = "test" },
+    { include-group = "notebooks" },
+    "docutils>=0.18.1,<0.20",
+    "sphinx>=5.0.2,<6",
+    "sphinx-rtd-theme>=2.0.0,<3",
+]
+dev = [
+    { include-group = "docs" },
+    "pip",
+    "pre-commit>=3.3.2",
+]
+
+[tool.uv]
+default-groups = ["dev"]
+# The environment FINN is developed and tested in (the image's Python). Users
+# installing the published package are not limited to it.
+environments = ["sys_platform == 'linux' and platform_machine == 'x86_64' and python_version == '3.10'"]
+constraint-dependencies = [
+    # anyio>=4.13 breaks pytest plugin loading through jupyter, with no metadata
+    # conflict for the resolver to see.
+    "anyio<4.13",
+    # Tested build backend versions.
+    "build==1.2.2.post1",
+    "setuptools==68.2.2",
+    "wheel==0.45.1",
+]
+
+[tool.uv.sources]
+# Unreleased commits FINN is developed against. Development and CI only: published
+# metadata carries the plain requirements above.
+qonnx = { git = "https://github.com/fastmachinelearning/qonnx.git", rev = "f5c9819bd00f01f41e70639b8461c8e4b39432f7" }
+brevitas = { git = "https://github.com/Xilinx/brevitas.git", rev = "aad4d5a293db6f2ec622a92a5d3278e47072453e" }
+dataset-loading = { git = "https://github.com/fbcotter/dataset_loading.git", rev = "5b9faa226e5f7c857579d31cdd9acde8cdfb816f" }
+torch = { index = "pytorch-cpu" }
+torchvision = { index = "pytorch-cpu" }
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.pytest.ini_options]
+addopts = "--verbose"
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "vivado: mark tests that require Vivado or Vivado HLS",
+    "vitis: mark tests that require Vitis",
+    "board: mark tests that require a PYNQ board",
+    "brevitas_export : mark tests that test brevitas export functionality",
+    "streamline: mark tests that test streamlining functionality",
+    "util: mark tests that test util functions",
+    "transform: mark tests that test transformations (before hls layers)",
+    "fpgadataflow: mark tests related to hls layers",
+    "end2end: mark tests that run the end2end flow",
+    "notebooks: mark tests that execute all Jupyter notebooks",
+    "sanity_bnn: mark tests that execute the sanity BNN test",
+    "bnn_u55c: mark tests that execute U55C BNN tests",
+    "bnn_kv260: mark tests that execute KV260 BNN tests",
+    "bnn_aup_zu3: mark tests that execute AUP-ZU3 BNN tests",
+    "bnn_zcu104: mark tests that execute ZCU104 BNN tests",
+    "container: mark tests that require a container runtime or host toolchain",
+]
+norecursedirs = ["dist", "build", ".tox"]
+testpaths = ["tests"]

@@ -1,5 +1,6 @@
 # Additional application inputs, hashed after dependency-inputs.txt.
 docker/image-inputs.txt
+pyproject.toml
 setup.py
 setup.cfg
 MANIFEST.in
