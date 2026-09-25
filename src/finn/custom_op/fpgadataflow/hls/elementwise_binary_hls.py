@@ -689,8 +689,7 @@ class ElementwiseBinaryOperation_hls(
         return intf_names
 
     def code_generation_ipi(self):
-        source_target = "./ip/verilog/rtl_ops/%s" % self.onnx_node.name
-        cmd = ["file mkdir %s" % source_target]
+        cmd = []
         # add streamer if needed
         mem_mode = self.get_nodeattr("mem_mode")
         mlo = self.get_nodeattr("mlo_max_iter")
@@ -745,9 +744,7 @@ class ElementwiseBinaryOperation_hls(
                 ms_rtllib_dir + "memstream.sv",
             ]
             for f in sourcefiles:
-                cmd += [
-                    "add_files -copy_to %s -norecurse %s" % (tcl_quote(source_target), tcl_quote(f))
-                ]
+                cmd += ["add_files -norecurse %s" % tcl_quote(f)]
             strm_inst = node_name + "_wstrm"
             cmd.append(
                 "create_bd_cell -type hier -reference %s /%s/%s"

@@ -43,7 +43,7 @@
 
 # Must match the Ubuntu release the runtime manifests were built for; each
 # manifest may declare EXPECT_OS, which docker/install-runtimes.sh checks.
-ARG UBUNTU_TAG=jammy-20230126
+ARG UBUNTU_TAG=noble-20240605
 
 
 # --- system ------------------------------------------------------------------
@@ -94,36 +94,12 @@ RUN apt-get update && \
     libboost-dev \
     libjansson-dev \
     libgetdata-dev \
-    g++-10 \
+    libncurses6 \
+    g++-13 \
     cmake \
     tcsh \
     tini && \
     rm -rf /var/lib/apt/lists/*
-
-# ncurses 5 ABI, which Vivado links against. focal and jammy ship it; noble
-# dropped it, so there the jammy packages are installed from the Ubuntu archive
-# pool, checksummed because this is an unauthenticated fetch installed as root.
-ARG NCURSES5_VERSION=6.3-2ubuntu0.2
-ARG LIBTINFO5_SHA256=b9bb64e716a7d9de05b1b33992763142ca81bcae3a7f8ce7e29fa3c6fd32f1e8
-ARG LIBNCURSES5_SHA256=91d18fcc4165a40d27e8181eb282bcaf89c2a5e6c6dc182b37df33827407361c
-RUN set -eu; \
-    apt-get update; \
-    if apt-cache show libtinfo5 2>/dev/null | grep -q '^Package:'; then \
-        apt-get install -y libtinfo5 libncurses5; \
-    else \
-        pool=http://archive.ubuntu.com/ubuntu/pool/universe/n/ncurses; \
-        arch=$(dpkg --print-architecture); \
-        wget -q "$pool/libtinfo5_${NCURSES5_VERSION}_${arch}.deb"   -O /tmp/libtinfo5.deb; \
-        wget -q "$pool/libncurses5_${NCURSES5_VERSION}_${arch}.deb" -O /tmp/libncurses5.deb; \
-        echo "$LIBTINFO5_SHA256  /tmp/libtinfo5.deb"     | sha256sum -c -; \
-        echo "$LIBNCURSES5_SHA256  /tmp/libncurses5.deb" | sha256sum -c -; \
-        apt-get install -y /tmp/libtinfo5.deb /tmp/libncurses5.deb; \
-        rm -f /tmp/libtinfo5.deb /tmp/libncurses5.deb; \
-    fi; \
-    rm -rf /var/lib/apt/lists/*; \
-    ldconfig; \
-    test -e /usr/lib/$(uname -m)-linux-gnu/libtinfo.so.5 || \
-        { echo "ERROR: libtinfo.so.5 missing after install" >&2; exit 1; }
 
 # LSB loader. lmutil and several Xilinx tool wrappers request the interpreter
 # /lib64/ld-lsb-x86-64.so.3; without it they fail with a misleading "No such file
@@ -172,7 +148,9 @@ ENV VIVADO_IP_CACHE="/tmp/vivado_ip_cache" \
     XILINX_LOCAL_USER_DATA=no
 
 # A stable non-root default user. docker/run overrides it with --user $UID:$GID.
-RUN useradd --create-home --uid 1000 --shell /bin/bash agent && \
+# The Ubuntu base ships an `ubuntu` user at uid 1000; `agent` takes its place.
+RUN userdel --remove ubuntu 2>/dev/null || true; \
+    useradd --create-home --uid 1000 --shell /bin/bash agent && \
     chmod 0755 /home/agent && \
     mkdir -p /home/agent/.local/bin /home/agent/.cache && \
     chown -R agent:agent /home/agent
@@ -198,7 +176,7 @@ ENV VIRTUAL_ENV=/opt/venv \
 RUN --mount=type=bind,source=pyproject.toml,target=/tmp/finn-lock/pyproject.toml \
     --mount=type=bind,source=uv.lock,target=/tmp/finn-lock/uv.lock \
     --mount=type=cache,target=/root/.cache/uv \
-    uv venv --python /usr/bin/python3.10 /opt/venv && \
+    uv venv --python /usr/bin/python3.12 /opt/venv && \
     cd /tmp/finn-lock && \
     uv sync --frozen --no-install-workspace && \
     chmod -R a+rwX /opt/venv

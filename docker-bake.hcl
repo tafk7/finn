@@ -31,7 +31,7 @@ variable "REGISTRY" { default = "xilinx/finn" }
 variable "FINN_RUNTIMES" { default = "" }
 
 # The Ubuntu base. Date-pinned, never the rolling tag.
-variable "UBUNTU_TAG" { default = "jammy-20230126" }
+variable "UBUNTU_TAG" { default = "noble-20240605" }
 
 # The runtime part of the tag is a function of the SET, so `xrt,slash` and
 # `slash,xrt` are one image.
@@ -68,7 +68,7 @@ function "labels" {
   params = [runtimes, sbx]
   result = {
     "org.opencontainers.image.title"       = "FINN"
-    "org.opencontainers.image.description" = "FINN dataflow compiler, Ubuntu 22.04 / Python 3.10"
+    "org.opencontainers.image.description" = "FINN dataflow compiler, Ubuntu 24.04 / Python 3.12"
     "org.opencontainers.image.source"      = "https://github.com/Xilinx/finn"
     "org.opencontainers.image.version"     = FINN_IMAGE_REVISION
     "dev.finn.image-revision"              = FINN_IMAGE_REVISION

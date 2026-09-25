@@ -222,7 +222,7 @@ The underlying environment variables remain available for automation and
 legacy callers. The most relevant are:
 
 * (required for ``build``) ``FINN_XILINX_PATH`` points to your Xilinx tools installation on the host (e.g. ``/opt/Xilinx``)
-* (required for ``build``) ``FINN_XILINX_VERSION`` sets the Xilinx tools version to be used (e.g. ``2022.2``)
+* (required for ``build``) ``FINN_XILINX_VERSION`` sets the Xilinx tools version to be used (e.g. ``2024.2``)
 * (required for Vitis) ``PLATFORM_REPO_PATHS`` points to the Vitis platform files (DSA).
 * ``FINN_RUNTIMES`` selects image runtime packages such as ``xrt`` or ``xrt,slash``.
 * (optional) ``NUM_DEFAULT_WORKERS`` (default 4) specifies the degree of parallelization for the transformations that can be run in parallel, potentially reducing build time
@@ -343,7 +343,7 @@ Prerequisites
 * Ubuntu 22.04
 * Python 3.10
 * System dependencies (see below)
-* Vivado/Vitis 2022.2 or later (for synthesis and simulation)
+* Vivado/Vitis 2024.2 or later (for synthesis and simulation)
 
 Quick Start
 ***********
@@ -355,7 +355,7 @@ Quick Start
 2. Set up Xilinx tools environment variables::
 
     export FINN_XILINX_PATH=/opt/Xilinx
-    export FINN_XILINX_VERSION=2022.2
+    export FINN_XILINX_VERSION=2024.2
 
 3. Clone FINN and run the local setup script::
 

@@ -102,8 +102,8 @@ if [ ! -r /etc/os-release ]; then
 fi
 HOST_OS=$(. /etc/os-release; printf '%s' "$ID")
 HOST_OS_VERSION=$(. /etc/os-release; printf '%s' "$VERSION_ID")
-if [ "$HOST_OS" != ubuntu ] || [ "$HOST_OS_VERSION" != 22.04 ]; then
-    yecho "FINN's hardware flows are tested on Ubuntu 22.04; found $HOST_OS $HOST_OS_VERSION"
+if [ "$HOST_OS" != ubuntu ] || [ "$HOST_OS_VERSION" != 24.04 ]; then
+    yecho "FINN's hardware flows are tested on Ubuntu 24.04; found $HOST_OS $HOST_OS_VERSION"
     yecho "Python-only use works elsewhere; for Vivado flows consider ./docker/run."
 fi
 gecho "  $HOST_OS $HOST_OS_VERSION / $HOST_ARCH - OK"
@@ -134,7 +134,7 @@ echo ""
 gecho "Step 2: Creating the Python environment..."
 # Workspace members (packages/*) are submodules at their pinned commits.
 git -C "${FINN_ROOT}" submodule update --init
-# The exact locked environment; Python 3.10 is provided by uv if the host lacks it.
+# The exact locked environment; Python 3.12 is provided by uv if the host lacks it.
 uv sync --frozen --project "${FINN_ROOT}"
 gecho "  ${UV_PROJECT_ENVIRONMENT:-${FINN_ROOT}/.venv}: FINN (editable) and locked dependencies"
 echo ""

@@ -8,7 +8,6 @@
 ############################################################################
 import math
 import os
-import shutil
 from qonnx.core.datatype import DataType
 from typing import Optional
 
@@ -105,9 +104,6 @@ class InnerShuffle_rtl(InnerShuffle, RTLBackend):
         # (e.g. by GiveUniqueNodeNames(prefix) during MakeZynqProject)
         self.set_nodeattr("gen_top_module", self.get_verilog_top_module_name())
 
-        sv_files = ["inner_shuffle.sv", "skid.sv", "elasticmem.sv"]
-        for sv_files in sv_files:
-            shutil.copy(f"{rtlsrc}/{sv_files}", code_gen_dir)
         self.set_nodeattr("ipgen_path", code_gen_dir)
         self.set_nodeattr("ip_path", code_gen_dir)
 
@@ -129,20 +125,11 @@ class InnerShuffle_rtl(InnerShuffle, RTLBackend):
 
     def code_generation_ipi(self):
         """Constructs and returns the TCL for node instantiation in Vivado IPI."""
-        code_gen_dir = self.get_nodeattr("code_gen_dir_ipgen")
         top_module = self.get_nodeattr("gen_top_module")
-        sourcefiles = [
-            "inner_shuffle.sv",
-            "skid.sv",
-            "elasticmem.sv",
-            f"{top_module}.v",
-        ]
-        sourcefiles = [os.path.join(code_gen_dir, f) for f in sourcefiles] + fifo_rtl_files()
-
         cmd = []
-        for vf in sourcefiles:
-            cmd += [f"add_files -norecurse {tcl_quote(vf)}"]
-        cmd += [f"create_bd_cell -type module -reference {top_module} {self.onnx_node.name}"]
+        for f in self.get_rtl_file_list(abspath=True):
+            cmd.append(f"add_files -norecurse {tcl_quote(f)}")
+        cmd.append(f"create_bd_cell -type module -reference {top_module} {self.onnx_node.name}")
         return cmd
 
     def execute_node(self, context, graph):

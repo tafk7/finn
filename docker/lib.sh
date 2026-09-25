@@ -99,7 +99,7 @@ finn_image_revision () (
         done < "$manifest"
         # Build arguments that change image contents without changing a file.
         # The runtime set is part of the tag suffix instead.
-        printf 'arg=UBUNTU_TAG=%s\n' "${UBUNTU_TAG:-jammy-20230126}"
+        printf 'arg=UBUNTU_TAG=%s\n' "${UBUNTU_TAG:-noble-20240605}"
     ) | sha256sum | awk '{print "img-" substr($1, 1, 16)}'
 )
 

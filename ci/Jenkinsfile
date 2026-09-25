@@ -575,7 +575,7 @@ void runShardBody(Map entry, String buildDir, String startMarker) {
 }
 
 // setup-local.sh expects git and g++ on the agent; this stage installs uv if it
-// is missing, and uv provides Python 3.10. Override FINN_LOCAL_BUILD_LABEL when
+// is missing, and uv provides Python 3.12. Override FINN_LOCAL_BUILD_LABEL when
 // the main build pool lacks those.
 void runLocalSetupTest() {
   node(finnLocalBuildLabel()) {

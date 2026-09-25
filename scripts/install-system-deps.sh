@@ -11,7 +11,7 @@
 #   sudo ./scripts/install-system-deps.sh
 #
 # Supported distributions:
-#   - Ubuntu 22.04 (primary, tested)
+#   - Ubuntu 24.04 (primary, tested)
 #   - Debian 11+ (should work)
 #   - Other apt-based distributions (may work)
 
@@ -77,43 +77,8 @@ if command -v apt-get &> /dev/null; then
         pybind11-dev \
         libboost-dev
 
-    # ---------------------------------------------------------------------
-    # The two things the container image ASSERTS at build time, and which this
-    # script used to omit.
-    #
-    # docker/Dockerfile.finn fails the build if either is missing. The bare-host
-    # lane had no equivalent: the ncurses 5 ABI was demoted to a printed
-    # suggestion ("may be required by some Vivado versions") and the LSB loader
-    # was absent entirely. Both are hard requirements for running Vivado, so the
-    # bare-host lane was silently narrower than the lane it claims to mirror --
-    # the same defect shape as the mount bugs, applied to OS packages.
-    # ---------------------------------------------------------------------
-
-    # ncurses 5 ABI. Vivado links against it. focal and jammy ship it; noble
-    # dropped it for ncurses 6, so ask apt and backport from the jammy pool when
-    # the distro has nothing. Checksums match Dockerfile.finn.
-    NCURSES5_VERSION=6.3-2ubuntu0.2
-    LIBTINFO5_SHA256=b9bb64e716a7d9de05b1b33992763142ca81bcae3a7f8ce7e29fa3c6fd32f1e8
-    LIBNCURSES5_SHA256=91d18fcc4165a40d27e8181eb282bcaf89c2a5e6c6dc182b37df33827407361c
-    if apt-cache show libtinfo5 2>/dev/null | grep -q '^Package:'; then
-        apt-get install -y libtinfo5 libncurses5
-    else
-        . /etc/os-release
-        yecho "ncurses 5 ABI absent on $VERSION_ID, backporting from the jammy pool"
-        pool=http://archive.ubuntu.com/ubuntu/pool/universe/n/ncurses
-        arch=$(dpkg --print-architecture)
-        wget -q "$pool/libtinfo5_${NCURSES5_VERSION}_${arch}.deb"   -O /tmp/libtinfo5.deb
-        wget -q "$pool/libncurses5_${NCURSES5_VERSION}_${arch}.deb" -O /tmp/libncurses5.deb
-        echo "$LIBTINFO5_SHA256  /tmp/libtinfo5.deb"     | sha256sum -c -
-        echo "$LIBNCURSES5_SHA256  /tmp/libncurses5.deb" | sha256sum -c -
-        apt-get install -y /tmp/libtinfo5.deb /tmp/libncurses5.deb
-        rm -f /tmp/libtinfo5.deb /tmp/libncurses5.deb
-    fi
-    ldconfig
-    if [ ! -e "/usr/lib/$(uname -m)-linux-gnu/libtinfo.so.5" ]; then
-        recho "libtinfo.so.5 missing after install; Vivado will not start"
-        exit 1
-    fi
+    # ncurses 6 ABI (Vivado 2024.2 and later), as in docker/Dockerfile.finn.
+    apt-get install -y libncurses6
 
     # LSB loader. lmutil and several tool wrappers request the interpreter
     # /lib64/ld-lsb-x86-64.so.3. Without it they fail to exec with "No such file

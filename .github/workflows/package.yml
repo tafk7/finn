@@ -20,7 +20,7 @@ jobs:
 
   wheel:
     name: Build and use the wheels
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
 
     steps:
       - name: Checkout
@@ -56,13 +56,45 @@ jobs:
       - name: Published metadata resolves
         # What `pip install finn` would need from PyPI (resolution only).
         run: |
-          uv venv --python 3.10 /tmp/finn-pypi
+          uv venv --python 3.12 /tmp/finn-pypi
           uv pip install --python /tmp/finn-pypi/bin/python --dry-run dist/finn-*.whl
+
+  python311:
+    # Development and the images use Python 3.12; the published metadata also
+    # allows 3.11. Run the unit tests there at the locked versions.
+    name: Unit tests on Python 3.11
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.10.0"
+
+      - name: Install at the locked versions
+        # uv.lock covers 3.12 only, so export its versions as constraints.
+        run: |
+          uv export --frozen --no-hashes --no-header --no-annotate --no-emit-workspace \
+            | sed -e 's/ ;.*//' -e '/^-e /d' > /tmp/locked.txt
+          uv venv --python 3.11 /tmp/finn311
+          uv pip install --python /tmp/finn311/bin/python --index-strategy unsafe-best-match \
+            -c /tmp/locked.txt -e . -e packages/finn-hlslib --group dev
+
+      - name: Unit tests
+        run: |
+          export FINN_ROOT="$PWD" FINN_BUILD_DIR=/tmp/finn_build
+          /tmp/finn311/bin/python -m pytest -q -n auto -m "not vivado and not slow" \
+            tests/util tests/transformation
 
   lowest:
     name: Lowest allowed dependency versions
     if: github.event_name == 'workflow_dispatch' && inputs.lowest
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
 
     steps:
       - name: Checkout

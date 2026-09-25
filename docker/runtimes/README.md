@@ -25,7 +25,7 @@ join the supported CI matrix.
 | `URL` | `fetch` | where to get it |
 | `SHA256` | no | checked when set; a warning prints the real sum when not |
 | `FILES` | `supply` | one or more file names in `docker/packages/` |
-| `EXPECT_OS` | no | `VERSION_ID` the package targets, e.g. `22.04` |
+| `EXPECT_OS` | no | `VERSION_ID` the package targets, e.g. `24.04` |
 
 `SOURCE=fetch` downloads the package into the build. Use it only for a stable,
 published URL.
