@@ -58,9 +58,6 @@ _finn_gecho "Activated FINN environment at $FINN_ROOT"
 # Select scratch without creating/repairing directories on shell activation.
 export FINN_BUILD_DIR="${FINN_HOST_BUILD_DIR:-/tmp/finn_build_$(id -u)}"
 
-# Board files path
-export FINN_BOARD_FILES_PATH="${FINN_BOARD_FILES_PATH:-$FINN_ROOT/deps/board_files}"
-export FINN_HLSLIB_PATH="${FINN_HLSLIB_PATH:-$FINN_ROOT/deps/finn-hlslib}"
 
 # Xilinx tools setup
 # The Xilinx toolchain, resolved by docker/config.py -- the same program the

@@ -45,7 +45,6 @@ def snapshot(destination):
         "VERSION",
         "LICENSE.txt",
         "README.md",
-        "deps.env",
     ):
         shutil.copy2(ROOT / name, destination / name)
     for name in ("src",):

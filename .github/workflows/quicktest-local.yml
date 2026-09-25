@@ -25,6 +25,11 @@ jobs:
         run: |
           sudo ./scripts/install-system-deps.sh
 
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.10.0"
+
       - name: Setup local FINN environment
         run: |
           export FINN_HOST_BUILD_DIR=/tmp/finn_gha

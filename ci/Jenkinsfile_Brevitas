@@ -14,12 +14,13 @@ pipeline {
           script {
             cleanPreviousBuildFiles(env.FINN_HOST_BUILD_DIR)
 
-            // Ensure the desired version of brevitas gets pulled
-            updateFetchRepos()
+            // Test against the requested brevitas commit
+            selectBrevitasCommit()
 
             // Multiple markers with pytest needs its own script
             createMultiMarkerScript("brevitas_export", "${env.TEST_NAME}", "--cov --cov-report=html:coverage_${env.TEST_NAME}")
-            sh './docker/run -- ./run-tests.sh'
+            // Relock for the selected commit and install it before the tests.
+            sh './docker/run -- bash -c "uv lock --upgrade-package brevitas && uv sync --inexact && ./run-tests.sh"'
 
             // Stash the test results file(s)
             stash name: env.TEST_NAME, includes: "${env.TEST_NAME}.xml,${env.TEST_NAME}.html"
@@ -65,6 +66,8 @@ void archiveSuccessfulStage(String stageEnvVariableSet, String folder) {
   }
 }
 
-void updateFetchRepos() {
-  sh "sed -i -e 's/BREVITAS_COMMIT=\".*\"/BREVITAS_COMMIT=\"${env.BREVITAS_COMMIT}\"/g' fetch-repos.sh"
+// Point the brevitas source in pyproject.toml at the commit under test.
+void selectBrevitasCommit() {
+  sh """sed -i -e 's|^\\(brevitas = { git = "[^"]*", rev = "\\)[^"]*"|\\1${env.BREVITAS_COMMIT}"|' pyproject.toml"""
+  sh """grep -q 'rev = "${env.BREVITAS_COMMIT}"' pyproject.toml"""
 }

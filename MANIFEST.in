@@ -1,4 +1,4 @@
-include VERSION LICENSE.txt deps.env
+include VERSION LICENSE.txt
 include FINN_BUILD_INFO.json
 include docs/installation.md docs/legacy-build-env-ledger.md docs/runtime-validation.md
 prune tests

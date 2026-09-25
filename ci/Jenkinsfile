@@ -574,8 +574,9 @@ void runShardBody(Map entry, String buildDir, String startMarker) {
   }
 }
 
-// setup-local.sh expects apt + python3.10 on the agent. Override
-// FINN_LOCAL_BUILD_LABEL when the main build pool lacks those.
+// setup-local.sh expects git and g++ on the agent; this stage installs uv if it
+// is missing, and uv provides Python 3.10. Override FINN_LOCAL_BUILD_LABEL when
+// the main build pool lacks those.
 void runLocalSetupTest() {
   node(finnLocalBuildLabel()) {
     withAgentNfsEnv {
@@ -585,28 +586,30 @@ void runLocalSetupTest() {
         String perBuildRoot = finnCiPerBuildRoot()
         String buildDir = "${perBuildRoot}/local_setup"
         echo "[stage-map] build=${env.BUILD_NUMBER} stage='Local Setup (non-Docker) with Vivado' stash=local_setup shard=1/1 node=${env.NODE_NAME} workspace=${env.WORKSPACE} build_dir=${buildDir}"
-        // Cache key tracks the dep inputs so changes force a fresh download.
-        String pipCacheKey = sh(
+        // Cache key tracks the lock so a change starts a fresh package cache.
+        String uvCacheKey = sh(
           returnStdout: true,
-          script: 'sha256sum requirements.txt setup.py setup.cfg pyproject.toml 2>/dev/null | sha256sum | cut -c1-16'
+          script: 'sha256sum uv.lock | cut -c1-16'
         ).trim()
-        if (!pipCacheKey) { pipCacheKey = "build-${env.BUILD_NUMBER}" }
+        if (!uvCacheKey) { uvCacheKey = "build-${env.BUILD_NUMBER}" }
         String cacheRoot   = finnCiLocalCacheRoot()
-        String pipCacheRoot = "${cacheRoot}/pip"
-        String pipCacheDir  = "${pipCacheRoot}/${pipCacheKey}"
-        String xdgCacheDir  = "${cacheRoot}/xdg"
+        String uvCacheRoot = "${cacheRoot}/uv"
+        String uvCacheDir  = "${uvCacheRoot}/${uvCacheKey}"
+        String xdgCacheDir = "${cacheRoot}/xdg"
         withEnv([
           "FINN_HOST_BUILD_DIR=${buildDir}",
-          "PIP_CACHE_DIR=${pipCacheDir}",
+          "UV_CACHE_DIR=${uvCacheDir}",
           "XDG_CACHE_HOME=${xdgCacheDir}",
+          "PATH+UV=${env.HOME}/.local/bin",
         ]) {
-          // prune-pip-cache keeps pipCacheDir and deletes cache-key dirs older
+          // prune-pip-cache keeps uvCacheDir and deletes cache-key dirs older
           // than 14 days. It tolerates concurrent deletion, so two builds
           // GC'ing at once needs no lock (flock is local-only on NFS anyway).
           sh """
-mkdir -p ${shellQuote(perBuildRoot)} ${shellQuote(pipCacheDir)} ${shellQuote(xdgCacheDir)}
+mkdir -p ${shellQuote(perBuildRoot)} ${shellQuote(uvCacheDir)} ${shellQuote(xdgCacheDir)}
 ${CI_TOOL} prune-pip-cache \\
-  ${shellQuote(pipCacheRoot)} ${shellQuote(pipCacheDir)} 14 || true
+  ${shellQuote(uvCacheRoot)} ${shellQuote(uvCacheDir)} 14 || true
+command -v uv >/dev/null || python3 -m pip install --user uv==0.10.0
 """
           cleanPreviousBuildFiles(buildDir)
           catchError(stageResult: 'FAILURE') {

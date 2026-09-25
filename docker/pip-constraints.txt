@@ -1,6 +1,0 @@
-# Bounds that must hold across every install. Load-bearing, not defensive:
-# numpy<2 is a FINN correctness requirement. Consumed as a FILE via
-# PIP_CONSTRAINT, by both docker/Dockerfile.finn and setup-local.sh, which is
-# why it cannot be inlined into either.
-numpy<2
-anyio<4.13
