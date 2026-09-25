@@ -28,7 +28,7 @@ page for the complete guide.
 
 | Setup | Command | Use it when |
 |---|---|---|
-| **Native** | `./setup-local.sh` | You work on the host (uv provides Python 3.10) |
+| **Native** | `./setup-local.sh` | You work on the host (uv provides Python 3.12) |
 | **Docker-built environment** | `./docker/run` | You want the reference OS environment, agent isolation, or an HPC image |
 
 Native quickstart:

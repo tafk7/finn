@@ -8,7 +8,7 @@ it, is in [environment.md](environment.md).
 ## Use FINN
 
 ```bash
-pip install finn          # Python-only use (Python 3.10-3.12, Linux x86-64)
+pip install finn          # Python-only use (Python 3.11-3.12, Linux x86-64)
 pip install "finn[hw]"    # plus finn-hlslib, for HLS simulation and synthesis
 ```
 

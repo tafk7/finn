@@ -58,7 +58,7 @@ print_usage() {
     echo "Environment variables:"
     echo "  FINN_VENV            Virtual environment path (default: .venv)"
     echo "  FINN_XILINX_PATH     Path to Xilinx tools (e.g., /opt/Xilinx)"
-    echo "  FINN_XILINX_VERSION  Xilinx tools version (e.g., 2022.2)"
+    echo "  FINN_XILINX_VERSION  Xilinx tools version (e.g., 2024.2)"
 }
 
 while [[ $# -gt 0 ]]; do
@@ -202,6 +202,6 @@ echo ""
 if [ "$XILINX_AVAILABLE" -eq 0 ]; then
     echo "Note: Xilinx tools not configured. For hardware flows, set:"
     echo "  export FINN_XILINX_PATH=/opt/Xilinx"
-    echo "  export FINN_XILINX_VERSION=2022.2"
+    echo "  export FINN_XILINX_VERSION=2024.2"
     echo ""
 fi

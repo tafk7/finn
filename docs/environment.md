@@ -30,7 +30,7 @@ history at commit `5dd9df9bc`.
   AMD install layouts) and `docker/finn-toolchain.sh` applies it, natively
   (`scripts/activate.sh`) and in the image (entrypoint and tool shims).
 * **System** packages are what pip cannot provide: the libraries Xilinx tools need
-  (ncurses 5, the LSB loader, the libudev preload for FLEXlm) and XRT/SLASH.
+  (ncurses 6, the LSB loader, the libudev preload for FLEXlm) and XRT/SLASH.
 * **Caches** are built or fetched by FINN when first needed, never installed:
   `finn_xsi` per Vivado installation and Python ABI, board files per pinned digest.
 
@@ -56,7 +56,7 @@ part ahead of time.
 ```text
  system ──► python ──────────────────────────► runtime ────────────► sbx
  apt,       uv; /opt/venv from uv.lock           XRT/SLASH            NOPASSWD sudo,
- ncurses5,  (no FINN, no workspace members);     (FINN_RUNTIMES)      BASH_ENV, npm,
+ ncurses6,  (no FINN, no workspace members);     (FINN_RUNTIMES)      BASH_ENV, npm,
  LSB,       active via ENV; board files;             │                proxy env_keep
  libudev    entrypoint                               └──► release: FINN + finn-hlslib wheels
 ```
@@ -126,11 +126,14 @@ part ahead of time.
 
 ## Open items
 
-* **PyPI:** FINN depends on an unreleased QONNX commit (`qonnx>=0.4.0` resolves to
-  a different QONNX from PyPI). Publishing needs a tested QONNX release, and
-  `finn-hlslib` published alongside FINN.
+* **PyPI:** FINN is developed against QONNX 1.0.0 plus four commits (the MaxPool
+  `ceil_mode` fix); the published requirement is `qonnx>=1.0.0`, which PyPI has.
+  Publishing needs a QONNX release that includes those commits, and `finn-hlslib`
+  published alongside FINN.
 * **Board files:** confirm whether XilinxBoardStore, Avnet and RealDigital files
   may be redistributed in a wheel; if so, a `finn-boards` package can replace the
   on-demand fetch.
-* **Lock range:** the lock covers Linux x86-64 with Python 3.10, the tested
-  environment. `requires-python` allows 3.10-3.12 (numpy<2 has no wheels beyond).
+* **Python range:** the lock, the image and development use Python 3.12 on
+  Ubuntu 24.04. `requires-python` allows 3.11-3.12: 3.10 cannot resolve (QONNX caps
+  onnx at 1.17 there, and onnxruntime 1.28 needs 3.11), numpy<2 has no wheels
+  beyond 3.12, and a Package workflow job runs the unit tests on 3.11.

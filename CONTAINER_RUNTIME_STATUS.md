@@ -1,6 +1,6 @@
 # Container/runtime status
 
-Updated: 2026-09-25. Branch: `refactor/container-runtime-implementation`.
+Updated: 2026-09-25 (after merging upstream `dev` at `b507fec58`). Branch: `refactor/container-runtime-implementation`.
 
 Committed locally; nothing has been merged or pushed. The original prototype is on
 `archive/container-runtime-prototype`; the dependency/application-image
@@ -45,16 +45,24 @@ tools and simulation boundary.
 **P8: validation needing AMD tools or other infrastructure**, none of which this
 host has:
 
-- HLS C++ simulation, synthesis and licence checkout, native and in the image.
+- HLS C++ simulation, synthesis and licence checkout, native and in the Ubuntu 24.04
+  image (without ncurses 5); the XRT 24.04 package install.
 - `finn_xsi` first-use build and RTL simulation against a real Vivado; XSI session
   equivalence, lifecycle and overhead.
 - SIF export and read-only execution (Apptainer).
 - The Dev Container through VS Code (uid remapping); the GitHub, Jenkins and Read
   the Docs pipelines as configured.
 
-**Before publishing to PyPI:** a tested QONNX release to depend on, finn-hlslib
-published alongside FINN, and a decision on redistributing board files.
+**Before publishing to PyPI:** a QONNX release that includes the four commits past
+1.0.0 that FINN uses, finn-hlslib published alongside FINN, and a decision on
+redistributing board files.
 
-**Review:** the branch history is one checkpoint commit followed by one commit per
-migration step; reorganize into reviewable commits (resource move as its own
+**Python and OS:** Python 3.12 on Ubuntu 24.04 (lock, image, development), with
+3.11 also allowed and unit-tested in CI. Vivado/Vitis 2024.2 is the minimum. The
+ncurses 5 compatibility libraries are no longer installed; confirm Vivado 2024.2
+runs without them (P8).
+
+**Review:** the branch history is one checkpoint commit, one commit per migration
+step, then the merge of upstream `dev` (conflict resolutions recorded by git
+rerere). Reorganize into reviewable commits (resource move as its own
 pure-rename commit) before proposing it upstream.

@@ -61,7 +61,7 @@ require package-repository access.
 ## FPGA and a coding agent together
 
 The optional overlay requires explicit absolute paths. For an older installation,
-paths might end in `Vivado/2022.2`, `Vitis/2022.2` and `Vitis_HLS/2022.2`. For a
+paths might end in `Vivado/2024.2`, `Vitis/2024.2` and `Vitis_HLS/2024.2`. For a
 newer installation they may end in `2025.1/Vivado` and `2025.1/Vitis` (also HLS).
 Choose paths that exist at your site; this example performs no host discovery.
 
@@ -70,9 +70,9 @@ FILES=("$ENV_DIR/sbxenv.yaml" "$ENV_DIR/fpga.sbxenv.yaml")
 ARGS=(--env-arg name=finn-fpga-agent --env-arg workspace="$CHECKOUT" \
   --env-arg template="$TEMPLATE" --env-arg agent=claude \
   --env-arg toolchain=/opt/Xilinx \
-  --env-arg vivado=/opt/Xilinx/Vivado/2022.2 \
-  --env-arg vitis=/opt/Xilinx/Vitis/2022.2 \
-  --env-arg hls=/opt/Xilinx/Vitis_HLS/2022.2 \
+  --env-arg vivado=/opt/Xilinx/Vivado/2024.2 \
+  --env-arg vitis=/opt/Xilinx/Vitis/2024.2 \
+  --env-arg hls=/opt/Xilinx/Vitis_HLS/2024.2 \
   --env-arg license_host=license.example.com --env-arg license_port=2100)
 sbx env plan "${ARGS[@]}" "${FILES[@]}"
 ```

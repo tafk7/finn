@@ -11,7 +11,7 @@ Quickstart
 1. Clone FINN and enter the checkout: ``git clone https://github.com/Xilinx/finn/``
    followed by ``cd finn``.
 2. Select a path using `Choose an installation`_: use native installation on
-   Ubuntu 22.04 x86-64 with Python 3.10, or the Docker-built environment on
+   Ubuntu 24.04 x86-64 (uv provides Python 3.12), or the Docker-built environment on
    other hosts and when you want a disposable environment.
 3. Prepare that path. For native installation, run
    ``sudo ./scripts/install-system-deps.sh``, ``./setup-local.sh --check``,
@@ -45,7 +45,7 @@ FINN has two setup paths:
     - Use it when
   * - Native installation
     - ``./setup-local.sh``
-    - The host is Ubuntu 22.04 with Python 3.10 and you want one local installation
+    - The host is Ubuntu 24.04 and you want one local installation
   * - Docker-built environment
     - ``./docker/run``
     - You need a portable dependency environment, agent isolation, or an HPC image
@@ -340,8 +340,8 @@ contract or when a disposable dependency environment is preferable.
 Prerequisites
 *************
 
-* Ubuntu 22.04
-* Python 3.10
+* Ubuntu 24.04 (other Linux x86-64 hosts work for Python-only use)
+* Python 3.12, provided by uv (published packages support 3.11-3.12)
 * System dependencies (see below)
 * Vivado/Vitis 2024.2 or later (for synthesis and simulation)
 
@@ -363,7 +363,7 @@ Quick Start
     cd finn
     ./setup-local.sh
 
-   The script needs `uv <https://docs.astral.sh/uv/>`_, which provides Python 3.10
+   The script needs `uv <https://docs.astral.sh/uv/>`_, which provides Python 3.12
    if the host lacks it.
 
 4. Activate the FINN environment::
