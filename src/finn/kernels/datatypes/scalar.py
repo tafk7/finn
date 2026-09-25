@@ -1,29 +1,36 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Scalar encoding admission independent of pins, streams, and implementation language."""
+"""Scalar encoding admission independent of pins, streams, and implementation language.
+
+``Scalar`` and its subclasses are ordinary handwritten Spaces. A kernel places
+one per operand, binding its dtype and the policy's bounds like any other child
+formal; each admission rule is its own constraint, so a known family refusal
+remains visible while an unrelated bound is unresolved. Callers read the raw
+``element_bits`` fact independently and consume the accepted ``encoding`` view.
+Subclassing is the extension mechanism: a subclass adds constraints and names
+them in its ``admission`` group.
+"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TypeVar
+from enum import Enum
 
 from finn.core.space import (
-    Constraint,
     ConstraintGroup,
     Param,
     Rejected,
-    ScopeBuilder,
     Space,
     Subspace,
     ValueRef,
     View,
-    ViewKey,
+    constraint,
     default_semantics,
     derived,
     reject,
 )
-from finn.kernels.datatypes.domains import BitBound, DatatypeDomain
+from finn.kernels.datatypes.domains import Integer, check_bit_bound, check_integer_family
 from finn.kernels.datatypes.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
 from finn.kernels.datatypes.values import (
     QONNXDataType,
@@ -31,28 +38,6 @@ from finn.kernels.datatypes.values import (
     qonnx_datatype_width,
     resolve_qonnx_datatype_name,
 )
-
-S = TypeVar("S", bound=Space)
-
-
-def type_constraints(
-    builder: ScopeBuilder[S],
-    dtype: ValueRef[QONNXDataType],
-    policy: DatatypeDomain,
-) -> tuple[Constraint, ...]:
-    """Localize declared policy dependencies without inspecting the policy's concrete type."""
-
-    def bind(name: str, value: BitBound) -> BitBound:
-        if not isinstance(value, ValueRef):
-            return value
-        parameter = builder.add(name, Param(int))
-        builder.bind(parameter, value)
-        return parameter
-
-    local = policy.rebind(bind)
-    return tuple(
-        builder.add(f"dtype_{name}", condition) for name, condition in local.constraints(dtype)
-    )
 
 
 @dataclass(frozen=True, init=False)
@@ -80,58 +65,93 @@ class ScalarEncoding:
         return self.dtype.signed()
 
 
-class ScalarScope(Space):
+SCALAR_ENCODING = default_semantics(ScalarEncoding)
+
+
+class Scalar(Space):
+    """Any positive-width QONNX encoding; subclasses add admission constraints."""
+
     dtype = Param(QONNX_DATATYPE_VALUE_SEMANTICS)
 
     @derived
     def element_bits(self) -> int:
         return qonnx_datatype_width(self.dtype)
 
-    @derived(semantics=default_semantics(ScalarEncoding))
-    def encoding(self) -> ScalarEncoding | Rejected:
+    @derived(semantics=SCALAR_ENCODING)
+    def candidate(self) -> ScalarEncoding | Rejected:
         try:
             return ScalarEncoding(self.dtype)
         except ValueError as error:
             return reject("dtype-storage", str(error))
 
+    admission = ConstraintGroup()
+    encoding = View(candidate, constraints=(admission,))
 
-SCALAR_VIEW = ViewKey("scalar", ScalarEncoding)
+
+class Signedness(Enum):
+    ANY = None
+    SIGNED = True
+    UNSIGNED = False
 
 
-class Scalar(Subspace[ScalarScope]):
-    """A supplied or chosen dtype with independently inspectable encoding admission."""
+class IntegerScalar(Scalar):
+    """An ordinary INT/UINT encoding with a minimum storage width."""
 
-    def __init__(
-        self,
-        dtype: ValueRef[QONNXDataType],
-        valid_types: DatatypeDomain,
-    ) -> None:
-        builder = ScopeBuilder(ScalarScope, name="ScalarBoundary")
-        admission = builder.add(
-            "admission", ConstraintGroup(*type_constraints(builder, ScalarScope.dtype, valid_types))
+    signedness = Param(Signedness)
+    min_bits = Param(int)
+
+    @constraint
+    def family(self) -> bool | Rejected:
+        return check_integer_family(self.dtype, self.signedness.value)
+
+    @constraint
+    def minimum_bits(self) -> bool | Rejected:
+        return check_bit_bound(self.dtype, self.min_bits, minimum=True)
+
+    admission = ConstraintGroup(family, minimum_bits)
+
+
+class BoundedIntegerScalar(IntegerScalar):
+    """An integer encoding that additionally fits a maximum storage width."""
+
+    max_bits = Param(int)
+
+    @constraint
+    def maximum_bits(self) -> bool | Rejected:
+        return check_bit_bound(self.dtype, self.max_bits, minimum=False)
+
+    admission = ConstraintGroup(IntegerScalar.family, IntegerScalar.minimum_bits, maximum_bits)
+
+
+def integer_scalar(
+    dtype: ValueRef[QONNXDataType], policy: Integer, *, when: ValueRef[bool] | None = None
+) -> Subspace[IntegerScalar]:
+    """Place a policy's admission; referenced bounds become ordinary child bindings."""
+    signedness = Signedness(policy.signed)
+    if policy.max_bits is None:
+        return Subspace(
+            IntegerScalar,
+            when=when,
+            dtype=dtype,
+            signedness=signedness,
+            min_bits=policy.min_bits,
         )
-        accepted = builder.add("physical", View(ScalarScope.encoding, constraints=(admission,)))
-        builder.export(SCALAR_VIEW).view(accepted)
-        builder.bind(ScalarScope.dtype, dtype)
-        placement = builder.place()
-        super().__init__(
-            placement.space_type,
-            when=placement.when,
-            bindings=placement.parameter_bindings,
-            **placement.bindings,
-        )
-        self._view = accepted
-
-    @property
-    def dtype(self) -> ValueRef[QONNXDataType]:
-        return self.ref(ScalarScope.dtype)
-
-    @property
-    def accepted_encoding(self) -> ValueRef[ScalarEncoding]:
-        return self.accepted(SCALAR_VIEW)
-
-    def view(self) -> View[ScalarEncoding]:
-        return self._view
+    return Subspace(
+        BoundedIntegerScalar,
+        when=when,
+        dtype=dtype,
+        signedness=signedness,
+        min_bits=policy.min_bits,
+        max_bits=policy.max_bits,
+    )
 
 
-__all__ = ["Scalar", "ScalarScope", "ScalarEncoding", "type_constraints"]
+__all__ = [
+    "BoundedIntegerScalar",
+    "IntegerScalar",
+    "SCALAR_ENCODING",
+    "Scalar",
+    "ScalarEncoding",
+    "Signedness",
+    "integer_scalar",
+]

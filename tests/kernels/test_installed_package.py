@@ -89,9 +89,9 @@ assert requirements.ModuleBuildRequirements.__module__ == "finn.kernels.artifact
 assert contribution_types.CopiedSource.__module__ == "finn.kernels.artifacts.contributions"
 
 dotp = DotpAxiKernel({
-    DotpAxiKernel.activation.dtype: DataType["INT3"],
-    DotpAxiKernel.weights.dtype: DataType["INT3"],
-    DotpAxiKernel.result.dtype: DataType["INT8"],
+    DotpAxiKernel.activation_dtype: DataType["INT3"],
+    DotpAxiKernel.weights_dtype: DataType["INT3"],
+    DotpAxiKernel.result_dtype: DataType["INT8"],
 }, pe=2, simd=2, target_dsp=DspBlock.DSP48E2, segment_length=0).with_choices(
     compute_pumping=False
 )

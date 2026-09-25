@@ -103,9 +103,9 @@ def run(configuration: Configuration, evidence: Path, *, backpressure_ticks: int
         {
             DotpAxiKernel.pe: c.pe,
             DotpAxiKernel.simd: c.simd,
-            DotpAxiKernel.activation.dtype: a_type,
-            DotpAxiKernel.weights.dtype: w_type,
-            DotpAxiKernel.result.dtype: result_type,
+            DotpAxiKernel.activation_dtype: a_type,
+            DotpAxiKernel.weights_dtype: w_type,
+            DotpAxiKernel.result_dtype: result_type,
             DotpAxiKernel.target_dsp: c.target,
             DotpAxiKernel.segment_length: c.segment,
         }

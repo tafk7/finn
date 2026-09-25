@@ -1,11 +1,13 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Typed, low-field-first AXIS declarations for codegen and logical binding.
+"""Typed, low-field-first AXIS values and ports for codegen and logical binding.
 
 One declaration supplies the pins and the packing. Scalar encodings keep their
 QONNX widths; only the complete beat is padded to a byte boundary. This describes
 the interface of a core, not a converter that changes its RTL implementation.
+``AxiStreamPort`` is the typed AXI profile of a ``TypedStream``: like the native
+port, it binds to a separately owned scalar rather than admitting a dtype itself.
 """
 
 from __future__ import annotations
@@ -13,39 +15,26 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from finn.core.space import (
-    Constraint,
-    ConstraintGroup,
-    DefinitionError,
     Param,
     Rejected,
-    ScopeBuilder,
-    Space,
     Subspace,
     ValueRef,
     View,
-    ViewKey,
-    constraint,
     default_semantics,
     derived,
     reject,
 )
 from finn.kernels.artifacts.abi import Bus, Endpoint
-from finn.kernels.datatypes.domains import DatatypeDomain
-from finn.kernels.datatypes.scalar import type_constraints
-from finn.kernels.physical.stream import ReadyValidStream, StreamMarker, MarkerKind
-from finn.kernels.datatypes.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
+from finn.kernels.datatypes.scalar import Scalar
 from finn.kernels.datatypes.values import (
     QONNXDataType,
     canonical_qonnx_datatype,
     qonnx_datatype_width,
     resolve_qonnx_datatype_name,
 )
-from finn.kernels.physical.layout import (
-    FieldPlacement,
-    PackedBeatLayout,
-    UnusedBitPolicy,
-    UnusedBitRange,
-)
+from finn.kernels.physical.layout import PackedBeatLayout
+from finn.kernels.physical.ports import TypedStream, lane_layout
+from finn.kernels.physical.stream import MarkerKind, ReadyValidStream, StreamMarker
 
 
 @dataclass(frozen=True, init=False)
@@ -62,35 +51,6 @@ class AxiStream:
     elements_per_beat: int
     endpoint: Endpoint
     last: bool
-
-    @staticmethod
-    def input(
-        name: str,
-        elements_per_beat: int | ValueRef[int],
-        valid_types: DatatypeDomain,
-        *,
-        last: bool = False,
-    ) -> AxiStreamInterface:
-        """Declare one input, its dtype admission and its physical stream."""
-        if valid_types is None:
-            raise DefinitionError("an AXIS input declares an admitted datatype domain")
-        return AxiStreamInterface(
-            name, elements_per_beat, Endpoint.TARGET, last, valid_types=valid_types
-        )
-
-    @staticmethod
-    def output(
-        name: str,
-        elements_per_beat: int | ValueRef[int],
-        dtype: ValueRef[QONNXDataType],
-        *,
-        last: bool = False,
-        valid_types: DatatypeDomain | None = None,
-    ) -> AxiStreamInterface:
-        """Expose a kernel-owned dtype source without declaring another Input."""
-        return AxiStreamInterface(
-            name, elements_per_beat, Endpoint.INITIATOR, last, dtype=dtype, valid_types=valid_types
-        )
 
     def __init__(
         self,
@@ -138,24 +98,8 @@ class AxiStream:
 
     @property
     def payload(self) -> PackedBeatLayout:
-        scalar = qonnx_datatype_width(self.dtype)
-        bits = scalar * self.elements_per_beat
-        return PackedBeatLayout(
-            tuple(
-                FieldPlacement(index, index * scalar, scalar)
-                for index in range(self.elements_per_beat)
-            ),
-            ()
-            if bits == self.data_width
-            else (
-                UnusedBitRange(
-                    bits,
-                    self.data_width - bits,
-                    UnusedBitPolicy.IGNORE_ON_RECEIVE
-                    if self.endpoint is Endpoint.TARGET
-                    else UnusedBitPolicy.UNSPECIFIED,
-                ),
-            ),
+        return lane_layout(
+            self.element_bits, self.elements_per_beat, self.data_width, self.endpoint
         )
 
     def bus(self, *, clock: str | None = None, reset: str | None = None) -> Bus:
@@ -177,176 +121,53 @@ class AxiStream:
         )
 
 
-class AxiStreamScope(Space):
-    """One interface occurrence with independent raw fields and admission."""
+class AxiStreamPort(TypedStream):
+    """A byte-aligned AXIS profile over lanes of an accepted scalar encoding."""
 
-    name = Param(str)
-    dtype = Param(QONNX_DATATYPE_VALUE_SEMANTICS)
-    elements_per_beat = Param(int)
-    endpoint = Param(Endpoint)
     last = Param(bool)
-    error_code = Param(str)
-
-    @derived
-    def element_bits(self) -> int:
-        return qonnx_datatype_width(self.dtype)
-
-    @derived
-    def payload_bits(self) -> int:
-        return self.element_bits * self.elements_per_beat
 
     @derived
     def carrier_bits(self) -> int:
         return (self.payload_bits + 7) // 8 * 8
 
-    @constraint
-    def elements_valid(self) -> bool | Rejected:
-        elements_per_beat = self.elements_per_beat
-        if elements_per_beat <= 0:
-            return reject("interface-elements", "elements per beat must be positive")
-        return True
-
-    @constraint
-    def element_bits_valid(self) -> bool | Rejected:
-        element_bits = self.element_bits
-        if element_bits <= 0:
-            return reject("interface-element-bits", "output elements must have positive width")
-        return True
+    @derived(semantics=default_semantics(PackedBeatLayout))
+    def payload(self) -> PackedBeatLayout:
+        return lane_layout(self.element_bits, self.lanes, self.carrier_bits, self.endpoint)
 
     @derived(semantics=default_semantics(AxiStream))
-    def stream(self) -> AxiStream | Rejected:
-        name = self.name
-        dtype = self.dtype
-        elements_per_beat = self.elements_per_beat
-        endpoint = self.endpoint
-        last = self.last
-        error_code = self.error_code
+    def candidate(self) -> AxiStream | Rejected:
         try:
-            return AxiStream(name, dtype, elements_per_beat, endpoint=endpoint, last=last)
+            return AxiStream(
+                self.name,
+                self.element.dtype,
+                self.lanes,
+                endpoint=self.endpoint,
+                last=self.last,
+            )
         except ValueError as error:
-            return reject(error_code, str(error))
+            return reject("interface-lanes", str(error))
 
-    @derived
-    def payload(self) -> PackedBeatLayout:
-        return self.stream.payload
-
-    def bus(self, *, clock: str | None = None, reset: str | None = None) -> Bus:
-        """Lower the raw physical description, without asserting admission."""
-        return self.stream.bus(clock=clock, reset=reset)
+    stream = View(candidate, constraints=(TypedStream.lanes_valid,))
 
 
-STREAM_VIEW = ViewKey("stream", AxiStream)
+def axi_stream(
+    name: str,
+    lanes: int | ValueRef[int],
+    endpoint: Endpoint,
+    element: Subspace[Scalar],
+    *,
+    last: bool = False,
+) -> Subspace[AxiStreamPort]:
+    """Bind an AXIS port to its scalar's raw dtype and accepted encoding."""
+    return Subspace(
+        AxiStreamPort,
+        name=name,
+        endpoint=endpoint,
+        lanes=lanes,
+        last=last,
+        dtype=element.ref(Scalar.dtype),
+        element=element.accepted(Scalar.encoding),
+    )
 
 
-class AxiStreamInterface(Subspace[AxiStreamScope]):
-    """Place a typed AXIS interface without adding members to its parent class.
-
-    Narrow handles read raw fields. The accepted_stream handle reads exactly
-    the accepted result of view(); inspect that view on the child occurrence.
-    Input factories expose a dtype Param, while output factories bind an
-    existing dtype supplier. Explicit fresh Params and Decisions also work.
-    """
-
-    def __init__(
-        self,
-        name: str,
-        elements_per_beat: int | ValueRef[int],
-        endpoint: Endpoint,
-        last: bool,
-        *,
-        valid_types: DatatypeDomain | None = None,
-        dtype: ValueRef[QONNXDataType] | None = None,
-        error_code: str = "axi-stream",
-    ) -> None:
-        if not isinstance(name, str) or not name or type(last) is not bool:
-            raise DefinitionError("an AXIS interface needs a name and a boolean last flag")
-        if not isinstance(endpoint, Endpoint):
-            raise DefinitionError("an AXIS interface needs an Endpoint")
-        if type(error_code) is not str or not error_code:
-            raise DefinitionError("an AXIS interface needs a nonempty refusal code")
-        if isinstance(elements_per_beat, ValueRef):
-            semantics = elements_per_beat.semantics
-            if semantics is not None and semantics.type_token is not int:
-                raise DefinitionError("elements per beat requires an integer declaration")
-        elif type(elements_per_beat) is not int or elements_per_beat <= 0:
-            raise DefinitionError("elements per beat must be a positive integer")
-
-        if dtype is None and endpoint is Endpoint.TARGET:
-            dtype = Param(QONNX_DATATYPE_VALUE_SEMANTICS)
-        if not isinstance(dtype, ValueRef) or (
-            dtype.semantics is not None
-            and dtype.semantics.type_token is not QONNX_DATATYPE_VALUE_SEMANTICS.type_token
-        ):
-            raise DefinitionError("an AXIS output requires a QONNX datatype value reference")
-
-        builder = ScopeBuilder(AxiStreamScope, name="AxiStreamBoundary")
-        conditions: list[Constraint] = []
-        if valid_types is not None:
-            conditions.extend(type_constraints(builder, AxiStreamScope.dtype, valid_types))
-        if endpoint is Endpoint.INITIATOR:
-            conditions.append(AxiStreamScope.element_bits_valid)
-        conditions.append(AxiStreamScope.elements_valid)
-        group = builder.add("admission", ConstraintGroup(*conditions))
-        accepted = builder.add("physical", View(AxiStreamScope.stream, constraints=(group,)))
-        builder.export(STREAM_VIEW).view(accepted)
-        builder.bind(AxiStreamScope.name, name)
-        builder.bind(AxiStreamScope.dtype, dtype)
-        builder.bind(AxiStreamScope.elements_per_beat, elements_per_beat)
-        builder.bind(AxiStreamScope.endpoint, endpoint)
-        builder.bind(AxiStreamScope.last, last)
-        builder.bind(AxiStreamScope.error_code, error_code)
-        placement = builder.place()
-        super().__init__(
-            placement.space_type,
-            when=placement.when,
-            bindings=placement.parameter_bindings,
-            **placement.bindings,
-        )
-        self._conditions = group
-        self._views = (accepted,)
-
-    @property
-    def dtype(self) -> ValueRef[QONNXDataType]:
-        return self.ref(AxiStreamScope.dtype)
-
-    @property
-    def elements_per_beat(self) -> ValueRef[int]:
-        return self.ref(AxiStreamScope.elements_per_beat)
-
-    @property
-    def lanes(self) -> ValueRef[int]:
-        return self.elements_per_beat
-
-    @property
-    def element_bits(self) -> ValueRef[int]:
-        return self.ref(AxiStreamScope.element_bits)
-
-    @property
-    def payload_bits(self) -> ValueRef[int]:
-        return self.ref(AxiStreamScope.payload_bits)
-
-    @property
-    def carrier_bits(self) -> ValueRef[int]:
-        return self.ref(AxiStreamScope.carrier_bits)
-
-    @property
-    def payload(self) -> ValueRef[PackedBeatLayout]:
-        return self.ref(AxiStreamScope.payload)
-
-    @property
-    def constraints(self) -> ConstraintGroup:
-        return self._conditions
-
-    @property
-    def stream(self) -> ValueRef[AxiStream]:
-        return self.ref(AxiStreamScope.stream)
-
-    @property
-    def accepted_stream(self) -> ValueRef[AxiStream]:
-        return self.accepted(STREAM_VIEW)
-
-    def view(self) -> View[AxiStream]:
-        return self._views[0]
-
-
-__all__ = ["AxiStream", "AxiStreamInterface", "AxiStreamScope", "STREAM_VIEW"]
+__all__ = ["AxiStream", "AxiStreamPort", "axi_stream"]

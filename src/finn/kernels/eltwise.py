@@ -17,7 +17,7 @@ import struct
 
 from finn.kernels.artifacts.abi import Clock, Direction, Endpoint, Reset, Signal
 from finn.kernels.artifacts.contribution_types import CopiedSource
-from finn.kernels.artifacts.derivation import Scalar
+from finn.kernels.artifacts.derivation import Scalar as BuildScalar
 from finn.kernels.artifacts.requirements import (
     FixedModuleName,
     ModuleABIRequirements,
@@ -27,14 +27,18 @@ from finn.kernels.artifacts.requirements import (
 from finn.kernels.base import Kernel
 from finn.kernels.datatypes.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
 from finn.kernels.datatypes.domains import Integer
+from finn.kernels.datatypes.scalar import Scalar
+from finn.kernels.physical.ports import native_stream
 from finn.kernels.physical.stream import STREAM_INTERFACES, ReadyValidStream
 from finn.kernels.datatypes.values import (
     QONNXDataType,
     resolve_qonnx_datatype_name,
 )
 from finn.core.space import (
+    ConstraintGroup,
     Param,
     Rejected,
+    Subspace,
     constraint,
     default_semantics,
     derived,
@@ -42,6 +46,16 @@ from finn.core.space import (
     view,
 )
 from finn.kernels.target import DspBlock
+
+
+class EltwiseOperand(Scalar):
+    """FLOAT32, or an ordinary integer of at most 128 bits."""
+
+    @constraint
+    def supported(self) -> bool | Rejected:
+        return True if self.dtype.name == "FLOAT32" else Integer(1, 128).check(self.dtype)
+
+    admission = ConstraintGroup(supported)
 
 
 class EltwiseKernel(Kernel):
@@ -63,6 +77,15 @@ class EltwiseKernel(Kernel):
         bits = 2 * a.bitwidth() if operation == "MUL" else a.bitwidth() + 1
         signed = a.signed() or operation in ("SUB", "SBR")
         return resolve_qonnx_datatype_name(f"{'INT' if signed else 'UINT'}{bits}")
+
+    lhs_type = Subspace(EltwiseOperand, dtype=lhs_dtype)
+    rhs_type = Subspace(EltwiseOperand, dtype=rhs_dtype)
+    result_type = Subspace(Scalar, dtype=result_dtype)
+    lhs = native_stream("lhs", pe, Endpoint.TARGET, lhs_type, pins=("adat", "avld", "ardy"))
+    rhs = native_stream("rhs", pe, Endpoint.TARGET, rhs_type, pins=("bdat", "bvld", "brdy"))
+    result = native_stream(
+        "result", pe, Endpoint.INITIATOR, result_type, pins=("odat", "ovld", "ordy")
+    )
 
     b_scale = Param(float)
 
@@ -89,11 +112,6 @@ class EltwiseKernel(Kernel):
         target = self.target_dsp
         if operation not in ("ADD", "SUB", "SBR", "MUL") or not 1 <= pe <= 0xFFFFFFFF:
             return reject("eltwise-operation", "positive PE and ADD, SUB, SBR or MUL are required")
-        for dtype in (a, b):
-            if dtype.name != "FLOAT32":
-                admitted = Integer(1, 128).check(dtype)
-                if isinstance(admitted, Rejected):
-                    return admitted
         both_int = a.name != "FLOAT32" and b.name != "FLOAT32"
         if both_int and (a.bitwidth() != b.bitwidth() or a.signed() != b.signed()):
             return reject(
@@ -109,33 +127,9 @@ class EltwiseKernel(Kernel):
 
     @view(semantics=STREAM_INTERFACES)
     def interfaces(self) -> tuple[ReadyValidStream, ...] | Rejected:
-        pe = self.pe
-        a, b = self.lhs_dtype, self.rhs_dtype
-        if not 1 <= pe <= 0xFFFFFFFF:
+        if not 1 <= self.pe <= 0xFFFFFFFF:
             return reject("eltwise-interface", "PE must be positive and fit native unsigned int")
-        for dtype in (a, b):
-            if dtype.name != "FLOAT32":
-                admitted = Integer(1, 128).check(dtype)
-                if isinstance(admitted, Rejected):
-                    return admitted
-        return (
-            ReadyValidStream(
-                "lhs", pe * a.bitwidth(), Endpoint.TARGET, "adat", "avld", "ardy", "clk", "rst"
-            ),
-            ReadyValidStream(
-                "rhs", pe * b.bitwidth(), Endpoint.TARGET, "bdat", "bvld", "brdy", "clk", "rst"
-            ),
-            ReadyValidStream(
-                "result",
-                pe * self.result_dtype.bitwidth(),
-                Endpoint.INITIATOR,
-                "odat",
-                "ovld",
-                "ordy",
-                "clk",
-                "rst",
-            ),
-        )
+        return (self.lhs.stream(), self.rhs.stream(), self.result.stream())
 
     @view(
         semantics=default_semantics(ModuleBuildRequirements),
@@ -148,7 +142,7 @@ class EltwiseKernel(Kernel):
         b = self.rhs_dtype
         scale = self.native_scale
         streams = self.interfaces()
-        parameter_values: dict[str, Scalar] = {
+        parameter_values: dict[str, BuildScalar] = {
             "OP": f'"{operation}"',
             "PE": pe,
             "B_SCALE": repr(scale),

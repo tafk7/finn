@@ -49,16 +49,7 @@ def parameters(**updates):
 def kernel(**updates):
     facts = parameters(**updates)
     pumping = facts.pop("compute_pumping")
-    return point_for(DotpAxiKernel, _supplied(facts), compute_pumping=pumping)
-
-
-def _supplied(facts):
-    nested = {
-        "activation_dtype": "activation.dtype",
-        "weights_dtype": "weights.dtype",
-        "result_dtype": "result.dtype",
-    }
-    return {nested.get(name, name): value for name, value in facts.items()}
+    return point_for(DotpAxiKernel, facts, compute_pumping=pumping)
 
 
 class _PartialDotp(Space):
@@ -75,11 +66,9 @@ class _PartialDotp(Space):
         simd=simd,
         target_dsp=target_dsp,
         segment_length=segment_length,
-        bindings={
-            DotpAxiKernel.activation.dtype: activation_dtype,
-            DotpAxiKernel.weights.dtype: weights_dtype,
-            DotpAxiKernel.result.dtype: result_dtype,
-        },
+        activation_dtype=activation_dtype,
+        weights_dtype=weights_dtype,
+        result_dtype=result_dtype,
     )
 
 
@@ -99,13 +88,14 @@ def test_component_groups_its_interfaces_and_keeps_one_root_physical_output():
     assert inputs == {
         "pe",
         "simd",
-        "activation.dtype",
-        "weights.dtype",
-        "result.dtype",
+        "activation_dtype",
+        "weights_dtype",
+        "result_dtype",
         "target_dsp",
         "segment_length",
     }
-    assert not hasattr(DotpAxiKernel, "activation_dtype")
+    # Operand dtypes are kernel facts; scalars and ports bind to them.
+    assert point.activation.dtype == point.activation_type.dtype == point.activation_dtype
     for name in ("contract", "region", "logical", "binding", "realization", "reference"):
         assert not hasattr(DotpAxiKernel, name)
 
@@ -128,7 +118,7 @@ def test_assessed_view_preserves_geometry_and_clocks(target, pumping):
         ("ap_clk", "ap_clk2x") if pumping else ("ap_clk",)
     )
     for stream, width in ((point.activation, 16), (point.weights, 24), (point.result, 24)):
-        assert stream.bus(clock="ap_clk", reset="ap_rst_n") == ports[stream.name]
+        assert stream.stream().bus(clock="ap_clk", reset="ap_rst_n") == ports[stream.name]
         assert (
             next(signal.width for signal in ports[stream.name].signals if signal.logical == "tdata")
             == width
@@ -138,9 +128,9 @@ def test_assessed_view_preserves_geometry_and_clocks(target, pumping):
 def test_physical_framing_has_no_workload_period_and_only_activation_has_last():
     point = kernel(pe=3, simd=5)
     point.build_requirements()
-    assert point.activation.elements_per_beat == 5
-    assert point.weights.elements_per_beat == 15
-    assert point.result.elements_per_beat == 3
+    assert point.activation.lanes == 5
+    assert point.weights.lanes == 15
+    assert point.result.lanes == 3
     assert point.activation.last
     assert not point.weights.last and not point.result.last
     # Weight field p*SIMD+s is low-field-first, matching the native RTL array.
@@ -234,9 +224,9 @@ def test_constraints_gate_acceptance_without_revalidating_raw_codegen():
 @pytest.mark.parametrize("updates,stream", [({"simd": 0}, "activation"), ({"pe": 0}, "result")])
 def test_invalid_native_interface_is_a_rejection_not_a_callback_failure(updates, stream):
     point = kernel(**updates)
-    answer = point.query(getattr(DotpAxiKernel, stream).stream)
+    answer = getattr(point, stream).stream.query()
     assert isinstance(answer, Rejected)
-    assert {finding.code for finding in answer.findings} == {"dotp-interface"}
+    assert {finding.code for finding in answer.findings} == {"interface-lanes"}
     assert isinstance(point.build_requirements.inspect().accepted_result, Rejected)
 
 
@@ -260,9 +250,9 @@ def test_result_dtype_and_pumping_are_required_without_any_workload_dimensions()
     point = partial(facts)
     assert isinstance(point.build_requirements.inspect().accepted_result, Unresolved)
     assert point.activation.element_bits == 3
-    assert point.weights.elements_per_beat == 8
+    assert point.weights.lanes == 8
     facts["result_dtype"] = DataType["INT12"]
-    point = point_for(DotpAxiKernel, _supplied(facts))
+    point = point_for(DotpAxiKernel, facts)
     assert isinstance(point.build_requirements.inspect().accepted_result, Unresolved)
 
 
@@ -274,11 +264,11 @@ def test_required_physical_facts_reject_omission_and_decision_remains_unresolved
     if "compute_pumping" in facts:
         choices["compute_pumping"] = facts.pop("compute_pumping")
     if missing == "compute_pumping":
-        point = point_for(DotpAxiKernel, _supplied(facts))
+        point = point_for(DotpAxiKernel, facts)
         assert isinstance(point.build_requirements.inspect().accepted_result, Unresolved)
     else:
         with pytest.raises(RequestError, match="missing required parameters"):
-            point_for(DotpAxiKernel, _supplied(facts), **choices)
+            point_for(DotpAxiKernel, facts, **choices)
 
 
 @pytest.mark.parametrize("bits", (4, 9, 12, 58))

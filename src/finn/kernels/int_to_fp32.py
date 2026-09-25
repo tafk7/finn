@@ -17,7 +17,7 @@ from finn.kernels.artifacts.requirements import (
 from finn.kernels.base import Kernel
 from finn.kernels.datatypes.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
 from finn.kernels.datatypes.domains import Integer
-from finn.kernels.datatypes.scalar import Scalar
+from finn.kernels.datatypes.scalar import integer_scalar
 from finn.kernels.datatypes.values import (
     resolve_qonnx_datatype_name,
 )
@@ -29,14 +29,14 @@ class IntToFp32Kernel(Kernel):
     version = "1"
 
     input_dtype = Param(QONNX_DATATYPE_VALUE_SEMANTICS)
-    input = Scalar(input_dtype, Integer(1, 128))
+    input = integer_scalar(input_dtype, Integer(1, 128))
     result_dtype = Const(
         resolve_qonnx_datatype_name("FLOAT32"), semantics=QONNX_DATATYPE_VALUE_SEMANTICS
     )
 
     @view
     def build_requirements(self) -> ModuleBuildRequirements:
-        encoding = self.input.view(IntToFp32Kernel.input.view())()
+        encoding = self.input.encoding()
         result = self.result_dtype
         parameters = (("SIGNED", int(encoding.signed)), ("WIDTH", encoding.bits))
         return ModuleBuildRequirements(

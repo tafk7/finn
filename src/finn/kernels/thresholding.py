@@ -42,7 +42,7 @@ from finn.kernels.datatypes.semantics import (
     THRESHOLD_TABLE,
 )
 from finn.kernels.datatypes.domains import Integer
-from finn.kernels.datatypes.scalar import Scalar
+from finn.kernels.datatypes.scalar import integer_scalar
 from finn.kernels.datatypes.values import (
     DatatypeError,
     QONNXDataType,
@@ -69,8 +69,8 @@ class ThresholdingAxiKernel(Kernel):
 
     input_dtype = Param(QONNX_DATATYPE_VALUE_SEMANTICS)
     threshold_dtype = Param(QONNX_DATATYPE_VALUE_SEMANTICS)
-    input_encoding = Scalar(input_dtype, Integer())
-    threshold_encoding = Scalar(threshold_dtype, Integer())
+    input_encoding = integer_scalar(input_dtype, Integer())
+    threshold_encoding = integer_scalar(threshold_dtype, Integer())
     thresholds = Param(THRESHOLD_TABLE)
     bias = Param(int)
 
@@ -195,8 +195,8 @@ class ThresholdingAxiKernel(Kernel):
     def build_requirements(self) -> ModuleBuildRequirements | Rejected:
         table = self.thresholds
         pe = self.pe
-        a = self.input_encoding.view(ThresholdingAxiKernel.input_encoding.view())().dtype
-        t = self.threshold_encoding.view(ThresholdingAxiKernel.threshold_encoding.view())().dtype
+        a = self.input_encoding.encoding().dtype
+        t = self.threshold_encoding.encoding().dtype
         result = self.result_dtype
         bias = self.bias
         axilite = self.use_axilite

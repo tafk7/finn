@@ -89,7 +89,12 @@ def _observation_wrapper(abi, entry_point, directory, activation_bits, weight_bi
     return top, path, observations
 
 
-def run(configuration: Configuration, delivery: WeightDelivery, evidence: Path) -> None:
+def run(
+    configuration: Configuration,
+    delivery: WeightDelivery,
+    evidence: Path,
+    rom_style: str = "auto",
+) -> None:
     c = configuration
     repetitions = 4
     a_type, w_type = DataType[c.activation], DataType[c.weight]
@@ -114,6 +119,7 @@ def run(configuration: Configuration, delivery: WeightDelivery, evidence: Path) 
         compute_pumping=c.pumping,
         weight_delivery=delivery,
         weights=weights.tolist() if delivery is WeightDelivery.CYCLIC else None,
+        rom_style=rom_style,
     )
     activation_words = [
         _pack(row[start : start + c.simd], a_type.bitwidth())
@@ -139,7 +145,8 @@ def run(configuration: Configuration, delivery: WeightDelivery, evidence: Path) 
             stimulus[name] = [
                 word | (padding if index % 2 else 0) for index, word in enumerate(stimulus[name])
             ]
-    directory = evidence / (c.label + "_" + delivery.value)
+    suffix = "_" + rom_style if delivery is WeightDelivery.CYCLIC and rom_style != "auto" else ""
+    directory = evidence / (c.label + "_" + delivery.value + suffix)
     directory.mkdir(parents=True, exist_ok=False)
     store = ArtifactStore(directory / "store")
     prepared = prepare_module_build(
@@ -199,7 +206,8 @@ def run(configuration: Configuration, delivery: WeightDelivery, evidence: Path) 
                 for index, word in enumerate(consumed_weights)
             )
         print(
-            f"PASS {c.label} {delivery.value} stalled={stalled} result={built.result_dtype.name}",
+            f"PASS {c.label} {delivery.value}{suffix} stalled={stalled} "
+            f"result={built.result_dtype.name}",
             flush=True,
         )
 
@@ -209,6 +217,7 @@ def main() -> None:
     parser.add_argument("--case", choices=[case.label for case in CASES])
     parser.add_argument("--delivery", choices=[delivery.value for delivery in WeightDelivery])
     parser.add_argument("--output", type=Path)
+    parser.add_argument("--rom-style", default="auto", choices=("auto", "distributed", "block"))
     args = parser.parse_args()
     directory = args.output or Path(tempfile.mkdtemp(prefix="mvau-assembly-evidence-"))
     print(f"Evidence: {directory}", flush=True)
@@ -216,7 +225,7 @@ def main() -> None:
         if args.case is None or args.case == case.label:
             for delivery in WeightDelivery:
                 if args.delivery is None or args.delivery == delivery.value:
-                    run(case, delivery, directory)
+                    run(case, delivery, directory, args.rom_style)
 
 
 if __name__ == "__main__":

@@ -13,9 +13,13 @@ There is no top-level last: the declared extents determine all stream lengths.
 Input high padding is ignored; output high padding is unspecified.
 
 No Region, logical operand mapping, or graph is required. ``MVAU`` binds its
-dotp child Space and consumes that child's accepted physical
-View. ``mvau_assembly`` supplies concrete facts and choices to this same path;
-its wiring code only receives the accepted component requirements.
+dotp child Space and passes that child's accepted physical View to one of two
+weight-delivery families, selected by the ``implementation`` structural choice.
+``ExternalWeights`` adds a top-level weight stream; ``CyclicWeights`` owns an
+initialized ROM, its ``rom_style`` and the optional ``weights`` fact. Both export
+typed assembly and requirements views. ``mvau_assembly`` supplies concrete facts
+and choices to this same path; its wiring code only receives accepted component
+requirements.
 """
 
 from __future__ import annotations
@@ -23,7 +27,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import Enum
-from typing import cast
+from typing import Any, cast
 
 from finn.kernels.artifacts.abi import Bus, Endpoint
 from finn.kernels.physical.stream import ReadyValidStream
@@ -38,9 +42,18 @@ from finn.kernels.artifacts.build import (
 )
 from finn.kernels.artifacts.derivation import ProducerIdentity
 from finn.kernels.dotp import DotpAxiKernel
-from finn.kernels.streaming import cyclic_stream_requirements, replay_buffer_requirements
+from finn.kernels.streaming import (
+    CYCLIC_ROM_STYLES,
+    cyclic_stream_requirements,
+    replay_buffer_requirements,
+)
 from finn.kernels.target import DspBlock
-from finn.kernels.datatypes.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
+from finn.kernels.datatypes.semantics import (
+    INTEGER_MATRIX,
+    INTEGER_VECTOR,
+    QONNX_DATATYPE_VALUE_SEMANTICS,
+    IntegerVector,
+)
 from finn.kernels.datatypes.values import (
     QONNXDataType,
     canonical_qonnx_datatype,
@@ -58,19 +71,26 @@ from finn.kernels.physical.structure import (
     UnusedOutput,
 )
 from finn.core.space import (
-    ConstraintGroup,
     Available,
+    ChangeRequest,
+    ConstraintGroup,
     Decision,
     Param,
+    QueryResult,
     Rejected,
     Space,
     Subspace,
+    SubspaceChoice,
+    View,
+    ViewKey,
     constraint,
+    default_semantics,
     derived,
     divisors_of,
     reject,
+    view,
 )
-from finn.core.space.errors import RequestError, ValueUnavailableError
+from finn.core.space.errors import ConfigurationError, RequestError
 
 
 class WeightDelivery(Enum):
@@ -192,26 +212,20 @@ def _axis(name: str, bits: int, endpoint: Endpoint) -> Bus:
 
 def _wire_mvau(
     *,
-    repetitions: int,
-    matrix_width: int,
-    matrix_height: int,
+    traversal: _Traversal,
     activation_dtype: QONNXDataType,
     weights_dtype: QONNXDataType,
-    pe: int,
-    simd: int,
-    compute: ModuleBuildRequirements,
     result_dtype: QONNXDataType,
-    weight_delivery: WeightDelivery = WeightDelivery.EXTERNAL,
-    weights: Sequence[Sequence[int]] | None = None,
+    compute: ModuleBuildRequirements,
+    weight_source: ModuleBuildRequirements | None,
+    initializer: tuple[int, ...] = (),
 ) -> MVAUAssembly:
-    """Wire accepted component requirements into the supported MVAU assembly."""
-    traversal = _Traversal(repetitions, matrix_width, matrix_height, pe, simd)
+    """Wire accepted component requirements; without a weight source, weights are a port."""
+    pe, simd = traversal.pe, traversal.simd
     activation_dtype = canonical_qonnx_datatype(activation_dtype)
     weights_dtype = canonical_qonnx_datatype(weights_dtype)
-    if not isinstance(weight_delivery, WeightDelivery):
-        raise ValueError("weight_delivery must be a WeightDelivery value")
-    if (weight_delivery is WeightDelivery.CYCLIC) != (weights is not None):
-        raise ValueError("cyclic delivery requires weights; external delivery has no initializer")
+    external = weight_source is None
+    weight_delivery = WeightDelivery.EXTERNAL if external else WeightDelivery.CYCLIC
     a_bits, w_bits, y_bits = (
         activation_dtype.bitwidth(),
         weights_dtype.bitwidth(),
@@ -227,26 +241,14 @@ def _wire_mvau(
         replay_count=traversal.neuron_folds,
     )
     instances = [ModuleInstance("u_replay", replay), ModuleInstance("u_compute", compute)]
-    initializer = () if weights is None else traversal.weight_image(weights, weights_dtype)
-    if weight_delivery is WeightDelivery.CYCLIC:
-        instances.append(
-            ModuleInstance(
-                "u_weights",
-                cyclic_stream_requirements(
-                    word_bits=w_payload, depth=len(initializer), image=initializer
-                ),
-            )
-        )
+    if weight_source is not None:
+        instances.append(ModuleInstance("u_weights", weight_source))
     top_abi = ModuleABIRequirements(
         GeneratedModuleName("finn_mvau_" + weight_delivery.value),
         (
             *(port for port in compute.abi.ports if not isinstance(port, Bus)),
             _axis("in0_V", a_carrier, Endpoint.TARGET),
-            *(
-                (_axis("in1_V", w_carrier, Endpoint.TARGET),)
-                if weight_delivery is WeightDelivery.EXTERNAL
-                else ()
-            ),
+            *((_axis("in1_V", w_carrier, Endpoint.TARGET),) if external else ()),
             _axis("out0_V", y_carrier, Endpoint.INITIATOR),
         ),
         (),
@@ -281,7 +283,7 @@ def _wire_mvau(
 
     for name in ("ap_clk", "ap_clk2x", "ap_rst_n"):
         connect(_slice("u_compute", name), _slice(None, name))
-    for owner in ("u_replay",) + (("u_weights",) if initializer else ()):
+    for owner in ("u_replay",) + (() if external else ("u_weights",)):
         connect(_slice(owner, "clk"), _slice(None, "ap_clk"))
         connect(_slice(owner, "rst"), _slice(None, "ap_rst_n"), invert=True)
     fields(("u_replay", "idat"), (None, "in0_V_tdata"), simd, a_bits)
@@ -292,13 +294,11 @@ def _wire_mvau(
     )
     connect(_slice("u_compute", "s_axis_input_tlast"), _slice("u_replay", "olast"))
     zero_padding("u_compute", "s_axis_input_tdata", a_payload, a_carrier)
-    source = (None, "in1_V_tdata") if not initializer else ("u_weights", "odat")
+    source = (None, "in1_V_tdata") if external else ("u_weights", "odat")
     fields(("u_compute", "s_axis_weights_tdata"), source, pe * simd, w_bits)
     controls(
         ("u_compute", "s_axis_weights_tvalid", "s_axis_weights_tready"),
-        (None, "in1_V_tvalid", "in1_V_tready")
-        if not initializer
-        else ("u_weights", "ovld", "ordy"),
+        (None, "in1_V_tvalid", "in1_V_tready") if external else ("u_weights", "ovld", "ordy"),
     )
     zero_padding("u_compute", "s_axis_weights_tdata", w_payload, w_carrier)
     fields((None, "out0_V_tdata"), ("u_compute", "m_axis_output_tdata"), pe, y_bits)
@@ -312,7 +312,7 @@ def _wire_mvau(
         ("u_compute", "m_axis_output_tvalid", "m_axis_output_tready"),
     )
     for name, payload, carrier in (("in0_V_tdata", a_payload, a_carrier),) + (
-        (("in1_V_tdata", w_payload, w_carrier),) if not initializer else ()
+        (("in1_V_tdata", w_payload, w_carrier),) if external else ()
     ):
         if carrier > payload:
             ignored.append(_slice(None, name, carrier - payload, payload))
@@ -356,8 +356,103 @@ def _wire_mvau(
     )
 
 
+TRAVERSAL = default_semantics(_Traversal)
+MODULE_BUILD = default_semantics(ModuleBuildRequirements)
+ASSEMBLY = default_semantics(MVAUAssembly)
+ASSEMBLY_VIEW = ViewKey("assembly", ASSEMBLY)
+BUILD_VIEW = ViewKey("build_requirements", MODULE_BUILD)
+
+
+class WeightDeliveryFamily(Space):
+    """Facts shared by the weight-delivery families: accepted folding and compute.
+
+    ``compute`` is the parent's accepted dotp requirements, so a family cannot
+    wire a compute core whose own physical View was refused.
+    """
+
+    traversal = Param(TRAVERSAL)
+    activation_dtype = Param(QONNX_DATATYPE_VALUE_SEMANTICS)
+    weights_dtype = Param(QONNX_DATATYPE_VALUE_SEMANTICS)
+    result_dtype = Param(QONNX_DATATYPE_VALUE_SEMANTICS)
+    compute = Param(MODULE_BUILD)
+
+
+class ExternalWeights(WeightDeliveryFamily):
+    """Weights arrive on the top-level ``in1_V`` stream, once per repetition."""
+
+    @view(semantics=ASSEMBLY)
+    def assembly(self) -> MVAUAssembly:
+        return _wire_mvau(
+            traversal=self.traversal,
+            activation_dtype=self.activation_dtype,
+            weights_dtype=self.weights_dtype,
+            result_dtype=self.result_dtype,
+            compute=self.compute,
+            weight_source=None,
+        )
+
+    @view(semantics=MODULE_BUILD)
+    def build_requirements(self) -> ModuleBuildRequirements:
+        return self.assembly().requirements
+
+    exports = {ASSEMBLY_VIEW: assembly, BUILD_VIEW: build_requirements}
+
+
+class CyclicWeights(WeightDeliveryFamily):
+    """An initialized on-chip ROM replays the weight image; there is no weight port.
+
+    The weight values are a fact of this family only. Without them the family's
+    image and views stay unresolved; the image is embedded in the requirements,
+    so the build needs no initialization file or data slot.
+    """
+
+    weights = Param(INTEGER_MATRIX)
+    rom_style = Decision(str, values=CYCLIC_ROM_STYLES)
+
+    @derived(semantics=INTEGER_VECTOR)
+    def image(self) -> IntegerVector | Rejected:
+        try:
+            return self.traversal.weight_image(self.weights, self.weights_dtype)
+        except ValueError as error:
+            return reject("mvau-weights", str(error))
+
+    @derived(semantics=MODULE_BUILD)
+    def weight_source(self) -> ModuleBuildRequirements:
+        traversal = self.traversal
+        image = self.image
+        return cyclic_stream_requirements(
+            word_bits=traversal.pe * traversal.simd * self.weights_dtype.bitwidth(),
+            depth=len(image),
+            image=image,
+            rom_style=self.rom_style,
+        )
+
+    @view(semantics=ASSEMBLY)
+    def assembly(self) -> MVAUAssembly:
+        return _wire_mvau(
+            traversal=self.traversal,
+            activation_dtype=self.activation_dtype,
+            weights_dtype=self.weights_dtype,
+            result_dtype=self.result_dtype,
+            compute=self.compute,
+            weight_source=self.weight_source,
+            initializer=self.image,
+        )
+
+    @view(semantics=MODULE_BUILD)
+    def build_requirements(self) -> ModuleBuildRequirements:
+        return self.assembly().requirements
+
+    exports = {ASSEMBLY_VIEW: assembly, BUILD_VIEW: build_requirements}
+
+
 class MVAU(Space):
-    """Workload parameters, folding/delivery choices, and a bound dotp child Space."""
+    """Workload facts, folding choices, a dotp child, and a weight-delivery family.
+
+    ``implementation`` selects ``external`` or ``cyclic`` delivery. The families
+    share typed assembly and requirements exports but keep their own ports,
+    initialization facts and local choices; only the selected one is evaluated.
+    """
 
     repetitions = Param(int)
     matrix_width = Param(int)
@@ -366,69 +461,79 @@ class MVAU(Space):
     weights_dtype = Param(QONNX_DATATYPE_VALUE_SEMANTICS)
     target_dsp = Param(DspBlock)
     segment_length = Param(int)
+    weights = Param(INTEGER_MATRIX, required=False)
     pe = Decision(int, domain=divisors_of(matrix_height))
     simd = Decision(int, domain=divisors_of(matrix_width))
-    weight_delivery = Decision(WeightDelivery, values=tuple(WeightDelivery))
 
     @derived(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
     def result_type(self) -> QONNXDataType | Rejected:
-        matrix_width = self.matrix_width
-        activation_dtype = self.activation_dtype
-        weights_dtype = self.weights_dtype
         try:
-            return exact_result_dtype(matrix_width, activation_dtype, weights_dtype)
+            return exact_result_dtype(self.matrix_width, self.activation_dtype, self.weights_dtype)
         except ValueError as error:
             return reject("mvau-arithmetic", str(error))
 
-    @constraint
-    def dimensions_supported(self) -> bool | Rejected:
-        repetitions = self.repetitions
-        matrix_width = self.matrix_width
-        matrix_height = self.matrix_height
-        pe = self.pe
-        simd = self.simd
+    @derived(semantics=TRAVERSAL)
+    def traversal(self) -> _Traversal | Rejected:
         try:
-            _Traversal(repetitions, matrix_width, matrix_height, pe, simd)
+            return _Traversal(
+                self.repetitions, self.matrix_width, self.matrix_height, self.pe, self.simd
+            )
         except ValueError as error:
             return reject("mvau-folding", str(error))
-        return True
+
+    @constraint
+    def dimensions_supported(self) -> bool:
+        # Reading the traversal propagates its folding refusal to this constraint.
+        return isinstance(self.traversal, _Traversal)
+
+    dimensions = ConstraintGroup(dimensions_supported)
 
     compute = Subspace(
         DotpAxiKernel,
-        bindings={
-            DotpAxiKernel.activation.dtype: activation_dtype,
-            DotpAxiKernel.weights.dtype: weights_dtype,
-            DotpAxiKernel.result.dtype: result_type,
-        },
+        activation_dtype=activation_dtype,
+        weights_dtype=weights_dtype,
+        result_dtype=result_type,
         pe=pe,
         simd=simd,
         target_dsp=target_dsp,
         segment_length=segment_length,
     )
 
-    dimensions = ConstraintGroup(dimensions_supported)
+    compute_requirements = compute.accepted(DotpAxiKernel.build_requirements)
+    implementation = SubspaceChoice(
+        {
+            WeightDelivery.EXTERNAL.value: Subspace(
+                ExternalWeights,
+                traversal=traversal,
+                activation_dtype=activation_dtype,
+                weights_dtype=weights_dtype,
+                result_dtype=result_type,
+                compute=compute_requirements,
+            ),
+            WeightDelivery.CYCLIC.value: Subspace(
+                CyclicWeights,
+                traversal=traversal,
+                activation_dtype=activation_dtype,
+                weights_dtype=weights_dtype,
+                result_dtype=result_type,
+                compute=compute_requirements,
+                weights=weights,
+            ),
+        },
+        exports=(ASSEMBLY_VIEW, BUILD_VIEW),
+    )
 
-    def assemble(self, weights: Sequence[Sequence[int]] | None = None) -> MVAUAssembly:
-        try:
-            compute = self.compute.build_requirements()
-        except ValueUnavailableError as error:
-            details = "; ".join(
-                f"{finding.code}: {finding.message}" for finding in error.result.findings
-            )
-            raise ValueError(f"dotp physical View is not accepted: {details}") from error
-        return _wire_mvau(
-            repetitions=self.repetitions,
-            matrix_width=self.matrix_width,
-            matrix_height=self.matrix_height,
-            activation_dtype=self.activation_dtype,
-            weights_dtype=self.weights_dtype,
-            pe=self.pe,
-            simd=self.simd,
-            compute=compute,
-            result_dtype=self.result_type,
-            weight_delivery=self.weight_delivery,
-            weights=weights,
-        )
+    assembly = View(implementation.accepted(ASSEMBLY_VIEW), constraints=(dimensions,))
+    build_requirements = View(implementation.accepted(BUILD_VIEW), constraints=(dimensions,))
+
+
+def _findings(results: Sequence[QueryResult[Any]]) -> str:
+    return "; ".join(
+        f"{finding.owner}: {finding.code}: {finding.message}"
+        for result in results
+        if not isinstance(result, Available)
+        for finding in result.findings
+    )
 
 
 def mvau_assembly(
@@ -445,35 +550,62 @@ def mvau_assembly(
     compute_pumping: bool = False,
     weight_delivery: WeightDelivery = WeightDelivery.EXTERNAL,
     weights: Sequence[Sequence[int]] | None = None,
+    rom_style: str = "auto",
 ) -> MVAUAssembly:
-    """Bind workload and folding choices, then wire the accepted dotp implementation."""
+    """Bind workload facts, select one delivery family and its choices, then assemble.
+
+    Weights are required by, and only accepted with, cyclic delivery. ``rom_style``
+    applies to cyclic delivery; the ``auto`` default leaves memory inference to
+    synthesis, as the ROM did before the choice existed.
+    """
+    if not isinstance(weight_delivery, WeightDelivery):
+        raise ValueError("weight_delivery must be a WeightDelivery value")
+    cyclic = weight_delivery is WeightDelivery.CYCLIC
+    if cyclic != (weights is not None):
+        raise ValueError("cyclic delivery requires weights; external delivery has no initializer")
+    facts: dict[str, object] = dict(
+        repetitions=repetitions,
+        matrix_width=matrix_width,
+        matrix_height=matrix_height,
+        activation_dtype=activation_dtype,
+        weights_dtype=weights_dtype,
+        target_dsp=target_dsp,
+        segment_length=segment_length,
+    )
+    if weights is not None:
+        facts["weights"] = tuple(tuple(row) for row in weights)
+    case = weight_delivery.value
     try:
-        point = MVAU(
-            repetitions=repetitions,
-            matrix_width=matrix_width,
-            matrix_height=matrix_height,
-            activation_dtype=activation_dtype,
-            weights_dtype=weights_dtype,
-            target_dsp=target_dsp,
-            segment_length=segment_length,
-        )
-        report = point.try_with_choices(
-            point.compute.field(DotpAxiKernel.compute_pumping).change(compute_pumping),
-            pe=pe,
-            simd=simd,
-            weight_delivery=weight_delivery,
-        )
-    except RequestError as error:
+        point = cast(MVAU, MVAU(**facts).implementation.select(case).instance)
+        changes: list[ChangeRequest] = [
+            point.compute.field(DotpAxiKernel.compute_pumping).change(compute_pumping)
+        ]
+        if cyclic:
+            family = point.implementation.alternative(case)
+            changes.append(family.field(CyclicWeights.rom_style).change(rom_style))
+        report = point.try_with_choices(*changes, pe=pe, simd=simd)
+    except (RequestError, ConfigurationError) as error:
         raise ValueError(str(error)) from error
     if not report.accepted:
-        details = "; ".join(
-            f"{finding.code}: {finding.message}"
-            for outcome in report.outcomes
-            if not isinstance(outcome.result, Available)
-            for finding in outcome.result.findings
+        raise ValueError(
+            "MVAU choices are not accepted: "
+            + _findings([outcome.result for outcome in report.outcomes])
         )
-        raise ValueError(f"MVAU choices are not accepted: {details}")
-    return report.instance.assemble(weights)
+    result = report.instance.assembly.query()
+    if not isinstance(result, Available):
+        raise ValueError(f"MVAU assembly is not accepted: {_findings([result])}")
+    return result.value
 
 
-__all__ = ["MVAU", "MVAUAssembly", "WeightDelivery", "exact_result_dtype", "mvau_assembly"]
+__all__ = [
+    "ASSEMBLY_VIEW",
+    "BUILD_VIEW",
+    "CyclicWeights",
+    "ExternalWeights",
+    "MVAU",
+    "MVAUAssembly",
+    "WeightDelivery",
+    "WeightDeliveryFamily",
+    "exact_result_dtype",
+    "mvau_assembly",
+]

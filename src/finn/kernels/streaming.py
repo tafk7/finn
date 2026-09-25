@@ -115,8 +115,11 @@ def replay_buffer_requirements(
     )
 
 
+CYCLIC_ROM_STYLES = ("auto", "distributed", "block")
+
+
 def cyclic_stream_requirements(
-    *, word_bits: int, depth: int, image: Sequence[int]
+    *, word_bits: int, depth: int, image: Sequence[int], rom_style: str
 ) -> ModuleBuildRequirements:
     """Continuously stream an explicitly initialized, read-only image in order.
 
@@ -129,9 +132,16 @@ def cyclic_stream_requirements(
     through the image and wrap at ``depth``; there is no last pin or finite-run
     completion. The registered output can sustain one transfer per cycle and
     holds its word until ready. Reset discards a pending output word.
+
+    ``rom_style`` selects the synthesis ``rom_style`` attribute: ``auto`` leaves
+    inference to the tool, ``distributed`` requests LUT ROM and ``block`` block
+    RAM. UltraRAM is not offered: bitstream initialization of UltraRAM is not
+    available on every supported device family.
     """
     _positive("word_bits", word_bits)
     _positive("depth", depth)
+    if rom_style not in CYCLIC_ROM_STYLES:
+        raise ValueError(f"rom_style must be one of {', '.join(CYCLIC_ROM_STYLES)}")
     words = tuple(image)
     if len(words) != depth:
         raise ValueError("image must contain exactly depth words")
@@ -141,6 +151,7 @@ def cyclic_stream_requirements(
     parameters = (
         ("DEPTH", depth),
         ("INIT_DATA", f"{word_bits * depth}'h{packed:x}"),
+        ("ROM_STYLE", f'"{rom_style}"'),
         ("W", word_bits),
     )
     return ModuleBuildRequirements(
@@ -163,6 +174,7 @@ def cyclic_stream_requirements(
 
 
 __all__ = [
+    "CYCLIC_ROM_STYLES",
     "replay_buffer_requirements",
     "cyclic_stream_requirements",
     "replay_buffer_interfaces",

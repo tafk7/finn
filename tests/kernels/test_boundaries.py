@@ -173,16 +173,16 @@ point = DotpAxiKernel(
     {
         DotpAxiKernel.pe: 2,
         DotpAxiKernel.simd: 2,
-        DotpAxiKernel.activation.dtype: DataType["INT3"],
-        DotpAxiKernel.weights.dtype: DataType["INT3"],
-        DotpAxiKernel.result.dtype: DataType["INT8"],
+        DotpAxiKernel.activation_dtype: DataType["INT3"],
+        DotpAxiKernel.weights_dtype: DataType["INT3"],
+        DotpAxiKernel.result_dtype: DataType["INT8"],
         DotpAxiKernel.target_dsp: DspBlock.DSP48E2,
         DotpAxiKernel.segment_length: 0,
     }
 ).with_choices(compute_pumping=False)
 answer = point.build_requirements()
 assert isinstance(answer, ModuleBuildRequirements)
-assert isinstance(point.activation.stream, AxiStream)
+assert isinstance(point.activation.stream(), AxiStream)
 assert point.activation.payload_bits == 6
 for mode in WeightDelivery:
     options = (

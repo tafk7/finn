@@ -43,7 +43,8 @@ from finn.kernels.datatypes.values import (
     ordinary_integer_bounds,
     qonnx_datatype_width,
 )
-from finn.kernels.physical.axi_stream import AxiStreamInterface
+from finn.kernels.datatypes.scalar import integer_scalar
+from finn.kernels.physical.axi_stream import axi_stream
 from finn.core.space import (
     ConstraintGroup,
     Decision,
@@ -76,33 +77,15 @@ class DotpAxiKernel(Kernel):
     segment_length = Param(int)
     compute_pumping = Decision(bool, values=(False, True))
 
-    activation = AxiStreamInterface(
-        "s_axis_input",
-        simd,
-        Endpoint.TARGET,
-        True,
-        dtype=Param(QONNX_DATATYPE_VALUE_SEMANTICS),
-        valid_types=Integer(min_bits=2),
-        error_code="dotp-interface",
-    )
-    weights = AxiStreamInterface(
-        "s_axis_weights",
-        pe * simd,
-        Endpoint.TARGET,
-        False,
-        dtype=Param(QONNX_DATATYPE_VALUE_SEMANTICS),
-        valid_types=SignedInteger(min_bits=2),
-        error_code="dotp-interface",
-    )
-    result = AxiStreamInterface(
-        "m_axis_output",
-        pe,
-        Endpoint.INITIATOR,
-        False,
-        dtype=Param(QONNX_DATATYPE_VALUE_SEMANTICS),
-        valid_types=SignedInteger(),
-        error_code="dotp-interface",
-    )
+    activation_dtype = Param(QONNX_DATATYPE_VALUE_SEMANTICS)
+    weights_dtype = Param(QONNX_DATATYPE_VALUE_SEMANTICS)
+    result_dtype = Param(QONNX_DATATYPE_VALUE_SEMANTICS)
+    activation_type = integer_scalar(activation_dtype, Integer(min_bits=2))
+    weights_type = integer_scalar(weights_dtype, SignedInteger(min_bits=2))
+    result_type = integer_scalar(result_dtype, SignedInteger())
+    activation = axi_stream("s_axis_input", simd, Endpoint.TARGET, activation_type, last=True)
+    weights = axi_stream("s_axis_weights", pe * simd, Endpoint.TARGET, weights_type)
+    result = axi_stream("m_axis_output", pe, Endpoint.INITIATOR, result_type)
 
     @constraint
     def target_supported(self) -> bool | Rejected:
@@ -130,8 +113,8 @@ class DotpAxiKernel(Kernel):
     @constraint
     def input_types_supported(self) -> bool | Rejected:
         target = self.target_dsp
-        activation = self.activation.dtype
-        weight = self.weights.dtype
+        activation = self.activation_dtype
+        weight = self.weights_dtype
         try:
             ordinary_integer_bounds(activation)
         except DatatypeError as error:
@@ -156,7 +139,7 @@ class DotpAxiKernel(Kernel):
 
     @constraint
     def accumulator_width_supported(self) -> bool | Rejected:
-        result = self.result.dtype
+        result = self.result_dtype
         target = self.target_dsp
         if not result.name.startswith("INT"):
             return reject(
@@ -207,9 +190,9 @@ class DotpAxiKernel(Kernel):
         simd = self.simd
         if not 1 <= pe <= 0xFFFFFFFF or not 1 <= simd <= 0xFFFFFFFF:
             return reject("dotp-geometry", "PE and SIMD must be positive native unsigned integers")
-        activation = self.activation.view(DotpAxiKernel.activation.view())()
-        weights = self.weights.view(DotpAxiKernel.weights.view())()
-        result = self.result.view(DotpAxiKernel.result.view())()
+        activation = self.activation.stream()
+        weights = self.weights.stream()
+        result = self.result.stream()
         if any(stream.carrier_bits > 0xFFFFFFFF for stream in (activation, weights, result)):
             return reject("dotp-stream-width", "packed stream widths must fit native unsigned int")
         target_dsp = self.target_dsp

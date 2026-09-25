@@ -1,34 +1,29 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Datatype admission declarations with explicit family and bit-bound dependencies."""
+"""Integer datatype policy: shared predicates, concrete checks and decision domains.
+
+A policy is plain data. Supplied dtypes are admitted by the ``IntegerScalar``
+Space in ``datatypes.scalar``, whose bound Params receive a policy's bounds as
+ordinary bindings; owned dtype choices use ``Integer.domain()``. Both apply the
+same predicates, so a policy never needs to know the scope that consumes it.
+"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from collections.abc import Callable, Iterable
+from collections.abc import Iterable
 import re
-from typing import Protocol
 
 from finn.kernels.datatypes.values import QONNXDataType, qonnx_datatype_width
-from finn.core.space import Constraint, Domain, Rejected, ValueRef, constraint, domain, reject
+from finn.core.space import Domain, Rejected, ValueRef, domain, reject
 from finn.kernels.datatypes.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
 from finn.kernels.datatypes.values import resolve_qonnx_datatype_name
 
 BitBound = int | ValueRef[int]
 
 
-class DatatypeDomain(Protocol):
-    def rebind(self, bind: Callable[[str, BitBound], BitBound]) -> DatatypeDomain:
-        """Place policy dependencies in a consumer's scope, without knowing that consumer."""
-        ...
-
-    def constraints(
-        self, datatype: ValueRef[QONNXDataType]
-    ) -> tuple[tuple[str, Constraint], ...]: ...
-
-
-def _check_bound(dtype: QONNXDataType, limit: int, *, minimum: bool) -> bool | Rejected:
+def check_bit_bound(dtype: QONNXDataType, limit: int, *, minimum: bool) -> bool | Rejected:
     if type(limit) is not int or limit < 1:
         return reject("dtype-bound-invalid", "a storage-bit bound must be a positive integer")
     actual = qonnx_datatype_width(dtype)
@@ -42,7 +37,7 @@ def _check_bound(dtype: QONNXDataType, limit: int, *, minimum: bool) -> bool | R
     return True
 
 
-def _check_family(dtype: QONNXDataType, signed: bool | None) -> bool | Rejected:
+def check_integer_family(dtype: QONNXDataType, signed: bool | None) -> bool | Rejected:
     ordinary = dtype.name == "BINARY" or re.fullmatch(r"U?INT-?\d+", dtype.name) is not None
     if not ordinary or (signed is not None and dtype.name.startswith("INT") != signed):
         expected = {None: "INT/UINT", True: "signed INT", False: "unsigned UINT"}[signed]
@@ -52,23 +47,6 @@ def _check_family(dtype: QONNXDataType, signed: bool | None) -> bool | Rejected:
             values={"datatype": dtype.name, "expected": expected},
         )
     return True
-
-
-def _bit_bound(datatype: ValueRef[QONNXDataType], bound: BitBound, *, minimum: bool) -> Constraint:
-
-    if isinstance(bound, ValueRef):
-
-        @constraint(datatype=datatype, bound=bound)
-        def dynamic(*, datatype: QONNXDataType, bound: int) -> bool | Rejected:
-            return _check_bound(datatype, bound, minimum=minimum)
-
-        return dynamic
-
-    @constraint(datatype=datatype)
-    def fixed(*, datatype: QONNXDataType) -> bool | Rejected:
-        return _check_bound(datatype, bound, minimum=minimum)
-
-    return fixed
 
 
 @dataclass(frozen=True)
@@ -94,39 +72,19 @@ class Integer:
         if self.signed is not None and type(self.signed) is not bool:
             raise TypeError("signed must be True, False or None")
 
-    def constraints(self, datatype: ValueRef[QONNXDataType]) -> tuple[tuple[str, Constraint], ...]:
-        @constraint(datatype=datatype)
-        def family(*, datatype: QONNXDataType) -> bool | Rejected:
-            return _check_family(datatype, self.signed)
-
-        return (
-            ("family", family),
-            ("minimum_bits", _bit_bound(datatype, self.min_bits, minimum=True)),
-            *(
-                (("maximum_bits", _bit_bound(datatype, self.max_bits, minimum=False)),)
-                if self.max_bits is not None
-                else ()
-            ),
-        )
-
-    def rebind(self, bind: Callable[[str, BitBound], BitBound]) -> Integer:
-        return Integer(
-            bind("minimum_bits", self.min_bits),
-            None if self.max_bits is None else bind("maximum_bits", self.max_bits),
-            signed=self.signed,
-        )
-
     def check(self, dtype: QONNXDataType) -> bool | Rejected:
-        """Check a concrete policy; dynamic bounds are resolved by the Space adapters."""
+        """Check a concrete policy; referenced bounds are bindings, resolved by a Space."""
         if isinstance(self.min_bits, ValueRef) or isinstance(self.max_bits, ValueRef):
-            raise TypeError("check requires concrete bit bounds; use constraints() or domain()")
-        family = _check_family(dtype, self.signed)
+            raise TypeError("check requires concrete bit bounds; use IntegerScalar or domain()")
+        family = check_integer_family(dtype, self.signed)
         if isinstance(family, Rejected):
             return family
-        minimum = _check_bound(dtype, self.min_bits, minimum=True)
+        minimum = check_bit_bound(dtype, self.min_bits, minimum=True)
         if isinstance(minimum, Rejected):
             return minimum
-        return True if self.max_bits is None else _check_bound(dtype, self.max_bits, minimum=False)
+        return (
+            True if self.max_bits is None else check_bit_bound(dtype, self.max_bits, minimum=False)
+        )
 
     def domain(self) -> Domain[QONNXDataType]:
         """Use the same policy for owned dtype choices; bounded policies enumerate widths."""
@@ -142,7 +100,7 @@ class Integer:
             return Integer(low, high, signed=self.signed)
 
         def accepts(*, candidate: QONNXDataType, **bounds: int) -> bool | Rejected:
-            # Invalid supplied bounds are semantic refusals, like constraints().
+            # Invalid supplied bounds are semantic refusals, as in IntegerScalar.
             try:
                 policy = resolved(bounds)
             except ValueError as error:
@@ -177,4 +135,10 @@ class SignedInteger(Integer):
         super().__init__(min_bits, max_bits, signed=True)
 
 
-__all__ = ["DatatypeDomain", "Integer", "SignedInteger"]
+__all__ = [
+    "BitBound",
+    "Integer",
+    "SignedInteger",
+    "check_bit_bound",
+    "check_integer_family",
+]

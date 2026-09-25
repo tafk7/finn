@@ -30,12 +30,12 @@ that separate repository while experimental.
 
 ```text
 base.py                  neutral Kernel identity and capability metadata
-dotp.py                  activation/weights/result scopes and build requirements
-mvau.py                  parent-owned folding/delivery and accepted dotp child
+dotp.py                  operand scalars, AXIS ports and build requirements
+mvau.py                  folding, accepted dotp child, and a weight-delivery family choice
 streaming.py             replay and initialized cyclic word delivery
 target.py                DSP targets and port capacities
-physical/                AXI scopes, detached packing, wiring and lowering
-datatypes/               QONNX identity, reusable policies, scalar scopes and codecs
+physical/                typed native/AXIS ports, detached packing, wiring and lowering
+datatypes/               QONNX identity, integer policies, scalar Spaces and codecs
 artifacts/               requirements, source resolution, rendering and builds
 resources/               cyclic RTL and source-generation templates
 
@@ -50,17 +50,36 @@ Space -> accepted build_requirements view -> ModuleBuildRequirements
 | `FifoKernel` | `fifo.py` | Opaque unpadded words; depth and RAM-style choice |
 | `InputGeneratorKernel` | `input_generator.py` | Immutable extent/stride vectors; native multi-bit loop markers |
 | `ThresholdingAxiKernel` | `thresholding.py` | Threshold tables, output encoding, AXI-Lite and set selection |
-| `EltwiseKernel` | `eltwise.py` | Integer/float operands, dependent type constraints, unpadded ready/valid words |
+| `EltwiseKernel` | `eltwise.py` | Integer/float operand scalars, dependent type constraints, typed unpadded ports |
 | `IntToFp32Kernel` | `int_to_fp32.py` | Combinational pins and a fixed FLOAT32 result; no clock or stream |
 | `MemStreamHlsKernel` | `memstream_hls.py` | C++ type and memory/interface declarations before HLS synthesis |
-| `DotpAxiKernel` | `dotp.py` | Typed AXIS interface scopes; target, pumping, segmentation and accumulator admission |
+| `DotpAxiKernel` | `dotp.py` | Typed AXIS ports; target, pumping, segmentation and accumulator admission |
 
-Dotp's supplied dtype handles are `DotpAxiKernel.activation.dtype`,
-`DotpAxiKernel.weights.dtype`, and `DotpAxiKernel.result.dtype`. Each child
-exposes narrow dtype/width fields independently of its accepted complete stream.
-The interface aggregate expands through `ScopeBuilder` and ordinary
-`Subspace` placement; it does not inject members into its parent class.
-Datatype policies may constrain both input and caller-selected output encodings.
+Operand datatypes are ordinary kernel Params, such as
+`DotpAxiKernel.activation_dtype`. Each operand has a separately placed scalar
+Space that owns its admission, and each port binds to that scalar's raw dtype
+and accepted encoding. Ports expose narrow dtype, width and packing fields
+independently of their accepted `stream` view, which requires the scalar:
+
+```python
+from finn.kernels import DotpAxiKernel, DspBlock
+from finn.kernels.datatypes.values import resolve_qonnx_datatype_name as dtype
+
+dotp = DotpAxiKernel(
+    activation_dtype=dtype("INT3"),
+    weights_dtype=dtype("INT3"),
+    result_dtype=dtype("INT8"),
+    pe=2,
+    simd=2,
+    target_dsp=DspBlock.DSP48E2,
+    segment_length=0,
+)
+assert dotp.activation.carrier_bits == 8
+assert dotp.activation_type.encoding().bits == 3
+assert dotp.activation.stream().payload_bits == 6
+```
+
+The same policy constrains input and caller-selected output encodings.
 
 The [original authoring-pass notes](../../../docs/kernel-authoring-pass/README.md)
 retain the adopted physical profiles and native-source findings. Their old
@@ -76,21 +95,68 @@ relative to a staging directory; retain that layout and use the declared
 `include_directories`. Its AXI-Lite memory and `ap_ctrl_hs` registers share the
 `control` bundle; software must enable start/auto-restart for continuous output.
 
-`MVAU` owns matrix geometry, PE/SIMD folding, result precision and weight
-delivery. Its `compute` child is a bound `DotpAxiKernel`; assembly requires that
-child's accepted `build_requirements` View. `mvau_assembly` binds this same Space for callers
-with a complete configuration:
+`MVAU` owns matrix geometry, PE/SIMD folding and result precision. Its
+`compute` child is a bound `DotpAxiKernel`. Weight delivery is the structural
+choice `implementation` between two families. `ExternalWeights` has a top-level
+weight stream and no initializer. `CyclicWeights` has no weight port; it owns a
+`rom_style` choice and consumes the optional `weights` fact, embedding the packed
+image in its requirements. Both export typed `assembly` and `build_requirements`
+views, which the parent's views accept. Only the selected family is evaluated:
 
 ```python
-from finn.kernels import DspBlock, WeightDelivery, mvau_assembly
-from finn.kernels.datatypes.values import resolve_qonnx_datatype_name
+from finn.core.space import Unresolved, inspection, selections
+from finn.kernels import MVAU
+from finn.kernels.mvau import CyclicWeights
+
+base = MVAU(
+    repetitions=2,
+    matrix_width=4,
+    matrix_height=4,
+    activation_dtype=dtype("INT3"),
+    weights_dtype=dtype("INT3"),
+    target_dsp=DspBlock.DSP48E2,
+    segment_length=0,
+    weights=((1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (0, 0, 0, 1)),
+)
+(choice,) = inspection.choices(base)
+family = base.implementation.alternative("cyclic")
+point = base.with_choices(
+    base.field(choice.selector).change("cyclic"),
+    family.field(CyclicWeights.rom_style).change("block"),
+    base.compute.field(DotpAxiKernel.compute_pumping).change(False),
+    pe=2,
+    simd=2,
+)
+assert len(point.assembly().initializer) == 4
+assert "in1_V" not in {port.name for port in point.assembly().structure.top_abi.ports}
+facts = dict(
+    repetitions=2,
+    matrix_width=4,
+    matrix_height=4,
+    activation_dtype=dtype("INT3"),
+    weights_dtype=dtype("INT3"),
+    target_dsp=DspBlock.DSP48E2,
+    segment_length=0,
+)
+saved = selections.capture(point)
+replayed = selections.restore(MVAU(**facts), saved).instance  # weights omitted
+assert isinstance(replayed.assembly.query(), Unresolved)
+```
+
+Changing the selector does not discard the old family's choices: clear
+`rom_style` in the same batch when switching to external delivery. The
+`mvau_assembly` adapter binds this same Space for callers with a complete
+configuration:
+
+```python
+from finn.kernels import WeightDelivery, mvau_assembly
 
 built = mvau_assembly(
     repetitions=2,
     matrix_width=4,
     matrix_height=4,
-    activation_dtype=resolve_qonnx_datatype_name("INT3"),
-    weights_dtype=resolve_qonnx_datatype_name("INT3"),
+    activation_dtype=dtype("INT3"),
+    weights_dtype=dtype("INT3"),
     pe=2,
     simd=2,
     target_dsp=DspBlock.DSP48E2,
@@ -101,7 +167,8 @@ built = mvau_assembly(
 
 `built.structure` exposes wiring, `built.initializer` contains packed cyclic
 weights, and `built.requirements` is the artifact handoff. External weight
-delivery uses `WeightDelivery.EXTERNAL` and omits `weights`.
+delivery uses `WeightDelivery.EXTERNAL` and omits `weights`; `rom_style`
+(default `auto`) applies only to cyclic delivery.
 
 Pass source roots explicitly to `finn.kernels.artifacts.build.prepare_module_build`:
 `roots={"kernels": resource_root(), "finnlib": finnlib_root}` and
@@ -138,19 +205,25 @@ declaration-order corrections are in FinnLib; there are no private copies in
 includes its native `queue` module. Record and validate source revisions when
 updating this dependency; matching filenames do not establish compatibility.
 
-`Integer(...).constraints(dtype)` and `Integer(...).domain()` share a policy
-for supplied facts and owned choices. `Scalar(dtype, valid_types)` places an
-accepted scalar encoding independently of any stream or implementation language.
-Conversion and thresholding consume these accepted scalar views before building
-pins. Type-family refusals and dynamic bit bounds remain independently visible.
+`Integer(...).domain()` and `integer_scalar(dtype, Integer(...))` share one
+policy for owned dtype choices and supplied facts. `integer_scalar` places an
+`IntegerScalar` (or `BoundedIntegerScalar`) Space whose policy bounds are ordinary
+child bindings, including references to parent fields. Each admission rule is a
+separate constraint, so type-family refusals remain visible while a dynamic bit
+bound is unresolved. `Scalar` itself admits any positive-width encoding; a
+kernel extends it by subclassing, as `EltwiseOperand` does for FLOAT32 or
+integer operands. Conversion, thresholding and every typed port consume the
+accepted `encoding` view before building pins.
 
 `ReadyValidStream` describes native transfer pins, markers and clock/reset
 associations. `pins()` preserves their exact widths. `axis_bus()` requires
 byte-aligned data and at most one LAST marker; it does not pad words or relabel
 loop/replay completion markers. `AxiStream` uses this same transport lowering
-while retaining its typed packing. FIFO, input generation and eltwise expose
-accepted `interfaces()` views; replay and cyclic delivery use the same native
-records rather than publishing unpadded words as AXI buses.
+while retaining its typed packing. Typed ports (`native_stream`, `axi_stream`)
+produce these records from lanes of an accepted scalar. Opaque words need no
+scalar: FIFO, input generation, replay and cyclic delivery construct
+`ReadyValidStream` values directly rather than publishing unpadded words as AXI
+buses.
 
 FIFO's `ram_style` remains a native preference. Its accepted `storage()` view
 reports both the effective backing and capacity, including output storage.
@@ -159,5 +232,6 @@ reports shift storage and capacity five. This is native implementation
 information, not a synthesis resource measurement.
 
 See the [refinement review](../../../docs/kernel-refinement-2026-09-25/REVIEW.md)
-for examples, validation, source-baseline details, and the intentionally
-remaining architecture/composition work.
+for the scalar/stream constructs and source baseline, and the
+[composition review](../../../docs/kernel-composition-2026-09-25/REVIEW.md) for
+the port authoring comparison, the delivery choice, and remaining work.

@@ -10,9 +10,7 @@ import pytest
 
 from finn.core.space import (
     Available,
-    ConstraintGroup,
     Decision,
-    Derived,
     Param,
     Rejected,
     SelectionSchema,
@@ -22,6 +20,7 @@ from finn.core.space import (
     codec_for,
     codecs,
     compile_space,
+    constraint,
     derived,
     selections,
     view,
@@ -31,6 +30,7 @@ from finn.core.space.extensions import ScopeBuilder
 from finn.kernels.artifacts.hls import HlsInterface, HlsSourceRequirements
 from finn.kernels.base import Kernel
 from finn.kernels.datatypes.domains import Integer, SignedInteger
+from finn.kernels.datatypes.scalar import IntegerScalar, integer_scalar
 from finn.kernels.datatypes.semantics import (
     INTEGER_VECTOR,
     QONNX_DATATYPE_CODEC,
@@ -199,38 +199,22 @@ def test_dtype_portable_selection_is_optional_and_uses_exact_canonical_encoding(
 
 
 def test_integer_admission_retains_dynamic_bounds_and_inspectable_family_refusal() -> None:
-    dtype = Param(QONNX_DATATYPE_VALUE_SEMANTICS)
-    width = Decision(int, values=(0, 8, 16))
+    class IntegerAdmission(Kernel):
+        id = "test.integer"
+        dtype = Param(QONNX_DATATYPE_VALUE_SEMANTICS)
+        width = Decision(int, values=(0, 8, 16))
 
-    def limit_value(*, width: int) -> int:
-        return width
+        @derived
+        def limit(self) -> int:
+            return self.width
 
-    limit = Derived(limit_value)
-    conditions = Integer(max_bits=limit, signed=False).constraints(dtype)
-    support = ConstraintGroup(*(condition for _, condition in conditions))
-    Family = cast(
-        type[Kernel],
-        type(
-            "IntegerAdmission",
-            (Kernel,),
-            {
-                "id": "test.integer",
-                "dtype": dtype,
-                "width": width,
-                "limit": limit,
-                **dict(conditions),
-                "support": support,
-                "physical": View(dtype, constraints=(support,)),
-            },
-        ),
-    )
-    model = compile_space(Family)
-    unknown = model.bind({dtype: resolve_qonnx_datatype_name("TERNARY")})
-    raw = unknown.query(dtype)
-    assert isinstance(raw, Available)
-    assert raw.value.name == "TERNARY"
-    assessment = unknown.inspect(support)
-    assert assessment.refused == ("family",)
+        admitted = integer_scalar(dtype, Integer(max_bits=limit, signed=False))
+
+    model = compile_space(IntegerAdmission)
+    unknown = model.bind({IntegerAdmission.dtype: resolve_qonnx_datatype_name("TERNARY")})
+    assert unknown.admitted.dtype.name == "TERNARY"
+    assessment = unknown.admitted.inspect(IntegerScalar.admission)
+    assert assessment.refused == ("admitted.family",)
     assert isinstance(assessment.result, Unresolved)
     for name, accepted in (
         ("UINT8", True),
@@ -239,12 +223,12 @@ def test_integer_admission_retains_dynamic_bounds_and_inspectable_family_refusal
         ("UINT16", False),
         ("BIPOLAR", False),
     ):
-        point = model.bind({dtype: resolve_qonnx_datatype_name(name)})
-        point = point.with_choices(point.field(width).change(8))
-        assert point.inspect(support).verdict is accepted
-    invalid = model.bind({dtype: resolve_qonnx_datatype_name("UINT8")})
-    invalid = invalid.with_choices(invalid.field(width).change(0))
-    refused = invalid.inspect(support).results["maximum_bits"]
+        point = model.bind({IntegerAdmission.dtype: resolve_qonnx_datatype_name(name)})
+        point = point.with_choices(width=8)
+        assert point.admitted.inspect(IntegerScalar.admission).verdict is accepted
+    invalid = model.bind({IntegerAdmission.dtype: resolve_qonnx_datatype_name("UINT8")})
+    invalid = invalid.with_choices(width=0)
+    refused = invalid.admitted.inspect(IntegerScalar.admission).results["admitted.maximum_bits"]
     assert isinstance(refused, Rejected)
     assert refused.findings[0].code == "dtype-bound-invalid"
     assert SignedInteger(max_bits=8).signed is True
@@ -303,11 +287,12 @@ def test_builder_extends_kernel_with_typed_optional_views_and_independent_scopes
 
     payload = builder.add("payload_bits", derived(bits))
     pins = builder.add("pin_values", derived(plain_pins))
-    conditions = tuple(
-        builder.add("dtype_" + name, condition)
-        for name, condition in Integer(max_bits=8).constraints(dtype)
-    )
-    ports = builder.add("ports", View(pins, constraints=conditions))
+
+    def narrow(*, dtype: QONNXDataType) -> bool | Rejected:
+        return Integer(max_bits=8).check(dtype)
+
+    admitted = builder.add("admitted", constraint(narrow))
+    ports = builder.add("ports", View(pins, constraints=(admitted,)))
     key = ViewKey("ports", Pins)
     builder.export(key).view(ports)
     builder.bind(dtype, Param(QONNX_DATATYPE_VALUE_SEMANTICS))

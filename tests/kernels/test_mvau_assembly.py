@@ -68,7 +68,12 @@ def test_cyclic_image_has_neuron_then_synapse_then_pe_simd_order():
     assert built.initializer == (0x22C, 0x6BE, 0xDD3, 0x941)
     assert "in1_V" not in {port.name for port in built.structure.top_abi.ports}
     cyclic = dict(built.structure.instances[2].requirements.parameters)
-    assert cyclic == {"DEPTH": 4, "W": 12, "INIT_DATA": "48'h941dd36be22c"}
+    assert cyclic == {
+        "DEPTH": 4,
+        "W": 12,
+        "INIT_DATA": "48'h941dd36be22c",
+        "ROM_STYLE": '"auto"',
+    }
     assert built.weight_beats == 12
 
 
@@ -127,6 +132,7 @@ def test_precision_covers_full_ranges_and_is_minimal(activation, weight, length,
         ({"weights": [[0] * 4] * 4}, "no initializer"),
         ({"weight_delivery": WeightDelivery.CYCLIC, "weights": [[0]]}, "shape"),
         ({"weight_delivery": WeightDelivery.CYCLIC, "weights": [[4] * 4] * 4}, "admitted"),
+        ({"weight_delivery": WeightDelivery.CYCLIC, "weights": [[0.5] * 4] * 4}, "integer"),
     ],
 )
 def test_invalid_configuration_fails_during_construction(changes, match):
@@ -147,22 +153,24 @@ def test_space_selects_folding_and_constructs_without_a_logical_contract():
             segment_length=0,
         ),
         pe=2,
-        weight_delivery=WeightDelivery.EXTERNAL,
+        implementation="external",
     )
     point = base.with_choices(simd=2)
     assert isinstance(point.compute.build_requirements.inspect().accepted_result, Unresolved)
+    assert isinstance(point.assembly.inspect().accepted_result, Unresolved)
     point = point.compute.with_choices(compute_pumping=False).root
     assert point.result_type == DataType["INT8"]
     assert value(assess(point, MVAU.dimensions_supported)) is True
     assert point.compute.pe == point.pe
     assert point.compute.result.dtype == point.result_type
     point.compute.build_requirements()
-    assert point.assemble().result_beats == 4
+    assert point.assembly().result_beats == 4
     assert not hasattr(MVAU, "contract")
     refused = base.with_choices(simd=1).compute.with_choices(compute_pumping=True).root
     assert isinstance(refused.compute.build_requirements.inspect().accepted_result, Rejected)
-    with pytest.raises(ValueError, match="dotp-pumping"):
-        refused.assemble()
+    rejected = refused.assembly.query()
+    assert isinstance(rejected, Rejected)
+    assert "dotp-pumping" in {finding.code for finding in rejected.findings}
 
 
 @pytest.mark.parametrize("delivery", tuple(WeightDelivery))
@@ -210,11 +218,9 @@ def test_mvau_honors_the_child_physical_view_not_just_its_raw_module(monkeypatch
     class RestrictedMVAU(MVAU):
         compute = Subspace(
             RestrictedDotp,
-            bindings={
-                RestrictedDotp.activation.dtype: MVAU.activation_dtype,
-                RestrictedDotp.weights.dtype: MVAU.weights_dtype,
-                RestrictedDotp.result.dtype: MVAU.result_type,
-            },
+            activation_dtype=MVAU.activation_dtype,
+            weights_dtype=MVAU.weights_dtype,
+            result_dtype=MVAU.result_type,
             pe=MVAU.pe,
             simd=MVAU.simd,
             target_dsp=MVAU.target_dsp,
@@ -234,13 +240,14 @@ def test_mvau_honors_the_child_physical_view_not_just_its_raw_module(monkeypatch
         ),
         pe=2,
         simd=2,
-        weight_delivery=WeightDelivery.EXTERNAL,
+        implementation="external",
     )
     point = point.compute.with_choices(compute_pumping=False).root
     assert isinstance(point.compute.query(DotpAxiKernel.codegen), Available)
     assert isinstance(point.compute.build_requirements.inspect().accepted_result, Rejected)
-    with pytest.raises(ValueError, match="test-view-only"):
-        point.assemble()
+    refused = point.assembly.query()
+    assert isinstance(refused, Rejected)
+    assert "test-view-only" in {finding.code for finding in refused.findings}
     # Substitute a fully authored family to exercise the convenience entry
     # point through the same accepted-view path, without mutating declarations.
     monkeypatch.setattr("finn.kernels.mvau.MVAU", RestrictedMVAU)

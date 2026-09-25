@@ -66,7 +66,9 @@ def test_replay_rejects_invalid_dimensions(name, value):
 
 @pytest.mark.parametrize("bits,image", [(1, (1,)), (13, (0, 8191, 37)), (65, (1 << 64, 7))])
 def test_cyclic_image_is_complete_and_buildable(tmp_path, bits, image):
-    requirements = cyclic_stream_requirements(word_bits=bits, depth=len(image), image=image)
+    requirements = cyclic_stream_requirements(
+        word_bits=bits, depth=len(image), image=image, rom_style="auto"
+    )
     parameters = dict(requirements.parameters)
     literal_width, packed_hex = parameters["INIT_DATA"].split("'h")
     assert int(literal_width) == bits * len(image)
@@ -85,8 +87,8 @@ def test_cyclic_image_is_complete_and_buildable(tmp_path, bits, image):
 
 
 def test_cyclic_image_changes_concrete_identity_without_changing_reusable_source(tmp_path):
-    first = cyclic_stream_requirements(word_bits=8, depth=3, image=(1, 2, 3))
-    second = cyclic_stream_requirements(word_bits=8, depth=3, image=(1, 2, 4))
+    first = cyclic_stream_requirements(word_bits=8, depth=3, image=(1, 2, 3), rom_style="auto")
+    second = cyclic_stream_requirements(word_bits=8, depth=3, image=(1, 2, 4), rom_style="auto")
     assert module_build_fingerprint(first) != module_build_fingerprint(second)
     store = ArtifactStore(tmp_path / "store")
     prepared = [
@@ -107,16 +109,17 @@ def test_cyclic_image_changes_concrete_identity_without_changing_reusable_source
         ({"word_bits": 8, "depth": 1, "image": (256,)}, "fitting word_bits"),
         ({"word_bits": 8, "depth": 1, "image": (-1,)}, "unsigned integers"),
         ({"word_bits": 8, "depth": 1, "image": (True,)}, "unsigned integers"),
+        ({"word_bits": 8, "depth": 1, "image": (0,), "rom_style": "ultra"}, "rom_style"),
     ],
 )
 def test_cyclic_rejects_incomplete_or_invalid_initialization(arguments, match):
     with pytest.raises(ValueError, match=match):
-        cyclic_stream_requirements(**arguments)
+        cyclic_stream_requirements(**{"rom_style": "auto", **arguments})
 
 
 def test_cyclic_snapshots_the_image():
     image = [0, 255]
-    requirements = cyclic_stream_requirements(word_bits=8, depth=2, image=image)
+    requirements = cyclic_stream_requirements(word_bits=8, depth=2, image=image, rom_style="auto")
     image[0] = 11
     assert dict(requirements.parameters)["INIT_DATA"] == "16'hff00"
 
@@ -125,13 +128,14 @@ _CYCLIC_TESTBENCH = r"""
 module cyclic_check #(
     parameter int W = 13,
     parameter int DEPTH = 3,
-    parameter logic [W*DEPTH-1:0] IMAGE = 39'h127ffe123
+    parameter logic [W*DEPTH-1:0] IMAGE = 39'h127ffe123,
+    parameter ROM_STYLE = "auto"
 )(output logic done = 0);
     logic clk = 0, rst = 1, ready = 0;
     wire [W-1:0] data;
     wire valid;
     always #5 clk = !clk;
-    cyclic_stream #(.W(W), .DEPTH(DEPTH), .INIT_DATA(IMAGE)) dut (
+    cyclic_stream #(.W(W), .DEPTH(DEPTH), .INIT_DATA(IMAGE), .ROM_STYLE(ROM_STYLE)) dut (
         .clk, .rst, .odat(data), .ovld(valid), .ordy(ready)
     );
     task automatic collect(input int count);
@@ -234,10 +238,12 @@ endmodule
 
 module stream_test;
     wire [7:0] done;
-    cyclic_check #(.W(1), .DEPTH(1), .IMAGE(1'b1)) c1(done[0]);
+    // Each ROM_STYLE is one synthesis attribute over the same behavior.
+    cyclic_check #(.W(1), .DEPTH(1), .IMAGE(1'b1), .ROM_STYLE("distributed")) c1(done[0]);
     cyclic_check c3(done[1]);
-    cyclic_check #(.W(65), .DEPTH(4), .IMAGE(260'h1ffffffffffffffffa123456789abcdef0))
-        c4(done[2]);
+    cyclic_check #(
+        .W(65), .DEPTH(4), .IMAGE(260'h1ffffffffffffffffa123456789abcdef0), .ROM_STYLE("block")
+    ) c4(done[2]);
     replay_check #(.LEN(1), .REP(1)) r11(done[3]);
     replay_check #(.LEN(1), .REP(3)) r13(done[4]);
     replay_check #(.LEN(3), .REP(1)) r31(done[5]);

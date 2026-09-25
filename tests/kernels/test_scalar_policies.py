@@ -7,7 +7,7 @@ import pytest
 
 from finn.core.space import Available, Decision, Param, Rejected, Space, Unresolved
 from finn.kernels.datatypes.domains import Integer, SignedInteger
-from finn.kernels.datatypes.scalar import Scalar
+from finn.kernels.datatypes.scalar import Scalar, integer_scalar
 from finn.kernels.datatypes.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
 from finn.kernels.datatypes.values import resolve_qonnx_datatype_name as dtype
 from finn.kernels.int_to_fp32 import IntToFp32Kernel
@@ -20,7 +20,7 @@ from kernels.test_migrated_simple import eltwise
 class Precision(Space):
     limit = Param(int)
     dtype = Decision(QONNX_DATATYPE_VALUE_SEMANTICS, domain=SignedInteger(2, limit).domain())
-    scalar = Scalar(dtype, SignedInteger(2, limit))
+    scalar = integer_scalar(dtype, SignedInteger(2, limit))
 
 
 def test_dtype_choice_and_scalar_admission_share_dynamic_limits():
@@ -28,10 +28,10 @@ def test_dtype_choice_and_scalar_admission_share_dynamic_limits():
     candidates = base.field(Precision.dtype).candidates()
     assert isinstance(candidates, Available)
     assert [value.name for value in candidates.value] == ["INT2", "INT3", "INT4", "INT5"]
-    assert isinstance(base.query(Precision.scalar.accepted_encoding), Unresolved)
+    assert isinstance(base.query(Precision.scalar.accepted(Scalar.encoding)), Unresolved)
     for name in ("INT2", "INT5"):
         selected = base.with_choices(dtype=dtype(name))
-        encoding = selected.query(Precision.scalar.accepted_encoding)
+        encoding = selected.query(Precision.scalar.accepted(Scalar.encoding))
         assert isinstance(encoding, Available)
         assert encoding.value.dtype.name == name
         assert encoding.value.bits == int(name[3:])
@@ -48,11 +48,11 @@ def test_invalid_bound_is_a_domain_refusal():
 
 def test_scalar_encoding_detaches_qonnx_values():
     selected = Precision(limit=5).with_choices(dtype=dtype("INT3"))
-    first = selected.scalar.view(Precision.scalar.view())()
+    first = selected.scalar.encoding()
     mutable = first.dtype
     mutable._bitwidth = 100
     assert first.bits == 3
-    assert selected.scalar.view(Precision.scalar.view())().bits == 3
+    assert selected.scalar.encoding().bits == 3
 
 
 @pytest.mark.parametrize("name", ("INT0", "UINT0", "BIPOLAR", "TERNARY", "FLOAT16", "INT129"))

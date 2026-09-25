@@ -45,6 +45,18 @@ INTEGER_VECTOR: ValueSemantics[IntegerVector] = ValueSemantics(
     lambda value: value,
 )
 
+IntegerMatrix = tuple[tuple[int, ...], ...]
+INTEGER_MATRIX: ValueSemantics[IntegerMatrix] = ValueSemantics(
+    IntegerMatrix,
+    "integer matrix",
+    lambda value: (
+        type(value) is tuple
+        and all(type(row) is tuple and all(type(item) is int for item in row) for row in value)
+    ),
+    lambda left, right: left == right,
+    lambda value: value,
+)
+
 ThresholdTable = tuple[tuple[tuple[int, ...], ...], ...]
 
 
@@ -66,7 +78,9 @@ THRESHOLD_TABLE: ValueSemantics[ThresholdTable] = ValueSemantics(
 
 
 __all__ = [
+    "INTEGER_MATRIX",
     "INTEGER_VECTOR",
+    "IntegerMatrix",
     "IntegerVector",
     "QONNX_DATATYPE_CODEC",
     "QONNX_DATATYPE_SEMANTICS",

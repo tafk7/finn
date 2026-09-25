@@ -1,5 +1,9 @@
 # First kernel refinement pass
 
+> The `Scalar(...)` and AXI declaration forms below describe `b2d01750a`. The
+> [composition pass](../kernel-composition-2026-09-25/REVIEW.md) replaces them
+> and MVAU's procedural assembly; this record is otherwise unchanged.
+
 This pass implements reusable scalar policy and native stream constructs,
 adopts them in the existing kernels, and ports the package to a concrete
 FinnLib source baseline. The generic Space engine and parked dataflow package

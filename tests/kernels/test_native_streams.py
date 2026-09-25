@@ -7,10 +7,13 @@ import subprocess
 
 import pytest
 
+from finn.core.space import Available, Rejected
 from finn.kernels.artifacts.abi import Direction, Endpoint
+from finn.kernels.eltwise import EltwiseOperand
 from finn.kernels.fifo import FifoKernel
 from finn.kernels.physical.stream import MarkerKind, ReadyValidStream, StreamMarker
 from kernels.test_migrated_rich import generator
+from kernels.test_migrated_simple import eltwise
 
 
 def test_native_streams_are_inspectable_without_storage_choices():
@@ -124,3 +127,22 @@ endmodule
         result = subprocess.run(command, cwd=tmp_path, capture_output=True, text=True, timeout=120)
         assert result.returncode == 0, result.stdout + result.stderr
     assert "FIFO_CAPACITY_PASS" in result.stdout, result.stdout + result.stderr
+
+
+def test_typed_native_ports_bind_separately_owned_operand_scalars():
+    mixed = eltwise(lhs="INT5", rhs="FLOAT32", pe=3)
+    lhs, rhs, result = mixed.interfaces()
+    assert (lhs.data, lhs.valid, lhs.ready) == ("adat", "avld", "ardy")
+    assert (lhs.data_width, rhs.data_width, result.data_width) == (15, 96, 96)
+    assert [field.bit_offset for field in mixed.lhs.payload.fields] == [0, 5, 10]
+    assert mixed.lhs.payload.unused == ()  # native ports are never padded
+    # Raw port facts do not wait for admission; the accepted stream does.
+    refused = eltwise(lhs="FLOAT16", rhs="FLOAT16")
+    assert refused.lhs.payload_bits == 32
+    admission = refused.lhs_type.inspect(EltwiseOperand.admission)
+    assert admission.verdict is False
+    answer = refused.lhs.stream.query()
+    assert isinstance(answer, Rejected)
+    assert {finding.owner for finding in answer.findings} == {"lhs_type.supported"}
+    assert isinstance(refused.build_requirements.query(), Rejected)
+    assert isinstance(eltwise().result.stream.query(), Available)
