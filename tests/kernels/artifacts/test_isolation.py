@@ -269,7 +269,7 @@ def test_no_planning_module_names_a_vendor_executable(
         ("from finn.dataflow import region\n", "finn.dataflow"),
         ("from finn.core.space import Space\n", "finn.core.space"),
         ("from finn.kernels.dotp import DotpAxiKernel\n", "finn.kernels.dotp"),
-        ("from ..space import Space\n", "finn.core.space"),
+        ("from ..space import Space\n", "finn.kernels.space"),
         ("from .. import physical\n", "finn.kernels.physical"),
         ("from ...dataflow import model\n", "finn.dataflow"),
         ("import onnx\n", "onnx"),
