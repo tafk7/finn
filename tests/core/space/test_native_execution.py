@@ -702,3 +702,176 @@ def test_self_cycles_are_reached_through_scopes_admission_and_guards() -> None:
     for family in (Admission, Guard):
         with pytest.raises(EvaluationError, match="dependency cycle"):
             family().with_choices(choice=1)
+
+
+@pytest.mark.parametrize(
+    "boundary",
+    (
+        "construct",
+        "publish",
+        "close",
+        "retire",
+        "active",
+        "deliver",
+        "returned",
+    ),
+)
+@pytest.mark.parametrize("primary_failure", (False, True))
+def test_interrupted_completion_drains_parent_and_preserves_failure(
+    boundary: str,
+    primary_failure: bool,
+) -> None:
+    events: list[object] = []
+    original = KeyboardInterrupt("completion boundary")
+    first = LookupError("original callback failure")
+
+    class Family(Space):
+        cleanup = Param(int)
+
+        @derived
+        def fact(self) -> int:
+            events.append("fact")
+            if primary_failure:
+                raise first
+            return 7
+
+        @derived
+        def middle(self) -> int:
+            events.append("entered")
+            try:
+                return self.fact
+            finally:
+                events.append(("middle cleanup", self.cleanup))
+
+        @derived
+        def output(self) -> int:
+            try:
+                return self.middle
+            finally:
+                events.append(("outer cleanup", self.cleanup + 1))
+                raise ValueError("outer cleanup failure")
+
+    markers = {
+        "construct": "if isinstance(outcome, _Failure):"
+        if primary_failure
+        else "outcome = _runtime.Evaluation(",
+        "publish": "failures[task.identity] = outcome"
+        if primary_failure
+        else "snapshot.cache[task.identity] = outcome",
+        "close": "task.frame.close()",
+        "retire": "tasks.pop()",
+        "active": "active.pop(task.identity)",
+        "deliver": "waiter.incoming = (",
+    }
+    source, start = inspect.getsourcelines(_execution.run)
+    target = (
+        None
+        if boundary == "returned"
+        else next(start + offset for offset, line in enumerate(source) if markers[boundary] in line)
+    )
+    fired = False
+
+    def trace(frame: FrameType, event: str, argument: object) -> TraceFunction:
+        nonlocal fired
+        task = frame.f_locals.get("task")
+        at_boundary = (
+            event == "return"
+            if boundary == "returned"
+            else event == "line" and frame.f_lineno == target
+        )
+        if (
+            not fired
+            and at_boundary
+            and frame.f_code.co_name == "finish"
+            and frame.f_code.co_filename == _execution.__file__
+            and isinstance(task, _execution._Task)
+            and task.context.key == "fact"
+        ):
+            fired = True
+            raise original
+        return trace
+
+    point = Family(cleanup=8)
+    prior = sys.gettrace()
+    try:
+        sys.settrace(trace)
+        with pytest.raises(KeyboardInterrupt) as caught:
+            _ = point.output
+    finally:
+        sys.settrace(prior)
+    assert fired and caught.value is original
+    assert events == ["entered", "fact", ("middle cleanup", 8), ("outer cleanup", 9)]
+    details = cancellation_details(caught.value)
+    assert details is not None and details.primary.owner == "fact"
+    if primary_failure:
+        assert details.primary.__cause__ is first
+        assert len(details.cleanup_failures) == 2
+        interrupted = details.cleanup_failures[0].error
+        assert interrupted is not None and interrupted.__cause__ is original
+    else:
+        assert details.primary.__cause__ is original
+        assert len(details.cleanup_failures) == 1
+    last = details.cleanup_failures[-1].error
+    assert last is not None and isinstance(last.__cause__, ValueError)
+    snapshot = state(point).snapshot
+    for name in ("middle", "output"):
+        assert state(point).model.linked.keys[name] not in snapshot.cache
+    assert point.cleanup == 8 and _execution.current() is None
+
+
+def test_interruption_before_failure_delivery_keeps_pending_primary() -> None:
+    events: list[int] = []
+    first = LookupError("provider failure")
+    original = KeyboardInterrupt("before failure delivery")
+
+    class Family(Space):
+        cleanup = Param(int)
+
+        @view
+        def failed(self) -> int:
+            raise first
+
+        @derived
+        def output(self) -> int:
+            try:
+                return self.failed()
+            finally:
+                events.append(self.cleanup)
+
+    source, start = inspect.getsourcelines(_execution.run)
+    target = next(
+        start + offset
+        for offset, line in enumerate(source)
+        if "finish(task, _remember_failure(context, task.incoming))" in line
+    )
+    fired = False
+
+    def trace(frame: FrameType, event: str, argument: object) -> TraceFunction:
+        nonlocal fired
+        task = frame.f_locals.get("task")
+        if (
+            not fired
+            and event == "line"
+            and frame.f_code is _execution.run.__code__
+            and frame.f_lineno == target
+            and isinstance(task, _execution._Task)
+            and task.context.snapshot.linked.nodes[task.context.index].kind == "view"
+        ):
+            fired = True
+            raise original
+        return trace
+
+    point = Family(cleanup=8)
+    prior = sys.gettrace()
+    try:
+        sys.settrace(trace)
+        with pytest.raises(KeyboardInterrupt) as caught:
+            _ = point.output
+    finally:
+        sys.settrace(prior)
+    assert fired and caught.value is original and events == [8]
+    details = cancellation_details(original)
+    assert details is not None and details.primary.__cause__ is first
+    assert len(details.cleanup_failures) == 1
+    interrupted = details.cleanup_failures[0].error
+    assert interrupted is not None and interrupted.__cause__ is original

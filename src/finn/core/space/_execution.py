@@ -371,9 +371,9 @@ def run(
             )
             if isinstance(task.identity, int):
                 snapshot.cache[task.identity] = outcome
+        task.frame.close()
         tasks.pop()
         active.pop(task.identity)
-        task.frame.close()
         if tasks:
             waiter = tasks[-1]
             waiter.incoming = (
@@ -406,13 +406,22 @@ def run(
                 snapshot.work.suspensions += 1
             else:
                 if isinstance(task.incoming, _Failure):
-                    finish(task, task.incoming)
+                    finish(task, _remember_failure(context, task.incoming))
                     continue
-                if task.started:
-                    demanded = task.frame.send(task.incoming)
-                else:
-                    task.started = True
-                    demanded = next(task.frame)
+                completed: Evaluation | None = None
+                try:
+                    if task.started:
+                        demanded = task.frame.send(task.incoming)
+                    else:
+                        task.started = True
+                        demanded = next(task.frame)
+                except StopIteration as completion:
+                    completed = cast("Evaluation", completion.value)
+                if completed is not None:
+                    # Completion must remain inside the failure boundary, and
+                    # outside the StopIteration handler's exception context.
+                    finish(task, completed)
+                    continue
                 task.incoming = None
                 if isinstance(demanded, Call):
                     task.call = demanded
@@ -435,15 +444,23 @@ def run(
                 )
             else:
                 begin(dependency, dependency)
-        except StopIteration as completion:
-            finish(task, cast("Evaluation", completion.value))
         except BaseException as cause:
+            if isinstance(task.incoming, _Failure):
+                # An engine-only waiter may not yet have consumed the earlier
+                # failure when interrupted immediately before its delivery.
+                _remember_failure(context, task.incoming)
             failure = _remember_exception(context, cause)
             assert failure is not None
-            if task.continuation is not None and not task.continuation.dead:
-                task.incoming = failure
+            if not any(pending is task for pending in tasks):
+                # Completion may already have retired this task. Its safely
+                # published result can remain cached, but its parent must see
+                # the interruption instead of the pending successful delivery.
+                active.pop(task.identity, None)
+            if tasks:
+                waiter = tasks[-1]
+                waiter.incoming = _remember_failure(waiter.context, failure)
             else:
-                finish(task, failure)
+                final = failure
     if isinstance(final, _Failure):
         _raise_native_failure(final)
     assert final is not None
