@@ -1,23 +1,22 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
-"""DS1 structure and signature checks; no evaluator is mocked here."""
+"""Definition structure, signature checks, and canonical linked type validation."""
 
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import cast, get_type_hints
-from typing_extensions import Self
+from typing import cast
 
 import pytest
+from typing_extensions import Self
 
 from finn.core.space import (
-    QueryResult,
     Const,
     Decision,
     DefinitionError,
-    MissingInput,
-    NotApplicable,
     Param,
+    QueryResult,
+    RequestError,
     Space,
     Subspace,
     SubspaceChoice,
@@ -26,20 +25,15 @@ from finn.core.space import (
     ValueSemantics,
     View,
     ViewKey,
+    compile_space,
     constraint,
     derived,
-    full_result,
-    optional,
     view,
 )
-from finn.core.space.collection import (
-    BoundArgument,
-    collect_placement,
-    collect_space,
-    resolve_decision_ref,
-    validate_argument,
-)
-from finn.core.space.declarations import Declaration, DecisionRef
+from finn.core.space._bindings import collect_placement
+from finn.core.space._signatures import BoundArgument, validate_argument
+from finn.core.space.collection import collect_space
+from finn.core.space.declarations import Declaration
 
 
 class Base(Space):
@@ -60,7 +54,7 @@ class Override(Base):
 
 def test_effective_collection_resolves_inherited_names_and_explicit_aliases() -> None:
     collected = collect_space(Override)
-    assert collected.members["extent"].declaration is Override.extent
+    assert collected.members["extent"] is Override.extent
     assert collected.functions["doubled"].dependencies[0].source is Override.extent
     assert collected.functions["aliased"].dependencies[0].source is Override.extent
     assert collected.aliases[Base.extent] == "extent"
@@ -103,7 +97,6 @@ def test_value_and_function_views_are_distinct_declarations_with_same_type() -> 
     assert collected.semantics[Example.detached].type_token is int
     assert Example.function.source is None
     assert Example.detached.source is Example.value
-    assert Example.function.requires == Example.detached.requires == ()
 
 
 def test_nested_alias_and_typed_exports() -> None:
@@ -134,21 +127,16 @@ def test_nested_alias_and_typed_exports() -> None:
     assert "extent" not in vars(Parent)
 
 
-def test_explicit_answer_semantics_and_dependency_modes() -> None:
+def test_explicit_answer_semantics_preserve_the_value_type() -> None:
     class Example(Space):
-        value = Param(int, required=False)
+        value = Param(int)
 
-        @derived(input=optional(value))
-        def missing(*, input: int | MissingInput | NotApplicable) -> bool:
-            return isinstance(input, MissingInput)
-
-        @derived(input=full_result(value), semantics=ValueSemantics.immutable_nominal(int))
-        def forwarded(*, input: QueryResult[int]) -> QueryResult[int]:
-            return input
+        @derived(input=value, semantics=ValueSemantics.immutable_nominal(int))
+        def forwarded(*, input: int) -> QueryResult[int]:
+            raise AssertionError("collection must not evaluate")
 
     collected = collect_space(Example)
-    assert collected.functions["missing"].dependencies[0].mode == "optional"
-    assert collected.functions["forwarded"].dependencies[0].mode == "result"
+    assert collected.functions["forwarded"].dependencies[0].source is Example.value
     assert collected.functions["forwarded"].semantics.type_token is int
 
 
@@ -330,13 +318,27 @@ def test_four_binding_forms_and_local_edit_ownership() -> None:
         "exposed-param",
         "local-decision",
     ]
-    local = cast(DecisionRef[object], Parent.local.decision_ref(Child.size))
-    assert resolve_decision_ref(local) is Parent.local.bindings["size"]
-    internal = cast(DecisionRef[object], Parent.alias.decision_ref(Child.internal))
-    assert resolve_decision_ref(internal) is Child.internal
+    model = compile_space(Parent)
+    local = Parent.local.decision_ref(Child.size)
+    assert model.linked.nodes[model.resolve(0, local)].kind == "decision"
+    assert (
+        model.linked.nodes[model.resolve(0, Parent.alias.decision_ref(Child.internal))].kind
+        == "decision"
+    )
     for placement in (Parent.literal, Parent.alias, Parent.exposed):
-        with pytest.raises(DefinitionError, match="not a locally owned Decision"):
-            resolve_decision_ref(cast(DecisionRef[object], placement.decision_ref(Child.size)))
+        with pytest.raises(RequestError, match="not a locally owned Decision"):
+            model.resolve(0, placement.decision_ref(Child.size))
+
+    class Invalid(Space):
+        supplier = Decision(int, values=(1, 2))
+        child = Subspace(Child, size=supplier)
+
+        @derived(value=child.decision_ref(Child.size))
+        def illegal(*, value: int) -> int:
+            raise AssertionError("ownership errors must precede evaluation")
+
+    with pytest.raises(DefinitionError, match="not a locally owned Decision"):
+        compile_space(Invalid)
 
 
 def test_child_omissions_and_incompatible_bindings_are_not_implicit_exposure() -> None:
@@ -444,7 +446,7 @@ def test_when_is_an_authoring_control_argument() -> None:
         collect_space(Wrong)
 
 
-def test_cached_child_records_supply_inferred_types_without_mutating_declarations() -> None:
+def test_linked_child_types_are_inferred_without_mutating_declarations() -> None:
     boolean_view = ViewKey("admitted", bool)
 
     class Child(Space):
@@ -457,8 +459,6 @@ def test_cached_child_records_supply_inferred_types_without_mutating_declaration
         admitted = View(enabled)
         exports = {boolean_view: admitted}
 
-    child_record = collect_space(Child)
-
     class Parent(Space):
         child = Subspace(Child, size=1)
 
@@ -469,9 +469,10 @@ def test_cached_child_records_supply_inferred_types_without_mutating_declaration
         copied = View(child.accepted(Child.admitted))
         exports = {boolean_view: copied}
 
-    effective = collect_space(Parent, known_spaces={Child: child_record})
-    assert effective.semantics[Parent.copied].type_token is bool
-    assert effective.guards[Parent.value] is Parent.value.when
+    model = compile_space(Parent)
+    semantics = model.linked.nodes[model.resolve(0, Parent.copied)].semantics
+    assert semantics is not None and semantics.type_token is bool
+    assert model.linked.nodes[model.resolve(0, Parent.value)].guard is not None
     assert Child.enabled.semantics is None
     assert Child.admitted.semantics is None
     assert Parent.copied.semantics is None
@@ -484,7 +485,7 @@ def test_cached_child_records_supply_inferred_types_without_mutating_declaration
             raise AssertionError("must not execute")
 
     with pytest.raises(DefinitionError, match="cannot consume bool"):
-        collect_space(Wrong, known_spaces={Child: child_record})
+        compile_space(Wrong)
 
 
 def test_collection_does_not_descend_into_deep_child_hierarchies() -> None:
@@ -495,36 +496,12 @@ def test_collection_does_not_descend_into_deep_child_hierarchies() -> None:
     assert tuple(effective.members) == ("child",)
 
 
-def test_linker_argument_validation_shares_dependency_mode_policy() -> None:
-    def annotations(integer: QueryResult[int], text: QueryResult[str]) -> None:
-        pass
-
-    hints: dict[str, object] = get_type_hints(annotations)
+def test_linker_argument_validation_checks_required_input_types() -> None:
     source = cast(ValueRef[object], Param(int))
     integer = cast(ValueSemantics[object], ValueSemantics.immutable_nominal(int))
-    validate_argument(BoundArgument("item", source, "required", int), integer, owner="reader.item")
-    validate_argument(
-        BoundArgument("item", source, "result", hints["integer"]), integer, owner="reader.item"
-    )
-    validate_argument(
-        BoundArgument("item", source, "optional", int | MissingInput | NotApplicable),
-        integer,
-        owner="reader.item",
-    )
-    with pytest.raises(DefinitionError, match="full_result dependency requires"):
-        validate_argument(
-            BoundArgument("item", source, "result", int), integer, owner="reader.item"
-        )
+    validate_argument(BoundArgument("item", source, int), integer, owner="reader.item")
     with pytest.raises(DefinitionError, match="cannot consume int"):
-        validate_argument(
-            BoundArgument("item", source, "result", hints["text"]), integer, owner="reader.item"
-        )
-    with pytest.raises(DefinitionError, match="cannot consume int"):
-        validate_argument(
-            BoundArgument("item", source, "optional", str | float | MissingInput | NotApplicable),
-            integer,
-            owner="reader.item",
-        )
+        validate_argument(BoundArgument("item", source, str), integer, owner="reader.item")
 
 
 def test_generic_list_annotations_validate_their_nominal_origin() -> None:

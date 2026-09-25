@@ -9,12 +9,13 @@ handles. Handles retain compilation, never a configuration, assignments or cache
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Generic, TypeVar, cast
 
-from .declarations import DecisionRef, ValueRef
+from .declarations import AcceptedViewRef, DecisionRef, ScopedValueRef, ValueKey, ValueRef, ViewKey
 from .errors import RequestError
-from .ir import LinkedModel
+from .ir import Choice, LinkedModel, Node, Scope
 from .semantics import ValueSemantics
 
 T = TypeVar("T")
@@ -64,6 +65,87 @@ class DecisionHandle(ValueHandle[T], DecisionRef[T], Generic[T]):
         super().__post_init__()
         if self._linked.nodes[self._node].kind != "decision":
             raise RequestError("a decision handle requires an owning Decision")
+
+
+def decision_key(linked: LinkedModel, index: int) -> str:
+    """Use the authored choice key for selectors, never generated node names."""
+    choice = linked.selector_choices.get(index)
+    return linked.nodes[index].key if choice is None else linked.choices[choice].key
+
+
+def resolve_reference(
+    nodes: Sequence[Node],
+    scopes: Sequence[Scope],
+    choices: Sequence[Choice],
+    scope: int,
+    reference: object,
+    *,
+    expand: bool = False,
+) -> int:
+    """Interpret fresh typed paths using frozen occurrence maps, never classes."""
+
+    if type(scope) is not int or not 0 <= scope < len(scopes):
+        raise RequestError("reference scope does not belong to this model")
+    seen: set[tuple[int, int]] = set()
+    require_view = False
+    decision_scope: int | None = None
+    original = reference
+    while True:
+        if not expand:
+            try:
+                index = scopes[scope].members[reference]
+                break
+            except (KeyError, TypeError):
+                pass
+        expand = False
+        if not isinstance(reference, (ScopedValueRef, AcceptedViewRef)):
+            raise RequestError("reference is not a member of this compiled scope")
+        step = (scope, id(reference))
+        if step in seen:
+            raise RequestError("cyclic scoped reference")
+        seen.add(step)
+        placement = reference.placement
+        if isinstance(reference, AcceptedViewRef):
+            require_view = True
+        child = scopes[scope].children.get(placement)
+        if child is not None:
+            scope = child
+            if isinstance(reference, DecisionRef):
+                decision_scope = scope
+            reference = reference.member
+            continue
+        choice_index = scopes[scope].choices.get(placement)
+        if choice_index is not None:
+            if isinstance(reference, DecisionRef):
+                raise RequestError("a DecisionRef must name a concrete locally owned decision")
+            member = reference.member
+            if (require_view and not isinstance(member, ViewKey)) or (
+                not require_view and not isinstance(member, ValueKey)
+            ):
+                raise RequestError("choice reference has the wrong export kind")
+            try:
+                return choices[choice_index].exports[member]
+            except KeyError as cause:
+                raise RequestError("reference is not an export of this compiled choice") from cause
+        raise RequestError("placement is not a child or choice of this compiled scope")
+    node = nodes[index]
+    # Named editable handles keep the frozen alias target, too. A fresh handle
+    # is checked while descending; declared aliases do not reread its fields.
+    if isinstance(original, DecisionRef):
+        seen_aliases: set[int] = set()
+        while node.kind == "alias" and node.output is not None:
+            if index in seen_aliases:
+                raise RequestError("cyclic decision alias")
+            seen_aliases.add(index)
+            index = node.output
+            node = nodes[index]
+        if node.kind != "decision":
+            raise RequestError("a Param alias is not a locally owned Decision")
+    if require_view and node.kind != "view":
+        raise RequestError("an accepted reference must name a view")
+    if decision_scope is not None and (node.kind != "decision" or node.scope != scope):
+        raise RequestError("a Param alias is not a locally owned Decision")
+    return index
 
 
 __all__ = ["DecisionHandle", "ValueHandle"]

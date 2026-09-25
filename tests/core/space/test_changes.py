@@ -18,10 +18,9 @@ from finn.core.space import (
     ValueSemantics,
     compile_space,
     domain,
-    refinement,
 )
 from finn.core.space.edits import ChangeRequest
-from finn.core.space.errors import EvaluationError, ConfigurationError, RequestError
+from finn.core.space.errors import ConfigurationError, EvaluationError, RequestError
 from finn.core.space.inspection import choices, decision_handle
 from finn.core.space.results import Available, Inapplicable, Rejected, Unresolved
 
@@ -47,20 +46,20 @@ def test_malformed_batch_structure_and_types_precede_every_snapshot_callback() -
 
     model = compile_space(Trial)
     base, other = model.bind(), model.bind()
-    first = refinement.change(base, Trial.first, 1)
+    first = base.field(Trial.first).change(1)
     bad_edits: tuple[ChangeRequest, ...] = (
         first,
         replace(first, scope=True),
         replace(first, scope=-1),
         replace(first, node=True),
         replace(first, node=10**6),
-        refinement.change(other, Trial.second, 1),
-        refinement.change(base, Trial.second, cast(int, "wrong")),
+        other.field(Trial.second).change(1),
+        base.field(Trial.second).change(cast(int, "wrong")),
         cast(ChangeRequest, object()),
     )
     for bad in bad_edits:
         with pytest.raises(RequestError):
-            refinement.commit(base, first, bad)
+            base.try_with_choices(first, bad)
         assert events == []
     assert isinstance(base.query(Trial.first), Unresolved)
 
@@ -82,7 +81,7 @@ def test_foreign_model_handles_are_rejected_before_evaluators() -> None:
     point = right.bind()
     handle = decision_handle(left, Trial.value)
     with pytest.raises(RequestError):
-        refinement.change(point, handle, 1)
+        point.field(handle).change(1)
     assert calls == []
 
 
@@ -116,12 +115,10 @@ def test_snapshot_and_recognition_programmer_failures_are_contextual() -> None:
     assert isinstance(input_error.value.__cause__, RuntimeError)
     base = Decisions()
     with pytest.raises(EvaluationError) as candidate_error:
-        refinement.commit(
-            base,
-            refinement.change(base, Decisions.earlier, 1),
-            refinement.change(base, Decisions.value, 1),
+        base.try_with_choices(
+            base.field(Decisions.earlier).change(1), base.field(Decisions.value).change(1)
         )
-    assert candidate_error.value.role == "candidate snapshot"
+    assert candidate_error.value.role == "choice snapshot"
     assert isinstance(candidate_error.value.__cause__, RuntimeError)
     assert memberships == []
 
@@ -141,7 +138,7 @@ def test_snapshot_and_recognition_programmer_failures_are_contextual() -> None:
     assert isinstance(recognition_error.value.__cause__, LookupError)
 
 
-def test_recommit_equality_is_contextual_and_cannot_mutate_stored_values() -> None:
+def test_replacement_equality_is_contextual_and_cannot_mutate_stored_values() -> None:
     fail = False
 
     def equal(left: list[int], right: list[int]) -> bool:
@@ -160,17 +157,17 @@ def test_recommit_equality_is_contextual_and_cannot_mutate_stored_values() -> No
         value = Decision(semantics, domain=domain(accepts=lambda *, candidate: True))
 
     base = Trial()
-    chosen = refinement.commit(base, refinement.change(base, Trial.value, [1])).instance
-    assert refinement.commit(chosen, refinement.change(chosen, Trial.value, [1])).instance is chosen
+    chosen = base.try_with_choices(base.field(Trial.value).change([1])).instance
+    assert chosen.try_with_choices(chosen.field(Trial.value).change([1])).instance is chosen
     assert chosen.value == [1]
-    conflict = refinement.commit(chosen, refinement.change(chosen, Trial.value, [2]))
-    assert not conflict.accepted and conflict.instance is chosen
+    conflict = chosen.try_with_choices(chosen.field(Trial.value).change([2]))
+    assert conflict.accepted and conflict.instance.value == [2]
     assert chosen.value == [1]
     fail = True
     with pytest.raises(EvaluationError) as raised:
-        refinement.commit(chosen, refinement.change(chosen, Trial.value, [1]))
+        chosen.try_with_choices(chosen.field(Trial.value).change([1]))
     assert raised.value.owner == "value"
-    assert raised.value.role == "commitment equality"
+    assert raised.value.role == "configuration equality"
     assert isinstance(raised.value.__cause__, RuntimeError)
     assert chosen.value == [1]
 
@@ -195,25 +192,24 @@ def test_independent_batch_reuses_trial_dependencies_and_publishes_only_once() -
     Family = cast(type[Space], type("IndependentBatch", (Space,), namespace))
     model = compile_space(Family)
     base = model.bind({seed: 100})
-    report = refinement.commit(
-        base,
+    report = base.try_with_choices(
         *(
-            refinement.change(base, member, index + 1)
+            base.field(member).change(index + 1)
             for index, member in reversed(list(enumerate(members)))
-        ),
+        )
     )
     assert report.accepted
     assert limits == [100]
     assert len(admitted) == len(members)
-    assert all(outcome.status == "committed" for outcome in report.outcomes)
+    assert all(outcome.status == "changed" for outcome in report.outcomes)
     assert report.instance.query(limit) == Available(100)
     assert limits == [100, 100]  # publication starts a separate cache
 
     limits.clear()
     admitted.clear()
-    edits = [refinement.change(base, member, index + 1) for index, member in enumerate(members)]
-    edits[-1] = refinement.change(base, members[-1], -1)
-    failed = refinement.commit(base, *edits)
+    edits = [base.field(member).change(index + 1) for index, member in enumerate(members)]
+    edits[-1] = base.field(members[-1]).change(-1)
+    failed = base.try_with_choices(*edits)
     assert not failed.accepted
     assert failed.instance is base
     assert limits == [100]
@@ -237,14 +233,14 @@ def test_dependent_batch_is_order_independent_without_precommitting_candidates()
         type("DependentBatch", (Space,), {f"step_{i}": member for i, member in enumerate(members)}),
     )
     base = Family()
-    edits = [refinement.change(base, member, index + 1) for index, member in enumerate(members)]
-    report = refinement.commit(base, *reversed(edits))
+    edits = [base.field(member).change(index + 1) for index, member in enumerate(members)]
+    report = base.try_with_choices(*reversed(edits))
     assert report.accepted
     assert calls == [(index + 1, index) for index in range(1, len(members))]
     assert report.instance.query(members[-1]) == Available(len(members))
     calls.clear()
-    edits[0] = refinement.change(base, members[0], 2)
-    failed = refinement.commit(base, *reversed(edits))
+    edits[0] = base.field(members[0]).change(2)
+    failed = base.try_with_choices(*reversed(edits))
     assert not failed.accepted
     assert failed.instance is base
     assert calls == []  # the refused first candidate never became a dependency value
@@ -268,15 +264,13 @@ def test_selector_and_nested_edit_share_atomic_order_and_inactive_edits_refuse()
     selector = choices(base)[0].selector
     assert selector is not None
     child = base.implementation.alternative("a")
-    report = refinement.commit(
-        base,
-        refinement.change(child, Child.value, 2),
-        refinement.change(base, selector, "a"),
+    report = base.try_with_choices(
+        child.field(Child.value).change(2), base.field(selector).change("a")
     )
     assert report.accepted
     assert report.instance.implementation.alternative("a").query(Child.value) == Available(2)
     inactive = report.instance.implementation.alternative("b")
-    failed = refinement.commit(report.instance, refinement.change(inactive, Child.value, 1))
+    failed = report.instance.try_with_choices(inactive.field(Child.value).change(1))
     assert not failed.accepted
     assert isinstance(failed.outcomes[0].result, Inapplicable)
     assert failed.instance is report.instance
@@ -297,7 +291,7 @@ def test_enumerated_candidates_still_pass_membership_before_commitment() -> None
     base = Trial()
     assert base.field(Trial.value).candidates() == Available((-1, 1))
     assert seen == []
-    report = refinement.commit(base, refinement.change(base, Trial.value, -1))
+    report = base.try_with_choices(base.field(Trial.value).change(-1))
     assert not report.accepted
     assert seen == [-1]
     assert isinstance(base.query(Trial.value), Unresolved)
@@ -313,14 +307,10 @@ def test_programmer_failure_after_provisional_admission_never_publishes_a_succes
 
     base = Trial()
     with pytest.raises(EvaluationError):
-        refinement.commit(
-            base,
-            refinement.change(base, Trial.first, 1),
-            refinement.change(base, Trial.second, 1),
-        )
+        base.try_with_choices(base.field(Trial.first).change(1), base.field(Trial.second).change(1))
     assert isinstance(base.query(Trial.first), Unresolved)
     assert isinstance(base.query(Trial.second), Unresolved)
-    assert refinement.commit(base).instance is base
+    assert base.try_with_choices().instance is base
 
 
 def test_selector_report_uses_authored_owner() -> None:
@@ -330,6 +320,6 @@ def test_selector_report_uses_authored_owner() -> None:
     point = Root()
     selector = choices(point)[0].selector
     assert selector is not None
-    report = refinement.commit(point, refinement.change(point, selector, "a"))
+    report = point.try_with_choices(point.field(selector).change("a"))
     assert report.accepted
     assert report.outcomes[0].owner == "implementation"

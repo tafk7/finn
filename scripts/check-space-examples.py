@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import argparse
 from pathlib import Path
 import sys
 from types import ModuleType
@@ -44,11 +45,17 @@ def check_examples(path: Path) -> int:
 
 
 def main() -> None:
-    total = sum(
-        check_examples(path)
-        for path in (ROOT / "docs/design-space.md", ROOT / "src/finn/kernels/README.md")
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "guides",
+        nargs="*",
+        type=Path,
+        help="Guide paths relative to the checkout; defaults to both Space and kernels",
     )
-    print(f"All {total} Space/kernel documentation examples passed")
+    arguments = parser.parse_args()
+    guides = arguments.guides or [Path("docs/design-space.md"), Path("src/finn/kernels/README.md")]
+    total = sum(check_examples(ROOT / path) for path in guides)
+    print(f"All {total} documentation examples passed")
 
 
 if __name__ == "__main__":

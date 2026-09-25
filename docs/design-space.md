@@ -60,15 +60,13 @@ and finalizes declaration structure for that family.
 
 Use `configuration.query(reference)` when a value may be unresolved, inapplicable or
 refused. `configuration.field(reference)` binds typed inspection to the current snapshot:
-its `get()` returns a value and `query()` returns a structured result. Decisions
+its `get()` returns a value and `query()` returns a structured result.
+Views use one `BoundView[T]` through descriptor access, `view(reference)`, or
+`field(reference)`, with call/get, query, and inspection operations. Decisions
 also expose `state`, `candidates()`, `change(value)`, and `clear()` on that bound
 field. These operations avoid repeating the configuration at each call. Direct descriptor
 reads require an available value. `require_value(result)` provides the same
 explicit unwrap and raises `ValueUnavailableError` for a non-value result.
-
-The proposed `configuration.fields.member` namespace cannot preserve arbitrary authored
-member types with standard Python typing alone. This release uses the generic
-typed `field(reference)` accessor rather than publishing an `Any`-typed proxy.
 
 ## Signatures and value semantics
 
@@ -125,8 +123,8 @@ attributable refusal. A derived Boolean `False` remains an ordinary value.
 
 Integer references support `+`, `-`, `*`, `//`, `%`, unary `-`, and reflected
 literal forms. They create ordinary dependency nodes and reject symbolic
-truthiness. Only this bounded integer vocabulary is folded; arbitrary Python
-callbacks are not traced or executed during compilation.
+truthiness. Expressions are type-checked during preparation and evaluated lazily
+inside each snapshot. Preparation does not evaluate arithmetic or authored callbacks.
 
 Ordinary pure Python remains available inside declared functions:
 
@@ -206,9 +204,9 @@ call returns its accepted value or raises `ValueUnavailableError`. Use
 `configuration.member.inspect()` or `configuration.inspect(ViewReference)` for
 an assessment; `configuration.view(ViewReference)` binds a view generically.
 The assessment exposes `output_result`, `readiness`, `constraints`, and
-`accepted_result`. Output and acceptance prerequisites are always included;
-additional `requires=` obligations default to empty. Named `Readiness` and
-`ConstraintGroup` declarations are optional reuse mechanisms.
+`accepted_result`. Output and constraint dependencies determine acceptance. `ConstraintGroup` can
+name a reusable set of constraints; readiness is a diagnostic derived from the
+output and constraint results.
 
 Known constraint refusals remain visible in `assessment.constraints.results`
 while other unresolved obligations may keep `accepted_result` unresolved. A raw
@@ -288,8 +286,8 @@ def latency(*, cycles: int, overhead: int) -> int:
 
 
 builder = ScopeBuilder(Tiles, name="BufferedTiles")
-builder.const("overhead", 1)
-latency_ref = builder.derived("latency", latency)
+builder.add("overhead", Const(1))
+latency_ref = builder.add("latency", derived(latency))
 builder.export(LATENCY).value(latency_ref)
 builder.bind(Tiles.extent, Param(int))
 template = builder.finish()
@@ -309,6 +307,11 @@ array = array.with_choices(array.field(TileArray.first.decision_ref(Tiles.factor
 assert array.query(TileArray.first.ref(LATENCY)) == Available(5)
 ```
 
+Use `builder.add(name, declaration)` for Params, Consts, Decisions, computations,
+constraints and views. The returned declaration retains its exact type. Python
+constructs the declaration before calling `add`: in particular, `Const(value)`
+snapshots its value even if `add` subsequently rejects a sealed builder.
+
 Finishing seals mutations; repeated placements reuse the template and own
 independent configuration state. Inherited fields retain the base Space's static
 type. Wrapper properties may delegate to standard `ref` and `accepted` handles.
@@ -317,7 +320,7 @@ Dynamic admission limits must be local Params with explicit suppliers. Capturing
 a parent reference in a child callback does not create a dependency binding.
 The builder has no runtime access and cannot replace compiled records.
 
-## Configuration replacement, monotone refinement, and sparse replay
+## Configuration replacement and sparse replay
 
 `with_choices` creates a revised configuration over the same frozen facts. It
 can add, replace, or clear choices in one order-independent batch. The original
@@ -342,20 +345,6 @@ retained and new choice is admitted; failed or inactive retained choices are
 not silently removed. New snapshots have independent caches and preserve the
 exact frozen facts and prepared definition.
 
-Search and conformance code uses the advanced monotone service. A `Change`
-retains its exact base snapshot, and `refinement.commit` only adds choices:
-
-```python
-from finn.core.space import refinement
-
-change = refinement.change(tile_base, Tiles.factor, 3)
-report = refinement.commit(tile_base, change)
-assert report.accepted and report.instance.factor == 3
-```
-
-Equal recommits are no-ops and changed recommits conflict. Replacement and
-monotone commitment deliberately have different contracts.
-
 Selections are detached, immutable sparse commitments. Capture includes each
 committed owning Decision and nontrivial selector once, including a value equal
 to the first candidate. It omits aliases, derived values and evaluator state:
@@ -364,17 +353,24 @@ to the first candidate. It omits aliases, derived values and evaluator state:
 from finn.core.space import selections
 
 saved = selections.capture(tile_configuration)
-edited = saved.with_changes([saved.edit(Tiles.factor, 4)])
+edited = selections.capture(tile_configuration.with_choices(factor=4))
 replayed = selections.restore(tile_base, edited)
 assert replayed.accepted and replayed.instance.factor == 4
 changed_inputs = tile_model.bind({Tiles.extent: 10})
 assert not selections.restore(changed_inputs, edited).accepted
 ```
 
-`Selection.remove(reference)` creates a detached removal request. Changing a
-selector does not silently prune old case entries; remove them explicitly or
-replay reports their inapplicability. Restore is a root operation using ordinary
-atomic refinement. In-process selections identify the exact compiled model.
+Edit configurations with `with_choices`, then capture them. Use a bound decision's
+`clear()` to remove a choice. Changing a selector does not silently prune old case
+commitments; clear them explicitly in the same batch.
+
+`selections.restore(base, saved)` requires a root with no committed choices and
+returns `ConfigurationResult`. The base may already have been queried. Replay is
+atomic and revalidates all saved choices under the bound facts; failure leaves the
+base intact. A configured receiver raises `RequestError`, including equal replay
+and replay of an empty selection. Bind a fresh root to replay different inputs.
+In-process selections identify the exact compiled model. Selection entries and
+`value(reference)` provide detached inspection; selections have no separate editor.
 
 Portable encoding additionally requires an explicit family/version and a codec
 for every saved choice. No codec, fingerprint or global registry is needed to
@@ -413,14 +409,14 @@ preserving unrelated entries. It performs no external write or graph transaction
 reject Boolean coercion. Inspect their variant and findings. Unresolved findings
 distinguish missing immutable inputs from commitment blockers.
 
-Ordinary dependencies require values. `optional(source)` admits explicit
-`MissingInput` / `NotApplicable` markers while preserving rejection;
-`full_result(source)` supplies the entire `QueryResult[T]`. Advanced result-aware
-callbacks still owe deterministic, monotone behavior. Ordinary self methods
-consume settled values: status inspection, configuration updates and reads from
-a different snapshot inside a computation fail contextually. Catching such a
-failure cannot turn a blocked read into a settled fallback. A decided fallback that
-later changes after commitment violates that contract.
+Computations consume ordinary values through `self` reads or explicit required
+arguments. Missing optional Params remain unresolved and distinct from a supplied
+`None`; the driver can inspect these outcomes with `query` and `inspect`.
+Callbacks may return explicit semantic results, including refusal. Status
+inspection, configuration updates and reads from another snapshot inside a
+computation fail contextually. Catching a blocked read cannot publish a fallback.
+Pure deterministic computations preserve settled results when compatible choices
+are added under the same facts; general configuration replacement can change them.
 
 `inspection.members`, `decisions` and `choices` discover frozen metadata without
 running evaluators. Typed `value_handle` and `decision_handle` references belong
@@ -432,12 +428,7 @@ causes. Observed reads include cache hits and do not claim a complete static
 dependency graph. `statistics(model)`
 reports structural counts without evaluating the model.
 
-The optional `conformance.MonotonicityHarness().verify(base, samples)` compares
-settled observations across caller-provided changes/batches. It reports violations,
-skipped samples and no-ops using declared equality, including unhashable values.
-It is empirical checking, not a general proof or a solver.
-
-## Kernel boundary and retired interfaces
+## Kernel boundary and validation
 
 `finn.kernels.base.Kernel` adds identity and public capability metadata. It does
 not require streams, clocks or an RTL ABI. [Physical kernels](../src/finn/kernels/README.md)
@@ -445,11 +436,6 @@ return explicit detached requirements: HLS source interfaces and synthesized RTL
 interfaces remain different products. Artifact roots, stores, rendering and
 physical algorithms remain in their existing layers.
 
-The old `_engine` runtime, `Engine`/`DesignPoint`/`DesignSpaceSpec`,
-`Input`/`Problem`/`Projection` spellings, property-style view access, root-factory
-reconstruction hooks and compiled-record replacement hooks have been retired.
-`finn.kernels.space`, `assess`, bound-view `result`, and bound-value `result`
-are also retired; use `inspect`, `query`, and value reads as described above.
 There is one supported runtime under `finn.core.space`, with its own `py.typed`
 marker and a declared native dependency on `greenlet==3.2.4`. No public scheduler
 selection is exposed. The generic package depends only on Python, typing support
@@ -463,6 +449,11 @@ Existing core graph-execution modules are outside this migration.
 ONNX parsing, graph staleness checks, nodeattr writes and graph transactions are
 adapter responsibilities. The independent kernel gate and historical dataflow
 validation records do not establish post-cutover dataflow compatibility.
+
+Run `scripts/check-space.sh` for standalone Space validation without hardware or
+graph dependencies. Install its prerequisites from `requirements-space-test.txt`.
+See [Maintaining Space](space-internals.md) for the implementation map and
+validation contracts, and [migration notes](space-migration.md) for retired APIs.
 
 Run `scripts/check-kernels.sh` for the independent generic Space and kernel
 gates, strict typing, formatting, import/wheel boundaries and these executable

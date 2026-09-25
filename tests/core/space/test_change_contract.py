@@ -7,7 +7,7 @@ from typing import cast
 
 import pytest
 
-from finn.core.space import Decision, Space, ValueSemantics, refinement
+from finn.core.space import Decision, Space, ValueSemantics
 from finn.core.space.domains import Domain
 from finn.core.space.errors import RequestError
 from finn.core.space.results import Available, Unresolved
@@ -33,10 +33,8 @@ def test_all_candidate_snapshots_precede_membership_callbacks() -> None:
         second: Decision[list[int]] = Decision(list, domain=Domain((), second_membership))
 
     base = Trial()
-    result = refinement.commit(
-        base,
-        refinement.change(base, Trial.first, 1),
-        refinement.change(base, Trial.second, payload),
+    result = base.try_with_choices(
+        base.field(Trial.first).change(1), base.field(Trial.second).change(payload)
     )
     assert result.accepted
     assert seen == [(1,)]
@@ -58,10 +56,8 @@ def test_malformed_last_candidate_prevents_first_membership_callback() -> None:
 
     base = Trial()
     with pytest.raises(RequestError):
-        refinement.commit(
-            base,
-            refinement.change(base, Trial.first, 1),
-            refinement.change(base, Trial.second, cast(int, "bad")),
+        base.try_with_choices(
+            base.field(Trial.first).change(1), base.field(Trial.second).change(cast(int, "bad"))
         )
     assert calls == []
     assert isinstance(base.query(Trial.first), Unresolved)
@@ -90,6 +86,6 @@ def test_unhashable_finite_domain_uses_declared_equality_and_detaches_reads() ->
     chosen = base.with_choices(bag=[2, 1])
     assert chosen.bag == [2, 1]
     assert chosen.with_choices(bag=[1, 2]) is chosen
-    failed = refinement.commit(base, refinement.change(base, Bags.bag, [1, 2, 3]))
+    failed = base.try_with_choices(base.field(Bags.bag).change([1, 2, 3]))
     assert not failed.accepted
     assert failed.instance is base

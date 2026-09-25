@@ -51,12 +51,11 @@ def test_freeze_restore_explore_capture_rebind_and_replace_owned_sparse_keys() -
     encoded = codecs.encode(captured, schema)
     checkpoint = selections.restore(base, codecs.decode(encoded, schema))
     assert checkpoint.accepted and checkpoint.instance.extent == 12
-    alternative = captured.with_changes(
-        [
-            captured.edit(Family.factor, 4),
-            captured.remove(Family.buffers),
-        ]
+    revised = checkpoint.instance.with_choices(
+        checkpoint.instance.field(Family.buffers).clear(),
+        factor=4,
     )
+    alternative = selections.capture(revised)
     explored = selections.restore(base, alternative)
     assert explored.accepted and explored.instance.factor == 4
     assert initial.factor == 3 and initial.buffers == 1

@@ -4,37 +4,37 @@
 
 from __future__ import annotations
 
-import inspect
-import types
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from types import MappingProxyType
-from typing import Literal, Union, cast, get_args, get_origin, get_type_hints
-from typing_extensions import Self
+from typing import cast
 
+from ._bindings import PlacementPlans
+from ._configuration import Space
+from ._signatures import (
+    BoundFunction,
+    bind_function,
+    output_semantics,
+    resolve_annotations,
+    resolve_source,
+    source_semantics,
+)
 from .declarations import (
-    AcceptedViewRef,
     Constraint,
-    Declaration,
     Decision,
-    DecisionRef,
-    Dependency,
+    Declaration,
     Derived,
-    ScopedValueRef,
-    Space,
     Subspace,
     SubspaceChoice,
-    Param,
     ValueKey,
     ValueRef,
     View,
     ViewKey,
+    class_namespace,
     local_name,
 )
 from .errors import DefinitionError
-from .expressions import Expr
-from .results import Available, Inapplicable, MissingInput, NotApplicable, Rejected, Unresolved
-from .semantics import ValueSemantics, default_semantics
+from .semantics import ValueSemantics
 
 _RESERVED = frozenset(
     {
@@ -54,294 +54,24 @@ _RESERVED = frozenset(
 
 
 @dataclass(frozen=True, slots=True)
-class BoundArgument:
-    name: str
-    source: ValueRef[object]
-    mode: Literal["required", "optional", "result"] = "required"
-    annotation: object = object
-
-
-@dataclass(frozen=True, slots=True)
-class BoundFunction:
-    function: Callable[..., object]
-    dependencies: tuple[BoundArgument, ...]
-    return_type: object
-    semantics: ValueSemantics[object]
-    call_style: Literal["explicit", "self"] = "explicit"
-
-
-@dataclass(frozen=True, slots=True)
-class MemberRecord:
-    name: str
-    declaration: Declaration
-    defined_on: type[object]
-
-
-@dataclass(frozen=True, slots=True)
 class EffectiveSpace:
     space_type: type[Space]
-    members: Mapping[str, MemberRecord]
+    members: Mapping[str, Declaration]
     functions: Mapping[str, BoundFunction]
     semantics: Mapping[Declaration, ValueSemantics[object]]
     aliases: Mapping[Declaration, str]
     exports: Mapping[ValueKey[object] | ViewKey[object], Declaration]
+    placements: PlacementPlans = field(default_factory=PlacementPlans, repr=False)
     guards: Mapping[Declaration, ValueRef[bool]] = field(
         default_factory=lambda: MappingProxyType({})
     )
 
 
-@dataclass(frozen=True, slots=True)
-class PlacementBinding:
-    parameter: Param[object]
-    supplier: object
-    kind: Literal["literal", "reference", "exposed-param", "local-decision"]
-
-
-@dataclass(frozen=True, slots=True)
-class PlacementTarget:
-    path: tuple[Subspace[Space], ...]
-    member: Param[object] | Decision[object]
-    name: str
-
-
-@dataclass(frozen=True, slots=True)
-class NestedBinding:
-    reference: ValueRef[object]
-    target: PlacementTarget
-    binding: PlacementBinding
-
-
-@dataclass(frozen=True, slots=True)
-class PlacementPlan:
-    placement: Subspace[Space]
-    bindings: Mapping[str, PlacementBinding]
-    nested_bindings: tuple[NestedBinding, ...] = ()
-
-
-class _TargetResolver:
-    """Resolve concrete typed paths without recursive template compilation."""
-
-    def __init__(self) -> None:
-        self.tables: dict[type[Space], tuple[dict[str, object], dict[int, str]]] = {}
-
-    def member(self, space_type: type[Space], reference: object) -> tuple[str, object]:
-        if space_type not in self.tables:
-            names = {
-                id(value): name
-                for base in reversed(space_type.__mro__)
-                for name, value in vars(base).items()
-                if isinstance(value, Declaration)
-            }
-            self.tables[space_type] = (_namespace(space_type), names)
-        namespace, names = self.tables[space_type]
-        name = names.get(id(reference))
-        if name is None:
-            raise DefinitionError("binding reference is not a member of this child family")
-        return name, namespace[name]
-
-    def resolve(
-        self,
-        space_type: type[Space],
-        reference: object,
-        *,
-        allow_decision_refs: bool = False,
-    ) -> PlacementTarget:
-        path: list[Subspace[Space]] = []
-        seen: set[tuple[type[Space], int]] = set()
-        while isinstance(reference, ScopedValueRef):
-            if isinstance(reference, DecisionRef) and not allow_decision_refs:
-                raise DefinitionError("binding targets require Param references, not DecisionRef")
-            identity = (space_type, id(reference))
-            if identity in seen:
-                raise DefinitionError("cyclic scoped parameter reference")
-            seen.add(identity)
-            _, placement = self.member(space_type, reference.placement)
-            if not isinstance(placement, Subspace):
-                raise DefinitionError("binding targets require concrete child placements")
-            path.append(placement)
-            space_type, reference = placement.space_type, reference.member
-        name, member = self.member(space_type, reference)
-        if not isinstance(member, (Param, Decision)):
-            raise DefinitionError("binding target is not a Param declaration")
-        return PlacementTarget(tuple(path), member, name)
-
-
-def _placement_binding(parameter: Param[object], supplier: object, label: str) -> PlacementBinding:
-    kind: Literal["literal", "reference", "exposed-param", "local-decision"]
-    if isinstance(supplier, Param) and supplier.owner is None:
-        kind = "exposed-param"
-    elif isinstance(supplier, Decision) and supplier.owner is None:
-        kind = "local-decision"
-    elif isinstance(supplier, ValueRef):
-        kind = "reference"
-    else:
-        kind = "literal"
-    assert parameter.semantics is not None
-    if isinstance(supplier, ValueRef):
-        if supplier.semantics is not None and not parameter.semantics.is_compatible_with(
-            supplier.semantics
-        ):
-            raise DefinitionError(f"{label}: binding has incompatible value semantics")
-    else:
-        try:
-            supplier = parameter.semantics.freeze(supplier)
-        except (TypeError, ValueError) as error:
-            raise DefinitionError(f"{label}: {error}") from error
-    return PlacementBinding(parameter, supplier, kind)
-
-
-def collect_placement(placement: Subspace[Space]) -> PlacementPlan:
-    """Validate named/direct bindings and explicitly targeted nested Params.
-
-    Nested target exposure is checked against the allocated scopes before any
-    callbacks are linked. It is not inferred by flattening child definitions.
-    """
-    namespace = _namespace(placement.space_type)
-    parameters = {name: value for name, value in namespace.items() if isinstance(value, Param)}
-    label = placement.name or placement.space_type.__qualname__
-    named = dict(placement.bindings)
-    extra = named.keys() - parameters.keys()
-    if extra:
-        raise DefinitionError(f"{label}: unknown child parameter bindings {sorted(extra)}")
-    resolver = _TargetResolver()
-    nested: list[NestedBinding] = []
-    targets: set[tuple[tuple[Subspace[Space], ...], str]] = set()
-    for reference, supplier in placement.parameter_bindings.items():
-        target = resolver.resolve(placement.space_type, reference)
-        if not isinstance(target.member, Param):
-            raise DefinitionError(f"{label}: binding target is not a Param declaration")
-        identity = (target.path, target.name)
-        if identity in targets:
-            raise DefinitionError(f"{label}: duplicate parameter binding")
-        targets.add(identity)
-        if not target.path:
-            if target.name in named:
-                raise DefinitionError(f"{label}.{target.name}: duplicate named and mapped binding")
-            named[target.name] = supplier
-        else:
-            nested.append(
-                NestedBinding(
-                    reference,
-                    target,
-                    _placement_binding(target.member, supplier, f"{label}.{target.name}"),
-                )
-            )
-    missing = parameters.keys() - named.keys()
-    if missing:
-        raise DefinitionError(f"{label}: missing child parameter bindings {sorted(missing)}")
-    bindings = {
-        name: _placement_binding(parameter, named[name], f"{label}.{name}")
-        for name, parameter in parameters.items()
-    }
-    return PlacementPlan(placement, MappingProxyType(bindings), tuple(nested))
-
-
-def resolve_decision_ref(reference: DecisionRef[object]) -> Decision[object]:
-    """Resolve the final owning choice across concrete nested parameter bindings."""
-    placement = reference.placement
-    if not isinstance(placement, Subspace):
-        raise DefinitionError("a DecisionRef requires a concrete child placement")
-    target = _TargetResolver().resolve(
-        placement.space_type,
-        reference.member,
-        allow_decision_refs=True,
-    )
-    if isinstance(target.member, Decision):
-        return target.member
-    chain = (placement, *target.path)
-    binding = collect_placement(chain[-1]).bindings[target.name]
-    for index in range(len(chain) - 2, -1, -1):
-        plan = collect_placement(chain[index])
-        remaining = target.path[index:]
-        for nested in plan.nested_bindings:
-            if nested.target.path == remaining and nested.target.member is target.member:
-                if binding.kind != "exposed-param":
-                    raise DefinitionError("nested parameter target is not deliberately exposed")
-                binding = nested.binding
-    if binding.kind == "local-decision" and isinstance(binding.supplier, Decision):
-        return binding.supplier
-    raise DefinitionError(
-        f"{placement.name or placement.space_type.__qualname__}.{target.name}: "
-        "a Param alias is not a locally owned Decision"
-    )
-
-
-def _namespace(space_type: type[Space]) -> dict[str, object]:
-    namespace: dict[str, object] = {}
-    for base in reversed(space_type.__mro__):
-        namespace.update(vars(base))
-    namespace[space_type.__name__] = space_type
-    return namespace
-
-
 def _annotation_namespace(space_type: type[Space]) -> dict[str, object]:
     """Resolve local family/base annotations without adding structural members."""
     namespace: dict[str, object] = {base.__name__: base for base in reversed(space_type.__mro__)}
-    namespace.update(_namespace(space_type))
+    namespace.update(class_namespace(space_type))
     return namespace
-
-
-def _hints(
-    function: Callable[..., object], namespace: Mapping[str, object], owner: str
-) -> dict[str, object]:
-    try:
-        return get_type_hints(function, localns=namespace)
-    except (NameError, TypeError, ValueError) as exc:
-        raise DefinitionError(f"{owner}: cannot resolve annotations: {exc}") from exc
-
-
-def _answer_value_type(annotation: object) -> object | None:
-    origin = get_origin(annotation)
-    if origin not in (Union, types.UnionType):
-        return None
-    arguments = get_args(annotation)
-    value_types = [get_args(arg)[0] for arg in arguments if get_origin(arg) is Available]
-    if len(value_types) == 1 and all(
-        get_origin(arg) is Available or arg in (Inapplicable, Rejected, Unresolved)
-        for arg in arguments
-    ):
-        return cast(object, value_types[0])
-    return None
-
-
-def _output_semantics(
-    declaration: Derived[object] | View[object] | Constraint,
-    hints: Mapping[str, object],
-    owner: str,
-) -> tuple[object, ValueSemantics[object]]:
-    annotation = hints.get("return")
-    if annotation is None:
-        raise DefinitionError(f"{owner}: a return annotation is required")
-    answer_type = _answer_value_type(annotation)
-    semantics = cast("ValueSemantics[object] | None", declaration.semantics)
-    if answer_type is not None and semantics is None:
-        raise DefinitionError(f"{owner}: QueryResult[T] returns require explicit semantics=")
-    value_type = answer_type if answer_type is not None else annotation
-    origin = get_origin(value_type)
-    nominal_type = origin if origin is not None else value_type
-    if semantics is None:
-        if getattr(nominal_type, "_is_protocol", False):
-            raise DefinitionError(f"{owner}: Protocol outputs require explicit semantics=")
-        if origin in (Union, types.UnionType) or not isinstance(nominal_type, type):
-            raise DefinitionError(f"{owner}: output annotation needs explicit semantics=")
-        try:
-            semantics = default_semantics(nominal_type)
-        except (TypeError, ValueError) as exc:
-            raise DefinitionError(f"{owner}: {exc}") from exc
-    token_origin = get_origin(semantics.type_token)
-    nominal_token = semantics.type_token if token_origin is None else token_origin
-    if (
-        origin not in (Union, types.UnionType)
-        and isinstance(nominal_type, type)
-        and isinstance(nominal_token, type)
-        and not getattr(nominal_type, "_is_protocol", False)
-    ):
-        if nominal_type is not nominal_token:
-            raise DefinitionError(
-                f"{owner}: output annotation {nominal_type.__name__} is incompatible with "
-                f"{semantics.name} semantics"
-            )
-    return annotation, semantics
 
 
 def _function(declaration: Declaration) -> Callable[..., object] | None:
@@ -350,225 +80,15 @@ def _function(declaration: Declaration) -> Callable[..., object] | None:
     return None
 
 
-def _resolve_source(source: object, effective: EffectiveSpace, owner: str) -> ValueRef[object]:
-    if not isinstance(source, ValueRef):
-        raise DefinitionError(f"{owner}: dependency must be a value reference")
-    name = effective.aliases.get(source)
-    if name is not None:
-        replacement = effective.members[name].declaration
-        if not isinstance(replacement, ValueRef):
-            raise DefinitionError(f"{owner}: overridden dependency {name} is not a value")
-        return replacement
-    if isinstance(source, (ScopedValueRef, AcceptedViewRef)):
-        if isinstance(source, DecisionRef):
-            resolve_decision_ref(source)
-        return source
-    if isinstance(source, Expr) and source.owner is None:
-        return source
-    raise DefinitionError(f"{owner}: dependency is not declared in this effective scope")
-
-
-def _source_semantics(
-    source: ValueRef[object] | View[object],
-    effective: EffectiveSpace,
-    known_spaces: Mapping[type[Space], EffectiveSpace] | None = None,
-) -> ValueSemantics[object] | None:
-    """Read already collected types iteratively; the linker checks unresolved edges."""
-    current: Declaration = source
-    seen: set[tuple[int, int]] = set()
-    while (id(current), id(effective)) not in seen:
-        seen.add((id(current), id(effective)))
-        if isinstance(current, (ValueRef, View)):
-            semantics = effective.semantics.get(current, current.semantics)
-            if semantics is not None:
-                return semantics
-        if isinstance(current, (ScopedValueRef, AcceptedViewRef)):
-            placement = current.placement
-            if not isinstance(placement, Subspace) or known_spaces is None:
-                return None
-            child = known_spaces.get(placement.space_type)
-            if child is None:
-                return None
-            member = current.member
-            if isinstance(member, (ValueKey, ViewKey)):
-                resolved = child.exports.get(member)
-            else:
-                name = child.aliases.get(member)
-                resolved = child.members[name].declaration if name is not None else None
-            if resolved is None:
-                return None
-            current, effective = resolved, child
-        elif isinstance(current, View) and current.source is not None:
-            current = current.source
-        else:
-            return None
-    return None
-
-
-def _argument_value_type(argument: BoundArgument, owner: str) -> object:
-    annotation = argument.annotation
-    if argument.mode == "result":
-        value_type = _answer_value_type(annotation)
-        if value_type is None:
-            raise DefinitionError(f"{owner}: full_result dependency requires QueryResult[T]")
-        return value_type
-    if argument.mode == "optional":
-        options = get_args(annotation)
-        if MissingInput not in options or NotApplicable not in options:
-            raise DefinitionError(
-                f"{owner}: optional dependency annotation must include MissingInput "
-                "and NotApplicable"
-            )
-        value_types = tuple(x for x in options if x not in (MissingInput, NotApplicable))
-        return value_types
-    return annotation
-
-
-def _annotation_accepts(annotation: object, value_type: type[object]) -> bool:
-    if isinstance(annotation, tuple):
-        return any(_annotation_accepts(option, value_type) for option in annotation)
-    origin = get_origin(annotation)
-    if origin in (Union, types.UnionType):
-        return any(_annotation_accepts(option, value_type) for option in get_args(annotation))
-    if isinstance(origin, type):
-        if getattr(origin, "_is_protocol", False):
-            return True
-        return issubclass(value_type, origin)
-    if isinstance(annotation, type):
-        if getattr(annotation, "_is_protocol", False):
-            # Non-runtime Protocols cannot be checked with issubclass. The
-            # explicit adapter semantics determines admissible runtime values.
-            return True
-        return issubclass(value_type, annotation)
-    return True
-
-
-def validate_argument(
-    argument: BoundArgument, semantics: ValueSemantics[object], *, owner: str
-) -> None:
-    """Check one linked supplier using the same dependency-mode policy as collection."""
-    value_type = _argument_value_type(argument, owner)
-    token_origin = get_origin(semantics.type_token)
-    nominal_token = semantics.type_token if token_origin is None else token_origin
-    if isinstance(nominal_token, type) and not _annotation_accepts(value_type, nominal_token):
-        raise DefinitionError(
-            f"{owner}: annotation {argument.annotation!r} cannot consume {semantics.name}"
-        )
-
-
-def bind_function(
-    declaration: Derived[object] | Constraint | View[object],
-    effective: EffectiveSpace,
-    *,
-    name: str,
-    namespace: Mapping[str, object] | None = None,
-    annotations: Mapping[str, object] | None = None,
-    known_spaces: Mapping[type[Space], EffectiveSpace] | None = None,
-) -> BoundFunction:
-    """Bind all arguments against one complete table, respecting overrides."""
-    owner = f"{effective.space_type.__qualname__}.{name}"
-    function = declaration.function
-    if function is None:
-        raise DefinitionError(f"{owner}: value-authored view has no function to bind")
-    hints = annotations
-    if hints is None:
-        hints = _hints(
-            function,
-            namespace if namespace is not None else _annotation_namespace(effective.space_type),
-            owner,
-        )
-    annotation, semantics = _output_semantics(declaration, hints, owner)
-    signature = inspect.signature(function)
-    parameters = tuple(signature.parameters.values())
-    if (
-        inspect.isgeneratorfunction(function)
-        or inspect.iscoroutinefunction(function)
-        or inspect.isasyncgenfunction(function)
-    ):
-        raise DefinitionError(f"{owner}: computations must be ordinary synchronous functions")
-    if parameters and parameters[0].name == "self":
-        parameter = parameters[0]
-        if (
-            len(parameters) != 1
-            or declaration.aliases
-            or parameter.kind
-            not in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
-            or parameter.default is not inspect.Parameter.empty
-        ):
-            raise DefinitionError(
-                f"{owner}: self methods cannot declare dependency arguments or aliases"
-            )
-        receiver = hints.get("self", Self)
-        if receiver is not Self and not (
-            isinstance(receiver, type)
-            and issubclass(receiver, Space)
-            and issubclass(effective.space_type, receiver)
-        ):
-            raise DefinitionError(
-                f"{owner}: receiver annotation {receiver!r} cannot accept "
-                f"{effective.space_type.__qualname__}"
-            )
-        return BoundFunction(function, (), annotation, semantics, "self")
-    extra = declaration.aliases.keys() - signature.parameters.keys()
-    if extra:
-        raise DefinitionError(f"{owner}: aliases name unknown arguments {sorted(extra)}")
-    arguments: list[BoundArgument] = []
-    for parameter in signature.parameters.values():
-        label = f"{owner} argument {parameter.name}"
-        if parameter.name in ("self", "cls"):
-            raise DefinitionError(f"{label}: implicit self/cls is unsupported")
-        if parameter.name == "when":
-            raise DefinitionError(f"{label}: when is a reserved authoring control argument")
-        if parameter.kind not in (
-            inspect.Parameter.POSITIONAL_OR_KEYWORD,
-            inspect.Parameter.KEYWORD_ONLY,
-        ):
-            raise DefinitionError(
-                f"{label}: positional-only and variadic parameters are unsupported"
-            )
-        if parameter.default is not inspect.Parameter.empty:
-            raise DefinitionError(f"{label}: dependency parameters cannot have defaults")
-        if parameter.name not in hints:
-            raise DefinitionError(f"{label}: a dependency annotation is required")
-        source = declaration.aliases.get(parameter.name)
-        if parameter.name not in declaration.aliases:
-            record = effective.members.get(parameter.name)
-            if record is None:
-                raise DefinitionError(f"{label}: no declaration with this name")
-            source = record.declaration
-        mode: Literal["required", "optional", "result"] = "required"
-        if isinstance(source, Dependency):
-            mode = source.mode
-            source = source.source
-        resolved = _resolve_source(source, effective, label)
-        source_semantics = _source_semantics(resolved, effective, known_spaces)
-        input_type = hints[parameter.name]
-        argument = BoundArgument(parameter.name, resolved, mode, input_type)
-        if source_semantics is not None:
-            validate_argument(argument, source_semantics, owner=label)
-        else:
-            _argument_value_type(argument, label)
-        arguments.append(argument)
-    return BoundFunction(function, tuple(arguments), annotation, semantics)
-
-
-def collect_space(
-    space_type: type[Space], *, known_spaces: Mapping[type[Space], EffectiveSpace] | None = None
-) -> EffectiveSpace:
-    """Collect one scope and snapshot its signatures; child linking is separate."""
-    if not isinstance(space_type, type) or not issubclass(space_type, Space):
-        raise DefinitionError("collect_space expects a Space subclass")
-    namespace = _namespace(space_type)
-    annotation_namespace = _annotation_namespace(space_type)
-    hint_cache: dict[int, dict[str, object]] = {}
-
-    def hints_for(function: Callable[..., object], owner: str) -> dict[str, object]:
-        key = id(function)
-        if key not in hint_cache:
-            hint_cache[key] = _hints(function, annotation_namespace, owner)
-        return hint_cache[key]
-
-    members: dict[str, MemberRecord] = {}
+def _collect_members(
+    space_type: type[Space],
+) -> tuple[
+    dict[str, Declaration],
+    dict[Declaration, str],
+    dict[str, list[Declaration]],
+]:
+    """Resolve MRO membership and retain declaration aliases for inherited references."""
+    members: dict[str, Declaration] = {}
     aliases: dict[Declaration, str] = {}
     inherited: dict[str, list[Declaration]] = {}
     for base in reversed(space_type.__mro__):
@@ -590,17 +110,27 @@ def collect_space(
                     )
                 inherited.setdefault(name, []).append(value)
                 aliases[value] = name
-                members[name] = MemberRecord(name, value, base)
+                members[name] = value
             elif name in members:
                 raise DefinitionError(
                     f"{base.__qualname__}.{name}: ordinary attribute hides an inherited declaration"
                 )
+    return members, aliases, inherited
+
+
+def _collect_semantics(
+    space_type: type[Space],
+    members: Mapping[str, Declaration],
+    inherited: Mapping[str, list[Declaration]],
+    placements: PlacementPlans,
+    hints_for: Callable[[Callable[..., object], str], Mapping[str, object]],
+) -> dict[Declaration, ValueSemantics[object]]:
+    """Check overrides and infer the local semantics of each effective member."""
     semantics: dict[Declaration, ValueSemantics[object]] = {}
-    for name, record in members.items():
-        declaration = record.declaration
+    for name, declaration in members.items():
         owner = f"{space_type.__qualname__}.{name}"
         if isinstance(declaration, Subspace):
-            collect_placement(declaration)
+            placements.get(declaration)
         providers = [
             base for base in space_type.__mro__ if isinstance(vars(base).get(name), Declaration)
         ]
@@ -615,9 +145,9 @@ def collect_space(
         function = _function(declaration)
         if function is not None:
             function_decl = cast("Derived[object] | Constraint | View[object]", declaration)
-            semantics[declaration] = _output_semantics(
+            semantics[declaration] = output_semantics(
                 function_decl, hints_for(function, owner), owner
-            )[1]
+            )
         elif isinstance(declaration, (ValueRef, View)) and declaration.semantics is not None:
             semantics[declaration] = declaration.semantics
         for prior in inherited[name][:-1]:
@@ -627,9 +157,7 @@ def collect_space(
             if old_semantics is None and isinstance(prior, (Derived, View)):
                 prior_function = prior.function
                 if prior_function is not None:
-                    old_semantics = _output_semantics(
-                        prior, hints_for(prior_function, owner), owner
-                    )[1]
+                    old_semantics = output_semantics(prior, hints_for(prior_function, owner), owner)
             current = semantics.get(declaration)
             if (
                 isinstance(old_semantics, ValueSemantics)
@@ -637,41 +165,26 @@ def collect_space(
                 and not old_semantics.is_compatible_with(current)
             ):
                 raise DefinitionError(f"{owner}: override changes value semantics")
-    preliminary = EffectiveSpace(
-        space_type,
-        MappingProxyType(members),
-        MappingProxyType({}),
-        MappingProxyType(semantics),
-        MappingProxyType(aliases),
-        MappingProxyType({}),
-    )
-    functions: dict[str, BoundFunction] = {}
-    for name, record in members.items():
-        if _function(record.declaration) is not None:
-            functions[name] = bind_function(
-                cast("Derived[object] | Constraint | View[object]", record.declaration),
-                preliminary,
-                name=name,
-                namespace=annotation_namespace,
-                annotations=hint_cache[id(_function(record.declaration))],
-                known_spaces=known_spaces,
-            )
+    return semantics
+
+
+def _collect_guards(effective: EffectiveSpace) -> Mapping[Declaration, ValueRef[bool]]:
+    members, placements, space_type = effective.members, effective.placements, effective.space_type
     guard_candidates: list[tuple[str, Declaration]] = [
-        (name, record.declaration) for name, record in members.items()
+        (name, declaration) for name, declaration in members.items()
     ]
-    for name, record in members.items():
-        declaration = record.declaration
-        placements: tuple[tuple[str, Subspace[Space]], ...] = ()
+    for name, declaration in members.items():
+        children: tuple[tuple[str, Subspace[Space]], ...] = ()
         if isinstance(declaration, Subspace):
-            placements = ((name, declaration),)
+            children = ((name, declaration),)
         elif isinstance(declaration, SubspaceChoice):
-            placements = tuple(
+            children = tuple(
                 (f"{name}.{case}", placement)
                 for case, placement in declaration.alternatives.items()
             )
-            guard_candidates.extend(placements)
-        for placement_name, placement in placements:
-            plan = collect_placement(placement)
+            guard_candidates.extend(children)
+        for placement_name, placement in children:
+            plan = placements.get(placement)
             guard_candidates.extend(
                 (f"{placement_name}.{parameter}", binding.supplier)
                 for parameter, binding in plan.bindings.items()
@@ -682,18 +195,23 @@ def collect_space(
         if declaration.when is None:
             continue
         owner = f"{space_type.__qualname__}.{name} guard"
-        guard = _resolve_source(declaration.when, preliminary, owner)
-        guard_semantics = _source_semantics(guard, preliminary, known_spaces)
+        guard = resolve_source(declaration.when, effective, owner)
+        guard_semantics = source_semantics(guard, effective)
         if guard_semantics is not None and guard_semantics.type_token is not bool:
             raise DefinitionError(f"{owner}: when= requires Boolean value semantics")
         guards[declaration] = cast(ValueRef[bool], guard)
-    for record in members.values():
-        if isinstance(record.declaration, View):
-            inferred = _source_semantics(record.declaration, preliminary, known_spaces)
-            if inferred is not None:
-                semantics[record.declaration] = inferred
+    return MappingProxyType(guards)
+
+
+def _collect_exports(
+    effective: EffectiveSpace, declared_exports: object
+) -> Mapping[
+    ValueKey[object] | ViewKey[object],
+    Declaration,
+]:
+    space_type, members = effective.space_type, effective.members
+    aliases, semantics = effective.aliases, effective.semantics
     exports: dict[ValueKey[object] | ViewKey[object], Declaration] = {}
-    declared_exports = namespace.get("exports", {})
     if not isinstance(declared_exports, Mapping):
         raise DefinitionError(
             f"{space_type.__qualname__}: exports must map typed keys to declarations"
@@ -707,7 +225,7 @@ def collect_space(
         export_names.add(key.name)
         if not isinstance(declaration, Declaration) or declaration not in aliases:
             raise DefinitionError(f"{space_type.__qualname__}: export {key.name} is not a member")
-        resolved = members[aliases[declaration]].declaration
+        resolved = members[aliases[declaration]]
         if (isinstance(key, ValueKey) and not isinstance(resolved, ValueRef)) or (
             isinstance(key, ViewKey) and not isinstance(resolved, View)
         ):
@@ -720,7 +238,7 @@ def collect_space(
             and isinstance(resolved, View)
             and resolved.source is not None
         ):
-            exported_semantics = _source_semantics(resolved.source, preliminary, known_spaces)
+            exported_semantics = source_semantics(resolved.source, effective)
         if exported_semantics is not None and not key.semantics.is_compatible_with(
             exported_semantics
         ):
@@ -728,12 +246,55 @@ def collect_space(
                 f"{space_type.__qualname__}: export {key.name} has incompatible semantics"
             )
         exports[key] = resolved
-    return EffectiveSpace(
+    return MappingProxyType(exports)
+
+
+def collect_space(
+    space_type: type[Space], *, placements: PlacementPlans | None = None
+) -> EffectiveSpace:
+    """Collect one scope and snapshot its signatures; child linking is separate."""
+    if not isinstance(space_type, type) or not issubclass(space_type, Space):
+        raise DefinitionError("collect_space expects a Space subclass")
+    placements = placements if placements is not None else PlacementPlans()
+    namespace = class_namespace(space_type)
+    annotation_namespace = _annotation_namespace(space_type)
+    hint_cache: dict[int, dict[str, object]] = {}
+
+    def hints_for(function: Callable[..., object], owner: str) -> dict[str, object]:
+        key = id(function)
+        if key not in hint_cache:
+            hint_cache[key] = resolve_annotations(function, annotation_namespace, owner)
+        return hint_cache[key]
+
+    members, aliases, inherited = _collect_members(space_type)
+    semantics = _collect_semantics(space_type, members, inherited, placements, hints_for)
+    preliminary = EffectiveSpace(
         space_type,
         MappingProxyType(members),
-        MappingProxyType(functions),
+        MappingProxyType({}),
         MappingProxyType(semantics),
         MappingProxyType(aliases),
-        MappingProxyType(exports),
-        MappingProxyType(guards),
+        MappingProxyType({}),
+        placements=placements,
+    )
+    functions: dict[str, BoundFunction] = {}
+    for name, declaration in members.items():
+        if _function(declaration) is not None:
+            functions[name] = bind_function(
+                cast("Derived[object] | Constraint | View[object]", declaration),
+                preliminary,
+                name=name,
+                annotations=hint_cache[id(_function(declaration))],
+                semantics=semantics[declaration],
+            )
+    for declaration in members.values():
+        if isinstance(declaration, View):
+            inferred = source_semantics(declaration, preliminary)
+            if inferred is not None:
+                semantics[declaration] = inferred
+    return replace(
+        preliminary,
+        functions=MappingProxyType(functions),
+        guards=_collect_guards(preliminary),
+        exports=_collect_exports(preliminary, namespace.get("exports", {})),
     )

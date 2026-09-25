@@ -8,25 +8,9 @@ from typing import cast
 
 import pytest
 
-from finn.kernels.base import Kernel
-from finn.kernels.artifacts.hls import HlsInterface, HlsSourceRequirements
-from finn.kernels.datatypes.domains import Integer, SignedInteger
-from finn.kernels.datatypes.semantics import (
-    INTEGER_VECTOR,
-    QONNX_DATATYPE_CODEC,
-    QONNX_DATATYPE_VALUE_SEMANTICS,
-    THRESHOLD_TABLE,
-)
-from finn.kernels.datatypes.values import (
-    QONNX_DATATYPE_TOKEN,
-    QONNXDataType,
-    decode_datatype,
-    encode_datatype,
-    resolve_qonnx_datatype_name,
-)
 from finn.core.space import (
-    ConstraintGroup,
     Available,
+    ConstraintGroup,
     Decision,
     Derived,
     Param,
@@ -44,6 +28,22 @@ from finn.core.space import (
 )
 from finn.core.space.errors import DefinitionError, RequestError
 from finn.core.space.extensions import ScopeBuilder
+from finn.kernels.artifacts.hls import HlsInterface, HlsSourceRequirements
+from finn.kernels.base import Kernel
+from finn.kernels.datatypes.domains import Integer, SignedInteger
+from finn.kernels.datatypes.semantics import (
+    INTEGER_VECTOR,
+    QONNX_DATATYPE_CODEC,
+    QONNX_DATATYPE_VALUE_SEMANTICS,
+    THRESHOLD_TABLE,
+)
+from finn.kernels.datatypes.values import (
+    QONNX_DATATYPE_TOKEN,
+    QONNXDataType,
+    decode_datatype,
+    encode_datatype,
+    resolve_qonnx_datatype_name,
+)
 
 
 @dataclass(frozen=True)
@@ -292,8 +292,8 @@ def test_builder_extends_kernel_with_typed_optional_views_and_independent_scopes
         id = "test.interface"
 
     builder = ScopeBuilder(InterfaceKernel, name="IntegerWord")
-    dtype = builder.param("dtype", QONNX_DATATYPE_VALUE_SEMANTICS)
-    lanes = builder.param("lanes", int)
+    dtype = builder.add("dtype", Param(QONNX_DATATYPE_VALUE_SEMANTICS))
+    lanes = builder.add("lanes", Param(int))
 
     def bits(*, dtype: QONNXDataType, lanes: int) -> int:
         return dtype.bitwidth() * lanes
@@ -301,13 +301,13 @@ def test_builder_extends_kernel_with_typed_optional_views_and_independent_scopes
     def plain_pins(*, payload_bits: int) -> Pins:
         return Pins((("word", payload_bits),), ())
 
-    payload = builder.derived("payload_bits", bits)
-    pins = builder.derived("pin_values", plain_pins)
+    payload = builder.add("payload_bits", derived(bits))
+    pins = builder.add("pin_values", derived(plain_pins))
     conditions = tuple(
         builder.add("dtype_" + name, condition)
         for name, condition in Integer(max_bits=8).constraints(dtype)
     )
-    ports = builder.view("ports", pins, constraints=conditions)
+    ports = builder.add("ports", View(pins, constraints=conditions))
     key = ViewKey("ports", Pins)
     builder.export(key).view(ports)
     builder.bind(dtype, Param(QONNX_DATATYPE_VALUE_SEMANTICS))

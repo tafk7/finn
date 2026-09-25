@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 from collections.abc import Generator, Mapping
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from threading import RLock
 from types import MappingProxyType
 from typing import TYPE_CHECKING, TypeAlias, cast
@@ -15,32 +15,29 @@ from . import _execution
 from .errors import EvaluationError
 from .ir import Argument, LinkedModel, Node
 from .results import (
-    QueryResult,
-    ConstraintAssessment,
     Available,
+    ConstraintAssessment,
     DecisionState,
     Finding,
     FindingKind,
     Inapplicable,
-    MissingInput,
     NonValue,
-    NotApplicable,
+    QueryResult,
     ReadinessAssessment,
     Rejected,
     Unresolved,
     ViewAssessment,
     assess_constraints,
-    assess_readiness,
     assess_view,
     constraint_result,
     owned_result,
 )
 
 if TYPE_CHECKING:
+    from ._configuration import Space
     from .compiler import SpaceModel
-    from .declarations import Space
 
-Assessment: TypeAlias = ViewAssessment[object] | ConstraintAssessment | ReadinessAssessment
+Assessment: TypeAlias = ViewAssessment[object] | ConstraintAssessment
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,12 +51,11 @@ class Evaluation:
 class Snapshot:
     """One root binding and commitment set with a local evaluation cache."""
 
-    linked: LinkedModel
+    model: SpaceModel[Space]
     parameters: Mapping[int, object]
     assignments: Mapping[int, object] = field(default_factory=dict)
     lock: RLock = field(default_factory=RLock, repr=False)
     cache: dict[int, Evaluation] = field(default_factory=dict, init=False, repr=False)
-    model: SpaceModel[Space] | None = field(default=None, kw_only=True, repr=False)
     work: _execution.Work = field(default_factory=_execution.Work, init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -67,15 +63,16 @@ class Snapshot:
             object.__setattr__(self, "parameters", MappingProxyType(dict(self.parameters)))
         object.__setattr__(self, "assignments", MappingProxyType(dict(self.assignments)))
 
-    def successor(self, assignments: Mapping[int, object]) -> Snapshot:
-        return Snapshot(self.linked, self.parameters, assignments, model=self.model)
+    @property
+    def linked(self) -> LinkedModel:
+        return self.model.linked
 
 
 class _TrialSnapshot(Snapshot):
     """Private complete candidates, admitted on demand before value publication.
 
-    Existing assignments may seed a monotone trial. Replacement starts with no
-    trusted assignments, so all retained candidates must pass admission again.
+    Every candidate, including retained assignments, must pass admission before
+    publication. The base contributes only its model, frozen facts, and lock.
     """
 
     __slots__ = ("_pending", "_published", "_candidates")
@@ -85,8 +82,8 @@ class _TrialSnapshot(Snapshot):
     _candidates: Mapping[int, object]
 
     def __init__(self, base: Snapshot, candidates: Mapping[int, object]) -> None:
-        pending = dict(base.assignments)
-        super().__init__(base.linked, base.parameters, {}, base.lock, model=base.model)
+        pending: dict[int, object] = {}
+        super().__init__(base.model, base.parameters, {}, base.lock)
         object.__setattr__(self, "assignments", MappingProxyType(pending))
         object.__setattr__(self, "_pending", pending)
         object.__setattr__(self, "_candidates", MappingProxyType(dict(candidates)))
@@ -94,18 +91,16 @@ class _TrialSnapshot(Snapshot):
 
     def admit(self, node_index: int, value: object) -> None:
         if self._published:
-            raise RuntimeError("a published refinement trial is closed")
+            raise RuntimeError("a published admission trial is closed")
         if node_index in self._pending or node_index in self.cache:
-            raise RuntimeError(
-                "refinement dependency order admitted a previously resolved decision"
-            )
+            raise RuntimeError("admission dependency order admitted a previously resolved decision")
         self._pending[node_index] = value
 
     def publish(self) -> Snapshot:
         if self._published:
-            raise RuntimeError("a refinement trial can only be published once")
+            raise RuntimeError("a admission trial can only be published once")
         object.__setattr__(self, "_published", True)
-        return Snapshot(self.linked, self.parameters, self._pending, model=self.model)
+        return Snapshot(self.model, self.parameters, self._pending)
 
 
 def _blocked(answers: list[QueryResult[object]]) -> NonValue | None:
@@ -127,37 +122,6 @@ def _clone(node: Node, value: object, *, owner: str, role: str) -> object:
         raise EvaluationError(owner, role, str(cause)) from cause
 
 
-def _argument_value(
-    linked: LinkedModel, argument: Argument, answer: QueryResult[object], owner: str
-) -> tuple[bool, object]:
-    source = linked.nodes[argument.node]
-    if argument.mode == "result":
-        if isinstance(answer, Available):
-            return True, Available(
-                _clone(source, answer.value, owner=owner, role="dependency snapshot")
-            )
-        return True, answer
-    if isinstance(answer, Available):
-        return True, _clone(source, answer.value, owner=owner, role="dependency snapshot")
-    if argument.mode == "optional":
-        if isinstance(answer, Inapplicable):
-            return True, NotApplicable(source.owner)
-        supplier = source
-        while supplier.kind == "alias" and supplier.output is not None:
-            supplier = linked.nodes[supplier.output]
-        if (
-            isinstance(answer, Unresolved)
-            and supplier.kind == "param"
-            and not supplier.required
-            and all(
-                finding.code == "input-missing" and finding.owner == supplier.owner
-                for finding in answer.findings
-            )
-        ):
-            return True, MissingInput(supplier.owner)
-    return False, answer
-
-
 def _arguments(
     linked: LinkedModel, arguments: tuple[Argument, ...], owner: str
 ) -> Generator[int, object, tuple[dict[str, object], NonValue | None]]:
@@ -165,11 +129,12 @@ def _arguments(
     failures: list[QueryResult[object]] = []
     for argument in arguments:
         answer = cast(QueryResult[object], (yield argument.node))
-        available, value = _argument_value(linked, argument, answer, owner)
-        if available:
-            values[argument.name] = value
+        if isinstance(answer, Available):
+            values[argument.name] = _clone(
+                linked.nodes[argument.node], answer.value, owner=owner, role="dependency snapshot"
+            )
         else:
-            failures.append(cast(QueryResult[object], value))
+            failures.append(answer)
     return values, _blocked(failures)
 
 
@@ -186,8 +151,6 @@ def _guard_assessment(node: Node, answer: NonValue) -> Assessment | None:
         return assess_view(answer, owner=node.key, applicability=answer)
     if node.kind == "constraint" or node.kind == "group":
         return ConstraintAssessment({node.key: answer}, answer)
-    if node.kind == "readiness":
-        return ReadinessAssessment({}, answer)
     return None
 
 
@@ -200,16 +163,7 @@ def _constraint_members(
     return {snapshot.linked.nodes[reference].key: cast(QueryResult[bool], answer)}
 
 
-def _readiness_members(
-    snapshot: Snapshot, reference: int, answer: QueryResult[object]
-) -> Mapping[str, QueryResult[object]]:
-    assessment = snapshot.cache[reference].assessment
-    if isinstance(assessment, (ConstraintAssessment, ReadinessAssessment)) and assessment.results:
-        return {key: cast(QueryResult[object], value) for key, value in assessment.results.items()}
-    return {snapshot.linked.nodes[reference].key: answer}
-
-
-def _frame(snapshot: Snapshot, node: Node) -> Generator[int | _execution.Call, object, Evaluation]:
+def _frame(snapshot: Snapshot, node: Node) -> _execution.Frame:
     if node.guard is not None:
         guard = cast(QueryResult[object], (yield node.guard))
         inactive = _guard_result(node, guard)
@@ -289,11 +243,7 @@ def _frame(snapshot: Snapshot, node: Node) -> Generator[int | _execution.Call, o
         for reference in node.constraints:
             answer = cast(QueryResult[object], (yield reference))
             constraints.update(_constraint_members(snapshot, reference, answer))
-        requires: dict[str, QueryResult[object]] = {}
-        for reference in node.requires:
-            answer = cast(QueryResult[object], (yield reference))
-            requires.update(_readiness_members(snapshot, reference, answer))
-        view = assess_view(output, owner=node.key, requires=requires, constraints=constraints)
+        view = assess_view(output, owner=node.key, constraints=constraints)
         return Evaluation(view.accepted_result, assessment=view)
     if node.kind == "group":
         answers: dict[str, QueryResult[bool]] = {}
@@ -302,14 +252,6 @@ def _frame(snapshot: Snapshot, node: Node) -> Generator[int | _execution.Call, o
             answers.update(_constraint_members(snapshot, reference, answer))
         group = assess_constraints(answers)
         return Evaluation(cast(QueryResult[object], group.result), assessment=group)
-    if node.kind == "readiness":
-        obligations: dict[str, QueryResult[object]] = {}
-        for reference in node.requires:
-            answer = cast(QueryResult[object], (yield reference))
-            obligations.update(_readiness_members(snapshot, reference, answer))
-        readiness = assess_readiness(obligations)
-        return Evaluation(cast(QueryResult[object], readiness.result), assessment=readiness)
-
     arguments, failure = yield from _arguments(snapshot.linked, node.arguments, node.owner)
     if failure is not None:
         return Evaluation(failure, assessment=_guard_assessment(node, failure))
@@ -339,13 +281,9 @@ def _frame(snapshot: Snapshot, node: Node) -> Generator[int | _execution.Call, o
 
 
 def _self_point(snapshot: Snapshot, scope: int) -> Space:
-    from .compiler import SpaceModel  # noqa: PLC0415 - preparation/execution boundary
-    from .occurrence import OccurrenceState, _attach  # noqa: PLC0415
+    from .occurrence import _attach  # noqa: PLC0415 - scoped callback receiver
 
-    model = snapshot.model
-    if model is None:
-        model = SpaceModel(snapshot.linked.scopes[0].space_type, snapshot.linked)
-    return _attach(OccurrenceState(model, snapshot), scope)
+    return _attach(snapshot, scope)
 
 
 def evaluate(snapshot: Snapshot, node_index: int) -> Evaluation:
@@ -357,7 +295,7 @@ def evaluate(snapshot: Snapshot, node_index: int) -> Evaluation:
 
 def _membership_frame(
     snapshot: Snapshot, node: Node, value: object, *, check_guard: bool = True
-) -> Generator[int | _execution.Call, object, Evaluation]:
+) -> _execution.Frame:
     if check_guard and node.guard is not None:
         guard = cast(QueryResult[object], (yield node.guard))
         inactive = _guard_result(node, guard)
@@ -383,9 +321,7 @@ def _membership_frame(
     return Evaluation(cast(QueryResult[object], called.value))
 
 
-def _enumeration_frame(
-    snapshot: Snapshot, node: Node
-) -> Generator[int | _execution.Call, object, Evaluation]:
+def _enumeration_frame(snapshot: Snapshot, node: Node) -> _execution.Frame:
     if node.guard is not None:
         guard = cast(QueryResult[object], (yield node.guard))
         inactive = _guard_result(node, guard)
@@ -432,7 +368,7 @@ def decision_state(snapshot: Snapshot, node_index: int) -> QueryResult[DecisionS
         value = _clone(
             node, snapshot.assignments[node_index], owner=node.owner, role="decision state"
         )
-        return Available(DecisionState(node.owner, "committed", value, "explicit"))
+        return Available(DecisionState(node.owner, "committed", value))
 
 
 def candidate_values(snapshot: Snapshot, node_index: int) -> QueryResult[tuple[object, ...]] | None:
@@ -446,15 +382,6 @@ def candidate_values(snapshot: Snapshot, node_index: int) -> QueryResult[tuple[o
         return cast(QueryResult[tuple[object, ...]], result)
 
 
-def membership(snapshot: Snapshot, node_index: int, value: object) -> QueryResult[bool]:
-    with snapshot.lock:
-        node = snapshot.linked.nodes[node_index]
-        result = _execution.run(
-            snapshot, node_index, _membership_frame(snapshot, node, value)
-        ).result
-        return cast(QueryResult[bool], result)
-
-
 def copy_result(
     snapshot: Snapshot, node_index: int, answer: QueryResult[object]
 ) -> QueryResult[object]:
@@ -464,7 +391,7 @@ def copy_result(
         return answer
     with snapshot.lock:
         node = snapshot.linked.nodes[node_index]
-        if node.kind in {"group", "readiness"} and type(answer.value) is bool:
+        if node.kind == "group" and type(answer.value) is bool:
             # Aggregate verdicts are intrinsic immutable booleans; these
             # declarations need no separate user-owned value semantics.
             return answer
@@ -472,19 +399,13 @@ def copy_result(
 
 
 def _copy_readiness(snapshot: Snapshot, assessment: ReadinessAssessment) -> ReadinessAssessment:
-    answers: dict[str, QueryResult[object]] = {}
-    for key, answer in assessment.results.items():
-        index = snapshot.linked.keys[key]
-        if isinstance(answer, Available) and isinstance(answer.value, DecisionState):
-            state = answer.value
-            node = snapshot.linked.nodes[index]
-            if state.status == "committed":
-                value = _clone(node, state.value, owner=node.owner, role="public state snapshot")
-                state = replace(state, value=value)
-            answers[key] = Available(state)
-        else:
-            answers[key] = copy_result(snapshot, index, answer)
-    return ReadinessAssessment(answers, assessment.result)
+    return ReadinessAssessment(
+        {
+            key: copy_result(snapshot, snapshot.linked.keys[key], answer)
+            for key, answer in assessment.results.items()
+        },
+        assessment.result,
+    )
 
 
 def copy_assessment(snapshot: Snapshot, node_index: int, assessment: Assessment) -> Assessment:
@@ -495,8 +416,6 @@ def copy_assessment(snapshot: Snapshot, node_index: int, assessment: Assessment)
             # Validated constraint values are exact bool, and findings are
             # immutable primitives. Their scalar answers can safely be shared.
             return assessment
-        if isinstance(assessment, ReadinessAssessment):
-            return _copy_readiness(snapshot, assessment)
         node = snapshot.linked.nodes[node_index]
         output_index = node.output if node.output is not None else node_index
         output = copy_result(snapshot, output_index, assessment.output_result)
@@ -521,5 +440,4 @@ __all__ = [
     "copy_assessment",
     "decision_state",
     "evaluate",
-    "membership",
 ]

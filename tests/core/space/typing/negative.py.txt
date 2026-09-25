@@ -1,7 +1,4 @@
-from finn.core.space import (
-    Decision, Param, Space, Subspace, ValueKey, ViewKey, constraint, derived, view,
-    ValueSemantics, QueryResult, Available, View, SubspaceChoice, refinement,
-)
+from finn.core.space import Decision, Param, Space, Subspace, ValueKey, ViewKey, constraint, derived, view, ValueSemantics, QueryResult, Available, View, SubspaceChoice
 
 class Child(Space):
     width = Param(int)
@@ -26,7 +23,7 @@ def bad(point: Child, parent: Parent) -> None:
     wrong_value: str = point.width  # E
     wrong_descriptor: int = Child.width  # E
     point.field(Child.lanes).change("two")  # E
-    refinement.change(point, Child.lanes, "two")  # E
+    point.field(Child.lanes).change('two')  # E
     point.field(Child.width).change(2)  # E
     parent.field(Parent.child.ref(Child.lanes)).change(2)  # E
     point.physical(3)  # E
@@ -43,7 +40,7 @@ def bad(point: Child, parent: Parent) -> None:
     Parent.child.accepted(Child.width)  # E
     Parent.child.ref(ViewKey("view", int))  # E
     Parent.child.accepted(ValueKey("value", int))  # E
-    refinement.commit(point, "not a change")  # E
+    point.try_with_choices('not a change')  # E
 
 @constraint  # E
 def wrong_constraint() -> str:

@@ -3,20 +3,12 @@
 
 from __future__ import annotations
 
+import gc
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-import gc
 from weakref import ReferenceType, ref
 
-from finn.core.space import (
-    Decision,
-    Param,
-    Space,
-    ValueSemantics,
-    compile_space,
-    derived,
-    refinement,
-)
+from finn.core.space import Decision, Param, Space, ValueSemantics, compile_space, derived
 from finn.core.space.results import Available
 
 
@@ -58,7 +50,7 @@ def test_discarded_candidate_snapshots_release_the_actual_cached_callback_output
     del candidates
     gc.collect()
     assert all(reference() is None for reference in produced)
-    assert refinement.commit(model.bind()).accepted
+    assert model.bind().try_with_choices().accepted
 
 
 def test_successor_does_not_retain_its_predecessors_output_cache() -> None:

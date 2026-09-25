@@ -12,9 +12,9 @@ from typing import Generic, TypeVar, cast
 
 from .errors import DefinitionError, EvaluationError, ValueUnavailableError
 from .results import (
-    QueryResult,
     Available,
     Inapplicable,
+    QueryResult,
     Rejected,
     Unresolved,
     owned_result,
@@ -23,6 +23,14 @@ from .results import (
 from .semantics import ValueSemantics, default_semantics
 
 T = TypeVar("T")
+
+
+def _contains(values: tuple[T, ...], candidate: T, semantics: ValueSemantics[T]) -> bool:
+    """Finite membership compares detached operands, including unhashable values."""
+    return any(
+        semantics.values_equal(semantics.freeze(candidate), semantics.freeze(allowed))
+        for allowed in values
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,9 +88,8 @@ class Domain(Generic[T]):
             if not semantics.accepts(candidate):
                 raise TypeError(f"expected candidate of nominal type {semantics.name}")
             if self._finite_values is not None:
-                result: bool | QueryResult[bool] = any(
-                    semantics.values_equal(semantics.freeze(candidate), semantics.freeze(allowed))
-                    for allowed in self._finite_values
+                result: bool | QueryResult[bool] = _contains(
+                    self._finite_values, candidate, semantics
                 )
             else:
                 result = self.accepts(candidate=candidate, **dependency_values)
@@ -142,10 +149,7 @@ def finite(values: Iterable[T], semantics: ValueSemantics[T] | None = None) -> D
             raise DefinitionError(
                 "a finite domain must be bound to value semantics before evaluation"
             )
-        return any(
-            semantics.values_equal(semantics.freeze(candidate), semantics.freeze(allowed))
-            for allowed in ordered
-        )
+        return _contains(ordered, candidate, semantics)
 
     def candidates() -> tuple[T, ...]:
         # The public enumeration method snapshots each result. The callback is

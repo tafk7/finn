@@ -12,8 +12,8 @@ import pytest
 from typing_extensions import assert_type
 
 from finn.core.space import (
-    Const,
     Available,
+    Const,
     Decision,
     DecisionRef,
     Param,
@@ -26,9 +26,9 @@ from finn.core.space import (
     compile_space,
     derived,
     domain,
+    inspection,
     view,
 )
-from finn.core.space import inspection
 from finn.core.space.errors import RequestError
 from finn.core.space.references import DecisionHandle, ValueHandle
 

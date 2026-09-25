@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: BSD-3-Clause
 """Typed declarations for the Space language.
 
-Declarations describe structure. Runtime operations dispatch lazily so authoring
-and collection do not depend on an evaluator or an existing compiled model.
+Declarations describe structure and preserve authored value types. Descriptors
+dispatch to bound configuration operations when read through a Space instance.
 """
 
 # Runtime dispatch is deliberately lazy to keep declaration collection independent.
@@ -11,28 +11,22 @@ and collection do not depend on an evaluator or an existing compiled model.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Mapping, Sequence
 import re
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from types import MappingProxyType
-from typing import TYPE_CHECKING, ClassVar, Generic, Literal, TypeVar, cast, overload
+from typing import TYPE_CHECKING, Generic, TypeVar, cast, overload
 
 from typing_extensions import Self
 
 from .domains import Domain, finite
-from .edits import Change, ChangeRequest, ConfigurationResult
 from .errors import DefinitionError
 from .results import (
     QueryResult,
-    ConstraintAssessment,
-    DecisionState,
-    MissingInput,
-    NotApplicable,
-    ReadinessAssessment,
-    ViewAssessment,
 )
 from .semantics import ValueSemantics, semantics_for
 
 if TYPE_CHECKING:
+    from ._configuration import BoundView, ChoiceView, Space
     from .expressions import Expr
 
 T = TypeVar("T")
@@ -46,6 +40,14 @@ def local_name(value: str, role: str) -> str:
     if not isinstance(value, str) or re.fullmatch(r"[A-Za-z0-9_-]+", value) is None:
         raise DefinitionError(f"{role} must be one nonempty ASCII name segment")
     return value
+
+
+def class_namespace(space_type: type[Space]) -> dict[str, object]:
+    namespace: dict[str, object] = {}
+    for base in reversed(space_type.__mro__):
+        namespace.update(vars(base))
+    namespace[space_type.__name__] = space_type
+    return namespace
 
 
 class Declaration:
@@ -149,21 +151,6 @@ class ValueDecl(ValueRef[T_co], Generic[T_co]):
         return read_value(instance, self)
 
 
-class Dependency(Generic[T_co]):
-    """A use-site mode; it does not create or change a value declaration."""
-
-    def __init__(self, source: ValueRef[object], mode: Literal["optional", "result"]) -> None:
-        self.source, self.mode = source, mode
-
-
-def optional(source: ValueRef[T]) -> Dependency[T | MissingInput | NotApplicable]:
-    return Dependency(source, "optional")
-
-
-def full_result(source: ValueRef[T]) -> Dependency[QueryResult[T]]:
-    return Dependency(source, "result")
-
-
 class Param(ValueDecl[T], Generic[T]):
     """A required or optional formal input supplied when a root is started."""
 
@@ -207,11 +194,6 @@ class Decision(ValueDecl[T], Generic[T]):
             if domain is not None
             else finite(cast(Iterable[T], values), self.semantics)
         )
-
-    def _choice_type(self, _value: T, /) -> T:
-        """Static marker used by typed change construction; never evaluated."""
-
-        raise RuntimeError("choice type markers are not runtime operations")
 
 
 class Derived(ValueDecl[T], Generic[T]):
@@ -334,81 +316,6 @@ class ConstraintGroup(Declaration):
         self.constraints = constraints
 
 
-class Readiness(Declaration):
-    def __init__(self, *requires: ValueRef[object] | Constraint | ConstraintGroup) -> None:
-        self.requires = requires
-
-
-class BoundView(Generic[T]):
-    def __init__(self, instance: Space, declaration: View[T]) -> None:
-        self.instance, self.declaration = instance, declaration
-
-    def __call__(self) -> T:
-        from .occurrence import read_value
-
-        return read_value(self.instance, self.declaration)
-
-    def inspect(self) -> ViewAssessment[T]:
-        return self.instance.inspect(self.declaration)
-
-    def query(self) -> QueryResult[T]:
-        return self.instance.query(self.declaration)
-
-
-class BoundValue(Generic[T]):
-    """A typed value reference bound to one configuration snapshot."""
-
-    def __init__(self, instance: Space, reference: ValueRef[T]) -> None:
-        self.instance, self.reference = instance, reference
-
-    def get(self) -> T:
-        from .occurrence import read_value
-
-        return read_value(self.instance, self.reference)
-
-    def query(self) -> QueryResult[T]:
-        return self.instance.query(self.reference)
-
-
-class BoundDecision(BoundValue[T], Generic[T]):
-    @property
-    def state(self) -> QueryResult[DecisionState[T]]:
-        from .occurrence import decision_state
-
-        return decision_state(self.instance, cast(Decision[T] | DecisionRef[T], self.reference))
-
-    def candidates(self) -> QueryResult[tuple[T, ...]] | None:
-        from .occurrence import candidates
-
-        return candidates(self.instance, cast(Decision[T] | DecisionRef[T], self.reference))
-
-    def change(self, value: T) -> Change[T]:
-        from .occurrence import change
-
-        return change(self.instance, cast(Decision[T] | DecisionRef[T], self.reference), value)
-
-    def clear(self) -> Change[T]:
-        from .occurrence import clear
-
-        return clear(self.instance, cast(Decision[T] | DecisionRef[T], self.reference))
-
-
-class BoundViewField(Generic[T]):
-    def __init__(self, instance: Space, reference: View[T]) -> None:
-        self.instance, self.reference = instance, reference
-
-    def get(self) -> T:
-        from .occurrence import read_value
-
-        return read_value(self.instance, self.reference)
-
-    def inspect(self) -> ViewAssessment[T]:
-        return self.instance.inspect(self.reference)
-
-    def query(self) -> QueryResult[T]:
-        return self.instance.query(self.reference)
-
-
 class View(Declaration, Generic[T]):
     """One assessment declaration for either a value or an authored function."""
 
@@ -417,7 +324,6 @@ class View(Declaration, Generic[T]):
         source: ValueRef[T],
         *,
         constraints: Sequence[Constraint | ConstraintGroup] = (),
-        requires: Sequence[ValueRef[object] | Constraint | ConstraintGroup | Readiness] = (),
         when: ValueRef[bool] | None = None,
     ) -> None:
         self.source: ValueRef[T] | None = source
@@ -425,7 +331,6 @@ class View(Declaration, Generic[T]):
         self.aliases: Mapping[str, object] = MappingProxyType({})
         self.semantics: ValueSemantics[T] | None = source.semantics
         self.constraints = tuple(constraints)
-        self.requires = tuple(requires)
         self.when = when
 
     @classmethod
@@ -436,7 +341,6 @@ class View(Declaration, Generic[T]):
         semantics: ValueSemantics[T] | None,
         aliases: Mapping[str, object],
         constraints: Sequence[Constraint | ConstraintGroup],
-        requires: Sequence[ValueRef[object] | Constraint | ConstraintGroup | Readiness],
         when: ValueRef[bool] | None = None,
     ) -> View[T]:
         result = cls.__new__(cls)
@@ -444,7 +348,7 @@ class View(Declaration, Generic[T]):
         result.function = function
         result.aliases = MappingProxyType(dict(aliases))
         result.semantics = semantics
-        result.constraints, result.requires = tuple(constraints), tuple(requires)
+        result.constraints = tuple(constraints)
         result.when = when
         return result
 
@@ -457,6 +361,8 @@ class View(Declaration, Generic[T]):
     def __get__(
         self, instance: Space | None, owner: type[object] | None = None
     ) -> Self | BoundView[T]:
+        from ._configuration import BoundView
+
         return self if instance is None else BoundView(instance, self)
 
 
@@ -465,10 +371,9 @@ class _ViewDecorator:
         self,
         aliases: Mapping[str, object],
         constraints: Sequence[Constraint | ConstraintGroup],
-        requires: Sequence[ValueRef[object] | Constraint | ConstraintGroup | Readiness],
         when: ValueRef[bool] | None,
     ) -> None:
-        self.aliases, self.constraints, self.requires = aliases, constraints, requires
+        self.aliases, self.constraints = aliases, constraints
         self.when = when
 
     def __call__(self, function: Callable[..., T]) -> View[T]:
@@ -477,7 +382,6 @@ class _ViewDecorator:
             semantics=None,
             aliases=self.aliases,
             constraints=self.constraints,
-            requires=self.requires,
             when=self.when,
         )
 
@@ -492,7 +396,6 @@ class _SemanticViewDecorator(Generic[T]):
             semantics=self.semantics,
             aliases=self.decorator.aliases,
             constraints=self.decorator.constraints,
-            requires=self.decorator.requires,
             when=self.decorator.when,
         )
 
@@ -507,7 +410,6 @@ def view(
     semantics: ValueSemantics[T],
     when: ValueRef[bool] | None = None,
     constraints: Sequence[Constraint | ConstraintGroup] = (),
-    requires: Sequence[ValueRef[object] | Constraint | ConstraintGroup | Readiness] = (),
     **aliases: object,
 ) -> _SemanticViewDecorator[T]: ...
 
@@ -518,7 +420,6 @@ def view(
     semantics: None = None,
     when: ValueRef[bool] | None = None,
     constraints: Sequence[Constraint | ConstraintGroup] = (),
-    requires: Sequence[ValueRef[object] | Constraint | ConstraintGroup | Readiness] = (),
     **aliases: object,
 ) -> _ViewDecorator: ...
 
@@ -530,10 +431,9 @@ def view(
     semantics: object = None,
     when: ValueRef[bool] | None = None,
     constraints: Sequence[Constraint | ConstraintGroup] = (),
-    requires: Sequence[ValueRef[object] | Constraint | ConstraintGroup | Readiness] = (),
     **aliases: object,
 ) -> object:
-    decorator = _ViewDecorator(aliases, constraints, requires, when)
+    decorator = _ViewDecorator(aliases, constraints, when)
     if function is not None:
         return decorator(function)
     if semantics is not None:
@@ -568,11 +468,6 @@ class ScopedValueRef(ValueRef[T], Generic[T]):
 class DecisionRef(ScopedValueRef[T], Generic[T]):
     """Editable handle; compilation verifies that this placement owns a choice."""
 
-    def _choice_type(self, _value: T, /) -> T:
-        """Static marker used by typed change construction; never evaluated."""
-
-        raise RuntimeError("choice type markers are not runtime operations")
-
 
 class AcceptedViewRef(ValueRef[T], Generic[T]):
     def __init__(
@@ -591,6 +486,8 @@ class Subspace(Declaration, Generic[S_co]):
         bindings: Mapping[ValueRef[object], object] | None = None,
         **parameters: object,
     ) -> None:
+        from ._configuration import Space
+
         if not isinstance(space_type, type) or not issubclass(space_type, Space):
             raise DefinitionError("a Subspace requires a Space subclass")
         self.space_type = space_type
@@ -623,27 +520,6 @@ class Subspace(Declaration, Generic[S_co]):
 
     def accepted(self, member: View[T] | ViewKey[T]) -> ValueRef[T]:
         return AcceptedViewRef(cast("Subspace[Space]", self), member)
-
-
-class ChoiceView:
-    def __init__(self, instance: Space, declaration: SubspaceChoice) -> None:
-        self.instance, self.declaration = instance, declaration
-
-    @property
-    def alternatives(self) -> tuple[str, ...]:
-        from .occurrence import choice_alternatives
-
-        return choice_alternatives(self)
-
-    def select(self, case: str) -> ChoiceView:
-        from .occurrence import select
-
-        return select(self, case)
-
-    def alternative(self, case: str) -> Space:
-        from .occurrence import alternative
-
-        return alternative(self, case)
 
 
 class SubspaceChoice(Declaration):
@@ -691,148 +567,3 @@ class SubspaceChoice(Declaration):
 
     def accepted(self, member: ViewKey[T]) -> ValueRef[T]:
         return AcceptedViewRef(self, member)
-
-
-class SpaceMeta(type):
-    """Construct configurations and protect prepared declaration structure."""
-
-    def __call__(
-        cls: SpaceMeta,
-        parameters: Mapping[object, object] | None = None,
-        /,
-        **keyword_parameters: object,
-    ) -> Space:
-        from .compiler import compile_space
-
-        return compile_space(cast(type[Space], cls)).bind(parameters, **keyword_parameters)
-
-    def __setattr__(cls, name: str, value: object) -> None:
-        if cls.__dict__.get("_space_definition_finalized", False) and not name.startswith(
-            "_space_"
-        ):
-            existing = getattr(cls, name, None)
-            if (
-                name == "exports"
-                or isinstance(existing, Declaration)
-                or isinstance(value, Declaration)
-            ):
-                raise DefinitionError(
-                    f"{cls.__qualname__}.{name}: prepared declaration structure is finalized"
-                )
-        super().__setattr__(name, value)
-
-    def __delattr__(cls, name: str) -> None:
-        if cls.__dict__.get("_space_definition_finalized", False):
-            existing = getattr(cls, name, None)
-            if name == "exports" or isinstance(existing, Declaration):
-                raise DefinitionError(
-                    f"{cls.__qualname__}.{name}: prepared declaration structure is finalized"
-                )
-        super().__delattr__(name)
-
-
-def _check_configuration_mutation(point: Space, name: str) -> None:
-    from ._execution import driver_only
-    from .occurrence import state
-
-    driver_only("configuration mutation")
-    current = getattr(point, "_state", None)
-    scope_index = getattr(point, "_scope", None)
-    if current is not None and type(scope_index) is int:
-        scope = state(point).model.linked.scopes[scope_index]
-        choice_names = {
-            declaration.name
-            for declaration in scope.choices
-            if isinstance(declaration, SubspaceChoice)
-        }
-        if name in scope.named_members or name in scope.named_children or name in choice_names:
-            raise AttributeError(f"{name} is an immutable configuration field; use with_choices()")
-
-
-class Space(metaclass=SpaceMeta):
-    """Authored family and scoped configuration type over an immutable runtime state."""
-
-    _state: object
-    _scope: int
-    exports: ClassVar[Mapping[ValueKey[object] | ViewKey[object], Declaration]] = MappingProxyType(
-        {}
-    )
-
-    def __init__(
-        self,
-        parameters: Mapping[object, object] | None = None,
-        /,
-        **keyword_parameters: object,
-    ) -> None:
-        """Typing signature only; SpaceMeta performs framework-owned construction."""
-
-    def __setattr__(self, name: str, value: object) -> None:
-        if name in {"_state", "_scope"} and name not in self.__dict__:
-            object.__setattr__(self, name, value)
-            return
-        _check_configuration_mutation(self, name)
-        object.__setattr__(self, name, value)
-
-    def __delattr__(self, name: str) -> None:
-        _check_configuration_mutation(self, name)
-        object.__delattr__(self, name)
-
-    def query(self, value: ValueRef[T] | View[T]) -> QueryResult[T]:
-        from .occurrence import query
-
-        return query(self, value)
-
-    @overload
-    def inspect(self, view: View[T]) -> ViewAssessment[T]: ...
-
-    @overload
-    def inspect(self, view: Constraint | ConstraintGroup) -> ConstraintAssessment: ...
-
-    @overload
-    def inspect(self, view: Readiness) -> ReadinessAssessment: ...
-
-    def inspect(
-        self, view: View[T] | Constraint | ConstraintGroup | Readiness
-    ) -> ViewAssessment[T] | ConstraintAssessment | ReadinessAssessment:
-        from .occurrence import inspect
-
-        return inspect(self, view)
-
-    def view(self, reference: View[T]) -> BoundView[T]:
-        from .occurrence import bind_view
-
-        return bind_view(self, reference)
-
-    @overload
-    def field(self, reference: Decision[T] | DecisionRef[T]) -> BoundDecision[T]: ...
-
-    @overload
-    def field(self, reference: View[T]) -> BoundViewField[T]: ...
-
-    @overload
-    def field(self, reference: ValueRef[T]) -> BoundValue[T]: ...
-
-    def field(
-        self, reference: ValueRef[T] | View[T]
-    ) -> BoundValue[T] | BoundDecision[T] | BoundViewField[T]:
-        from .occurrence import bind_field
-
-        return bind_field(self, reference)
-
-    def with_choices(self, /, *changes: ChangeRequest, **choices: object) -> Self:
-        from .occurrence import with_choices
-
-        return with_choices(self, *changes, **choices)
-
-    def try_with_choices(
-        self, /, *changes: ChangeRequest, **choices: object
-    ) -> ConfigurationResult[Self]:
-        from .occurrence import try_with_choices
-
-        return try_with_choices(self, *changes, **choices)
-
-    @property
-    def root(self) -> Space:
-        from .occurrence import root
-
-        return root(self)

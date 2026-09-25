@@ -179,35 +179,14 @@ def constraint_result(answer: bool | QueryResult[bool], owner: str) -> QueryResu
 
 
 @dataclass(frozen=True, slots=True)
-class MissingInput(NoTruthValue):
-    """An optional external parameter was omitted, distinct from supplied None."""
-
-    owner: str = ""
-
-
-@dataclass(frozen=True, slots=True)
-class NotApplicable(NoTruthValue):
-    """An explicitly optional dependency does not apply in this specialization."""
-
-    owner: str = ""
-
-
-MISSING = MissingInput()
-NOT_APPLICABLE = NotApplicable()
-
-
-@dataclass(frozen=True, slots=True)
 class DecisionState(Generic[T]):
     owner: str
     status: Literal["unassigned", "committed"] = "unassigned"
     value: T | None = None
-    origin: str | None = None
 
     def __post_init__(self) -> None:
         if self.status not in {"unassigned", "committed"}:
             raise ValueError("unknown decision state")
-        if (self.status == "committed") != (self.origin is not None):
-            raise ValueError("only a committed decision state has an origin")
         if self.status == "unassigned" and self.value is not None:
             raise ValueError("an unassigned decision has no value")
 
@@ -284,32 +263,6 @@ def assess_constraints(answers: Mapping[str, QueryResult[bool]]) -> ConstraintAs
     return ConstraintAssessment(normalized, result)
 
 
-def assess_readiness(answers: Mapping[str, QueryResult[object]]) -> ReadinessAssessment:
-    normalized: dict[str, QueryResult[object]] = {}
-    for owner, answer in answers.items():
-        if (
-            isinstance(answer, Available)
-            and isinstance(answer.value, DecisionState)
-            and answer.value.status == "unassigned"
-        ):
-            normalized[owner] = Unresolved(
-                (
-                    Finding(
-                        FindingKind.BLOCKER,
-                        "decision-unassigned",
-                        answer.value.owner,
-                        "readiness requires a committed decision",
-                    ),
-                )
-            )
-        else:
-            normalized[owner] = answer
-    unresolved = _unresolved(normalized.values())
-    return ReadinessAssessment(
-        normalized, unresolved if unresolved is not None else Available(True)
-    )
-
-
 @dataclass(frozen=True, slots=True)
 class ViewAssessment(Generic[T]):
     output_result: QueryResult[T]
@@ -337,7 +290,6 @@ def assess_view(
     output_result: QueryResult[T],
     *,
     owner: str,
-    requires: Mapping[str, QueryResult[object]] | None = None,
     constraints: Mapping[str, QueryResult[bool]] | None = None,
     applicability: QueryResult[bool] = Available(True),
 ) -> ViewAssessment[T]:
@@ -348,15 +300,17 @@ def assess_view(
     """
 
     constraint_results = assess_constraints(constraints if constraints is not None else {})
-    required = dict(requires if requires is not None else {})
-    required.update(
-        (name, cast(QueryResult[object], answer))
+    required = {
+        name: cast(QueryResult[object], answer)
         for name, answer in constraint_results.results.items()
-    )
+    }
     # The compiler owns the names and rejects member collisions. The raw view
     # output is always included even when no extra readiness was requested.
     required[owner] = cast(QueryResult[object], output_result)
-    readiness = assess_readiness(required)
+    unresolved = _unresolved(required.values())
+    readiness = ReadinessAssessment(
+        required, unresolved if unresolved is not None else Available(True)
+    )
     accepted: QueryResult[T]
     if not isinstance(applicability, Available):
         accepted = applicability
@@ -380,17 +334,12 @@ __all__ = [
     "Finding",
     "FindingKind",
     "Inapplicable",
-    "MISSING",
-    "MissingInput",
-    "NOT_APPLICABLE",
     "NonValue",
-    "NotApplicable",
     "ReadinessAssessment",
     "Rejected",
     "Unresolved",
     "ViewAssessment",
     "assess_constraints",
-    "assess_readiness",
     "assess_view",
     "constraint_result",
     "finding_sort_key",

@@ -9,22 +9,16 @@ as a handwritten Subspace. Parent classes and compiled records are never edited.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Sequence
 from types import MappingProxyType
 from typing import Generic, Protocol, TypeVar, cast, overload
 
-from .collection import collect_placement, collect_space
+from ._bindings import collect_placement
+from ._configuration import Space
+from .collection import collect_space
 from .declarations import (
-    Const,
-    Constraint,
-    ConstraintGroup,
     Declaration,
-    Decision,
-    Derived,
     Param,
-    Readiness,
     ScopedValueRef,
-    Space,
     Subspace,
     ValueKey,
     ValueRef,
@@ -32,9 +26,7 @@ from .declarations import (
     ViewKey,
     local_name,
 )
-from .domains import Domain
 from .errors import DefinitionError
-from .results import QueryResult
 from .semantics import ValueSemantics
 
 T = TypeVar("T")
@@ -96,7 +88,7 @@ class ScopeBuilder(Generic[S]):
             name if name is not None else f"{base.__name__}Bundle", "extension template name"
         )
         effective = collect_space(base)
-        self._base_members = {key: record.declaration for key, record in effective.members.items()}
+        self._base_members = dict(effective.members)
         self._base_names = {key for cls in base.__mro__ for key in vars(cls)}
         self._names_by_identity = {id(source): key for source, key in effective.aliases.items()}
         self._members: dict[str, Declaration] = {}
@@ -135,95 +127,6 @@ class ScopeBuilder(Generic[S]):
         self._members[name] = declaration
         self._names_by_identity[id(declaration)] = name
         return declaration
-
-    def param(
-        self,
-        name: str,
-        value_type: type[T] | ValueSemantics[T],
-        *,
-        required: bool = True,
-        semantics: ValueSemantics[T] | None = None,
-    ) -> Param[T]:
-        self._open()
-        return self.add(name, Param(value_type, required=required, semantics=semantics))
-
-    def const(self, name: str, value: T, *, semantics: ValueSemantics[T] | None = None) -> Const[T]:
-        self._open()
-        return self.add(name, Const(value, semantics=semantics))
-
-    def decision(
-        self,
-        name: str,
-        value_type: type[T] | ValueSemantics[T],
-        *,
-        domain: Domain[T] | None = None,
-        values: Iterable[T] | None = None,
-        semantics: ValueSemantics[T] | None = None,
-        when: ValueRef[bool] | None = None,
-    ) -> Decision[T]:
-        self._open()
-        return self.add(
-            name, Decision(value_type, domain=domain, values=values, semantics=semantics, when=when)
-        )
-
-    @overload
-    def derived(
-        self,
-        name: str,
-        function: Callable[..., T],
-        *,
-        semantics: None = None,
-        when: ValueRef[bool] | None = None,
-        **aliases: object,
-    ) -> Derived[T]: ...
-
-    @overload
-    def derived(
-        self,
-        name: str,
-        function: Callable[..., T | QueryResult[T]],
-        *,
-        semantics: ValueSemantics[T],
-        when: ValueRef[bool] | None = None,
-        **aliases: object,
-    ) -> Derived[T]: ...
-
-    def derived(
-        self,
-        name: str,
-        function: Callable[..., object],
-        *,
-        semantics: object = None,
-        when: ValueRef[bool] | None = None,
-        **aliases: object,
-    ) -> object:
-        self._open()
-        if semantics is not None and not isinstance(semantics, ValueSemantics):
-            raise DefinitionError("semantics= must be a ValueSemantics")
-        return self.add(name, Derived(function, semantics=semantics, aliases=aliases, when=when))
-
-    def constraint(
-        self,
-        name: str,
-        function: Callable[..., bool | QueryResult[bool]],
-        *,
-        when: ValueRef[bool] | None = None,
-        **aliases: object,
-    ) -> Constraint:
-        self._open()
-        return self.add(name, Constraint(function, aliases=aliases, when=when))
-
-    def view(
-        self,
-        name: str,
-        source: ValueRef[T],
-        *,
-        constraints: Sequence[Constraint | ConstraintGroup] = (),
-        requires: Sequence[ValueRef[object] | Constraint | ConstraintGroup | Readiness] = (),
-        when: ValueRef[bool] | None = None,
-    ) -> View[T]:
-        self._open()
-        return self.add(name, View(source, constraints=constraints, requires=requires, when=when))
 
     @overload
     def export(self, key: ValueKey[T]) -> ValueExport[T]: ...

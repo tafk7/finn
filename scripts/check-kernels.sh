@@ -15,21 +15,20 @@ RUN_PYTHONPATH="$FINN_ROOT/src:$FINN_ROOT/tests"
 if [ -d "$FINN_ROOT/deps/qonnx/src" ]; then
     RUN_PYTHONPATH="$RUN_PYTHONPATH:$FINN_ROOT/deps/qonnx/src"
 fi
-"$PYTHON_BIN" --version
 # These are independent Space/kernel gates. Parked dataflow/graph tests remain
 # outside this command; their compatibility is not claimed.
-PYTHONPATH="$RUN_PYTHONPATH" "$PYTHON_BIN" -m pytest -q --confcutdir=tests/core/space tests/core/space
+PYTHON_BIN="$PYTHON_BIN" RUFF_BIN="$RUFF_BIN" MYPY_BIN="$MYPY_BIN" bash scripts/check-space.sh
 PYTHONPATH="$RUN_PYTHONPATH" "$PYTHON_BIN" -m pytest -q --confcutdir=tests/kernels tests/kernels
-PYTHONPATH="$RUN_PYTHONPATH" "$PYTHON_BIN" scripts/check-space-examples.py
-"$RUFF_BIN" format --check src/finn/core/space src/finn/kernels tests/core/space tests/kernels \
+PYTHONPATH="$RUN_PYTHONPATH" "$PYTHON_BIN" scripts/check-space-examples.py src/finn/kernels/README.md
+"$RUFF_BIN" format --check src/finn/kernels tests/kernels \
     scripts/benchmark-space.py scripts/check-space-examples.py
-"$RUFF_BIN" check src/finn/core/space src/finn/kernels tests/core/space tests/kernels \
+"$RUFF_BIN" check src/finn/kernels tests/kernels \
     scripts/benchmark-space.py scripts/check-space-examples.py
 env -u PYTHONPATH MYPYPATH=src:tests "$MYPY_BIN" \
-    --no-incremental --strict --explicit-package-bases -p finn.core.space -p finn.kernels
+    --no-incremental --strict --explicit-package-bases -p finn.kernels
 env -u PYTHONPATH MYPYPATH=src:tests "$MYPY_BIN" \
     --no-incremental --strict --explicit-package-bases \
-    tests/core/space tests/kernels/typing tests/kernels/helpers.py \
+    tests/kernels/typing tests/kernels/helpers.py \
     tests/kernels/test_boundaries.py tests/kernels/test_datatypes.py \
     tests/kernels/artifacts/conftest.py tests/kernels/artifacts/test_isolation.py \
     tests/kernels/test_installed_package.py

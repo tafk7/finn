@@ -9,7 +9,7 @@ import pytest
 
 from finn.core.space.domains import Domain, divisors_of, domain, finite
 from finn.core.space.errors import DefinitionError, EvaluationError
-from finn.core.space.results import QueryResult, Available, Inapplicable, Rejected, reject
+from finn.core.space.results import Available, Inapplicable, QueryResult, Rejected, reject
 from finn.core.space.semantics import ValueSemantics, default_semantics
 
 INT = default_semantics(int)

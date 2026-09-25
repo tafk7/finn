@@ -5,10 +5,10 @@
 from typing_extensions import assert_type
 
 from finn.core.space import (
-    QueryResult,
     Available,
     Derived,
     Param,
+    QueryResult,
     ScopeBuilder,
     Space,
     Subspace,
@@ -17,6 +17,7 @@ from finn.core.space import (
     ValueSemantics,
     View,
     ViewKey,
+    derived,
 )
 
 
@@ -39,9 +40,9 @@ def answer(*, lanes: int) -> QueryResult[int]:
 
 
 builder = ScopeBuilder(Shape)
-computed = builder.derived("doubled", doubled)
-answered = builder.derived("answered", answer, semantics=ValueSemantics.immutable_nominal(int))
-view = builder.view("complete", computed)
+computed = builder.add("doubled", derived(doubled))
+answered = builder.add("answered", derived(semantics=ValueSemantics.immutable_nominal(int))(answer))
+view = builder.add("complete", View(computed))
 builder.export(ValueKey("bits", int)).value(computed)
 builder.export(ViewKey("complete", int)).view(view)
 builder.bind(Shape.lanes, 4)

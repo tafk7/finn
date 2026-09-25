@@ -4,9 +4,9 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 from dataclasses import dataclass
-import json
 from typing import cast
 
 import pytest
@@ -145,7 +145,8 @@ def test_custom_unhashable_values_round_trip_by_declared_equality_and_detach_doc
     decoded = codecs.decode(document, schema)
     assert decoded.value(Family.bag).items == [1, 2]
     assert decoded == selection
-    assert selections.restore(point, decoded).instance is point
+    restored = selections.restore(model.bind(), decoded)
+    assert restored.accepted and selections.capture(restored.instance) == selection
     payload = _entries(document)[0]["value"]
     assert isinstance(payload, list)
     payload.append(9)
@@ -243,10 +244,6 @@ def test_selected_case_identity_is_authored_and_unknown_cases_are_diagnosed() ->
     _entries(document)[0]["value"] = "removed-case"
     with pytest.raises(RequestError, match="unknown structural case"):
         codecs.decode(document, schema)
-    captured = selections.capture(point)
-    invalid = captured.with_changes([captured.edit(selector, "removed-case")])
-    with pytest.raises(RequestError, match="unknown structural case"):
-        codecs.encode(invalid, schema)
     assert selections.capture(base).keys == ()
 
 

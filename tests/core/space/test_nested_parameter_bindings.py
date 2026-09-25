@@ -6,16 +6,16 @@
 from __future__ import annotations
 
 import os
-from pathlib import Path
 import re
 import shutil
 import subprocess
+from pathlib import Path
 
 import pytest
 
 from finn.core.space import (
-    Const,
     Available,
+    Const,
     Decision,
     Inapplicable,
     Param,
@@ -27,8 +27,9 @@ from finn.core.space import (
     compile_space,
     derived,
     divisors_of,
+    inspection,
+    selections,
 )
-from finn.core.space import inspection, selections
 from finn.core.space.errors import DefinitionError, RequestError
 
 

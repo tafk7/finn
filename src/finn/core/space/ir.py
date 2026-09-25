@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Literal
 from .semantics import ValueSemantics
 
 if TYPE_CHECKING:
-    from .declarations import Space
+    from ._configuration import Space
     from .domains import Domain
 
 NodeKind = Literal[
@@ -30,17 +30,14 @@ NodeKind = Literal[
     "alias",
     "guard",
     "select",
-    "readiness",
     "group",
 ]
-DependencyMode = Literal["required", "optional", "result"]
 
 
 @dataclass(frozen=True, slots=True)
 class Argument:
     name: str
     node: int
-    mode: DependencyMode = "required"
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,7 +57,6 @@ class Node:
     domain_arguments: tuple[Argument, ...] = ()
     output: int | None = None
     constraints: tuple[int, ...] = ()
-    requires: tuple[int, ...] = ()
     alternatives: tuple[tuple[str, int], ...] = ()
     selector: int | None = None
     source_owner: str | None = None
@@ -90,7 +86,6 @@ class Node:
         if self.selector is not None:
             refs.append(self.selector)
         refs.extend(self.constraints)
-        refs.extend(self.requires)
         refs.extend(target for _, target in self.alternatives)
         return tuple(dict.fromkeys(refs))
 

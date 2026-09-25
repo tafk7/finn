@@ -6,17 +6,17 @@
 from __future__ import annotations
 
 import os
-from pathlib import Path
 import re
 import shutil
 import subprocess
+from pathlib import Path
 from typing import cast
 
 import pytest
 
 from finn.core.space import (
-    Const,
     Available,
+    Const,
     Decision,
     Inapplicable,
     Param,
@@ -26,8 +26,8 @@ from finn.core.space import (
     compile_space,
     derived,
     divisors_of,
+    inspection,
 )
-from finn.core.space import inspection
 from finn.core.space.declarations import ValueRef
 from finn.core.space.errors import DefinitionError, EvaluationError
 from finn.core.space.expressions import Expr
@@ -80,7 +80,7 @@ def test_an_inferred_derived_integer_remains_an_ordinary_callback() -> None:
     assert any(item.key == "doubled" for item in dependencies)
 
 
-def test_literal_and_const_folding_preserves_static_ownership_dependencies() -> None:
+def test_literal_expressions_evaluate_lazily_and_preserve_owned_dependencies() -> None:
     class Family(Space):
         base = Const(4)
         folded = (base + 3) * 2
@@ -88,15 +88,15 @@ def test_literal_and_const_folding_preserves_static_ownership_dependencies() -> 
 
     model = compile_space(Family)
     metadata = {item.key: item for item in inspection.members(model)}
-    assert metadata["folded"].kind == "const"
-    assert metadata["anonymous"].kind == "const"
+    assert metadata["folded"].kind == "derived"
+    assert metadata["anonymous"].kind == "derived"
     point = model.bind()
     assert (point.folded, point.anonymous) == (14, 4)
     assert inspection.dependencies(model, Family.folded)
     evidence = inspection.explain(point, Family.folded)
     assert evidence.result == Available(14)
-    assert len(evidence.nodes) == 1
-    assert evidence.nodes[0].declaration.owner == "folded"
+    assert {node.declaration.owner for node in evidence.nodes} == {"base", "folded"}
+    assert len(evidence.nodes) > 1
 
 
 def test_anonymous_expressions_work_in_aliases_domains_and_child_bindings() -> None:
@@ -119,7 +119,7 @@ def test_anonymous_expressions_work_in_aliases_domains_and_child_bindings() -> N
     assert point.child.physical() == 12
 
 
-def test_failed_folding_defers_errors_until_guarded_expression_is_demanded() -> None:
+def test_arithmetic_errors_are_deferred_until_guarded_expression_is_demanded() -> None:
     class Family(Space):
         enabled = Param(bool)
         physical = View(Const(1) // 0, when=enabled)

@@ -5,33 +5,26 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Mapping, Sequence
-from dataclasses import dataclass, field, replace
 import inspect
+from collections.abc import Callable, Iterable, Mapping
+from dataclasses import dataclass, field, replace
 from typing import cast
 
-from .collection import (
-    BoundArgument,
-    BoundFunction,
-    EffectiveSpace,
-    PlacementBinding,
-    collect_placement,
-    collect_space,
-    validate_argument,
-)
+from ._bindings import PlacementBinding, PlacementPlans
+from ._configuration import Space
+from ._graph import dependency_order
+from ._signatures import BoundArgument, BoundFunction, validate_argument
+from .collection import EffectiveSpace, collect_space
 from .declarations import (
     AcceptedViewRef,
     Const,
     Constraint,
     ConstraintGroup,
-    Declaration,
     Decision,
-    DecisionRef,
+    Declaration,
     Derived,
     Param,
-    Readiness,
     ScopedValueRef,
-    Space,
     Subspace,
     SubspaceChoice,
     ValueKey,
@@ -41,87 +34,13 @@ from .declarations import (
 )
 from .domains import Domain, finite
 from .errors import DefinitionError, RequestError
-from .expressions import Expr, INTEGER_SEMANTICS, IntOperator, apply_integer, evaluator
+from .expressions import INTEGER_SEMANTICS, Expr, IntOperator, evaluator
 from .ir import Argument, Choice, LinkedModel, Node, NodeKind, Scope
+from .references import resolve_reference
 from .semantics import ValueSemantics, default_semantics
 
 _BOOL = default_semantics(bool)
 _STRING = default_semantics(str)
-
-
-def resolve_reference(
-    nodes: Sequence[Node],
-    scopes: Sequence[Scope],
-    choices: Sequence[Choice],
-    scope: int,
-    reference: object,
-    *,
-    expand: bool = False,
-) -> int:
-    """Interpret fresh typed paths using frozen occurrence maps, never classes."""
-
-    if type(scope) is not int or not 0 <= scope < len(scopes):
-        raise RequestError("reference scope does not belong to this model")
-    seen: set[tuple[int, int]] = set()
-    require_view = False
-    decision_scope: int | None = None
-    original = reference
-    while True:
-        if not expand:
-            try:
-                index = scopes[scope].members[reference]
-                break
-            except (KeyError, TypeError):
-                pass
-        expand = False
-        if not isinstance(reference, (ScopedValueRef, AcceptedViewRef)):
-            raise RequestError("reference is not a member of this compiled scope")
-        step = (scope, id(reference))
-        if step in seen:
-            raise RequestError("cyclic scoped reference")
-        seen.add(step)
-        placement = reference.placement
-        if isinstance(reference, AcceptedViewRef):
-            require_view = True
-        child = scopes[scope].children.get(placement)
-        if child is not None:
-            scope = child
-            if isinstance(reference, DecisionRef):
-                decision_scope = scope
-            reference = reference.member
-            continue
-        choice_index = scopes[scope].choices.get(placement)
-        if choice_index is not None:
-            if isinstance(reference, DecisionRef):
-                raise RequestError("a DecisionRef must name a concrete locally owned decision")
-            member = reference.member
-            if (require_view and not isinstance(member, ViewKey)) or (
-                not require_view and not isinstance(member, ValueKey)
-            ):
-                raise RequestError("choice reference has the wrong export kind")
-            try:
-                return choices[choice_index].exports[member]
-            except KeyError as cause:
-                raise RequestError("reference is not an export of this compiled choice") from cause
-        raise RequestError("placement is not a child or choice of this compiled scope")
-    node = nodes[index]
-    # Named editable handles keep the frozen alias target, too. A fresh handle
-    # is checked while descending; declared aliases do not reread its fields.
-    if isinstance(original, DecisionRef):
-        seen_aliases: set[int] = set()
-        while node.kind == "alias" and node.output is not None:
-            if index in seen_aliases:
-                raise RequestError("cyclic decision alias")
-            seen_aliases.add(index)
-            index = node.output
-            node = nodes[index]
-        if node.kind != "decision":
-            raise RequestError("a Param alias is not a locally owned Decision")
-    if require_view and node.kind != "view":
-        raise RequestError("an accepted reference must name a view")
-    if decision_scope is not None and (node.kind != "decision" or node.scope != scope):
-        raise RequestError("a Param alias is not a locally owned Decision")
-    return index
 
 
 @dataclass
@@ -159,7 +78,6 @@ class _ChoiceDraft:
     index: int
     scope: int
     key: str
-    declaration: SubspaceChoice
     guard: int | None
     selector: int | None
     cases: list[tuple[str, int]] = field(default_factory=list)
@@ -222,14 +140,18 @@ def _matches(expected: str) -> Callable[..., object]:
     return matches
 
 
+_BINDING_KINDS: Mapping[str, NodeKind] = {
+    "literal": "const",
+    "reference": "alias",
+    "exposed-param": "param",
+    "local-decision": "decision",
+}
+
+
 class _Linker:
-    def __init__(
-        self,
-        space_type: type[Space],
-        validate: Callable[[tuple[Node, ...]], tuple[int, ...]],
-    ) -> None:
+    def __init__(self, space_type: type[Space]) -> None:
         self.space_type = space_type
-        self.validate = validate
+        self.placements = PlacementPlans()
         self.effective: dict[type[Space], EffectiveSpace] = {}
         self.aliases: dict[type[Space], dict[str, list[Declaration]]] = {}
         self.nodes: list[Node] = []
@@ -242,7 +164,6 @@ class _Linker:
         self.argument_checks: list[tuple[BoundArgument, int, str]] = []
         self.expression_nodes: dict[tuple[int, Expr], int] = {}
         self.expression_tasks: list[_ExpressionTask] = []
-        self.expression_operators: dict[int, IntOperator] = {}
         self.expression_counts: dict[str, int] = {}
         self.scopes: tuple[Scope, ...] = ()
         self.choices: tuple[Choice, ...] = ()
@@ -258,15 +179,14 @@ class _Linker:
             cursor += 1
             if space_type in self.effective:
                 continue
-            effective = collect_space(space_type)
+            effective = collect_space(space_type, placements=self.placements)
             self.effective[space_type] = effective
             aliases: dict[str, list[Declaration]] = {}
             for declaration, name in effective.aliases.items():
                 aliases.setdefault(name, []).append(declaration)
             self.aliases[space_type] = aliases
             descendants: list[type[Space]] = []
-            for record in effective.members.values():
-                declaration = record.declaration
+            for declaration in effective.members.values():
                 if isinstance(declaration, Subspace):
                     descendants.append(declaration.space_type)
                 elif isinstance(declaration, SubspaceChoice):
@@ -277,17 +197,10 @@ class _Linker:
             pending.extend(child for child in descendants if child not in self.effective)
         indices = {space_type: index for index, space_type in enumerate(self.effective)}
         structure = tuple(
-            Node(
-                index,
-                0,
-                space_type.__qualname__,
-                "group",
-                requires=tuple(indices[child] for child in children[space_type]),
-            )
-            for space_type, index in indices.items()
+            tuple(indices[child] for child in children[space_type]) for space_type in self.effective
         )
         try:
-            self.validate(structure)
+            dependency_order(structure, tuple(family.__qualname__ for family in self.effective))
         except DefinitionError as cause:
             raise DefinitionError("recursive Space placement", findings=cause.findings) from cause
 
@@ -339,7 +252,7 @@ class _Linker:
         placement: Subspace[Space] | None = None,
     ) -> int:
         index = len(self.drafts)
-        plan = collect_placement(placement) if placement is not None else None
+        plan = self.placements.get(placement) if placement is not None else None
         bindings = plan.bindings if plan is not None else {}
         draft = _ScopeDraft(
             index,
@@ -356,22 +269,13 @@ class _Linker:
                 _ParameterOverride(index, draft.source_scope, item.reference, item.binding)
                 for item in plan.nested_bindings
             )
-        for member_name, record in draft.effective.members.items():
-            declaration = record.declaration
+        for member_name, declaration in draft.effective.members.items():
             if isinstance(declaration, (Subspace, SubspaceChoice)):
                 continue
             binding = bindings.get(member_name)
             kind: NodeKind
             if isinstance(declaration, Param):
-                kind = (
-                    "param"
-                    if binding is None or binding.kind == "exposed-param"
-                    else "decision"
-                    if binding.kind == "local-decision"
-                    else "const"
-                    if binding.kind == "literal"
-                    else "alias"
-                )
+                kind = "param" if binding is None else _BINDING_KINDS[binding.kind]
             elif isinstance(declaration, Const):
                 kind = "const"
             elif isinstance(declaration, Decision):
@@ -382,8 +286,6 @@ class _Linker:
                 kind = "constraint"
             elif isinstance(declaration, View):
                 kind = "view"
-            elif isinstance(declaration, Readiness):
-                kind = "readiness"
             elif isinstance(declaration, ConstraintGroup):
                 kind = "group"
             elif isinstance(declaration, (ScopedValueRef, AcceptedViewRef)):
@@ -430,9 +332,7 @@ class _Linker:
                 self.nodes[selector],
                 domain=cast(Domain[object], finite(declaration.alternatives, _STRING)),
             )
-        choice = _ChoiceDraft(
-            len(self.choice_drafts), scope.index, key, declaration, guard, selector
-        )
+        choice = _ChoiceDraft(len(self.choice_drafts), scope.index, key, guard, selector)
         self.choice_drafts.append(choice)
         for alias in self.aliases[scope.effective.space_type][name]:
             scope.choices[alias] = choice.index
@@ -480,8 +380,7 @@ class _Linker:
         while cursor < len(self.drafts):
             scope = self.drafts[cursor]
             cursor += 1
-            for name, record in scope.effective.members.items():
-                declaration = record.declaration
+            for name, declaration in scope.effective.members.items():
                 if isinstance(declaration, Subspace):
                     key = _key(scope.name, name)
                     guard = self.guarded(
@@ -499,6 +398,8 @@ class _Linker:
                         scope.children[alias] = child
                 elif isinstance(declaration, SubspaceChoice):
                     self.choice(scope, name, declaration)
+        # All occurrence identities and membership maps are now stable. Later
+        # phases replace node payloads, never scope identities.
         self.scopes = tuple(draft.freeze() for draft in self.drafts)
         self.choices = tuple(choice.freeze() for choice in self.choice_drafts)
 
@@ -528,15 +429,7 @@ class _Linker:
                 binding=override.binding,
                 binding_scope=override.source_scope,
             )
-            kind = cast(
-                NodeKind,
-                {
-                    "literal": "const",
-                    "reference": "alias",
-                    "exposed-param": "param",
-                    "local-decision": "decision",
-                }[override.binding.kind],
-            )
+            kind = _BINDING_KINDS[override.binding.kind]
             self.nodes[target] = replace(node, kind=kind)
 
     def reference(self, scope: int, source: object, *, owner: str) -> int:
@@ -632,50 +525,22 @@ class _Linker:
                 arguments=tuple(arguments),
                 function=evaluator(task.operator),
             )
-            self.expression_operators[task.index] = task.operator
 
-    def fold_expressions(self, order: tuple[int, ...]) -> None:
-        """Fold successful builtin arithmetic on unguarded definition constants."""
-
-        for index in order:
-            operator = self.expression_operators.get(index)
-            if operator is None:
-                continue
-            node = self.nodes[index]
-            operands = tuple(self.nodes[argument.node] for argument in node.arguments)
-            if any(
-                operand.semantics is None or operand.semantics.type_token is not int
-                for operand in operands
-            ):
+    def check_expression_semantics(self) -> None:
+        """Resolve integer operand types after linked aliases have their semantics."""
+        for task in self.expression_tasks:
+            node = self.nodes[task.index]
+            operands = (self.nodes[arg.node].semantics for arg in node.arguments)
+            if any(semantics is None or semantics.type_token is not int for semantics in operands):
                 raise DefinitionError(
                     f"{node.owner}: integer expression operands require int value semantics"
                 )
-            if not all(
-                operand.kind == "const" and operand.guard is None and type(operand.value) is int
-                for operand in operands
-            ):
-                continue
-            try:
-                value = apply_integer(
-                    operator, tuple(cast(int, operand.value) for operand in operands)
-                )
-            except ArithmeticError:
-                # Invalid arithmetic is a contextual runtime error only if its
-                # body is demanded. Inactive guarded expressions remain safe.
-                continue
-            assert node.semantics is not None
-            self.nodes[index] = replace(
-                node,
-                kind="const",
-                value=node.semantics.freeze(value),
-                function=None,
-            )
 
     def arguments(self, scope: int, function: BoundFunction, *, owner: str) -> tuple[Argument, ...]:
         arguments: list[Argument] = []
         for dependency in function.dependencies:
             target = self.reference(scope, dependency.source, owner=owner)
-            arguments.append(Argument(dependency.name, target, dependency.mode))
+            arguments.append(Argument(dependency.name, target))
             self.argument_checks.append((dependency, target, owner))
         return tuple(arguments)
 
@@ -732,7 +597,8 @@ class _Linker:
                     ) from cause
         return domain, tuple(arguments)
 
-    def link_member(self, task: _MemberTask) -> None:
+    def member_source(self, task: _MemberTask) -> tuple[Declaration, int] | None:
+        """Apply a child supplier; return the declaration and its authoring scope."""
         scope = self.drafts[task.scope]
         node = self.nodes[task.index]
         declaration = task.declaration
@@ -742,16 +608,49 @@ class _Linker:
             source_scope = scope.source_scope if task.binding_scope is None else task.binding_scope
             if binding.kind == "literal":
                 self.nodes[node.index] = replace(node, value=binding.supplier)
-                return
+                return None
             if binding.kind == "reference":
                 self.nodes[node.index] = replace(
                     node, output=self.reference(source_scope, binding.supplier, owner=node.key)
                 )
-                return
+                return None
             if not isinstance(binding.supplier, (Param, Decision)):
                 raise DefinitionError(f"{node.key}: malformed exposed parameter binding")
             declaration = binding.supplier
 
+        return declaration, source_scope
+
+    def callback(self, node: Node, function: BoundFunction) -> Node:
+        return replace(
+            node,
+            function=function.function,
+            call_style=function.call_style,
+            arguments=self.arguments(node.scope, function, owner=node.owner),
+        )
+
+    def view_output(self, node: Node, declaration: View[object], name: str) -> int:
+        """Both view forms lower to one accepted node with an explicit raw output."""
+        if declaration.source is not None:
+            return self.reference(node.scope, declaration.source, owner=node.key)
+        function = self.drafts[node.scope].effective.functions[name]
+        output = self.reserve(
+            node.scope,
+            node.key + ".$output",
+            "derived",
+            function.semantics,
+            guard=node.guard,
+            source_owner=node.key,
+        )
+        self.nodes[output] = self.callback(self.nodes[output], function)
+        return output
+
+    def link_member(self, task: _MemberTask) -> None:
+        source = self.member_source(task)
+        if source is None:
+            return
+        declaration, source_scope = source
+        scope = self.drafts[task.scope]
+        node = self.nodes[task.index]
         condition = (
             getattr(declaration, "when", None)
             if task.binding is not None
@@ -782,13 +681,7 @@ class _Linker:
         elif isinstance(declaration, Expr):
             self.expression(scope.index, declaration, owner=node.key, index=node.index)
         elif isinstance(declaration, (Derived, Constraint)):
-            function = scope.effective.functions[task.name]
-            node = replace(
-                node,
-                function=function.function,
-                call_style=function.call_style,
-                arguments=self.arguments(scope.index, function, owner=node.key),
-            )
+            node = self.callback(node, scope.effective.functions[task.name])
         elif isinstance(declaration, ConstraintGroup):
             node = replace(
                 node,
@@ -799,48 +692,14 @@ class _Linker:
                     owner=node.key,
                 ),
             )
-        elif isinstance(declaration, Readiness):
-            node = replace(
-                node,
-                requires=self.obligations(
-                    scope.index,
-                    declaration.requires,
-                    (ValueRef, Constraint, ConstraintGroup),
-                    owner=node.key,
-                ),
-            )
         elif isinstance(declaration, View):
-            if declaration.source is not None:
-                output = self.reference(scope.index, declaration.source, owner=node.key)
-            else:
-                function = scope.effective.functions[task.name]
-                output = self.reserve(
-                    scope.index,
-                    node.key + ".$output",
-                    "derived",
-                    function.semantics,
-                    guard=guard,
-                    source_owner=node.key,
-                )
-                self.nodes[output] = replace(
-                    self.nodes[output],
-                    function=function.function,
-                    call_style=function.call_style,
-                    arguments=self.arguments(scope.index, function, owner=node.key),
-                )
             node = replace(
                 node,
-                output=output,
+                output=self.view_output(node, declaration, task.name),
                 constraints=self.obligations(
                     scope.index,
                     declaration.constraints,
                     (Constraint, ConstraintGroup),
-                    owner=node.key,
-                ),
-                requires=self.obligations(
-                    scope.index,
-                    declaration.requires,
-                    (ValueRef, Constraint, ConstraintGroup, Readiness),
                     owner=node.key,
                 ),
             )
@@ -937,6 +796,7 @@ class _Linker:
                     )
 
     def build(self) -> LinkedModel:
+        """Prepare templates, allocate occurrences, lower edges, then validate/freeze."""
         self.collect()
         self.allocate()
         self.apply_parameter_overrides()
@@ -952,9 +812,12 @@ class _Linker:
             )
         self.link_choices()
         self.link_expressions()
-        order = self.validate(tuple(self.nodes))
+        order = dependency_order(
+            tuple(node.dependencies for node in self.nodes),
+            tuple(node.key for node in self.nodes),
+        )
         self.check_semantics(order)
-        self.fold_expressions(order)
+        self.check_expression_semantics()
         nodes = tuple(self.nodes)
         keys = {node.key: node.index for node in nodes}
         if len(keys) != len(nodes):
@@ -970,8 +833,5 @@ class _Linker:
         )
 
 
-def link_space(
-    space_type: type[Space],
-    validate: Callable[[tuple[Node, ...]], tuple[int, ...]],
-) -> LinkedModel:
-    return _Linker(space_type, validate).build()
+def link_space(space_type: type[Space]) -> LinkedModel:
+    return _Linker(space_type).build()
