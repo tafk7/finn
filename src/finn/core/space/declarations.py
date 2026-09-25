@@ -731,6 +731,24 @@ class SpaceMeta(type):
         super().__delattr__(name)
 
 
+def _check_configuration_mutation(point: Space, name: str) -> None:
+    from ._execution import driver_only
+    from .occurrence import state
+
+    driver_only("configuration mutation")
+    current = getattr(point, "_state", None)
+    scope_index = getattr(point, "_scope", None)
+    if current is not None and type(scope_index) is int:
+        scope = state(point).model.linked.scopes[scope_index]
+        choice_names = {
+            declaration.name
+            for declaration in scope.choices
+            if isinstance(declaration, SubspaceChoice)
+        }
+        if name in scope.named_members or name in scope.named_children or name in choice_names:
+            raise AttributeError(f"{name} is an immutable configuration field; use with_choices()")
+
+
 class Space(metaclass=SpaceMeta):
     """Authored family and scoped configuration type over an immutable runtime state."""
 
@@ -752,22 +770,12 @@ class Space(metaclass=SpaceMeta):
         if name in {"_state", "_scope"} and name not in self.__dict__:
             object.__setattr__(self, name, value)
             return
-        current = getattr(self, "_state", None)
-        scope_index = getattr(self, "_scope", None)
-        if current is not None and type(scope_index) is int:
-            from .occurrence import state
-
-            scope = state(self).model.linked.scopes[scope_index]
-            choice_names = {
-                declaration.name
-                for declaration in scope.choices
-                if isinstance(declaration, SubspaceChoice)
-            }
-            if name in scope.named_members or name in scope.named_children or name in choice_names:
-                raise AttributeError(
-                    f"{name} is an immutable configuration field; use with_choices()"
-                )
+        _check_configuration_mutation(self, name)
         object.__setattr__(self, name, value)
+
+    def __delattr__(self, name: str) -> None:
+        _check_configuration_mutation(self, name)
+        object.__delattr__(self, name)
 
     def query(self, value: ValueRef[T] | View[T]) -> QueryResult[T]:
         from .occurrence import query

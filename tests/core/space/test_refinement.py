@@ -248,8 +248,13 @@ def test_dependent_batch_is_order_independent_without_precommitting_candidates()
     assert not failed.accepted
     assert failed.instance is base
     assert calls == []  # the refused first candidate never became a dependency value
-    assert isinstance(failed.outcomes[-1].result, Rejected)
-    assert all(isinstance(item.result, Unresolved) for item in failed.outcomes[:-1])
+    primary = failed.outcomes[-1].result
+    assert isinstance(primary, Rejected)
+    assert primary.findings and all(finding.owner == "step_0" for finding in primary.findings)
+    # Dependents preserve the prerequisite cause; they have not run membership.
+    for item in failed.outcomes[:-1]:
+        assert isinstance(item.result, Rejected)
+        assert item.result.findings == primary.findings
 
 
 def test_selector_and_nested_edit_share_atomic_order_and_inactive_edits_refuse() -> None:

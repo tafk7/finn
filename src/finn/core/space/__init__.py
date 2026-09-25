@@ -31,6 +31,12 @@ from .declarations import (
     optional,
     view,
 )
+from ._execution import (
+    CleanupFailure,
+    NativeCancellationDetails,
+    NativeEvaluationError,
+    cancellation_details,
+)
 from .compiler import SpaceModel, compile_space
 from .domains import Domain, divisors_of, domain, finite
 from .edits import Change, ChangeOutcome, ChangeRequest, CommitmentReport, ConfigurationResult
@@ -76,6 +82,10 @@ __all__ = [
     "BoundView",
     "BoundViewField",
     "ChoiceView",
+    "CleanupFailure",
+    "NativeCancellationDetails",
+    "NativeEvaluationError",
+    "cancellation_details",
     "CodecBinding",
     "Const",
     "Constraint",

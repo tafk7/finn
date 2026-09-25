@@ -81,8 +81,12 @@ def test_prepared_structure_and_configuration_fields_are_immutable() -> None:
         del Family.value
     with pytest.raises(AttributeError, match="immutable configuration field"):
         instance.value = 4
+    with pytest.raises(AttributeError, match="immutable configuration field"):
+        del instance.value
     setattr(instance, "note", "ordinary metadata")
     assert getattr(instance, "note") == "ordinary metadata"
+    delattr(instance, "note")
+    assert not hasattr(instance, "note")
 
 
 def test_prepared_inherited_declarations_and_their_owners_are_immutable() -> None:

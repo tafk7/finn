@@ -321,9 +321,11 @@ def test_callback_arguments_are_detached_from_snapshot_values() -> None:
     assert evaluate(second, 1).result == Available(3)
     successor = first.successor({})
     assert successor.parameters is first.parameters
-    assert successor.lock is first.lock
     assert successor.cache == {}
     assert first.cache
+    assert evaluate(successor, 1).result == Available(2)
+    assert evaluate(first, 0).result == Available([1])
+    assert successor.cache is not first.cache
 
 
 def test_selection_preserves_selected_refusal_and_skips_other_callback() -> None:
