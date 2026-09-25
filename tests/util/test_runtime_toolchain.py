@@ -12,7 +12,7 @@ import threading
 import time
 from pathlib import Path
 
-from finn.util._legacy_build_env import build_environment, external_path
+from finn.util._legacy_build_env import build_environment
 from finn.util._toolchain import Selection, Toolchain, run_process
 from finn.util.hls import CallHLS
 
@@ -332,14 +332,13 @@ def test_frontend_availability_does_not_override_compatibility(tmp_path):
 
 def test_legacy_precedence_and_worker_inheritance(tmp_path):
     root = tmp_path / "selected"
-    (root / "deps/finn-hlslib").mkdir(parents=True)
+    root.mkdir()
     env = {
         "FINN_ROOT": "/wrong",
         "FINN_BUILD_DIR": "/wrong/build",
         "PATH": os.defpath,
         "XILINX_VIVADO": str(root),
     }
-    assert external_path("hlslib", root=root, environ=env) == str(root / "deps/finn-hlslib")
     child = build_environment(env, root=root, build_dir=tmp_path / "scratch")
     assert env["FINN_ROOT"] == "/wrong"
     assert child["VIVADO_PATH"] == str(root)
@@ -355,8 +354,6 @@ def test_legacy_precedence_and_worker_inheritance(tmp_path):
         env=child,
     )
     assert result.stdout.decode().strip() == str(tmp_path / "scratch")
-    with pytest.raises(FileNotFoundError, match="FINN_BOARD_FILES_PATH"):
-        external_path("boards", environ={})
 
 
 def test_stitched_vivado_operation_uses_selected_route(tmp_path, monkeypatch):

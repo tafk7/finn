@@ -1,0 +1,3 @@
+[submodule "packages/finn-hlslib/finn_hlslib/hlslib"]
+	path = packages/finn-hlslib/finn_hlslib/hlslib
+	url = https://github.com/Xilinx/finn-hlslib.git

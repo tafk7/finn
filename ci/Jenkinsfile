@@ -930,14 +930,17 @@ void checkoutPinned() {
     def vars = checkout scm
     PINNED_SCM_COMMIT = vars.GIT_COMMIT
     echo "checkoutPinned: pinned build to ${PINNED_SCM_COMMIT}"
-    return
+  } else {
+    checkout([
+      $class: 'GitSCM',
+      branches: [[name: PINNED_SCM_COMMIT]],
+      userRemoteConfigs: scm.userRemoteConfigs,
+      extensions: scm.extensions,
+    ])
   }
-  checkout([
-    $class: 'GitSCM',
-    branches: [[name: PINNED_SCM_COMMIT]],
-    userRemoteConfigs: scm.userRemoteConfigs,
-    extensions: scm.extensions,
-  ])
+  // Workspace members (packages/*) are submodules at the commits this checkout pins,
+  // independent of the job's SCM submodule settings.
+  sh 'git submodule update --init --recursive'
 }
 
 // Per-shard scratch lives under WORKSPACE_TMP (a sibling of the git

@@ -16,6 +16,8 @@ jobs:
     steps:
       - name: checkout
         uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: DockerRunQuicktest
         run: ./docker/run -- quicktest.sh

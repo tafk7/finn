@@ -30,6 +30,7 @@ import pytest
 
 import numpy as np
 import os
+import shlex
 import subprocess
 from qonnx.core.datatype import DataType
 from qonnx.util.basic import gen_finn_dt_tensor
@@ -41,6 +42,8 @@ from finn.util.data_packing import (
     numpy_to_hls_code,
     packed_bytearray_to_finnpy,
 )
+from finn.util.external import hlslib_path
+from finn.util.resources import resource_path
 
 
 @pytest.mark.util
@@ -101,11 +104,15 @@ def test_npy2apintstream(test_shape, dtype):
     with open(test_dir + "/test.cpp", "w") as f:
         f.write("\n".join(test_app_string))
     cmd_compile = """
-g++ -o test_npy2apintstream test.cpp $FINN_ROOT/src/finn/_data/qnn-data/cpp/cnpy.cpp \
--I{}/include -I{}/include -I$FINN_ROOT/src/finn/_data/qnn-data/cpp \
--I$FINN_ROOT/deps/finn-hlslib \
+g++ -o test_npy2apintstream test.cpp {} \
+-I{}/include -I{}/include -I{} \
+-I{} \
 --std=c++17 -lz""".format(
-        os.environ["HLS_PATH"], os.environ["VITIS_PATH"]
+        shlex.quote(resource_path("qnn-data", "cpp/cnpy.cpp")),
+        os.environ["HLS_PATH"],
+        os.environ["VITIS_PATH"],
+        shlex.quote(resource_path("qnn-data", "cpp")),
+        shlex.quote(hlslib_path()),
     )
     with open(test_dir + "/compile.sh", "w") as f:
         f.write(cmd_compile)

@@ -175,6 +175,7 @@ echo ""
 # Step 2: Fetch git dependencies
 if [ "$SKIP_DEPS" -eq 0 ]; then
     gecho "Step 2: Fetching git dependencies..."
+    git -C "${FINN_ROOT}" submodule update --init
     if [ -f "${FINN_ROOT}/fetch-repos.sh" ]; then
         bash "${FINN_ROOT}/fetch-repos.sh"
     else
@@ -228,6 +229,7 @@ gecho "  Installed FINN and development requirements"
 python -m pip install --use-pep517 --no-build-isolation \
     -e "${FINN_ROOT}/deps/qonnx" -e "${FINN_ROOT}/deps/finn-experimental" \
     -e "${FINN_ROOT}/deps/brevitas" -e "${FINN_ROOT}/deps/dataset_loading" \
+    -e "${FINN_ROOT}/packages/finn-hlslib" \
     -e "${FINN_ROOT}"
 gecho "  Installed selected dependency checkouts and FINN"
 

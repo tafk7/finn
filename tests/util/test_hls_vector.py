@@ -29,11 +29,13 @@ import pytest
 
 import numpy as np
 import os
+import shlex
 import subprocess
 from qonnx.core.datatype import DataType
 from qonnx.util.basic import gen_finn_dt_tensor
 
 from finn.util.basic import make_build_dir, robust_rmtree
+from finn.util.resources import resource_path
 
 
 @pytest.mark.util
@@ -93,10 +95,13 @@ def test_npy2vectorstream(test_shape, dtype):
     with open(test_dir + "/test.cpp", "w") as f:
         f.write("\n".join(test_app_string))
     cmd_compile = """
-g++ -o test_npy2vectorstream test.cpp $FINN_ROOT/src/finn/_data/qnn-data/cpp/cnpy.cpp \
--I{}/include -I{}/include -I$FINN_ROOT/src/finn/_data/qnn-data/cpp \
+g++ -o test_npy2vectorstream test.cpp {} \
+-I{}/include -I{}/include -I{} \
 --std=c++17 -lz """.format(
-        os.environ["HLS_PATH"], os.environ["VITIS_PATH"]
+        shlex.quote(resource_path("qnn-data", "cpp/cnpy.cpp")),
+        os.environ["HLS_PATH"],
+        os.environ["VITIS_PATH"],
+        shlex.quote(resource_path("qnn-data", "cpp")),
     )
     with open(test_dir + "/compile.sh", "w") as f:
         f.write(cmd_compile)

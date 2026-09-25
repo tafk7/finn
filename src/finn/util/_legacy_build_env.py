@@ -24,24 +24,6 @@ def build_directory(path=None, environ=None):
     return str(Path(value or Path(tempfile.gettempdir()) / f"finn_build_{os.getuid()}").resolve())
 
 
-def external_path(kind, path=None, *, root=None, environ=None):
-    env = os.environ if environ is None else environ
-    variable, directory = {
-        "hlslib": ("FINN_HLSLIB_PATH", "finn-hlslib"),
-        "boards": ("FINN_BOARD_FILES_PATH", "board_files"),
-    }[kind]
-    value = path
-    if value is None and root is not None:
-        value = Path(root) / "deps" / directory
-    if value is None:
-        value = env.get(variable)
-    if value is None and env.get("FINN_ROOT"):
-        value = Path(env["FINN_ROOT"]) / "deps" / directory
-    if not value or not Path(value).is_dir():
-        raise FileNotFoundError(f"Set {variable} to the installed, versioned {directory} directory")
-    return str(Path(value).resolve())
-
-
 def toolchain(environ=None):
     """Translate legacy tool inputs once for unmigrated public operations."""
     env = dict(os.environ if environ is None else environ)

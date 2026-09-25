@@ -48,9 +48,9 @@ from finn.transformation.fpgadataflow.insert_fifo import InsertFIFO
 from finn.transformation.fpgadataflow.insert_iodma import InsertIODMA
 from finn.transformation.fpgadataflow.prepare_ip import PrepareIP
 from finn.transformation.fpgadataflow.specialize_layers import SpecializeLayers
-from finn.util._legacy_build_env import external_path
 from finn.util._legacy_build_env import toolchain as legacy_toolchain
 from finn.util.basic import make_build_dir, pynq_native_port_width, pynq_part_map
+from finn.util.external import board_files_path
 from finn.util.resources import resource_path, tcl_quote
 
 from . import templates
@@ -251,7 +251,7 @@ class MakeZYNQProject(Transformation):
         with open(ipcfg, "w") as f:
             f.write(
                 templates.custom_zynq_shell_template.replace(
-                    "$BOARD_FILES$", tcl_quote(external_path("boards"))
+                    "$BOARD_FILES$", tcl_quote(board_files_path())
                 )
                 % (
                     fclk_mhz,
