@@ -24,11 +24,8 @@ class DefinitionError(SpaceError, ValueError):
         super().__init__(detail)
 
 
-AuthoringError = DefinitionError
-
-
 class RequestError(SpaceError, ValueError):
-    """A binding or refinement request is malformed, before evaluation."""
+    """A binding or configuration request is malformed, before evaluation."""
 
     def __init__(self, detail: str, *, findings: Iterable[Finding] = ()) -> None:
         self.findings = tuple(findings)
@@ -65,19 +62,9 @@ class ConfigurationError(SpaceError):
         super().__init__("configuration change refused; inspect the report")
 
 
-class CommitmentError(SpaceError):
-    """A well-formed monotone commitment could not be published."""
-
-    def __init__(self, report: object) -> None:
-        self.report = report
-        super().__init__("commitment refused; inspect the report")
-
-
 __all__ = [
-    "AuthoringError",
     "DefinitionError",
     "EvaluationError",
-    "CommitmentError",
     "ConfigurationError",
     "RequestError",
     "SpaceError",

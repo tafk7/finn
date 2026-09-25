@@ -10,10 +10,12 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Generic, TypeAlias, TypeVar, Union, cast
 
+from ._configuration import Space
 from .compiler import SpaceModel
-from .declarations import Decision, DecisionRef, Space
+from .declarations import Decision, DecisionRef
 from .errors import DefinitionError, RequestError
-from .inspection import DecisionInfo, decision_info, decisions
+from .inspection import decision_info
+from .references import decision_key
 from .selections import Selection, _recognize, _semantics, _snapshot
 
 T = TypeVar("T")
@@ -85,7 +87,7 @@ def codec_for(reference: Decision[T] | DecisionRef[T], codec: ValueCodec[T]) -> 
 
 @dataclass(frozen=True, slots=True)
 class _SchemaEntry:
-    info: DecisionInfo[object]
+    node: int
     codec: ValueCodec[object]
 
 
@@ -98,7 +100,7 @@ class SelectionSchema:
     owned_keys: frozenset[str]
     _model: SpaceModel[Space] = field(repr=False)
     _entries: Mapping[str, _SchemaEntry] = field(repr=False)
-    _decisions: Mapping[str, DecisionInfo[object]] = field(repr=False)
+    _known_keys: frozenset[str] = field(repr=False)
 
     def __init__(
         self,
@@ -112,7 +114,7 @@ class SelectionSchema:
         _identity(family, version, label="selection schema")
         if not isinstance(model, SpaceModel):
             raise DefinitionError("a selection schema requires a compiled model")
-        declared = {info.key: info for info in decisions(model)}
+        declared = frozenset(decision_key(model.linked, index) for index in model.linked.decisions)
         entries: dict[str, _SchemaEntry] = {}
         for binding in bindings:
             if not isinstance(binding, CodecBinding) or not isinstance(binding.codec, ValueCodec):
@@ -120,16 +122,24 @@ class SelectionSchema:
             info = decision_info(model, binding.reference)
             if info.key in entries:
                 raise DefinitionError(f"duplicate codec binding for {info.key!r}")
-            entries[info.key] = _SchemaEntry(info, binding.codec)
+            entries[info.key] = _SchemaEntry(model.resolve(0, info.reference), binding.codec)
         owned = frozenset(owned_keys)
         if any(type(key) is not str or not key for key in owned):
             raise DefinitionError("historical owned keys must be nonempty strings")
         object.__setattr__(self, "family", family)
         object.__setattr__(self, "version", version)
-        object.__setattr__(self, "owned_keys", owned | declared.keys())
+        object.__setattr__(self, "owned_keys", owned | declared)
         object.__setattr__(self, "_model", cast(SpaceModel[Space], model))
         object.__setattr__(self, "_entries", MappingProxyType(entries))
-        object.__setattr__(self, "_decisions", MappingProxyType(declared))
+        object.__setattr__(self, "_known_keys", declared)
+
+
+def _check_case(schema: SelectionSchema, index: int, value: object) -> None:
+    choice_index = schema._model.linked.selector_choices.get(index)
+    if choice_index is not None:
+        choice = schema._model.linked.choices[choice_index]
+        if type(value) is not str or not any(value == name for name, _ in choice.cases):
+            raise RequestError(f"{choice.key}: unknown structural case {value!r}")
 
 
 def encode(selection: Selection, schema: SelectionSchema) -> dict[str, JSONValue]:
@@ -141,27 +151,29 @@ def encode(selection: Selection, schema: SelectionSchema) -> dict[str, JSONValue
     for key in selection.keys:
         if key not in schema._entries:
             raise RequestError(f"{key}: encoding a committed choice requires an explicit codec")
-    selected_entries = tuple((entry.info.key, entry.value) for entry in selection._entries)
+    selected_entries = tuple(
+        (decision_key(selection._model.linked, entry.node), entry.value)
+        for entry in selection._entries
+    )
     for key, value in selected_entries:
-        info = schema._entries[key].info
-        if info.selector and (type(value) is not str or value not in info.cases):
-            raise RequestError(f"{key}: unknown structural case {value!r}")
+        _check_case(schema, schema._entries[key].node, value)
     entries: list[JSONValue] = []
     for key, value in selected_entries:
         bound = schema._entries[key]
         codec = bound.codec
         try:
-            expected = _snapshot(bound.info, value)
-            encoded = codec.encode(_snapshot(bound.info, value))
+            expected = _snapshot(schema._model, bound.node, value)
+            encoded = codec.encode(_snapshot(schema._model, bound.node, value))
         except Exception as cause:
             raise RequestError(f"{key}: codec {codec.id!r} encoding failed: {cause}") from cause
         payload = _json_copy(encoded, label=f"{key} codec {codec.id!r} encoded value")
         try:
             decoded = codec.decode(_json_copy(payload, label=f"{key} round-trip value"))
-            _recognize(bound.info, decoded)
-            restored = _snapshot(bound.info, decoded)
-            equal = _semantics(bound.info).values_equal(
-                _snapshot(bound.info, expected), _snapshot(bound.info, restored)
+            _recognize(schema._model, bound.node, decoded)
+            restored = _snapshot(schema._model, bound.node, decoded)
+            equal = _semantics(schema._model, bound.node).values_equal(
+                _snapshot(schema._model, bound.node, expected),
+                _snapshot(schema._model, bound.node, restored),
             )
         except Exception as cause:
             raise RequestError(
@@ -207,7 +219,7 @@ def decode(document: object, schema: SelectionSchema) -> Selection:
         }:
             raise RequestError("each selection entry requires key, codec, codec_version, and value")
         key = entry["key"]
-        if type(key) is not str or key not in schema._decisions:
+        if type(key) is not str or key not in schema._known_keys:
             raise RequestError(f"unknown selection key {key!r}")
         if key in seen:
             raise RequestError(f"duplicate selection key {key!r}")
@@ -220,17 +232,17 @@ def decode(document: object, schema: SelectionSchema) -> Selection:
         if entry["codec_version"] != bound.codec.version or type(entry["codec_version"]) is not int:
             raise RequestError(f"{key}: incompatible codec version")
         pending.append((bound, entry["value"]))
-    values: list[tuple[DecisionInfo[object], object]] = []
+    values: list[tuple[int, object]] = []
     for bound, encoded in pending:
         try:
             value = bound.codec.decode(encoded)
         except Exception as cause:
             raise RequestError(
-                f"{bound.info.key}: codec {bound.codec.id!r} decoding failed: {cause}"
+                f"{decision_key(schema._model.linked, bound.node)}: "
+                f"codec {bound.codec.id!r} decoding failed: {cause}"
             ) from cause
-        if bound.info.selector and (type(value) is not str or value not in bound.info.cases):
-            raise RequestError(f"{bound.info.key}: unknown structural case {value!r}")
-        values.append((bound.info, value))
+        _check_case(schema, bound.node, value)
+        values.append((bound.node, value))
     return Selection._from_values(schema._model, values)
 
 

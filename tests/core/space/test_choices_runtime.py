@@ -11,8 +11,8 @@ from typing import cast
 import pytest
 
 from finn.core.space import (
-    Const,
     Available,
+    Const,
     Decision,
     Inapplicable,
     Param,
@@ -27,11 +27,10 @@ from finn.core.space import (
     constraint,
     derived,
     divisors_of,
-    refinement,
+    inspection,
     view,
 )
-from finn.core.space.errors import EvaluationError, ConfigurationError, RequestError
-from finn.core.space import inspection
+from finn.core.space.errors import ConfigurationError, EvaluationError, RequestError
 
 PHYSICAL = ViewKey("physical", int)
 
@@ -242,7 +241,7 @@ def test_exposed_inputs_local_decisions_and_supplier_aliases_keep_distinct_right
     chosen = base.with_choices(supplier=4)
     assert chosen.aliased.width == 4
     with pytest.raises(RequestError):
-        refinement.change(chosen.aliased, cast(Decision[int], Child.width), 2)
+        inspection.decision_handle(chosen.aliased, cast(Decision[int], Child.width))
     local = chosen.with_choices(chosen.field(Root.local.decision_ref(Child.width)).change(6))
     assert local.local.width == 6
     assert local.aliased.width == 4

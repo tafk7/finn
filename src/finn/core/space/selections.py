@@ -1,6 +1,6 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
-"""Detached sparse commitments and checked replay through atomic refinement."""
+"""Detached sparse choices, captured and replayed through ordinary configuration updates."""
 
 from __future__ import annotations
 
@@ -8,47 +8,67 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import TypeVar, cast
 
+from . import _execution
+from ._changes import try_with_choices
+from ._configuration import Space
 from .compiler import SpaceModel
-from .declarations import Decision, DecisionRef, Space
-from .edits import CommitmentReport
+from .declarations import Decision, DecisionRef
+from .edits import Change, ConfigurationResult
 from .errors import EvaluationError, RequestError
-from .inspection import DecisionInfo, decision_info, decisions
 from .occurrence import state
-from .references import DecisionHandle
+from .references import DecisionHandle, decision_key
 from .semantics import ValueSemantics
-from . import _execution, refinement
 
 T = TypeVar("T")
 S = TypeVar("S", bound=Space)
 
 
-def _semantics(info: DecisionInfo[object]) -> ValueSemantics[object]:
-    semantics = info.reference.semantics
-    if semantics is None:
-        raise RequestError(f"{info.key}: decision has no value semantics")
+def _check_nodes(model: SpaceModel[Space], indices: Iterable[int]) -> None:
+    seen: set[int] = set()
+    for index in indices:
+        if (
+            type(index) is not int
+            or not 0 <= index < len(model.linked.nodes)
+            or model.linked.nodes[index].kind != "decision"
+        ):
+            raise RequestError("selection entry must identify an owning decision")
+        if index in seen:
+            raise RequestError(f"duplicate selection key {decision_key(model.linked, index)!r}")
+        seen.add(index)
+
+
+def _semantics(model: SpaceModel[Space], index: int) -> ValueSemantics[object]:
+    semantics = model.linked.nodes[index].semantics
+    assert semantics is not None
     return semantics
 
 
-def _recognize(info: DecisionInfo[object], value: object) -> None:
-    semantics = _semantics(info)
+def _recognize(model: SpaceModel[Space], index: int, value: object) -> None:
+    semantics = _semantics(model, index)
+    node = model.linked.nodes[index]
     try:
         accepted = semantics.accepts(value)
     except Exception as cause:
-        raise EvaluationError(info.owner, "selection recognition", str(cause)) from cause
+        raise EvaluationError(node.owner, "selection recognition", str(cause)) from cause
     if not accepted:
-        raise RequestError(f"{info.key}: expected selection value of type {semantics.name}")
+        raise RequestError(
+            f"{decision_key(model.linked, index)}: "
+            f"expected selection value of type {semantics.name}"
+        )
 
 
-def _snapshot(info: DecisionInfo[object], value: object) -> object:
+def _snapshot(model: SpaceModel[Space], index: int, value: object) -> object:
     try:
-        return _semantics(info).freeze(value)
+        return _semantics(model, index).freeze(value)
     except Exception as cause:
-        raise EvaluationError(info.owner, "selection snapshot", str(cause)) from cause
+        raise EvaluationError(
+            model.linked.nodes[index].owner, "selection snapshot", str(cause)
+        ) from cause
 
 
 @dataclass(frozen=True, slots=True)
 class SelectionEntry:
-    """A detached public copy of one committed owning decision."""
+    """A detached public copy of one owning decision's value."""
 
     key: str
     reference: DecisionHandle[object]
@@ -57,28 +77,16 @@ class SelectionEntry:
 
 @dataclass(frozen=True, slots=True)
 class _StoredEntry:
-    info: DecisionInfo[object]
+    node: int
     value: object = field(repr=False)
-
-
-@dataclass(frozen=True, slots=True)
-class SelectionChange:
-    """A detached typed request, created by Selection.edit or Selection.remove."""
-
-    _model: SpaceModel[Space] = field(repr=False)
-    _info: DecisionInfo[object] = field(repr=False)
-    _remove: bool
-    _value: object = field(default=None, repr=False)
 
 
 @dataclass(frozen=True, slots=True, eq=False)
 class Selection:
-    """Immutable sparse choices for exactly one compiled model.
+    """Read-only sparse choices for one model; edit a configuration, then capture it.
 
-    Private payloads belong to this value. Every public value read takes a new
-    declared snapshot, including entry iteration and replay requests.
-    Declaration references are relative to the model root; children use scoped
-    references or model-bound handles, never a guessed placement.
+    Internal entries contain owning node indices and detached values. Public
+    entries, equality operands, and replay values receive defensive snapshots.
     """
 
     _model: SpaceModel[Space] = field(repr=False)
@@ -87,125 +95,101 @@ class Selection:
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, Selection) or self._model.linked is not other._model.linked:
             return False
-        if self.keys != other.keys:
+        if tuple(entry.node for entry in self._entries) != tuple(
+            entry.node for entry in other._entries
+        ):
             return False
         for left, right in zip(self._entries, other._entries):
             try:
-                equal = _semantics(left.info).values_equal(
-                    _snapshot(left.info, left.value), _snapshot(right.info, right.value)
+                equal = _semantics(self._model, left.node).values_equal(
+                    _snapshot(self._model, left.node, left.value),
+                    _snapshot(self._model, right.node, right.value),
                 )
             except EvaluationError:
                 raise
             except Exception as cause:
-                raise EvaluationError(left.info.owner, "selection equality", str(cause)) from cause
+                raise EvaluationError(
+                    self._model.linked.nodes[left.node].owner, "selection equality", str(cause)
+                ) from cause
             if not equal:
                 return False
         return True
 
     @classmethod
     def _from_values(
-        cls, model: SpaceModel[Space], values: Iterable[tuple[DecisionInfo[object], object]]
+        cls, model: SpaceModel[Space], values: Iterable[tuple[int, object]]
     ) -> Selection:
         pending = tuple(values)
-        seen: set[str] = set()
-        for info, _ in pending:
-            actual = decision_info(model, info.reference)
-            if actual.key != info.key or info.key in seen:
-                raise RequestError(f"duplicate or incompatible selection key {info.key!r}")
-            seen.add(info.key)
-        for info, value in pending:
-            _recognize(info, value)
+        _check_nodes(model, (index for index, _ in pending))
+        for index, value in pending:
+            _recognize(model, index, value)
         return cls(
             model,
             tuple(
-                _StoredEntry(info, _snapshot(info, value))
-                for info, value in sorted(pending, key=lambda entry: entry[0].key)
+                _StoredEntry(index, _snapshot(model, index, value))
+                for index, value in sorted(
+                    pending, key=lambda entry: decision_key(model.linked, entry[0])
+                )
             ),
         )
 
     @property
     def entries(self) -> tuple[SelectionEntry, ...]:
         return tuple(
-            SelectionEntry(entry.info.key, entry.info.reference, _snapshot(entry.info, entry.value))
+            SelectionEntry(
+                decision_key(self._model.linked, entry.node),
+                DecisionHandle(self._model.linked, entry.node),
+                _snapshot(self._model, entry.node, entry.value),
+            )
             for entry in self._entries
         )
 
     @property
     def keys(self) -> tuple[str, ...]:
-        return tuple(entry.info.key for entry in self._entries)
+        return tuple(decision_key(self._model.linked, entry.node) for entry in self._entries)
 
     def value(self, reference: Decision[T] | DecisionRef[T]) -> T:
-        info = decision_info(self._model, reference)
+        if not isinstance(reference, (Decision, DecisionRef)):
+            raise RequestError("selection lookup requires an owning Decision")
+        index = self._model.resolve(0, reference)
+        _check_nodes(self._model, (index,))
         for entry in self._entries:
-            if entry.info.reference == info.reference:
-                return cast(T, _snapshot(entry.info, entry.value))
-        raise KeyError(info.key)
-
-    def edit(self, reference: Decision[T] | DecisionRef[T], value: T) -> SelectionChange:
-        info = cast(DecisionInfo[object], decision_info(self._model, reference))
-        _recognize(info, value)
-        return SelectionChange(self._model, info, False, _snapshot(info, value))
-
-    def remove(self, reference: Decision[T] | DecisionRef[T]) -> SelectionChange:
-        info = cast(DecisionInfo[object], decision_info(self._model, reference))
-        return SelectionChange(self._model, info, True)
-
-    def with_changes(self, changes: Iterable[SelectionChange]) -> Selection:
-        pending = tuple(changes)
-        seen: set[str] = set()
-        # Validate the complete change list before copying values or running adapters.
-        for change in pending:
-            if not isinstance(change, SelectionChange):
-                raise RequestError("selection changes must come from edit() or remove()")
-            if change._model.linked is not self._model.linked:
-                raise RequestError("selection change belongs to a different compiled model")
-            info = decision_info(self._model, change._info.reference)
-            if info.key != change._info.key or info.key in seen:
-                raise RequestError(f"duplicate or incompatible selection change {info.key!r}")
-            seen.add(info.key)
-        values = {entry.info.key: (entry.info, entry.value) for entry in self._entries}
-        for change in pending:
-            if change._remove:
-                values.pop(change._info.key, None)
-            else:
-                values[change._info.key] = (change._info, change._value)
-        # A changed selector deliberately retains old case commitments until removed.
-        return Selection._from_values(self._model, values.values())
+            if entry.node == index:
+                return cast(T, _snapshot(self._model, index, entry.value))
+        raise KeyError(decision_key(self._model.linked, index))
 
 
 def capture(point: Space) -> Selection:
-    """Capture the shared root's committed owners, without querying unrelated work."""
+    """Capture every committed owner in the root, without evaluating other work."""
     _execution.driver_only("selection capture")
     current = state(point)
-    values: list[tuple[DecisionInfo[object], object]] = []
-    with current.snapshot.lock:
-        for info in decisions(current.model):
-            index = current.model.resolve(0, info.reference)
-            if index not in current.snapshot.assignments:
-                continue
-            values.append((info, current.snapshot.assignments[index]))
-    return Selection._from_values(current.model, values)
+    with current.lock:
+        return Selection._from_values(current.model, current.assignments.items())
 
 
-def restore(base: S, selection: Selection) -> CommitmentReport[S]:
-    """Validate a detached request and atomically replay it on a root checkpoint."""
+def restore(base: S, selection: Selection) -> ConfigurationResult[S]:
+    """Atomically replay choices on a root with no existing assignments.
+
+    Bind a new root to restore different facts. Edit configured points with
+    with_choices; restore never implicitly merges or overwrites their choices.
+    """
     _execution.driver_only("selection restore")
     current = state(base)
     if base._scope != 0:
         raise RequestError("selection restore requires a root configuration")
+    if current.assignments:
+        raise RequestError("selection restore requires a root with no committed choices")
     if not isinstance(selection, Selection):
         raise RequestError("restore requires a Selection")
-    if selection._model.linked is not current.model.linked:
+    if selection._model.linked is not current.linked:
         raise RequestError("selection belongs to a different compiled model")
-    seen: set[str] = set()
-    for entry in selection._entries:
-        info = decision_info(current.model, entry.info.reference)
-        if info.key != entry.info.key or info.key in seen:
-            raise RequestError(f"duplicate or incompatible selection key {info.key!r}")
-        seen.add(info.key)
-    entries = selection.entries
-    return refinement.commit(
-        base, *(refinement.change(base, entry.reference, entry.value) for entry in entries)
+    _check_nodes(current.model, (entry.node for entry in selection._entries))
+    return try_with_choices(
+        base,
+        *(
+            Change(current, current.linked.nodes[entry.node].scope, entry.node, entry.value)
+            for entry in selection._entries
+        ),
     )
 
 
@@ -230,11 +214,4 @@ def replace_owned(
     return result
 
 
-__all__ = [
-    "Selection",
-    "SelectionChange",
-    "SelectionEntry",
-    "capture",
-    "replace_owned",
-    "restore",
-]
+__all__ = ["Selection", "SelectionEntry", "capture", "replace_owned", "restore"]

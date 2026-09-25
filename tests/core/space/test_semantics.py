@@ -8,24 +8,20 @@ from typing import cast
 
 import pytest
 
+from finn.core.space import Space, SpaceModel
 from finn.core.space._runtime import Snapshot, decision_state, evaluate
-from finn.core.space.errors import EvaluationError, ConfigurationError, RequestError
+from finn.core.space.errors import ConfigurationError, EvaluationError, RequestError
 from finn.core.space.ir import Argument, LinkedModel, Node
 from finn.core.space.results import (
-    MISSING,
-    NOT_APPLICABLE,
-    QueryResult,
     Available,
-    DecisionState,
     Finding,
     FindingKind,
     Inapplicable,
-    MissingInput,
+    QueryResult,
     Rejected,
     Unresolved,
     ViewAssessment,
     assess_constraints,
-    assess_readiness,
     assess_view,
     constraint_result,
     ordered_findings,
@@ -41,7 +37,7 @@ def blocker(owner: str = "lanes") -> Unresolved:
 
 def test_answers_and_optional_markers_have_no_truth_value() -> None:
     values: tuple[object, ...] = (Available(False), Inapplicable(), reject("no", "no"), blocker())
-    for value in (*values, MISSING, NOT_APPLICABLE):
+    for value in values:
         with pytest.raises(TypeError, match="no truth value"):
             bool(value)
 
@@ -134,22 +130,22 @@ def test_unresolved_constraints_keep_individual_refusal_inspectable() -> None:
     assert assessment.results["width"] == refused
 
 
-def test_readiness_requires_assignment_but_does_not_erase_refusal() -> None:
-    unassigned: DecisionState[int] = DecisionState("lanes")
-    waiting = assess_readiness({"lanes": Available(unassigned)})
-    assert waiting.ready is None
-    assert isinstance(waiting.result, Unresolved)
-    assert waiting.result.findings[0].owner == "lanes"
-    final = assess_readiness({"supported": reject("no", "unsupported"), "off": Inapplicable()})
-    assert final.ready is True
+def test_readiness_tracks_unresolved_results_without_erasing_refusal() -> None:
+    refused = reject("no", "unsupported", owner="support")
+    waiting: ViewAssessment[int] = assess_view(
+        blocker(), owner="physical", constraints={"support": refused}
+    )
+    assert waiting.readiness.ready is None
+    assert waiting.constraints.result == refused
+    final = assess_view(Available(1), owner="physical", constraints={"support": refused})
+    assert final.readiness.ready is True
+    assert final.accepted_result == refused
 
 
 def test_view_reducer_obeys_readiness_output_and_refusal_precedence() -> None:
     raw: QueryResult[int] = Available(4)
     refused = reject("geometry", "too wide", owner="width")
-    waiting = assess_view(
-        raw, owner="physical", requires={"lanes": blocker()}, constraints={"width": refused}
-    )
+    waiting = assess_view(raw, owner="physical", constraints={"lanes": blocker(), "width": refused})
     assert waiting.output_result == raw
     assert isinstance(waiting.accepted_result, Unresolved)
     assert waiting.constraints.refused == ("width",)
@@ -166,7 +162,7 @@ def test_view_reducer_obeys_readiness_output_and_refusal_precedence() -> None:
 
 def test_view_applicability_precedes_unresolved_requirements() -> None:
     result: ViewAssessment[int] = assess_view(
-        blocker(), owner="physical", applicability=Available(False), requires={"lanes": blocker()}
+        blocker(), owner="physical", applicability=Available(False)
     )
     assert isinstance(result.accepted_result, Inapplicable)
 
@@ -184,8 +180,9 @@ def test_errors_keep_boundary_and_programming_failures_distinct() -> None:
         assert error.__cause__ is cause
 
 
-def linked(*nodes: Node) -> LinkedModel:
-    return LinkedModel(
+def prepared(*nodes: Node) -> SpaceModel[Space]:
+    """Minimal prepared model for evaluator tests using hand-built explicit IR."""
+    linked = LinkedModel(
         nodes,
         (),
         tuple(node.index for node in nodes),
@@ -193,6 +190,8 @@ def linked(*nodes: Node) -> LinkedModel:
         tuple(node.index for node in nodes if node.kind == "decision"),
         {node.key: node.index for node in nodes},
     )
+
+    return SpaceModel(Space, linked)
 
 
 INT = cast(ValueSemantics[object], default_semantics(int))
@@ -223,7 +222,7 @@ def test_iterative_evaluation_demands_only_a_deep_query_closure() -> None:
             )
         )
     nodes.append(Node(6001, 0, "unrelated", "derived", semantics=INT, function=unrelated))
-    snapshot = Snapshot(linked(*nodes), {})
+    snapshot = Snapshot(prepared(*nodes), {})
     result = evaluate(snapshot, 6000)
     assert result.result == Available(6000)
     assert result.dependencies == (5999,)
@@ -237,7 +236,7 @@ def test_guard_suppresses_callbacks_and_both_decision_queries_agree() -> None:
     def inactive() -> int:
         raise AssertionError("inactive callback ran")
 
-    model = linked(
+    model = prepared(
         Node(0, 0, "enabled", "const", semantics=BOOL, value=False),
         Node(1, 0, "lanes", "decision", semantics=INT, guard=0),
         Node(2, 0, "body", "derived", semantics=INT, guard=0, function=inactive),
@@ -254,25 +253,27 @@ def test_guard_suppresses_callbacks_and_both_decision_queries_agree() -> None:
     assert isinstance(evaluate(snapshot, 3).result, Unresolved)
 
 
-def test_optional_missing_input_differs_from_supplied_none_and_preserves_refusal() -> None:
+def test_missing_optional_input_blocks_callbacks_and_differs_from_supplied_none() -> None:
     none_semantics = cast(ValueSemantics[object], default_semantics(type(None)))
+    calls: list[object] = []
 
-    def is_missing(*, source: object) -> bool:
-        return isinstance(source, MissingInput)
+    def consume(*, source: object) -> bool:
+        calls.append(source)
+        return source is None
 
     def refused() -> QueryResult[object]:
         return reject("unsupported", "unsupported value")
 
-    model = linked(
+    model = prepared(
         Node(0, 0, "source", "param", semantics=none_semantics, required=False),
         Node(
             1,
             0,
-            "missing",
+            "consumer",
             "derived",
             semantics=BOOL,
-            arguments=(Argument("source", 0, "optional"),),
-            function=is_missing,
+            arguments=(Argument("source", 0),),
+            function=consume,
         ),
         Node(2, 0, "refused", "derived", semantics=INT, function=refused),
         Node(
@@ -281,18 +282,20 @@ def test_optional_missing_input_differs_from_supplied_none_and_preserves_refusal
             "still_refused",
             "derived",
             semantics=BOOL,
-            arguments=(Argument("source", 2, "optional"),),
-            function=is_missing,
+            arguments=(Argument("source", 2),),
+            function=consume,
         ),
     )
     absent = Snapshot(model, {})
     supplied = Snapshot(model, {0: None})
-    assert evaluate(absent, 1).result == Available(True)
-    assert evaluate(supplied, 1).result == Available(False)
-    assert isinstance(evaluate(absent, 0).result, Unresolved)
+    assert isinstance(evaluate(absent, 1).result, Unresolved)
+    assert calls == []
+    assert evaluate(supplied, 1).result == Available(True)
+    assert calls == [None]
     propagated = evaluate(absent, 3).result
     assert isinstance(propagated, Rejected)
     assert propagated.findings[0].owner == "refused"
+    assert calls == [None]
 
 
 def test_callback_arguments_are_detached_from_snapshot_values() -> None:
@@ -302,7 +305,7 @@ def test_callback_arguments_are_detached_from_snapshot_values() -> None:
         source.append(99)
         return len(source)
 
-    model = linked(
+    model = prepared(
         Node(0, 0, "source", "param", semantics=lists),
         Node(
             1,
@@ -319,7 +322,7 @@ def test_callback_arguments_are_detached_from_snapshot_values() -> None:
     assert evaluate(first, 1).result == Available(2)
     assert evaluate(first, 0).result == Available([1])
     assert evaluate(second, 1).result == Available(3)
-    successor = first.successor({})
+    successor = Snapshot(first.model, first.parameters)
     assert successor.parameters is first.parameters
     assert successor.cache == {}
     assert first.cache
@@ -337,7 +340,7 @@ def test_selection_preserves_selected_refusal_and_skips_other_callback() -> None
     def inactive() -> int:
         raise AssertionError("nonselected callback ran")
 
-    model = linked(
+    model = prepared(
         Node(0, 0, "case", "const", semantics=string, value="chosen"),
         Node(1, 0, "chosen", "derived", semantics=INT, function=refused),
         Node(2, 0, "other", "derived", semantics=INT, function=inactive),
@@ -360,7 +363,7 @@ def test_selection_preserves_selected_refusal_and_skips_other_callback() -> None
 
 
 def test_view_callback_and_accepted_dependency_share_the_cached_assessment() -> None:
-    model = linked(
+    model = prepared(
         Node(0, 0, "raw", "const", semantics=INT, value=4),
         Node(1, 0, "support", "constraint", semantics=BOOL, function=lambda: False),
         Node(2, 0, "physical", "view", semantics=INT, output=0, constraints=(1,)),
@@ -377,7 +380,7 @@ def test_view_callback_and_accepted_dependency_share_the_cached_assessment() -> 
 
 
 def test_bad_callback_output_raises_contextual_programming_error() -> None:
-    model = linked(Node(0, 0, "broken", "derived", semantics=INT, function=lambda: "wrong"))
+    model = prepared(Node(0, 0, "broken", "derived", semantics=INT, function=lambda: "wrong"))
     with pytest.raises(EvaluationError) as raised:
         evaluate(Snapshot(model, {}), 0)
     assert raised.value.owner == "broken"
@@ -385,13 +388,11 @@ def test_bad_callback_output_raises_contextual_programming_error() -> None:
     assert isinstance(raised.value.__cause__, TypeError)
 
 
-def test_optional_alias_uses_canonical_missing_parameter_owner() -> None:
-    def owner(*, value: object) -> int:
-        assert isinstance(value, MissingInput)
-        assert value.owner == "source"
-        return 1
+def test_required_alias_preserves_canonical_missing_parameter_owner() -> None:
+    def consume(*, value: object) -> int:
+        raise AssertionError("missing input must prevent invocation")
 
-    model = linked(
+    model = prepared(
         Node(0, 0, "source", "param", semantics=INT, required=False),
         Node(1, 0, "child.alias", "alias", semantics=INT, output=0),
         Node(
@@ -400,11 +401,13 @@ def test_optional_alias_uses_canonical_missing_parameter_owner() -> None:
             "consumer",
             "derived",
             semantics=INT,
-            arguments=(Argument("value", 1, "optional"),),
-            function=owner,
+            arguments=(Argument("value", 1),),
+            function=consume,
         ),
     )
     snapshot = Snapshot(model, {})
-    assert evaluate(snapshot, 2).result == Available(1)
+    answer = evaluate(snapshot, 2).result
+    assert isinstance(answer, Unresolved)
+    assert all(finding.owner == "source" for finding in answer.findings)
     assert evaluate(snapshot, 2).dependencies == (1,)
     assert evaluate(snapshot, 1).dependencies == (0,)

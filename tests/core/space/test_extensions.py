@@ -4,19 +4,19 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import os
-from pathlib import Path
 import re
 import shutil
 import subprocess
+from dataclasses import dataclass
+from pathlib import Path
 from typing import cast
 
 import pytest
 
 from finn.core.space import (
-    Const,
     Available,
+    Const,
     Decision,
     DecisionRef,
     DefinitionError,
@@ -29,6 +29,7 @@ from finn.core.space import (
     ValueKey,
     ValueRef,
     ValueSemantics,
+    View,
     ViewKey,
     compile_space,
     constraint,
@@ -108,28 +109,19 @@ def stream_shape(
     maximum_bits: int | ValueRef[int],
 ) -> StreamPlacement:
     builder = ScopeBuilder(StreamShape, name="AdmittedStream")
-    limit = builder.param("maximum_bits", int)
-    minimum = builder.const("minimum_lanes", 1)
-    admission = builder.constraint(
-        "admitted",
-        _admitted,
-        dtype=StreamShape.dtype,
-        maximum_bits=limit,
+    limit = builder.add("maximum_bits", Param(int))
+    minimum = builder.add("minimum_lanes", Const(1))
+    admission = builder.add(
+        "admitted", constraint(dtype=StreamShape.dtype, maximum_bits=limit)(_admitted)
     )
-    geometry = builder.constraint(
-        "positive_lanes",
-        _positive_lanes,
-        lanes=StreamShape.lanes,
-        minimum=minimum,
+    geometry = builder.add(
+        "positive_lanes", constraint(lanes=StreamShape.lanes, minimum=minimum)(_positive_lanes)
     )
-    value = builder.derived(
+    value = builder.add(
         "stream_value",
-        _stream,
-        dtype=StreamShape.dtype,
-        lanes=StreamShape.lanes,
-        bits=StreamShape.bits,
+        derived(dtype=StreamShape.dtype, lanes=StreamShape.lanes, bits=StreamShape.bits)(_stream),
     )
-    complete = builder.view("complete", value, constraints=(admission, geometry))
+    complete = builder.add("complete", View(value, constraints=(admission, geometry)))
     builder.export(STREAM).view(complete)
     builder.export(BITS).value(StreamShape.bits)
     builder.bind(StreamShape.dtype, dtype)
@@ -194,14 +186,14 @@ def test_stream_shape_places_independent_choices_and_keeps_narrow_fields_availab
 def test_builder_finish_is_pure_repeatable_and_placements_share_only_the_template() -> None:
     calls: list[int] = []
     builder = ScopeBuilder(Space)
-    value = builder.param("value", int)
-    choice = builder.decision("choice", int, values=(1, 2))
+    value = builder.add("value", Param(int))
+    choice = builder.add("choice", Decision(int, values=(1, 2)))
 
     def compute(*, value: int, choice: int) -> int:
         calls.append(value)
         return value * choice
 
-    output = builder.derived("output", compute)
+    output = builder.add("output", derived(compute))
     key = ValueKey("output", int)
     builder.export(key).value(output)
     builder.bind(value, 3)
@@ -222,7 +214,7 @@ def test_builder_finish_is_pure_repeatable_and_placements_share_only_the_templat
     assert calls == [3]
 
 
-def test_builder_seals_every_mutation_before_snapshot_adapters_run() -> None:
+def test_closed_builder_rejects_add_after_declaration_construction() -> None:
     calls: list[int] = []
 
     def snapshot(value: int) -> int:
@@ -233,31 +225,32 @@ def test_builder_seals_every_mutation_before_snapshot_adapters_run() -> None:
         int, "integer", lambda value: type(value) is int, int.__eq__, snapshot
     )
     builder = ScopeBuilder(Space)
-    value = builder.param("value", int)
+    value = builder.add("value", Param(int))
     deferred_export = builder.export(ValueKey("value", int))
     builder.finish()
     with pytest.raises(DefinitionError, match="sealed"):
-        builder.const("too_late", 1, semantics=semantics)
+        builder.add("too_late", Const(1, semantics=semantics))
     with pytest.raises(DefinitionError, match="sealed"):
-        builder.decision("too_late", semantics, values=(1,))
+        builder.add("too_late", Decision(semantics, values=(1,)))
     with pytest.raises(DefinitionError, match="sealed"):
         builder.bind(value, 1)
     with pytest.raises(DefinitionError, match="sealed"):
         deferred_export.value(value)
     with pytest.raises(DefinitionError, match="sealed"):
         builder.add("too_late", Const(1))
-    assert calls == []
+    assert calls == [1, 1]
+    assert builder.sealed
 
 
 def test_duplicate_names_owned_declarations_and_foreign_exports_are_definition_errors() -> None:
     builder = ScopeBuilder(StreamShape)
     with pytest.raises(DefinitionError, match="inherited member"):
-        builder.param("dtype", int)
+        builder.add("dtype", Param(int))
     with pytest.raises(DefinitionError, match="already belongs"):
         builder.add("renamed", StreamShape.dtype)
-    local = builder.const("constant", 3)
+    local = builder.add("constant", Const(3))
     with pytest.raises(DefinitionError, match="duplicate"):
-        builder.const("constant", 4)
+        builder.add("constant", Const(4))
     with pytest.raises(DefinitionError, match="already has a member name"):
         builder.add("other_name", local)
     with pytest.raises(DefinitionError, match="not a local or inherited member"):
@@ -266,7 +259,7 @@ def test_duplicate_names_owned_declarations_and_foreign_exports_are_definition_e
     with pytest.raises(DefinitionError, match="duplicate export"):
         builder.export(ValueKey("local", int)).value(local)
     with pytest.raises(DefinitionError, match="name segment"):
-        builder.const("invalid.name", 1)
+        builder.add("invalid.name", Const(1))
 
 
 def test_missing_bindings_and_incompatible_exports_fail_without_descriptor_runtime_errors() -> None:
@@ -276,7 +269,7 @@ def test_missing_bindings_and_incompatible_exports_fail_without_descriptor_runti
         builder.place()
     assert builder.finish() is builder.finish()
     wrong = ScopeBuilder(Space)
-    integer = wrong.const("value", 3)
+    integer = wrong.add("value", Const(3))
     wrong.export(ValueKey("value", str)).value(cast(ValueRef[str], integer))
     with pytest.raises(DefinitionError, match="incompatible semantics"):
         wrong.finish()
@@ -289,8 +282,8 @@ def test_external_bound_references_must_be_explicit_child_bindings() -> None:
         limit = Param(int)
 
     builder = ScopeBuilder(StreamShape)
-    builder.constraint(
-        "hidden_parent", _admitted, dtype=StreamShape.dtype, maximum_bits=Parent.limit
+    builder.add(
+        "hidden_parent", constraint(dtype=StreamShape.dtype, maximum_bits=Parent.limit)(_admitted)
     )
     with pytest.raises(DefinitionError, match="not declared in this effective scope"):
         builder.finish()

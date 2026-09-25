@@ -6,29 +6,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Generic, Literal, Protocol, TypeVar
+from typing import TYPE_CHECKING, Any, Generic, Literal, TypeAlias, TypeVar
 
 from .results import QueryResult
 
 if TYPE_CHECKING:
-    from .declarations import Space
+    from ._configuration import Space
 
 T_co = TypeVar("T_co", covariant=True)
 S = TypeVar("S", bound="Space")
-
-
-class ChangeRequest(Protocol):
-    @property
-    def base(self) -> object: ...
-
-    @property
-    def scope(self) -> int: ...
-
-    @property
-    def node(self) -> int: ...
-
-    @property
-    def remove(self) -> bool: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,19 +28,18 @@ class Change(Generic[T_co]):
     remove: bool = False
 
 
+# A batch accepts only Change objects, with heterogeneous payloads. Any erases
+# the payload here without widening type inference in nested change(...) calls.
+# Factories and individual Change[T] objects retain their precise value type.
+ChangeRequest: TypeAlias = Change[Any]
+
+
 @dataclass(frozen=True, slots=True)
 class ChangeOutcome:
     owner: str
     result: QueryResult[bool]
-    status: Literal["unchanged", "admissible", "refused", "changed", "removed", "committed"]
+    status: Literal["unchanged", "admissible", "refused", "changed", "removed"]
     requested: bool = True
-
-
-@dataclass(frozen=True, slots=True)
-class CommitmentReport(Generic[S]):
-    instance: S
-    accepted: bool
-    outcomes: tuple[ChangeOutcome, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,6 +53,5 @@ __all__ = [
     "Change",
     "ChangeOutcome",
     "ChangeRequest",
-    "CommitmentReport",
     "ConfigurationResult",
 ]

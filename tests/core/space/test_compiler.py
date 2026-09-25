@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Compiler invariants independent of the old flat-spec adaptation machinery."""
+"""Compiler ordering, ownership, and immutable definition invariants."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ from typing import cast
 
 import pytest
 
+from finn.core.space import Space
 from finn.core.space.compiler import compile_space
 from finn.core.space.declarations import (
     Const,
@@ -17,15 +18,13 @@ from finn.core.space.declarations import (
     Decision,
     Derived,
     Param,
-    Readiness,
-    Space,
     Subspace,
     View,
     constraint,
     derived,
     view,
 )
-from finn.core.space.domains import domain, divisors_of
+from finn.core.space.domains import divisors_of, domain
 from finn.core.space.errors import DefinitionError, RequestError
 from finn.core.space.results import Available
 from finn.core.space.semantics import ValueSemantics
@@ -49,9 +48,8 @@ def test_compile_links_forward_dependencies_without_executing_callbacks() -> Non
             calls.append("supported")
             return extent > 0
 
-        ready = Readiness(lanes)
         admitted = ConstraintGroup(supported)
-        result = View(cycles, constraints=(admitted,), requires=(ready,))
+        result = View(cycles, constraints=(admitted,))
 
     model = compile_space(Family)
     assert calls == []
@@ -67,6 +65,49 @@ def test_compile_links_forward_dependencies_without_executing_callbacks() -> Non
     assert model.linked.parameters == (model.resolve(0, Family.extent),)
     assert model.linked.decisions == (model.resolve(0, Family.lanes),)
     assert nodes[model.resolve(0, Family.result)].semantics is not None
+
+
+def test_placement_literals_are_frozen_once_per_preparation_and_reads_stay_detached() -> None:
+    snapshots: list[list[int]] = []
+
+    def snapshot(value: list[int]) -> list[int]:
+        snapshots.append(list(value))
+        return list(value)
+
+    semantics: ValueSemantics[list[int]] = ValueSemantics(
+        list,
+        "integer list",
+        lambda value: type(value) is list,
+        lambda left, right: left == right,
+        snapshot,
+    )
+    literal = [1]
+
+    class Leaf(Space):
+        value = Param(semantics)
+
+    class Branch(Space):
+        leaf = Subspace(Leaf, value=literal)
+
+    class Root(Space):
+        left = Subspace(Branch)
+        right = Subspace(Branch)
+
+    model = compile_space(Root)
+    assert snapshots == [[1]]
+    literal.append(2)
+    point = model.bind()
+    point.left.leaf.value.append(99)
+    assert point.left.leaf.value == point.right.leaf.value == [1]
+    assert compile_space(Root) is model
+
+    # A different root prepares its own definition; no global placement cache
+    # can reuse the earlier root's frozen literals.
+    snapshots.clear()
+    branch = compile_space(Branch)
+    assert snapshots == [[1, 2]]
+    assert branch.bind().leaf.value == [1, 2]
+    assert point.left.leaf.value == [1]
 
 
 def test_self_invocation_is_preserved_for_nested_functions_and_view_outputs() -> None:
@@ -130,7 +171,6 @@ def test_function_and_value_views_have_an_explicit_raw_output() -> None:
         assert node.kind == "view"
         assert node.output is not None
         assert model.linked.nodes[node.output].kind == "derived"
-        assert node.requires == ()
 
 
 def test_a_transitive_triangle_is_acyclic_and_cycles_name_only_their_members() -> None:

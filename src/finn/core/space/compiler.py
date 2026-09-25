@@ -10,12 +10,11 @@ from dataclasses import dataclass
 from threading import RLock
 from typing import Generic, TypeVar
 
-from ._linker import link_space, resolve_reference
-from .declarations import Space
+from ._configuration import Space
+from ._linker import link_space
 from .errors import DefinitionError, RequestError
-from .ir import LinkedModel, Node
-from .results import Finding, FindingKind
-from .references import ValueHandle
+from .ir import LinkedModel
+from .references import ValueHandle, resolve_reference
 
 S = TypeVar("S", bound=Space)
 
@@ -96,70 +95,6 @@ def _definition_families(space_types: tuple[type[Space], ...]) -> tuple[type[Spa
     return tuple(result)
 
 
-def _validated_order(nodes: tuple[Node, ...]) -> tuple[int, ...]:
-    """Validate known structural/explicit edges and order them in O(V + E).
-
-    Arbitrary self-method dependencies are discovered when their reads execute.
-    Their reached cycles belong to evaluation, rather than this static check.
-    """
-
-    dependencies = tuple(node.dependencies for node in nodes)
-    reverse: list[list[int]] = [[] for _ in nodes]
-    for node in nodes:
-        for dependency in dependencies[node.index]:
-            reverse[dependency].append(node.index)
-
-    # Finish dependencies before their users. Iterator frames avoid Python's
-    # recursion limit even when the dependency depth equals the model size.
-    visited: set[int] = set()
-    finished: list[int] = []
-    for root in range(len(nodes)):
-        if root in visited:
-            continue
-        visited.add(root)
-        stack = [(root, iter(dependencies[root]))]
-        while stack:
-            current, adjacent = stack[-1]
-            child = next(adjacent, None)
-            if child is None:
-                finished.append(current)
-                stack.pop()
-            elif child not in visited:
-                visited.add(child)
-                stack.append((child, iter(dependencies[child])))
-
-    assigned: set[int] = set()
-    cycles: list[tuple[str, ...]] = []
-    for root in reversed(finished):
-        if root in assigned:
-            continue
-        component: list[int] = []
-        pending = [root]
-        assigned.add(root)
-        while pending:
-            current = pending.pop()
-            component.append(current)
-            for child in reverse[current]:
-                if child not in assigned:
-                    assigned.add(child)
-                    pending.append(child)
-        if len(component) > 1 or root in dependencies[root]:
-            cycles.append(tuple(sorted(nodes[index].key for index in component)))
-    if cycles:
-        findings = tuple(
-            Finding(
-                FindingKind.AUTHORING,
-                "cyclic-dependency",
-                members[0],
-                "cyclic dependencies: " + ", ".join(members),
-                details=(("members", members),),
-            )
-            for members in sorted(cycles)
-        )
-        raise DefinitionError("model contains cyclic dependencies", findings=findings)
-    return tuple(finished)
-
-
 def compile_space(space_type: type[S]) -> SpaceModel[S]:
     """Return the canonical prepared definition for one root family."""
 
@@ -171,7 +106,7 @@ def compile_space(space_type: type[S]) -> SpaceModel[S]:
             if not isinstance(cached, SpaceModel) or cached.space_type is not space_type:
                 raise DefinitionError("invalid prepared-model cache on Space family")
             return cached
-        linked = link_space(space_type, _validated_order)
+        linked = link_space(space_type)
         scope_types = tuple(dict.fromkeys(scope.space_type for scope in linked.scopes))
         _validate_constructors(scope_types)
         model = SpaceModel(space_type, linked)

@@ -3,8 +3,8 @@
 
 """Behavioral vertical slices for the replacement runtime."""
 
-from dataclasses import dataclass
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 
 import pytest
 
@@ -17,12 +17,11 @@ from finn.core.space import (
     compile_space,
     constraint,
     derived,
-    refinement,
     view,
 )
 from finn.core.space.domains import divisors_of
 from finn.core.space.errors import EvaluationError, RequestError
-from finn.core.space.results import QueryResult, Available, Rejected, Unresolved
+from finn.core.space.results import Available, QueryResult, Rejected, Unresolved
 
 
 @dataclass(frozen=True)
@@ -86,28 +85,22 @@ def test_atomic_refinement_follows_dependencies_and_never_publishes_partial_stat
         lanes = Decision(int, domain=divisors_of(extent))
 
     base = Tiles()
-    report = refinement.commit(
-        base,
-        refinement.change(base, Tiles.lanes, 4),
-        refinement.change(base, Tiles.extent, 12),
+    report = base.try_with_choices(
+        base.field(Tiles.lanes).change(4), base.field(Tiles.extent).change(12)
     )
     assert report.accepted
     assert report.instance.lanes == 4
     assert report.instance.extent == 12
-    failure = refinement.commit(
-        base,
-        refinement.change(base, Tiles.lanes, 5),
-        refinement.change(base, Tiles.extent, 12),
+    failure = base.try_with_choices(
+        base.field(Tiles.lanes).change(5), base.field(Tiles.extent).change(12)
     )
     assert not failure.accepted
     assert failure.instance is base
     assert {x.status for x in failure.outcomes} == {"refused", "admissible"}
     assert isinstance(base.query(Tiles.extent), Unresolved)
     with pytest.raises(RequestError):
-        refinement.commit(
-            base,
-            refinement.change(base, Tiles.extent, 8),
-            refinement.change(report.instance, Tiles.lanes, 4),
+        base.try_with_choices(
+            base.field(Tiles.extent).change(8), report.instance.field(Tiles.lanes).change(4)
         )
 
 

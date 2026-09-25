@@ -5,23 +5,23 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+
 from typing_extensions import assert_type
 
 from finn.core.space import (
-    QueryResult,
+    Available,
     BoundDecision,
     BoundValue,
     BoundView,
-    BoundViewField,
+    Change,
     ChoiceView,
+    ConfigurationResult,
     Const,
-    Available,
     Decision,
     DecisionRef,
     Derived,
-    Change,
-    CommitmentReport,
     Param,
+    QueryResult,
     Space,
     Subspace,
     SubspaceChoice,
@@ -33,7 +33,6 @@ from finn.core.space import (
     ViewKey,
     constraint,
     derived,
-    refinement,
     view,
 )
 
@@ -178,23 +177,21 @@ def check(point: Fifo, assembly: Assembly, eltwise: Eltwise) -> None:
     assert_type(point.with_choices(ram_style="auto"), Fifo)
     assert_type(point.field(Fifo.capacity), BoundValue[int])
     assert_type(point.field(Fifo.ram_style), BoundDecision[str])
-    assert_type(point.field(Fifo.physical), BoundViewField[int])
+    assert_type(point.field(Fifo.physical), BoundView[int])
     assert_type(point.field(Fifo.physical).get(), int)
     assert_type(point.field(Fifo.physical).query(), QueryResult[int])
     assert_type(point.field(Fifo.physical).inspect(), ViewAssessment[int])
     assert_type(point.field(Fifo.ram_style).change("block"), Change[str])
-    assert_type(refinement.change(point, Fifo.ram_style, "block"), Change[str])
+    assert_type(point.field(Fifo.ram_style).change("block"), Change[str])
     assert_type(
-        refinement.commit(point, refinement.change(point, Fifo.ram_style, "block")),
-        CommitmentReport[Fifo],
+        point.try_with_choices(point.field(Fifo.ram_style).change("block")),
+        ConfigurationResult[Fifo],
     )
     assert_type(
-        refinement.commit(
-            point,
-            point.field(Fifo.ram_style).change("block"),
-            point.field(Fifo.banks).change(2),
+        point.try_with_choices(
+            point.field(Fifo.ram_style).change("block"), point.field(Fifo.banks).change(2)
         ),
-        CommitmentReport[Fifo],
+        ConfigurationResult[Fifo],
     )
     assert_type(point.query(Fifo.capacity), QueryResult[int])
     assert_type(Eltwise.result_dtype, Derived[DType])

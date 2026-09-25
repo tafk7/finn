@@ -2,7 +2,7 @@
 
 > Historical baseline: this document records the earlier flat authoring pass.
 > Its Space/Problem syntax and validation results describe that source state.
-> Use the [current Space API](../design-space.md) and
+> Use the [current Space API](../../../scratchpad/space/AUTHORING.md) and
 > [physical-kernel guide](../../src/finn/kernels/README.md) for the delivered
 > runtime. The experimental dataflow port remains deferred.
 

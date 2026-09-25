@@ -10,7 +10,7 @@ from collections.abc import Mapping
 from typing import TypeVar
 
 from finn.core.space import Space, compile_space
-from finn.core.space.declarations import Constraint
+from finn.core.space import Constraint
 from finn.core.space.errors import ConfigurationError, RequestError
 from finn.core.space.inspection import decisions, members
 from finn.core.space.results import QueryResult, Available

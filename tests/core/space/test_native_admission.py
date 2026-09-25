@@ -4,10 +4,10 @@
 
 from __future__ import annotations
 
+import gc
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-import gc
 from itertools import permutations
 from threading import Barrier
 from typing import cast
@@ -25,14 +25,14 @@ from finn.core.space import (
     Subspace,
     ValueRef,
     ValueSemantics,
+    _execution,
+    _runtime,
     compile_space,
     derived,
     divisors_of,
     domain,
     inspection,
-    refinement,
 )
-from finn.core.space import _execution, _runtime
 from finn.core.space.occurrence import state
 
 
@@ -74,7 +74,7 @@ def _chain_family(reverse: bool) -> type[Space]:
 
 
 @pytest.mark.parametrize("reverse", (False, True))
-@pytest.mark.parametrize("operation", ("replacement", "monotone"))
+@pytest.mark.parametrize("operation", ("keywords", "fields"))
 def test_dependent_admission_all_request_and_declaration_orders(
     reverse: bool, operation: str
 ) -> None:
@@ -84,15 +84,15 @@ def test_dependent_admission_all_request_and_declaration_orders(
         values = {"a": 1, "b": 2, "c": 3}
         for valid in (True, False):
             requested = {name: 99 if name == "a" and not valid else values[name] for name in order}
-            if operation == "replacement":
+            if operation == "keywords":
                 report = point.try_with_choices(**requested)
                 accepted, instance, outcomes = report.accepted, report.instance, report.outcomes
             else:
                 edits = [
-                    refinement.change(point, cast(Decision[int], getattr(family, name)), value)
+                    point.field(cast(Decision[int], getattr(family, name))).change(value)
                     for name, value in requested.items()
                 ]
-                committed = refinement.commit(point, *edits)
+                committed = point.try_with_choices(*edits)
                 accepted, instance, outcomes = (
                     committed.accepted,
                     committed.instance,
@@ -158,7 +158,7 @@ def test_published_reads_do_not_repeat_admission_callbacks() -> None:
 
 
 @pytest.mark.parametrize("raises", (False, True))
-@pytest.mark.parametrize("operation", ("replacement", "monotone"))
+@pytest.mark.parametrize("operation", ("keywords", "fields"))
 def test_equality_mutation_cannot_change_cached_or_caller_values(
     raises: bool, operation: str
 ) -> None:
@@ -179,20 +179,20 @@ def test_equality_mutation_cannot_change_cached_or_caller_values(
     candidate = [1]
 
     def update() -> object:
-        if operation == "replacement":
+        if operation == "keywords":
             return point.try_with_choices(choice=candidate)
-        return refinement.commit(point, point.field(Family.choice).change(candidate))
+        return point.try_with_choices(point.field(Family.choice).change(candidate))
 
     if raises:
         with pytest.raises(EvaluationError) as caught:
             update()
         assert isinstance(caught.value.__cause__, LookupError)
     else:
-        if operation == "replacement":
+        if operation == "keywords":
             assert point.try_with_choices(choice=candidate).instance is point
         else:
             assert (
-                refinement.commit(point, point.field(Family.choice).change(candidate)).instance
+                point.try_with_choices(point.field(Family.choice).change(candidate)).instance
                 is point
             )
     assert point.choice == [1] and candidate == [1]
@@ -253,9 +253,9 @@ def test_observed_evidence_includes_cached_reads_and_omits_unselected_work() -> 
     assert edges["output"] == ("left.cycles", "right.cycles")
     assert edges["left.cycles"] == ("left.extent", "left.lanes")
     assert "unrelated" not in edges
-    starts = state(point).snapshot.work.callback_starts
+    starts = state(point).work.callback_starts
     assert inspection.explain(point, Pair.output) == evidence
-    assert state(point).snapshot.work.callback_starts == starts
+    assert state(point).work.callback_starts == starts
     assert inspection.dependencies(point, Pair.output) == ()  # bodies are discovered when read
 
 
@@ -280,7 +280,7 @@ def test_native_chain_20000_has_one_start_per_callback() -> None:
     family, names = _deep_family(20_000)
     point = family(value_0=0)
     assert getattr(point, names[-1]) == 20_000
-    work = state(point).snapshot.work
+    work = state(point).work
     assert work.callback_starts == 20_000
     assert work.getter_attempts == 20_001
     assert work.nodes_started == 20_001
@@ -300,9 +300,9 @@ def test_native_wide_fan_in_and_cached_prefix_deep_dependency() -> None:
     mixed = cast(type[Space], type("Mixed", (family,), {"output": derived(output)}))
     point = mixed(value_0=0)
     assert getattr(point, "value_400") == 400
-    before = state(point).snapshot.work.callback_starts
+    before = state(point).work.callback_starts
     assert getattr(point, "output") == sum(range(1, 401)) + 1_200
-    assert state(point).snapshot.work.callback_starts - before == 801
+    assert state(point).work.callback_starts - before == 801
     evidence = inspection.explain(point, cast(ValueRef[int], getattr(mixed, "output")))
     edges = next(node.dependencies for node in evidence.nodes if node.declaration.key == "output")
     assert len(edges) == 401
@@ -316,8 +316,8 @@ def test_native_wide_fan_in_and_cached_prefix_deep_dependency() -> None:
     wide = cast(type[Space], type("WideSelf", (Space,), leaves))
     fan = wide(**{f"leaf_{index}": index for index in range(1_000)})
     assert getattr(fan, "total") == sum(range(1_000))
-    assert state(fan).snapshot.work.callback_starts == 1
-    assert state(fan).snapshot.work.suspensions == 1_000
+    assert state(fan).work.callback_starts == 1
+    assert state(fan).work.suspensions == 1_000
 
 
 @dataclass(frozen=True)
@@ -396,14 +396,14 @@ def test_contexts_continuations_trials_and_cached_outputs_are_reclaimed(
     def exercise() -> None:
         point = Family(fact=2).with_choices(choice=1)
         assert point.payload == Payload(1)
-        snapshot = state(point).snapshot
+        snapshot = state(point)
         answer = snapshot.cache[state(point).model.linked.keys["payload"]].result
         assert isinstance(answer, Available)
         outputs.append(ref(cast(Payload, answer.value)))
         successor = point.with_choices(choice=2)
         assert successor.payload == Payload(2)
-        assert state(successor).snapshot.parameters is snapshot.parameters
-        assert state(successor).snapshot.lock is not snapshot.lock
+        assert state(successor).parameters is snapshot.parameters
+        assert state(successor).lock is not snapshot.lock
         failed = Family(fact=3)
         with pytest.raises(_execution.NativeEvaluationError):
             _ = failed.broken

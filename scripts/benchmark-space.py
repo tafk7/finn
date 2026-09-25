@@ -15,14 +15,10 @@ check what was evaluated and that discarded point populations release caches.
 from __future__ import annotations
 
 import argparse
-from collections import Counter
-from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
 import gc
 import hashlib
 import importlib
 import json
-from pathlib import Path
 import platform
 import resource
 import statistics
@@ -31,6 +27,10 @@ import sys
 import time
 import tracemalloc
 import weakref
+from collections import Counter
+from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
+from pathlib import Path
 
 
 def increment(*, value: int) -> int:
@@ -145,7 +145,49 @@ def compilation(api, label: str, count: int, factory) -> dict[str, object]:
     }
 
 
-def batch_refinement(api, count: int, *, dependent: bool) -> dict[str, object]:
+def constant_expressions(api, terms: int, trials: int) -> dict[str, object]:
+    """Measure the deliberate tradeoff of runtime evaluation of constant expressions."""
+    base = api.Const(7)
+    names = tuple(f"term{index}" for index in range(terms))
+
+    def total(self) -> int:
+        return sum(getattr(self, name) for name in names)
+
+    family = type(
+        "ConstantExpressions",
+        (api.Space,),
+        {
+            "base": base,
+            "total": api.derived(total),
+            **{name: base + index for index, name in enumerate(names)},
+        },
+    )
+    started = time.perf_counter()
+    model = api.compile_space(family)
+    prepare_seconds = time.perf_counter() - started
+    expected = 7 * terms + terms * (terms - 1) // 2
+    points = [model.bind() for _ in range(trials)]
+    started = time.perf_counter()
+    assert all(point.total == expected for point in points)
+    cold_seconds = time.perf_counter() - started
+    started = time.perf_counter()
+    assert all(point.total == expected for point in points)
+    warm_seconds = time.perf_counter() - started
+    evidence = api.inspection.explain(points[0], family.total)
+    assert evidence.result == api.Available(expected)
+    return {
+        "terms": terms,
+        "trials": trials,
+        "result": expected,
+        "prepare_seconds": prepare_seconds,
+        "cold_seconds": cold_seconds,
+        "warm_seconds": warm_seconds,
+        "demanded_nodes": len(evidence.nodes),
+        "statistics": asdict(api.inspection.statistics(model)),
+    }
+
+
+def batch_updates(api, count: int, *, dependent: bool) -> dict[str, object]:
     work = Counter()
 
     def prerequisite(*, previous: int) -> int:
@@ -171,11 +213,9 @@ def batch_refinement(api, count: int, *, dependent: bool) -> dict[str, object]:
     family = type("DependentBatch" if dependent else "IndependentBatch", (api.Space,), members)
     model = api.compile_space(family)
     base = model.bind()
-    changes = [
-        api.refinement.change(base, reference, value) for reference, value in reversed(requests)
-    ]
+    changes = [base.field(reference).change(value) for reference, value in reversed(requests)]
     started = time.perf_counter()
-    report = api.refinement.commit(base, *changes)
+    report = base.try_with_choices(*changes)
     seconds = time.perf_counter() - started
     assert report.accepted
     assert len(report.outcomes) == count
@@ -190,7 +230,7 @@ def batch_refinement(api, count: int, *, dependent: bool) -> dict[str, object]:
         "changes": count,
         "submitted_order": "reverse declaration order",
         "statistics": asdict(api.inspection.statistics(model)),
-        "refine_seconds": seconds,
+        "update_seconds": seconds,
         "membership_calls": work["membership"],
         "prerequisite_calls": work["prerequisite"],
         "captured_choices": len(selection.entries),
@@ -690,10 +730,10 @@ def markdown(report: dict[str, object]) -> str:
             "| Batch | Changes | Membership calls | Prerequisite calls | Commit s | Capture s |",
             "|---|---:|---:|---:|---:|---:|",
         ]
-        for item in report["refinement"]:
+        for item in report["batch_updates"]:
             lines.append(
                 f"| {item['fixture']} | {item['changes']} | {item['membership_calls']} | "
-                f"{item['prerequisite_calls']} | {item['refine_seconds']:.6f} | "
+                f"{item['prerequisite_calls']} | {item['update_seconds']:.6f} | "
                 f"{item['capture_seconds']:.6f} |"
             )
         replacement = report["replacement_validation"]
@@ -782,6 +822,21 @@ def markdown(report: dict[str, object]) -> str:
                 f"{item['retained_old_configuration_count']} |"
             )
         lines.append("")
+    if "constant_expressions" in report:
+        item = report["constant_expressions"]
+        lines += [
+            "## Constant expressions",
+            "",
+            f"{item['terms']} constant terms across {item['trials']} configurations: "
+            f"prepare {item['prepare_seconds']:.6f} s; cold reads {item['cold_seconds']:.6f} s; "
+            f"warm reads {item['warm_seconds']:.6f} s. "
+            f"The first query demanded {item['demanded_nodes']} nodes.",
+            "",
+            "Removing folding intentionally adds runtime expression work. Compare this "
+            "scenario separately from parameter-based expressions, and preserve operand "
+            "validation and inactive arithmetic suppression.",
+            "",
+        ]
     lines += [
         "## Interpretation and limits",
         "",
@@ -879,9 +934,12 @@ def main() -> None:
                     compilation(api, "repeated children", arguments.children, repeated_family),
                     compilation(api, "guarded scope depth", arguments.depth, deep_family),
                 ],
-                "refinement": [
-                    batch_refinement(api, arguments.batch, dependent=False),
-                    batch_refinement(api, arguments.batch, dependent=True),
+                "constant_expressions": constant_expressions(
+                    api, arguments.batch, arguments.population
+                ),
+                "batch_updates": [
+                    batch_updates(api, arguments.batch, dependent=False),
+                    batch_updates(api, arguments.batch, dependent=True),
                 ],
                 "replacement_validation": replacement_validation(api, arguments.batch),
                 "narrow_queries": [narrow_query(api, 1), narrow_query(api, arguments.branches)],

@@ -5,15 +5,15 @@
 from __future__ import annotations
 
 import os
-from pathlib import Path
 import re
 import shutil
 import subprocess
+from pathlib import Path
 
 
 def test_strict_authoring_types(tmp_path: Path) -> None:
     mypy = shutil.which("mypy")
-    assert mypy is not None, "the DS1 typing gate requires mypy"
+    assert mypy is not None, "the Space typing gate requires mypy"
     root = Path(__file__).resolve().parents[3]
     fixtures = Path(__file__).with_name("typing")
     environment = dict(os.environ, MYPYPATH=f"{root / 'src'}:{root / 'tests'}")

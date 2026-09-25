@@ -46,7 +46,7 @@ class Expr(ValueDecl[int]):
 
 
 def apply_integer(operator: IntOperator, operands: tuple[int, ...]) -> int:
-    """Only these builtin integer operations may be folded during compilation."""
+    """Evaluate the bounded integer vocabulary using ordinary Python arithmetic."""
 
     if any(type(value) is not int for value in operands):
         raise TypeError("integer expressions require exact int values")

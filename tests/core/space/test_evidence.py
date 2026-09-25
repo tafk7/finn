@@ -6,16 +6,14 @@
 from __future__ import annotations
 
 import gc
-from typing import cast
 import weakref
+from typing import cast
 
 from finn.core.space import (
-    Const,
     Available,
+    Const,
     Decision,
     Inapplicable,
-    MissingInput,
-    NotApplicable,
     Param,
     Rejected,
     Space,
@@ -27,10 +25,9 @@ from finn.core.space import (
     compile_space,
     constraint,
     derived,
-    optional,
+    inspection,
     view,
 )
-from finn.core.space import inspection
 
 PHYSICAL = ViewKey("physical", int)
 
@@ -96,9 +93,9 @@ def test_optional_input_presence_distinguishes_omission_from_supplied_none() -> 
     class Child(Space):
         size = Param(int, required=False)
 
-        @derived(size=optional(size))
-        def fallback(*, size: int | MissingInput | NotApplicable) -> int:
-            return size if isinstance(size, int) else 7
+        @derived
+        def doubled(self) -> int:
+            return self.size * 2
 
     class Root(Space):
         size = Param(int, required=False)
@@ -106,8 +103,8 @@ def test_optional_input_presence_distinguishes_omission_from_supplied_none() -> 
         child = Subspace(Child, size=size)
 
     point = Root({Root.nil: None})
-    missing = inspection.explain(point.child, Child.fallback)
-    assert missing.result == Available(7)
+    missing = inspection.explain(point.child, Child.doubled)
+    assert isinstance(missing.result, Unresolved)
     facts = [node for node in missing.nodes if node.input_presence is not None]
     assert len(facts) == 1
     assert facts[0].declaration.key == "size"
@@ -143,7 +140,11 @@ def test_refusal_causes_stay_visible_while_another_obligation_is_unresolved() ->
         def supported() -> bool:
             return False
 
-        physical = View(value, constraints=(supported,), requires=(chosen,))
+        @derived
+        def selected(self) -> int:
+            return self.value + self.chosen
+
+        physical = View(selected, constraints=(supported,))
 
     point = Family()
     evidence = inspection.explain(point, Family.physical)

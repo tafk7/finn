@@ -3,8 +3,8 @@
 
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor
 import gc
+from concurrent.futures import ThreadPoolExecutor
 from weakref import ReferenceType, ref
 
 import pytest
@@ -44,7 +44,7 @@ def test_constructor_and_explicit_bind_share_one_concurrent_preparation() -> Non
     explicit = model.bind(value=20)
     assert all(type(instance) is Family for instance in (*instances, explicit))
     assert all(state(instance).model is model for instance in (*instances, explicit))
-    assert len({id(state(instance).snapshot) for instance in instances}) == len(instances)
+    assert len({id(state(instance)) for instance in instances}) == len(instances)
 
 
 def test_failed_preparation_does_not_poison_cache_and_subclasses_do_not_borrow_it() -> None:
@@ -309,8 +309,8 @@ def test_replacement_reuses_frozen_facts_keeps_views_lazy_and_starts_a_fresh_cac
     assert first.result() == 2
     revised = first.with_choices(choice=2)
     assert calls == [1]
-    assert state(revised).snapshot.parameters is state(first).snapshot.parameters
-    assert state(revised).snapshot.cache == {}
+    assert state(revised).parameters is state(first).parameters
+    assert state(revised).cache == {}
     assert revised.result() == 3
     assert calls == [1, 2]
 

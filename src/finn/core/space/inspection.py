@@ -13,27 +13,25 @@ from dataclasses import dataclass
 from typing import Generic, Literal, TypeVar, cast, overload
 
 from . import _execution, _runtime
+from ._configuration import Space
 from .compiler import SpaceModel
 from .declarations import (
     Constraint,
     ConstraintGroup,
     Decision,
     DecisionRef,
-    Readiness,
-    Space,
     ValueRef,
     View,
 )
 from .errors import RequestError
-from .ir import Choice, LinkedModel, NodeKind
+from .ir import LinkedModel, NodeKind
 from .occurrence import state
-from .references import DecisionHandle, ValueHandle
+from .references import DecisionHandle, ValueHandle, decision_key
 from .results import (
-    QueryResult,
-    ConstraintAssessment,
     Available,
+    ConstraintAssessment,
     DecisionState,
-    ReadinessAssessment,
+    QueryResult,
     ViewAssessment,
 )
 
@@ -104,7 +102,7 @@ class QueryEvidence(Generic[T]):
     query: NodeInfo
     result: QueryResult[T]
     nodes: tuple[EvidenceNode, ...]
-    assessment: ViewAssessment[T] | ConstraintAssessment | ReadinessAssessment | None = None
+    assessment: ViewAssessment[T] | ConstraintAssessment | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -163,10 +161,6 @@ def _scope_set(linked: LinkedModel, root: int) -> set[int]:
     return included
 
 
-def _selectors(linked: LinkedModel) -> dict[int, Choice]:
-    return {choice.selector: choice for choice in linked.choices if choice.selector is not None}
-
-
 def _node_info(linked: LinkedModel, index: int) -> NodeInfo:
     node = linked.nodes[index]
     reference = (
@@ -188,15 +182,15 @@ def _node_info(linked: LinkedModel, index: int) -> NodeInfo:
 def _decision_info(
     linked: LinkedModel,
     index: int,
-    selectors: dict[int, Choice],
 ) -> DecisionInfo[object]:
     node = linked.nodes[index]
     if node.kind != "decision":
         raise RequestError("decision inspection requires an owning Decision")
-    choice = selectors.get(index)
+    choice_index = linked.selector_choices.get(index)
+    choice = None if choice_index is None else linked.choices[choice_index]
     return DecisionInfo(
         DecisionHandle[object](linked, index),
-        node.key if choice is None else choice.key,
+        decision_key(linked, index),
         linked.scopes[node.scope].name,
         node.owner,
         choice is not None,
@@ -209,9 +203,8 @@ def decisions(subject: Space | SpaceModel[S]) -> tuple[DecisionInfo[object], ...
 
     model, scope = _context(subject)
     included = _scope_set(model.linked, scope)
-    selectors = _selectors(model.linked)
     result = (
-        _decision_info(model.linked, index, selectors)
+        _decision_info(model.linked, index)
         for index in model.linked.decisions
         if model.linked.nodes[index].scope in included
     )
@@ -226,7 +219,7 @@ def decision_info(
     if not isinstance(reference, (Decision, DecisionRef)):
         raise RequestError("a parameter alias cannot become an editable decision handle")
     index = model.resolve(scope, reference)
-    return cast(DecisionInfo[T], _decision_info(model.linked, index, _selectors(model.linked)))
+    return cast(DecisionInfo[T], _decision_info(model.linked, index))
 
 
 def decision_handle(
@@ -248,7 +241,7 @@ def value_handle(
 @overload
 def value_handle(
     subject: Space | SpaceModel[S],
-    reference: Constraint | ConstraintGroup | Readiness,
+    reference: Constraint | ConstraintGroup,
 ) -> ValueHandle[bool]: ...
 
 
@@ -314,7 +307,7 @@ def explain(point: Space, reference: ValueRef[T] | View[T]) -> QueryEvidence[T]:
 @overload
 def explain(
     point: Space,
-    reference: Constraint | ConstraintGroup | Readiness,
+    reference: Constraint | ConstraintGroup,
 ) -> QueryEvidence[bool]: ...
 
 
@@ -323,7 +316,7 @@ def explain(point: Space, reference: object) -> object:
 
     _execution.driver_only("dependency inspection")
     current = state(point)
-    linked, snapshot = current.model.linked, current.snapshot
+    linked, snapshot = current.model.linked, current
     root = current.model.resolve(point._scope, reference)
     selectors = linked.selector_choices
     with snapshot.lock:

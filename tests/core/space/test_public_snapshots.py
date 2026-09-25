@@ -8,12 +8,11 @@ from dataclasses import dataclass
 import pytest
 
 from finn.core.space import (
+    Available,
     Const,
     ConstraintGroup,
-    Available,
     Decision,
     Param,
-    Readiness,
     Rejected,
     Space,
     Unresolved,
@@ -49,10 +48,9 @@ class Mutable(Space):
     def raw(*, source: Bag) -> Bag:
         return Bag(source.values)
 
-    physical = View(raw, requires=(source,))
-    ready = Readiness(raw)
+    physical = View(raw)
 
-    @view(semantics=BAG, requires=(source,))
+    @view(semantics=BAG)
     def computed(*, source: Bag) -> Bag:
         return Bag(source.values)
 
@@ -88,18 +86,6 @@ def test_value_and_function_views_detach_all_public_assessment_payloads() -> Non
                 assert answer.value == Bag([1])
     assert point.source == Bag([1])
     assert point.raw == Bag([1])
-
-
-def test_standalone_readiness_returns_detached_required_values() -> None:
-    point = Mutable({Mutable.source: Bag([1])})
-    readiness = point.inspect(Mutable.ready)
-    raw = readiness.results["raw"]
-    assert isinstance(raw, Available)
-    assert isinstance(raw.value, Bag)
-    raw.value.values.append(2)
-    again = point.inspect(Mutable.ready).results["raw"]
-    assert isinstance(again, Available)
-    assert again.value == Bag([1])
 
 
 def test_decision_reads_and_candidates_cannot_mutate_frozen_commitments() -> None:
@@ -161,9 +147,7 @@ def test_grouped_view_obligations_keep_refusals_visible_while_waiting() -> None:
             return lanes > 0
 
         support = ConstraintGroup(refused, pending)
-        ready = Readiness(support)
         physical = View(output, constraints=(support,))
-        ready_view = View(output, requires=(ready,))
 
     point = Grouped()
     grouped = point.inspect(Grouped.support)
@@ -176,24 +160,20 @@ def test_grouped_view_obligations_keep_refusals_visible_while_waiting() -> None:
         assert isinstance(refused, Rejected)
         assert refused.findings[0].owner == "refused"
         assert isinstance(assessment.constraints.results["pending"], Unresolved)
-        readiness = point.inspect(Grouped.ready)
+        readiness = assessment.readiness
         assert readiness.ready is None
         assert isinstance(readiness.results["refused"], Rejected)
-        via_readiness = point.ready_view.inspect()
-        assert isinstance(via_readiness.accepted_result, Unresolved)
-        assert isinstance(via_readiness.readiness.results["refused"], Rejected)
     committed = point.with_choices(lanes=1)
     assert isinstance(committed.physical.inspect().accepted_result, Rejected)
-    assert committed.inspect(Grouped.ready).ready is True
+    assert committed.physical.inspect().readiness.ready is True
 
 
 def test_empty_named_obligations_can_be_assessed_without_value_semantics() -> None:
     class Empty(Space):
         output = Const(4)
         group = ConstraintGroup()
-        ready = Readiness()
-        physical = View(output, requires=(group, ready))
+        physical = View(output, constraints=(group,))
 
     point = Empty()
     assert point.physical() == 4
-    assert point.inspect(Empty.ready).ready is True
+    assert point.physical.inspect().readiness.ready is True

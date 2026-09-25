@@ -7,17 +7,19 @@ stacks. Failures/cancellation return through waiting reads and drain cleanup.
 """
 
 from __future__ import annotations
+
 from collections.abc import Callable, Generator, Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar, copy_context
 from dataclasses import dataclass, field
 from importlib import import_module
-from typing import TYPE_CHECKING, NoReturn, Protocol, cast
+from typing import TYPE_CHECKING, NoReturn, Protocol, TypeAlias, cast
+
 from .errors import EvaluationError, ValueUnavailableError
-from .results import QueryResult, NonValue, Unresolved, Rejected, Inapplicable
+from .results import Inapplicable, NonValue, QueryResult, Rejected, Unresolved
 
 if TYPE_CHECKING:
-    from ._runtime import Snapshot, Evaluation
+    from ._runtime import Evaluation, Snapshot
 
 
 class _Greenlet(Protocol):
@@ -49,6 +51,8 @@ class Work:
 
 @dataclass(slots=True)
 class Context:
+    """One node's actual reads and sticky failures, shared with its native call."""
+
     snapshot: Snapshot
     index: int
     native_parent: _Greenlet
@@ -215,8 +219,7 @@ def _remember_failure(context: Context, incoming: _Failure) -> _Failure:
 
 def _native_fault(context: Context, error: EvaluationError) -> None:
     context.fault = error
-    if context.native_parent is not None:
-        _remember_failure(context, _Failure(error))
+    _remember_failure(context, _Failure(error))
 
 
 def _remember_exception(context: Context, cause: BaseException) -> _Failure | None:
@@ -274,7 +277,14 @@ class _Returned:
     value: object
 
 
-def _invoke(context: Context, call: Call) -> _Returned | _Halt | _Failure:
+# Frames yield dependencies or native calls and finish with an Evaluation.
+# Dependency requests receive QueryResult values; calls receive CallOutcome.
+# Native descriptor reads receive complete Evaluations or transported failures.
+Frame: TypeAlias = Generator[int | Call, object, "Evaluation"]
+CallOutcome: TypeAlias = _Returned | _Halt | _Failure
+
+
+def _invoke(context: Context, call: Call) -> CallOutcome:
     """Only authored execution and its exception boundary occupy a native stack."""
     context.native_started = True
     context.role = call.role
@@ -306,9 +316,11 @@ def _invoke(context: Context, call: Call) -> _Returned | _Halt | _Failure:
 
 @dataclass(slots=True)
 class _Task:
+    """A suspended node frame and, while its callback runs, a native continuation."""
+
     identity: object
     context: Context
-    frame: Generator[int | Call, object, Evaluation]
+    frame: Frame
     continuation: _Greenlet | None = None
     call: Call | None = None
     incoming: object = None
@@ -331,9 +343,14 @@ def accept_read(context: Context, index: int, outcome: object) -> Evaluation:
     return entry
 
 
-def run(
-    snapshot: Snapshot, index: int, frame: Generator[int | Call, object, Evaluation] | None = None
-) -> Evaluation:
+def run(snapshot: Snapshot, index: int, frame: Frame | None = None) -> Evaluation:
+    """Drain a query's dependency stack, including native cleanup after failure.
+
+    Integer identities represent cacheable nodes. A supplied domain-operation
+    frame gets a unique identity so its result cannot replace the decision value.
+    Successful nodes enter the snapshot cache; failures live only for this run.
+    Completion remains inside the exception boundary through retirement/delivery.
+    """
     from . import _runtime  # noqa: PLC0415 - execution/runtime record cycle
 
     parent = greenlet.getcurrent()
@@ -346,7 +363,7 @@ def run(
     def begin(
         current_index: int,
         identity: object,
-        initial: Generator[int | Call, object, Evaluation] | None = None,
+        initial: Frame | None = None,
     ) -> None:
         context = Context(snapshot, current_index, parent)
         task = _Task(

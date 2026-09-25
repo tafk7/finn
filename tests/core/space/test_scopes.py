@@ -10,8 +10,8 @@ from typing import cast
 import pytest
 
 from finn.core.space import (
-    Const,
     Available,
+    Const,
     Decision,
     Inapplicable,
     Param,

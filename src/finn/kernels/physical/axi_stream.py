@@ -12,21 +12,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from finn.kernels.artifacts.abi import Bus, Endpoint, Member, StandardProtocol
-from finn.kernels.datatypes.values import (
-    QONNXDataType,
-    qonnx_datatype_width,
-    canonical_qonnx_datatype,
-    resolve_qonnx_datatype_name,
-)
-from finn.kernels.datatypes.domains import DatatypeDomain, Integer
-from finn.kernels.datatypes.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
-from finn.kernels.physical.layout import (
-    FieldPlacement,
-    PackedBeatLayout,
-    UnusedBitPolicy,
-    UnusedBitRange,
-)
 from finn.core.space import (
     Constraint,
     ConstraintGroup,
@@ -43,6 +28,21 @@ from finn.core.space import (
     default_semantics,
     derived,
     reject,
+)
+from finn.kernels.artifacts.abi import Bus, Endpoint, Member, StandardProtocol
+from finn.kernels.datatypes.domains import DatatypeDomain, Integer
+from finn.kernels.datatypes.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
+from finn.kernels.datatypes.values import (
+    QONNXDataType,
+    canonical_qonnx_datatype,
+    qonnx_datatype_width,
+    resolve_qonnx_datatype_name,
+)
+from finn.kernels.physical.layout import (
+    FieldPlacement,
+    PackedBeatLayout,
+    UnusedBitPolicy,
+    UnusedBitRange,
 )
 
 
@@ -239,7 +239,7 @@ def _local_domain(domain: DatatypeDomain, builder: ScopeBuilder[AxiStreamScope])
     def bound(name: str, value: int | ValueRef[int]) -> int | ValueRef[int]:
         if not isinstance(value, ValueRef):
             return value
-        parameter = builder.param(name, int)
+        parameter = builder.add(name, Param(int))
         builder.bind(parameter, value)
         return parameter
 
@@ -303,7 +303,7 @@ class AxiStreamInterface(Subspace[AxiStreamScope]):
             conditions.append(AxiStreamScope.element_bits_valid)
         conditions.append(AxiStreamScope.elements_valid)
         group = builder.add("admission", ConstraintGroup(*conditions))
-        accepted = builder.view("physical", AxiStreamScope.stream, constraints=(group,))
+        accepted = builder.add("physical", View(AxiStreamScope.stream, constraints=(group,)))
         builder.export(STREAM_VIEW).view(accepted)
         builder.bind(AxiStreamScope.name, name)
         builder.bind(AxiStreamScope.dtype, dtype)
