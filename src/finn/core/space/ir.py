@@ -31,6 +31,9 @@ NodeKind = Literal[
     "guard",
     "select",
     "group",
+    "present",
+    "locate",
+    "members",
 ]
 
 

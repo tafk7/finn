@@ -17,13 +17,17 @@ from ._signatures import BoundArgument, BoundFunction, validate_argument
 from .collection import EffectiveSpace, collect_space
 from .declarations import (
     AcceptedViewRef,
+    Bind,
     Const,
     Constraint,
     ConstraintGroup,
     Decision,
     Declaration,
     Derived,
+    LocatedRef,
+    Members,
     Param,
+    Present,
     ScopedValueRef,
     Subspace,
     SubspaceChoice,
@@ -52,6 +56,7 @@ class _ScopeDraft:
     guard: int | None
     source_scope: int
     bindings: Mapping[str, PlacementBinding]
+    unbound: tuple[str, ...] = ()
     members: dict[object, int] = field(default_factory=dict)
     named_members: dict[str, int] = field(default_factory=dict)
     children: dict[object, int] = field(default_factory=dict)
@@ -167,6 +172,11 @@ class _Linker:
         self.expression_counts: dict[str, int] = {}
         self.scopes: tuple[Scope, ...] = ()
         self.choices: tuple[Choice, ...] = ()
+        # Graph primitives: formals left open at placement, the node name of each
+        # choice case placement, and the anonymous Present nodes per scope.
+        self.unbound: dict[int, bool] = {}
+        self.case_nodes: dict[int, str] = {}
+        self.present_nodes: dict[tuple[int, Present[object]], int] = {}
 
     def collect(self) -> None:
         """Collect each family once, and reject structural recursion first."""
@@ -262,6 +272,7 @@ class _Linker:
             guard,
             0 if parent is None else parent,
             bindings,
+            plan.unbound if plan is not None else (),
         )
         self.drafts.append(draft)
         if plan is not None:
@@ -288,8 +299,14 @@ class _Linker:
                 kind = "view"
             elif isinstance(declaration, ConstraintGroup):
                 kind = "group"
-            elif isinstance(declaration, (ScopedValueRef, AcceptedViewRef)):
+            elif isinstance(declaration, (ScopedValueRef, AcceptedViewRef, Bind)):
                 kind = "alias"
+            elif isinstance(declaration, LocatedRef):
+                kind = "locate"
+            elif isinstance(declaration, Present):
+                kind = "present"
+            elif isinstance(declaration, Members):
+                kind = "members"
             else:
                 raise DefinitionError(f"{_key(name, member_name)}: unsupported declaration")
             node = self.reserve(
@@ -300,6 +317,8 @@ class _Linker:
                 guard=guard,
             )
             draft.named_members[member_name] = node
+            if isinstance(declaration, Param) and member_name in draft.unbound:
+                self.unbound[node] = declaration.required
             self.member_positions[node] = len(self.members)
             self.members.append(_MemberTask(node, index, member_name, declaration, binding))
         for declaration, member_name in draft.effective.aliases.items():
@@ -364,6 +383,10 @@ class _Linker:
                 placement.space_type, scope.index, case_key, case_guard, placement=placement
             )
             choice.cases.append((case, child))
+            # A case is reachable from the enclosing scope, so its members can be
+            # referenced, bound and located; as a node it is the choice itself.
+            scope.children[placement] = child
+            self.case_nodes[id(placement)] = name
         for export in declaration.exports:
             choice.exports[export] = self.reserve(
                 scope.index,
@@ -432,9 +455,131 @@ class _Linker:
             kind = _BINDING_KINDS[override.binding.kind]
             self.nodes[target] = replace(node, kind=kind)
 
+    def link_binds(self) -> None:
+        """Turn every formal left open at placement into a supply of its binds.
+
+        A formal with no Bind stays unsupplied if optional; a required one is
+        the same definition error an incomplete placement always was.
+        """
+
+        supplies: dict[int, list[tuple[str, int]]] = {}
+        for draft in self.drafts:
+            for name, declaration in draft.effective.members.items():
+                if not isinstance(declaration, Bind):
+                    continue
+                key = _key(draft.name, name)
+                target = self.reference(draft.index, declaration.target, owner=key)
+                if (
+                    target not in self.unbound
+                    or self.members[self.member_positions[target]].binding is not None
+                ):
+                    raise DefinitionError(f"{key}: the target formal is already supplied")
+                supplies.setdefault(target, []).append((key, draft.named_members[name]))
+        missing: dict[int, list[str]] = {}
+        for index, required in self.unbound.items():
+            if self.members[self.member_positions[index]].binding is not None:
+                continue  # an outer nested binding supplied it
+            alternatives = tuple(supplies.get(index, ()))
+            if required and not alternatives:
+                node = self.nodes[index]
+                missing.setdefault(node.scope, []).append(node.key.rsplit(".", 1)[-1])
+            self.nodes[index] = replace(
+                self.nodes[index], kind="present", alternatives=alternatives
+            )
+        for scope, names in missing.items():
+            raise DefinitionError(
+                f"{self.scopes[scope].name}: missing child parameter bindings {sorted(names)}"
+            )
+
+    def node_name(self, placement: object) -> str | None:
+        if placement is None:
+            return None
+        return self.case_nodes.get(id(placement), cast(Declaration, placement).name)
+
+    def members_candidates(self, scope: int, key: ViewKey[object]) -> list[tuple[str, int]]:
+        """Each child node's contribution for ``key``, choice cases in case order."""
+
+        draft = self.drafts[scope]
+        result: list[tuple[str, int]] = []
+        for name, declaration in draft.effective.members.items():
+            if isinstance(declaration, Subspace):
+                scopes = [draft.named_children[name]]
+            elif isinstance(declaration, SubspaceChoice):
+                scopes = [case for _, case in self.choice_drafts[draft.choices[declaration]].cases]
+            else:
+                continue
+            for child in scopes:
+                target = self.drafts[child].members.get(key)
+                if target is None:
+                    continue
+                if self.nodes[target].kind != "view":
+                    raise DefinitionError(
+                        f"{draft.name or '<root>'}: member {key.name} must be a view"
+                    )
+                result.append((name, target))
+        return result
+
+    def locate(
+        self, scope: int, source: LocatedRef[object], *, owner: str, index: int | None = None
+    ) -> int:
+        """A located value: the member's result plus the identity of its node."""
+
+        if index is None:
+            number = self.expression_counts.get(owner, 0)
+            self.expression_counts[owner] = number + 1
+            index = self.reserve(
+                scope,
+                f"{owner}.$located.{number}",
+                "locate",
+                cast("ValueSemantics[object] | None", source.semantics),
+                guard=self.drafts[scope].guard,
+                source_owner=owner,
+            )
+        placement, member = source.placement, source.member
+        target: object
+        if placement is None:
+            target = member
+        elif isinstance(member, (View, ViewKey)):
+            target = AcceptedViewRef(placement, member)
+        else:
+            target = ScopedValueRef(placement, member)
+        self.nodes[index] = replace(
+            self.nodes[index],
+            output=self.reference(scope, target, owner=owner),
+            value=(self.node_name(placement), cast(Declaration, member).name),
+        )
+        return index
+
+    def present(self, scope: int, source: Present[object], *, owner: str) -> int:
+        identity = (scope, source)
+        if identity not in self.present_nodes:
+            number = self.expression_counts.get(owner, 0)
+            self.expression_counts[owner] = number + 1
+            index = self.reserve(
+                scope,
+                f"{owner}.$present.{number}",
+                "present",
+                source.semantics,
+                guard=self.drafts[scope].guard,
+                source_owner=owner,
+            )
+            self.present_nodes[identity] = index
+            self.nodes[index] = replace(
+                self.nodes[index],
+                alternatives=tuple(
+                    (f"{owner}.{position}", self.reference(scope, item, owner=owner))
+                    for position, item in enumerate(source.sources)
+                ),
+            )
+        return self.present_nodes[identity]
+
     def reference(self, scope: int, source: object, *, owner: str) -> int:
         if isinstance(source, Expr) and source.owner is None:
             return self.expression(scope, source, owner=owner)
+        if isinstance(source, Present) and source.owner is None:
+            return self.present(scope, cast(Present[object], source), owner=owner)
+        if isinstance(source, LocatedRef) and source.owner is None:
+            return self.locate(scope, cast(LocatedRef[object], source), owner=owner)
         try:
             return resolve_reference(self.nodes, self.scopes, self.choices, scope, source)
         except RequestError as cause:
@@ -557,11 +702,21 @@ class _Linker:
         for source in sources:
             if not isinstance(source, allowed):
                 raise DefinitionError(f"{owner}: unsupported obligation declaration")
-            index = self.reference(scope, source, owner=owner)
-            if index in seen:
-                raise DefinitionError(f"{owner}: duplicate obligation")
-            result.append(index)
-            seen.add(index)
+            if isinstance(source, Members):
+                # A member family obliges each member's acceptance separately.
+                indices = [
+                    target
+                    for _, target in self.members_candidates(
+                        scope, cast(ViewKey[object], source.key)
+                    )
+                ]
+            else:
+                indices = [self.reference(scope, source, owner=owner)]
+            for index in indices:
+                if index in seen:
+                    raise DefinitionError(f"{owner}: duplicate obligation")
+                result.append(index)
+                seen.add(index)
         return tuple(result)
 
     def domain(
@@ -699,9 +854,46 @@ class _Linker:
                 constraints=self.obligations(
                     scope.index,
                     declaration.constraints,
-                    (Constraint, ConstraintGroup),
+                    (Constraint, ConstraintGroup, View, AcceptedViewRef, Members),
                     owner=node.key,
                 ),
+            )
+        elif isinstance(declaration, Bind):
+            supplied = declaration.source
+            if isinstance(supplied, ValueRef):
+                output = self.reference(scope.index, supplied, owner=node.key)
+            else:
+                semantics = self.nodes[
+                    self.reference(scope.index, declaration.target, owner=node.key)
+                ].semantics
+                assert semantics is not None
+                output = self.reserve(
+                    scope.index, node.key + ".$literal", "const", semantics, source_owner=node.key
+                )
+                try:
+                    value = semantics.freeze(supplied)
+                except Exception as cause:
+                    raise DefinitionError(f"{node.key}: {cause}") from cause
+                self.nodes[output] = replace(self.nodes[output], value=value)
+            node = replace(node, output=output)
+        elif isinstance(declaration, LocatedRef):
+            self.locate(scope.index, declaration, owner=node.key, index=node.index)
+            node = self.nodes[node.index]
+        elif isinstance(declaration, Present):
+            node = replace(
+                node,
+                alternatives=tuple(
+                    (f"{node.key}.{position}", self.reference(scope.index, item, owner=node.key))
+                    for position, item in enumerate(declaration.sources)
+                ),
+            )
+        elif isinstance(declaration, Members):
+            node = replace(
+                node,
+                alternatives=tuple(
+                    self.members_candidates(scope.index, cast(ViewKey[object], declaration.key))
+                ),
+                value=declaration.key.name,
             )
         elif isinstance(declaration, (ScopedValueRef, AcceptedViewRef)):
             try:
@@ -755,7 +947,12 @@ class _Linker:
                     raise DefinitionError(f"{node.key}: output has incompatible value semantics")
                 if node.semantics is None:
                     self.nodes[index] = node = replace(node, semantics=output)
-            if node.kind == "select":
+            if node.kind == "present" and node.semantics is None and node.alternatives:
+                # Like an alias, a Present takes its sources' linked semantics.
+                self.nodes[index] = node = replace(
+                    node, semantics=self.nodes[node.alternatives[0][1]].semantics
+                )
+            if node.kind in {"select", "present"}:
                 for _, target in node.alternatives:
                     semantics = self.nodes[target].semantics
                     if (
@@ -800,6 +997,7 @@ class _Linker:
         self.collect()
         self.allocate()
         self.apply_parameter_overrides()
+        self.link_binds()
         for task in self.members:
             self.link_member(task)
         for guard_task in self.guards:

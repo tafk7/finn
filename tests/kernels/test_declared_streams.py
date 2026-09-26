@@ -1,36 +1,39 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Declared streams: explicit endpoints, per-stream refusals, boundary ports, composition."""
+"""Streams as relation nodes: located ends, per-stream refusals, members wired."""
 
 from qonnx.core.datatype import DataType
 
 from finn.core.space import (
     Available,
-    ConstraintGroup,
+    Located,
+    Members,
     Param,
     Rejected,
     Space,
     Subspace,
     Unresolved,
+    View,
     default_semantics,
     inspection,
+    located,
     view,
 )
+from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.build import ModuleBuildRequirements
 from finn.kernels.artifacts.derivation import ProducerIdentity
 from finn.kernels.datatypes.scalar import ScalarEncoding
 from finn.kernels.delivery import CyclicDelivery
 from finn.kernels.physical.forms import vector_major
 from finn.kernels.streams import (
+    CONNECTION,
+    MODULE,
     STREAM_SPEC,
-    Stream,
     StreamLink,
     StreamSpec,
-    TopInput,
-    TopOutput,
-    compose,
-    connected,
+    boundary_contract,
+    netlist,
 )
 
 INT4 = ScalarEncoding(DataType["INT4"])
@@ -38,10 +41,12 @@ PRODUCED = vector_major((4,), 2)
 
 
 class Constants(Space):
-    """Two constant vectors streamed to two top outputs; each output's order is supplied."""
+    """Two constant vectors streamed to two outputs; each output's order is supplied."""
 
     first_spec = Param(STREAM_SPEC)
     second_spec = Param(STREAM_SPEC)
+    out0_V = View(first_spec)
+    out1_V = View(second_spec)
 
     first_source = Subspace(
         CyclicDelivery, dtype=DataType["INT4"], form=PRODUCED, values=(1, 2, 3, 4)
@@ -49,34 +54,31 @@ class Constants(Space):
     second_source = Subspace(
         CyclicDelivery, dtype=DataType["INT4"], form=PRODUCED, values=(5, 6, 7, -8)
     )
-    first_sink = Subspace(TopOutput, name="out0_V", input_stream=first_spec)
-    second_sink = Subspace(TopOutput, name="out1_V", input_stream=second_spec)
-
-    first = Stream(
-        first_spec,
-        source=("u_first", first_source.accepted(CyclicDelivery.output)),
-        sink=("out0_V", first_sink.accepted(TopOutput.port)),
+    first = Subspace(
+        StreamLink,
+        spec=first_spec,
+        source=first_source.at(CyclicDelivery.output),
+        sink=located(out0_V),
     )
-    second = Stream(
-        second_spec,
-        source=("u_second", second_source.accepted(CyclicDelivery.output)),
-        sink=("out1_V", second_sink.accepted(TopOutput.port)),
+    second = Subspace(
+        StreamLink,
+        spec=second_spec,
+        source=second_source.at(CyclicDelivery.output),
+        sink=located(out1_V),
     )
-    first_connected = connected(first)
-    second_connected = connected(second)
-    streams = ConstraintGroup(first_connected, second_connected)
+    modules = Members(MODULE)
+    streams = Members(CONNECTION)
 
-    @view(semantics=default_semantics(ModuleBuildRequirements), constraints=(streams,))
+    @view(semantics=default_semantics(ModuleBuildRequirements), constraints=(modules, streams))
     def build(self) -> ModuleBuildRequirements:
-        return compose(
+        composed = netlist(
+            self.modules,
+            self.streams,
             module="constants",
             producer=ProducerIdentity("test.constants", "1"),
-            instances={
-                "u_first": self.first_source.build_requirements(),
-                "u_second": self.second_source.build_requirements(),
-            },
-            connections=(self.first.connection(), self.second.connection()),
-        ).requirements
+        )
+        assert not isinstance(composed, Rejected)
+        return composed.requirements
 
 
 def constants(first=PRODUCED, second=PRODUCED):
@@ -99,27 +101,30 @@ def test_each_stream_owns_its_refusal_and_independent_refusals_are_all_visible()
     point = constants(first=wide, second=wide)
     assessment = point.build.inspect()
     results = assessment.constraints.results
-    assert isinstance(results["first_connected"], Rejected)
-    assert isinstance(results["second_connected"], Rejected)
-    owners = {
-        cause.owner
-        for result in results.values()
-        for finding in result.findings
-        for cause in (finding, *finding.causes)
-    }
-    assert {"first.compatible", "second.compatible"} <= owners
-    assert not isinstance(assessment.accepted_result, Available)
+    assert isinstance(results["first.connection"], Rejected)
+    assert isinstance(results["second.connection"], Rejected)
+    refusal = assessment.accepted_result
+    assert isinstance(refusal, Rejected)
+    assert {f.owner for f in refusal.findings} == {"first.compatible", "second.compatible"}
     # One stream refusing leaves the other stream's connection accepted.
     mixed = constants(first=wide)
     assert isinstance(mixed.first.connection.query(), Rejected)
     assert isinstance(mixed.second.connection.query(), Available)
 
 
-def test_explain_shows_per_stream_evidence_not_one_opaque_callback():
+def test_explain_shows_per_stream_and_per_member_evidence():
     point = constants()
     evidence = inspection.explain(point, Constants.build)
     visited = {node.declaration.key for node in evidence.nodes}
-    assert {"first.connection", "second.connection", "first.compatible"} <= visited
+    assert {
+        "first.connection",
+        "second.connection",
+        "first.compatible",
+        "first.source",
+        "first_source.build_requirements",
+        "modules",
+        "streams",
+    } <= visited
 
 
 def test_a_stream_waits_for_its_own_endpoints_only():
@@ -129,11 +134,12 @@ def test_a_stream_waits_for_its_own_endpoints_only():
     assert isinstance(point.first.connection.query(), Available)
     assert isinstance(point.second.connection.query(), Available)
     assert isinstance(point.build.query(), Unresolved)
-    assert point.first.query(StreamLink.name) == Available("first")
+    # Ends know where they are, by declaration name.
+    assert point.first.source.node == "first_source"
+    assert point.first.sink == Located(None, "out0_V", StreamSpec(INT4, PRODUCED))
 
 
 def test_boundary_ports_are_axis_and_byte_aligned():
-    source = TopInput(name="in0_V", output_stream=StreamSpec(INT4, vector_major((3,), 3)))
-    contract = source.port()
+    contract = boundary_contract("in0_V", StreamSpec(INT4, vector_major((3,), 3)), Endpoint.TARGET)
     assert contract.transport.data_width == 16
     assert contract.payload_bits == 12

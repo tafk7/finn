@@ -31,6 +31,7 @@ from .results import (
     assess_view,
     constraint_result,
     owned_result,
+    reject,
 )
 
 if TYPE_CHECKING:
@@ -163,6 +164,76 @@ def _constraint_members(
     return {snapshot.linked.nodes[reference].key: cast(QueryResult[bool], answer)}
 
 
+def _obligation(
+    snapshot: Snapshot, reference: int, answer: QueryResult[object]
+) -> QueryResult[object]:
+    """An obliged view contributes only its acceptance."""
+    if snapshot.linked.nodes[reference].kind == "view" and isinstance(answer, Available):
+        return Available(True)
+    return answer
+
+
+def _present(node: Node, answers: list[QueryResult[object]]) -> QueryResult[object]:
+    """The single present source. While any source is unresolved the answer is
+    unresolved too: a later commitment could still make a second one present."""
+    active = [answer for answer in answers if not isinstance(answer, Inapplicable)]
+    blocked = _blocked([answer for answer in active if not isinstance(answer, Available)])
+    if blocked is not None:
+        return blocked
+    if len(active) > 1:
+        return reject(
+            "multiple-suppliers",
+            f"{len(active)} sources are present; at most one may supply this value",
+            owner=node.owner,
+        )
+    if not active:
+        return Unresolved(
+            (
+                Finding(
+                    FindingKind.LIMITATION,
+                    "input-unsupplied",
+                    node.owner,
+                    "no present source supplies this value",
+                ),
+            )
+        )
+    return active[0]
+
+
+def _graph_frame(snapshot: Snapshot, node: Node) -> _execution.Frame:
+    from .graph import Located  # noqa: PLC0415 - value type of the graph primitives
+
+    if node.kind == "present":
+        answers: list[QueryResult[object]] = []
+        for _, target in node.alternatives:
+            answers.append(cast(QueryResult[object], (yield target)))
+        return Evaluation(_present(node, answers))
+    if node.kind == "locate":
+        assert node.output is not None
+        answer = cast(QueryResult[object], (yield node.output))
+        if not isinstance(answer, Available):
+            return Evaluation(answer)
+        where, member = cast(tuple[str | None, str], node.value)
+        return Evaluation(Available(Located(where, member, answer.value)))
+    assert node.kind == "members"
+    located: list[Located[object]] = []
+    failures: list[QueryResult[object]] = []
+    settled: set[str] = set()
+    for name, target in node.alternatives:
+        if name in settled:
+            continue  # this node's selected case already answered
+        answer = cast(QueryResult[object], (yield target))
+        if isinstance(answer, Inapplicable):
+            continue
+        settled.add(name)
+        if isinstance(answer, Available):
+            located.append(Located(name, cast(str, node.value), answer.value))
+        else:
+            failures.append(answer)
+    blocked = _blocked(failures)
+    return Evaluation(blocked if blocked is not None else Available(tuple(located)))
+
+
 def _frame(snapshot: Snapshot, node: Node) -> _execution.Frame:
     if node.guard is not None:
         guard = cast(QueryResult[object], (yield node.guard))
@@ -187,6 +258,8 @@ def _frame(snapshot: Snapshot, node: Node) -> _execution.Frame:
         )
     if node.kind == "const":
         return Evaluation(Available(node.value))
+    if node.kind in {"present", "locate", "members"}:
+        return (yield from _graph_frame(snapshot, node))
     if node.kind == "decision":
         if node.index in snapshot.assignments:
             return Evaluation(Available(snapshot.assignments[node.index]))
@@ -241,7 +314,7 @@ def _frame(snapshot: Snapshot, node: Node) -> _execution.Frame:
         output = cast(QueryResult[object], (yield node.output))
         constraints: dict[str, QueryResult[bool]] = {}
         for reference in node.constraints:
-            answer = cast(QueryResult[object], (yield reference))
+            answer = _obligation(snapshot, reference, cast(QueryResult[object], (yield reference)))
             constraints.update(_constraint_members(snapshot, reference, answer))
         view = assess_view(output, owner=node.key, constraints=constraints)
         return Evaluation(view.accepted_result, assessment=view)
@@ -398,12 +471,17 @@ def copy_result(
         return Available(_clone(node, answer.value, owner=node.owner, role="public value snapshot"))
 
 
-def _copy_readiness(snapshot: Snapshot, assessment: ReadinessAssessment) -> ReadinessAssessment:
+def _copy_readiness(
+    snapshot: Snapshot, assessment: ReadinessAssessment, own: str
+) -> ReadinessAssessment:
+    def copy(key: str, answer: QueryResult[object]) -> QueryResult[object]:
+        index = snapshot.linked.keys[key]
+        if key != own and snapshot.linked.nodes[index].kind == "view":
+            return answer  # an obliged view contributes only its Boolean acceptance
+        return copy_result(snapshot, index, answer)
+
     return ReadinessAssessment(
-        {
-            key: copy_result(snapshot, snapshot.linked.keys[key], answer)
-            for key, answer in assessment.results.items()
-        },
+        {key: copy(key, answer) for key, answer in assessment.results.items()},
         assessment.result,
     )
 
@@ -426,7 +504,7 @@ def copy_assessment(snapshot: Snapshot, node_index: int, assessment: Assessment)
         )
         return ViewAssessment(
             output,
-            _copy_readiness(snapshot, assessment.readiness),
+            _copy_readiness(snapshot, assessment.readiness, node.key),
             assessment.constraints,
             accepted,
         )

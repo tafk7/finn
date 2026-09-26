@@ -157,7 +157,7 @@ structure = point.structure().structure
 assert [item.instance_id for item in structure.instances] == [
     "u_replay",
     "u_compute",
-    "u_weights",
+    "u_implementation",
     "u_weight_stream_fifo",
 ]
 assert point.build_requirements() == point.structure().requirements

@@ -47,6 +47,9 @@ class NestedBinding:
 class PlacementPlan:
     bindings: Mapping[str, PlacementBinding]
     nested_bindings: tuple[NestedBinding, ...] = ()
+    # Formals left open at placement: a Bind of the parent may supply them;
+    # otherwise an optional formal is unsupplied and a required one is an error.
+    unbound: tuple[str, ...] = ()
 
 
 class _TargetResolver:
@@ -153,14 +156,13 @@ def collect_placement(placement: Subspace[Space]) -> PlacementPlan:
                     _placement_binding(target.member, supplier, f"{label}.{target.name}"),
                 )
             )
-    missing = parameters.keys() - named.keys()
-    if missing:
-        raise DefinitionError(f"{label}: missing child parameter bindings {sorted(missing)}")
+    unbound = tuple(name for name in parameters if name not in named)
     bindings = {
         name: _placement_binding(parameter, named[name], f"{label}.{name}")
         for name, parameter in parameters.items()
+        if name in named
     }
-    return PlacementPlan(MappingProxyType(bindings), tuple(nested))
+    return PlacementPlan(MappingProxyType(bindings), tuple(nested), unbound)
 
 
 class PlacementPlans:

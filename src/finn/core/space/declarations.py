@@ -14,12 +14,13 @@ from __future__ import annotations
 import re
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Generic, TypeVar, cast, overload
+from typing import TYPE_CHECKING, Any, Generic, TypeAlias, TypeVar, cast, overload
 
 from typing_extensions import Self
 
 from .domains import Domain, finite
 from .errors import DefinitionError
+from .graph import LOCATED, Located
 from .results import (
     QueryResult,
 )
@@ -316,6 +317,13 @@ class ConstraintGroup(Declaration):
         self.constraints = constraints
 
 
+# A view's obligations: constraints, groups, other views (their acceptance),
+# accepted references, and member families (each member's acceptance).
+Obligation: TypeAlias = (
+    "Constraint | ConstraintGroup | View[Any] | AcceptedViewRef[Any] | Members[Any]"
+)
+
+
 class View(Declaration, Generic[T]):
     """One assessment declaration for either a value or an authored function."""
 
@@ -323,7 +331,7 @@ class View(Declaration, Generic[T]):
         self,
         source: ValueRef[T],
         *,
-        constraints: Sequence[Constraint | ConstraintGroup] = (),
+        constraints: Sequence[Obligation] = (),
         when: ValueRef[bool] | None = None,
     ) -> None:
         self.source: ValueRef[T] | None = source
@@ -340,7 +348,7 @@ class View(Declaration, Generic[T]):
         *,
         semantics: ValueSemantics[T] | None,
         aliases: Mapping[str, object],
-        constraints: Sequence[Constraint | ConstraintGroup],
+        constraints: Sequence[Obligation],
         when: ValueRef[bool] | None = None,
     ) -> View[T]:
         result = cls.__new__(cls)
@@ -370,7 +378,7 @@ class _ViewDecorator:
     def __init__(
         self,
         aliases: Mapping[str, object],
-        constraints: Sequence[Constraint | ConstraintGroup],
+        constraints: Sequence[Obligation],
         when: ValueRef[bool] | None,
     ) -> None:
         self.aliases, self.constraints = aliases, constraints
@@ -409,7 +417,7 @@ def view(
     *,
     semantics: ValueSemantics[T],
     when: ValueRef[bool] | None = None,
-    constraints: Sequence[Constraint | ConstraintGroup] = (),
+    constraints: Sequence[Obligation] = (),
     **aliases: object,
 ) -> _SemanticViewDecorator[T]: ...
 
@@ -419,7 +427,7 @@ def view(
     *,
     semantics: None = None,
     when: ValueRef[bool] | None = None,
-    constraints: Sequence[Constraint | ConstraintGroup] = (),
+    constraints: Sequence[Obligation] = (),
     **aliases: object,
 ) -> _ViewDecorator: ...
 
@@ -430,7 +438,7 @@ def view(
     *,
     semantics: object = None,
     when: ValueRef[bool] | None = None,
-    constraints: Sequence[Constraint | ConstraintGroup] = (),
+    constraints: Sequence[Obligation] = (),
     **aliases: object,
 ) -> object:
     decorator = _ViewDecorator(aliases, constraints, when)
@@ -518,8 +526,12 @@ class Subspace(Declaration, Generic[S_co]):
     def decision_ref(self, member: ValueRef[T]) -> DecisionRef[T]:
         return DecisionRef(cast("Subspace[Space]", self), member)
 
-    def accepted(self, member: View[T] | ViewKey[T]) -> ValueRef[T]:
+    def accepted(self, member: View[T] | ViewKey[T]) -> AcceptedViewRef[T]:
         return AcceptedViewRef(cast("Subspace[Space]", self), member)
+
+    def at(self, member: ValueRef[T] | View[T] | ValueKey[T] | ViewKey[T]) -> LocatedRef[T]:
+        """The member's value together with this node's identity (a ``Located``)."""
+        return LocatedRef(cast("Subspace[Space]", self), member)
 
 
 class SubspaceChoice(Declaration):
@@ -565,5 +577,105 @@ class SubspaceChoice(Declaration):
     def ref(self, member: ValueKey[T]) -> ValueRef[T]:
         return ScopedValueRef(self, member)
 
-    def accepted(self, member: ViewKey[T]) -> ValueRef[T]:
+    def accepted(self, member: ViewKey[T]) -> AcceptedViewRef[T]:
         return AcceptedViewRef(self, member)
+
+    def at(self, member: ValueKey[T] | ViewKey[T]) -> LocatedRef[T]:
+        """The selected case's export, located at this choice's node."""
+        return LocatedRef(self, member)
+
+    def case(self) -> ChoiceCaseRef:
+        """The selected case name, read-only; the selector owns the commitment."""
+        if len(self.alternatives) < 2:
+            raise DefinitionError("a singleton choice has no selected-case reference")
+        return ChoiceCaseRef(self)
+
+
+# -- Graph primitives ------------------------------------------------------------------
+
+
+class ChoiceCaseRef(ScopedValueRef[str]):
+    """Read-only reference to the case a structural choice selects."""
+
+    def __init__(self, placement: SubspaceChoice) -> None:
+        super().__init__(placement, ValueKey("case", str))
+
+    @overload
+    def __get__(self, instance: None, owner: type[object] | None = None) -> Self: ...
+
+    @overload
+    def __get__(self, instance: Space, owner: type[object] | None = None) -> str: ...
+
+    def __get__(self, instance: Space | None, owner: type[object] | None = None) -> Self | str:
+        if instance is None:
+            return self
+        from .occurrence import read_value
+
+        return read_value(instance, self)
+
+
+class LocatedRef(ValueDecl[Located[T]], Generic[T]):
+    """A member's value together with the identity of the node that holds it.
+
+    ``placement`` is a child placement, a structural choice (its selected case),
+    or None for the enclosing Space's own member (see ``located``).
+    """
+
+    def __init__(
+        self,
+        placement: Subspace[Space] | SubspaceChoice | None,
+        member: ValueRef[T] | View[T] | ValueKey[T] | ViewKey[T],
+    ) -> None:
+        self.placement, self.member = placement, member
+        self.semantics = cast("ValueSemantics[Located[T]]", LOCATED)
+
+
+def located(member: ValueRef[T] | View[T]) -> LocatedRef[T]:
+    """One of this Space's own members, located at the Space itself (node None)."""
+    return LocatedRef(None, member)
+
+
+class Present(ValueDecl[T], Generic[T]):
+    """The value of whichever one of ``sources`` is present (applicable).
+
+    Unresolved while any source is unresolved; refused if two are present;
+    unsupplied (unresolved) if none is.
+    """
+
+    def __init__(self, *sources: ValueRef[T], semantics: ValueSemantics[T] | None = None) -> None:
+        if not sources or any(not isinstance(source, ValueRef) for source in sources):
+            raise DefinitionError("Present requires one or more value references")
+        self.sources = sources
+        self.semantics = semantics if semantics is not None else sources[0].semantics
+
+
+class Bind(Declaration, Generic[T]):
+    """An edge: supply a descendant's unbound formal from ``source``.
+
+    Declared in the enclosing Space, after the nodes it joins, so edges may
+    point forward or around a cycle. Several binds to one formal are resolved
+    like ``Present``: at most one may be present.
+    """
+
+    def __init__(
+        self,
+        target: ValueRef[T],
+        source: ValueRef[T] | T,
+        *,
+        when: ValueRef[bool] | None = None,
+    ) -> None:
+        if not isinstance(target, ScopedValueRef):
+            raise DefinitionError("a Bind targets a descendant's formal through a scoped ref")
+        self.target, self.source, self.when = target, source, when
+        self.semantics = target.semantics
+
+
+class Members(ValueDecl[tuple[Any, ...]], Generic[T]):
+    """Every present child node exporting ``key``, as ``Located`` values in
+    declaration order; used as an obligation, each member's acceptance counts."""
+
+    def __init__(self, key: ViewKey[T]) -> None:
+        if not isinstance(key, ViewKey):
+            raise DefinitionError("Members requires a ViewKey")
+        self.key = key
+        self.semantics = cast("ValueSemantics[tuple[Any, ...]]", semantics_for(tuple))

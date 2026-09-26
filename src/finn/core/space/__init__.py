@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 """Typed design-space authoring, immutable specialization and public services."""
 
-from . import codecs, extensions, inspection, selections
+from . import codecs, extensions, graph, inspection, selections
 from ._configuration import BoundDecision, BoundValue, BoundView, ChoiceView, Space
 from ._execution import (
     CleanupFailure,
@@ -14,13 +14,18 @@ from .codecs import CodecBinding, JSONValue, SelectionSchema, ValueCodec, codec_
 from .compiler import SpaceModel, compile_space
 from .declarations import (
     AcceptedViewRef,
+    Bind,
+    ChoiceCaseRef,
     Const,
     Constraint,
     ConstraintGroup,
     Decision,
     DecisionRef,
     Derived,
+    LocatedRef,
+    Members,
     Param,
+    Present,
     Subspace,
     SubspaceChoice,
     ValueKey,
@@ -29,6 +34,7 @@ from .declarations import (
     ViewKey,
     constraint,
     derived,
+    located,
     view,
 )
 from .domains import Domain, divisors_of, domain, finite
@@ -42,6 +48,7 @@ from .errors import (
 )
 from .expressions import Expr
 from .extensions import ScopeBuilder
+from .graph import Located
 from .references import DecisionHandle, ValueHandle
 from .results import (
     Available,
@@ -76,6 +83,14 @@ __all__ = [
     "Subspace",
     "SubspaceChoice",
     "ScopeBuilder",
+    # Graph primitives
+    "Bind",
+    "Present",
+    "Members",
+    "LocatedRef",
+    "Located",
+    "located",
+    "ChoiceCaseRef",
     "derived",
     "constraint",
     "view",
@@ -138,6 +153,7 @@ __all__ = [
     # Public services
     "codecs",
     "extensions",
+    "graph",
     "inspection",
     "selections",
 ]

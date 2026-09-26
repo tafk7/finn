@@ -27,7 +27,7 @@ from finn.kernels.datatypes.scalar import ScalarEncoding
 from finn.kernels.physical.contract import STREAM_CONTRACT, StreamContract
 from finn.kernels.physical.forms import Every, Traversal
 from finn.kernels.physical.stream import ReadyValidStream, StreamMarker, MarkerKind
-from finn.kernels.streams import Port
+from finn.kernels.streams import MODULE, STREAM_SPEC
 from finn.kernels.artifacts.contribution_types import CopiedSource
 from finn.kernels.artifacts.requirements import (
     FixedModuleName,
@@ -108,7 +108,7 @@ class ReplayBuffer(Kernel):
     id = "finnlib.replay_buffer"
     version = "1"
 
-    input_stream = Port(Endpoint.TARGET)
+    input_stream = Param(STREAM_SPEC, required=False)
     sequence_length = Param(int)
     replay_count = Param(int)
 
@@ -143,6 +143,8 @@ class ReplayBuffer(Kernel):
             )
         except ValueError as error:
             return reject("replay-geometry", str(error))
+
+    exports = {MODULE: build_requirements}
 
 
 def cyclic_stream_interface(*, word_bits: int) -> ReadyValidStream:

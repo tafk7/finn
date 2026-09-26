@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from typing_extensions import assert_type
 
 from finn.core.space import (
+    AcceptedViewRef,
     Available,
     BoundDecision,
     BoundValue,
@@ -206,9 +207,9 @@ def check(point: Fifo, assembly: Assembly, eltwise: Eltwise) -> None:
     assert_type(Assembly.second.decision_ref(Fifo.depth), DecisionRef[int])
     assert_type(assembly.first, Fifo)
     assert_type(assembly.first.with_choices(ram_style="block"), Fifo)
-    assert_type(Assembly.first.accepted(Fifo.physical), ValueRef[int])
+    assert_type(Assembly.first.accepted(Fifo.physical), AcceptedViewRef[int])
     assert_type(Assembly.implementation.ref(WIDTH), ValueRef[int])
-    assert_type(Assembly.implementation.accepted(PHYSICAL), ValueRef[int])
+    assert_type(Assembly.implementation.accepted(PHYSICAL), AcceptedViewRef[int])
     assert_type(assembly.implementation, ChoiceView)
     assert_type(Assembly(width=8), Assembly)
     assert_type(GuardedAssembly.value, Derived[int])

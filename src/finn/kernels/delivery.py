@@ -6,7 +6,7 @@
 The consumer supplies the operand values and the beat ``form`` in which it reads
 them; the kernel packs the image in that form and streams it cyclically from an
 initialized ROM. Its ``output`` view is a stream contract, so a parent connects
-it to a consumer port with ``Composition.connect`` instead of wiring pins. The
+it to a consumer port with a stream relation instead of wiring pins. The
 image is embedded in the build requirements; there is no initialization file.
 
 The same kernel serves a matrix tile walk (MVAU/VVAU weights), a chunked or
@@ -36,7 +36,7 @@ from finn.kernels.streaming import (
     cyclic_stream_requirements,
 )
 from finn.core.space import default_semantics
-from finn.kernels.streams import MODULE, MODULE_SEMANTICS, OUTPUT_PORT, Module
+from finn.kernels.streams import MODULE
 
 
 class CyclicDelivery(Kernel):
@@ -85,11 +85,7 @@ class CyclicDelivery(Kernel):
             rom_style=self.rom_style,
         )
 
-    @view(semantics=MODULE_SEMANTICS)
-    def module(self) -> Module:
-        return Module(self.build_requirements())
-
-    exports = {OUTPUT_PORT: output, MODULE: module}
+    exports = {MODULE: build_requirements}
 
 
 def _leaves(values: object) -> tuple[int, ...]:

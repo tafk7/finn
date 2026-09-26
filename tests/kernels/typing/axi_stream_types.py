@@ -4,23 +4,25 @@
 
 from typing_extensions import assert_type
 
-from finn.kernels.datatypes.scalar import IntegerScalar, Scalar, ScalarEncoding
+from finn.core.space import AcceptedViewRef, BoundView, Param, QueryResult, Subspace, ViewAssessment
 from finn.dataflow.datatypes import QONNXDataType
+from finn.kernels.datatypes.scalar import IntegerScalar, Scalar, ScalarEncoding
 from finn.kernels.dotp import DotpAxiKernel
 from finn.kernels.eltwise import EltwiseKernel
 from finn.kernels.physical.axi_stream import AxiStream, AxiStreamPort
 from finn.kernels.physical.layout import PackedBeatLayout
 from finn.kernels.physical.ports import NativeStreamPort
 from finn.kernels.physical.stream import ReadyValidStream
-from finn.core.space import BoundView, Param, QueryResult, Subspace, ValueRef, ViewAssessment
 
 
 def check(point: DotpAxiKernel, eltwise: EltwiseKernel) -> None:
     assert_type(DotpAxiKernel.activation, Subspace[AxiStreamPort])
     assert_type(DotpAxiKernel.activation_type, Subspace[IntegerScalar])
     assert_type(DotpAxiKernel.activation_dtype, Param[QONNXDataType])
-    assert_type(DotpAxiKernel.activation.accepted(AxiStreamPort.stream), ValueRef[AxiStream])
-    assert_type(DotpAxiKernel.activation_type.accepted(Scalar.encoding), ValueRef[ScalarEncoding])
+    assert_type(DotpAxiKernel.activation.accepted(AxiStreamPort.stream), AcceptedViewRef[AxiStream])
+    assert_type(
+        DotpAxiKernel.activation_type.accepted(Scalar.encoding), AcceptedViewRef[ScalarEncoding]
+    )
     assert_type(point.activation, AxiStreamPort)
     assert_type(point.activation.dtype, QONNXDataType)
     assert_type(point.activation.payload_bits, int)

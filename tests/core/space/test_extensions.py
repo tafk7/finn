@@ -265,8 +265,14 @@ def test_duplicate_names_owned_declarations_and_foreign_exports_are_definition_e
 def test_missing_bindings_and_incompatible_exports_fail_without_descriptor_runtime_errors() -> None:
     builder = ScopeBuilder(StreamShape)
     builder.bind(StreamShape.dtype, Encoding(3))
+    placement = builder.place()
+
+    class Holder(Space):
+        shape = placement
+
+    # The open formal is refused where it would have to be supplied: its parent.
     with pytest.raises(DefinitionError, match="missing child parameter bindings"):
-        builder.place()
+        Holder()
     assert builder.finish() is builder.finish()
     wrong = ScopeBuilder(Space)
     integer = wrong.add("value", Const(3))

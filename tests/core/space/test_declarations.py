@@ -346,8 +346,15 @@ def test_child_omissions_and_incompatible_bindings_are_not_implicit_exposure() -
         width = Param(int)
         optional_width = Param(int, required=False)
 
+    # An optional formal may stay open: it is unsupplied, not implicitly exposed.
+    assert collect_placement(Subspace(Child, width=8)).unbound == ("optional_width",)
+
+    class Parent(Space):
+        child = Subspace(Child, optional_width=3)
+
+    # A required formal nobody supplies fails when its parent is prepared.
     with pytest.raises(DefinitionError, match="missing child parameter"):
-        collect_placement(Subspace(Child, width=8))
+        Parent()
     with pytest.raises(DefinitionError, match="unknown child parameter"):
         collect_placement(Subspace(Child, width=8, optional_width=9, typo=1))
     with pytest.raises(DefinitionError, match="incompatible value semantics"):
