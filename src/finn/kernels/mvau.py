@@ -13,10 +13,10 @@ There is no top-level last: the declared extents determine all stream lengths.
 Input high padding is ignored; output high padding is unspecified.
 
 No Region, logical operand mapping, or graph is required. ``MVAU`` declares its
-connections as ``Stream``s and binds each kernel's ports to them; the replay,
-dotp, the weight source and the boundary ports are wired by
-``assemble_streams`` through checked stream contracts. ``mvau_assembly``
-supplies concrete facts and choices to this same path.
+connections as ``Stream``s between its placements' port views; each stream
+checks its own contract, and ``structure`` composes the accepted connections.
+``mvau_assembly`` is a convenience adapter: it commits concrete facts and
+choices and packs the resulting views into an ``MVAUAssembly`` record.
 """
 
 from __future__ import annotations
@@ -148,7 +148,6 @@ class MVAUAssembly:
 
 
 FOLDING = default_semantics(_Folding)
-ASSEMBLY = default_semantics(MVAUAssembly)
 
 
 class MVAU(Space):
