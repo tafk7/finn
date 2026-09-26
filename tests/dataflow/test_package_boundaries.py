@@ -29,12 +29,6 @@ DATAFLOW = FINN / "dataflow"
 KERNELS = FINN / "kernels"
 PARKED = FINN / "parked"
 TESTS = ROOT / "tests"
-PARKED_TESTS = TESTS / "parked"
-
-#: Live modules that still reach into parked code.  Each entry is a known leak
-#: to remove, not a permitted dependency; the test below fails if one is fixed
-#: without being deleted here, so the list cannot go stale.
-KNOWN_PARKED_IMPORTERS = frozenset({FINN / "analysis" / "verify_custom_nodes.py"})
 
 
 def _module_name(path: Path) -> str:
@@ -129,21 +123,15 @@ def test_kernels_never_import_parked_code() -> None:
 
 
 def test_nothing_outside_parked_imports_parked_code() -> None:
-    leaking: set[Path] = set()
     for path in _sources(FINN):
         if path.is_relative_to(PARKED):
             continue
-        if any(_within(name, "finn.parked") for name in _imported_modules(path, _package_of(path))):
-            leaking.add(path)
-    assert leaking == KNOWN_PARKED_IMPORTERS, sorted(map(str, leaking))
+        named = _imported_modules(path, _package_of(path))
+        assert not any(_within(name, "finn.parked") for name in named), path
 
     for path in _sources(TESTS):
-        if path.is_relative_to(PARKED_TESTS):
-            continue
         named = _imported_modules(path, "tests")
-        assert not any(_within(name, "finn.parked") or _within(name, "parked") for name in named), (
-            path
-        )
+        assert not any(_within(name, "finn.parked") for name in named), path
 
 
 def test_the_logical_facade_loads_no_model_until_a_public_name_is_requested() -> None:
@@ -169,7 +157,7 @@ def test_the_logical_facade_loads_no_model_until_a_public_name_is_requested() ->
 def test_package_roots_re_export_nothing() -> None:
     """One import path per concept: owning modules, not package roots."""
 
-    for name in ("finn.dataflow", "finn.dataflow.model", "finn.dataflow.kernels"):
+    for name in ("finn.dataflow", "finn.dataflow.model"):
         root = import_module(name)
         assert not hasattr(root, "__all__"), name
         assert not hasattr(root, "__getattr__"), name

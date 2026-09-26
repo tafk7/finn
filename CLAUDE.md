@@ -9,15 +9,14 @@ shell** and keep working; do not sit on a foreground call waiting for it.
 ```
 # right
 Bash(run_in_background=true):
-    FINN_DOCKER_EXTRA="..." bash run-docker.sh bash tests/dataflow/rtlsim/run_composed_equiv.sh
+    FINN_DOCKER_EXTRA="..." bash run-docker.sh bash <runner>.sh
 
 # wrong
 Bash(timeout=3000): bash run-docker.sh ...          # blocks the whole session
 ```
 
-The runner scripts under `tests/dataflow/rtlsim/` already `tee` to a
-gitignored `*.log` and propagate the child's exit status, so a backgrounded
-run leaves a readable transcript and a truthful status.
+Have the runner `tee` to a gitignored `*.log` and propagate the child's exit
+status, so a backgrounded run leaves a readable transcript and a truthful status.
 
 **While it runs**, do the work that does not need Vivado: unit tests, lint,
 mypy, the next increment. The completion notification will find you — do **not**
@@ -48,16 +47,13 @@ shared: a second container entering the same window fails with
 mv: cannot stat '.../deps/qonnx/pyproject.toml': No such file or directory
 ```
 
-and exits before producing a fixture log at all. The failure names qonnx and
-looks nothing like a concurrency problem, which is why it is written down here.
-
-So fixtures 5 and 6 are **sequential**, not parallel — start the second only
-after the first has exited. Backgrounding them both at once is the natural
-thing to do and the wrong one.
+and exits before producing a log at all. The failure names qonnx and looks
+nothing like a concurrency problem, which is why it is written down here. Run
+Docker invocations sequentially.
 
 ### Running against FinnLib
 
-The decomposed MVAU compiles against FinnLib, which is a separate repository.
+The kernels compile against FinnLib, which is a separate repository.
 `fetch-repos.sh` pins it under `deps/finnlib`; a local working clone is reached
 by mounting it and setting `FINNLIB_ROOT`:
 
@@ -86,24 +82,32 @@ object:
   diagnostic and without the watchdog firing.
 
 So the rule is **one simulation per process**, not one configuration per
-process — a single configuration is already several simulations. The harness
-marshals each compile+load+run into a fresh interpreter over a JSON request
-(`--simulate <request> --out <response>`) and the parent never loads a
-simulation object at all. Keep that shape when adding fixtures.
+process — a single configuration is already several simulations. Run each
+compile+load+run in a fresh interpreter.
 
-## Test and lint commands
+## Packages and gates
 
 ```
-FINN_ROOT=$PWD PYTHONPATH=src:tests:deps/qonnx/src python -m pytest tests/dataflow
-ruff check src/finn/dataflow tests/dataflow
-ruff format --check src/finn/dataflow tests/dataflow
-env -u PYTHONPATH MYPYPATH=src:tests mypy --strict -p finn.dataflow
+finn.core.space  <-  finn.dataflow  <-  finn.kernels  <-  finn.parked
 ```
 
-`scripts/check-dataflow-design.sh` runs all of these together, and is the gate
-for changes under `src/finn/dataflow/`.
+- `finn.core.space` — the generic Space engine.
+- `finn.dataflow` — canonical logical dataflow values (Regions, Networks, maps).
+- `finn.kernels` — kernels bound to RTL/HLS sources.
+- `finn.parked` — retired code kept as reference only. It is not tested, not
+  shipped, and nothing live imports it.
+
+Gates (both use the kernel venv):
+
+```
+PYTHON_BIN=/home/tkeller/prj-kernels/.kernel-venv/bin/python bash scripts/check-kernels.sh
+PYTHON_BIN=/home/tkeller/prj-kernels/.kernel-venv/bin/python bash scripts/check-dataflow-design.sh
+```
+
+Run `ruff format` only on the paths you changed; formatting all of `src`
+rewrites unrelated FINN files.
 
 **mypy must not see `deps/qonnx/src` on `PYTHONPATH`.** With qonnx importable,
 its missing `py.typed` turns every qonnx import into a different error code and
 the `# type: ignore[import-not-found]` comments read as unused — dozens of
-false positives. Hence `env -u PYTHONPATH`.
+false positives. The gates run mypy under `env -u PYTHONPATH`.

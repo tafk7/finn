@@ -25,7 +25,7 @@ from finn.parked.dataflow.model.logical.authoring import RegionDeclaration
 from finn.parked.dataflow.model.physical.authoring import PhysicallyUnsupported
 from finn.kernels.space.declarations import Input
 from finn.kernels.datatypes.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
-from finn.dataflow.kernels.matmul.regions import construct_weight_stream_region
+from finn.parked.dataflow.kernels.matmul.regions import construct_weight_stream_region
 
 
 class MemstreamKernel(Kernel):

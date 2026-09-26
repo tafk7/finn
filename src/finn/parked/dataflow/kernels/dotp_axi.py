@@ -49,7 +49,7 @@ from finn.parked.dataflow.kernels.typing import (
     operand_widths_supported as _operand_widths_supported,
 )
 from finn.dataflow.model.logical.region import DataflowRegion, NumericElementType, element_width
-from finn.dataflow.kernels.matmul.regions import (
+from finn.parked.dataflow.kernels.matmul.regions import (
     construct_batch_interleaved_streamed_mvau_region,
     construct_dot_product_region,
     construct_embedded_dot_product_region,

@@ -7,7 +7,7 @@
 # finn.dataflow sits directly on finn.core.space and below finn.kernels, so this
 # gate checks only the value layer. Run scripts/check-kernels.sh as well for a
 # change that can reach the kernels built on it. Parked code under finn.parked
-# and tests/parked is outside every gate.
+# is reference only and outside every gate.
 
 set -euo pipefail
 
@@ -61,16 +61,9 @@ env -u PYTHONPATH MYPYPATH=src:tests "$MYPY_BIN" \
     --explicit-package-bases \
     -p finn.dataflow
 
-# The typed canonical tests.  The remaining files under tests/dataflow predate
-# strict typing of tests and are checked by pytest and ruff only.
+# The canonical tests are strictly typed too.
 env -u PYTHONPATH MYPYPATH=src:tests "$MYPY_BIN" \
     --no-incremental \
     --strict \
     --explicit-package-bases \
-    tests/dataflow/parameters \
-    tests/dataflow/model/test_composition.py \
-    tests/dataflow/model/test_datatypes.py \
-    tests/dataflow/model/test_facade.py \
-    tests/dataflow/model/test_network.py \
-    tests/dataflow/model/test_network_validation.py \
-    tests/dataflow/test_package_boundaries.py
+    tests/dataflow

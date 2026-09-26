@@ -36,7 +36,7 @@ from finn.dataflow.model.logical.region import (
     ScheduleLevel,
     is_element_type,
 )
-from finn.dataflow.parameters.cyclic.region import construct_cyclic_parameter_region
+from finn.parked.dataflow.parameters.cyclic.region import construct_cyclic_parameter_region
 
 
 def _positive_integer(value: object) -> bool:

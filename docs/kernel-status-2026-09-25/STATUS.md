@@ -88,15 +88,19 @@ What the evidence settled:
   (Section 5), and the physical-profile limits.
 - **Package rehome.** `finn.dataflow` now holds only the canonical logical
   values: Regions, Networks, maps, their validation, presentation, refs,
-  composition, results and their `finn.core.space` value semantics, plus the
-  reference MVAU and cyclic-parameter Regions. The scalar datatype boundary moved
-  from `finn.kernels.datatypes.values` to `finn.dataflow.datatypes`. The
-  dependency direction is `finn.core.space <- finn.dataflow <- finn.kernels <-
-  finn.parked`. The retired implementation (authoring, Views, ops, kernel models,
-  `custom_op.dataflow`) lives under `finn.parked` and `tests/parked`. It is
-  excluded from the wheel and from every gate. `scripts/check-dataflow-design.sh`
-  is the canon gate (175 tests, strict `-p finn.dataflow`). Kernel gate: 301
-  Space and 758 kernel tests pass.
+  composition, results and their `finn.core.space` value semantics. The scalar
+  datatype boundary moved from `finn.kernels.datatypes.values` to
+  `finn.dataflow.datatypes`. The dependency direction is `finn.core.space <-
+  finn.dataflow <- finn.kernels <- finn.parked`.
+  - `finn.parked` is code reference only: the retired authoring, Views, ops,
+    kernel models, `custom_op.dataflow`, and the reference MVAU and
+    cyclic-parameter Region constructors. It is excluded from the wheel and from
+    every gate, and nothing live imports it. Its tests were deleted.
+  - The canon tests that depended on the parked constructors, or predated strict
+    typing, were deleted rather than kept as weak evidence. The dataflow model
+    gets a focused pass, with new tests, after Space composition becomes graph-like.
+  - `finn/analysis/verify_custom_nodes.py` is restored to its pre-dataflow
+    baseline (it only checks baseline FINN custom ops).
 
 ## 4. Direction: Space-native streams
 

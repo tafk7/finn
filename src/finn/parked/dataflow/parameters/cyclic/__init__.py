@@ -3,7 +3,7 @@
 
 """Cyclic parameter-supply vocabulary and regions."""
 
-from finn.dataflow.parameters.cyclic.region import construct_cyclic_parameter_region
+from finn.parked.dataflow.parameters.cyclic.region import construct_cyclic_parameter_region
 
 __all__ = [
     "construct_cyclic_parameter_region",

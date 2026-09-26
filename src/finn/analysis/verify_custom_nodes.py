@@ -26,11 +26,10 @@
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-from qonnx.core.modelwrapper import ModelWrapper  # type: ignore[import-not-found]
-from qonnx.custom_op.registry import is_custom_op  # type: ignore[import-not-found]
+import qonnx.custom_op.registry as registry
 
 
-def verify_nodes(model: ModelWrapper) -> dict[str, object]:
+def verify_nodes(model):
     """Checks if custom ops in graph are correctly built, with all attributes
     and inputs. Please note that many FINN CustomOps don't yet implement the
     verify_node function required for this analysis pass to work correctly.
@@ -39,17 +38,11 @@ def verify_nodes(model: ModelWrapper) -> dict[str, object]:
 
     * info_messages: is list of strings about the result of the verification."""
 
-    from contextlib import nullcontext  # noqa: PLC0415
-    from finn.parked.dataflow.ops.base import DATAFLOW_DOMAIN  # noqa: PLC0415
-    from finn.parked.dataflow.ops.reconstruction import source_analysis  # noqa: PLC0415
-
     verification_dict = {}
-    dataflow = any(node.domain == DATAFLOW_DOMAIN for node in model.graph.node)
-    with source_analysis(model) if dataflow else nullcontext():
-        for node in model.graph.node:
-            if is_custom_op(node.domain):
-                op_type = node.op_type
-                inst = model.get_customop_wrapper(node)
-                verification_dict[op_type] = inst.verify_node()
+    for node in model.graph.node:
+        if registry.is_custom_op(node.domain):
+            op_type = node.op_type
+            inst = registry.getCustomOp(node)
+            verification_dict[op_type] = inst.verify_node()
 
     return verification_dict
