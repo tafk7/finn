@@ -2,11 +2,12 @@
 # SPDX-License-Identifier: BSD-3-Clause
 """A graph of design spaces, stated only in terms of Space.
 
-Nodes are placements. Edges are the existing bindings, plus ``Bind`` for an
-edge declared after its nodes (forward, around a cycle, or built as data) and
-``Present`` for whichever source is present. Structure becomes observable to
-computations through ``Located`` values (``.at`` / ``located``) and
-``Members(key)``, which ranges over the present children that export ``key``.
+Calling a family declares a node; ``node.member`` is a reference to one of its
+members. Edges are bindings at the call, plus ``Bind`` for an edge declared
+after its nodes (forward, around a cycle, or built as data) and ``Present`` for
+whichever source is present. A ``Param(Located)`` formal receives a reference
+with its node and member names, and ``Members(key)`` ranges over the present
+children that export ``key``. A Decision over nodes is the structural choice.
 None of these cases is about hardware.
 """
 
@@ -17,6 +18,8 @@ from typing import cast
 import pytest
 
 from finn.core.space import (
+    OPEN,
+    UNSUPPLIED,
     Available,
     Bind,
     Decision,
@@ -24,28 +27,25 @@ from finn.core.space import (
     EvaluationError,
     Inapplicable,
     Located,
+    LocatedParam,
     Members,
     Param,
     Present,
     Rejected,
-    ScopeBuilder,
     Space,
-    Subspace,
-    SubspaceChoice,
     Unresolved,
     View,
     ViewKey,
+    composite,
+    configure,
     constraint,
     derived,
     divisors_of,
     inspection,
-    located,
     reject,
-    require_value,
     selections,
     view,
 )
-from finn.core.space.graph import LOCATED
 
 COST = ViewKey("cost", int)
 AGREED = ViewKey("agreed", int)
@@ -63,7 +63,7 @@ def owners(result: object) -> set[str]:
 
 
 class Tiles(Space):
-    extent = Param(int)
+    extent: Param[int] = Param(int)
     factor = Decision(int, domain=divisors_of(extent))
 
     @view
@@ -79,8 +79,8 @@ class Tiles(Space):
 class Same(Space):
     """A relation: two located values must be equal; its output is the agreed value."""
 
-    left = Param(LOCATED)
-    right = Param(LOCATED)
+    left: LocatedParam[int] = Param(Located)
+    right: LocatedParam[int] = Param(Located)
 
     @constraint
     def equal(self) -> bool | Rejected:
@@ -93,34 +93,32 @@ class Same(Space):
             )
         return True
 
-    @view(constraints=(equal,))
+    @view(requires=(equal,))
     def agreed(self) -> int:
-        return cast(int, self.left.value)
+        return self.left.value
 
     exports = {AGREED: agreed}
 
 
 class Aligned(Space):
-    extent = Param(int)
-    first = Subspace(Tiles, extent=extent)
-    second = Subspace(Tiles, extent=extent)
-    aligned = Subspace(Same, left=first.at(Tiles.factor), right=second.at(Tiles.factor))
+    extent: Param[int] = Param(int)
+    first = Tiles(extent=extent)
+    second = Tiles(extent=extent)
+    # A plain reference supplies a located formal: node and member come from the graph.
+    aligned = Same(left=first.factor, right=second.factor)
     relations = Members(AGREED)
 
-    @view(constraints=(relations,))
+    @view(requires=(relations,))
     def factor(self) -> int:
         return self.aligned.agreed()
 
 
 def choose(point: Aligned, first: int, second: int) -> Aligned:
-    return point.with_choices(
-        point.first.field(Tiles.factor).change(first),
-        point.second.field(Tiles.factor).change(second),
-    )
+    return point.with_choices({Aligned.first.factor: first, Aligned.second.factor: second})
 
 
 def test_a_relation_node_reads_located_siblings_and_owns_its_refusal() -> None:
-    point = Aligned(extent=12)
+    point = configure(Aligned(extent=12))
     assert isinstance(point.factor.query(), Unresolved)
     assert choose(point, 3, 3).factor() == 3
     refused = choose(point, 3, 4).factor.inspect()
@@ -137,11 +135,11 @@ def test_a_relation_node_reads_located_siblings_and_owns_its_refusal() -> None:
 
 
 class Budgeted(Space):
-    limit = Param(int)
+    limit: Param[int] = Param(int)
     use_third = Decision(bool, values=(False, True))
-    a = Subspace(Tiles, extent=12)
-    b = Subspace(Tiles, extent=8)
-    c = Subspace(Tiles, extent=6, when=use_third)
+    a = Tiles(extent=12)
+    b = Tiles(extent=8)
+    c = Tiles(extent=6, when=use_third)
     costs = Members(COST)
 
     @constraint
@@ -151,25 +149,25 @@ class Budgeted(Space):
             return reject("over-budget", f"{spent} exceeds {self.limit}")
         return True
 
-    @view(constraints=(costs, within))
+    @view(requires=(costs, within))
     def total(self) -> int:
         return sum(member.value for member in self.costs)
 
 
 def test_members_range_over_present_nodes_with_per_member_obligations() -> None:
-    point = Budgeted(limit=10).with_choices(use_third=False)
-    point = point.with_choices(point.a.field(Tiles.factor).change(4))
+    point = configure(Budgeted(limit=10)).with_choices(use_third=False)
+    point = point.with_choices({Budgeted.a.factor: 4})
     assessment = point.total.inspect()
     # Only b is still open; the absent c is inapplicable and never refuses.
     results = assessment.constraints.results
     assert set(results) == {"a.cost", "b.cost", "c.cost", "within"}
     assert isinstance(results["b.cost"], Unresolved)
     assert isinstance(results["c.cost"], Inapplicable)
-    point = point.with_choices(point.b.field(Tiles.factor).change(2))
+    point = point.with_choices({Budgeted.b.factor: 2})
     assert point.total() == 3 + 4
     assert point.costs == (Located("a", "cost", 3), Located("b", "cost", 4))
     third = point.with_choices(use_third=True)
-    third = third.with_choices(third.c.field(Tiles.factor).change(1))
+    third = third.with_choices({Budgeted.c.factor: 1})
     refused = third.total.query()
     assert codes(refused) == {"over-budget"} and owners(refused) == {"within"}
 
@@ -178,7 +176,7 @@ def test_members_range_over_present_nodes_with_per_member_obligations() -> None:
 
 
 class Stage(Space):
-    width_in = Param(int)
+    width_in: Param[int] = Param(int)
     growth = Decision(int, values=(0, 1, 2))
 
     @view
@@ -189,25 +187,25 @@ class Stage(Space):
 
 
 def pipeline(count: int) -> type[Space]:
-    builder = ScopeBuilder(Space, name=f"Pipeline{count}")
-    stages = [builder.add("s0", Subspace(Stage, width_in=4))]
-    for index in range(1, count):
-        stages.append(builder.add(f"s{index}", Subspace(Stage)))  # width_in left open
-        builder.add(
-            f"e{index}",
-            Bind(stages[index].ref(Stage.width_in), stages[index - 1].accepted(Stage.width_out)),
-        )
-    builder.add("widths", Members(WIDTH))
-    return builder.finish()
+    """Nodes and edges are plain Python values; ``composite`` names them."""
+    stages = [Stage(width_in=4), *(Stage(width_in=OPEN) for _ in range(1, count))]
+    edges = {
+        f"e{index}": Bind(stages[index].width_in, stages[index - 1].width_out)
+        for index in range(1, count)
+    }
+    nodes = {f"s{index}": stage for index, stage in enumerate(stages)}
+    return composite(f"Pipeline{count}", {**nodes, **edges, "widths": Members(WIDTH)})
 
 
 def test_a_pipeline_is_built_as_data_and_its_edges_are_declarations() -> None:
-    point = pipeline(5)()
+    family = pipeline(5)
+    point = configure(family())
     handles = {item.key: item.reference for item in inspection.decisions(point)}
-    point = point.with_choices(*(point.field(handles[f"s{i}.growth"]).change(1) for i in range(5)))
-    members = cast("Members[int]", getattr(type(point), "widths"))
-    widths = cast(tuple[Located[int], ...], require_value(point.query(members)))
-    assert [(item.node, item.value) for item in widths] == [
+    point = point.with_choices({handles[f"s{i}.growth"]: 1 for i in range(5)})
+    members = cast("Members[int]", getattr(family, "widths"))
+    widths = point.query(members)
+    assert isinstance(widths, Available)
+    assert [(item.node, item.value) for item in widths.value] == [
         ("s0", 5),
         ("s1", 6),
         ("s2", 7),
@@ -222,7 +220,7 @@ def test_a_pipeline_is_built_as_data_and_its_edges_are_declarations() -> None:
 
 
 class Source(Space):
-    width = Param(int)
+    width: Param[int] = Param(int)
 
     @view
     def out(self) -> int:
@@ -230,8 +228,8 @@ class Source(Space):
 
 
 class Sink(Space):
-    width = Param(int)
-    limit = Param(int, required=False)
+    width: Param[int] = Param(int)
+    limit: Param[int] = Param(int, default=UNSUPPLIED)
 
 
 class Either(Space):
@@ -245,13 +243,13 @@ class Either(Space):
     def is_b(self) -> bool:
         return self.mode == "b"
 
-    a = Subspace(Source, width=3, when=is_a)
-    b = Subspace(Source, width=5, when=is_b)
-    sink = Subspace(Sink, width=Present(a.accepted(Source.out), b.accepted(Source.out)))
+    a = Source(width=3, when=is_a)
+    b = Source(width=5, when=is_b)
+    sink = Sink(width=Present(a.out, b.out))
 
 
 def test_present_supplies_a_formal_from_whichever_node_is_present() -> None:
-    point = Either()
+    point = configure(Either())
     assert isinstance(point.sink.query(Sink.width), Unresolved)  # not yet known which
     assert point.with_choices(mode="a").sink.width == 3
     assert point.with_choices(mode="b").sink.width == 5
@@ -261,13 +259,13 @@ def test_present_supplies_a_formal_from_whichever_node_is_present() -> None:
 
 def test_two_present_sources_are_refused_where_the_value_is_read() -> None:
     class Both(Space):
-        a = Subspace(Source, width=3)
-        b = Subspace(Source, width=3)
-        sink = Subspace(Sink)
-        from_a = Bind(sink.ref(Sink.width), a.accepted(Source.out))
-        from_b = Bind(sink.ref(Sink.width), b.accepted(Source.out))
+        a = Source(width=3)
+        b = Source(width=3)
+        sink = Sink(width=OPEN)
+        from_a = Bind(sink.width, a.out)
+        from_b = Bind(sink.width, b.out)
 
-    answer = Both().sink.query(Sink.width)
+    answer = configure(Both()).sink.query(Sink.width)
     assert codes(answer) == {"multiple-suppliers"} and owners(answer) == {"sink.width"}
 
 
@@ -275,8 +273,8 @@ def test_two_present_sources_are_refused_where_the_value_is_read() -> None:
 
 
 class Adder(Space):
-    inp = Param(int)
-    back = Param(int)
+    inp: Param[int] = Param(int)
+    back: Param[int] = Param(int)
 
     @view
     def out(self) -> int:
@@ -290,8 +288,8 @@ class Register(Space):
     read ``d`` and so close the cycle: acceptance is part of the value flow.
     """
 
-    width = Param(int)
-    d = Param(int)
+    width: Param[int] = Param(int)
+    d: Param[int] = Param(int)
 
     @constraint
     def fits(self) -> bool:
@@ -303,15 +301,15 @@ class Register(Space):
 
 
 class Accumulator(Space):
-    width = Param(int)
-    total = Param(int)
-    adder = Subspace(Adder, inp=width)  # back is supplied by the loop edge below
-    register = Subspace(Register, width=total, d=adder.accepted(Adder.out))
-    loop = Bind(adder.ref(Adder.back), register.ref(Register.q))
+    width: Param[int] = Param(int)
+    total: Param[int] = Param(int)
+    adder = Adder(inp=width, back=OPEN)  # back is supplied by the loop edge below
+    register = Register(width=total, d=adder.out)
+    loop = Bind(adder.back, register.q)
 
 
 class Echo(Space):
-    d = Param(int)
+    d: Param[int] = Param(int)
 
     @view
     def q(self) -> int:
@@ -319,22 +317,22 @@ class Echo(Space):
 
 
 def test_a_cyclic_graph_evaluates_when_its_value_flow_is_anchored() -> None:
-    point = Accumulator(width=4, total=12)
+    point = configure(Accumulator(width=4, total=12))
     assert point.adder.out() == 13
     assert point.register.inspect(Register.fits).verdict is True
-    wide = Accumulator(width=30, total=12)  # 31 does not fit twice 12
+    wide = configure(Accumulator(width=30, total=12))  # 31 does not fit twice 12
     assert isinstance(wide.register.inspect(Register.fits).result, Rejected)
 
 
 def test_an_unanchored_value_cycle_fails_with_its_path() -> None:
     class Unanchored(Space):
-        width = Param(int)
-        adder = Subspace(Adder, inp=width)
-        echo = Subspace(Echo, d=adder.accepted(Adder.out))
-        loop = Bind(adder.ref(Adder.back), echo.accepted(Echo.q))
+        width: Param[int] = Param(int)
+        adder = Adder(inp=width, back=OPEN)
+        echo = Echo(d=adder.out)
+        loop = Bind(adder.back, echo.q)
 
     with pytest.raises(EvaluationError, match="cycle"):
-        Unanchored(width=4).adder.out()
+        configure(Unanchored(width=4)).adder.out()
 
 
 # -- 6. closure: a composite is a node like any other ----------------------------------
@@ -343,60 +341,57 @@ def test_an_unanchored_value_cycle_fails_with_its_path() -> None:
 class Pair(Space):
     """Two stages in series; its input is its own formal, its output an export."""
 
-    width_in = Param(int)
-    first = Subspace(Stage, width_in=width_in)
-    second = Subspace(Stage, width_in=first.accepted(Stage.width_out))
-    width_out = View(second.accepted(Stage.width_out))
+    width_in: Param[int] = Param(int)
+    first = Stage(width_in=width_in)
+    second = Stage(width_in=first.width_out)
+    width_out = View(second.width_out)
     exports = {WIDTH: width_out}
 
 
 class Chain(Space):
-    head = Subspace(Stage, width_in=2)
-    body = Subspace(Pair)  # width_in left open, supplied by an edge
-    edge = Bind(body.ref(Pair.width_in), head.accepted(Stage.width_out))
+    head = Stage(width_in=2)
+    body = Pair(width_in=OPEN)  # supplied by an edge
+    edge = Bind(body.width_in, head.width_out)
     widths = Members(WIDTH)
 
 
 def test_a_composite_node_has_the_surface_of_a_leaf_node() -> None:
-    point = Chain()
+    point = configure(Chain())
     handles = {item.key: item.reference for item in inspection.decisions(point)}
-    point = point.with_choices(*(point.field(ref).change(1) for ref in handles.values()))
+    point = point.with_choices({handle: 1 for handle in handles.values()})
     assert [(m.node, m.value) for m in point.widths] == [("head", 3), ("body", 5)]
 
 
-# -- 7. reducibility: a SubspaceChoice is a selector, guarded nodes and Present ---------
-
-OUTPUT = ViewKey("output", int)
+# -- 7. reducibility: the old structural choice is simply a Decision over nodes ----------
 
 
 class Fixed(Space):
-    width = Param(int)
+    width: Param[int] = Param(int)
     physical = View(width)
-    exports = {OUTPUT: physical}
 
 
 class Tuned(Space):
-    base = Param(int)
+    base: Param[int] = Param(int)
     extra = Decision(int, values=(1, 2))
 
     @view
     def physical(self) -> int:
         return self.base + self.extra
 
-    exports = {OUTPUT: physical}
-
 
 class WithChoice(Space):
-    base = Param(int, required=False)
-    choice = SubspaceChoice(
-        {"fixed": Subspace(Fixed, width=8), "tuned": Subspace(Tuned, base=base)},
-        exports=(OUTPUT,),
-    )
-    physical = View(choice.accepted(OUTPUT))
+    """The structural choice: a Decision over nodes, read through ``choice.physical``."""
+
+    base: Param[int] = Param(int, default=UNSUPPLIED)
+    tuned = Tuned(base=base)
+    choice = Decision[Fixed | Tuned](values={"fixed": Fixed(width=8), "tuned": tuned})
+    physical = View(choice.physical)
 
 
 class WithPrimitives(Space):
-    base = Param(int, required=False)
+    """The same choice spelled with the primitives it lowers onto."""
+
+    base: Param[int] = Param(int, default=UNSUPPLIED)
     choice = Decision(str, values=("fixed", "tuned"))
 
     @derived
@@ -407,58 +402,66 @@ class WithPrimitives(Space):
     def is_tuned(self) -> bool:
         return self.choice == "tuned"
 
-    fixed = Subspace(Fixed, width=8, when=is_fixed)
-    tuned = Subspace(Tuned, base=base, when=is_tuned)
-    physical = View(Present(fixed.accepted(OUTPUT), tuned.accepted(OUTPUT)))
+    fixed = Fixed(width=8, when=is_fixed)
+    tuned = Tuned(base=base, when=is_tuned)
+    physical = View(Present(fixed.physical, tuned.physical))
 
 
 @pytest.mark.parametrize("family", (WithChoice, WithPrimitives))
-def test_a_structural_choice_reduces_to_primitives(family: type[Space]) -> None:
-    start = family(base=4)
-    selector = next(item.reference for item in inspection.decisions(start) if item.key == "choice")
-    extra = next(
-        item.reference for item in inspection.decisions(start) if item.key.endswith("extra")
-    )
-    physical = cast(View[int], getattr(family, "physical"))
+def test_a_structural_choice_reduces_to_primitives(
+    family: type[WithChoice] | type[WithPrimitives],
+) -> None:
+    start = configure(family(base=4))
+    physical = family.physical
+    extra = family.tuned.extra
     assert isinstance(start.query(physical), Unresolved)
-    tuned = start.with_choices(start.field(selector).change("tuned"), start.field(extra).change(2))
+    tuned = start.with_choices({family.choice: "tuned", extra: 2})
     assert tuned.query(physical) == Available(6)
-    # A case-local choice of an inactive case is refused, not stored.
-    assert not tuned.try_with_choices(tuned.field(selector).change("fixed")).accepted
-    fixed = tuned.with_choices(tuned.field(selector).change("fixed"), tuned.field(extra).clear())
+    # A candidate-local choice of an inactive candidate is refused, not stored.
+    assert not tuned.try_with_choices({family.choice: "fixed"}).accepted
+    fixed = tuned.with_choices({family.choice: "fixed"}, tuned.tuned.field(Tuned.extra).clear())
     assert fixed.query(physical) == Available(8)
     assert isinstance(fixed.query(extra), Inapplicable)
-    replayed = selections.restore(family(base=4), selections.capture(tuned))
+    replayed = selections.restore(configure(family(base=4)), selections.capture(tuned))
     assert replayed.accepted and replayed.instance.query(physical) == Available(6)
 
 
-def test_case_members_are_ordinary_references_once_cases_are_nodes() -> None:
-    # Previously a case-local choice was reachable only through inspection handles.
-    tuned_extra = WithChoice.choice.alternatives["tuned"].decision_ref(Tuned.extra)
-    start = WithChoice(base=4)
-    point = start.with_choices(
-        start.field(inspection.choices(start)[0].selector).change("tuned"),  # type: ignore[arg-type]
-        start.field(tuned_extra).change(1),
-    )
+def test_candidates_are_ordinary_nodes_with_declaration_path_keys() -> None:
+    keys = {item.key for item in inspection.decisions(WithChoice)}
+    assert keys == {"choice", "choice.tuned.extra"}
+    start = configure(WithChoice(base=4))
+    point = start.with_choices(choice="tuned").with_choices({WithChoice.tuned.extra: 1})
     assert point.physical() == 5
-    located_case = WithChoice.choice.at(OUTPUT)
-    del located_case  # the located form names the choice node: see the MVAU case
+    selected = point.choice
+    assert isinstance(selected, Tuned) and selected.extra == 1
+    fixed = inspection.candidate(point, WithChoice.choice, "fixed")
+    assert isinstance(fixed, Fixed) and isinstance(fixed.query(Fixed.physical), Inapplicable)
 
 
-def test_the_enclosing_space_locates_its_own_members() -> None:
+def test_a_formal_of_the_enclosing_space_locates_at_the_space_itself() -> None:
     class Own(Space):
-        width = Param(int)
-        here = located(width)
+        width: Param[int] = Param(int)
+        here = Same(left=width, right=width)
 
-    assert Own(width=3).here == Located(None, "width", 3)
+    assert configure(Own(width=3)).here.left == Located(None, "width", 3)
 
 
 def test_a_bind_must_target_an_open_formal() -> None:
+    class Twice(Space):
+        a = Source(width=3)
+        sink = Sink(width=1)
+        again = Bind(sink.width, a.out)
+
     with pytest.raises(DefinitionError, match="already supplied"):
+        configure(Twice())
 
-        class Twice(Space):
-            a = Subspace(Source, width=3)
-            sink = Subspace(Sink, width=1)
-            again = Bind(sink.ref(Sink.width), a.accepted(Source.out))
 
-        Twice()
+def test_a_required_formal_is_bound_or_declared_open() -> None:
+    with pytest.raises(DefinitionError, match="missing formals"):
+        Sink()  # type: ignore[call-arg]
+
+    class Dangling(Space):
+        sink = Sink(width=OPEN)
+
+    with pytest.raises(DefinitionError, match="no Bind supplying them"):
+        configure(Dangling())

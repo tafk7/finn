@@ -1,20 +1,37 @@
-
-from finn.core.space import Param, View, derived
 from finn.core.space import (
-    Param, ScopeBuilder, Space, ValueKey, ViewKey, QueryResult, Available, ValueSemantics,
+    OPEN, Available, Bind, Param, QueryResult, Space, ValueSemantics, View, ViewKey,
+    composite, configure, derived,
 )
 
-builder = ScopeBuilder(Space)
-number = builder.add('number', Param(int))
-text = builder.add('text', Param(str))
-view = builder.add('complete', View(number))
-builder.bind(number, "wrong")  # E
-builder.export(ValueKey("number", int)).value(text)  # E
-builder.export(ViewKey("complete", str)).view(view)  # E
-builder.export(ValueKey("value", int)).value(view)  # E
-builder.export(ViewKey("view", int)).view(number)  # E
+class Shape(Space):
+    lanes: Param[int] = Param(int)
+
+class Other(Space):
+    width: Param[int] = Param(int)
+
+Doubled = composite("Doubled", {}, base=Shape)
+Doubled(lanes="four")  # E
+Doubled(width=4)  # E
+Doubled(1)  # E
+Plain = composite("Plain", {})
+Plain(lanes=1)  # E
+composite("NotAFamily", {}, base=int)  # E
+composite("NotAMapping", [("lanes", Param(int))])  # E
+composite("BadExports", {}, exports={"complete": View(Shape.lanes)})  # E
+wrong_family: Other = configure(Doubled(lanes=1))  # E
+wrong_node: Other = Doubled(lanes=1)  # E
+
+node = Doubled(lanes=OPEN)
+wrong_value: str = node.lanes  # E
+node.width  # E
+nodes = [Doubled(lanes=index) for index in range(3)]
+wrong_element: list[Other] = nodes  # E
+
+class Parent(Space):
+    first = Doubled(lanes=1)
+    wrong_reference = Other(width=first.label)  # E
 
 def wrong(*, number: int) -> QueryResult[str]:
     return Available(str(number))
 
-builder.add('wrong', derived(semantics=ValueSemantics.immutable_nominal(int))(wrong))  # E
+derived(semantics=ValueSemantics.immutable_nominal(int))(wrong)  # E

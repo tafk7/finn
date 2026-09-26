@@ -17,13 +17,11 @@ from finn.core.space import (
     Param,
     SelectionSchema,
     Space,
-    Subspace,
-    SubspaceChoice,
     ValueCodec,
     ValueSemantics,
     codec_for,
     codecs,
-    compile_space,
+    configure,
     divisors_of,
     inspection,
     selections,
@@ -53,33 +51,32 @@ def _entries(document: dict[str, JSONValue]) -> list[dict[str, JSONValue]]:
 
 def test_partial_document_replays_on_another_compilation_using_explicit_schema_identity() -> None:
     class Family(Space):
-        extent = Param(int)
+        extent: Param[int] = Param(int)
         factor = Decision(int, domain=divisors_of(extent))
         style = Decision(str, values=("auto", "block"))
 
-    first = compile_space(Family)
+    # A schema may be built from the family itself (compiled on demand) ...
     schema = SelectionSchema(
-        first,
+        Family,
         family="test.family",
         version=2,
         bindings=(codec_for(Family.factor, INTEGER), codec_for(Family.style, STRING)),
     )
-    point = first.bind({Family.extent: 12}).with_choices(factor=3)
+    point = configure(Family(extent=12)).with_choices(factor=3)
     document = codecs.encode(selections.capture(point), schema)
     assert [entry["key"] for entry in _entries(document)] == ["factor"]
     assert _entries(document)[0]["codec"] == "integer"
     serialized = json.dumps(document)
     assert "Family" not in serialized and "$" not in serialized
-    second = compile_space(Family)
+    # ... or from any configuration of it; identity is the explicit family and version.
+    second = configure(Family(extent=12))
     second_schema = SelectionSchema(
         second,
         family="test.family",
         version=2,
         bindings=(codec_for(Family.factor, INTEGER), codec_for(Family.style, STRING)),
     )
-    restored = selections.restore(
-        second.bind({Family.extent: 12}), codecs.decode(json.loads(serialized), second_schema)
-    )
+    restored = selections.restore(second, codecs.decode(json.loads(serialized), second_schema))
     assert restored.accepted and restored.instance.factor == 3
     assert selections.capture(restored.instance).keys == ("factor",)
 
@@ -89,14 +86,13 @@ def test_entry_order_does_not_control_dependent_replay() -> None:
         extent = Decision(int, values=(8, 12))
         factor = Decision(int, domain=divisors_of(extent))
 
-    model = compile_space(Family)
     schema = SelectionSchema(
-        model,
+        Family,
         family="ordered",
         version=1,
         bindings=(codec_for(Family.extent, INTEGER), codec_for(Family.factor, INTEGER)),
     )
-    base = model.bind()
+    base = configure(Family())
     point = base.with_choices(extent=12).with_choices(factor=3)
     document = codecs.encode(selections.capture(point), schema)
     _entries(document).reverse()
@@ -132,20 +128,19 @@ def test_custom_unhashable_values_round_trip_by_declared_equality_and_detach_doc
     class Family(Space):
         bag = Decision(BAG, values=(Bag([1, 2]),))
 
-    model = compile_space(Family)
     schema = SelectionSchema(
-        model,
+        Family,
         family="bags",
         version=1,
         bindings=(codec_for(Family.bag, ValueCodec("bag", 1, _encode_bag, _decode_bag)),),
     )
-    point = model.bind().with_choices(bag=Bag([2, 1]))
+    point = configure(Family()).with_choices(bag=Bag([2, 1]))
     selection = selections.capture(point)
     document = codecs.encode(selection, schema)
     decoded = codecs.decode(document, schema)
     assert decoded.value(Family.bag).items == [1, 2]
     assert decoded == selection
-    restored = selections.restore(model.bind(), decoded)
+    restored = selections.restore(configure(Family()), decoded)
     assert restored.accepted and selections.capture(restored.instance) == selection
     payload = _entries(document)[0]["value"]
     assert isinstance(payload, list)
@@ -167,15 +162,14 @@ def test_all_schema_and_key_errors_are_found_before_any_decoder_runs() -> None:
         a = Decision(int, values=(1,))
         b = Decision(int, values=(2,))
 
-    model = compile_space(Family)
     codec = ValueCodec[int]("integer", 1, lambda value: value, decode_integer)
     schema = SelectionSchema(
-        model,
+        Family,
         family="two",
         version=1,
         bindings=(codec_for(Family.a, codec), codec_for(Family.b, codec)),
     )
-    point = model.bind().with_choices(a=1).with_choices(b=2)
+    point = configure(Family()).with_choices(a=1).with_choices(b=2)
     selection = selections.capture(point)
     mutations: tuple[Callable[[dict[str, JSONValue]], None], ...] = (
         lambda document: document.__setitem__("family", "different"),
@@ -201,14 +195,13 @@ def test_missing_codecs_and_invalid_decoded_values_do_not_silently_drop_entries(
     class Family(Space):
         factor = Decision(int, values=(1,))
 
-    model = compile_space(Family)
-    point = model.bind().with_choices(factor=1)
-    incomplete = SelectionSchema(model, family="one", version=1, bindings=())
-    assert codecs.encode(selections.capture(model.bind()), incomplete)["entries"] == []
+    point = configure(Family()).with_choices(factor=1)
+    incomplete = SelectionSchema(Family, family="one", version=1, bindings=())
+    assert codecs.encode(selections.capture(configure(Family())), incomplete)["entries"] == []
     with pytest.raises(RequestError, match="explicit codec"):
         codecs.encode(selections.capture(point), incomplete)
     schema = SelectionSchema(
-        model, family="one", version=1, bindings=(codec_for(Family.factor, INTEGER),)
+        Family, family="one", version=1, bindings=(codec_for(Family.factor, INTEGER),)
     )
     document = codecs.encode(selections.capture(point), schema)
     _entries(document)[0]["value"] = "wrong"
@@ -216,7 +209,7 @@ def test_missing_codecs_and_invalid_decoded_values_do_not_silently_drop_entries(
         codecs.decode(document, schema)
     broken = ValueCodec[int]("integer", 1, lambda value: value, lambda value: cast(int, "wrong"))
     broken_schema = SelectionSchema(
-        model, family="one", version=1, bindings=(codec_for(Family.factor, broken),)
+        Family, family="one", version=1, bindings=(codec_for(Family.factor, broken),)
     )
     with pytest.raises(RequestError, match="expected selection value"):
         codecs.decode(codecs.encode(selections.capture(point), schema), broken_schema)
@@ -227,16 +220,17 @@ def test_selected_case_identity_is_authored_and_unknown_cases_are_diagnosed() ->
         pass
 
     class Family(Space):
-        implementation = SubspaceChoice({"small": Subspace(Child), "fast": Subspace(Child)})
+        implementation = Decision(values={"small": Child(), "fast": Child()})
 
-    model = compile_space(Family)
-    selector = inspection.choices(model)[0].selector
-    assert selector is not None
+    # The selector is bound through the class-level reference to the Decision over nodes.
     schema = SelectionSchema(
-        model, family="implementations", version=1, bindings=(codec_for(selector, STRING),)
+        Family,
+        family="implementations",
+        version=1,
+        bindings=(codec_for(Family.implementation, STRING),),
     )
-    base = model.bind()
-    point = base.with_choices(base.field(selector).change("fast"))
+    base = configure(Family())
+    point = base.with_choices(implementation="fast")
     document = codecs.encode(selections.capture(point), schema)
     assert _entries(document)[0]["key"] == "implementation"
     assert _entries(document)[0]["value"] == "fast"
@@ -251,7 +245,7 @@ def test_nonportable_payloads_cycles_and_duplicate_schema_bindings_are_rejected(
     class Family(Space):
         factor = Decision(int, values=(1,))
 
-    model = compile_space(Family)
+    model = inspection.model(Family)
     with pytest.raises(DefinitionError, match="duplicate codec"):
         SelectionSchema(
             model,
@@ -264,7 +258,7 @@ def test_nonportable_payloads_cycles_and_duplicate_schema_bindings_are_rejected(
     schema = SelectionSchema(
         model, family="one", version=1, bindings=(codec_for(Family.factor, INTEGER),)
     )
-    point = model.bind().with_choices(factor=1)
+    point = configure(Family()).with_choices(factor=1)
     for malformed in (float("nan"), {"value": object()}, {1: "bad-key"}):
         with pytest.raises(RequestError):
             codecs.decode(malformed, schema)
@@ -277,7 +271,7 @@ def test_nonportable_payloads_cycles_and_duplicate_schema_bindings_are_rejected(
         factor = Decision(int, values=(1,))
 
     other_schema = SelectionSchema(
-        compile_space(Other),
+        Other,
         family="one",
         version=1,
         bindings=(codec_for(Other.factor, INTEGER),),
@@ -291,8 +285,8 @@ def test_lossy_codecs_are_refused_and_encoding_callbacks_get_detached_values() -
         factor = Decision(int, values=(1, 2))
         bag = Decision(BAG, values=(Bag([1, 2]),))
 
-    model = compile_space(Family)
-    point = model.bind().with_choices(factor=2)
+    model = inspection.model(Family)
+    point = configure(Family()).with_choices(factor=2)
     lossy = ValueCodec[int]("lossy", 1, lambda value: 1, _integer)
     schema = SelectionSchema(
         model, family="lossy", version=1, bindings=(codec_for(Family.factor, lossy),)
@@ -309,7 +303,7 @@ def test_lossy_codecs_are_refused_and_encoding_callbacks_get_detached_values() -
     bag_schema = SelectionSchema(
         model, family="bags", version=1, bindings=(codec_for(Family.bag, bag_codec),)
     )
-    original = selections.capture(model.bind().with_choices(bag=Bag([1, 2])))
+    original = selections.capture(configure(Family()).with_choices(bag=Bag([1, 2])))
     encoded = codecs.encode(original, bag_schema)
     assert _entries(encoded)[0]["value"] == [1, 2]
     assert original.value(Family.bag).items == [1, 2]
@@ -320,17 +314,15 @@ def test_encoded_stale_case_entries_are_rejected_by_atomic_replay() -> None:
         lanes = Decision(int, values=(1, 2))
 
     class Family(Space):
-        implementation = SubspaceChoice({"left": Subspace(Child), "right": Subspace(Child)})
+        left = Child()
+        implementation = Decision(values={"left": left, "right": Child()})
 
-    model = compile_space(Family)
-    base = model.bind()
-    selector = inspection.choices(model)[0].selector
-    assert selector is not None
-    selected = base.implementation.select("left").alternative("left")
-    lanes = inspection.decision_handle(selected, Child.lanes)
-    point = selected.with_choices(lanes=1).root
+    base = configure(Family())
+    selector = inspection.choices(base)[0].selector
+    lanes = inspection.decision_handle(Family, Family.left.lanes)
+    point = base.with_choices({Family.implementation: "left", Family.left.lanes: 1})
     schema = SelectionSchema(
-        model,
+        base,
         family="cases",
         version=1,
         bindings=(codec_for(selector, STRING), codec_for(lanes, INTEGER)),
@@ -351,12 +343,11 @@ def test_roundtrip_decoder_failure_keeps_codec_context_and_original_cause() -> N
     def broken_decoder(value: JSONValue) -> int:
         raise RuntimeError("decoder unavailable")
 
-    model = compile_space(Family)
     codec = ValueCodec[int]("broken", 3, lambda value: value, broken_decoder)
     schema = SelectionSchema(
-        model, family="failures", version=1, bindings=(codec_for(Family.factor, codec),)
+        Family, family="failures", version=1, bindings=(codec_for(Family.factor, codec),)
     )
-    selection = selections.capture(model.bind().with_choices(factor=1))
+    selection = selections.capture(configure(Family()).with_choices(factor=1))
     with pytest.raises(RequestError, match="factor.*broken.*round-trip") as raised:
         codecs.encode(selection, schema)
     assert isinstance(raised.value.__cause__, RuntimeError)

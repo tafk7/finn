@@ -1,13 +1,21 @@
+"""Expressions as mypy sees them.
+
+Arithmetic on the bare declarations of one class body is an ``Expr``. A
+reference to a node's member is typed as its value (option A), so arithmetic
+on it is statically an ``int``: a member defined that way is an ``int`` at
+class level and at instance level (at runtime it is still an expression).
+"""
+
 from __future__ import annotations
 
 from typing_extensions import assert_type
 
-from finn.core.space import Decision, Param, Space, Subspace, derived
+from finn.core.space import Decision, Param, Space, derived
 from finn.core.space.expressions import Expr
 
 
 class Arithmetic(Space):
-    extent = Param(int)
+    extent: Param[int] = Param(int)
     lanes = Decision(int, values=(1, 2))
 
     @derived
@@ -20,14 +28,22 @@ class Arithmetic(Space):
 
 
 class Parent(Space):
-    child = Subspace(Arithmetic, extent=3)
-    result = child.ref(Arithmetic.width) + 1
+    extent: Param[int] = Param(int)
+    child = Arithmetic(extent=3)
+    assert_type(child.width, int)
+    result = child.width + 1
+    # A reference plus a bare declaration falls back to the declaration's operator.
+    mixed = child.width + extent
+    assert_type(mixed, Expr)
+    other = Arithmetic(extent=child.width * 2)
 
 
 assert_type(Arithmetic.width, Expr)
 assert_type(Arithmetic.reflected, Expr)
 assert_type(Arithmetic.negated, Expr)
-assert_type(Parent.result, Expr)
+assert_type(Parent.child.width, int)
+assert_type(Parent.result, int)
+assert_type(Parent.mixed, Expr)
 
 
 def reads(point: Arithmetic, parent: Parent) -> None:
@@ -35,3 +51,5 @@ def reads(point: Arithmetic, parent: Parent) -> None:
     assert_type(point.reflected, int)
     assert_type(point.negated, int)
     assert_type(parent.result, int)
+    assert_type(parent.mixed, int)
+    assert_type(parent.other.width, int)

@@ -14,9 +14,20 @@ bad_division = number / 2  # E
 bad_power = number ** 2  # E
 bad_bool_type: Expr[bool]  # E
 
+class Child(Space):
+    width: Param[int] = Param(int)
+    label: Param[str] = Param(str)
+
 class Example(Space):
-    extent = Param(int)
+    extent: Param[int] = Param(int)
     value = extent * 2
+    child = Child(width=extent, label="x")
+    # A reference is typed as its value, so mypy checks arithmetic on it as that value.
+    bad_reference = child.label + 1  # E
+    bad_mixed = child.label + extent  # E
+    reference_sum = child.width + 1
+    # Not reported: int / int is float for mypy; refused at runtime (no such operator).
+    reference_division = child.width / 2
 
 def wrong_read(point: Example) -> str:
     return point.value  # E

@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 import gc
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from itertools import permutations
@@ -22,12 +22,11 @@ from finn.core.space import (
     Param,
     Rejected,
     Space,
-    Subspace,
     ValueRef,
     ValueSemantics,
     _execution,
     _runtime,
-    compile_space,
+    configure,
     derived,
     divisors_of,
     domain,
@@ -80,7 +79,7 @@ def test_dependent_admission_all_request_and_declaration_orders(
 ) -> None:
     family = _chain_family(reverse)
     for order in permutations(("a", "b", "c")):
-        point = family()
+        point = configure(family())
         values = {"a": 1, "b": 2, "c": 3}
         for valid in (True, False):
             requested = {name: 99 if name == "a" and not valid else values[name] for name in order}
@@ -125,7 +124,7 @@ def test_invalid_candidate_never_crosses_a_getter_or_reaches_division() -> None:
         )
 
     for order in (("output", "divisor"), ("divisor", "output")):
-        report = Family().try_with_choices(
+        report = configure(Family()).try_with_choices(
             **{name: 0 if name == "divisor" else 3 for name in order}
         )
         assert not report.accepted
@@ -141,14 +140,14 @@ def test_published_reads_do_not_repeat_admission_callbacks() -> None:
         return 0 < candidate <= extent
 
     class Family(Space):
-        extent = Param(int)
+        extent: Param[int] = Param(int)
         choice = Decision(int, domain=domain(accepts=accepts, extent=extent))
 
         @derived
         def output(self) -> int:
             return self.choice + 1
 
-    point = Family(extent=9).with_choices(choice=3)
+    point = configure(Family(extent=9)).with_choices(choice=3)
     assert calls == [3]
     for _ in range(3):
         assert point.choice == 3 and point.output == 4
@@ -175,7 +174,7 @@ def test_equality_mutation_cannot_change_cached_or_caller_values(
     class Family(Space):
         choice = Decision(semantics, domain=domain(accepts=lambda candidate: True))
 
-    point = Family().with_choices(choice=[1])
+    point = configure(Family()).with_choices(choice=[1])
     candidate = [1]
 
     def update() -> object:
@@ -211,14 +210,14 @@ def test_finite_domain_equality_also_detaches_definition_values() -> None:
         choice = Decision(semantics, values=([1], [2]))
 
     for _ in range(2):
-        point = Family().with_choices(choice=[1])
+        point = configure(Family()).with_choices(choice=[1])
         assert point.choice == [1]
         assert point.field(Family.choice).candidates() == Available(([1], [2]))
 
 
 def test_observed_evidence_includes_cached_reads_and_omits_unselected_work() -> None:
     class Child(Space):
-        extent = Param(int)
+        extent: Param[int] = Param(int)
         lanes = Decision(int, domain=divisors_of(extent))
 
         @derived
@@ -226,9 +225,9 @@ def test_observed_evidence_includes_cached_reads_and_omits_unselected_work() -> 
             return self.extent // self.lanes
 
     class Pair(Space):
-        extent = Param(int)
-        left = Subspace(Child, extent=extent)
-        right = Subspace(Child, extent=extent)
+        extent: Param[int] = Param(int)
+        left = Child(extent=extent)
+        right = Child(extent=extent)
 
         @derived
         def output(self) -> int:
@@ -238,7 +237,7 @@ def test_observed_evidence_includes_cached_reads_and_omits_unselected_work() -> 
         def unrelated(self) -> int:
             raise AssertionError("unreached")
 
-    base = Pair(extent=12)
+    base = configure(Pair(extent=12))
     point = base.with_choices(
         base.left.field(Child.lanes).change(3), base.right.field(Child.lanes).change(4)
     )
@@ -257,6 +256,12 @@ def test_observed_evidence_includes_cached_reads_and_omits_unselected_work() -> 
     assert inspection.explain(point, Pair.output) == evidence
     assert state(point).work.callback_starts == starts
     assert inspection.dependencies(point, Pair.output) == ()  # bodies are discovered when read
+
+
+def declare(family: type[Space], bindings: Mapping[str, object]) -> Space:
+    """Declare a node of a family built at runtime: its formals are not statically known."""
+    node: Callable[..., Space] = family
+    return node(**bindings)
 
 
 def _deep_family(depth: int) -> tuple[type[Space], list[str]]:
@@ -278,7 +283,7 @@ def _deep_family(depth: int) -> tuple[type[Space], list[str]]:
 
 def test_native_chain_20000_has_one_start_per_callback() -> None:
     family, names = _deep_family(20_000)
-    point = family(value_0=0)
+    point = configure(declare(family, {"value_0": 0}))
     assert getattr(point, names[-1]) == 20_000
     work = state(point).work
     assert work.callback_starts == 20_000
@@ -298,7 +303,7 @@ def test_native_wide_fan_in_and_cached_prefix_deep_dependency() -> None:
         return prefix + cast(int, getattr(self, "value_1200"))
 
     mixed = cast(type[Space], type("Mixed", (family,), {"output": derived(output)}))
-    point = mixed(value_0=0)
+    point = configure(declare(mixed, {"value_0": 0}))
     assert getattr(point, "value_400") == 400
     before = state(point).work.callback_starts
     assert getattr(point, "output") == sum(range(1, 401)) + 1_200
@@ -314,7 +319,7 @@ def test_native_wide_fan_in_and_cached_prefix_deep_dependency() -> None:
 
     leaves["total"] = derived(total)
     wide = cast(type[Space], type("WideSelf", (Space,), leaves))
-    fan = wide(**{f"leaf_{index}": index for index in range(1_000)})
+    fan = configure(declare(wide, {f"leaf_{index}": index for index in range(1_000)}))
     assert getattr(fan, "total") == sum(range(1_000))
     assert state(fan).work.callback_starts == 1
     assert state(fan).work.suspensions == 1_000
@@ -369,7 +374,7 @@ def test_contexts_continuations_trials_and_cached_outputs_are_reclaimed(
         return candidate > 0
 
     class Family(Space):
-        fact = Param(int)
+        fact: Param[int] = Param(int)
         choice = Decision(int, domain=domain(accepts=accepts))
 
         @derived
@@ -390,11 +395,11 @@ def test_contexts_continuations_trials_and_cached_outputs_are_reclaimed(
             finally:
                 _ = self.fact
 
-    model = compile_space(Family)
-    survivor = model.bind(fact=1)
+    model = inspection.model(Family)
+    survivor = configure(Family(fact=1))
 
     def exercise() -> None:
-        point = Family(fact=2).with_choices(choice=1)
+        point = configure(Family(fact=2)).with_choices(choice=1)
         assert point.payload == Payload(1)
         snapshot = state(point)
         answer = snapshot.cache[state(point).model.linked.keys["payload"]].result
@@ -404,7 +409,7 @@ def test_contexts_continuations_trials_and_cached_outputs_are_reclaimed(
         assert successor.payload == Payload(2)
         assert state(successor).parameters is snapshot.parameters
         assert state(successor).lock is not snapshot.lock
-        failed = Family(fact=3)
+        failed = configure(Family(fact=3))
         with pytest.raises(_execution.NativeEvaluationError):
             _ = failed.broken
         with pytest.raises(KeyboardInterrupt):
@@ -421,7 +426,8 @@ def test_contexts_continuations_trials_and_cached_outputs_are_reclaimed(
     assert all(item() is None for item in contexts)
     assert all(item() is None for item in continuations)
     assert all(item() is None for item in outputs)
-    assert survivor.fact == 1 and compile_space(Family) is model
+    assert survivor.fact == 1 and inspection.model(survivor) is model
+    assert inspection.model(Family) is model
 
 
 def test_concurrent_independent_and_cold_shared_snapshots() -> None:
@@ -429,7 +435,7 @@ def test_concurrent_independent_and_cold_shared_snapshots() -> None:
     calls: list[int] = []
 
     class Independent(Space):
-        fact = Param(int)
+        fact: Param[int] = Param(int)
 
         @derived
         def output(self) -> int:
@@ -438,20 +444,20 @@ def test_concurrent_independent_and_cold_shared_snapshots() -> None:
             calls.append(value)
             return value
 
-    first, second = Independent(fact=1), Independent(fact=2)
+    first, second = configure(Independent(fact=1)), configure(Independent(fact=2))
     with ThreadPoolExecutor(max_workers=2) as pool:
         assert list(pool.map(lambda point: point.output, (first, second))) == [1, 2]
     assert sorted(calls) == [1, 2]
 
     class Shared(Space):
-        fact = Param(int)
+        fact: Param[int] = Param(int)
 
         @derived
         def output(self) -> int:
             calls.append(self.fact)
             return self.fact
 
-    point = Shared(fact=3)
+    point = configure(Shared(fact=3))
     with ThreadPoolExecutor(max_workers=4) as pool:
         assert list(pool.map(lambda _: point.output, range(64))) == [3] * 64
     assert sorted(calls) == [1, 2, 3]

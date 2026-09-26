@@ -9,7 +9,8 @@ from typing import cast
 
 import pytest
 
-from finn.core.space import Space
+from finn.core.space import Space, configure, inspection
+from finn.core.space._nodes import node_record
 from finn.core.space.compiler import compile_space
 from finn.core.space.declarations import (
     Const,
@@ -18,7 +19,6 @@ from finn.core.space.declarations import (
     Decision,
     Derived,
     Param,
-    Subspace,
     View,
     constraint,
     derived,
@@ -39,7 +39,7 @@ def test_compile_links_forward_dependencies_without_executing_callbacks() -> Non
             calls.append("cycles")
             return extent // lanes
 
-        extent = Param(int)
+        extent: Param[int] = Param(int)
         lanes = Decision(int, domain=divisors_of(extent))
         label = Const("flat family")
 
@@ -49,7 +49,7 @@ def test_compile_links_forward_dependencies_without_executing_callbacks() -> Non
             return extent > 0
 
         admitted = ConstraintGroup(supported)
-        result = View(cycles, constraints=(admitted,))
+        result = View(cycles, requires=(admitted,))
 
     model = compile_space(Family)
     assert calls == []
@@ -67,7 +67,7 @@ def test_compile_links_forward_dependencies_without_executing_callbacks() -> Non
     assert nodes[model.resolve(0, Family.result)].semantics is not None
 
 
-def test_placement_literals_are_frozen_once_per_preparation_and_reads_stay_detached() -> None:
+def test_placement_literals_are_frozen_once_per_declaration_and_reads_stay_detached() -> None:
     snapshots: list[list[int]] = []
 
     def snapshot(value: list[int]) -> list[int]:
@@ -84,35 +84,40 @@ def test_placement_literals_are_frozen_once_per_preparation_and_reads_stay_detac
     literal = [1]
 
     class Leaf(Space):
-        value = Param(semantics)
+        value: Param[list[int]] = Param(semantics)
 
     class Branch(Space):
-        leaf = Subspace(Leaf, value=literal)
+        leaf = Leaf(value=literal)
+
+    # A literal binding is frozen once, where its node is declared.
+    assert snapshots == [[1]]
 
     class Root(Space):
-        left = Subspace(Branch)
-        right = Subspace(Branch)
+        left = Branch()
+        right = Branch()
 
     model = compile_space(Root)
-    assert snapshots == [[1]]
+    assert snapshots == [[1]]  # compiling reuses the declaration's frozen literal
     literal.append(2)
-    point = model.bind()
+    point = configure(Root())
     point.left.leaf.value.append(99)
     assert point.left.leaf.value == point.right.leaf.value == [1]
     assert compile_space(Root) is model
+    assert inspection.model(point) is model
 
-    # A different root prepares its own definition; no global placement cache
-    # can reuse the earlier root's frozen literals.
-    snapshots.clear()
-    branch = compile_space(Branch)
-    assert snapshots == [[1, 2]]
-    assert branch.bind().leaf.value == [1, 2]
+    # A fresh declaration freezes the literal's current value; no cache lets
+    # it reuse, or disturb, the earlier declaration's frozen literal.
+    class Fresh(Space):
+        leaf = Leaf(value=literal)
+
+    assert configure(Fresh()).leaf.value == [1, 2]
+    assert configure(Branch()).leaf.value == [1]
     assert point.left.leaf.value == [1]
 
 
 def test_self_invocation_is_preserved_for_nested_functions_and_view_outputs() -> None:
     class Child(Space):
-        source = Param(int)
+        source: Param[int] = Param(int)
 
         @derived
         def scalar(self) -> int:
@@ -122,7 +127,7 @@ def test_self_invocation_is_preserved_for_nested_functions_and_view_outputs() ->
         def supported(self) -> bool:
             raise AssertionError("preparation must not execute self methods")
 
-        @view(constraints=(supported,))
+        @view(requires=(supported,))
         def physical(self) -> int:
             raise AssertionError("preparation must not execute self methods")
 
@@ -131,11 +136,11 @@ def test_self_invocation_is_preserved_for_nested_functions_and_view_outputs() ->
             raise AssertionError("preparation must not execute explicit providers")
 
     class Parent(Space):
-        child = Subspace(Child, source=4)
+        child = Child(source=4)
 
     model = compile_space(Parent)
     nodes = model.linked.nodes
-    child_scope = model.linked.scopes[0].children[Parent.child]
+    child_scope = model.linked.scopes[0].children[node_record(Parent.child)]
     scalar = nodes[model.resolve(child_scope, Child.scalar)]
     supported = nodes[model.resolve(child_scope, Child.supported)]
     physical = nodes[model.resolve(child_scope, Child.physical)]
@@ -153,7 +158,7 @@ def test_self_invocation_is_preserved_for_nested_functions_and_view_outputs() ->
 
 def test_function_and_value_views_have_an_explicit_raw_output() -> None:
     class Family(Space):
-        size = Param(int)
+        size: Param[int] = Param(int)
 
         @derived
         def doubled(*, size: int) -> int:
@@ -175,7 +180,7 @@ def test_function_and_value_views_have_an_explicit_raw_output() -> None:
 
 def test_a_transitive_triangle_is_acyclic_and_cycles_name_only_their_members() -> None:
     class Triangle(Space):
-        first = Param(int)
+        first: Param[int] = Param(int)
 
         @derived
         def second(*, first: int) -> int:
@@ -229,12 +234,12 @@ def test_twenty_thousand_dependencies_compile_and_evaluate_iteratively() -> None
     assert len(model.linked.order) == 20_001
     assert len(model.linked.nodes[-1].dependencies) == 1
     assert model.linked.order[-1] == model.resolve(0, members["value20000"])
-    assert model.bind().query(cast(Derived[int], members["value20000"])) == Available(20_000)
+    assert configure(family()).query(cast(Derived[int], members["value20000"])) == Available(20_000)
 
 
 def test_compiled_handles_do_not_follow_later_class_rebinding() -> None:
     class Family(Space):
-        value = Param(int)
+        value: Param[int] = Param(int)
 
     original = Family.value
     old = compile_space(Family)
@@ -284,7 +289,7 @@ def test_compile_snapshots_values_domains_and_callback_references() -> None:
         return value + 2
 
     class Family(Space):
-        value = Param(int)
+        value: Param[int] = Param(int)
         constant = Const([1])
         choice = Decision[list[int]](list, values=values)
         calculated = Derived(first)
@@ -320,11 +325,11 @@ def test_foreign_value_and_obligation_references_are_definition_errors() -> None
 
     class ForeignConstraint(Space):
         own = Const(1)
-        result = View(own, constraints=(Other.valid,))
+        result = View(own, requires=(Other.valid,))
 
     class WrongKind(Space):
         own = Const(1)
-        result = View(own, constraints=(cast(Constraint, own),))
+        result = View(own, requires=(cast(Constraint, own),))
 
     for family in (ForeignView, ForeignConstraint, WrongKind):
         with pytest.raises(DefinitionError):
@@ -339,7 +344,7 @@ def test_domain_binding_is_validated_without_invocation() -> None:
         return candidate <= maximum
 
     class Family(Space):
-        maximum = Param(int)
+        maximum: Param[int] = Param(int)
         choice = Decision(int, domain=domain(accepts=membership, maximum=maximum))
 
     model = compile_space(Family)
@@ -349,7 +354,7 @@ def test_domain_binding_is_validated_without_invocation() -> None:
     ].node == model.resolve(0, Family.maximum)
 
     class WrongSignature(Space):
-        maximum = Param(int)
+        maximum: Param[int] = Param(int)
         choice = Decision(int, domain=domain(accepts=membership, misspelled=maximum))
 
     with pytest.raises(DefinitionError, match="domain membership signature"):
@@ -405,13 +410,15 @@ def test_generic_alias_adapter_tokens_keep_identity_for_input_and_output_annotat
     )
 
     class Family(Space):
-        source = Param(vector)
+        source: Param[tuple[int, ...]] = Param(vector)
 
         @derived(semantics=vector)
         def result(*, source: tuple[int, ...]) -> tuple[int, ...]:
             return source + (3,)
 
     model = compile_space(Family)
-    assert model.bind({Family.source: (1, 2)}).result == (1, 2, 3)
+    point = configure(Family(source=(1, 2)))
+    assert inspection.model(point) is model  # plain root values stay runtime inputs
+    assert point.result == (1, 2, 3)
     semantics = model.linked.nodes[model.resolve(0, Family.result)].semantics
     assert semantics is not None and semantics.type_token is token

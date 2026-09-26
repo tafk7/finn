@@ -14,13 +14,14 @@ from finn.core.space import (
     Param,
     Space,
     View,
-    compile_space,
+    configure,
     constraint,
     derived,
+    inspection,
     view,
 )
 from finn.core.space.domains import divisors_of
-from finn.core.space.errors import EvaluationError, RequestError
+from finn.core.space.errors import DefinitionError, EvaluationError, RequestError
 from finn.core.space.results import Available, QueryResult, Rejected, Unresolved
 
 
@@ -32,8 +33,8 @@ class FifoShape:
 
 
 class Fifo(Space):
-    word_bits = Param(int)
-    depth = Param(int)
+    word_bits: Param[int] = Param(int)
+    depth: Param[int] = Param(int)
     ram_style = Decision(str, values=("auto", "block", "shift"))
     family = Const("fifo")
 
@@ -41,14 +42,16 @@ class Fifo(Space):
     def supported(self) -> bool:
         return self.word_bits > 0 and self.depth >= 2
 
-    @view(constraints=(supported,))
+    @view(requires=(supported,))
     def physical(self) -> FifoShape:
         return FifoShape(self.word_bits, self.depth, self.ram_style)
 
 
-def test_fifo_compile_bind_replace_and_inspect_is_immutable() -> None:
-    model = compile_space(Fifo)
-    base = model.bind(word_bits=13, depth=8)
+def test_fifo_configure_replace_and_inspect_is_immutable() -> None:
+    base = configure(Fifo(word_bits=13, depth=8))
+    # Plain values are runtime inputs: every such root shares the family's one model.
+    model = inspection.model(Fifo)
+    assert inspection.model(base) is model
     assert base.family == "fifo"
     assert isinstance(base.physical.inspect().accepted_result, Unresolved)
     state = base.field(Fifo.ram_style).state
@@ -66,12 +69,13 @@ def test_fifo_compile_bind_replace_and_inspect_is_immutable() -> None:
     assert isinstance(base.query(Fifo.ram_style), Unresolved)
     assert chosen.with_choices(ram_style="block") is chosen
     assert chosen.with_choices(ram_style="shift").ram_style == "shift"
-    other = model.bind(word_bits=7, depth=4).with_choices(ram_style="shift")
+    other = configure(Fifo(word_bits=7, depth=4)).with_choices(ram_style="shift")
+    assert inspection.model(other) is model
     assert other.physical() == FifoShape(7, 4, "shift")
 
 
 def test_final_constraint_refusal_remains_visible_while_output_unresolved() -> None:
-    base = Fifo(word_bits=0, depth=8)
+    base = configure(Fifo(word_bits=0, depth=8))
     assessment = base.physical.inspect()
     assert isinstance(assessment.accepted_result, Unresolved)
     assert assessment.constraints.refused == ("supported",)
@@ -84,7 +88,7 @@ def test_atomic_refinement_follows_dependencies_and_never_publishes_partial_stat
         extent = Decision(int, values=(8, 12))
         lanes = Decision(int, domain=divisors_of(extent))
 
-    base = Tiles()
+    base = configure(Tiles())
     report = base.try_with_choices(
         base.field(Tiles.lanes).change(4), base.field(Tiles.extent).change(12)
     )
@@ -118,46 +122,55 @@ def test_binding_and_callback_values_are_snapshots_without_requiring_a_codec() -
 
         physical = View(length)
 
-    original = [1, 2]
-    model = compile_space(Mutable)
-    base = model.bind(payload=original)
+    original: list[object] = [1, 2]
+    # The node call is the binding boundary: it snapshots the value.
+    node = Mutable(payload=original)
     original.append(3)
+    base = configure(node)
     assert base.length == 3
     assert base.payload == [1, 2]
     base.payload.append(4)
     assert base.payload == [1, 2]
     assert base.physical() == 3
     assert calls == [2]
-    other = model.bind(payload=[8])
+    other = configure(Mutable(payload=[8]))
+    assert inspection.model(other) is inspection.model(base)
     assert other.length == 2
     assert calls == [2, 1]
 
 
 def test_missing_required_parameters_and_malformed_commitments_fail_at_boundary() -> None:
-    with pytest.raises(RequestError, match="depth"):
-        Fifo(word_bits=13)
-    with pytest.raises(RequestError):
+    # Node-call errors are definition errors, raised at the call.
+    with pytest.raises(DefinitionError, match="depth"):
+        Fifo(word_bits=13)  # type: ignore[call-arg]
+    with pytest.raises(DefinitionError, match="int"):
         Fifo(word_bits=True, depth=8)
-    with pytest.raises(RequestError):
-        Fifo({Fifo.ram_style: "auto"}, word_bits=13, depth=8)
+    with pytest.raises(DefinitionError, match="keyword"):
+        Fifo({Fifo.ram_style: "auto"}, word_bits=13, depth=8)  # type: ignore[arg-type, call-arg]
+    # Commitments are made on a configuration and refused at that boundary.
+    base = configure(Fifo(word_bits=13, depth=8))
+    with pytest.raises(RequestError, match="ram_style"):
+        base.with_choices(ram_style=5)
+    with pytest.raises(RequestError, match="bogus"):
+        base.with_choices(bogus="auto")
 
 
 def test_programmer_failure_keeps_owner_and_cause() -> None:
     class Broken(Space):
-        denominator = Param(int)
+        denominator: Param[int] = Param(int)
 
         @derived
         def quotient(*, denominator: int) -> int:
             return 10 // denominator
 
     with pytest.raises(EvaluationError) as caught:
-        Broken(denominator=0).query(Broken.quotient)
+        configure(Broken(denominator=0)).query(Broken.quotient)
     assert caught.value.owner == "quotient"
     assert isinstance(caught.value.__cause__, ZeroDivisionError)
 
 
 def test_concurrent_reads_and_successors_are_deterministic() -> None:
-    base = Fifo(word_bits=13, depth=8)
+    base = configure(Fifo(word_bits=13, depth=8))
 
     def run(style: str) -> QueryResult[FifoShape]:
         return base.with_choices(ram_style=style).physical.inspect().accepted_result
@@ -171,7 +184,7 @@ def test_concurrent_reads_and_successors_are_deterministic() -> None:
 
 def test_generic_container_outputs_infer_nominal_snapshot_semantics() -> None:
     class Collections(Space):
-        count = Param(int)
+        count: Param[int] = Param(int)
 
         @derived
         def indices(*, count: int) -> tuple[int, ...]:
@@ -181,7 +194,7 @@ def test_generic_container_outputs_infer_nominal_snapshot_semantics() -> None:
         def materialized(*, indices: tuple[int, ...]) -> list[int]:
             return list(indices)
 
-    point = Collections(count=3)
+    point = configure(Collections(count=3))
     assert point.indices == (0, 1, 2)
     first = point.materialized()
     first.append(99)

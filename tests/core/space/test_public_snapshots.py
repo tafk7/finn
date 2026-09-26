@@ -18,7 +18,7 @@ from finn.core.space import (
     Unresolved,
     ValueSemantics,
     View,
-    compile_space,
+    configure,
     constraint,
     derived,
     view,
@@ -41,7 +41,7 @@ BAG = ValueSemantics(
 
 
 class Mutable(Space):
-    source = Param(BAG)
+    source: Param[Bag] = Param(BAG)
     choice = Decision(BAG, values=(Bag([3]),))
 
     @derived(semantics=BAG)
@@ -57,7 +57,7 @@ class Mutable(Space):
 
 def test_value_and_function_views_detach_all_public_assessment_payloads() -> None:
     original = Bag([1])
-    point = compile_space(Mutable).bind({Mutable.source: original})
+    point = configure(Mutable(source=original))
     original.values.append(9)
     for declaration in (Mutable.physical, Mutable.computed):
         bound = point.view(declaration)
@@ -89,7 +89,7 @@ def test_value_and_function_views_detach_all_public_assessment_payloads() -> Non
 
 
 def test_decision_reads_and_candidates_cannot_mutate_frozen_commitments() -> None:
-    base = Mutable({Mutable.source: Bag([1])})
+    base = configure(Mutable(source=Bag([1])))
     candidates = base.field(Mutable.choice).candidates()
     assert isinstance(candidates, Available)
     candidates.value[0].values.append(9)
@@ -116,10 +116,10 @@ def test_public_snapshot_failure_retains_declaration_role_and_cause() -> None:
     semantics = ValueSemantics(Bag, "bag", lambda value: type(value) is Bag, BAG.equal, snapshot)
 
     class Failing(Space):
-        source = Param(semantics)
+        source: Param[Bag] = Param(semantics)
         physical = View(source)
 
-    point = Failing({Failing.source: Bag([1])})
+    point = configure(Failing(source=Bag([1])))
     point.physical()
     fail = True
     with pytest.raises(EvaluationError) as answer_error:
@@ -147,9 +147,9 @@ def test_grouped_view_obligations_keep_refusals_visible_while_waiting() -> None:
             return lanes > 0
 
         support = ConstraintGroup(refused, pending)
-        physical = View(output, constraints=(support,))
+        physical = View(output, requires=(support,))
 
-    point = Grouped()
+    point = configure(Grouped())
     grouped = point.inspect(Grouped.support)
     for _ in range(2):
         assessment = point.physical.inspect()
@@ -172,8 +172,8 @@ def test_empty_named_obligations_can_be_assessed_without_value_semantics() -> No
     class Empty(Space):
         output = Const(4)
         group = ConstraintGroup()
-        physical = View(output, constraints=(group,))
+        physical = View(output, requires=(group,))
 
-    point = Empty()
+    point = configure(Empty())
     assert point.physical() == 4
     assert point.physical.inspect().readiness.ready is True

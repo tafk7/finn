@@ -1,15 +1,32 @@
-from finn.core.space import Decision, Param, Space, Subspace, ValueKey, ViewKey, constraint, derived, view, ValueSemantics, QueryResult, Available, View, SubspaceChoice
+from finn.core.space import UNSUPPLIED, Decision, Param, Space, View, constraint, derived, view, ValueSemantics, QueryResult, Available, configure
 
 class Child(Space):
-    width = Param(int)
+    width: Param[int] = Param(int)
+    label: Param[str] = Param(str, default=UNSUPPLIED)
     lanes = Decision(int, values=(1, 2))
 
     @view
     def physical(self) -> int:
         return self.width
 
+class Boiler(Space):
+    kw: Param[int] = Param(int)
+
+class HeatPump(Space):
+    kw: Param[int] = Param(int)
+    cop = Decision(int, values=(3, 4))
+
 class Parent(Space):
-    child = Subspace(Child, width=4)
+    child = Child(width=4)
+    missing = Child()  # E
+    wrong_literal = Child(width="four")  # E
+    unknown = Child(width=1, depth=2)  # E
+    wrong_reference = Child(width=child.label)  # E
+    wrong_guard = Child(width=1, when=child.width)  # E
+    heating = Decision[Boiler | HeatPump](values={"boiler": Boiler(kw=1), "heat_pump": HeatPump(kw=2)})
+    not_on_every_candidate = Child(width=heating.cop)  # E
+    joined = Decision(values={"boiler": Boiler(kw=1), "heat_pump": HeatPump(kw=2)})
+    joined_member = Child(width=joined.kw)  # E
 
     @derived
     def invalid_child_read(self) -> str:
@@ -22,24 +39,13 @@ class Parent(Space):
 def bad(point: Child, parent: Parent) -> None:
     wrong_value: str = point.width  # E
     wrong_descriptor: int = Child.width  # E
+    wrong_configuration: str = configure(Child(width=1))  # E
     point.field(Child.lanes).change("two")  # E
-    point.field(Child.lanes).change('two')  # E
     point.field(Child.width).change(2)  # E
-    parent.field(Parent.child.ref(Child.lanes)).change(2)  # E
     point.physical(3)  # E
     wrong_assessment: int = point.physical.inspect()  # E
     wrong_output: str = point.physical()  # E
-    wrong_view_output: str = point.view(Child.physical)()  # E
-    wrong_field: str = point.field(Child.width).get()  # E
     point.physical.assess()  # E
-    point.physical.result()  # E
-    point.assess(Child.physical)  # E
-    point.field(Child.width).result()  # E
-    point.field(Child.physical).result()  # E
-    point.field(Child.physical).assess()  # E
-    Parent.child.accepted(Child.width)  # E
-    Parent.child.ref(ViewKey("view", int))  # E
-    Parent.child.accepted(ValueKey("value", int))  # E
     point.try_with_choices('not a change')  # E
 
 @constraint  # E
@@ -51,18 +57,8 @@ def wrong_answer() -> QueryResult[str]:
     return Available("bad")
 
 bad_guard = Decision(int, values=(1,), when=Child.width)  # E
-bad_child = Subspace(Child, width=4, when=Child.width)  # E
-bad_choice = SubspaceChoice({"one": Subspace(Child, width=4)}, when=Child.width)  # E
 bad_view = View(Child.width, when=Child.width)  # E
 
 @derived(when=Child.width)  # E
 def wrong_derived_guard() -> int:
     return 1
-
-@view(when=Child.width)  # E
-def wrong_view_guard() -> int:
-    return 1
-
-@constraint(when=Child.width)  # E
-def wrong_constraint_guard() -> bool:
-    return True

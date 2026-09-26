@@ -6,7 +6,6 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from contextvars import ContextVar
-from typing import TYPE_CHECKING
 
 import pytest
 
@@ -16,10 +15,10 @@ from finn.core.space import (
     Inapplicable,
     Param,
     Space,
-    Subspace,
     Unresolved,
     ValueSemantics,
     ValueUnavailableError,
+    configure,
     constraint,
     derived,
     domain,
@@ -29,9 +28,6 @@ from finn.core.space import (
 )
 from finn.core.space._execution import NativeEvaluationError
 from finn.core.space.occurrence import state
-
-if TYPE_CHECKING:
-    pass
 
 
 @pytest.mark.parametrize("field", ("caught", "finally_return", "blocked"))
@@ -64,7 +60,7 @@ def test_caught_failure_and_nonvalue_cannot_publish_fallback(field: str) -> None
             except ValueUnavailableError:
                 return 99
 
-    point = Family()
+    point = configure(Family())
     if field == "blocked":
         assert isinstance(point.query(Family.blocked), Unresolved)
         assert point.with_choices(choice=1).blocked == 1
@@ -91,11 +87,12 @@ def test_caught_failure_and_nonvalue_cannot_publish_fallback(field: str) -> None
         "assign",
         "delete",
         "foreign",
+        "configure",
     ),
 )
 def test_driver_operations_remain_sticky_when_caught(operation: str) -> None:
     class Family(Space):
-        fact = Param(int)
+        fact: Param[int] = Param(int)
         choice = Decision(int, values=(1,))
 
         @view
@@ -110,7 +107,7 @@ def test_driver_operations_remain_sticky_when_caught(operation: str) -> None:
                 return 99
             return 0
 
-    foreign = Family(fact=8)
+    foreign = configure(Family(fact=8))
     saved = selections.capture(foreign)
     actions: dict[str, Callable[[Family], object]] = {
         "query": lambda point: point.query(Family.choice),
@@ -126,8 +123,10 @@ def test_driver_operations_remain_sticky_when_caught(operation: str) -> None:
         "assign": lambda point: setattr(point, "fact", 99),
         "delete": lambda point: delattr(point, "fact"),
         "foreign": lambda point: foreign.fact,
+        # configure() is the compile step that replaced constructing a configuration.
+        "configure": lambda point: configure(Family(fact=1)),
     }
-    point = Family(fact=7)
+    point = configure(Family(fact=7))
     with pytest.raises(NativeEvaluationError, match="cross-snapshot|driver-only"):
         _ = point.invalid
     assert point.fact == 7 and isinstance(point.query(Family.choice), Unresolved)
@@ -138,7 +137,7 @@ def test_context_variables_survive_suspension_without_leaking() -> None:
     observed: list[str] = []
 
     class Family(Space):
-        fact = Param(int)
+        fact: Param[int] = Param(int)
 
         @derived
         def inner(self) -> int:
@@ -156,7 +155,7 @@ def test_context_variables_survive_suspension_without_leaking() -> None:
             finally:
                 marker.reset(token)
 
-    point = Family(fact=7)
+    point = configure(Family(fact=7))
     assert point.outer == 7 and observed == ["driver", "outer"]
     assert marker.get() == "driver"
 
@@ -169,7 +168,7 @@ def test_contextual_domain_error_is_one_primary_failure() -> None:
         choice = Decision(int, domain=domain(accepts=accepts))
 
     with pytest.raises(NativeEvaluationError) as caught:
-        Family().with_choices(choice=1)
+        configure(Family()).with_choices(choice=1)
     assert caught.value.owner == "choice" and caught.value.role == "domain membership"
     assert isinstance(caught.value.__cause__, LookupError)
     assert caught.value.cleanup_failures == ()
@@ -188,7 +187,7 @@ def test_public_snapshot_failure_cannot_be_caught_into_success() -> None:
     )
 
     class Family(Space):
-        fact = Param(semantics)
+        fact: Param[list[int]] = Param(semantics)
 
         @derived
         def output(self) -> int:
@@ -197,7 +196,7 @@ def test_public_snapshot_failure_cannot_be_caught_into_success() -> None:
             except EvaluationError:
                 return 99
 
-    point = Family(fact=[1])
+    point = configure(Family(fact=[1]))
     armed = True
     with pytest.raises(NativeEvaluationError) as caught:
         _ = point.output
@@ -211,9 +210,9 @@ def test_semantic_transformations_cannot_read_configuration_even_when_caught(hoo
     armed = False
 
     class Facts(Space):
-        value = Param(int)
+        value: Param[int] = Param(int)
 
-    facts = Facts(value=7)
+    facts = configure(Facts(value=7))
 
     def probe(role: str) -> None:
         if armed and hook == role:
@@ -239,7 +238,7 @@ def test_semantic_transformations_cannot_read_configuration_even_when_caught(hoo
     class Family(Space):
         choice = Decision(semantics, domain=domain(accepts=lambda candidate: True))
 
-    point = Family().with_choices(choice=[1])
+    point = configure(Family()).with_choices(choice=[1])
     armed = True
     with pytest.raises(EvaluationError, match="pure value transformation"):
         point.with_choices(choice=[1])
@@ -255,14 +254,14 @@ def test_blocked_self_constraint_keeps_its_inspectable_assessment() -> None:
         def positive(self) -> bool:
             return self.choice > 0
 
-    assessment = Family().inspect(Family.positive)
+    assessment = configure(Family()).inspect(Family.positive)
     assert isinstance(assessment.result, Unresolved)
     assert isinstance(assessment.results["positive"], Unresolved)
 
 
 def test_membership_only_domain_enumeration_keeps_applicability_and_blockers() -> None:
     class Family(Space):
-        enabled = Param(bool)
+        enabled: Param[bool] = Param(bool)
         prerequisite = Decision(int, values=(1,))
         choice = Decision(
             int,
@@ -270,15 +269,17 @@ def test_membership_only_domain_enumeration_keeps_applicability_and_blockers() -
             when=enabled,
         )
 
-    assert isinstance(Family(enabled=False).field(Family.choice).candidates(), Inapplicable)
-    point = Family(enabled=True)
+    assert isinstance(
+        configure(Family(enabled=False)).field(Family.choice).candidates(), Inapplicable
+    )
+    point = configure(Family(enabled=True))
     assert isinstance(point.field(Family.choice).candidates(), Unresolved)
     assert point.with_choices(prerequisite=1).field(Family.choice).candidates() is None
 
 
 def test_self_cycles_are_reached_through_scopes_admission_and_guards() -> None:
     class Child(Space):
-        source = Param(int)
+        source: Param[int] = Param(int)
 
         @derived
         def value(self) -> int:
@@ -289,7 +290,7 @@ def test_self_cycles_are_reached_through_scopes_admission_and_guards() -> None:
         def output(self) -> int:
             return self.child.value
 
-        child = Subspace(Child, source=output)
+        child = Child(source=output)
 
     class Admission(Space):
         @derived
@@ -307,10 +308,10 @@ def test_self_cycles_are_reached_through_scopes_admission_and_guards() -> None:
 
         choice = Decision(int, values=(1,), when=enabled)
 
-    point = Parent()
+    point = configure(Parent())
     with pytest.raises(EvaluationError, match="dependency cycle") as scoped:
         _ = point.output
     assert "child.value" in str(scoped.value)
     for family in (Admission, Guard):
         with pytest.raises(EvaluationError, match="dependency cycle"):
-            family().with_choices(choice=1)
+            configure(family()).with_choices(choice=1)

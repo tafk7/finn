@@ -1,0 +1,227 @@
+# Copyright (C) 2026, Advanced Micro Devices, Inc.
+# SPDX-License-Identifier: BSD-3-Clause
+"""The house toy: a graph of design spaces in the declarative form.
+
+Calling a family declares a node; ``kitchen.finish`` is a reference to that
+node's member; a Decision over nodes is the structural choice; ``configure``
+is the one compile step. Nothing here is about hardware.
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from finn.core.space import (
+    OPEN,
+    Available,
+    Bind,
+    ConfigurationError,
+    Decision,
+    Inapplicable,
+    Located,
+    LocatedParam,
+    Members,
+    Param,
+    Rejected,
+    Space,
+    Unresolved,
+    ViewKey,
+    configure,
+    constraint,
+    inspection,
+    reject,
+    selections,
+    view,
+)
+
+COST = ViewKey("cost", int)
+
+
+def codes(result: object) -> set[str]:
+    assert isinstance(result, (Rejected, Unresolved))
+    return {finding.code for finding in result.findings}
+
+
+class Room(Space):
+    area: Param[int] = Param(int)
+    finish = Decision(int, values=(1, 2, 3))
+
+    @view
+    def cost(self) -> int:
+        return self.area * self.finish
+
+    exports = {COST: cost}
+
+
+class Boiler(Space):
+    kw: Param[int] = Param(int)
+
+    @view
+    def cost(self) -> int:
+        return 30 + self.kw
+
+    exports = {COST: cost}
+
+
+class HeatPump(Space):
+    kw: Param[int] = Param(int)
+    cop = Decision(int, values=(3, 4))
+
+    @view
+    def cost(self) -> int:
+        return 10 * self.cop + self.kw
+
+    exports = {COST: cost}
+
+
+class Thermostat(Space):
+    kw: Param[int] = Param(int)
+
+    @view
+    def cost(self) -> int:
+        return 2 if self.kw < 10 else 5
+
+    exports = {COST: cost}
+
+
+class Match(Space):
+    """A relation node: two located values must agree."""
+
+    a: LocatedParam[int] = Param(Located)
+    b: LocatedParam[int] = Param(Located)
+
+    @constraint
+    def same(self) -> bool | Rejected:
+        a, b = self.a, self.b
+        if a.value != b.value:
+            return reject(
+                "mismatch", f"{a.node}.{a.member}={a.value}, {b.node}.{b.member}={b.value}"
+            )
+        return True
+
+    @view(requires=(same,))
+    def agreed(self) -> int:
+        return self.a.value
+
+
+class House(Space):
+    budget: Param[int] = Param(int)
+    want_garage = Decision(bool, values=(False, True))
+    hall = Room(area=OPEN)
+    kitchen = Room(area=12)
+    dining = Room(area=16)
+    garage = Room(area=20, when=want_garage)
+    # A class attribute may name a candidate: a typed handle, not a placement.
+    heat_pump = HeatPump(kw=8)
+    heating = Decision[Boiler | HeatPump](values={"boiler": Boiler(kw=24), "heat_pump": heat_pump})
+    thermostat = Thermostat(kw=heating.kw)
+    hall_area = Bind(hall.area, kitchen.area)
+    matched = Match(a=kitchen.finish, b=dining.finish)
+    costs = Members(COST)
+
+    @constraint
+    def within_budget(self) -> bool | Rejected:
+        spent = {member.node: member.value for member in self.costs}
+        if sum(spent.values()) > self.budget:
+            return reject("over-budget", f"{sum(spent.values())} exceeds {self.budget}")
+        return True
+
+    @view(requires=(costs, within_budget, matched.agreed))
+    def total(self) -> int:
+        return sum(member.value for member in self.costs)
+
+
+def test_the_house_is_declared_then_configured() -> None:
+    house = configure(House(budget=200))
+    assert isinstance(house.total.query(), Unresolved)  # nothing decided yet
+    assert house.hall.area == 12  # supplied by the hall_area edge
+    point = house.with_choices(
+        {
+            House.want_garage: False,
+            House.heating: "heat_pump",
+            House.heat_pump.cop: 3,
+            House.hall.finish: 1,
+            House.kitchen.finish: 2,
+            House.dining.finish: 2,
+        }
+    )
+    assert point.thermostat.kw == 8  # heating.kw: the selected candidate's member
+    assert point.costs == (
+        Located("hall", "cost", 12),
+        Located("kitchen", "cost", 24),
+        Located("dining", "cost", 32),
+        Located("heating.heat_pump", "cost", 38),
+        Located("thermostat", "cost", 2),
+    )
+    assert point.total() == 12 + 24 + 32 + 38 + 2
+
+
+def test_a_structural_choice_reads_as_the_selected_candidate() -> None:
+    house = configure(House(budget=200))
+    # heating.kw is unresolved until the decision is made.
+    assert isinstance(house.thermostat.query(Thermostat.kw), Unresolved)
+    boiler = house.with_choices(heating="boiler")
+    assert boiler.thermostat.kw == 24
+    selected = boiler.heating
+    assert isinstance(selected, Boiler) and selected.kw == 24
+    assert isinstance(boiler.query(House.heat_pump.cop), Inapplicable)
+    pump = boiler.with_choices({House.heating: "heat_pump", House.heat_pump.cop: 4})
+    assert isinstance(pump.heating, HeatPump) and pump.heating.cop == 4
+    # A stale candidate-local choice is refused when switching away.
+    assert not pump.try_with_choices(heating="boiler").accepted
+    cleared = pump.with_choices(pump.heating.field(HeatPump.cop).clear(), heating="boiler")
+    assert cleared.thermostat.kw == 24
+
+
+def test_the_relation_and_the_budget_own_their_refusals() -> None:
+    house = configure(House(budget=80))
+    point = house.with_choices(
+        {
+            House.want_garage: True,
+            House.heating: "boiler",
+            House.hall.finish: 1,
+            House.kitchen.finish: 1,
+            House.dining.finish: 3,
+            House.garage.finish: 1,
+        }
+    )
+    refused = point.total.inspect()
+    results = refused.constraints.results
+    assert codes(results["matched.agreed"]) == {"mismatch"}
+    assert "kitchen.finish=1, dining.finish=3" in {
+        finding.message
+        for finding in refused.accepted_result.findings  # type: ignore[union-attr]
+    }
+    assert codes(results["within_budget"]) == {"over-budget"}
+    assert isinstance(results["garage.cost"], Available)
+
+
+def test_the_garage_is_present_only_when_wanted() -> None:
+    house = configure(House(budget=500))
+    without = house.with_choices(want_garage=False)
+    assert isinstance(without.garage.query(Room.finish), Inapplicable)
+    with pytest.raises(ConfigurationError):
+        without.with_choices({House.garage.finish: 2})
+    wanted = house.with_choices(want_garage=True)
+    assert wanted.with_choices({House.garage.finish: 2}).garage.cost() == 40
+
+
+def test_keys_selections_and_inspection_use_declaration_paths() -> None:
+    house = configure(House(budget=200))
+    keys = {item.key for item in inspection.decisions(house)}
+    assert keys == {
+        "want_garage",
+        "heating",
+        "heating.heat_pump.cop",
+        "hall.finish",
+        "kitchen.finish",
+        "dining.finish",
+        "garage.finish",
+    }
+    point = house.with_choices({House.heating: "heat_pump", House.heat_pump.cop: 4})
+    captured = selections.capture(point)
+    assert captured.keys == ("heating", "heating.heat_pump.cop")
+    replayed = selections.restore(configure(House(budget=999)), captured)
+    assert replayed.accepted and replayed.instance.thermostat.kw == 8
+    (choice,) = inspection.choices(house)
+    assert [case.name for case in choice.cases] == ["boiler", "heat_pump"]

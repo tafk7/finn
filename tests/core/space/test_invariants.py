@@ -2,14 +2,24 @@
 # SPDX-License-Identifier: BSD-3-Clause
 """Concrete stability laws for fixed facts and compatible additional choices."""
 
-from finn.core.space import Available, Decision, Param, Space, Unresolved, constraint, derived, view
+from finn.core.space import (
+    Available,
+    Decision,
+    Param,
+    Space,
+    Unresolved,
+    configure,
+    constraint,
+    derived,
+    view,
+)
 
 
 def test_settled_values_and_acceptance_survive_unrelated_added_choices() -> None:
     calls: list[int] = []
 
     class Family(Space):
-        extent = Param(int)
+        extent: Param[int] = Param(int)
         lanes = Decision(int, values=(1, 2))
         style = Decision(str, values=("small", "fast"))
 
@@ -23,11 +33,11 @@ def test_settled_values_and_acceptance_survive_unrelated_added_choices() -> None
         def supported(self) -> bool:
             return self.lanes <= self.extent
 
-        @view(constraints=(supported,))
+        @view(requires=(supported,))
         def physical(self) -> int:
             return self.cycles
 
-    base = Family(extent=8)
+    base = configure(Family(extent=8))
     assert isinstance(base.query(Family.cycles), Unresolved)
     assert calls == []
     first = base.with_choices(lanes=2)

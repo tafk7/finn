@@ -15,7 +15,7 @@ from finn.core.space import (
     ValueCodec,
     codec_for,
     codecs,
-    compile_space,
+    configure,
     divisors_of,
     selections,
 )
@@ -30,22 +30,21 @@ def _integer(value: JSONValue) -> int:
 
 def test_freeze_restore_explore_capture_rebind_and_replace_owned_sparse_keys() -> None:
     class Family(Space):
-        extent = Param(int)
+        extent: Param[int] = Param(int)
         factor = Decision(int, domain=divisors_of(extent))
         buffers = Decision(int, values=(1, 2))
 
-    model = compile_space(Family)
     integer = ValueCodec[int]("integer", 1, lambda value: value, _integer)
     schema = SelectionSchema(
-        model,
+        Family,
         family="mapping-demo",
         version=1,
         bindings=(codec_for(Family.factor, integer), codec_for(Family.buffers, integer)),
         owned_keys=("retired-choice",),
     )
-    facts: dict[object, object] = {Family.extent: 12}
-    base = model.bind(facts)
-    facts[Family.extent] = 10
+    facts = {"extent": 12}
+    base = configure(Family(extent=facts["extent"]))
+    facts["extent"] = 10
     initial = base.with_choices(factor=3).with_choices(buffers=1)
     captured = selections.capture(initial)
     encoded = codecs.encode(captured, schema)
@@ -59,7 +58,7 @@ def test_freeze_restore_explore_capture_rebind_and_replace_owned_sparse_keys() -
     explored = selections.restore(base, alternative)
     assert explored.accepted and explored.instance.factor == 4
     assert initial.factor == 3 and initial.buffers == 1
-    rebound = model.bind(facts)
+    rebound = configure(Family(extent=facts["extent"]))
     refused = selections.restore(rebound, selections.capture(explored.instance))
     assert not refused.accepted and refused.instance is rebound
     assert selections.capture(rebound).keys == ()

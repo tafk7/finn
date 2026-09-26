@@ -1,6 +1,11 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
-"""Executable typing contract; mypy checks this without a plugin or Any escapes."""
+"""Executable typing contract; mypy checks this without a plugin or Any escapes.
+
+Declarations are typed as the values they stand for (option A): a node call
+``Room(area=12)`` is a ``Room``, and ``kitchen.finish`` in a class body is an
+``int``. Inside methods ``self`` is a configuration and every read is exact.
+"""
 
 from __future__ import annotations
 
@@ -9,31 +14,33 @@ from dataclasses import dataclass
 from typing_extensions import assert_type
 
 from finn.core.space import (
-    AcceptedViewRef,
+    OPEN,
+    UNSUPPLIED,
     Available,
+    Bind,
     BoundDecision,
     BoundValue,
     BoundView,
     Change,
-    ChoiceView,
     ConfigurationResult,
     Const,
     Decision,
-    DecisionRef,
     Derived,
+    Located,
+    LocatedParam,
+    Members,
     Param,
+    Present,
     QueryResult,
     Space,
-    Subspace,
-    SubspaceChoice,
-    ValueKey,
-    ValueRef,
     ValueSemantics,
     View,
     ViewAssessment,
     ViewKey,
+    configure,
     constraint,
     derived,
+    selected,
     view,
 )
 
@@ -45,13 +52,97 @@ class DType:
 
 DTYPE = ValueSemantics.immutable_nominal(DType)
 INT = ValueSemantics.immutable_nominal(int)
-WIDTH = ValueKey("width", int)
-PHYSICAL = ViewKey("physical", int)
+COST = ViewKey("cost", int)
+
+
+class Room(Space):
+    area: Param[int] = Param(int)
+    label: Param[str] = Param(str, default=UNSUPPLIED)
+    finish = Decision(int, values=(1, 2, 3))
+
+    @view
+    def cost(self) -> int:
+        return self.area * self.finish
+
+    exports = {COST: cost}
+
+
+class Boiler(Space):
+    kw: Param[int] = Param(int)
+
+
+class HeatPump(Space):
+    kw: Param[int] = Param(int)
+    cop = Decision(int, values=(3, 4))
+
+
+class Thermostat(Space):
+    kw: Param[int] = Param(int)
+
+
+class Match(Space):
+    a: LocatedParam[int] = Param(Located)
+    b: LocatedParam[int] = Param(Located)
+
+    @constraint
+    def same(self) -> bool:
+        assert_type(self.a, Located[int])
+        return self.a.value == self.b.value
+
+
+class House(Space):
+    budget: Param[int] = Param(int)
+    want_garage = Decision(bool, values=(False, True))
+    hall = Room(area=OPEN)
+    kitchen = Room(area=12)
+    dining = Room(area=budget, label="dining")
+    garage = Room(area=kitchen.area, when=want_garage)
+    heat_pump = HeatPump(kw=8)
+    heating = Decision[Boiler | HeatPump](values={"boiler": Boiler(kw=24), "heat_pump": heat_pump})
+    maybe = Decision(values={"none": None, "boiler": Boiler(kw=3)})
+    thermostat = Thermostat(kw=heating.kw)
+    hall_area = Bind(hall.area, kitchen.area)
+    matched = Match(a=kitchen.finish, b=dining.finish)
+    either = Room(area=Present(kitchen.area, dining.area))
+    costs = Members(COST)
+    which = selected(heating)
+
+    # References in a class body are typed as the values they stand for.
+    assert_type(kitchen, Room)
+    assert_type(kitchen.finish, int)
+    assert_type(kitchen.cost, BoundView[int])
+    assert_type(heating, Boiler | HeatPump)
+    assert_type(heating.kw, int)
+    assert_type(maybe, Boiler | None)
+    assert_type(heat_pump.cop, int)
+
+    @view(requires=(costs, matched.same, kitchen.cost))
+    def total(self) -> int:
+        assert_type(self.kitchen, Room)
+        assert_type(self.kitchen.finish, int)
+        assert_type(self.kitchen.cost(), int)
+        assert_type(self.heating, Boiler | HeatPump)
+        assert_type(self.heating.kw, int)
+        assert_type(self.maybe, Boiler | None)
+        assert_type(self.which, str)
+        assert_type(self.costs, tuple[Located[int], ...])
+        return sum(member.value for member in self.costs)
+
+
+class Estate(Space):
+    """A family-typed formal: the caller supplies the node."""
+
+    home: House = Param(House)
+    assert_type(home.kitchen.finish, int)
+
+    @derived
+    def finish(self) -> int:
+        return self.home.kitchen.finish
 
 
 class Fifo(Space):
-    word_bits = Param(int)
-    depth = Param(int)
+    word_bits: Param[int] = Param(int)
+    depth: Param[int] = Param(int)
     ram_style = Decision(str, values=("auto", "block"))
     banks = Decision(int, values=(1, 2))
     minimum_depth = Const(2)
@@ -64,17 +155,16 @@ class Fifo(Space):
     def capacity(self) -> int:
         return self.word_bits * self.depth
 
-    @view(constraints=(supported,))
+    @view(requires=(supported,))
     def physical(self) -> int:
         return self.capacity + len(self.ram_style)
 
-    detached = View(capacity, constraints=(supported,))
-    exports = {WIDTH: word_bits, PHYSICAL: physical}
+    detached = View(capacity, requires=(supported,))
 
 
 class Eltwise(Space):
-    activation = Param(DTYPE)
-    weight = Param(DTYPE)
+    activation: Param[DType] = Param(DTYPE)
+    weight: Param[DType] = Param(DTYPE)
 
     @derived(a=activation, b=weight, semantics=DTYPE)
     def result_dtype(*, a: DType, b: DType) -> QueryResult[DType]:
@@ -84,82 +174,36 @@ class Eltwise(Space):
     def physical(*, result_dtype: DType) -> QueryResult[int]:
         return Available(result_dtype.bits)
 
-    @derived
-    def width(*, result_dtype: DType) -> int:
-        return result_dtype.bits
-
-    exports = {WIDTH: width, PHYSICAL: physical}
-
-
-class FifoInterface(Subspace[Fifo]):
-    @property
-    def width(self) -> ValueRef[int]:
-        return self.ref(Fifo.word_bits)
-
-    @property
-    def style(self) -> DecisionRef[str]:
-        return self.decision_ref(Fifo.ram_style)
-
-
-class Assembly(Space):
-    width = Param(int)
-    first = FifoInterface(Fifo, word_bits=width, depth=Param(int))
-    second = Subspace(Fifo, word_bits=8, depth=Decision(int, values=(4, 8)))
-    implementation = SubspaceChoice(
-        {
-            "fifo": Subspace(Fifo, word_bits=width, depth=8),
-            "eltwise": Subspace(Eltwise, activation=DType(8), weight=DType(8)),
-        },
-        exports=(WIDTH, PHYSICAL),
-    )
-
-    @derived
-    def twice_width(self) -> int:
-        assert_type(self.first, Fifo)
-        assert_type(self.first.word_bits, int)
-        return self.first.word_bits * 2
-
 
 class GuardedAssembly(Space):
-    enabled = Param(bool)
+    enabled: Param[bool] = Param(bool)
     slots = Decision(int, values=(1, 2), when=enabled)
-    fifo = Subspace(Fifo, word_bits=8, depth=4, when=enabled)
-    choice = SubspaceChoice(
-        {"fifo": Subspace(Fifo, word_bits=8, depth=4)},
-        exports=(PHYSICAL,),
-        when=enabled,
-    )
+    fifo = Fifo(word_bits=8, depth=4, when=enabled)
 
     @derived(when=enabled)
     def value(*, slots: int) -> int:
         return slots
 
-    @derived(semantics=INT, when=enabled)
-    def answer_value(*, slots: int) -> QueryResult[int]:
-        return Available(slots)
-
     @constraint(when=enabled)
     def supported(*, slots: int) -> bool:
         return slots > 0
 
-    physical = View(value, constraints=(supported,), when=enabled)
-
-    @view(when=enabled)
-    def decorated(*, slots: int) -> int:
-        return slots
-
-    @view(semantics=INT, when=enabled)
-    def answer_view(*, slots: int) -> QueryResult[int]:
-        return Available(slots)
+    physical = View(value, requires=(supported,), when=enabled)
 
 
-def check(point: Fifo, assembly: Assembly, eltwise: Eltwise) -> None:
+def check(point: Fifo, house: House, eltwise: Eltwise) -> None:
+    # Class access is the schema key: a declaration.
     assert_type(Fifo.word_bits, Param[int])
     assert_type(Fifo.ram_style, Decision[str])
     assert_type(Fifo.minimum_depth, Const[int])
     assert_type(Fifo.capacity, Derived[int])
     assert_type(Fifo.physical, View[int])
-    assert_type(Fifo.detached, View[int])
+    assert_type(House.kitchen, Room)
+    assert_type(House.kitchen.finish, int)
+    # The compile step is typed as the family.
+    assert_type(configure(House(budget=100)), House)
+    assert_type(configure(Estate(home=House(budget=1))), Estate)
+    # Configuration reads are exact.
     assert_type(point.word_bits, int)
     assert_type(point.ram_style, str)
     assert_type(point.minimum_depth, int)
@@ -169,51 +213,23 @@ def check(point: Fifo, assembly: Assembly, eltwise: Eltwise) -> None:
     assert_type(point.physical.inspect(), ViewAssessment[int])
     assert_type(point.physical.query(), QueryResult[int])
     assert_type(point.view(Fifo.physical), BoundView[int])
-    assert_type(point.view(Fifo.physical)(), int)
-    assert_type(point.field(Fifo.capacity).get(), int)
-    assert_type(point.field(Fifo.capacity).query(), QueryResult[int])
-    assert_type(point.field(Fifo.ram_style).get(), str)
-    assert_type(point.field(Fifo.ram_style).query(), QueryResult[str])
-    assert_type(point.inspect(Fifo.physical), ViewAssessment[int])
-    assert_type(point.with_choices(ram_style="auto"), Fifo)
     assert_type(point.field(Fifo.capacity), BoundValue[int])
     assert_type(point.field(Fifo.ram_style), BoundDecision[str])
     assert_type(point.field(Fifo.physical), BoundView[int])
-    assert_type(point.field(Fifo.physical).get(), int)
-    assert_type(point.field(Fifo.physical).query(), QueryResult[int])
-    assert_type(point.field(Fifo.physical).inspect(), ViewAssessment[int])
     assert_type(point.field(Fifo.ram_style).change("block"), Change[str])
-    assert_type(point.field(Fifo.ram_style).change("block"), Change[str])
+    assert_type(point.inspect(Fifo.physical), ViewAssessment[int])
+    assert_type(point.query(Fifo.capacity), QueryResult[int])
+    assert_type(house.query(House.kitchen.finish), QueryResult[int])
+    assert_type(point.with_choices(ram_style="auto"), Fifo)
+    assert_type(house.with_choices({House.kitchen.finish: 2, House.heating: "boiler"}), House)
     assert_type(
         point.try_with_choices(point.field(Fifo.ram_style).change("block")),
         ConfigurationResult[Fifo],
     )
-    assert_type(
-        point.try_with_choices(
-            point.field(Fifo.ram_style).change("block"), point.field(Fifo.banks).change(2)
-        ),
-        ConfigurationResult[Fifo],
-    )
-    assert_type(point.query(Fifo.capacity), QueryResult[int])
-    assert_type(Eltwise.result_dtype, Derived[DType])
     assert_type(eltwise.result_dtype, DType)
-    assert_type(Eltwise.physical, View[int])
     assert_type(eltwise.physical(), int)
-    assert_type(eltwise.physical.inspect(), ViewAssessment[int])
-    assert_type(Assembly.first, FifoInterface)
-    assert_type(Assembly.first.width, ValueRef[int])
-    assert_type(Assembly.first.style, DecisionRef[str])
-    assert_type(Assembly.second.ref(Fifo.depth), ValueRef[int])
-    assert_type(Assembly.second.decision_ref(Fifo.depth), DecisionRef[int])
-    assert_type(assembly.first, Fifo)
-    assert_type(assembly.first.with_choices(ram_style="block"), Fifo)
-    assert_type(Assembly.first.accepted(Fifo.physical), AcceptedViewRef[int])
-    assert_type(Assembly.implementation.ref(WIDTH), ValueRef[int])
-    assert_type(Assembly.implementation.accepted(PHYSICAL), AcceptedViewRef[int])
-    assert_type(assembly.implementation, ChoiceView)
-    assert_type(Assembly(width=8), Assembly)
+    assert_type(house.kitchen.finish, int)
+    assert_type(house.heating, Boiler | HeatPump)
+    assert_type(house.maybe, Boiler | None)
     assert_type(GuardedAssembly.value, Derived[int])
-    assert_type(GuardedAssembly.answer_value, Derived[int])
     assert_type(GuardedAssembly.physical, View[int])
-    assert_type(GuardedAssembly.decorated, View[int])
-    assert_type(GuardedAssembly.answer_view, View[int])

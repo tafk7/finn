@@ -19,11 +19,9 @@ from finn.core.space import (
     Param,
     Selection,
     Space,
-    Subspace,
-    SubspaceChoice,
     Unresolved,
     ValueSemantics,
-    compile_space,
+    configure,
     derived,
     divisors_of,
     domain,
@@ -35,22 +33,21 @@ from finn.core.space.errors import RequestError
 
 def test_capture_child_keeps_each_committed_root_owner_once_and_includes_first_value() -> None:
     class Child(Space):
-        supplied = Param(int)
+        supplied: Param[int] = Param(int)
         local = Decision(str, values=("auto", "block"))
 
     class Family(Space):
         factor = Decision(int, values=(1, 2))
-        left = Subspace(Child, supplied=factor)
-        right = Subspace(Child, supplied=factor)
+        left = Child(supplied=factor)
+        right = Child(supplied=factor)
 
         @derived
         def doubled(*, factor: int) -> int:
             return factor * 2
 
-    model = compile_space(Family)
-    base = model.bind()
+    base = configure(Family())
     first = base.with_choices(factor=1)
-    point = first.with_choices(first.field(Family.left.decision_ref(Child.local)).change("auto"))
+    point = first.with_choices({Family.left.local: "auto"})
     assert point.doubled == 2
     captured = selections.capture(point.left)
     assert captured.keys == ("factor", "left.local")
@@ -67,7 +64,7 @@ def test_configuration_edits_can_be_captured_without_changing_earlier_points() -
         factor = Decision(int, values=(1, 2))
         style = Decision(str, values=("small", "fast"))
 
-    base = Family()
+    base = configure(Family())
     point = base.with_choices(factor=1, style="small")
     original = selections.capture(point)
     revised = point.with_choices(point.field(Family.style).clear(), factor=2)
@@ -88,13 +85,12 @@ def test_configuration_edits_can_be_captured_without_changing_earlier_points() -
 
 def test_rebound_inputs_can_refuse_an_earlier_selection_without_partial_publication() -> None:
     class Family(Space):
-        extent = Param(int)
+        extent: Param[int] = Param(int)
         factor = Decision(int, domain=divisors_of(extent))
         style = Decision(str, values=("auto", "block"))
 
-    model = compile_space(Family)
-    first = model.bind({Family.extent: 12}).with_choices(factor=4).with_choices(style="block")
-    changed = model.bind({Family.extent: 10})
+    first = configure(Family(extent=12)).with_choices(factor=4).with_choices(style="block")
+    changed = configure(Family(extent=10))
     report = selections.restore(changed, selections.capture(first))
     assert not report.accepted and report.instance is changed
     assert selections.capture(changed).keys == ()
@@ -106,39 +102,39 @@ def test_selector_change_requires_explicit_case_clearing_before_capture() -> Non
         lanes = Decision(int, values=(1, 2))
 
     class Family(Space):
-        implementation = SubspaceChoice({"left": Subspace(Child), "right": Subspace(Child)})
+        left = Child()  # a class attribute naming a candidate: a typed handle
+        implementation = Decision(values={"left": left, "right": Child()})
 
-    base = Family()
+    base = configure(Family())
     selector = inspection.choices(base)[0].selector
-    assert selector is not None
-    child = base.implementation.select("left").alternative("left")
-    left_lanes = inspection.decision_handle(child, Child.lanes)
-    point = child.with_choices(lanes=1).root
+    point = base.with_choices({Family.implementation: "left", Family.left.lanes: 1})
     captured = selections.capture(point)
     assert captured.keys == ("implementation", "implementation.left.lanes")
-    refused = point.try_with_choices(point.field(selector).change("right"))
+    refused = point.try_with_choices({selector: "right"})
     assert not refused.accepted and refused.instance is point
     assert selections.capture(point) == captured
-    revised = point.with_choices(
-        point.field(left_lanes).clear(), point.field(selector).change("right")
-    )
+    revised = point.with_choices(point.left.field(Child.lanes).clear(), {selector: "right"})
     cleaned = selections.capture(revised)
     accepted = selections.restore(base, cleaned)
     assert accepted.accepted and cleaned.keys == ("implementation",)
 
 
-def test_singleton_choices_do_not_create_persisted_selectors() -> None:
+def test_singleton_choices_persist_their_selector_like_any_decision() -> None:
+    # Replaces "singleton choices do not create persisted selectors": a singleton
+    # Decision over nodes is an ordinary Decision, committed and captured like any other.
     class Child(Space):
         lanes = Decision(int, values=(1,))
 
     class Family(Space):
-        implementation = SubspaceChoice({"only": Subspace(Child)})
+        implementation = Decision(values={"only": Child()})
 
-    point = Family().implementation.alternative("only").with_choices(lanes=1)
+    base = configure(Family())
+    assert isinstance(base.query(Family.implementation.lanes), Unresolved)
+    point = base.with_choices({Family.implementation: "only", Family.implementation.lanes: 1})
     captured = selections.capture(point)
-    assert len(captured.entries) == 1
-    assert captured.entries[0].key.endswith("lanes")
-    assert not inspection.decision_info(point, Child.lanes).selector
+    assert captured.keys == ("implementation", "implementation.only.lanes")
+    assert inspection.decision_info(point, Family.implementation).selector
+    assert not inspection.decision_info(point, Family.implementation.lanes).selector
 
 
 @dataclass
@@ -159,7 +155,7 @@ def test_capture_and_public_entries_detach_mutable_payloads() -> None:
     class Family(Space):
         payload = Decision(PAYLOAD, values=(Payload([1, 2]), Payload([3])))
 
-    base = Family()
+    base = configure(Family())
     source = Payload([2, 1])
     point = base.with_choices(payload=source)
     captured = selections.capture(point)
@@ -184,17 +180,16 @@ def test_foreign_models_invalid_selections_and_child_restore_are_rejected() -> N
         value = Decision(int, values=(1, 2))
 
     class Family(Space):
-        first = Subspace(Child)
-        second = Subspace(Child)
+        first = Child()
+        second = Child()
 
     class OtherFamily(Space):
-        first = Subspace(Child)
-        second = Subspace(Child)
+        first = Child()
+        second = Child()
 
-    point = Family()
-    point = point.with_choices(point.field(Family.first.decision_ref(Child.value)).change(1))
+    point = configure(Family()).with_choices({Family.first.value: 1})
     saved = selections.capture(point)
-    other = OtherFamily()
+    other = configure(OtherFamily())
     with pytest.raises(RequestError, match="different compiled model"):
         selections.restore(other, saved)
     with pytest.raises(RequestError, match="root configuration"):
@@ -202,7 +197,7 @@ def test_foreign_models_invalid_selections_and_child_restore_are_rejected() -> N
     with pytest.raises(RequestError):
         saved.value(Child.value)
     with pytest.raises(RequestError, match="different compiled model"):
-        foreign = inspection.decision_handle(other, OtherFamily.first.decision_ref(Child.value))
+        foreign = inspection.decision_handle(other, OtherFamily.first.value)
         saved.value(foreign)
     with pytest.raises(RequestError, match="Selection"):
         selections.restore(other, cast(Selection, object()))
@@ -218,7 +213,7 @@ def test_capture_does_not_evaluate_unrelated_uncommitted_guard_callbacks() -> No
 
         unrelated = Decision(int, values=(1,), when=explosive)
 
-    point = Family().with_choices(committed=1)
+    point = configure(Family()).with_choices(committed=1)
     assert selections.capture(point).keys == ("committed",)
 
 
@@ -228,12 +223,12 @@ def test_selection_reads_replay_and_codec_bindings_have_strict_types(tmp_path: P
     project = Path(__file__).resolve().parents[3]
     common = """from typing_extensions import assert_type
 from finn.core.space import (
-    Decision, Param, Space, ValueCodec, JSONValue, codec_for, compile_space,
+    Decision, Param, Space, ValueCodec, JSONValue, codec_for, configure,
     selections, Selection, ConfigurationResult,
 )
 
 class Family(Space):
-    extent = Param(int)
+    extent: Param[int] = Param(int)
     factor = Decision(int, values=(1, 2))
     style = Decision(str, values=("auto", "block"))
 
@@ -243,7 +238,7 @@ def integer(value: JSONValue) -> int:
     return value
 
 integer_codec: ValueCodec[int] = ValueCodec("integer", 1, lambda value: value, integer)
-base = compile_space(Family).bind({Family.extent: 4})
+base = configure(Family(extent=4))
 selected = selections.capture(base)
 """
     positive = (
@@ -256,7 +251,7 @@ codec_for(Family.factor, integer_codec)
     )
     negative = (
         common
-        + """selected.value(Family.extent)  # E
+        + """selected.value(Family.extent)  # accepted: a reference is typed as its value
 selected.edit(Family.factor, 2)  # E
 selected.remove(Family.factor)  # E
 codec_for(Family.style, integer_codec)  # E
@@ -313,7 +308,7 @@ def test_restore_preconditions_precede_value_adapters_and_admission() -> None:
     class Family(Space):
         value = Decision(semantics, domain=domain(accepts=accepts))
 
-    base = Family()
+    base = configure(Family())
     configured = base.with_choices(value=1)
     same = selections.capture(configured)
     different = selections.capture(base.with_choices(value=2))
@@ -332,17 +327,19 @@ def test_restore_preconditions_precede_value_adapters_and_admission() -> None:
     assert selections.restore(cleared, different).instance.value == 2
 
 
-def test_singleton_structural_selection_does_not_disqualify_empty_root() -> None:
+def test_singleton_structural_selection_is_committed_and_replays_on_an_empty_root() -> None:
+    # Replaces "selecting the only case is a no-op": a singleton Decision over nodes
+    # needs a commitment now; the committed selector replays like any other choice.
     class Child(Space):
         value = Decision(int, values=(1,))
 
     class Family(Space):
-        choice = SubspaceChoice({"only": Subspace(Child)})
+        choice = Decision(values={"only": Child()})
 
-    base = Family()
-    assert base.choice.select("only").instance is base
-    configured = base.choice.alternative("only").with_choices(value=1)
+    base = configure(Family())
+    committed = base.with_choices(choice="only")
+    assert committed is not base and selections.capture(committed).keys == ("choice",)
+    configured = committed.with_choices({Family.choice.value: 1})
     result = selections.restore(base, selections.capture(configured))
-    assert (
-        result.accepted and result.instance.choice.alternative("only").field(Child.value).get() == 1
-    )
+    only = result.instance.choice
+    assert result.accepted and isinstance(only, Child) and only.field(Child.value).get() == 1
