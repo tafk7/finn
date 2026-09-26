@@ -28,6 +28,11 @@ The [Space design](../../../../scratchpad/space/DESIGN.md),
 [migration notes](../../../../scratchpad/space/MIGRATION.md) are maintained in
 that separate repository while experimental.
 
+The [kernel and artifact integration refactoring spec](../../../docs/kernel-artifact-integration-2026-09-25/SPEC.md)
+records the planned declaration, source-preparation, composition, and provenance
+work while preserving the independent Space and artifact systems. It describes
+planned changes, not additional APIs already delivered here.
+
 ```text
 base.py                  neutral Kernel identity and capability metadata
 dotp.py                  operand scalars, AXIS ports and build requirements
@@ -95,22 +100,30 @@ relative to a staging directory; retain that layout and use the declared
 `include_directories`. Its AXI-Lite memory and `ap_ctrl_hs` registers share the
 `control` bundle; software must enable start/auto-restart for continuous output.
 
-`MVAU` owns matrix geometry, PE/SIMD folding and result precision. Its
-`compute` child is a bound `DotpAxiKernel`. Weight delivery is the structural
-choice `implementation` between two families. `ExternalWeights` has a top-level
-weight stream and no initializer. `CyclicWeights` has no weight port: it places a
-reusable `CyclicDelivery` kernel as its `source`, giving it the optional `weights`
-fact and the tile form dotp reads. The source owns the `rom_style` choice and
-embeds the packed image in its requirements. Both families export typed
-`assembly` and `build_requirements` views, which the parent's views accept, and
-wire replay, compute and the weight source only through checked stream
-contracts (below). Only the selected family is evaluated:
+`MVAU` owns matrix geometry, PE/SIMD folding and result precision, and declares
+its connections as streams (`finn.kernels.streams`). Each `Stream` carries a
+`StreamSpec` (element, traversal, repetition, markers), and every placed kernel
+binds its `Port`s to `stream.spec`:
+
+```text
+in0_V ─activations─► replay ─replayed─► compute (dotp) ─results─► out0_V
+                                           ▲
+       implementation ─── weight_stream ───┘   (buffered: direct | fifo)
+       external: TopInput in1_V  |  cyclic: CyclicDelivery (rom_style, weights)
+```
+
+`assemble_streams` derives the whole structure: it checks each stream's producer
+and consumer contracts, wires them, routes clocks and resets, and turns
+`TopInput`/`TopOutput` into AXIS ports. Either end of a stream may be a
+`SubspaceChoice` of kernels; only the selected case is evaluated. A stream
+declared `buffered=True` owns a `transport` choice: `direct`, or a `fifo` case
+whose depth and memory style are its own decisions. Whether a FIFO is needed
+and how deep is a compiler decision; the stream only provides the slot:
 
 ```python
 from finn.core.space import Unresolved, inspection, selections
 from finn.kernels import MVAU
 from finn.kernels.delivery import CyclicDelivery
-from finn.kernels.mvau import CyclicWeights
 
 base = MVAU(
     repetitions=2,
@@ -122,17 +135,25 @@ base = MVAU(
     segment_length=0,
     weights=((1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (0, 0, 0, 1)),
 )
-(choice,) = inspection.choices(base)
-family = base.implementation.alternative("cyclic")
+owned = {item.key: item.reference for item in inspection.decisions(base)}
 point = base.with_choices(
-    base.field(choice.selector).change("cyclic"),
-    family.field(CyclicWeights.source.decision_ref(CyclicDelivery.rom_style)).change("block"),
+    base.field(owned["implementation"]).change("cyclic"),
+    base.field(owned["implementation.cyclic.rom_style"]).change("block"),
+    base.field(owned["weight_stream.transport"]).change("fifo"),
+    base.field(owned["weight_stream.transport.fifo.buffer.depth"]).change(16),
+    base.field(owned["weight_stream.transport.fifo.buffer.ram_style"]).change("auto"),
     base.compute.field(DotpAxiKernel.compute_pumping).change(False),
     pe=2,
     simd=2,
 )
-assert len(point.assembly().initializer) == 4
-assert "in1_V" not in {port.name for port in point.assembly().structure.top_abi.ports}
+built = point.assembly()
+assert len(built.initializer) == 4
+assert [item.instance_id for item in built.structure.instances] == [
+    "u_replay",
+    "u_compute",
+    "u_weights",
+    "u_weight_stream_fifo",
+]
 facts = dict(
     repetitions=2,
     matrix_width=4,
@@ -147,8 +168,9 @@ replayed = selections.restore(MVAU(**facts), saved).instance  # weights omitted
 assert isinstance(replayed.assembly.query(), Unresolved)
 ```
 
-Changing the selector does not discard the old family's choices: clear the
-source's `rom_style` in the same batch when switching to external delivery. The
+Changing a selector does not discard the old case's choices: clear
+`rom_style` (or a FIFO's depth and memory style) in the same batch when
+switching away from that case. The
 `mvau_assembly` adapter binds this same Space for callers with a complete
 configuration:
 
@@ -172,7 +194,8 @@ built = mvau_assembly(
 `built.structure` exposes wiring, `built.initializer` contains packed cyclic
 weights, and `built.requirements` is the artifact handoff. External weight
 delivery uses `WeightDelivery.EXTERNAL` and omits `weights`; `rom_style`
-(default `auto`) applies only to cyclic delivery.
+(default `auto`) applies only to cyclic delivery, and `weight_fifo_depth`
+places a FIFO on the weight stream.
 
 Pass source roots explicitly to `finn.kernels.artifacts.build.prepare_module_build`:
 `roots={"kernels": resource_root(), "finnlib": finnlib_root}` and

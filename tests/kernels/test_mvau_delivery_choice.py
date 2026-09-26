@@ -27,25 +27,20 @@ from finn.core.space import (
     inspection,
     selections,
 )
-from finn.core.space.errors import RequestError
+from finn.core.space.errors import ConfigurationError, RequestError
 from finn.kernels.artifacts.abi import Bus
 from finn.kernels.artifacts.build import ModuleBuildRequirements, prepare_module_build
 from finn.kernels.artifacts.store import ArtifactStore
 from finn.kernels.delivery import CyclicDelivery
 from finn.kernels.dotp import DotpAxiKernel
-from finn.kernels.mvau import (
-    CyclicWeights,
-    ExternalWeights,
-    MVAU,
-    WeightDelivery,
-    mvau_assembly,
-)
+from finn.kernels.mvau import MVAU, WeightDelivery, mvau_assembly
+from finn.kernels.streams import TopInput
 from finn.kernels.resources import resource_root, template_root
 from finn.kernels.target import DspBlock
 
 ROOT = Path(__file__).resolve().parents[2]
-IMAGE = CyclicWeights.source.ref(CyclicDelivery.image)
-ROM_STYLE = CyclicWeights.source.decision_ref(CyclicDelivery.rom_style)
+IMAGE = CyclicDelivery.image
+ROM_STYLE = CyclicDelivery.rom_style
 WEIGHTS = ((-4, -3, -2, -1), (0, 1, 2, 3), (3, 2, 1, 0), (-1, -2, -3, -4))
 FACTS = dict(
     repetitions=3,
@@ -62,20 +57,25 @@ def base(**facts):
     return MVAU(**{**FACTS, **facts})
 
 
-def selector(point):
-    (choice,) = inspection.choices(point)
-    assert choice.key == "implementation" and choice.selector is not None
+def selector(point, key="implementation"):
+    (choice,) = [item for item in inspection.choices(point) if item.key == key]
+    assert choice.selector is not None
     return choice.selector
+
+
+def transport(point):
+    return selector(point, "weight_stream.transport")
 
 
 def rom_style(point):
     family = point.implementation.alternative("cyclic")
-    return inspection.decision_handle(family.source, CyclicDelivery.rom_style)
+    return inspection.decision_handle(family, CyclicDelivery.rom_style)
 
 
 def configured(point, case, *, style=None, pe=2, simd=2):
     changes = [
         point.field(selector(point)).change(case),
+        point.field(transport(point)).change("direct"),
         point.compute.field(DotpAxiKernel.compute_pumping).change(False),
     ]
     if style is not None:
@@ -123,7 +123,7 @@ def test_the_inactive_family_is_never_demanded():
     assert "weights" not in visited
     inactive = point.implementation.alternative("cyclic")
     assert isinstance(inactive.query(IMAGE), Inapplicable)
-    assert isinstance(inactive.source.field(CyclicDelivery.rom_style).query(), Inapplicable)
+    assert isinstance(inactive.field(CyclicDelivery.rom_style).query(), Inapplicable)
 
 
 def test_case_local_choices_are_owned_by_their_family():
@@ -133,15 +133,19 @@ def test_case_local_choices_are_owned_by_their_family():
         "simd",
         "compute.compute_pumping",
         "implementation",
-        "implementation.cyclic.source.rom_style",
+        "implementation.cyclic.rom_style",
+        "weight_stream.transport",
+        "weight_stream.transport.fifo.buffer.depth",
+        "weight_stream.transport.fifo.buffer.ram_style",
     }
     assert records["implementation"].selector
     assert records["implementation"].cases == ("external", "cyclic")
-    local = records["implementation.cyclic.source.rom_style"]
+    local = records["implementation.cyclic.rom_style"]
     # The choice belongs to the reusable delivery kernel placed by the family.
-    assert local.scope == "implementation.cyclic.source" and not local.selector
+    assert local.scope == "implementation.cyclic" and not local.selector
     cases = {case.name: case.space_type for case in inspection.choices(base())[0].cases}
-    assert cases == {"external": ExternalWeights, "cyclic": CyclicWeights}
+    # The cases are a boundary port and the reusable delivery kernel themselves.
+    assert cases == {"external": TopInput, "cyclic": CyclicDelivery}
     # Applicability of a case-local choice waits for the selector, and names it.
     unselected = base().implementation.alternative("cyclic").field(ROM_STYLE)
     pending = unselected.candidates()
@@ -155,7 +159,7 @@ def test_missing_cyclic_weights_leave_only_the_selected_family_unresolved():
     assert isinstance(external.assembly.query(), Available)
     cyclic = configured(base(), "cyclic", style="distributed")
     family = cyclic.implementation.alternative("cyclic")
-    assert family.source.rom_style == "distributed"
+    assert family.rom_style == "distributed"
     assert isinstance(family.query(IMAGE), Unresolved)
     assessment = cyclic.assembly.inspect()
     assert isinstance(assessment.accepted_result, Unresolved)
@@ -174,7 +178,7 @@ def test_cyclic_family_needs_its_own_rom_choice_and_refuses_bad_weights():
     refused = bad.assembly.query()
     assert isinstance(refused, Rejected)
     assert keys(refused) == {"cyclic-values"}
-    assert owners(refused) == {"implementation.cyclic.source.image"}
+    assert owners(refused) == {"implementation.cyclic.image"}
     # A shape error is refused the same way, and never demanded by external delivery.
     wrong = configured(base(weights=((0,),)), "cyclic", style="auto").assembly.query()
     assert isinstance(wrong, Rejected) and "shape" in wrong.findings[0].message
@@ -217,6 +221,7 @@ def schema(point):
         version=1,
         bindings=(
             codec_for(selector(point), STRING),
+            codec_for(transport(point), STRING),
             codec_for(rom_style(point), STRING),
             codec_for(MVAU.pe, INTEGER),
             codec_for(MVAU.simd, INTEGER),
@@ -233,9 +238,10 @@ def test_selector_and_case_choices_round_trip_through_an_empty_root():
     assert saved.keys == (
         "compute.compute_pumping",
         "implementation",
-        "implementation.cyclic.source.rom_style",
+        "implementation.cyclic.rom_style",
         "pe",
         "simd",
+        "weight_stream.transport",
     )
     document = codecs.encode(saved, schema(point))
     decoded = codecs.decode(document, schema(point))
@@ -266,8 +272,8 @@ def test_switching_families_is_atomic_and_requires_clearing_stale_case_choices()
     stale = cyclic.try_with_choices(cyclic.field(selector(cyclic)).change("external"))
     assert not stale.accepted and stale.instance is cyclic
     refused = {outcome.owner: outcome for outcome in stale.outcomes if outcome.status == "refused"}
-    assert set(refused) == {"implementation.cyclic.source.rom_style"}
-    assert isinstance(refused["implementation.cyclic.source.rom_style"].result, Inapplicable)
+    assert set(refused) == {"implementation.cyclic.rom_style"}
+    assert isinstance(refused["implementation.cyclic.rom_style"].result, Inapplicable)
     assert cyclic.assembly().weight_delivery is WeightDelivery.CYCLIC
     switched = cyclic.with_choices(
         cyclic.field(selector(cyclic)).change("external"),
@@ -279,6 +285,7 @@ def test_switching_families_is_atomic_and_requires_clearing_stale_case_choices()
         "implementation",
         "pe",
         "simd",
+        "weight_stream.transport",
     )
     # Switching back commits the case-local choice in the same batch.
     back = switched.with_choices(
@@ -338,3 +345,76 @@ def test_adapter_rejects_an_unknown_rom_style():
             weights=WEIGHTS,
             rom_style="ultra",
         )
+
+
+# -- the weight stream's transport slot --------------------------------------------------
+
+FIFO_DEPTH = "weight_stream.transport.fifo.buffer.depth"
+FIFO_RAM_STYLE = "weight_stream.transport.fifo.buffer.ram_style"
+
+
+def handle(point, key):
+    return next(item.reference for item in inspection.decisions(point) if item.key == key)
+
+
+def buffered(point, depth=None):
+    changes = [
+        point.field(transport(point)).change("fifo"),
+        point.field(handle(point, FIFO_RAM_STYLE)).change("auto"),
+    ]
+    if depth is not None:
+        changes.append(point.field(handle(point, FIFO_DEPTH)).change(depth))
+    return point.with_choices(*changes)
+
+
+def test_a_buffered_stream_places_a_fifo_between_its_producer_and_consumer():
+    for case, weights in (("external", None), ("cyclic", WEIGHTS)):
+        point = configured(
+            base(weights=weights) if weights else base(), case, style=("auto" if weights else None)
+        )
+        fifo = buffered(point, depth=32)
+        built = fifo.assembly()
+        instances = [item.instance_id for item in built.structure.instances]
+        assert instances[-1] == "u_weight_stream_fifo"
+        destinations = {
+            (wire.destination.pin.instance_id, wire.source.pin.instance_id)
+            for wire in built.structure.wires
+            if hasattr(wire.source, "pin")
+            and wire.destination.pin.signal_id in ("idat", "s_axis_weights_tdata")
+        }
+        producer = "u_weights" if case == "cyclic" else None
+        assert ("u_weight_stream_fifo", producer) in destinations
+        assert ("u_compute", "u_weight_stream_fifo") in destinations
+        depth = dict(built.structure.instances[-1].requirements.parameters)["DEPTH"]
+        assert depth == 32
+        # The logical sequence and the dotp arithmetic are unchanged.
+        assert built.weight_beats == point.assembly().weight_beats
+
+
+def test_fifo_depth_is_owned_by_the_stream_and_only_demanded_when_selected():
+    point = configured(base(), "external")
+    records = {item.key: item for item in inspection.decisions(point)}
+    assert records[FIFO_DEPTH].scope == "weight_stream.transport.fifo.buffer"
+    assert isinstance(point.field(handle(point, FIFO_DEPTH)).query(), Inapplicable)
+    undecided = buffered(point)
+    assert isinstance(undecided.assembly.query(), Unresolved)
+    with pytest.raises(ConfigurationError):
+        buffered(point, depth=1)
+    deep = buffered(point, depth=64)
+    saved = selections.capture(deep)
+    assert FIFO_DEPTH in saved.keys
+    assert selections.restore(base(), saved).instance.assembly() == deep.assembly()
+    # Removing the FIFO requires clearing its stale depth and memory style atomically.
+    stale = deep.try_with_choices(deep.field(transport(deep)).change("direct"))
+    assert not stale.accepted
+    direct = deep.with_choices(
+        deep.field(transport(deep)).change("direct"),
+        deep.field(handle(deep, FIFO_DEPTH)).clear(),
+        deep.field(handle(deep, FIFO_RAM_STYLE)).clear(),
+    )
+    assert direct.assembly() == point.assembly()
+
+
+def test_adapter_places_the_weight_fifo_on_request():
+    built = mvau_assembly(**{**FACTS, "pe": 2, "simd": 2}, weight_fifo_depth=16)
+    assert [item.instance_id for item in built.structure.instances][-1] == "u_weight_stream_fifo"

@@ -45,6 +45,8 @@ from finn.kernels.datatypes.values import (
 )
 from finn.kernels.datatypes.scalar import integer_scalar
 from finn.kernels.physical.axi_stream import AxiStream, axi_stream
+from finn.kernels.physical.contract import StreamContract
+from finn.kernels.streams import COMPONENT, COMPONENT_SEMANTICS, Component, Port
 from finn.core.space import (
     ConstraintGroup,
     Decision,
@@ -84,6 +86,9 @@ class DotpAxiKernel(Kernel):
     activation_type = integer_scalar(activation_dtype, Integer(min_bits=2))
     weights_type = integer_scalar(weights_dtype, SignedInteger(min_bits=2))
     result_type = integer_scalar(result_dtype, SignedInteger())
+    activation_stream = Port(Endpoint.TARGET)
+    weights_stream = Port(Endpoint.TARGET)
+    result_stream = Port(Endpoint.INITIATOR)
     activation = axi_stream("s_axis_input", simd, Endpoint.TARGET, activation_type, last=True)
     weights = axi_stream("s_axis_weights", pe * simd, Endpoint.TARGET, weights_type)
     result = axi_stream("m_axis_output", pe, Endpoint.INITIATOR, result_type)
@@ -280,6 +285,34 @@ class DotpAxiKernel(Kernel):
     def interfaces(self) -> tuple[AxiStream, ...]:
         """Accepted (activation, weights, result) ports; framing is the caller's."""
         return (self.activation.stream(), self.weights.stream(), self.result.stream())
+
+    @view(semantics=COMPONENT_SEMANTICS)
+    def component(self) -> Component | Rejected:
+        """Port contracts over the bound streams: their order, with dotp's own encodings.
+
+        The activation stream must carry a frame marker; it drives TLAST.
+        """
+        names = ("activation_stream", "weights_stream", "result_stream")
+        specs = (self.activation_stream, self.weights_stream, self.result_stream)
+        ports: dict[str, StreamContract] = {}
+        for name, spec, port in zip(names, specs, self.interfaces()):
+            if spec.element.datatype_name != port.dtype.name:
+                return reject(
+                    "dotp-stream-element",
+                    f"{name} carries {spec.element.datatype_name}, the port {port.dtype.name}",
+                )
+            transport = port.native(clock="ap_clk", reset="ap_rst_n")
+            markers = {}
+            if transport.markers:
+                if len(spec.markers) != 1:
+                    return reject("dotp-framing", f"{name} needs exactly one frame marker rule")
+                markers = {transport.markers[0].signal: spec.markers[0]}
+            ports[name] = StreamContract(
+                transport, spec.element, spec.form, spec.repetition, markers
+            )
+        return Component(self.build_requirements(), ports)
+
+    exports = {COMPONENT: component}
 
 
 __all__ = ["DotpAxiKernel"]

@@ -36,6 +36,8 @@ from finn.kernels.streaming import (
     cyclic_stream_requirements,
 )
 from finn.core.space import default_semantics
+from finn.kernels.artifacts.abi import Endpoint
+from finn.kernels.streams import COMPONENT, COMPONENT_SEMANTICS, Component, Port
 
 
 class CyclicDelivery(Kernel):
@@ -47,6 +49,7 @@ class CyclicDelivery(Kernel):
     form = Param(TRAVERSAL)
     values = Param(INTEGER_TENSOR)
     rom_style = Decision(str, values=CYCLIC_ROM_STYLES)
+    output_stream = Port(Endpoint.INITIATOR)
 
     @derived(semantics=INTEGER_VECTOR)
     def image(self) -> IntegerVector | Rejected:
@@ -83,6 +86,14 @@ class CyclicDelivery(Kernel):
             image=image,
             rom_style=self.rom_style,
         )
+
+    @view(semantics=COMPONENT_SEMANTICS)
+    def component(self) -> Component:
+        return Component(
+            self.build_requirements(), {"output_stream": self.output()}, initializer=self.image
+        )
+
+    exports = {COMPONENT: component}
 
 
 def _leaves(values: object) -> tuple[int, ...]:

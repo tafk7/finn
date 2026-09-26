@@ -12,14 +12,11 @@ fold), with PE low-first fields. Internal last closes every synapse-fold group.
 There is no top-level last: the declared extents determine all stream lengths.
 Input high padding is ignored; output high padding is unspecified.
 
-No Region, logical operand mapping, or graph is required. ``MVAU`` binds its
-dotp child Space and passes that child's accepted physical View to one of two
-weight-delivery families, selected by the ``implementation`` structural choice.
-``ExternalWeights`` adds a top-level weight stream; ``CyclicWeights`` owns an
-initialized ROM, its ``rom_style`` and the optional ``weights`` fact. Both export
-typed assembly and requirements views. ``mvau_assembly`` supplies concrete facts
-and choices to this same path; its wiring code only receives accepted component
-requirements.
+No Region, logical operand mapping, or graph is required. ``MVAU`` declares its
+connections as ``Stream``s and binds each kernel's ports to them; the replay,
+dotp, the weight source and the boundary ports are wired by
+``assemble_streams`` through checked stream contracts. ``mvau_assembly``
+supplies concrete facts and choices to this same path.
 """
 
 from __future__ import annotations
@@ -27,17 +24,10 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, cast
+from typing import Any
 
-from finn.kernels.artifacts.abi import Bus, Endpoint
 from finn.kernels.artifacts.build import (
-    EntryPointSourceName,
-    FixedModuleName,
-    GeneratedModuleName,
-    ModuleABIRequirements,
     ModuleBuildRequirements,
-    RenderedSourceRequirement,
-    SELF_CONTAINED_JINJA_RENDERER,
 )
 from finn.kernels.artifacts.derivation import ProducerIdentity
 from finn.kernels.datatypes.scalar import ScalarEncoding
@@ -50,13 +40,18 @@ from finn.kernels.datatypes.values import (
 )
 from finn.kernels.delivery import CyclicDelivery
 from finn.kernels.dotp import DotpAxiKernel
-from finn.kernels.physical.axi_stream import AxiStream
-from finn.kernels.physical.composition import Composition, StreamEnd
-from finn.kernels.physical.contract import StreamContract, StreamMismatch
 from finn.kernels.physical.forms import TRAVERSAL, Every, Traversal, tile, vector_major
-from finn.kernels.physical.lowering import lower_module_structure
 from finn.kernels.physical.structure import PhysicalStructure
-from finn.kernels.streaming import replay_buffer_contracts, replay_buffer_requirements
+from finn.kernels.streaming import ReplayBuffer
+from finn.kernels.streams import (
+    COMPONENT,
+    STREAM_SPEC,
+    Stream,
+    StreamSpec,
+    TopInput,
+    TopOutput,
+    assemble_streams,
+)
 from finn.kernels.target import DspBlock
 from finn.core.space import (
     Available,
@@ -69,8 +64,6 @@ from finn.core.space import (
     Space,
     Subspace,
     SubspaceChoice,
-    View,
-    ViewKey,
     constraint,
     default_semantics,
     derived,
@@ -78,6 +71,7 @@ from finn.core.space import (
     reject,
     view,
 )
+from finn.core.space import DecisionHandle, inspection
 from finn.core.space.errors import ConfigurationError, RequestError
 
 
@@ -153,222 +147,26 @@ class MVAUAssembly:
     initializer: tuple[int, ...]
 
 
-def _wire_mvau(
-    *,
-    folding: _Folding,
-    activation_dtype: QONNXDataType,
-    weights_dtype: QONNXDataType,
-    result_dtype: QONNXDataType,
-    compute: ModuleBuildRequirements,
-    ports: tuple[AxiStream, ...],
-    weight_source: tuple[ModuleBuildRequirements, StreamContract] | None,
-    initializer: tuple[int, ...] = (),
-) -> MVAUAssembly:
-    """Compose replay, compute and an optional weight source through checked streams.
-
-    The traversals state the MVAU order: vector-major activations are replayed
-    once per neuron fold, and weight tiles repeat once per vector. Without a weight source,
-    the weight stream is a top-level port. ``ports`` are dotp's accepted streams.
-    """
-    x, w, y = (ScalarEncoding(dtype) for dtype in (activation_dtype, weights_dtype, result_dtype))
-    t = folding
-    external = weight_source is None
-    weight_delivery = WeightDelivery.EXTERNAL if external else WeightDelivery.CYCLIC
-    clocking = dict(clock="ap_clk", reset="ap_rst_n")
-
-    def top(
-        name: str, element: ScalarEncoding, form: Traversal, endpoint: Endpoint
-    ) -> StreamContract:
-        stream = AxiStream(name, element.dtype, form.lanes, endpoint=endpoint)
-        return StreamContract(stream.native(**clocking), element, form)
-
-    x_form = vector_major((t.repetitions, t.matrix_width), t.simd)
-    w_form = tile(t.matrix_height, t.matrix_width, t.pe, t.simd).repeated(t.repetitions)
-    y_form = vector_major((t.repetitions, t.matrix_height), t.pe)
-    x_top = top("in0_V", x, x_form, Endpoint.TARGET)
-    w_top = top("in1_V", w, w_form, Endpoint.TARGET)
-    y_top = top("out0_V", y, y_form, Endpoint.INITIATOR)
-    replay_in, replay_out = replay_buffer_contracts(
-        x, x_form, sequence_length=t.synapse_folds, replay_count=t.neuron_folds
-    )
-    activation, weights, result = (port.native(**clocking) for port in ports)
-
-    top_abi = ModuleABIRequirements(
-        GeneratedModuleName("finn_mvau_" + weight_delivery.value),
-        (
-            *(port for port in compute.abi.ports if not isinstance(port, Bus)),
-            *(c.transport.axis_bus() for c in (x_top, *((w_top,) if external else ()), y_top)),
-        ),
-        (),
-        compute.abi.clock_alignments,
-    )
-    composition = Composition(top_abi)
-    composition.add("u_replay", _replay(x, t))
-    composition.add("u_compute", compute)
-    for pin in ("ap_clk", "ap_clk2x", "ap_rst_n"):
-        composition.drive("u_compute", pin, pin)
-    children = ("u_replay",) if external else ("u_replay", "u_weights")
-    if weight_source is not None:
-        composition.add("u_weights", weight_source[0])
-    for owner in children:
-        composition.drive(owner, "clk", "ap_clk")
-        composition.drive(owner, "rst", "ap_rst_n")
-
-    composition.connect(StreamEnd(None, x_top), StreamEnd("u_replay", replay_in))
-    composition.connect(
-        StreamEnd("u_replay", replay_out),
-        StreamEnd(
-            "u_compute",
-            StreamContract(
-                activation,
-                x,
-                replay_out.form,
-                markers={activation.markers[0].signal: Every(t.synapse_folds)},
-            ),
-        ),
-    )
-    composition.connect(
-        StreamEnd(None, w_top)
-        if weight_source is None
-        else StreamEnd("u_weights", weight_source[1]),
-        StreamEnd("u_compute", StreamContract(weights, w, w_form)),
-    )
-    composition.connect(
-        StreamEnd("u_compute", StreamContract(result, y, y_form)), StreamEnd(None, y_top)
-    )
-    structure = composition.finish()
-    wrapper = RenderedSourceRequirement(
-        EntryPointSourceName(),
-        "decomposed_wrapper.sv.j2",
-        ("PORT_DECLARATIONS", "NET_DECLARATIONS", "ASSIGNMENTS", "INSTANCES"),
-        SELF_CONTAINED_JINJA_RENDERER,
-        requires=tuple(
-            "module:" + cast(FixedModuleName, instance.requirements.abi.entry_point).value
-            for instance in structure.instances
-        ),
-        provides_entry_point=True,
-    )
-    requirements = lower_module_structure(
-        structure,
-        producer=ProducerIdentity("finn.mvau." + weight_delivery.value, "1"),
-        wrapper_template=wrapper,
-    )
-    return MVAUAssembly(
-        t.activation_beats,
-        t.weight_beats,
-        t.result_beats,
-        result_dtype,
-        weight_delivery,
-        structure,
-        requirements,
-        initializer,
-    )
-
-
-def _replay(element: ScalarEncoding, folding: _Folding) -> ModuleBuildRequirements:
-    return replay_buffer_requirements(
-        word_bits=folding.simd * element.bits,
-        sequence_length=folding.synapse_folds,
-        replay_count=folding.neuron_folds,
-    )
-
-
 FOLDING = default_semantics(_Folding)
-MODULE_BUILD = default_semantics(ModuleBuildRequirements)
 ASSEMBLY = default_semantics(MVAUAssembly)
-AXI_PORTS = default_semantics(tuple)
-ASSEMBLY_VIEW = ViewKey("assembly", ASSEMBLY)
-BUILD_VIEW = ViewKey("build_requirements", MODULE_BUILD)
 
 
-class WeightDeliveryFamily(Space):
-    """Facts shared by the weight-delivery families: accepted folding and compute.
-
-    ``compute`` and ``ports`` are the parent's accepted dotp requirements and
-    streams, so a family cannot wire a compute core whose physical View was refused.
-    """
-
-    folding = Param(FOLDING)
-    activation_dtype = Param(QONNX_DATATYPE_VALUE_SEMANTICS)
-    weights_dtype = Param(QONNX_DATATYPE_VALUE_SEMANTICS)
-    result_dtype = Param(QONNX_DATATYPE_VALUE_SEMANTICS)
-    compute = Param(MODULE_BUILD)
-    ports = Param(AXI_PORTS)
-
-    def _assemble(
-        self,
-        weight_source: tuple[ModuleBuildRequirements, StreamContract] | None,
-        initializer: tuple[int, ...] = (),
-    ) -> MVAUAssembly | Rejected:
-        try:
-            return _wire_mvau(
-                folding=self.folding,
-                activation_dtype=self.activation_dtype,
-                weights_dtype=self.weights_dtype,
-                result_dtype=self.result_dtype,
-                compute=self.compute,
-                ports=self.ports,
-                weight_source=weight_source,
-                initializer=initializer,
-            )
-        except StreamMismatch as error:
-            return reject("mvau-stream", str(error))
-
-
-class ExternalWeights(WeightDeliveryFamily):
-    """Weights arrive on the top-level ``in1_V`` stream, once per repetition."""
-
-    @view(semantics=ASSEMBLY)
-    def assembly(self) -> MVAUAssembly | Rejected:
-        return self._assemble(None)
-
-    @view(semantics=MODULE_BUILD)
-    def build_requirements(self) -> ModuleBuildRequirements:
-        return self.assembly().requirements
-
-    exports = {ASSEMBLY_VIEW: assembly, BUILD_VIEW: build_requirements}
-
-
-class CyclicWeights(WeightDeliveryFamily):
-    """A reusable ``CyclicDelivery`` kernel streams the weight tiles; there is no weight port.
-
-    The family supplies the weight values and the tile form dotp reads; the
-    delivery kernel owns packing, its ``rom_style`` choice and its build. The
-    connection to dotp is checked by stream contract, not wired by hand. Without
-    weights the source's image and this family's views stay unresolved.
-    """
-
-    weights = Param(INTEGER_TENSOR)
-
-    @derived(semantics=TRAVERSAL)
-    def weight_form(self) -> Traversal:
-        t = self.folding
-        return tile(t.matrix_height, t.matrix_width, t.pe, t.simd)
-
-    source = Subspace(
-        CyclicDelivery, dtype=WeightDeliveryFamily.weights_dtype, form=weight_form, values=weights
-    )
-
-    @view(semantics=ASSEMBLY)
-    def assembly(self) -> MVAUAssembly | Rejected:
-        source = self.source
-        return self._assemble(
-            (source.build_requirements(), source.output()), initializer=source.image
-        )
-
-    @view(semantics=MODULE_BUILD)
-    def build_requirements(self) -> ModuleBuildRequirements:
-        return self.assembly().requirements
-
-    exports = {ASSEMBLY_VIEW: assembly, BUILD_VIEW: build_requirements}
+def _encoding(dtype: QONNXDataType) -> ScalarEncoding | Rejected:
+    try:
+        return ScalarEncoding(dtype)
+    except ValueError as error:
+        return reject("mvau-encoding", str(error))
 
 
 class MVAU(Space):
-    """Workload facts, folding choices, a dotp child, and a weight-delivery family.
+    """Workload facts, folding choices, and kernels connected by declared streams.
 
-    ``implementation`` selects ``external`` or ``cyclic`` delivery. The families
-    share typed assembly and requirements exports but keep their own ports,
-    initialization facts and local choices; only the selected one is evaluated.
+    ``activations`` enters at ``in0_V`` and is replayed once per neuron fold into
+    ``replayed``; dotp consumes it with ``weight_stream`` and produces ``results``
+    for ``out0_V``. The ``implementation`` choice produces ``weight_stream``:
+    ``external`` is a top-level port and ``cyclic`` a ``CyclicDelivery`` owning
+    ``rom_style`` and the optional ``weights``. ``weight_stream`` is buffered: its
+    transport is ``direct`` or a ``fifo`` whose depth is a committed decision.
     """
 
     repetitions = Param(int)
@@ -405,6 +203,59 @@ class MVAU(Space):
 
     dimensions = ConstraintGroup(dimensions_supported)
 
+    @derived
+    def synapse_folds(self) -> int:
+        return self.folding.synapse_folds
+
+    @derived
+    def neuron_folds(self) -> int:
+        return self.folding.neuron_folds
+
+    @derived(semantics=STREAM_SPEC)
+    def activation_spec(self) -> StreamSpec | Rejected:
+        f, element = self.folding, _encoding(self.activation_dtype)
+        if isinstance(element, Rejected):
+            return element
+        return StreamSpec(element, vector_major((f.repetitions, f.matrix_width), f.simd))
+
+    @derived(semantics=STREAM_SPEC)
+    def replayed_spec(self) -> StreamSpec:
+        f, spec = self.folding, self.activation_spec
+        form = spec.form.replayed(f.neuron_folds, inner_beats=f.synapse_folds)
+        return StreamSpec(spec.element, form, markers=(Every(f.synapse_folds),))
+
+    @derived(semantics=TRAVERSAL)
+    def weight_period(self) -> Traversal:
+        f = self.folding
+        return tile(f.matrix_height, f.matrix_width, f.pe, f.simd)
+
+    @derived(semantics=STREAM_SPEC)
+    def weight_spec(self) -> StreamSpec | Rejected:
+        element = _encoding(self.weights_dtype)
+        if isinstance(element, Rejected):
+            return element
+        return StreamSpec(element, self.weight_period.repeated(self.folding.repetitions))
+
+    @derived(semantics=STREAM_SPEC)
+    def result_spec(self) -> StreamSpec | Rejected:
+        f, element = self.folding, _encoding(self.result_type)
+        if isinstance(element, Rejected):
+            return element
+        return StreamSpec(element, vector_major((f.repetitions, f.matrix_height), f.pe))
+
+    activations = Stream(activation_spec)
+    replayed = Stream(replayed_spec)
+    weight_stream = Stream(weight_spec, buffered=True)
+    results = Stream(result_spec)
+
+    source = Subspace(TopInput, name="in0_V", output_stream=activations.spec)
+    replay = Subspace(
+        ReplayBuffer,
+        input_stream=activations.spec,
+        output_stream=replayed.spec,
+        sequence_length=synapse_folds,
+        replay_count=neuron_folds,
+    )
     compute = Subspace(
         DotpAxiKernel,
         activation_dtype=activation_dtype,
@@ -414,40 +265,58 @@ class MVAU(Space):
         simd=simd,
         target_dsp=target_dsp,
         segment_length=segment_length,
+        activation_stream=replayed.spec,
+        weights_stream=weight_stream.spec,
+        result_stream=results.spec,
     )
-
-    compute_requirements = compute.accepted(DotpAxiKernel.build_requirements)
-    compute_ports = compute.accepted(DotpAxiKernel.interfaces)
     implementation = SubspaceChoice(
         {
             WeightDelivery.EXTERNAL.value: Subspace(
-                ExternalWeights,
-                folding=folding,
-                activation_dtype=activation_dtype,
-                weights_dtype=weights_dtype,
-                result_dtype=result_type,
-                compute=compute_requirements,
-                ports=compute_ports,
+                TopInput, name="in1_V", output_stream=weight_stream.spec
             ),
             WeightDelivery.CYCLIC.value: Subspace(
-                CyclicWeights,
-                folding=folding,
-                activation_dtype=activation_dtype,
-                weights_dtype=weights_dtype,
-                result_dtype=result_type,
-                compute=compute_requirements,
-                ports=compute_ports,
-                weights=weights,
+                CyclicDelivery,
+                dtype=weights_dtype,
+                form=weight_period,
+                values=weights,
+                output_stream=weight_stream.spec,
             ),
         },
-        exports=(ASSEMBLY_VIEW, BUILD_VIEW),
+        exports=(COMPONENT,),
     )
+    sink = Subspace(TopOutput, name="out0_V", input_stream=results.spec)
 
-    assembly = View(implementation.accepted(ASSEMBLY_VIEW), constraints=(dimensions,))
-    build_requirements = View(implementation.accepted(BUILD_VIEW), constraints=(dimensions,))
+    @view(semantics=ASSEMBLY, constraints=(dimensions,))
+    def assembly(self) -> MVAUAssembly | Rejected:
+        source = self.field(MVAU.implementation.accepted(COMPONENT)).get()
+        delivery = WeightDelivery.EXTERNAL if source.requirements is None else WeightDelivery.CYCLIC
+        try:
+            built = assemble_streams(
+                self,
+                module="finn_mvau_" + delivery.value,
+                producer=ProducerIdentity("finn.mvau." + delivery.value, "1"),
+                instance_names={"implementation": "u_weights"},
+            )
+        except ValueError as error:
+            return reject("mvau-stream", str(error))
+        f = self.folding
+        return MVAUAssembly(
+            f.activation_beats,
+            f.weight_beats,
+            f.result_beats,
+            self.result_type,
+            delivery,
+            built.structure,
+            built.requirements,
+            source.initializer,
+        )
+
+    @view(semantics=default_semantics(ModuleBuildRequirements), constraints=(dimensions,))
+    def build_requirements(self) -> ModuleBuildRequirements:
+        return self.assembly().requirements
 
 
-CYCLIC_ROM_STYLE = CyclicWeights.source.decision_ref(CyclicDelivery.rom_style)
+ROM_STYLE = CyclicDelivery.rom_style
 
 
 def _findings(results: Sequence[QueryResult[Any]]) -> str:
@@ -457,6 +326,13 @@ def _findings(results: Sequence[QueryResult[Any]]) -> str:
         if not isinstance(result, Available)
         for finding in result.findings
     )
+
+
+def _selector(point: Space, key: str) -> DecisionHandle[str]:
+    for choice in inspection.choices(point):
+        if choice.key == key and choice.selector is not None:
+            return choice.selector
+    raise LookupError(key)
 
 
 def mvau_assembly(
@@ -474,12 +350,14 @@ def mvau_assembly(
     weight_delivery: WeightDelivery = WeightDelivery.EXTERNAL,
     weights: Sequence[Sequence[int]] | None = None,
     rom_style: str = "auto",
+    weight_fifo_depth: int | None = None,
 ) -> MVAUAssembly:
-    """Bind workload facts, select one delivery family and its choices, then assemble.
+    """Bind workload facts, commit every choice, then assemble.
 
     Weights are required by, and only accepted with, cyclic delivery. ``rom_style``
     applies to cyclic delivery; the ``auto`` default leaves memory inference to
-    synthesis, as the ROM did before the choice existed.
+    synthesis, as the ROM did before the choice existed. ``weight_fifo_depth``
+    places a FIFO on the weight stream; ``None`` connects it directly.
     """
     if not isinstance(weight_delivery, WeightDelivery):
         raise ValueError("weight_delivery must be a WeightDelivery value")
@@ -498,14 +376,24 @@ def mvau_assembly(
     if weights is not None:
         facts["weights"] = tuple(tuple(row) for row in weights)
     case = weight_delivery.value
+    buffered = weight_fifo_depth is not None
     try:
-        point = cast(MVAU, MVAU(**facts).implementation.select(case).instance)
+        point = MVAU(**facts)
         changes: list[ChangeRequest] = [
-            point.compute.field(DotpAxiKernel.compute_pumping).change(compute_pumping)
+            point.field(_selector(point, "implementation")).change(case),
+            point.field(_selector(point, "weight_stream.transport")).change(
+                "fifo" if buffered else "direct"
+            ),
+            point.compute.field(DotpAxiKernel.compute_pumping).change(compute_pumping),
         ]
         if cyclic:
             family = point.implementation.alternative(case)
-            changes.append(family.field(CYCLIC_ROM_STYLE).change(rom_style))
+            changes.append(family.field(ROM_STYLE).change(rom_style))
+        if buffered:
+            owned = {item.key: item.reference for item in inspection.decisions(point)}
+            stage = "weight_stream.transport.fifo.buffer."
+            changes.append(point.field(owned[stage + "depth"]).change(weight_fifo_depth))
+            changes.append(point.field(owned[stage + "ram_style"]).change("auto"))
         report = point.try_with_choices(*changes, pe=pe, simd=simd)
     except (RequestError, ConfigurationError) as error:
         raise ValueError(str(error)) from error
@@ -521,14 +409,10 @@ def mvau_assembly(
 
 
 __all__ = [
-    "ASSEMBLY_VIEW",
-    "BUILD_VIEW",
-    "CyclicWeights",
-    "ExternalWeights",
     "MVAU",
     "MVAUAssembly",
+    "ROM_STYLE",
     "WeightDelivery",
-    "WeightDeliveryFamily",
     "exact_result_dtype",
     "mvau_assembly",
 ]

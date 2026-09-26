@@ -20,10 +20,13 @@ from finn.kernels.artifacts.abi import (
     Reset,
     Signal,
 )
+from finn.core.space import Param, Rejected, reject, view
+from finn.kernels.base import Kernel
 from finn.kernels.datatypes.scalar import ScalarEncoding
 from finn.kernels.physical.contract import StreamContract
 from finn.kernels.physical.forms import Every, Traversal
 from finn.kernels.physical.stream import ReadyValidStream, StreamMarker, MarkerKind
+from finn.kernels.streams import COMPONENT, COMPONENT_SEMANTICS, Component, Port
 from finn.kernels.artifacts.contribution_types import CopiedSource
 from finn.kernels.artifacts.requirements import (
     FixedModuleName,
@@ -96,6 +99,39 @@ def replay_buffer_contracts(
             },
         ),
     )
+
+
+class ReplayBuffer(Kernel):
+    """FinnLib replay as a stream kernel: its output contract is derived, not declared."""
+
+    id = "finnlib.replay_buffer"
+    version = "1"
+
+    input_stream = Port(Endpoint.TARGET)
+    output_stream = Port(Endpoint.INITIATOR)
+    sequence_length = Param(int)
+    replay_count = Param(int)
+
+    @view(semantics=COMPONENT_SEMANTICS)
+    def component(self) -> Component | Rejected:
+        spec = self.input_stream
+        try:
+            source, sink = replay_buffer_contracts(
+                spec.element,
+                spec.form,
+                sequence_length=self.sequence_length,
+                replay_count=self.replay_count,
+            )
+            requirements = replay_buffer_requirements(
+                word_bits=spec.payload_bits,
+                sequence_length=self.sequence_length,
+                replay_count=self.replay_count,
+            )
+        except ValueError as error:
+            return reject("replay-geometry", str(error))
+        return Component(requirements, {"input_stream": source, "output_stream": sink})
+
+    exports = {COMPONENT: component}
 
 
 def cyclic_stream_interface(*, word_bits: int) -> ReadyValidStream:
@@ -204,6 +240,7 @@ def cyclic_stream_requirements(
 
 __all__ = [
     "CYCLIC_ROM_STYLES",
+    "ReplayBuffer",
     "replay_buffer_contracts",
     "replay_buffer_requirements",
     "cyclic_stream_requirements",

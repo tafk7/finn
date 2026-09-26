@@ -126,7 +126,8 @@ def test_precision_covers_full_ranges_and_is_minimal(activation, weight, length,
         ({"pe": 3}, "domain-membership"),
         ({"simd": 3}, "domain-membership"),
         ({"repetitions": 0}, "positive"),
-        ({"matrix_width": 1 << 48}, "dotp-accumulator-width"),
+        # Both the replay's native length and dotp's accumulator refuse this width.
+        ({"matrix_width": 1 << 48}, "replay-geometry|dotp-accumulator-width"),
         ({"weight_delivery": "external"}, "WeightDelivery"),
         ({"weight_delivery": WeightDelivery.CYCLIC}, "requires weights"),
         ({"weights": [[0] * 4] * 4}, "no initializer"),
@@ -154,6 +155,7 @@ def test_space_selects_folding_and_constructs_without_a_logical_contract():
         ),
         pe=2,
         implementation="external",
+        **{"weight_stream.transport": "direct"},
     )
     point = base.with_choices(simd=2)
     assert isinstance(point.compute.build_requirements.inspect().accepted_result, Unresolved)
@@ -225,6 +227,9 @@ def test_mvau_honors_the_child_physical_view_not_just_its_raw_module(monkeypatch
             simd=MVAU.simd,
             target_dsp=MVAU.target_dsp,
             segment_length=MVAU.segment_length,
+            activation_stream=MVAU.replayed.spec,
+            weights_stream=MVAU.weight_stream.spec,
+            result_stream=MVAU.results.spec,
         )
 
     point = point_for(
@@ -241,6 +246,7 @@ def test_mvau_honors_the_child_physical_view_not_just_its_raw_module(monkeypatch
         pe=2,
         simd=2,
         implementation="external",
+        **{"weight_stream.transport": "direct"},
     )
     point = point.compute.with_choices(compute_pumping=False).root
     assert isinstance(point.compute.query(DotpAxiKernel.codegen), Available)

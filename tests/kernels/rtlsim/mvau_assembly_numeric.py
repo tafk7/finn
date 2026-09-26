@@ -94,6 +94,7 @@ def run(
     delivery: WeightDelivery,
     evidence: Path,
     rom_style: str = "auto",
+    weight_fifo_depth: int | None = None,
 ) -> None:
     c = configuration
     repetitions = 4
@@ -120,6 +121,7 @@ def run(
         weight_delivery=delivery,
         weights=weights.tolist() if delivery is WeightDelivery.CYCLIC else None,
         rom_style=rom_style,
+        weight_fifo_depth=weight_fifo_depth,
     )
     activation_words = [
         _pack(row[start : start + c.simd], a_type.bitwidth())
@@ -146,6 +148,7 @@ def run(
                 word | (padding if index % 2 else 0) for index, word in enumerate(stimulus[name])
             ]
     suffix = "_" + rom_style if delivery is WeightDelivery.CYCLIC and rom_style != "auto" else ""
+    suffix += f"_fifo{weight_fifo_depth}" if weight_fifo_depth else ""
     directory = evidence / (c.label + "_" + delivery.value + suffix)
     directory.mkdir(parents=True, exist_ok=False)
     store = ArtifactStore(directory / "store")
@@ -218,6 +221,7 @@ def main() -> None:
     parser.add_argument("--delivery", choices=[delivery.value for delivery in WeightDelivery])
     parser.add_argument("--output", type=Path)
     parser.add_argument("--rom-style", default="auto", choices=("auto", "distributed", "block"))
+    parser.add_argument("--weight-fifo-depth", type=int)
     args = parser.parse_args()
     directory = args.output or Path(tempfile.mkdtemp(prefix="mvau-assembly-evidence-"))
     print(f"Evidence: {directory}", flush=True)
@@ -225,7 +229,7 @@ def main() -> None:
         if args.case is None or args.case == case.label:
             for delivery in WeightDelivery:
                 if args.delivery is None or args.delivery == delivery.value:
-                    run(case, delivery, directory, args.rom_style)
+                    run(case, delivery, directory, args.rom_style, args.weight_fifo_depth)
 
 
 if __name__ == "__main__":

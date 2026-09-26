@@ -102,7 +102,10 @@ class Traversal:
         object.__setattr__(self, "shape", shape)
         object.__setattr__(self, "beat_loops", _canonical(beat_loops))
         object.__setattr__(self, "lane_loops", _canonical(lane_loops))
-        if max(_offsets(self.beat_loops)) + max(_offsets(self.lane_loops)) >= size:
+        reach = sum(
+            (loop.extent - 1) * loop.stride for loop in (*self.beat_loops, *self.lane_loops)
+        )
+        if reach >= size:
             raise ValueError("the traversal addresses positions outside the operand")
 
     @classmethod
