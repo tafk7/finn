@@ -34,6 +34,9 @@ Design: [docs/environment.md](docs/environment.md). Instructions:
 
 ## Remaining work
 
+The task spec, with order, acceptance criteria and open questions, is
+[docs/runtime-remaining-work.md](docs/runtime-remaining-work.md).
+
 **P6: integrate the private build-engine branch** using its actual API: connect
 explicit resource/tool/scratch inputs at its real boundaries, remove or reconcile
 the whole-build subprocess in `build_dataflow_directory`, and retire internal

@@ -18,5 +18,6 @@ Environment and runtime:
 * [Installation and development](installation.md)
 * [Environment design](environment.md)
 * [Remaining legacy environment obligations](legacy-build-env-ledger.md)
+* [Task spec: remaining work from P6](runtime-remaining-work.md)
 * [Runtime validation record](runtime-validation.md)
 * [XSI process-boundary investigation](xsi-process-boundary-investigation.md)
