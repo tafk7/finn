@@ -8,6 +8,7 @@ import io
 import logging
 import multiprocessing
 import os
+import shutil
 import subprocess
 import sys
 import tarfile
@@ -273,10 +274,10 @@ def test_parallel_first_use_fetches_once(boards, tmp_path, monkeypatch):
     log = tmp_path / "fetches"
     assemble = _store.assemble
 
-    def counted(resource, work):
+    def counted(resource, *args):
         with open(log, "a") as file:
             file.write(resource.name + "\n")
-        return assemble(resource, work)
+        return assemble(resource, *args)
 
     monkeypatch.setattr(_store, "assemble", counted)
     context = multiprocessing.get_context("fork")
@@ -339,6 +340,11 @@ def test_project_redefinition_is_logged_and_packages_cannot_redefine(
         ({"package": "m:d", "into": "x"}, "package source"),
         ({"package": "m", "kind": "rtl"}, "kind must be a list"),
         ({"package": "m", "extra": 1}, "unknown field"),
+        ({"package": "m", "mirrors": ["u"]}, "package source"),
+        (
+            {"url": "u", "sha256": "0" * 64, "digest": "sha256:" + "0" * 64, "mirrors": "u"},
+            "mirrors must be a list",
+        ),
     ],
 )
 def test_invalid_declarations_are_rejected(fields, message):
@@ -499,6 +505,8 @@ def test_cli_clean_and_check(boards, tmp_path, capsys, monkeypatch):
     assert cli(capsys, "clean")[1] == f"removed {kept}\n"
 
     assert cli(capsys, "check")[0] == 0
+    monkeypatch.setenv("FINN_RESOURCES_KV260_BOARDS_URL", "https://mirror.example/kv260.git")
+    assert cli(capsys, "check")[0] == 0
     monkeypatch.setenv("FINN_RESOURCES_KV260_BOARDS", str(tmp_path / "missing"))
     monkeypatch.setenv("FINN_RESOURCES_KV206_BOARDS", str(tmp_path))
     monkeypatch.setenv("FINN_BOARD_FILES_PATH", str(tmp_path))
@@ -611,18 +619,77 @@ def test_package_declarations_in_a_virtual_environment(tmp_path):
     assert run("path", "acme-rtl").strip() == str(site / "acme_finn/rtl")
 
 
-def test_fetching_into_another_cache_copies_a_verified_copy(boards, tmp_path, monkeypatch):
+def test_fetching_into_another_cache_copies_a_verified_copy(boards, tmp_path):
     fetched = Path(resources.path("kv260-boards"))
 
     def no_network(*args):
         raise AssertionError("fetched from the source")
 
-    monkeypatch.setattr(_store, "assemble", no_network)
-    (carried,) = resources.fetch(["kv260-boards"], tmp_path / "carry")
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(_store, "assemble", no_network)
+        (carried,) = resources.fetch(["kv260-boards"], tmp_path / "carry")
     assert Path(carried).parent == tmp_path / "carry"
     assert resources.tree_digest(carried) == resources.tree_digest(fetched)
 
-    # A copy that no longer matches its digest is refused, not propagated.
+    # A copy that no longer matches its digest is not propagated: the source is used.
     (fetched / "kv260/board.xml").write_text("tampered\n")
-    with pytest.raises(resources.ResourceError, match="has digest"):
-        resources.fetch(["kv260-boards"], tmp_path / "carry-again")
+    (again,) = resources.fetch(["kv260-boards"], tmp_path / "carry-again")
+    assert (Path(again) / "kv260/board.xml").read_text() == "k\n"
+
+
+def test_mirrors_and_url_override(boards, project, tmp_path, monkeypatch):
+    text = (project / "pyproject.toml").read_text()
+    mirror = tmp_path / "mirror"
+    git(tmp_path, "clone", "--quiet", "--bare", str(boards), str(mirror))
+    git(mirror, "config", "uploadpack.allowReachableSHA1InWant", "true")
+    missing = (tmp_path / "gone").as_uri()
+    declare(
+        project,
+        text.replace(boards.as_uri(), missing)
+        + f'mirrors = ["{(tmp_path / "gone-too").as_uri()}", "{mirror.as_uri()}"]\n',
+    )
+    path = Path(resources.path("kv260-boards"))
+    assert (path / "kv260/board.xml").read_text() == "k\n"
+
+    # Every source failing names each failure.
+    for directory in _store.roots():
+        shutil.rmtree(directory[0], ignore_errors=True)
+    shutil.rmtree(mirror)
+    with pytest.raises(resources.ResourceError) as error:
+        resources.path("kv260-boards")
+    assert str(error.value).count("git fetch failed") == 3
+
+    # FINN_RESOURCES_<NAME>_URL replaces the declared URL, e.g. with a site mirror.
+    monkeypatch.setenv("FINN_RESOURCES_KV260_BOARDS_URL", boards.as_uri())
+    assert Path(resources.path("kv260-boards")) == path
+
+
+def test_without_git_github_sources_use_the_commit_archive(boards, project, tmp_path, monkeypatch):
+    resource = resources.declarations()["kv260-boards"]
+    tarball = tmp_path / "commit.tar.gz"
+    git(boards, "archive", f"--prefix=store-{resource.commit}/", "-o", str(tarball), "HEAD")
+    requested = []
+
+    def github_archive(url, commit):
+        requested.append((url, commit))
+        return tarball.as_uri()
+
+    monkeypatch.setattr(_store, "github_archive", github_archive)
+    monkeypatch.setenv("PATH", str(tmp_path / "no-tools"))
+    path = Path(resources.path("kv260-boards"))
+    assert (path / "kv260/board.xml").read_text() == "k\n"
+    assert requested == [(boards.as_uri(), resource.commit)]
+
+
+def test_github_archive_urls():
+    commit = "8d979e2bdced486dd25d26607d1ff5ae327ed6a8"
+    for url in (
+        "https://github.com/Xilinx/finn-hlslib.git",
+        "https://github.com/Xilinx/finn-hlslib",
+        "https://github.com/Xilinx/finn-hlslib/",
+    ):
+        assert _store.github_archive(url, commit) == (
+            f"https://github.com/Xilinx/finn-hlslib/archive/{commit}.tar.gz"
+        )
+    assert _store.github_archive("https://gitlab.com/a/b.git", commit) is None
+    assert _store.github_archive("git@github.com:a/b.git", commit) is None

@@ -350,3 +350,14 @@ Networked check (phase 1, 2026-09-26): the six sources fetched from GitHub.
 The five board trees copied into one directory hold 258 files with digest
 `89ebe8049a4f…6960e`, identical to `BOARD_FILES_DIGEST` of the previous
 assembled tree, under both the previous and the new digest implementation.
+
+Git-less fallback (phase 6, 2026-09-26): with no `git` on PATH, `fetch --all`
+took all six resources from GitHub's commit archives in 26 s, and every tree
+matched its declared digest (the archives carry no `export-ignore` differences
+for these repositories).
+
+Phase 5 deviation: no cache step was added to the GitHub native workflow
+(`quicktest-local.yml`). It runs without Vivado (`--skip-xsi`), so nothing there
+fetches resources. The Jenkins native stage already keeps `XDG_CACHE_HOME` on a
+persistent path, so `~/.cache/finn/resources` survives between builds; entries
+are digest-keyed, so a pin change adds a new entry rather than going stale.

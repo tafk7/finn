@@ -27,6 +27,7 @@ _DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
 _COMMIT = re.compile(r"[0-9a-f]{40}")
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 _SOURCES = {"git": ("commit",), "url": ("sha256",), "package": ()}
+_LISTS = ("kind", "mirrors")
 _FIELDS = {
     "description",
     "kind",
@@ -39,6 +40,7 @@ _FIELDS = {
     "subdir",
     "into",
     "digest",
+    "mirrors",
 }
 
 
@@ -65,6 +67,7 @@ class Resource:
     subdir: str = None
     into: str = None
     digest: str = None
+    mirrors: tuple = ()
 
     @property
     def env(self):
@@ -115,19 +118,22 @@ def _resource(name, fields, origin):
                 f"a {source} source"
             )
     for key, value in fields.items():
-        expected = bool if key == "redistributable" else list if key == "kind" else str
+        expected = bool if key == "redistributable" else list if key in _LISTS else str
         if not isinstance(value, expected):
             fail(f"{key} must be a {expected.__name__}")
-    if not all(isinstance(k, str) and k for k in fields.get("kind", [])):
-        fail("kind must be a list of non-empty strings")
+    for key in _LISTS:
+        if not all(isinstance(item, str) and item for item in fields.get(key, [])):
+            fail(f"{key} must be a list of non-empty strings")
     if source == "git" and not _COMMIT.fullmatch(fields["commit"]):
         fail("commit must be a full 40-character commit id; use `finn-resources update` for refs")
     if source == "url" and not _SHA256.fullmatch(fields["sha256"]):
         fail("sha256 must be 64 lower-case hex digits")
     if source == "package":
         module, _, subdir = fields["package"].partition(":")
-        if not module or any(key in fields for key in ("subdir", "into", "digest")):
-            fail("a package source is 'module.name:subdir', with no subdir, into or digest")
+        if not module or any(key in fields for key in ("subdir", "into", "digest", "mirrors")):
+            fail(
+                "a package source is 'module.name:subdir', with no subdir, into, digest or mirrors"
+            )
         _relative(subdir or ".", "package subdir", fail)
     else:
         if not _DIGEST.fullmatch(fields.get("digest", "")):
@@ -141,7 +147,7 @@ def _resource(name, fields, origin):
     return Resource(
         name=name,
         origin=str(origin),
-        **{key: tuple(value) if key == "kind" else value for key, value in fields.items()},
+        **{key: tuple(value) if key in _LISTS else value for key, value in fields.items()},
     )
 
 

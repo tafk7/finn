@@ -95,6 +95,8 @@ def _list(args):
             notes.append(f"{resource.name}: declared by {resource.origin}")
         if current.state == "override":
             notes.append(f"{resource.name}: overridden by {current.detail}")
+        if os.environ.get(resource.env + "_URL"):
+            notes.append(f"{resource.name}: fetched from {resource.env}_URL")
     _table(rows)
     for note in notes:
         print(note)
@@ -191,7 +193,7 @@ def _update(args):
             f"update moves git resources; for {args.name}, change url and sha256 by hand "
             "and set digest to the output of `finn-resources digest DIR`"
         )
-    commit = _resolve(resource.git, args.ref)
+    commit = _resolve(_store.urls(resource)[0], args.ref)
     candidate = replace(resource, commit=commit, digest="sha256:" + "0" * 64)
     root = _store.fetch_root()
     root.mkdir(parents=True, exist_ok=True)
@@ -268,8 +270,15 @@ def _check(args):
     except ResourceError as error:
         problems.append(str(error))
         declared = {}
-    if any(r.git for r in declared.values()) and shutil.which("git") is None:
-        problems.append("git is not installed; git resources cannot be fetched")
+    if shutil.which("git") is None:
+        # GitHub sources fall back to GitHub's archive of the commit.
+        stuck = [
+            r.name
+            for r in declared.values()
+            if r.git and not _store.github_archive(_store.urls(r)[0], r.commit)
+        ]
+        if stuck:
+            problems.append(f"git is not installed, so these cannot be fetched: {', '.join(stuck)}")
     system = os.environ.get(PREFIX + "SYSTEM_CACHE")
     if system and not Path(system).is_dir():
         problems.append(f"{PREFIX}SYSTEM_CACHE={system} is not a directory")
@@ -277,13 +286,14 @@ def _check(args):
     existing = next((p for p in (root, *root.parents) if p.exists()), None)
     if existing is None or not os.access(existing, os.W_OK):
         problems.append(f"the cache {root} is not writable, so resources cannot be fetched")
-    variables = {r.env: r.name for r in declared.values()} | api._ALIASES
+    overrides = {r.env for r in declared.values()} | set(api._ALIASES)
+    sources = {r.env + "_URL" for r in declared.values() if not r.package}
     for variable, value in sorted(os.environ.items()):
         if variable in api._REMOVED:
             problems.append(f"{variable} is set but no longer used: {api._REMOVED[variable]}")
-        elif variable in variables and value and not Path(value).is_dir():
+        elif variable in overrides and value and not Path(value).is_dir():
             problems.append(f"{variable}={value} is not a directory")
-        elif variable.startswith(PREFIX) and variable not in variables.keys() | _SETTINGS:
+        elif variable.startswith(PREFIX) and variable not in overrides | sources | _SETTINGS:
             problems.append(f"{variable} matches no declared resource")
     if os.environ.get(PREFIX + "OFFLINE", "") not in ("", "0"):
         missing = [r.name for r in declared.values() if not r.package and not _store.lookup(r)]

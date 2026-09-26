@@ -10,6 +10,7 @@ import contextlib
 import fcntl
 import hashlib
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -116,26 +117,45 @@ def fetch(resource, root):
     with locked(root, resource.entry) as entry:
         if complete(entry, resource.digest):
             return entry
-        # A copy in another cache (e.g. when filling a directory to carry offline)
-        # saves the download; it is verified like a fetched tree.
-        copy = lookup(resource)
-        where = copy or resource.source
-        print(f"finn: fetching resource {resource.name} from {where}", file=sys.stderr)
         with tempfile.TemporaryDirectory(dir=root, prefix=f".{resource.entry}.") as work:
-            if copy:
-                tree = Path(work) / "tree"
+            publish(_verified_tree(resource, Path(work)), entry, resource.digest)
+    return entry
+
+
+def urls(resource):
+    """Where a resource's source is fetched from, in order: the declared URL, or
+    FINN_RESOURCES_<NAME>_URL in its place, then the declared mirrors."""
+    primary = os.environ.get(resource.env + "_URL") or resource.git or resource.url
+    return [primary, *resource.mirrors]
+
+
+def _verified_tree(resource, work):
+    """Try each place a resource can come from until one yields its digest."""
+    # A copy in another cache (e.g. when filling a directory to carry offline)
+    # saves the download; it is verified like a fetched tree.
+    copy = lookup(resource)
+    failures = []
+    for number, where in enumerate(([copy] if copy else []) + urls(resource)):
+        print(f"finn: fetching resource {resource.name} from {where}", file=sys.stderr)
+        try:
+            if where == copy:
+                tree = work / f"copy{number}"
                 shutil.copytree(copy, tree, symlinks=True)
             else:
-                tree = assemble(resource, Path(work))
-            actual = tree_digest(tree)
-            if actual != resource.digest:
-                raise ResourceError(
-                    f"Resource {resource.name} from {where} has digest {actual}, "
-                    f"but {resource.origin} declares {resource.digest}. If the source was "
-                    "changed on purpose, update the digest (`finn-resources update`)."
-                )
-            publish(tree, entry, resource.digest)
-    return entry
+                tree = assemble(resource, work / f"source{number}", where)
+        except ResourceError as error:
+            failures.append(str(error))
+            continue
+        actual = tree_digest(tree)
+        if actual == resource.digest:
+            return tree
+        failures.append(f"{where} has digest {actual}")
+    message = "\n  ".join(failures)
+    raise ResourceError(
+        f"Cannot fetch resource {resource.name} with the digest {resource.origin} declares "
+        f"({resource.digest}):\n  {message}\nIf the source changed on purpose, update the "
+        "pin with `finn-resources update`."
+    )
 
 
 def publish(tree, entry, digest):
@@ -147,16 +167,18 @@ def publish(tree, entry, digest):
     tree.rename(entry)
 
 
-def assemble(resource, work):
-    """Fetch a resource's source into work and lay out its tree, unverified."""
+def assemble(resource, work, url=None):
+    """Fetch a resource's source (by default from its first URL) into work and lay
+    out its tree, unverified."""
+    url = url or urls(resource)[0]
     if resource.git:
-        source = git_checkout(resource.git, resource.commit, resource.subdir, work / "source")
+        source = git_source(url, resource.commit, resource.subdir, work / "source")
     else:
-        source = archive(resource.url, resource.sha256, work / "source")
+        source = archive(url, resource.sha256, work / "source")
     if resource.subdir:
         source = source / resource.subdir
         if not source.is_dir():
-            raise ResourceError(f"{resource.subdir} is not a directory in {resource.source}")
+            raise ResourceError(f"{resource.subdir} is not a directory in {url}")
     tree = work / "tree"
     shutil.copytree(
         source,
@@ -167,10 +189,28 @@ def assemble(resource, work):
     return tree
 
 
+def git_source(url, commit, subdir, dest):
+    """One commit of a git repository: a sparse checkout, or without git, GitHub's
+    archive of the commit."""
+    if shutil.which("git"):
+        return git_checkout(url, commit, subdir, dest)
+    tarball = github_archive(url, commit)
+    if tarball is None:
+        raise ResourceError(f"git is required to fetch {url}")
+    print(f"finn: git is not installed; using {tarball}", file=sys.stderr)
+    # GitHub archives are not byte-stable, so there is no archive checksum; the
+    # tree digest verifies the content.
+    return archive(tarball, None, dest)
+
+
+def github_archive(url, commit):
+    """The URL of GitHub's tarball of a commit, or None for other hosts."""
+    match = re.fullmatch(r"https://github\.com/([\w.-]+)/([\w.-]+?)(?:\.git)?/?", url)
+    return match and f"https://github.com/{match[1]}/{match[2]}/archive/{commit}.tar.gz"
+
+
 def git_checkout(url, commit, subdir, dest):
     """Check out one commit, fetching only the blobs under subdir; return the checkout."""
-    if shutil.which("git") is None:
-        raise ResourceError(f"git is required to fetch {url}")
     env = dict(os.environ, GIT_TERMINAL_PROMPT="0")
 
     def git(*args):
@@ -191,7 +231,8 @@ def git_checkout(url, commit, subdir, dest):
 
 
 def archive(url, sha256, dest):
-    """Download, check and safely extract an archive; return its root directory.
+    """Download, check (unless sha256 is None) and safely extract an archive;
+    return its root directory.
 
     An archive holding a single top-level directory has that directory as its
     root, as source archives usually do.
@@ -205,7 +246,7 @@ def archive(url, sha256, dest):
     except OSError as error:
         raise ResourceError(f"Cannot download {url}: {error}") from None
     actual = _file_sha256(download).hexdigest()
-    if actual != sha256:
+    if sha256 is not None and actual != sha256:
         raise ResourceError(f"{url} has sha256 {actual}, expected {sha256}")
     tree = dest / "tree"
     tree.mkdir()
