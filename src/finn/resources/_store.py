@@ -6,6 +6,7 @@ the tree in a temporary directory beside the entry, verifies its digest, writes
 the marker and renames it into place, under a file lock, so a failed or
 concurrent fetch never publishes a partial or unverified tree.
 """
+import contextlib
 import fcntl
 import hashlib
 import os
@@ -95,18 +96,24 @@ def lookup(resource):
     return None
 
 
-def fetch(resource, root):
-    """Fetch, verify and publish a resource into a cache root; return the entry."""
+@contextlib.contextmanager
+def locked(root, entry):
+    """Hold an entry's lock in a cache root, creating the root if needed."""
     root = Path(root)
-    entry = root / resource.entry
     try:
         root.mkdir(parents=True, exist_ok=True)
-        lock = open(root / f".{resource.entry}.lock", "w")
+        lock = open(root / f".{entry}.lock", "w")
     except OSError as error:
         raise ResourceError(f"Cannot write to the resource cache {root}: {error}") from None
     with lock:
         # Parallel first uses wait for a single fetch instead of racing.
         fcntl.flock(lock, fcntl.LOCK_EX)
+        yield root / entry
+
+
+def fetch(resource, root):
+    """Fetch, verify and publish a resource into a cache root; return the entry."""
+    with locked(root, resource.entry) as entry:
         if complete(entry, resource.digest):
             return entry
         print(f"finn: fetching resource {resource.name} from {resource.source}", file=sys.stderr)
@@ -119,12 +126,17 @@ def fetch(resource, root):
                     f"but {resource.origin} declares {resource.digest}. If the source was "
                     "changed on purpose, update the digest (`finn-resources update`)."
                 )
-            (tree / MARKER).write_text(resource.digest + "\n")
-            if entry.exists():
-                # A leftover without a valid marker, e.g. from an interrupted copy.
-                shutil.rmtree(entry)
-            tree.rename(entry)
+            publish(tree, entry, resource.digest)
     return entry
+
+
+def publish(tree, entry, digest):
+    """Move a verified tree into place as a complete entry; hold the entry's lock."""
+    (tree / MARKER).write_text(digest + "\n")
+    if entry.exists():
+        # A leftover without a valid marker, e.g. from an interrupted copy.
+        shutil.rmtree(entry)
+    tree.rename(entry)
 
 
 def assemble(resource, work):

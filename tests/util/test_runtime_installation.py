@@ -134,6 +134,7 @@ def test_checkout_and_sdist_wheels_have_same_assets_and_work_without_checkout(tm
         or data["finn/_data/rtllib/memstream/component.xml"]
     )
     assert "finn/_data/qnn-data/cpp/CNPY_LICENSE" in data
+    assert "finn/_data/resources.toml" in data and "finn/resources/_cli.py" in data
     assert not any(
         "/testcase/" in name or "_tb." in name or "/build_dataflow/" in name for name in data
     )
@@ -170,6 +171,9 @@ def test_checkout_and_sdist_wheels_have_same_assets_and_work_without_checkout(tm
     assert str(installed) in identity
     assert (installed / "bin/build_dataflow").exists()
     run([installed / "bin/build_dataflow", "--help"], unrelated, clean_env())
+    # The declarations ship in the wheel.
+    listing = run([installed / "bin/finn-resources", "list"], unrelated, clean_env()).stdout
+    assert listing.splitlines()[1].startswith("hlslib ")
 
 
 def test_two_editable_environments_observe_only_selected_code_and_resources(tmp_path):

@@ -8,6 +8,7 @@ files listed in FINN_RESOURCES_FILES.
 import logging
 import os
 import re
+import shutil
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
@@ -162,18 +163,24 @@ def load(path, keys):
     return parse(data, path)
 
 
+def table_keys(path):
+    """Where declarations live in a file: [tool.finn.resources] in a pyproject.toml,
+    else [resources]."""
+    return ("tool", "finn", "resources") if Path(path).name == "pyproject.toml" else ("resources",)
+
+
 def project_files(start=None):
     """The project's declaration files: the nearest pyproject.toml, then FINN_RESOURCES_FILES."""
     files = []
     start = Path(start or os.getcwd()).resolve()
     for directory in (start, *start.parents):
         if (directory / "pyproject.toml").is_file():
-            files.append((directory / "pyproject.toml", ("tool", "finn", "resources")))
+            files.append(directory / "pyproject.toml")
             break
     for name in os.environ.get(PREFIX + "FILES", "").split(os.pathsep):
         if name:
-            files.append((Path(name), ("resources",)))
-    return files
+            files.append(Path(name))
+    return [(file, table_keys(file)) for file in files]
 
 
 def merge(finn, packages, project):
@@ -198,3 +205,48 @@ def merge(finn, packages, project):
         # Reassigning keeps the original position, so kind order is stable.
         merged[resource.name] = resource
     return merged
+
+
+_HEADER = re.compile(r"\s*\[(?!\[)\s*(?P<key>[^\]]+?)\s*\]\s*(#.*)?")
+
+
+def rewrite(path, keys, name, values):
+    """Set string fields of one resource's table in a TOML file, changing nothing else.
+
+    The standard library reads TOML but cannot write it, so this edits only the
+    lines ``field = "..."`` inside ``[<keys>.<name>]`` and then re-parses the
+    result; the file is replaced only if exactly those values changed.
+    """
+    path = Path(path)
+    text = path.read_text()
+    lines = text.splitlines(keepends=True)
+    wanted = [*keys, name]
+    inside, changed = False, set()
+    for number, line in enumerate(lines):
+        header = _HEADER.fullmatch(line.rstrip("\n"))
+        if header or line.lstrip().startswith("[["):
+            key = header and [k.strip().strip("\"'") for k in header["key"].split(".")]
+            inside = key == wanted
+            continue
+        field = re.match(r'(\s*(\w+)\s*=\s*)"[^"\\]*"', line)
+        if inside and field and field[2] in values:
+            lines[number] = f'{field[1]}"{values[field[2]]}"{line[field.end():]}'
+            changed.add(field[2])
+    if changed != set(values):
+        missing = ", ".join(sorted(set(values) - changed))
+        raise DeclarationError(
+            f"{path}: cannot find {missing} as a quoted value in [{'.'.join(wanted)}]; "
+            "edit it by hand"
+        )
+    new_text = "".join(lines)
+    expected = tomllib.loads(text)
+    table = expected
+    for key in wanted:
+        table = table[key]
+    table.update(values)
+    if tomllib.loads(new_text) != expected:
+        raise DeclarationError(f"{path}: the edit would change more than {sorted(values)}")
+    temporary = path.with_name(f".{path.name}.update")
+    temporary.write_text(new_text)
+    shutil.copymode(path, temporary)
+    os.replace(temporary, path)

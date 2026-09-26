@@ -42,6 +42,7 @@ Source = "https://github.com/Xilinx/finn"
 
 [project.scripts]
 build_dataflow = "finn.builder.build_dataflow:main"
+finn-resources = "finn.resources._cli:main"
 
 [dependency-groups]
 test = [
