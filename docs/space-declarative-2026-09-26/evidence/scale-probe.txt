@@ -1,0 +1,3 @@
+N=  50  prepare     42.6 ms  full read    17.5 ms  read after one local edit    17.2 ms  callbacks re-run 50 (first snapshot: 50)
+N= 200  prepare    156.7 ms  full read    70.3 ms  read after one local edit    68.7 ms  callbacks re-run 200 (first snapshot: 200)
+N= 800  prepare    616.7 ms  full read   278.5 ms  read after one local edit   284.2 ms  callbacks re-run 800 (first snapshot: 800)
