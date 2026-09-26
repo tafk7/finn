@@ -1,8 +1,10 @@
 # Graph composition for `finn.core.space`
 
 Date: 2026-09-25/26. Base: `feature/kernel-package-extraction` at `0d700b1ab`.
-Status: **design at the human review gate.** A working spike validates it; see
-§9. The spike is commit `759ee0e17` on the local branch
+Status: **superseded** by [`../space-design-graph-2026-09-26/DESIGN.md`](../space-design-graph-2026-09-26/DESIGN.md).
+Review found the Port/Net/Interface/Fold model shaped by streams rather than by
+design spaces. The record is kept for its evidence and rejected alternatives.
+A working spike validates it; see §9. The spike is commit `759ee0e17` on the local branch
 `spike/space-graph-composition`. It is not merged, and nothing is pushed.
 
 ## 0. Summary
