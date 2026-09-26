@@ -8,41 +8,33 @@ are checked as a batch; only a fully admitted trial becomes a configuration.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import replace
-from typing import Literal, TypeVar, cast
+from typing import Any, Literal, TypeVar, cast
 
 from . import _execution, _runtime
-from ._configuration import ChoiceView, Space
-from .declarations import Decision, DecisionRef, SubspaceChoice
+from ._configuration import Space
 from .edits import Change, ChangeOutcome, ChangeRequest, ConfigurationResult
 from .errors import ConfigurationError, EvaluationError, RequestError
 from .ir import Node
-from .occurrence import (
-    _attach,
-    _case_scope,
-    _choice_record,
-    _decision,
-    _prepare_values,
-    root,
-    state,
-)
-from .results import Available, Inapplicable, QueryResult
+from .occurrence import _attach, _prepare_values, decision_index, state
+from .results import Available, QueryResult
 
 T = TypeVar("T")
 S = TypeVar("S", bound=Space)
 
 
-def change(point: Space, reference: Decision[T] | DecisionRef[T], value: T) -> Change[T]:
+def change(point: Space, reference: object, value: T) -> Change[T]:
     _execution.driver_only("change construction")
     current = state(point)
-    index = _decision(point, reference)
+    index = decision_index(point, reference)
     return Change(current, current.linked.nodes[index].scope, index, value)
 
 
-def clear(point: Space, reference: Decision[T] | DecisionRef[T]) -> Change[T]:
+def clear(point: Space, reference: object) -> Change[object]:
     _execution.driver_only("clear construction")
     current = state(point)
-    index = _decision(point, reference)
+    index = decision_index(point, reference)
     return Change(current, current.linked.nodes[index].scope, index, remove=True)
 
 
@@ -74,23 +66,27 @@ def _keyword_change(point: Space, name: str, value: object) -> Change[object]:
     scope = current.linked.scopes[point._scope]
     index = scope.named_members.get(name)
     if index is None:
-        for declaration, choice_index in scope.choices.items():
-            if isinstance(declaration, SubspaceChoice) and declaration.name == name:
-                choice = current.linked.choices[choice_index]
-                if choice.selector is None:
-                    if type(value) is not str or value not in tuple(
-                        case for case, _ in choice.cases
-                    ):
-                        raise RequestError(f"{choice.key}: unknown choice case {value!r}")
-                    raise RequestError(f"{choice.key} is a singleton structural choice")
-                index = choice.selector
-                break
-    if index is None:
         raise RequestError(f"unknown direct choice {name!r}")
     node = current.linked.nodes[index]
     if node.kind != "decision" or node.scope != point._scope:
         raise RequestError(f"{node.key} is not a direct owned choice in this scope")
     return Change(current, node.scope, index, value)
+
+
+def _requests(
+    point: Space, items: tuple[ChangeRequest | Mapping[Any, object], ...]
+) -> list[Change[object]]:
+    """Expand ``{reference: value}`` mappings in order; Change objects pass through."""
+    current = state(point)
+    result: list[Change[object]] = []
+    for item in items:
+        if isinstance(item, Mapping):
+            for reference, value in item.items():
+                index = decision_index(point, reference)
+                result.append(Change(current, current.linked.nodes[index].scope, index, value))
+        else:
+            result.append(item)
+    return result
 
 
 def _values_equal(node: Node, left: object, right: object) -> bool:
@@ -110,14 +106,14 @@ def _admission(trial: _runtime.Snapshot, index: int) -> QueryResult[bool]:
 
 
 def try_with_choices(
-    point: S, /, *changes: ChangeRequest, **choices: object
+    point: S, /, *changes: ChangeRequest | Mapping[Any, object], **choices: object
 ) -> ConfigurationResult[S]:
     """Build and validate a replacement choice set over the same frozen facts."""
 
     _execution.driver_only("configuration replacement")
     current = state(point)
     keyword_changes = tuple(_keyword_change(point, name, value) for name, value in choices.items())
-    all_changes = (*changes, *keyword_changes)
+    all_changes = (*_requests(point, changes), *keyword_changes)
     normalized = _normalize_changes(point, all_changes)
     with current.lock:
         prepared = _prepare_values(
@@ -198,44 +194,10 @@ def try_with_choices(
         return ConfigurationResult(successor, True, tuple(published))
 
 
-def with_choices(point: S, /, *changes: ChangeRequest, **choices: object) -> S:
+def with_choices(
+    point: S, /, *changes: ChangeRequest | Mapping[Any, object], **choices: object
+) -> S:
     report = try_with_choices(point, *changes, **choices)
     if not report.accepted:
         raise ConfigurationError(report)
     return report.instance
-
-
-def select(view: ChoiceView, case: str) -> ChoiceView:
-    _execution.driver_only("configuration selection")
-    current, declaration = _choice_record(view)
-    _case_scope(declaration, case)
-    if declaration.selector is None:
-        # A singleton case is structurally selected, but an enclosing guard
-        # still determines whether selection applies at this snapshot.
-        if declaration.guard is not None:
-            guard = _runtime.evaluate(current, declaration.guard).result
-            if not isinstance(guard, Available) or guard.value is not True:
-                refusal: QueryResult[bool] = (
-                    Inapplicable()
-                    if isinstance(guard, Available)
-                    else cast(QueryResult[bool], guard)
-                )
-                report = ConfigurationResult(
-                    root(view.instance),
-                    False,
-                    (ChangeOutcome(declaration.key, refusal, "refused"),),
-                )
-                raise ConfigurationError(report)
-        return view
-    selector = current.linked.nodes[declaration.selector]
-    report = try_with_choices(
-        root(view.instance),
-        Change(current, selector.scope, selector.index, case),
-    )
-    if not report.accepted:
-        raise ConfigurationError(report)
-    successor = state(report.instance)
-    if successor is current:
-        return view
-    owner = _attach(successor, view.instance._scope)
-    return ChoiceView(owner, view.declaration)

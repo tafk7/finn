@@ -63,14 +63,15 @@ class Node:
     alternatives: tuple[tuple[str, int], ...] = ()
     selector: int | None = None
     source_owner: str | None = None
+    origin: str | None = None
     selection_index: Mapping[str, int] | None = field(
         default=None, init=False, repr=False, compare=False
     )
 
     def __post_init__(self) -> None:
-        # Keep ordered alternatives as the structural graph. Only a genuine
-        # multi-case selection needs a second, direct runtime lookup index.
-        if self.kind == "select" and len(self.alternatives) > 1:
+        # Keep ordered alternatives as the structural graph; a selection also
+        # needs a direct runtime lookup (a case without the member is absent).
+        if self.kind == "select":
             object.__setattr__(self, "selection_index", MappingProxyType(dict(self.alternatives)))
 
     @property
@@ -105,6 +106,8 @@ class Scope:
     named_children: Mapping[str, int] = field(default_factory=dict)
     guard: int | None = None
     choices: Mapping[object, int] = field(default_factory=dict)
+    # The node declaration instantiated here (None for a family compiled alone).
+    record: object = None
 
     def __post_init__(self) -> None:
         for attr in ("members", "children", "named_members", "named_children", "choices"):
@@ -113,16 +116,19 @@ class Scope:
 
 @dataclass(frozen=True, slots=True)
 class Choice:
+    """A Decision over nodes: its selector, candidate scopes (None places nothing),
+    and the members read through it (``decision.member``) that were linked."""
+
     index: int
     scope: int
     key: str
-    selector: int | None
-    cases: tuple[tuple[str, int], ...]
-    exports: Mapping[object, int]
+    selector: int
+    cases: tuple[tuple[str, int | None], ...]
+    members: Mapping[str, int]
     guard: int | None = None
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "exports", MappingProxyType(dict(self.exports)))
+        object.__setattr__(self, "members", MappingProxyType(dict(self.members)))
 
 
 @dataclass(frozen=True, slots=True)
@@ -134,6 +140,8 @@ class LinkedModel:
     decisions: tuple[int, ...]
     keys: Mapping[str, int]
     choices: tuple[Choice, ...] = ()
+    # Formals supplied by a shared unnamed Decision: edits may pass through them.
+    editable_aliases: frozenset[int] = frozenset()
     selector_choices: Mapping[int, int] = field(init=False, repr=False)
     ranks: tuple[int, ...] = field(init=False, repr=False)
 
@@ -146,7 +154,5 @@ class LinkedModel:
         object.__setattr__(
             self,
             "selector_choices",
-            MappingProxyType(
-                {item.selector: item.index for item in self.choices if item.selector is not None}
-            ),
+            MappingProxyType({item.selector: item.index for item in self.choices}),
         )

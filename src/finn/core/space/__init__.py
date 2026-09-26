@@ -3,7 +3,7 @@
 """Typed design-space authoring, immutable specialization and public services."""
 
 from . import codecs, extensions, graph, inspection, selections
-from ._configuration import BoundDecision, BoundValue, BoundView, ChoiceView, Space
+from ._configuration import BoundDecision, BoundValue, BoundView, Space
 from ._execution import (
     CleanupFailure,
     NativeCancellationDetails,
@@ -11,30 +11,26 @@ from ._execution import (
     cancellation_details,
 )
 from .codecs import CodecBinding, JSONValue, SelectionSchema, ValueCodec, codec_for
-from .compiler import SpaceModel, compile_space
+from .compiler import SpaceModel, configure
 from .declarations import (
-    AcceptedViewRef,
+    OPEN,
+    UNSUPPLIED,
     Bind,
-    ChoiceCaseRef,
     Const,
     Constraint,
     ConstraintGroup,
     Decision,
-    DecisionRef,
     Derived,
-    LocatedRef,
+    LocatedParam,
     Members,
     Param,
     Present,
-    Subspace,
-    SubspaceChoice,
-    ValueKey,
     ValueRef,
     View,
     ViewKey,
     constraint,
     derived,
-    located,
+    selected,
     view,
 )
 from .domains import Domain, divisors_of, domain, finite
@@ -43,11 +39,12 @@ from .errors import (
     ConfigurationError,
     DefinitionError,
     EvaluationError,
+    ReferenceUseError,
     RequestError,
     ValueUnavailableError,
 )
 from .expressions import Expr
-from .extensions import ScopeBuilder
+from .extensions import composite
 from .graph import Located
 from .references import DecisionHandle, ValueHandle
 from .results import (
@@ -69,43 +66,38 @@ from .selections import Selection, SelectionEntry
 from .semantics import ValueSemantics, default_semantics
 
 __all__ = [
-    # Definitions and composition
+    # Families, node declarations and the compile step
     "Space",
+    "configure",
     "SpaceModel",
-    "compile_space",
+    "composite",
     "Param",
+    "LocatedParam",
+    "OPEN",
+    "UNSUPPLIED",
     "Const",
     "Decision",
+    "selected",
     "Derived",
     "Constraint",
     "ConstraintGroup",
     "View",
-    "Subspace",
-    "SubspaceChoice",
-    "ScopeBuilder",
     # Graph primitives
     "Bind",
     "Present",
     "Members",
-    "LocatedRef",
     "Located",
-    "located",
-    "ChoiceCaseRef",
     "derived",
     "constraint",
     "view",
     # Typed references and bound accessors
     "ValueRef",
-    "DecisionRef",
-    "AcceptedViewRef",
-    "ValueKey",
     "ViewKey",
     "ValueHandle",
     "DecisionHandle",
     "BoundValue",
     "BoundDecision",
     "BoundView",
-    "ChoiceView",
     "Expr",
     # Domains and value semantics
     "Domain",
@@ -144,6 +136,7 @@ __all__ = [
     "DefinitionError",
     "RequestError",
     "EvaluationError",
+    "ReferenceUseError",
     "ConfigurationError",
     "ValueUnavailableError",
     "CleanupFailure",

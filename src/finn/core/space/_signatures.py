@@ -14,11 +14,12 @@ from typing_extensions import Self
 
 from ._configuration import Space
 from .declarations import (
-    AcceptedViewRef,
+    CaseRef,
+    ChoiceMemberRef,
     Constraint,
-    Declaration,
     Derived,
-    ScopedValueRef,
+    MemberRef,
+    Present,
     ValueRef,
     View,
 )
@@ -110,30 +111,31 @@ def output_semantics(
 
 
 def resolve_source(source: object, effective: EffectiveSpace, owner: str) -> ValueRef[object]:
-    if not isinstance(source, ValueRef):
+    if not isinstance(source, (ValueRef, View)):
         raise DefinitionError(f"{owner}: dependency must be a value reference")
     name = effective.aliases.get(source)
     if name is not None:
         replacement = effective.members[name]
-        if not isinstance(replacement, ValueRef):
+        if not isinstance(replacement, (ValueRef, View)):
             raise DefinitionError(f"{owner}: overridden dependency {name} is not a value")
-        return replacement
-    if isinstance(source, (ScopedValueRef, AcceptedViewRef)):
+        return cast(ValueRef[object], replacement)
+    if isinstance(source, (MemberRef, ChoiceMemberRef)):
         return source
-    if isinstance(source, Expr) and source.owner is None:
-        return source
+    if isinstance(source, (Expr, Present, CaseRef)) and source.owner is None:
+        return cast(ValueRef[object], source)
     raise DefinitionError(f"{owner}: dependency is not declared in this effective scope")
 
 
 def source_semantics(
-    source: ValueRef[object] | View[object],
+    source: object,
     effective: EffectiveSpace,
 ) -> ValueSemantics[object] | None:
     """Infer local value/view types; cross-scope types are checked after linking."""
-    seen: set[Declaration] = set()
-    while source not in seen:
-        seen.add(source)
-        semantics = effective.semantics.get(source, source.semantics)
+    seen: set[int] = set()
+    while isinstance(source, (ValueRef, View)) and id(source) not in seen:
+        seen.add(id(source))
+        declared = cast("ValueSemantics[object] | None", source.semantics)
+        semantics = effective.semantics.get(source, declared)
         if semantics is not None:
             return semantics
         if not isinstance(source, View) or source.source is None:

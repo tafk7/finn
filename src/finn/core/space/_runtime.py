@@ -287,27 +287,19 @@ def _frame(snapshot: Snapshot, node: Node) -> _execution.Frame:
             raise EvaluationError(node.owner, node.kind, "missing output reference")
         return Evaluation(cast(QueryResult[object], (yield node.output)))
     if node.kind == "select":
-        if node.selector is None:
-            if len(node.alternatives) != 1:
-                raise EvaluationError(node.owner, "selection", "missing selector")
-            selected = node.alternatives[0][1]
-        else:
-            selector = cast(QueryResult[object], (yield node.selector))
-            if not isinstance(selector, Available):
-                return Evaluation(selector)
-            case = selector.value
-            if type(case) is not str:
-                raise EvaluationError(node.owner, "selection", "selector is not a declared case")
-            if node.selection_index is not None:
-                target = node.selection_index.get(case)
-            elif len(node.alternatives) == 1 and node.alternatives[0][0] == case:
-                target = node.alternatives[0][1]
-            else:
-                target = None
-            if target is None:
-                raise EvaluationError(node.owner, "selection", "selector is not a declared case")
-            selected = target
-        return Evaluation(cast(QueryResult[object], (yield selected)))
+        if node.selector is None or node.selection_index is None:
+            raise EvaluationError(node.owner, "selection", "missing selector")
+        selector = cast(QueryResult[object], (yield node.selector))
+        if not isinstance(selector, Available):
+            return Evaluation(selector)
+        case = selector.value
+        if type(case) is not str:
+            raise EvaluationError(node.owner, "selection", "selector is not a declared case")
+        target = node.selection_index.get(case)
+        if target is None:
+            # The selected candidate is None, or has no such member: absent.
+            return Evaluation(Inapplicable())
+        return Evaluation(cast(QueryResult[object], (yield target)))
     if node.kind == "view":
         if node.output is None:
             raise EvaluationError(node.owner, "view", "missing output reference")

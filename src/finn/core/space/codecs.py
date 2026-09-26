@@ -8,14 +8,15 @@ import math
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import Generic, TypeAlias, TypeVar, Union, cast
+from typing import Any, Generic, TypeAlias, TypeVar, Union, cast, overload
 
 from ._configuration import Space
 from .compiler import SpaceModel
-from .declarations import Decision, DecisionRef
+from .declarations import Decision
 from .errors import DefinitionError, RequestError
 from .inspection import decision_info
-from .references import decision_key
+from .inspection import model as compiled_model
+from .references import DecisionHandle, decision_key
 from .selections import Selection, _recognize, _semantics, _snapshot
 
 T = TypeVar("T")
@@ -75,14 +76,29 @@ class ValueCodec(Generic[T]):
 class CodecBinding:
     """A type-checked pairing, constructed with codec_for()."""
 
-    reference: Decision[object] | DecisionRef[object]
+    reference: object
     codec: ValueCodec[object]
 
 
-def codec_for(reference: Decision[T] | DecisionRef[T], codec: ValueCodec[T]) -> CodecBinding:
-    return CodecBinding(
-        cast("Decision[object] | DecisionRef[object]", reference), cast(ValueCodec[object], codec)
-    )
+@overload
+def codec_for(reference: Decision[T] | DecisionHandle[T], codec: ValueCodec[T]) -> CodecBinding: ...
+
+
+@overload
+def codec_for(reference: Space | None, codec: ValueCodec[str]) -> CodecBinding: ...
+
+
+@overload
+def codec_for(reference: T, codec: ValueCodec[T]) -> CodecBinding: ...
+
+
+def codec_for(reference: object, codec: ValueCodec[Any]) -> CodecBinding:
+    """Pair a decision with its codec, checking the codec's value type.
+
+    A Decision over nodes persists its key, so it takes a ``str`` codec; a
+    reference is typed as its value (see DESIGN.md), so its codec must match it.
+    """
+    return CodecBinding(reference, cast(ValueCodec[object], codec))
 
 
 @dataclass(frozen=True, slots=True)
@@ -104,7 +120,7 @@ class SelectionSchema:
 
     def __init__(
         self,
-        model: SpaceModel[S],
+        model: SpaceModel[S] | Space | type[Space],
         *,
         family: str,
         version: int,
@@ -112,24 +128,27 @@ class SelectionSchema:
         owned_keys: Iterable[str] = (),
     ) -> None:
         _identity(family, version, label="selection schema")
-        if not isinstance(model, SpaceModel):
+        if not isinstance(model, (SpaceModel, Space, type)):
             raise DefinitionError("a selection schema requires a compiled model")
-        declared = frozenset(decision_key(model.linked, index) for index in model.linked.decisions)
+        compiled = compiled_model(model)
+        declared = frozenset(
+            decision_key(compiled.linked, index) for index in compiled.linked.decisions
+        )
         entries: dict[str, _SchemaEntry] = {}
         for binding in bindings:
             if not isinstance(binding, CodecBinding) or not isinstance(binding.codec, ValueCodec):
                 raise DefinitionError("schema bindings must come from codec_for()")
-            info = decision_info(model, binding.reference)
+            info = decision_info(compiled, binding.reference)
             if info.key in entries:
                 raise DefinitionError(f"duplicate codec binding for {info.key!r}")
-            entries[info.key] = _SchemaEntry(model.resolve(0, info.reference), binding.codec)
+            entries[info.key] = _SchemaEntry(compiled.resolve(0, info.reference), binding.codec)
         owned = frozenset(owned_keys)
         if any(type(key) is not str or not key for key in owned):
             raise DefinitionError("historical owned keys must be nonempty strings")
         object.__setattr__(self, "family", family)
         object.__setattr__(self, "version", version)
         object.__setattr__(self, "owned_keys", owned | declared)
-        object.__setattr__(self, "_model", cast(SpaceModel[Space], model))
+        object.__setattr__(self, "_model", compiled)
         object.__setattr__(self, "_entries", MappingProxyType(entries))
         object.__setattr__(self, "_known_keys", declared)
 

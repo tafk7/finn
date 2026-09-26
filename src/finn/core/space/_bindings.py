@@ -1,177 +1,86 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
-"""Explicit child suppliers, nested parameter targets, and placement plans."""
+"""How each formal of one declared node is supplied."""
 
 from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Literal
+from typing import TYPE_CHECKING, Literal, cast
 
-from ._configuration import Space
-from .declarations import (
-    Decision,
-    DecisionRef,
-    Declaration,
-    Param,
-    ScopedValueRef,
-    Subspace,
-    ValueRef,
-    class_namespace,
-)
+from ._nodes import FamilyFormal, NodeDecl, family_formals
+from .declarations import MISSING, Const, Decision, Param, ValueRef, View, at
 from .errors import DefinitionError
+
+if TYPE_CHECKING:
+    from ._configuration import Space
+
+BindingKind = Literal["literal", "reference", "local-decision", "node", "parameter"]
 
 
 @dataclass(frozen=True, slots=True)
 class PlacementBinding:
     supplier: object
-    kind: Literal["literal", "reference", "exposed-param", "local-decision"]
-
-
-@dataclass(frozen=True, slots=True)
-class PlacementTarget:
-    path: tuple[Subspace[Space], ...]
-    member: Param[object]
-    name: str
-
-
-@dataclass(frozen=True, slots=True)
-class NestedBinding:
-    reference: ValueRef[object]
-    target: PlacementTarget
-    binding: PlacementBinding
+    kind: BindingKind
 
 
 @dataclass(frozen=True, slots=True)
 class PlacementPlan:
     bindings: Mapping[str, PlacementBinding]
-    nested_bindings: tuple[NestedBinding, ...] = ()
-    # Formals left open at placement: a Bind of the parent may supply them;
-    # otherwise an optional formal is unsupplied and a required one is an error.
-    unbound: tuple[str, ...] = ()
+    # Formals left open at the call (OPEN, or optional and unbound): a Bind of
+    # the parent may supply them; an optional one nobody supplies stays
+    # unsupplied, and one with a value default falls back to that default.
+    open: tuple[str, ...] = ()
 
 
-class _TargetResolver:
-    """Resolve concrete typed paths without recursive template compilation."""
-
-    def __init__(self) -> None:
-        self.tables: dict[type[Space], tuple[dict[str, object], dict[int, str]]] = {}
-
-    def member(self, space_type: type[Space], reference: object) -> tuple[str, object]:
-        if space_type not in self.tables:
-            names = {
-                id(value): name
-                for base in reversed(space_type.__mro__)
-                for name, value in vars(base).items()
-                if isinstance(value, Declaration)
-            }
-            self.tables[space_type] = (class_namespace(space_type), names)
-        namespace, names = self.tables[space_type]
-        name = names.get(id(reference))
-        if name is None:
-            raise DefinitionError("binding reference is not a member of this child family")
-        return name, namespace[name]
-
-    def resolve(
-        self,
-        space_type: type[Space],
-        reference: object,
-    ) -> PlacementTarget:
-        path: list[Subspace[Space]] = []
-        seen: set[tuple[type[Space], int]] = set()
-        while isinstance(reference, ScopedValueRef):
-            if isinstance(reference, DecisionRef):
-                raise DefinitionError("binding targets require Param references, not DecisionRef")
-            identity = (space_type, id(reference))
-            if identity in seen:
-                raise DefinitionError("cyclic scoped parameter reference")
-            seen.add(identity)
-            _, placement = self.member(space_type, reference.placement)
-            if not isinstance(placement, Subspace):
-                raise DefinitionError("binding targets require concrete child placements")
-            path.append(placement)
-            space_type, reference = placement.space_type, reference.member
-        name, member = self.member(space_type, reference)
-        if not isinstance(member, Param):
-            raise DefinitionError("binding target is not a Param declaration")
-        return PlacementTarget(tuple(path), member, name)
-
-
-def _placement_binding(parameter: Param[object], supplier: object, label: str) -> PlacementBinding:
-    kind: Literal["literal", "reference", "exposed-param", "local-decision"]
-    if isinstance(supplier, Param) and supplier.owner is None:
-        kind = "exposed-param"
-    elif isinstance(supplier, Decision) and supplier.owner is None:
-        kind = "local-decision"
-    elif isinstance(supplier, ValueRef):
-        kind = "reference"
-    else:
-        kind = "literal"
-    assert parameter.semantics is not None
-    if isinstance(supplier, ValueRef):
-        if supplier.semantics is not None and not parameter.semantics.is_compatible_with(
-            supplier.semantics
-        ):
-            raise DefinitionError(f"{label}: binding has incompatible value semantics")
-    else:
-        try:
-            supplier = parameter.semantics.freeze(supplier)
-        except (TypeError, ValueError) as error:
-            raise DefinitionError(f"{label}: {error}") from error
-    return PlacementBinding(supplier, kind)
-
-
-def collect_placement(placement: Subspace[Space]) -> PlacementPlan:
-    """Validate named/direct bindings and explicitly targeted nested Params.
-
-    Nested target exposure is checked against the allocated scopes before any
-    callbacks are linked. It is not inferred by flattening child definitions.
-    """
-    namespace = class_namespace(placement.space_type)
-    parameters = {name: value for name, value in namespace.items() if isinstance(value, Param)}
-    label = placement.name or placement.space_type.__qualname__
-    named = dict(placement.bindings)
-    extra = named.keys() - parameters.keys()
-    if extra:
-        raise DefinitionError(f"{label}: unknown child parameter bindings {sorted(extra)}")
-    resolver = _TargetResolver()
-    nested: list[NestedBinding] = []
-    targets: set[tuple[tuple[Subspace[Space], ...], str]] = set()
-    for reference, supplier in placement.parameter_bindings.items():
-        target = resolver.resolve(placement.space_type, reference)
-        identity = (target.path, target.name)
-        if identity in targets:
-            raise DefinitionError(f"{label}: duplicate parameter binding")
-        targets.add(identity)
-        if not target.path:
-            if target.name in named:
-                raise DefinitionError(f"{label}.{target.name}: duplicate named and mapped binding")
-            named[target.name] = supplier
-        else:
-            nested.append(
-                NestedBinding(
-                    reference,
-                    target,
-                    _placement_binding(target.member, supplier, f"{label}.{target.name}"),
+def placement_plan(
+    family: type[Space],
+    record: NodeDecl | None,
+    *,
+    root: bool,
+    formals: Mapping[str, object] | None = None,
+) -> PlacementPlan:
+    """Classify every formal of one node; the root's literal values stay runtime inputs."""
+    formals = family_formals(family) if formals is None else formals
+    supplied = record.bindings if record is not None else {}
+    bindings: dict[str, PlacementBinding] = {}
+    opened: list[str] = []
+    for name, formal in formals.items():
+        if name in supplied:
+            value = supplied[name]
+            kind: BindingKind
+            if isinstance(formal, FamilyFormal):
+                kind = "node"
+            elif isinstance(value, Decision) and value.owner is None:
+                kind = "local-decision"
+            elif isinstance(value, Param) and value.owner is None:
+                raise DefinitionError(
+                    f"{family.__qualname__}.{name}{at(value.origin)}: an inline Param cannot "
+                    "supply a formal; declare the formal on the enclosing family and bind it"
                 )
-            )
-    unbound = tuple(name for name in parameters if name not in named)
-    bindings = {
-        name: _placement_binding(parameter, named[name], f"{label}.{name}")
-        for name, parameter in parameters.items()
-        if name in named
-    }
-    return PlacementPlan(MappingProxyType(bindings), tuple(nested), unbound)
+            elif isinstance(value, Const) and value.owner is None:
+                value, kind = value.value, "parameter" if root else "literal"
+            elif isinstance(value, (ValueRef, View)):
+                kind = "reference"
+            else:
+                kind = "parameter" if root else "literal"
+            bindings[name] = PlacementBinding(value, kind)
+        elif isinstance(formal, FamilyFormal) or root:
+            continue
+        else:
+            opened.append(name)
+    if record is not None:
+        # An explicitly OPEN formal is open even though it is required.
+        opened.extend(name for name in record.open if name not in opened)
+    return PlacementPlan(MappingProxyType(bindings), tuple(opened))
 
 
-class PlacementPlans:
-    """Normalized placements owned by one collection/preparation session."""
+def open_default(formal: object) -> object:
+    """The fallback of an open formal: a value, UNSUPPLIED, or MISSING if required."""
+    if isinstance(formal, Param):
+        return cast(Param[object], formal).default
+    return MISSING
 
-    def __init__(self) -> None:
-        self._plans: dict[Subspace[Space], PlacementPlan] = {}
 
-    def get(self, placement: Subspace[Space]) -> PlacementPlan:
-        if placement not in self._plans:
-            self._plans[placement] = collect_placement(placement)
-        return self._plans[placement]
+__all__ = ["PlacementBinding", "PlacementPlan", "open_default", "placement_plan"]

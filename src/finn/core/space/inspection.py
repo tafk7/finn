@@ -9,22 +9,32 @@ evaluates one query and follows only cached demanded edges for that snapshot.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Generic, Literal, TypeVar, cast, overload
+from types import MappingProxyType
+from typing import Any, Generic, Literal, TypeVar, cast, overload
 
 from . import _execution, _runtime
 from ._configuration import Space
-from .compiler import SpaceModel
+from ._nodes import NodeChoice, NodeDecl, family_formals, node_record
+from .collection import collect_space
+from .compiler import SpaceModel, compile_space
 from .declarations import (
+    CaseRef,
+    ChoiceMemberRef,
     Constraint,
     ConstraintGroup,
     Decision,
-    DecisionRef,
+    Declaration,
+    MemberRef,
+    Param,
     ValueRef,
     View,
+    declared_path,
 )
 from .errors import RequestError
 from .ir import LinkedModel, NodeKind
+from .occurrence import candidate as _candidate
 from .occurrence import state
 from .references import DecisionHandle, ValueHandle, decision_key
 from .results import (
@@ -50,6 +60,7 @@ class NodeInfo:
     owner: str
     generated: bool
     guard: ValueHandle[bool] | None
+    origin: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,9 +77,11 @@ class DecisionInfo(Generic[T]):
 
 @dataclass(frozen=True, slots=True)
 class CaseInfo:
+    """One candidate of a Decision over nodes; a None candidate has no scope."""
+
     name: str
-    scope: str
-    space_type: type[Space]
+    scope: str | None
+    space_type: type[Space] | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,7 +89,7 @@ class ChoiceInfo:
     key: str
     scope: str
     cases: tuple[CaseInfo, ...]
-    selector: DecisionHandle[str] | None
+    selector: DecisionHandle[str]
     guard: ValueHandle[bool] | None
 
 
@@ -109,11 +122,11 @@ class QueryEvidence(Generic[T]):
 class ModelStatistics:
     """Structural counts for one compiled family, independent of runtime state.
 
-    Authored declarations count effective value/constraint/view members once in
-    every instantiated scope, plus each child placement (including choice cases)
-    and each structural choice. Reused templates therefore count at every
+    Authored declarations count effective members once in every instantiated
+    scope (a Decision over nodes is one member), plus each placed node
+    (including every candidate). Reused templates therefore count at every
     placement. A fresh binding replaces its child formal and is counted once;
-    generated output, guard, selector and selected-export nodes are excluded.
+    generated output, guard, selection and located nodes are excluded.
     """
 
     authored_declarations: int
@@ -124,16 +137,16 @@ class ModelStatistics:
     owning_decisions: int
 
 
-def statistics(model: SpaceModel[S]) -> ModelStatistics:
+def statistics(subject: Space | SpaceModel[S] | type[Space]) -> ModelStatistics:
     """Count direct structure on demand, with no runtime or closure retention."""
 
-    if not isinstance(model, SpaceModel):
+    if not isinstance(subject, (SpaceModel, Space, type)):
         raise RequestError("statistics requires a compiled model")
-    linked = model.linked
+    linked = _context(subject)[0].linked
     placements = len(linked.scopes) - 1
     authored = sum(len(scope.named_members) for scope in linked.scopes)
     return ModelStatistics(
-        authored + placements + len(linked.choices),
+        authored + placements,
         len(linked.scopes),
         len(linked.nodes),
         sum(len(node.dependencies) for node in linked.nodes),
@@ -142,13 +155,20 @@ def statistics(model: SpaceModel[S]) -> ModelStatistics:
     )
 
 
-def _context(subject: Space | SpaceModel[S]) -> tuple[SpaceModel[Space], int]:
+def _context(subject: Space | SpaceModel[S] | type[Space]) -> tuple[SpaceModel[Space], int]:
     if isinstance(subject, SpaceModel):
         return cast(SpaceModel[Space], subject), 0
+    if isinstance(subject, type) and issubclass(subject, Space):
+        return cast(SpaceModel[Space], compile_space(subject)), 0
     if isinstance(subject, Space):
         current = state(subject)
         return current.model, subject._scope
-    raise RequestError("inspection requires a compiled model or attached configuration")
+    raise RequestError("inspection requires a configuration, a compiled model or a family")
+
+
+def model(subject: Space | SpaceModel[S] | type[Space]) -> SpaceModel[Space]:
+    """The compiled model of a configuration, or of a family compiled alone."""
+    return _context(subject)[0]
 
 
 def _scope_set(linked: LinkedModel, root: int) -> set[int]:
@@ -176,6 +196,7 @@ def _node_info(linked: LinkedModel, index: int) -> NodeInfo:
         node.owner,
         node.source_owner is not None,
         None if node.guard is None else ValueHandle[bool](linked, node.guard),
+        node.origin,
     )
 
 
@@ -198,34 +219,50 @@ def _decision_info(
     )
 
 
-def decisions(subject: Space | SpaceModel[S]) -> tuple[DecisionInfo[object], ...]:
+def decisions(subject: Space | SpaceModel[S] | type[Space]) -> tuple[DecisionInfo[object], ...]:
     """Discover all owning decisions below this scope, including inactive cases."""
 
-    model, scope = _context(subject)
-    included = _scope_set(model.linked, scope)
+    compiled, scope = _context(subject)
+    included = _scope_set(compiled.linked, scope)
     result = (
-        _decision_info(model.linked, index)
-        for index in model.linked.decisions
-        if model.linked.nodes[index].scope in included
+        _decision_info(compiled.linked, index)
+        for index in compiled.linked.decisions
+        if compiled.linked.nodes[index].scope in included
     )
     return tuple(sorted(result, key=lambda item: item.key))
 
 
+@overload
 def decision_info(
-    subject: Space | SpaceModel[S],
-    reference: Decision[T] | DecisionRef[T],
-) -> DecisionInfo[T]:
-    model, scope = _context(subject)
-    if not isinstance(reference, (Decision, DecisionRef)):
-        raise RequestError("a parameter alias cannot become an editable decision handle")
-    index = model.resolve(scope, reference)
-    return cast(DecisionInfo[T], _decision_info(model.linked, index))
+    subject: Space | SpaceModel[S] | type[Space], reference: Decision[T]
+) -> DecisionInfo[T]: ...
 
 
+@overload
+def decision_info(
+    subject: Space | SpaceModel[S] | type[Space], reference: object
+) -> DecisionInfo[Any]: ...
+
+
+def decision_info(subject: Space | SpaceModel[S] | type[Space], reference: object) -> object:
+    compiled, scope = _context(subject)
+    index = compiled.decision(scope, reference)
+    return _decision_info(compiled.linked, index)
+
+
+@overload
 def decision_handle(
-    subject: Space | SpaceModel[S],
-    reference: Decision[T] | DecisionRef[T],
-) -> DecisionHandle[T]:
+    subject: Space | SpaceModel[S] | type[Space], reference: Decision[T]
+) -> DecisionHandle[T]: ...
+
+
+@overload
+def decision_handle(
+    subject: Space | SpaceModel[S] | type[Space], reference: object
+) -> DecisionHandle[Any]: ...
+
+
+def decision_handle(subject: Space | SpaceModel[S] | type[Space], reference: object) -> object:
     """Bind a typed owning decision while retaining its candidate value type."""
 
     return decision_info(subject, reference).reference
@@ -233,38 +270,47 @@ def decision_handle(
 
 @overload
 def value_handle(
-    subject: Space | SpaceModel[S],
+    subject: Space | SpaceModel[S] | type[Space],
     reference: ValueRef[T] | View[T],
 ) -> ValueHandle[T]: ...
 
 
 @overload
 def value_handle(
-    subject: Space | SpaceModel[S],
+    subject: Space | SpaceModel[S] | type[Space],
     reference: Constraint | ConstraintGroup,
 ) -> ValueHandle[bool]: ...
 
 
-def value_handle(subject: Space | SpaceModel[S], reference: object) -> object:
+@overload
+def value_handle(
+    subject: Space | SpaceModel[S] | type[Space], reference: object
+) -> ValueHandle[Any]: ...
+
+
+def value_handle(subject: Space | SpaceModel[S] | type[Space], reference: object) -> object:
     """Bind a typed value, accepted view result, or Boolean assessment result."""
 
-    model, scope = _context(subject)
-    return ValueHandle(model.linked, model.resolve(scope, reference))
+    compiled, scope = _context(subject)
+    return ValueHandle(compiled.linked, compiled.resolve(scope, reference))
 
 
-def choices(subject: Space | SpaceModel[S]) -> tuple[ChoiceInfo, ...]:
-    model, scope = _context(subject)
-    linked = model.linked
+def choices(subject: Space | SpaceModel[S] | type[Space]) -> tuple[ChoiceInfo, ...]:
+    """Every Decision over nodes below this scope, with its candidates."""
+    compiled, scope = _context(subject)
+    linked = compiled.linked
     included = _scope_set(linked, scope)
     return tuple(
         ChoiceInfo(
             choice.key,
             linked.scopes[choice.scope].name,
             tuple(
-                CaseInfo(name, linked.scopes[index].name, linked.scopes[index].space_type)
+                CaseInfo(name, None, None)
+                if index is None
+                else CaseInfo(name, linked.scopes[index].name, linked.scopes[index].space_type)
                 for name, index in choice.cases
             ),
-            None if choice.selector is None else DecisionHandle[str](linked, choice.selector),
+            DecisionHandle[str](linked, choice.selector),
             None if choice.guard is None else ValueHandle[bool](linked, choice.guard),
         )
         for choice in sorted(linked.choices, key=lambda item: item.key)
@@ -272,32 +318,32 @@ def choices(subject: Space | SpaceModel[S]) -> tuple[ChoiceInfo, ...]:
     )
 
 
-def members(subject: Space | SpaceModel[S]) -> tuple[NodeInfo, ...]:
+def members(subject: Space | SpaceModel[S] | type[Space]) -> tuple[NodeInfo, ...]:
     """Inspect authored and deliberately exposed members below this scope."""
 
-    model, scope = _context(subject)
-    included = _scope_set(model.linked, scope)
+    compiled, scope = _context(subject)
+    included = _scope_set(compiled.linked, scope)
     indices = {
         index
-        for current in model.linked.scopes
+        for current in compiled.linked.scopes
         if current.index in included
         for index in current.named_members.values()
     }
     return tuple(
-        _node_info(model.linked, index)
-        for index in sorted(indices, key=lambda item: model.linked.nodes[item].key)
+        _node_info(compiled.linked, index)
+        for index in sorted(indices, key=lambda item: compiled.linked.nodes[item].key)
     )
 
 
 def dependencies(
-    subject: Space | SpaceModel[S],
+    subject: Space | SpaceModel[S] | type[Space],
     reference: object,
 ) -> tuple[NodeInfo, ...]:
     """Return known structural inputs; self-method reads are discovered at runtime."""
 
-    model, scope = _context(subject)
-    node = model.linked.nodes[model.resolve(scope, reference)]
-    return tuple(_node_info(model.linked, index) for index in node.dependencies)
+    compiled, scope = _context(subject)
+    node = compiled.linked.nodes[compiled.resolve(scope, reference)]
+    return tuple(_node_info(compiled.linked, index) for index in node.dependencies)
 
 
 @overload
@@ -366,6 +412,91 @@ def explain(point: Space, reference: object) -> object:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class NodeDeclaration:
+    """A node declaration read without compiling it.
+
+    ``bindings`` maps each bound formal to its supplier: a frozen value, a
+    reference, a fresh Decision, or (for a family-typed formal) a node.
+    ``open`` names formals left open for a ``Bind``.
+    """
+
+    family: type[Space]
+    name: str | None
+    placement: str | None
+    members: tuple[str, ...]
+    bindings: Mapping[str, object]
+    open: tuple[str, ...]
+    when: object
+    origin: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class ReferenceInfo:
+    """A symbolic reference read without compiling: its node path and member."""
+
+    path: tuple[str | None, ...]
+    member: str
+    origin: str | None
+
+
+def declaration(node: object) -> NodeDeclaration:
+    """Inspect a node declaration (or a Decision over nodes' candidate) before compilation."""
+
+    record = node_record(node)
+    if record is None and isinstance(node, NodeDecl):
+        record = node
+    if record is None:
+        raise RequestError("declaration() takes a node declaration, as returned by a family call")
+    formals = family_formals(record.family)
+    bindings: dict[str, object] = {}
+    for name, value in record.bindings.items():
+        formal = formals.get(name)
+        if isinstance(value, NodeDecl):
+            value = value.instance
+        elif isinstance(formal, Param) and not isinstance(value, (ValueRef, View)):
+            # A detached copy: the declaration keeps its own frozen literal.
+            semantics = cast(Param[object], formal).semantics
+            assert semantics is not None
+            value = semantics.freeze(value)
+        bindings[name] = value
+    return NodeDeclaration(
+        record.family,
+        record.name,
+        record.placement,
+        tuple(collect_space(record.family).members),
+        MappingProxyType(bindings),
+        tuple(sorted(record.open)),
+        record.when,
+        record.origin,
+    )
+
+
+def reference(value: object) -> ReferenceInfo:
+    """Inspect a symbolic reference (``kitchen.finish``, ``heating.kw``) before compilation."""
+
+    if isinstance(value, NodeChoice):
+        path: tuple[Declaration, ...] = value._space_path
+        return ReferenceInfo(tuple(item.name for item in path), "", path[-1].origin)
+    if isinstance(value, (MemberRef, ChoiceMemberRef, CaseRef)):
+        member = value.member if isinstance(value, (MemberRef, ChoiceMemberRef)) else "$case"
+        name = member if isinstance(member, str) else member.name
+        return ReferenceInfo(tuple(item.name for item in value.path), str(name), value.origin)
+    raise RequestError("reference() takes a symbolic reference such as node.member")
+
+
+def candidate(point: Space, decision: object, case: str) -> Space | None:
+    """A candidate's configuration, selected or not; None for a None candidate."""
+
+    return _candidate(point, decision, case)
+
+
+def is_declaration(value: object) -> bool:
+    """Whether ``value`` is a node declaration or reference path rather than a configuration."""
+
+    return isinstance(value, Space) and declared_path(value) is not None
+
+
 __all__ = [
     "CaseInfo",
     "ChoiceInfo",
@@ -374,13 +505,20 @@ __all__ = [
     "NodeInfo",
     "ModelStatistics",
     "QueryEvidence",
+    "NodeDeclaration",
+    "ReferenceInfo",
+    "candidate",
     "choices",
+    "declaration",
     "decision_handle",
     "decision_info",
     "decisions",
     "dependencies",
     "explain",
+    "is_declaration",
     "members",
+    "model",
+    "reference",
     "statistics",
     "value_handle",
 ]

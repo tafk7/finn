@@ -6,13 +6,13 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
-from typing import TypeVar, cast
+from typing import Any, TypeVar, overload
 
 from . import _execution
 from ._changes import try_with_choices
 from ._configuration import Space
 from .compiler import SpaceModel
-from .declarations import Decision, DecisionRef
+from .declarations import Decision
 from .edits import Change, ConfigurationResult
 from .errors import EvaluationError, RequestError
 from .occurrence import state
@@ -148,14 +148,29 @@ class Selection:
     def keys(self) -> tuple[str, ...]:
         return tuple(decision_key(self._model.linked, entry.node) for entry in self._entries)
 
-    def value(self, reference: Decision[T] | DecisionRef[T]) -> T:
-        if not isinstance(reference, (Decision, DecisionRef)):
-            raise RequestError("selection lookup requires an owning Decision")
-        index = self._model.resolve(0, reference)
+    @overload
+    def value(self, reference: Decision[T] | DecisionHandle[T]) -> T: ...
+
+    @overload
+    def value(self, reference: Space | None) -> str: ...
+
+    @overload
+    def value(self, reference: T) -> T: ...
+
+    def value(self, reference: object) -> Any:
+        """The captured value of a decision: a Decision member, a reference, or a handle.
+
+        A Decision over nodes (typed as its candidates) captures its key; a
+        reference is typed as its value, so its captured value has that type.
+        """
+        try:
+            index = self._model.decision(0, reference)
+        except RequestError as cause:
+            raise RequestError(f"selection lookup requires an owning Decision: {cause}") from cause
         _check_nodes(self._model, (index,))
         for entry in self._entries:
             if entry.node == index:
-                return cast(T, _snapshot(self._model, index, entry.value))
+                return _snapshot(self._model, index, entry.value)
         raise KeyError(decision_key(self._model.linked, index))
 
 
