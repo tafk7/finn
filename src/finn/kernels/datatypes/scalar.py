@@ -52,6 +52,14 @@ class ScalarEncoding:
             raise ValueError("a scalar storage encoding must have positive width")
         object.__setattr__(self, "datatype_name", canonical.name)
 
+    @classmethod
+    def admit(cls, dtype: QONNXDataType) -> ScalarEncoding | Rejected:
+        """The encoding, or a ``dtype-storage`` refusal for a zero-width dtype."""
+        try:
+            return cls(dtype)
+        except ValueError as error:
+            return reject("dtype-storage", str(error))
+
     @property
     def dtype(self) -> QONNXDataType:
         return resolve_qonnx_datatype_name(self.datatype_name)
@@ -79,10 +87,7 @@ class Scalar(Space):
 
     @derived(semantics=SCALAR_ENCODING)
     def candidate(self) -> ScalarEncoding | Rejected:
-        try:
-            return ScalarEncoding(self.dtype)
-        except ValueError as error:
-            return reject("dtype-storage", str(error))
+        return ScalarEncoding.admit(self.dtype)
 
     admission = ConstraintGroup()
     encoding = View(candidate, constraints=(admission,))

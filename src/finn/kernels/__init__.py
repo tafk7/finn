@@ -11,6 +11,7 @@ from importlib import import_module
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from finn.kernels.configure import configure
     from finn.kernels.delivery import CyclicDelivery
     from finn.kernels.dotp import DotpAxiKernel
     from finn.kernels.eltwise import EltwiseKernel
@@ -28,6 +29,7 @@ if TYPE_CHECKING:
 
 _LAZY_EXPORTS = {
     "CyclicDelivery": ("finn.kernels.delivery", "CyclicDelivery"),
+    "configure": ("finn.kernels.configure", "configure"),
     "DotpAxiKernel": ("finn.kernels.dotp", "DotpAxiKernel"),
     "EltwiseKernel": ("finn.kernels.eltwise", "EltwiseKernel"),
     "FifoKernel": ("finn.kernels.fifo", "FifoKernel"),
@@ -57,6 +59,7 @@ def __getattr__(name: str) -> object:
 
 __all__ = [
     "CyclicDelivery",
+    "configure",
     "DotpAxiKernel",
     "EltwiseKernel",
     "FifoKernel",

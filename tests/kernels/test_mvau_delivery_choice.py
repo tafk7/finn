@@ -83,6 +83,11 @@ def configured(point, case, *, style=None, pe=2, simd=2):
     return point.with_choices(*changes, pe=pe, simd=simd)
 
 
+def delivery(point):
+    names = {item.instance_id for item in point.structure().structure.instances}
+    return WeightDelivery.CYCLIC if "u_weights" in names else WeightDelivery.EXTERNAL
+
+
 def keys(result):
     return {finding.code for finding in result.findings}
 
@@ -98,16 +103,15 @@ def test_families_share_typed_exports_but_keep_their_own_ports_and_components():
         (external, {"in0_V", "in1_V", "out0_V"}, ["u_replay", "u_compute"]),
         (cyclic, {"in0_V", "out0_V"}, ["u_replay", "u_compute", "u_weights"]),
     ):
-        built = point.assembly()
+        built = point.structure()
         requirements = point.build_requirements()
         assert isinstance(requirements, ModuleBuildRequirements)
         assert requirements == built.requirements
         assert {p.name for p in built.structure.top_abi.ports if isinstance(p, Bus)} == ports
         assert [item.instance_id for item in built.structure.instances] == instances
-    assert external.assembly().weight_delivery is WeightDelivery.EXTERNAL
-    assert external.assembly().initializer == ()
-    assert cyclic.assembly().initializer == (0x22C, 0x6BE, 0xDD3, 0x941)
-    rom = dict(cyclic.assembly().structure.instances[2].requirements.parameters)
+    assert delivery(external) is WeightDelivery.EXTERNAL
+    assert cyclic.implementation.alternative("cyclic").image == (0x22C, 0x6BE, 0xDD3, 0x941)
+    rom = dict(cyclic.structure().structure.instances[2].requirements.parameters)
     assert rom["ROM_STYLE"] == '"block"'
     assert external.build_requirements().implementation_id != (
         cyclic.build_requirements().implementation_id
@@ -116,7 +120,7 @@ def test_families_share_typed_exports_but_keep_their_own_ports_and_components():
 
 def test_the_inactive_family_is_never_demanded():
     point = configured(base(), "external")
-    evidence = inspection.explain(point, MVAU.assembly)
+    evidence = inspection.explain(point, MVAU.structure)
     visited = {node.declaration.key for node in evidence.nodes}
     assert any(key.startswith("implementation.external.") for key in visited)
     assert not any(key.startswith("implementation.cyclic.") for key in visited)
@@ -156,39 +160,39 @@ def test_case_local_choices_are_owned_by_their_family():
 
 def test_missing_cyclic_weights_leave_only_the_selected_family_unresolved():
     external = configured(base(), "external")
-    assert isinstance(external.assembly.query(), Available)
+    assert isinstance(external.structure.query(), Available)
     cyclic = configured(base(), "cyclic", style="distributed")
     family = cyclic.implementation.alternative("cyclic")
     assert family.rom_style == "distributed"
     assert isinstance(family.query(IMAGE), Unresolved)
-    assessment = cyclic.assembly.inspect()
+    assessment = cyclic.structure.inspect()
     assert isinstance(assessment.accepted_result, Unresolved)
     assert assessment.constraints.verdict is True
     # The compute product and folding do not wait for the family's optional fact.
     assert isinstance(cyclic.compute.build_requirements.query(), Available)
-    evidence = inspection.explain(cyclic, MVAU.assembly)
+    evidence = inspection.explain(cyclic, MVAU.structure)
     omitted = [node for node in evidence.nodes if node.input_presence == "omitted"]
     assert [node.declaration.key for node in omitted] == ["weights"]
 
 
 def test_cyclic_family_needs_its_own_rom_choice_and_refuses_bad_weights():
     uncommitted = configured(base(weights=WEIGHTS), "cyclic")
-    assert isinstance(uncommitted.assembly.query(), Unresolved)
+    assert isinstance(uncommitted.structure.query(), Unresolved)
     bad = configured(base(weights=((4,) * 4,) * 4), "cyclic", style="auto")
-    refused = bad.assembly.query()
+    refused = bad.structure.query()
     assert isinstance(refused, Rejected)
     assert keys(refused) == {"cyclic-values"}
     assert owners(refused) == {"implementation.cyclic.image"}
     # A shape error is refused the same way, and never demanded by external delivery.
-    wrong = configured(base(weights=((0,),)), "cyclic", style="auto").assembly.query()
+    wrong = configured(base(weights=((0,),)), "cyclic", style="auto").structure.query()
     assert isinstance(wrong, Rejected) and "shape" in wrong.findings[0].message
-    assert isinstance(configured(base(weights=((0,),)), "external").assembly.query(), Available)
+    assert isinstance(configured(base(weights=((0,),)), "external").structure.query(), Available)
 
 
 def test_known_refusals_remain_visible_while_the_family_is_unselected():
     point = base(weights=WEIGHTS).with_choices(pe=4, simd=2)
     point = point.compute.with_choices(compute_pumping=True).root
-    assessment = point.assembly.inspect()
+    assessment = point.structure.inspect()
     assert isinstance(assessment.accepted_result, Unresolved)
     compute = point.compute.build_requirements.inspect()
     assert isinstance(compute.accepted_result, Available)
@@ -249,15 +253,17 @@ def test_selector_and_case_choices_round_trip_through_an_empty_root():
     fresh = base(weights=WEIGHTS)
     replayed = selections.restore(fresh, decoded)
     assert replayed.accepted
-    assert replayed.instance.assembly() == point.assembly()
+    assert replayed.instance.structure() == point.structure()
     # Replay under different supplied facts: the same choices, a new image.
     other = selections.restore(base(weights=tuple(row[::-1] for row in WEIGHTS)), decoded)
     assert other.accepted
-    assert other.instance.assembly().initializer != point.assembly().initializer
+    assert other.instance.implementation.alternative("cyclic").image != (
+        point.implementation.alternative("cyclic").image
+    )
     # Without the family's optional fact the choices replay but stay unresolved.
     unresolved = selections.restore(base(), decoded)
     assert unresolved.accepted
-    assert isinstance(unresolved.instance.assembly.query(), Unresolved)
+    assert isinstance(unresolved.instance.structure.query(), Unresolved)
     # Facts that invalidate a saved folding refuse replay atomically.
     changed = base(weights=WEIGHTS, matrix_height=5)
     refused = selections.restore(changed, decoded)
@@ -274,12 +280,12 @@ def test_switching_families_is_atomic_and_requires_clearing_stale_case_choices()
     refused = {outcome.owner: outcome for outcome in stale.outcomes if outcome.status == "refused"}
     assert set(refused) == {"implementation.cyclic.rom_style"}
     assert isinstance(refused["implementation.cyclic.rom_style"].result, Inapplicable)
-    assert cyclic.assembly().weight_delivery is WeightDelivery.CYCLIC
+    assert delivery(cyclic) is WeightDelivery.CYCLIC
     switched = cyclic.with_choices(
         cyclic.field(selector(cyclic)).change("external"),
         cyclic.field(rom_style(cyclic)).clear(),
     )
-    assert switched.assembly().weight_delivery is WeightDelivery.EXTERNAL
+    assert delivery(switched) is WeightDelivery.EXTERNAL
     assert selections.capture(switched).keys == (
         "compute.compute_pumping",
         "implementation",
@@ -292,8 +298,8 @@ def test_switching_families_is_atomic_and_requires_clearing_stale_case_choices()
         switched.field(selector(switched)).change("cyclic"),
         switched.field(rom_style(switched)).change("distributed"),
     )
-    assert back.assembly().weight_delivery is WeightDelivery.CYCLIC
-    rom = dict(back.assembly().structure.instances[2].requirements.parameters)
+    assert delivery(back) is WeightDelivery.CYCLIC
+    rom = dict(back.structure().structure.instances[2].requirements.parameters)
     assert rom["ROM_STYLE"] == '"distributed"'
     # A case-local choice for an unselected family is refused, not stored.
     early = switched.try_with_choices(switched.field(rom_style(switched)).change("block"))
@@ -313,7 +319,8 @@ def test_public_adapter_matches_the_space_path(delivery):
         delivery.value,
         style="auto" if cyclic else None,
     )
-    assert adapted == point.assembly()
+    composed = point.structure()
+    assert (adapted.structure, adapted.requirements) == (composed.structure, composed.requirements)
 
 
 @pytest.mark.parametrize("style", ("auto", "distributed", "block"))
@@ -373,7 +380,7 @@ def test_a_buffered_stream_places_a_fifo_between_its_producer_and_consumer():
             base(weights=weights) if weights else base(), case, style=("auto" if weights else None)
         )
         fifo = buffered(point, depth=32)
-        built = fifo.assembly()
+        built = fifo.structure()
         instances = [item.instance_id for item in built.structure.instances]
         assert instances[-1] == "u_weight_stream_fifo"
         destinations = {
@@ -387,8 +394,6 @@ def test_a_buffered_stream_places_a_fifo_between_its_producer_and_consumer():
         assert ("u_compute", "u_weight_stream_fifo") in destinations
         depth = dict(built.structure.instances[-1].requirements.parameters)["DEPTH"]
         assert depth == 32
-        # The logical sequence and the dotp arithmetic are unchanged.
-        assert built.weight_beats == point.assembly().weight_beats
 
 
 def test_fifo_depth_is_owned_by_the_stream_and_only_demanded_when_selected():
@@ -397,13 +402,13 @@ def test_fifo_depth_is_owned_by_the_stream_and_only_demanded_when_selected():
     assert records[FIFO_DEPTH].scope == "weight_stream.transport.fifo.buffer"
     assert isinstance(point.field(handle(point, FIFO_DEPTH)).query(), Inapplicable)
     undecided = buffered(point)
-    assert isinstance(undecided.assembly.query(), Unresolved)
+    assert isinstance(undecided.structure.query(), Unresolved)
     with pytest.raises(ConfigurationError):
         buffered(point, depth=1)
     deep = buffered(point, depth=64)
     saved = selections.capture(deep)
     assert FIFO_DEPTH in saved.keys
-    assert selections.restore(base(), saved).instance.assembly() == deep.assembly()
+    assert selections.restore(base(), saved).instance.structure() == deep.structure()
     # Removing the FIFO requires clearing its stale depth and memory style atomically.
     stale = deep.try_with_choices(deep.field(transport(deep)).change("direct"))
     assert not stale.accepted
@@ -412,7 +417,7 @@ def test_fifo_depth_is_owned_by_the_stream_and_only_demanded_when_selected():
         deep.field(handle(deep, FIFO_DEPTH)).clear(),
         deep.field(handle(deep, FIFO_RAM_STYLE)).clear(),
     )
-    assert direct.assembly() == point.assembly()
+    assert direct.structure() == point.structure()
 
 
 def test_adapter_places_the_weight_fifo_on_request():

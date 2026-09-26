@@ -68,6 +68,25 @@ What the evidence settled:
 | **Forms are declared, not negotiated** | Ports don't publish the traversals they support; `classify()` names adapters but nothing inserts them |
 | **Hygiene** | FinnLib `b17eae6a` (which adds `replay_buffer.sv`) is on no remote. Scratchpad records are untracked. The pinned `space/MVAU-EXAMPLE.md` predates these APIs |
 
+## Update (same day)
+
+- **Section 4 is implemented.** See the declared-streams REVIEW, section
+  "Revision: Space-native streams". Streams now have explicit endpoints,
+  per-stream constraints and connection views, a pure `compose` reduction and
+  the `configure` helper. `ScalarEncoding.admit` is added, and `MVAUAssembly`
+  is adapter-only. Build identity is unchanged.
+- **Decisions taken.**
+  1. The restructure landed before the artifact-integration SPEC, which is
+     untouched.
+  2. Instance names are explicit on stream endpoints, so no engine change was
+     needed.
+  3. FinnLib `b17eae6a` is pushed as `origin/kernel-contract-refinement-20260925`
+     on the personal fork.
+  4. Only `open/kernel-roster-map/` is committed in scratchpad (`f601063`).
+     `space/` remains untracked there.
+- **Still open.** Negotiation and adapter insertion, the robust-MVAU items, MX
+  (Section 5), and the physical-profile limits.
+
 ## 4. Direction: Space-native streams
 
 **Goal.** Each connection is an ordinary part of the Space: it has its own

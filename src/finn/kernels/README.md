@@ -101,9 +101,10 @@ relative to a staging directory; retain that layout and use the declared
 `control` bundle; software must enable start/auto-restart for continuous output.
 
 `MVAU` owns matrix geometry, PE/SIMD folding and result precision, and declares
-its connections as streams (`finn.kernels.streams`). Each `Stream` carries a
-`StreamSpec` (element, traversal, repetition, markers), and every placed kernel
-binds its `Port`s to `stream.spec`:
+its connections as streams (`finn.kernels.streams`). It derives a `StreamSpec`
+(element, traversal, repetition, markers) for each connection, binds kernel
+`Port`s to it, and declares each `Stream` with its producer and consumer as
+explicit accepted port views:
 
 ```text
 in0_V ─activations─► replay ─replayed─► compute (dotp) ─results─► out0_V
@@ -112,48 +113,22 @@ in0_V ─activations─► replay ─replayed─► compute (dotp) ─results─
        external: TopInput in1_V  |  cyclic: CyclicDelivery (rom_style, weights)
 ```
 
-`assemble_streams` derives the whole structure: it checks each stream's producer
-and consumer contracts, wires them, routes clocks and resets, and turns
-`TopInput`/`TopOutput` into AXIS ports. Either end of a stream may be a
-`SubspaceChoice` of kernels; only the selected case is evaluated. A stream
-declared `buffered=True` owns a `transport` choice: `direct`, or a `fifo` case
-whose depth and memory style are its own decisions. Whether a FIFO is needed
-and how deep is a compiler decision; the stream only provides the slot:
+Every stream owns a `compatible` constraint, so a refusal names the stream and
+independent streams settle independently. Its accepted `connection` feeds the
+parent's `structure` view, a thin reduction (`compose`) that wires the accepted
+instances and connections, routes clocks and resets, and turns boundary ports
+into AXIS. `build_requirements` lowers that structure. Either end of a stream may
+be a `SubspaceChoice`; only the selected case is evaluated. A stream declared
+`buffered=True` owns a `transport` choice: `direct`, or a `fifo` case whose depth
+and memory style are its own decisions. Whether a FIFO is needed and how deep is
+a compiler decision; the stream only provides the slot. `configure` commits
+choices by their inspection keys in one batch:
 
 ```python
-from finn.core.space import Unresolved, inspection, selections
+from finn.core.space import Unresolved, selections
 from finn.kernels import MVAU
-from finn.kernels.delivery import CyclicDelivery
+from finn.kernels.configure import configure
 
-base = MVAU(
-    repetitions=2,
-    matrix_width=4,
-    matrix_height=4,
-    activation_dtype=dtype("INT3"),
-    weights_dtype=dtype("INT3"),
-    target_dsp=DspBlock.DSP48E2,
-    segment_length=0,
-    weights=((1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (0, 0, 0, 1)),
-)
-owned = {item.key: item.reference for item in inspection.decisions(base)}
-point = base.with_choices(
-    base.field(owned["implementation"]).change("cyclic"),
-    base.field(owned["implementation.cyclic.rom_style"]).change("block"),
-    base.field(owned["weight_stream.transport"]).change("fifo"),
-    base.field(owned["weight_stream.transport.fifo.buffer.depth"]).change(16),
-    base.field(owned["weight_stream.transport.fifo.buffer.ram_style"]).change("auto"),
-    base.compute.field(DotpAxiKernel.compute_pumping).change(False),
-    pe=2,
-    simd=2,
-)
-built = point.assembly()
-assert len(built.initializer) == 4
-assert [item.instance_id for item in built.structure.instances] == [
-    "u_replay",
-    "u_compute",
-    "u_weights",
-    "u_weight_stream_fifo",
-]
 facts = dict(
     repetitions=2,
     matrix_width=4,
@@ -163,9 +138,32 @@ facts = dict(
     target_dsp=DspBlock.DSP48E2,
     segment_length=0,
 )
+identity = ((1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (0, 0, 0, 1))
+point = configure(
+    MVAU,
+    {**facts, "weights": identity},
+    {
+        "implementation": "cyclic",
+        "implementation.cyclic.rom_style": "block",
+        "weight_stream.transport": "fifo",
+        "weight_stream.transport.fifo.buffer.depth": 16,
+        "weight_stream.transport.fifo.buffer.ram_style": "auto",
+        "compute.compute_pumping": False,
+        "pe": 2,
+        "simd": 2,
+    },
+)
+structure = point.structure().structure
+assert [item.instance_id for item in structure.instances] == [
+    "u_replay",
+    "u_compute",
+    "u_weights",
+    "u_weight_stream_fifo",
+]
+assert point.build_requirements() == point.structure().requirements
 saved = selections.capture(point)
 replayed = selections.restore(MVAU(**facts), saved).instance  # weights omitted
-assert isinstance(replayed.assembly.query(), Unresolved)
+assert isinstance(replayed.structure.query(), Unresolved)
 ```
 
 Changing a selector does not discard the old case's choices: clear

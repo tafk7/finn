@@ -159,18 +159,19 @@ def test_space_selects_folding_and_constructs_without_a_logical_contract():
     )
     point = base.with_choices(simd=2)
     assert isinstance(point.compute.build_requirements.inspect().accepted_result, Unresolved)
-    assert isinstance(point.assembly.inspect().accepted_result, Unresolved)
+    assert isinstance(point.structure.inspect().accepted_result, Unresolved)
     point = point.compute.with_choices(compute_pumping=False).root
     assert point.result_type == DataType["INT8"]
     assert value(assess(point, MVAU.dimensions_supported)) is True
     assert point.compute.pe == point.pe
     assert point.compute.result.dtype == point.result_type
     point.compute.build_requirements()
-    assert point.assembly().result_beats == 4
+    assert point.folding.result_beats == 4
+    assert point.structure().requirements == point.build_requirements()
     assert not hasattr(MVAU, "contract")
     refused = base.with_choices(simd=1).compute.with_choices(compute_pumping=True).root
     assert isinstance(refused.compute.build_requirements.inspect().accepted_result, Rejected)
-    rejected = refused.assembly.query()
+    rejected = refused.structure.query()
     assert isinstance(rejected, Rejected)
     assert "dotp-pumping" in {finding.code for finding in rejected.findings}
 
@@ -251,7 +252,7 @@ def test_mvau_honors_the_child_physical_view_not_just_its_raw_module(monkeypatch
     point = point.compute.with_choices(compute_pumping=False).root
     assert isinstance(point.compute.query(DotpAxiKernel.codegen), Available)
     assert isinstance(point.compute.build_requirements.inspect().accepted_result, Rejected)
-    refused = point.assembly.query()
+    refused = point.structure.query()
     assert isinstance(refused, Rejected)
     assert "test-view-only" in {finding.code for finding in refused.findings}
     # Substitute a fully authored family to exercise the convenience entry

@@ -1,44 +1,56 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Declared streams: kernels bind their ports to named connections in a parent Space.
+"""Declared streams: each connection is an ordinary part of the parent Space.
 
-A parent declares each connection as a ``Stream`` over a ``StreamSpec`` (the
-logical sequence: element, traversal, repetition, markers) and binds child
-``Port`` formals to ``stream.spec``. A placement may be a ``SubspaceChoice``,
-so either end of a stream can be a choice of kernels; every case must bind the
-same ports to the same streams. ``assemble_streams`` then derives the whole
-physical structure: each stream's producer and consumer contracts are checked
-and wired by ``Composition.connect``, clocks and resets are routed by role, and
-boundary placements (``TopInput``/``TopOutput``) become top-level AXIS ports.
+A parent derives a ``StreamSpec`` (element, traversal, repetition, markers) for
+every connection, binds kernel ``Port`` formals to it, and declares a ``Stream``
+naming its producer and consumer through accepted port views:
 
-A stream declared ``buffered=True`` owns a transport choice between ``direct``
-and ``fifo``. The FIFO case owns its ``depth`` and the FIFO's ``ram_style``
-decisions; it is an identity adapter, so the stream's contract is unchanged.
-Whether a FIFO is needed and how deep it must be is a compiler question; this
-layer only makes the slot available where the kernel author allows one.
+    weight_stream = Stream(
+        weight_spec,
+        source=("u_weights", implementation.accepted(OUTPUT_PORT)),
+        sink=("u_compute", compute.accepted(DotpAxiKernel.weights_port)),
+        buffered=True,
+    )
+
+Each stream owns its ``compatible`` constraint, so a refusal is attributed to
+that stream and independent streams settle independently. Its accepted
+``connection`` view is a detached ``Connection``. The parent's physical output is
+a thin reduction: ``compose`` collects its instances and connections, then wires,
+validates and lowers them. Nothing here discovers topology by inspection: the
+linker owns every endpoint through explicit bindings.
+
+A stream declared ``buffered=True`` owns a ``transport`` choice between
+``direct`` and ``fifo``. The FIFO case owns its ``depth`` and the FIFO's
+``ram_style``; it is an identity adapter, checked on both of its sides. Whether
+a FIFO is needed and how deep is a compiler decision; the stream provides the slot.
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping
-from dataclasses import dataclass, field
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from types import MappingProxyType
 
 from finn.core.space import (
+    Constraint,
     Decision,
     Param,
+    Rejected,
     Space,
     Subspace,
     SubspaceChoice,
     ValueRef,
     View,
     ViewKey,
+    constraint,
     default_semantics,
     derived,
     domain,
+    reject,
     view,
 )
-from finn.core.space.declarations import Declaration, ScopedValueRef
 from finn.kernels.artifacts.abi import Clock, ClockAlignment, Direction, Endpoint, Reset, Signal
 from finn.kernels.artifacts.build import (
     EntryPointSourceName,
@@ -54,7 +66,12 @@ from finn.kernels.datatypes.scalar import ScalarEncoding
 from finn.kernels.fifo import FifoKernel
 from finn.kernels.physical.axi_stream import AxiStream
 from finn.kernels.physical.composition import Composition, StreamEnd
-from finn.kernels.physical.contract import StreamContract
+from finn.kernels.physical.contract import (
+    STREAM_CONTRACT,
+    Mismatch,
+    StreamContract,
+    compatibility,
+)
 from finn.kernels.physical.forms import Every, Repetition, Traversal
 from finn.kernels.physical.lowering import lower_module_structure
 from finn.kernels.physical.structure import PhysicalStructure
@@ -79,9 +96,9 @@ STREAM_SPEC = default_semantics(StreamSpec)
 
 
 class Port(Param[StreamSpec]):
-    """A kernel's stream endpoint: bound by a parent to ``stream.spec``.
+    """A kernel's stream formal: the parent binds the connection's spec.
 
-    Optional, so a kernel can be configured on its own without any stream.
+    Optional, so a kernel can still be configured on its own without a stream.
     """
 
     def __init__(self, direction: Endpoint) -> None:
@@ -90,48 +107,16 @@ class Port(Param[StreamSpec]):
 
 
 @dataclass(frozen=True)
-class Component:
-    """What a placement contributes: its module (None for a boundary) and port contracts."""
+class Module:
+    """A placement's module, or None for a boundary placement."""
 
     requirements: ModuleBuildRequirements | None
-    ports: Mapping[str, StreamContract] = field(default_factory=dict)
-    initializer: tuple[int, ...] = ()
-
-    def __post_init__(self) -> None:
-        object.__setattr__(self, "ports", dict(self.ports))
 
 
-COMPONENT_SEMANTICS = default_semantics(Component)
-COMPONENT = ViewKey("component", COMPONENT_SEMANTICS)
+MODULE_SEMANTICS = default_semantics(Module)
+MODULE = ViewKey("module", MODULE_SEMANTICS)
+OUTPUT_PORT = ViewKey("output_port", STREAM_CONTRACT)
 _CLOCKING = {"clock": "ap_clk", "reset": "ap_rst_n"}
-
-
-class TopInput(Space):
-    """The composed module's own input port, producing a stream."""
-
-    name = Param(str)
-    output_stream = Port(Endpoint.INITIATOR)
-
-    @view(semantics=COMPONENT_SEMANTICS)
-    def component(self) -> Component:
-        contract = _top(self.name, self.output_stream, Endpoint.TARGET)
-        return Component(None, {"output_stream": contract})
-
-    exports = {COMPONENT: component}
-
-
-class TopOutput(Space):
-    """The composed module's own output port, consuming a stream."""
-
-    name = Param(str)
-    input_stream = Port(Endpoint.TARGET)
-
-    @view(semantics=COMPONENT_SEMANTICS)
-    def component(self) -> Component:
-        contract = _top(self.name, self.input_stream, Endpoint.INITIATOR)
-        return Component(None, {"input_stream": contract})
-
-    exports = {COMPONENT: component}
 
 
 def _top(name: str, spec: StreamSpec, endpoint: Endpoint) -> StreamContract:
@@ -145,18 +130,57 @@ def _top(name: str, spec: StreamSpec, endpoint: Endpoint) -> StreamContract:
     return StreamContract(transport, spec.element, spec.form, spec.repetition, markers)
 
 
-class StreamLink(Space):
-    """One declared connection; direct unless declared buffered."""
+class TopInput(Space):
+    """The composed module's own input port, producing a stream."""
 
-    spec = Param(STREAM_SPEC)
+    name = Param(str)
+    output_stream = Port(Endpoint.INITIATOR)
 
-    @view(semantics=COMPONENT_SEMANTICS)
-    def stage(self) -> Component:
-        return Component(None)
+    @view(semantics=STREAM_CONTRACT)
+    def port(self) -> StreamContract:
+        return _top(self.name, self.output_stream, Endpoint.TARGET)
+
+    @view(semantics=MODULE_SEMANTICS)
+    def module(self) -> Module:
+        return Module(None)
+
+    exports = {OUTPUT_PORT: port, MODULE: module}
+
+
+class TopOutput(Space):
+    """The composed module's own output port, consuming a stream."""
+
+    name = Param(str)
+    input_stream = Port(Endpoint.TARGET)
+
+    @view(semantics=STREAM_CONTRACT)
+    def port(self) -> StreamContract:
+        return _top(self.name, self.input_stream, Endpoint.INITIATOR)
+
+
+@dataclass(frozen=True)
+class Stage:
+    """A transport stage inside a stream: none (direct) or a module with two ports."""
+
+    requirements: ModuleBuildRequirements | None = None
+    input: StreamContract | None = None
+    output: StreamContract | None = None
+
+
+STAGE_SEMANTICS = default_semantics(Stage)
+STAGE = ViewKey("stage", STAGE_SEMANTICS)
+
+
+class _Direct(Space):
+    @view(semantics=STAGE_SEMANTICS)
+    def stage(self) -> Stage:
+        return Stage()
+
+    exports = {STAGE: stage}
 
 
 class StreamFifo(Space):
-    """An identity adapter: the stream's contract on both sides of a native FIFO."""
+    """An identity adapter: the stream's own spec on both sides of a native FIFO."""
 
     spec = Param(STREAM_SPEC)
 
@@ -170,173 +194,212 @@ class StreamFifo(Space):
         depth=Decision(int, domain=domain(accepts=lambda *, candidate: 2 <= candidate < 2**32)),
     )
 
-    @view(semantics=COMPONENT_SEMANTICS)
-    def component(self) -> Component:
+    @view(semantics=STAGE_SEMANTICS)
+    def stage(self) -> Stage:
         spec = self.spec
         source, sink = self.buffer.interfaces()
-        return Component(
+        return Stage(
             self.buffer.build_requirements(),
-            {
-                "input": StreamContract(source, spec.element, spec.form),
-                "output": StreamContract(sink, spec.element, spec.form),
-            },
+            StreamContract(source, spec.element, spec.form),
+            StreamContract(sink, spec.element, spec.form),
         )
 
-    exports = {COMPONENT: component}
+    exports = {STAGE: stage}
 
 
-class _Direct(Space):
-    @view(semantics=COMPONENT_SEMANTICS)
-    def component(self) -> Component:
-        return Component(None)
+@dataclass(frozen=True)
+class Connection:
+    """One checked stream; an owner of None is the composed module's boundary."""
 
-    exports = {COMPONENT: component}
+    name: str
+    source_owner: str | None
+    source: StreamContract
+    sink_owner: str | None
+    sink: StreamContract
+    stage: Stage
+
+
+CONNECTION = default_semantics(Connection)
+
+
+def _is_top_source(contract: StreamContract) -> bool:
+    return contract.transport.endpoint is Endpoint.TARGET
+
+
+def _is_top_sink(contract: StreamContract) -> bool:
+    return contract.transport.endpoint is Endpoint.INITIATOR
+
+
+class StreamLink(Space):
+    """One declared connection between a producer port and a consumer port."""
+
+    name = Param(str)
+    spec = Param(STREAM_SPEC)
+    source = Param(STREAM_CONTRACT)
+    sink = Param(STREAM_CONTRACT)
+    source_instance = Param(str)
+    sink_instance = Param(str)
+
+    @view(semantics=STAGE_SEMANTICS)
+    def stage(self) -> Stage:
+        return Stage()
+
+    @constraint
+    def compatible(self) -> bool | Rejected:
+        source, sink, stage = self.source, self.sink, self.stage()
+        if stage.requirements is None:
+            found = list(
+                compatibility(
+                    source,
+                    sink,
+                    source_is_top=_is_top_source(source),
+                    sink_is_top=_is_top_sink(sink),
+                )
+            )
+        else:
+            assert stage.input is not None and stage.output is not None
+            found = [
+                *compatibility(
+                    source, stage.input, source_is_top=_is_top_source(source), sink_is_top=False
+                ),
+                *compatibility(
+                    stage.output, sink, source_is_top=False, sink_is_top=_is_top_sink(sink)
+                ),
+            ]
+        return _refusal(self.name, found)
+
+    @derived(semantics=CONNECTION)
+    def link(self) -> Connection:
+        source, sink = self.source, self.sink
+        return Connection(
+            self.name,
+            None if _is_top_source(source) else self.source_instance,
+            source,
+            None if _is_top_sink(sink) else self.sink_instance,
+            sink,
+            self.stage(),
+        )
+
+    connection = View(link, constraints=(compatible,))
+
+
+def _refusal(stream: str, found: Sequence[Mismatch]) -> bool | Rejected:
+    if not found:
+        return True
+    return reject(
+        found[0].code,
+        "; ".join(f"{item.code}: {item.message}" for item in found),
+        values={"stream": stream},
+    )
 
 
 class BufferedStreamLink(StreamLink):
     transport = SubspaceChoice(
         {"direct": Subspace(_Direct), "fifo": Subspace(StreamFifo, spec=StreamLink.spec)},
-        exports=(COMPONENT,),
+        exports=(STAGE,),
     )
-    stage = View(transport.accepted(COMPONENT))
+    stage = View(transport.accepted(STAGE))
+
+
+End = tuple[str, ValueRef[StreamContract]]
 
 
 class Stream(Subspace[StreamLink]):
-    """Declare a connection; bind ports with ``Subspace(Kernel, port=stream.spec)``."""
+    """Declare a connection from ``source`` to ``sink``, each (instance name, port view).
 
-    def __init__(self, spec: ValueRef[StreamSpec], *, buffered: bool = False) -> None:
-        super().__init__(BufferedStreamLink if buffered else StreamLink, spec=spec)
+    Instance names are the physical names of the endpoints' modules; a boundary
+    endpoint's name is unused. The declared attribute name names the stream
+    and its FIFO instance.
+    """
+
+    def __init__(
+        self, spec: ValueRef[StreamSpec], *, source: End, sink: End, buffered: bool = False
+    ) -> None:
+        super().__init__(
+            BufferedStreamLink if buffered else StreamLink,
+            spec=spec,
+            source=source[1],
+            sink=sink[1],
+            source_instance=source[0],
+            sink_instance=sink[0],
+        )
         self.buffered = buffered
+
+    def __set_name__(self, owner: type[object], name: str) -> None:
+        super().__set_name__(owner, name)
+        self.bindings = MappingProxyType({**self.bindings, "name": name})
 
     @property
     def spec(self) -> ValueRef[StreamSpec]:
         return self.ref(StreamLink.spec)
 
-
-@dataclass(frozen=True)
-class _End:
-    placement: str
-    port: str
-    direction: Endpoint
+    @property
+    def connection(self) -> ValueRef[Connection]:
+        return self.accepted(StreamLink.connection)
 
 
-def _port_bindings(
-    placement: Subspace[Space], streams: Mapping[int, str]
-) -> dict[str, tuple[str, Endpoint]]:
-    ports: dict[str, tuple[str, Endpoint]] = {}
-    for formal, supplier in placement.bindings.items():
-        declaration = getattr(placement.space_type, formal, None)
-        if not isinstance(declaration, Port):
-            continue
-        if not isinstance(supplier, ScopedValueRef) or id(supplier.placement) not in streams:
-            raise ValueError(f"port {formal!r} must be bound to a declared stream's spec")
-        ports[formal] = (streams[id(supplier.placement)], declaration.direction)
-    return ports
+def connected(stream: Stream) -> Constraint:
+    """A parent constraint that holds exactly when ``stream``'s connection is accepted."""
 
+    @constraint(connection=stream.connection)
+    def accepted(*, connection: Connection) -> bool:
+        return True
 
-def _declarations(space_type: type[Space]) -> dict[str, Declaration]:
-    found: dict[str, Declaration] = {}
-    for cls in reversed(space_type.__mro__):
-        for name, value in vars(cls).items():
-            if isinstance(value, Declaration):
-                found[name] = value
-    return found
+    return accepted
 
 
 @dataclass(frozen=True)
-class Assembled:
+class Composed:
     structure: PhysicalStructure
     requirements: ModuleBuildRequirements
-    components: Mapping[str, Component]
 
 
-def assemble_streams(
-    point: Space,
+COMPOSED = default_semantics(Composed)
+
+
+def compose(
     *,
     module: str,
     producer: ProducerIdentity,
-    instance_names: Mapping[str, str] | None = None,
-) -> Assembled:
-    """Wire every placement of ``point`` through its declared streams.
+    instances: Mapping[str, ModuleBuildRequirements | None],
+    connections: Sequence[Connection],
+) -> Composed:
+    """Wire accepted instances through accepted connections; a pure reduction.
 
-    Call from a view of the parent Space. Raises ``StreamMismatch`` for an
-    incompatible pair and ``ValueError`` for a malformed stream topology.
+    ``instances`` maps instance names to modules (None omits a boundary case).
+    Raises ``StreamMismatch`` or ``PhysicalStructureError`` only for a defect the
+    streams' own constraints cannot see, such as a clock-domain conflict.
     """
-    names = dict(instance_names or {})
-    declared = _declarations(type(point))
-    streams = {id(value): name for name, value in declared.items() if isinstance(value, Stream)}
-    ends: dict[str, list[_End]] = {name: [] for name in streams.values()}
-    components: dict[str, Component] = {}
-    for name, value in declared.items():
-        if isinstance(value, Stream):
-            continue
-        if isinstance(value, SubspaceChoice):
-            maps = [_port_bindings(case, streams) for case in value.alternatives.values()]
-            if any(item != maps[0] for item in maps):
-                raise ValueError(f"{name}: every case must bind the same ports to the same streams")
-            bindings = maps[0]
-            if not bindings:
-                continue
-            component = point.field(value.accepted(COMPONENT)).get()
-        elif isinstance(value, Subspace):
-            bindings = _port_bindings(value, streams)
-            if not bindings:
-                continue
-            component = getattr(point, name).component()
-        else:
-            continue
-        components[name] = component
-        for port, (stream, direction) in bindings.items():
-            ends[stream].append(_End(name, port, direction))
-
-    instances: dict[str, str] = {}
-    for name, component in components.items():
-        if component.requirements is not None:
-            instances[name] = names.get(name, "u_" + name)
-    fifos: dict[str, Component] = {}
-    for stream, link in ((s, getattr(point, s)) for s in ends):
-        stage = link.stage()
-        if stage.requirements is not None:
-            fifos[stream] = stage
-
-    boundary: list[StreamContract] = []
-    for name, component in components.items():
-        if component.requirements is None:
-            boundary.extend(component.ports.values())
-    children = [components[name].requirements for name in instances] + [
-        stage.requirements for stage in fifos.values()
+    placed = {name: module for name, module in instances.items() if module is not None}
+    fifos = {c.name: c.stage for c in connections if c.stage.requirements is not None}
+    boundary = [c.source for c in connections if c.source_owner is None] + [
+        c.sink for c in connections if c.sink_owner is None
     ]
-    top_abi = _top_abi(module, boundary, [item for item in children if item is not None])
-
-    composition = Composition(top_abi)
-    for name, instance in instances.items():
-        requirements = components[name].requirements
-        assert requirements is not None
-        composition.add(instance, requirements)
-        _drive(composition, instance, components[name])
+    children = [*placed.values(), *(s.requirements for s in fifos.values() if s.requirements)]
+    composition = Composition(_top_abi(module, boundary, children))
+    stream_pins: dict[str, set[str]] = {}
+    for c in connections:
+        for owner, contract in ((c.source_owner, c.source), (c.sink_owner, c.sink)):
+            if owner is not None:
+                stream_pins.setdefault(owner, set()).update(
+                    pin.name for pin in contract.transport.pins()
+                )
+    for name, requirements in placed.items():
+        composition.add(name, requirements)
+        _drive(composition, name, requirements, stream_pins.get(name, set()))
     for stream, stage in fifos.items():
-        assert stage.requirements is not None
-        composition.add(f"u_{stream}_fifo", stage.requirements)
-        _drive(composition, f"u_{stream}_fifo", stage)
-
-    def end(item: _End) -> StreamEnd:
-        return StreamEnd(instances.get(item.placement), components[item.placement].ports[item.port])
-
-    for stream, items in ends.items():
-        producers = [item for item in items if item.direction is Endpoint.INITIATOR]
-        consumers = [item for item in items if item.direction is Endpoint.TARGET]
-        if len(producers) != 1 or len(consumers) != 1:
-            raise ValueError(
-                f"stream {stream!r} needs one producer and one consumer "
-                f"(found {len(producers)} and {len(consumers)}); fan-out is not supported"
-            )
-        source, sink = end(producers[0]), end(consumers[0])
-        if stream in fifos:
-            fifo = f"u_{stream}_fifo"
-            composition.connect(source, StreamEnd(fifo, fifos[stream].ports["input"]))
-            source = StreamEnd(fifo, fifos[stream].ports["output"])
+        assert stage.requirements and stage.input and stage.output
+        instance = f"u_{stream}_fifo"
+        composition.add(instance, stage.requirements)
+        pins = {p.name for p in (*stage.input.transport.pins(), *stage.output.transport.pins())}
+        _drive(composition, instance, stage.requirements, pins)
+    for c in connections:
+        source, sink = StreamEnd(c.source_owner, c.source), StreamEnd(c.sink_owner, c.sink)
+        if c.stage.input is not None and c.stage.output is not None:
+            instance = f"u_{c.name}_fifo"
+            composition.connect(source, StreamEnd(instance, c.stage.input))
+            source = StreamEnd(instance, c.stage.output)
         composition.connect(source, sink)
-
     structure = composition.finish()
     wrapper = RenderedSourceRequirement(
         EntryPointSourceName(),
@@ -350,8 +413,9 @@ def assemble_streams(
         ),
         provides_entry_point=True,
     )
-    requirements = lower_module_structure(structure, producer=producer, wrapper_template=wrapper)
-    return Assembled(structure, requirements, components)
+    return Composed(
+        structure, lower_module_structure(structure, producer=producer, wrapper_template=wrapper)
+    )
 
 
 def _top_abi(
@@ -388,14 +452,15 @@ def _top_abi(
     )
 
 
-def _drive(composition: Composition, instance: str, component: Component) -> None:
-    """Route every input outside the component's streams: clocks and resets by role."""
-    assert component.requirements is not None
-    streams = {
-        pin.name for contract in component.ports.values() for pin in contract.transport.pins()
-    }
-    for name, info in abi_pins(component.requirements.abi).items():
-        if info.bus_id is not None or info.direction is not Direction.IN or name in streams:
+def _drive(
+    composition: Composition,
+    instance: str,
+    requirements: ModuleBuildRequirements,
+    stream_pins: set[str],
+) -> None:
+    """Route every input outside the instance's streams: clocks and resets by role."""
+    for name, info in abi_pins(requirements.abi).items():
+        if info.bus_id is not None or info.direction is not Direction.IN or name in stream_pins:
             continue
         if "clk2x" in name:
             composition.drive(instance, name, "ap_clk2x")
@@ -408,16 +473,22 @@ def _drive(composition: Composition, instance: str, component: Component) -> Non
 
 
 __all__ = [
-    "Assembled",
-    "COMPONENT",
-    "Component",
+    "COMPOSED",
+    "CONNECTION",
+    "Composed",
+    "Connection",
+    "MODULE",
+    "Module",
+    "OUTPUT_PORT",
     "Port",
     "STREAM_SPEC",
+    "Stage",
     "Stream",
     "StreamFifo",
     "StreamLink",
     "StreamSpec",
     "TopInput",
     "TopOutput",
-    "assemble_streams",
+    "compose",
+    "connected",
 ]

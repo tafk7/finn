@@ -113,3 +113,59 @@ MVAU now also has a required `weight_stream.transport` decision.
 - **Placement discovery is class-level.** Streams and bindings are found by
   inspecting class declarations, so inherited placements are included.
   Dynamically built ScopeBuilder templates are not covered.
+
+## Revision: Space-native streams
+
+This revision implements the direction in [STATUS.md](../kernel-status-2026-09-25/STATUS.md)
+§4. It replaces `assemble_streams` and the `MVAU.assembly` view.
+
+- **Explicit endpoints.** `Stream(spec, source=(instance, port_view),
+  sink=(instance, port_view), buffered=...)` binds its producer and consumer
+  through ordinary accepted refs, so the linker owns the topology. Kernels
+  publish one accepted view per port: dotp's `activation_port`, `weights_port`
+  and `result_port`; replay's `input_port` and `output_port`;
+  `CyclicDelivery.output`; and `TopInput.port`/`TopOutput.port`. Choice cases
+  export `OUTPUT_PORT` and `MODULE`. Streams are declared after the
+  placements, and kernel ports bind to the parent's spec values directly, so
+  there is no declaration cycle.
+- **Checks are constraints; connections are views.** `StreamLink.compatible`
+  owns each stream's refusal, and it checks both halves when a FIFO is
+  selected. `StreamLink.connection` is the accepted, detached `Connection`.
+  `connected(stream)` gives the parent one constraint per stream, and
+  `ConstraintGroup` attaches them to its views. Independent refusals are all
+  visible at once, each owned by `<stream>.compatible`.
+- **A thin reduction.** `compose(module, producer, instances, connections)` is
+  a pure function. MVAU's `structure` view passes it the accepted instances and
+  connections by name, and `build_requirements` returns its lowering.
+- **`MVAUAssembly` is adapter-only.** Beat counts come from `folding`. Delivery
+  follows the selected case. The initializer is `CyclicDelivery.image`.
+  `mvau_assembly()` returns the same record as before.
+- **Removed code.** Class-attribute discovery, `Component`/`COMPONENT`, the
+  `component` views, `CyclicDelivery`'s port formal and `ReplayBuffer`'s
+  output port formal are all removed.
+- **Helpers.**
+  - `finn.kernels.configure.configure(space, facts, choices)` commits choices
+    by their inspection keys in one batch and raises readable refusals; the
+    adapter and README use it.
+  - `describe()` formats findings.
+  - `ScalarEncoding.admit(dtype)` replaces MVAU's private encoding wrapper.
+
+**Evidence.**
+
+- **Unchanged build identity.** `module_build_fingerprint` is identical to
+  `ee5e8852e` for six MVAU configurations: external; cyclic with a block ROM;
+  a FIFO on each delivery; padded output; and pumped DSP58.
+- **Independent refusals.** `tests/kernels/test_declared_streams.py` shows two
+  streams refusing independently, with their own owners.
+- **Per-stream evidence.** `inspection.explain` of the parent reports
+  per-stream `connection` and `compatible` nodes.
+- **Validation.** XSim and gate results are in VALIDATION.txt.
+
+**Remaining limits.**
+
+- Each stream still requires literal instance names for its endpoints. They are
+  explicit and checked by the physical validator, but repeated between the
+  `instances` mapping and the `Stream` declarations.
+- `compose` can still raise, for example on a clock-domain conflict. That is a
+  defect no per-stream constraint can see. The parent converts it to an
+  `mvau-composition` refusal.
