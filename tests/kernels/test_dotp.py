@@ -93,6 +93,7 @@ def test_component_groups_its_interfaces_and_keeps_one_root_physical_output():
         "activation_port",
         "build_requirements",
         "interfaces",
+        "ports",
         "result_port",
         "weights_port",
     )
@@ -109,10 +110,13 @@ def test_component_groups_its_interfaces_and_keeps_one_root_physical_output():
         "result_dtype",
         "target_dsp",
         "segment_length",
-        # Optional stream ports, bound by a parent that places dotp between streams.
-        "activation_stream",
-        "weights_stream",
-        "result_stream",
+    }
+    # Optional reference inputs, supplied with Stream nodes by a parent that places
+    # dotp between streams; alone, each is an unsupplied presence.
+    streams = {item.key: item.kind for item in inspection.members(point)}
+    assert {name: streams[name] for name in ("activation_stream", "result_stream")} == {
+        "activation_stream": "present",
+        "result_stream": "present",
     }
     # Operand dtypes are kernel facts; scalars and ports bind to them.
     assert point.activation.dtype == point.activation_type.dtype == point.activation_dtype

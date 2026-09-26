@@ -49,7 +49,15 @@ from finn.dataflow.datatypes import (
 from finn.kernels.datatypes.scalar import integer_scalar
 from finn.kernels.physical.axi_stream import AxiStream, axi_stream
 from finn.kernels.physical.contract import STREAM_CONTRACT, StreamContract
-from finn.kernels.streams import MODULE, STREAM_SPEC, StreamSpec
+from finn.kernels.streams import (
+    MODULE,
+    PORTS,
+    PORTS_SEMANTICS,
+    Ports,
+    Stream,
+    consumes,
+    produces,
+)
 from finn.core.space import (
     UNSUPPLIED,
     ConstraintGroup,
@@ -90,10 +98,11 @@ class DotpAxiKernel(Kernel):
     activation_type = integer_scalar(activation_dtype, Integer(min_bits=2))
     weights_type = integer_scalar(weights_dtype, SignedInteger(min_bits=2))
     result_type = integer_scalar(result_dtype, SignedInteger())
-    # The streams' logical sequences, when a parent places dotp between streams.
-    activation_stream: Param[StreamSpec] = Param(STREAM_SPEC, default=UNSUPPLIED)
-    weights_stream: Param[StreamSpec] = Param(STREAM_SPEC, default=UNSUPPLIED)
-    result_stream: Param[StreamSpec] = Param(STREAM_SPEC, default=UNSUPPLIED)
+    # The streams dotp sits on, when a parent places it between streams: reference
+    # inputs, each a Stream node placed beside dotp.
+    activation_stream: Param[Stream] = Param(Stream, default=UNSUPPLIED)
+    weights_stream: Param[Stream] = Param(Stream, default=UNSUPPLIED)
+    result_stream: Param[Stream] = Param(Stream, default=UNSUPPLIED)
     activation = axi_stream("s_axis_input", simd, Endpoint.TARGET, activation_type, last=True)
     weights = axi_stream("s_axis_weights", pe * simd, Endpoint.TARGET, weights_type)
     result = axi_stream("m_axis_output", pe, Endpoint.INITIATOR, result_type)
@@ -291,8 +300,9 @@ class DotpAxiKernel(Kernel):
         """Accepted (activation, weights, result) ports; framing is the caller's."""
         return (self.activation.stream(), self.weights.stream(), self.result.stream())
 
-    def _port(self, index: int, spec: StreamSpec) -> StreamContract | Rejected:
-        """A port over its bound stream: the stream's order, dotp's own encoding."""
+    def _port(self, index: int, stream: Stream) -> StreamContract | Rejected:
+        """A port over the stream it sits on: the stream's order, dotp's own encoding."""
+        spec = stream.spec
         port = self.interfaces()[index]
         if spec.element.datatype_name != port.dtype.name:
             return reject(
@@ -319,7 +329,16 @@ class DotpAxiKernel(Kernel):
     def result_port(self) -> StreamContract | Rejected:
         return self._port(2, self.result_stream)
 
-    exports = {MODULE: build_requirements}
+    @view(semantics=PORTS_SEMANTICS)
+    def ports(self) -> Ports:
+        """Each port keyed by its stream input: activations and weights in, results out."""
+        return Ports.of(
+            activation_stream=consumes(self.activation_port()),
+            weights_stream=consumes(self.weights_port()),
+            result_stream=produces(self.result_port()),
+        )
+
+    exports = {MODULE: build_requirements, PORTS: ports}
 
 
 __all__ = ["DotpAxiKernel"]

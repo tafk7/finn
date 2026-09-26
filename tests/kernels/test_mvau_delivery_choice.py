@@ -3,10 +3,11 @@
 
 """MVAU weight delivery as a Decision over nodes: nothing, or a cyclic delivery node.
 
-External delivery places no node and presents ``in1_V``; cyclic delivery places
-the ``cyclic`` CyclicDelivery node, with its own initialization fact and local
-choice. These tests cover laziness, optional facts, persistence, atomic
-switching and diagnostics.
+External delivery places no node, so ``weight_stream`` has only its consumer and
+is the boundary ``in1_V``; cyclic delivery places the ``cyclic`` CyclicDelivery
+node, which references the stream as its producer and has its own
+initialization fact and local choice. These tests cover laziness, optional
+facts, persistence, atomic switching and diagnostics.
 """
 
 from pathlib import Path
@@ -134,9 +135,9 @@ def test_the_inactive_family_is_never_demanded():
     point = configured(base(), "external")
     evidence = inspection.explain(point, MVAU.structure)
     visited = {node.declaration.key for node in evidence.nodes}
-    # External delivery places no node; the boundary member in1_V drives the stream.
-    # The Decision over nodes is itself the selector (no generated ``$selector`` node).
-    assert {"implementation", "in1_V", "weight_stream.source"} <= visited
+    # External delivery places no node: the stream sees only its consumer and is the
+    # boundary in1_V. The Decision over nodes is itself the selector.
+    assert {"implementation", "weight_stream.ends", "weight_stream.endpoints"} <= visited
     assert [
         node.selector for node in evidence.nodes if node.declaration.key == "implementation"
     ] == [True]
@@ -149,7 +150,7 @@ def test_the_inactive_family_is_never_demanded():
     assert set(reached) == {
         "implementation.cyclic.$selected",
         "implementation.cyclic.build_requirements",
-        "implementation.cyclic.output",
+        "implementation.cyclic.ports",
     }
     assert all(
         isinstance(result, Inapplicable)

@@ -13,11 +13,11 @@ There is no top-level last: the declared extents determine all stream lengths.
 Input high padding is ignored; output high padding is unspecified.
 
 No Region, logical operand mapping, or dataflow graph is required. ``MVAU`` is a
-graph of design spaces: kernel nodes, and one ``StreamLink`` relation node per
-stream reading its two ends as located values. Its own boundary streams are its
-own members ``in0_V``/``in1_V``/``out0_V``. ``structure`` wires
-``Members(MODULE)`` through ``Members(CONNECTION)``. ``mvau_assembly`` is a
-convenience adapter: it configures concrete facts, commits the choices and
+graph of design spaces: four ``Stream`` nodes, and kernel nodes that reference
+them. Each stream sees its users; one with a single user is a boundary of MVAU
+and presents its ``port`` name (``in0_V``, ``in1_V``, ``out0_V``). ``structure``
+wires ``Members(MODULE)`` through ``Members(CONNECTION)``. ``mvau_assembly`` is
+a convenience adapter: it configures concrete facts, commits the choices and
 packs the views into an ``MVAUAssembly``.
 """
 
@@ -55,9 +55,9 @@ from finn.kernels.streams import (
     CONNECTION,
     MODULE,
     STREAM_SPEC,
-    BufferedStreamLink,
+    BufferedStream,
     Composed,
-    StreamLink,
+    Stream,
     StreamSpec,
     netlist,
 )
@@ -69,10 +69,8 @@ from finn.core.space import (
     Decision,
     Members,
     Param,
-    Present,
     Rejected,
     Space,
-    View,
     configure,
     constraint,
     default_semantics,
@@ -160,15 +158,16 @@ FOLDING = default_semantics(_Folding)
 
 
 class MVAU(Space):
-    """Workload facts, folding choices, and kernels connected by declared streams.
+    """Workload facts, folding choices, and kernels that reference declared streams.
 
     ``activations`` enters at ``in0_V`` and is replayed once per neuron fold into
     ``replayed``; dotp consumes it with ``weight_stream`` and produces ``results``
     for ``out0_V``. The ``implementation`` Decision decides what drives
-    ``weight_stream``: ``external`` places nothing and presents ``in1_V``, and
-    ``cyclic`` places the ``cyclic`` CyclicDelivery node owning ``rom_style`` and
-    the optional ``weights``. ``weight_stream`` is buffered: ``direct`` or a
-    ``fifo`` with a committed depth.
+    ``weight_stream``: ``external`` places nothing, so the stream has only its
+    consumer and is the boundary ``in1_V``; ``cyclic`` places the ``cyclic``
+    CyclicDelivery node, which references the stream as its producer and owns
+    ``rom_style`` and the optional ``weights``. ``weight_stream`` is buffered:
+    ``direct`` or a ``fifo`` with a committed depth.
     """
 
     repetitions: Param[int] = Param(int)
@@ -245,12 +244,16 @@ class MVAU(Space):
             return element
         return StreamSpec(element, vector_major((f.repetitions, f.matrix_height), f.pe))
 
-    # The composite's own boundary streams: what it presents at each port.
-    in0_V = View(activation_spec)
-    out0_V = View(result_spec)
+    # Streams: relations between the kernels that reference them. A stream with a
+    # single user is a boundary of MVAU and presents its ABI port name.
+    activations = Stream(spec=activation_spec, port="in0_V")
+    replayed = Stream(spec=replayed_spec)
+    weight_stream = BufferedStream(spec=weight_spec, port="in1_V")
+    results = Stream(spec=result_spec, port="out0_V")
 
     replay = ReplayBuffer(
-        input_stream=activation_spec,
+        input_stream=activations,
+        output_stream=replayed,
         sequence_length=synapse_folds,
         replay_count=neuron_folds,
     )
@@ -262,34 +265,19 @@ class MVAU(Space):
         simd=simd,
         target_dsp=target_dsp,
         segment_length=segment_length,
-        activation_stream=replayed_spec,
-        weights_stream=weight_spec,
-        result_stream=result_spec,
+        activation_stream=replayed,
+        weights_stream=weight_stream,
+        result_stream=results,
     )
-    # A handle naming the cyclic candidate; the Decision places it.
-    cyclic = CyclicDelivery(dtype=weights_dtype, form=weight_period, values=weights)
+    # A handle naming the cyclic candidate; the Decision places it. It references
+    # weight_stream as its producer, so only when selected is the stream internal.
+    cyclic = CyclicDelivery(
+        dtype=weights_dtype, form=weight_period, values=weights, output_stream=weight_stream
+    )
     implementation = Decision(
         values={WeightDelivery.EXTERNAL.value: None, WeightDelivery.CYCLIC.value: cyclic}
     )
     delivery = selected(implementation)
-
-    @derived
-    def external(self) -> bool:
-        return self.implementation is None
-
-    in1_V = View(weight_spec, when=external)
-
-    activations = StreamLink(spec=activation_spec, source=in0_V, sink=replay.input_port)
-    replayed = StreamLink(
-        spec=replayed_spec, source=replay.output_port, sink=compute.activation_port
-    )
-    weight_stream = BufferedStreamLink(
-        spec=weight_spec,
-        # Whichever driver is present: the boundary, or the cyclic delivery node.
-        source=Present(in1_V, cyclic.output),
-        sink=compute.weights_port,
-    )
-    results = StreamLink(spec=result_spec, source=compute.result_port, sink=out0_V)
     modules = Members(MODULE)
     streams = Members(CONNECTION)
 

@@ -1,35 +1,47 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Streams as relations: a stream is an ordinary node declared among the nodes it joins.
+"""Streams as ordinary Spaces that kernels reference.
 
-A ``StreamLink`` reads its two ends as ``Located`` values: a child's contract
-view (``compute.weights_port``), or one of the composite's own members
-(``in0_V``) holding the ``StreamSpec`` of a boundary port. Its formals are
-``Param(Located)``, so a plain reference arrives with its node and member names.
-Its ``compatible`` constraint owns every refusal about that stream, and its
-``connection`` view is exported as ``CONNECTION``. A composite collects its
-modules and connections with ``Members(MODULE)`` and ``Members(CONNECTION)``;
-``netlist`` wires them. Instance names come from the node names in those
-located values; nothing is named by a literal.
+A ``Stream`` is a node of its own, declared in the composite beside the
+kernels it joins. A kernel has one reference input per stream it sits on
+(``output_stream: Param[Stream] = Param(Stream)``) and exports its port
+records under ``PORTS``, keyed by those input names. Each record says whether
+the kernel produces into the stream or consumes from it: direction is domain
+data, carried by the kernel's own export. The stream sees the kernels that
+reference it through ``Users(PORTS)``; the one-producer-one-consumer rule,
+compatibility and the AXIS boundary belong to this family, not to the engine.
 
-A ``BufferedStreamLink`` owns a ``transport`` Decision over two nodes,
-``direct`` and ``fifo``. The FIFO candidate owns its ``depth`` and the FIFO's
+A stream with a user on one side only is a boundary of its composite. Its
+``port`` input names the top-level AXIS port (``in0_V``): an ABI name is
+design data of the stream, independent of the stream's node name, which is
+its identity and the prefix of its persisted decision keys.
+
+A stream's ``spec`` is supplied by the composite and must not depend on its
+users: kernels read it (``self.output_stream.spec``) to build their port
+contracts, so a spec derived from a user's contract is a dependency cycle.
+
+A ``BufferedStream`` owns a ``transport`` Decision over two nodes, ``direct``
+and ``fifo``. The FIFO candidate owns its ``depth`` and the FIFO's
 ``ram_style``; it is an identity adapter, checked on both of its sides.
+``Members(CONNECTION)`` collects a composite's streams and ``netlist`` wires
+them; instance names come from the located user names, never from literals.
 """
 
 from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
+from enum import Enum
 
 from finn.core.space import (
+    UNSUPPLIED,
     Decision,
     Located,
-    LocatedParam,
     Param,
     Rejected,
     Space,
+    Users,
     View,
     ViewKey,
     constraint,
@@ -141,6 +153,47 @@ class StreamFifo(Space):
         )
 
 
+class Flow(Enum):
+    """Which way a kernel's port faces the stream it sits on."""
+
+    IN = "in"  # the kernel consumes the stream
+    OUT = "out"  # the kernel produces it
+
+
+@dataclass(frozen=True)
+class Port:
+    """One of a kernel's stream ports: its direction and its contract."""
+
+    flow: Flow
+    contract: StreamContract
+
+
+def produces(contract: StreamContract) -> Port:
+    return Port(Flow.OUT, contract)
+
+
+def consumes(contract: StreamContract) -> Port:
+    return Port(Flow.IN, contract)
+
+
+@dataclass(frozen=True)
+class Ports:
+    """A kernel's stream ports, keyed by the name of the reference input each sits on."""
+
+    entries: tuple[tuple[str, Port], ...]
+
+    @classmethod
+    def of(cls, **ports: Port) -> Ports:
+        return cls(tuple(ports.items()))
+
+    def __getitem__(self, name: str) -> Port:
+        return dict(self.entries)[name]
+
+
+PORTS_SEMANTICS = default_semantics(Ports)
+PORTS = ViewKey("ports", PORTS_SEMANTICS)
+
+
 @dataclass(frozen=True)
 class Connection:
     """One checked stream; an owner of None is the composed module itself."""
@@ -156,32 +209,58 @@ CONNECTION_SEMANTICS = default_semantics(Connection)
 CONNECTION = ViewKey("connection", CONNECTION_SEMANTICS)
 
 
-def _end(end: Located[object], spec: StreamSpec, endpoint: Endpoint) -> StreamContract:
-    """A child's contract, or the AXIS port for one of the composite's own members."""
-    if end.node is None:
-        return boundary_contract(end.member, spec, endpoint)
-    assert isinstance(end.value, StreamContract)
-    return end.value
+@dataclass(frozen=True)
+class Endpoints:
+    """The producing and consuming ends of one stream; an owner of None is the boundary."""
+
+    source_owner: str | None
+    source: StreamContract
+    sink_owner: str | None
+    sink: StreamContract
 
 
-class StreamLink(Space):
-    """A relation between a producing and a consuming stream end."""
+ENDPOINTS = default_semantics(Endpoints)
+
+
+class Stream(Space):
+    """A relation between the kernels that reference it: one producer, one consumer.
+
+    ``ends`` holds every present user's ``PORTS`` export, located by the user's
+    name and the input it references this stream through. A side without a
+    user is the composite's boundary, presented as the AXIS port ``port``.
+    """
 
     spec: Param[StreamSpec] = Param(STREAM_SPEC)
-    source: LocatedParam[object] = Param(Located)
-    sink: LocatedParam[object] = Param(Located)
+    port: Param[str] = Param(str, default=UNSUPPLIED)
+    ends = Users(PORTS)
 
-    @derived(semantics=default_semantics(tuple))
-    def contracts(self) -> tuple[StreamContract, StreamContract] | Rejected:
-        spec = self.spec
-        try:
-            # Seen from inside, the composite's input is the AXIS target.
-            return (
-                _end(self.source, spec, Endpoint.TARGET),
-                _end(self.sink, spec, Endpoint.INITIATOR),
+    @derived(semantics=ENDPOINTS)
+    def endpoints(self) -> Endpoints | Rejected:
+        producers: list[tuple[str | None, StreamContract]] = []
+        consumers: list[tuple[str | None, StreamContract]] = []
+        for end in self.ends:
+            port = end.value[end.member]
+            side = producers if port.flow is Flow.OUT else consumers
+            side.append((end.node, port.contract))
+        if len(producers) > 1 or len(consumers) > 1:
+            named = ", ".join(f"{end.node}.{end.member}" for end in self.ends)
+            return reject(
+                "stream-users",
+                f"a stream has at most one producer and one consumer; referenced by {named}",
             )
+        if not producers and not consumers:
+            return reject("stream-unused", "no present kernel references this stream")
+        try:
+            # A side without a user is the boundary. Seen from inside, the
+            # composite's input is the AXIS target and its output the initiator.
+            source = producers[0] if producers else (None, self._boundary(Endpoint.TARGET))
+            sink = consumers[0] if consumers else (None, self._boundary(Endpoint.INITIATOR))
         except ValueError as error:
             return reject("stream-boundary", str(error))
+        return Endpoints(source[0], source[1], sink[0], sink[1])
+
+    def _boundary(self, endpoint: Endpoint) -> StreamContract:
+        return boundary_contract(self.port, self.spec, endpoint)
 
     @view(semantics=STAGE_SEMANTICS)
     def stage(self) -> Stage:
@@ -189,25 +268,29 @@ class StreamLink(Space):
 
     @constraint
     def compatible(self) -> bool | Rejected:
-        source, sink = self.contracts
+        ends = self.endpoints
         stage = self.stage()
-        source_top, sink_top = self.source.node is None, self.sink.node is None
+        source_top, sink_top = ends.source_owner is None, ends.sink_owner is None
         if stage.requirements is None:
             found = list(
-                compatibility(source, sink, source_is_top=source_top, sink_is_top=sink_top)
+                compatibility(
+                    ends.source, ends.sink, source_is_top=source_top, sink_is_top=sink_top
+                )
             )
         else:
             assert stage.input is not None and stage.output is not None
             found = [
-                *compatibility(source, stage.input, source_is_top=source_top, sink_is_top=False),
-                *compatibility(stage.output, sink, source_is_top=False, sink_is_top=sink_top),
+                *compatibility(
+                    ends.source, stage.input, source_is_top=source_top, sink_is_top=False
+                ),
+                *compatibility(stage.output, ends.sink, source_is_top=False, sink_is_top=sink_top),
             ]
         return _refusal(found)
 
     @derived(semantics=CONNECTION_SEMANTICS)
     def link(self) -> Connection:
-        source, sink = self.contracts
-        return Connection(self.source.node, source, self.sink.node, sink, self.stage())
+        ends = self.endpoints
+        return Connection(ends.source_owner, ends.source, ends.sink_owner, ends.sink, self.stage())
 
     connection = View(link, requires=(compatible,))
     exports = {CONNECTION: connection}
@@ -219,9 +302,9 @@ def _refusal(found: Sequence[Mismatch]) -> bool | Rejected:
     return reject(found[0].code, "; ".join(f"{item.code}: {item.message}" for item in found))
 
 
-class BufferedStreamLink(StreamLink):
+class BufferedStream(Stream):
     transport = Decision[_Direct | StreamFifo](
-        values={"direct": _Direct(), "fifo": StreamFifo(spec=StreamLink.spec)}
+        values={"direct": _Direct(), "fifo": StreamFifo(spec=Stream.spec)}
     )
     stage = View(transport.stage)
 
@@ -382,17 +465,24 @@ def _drive(
 
 
 __all__ = [
-    "BufferedStreamLink",
+    "BufferedStream",
     "COMPOSED",
     "CONNECTION",
     "Composed",
     "Connection",
+    "Endpoints",
+    "Flow",
     "MODULE",
+    "PORTS",
+    "Port",
+    "Ports",
     "STREAM_SPEC",
     "Stage",
+    "Stream",
     "StreamFifo",
-    "StreamLink",
     "StreamSpec",
     "boundary_contract",
+    "consumes",
     "netlist",
+    "produces",
 ]

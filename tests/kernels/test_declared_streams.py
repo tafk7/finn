@@ -1,21 +1,28 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Streams as relation nodes: located ends, per-stream refusals, members wired."""
+"""Streams as ordinary Spaces: kernels reference them, and each stream sees its users.
 
+Every stream owns its refusals; a stream with one user is a boundary of the
+composite and presents its ``port`` name; a stream's spec is anchored in the
+composite, and deriving it from a user is refused as a dependency cycle.
+"""
+
+import pytest
 from qonnx.core.datatype import DataType
 
 from finn.core.space import (
     Available,
-    Located,
+    EvaluationError,
     Members,
     Param,
     Rejected,
     Space,
     Unresolved,
-    View,
+    Users,
     configure,
     default_semantics,
+    derived,
     inspection,
     view,
 )
@@ -28,11 +35,16 @@ from finn.kernels.physical.forms import vector_major
 from finn.kernels.streams import (
     CONNECTION,
     MODULE,
+    PORTS,
+    PORTS_SEMANTICS,
     STREAM_SPEC,
-    StreamLink,
+    Flow,
+    Ports,
+    Stream,
     StreamSpec,
     boundary_contract,
     netlist,
+    produces,
 )
 
 INT4 = ScalarEncoding(DataType["INT4"])
@@ -44,15 +56,16 @@ class Constants(Space):
 
     first_spec: Param[StreamSpec] = Param(STREAM_SPEC)
     second_spec: Param[StreamSpec] = Param(STREAM_SPEC)
-    out0_V = View(first_spec)
-    out1_V = View(second_spec)
+    # Each stream has only its producer: it is a boundary, named by its port.
+    first = Stream(spec=first_spec, port="out0_V")
+    second = Stream(spec=second_spec, port="out1_V")
 
-    first_source = CyclicDelivery(dtype=DataType["INT4"], form=PRODUCED, values=(1, 2, 3, 4))
-    second_source = CyclicDelivery(dtype=DataType["INT4"], form=PRODUCED, values=(5, 6, 7, -8))
-    # Plain references into the links' Param(Located) ends: a child's view, or one
-    # of the composite's own members.
-    first = StreamLink(spec=first_spec, source=first_source.output, sink=out0_V)
-    second = StreamLink(spec=second_spec, source=second_source.output, sink=out1_V)
+    first_source = CyclicDelivery(
+        dtype=DataType["INT4"], form=PRODUCED, values=(1, 2, 3, 4), output_stream=first
+    )
+    second_source = CyclicDelivery(
+        dtype=DataType["INT4"], form=PRODUCED, values=(5, 6, 7, -8), output_stream=second
+    )
     modules = Members(MODULE)
     streams = Members(CONNECTION)
 
@@ -109,7 +122,8 @@ def test_explain_shows_per_stream_and_per_member_evidence():
         "first.connection",
         "second.connection",
         "first.compatible",
-        "first.source",
+        "first.ends",
+        "first_source.ports",
         "first_source.build_requirements",
         "modules",
         "streams",
@@ -125,12 +139,92 @@ def test_a_stream_waits_for_its_own_endpoints_only():
     assert isinstance(point.first.connection.query(), Available)
     assert isinstance(point.second.connection.query(), Available)
     assert isinstance(point.build.query(), Unresolved)
-    # Ends know where they are, by declaration name.
-    assert point.first.source.node == "first_source"
-    assert point.first.sink == Located(None, "out0_V", StreamSpec(INT4, PRODUCED))
+    # A stream sees its users by declaration name and by the input that references it.
+    (end,) = point.first.ends
+    assert (end.node, end.member) == ("first_source", "output_stream")
+    assert end.value["output_stream"].flow is Flow.OUT
+    connection = point.first.connection()
+    assert (connection.source_owner, connection.sink_owner) == ("first_source", None)
+    assert connection.sink.transport.name == "out0_V"
 
 
 def test_boundary_ports_are_axis_and_byte_aligned():
     contract = boundary_contract("in0_V", StreamSpec(INT4, vector_major((3,), 3)), Endpoint.TARGET)
     assert contract.transport.data_width == 16
     assert contract.payload_bits == 12
+
+
+def test_two_producers_on_one_stream_are_refused_by_the_stream():
+    class Clash(Space):
+        spec: Param[StreamSpec] = Param(STREAM_SPEC)
+        shared = Stream(spec=spec, port="out0_V")
+        a = CyclicDelivery(
+            dtype=DataType["INT4"], form=PRODUCED, values=(1, 2, 3, 4), output_stream=shared
+        )
+        b = CyclicDelivery(
+            dtype=DataType["INT4"], form=PRODUCED, values=(1, 2, 3, 4), output_stream=shared
+        )
+
+    point = configure(Clash(spec=StreamSpec(INT4, PRODUCED)))
+    refused = point.shared.connection.query()
+    assert isinstance(refused, Rejected)
+    assert {f.code for f in refused.findings} == {"stream-users"}
+    assert "a.output_stream, b.output_stream" in refused.findings[0].message
+
+
+def test_a_boundary_stream_needs_its_port_name():
+    class Unnamed(Space):
+        spec: Param[StreamSpec] = Param(STREAM_SPEC)
+        out = Stream(spec=spec)
+        source = CyclicDelivery(
+            dtype=DataType["INT4"], form=PRODUCED, values=(1, 2, 3, 4), output_stream=out
+        )
+
+    waiting = configure(Unnamed(spec=StreamSpec(INT4, PRODUCED))).out.connection.query()
+    assert isinstance(waiting, Unresolved)
+    assert {f.owner for f in waiting.findings} == {"out.port"}
+
+
+# -- the anchoring rule: a stream's spec must not depend on its users ------------------
+
+
+class ProducerSpecStream(Space):
+    """A stream that derives its spec from its producer's contract: not anchored."""
+
+    ends = Users(PORTS)
+
+    @derived(semantics=STREAM_SPEC)
+    def spec(self) -> StreamSpec:
+        (end,) = self.ends
+        contract = end.value[end.member].contract
+        return StreamSpec(contract.element, contract.form)
+
+
+class SpecReadingProducer(Space):
+    """Builds its port contract from the stream's spec, as dotp does."""
+
+    output_stream: Param[ProducerSpecStream] = Param(ProducerSpecStream)
+    source = CyclicDelivery(dtype=DataType["INT4"], form=PRODUCED, values=(1, 2, 3, 4))
+
+    @view(semantics=PORTS_SEMANTICS)
+    def ports(self) -> Ports:
+        contract = self.source.output()
+        spec = self.output_stream.spec  # the stream's spec shapes the port
+        return Ports.of(
+            output_stream=produces(type(contract)(contract.transport, spec.element, spec.form))
+        )
+
+    exports = {PORTS: ports}
+
+
+def test_a_spec_derived_from_its_users_is_refused_with_the_cycle_path():
+    class Unanchored(Space):
+        edge = ProducerSpecStream()
+        producer = SpecReadingProducer(output_stream=edge)
+
+    point = configure(Unanchored())
+    with pytest.raises(EvaluationError, match="dependency cycle") as caught:
+        point.edge.spec
+    path = str(caught.value)
+    # The cycle, in evaluation order: the spec reads the users, a user's ports read the spec.
+    assert "edge.spec" in path and "edge.ends" in path and "producer.ports" in path

@@ -6,8 +6,10 @@
 The consumer supplies the operand values and the beat ``form`` in which it reads
 them; the kernel packs the image in that form and streams it cyclically from an
 initialized ROM. Its ``output`` view is a stream contract, so a parent connects
-it to a consumer port with a stream relation instead of wiring pins. The
-image is embedded in the build requirements; there is no initialization file.
+it to a consumer port through a stream instead of wiring pins: supplied with a
+``Stream`` node (``output_stream=weights``), it exports its port as the
+stream's producer. The image is embedded in the build requirements; there is
+no initialization file.
 
 The same kernel serves a matrix tile walk (MVAU/VVAU weights), a chunked or
 replicated tile (tiled MVU), a channel vector (elementwise parameters) or any
@@ -18,7 +20,7 @@ the same either way.
 
 from __future__ import annotations
 
-from finn.core.space import Decision, Param, Rejected, derived, reject, view
+from finn.core.space import UNSUPPLIED, Decision, Param, Rejected, derived, reject, view
 from finn.dataflow.datatypes import QONNXDataType
 from finn.kernels.artifacts.requirements import ModuleBuildRequirements
 from finn.kernels.base import Kernel
@@ -40,7 +42,7 @@ from finn.kernels.streaming import (
     cyclic_stream_requirements,
 )
 from finn.core.space import default_semantics
-from finn.kernels.streams import MODULE
+from finn.kernels.streams import MODULE, PORTS, PORTS_SEMANTICS, Ports, Stream, produces
 
 
 class CyclicDelivery(Kernel):
@@ -51,6 +53,8 @@ class CyclicDelivery(Kernel):
     element = integer_scalar(dtype, Integer())
     form: Param[Traversal] = Param(TRAVERSAL)
     values: Param[IntegerTensor] = Param(INTEGER_TENSOR)
+    # The stream it drives, when a parent places it beside a consumer.
+    output_stream: Param[Stream] = Param(Stream, default=UNSUPPLIED)
     rom_style = Decision(str, values=CYCLIC_ROM_STYLES)
 
     @derived(semantics=INTEGER_VECTOR)
@@ -89,7 +93,11 @@ class CyclicDelivery(Kernel):
             rom_style=self.rom_style,
         )
 
-    exports = {MODULE: build_requirements}
+    @view(semantics=PORTS_SEMANTICS)
+    def ports(self) -> Ports:
+        return Ports.of(output_stream=produces(self.output()))
+
+    exports = {MODULE: build_requirements, PORTS: ports}
 
 
 def _leaves(values: object) -> tuple[int, ...]:

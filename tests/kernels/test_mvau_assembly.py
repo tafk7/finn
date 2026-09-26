@@ -228,9 +228,10 @@ def test_mvau_honors_the_child_physical_view_not_just_its_raw_module(monkeypatch
             simd=MVAU.simd,
             target_dsp=MVAU.target_dsp,
             segment_length=MVAU.segment_length,
-            activation_stream=MVAU.replayed_spec,
-            weights_stream=MVAU.weight_spec,
-            result_stream=MVAU.result_spec,
+            # References to MVAU's stream nodes, which RestrictedMVAU inherits.
+            activation_stream=MVAU.replayed,
+            weights_stream=MVAU.weight_stream,
+            result_stream=MVAU.results,
         )
 
     point = point_for(

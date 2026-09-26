@@ -23,13 +23,21 @@ from finn.kernels.artifacts.abi import (
     Reset,
     Signal,
 )
-from finn.core.space import UNSUPPLIED, Param, Rejected, default_semantics, derived, reject, view
+from finn.core.space import Param, Rejected, default_semantics, derived, reject, view
 from finn.kernels.base import Kernel
 from finn.kernels.datatypes.scalar import ScalarEncoding
 from finn.kernels.physical.contract import STREAM_CONTRACT, StreamContract
 from finn.kernels.physical.forms import Every, Traversal
 from finn.kernels.physical.stream import ReadyValidStream, StreamMarker, MarkerKind
-from finn.kernels.streams import MODULE, STREAM_SPEC, StreamSpec
+from finn.kernels.streams import (
+    MODULE,
+    PORTS,
+    PORTS_SEMANTICS,
+    Ports,
+    Stream,
+    consumes,
+    produces,
+)
 from finn.kernels.artifacts.contribution_types import CopiedSource
 from finn.kernels.artifacts.requirements import (
     FixedModuleName,
@@ -110,13 +118,15 @@ class ReplayBuffer(Kernel):
     id = "finnlib.replay_buffer"
     version = "1"
 
-    input_stream: Param[StreamSpec] = Param(STREAM_SPEC, default=UNSUPPLIED)
+    # The streams it sits on; its output contract derives from the input stream.
+    input_stream: Param[Stream] = Param(Stream)
+    output_stream: Param[Stream] = Param(Stream)
     sequence_length: Param[int] = Param(int)
     replay_count: Param[int] = Param(int)
 
     @derived(semantics=default_semantics(tuple))
     def contracts(self) -> tuple[StreamContract, ...] | Rejected:
-        spec = self.input_stream
+        spec = self.input_stream.spec
         try:
             return replay_buffer_contracts(
                 spec.element,
@@ -135,18 +145,24 @@ class ReplayBuffer(Kernel):
     def output_port(self) -> StreamContract:
         return cast(StreamContract, self.contracts[1])
 
+    @view(semantics=PORTS_SEMANTICS)
+    def ports(self) -> Ports:
+        return Ports.of(
+            input_stream=consumes(self.input_port()), output_stream=produces(self.output_port())
+        )
+
     @view(semantics=default_semantics(ModuleBuildRequirements))
     def build_requirements(self) -> ModuleBuildRequirements | Rejected:
         try:
             return replay_buffer_requirements(
-                word_bits=self.input_stream.payload_bits,
+                word_bits=self.input_stream.spec.payload_bits,
                 sequence_length=self.sequence_length,
                 replay_count=self.replay_count,
             )
         except ValueError as error:
             return reject("replay-geometry", str(error))
 
-    exports = {MODULE: build_requirements}
+    exports = {MODULE: build_requirements, PORTS: ports}
 
 
 def cyclic_stream_interface(*, word_bits: int) -> ReadyValidStream:
