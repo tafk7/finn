@@ -22,7 +22,7 @@ from finn.kernels.artifacts.abi import (
 )
 from finn.kernels.datatypes.scalar import ScalarEncoding
 from finn.kernels.physical.contract import StreamContract
-from finn.kernels.physical.forms import Batch, BeatForm, Every, Repeat
+from finn.kernels.physical.forms import Every, Traversal
 from finn.kernels.physical.stream import ReadyValidStream, StreamMarker, MarkerKind
 from finn.kernels.artifacts.contribution_types import CopiedSource
 from finn.kernels.artifacts.requirements import (
@@ -73,26 +73,27 @@ def replay_buffer_interfaces(*, word_bits: int) -> tuple[ReadyValidStream, ...]:
 
 
 def replay_buffer_contracts(
-    element: ScalarEncoding, form: BeatForm, *, replay_count: int
+    element: ScalarEncoding, form: Traversal, *, sequence_length: int, replay_count: int
 ) -> tuple[StreamContract, StreamContract]:
-    """Input and output contracts of a replay over ``Batch(sequence, n)`` input.
+    """Input and output contracts of a replay over ``form``.
 
-    Each ``sequence`` pass is presented ``replay_count`` times: the output form is
-    ``Batch(Repeat(sequence, replay_count), n)``. ``olast`` closes every sequence
-    and ``ofin`` its final repetition, so both are periodic marker rules.
+    Every consecutive ``sequence_length`` beats are presented ``replay_count``
+    times: a replay loop is inserted above that group. ``olast`` closes every
+    sequence and ``ofin`` its final repetition, so both are periodic rules.
     """
-    if not isinstance(form, Batch):
-        raise ValueError("replay input is a Batch of independent sequences")
+    _positive("sequence_length", sequence_length)
     _positive("replay_count", replay_count)
-    length = form.form.beats
     source, sink = replay_buffer_interfaces(word_bits=form.lanes * element.bits)
     return (
         StreamContract(source, element, form),
         StreamContract(
             sink,
             element,
-            Batch(Repeat(form.form, replay_count), form.count),
-            markers={"olast": Every(length), "ofin": Every(length * replay_count)},
+            form.replayed(replay_count, inner_beats=sequence_length),
+            markers={
+                "olast": Every(sequence_length),
+                "ofin": Every(sequence_length * replay_count),
+            },
         ),
     )
 

@@ -21,7 +21,7 @@ on-chip source is the one delivery mechanism that recurs across families.
 
 | Module | Contents |
 |---|---|
-| `physical/forms.py` | Logical beat forms (`Fold`, `Tile`, `Repeat`, `Batch`), a `Repetition` (`ONCE` or `CYCLIC`), the periodic marker rule `Every(k)`, and `pack(form, values, bits)`. Forms compare by value; `positions()` enumerates them. |
+| `physical/forms.py` | Logical order (first as `Fold`/`Tile`/`Repeat`/`Batch`; now the canonical `Traversal`, see the revision below), a `Repetition` (`ONCE` or `CYCLIC`), the periodic marker rule `Every(k)`, and `pack(form, values, bits)`. |
 | `physical/contract.py` | `StreamContract` combines the transport with the element, form, repetition and marker rules. `compatibility(source, sink)` returns every mismatch, each labelled logical, physical or protocol. |
 | `physical/composition.py` | `Composition` places instances and routes clocks and resets. `drive` derives reset inversion from the declared polarities. `connect` checks two stream ends, including their clock domain, then emits every data, padding, handshake and marker wire. |
 | `delivery.py` | `CyclicDelivery`, a standalone kernel. It takes a dtype, the consumer's `form` and the operand `values`, and owns the `rom_style` choice. Its views are `output` (a cyclic stream contract) and `build_requirements`. |
@@ -101,3 +101,94 @@ suite shows that they are refused.
 - **Persistence key changed.** The key is now
   `implementation.cyclic.source.rom_style`, because the choice belongs to the
   reusable kernel. Recorded in scratchpad `space/MIGRATION.md`.
+
+## Revision: traversals replace the ad hoc forms
+
+`Fold`/`Tile`/`Repeat`/`Batch` are replaced by one canonical `Traversal`: a
+loop nest over the row-major operand. `beat_loops` step between beats and
+`lane_loops` between fields, with field zero least significant. Each loop is an
+`(extent, stride)` in flat elements, and stride 0 means replay. Construction
+drops unit loops and merges contiguous loops. A property test over 4,000
+random pairs confirms that two traversals are equal exactly when they present
+the same sequence. `vector_major`, `tile`, `.repeated()` and `.replayed()` build
+the common orders.
+
+`classify(source, sink)` names what a mismatch needs. It refines both loop nests
+at their shared stride boundaries before comparing them:
+
+| Adaptation | Test | Realized by |
+|---|---|---|
+| identity | equal | nothing |
+| lane_permutation | equal beat loops; lane offsets permuted | wires; `connect` crosses fields |
+| reorder | equal lane loops; beat loops permuted, plus replay loops | `input_gen` / OuterShuffle, with `frame_beats`, `DIMS` and `COEFS` derived |
+| width_conversion | same element-level order, different lane count | data-width converter |
+| lane_regroup | same positions under another lane axis | InnerShuffle |
+| incompatible | different positions | nothing |
+
+**Stress cases.** Each result below is derived from the two traversals alone:
+
+- **Tiled MVU input:** `DIMS=(NF,SF,T)`, `COEFS=(0,1,SF)`, frame `SF·T`. These
+  are exactly the activation `input_gen` parameters in `mvu_tiled_axi.sv`.
+- **Tiled MVU output:** `DIMS=(T,NF)`, `COEFS=(1,T)`, frame `NF·T`. These are
+  exactly its `genReorder` parameters.
+- **Tiled MVU weights:** the chunked weight stream classifies as a width
+  conversion from full tiles. `CyclicDelivery` can also produce the chunked
+  order directly, so no adapter is needed.
+- **OuterShuffle:** coefficients equal FINN's
+  `shuffle_perfect_loopnest_coeffs / SIMD`.
+- **InnerShuffle:** classifies as a lane regroup.
+
+Baseline hard-codes those two tiled-MVU stages because every FINN stream is
+assumed to be vector-major. With traversals, they become derivable adapters, or
+disappear when a neighbour produces the core's order.
+
+**Limit.** A split that is not a loop nest cannot be expressed. The tiled MVU's
+weight chunks are a loop nest when `WSIMD` and `SIMD` nest (one divides the
+other). In general they need a flattened-axis view.
+
+## Proposal (not implemented): declared streams, adapters, block formats
+
+**Declared streams.** A connection becomes a Space declaration, and kernels bind
+their ports to it:
+
+```text
+class MVAU(Kernel):
+    x  = Stream(boundary=INPUT)                    # top-level port
+    xr = Stream()                                  # internal
+    w  = Stream()
+    y  = Stream(boundary=OUTPUT)
+    replay  = Subspace(ReplayBuffer, input=x, output=xr, ...)
+    compute = Subspace(DotpAxiKernel, activation=xr, weights=w, result=y, ...)
+    weights = SubspaceChoice({"external": Boundary(w), "cyclic": Subspace(CyclicDelivery, output=w, ...)})
+```
+
+- Every kernel publishes a contract view per port.
+- The parent's assembly is generic: enumerate the streams, find each one's
+  producer and consumers, and `connect`.
+- A stream's check becomes a Space constraint, so a mismatch is an ordinary
+  attributable refusal rather than an exception.
+- A choice of kernels on either side is an ordinary `SubspaceChoice`.
+- Negotiation fits naturally. Each port declares the traversals it supports as a
+  domain, and the stream owns a `form` Decision over their intersection. Adapter
+  insertion later becomes a choice of adapter kernels on the stream.
+- Open question: whether this needs engine support to enumerate stream bindings,
+  or whether inspection over placements is enough.
+
+**Adapter (infrastructure) kernels.** An adapter maps one operand to itself
+across traversals (reorder, width conversion, lane regroup) or across encodings
+(int to float, MX pack/unpack). It declares a transform signature, so `classify`
+results can be matched to available adapters. The FinnLib candidates are
+`input_gen` (reorder/replay), `inner_shuffle` (lane regroup) and a width
+converter.
+
+**Block formats (MX).** Standardize these at the element-encoding level:
+
+- a `BlockEncoding` of element dtype, block size and scale dtype, next to
+  `ScalarEncoding`;
+- the physical standard: a block's elements are packed LSB-first, and its shared
+  scale travels as a second operand whose traversal is derived from the values'
+  traversal by dividing the block axis;
+- lanes must hold whole blocks.
+
+This keeps traversals and adapters unchanged. The MX pack and unpack kernels are
+encoding adapters.

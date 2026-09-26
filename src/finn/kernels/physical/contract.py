@@ -10,10 +10,10 @@ A contract joins three levels, each owned elsewhere and checked here together:
 - protocol: the ready/valid (or AXIS) pins, marker pins and clock/reset names.
 
 ``compatibility`` compares a producing and a consuming end. A logical mismatch
-can only be repaired by a kernel that changes the sequence (replay, reorder,
-width conversion). Physical and protocol differences that leave the sequence
-unchanged (padding, reset polarity) are properties of the connection, which
-``Composition.connect`` realizes as wires.
+can only be repaired by an adapter kernel, which ``forms.classify`` names
+(reorder or replay, width conversion, lane regroup). A pure lane permutation,
+padding and reset polarity leave the sequence unchanged; they are properties of
+the connection, which ``Composition.connect`` realizes as wires.
 """
 
 from __future__ import annotations
@@ -25,7 +25,13 @@ from enum import Enum
 from finn.core.space import ValueSemantics, default_semantics
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.datatypes.scalar import ScalarEncoding
-from finn.kernels.physical.forms import BeatForm, Every, Repeat, Repetition
+from finn.kernels.physical.forms import (
+    Adaptation,
+    Every,
+    Repetition,
+    Traversal,
+    classify,
+)
 from finn.kernels.physical.stream import ReadyValidStream
 
 
@@ -53,15 +59,15 @@ class StreamContract:
 
     transport: ReadyValidStream
     element: ScalarEncoding
-    form: BeatForm
+    form: Traversal
     repetition: Repetition = Repetition.ONCE
     markers: Mapping[str, Every] | tuple[tuple[str, Every], ...] = ()
 
     def __post_init__(self) -> None:
         if not isinstance(self.transport, ReadyValidStream):
             raise TypeError("a stream contract has a ReadyValidStream transport")
-        if not isinstance(self.element, ScalarEncoding) or not isinstance(self.form, BeatForm):
-            raise TypeError("a stream contract has a ScalarEncoding element and a BeatForm")
+        if not isinstance(self.element, ScalarEncoding) or not isinstance(self.form, Traversal):
+            raise TypeError("a stream contract has a ScalarEncoding element and a Traversal")
         if not isinstance(self.repetition, Repetition):
             raise TypeError("a stream contract has a Repetition")
         if self.payload_bits > self.transport.data_width:
@@ -92,10 +98,6 @@ class StreamContract:
 STREAM_CONTRACT: ValueSemantics[StreamContract] = default_semantics(StreamContract)
 
 
-def _period_divides(source: BeatForm, sink: BeatForm) -> bool:
-    return sink == source or (isinstance(sink, Repeat) and sink.form == source)
-
-
 def compatibility(
     source: StreamContract, sink: StreamContract, *, source_is_top: bool, sink_is_top: bool
 ) -> tuple[Mismatch, ...]:
@@ -120,19 +122,24 @@ def compatibility(
             "stream-element",
             f"{source.element.datatype_name} cannot feed {sink.element.datatype_name}",
         )
-    if source.lanes != sink.lanes:
-        refuse(Level.LOGICAL, "stream-lanes", f"{source.lanes} lanes cannot feed {sink.lanes}")
-    if source.repetition is Repetition.CYCLIC:
-        if not _period_divides(source.form, sink.form):
+    if sink.repetition is Repetition.CYCLIC and source.repetition is not Repetition.CYCLIC:
+        refuse(Level.LOGICAL, "stream-repetition", "a single pass cannot feed a cyclic consumer")
+    produced = _presented(source, sink)
+    if produced is None:
+        refuse(
+            Level.LOGICAL,
+            "stream-form",
+            "the consumer's pass is not whole repetitions of the cyclic source",
+        )
+    else:
+        verdict = classify(produced, sink.form)
+        if verdict.adaptation not in (Adaptation.IDENTITY, Adaptation.LANE_PERMUTATION):
+            detail = f": {verdict.reorder}" if verdict.reorder else ""
             refuse(
                 Level.LOGICAL,
                 "stream-form",
-                f"cyclic {source.form} does not repeat into {sink.form}",
+                f"needs a {verdict.adaptation.value} adapter ({verdict.detail}){detail}",
             )
-    elif sink.repetition is Repetition.CYCLIC:
-        refuse(Level.LOGICAL, "stream-repetition", "a single pass cannot feed a cyclic consumer")
-    elif source.form != sink.form:
-        refuse(Level.LOGICAL, "stream-form", f"{source.form} is not {sink.form}")
 
     offered = source.rules
     for signal, rule in sink.rules.items():
@@ -166,6 +173,26 @@ def compatibility(
     return tuple(found)
 
 
+def _presented(source: StreamContract, sink: StreamContract) -> Traversal | None:
+    """The sequence a source presents over one consumer pass (None if it cannot align)."""
+    if source.repetition is Repetition.ONCE or source.form.shape != sink.form.shape:
+        return source.form
+    if sink.form.beats % source.form.beats:
+        return None
+    count = sink.form.beats // source.form.beats
+    return source.form if count == 1 else source.form.repeated(count)
+
+
+def lane_permutation(source: StreamContract, sink: StreamContract) -> tuple[int, ...]:
+    """Sink field -> source field; the identity unless the lanes are only reordered."""
+    produced = _presented(source, sink)
+    if produced is not None:
+        verdict = classify(produced, sink.form)
+        if verdict.adaptation is Adaptation.LANE_PERMUTATION:
+            return verdict.lane_permutation
+    return tuple(range(sink.lanes))
+
+
 def marker_pairs(source: StreamContract, sink: StreamContract) -> tuple[tuple[str, str], ...]:
     """(source signal, sink signal) for each required sink marker."""
     offered = source.rules
@@ -194,5 +221,6 @@ __all__ = [
     "StreamContract",
     "StreamMismatch",
     "compatibility",
+    "lane_permutation",
     "marker_pairs",
 ]

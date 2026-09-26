@@ -23,3 +23,13 @@ Structural equivalence: every pre-existing assertion in tests/kernels/test_mvau_
 result padding, cyclic image order/parameters, portable builds) passes unchanged.
 
 No synthesis or place-and-route was run for this increment.
+
+Traversal revision (same day):
+  Gate: 301 Space tests, 750 kernel tests passed, no skips; format, lint, strict typing clean.
+  test_stream_contract.py: 21 tests, including canonical-equality property test (4000 random
+  pairs), tiled-MVU input/output reorders equal to mvu_tiled_axi.sv input_gen parameters,
+  OuterShuffle coefficients equal to shuffle_perfect_loopnest_coeffs, InnerShuffle as
+  lane_regroup, chunked weights as width_conversion, crossed-lane wiring, and the eltwise +
+  CyclicDelivery XSim run.
+  MVAU numeric XSI: 20 PASS (5 configurations x {external, cyclic} x {free, stalled}).
+  Documentation examples: 18 passed.

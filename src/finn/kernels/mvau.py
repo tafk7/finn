@@ -53,15 +53,7 @@ from finn.kernels.dotp import DotpAxiKernel
 from finn.kernels.physical.axi_stream import AxiStream
 from finn.kernels.physical.composition import Composition, StreamEnd
 from finn.kernels.physical.contract import StreamContract, StreamMismatch
-from finn.kernels.physical.forms import (
-    BEAT_FORM,
-    Batch,
-    BeatForm,
-    Every,
-    Fold,
-    Repeat,
-    Tile,
-)
+from finn.kernels.physical.forms import TRAVERSAL, Every, Traversal, tile, vector_major
 from finn.kernels.physical.lowering import lower_module_structure
 from finn.kernels.physical.structure import PhysicalStructure
 from finn.kernels.streaming import replay_buffer_contracts, replay_buffer_requirements
@@ -113,7 +105,7 @@ def exact_result_dtype(
 
 
 @dataclass(frozen=True, slots=True)
-class _Traversal:
+class _Folding:
     """Concrete stream extents and the native PE/SIMD packing order above."""
 
     repetitions: int
@@ -163,7 +155,7 @@ class MVAUAssembly:
 
 def _wire_mvau(
     *,
-    traversal: _Traversal,
+    folding: _Folding,
     activation_dtype: QONNXDataType,
     weights_dtype: QONNXDataType,
     result_dtype: QONNXDataType,
@@ -174,29 +166,31 @@ def _wire_mvau(
 ) -> MVAUAssembly:
     """Compose replay, compute and an optional weight source through checked streams.
 
-    The forms state the MVAU traversal: activation vectors are replayed once per
-    neuron fold, and weight tiles repeat once per vector. Without a weight source,
+    The traversals state the MVAU order: vector-major activations are replayed
+    once per neuron fold, and weight tiles repeat once per vector. Without a weight source,
     the weight stream is a top-level port. ``ports`` are dotp's accepted streams.
     """
     x, w, y = (ScalarEncoding(dtype) for dtype in (activation_dtype, weights_dtype, result_dtype))
-    t = traversal
+    t = folding
     external = weight_source is None
     weight_delivery = WeightDelivery.EXTERNAL if external else WeightDelivery.CYCLIC
     clocking = dict(clock="ap_clk", reset="ap_rst_n")
 
     def top(
-        name: str, element: ScalarEncoding, form: BeatForm, endpoint: Endpoint
+        name: str, element: ScalarEncoding, form: Traversal, endpoint: Endpoint
     ) -> StreamContract:
         stream = AxiStream(name, element.dtype, form.lanes, endpoint=endpoint)
         return StreamContract(stream.native(**clocking), element, form)
 
-    x_form = Batch(Fold(t.matrix_width, t.simd), t.repetitions)
-    w_form = Repeat(Tile(t.matrix_height, t.matrix_width, t.pe, t.simd), t.repetitions)
-    y_form = Batch(Fold(t.matrix_height, t.pe), t.repetitions)
+    x_form = vector_major((t.repetitions, t.matrix_width), t.simd)
+    w_form = tile(t.matrix_height, t.matrix_width, t.pe, t.simd).repeated(t.repetitions)
+    y_form = vector_major((t.repetitions, t.matrix_height), t.pe)
     x_top = top("in0_V", x, x_form, Endpoint.TARGET)
     w_top = top("in1_V", w, w_form, Endpoint.TARGET)
     y_top = top("out0_V", y, y_form, Endpoint.INITIATOR)
-    replay_in, replay_out = replay_buffer_contracts(x, x_form, replay_count=t.neuron_folds)
+    replay_in, replay_out = replay_buffer_contracts(
+        x, x_form, sequence_length=t.synapse_folds, replay_count=t.neuron_folds
+    )
     activation, weights, result = (port.native(**clocking) for port in ports)
 
     top_abi = ModuleABIRequirements(
@@ -271,15 +265,15 @@ def _wire_mvau(
     )
 
 
-def _replay(element: ScalarEncoding, traversal: _Traversal) -> ModuleBuildRequirements:
+def _replay(element: ScalarEncoding, folding: _Folding) -> ModuleBuildRequirements:
     return replay_buffer_requirements(
-        word_bits=traversal.simd * element.bits,
-        sequence_length=traversal.synapse_folds,
-        replay_count=traversal.neuron_folds,
+        word_bits=folding.simd * element.bits,
+        sequence_length=folding.synapse_folds,
+        replay_count=folding.neuron_folds,
     )
 
 
-TRAVERSAL = default_semantics(_Traversal)
+FOLDING = default_semantics(_Folding)
 MODULE_BUILD = default_semantics(ModuleBuildRequirements)
 ASSEMBLY = default_semantics(MVAUAssembly)
 AXI_PORTS = default_semantics(tuple)
@@ -294,7 +288,7 @@ class WeightDeliveryFamily(Space):
     streams, so a family cannot wire a compute core whose physical View was refused.
     """
 
-    traversal = Param(TRAVERSAL)
+    folding = Param(FOLDING)
     activation_dtype = Param(QONNX_DATATYPE_VALUE_SEMANTICS)
     weights_dtype = Param(QONNX_DATATYPE_VALUE_SEMANTICS)
     result_dtype = Param(QONNX_DATATYPE_VALUE_SEMANTICS)
@@ -308,7 +302,7 @@ class WeightDeliveryFamily(Space):
     ) -> MVAUAssembly | Rejected:
         try:
             return _wire_mvau(
-                traversal=self.traversal,
+                folding=self.folding,
                 activation_dtype=self.activation_dtype,
                 weights_dtype=self.weights_dtype,
                 result_dtype=self.result_dtype,
@@ -346,10 +340,10 @@ class CyclicWeights(WeightDeliveryFamily):
 
     weights = Param(INTEGER_TENSOR)
 
-    @derived(semantics=BEAT_FORM)
-    def weight_form(self) -> BeatForm:
-        t = self.traversal
-        return Tile(t.matrix_height, t.matrix_width, t.pe, t.simd)
+    @derived(semantics=TRAVERSAL)
+    def weight_form(self) -> Traversal:
+        t = self.folding
+        return tile(t.matrix_height, t.matrix_width, t.pe, t.simd)
 
     source = Subspace(
         CyclicDelivery, dtype=WeightDeliveryFamily.weights_dtype, form=weight_form, values=weights
@@ -395,10 +389,10 @@ class MVAU(Space):
         except ValueError as error:
             return reject("mvau-arithmetic", str(error))
 
-    @derived(semantics=TRAVERSAL)
-    def traversal(self) -> _Traversal | Rejected:
+    @derived(semantics=FOLDING)
+    def folding(self) -> _Folding | Rejected:
         try:
-            return _Traversal(
+            return _Folding(
                 self.repetitions, self.matrix_width, self.matrix_height, self.pe, self.simd
             )
         except ValueError as error:
@@ -406,8 +400,8 @@ class MVAU(Space):
 
     @constraint
     def dimensions_supported(self) -> bool:
-        # Reading the traversal propagates its folding refusal to this constraint.
-        return isinstance(self.traversal, _Traversal)
+        # Reading the folding propagates its refusal to this constraint.
+        return isinstance(self.folding, _Folding)
 
     dimensions = ConstraintGroup(dimensions_supported)
 
@@ -428,7 +422,7 @@ class MVAU(Space):
         {
             WeightDelivery.EXTERNAL.value: Subspace(
                 ExternalWeights,
-                traversal=traversal,
+                folding=folding,
                 activation_dtype=activation_dtype,
                 weights_dtype=weights_dtype,
                 result_dtype=result_type,
@@ -437,7 +431,7 @@ class MVAU(Space):
             ),
             WeightDelivery.CYCLIC.value: Subspace(
                 CyclicWeights,
-                traversal=traversal,
+                folding=folding,
                 activation_dtype=activation_dtype,
                 weights_dtype=weights_dtype,
                 result_dtype=result_type,

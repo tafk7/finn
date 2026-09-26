@@ -1,24 +1,30 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Logical beat forms: which operand positions each beat carries, and in what order.
+"""Logical stream order as a loop nest over a row-major operand.
 
-A form describes one pass of a stream over an operand of ``shape``. Beat ``n``
-field ``f`` carries ``position(n, f)``; field zero is the least-significant field
-of the physical word. Forms compare by value. Two streams carry the same
-sequence when their forms are equal, so a connection can be checked without
-enumerating positions; ``positions()`` enumerates them for packing and tests.
+A ``Traversal`` walks an operand of ``shape`` with two loop nests, both listed
+outer to inner. Each iteration of ``beat_loops`` is one beat; each iteration of
+``lane_loops`` is one field of that beat, field zero first (least significant).
+A loop advances the operand's flat row-major index by ``stride`` elements per
+step; a stride of zero repeats (replays) positions. Tiles, chunked tiles,
+transposes, sliding windows and replay are all ordinary loop nests.
 
-Forms deliberately contain no schedule, timing or physical bit placement. They
-correspond to the canon ``BeatSequence`` (``elements_per_beat``, ``beat_count``
-and ``beat``) for streams whose sequence has a named construction.
+Construction canonicalizes the nests, so two traversals are equal exactly when
+they present the same positions in the same beats and fields. ``classify``
+compares two traversals of one operand and names the adapter a mismatch needs:
+free lane wiring, a loop-nest reorder with its ``input_gen`` parameters, a width
+conversion, a lane regroup, or none at all. It corresponds to the canon
+``BeatSequence`` without adopting Regions.
 """
 
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from enum import Enum
+from math import prod
 
 from finn.core.space import ValueSemantics
 
@@ -30,161 +36,306 @@ def _positive(value: int, name: str) -> None:
         raise ValueError(f"{name} must be a positive integer")
 
 
-class BeatForm:
-    """Base of all forms: ``lanes`` fields per beat, ``beats`` beats per pass."""
+@dataclass(frozen=True, order=True)
+class Loop:
+    extent: int
+    stride: int
+
+    def __post_init__(self) -> None:
+        _positive(self.extent, "loop extent")
+        if type(self.stride) is not int or self.stride < 0:
+            raise ValueError("a loop stride is a nonnegative number of elements")
+
+
+def _canonical(loops: Sequence[Loop]) -> tuple[Loop, ...]:
+    """Drop unit loops and merge an outer loop into a contiguous inner one."""
+    merged: list[Loop] = []
+    for loop in loops:
+        if loop.extent == 1:
+            continue
+        if merged and merged[-1].stride == loop.extent * loop.stride:
+            outer = merged.pop()
+            loop = Loop(outer.extent * loop.extent, loop.stride)
+        merged.append(loop)
+    return tuple(merged)
+
+
+def _offsets(loops: Sequence[Loop]) -> Iterator[int]:
+    if not loops:
+        yield 0
+        return
+    head, rest = loops[0], loops[1:]
+    inner = tuple(_offsets(rest))
+    for index in range(head.extent):
+        for offset in inner:
+            yield index * head.stride + offset
+
+
+def _axis_strides(shape: Sequence[int]) -> tuple[int, ...]:
+    return tuple(prod(shape[axis + 1 :]) for axis in range(len(shape)))
+
+
+AxisStep = tuple[int | None, int, int]
+"""(operand axis or None for a replay loop, extent, step along that axis)."""
+
+
+@dataclass(frozen=True, init=False)
+class Traversal:
+    shape: tuple[int, ...]
+    beat_loops: tuple[Loop, ...]
+    lane_loops: tuple[Loop, ...]
+
+    def __init__(
+        self, shape: Sequence[int], beat_loops: Sequence[Loop], lane_loops: Sequence[Loop]
+    ) -> None:
+        shape = tuple(shape)
+        if not shape:
+            raise ValueError("a traversal walks an operand of rank at least one")
+        for extent in shape:
+            _positive(extent, "operand extent")
+        size = prod(shape)
+        for loop in (*beat_loops, *lane_loops):
+            if not isinstance(loop, Loop):
+                raise TypeError("traversal loops are Loop values")
+            if loop.stride and (loop.extent - 1) * loop.stride >= size:
+                raise ValueError(f"{loop} leaves an operand of {size} elements")
+        object.__setattr__(self, "shape", shape)
+        object.__setattr__(self, "beat_loops", _canonical(beat_loops))
+        object.__setattr__(self, "lane_loops", _canonical(lane_loops))
+        if max(_offsets(self.beat_loops)) + max(_offsets(self.lane_loops)) >= size:
+            raise ValueError("the traversal addresses positions outside the operand")
+
+    @classmethod
+    def over(
+        cls, shape: Sequence[int], beats: Sequence[AxisStep], lanes: Sequence[AxisStep]
+    ) -> Traversal:
+        """Build from (axis, extent, step) loops; axis None is a replay loop."""
+        strides = _axis_strides(tuple(shape))
+
+        def loops(steps: Sequence[AxisStep]) -> tuple[Loop, ...]:
+            return tuple(
+                Loop(extent, 0 if axis is None else step * strides[axis])
+                for axis, extent, step in steps
+            )
+
+        return cls(shape, loops(beats), loops(lanes))
 
     @property
     def lanes(self) -> int:
-        raise NotImplementedError
+        return prod(loop.extent for loop in self.lane_loops)
 
     @property
     def beats(self) -> int:
-        raise NotImplementedError
-
-    @property
-    def shape(self) -> tuple[int, ...]:
-        raise NotImplementedError
+        return prod(loop.extent for loop in self.beat_loops)
 
     def position(self, beat: int, field: int) -> Position:
-        raise NotImplementedError
+        flat = 0
+        for loops, index in ((self.beat_loops, beat), (self.lane_loops, field)):
+            for loop in reversed(loops):
+                index, digit = divmod(index, loop.extent)
+                flat += digit * loop.stride
+        position = []
+        for extent in reversed(self.shape):
+            flat, digit = divmod(flat, extent)
+            position.append(digit)
+        return tuple(reversed(position))
 
     def positions(self) -> Iterator[tuple[Position, ...]]:
         for beat in range(self.beats):
             yield tuple(self.position(beat, field) for field in range(self.lanes))
 
+    def repeated(self, count: int) -> Traversal:
+        """The whole pass presented ``count`` times."""
+        _positive(count, "count")
+        return Traversal(self.shape, (Loop(count, 0), *self.beat_loops), self.lane_loops)
+
+    def replayed(self, count: int, *, inner_beats: int) -> Traversal:
+        """Present every consecutive group of ``inner_beats`` beats ``count`` times."""
+        _positive(count, "count")
+        outer, inner = _split_at(self.beat_loops, inner_beats)
+        return Traversal(self.shape, (*outer, Loop(count, 0), *inner), self.lane_loops)
+
+
+def vector_major(shape: Sequence[int], lanes: int) -> Traversal:
+    """FINN's default order: row-major, the innermost axis split into ``lanes`` fields."""
+    shape = tuple(shape)
+    _positive(lanes, "lanes")
+    if shape[-1] % lanes:
+        raise ValueError("lanes must divide the innermost extent")
+    last = len(shape) - 1
+    beats = [(axis, extent, 1) for axis, extent in enumerate(shape[:-1])]
+    return Traversal.over(shape, (*beats, (last, shape[-1] // lanes, lanes)), ((last, lanes, 1),))
+
+
+def tile(rows: int, cols: int, pe: int, simd: int) -> Traversal:
+    """A (rows, cols) matrix in pe x simd tiles: row folds, then column folds; SIMD fastest."""
+    if rows % pe or cols % simd:
+        raise ValueError("PE must divide rows and SIMD must divide cols")
+    return Traversal.over(
+        (rows, cols),
+        ((0, rows // pe, pe), (1, cols // simd, simd)),
+        ((0, pe, 1), (1, simd, 1)),
+    )
+
+
+def _split(loop: Loop, boundary: int) -> tuple[Loop, ...] | None:
+    """Split one nonzero-stride loop at a stride boundary strictly inside it."""
+    low, high = loop.stride, loop.stride * loop.extent
+    if not loop.stride or not low < boundary < high:
+        return (loop,)
+    if boundary % low or loop.extent % (boundary // low):
+        return None
+    inner = boundary // low
+    return (Loop(loop.extent // inner, boundary), Loop(inner, loop.stride))
+
+
+def _refine(loops: Sequence[Loop], boundaries: set[int]) -> tuple[Loop, ...] | None:
+    refined: list[Loop] = []
+    for loop in loops:
+        pieces: tuple[Loop, ...] | None = (loop,)
+        for boundary in sorted(boundaries, reverse=True):
+            next_pieces: list[Loop] = []
+            for piece in pieces or ():
+                split = _split(piece, boundary)
+                if split is None:
+                    return None
+                next_pieces.extend(split)
+            pieces = tuple(next_pieces)
+        refined.extend(pieces or ())
+    return tuple(refined)
+
+
+def _common_refinement(
+    first: Sequence[Loop], second: Sequence[Loop]
+) -> tuple[tuple[Loop, ...], tuple[Loop, ...]] | None:
+    boundaries = {
+        value
+        for loop in (*first, *second)
+        if loop.stride
+        for value in (loop.stride, loop.stride * loop.extent)
+    }
+    a, b = _refine(first, boundaries), _refine(second, boundaries)
+    return None if a is None or b is None else (a, b)
+
+
+def _split_at(loops: Sequence[Loop], inner_beats: int) -> tuple[tuple[Loop, ...], tuple[Loop, ...]]:
+    _positive(inner_beats, "inner_beats")
+    outer: list[Loop] = list(loops)
+    inner: list[Loop] = []
+    remaining = inner_beats
+    while remaining > 1:
+        if not outer:
+            raise ValueError("inner_beats exceeds the pass")
+        loop = outer.pop()
+        if loop.extent <= remaining:
+            if remaining % loop.extent:
+                raise ValueError("inner_beats does not align with the loop nest")
+            inner.insert(0, loop)
+            remaining //= loop.extent
+            continue
+        if loop.extent % remaining:
+            raise ValueError("inner_beats does not align with the loop nest")
+        outer.append(Loop(loop.extent // remaining, loop.stride * remaining))
+        inner.insert(0, Loop(remaining, loop.stride))
+        remaining = 1
+    return tuple(outer), tuple(inner)
+
+
+class Adaptation(Enum):
+    """What must sit between a producer and a consumer of one operand."""
+
+    IDENTITY = "identity"
+    LANE_PERMUTATION = "lane_permutation"  # free: wires only
+    REORDER = "reorder"  # buffered loop-nest reorder or replay: input_gen / outer shuffle
+    WIDTH_CONVERSION = "width_conversion"  # same element order, different lanes: DWC
+    LANE_REGROUP = "lane_regroup"  # the lane axis changes: inner shuffle (banked transpose)
+    INCOMPATIBLE = "incompatible"  # different positions, or no loop-nest relation
+
 
 @dataclass(frozen=True)
-class Fold(BeatForm):
-    """A vector of ``extent`` elements, ``width`` consecutive elements per beat."""
+class Reorder:
+    """``input_gen`` parameters: per frame of ``frame_beats`` input beats, emit the
+    beat at ``sum(index[i] * coefs[i])`` for the nested ``dims`` (outer first)."""
 
-    extent: int
-    width: int
-
-    def __post_init__(self) -> None:
-        _positive(self.extent, "extent")
-        _positive(self.width, "width")
-        if self.extent % self.width:
-            raise ValueError("a fold's width must divide its extent")
-
-    @property
-    def lanes(self) -> int:
-        return self.width
-
-    @property
-    def beats(self) -> int:
-        return self.extent // self.width
-
-    @property
-    def shape(self) -> tuple[int, ...]:
-        return (self.extent,)
-
-    def position(self, beat: int, field: int) -> Position:
-        return (beat * self.width + field,)
+    frame_beats: int
+    dims: tuple[int, ...]
+    coefs: tuple[int, ...]
 
 
 @dataclass(frozen=True)
-class Tile(BeatForm):
-    """A (rows, cols) matrix in ``pe x simd`` tiles: row folds outer, column folds inner.
-
-    Field ``p * simd + s`` carries ``(nf * pe + p, sf * simd + s)``: SIMD varies
-    fastest within a beat. This is the MVAU/VVAU weight tile order.
-    """
-
-    rows: int
-    cols: int
-    pe: int
-    simd: int
-
-    def __post_init__(self) -> None:
-        for name in ("rows", "cols", "pe", "simd"):
-            _positive(getattr(self, name), name)
-        if self.rows % self.pe or self.cols % self.simd:
-            raise ValueError("PE must divide rows and SIMD must divide cols")
-
-    @property
-    def lanes(self) -> int:
-        return self.pe * self.simd
-
-    @property
-    def beats(self) -> int:
-        return (self.rows // self.pe) * (self.cols // self.simd)
-
-    @property
-    def shape(self) -> tuple[int, ...]:
-        return (self.rows, self.cols)
-
-    def position(self, beat: int, field: int) -> Position:
-        row_fold, col_fold = divmod(beat, self.cols // self.simd)
-        p, s = divmod(field, self.simd)
-        return (row_fold * self.pe + p, col_fold * self.simd + s)
+class Classification:
+    adaptation: Adaptation
+    detail: str = ""
+    lane_permutation: tuple[int, ...] = ()
+    reorder: Reorder | None = None
 
 
-@dataclass(frozen=True)
-class Repeat(BeatForm):
-    """The whole ``form`` sequence presented ``count`` times; positions repeat."""
-
-    form: BeatForm
-    count: int
-
-    def __post_init__(self) -> None:
-        if not isinstance(self.form, BeatForm):
-            raise TypeError("Repeat wraps a BeatForm")
-        _positive(self.count, "count")
-
-    @property
-    def lanes(self) -> int:
-        return self.form.lanes
-
-    @property
-    def beats(self) -> int:
-        return self.form.beats * self.count
-
-    @property
-    def shape(self) -> tuple[int, ...]:
-        return self.form.shape
-
-    def position(self, beat: int, field: int) -> Position:
-        return self.form.position(beat % self.form.beats, field)
-
-
-@dataclass(frozen=True)
-class Batch(BeatForm):
-    """``count`` distinct instances of ``form``, outermost; positions gain a leading index."""
-
-    form: BeatForm
-    count: int
-
-    def __post_init__(self) -> None:
-        if not isinstance(self.form, BeatForm):
-            raise TypeError("Batch wraps a BeatForm")
-        _positive(self.count, "count")
-
-    @property
-    def lanes(self) -> int:
-        return self.form.lanes
-
-    @property
-    def beats(self) -> int:
-        return self.form.beats * self.count
-
-    @property
-    def shape(self) -> tuple[int, ...]:
-        return (self.count, *self.form.shape)
-
-    def position(self, beat: int, field: int) -> Position:
-        index, inner = divmod(beat, self.form.beats)
-        return (index, *self.form.position(inner, field))
+def classify(source: Traversal, sink: Traversal) -> Classification:
+    """Name the adapter that turns ``source``'s sequence into ``sink``'s."""
+    if source.shape != sink.shape:
+        return Classification(Adaptation.INCOMPATIBLE, "different operand shapes")
+    if source == sink:
+        return Classification(Adaptation.IDENTITY)
+    if source.beat_loops == sink.beat_loops and source.lanes == sink.lanes:
+        offsets = list(_offsets(source.lane_loops))
+        wanted = list(_offsets(sink.lane_loops))
+        if Counter(offsets) == Counter(wanted):
+            return Classification(
+                Adaptation.LANE_PERMUTATION,
+                "the same positions in each beat, in another field order",
+                lane_permutation=tuple(offsets.index(offset) for offset in wanted),
+            )
+    if source.lane_loops == sink.lane_loops:
+        reorder = _reorder(source.beat_loops, sink.beat_loops)
+        if reorder is not None:
+            return Classification(
+                Adaptation.REORDER, "a buffered loop-nest reorder", reorder=reorder
+            )
+    flat = (
+        _canonical((*source.beat_loops, *source.lane_loops)),
+        _canonical((*sink.beat_loops, *sink.lane_loops)),
+    )
+    if flat[0] == flat[1]:
+        return Classification(
+            Adaptation.WIDTH_CONVERSION, f"{source.lanes} lanes regrouped as {sink.lanes}"
+        )
+    refined = _common_refinement(*flat)
+    if refined is not None and Counter(refined[0]) == Counter(refined[1]):
+        return Classification(Adaptation.LANE_REGROUP, "the same positions under another lane axis")
+    return Classification(Adaptation.INCOMPATIBLE, "the sequences present different positions")
 
 
-class Repetition(Enum):
-    """Pass correspondence of a producer: one pass, or its form repeated indefinitely.
+def _reorder(source: Sequence[Loop], sink: Sequence[Loop]) -> Reorder | None:
+    refined = _common_refinement(source, sink)
+    if refined is None:
+        return None
+    produced, consumed = refined
+    replays = [loop for loop in consumed if loop.stride == 0 and loop not in produced]
+    if Counter(consumed) - Counter(replays) != Counter(produced):
+        return None
+    shared = 0
+    while shared < min(len(produced), len(consumed)) and produced[shared] == consumed[shared]:
+        shared += 1
+    produced, consumed = produced[shared:], consumed[shared:]
+    beat_stride: dict[Loop, list[int]] = {}
+    for index, loop in enumerate(produced):
+        beat_stride.setdefault(loop, []).append(prod(item.extent for item in produced[index + 1 :]))
+    coefs = []
+    for loop in consumed:
+        strides = beat_stride.get(loop)
+        coefs.append(strides.pop(0) if strides else 0)
+    return Reorder(
+        prod(loop.extent for loop in produced),
+        tuple(loop.extent for loop in consumed),
+        tuple(coefs),
+    )
 
-    A cyclic producer of form ``F`` satisfies a consumer pass of ``F`` or
-    ``Repeat(F, k)``; the consumer's pass length is a whole number of periods.
-    """
 
-    ONCE = "once"
-    CYCLIC = "cyclic"
+def is_repetition(sink: Traversal, source: Traversal) -> bool:
+    """Whether ``sink`` is ``source`` presented a whole number of times."""
+    if sink == source:
+        return True
+    return sink.beats % source.beats == 0 and sink == source.repeated(sink.beats // source.beats)
 
 
 @dataclass(frozen=True)
@@ -200,26 +351,28 @@ class Every:
         return (beat + 1) % self.period == 0
 
 
-def pack(form: BeatForm, values: object, bits: int) -> tuple[int, ...]:
-    """Pack an integer operand of ``form.shape`` into one raw word per beat.
+class Repetition(Enum):
+    """Pass correspondence of a producer: one pass, or its traversal repeated indefinitely."""
 
-    Fields are ``bits`` wide, field zero least significant; values are stored
-    in two's complement. Range admission belongs to the caller's dtype policy.
-    """
+    ONCE = "once"
+    CYCLIC = "cyclic"
+
+
+def pack(form: Traversal, values: object, bits: int) -> tuple[int, ...]:
+    """Pack an integer operand of ``form.shape`` into one raw word per beat, field zero lowest."""
     _positive(bits, "bits")
+    _check_shape(values, form.shape)
     mask = (1 << bits) - 1
 
     def lookup(position: Position) -> int:
         item = values
         for index in position:
-            if not isinstance(item, Sequence) or not 0 <= index < len(item):
-                raise ValueError(f"operand has no position {position}; expected {form.shape}")
+            assert isinstance(item, Sequence)
             item = item[index]
         if type(item) is not int:
             raise ValueError(f"operand position {position} is not an integer")
         return item
 
-    _check_shape(values, form.shape)
     return tuple(
         sum((lookup(position) & mask) << (field * bits) for field, position in enumerate(beat))
         for beat in form.positions()
@@ -235,24 +388,29 @@ def _check_shape(values: object, shape: tuple[int, ...]) -> None:
         _check_shape(item, shape[1:])
 
 
-BEAT_FORM: ValueSemantics[BeatForm] = ValueSemantics(
-    BeatForm,
-    "beat form",
-    lambda value: isinstance(value, BeatForm),
+TRAVERSAL: ValueSemantics[Traversal] = ValueSemantics(
+    Traversal,
+    "traversal",
+    lambda value: type(value) is Traversal,
     lambda left, right: left == right,
     lambda value: value,
 )
 
 
 __all__ = [
-    "BEAT_FORM",
-    "Batch",
-    "BeatForm",
+    "Adaptation",
+    "AxisStep",
+    "Classification",
     "Every",
-    "Fold",
+    "Loop",
     "Position",
-    "Repeat",
+    "Reorder",
     "Repetition",
-    "Tile",
+    "TRAVERSAL",
+    "Traversal",
+    "classify",
+    "is_repetition",
     "pack",
+    "tile",
+    "vector_major",
 ]

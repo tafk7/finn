@@ -9,9 +9,11 @@ initialized ROM. Its ``output`` view is a stream contract, so a parent connects
 it to a consumer port with ``Composition.connect`` instead of wiring pins. The
 image is embedded in the build requirements; there is no initialization file.
 
-The same kernel serves a matrix tile walk (MVAU/VVAU weights), a channel vector
-(elementwise parameters) or any other form. A parent may place it inside an
-operation kernel or beside one; the contract is the same either way.
+The same kernel serves a matrix tile walk (MVAU/VVAU weights), a chunked or
+replicated tile (tiled MVU), a channel vector (elementwise parameters) or any
+other traversal, so the consumer's order is produced directly with no adapter.
+A parent may place it inside an operation kernel or beside one; the contract is
+the same either way.
 """
 
 from finn.core.space import Decision, Param, Rejected, derived, reject, view
@@ -27,7 +29,7 @@ from finn.kernels.datatypes.semantics import (
 )
 from finn.kernels.datatypes.values import ordinary_integer_bounds
 from finn.kernels.physical.contract import STREAM_CONTRACT, StreamContract
-from finn.kernels.physical.forms import BEAT_FORM, Repetition, pack
+from finn.kernels.physical.forms import TRAVERSAL, Repetition, pack
 from finn.kernels.streaming import (
     CYCLIC_ROM_STYLES,
     cyclic_stream_interface,
@@ -42,7 +44,7 @@ class CyclicDelivery(Kernel):
 
     dtype = Param(QONNX_DATATYPE_VALUE_SEMANTICS)
     element = integer_scalar(dtype, Integer())
-    form = Param(BEAT_FORM)
+    form = Param(TRAVERSAL)
     values = Param(INTEGER_TENSOR)
     rom_style = Decision(str, values=CYCLIC_ROM_STYLES)
 

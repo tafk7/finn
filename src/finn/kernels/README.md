@@ -229,32 +229,50 @@ scalar: FIFO, input generation and replay construct `ReadyValidStream` values
 directly rather than publishing unpadded words as AXI buses.
 
 A `StreamContract` (`physical/contract.py`) adds the logical sequence to a
-transport: the element encoding, a beat `form` (`physical/forms.py`: `Fold`,
-`Tile`, `Repeat`, `Batch`) naming which operand positions each beat carries in
-which field order, a `Repetition` (`ONCE`, or `CYCLIC` for a free-running
-source whose form repeats into the consumer's pass), and periodic marker rules
-(`Every(k)`). `compatibility(source, sink)` refuses logical mismatches (element,
-lanes, form, repetition, marker rules) that only a sequence-changing kernel
-could repair; physical and protocol differences that keep the sequence are
-realized by `Composition.connect`, which also checks clock domains and emits
-every data, padding, handshake and marker wire. Equal widths are not enough:
-`Tile(4, 4, 1, 4)` and `Tile(4, 4, 4, 1)` have the same lanes and word width
-but carry different positions, and cannot connect.
+transport: the element encoding, a `Traversal` (`physical/forms.py`), a
+`Repetition` (`ONCE`, or `CYCLIC` for a free-running source) and periodic marker
+rules (`Every(k)`). A traversal is a loop nest over the row-major operand:
+`beat_loops` step from beat to beat, `lane_loops` from field to field (field
+zero is least significant), and a stride of zero replays positions. Tiles,
+chunked tiles, transposes and replay are all loop nests; `vector_major` is
+FINN's default order. Traversals are canonical, so equal values present equal
+sequences.
 
-`CyclicDelivery` streams a constant integer operand in whatever form its
-consumer reads, from an initialized ROM. Its `output` view is a cyclic stream
-contract, so the same kernel feeds MVAU weight tiles or an eltwise channel
-vector, placed inside an operation kernel or beside one:
+`classify(source, sink)` names what a mismatch needs:
+
+| Adaptation | Meaning | Realized by |
+|---|---|---|
+| `identity` | same sequence | nothing |
+| `lane_permutation` | same positions per beat, other field order | wires (free) |
+| `reorder` | same lanes, other beat order or replay | `input_gen` / outer shuffle, with derived `DIMS`/`COEFS` |
+| `width_conversion` | same element order, other lane count | data-width converter |
+| `lane_regroup` | the lane axis changes | inner shuffle (banked transpose) |
+| `incompatible` | different positions | nothing |
+
+`compatibility` accepts the first two and refuses the rest, naming the adapter.
+`Composition.connect` checks clock domains too, then emits every data (with any
+lane permutation), padding, handshake and marker wire. The derived reorders
+reproduce the tiled MVU's two hard-coded `input_gen` stages and FINN's
+OuterShuffle coefficients exactly (see `tests/kernels/test_stream_contract.py`).
+
+`CyclicDelivery` streams a constant integer operand in whatever traversal its
+consumer reads, from an initialized ROM, so the consumer's order needs no
+adapter. Its `output` view is a cyclic stream contract; the same kernel feeds
+MVAU weight tiles or an eltwise channel vector, inside an operation kernel or
+beside one:
 
 ```python
 from finn.kernels import CyclicDelivery
-from finn.kernels.physical.forms import Fold, Repeat, Repetition
+from finn.kernels.physical.forms import Adaptation, Repetition, classify, vector_major
 
-vector = CyclicDelivery(dtype=dtype("INT4"), form=Fold(4, 2), values=(1, -2, 7, -8))
+channels = vector_major((4,), 2)
+vector = CyclicDelivery(dtype=dtype("INT4"), form=channels, values=(1, -2, 7, -8))
 rhs = vector.with_choices(rom_style="distributed")
 assert rhs.output().repetition is Repetition.CYCLIC
 assert rhs.image == (0xE1, 0x87)
-assert Repeat(rhs.output().form, 3).beats == 6  # a consumer pass of three vectors
+pixels = vector_major((3, 4), 2)  # three pixels of four channels, two lanes
+assert classify(channels.repeated(3), channels.repeated(3)).adaptation is Adaptation.IDENTITY
+assert classify(vector_major((3, 4), 4), pixels).adaptation is Adaptation.WIDTH_CONVERSION
 ```
 
 FIFO's `ram_style` remains a native preference. Its accepted `storage()` view

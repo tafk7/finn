@@ -23,6 +23,7 @@ from finn.kernels.physical.contract import (
     StreamContract,
     StreamMismatch,
     compatibility,
+    lane_permutation,
     marker_pairs,
 )
 from finn.kernels.physical.structure import (
@@ -135,12 +136,11 @@ class Composition:
         produced, consumed = source.contract, sink.contract
         src, dst = produced.transport, consumed.transport
         bits = produced.element.bits
-        for field_index in range(produced.lanes):
-            offset = field_index * bits
+        for field_index, source_field in enumerate(lane_permutation(produced, consumed)):
             self._wires.append(
                 PhysicalWire(
-                    _slice(sink.owner, dst.data, bits, offset),
-                    _slice(source.owner, src.data, bits, offset),
+                    _slice(sink.owner, dst.data, bits, field_index * bits),
+                    _slice(source.owner, src.data, bits, source_field * bits),
                 )
             )
         payload = produced.payload_bits
