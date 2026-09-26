@@ -116,13 +116,21 @@ def fetch(resource, root):
     with locked(root, resource.entry) as entry:
         if complete(entry, resource.digest):
             return entry
-        print(f"finn: fetching resource {resource.name} from {resource.source}", file=sys.stderr)
+        # A copy in another cache (e.g. when filling a directory to carry offline)
+        # saves the download; it is verified like a fetched tree.
+        copy = lookup(resource)
+        where = copy or resource.source
+        print(f"finn: fetching resource {resource.name} from {where}", file=sys.stderr)
         with tempfile.TemporaryDirectory(dir=root, prefix=f".{resource.entry}.") as work:
-            tree = assemble(resource, Path(work))
+            if copy:
+                tree = Path(work) / "tree"
+                shutil.copytree(copy, tree, symlinks=True)
+            else:
+                tree = assemble(resource, Path(work))
             actual = tree_digest(tree)
             if actual != resource.digest:
                 raise ResourceError(
-                    f"Resource {resource.name} from {resource.source} has digest {actual}, "
+                    f"Resource {resource.name} from {where} has digest {actual}, "
                     f"but {resource.origin} declares {resource.digest}. If the source was "
                     "changed on purpose, update the digest (`finn-resources update`)."
                 )

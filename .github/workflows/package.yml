@@ -46,9 +46,9 @@ jobs:
         run: |
           /tmp/finn-wheel/bin/python -I "$GITHUB_WORKSPACE/tests/util/runtime_resource_smoke.py" /tmp/smoke
           /tmp/finn-wheel/bin/build_dataflow --help
-          # The declarations ship in the wheel; hlslib is fetched on first use.
-          /tmp/finn-wheel/bin/python -I -c \
-            "from finn import resources; print(resources.path('hlslib'))"
+          # The resource declarations ship in the wheel; hlslib is fetched on first use.
+          /tmp/finn-wheel/bin/finn-resources list
+          test -f "$(/tmp/finn-wheel/bin/finn-resources path hlslib)/bnn-library.h"
 
       - name: Published metadata resolves
         # What `pip install finn` would need from PyPI (resolution only).

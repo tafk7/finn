@@ -173,7 +173,7 @@ if [ "$SKIP_XSI" -eq 0 ] && [ "$XILINX_AVAILABLE" -eq 1 ]; then
     $PYTHON -m finn.xsi.setup
     gecho "  finn_xsi built and verified"
     # Fetched on first use anyway; fetching now lets later builds run offline.
-    $PYTHON -c "from finn import resources; resources.path('hlslib'); resources.paths('vivado-boards')"
+    $PYTHON -m finn.resources fetch --kind vivado-boards --kind hls-include >/dev/null
     gecho "  finn-hlslib and board files fetched"
 elif [ "$SKIP_XSI" -eq 1 ]; then
     yecho "Step 4: Skipping hardware preparation (--skip-xsi)"

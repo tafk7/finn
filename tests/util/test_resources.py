@@ -609,3 +609,20 @@ def test_package_declarations_in_a_virtual_environment(tmp_path):
         "rtl",
     ]
     assert run("path", "acme-rtl").strip() == str(site / "acme_finn/rtl")
+
+
+def test_fetching_into_another_cache_copies_a_verified_copy(boards, tmp_path, monkeypatch):
+    fetched = Path(resources.path("kv260-boards"))
+
+    def no_network(*args):
+        raise AssertionError("fetched from the source")
+
+    monkeypatch.setattr(_store, "assemble", no_network)
+    (carried,) = resources.fetch(["kv260-boards"], tmp_path / "carry")
+    assert Path(carried).parent == tmp_path / "carry"
+    assert resources.tree_digest(carried) == resources.tree_digest(fetched)
+
+    # A copy that no longer matches its digest is refused, not propagated.
+    (fetched / "kv260/board.xml").write_text("tampered\n")
+    with pytest.raises(resources.ResourceError, match="has digest"):
+        resources.fetch(["kv260-boards"], tmp_path / "carry-again")

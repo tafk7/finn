@@ -28,16 +28,20 @@
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-# Stages: system -> python -> runtime -> sbx, and runtime -> release.
+# Stages: system -> python -> runtime -> dev -> sbx, and runtime -> release.
 #
 #   system   OS packages and the fixes Xilinx tools need. Changes rarely.
 #   python   uv and /opt/venv with FINN's locked dependencies (uv.lock), always
-#            active. FINN itself is not installed: the entrypoint installs the
-#            mounted checkout editable when a container starts.
+#            active, and the redistributable external resources (finn-hlslib).
+#            FINN itself is not installed: the entrypoint installs the mounted
+#            checkout editable when a container starts.
 #   runtime  accelerator userspace selected by FINN_RUNTIMES (XRT, SLASH).
-#   sbx      the runtime image plus the in-container privileges sbx needs.
+#   dev      the runtime image plus third-party Vivado board files, which FINN
+#            may not redistribute: for local images only. The default target.
+#   sbx      the dev image plus the in-container privileges sbx needs.
 #   release  the runtime image with a FINN wheel installed, for read-only use
-#            (SIF/HPC); no checkout is needed.
+#            (SIF/HPC); no checkout is needed. Board files are fetched on first
+#            use.
 #
 # The image is x86-64 only (Vivado and XRT are).
 
@@ -192,13 +196,13 @@ RUN test "$(uv pip list --format freeze | wc -l)" -gt 100 && \
     (cd /tmp/pytest-probe && pytest -q -p no:cacheprovider >/dev/null) && \
     rm -rf /tmp/pytest-probe
 
-# External resources (finn-hlslib, board files) in the read-only system cache,
-# fetched at the pins in finn/_data/resources.toml. finn.resources uses only the
-# standard library, so it runs from the mounted sources before FINN is installed.
+# Redistributable external resources (finn-hlslib) in the read-only system cache,
+# at the pins in finn/_data/resources.toml. finn.resources uses only the standard
+# library, so it runs from the mounted sources before FINN is installed.
 RUN --mount=type=bind,source=src/finn/resources,target=/tmp/src/finn/resources \
     --mount=type=bind,source=src/finn/_data/resources.toml,target=/tmp/src/finn/_data/resources.toml \
-    PYTHONPATH=/tmp/src python -B -c \
-        'from finn import resources as r; r.fetch(r.declarations(), "/opt/finn/resources")' && \
+    PYTHONPATH=/tmp/src python -B -m finn.resources fetch --all --redistributable-only \
+        --dest /opt/finn/resources >/dev/null && \
     rm -f /opt/finn/resources/.*.lock
 ENV FINN_RESOURCES_SYSTEM_CACHE=/opt/finn/resources
 
@@ -224,6 +228,19 @@ RUN --mount=type=bind,source=docker/runtimes,target=/tmp/runtimes \
     --mount=type=bind,source=docker/packages,target=/tmp/packages \
     --mount=type=bind,source=docker/install-runtimes.sh,target=/tmp/install-runtimes.sh \
     sh /tmp/install-runtimes.sh
+USER agent
+
+
+# --- dev ---------------------------------------------------------------------
+# Third-party Vivado board files join the system cache. They may not be
+# redistributed, so only images built locally contain them.
+FROM runtime AS dev
+USER root
+RUN --mount=type=bind,source=src/finn/resources,target=/tmp/src/finn/resources \
+    --mount=type=bind,source=src/finn/_data/resources.toml,target=/tmp/src/finn/_data/resources.toml \
+    PYTHONPATH=/tmp/src python -B -m finn.resources fetch --kind vivado-boards \
+        --dest /opt/finn/resources >/dev/null && \
+    rm -f /opt/finn/resources/.*.lock
 USER agent
 
 
@@ -263,7 +280,7 @@ USER agent
 #   npm prefix       global npm installs land in a directory that is on PATH.
 #   /etc/sandbox-persistent.sh
 #                    sbx-managed; it must exist for BASH_ENV to source.
-FROM runtime AS sbx
+FROM dev AS sbx
 USER root
 COPY docker/finn-bashenv.sh /etc/finn-bashenv.sh
 ENV BASH_ENV=/etc/finn-bashenv.sh \

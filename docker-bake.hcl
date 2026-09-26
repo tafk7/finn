@@ -81,7 +81,7 @@ function "labels" {
 
 target "finn" {
   inherits = ["_common"]
-  target   = "runtime"
+  target   = "dev"
   args     = { FINN_RUNTIMES = "" }
   labels   = labels("", false)
   tags     = [tag("", false)]
@@ -90,7 +90,7 @@ target "finn" {
 # Parameterized over FINN_RUNTIMES, for any manifest set.
 target "finn-runtime" {
   inherits = ["_common"]
-  target   = "runtime"
+  target   = "dev"
   args     = { FINN_RUNTIMES = runtime_set(FINN_RUNTIMES) }
   labels   = labels(FINN_RUNTIMES, false)
   tags     = [tag(FINN_RUNTIMES, false)]
@@ -98,7 +98,7 @@ target "finn-runtime" {
 
 target "finn-xrt" {
   inherits = ["_common"]
-  target   = "runtime"
+  target   = "dev"
   args     = { FINN_RUNTIMES = "xrt" }
   labels   = labels("xrt", false)
   tags     = [tag("xrt", false)]
@@ -132,7 +132,7 @@ target "finn-sbx-xrt" {
 # docker/packages/slash.deb, which FINN does not ship and CI cannot produce.
 target "finn-slash-xrt" {
   inherits = ["_common"]
-  target   = "runtime"
+  target   = "dev"
   args     = { FINN_RUNTIMES = "slash,xrt" }
   labels   = labels("slash,xrt", false)
   tags     = [tag("slash,xrt", false)]
@@ -140,7 +140,7 @@ target "finn-slash-xrt" {
 
 target "finn-slashkit-xrt" {
   inherits = ["_common"]
-  target   = "runtime"
+  target   = "dev"
   args     = { FINN_RUNTIMES = "slash,slashkit,xrt" }
   labels   = labels("slash,slashkit,xrt", false)
   tags     = [tag("slash,slashkit,xrt", false)]
