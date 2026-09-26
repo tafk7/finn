@@ -1,10 +1,8 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Dataflow modeling and compiler integration experiments.
+"""Reference Regions and Networks for concrete kernel families.
 
-Canonical physical components and explicit MVAU assembly live in finn.kernels.
-These modules retain logical contracts, Region/Network modeling and adapters.
+These constructors build canonical logical values only; they carry no Space,
+authoring or physical implementation.
 """
-
-__all__: tuple[str, ...] = ()

@@ -9,7 +9,7 @@ from finn.core.space import Available, Decision, Param, Rejected, Space, Unresol
 from finn.kernels.datatypes.domains import Integer, SignedInteger
 from finn.kernels.datatypes.scalar import Scalar, integer_scalar
 from finn.kernels.datatypes.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
-from finn.kernels.datatypes.values import resolve_qonnx_datatype_name as dtype
+from finn.dataflow.datatypes import resolve_qonnx_datatype_name as dtype
 from finn.kernels.int_to_fp32 import IntToFp32Kernel
 from finn.kernels.memstream_hls import MemStreamHlsKernel
 from kernels.test_dotp import kernel as dotp

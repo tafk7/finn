@@ -12,7 +12,7 @@ import pytest
 from finn.kernels.artifacts.abi import Direction, Signal
 from finn.kernels.artifacts.contribution_types import CopiedSource
 from finn.kernels.datatypes.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
-from finn.kernels.datatypes.values import resolve_qonnx_datatype_name
+from finn.dataflow.datatypes import resolve_qonnx_datatype_name
 from finn.kernels.eltwise import EltwiseKernel
 from finn.kernels.fifo import FifoKernel
 from finn.kernels.int_to_fp32 import IntToFp32Kernel

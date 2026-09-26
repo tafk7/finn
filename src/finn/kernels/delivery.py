@@ -27,7 +27,7 @@ from finn.kernels.datatypes.semantics import (
     QONNX_DATATYPE_VALUE_SEMANTICS,
     IntegerVector,
 )
-from finn.kernels.datatypes.values import ordinary_integer_bounds
+from finn.dataflow.datatypes import ordinary_integer_bounds
 from finn.kernels.physical.contract import STREAM_CONTRACT, StreamContract
 from finn.kernels.physical.forms import TRAVERSAL, Repetition, pack
 from finn.kernels.streaming import (

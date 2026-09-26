@@ -38,7 +38,7 @@ from finn.kernels.target import DspBlock, dsp_widths
 from finn.kernels.base import Kernel
 from finn.kernels.datatypes.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
 from finn.kernels.datatypes.domains import Integer, SignedInteger
-from finn.kernels.datatypes.values import (
+from finn.dataflow.datatypes import (
     DatatypeError,
     ordinary_integer_bounds,
     qonnx_datatype_width,

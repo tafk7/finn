@@ -8,7 +8,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-from finn.kernels.datatypes.values import QONNXDataType, canonical_qonnx_datatype
+from finn.dataflow.datatypes import QONNXDataType, canonical_qonnx_datatype
 from finn.dataflow.model.logical.maps import (
     AffineRankMap,
     Coordinate,

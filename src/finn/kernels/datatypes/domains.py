@@ -15,10 +15,10 @@ from dataclasses import dataclass
 from collections.abc import Iterable
 import re
 
-from finn.kernels.datatypes.values import QONNXDataType, qonnx_datatype_width
+from finn.dataflow.datatypes import QONNXDataType, qonnx_datatype_width
 from finn.core.space import Domain, Rejected, ValueRef, domain, reject
 from finn.kernels.datatypes.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
-from finn.kernels.datatypes.values import resolve_qonnx_datatype_name
+from finn.dataflow.datatypes import resolve_qonnx_datatype_name
 
 BitBound = int | ValueRef[int]
 

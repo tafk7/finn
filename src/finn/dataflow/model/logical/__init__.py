@@ -12,7 +12,7 @@ from importlib import import_module
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from finn.kernels.datatypes.values import (
+    from finn.dataflow.datatypes import (
         DatatypeError,
         QONNXDataType,
         canonical_qonnx_datatype,
@@ -138,7 +138,7 @@ if TYPE_CHECKING:
     )
 
 _EXPORT_GROUPS = {
-    "finn.kernels.datatypes.values": (
+    "finn.dataflow.datatypes": (
         "DatatypeError",
         "QONNXDataType",
         "canonical_qonnx_datatype",

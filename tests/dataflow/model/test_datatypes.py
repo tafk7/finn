@@ -1,21 +1,58 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Region datatype ingestion; scalar datatype coverage lives in tests/kernels."""
+"""Region datatype ingestion; datatype Space semantics are covered in tests/kernels."""
 
-from typing import cast
+from typing import Any, cast
 import pytest
-from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
-from finn.kernels.datatypes.values import (
+from qonnx.core.datatype import BaseDataType, DataType  # type: ignore[import-not-found]
+from finn.dataflow.datatypes import (
     DatatypeError,
     canonical_qonnx_datatype,
     QONNXDataType,
     is_qonnx_datatype,
     qonnx_datatype_width,
 )
-from finn.kernels.datatypes.semantics import QONNX_DATATYPE_SEMANTICS
 from finn.dataflow.model.logical.region import Operand, is_element_type
-from kernels.test_datatypes import _LyingWidth, _ZeroWidth
+
+
+class _LyingWidth(BaseDataType):  # type: ignore[misc]
+    """Names itself ``INT8`` truthfully and reports its width falsely."""
+
+    def get_canonical_name(self) -> str:
+        return "INT8"
+
+    def bitwidth(self) -> int:
+        raise RuntimeError("boom")
+
+    def min(self) -> int:
+        return 0
+
+    def max(self) -> int:
+        return 255
+
+    def allowed(self, value: float) -> bool:
+        return True
+
+    def is_integer(self) -> bool:
+        return True
+
+    def is_fixed_point(self) -> bool:
+        return False
+
+    def to_numpy_dt(self) -> Any:
+        return None
+
+    def get_num_possible_values(self) -> int:
+        return 256
+
+    def get_hls_datatype_str(self) -> str:
+        return "ap_uint<8>"
+
+
+class _ZeroWidth(_LyingWidth):
+    def bitwidth(self) -> int:
+        return 0
 
 
 def test_element_width_is_read_from_the_canonical_value_not_the_caller_s() -> None:
@@ -68,7 +105,7 @@ def test_an_instance_mutated_into_an_invalid_state_is_refused_not_raised() -> No
 
     Mutating ``_intwidth`` past the total width renames the datatype to
     ``FIXED<8,9>``, which QONNX then refuses to reconstruct.  Recognition must
-    stay total across that: ``accepts`` returns ``False``, and the Region
+    stay total across that: ``is_qonnx_datatype`` returns ``False``, and the Region
     constructor refuses at its own documented boundary rather than propagating
     an ``AssertionError`` from three layers down.
     """
@@ -78,7 +115,6 @@ def test_an_instance_mutated_into_an_invalid_state_is_refused_not_raised() -> No
     assert mutated.name == "FIXED<8,9>"
 
     assert is_qonnx_datatype(mutated) is False
-    assert QONNX_DATATYPE_SEMANTICS.accepts(mutated) is False
     with pytest.raises(DatatypeError):
         canonical_qonnx_datatype(mutated)
 

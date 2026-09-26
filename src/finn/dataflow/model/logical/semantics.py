@@ -1,29 +1,24 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Compatibility facade for logical value semantics.
+"""Space value semantics for the canonical logical values.
 
-Datatype and logical-result semantics have lightweight owning modules. This
-facade re-exports the same objects and declares the remaining Region, Network
-and validation-report domains. No alternative tokens are created by the split.
+Regions, Networks, position maps, validation reports and logical results are
+immutable values, so each is declared with the nominal ``finn.core.space``
+policy: exact type recognition, structural equality and identity snapshots.
+The one exception is ``LogicalResult``, a capability over two result classes,
+which therefore carries its own token.
+
+Scalar datatype semantics are not declared here; ``finn.kernels.datatypes``
+owns them.
 """
 
-from finn.kernels._engine import ValueSemantics
+from finn.core.space import ValueSemantics
 from finn.dataflow.model.logical.network import DataflowNetwork, PositionMap
 from finn.dataflow.model.logical.network_validation import NetworkValidationReport
 from finn.dataflow.model.logical.region import DataflowRegion
 from finn.dataflow.model.logical.region_validation import RegionValidationReport
-
-from finn.kernels.datatypes.semantics import (
-    QONNX_DATATYPE_CODEC,
-    QONNX_DATATYPE_SEMANTICS,
-    QONNX_DATATYPE_VALUE_SEMANTICS,
-)
-
-from finn.dataflow.model.logical.result_semantics import (
-    DATAFLOW_LOGICAL_RESULT_SEMANTICS,
-)
-
+from finn.dataflow.model.logical.results import LogicalResult, NetworkResult, RegionResult
 
 DATAFLOW_REGION_SEMANTICS = ValueSemantics.immutable_nominal(
     DataflowRegion,
@@ -37,8 +32,6 @@ DATAFLOW_NETWORK_SEMANTICS = ValueSemantics.immutable_nominal(
     DataflowNetwork,
     name="DataflowNetwork",
 )
-
-
 POSITION_MAP_SEMANTICS = ValueSemantics.immutable_nominal(
     PositionMap,
     name="PositionMap",
@@ -48,14 +41,36 @@ NETWORK_VALIDATION_REPORT_SEMANTICS = ValueSemantics.immutable_nominal(
     name="NetworkValidationReport",
 )
 
+
+class _LogicalResultToken:
+    """Identity token for the Region-or-Network result capability."""
+
+
+def _is_logical_result(value: object) -> bool:
+    return isinstance(value, (RegionResult, NetworkResult))
+
+
+def _logical_results_equal(left: LogicalResult, right: LogicalResult) -> bool:
+    return bool(left == right)
+
+
+def _logical_result_snapshot(value: LogicalResult) -> LogicalResult:
+    return value
+
+
+DATAFLOW_LOGICAL_RESULT_SEMANTICS: ValueSemantics[LogicalResult] = ValueSemantics(
+    type_token=_LogicalResultToken,
+    name="LogicalResult",
+    recognizes=_is_logical_result,
+    equal=_logical_results_equal,
+    snapshot=_logical_result_snapshot,
+)
+
 __all__ = [
     "DATAFLOW_LOGICAL_RESULT_SEMANTICS",
-    "DATAFLOW_REGION_SEMANTICS",
-    "QONNX_DATATYPE_CODEC",
     "DATAFLOW_NETWORK_SEMANTICS",
+    "DATAFLOW_REGION_SEMANTICS",
     "NETWORK_VALIDATION_REPORT_SEMANTICS",
     "POSITION_MAP_SEMANTICS",
-    "QONNX_DATATYPE_SEMANTICS",
-    "QONNX_DATATYPE_VALUE_SEMANTICS",
     "REGION_VALIDATION_REPORT_SEMANTICS",
 ]

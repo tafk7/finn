@@ -86,6 +86,17 @@ What the evidence settled:
      `space/` remains untracked there.
 - **Still open.** Negotiation and adapter insertion, the robust-MVAU items, MX
   (Section 5), and the physical-profile limits.
+- **Package rehome.** `finn.dataflow` now holds only the canonical logical
+  values: Regions, Networks, maps, their validation, presentation, refs,
+  composition, results and their `finn.core.space` value semantics, plus the
+  reference MVAU and cyclic-parameter Regions. The scalar datatype boundary moved
+  from `finn.kernels.datatypes.values` to `finn.dataflow.datatypes`. The
+  dependency direction is `finn.core.space <- finn.dataflow <- finn.kernels <-
+  finn.parked`. The retired implementation (authoring, Views, ops, kernel models,
+  `custom_op.dataflow`) lives under `finn.parked` and `tests/parked`. It is
+  excluded from the wheel and from every gate. `scripts/check-dataflow-design.sh`
+  is the canon gate (175 tests, strict `-p finn.dataflow`). Kernel gate: 301
+  Space and 758 kernel tests pass.
 
 ## 4. Direction: Space-native streams
 

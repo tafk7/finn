@@ -547,7 +547,7 @@ def kernel_workload(api, name: str, trials: int) -> dict[str, object]:
         kernels.MVAU,
         kernels.WeightDelivery,
     )
-    dtype = importlib.import_module("finn.kernels.datatypes.values").resolve_qonnx_datatype_name
+    dtype = importlib.import_module("finn.dataflow.datatypes").resolve_qonnx_datatype_name
     if name == "fifo":
         base = FifoKernel(word_bits=16, depth=32)
 

@@ -1,0 +1,1210 @@
+# Copyright (C) 2026, Advanced Micro Devices, Inc.
+# SPDX-License-Identifier: BSD-3-Clause
+
+"""G6: what an MVAU node *means*, as distinct from what is built for it.
+
+Three claims, and they are checked separately because they fail separately:
+
+1. the profile, the threshold operand and the narrowness analysis are read
+   from the graph correctly, and disagreements are reported rather than
+   assumed away;
+2. the numbers are the ones the previous implementation produced -- checked
+   against ``numpy.matmul``, ``xnorpopcountmatmul`` and ``multithreshold``
+   directly, not against a recorded expectation that could have been wrong
+   when it was recorded;
+3. a fused-threshold node is a valid *problem* with no applicable Kernel here,
+   which is a different outcome from an invalid node and must not be confused
+   with one.
+"""
+
+from __future__ import annotations
+from finn.kernels.space.declarations import Space
+
+from dataclasses import dataclass
+from typing import Any
+
+import numpy as np  # type: ignore[import-not-found]
+import pytest
+import qonnx.custom_op.general.xnorpopcount as xnor  # type: ignore[import-not-found]
+from onnx import TensorProto, helper  # type: ignore[import-not-found]
+from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
+from qonnx.core.modelwrapper import ModelWrapper  # type: ignore[import-not-found]
+from qonnx.custom_op.general.multithreshold import (  # type: ignore[import-not-found]
+    multithreshold,
+)
+
+from finn.analysis.verify_custom_nodes import verify_nodes
+from finn.kernels._engine import Absent, Decided, Unresolved
+from finn.parked.dataflow.analysis.integer_dot import (
+    DatatypeWeightPremise,
+    IntegerRange,
+    InvocationScope,
+    OperandIdentity,
+    RuntimeWeightPromise,
+)
+from finn.parked.dataflow.kernels.matmul.base import DspBlock
+from finn.kernels.space.declarations import AuthoringError
+from finn.parked.dataflow.ops.base import DATAFLOW_DOMAIN, DataflowOpError
+from finn.parked.dataflow.ops.space import DataflowSpace
+from finn.parked.dataflow.ops.mvau.op import MvauDataflowOp
+from finn.parked.dataflow.kernels.matmul.base import (
+    AccumulationMode,
+    ActivationMode,
+    MvauComputationProfile,
+    MatmulInterface,
+)
+from finn.parked.dataflow.ops.mvau.computation import execute_mvau
+from finn.parked.dataflow.kernels.matmul.base import WeightedDotProductKernel
+from finn.parked.dataflow.ops.mvau.op import origin_nodes, MvauSpace
+from finn.parked.dataflow.ops.persistence import assign_dataflow_scope_ids
+from finn.parked.dataflow.ops.schema import Attribute, OpInput, OpOutput
+
+from parked.dataflow.ops.test_dataflow_op import (
+    _space_for,
+    _rebind,
+    Build,
+    _configured_mvau,
+    _configure_mvau_point,
+    _replay_model,
+    _unbound,
+)
+
+MATRIX_WIDTH = 8
+MATRIX_HEIGHT = 4
+REPETITIONS = 2
+
+
+def _value(name: str, shape: tuple[int, ...]) -> Any:
+    return helper.make_tensor_value_info(name, TensorProto.FLOAT, list(shape))
+
+
+def _model(
+    *,
+    no_activation: bool = True,
+    binary_xnor: bool = False,
+    activation_bias: int = 0,
+    activation_type: str = "INT8",
+    weight_type: str = "INT8",
+    output_type: str = "INT32",
+    weights: np.ndarray | None = None,
+    thresholds: np.ndarray | None = None,
+    threshold_shape: tuple[int, ...] | None = None,
+    weight_initializer: bool = True,
+) -> ModelWrapper:
+    """One MVAU node, with whatever source semantics the test is about."""
+
+    inputs = ["activation", "weight"]
+    if thresholds is not None or threshold_shape is not None:
+        inputs.append("threshold")
+    node = helper.make_node(
+        "MvauDataflowOp",
+        inputs,
+        ["output"],
+        domain=DATAFLOW_DOMAIN,
+        name="mvau0",
+        outputDataType=output_type,
+        accDataType=output_type if no_activation else "INT32",
+        noActivation=int(no_activation),
+        binaryXnorMode=int(binary_xnor),
+        ActVal=activation_bias,
+    )
+    shape = threshold_shape or (
+        () if thresholds is None else tuple(int(extent) for extent in thresholds.shape)
+    )
+    extra = [_value("threshold", shape)] if shape else []
+    graph = helper.make_graph(
+        [node],
+        "mvau",
+        [_value("activation", (REPETITIONS, MATRIX_WIDTH))],
+        [_value("output", (REPETITIONS, MATRIX_HEIGHT))],
+        value_info=[_value("weight", (MATRIX_WIDTH, MATRIX_HEIGHT)), *extra],
+    )
+    model = ModelWrapper(
+        helper.make_model(
+            graph,
+            opset_imports=[helper.make_opsetid("", 13), helper.make_opsetid(DATAFLOW_DOMAIN, 1)],
+        )
+    )
+    model.set_tensor_datatype("activation", DataType[activation_type])
+    model.set_tensor_datatype("weight", DataType[weight_type])
+    model.set_tensor_datatype("output", DataType[output_type])
+    if weight_initializer:
+        model.set_initializer(
+            "weight",
+            np.zeros((MATRIX_WIDTH, MATRIX_HEIGHT), dtype=np.float32)
+            if weights is None
+            else weights.astype(np.float32),
+        )
+    if shape:
+        model.set_tensor_datatype("threshold", DataType["INT32"])
+        if thresholds is not None:
+            model.set_initializer("threshold", thresholds.astype(np.float32))
+    assign_dataflow_scope_ids(model, domain=DATAFLOW_DOMAIN)
+    return model
+
+
+def _bound(model: ModelWrapper) -> MvauSpace:
+    operation = _space_for(_unbound(model, "mvau0"), model, Build())
+    assert isinstance(operation, MvauSpace)
+    return operation
+
+
+def _findings(answer: Any) -> set[str]:
+    return {finding.code for finding in getattr(answer, "findings", ())}
+
+
+def _accepts(operation: MvauSpace) -> bool:
+    """Whether this node's own semantics are consistent."""
+
+    return operation.assess(MvauSpace.source_accepts).verdict is True
+
+
+def _refusals(operation: MvauSpace) -> set[str]:
+    """Every code the operation's own constraints reported."""
+
+    assessment = operation.assess(MvauSpace.source_accepts)
+    return {
+        finding.code
+        for answer in assessment.answers.values()
+        for finding in getattr(answer, "findings", ())
+    }
+
+
+# -- the profile ----------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("no_activation", "binary_xnor", "accumulation", "activation"),
+    [
+        (True, False, AccumulationMode.INTEGER, ActivationMode.NONE),
+        (True, True, AccumulationMode.XNOR_POPCOUNT, ActivationMode.NONE),
+        (False, False, AccumulationMode.INTEGER, ActivationMode.MULTITHRESHOLD),
+        # The combination one exclusive enum could not hold: an XNOR popcount
+        # *and then* a threshold.  Neither axis wins; both happen.
+        (False, True, AccumulationMode.XNOR_POPCOUNT, ActivationMode.MULTITHRESHOLD),
+    ],
+    ids=["integer", "xnor", "thresholded", "xnor-and-thresholded"],
+)
+def test_the_profile_carries_both_axes_independently(
+    no_activation: bool,
+    binary_xnor: bool,
+    accumulation: AccumulationMode,
+    activation: ActivationMode,
+) -> None:
+    thresholds = None if no_activation else np.zeros((MATRIX_HEIGHT, 1), dtype=np.float32)
+    model = _model(no_activation=no_activation, binary_xnor=binary_xnor, thresholds=thresholds)
+
+    assert _bound(model).answer(MvauSpace.profile) == Decided(
+        MvauComputationProfile(accumulation, activation)
+    )
+
+
+def test_bipolar_operands_are_a_popcount_whatever_the_attribute_says() -> None:
+    """The accumulation depends on the datatypes, so the derivation reads them."""
+
+    model = _model(activation_type="BIPOLAR", weight_type="BIPOLAR")
+
+    assert _bound(model).answer(MvauSpace.profile) == Decided(
+        MvauComputationProfile(AccumulationMode.BIPOLAR_POPCOUNT, ActivationMode.NONE)
+    )
+
+
+# -- the threshold operand ------------------------------------------------------
+
+
+def test_a_thresholded_node_reads_its_threshold_operand() -> None:
+    thresholds = np.array([[1.0], [2.0], [3.0], [4.0]], dtype=np.float32)
+    operation = _bound(_model(no_activation=False, thresholds=thresholds))
+
+    assert operation.source.has("threshold")
+    assert operation.answer(MvauSpace.threshold__present) == Decided(True)
+    assert operation.source.operand("threshold").shape == (MATRIX_HEIGHT, 1)
+
+
+def test_a_plain_node_has_no_threshold_operand_and_that_is_not_a_refusal() -> None:
+    operation = _bound(_model())
+
+    assert not operation.source.has("threshold")
+    assert operation.answer(MvauSpace.threshold__present) == Decided(False)
+    assert _accepts(operation)
+
+
+def test_a_fused_activation_without_thresholds_is_refused() -> None:
+    """Neither half of the disagreement is repairable, so it is a refusal."""
+
+    assert _accepts(_bound(_model(no_activation=True)))
+
+    operation = _bound(_model(no_activation=False))
+
+    assert "mvau-threshold-presence-mismatch" in _refusals(operation)
+
+
+def test_thresholds_on_a_node_that_fuses_nothing_are_refused() -> None:
+    """Silently ignoring them would compute something the graph did not ask for."""
+
+    thresholds = np.zeros((MATRIX_HEIGHT, 1), dtype=np.float32)
+    operation = _bound(_model(no_activation=True, thresholds=thresholds))
+
+    assert "mvau-threshold-presence-mismatch" in _refusals(operation)
+
+
+@pytest.mark.parametrize(
+    "shape", [(MATRIX_HEIGHT + 1, 1), (MATRIX_HEIGHT,), (1, MATRIX_HEIGHT, 1)], ids=str
+)
+def test_a_threshold_operand_is_one_row_per_output_channel(shape: tuple[int, ...]) -> None:
+    operation = _bound(_model(no_activation=False, threshold_shape=shape))
+
+    assert "mvau-threshold-shape" in _refusals(operation)
+
+
+# -- narrowness is derived from the weights -------------------------------------
+
+
+def test_narrow_weights_is_read_from_the_matrix_not_asserted_about_it() -> None:
+    using_minimum = np.full((MATRIX_WIDTH, MATRIX_HEIGHT), -128.0, dtype=np.float32)
+    avoiding_it = np.full((MATRIX_WIDTH, MATRIX_HEIGHT), -127.0, dtype=np.float32)
+
+    assert _bound(_model(weights=avoiding_it)).answer(
+        MvauSpace.effective_narrow_weights
+    ) == Decided(True)
+    assert _bound(_model(weights=using_minimum)).answer(
+        MvauSpace.effective_narrow_weights
+    ) == Decided(False)
+
+
+def test_a_matrix_with_no_initializer_is_not_promised_to_be_narrow() -> None:
+    """Absent is ``False``: hardware cannot be built on a promise nobody made."""
+
+    operation = _bound(_model(weight_initializer=False))
+
+    assert not isinstance(operation.answer(MvauSpace.weight.value_summary), Decided)
+    assert operation.answer(MvauSpace.effective_narrow_weights) == Decided(False)
+
+
+def test_the_analysis_keeps_only_its_scalar_result() -> None:
+    """The array is read at binding time and does not survive into the point."""
+
+    operation = _bound(_model(weights=np.full((MATRIX_WIDTH, MATRIX_HEIGHT), 3.0)))
+
+    assert operation.answer(MvauSpace.weight_excludes_minimum) == Decided(True)
+    assert all(not isinstance(value, np.ndarray) for value in operation.problem_snapshot.values())
+
+
+@pytest.mark.parametrize(
+    ("values", "expected"),
+    [
+        (np.array([[-128.0, 0.0]]), False),
+        (np.array([[-127.0, 5.0]]), True),
+        (np.array([]), None),
+    ],
+    ids=["uses-minimum", "avoids-minimum", "empty"],
+)
+def test_the_analysis_says_nothing_when_it_cannot_ask(
+    values: np.ndarray, expected: bool | None
+) -> None:
+    answer = _bound(_model(weights=values)).answer(MvauSpace.weight_excludes_minimum)
+    if expected is None:
+        assert not isinstance(answer, Decided)
+    else:
+        assert answer == Decided(expected)
+
+
+# -- what the operation is authoritative for ------------------------------------
+
+
+def test_a_plain_node_derives_its_output_datatype_from_the_accumulator() -> None:
+    assert _bound(_model()).expected_outputs()["output"] == (
+        (REPETITIONS, MATRIX_HEIGHT),
+        DataType["INT32"],
+    )
+
+
+def test_a_thresholded_node_derives_its_output_datatype_from_the_source_attribute() -> None:
+    """The explicit source outputDataType also repairs the graph annotation."""
+
+    thresholds = np.zeros((MATRIX_HEIGHT, 1), dtype=np.float32)
+    operation = _bound(_model(no_activation=False, thresholds=thresholds, output_type="UINT4"))
+
+    shape, datatype = operation.expected_outputs()["output"]
+
+    assert shape == (REPETITIONS, MATRIX_HEIGHT)
+    assert datatype == DataType["UINT4"]
+    assert operation.reconciliation() == ()
+
+
+@pytest.mark.parametrize("operand_type,binary_xnor", [("BINARY", True), ("BIPOLAR", False)])
+@pytest.mark.parametrize("fused", [False, True])
+def test_popcount_source_typing_survives_inference_without_admitting_a_kernel(
+    operand_type: str,
+    binary_xnor: bool,
+    fused: bool,
+) -> None:
+    output = "UINT4" if fused else "INT32"
+    model = _model(
+        no_activation=not fused,
+        binary_xnor=binary_xnor,
+        activation_type=operand_type,
+        weight_type=operand_type,
+        weights=np.ones((MATRIX_WIDTH, MATRIX_HEIGHT), dtype=np.float32),
+        output_type=output,
+        thresholds=np.zeros((MATRIX_HEIGHT, 1), dtype=np.float32) if fused else None,
+    )
+    operation = _bound(model)
+    assert _accepts(operation)
+    assert operation.operand_type("result") == Decided(DataType[output])
+    wrapper = _unbound(model, "mvau0")
+    wrapper.infer_node_datatype(model)
+    assert model.get_tensor_datatype("output") == DataType[output]
+    chosen = _configure_mvau_point(operation)
+    assert isinstance(chosen.dataflow.accepted_answer, Absent)
+    expected = (
+        "mvau-kernel-fuses-no-activation" if fused else "mvau-kernel-accumulation-unsupported"
+    )
+    assert expected in _findings(chosen.dataflow.accepted_answer)
+    assert isinstance(chosen.physical.accepted_answer, Absent)
+
+
+@pytest.mark.parametrize("operand_type,binary_xnor", [("BINARY", True), ("BIPOLAR", False)])
+@pytest.mark.parametrize("accumulator", ["INT4", "UINT3", "FLOAT32"])
+def test_popcount_precision_rejects_unrepresentable_counts_and_clears_stale_annotations(
+    operand_type: str,
+    binary_xnor: bool,
+    accumulator: str,
+) -> None:
+    model = _model(
+        binary_xnor=binary_xnor,
+        activation_type=operand_type,
+        weight_type=operand_type,
+        output_type=accumulator,
+        weights=np.ones((MATRIX_WIDTH, MATRIX_HEIGHT), dtype=np.float32),
+    )
+    operation = _bound(model)
+    answer = operation.operand_type("result")
+    assert isinstance(answer, Absent)
+    expected = (
+        "mvau-popcount-accumulator-type"
+        if accumulator == "FLOAT32"
+        else "mvau-accumulator-precision"
+    )
+    assert expected in _findings(answer)
+    model.set_tensor_datatype("output", DataType["INT32"])
+    _unbound(model, "mvau0").infer_node_datatype(model)
+    assert not any(
+        item.tensor_name == "output" and entry.key == "finn_datatype"
+        for item in model.graph.quantization_annotation
+        for entry in item.quant_parameter_tensor_names
+    )
+
+
+@pytest.mark.parametrize(
+    "activation,weight", [("INT8", "BINARY"), ("BINARY", "INT8"), ("BIPOLAR", "BIPOLAR")]
+)
+def test_xnor_profile_rejects_nonbinary_operand_semantics(activation: str, weight: str) -> None:
+    model = _model(
+        binary_xnor=True,
+        activation_type=activation,
+        weight_type=weight,
+        weights=np.ones((MATRIX_WIDTH, MATRIX_HEIGHT), dtype=np.float32),
+    )
+    answer = _bound(model).operand_type("result")
+    assert isinstance(answer, Absent)
+    assert "mvau-popcount-operands" in _findings(answer)
+
+
+@pytest.mark.parametrize(
+    "activation,weight,eligible",
+    [
+        ("INT4", "UINT4", False),
+        ("BINARY", "INT4", False),
+        ("INT4", "BINARY", False),
+        ("TERNARY", "INT4", False),
+        ("INT1", "INT4", False),
+        ("INT4", "INT4", True),
+    ],
+)
+def test_semantic_integer_type_inference_is_separate_from_primitive_type_eligibility(
+    activation: str,
+    weight: str,
+    eligible: bool,
+) -> None:
+    model = _model(
+        activation_type=activation,
+        weight_type=weight,
+        weights=np.ones((MATRIX_WIDTH, MATRIX_HEIGHT), dtype=np.float32),
+    )
+    wrapper = _unbound(model, "mvau0")
+    operation = wrapper.space  # no target facts and no implementation/folding selection
+    assert _accepts(operation)
+    assert isinstance(operation.resolve_implementation(), Unresolved)
+    assert operation.operand_type("result") == Decided(DataType["INT32"])
+    family = operation.interface_binding.resolve(operation)
+    assert isinstance(family, Decided)
+    profile = family.value.assess_view(MatmulInterface.integer_type_profile).accepted_answer
+    assert isinstance(profile, Decided) is eligible
+    if not eligible:
+        assert isinstance(profile, Absent)
+    wrapper.infer_node_datatype(model)
+    assert model.get_tensor_datatype("output") == DataType["INT32"]
+    if not eligible:
+        chosen = _configure_mvau_point(_bound(model))
+        assert isinstance(chosen.dataflow.accepted_answer, Absent)
+        assert isinstance(chosen.physical.accepted_answer, Absent)
+
+
+# -- the Kernels' applicability -------------------------------------------------
+
+
+def test_a_fused_threshold_node_is_valid_and_has_no_applicable_design() -> None:
+    """A different outcome from an invalid node, and reported differently."""
+
+    thresholds = np.zeros((MATRIX_HEIGHT, 1), dtype=np.float32)
+    operation = _bound(_model(no_activation=False, thresholds=thresholds))
+
+    assert _accepts(operation)
+
+    chosen = _configure_mvau_point(operation)
+    assert "mvau-kernel-fuses-no-activation" in _findings(chosen.dataflow.accepted_answer)
+
+
+def test_the_refusal_belongs_to_the_design_and_not_to_the_operation() -> None:
+    """Named where it is: the mathematics is fine, this composition is not."""
+
+    assert any(
+        item is WeightedDotProductKernel.computes_a_bare_accumulator
+        for item in WeightedDotProductKernel.logical_support.constraints
+    )
+    assert all(
+        item is not WeightedDotProductKernel.computes_a_bare_accumulator
+        for item in MvauSpace.source_accepts.constraints
+    )
+
+
+# -- execution ------------------------------------------------------------------
+
+
+def _executed(model: ModelWrapper, **values: np.ndarray) -> np.ndarray:
+    operation = _unbound(model, "mvau0")
+    operation.attach_model(model)
+    context: dict[str, Any] = dict(values)
+    if isinstance(operation, Space):
+        adapter = _unbound(model, "mvau0")
+        adapter.space = operation
+        adapter.execute_node(context, model.graph)
+    else:
+        operation.execute_node(context, model.graph)
+    return np.asarray(context["output"])
+
+
+def test_an_integer_node_computes_a_matrix_product() -> None:
+    activation = np.arange(REPETITIONS * MATRIX_WIDTH, dtype=np.float32).reshape(
+        REPETITIONS, MATRIX_WIDTH
+    )
+    weight = np.arange(MATRIX_WIDTH * MATRIX_HEIGHT, dtype=np.float32).reshape(
+        MATRIX_WIDTH, MATRIX_HEIGHT
+    )
+
+    result = _executed(_model(weights=weight), activation=activation, weight=weight)
+
+    assert np.array_equal(result, np.matmul(activation, weight))
+
+
+def test_an_xnor_node_computes_a_popcount_product() -> None:
+    activation = (
+        np.random.RandomState(0).randint(0, 2, (REPETITIONS, MATRIX_WIDTH)).astype(np.float32)
+    )
+    weight = (
+        np.random.RandomState(1).randint(0, 2, (MATRIX_WIDTH, MATRIX_HEIGHT)).astype(np.float32)
+    )
+    model = _model(binary_xnor=True, activation_type="BINARY", weight_type="BINARY")
+
+    result = _executed(model, activation=activation, weight=weight)
+
+    assert np.array_equal(result, xnor.xnorpopcountmatmul(activation, weight))
+
+
+def test_bipolar_operands_are_mapped_before_the_popcount() -> None:
+    """The oracle's special case, and the one an integer matmul gets wrong."""
+
+    activation = (
+        np.random.RandomState(2).choice([-1.0, 1.0], (REPETITIONS, MATRIX_WIDTH)).astype(np.float32)
+    )
+    weight = (
+        np.random.RandomState(3)
+        .choice([-1.0, 1.0], (MATRIX_WIDTH, MATRIX_HEIGHT))
+        .astype(np.float32)
+    )
+    model = _model(activation_type="BIPOLAR", weight_type="BIPOLAR")
+
+    result = _executed(model, activation=activation, weight=weight)
+
+    expected = xnor.xnorpopcountmatmul((activation + 1) / 2, (weight + 1) / 2)
+    assert np.array_equal(result, expected)
+    assert not np.array_equal(result, np.matmul(activation, weight))
+
+
+def test_a_thresholded_node_applies_its_thresholds() -> None:
+    activation = np.arange(REPETITIONS * MATRIX_WIDTH, dtype=np.float32).reshape(
+        REPETITIONS, MATRIX_WIDTH
+    )
+    weight = np.ones((MATRIX_WIDTH, MATRIX_HEIGHT), dtype=np.float32)
+    thresholds = np.array([[10.0, 40.0]] * MATRIX_HEIGHT, dtype=np.float32)
+    model = _model(no_activation=False, thresholds=thresholds, output_type="UINT4")
+
+    result = _executed(model, activation=activation, weight=weight, threshold=thresholds)
+
+    expected = multithreshold(np.matmul(activation, weight), thresholds, 1, 0)
+    assert np.array_equal(result, expected)
+
+
+def test_a_bipolar_output_scales_and_biases_the_threshold_result() -> None:
+    activation = np.arange(REPETITIONS * MATRIX_WIDTH, dtype=np.float32).reshape(
+        REPETITIONS, MATRIX_WIDTH
+    )
+    weight = np.ones((MATRIX_WIDTH, MATRIX_HEIGHT), dtype=np.float32)
+    thresholds = np.array([[40.0]] * MATRIX_HEIGHT, dtype=np.float32)
+
+    result = execute_mvau(
+        activation=activation,
+        weight=weight,
+        thresholds=thresholds,
+        profile=MvauComputationProfile(AccumulationMode.INTEGER, ActivationMode.MULTITHRESHOLD),
+        output_type=DataType["BIPOLAR"],
+        activation_bias=0,
+    )
+
+    assert np.array_equal(result, multithreshold(np.matmul(activation, weight), thresholds, 2, -1))
+
+
+def test_the_activation_bias_reaches_the_threshold_result() -> None:
+    activation = np.ones((REPETITIONS, MATRIX_WIDTH), dtype=np.float32)
+    weight = np.ones((MATRIX_WIDTH, MATRIX_HEIGHT), dtype=np.float32)
+    thresholds = np.array([[4.0]] * MATRIX_HEIGHT, dtype=np.float32)
+    model = _model(no_activation=False, thresholds=thresholds, activation_bias=-3)
+
+    result = _executed(model, activation=activation, weight=weight, threshold=thresholds)
+
+    assert np.array_equal(result, multithreshold(np.matmul(activation, weight), thresholds, 1, -3))
+
+
+def test_a_four_dimensional_result_is_transposed_around_multithreshold() -> None:
+    """Channels-last in, channels-last out, channels-second in between."""
+
+    activation = np.arange(2 * 3 * 3 * MATRIX_WIDTH, dtype=np.float32).reshape(
+        2, 3, 3, MATRIX_WIDTH
+    )
+    weight = np.ones((MATRIX_WIDTH, MATRIX_HEIGHT), dtype=np.float32)
+    thresholds = np.array([[100.0, 400.0]] * MATRIX_HEIGHT, dtype=np.float32)
+
+    result = execute_mvau(
+        activation=activation,
+        weight=weight,
+        thresholds=thresholds,
+        profile=MvauComputationProfile(AccumulationMode.INTEGER, ActivationMode.MULTITHRESHOLD),
+        output_type=DataType["UINT4"],
+        activation_bias=0,
+    )
+
+    product = np.matmul(activation, weight)
+    expected = multithreshold(product.transpose((0, 3, 1, 2)), thresholds, 1, 0).transpose(
+        (0, 2, 3, 1)
+    )
+    assert result.shape == product.shape
+    assert np.array_equal(result, expected)
+
+
+def test_execution_without_a_model_refuses_rather_than_guessing_a_datatype() -> None:
+    """Constructed directly, as a caller outside QONNX's own path would."""
+
+    model = _model()
+    operation = MvauDataflowOp(model.graph.node[0], 1)
+
+    with pytest.raises(DataflowOpError, match="creation has not completed"):
+        operation.execute_node({}, model.graph)
+
+
+def test_a_bound_occurrence_executes_from_its_frozen_reading() -> None:
+    """Both states answer, and they answer the same."""
+
+    activation = np.ones((REPETITIONS, MATRIX_WIDTH), dtype=np.float32)
+    weight = np.ones((MATRIX_WIDTH, MATRIX_HEIGHT), dtype=np.float32)
+    model = _model(weights=weight)
+    operation = _bound(model)
+
+    context: dict[str, Any] = {"activation": activation, "weight": weight}
+    if isinstance(operation, Space):
+        adapter = _unbound(model, "mvau0")
+        adapter.space = operation
+        adapter.execute_node(context, model.graph)
+    else:
+        operation.execute_node(context, model.graph)
+
+    assert np.array_equal(context["output"], np.matmul(activation, weight))
+
+
+def test_source_execution_is_independent_of_target_accumulator_limit() -> None:
+    activation = np.ones((REPETITIONS, MATRIX_WIDTH), dtype=np.float32)
+    weight = np.ones((MATRIX_WIDTH, MATRIX_HEIGHT), dtype=np.float32)
+    model = _model(output_type="INT64", weights=weight)
+    operation = _bound(model)
+    source = operation.answer(MvauSpace.source_numerical_report)
+    target = operation.answer(MvauSpace.numerical_support)
+    assert isinstance(source, Decided) and source.value.supported
+    assert isinstance(target, Decided)
+    assert {finding.code for finding in target.value.findings} == {
+        "integer-target-accumulator-limit"
+    }
+
+    context: dict[str, Any] = {"activation": activation, "weight": weight}
+    if isinstance(operation, Space):
+        adapter = _unbound(model, "mvau0")
+        adapter.space = operation
+        adapter.execute_node(context, model.graph)
+    else:
+        operation.execute_node(context, model.graph)
+    assert context["output"].dtype == np.int32
+    assert np.array_equal(
+        context["output"],
+        np.full((REPETITIONS, MATRIX_HEIGHT), MATRIX_WIDTH, dtype=np.int32),
+    )
+
+
+def test_unbound_source_execution_is_independent_of_target_accumulator_limit() -> None:
+    activation = np.ones((REPETITIONS, MATRIX_WIDTH), dtype=np.float32)
+    weight = np.ones((MATRIX_WIDTH, MATRIX_HEIGHT), dtype=np.float32)
+    model = _model(output_type="INT64", weights=weight)
+    operation = _unbound(model, "mvau0")
+    operation.attach_model(model)
+    context: dict[str, Any] = {"activation": activation, "weight": weight}
+    if isinstance(operation, Space):
+        adapter = _unbound(model, "mvau0")
+        adapter.space = operation
+        adapter.execute_node(context, model.graph)
+    else:
+        operation.execute_node(context, model.graph)
+    assert np.array_equal(
+        context["output"],
+        np.full((REPETITIONS, MATRIX_HEIGHT), MATRIX_WIDTH, dtype=np.int32),
+    )
+
+
+# -- verification ---------------------------------------------------------------
+
+
+def test_verify_node_reports_what_the_projection_would_refuse() -> None:
+    """One set of checks, two audiences -- never two sets that can disagree."""
+
+    assert _unbound(_model(), "mvau0").verify_node() == []
+
+    broken = _unbound(_model(no_activation=False), "mvau0")
+    messages = broken.verify_node()
+
+    assert messages and any("threshold" in message for message in messages)
+
+
+# -- the graph names -------------------------------------------------------------
+
+
+def test_the_node_attributes_keep_the_names_finns_graphs_already_use() -> None:
+    declared = _unbound(_model(), "mvau0").get_nodeattr_types()
+
+    assert {"noActivation", "binaryXnorMode", "ActVal", "accDataType"} <= set(declared)
+    assert "no_activation" not in declared
+
+
+def test_two_members_may_not_read_one_node_attribute() -> None:
+    with pytest.raises(AuthoringError, match="one graph attribute is one source fact"):
+
+        class Doubled(DataflowSpace):
+            family = "test.doubled"
+            activation = OpInput(index=0)
+            result = OpOutput(index=0)
+            first = Attribute(int, default=0, onnx="shared")
+            second = Attribute(int, default=0, onnx="shared")
+
+
+# -- the second operation, at its own scale --------------------------------------
+
+
+def test_the_replay_operation_executes_its_own_semantics() -> None:
+    """Rows repeated consecutively, which is the order the buffer replays them."""
+
+    model = _replay_model(repetitions=2, matrix_width=8, folds=4)
+    operation = _unbound(model, "replay0")
+    operation.attach_model(model)
+    activation = np.arange(2 * 8, dtype=np.float32).reshape(2, 8)
+
+    context: dict[str, Any] = {"activation": activation}
+    if isinstance(operation, Space):
+        adapter = _unbound(model, "mvau0")
+        adapter.space = operation
+        adapter.execute_node(context, model.graph)
+    else:
+        operation.execute_node(context, model.graph)
+
+    assert np.array_equal(context["expanded"], np.repeat(activation, 4, axis=0))
+
+
+def test_the_replay_operation_verifies_its_own_semantics() -> None:
+    model = _replay_model()
+    assert _unbound(model, "replay0").verify_node() == []
+
+    model.set_tensor_shape("activation", [8])
+    broken = _unbound(model, "replay0")
+
+    assert any("matrix-shaped" in message for message in broken.verify_node())
+
+
+def test_a_stale_output_annotation_is_still_not_a_verification_failure() -> None:
+    """The ruling from the review round holds for the second operation too.
+
+    An output annotation the operation can repair must not be reported as a
+    fault, or the repair can never be committed.  It is a reconciliation
+    difference, and ``verify_node`` deliberately does not read it.
+    """
+
+    model = _replay_model()
+    model.set_tensor_shape("expanded", [99, 8])
+    operation = _space_for(_unbound(model, "replay0"), model, Build())
+
+    assert _unbound(model, "replay0").verify_node() == []
+    assert operation.reconciliation() != ()
+
+
+# -- the combination one exclusive enum could not represent -----------------------
+
+
+def test_an_xnor_node_that_also_thresholds_does_both_in_order() -> None:
+    """The defect the two-axis profile exists to prevent, checked numerically.
+
+    Collapsing accumulation and activation into one exclusive value made the
+    threshold win, so this node computed a plain matrix product and thresholded
+    *that* -- a different function of the same graph, with no error anywhere.
+    """
+
+    activation = (
+        np.random.RandomState(4).randint(0, 2, (REPETITIONS, MATRIX_WIDTH)).astype(np.float32)
+    )
+    weight = (
+        np.random.RandomState(5).randint(0, 2, (MATRIX_WIDTH, MATRIX_HEIGHT)).astype(np.float32)
+    )
+    thresholds = np.array([[2.0, 5.0]] * MATRIX_HEIGHT, dtype=np.float32)
+    model = _model(
+        no_activation=False,
+        binary_xnor=True,
+        activation_type="BINARY",
+        weight_type="BINARY",
+        output_type="UINT4",
+        thresholds=thresholds,
+    )
+
+    result = _executed(model, activation=activation, weight=weight, threshold=thresholds)
+
+    expected = multithreshold(xnor.xnorpopcountmatmul(activation, weight), thresholds, 1, 0)
+    assert np.array_equal(result, expected)
+    # And it is genuinely a different answer from the collapsed behaviour.
+    assert not np.array_equal(
+        result, multithreshold(np.matmul(activation, weight), thresholds, 1, 0)
+    )
+
+
+def test_bipolar_operands_that_also_threshold_map_before_the_popcount() -> None:
+    activation = (
+        np.random.RandomState(6).choice([-1.0, 1.0], (REPETITIONS, MATRIX_WIDTH)).astype(np.float32)
+    )
+    weight = (
+        np.random.RandomState(7)
+        .choice([-1.0, 1.0], (MATRIX_WIDTH, MATRIX_HEIGHT))
+        .astype(np.float32)
+    )
+    thresholds = np.array([[2.0, 5.0]] * MATRIX_HEIGHT, dtype=np.float32)
+    model = _model(
+        no_activation=False,
+        activation_type="BIPOLAR",
+        weight_type="BIPOLAR",
+        output_type="UINT4",
+        thresholds=thresholds,
+    )
+
+    result = _executed(model, activation=activation, weight=weight, threshold=thresholds)
+
+    popcount = xnor.xnorpopcountmatmul((activation + 1) / 2, (weight + 1) / 2)
+    assert np.array_equal(result, multithreshold(popcount, thresholds, 1, 0))
+
+
+# -- the fused output datatype is a source fact ----------------------------------
+
+
+def _fused(output_type: str = "UINT4") -> Any:
+    thresholds = np.zeros((MATRIX_HEIGHT, 1), dtype=np.float32)
+    return _bound(_model(no_activation=False, thresholds=thresholds, output_type=output_type))
+
+
+def test_a_fused_output_datatype_is_in_the_problem_and_its_fingerprint() -> None:
+    """It decides the scale and bias, so it decides the numbers."""
+
+    assert _fused("UINT4").answer(MvauSpace.output_type) == Decided(DataType["UINT4"])
+    assert _fused("UINT4").problem_fingerprint != _fused("BIPOLAR").problem_fingerprint
+
+
+def test_a_plain_node_does_not_take_its_output_annotation_as_a_fact() -> None:
+    """It derives the value and repairs the annotation, so reading it back
+    would make the design space depend on something it is authoritative for --
+    and would move the fingerprint every time a stale annotation was fixed."""
+
+    plain = _bound(_model(output_type="INT32"))
+    other_model = _model()
+    other_model.set_tensor_datatype("output", DataType["UINT8"])
+    other = _bound(other_model)
+
+    assert plain.answer(MvauSpace.output_type) == Decided(DataType["INT32"])
+    assert plain.problem_fingerprint == other.problem_fingerprint
+
+
+def test_changing_a_fused_output_datatype_changes_the_numbers() -> None:
+    """Which is exactly why it may not sit outside the problem identity."""
+
+    activation = np.arange(REPETITIONS * MATRIX_WIDTH, dtype=np.float32).reshape(
+        REPETITIONS, MATRIX_WIDTH
+    )
+    weight = np.ones((MATRIX_WIDTH, MATRIX_HEIGHT), dtype=np.float32)
+    thresholds = np.array([[40.0]] * MATRIX_HEIGHT, dtype=np.float32)
+
+    unsigned = _executed(
+        _model(no_activation=False, thresholds=thresholds, output_type="UINT4"),
+        activation=activation,
+        weight=weight,
+        threshold=thresholds,
+    )
+    bipolar = _executed(
+        _model(no_activation=False, thresholds=thresholds, output_type="BIPOLAR"),
+        activation=activation,
+        weight=weight,
+        threshold=thresholds,
+    )
+
+    assert not np.array_equal(unsigned, bipolar)
+
+
+# -- runtime-writable weights ----------------------------------------------------
+
+
+@dataclass(frozen=True)
+class RuntimeBuild(Build):
+    """A build that writes the matrix at runtime, with or without a promise."""
+
+    runtime_writable_weights: bool = True
+    runtime_weight_range_contract: bool | None = None
+    runtime_weight_promise: RuntimeWeightPromise | None = None
+
+
+def _narrow(build: Build, *, weights: np.ndarray | None = None) -> Any:
+    model = _model(weights=weights)
+    operation = _space_for(_unbound(model, "mvau0"), model, build)
+    return operation.answer(MvauSpace.effective_narrow_weights)
+
+
+def test_a_runtime_written_matrix_uses_datatype_sizing_not_initializer_or_flag() -> None:
+    """The initializer is about to be overwritten; narrowing on it is unsound."""
+
+    avoiding = np.full((MATRIX_WIDTH, MATRIX_HEIGHT), -127.0, dtype=np.float32)
+
+    assert _narrow(Build(), weights=avoiding) == Decided(True)
+    assert _narrow(RuntimeBuild(), weights=avoiding) == Decided(False)
+    assert _narrow(RuntimeBuild(runtime_weight_range_contract=True), weights=avoiding) == Decided(
+        False
+    )
+
+
+def test_a_runtime_narrowness_flag_never_substitutes_for_source_value_facts() -> None:
+    using_minimum = np.full((MATRIX_WIDTH, MATRIX_HEIGHT), -128.0, dtype=np.float32)
+
+    assert _narrow(
+        RuntimeBuild(runtime_weight_range_contract=False), weights=using_minimum
+    ) == Decided(False)
+    assert _narrow(
+        RuntimeBuild(runtime_weight_range_contract=True), weights=using_minimum
+    ) == Decided(False)
+
+
+def test_the_runtime_facts_are_part_of_the_problem_identity() -> None:
+    """They change what is built, so a recorded choice must not outlive them."""
+
+    model = _model()
+    plain = _space_for(_unbound(model, "mvau0"), model, Build())
+    runtime = _space_for(_unbound(model, "mvau0"), model, RuntimeBuild())
+
+    assert plain.problem_fingerprint != runtime.problem_fingerprint
+
+
+def _runtime_promise(
+    scope: str,
+    *,
+    source: OperandIdentity = OperandIdentity("weight", "input", 1),
+    covered: tuple[str, ...] | None = None,
+) -> RuntimeWeightPromise:
+    return RuntimeWeightPromise(
+        IntegerRange(-2, 2),
+        MATRIX_WIDTH * MATRIX_HEIGHT,
+        source,
+        tuple(InvocationScope(item) for item in (covered or (scope,))),
+        "source-test-runtime-weights",
+        "FLOAT32",
+    )
+
+
+def test_unknown_runtime_weights_fall_back_to_full_datatype_bounds() -> None:
+    weights = np.ones((MATRIX_WIDTH, MATRIX_HEIGHT), dtype=np.float32)
+    activation = np.full((REPETITIONS, MATRIX_WIDTH), 2, dtype=np.float32)
+    model = _model(weights=weights)
+    wrapper = _unbound(model, "mvau0")
+    scope = wrapper.recorded_scope_id()
+    assert scope is not None
+
+    valid = _space_for(wrapper, model, RuntimeBuild(runtime_weight_promise=_runtime_promise(scope)))
+    report = valid.answer(MvauSpace.numerical_support)
+    assert isinstance(report, Decided) and report.value.supported
+    assert report.value.support is not None
+    assert isinstance(report.value.support.premise.weights, DatatypeWeightPremise)
+    context: dict[str, Any] = {"activation": activation, "weight": weights}
+    wrapper.space = valid
+    wrapper.execute_node(context, model.graph)
+    assert context["output"].dtype == np.int32
+    assert np.array_equal(
+        context["output"],
+        np.full((REPETITIONS, MATRIX_HEIGHT), 2 * MATRIX_WIDTH, dtype=np.int32),
+    )
+
+    wrong_scope = _space_for(
+        wrapper,
+        model,
+        RuntimeBuild(runtime_weight_promise=_runtime_promise("unrelated-invocation-A")),
+    )
+    scope_fallback = wrong_scope.answer(MvauSpace.numerical_support)
+    assert isinstance(scope_fallback, Decided) and scope_fallback.value.supported
+
+    wrong_source = _space_for(
+        wrapper,
+        model,
+        RuntimeBuild(
+            runtime_weight_promise=_runtime_promise(
+                scope,
+                source=OperandIdentity("other-weight", "input", 1),
+            )
+        ),
+    )
+    source_fallback = wrong_source.answer(MvauSpace.numerical_support)
+    assert isinstance(source_fallback, Decided) and source_fallback.value.supported
+
+    broad = _space_for(
+        wrapper,
+        model,
+        RuntimeBuild(
+            runtime_weight_promise=_runtime_promise(
+                scope,
+                covered=("another-invocation", scope),
+            )
+        ),
+    )
+    accepted = broad.answer(MvauSpace.numerical_support)
+    assert isinstance(accepted, Decided) and accepted.value.supported
+    assert scope_fallback.value.support == source_fallback.value.support == accepted.value.support
+
+
+@pytest.mark.parametrize("build", (Build(), RuntimeBuild()))
+def test_unknown_weight_input_uses_full_logical_datatype_range(build: Build) -> None:
+    model = _model(weight_initializer=False)
+    weight_info = next(item for item in model.graph.value_info if item.name == "weight")
+    model.graph.input.append(weight_info)
+    retained = [item for item in model.graph.value_info if item.name != "weight"]
+    del model.graph.value_info[:]
+    model.graph.value_info.extend(retained)
+    operation = _space_for(_unbound(model, "mvau0"), model, build)
+    report = operation.answer(MvauSpace.source_numerical_report)
+    assert isinstance(report, Decided) and report.value.supported
+    assert report.value.support is not None
+    assert isinstance(report.value.support.premise.weights, DatatypeWeightPremise)
+    assert report.value.support.bounds.result == IntegerRange(-130_048, 131_072)
+
+
+# -- provenance ------------------------------------------------------------------
+
+
+def test_the_association_carries_the_nodes_this_one_was_fused_from() -> None:
+    """The lineage exists nowhere else once the fusion has happened."""
+
+    model = _model()
+    _set_source_nodes(model, "matmul0,add0,relu0")
+    _model_, operation = _configured_mvau(model)
+
+    assert origin_nodes(operation.source) == ("matmul0", "add0", "relu0")
+
+
+def test_an_unfused_node_is_its_own_origin_and_says_so_with_an_empty_lineage() -> None:
+    _model_, operation = _configured_mvau(_model())
+
+    assert origin_nodes(operation.source) == ()
+
+
+def _set_source_nodes(model: ModelWrapper, value: str) -> None:
+    model.graph.node[0].attribute.append(
+        helper.make_attribute("dataflow_source_nodes", value.encode("utf-8"))
+    )
+
+
+# -- verification through FINN's own analysis ------------------------------------
+
+
+def test_verify_nodes_runs_over_an_ordinary_wrapper() -> None:
+    """The path FINN actually takes: a model-attached, design-space-unbound op."""
+
+    report = verify_nodes(_model())
+
+    assert report == {"MvauDataflowOp": []}
+
+
+def test_verify_nodes_reports_a_malformed_node_through_the_same_analysis() -> None:
+    model = _model(no_activation=False)
+
+    report = verify_nodes(model)
+
+    assert any("threshold" in message for message in report["MvauDataflowOp"])
+
+
+def test_verifying_needs_no_build_configuration() -> None:
+    """A graph is verified long before anybody has chosen a synthesis target."""
+
+    operation = _unbound(_model(), "mvau0")
+
+    assert operation.verify_node() == []
+    assert operation.space.assess_source().verdict is True
+
+
+def test_verification_does_not_replay_recorded_choices() -> None:
+    """Verification asks whether the node is well formed, nothing more."""
+
+    model, _operation = _configured_mvau(_model())
+    # A recorded choice made against a *different* problem would refuse a bind.
+    model.set_tensor_shape("activation", [4, MATRIX_WIDTH])
+
+    assert verify_nodes(model) == {"MvauDataflowOp": []}
+
+
+# -- what the build configuration owes -------------------------------------------
+
+
+@dataclass(frozen=True)
+class NoClockBuild:
+    """A configuration missing a fact this operation declares as required."""
+
+    target_dsp: DspBlock = DspBlock.DSP58
+
+
+@dataclass(frozen=True)
+class EmptyClockBuild(Build):
+    """A configuration that supplies the attribute and sets it to nothing."""
+
+    synth_clk_period_ns: Any = None
+
+
+def test_missing_build_fact_leaves_physical_input_unresolved() -> None:
+    """Independent type facts do not require a generation clock."""
+
+    model = _model()
+
+    operation = _space_for(_unbound(model, "mvau0"), model, NoClockBuild())
+    assert MvauSpace.clock_period_ns not in operation.problem_snapshot
+    assert operation.expected_outputs()["output"][1] == DataType["INT32"]
+
+
+def test_build_fact_supplied_as_none_remains_unavailable() -> None:
+    """Supplying the attribute and setting it to nothing has supplied nothing."""
+
+    model = _model()
+
+    operation = _space_for(_unbound(model, "mvau0"), model, EmptyClockBuild())
+    assert MvauSpace.clock_period_ns not in operation.problem_snapshot
+    assert operation.expected_outputs()["output"][1] == DataType["INT32"]
+
+
+def test_a_valid_build_still_binds() -> None:
+    model = _model()
+
+    assert _space_for(_unbound(model, "mvau0"), model, Build()).is_bound
+
+
+def test_dsp_codec_stays_stable_while_oh_source_schema_identity_changes() -> None:
+    operation = _bound(_model())
+    codec = MvauSpace.target_dsp.canonical
+    value = operation.problem_snapshot[MvauSpace.target_dsp]
+
+    assert (codec.identity, codec.version) == ("dataflow.structural", 1)
+    assert codec.encode(value) == {
+        "enum": "finn.dataflow.kernels.dotp_axi.DspBlock",
+        "value": "DSP58",
+    }
+    # The shared datatype codec now identifies finn.kernels.
+    # The dataflow-owned DSP persistence payload above remains unchanged.
+    assert (
+        operation.local_problem_fingerprint
+        == "53a078177783974f90cec6ace924f122199064f25f139bcedd12cb7681fb9a8e"
+    )
+
+
+def test_an_optional_build_fact_that_is_absent_becomes_an_absent_problem() -> None:
+    """And a reader has to say what it does about that, rather than get a default."""
+
+    operation = _bound(_model())
+
+    assert not isinstance(operation.answer(MvauSpace.runtime_weight_range_contract), Decided)
+    # The optional fact that *does* declare a default uses it.
+    assert operation.answer(MvauSpace.runtime_writable_weights) == Decided(False)
+
+
+def test_verification_still_needs_no_build_at_all() -> None:
+    """The property the absence-tolerant Problem exists for, kept."""
+
+    assert verify_nodes(_model()) == {"MvauDataflowOp": []}
+
+
+@pytest.mark.parametrize("fused", [False, True])
+def test_output_annotations_are_observations_even_for_fused_nodes(fused: bool) -> None:
+    thresholds = np.zeros((MATRIX_HEIGHT, 1), dtype=np.float32) if fused else None
+    expected = "UINT4" if fused else "INT32"
+    model = _model(no_activation=not fused, thresholds=thresholds, output_type=expected)
+    bound = _bound(model)
+    original_fingerprint = bound.problem_fingerprint
+    model.set_tensor_datatype("output", DataType["BIPOLAR"])
+    model.set_tensor_shape("output", [999])
+    fresh = _rebind(bound, model)
+    assert fresh.problem_fingerprint == original_fingerprint
+    assert len(fresh.reconciliation()) == 2
+    assert fresh.expected_outputs()["output"][1] == DataType[expected]
+    wrapper = _unbound(model, "mvau0")
+    wrapper.infer_node_datatype(model)
+    assert model.get_tensor_datatype("output") == DataType[expected]
+    # No annotation at all is also a repairable observation.
+    del model.graph.quantization_annotation[:]
+    for tensor, datatype in (("activation", "INT8"), ("weight", "INT8")):
+        model.set_tensor_datatype(tensor, DataType[datatype])
+    if fused:
+        model.set_tensor_datatype("threshold", DataType["INT32"])
+    wrapper.infer_node_datatype(model)
+    assert model.get_tensor_datatype("output") == DataType[expected]
+
+
+def test_output_source_attribute_is_required_and_no_activation_must_match_accumulator() -> None:
+    model = _model()
+    node = model.graph.node[0]
+    for attribute in node.attribute:
+        if attribute.name == "outputDataType":
+            attribute.s = b"INT16"
+    assert "output-accumulator-mismatch" in {
+        finding.code
+        for answer in _bound(model).assess_source().answers.values()
+        for finding in getattr(answer, "findings", ())
+    }
+    kept = [attribute for attribute in node.attribute if attribute.name != "outputDataType"]
+    del node.attribute[:]
+    node.attribute.extend(kept)
+    with pytest.raises(ValueError, match="requires source attribute 'outputDataType'"):
+        _bound(model)

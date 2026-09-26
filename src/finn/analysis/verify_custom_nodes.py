@@ -40,8 +40,8 @@ def verify_nodes(model: ModelWrapper) -> dict[str, object]:
     * info_messages: is list of strings about the result of the verification."""
 
     from contextlib import nullcontext  # noqa: PLC0415
-    from finn.dataflow.ops.base import DATAFLOW_DOMAIN  # noqa: PLC0415
-    from finn.dataflow.ops.reconstruction import source_analysis  # noqa: PLC0415
+    from finn.parked.dataflow.ops.base import DATAFLOW_DOMAIN  # noqa: PLC0415
+    from finn.parked.dataflow.ops.reconstruction import source_analysis  # noqa: PLC0415
 
     verification_dict = {}
     dataflow = any(node.domain == DATAFLOW_DOMAIN for node in model.graph.node)

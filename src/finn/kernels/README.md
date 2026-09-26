@@ -68,7 +68,7 @@ independently of their accepted `stream` view, which requires the scalar:
 
 ```python
 from finn.kernels import DotpAxiKernel, DspBlock
-from finn.kernels.datatypes.values import resolve_qonnx_datatype_name as dtype
+from finn.dataflow.datatypes import resolve_qonnx_datatype_name as dtype
 
 dotp = DotpAxiKernel(
     activation_dtype=dtype("INT3"),
@@ -215,9 +215,10 @@ example, `python -m kernels.rtlsim.mvau_assembly_numeric --case packed` with
 library path configured. `pure_dot_product_numeric --stress` exercises sustained
 one-beat reductions with long output stalls.
 
-The experimental code under `finn.dataflow` still imports the removed
-`finn.kernels.space` package and consumes incompatible retired interfaces. It
-requires a separate port to `finn.core.space`; there is no compatibility alias. Graph inference, nodeattr persistence,
+`finn.kernels` builds on the canonical logical values in `finn.dataflow`
+(Regions, Networks, maps, validation and the QONNX datatype boundary), which in
+turn depend only on `finn.core.space`. The retired dataflow implementation lives
+in `finn.parked`, outside every gate; nothing live imports it. Graph inference, nodeattr persistence,
 source reconstruction and graph transactions are outside this kernel API.
 The independent kernel gate does not claim those consumers work. The canonical
 physical definitions and shared support belong here.

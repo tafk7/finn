@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Build and use the wheel without checkout imports or dataflow dependencies."""
+"""Build and use the wheel without checkout imports, parked code or graph dependencies."""
 
 from __future__ import annotations
 
@@ -34,7 +34,7 @@ sys.dont_write_bytecode = True
 class RejectGraphDependencies(importlib.abc.MetaPathFinder):
     def find_spec(self, fullname, path=None, target=None):
         forbidden = (
-            "finn.dataflow", "finn.custom_op.dataflow", "onnx",
+            "finn.parked", "finn.custom_op.dataflow", "onnx",
             "finn.kernels.space", "finn.core.modelwrapper", "finn.core.onnx_exec",
             "finn.core.rtlsim_exec",
         )
@@ -81,6 +81,9 @@ assert resources.is_relative_to(installed)
 assert (installed / "finn/kernels/py.typed").is_file()
 assert not (installed / "finn/kernels/_engine").exists()
 assert (installed / "finn/core/space/py.typed").is_file()
+assert (installed / "finn/dataflow/py.typed").is_file()
+assert not (installed / "finn/parked").exists()
+assert "finn.dataflow.datatypes" in sys.modules
 assert not (installed / "finn/kernels/space").exists()
 assert not (resources / "dotp_axi.sv").exists()
 assert build.ModuleBuildRequirements is requirements.ModuleBuildRequirements
@@ -211,12 +214,17 @@ def test_installed_wheel_materializes_independent_kernel_builds(tmp_path: Path) 
         assert {
             "finn/kernels/py.typed",
             "finn/core/space/py.typed",
+            "finn/dataflow/py.typed",
+            "finn/dataflow/datatypes.py",
+            "finn/dataflow/model/logical/region.py",
             "finn/kernels/resources/cyclic_stream.sv",
             "finn/kernels/resources/decomposed_wrapper.sv.j2",
         } <= set(archive.namelist())
         assert not any(
             name.startswith("finn/kernels/_engine/")
             or name.startswith("finn/kernels/space/")
+            or name.startswith("finn/parked/")
+            or name.startswith("finn/custom_op/dataflow/")
             or any(part.startswith("_next") for part in name.split("/"))
             for name in archive.namelist()
         )

@@ -13,7 +13,7 @@ import pytest
 from finn.kernels.artifacts.abi import Bus, Signal
 from finn.kernels.artifacts.hls import HlsSourceRequirements, render_hls_sources
 from finn.kernels.datatypes.semantics import IntegerVector, ThresholdTable
-from finn.kernels.datatypes.values import resolve_qonnx_datatype_name
+from finn.dataflow.datatypes import resolve_qonnx_datatype_name
 from finn.kernels.input_generator import InputGeneratorKernel
 from finn.kernels.memstream_hls import MemStreamHlsKernel
 from finn.kernels.resources import template_root

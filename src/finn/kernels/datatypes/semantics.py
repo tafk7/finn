@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import cast
 
-from finn.kernels.datatypes.values import (
+from finn.dataflow.datatypes import (
     QONNX_DATATYPE_TOKEN,
     QONNXDataType,
     canonical_qonnx_datatype,

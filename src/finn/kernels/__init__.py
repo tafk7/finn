@@ -3,8 +3,8 @@
 
 """Physical components and the supported explicit MVAU assembly.
 
-The public construction path needs no dataflow model or compiler node.
-Logical modeling experiments remain in :mod:`finn.dataflow`.
+The public construction path needs no compiler node. Scalar datatype values
+and canonical logical values come from :mod:`finn.dataflow`, below this package.
 """
 
 from importlib import import_module

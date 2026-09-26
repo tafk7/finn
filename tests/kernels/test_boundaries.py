@@ -89,9 +89,10 @@ def within(name: str, prefix: str) -> bool:
     return name == prefix or name.startswith(prefix + ".")
 
 
-def test_kernel_sources_and_tests_have_no_dataflow_dependency() -> None:
+def test_kernel_sources_and_tests_have_no_parked_dependency() -> None:
+    """``finn.kernels`` builds on ``finn.dataflow`` and never on parked code."""
     forbidden = (
-        "finn.dataflow",
+        "finn.parked",
         "finn.custom_op.dataflow",
         "finn.kernels.space",
         "qonnx.core.modelwrapper",
@@ -111,7 +112,7 @@ def test_kernel_sources_and_tests_have_no_dataflow_dependency() -> None:
             else:
                 continue
             assert not any(
-                within(name, prefix) for name in names for prefix in (*forbidden, "dataflow")
+                within(name, prefix) for name in names for prefix in (*forbidden, "parked")
             ), path
 
 
@@ -145,16 +146,16 @@ def test_generic_space_imports_only_generic_dependencies() -> None:
         assert not invalid, (path, invalid)
 
 
-def test_cold_import_and_construction_with_dataflow_unavailable() -> None:
+def test_cold_import_and_construction_with_parked_code_unavailable() -> None:
     script = r"""
 import importlib.abc
 import sys
 
 
-class RejectDataflow(importlib.abc.MetaPathFinder):
+class RejectParked(importlib.abc.MetaPathFinder):
     def find_spec(self, fullname, path=None, target=None):
         forbidden = (
-            "finn.dataflow", "finn.custom_op.dataflow",
+            "finn.parked", "finn.custom_op.dataflow",
             "qonnx.core.modelwrapper", "finn.kernels._engine", "finn.kernels.space",
             "finn.core.modelwrapper", "finn.core.onnx_exec", "finn.core.rtlsim_exec", "onnx",
         )
@@ -162,7 +163,7 @@ class RejectDataflow(importlib.abc.MetaPathFinder):
             raise AssertionError("forbidden dependency: " + fullname)
 
 
-sys.meta_path.insert(0, RejectDataflow())
+sys.meta_path.insert(0, RejectParked())
 from finn.kernels import DotpAxiKernel, DspBlock, WeightDelivery, mvau_assembly
 from finn.kernels.artifacts.requirements import ModuleBuildRequirements
 from finn.kernels.physical.axi_stream import AxiStream
@@ -237,7 +238,7 @@ package_name = sys.argv[1]
 class RejectOtherLayers(importlib.abc.MetaPathFinder):
     def find_spec(self, fullname, path=None, target=None):
         if fullname.startswith((
-            "qonnx", "onnx", "finn.dataflow", "finn.custom_op.dataflow",
+            "qonnx", "onnx", "finn.dataflow", "finn.parked", "finn.custom_op.dataflow",
             "finn.kernels.space", "finn.core.modelwrapper", "finn.core.onnx_exec",
             "finn.core.rtlsim_exec",
         )) or (package_name == "finn.core.space" and fullname.startswith("finn.kernels")):

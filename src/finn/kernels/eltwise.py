@@ -30,7 +30,7 @@ from finn.kernels.datatypes.domains import Integer
 from finn.kernels.datatypes.scalar import Scalar
 from finn.kernels.physical.ports import native_stream
 from finn.kernels.physical.stream import STREAM_INTERFACES, ReadyValidStream
-from finn.kernels.datatypes.values import (
+from finn.dataflow.datatypes import (
     QONNXDataType,
     resolve_qonnx_datatype_name,
 )

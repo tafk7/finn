@@ -43,7 +43,7 @@ from finn.kernels.datatypes.semantics import (
 )
 from finn.kernels.datatypes.domains import Integer
 from finn.kernels.datatypes.scalar import integer_scalar
-from finn.kernels.datatypes.values import (
+from finn.dataflow.datatypes import (
     DatatypeError,
     QONNXDataType,
     ordinary_integer_bounds,

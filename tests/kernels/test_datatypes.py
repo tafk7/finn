@@ -22,7 +22,7 @@ import pytest
 from qonnx.core.datatype import BaseDataType, DataType  # type: ignore[import-not-found]
 
 from finn.kernels.datatypes.semantics import QONNX_DATATYPE_SEMANTICS
-from finn.kernels.datatypes.values import (
+from finn.dataflow.datatypes import (
     DatatypeError,
     QONNXDataType,
     canonical_qonnx_datatype,
@@ -339,21 +339,6 @@ def test_recognition_survives_a_value_that_raises_on_the_second_naming() -> None
     assert QONNX_DATATYPE_SEMANTICS.accepts(_ExhaustedName()) is False
     with pytest.raises(DatatypeError, match="could not be compared"):
         canonical_qonnx_datatype(_ExhaustedName())
-
-
-class _LyingWidth(_ExplodingName):
-    """Names itself ``INT8`` truthfully and reports its width falsely."""
-
-    def get_canonical_name(self) -> str:
-        return "INT8"
-
-    def bitwidth(self) -> int:
-        raise RuntimeError("boom")
-
-
-class _ZeroWidth(_LyingWidth):
-    def bitwidth(self) -> int:
-        return 0
 
 
 def test_a_jointly_invalid_fixed_point_name_is_refused_not_raised() -> None:

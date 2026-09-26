@@ -5,7 +5,7 @@
 from typing_extensions import assert_type
 
 from finn.kernels.datatypes.scalar import IntegerScalar, Scalar, ScalarEncoding
-from finn.kernels.datatypes.values import QONNXDataType
+from finn.dataflow.datatypes import QONNXDataType
 from finn.kernels.dotp import DotpAxiKernel
 from finn.kernels.eltwise import EltwiseKernel
 from finn.kernels.physical.axi_stream import AxiStream, AxiStreamPort

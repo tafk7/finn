@@ -28,7 +28,7 @@ from finn.core.space import (
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.datatypes.scalar import SCALAR_ENCODING, Scalar
 from finn.kernels.datatypes.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
-from finn.kernels.datatypes.values import qonnx_datatype_width
+from finn.dataflow.datatypes import qonnx_datatype_width
 from finn.kernels.physical.layout import (
     FieldPlacement,
     PackedBeatLayout,

@@ -26,7 +26,7 @@ from finn.core.space import (
 )
 from finn.kernels.artifacts.abi import Bus, Endpoint
 from finn.kernels.datatypes.scalar import Scalar
-from finn.kernels.datatypes.values import (
+from finn.dataflow.datatypes import (
     QONNXDataType,
     canonical_qonnx_datatype,
     qonnx_datatype_width,

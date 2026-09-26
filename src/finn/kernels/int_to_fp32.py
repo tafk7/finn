@@ -18,7 +18,7 @@ from finn.kernels.base import Kernel
 from finn.kernels.datatypes.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
 from finn.kernels.datatypes.domains import Integer
 from finn.kernels.datatypes.scalar import integer_scalar
-from finn.kernels.datatypes.values import (
+from finn.dataflow.datatypes import (
     resolve_qonnx_datatype_name,
 )
 from finn.core.space import Const, Param, view

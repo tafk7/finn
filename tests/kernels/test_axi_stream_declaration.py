@@ -13,7 +13,7 @@ from finn.kernels.datatypes.scalar import IntegerScalar, Scalar, integer_scalar
 from finn.kernels.datatypes.semantics import (
     QONNX_DATATYPE_VALUE_SEMANTICS,
 )
-from finn.kernels.datatypes.values import QONNXDataType
+from finn.dataflow.datatypes import QONNXDataType
 from finn.kernels.physical.axi_stream import AxiStreamPort, axi_stream
 from finn.core.space import Param, Space, Subspace, derived
 

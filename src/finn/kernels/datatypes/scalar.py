@@ -32,7 +32,7 @@ from finn.core.space import (
 )
 from finn.kernels.datatypes.domains import Integer, check_bit_bound, check_integer_family
 from finn.kernels.datatypes.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
-from finn.kernels.datatypes.values import (
+from finn.dataflow.datatypes import (
     QONNXDataType,
     canonical_qonnx_datatype,
     qonnx_datatype_width,

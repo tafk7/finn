@@ -13,7 +13,7 @@ accidentally dropped one both show up as a set difference.
 from __future__ import annotations
 
 import finn.dataflow.model.logical as model
-from finn.kernels.datatypes import values as datatypes
+from finn.dataflow import datatypes
 
 
 def test_the_model_facade_is_exactly_this_set() -> None:

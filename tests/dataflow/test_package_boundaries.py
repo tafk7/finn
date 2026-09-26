@@ -1,358 +1,185 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Current package ownership and dependency boundaries.
+"""The dependency direction between the Space engine, dataflow, kernels and parked code.
 
-Canonical model values remain usable without the engine. Generic Space code
-stays independent of dataflow domains, and artifact processing does not import
-its compiler consumers. Public facades load implementations only when requested.
+```text
+finn.core.space  <-  finn.dataflow  <-  finn.kernels  <-  finn.parked / graph integration
+```
+
+``finn.dataflow`` holds canonical logical values and imports only the engine,
+QONNX's datatype module and the standard library. ``finn.kernels`` builds on it
+and never reaches into parked code. ``finn.parked`` is the retired
+implementation: it may import anything live, and nothing live imports it.
 """
 
 from __future__ import annotations
 
 import ast
+import pkgutil
 import subprocess
 import sys
 from importlib import import_module
 from pathlib import Path
 
 ROOT = Path(__file__).parents[2]
-SOURCE = ROOT / "src" / "finn"
-DATAFLOW = SOURCE / "dataflow"
+SOURCE = ROOT / "src"
+FINN = SOURCE / "finn"
+DATAFLOW = FINN / "dataflow"
+KERNELS = FINN / "kernels"
+PARKED = FINN / "parked"
+TESTS = ROOT / "tests"
+PARKED_TESTS = TESTS / "parked"
+
+#: Live modules that still reach into parked code.  Each entry is a known leak
+#: to remove, not a permitted dependency; the test below fails if one is fixed
+#: without being deleted here, so the list cannot go stale.
+KNOWN_PARKED_IMPORTERS = frozenset({FINN / "analysis" / "verify_custom_nodes.py"})
 
 
-def _imported_modules(path: Path) -> set[str]:
-    """Absolute module names any import statement in ``path`` names."""
+def _module_name(path: Path) -> str:
+    parts = path.relative_to(SOURCE).with_suffix("").parts
+    return ".".join(parts[:-1] if parts[-1] == "__init__" else parts)
+
+
+def _imported_modules(path: Path, package: str | None = None) -> set[str]:
+    """Absolute names of every module an import statement in ``path`` names.
+
+    Relative imports are resolved against ``package``.  Every level of a dotted
+    name is included, so ``from a.b import c`` also reports ``a.b.c``.
+    """
 
     tree = ast.parse(path.read_text(), filename=str(path))
     names: set[str] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             names.update(alias.name for alias in node.names)
-        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
-            names.add(node.module)
+        elif isinstance(node, ast.ImportFrom):
+            if node.level:
+                assert package is not None, f"relative import outside a package: {path}"
+                anchor = package.split(".")[: len(package.split(".")) - node.level + 1]
+                base = ".".join([*anchor, *([node.module] if node.module else [])])
+            else:
+                base = node.module or ""
+            names.add(base)
+            names.update(f"{base}.{alias.name}" for alias in node.names)
     return names
+
+
+def _package_of(path: Path) -> str:
+    name = _module_name(path)
+    return name if path.name == "__init__.py" else name.rpartition(".")[0]
 
 
 def _within(module: str, prefix: str) -> bool:
     return module == prefix or module.startswith(f"{prefix}.")
 
 
-def _assert_fresh_import_avoids(module: str, forbidden: tuple[str, ...]) -> None:
-    """Import ``module`` in a fresh process and reject forbidden transitive imports."""
+def _sources(directory: Path) -> tuple[Path, ...]:
+    paths = tuple(sorted(directory.rglob("*.py")))
+    assert paths, directory
+    return paths
+
+
+def test_dataflow_imports_only_the_engine_qonnx_datatypes_and_the_standard_library() -> None:
+    allowed_packages = ("finn.dataflow", "finn.core.space", "qonnx.core.datatype")
+    for path in _sources(DATAFLOW):
+        invalid = {
+            name
+            for name in _imported_modules(path, _package_of(path))
+            if not any(_within(name, prefix) for prefix in allowed_packages)
+            and name.split(".")[0] not in sys.stdlib_module_names
+            and name != "__future__"
+            # ``from qonnx.core.datatype import X`` also names its parents.
+            and name not in ("qonnx", "qonnx.core")
+        }
+        assert not invalid, (path, invalid)
+
+
+def test_dataflow_loads_neither_kernels_nor_parked_code_at_runtime() -> None:
+    """Importing every canonical module pulls in nothing above the value layer."""
 
     script = "\n".join(
         (
-            "from importlib import import_module",
+            "import importlib, pkgutil, sys",
+            "import finn.dataflow as package",
+            "for info in pkgutil.walk_packages(package.__path__, 'finn.dataflow.'):",
+            "    importlib.import_module(info.name)",
+            "bad = sorted(",
+            "    name for name in sys.modules",
+            "    if name.startswith(('finn.kernels', 'finn.parked', 'finn.custom_op', 'onnx'))",
+            "    or (",
+            "        name.startswith('qonnx.')",
+            "        and name not in ('qonnx.core', 'qonnx.core.datatype')",
+            "    )",
+            ")",
+            "raise SystemExit('loaded: ' + ', '.join(bad) if bad else 0)",
+        )
+    )
+    completed = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True, check=False
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+
+
+def test_kernels_never_import_parked_code() -> None:
+    for path in _sources(KERNELS):
+        named = _imported_modules(path, _package_of(path))
+        assert not any(_within(name, "finn.parked") for name in named), path
+
+
+def test_nothing_outside_parked_imports_parked_code() -> None:
+    leaking: set[Path] = set()
+    for path in _sources(FINN):
+        if path.is_relative_to(PARKED):
+            continue
+        if any(_within(name, "finn.parked") for name in _imported_modules(path, _package_of(path))):
+            leaking.add(path)
+    assert leaking == KNOWN_PARKED_IMPORTERS, sorted(map(str, leaking))
+
+    for path in _sources(TESTS):
+        if path.is_relative_to(PARKED_TESTS):
+            continue
+        named = _imported_modules(path, "tests")
+        assert not any(_within(name, "finn.parked") or _within(name, "parked") for name in named), (
+            path
+        )
+
+
+def test_the_logical_facade_loads_no_model_until_a_public_name_is_requested() -> None:
+    script = "\n".join(
+        (
             "import sys",
-            f"import_module({module!r})",
-            f"forbidden = {forbidden!r}",
-            "loaded = [name for name in forbidden if name in sys.modules]",
+            "import finn.dataflow.model.logical",
+            "loaded = [name for name in (",
+            "    'finn.dataflow.model.logical.region',",
+            "    'finn.dataflow.model.logical.network',",
+            "    'finn.dataflow.model.logical.composition',",
+            "    'finn.dataflow.datatypes',",
+            ") if name in sys.modules]",
             "raise SystemExit('loaded: ' + ', '.join(loaded) if loaded else 0)",
         )
     )
     completed = subprocess.run(
         [sys.executable, "-c", script], capture_output=True, text=True, check=False
     )
-    assert completed.returncode == 0, completed.stderr
+    assert completed.returncode == 0, completed.stdout + completed.stderr
 
 
-def test_the_final_package_boundaries_are_the_approved_ones() -> None:
-    assert tuple(import_module("finn.dataflow.kernels").__all__) == ()
-    assert tuple(import_module("finn.dataflow.ops").__all__) == ()
-    assert tuple(import_module("finn.dataflow.ops.mvau").__all__) == ()
-    physical_library = import_module("finn.kernels")
-    assert {
-        "DotpAxiKernel",
-        "DspBlock",
-        "MVAU",
-        "MVAUAssembly",
-        "WeightDelivery",
-        "mvau_assembly",
-        "replay_buffer_requirements",
-        "cyclic_stream_requirements",
-    } <= set(physical_library.__all__)
-    # The concrete library can grow; every public member must retain its owner
-    # in the physical package rather than introducing a dataflow back-edge.
-    for name in physical_library.__all__:
-        assert getattr(physical_library, name).__module__.startswith("finn.kernels.")
-    for framework_name in (
-        "Kernel",
-        "KernelChoice",
-        "LogicalView",
-        "ModuleBuildRequirements",
-        "ModuleParameter",
-        "NetworkBoundary",
-        "NetworkEdge",
-        "PhysicalView",
-        "PhysicallyUnsupported",
-        "RegionDeclaration",
-        "RelationView",
-        "EdgeSink",
-        "kernel_dataflow",
-        "kernel_physical",
-    ):
-        assert not hasattr(import_module("finn.kernels"), framework_name)
+def test_package_roots_re_export_nothing() -> None:
+    """One import path per concept: owning modules, not package roots."""
+
+    for name in ("finn.dataflow", "finn.dataflow.model", "finn.dataflow.kernels"):
+        root = import_module(name)
+        assert not hasattr(root, "__all__"), name
+        assert not hasattr(root, "__getattr__"), name
+        for value in ("DataflowRegion", "DataflowNetwork", "Kernel", "Space", "LogicalView"):
+            assert not hasattr(root, value), (name, value)
 
 
-def test_pure_logical_values_import_nothing_above_or_beside_them() -> None:
-    """``model`` is the bottom of the dataflow stack, and depends on none of it.
-
-    The reverse direction is what makes the model a *value* layer: a Region can
-    be constructed, compared and validated with no compiler, no engine, no
-    Kernel and no graph in the process.  ``space`` may import ``model``; this is
-    the claim that it never runs the other way.
-    """
-
-    forbidden = (
-        "finn.kernels.space",
-        "finn.kernels._engine",
-        "finn.dataflow.kernels",
-        "finn.dataflow.ops",
-        "finn.dataflow.parameters",
-        "finn.kernels.artifacts",
-        "onnx",
-    )
-    adapters = {
-        "authoring.py",
-        "interface_authoring.py",
-        "semantics.py",
-        "datatype_semantics.py",
-        "result_semantics.py",
-        "datatype_domains.py",
-        "view.py",
-        "view_authoring.py",
-        "contract_authoring.py",
-        "contract_expressions.py",
-        "_contract_support.py",
-    }
-    for path in (DATAFLOW / "model" / "logical").rglob("*.py"):
-        if path.name in adapters:
-            continue
-        named = _imported_modules(path)
-        assert not any(_within(name, package) for name in named for package in forbidden), path
-
-
-def test_pure_physical_and_public_interface_values_keep_one_way_dependencies() -> None:
-    forbidden = (
-        "finn.kernels.space",
-        "finn.kernels._engine",
-        "finn.dataflow.kernels",
-        "finn.dataflow.ops",
-    )
-    pure = (
-        SOURCE / "kernels" / "physical" / "layout.py",
-        SOURCE / "kernels" / "physical" / "structure.py",
-        SOURCE / "kernels" / "physical" / "validation.py",
-        SOURCE / "kernels" / "physical" / "lowering.py",
-        DATAFLOW / "model" / "physical" / "interface.py",
-        DATAFLOW / "model" / "logical" / "interface.py",
-    )
-    for path in pure:
-        named = _imported_modules(path)
-        assert not any(_within(name, package) for name in named for package in forbidden), path
-
-
-def test_domain_facades_and_pure_value_modules_are_lazy() -> None:
-    _assert_fresh_import_avoids(
-        "finn.dataflow.model",
-        (
-            "finn.dataflow.model.kernel",
-            "finn.dataflow.model.logical",
-            "finn.dataflow.model.physical",
-            "finn.dataflow.model.relations",
-            "finn.kernels.space",
-            "finn.kernels._engine",
-        ),
-    )
-    _assert_fresh_import_avoids(
-        "finn.kernels.physical.structure",
-        ("finn.kernels.space", "finn.kernels._engine", "finn.dataflow.kernels"),
-    )
-    _assert_fresh_import_avoids(
-        "finn.dataflow.model.physical.interface",
-        ("finn.kernels.space", "finn.kernels._engine", "finn.dataflow.kernels"),
-    )
-
-
-def test_minimal_dotp_does_not_load_historical_authoring_or_build_processing() -> None:
-    _assert_fresh_import_avoids(
-        "finn.kernels.dotp",
-        (
-            "finn.dataflow.kernels.matmul",
-            "finn.dataflow.parameters",
-            "finn.dataflow.model.kernel",
-            "finn.dataflow.model.children",
-            "finn.dataflow.model.logical.authoring",
-            "finn.dataflow.model.logical.view_authoring",
-            "finn.dataflow.model.logical.composition",
-            "finn.dataflow.model.logical.presentation",
-            "finn.dataflow.model.physical.axi_stream_binding",
-            "finn.dataflow.model.physical.interface",
-            "finn.dataflow.model.physical.authoring",
-            "finn.kernels.artifacts.build",
-            "finn.kernels.artifacts.contributions",
-            "finn.kernels.artifacts.render",
-            "finn.kernels.artifacts.packaging",
-            "finn.kernels.artifacts.store",
-        ),
-    )
-
-
-def test_axi_declarations_do_not_load_regions_or_composition_adapters() -> None:
-    _assert_fresh_import_avoids(
-        "finn.kernels.physical.axi_stream",
-        (
-            "finn.dataflow.model.logical.region",
-            "finn.dataflow.model.logical.composition",
-            "finn.dataflow.model.physical.interface",
-            "finn.dataflow.model.physical.axi_stream_binding",
-            "finn.kernels.artifacts.build",
-            "finn.dataflow.kernels",
-        ),
-    )
-
-
-def test_logical_facade_loads_no_model_until_a_public_name_is_requested() -> None:
-    _assert_fresh_import_avoids(
-        "finn.dataflow.model.logical",
-        (
-            "finn.dataflow.model.logical.region",
-            "finn.dataflow.model.logical.network",
-            "finn.dataflow.model.logical.composition",
-            "finn.kernels.datatypes.values",
-        ),
-    )
-
-
-def test_module_requirements_are_independent_of_build_processing() -> None:
-    _assert_fresh_import_avoids(
-        "finn.kernels.artifacts.requirements",
-        (
-            "finn.kernels.artifacts.build",
-            "finn.kernels.artifacts.contributions",
-            "finn.kernels.artifacts.render",
-            "finn.kernels.artifacts.store",
-            "finn.kernels.artifacts.packaging",
-            "finn.dataflow.model",
-            "finn.kernels.space",
-            "finn.kernels._engine",
-        ),
-    )
-
-
-def test_neither_package_is_re_exported_from_the_dataflow_root() -> None:
-    """One import path per concept: ``finn.dataflow`` itself exports nothing.
-
-    A value reachable as both ``finn.dataflow.X`` and ``finn.dataflow.model.X``
-    reads as a value with two owners, which is exactly what the model/space
-    split exists to end.
-    """
-
-    root = import_module("finn.dataflow")
-    assert not hasattr(root, "__all__")
-    for name in (
-        "DataflowRegion",
-        "DataflowNetwork",
-        "Space",
-        "Problem",
-        "Decision",
-        "Kernel",
-        "KernelChoice",
-        "ModuleParameter",
-        "ModuleBuildRequirements",
-        "RegionDeclaration",
-        "NetworkEdge",
-        "NetworkBoundary",
-    ):
-        assert not hasattr(root, name), name
-
-
-def test_canonical_values_stay_importable_without_the_engine() -> None:
-    _assert_fresh_import_avoids("finn.dataflow.model.logical.region", ("finn.kernels._engine",))
-    _assert_fresh_import_avoids("finn.dataflow.model.logical.network", ("finn.kernels._engine",))
-    _assert_fresh_import_avoids(
-        "finn.dataflow.model.logical.refs",
-        ("finn.kernels._engine", "finn.dataflow.ops", "finn.dataflow.kernels"),
-    )
-    _assert_fresh_import_avoids(
-        "finn.dataflow.model",
-        (
-            "finn.kernels.space",
-            "finn.kernels._engine",
-            "finn.dataflow.kernels",
-            "finn.dataflow.ops",
-            "finn.kernels.artifacts",
-        ),
-    )
-    _assert_fresh_import_avoids(
-        "finn.dataflow.model.logical",
-        (
-            "finn.kernels.space",
-            "finn.kernels._engine",
-            "finn.dataflow.kernels",
-            "finn.dataflow.ops",
-            "finn.kernels.artifacts",
-        ),
-    )
-    _assert_fresh_import_avoids("finn.dataflow.kernels.matmul.regions", ("finn.kernels._engine",))
-    _assert_fresh_import_avoids("finn.dataflow.kernels.matmul.networks", ("finn.kernels._engine",))
-
-
-def test_the_space_facade_does_not_drag_in_the_dataflow_model() -> None:
-    """The bridge is opt-in.  ``space.__init__`` does not import it."""
-
-    _assert_fresh_import_avoids(
-        "finn.kernels.space",
-        ("finn.dataflow.model",),
-    )
-
-
-def test_layer_facades_do_not_eagerly_load_their_implementations() -> None:
-    _assert_fresh_import_avoids(
-        "finn.dataflow.kernels",
-        (
-            "finn.dataflow.kernels.dotp_axi",
-            "finn.dataflow.kernels.matmul.dot_product",
-            "finn.dataflow.kernels.replay",
-            "finn.dataflow.kernels.replay_buffer",
-        ),
-    )
-    _assert_fresh_import_avoids(
-        "finn.dataflow.ops.mvau", ("finn.dataflow.kernels.matmul.dot_product",)
-    )
-
-
-def test_pure_dot_product_does_not_load_physical_or_composition_frameworks() -> None:
-    _assert_fresh_import_avoids(
-        "finn.dataflow.kernels.dot_product",
-        (
-            "finn.dataflow.model.physical.axi_stream_contract",
-            "finn.dataflow.model.physical.view",
-            "finn.kernels.artifacts.build",
-            "finn.kernels.target",
-            "finn.dataflow.model.logical.view",
-            "finn.dataflow.model.logical.composition",
-        ),
-    )
-
-
-def test_physical_component_path_does_not_load_logical_models_or_compiler_nodes() -> None:
-    for module in (
-        "finn.kernels.dotp",
-        "finn.kernels.streaming",
-        "finn.kernels.mvau",
-    ):
-        _assert_fresh_import_avoids(
-            module,
-            (
-                "finn.dataflow.model.logical.region",
-                "finn.dataflow.model.logical.network",
-                "finn.dataflow.model.logical.contract_authoring",
-                "finn.dataflow.model.logical.composition",
-                "finn.dataflow.model.logical.view",
-                "finn.dataflow.model.physical.interface",
-                "finn.dataflow.ops.mvau.op",
-                "qonnx.core.modelwrapper",
-            ),
-        )
+def test_every_canonical_module_is_importable() -> None:
+    package = import_module("finn.dataflow")
+    names = [info.name for info in pkgutil.walk_packages(package.__path__, "finn.dataflow.")]
+    assert "finn.dataflow.model.logical.semantics" in names
+    for name in names:
+        import_module(name)
