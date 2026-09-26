@@ -18,6 +18,8 @@ Biases below -N-1 are refused: the native unsigned width expression creates a
 33-bit output, but the result addition zero-extends the negative 32-bit bias.
 """
 
+from __future__ import annotations
+
 from finn.kernels.base import Kernel
 from finn.kernels.artifacts.abi import (
     Bus,
@@ -38,6 +40,7 @@ from finn.kernels.artifacts.requirements import (
     ScalarTable,
 )
 from finn.kernels.datatypes.semantics import (
+    ThresholdTable,
     QONNX_DATATYPE_VALUE_SEMANTICS,
     THRESHOLD_TABLE,
 )
@@ -67,12 +70,12 @@ class ThresholdingAxiKernel(Kernel):
     id = "finnlib.thresholding_axi.integer"
     version = "1"
 
-    input_dtype = Param(QONNX_DATATYPE_VALUE_SEMANTICS)
-    threshold_dtype = Param(QONNX_DATATYPE_VALUE_SEMANTICS)
+    input_dtype: Param[QONNXDataType] = Param(QONNX_DATATYPE_VALUE_SEMANTICS)
+    threshold_dtype: Param[QONNXDataType] = Param(QONNX_DATATYPE_VALUE_SEMANTICS)
     input_encoding = integer_scalar(input_dtype, Integer())
     threshold_encoding = integer_scalar(threshold_dtype, Integer())
-    thresholds = Param(THRESHOLD_TABLE)
-    bias = Param(int)
+    thresholds: Param[ThresholdTable] = Param(THRESHOLD_TABLE)
+    bias: Param[int] = Param(int)
 
     @derived(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
     def result_dtype(self) -> QONNXDataType | Rejected:
@@ -90,11 +93,11 @@ class ThresholdingAxiKernel(Kernel):
         bits = 1 + (candidate - 1).bit_length()
         return resolve_qonnx_datatype_name(f"INT{bits}")
 
-    pe = Param(int)
+    pe: Param[int] = Param(int)
     use_axilite = Decision(bool, values=(False, True))
     deep_pipeline = Decision(bool, values=(False, True))
-    depth_trigger_bram = Param(int)
-    depth_trigger_uram = Param(int)
+    depth_trigger_bram: Param[int] = Param(int)
+    depth_trigger_uram: Param[int] = Param(int)
 
     @constraint
     def types_supported(self) -> bool | Rejected:
@@ -190,7 +193,7 @@ class ThresholdingAxiKernel(Kernel):
 
     @view(
         semantics=default_semantics(ModuleBuildRequirements),
-        constraints=(implementation_supported,),
+        requires=(implementation_supported,),
     )
     def build_requirements(self) -> ModuleBuildRequirements | Rejected:
         table = self.thresholds

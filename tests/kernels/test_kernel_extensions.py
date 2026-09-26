@@ -19,14 +19,14 @@ from finn.core.space import (
     ViewKey,
     codec_for,
     codecs,
-    compile_space,
+    composite,
+    configure,
     constraint,
     derived,
     selections,
     view,
 )
 from finn.core.space.errors import DefinitionError, RequestError
-from finn.core.space.extensions import ScopeBuilder
 from finn.kernels.artifacts.hls import HlsInterface, HlsSourceRequirements
 from finn.kernels.base import Kernel
 from finn.kernels.datatypes.domains import Integer, SignedInteger
@@ -70,7 +70,7 @@ def test_kernel_identity_is_validated_at_class_creation() -> None:
         id = "test.empty"
 
     assert Empty.version == "1"
-    assert Empty().capabilities() == ()
+    assert configure(Empty()).capabilities() == ()
 
 
 def test_kernel_capabilities_have_independent_output_types_and_no_implicit_abi() -> None:
@@ -78,7 +78,7 @@ def test_kernel_capabilities_have_independent_output_types_and_no_implicit_abi()
 
     class OpaqueWord(Kernel):
         id = "test.opaque"
-        bits = Param(int)
+        bits: Param[int] = Param(int)
 
         @view
         def pins(self) -> Pins:
@@ -88,8 +88,8 @@ def test_kernel_capabilities_have_independent_output_types_and_no_implicit_abi()
 
     class Axis(Kernel):
         id = "test.axis"
-        bits = Param(int)
-        lanes = Param(int)
+        bits: Param[int] = Param(int)
+        lanes: Param[int] = Param(int)
 
         @view
         def stream(self) -> AxisShape:
@@ -114,7 +114,7 @@ def test_kernel_capabilities_have_independent_output_types_and_no_implicit_abi()
                 (),
             )
 
-    opaque = OpaqueWord({OpaqueWord.bits: 13})
+    opaque = configure(OpaqueWord(bits=13))
     capabilities = opaque.capabilities()
     assert [entry.key for entry in capabilities] == ["pins"]
     assert calls == []
@@ -122,9 +122,9 @@ def test_kernel_capabilities_have_independent_output_types_and_no_implicit_abi()
     answer = opaque.query(capabilities[0].reference)
     assert isinstance(answer, Available)
     assert answer.value == Pins((("word", 13),), (("result", 13),))
-    axis = Axis({Axis.bits: 13, Axis.lanes: 3})
+    axis = configure(Axis(bits=13, lanes=3))
     assert axis.stream() == AxisShape(39, 40)
-    hls = Hls()
+    hls = configure(Hls())
     result = hls.sources()
     assert isinstance(result, HlsSourceRequirements)
     assert [entry.key for entry in hls.capabilities()] == ["sources"]
@@ -135,7 +135,7 @@ def test_kernel_capabilities_have_independent_output_types_and_no_implicit_abi()
         exports = {ViewKey("pins", Pins): Hls.sources}
 
     with pytest.raises(DefinitionError, match="semantics|type"):
-        compile_space(Invalid)
+        configure(Invalid())
 
 
 @pytest.mark.parametrize(
@@ -178,11 +178,10 @@ def test_dtype_portable_selection_is_optional_and_uses_exact_canonical_encoding(
             values=(resolve_qonnx_datatype_name("TERNARY"), resolve_qonnx_datatype_name("INT2")),
         )
 
-    model = compile_space(DtypeKernel)
-    base = model.bind()
+    base = configure(DtypeKernel())
     point = base.with_choices(dtype=resolve_qonnx_datatype_name("TERNARY"))
     schema = SelectionSchema(
-        model,
+        DtypeKernel,
         family=DtypeKernel.id,
         version=1,
         bindings=(codec_for(DtypeKernel.dtype, QONNX_DATATYPE_CODEC),),
@@ -201,7 +200,7 @@ def test_dtype_portable_selection_is_optional_and_uses_exact_canonical_encoding(
 def test_integer_admission_retains_dynamic_bounds_and_inspectable_family_refusal() -> None:
     class IntegerAdmission(Kernel):
         id = "test.integer"
-        dtype = Param(QONNX_DATATYPE_VALUE_SEMANTICS)
+        dtype: Param[QONNXDataType] = Param(QONNX_DATATYPE_VALUE_SEMANTICS)
         width = Decision(int, values=(0, 8, 16))
 
         @derived
@@ -210,8 +209,7 @@ def test_integer_admission_retains_dynamic_bounds_and_inspectable_family_refusal
 
         admitted = integer_scalar(dtype, Integer(max_bits=limit, signed=False))
 
-    model = compile_space(IntegerAdmission)
-    unknown = model.bind({IntegerAdmission.dtype: resolve_qonnx_datatype_name("TERNARY")})
+    unknown = configure(IntegerAdmission(dtype=resolve_qonnx_datatype_name("TERNARY")))
     assert unknown.admitted.dtype.name == "TERNARY"
     assessment = unknown.admitted.inspect(IntegerScalar.admission)
     assert assessment.refused == ("admitted.family",)
@@ -223,10 +221,10 @@ def test_integer_admission_retains_dynamic_bounds_and_inspectable_family_refusal
         ("UINT16", False),
         ("BIPOLAR", False),
     ):
-        point = model.bind({IntegerAdmission.dtype: resolve_qonnx_datatype_name(name)})
+        point = configure(IntegerAdmission(dtype=resolve_qonnx_datatype_name(name)))
         point = point.with_choices(width=8)
         assert point.admitted.inspect(IntegerScalar.admission).verdict is accepted
-    invalid = model.bind({IntegerAdmission.dtype: resolve_qonnx_datatype_name("UINT8")})
+    invalid = configure(IntegerAdmission(dtype=resolve_qonnx_datatype_name("UINT8")))
     invalid = invalid.with_choices(width=0)
     refused = invalid.admitted.inspect(IntegerScalar.admission).results["admitted.maximum_bits"]
     assert isinstance(refused, Rejected)
@@ -252,7 +250,7 @@ def test_tuple_adapters_preserve_exact_integer_structure_without_geometry_valida
 def test_explicit_dtype_semantics_support_typed_protocol_results_and_detached_values() -> None:
     class Typed(Kernel):
         id = "test.typed"
-        dtype = Param(QONNX_DATATYPE_VALUE_SEMANTICS)
+        dtype: Param[QONNXDataType] = Param(QONNX_DATATYPE_VALUE_SEMANTICS)
 
         @derived(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
         def result(self) -> QONNXDataType:
@@ -261,7 +259,7 @@ def test_explicit_dtype_semantics_support_typed_protocol_results_and_detached_va
         physical = View(result)
 
     original = resolve_qonnx_datatype_name("INT8")
-    point = Typed({Typed.dtype: original})
+    point = configure(Typed(dtype=original))
     setattr(original, "_bitwidth", 16)
     assert point.dtype.name == "INT8"
     returned = point.result
@@ -271,13 +269,13 @@ def test_explicit_dtype_semantics_support_typed_protocol_results_and_detached_va
     assert result.name == "INT8"
 
 
-def test_builder_extends_kernel_with_typed_optional_views_and_independent_scopes() -> None:
+def test_composite_extends_kernel_with_typed_optional_views_and_independent_nodes() -> None:
+    # ScopeBuilder is removed: the declarations are built in plain Python and
+    # ``composite`` names them as a family on the kernel base. Its exposed ``dtype``
+    # binding becomes a formal each placing node binds by name; each node call is
+    # an independent scope.
     class InterfaceKernel(Kernel):
         id = "test.interface"
-
-    builder = ScopeBuilder(InterfaceKernel, name="IntegerWord")
-    dtype = builder.add("dtype", Param(QONNX_DATATYPE_VALUE_SEMANTICS))
-    lanes = builder.add("lanes", Param(int))
 
     def bits(*, dtype: QONNXDataType, lanes: int) -> int:
         return dtype.bitwidth() * lanes
@@ -285,32 +283,44 @@ def test_builder_extends_kernel_with_typed_optional_views_and_independent_scopes
     def plain_pins(*, payload_bits: int) -> Pins:
         return Pins((("word", payload_bits),), ())
 
-    payload = builder.add("payload_bits", derived(bits))
-    pins = builder.add("pin_values", derived(plain_pins))
-
     def narrow(*, dtype: QONNXDataType) -> bool | Rejected:
         return Integer(max_bits=8).check(dtype)
 
-    admitted = builder.add("admitted", constraint(narrow))
-    ports = builder.add("ports", View(pins, constraints=(admitted,)))
+    pins = derived(plain_pins)
+    admitted = constraint(narrow)
+    ports = View(pins, requires=(admitted,))
     key = ViewKey("ports", Pins)
-    builder.export(key).view(ports)
-    builder.bind(dtype, Param(QONNX_DATATYPE_VALUE_SEMANTICS))
-    builder.bind(lanes, 2)
-    assert builder.finish().id == InterfaceKernel.id
+    word = composite(
+        "IntegerWord",
+        {
+            "dtype": Param(QONNX_DATATYPE_VALUE_SEMANTICS),
+            "lanes": Param(int),
+            "payload_bits": derived(bits),
+            "pin_values": pins,
+            "admitted": admitted,
+            "ports": ports,
+        },
+        base=InterfaceKernel,
+        exports={key: ports},
+    )
+    assert issubclass(word, InterfaceKernel) and word.id == InterfaceKernel.id
 
     class Pair(Kernel):
         id = "test.interface_pair"
-        activation = builder.place()
-        weights = builder.place()
+        activation_dtype: Param[QONNXDataType] = Param(QONNX_DATATYPE_VALUE_SEMANTICS)
+        weights_dtype: Param[QONNXDataType] = Param(QONNX_DATATYPE_VALUE_SEMANTICS)
+        activation = word(dtype=activation_dtype, lanes=2)  # type: ignore[call-arg]
+        weights = word(dtype=weights_dtype, lanes=2)  # type: ignore[call-arg]
 
-    point = Pair(
-        {
-            Pair.activation.ref(dtype): resolve_qonnx_datatype_name("INT4"),
-            Pair.weights.ref(dtype): resolve_qonnx_datatype_name("INT16"),
-        }
+    point = configure(
+        Pair(
+            activation_dtype=resolve_qonnx_datatype_name("INT4"),
+            weights_dtype=resolve_qonnx_datatype_name("INT16"),
+        )
     )
-    assert point.query(Pair.activation.accepted(key)) == Available(Pins((("word", 8),), ()))
-    assert isinstance(point.query(Pair.weights.accepted(key)), Rejected)
-    assert point.query(Pair.weights.ref(payload)) == Available(32)
+    activation_ports = getattr(Pair.activation, "ports")
+    weights_ports = getattr(Pair.weights, "ports")
+    assert point.query(activation_ports) == Available(Pins((("word", 8),), ()))
+    assert isinstance(point.query(weights_ports), Rejected)
+    assert point.query(getattr(Pair.weights, "payload_bits")) == Available(32)
     assert [info.key for info in point.capabilities()] == ["activation.ports", "weights.ports"]

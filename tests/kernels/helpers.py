@@ -1,41 +1,24 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Test harness using public model binding and typed discovery.
+"""Test harness: configure a kernel node from its formals, then commit choices by key.
 
-Supplied facts use exposed parameter keys. Required omissions are errors;
-partial evaluation uses explicit optional-Param or unresolved-Decision fixtures."""
+Facts are the root node's typed formals; a missing required one is refused at
+the node call. Choices use the stable decision keys ``inspection`` reports."""
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import TypeVar
 
-from finn.core.space import Space, compile_space
-from finn.core.space import Constraint
-from finn.core.space.errors import ConfigurationError, RequestError
-from finn.core.space.inspection import decisions, members
-from finn.core.space.results import QueryResult, Available
+from finn.core.space import Constraint, Space, configure
+from finn.core.space.results import Available, QueryResult
+from finn.kernels.configure import commit
 
 T = TypeVar("T")
 S = TypeVar("S", bound=Space)
 
 
-def point_for(kernel: type[S], facts: Mapping[str, object], **choices: object) -> S:
-    model = compile_space(kernel)
-    parameters = {item.key: item.reference for item in members(model) if item.kind == "param"}
-    unknown = facts.keys() - parameters.keys()
-    if unknown:
-        raise RequestError(f"unknown supplied facts: {sorted(unknown)}")
-    point = model.bind({parameters[name]: value for name, value in facts.items()})
-    owned = {item.key: item.reference for item in decisions(model)}
-    unknown_choices = choices.keys() - owned.keys()
-    if unknown_choices:
-        raise RequestError(f"unknown choices: {sorted(unknown_choices)}")
-    report = point.try_with_choices(
-        *(point.field(owned[name]).change(value) for name, value in choices.items())
-    )
-    if not report.accepted:
-        raise ConfigurationError(report)
-    return report.instance
+def point_for(kernel: Callable[..., S], facts: Mapping[str, object], **choices: object) -> S:
+    return commit(configure(kernel(**facts)), choices)
 
 
 def value(answer: QueryResult[T]) -> T:

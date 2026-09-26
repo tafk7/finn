@@ -16,12 +16,16 @@ A parent may place it inside an operation kernel or beside one; the contract is
 the same either way.
 """
 
+from __future__ import annotations
+
 from finn.core.space import Decision, Param, Rejected, derived, reject, view
+from finn.dataflow.datatypes import QONNXDataType
 from finn.kernels.artifacts.requirements import ModuleBuildRequirements
 from finn.kernels.base import Kernel
 from finn.kernels.datatypes.domains import Integer
 from finn.kernels.datatypes.scalar import integer_scalar
 from finn.kernels.datatypes.semantics import (
+    IntegerTensor,
     INTEGER_TENSOR,
     INTEGER_VECTOR,
     QONNX_DATATYPE_VALUE_SEMANTICS,
@@ -29,7 +33,7 @@ from finn.kernels.datatypes.semantics import (
 )
 from finn.dataflow.datatypes import ordinary_integer_bounds
 from finn.kernels.physical.contract import STREAM_CONTRACT, StreamContract
-from finn.kernels.physical.forms import TRAVERSAL, Repetition, pack
+from finn.kernels.physical.forms import TRAVERSAL, Repetition, Traversal, pack
 from finn.kernels.streaming import (
     CYCLIC_ROM_STYLES,
     cyclic_stream_interface,
@@ -43,10 +47,10 @@ class CyclicDelivery(Kernel):
     id = "finn.cyclic_delivery"
     version = "1"
 
-    dtype = Param(QONNX_DATATYPE_VALUE_SEMANTICS)
+    dtype: Param[QONNXDataType] = Param(QONNX_DATATYPE_VALUE_SEMANTICS)
     element = integer_scalar(dtype, Integer())
-    form = Param(TRAVERSAL)
-    values = Param(INTEGER_TENSOR)
+    form: Param[Traversal] = Param(TRAVERSAL)
+    values: Param[IntegerTensor] = Param(INTEGER_TENSOR)
     rom_style = Decision(str, values=CYCLIC_ROM_STYLES)
 
     @derived(semantics=INTEGER_VECTOR)

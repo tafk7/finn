@@ -1,14 +1,15 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Static assertions for the class-centered descriptor API.
+"""Static assertions for the declarative node API.
 
 A positive typing fixture: strict mypy must accept this module unchanged. The
-claims below are the ones a runtime test cannot make. ``pipeline.fixed`` and
-``pipeline.implementation`` both *work* at runtime whatever the annotations say,
-so the thing worth pinning is that a contributor's editor and type checker see
-the authored child class and the bound view rather than ``Any`` or the
-declaration — which is exactly what a descriptor overload silently loses.
+claims below are the ones a runtime test cannot make. A node declaration
+``FixedImplementation(size=size)`` and the configuration ``pipeline.fixed``
+both *work* at runtime whatever the annotations say, so the thing worth
+pinning is that a contributor's editor and type checker see the authored
+family, references typed as the values they stand for, and the bound view,
+rather than ``Any`` or an internal declaration type.
 """
 
 from __future__ import annotations
@@ -16,32 +17,31 @@ from __future__ import annotations
 from typing_extensions import assert_type
 
 from finn.core.space import (
-    QueryResult,
     BoundView,
+    ConfigurationResult,
     Const,
     Decision,
     Derived,
     Param,
+    QueryResult,
     Space,
-    SpaceModel,
-    Subspace,
-    SubspaceChoice,
-    ChoiceView,
-    ValueKey,
-    ValueRef,
     View,
     ViewAssessment,
-    compile_space,
-    derived,
-    view,
+    ViewKey,
+    configure,
     constraint,
+    derived,
+    inspection,
+    selected,
+    view,
 )
+from finn.core.space.inspection import ChoiceInfo
 
-RESULT = ValueKey("result", int)
+RESULT = ViewKey("result", int)
 
 
 class FixedImplementation(Space):
-    size = Param(int)
+    size: Param[int] = Param(int)
     lanes = Decision(int, values=(1, 2, 4))
     minimum = Const(1)
 
@@ -50,22 +50,28 @@ class FixedImplementation(Space):
         return self.size // self.lanes
 
     physical = View(result)
-    exports = {RESULT: result}
+    exports = {RESULT: physical}
 
 
 class SmallImplementation(Space):
-    size = Param(int)
+    size: Param[int] = Param(int)
 
     @derived
     def result(self) -> int:
         return self.size
 
-    exports = {RESULT: result}
+    physical = View(result)
+    exports = {RESULT: physical}
 
 
 class Pipeline(Space):
-    size = Param(int)
-    fixed = Subspace(FixedImplementation, size=size)
+    size: Param[int] = Param(int)
+    # Calling a family declares a node, typed as the family.
+    fixed = FixedImplementation(size=size)
+    assert_type(fixed, FixedImplementation)
+    # A reference in a class body is typed as the value it stands for.
+    assert_type(fixed.result, int)
+    assert_type(fixed.physical, BoundView[int])
 
     @derived
     def cycles(self) -> int:
@@ -77,59 +83,72 @@ class Pipeline(Space):
     def supported(self) -> bool:
         return self.size > 0
 
-    @view(constraints=(supported,))
+    @view(requires=(supported,))
     def output(self) -> int:
         return self.cycles
 
-    implementation = SubspaceChoice(
-        {
-            "fast": Subspace(FixedImplementation, size=size),
-            "small": Subspace(SmallImplementation, size=size),
-        },
-        exports=(RESULT,),
+    # The structural choice: a Decision over nodes, typed as its candidates.
+    implementation = Decision[FixedImplementation | SmallImplementation](
+        values={
+            "fast": FixedImplementation(size=size),
+            "small": SmallImplementation(size=size),
+        }
     )
+    assert_type(implementation, FixedImplementation | SmallImplementation)
+    # A member every candidate has is read through the choice.
+    assert_type(implementation.result, int)
+    chosen = View(implementation.physical)
+    case = selected(implementation)
+
+    @derived
+    def chosen_case(self) -> str:
+        assert_type(self.case, str)
+        return self.case
 
 
-# Class access is the declaration; the Subspace keeps its concrete child type.
-assert_type(Pipeline.fixed, Subspace[FixedImplementation])
-assert_type(Pipeline.implementation, SubspaceChoice)
+# Class access is the schema key; a node keeps its concrete family.
+assert_type(Pipeline.fixed, FixedImplementation)
+assert_type(Pipeline.fixed.result, int)
+assert_type(Pipeline.implementation, FixedImplementation | SmallImplementation)
 assert_type(Pipeline.size, Param[int])
+assert_type(Pipeline.chosen, View[int])
 assert_type(FixedImplementation.minimum, Const[int])
 assert_type(FixedImplementation.result, Derived[int])
 assert_type(FixedImplementation.physical, View[int])
-assert_type(Pipeline.implementation.ref(RESULT), ValueRef[int])
+assert_type(FixedImplementation.lanes, Decision[int])
 
-# The compiler service preserves the authored root class through the model.
-model = compile_space(Pipeline)
-assert_type(model, SpaceModel[Pipeline])
-assert_type(model.bind({Pipeline.size: 8}), Pipeline)
+# The one compile step preserves the authored root family.
+assert_type(configure(Pipeline(size=8)), Pipeline)
 
-# So does the one-shot entry, and so does an immutable successor.
-pipeline = Pipeline({Pipeline.size: 8})
-assert_type(pipeline, Pipeline)
 
-# Instance access binds the exact use site.
-assert_type(pipeline.fixed, FixedImplementation)
-assert_type(pipeline.implementation, ChoiceView)
+def check(pipeline: Pipeline) -> None:
+    # Configuration access binds the exact use site.
+    assert_type(pipeline.fixed, FixedImplementation)
+    assert_type(pipeline.implementation, FixedImplementation | SmallImplementation)
+    assert_type(pipeline.case, str)
 
-# And the bound view's own surface stays typed.
-assert_type(pipeline.implementation.alternatives, tuple[str, ...])
-assert_type(pipeline.implementation.select("fast"), ChoiceView)
-assert_type(pipeline.implementation.alternative("fast"), Space)
+    # The replacements of the bound choice view stay typed.
+    assert_type(pipeline.with_choices(implementation="fast"), Pipeline)
+    assert_type(pipeline.with_choices({Pipeline.implementation: "small"}), Pipeline)
+    assert_type(pipeline.try_with_choices(implementation="fast"), ConfigurationResult[Pipeline])
+    assert_type(inspection.candidate(pipeline, Pipeline.implementation, "fast"), Space | None)
+    assert_type(inspection.choices(pipeline), tuple[ChoiceInfo, ...])
 
-# A declared value read through an occurrence has its declared type.
-assert_type(pipeline.fixed.result, int)
-assert_type(pipeline.fixed.with_choices(lanes=2), FixedImplementation)
-assert_type(pipeline.fixed.physical, BoundView[int])
-assert_type(pipeline.fixed.physical(), int)
-assert_type(pipeline.fixed.physical.inspect(), ViewAssessment[int])
-assert_type(pipeline.fixed.physical.query(), QueryResult[int])
-assert_type(pipeline.fixed.inspect(FixedImplementation.physical), ViewAssessment[int])
-assert_type(pipeline.fixed.view(FixedImplementation.physical), BoundView[int])
-assert_type(pipeline.fixed.view(FixedImplementation.physical)(), int)
-assert_type(pipeline.fixed.field(FixedImplementation.result).get(), int)
-assert_type(pipeline.fixed.field(FixedImplementation.result).query(), QueryResult[int])
-assert_type(pipeline.fixed.field(FixedImplementation.lanes).get(), int)
-assert_type(pipeline.fixed.field(FixedImplementation.lanes).query(), QueryResult[int])
-assert_type(pipeline.output(), int)
-assert_type(pipeline.fixed.query(FixedImplementation.result), QueryResult[int])
+    # A declared value read through a configuration has its declared type.
+    assert_type(pipeline.fixed.result, int)
+    assert_type(pipeline.fixed.with_choices(lanes=2), FixedImplementation)
+    assert_type(pipeline.fixed.physical, BoundView[int])
+    assert_type(pipeline.fixed.physical(), int)
+    assert_type(pipeline.fixed.physical.inspect(), ViewAssessment[int])
+    assert_type(pipeline.fixed.physical.query(), QueryResult[int])
+    assert_type(pipeline.fixed.inspect(FixedImplementation.physical), ViewAssessment[int])
+    assert_type(pipeline.fixed.view(FixedImplementation.physical), BoundView[int])
+    assert_type(pipeline.fixed.view(FixedImplementation.physical)(), int)
+    assert_type(pipeline.fixed.field(FixedImplementation.result).get(), int)
+    assert_type(pipeline.fixed.field(FixedImplementation.result).query(), QueryResult[int])
+    assert_type(pipeline.fixed.field(FixedImplementation.lanes).get(), int)
+    assert_type(pipeline.fixed.field(FixedImplementation.lanes).query(), QueryResult[int])
+    assert_type(pipeline.output(), int)
+    assert_type(pipeline.chosen(), int)
+    assert_type(pipeline.fixed.query(FixedImplementation.result), QueryResult[int])
+    assert_type(pipeline.query(Pipeline.fixed.result), QueryResult[int])

@@ -17,8 +17,8 @@ graph of design spaces: kernel nodes, and one ``StreamLink`` relation node per
 stream reading its two ends as located values. Its own boundary streams are its
 own members ``in0_V``/``in1_V``/``out0_V``. ``structure`` wires
 ``Members(MODULE)`` through ``Members(CONNECTION)``. ``mvau_assembly`` is a
-convenience adapter: it commits concrete facts and choices and packs the views
-into an ``MVAUAssembly``.
+convenience adapter: it configures concrete facts, commits the choices and
+packs the views into an ``MVAUAssembly``.
 """
 
 from __future__ import annotations
@@ -26,20 +26,25 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import Enum
+from typing import Any
 
 from finn.kernels.artifacts.build import (
     ModuleBuildRequirements,
 )
 from finn.kernels.artifacts.derivation import ProducerIdentity
 from finn.kernels.datatypes.scalar import ScalarEncoding
-from finn.kernels.datatypes.semantics import INTEGER_TENSOR, QONNX_DATATYPE_VALUE_SEMANTICS
+from finn.kernels.datatypes.semantics import (
+    INTEGER_TENSOR,
+    QONNX_DATATYPE_VALUE_SEMANTICS,
+    IntegerTensor,
+)
 from finn.dataflow.datatypes import (
     QONNXDataType,
     canonical_qonnx_datatype,
     ordinary_integer_bounds,
     resolve_qonnx_datatype_name,
 )
-from finn.kernels.configure import configure, describe
+from finn.kernels.configure import commit, describe
 from finn.kernels.delivery import CyclicDelivery
 from finn.kernels.dotp import DotpAxiKernel
 from finn.kernels.physical.forms import TRAVERSAL, Every, Traversal, tile, vector_major
@@ -58,6 +63,7 @@ from finn.kernels.streams import (
 )
 from finn.kernels.target import DspBlock
 from finn.core.space import (
+    UNSUPPLIED,
     Available,
     ConstraintGroup,
     Decision,
@@ -67,14 +73,13 @@ from finn.core.space import (
     Rejected,
     Space,
     View,
-    Subspace,
-    SubspaceChoice,
+    configure,
     constraint,
     default_semantics,
     derived,
     divisors_of,
-    located,
     reject,
+    selected,
     view,
 )
 
@@ -154,29 +159,26 @@ class MVAUAssembly:
 FOLDING = default_semantics(_Folding)
 
 
-class External(Space):
-    """External weight delivery: nothing is placed; the weights enter at ``in1_V``."""
-
-
 class MVAU(Space):
     """Workload facts, folding choices, and kernels connected by declared streams.
 
     ``activations`` enters at ``in0_V`` and is replayed once per neuron fold into
     ``replayed``; dotp consumes it with ``weight_stream`` and produces ``results``
-    for ``out0_V``. The ``implementation`` choice decides what drives
-    ``weight_stream``: ``external`` presents ``in1_V``, and ``cyclic`` places a
-    ``CyclicDelivery`` owning ``rom_style`` and the optional ``weights``.
-    ``weight_stream`` is buffered: ``direct`` or a ``fifo`` with a committed depth.
+    for ``out0_V``. The ``implementation`` Decision decides what drives
+    ``weight_stream``: ``external`` places nothing and presents ``in1_V``, and
+    ``cyclic`` places the ``cyclic`` CyclicDelivery node owning ``rom_style`` and
+    the optional ``weights``. ``weight_stream`` is buffered: ``direct`` or a
+    ``fifo`` with a committed depth.
     """
 
-    repetitions = Param(int)
-    matrix_width = Param(int)
-    matrix_height = Param(int)
-    activation_dtype = Param(QONNX_DATATYPE_VALUE_SEMANTICS)
-    weights_dtype = Param(QONNX_DATATYPE_VALUE_SEMANTICS)
-    target_dsp = Param(DspBlock)
-    segment_length = Param(int)
-    weights = Param(INTEGER_TENSOR, required=False)
+    repetitions: Param[int] = Param(int)
+    matrix_width: Param[int] = Param(int)
+    matrix_height: Param[int] = Param(int)
+    activation_dtype: Param[QONNXDataType] = Param(QONNX_DATATYPE_VALUE_SEMANTICS)
+    weights_dtype: Param[QONNXDataType] = Param(QONNX_DATATYPE_VALUE_SEMANTICS)
+    target_dsp: Param[DspBlock] = Param(DspBlock)
+    segment_length: Param[int] = Param(int)
+    weights: Param[IntegerTensor] = Param(INTEGER_TENSOR, default=UNSUPPLIED)
     pe = Decision(int, domain=divisors_of(matrix_height))
     simd = Decision(int, domain=divisors_of(matrix_width))
 
@@ -247,14 +249,12 @@ class MVAU(Space):
     in0_V = View(activation_spec)
     out0_V = View(result_spec)
 
-    replay = Subspace(
-        ReplayBuffer,
+    replay = ReplayBuffer(
         input_stream=activation_spec,
         sequence_length=synapse_folds,
         replay_count=neuron_folds,
     )
-    compute = Subspace(
-        DotpAxiKernel,
+    compute = DotpAxiKernel(
         activation_dtype=activation_dtype,
         weights_dtype=weights_dtype,
         result_dtype=result_type,
@@ -266,54 +266,34 @@ class MVAU(Space):
         weights_stream=weight_spec,
         result_stream=result_spec,
     )
-    implementation = SubspaceChoice(
-        {
-            WeightDelivery.EXTERNAL.value: Subspace(External),
-            WeightDelivery.CYCLIC.value: Subspace(
-                CyclicDelivery, dtype=weights_dtype, form=weight_period, values=weights
-            ),
-        }
+    # A handle naming the cyclic candidate; the Decision places it.
+    cyclic = CyclicDelivery(dtype=weights_dtype, form=weight_period, values=weights)
+    implementation = Decision(
+        values={WeightDelivery.EXTERNAL.value: None, WeightDelivery.CYCLIC.value: cyclic}
     )
-    delivery = implementation.case()
+    delivery = selected(implementation)
 
     @derived
     def external(self) -> bool:
-        return self.delivery == WeightDelivery.EXTERNAL.value
+        return self.implementation is None
 
     in1_V = View(weight_spec, when=external)
 
-    activations = Subspace(
-        StreamLink,
-        spec=activation_spec,
-        source=located(in0_V),
-        sink=replay.at(ReplayBuffer.input_port),
+    activations = StreamLink(spec=activation_spec, source=in0_V, sink=replay.input_port)
+    replayed = StreamLink(
+        spec=replayed_spec, source=replay.output_port, sink=compute.activation_port
     )
-    replayed = Subspace(
-        StreamLink,
-        spec=replayed_spec,
-        source=replay.at(ReplayBuffer.output_port),
-        sink=compute.at(DotpAxiKernel.activation_port),
-    )
-    weight_stream = Subspace(
-        BufferedStreamLink,
+    weight_stream = BufferedStreamLink(
         spec=weight_spec,
         # Whichever driver is present: the boundary, or the cyclic delivery node.
-        source=Present(
-            located(in1_V),
-            implementation.alternatives["cyclic"].at(CyclicDelivery.output),
-        ),
-        sink=compute.at(DotpAxiKernel.weights_port),
+        source=Present(in1_V, cyclic.output),
+        sink=compute.weights_port,
     )
-    results = Subspace(
-        StreamLink,
-        spec=result_spec,
-        source=compute.at(DotpAxiKernel.result_port),
-        sink=located(out0_V),
-    )
+    results = StreamLink(spec=result_spec, source=compute.result_port, sink=out0_V)
     modules = Members(MODULE)
     streams = Members(CONNECTION)
 
-    @view(semantics=COMPOSED, constraints=(dimensions, modules, streams))
+    @view(semantics=COMPOSED, requires=(dimensions, modules, streams))
     def structure(self) -> Composed | Rejected:
         return netlist(
             self.modules,
@@ -322,7 +302,7 @@ class MVAU(Space):
             producer=ProducerIdentity("finn.mvau." + self.delivery, "1"),
         )
 
-    @view(semantics=default_semantics(ModuleBuildRequirements), constraints=(structure,))
+    @view(semantics=default_semantics(ModuleBuildRequirements), requires=(structure,))
     def build_requirements(self) -> ModuleBuildRequirements:
         return self.structure().requirements
 
@@ -359,7 +339,7 @@ def mvau_assembly(
     cyclic = weight_delivery is WeightDelivery.CYCLIC
     if cyclic != (weights is not None):
         raise ValueError("cyclic delivery requires weights; external delivery has no initializer")
-    facts: dict[str, object] = dict(
+    facts: dict[str, Any] = dict(
         repetitions=repetitions,
         matrix_width=matrix_width,
         matrix_height=matrix_height,
@@ -384,7 +364,7 @@ def mvau_assembly(
     if buffered:
         choices["weight_stream.transport.fifo.buffer.depth"] = weight_fifo_depth
         choices["weight_stream.transport.fifo.buffer.ram_style"] = "auto"
-    point = configure(MVAU, facts, choices)
+    point = commit(configure(MVAU(**facts)), choices)
     composed = point.structure.query()
     if not isinstance(composed, Available):
         raise ValueError(f"MVAU assembly is not accepted: {describe([composed])}")
@@ -397,7 +377,7 @@ def mvau_assembly(
         weight_delivery,
         composed.value.structure,
         composed.value.requirements,
-        point.implementation.alternative(case).field(CyclicDelivery.image).get() if cyclic else (),
+        point.cyclic.image if cyclic else (),
     )
 
 

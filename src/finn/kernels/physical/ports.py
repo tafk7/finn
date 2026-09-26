@@ -3,9 +3,9 @@
 
 """Typed stream ports: lanes of a separately owned, accepted scalar encoding.
 
-A port does not own its datatype or admission. The kernel places a ``Scalar``
-for each operand and binds the port to that scalar's raw ``dtype`` and accepted
-``encoding``. Raw lane, width and packing facts are therefore available as soon
+A port does not own its datatype or admission. The kernel declares a ``Scalar``
+node for each operand and binds the port to that scalar's raw ``dtype`` and
+accepted ``encoding``. Raw lane, width and packing facts are therefore available as soon
 as the dtype is known, while a port's accepted ``stream`` requires the scalar's
 admission. Opaque word streams need no port: kernels such as the FIFO describe
 them directly with ``ReadyValidStream`` values.
@@ -17,7 +17,6 @@ from finn.core.space import (
     Param,
     Rejected,
     Space,
-    Subspace,
     ValueRef,
     View,
     constraint,
@@ -26,9 +25,9 @@ from finn.core.space import (
     reject,
 )
 from finn.kernels.artifacts.abi import Endpoint
-from finn.kernels.datatypes.scalar import SCALAR_ENCODING, Scalar
+from finn.kernels.datatypes.scalar import SCALAR_ENCODING, Scalar, ScalarEncoding
 from finn.kernels.datatypes.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
-from finn.dataflow.datatypes import qonnx_datatype_width
+from finn.dataflow.datatypes import QONNXDataType, qonnx_datatype_width
 from finn.kernels.physical.layout import (
     FieldPlacement,
     PackedBeatLayout,
@@ -62,11 +61,11 @@ def lane_layout(
 class TypedStream(Space):
     """Shared lane facts of a typed port; subclasses add a transport profile."""
 
-    name = Param(str)
-    endpoint = Param(Endpoint)
-    lanes = Param(int)
-    dtype = Param(QONNX_DATATYPE_VALUE_SEMANTICS)
-    element = Param(SCALAR_ENCODING)
+    name: Param[str] = Param(str)
+    endpoint: Param[Endpoint] = Param(Endpoint)
+    lanes: Param[int] = Param(int)
+    dtype: Param[QONNXDataType] = Param(QONNX_DATATYPE_VALUE_SEMANTICS)
+    element: Param[ScalarEncoding] = Param(SCALAR_ENCODING)
 
     @derived
     def element_bits(self) -> int:
@@ -86,11 +85,11 @@ class TypedStream(Space):
 class NativeStreamPort(TypedStream):
     """Unpadded native ready/valid pins carrying ``lanes`` packed elements."""
 
-    data = Param(str)
-    valid = Param(str)
-    ready = Param(str)
-    clock = Param(str)
-    reset = Param(str)
+    data: Param[str] = Param(str)
+    valid: Param[str] = Param(str)
+    ready: Param[str] = Param(str)
+    clock: Param[str] = Param(str)
+    reset: Param[str] = Param(str)
 
     @derived(semantics=default_semantics(PackedBeatLayout))
     def payload(self) -> PackedBeatLayout:
@@ -111,28 +110,27 @@ class NativeStreamPort(TypedStream):
             self.reset,
         )
 
-    stream = View(candidate, constraints=(TypedStream.lanes_valid,))
+    stream = View(candidate, requires=(TypedStream.lanes_valid,))
 
 
 def native_stream(
     name: str,
     lanes: int | ValueRef[int],
     endpoint: Endpoint,
-    element: Subspace[Scalar],
+    element: Scalar,
     *,
     pins: tuple[str, str, str],
     clock: str = "clk",
     reset: str = "rst",
-) -> Subspace[NativeStreamPort]:
+) -> NativeStreamPort:
     """Bind a native port to its scalar's raw dtype and accepted encoding."""
     data, valid, ready = pins
-    return Subspace(
-        NativeStreamPort,
+    return NativeStreamPort(
         name=name,
         endpoint=endpoint,
         lanes=lanes,
-        dtype=element.ref(Scalar.dtype),
-        element=element.accepted(Scalar.encoding),
+        dtype=element.dtype,
+        element=element.encoding,
         data=data,
         valid=valid,
         ready=ready,

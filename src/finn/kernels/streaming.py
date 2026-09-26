@@ -10,6 +10,8 @@ on a rising edge with valid and ready asserted outside reset. Output payload and
 framing stay stable while a valid transfer is stalled.
 """
 
+from __future__ import annotations
+
 from collections.abc import Sequence
 from typing import cast
 
@@ -21,13 +23,13 @@ from finn.kernels.artifacts.abi import (
     Reset,
     Signal,
 )
-from finn.core.space import Param, Rejected, default_semantics, derived, reject, view
+from finn.core.space import UNSUPPLIED, Param, Rejected, default_semantics, derived, reject, view
 from finn.kernels.base import Kernel
 from finn.kernels.datatypes.scalar import ScalarEncoding
 from finn.kernels.physical.contract import STREAM_CONTRACT, StreamContract
 from finn.kernels.physical.forms import Every, Traversal
 from finn.kernels.physical.stream import ReadyValidStream, StreamMarker, MarkerKind
-from finn.kernels.streams import MODULE, STREAM_SPEC
+from finn.kernels.streams import MODULE, STREAM_SPEC, StreamSpec
 from finn.kernels.artifacts.contribution_types import CopiedSource
 from finn.kernels.artifacts.requirements import (
     FixedModuleName,
@@ -108,9 +110,9 @@ class ReplayBuffer(Kernel):
     id = "finnlib.replay_buffer"
     version = "1"
 
-    input_stream = Param(STREAM_SPEC, required=False)
-    sequence_length = Param(int)
-    replay_count = Param(int)
+    input_stream: Param[StreamSpec] = Param(STREAM_SPEC, default=UNSUPPLIED)
+    sequence_length: Param[int] = Param(int)
+    replay_count: Param[int] = Param(int)
 
     @derived(semantics=default_semantics(tuple))
     def contracts(self) -> tuple[StreamContract, ...] | Rejected:

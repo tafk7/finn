@@ -1,20 +1,21 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Streams as relations: a stream is an ordinary Space placed among the nodes it joins.
+"""Streams as relations: a stream is an ordinary node declared among the nodes it joins.
 
 A ``StreamLink`` reads its two ends as ``Located`` values: a child's contract
-view (``compute.at(DotpAxiKernel.weights_port)``), or one of the composite's own
-members (``located(in0_V)``) holding the ``StreamSpec`` of a boundary port.
+view (``compute.weights_port``), or one of the composite's own members
+(``in0_V``) holding the ``StreamSpec`` of a boundary port. Its formals are
+``Param(Located)``, so a plain reference arrives with its node and member names.
 Its ``compatible`` constraint owns every refusal about that stream, and its
 ``connection`` view is exported as ``CONNECTION``. A composite collects its
 modules and connections with ``Members(MODULE)`` and ``Members(CONNECTION)``;
 ``netlist`` wires them. Instance names come from the node names in those
 located values; nothing is named by a literal.
 
-A ``BufferedStreamLink`` owns a ``transport`` choice between ``direct`` and
-``fifo``. The FIFO case owns its ``depth`` and the FIFO's ``ram_style``; it is
-an identity adapter, checked on both of its sides.
+A ``BufferedStreamLink`` owns a ``transport`` Decision over two nodes,
+``direct`` and ``fifo``. The FIFO candidate owns its ``depth`` and the FIFO's
+``ram_style``; it is an identity adapter, checked on both of its sides.
 """
 
 from __future__ import annotations
@@ -25,11 +26,10 @@ from dataclasses import dataclass, replace
 from finn.core.space import (
     Decision,
     Located,
+    LocatedParam,
     Param,
     Rejected,
     Space,
-    Subspace,
-    SubspaceChoice,
     View,
     ViewKey,
     constraint,
@@ -39,7 +39,6 @@ from finn.core.space import (
     reject,
     view,
 )
-from finn.core.space.graph import LOCATED
 from finn.kernels.artifacts.abi import Clock, ClockAlignment, Direction, Endpoint, Reset, Signal
 from finn.kernels.artifacts.build import (
     EntryPointSourceName,
@@ -109,7 +108,6 @@ class Stage:
 
 
 STAGE_SEMANTICS = default_semantics(Stage)
-STAGE = ViewKey("stage", STAGE_SEMANTICS)
 
 
 class _Direct(Space):
@@ -117,20 +115,17 @@ class _Direct(Space):
     def stage(self) -> Stage:
         return Stage()
 
-    exports = {STAGE: stage}
-
 
 class StreamFifo(Space):
     """An identity adapter: the stream's own spec on both sides of a native FIFO."""
 
-    spec = Param(STREAM_SPEC)
+    spec: Param[StreamSpec] = Param(STREAM_SPEC)
 
     @derived
     def word_bits(self) -> int:
         return self.spec.payload_bits
 
-    buffer = Subspace(
-        FifoKernel,
+    buffer = FifoKernel(
         word_bits=word_bits,
         depth=Decision(int, domain=domain(accepts=lambda *, candidate: 2 <= candidate < 2**32)),
     )
@@ -144,8 +139,6 @@ class StreamFifo(Space):
             StreamContract(source, spec.element, spec.form),
             StreamContract(sink, spec.element, spec.form),
         )
-
-    exports = {STAGE: stage}
 
 
 @dataclass(frozen=True)
@@ -174,9 +167,9 @@ def _end(end: Located[object], spec: StreamSpec, endpoint: Endpoint) -> StreamCo
 class StreamLink(Space):
     """A relation between a producing and a consuming stream end."""
 
-    spec = Param(STREAM_SPEC)
-    source = Param(LOCATED)
-    sink = Param(LOCATED)
+    spec: Param[StreamSpec] = Param(STREAM_SPEC)
+    source: LocatedParam[object] = Param(Located)
+    sink: LocatedParam[object] = Param(Located)
 
     @derived(semantics=default_semantics(tuple))
     def contracts(self) -> tuple[StreamContract, StreamContract] | Rejected:
@@ -216,7 +209,7 @@ class StreamLink(Space):
         source, sink = self.contracts
         return Connection(self.source.node, source, self.sink.node, sink, self.stage())
 
-    connection = View(link, constraints=(compatible,))
+    connection = View(link, requires=(compatible,))
     exports = {CONNECTION: connection}
 
 
@@ -227,11 +220,10 @@ def _refusal(found: Sequence[Mismatch]) -> bool | Rejected:
 
 
 class BufferedStreamLink(StreamLink):
-    transport = SubspaceChoice(
-        {"direct": Subspace(_Direct), "fifo": Subspace(StreamFifo, spec=StreamLink.spec)},
-        exports=(STAGE,),
+    transport = Decision[_Direct | StreamFifo](
+        values={"direct": _Direct(), "fifo": StreamFifo(spec=StreamLink.spec)}
     )
-    stage = View(transport.accepted(STAGE))
+    stage = View(transport.stage)
 
 
 @dataclass(frozen=True)
@@ -244,7 +236,8 @@ COMPOSED = default_semantics(Composed)
 
 
 def _instance(node: str | None) -> str | None:
-    return None if node is None else "u_" + node
+    """``u_<node>``; a candidate of a Decision (``implementation.cyclic``) joins with ``_``."""
+    return None if node is None else "u_" + node.replace(".", "_")
 
 
 def netlist(
@@ -261,7 +254,7 @@ def netlist(
     """
     connections = [
         (
-            str(stream.node),
+            str(stream.node).replace(".", "_"),
             replace(
                 stream.value,
                 source_owner=_instance(stream.value.source_owner),
@@ -272,7 +265,10 @@ def netlist(
     ]
     try:
         return _wire(
-            {"u_" + str(item.node): item.value for item in modules}, connections, module, producer
+            {str(_instance(item.node)): item.value for item in modules},
+            connections,
+            module,
+            producer,
         )
     except ValueError as error:
         return reject("stream-composition", str(error))

@@ -17,8 +17,15 @@ from finn.dataflow.datatypes import resolve_qonnx_datatype_name
 from finn.kernels.input_generator import InputGeneratorKernel
 from finn.kernels.memstream_hls import MemStreamHlsKernel
 from finn.kernels.resources import template_root
-from finn.core.space import Param, Rejected, Space, Subspace, Unresolved
-from finn.core.space.errors import RequestError
+from finn.core.space import (
+    UNSUPPLIED,
+    DefinitionError,
+    Param,
+    Rejected,
+    Space,
+    Unresolved,
+    configure,
+)
 from finn.kernels.thresholding import ThresholdingAxiKernel
 
 TABLE: ThresholdTable = (((-2, 0, 3), (-1, 1, 4)),)
@@ -31,13 +38,8 @@ def generator(
     extents: IntegerVector = (3, 6),
     strides: IntegerVector = (0, 1),
 ) -> InputGeneratorKernel:
-    return InputGeneratorKernel(
-        {
-            InputGeneratorKernel.word_bits: bits,
-            InputGeneratorKernel.frame_words: frame,
-            InputGeneratorKernel.extents: extents,
-            InputGeneratorKernel.strides: strides,
-        }
+    return configure(
+        InputGeneratorKernel(word_bits=bits, frame_words=frame, extents=extents, strides=strides)
     ).with_choices(ram_style="auto")
 
 
@@ -51,16 +53,16 @@ def threshold_base(
     bram: int = 0,
     uram: int = 0,
 ) -> ThresholdingAxiKernel:
-    return ThresholdingAxiKernel(
-        {
-            ThresholdingAxiKernel.input_dtype: resolve_qonnx_datatype_name(input_dtype),
-            ThresholdingAxiKernel.threshold_dtype: resolve_qonnx_datatype_name(threshold_dtype),
-            ThresholdingAxiKernel.thresholds: table,
-            ThresholdingAxiKernel.pe: pe,
-            ThresholdingAxiKernel.bias: bias,
-            ThresholdingAxiKernel.depth_trigger_bram: bram,
-            ThresholdingAxiKernel.depth_trigger_uram: uram,
-        }
+    return configure(
+        ThresholdingAxiKernel(
+            input_dtype=resolve_qonnx_datatype_name(input_dtype),
+            threshold_dtype=resolve_qonnx_datatype_name(threshold_dtype),
+            thresholds=table,
+            pe=pe,
+            bias=bias,
+            depth_trigger_bram=bram,
+            depth_trigger_uram=uram,
+        )
     )
 
 
@@ -91,11 +93,8 @@ def threshold(
 
 
 def memstream(dtype: str = "INT9", depth: int = 3) -> MemStreamHlsKernel:
-    return MemStreamHlsKernel(
-        {
-            MemStreamHlsKernel.element_dtype: resolve_qonnx_datatype_name(dtype),
-            MemStreamHlsKernel.depth: depth,
-        }
+    return configure(
+        MemStreamHlsKernel(element_dtype=resolve_qonnx_datatype_name(dtype), depth=depth)
     )
 
 
@@ -136,7 +135,8 @@ def test_generator_refuses_invalid_loop_geometry(
 
 @pytest.mark.parametrize("bad", ([3, 6], (3, True), (3, [6])))
 def test_generator_requires_exact_immutable_integer_vectors(bad: object) -> None:
-    with pytest.raises(RequestError):
+    # A bad literal is refused at the node call.
+    with pytest.raises(DefinitionError, match="integer vector"):
         generator(extents=cast(IntegerVector, bad))
 
 
@@ -208,7 +208,7 @@ def test_threshold_rejects_existing_unsupported_profiles_and_malformed_tables() 
         isinstance(point.build_requirements.inspect().accepted_result, Rejected)
         for point in profiles
     )
-    with pytest.raises(RequestError):
+    with pytest.raises(DefinitionError, match="threshold table"):
         threshold(table=cast(ThresholdTable, (([-2, 0, 3],),)))
 
 
@@ -255,16 +255,15 @@ def test_hls_native_type_and_depth_limits_remain_explicit_refusals(dtype: str, d
 
 def test_rich_roots_require_parameters_and_optional_parent_depth_permits_narrow_hls_type() -> None:
     for family in (InputGeneratorKernel, ThresholdingAxiKernel, MemStreamHlsKernel):
-        with pytest.raises(RequestError):
-            family()
+        with pytest.raises(DefinitionError, match="missing formals"):
+            family()  # type: ignore[call-arg]
 
+    # Replaces an inline exposed Param child binding: the optional depth is the
+    # parent's own formal, bound to the child by name.
     class OptionalMemory(Space):
-        memory = Subspace(
-            MemStreamHlsKernel,
-            element_dtype=resolve_qonnx_datatype_name("INT9"),
-            depth=Param(int, required=False),
-        )
+        depth: Param[int] = Param(int, default=UNSUPPLIED)
+        memory = MemStreamHlsKernel(element_dtype=resolve_qonnx_datatype_name("INT9"), depth=depth)
 
-    point = OptionalMemory()
+    point = configure(OptionalMemory())
     assert point.memory.cpp_type == "ap_int<9>"
     assert isinstance(point.memory.build_requirements.inspect().accepted_result, Unresolved)

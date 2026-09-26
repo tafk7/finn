@@ -17,6 +17,8 @@ declared activation and signed weight values are admitted, including the most
 negative weight. NARROW_WEIGHTS is always zero.
 """
 
+from __future__ import annotations
+
 from finn.kernels.artifacts.abi import (
     Clock,
     ClockAlignment,
@@ -36,6 +38,7 @@ from finn.kernels.artifacts.requirements import (
 )
 from finn.kernels.target import DspBlock, dsp_widths
 from finn.kernels.base import Kernel
+from finn.dataflow.datatypes import QONNXDataType
 from finn.kernels.datatypes.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
 from finn.kernels.datatypes.domains import Integer, SignedInteger
 from finn.dataflow.datatypes import (
@@ -48,6 +51,7 @@ from finn.kernels.physical.axi_stream import AxiStream, axi_stream
 from finn.kernels.physical.contract import STREAM_CONTRACT, StreamContract
 from finn.kernels.streams import MODULE, STREAM_SPEC, StreamSpec
 from finn.core.space import (
+    UNSUPPLIED,
     ConstraintGroup,
     Decision,
     Param,
@@ -74,22 +78,22 @@ class DotpAxiKernel(Kernel):
     id = "exact_integer_dot_product_axi"
     version = "2"
 
-    pe = Param(int)
-    simd = Param(int)
-    target_dsp = Param(DspBlock)
-    segment_length = Param(int)
+    pe: Param[int] = Param(int)
+    simd: Param[int] = Param(int)
+    target_dsp: Param[DspBlock] = Param(DspBlock)
+    segment_length: Param[int] = Param(int)
     compute_pumping = Decision(bool, values=(False, True))
 
-    activation_dtype = Param(QONNX_DATATYPE_VALUE_SEMANTICS)
-    weights_dtype = Param(QONNX_DATATYPE_VALUE_SEMANTICS)
-    result_dtype = Param(QONNX_DATATYPE_VALUE_SEMANTICS)
+    activation_dtype: Param[QONNXDataType] = Param(QONNX_DATATYPE_VALUE_SEMANTICS)
+    weights_dtype: Param[QONNXDataType] = Param(QONNX_DATATYPE_VALUE_SEMANTICS)
+    result_dtype: Param[QONNXDataType] = Param(QONNX_DATATYPE_VALUE_SEMANTICS)
     activation_type = integer_scalar(activation_dtype, Integer(min_bits=2))
     weights_type = integer_scalar(weights_dtype, SignedInteger(min_bits=2))
     result_type = integer_scalar(result_dtype, SignedInteger())
     # The streams' logical sequences, when a parent places dotp between streams.
-    activation_stream = Param(STREAM_SPEC, required=False)
-    weights_stream = Param(STREAM_SPEC, required=False)
-    result_stream = Param(STREAM_SPEC, required=False)
+    activation_stream: Param[StreamSpec] = Param(STREAM_SPEC, default=UNSUPPLIED)
+    weights_stream: Param[StreamSpec] = Param(STREAM_SPEC, default=UNSUPPLIED)
+    result_stream: Param[StreamSpec] = Param(STREAM_SPEC, default=UNSUPPLIED)
     activation = axi_stream("s_axis_input", simd, Endpoint.TARGET, activation_type, last=True)
     weights = axi_stream("s_axis_weights", pe * simd, Endpoint.TARGET, weights_type)
     result = axi_stream("m_axis_output", pe, Endpoint.INITIATOR, result_type)
@@ -280,7 +284,7 @@ class DotpAxiKernel(Kernel):
             DotpAxiKernel.id, DotpAxiKernel.version, parameters, abi, sources
         )
 
-    build_requirements = View(codegen, constraints=(support,))
+    build_requirements = View(codegen, requires=(support,))
 
     @view(semantics=default_semantics(tuple))
     def interfaces(self) -> tuple[AxiStream, ...]:

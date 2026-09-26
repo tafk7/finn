@@ -14,7 +14,6 @@ from qonnx.core.datatype import DataType
 import pyslang
 from pyslang import ast, syntax
 
-from kernels.helpers import point_for
 from finn.kernels import (
     EltwiseKernel,
     FifoKernel,
@@ -31,8 +30,17 @@ from finn.kernels.artifacts.rtl import TOLERATED_DIAGNOSTICS
 from finn.kernels.artifacts.store import ArtifactStore
 from finn.kernels.resources import resource_root, template_root
 from finn.kernels.datatypes.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
-from finn.core.space import Param, Rejected, Space, Subspace, Unresolved
-from finn.core.space.errors import RequestError
+from finn.core.space import (
+    UNSUPPLIED,
+    DefinitionError,
+    Param,
+    Rejected,
+    Space,
+    Unresolved,
+    configure,
+)
+from finn.dataflow.datatypes import QONNXDataType
+from kernels.helpers import point_for
 from finn.kernels.target import DspBlock
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -218,10 +226,11 @@ def test_typed_integer_vectors_and_tables_reject_mutable_or_mistyped_payloads():
     invalid_scale = eltwise(b_scale=float("nan"))
     assert isinstance(invalid_scale.query(EltwiseKernel.native_scale), Rejected)
     assert isinstance(invalid_scale.build_requirements.inspect().accepted_result, Rejected)
+    # A mistyped formal is refused at the node call.
     for bad in ([3, 6], (3, True), (3, [6])):
-        with pytest.raises(RequestError):
+        with pytest.raises(DefinitionError):
             generator(extents=bad)
-    with pytest.raises(RequestError):
+    with pytest.raises(DefinitionError):
         threshold(thresholds=(([-2, 0, 3],),))
 
 
@@ -267,16 +276,19 @@ def test_required_root_bindings_and_explicit_optional_inputs_preserve_partial_qu
         ThresholdingAxiKernel,
         MemStreamHlsKernel,
     ):
-        with pytest.raises(RequestError):
+        # A missing required formal is refused at the node call, before configure().
+        with pytest.raises(DefinitionError, match="missing formals"):
             point_for(kernel, {})
 
+    # Replaces an inline exposed Param child binding: the parent declares the
+    # optional formal itself and binds the child's formal to it by name.
     class OptionalConverter(Space):
-        converter = Subspace(
-            IntToFp32Kernel,
-            input_dtype=Param(QONNX_DATATYPE_VALUE_SEMANTICS, required=False),
+        input_dtype: Param[QONNXDataType] = Param(
+            QONNX_DATATYPE_VALUE_SEMANTICS, default=UNSUPPLIED
         )
+        converter = IntToFp32Kernel(input_dtype=input_dtype)
 
-    point = OptionalConverter().converter
+    point = configure(OptionalConverter()).converter
     assert point.result_dtype == DataType["FLOAT32"]
     assert isinstance(point.build_requirements.inspect().accepted_result, Unresolved)
     assert all(not isinstance(port, Bus) for port in fifo().build_requirements().abi.ports)

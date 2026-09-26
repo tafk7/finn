@@ -12,12 +12,11 @@ from finn.core.space import (
     Param,
     Rejected,
     Space,
-    Subspace,
     Unresolved,
     View,
+    configure,
     default_semantics,
     inspection,
-    located,
     view,
 )
 from finn.kernels.artifacts.abi import Endpoint
@@ -43,33 +42,21 @@ PRODUCED = vector_major((4,), 2)
 class Constants(Space):
     """Two constant vectors streamed to two outputs; each output's order is supplied."""
 
-    first_spec = Param(STREAM_SPEC)
-    second_spec = Param(STREAM_SPEC)
+    first_spec: Param[StreamSpec] = Param(STREAM_SPEC)
+    second_spec: Param[StreamSpec] = Param(STREAM_SPEC)
     out0_V = View(first_spec)
     out1_V = View(second_spec)
 
-    first_source = Subspace(
-        CyclicDelivery, dtype=DataType["INT4"], form=PRODUCED, values=(1, 2, 3, 4)
-    )
-    second_source = Subspace(
-        CyclicDelivery, dtype=DataType["INT4"], form=PRODUCED, values=(5, 6, 7, -8)
-    )
-    first = Subspace(
-        StreamLink,
-        spec=first_spec,
-        source=first_source.at(CyclicDelivery.output),
-        sink=located(out0_V),
-    )
-    second = Subspace(
-        StreamLink,
-        spec=second_spec,
-        source=second_source.at(CyclicDelivery.output),
-        sink=located(out1_V),
-    )
+    first_source = CyclicDelivery(dtype=DataType["INT4"], form=PRODUCED, values=(1, 2, 3, 4))
+    second_source = CyclicDelivery(dtype=DataType["INT4"], form=PRODUCED, values=(5, 6, 7, -8))
+    # Plain references into the links' Param(Located) ends: a child's view, or one
+    # of the composite's own members.
+    first = StreamLink(spec=first_spec, source=first_source.output, sink=out0_V)
+    second = StreamLink(spec=second_spec, source=second_source.output, sink=out1_V)
     modules = Members(MODULE)
     streams = Members(CONNECTION)
 
-    @view(semantics=default_semantics(ModuleBuildRequirements), constraints=(modules, streams))
+    @view(semantics=default_semantics(ModuleBuildRequirements), requires=(modules, streams))
     def build(self) -> ModuleBuildRequirements:
         composed = netlist(
             self.modules,
@@ -82,7 +69,9 @@ class Constants(Space):
 
 
 def constants(first=PRODUCED, second=PRODUCED):
-    point = Constants(first_spec=StreamSpec(INT4, first), second_spec=StreamSpec(INT4, second))
+    point = configure(
+        Constants(first_spec=StreamSpec(INT4, first), second_spec=StreamSpec(INT4, second))
+    )
     return point.with_choices(
         point.first_source.field(CyclicDelivery.rom_style).change("auto"),
         point.second_source.field(CyclicDelivery.rom_style).change("distributed"),
@@ -128,7 +117,9 @@ def test_explain_shows_per_stream_and_per_member_evidence():
 
 
 def test_a_stream_waits_for_its_own_endpoints_only():
-    point = Constants(first_spec=StreamSpec(INT4, PRODUCED), second_spec=StreamSpec(INT4, PRODUCED))
+    point = configure(
+        Constants(first_spec=StreamSpec(INT4, PRODUCED), second_spec=StreamSpec(INT4, PRODUCED))
+    )
     point = point.with_choices(point.first_source.field(CyclicDelivery.rom_style).change("auto"))
     # The ROM choice feeds only the module, not either stream's contracts.
     assert isinstance(point.first.connection.query(), Available)

@@ -12,12 +12,22 @@ import pytest
 from finn.kernels.artifacts.abi import Direction, Signal
 from finn.kernels.artifacts.contribution_types import CopiedSource
 from finn.kernels.datatypes.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
-from finn.dataflow.datatypes import resolve_qonnx_datatype_name
+from finn.dataflow.datatypes import QONNXDataType, resolve_qonnx_datatype_name
 from finn.kernels.eltwise import EltwiseKernel
 from finn.kernels.fifo import FifoKernel
 from finn.kernels.int_to_fp32 import IntToFp32Kernel
-from finn.core.space import QueryResult, Available, Param, Rejected, Space, Subspace, Unresolved
-from finn.core.space.errors import RequestError, ValueUnavailableError
+from finn.core.space import (
+    UNSUPPLIED,
+    Available,
+    DefinitionError,
+    Param,
+    QueryResult,
+    Rejected,
+    Space,
+    Unresolved,
+    configure,
+)
+from finn.core.space.errors import ValueUnavailableError
 from finn.kernels.target import DspBlock
 
 T = TypeVar("T")
@@ -29,7 +39,7 @@ def decided(answer: QueryResult[T]) -> T:
 
 
 def test_fifo_start_commit_and_callable_view_keep_opaque_word_geometry() -> None:
-    base = FifoKernel(word_bits=13, depth=8)
+    base = configure(FifoKernel(word_bits=13, depth=8))
     assert isinstance(base.build_requirements.inspect().accepted_result, Unresolved)
     with pytest.raises(ValueUnavailableError):
         base.build_requirements()
@@ -61,7 +71,7 @@ def test_fifo_start_commit_and_callable_view_keep_opaque_word_geometry() -> None
 
 @pytest.mark.parametrize("style", ("auto", "shift", "distributed", "block", "ultra"))
 def test_fifo_ram_styles_remain_explicit_and_preserve_native_parameter_values(style: str) -> None:
-    point = FifoKernel(word_bits=17, depth=64).with_choices(ram_style=style)
+    point = configure(FifoKernel(word_bits=17, depth=64)).with_choices(ram_style=style)
     assert dict(point.build_requirements().parameters)["RAM_STYLE"] == f'"{style}"'
 
 
@@ -69,7 +79,7 @@ def test_fifo_ram_styles_remain_explicit_and_preserve_native_parameter_values(st
 def test_fifo_geometry_refusal_remains_visible_before_and_after_ram_choice(
     bits: int, depth: int
 ) -> None:
-    base = FifoKernel(word_bits=bits, depth=depth)
+    base = configure(FifoKernel(word_bits=bits, depth=depth))
     assert base.build_requirements.inspect().constraints.refused == ("geometry_supported",)
     assert isinstance(base.build_requirements.inspect().accepted_result, Unresolved)
     chosen = base.with_choices(ram_style="auto")
@@ -83,7 +93,7 @@ def test_fifo_geometry_refusal_remains_visible_before_and_after_ram_choice(
     ("name", "width", "signed"), (("INT9", 9, 1), ("BINARY", 1, 0), ("INT128", 128, 1))
 )
 def test_converter_has_only_native_combinational_pins(name: str, width: int, signed: int) -> None:
-    point = IntToFp32Kernel(input_dtype=resolve_qonnx_datatype_name(name))
+    point = configure(IntToFp32Kernel(input_dtype=resolve_qonnx_datatype_name(name)))
     assert point.result_dtype.name == "FLOAT32"
     requirements = point.build_requirements()
     assert requirements.parameters == (("SIGNED", signed), ("WIDTH", width))
@@ -96,25 +106,28 @@ def test_converter_has_only_native_combinational_pins(name: str, width: int, sig
 
 @pytest.mark.parametrize("name", ("FLOAT32", "BIPOLAR", "TERNARY", "INT129"))
 def test_converter_refuses_unsupported_encodings_and_widths(name: str) -> None:
-    point = IntToFp32Kernel(input_dtype=resolve_qonnx_datatype_name(name))
+    point = configure(IntToFp32Kernel(input_dtype=resolve_qonnx_datatype_name(name)))
     assert isinstance(point.build_requirements.inspect().accepted_result, Rejected)
 
 
 def test_required_root_inputs_fail_binding_and_optional_parent_exposure_keeps_partial_read() -> (
     None
 ):
-    with pytest.raises(RequestError):
-        FifoKernel(word_bits=13)
-    with pytest.raises(RequestError):
-        IntToFp32Kernel()
+    # A missing required formal is refused at the node call, before configure().
+    with pytest.raises(DefinitionError, match="missing formals"):
+        FifoKernel(word_bits=13)  # type: ignore[call-arg]
+    with pytest.raises(DefinitionError, match="missing formals"):
+        IntToFp32Kernel()  # type: ignore[call-arg]
 
+    # Replaces an inline exposed Param child binding: the parent declares the
+    # optional formal itself and binds the child's formal to it by name.
     class OptionalConverter(Space):
-        converter = Subspace(
-            IntToFp32Kernel,
-            input_dtype=Param(QONNX_DATATYPE_VALUE_SEMANTICS, required=False),
+        input_dtype: Param[QONNXDataType] = Param(
+            QONNX_DATATYPE_VALUE_SEMANTICS, default=UNSUPPLIED
         )
+        converter = IntToFp32Kernel(input_dtype=input_dtype)
 
-    point = OptionalConverter()
+    point = configure(OptionalConverter())
     assert point.converter.result_dtype.name == "FLOAT32"
     assert isinstance(point.converter.build_requirements.inspect().accepted_result, Unresolved)
 
@@ -128,15 +141,15 @@ def eltwise(
     scale: float = 1.0,
     target: DspBlock = DspBlock.DSP58,
 ) -> EltwiseKernel:
-    return EltwiseKernel(
-        {
-            EltwiseKernel.operation: operation,
-            EltwiseKernel.pe: pe,
-            EltwiseKernel.lhs_dtype: resolve_qonnx_datatype_name(lhs),
-            EltwiseKernel.rhs_dtype: resolve_qonnx_datatype_name(rhs),
-            EltwiseKernel.b_scale: scale,
-            EltwiseKernel.target_dsp: target,
-        }
+    return configure(
+        EltwiseKernel(
+            operation=operation,
+            pe=pe,
+            lhs_dtype=resolve_qonnx_datatype_name(lhs),
+            rhs_dtype=resolve_qonnx_datatype_name(rhs),
+            b_scale=scale,
+            target_dsp=target,
+        )
     )
 
 
@@ -209,18 +222,20 @@ def test_eltwise_retains_supported_profile_restrictions() -> None:
 
 
 def test_eltwise_narrow_result_stays_known_with_optional_parent_target_omission() -> None:
+    # Replaces an inline exposed Param child binding: the optional formal is the
+    # parent's own, bound to the child by name.
     class OptionalTarget(Space):
-        arithmetic = Subspace(
-            EltwiseKernel,
+        target_dsp: Param[DspBlock] = Param(DspBlock, default=UNSUPPLIED)
+        arithmetic = EltwiseKernel(
             operation="ADD",
             pe=2,
             lhs_dtype=resolve_qonnx_datatype_name("INT3"),
             rhs_dtype=resolve_qonnx_datatype_name("INT3"),
             b_scale=1.0,
-            target_dsp=Param(DspBlock, required=False),
+            target_dsp=target_dsp,
         )
 
-    point = OptionalTarget()
+    point = configure(OptionalTarget())
     assert point.arithmetic.result_dtype.name == "INT4"
     assessment = point.arithmetic.build_requirements.inspect()
     assert isinstance(assessment.output_result, Available)
