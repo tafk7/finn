@@ -35,6 +35,7 @@ import subprocess
 from qonnx.core.datatype import DataType
 from qonnx.util.basic import gen_finn_dt_tensor
 
+from finn import resources
 from finn.util.basic import make_build_dir, robust_rmtree
 from finn.util.data_packing import (
     finnpy_to_packed_bytearray,
@@ -42,7 +43,6 @@ from finn.util.data_packing import (
     numpy_to_hls_code,
     packed_bytearray_to_finnpy,
 )
-from finn.util.external import hlslib_path
 from finn.util.resources import resource_path
 
 
@@ -112,7 +112,7 @@ g++ -o test_npy2apintstream test.cpp {} \
         os.environ["HLS_PATH"],
         os.environ["VITIS_PATH"],
         shlex.quote(resource_path("qnn-data", "cpp")),
-        shlex.quote(hlslib_path()),
+        shlex.quote(resources.path("hlslib")),
     )
     with open(test_dir + "/compile.sh", "w") as f:
         f.write(cmd_compile)

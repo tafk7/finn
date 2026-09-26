@@ -53,7 +53,7 @@ def test_rtl_source_lists_resolve_installed_files(module, classname, tmp_path, m
 def test_generated_hls_tcl_resolves_resources_and_external_input(tmp_path, monkeypatch):
     external = tmp_path / "external $ headers [1]"
     external.mkdir()
-    monkeypatch.setenv("FINN_HLSLIB_PATH", str(external))
+    monkeypatch.setenv("FINN_RESOURCES_HLSLIB", str(external))
     monkeypatch.delenv("FINN_ROOT", raising=False)
     node = oh.make_node(
         "StreamingDataWidthConverter_hls",

@@ -828,7 +828,8 @@ def test_image_input_manifest_covers_dockerfile_sources():
     for path in (
         "pyproject.toml",
         "uv.lock",
-        "src/finn/util/external.py",
+        "src/finn/resources/*.py",
+        "src/finn/_data/resources.toml",
         "docker/Dockerfile.finn",
         "docker/finn_entrypoint.sh",
         "docker/quicktest.sh",
@@ -845,7 +846,9 @@ def test_image_input_manifest_covers_dockerfile_sources():
         if source != ".":
             assert any(fnmatch.fnmatch(source, p) or p.startswith(source) for p in patterns), source
     # FINN's own sources are installed from the mounted checkout, not baked.
-    assert not any(p.startswith("src/") and p != "src/finn/util/external.py" for p in patterns)
+    # finn.resources is the exception: the image fetches its resources with it.
+    resources = {"src/finn/resources/*.py", "src/finn/_data/resources.toml"}
+    assert not any(p.startswith("src/") and p not in resources for p in patterns)
     for launcher in ("docker/config.py", "docker/run", "docs/finn/getting_started.rst"):
         assert launcher not in patterns
 

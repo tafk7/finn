@@ -169,8 +169,8 @@ ENV VIRTUAL_ENV=/opt/venv \
     UV_LINK_MODE=copy \
     PATH=/opt/venv/bin:/usr/local/lib/finn/toolchain-bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
-# FINN's locked dependencies. FINN and the workspace members (packages/*) are not
-# installed here; the entrypoint installs them editable from the mounted checkout.
+# FINN's locked dependencies. FINN itself is not installed here; the entrypoint
+# installs it editable from the mounted checkout.
 # The venv is writable by any user because containers run as the caller's uid and
 # the entrypoint installs into it; each container's writable layer is its own.
 RUN --mount=type=bind,source=pyproject.toml,target=/tmp/finn-lock/pyproject.toml \
@@ -178,7 +178,7 @@ RUN --mount=type=bind,source=pyproject.toml,target=/tmp/finn-lock/pyproject.toml
     --mount=type=cache,target=/root/.cache/uv \
     uv venv --python /usr/bin/python3.12 /opt/venv && \
     cd /tmp/finn-lock && \
-    uv sync --frozen --no-install-workspace && \
+    uv sync --frozen --no-install-project && \
     chmod -R a+rwX /opt/venv
 
 # Fail the build on an inconsistent environment. The pytest run is not redundant
@@ -192,11 +192,15 @@ RUN test "$(uv pip list --format freeze | wc -l)" -gt 100 && \
     (cd /tmp/pytest-probe && pytest -q -p no:cacheprovider >/dev/null) && \
     rm -rf /tmp/pytest-probe
 
-# Board files, fetched from upstream at the pins in finn/util/external.py.
-RUN --mount=type=bind,source=src/finn/util/external.py,target=/tmp/external.py \
-    python /tmp/external.py fetch-boards --dest /opt/finn/board-files && \
-    rm -f /opt/finn/.board-files.lock
-ENV FINN_BOARD_FILES_PATH=/opt/finn/board-files
+# External resources (finn-hlslib, board files) in the read-only system cache,
+# fetched at the pins in finn/_data/resources.toml. finn.resources uses only the
+# standard library, so it runs from the mounted sources before FINN is installed.
+RUN --mount=type=bind,source=src/finn/resources,target=/tmp/src/finn/resources \
+    --mount=type=bind,source=src/finn/_data/resources.toml,target=/tmp/src/finn/_data/resources.toml \
+    PYTHONPATH=/tmp/src python -B -c \
+        'from finn import resources as r; r.fetch(r.declarations(), "/opt/finn/resources")' && \
+    rm -f /opt/finn/resources/.*.lock
+ENV FINN_RESOURCES_SYSTEM_CACHE=/opt/finn/resources
 
 COPY docker/finn_entrypoint.sh docker/quicktest.sh /usr/local/bin/
 RUN chmod 755 /usr/local/bin/finn_entrypoint.sh /usr/local/bin/quicktest.sh
@@ -224,7 +228,7 @@ USER agent
 
 
 # --- release -----------------------------------------------------------------
-# FINN and finn-hlslib installed from wheels built from this context. For
+# FINN installed from a wheel built from this context. For
 # read-only images (SIF/HPC): no checkout, no startup install.
 FROM runtime AS release-wheels
 USER root
@@ -234,8 +238,7 @@ RUN --mount=type=bind,source=.,target=/tmp/context \
     cp -r /tmp/context /tmp/finn && \
     cd /tmp/finn && \
     python -c 'import json,os; from pathlib import Path; d=os.environ["FINN_SOURCE_DIRTY"]; Path("FINN_BUILD_INFO.json").write_text(json.dumps({"version": Path("VERSION").read_text().strip(), "revision": os.environ["FINN_SOURCE_REVISION"], "dirty": d == "1" if d in {"0", "1"} else None}))' && \
-    uv build --wheel --no-build-isolation --out-dir /opt/finn/wheels . && \
-    uv build --wheel --no-build-isolation --out-dir /opt/finn/wheels packages/finn-hlslib
+    uv build --wheel --no-build-isolation --out-dir /opt/finn/wheels .
 
 FROM runtime AS release
 USER root

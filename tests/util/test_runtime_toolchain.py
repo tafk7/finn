@@ -12,9 +12,11 @@ import threading
 import time
 from pathlib import Path
 
+from finn import resources
 from finn.util._legacy_build_env import build_environment
 from finn.util._toolchain import Selection, Toolchain, run_process
 from finn.util.hls import CallHLS
+from finn.util.resources import tcl_quote
 
 
 def executable(path, body):
@@ -93,10 +95,19 @@ def test_zynq_and_vitis_direct_operations_preserve_scope(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(make_zynq_proj, "make_build_dir", lambda **_: str(project))
     monkeypatch.setattr(alveo_build, "make_build_dir", lambda **_: str(project))
-    monkeypatch.setenv("FINN_BOARD_FILES_PATH", str(tmp_path))
+    boards = []
+    for number, resource in enumerate(
+        r for r in resources.declarations().values() if "vivado-boards" in r.kind
+    ):
+        boards.append(tmp_path / f"boards {number} $[%]")
+        boards[-1].mkdir()
+        monkeypatch.setenv(resource.env, str(boards[-1]))
     before = dict(os.environ), os.getcwd()
     model = ModelWrapper(oh.make_model(oh.make_graph([], "empty", [], [])))
     make_zynq_proj.MakeZYNQProject("Pynq-Z1", 10, toolchain=tc).apply(model)
+    # Every board repository is a Vivado board path, each a quoted Tcl word.
+    config = (project / "ip_config.tcl").read_text()
+    assert f"lappend paths_prop {' '.join(tcl_quote(b) for b in boards)}\n" in config
     model.set_metadata_prop("vivado_stitch_proj", str(project))
     model.set_metadata_prop(
         "vivado_stitch_ifnames",

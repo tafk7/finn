@@ -26,6 +26,7 @@ before FINN is installed: ``PYTHONPATH=src python -m finn.resources``.
 import os
 import warnings
 from dataclasses import dataclass
+from pathlib import Path
 
 from . import _declare, _store
 from ._declare import PREFIX, DeclarationError, Resource, ResourceError
@@ -37,6 +38,7 @@ __all__ = [
     "ResourceError",
     "Status",
     "declarations",
+    "fetch",
     "path",
     "paths",
     "status",
@@ -147,3 +149,15 @@ def path(name, fetch=True):
 def paths(kind, fetch=True):
     """Return the directories of every resource of a kind, in declaration order."""
     return [path(r.name, fetch) for r in declarations().values() if kind in r.kind]
+
+
+def fetch(names, dest=None):
+    """Fetch resources into a cache root (default: the first writable one).
+
+    Unlike path(), this ignores overrides and existing copies elsewhere: it fills
+    one cache, e.g. an image's system cache or a directory to carry offline.
+    Package resources need no fetching and are skipped. Returns the entries.
+    """
+    root = Path(dest) if dest else _store.fetch_root()
+    declared = [_get(name) for name in names]
+    return [str(_store.fetch(r, root)) for r in declared if not r.package]

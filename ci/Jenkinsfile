@@ -941,9 +941,6 @@ void checkoutPinned() {
       extensions: scm.extensions,
     ])
   }
-  // Workspace members (packages/*) are submodules at the commits this checkout pins,
-  // independent of the job's SCM submodule settings.
-  sh 'git submodule update --init --recursive'
 }
 
 // Per-shard scratch lives under WORKSPACE_TMP (a sibling of the git

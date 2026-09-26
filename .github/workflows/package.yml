@@ -25,24 +25,20 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          submodules: recursive
 
       - name: Install uv
         uses: astral-sh/setup-uv@v6
         with:
           version: "0.10.0"
 
-      - name: Build wheels
-        run: |
-          uv build --out-dir dist .
-          uv build --out-dir dist packages/finn-hlslib
+      - name: Build the wheel
+        run: uv build --out-dir dist .
 
-      - name: Install the wheels into a clean environment
-        # Dependencies at the locked versions; FINN and finn-hlslib from the wheels.
+      - name: Install the wheel into a clean environment
+        # Dependencies at the locked versions; FINN from the wheel.
         run: |
           UV_PROJECT_ENVIRONMENT=/tmp/finn-wheel uv sync --frozen --no-default-groups \
-            --no-install-workspace --extra hw
+            --no-install-project
           uv pip install --python /tmp/finn-wheel/bin/python --no-deps dist/*.whl
 
       - name: Use the installed package outside the checkout
@@ -50,8 +46,9 @@ jobs:
         run: |
           /tmp/finn-wheel/bin/python -I "$GITHUB_WORKSPACE/tests/util/runtime_resource_smoke.py" /tmp/smoke
           /tmp/finn-wheel/bin/build_dataflow --help
+          # The declarations ship in the wheel; hlslib is fetched on first use.
           /tmp/finn-wheel/bin/python -I -c \
-            "from finn.util.external import hlslib_path; import finn; print(hlslib_path())"
+            "from finn import resources; print(resources.path('hlslib'))"
 
       - name: Published metadata resolves
         # What `pip install finn` would need from PyPI (resolution only).
@@ -68,8 +65,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          submodules: recursive
 
       - name: Install uv
         uses: astral-sh/setup-uv@v6
@@ -83,7 +78,7 @@ jobs:
             | sed -e 's/ ;.*//' -e '/^-e /d' > /tmp/locked.txt
           uv venv --python 3.11 /tmp/finn311
           uv pip install --python /tmp/finn311/bin/python --index-strategy unsafe-best-match \
-            -c /tmp/locked.txt -e . -e packages/finn-hlslib --group dev
+            -c /tmp/locked.txt -e . --group dev
 
       - name: Unit tests
         run: |
@@ -99,8 +94,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          submodules: recursive
 
       - name: Install uv
         uses: astral-sh/setup-uv@v6

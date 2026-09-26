@@ -13,7 +13,8 @@ docker/image-inputs.txt
 docker/Dockerfile.finn
 pyproject.toml
 uv.lock
-src/finn/util/external.py
+src/finn/resources/*.py
+src/finn/_data/resources.toml
 docker/finn_entrypoint.sh
 docker/quicktest.sh
 docker/toolchain-shim

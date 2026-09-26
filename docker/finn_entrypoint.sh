@@ -52,8 +52,8 @@ if [ -z "${UV_CACHE_DIR:-}" ] && [ -n "${FINN_BUILD_DIR:-}" ] \
     export UV_CACHE_DIR="$FINN_BUILD_DIR/.uv-cache"
 fi
 
-# Install the checkout at FINN_ROOT editable into /opt/venv, with its workspace
-# members and any difference between its uv.lock and the image. This follows the
+# Install the checkout at FINN_ROOT editable into /opt/venv, with any difference
+# between its uv.lock and the image. This follows the
 # committed lock exactly; set FINN_SYNC=0 to skip it.
 finn_sync() {
     [ "${FINN_SYNC:-1}" != 0 ] || return 0
@@ -62,11 +62,8 @@ finn_sync() {
         echo "finn: no FINN checkout at FINN_ROOT; using the image environment" >&2
         return 0
     fi
-    if [ -d "$root/.git" ] && git -C "$root" submodule status 2>/dev/null | grep -q '^-'; then
-        echo "finn: uninitialized submodules in $root; run: git submodule update --init" >&2
-    fi
     set -- uv sync --frozen --inexact --quiet --project "$root" \
-        --no-build-isolation-package finn --no-build-isolation-package finn-hlslib
+        --no-build-isolation-package finn
     # Offline first: normally nothing needs downloading. Online only when the
     # checkout's uv.lock asks for packages the image does not have.
     "$@" --offline 2>/dev/null || "$@" || {

@@ -34,7 +34,7 @@ page for the complete guide.
 Native quickstart:
 
 ```bash
-git clone --recurse-submodules https://github.com/Xilinx/finn.git && cd finn
+git clone https://github.com/Xilinx/finn.git && cd finn
 ./setup-local.sh
 source scripts/activate.sh
 ```

@@ -35,11 +35,6 @@ dependencies = [
     "torch>=2.8.0,<3",
 ]
 
-[project.optional-dependencies]
-# Data for hardware flows (HLS C++ simulation and synthesis). Python-only use
-# does not need it.
-hw = ["finn-hlslib>=0.1.0"]
-
 [project.urls]
 Homepage = "https://xilinx.github.io/finn/"
 Documentation = "https://finn.readthedocs.io/"
@@ -93,7 +88,6 @@ docs = [
 ]
 dev = [
     { include-group = "docs" },
-    "finn-hlslib",
     "pip",
     "pre-commit>=3.5.0",
 ]
@@ -113,13 +107,7 @@ constraint-dependencies = [
     "wheel==0.45.1",
 ]
 
-[tool.uv.workspace]
-# Developed in lockstep with FINN and always installed editable. Each member's
-# upstream repository is a git submodule; the submodule commit is its pin.
-members = ["packages/finn-hlslib"]
-
 [tool.uv.sources]
-finn-hlslib = { workspace = true }
 # Unreleased commits FINN is developed against. Development and CI only: published
 # metadata carries the plain requirements above.
 qonnx = { git = "https://github.com/fastmachinelearning/qonnx.git", rev = "4c1f9b4452bb90e743f3bd7e182603fa5096af06" }

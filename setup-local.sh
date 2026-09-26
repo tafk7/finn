@@ -4,9 +4,8 @@
 
 # setup-local.sh - Set up a FINN development environment on the host (no Docker)
 #
-# The Python environment is plain uv: `git submodule update --init && uv sync`
-# creates .venv with FINN (editable), its workspace members and the locked
-# dependencies. This script adds prerequisite checks, Xilinx detection and the
+# The Python environment is plain uv: `uv sync` creates .venv with FINN
+# (editable) and the locked dependencies. This script adds prerequisite checks, Xilinx detection and the
 # optional XSI build around that.
 #
 # Usage:
@@ -132,8 +131,6 @@ fi
 echo ""
 
 gecho "Step 2: Creating the Python environment..."
-# Workspace members (packages/*) are submodules at their pinned commits.
-git -C "${FINN_ROOT}" submodule update --init
 # The exact locked environment; Python 3.12 is provided by uv if the host lacks it.
 uv sync --frozen --project "${FINN_ROOT}"
 gecho "  ${UV_PROJECT_ENVIRONMENT:-${FINN_ROOT}/.venv}: FINN (editable) and locked dependencies"
@@ -176,8 +173,8 @@ if [ "$SKIP_XSI" -eq 0 ] && [ "$XILINX_AVAILABLE" -eq 1 ]; then
     $PYTHON -m finn.xsi.setup
     gecho "  finn_xsi built and verified"
     # Fetched on first use anyway; fetching now lets later builds run offline.
-    $PYTHON -m finn.util.external fetch-boards >/dev/null
-    gecho "  Board files fetched"
+    $PYTHON -c "from finn import resources; resources.path('hlslib'); resources.paths('vivado-boards')"
+    gecho "  finn-hlslib and board files fetched"
 elif [ "$SKIP_XSI" -eq 1 ]; then
     yecho "Step 4: Skipping hardware preparation (--skip-xsi)"
 else
@@ -196,8 +193,8 @@ echo ""
 echo "Activate the environment (and the Xilinx toolchain, if configured):"
 echo "  source scripts/activate.sh"
 echo ""
-echo "After pulling changes to uv.lock or the submodules, update it with:"
-echo "  git submodule update --init && uv sync"
+echo "After pulling changes to uv.lock, update it with:"
+echo "  uv sync"
 echo ""
 if [ "$XILINX_AVAILABLE" -eq 0 ]; then
     echo "Note: Xilinx tools not configured. For hardware flows, set:"
