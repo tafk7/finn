@@ -46,11 +46,12 @@ from finn.dataflow.datatypes import (
 from finn.kernels.datatypes.scalar import integer_scalar
 from finn.kernels.physical.axi_stream import AxiStream, axi_stream
 from finn.kernels.physical.contract import STREAM_CONTRACT, StreamContract
-from finn.kernels.streams import Port, StreamSpec
+from finn.kernels.streams import MODULE, STREAM, StreamSpec
 from finn.core.space import (
     ConstraintGroup,
     Decision,
     Param,
+    Port,
     Rejected,
     View,
     constraint,
@@ -86,9 +87,6 @@ class DotpAxiKernel(Kernel):
     activation_type = integer_scalar(activation_dtype, Integer(min_bits=2))
     weights_type = integer_scalar(weights_dtype, SignedInteger(min_bits=2))
     result_type = integer_scalar(result_dtype, SignedInteger())
-    activation_stream = Port(Endpoint.TARGET)
-    weights_stream = Port(Endpoint.TARGET)
-    result_stream = Port(Endpoint.INITIATOR)
     activation = axi_stream("s_axis_input", simd, Endpoint.TARGET, activation_type, last=True)
     weights = axi_stream("s_axis_weights", pe * simd, Endpoint.TARGET, weights_type)
     result = axi_stream("m_axis_output", pe, Endpoint.INITIATOR, result_type)
@@ -313,6 +311,11 @@ class DotpAxiKernel(Kernel):
     @view(semantics=STREAM_CONTRACT)
     def result_port(self) -> StreamContract | Rejected:
         return self._port(2, self.result_stream)
+
+    activation_stream = Port(STREAM, "in", offer=activation_port)
+    weights_stream = Port(STREAM, "in", offer=weights_port)
+    result_stream = Port(STREAM, "out", offer=result_port)
+    exports = {MODULE: build_requirements}
 
 
 __all__ = ["DotpAxiKernel"]

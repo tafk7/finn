@@ -14,7 +14,7 @@ from __future__ import annotations
 import re
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Generic, TypeVar, cast, overload
+from typing import TYPE_CHECKING, Any, Generic, Literal, TypeAlias, TypeVar, cast, overload
 
 from typing_extensions import Self
 
@@ -28,6 +28,7 @@ from .semantics import ValueSemantics, semantics_for
 if TYPE_CHECKING:
     from ._configuration import BoundView, ChoiceView, Space
     from .expressions import Expr
+    from .graph import Interpretation
 
 T = TypeVar("T")
 T_co = TypeVar("T_co", covariant=True)
@@ -316,6 +317,11 @@ class ConstraintGroup(Declaration):
         self.constraints = constraints
 
 
+# An obligation of a view: a constraint, a group, or another view whose
+# acceptance is required. An inactive obligation never refuses.
+Obligation: TypeAlias = "Constraint | ConstraintGroup | View[Any] | AcceptedViewRef[Any]"
+
+
 class View(Declaration, Generic[T]):
     """One assessment declaration for either a value or an authored function."""
 
@@ -323,7 +329,7 @@ class View(Declaration, Generic[T]):
         self,
         source: ValueRef[T],
         *,
-        constraints: Sequence[Constraint | ConstraintGroup] = (),
+        constraints: Sequence[Obligation] = (),
         when: ValueRef[bool] | None = None,
     ) -> None:
         self.source: ValueRef[T] | None = source
@@ -340,7 +346,7 @@ class View(Declaration, Generic[T]):
         *,
         semantics: ValueSemantics[T] | None,
         aliases: Mapping[str, object],
-        constraints: Sequence[Constraint | ConstraintGroup],
+        constraints: Sequence[Obligation],
         when: ValueRef[bool] | None = None,
     ) -> View[T]:
         result = cls.__new__(cls)
@@ -370,7 +376,7 @@ class _ViewDecorator:
     def __init__(
         self,
         aliases: Mapping[str, object],
-        constraints: Sequence[Constraint | ConstraintGroup],
+        constraints: Sequence[Obligation],
         when: ValueRef[bool] | None,
     ) -> None:
         self.aliases, self.constraints = aliases, constraints
@@ -409,7 +415,7 @@ def view(
     *,
     semantics: ValueSemantics[T],
     when: ValueRef[bool] | None = None,
-    constraints: Sequence[Constraint | ConstraintGroup] = (),
+    constraints: Sequence[Obligation] = (),
     **aliases: object,
 ) -> _SemanticViewDecorator[T]: ...
 
@@ -419,7 +425,7 @@ def view(
     *,
     semantics: None = None,
     when: ValueRef[bool] | None = None,
-    constraints: Sequence[Constraint | ConstraintGroup] = (),
+    constraints: Sequence[Obligation] = (),
     **aliases: object,
 ) -> _ViewDecorator: ...
 
@@ -430,7 +436,7 @@ def view(
     *,
     semantics: object = None,
     when: ValueRef[bool] | None = None,
-    constraints: Sequence[Constraint | ConstraintGroup] = (),
+    constraints: Sequence[Obligation] = (),
     **aliases: object,
 ) -> object:
     decorator = _ViewDecorator(aliases, constraints, when)
@@ -467,6 +473,29 @@ class ScopedValueRef(ValueRef[T], Generic[T]):
 
 class DecisionRef(ScopedValueRef[T], Generic[T]):
     """Editable handle; compilation verifies that this placement owns a choice."""
+
+
+_CASE = ValueKey("case", str)
+
+
+class ChoiceCaseRef(ScopedValueRef[str]):
+    """Read-only reference to the case a structural choice selects."""
+
+    def __init__(self, placement: SubspaceChoice) -> None:
+        super().__init__(placement, _CASE)
+
+    @overload
+    def __get__(self, instance: None, owner: type[object] | None = None) -> Self: ...
+
+    @overload
+    def __get__(self, instance: Space, owner: type[object] | None = None) -> str: ...
+
+    def __get__(self, instance: Space | None, owner: type[object] | None = None) -> Self | str:
+        if instance is None:
+            return self
+        from .occurrence import read_value
+
+        return read_value(instance, self)
 
 
 class AcceptedViewRef(ValueRef[T], Generic[T]):
@@ -518,7 +547,7 @@ class Subspace(Declaration, Generic[S_co]):
     def decision_ref(self, member: ValueRef[T]) -> DecisionRef[T]:
         return DecisionRef(cast("Subspace[Space]", self), member)
 
-    def accepted(self, member: View[T] | ViewKey[T]) -> ValueRef[T]:
+    def accepted(self, member: View[T] | ViewKey[T]) -> AcceptedViewRef[T]:
         return AcceptedViewRef(cast("Subspace[Space]", self), member)
 
 
@@ -565,5 +594,150 @@ class SubspaceChoice(Declaration):
     def ref(self, member: ValueKey[T]) -> ValueRef[T]:
         return ScopedValueRef(self, member)
 
-    def accepted(self, member: ViewKey[T]) -> ValueRef[T]:
+    def accepted(self, member: ViewKey[T]) -> AcceptedViewRef[T]:
         return AcceptedViewRef(self, member)
+
+    def case(self) -> ChoiceCaseRef:
+        """The selected case name; its selector owns the commitment."""
+        if len(self.alternatives) < 2:
+            raise DefinitionError("a singleton choice has no selected-case reference")
+        return ChoiceCaseRef(self)
+
+
+# -- Graph composition -------------------------------------------------------------
+
+C = TypeVar("C")
+F = TypeVar("F")
+L_co = TypeVar("L_co", bound="Space", covariant=True)
+R = TypeVar("R")
+
+
+class Interface(Generic[C, F]):
+    """A port kind: the value a net carries between its ends, and what each end offers.
+
+    ``carries`` is unified along a net: it is published by some ends (or by the
+    parent) and adopted by the others. ``offers`` is a per-end facet that the
+    net's own checks read; it never flows to another end.
+    """
+
+    def __init__(
+        self,
+        name: str,
+        *,
+        carries: type[C] | ValueSemantics[C],
+        offers: type[F] | ValueSemantics[F] | None = None,
+    ) -> None:
+        self.name = local_name(name, "interface name")
+        self.carried: ValueSemantics[C] = semantics_for(carries)
+        self.offered: ValueSemantics[F] | None = None if offers is None else semantics_for(offers)
+
+
+class Port(ValueDecl[C], Generic[C]):
+    """An attachment point of a Space. Reading it yields the carried value.
+
+    ``carry=`` publishes the carried value; without it the port adopts the
+    value of the net it is attached to. ``offer=`` names this Space's view that
+    the net reads as this end's facet. ``net=`` attaches the Space's *own* port
+    to one of its nets, from inside: this is how a child port is promoted.
+    A port that no net reaches is unconnected: an adopted read is unresolved.
+    """
+
+    def __init__(
+        self,
+        interface: Interface[C, Any],
+        direction: Literal["in", "out"],
+        *,
+        carry: ValueRef[C] | None = None,
+        offer: View[Any] | None = None,
+        net: Net[Space] | None = None,
+        when: ValueRef[bool] | None = None,
+    ) -> None:
+        if direction not in ("in", "out"):
+            raise DefinitionError("a port direction is 'in' or 'out'")
+        if not isinstance(interface, Interface):
+            raise DefinitionError("a Port requires an Interface")
+        if carry is not None and not isinstance(carry, ValueRef):
+            raise DefinitionError("carry= requires a value reference")
+        if offer is not None and not isinstance(offer, View):
+            raise DefinitionError("offer= requires a View of the same Space")
+        if offer is not None and interface.offered is None:
+            raise DefinitionError(f"interface {interface.name} has no offered facet")
+        if net is not None and not isinstance(net, Net):
+            raise DefinitionError("net= requires a Net declaration of the same Space")
+        self.interface, self.direction = interface, direction
+        self.carry, self.offer, self.net = carry, offer, net
+        self.semantics = interface.carried
+        self.when = when
+
+
+class Net(Subspace[L_co], Generic[L_co]):
+    """A hyperedge: a placed scope of a ``Link`` family whose ends are ports.
+
+    Children attach their ports by binding them to the net at placement, as in
+    ``Subspace(Kernel, input=net)``; the composite attaches its own ports with
+    ``Port(..., net=net)``. ``carry=`` lets the parent anchor the carried value.
+    The net owns the link's decisions, constraints and views, so its findings
+    are attributed to the net's own scope.
+    """
+
+    def __init__(
+        self,
+        link: type[L_co],
+        *,
+        carry: object = None,
+        when: ValueRef[bool] | None = None,
+        bindings: Mapping[ValueRef[object], object] | None = None,
+        **parameters: object,
+    ) -> None:
+        from .graph import Link
+
+        if not isinstance(link, type) or not issubclass(link, Link):
+            raise DefinitionError("a Net requires a Link subclass")
+        super().__init__(link, when=when, bindings=bindings, **parameters)
+        self.carry = carry
+
+
+class Carried(ValueDecl[C], Generic[C]):
+    """A Link member: its net's unified carried value (engine-computed)."""
+
+    def __init__(self, interface: Interface[C, Any]) -> None:
+        self.interface = interface
+        self.semantics = interface.carried
+
+
+class Ends(ValueDecl[tuple[Any, ...]], Generic[F]):
+    """A Link member: the net's active ends, each an ``End[F]`` (engine-computed)."""
+
+    def __init__(self, interface: Interface[Any, F]) -> None:
+        self.interface = interface
+        self.semantics = cast(ValueSemantics[tuple[Any, ...]], semantics_for(tuple))
+
+
+class Fold(View[R], Generic[R]):
+    """A view computed by an interpretation over the enclosing Space's topology.
+
+    The interpretation's reducer is defined once by its domain. The engine
+    builds the ``Topology`` from each active node's and net's contribution and
+    obliges every one of them, so each refusal stays attributed to its owner.
+    """
+
+    def __init__(
+        self,
+        interpretation: Interpretation[Any, Any, R],
+        *,
+        constraints: Sequence[Obligation] = (),
+        when: ValueRef[bool] | None = None,
+        **arguments: object,
+    ) -> None:
+        from .graph import Interpretation as _Interpretation
+
+        if not isinstance(interpretation, _Interpretation):
+            raise DefinitionError("a Fold requires an Interpretation")
+        self.source = None
+        self.function = None
+        self.aliases = MappingProxyType({})
+        self.semantics = interpretation.result
+        self.constraints = tuple(constraints)
+        self.when = when
+        self.interpretation = interpretation
+        self.arguments = MappingProxyType(dict(arguments))

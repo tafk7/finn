@@ -100,28 +100,29 @@ relative to a staging directory; retain that layout and use the declared
 `include_directories`. Its AXI-Lite memory and `ap_ctrl_hs` registers share the
 `control` bundle; software must enable start/auto-restart for continuous output.
 
-`MVAU` owns matrix geometry, PE/SIMD folding and result precision, and declares
-its connections as streams (`finn.kernels.streams`). It derives a `StreamSpec`
-(element, traversal, repetition, markers) for each connection, binds kernel
-`Port`s to it, and declares each `Stream` with its producer and consumer as
-explicit accepted port views:
+`MVAU` owns matrix geometry, PE/SIMD folding and result precision, and is a
+graph composite (`finn.kernels.streams`). Each stream is a `Net`; kernels attach
+their stream `Port`s to nets at placement, and MVAU's own ports `in0_V`,
+`in1_V` and `out0_V` are attached from inside. The carried `StreamSpec`
+(element, traversal, repetition, markers) is published by MVAU on its ports or
+nets and adopted by the kernels:
 
 ```text
 in0_V ─activations─► replay ─replayed─► compute (dotp) ─results─► out0_V
                                            ▲
        implementation ─── weight_stream ───┘   (buffered: direct | fifo)
-       external: TopInput in1_V  |  cyclic: CyclicDelivery (rom_style, weights)
+       external: in1_V drives it  |  cyclic: CyclicDelivery (rom_style, weights)
 ```
 
-Every stream owns a `compatible` constraint, so a refusal names the stream and
-independent streams settle independently. Its accepted `connection` feeds the
-parent's `structure` view, a thin reduction (`compose`) that wires the accepted
-instances and connections, routes clocks and resets, and turns boundary ports
-into AXIS. `build_requirements` lowers that structure. Either end of a stream may
-be a `SubspaceChoice`; only the selected case is evaluated. A stream declared
-`buffered=True` owns a `transport` choice: `direct`, or a `fifo` case whose depth
-and memory style are its own decisions. Whether a FIFO is needed and how deep is
-a compiler decision; the stream only provides the slot. `configure` commits
+Every net owns a `compatible` constraint, so a refusal names the stream and
+independent streams settle independently. `structure` is a `Fold` of the
+`NETLIST` interpretation: it instantiates every node's accepted module as
+`u_<node>`, wires every net's accepted connection, routes clocks and resets,
+and turns MVAU's own ports into AXIS. `build_requirements` lowers that
+structure. Only the selected case of a choice is evaluated. A
+`BufferedStreamLink` net owns a `transport` choice: `direct`, or a `fifo` case
+whose depth and memory style are its own decisions. Whether a FIFO is needed
+and how deep is a compiler decision; the net only provides the slot. `configure` commits
 choices by their inspection keys in one batch:
 
 ```python
@@ -157,7 +158,7 @@ structure = point.structure().structure
 assert [item.instance_id for item in structure.instances] == [
     "u_replay",
     "u_compute",
-    "u_weights",
+    "u_implementation",
     "u_weight_stream_fifo",
 ]
 assert point.build_requirements() == point.structure().requirements

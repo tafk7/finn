@@ -8,7 +8,7 @@ from __future__ import annotations
 import inspect
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field, replace
-from typing import cast
+from typing import Any, cast
 
 from ._bindings import PlacementBinding, PlacementPlans
 from ._configuration import Space
@@ -17,13 +17,18 @@ from ._signatures import BoundArgument, BoundFunction, validate_argument
 from .collection import EffectiveSpace, collect_space
 from .declarations import (
     AcceptedViewRef,
+    Carried,
     Const,
     Constraint,
     ConstraintGroup,
     Decision,
     Declaration,
     Derived,
+    Ends,
+    Fold,
+    Net,
     Param,
+    Port,
     ScopedValueRef,
     Subspace,
     SubspaceChoice,
@@ -35,7 +40,8 @@ from .declarations import (
 from .domains import Domain, finite
 from .errors import DefinitionError, RequestError
 from .expressions import INTEGER_SEMANTICS, Expr, IntOperator, evaluator
-from .ir import Argument, Choice, LinkedModel, Node, NodeKind, Scope
+from .graph import TOPOLOGY, Interpretation
+from .ir import Argument, Choice, EndSlot, LinkedModel, Node, NodeKind, Scope, TopologyPlan
 from .references import resolve_reference
 from .semantics import ValueSemantics, default_semantics
 
@@ -52,6 +58,10 @@ class _ScopeDraft:
     guard: int | None
     source_scope: int
     bindings: Mapping[str, PlacementBinding]
+    node_name: str | None = None
+    # Typed as object: a Subspace is a descriptor, which a dataclass field would invoke.
+    placement: object = None
+    ports: Mapping[str, Net[Space]] = field(default_factory=dict)
     members: dict[object, int] = field(default_factory=dict)
     named_members: dict[str, int] = field(default_factory=dict)
     children: dict[object, int] = field(default_factory=dict)
@@ -129,6 +139,20 @@ class _ExpressionTask:
     operands: tuple[int | ValueRef[int], ...]
 
 
+@dataclass
+class _Attachment:
+    """One potential end of a net: a child's port bound at placement, or the
+    composite's own port attached from inside (``inside``)."""
+
+    port: int
+    declaration: Port[object]
+    scope: int
+    name: str
+    node: str | None
+    inside: bool
+    publishes: bool = False
+
+
 def _key(scope: str, member: str) -> str:
     return f"{scope}.{member}" if scope else member
 
@@ -167,6 +191,16 @@ class _Linker:
         self.expression_counts: dict[str, int] = {}
         self.scopes: tuple[Scope, ...] = ()
         self.choices: tuple[Choice, ...] = ()
+        # Graph composition: per net scope, its ends and its carried node; per
+        # port node, the node its value aliases (None: unconnected).
+        self.attachments: dict[int, list[_Attachment]] = {}
+        self.carried: dict[int, int] = {}
+        self.anchors: dict[int, list[tuple[str, int]]] = {}
+        self.port_outputs: dict[int, int | None] = {}
+        self.ends_nodes: dict[int, int] = {}
+        self.folds: list[int] = []
+        self.topologies: dict[tuple[int, int], int] = {}
+        self.contributions: dict[int, tuple[int, ...]] = {}
 
     def collect(self) -> None:
         """Collect each family once, and reject structural recursion first."""
@@ -250,6 +284,7 @@ class _Linker:
         guard: int | None,
         *,
         placement: Subspace[Space] | None = None,
+        node_name: str | None = None,
     ) -> int:
         index = len(self.drafts)
         plan = self.placements.get(placement) if placement is not None else None
@@ -262,6 +297,9 @@ class _Linker:
             guard,
             0 if parent is None else parent,
             bindings,
+            node_name,
+            placement,
+            plan.ports if plan is not None else {},
         )
         self.drafts.append(draft)
         if plan is not None:
@@ -288,8 +326,10 @@ class _Linker:
                 kind = "view"
             elif isinstance(declaration, ConstraintGroup):
                 kind = "group"
-            elif isinstance(declaration, (ScopedValueRef, AcceptedViewRef)):
+            elif isinstance(declaration, (ScopedValueRef, AcceptedViewRef, Carried, Ends)):
                 kind = "alias"
+            elif isinstance(declaration, Port):
+                kind = "port"
             else:
                 raise DefinitionError(f"{_key(name, member_name)}: unsupported declaration")
             node = self.reserve(
@@ -361,7 +401,12 @@ class _Linker:
                 owner=case_key,
             )
             child = self.new_scope(
-                placement.space_type, scope.index, case_key, case_guard, placement=placement
+                placement.space_type,
+                scope.index,
+                case_key,
+                case_guard,
+                placement=placement,
+                node_name=name,
             )
             choice.cases.append((case, child))
         for export in declaration.exports:
@@ -391,7 +436,12 @@ class _Linker:
                         owner=key,
                     )
                     child = self.new_scope(
-                        declaration.space_type, scope.index, key, guard, placement=declaration
+                        declaration.space_type,
+                        scope.index,
+                        key,
+                        guard,
+                        placement=declaration,
+                        node_name=name,
                     )
                     scope.named_children[name] = child
                     for alias in self.aliases[scope.effective.space_type][name]:
@@ -431,6 +481,294 @@ class _Linker:
             )
             kind = _BINDING_KINDS[override.binding.kind]
             self.nodes[target] = replace(node, kind=kind)
+
+    def attach(self) -> None:
+        """Collect every net's ends, then decide which of them anchor its value.
+
+        Inner nets are resolved first: whether a composite child's port
+        publishes outward depends on whether its inside anchors the value.
+        """
+
+        nets = [draft.index for draft in self.drafts if isinstance(draft.placement, Net)]
+        inside: list[tuple[int, _Attachment]] = []
+        outside: list[tuple[int, _Attachment]] = []
+        for draft in self.drafts:
+            for name, declaration in draft.effective.members.items():
+                if isinstance(declaration, Port) and declaration.net is not None:
+                    net = draft.children.get(declaration.net)
+                    if net is None or not isinstance(self.drafts[net].placement, Net):
+                        raise DefinitionError(
+                            f"{_key(draft.name, name)}: net= must name a Net of the same Space"
+                        )
+                    port = draft.named_members[name]
+                    inside.append(
+                        (net, _Attachment(port, declaration, draft.index, name, None, True))
+                    )
+            if draft.ports:
+                assert draft.parent is not None
+                parent = self.drafts[draft.parent]
+                for name, net_declaration in draft.ports.items():
+                    net = parent.children.get(net_declaration)
+                    if net is None or not isinstance(self.drafts[net].placement, Net):
+                        raise DefinitionError(
+                            f"{_key(draft.name, name)}: a port binds to a Net of its parent"
+                        )
+                    declaration = cast(Port[object], draft.effective.members[name])
+                    port = draft.named_members[name]
+                    outside.append(
+                        (
+                            net,
+                            _Attachment(
+                                port, declaration, draft.index, name, draft.node_name, False
+                            ),
+                        )
+                    )
+        self.attachments = {net: [] for net in nets}
+        for net, attachment in (*inside, *outside):
+            self.attachments[net].append(attachment)
+        outer = {attachment.port: net for net, attachment in outside}
+        for net in nets:
+            draft = self.drafts[net]
+            interfaces = {
+                id(a.declaration.interface): a.declaration.interface for a in self.attachments[net]
+            }
+            for declaration in draft.effective.members.values():
+                if isinstance(declaration, (Carried, Ends)):
+                    interfaces.setdefault(id(declaration.interface), declaration.interface)
+            if len(interfaces) > 1:
+                raise DefinitionError(f"{draft.name}: a net joins ports of one interface")
+            if not interfaces:
+                continue
+            (interface,) = interfaces.values()
+            self.carried[net] = self.reserve(
+                net,
+                draft.name + ".$carried",
+                "unify",
+                interface.carried,
+                guard=draft.guard,
+                source_owner=draft.name,
+            )
+            self.ends_nodes[net] = self.reserve(
+                net,
+                draft.name + ".$ends",
+                "ends",
+                cast(ValueSemantics[object], default_semantics(tuple)),
+                guard=draft.guard,
+                source_owner=draft.name,
+            )
+        exposes: set[int] = set()
+        for net in sorted(nets, reverse=True):
+            if net not in self.carried:
+                continue
+            draft = self.drafts[net]
+            assert draft.parent is not None
+            candidates: list[tuple[str, int]] = []
+            carry = cast(Net[Space], draft.placement).carry
+            if carry is not None:
+                candidates.append((draft.name + ".carry", self.anchor(draft, carry)))
+            for attachment in self.attachments[net]:
+                declaration = attachment.declaration
+                if declaration.carry is not None or (
+                    not attachment.inside and attachment.port in exposes
+                ):
+                    attachment.publishes = True
+                    candidates.append((self.nodes[attachment.port].key, attachment.port))
+            for attachment in self.attachments[net]:
+                if attachment.inside and attachment.declaration.carry is None:
+                    if candidates and not attachment.publishes:
+                        # The inside anchors this value: the port publishes it outward.
+                        exposes.add(attachment.port)
+                        self.port_outputs[attachment.port] = self.carried[net]
+                    else:
+                        # Nothing inside anchors it: the port relays it from outside.
+                        attachment.publishes = True
+                        candidates.append((self.nodes[attachment.port].key, attachment.port))
+                        self.port_outputs[attachment.port] = (
+                            self.carried[outer[attachment.port]]
+                            if attachment.port in outer
+                            else None
+                        )
+            if not candidates:
+                raise DefinitionError(
+                    f"{draft.name}: no end publishes the carried value; bind carry= or "
+                    "publish it from a port"
+                )
+            self.anchors[net] = candidates
+        for draft in self.drafts:
+            for name, declaration in draft.effective.members.items():
+                if not isinstance(declaration, Port):
+                    continue
+                port = draft.named_members[name]
+                if declaration.carry is not None:
+                    self.port_outputs[port] = self.reference(
+                        draft.index, declaration.carry, owner=self.nodes[port].key
+                    )
+                elif port not in self.port_outputs:
+                    net = outer.get(port)
+                    self.port_outputs[port] = None if net is None else self.carried.get(net)
+
+    def anchor(self, draft: _ScopeDraft, carry: object) -> int:
+        """The parent's own anchor of a net: a reference, a literal or a fresh Decision."""
+
+        assert draft.parent is not None
+        semantics = cast(ValueSemantics[object], self.nodes[self.carried[draft.index]].semantics)
+        key = draft.name + ".carry"
+        if isinstance(carry, Decision) and carry.owner is None:
+            index = self.reserve(draft.parent, key, "decision", semantics, guard=draft.guard)
+            domain, arguments = self.domain(
+                draft.parent, cast(Decision[object], carry), semantics, owner=key
+            )
+            self.nodes[index] = replace(
+                self.nodes[index], domain=domain, domain_arguments=arguments
+            )
+            return index
+        if isinstance(carry, ValueRef):
+            return self.reference(draft.parent, carry, owner=key)
+        index = self.reserve(draft.parent, key, "const", semantics, source_owner=draft.name)
+        try:
+            value = semantics.freeze(carry)
+        except Exception as cause:
+            raise DefinitionError(f"{key}: {cause}") from cause
+        self.nodes[index] = replace(self.nodes[index], value=value)
+        return index
+
+    def link_graph(self) -> None:
+        """Fill each net's anchors and ends, then each fold's topology."""
+
+        for net, carried in self.carried.items():
+            self.nodes[carried] = replace(
+                self.nodes[carried],
+                alternatives=tuple(self.anchors[net]),
+            )
+            slots: list[EndSlot] = []
+            for attachment in self.attachments[net]:
+                declaration = attachment.declaration
+                direction = declaration.direction
+                if attachment.inside:
+                    direction = "out" if direction == "in" else "in"
+                offer = (
+                    None
+                    if attachment.inside or declaration.offer is None
+                    else self.reference(
+                        attachment.scope, declaration.offer, owner=self.nodes[attachment.port].key
+                    )
+                )
+                slots.append(
+                    EndSlot(
+                        attachment.node,
+                        attachment.name,
+                        direction,
+                        attachment.publishes,
+                        self.nodes[attachment.port].guard,
+                        offer,
+                    )
+                )
+            ends = self.ends_nodes[net]
+            self.nodes[ends] = replace(self.nodes[ends], ends=tuple(slots))
+        for index in self.folds:
+            self.link_fold(index)
+
+    def topology(self, scope: int, interpretation: Interpretation[Any, Any, Any]) -> int:
+        identity = (scope, id(interpretation))
+        if identity in self.topologies:
+            return self.topologies[identity]
+        draft = self.drafts[scope]
+        key = _key(draft.name, "$topology." + interpretation.name)
+        nodes: list[tuple[str, tuple[int, ...]]] = []
+        nets: list[tuple[str, int, tuple[EndSlot, ...]]] = []
+        ports: list[tuple[str, str, int | None]] = []
+        obligations: list[int] = []
+
+        def contribution(child: int, export: object) -> int | None:
+            target = self.drafts[child].members.get(export) if export is not None else None
+            if target is None:
+                return None
+            if self.nodes[target].kind != "view":
+                raise DefinitionError(f"{key}: a contribution must be an exported view")
+            return target
+
+        for name, declaration in draft.effective.members.items():
+            if isinstance(declaration, Net):
+                net = draft.named_children[name]
+                target = contribution(net, interpretation.net)
+                if target is not None:
+                    slots = self.nodes[self.ends_nodes[net]].ends if net in self.ends_nodes else ()
+                    nets.append((name, target, tuple(replace(s, offer=None) for s in slots)))
+                    obligations.append(target)
+            elif isinstance(declaration, Subspace):
+                target = contribution(draft.named_children[name], interpretation.node)
+                if target is not None:
+                    nodes.append((name, (target,)))
+                    obligations.append(target)
+            elif isinstance(declaration, SubspaceChoice):
+                choice = self.choice_drafts[draft.choices[declaration]]
+                candidates = tuple(
+                    target
+                    for _, case in choice.cases
+                    if (target := contribution(case, interpretation.node)) is not None
+                )
+                if candidates:
+                    nodes.append((name, candidates))
+                    obligations.extend(candidates)
+            elif isinstance(declaration, Port):
+                port = draft.named_members[name]
+                ports.append((name, declaration.direction, self.nodes[port].guard))
+        index = self.reserve(
+            scope,
+            key,
+            "topology",
+            cast(ValueSemantics[object], TOPOLOGY),
+            guard=draft.guard,
+            source_owner=draft.name or None,
+        )
+        self.nodes[index] = replace(
+            self.nodes[index],
+            topology=TopologyPlan(tuple(nodes), tuple(nets), tuple(ports)),
+        )
+        self.contributions[index] = tuple(obligations)
+        self.topologies[identity] = index
+        return index
+
+    def link_fold(self, index: int) -> None:
+        node = self.nodes[index]
+        draft = self.drafts[node.scope]
+        declaration = cast(Fold[object], draft.effective.members[node.key.rsplit(".", 1)[-1]])
+        interpretation = declaration.interpretation
+        topology = self.topology(node.scope, interpretation)
+        arguments = [Argument("topology", topology)]
+        for name, supplied in declaration.arguments.items():
+            if isinstance(supplied, ValueRef):
+                target = self.reference(node.scope, supplied, owner=node.key)
+            else:
+                target = self.reserve(
+                    node.scope,
+                    f"{node.key}.$literal.{name}",
+                    "const",
+                    cast(ValueSemantics[object], default_semantics(type(supplied))),
+                    source_owner=node.key,
+                )
+                self.nodes[target] = replace(self.nodes[target], value=supplied)
+            arguments.append(Argument(name, target))
+        output = self.reserve(
+            node.scope,
+            node.key + ".$output",
+            "derived",
+            interpretation.result,
+            guard=node.guard,
+            source_owner=node.key,
+        )
+        self.nodes[output] = replace(
+            self.nodes[output], function=interpretation.reduce, arguments=tuple(arguments)
+        )
+        declared = self.obligations(
+            node.scope,
+            declaration.constraints,
+            (Constraint, ConstraintGroup, View, AcceptedViewRef),
+            owner=node.key,
+        )
+        self.nodes[index] = replace(
+            node, output=output, constraints=(*declared, *self.contributions[topology])
+        )
 
     def reference(self, scope: int, source: object, *, owner: str) -> int:
         if isinstance(source, Expr) and source.owner is None:
@@ -682,6 +1020,17 @@ class _Linker:
             self.expression(scope.index, declaration, owner=node.key, index=node.index)
         elif isinstance(declaration, (Derived, Constraint)):
             node = self.callback(node, scope.effective.functions[task.name])
+        elif isinstance(declaration, Port):
+            output = self.port_outputs.get(node.index)
+            if output is not None:
+                node = replace(node, kind="alias", output=output)
+        elif isinstance(declaration, (Carried, Ends)):
+            table = self.carried if isinstance(declaration, Carried) else self.ends_nodes
+            if task.scope not in table:
+                raise DefinitionError(f"{node.key}: Carried and Ends belong to a placed Net")
+            node = replace(node, output=table[task.scope])
+        elif isinstance(declaration, Fold):
+            self.folds.append(node.index)
         elif isinstance(declaration, ConstraintGroup):
             node = replace(
                 node,
@@ -699,7 +1048,7 @@ class _Linker:
                 constraints=self.obligations(
                     scope.index,
                     declaration.constraints,
-                    (Constraint, ConstraintGroup),
+                    (Constraint, ConstraintGroup, View, AcceptedViewRef),
                     owner=node.key,
                 ),
             )
@@ -755,7 +1104,7 @@ class _Linker:
                     raise DefinitionError(f"{node.key}: output has incompatible value semantics")
                 if node.semantics is None:
                     self.nodes[index] = node = replace(node, semantics=output)
-            if node.kind == "select":
+            if node.kind in {"select", "unify"}:
                 for _, target in node.alternatives:
                     semantics = self.nodes[target].semantics
                     if (
@@ -800,8 +1149,10 @@ class _Linker:
         self.collect()
         self.allocate()
         self.apply_parameter_overrides()
+        self.attach()
         for task in self.members:
             self.link_member(task)
+        self.link_graph()
         for guard_task in self.guards:
             node = self.nodes[guard_task.index]
             self.nodes[guard_task.index] = replace(

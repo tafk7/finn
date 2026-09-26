@@ -33,8 +33,7 @@ from finn.kernels.artifacts.build import ModuleBuildRequirements, prepare_module
 from finn.kernels.artifacts.store import ArtifactStore
 from finn.kernels.delivery import CyclicDelivery
 from finn.kernels.dotp import DotpAxiKernel
-from finn.kernels.mvau import MVAU, WeightDelivery, mvau_assembly
-from finn.kernels.streams import TopInput
+from finn.kernels.mvau import MVAU, External, WeightDelivery, mvau_assembly
 from finn.kernels.resources import resource_root, template_root
 from finn.kernels.target import DspBlock
 
@@ -85,7 +84,7 @@ def configured(point, case, *, style=None, pe=2, simd=2):
 
 def delivery(point):
     names = {item.instance_id for item in point.structure().structure.instances}
-    return WeightDelivery.CYCLIC if "u_weights" in names else WeightDelivery.EXTERNAL
+    return WeightDelivery.CYCLIC if "u_implementation" in names else WeightDelivery.EXTERNAL
 
 
 def keys(result):
@@ -101,7 +100,7 @@ def test_families_share_typed_exports_but_keep_their_own_ports_and_components():
     cyclic = configured(base(weights=WEIGHTS), "cyclic", style="block")
     for point, ports, instances in (
         (external, {"in0_V", "in1_V", "out0_V"}, ["u_replay", "u_compute"]),
-        (cyclic, {"in0_V", "out0_V"}, ["u_replay", "u_compute", "u_weights"]),
+        (cyclic, {"in0_V", "out0_V"}, ["u_replay", "u_compute", "u_implementation"]),
     ):
         built = point.structure()
         requirements = point.build_requirements()
@@ -122,8 +121,19 @@ def test_the_inactive_family_is_never_demanded():
     point = configured(base(), "external")
     evidence = inspection.explain(point, MVAU.structure)
     visited = {node.declaration.key for node in evidence.nodes}
-    assert any(key.startswith("implementation.external.") for key in visited)
-    assert not any(key.startswith("implementation.cyclic.") for key in visited)
+    # External delivery places no node; the boundary port in1_V drives the stream.
+    assert {"implementation.$selector", "in1_V.$guard", "weight_stream.$ends"} <= visited
+    # The inactive family is reached only to settle its guard; none of its work runs.
+    reached = {
+        node.declaration.key: node.result
+        for node in evidence.nodes
+        if node.declaration.key.startswith("implementation.cyclic.")
+    }
+    assert set(reached) == {
+        "implementation.cyclic.$selected",
+        "implementation.cyclic.build_requirements",
+    }
+    assert isinstance(reached["implementation.cyclic.build_requirements"], Inapplicable)
     assert "weights" not in visited
     inactive = point.implementation.alternative("cyclic")
     assert isinstance(inactive.query(IMAGE), Inapplicable)
@@ -148,8 +158,8 @@ def test_case_local_choices_are_owned_by_their_family():
     # The choice belongs to the reusable delivery kernel placed by the family.
     assert local.scope == "implementation.cyclic" and not local.selector
     cases = {case.name: case.space_type for case in inspection.choices(base())[0].cases}
-    # The cases are a boundary port and the reusable delivery kernel themselves.
-    assert cases == {"external": TopInput, "cyclic": CyclicDelivery}
+    # External delivery places nothing; cyclic places the reusable delivery kernel.
+    assert cases == {"external": External, "cyclic": CyclicDelivery}
     # Applicability of a case-local choice waits for the selector, and names it.
     unselected = base().implementation.alternative("cyclic").field(ROM_STYLE)
     pending = unselected.candidates()
@@ -167,7 +177,13 @@ def test_missing_cyclic_weights_leave_only_the_selected_family_unresolved():
     assert isinstance(family.query(IMAGE), Unresolved)
     assessment = cyclic.structure.inspect()
     assert isinstance(assessment.accepted_result, Unresolved)
-    assert assessment.constraints.verdict is True
+    # Only the selected family's module waits; every stream is already accepted.
+    waiting = {
+        key
+        for key, result in assessment.constraints.results.items()
+        if not isinstance(result, Available)
+    }
+    assert waiting == {"implementation.cyclic.build_requirements"}
     # The compute product and folding do not wait for the family's optional fact.
     assert isinstance(cyclic.compute.build_requirements.query(), Available)
     evidence = inspection.explain(cyclic, MVAU.structure)
@@ -341,7 +357,7 @@ def test_rom_style_reaches_the_prepared_build_without_data_slots(tmp_path, style
     assert prepared.slots == ()
     assert ("ROM_STYLE", f'"{style}"') in dict(
         (item.instance_id, item.requirements.parameters) for item in built.structure.instances
-    )["u_weights"]
+    )["u_implementation"]
 
 
 def test_adapter_rejects_an_unknown_rom_style():
@@ -389,7 +405,7 @@ def test_a_buffered_stream_places_a_fifo_between_its_producer_and_consumer():
             if hasattr(wire.source, "pin")
             and wire.destination.pin.signal_id in ("idat", "s_axis_weights_tdata")
         }
-        producer = "u_weights" if case == "cyclic" else None
+        producer = "u_implementation" if case == "cyclic" else None
         assert ("u_weight_stream_fifo", producer) in destinations
         assert ("u_compute", "u_weight_stream_fifo") in destinations
         depth = dict(built.structure.instances[-1].requirements.parameters)["DEPTH"]

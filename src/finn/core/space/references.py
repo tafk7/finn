@@ -13,7 +13,15 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Generic, TypeVar, cast
 
-from .declarations import AcceptedViewRef, DecisionRef, ScopedValueRef, ValueKey, ValueRef, ViewKey
+from .declarations import (
+    AcceptedViewRef,
+    ChoiceCaseRef,
+    DecisionRef,
+    ScopedValueRef,
+    ValueKey,
+    ValueRef,
+    ViewKey,
+)
 from .errors import RequestError
 from .ir import Choice, LinkedModel, Node, Scope
 from .semantics import ValueSemantics
@@ -116,6 +124,10 @@ def resolve_reference(
             continue
         choice_index = scopes[scope].choices.get(placement)
         if choice_index is not None:
+            if isinstance(reference, ChoiceCaseRef):
+                selector = choices[choice_index].selector
+                assert selector is not None
+                return selector
             if isinstance(reference, DecisionRef):
                 raise RequestError("a DecisionRef must name a concrete locally owned decision")
             member = reference.member

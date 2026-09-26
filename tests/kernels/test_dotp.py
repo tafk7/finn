@@ -24,7 +24,6 @@ from finn.kernels.artifacts.abi import Clock, Data, Derived as DerivedClock
 from finn.kernels.artifacts.build import materialize_module_sources, prepare_module_build
 from finn.kernels.artifacts.store import ArtifactStore
 import finn.kernels.dotp as dotp_axi
-from finn.kernels.streams import STREAM_SPEC
 from finn.kernels.dotp import DotpAxiKernel
 from finn.kernels.target import DspBlock
 from finn.kernels.base import Kernel
@@ -70,10 +69,6 @@ class _PartialDotp(Space):
         activation_dtype=activation_dtype,
         weights_dtype=weights_dtype,
         result_dtype=result_dtype,
-        # Placed outside any stream: its ports stay unbound optional inputs.
-        activation_stream=Param(STREAM_SPEC, required=False),
-        weights_stream=Param(STREAM_SPEC, required=False),
-        result_stream=Param(STREAM_SPEC, required=False),
     )
 
 
@@ -105,11 +100,11 @@ def test_component_groups_its_interfaces_and_keeps_one_root_physical_output():
         "result_dtype",
         "target_dsp",
         "segment_length",
-        # Optional stream ports, bound by a parent that places dotp between streams.
-        "activation_stream",
-        "weights_stream",
-        "result_stream",
     }
+    # Stream ports are attachment points, not inputs; placed outside any net they
+    # stay unconnected.
+    ports = {item.key for item in inspection.members(point) if item.kind == "port"}
+    assert ports == {"activation_stream", "weights_stream", "result_stream"}
     # Operand dtypes are kernel facts; scalars and ports bind to them.
     assert point.activation.dtype == point.activation_type.dtype == point.activation_dtype
     for name in ("contract", "region", "logical", "binding", "realization", "reference"):

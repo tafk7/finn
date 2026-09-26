@@ -31,6 +31,7 @@ from .results import (
     assess_view,
     constraint_result,
     owned_result,
+    reject,
 )
 
 if TYPE_CHECKING:
@@ -163,6 +164,121 @@ def _constraint_members(
     return {snapshot.linked.nodes[reference].key: cast(QueryResult[bool], answer)}
 
 
+def _obligation(
+    snapshot: Snapshot, reference: int, answer: QueryResult[object]
+) -> QueryResult[object]:
+    """A view obliged by another view contributes only its acceptance."""
+    if snapshot.linked.nodes[reference].kind == "view" and isinstance(answer, Available):
+        return Available(True)
+    return answer
+
+
+def _unify(node: Node, answers: list[tuple[str, QueryResult[object]]]) -> QueryResult[object]:
+    """Every active anchor of a net must agree; inactive anchors are absent."""
+    active = [(label, answer) for label, answer in answers if not isinstance(answer, Inapplicable)]
+    blocked = _blocked([answer for _, answer in active if not isinstance(answer, Available)])
+    if blocked is not None:
+        return blocked
+    if not active:
+        return reject(
+            "net-unanchored", "no active end publishes the carried value", owner=node.owner
+        )
+    assert node.semantics is not None
+    (first_label, first), *others = cast(list[tuple[str, Available[object]]], active)
+    differing = [
+        label
+        for label, answer in others
+        if not node.semantics.values_equal(first.value, answer.value)
+    ]
+    if differing:
+        return reject(
+            "net-disagree",
+            f"{', '.join(differing)} publish a different value than {first_label}",
+            owner=node.owner,
+            values={"anchors": [first_label, *differing]},
+        )
+    return first
+
+
+def _graph_frame(snapshot: Snapshot, node: Node) -> _execution.Frame:
+    from .graph import End, EndRef, NetEntry, PortEntry, Topology  # noqa: PLC0415
+
+    if node.kind == "port":
+        return Evaluation(
+            Unresolved(
+                (
+                    Finding(
+                        FindingKind.LIMITATION,
+                        "port-unconnected",
+                        node.owner,
+                        "no net reaches this port, and it does not publish its value",
+                    ),
+                )
+            )
+        )
+    if node.kind == "unify":
+        answers = []
+        for label, target in node.alternatives:
+            answers.append((label, cast(QueryResult[object], (yield target))))
+        return Evaluation(_unify(node, answers))
+    failures: list[QueryResult[object]] = []
+
+    def present(answer: QueryResult[object]) -> bool:
+        if isinstance(answer, Available):
+            return answer.value is True
+        if not isinstance(answer, Inapplicable):
+            failures.append(answer)
+        return False
+
+    if node.kind == "ends":
+        ends = []
+        for slot in node.ends:
+            if slot.presence is not None:
+                if not present(cast(QueryResult[object], (yield slot.presence))):
+                    continue
+            offer: object = None
+            if slot.offer is not None:
+                answer = cast(QueryResult[object], (yield slot.offer))
+                if isinstance(answer, Available):
+                    offer = answer.value
+                elif not isinstance(answer, Inapplicable):
+                    failures.append(answer)
+            ends.append(End(slot.node, slot.port, slot.direction, slot.publishes, offer))  # type: ignore[arg-type]
+        blocked = _blocked(failures)
+        return Evaluation(blocked if blocked is not None else Available(tuple(ends)))
+    assert node.kind == "topology" and node.topology is not None
+    nodes = []
+    for name, candidates in node.topology.nodes:
+        for target in candidates:
+            answer = cast(QueryResult[object], (yield target))
+            if isinstance(answer, Available):
+                nodes.append((name, answer.value))
+                break
+            if not isinstance(answer, Inapplicable):
+                failures.append(answer)
+                break
+    nets = []
+    for name, contribution, slots in node.topology.nets:
+        answer = cast(QueryResult[object], (yield contribution))
+        if not isinstance(answer, Available):
+            if not isinstance(answer, Inapplicable):
+                failures.append(answer)
+            continue
+        refs = []
+        for slot in slots:
+            if slot.presence is None or present(cast(QueryResult[object], (yield slot.presence))):
+                refs.append(EndRef(slot.node, slot.port, slot.direction))  # type: ignore[arg-type]
+        nets.append(NetEntry(name, answer.value, tuple(refs)))
+    ports = []
+    for name, direction, guard in node.topology.ports:
+        if guard is None or present(cast(QueryResult[object], (yield guard))):
+            ports.append(PortEntry(name, direction))  # type: ignore[arg-type]
+    blocked = _blocked(failures)
+    if blocked is not None:
+        return Evaluation(blocked)
+    return Evaluation(Available(Topology(tuple(nodes), tuple(nets), tuple(ports))))
+
+
 def _frame(snapshot: Snapshot, node: Node) -> _execution.Frame:
     if node.guard is not None:
         guard = cast(QueryResult[object], (yield node.guard))
@@ -187,6 +303,8 @@ def _frame(snapshot: Snapshot, node: Node) -> _execution.Frame:
         )
     if node.kind == "const":
         return Evaluation(Available(node.value))
+    if node.kind in {"port", "unify", "ends", "topology"}:
+        return (yield from _graph_frame(snapshot, node))
     if node.kind == "decision":
         if node.index in snapshot.assignments:
             return Evaluation(Available(snapshot.assignments[node.index]))
@@ -241,7 +359,7 @@ def _frame(snapshot: Snapshot, node: Node) -> _execution.Frame:
         output = cast(QueryResult[object], (yield node.output))
         constraints: dict[str, QueryResult[bool]] = {}
         for reference in node.constraints:
-            answer = cast(QueryResult[object], (yield reference))
+            answer = _obligation(snapshot, reference, cast(QueryResult[object], (yield reference)))
             constraints.update(_constraint_members(snapshot, reference, answer))
         view = assess_view(output, owner=node.key, constraints=constraints)
         return Evaluation(view.accepted_result, assessment=view)
@@ -398,12 +516,18 @@ def copy_result(
         return Available(_clone(node, answer.value, owner=node.owner, role="public value snapshot"))
 
 
-def _copy_readiness(snapshot: Snapshot, assessment: ReadinessAssessment) -> ReadinessAssessment:
+def _copy_readiness(
+    snapshot: Snapshot, assessment: ReadinessAssessment, own: str
+) -> ReadinessAssessment:
+    def copy(key: str, answer: QueryResult[object]) -> QueryResult[object]:
+        index = snapshot.linked.keys[key]
+        if key != own and snapshot.linked.nodes[index].kind == "view":
+            # An obliged view contributes only its intrinsic Boolean acceptance.
+            return answer
+        return copy_result(snapshot, index, answer)
+
     return ReadinessAssessment(
-        {
-            key: copy_result(snapshot, snapshot.linked.keys[key], answer)
-            for key, answer in assessment.results.items()
-        },
+        {key: copy(key, answer) for key, answer in assessment.results.items()},
         assessment.result,
     )
 
@@ -426,7 +550,7 @@ def copy_assessment(snapshot: Snapshot, node_index: int, assessment: Assessment)
         )
         return ViewAssessment(
             output,
-            _copy_readiness(snapshot, assessment.readiness),
+            _copy_readiness(snapshot, assessment.readiness, node.key),
             assessment.constraints,
             accepted,
         )

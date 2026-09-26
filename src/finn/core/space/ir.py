@@ -31,6 +31,10 @@ NodeKind = Literal[
     "guard",
     "select",
     "group",
+    "port",
+    "unify",
+    "ends",
+    "topology",
 ]
 
 
@@ -38,6 +42,28 @@ NodeKind = Literal[
 class Argument:
     name: str
     node: int
+
+
+@dataclass(frozen=True, slots=True)
+class EndSlot:
+    """One potential end of a net; ``presence`` is its port's applicability guard."""
+
+    node: str | None
+    port: str
+    direction: str
+    publishes: bool
+    presence: int | None
+    offer: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class TopologyPlan:
+    """Potential topology of one scope: node contribution candidates in case order,
+    nets with their contribution and ends, and the scope's own ports."""
+
+    nodes: tuple[tuple[str, tuple[int, ...]], ...]
+    nets: tuple[tuple[str, int, tuple[EndSlot, ...]], ...]
+    ports: tuple[tuple[str, str, int | None], ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,6 +86,8 @@ class Node:
     alternatives: tuple[tuple[str, int], ...] = ()
     selector: int | None = None
     source_owner: str | None = None
+    ends: tuple[EndSlot, ...] = ()
+    topology: TopologyPlan | None = None
     selection_index: Mapping[str, int] | None = field(
         default=None, init=False, repr=False, compare=False
     )
@@ -87,6 +115,14 @@ class Node:
             refs.append(self.selector)
         refs.extend(self.constraints)
         refs.extend(target for _, target in self.alternatives)
+        for slot in self.ends:
+            refs.extend(index for index in (slot.presence, slot.offer) if index is not None)
+        if self.topology is not None:
+            refs.extend(index for _, candidates in self.topology.nodes for index in candidates)
+            for _, contribution, slots in self.topology.nets:
+                refs.append(contribution)
+                refs.extend(slot.presence for slot in slots if slot.presence is not None)
+            refs.extend(guard for _, _, guard in self.topology.ports if guard is not None)
         return tuple(dict.fromkeys(refs))
 
 

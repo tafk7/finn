@@ -21,13 +21,13 @@ from finn.kernels.artifacts.abi import (
     Reset,
     Signal,
 )
-from finn.core.space import Param, Rejected, default_semantics, derived, reject, view
+from finn.core.space import Param, Port, Rejected, default_semantics, derived, reject, view
 from finn.kernels.base import Kernel
 from finn.kernels.datatypes.scalar import ScalarEncoding
 from finn.kernels.physical.contract import STREAM_CONTRACT, StreamContract
 from finn.kernels.physical.forms import Every, Traversal
 from finn.kernels.physical.stream import ReadyValidStream, StreamMarker, MarkerKind
-from finn.kernels.streams import Port
+from finn.kernels.streams import MODULE, STREAM
 from finn.kernels.artifacts.contribution_types import CopiedSource
 from finn.kernels.artifacts.requirements import (
     FixedModuleName,
@@ -108,7 +108,6 @@ class ReplayBuffer(Kernel):
     id = "finnlib.replay_buffer"
     version = "1"
 
-    input_stream = Port(Endpoint.TARGET)
     sequence_length = Param(int)
     replay_count = Param(int)
 
@@ -133,6 +132,9 @@ class ReplayBuffer(Kernel):
     def output_port(self) -> StreamContract:
         return cast(StreamContract, self.contracts[1])
 
+    input_stream = Port(STREAM, "in", offer=input_port)
+    output_stream = Port(STREAM, "out", offer=output_port)
+
     @view(semantics=default_semantics(ModuleBuildRequirements))
     def build_requirements(self) -> ModuleBuildRequirements | Rejected:
         try:
@@ -143,6 +145,8 @@ class ReplayBuffer(Kernel):
             )
         except ValueError as error:
             return reject("replay-geometry", str(error))
+
+    exports = {MODULE: build_requirements}
 
 
 def cyclic_stream_interface(*, word_bits: int) -> ReadyValidStream:

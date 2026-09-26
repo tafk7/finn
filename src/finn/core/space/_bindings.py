@@ -14,7 +14,9 @@ from .declarations import (
     Decision,
     DecisionRef,
     Declaration,
+    Net,
     Param,
+    Port,
     ScopedValueRef,
     Subspace,
     ValueRef,
@@ -47,6 +49,7 @@ class NestedBinding:
 class PlacementPlan:
     bindings: Mapping[str, PlacementBinding]
     nested_bindings: tuple[NestedBinding, ...] = ()
+    ports: Mapping[str, Net[Space]] = MappingProxyType({})
 
 
 class _TargetResolver:
@@ -129,6 +132,13 @@ def collect_placement(placement: Subspace[Space]) -> PlacementPlan:
     parameters = {name: value for name, value in namespace.items() if isinstance(value, Param)}
     label = placement.name or placement.space_type.__qualname__
     named = dict(placement.bindings)
+    # A port is attached, never supplied: its binding names one of the parent's nets.
+    ports: dict[str, Net[Space]] = {}
+    for name in [name for name in named if isinstance(namespace.get(name), Port)]:
+        net = named.pop(name)
+        if not isinstance(net, Net):
+            raise DefinitionError(f"{label}.{name}: a port binds to a Net declaration")
+        ports[name] = net
     extra = named.keys() - parameters.keys()
     if extra:
         raise DefinitionError(f"{label}: unknown child parameter bindings {sorted(extra)}")
@@ -160,7 +170,7 @@ def collect_placement(placement: Subspace[Space]) -> PlacementPlan:
         name: _placement_binding(parameter, named[name], f"{label}.{name}")
         for name, parameter in parameters.items()
     }
-    return PlacementPlan(MappingProxyType(bindings), tuple(nested))
+    return PlacementPlan(MappingProxyType(bindings), tuple(nested), MappingProxyType(ports))
 
 
 class PlacementPlans:
