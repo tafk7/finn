@@ -10,10 +10,14 @@ know names::
     resources.path("hlslib")               # one resource, fetched if needed
     resources.paths("vivado-boards")       # every resource of a kind
 
-Declarations come from FINN (``finn/_data/resources.toml``), then the nearest
-``pyproject.toml`` (``[tool.finn.resources]``) and files listed in
-FINN_RESOURCES_FILES. ``FINN_RESOURCES_<NAME>=/dir`` replaces a resource with a
-local directory, unverified; FINN_HLSLIB_PATH is an alias for the hlslib one.
+Declarations come from FINN (``finn/_data/resources.toml``), then installed
+packages (the ``finn.resources`` entry-point group, naming a module that
+contains a ``resources.toml``), then the nearest ``pyproject.toml``
+(``[tool.finn.resources]``) and files listed in FINN_RESOURCES_FILES. Packages
+may only add resources; the project may also redefine them.
+
+``FINN_RESOURCES_<NAME>=/dir`` replaces a resource with a local directory,
+unverified; FINN_HLSLIB_PATH is an alias for the hlslib one.
 
 Caches are searched in order: FINN_RESOURCES_CACHE, the read-only system cache
 FINN_RESOURCES_SYSTEM_CACHE (default /opt/finn/resources, if it exists), then
@@ -77,8 +81,9 @@ def declarations():
             if os.environ.get(variable):
                 warnings.warn(f"{variable} is no longer used: {advice}", stacklevel=2)
         finn = _declare.load(_declare.FINN_FILE, ("resources",))
+        packages = [r for f in _declare.package_files() for r in _declare.load(f, ("resources",))]
         project = [r for f, keys in _declare.project_files() for r in _declare.load(f, keys)]
-        _cache[key] = _declare.merge(finn, [], project)
+        _cache[key] = _declare.merge(finn, packages, project)
     return dict(_cache[key])
 
 

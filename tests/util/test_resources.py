@@ -521,3 +521,91 @@ def test_cli_runs_as_a_module(project):
         check=True,
     )
     assert result.stdout.splitlines()[1].startswith("hlslib ")
+
+
+def installed(site, dist, module, declarations):
+    """An installed distribution declaring resources through the finn.resources group."""
+    info = f"{dist.replace('-', '_')}-1.0.dist-info"
+    return write(
+        site,
+        {
+            f"{module}/__init__.py": "",
+            f"{module}/resources.toml": textwrap.dedent(declarations),
+            f"{module}/rtl/core.v": "module core;\n",
+            f"{info}/METADATA": f"Metadata-Version: 2.1\nName: {dist}\nVersion: 1.0\n",
+            f"{info}/entry_points.txt": f"[finn.resources]\n{module} = {module}\n",
+        },
+    )
+
+
+def test_packages_add_resources_but_only_the_project_redefines(
+    project, tmp_path, monkeypatch, caplog
+):
+    site = installed(
+        tmp_path / "site",
+        "acme-finn",
+        "acme_finn",
+        """
+        [resources.acme-rtl]
+        kind = ["rtl"]
+        package = "acme_finn:rtl"
+        """,
+    )
+    monkeypatch.syspath_prepend(str(site))
+    declared = resources.declarations()
+    assert list(declared)[-1] == "acme-rtl"
+    assert declared["acme-rtl"].origin == str(site / "acme_finn/resources.toml")
+    assert resources.paths("rtl") == [str(site / "acme_finn/rtl")]
+
+    # The project may redefine a package's resource.
+    declare(project, '[tool.finn.resources.acme-rtl]\nkind = ["rtl"]\npackage = "acme_finn"\n')
+    with caplog.at_level(logging.WARNING, logger="finn.resources"):
+        assert resources.paths("rtl") == [str(site / "acme_finn")]
+    assert "redefines resource 'acme-rtl'" in caplog.text
+
+    # A package may not redefine FINN's resources or another package's.
+    installed(site, "zeta", "zeta_finn", '[resources.hlslib]\npackage = "zeta_finn"\n')
+    resources._cache.clear()
+    with pytest.raises(resources.DeclarationError, match="zeta_finn.*already declared by"):
+        resources.declarations()
+    installed(site, "zeta", "zeta_finn", '[resources.acme-rtl]\npackage = "zeta_finn"\n')
+    resources._cache.clear()
+    with pytest.raises(resources.DeclarationError, match="zeta_finn.*acme_finn"):
+        resources.declarations()
+
+    # A broken entry point is an error, not silently skipped.
+    (site / "zeta_finn/resources.toml").unlink()
+    resources._cache.clear()
+    with pytest.raises(resources.DeclarationError, match="zeta_finn contains no resources.toml"):
+        resources.declarations()
+
+
+def test_package_declarations_in_a_virtual_environment(tmp_path):
+    venv = tmp_path / "venv"
+    subprocess.run([sys.executable, "-m", "venv", "--without-pip", venv], check=True)
+    site = next(venv.glob("lib/python*/site-packages"))
+    # FINN's resources package only; it needs nothing else.
+    (site / "finn-src.pth").write_text(SRC + "\n")
+    installed(
+        site,
+        "acme-finn",
+        "acme_finn",
+        '[resources.acme-rtl]\nkind = ["rtl"]\npackage = "acme_finn:rtl"\n',
+    )
+
+    def run(*args):
+        return subprocess.run(
+            [venv / "bin/python", "-m", "finn.resources", *args],
+            cwd=tmp_path,
+            env={"PATH": os.defpath, "HOME": str(tmp_path)},
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+
+    assert run("list", "--kind", "rtl").splitlines()[1].split()[:3] == [
+        "acme-rtl",
+        "package",
+        "rtl",
+    ]
+    assert run("path", "acme-rtl").strip() == str(site / "acme_finn/rtl")

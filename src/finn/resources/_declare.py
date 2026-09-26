@@ -1,7 +1,9 @@
 """Resource declarations: parsing, validation and merging.
 
 A declaration is a TOML table naming one resource and its pinned source. FINN's
-own declarations ship in ``finn/_data/resources.toml``; a project may add or
+own declarations ship in ``finn/_data/resources.toml``. Installed packages add
+theirs through the ``finn.resources`` entry-point group: each entry point names
+a module (package) containing a ``resources.toml``. A project may add or
 redefine resources in ``[tool.finn.resources]`` of its ``pyproject.toml`` or in
 files listed in FINN_RESOURCES_FILES.
 """
@@ -161,6 +163,27 @@ def load(path, keys):
         if not isinstance(data, dict):
             raise DeclarationError(f"{path}: {'.'.join(keys)} must be a table")
     return parse(data, path)
+
+
+def package_files():
+    """Declaration files of installed packages, from the finn.resources entry points."""
+    from importlib.metadata import entry_points  # noqa: PLC0415
+    from importlib.resources import files  # noqa: PLC0415
+
+    found = []
+    for point in sorted(
+        entry_points(group="finn.resources"),
+        key=lambda p: ((p.dist.name if p.dist else ""), p.name),
+    ):
+        where = f"entry point {point.name!r} of {point.dist.name if point.dist else '?'}"
+        try:
+            file = files(point.value).joinpath("resources.toml")
+        except (ImportError, TypeError) as error:
+            raise DeclarationError(f"{where}: cannot import {point.value}: {error}") from None
+        if not file.is_file() or not isinstance(file, Path):
+            raise DeclarationError(f"{where}: {point.value} contains no resources.toml")
+        found.append(file)
+    return found
 
 
 def table_keys(path):
