@@ -6,7 +6,9 @@
 ``configure(node)`` is the one step from a declaration to a configuration.
 A root whose bindings are all plain values reuses its family's model and
 binds the values as runtime inputs; a root that supplies structure (a node, a
-reference, or a fresh Decision) is compiled for that declaration.
+reference, or a fresh Decision) is compiled for that declaration. Preparing a
+model freezes every node declaration it instantiates, and ``configure``
+freezes its root: from then on, assigning a formal is refused.
 """
 
 # Lazy imports break the declaration/configuration/evaluation cycle.
@@ -19,8 +21,15 @@ from typing import Generic, TypeVar, cast
 
 from ._configuration import Space
 from ._linker import link_space
-from ._nodes import FamilyFormal, NodeDecl, family_formals, node_record
-from .declarations import MISSING, UNSUPPLIED, Param, at
+from ._nodes import (
+    FamilyFormal,
+    NodeDecl,
+    family_formals,
+    missing_formal,
+    node_record,
+    unsupplied_formals,
+)
+from .declarations import MISSING, UNSUPPLIED, Param
 from .errors import DefinitionError, RequestError
 from .ir import LinkedModel
 from .references import ValueHandle, resolve_decision, resolve_reference
@@ -118,6 +127,10 @@ def _publish(space_type: type[S], linked: LinkedModel) -> SpaceModel[S]:
     # Publication happens only after the complete definition linked successfully.
     for family in _definition_families(scope_types):
         type.__setattr__(family, "_space_definition_finalized", True)
+    reason = f"{space_type.__name__} was prepared"
+    for scope in linked.scopes:
+        if isinstance(scope.record, NodeDecl):
+            scope.record.freeze(reason)
     return model
 
 
@@ -141,7 +154,7 @@ def _structural(record: NodeDecl) -> bool:
     from ._bindings import placement_plan
 
     plan = placement_plan(record.family, record, root=True)
-    return bool(record.open) or any(item.kind != "parameter" for item in plan.bindings.values())
+    return bool(record.nested) or any(item.kind != "parameter" for item in plan.bindings.values())
 
 
 def compile_node(record: NodeDecl) -> SpaceModel[Space]:
@@ -164,10 +177,11 @@ def root_record(node: object) -> NodeDecl:
         raise RequestError(
             "configure() takes a node declaration, as in configure(House(budget=100))"
         )
-    if record.placement is not None:
+    if record.placement is not None or record.sites:
+        where = record.placement or f"supplied to {', '.join(record.sites)}"
         raise RequestError(
-            f"configure() takes a root: {record.describe()} is already placed; configure the "
-            "node that contains it"
+            f"configure() takes a root: {record.describe()} is already placed ({where}); "
+            "configure the node that contains it"
         )
     return record
 
@@ -200,10 +214,20 @@ def configure(node: S) -> S:
     from .occurrence import bind  # noqa: PLC0415 - keep compilation evaluator-independent
 
     record = root_record(node)
+    formals = family_formals(record.family)
+    missing = [
+        missing_formal(name, formals[name], None, record.family.__qualname__)
+        for name in unsupplied_formals(record)
+    ]
+    if missing:
+        raise DefinitionError(f"{'; '.join(missing)}; while configuring {record.describe()}")
     try:
         model = compile_node(record)
     except DefinitionError as error:
-        raise DefinitionError(f"{error}{at(record.origin)}", findings=error.findings) from error
+        raise DefinitionError(
+            f"{error}; while configuring {record.describe()}", findings=error.findings
+        ) from error
+    record.freeze("configure() took it as a root")
     return cast(S, bind(model, root_parameters(model, record)))
 
 

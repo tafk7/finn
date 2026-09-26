@@ -255,8 +255,8 @@ def test_hls_native_type_and_depth_limits_remain_explicit_refusals(dtype: str, d
 
 def test_rich_roots_require_parameters_and_optional_parent_depth_permits_narrow_hls_type() -> None:
     for family in (InputGeneratorKernel, ThresholdingAxiKernel, MemStreamHlsKernel):
-        with pytest.raises(DefinitionError, match="missing formals"):
-            family()  # type: ignore[call-arg]
+        with pytest.raises(DefinitionError, match="is not supplied"):
+            configure(family())
 
     # Replaces an inline exposed Param child binding: the optional depth is the
     # parent's own formal, bound to the child by name.

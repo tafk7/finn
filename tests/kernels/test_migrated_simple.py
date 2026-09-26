@@ -113,11 +113,11 @@ def test_converter_refuses_unsupported_encodings_and_widths(name: str) -> None:
 def test_required_root_inputs_fail_binding_and_optional_parent_exposure_keeps_partial_read() -> (
     None
 ):
-    # A missing required formal is refused at the node call, before configure().
-    with pytest.raises(DefinitionError, match="missing formals"):
-        FifoKernel(word_bits=13)  # type: ignore[call-arg]
-    with pytest.raises(DefinitionError, match="missing formals"):
-        IntToFp32Kernel()  # type: ignore[call-arg]
+    # A missing required formal is refused when configure() prepares the root.
+    with pytest.raises(DefinitionError, match="depth is not supplied"):
+        configure(FifoKernel(word_bits=13))
+    with pytest.raises(DefinitionError, match="is not supplied"):
+        configure(IntToFp32Kernel())
 
     # Replaces an inline exposed Param child binding: the parent declares the
     # optional formal itself and binds the child's formal to it by name.

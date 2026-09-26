@@ -1,12 +1,13 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
-"""Graphs as data: name nodes and edges built in plain Python as one composite family.
+"""Graphs as data: name nodes built in plain Python as one composite family.
 
 Nodes are ordinary values: build them in loops, keep them in lists, and join
-them with ``Bind`` edges. ``composite`` names them as the members of a new
-family, exactly as a class body would; Python's class construction places each
-node (``__set_name__``) and the family is collected once to report definition
-errors early. There is no builder state to seal.
+them by assigning their formals (``current.width_in = previous.width_out``).
+``composite`` names them as the members of a new family, exactly as a class
+body would; Python's class construction places each node (``__set_name__``)
+and the family is collected once to report definition errors early. There is
+no builder state to seal: the nodes stay assignable until the family is prepared.
 """
 
 from __future__ import annotations
@@ -49,7 +50,7 @@ def composite(
     base: type[Space] = Space,
     exports: Mapping[ViewKey[Any], object] | None = None,
 ) -> type[Space]:
-    """A new family whose members are ``members``: nodes, edges and declarations.
+    """A new family whose members are ``members``: nodes and declarations.
 
     Equivalent to a class statement with those attributes, so every rule of
     a class body applies: each node is placed once, and names are one segment.

@@ -16,9 +16,26 @@ class HeatPump(Space):
     kw: Param[int] = Param(int)
     cop = Decision(int, values=(3, 4))
 
+class Stream(Space):
+    spec: Param[int] = Param(int)
+
+class Producer(Space):
+    output: Param[Stream] = Param(Stream)
+
+    @derived
+    def wrong_spec(self) -> str:
+        return self.output.spec  # E
+
 class Parent(Space):
     child = Child(width=4)
-    missing = Child()  # E
+    bare = Child()  # not an error: an assignment may supply the width
+    bare.width = "four"  # E
+    bare.depth = 2  # E
+    edge = Stream(spec=1)
+    producer = Producer(output=child)  # E
+    later = Producer()
+    later.output = child  # E
+    later.output = edge
     wrong_literal = Child(width="four")  # E
     unknown = Child(width=1, depth=2)  # E
     wrong_reference = Child(width=child.label)  # E

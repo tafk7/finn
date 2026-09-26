@@ -86,7 +86,7 @@ def _descend(scopes: Sequence[Scope], scope: int, path: Sequence[Declaration]) -
         current = scopes[scope]
         if record is current.record:
             continue  # the node this scope instantiates
-        child = current.children.get(record)
+        child = current.children.get(record, current.references.get(record))
         if child is None:
             name = record.name if record.name is not None else type(record).__name__
             raise RequestError(

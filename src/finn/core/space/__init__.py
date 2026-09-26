@@ -13,9 +13,7 @@ from ._execution import (
 from .codecs import CodecBinding, JSONValue, SelectionSchema, ValueCodec, codec_for
 from .compiler import SpaceModel, configure
 from .declarations import (
-    OPEN,
     UNSUPPLIED,
-    Bind,
     Const,
     Constraint,
     ConstraintGroup,
@@ -25,6 +23,7 @@ from .declarations import (
     Members,
     Param,
     Present,
+    Users,
     ValueRef,
     View,
     ViewKey,
@@ -73,7 +72,6 @@ __all__ = [
     "composite",
     "Param",
     "LocatedParam",
-    "OPEN",
     "UNSUPPLIED",
     "Const",
     "Decision",
@@ -83,9 +81,9 @@ __all__ = [
     "ConstraintGroup",
     "View",
     # Graph primitives
-    "Bind",
     "Present",
     "Members",
+    "Users",
     "Located",
     "derived",
     "constraint",

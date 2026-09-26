@@ -3,12 +3,13 @@
 """A graph of design spaces, stated only in terms of Space.
 
 Calling a family declares a node; ``node.member`` is a reference to one of its
-members. Edges are bindings at the call, plus ``Bind`` for an edge declared
-after its nodes (forward, around a cycle, or built as data) and ``Present`` for
-whichever source is present. A ``Param(Located)`` formal receives a reference
-with its node and member names, and ``Members(key)`` ranges over the present
-children that export ``key``. A Decision over nodes is the structural choice.
-None of these cases is about hardware.
+members. Edges are bindings at the call, or assignments to a formal after the
+node is declared (``adder.back = register.q``: forward, around a cycle, or
+built as data), and ``Present`` for whichever source is present. A
+``Param(Located)`` formal receives a reference with its node and member names,
+and ``Members(key)`` ranges over the present children that export ``key``. A
+Decision over nodes is the structural choice. None of these cases is about
+hardware.
 """
 
 from __future__ import annotations
@@ -18,10 +19,8 @@ from typing import cast
 import pytest
 
 from finn.core.space import (
-    OPEN,
     UNSUPPLIED,
     Available,
-    Bind,
     Decision,
     DefinitionError,
     EvaluationError,
@@ -172,7 +171,7 @@ def test_members_range_over_present_nodes_with_per_member_obligations() -> None:
     assert codes(refused) == {"over-budget"} and owners(refused) == {"within"}
 
 
-# -- 3. a graph built as data, with edges declared after their nodes -------------------
+# -- 3. a graph built as data, with edges assigned after their nodes -------------------
 
 
 class Stage(Space):
@@ -187,14 +186,12 @@ class Stage(Space):
 
 
 def pipeline(count: int) -> type[Space]:
-    """Nodes and edges are plain Python values; ``composite`` names them."""
-    stages = [Stage(width_in=4), *(Stage(width_in=OPEN) for _ in range(1, count))]
-    edges = {
-        f"e{index}": Bind(stages[index].width_in, stages[index - 1].width_out)
-        for index in range(1, count)
-    }
+    """Nodes are plain Python values, joined by assignment; ``composite`` names them."""
+    stages = [Stage(width_in=4), *(Stage() for _ in range(1, count))]
+    for previous, current in zip(stages, stages[1:]):
+        current.width_in = previous.width_out
     nodes = {f"s{index}": stage for index, stage in enumerate(stages)}
-    return composite(f"Pipeline{count}", {**nodes, **edges, "widths": Members(WIDTH)})
+    return composite(f"Pipeline{count}", {**nodes, "widths": Members(WIDTH)})
 
 
 def test_a_pipeline_is_built_as_data_and_its_edges_are_declarations() -> None:
@@ -213,7 +210,7 @@ def test_a_pipeline_is_built_as_data_and_its_edges_are_declarations() -> None:
         ("s4", 9),
     ]
     evidence = inspection.explain(point, members)
-    assert {"e4", "s4.width_in", "s3.width_out"} <= {n.declaration.key for n in evidence.nodes}
+    assert {"s4.width_in", "s3.width_out"} <= {n.declaration.key for n in evidence.nodes}
 
 
 # -- 4. a formal supplied by whichever source is present --------------------------------
@@ -261,9 +258,8 @@ def test_two_present_sources_are_refused_where_the_value_is_read() -> None:
     class Both(Space):
         a = Source(width=3)
         b = Source(width=3)
-        sink = Sink(width=OPEN)
-        from_a = Bind(sink.width, a.out)
-        from_b = Bind(sink.width, b.out)
+        sink = Sink()
+        sink.width = Present(a.out, b.out)  # alternative suppliers, assigned
 
     answer = configure(Both()).sink.query(Sink.width)
     assert codes(answer) == {"multiple-suppliers"} and owners(answer) == {"sink.width"}
@@ -303,9 +299,9 @@ class Register(Space):
 class Accumulator(Space):
     width: Param[int] = Param(int)
     total: Param[int] = Param(int)
-    adder = Adder(inp=width, back=OPEN)  # back is supplied by the loop edge below
+    adder = Adder(inp=width)  # back is supplied by the loop edge below
     register = Register(width=total, d=adder.out)
-    loop = Bind(adder.back, register.q)
+    adder.back = register.q
 
 
 class Echo(Space):
@@ -327,9 +323,9 @@ def test_a_cyclic_graph_evaluates_when_its_value_flow_is_anchored() -> None:
 def test_an_unanchored_value_cycle_fails_with_its_path() -> None:
     class Unanchored(Space):
         width: Param[int] = Param(int)
-        adder = Adder(inp=width, back=OPEN)
+        adder = Adder(inp=width)
         echo = Echo(d=adder.out)
-        loop = Bind(adder.back, echo.q)
+        adder.back = echo.q
 
     with pytest.raises(EvaluationError, match="cycle"):
         configure(Unanchored(width=4)).adder.out()
@@ -350,8 +346,8 @@ class Pair(Space):
 
 class Chain(Space):
     head = Stage(width_in=2)
-    body = Pair(width_in=OPEN)  # supplied by an edge
-    edge = Bind(body.width_in, head.width_out)
+    body = Pair()
+    body.width_in = head.width_out  # an edge, assigned
     widths = Members(WIDTH)
 
 
@@ -446,22 +442,32 @@ def test_a_formal_of_the_enclosing_space_locates_at_the_space_itself() -> None:
     assert configure(Own(width=3)).here.left == Located(None, "width", 3)
 
 
-def test_a_bind_must_target_an_open_formal() -> None:
-    class Twice(Space):
-        a = Source(width=3)
-        sink = Sink(width=1)
-        again = Bind(sink.width, a.out)
+def test_assigning_a_supplied_formal_is_a_definition_error() -> None:
+    with pytest.raises(DefinitionError, match="already supplied") as caught:
 
-    with pytest.raises(DefinitionError, match="already supplied"):
-        configure(Twice())
+        class Twice(Space):
+            a = Source(width=3)
+            sink = Sink(width=1)
+            sink.width = a.out
+
+    # Both sites are named: the assignment, and the call that supplied the formal.
+    message = str(caught.value)
+    assert "assigned at test_design_graph.py:" in message
+    assert "already supplied at test_design_graph.py:" in message
 
 
-def test_a_required_formal_is_bound_or_declared_open() -> None:
-    with pytest.raises(DefinitionError, match="missing formals"):
-        Sink()  # type: ignore[call-arg]
+def test_a_required_formal_left_unsupplied_is_reported_when_prepared() -> None:
+    sink = Sink()  # legal: an assignment may still supply the width
+    assert inspection.declaration(sink).unsupplied == ("width",)
 
     class Dangling(Space):
-        sink = Sink(width=OPEN)
+        sink = Sink()
 
-    with pytest.raises(DefinitionError, match="no Bind supplying them"):
+    with pytest.raises(DefinitionError, match=r"sink\.width is not supplied") as caught:
         configure(Dangling())
+    message = str(caught.value)
+    # The formal's declaration line and the node's call line.
+    assert "Sink.width (declared at test_design_graph.py:" in message
+    assert "for the node sink (declared at test_design_graph.py:" in message
+    with pytest.raises(DefinitionError, match=r"width is not supplied"):
+        configure(Sink())

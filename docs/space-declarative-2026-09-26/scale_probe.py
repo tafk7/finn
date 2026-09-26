@@ -4,18 +4,16 @@
 
 The previous spike's probe (``space-design-graph-2026-09-26/scale_probe.py``),
 ported to the declarative API: a pipeline of N stages is built as data (plain
-Python nodes and ``Bind`` edges, named by ``composite``); each stage's input
-is bound to the previous stage's output. After a full evaluation, one decision
-of the *last* stage is changed and the last width is read again. Every
-snapshot has its own cache, so the unchanged prefix is re-evaluated.
-Run from the FINN checkout on spike/space-declarative with PYTHONPATH=src:tests.
+Python nodes, joined by assignment in a loop and named by ``composite``); each
+stage's input is assigned the previous stage's output. After a full
+evaluation, one decision of the *last* stage is changed and the last width is
+read again. Every snapshot has its own cache, so the unchanged prefix is
+re-evaluated. Run from the FINN checkout with PYTHONPATH=src:tests.
 """
 
 import time
 
 from finn.core.space import (
-    OPEN,
-    Bind,
     Decision,
     Param,
     Space,
@@ -36,11 +34,10 @@ class Stage(Space):
 
 
 def pipeline(count: int) -> type[Space]:
-    stages = [Stage(width_in=4), *(Stage(width_in=OPEN) for _ in range(1, count))]
-    members: dict[str, object] = {f"s{index}": stage for index, stage in enumerate(stages)}
-    for index in range(1, count):
-        members[f"e{index}"] = Bind(stages[index].width_in, stages[index - 1].width_out)
-    return composite(f"Probe{count}", members)
+    stages = [Stage(width_in=4), *(Stage() for _ in range(1, count))]
+    for previous, current in zip(stages, stages[1:]):
+        current.width_in = previous.width_out
+    return composite(f"Probe{count}", {f"s{index}": stage for index, stage in enumerate(stages)})
 
 
 for count in (50, 200, 800):

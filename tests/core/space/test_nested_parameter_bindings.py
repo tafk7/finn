@@ -1,13 +1,14 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""A reusable interface leaves nested formals open; enclosing nodes supply them.
+"""A reusable interface leaves nested formals unsupplied; enclosing nodes supply them.
 
-The nested ``bindings={...}`` map is gone. Its roles are now played by graph
-primitives: a nested formal left ``OPEN`` is supplied by a ``Bind`` edge of an
-enclosing family; a formal that should be exposed is declared on the enclosing
-family and bound by name; and a fresh inline ``Decision`` at a node call (also
-on a node the caller supplies to a family-typed formal) owns its choice.
+The nested ``bindings={...}`` map is gone. Its roles are played by assignment:
+a nested formal left unsupplied is assigned through a path by an enclosing
+family (``kernel.port.dtype = dtype``), which binds it for that placement only;
+a formal that should be exposed is declared on the enclosing family and bound
+by name; and a fresh inline ``Decision`` at a node call (also on a node the
+caller supplies to a reference input) owns its choice.
 """
 
 from __future__ import annotations
@@ -21,10 +22,8 @@ from pathlib import Path
 import pytest
 
 from finn.core.space import (
-    OPEN,
     UNSUPPLIED,
     Available,
-    Bind,
     BoundDecision,
     Const,
     Decision,
@@ -56,17 +55,17 @@ class Port(Space):
 
 
 class Reusable(Space):
-    """Its port's formals stay open: whoever places a Reusable supplies them."""
+    """Its port's formals stay unsupplied: whoever places a Reusable supplies them."""
 
     count: Param[int] = Param(int)
-    port = Port(dtype=OPEN, lanes=OPEN)
+    port = Port()
 
 
 class Kernel(Space):
     """The caller supplies the port node itself, with its own bindings."""
 
     count: Param[int] = Param(int)
-    port: Port = Param(Port)
+    port: Param[Port] = Param(Port)
 
 
 def codes(result: object) -> set[str]:
@@ -79,8 +78,8 @@ def test_outer_params_and_decisions_supply_interface_slots_without_new_choices()
         dtype: Param[str] = Param(str)
         lanes = Decision(int, values=(1, 2, 4))
         kernel = Reusable(count=1)
-        kernel_dtype = Bind(kernel.port.dtype, dtype)
-        kernel_lanes = Bind(kernel.port.lanes, lanes)
+        kernel.port.dtype = dtype  # for this placement of Reusable only
+        kernel.port.lanes = lanes
 
     base = configure(Parent(dtype="INT8"))
     assert base.kernel.port.dtype == "INT8"
@@ -89,7 +88,7 @@ def test_outer_params_and_decisions_supply_interface_slots_without_new_choices()
     assert chosen.kernel.port.physical() == ("INT8", 2)
     assert [item.key for item in inspection.decisions(chosen)] == ["lanes"]
     assert len(selections.capture(chosen).entries) == 1
-    # A formal supplied by an edge is not a choice of its own.
+    # A formal supplied by an assignment is not a choice of its own.
     with pytest.raises(RequestError, match="not independently editable"):
         chosen.with_choices({Parent.kernel.port.lanes: 1})
     evidence = inspection.explain(chosen.kernel.port, Port.description)
@@ -149,8 +148,20 @@ def test_repeated_placements_keep_fresh_choices_independent() -> None:
     assert keys == ["first.port.lanes", "second.port.lanes"]
 
 
-def test_a_fresh_decision_shared_by_two_nodes_is_one_decision_of_their_common_scope() -> None:
-    lanes = Decision(int, values=(1, 2, 4))  # fresh: bound at calls, never a class attribute
+def test_an_unnamed_decision_shared_by_two_nodes_is_a_definition_error() -> None:
+    lanes = Decision(int, values=(1, 2, 4))  # unnamed: bound at calls, never a class attribute
+
+    class Shared(Space):
+        first = Kernel(count=1, port=Port(dtype="INT4", lanes=lanes))
+        second = Kernel(count=2, port=Port(dtype="INT8", lanes=lanes))
+
+    with pytest.raises(DefinitionError, match="a shared decision must be named") as caught:
+        configure(Shared())
+    assert "Port.lanes" in str(caught.value) and 'name="..."' in str(caught.value)
+
+
+def test_a_named_decision_shared_by_two_nodes_is_one_decision_of_their_common_scope() -> None:
+    lanes = Decision(int, values=(1, 2, 4), name="lanes")
 
     class Shared(Space):
         use_first = Decision(bool, values=(False, True))
@@ -158,10 +169,10 @@ def test_a_fresh_decision_shared_by_two_nodes_is_one_decision_of_their_common_sc
         second = Kernel(count=2, port=Port(dtype="INT8", lanes=lanes))
 
     (info,) = [item for item in inspection.decisions(Shared) if item.key != "use_first"]
-    # Owned by the lowest scope containing both uses, keyed by its first use.
-    assert (info.key, info.scope) == ("first.port.lanes", "")
+    # Owned by the lowest scope containing both uses, keyed by that scope and its name.
+    assert (info.key, info.scope) == ("lanes", "")
     base = configure(Shared())
-    # Either use edits the one decision; it applies whenever any use does.
+    # Either use edits the one decision; it applies whenever its owner does.
     point = base.with_choices({Shared.second.port.lanes: 4}, use_first=False)
     assert point.second.port.physical() == ("INT8", 4)
     assert isinstance(point.first.port.query(Port.lanes), Inapplicable)
@@ -169,6 +180,7 @@ def test_a_fresh_decision_shared_by_two_nodes_is_one_decision_of_their_common_sc
     both = point.with_choices({Shared.first.port.lanes: 2}, use_first=True)
     assert both.first.port.physical() == ("INT4", 2)
     assert both.second.port.physical() == ("INT8", 2)
+    assert both.with_choices(lanes=1).second.port.physical() == ("INT8", 1)
     assert len(selections.capture(both).entries) == 2
 
 
@@ -177,8 +189,8 @@ def test_unbound_exposure_is_a_formal_declared_on_the_enclosing_family() -> None
     class Parent(Space):
         lanes: Param[int] = Param(int, default=UNSUPPLIED)
         kernel = Reusable(count=1)
-        kernel_dtype = Bind(kernel.port.dtype, "INT8")
-        kernel_lanes = Bind(kernel.port.lanes, lanes)
+        kernel.port.dtype = "INT8"
+        kernel.port.lanes = lanes
 
     omitted = configure(Parent())
     assert omitted.kernel.port.dtype == "INT8"
@@ -189,26 +201,26 @@ def test_unbound_exposure_is_a_formal_declared_on_the_enclosing_family() -> None
 
 def test_reexposed_nested_slot_can_be_bound_again_by_an_outer_placement() -> None:
     class Middle(Space):
-        kernel = Reusable(count=1)  # the port's formals stay open through Middle
+        kernel = Reusable(count=1)  # the port's formals stay unsupplied through Middle
 
     class Outer(Space):
         lanes = Decision(int, values=(2, 4))
         middle = Middle()
-        dtype_edge = Bind(middle.kernel.port.dtype, "INT3")
-        lanes_edge = Bind(middle.kernel.port.lanes, lanes)
+        middle.kernel.port.dtype = "INT3"
+        middle.kernel.port.lanes = lanes
 
     point = configure(Outer())
     chosen = point.with_choices(lanes=4)
     assert chosen.middle.kernel.port.physical() == ("INT3", 4)
-    with pytest.raises(DefinitionError, match="no Bind supplying them"):
+    with pytest.raises(DefinitionError, match=r"kernel\.port\.dtype is not supplied"):
         configure(Middle())
 
     # Re-exposing by name: the enclosing family declares the formal and binds it.
     class Named(Space):
         dtype: Param[str] = Param(str)
         kernel = Reusable(count=1)
-        dtype_edge = Bind(kernel.port.dtype, dtype)
-        lanes_edge = Bind(kernel.port.lanes, 2)
+        kernel.port.dtype = dtype
+        kernel.port.lanes = 2
 
     class Top(Space):
         named = Named(dtype="INT5")
@@ -217,7 +229,7 @@ def test_reexposed_nested_slot_can_be_bound_again_by_an_outer_placement() -> Non
 
 
 @pytest.mark.parametrize("kind", ["literal", "alias", "decision"])
-def test_an_outer_bind_cannot_override_an_internal_binding(kind: str) -> None:
+def test_an_outer_assignment_cannot_override_an_internal_binding(kind: str) -> None:
     class Internal(Space):
         local = Const(2)
         port = Port(
@@ -229,111 +241,109 @@ def test_an_outer_bind_cannot_override_an_internal_binding(kind: str) -> None:
             else Decision(int, values=(1, 2)),
         )
 
-    class Parent(Space):
-        child = Internal()
-        override = Bind(child.port.lanes, 4)
-
     with pytest.raises(DefinitionError, match="already supplied"):
-        configure(Parent())
+
+        class Parent(Space):
+            child = Internal()
+            child.port.lanes = 4
 
 
-def test_an_outer_bind_beside_an_inner_bind_is_refused_where_it_is_read() -> None:
-    # An open formal is supplied by whichever of its Binds is present, like Present.
+def test_an_outer_assignment_beside_an_inner_one_is_refused_when_prepared() -> None:
+    # A formal has one supplier. Two bodies assigning it through a path meet only
+    # when the outer family is prepared.
     class Middle(Space):
         kernel = Reusable(count=1)
-        dtype_edge = Bind(kernel.port.dtype, "INT8")
-        lanes_edge = Bind(kernel.port.lanes, 2)
+        kernel.port.dtype = "INT8"
+        kernel.port.lanes = 2
 
     class Outer(Space):
         middle = Middle()
-        again = Bind(middle.kernel.port.dtype, "INT4")
+        middle.kernel.port.dtype = "INT4"
 
     assert configure(Middle()).kernel.port.physical() == ("INT8", 2)
-    answer = configure(Outer()).middle.kernel.port.query(Port.dtype)
-    assert codes(answer) == {"multiple-suppliers"}
+    with pytest.raises(DefinitionError, match=r"middle\.kernel\.port\.dtype .*already supplied"):
+        configure(Outer())
 
 
-def test_bind_targets_are_checked() -> None:
+def test_assignment_targets_are_checked() -> None:
     class Parent(Space):
         child = Reusable(count=2)
-        dtype_edge = Bind(child.port.dtype, "INT8")
-        lanes_edge = Bind(child.port.lanes, 1)
+        child.port.dtype = "INT8"
+        child.port.lanes = 1
 
     assert configure(Parent()).child.count == 2
 
-    class DuplicateDirect(Space):
-        child = Reusable(count=1)
-        again = Bind(child.count, 2)
+    with pytest.raises(DefinitionError, match="already supplied"):
+
+        class DuplicateDirect(Space):
+            child = Reusable(count=1)
+            child.count = 2
 
     with pytest.raises(DefinitionError, match="already supplied"):
-        configure(DuplicateDirect())
 
-    class DuplicateNested(Space):
-        child = Reusable(count=1)
-        first = Bind(child.port.dtype, "INT8")
-        second = Bind(child.port.dtype, "INT4")
-        lanes_edge = Bind(child.port.lanes, 1)
+        class DuplicateNested(Space):
+            child = Reusable(count=1)
+            child.port.dtype = "INT8"
+            child.port.dtype = "INT4"
 
-    assert codes(configure(DuplicateNested()).child.port.query(Port.dtype)) == {
-        "multiple-suppliers"
-    }
+    with pytest.raises(DefinitionError, match="has no formal 'description'"):
 
-    class Foreign(Space):
-        value: Param[str] = Param(str)
+        class NonParameter(Space):
+            child = Reusable(count=1)
+            child.port.description = ("x", 2)
 
-    with pytest.raises(DefinitionError, match="through a reference"):
-        Bind(Foreign.value, "INT8")
-
-    unplaced = Reusable(count=1)
-
-    class ForeignTarget(Space):
-        child = Reusable(count=1)
-        edge = Bind(unplaced.port.dtype, "INT8")
-
-    with pytest.raises(DefinitionError, match="is not placed"):
-        configure(ForeignTarget())
-
-    class NonParameter(Space):
-        child = Reusable(count=1)
-        edge = Bind(child.port.description, ("x", 2))
-
-    with pytest.raises(DefinitionError, match="the target is not a formal"):
-        configure(NonParameter())
-
+    with pytest.raises(DefinitionError, match="expected value of nominal type int"):
+        Reusable().count = "two"  # type: ignore[assignment]
     with pytest.raises(DefinitionError, match="unknown formals"):
         Reusable(count=1, width=2)  # type: ignore[call-arg]
 
 
-def test_compiled_nested_binding_keeps_original_supplier_after_source_changes() -> None:
+def test_assignment_after_freezing_is_refused() -> None:
     class Parent(Space):
         first: Param[str] = Param(str)
         second: Param[str] = Param(str)
         kernel = Reusable(count=1)
-        dtype_edge = Bind(kernel.port.dtype, first)
-        lanes_edge = Bind(kernel.port.lanes, 1)
+        kernel.port.dtype = first
+        kernel.port.lanes = 1
 
     reference = Parent.kernel.port.dtype
     old = configure(Parent(first="INT3", second="INT7"))
-    Parent.dtype_edge.source = Parent.second
-    new = configure(Parent(first="INT3", second="INT7"))
-    assert old.query(reference) == Available("INT3")
-    assert new.query(reference) == Available("INT3")
+    # Preparing Parent froze its node declarations: the model cannot drift.
+    with pytest.raises(DefinitionError, match="is frozen .Parent was prepared") as caught:
+        Parent.kernel.port.lanes = 2
+    assert "assigned at test_nested_parameter_bindings.py:" in str(caught.value)
+    point = configure(Parent(first="INT3", second="INT7"))
+    assert old.query(reference) == point.query(reference) == Available("INT3")
+    assert inspection.declaration(Parent.kernel).frozen == "Parent was prepared"
     with pytest.raises(TypeError):
         inspection.declaration(Parent.kernel).bindings["count"] = 2  # type: ignore[index]
 
 
+def test_configure_freezes_its_root() -> None:
+    root = Reusable()
+    root.count = 3
+    root.port.dtype = "INT8"
+    root.port.lanes = 2
+    assert configure(root).port.physical() == ("INT8", 2)
+    with pytest.raises(DefinitionError, match="is frozen"):
+        root.count = 4
+
+
 def test_a_graph_built_as_data_binds_nested_formals_and_keeps_their_types() -> None:
-    # ScopeBuilder is gone: nodes and edges are plain values that composite names.
+    # ScopeBuilder is gone: nodes are plain values, joined by assignment, named by composite.
     child = Reusable(count=1)
-    edges = {"dtype": Bind(child.port.dtype, "INT8"), "lanes": Bind(child.port.lanes, 2)}
+    child.port.dtype = "INT8"
+    child.port.lanes = 2
     declaration = inspection.declaration(child)
-    assert dict(declaration.bindings) == {"count": 1} and declaration.open == ()
-    family = composite("Parent", {"child": child, **edges})
+    assert dict(declaration.bindings) == {"count": 1}
+    assert dict(declaration.nested) == {"port.dtype": "INT8", "port.lanes": 2}
+    assert declaration.unsupplied == () and declaration.frozen is None
+    family = composite("Parent", {"child": child})
     point = configure(family())
     placed = getattr(point, "child")
     assert isinstance(placed, Reusable)
     assert placed.port.physical() == ("INT8", 2)
-    with pytest.raises(DefinitionError, match="Bind supplying them"):
+    with pytest.raises(DefinitionError, match=r"child\.port\.dtype is not supplied"):
         configure(composite("Unbound", {"child": Reusable(count=1)})())
 
 
@@ -363,18 +373,16 @@ def test_nested_decision_reference_can_traverse_concrete_reference_layers() -> N
 def test_nested_binding_typing_rejects_a_supplier_of_the_wrong_type(tmp_path: Path) -> None:
     mypy = shutil.which("mypy")
     assert mypy is not None
-    source = """from finn.core.space import OPEN, Bind, Param, Space
+    source = """from finn.core.space import Param, Space
 class Port(Space):
     width: Param[int] = Param(int)
 class Child(Space):
-    port = Port(width=OPEN)
+    port = Port()
 class Parent(Space):
     child = Child()
-    good = Bind(child.port.width, 4)
-    # mypy infers Bind's T from both arguments (a join, here object), so an
-    # unannotated Bind cannot reject the source; an explicit Bind[int] can.
-    joined = Bind(child.port.width, "wrong")
-    bad = Bind[int](child.port.width, "wrong")  # E
+    child.port.width = 4
+    # Assignment is typed by Param.__set__: the value type is checked exactly.
+    child.port.width = "wrong"  # E
     fresh = Port(width="wrong")  # E
 """
     fixture = tmp_path / "nested_binding_types.py"

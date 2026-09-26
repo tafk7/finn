@@ -108,9 +108,19 @@ class Scope:
     choices: Mapping[object, int] = field(default_factory=dict)
     # The node declaration instantiated here (None for a family compiled alone).
     record: object = None
+    # Reference inputs: the formal's declaration -> the scope of the node it
+    # references, which is placed elsewhere (not a child of this scope).
+    references: Mapping[object, int] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        for attr in ("members", "children", "named_members", "named_children", "choices"):
+        for attr in (
+            "members",
+            "children",
+            "named_members",
+            "named_children",
+            "choices",
+            "references",
+        ):
             object.__setattr__(self, attr, MappingProxyType(dict(getattr(self, attr))))
 
 
@@ -140,7 +150,7 @@ class LinkedModel:
     decisions: tuple[int, ...]
     keys: Mapping[str, int]
     choices: tuple[Choice, ...] = ()
-    # Formals supplied by a shared unnamed Decision: edits may pass through them.
+    # Formals supplied by a named shared Decision: edits may pass through them.
     editable_aliases: frozenset[int] = frozenset()
     selector_choices: Mapping[int, int] = field(init=False, repr=False)
     ranks: tuple[int, ...] = field(init=False, repr=False)

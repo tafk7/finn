@@ -10,7 +10,6 @@ from typing import cast
 import pytest
 
 from finn.core.space import (
-    OPEN,
     UNSUPPLIED,
     Available,
     BoundDecision,
@@ -130,10 +129,8 @@ def test_local_decision_domain_uses_parent_suppliers_and_exposure_is_explicit() 
     supplied = configure(Root(extent=12, exposed_value=7))
     assert supplied.exposed.value == 7
 
-    with pytest.raises(DefinitionError, match="missing formals"):
-        Child()  # type: ignore[call-arg]
-    missing = composite("Missing", {"child": Child(value=OPEN)})
-    with pytest.raises(DefinitionError, match="no Bind supplying them"):
+    missing = composite("Missing", {"child": Child()})
+    with pytest.raises(DefinitionError, match=r"child\.value is not supplied"):
         configure(missing())
 
 

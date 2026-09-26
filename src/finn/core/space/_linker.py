@@ -5,8 +5,10 @@
 
 Every declared node becomes a scope; every member a node of the evaluation
 graph. A Decision over nodes becomes a selector decision, one guarded scope
-per candidate, and a ``select`` node per member read through it. An open
-formal becomes a ``present`` node over the ``Bind`` edges that supply it.
+per candidate, and a ``select`` node per member read through it. A reference
+input becomes a presence node plus a scope reference (or, for a fresh node, a
+placement there); ``Users`` becomes a ``members`` node over the exports of
+the nodes whose inputs reference this one.
 """
 
 from __future__ import annotations
@@ -16,16 +18,23 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field, replace
 from typing import cast
 
-from ._bindings import PlacementBinding, PlacementPlan, open_default, placement_plan
+from ._bindings import PlacementBinding, PlacementPlan, Supply, fallback, placement_plan
 from ._configuration import Space
 from ._graph import dependency_order
-from ._nodes import FamilyFormal, NodeDecision, NodeDecl, family_formals, unwrap
+from ._nodes import (
+    FamilyFormal,
+    NodeDecision,
+    NodeDecl,
+    family_formals,
+    is_fresh,
+    missing_formal,
+    unwrap,
+)
 from ._signatures import BoundArgument, BoundFunction, validate_argument
 from .collection import EffectiveSpace, collect_space
 from .declarations import (
     MISSING,
     UNSUPPLIED,
-    Bind,
     CaseRef,
     ChoiceMemberRef,
     Const,
@@ -39,6 +48,7 @@ from .declarations import (
     Members,
     Param,
     Present,
+    Users,
     ValueRef,
     View,
     ViewKey,
@@ -71,6 +81,9 @@ class _ScopeDraft:
     children: dict[object, int] = field(default_factory=dict)
     named_children: dict[str, int] = field(default_factory=dict)
     choices: dict[object, int] = field(default_factory=dict)
+    references: dict[object, int] = field(default_factory=dict)
+    # Each reference input's declaration -> the scope it reaches (None: unsupplied).
+    targets: dict[object, int | None] = field(default_factory=dict)
 
     def freeze(self) -> Scope:
         return Scope(
@@ -85,6 +98,7 @@ class _ScopeDraft:
             self.guard,
             self.choices,
             self.record,
+            self.references,
         )
 
 
@@ -117,8 +131,19 @@ class _MemberTask:
     name: str
     declaration: Declaration
     binding: PlacementBinding | None
-    # Where the owning scope of a shared fresh decision was inferred to be.
+    # Where the owning scope of a named shared decision was inferred to be.
     owner_scope: int | None = None
+
+
+@dataclass(frozen=True)
+class _ReferenceTask:
+    """A reference input to resolve once every node of its authoring scope is placed."""
+
+    scope: int
+    name: str
+    supplier: NodeDecl
+    source_scope: int
+    presence: int
 
 
 @dataclass(frozen=True)
@@ -178,17 +203,21 @@ class _Linker:
         self.expression_counts: dict[str, int] = {}
         self.scopes: tuple[Scope, ...] = ()
         self.choices: tuple[Choice, ...] = ()
-        # Formals left open at placement, and whether each is required.
-        self.unbound: dict[int, object] = {}
         self.present_nodes: dict[tuple[int, Present[object], bool], int] = {}
         self.choice_member_nodes: dict[tuple[int, str, bool], int] = {}
-        # Fresh (unnamed) decisions, by authoring scope: their formal nodes.
-        self.fresh: dict[tuple[int, int], list[int]] = {}
-        self.fresh_declarations: dict[tuple[int, int], Decision[object]] = {}
+        # Named Decisions that are not class attributes, by authoring scope: their uses.
+        self.named: dict[tuple[int, int], list[int]] = {}
+        self.named_declarations: dict[tuple[int, int], Decision[object]] = {}
         self.editable_aliases: set[int] = set()
         self.formals: dict[type[Space], dict[str, Declaration]] = {}
         # Selections linked for a member name several candidates share.
         self.shared: dict[int, tuple[int, str]] = {}
+        # Reference inputs waiting for their authoring scope to be placed.
+        self.pending: list[_ReferenceTask] = []
+        # Referenced scope -> the (user scope, input name) pairs that reference it.
+        self.users: dict[int, list[tuple[int, str]]] = {}
+        # Required formals nothing supplies, reported together after allocation.
+        self.missing: list[str] = []
 
     # -- families -----------------------------------------------------------------------
 
@@ -288,6 +317,40 @@ class _Linker:
         self.guards.append(_GuardTask(index, source_scope, condition))
         return index
 
+    def nested_supplies(self, parent: int, record: NodeDecl | None, key: str) -> dict[str, Supply]:
+        """Formals of ``record`` supplied through a path by an enclosing node.
+
+        ``kernel.port.dtype = x`` in a body stores the binding on ``kernel`` for
+        the path ``(port,)``; it applies to this placement of ``kernel`` only,
+        and its supplier is read in the body that declared ``kernel``.
+        """
+        supplies: dict[str, Supply] = {}
+        chain: list[NodeDecl | None] = [record]
+        scope: int | None = parent
+        while scope is not None:
+            draft = self.drafts[scope]
+            owner = draft.record
+            if isinstance(owner, NodeDecl) and owner.nested and None not in chain:
+                path = tuple(cast(list[NodeDecl], chain[::-1]))
+                for name, (value, origin) in owner.nested.get(path, {}).items():
+                    earlier = (
+                        record.supplied_at.get(name)
+                        if record is not None and name in record.bindings
+                        else supplies[name][2]
+                        if name in supplies
+                        else False
+                    )
+                    if earlier is not False:
+                        raise DefinitionError(
+                            f"{_key(key, name)} (assigned at {origin}): the formal is already "
+                            f"supplied at {earlier}; a formal has one supplier (write "
+                            "alternatives as Present(a, b))"
+                        )
+                    supplies[name] = (value, draft.source_scope, origin)
+            chain.append(owner)
+            scope = draft.parent
+        return supplies
+
     def new_scope(
         self,
         space_type: type[Space],
@@ -303,7 +366,8 @@ class _Linker:
         formals = self.formals.get(space_type)
         if formals is None:
             formals = self.formals[space_type] = family_formals(space_type)
-        plan = placement_plan(space_type, record, root=root, formals=formals)
+        nested = None if parent is None else self.nested_supplies(parent, record, name)
+        plan = placement_plan(space_type, record, root=root, formals=formals, nested=nested)
         draft = _ScopeDraft(
             index,
             parent,
@@ -317,11 +381,16 @@ class _Linker:
         self.drafts.append(draft)
         for member_name, declaration in draft.effective.members.items():
             if isinstance(declaration, (NodeDecl, NodeDecision)):
-                continue  # structure: allocated below
+                continue  # structure (and reference inputs): allocated below
             binding = plan.bindings.get(member_name)
             kind: NodeKind
             if isinstance(declaration, Param):
-                kind = "param" if binding is None else _BINDING_KINDS[binding.kind]
+                if binding is not None:
+                    kind = _BINDING_KINDS[binding.kind]
+                elif root:
+                    kind = "param"
+                else:
+                    binding, kind = self.unsupplied(draft, member_name, declaration)
             elif isinstance(declaration, Const):
                 kind = "const"
             elif isinstance(declaration, Decision):
@@ -334,7 +403,7 @@ class _Linker:
                 kind = "view"
             elif isinstance(declaration, ConstraintGroup):
                 kind = "group"
-            elif isinstance(declaration, (MemberRef, ChoiceMemberRef, CaseRef, Bind)):
+            elif isinstance(declaration, (MemberRef, ChoiceMemberRef, CaseRef)):
                 kind = "alias"
             elif isinstance(declaration, Present):
                 kind = "present"
@@ -351,12 +420,8 @@ class _Linker:
                 origin=declaration.origin,
             )
             draft.named_members[member_name] = node
-            if isinstance(declaration, Param) and member_name in plan.open:
-                self.unbound[node] = open_default(formals.get(member_name, declaration))
             if binding is not None and binding.kind == "local-decision":
-                identity = (draft.source_scope, id(binding.supplier))
-                self.fresh.setdefault(identity, []).append(node)
-                self.fresh_declarations[identity] = cast(Decision[object], binding.supplier)
+                self.local_decision(draft, node, binding)
             self.member_positions[node] = len(self.members)
             self.members.append(_MemberTask(node, index, member_name, declaration, binding))
         for declaration, member_name in draft.effective.aliases.items():
@@ -365,6 +430,37 @@ class _Linker:
         for export, declaration in draft.effective.exports.items():
             draft.members[export] = draft.members[declaration]
         return index
+
+    def unsupplied(
+        self, draft: _ScopeDraft, name: str, formal: Declaration
+    ) -> tuple[PlacementBinding | None, NodeKind]:
+        """A child's formal nothing supplies: its default, unsupplied, or missing."""
+        default = fallback(formal)
+        if default is MISSING:
+            self.missing.append(
+                missing_formal(
+                    _key(draft.name, name), formal, draft.record, self.space_type.__qualname__
+                )
+            )
+        if default is MISSING or default is UNSUPPLIED:
+            return None, "present"  # no alternatives: unsupplied
+        return PlacementBinding(default, "literal"), "const"
+
+    def local_decision(self, draft: _ScopeDraft, node: int, binding: PlacementBinding) -> None:
+        """An inline Decision: one use keys it at the formal; a shared one needs a name."""
+        decision = cast(Decision[object], binding.supplier)
+        if decision.name is None:
+            if len(decision.sites) > 1:
+                raise DefinitionError(
+                    f"Decision{at(decision.origin)} supplies {len(decision.sites)} formals "
+                    f"({', '.join(decision.sites)}): a shared decision must be named. Make it "
+                    'a class attribute, or pass Decision(..., name="...")'
+                )
+            return
+        source = binding.source_scope if binding.source_scope is not None else draft.source_scope
+        identity = (source, id(decision))
+        self.named.setdefault(identity, []).append(node)
+        self.named_declarations[identity] = decision
 
     def place(
         self,
@@ -487,6 +583,96 @@ class _Linker:
             choice.members[member] = node
             self.shared[node] = (choice.index, member)
 
+    def reference_input(self, scope: _ScopeDraft, name: str, formal: FamilyFormal) -> None:
+        """``output: Param[Stream]``: place a fresh node here, or reference a placed one.
+
+        Either way the input gets a presence node: a constant guarded by the
+        reached node's own guard, so reading the input of an absent node is
+        inapplicable. An unsupplied optional input is unsupplied.
+        """
+        key = _key(scope.name, name)
+        aliases = self.aliases[scope.effective.space_type][name]
+        binding = scope.plan.bindings.get(name)
+        presence = self.reserve(
+            scope.index,
+            key,
+            "const" if binding is not None else "present",
+            cast(ValueSemantics[object], _BOOL),
+            origin=formal.origin,
+        )
+        scope.named_members[name] = presence
+        for alias in aliases:
+            scope.members[alias] = presence
+        if binding is None:
+            for alias in aliases:
+                scope.targets[alias] = None
+            if formal.required and scope.parent is not None:
+                self.missing.append(
+                    missing_formal(key, formal, scope.record, self.space_type.__qualname__)
+                )
+            return
+        supplier = cast(NodeDecl, binding.supplier)
+        source = binding.source_scope if binding.source_scope is not None else scope.source_scope
+        if not is_fresh(supplier):
+            self.pending.append(_ReferenceTask(scope.index, name, supplier, source, presence))
+            return
+        if len(supplier.sites) > 1:
+            raise DefinitionError(
+                f"{supplier.describe()} is supplied to {len(supplier.sites)} reference inputs "
+                f"({', '.join(supplier.sites)}) and placed by none: place it (a class attribute "
+                "or a composite member) so that each input references it"
+            )
+        guard = self.guarded(source, scope.guard, supplier.when, key + ".$guard", owner=key)
+        child = self.place(
+            scope, name, supplier, guard, source_scope=source, keys=(*aliases, supplier)
+        )
+        scope.named_children[name] = child
+        for alias in aliases:
+            scope.targets[alias] = child
+        self.users.setdefault(child, []).append((scope.index, name))
+        self.nodes[presence] = replace(self.nodes[presence], value=True, guard=guard)
+
+    def resolve_references(self) -> None:
+        """Resolve each reference input in the body that wrote it, in scope order.
+
+        A reference names a node placed in that body (a sibling, a candidate)
+        or forwards one of that body's own reference inputs. Nothing else is
+        visible: a family reaches an ancestor's node only through its inputs.
+        """
+        for task in self.pending:
+            draft = self.drafts[task.scope]
+            source = self.drafts[task.source_scope]
+            supplier = task.supplier
+            key = _key(draft.name, task.name)
+            target: int | None
+            if isinstance(supplier, FamilyFormal):
+                if supplier not in source.targets:
+                    raise DefinitionError(
+                        f"{key}: forwards a reference input{at(supplier.origin)} that is not an "
+                        f"input of {source.effective.space_type.__qualname__}"
+                    )
+                target = source.targets[supplier]
+            else:
+                target = source.children.get(supplier)
+                if target is None:
+                    raise DefinitionError(
+                        f"{key}: references {supplier.describe()}, which is not placed in "
+                        f"{source.name or '<root>'}: a reference input names a node placed "
+                        "beside it, or forwards an input of the enclosing family"
+                    )
+                self.users.setdefault(target, []).append((task.scope, task.name))
+            for alias in self.aliases[draft.effective.space_type][task.name]:
+                draft.targets[alias] = target
+                if target is not None:
+                    draft.references[alias] = target
+            node = self.nodes[task.presence]
+            if target is None:
+                self.nodes[task.presence] = replace(node, kind="present")
+            else:
+                self.nodes[task.presence] = replace(
+                    node, value=True, guard=self.drafts[target].guard
+                )
+
     def allocate(self) -> None:
         self.new_scope(self.space_type, None, "", None, record=self.root, source_scope=0)
         cursor = 0
@@ -495,30 +681,7 @@ class _Linker:
             cursor += 1
             for name, declaration in scope.effective.members.items():
                 if isinstance(declaration, FamilyFormal):
-                    binding = scope.plan.bindings.get(name)
-                    if binding is None:
-                        raise DefinitionError(
-                            f"{_key(scope.name, name)}: a family-typed formal needs a node; "
-                            "configure a node declaration that supplies it"
-                        )
-                    supplied = cast(NodeDecl, binding.supplier)
-                    key = _key(scope.name, name)
-                    guard = self.guarded(
-                        scope.source_scope,
-                        scope.guard,
-                        supplied.when,
-                        key + ".$guard",
-                        owner=key,
-                    )
-                    child = self.place(
-                        scope,
-                        name,
-                        supplied,
-                        guard,
-                        source_scope=scope.source_scope,
-                        keys=(*self.aliases[scope.effective.space_type][name], supplied),
-                    )
-                    scope.named_children[name] = child
+                    self.reference_input(scope, name, declaration)
                 elif isinstance(declaration, NodeDecl):
                     key = _key(scope.name, name)
                     guard = self.guarded(
@@ -539,42 +702,52 @@ class _Linker:
                     scope.named_children[name] = child
                 elif isinstance(declaration, NodeDecision):
                     self.choice(scope, name, declaration)
-        self.infer_fresh_owners()
+        self.resolve_references()
+        if self.missing:
+            raise DefinitionError("; ".join(self.missing))
+        self.own_named_decisions()
         # All occurrence identities and membership maps are now stable. Later
         # phases replace node payloads, never scope identities.
         self.scopes = tuple(draft.freeze() for draft in self.drafts)
 
-    def infer_fresh_owners(self) -> None:
-        """A fresh Decision supplying several formals is one decision.
+    def own_named_decisions(self) -> None:
+        """A named Decision that is not a class attribute is one decision.
 
         It is owned by the lowest scope containing every node it supplies, so
-        it applies whenever any of them does, and it takes the key of its first
-        use. Every formal it supplies becomes an alias of it that keeps its own
-        node's guard, and through which the decision may be edited.
+        it applies whenever that scope does, and it is keyed by that scope and
+        its name. Every formal it supplies becomes an alias of it that keeps its
+        own node's guard, and through which the decision may be edited.
         """
 
-        for identity, uses in self.fresh.items():
-            if len(uses) < 2:
-                continue
+        for identity, uses in self.named.items():
+            decision = self.named_declarations[identity]
             owner = self.lowest_common_scope([self.nodes[use].scope for use in uses])
+            draft = self.drafts[owner]
+            name = cast(str, decision.name)
+            key = _key(draft.name, name)
+            if name in draft.named_members or name in draft.named_children:
+                raise DefinitionError(
+                    f"{key}: the shared Decision{at(decision.origin)} is named like a member "
+                    f"of {draft.effective.space_type.__qualname__}; choose another name"
+                )
             first = self.nodes[uses[0]]
-            decision = self.reserve(
+            node = self.reserve(
                 owner,
-                first.key,
+                key,
                 "decision",
                 first.semantics,
-                guard=self.drafts[owner].guard,
-                origin=first.origin,
+                guard=draft.guard,
+                origin=decision.origin,
             )
-            self.nodes[first.index] = replace(first, key=first.key + ".$use")
             task = self.members[self.member_positions[first.index]]
-            self.member_positions[decision] = len(self.members)
-            self.members.append(replace(task, index=decision, owner_scope=owner))
-            self.drafts[owner].members[self.fresh_declarations[identity]] = decision
+            self.member_positions[node] = len(self.members)
+            self.members.append(replace(task, index=node, owner_scope=owner))
+            draft.members[decision] = node
+            draft.named_members[name] = node
             for use in uses:
                 position = self.member_positions[use]
                 self.members[position] = replace(
-                    self.members[position], binding=PlacementBinding(decision, "reference")
+                    self.members[position], binding=PlacementBinding(node, "reference")
                 )
                 self.nodes[use] = replace(self.nodes[use], kind="alias")
                 self.editable_aliases.add(use)
@@ -595,51 +768,7 @@ class _Linker:
             common = chains[0][level]
         return common
 
-    # -- edges --------------------------------------------------------------------------
-
-    def link_binds(self) -> None:
-        """Turn every formal left open at placement into a supply of its binds.
-
-        A formal with no Bind falls back to its default: a value, unsupplied if
-        optional, and a definition error if it was required.
-        """
-
-        supplies: dict[int, list[tuple[str, int]]] = {}
-        for draft in self.drafts:
-            for name, declaration in draft.effective.members.items():
-                if not isinstance(declaration, Bind):
-                    continue
-                key = _key(draft.name, name)
-                target = self.reference(draft.index, declaration.target, owner=key)
-                if target not in self.unbound:
-                    position = self.member_positions.get(target)
-                    member = None if position is None else self.members[position].declaration
-                    problem = (
-                        "the target formal is already supplied"
-                        if isinstance(member, Param)
-                        else "the target is not a formal"
-                    )
-                    raise DefinitionError(f"{key}{at(declaration.origin)}: {problem}")
-                supplies.setdefault(target, []).append((key, draft.named_members[name]))
-        missing: dict[int, list[str]] = {}
-        for index, default in self.unbound.items():
-            alternatives = tuple(supplies.get(index, ()))
-            node = self.nodes[index]
-            if not alternatives and default is MISSING:
-                missing.setdefault(node.scope, []).append(node.key.rsplit(".", 1)[-1])
-            if not alternatives and default is not MISSING and default is not UNSUPPLIED:
-                self.nodes[index] = replace(node, kind="const", value=default)
-                position = self.member_positions[index]
-                self.members[position] = replace(
-                    self.members[position], binding=PlacementBinding(default, "literal")
-                )
-                continue
-            self.nodes[index] = replace(node, kind="present", alternatives=alternatives)
-        for scope, names in missing.items():
-            raise DefinitionError(
-                f"{self.scopes[scope].name}: open formals {sorted(names)} "
-                "have no Bind supplying them"
-            )
+    # -- names --------------------------------------------------------------------------
 
     def local_name(self, scope: int, child: int) -> str:
         prefix = self.drafts[scope].name
@@ -651,12 +780,18 @@ class _Linker:
         names: list[str] = []
         current = scope
         for record in path:
-            if record is self.drafts[current].record:
+            draft = self.drafts[current]
+            if record is draft.record:
                 continue
-            child = self.drafts[current].children.get(record)
-            if child is None:
+            child = draft.children.get(record)
+            if child is not None:
+                names.append(self.local_name(current, child))
+            elif record in draft.references:
+                # Through a reference input: named by the input, not by the node reached.
+                child = draft.references[record]
+                names.append(draft.effective.aliases[record])
+            else:
                 raise DefinitionError(f"{record.name}: node is not placed in this scope")
-            names.append(self.local_name(current, child))
             current = child
         return ".".join(names)
 
@@ -667,6 +802,8 @@ class _Linker:
         result: list[tuple[str, int]] = []
         for name, declaration in draft.effective.members.items():
             if isinstance(declaration, NodeDecl):
+                if name not in draft.named_children:
+                    continue  # a reference input: the node belongs where it is placed
                 children = [draft.named_children[name]]
             elif isinstance(declaration, NodeDecision):
                 cases = self.choice_drafts[draft.choices[declaration]].cases
@@ -682,6 +819,28 @@ class _Linker:
                         f"{draft.name or '<root>'}: member {key.name} must be a view"
                     )
                 result.append((self.local_name(scope, child), target))
+        return result
+
+    def users_candidates(self, scope: int, key: ViewKey[object]) -> list[tuple[str, str, int]]:
+        """Each user's export of ``key``: (its name beside this node, input, view)."""
+
+        parent = self.drafts[scope].parent
+        order = {
+            user: list(self.drafts[user].effective.members) for user, _ in self.users.get(scope, ())
+        }
+        result: list[tuple[str, str, int]] = []
+        for user, member in sorted(
+            self.users.get(scope, ()), key=lambda item: (item[0], order[item[0]].index(item[1]))
+        ):
+            target = self.drafts[user].members.get(key)
+            if target is None:
+                continue
+            if self.nodes[target].kind != "view":
+                raise DefinitionError(
+                    f"{self.drafts[user].name or '<root>'}: member {key.name} must be a view"
+                )
+            name = "" if parent is None or user == parent else self.local_name(parent, user)
+            result.append((name, member, target))
         return result
 
     def fresh_number(self, owner: str) -> int:
@@ -810,9 +969,10 @@ class _Linker:
 
     def descend(self, scope: int, path: Iterable[Declaration], *, owner: str) -> int:
         for record in path:
-            if record is self.drafts[scope].record:
+            draft = self.drafts[scope]
+            if record is draft.record:
                 continue
-            child = self.drafts[scope].children.get(record)
+            child = draft.children.get(record, draft.references.get(record))
             if child is None:
                 raise DefinitionError(
                     f"{owner}: {getattr(record, 'describe', lambda: record.name)()} is not "
@@ -985,7 +1145,13 @@ class _Linker:
         for source in sources:
             if not isinstance(source, allowed):
                 raise DefinitionError(f"{owner}: unsupported obligation declaration")
-            if isinstance(source, Members):
+            if isinstance(source, Users):
+                # Each user is obliged separately; one referencing twice counts once.
+                key = cast(ViewKey[object], source.key)
+                indices = list(
+                    dict.fromkeys(target for *_, target in self.users_candidates(scope, key))
+                )
+            elif isinstance(source, Members):
                 # A member family obliges each member's acceptance separately.
                 indices = [
                     target
@@ -998,7 +1164,7 @@ class _Linker:
                 if self.nodes[indices[0]].kind not in {"view", "constraint", "group"}:
                     raise DefinitionError(
                         f"{owner}: a view may require only constraints, groups, views, "
-                        "references to views and Members"
+                        "references to views, Members and Users"
                     )
             for index in indices:
                 if index in seen:
@@ -1069,6 +1235,13 @@ class _Linker:
         node = self.nodes[task.index]
         declaration = task.declaration
         binding = task.binding
+        # A supplier is read in the body that wrote it: the node's own source
+        # scope, or the enclosing node's for a binding assigned through a path.
+        written = (
+            scope.source_scope
+            if binding is None or binding.source_scope is None
+            else binding.source_scope
+        )
         if binding is not None and binding.kind in {"literal", "reference"}:
             if binding.kind == "literal":
                 self.nodes[node.index] = replace(node, value=binding.supplier)
@@ -1079,9 +1252,7 @@ class _Linker:
                 located = isinstance(formal, LocatedParam)
                 self.nodes[node.index] = replace(
                     node,
-                    output=self.supply(
-                        scope.source_scope, binding.supplier, owner=node.key, locate=located
-                    ),
+                    output=self.supply(written, binding.supplier, owner=node.key, locate=located),
                 )
             return
         source_scope = scope.index
@@ -1089,7 +1260,7 @@ class _Linker:
         guard_scope = scope
         if binding is not None and binding.kind == "local-decision":
             declaration = cast(Decision[object], binding.supplier)
-            source_scope = scope.source_scope
+            source_scope = written
             condition = declaration.when
             if task.owner_scope is not None:
                 guard_scope = self.drafts[task.owner_scope]
@@ -1143,29 +1314,13 @@ class _Linker:
                     owner=node.key,
                 ),
             )
-        elif isinstance(declaration, Bind):
-            supplied = declaration.source
-            target = self.reference(scope.index, declaration.target, owner=node.key)
-            target_member = self.members[self.member_positions[target]].declaration
-            if isinstance(supplied, (ValueRef, View)):
-                output = self.supply(
-                    scope.index,
-                    supplied,
-                    owner=node.key,
-                    locate=isinstance(target_member, LocatedParam),
-                )
-            else:
-                semantics = self.nodes[target].semantics
-                assert semantics is not None
-                output = self.reserve(
-                    scope.index, node.key + ".$literal", "const", semantics, source_owner=node.key
-                )
-                try:
-                    value = semantics.freeze(supplied)
-                except Exception as cause:
-                    raise DefinitionError(f"{node.key}: {cause}") from cause
-                self.nodes[output] = replace(self.nodes[output], value=value)
-            node = replace(node, output=output)
+        elif isinstance(declaration, Users):
+            entries = self.users_candidates(scope.index, cast(ViewKey[object], declaration.key))
+            node = replace(
+                node,
+                alternatives=tuple((name, target) for name, _, target in entries),
+                value=tuple(member for _, member, _ in entries),
+            )
         elif isinstance(declaration, Present):
             node = replace(
                 node,
@@ -1180,8 +1335,8 @@ class _Linker:
                 alternatives=tuple(
                     self.members_candidates(scope.index, cast(ViewKey[object], declaration.key))
                 ),
-                value=declaration.key.name,
             )
+            node = replace(node, value=(declaration.key.name,) * len(node.alternatives))
         elif isinstance(declaration, (MemberRef, ChoiceMemberRef, CaseRef)):
             anonymous = replace_owner(declaration)
             node = replace(node, output=self.reference(scope.index, anonymous, owner=node.key))
@@ -1262,7 +1417,6 @@ class _Linker:
         """Prepare templates, allocate occurrences, lower edges, then validate/freeze."""
         self.check_recursion()
         self.allocate()
-        self.link_binds()
         for task in self.members:
             self.link_member(task)
         for guard_task in self.guards:

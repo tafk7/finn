@@ -88,28 +88,12 @@ class _Unsupplied:
         return "UNSUPPLIED"
 
 
-class _Open:
-    """Leaves a required formal open at the call: a later ``Bind`` supplies it."""
-
-    _instance: _Open | None = None
-
-    def __new__(cls) -> _Open:
-        if cls._instance is None:
-            cls._instance = super().__new__(cls)
-        return cls._instance
-
-    def __repr__(self) -> str:
-        return "OPEN"
-
-
 class _Missing:
     def __repr__(self) -> str:
         return "<required>"
 
 
 UNSUPPLIED = _Unsupplied()
-# Typed Any so it is accepted for a formal of any type; see DESIGN.md (typing).
-OPEN: Any = _Open()
 MISSING = _Missing()
 
 
@@ -237,20 +221,23 @@ class ValueDecl(ValueRef[T_co], Generic[T_co]):
 class Param(ValueDecl[T], Generic[T]):
     """A formal input of a family, supplied where a node of the family is declared.
 
-    ``Param(int)`` is required; ``default=`` makes it optional, and
-    ``default=UNSUPPLIED`` leaves it unsupplied when nobody binds it.
-    ``Param(Located)`` locates a plain reference automatically, and
-    ``Param(Family)`` is a family-typed formal: the caller supplies a node.
-    Annotate formals (``area: Param[int] = Param(int)``) so family calls are typed.
+    Supply it at the call (``Room(area=12)``) or by assignment before the
+    family is prepared (``hall.area = kitchen.area``). ``Param(int)`` is
+    required: preparing a family in which nothing supplies it is a definition
+    error. ``default=`` makes it optional, and ``default=UNSUPPLIED`` leaves it
+    unsupplied when nobody binds it. ``Param(Located)`` locates a plain
+    reference automatically, and ``Param(Family)`` is a reference input: the
+    caller supplies a node of that family, which is placed there if it is fresh
+    and referenced if it is placed elsewhere. Annotate formals
+    (``area: Param[int] = Param(int)``, ``output: Param[Stream] = Param(Stream)``)
+    so family calls and assignments are typed.
     """
 
     default: object
     required: bool
 
     @overload
-    def __new__(  # type: ignore[overload-overlap, misc]
-        cls, value_type: type[N], *, default: N = ...
-    ) -> N: ...
+    def __new__(cls, value_type: type[N], *, default: _Unsupplied = ...) -> Param[N]: ...
 
     @overload
     def __new__(
@@ -275,11 +262,13 @@ class Param(ValueDecl[T], Generic[T]):
         from ._configuration import Space
 
         if isinstance(value_type, type) and issubclass(value_type, Space):
-            if default is not MISSING:
-                raise DefinitionError("a family-typed formal has no default")
+            if default is not MISSING and default is not UNSUPPLIED:
+                raise DefinitionError(
+                    "a reference input has no value default; default=UNSUPPLIED makes it optional"
+                )
             from ._nodes import family_formal
 
-            return family_formal(value_type)
+            return family_formal(value_type, required=default is MISSING)
         chosen = cast(
             ValueSemantics[object],
             semantics if semantics is not None else semantics_for(cast(Any, value_type)),
@@ -300,9 +289,12 @@ class Param(ValueDecl[T], Generic[T]):
         return instance
 
     def __set__(self, instance: object, value: T | ValueRef[T] | View[T] | BoundView[T]) -> None:
-        # The value type is what mypy's dataclass_transform uses for the family's
-        # constructor keyword; a configuration never changes.
-        raise AttributeError(f"{self.name} is an immutable configuration field")
+        # The value type types both the family's constructor keyword (through
+        # dataclass_transform) and assignment to a declaration's formal. At
+        # runtime Space.__setattr__ handles assignment before this is reached.
+        from ._nodes import assign
+
+        assign(instance, cast(str, self.name), value)
 
 
 class LocatedParam(Param[Located[T]], Generic[T]):
@@ -324,7 +316,9 @@ class LocatedParam(Param[Located[T]], Generic[T]):
         | BoundView[T]
         | BoundView[Located[T]],
     ) -> None:
-        raise AttributeError(f"{self.name} is an immutable configuration field")
+        from ._nodes import assign
+
+        assign(instance, cast(str, self.name), value)
 
 
 class Const(ValueDecl[T], Generic[T]):
@@ -346,9 +340,17 @@ class Decision(ValueDecl[T], Generic[T]):
     key; each candidate is a node named ``<decision>.<key>`` whose presence
     derives from the decision; ``None`` places nothing. Such a decision is typed
     as its candidates, so ``decision.member`` reads the selected candidate's member.
+
+    A Decision that is not a class attribute may supply exactly one formal
+    (``Fifo(depth=Decision(int, values=(4, 8)))``), and is keyed by that
+    formal's path. One that supplies several formals is shared and must be
+    named: a class attribute, or ``Decision(..., name="depth")``, which is
+    owned by the lowest scope containing every node it supplies.
     """
 
     domain: Domain[T]
+    # Where this Decision supplies a formal (for the shared-decision rule).
+    sites: list[str]
 
     @overload
     def __new__(  # type: ignore[misc]
@@ -369,6 +371,7 @@ class Decision(ValueDecl[T], Generic[T]):
         values: Iterable[T] | None = None,
         semantics: ValueSemantics[T] | None = None,
         when: Guard = None,
+        name: str | None = None,
     ) -> Decision[T]: ...
 
     def __new__(
@@ -379,6 +382,7 @@ class Decision(ValueDecl[T], Generic[T]):
         values: object = None,
         semantics: object = None,
         when: object = None,
+        name: object = None,
     ) -> Any:
         if value_type is None and domain is None and isinstance(values, Mapping):
             from ._nodes import node_choice
@@ -400,7 +404,18 @@ class Decision(ValueDecl[T], Generic[T]):
             if domain is not None
             else finite(cast(Iterable[object], values), chosen)
         )
+        instance.sites = []
+        if name is not None:
+            instance.name = local_name(cast(str, name), "decision name")
         return instance
+
+    def __set_name__(self, owner: type[object], name: str) -> None:
+        if self.owner is None and self.name is not None and self.name != name:
+            raise DefinitionError(
+                f"{owner.__qualname__}.{name}: Decision{at(self.origin)} is named "
+                f"{self.name!r}; a class attribute takes its attribute name"
+            )
+        super().__set_name__(owner, name)
 
 
 def _guard(when: object) -> ValueRef[bool] | None:
@@ -934,44 +949,32 @@ class Present(ValueDecl[T], Generic[T]):
         )
 
 
-class Bind(Declaration, Generic[T]):
-    """An edge: supply a descendant's open formal from ``source``.
-
-    Declared in the enclosing Space, after the nodes it joins, so edges may
-    point forward or around a cycle. Several binds to one formal are resolved
-    like ``Present``: at most one may be present.
-    """
-
-    def __init__(
-        self,
-        target: T,
-        source: T | ValueRef[T] | View[T] | BoundView[T],
-        *,
-        when: Guard = None,
-    ) -> None:
-        if not isinstance(target, MemberRef):
-            raise DefinitionError(
-                "a Bind targets a node's formal through a reference, as in Bind(sink.width, ...)"
-            )
-        self.target: MemberRef[T] = target
-        self.source: object = source
-        self.when = _guard(when)
-        self.semantics = target.semantics
-
-
 class Members(ValueDecl[tuple[Located[T], ...]], Generic[T]):
     """Every present child node exporting ``key``, as ``Located`` values in
-    declaration order; as an obligation, each member's acceptance counts."""
+    declaration order; as an obligation, each member's acceptance counts.
+
+    Each entry is ``Located(node=<child name>, member=<key name>, value=<export>)``.
+    """
 
     def __init__(self, key: ViewKey[T]) -> None:
         if not isinstance(key, ViewKey):
-            raise DefinitionError("Members requires a ViewKey")
+            raise DefinitionError(f"{type(self).__name__} requires a ViewKey")
         self.key = key
         self.semantics = cast("ValueSemantics[tuple[Located[T], ...]]", semantics_for(tuple))
 
 
+class Users(Members[T], Generic[T]):
+    """The mirror of ``Members``: every present node whose input references this one.
+
+    In declaration order, each entry is ``Located(node=<user's name beside this
+    node>, member=<the user's input name>, value=<the user's export of key>)``.
+    A user reached through a Decision candidate or a guard is present only when
+    that candidate is selected or that guard holds; a user that does not export
+    ``key`` is omitted. As an obligation, each user's acceptance counts.
+    """
+
+
 __all__ = [
-    "Bind",
     "CaseRef",
     "ChoiceMemberRef",
     "Const",
@@ -984,10 +987,10 @@ __all__ = [
     "LocatedParam",
     "Members",
     "MemberRef",
-    "OPEN",
     "Param",
     "Present",
     "UNSUPPLIED",
+    "Users",
     "ValueDecl",
     "ValueRef",
     "View",

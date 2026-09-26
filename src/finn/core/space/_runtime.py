@@ -216,18 +216,16 @@ def _graph_frame(snapshot: Snapshot, node: Node) -> _execution.Frame:
         where, member = cast(tuple[str | None, str], node.value)
         return Evaluation(Available(Located(where, member, answer.value)))
     assert node.kind == "members"
+    # Members and Users: one (node name, export) alternative per entry, with
+    # the member name of each entry (the key's name, or the user's input name).
     located: list[Located[object]] = []
     failures: list[QueryResult[object]] = []
-    settled: set[str] = set()
-    for name, target in node.alternatives:
-        if name in settled:
-            continue  # this node's selected case already answered
+    for (name, target), member in zip(node.alternatives, cast(tuple[str, ...], node.value)):
         answer = cast(QueryResult[object], (yield target))
         if isinstance(answer, Inapplicable):
             continue
-        settled.add(name)
         if isinstance(answer, Available):
-            located.append(Located(name, cast(str, node.value), answer.value))
+            located.append(Located(name or None, member, answer.value))
         else:
             failures.append(answer)
     blocked = _blocked(failures)

@@ -23,7 +23,6 @@ from .declarations import (
     ConstraintGroup,
     Decision,
     Declaration,
-    Param,
     ValueRef,
     View,
     ViewKey,
@@ -120,13 +119,17 @@ def _when_field(*, default: None = None, kw_only: bool = True) -> Any:
 @dataclass_transform(
     kw_only_default=True,
     eq_default=False,
-    field_specifiers=(Param, _when_field),
+    field_specifiers=(_when_field,),
 )
 class SpaceMeta(type):
     """Declare nodes, and protect prepared declaration structure.
 
     ``dataclass_transform`` types each family's call from its annotated
-    formals (``area: Param[int] = Param(int)``) plus the ``when`` guard.
+    formals (``area: Param[int] = Param(int)``) plus the ``when`` guard. Param
+    is deliberately not a field specifier: every formal then has a default at
+    the type level, so a bare ``Room()`` type-checks (a later assignment may
+    supply its formals), while each keyword and assignment is typed by
+    ``Param.__set__``.
     """
 
     if not TYPE_CHECKING:
@@ -174,8 +177,6 @@ def _check_configuration_mutation(point: Space, name: str) -> None:
     from ._execution import driver_only
     from .occurrence import state
 
-    if declared_path(point) is not None:
-        raise AttributeError(f"{name}: a node declaration is immutable")
     driver_only("configuration mutation")
     current = getattr(point, "_state", None)
     scope_index = getattr(point, "_scope", None)
@@ -223,13 +224,25 @@ class Space(metaclass=SpaceMeta):
 
         return cast(Self, child(cast(Space, instance), path[0]))
 
-    def __setattr__(self, name: str, value: object) -> None:
-        _check_configuration_mutation(self, name)
-        object.__setattr__(self, name, value)
+    if not TYPE_CHECKING:
+        # Hidden from type checkers: a declared __setattr__ would make mypy accept
+        # assignment to any attribute. Formals are typed by Param.__set__ instead.
 
-    def __delattr__(self, name: str) -> None:
-        _check_configuration_mutation(self, name)
-        object.__delattr__(self, name)
+        def __setattr__(self, name: str, value: object) -> None:
+            if declared_path(self) is not None:
+                # A declaration: supply one of its formals (``hall.area = kitchen.area``).
+                from ._nodes import assign
+
+                assign(self, name, value)
+                return
+            _check_configuration_mutation(self, name)
+            object.__setattr__(self, name, value)
+
+        def __delattr__(self, name: str) -> None:
+            if declared_path(self) is not None:
+                raise AttributeError(f"{name}: a supplied formal cannot be removed")
+            _check_configuration_mutation(self, name)
+            object.__delattr__(self, name)
 
     def __repr__(self) -> str:
         path = declared_path(self)

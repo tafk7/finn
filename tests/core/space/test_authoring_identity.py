@@ -39,16 +39,16 @@ def test_authored_names_are_unambiguous_segments(name: str) -> None:
 
 def test_malformed_candidates_fail_as_definitions() -> None:
     # Subspace(F) is gone: a node is declared by calling its family, so the
-    # malformed forms are a candidate or a family-typed formal that is not a
+    # malformed forms are a candidate or a reference input that is not a
     # node, and a composite over a non-Space base.
     class Holder(Space):
-        held: Space = Param(Space)
+        held: Param[Space] = Param(Space)
 
     with pytest.raises(DefinitionError, match="Space base family"):
         composite("NotSpace", {}, base=cast(type[Space], int))
     with pytest.raises(DefinitionError, match="expected a node declaration or None"):
         Decision(values={"case": cast(Space, 4)})
-    with pytest.raises(DefinitionError, match="needs a node declaration"):
+    with pytest.raises(DefinitionError, match="takes a node declaration"):
         Holder(held=cast(Space, 4))
     with pytest.raises(DefinitionError, match="at least one candidate"):
         Decision(values={})

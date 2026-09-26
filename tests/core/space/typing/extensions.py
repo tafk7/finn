@@ -10,9 +10,7 @@ base=B)`` is a ``type[B]``, so the base's formals type the new family's calls.
 from typing_extensions import assert_type
 
 from finn.core.space import (
-    OPEN,
     Available,
-    Bind,
     BoundView,
     Derived,
     Param,
@@ -63,27 +61,24 @@ def stage(lanes: int) -> Shape:
 
 
 def chain(count: int) -> type[Space]:
-    """Nodes in a list and edges in a dict: every element stays typed."""
-    stages = [Doubled(lanes=4), *(Doubled(lanes=OPEN) for _ in range(1, count))]
+    """Nodes in a list, joined by assignment in a loop: every element stays typed."""
+    stages = [Doubled(lanes=4), *(Doubled() for _ in range(1, count))]
     assert_type(stages, list[Shape])
     assert_type(stages[0].lanes, int)
     assert_type(stages[0].physical, BoundView[int])
-    edges = {
-        f"e{index}": Bind(stages[index].lanes, stages[index - 1].lanes) for index in range(1, count)
-    }
-    assert_type(edges, dict[str, Bind[int]])
+    for previous, current in zip(stages, stages[1:]):
+        current.lanes = previous.lanes  # typed by Param.__set__
     nodes = {f"s{index}": node for index, node in enumerate(stages)}
-    return composite(f"Chain{count}", {**nodes, **edges})
+    return composite(f"Chain{count}", nodes)
 
 
 class Parent(Space):
     width: Param[int] = Param(int)
     first = Doubled(lanes=width)
-    second = Doubled(lanes=OPEN)
-    edge = Bind(second.lanes, first.lanes)
+    second = Doubled()
+    second.lanes = first.lanes
     assert_type(first, Shape)
     assert_type(first.lanes, int)
-    assert_type(edge, Bind[int])
 
 
 def check(point: Parent) -> None:

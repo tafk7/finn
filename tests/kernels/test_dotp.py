@@ -288,8 +288,8 @@ def test_required_physical_facts_reject_omission_and_decision_remains_unresolved
         point = point_for(facts)
         assert isinstance(point.build_requirements.inspect().accepted_result, Unresolved)
     else:
-        # A missing required formal is refused at the node call, before configure().
-        with pytest.raises(DefinitionError, match=f"missing formals \\['{missing}'\\]"):
+        # A bare call is legal; the missing formal is refused when configure() prepares it.
+        with pytest.raises(DefinitionError, match=f"^{missing} is not supplied"):
             point_for(facts, **choices)
 
 

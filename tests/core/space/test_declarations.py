@@ -11,7 +11,6 @@ import pytest
 from typing_extensions import Self
 
 from finn.core.space import (
-    OPEN,
     UNSUPPLIED,
     Const,
     Decision,
@@ -343,7 +342,7 @@ def test_binding_forms_and_local_edit_ownership() -> None:
         internal = Decision(str, values=("auto", "block"))
 
     class Holder(Space):
-        held: Child = Param(Child)
+        held: Param[Child] = Param(Child)
 
     class Parent(Space):
         supplied = Decision(int, values=(1, 2))
@@ -398,22 +397,21 @@ def test_child_omissions_and_incompatible_bindings_are_not_implicit_exposure() -
         width: Param[int] = Param(int)
         optional_width: Param[int] = Param(int, default=UNSUPPLIED)
 
-    # An optional formal may stay open: it is unsupplied, not implicitly exposed.
-    assert placement_plan(Child, record_of(Child(width=8)), root=False).open == ("optional_width",)
-    assert placement_plan(Child, record_of(Child(width=OPEN)), root=False).open == (
+    # An optional formal may stay unsupplied: it is not implicitly exposed.
+    assert placement_plan(Child, record_of(Child(width=8)), root=False).unsupplied == (
+        "optional_width",
+    )
+    assert placement_plan(Child, record_of(Child()), root=False).unsupplied == (
         "width",
         "optional_width",
     )
 
-    # A required formal nobody supplies fails where the node is declared.
-    with pytest.raises(DefinitionError, match="missing formals"):
-        Child(optional_width=3)  # type: ignore[call-arg]
-
+    # A required formal nobody supplies is legal at the call (an assignment may
+    # still supply it), and fails when a family containing the node is prepared.
     class Parent(Space):
-        child = Child(width=OPEN, optional_width=3)
+        child = Child(optional_width=3)
 
-    # A formal declared OPEN still needs a Bind in its parent.
-    with pytest.raises(DefinitionError, match="no Bind supplying them"):
+    with pytest.raises(DefinitionError, match=r"child\.width is not supplied"):
         configure(Parent())
     with pytest.raises(DefinitionError, match="unknown formals"):
         Child(width=8, optional_width=9, typo=1)  # type: ignore[call-arg]

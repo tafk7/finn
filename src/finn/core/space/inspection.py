@@ -16,7 +16,7 @@ from typing import Any, Generic, Literal, TypeVar, cast, overload
 
 from . import _execution, _runtime
 from ._configuration import Space
-from ._nodes import NodeChoice, NodeDecl, family_formals, node_record
+from ._nodes import NodeChoice, NodeDecl, family_formals, node_record, unsupplied_formals
 from .collection import collect_space
 from .compiler import SpaceModel, compile_space
 from .declarations import (
@@ -417,8 +417,10 @@ class NodeDeclaration:
     """A node declaration read without compiling it.
 
     ``bindings`` maps each bound formal to its supplier: a frozen value, a
-    reference, a fresh Decision, or (for a family-typed formal) a node.
-    ``open`` names formals left open for a ``Bind``.
+    reference, a fresh Decision, or (for a reference input) a node.
+    ``nested`` maps the formals of descendants assigned through a path
+    (``"port.dtype"``) to their suppliers. ``unsupplied`` names the required
+    formals nothing supplies yet, and ``frozen`` says why assignment is closed.
     """
 
     family: type[Space]
@@ -426,7 +428,9 @@ class NodeDeclaration:
     placement: str | None
     members: tuple[str, ...]
     bindings: Mapping[str, object]
-    open: tuple[str, ...]
+    nested: Mapping[str, object]
+    unsupplied: tuple[str, ...]
+    frozen: str | None
     when: object
     origin: str | None
 
@@ -460,13 +464,22 @@ def declaration(node: object) -> NodeDeclaration:
             assert semantics is not None
             value = semantics.freeze(value)
         bindings[name] = value
+    nested = {
+        ".".join((*(str(item.name) for item in path), name)): (
+            value.instance if isinstance(value, NodeDecl) else value
+        )
+        for path, supplies in record.nested.items()
+        for name, (value, _) in supplies.items()
+    }
     return NodeDeclaration(
         record.family,
         record.name,
         record.placement,
         tuple(collect_space(record.family).members),
         MappingProxyType(bindings),
-        tuple(sorted(record.open)),
+        MappingProxyType(nested),
+        tuple(sorted(unsupplied_formals(record))),
+        record.frozen,
         record.when,
         record.origin,
     )

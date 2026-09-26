@@ -140,9 +140,9 @@ def test_binding_and_callback_values_are_snapshots_without_requiring_a_codec() -
 
 
 def test_missing_required_parameters_and_malformed_commitments_fail_at_boundary() -> None:
-    # Node-call errors are definition errors, raised at the call.
-    with pytest.raises(DefinitionError, match="depth"):
-        Fifo(word_bits=13)  # type: ignore[call-arg]
+    # A missing formal is refused when the root is configured; type errors at the call.
+    with pytest.raises(DefinitionError, match="depth is not supplied"):
+        configure(Fifo(word_bits=13))
     with pytest.raises(DefinitionError, match="int"):
         Fifo(word_bits=True, depth=8)
     with pytest.raises(DefinitionError, match="keyword"):

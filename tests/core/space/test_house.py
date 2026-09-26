@@ -12,9 +12,7 @@ from __future__ import annotations
 import pytest
 
 from finn.core.space import (
-    OPEN,
     Available,
-    Bind,
     ConfigurationError,
     Decision,
     Inapplicable,
@@ -107,7 +105,7 @@ class Match(Space):
 class House(Space):
     budget: Param[int] = Param(int)
     want_garage = Decision(bool, values=(False, True))
-    hall = Room(area=OPEN)
+    hall = Room()  # its area is supplied by the assignment below
     kitchen = Room(area=12)
     dining = Room(area=16)
     garage = Room(area=20, when=want_garage)
@@ -115,7 +113,7 @@ class House(Space):
     heat_pump = HeatPump(kw=8)
     heating = Decision[Boiler | HeatPump](values={"boiler": Boiler(kw=24), "heat_pump": heat_pump})
     thermostat = Thermostat(kw=heating.kw)
-    hall_area = Bind(hall.area, kitchen.area)
+    hall.area = kitchen.area  # an edge declared after its nodes
     matched = Match(a=kitchen.finish, b=dining.finish)
     costs = Members(COST)
 
@@ -134,7 +132,7 @@ class House(Space):
 def test_the_house_is_declared_then_configured() -> None:
     house = configure(House(budget=200))
     assert isinstance(house.total.query(), Unresolved)  # nothing decided yet
-    assert house.hall.area == 12  # supplied by the hall_area edge
+    assert house.hall.area == 12  # supplied by the assignment hall.area = kitchen.area
     point = house.with_choices(
         {
             House.want_garage: False,

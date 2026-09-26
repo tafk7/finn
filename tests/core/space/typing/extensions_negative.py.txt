@@ -1,5 +1,5 @@
 from finn.core.space import (
-    OPEN, Available, Bind, Param, QueryResult, Space, ValueSemantics, View, ViewKey,
+    Available, Param, QueryResult, Space, ValueSemantics, View, ViewKey,
     composite, configure, derived,
 )
 
@@ -21,9 +21,11 @@ composite("BadExports", {}, exports={"complete": View(Shape.lanes)})  # E
 wrong_family: Other = configure(Doubled(lanes=1))  # E
 wrong_node: Other = Doubled(lanes=1)  # E
 
-node = Doubled(lanes=OPEN)
+node = Doubled()
 wrong_value: str = node.lanes  # E
 node.width  # E
+node.lanes = "four"  # E
+node.width = 4  # E
 nodes = [Doubled(lanes=index) for index in range(3)]
 wrong_element: list[Other] = nodes  # E
 

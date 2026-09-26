@@ -86,7 +86,8 @@ def test_prepared_structure_and_configuration_fields_are_immutable() -> None:
         instance.value = 4
     with pytest.raises(AttributeError, match="immutable configuration field"):
         del instance.value
-    with pytest.raises(AttributeError, match="node declaration is immutable"):
+    # configure() froze the root declaration: its formals can no longer be assigned.
+    with pytest.raises(DefinitionError, match="is frozen"):
         node.value = 4
     setattr(instance, "note", "ordinary metadata")
     assert getattr(instance, "note") == "ordinary metadata"

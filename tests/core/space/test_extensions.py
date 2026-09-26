@@ -22,7 +22,6 @@ from typing import cast
 import pytest
 
 from finn.core.space import (
-    OPEN,
     UNSUPPLIED,
     Available,
     BoundView,
@@ -272,11 +271,10 @@ def test_duplicate_names_owned_declarations_and_foreign_exports_are_definition_e
 
 
 def test_missing_bindings_and_incompatible_exports_fail_without_descriptor_runtime_errors() -> None:
-    with pytest.raises(DefinitionError, match="missing formals"):
-        StreamShape(dtype=Encoding(3))  # type: ignore[call-arg]
-    # An open formal is refused where it would have to be supplied: its parent.
-    holder = composite("Holder", {"shape": StreamShape(dtype=Encoding(3), lanes=OPEN)})
-    with pytest.raises(DefinitionError, match="no Bind supplying them"):
+    # A formal left unsupplied is refused where it would have to be supplied: when
+    # the family placing the node is prepared.
+    holder = composite("Holder", {"shape": StreamShape(dtype=Encoding(3))})
+    with pytest.raises(DefinitionError, match=r"shape\.lanes is not supplied"):
         configure(holder())
     integer = Const(3)
     view = View(integer)

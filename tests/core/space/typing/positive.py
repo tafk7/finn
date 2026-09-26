@@ -14,10 +14,8 @@ from dataclasses import dataclass
 from typing_extensions import assert_type
 
 from finn.core.space import (
-    OPEN,
     UNSUPPLIED,
     Available,
-    Bind,
     BoundDecision,
     BoundValue,
     BoundView,
@@ -33,6 +31,7 @@ from finn.core.space import (
     Present,
     QueryResult,
     Space,
+    Users,
     ValueSemantics,
     View,
     ViewAssessment,
@@ -93,7 +92,7 @@ class Match(Space):
 class House(Space):
     budget: Param[int] = Param(int)
     want_garage = Decision(bool, values=(False, True))
-    hall = Room(area=OPEN)
+    hall = Room()  # a bare call: its area is assigned below
     kitchen = Room(area=12)
     dining = Room(area=budget, label="dining")
     garage = Room(area=kitchen.area, when=want_garage)
@@ -101,7 +100,7 @@ class House(Space):
     heating = Decision[Boiler | HeatPump](values={"boiler": Boiler(kw=24), "heat_pump": heat_pump})
     maybe = Decision(values={"none": None, "boiler": Boiler(kw=3)})
     thermostat = Thermostat(kw=heating.kw)
-    hall_area = Bind(hall.area, kitchen.area)
+    hall.area = kitchen.area  # typed by Param.__set__: an int reference
     matched = Match(a=kitchen.finish, b=dining.finish)
     either = Room(area=Present(kitchen.area, dining.area))
     costs = Members(COST)
@@ -130,14 +129,48 @@ class House(Space):
 
 
 class Estate(Space):
-    """A family-typed formal: the caller supplies the node."""
+    """A reference input: the caller supplies the node (placed here if it is fresh)."""
 
-    home: House = Param(House)
-    assert_type(home.kitchen.finish, int)
+    home: Param[House] = Param(House)
 
     @derived
     def finish(self) -> int:
+        assert_type(self.home, House)
         return self.home.kitchen.finish
+
+
+class Stream(Space):
+    spec: Param[int] = Param(int)
+    ends = Users(COST)
+
+    @derived
+    def users(self) -> int:
+        assert_type(self.ends, tuple[Located[int], ...])
+        return len(self.ends)
+
+
+class Producer(Space):
+    output: Param[Stream] = Param(Stream)
+    feed: Param[Stream] = Param(Stream, default=UNSUPPLIED)
+
+    @view
+    def cost(self) -> int:
+        # A reference input reads as the referenced node's configuration.
+        assert_type(self.output, Stream)
+        assert_type(self.output.spec, int)
+        return self.output.spec
+
+    exports = {COST: cost}
+
+
+class Graph(Space):
+    edge = Stream(spec=8)
+    producer = Producer(output=edge)  # a placed node: a reference
+    later = Producer()
+    later.output = edge  # a reference input may be assigned too
+    fresh = Producer(output=Stream(spec=4))  # a fresh node: placed at the input
+    shared = Decision(int, values=(1, 2), name="shared")
+    assert_type(shared, Decision[int])
 
 
 class Fifo(Space):
@@ -203,6 +236,7 @@ def check(point: Fifo, house: House, eltwise: Eltwise) -> None:
     # The compile step is typed as the family.
     assert_type(configure(House(budget=100)), House)
     assert_type(configure(Estate(home=House(budget=1))), Estate)
+    assert_type(configure(Room()), Room)  # a bare call type-checks
     # Configuration reads are exact.
     assert_type(point.word_bits, int)
     assert_type(point.ram_style, str)

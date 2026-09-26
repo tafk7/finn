@@ -276,8 +276,8 @@ def test_required_root_bindings_and_explicit_optional_inputs_preserve_partial_qu
         ThresholdingAxiKernel,
         MemStreamHlsKernel,
     ):
-        # A missing required formal is refused at the node call, before configure().
-        with pytest.raises(DefinitionError, match="missing formals"):
+        # A missing required formal is refused when configure() prepares the root.
+        with pytest.raises(DefinitionError, match="is not supplied"):
             point_for(kernel, {})
 
     # Replaces an inline exposed Param child binding: the parent declares the

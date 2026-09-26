@@ -226,13 +226,22 @@ def root(point: Space) -> Space:
 
 
 def child(point: Space, record: Declaration) -> Space:
+    """A child node's configuration; through a reference input, the referenced node's.
+
+    Every read through a referenced node that is absent is inapplicable, as for
+    any guarded node. An unsupplied optional reference input has no node: it
+    reads its presence, which is unsupplied, exactly like a value read.
+    """
+    from ._nodes import FamilyFormal
+
     current = state(point)
     _execution.check_snapshot(current)
     scope = current.linked.scopes[point._scope]
-    try:
-        child_scope = scope.children[record]
-    except KeyError as error:
-        raise RequestError("child node is not part of this compiled scope") from error
+    child_scope = scope.children.get(record, scope.references.get(record))
+    if child_scope is None and isinstance(record, FamilyFormal) and record in scope.members:
+        _read_index(point, scope.members[record])  # raises: unsupplied
+    if child_scope is None:
+        raise RequestError("child node is not part of this compiled scope")
     return _attach(current, child_scope)
 
 
