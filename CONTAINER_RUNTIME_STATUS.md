@@ -1,6 +1,9 @@
 # Container/runtime status
 
-Updated: 2026-09-25 (after merging upstream `dev` at `b507fec58`). Branch: `refactor/container-runtime-implementation`.
+Updated: 2026-09-26. Branch: `feature/external-resources`, an exploration based on
+`refactor/container-runtime-implementation` at `09fb86df7` (after merging upstream
+`dev` at `b507fec58`); plan and records in
+[docs/external-resources-plan.md](docs/external-resources-plan.md).
 
 Committed locally; nothing has been merged or pushed. The original prototype is on
 `archive/container-runtime-prototype`; the dependency/application-image
@@ -11,14 +14,19 @@ implementation this replaced is preserved at the checkpoint `5dd9df9bc`.
 - **Packaging:** resources in `finn._data`; installed FINN works without a checkout.
 - **Dependencies:** `pyproject.toml` (runtime ranges, dependency groups, uv sources
   for unreleased commits) and `uv.lock`, reproducing the previous image's versions.
-  finn-hlslib is a workspace member (`packages/finn-hlslib`, upstream as a
-  submodule); board files are fetched on first use from pinned commits.
+- **External resources:** finn-hlslib and the board files (five repositories) are
+  declared with pinned commits and tree digests in `finn/_data/resources.toml`,
+  fetched on first use and cached by digest (`finn.resources`, `finn-resources`);
+  projects and installed packages declare their own. No submodules, no uv
+  workspace, no `finn[hw]` extra.
 - **Environments:** one image with `/opt/venv` active and a never-fatal startup
   editable install of the mounted checkout (Docker, Dev Container, sbx); native
-  `setup-local.sh` wraps `uv sync`; release image for SIF/HPC.
+  `setup-local.sh` wraps `uv sync`; release image for SIF/HPC. The default `dev`
+  image carries all resources; `release` only the redistributable ones.
 - **Tools and simulation:** scoped vendor command execution; XSI session process;
   `finn_xsi` built on first use (keyed, concurrency-safe).
-- **CI:** wheel build and clean-environment use; lock-keyed caches; submodules.
+- **CI:** wheel build and clean-environment use, including fetching finn-hlslib;
+  lock-keyed caches.
 
 Design: [docs/environment.md](docs/environment.md). Instructions:
 [docs/installation.md](docs/installation.md). Evidence:
@@ -50,12 +58,15 @@ host has:
 - `finn_xsi` first-use build and RTL simulation against a real Vivado; XSI session
   equivalence, lifecycle and overhead.
 - SIF export and read-only execution (Apptainer).
+- Vivado finding boards across several board repository paths (one per board
+  resource, at the same depth as the previous single directory), in a real Zynq
+  project build.
 - The Dev Container through VS Code (uid remapping); the GitHub, Jenkins and Read
   the Docs pipelines as configured.
 
 **Before publishing to PyPI:** a QONNX release that includes the four commits past
-1.0.0 that FINN uses, finn-hlslib published alongside FINN, and a decision on
-redistributing board files.
+1.0.0 that FINN uses, and a decision on redistributing board files (which would
+make them `redistributable` and part of published images).
 
 **Python and OS:** Python 3.12 on Ubuntu 24.04 (lock, image, development), with
 3.11 also allowed and unit-tested in CI. Vivado/Vitis 2024.2 is the minimum. The

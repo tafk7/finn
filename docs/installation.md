@@ -8,33 +8,33 @@ it, is in [environment.md](environment.md).
 ## Use FINN
 
 ```bash
-pip install finn          # Python-only use (Python 3.11-3.12, Linux x86-64)
-pip install "finn[hw]"    # plus finn-hlslib, for HLS simulation and synthesis
+pip install finn          # Python 3.11-3.12, Linux x86-64
 ```
 
 Hardware flows additionally need Vivado/Vitis (selected with `FINN_XILINX_PATH`
 and `FINN_XILINX_VERSION`, or by sourcing AMD's `settings64.sh`) and a licence.
-Board files are fetched from their upstream repositories on first use and cached
-(see [external build data](#external-build-data)). The `finn_xsi` simulation
-extension is built against your Vivado on first use.
+The finn-hlslib HLS library and Vivado board files are fetched from their pinned
+upstream commits on first use and cached (see
+[external resources](#external-resources)); fetching them uses git, or GitHub's
+archives where git is missing. The `finn_xsi` simulation extension is built
+against your Vivado on first use.
 
 ## Develop FINN
 
 Every modality uses the same lock and ends up with the same thing: an active venv
-with FINN and its workspace members (`packages/*`, currently finn-hlslib) installed
-editable, and every other dependency at its locked version.
+with FINN installed editable, and every other dependency at its locked version.
 
 **Native host:**
 
 ```bash
-git clone --recurse-submodules https://github.com/Xilinx/finn.git && cd finn
+git clone https://github.com/Xilinx/finn.git && cd finn
 ./setup-local.sh              # checks, then `uv sync` into .venv, optional XSI build
 source scripts/activate.sh    # activates .venv and the Xilinx toolchain, if configured
 ```
 
-`setup-local.sh` wraps `git submodule update --init && uv sync`; that is all a
-Python-only developer needs. After pulling a change to `uv.lock` or a submodule,
-run `git submodule update --init && uv sync` again.
+`setup-local.sh` wraps `uv sync`; that is all a Python-only developer needs. With
+Vivado configured, it also fetches finn-hlslib and the board files, so later builds
+can run offline. After pulling a change to `uv.lock`, run `uv sync` again.
 
 **Docker:**
 
@@ -60,7 +60,7 @@ the workspace checkout when the sandbox starts.
 `docker exec` and `sbx exec` do not wait for the entrypoint. A script that execs
 into a container it has just started can wait for `/tmp/finn-ready`.
 
-## Co-develop QONNX, Brevitas or another dependency
+## Co-develop QONNX, Brevitas, finn-hlslib or another dependency
 
 Point the dependency's source at your checkout, locally (do not commit this):
 
@@ -74,6 +74,10 @@ Then run `uv sync` (natively, or inside a running container). In Docker, mount t
 checkout at the same relative place, e.g. `./docker/run --volume "$PWD/../qonnx:$PWD/../qonnx"`.
 uv also updates `uv.lock`; do not commit either change.
 
+finn-hlslib, board files and other [external resources](#external-resources) are
+not Python dependencies. Point FINN at a checkout with an environment variable
+instead: `FINN_RESOURCES_HLSLIB=../finn-hlslib`.
+
 ## Add a dependency
 
 Everything goes through `pyproject.toml` and `uv.lock`; no Dockerfile or setup
@@ -81,25 +85,24 @@ script changes.
 
 * **Python package:** add it to `[project] dependencies` (or a dependency group),
   with a `[tool.uv.sources]` git entry if it is unreleased, then `uv lock`.
-* **Build data** (headers, board files, Tcl libraries): wrap it as a data-only
-  Python package and treat it as above; register its lookup in
-  `finn.util.external`.
-* **Developed in lockstep with FINN** (always editable for everyone): add its
-  repository as a git submodule under `packages/`, give it a `pyproject.toml`
-  there if upstream has none (see `packages/finn-hlslib`), and mark it
-  `{ workspace = true }` in `[tool.uv.sources]`. Each member must also be
-  released to PyPI for `pip install finn` users.
+* **Build data** (HLS or RTL libraries, board files, Tcl libraries): declare it as
+  an [external resource](#external-resources) in `src/finn/_data/resources.toml`
+  and look it up by kind with `finn.resources.paths(kind)`. Say whether FINN may
+  redistribute it (`redistributable`); the images follow that.
 
 ## Inspect an environment
 
 ```bash
-python -m finn.util.installation finn qonnx brevitas finn-hlslib
+python -m finn.util.installation finn qonnx brevitas
+finn-resources list
 ```
 
-This reports import locations, versions and installation metadata. FINN wheel
-provenance preserves the Git revision and dirty state through its sdist.
+The first reports import locations, versions and installation metadata; FINN wheel
+provenance preserves the Git revision and dirty state through its sdist. The second
+lists the external resources, whether each is cached, overridden or missing, and
+where.
 
-## Package resources and external build data
+## Package data and external resources
 
 `finn.util.resources.resource_path(family, *parts)` resolves stable read-only
 paths in `rtllib`, `custom_hls`, `xsi`, or `qnn-data`, under `finn._data`
@@ -108,18 +111,166 @@ Editable installations observe changes to these directly. Generated RTL, driver
 files and compiled XSI extensions belong in writable build storage, never in the
 installed distribution.
 
-### External build data
+## External resources
 
-* **finn-hlslib** is the `finn-hlslib` package (`finn[hw]`), a workspace member
-  wrapping the upstream repository as a submodule at its pinned commit.
-* **Board files** come from third-party repositories that FINN does not
-  redistribute. `finn.util.external` fetches the pinned commits on first use
-  (sparse, single-commit fetches), verifies a content digest and caches the result
-  under `${XDG_CACHE_HOME:-~/.cache}/finn`. Images and `setup-local.sh` (with
-  Vivado) fetch them ahead of time; `python -m finn.util.external fetch-boards`
-  does so explicitly.
+FINN uses directory trees it does not contain: the finn-hlslib HLS library and
+Vivado board files. Each is an *external resource*: a named tree declared with a
+pinned source and a content digest, fetched on first use, verified and cached.
+Your own board files and RTL or HLS libraries are declared the same way.
 
-`FINN_HLSLIB_PATH` and `FINN_BOARD_FILES_PATH` override either location.
+```bash
+finn-resources list              # declarations; cached, overridden or missing
+finn-resources list --boards     # the boards the board files provide
+finn-resources fetch --all       # fetch now rather than on first use
+finn-resources verify            # re-check the digests of cached copies
+finn-resources check             # git, caches and overrides
+```
+
+`python -m finn.resources` is the same command. In Python,
+`finn.resources.path("hlslib")` returns one resource's directory and
+`finn.resources.paths("vivado-boards")` those of every resource of a kind.
+
+### FINN's resources
+
+Declared in `src/finn/_data/resources.toml`, which ships in the wheel:
+
+| Name | Kind | Source |
+|---|---|---|
+| `hlslib` | `hls-include` | [finn-hlslib](https://github.com/Xilinx/finn-hlslib) |
+| `avnet-boards` | `vivado-boards` | [Avnet/bdf](https://github.com/Avnet/bdf) |
+| `rfsoc2x2-boards`, `kv260-som-boards` | `vivado-boards` | one board each from [XilinxBoardStore](https://github.com/Xilinx/XilinxBoardStore) |
+| `rfsoc4x2-boards`, `aup-zu3-boards` | `vivado-boards` | RealDigital's board support repositories |
+
+The HLS include path is the `hlslib` resource. Every `vivado-boards` resource is
+added to Vivado's board repository paths. Board files are third-party files FINN
+does not redistribute: images built locally contain them, and the release image
+and `pip install finn` fetch them on first use.
+
+### Caches
+
+Searched in order; the first complete copy wins:
+
+1. `FINN_RESOURCES_CACHE`, if set: writable, for a site-managed cache or one
+   carried to an offline machine.
+2. The system cache, `FINN_RESOURCES_SYSTEM_CACHE` (default `/opt/finn/resources`,
+   if it exists): read-only, filled when an image is built.
+3. `${XDG_CACHE_HOME:-~/.cache}/finn/resources`.
+
+A fetch goes into the first writable one. Git sources are fetched as a single
+commit, with only the declared subdirectory's files. The tree is built in a
+temporary directory, checked against its digest and renamed into place under a
+file lock, so concurrent first uses fetch once and nothing unverified is ever
+used. Entries are named `<name>-<digest prefix>`: a new pin is a new entry, never
+a stale one. `finn-resources clean --unused` removes entries that no current
+declaration uses.
+
+### Offline use
+
+Where the network is available, fetch into a directory:
+
+```bash
+finn-resources fetch --all --dest /media/finn-resources
+```
+
+and on the offline machine, use it as the cache:
+
+```bash
+export FINN_RESOURCES_CACHE=/media/finn-resources FINN_RESOURCES_OFFLINE=1
+finn-resources check
+```
+
+With `FINN_RESOURCES_OFFLINE=1`, a resource missing from every cache is an error
+that names the command to fetch it, never a network access. A site mirror can
+stand in for a source: `FINN_RESOURCES_HLSLIB_URL=https://git.example/finn-hlslib.git`
+replaces the declared URL. A declaration can also list `mirrors`, which are tried
+in order after the source; every source is verified against the same digest.
+
+### Overrides and co-development
+
+`FINN_RESOURCES_<NAME>=/dir` (the name upper-cased, `-` written as `_`) uses a
+local directory instead, without a digest check, for example
+`FINN_RESOURCES_HLSLIB=../finn-hlslib` or
+`FINN_RESOURCES_AVNET_BOARDS=$HOME/bdf`. `FINN_HLSLIB_PATH` still works as an
+alias for the first. `FINN_BOARD_FILES_PATH` is no longer used: override each
+board resource instead (FINN warns if it is set).
+
+### Moving a pin
+
+```bash
+finn-resources update hlslib --ref main    # a branch, tag or commit
+```
+
+This resolves the ref to a commit, fetches it, computes the new digest and
+rewrites `commit` and `digest` in the file that declares the resource. It edits
+only those two values and checks that the file still parses to the same thing
+otherwise, or leaves it untouched. For a declaration inside an installed package
+it prints the new values instead, for you to put in your project.
+
+### Declaring your own
+
+A project declares resources in `[tool.finn.resources]` of the nearest
+`pyproject.toml`, searched upward from the working directory, or in TOML files
+(with `[resources.NAME]` tables) listed in `FINN_RESOURCES_FILES`. It may add
+resources, and it may redefine FINN's, for example to try a newer finn-hlslib;
+FINN logs each redefinition.
+
+For example, board files for a custom carrier board and an RTL library shipped
+as an archive:
+
+```toml
+# pyproject.toml
+[tool.finn.resources.acme-boards]
+description = "ACME carrier board files"
+kind = ["vivado-boards"]               # added to Vivado's board paths
+git = "https://github.com/acme/board-files.git"
+commit = "0123456789abcdef0123456789abcdef01234567"
+subdir = "boards/acme_carrier"         # only this directory is fetched...
+into = "acme_carrier"                  # ...and placed here in the resource root
+digest = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+
+[tool.finn.resources.acme-rtl]
+description = "ACME RTL library 1.2"
+kind = ["rtl"]
+url = "https://downloads.acme.example/acme-rtl-1.2.tar.gz"
+sha256 = "<sha256sum of the archive>"
+subdir = "rtl"
+digest = "sha256:<finn-resources digest of the rtl directory>"
+```
+
+For a git source, start with any well-formed digest (as above) and let
+`finn-resources update acme-boards --ref v1.0` fill in `commit` and `digest`. For
+an archive, set `sha256` from `sha256sum`, unpack it and run
+`finn-resources digest acme-rtl-1.2/rtl`. (An archive whose content is a single
+top-level directory is unpacked into that directory's place, as source archives
+usually are.) Then `finn-resources list --boards` shows the new board, and
+`finn.resources.paths("rtl")` returns the library's directory.
+
+| Field | Meaning |
+|---|---|
+| `git` and `commit`, `url` and `sha256`, or `package` | The source: a full commit id; a tar or zip archive and its checksum; or `"module:subdir"`, data installed with a Python package |
+| `subdir` | Only this directory of the source |
+| `into` | Where to place it inside the resource root |
+| `digest` | The tree digest of the resource root (not for `package`) |
+| `kind` | Tags consumers look resources up by |
+| `redistributable` | Whether FINN may put it into published images (default `false`) |
+| `mirrors` | Alternative URLs, tried in order after the source |
+| `description` | Free text |
+
+Kinds are free-form. FINN itself uses `hls-include` and `vivado-boards`; other
+kinds are for your own code to look up.
+
+A Python package can ship declarations too: put a `resources.toml` with
+`[resources.NAME]` tables in one of its modules and name that module in the
+`finn.resources` entry-point group:
+
+```toml
+# the package's pyproject.toml
+[project.entry-points."finn.resources"]
+acme = "acme_finn"
+```
+
+Its resources usually use `package = "acme_finn:rtl"`. Packages may add
+resources but not redefine FINN's or another package's; only the project may.
 
 Saved projects contain absolute installed-resource and intermediate-artifact
 paths. Keep the selected installation, external data and build directories in

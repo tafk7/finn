@@ -105,8 +105,8 @@ Python dependencies are declared in ``pyproject.toml`` and locked in ``uv.lock``
 which native development, CI and the images all use. Unreleased dependencies
 (currently QONNX, Brevitas and dataset_loading) are pinned by commit in
 ``[tool.uv.sources]``. The image holds the locked dependencies in ``/opt/venv``;
-when a container starts, FINN and its workspace members are installed editable
-from the mounted checkout, so FINN is never baked into the development image.
+when a container starts, FINN is installed editable from the mounted checkout,
+so FINN is never baked into the development image.
 
 To co-develop a dependency, point its source at a local checkout (without
 committing it) and run ``uv sync``:
@@ -119,12 +119,13 @@ committing it) and run ``uv sync``:
 To test against another commit, change its ``rev`` and run
 ``uv lock --upgrade-package NAME``.
 
-finn-hlslib is the ``finn-hlslib`` package in ``packages/finn-hlslib``, a
-workspace member wrapping the upstream repository as a git submodule, so it is
-always editable in a development environment. Board files are fetched from
-their pinned upstream commits on first use (``finn.util.external``).
-``FINN_HLSLIB_PATH`` and ``FINN_BOARD_FILES_PATH`` override either location.
-See ``docs/environment.md`` for the design.
+finn-hlslib and the Vivado board files are external resources, declared in
+``src/finn/_data/resources.toml`` with pinned commits and content digests,
+fetched on first use and cached (``finn.resources``; ``finn-resources list``
+shows them). To co-develop finn-hlslib, point FINN at a checkout with
+``FINN_RESOURCES_HLSLIB=../finn-hlslib``; ``finn-resources update hlslib --ref
+REF`` moves the pin. See ``docs/installation.md`` for their use and
+``docs/environment.md`` for the design.
 
 Launch sequence
 ---------------

@@ -147,8 +147,8 @@ and [kit schema](https://docs.docker.com/ai/sandboxes/customize/kit-reference/).
 There is nothing to prepare. The template's `/opt/venv` is active for every
 command and already holds FINN's locked dependencies. When the sandbox starts, the
 image entrypoint installs the workspace checkout (`FINN_ROOT`, set by
-`sbxenv.yaml`) editable into it, together with its workspace members such as
-finn-hlslib. It then writes `/tmp/finn-ready`; scripts that `exec` into a sandbox
+`sbxenv.yaml`) editable into it; finn-hlslib and the board files are already in
+the image's resource cache. It then writes `/tmp/finn-ready`; scripts that `exec` into a sandbox
 immediately after creating it can wait for that file.
 
 ```bash

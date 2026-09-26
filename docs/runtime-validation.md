@@ -1,5 +1,27 @@
 # Runtime implementation validation
 
+## External resources (2026-09-26)
+
+Branch `feature/external-resources` from `09fb86df7`: finn-hlslib and the board
+files as external resources (`finn.resources`), replacing the finn-hlslib
+workspace package, its submodule and `finn.util.external`. Plan and decisions in
+[external-resources-plan.md](external-resources-plan.md). Same host as below.
+
+| Check | Result |
+| --- | --- |
+| Pins | The six declarations fetched from GitHub: hlslib 187 files (the submodule's `git ls-files` count), board repositories 227 + 6 + 6 + 14 + 5 files. The five board trees together: 258 files, digest `89ebe804...`, identical to the previous assembled tree. |
+| Without git | `fetch --all` with no `git` on PATH: all six from GitHub's commit archives in 26 s, every tree matching its declared digest. |
+| Native | `tests/util` and `tests/transformation` without Vivado: 2063 passed, 11 skipped, 4 xfailed, 1 xpassed. `tests/util/test_resources.py` (39 tests, no network): local git repositories and archives, sparse `subdir`/`into`, digest mismatch publishing nothing, cache order with a read-only system cache, overrides and compatibility variables, four processes' first use fetching once, redefinition rules, entry points in a temporary venv, `update` against a local repository, mirrors, the git-less fallback, and `finn.resources` importing only the standard library (`python -S`). |
+| Lock | `uv lock` removes only `finn-hlslib`. |
+| Wheel | Contains `finn/_data/resources.toml` and `finn/resources`; installed with no dependencies at all into a bare venv, `finn-resources list` shows the declarations and `finn-resources path hlslib` fetches it. |
+| Offline | `fetch hlslib --dest DIR`; then with a fresh home, `FINN_RESOURCES_OFFLINE=1` alone is an error naming the fetch command, and with `FINN_RESOURCES_CACHE=DIR` resolves without network. |
+| Images | Default target `dev` (`img-501a4001f1ac58da`, 3.65 GB): all six resources in `/opt/finn/resources`. `release` (3.63 GB): only hlslib. sbx builds on `dev`. With `--network none` as uid 1001, the dev image resolves and verifies all six from the system cache; the release image resolves hlslib, and board files fail with a network error (fetched on first use). |
+| Containers | Through `docker/run`: FINN from the checkout, resources from the system cache; runtime, resource, installation and configuration tests inside the image: 131 passed, 1 skipped. Conformance suite against real Docker and sbx: 14 passed, 4 skipped (Xilinx toolchain, node-locked licence, Apptainer). |
+
+Not validated here: Vivado finding boards across the five board repository paths
+(each at the same depth as in the previous single directory); HLS with the fetched
+finn-hlslib; the GitHub and Jenkins pipelines as configured.
+
 ## Upstream `dev` merge: Python 3.12 / Ubuntu 24.04 (2026-09-25)
 
 Merge of `upstream/dev` at `b507fec58` (134 commits, including the Python 3.12 /

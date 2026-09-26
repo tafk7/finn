@@ -24,8 +24,9 @@ Docker image
 ```
 
 With no command, `docker/run` opens an interactive shell. `/opt/venv` is active,
-with FINN and its workspace members installed editable from the checkout when the
-container starts. Use `--print` to see the normalized request without building or
+with FINN installed editable from the checkout when the container starts. The
+image's system cache (`/opt/finn/resources`) holds finn-hlslib and the board files;
+`finn-resources list` shows them. Use `--print` to see the normalized request without building or
 running anything. `-n NAME` and `--name NAME` assign the Docker container name;
 `--volume` adds a mount, for example a co-developed QONNX checkout.
 
@@ -164,7 +165,8 @@ hooks because those paths bypass normal startup.
 | `build-xrt` grant/image spelling | `--fpga --runtime xrt` |
 | Bake target `finn-xrt-slash` | `finn-slash-xrt` |
 | `--dependencies`, `--venv`, `--deps`, `FINN_DEPS` | The dev image installs the mounted checkout at start |
-| `fetch-repos.sh`, `deps.env` | `pyproject.toml`/`uv.lock`, the finn-hlslib submodule, board files fetched on first use |
+| `fetch-repos.sh`, `deps.env` | `pyproject.toml`/`uv.lock`; finn-hlslib and board files as external resources (`finn-resources`) |
+| `FINN_BOARD_FILES_PATH` | `FINN_RESOURCES_<NAME>` per board resource |
 
 `docker/config` and `docker/finn-env` are removed; use `docker/config.py`.
 The resolver's `sbx` subcommand and `inspect --sbx`, and the launcher's `--sbx`
@@ -187,9 +189,9 @@ state migration, sandbox removal or global policy/credential changes occur.
 ## Development environment
 
 The dev image runs the mounted checkout, not an installed FINN. At container start
-the entrypoint runs `uv sync --frozen --inexact` against `FINN_ROOT`: FINN and the
-workspace members (`packages/*`) are installed editable, plus any difference
-between the checkout's `uv.lock` and the image, offline where possible. uv's cache
+the entrypoint runs `uv sync --frozen --inexact` against `FINN_ROOT`: FINN is
+installed editable, plus any difference between the checkout's `uv.lock` and the
+image, offline where possible. uv's cache
 is kept in `$FINN_BUILD_DIR/.uv-cache`, so later starts reuse the editable builds.
 `docker exec` and `sbx exec` skip the entrypoint but join a container where it has
 run; scripts that exec into a new container can wait for `/tmp/finn-ready`.

@@ -10,8 +10,8 @@ history at commit `5dd9df9bc`.
 
 ```text
  ┌──────────────────────────────────────────────────────────────────────────┐
- │ 3 PYTHON   pip install finn[hw]                          (users)          │
- │            uv sync -> active venv: FINN + workspace members editable,     │
+ │ 3 PYTHON   pip install finn                              (users)          │
+ │            uv sync -> active venv: FINN editable,                         │
  │            everything else at uv.lock                    (developers)    │
  ├──────────────────────────────────────────────────────────────────────────┤
  │ 2 VIVADO   the user's, never installed by FINN; selected by environment  │
@@ -19,32 +19,35 @@ history at commit `5dd9df9bc`.
  ├──────────────────────────────────────────────────────────────────────────┤
  │ 1 SYSTEM   OS packages and XRT/SLASH: the host, or the image              │
  └──────────────────────────────────────────────────────────────────────────┘
-   caches   finn_xsi (built on first use), board files (fetched on first use)
+   caches   finn_xsi (built on first use), external resources such as
+            finn-hlslib and board files (fetched on first use)
 ```
 
 * **Python** is standard packaging. `pyproject.toml` declares FINN's runtime
   dependencies as ranges, dependency groups for development, and uv sources for
   unreleased commits; `uv.lock` is the exact environment for development, CI and
-  the images. Build data is packaged too: finn-hlslib is the `finn-hlslib` package.
+  the images. Build data FINN does not contain (finn-hlslib, board files) is not
+  Python: it is declared as [external resources](#external-resources).
 * **Vivado** is always the user's. `docker/config.py` locates it on the host (both
   AMD install layouts) and `docker/finn-toolchain.sh` applies it, natively
   (`scripts/activate.sh`) and in the image (entrypoint and tool shims).
 * **System** packages are what pip cannot provide: the libraries Xilinx tools need
   (ncurses 6, the LSB loader, the libudev preload for FLEXlm) and XRT/SLASH.
 * **Caches** are built or fetched by FINN when first needed, never installed:
-  `finn_xsi` per Vivado installation and Python ABI, board files per pinned digest.
+  `finn_xsi` per Vivado installation and Python ABI, external resources per
+  pinned digest.
 
 ## Per modality
 
 ```text
                  SYSTEM                 VIVADO                       PYTHON
                ┌──────────────────────┬────────────────────────────┬──────────────────────────────┐
- User          │ host (hw only)       │ host (hw only)             │ pip install finn[hw]         │
+ User          │ host (hw only)       │ host (hw only)             │ pip install finn             │
  Native dev    │ host                 │ host; scripts/activate.sh  │ uv sync; scripts/activate.sh │
  Docker        │ image                │ mounted by docker/run      │ /opt/venv, always active;    │
  Dev Container │ image                │ (none, or a mount)         │ the entrypoint installs the  │
  sbx           │ image + sbx stage    │ sbx mount + licence policy │ checkout at container start  │
- Release/SIF   │ image                │ mounted                    │ FINN wheels, installed       │
+ Release/SIF   │ image                │ mounted                    │ FINN wheel, installed        │
                └──────────────────────┴────────────────────────────┴──────────────────────────────┘
 ```
 
@@ -54,21 +57,26 @@ part ahead of time.
 ## One image
 
 ```text
- system ──► python ──────────────────────────► runtime ────────────► sbx
- apt,       uv; /opt/venv from uv.lock           XRT/SLASH            NOPASSWD sudo,
- ncurses6,  (no FINN, no workspace members);     (FINN_RUNTIMES)      BASH_ENV, npm,
- LSB,       active via ENV; board files;             │                proxy env_keep
- libudev    entrypoint                               └──► release: FINN + finn-hlslib wheels
+ system ──► python ─────────────────────► runtime ──────────► dev ──────────► sbx
+ apt,       uv; /opt/venv from uv.lock      XRT/SLASH          board files     NOPASSWD sudo,
+ ncurses6,  (no FINN); active via ENV;      (FINN_RUNTIMES)    (not redistri-  BASH_ENV, npm,
+ LSB,       finn-hlslib (redistributable        │              butable; local  proxy env_keep
+ libudev    resources); entrypoint              │              images only)
+                                                └──► release: FINN wheel; board files on first use
 ```
 
 * The tag hashes `docker/image-inputs.txt`: the Dockerfile, `pyproject.toml`,
-  `uv.lock`, the board pins in `finn/util/external.py`, the container scripts and
-  the runtime manifests. FINN's sources are not an input.
+  `uv.lock`, the resource pins (`finn/_data/resources.toml`) and `finn.resources`,
+  which fetches them, the container scripts and the runtime manifests. FINN's
+  other sources are not an input.
+* `dev` is the default target and the base of `sbx`. Only images built locally
+  contain third-party board files; `release` builds on `runtime`, so it carries
+  only resources declared `redistributable`.
 * `/opt/venv` is active through image `ENV`, so `docker exec`, `sbx exec`,
   non-interactive shells and editors see it, not only login shells. It is
   writable by any uid: containers run as the caller's uid, and each container's
   writable layer is its own.
-* The release image installs wheels built from the checkout. It is for read-only
+* The release image installs a wheel built from the checkout. It is for read-only
   use (SIF/HPC), where a startup install is impossible, and is what
   `docker/build --export-sif` exports.
 
@@ -83,7 +91,7 @@ part ahead of time.
       ▼                                                                      │
  uv sync --frozen --inexact --project $FINN_ROOT                             │
    (offline first; online only if uv.lock needs packages the image lacks)   │
-      ├─ ok ──► FINN + workspace members editable, + any lock difference ───┤
+      ├─ ok ──► FINN editable, + any lock difference ───────────────────────┤
       └─ fails ──► warning with the fix; image environment kept ────────────┤
                                                                              ▼
                                                touch /tmp/finn-ready; exec the command
@@ -105,15 +113,41 @@ part ahead of time.
 * **Ordinary dependency:** `[project] dependencies` or a dependency group; a git
   source in `[tool.uv.sources]` while unreleased. Occasional co-development: a
   local, uncommitted path source.
-* **Build data:** a data-only package, found through `importlib.resources`, with
-  an environment-variable override (`finn.util.external`).
-* **Developed in lockstep:** a workspace member under `packages/`, a git submodule
-  whose commit is the pin, always editable. It lives inside the checkout, so every
-  container sees it through the existing mount. Members are never baked into the
-  image (`--no-install-workspace`).
-* **Not redistributable:** fetched from upstream on first use, pinned and verified
-  by digest, cached. The board files are this case until their licences are
-  confirmed for redistribution in a wheel.
+* **Build data** (HLS or RTL libraries, board files): an external resource,
+  below. Co-development: `FINN_RESOURCES_<NAME>` pointing at a checkout.
+
+## External resources
+
+```text
+ declarations                         caches (first complete copy wins)
+ 1 finn/_data/resources.toml          1 FINN_RESOURCES_CACHE        writable
+ 2 packages: entry points  ─ merge ─► 2 /opt/finn/resources         read-only, image
+   "finn.resources" (add only)        3 ~/.cache/finn/resources     writable
+ 3 project: pyproject.toml                 │
+   [tool.finn.resources], or               ▼ missing: fetch (locked) ─► verify digest ─► rename
+   FINN_RESOURCES_FILES (may redefine)       git commit (sparse) · archive + sha256
+                                             · GitHub archive without git · mirrors
+ override: FINN_RESOURCES_<NAME>=/dir (unverified)
+```
+
+* **One mechanism** for FINN's resources, packages' and users': a named
+  directory tree with a pinned source (`git`+`commit`, `url`+`sha256`, or data in
+  an installed `package`) and a tree digest. Consumers ask by kind
+  (`paths("vivado-boards")`), so adding a board repository or an RTL library is a
+  declaration, not a code change.
+* **Why not packages:** finn-hlslib used to be a workspace package from a git
+  submodule. That needed the submodule in every checkout and CI job, a uv
+  workspace, a `finn[hw]` extra, a second wheel and a PyPI release for
+  `pip install finn` users, and it could not cover board files, which may not be
+  redistributed. Declarations ship in FINN's wheel; resources are fetched on
+  first use.
+* **Reproducible and safe:** exact pins; the digest is checked before a tree is
+  published, under a file lock, with an atomic rename. An entry is named by its
+  digest, so a new pin can never reuse a stale tree.
+* **Standard library only**, so the image build runs it from the mounted sources
+  before FINN is installed, and a wheel-only install needs nothing else.
+* **Redistribution:** each declaration says whether FINN may bake it into published
+  images. The `python` stage fetches the redistributable ones, `dev` the rest.
 
 ## Guards
 
@@ -128,11 +162,14 @@ part ahead of time.
 
 * **PyPI:** FINN is developed against QONNX 1.0.0 plus four commits (the MaxPool
   `ceil_mode` fix); the published requirement is `qonnx>=1.0.0`, which PyPI has.
-  Publishing needs a QONNX release that includes those commits, and `finn-hlslib`
-  published alongside FINN.
+  Publishing needs a QONNX release that includes those commits.
 * **Board files:** confirm whether XilinxBoardStore, Avnet and RealDigital files
-  may be redistributed in a wheel; if so, a `finn-boards` package can replace the
-  on-demand fetch.
+  may be redistributed; if so, marking them `redistributable = true` puts them in
+  published images too.
+* **Several board paths:** each board resource is now a separate Vivado board
+  repository path (at the same depth as before, where all shared one directory).
+  This still needs a real Vivado run; the fallback is one directory of links to
+  the resource roots.
 * **Python range:** the lock, the image and development use Python 3.12 on
   Ubuntu 24.04. `requires-python` allows 3.11-3.12: 3.10 cannot resolve (QONNX caps
   onnx at 1.17 there, and onnxruntime 1.28 needs 3.11), numpy<2 has no wheels

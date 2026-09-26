@@ -361,3 +361,11 @@ Phase 5 deviation: no cache step was added to the GitHub native workflow
 fetches resources. The Jenkins native stage already keeps `XDG_CACHE_HOME` on a
 persistent path, so `~/.cache/finn/resources` survives between builds; entries
 are digest-keyed, so a pin change adds a new entry rather than going stale.
+
+Implementation (2026-09-26): phases 0-7, one or more commits each on this
+branch; validation in [runtime-validation.md](runtime-validation.md). Beyond the
+plan: a fetch into one cache copies and re-verifies a complete copy from another
+cache instead of downloading again (so `fetch --dest` works from a populated
+cache), and every source (a cached copy, the source, each mirror) is checked
+against the digest before the next is tried. Still open: the Vivado run with
+several board paths (P8).

@@ -19,9 +19,9 @@ For more general information about FINN, please visit the [project page](https:/
 
 ## Getting Started
 
-FINN is a Python package: `pip install finn` for Python-only use, `pip install
-"finn[hw]"` for hardware flows (with Vivado). For development, there are the two
-setup paths below; both use the same locked environment
+FINN is a Python package: `pip install finn`. Hardware flows also need Vivado;
+FINN fetches finn-hlslib and board files on first use. For development, there are
+the two setup paths below; both use the same locked environment
 ([installation and development](docs/installation.md)). See the
 [Getting Started](https://finn.readthedocs.io/en/latest/getting_started.html)
 page for the complete guide.

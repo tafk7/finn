@@ -236,7 +236,7 @@ legacy callers. The most relevant are:
 * (optional) ``FINN_DOCKER_RUN_AS_ROOT`` (default 0) if set to 1 then run Docker container as root, default is the current user.
 * (optional) ``FINN_DOCKER_EXTRA`` (default "") passes extra arguments to ``docker compose run``.
 * (optional) ``FINN_SYNC`` (default 1) set to 0 to skip installing the mounted checkout when a container starts.
-* (optional) ``FINN_HLSLIB_PATH`` / ``FINN_BOARD_FILES_PATH`` override where the HLS headers and Vivado board files are read from. By default they come from the ``finn-hlslib`` package and from board files fetched on first use.
+* (optional) ``FINN_RESOURCES_<NAME>`` overrides where an external resource is read from, for example ``FINN_RESOURCES_HLSLIB`` for the finn-hlslib headers (``FINN_HLSLIB_PATH`` is an alias) or ``FINN_RESOURCES_AVNET_BOARDS`` for one set of Vivado board files. By default they are fetched from their pinned sources on first use and cached; ``finn-resources list`` shows them. ``FINN_BOARD_FILES_PATH`` is no longer used.
 
 General FINN Docker tips
 ************************
@@ -359,7 +359,7 @@ Quick Start
 
 3. Clone FINN and run the local setup script::
 
-    git clone --recurse-submodules https://github.com/Xilinx/finn.git
+    git clone https://github.com/Xilinx/finn.git
     cd finn
     ./setup-local.sh
 
@@ -449,8 +449,10 @@ The Zynq-7000-based Pynq-Z1 and Pynq-Z2 boards were retired from official
 support with the move to Vivado 2024.2. AUP-ZU3 is the recommended supported
 replacement for academic use. The old board mappings remain available, but
 their board files are no longer downloaded or exercised by CI. Re-enabling
-them requires removing the boards from ``retired_pynq_boards`` and restoring
-their sources in ``BOARD_SOURCES`` in ``finn/util/external.py``.
+them requires removing the boards from ``retired_pynq_boards`` and declaring
+their board files as a ``vivado-boards`` resource, in
+``finn/_data/resources.toml`` or in your project's ``pyproject.toml`` (see
+``docs/installation.md``).
 
 PYNQ board first-time setup
 ****************************
