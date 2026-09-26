@@ -58,6 +58,7 @@ def resource_files(directory):
         ".abc",
         ".mdd",
         ".mld",
+        ".toml",
     }
     result = []
     for path in Path(directory).rglob("*"):

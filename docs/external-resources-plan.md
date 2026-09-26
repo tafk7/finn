@@ -317,3 +317,36 @@ inputs, workflow and Jenkins changes, and `setup-local.sh`.
 3. **Deprecation:** keep `FINN_BOARD_FILES_PATH` with its all-or-nothing meaning
    for one release, then remove it?
 4. **Git-less fallback:** now (phase 6), or wait until someone needs it?
+
+## Records
+
+Decisions confirmed before phase 1 (2026-09-26):
+
+1. **Naming:** "resources", not "external": module `finn.resources`, command
+   `finn-resources`, FINN's file `src/finn/_data/resources.toml` (table
+   `[resources.NAME]`), project table `[tool.finn.resources]`, variables
+   `FINN_RESOURCES_*` (override `FINN_RESOURCES_<NAME>`), entry-point group
+   `finn.resources`. `finn.util.resources` (`resource_path`, FINN's own package
+   data) is unrelated and keeps its name. Names whose override variable would be
+   a setting (`cache`, `system-cache`, `files`, `offline`, anything ending in
+   `-url`) are rejected.
+2. **Project discovery:** the nearest `pyproject.toml`, walking up from the
+   working directory, then `FINN_RESOURCES_FILES`. Found once per process.
+3. **`FINN_BOARD_FILES_PATH`:** removed now; if set, FINN warns that it is no
+   longer used.
+4. **Git-less fallback:** phase 6, as planned.
+
+Networked check (phase 1, 2026-09-26): the six sources fetched from GitHub.
+
+| Resource | Files | Digest |
+|---|---|---|
+| hlslib | 187 | `sha256:eaeda81f…c989` |
+| avnet-boards | 227 | `sha256:69673676…f215` |
+| rfsoc2x2-boards | 6 | `sha256:c6329368…0aff` |
+| rfsoc4x2-boards | 6 | `sha256:892a9389…e42e1b` |
+| kv260-som-boards | 14 | `sha256:366c8adc…27fc` |
+| aup-zu3-boards | 5 | `sha256:a14a0213…797d` |
+
+The five board trees copied into one directory hold 258 files with digest
+`89ebe8049a4f…6960e`, identical to `BOARD_FILES_DIGEST` of the previous
+assembled tree, under both the previous and the new digest implementation.
