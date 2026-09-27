@@ -10,7 +10,6 @@ from typing import cast
 import pytest
 
 from finn.core.space import (
-    UNSUPPLIED,
     Available,
     BoundDecision,
     Const,
@@ -23,9 +22,9 @@ from finn.core.space import (
     View,
     ViewKey,
     composite,
-    configure,
     constraint,
     derived,
+    design_space,
     divisors_of,
     inspection,
 )
@@ -37,8 +36,8 @@ WIDTH = ViewKey("width", int)
 
 def test_composite_keeps_narrow_fields_available_and_reuses_accepted_children() -> None:
     class Interface(Space):
-        width: Param[int] = Param(int)
-        lanes = Decision(int, values=(1, 2))
+        width: int = Param()
+        lanes: int = Decision(values=(1, 2))
 
         @derived
         def complete(*, width: int, lanes: int) -> int:
@@ -70,7 +69,7 @@ def test_composite_keeps_narrow_fields_available_and_reuses_accepted_children() 
         weights = Interface(width=4)
         optional = Interface(width=16, when=enabled)
         # The structural choice is a Decision over nodes (was SubspaceChoice + exports).
-        implementation = Decision[Interface | Refused](
+        implementation: Interface | Refused = Decision(
             values={"normal": Interface(width=32), "refused": Refused()}
         )
 
@@ -85,7 +84,7 @@ def test_composite_keeps_narrow_fields_available_and_reuses_accepted_children() 
         def selected_width(*, width: int) -> int:
             return width
 
-    base = configure(Composite())
+    base = design_space(Composite())
     assert base.narrow == 12
     assert isinstance(base.activation.physical.inspect().accepted_result, Unresolved)
     assert isinstance(base.weights.physical.inspect().accepted_result, Unresolved)
@@ -106,18 +105,18 @@ def test_composite_keeps_narrow_fields_available_and_reuses_accepted_children() 
 
 def test_local_decision_domain_uses_parent_suppliers_and_exposure_is_explicit() -> None:
     class Child(Space):
-        value: Param[int] = Param(int)
+        value: int = Param()
         physical = View(value)
 
     class Root(Space):
-        extent: Param[int] = Param(int)
+        extent: int = Param()
         # An inline exposed Param is gone: the formal is declared on the enclosing
         # family and bound by name.
-        exposed_value: Param[int] = Param(int, default=UNSUPPLIED)
-        owned = Child(value=Decision(int, domain=divisors_of(extent)))
+        exposed_value: int = Param(required=False)
+        owned = Child(value=Decision(domain=divisors_of(extent)))
         exposed = Child(value=exposed_value)
 
-    base = configure(Root(extent=12))
+    base = design_space(Root(extent=12))
     owned = base.owned.field(Child.value)
     assert isinstance(owned, BoundDecision)  # a fresh inline Decision is owned
     assert owned.candidates() == Available((1, 2, 3, 4, 6, 12))
@@ -126,12 +125,12 @@ def test_local_decision_domain_uses_parent_suppliers_and_exposure_is_explicit() 
     assert isinstance(chosen.exposed.query(Child.value), Unresolved)
     with pytest.raises(ConfigurationError):
         base.with_choices({Root.owned.value: 5})
-    supplied = configure(Root(extent=12, exposed_value=7))
+    supplied = design_space(Root(extent=12, exposed_value=7))
     assert supplied.exposed.value == 7
 
     missing = composite("Missing", {"child": Child()})
     with pytest.raises(DefinitionError, match=r"child\.value is not supplied"):
-        configure(missing())
+        design_space(missing())
 
 
 def test_nested_handles_and_named_aliases_keep_frozen_interpretations() -> None:
@@ -149,7 +148,7 @@ def test_nested_handles_and_named_aliases_keep_frozen_interpretations() -> None:
 
     original_placement = Middle.inner
     original_accepted = Root.accepted
-    base = configure(Root())
+    base = design_space(Root())
     assert base.query(Root.outer.inner.value) == Available(5)
     assert base.query(original_accepted) == Available(5)
 
@@ -164,7 +163,7 @@ def test_nested_handles_and_named_aliases_keep_frozen_interpretations() -> None:
     # the source declaration later cannot retarget that old compiled reference.
     original_accepted.source = Root.outer.inner.other
     assert base.query(original_accepted) == Available(5)
-    assert configure(Root()).accepted() == 5
+    assert design_space(Root()).accepted() == 5
 
 
 def test_two_thousand_guarded_scopes_compile_and_query_iteratively() -> None:
@@ -177,7 +176,7 @@ def test_two_thousand_guarded_scopes_compile_and_query_iteratively() -> None:
         family = composite(f"Layer{depth}", {"enabled": enabled, "inner": family(when=enabled)})
     model = inspection.model(family)
     assert len(model.linked.scopes) == 2_001
-    leaf = configure(family())
+    leaf = design_space(family())
     for _ in range(2_000):
         leaf = cast(Space, getattr(leaf, "inner"))
     assert leaf.query(Leaf.value) == Available(9)
@@ -191,7 +190,7 @@ def test_recursive_structure_is_rejected_before_occurrence_allocation() -> None:
     repeated.__set_name__(Recursive, "again")
     setattr(Recursive, "again", repeated)
     with pytest.raises(DefinitionError, match="recursive Space placement"):
-        configure(Recursive())
+        design_space(Recursive())
 
 
 def test_choice_members_are_validated_over_all_cases_before_selection() -> None:
@@ -206,22 +205,22 @@ def test_choice_members_are_validated_over_all_cases_before_selection() -> None:
         value = Const(2)
 
     class Nowhere(Space):
-        implementation = Decision[Complete | Missing](
+        implementation: Complete | Missing = Decision(
             values={"complete": Complete(), "missing": Missing()}
         )
         absent = View(implementation.absent)  # type: ignore[union-attr]
 
     with pytest.raises(DefinitionError, match="no candidate of implementation has a member absent"):
-        configure(Nowhere())
+        design_space(Nowhere())
 
     class Partial(Space):
-        implementation = Decision[Complete | Missing](
+        implementation: Complete | Missing = Decision(
             values={"complete": Complete(), "missing": Missing()}
         )
         # mypy accepts a by-name read only when every candidate has the member.
         physical = View(cast(Complete, implementation).physical)
 
-    base = configure(Partial())
+    base = design_space(Partial())
     assert isinstance(base.query(Partial.physical), Unresolved)
     assert base.with_choices(implementation="complete").physical() == 1
     assert isinstance(
@@ -248,7 +247,7 @@ def test_inferred_nested_output_must_match_consumer_annotation() -> None:
             return value
 
     with pytest.raises(DefinitionError, match="cannot consume"):
-        configure(Root())
+        design_space(Root())
 
 
 def test_false_choice_guard_does_not_demand_selector_or_case_condition() -> None:
@@ -257,10 +256,10 @@ def test_false_choice_guard_does_not_demand_selector_or_case_condition() -> None
 
     class Root(Space):
         disabled = Const(False)
-        unknown = Decision(bool, values=(False, True))
-        choice = Decision(values={"a": Leaf(when=unknown), "b": Leaf()}, when=disabled)
+        unknown: bool = Decision(values=(False, True))
+        choice: Leaf = Decision(values={"a": Leaf(when=unknown), "b": Leaf()}, when=disabled)
 
-    point = configure(Root())
+    point = design_space(Root())
     assert isinstance(point.query(Root.choice), Inapplicable)
     for case in ("a", "b"):
         candidate = inspection.candidate(point, Root.choice, case)

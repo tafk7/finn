@@ -9,6 +9,7 @@ evaluates one query and follows only cached demanded edges for that snapshot.
 
 from __future__ import annotations
 
+import copy
 from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
@@ -16,9 +17,9 @@ from typing import Any, Generic, Literal, TypeVar, cast, overload
 
 from . import _execution, _runtime
 from ._configuration import Space
-from ._nodes import NodeChoice, NodeDecl, family_formals, node_record, unsupplied_formals
+from ._nodes import NodeChoice, NodeDecision, NodeDecl, node_record, unsupplied_formals
 from .collection import collect_space
-from .compiler import SpaceModel, compile_space
+from .compiler import Model, compile_model
 from .declarations import (
     CaseRef,
     ChoiceMemberRef,
@@ -27,16 +28,15 @@ from .declarations import (
     Decision,
     Declaration,
     MemberRef,
-    Param,
     ValueRef,
     View,
     declared_path,
 )
 from .errors import RequestError
-from .ir import LinkedModel, NodeKind
+from .ir import Layer, LinkedModel, NodeKind, Provenance
 from .occurrence import candidate as _candidate
 from .occurrence import state
-from .references import DecisionHandle, ValueHandle, decision_key
+from .references import DecisionHandle, ValueHandle, _descend, decision_key
 from .results import (
     Available,
     ConstraintAssessment,
@@ -61,6 +61,8 @@ class NodeInfo:
     generated: bool
     guard: ValueHandle[bool] | None
     origin: str | None = None
+    # Who set this member's value, for a member some body supplied or overrode.
+    provenance: Provenance | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -108,6 +110,10 @@ class EvidenceNode:
     decision_state: QueryResult[DecisionState[object]] | None = None
     selector: bool = False
     is_guard: bool = False
+    # Forwarding aliases this computation read through (by their authored
+    # names): the dependency is the alias's source, which evaluation reached
+    # directly, and the alias is kept here so evidence still names it.
+    via: tuple[NodeInfo, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -137,10 +143,10 @@ class ModelStatistics:
     owning_decisions: int
 
 
-def statistics(subject: Space | SpaceModel[S] | type[Space]) -> ModelStatistics:
+def statistics(subject: Space | Model[S] | type[Space]) -> ModelStatistics:
     """Count direct structure on demand, with no runtime or closure retention."""
 
-    if not isinstance(subject, (SpaceModel, Space, type)):
+    if not isinstance(subject, (Model, Space, type)):
         raise RequestError("statistics requires a compiled model")
     linked = _context(subject)[0].linked
     placements = len(linked.scopes) - 1
@@ -155,18 +161,18 @@ def statistics(subject: Space | SpaceModel[S] | type[Space]) -> ModelStatistics:
     )
 
 
-def _context(subject: Space | SpaceModel[S] | type[Space]) -> tuple[SpaceModel[Space], int]:
-    if isinstance(subject, SpaceModel):
-        return cast(SpaceModel[Space], subject), 0
+def _context(subject: Space | Model[S] | type[Space]) -> tuple[Model[Space], int]:
+    if isinstance(subject, Model):
+        return cast(Model[Space], subject), 0
     if isinstance(subject, type) and issubclass(subject, Space):
-        return cast(SpaceModel[Space], compile_space(subject)), 0
+        return cast(Model[Space], compile_model(subject)), 0
     if isinstance(subject, Space):
         current = state(subject)
         return current.model, subject._scope
     raise RequestError("inspection requires a configuration, a compiled model or a family")
 
 
-def model(subject: Space | SpaceModel[S] | type[Space]) -> SpaceModel[Space]:
+def model(subject: Space | Model[S] | type[Space]) -> Model[Space]:
     """The compiled model of a configuration, or of a family compiled alone."""
     return _context(subject)[0]
 
@@ -197,6 +203,7 @@ def _node_info(linked: LinkedModel, index: int) -> NodeInfo:
         node.source_owner is not None,
         None if node.guard is None else ValueHandle[bool](linked, node.guard),
         node.origin,
+        linked.provenance.get(index),
     )
 
 
@@ -219,7 +226,7 @@ def _decision_info(
     )
 
 
-def decisions(subject: Space | SpaceModel[S] | type[Space]) -> tuple[DecisionInfo[object], ...]:
+def decisions(subject: Space | Model[S] | type[Space]) -> tuple[DecisionInfo[object], ...]:
     """Discover all owning decisions below this scope, including inactive cases."""
 
     compiled, scope = _context(subject)
@@ -234,17 +241,27 @@ def decisions(subject: Space | SpaceModel[S] | type[Space]) -> tuple[DecisionInf
 
 @overload
 def decision_info(
-    subject: Space | SpaceModel[S] | type[Space], reference: Decision[T]
+    subject: Space | Model[S] | type[Space], reference: Decision[T]
 ) -> DecisionInfo[T]: ...
 
 
 @overload
 def decision_info(
-    subject: Space | SpaceModel[S] | type[Space], reference: object
-) -> DecisionInfo[Any]: ...
+    subject: Space | Model[S] | type[Space], reference: DecisionHandle[T] | ValueRef[T]
+) -> DecisionInfo[T]: ...
 
 
-def decision_info(subject: Space | SpaceModel[S] | type[Space], reference: object) -> object:
+@overload
+def decision_info(
+    subject: Space | Model[S] | type[Space], reference: Space | None
+) -> DecisionInfo[str]: ...
+
+
+@overload
+def decision_info(subject: Space | Model[S] | type[Space], reference: T) -> DecisionInfo[T]: ...
+
+
+def decision_info(subject: Space | Model[S] | type[Space], reference: object) -> object:
     compiled, scope = _context(subject)
     index = compiled.decision(scope, reference)
     return _decision_info(compiled.linked, index)
@@ -252,17 +269,27 @@ def decision_info(subject: Space | SpaceModel[S] | type[Space], reference: objec
 
 @overload
 def decision_handle(
-    subject: Space | SpaceModel[S] | type[Space], reference: Decision[T]
+    subject: Space | Model[S] | type[Space], reference: Decision[T]
 ) -> DecisionHandle[T]: ...
 
 
 @overload
 def decision_handle(
-    subject: Space | SpaceModel[S] | type[Space], reference: object
-) -> DecisionHandle[Any]: ...
+    subject: Space | Model[S] | type[Space], reference: DecisionHandle[T] | ValueRef[T]
+) -> DecisionHandle[T]: ...
 
 
-def decision_handle(subject: Space | SpaceModel[S] | type[Space], reference: object) -> object:
+@overload
+def decision_handle(
+    subject: Space | Model[S] | type[Space], reference: Space | None
+) -> DecisionHandle[str]: ...
+
+
+@overload
+def decision_handle(subject: Space | Model[S] | type[Space], reference: T) -> DecisionHandle[T]: ...
+
+
+def decision_handle(subject: Space | Model[S] | type[Space], reference: object) -> object:
     """Bind a typed owning decision while retaining its candidate value type."""
 
     return decision_info(subject, reference).reference
@@ -270,32 +297,36 @@ def decision_handle(subject: Space | SpaceModel[S] | type[Space], reference: obj
 
 @overload
 def value_handle(
-    subject: Space | SpaceModel[S] | type[Space],
+    subject: Space | Model[S] | type[Space],
     reference: ValueRef[T] | View[T],
 ) -> ValueHandle[T]: ...
 
 
 @overload
 def value_handle(
-    subject: Space | SpaceModel[S] | type[Space],
+    subject: Space | Model[S] | type[Space],
     reference: Constraint | ConstraintGroup,
 ) -> ValueHandle[bool]: ...
 
 
 @overload
 def value_handle(
-    subject: Space | SpaceModel[S] | type[Space], reference: object
+    subject: Space | Model[S] | type[Space], reference: Space | None
 ) -> ValueHandle[Any]: ...
 
 
-def value_handle(subject: Space | SpaceModel[S] | type[Space], reference: object) -> object:
+@overload
+def value_handle(subject: Space | Model[S] | type[Space], reference: T) -> ValueHandle[T]: ...
+
+
+def value_handle(subject: Space | Model[S] | type[Space], reference: object) -> object:
     """Bind a typed value, accepted view result, or Boolean assessment result."""
 
     compiled, scope = _context(subject)
     return ValueHandle(compiled.linked, compiled.resolve(scope, reference))
 
 
-def choices(subject: Space | SpaceModel[S] | type[Space]) -> tuple[ChoiceInfo, ...]:
+def choices(subject: Space | Model[S] | type[Space]) -> tuple[ChoiceInfo, ...]:
     """Every Decision over nodes below this scope, with its candidates."""
     compiled, scope = _context(subject)
     linked = compiled.linked
@@ -318,8 +349,8 @@ def choices(subject: Space | SpaceModel[S] | type[Space]) -> tuple[ChoiceInfo, .
     )
 
 
-def members(subject: Space | SpaceModel[S] | type[Space]) -> tuple[NodeInfo, ...]:
-    """Inspect authored and deliberately exposed members below this scope."""
+def members(subject: Space | Model[S] | type[Space]) -> tuple[NodeInfo, ...]:
+    """Inspect every named member below this scope (including forwarding aliases)."""
 
     compiled, scope = _context(subject)
     included = _scope_set(compiled.linked, scope)
@@ -335,8 +366,35 @@ def members(subject: Space | SpaceModel[S] | type[Space]) -> tuple[NodeInfo, ...
     )
 
 
+def provenance(subject: Space | Model[S] | type[Space], reference: object) -> Provenance | None:
+    """Who set a member's effective value, and what it overrides; None if nothing set it.
+
+    ``reference`` is a member (``House.kitchen.area``), a child node
+    (``House.kitchen.sub``, replaced by an enclosing body) or a handle. The
+    text form reads ``kitchen.area = 16 (set by House at house.py:42; declared
+    12 at room.py:10)``.
+    """
+    compiled, scope = _context(subject)
+    linked = compiled.linked
+    record = declared_path(reference) if isinstance(reference, Space) else None
+    if record is not None:
+        return linked.scope_provenance.get(_descend(linked.scopes, scope, record))
+    return linked.provenance.get(compiled.resolve(scope, reference))
+
+
+def pinned(subject: Space | Model[S] | type[Space]) -> tuple[Provenance, ...]:
+    """Every decision key an override removed by pinning its coordinate, with who pinned it."""
+    compiled, scope = _context(subject)
+    prefix = compiled.linked.scopes[scope].name
+    return tuple(
+        item
+        for key, item in sorted(compiled.linked.pinned.items())
+        if not prefix or key.startswith(prefix + ".")
+    )
+
+
 def dependencies(
-    subject: Space | SpaceModel[S] | type[Space],
+    subject: Space | Model[S] | type[Space],
     reference: object,
 ) -> tuple[NodeInfo, ...]:
     """Return known structural inputs; self-method reads are discovered at runtime."""
@@ -355,6 +413,10 @@ def explain(
     point: Space,
     reference: Constraint | ConstraintGroup,
 ) -> QueryEvidence[bool]: ...
+
+
+@overload
+def explain(point: Space, reference: T) -> QueryEvidence[T]: ...
 
 
 def explain(point: Space, reference: object) -> object:
@@ -381,6 +443,10 @@ def explain(point: Space, reference: object) -> object:
         evidence: list[EvidenceNode] = []
         for index in sorted(visited, key=lambda item: linked.nodes[item].key):
             node, entry = linked.nodes[index], snapshot.cache[index]
+            demanded = set(entry.dependencies)
+            aliases = dict.fromkeys(
+                alias for alias, source in (*node.via, *entry.via) if source in demanded
+            )
             active = True
             if node.guard is not None:
                 guard = snapshot.cache[node.guard].result
@@ -397,6 +463,7 @@ def explain(point: Space, reference: object) -> object:
                     _runtime.decision_state(snapshot, index) if node.kind == "decision" else None,
                     index in selectors,
                     index in guard_nodes,
+                    tuple(_node_info(linked, alias) for alias in aliases),
                 )
             )
         assessment = (
@@ -416,11 +483,12 @@ def explain(point: Space, reference: object) -> object:
 class NodeDeclaration:
     """A node declaration read without compiling it.
 
-    ``bindings`` maps each bound formal to its supplier: a frozen value, a
-    reference, a fresh Decision, or (for a reference input) a node.
-    ``nested`` maps the formals of descendants assigned through a path
-    (``"port.dtype"``) to their suppliers. ``unsupplied`` names the required
-    formals nothing supplies yet, and ``frozen`` says why assignment is closed.
+    ``bindings`` maps each member this node's own body set (at the call or by
+    direct assignment) to its supplier: a value, a reference, a fresh Decision,
+    or a node. ``nested`` maps the members of descendants assigned through a
+    path (``"port.dtype"``), which override what the bodies inside set.
+    ``unsupplied`` names the required formals nothing supplies yet, and
+    ``frozen`` says why assignment is closed.
     """
 
     family: type[Space]
@@ -452,25 +520,19 @@ def declaration(node: object) -> NodeDeclaration:
         record = node
     if record is None:
         raise RequestError("declaration() takes a node declaration, as returned by a family call")
-    formals = family_formals(record.family)
-    bindings: dict[str, object] = {}
-    for name, value in record.bindings.items():
-        formal = formals.get(name)
+
+    def public(value: object) -> object:
         if isinstance(value, NodeDecl):
-            value = value.instance
-        elif isinstance(formal, Param) and not isinstance(value, (ValueRef, View)):
+            return value.instance
+        if isinstance(value, NodeDecision):
+            return value.proxy
+        if not isinstance(value, (ValueRef, View)):
             # A detached copy: the declaration keeps its own frozen literal.
-            semantics = cast(Param[object], formal).semantics
-            assert semantics is not None
-            value = semantics.freeze(value)
-        bindings[name] = value
-    nested = {
-        ".".join((*(str(item.name) for item in path), name)): (
-            value.instance if isinstance(value, NodeDecl) else value
-        )
-        for path, supplies in record.nested.items()
-        for name, (value, _) in supplies.items()
-    }
+            return copy.deepcopy(value)
+        return value
+
+    bindings = {name: public(value) for name, value in record.bindings.items()}
+    nested = {path: public(value) for path, value in record.nested.items()}
     return NodeDeclaration(
         record.family,
         record.name,
@@ -515,7 +577,9 @@ __all__ = [
     "ChoiceInfo",
     "DecisionInfo",
     "EvidenceNode",
+    "Layer",
     "NodeInfo",
+    "Provenance",
     "ModelStatistics",
     "QueryEvidence",
     "NodeDeclaration",
@@ -531,6 +595,8 @@ __all__ = [
     "is_declaration",
     "members",
     "model",
+    "pinned",
+    "provenance",
     "reference",
     "statistics",
     "value_handle",

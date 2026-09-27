@@ -24,8 +24,8 @@ from finn.core.space import (
     Space,
     Unresolved,
     ViewKey,
-    configure,
     constraint,
+    design_space,
     inspection,
     reject,
     selections,
@@ -41,8 +41,8 @@ def codes(result: object) -> set[str]:
 
 
 class Room(Space):
-    area: Param[int] = Param(int)
-    finish = Decision(int, values=(1, 2, 3))
+    area: int = Param()
+    finish: int = Decision(values=(1, 2, 3))
 
     @view
     def cost(self) -> int:
@@ -52,7 +52,7 @@ class Room(Space):
 
 
 class Boiler(Space):
-    kw: Param[int] = Param(int)
+    kw: int = Param()
 
     @view
     def cost(self) -> int:
@@ -62,8 +62,8 @@ class Boiler(Space):
 
 
 class HeatPump(Space):
-    kw: Param[int] = Param(int)
-    cop = Decision(int, values=(3, 4))
+    kw: int = Param()
+    cop: int = Decision(values=(3, 4))
 
     @view
     def cost(self) -> int:
@@ -73,7 +73,7 @@ class HeatPump(Space):
 
 
 class Thermostat(Space):
-    kw: Param[int] = Param(int)
+    kw: int = Param()
 
     @view
     def cost(self) -> int:
@@ -85,8 +85,8 @@ class Thermostat(Space):
 class Match(Space):
     """A relation node: two located values must agree."""
 
-    a: LocatedParam[int] = Param(Located)
-    b: LocatedParam[int] = Param(Located)
+    a: LocatedParam[int] = LocatedParam()
+    b: LocatedParam[int] = LocatedParam()
 
     @constraint
     def same(self) -> bool | Rejected:
@@ -103,15 +103,15 @@ class Match(Space):
 
 
 class House(Space):
-    budget: Param[int] = Param(int)
-    want_garage = Decision(bool, values=(False, True))
+    budget: int = Param()
+    want_garage: bool = Decision(values=(False, True))
     hall = Room()  # its area is supplied by the assignment below
     kitchen = Room(area=12)
     dining = Room(area=16)
     garage = Room(area=20, when=want_garage)
     # A class attribute may name a candidate: a typed handle, not a placement.
     heat_pump = HeatPump(kw=8)
-    heating = Decision[Boiler | HeatPump](values={"boiler": Boiler(kw=24), "heat_pump": heat_pump})
+    heating: Boiler | HeatPump = Decision(values={"boiler": Boiler(kw=24), "heat_pump": heat_pump})
     thermostat = Thermostat(kw=heating.kw)
     hall.area = kitchen.area  # an edge declared after its nodes
     matched = Match(a=kitchen.finish, b=dining.finish)
@@ -130,7 +130,7 @@ class House(Space):
 
 
 def test_the_house_is_declared_then_configured() -> None:
-    house = configure(House(budget=200))
+    house = design_space(House(budget=200))
     assert isinstance(house.total.query(), Unresolved)  # nothing decided yet
     assert house.hall.area == 12  # supplied by the assignment hall.area = kitchen.area
     point = house.with_choices(
@@ -155,7 +155,7 @@ def test_the_house_is_declared_then_configured() -> None:
 
 
 def test_a_structural_choice_reads_as_the_selected_candidate() -> None:
-    house = configure(House(budget=200))
+    house = design_space(House(budget=200))
     # heating.kw is unresolved until the decision is made.
     assert isinstance(house.thermostat.query(Thermostat.kw), Unresolved)
     boiler = house.with_choices(heating="boiler")
@@ -172,7 +172,7 @@ def test_a_structural_choice_reads_as_the_selected_candidate() -> None:
 
 
 def test_the_relation_and_the_budget_own_their_refusals() -> None:
-    house = configure(House(budget=80))
+    house = design_space(House(budget=80))
     point = house.with_choices(
         {
             House.want_garage: True,
@@ -195,7 +195,7 @@ def test_the_relation_and_the_budget_own_their_refusals() -> None:
 
 
 def test_the_garage_is_present_only_when_wanted() -> None:
-    house = configure(House(budget=500))
+    house = design_space(House(budget=500))
     without = house.with_choices(want_garage=False)
     assert isinstance(without.garage.query(Room.finish), Inapplicable)
     with pytest.raises(ConfigurationError):
@@ -205,7 +205,7 @@ def test_the_garage_is_present_only_when_wanted() -> None:
 
 
 def test_keys_selections_and_inspection_use_declaration_paths() -> None:
-    house = configure(House(budget=200))
+    house = design_space(House(budget=200))
     keys = {item.key for item in inspection.decisions(house)}
     assert keys == {
         "want_garage",
@@ -219,7 +219,7 @@ def test_keys_selections_and_inspection_use_declaration_paths() -> None:
     point = house.with_choices({House.heating: "heat_pump", House.heat_pump.cop: 4})
     captured = selections.capture(point)
     assert captured.keys == ("heating", "heating.heat_pump.cop")
-    replayed = selections.restore(configure(House(budget=999)), captured)
+    replayed = selections.restore(design_space(House(budget=999)), captured)
     assert replayed.accepted and replayed.instance.thermostat.kw == 8
     (choice,) = inspection.choices(house)
     assert [case.name for case in choice.cases] == ["boiler", "heat_pump"]

@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 from collections.abc import Generator, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from threading import RLock
 from types import MappingProxyType
 from typing import TYPE_CHECKING, TypeAlias, cast
@@ -36,7 +36,7 @@ from .results import (
 
 if TYPE_CHECKING:
     from ._configuration import Space
-    from .compiler import SpaceModel
+    from .compiler import Model
 
 Assessment: TypeAlias = ViewAssessment[object] | ConstraintAssessment
 
@@ -46,13 +46,15 @@ class Evaluation:
     result: QueryResult[object]
     dependencies: tuple[int, ...] = ()
     assessment: Assessment | None = None
+    # Method reads that went straight to a forwarding alias's source: (alias, source).
+    via: tuple[tuple[int, int], ...] = ()
 
 
 @dataclass(frozen=True, slots=True, eq=False)
 class Snapshot:
     """One root binding and commitment set with a local evaluation cache."""
 
-    model: SpaceModel[Space]
+    model: Model[Space]
     parameters: Mapping[int, object]
     assignments: Mapping[int, object] = field(default_factory=dict)
     lock: RLock = field(default_factory=RLock, repr=False)
@@ -255,6 +257,8 @@ def _frame(snapshot: Snapshot, node: Node) -> _execution.Frame:
             )
         )
     if node.kind == "const":
+        if node.domain is not None:
+            return (yield from _pinned(snapshot, node, Available(node.value)))
         return Evaluation(Available(node.value))
     if node.kind in {"present", "locate", "members"}:
         return (yield from _graph_frame(snapshot, node))
@@ -283,7 +287,10 @@ def _frame(snapshot: Snapshot, node: Node) -> _execution.Frame:
     if node.kind in {"alias", "guard"}:
         if node.output is None:
             raise EvaluationError(node.owner, node.kind, "missing output reference")
-        return Evaluation(cast(QueryResult[object], (yield node.output)))
+        answer = cast(QueryResult[object], (yield node.output))
+        if node.domain is not None:
+            return (yield from _pinned(snapshot, node, answer))
+        return Evaluation(answer)
     if node.kind == "select":
         if node.selector is None or node.selection_index is None:
             raise EvaluationError(node.owner, "selection", "missing selector")
@@ -343,6 +350,76 @@ def _frame(snapshot: Snapshot, node: Node) -> _execution.Frame:
         raise EvaluationError(node.owner, node.kind, str(cause)) from cause
 
 
+def _refused(node: Node, value: object, answer: QueryResult[object]) -> QueryResult[object]:
+    """A supplied value outside the declared domain, reported with who supplied it."""
+    if not isinstance(answer, Rejected):
+        return answer
+    reason = "; ".join(finding.message for finding in answer.findings)
+    supplied = node.note or f"{node.key} = {value!r}"
+    return reject(
+        "domain-membership",
+        f"{supplied}: {value!r} is outside the declared domain ({reason})",
+        owner=node.owner,
+    )
+
+
+def _pinned(snapshot: Snapshot, node: Node, answer: QueryResult[object]) -> _execution.Frame:
+    """A pinned coordinate: the supplied value must be in the declared domain."""
+    if not isinstance(answer, Available):
+        return Evaluation(answer)
+    admission = yield from _membership_frame(snapshot, node, answer.value, check_guard=False)
+    if isinstance(admission.result, Available) and admission.result.value is True:
+        return Evaluation(answer)
+    return Evaluation(_refused(node, answer.value, admission.result))
+
+
+def supplied_provenance(snapshot: Snapshot, evaluation: Evaluation, index: int) -> Evaluation:
+    """A computation's own refusal names who set the overridden values it read.
+
+    ``kitchen.area = 16 (set by House at house.py:42; declared 12 at room.py:10)``
+    is appended to each finding the computation owns, for every value it read
+    that an enclosing body set over another setting.
+    """
+    result = evaluation.result
+    linked = snapshot.linked
+    if not isinstance(result, Rejected) or not linked.provenance:
+        return evaluation
+    node = linked.nodes[index]
+    if node.function is None:
+        return evaluation
+    read = (*evaluation.dependencies, *(alias for alias, _ in evaluation.via))
+    texts = tuple(
+        dict.fromkeys(
+            linked.provenance[item].text()
+            for item in read
+            if item in linked.provenance and len(linked.provenance[item].layers) > 1
+        )
+    )
+    if not texts:
+        return evaluation
+    findings = tuple(
+        replace(
+            finding,
+            message=f"{finding.message}; {'; '.join(texts)}",
+            details=(*finding.details, ("provenance", texts)),
+        )
+        if finding.owner == node.owner
+        else finding
+        for finding in result.findings
+    )
+    annotated = Rejected(findings)
+    assessment = evaluation.assessment
+    if isinstance(assessment, ConstraintAssessment):
+        assessment = ConstraintAssessment(
+            {
+                key: annotated if answer is result else answer
+                for key, answer in assessment.results.items()
+            },
+            annotated if assessment.result is result else assessment.result,
+        )
+    return Evaluation(annotated, evaluation.dependencies, assessment, evaluation.via)
+
+
 def _self_point(snapshot: Snapshot, scope: int) -> Space:
     from .occurrence import _attach  # noqa: PLC0415 - scoped callback receiver
 
@@ -381,7 +458,34 @@ def _membership_frame(
         assert blocked is not None
         return Evaluation(blocked)
     assert isinstance(called, _execution._Returned)
-    return Evaluation(cast(QueryResult[object], called.value))
+    result = cast(QueryResult[object], called.value)
+    if node.contract is not None and isinstance(result, Available) and result.value is True:
+        # A replaced Decision: the declared domain still checks the candidate.
+        contract = yield from _contract_frame(snapshot, node, candidate)
+        if not (isinstance(contract, Available) and contract.value is True):
+            return Evaluation(_refused(node, candidate, contract))
+    return Evaluation(result)
+
+
+def _contract_frame(
+    snapshot: Snapshot, node: Node, candidate: object
+) -> Generator[int | _execution.Call, object, QueryResult[object]]:
+    assert node.contract is not None and node.semantics is not None
+    arguments, failure = yield from _arguments(snapshot.linked, node.contract_arguments, node.owner)
+    if failure is not None:
+        return failure
+    called = yield _execution.Call(
+        node.contract.membership,
+        (candidate, arguments),
+        {"semantics": node.semantics, "owner": node.owner},
+        "domain membership",
+    )
+    if isinstance(called, _execution._Halt):
+        blocked = _blocked(list(called.results))
+        assert blocked is not None
+        return blocked
+    assert isinstance(called, _execution._Returned)
+    return cast(QueryResult[object], called.value)
 
 
 def _enumeration_frame(snapshot: Snapshot, node: Node) -> _execution.Frame:
@@ -407,7 +511,18 @@ def _enumeration_frame(snapshot: Snapshot, node: Node) -> _execution.Frame:
         assert blocked is not None
         return Evaluation(blocked)
     assert isinstance(called, _execution._Returned)
-    return Evaluation(cast(QueryResult[object], called.value))
+    result = cast(QueryResult[object], called.value)
+    if node.contract is None or not isinstance(result, Available):
+        return Evaluation(result)
+    # Advisory enumeration of a replaced Decision lists what its contract admits.
+    admitted: list[object] = []
+    for candidate in cast(tuple[object, ...], result.value):
+        contract = yield from _contract_frame(snapshot, node, candidate)
+        if isinstance(contract, Available) and contract.value is True:
+            admitted.append(candidate)
+        elif not isinstance(contract, Rejected):
+            return Evaluation(contract)
+    return Evaluation(Available(tuple(admitted)))
 
 
 def _applicability(snapshot: Snapshot, node: Node) -> NonValue | None:

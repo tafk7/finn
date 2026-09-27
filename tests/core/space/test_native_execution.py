@@ -18,9 +18,9 @@ from finn.core.space import (
     Unresolved,
     ValueSemantics,
     ValueUnavailableError,
-    configure,
     constraint,
     derived,
+    design_space,
     domain,
     inspection,
     selections,
@@ -33,7 +33,7 @@ from finn.core.space.occurrence import state
 @pytest.mark.parametrize("field", ("caught", "finally_return", "blocked"))
 def test_caught_failure_and_nonvalue_cannot_publish_fallback(field: str) -> None:
     class Family(Space):
-        choice = Decision(int, values=(1,))
+        choice: int = Decision(values=(1,))
 
         @derived
         def broken(self) -> int:
@@ -60,7 +60,7 @@ def test_caught_failure_and_nonvalue_cannot_publish_fallback(field: str) -> None
             except ValueUnavailableError:
                 return 99
 
-    point = configure(Family())
+    point = design_space(Family())
     if field == "blocked":
         assert isinstance(point.query(Family.blocked), Unresolved)
         assert point.with_choices(choice=1).blocked == 1
@@ -92,8 +92,8 @@ def test_caught_failure_and_nonvalue_cannot_publish_fallback(field: str) -> None
 )
 def test_driver_operations_remain_sticky_when_caught(operation: str) -> None:
     class Family(Space):
-        fact: Param[int] = Param(int)
-        choice = Decision(int, values=(1,))
+        fact: int = Param()
+        choice: int = Decision(values=(1,))
 
         @view
         def output(self) -> int:
@@ -107,7 +107,7 @@ def test_driver_operations_remain_sticky_when_caught(operation: str) -> None:
                 return 99
             return 0
 
-    foreign = configure(Family(fact=8))
+    foreign = design_space(Family(fact=8))
     saved = selections.capture(foreign)
     actions: dict[str, Callable[[Family], object]] = {
         "query": lambda point: point.query(Family.choice),
@@ -123,10 +123,10 @@ def test_driver_operations_remain_sticky_when_caught(operation: str) -> None:
         "assign": lambda point: setattr(point, "fact", 99),
         "delete": lambda point: delattr(point, "fact"),
         "foreign": lambda point: foreign.fact,
-        # configure() is the compile step that replaced constructing a configuration.
-        "configure": lambda point: configure(Family(fact=1)),
+        # design_space() is the compile step that replaced constructing a configuration.
+        "configure": lambda point: design_space(Family(fact=1)),
     }
-    point = configure(Family(fact=7))
+    point = design_space(Family(fact=7))
     with pytest.raises(NativeEvaluationError, match="cross-snapshot|driver-only"):
         _ = point.invalid
     assert point.fact == 7 and isinstance(point.query(Family.choice), Unresolved)
@@ -137,7 +137,7 @@ def test_context_variables_survive_suspension_without_leaking() -> None:
     observed: list[str] = []
 
     class Family(Space):
-        fact: Param[int] = Param(int)
+        fact: int = Param()
 
         @derived
         def inner(self) -> int:
@@ -155,7 +155,7 @@ def test_context_variables_survive_suspension_without_leaking() -> None:
             finally:
                 marker.reset(token)
 
-    point = configure(Family(fact=7))
+    point = design_space(Family(fact=7))
     assert point.outer == 7 and observed == ["driver", "outer"]
     assert marker.get() == "driver"
 
@@ -165,10 +165,10 @@ def test_contextual_domain_error_is_one_primary_failure() -> None:
         raise LookupError("membership failure")
 
     class Family(Space):
-        choice = Decision(int, domain=domain(accepts=accepts))
+        choice: int = Decision(domain=domain(accepts=accepts))
 
     with pytest.raises(NativeEvaluationError) as caught:
-        configure(Family()).with_choices(choice=1)
+        design_space(Family()).with_choices(choice=1)
     assert caught.value.owner == "choice" and caught.value.role == "domain membership"
     assert isinstance(caught.value.__cause__, LookupError)
     assert caught.value.cleanup_failures == ()
@@ -187,7 +187,7 @@ def test_public_snapshot_failure_cannot_be_caught_into_success() -> None:
     )
 
     class Family(Space):
-        fact: Param[list[int]] = Param(semantics)
+        fact: list[int] = Param(semantics=semantics)
 
         @derived
         def output(self) -> int:
@@ -196,7 +196,7 @@ def test_public_snapshot_failure_cannot_be_caught_into_success() -> None:
             except EvaluationError:
                 return 99
 
-    point = configure(Family(fact=[1]))
+    point = design_space(Family(fact=[1]))
     armed = True
     with pytest.raises(NativeEvaluationError) as caught:
         _ = point.output
@@ -210,9 +210,9 @@ def test_semantic_transformations_cannot_read_configuration_even_when_caught(hoo
     armed = False
 
     class Facts(Space):
-        value: Param[int] = Param(int)
+        value: int = Param()
 
-    facts = configure(Facts(value=7))
+    facts = design_space(Facts(value=7))
 
     def probe(role: str) -> None:
         if armed and hook == role:
@@ -236,9 +236,11 @@ def test_semantic_transformations_cannot_read_configuration_even_when_caught(hoo
     semantics = ValueSemantics(list, "list", recognizes, equal, snapshot)
 
     class Family(Space):
-        choice = Decision(semantics, domain=domain(accepts=lambda candidate: True))
+        choice: list[int] = Decision(
+            domain=domain(accepts=lambda candidate: True), semantics=semantics
+        )
 
-    point = configure(Family()).with_choices(choice=[1])
+    point = design_space(Family()).with_choices(choice=[1])
     armed = True
     with pytest.raises(EvaluationError, match="pure value transformation"):
         point.with_choices(choice=[1])
@@ -248,38 +250,37 @@ def test_semantic_transformations_cannot_read_configuration_even_when_caught(hoo
 
 def test_blocked_self_constraint_keeps_its_inspectable_assessment() -> None:
     class Family(Space):
-        choice = Decision(int, values=(1,))
+        choice: int = Decision(values=(1,))
 
         @constraint
         def positive(self) -> bool:
             return self.choice > 0
 
-    assessment = configure(Family()).inspect(Family.positive)
+    assessment = design_space(Family()).inspect(Family.positive)
     assert isinstance(assessment.result, Unresolved)
     assert isinstance(assessment.results["positive"], Unresolved)
 
 
 def test_membership_only_domain_enumeration_keeps_applicability_and_blockers() -> None:
     class Family(Space):
-        enabled: Param[bool] = Param(bool)
-        prerequisite = Decision(int, values=(1,))
-        choice = Decision(
-            int,
+        enabled: bool = Param()
+        prerequisite: int = Decision(values=(1,))
+        choice: int = Decision(
             domain=domain(accepts=lambda candidate, value: candidate == value, value=prerequisite),
             when=enabled,
         )
 
     assert isinstance(
-        configure(Family(enabled=False)).field(Family.choice).candidates(), Inapplicable
+        design_space(Family(enabled=False)).field(Family.choice).candidates(), Inapplicable
     )
-    point = configure(Family(enabled=True))
+    point = design_space(Family(enabled=True))
     assert isinstance(point.field(Family.choice).candidates(), Unresolved)
     assert point.with_choices(prerequisite=1).field(Family.choice).candidates() is None
 
 
 def test_self_cycles_are_reached_through_scopes_admission_and_guards() -> None:
     class Child(Space):
-        source: Param[int] = Param(int)
+        source: int = Param()
 
         @derived
         def value(self) -> int:
@@ -297,8 +298,8 @@ def test_self_cycles_are_reached_through_scopes_admission_and_guards() -> None:
         def extent(self) -> int:
             return self.choice
 
-        choice = Decision(
-            int, domain=domain(accepts=lambda candidate, value: candidate == value, value=extent)
+        choice: int = Decision(
+            domain=domain(accepts=lambda candidate, value: candidate == value, value=extent)
         )
 
     class Guard(Space):
@@ -306,12 +307,12 @@ def test_self_cycles_are_reached_through_scopes_admission_and_guards() -> None:
         def enabled(self) -> bool:
             return self.choice > 0
 
-        choice = Decision(int, values=(1,), when=enabled)
+        choice: int = Decision(values=(1,), when=enabled)
 
-    point = configure(Parent())
+    point = design_space(Parent())
     with pytest.raises(EvaluationError, match="dependency cycle") as scoped:
         _ = point.output
     assert "child.value" in str(scoped.value)
     for family in (Admission, Guard):
         with pytest.raises(EvaluationError, match="dependency cycle"):
-            configure(family()).with_choices(choice=1)
+            design_space(family()).with_choices(choice=1)

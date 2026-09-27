@@ -3,9 +3,10 @@
 """The Space family type, its node declarations, and bound value and view accessors.
 
 A ``Space`` object is one of two things. Calling a family, ``Room(area=12)``,
-returns a *node declaration*: a template with bindings that reads its members
-as symbolic references. ``configure(node)`` returns a *configuration*: a point
-of the compiled space whose members read values. Both are typed as the family.
+returns a *declaration*: a template with bindings that reads its members as
+symbolic references. ``design_space(node)`` returns a *configuration* (at
+first the whole design space, every choice open) whose members read values.
+Both are typed as the family.
 """
 
 # Local dispatch imports keep configuration types independent of their operations.
@@ -125,11 +126,11 @@ class SpaceMeta(type):
     """Declare nodes, and protect prepared declaration structure.
 
     ``dataclass_transform`` types each family's call from its annotated
-    formals (``area: Param[int] = Param(int)``) plus the ``when`` guard. Param
-    is deliberately not a field specifier: every formal then has a default at
-    the type level, so a bare ``Room()`` type-checks (a later assignment may
-    supply its formals), while each keyword and assignment is typed by
-    ``Param.__set__``.
+    formals and Decisions (``area: int = Param()``) plus the ``when`` guard.
+    Param and Decision are deliberately not field specifiers: their call is
+    then a default, so every member is optional at the call and a bare
+    ``Room()`` type-checks (a later assignment may supply it), while each
+    keyword and assignment is typed by the annotation.
     """
 
     if not TYPE_CHECKING:
@@ -187,7 +188,7 @@ def _check_configuration_mutation(point: Space, name: str) -> None:
 
 
 class Space(metaclass=SpaceMeta):
-    """A family of design spaces: calling it declares a node, ``configure`` compiles one."""
+    """A family of design spaces: calling it declares a node, ``design_space`` opens one."""
 
     when: _When = _when_field(default=None, kw_only=True)
     _state: ClassVar[object]
@@ -226,7 +227,7 @@ class Space(metaclass=SpaceMeta):
 
     if not TYPE_CHECKING:
         # Hidden from type checkers: a declared __setattr__ would make mypy accept
-        # assignment to any attribute. Formals are typed by Param.__set__ instead.
+        # assignment to any attribute. Members are typed by their annotations instead.
 
         def __setattr__(self, name: str, value: object) -> None:
             if declared_path(self) is not None:
@@ -240,7 +241,7 @@ class Space(metaclass=SpaceMeta):
 
         def __delattr__(self, name: str) -> None:
             if declared_path(self) is not None:
-                raise AttributeError(f"{name}: a supplied formal cannot be removed")
+                raise AttributeError(f"{name}: an assignment cannot be removed")
             _check_configuration_mutation(self, name)
             object.__delattr__(self, name)
 
@@ -263,10 +264,26 @@ class Space(metaclass=SpaceMeta):
     def query(self, value: T) -> QueryResult[T]: ...
 
     def query(self, value: object) -> QueryResult[Any]:
-        """Query a member or a reference (``House.kitchen.finish``) of this configuration."""
+        """Query a member or a reference (``House.kitchen.finish``) of this configuration.
+
+        A node (a child, a candidate handle, or a reference input such as
+        ``K.output``) answers its configuration: inapplicable when the node is
+        absent, unresolved while its presence is undecided or it is unsupplied.
+        """
         from .occurrence import query
 
         return query(self, value)
+
+    def present(self, node: Space | None) -> bool:
+        """Whether a node (a child, a candidate, or the node a reference input names) is present.
+
+        Read like a value: undecided presence raises ``ValueUnavailableError``
+        (inside a method it halts the method as unresolved). An unsupplied
+        optional reference input is not present.
+        """
+        from .occurrence import present
+
+        return present(self, node)
 
     @overload
     def inspect(self, view: View[T]) -> ViewAssessment[T]: ...
@@ -290,17 +307,23 @@ class Space(metaclass=SpaceMeta):
     def field(self, reference: Decision[T] | DecisionHandle[T]) -> BoundDecision[T]: ...
 
     @overload
-    def field(self, reference: View[T]) -> BoundView[T]: ...
+    def field(self, reference: View[T]) -> BoundView[T]: ...  # type: ignore[overload-overlap]
 
     @overload
-    def field(self, reference: ValueRef[T]) -> BoundValue[T]: ...
+    def field(self, reference: ValueRef[T]) -> BoundValue[T]: ...  # type: ignore[overload-overlap]
 
-    def field(
-        self, reference: ValueRef[T] | View[T]
-    ) -> BoundValue[T] | BoundDecision[T] | BoundView[T]:
+    @overload
+    def field(self, reference: Space | None) -> BoundDecision[str]: ...
+
+    @overload
+    def field(self, reference: T) -> BoundDecision[T]: ...
+
+    def field(self, reference: object) -> BoundValue[Any] | BoundDecision[Any] | BoundView[Any]:
+        """A bound accessor. A member typed as its value binds as a decision
+        accessor: its decision operations refuse a member that is not one."""
         from .occurrence import bind_field
 
-        return bind_field(self, reference)
+        return bind_field(self, cast("ValueRef[Any]", reference))
 
     def with_choices(
         self, /, *changes: ChangeRequest | Mapping[Any, object], **choices: object

@@ -15,10 +15,10 @@ from finn.core.space import (
     View,
     ViewKey,
     composite,
-    configure,
+    design_space,
     inspection,
 )
-from finn.core.space.compiler import compile_space
+from finn.core.space.compiler import compile_model
 from finn.core.space.errors import DefinitionError
 
 
@@ -34,7 +34,7 @@ def test_authored_names_are_unambiguous_segments(name: str) -> None:
         composite("Named", {name: Const(3)})
     family = type("BadIdentity", (Space,), {name: Const(3)})
     with pytest.raises(DefinitionError, match="name segment"):
-        compile_space(family)
+        compile_model(family)
 
 
 def test_malformed_candidates_fail_as_definitions() -> None:
@@ -42,7 +42,7 @@ def test_malformed_candidates_fail_as_definitions() -> None:
     # malformed forms are a candidate or a reference input that is not a
     # node, and a composite over a non-Space base.
     class Holder(Space):
-        held: Param[Space] = Param(Space)
+        held: Space = Param()
 
     with pytest.raises(DefinitionError, match="Space base family"):
         composite("NotSpace", {}, base=cast(type[Space], int))
@@ -64,14 +64,14 @@ def test_malformed_candidates_fail_as_definitions() -> None:
         exports = {first: result, second: result}
 
     with pytest.raises(DefinitionError, match="duplicate export key result"):
-        compile_space(Duplicate)
+        compile_model(Duplicate)
 
 
 def test_case_ids_can_use_hyphens_without_becoming_paths() -> None:
     class Root(Space):
-        implementation = Decision(values={"low-area": Space()})
+        implementation: Space = Decision(values={"low-area": Space()})
 
-    point = configure(Root())
+    point = design_space(Root())
     (choice,) = inspection.choices(point)
     assert [case.name for case in choice.cases] == ["low-area"]
     assert [case.scope for case in choice.cases] == ["implementation.low-area"]

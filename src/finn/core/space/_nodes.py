@@ -1,12 +1,17 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
-"""Node declarations: calling a family, assigning formals, and placing each node once.
+"""Node declarations: calling a family, assigning members, and placing each node once.
 
 ``Room(area=12)`` returns a declaration-mode ``Room`` object carrying a
-``NodeDecl`` record; ``hall.area = kitchen.area`` supplies a formal later. A
-node is placed exactly once: by a class-body attribute, as a candidate of a
-Decision, or (when nothing else places it) at the one reference input it is
-supplied to. Nothing here compiles; ``configure`` does.
+``NodeDecl`` record; ``hall.area = kitchen.area`` supplies a formal later.
+Assignment reaches any depth (``middle.kernel.port.lanes = lanes``): the value
+is stored on the first node of the path, keyed by the member path below it,
+and applies to that placement only. Where several bodies set one member, the
+outermost wins; one body setting it twice is a definition error.
+
+A node is placed exactly once: by a class-body attribute, as a candidate of a
+Decision, as the replacement of a child node, or (when nothing else places it)
+at the one reference input it is supplied to. Nothing here compiles.
 """
 
 # Lazy imports break the declaration/configuration/evaluation cycle.
@@ -15,13 +20,16 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, NoReturn, cast
+from typing import TYPE_CHECKING, Any, Literal, NoReturn, cast
 
 from .declarations import (
     MISSING,
+    UNSUPPLIED,
     ChoiceMemberRef,
+    Const,
     Decision,
     Declaration,
+    LocatedParam,
     Param,
     ValueRef,
     View,
@@ -41,13 +49,18 @@ if TYPE_CHECKING:
 
 _STRING = default_semantics(str)
 
+# What an assignment may target. Data is overridable; behaviour is not.
+SlotKind = Literal["param", "reference", "decision", "choice", "node", "behaviour"]
+
 
 class NodeDecl(Declaration):
-    """One declared node of ``family``: its bindings, guard and placement.
+    """One declared node of ``family``: its assignments, guard and placement.
 
-    A declaration is mutable until it is frozen: formals left unsupplied at the
-    call may be assigned (``hall.area = kitchen.area``). It freezes when a model
-    containing it is prepared, or when ``configure`` takes it as a root.
+    ``overrides`` maps a member path below this node (``"area"``, or
+    ``"port.dtype"`` through a child) to its supplier and the line that wrote
+    it. A path of one segment is the node's own binding (at the call, or by
+    direct assignment). A declaration is mutable until it is frozen: when a
+    model containing it is prepared, or when ``design_space`` takes it as a root.
     """
 
     _record_origin = False
@@ -57,12 +70,7 @@ class NodeDecl(Declaration):
         # (a Space node, a Decision) would read through its __get__ in mypy.
         self.family: type[Space] = family
         self.origin = origin
-        self.bindings: dict[str, object] = {}
-        # Where each binding was written: the call, or an assignment.
-        self.supplied_at: dict[str, str | None] = {}
-        # Formals of descendants supplied through a path (``kernel.port.dtype = x``),
-        # keyed by the node path below this node; they apply to this placement only.
-        self.nested: dict[tuple[NodeDecl, ...], dict[str, tuple[object, str | None]]] = {}
+        self.overrides: dict[str, tuple[object, str | None]] = {}
         self.instance: object = None
         self.placement: str | None = None
         self.candidate_of: NodeDecision | None = None
@@ -71,6 +79,16 @@ class NodeDecl(Declaration):
         self.sites: list[str] = []
         self.model: object = None
         self.frozen: str | None = None
+
+    @property
+    def bindings(self) -> dict[str, object]:
+        """The node's own members supplied at its call or by direct assignment."""
+        return {key: value for key, (value, _) in self.overrides.items() if "." not in key}
+
+    @property
+    def nested(self) -> dict[str, object]:
+        """Members of descendants assigned through a path, keyed ``"port.dtype"``."""
+        return {key: value for key, (value, _) in self.overrides.items() if "." in key}
 
     def describe(self) -> str:
         where = f" placed at {self.placement}" if self.placement else ""
@@ -84,17 +102,13 @@ class NodeDecl(Declaration):
         return f"<{self.describe()}>"
 
 
-class FamilyFormal(NodeDecl):
-    """``Param(Family)``: a reference input whose value is a node supplied by the caller."""
-
-    required: bool = True
-
-
 class NodeDecision(Decision[str]):
     """The record of a Decision over nodes; its class-body face is a ``NodeChoice``."""
 
     candidates: Mapping[str, NodeDecl | None]
     proxy: NodeChoice
+    # Where it replaces another Decision over nodes, if it is an override.
+    replaces: str | None
 
     def describe(self) -> str:
         where = f"{self.owner.__qualname__}.{self.name}" if self.owner is not None else None
@@ -120,10 +134,6 @@ def place_in_class(record: NodeDecl, owner: type[object], name: str) -> None:
         # It is a handle, not a second placement; collection checks the owner.
         record.aliases.append(where)
         return
-    if isinstance(record, FamilyFormal):
-        Declaration.__set_name__(record, owner, name)
-        record.placement = where
-        return
     if record.placement is not None:
         _refuse_placement(record, where)
     record.owner, record.name, record.placement = owner, name, where
@@ -138,11 +148,7 @@ def place_as_candidate(record: NodeDecl, decision: NodeDecision, key: str) -> No
 
 def is_fresh(record: NodeDecl) -> bool:
     """Placed by nothing: a node supplied to a reference input is then placed there."""
-    return (
-        not isinstance(record, FamilyFormal)
-        and record.placement is None
-        and record.candidate_of is None
-    )
+    return record.placement is None and record.candidate_of is None
 
 
 def node_record(value: object) -> NodeDecl | None:
@@ -163,68 +169,101 @@ def _declaration_object(family: type[Space], path: tuple[Declaration, ...]) -> S
     return node
 
 
-def family_formal(family: type[Space], *, required: bool = True) -> Space:
-    record = Declaration.__new__(FamilyFormal)
-    record._init(family, source_origin())
-    record.required = required
-    node = _declaration_object(family, (record,))
-    record.instance = node
-    return node
-
-
 def path_proxy(family: type[Space], path: tuple[Declaration, ...]) -> Space:
     """A child reached through a node declaration: ``house.kitchen``."""
     return _declaration_object(family, path)
 
 
-def family_formals(family: type[Space]) -> dict[str, Declaration]:
-    """Every formal of ``family`` by name, most-derived declaration last."""
+def slot_declaration(value: object) -> Declaration | None:
+    """The declaration a class attribute contributes: a record for a node or choice."""
     from ._configuration import Space
 
-    formals: dict[str, Declaration] = {}
+    if isinstance(value, Declaration):
+        return value
+    if isinstance(value, NodeChoice):
+        return value._space_decision()
+    if isinstance(value, Space):
+        path = declared_path(value)
+        if path is not None and len(path) == 1:
+            return path[0]
+    return None
+
+
+def is_reference_input(declaration: object) -> bool:
+    """``output: Stream = Param()``: a formal whose value is a node."""
+    return (
+        isinstance(declaration, Param)
+        and not isinstance(declaration, LocatedParam)
+        and cast(Param[object], declaration).reference_family() is not None
+    )
+
+
+def slot_kind(declaration: Declaration) -> SlotKind:
+    if isinstance(declaration, Param):
+        return "reference" if is_reference_input(declaration) else "param"
+    if isinstance(declaration, NodeDecision):
+        return "choice"
+    if isinstance(declaration, Decision):
+        return "decision"
+    if isinstance(declaration, NodeDecl):
+        return "node"
+    return "behaviour"
+
+
+def family_members(family: type[Space]) -> tuple[dict[str, Declaration], set[str]]:
+    """Every named member of ``family`` (most-derived last), and its candidate handles."""
+    members: dict[str, Declaration] = {}
+    handles: set[str] = set()
     for base in reversed(family.__mro__):
         for name, value in vars(base).items():
-            if isinstance(value, Param):
-                formals[name] = value
-            elif isinstance(value, Space):
-                path = declared_path(value)
-                if path is not None and len(path) == 1 and isinstance(path[0], FamilyFormal):
-                    formals[name] = path[0]
-                else:
-                    formals.pop(name, None)
-            elif name in formals:
-                formals.pop(name)
-    return formals
+            declaration = slot_declaration(value)
+            if declaration is None:
+                if name in members and not name.startswith("__"):
+                    members.pop(name)
+                continue
+            if isinstance(declaration, NodeDecl) and declaration.candidate_of is not None:
+                handles.add(name)
+                members.pop(name, None)
+                continue
+            handles.discard(name)
+            members[name] = declaration
+    return members, handles
 
 
-def is_required(formal: Declaration) -> bool:
-    if isinstance(formal, FamilyFormal):
-        return formal.required
-    return cast(Param[object], formal).default is MISSING
+def family_formals(family: type[Space]) -> dict[str, Param[object]]:
+    """Every formal (value or reference input) of ``family`` by name."""
+    members, _ = family_members(family)
+    return {
+        name: cast(Param[object], member)
+        for name, member in members.items()
+        if isinstance(member, Param)
+    }
 
 
-def _check_reference(formal: Param[object], value: object, label: str) -> None:
-    from .declarations import LocatedParam
+def is_required(formal: Param[object]) -> bool:
+    return formal.default is MISSING
 
-    if isinstance(formal, LocatedParam):
-        return
+
+def _check_reference(semantics: ValueSemantics[object] | None, value: object, label: str) -> None:
     supplied = cast("ValueSemantics[object] | None", getattr(value, "semantics", None))
     if (
         supplied is not None
-        and formal.semantics is not None
-        and not formal.semantics.is_compatible_with(supplied)
+        and semantics is not None
+        and not semantics.is_compatible_with(supplied)
     ):
         raise DefinitionError(f"{label}: binding has incompatible value semantics")
 
 
-def _freeze_literal(parameter: Param[object], name: str, label: str, value: object) -> object:
-    """Recognize, then snapshot, a literal once, where the node is declared.
+def _freeze_literal(
+    semantics: ValueSemantics[object] | None, name: str, label: str, value: object
+) -> object:
+    """Recognize, then snapshot, a literal once, where it is written.
 
     An unrecognized value is a definition error; an adapter that raises is a
     programmer failure, reported with its owner and role like any other.
     """
-    semantics = parameter.semantics
-    assert semantics is not None
+    if semantics is None:
+        raise DefinitionError(f"{label}: the member's value type is not known yet")
     try:
         recognized = semantics.accepts(value)
     except Exception as cause:
@@ -237,133 +276,248 @@ def _freeze_literal(parameter: Param[object], name: str, label: str, value: obje
         raise EvaluationError(name, "parameter snapshot", str(cause)) from cause
 
 
-def _supplier(name: str, formal: Declaration, value: object, label: str) -> object:
-    """Validate one supplier of a formal, as far as it can be checked before linking."""
+def _value_supplier(
+    semantics: ValueSemantics[object] | None, name: str, value: object, label: str
+) -> object:
     from ._configuration import Space
 
-    if isinstance(formal, FamilyFormal):
-        supplied = node_record(value)
-        path = declared_path(value) if isinstance(value, Space) else None
-        if supplied is None and path is not None and len(path) > 1:
-            raise DefinitionError(
-                f"{label}: {_path_text(path)} reaches into another node; a reference input "
-                "names a node placed beside it, or forwards an input of the enclosing family"
-            )
-        if supplied is None:
-            raise DefinitionError(f"{label}: a reference input takes a node declaration")
-        if not issubclass(supplied.family, formal.family):
-            raise DefinitionError(
-                f"{label}: expected a {formal.family.__qualname__} node, "
-                f"got {supplied.family.__qualname__}"
-            )
-        supplied.sites.append(label)
-        return supplied
-    parameter = cast(Param[object], formal)
-    if isinstance(value, NodeChoice) or isinstance(value, Space):
+    if isinstance(value, (NodeChoice, Space)):
         raise DefinitionError(
             f"{label}: a node or a Decision over nodes is not a value; bind one of its members"
         )
     # A declaration's owner is set only after the class body ran, so a
     # sibling member and a fresh inline Decision are told apart when linking.
     if isinstance(value, (ValueRef, View)):
-        _check_reference(parameter, value, label)
+        if isinstance(value, (Param, Decision)) and not isinstance(value, NodeDecision):
+            try:  # a sibling in the class body: its annotation is already known
+                cast(Param[object], value).resolve()
+            except DefinitionError:
+                pass
+        _check_reference(semantics, value, label)
         if isinstance(value, Decision) and not isinstance(value, NodeDecision):
             cast(Decision[object], value).sites.append(label)
         return value
-    return _freeze_literal(parameter, name, label, value)
+    return _freeze_literal(semantics, name, label, value)
+
+
+def _reference_supplier(formal: Param[object], value: object, label: str) -> object:
+    from ._configuration import Space
+
+    if isinstance(value, Param):
+        return value  # forwards an input of the enclosing family; checked when linking
+    supplied = node_record(value)
+    path = declared_path(value) if isinstance(value, Space) else None
+    if supplied is None and path is not None and len(path) > 1:
+        raise DefinitionError(
+            f"{label}: {_path_text(path)} reaches into another node; a reference input "
+            "names a node placed beside it, or forwards an input of the enclosing family"
+        )
+    if supplied is None:
+        raise DefinitionError(f"{label}: a reference input takes a node declaration")
+    family = cast("type[Space]", formal.reference_family())
+    if not issubclass(supplied.family, family):
+        raise DefinitionError(
+            f"{label}: expected a {family.__qualname__} node, got {supplied.family.__qualname__}"
+        )
+    supplied.sites.append(label)
+    return supplied
+
+
+def _choice_supplier(original: NodeDecision, value: object, label: str) -> NodeDecision:
+    """A Decision over nodes may be narrowed: fewer cases, each a compatible node."""
+    if not isinstance(value, NodeChoice) or len(value._space_path) != 1:
+        raise DefinitionError(
+            f"{label}: a Decision over nodes is overridden by another Decision over nodes "
+            "(a narrower one); a value cannot pin it"
+        )
+    decision = value._space_decision()
+    if decision.owner is not None or decision.replaces is not None:
+        raise DefinitionError(f"{label}: {decision.describe()} is already placed")
+    for key, record in decision.candidates.items():
+        if key not in original.candidates:
+            raise DefinitionError(
+                f"{label}: case {key!r} is not a case of {original.describe()}; an override "
+                "narrows the cases, it does not add one"
+            )
+        previous = original.candidates[key]
+        if (record is None) != (previous is None) or (
+            record is not None
+            and previous is not None
+            and not issubclass(record.family, previous.family)
+        ):
+            expected = "None" if previous is None else f"a {previous.family.__qualname__} node"
+            raise DefinitionError(f"{label}: case {key!r} must be {expected}")
+    decision.replaces = label
+    for key, record in decision.candidates.items():
+        if record is not None:
+            record.placement = f"{label}.{key}"
+    return decision
+
+
+def _node_supplier(original: NodeDecl, value: object, label: str) -> NodeDecl:
+    """A child node may be replaced by a fresh node of its family or a subclass."""
+    record = node_record(value)
+    if record is None:
+        raise DefinitionError(f"{label}: a child node is replaced by a node declaration")
+    if not issubclass(record.family, original.family):
+        raise DefinitionError(
+            f"{label}: expected a {original.family.__qualname__} node (or a subclass), got "
+            f"{record.family.__qualname__}; a replacement must keep every member the "
+            "enclosing bodies can name"
+        )
+    if record.when is not None:
+        raise DefinitionError(
+            f"{label}: a replacement takes its slot's presence; declare when= on the slot"
+        )
+    if not is_fresh(record) or record.sites:
+        _refuse_placement(record, f"override {label}")
+    record.placement = f"override {label}"
+    return record
+
+
+def check_supplier(
+    family: type[Space], name: str, member: Declaration, value: object, label: str
+) -> object:
+    """Validate one supplier of a member, as far as it can be checked before linking."""
+    kind = slot_kind(member)
+    if kind == "behaviour":
+        what = type(member).__name__
+        raise DefinitionError(
+            f"{label}: {family.__qualname__}.{name} is a {what}: behaviour belongs to the "
+            "family; subclass it to change it (only Params, Decisions and child nodes are "
+            "assigned)"
+        )
+    if kind == "reference":
+        return _reference_supplier(cast(Param[object], member), value, label)
+    if kind == "choice":
+        return _choice_supplier(cast(NodeDecision, member), value, label)
+    if kind == "node":
+        return _node_supplier(cast(NodeDecl, member), value, label)
+    if isinstance(member, Param):
+        member.resolve()
+    elif isinstance(member, Decision):
+        cast(Decision[object], member).resolve()
+    semantics = cast("ValueSemantics[object] | None", getattr(member, "semantics", None))
+    if isinstance(member, LocatedParam):
+        if isinstance(value, (ValueRef, View)):
+            return value
+        return _freeze_literal(semantics, name, label, value)
+    return _value_supplier(semantics, name, value, label)
+
+
+def _record(head: NodeDecl, key: str, supplier: object, origin: str | None, label: str) -> None:
+    earlier = head.overrides.get(key)
+    if earlier is not None:
+        raise DefinitionError(
+            f"{label}: {key} is already assigned at {earlier[1]} in this body; a body sets a "
+            "member once, and only an enclosing body may override it (write alternatives "
+            "as Present(a, b))"
+        )
+    head.overrides[key] = (supplier, origin)
 
 
 def declare_node(family: type[Space], keywords: Mapping[str, object]) -> Space:
     """``family(**keywords)``: validate the bindings eagerly and return the node.
 
-    Formals left out may be supplied later by assignment; a required one that
-    nothing supplies is reported when a family containing the node is prepared.
+    A keyword is exactly an assignment by the calling body. Members left out
+    may be supplied later by assignment; a required formal that nothing
+    supplies is reported when a family containing the node is prepared.
     """
 
     origin = source_origin()
     keywords = dict(keywords)
     when = _guard(keywords.pop("when", None))
-    formals = family_formals(family)
-    unknown = sorted(keywords.keys() - formals.keys())
+    members, handles = family_members(family)
+    unknown = sorted(keywords.keys() - members.keys())
     if unknown:
-        raise DefinitionError(f"{family.__qualname__}{at(origin)}: unknown formals {unknown}")
+        raise DefinitionError(f"{family.__qualname__}{at(origin)}: unknown members {unknown}")
     record = Declaration.__new__(NodeDecl)
     record._init(family, origin)
     record.when = when
     for name, value in keywords.items():
         label = f"{family.__qualname__}.{name}{at(origin)}"
-        record.bindings[name] = _supplier(name, formals[name], value, label)
-        record.supplied_at[name] = origin
+        record.overrides[name] = (check_supplier(family, name, members[name], value, label), origin)
     node = _declaration_object(family, (record,))
     record.instance = node
     return node
 
 
-def _path_label(path: tuple[NodeDecl, ...], name: str) -> str:
+def _segments(record: Declaration) -> tuple[str, ...]:
+    if isinstance(record, NodeDecl) and record.candidate_of is not None:
+        return (str(record.candidate_of.name), str(record.name))
+    return (str(record.name),)
+
+
+def _path_label(path: tuple[Declaration, ...], name: str) -> str:
     # Inside a class body a node has no name yet: identify it by its call line.
     names = [
-        record.name or f"<{record.family.__qualname__} node{at(record.origin)}>" for record in path
+        record.name
+        or f"<{getattr(record, 'family', type(record)).__qualname__} node{at(record.origin)}>"
+        for record in path
     ]
     return ".".join((*names, name))
 
 
 def assign(instance: object, name: str, value: object) -> None:
-    """``node.formal = value``: supply a formal of a declaration after the call.
+    """``node.member = value``: supply or override a member of a declaration.
 
-    Through a path (``kernel.port.dtype = x``) the formal is supplied for this
-    placement of ``kernel`` only; the binding belongs to ``kernel``.
+    Through a path (``kernel.port.dtype = x``) the member is set for this
+    placement of ``kernel`` only; the assignment is stored on ``kernel``,
+    keyed by the path below it, and overrides whatever the bodies inside
+    ``kernel`` set. One body setting a member twice is a definition error.
     """
 
     origin = source_origin()
     path = declared_path(instance)
     if path is None:
         raise AttributeError(f"{name} is an immutable configuration field; use with_choices()")
-    if any(not isinstance(item, NodeDecl) or isinstance(item, FamilyFormal) for item in path):
+    label = f"{_path_label(path, name)} (assigned at {origin})"
+    if any(not isinstance(item, NodeDecl) for item in path):
         raise DefinitionError(
-            f"{_path_label(cast(tuple[NodeDecl, ...], path), name)}{at(origin)}: assign formals "
-            "of a node declaration, or of the nodes below it, not through a reference input "
-            "or a Decision"
+            f"{label}: assign members of a node declaration, or of the nodes below it, not "
+            "through a reference input (assign the referenced node where it is placed)"
         )
     records = cast(tuple[NodeDecl, ...], path)
-    owner, target = records[0], records[-1]
-    label = f"{_path_label(records, name)} (assigned at {origin})"
-    formals = family_formals(target.family)
-    if name not in formals:
+    head, target = records[0], records[-1]
+    members, handles = family_members(target.family)
+    if name in handles:
         raise DefinitionError(
-            f"{label}: {target.family.__qualname__} has no formal {name!r}; only formals "
-            "can be assigned"
+            f"{label}: {name} names a candidate of a Decision; override the Decision instead"
         )
-    if owner.frozen is not None:
+    if name not in members:
         raise DefinitionError(
-            f"{label}: {owner.describe()} is frozen ({owner.frozen}); a declaration can be "
-            "assigned only until its family is prepared or configure() takes it"
+            f"{label}: {target.family.__qualname__} has no member {name!r} to assign"
         )
-    below = records[1:]
-    earlier: str | None | bool = False
-    if name in target.bindings:
-        earlier = target.supplied_at.get(name)
-    elif name in owner.nested.get(below, {}):
-        earlier = owner.nested[below][name][1]
-    if earlier is not False:
+    if head.frozen is not None:
         raise DefinitionError(
-            f"{label}: the formal is already supplied at {earlier}; a formal has one "
-            "supplier (write alternatives as Present(a, b))"
+            f"{label}: {head.describe()} is frozen ({head.frozen}); a declaration can be "
+            "assigned only until its family is prepared or design_space() takes it"
         )
-    supplier = _supplier(name, formals[name], value, label)
-    if below:
-        owner.nested.setdefault(below, {})[name] = (supplier, origin)
-    else:
-        target.bindings[name] = supplier
-        target.supplied_at[name] = origin
+    key = ".".join((*(segment for record in records[1:] for segment in _segments(record)), name))
+    supplier = check_supplier(target.family, name, members[name], value, label)
+    _record(head, key, supplier, origin, label)
 
 
 def unsupplied_formals(record: NodeDecl) -> list[str]:
     """Required formals that no binding of the node itself supplies (yet)."""
+    own = record.bindings
     return [
         name
         for name, formal in family_formals(record.family).items()
-        if name not in record.bindings and is_required(formal)
+        if name not in own and is_required(formal)
     ]
+
+
+def is_structural(record: NodeDecl) -> bool:
+    """Whether a root supplies structure: anything but plain values for its own formals."""
+    formals = family_formals(record.family)
+    for key, (value, _) in record.overrides.items():
+        formal = formals.get(key)
+        if formal is None or is_reference_input(formal):
+            return True
+        if isinstance(value, (ValueRef, View, NodeDecl)) and not isinstance(value, Const):
+            return True
+    return False
 
 
 def missing_formal(key: str, formal: Declaration, record: NodeDecl | None, family: str) -> str:
@@ -373,13 +527,20 @@ def missing_formal(key: str, formal: Declaration, record: NodeDecl | None, famil
     if record is None or not node:
         return (
             f"{key} is not supplied: {declared}{at(formal.origin)} is required; supply it at "
-            f"the call ({member}=...) or assign it before configure()"
+            f"the call ({member}=...) or assign it before design_space()"
         )
     return (
         f"{key} is not supplied: {declared}{at(formal.origin)} is required, and nothing "
         f"supplies it for the node {node}{at(record.origin)} before {family} is prepared; "
         f"supply it at the call or assign it ({key} = ...)"
     )
+
+
+def fallback(formal: Param[object]) -> object:
+    """The default of an unsupplied formal: a value, UNSUPPLIED, or MISSING if required."""
+    if is_reference_input(formal):
+        return MISSING if formal.required else UNSUPPLIED
+    return formal.default
 
 
 class NodeChoice:
@@ -404,6 +565,11 @@ class NodeChoice:
                 f"{owner.__qualname__}.{name}: a nested choice path is a reference"
             )
         decision = self._space_decision()
+        if decision.replaces is not None:
+            raise DefinitionError(
+                f"{owner.__qualname__}.{name}: {decision.describe()} already overrides "
+                f"{decision.replaces}"
+            )
         decision.__set_name__(owner, name)
         for key, record in decision.candidates.items():
             if record is not None:
@@ -445,7 +611,11 @@ class NodeChoice:
 def node_choice(values: Mapping[object, object], *, when: ValueRef[bool] | None) -> NodeChoice:
     if not values:
         raise DefinitionError("a Decision over nodes requires at least one candidate")
+    from .declarations import _class_body
+
     decision = Declaration.__new__(NodeDecision)
+    object.__setattr__(decision, "_body", _class_body())
+    decision.replaces = None
     candidates: dict[str, NodeDecl | None] = {}
     for key, value in values.items():
         local_name(cast(str, key), "candidate key")
@@ -453,7 +623,7 @@ def node_choice(values: Mapping[object, object], *, when: ValueRef[bool] | None)
             candidates[cast(str, key)] = None
             continue
         record = node_record(value)
-        if record is None or isinstance(record, FamilyFormal):
+        if record is None:
             raise DefinitionError(
                 f"candidate {key!r}{at(decision.origin)}: expected a node declaration or None"
             )
@@ -462,9 +632,11 @@ def node_choice(values: Mapping[object, object], *, when: ValueRef[bool] | None)
     if all(record is None for record in candidates.values()):
         raise DefinitionError(f"a Decision over nodes{at(decision.origin)} needs a node candidate")
     decision.candidates = MappingProxyType(candidates)
-    decision.semantics = _STRING
+    decision.semantics = decision.explicit = _STRING
+    decision.resolved = True
     decision.when = when
     decision.domain = finite(tuple(candidates), _STRING)
+    decision.sites = []
     proxy = NodeChoice((decision,))
     decision.proxy = proxy
     return proxy
@@ -479,21 +651,26 @@ def unwrap(value: object) -> object:
 
 
 __all__ = [
-    "FamilyFormal",
     "NodeChoice",
     "NodeDecision",
     "NodeDecl",
     "assign",
+    "check_supplier",
     "declare_node",
-    "family_formal",
+    "fallback",
     "family_formals",
+    "family_members",
     "is_fresh",
+    "is_reference_input",
     "is_required",
+    "is_structural",
     "missing_formal",
     "node_choice",
     "node_record",
     "path_proxy",
     "place_in_class",
+    "slot_declaration",
+    "slot_kind",
     "unsupplied_formals",
     "unwrap",
 ]

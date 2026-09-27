@@ -4,7 +4,11 @@
 
 Declarations are typed as the values they stand for (option A): a node call
 ``Room(area=12)`` is a ``Room``, and ``kitchen.finish`` in a class body is an
-``int``. Inside methods ``self`` is a configuration and every read is exact.
+``int``. Formals and Decisions are annotated with their value type
+(``area: int = Param()``), so a class-level member is typed as its value too,
+and so is a read through a reference input in the class body
+(``output.spec.payload_bits``). Inside methods ``self`` is a configuration and
+every read is exact.
 """
 
 from __future__ import annotations
@@ -14,16 +18,15 @@ from dataclasses import dataclass
 from typing_extensions import assert_type
 
 from finn.core.space import (
-    UNSUPPLIED,
     Available,
     BoundDecision,
-    BoundValue,
     BoundView,
     Change,
+    CodecBinding,
     ConfigurationResult,
     Const,
     Decision,
-    Derived,
+    DecisionHandle,
     Located,
     LocatedParam,
     Members,
@@ -32,16 +35,22 @@ from finn.core.space import (
     QueryResult,
     Space,
     Users,
+    ValueCodec,
+    ValueHandle,
     ValueSemantics,
     View,
     ViewAssessment,
     ViewKey,
-    configure,
+    accepted,
+    codec_for,
     constraint,
     derived,
+    design_space,
+    inspection,
     selected,
     view,
 )
+from finn.core.space.inspection import Provenance
 
 
 @dataclass(frozen=True)
@@ -55,9 +64,9 @@ COST = ViewKey("cost", int)
 
 
 class Room(Space):
-    area: Param[int] = Param(int)
-    label: Param[str] = Param(str, default=UNSUPPLIED)
-    finish = Decision(int, values=(1, 2, 3))
+    area: int = Param()
+    label: str = Param(required=False)
+    finish: int = Decision(values=(1, 2, 3))
 
     @view
     def cost(self) -> int:
@@ -67,21 +76,21 @@ class Room(Space):
 
 
 class Boiler(Space):
-    kw: Param[int] = Param(int)
+    kw: int = Param()
 
 
 class HeatPump(Space):
-    kw: Param[int] = Param(int)
-    cop = Decision(int, values=(3, 4))
+    kw: int = Param()
+    cop: int = Decision(values=(3, 4))
 
 
 class Thermostat(Space):
-    kw: Param[int] = Param(int)
+    kw: int = Param()
 
 
 class Match(Space):
-    a: LocatedParam[int] = Param(Located)
-    b: LocatedParam[int] = Param(Located)
+    a: LocatedParam[int] = LocatedParam()
+    b: LocatedParam[int] = LocatedParam()
 
     @constraint
     def same(self) -> bool:
@@ -90,17 +99,17 @@ class Match(Space):
 
 
 class House(Space):
-    budget: Param[int] = Param(int)
-    want_garage = Decision(bool, values=(False, True))
+    budget: int = Param()
+    want_garage: bool = Decision(values=(False, True))
     hall = Room()  # a bare call: its area is assigned below
     kitchen = Room(area=12)
     dining = Room(area=budget, label="dining")
     garage = Room(area=kitchen.area, when=want_garage)
     heat_pump = HeatPump(kw=8)
-    heating = Decision[Boiler | HeatPump](values={"boiler": Boiler(kw=24), "heat_pump": heat_pump})
-    maybe = Decision(values={"none": None, "boiler": Boiler(kw=3)})
+    heating: Boiler | HeatPump = Decision(values={"boiler": Boiler(kw=24), "heat_pump": heat_pump})
+    maybe: Boiler | None = Decision(values={"none": None, "boiler": Boiler(kw=3)})
     thermostat = Thermostat(kw=heating.kw)
-    hall.area = kitchen.area  # typed by Param.__set__: an int reference
+    hall.area = kitchen.area  # typed by the annotation: an int reference
     matched = Match(a=kitchen.finish, b=dining.finish)
     either = Room(area=Present(kitchen.area, dining.area))
     costs = Members(COST)
@@ -131,7 +140,7 @@ class House(Space):
 class Estate(Space):
     """A reference input: the caller supplies the node (placed here if it is fresh)."""
 
-    home: Param[House] = Param(House)
+    home: House = Param()
 
     @derived
     def finish(self) -> int:
@@ -140,7 +149,7 @@ class Estate(Space):
 
 
 class Stream(Space):
-    spec: Param[int] = Param(int)
+    spec: int = Param()
     ends = Users(COST)
 
     @derived
@@ -150,8 +159,8 @@ class Stream(Space):
 
 
 class Producer(Space):
-    output: Param[Stream] = Param(Stream)
-    feed: Param[Stream] = Param(Stream, default=UNSUPPLIED)
+    output: Stream = Param()
+    feed: Stream = Param(required=False)
 
     @view
     def cost(self) -> int:
@@ -169,15 +178,15 @@ class Graph(Space):
     later = Producer()
     later.output = edge  # a reference input may be assigned too
     fresh = Producer(output=Stream(spec=4))  # a fresh node: placed at the input
-    shared = Decision(int, values=(1, 2), name="shared")
-    assert_type(shared, Decision[int])
+    shared: int = Decision(values=(1, 2), name="shared")
+    assert_type(shared, int)
 
 
 class Fifo(Space):
-    word_bits: Param[int] = Param(int)
-    depth: Param[int] = Param(int)
-    ram_style = Decision(str, values=("auto", "block"))
-    banks = Decision(int, values=(1, 2))
+    word_bits: int = Param()
+    depth: int = Param()
+    ram_style: str = Decision(values=("auto", "block"))
+    banks: int = Decision(values=(1, 2))
     minimum_depth = Const(2)
 
     @constraint
@@ -196,8 +205,8 @@ class Fifo(Space):
 
 
 class Eltwise(Space):
-    activation: Param[DType] = Param(DTYPE)
-    weight: Param[DType] = Param(DTYPE)
+    activation: DType = Param(semantics=DTYPE)
+    weight: DType = Param(semantics=DTYPE)
 
     @derived(a=activation, b=weight, semantics=DTYPE)
     def result_dtype(*, a: DType, b: DType) -> QueryResult[DType]:
@@ -209,8 +218,8 @@ class Eltwise(Space):
 
 
 class GuardedAssembly(Space):
-    enabled: Param[bool] = Param(bool)
-    slots = Decision(int, values=(1, 2), when=enabled)
+    enabled: bool = Param()
+    slots: int = Decision(values=(1, 2), when=enabled)
     fifo = Fifo(word_bits=8, depth=4, when=enabled)
 
     @derived(when=enabled)
@@ -225,18 +234,18 @@ class GuardedAssembly(Space):
 
 
 def check(point: Fifo, house: House, eltwise: Eltwise) -> None:
-    # Class access is the schema key: a declaration.
-    assert_type(Fifo.word_bits, Param[int])
-    assert_type(Fifo.ram_style, Decision[str])
+    # Class access is the schema key, typed as its value like every reference.
+    assert_type(Fifo.word_bits, int)
+    assert_type(Fifo.ram_style, str)
     assert_type(Fifo.minimum_depth, Const[int])
-    assert_type(Fifo.capacity, Derived[int])
+    assert_type(Fifo.capacity, int)
     assert_type(Fifo.physical, View[int])
     assert_type(House.kitchen, Room)
     assert_type(House.kitchen.finish, int)
     # The compile step is typed as the family.
-    assert_type(configure(House(budget=100)), House)
-    assert_type(configure(Estate(home=House(budget=1))), Estate)
-    assert_type(configure(Room()), Room)  # a bare call type-checks
+    assert_type(design_space(House(budget=100)), House)
+    assert_type(design_space(Estate(home=House(budget=1))), Estate)
+    assert_type(design_space(Room()), Room)  # a bare call type-checks
     # Configuration reads are exact.
     assert_type(point.word_bits, int)
     assert_type(point.ram_style, str)
@@ -247,7 +256,9 @@ def check(point: Fifo, house: House, eltwise: Eltwise) -> None:
     assert_type(point.physical.inspect(), ViewAssessment[int])
     assert_type(point.physical.query(), QueryResult[int])
     assert_type(point.view(Fifo.physical), BoundView[int])
-    assert_type(point.field(Fifo.capacity), BoundValue[int])
+    # A key typed as its value binds as a decision accessor (a Param or a
+    # derived value cannot be told from a Decision statically).
+    assert_type(point.field(Fifo.capacity), BoundDecision[int])
     assert_type(point.field(Fifo.ram_style), BoundDecision[str])
     assert_type(point.field(Fifo.physical), BoundView[int])
     assert_type(point.field(Fifo.ram_style).change("block"), Change[str])
@@ -265,5 +276,62 @@ def check(point: Fifo, house: House, eltwise: Eltwise) -> None:
     assert_type(house.kitchen.finish, int)
     assert_type(house.heating, Boiler | HeatPump)
     assert_type(house.maybe, Boiler | None)
-    assert_type(GuardedAssembly.value, Derived[int])
+    assert_type(GuardedAssembly.value, int)
     assert_type(GuardedAssembly.physical, View[int])
+
+
+# -- iteration 3: annotated formals, reads through reference inputs, overrides ----------
+
+
+@dataclass(frozen=True)
+class Spec:
+    lanes: int
+    bits: int
+
+    @property
+    def payload_bits(self) -> int:
+        return self.lanes * self.bits
+
+
+class Wire(Space):
+    spec: Spec = Param()
+
+
+class Buffer(Space):
+    word_bits: int = Param()
+    depth: int = Decision(values=(2, 4, 8))
+
+
+class Kernel(Space):
+    output: Wire = Param()  # a reference input, annotated with its family
+    buffer = Buffer(word_bits=output.spec.payload_bits)  # typed in the class body
+    assert_type(output, Wire)
+    assert_type(output.spec, Spec)
+    assert_type(output.spec.payload_bits, int)
+
+
+class Board(Space):
+    wire = Wire(spec=Spec(4, 8))
+    kernel = Kernel(output=wire)
+    kernel.buffer.depth = 4  # pin a Decision of a descendant
+    spare = Kernel(output=wire)
+    spare.buffer.depth = Decision(values=(2, 4))  # narrow it: same key
+    spare.buffer = Buffer(word_bits=16)  # replace a child node (same family)
+    lobby = Room(area=1)
+    stages = Room(area=accepted(lobby.cost))  # a view's accepted value supplies a formal
+
+
+def keys(board: Board, house: House, codec: ValueCodec[int]) -> None:
+    assert_type(Room(), Room)  # every member is optional at the call
+    assert_type(Room(area=3, finish=2), Room)  # a Decision may be pinned at the call
+    assert_type(Kernel.output, Wire)
+    assert_type(Board.kernel.buffer.depth, int)
+    assert_type(board.kernel.query(Kernel.output), QueryResult[Wire])
+    assert_type(board.kernel.present(Kernel.output), bool)
+    assert_type(board.kernel.output.spec.payload_bits, int)
+    assert_type(inspection.decision_handle(house, House.kitchen.finish), DecisionHandle[int])
+    assert_type(inspection.decision_handle(house, House.heating), DecisionHandle[str])
+    assert_type(inspection.value_handle(board, Board.kernel.buffer.word_bits), ValueHandle[int])
+    assert_type(inspection.provenance(board, Board.kernel.buffer.depth), Provenance | None)
+    assert_type(codec_for(Room.finish, codec), CodecBinding)
+    assert_type(house.with_choices({House.kitchen.finish: 2}), House)

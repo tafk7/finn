@@ -10,7 +10,6 @@ import weakref
 from typing import cast
 
 from finn.core.space import (
-    UNSUPPLIED,
     Available,
     Const,
     Decision,
@@ -21,9 +20,9 @@ from finn.core.space import (
     Unresolved,
     View,
     ViewKey,
-    configure,
     constraint,
     derived,
+    design_space,
     inspection,
     view,
 )
@@ -35,7 +34,7 @@ def test_static_alternatives_and_demanded_evidence_are_separate() -> None:
     calls: list[str] = []
 
     class Good(Space):
-        size: Param[int] = Param(int)
+        size: int = Param()
 
         @view
         def physical(*, size: int) -> int:
@@ -55,8 +54,8 @@ def test_static_alternatives_and_demanded_evidence_are_separate() -> None:
     # The structural choice is a Decision over nodes; its output reads the
     # selected candidate's member by name (formerly SubspaceChoice.accepted).
     class Root(Space):
-        size: Param[int] = Param(int)
-        implementation = Decision[Good | Bad](values={"good": Good(size=size), "bad": Bad()})
+        size: int = Param()
+        implementation: Good | Bad = Decision(values={"good": Good(size=size), "bad": Bad()})
         physical = View(implementation.physical)
 
     output = Root.physical
@@ -73,7 +72,7 @@ def test_static_alternatives_and_demanded_evidence_are_separate() -> None:
         "implementation.bad.physical",
     }
     assert calls == []
-    base = configure(Root(size=12))
+    base = design_space(Root(size=12))
     choice = inspection.choices(base)[0]
     point = base.with_choices({choice.selector: "good"})
     first = inspection.explain(point, output)
@@ -95,18 +94,18 @@ def test_static_alternatives_and_demanded_evidence_are_separate() -> None:
 
 def test_optional_input_presence_distinguishes_omission_from_supplied_none() -> None:
     class Child(Space):
-        size: Param[int] = Param(int, default=UNSUPPLIED)
+        size: int = Param(required=False)
 
         @derived
         def doubled(self) -> int:
             return self.size * 2
 
     class Root(Space):
-        size: Param[int] = Param(int, default=UNSUPPLIED)
-        nil: Param[None] = Param(type(None), default=UNSUPPLIED)
+        size: int = Param(required=False)
+        nil: None = Param(required=False)
         child = Child(size=size)
 
-    point = configure(Root(nil=None))
+    point = design_space(Root(nil=None))
     missing = inspection.explain(point.child, Child.doubled)
     assert isinstance(missing.result, Unresolved)
     facts = [node for node in missing.nodes if node.input_presence is not None]
@@ -121,13 +120,13 @@ def test_optional_input_presence_distinguishes_omission_from_supplied_none() -> 
 
 def test_inactive_parameter_evidence_does_not_expose_unused_bound_value() -> None:
     class Child(Space):
-        value: Param[int] = Param(int)
+        value: int = Param()
 
     # Formerly an inline exposed Param(int) child binding: now the enclosing
     # family declares the formal and binds it by name (``Forwarded``); a plain
     # literal binding (``Literal``) is covered alongside it.
     class Forwarded(Space):
-        value: Param[int] = Param(int)
+        value: int = Param()
         enabled = Const(False)
         child = Child(value=value, when=enabled)
 
@@ -135,7 +134,7 @@ def test_inactive_parameter_evidence_does_not_expose_unused_bound_value() -> Non
         enabled = Const(False)
         child = Child(value=12345, when=enabled)
 
-    for point in (configure(Forwarded(value=12345)), configure(Literal())):
+    for point in (design_space(Forwarded(value=12345)), design_space(Literal())):
         evidence = inspection.explain(point.child, Child.value)
         assert isinstance(evidence.result, Inapplicable)
         assert not any(node.result == Available(12345) for node in evidence.nodes)
@@ -148,7 +147,7 @@ def test_inactive_parameter_evidence_does_not_expose_unused_bound_value() -> Non
 
 def test_refusal_causes_stay_visible_while_another_obligation_is_unresolved() -> None:
     class Family(Space):
-        chosen = Decision(int, values=(1, 2))
+        chosen: int = Decision(values=(1, 2))
         value = Const(3)
 
         @constraint
@@ -161,7 +160,7 @@ def test_refusal_causes_stay_visible_while_another_obligation_is_unresolved() ->
 
         physical = View(selected, requires=(supported,))
 
-    point = configure(Family())
+    point = design_space(Family())
     evidence = inspection.explain(point, Family.physical)
     assert isinstance(evidence.result, Unresolved)
     assert evidence.assessment is not None
@@ -176,11 +175,11 @@ def test_refusal_causes_stay_visible_while_another_obligation_is_unresolved() ->
 
 def test_evidence_values_are_detached_from_frozen_inputs_and_caches() -> None:
     class Family(Space):
-        source: Param[list[int]] = Param(list)
+        source: list[int] = Param()
         physical = View(source)
 
     source = [1, 2]
-    point = configure(Family(source=source))
+    point = design_space(Family(source=source))
     source.append(99)
     first = inspection.explain(point, Family.physical)
     assert isinstance(first.result, Available)
@@ -197,7 +196,7 @@ def test_evidence_retains_no_occurrence_or_snapshot_lifetime() -> None:
     class Family(Space):
         value = Const(2)
 
-    point = configure(Family())
+    point = design_space(Family())
     reference = weakref.ref(point)
     evidence = inspection.explain(point, Family.value)
     del point

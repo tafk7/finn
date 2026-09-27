@@ -11,7 +11,7 @@ from types import MappingProxyType
 from typing import Any, Generic, TypeAlias, TypeVar, Union, cast, overload
 
 from ._configuration import Space
-from .compiler import SpaceModel
+from .compiler import Model
 from .declarations import Decision
 from .errors import DefinitionError, RequestError
 from .inspection import decision_info
@@ -114,13 +114,13 @@ class SelectionSchema:
     family: str
     version: int
     owned_keys: frozenset[str]
-    _model: SpaceModel[Space] = field(repr=False)
+    _model: Model[Space] = field(repr=False)
     _entries: Mapping[str, _SchemaEntry] = field(repr=False)
     _known_keys: frozenset[str] = field(repr=False)
 
     def __init__(
         self,
-        model: SpaceModel[S] | Space | type[Space],
+        model: Model[S] | Space | type[Space],
         *,
         family: str,
         version: int,
@@ -128,7 +128,7 @@ class SelectionSchema:
         owned_keys: Iterable[str] = (),
     ) -> None:
         _identity(family, version, label="selection schema")
-        if not isinstance(model, (SpaceModel, Space, type)):
+        if not isinstance(model, (Model, Space, type)):
             raise DefinitionError("a selection schema requires a compiled model")
         compiled = compiled_model(model)
         declared = frozenset(
@@ -238,6 +238,12 @@ def decode(document: object, schema: SelectionSchema) -> Selection:
         }:
             raise RequestError("each selection entry requires key, codec, codec_version, and value")
         key = entry["key"]
+        pinned = schema._model.linked.pinned.get(key) if type(key) is str else None
+        if pinned is not None:
+            raise RequestError(
+                f"stale selection key {key!r}: this model no longer has the choice, an "
+                f"enclosing body pinned it ({pinned.text()})"
+            )
         if type(key) is not str or key not in schema._known_keys:
             raise RequestError(f"unknown selection key {key!r}")
         if key in seen:

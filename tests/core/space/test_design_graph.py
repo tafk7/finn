@@ -19,7 +19,6 @@ from typing import cast
 import pytest
 
 from finn.core.space import (
-    UNSUPPLIED,
     Available,
     Decision,
     DefinitionError,
@@ -35,10 +34,11 @@ from finn.core.space import (
     Unresolved,
     View,
     ViewKey,
+    accepted,
     composite,
-    configure,
     constraint,
     derived,
+    design_space,
     divisors_of,
     inspection,
     reject,
@@ -62,8 +62,8 @@ def owners(result: object) -> set[str]:
 
 
 class Tiles(Space):
-    extent: Param[int] = Param(int)
-    factor = Decision(int, domain=divisors_of(extent))
+    extent: int = Param()
+    factor: int = Decision(domain=divisors_of(extent))
 
     @view
     def cost(self) -> int:
@@ -78,8 +78,8 @@ class Tiles(Space):
 class Same(Space):
     """A relation: two located values must be equal; its output is the agreed value."""
 
-    left: LocatedParam[int] = Param(Located)
-    right: LocatedParam[int] = Param(Located)
+    left: LocatedParam[int] = LocatedParam()
+    right: LocatedParam[int] = LocatedParam()
 
     @constraint
     def equal(self) -> bool | Rejected:
@@ -100,7 +100,7 @@ class Same(Space):
 
 
 class Aligned(Space):
-    extent: Param[int] = Param(int)
+    extent: int = Param()
     first = Tiles(extent=extent)
     second = Tiles(extent=extent)
     # A plain reference supplies a located formal: node and member come from the graph.
@@ -117,7 +117,7 @@ def choose(point: Aligned, first: int, second: int) -> Aligned:
 
 
 def test_a_relation_node_reads_located_siblings_and_owns_its_refusal() -> None:
-    point = configure(Aligned(extent=12))
+    point = design_space(Aligned(extent=12))
     assert isinstance(point.factor.query(), Unresolved)
     assert choose(point, 3, 3).factor() == 3
     refused = choose(point, 3, 4).factor.inspect()
@@ -134,8 +134,8 @@ def test_a_relation_node_reads_located_siblings_and_owns_its_refusal() -> None:
 
 
 class Budgeted(Space):
-    limit: Param[int] = Param(int)
-    use_third = Decision(bool, values=(False, True))
+    limit: int = Param()
+    use_third: bool = Decision(values=(False, True))
     a = Tiles(extent=12)
     b = Tiles(extent=8)
     c = Tiles(extent=6, when=use_third)
@@ -154,7 +154,7 @@ class Budgeted(Space):
 
 
 def test_members_range_over_present_nodes_with_per_member_obligations() -> None:
-    point = configure(Budgeted(limit=10)).with_choices(use_third=False)
+    point = design_space(Budgeted(limit=10)).with_choices(use_third=False)
     point = point.with_choices({Budgeted.a.factor: 4})
     assessment = point.total.inspect()
     # Only b is still open; the absent c is inapplicable and never refuses.
@@ -175,8 +175,8 @@ def test_members_range_over_present_nodes_with_per_member_obligations() -> None:
 
 
 class Stage(Space):
-    width_in: Param[int] = Param(int)
-    growth = Decision(int, values=(0, 1, 2))
+    width_in: int = Param()
+    growth: int = Decision(values=(0, 1, 2))
 
     @view
     def width_out(self) -> int:
@@ -189,14 +189,14 @@ def pipeline(count: int) -> type[Space]:
     """Nodes are plain Python values, joined by assignment; ``composite`` names them."""
     stages = [Stage(width_in=4), *(Stage() for _ in range(1, count))]
     for previous, current in zip(stages, stages[1:]):
-        current.width_in = previous.width_out
+        current.width_in = accepted(previous.width_out)
     nodes = {f"s{index}": stage for index, stage in enumerate(stages)}
     return composite(f"Pipeline{count}", {**nodes, "widths": Members(WIDTH)})
 
 
 def test_a_pipeline_is_built_as_data_and_its_edges_are_declarations() -> None:
     family = pipeline(5)
-    point = configure(family())
+    point = design_space(family())
     handles = {item.key: item.reference for item in inspection.decisions(point)}
     point = point.with_choices({handles[f"s{i}.growth"]: 1 for i in range(5)})
     members = cast("Members[int]", getattr(family, "widths"))
@@ -210,14 +210,17 @@ def test_a_pipeline_is_built_as_data_and_its_edges_are_declarations() -> None:
         ("s4", 9),
     ]
     evidence = inspection.explain(point, members)
-    assert {"s4.width_in", "s3.width_out"} <= {n.declaration.key for n in evidence.nodes}
+    assert "s3.width_out" in {n.declaration.key for n in evidence.nodes}
+    # s4.width_in forwards s3.width_out: evaluation reads the source directly,
+    # and the evidence still names the formal it read through.
+    assert "s4.width_in" in {alias.key for n in evidence.nodes for alias in n.via}
 
 
 # -- 4. a formal supplied by whichever source is present --------------------------------
 
 
 class Source(Space):
-    width: Param[int] = Param(int)
+    width: int = Param()
 
     @view
     def out(self) -> int:
@@ -225,12 +228,12 @@ class Source(Space):
 
 
 class Sink(Space):
-    width: Param[int] = Param(int)
-    limit: Param[int] = Param(int, default=UNSUPPLIED)
+    width: int = Param()
+    limit: int = Param(required=False)
 
 
 class Either(Space):
-    mode = Decision(str, values=("a", "b"))
+    mode: str = Decision(values=("a", "b"))
 
     @derived
     def is_a(self) -> bool:
@@ -246,7 +249,7 @@ class Either(Space):
 
 
 def test_present_supplies_a_formal_from_whichever_node_is_present() -> None:
-    point = configure(Either())
+    point = design_space(Either())
     assert isinstance(point.sink.query(Sink.width), Unresolved)  # not yet known which
     assert point.with_choices(mode="a").sink.width == 3
     assert point.with_choices(mode="b").sink.width == 5
@@ -261,7 +264,7 @@ def test_two_present_sources_are_refused_where_the_value_is_read() -> None:
         sink = Sink()
         sink.width = Present(a.out, b.out)  # alternative suppliers, assigned
 
-    answer = configure(Both()).sink.query(Sink.width)
+    answer = design_space(Both()).sink.query(Sink.width)
     assert codes(answer) == {"multiple-suppliers"} and owners(answer) == {"sink.width"}
 
 
@@ -269,8 +272,8 @@ def test_two_present_sources_are_refused_where_the_value_is_read() -> None:
 
 
 class Adder(Space):
-    inp: Param[int] = Param(int)
-    back: Param[int] = Param(int)
+    inp: int = Param()
+    back: int = Param()
 
     @view
     def out(self) -> int:
@@ -284,8 +287,8 @@ class Register(Space):
     read ``d`` and so close the cycle: acceptance is part of the value flow.
     """
 
-    width: Param[int] = Param(int)
-    d: Param[int] = Param(int)
+    width: int = Param()
+    d: int = Param()
 
     @constraint
     def fits(self) -> bool:
@@ -297,15 +300,15 @@ class Register(Space):
 
 
 class Accumulator(Space):
-    width: Param[int] = Param(int)
-    total: Param[int] = Param(int)
+    width: int = Param()
+    total: int = Param()
     adder = Adder(inp=width)  # back is supplied by the loop edge below
-    register = Register(width=total, d=adder.out)
+    register = Register(width=total, d=accepted(adder.out))
     adder.back = register.q
 
 
 class Echo(Space):
-    d: Param[int] = Param(int)
+    d: int = Param()
 
     @view
     def q(self) -> int:
@@ -313,22 +316,22 @@ class Echo(Space):
 
 
 def test_a_cyclic_graph_evaluates_when_its_value_flow_is_anchored() -> None:
-    point = configure(Accumulator(width=4, total=12))
+    point = design_space(Accumulator(width=4, total=12))
     assert point.adder.out() == 13
     assert point.register.inspect(Register.fits).verdict is True
-    wide = configure(Accumulator(width=30, total=12))  # 31 does not fit twice 12
+    wide = design_space(Accumulator(width=30, total=12))  # 31 does not fit twice 12
     assert isinstance(wide.register.inspect(Register.fits).result, Rejected)
 
 
 def test_an_unanchored_value_cycle_fails_with_its_path() -> None:
     class Unanchored(Space):
-        width: Param[int] = Param(int)
+        width: int = Param()
         adder = Adder(inp=width)
-        echo = Echo(d=adder.out)
-        adder.back = echo.q
+        echo = Echo(d=accepted(adder.out))
+        adder.back = accepted(echo.q)
 
     with pytest.raises(EvaluationError, match="cycle"):
-        configure(Unanchored(width=4)).adder.out()
+        design_space(Unanchored(width=4)).adder.out()
 
 
 # -- 6. closure: a composite is a node like any other ----------------------------------
@@ -337,9 +340,9 @@ def test_an_unanchored_value_cycle_fails_with_its_path() -> None:
 class Pair(Space):
     """Two stages in series; its input is its own formal, its output an export."""
 
-    width_in: Param[int] = Param(int)
+    width_in: int = Param()
     first = Stage(width_in=width_in)
-    second = Stage(width_in=first.width_out)
+    second = Stage(width_in=accepted(first.width_out))
     width_out = View(second.width_out)
     exports = {WIDTH: width_out}
 
@@ -347,12 +350,12 @@ class Pair(Space):
 class Chain(Space):
     head = Stage(width_in=2)
     body = Pair()
-    body.width_in = head.width_out  # an edge, assigned
+    body.width_in = accepted(head.width_out)  # an edge, assigned
     widths = Members(WIDTH)
 
 
 def test_a_composite_node_has_the_surface_of_a_leaf_node() -> None:
-    point = configure(Chain())
+    point = design_space(Chain())
     handles = {item.key: item.reference for item in inspection.decisions(point)}
     point = point.with_choices({handle: 1 for handle in handles.values()})
     assert [(m.node, m.value) for m in point.widths] == [("head", 3), ("body", 5)]
@@ -362,13 +365,13 @@ def test_a_composite_node_has_the_surface_of_a_leaf_node() -> None:
 
 
 class Fixed(Space):
-    width: Param[int] = Param(int)
+    width: int = Param()
     physical = View(width)
 
 
 class Tuned(Space):
-    base: Param[int] = Param(int)
-    extra = Decision(int, values=(1, 2))
+    base: int = Param()
+    extra: int = Decision(values=(1, 2))
 
     @view
     def physical(self) -> int:
@@ -378,17 +381,17 @@ class Tuned(Space):
 class WithChoice(Space):
     """The structural choice: a Decision over nodes, read through ``choice.physical``."""
 
-    base: Param[int] = Param(int, default=UNSUPPLIED)
+    base: int = Param(required=False)
     tuned = Tuned(base=base)
-    choice = Decision[Fixed | Tuned](values={"fixed": Fixed(width=8), "tuned": tuned})
+    choice: Fixed | Tuned = Decision(values={"fixed": Fixed(width=8), "tuned": tuned})
     physical = View(choice.physical)
 
 
 class WithPrimitives(Space):
     """The same choice spelled with the primitives it lowers onto."""
 
-    base: Param[int] = Param(int, default=UNSUPPLIED)
-    choice = Decision(str, values=("fixed", "tuned"))
+    base: int = Param(required=False)
+    choice: str = Decision(values=("fixed", "tuned"))
 
     @derived
     def is_fixed(self) -> bool:
@@ -407,7 +410,7 @@ class WithPrimitives(Space):
 def test_a_structural_choice_reduces_to_primitives(
     family: type[WithChoice] | type[WithPrimitives],
 ) -> None:
-    start = configure(family(base=4))
+    start = design_space(family(base=4))
     physical = family.physical
     extra = family.tuned.extra
     assert isinstance(start.query(physical), Unresolved)
@@ -418,14 +421,14 @@ def test_a_structural_choice_reduces_to_primitives(
     fixed = tuned.with_choices({family.choice: "fixed"}, tuned.tuned.field(Tuned.extra).clear())
     assert fixed.query(physical) == Available(8)
     assert isinstance(fixed.query(extra), Inapplicable)
-    replayed = selections.restore(configure(family(base=4)), selections.capture(tuned))
+    replayed = selections.restore(design_space(family(base=4)), selections.capture(tuned))
     assert replayed.accepted and replayed.instance.query(physical) == Available(6)
 
 
 def test_candidates_are_ordinary_nodes_with_declaration_path_keys() -> None:
     keys = {item.key for item in inspection.decisions(WithChoice)}
     assert keys == {"choice", "choice.tuned.extra"}
-    start = configure(WithChoice(base=4))
+    start = design_space(WithChoice(base=4))
     point = start.with_choices(choice="tuned").with_choices({WithChoice.tuned.extra: 1})
     assert point.physical() == 5
     selected = point.choice
@@ -436,24 +439,24 @@ def test_candidates_are_ordinary_nodes_with_declaration_path_keys() -> None:
 
 def test_a_formal_of_the_enclosing_space_locates_at_the_space_itself() -> None:
     class Own(Space):
-        width: Param[int] = Param(int)
+        width: int = Param()
         here = Same(left=width, right=width)
 
-    assert configure(Own(width=3)).here.left == Located(None, "width", 3)
+    assert design_space(Own(width=3)).here.left == Located(None, "width", 3)
 
 
-def test_assigning_a_supplied_formal_is_a_definition_error() -> None:
-    with pytest.raises(DefinitionError, match="already supplied") as caught:
+def test_assigning_a_formal_twice_in_one_body_is_a_definition_error() -> None:
+    with pytest.raises(DefinitionError, match="already assigned") as caught:
 
         class Twice(Space):
             a = Source(width=3)
             sink = Sink(width=1)
-            sink.width = a.out
+            sink.width = accepted(a.out)
 
     # Both sites are named: the assignment, and the call that supplied the formal.
     message = str(caught.value)
     assert "assigned at test_design_graph.py:" in message
-    assert "already supplied at test_design_graph.py:" in message
+    assert "already assigned at test_design_graph.py:" in message
 
 
 def test_a_required_formal_left_unsupplied_is_reported_when_prepared() -> None:
@@ -464,10 +467,10 @@ def test_a_required_formal_left_unsupplied_is_reported_when_prepared() -> None:
         sink = Sink()
 
     with pytest.raises(DefinitionError, match=r"sink\.width is not supplied") as caught:
-        configure(Dangling())
+        design_space(Dangling())
     message = str(caught.value)
     # The formal's declaration line and the node's call line.
     assert "Sink.width (declared at test_design_graph.py:" in message
     assert "for the node sink (declared at test_design_graph.py:" in message
     with pytest.raises(DefinitionError, match=r"width is not supplied"):
-        configure(Sink())
+        design_space(Sink())

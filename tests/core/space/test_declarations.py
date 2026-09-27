@@ -11,10 +11,10 @@ import pytest
 from typing_extensions import Self
 
 from finn.core.space import (
-    UNSUPPLIED,
     Const,
     Decision,
     DefinitionError,
+    Derived,
     Param,
     QueryResult,
     RequestError,
@@ -23,18 +23,28 @@ from finn.core.space import (
     ValueSemantics,
     View,
     ViewKey,
-    configure,
     constraint,
     derived,
+    design_space,
     inspection,
     view,
 )
-from finn.core.space._bindings import placement_plan
 from finn.core.space._nodes import NodeDecision, NodeDecl, node_record, unwrap
 from finn.core.space._signatures import BoundArgument, validate_argument
 from finn.core.space.collection import collect_space
-from finn.core.space.compiler import compile_space
+from finn.core.space.compiler import compile_model
 from finn.core.space.declarations import Declaration
+
+
+def decl(value: object) -> Declaration:
+    """A class-level member as its declaration: statically, members are typed as values."""
+    assert isinstance(value, Declaration)
+    return value
+
+
+def ref(value: object) -> ValueRef[object]:
+    assert isinstance(value, ValueRef)
+    return value
 
 
 def record_of(node: object) -> NodeDecl:
@@ -52,7 +62,7 @@ def decision_record(choice: object) -> NodeDecision:
 
 
 class Base(Space):
-    extent: Param[int] = Param(int)
+    extent: int = Param()
 
     @derived
     def doubled(*, extent: int) -> int:
@@ -64,17 +74,17 @@ class Base(Space):
 
 
 class Override(Base):
-    extent: Param[int] = Param(int)
+    extent: int = Param()
 
 
 def test_effective_collection_resolves_inherited_names_and_explicit_aliases() -> None:
     collected = collect_space(Override)
-    assert collected.members["extent"] is Override.extent
-    assert collected.functions["doubled"].dependencies[0].source is Override.extent
-    assert collected.functions["aliased"].dependencies[0].source is Override.extent
-    assert collected.aliases[Base.extent] == "extent"
+    assert collected.members["extent"] is decl(Override.extent)
+    assert collected.functions["doubled"].dependencies[0].source is decl(Override.extent)
+    assert collected.functions["aliased"].dependencies[0].source is decl(Override.extent)
+    assert collected.aliases[decl(Base.extent)] == "extent"
     assert collected.functions["doubled"].semantics.type_token is int
-    assert Base.doubled.semantics is None
+    assert ref(Base.doubled).semantics is None
 
 
 def test_forward_members_and_postponed_class_annotations() -> None:
@@ -86,10 +96,10 @@ def test_forward_members_and_postponed_class_annotations() -> None:
         def result(*, later: Quantity) -> Quantity:
             raise AssertionError("must not run")
 
-        later: Param[Quantity] = Param(Quantity)
+        later: Quantity = Param()
 
     collected = collect_space(Example)
-    assert collected.functions["result"].dependencies[0].source is Example.later
+    assert collected.functions["result"].dependencies[0].source is decl(Example.later)
     assert collected.functions["result"].semantics.type_token is Example.Quantity
 
 
@@ -121,7 +131,7 @@ def test_node_member_alias_and_typed_view_exports() -> None:
     physical = ViewKey("physical", int)
 
     class Child(Space):
-        extent: Param[int] = Param(int)
+        extent: int = Param()
 
         @view
         def result(*, extent: int) -> int:
@@ -131,15 +141,15 @@ def test_node_member_alias_and_typed_view_exports() -> None:
         exports = {width: width_view, physical: result}
 
     class ValueExport(Space):
-        extent: Param[int] = Param(int)
-        exports = {width: extent}
+        extent: int = Param()
+        exports = {width: extent}  # type: ignore[dict-item]
 
     with pytest.raises(DefinitionError, match="export width has the wrong kind"):
         collect_space(ValueExport)
 
     # An inline exposed Param is removed: the parent declares the formal and binds it.
     class Parent(Space):
-        extent: Param[int] = Param(int)
+        extent: int = Param()
         child = Child(extent=extent)
 
         @derived(size=child.extent)
@@ -155,25 +165,25 @@ def test_node_member_alias_and_typed_view_exports() -> None:
     assert dependency == cast(object, Parent.child.extent)
     assert inspection.reference(dependency).path == ("child",)
     assert set(vars(Parent)) >= {"extent", "child", "total"}
-    assert configure(Parent(extent=4)).total == 8
+    assert design_space(Parent(extent=4)).total == 8
 
     class Exposing(Space):
-        child = Child(extent=Param(int))
+        child = Child(extent=Param())
 
-    with pytest.raises(DefinitionError, match="inline Param cannot supply a formal"):
-        configure(Exposing())
+    with pytest.raises(DefinitionError, match="inline Param cannot supply"):
+        design_space(Exposing())
 
 
 def test_explicit_answer_semantics_preserve_the_value_type() -> None:
     class Example(Space):
-        value: Param[int] = Param(int)
+        value: int = Param()
 
         @derived(input=value, semantics=ValueSemantics.immutable_nominal(int))
         def forwarded(*, input: int) -> QueryResult[int]:
             raise AssertionError("collection must not evaluate")
 
     collected = collect_space(Example)
-    assert collected.functions["forwarded"].dependencies[0].source is Example.value
+    assert collected.functions["forwarded"].dependencies[0].source is decl(Example.value)
     assert collected.functions["forwarded"].semantics.type_token is int
 
 
@@ -196,14 +206,18 @@ def test_bad_signatures_fail_without_invocation(function_source: str, message: s
     namespace: dict[str, object] = {}
     exec(function_source, namespace)
     function = cast(Callable[..., object], namespace["result"])
-    example = type("BadSignature", (Space,), {"value": Param(int), "result": derived(function)})
+    example = type(
+        "BadSignature",
+        (Space,),
+        {"__annotations__": {"value": int}, "value": Param(), "result": derived(function)},
+    )
     with pytest.raises(DefinitionError, match=message):
         collect_space(example)
 
 
 def test_self_receivers_are_collected_without_executing_or_inventing_dependencies() -> None:
     class Parent(Space):
-        value: Param[int] = Param(int)
+        value: int = Param()
 
     class Example(Parent):
         @derived
@@ -234,7 +248,7 @@ def test_self_receivers_are_collected_without_executing_or_inventing_dependencie
 
 def test_self_receiver_and_explicit_argument_aliases_are_ambiguous() -> None:
     class Ambiguous(Space):
-        value: Param[int] = Param(int)
+        value: int = Param()
 
         @derived(value=value)
         def result(self) -> int:
@@ -246,7 +260,7 @@ def test_self_receiver_and_explicit_argument_aliases_are_ambiguous() -> None:
 
 def test_extra_alias_and_answer_without_semantics_are_rejected() -> None:
     class Extra(Space):
-        value: Param[int] = Param(int)
+        value: int = Param()
 
         @derived(typo=value)
         def result(*, value: int) -> int:
@@ -265,7 +279,7 @@ def test_extra_alias_and_answer_without_semantics_are_rejected() -> None:
 
 
 def test_incompatible_override_collision_and_reserved_names() -> None:
-    different = type("Different", (Base,), {"extent": Param(str)})
+    different = type("Different", (Base,), {"__annotations__": {"extent": str}, "extent": Param()})
     with pytest.raises(DefinitionError, match="Different.extent.*semantics"):
         collect_space(different)
     changed_kind = type("ChangedKind", (Base,), {"extent": Const(2)})
@@ -276,18 +290,18 @@ def test_incompatible_override_collision_and_reserved_names() -> None:
         collect_space(hidden)
 
     class Other(Space):
-        extent: Param[int] = Param(int)
+        extent: int = Param()
 
     collision = type("Collision", (Base, Other), {})
     with pytest.raises(DefinitionError, match="conflicting inherited"):
         collect_space(collision)
-    reserved = type("Reserved", (Space,), {"query": Param(int)})
+    reserved = type("Reserved", (Space,), {"__annotations__": {"query": int}, "query": Param()})
     with pytest.raises(DefinitionError, match="reserved configuration name"):
         collect_space(reserved)
 
 
 def test_duplicate_declaration_reuse_is_attributable() -> None:
-    value = Param(int)
+    value: int = Param()
     with pytest.raises(RuntimeError) as exc:
         type("Duplicate", (Space,), {"one": value, "two": value})
     assert isinstance(exc.value.__cause__, DefinitionError)
@@ -298,13 +312,13 @@ def test_unbound_late_declarations_and_bad_exports_are_rejected() -> None:
     class Example(Space):
         pass
 
-    setattr(Example, "late", Param(int))
+    setattr(Example, "late", Param())
     with pytest.raises(DefinitionError, match="not bound at class creation"):
         collect_space(Example)
     wrong = type(
         "WrongExport",
         (Space,),
-        {"value": Param(int)},
+        {"__annotations__": {"value": int}, "value": Param()},
     )
     wrong_member = cast(Declaration, vars(wrong)["value"])
     setattr(wrong, "exports", {ViewKey("physical", int): wrong_member})
@@ -318,9 +332,9 @@ def test_definition_constants_snapshot_and_decision_domain_contract() -> None:
     source.append(3)
     assert constant.value == [1, 2]
     with pytest.raises(DefinitionError, match="exactly one"):
-        Decision(int)
+        Decision()  # type: ignore[call-overload]
     with pytest.raises(TypeError, match="truth value"):
-        bool(Param(int))
+        bool(Param(default=1))
 
 
 def test_inferred_derived_override_cannot_change_value_type() -> None:
@@ -338,33 +352,33 @@ def test_binding_forms_and_local_edit_ownership() -> None:
     # a family-typed formal is supplied by a node, and a root keeps its values as
     # runtime parameters.
     class Child(Space):
-        size: Param[int] = Param(int)
-        internal = Decision(str, values=("auto", "block"))
+        size: int = Param()
+        internal: str = Decision(values=("auto", "block"))
 
     class Holder(Space):
-        held: Param[Child] = Param(Child)
+        held: Child = Param()
 
     class Parent(Space):
-        supplied = Decision(int, values=(1, 2))
+        supplied: int = Decision(values=(1, 2))
         literal = Child(size=4)
         alias = Child(size=supplied)
-        local = Child(size=Decision(int, values=(4, 8)))
+        local = Child(size=Decision(values=(4, 8)))
         holder = Holder(held=Child(size=2))
 
-    plans = [
-        placement_plan(Child, record_of(node), root=False)
+    # How each supply links: a literal is a constant, a reference an alias, a
+    # fresh Decision a decision, a node at a reference input its placement.
+    linked = compile_model(Parent).linked
+    kinds = [
+        linked.nodes[compile_model(Parent).resolve(0, node.size)].kind
         for node in (Parent.literal, Parent.alias, Parent.local)
     ]
-    assert [plan.bindings["size"].kind for plan in plans] == [
-        "literal",
-        "reference",
-        "local-decision",
-    ]
-    held = placement_plan(Holder, record_of(Parent.holder), root=False).bindings["held"]
-    assert held.kind == "node"
-    root = placement_plan(Child, record_of(Child(size=4)), root=True).bindings["size"]
-    assert root.kind == "parameter"
-    model = compile_space(Parent)
+    assert kinds == ["const", "alias", "decision"]
+    assert linked.scopes[0].named_children["holder"] in {
+        scope.parent for scope in linked.scopes if scope.name == "holder.held"
+    }
+    root = compile_model(Child).linked
+    assert root.nodes[root.keys["size"]].kind == "param"
+    model = compile_model(Parent)
     local = model.decision(0, Parent.local.size)
     assert model.linked.nodes[local].kind == "decision"
     assert model.linked.nodes[local].key == "local.size"
@@ -375,36 +389,37 @@ def test_binding_forms_and_local_edit_ownership() -> None:
 
     # decision_ref is removed: a formal is read like any member, and only an owned
     # fresh Decision is editable through it.
-    point = configure(Parent())
+    point = design_space(Parent())
     assert point.with_choices({Parent.local.size: 8}).local.size == 8
     with pytest.raises(RequestError, match="not an owned Decision"):
         point.with_choices({Parent.alias.size: 1})
 
     class Reader(Space):
-        supplier = Decision(int, values=(1, 2))
+        supplier: int = Decision(values=(1, 2))
         child = Child(size=supplier)
 
         @derived(value=child.size)
         def doubled(*, value: int) -> int:
             return value * 2
 
-    reader = configure(Reader()).with_choices(supplier=2)
+    reader = design_space(Reader()).with_choices(supplier=2)
     assert reader.doubled == 4
 
 
 def test_child_omissions_and_incompatible_bindings_are_not_implicit_exposure() -> None:
     class Child(Space):
-        width: Param[int] = Param(int)
-        optional_width: Param[int] = Param(int, default=UNSUPPLIED)
+        width: int = Param()
+        optional_width: int = Param(required=False)
 
     # An optional formal may stay unsupplied: it is not implicitly exposed.
-    assert placement_plan(Child, record_of(Child(width=8)), root=False).unsupplied == (
-        "optional_width",
-    )
-    assert placement_plan(Child, record_of(Child()), root=False).unsupplied == (
-        "width",
-        "optional_width",
-    )
+    assert inspection.declaration(Child(width=8)).unsupplied == ()
+    assert inspection.declaration(Child()).unsupplied == ("width",)
+
+    class Holder(Space):
+        child = Child(width=8)
+
+    linked = compile_model(Holder).linked
+    assert linked.nodes[linked.keys["child.optional_width"]].kind == "present"
 
     # A required formal nobody supplies is legal at the call (an assignment may
     # still supply it), and fails when a family containing the node is prepared.
@@ -412,23 +427,23 @@ def test_child_omissions_and_incompatible_bindings_are_not_implicit_exposure() -
         child = Child(optional_width=3)
 
     with pytest.raises(DefinitionError, match=r"child\.width is not supplied"):
-        configure(Parent())
-    with pytest.raises(DefinitionError, match="unknown formals"):
+        design_space(Parent())
+    with pytest.raises(DefinitionError, match="unknown members"):
         Child(width=8, optional_width=9, typo=1)  # type: ignore[call-arg]
     with pytest.raises(DefinitionError, match="incompatible value semantics"):
 
         class Wrong(Space):
-            label: Param[str] = Param(str)
+            label: str = Param()
             child = Child(width=label, optional_width=9)  # type: ignore[arg-type]
 
 
 def test_guards_are_collected_separately_and_respect_inherited_overrides() -> None:
     class Child(Space):
-        value: Param[int] = Param(int)
+        value: int = Param()
 
     class Guarded(Space):
-        enabled: Param[bool] = Param(bool)
-        selected = Decision(int, values=(1, 2), when=enabled)
+        enabled: bool = Param()
+        selected: int = Decision(values=(1, 2), when=enabled)
 
         @derived(when=enabled)
         def result(*, selected: int) -> int:
@@ -445,58 +460,60 @@ def test_guards_are_collected_separately_and_respect_inherited_overrides() -> No
         physical = View(result, requires=(support,), when=enabled)
         child = Child(value=1, when=enabled)
         # A singleton structural choice is an ordinary Decision over nodes.
-        implementation = Decision(values={"only": Child(value=1)}, when=enabled)
+        implementation: Child = Decision(values={"only": Child(value=1)}, when=enabled)
 
     class OverrideGuard(Guarded):
-        enabled: Param[bool] = Param(bool)
+        enabled: bool = Param()
 
     effective = collect_space(OverrideGuard)
     guarded: tuple[Declaration, ...] = (
-        Guarded.selected,
-        Guarded.result,
-        Guarded.support,
-        Guarded.authored,
-        Guarded.physical,
+        decl(Guarded.selected),
+        decl(Guarded.result),
+        decl(Guarded.support),
+        decl(Guarded.authored),
+        decl(Guarded.physical),
         record_of(Guarded.child),
         decision_record(Guarded.implementation),
     )
-    assert all(effective.guards[declaration] is OverrideGuard.enabled for declaration in guarded)
+    assert all(
+        effective.guards[declaration] is decl(OverrideGuard.enabled) for declaration in guarded
+    )
     assert [arg.name for arg in effective.functions["result"].dependencies] == ["selected"]
-    assert "when" not in Guarded.result.aliases
+    assert "when" not in cast("Derived[object]", Guarded.result).aliases
     assert "when" not in inspection.declaration(Guarded.child).bindings
 
 
 def test_guards_on_fresh_local_choices_and_alternatives_use_the_placement_scope() -> None:
     class Child(Space):
-        value: Param[int] = Param(int)
+        value: int = Param()
 
     class Parent(Space):
-        enabled: Param[bool] = Param(bool)
-        child = Child(value=Decision(int, values=(1,), when=enabled))
-        choice = Decision(values={"one": Child(value=1, when=enabled)})
+        enabled: bool = Param()
+        child = Child(value=Decision(values=(1,), when=enabled))
+        choice: Child = Decision(values={"one": Child(value=1, when=enabled)})
 
     effective = collect_space(Parent)
     decision = inspection.declaration(Parent.child).bindings["value"]
     assert isinstance(decision, Decision)
-    assert effective.guards[decision] is Parent.enabled
+    assert effective.guards[decision] is decl(Parent.enabled)
     candidate = decision_record(Parent.choice).candidates["one"]
     assert candidate is not None
-    assert effective.guards[candidate] is Parent.enabled
+    assert effective.guards[candidate] is decl(Parent.enabled)
 
 
 def test_nonboolean_and_foreign_guards_fail_during_collection() -> None:
     class Wrong(Space):
-        count: Param[int] = Param(int)
-        choice = Decision(int, values=(1,), when=cast(ValueRef[bool], count))
+        count: int = Param()
+        choice: int = Decision(values=(1,), when=cast(ValueRef[bool], count))
 
     with pytest.raises(DefinitionError, match="Wrong.choice guard.*Boolean"):
         collect_space(Wrong)
 
     class Foreign(Space):
-        enabled: Param[bool] = Param(bool)
+        enabled: bool = Param()
 
     class Unrelated(Space):
-        choice = Decision(int, values=(1,), when=Foreign.enabled)
+        choice: int = Decision(values=(1,), when=Foreign.enabled)
 
     with pytest.raises(DefinitionError, match="Unrelated.choice guard.*effective scope"):
         collect_space(Unrelated)
@@ -504,7 +521,7 @@ def test_nonboolean_and_foreign_guards_fail_during_collection() -> None:
 
 def test_when_is_an_authoring_control_argument() -> None:
     class Wrong(Space):
-        active: Param[bool] = Param(bool)
+        active: bool = Param()
 
         @derived(when=active)
         def value(*, when: bool) -> int:
@@ -518,7 +535,7 @@ def test_linked_child_types_are_inferred_without_mutating_declarations() -> None
     boolean_view = ViewKey("admitted", bool)
 
     class Child(Space):
-        size: Param[int] = Param(int)
+        size: int = Param()
 
         @derived
         def enabled(*, size: int) -> bool:
@@ -537,11 +554,11 @@ def test_linked_child_types_are_inferred_without_mutating_declarations() -> None
         copied = View(child.admitted)
         exports = {boolean_view: copied}
 
-    model = compile_space(Parent)
+    model = compile_model(Parent)
     semantics = model.linked.nodes[model.resolve(0, Parent.copied)].semantics
     assert semantics is not None and semantics.type_token is bool
     assert model.linked.nodes[model.resolve(0, Parent.value)].guard is not None
-    assert Child.enabled.semantics is None
+    assert ref(Child.enabled).semantics is None
     assert Child.admitted.semantics is None
     assert Parent.copied.semantics is None
 
@@ -553,7 +570,7 @@ def test_linked_child_types_are_inferred_without_mutating_declarations() -> None
             raise AssertionError("must not execute")
 
     with pytest.raises(DefinitionError, match="cannot consume bool"):
-        compile_space(Wrong)
+        compile_model(Wrong)
 
 
 def test_collection_does_not_descend_into_deep_child_hierarchies() -> None:
@@ -565,7 +582,7 @@ def test_collection_does_not_descend_into_deep_child_hierarchies() -> None:
 
 
 def test_linker_argument_validation_checks_required_input_types() -> None:
-    source = cast(ValueRef[object], Param(int))
+    source = cast(ValueRef[object], Param(default=0))
     integer = cast(ValueSemantics[object], ValueSemantics.immutable_nominal(int))
     validate_argument(BoundArgument("item", source, int), integer, owner="reader.item")
     with pytest.raises(DefinitionError, match="cannot consume int"):
@@ -574,11 +591,11 @@ def test_linker_argument_validation_checks_required_input_types() -> None:
 
 def test_generic_list_annotations_validate_their_nominal_origin() -> None:
     class Vector(Space):
-        values: Param[list[int]] = Param(list)
+        values: list[int] = Param()
 
         @derived
         def total(*, values: list[int]) -> int:
             return sum(values)
 
     effective = collect_space(Vector)
-    assert effective.functions["total"].dependencies[0].source is Vector.values
+    assert effective.functions["total"].dependencies[0].source is decl(Vector.values)

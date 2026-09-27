@@ -6,11 +6,11 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
-from types import MappingProxyType
-from typing import cast
+from types import MappingProxyType, UnionType
+from typing import Union, cast, get_args, get_origin
 
 from ._configuration import Space
-from ._nodes import FamilyFormal, NodeChoice, NodeDecision, NodeDecl, node_record
+from ._nodes import NodeDecision, NodeDecl, node_record, slot_declaration
 from ._signatures import (
     BoundFunction,
     bind_function,
@@ -20,16 +20,19 @@ from ._signatures import (
     source_semantics,
 )
 from .declarations import (
+    MISSING,
     Constraint,
     Decision,
     Declaration,
     Derived,
+    Param,
     ValueRef,
     View,
     ViewKey,
+    _describe_formal,
     at,
     class_namespace,
-    declared_path,
+    declared_annotation,
     local_name,
 )
 from .errors import DefinitionError
@@ -81,15 +84,30 @@ def _function(declaration: Declaration) -> Callable[..., object] | None:
 
 def member_declaration(value: object) -> Declaration | None:
     """The declaration a class attribute contributes: a record for a node or choice."""
-    if isinstance(value, Declaration):
-        return value
-    if isinstance(value, NodeChoice):
-        return value._space_decision()
-    if isinstance(value, Space):
-        path = declared_path(value)
-        if path is not None and len(path) == 1:
-            return path[0]
-    return None
+    return slot_declaration(value)
+
+
+def _check_choice_annotation(decision: NodeDecision) -> None:
+    """``heating: Boiler | HeatPump = Decision(values=...)``: the union names the candidates."""
+    annotation = declared_annotation(decision, "Decision")
+    if annotation is MISSING:
+        return  # a Decision over nodes persists its key; its annotation only types it
+    options = get_args(annotation) if get_origin(annotation) in (Union, UnionType) else ()
+    options = options or (annotation,)
+    label = _describe_formal(decision, "Decision")
+    for key, record in decision.candidates.items():
+        if record is None:
+            if type(None) not in options:
+                raise DefinitionError(
+                    f"{label}: candidate {key!r} is None, so the annotation must include None"
+                )
+        elif not any(
+            isinstance(option, type) and issubclass(record.family, option) for option in options
+        ):
+            raise DefinitionError(
+                f"{label}: candidate {key!r} is a {record.family.__qualname__} node, which the "
+                f"annotation {annotation!r} does not admit"
+            )
 
 
 def _collect_members(
@@ -200,7 +218,7 @@ def _collect_guards(effective: EffectiveSpace) -> Mapping[Declaration, ValueRef[
     guard_candidates: list[tuple[str, Declaration]] = list(members.items())
     for name, declaration in members.items():
         children: tuple[tuple[str, NodeDecl], ...] = ()
-        if isinstance(declaration, NodeDecl) and not isinstance(declaration, FamilyFormal):
+        if isinstance(declaration, NodeDecl):
             children = ((name, declaration),)
         elif isinstance(declaration, NodeDecision):
             children = tuple(
@@ -284,6 +302,12 @@ def collect_space(space_type: type[Space]) -> EffectiveSpace:
         return hint_cache[key]
 
     members, aliases, inherited = _collect_members(space_type)
+    for declaration in members.values():
+        # The annotation is the single source of a member's value type.
+        if isinstance(declaration, NodeDecision):
+            _check_choice_annotation(declaration)
+        elif isinstance(declaration, (Param, Decision)):
+            declaration.resolve()
     semantics = _collect_semantics(space_type, members, inherited, hints_for)
     preliminary = EffectiveSpace(
         space_type,

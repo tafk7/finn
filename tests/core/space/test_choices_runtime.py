@@ -21,9 +21,9 @@ from finn.core.space import (
     Unresolved,
     View,
     ViewKey,
-    configure,
     constraint,
     derived,
+    design_space,
     divisors_of,
     inspection,
     view,
@@ -39,8 +39,8 @@ PHYSICAL = ViewKey("physical", int)
 
 
 class Tile(Space):
-    extent: Param[int] = Param(int)
-    lanes = Decision(int, domain=divisors_of(extent))
+    extent: int = Param()
+    lanes: int = Decision(domain=divisors_of(extent))
 
     @derived
     def cycles(*, extent: int, lanes: int) -> int:
@@ -51,11 +51,11 @@ class Tile(Space):
 
 def test_two_child_placements_have_independent_choices_and_immutable_roots() -> None:
     class Pair(Space):
-        extent: Param[int] = Param(int)
+        extent: int = Param()
         first = Tile(extent=extent)
         second = Tile(extent=extent)
 
-    base = configure(Pair(extent=12))
+    base = design_space(Pair(extent=12))
     first = base.first.with_choices(lanes=3)
     assert isinstance(first, Tile)
     assert first.physical() == 4
@@ -75,8 +75,8 @@ def test_false_outer_scope_suppresses_inner_commitments_and_callbacks() -> None:
     calls: list[str] = []
 
     class Guarded(Space):
-        inner = Decision(bool, values=(True, False))
-        lanes = Decision(int, values=(1, 2), when=inner)
+        inner: bool = Decision(values=(True, False))
+        lanes: int = Decision(values=(1, 2), when=inner)
 
         @derived(when=inner)
         def raw() -> int:
@@ -89,7 +89,7 @@ def test_false_outer_scope_suppresses_inner_commitments_and_callbacks() -> None:
         enabled = Const(False)
         child = Guarded(when=enabled)
 
-    point = configure(Outer())
+    point = design_space(Outer())
     assert isinstance(point.child.query(Guarded.lanes), Inapplicable)
     assert isinstance(point.child.field(Guarded.lanes).state, Inapplicable)
     assert isinstance(point.child.query(Guarded.raw), Inapplicable)
@@ -124,13 +124,13 @@ def test_selected_view_preserves_direct_refusal_and_skips_other_alternatives() -
     class Root(Space):
         # A Decision over nodes replaces SubspaceChoice; ``implementation.physical``
         # reads the selected candidate's member by name (was accepted(PHYSICAL)).
-        implementation = Decision[Refused | Explodes](
+        implementation: Refused | Explodes = Decision(
             values={"refused": Refused(), "explodes": Explodes()}
         )
         accepted = View(implementation.physical)
         physical = View(accepted)
 
-    base = configure(Root())
+    base = design_space(Root())
     assert isinstance(base.query(Root.accepted), Unresolved)
     point = base.with_choices(implementation="refused")
     child = point.implementation
@@ -156,18 +156,18 @@ def test_singleton_choice_needs_a_commitment_and_respects_its_outer_guard() -> N
         exports = {PHYSICAL: physical}
 
     class Root(Space):
-        enabled: Param[bool] = Param(bool)
-        implementation = Decision[Only](values={"only": Only()}, when=enabled)
+        enabled: bool = Param()
+        implementation: Only = Decision(values={"only": Only()}, when=enabled)
         accepted = View(implementation.physical)
 
-    active = configure(Root(enabled=True))
+    active = design_space(Root(enabled=True))
     assert isinstance(active.query(Root.accepted), Unresolved)
     (choice,) = inspection.choices(active)
     assert [case.name for case in choice.cases] == ["only"]
     chosen = active.with_choices(implementation="only")
     assert chosen.query(Root.accepted) == Available(7)
     assert chosen.with_choices(implementation="only") is chosen
-    inactive = configure(Root(enabled=False))
+    inactive = design_space(Root(enabled=False))
     assert isinstance(inactive.query(Root.accepted), Inapplicable)
     with pytest.raises(ConfigurationError):
         inactive.with_choices(implementation="only")
@@ -181,7 +181,7 @@ def test_nested_choice_selection_retains_its_owning_scope() -> None:
         value = Const(2)
 
     class Family(Space):
-        implementation = Decision[A | B](values={"a": A(), "b": B()})
+        implementation: A | B = Decision(values={"a": A(), "b": B()})
 
     class Root(Space):
         first = Family()
@@ -192,7 +192,7 @@ def test_nested_choice_selection_retains_its_owning_scope() -> None:
         assert candidate is not None
         return candidate
 
-    base = configure(Root())
+    base = design_space(Root())
     selected = base.first.with_choices(implementation="a")
     assert isinstance(selected, Family)
     assert alternative(selected, "a").query(A.value) == Available(1)
@@ -210,9 +210,9 @@ def test_choice_metadata_and_handles_retain_the_compiled_definition() -> None:
         value = Const(2)
 
     class Root(Space):
-        implementation = Decision[A | B](values={"a": A(), "b": B()})
+        implementation: A | B = Decision(values={"a": A(), "b": B()})
 
-    base = configure(Root())
+    base = design_space(Root())
     (saved,) = inspection.choices(base)
     # The compiled choice cannot be retargeted: neither the Decision nor the family.
     with pytest.raises(AttributeError, match="immutable"):
@@ -236,25 +236,25 @@ def test_function_view_failure_names_its_authored_owner() -> None:
             raise ZeroDivisionError("broken calculation")
 
     with pytest.raises(EvaluationError) as raised:
-        configure(Broken()).physical()
+        design_space(Broken()).physical()
     assert raised.value.owner == "physical"
     assert isinstance(raised.value.__cause__, ZeroDivisionError)
 
 
 def test_exposed_inputs_local_decisions_and_supplier_aliases_keep_distinct_rights() -> None:
     class Child(Space):
-        width: Param[int] = Param(int)
+        width: int = Param()
         physical = View(width)
 
     class Root(Space):
-        supplier = Decision(int, values=(2, 4))
+        supplier: int = Decision(values=(2, 4))
         # An inline exposed Param is gone: the formal is declared here and bound by name.
-        exposed_width: Param[int] = Param(int)
+        exposed_width: int = Param()
         aliased = Child(width=supplier)
-        local = Child(width=Decision(int, values=(3, 6)))
+        local = Child(width=Decision(values=(3, 6)))
         exposed = Child(width=exposed_width)
 
-    base = configure(Root(exposed_width=9))
+    base = design_space(Root(exposed_width=9))
     assert base.exposed.physical() == 9
     chosen = base.with_choices(supplier=4)
     assert chosen.aliased.width == 4
@@ -273,7 +273,7 @@ def test_wide_selected_outputs_keep_frozen_case_order_and_exact_targets() -> Non
     calls: list[int] = []
 
     class Leaf(Space):
-        value: Param[int] = Param(int)
+        value: int = Param()
 
         @view
         def physical(*, value: int) -> int:
@@ -283,7 +283,7 @@ def test_wide_selected_outputs_keep_frozen_case_order_and_exact_targets() -> Non
         exports = {PHYSICAL: physical}
 
     class Root(Space):
-        implementation = Decision[Leaf](
+        implementation: Leaf = Decision(
             values={f"case{index}": Leaf(value=index) for index in range(128)}
         )
         physical = View(implementation.physical)
@@ -303,7 +303,7 @@ def test_wide_selected_outputs_keep_frozen_case_order_and_exact_targets() -> Non
     assert calls == []
     with pytest.raises(AttributeError, match="immutable"):
         setattr(Root.implementation, "candidates", {"changed": Leaf(value=-1)})
-    base = configure(Root())
+    base = design_space(Root())
     for index in (0, 64, 127):
         point = base.with_choices({metadata.selector: f"case{index}"})
         assert point.query(output) == Available(index)

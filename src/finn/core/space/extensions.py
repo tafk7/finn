@@ -29,6 +29,7 @@ def composite(
     name: str,
     members: Mapping[str, object],
     *,
+    annotations: Mapping[str, object] | None = None,
     exports: Mapping[ViewKey[Any], object] | None = None,
 ) -> type[Space]: ...
 
@@ -39,6 +40,7 @@ def composite(
     members: Mapping[str, object],
     *,
     base: type[S],
+    annotations: Mapping[str, object] | None = None,
     exports: Mapping[ViewKey[Any], object] | None = None,
 ) -> type[S]: ...
 
@@ -48,12 +50,15 @@ def composite(
     members: Mapping[str, object],
     *,
     base: type[Space] = Space,
+    annotations: Mapping[str, object] | None = None,
     exports: Mapping[ViewKey[Any], object] | None = None,
 ) -> type[Space]:
     """A new family whose members are ``members``: nodes and declarations.
 
     Equivalent to a class statement with those attributes, so every rule of
     a class body applies: each node is placed once, and names are one segment.
+    ``annotations`` are the class body's annotations: the value type of each
+    Param and Decision member (``{"choice": int}``).
     """
 
     local_name(name, "composite family name")
@@ -64,6 +69,11 @@ def composite(
     frame = sys._getframe(1)
     namespace: dict[str, object] = {"__module__": frame.f_globals.get("__name__", __name__)}
     namespace.update(members)
+    if annotations is not None:
+        unknown = sorted(annotations.keys() - members.keys())
+        if unknown:
+            raise DefinitionError(f"{name}: annotations name no member {unknown}")
+        namespace["__annotations__"] = dict(annotations)
     if exports is not None:
         namespace["exports"] = dict(exports)
     try:

@@ -5,12 +5,12 @@ from __future__ import annotations
 
 import gc
 from concurrent.futures import ThreadPoolExecutor
+from typing import cast
 from weakref import ReferenceType, ref
 
 import pytest
 
 from finn.core.space import (
-    UNSUPPLIED,
     Available,
     Decision,
     Param,
@@ -18,13 +18,14 @@ from finn.core.space import (
     Unresolved,
     ValueSemantics,
     View,
-    configure,
+    default_semantics,
     derived,
+    design_space,
     divisors_of,
     domain,
     require_value,
 )
-from finn.core.space.compiler import compile_space
+from finn.core.space.compiler import compile_model
 from finn.core.space.errors import (
     ConfigurationError,
     DefinitionError,
@@ -36,12 +37,12 @@ from finn.core.space.occurrence import state
 
 def test_concurrent_configures_share_one_preparation() -> None:
     class Family(Space):
-        value: Param[int] = Param(int)
+        value: int = Param()
 
     with ThreadPoolExecutor(max_workers=8) as pool:
-        instances = list(pool.map(lambda value: configure(Family(value=value)), range(16)))
-    model = compile_space(Family)
-    explicit = configure(Family(value=20))
+        instances = list(pool.map(lambda value: design_space(Family(value=value)), range(16)))
+    model = compile_model(Family)
+    explicit = design_space(Family(value=20))
     assert all(type(instance) is Family for instance in (*instances, explicit))
     assert all(state(instance).model is model for instance in (*instances, explicit))
     assert len({id(state(instance)) for instance in instances}) == len(instances)
@@ -55,38 +56,38 @@ def test_failed_preparation_does_not_poison_cache_and_subclasses_do_not_borrow_i
             return value * 2
 
     with pytest.raises(DefinitionError, match="no declaration"):
-        compile_space(Broken)
-    value = Param(int)
+        compile_model(Broken)
+    value = cast(Param[int], Param(semantics=default_semantics(int)))
     value.__set_name__(Broken, "value")
     setattr(Broken, "value", value)
     # The formal is added after class creation, so it is not part of the static signature.
-    assert configure(Broken(value=3)).doubled == 6  # type: ignore[call-arg]
+    assert design_space(Broken(value=3)).doubled == 6  # type: ignore[call-arg]
 
     class Child(Broken):
-        extra: Param[int] = Param(int)
+        extra: int = Param()
 
-    parent_model = compile_space(Broken)
-    child_model = compile_space(Child)
+    parent_model = compile_model(Broken)
+    child_model = compile_model(Child)
     assert child_model is not parent_model
-    assert configure(Child(value=3, extra=4)).extra == 4  # type: ignore[call-arg]
+    assert design_space(Child(value=3, extra=4)).extra == 4  # type: ignore[call-arg]
 
 
 def test_prepared_structure_and_configuration_fields_are_immutable() -> None:
     class Family(Space):
-        value: Param[int] = Param(int)
-        choice = Decision(int, values=(1, 2))
+        value: int = Param()
+        choice: int = Decision(values=(1, 2))
 
     node = Family(value=3)
-    instance = configure(node)
+    instance = design_space(node)
     with pytest.raises(DefinitionError, match="finalized"):
-        Family.choice = Decision(int, values=(3, 4))
+        Family.choice = Decision(values=(3, 4))
     with pytest.raises(DefinitionError, match="finalized"):
         del Family.value
     with pytest.raises(AttributeError, match="immutable configuration field"):
         instance.value = 4
     with pytest.raises(AttributeError, match="immutable configuration field"):
         del instance.value
-    # configure() froze the root declaration: its formals can no longer be assigned.
+    # design_space() froze the root declaration: its formals can no longer be assigned.
     with pytest.raises(DefinitionError, match="is frozen"):
         node.value = 4
     setattr(instance, "note", "ordinary metadata")
@@ -97,40 +98,40 @@ def test_prepared_structure_and_configuration_fields_are_immutable() -> None:
 
 def test_prepared_inherited_declarations_and_their_owners_are_immutable() -> None:
     class Base(Space):
-        value: Param[int] = Param(int)
+        value: int = Param()
 
     class Family(Base):
         pass
 
-    instance = configure(Family(value=1))
+    instance = design_space(Family(value=1))
     reference = Family.value
     with pytest.raises(DefinitionError, match="finalized"):
-        Family.value = 99  # type: ignore[assignment]
+        Family.value = 99
     with pytest.raises(DefinitionError, match="finalized"):
-        Base.value = 99  # type: ignore[assignment]
+        Base.value = 99
     assert instance.value == 1
     assert instance.query(reference) == Available(1)
 
     class Variant(Base):
-        value: Param[int] = Param(int, default=UNSUPPLIED)
+        value: int = Param(required=False)
 
-    assert configure(Variant(value=2)).value == 2
+    assert design_space(Variant(value=2)).value == 2
 
 
 def test_custom_instance_initialization_is_rejected_at_preparation() -> None:
     class Stateful(Space):
-        value: Param[int] = Param(int)
+        value: int = Param()
 
         def __init__(self, value: int) -> None:
             self.saved = value
 
     with pytest.raises(DefinitionError, match="custom instance __init__"):
-        compile_space(Stateful)
+        compile_model(Stateful)
 
 
 def test_nested_custom_instance_initialization_is_rejected() -> None:
     class Child(Space):
-        value: Param[int] = Param(int)
+        value: int = Param()
 
         def __init__(self, **parameters: object) -> None:
             self.saved = parameters
@@ -139,21 +140,21 @@ def test_nested_custom_instance_initialization_is_rejected() -> None:
         child = Child(value=1)
 
     with pytest.raises(DefinitionError, match="custom instance __init__"):
-        compile_space(Parent)
+        compile_model(Parent)
 
     class ChoiceParent(Space):
-        child = Decision(values={"only": Child(value=1)})
+        child: Child = Decision(values={"only": Child(value=1)})
 
     with pytest.raises(DefinitionError, match="custom instance __init__"):
-        compile_space(ChoiceParent)
+        compile_model(ChoiceParent)
 
 
 def test_structural_choices_cannot_be_shadowed_on_instances() -> None:
     class Family(Space):
-        implementation = Decision(values={"a": Space(), "b": Space()})
-        singleton = Decision(values={"only": Space()})
+        implementation: Space = Decision(values={"a": Space(), "b": Space()})
+        singleton: Space = Decision(values={"only": Space()})
 
-    instance = configure(Family()).with_choices(implementation="a")
+    instance = design_space(Family()).with_choices(implementation="a")
     with pytest.raises(AttributeError, match="immutable configuration field"):
         instance.implementation = "b"  # type: ignore[assignment]
     with pytest.raises(AttributeError, match="immutable configuration field"):
@@ -164,10 +165,10 @@ def test_structural_choices_cannot_be_shadowed_on_instances() -> None:
 @pytest.mark.parametrize("name", ["self", "point"])
 def test_choice_keywords_do_not_collide_with_receiver_arguments(method: str, name: str) -> None:
     class Family(Space):
-        self = Decision(int, values=(1, 2))
-        point = Decision(int, values=(1, 2))
+        self: int = Decision(values=(1, 2))
+        point: int = Decision(values=(1, 2))
 
-    instance = configure(Family())
+    instance = design_space(Family())
     result = getattr(instance, method)(**{name: 1})
     revised = result if method == "with_choices" else result.instance
     assert getattr(revised, name) == 1
@@ -189,10 +190,10 @@ def test_family_keywords_do_not_steal_formal_names_and_request_errors_precede_sn
     )
 
     class Family(Space):
-        parameters: Param[int] = Param(counted)
-        choice = Decision(counted, values=(1, 2))
+        parameters: int = Param(semantics=counted)
+        choice: int = Decision(values=(1, 2), semantics=counted)
 
-    point = configure(Family(parameters=3))
+    point = design_space(Family(parameters=3))
     assert point.parameters == 3
     snapshots.clear()
     # A family call binds formals by keyword only; the positional mapping of the
@@ -209,11 +210,11 @@ def test_family_keywords_do_not_steal_formal_names_and_request_errors_precede_sn
 def test_dynamic_prepared_family_and_bound_metadata_are_collectable() -> None:
     def create() -> tuple[ReferenceType[object], ReferenceType[object], ReferenceType[object]]:
         class Family(Space):
-            value: Param[int] = Param(int)
+            value: int = Param()
 
-        instance = configure(Family(value=1))
+        instance = design_space(Family(value=1))
         bound = instance.field(Family.value)
-        compile_space(Family)
+        compile_model(Family)
         return ref(Family), ref(instance), ref(bound)
 
     family_ref, instance_ref, bound_ref = create()
@@ -225,10 +226,10 @@ def test_dynamic_prepared_family_and_bound_metadata_are_collectable() -> None:
 
 def test_replacement_revalidates_retained_choices_and_supports_atomic_clear() -> None:
     class Family(Space):
-        extent = Decision(int, values=(8, 12))
-        lanes = Decision(int, domain=divisors_of(extent))
+        extent: int = Decision(values=(8, 12))
+        lanes: int = Decision(domain=divisors_of(extent))
 
-    base = configure(Family())
+    base = design_space(Family())
     configured = base.with_choices(extent=12, lanes=3)
     refused = configured.try_with_choices(extent=8)
     assert not refused.accepted and refused.instance is configured
@@ -251,10 +252,10 @@ def test_replacement_revalidates_retained_choices_and_supports_atomic_clear() ->
 
 def test_require_value_preserves_result_and_view_context() -> None:
     class Family(Space):
-        choice = Decision(int, values=(0, 1))
+        choice: int = Decision(values=(0, 1))
         result = View(choice)
 
-    base = configure(Family())
+    base = design_space(Family())
     unresolved = base.query(Family.choice)
     with pytest.raises(ValueUnavailableError) as caught:
         require_value(unresolved)
@@ -279,14 +280,14 @@ def test_require_value_preserves_result_and_view_context() -> None:
 
 def test_child_replacement_returns_child_and_revalidates_the_whole_root() -> None:
     class Child(Space):
-        local = Decision(int, values=(1, 2))
+        local: int = Decision(values=(1, 2))
 
     class Root(Space):
-        extent = Decision(int, values=(2, 4))
-        sibling = Decision(int, domain=divisors_of(extent))
+        extent: int = Decision(values=(2, 4))
+        sibling: int = Decision(domain=divisors_of(extent))
         child = Child()
 
-    root = configure(Root()).with_choices(extent=4, sibling=4)
+    root = design_space(Root()).with_choices(extent=4, sibling=4)
     child = root.child.with_choices(local=1)
     refused = child.try_with_choices(child.root.field(Root.extent).change(2))
     assert not refused.accepted and refused.instance is child
@@ -304,8 +305,8 @@ def test_replacement_reuses_frozen_facts_keeps_views_lazy_and_starts_a_fresh_cac
     calls: list[int] = []
 
     class Family(Space):
-        source: Param[list[object]] = Param(list)
-        choice = Decision(int, values=(1, 2))
+        source: list[object] = Param()
+        choice: int = Decision(values=(1, 2))
 
         @derived
         def output(*, source: list[object], choice: int) -> int:
@@ -315,7 +316,7 @@ def test_replacement_reuses_frozen_facts_keeps_views_lazy_and_starts_a_fresh_cac
         result = View(output)
 
     source: list[object] = [1]
-    first = configure(Family(source=source)).with_choices(choice=1)
+    first = design_space(Family(source=source)).with_choices(choice=1)
     source.append(2)
     assert calls == []
     assert first.result() == 2
@@ -335,10 +336,10 @@ def test_all_replacement_request_errors_precede_domain_callbacks() -> None:
         return True
 
     class Family(Space):
-        first = Decision(int, values=(1, 2))
-        second = Decision(int, domain=domain(accepts=accepts))
+        first: int = Decision(values=(1, 2))
+        second: int = Decision(domain=domain(accepts=accepts))
 
-    base = configure(Family())
+    base = design_space(Family())
     valid = base.field(Family.second).change(1)
     with pytest.raises(RequestError):
         base.try_with_choices(valid, object())  # type: ignore[arg-type]

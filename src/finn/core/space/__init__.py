@@ -11,9 +11,8 @@ from ._execution import (
     cancellation_details,
 )
 from .codecs import CodecBinding, JSONValue, SelectionSchema, ValueCodec, codec_for
-from .compiler import SpaceModel, configure
+from .compiler import Model, design_space
 from .declarations import (
-    UNSUPPLIED,
     Const,
     Constraint,
     ConstraintGroup,
@@ -27,6 +26,7 @@ from .declarations import (
     ValueRef,
     View,
     ViewKey,
+    accepted,
     constraint,
     derived,
     selected,
@@ -67,12 +67,11 @@ from .semantics import ValueSemantics, default_semantics
 __all__ = [
     # Families, node declarations and the compile step
     "Space",
-    "configure",
-    "SpaceModel",
+    "design_space",
+    "Model",
     "composite",
     "Param",
     "LocatedParam",
-    "UNSUPPLIED",
     "Const",
     "Decision",
     "selected",
@@ -85,6 +84,7 @@ __all__ = [
     "Members",
     "Users",
     "Located",
+    "accepted",
     "derived",
     "constraint",
     "view",

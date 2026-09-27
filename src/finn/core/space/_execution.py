@@ -58,6 +58,8 @@ class Context:
     native_parent: _Greenlet
     native_started: bool = False
     dependencies: dict[int, None] = field(default_factory=dict)
+    # Reads of a forwarding alias served by its source: alias -> source.
+    via: dict[int, int] = field(default_factory=dict)
     blocked: dict[int, NonValue] = field(default_factory=dict)
     failure: _Failure | None = None
     fault: EvaluationError | None = None
@@ -384,8 +386,12 @@ def run(snapshot: Snapshot, index: int, frame: Frame | None = None) -> Evaluatio
             failures[task.identity] = outcome
         else:
             outcome = _runtime.Evaluation(
-                outcome.result, tuple(task.context.dependencies), outcome.assessment
+                outcome.result,
+                tuple(task.context.dependencies),
+                outcome.assessment,
+                tuple(task.context.via.items()),
             )
+            outcome = _runtime.supplied_provenance(snapshot, outcome, task.context.index)
             if isinstance(task.identity, int):
                 snapshot.cache[task.identity] = outcome
         task.frame.close()
@@ -417,8 +423,10 @@ def run(snapshot: Snapshot, index: int, frame: Frame | None = None) -> Evaluatio
                     demanded = continuation.switch(task.incoming)
                 task.incoming = None
                 if continuation.dead:
+                    # A frame may make another native call after this one.
                     task.continuation = None
                     task.incoming = demanded
+                    context.native_started = False
                     continue
                 snapshot.work.suspensions += 1
             else:

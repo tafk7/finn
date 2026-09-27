@@ -22,8 +22,8 @@ from finn.core.space import (
     View,
     ViewKey,
     composite,
-    configure,
     derived,
+    design_space,
     domain,
     inspection,
     view,
@@ -46,7 +46,7 @@ def test_inspection_does_not_run_domains_or_evaluators() -> None:
         return (1, 2, 4)
 
     class Family(Space):
-        lanes = Decision(int, domain=domain(accepts=membership, candidates=candidates))
+        lanes: int = Decision(domain=domain(accepts=membership, candidates=candidates))
 
         @derived
         def cost(*, lanes: int) -> int:
@@ -55,7 +55,7 @@ def test_inspection_does_not_run_domains_or_evaluators() -> None:
 
         physical = View(cost)
 
-    point = configure(Family())
+    point = design_space(Family())
     model = inspection.model(point)
     decisions = inspection.decisions(point)
     assert [item.key for item in decisions] == ["lanes"]
@@ -83,15 +83,15 @@ def test_inspection_does_not_run_domains_or_evaluators() -> None:
 
 def test_discovery_reports_owning_decisions_and_author_names_for_selectors() -> None:
     class Child(Space):
-        supplied: Param[int] = Param(int)
-        local = Decision(int, values=(1, 2))
+        supplied: int = Param()
+        local: int = Decision(values=(1, 2))
 
     class Root(Space):
-        source = Decision(int, values=(2, 4))
+        source: int = Decision(values=(2, 4))
         child = Child(supplied=source)
-        implementation = Decision(values={"a": Child(supplied=1), "b": Child(supplied=2)})
+        implementation: Child = Decision(values={"a": Child(supplied=1), "b": Child(supplied=2)})
 
-    point = configure(Root())
+    point = design_space(Root())
     decisions = inspection.decisions(point)
     assert {item.key for item in decisions} == {
         "source",
@@ -122,14 +122,14 @@ def test_discovery_reports_owning_decisions_and_author_names_for_selectors() -> 
 
 def test_typed_handles_preserve_types_and_match_repeated_discovery() -> None:
     class Family(Space):
-        lanes = Decision(int, values=(1, 2))
+        lanes: int = Decision(values=(1, 2))
 
         @view
         def physical(*, lanes: int) -> int:
             return lanes
 
     model = inspection.model(Family)
-    point = configure(Family())
+    point = design_space(Family())
     decision = inspection.decision_handle(model, Family.lanes)
     value = inspection.value_handle(model, Family.physical)
     assert_type(decision, DecisionHandle[int])
@@ -153,16 +153,16 @@ def test_foreign_handles_fail_before_callbacks_and_aliases_cannot_be_upgraded() 
         return candidate > 0
 
     class Child(Space):
-        supplied: Param[int] = Param(int)
+        supplied: int = Param()
 
     class Family(Space):
-        choice = Decision(int, domain=domain(accepts=membership))
+        choice: int = Decision(domain=domain(accepts=membership))
         child = Child(supplied=choice)
 
     class OtherFamily(Family):
         pass
 
-    first = configure(Family())
+    first = design_space(Family())
     foreign = inspection.decision_handle(OtherFamily, Family.choice)
     with pytest.raises(RequestError, match="different compiled model"):
         first.with_choices({foreign: 1})
@@ -180,11 +180,11 @@ def test_foreign_handles_fail_before_callbacks_and_aliases_cannot_be_upgraded() 
 
 def test_handles_follow_model_identity_across_starts_without_retaining_point_state() -> None:
     class Family(Space):
-        source: Param[int] = Param(int)
-        lanes = Decision(int, values=(1, 2))
+        source: int = Param()
+        lanes: int = Decision(values=(1, 2))
 
     model = inspection.model(Family)
-    first, second = configure(Family(source=4)), configure(Family(source=8))
+    first, second = design_space(Family(source=4)), design_space(Family(source=8))
     source = inspection.value_handle(model, Family.source)
     decision = inspection.decision_handle(first, Family.lanes)
     assert first.query(source) == Available(4)
@@ -201,8 +201,8 @@ def test_singleton_choice_metadata_exposes_an_ordinary_editable_selector() -> No
         value = Const(1)
 
     class Root(Space):
-        implementation = Decision(values={"only": Child()})
-        optional = Decision(values={"none": None, "some": Child()})
+        implementation: Child = Decision(values={"only": Child()})
+        optional: Child | None = Decision(values={"none": None, "some": Child()})
 
     info = inspection.decision_info(Root, Root.implementation)
     assert (info.key, info.selector, info.cases) == ("implementation", True, ("only",))
@@ -216,7 +216,7 @@ def test_singleton_choice_metadata_exposes_an_ordinary_editable_selector() -> No
         ("none", None, None),
         ("some", "optional.some", Child),
     ]
-    point = configure(Root())
+    point = design_space(Root())
     assert isinstance(point.query(Root.implementation.value), Unresolved)
     chosen = point.with_choices({implementation.selector: "only", optional.selector: "none"})
     assert isinstance(chosen.implementation, Child) and chosen.implementation.value == 1
@@ -225,7 +225,7 @@ def test_singleton_choice_metadata_exposes_an_ordinary_editable_selector() -> No
 
 def test_statistics_counts_instantiated_members_and_direct_structure() -> None:
     class Leaf(Space):
-        value = Decision(int, values=(1, 2))
+        value: int = Decision(values=(1, 2))
         physical = View(value)
 
     def repeated(count: int) -> inspection.ModelStatistics:

@@ -1,13 +1,13 @@
 from finn.core.space import (
     Available, Param, QueryResult, Space, ValueSemantics, View, ViewKey,
-    composite, configure, derived,
+    composite, design_space, derived,
 )
 
 class Shape(Space):
-    lanes: Param[int] = Param(int)
+    lanes: int = Param()
 
 class Other(Space):
-    width: Param[int] = Param(int)
+    width: int = Param()
 
 Doubled = composite("Doubled", {}, base=Shape)
 Doubled(lanes="four")  # E
@@ -18,7 +18,7 @@ Plain(lanes=1)  # E
 composite("NotAFamily", {}, base=int)  # E
 composite("NotAMapping", [("lanes", Param(int))])  # E
 composite("BadExports", {}, exports={"complete": View(Shape.lanes)})  # E
-wrong_family: Other = configure(Doubled(lanes=1))  # E
+wrong_family: Other = design_space(Doubled(lanes=1))  # E
 wrong_node: Other = Doubled(lanes=1)  # E
 
 node = Doubled()

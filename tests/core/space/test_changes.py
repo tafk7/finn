@@ -15,7 +15,7 @@ from finn.core.space import (
     Space,
     ValueSemantics,
     composite,
-    configure,
+    design_space,
     domain,
 )
 from finn.core.space.edits import ChangeRequest
@@ -45,10 +45,10 @@ def test_malformed_batch_structure_and_types_precede_every_snapshot_callback() -
     )
 
     class Trial(Space):
-        first = Decision(semantics, domain=domain(accepts=membership))
-        second = Decision(int, values=(1, 2))
+        first: int = Decision(domain=domain(accepts=membership), semantics=semantics)
+        second: int = Decision(values=(1, 2))
 
-    base, other = configure(Trial()), configure(Trial())
+    base, other = design_space(Trial()), design_space(Trial())
     first = base.field(Trial.first).change(1)
     bad_edits: tuple[ChangeRequest, ...] = (
         first,
@@ -75,12 +75,12 @@ def test_foreign_model_handles_are_rejected_before_evaluators() -> None:
         return True
 
     class Trial(Space):
-        value = Decision(int, domain=domain(accepts=membership))
+        value: int = Decision(domain=domain(accepts=membership))
 
     class Other(Trial):
         pass
 
-    point = configure(Other())
+    point = design_space(Other())
     handle = decision_handle(Trial, Trial.value)
     with pytest.raises(RequestError):
         point.field(handle)
@@ -104,21 +104,21 @@ def test_snapshot_and_recognition_programmer_failures_are_contextual() -> None:
     )
 
     class Inputs(Space):
-        value: Param[int] = Param(semantics)
+        value: int = Param(semantics=semantics)
 
     class Decisions(Space):
-        earlier = Decision(int, domain=domain(accepts=membership))
-        value = Decision(semantics, domain=domain(accepts=lambda *, candidate: True))
+        earlier: int = Decision(domain=domain(accepts=membership))
+        value: int = Decision(domain=domain(accepts=lambda *, candidate: True), semantics=semantics)
 
     # An unrecognized literal is a bad binding at the node call.
     with pytest.raises(DefinitionError):
         Inputs(value=cast(int, "wrong"))
     with pytest.raises(EvaluationError) as input_error:
-        configure(Inputs(value=1))
+        design_space(Inputs(value=1))
     assert input_error.value.owner == "value"
     assert input_error.value.role == "parameter snapshot"
     assert isinstance(input_error.value.__cause__, RuntimeError)
-    base = configure(Decisions())
+    base = design_space(Decisions())
     with pytest.raises(EvaluationError) as candidate_error:
         base.try_with_choices(
             base.field(Decisions.earlier).change(1), base.field(Decisions.value).change(1)
@@ -135,10 +135,10 @@ def test_snapshot_and_recognition_programmer_failures_are_contextual() -> None:
     )
 
     class Unrecognizable(Space):
-        value: Param[int] = Param(recognition)
+        value: int = Param(semantics=recognition)
 
     with pytest.raises(EvaluationError) as recognition_error:
-        configure(Unrecognizable(value=1))
+        design_space(Unrecognizable(value=1))
     assert recognition_error.value.role == "parameter recognition"
     assert isinstance(recognition_error.value.__cause__, LookupError)
 
@@ -159,9 +159,11 @@ def test_replacement_equality_is_contextual_and_cannot_mutate_stored_values() ->
     )
 
     class Trial(Space):
-        value = Decision(semantics, domain=domain(accepts=lambda *, candidate: True))
+        value: list[int] = Decision(
+            domain=domain(accepts=lambda *, candidate: True), semantics=semantics
+        )
 
-    base = configure(Trial())
+    base = design_space(Trial())
     chosen = base.try_with_choices(base.field(Trial.value).change([1])).instance
     assert chosen.try_with_choices(chosen.field(Trial.value).change([1])).instance is chosen
     assert chosen.value == [1]
@@ -190,17 +192,20 @@ def test_independent_batch_reuses_trial_dependencies_and_publishes_only_once() -
         return 0 < candidate <= limit
 
     class Seeded(Space):
-        seed: Param[int] = Param(int)
+        seed: int = Param()
         limit = Derived(limit_value)
 
     limit = Seeded.limit
-    members = [Decision(int, domain=domain(accepts=membership, limit=limit)) for _ in range(64)]
+    members: list[int] = [
+        Decision(domain=domain(accepts=membership, limit=limit)) for _ in range(64)
+    ]
     family = composite(
         "IndependentBatch",
         {f"choice_{index}": member for index, member in enumerate(members)},
+        annotations={f"choice_{index}": int for index in range(len(members))},
         base=Seeded,
     )
-    base = configure(family(seed=100))
+    base = design_space(family(seed=100))
     report = base.try_with_choices(
         *(
             base.field(member).change(index + 1)
@@ -234,11 +239,15 @@ def test_dependent_batch_is_order_independent_without_precommitting_candidates()
         calls.append((candidate, previous))
         return candidate == previous + 1
 
-    members = [Decision(int, values=(1,))]
+    members: list[int] = [Decision(values=(1,))]
     for _ in range(31):
-        members.append(Decision(int, domain=domain(accepts=membership, previous=members[-1])))
-    family = composite("DependentBatch", {f"step_{i}": member for i, member in enumerate(members)})
-    base = configure(family())
+        members.append(Decision(domain=domain(accepts=membership, previous=members[-1])))
+    family = composite(
+        "DependentBatch",
+        {f"step_{i}": member for i, member in enumerate(members)},
+        annotations={f"step_{i}": int for i in range(len(members))},
+    )
+    base = design_space(family())
     edits = [base.field(member).change(index + 1) for index, member in enumerate(members)]
     report = base.try_with_choices(*reversed(edits))
     assert report.accepted
@@ -261,12 +270,12 @@ def test_dependent_batch_is_order_independent_without_precommitting_candidates()
 
 def test_selector_and_nested_edit_share_atomic_order_and_inactive_edits_refuse() -> None:
     class Child(Space):
-        value = Decision(int, values=(1, 2))
+        value: int = Decision(values=(1, 2))
 
     class Root(Space):
-        implementation = Decision(values={"a": Child(), "b": Child()})
+        implementation: Child = Decision(values={"a": Child(), "b": Child()})
 
-    base = configure(Root())
+    base = design_space(Root())
     selector = choices(base)[0].selector
     child = candidate(base, Root.implementation, "a")
     assert child is not None
@@ -292,9 +301,9 @@ def test_enumerated_candidates_still_pass_membership_before_commitment() -> None
         return candidate > 0
 
     class Trial(Space):
-        value = Decision(int, domain=domain(accepts=membership, candidates=lambda: (-1, 1)))
+        value: int = Decision(domain=domain(accepts=membership, candidates=lambda: (-1, 1)))
 
-    base = configure(Trial())
+    base = design_space(Trial())
     assert base.field(Trial.value).candidates() == Available((-1, 1))
     assert seen == []
     report = base.try_with_choices(base.field(Trial.value).change(-1))
@@ -308,10 +317,10 @@ def test_programmer_failure_after_provisional_admission_never_publishes_a_succes
         raise RuntimeError("membership failed")
 
     class Trial(Space):
-        first = Decision(int, values=(1,))
-        second = Decision(int, domain=domain(accepts=broken))
+        first: int = Decision(values=(1,))
+        second: int = Decision(domain=domain(accepts=broken))
 
-    base = configure(Trial())
+    base = design_space(Trial())
     with pytest.raises(EvaluationError):
         base.try_with_choices(base.field(Trial.first).change(1), base.field(Trial.second).change(1))
     assert isinstance(base.query(Trial.first), Unresolved)
@@ -321,9 +330,9 @@ def test_programmer_failure_after_provisional_admission_never_publishes_a_succes
 
 def test_selector_report_uses_authored_owner() -> None:
     class Root(Space):
-        implementation = Decision(values={"a": Space(), "b": Space()})
+        implementation: Space = Decision(values={"a": Space(), "b": Space()})
 
-    point = configure(Root())
+    point = design_space(Root())
     selector = choices(point)[0].selector
     report = point.try_with_choices({selector: "a"})
     assert report.accepted

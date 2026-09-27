@@ -38,6 +38,58 @@ NodeKind = Literal[
 
 
 @dataclass(frozen=True, slots=True)
+class Layer:
+    """One body's setting of a member: who wrote it, where, and what."""
+
+    body: str
+    origin: str | None
+    value: str
+    # The family's own declaration (a Param default, a Decision, a child node).
+    declared: bool = False
+
+    def describe(self) -> str:
+        where = f" at {self.origin}" if self.origin else ""
+        if self.declared:
+            return f"declared {self.value}{where}"
+        return f"{self.value} set by {self.body}{where}"
+
+
+@dataclass(frozen=True, slots=True)
+class Provenance:
+    """Who set a member's effective value, and what it overrides.
+
+    ``layers`` runs from the family's declaration outwards; the last layer is
+    the effective one (the outermost body that set it wins).
+    """
+
+    key: str
+    layers: tuple[Layer, ...]
+
+    @property
+    def effective(self) -> Layer:
+        return self.layers[-1]
+
+    @property
+    def overridden(self) -> tuple[Layer, ...]:
+        return self.layers[:-1]
+
+    def text(self) -> str:
+        """``kitchen.area = 16 (set by House at house.py:42; declared 12 at room.py:10)``."""
+        effective = self.effective
+        where = f" at {effective.origin}" if effective.origin else ""
+        head = "declared" if effective.declared else f"set by {effective.body}"
+        parts = [f"{head}{where}"]
+        parts.extend(
+            ("overrides " if not layer.declared else "") + layer.describe()
+            for layer in reversed(self.overridden)
+        )
+        return f"{self.key} = {effective.value} ({'; '.join(parts)})"
+
+    def __str__(self) -> str:
+        return self.text()
+
+
+@dataclass(frozen=True, slots=True)
 class Argument:
     name: str
     node: int
@@ -64,6 +116,14 @@ class Node:
     selector: int | None = None
     source_owner: str | None = None
     origin: str | None = None
+    # A Decision replaced by a narrower one keeps its declared domain as a contract;
+    # a pinned coordinate (a const or alias with a domain) is checked against it.
+    contract: Domain[object] | None = None
+    contract_arguments: tuple[Argument, ...] = ()
+    # Provenance text for refusals of a supplied value.
+    note: str | None = None
+    # Structural edges that bypass forwarding aliases: (alias, its source).
+    via: tuple[tuple[int, int], ...] = ()
     selection_index: Mapping[str, int] | None = field(
         default=None, init=False, repr=False, compare=False
     )
@@ -82,7 +142,9 @@ class Node:
     @property
     def dependencies(self) -> tuple[int, ...]:
         """Known structural/explicit edges; self-method reads are observed at runtime."""
-        refs = [arg.node for arg in (*self.arguments, *self.domain_arguments)]
+        refs = [
+            arg.node for arg in (*self.arguments, *self.domain_arguments, *self.contract_arguments)
+        ]
         if self.guard is not None:
             refs.append(self.guard)
         if self.output is not None:
@@ -152,11 +214,22 @@ class LinkedModel:
     choices: tuple[Choice, ...] = ()
     # Formals supplied by a named shared Decision: edits may pass through them.
     editable_aliases: frozenset[int] = frozenset()
+    # Who set each supplied member (by node) and each replaced child (by scope).
+    provenance: Mapping[int, Provenance] = field(default_factory=dict)
+    scope_provenance: Mapping[int, Provenance] = field(default_factory=dict)
+    # Decision keys removed by an override that pinned the coordinate.
+    pinned: Mapping[str, Provenance] = field(default_factory=dict)
+    # Each node's forwarding source: an alias chain collapsed to its source.
+    forward: tuple[int, ...] = ()
     selector_choices: Mapping[int, int] = field(init=False, repr=False)
     ranks: tuple[int, ...] = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "keys", MappingProxyType(dict(self.keys)))
+        for attr in ("provenance", "scope_provenance", "pinned"):
+            object.__setattr__(self, attr, MappingProxyType(dict(getattr(self, attr))))
+        if not self.forward:
+            object.__setattr__(self, "forward", tuple(range(len(self.nodes))))
         ranks = [0] * len(self.nodes)
         for rank, index in enumerate(self.order):
             ranks[index] = rank

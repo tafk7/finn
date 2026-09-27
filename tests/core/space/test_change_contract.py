@@ -7,7 +7,7 @@ from typing import cast
 
 import pytest
 
-from finn.core.space import Decision, Space, ValueSemantics, configure
+from finn.core.space import Decision, Space, ValueSemantics, design_space
 from finn.core.space.domains import Domain
 from finn.core.space.errors import RequestError
 from finn.core.space.results import Available, Unresolved
@@ -29,10 +29,10 @@ def test_all_candidate_snapshots_precede_membership_callbacks() -> None:
         return True
 
     class Trial(Space):
-        first = Decision(int, domain=Domain((), first_membership))
-        second: Decision[list[int]] = Decision(list, domain=Domain((), second_membership))
+        first: int = Decision(domain=Domain((), first_membership))
+        second: list[int] = Decision(domain=Domain((), second_membership))
 
-    base = configure(Trial())
+    base = design_space(Trial())
     result = base.try_with_choices(
         base.field(Trial.first).change(1), base.field(Trial.second).change(payload)
     )
@@ -51,10 +51,10 @@ def test_malformed_last_candidate_prevents_first_membership_callback() -> None:
         return True
 
     class Trial(Space):
-        first = Decision(int, domain=Domain((), membership))
-        second = Decision(int, values=(1, 2))
+        first: int = Decision(domain=Domain((), membership))
+        second: int = Decision(values=(1, 2))
 
-    base = configure(Trial())
+    base = design_space(Trial())
     with pytest.raises(RequestError):
         base.try_with_choices(
             base.field(Trial.first).change(1), base.field(Trial.second).change(cast(int, "bad"))
@@ -74,10 +74,10 @@ def test_unhashable_finite_domain_uses_declared_equality_and_detaches_reads() ->
     allowed = [1, 2]
 
     class Bags(Space):
-        bag = Decision(semantics, values=(allowed,))
+        bag: list[int] = Decision(values=(allowed,), semantics=semantics)
 
     allowed.append(3)
-    base = configure(Bags())
+    base = design_space(Bags())
     candidates = base.field(Bags.bag).candidates()
     assert candidates == Available(([1, 2],))
     assert isinstance(candidates, Available)

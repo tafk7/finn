@@ -12,7 +12,6 @@ from typing_extensions import assert_type
 from finn.core.space import (
     Available,
     BoundView,
-    Derived,
     Param,
     QueryResult,
     Space,
@@ -20,13 +19,13 @@ from finn.core.space import (
     View,
     ViewKey,
     composite,
-    configure,
     derived,
+    design_space,
 )
 
 
 class Shape(Space):
-    lanes: Param[int] = Param(int)
+    lanes: int = Param()
     physical = View(lanes)
 
 
@@ -41,8 +40,9 @@ def answer(*, lanes: int) -> QueryResult[int]:
 computed = derived(doubled)
 answered = derived(semantics=ValueSemantics.immutable_nominal(int))(answer)
 complete = View(computed)
-assert_type(computed, Derived[int])
-assert_type(answered, Derived[int])
+# A derived member is typed as its value, like every reference, so it may supply a formal.
+assert_type(computed, int)
+assert_type(answered, int)
 assert_type(complete, View[int])
 
 Doubled = composite(
@@ -73,7 +73,7 @@ def chain(count: int) -> type[Space]:
 
 
 class Parent(Space):
-    width: Param[int] = Param(int)
+    width: int = Param()
     first = Doubled(lanes=width)
     second = Doubled()
     second.lanes = first.lanes
@@ -87,6 +87,6 @@ def check(point: Parent) -> None:
     assert_type(point.first, Shape)
     assert_type(point.first.lanes, int)
     assert_type(point.first.physical(), int)
-    assert_type(configure(Doubled(lanes=2)), Shape)
-    assert_type(configure(Parent(width=2)), Parent)
-    assert_type(configure(chain(3)()), Space)
+    assert_type(design_space(Doubled(lanes=2)), Shape)
+    assert_type(design_space(Parent(width=2)), Parent)
+    assert_type(design_space(chain(3)()), Space)

@@ -8,7 +8,15 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from weakref import ReferenceType, ref
 
-from finn.core.space import Decision, Param, Space, ValueSemantics, configure, derived, inspection
+from finn.core.space import (
+    Decision,
+    Param,
+    Space,
+    ValueSemantics,
+    derived,
+    design_space,
+    inspection,
+)
 from finn.core.space.results import Available
 
 
@@ -24,7 +32,7 @@ def test_discarded_candidate_snapshots_release_the_actual_cached_callback_output
     produced: list[ReferenceType[Payload]] = []
 
     class Family(Space):
-        factor = Decision(int, values=range(16))
+        factor: int = Decision(values=range(16))
 
         @derived(semantics=PAYLOAD)
         def output(*, factor: int) -> Payload:
@@ -33,7 +41,7 @@ def test_discarded_candidate_snapshots_release_the_actual_cached_callback_output
             return payload
 
     model = inspection.model(Family)
-    base = configure(Family())
+    base = design_space(Family())
     assert inspection.model(base) is model  # a plain root reuses the family's model
 
     def population() -> list[Family]:
@@ -51,15 +59,15 @@ def test_discarded_candidate_snapshots_release_the_actual_cached_callback_output
     del candidates
     gc.collect()
     assert all(reference() is None for reference in produced)
-    assert configure(Family()).try_with_choices().accepted
+    assert design_space(Family()).try_with_choices().accepted
 
 
 def test_successor_does_not_retain_its_predecessors_output_cache() -> None:
     produced: list[ReferenceType[Payload]] = []
 
     class Family(Space):
-        factor = Decision(int, values=(1, 2))
-        extra = Decision(int, values=(3, 4))
+        factor: int = Decision(values=(1, 2))
+        extra: int = Decision(values=(3, 4))
 
         @derived(semantics=PAYLOAD)
         def output(*, factor: int) -> Payload:
@@ -67,7 +75,7 @@ def test_successor_does_not_retain_its_predecessors_output_cache() -> None:
             produced.append(ref(payload))
             return payload
 
-    earlier = configure(Family()).with_choices(factor=1)
+    earlier = design_space(Family()).with_choices(factor=1)
     earlier.query(Family.output)
     later = earlier.with_choices(extra=3)
     assert produced[0]() is not None
@@ -83,7 +91,7 @@ def test_concurrent_reads_evaluate_one_cached_output_per_snapshot() -> None:
     produced: list[ReferenceType[Payload]] = []
 
     class Family(Space):
-        source: Param[int] = Param(int)
+        source: int = Param()
 
         @derived(semantics=PAYLOAD)
         def output(*, source: int) -> Payload:
@@ -91,8 +99,8 @@ def test_concurrent_reads_evaluate_one_cached_output_per_snapshot() -> None:
             produced.append(ref(payload))
             return payload
 
-    first = configure(Family(source=1))
-    second = configure(Family(source=2))
+    first = design_space(Family(source=1))
+    second = design_space(Family(source=2))
     assert inspection.model(first) is inspection.model(second)
 
     def read_first(_: int) -> Payload:
@@ -111,7 +119,7 @@ def test_concurrent_successors_keep_independent_commitments_and_caches() -> None
     produced: list[ReferenceType[Payload]] = []
 
     class Family(Space):
-        factor = Decision(int, values=range(16))
+        factor: int = Decision(values=range(16))
 
         @derived(semantics=PAYLOAD)
         def output(*, factor: int) -> Payload:
@@ -119,7 +127,7 @@ def test_concurrent_successors_keep_independent_commitments_and_caches() -> None
             produced.append(ref(payload))
             return payload
 
-    base = configure(Family())
+    base = design_space(Family())
 
     def explore(value: int) -> Family:
         point = base.with_choices(factor=value)
@@ -139,7 +147,7 @@ def test_independent_root_bindings_remain_frozen_when_model_is_reused() -> None:
     calls: list[tuple[int, ...]] = []
 
     class Family(Space):
-        values: Param[list[int]] = Param(list)
+        values: list[int] = Param()
 
         @derived
         def total(*, values: list[int]) -> int:
@@ -147,9 +155,9 @@ def test_independent_root_bindings_remain_frozen_when_model_is_reused() -> None:
             return sum(values)
 
     original = [1, 2]
-    first = configure(Family(values=original))
+    first = design_space(Family(values=original))
     original.append(3)
-    second = configure(Family(values=original))
+    second = design_space(Family(values=original))
     original.clear()
     assert inspection.model(first) is inspection.model(second)
     assert first.total == 3

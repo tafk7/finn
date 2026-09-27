@@ -20,7 +20,7 @@ from finn.core.space import (
     ReferenceUseError,
     Space,
     ViewKey,
-    configure,
+    design_space,
     inspection,
     view,
 )
@@ -28,8 +28,8 @@ from finn.core.space.expressions import Expr
 
 
 class Room(Space):
-    area: Param[int] = Param(int)
-    finish = Decision(int, values=(1, 2))
+    area: int = Param()
+    finish: int = Decision(values=(1, 2))
 
     @view
     def cost(self) -> int:
@@ -37,7 +37,7 @@ class Room(Space):
 
 
 class Boiler(Space):
-    kw: Param[int] = Param(int)
+    kw: int = Param()
 
 
 def kitchen_area() -> object:
@@ -96,7 +96,7 @@ def test_misuse_in_a_class_body_names_the_node_by_its_declaration() -> None:
     with pytest.raises(ReferenceUseError, match=r"Decision over \['boiler'\].*\.kw"):
 
         class Heated(Space):
-            heating = Decision(values={"boiler": Boiler(kw=3)})
+            heating: Boiler = Decision(values={"boiler": Boiler(kw=3)})
             size = max(heating.kw, 10)
 
 
@@ -115,7 +115,7 @@ def test_references_are_keys_integer_arithmetic_builds_expressions() -> None:
     # Equality is not overloaded into an expression.
     assert isinstance(House.kitchen.finish == House.kitchen.finish, bool)
     assert isinstance(vars(House)["doubled"], Expr)
-    assert configure(House()).doubled == 24
+    assert design_space(House()).doubled == 24
     info = inspection.reference(House.kitchen.finish)
     assert (info.path, info.member) == (("kitchen",), "finish")
 

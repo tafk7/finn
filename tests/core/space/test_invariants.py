@@ -8,9 +8,9 @@ from finn.core.space import (
     Param,
     Space,
     Unresolved,
-    configure,
     constraint,
     derived,
+    design_space,
     view,
 )
 
@@ -19,9 +19,9 @@ def test_settled_values_and_acceptance_survive_unrelated_added_choices() -> None
     calls: list[int] = []
 
     class Family(Space):
-        extent: Param[int] = Param(int)
-        lanes = Decision(int, values=(1, 2))
-        style = Decision(str, values=("small", "fast"))
+        extent: int = Param()
+        lanes: int = Decision(values=(1, 2))
+        style: str = Decision(values=("small", "fast"))
 
         @derived
         def cycles(self) -> int:
@@ -37,7 +37,7 @@ def test_settled_values_and_acceptance_survive_unrelated_added_choices() -> None
         def physical(self) -> int:
             return self.cycles
 
-    base = configure(Family(extent=8))
+    base = design_space(Family(extent=8))
     assert isinstance(base.query(Family.cycles), Unresolved)
     assert calls == []
     first = base.with_choices(lanes=2)

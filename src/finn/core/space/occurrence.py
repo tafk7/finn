@@ -12,8 +12,9 @@ from typing import TypeVar, cast, overload
 
 from . import _execution, _runtime
 from ._configuration import BoundDecision, BoundValue, BoundView, Space
+from ._linker import guard_implies
 from ._runtime import Snapshot
-from .compiler import SpaceModel
+from .compiler import Model
 from .declarations import (
     Constraint,
     ConstraintGroup,
@@ -25,9 +26,12 @@ from .declarations import (
 from .errors import EvaluationError, RequestError
 from .ir import LinkedModel, Node
 from .results import (
+    Available,
     ConstraintAssessment,
     DecisionState,
+    Inapplicable,
     QueryResult,
+    Unresolved,
     ViewAssessment,
     require_value,
 )
@@ -41,9 +45,10 @@ def state(point: Space) -> Snapshot:
     if not isinstance(current, Snapshot):
         if declared_path(point) is not None:
             raise RequestError(
-                f"{point!r} is a node declaration, not a configuration; configure() its root"
+                f"{point!r} is a node declaration, not a configuration; open its root's "
+                "design space with design_space()"
             )
-        raise RequestError("an instance must be created by configure()")
+        raise RequestError("a configuration is created by design_space()")
     return current
 
 
@@ -87,7 +92,7 @@ def _prepare_values(
     }
 
 
-def bind(model: SpaceModel[S], parameters: Mapping[int, object]) -> S:
+def bind(model: Model[S], parameters: Mapping[int, object]) -> S:
     """Validate all root inputs and freeze them before any evaluation."""
     _execution.driver_only("configuration binding")
     for index in parameters:
@@ -101,16 +106,104 @@ def bind(model: SpaceModel[S], parameters: Mapping[int, object]) -> S:
     if missing:
         raise RequestError(f"missing required parameters: {', '.join(missing)}")
     frozen = _prepare_values(model.linked, parameters, "parameter")
-    snapshot = _runtime.Snapshot(cast(SpaceModel[Space], model), frozen)
+    snapshot = _runtime.Snapshot(cast(Model[Space], model), frozen)
     return cast(S, _attach(snapshot, 0))
+
+
+def _node_scope(point: Space, reference: object) -> tuple[int, int | None] | None:
+    """For a node reference: (the scope holding it, the node's scope or None if unsupplied)."""
+    from ._configuration import Space
+    from ._nodes import NodeDecl, is_reference_input
+    from .references import _descend
+
+    if isinstance(reference, Space):
+        path = declared_path(reference)
+        if path is None:
+            return None
+        *outer, last = path
+    elif is_reference_input(reference):
+        outer, last = [], cast(Declaration, reference)
+    else:
+        return None
+    if not isinstance(last, NodeDecl) and not is_reference_input(last):
+        return None
+    current = state(point)
+    scopes = current.linked.scopes
+    holder = _descend(scopes, point._scope, outer)
+    scope = scopes[holder]
+    if last is scope.record:
+        return holder, holder
+    target = scope.children.get(last, scope.references.get(last))
+    if target is None and last not in scope.members:
+        raise RequestError("node is not part of this compiled scope")
+    return holder, target
+
+
+def _presence(point: Space, holder: int, target: int | None, last: object) -> int | None:
+    """The node answering a node's presence: its guard, or a reference input's presence node."""
+    scopes = state(point).linked.scopes
+    if last in scopes[holder].members:  # a reference input
+        return scopes[holder].members[last]
+    return None if target is None else scopes[target].guard
 
 
 def query(point: Space, reference: object) -> QueryResult[object]:
     _execution.driver_only("query inspection")
     current = state(point)
+    located = _node_scope(point, reference)
+    if located is not None:
+        holder, target = located
+        last = cast(tuple[Declaration, ...], declared_path(reference) or (reference,))[-1]
+        presence = _presence(point, holder, target, last)
+        if presence is not None:
+            answer = _runtime.evaluate(current, presence).result
+            if not isinstance(answer, Available) or answer.value is not True:
+                return answer if not isinstance(answer, Available) else Inapplicable()
+        assert target is not None
+        return Available(_attach(current, target))
     index = current.model.resolve(point._scope, reference)
     result = _runtime.evaluate(current, index).result
     return _runtime.copy_result(current, index, result)
+
+
+def present(point: Space, node: object) -> bool:
+    """Whether a node is present, read like a value (undecided presence raises)."""
+    located = _node_scope(point, node)
+    if located is None:
+        raise RequestError("present() takes a node: a child, a candidate or a reference input")
+    holder, target = located
+    last = cast(tuple[Declaration, ...], declared_path(node) or (node,))[-1]
+    presence = _presence(point, holder, target, last)
+    if presence is None:
+        return target is not None
+    answer = _read_result(point, presence)
+    if isinstance(answer, Available):
+        return answer.value is True
+    if isinstance(answer, Inapplicable) or (isinstance(answer, Unresolved) and _unsupplied(answer)):
+        return False
+    return bool(_read_index(point, presence))  # undecided: raises like any value read
+
+
+def _read_result(point: Space, index: int) -> QueryResult[object]:
+    """A node's answer without halting the reading method on a non-value."""
+    snapshot = state(point)
+    _execution.check_snapshot(snapshot)
+    active = _execution.current()
+    if active is None:
+        return _runtime.evaluate(snapshot, index).result
+    active.dependencies[index] = None
+    outcome: object = (
+        snapshot.cache[index] if index in snapshot.cache else active.native_parent.switch(index)
+    )
+    if not isinstance(outcome, _runtime.Evaluation):
+        _execution.accept_read(active, index, outcome)  # a transported failure: raises
+    return cast(_runtime.Evaluation, outcome).result
+
+
+def _unsupplied(answer: Unresolved) -> bool:
+    return bool(answer.findings) and all(
+        finding.code == "input-unsupplied" for finding in answer.findings
+    )
 
 
 def read_value(point: Space, reference: ValueRef[T] | View[T]) -> T:
@@ -145,6 +238,17 @@ def _read_value(point: Space, reference: ValueRef[T] | View[T]) -> T:
     snapshot = state(point)
     _execution.check_snapshot(snapshot)
     index = snapshot.model.resolve(point._scope, reference)
+    active = _execution.current()
+    if active is not None:
+        # A method's read of a forwarding alias goes straight to its source
+        # when the alias applies whenever the reading node does.
+        linked = snapshot.linked
+        source = linked.forward[index]
+        if source != index and guard_implies(
+            linked.nodes, linked.nodes[index].guard, linked.nodes[active.index].guard
+        ):
+            active.via[index] = source
+            index = source
     return cast(T, _read_index(point, index))
 
 
@@ -232,13 +336,13 @@ def child(point: Space, record: Declaration) -> Space:
     any guarded node. An unsupplied optional reference input has no node: it
     reads its presence, which is unsupplied, exactly like a value read.
     """
-    from ._nodes import FamilyFormal
+    from ._nodes import is_reference_input
 
     current = state(point)
     _execution.check_snapshot(current)
     scope = current.linked.scopes[point._scope]
     child_scope = scope.children.get(record, scope.references.get(record))
-    if child_scope is None and isinstance(record, FamilyFormal) and record in scope.members:
+    if child_scope is None and is_reference_input(record) and record in scope.members:
         _read_index(point, scope.members[record])  # raises: unsupplied
     if child_scope is None:
         raise RequestError("child node is not part of this compiled scope")

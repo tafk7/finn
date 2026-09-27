@@ -18,11 +18,11 @@ import re
 import shutil
 import subprocess
 from pathlib import Path
+from typing import cast
 
 import pytest
 
 from finn.core.space import (
-    UNSUPPLIED,
     Available,
     BoundDecision,
     Const,
@@ -34,8 +34,8 @@ from finn.core.space import (
     Unresolved,
     View,
     composite,
-    configure,
     derived,
+    design_space,
     divisors_of,
     inspection,
     selections,
@@ -44,8 +44,8 @@ from finn.core.space.errors import ConfigurationError, DefinitionError, RequestE
 
 
 class Port(Space):
-    dtype: Param[str] = Param(str)
-    lanes: Param[int] = Param(int)
+    dtype: str = Param()
+    lanes: int = Param()
 
     @derived
     def description(*, dtype: str, lanes: int) -> tuple[str, int]:
@@ -57,15 +57,15 @@ class Port(Space):
 class Reusable(Space):
     """Its port's formals stay unsupplied: whoever places a Reusable supplies them."""
 
-    count: Param[int] = Param(int)
+    count: int = Param()
     port = Port()
 
 
 class Kernel(Space):
     """The caller supplies the port node itself, with its own bindings."""
 
-    count: Param[int] = Param(int)
-    port: Param[Port] = Param(Port)
+    count: int = Param()
+    port: Port = Param()
 
 
 def codes(result: object) -> set[str]:
@@ -75,13 +75,13 @@ def codes(result: object) -> set[str]:
 
 def test_outer_params_and_decisions_supply_interface_slots_without_new_choices() -> None:
     class Parent(Space):
-        dtype: Param[str] = Param(str)
-        lanes = Decision(int, values=(1, 2, 4))
+        dtype: str = Param()
+        lanes: int = Decision(values=(1, 2, 4))
         kernel = Reusable(count=1)
         kernel.port.dtype = dtype  # for this placement of Reusable only
         kernel.port.lanes = lanes
 
-    base = configure(Parent(dtype="INT8"))
+    base = design_space(Parent(dtype="INT8"))
     assert base.kernel.port.dtype == "INT8"
     assert isinstance(base.kernel.port.query(Port.lanes), Unresolved)
     chosen = base.with_choices(lanes=2)
@@ -104,20 +104,20 @@ def test_outer_params_and_decisions_supply_interface_slots_without_new_choices()
 
 def test_fresh_nested_decision_uses_outer_domain_and_guard_sources() -> None:
     class Parent(Space):
-        extent: Param[int] = Param(int)
-        enabled: Param[bool] = Param(bool)
+        extent: int = Param()
+        enabled: bool = Param()
         # A fresh Decision at the call of the node supplied to a family-typed
         # formal: its domain and guard read the enclosing family.
         kernel = Kernel(
             count=9,
-            port=Port(dtype="INT4", lanes=Decision(int, domain=divisors_of(extent), when=enabled)),
+            port=Port(dtype="INT4", lanes=Decision(domain=divisors_of(extent), when=enabled)),
         )
 
         @derived(lanes=kernel.port.lanes)
         def folded(*, lanes: int) -> int:
             return lanes * 2
 
-    base = configure(Parent(extent=12, enabled=True))
+    base = design_space(Parent(extent=12, enabled=True))
     field = base.kernel.port.field(Port.lanes)
     assert isinstance(field, BoundDecision)  # the fresh Decision is owned here
     assert field.candidates() == Available((1, 2, 3, 4, 6, 12))
@@ -127,7 +127,7 @@ def test_fresh_nested_decision_uses_outer_domain_and_guard_sources() -> None:
     assert [item.key for item in inspection.decisions(chosen)] == ["kernel.port.lanes"]
     with pytest.raises(ConfigurationError):
         base.with_choices({Parent.kernel.port.lanes: 5})
-    inactive = configure(Parent(extent=12, enabled=False))
+    inactive = design_space(Parent(extent=12, enabled=False))
     inactive_field = inactive.kernel.port.field(Port.lanes)
     assert isinstance(inactive_field, BoundDecision)
     assert isinstance(inactive_field.state, Inapplicable)
@@ -136,10 +136,10 @@ def test_fresh_nested_decision_uses_outer_domain_and_guard_sources() -> None:
 
 def test_repeated_placements_keep_fresh_choices_independent() -> None:
     class Pair(Space):
-        first = Kernel(count=1, port=Port(dtype="INT4", lanes=Decision(int, values=(1, 2))))
-        second = Kernel(count=1, port=Port(dtype="INT8", lanes=Decision(int, values=(2, 4))))
+        first = Kernel(count=1, port=Port(dtype="INT4", lanes=Decision(values=(1, 2))))
+        second = Kernel(count=1, port=Port(dtype="INT8", lanes=Decision(values=(2, 4))))
 
-    base = configure(Pair())
+    base = design_space(Pair())
     chosen = base.with_choices({Pair.first.port.lanes: 2})
     assert chosen.first.port.physical() == ("INT4", 2)
     assert isinstance(chosen.second.port.query(Port.lanes), Unresolved)
@@ -149,29 +149,29 @@ def test_repeated_placements_keep_fresh_choices_independent() -> None:
 
 
 def test_an_unnamed_decision_shared_by_two_nodes_is_a_definition_error() -> None:
-    lanes = Decision(int, values=(1, 2, 4))  # unnamed: bound at calls, never a class attribute
+    lanes: int = Decision(values=(1, 2, 4))  # unnamed: bound at calls, never a class attribute
 
     class Shared(Space):
         first = Kernel(count=1, port=Port(dtype="INT4", lanes=lanes))
         second = Kernel(count=2, port=Port(dtype="INT8", lanes=lanes))
 
     with pytest.raises(DefinitionError, match="a shared decision must be named") as caught:
-        configure(Shared())
+        design_space(Shared())
     assert "Port.lanes" in str(caught.value) and 'name="..."' in str(caught.value)
 
 
 def test_a_named_decision_shared_by_two_nodes_is_one_decision_of_their_common_scope() -> None:
-    lanes = Decision(int, values=(1, 2, 4), name="lanes")
+    lanes: int = Decision(values=(1, 2, 4), name="lanes")
 
     class Shared(Space):
-        use_first = Decision(bool, values=(False, True))
+        use_first: bool = Decision(values=(False, True))
         first = Kernel(count=1, port=Port(dtype="INT4", lanes=lanes), when=use_first)
         second = Kernel(count=2, port=Port(dtype="INT8", lanes=lanes))
 
     (info,) = [item for item in inspection.decisions(Shared) if item.key != "use_first"]
     # Owned by the lowest scope containing both uses, keyed by that scope and its name.
     assert (info.key, info.scope) == ("lanes", "")
-    base = configure(Shared())
+    base = design_space(Shared())
     # Either use edits the one decision; it applies whenever its owner does.
     point = base.with_choices({Shared.second.port.lanes: 4}, use_first=False)
     assert point.second.port.physical() == ("INT8", 4)
@@ -187,9 +187,9 @@ def test_a_named_decision_shared_by_two_nodes_is_one_decision_of_their_common_sc
 def test_a_decision_name_is_checked_where_it_becomes_a_key() -> None:
     # A class attribute takes its attribute name; a different name= is refused.
     with pytest.raises(DefinitionError, match="a class attribute takes its attribute name"):
-        composite("Renamed", {"lanes": Decision(int, values=(1,), name="other")})
+        composite("Renamed", {"lanes": Decision(values=(1,), name="other")})
     # A named shared decision is a member of its owner: it may not shadow one.
-    lanes = Decision(int, values=(1, 2), name="width")
+    lanes: int = Decision(values=(1, 2), name="width")
 
     class Clash(Space):
         width = Const(4)
@@ -197,21 +197,21 @@ def test_a_decision_name_is_checked_where_it_becomes_a_key() -> None:
         second = Kernel(count=2, port=Port(dtype="INT8", lanes=lanes))
 
     with pytest.raises(DefinitionError, match="is named like a member"):
-        configure(Clash())
+        design_space(Clash())
 
 
 def test_unbound_exposure_is_a_formal_declared_on_the_enclosing_family() -> None:
     # An exposed inline Param is gone: declare the formal here, bind it by name.
     class Parent(Space):
-        lanes: Param[int] = Param(int, default=UNSUPPLIED)
+        lanes: int = Param(required=False)
         kernel = Reusable(count=1)
         kernel.port.dtype = "INT8"
         kernel.port.lanes = lanes
 
-    omitted = configure(Parent())
+    omitted = design_space(Parent())
     assert omitted.kernel.port.dtype == "INT8"
     assert isinstance(omitted.kernel.port.query(Port.lanes), Unresolved)
-    supplied = configure(Parent(lanes=3))
+    supplied = design_space(Parent(lanes=3))
     assert supplied.kernel.port.physical() == ("INT8", 3)
 
 
@@ -220,20 +220,20 @@ def test_reexposed_nested_slot_can_be_bound_again_by_an_outer_placement() -> Non
         kernel = Reusable(count=1)  # the port's formals stay unsupplied through Middle
 
     class Outer(Space):
-        lanes = Decision(int, values=(2, 4))
+        lanes: int = Decision(values=(2, 4))
         middle = Middle()
         middle.kernel.port.dtype = "INT3"
         middle.kernel.port.lanes = lanes
 
-    point = configure(Outer())
+    point = design_space(Outer())
     chosen = point.with_choices(lanes=4)
     assert chosen.middle.kernel.port.physical() == ("INT3", 4)
     with pytest.raises(DefinitionError, match=r"kernel\.port\.dtype is not supplied"):
-        configure(Middle())
+        design_space(Middle())
 
     # Re-exposing by name: the enclosing family declares the formal and binds it.
     class Named(Space):
-        dtype: Param[str] = Param(str)
+        dtype: str = Param()
         kernel = Reusable(count=1)
         kernel.port.dtype = dtype
         kernel.port.lanes = 2
@@ -241,32 +241,39 @@ def test_reexposed_nested_slot_can_be_bound_again_by_an_outer_placement() -> Non
     class Top(Space):
         named = Named(dtype="INT5")
 
-    assert configure(Top()).named.kernel.port.physical() == ("INT5", 2)
+    assert design_space(Top()).named.kernel.port.physical() == ("INT5", 2)
 
 
 @pytest.mark.parametrize("kind", ["literal", "alias", "decision"])
-def test_an_outer_assignment_cannot_override_an_internal_binding(kind: str) -> None:
+def test_an_outer_assignment_overrides_an_internal_binding(kind: str) -> None:
+    # Parameters are template fields: an enclosing body may override what an
+    # inner body supplied, and the outermost assignment wins.
     class Internal(Space):
         local = Const(2)
         port = Port(
             dtype="INT8",
             lanes=2
             if kind == "literal"
-            else local
+            else cast(int, local)
             if kind == "alias"
-            else Decision(int, values=(1, 2)),
+            else Decision(values=(1, 2)),
         )
 
-    with pytest.raises(DefinitionError, match="already supplied"):
+    class Parent(Space):
+        child = Internal()
+        child.port.lanes = 4
 
-        class Parent(Space):
-            child = Internal()
-            child.port.lanes = 4
+    inner = [item.key for item in inspection.decisions(Internal)]
+    assert inner == (["port.lanes"] if kind == "decision" else [])
+    point = design_space(Parent())
+    assert point.child.port.physical() == ("INT8", 4)
+    assert [item.key for item in inspection.decisions(point)] == []
+    provenance = inspection.provenance(point, Parent.child.port.lanes)
+    assert provenance is not None
+    assert provenance.text().startswith("child.port.lanes = 4 (set by Parent at ")
 
 
-def test_an_outer_assignment_beside_an_inner_one_is_refused_when_prepared() -> None:
-    # A formal has one supplier. Two bodies assigning it through a path meet only
-    # when the outer family is prepared.
+def test_an_outer_assignment_beside_an_inner_one_wins() -> None:
     class Middle(Space):
         kernel = Reusable(count=1)
         kernel.port.dtype = "INT8"
@@ -276,9 +283,8 @@ def test_an_outer_assignment_beside_an_inner_one_is_refused_when_prepared() -> N
         middle = Middle()
         middle.kernel.port.dtype = "INT4"
 
-    assert configure(Middle()).kernel.port.physical() == ("INT8", 2)
-    with pytest.raises(DefinitionError, match=r"middle\.kernel\.port\.dtype .*already supplied"):
-        configure(Outer())
+    assert design_space(Middle()).kernel.port.physical() == ("INT8", 2)
+    assert design_space(Outer()).middle.kernel.port.physical() == ("INT4", 2)
 
 
 def test_assignment_targets_are_checked() -> None:
@@ -287,22 +293,22 @@ def test_assignment_targets_are_checked() -> None:
         child.port.dtype = "INT8"
         child.port.lanes = 1
 
-    assert configure(Parent()).child.count == 2
+    assert design_space(Parent()).child.count == 2
 
-    with pytest.raises(DefinitionError, match="already supplied"):
+    with pytest.raises(DefinitionError, match="already assigned"):
 
         class DuplicateDirect(Space):
             child = Reusable(count=1)
             child.count = 2
 
-    with pytest.raises(DefinitionError, match="already supplied"):
+    with pytest.raises(DefinitionError, match="already assigned"):
 
         class DuplicateNested(Space):
             child = Reusable(count=1)
             child.port.dtype = "INT8"
             child.port.dtype = "INT4"
 
-    with pytest.raises(DefinitionError, match="has no formal 'description'"):
+    with pytest.raises(DefinitionError, match="behaviour belongs to the family"):
 
         class NonParameter(Space):
             child = Reusable(count=1)
@@ -310,25 +316,25 @@ def test_assignment_targets_are_checked() -> None:
 
     with pytest.raises(DefinitionError, match="expected value of nominal type int"):
         Reusable().count = "two"  # type: ignore[assignment]
-    with pytest.raises(DefinitionError, match="unknown formals"):
+    with pytest.raises(DefinitionError, match="unknown members"):
         Reusable(count=1, width=2)  # type: ignore[call-arg]
 
 
 def test_assignment_after_freezing_is_refused() -> None:
     class Parent(Space):
-        first: Param[str] = Param(str)
-        second: Param[str] = Param(str)
+        first: str = Param()
+        second: str = Param()
         kernel = Reusable(count=1)
         kernel.port.dtype = first
         kernel.port.lanes = 1
 
     reference = Parent.kernel.port.dtype
-    old = configure(Parent(first="INT3", second="INT7"))
+    old = design_space(Parent(first="INT3", second="INT7"))
     # Preparing Parent froze its node declarations: the model cannot drift.
     with pytest.raises(DefinitionError, match="is frozen .Parent was prepared") as caught:
         Parent.kernel.port.lanes = 2
     assert "assigned at test_nested_parameter_bindings.py:" in str(caught.value)
-    point = configure(Parent(first="INT3", second="INT7"))
+    point = design_space(Parent(first="INT3", second="INT7"))
     assert old.query(reference) == point.query(reference) == Available("INT3")
     assert inspection.declaration(Parent.kernel).frozen == "Parent was prepared"
     with pytest.raises(TypeError):
@@ -340,7 +346,7 @@ def test_configure_freezes_its_root() -> None:
     root.count = 3
     root.port.dtype = "INT8"
     root.port.lanes = 2
-    assert configure(root).port.physical() == ("INT8", 2)
+    assert design_space(root).port.physical() == ("INT8", 2)
     with pytest.raises(DefinitionError, match="is frozen"):
         root.count = 4
 
@@ -355,17 +361,17 @@ def test_a_graph_built_as_data_binds_nested_formals_and_keeps_their_types() -> N
     assert dict(declaration.nested) == {"port.dtype": "INT8", "port.lanes": 2}
     assert declaration.unsupplied == () and declaration.frozen is None
     family = composite("Parent", {"child": child})
-    point = configure(family())
+    point = design_space(family())
     placed = getattr(point, "child")
     assert isinstance(placed, Reusable)
     assert placed.port.physical() == ("INT8", 2)
     with pytest.raises(DefinitionError, match=r"child\.port\.dtype is not supplied"):
-        configure(composite("Unbound", {"child": Reusable(count=1)})())
+        design_space(composite("Unbound", {"child": Reusable(count=1)})())
 
 
 def test_nested_decision_reference_can_traverse_concrete_reference_layers() -> None:
     class Leaf(Space):
-        value = Decision(int, values=(1, 2))
+        value: int = Decision(values=(1, 2))
 
     class Middle(Space):
         leaf = Leaf()
@@ -374,7 +380,7 @@ def test_nested_decision_reference_can_traverse_concrete_reference_layers() -> N
         middle = Middle()
 
     reference = Outer.middle.leaf.value
-    base = configure(Outer())
+    base = design_space(Outer())
     point = base.with_choices({reference: 2})
     assert point.middle.leaf.value == 2
     through_root = inspection.decision_handle(point, reference)
@@ -391,7 +397,7 @@ def test_nested_binding_typing_rejects_a_supplier_of_the_wrong_type(tmp_path: Pa
     assert mypy is not None
     source = """from finn.core.space import Param, Space
 class Port(Space):
-    width: Param[int] = Param(int)
+    width: int = Param()
 class Child(Space):
     port = Port()
 class Parent(Space):

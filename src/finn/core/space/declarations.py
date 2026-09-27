@@ -4,7 +4,7 @@
 
 A family's class body declares members (formals, decisions, computations,
 views) and nodes. Calling a family, ``Room(area=12)``, declares a node: a
-template with bindings, compiled only by ``configure``. Attribute access on a
+template with bindings, compiled only by ``design_space``. Attribute access on a
 node declaration, ``kitchen.finish``, is a symbolic reference to that node's
 member. It is typed as the member's value (option A); at runtime it refuses
 every value-like use with ``ReferenceUseError``.
@@ -18,9 +18,22 @@ from __future__ import annotations
 import os
 import re
 import sys
+import types
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Generic, NoReturn, TypeAlias, TypeVar, cast, overload
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Generic,
+    NoReturn,
+    TypeAlias,
+    TypeVar,
+    Union,
+    cast,
+    get_origin,
+    get_type_hints,
+    overload,
+)
 
 from typing_extensions import Self
 
@@ -36,7 +49,6 @@ if TYPE_CHECKING:
 
 T = TypeVar("T")
 T_co = TypeVar("T_co", covariant=True)
-N = TypeVar("N", bound="Space")
 
 _STRING = default_semantics(str)
 
@@ -218,91 +230,288 @@ class ValueDecl(ValueRef[T_co], Generic[T_co]):
         return read_value(instance, self)
 
 
+def _class_body() -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]] | None:
+    """The globals, namespace and enclosing locals of the class body declaring a member.
+
+    Annotations are strings under ``from __future__ import annotations``; a
+    family declared inside a function names that function's local classes, so
+    the enclosing frame's locals are kept to resolve them.
+    """
+    frame = sys._getframe(2)
+    while frame is not None:
+        module = frame.f_globals.get("__name__", "")
+        if module != _PACKAGE and not module.startswith(_PACKAGE + "."):
+            break
+        frame = frame.f_back  # type: ignore[assignment]
+    if frame is None:
+        return None
+    namespace = frame.f_locals
+    if "__qualname__" in namespace and "__module__" in namespace:
+        outer = frame.f_back
+        enclosing = (
+            outer.f_locals if outer is not None and outer.f_locals is not frame.f_globals else {}
+        )
+        return frame.f_globals, namespace, enclosing
+    return None
+
+
+def _describe_formal(declaration: Declaration, kind: str) -> str:
+    owner = declaration.owner
+    where = f"{owner.__qualname__}.{declaration.name}" if owner is not None else kind
+    return f"{where}{at(declaration.origin)}"
+
+
+def declared_annotation(declaration: Declaration, kind: str) -> object:
+    """The evaluated annotation of a class attribute: the single source of its value type.
+
+    After class creation it is read from the owner's ``__annotations__``; in the
+    class body itself (``output.spec`` before the class exists) from the body's
+    namespace. A missing or unresolvable annotation is a definition error.
+    """
+    body = cast(
+        "tuple[dict[str, Any], dict[str, Any], dict[str, Any]] | None",
+        vars(declaration).get("_body"),
+    )
+    name = declaration.name
+    annotations: Mapping[str, object]
+    enclosing: Mapping[str, object] = {} if body is None else body[2]
+    if declaration.owner is not None and name is not None:
+        owner = declaration.owner
+        annotations = owner.__dict__.get("__annotations__", {})
+        module = sys.modules.get(owner.__module__)
+        globals_ = vars(module) if module is not None else {}
+        locals_: Mapping[str, object] = {
+            **enclosing,
+            **class_namespace(cast("type[Space]", owner)),
+        }
+    elif body is not None:
+        globals_, namespace, _ = body
+        locals_ = {**enclosing, **namespace}
+        annotations = cast(Mapping[str, object], namespace.get("__annotations__", {}))
+        name = next((key for key, value in namespace.items() if value is declaration), None)
+    else:
+        annotations, name, globals_, locals_ = {}, None, {}, {}
+    if name is None or name not in annotations:
+        return MISSING
+    annotation = annotations[name]
+    if not isinstance(annotation, str):
+        return annotation
+    try:
+        return eval(annotation, dict(globals_), dict(locals_))  # noqa: S307 - authored annotation
+    except Exception as cause:
+        raise DefinitionError(
+            f"{_describe_formal(declaration, kind)}: cannot resolve the annotation "
+            f"{annotation!r}: {cause}"
+        ) from cause
+
+
+def _unannotated(declaration: Declaration, kind: str) -> DefinitionError:
+    attribute = declaration.name or kind.lower()
+    return DefinitionError(
+        f"{_describe_formal(declaration, kind)}: annotate the {kind.lower()} with its value "
+        f"type, as in `{attribute}: int = {kind}()`"
+    )
+
+
+def annotation_semantics(
+    annotation: object, explicit: ValueSemantics[Any] | None, label: str
+) -> ValueSemantics[Any]:
+    """Value semantics for an annotated value type; ``semantics=`` overrides the default."""
+    if annotation is MISSING:
+        # Declared outside a class body (a family built as data) with no
+        # annotation: its explicit semantics carry the value type.
+        assert explicit is not None
+        return explicit
+    if annotation is None:
+        annotation = type(None)
+    origin = get_origin(annotation)
+    nominal = origin if origin is not None else annotation
+    union = origin in (Union, types.UnionType)
+    protocol = bool(getattr(nominal, "_is_protocol", False))
+    if explicit is not None:
+        token = explicit.type_token
+        token = get_origin(token) or token
+        if (
+            not union
+            and not protocol
+            and isinstance(nominal, type)
+            and isinstance(token, type)
+            and nominal is not token
+        ):
+            raise DefinitionError(
+                f"{label}: annotation {nominal.__qualname__} is incompatible with "
+                f"{explicit.name} semantics"
+            )
+        return explicit
+    if union or protocol or not isinstance(nominal, type):
+        raise DefinitionError(
+            f"{label}: the annotation {annotation!r} needs explicit semantics= (a union, "
+            "protocol or special form has no default value semantics)"
+        )
+    return default_semantics(nominal)
+
+
+def _space_family(annotation: object) -> type[Space] | None:
+    from ._configuration import Space
+
+    if isinstance(annotation, type) and issubclass(annotation, Space):
+        return annotation
+    return None
+
+
 class Param(ValueDecl[T], Generic[T]):
     """A formal input of a family, supplied where a node of the family is declared.
 
-    Supply it at the call (``Room(area=12)``) or by assignment before the
-    family is prepared (``hall.area = kitchen.area``). ``Param(int)`` is
-    required: preparing a family in which nothing supplies it is a definition
-    error. ``default=`` makes it optional, and ``default=UNSUPPLIED`` leaves it
-    unsupplied when nobody binds it. ``Param(Located)`` locates a plain
-    reference automatically, and ``Param(Family)`` is a reference input: the
-    caller supplies a node of that family, which is placed there if it is fresh
-    and referenced if it is placed elsewhere. Annotate formals
-    (``area: Param[int] = Param(int)``, ``output: Param[Stream] = Param(Stream)``)
-    so family calls and assignments are typed.
+    Annotate it with its value type: ``area: int = Param()``. The annotation is
+    the single source of the value type; ``semantics=`` gives custom value
+    semantics for it. Supply a formal at the call (``Room(area=12)``) or by
+    assignment (``hall.area = kitchen.area``); an enclosing body may override
+    what an inner one supplied, and the outermost assignment wins.
+
+    ``Param()`` is required: preparing a family in which nothing supplies it is
+    a definition error. ``default=`` makes it optional, and ``required=False``
+    leaves it unsupplied when nobody binds it. A formal annotated with a family
+    (``output: Stream = Param()``) is a reference input: the caller supplies a
+    node, placed there if it is fresh and referenced if it is placed elsewhere.
     """
 
     default: object
     required: bool
+    explicit: ValueSemantics[T] | None
+    family: type[Space] | None
+    resolved: bool
 
     @overload
-    def __new__(cls, value_type: type[N], *, default: _Unsupplied = ...) -> Param[N]: ...
+    def __new__(  # type: ignore[misc]
+        cls, *, default: T, semantics: ValueSemantics[T] | None = None
+    ) -> T: ...
 
     @overload
-    def __new__(
-        cls,
-        value_type: type[Located[Any]] | ValueSemantics[Located[Any]],
-        *,
-        default: Located[Any] | _Unsupplied = ...,
-    ) -> LocatedParam[Any]: ...
-
-    @overload
-    def __new__(
-        cls,
-        value_type: type[T] | ValueSemantics[T],
-        *,
-        default: T | _Unsupplied = ...,
-        semantics: ValueSemantics[T] | None = None,
-    ) -> Param[T]: ...
+    def __new__(  # type: ignore[misc]
+        cls, *, required: bool = True, semantics: ValueSemantics[T] | None = None
+    ) -> T: ...
 
     def __new__(
-        cls, value_type: object, *, default: object = MISSING, semantics: object = None
+        cls, *, default: object = MISSING, required: object = None, semantics: object = None
     ) -> Any:
-        from ._configuration import Space
-
-        if isinstance(value_type, type) and issubclass(value_type, Space):
-            if default is not MISSING and default is not UNSUPPLIED:
-                raise DefinitionError(
-                    "a reference input has no value default; default=UNSUPPLIED makes it optional"
-                )
-            from ._nodes import family_formal
-
-            return family_formal(value_type, required=default is MISSING)
-        chosen = cast(
-            ValueSemantics[object],
-            semantics if semantics is not None else semantics_for(cast(Any, value_type)),
-        )
-        if not isinstance(chosen, ValueSemantics):
+        if default is not MISSING and required is not None:
+            raise DefinitionError(
+                "Param(default=...) is already optional; required= applies without a default"
+            )
+        if semantics is not None and not isinstance(semantics, ValueSemantics):
             raise DefinitionError("semantics= must be a ValueSemantics")
-        kind = LocatedParam if chosen.type_token is Located and cls is Param else cls
-        instance = cast(Param[object], super().__new__(kind))
-        instance.semantics = chosen
-        instance.required = default is MISSING
-        if default is MISSING or default is UNSUPPLIED:
-            instance.default = default
-        else:
-            try:
-                instance.default = chosen.freeze(default)
-            except (TypeError, ValueError) as error:
-                raise DefinitionError(f"invalid formal default: {error}") from error
+        instance = cast(Param[object], super().__new__(cls))
+        object.__setattr__(instance, "_body", _class_body())
+        instance.explicit = cast("ValueSemantics[object] | None", semantics)
+        instance.semantics = instance.explicit
+        instance.family = None
+        instance.resolved = False
+        instance.required = default is MISSING and required is not False
+        instance.default = default if default is not MISSING or instance.required else UNSUPPLIED
         return instance
 
-    def __set__(self, instance: object, value: T | ValueRef[T] | View[T] | BoundView[T]) -> None:
-        # The value type types both the family's constructor keyword (through
-        # dataclass_transform) and assignment to a declaration's formal. At
-        # runtime Space.__setattr__ handles assignment before this is reached.
-        from ._nodes import assign
+    def __set_name__(self, owner: type[object], name: str) -> None:
+        super().__set_name__(owner, name)
+        try:
+            self.resolve()
+        except DefinitionError:
+            pass  # a forward reference: resolved again when the family is collected
 
-        assign(instance, cast(str, self.name), value)
+    def resolve(self) -> Param[T]:
+        """Read the annotation: a value type (with its semantics) or a family (a reference)."""
+        if self.resolved:
+            return self
+        annotation = declared_annotation(self, "Param")
+        if annotation is MISSING and self.explicit is None:
+            raise _unannotated(self, "Param")
+        label = _describe_formal(self, "Param")
+        family = _space_family(annotation)
+        if family is not None:
+            if self.explicit is not None or self.default not in (MISSING, UNSUPPLIED):
+                raise DefinitionError(
+                    f"{label}: a reference input has no value default or semantics; "
+                    "required=False makes it optional"
+                )
+            self.family, self.semantics = family, None
+        else:
+            semantics = annotation_semantics(annotation, self.explicit, label)
+            if self.default not in (MISSING, UNSUPPLIED):
+                try:
+                    self.default = semantics.freeze(self.default)
+                except (TypeError, ValueError) as error:
+                    raise DefinitionError(f"{label}: invalid formal default: {error}") from error
+            self.semantics = semantics
+        self.resolved = True
+        return self
+
+    def reference_family(self) -> type[Space] | None:
+        """The family of a reference input, or None for a value formal."""
+        return self.resolve().family
+
+    @overload
+    def __get__(self, instance: None, owner: type[object] | None = None) -> Self: ...
+
+    @overload
+    def __get__(self, instance: Space, owner: type[object] | None = None) -> T: ...
+
+    def __get__(self, instance: Space | None, owner: type[object] | None = None) -> Any:
+        if instance is None:
+            return self
+        family = self.reference_family()
+        if family is None:
+            return ValueDecl.__get__(self, instance, owner)
+        path = declared_path(instance)
+        if path is not None:
+            from ._nodes import path_proxy
+
+            return path_proxy(family, (*path, self))
+        from .occurrence import child
+
+        return child(instance, self)
+
+    if not TYPE_CHECKING:
+
+        def __getattr__(self, name: str) -> Any:
+            # ``output.spec`` in the class body that declares ``output: Stream``:
+            # a member of the node the reference input will name.
+            if name.startswith("_"):
+                raise AttributeError(name)
+            try:
+                family = self.reference_family()
+            except DefinitionError:
+                raise AttributeError(name) from None
+            if family is None or not _has_member(family, name):
+                raise AttributeError(name)
+            from ._nodes import path_proxy
+
+            return getattr(path_proxy(family, (self,)), name)
+
+
+def _has_member(family: type[Space], name: str) -> bool:
+    from ._nodes import slot_declaration
+
+    return any(slot_declaration(vars(base).get(name)) is not None for base in family.__mro__)
 
 
 class LocatedParam(Param[Located[T]], Generic[T]):
-    """A formal holding a ``Located`` value.
+    """A formal holding a ``Located`` value: ``a: LocatedParam[int] = LocatedParam()``.
 
     Binding a plain reference supplies its located form: node name, member
-    name and value. Declare it with ``Param(Located)``.
+    name and value. Its suppliers are typed as ``T`` and its value as
+    ``Located[T]``, so the annotation names this descriptor rather than the
+    value type (the one exception to annotating a formal with its value type).
     """
+
+    def __new__(cls, *, required: bool = True) -> LocatedParam[T]:
+        instance = Declaration.__new__(cls)
+        object.__setattr__(instance, "_body", None)
+        instance.explicit = cast("ValueSemantics[Located[T]]", LOCATED)
+        instance.semantics = instance.explicit
+        instance.family = None
+        instance.resolved = True
+        instance.required = required
+        instance.default = MISSING if required else UNSUPPLIED
+        return instance
 
     def __set__(
         self,
@@ -333,50 +542,58 @@ Guard: TypeAlias = "ValueRef[bool] | bool | None"
 
 
 class Decision(ValueDecl[T], Generic[T]):
-    """An independently editable choice. Its type parameter is invariant.
+    """An independently editable choice, annotated with its value type.
 
-    ``Decision(int, values=(1, 2))`` chooses a value. ``Decision(values={"a":
-    A(), "b": B(), "none": None})`` chooses a node: the persisted value is the
-    key; each candidate is a node named ``<decision>.<key>`` whose presence
-    derives from the decision; ``None`` places nothing. Such a decision is typed
-    as its candidates, so ``decision.member`` reads the selected candidate's member.
+    ``finish: int = Decision(values=(1, 2, 3))`` chooses a value; the
+    annotation is its value type, ``semantics=`` gives custom value semantics.
+    ``heating: Boiler | HeatPump = Decision(values={"boiler": Boiler(), ...})``
+    chooses a node: the persisted value is the key; each candidate is a node
+    named ``<decision>.<key>`` whose presence derives from the decision; a
+    ``None`` candidate places nothing.
 
-    A Decision that is not a class attribute may supply exactly one formal
-    (``Fifo(depth=Decision(int, values=(4, 8)))``), and is keyed by that
-    formal's path. One that supplies several formals is shared and must be
-    named: a class attribute, or ``Decision(..., name="depth")``, which is
-    owned by the lowest scope containing every node it supplies.
+    A Decision that is not a class attribute takes its value type from the
+    formal it supplies. It may supply exactly one formal
+    (``Fifo(depth=Decision(values=(4, 8)))``), and is keyed by that formal's
+    path. One that supplies several formals is shared and must be named: a
+    class attribute, or ``Decision(..., name="depth")``, which is owned by the
+    lowest scope containing every node it supplies.
+
+    An enclosing body may override a Decision of a node it contains: a value
+    pins the coordinate (its key disappears), another Decision replaces it
+    under the same key. Either is checked against this Decision's domain.
     """
 
     domain: Domain[T]
+    explicit: ValueSemantics[T] | None
+    resolved: bool
     # Where this Decision supplies a formal (for the shared-decision rule).
     sites: list[str]
 
     @overload
+    def __new__(cls, *, values: Mapping[str, Space | None], when: Guard = None) -> Any: ...
+
+    @overload
     def __new__(  # type: ignore[misc]
-        cls, *, values: Mapping[str, T], when: Guard = None
+        cls,
+        *,
+        values: Iterable[T],
+        semantics: ValueSemantics[T] | None = None,
+        when: Guard = None,
+        name: str | None = None,
     ) -> T: ...
 
     @overload
     def __new__(  # type: ignore[misc]
-        cls, *, values: Mapping[str, T | None], when: Guard = None
-    ) -> T | None: ...
-
-    @overload
-    def __new__(
         cls,
-        value_type: type[T] | ValueSemantics[T],
         *,
-        domain: Domain[T] | None = None,
-        values: Iterable[T] | None = None,
+        domain: Domain[T],
         semantics: ValueSemantics[T] | None = None,
         when: Guard = None,
         name: str | None = None,
-    ) -> Decision[T]: ...
+    ) -> T: ...
 
     def __new__(
         cls,
-        value_type: object = None,
         *,
         domain: object = None,
         values: object = None,
@@ -384,25 +601,31 @@ class Decision(ValueDecl[T], Generic[T]):
         when: object = None,
         name: object = None,
     ) -> Any:
-        if value_type is None and domain is None and isinstance(values, Mapping):
+        if domain is None and isinstance(values, Mapping):
+            if semantics is not None or name is not None:
+                raise DefinitionError(
+                    "a Decision over nodes persists its key: it takes no semantics= or name="
+                )
             from ._nodes import node_choice
 
             return node_choice(values, when=_guard(when))
-        if value_type is None:
-            raise DefinitionError("a Decision needs a value type, or values= mapping keys to nodes")
         if (domain is None) == (values is None):
             raise DefinitionError("a Decision needs exactly one of domain= or values=")
+        if semantics is not None and not isinstance(semantics, ValueSemantics):
+            raise DefinitionError("semantics= must be a ValueSemantics")
+        if domain is not None and not isinstance(domain, Domain):
+            raise DefinitionError("domain= must be a Domain")
         instance = cast(Decision[object], super().__new__(cls))
-        chosen = cast(
-            ValueSemantics[object],
-            semantics if semantics is not None else semantics_for(cast(Any, value_type)),
-        )
-        instance.semantics = chosen
+        object.__setattr__(instance, "_body", _class_body())
+        explicit = cast("ValueSemantics[object] | None", semantics)
+        instance.explicit = instance.semantics = explicit
+        instance.resolved = False
         instance.when = _guard(when)
+        # The domain is bound to the value semantics when the model is linked.
         instance.domain = (
-            cast(Domain[object], domain).with_semantics(chosen)
+            cast(Domain[object], domain)
             if domain is not None
-            else finite(cast(Iterable[object], values), chosen)
+            else finite(cast(Iterable[object], values), explicit)
         )
         instance.sites = []
         if name is not None:
@@ -416,6 +639,25 @@ class Decision(ValueDecl[T], Generic[T]):
                 f"{self.name!r}; a class attribute takes its attribute name"
             )
         super().__set_name__(owner, name)
+        try:
+            self.resolve()
+        except DefinitionError:
+            pass  # a forward reference: resolved again when the family is collected
+
+    def resolve(self) -> Decision[T]:
+        """A class attribute reads its annotation; an inline one waits for its formal."""
+        if self.resolved:
+            return self
+        annotation = declared_annotation(self, "Decision")
+        if annotation is MISSING and self.owner is None:
+            return self  # inline: typed by the formal it supplies
+        if annotation is MISSING and self.explicit is None:
+            raise _unannotated(self, "Decision")
+        self.semantics = annotation_semantics(
+            annotation, self.explicit, _describe_formal(self, "Decision")
+        )
+        self.resolved = True
+        return self
 
 
 def _guard(when: object) -> ValueRef[bool] | None:
@@ -447,20 +689,23 @@ class _DerivedDecorator:
     def __init__(self, aliases: Mapping[str, object], when: Guard) -> None:
         self.aliases, self.when = aliases, when
 
-    def __call__(self, function: Callable[..., T]) -> Derived[T]:
-        return Derived(function, aliases=self.aliases, when=self.when)
+    def __call__(self, function: Callable[..., T]) -> T:
+        # Typed as its value, like a formal: it may supply a formal in the class body.
+        return cast(T, Derived(function, aliases=self.aliases, when=self.when))
 
 
 class _SemanticDerivedDecorator(Generic[T]):
     def __init__(self, semantics: ValueSemantics[T], aliases: Mapping[str, object], when: Guard):
         self.semantics, self.aliases, self.when = semantics, aliases, when
 
-    def __call__(self, function: Callable[..., T | QueryResult[T]]) -> Derived[T]:
-        return Derived(function, semantics=self.semantics, aliases=self.aliases, when=self.when)
+    def __call__(self, function: Callable[..., T | QueryResult[T]]) -> T:
+        return cast(
+            T, Derived(function, semantics=self.semantics, aliases=self.aliases, when=self.when)
+        )
 
 
 @overload
-def derived(function: Callable[..., T], /) -> Derived[T]: ...
+def derived(function: Callable[..., T], /) -> T: ...
 
 
 @overload
@@ -882,6 +1127,73 @@ class MemberRef(_Symbolic, ValueRef[T], Generic[T]):
     def _key(self) -> tuple[object, ...]:
         return (*(id(item) for item in self.path), id(self.member))
 
+    if not TYPE_CHECKING:
+
+        def __getattr__(self, name: str) -> Projection[Any]:
+            return project(self, name)
+
+
+def _attribute_type(owner: object, name: str) -> object:
+    """The annotated type of a value type's attribute: a property's return, or a field."""
+    import inspect
+
+    if not isinstance(owner, type):
+        return MISSING
+    try:
+        attribute = inspect.getattr_static(owner, name)
+    except AttributeError:
+        return MISSING
+    try:
+        if isinstance(attribute, property) and attribute.fget is not None:
+            return get_type_hints(attribute.fget).get("return", MISSING)
+        return get_type_hints(owner).get(name, MISSING)
+    except Exception:
+        return MISSING
+
+
+def project(source: ValueRef[Any], name: str) -> Projection[Any]:
+    """``output.spec.payload_bits``: an attribute of a referenced value, typed by its class.
+
+    Only an attribute the value's type annotates projects; anything else is
+    the ordinary ``AttributeError``, so introspection stays unaffected.
+    """
+    semantics = source.semantics
+    token = None if semantics is None else semantics.type_token
+    token = get_origin(token) or token
+    if name.startswith("_") or not isinstance(token, type):
+        raise AttributeError(name)
+    annotation = _attribute_type(token, name)
+    if annotation is MISSING:
+        raise AttributeError(name)
+    return Projection(source, name, annotation)
+
+
+class Projection(_Symbolic, ValueRef[T], Generic[T]):
+    """An attribute of a referenced value, read in the class body (``spec.payload_bits``)."""
+
+    def __init__(self, source: ValueRef[Any], attribute: str, annotation: object) -> None:
+        self.source, self.attribute = source, attribute
+        origin = get_origin(annotation)
+        nominal = origin if origin is not None else annotation
+        self.semantics = (
+            cast("ValueSemantics[T]", default_semantics(nominal))
+            if isinstance(nominal, type)
+            else None
+        )
+
+    def _describe(self) -> str:
+        inner = self.source._describe() if isinstance(self.source, _Symbolic) else "value"
+        return f"{inner}.{self.attribute}"
+
+    def _key(self) -> tuple[object, ...]:
+        inner = self.source._key() if isinstance(self.source, _Symbolic) else (id(self.source),)
+        return (*inner, self.attribute)
+
+    if not TYPE_CHECKING:
+
+        def __getattr__(self, name: str) -> Projection[Any]:
+            return project(self, name)
+
 
 class ChoiceMemberRef(_Symbolic, ValueRef[Any]):
     """``decision.member``: the selected candidate's member, by name.
@@ -909,6 +1221,19 @@ class CaseRef(ValueDecl[str]):
         self.semantics = _STRING
 
 
+def accepted(view: View[T] | BoundView[T]) -> T:
+    """Supply a formal with a view's accepted value: ``stage.width_in = accepted(prev.out)``.
+
+    A view is an assessment, typed ``View[T]`` in its class body and
+    ``BoundView[T]`` through a node, so it does not type as the ``T`` a formal
+    takes. At runtime this returns the reference unchanged; the formal reads
+    the view's accepted result, exactly as it would without the call.
+    """
+    if not isinstance(view, (View, MemberRef)):
+        raise DefinitionError("accepted() takes a view or a reference to one")
+    return cast(T, view)
+
+
 def selected(decision: object) -> str:
     """The selected key of a Decision over nodes, as a read-only value.
 
@@ -925,28 +1250,34 @@ class Present(ValueDecl[T], Generic[T]):
     """The value of whichever one of ``sources`` is present (applicable).
 
     Unresolved while any source is unresolved; refused if two are present;
-    unsupplied (unresolved) if none is.
+    unsupplied (unresolved) if none is. Typed as its value, so it may supply a
+    formal (``sink.width = Present(a.out, b.out)``).
     """
 
     @overload
-    def __init__(
-        self,
+    def __new__(  # type: ignore[misc]
+        cls,
         *sources: ValueRef[T] | View[T] | BoundView[T],
         semantics: ValueSemantics[T] | None = None,
-    ) -> None: ...
+    ) -> T: ...
 
     @overload
-    def __init__(self, *sources: T, semantics: ValueSemantics[T] | None = None) -> None: ...
+    def __new__(  # type: ignore[misc]
+        cls, *sources: T, semantics: ValueSemantics[T] | None = None
+    ) -> T: ...
 
-    def __init__(self, *sources: object, semantics: ValueSemantics[T] | None = None) -> None:
+    def __new__(cls, *sources: object, semantics: object = None) -> Any:
         if not sources or any(not isinstance(source, (ValueRef, View)) for source in sources):
             raise DefinitionError("Present requires one or more value references")
-        self.sources = cast(tuple[ValueRef[T], ...], sources)
-        self.semantics = (
-            semantics
-            if semantics is not None
-            else cast("ValueSemantics[T] | None", getattr(sources[0], "semantics", None))
+        instance = cast("Present[object]", super().__new__(cls))
+        instance.sources = cast(tuple[ValueRef[object], ...], sources)
+        instance.semantics = cast(
+            "ValueSemantics[object] | None",
+            semantics if semantics is not None else getattr(sources[0], "semantics", None),
         )
+        return instance
+
+    sources: tuple[ValueRef[T], ...]
 
 
 class Members(ValueDecl[tuple[Located[T], ...]], Generic[T]):
@@ -989,9 +1320,11 @@ __all__ = [
     "MemberRef",
     "Param",
     "Present",
+    "Projection",
     "UNSUPPLIED",
     "Users",
     "ValueDecl",
+    "accepted",
     "ValueRef",
     "View",
     "ViewKey",
