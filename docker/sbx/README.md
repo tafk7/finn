@@ -85,45 +85,46 @@ additions: add read-only `additionalWorkspaces` entries and the matching
 `XILINXD_LICENSE_FILE` / `PLATFORM_REPO_PATHS` values in a user-owned overlay.
 A licence file may depend on a host ID that is unavailable in the microVM.
 
-## Optional site network mixin
+## Closed network with a licence server
 
-If your site needs explicit licence network grants, create
-`$ENV_DIR/license.sbxenv.yaml` alongside the copied `site-license` directory:
+To give a sandbox no network except the licence server, close the network for
+sandboxes and let the `license` overlay open the server's two ports. Site values
+stay out of the repository, in a user-owned arguments file, for example
+`~/.config/finn/sbx.args`:
 
-```yaml
-args:
-  vendor_port:
-    required: true
-kits:
-  - source: ./site-license
-    args:
-      host: "${{ env.args.license_host }}"
-      manager_port: "${{ env.args.license_port }}"
-      vendor_port: "${{ env.args.vendor_port }}"
+```text
+license_host=10.0.0.5
+license_port=2100
+vendor_port=2101
 ```
 
-Append this overlay and the **pinned** vendor-daemon port to the FPGA request:
+`license_host` is the server's IP address (see below), `license_port` the
+licence manager's port from `XILINXD_LICENSE_FILE` (`port@host`), and
+`vendor_port` the port of the xilinxd vendor daemon. These replace the
+`license_host`/`license_port` arguments of the FPGA example above.
 
 ```bash
+cp -R docker/sbx/license.sbxenv.yaml docker/sbx/site-license "$ENV_DIR/"
 FILES+=("$ENV_DIR/license.sbxenv.yaml")
-ARGS+=(--env-arg vendor_port=2101)
-sbx env plan "${ARGS[@]}" "${FILES[@]}"
+ARGS+=(--env-args-file ~/.config/finn/sbx.args)
 sbx env create "${ARGS[@]}" "${FILES[@]}"
-sbx env exec "${ARGS[@]}" "${FILES[@]}" -- bash -o pipefail -c \
-  'wget -qO- https://claude.ai/install.sh | bash -s -- stable'
-sbx env exec "${ARGS[@]}" "${FILES[@]}" -- sh -c \
-  'sudo ln -sf "$HOME/.local/bin/claude" /usr/local/bin/claude'
-sbx env exec "${ARGS[@]}" "${FILES[@]}" -- vivado -version
-sbx env run "${ARGS[@]}" "${FILES[@]}"
-sbx env rm "${ARGS[@]}" "${FILES[@]}" --force
+sbx policy check network --sandbox finn-fpga-agent 10.0.0.5:2100
 ```
 
-The mixin requests the licence-manager and vendor-daemon connections separately.
-If the vendor daemon has an unpinned port, a site may deliberately replace the
-port-specific rules in its copy with an exact host rule such as
-`license.example.com`. That permits all ports on that host; this example does not
-select it automatically. Policy readback or `lmstat` alone does not prove a real
-licence checkout. Validate an actual licensed tool operation at your site.
+* **Closing the network is host-wide.** sbx applies a global policy to every
+  sandbox and a deny rule overrides every allow, so a per-sandbox "deny all
+  except" is not possible. Initialise the global policy as `deny-all`
+  (`sbx policy reset`, then `sbx policy init deny-all`); each sandbox then gets
+  only the rules of its kits: the licence ports from this overlay, and the model
+  API from a coding-agent kit. FINN's image needs no network to start.
+* **Use the IP address.** FlexLM connections are plain TCP, which sbx matches by
+  address; a rule naming the host does not match them.
+* **Finding the vendor port.** Unless the licence file pins it (`VENDOR xilinxd
+  port=...`), the daemon's port is chosen by the server. Create the sandbox with
+  any value, run a licensed operation, and `sbx policy log SANDBOX` lists the
+  blocked port; recreate with it.
+* **Validate with a licensed operation**, such as synthesis for a Versal part.
+  A policy check or `lmstat` alone does not prove a checkout.
 
 Keep the base, chosen overlays and optional kit together when copying. Relative
 kit references resolve beside the file declaring them. Native mappings merge,
