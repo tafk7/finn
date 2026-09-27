@@ -42,7 +42,7 @@ from finn.kernels.streaming import (
     cyclic_stream_requirements,
 )
 from finn.core.space import default_semantics
-from finn.kernels.streams import MODULE, PORTS, PORTS_SEMANTICS, Ports, Stream, produces
+from finn.kernels.streams import MODULE, PORT, Stream
 
 
 class CyclicDelivery(Kernel):
@@ -93,11 +93,7 @@ class CyclicDelivery(Kernel):
             rom_style=self.rom_style,
         )
 
-    @view(semantics=PORTS_SEMANTICS)
-    def ports(self) -> Ports:
-        return Ports.of(output_stream=produces(self.output))
-
-    exports = {MODULE: build_requirements, PORTS: ports}
+    exports = {MODULE: build_requirements, PORT: {output_stream: output}}
 
 
 def _leaves(values: object) -> tuple[int, ...]:

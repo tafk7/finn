@@ -32,19 +32,16 @@ from finn.kernels.artifacts.derivation import ProducerIdentity
 from finn.kernels.datatypes.scalar import ScalarEncoding
 from finn.kernels.delivery import CyclicDelivery
 from finn.kernels.physical.forms import vector_major
+from finn.kernels.physical.contract import STREAM_CONTRACT, StreamContract
 from finn.kernels.streams import (
     CONNECTION,
     MODULE,
-    PORTS,
-    PORTS_SEMANTICS,
+    PORT,
     STREAM_SPEC,
-    Flow,
-    Ports,
     Stream,
     StreamSpec,
     boundary_contract,
     netlist,
-    produces,
 )
 
 INT4 = ScalarEncoding(DataType["INT4"])
@@ -123,7 +120,7 @@ def test_explain_shows_per_stream_and_per_member_evidence():
         "second.connection",
         "first.compatible",
         "first.ends",
-        "first_source.ports",
+        "first_source.output",
         "first_source.build_requirements",
         "modules",
         "streams",
@@ -142,7 +139,7 @@ def test_a_stream_waits_for_its_own_endpoints_only():
     # A stream sees its users by declaration name and by the input that references it.
     (end,) = point.first.ends
     assert (end.node, end.member) == ("first_source", "output_stream")
-    assert end.value["output_stream"].flow is Flow.OUT
+    assert end.value.transport.endpoint is Endpoint.INITIATOR  # the source produces
     connection = point.first.connection
     assert (connection.source_owner, connection.sink_owner) == ("first_source", None)
     assert connection.sink.transport.name == "out0_V"
@@ -191,13 +188,12 @@ def test_a_boundary_stream_needs_its_port_name():
 class ProducerSpecStream(Space):
     """A stream that derives its spec from its producer's contract: not anchored."""
 
-    ends = Users(PORTS)
+    ends = Users(PORT)
 
     @derived(semantics=STREAM_SPEC)
     def spec(self) -> StreamSpec:
         (end,) = self.ends
-        contract = end.value[end.member].contract
-        return StreamSpec(contract.element, contract.form)
+        return StreamSpec(end.value.element, end.value.form)
 
 
 class SpecReadingProducer(Space):
@@ -206,15 +202,13 @@ class SpecReadingProducer(Space):
     output_stream: ProducerSpecStream = Param()
     source = CyclicDelivery(dtype=DataType["INT4"], form=PRODUCED, values=(1, 2, 3, 4))
 
-    @view(semantics=PORTS_SEMANTICS)
-    def ports(self) -> Ports:
+    @view(semantics=STREAM_CONTRACT)
+    def port(self) -> StreamContract:
         contract = self.source.output
         spec = self.output_stream.spec  # the stream's spec shapes the port
-        return Ports.of(
-            output_stream=produces(type(contract)(contract.transport, spec.element, spec.form))
-        )
+        return StreamContract(contract.transport, spec.element, spec.form)
 
-    exports = {PORTS: ports}
+    exports = {PORT: {output_stream: port}}
 
 
 def test_a_spec_derived_from_its_users_is_refused_with_the_cycle_path():
@@ -227,4 +221,4 @@ def test_a_spec_derived_from_its_users_is_refused_with_the_cycle_path():
         point.edge.spec
     path = str(caught.value)
     # The cycle, in evaluation order: the spec reads the users, a user's ports read the spec.
-    assert "edge.spec" in path and "edge.ends" in path and "producer.ports" in path
+    assert "edge.spec" in path and "edge.ends" in path and "producer.port" in path

@@ -13,7 +13,7 @@ framing stay stable while a valid transfer is stalled.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import cast
+from dataclasses import dataclass
 
 from finn.kernels.artifacts.abi import (
     Clock,
@@ -29,15 +29,7 @@ from finn.kernels.datatypes.scalar import ScalarEncoding
 from finn.kernels.physical.contract import STREAM_CONTRACT, StreamContract
 from finn.kernels.physical.forms import Every, Traversal
 from finn.kernels.physical.stream import ReadyValidStream, StreamMarker, MarkerKind
-from finn.kernels.streams import (
-    MODULE,
-    PORTS,
-    PORTS_SEMANTICS,
-    Ports,
-    Stream,
-    consumes,
-    produces,
-)
+from finn.kernels.streams import MODULE, PORT, Stream
 from finn.kernels.artifacts.contribution_types import CopiedSource
 from finn.kernels.artifacts.requirements import (
     FixedModuleName,
@@ -86,9 +78,20 @@ def replay_buffer_interfaces(*, word_bits: int) -> tuple[ReadyValidStream, ...]:
     )
 
 
+@dataclass(frozen=True)
+class ReplayContracts:
+    """The replay's two ends: what it consumes and what it produces."""
+
+    input: StreamContract
+    output: StreamContract
+
+
+REPLAY_CONTRACTS = default_semantics(ReplayContracts)
+
+
 def replay_buffer_contracts(
     element: ScalarEncoding, form: Traversal, *, sequence_length: int, replay_count: int
-) -> tuple[StreamContract, StreamContract]:
+) -> ReplayContracts:
     """Input and output contracts of a replay over ``form``.
 
     Every consecutive ``sequence_length`` beats are presented ``replay_count``
@@ -98,7 +101,7 @@ def replay_buffer_contracts(
     _positive("sequence_length", sequence_length)
     _positive("replay_count", replay_count)
     source, sink = replay_buffer_interfaces(word_bits=form.lanes * element.bits)
-    return (
+    return ReplayContracts(
         StreamContract(source, element, form),
         StreamContract(
             sink,
@@ -124,8 +127,8 @@ class ReplayBuffer(Kernel):
     sequence_length: int = Param()
     replay_count: int = Param()
 
-    @derived(semantics=default_semantics(tuple))
-    def contracts(self) -> tuple[StreamContract, ...] | Rejected:
+    @derived(semantics=REPLAY_CONTRACTS)
+    def contracts(self) -> ReplayContracts | Rejected:
         spec = self.input_stream.spec
         try:
             return replay_buffer_contracts(
@@ -139,17 +142,11 @@ class ReplayBuffer(Kernel):
 
     @view(semantics=STREAM_CONTRACT)
     def input_port(self) -> StreamContract:
-        return cast(StreamContract, self.contracts[0])
+        return self.contracts.input
 
     @view(semantics=STREAM_CONTRACT)
     def output_port(self) -> StreamContract:
-        return cast(StreamContract, self.contracts[1])
-
-    @view(semantics=PORTS_SEMANTICS)
-    def ports(self) -> Ports:
-        return Ports.of(
-            input_stream=consumes(self.input_port), output_stream=produces(self.output_port)
-        )
+        return self.contracts.output
 
     @view(semantics=default_semantics(ModuleBuildRequirements))
     def build_requirements(self) -> ModuleBuildRequirements | Rejected:
@@ -162,7 +159,10 @@ class ReplayBuffer(Kernel):
         except ValueError as error:
             return reject("replay-geometry", str(error))
 
-    exports = {MODULE: build_requirements, PORTS: ports}
+    exports = {
+        MODULE: build_requirements,
+        PORT: {input_stream: input_port, output_stream: output_port},
+    }
 
 
 def cyclic_stream_interface(*, word_bits: int) -> ReadyValidStream:
@@ -272,6 +272,7 @@ def cyclic_stream_requirements(
 __all__ = [
     "CYCLIC_ROM_STYLES",
     "ReplayBuffer",
+    "ReplayContracts",
     "replay_buffer_contracts",
     "replay_buffer_requirements",
     "cyclic_stream_requirements",

@@ -334,6 +334,72 @@ def _reorder(source: Sequence[Loop], sink: Sequence[Loop]) -> Reorder | None:
     )
 
 
+def canonical_loops(loops: Sequence[Loop]) -> tuple[Loop, ...]:
+    """A loop nest in the canonical form a ``Traversal`` stores."""
+    return _canonical(loops)
+
+
+Step = tuple[int, int, int]
+"""(extent, row step, column step) of one beat loop, outer first."""
+
+
+def beat_walk(form: Traversal, width: int) -> tuple[Step, ...] | None:
+    """Where each beat starts, reading the operand as rows of ``width`` elements.
+
+    A loop stepping whole rows moves the row, a loop inside a row moves the
+    column, and a loop that runs on across rows is split where it wraps. None
+    when a loop crosses rows any other way, so no row/column walk describes it.
+    """
+    _positive(width, "width")
+    steps: list[Step] = []
+    for loop in form.beat_loops:
+        extent, stride = loop.extent, loop.stride
+        if stride % width == 0:
+            steps.append((extent, stride // width, 0))
+        elif width % stride == 0 and extent * stride <= width:
+            steps.append((extent, 0, stride))
+        elif width % stride == 0 and (extent * stride) % width == 0:
+            per_row = width // stride
+            steps += [(extent // per_row, 1, 0), (per_row, 0, stride)]
+        else:
+            return None
+    # The column steps together must stay inside one row, or a beat's column
+    # would carry into its row.
+    if sum((extent - 1) * column for extent, _, column in steps) >= width:
+        return None
+    return tuple(steps)
+
+
+def walk_axis(steps: Sequence[Step], axis: int) -> tuple[Loop, ...]:
+    """The canonical walk of one component: 1 for rows, 2 for columns."""
+    return _canonical(tuple(Loop(step[0], step[axis]) for step in steps))
+
+
+def split_walk(
+    steps: Sequence[Step], inner_beats: int
+) -> tuple[tuple[Step, ...], tuple[Step, ...]] | None:
+    """Split a walk into its groups of ``inner_beats`` beats and the walk within one."""
+    _positive(inner_beats, "inner_beats")
+    outer, inner = list(steps), list[Step]()
+    remaining = inner_beats
+    while remaining > 1:
+        if not outer:
+            return None
+        extent, row, column = outer.pop()
+        if extent <= remaining:
+            if remaining % extent:
+                return None
+            inner.insert(0, (extent, row, column))
+            remaining //= extent
+            continue
+        if extent % remaining:
+            return None
+        outer.append((extent // remaining, row * remaining, column * remaining))
+        inner.insert(0, (remaining, row, column))
+        remaining = 1
+    return tuple(outer), tuple(inner)
+
+
 def is_repetition(sink: Traversal, source: Traversal) -> bool:
     """Whether ``sink`` is ``source`` presented a whole number of times."""
     if sink == source:
@@ -409,11 +475,16 @@ __all__ = [
     "Position",
     "Reorder",
     "Repetition",
+    "Step",
     "TRAVERSAL",
     "Traversal",
+    "beat_walk",
+    "canonical_loops",
     "classify",
     "is_repetition",
     "pack",
+    "split_walk",
     "tile",
     "vector_major",
+    "walk_axis",
 ]

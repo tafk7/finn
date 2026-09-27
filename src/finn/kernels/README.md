@@ -110,26 +110,29 @@ relative to a staging directory; retain that layout and use the declared
 
 `MVAU` owns matrix geometry, PE/SIMD folding and result precision, and declares
 its connections as streams (`finn.kernels.streams`). It derives a `StreamSpec`
-(element, traversal, repetition, markers) for each connection, binds kernel
-`Port`s to it, and declares each `Stream` with its producer and consumer as
-explicit accepted port views:
+(element, traversal, repetition, markers) for each stream; kernels reference
+the streams they sit on through reference inputs and export one port contract
+per input (`exports = {PORT: {activation_stream: activation_port, ...}}`):
 
 ```text
 in0_V ─activations─► replay ─replayed─► compute (dotp) ─results─► out0_V
                                            ▲
        implementation ─── weight_stream ───┘   (buffered: direct | fifo)
-       external: TopInput in1_V  |  cyclic: CyclicDelivery (rom_style, weights)
+       external: boundary in1_V  |  cyclic: CyclicDelivery (rom_style, weights)
 ```
 
-Every stream owns a `compatible` constraint, so a refusal names the stream and
-independent streams settle independently. Its accepted `connection` feeds the
-parent's `structure` view, a thin reduction (`compose`) that wires the accepted
-instances and connections, routes clocks and resets, and turns boundary ports
-into AXIS. `build_requirements` lowers that structure. Either end of a stream may
-be a member of a Decision over nodes (`Present(in1_V, cyclic.output)`); only the
-selected candidate is evaluated. The `implementation` Decision places either
-nothing (`external`, presenting `in1_V`) or its `cyclic` CyclicDelivery candidate,
-named `implementation.cyclic`. A `BufferedStream` owns a `transport`
+A stream sees each user's port on that stream only (`Users(PORT)`), so a port's
+refusal names its own stream and independent streams settle independently.
+Ports check what they read: dotp refuses a stream whose lanes, lane order,
+column walk or frame rows differ from its PE/SIMD reading, rather than adopting
+the stream's form. Every stream owns a `compatible` constraint, and its accepted
+`connection` feeds the parent's `structure` view: `netlist` wires
+`Members(MODULE)` through `Members(CONNECTION)`, routes clocks and resets, and
+turns boundary streams into AXIS. `build_requirements` lowers that structure.
+The `implementation` Decision places either nothing (`external`: the weight
+stream has one user and is the boundary `in1_V`) or its `cyclic`
+CyclicDelivery candidate, named `implementation.cyclic`; only the selected
+candidate is evaluated. A `BufferedStream` owns a `transport`
 Decision over nodes: `direct`, or a `fifo` candidate whose depth and memory style
 are its own decisions. Whether a FIFO is needed and how deep is a compiler
 decision; the stream only provides the slot. `commit` (from

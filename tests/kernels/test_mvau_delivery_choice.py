@@ -150,7 +150,7 @@ def test_the_inactive_family_is_never_demanded():
     assert set(reached) == {
         "implementation.cyclic.$selected",
         "implementation.cyclic.build_requirements",
-        "implementation.cyclic.ports",
+        "implementation.cyclic.output",
     }
     assert all(
         isinstance(result, Inapplicable)

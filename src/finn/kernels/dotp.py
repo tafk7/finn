@@ -19,6 +19,8 @@ negative weight. NARROW_WEIGHTS is always zero.
 
 from __future__ import annotations
 
+from math import prod
+
 from finn.kernels.artifacts.abi import (
     Clock,
     ClockAlignment,
@@ -49,15 +51,16 @@ from finn.dataflow.datatypes import (
 from finn.kernels.datatypes.scalar import integer_scalar
 from finn.kernels.physical.axi_stream import AxiStream, axi_stream
 from finn.kernels.physical.contract import STREAM_CONTRACT, StreamContract
-from finn.kernels.streams import (
-    MODULE,
-    PORTS,
-    PORTS_SEMANTICS,
-    Ports,
-    Stream,
-    consumes,
-    produces,
+from finn.kernels.physical.forms import (
+    Loop,
+    Step,
+    Traversal,
+    beat_walk,
+    canonical_loops,
+    split_walk,
+    walk_axis,
 )
+from finn.kernels.streams import MODULE, PORT, Stream, StreamSpec
 from finn.core.space import (
     ConstraintGroup,
     Decision,
@@ -131,39 +134,34 @@ class DotpAxiKernel(Kernel):
 
     @constraint
     def input_types_supported(self) -> bool | Rejected:
+        # The scalars admit the encodings (integer family, signedness, two bits);
+        # these are the DSP's own bounds on them.
         target = self.target_dsp
         activation = self.activation_dtype
         weight = self.weights_dtype
         try:
             ordinary_integer_bounds(activation)
-        except DatatypeError as error:
-            return reject("dotp-activation-type", str(error))
+        except DatatypeError:
+            return True  # not an integer: refused by the activation scalar
         a_bits, b_bits, _ = dsp_widths(target)
         activation_bits = qonnx_datatype_width(activation)
         weight_bits = qonnx_datatype_width(weight)
         unsigned = not activation.signed()
-        if activation_bits < 2 or activation_bits + unsigned > b_bits:
+        if activation_bits + unsigned > b_bits:
             return reject(
                 "dotp-activation-width", "activation values must fit the signed DSP B input"
             )
         # dotp_axi selects its signed 9x8 INT8 path for this boundary case.
         if target is DspBlock.DSP58 and unsigned and activation_bits == 9 and weight_bits <= 8:
             return reject("dotp-activation-width", "the native INT8 path needs a ninth sign bit")
-        if not weight.name.startswith("INT") or not 2 <= weight_bits < a_bits:
-            return reject(
-                "dotp-weight-type",
-                "full-range signed weights need at least two bits and room for a DSP sign guard",
-            )
+        if weight_bits >= a_bits:
+            return reject("dotp-weight-width", "signed weights need room for a DSP sign guard")
         return True
 
     @constraint
     def accumulator_width_supported(self) -> bool | Rejected:
         result = self.result_dtype
         target = self.target_dsp
-        if not result.name.startswith("INT"):
-            return reject(
-                "dotp-result-type", "the accumulator requires an ordinary signed INT dtype"
-            )
         bits, maximum = qonnx_datatype_width(result), dsp_widths(target)[2]
         if not 1 <= bits <= maximum:
             return reject(
@@ -204,16 +202,13 @@ class DotpAxiKernel(Kernel):
     )
 
     @derived(semantics=default_semantics(ModuleBuildRequirements))
-    def codegen(self) -> ModuleBuildRequirements | Rejected:
+    def codegen(self) -> ModuleBuildRequirements:
+        # Geometry and widths are the support group's; build_requirements requires it.
         pe = self.pe
         simd = self.simd
-        if not 1 <= pe <= 0xFFFFFFFF or not 1 <= simd <= 0xFFFFFFFF:
-            return reject("dotp-geometry", "PE and SIMD must be positive native unsigned integers")
         activation = self.activation.stream
         weights = self.weights.stream
         result = self.result.stream
-        if any(stream.carrier_bits > 0xFFFFFFFF for stream in (activation, weights, result)):
-            return reject("dotp-stream-width", "packed stream widths must fit native unsigned int")
         target_dsp = self.target_dsp
         segment_length = self.segment_length
         compute_pumping = self.compute_pumping
@@ -299,10 +294,9 @@ class DotpAxiKernel(Kernel):
         """Accepted (activation, weights, result) ports; framing is the caller's."""
         return (self.activation.stream, self.weights.stream, self.result.stream)
 
-    def _port(self, index: int, stream: Stream) -> StreamContract | Rejected:
+    def _port(self, port: AxiStream, stream: Stream) -> StreamContract | Rejected:
         """A port over the stream it sits on: the stream's order, dotp's own encoding."""
         spec = stream.spec
-        port = self.interfaces[index]
         if spec.element.datatype_name != port.dtype.name:
             return reject(
                 "dotp-stream-element",
@@ -316,28 +310,109 @@ class DotpAxiKernel(Kernel):
             markers = {transport.markers[0].signal: spec.markers[0]}
         return StreamContract(transport, spec.element, spec.form, spec.repetition, markers)
 
+    # What dotp reads. Activation beats carry SIMD consecutive columns of a
+    # (rows, K) operand; weight beats carry PE rows of those same K columns, SIMD
+    # fastest; result beats carry PE consecutive columns of a (rows, N) result.
+    # Beat by beat the weight columns are the activation columns; each frame
+    # (the activation marker period) stays within one activation row and one
+    # group of weight rows, and produces one result beat whose row is the
+    # activation row and whose columns are those weight rows.
+
     @view(semantics=STREAM_CONTRACT)
     def activation_port(self) -> StreamContract | Rejected:
-        return self._port(0, self.activation_stream)
+        spec, simd = self.activation_stream.spec, self.simd
+        refused = _fields(spec.form, (Loop(simd, 1),), "activation", f"SIMD={simd}")
+        if refused is not None:
+            return refused
+        if len(spec.markers) == 1 and _frames(spec, spec.form) is None:
+            return reject(
+                "dotp-stream-form", "a reduction frame must stay within one activation row"
+            )
+        return self._port(self.activation.stream, self.activation_stream)
 
     @view(semantics=STREAM_CONTRACT)
     def weights_port(self) -> StreamContract | Rejected:
-        return self._port(1, self.weights_stream)
+        weights, activation = self.weights_stream.spec, self.activation_stream.spec
+        pe, simd = self.pe, self.simd
+        width = activation.form.shape[-1]
+        if len(weights.form.shape) != 2 or weights.form.shape[1] != width:
+            return reject(
+                "dotp-stream-form",
+                f"weights must be a matrix over the activation's {width} columns",
+            )
+        required = (Loop(pe, width), Loop(simd, 1))
+        refused = _fields(weights.form, required, "weights", f"PE={pe} rows of SIMD={simd}")
+        if refused is not None:
+            return refused
+        mine, theirs = beat_walk(weights.form, width), beat_walk(activation.form, width)
+        if mine is None or theirs is None or walk_axis(mine, 2) != walk_axis(theirs, 2):
+            return reject("dotp-stream-form", "weight columns do not follow the activation columns")
+        if len(activation.markers) == 1 and _frames(activation, weights.form) is None:
+            return reject(
+                "dotp-stream-form", "a reduction frame must read one group of weight rows"
+            )
+        return self._port(self.weights.stream, self.weights_stream)
 
     @view(semantics=STREAM_CONTRACT)
     def result_port(self) -> StreamContract | Rejected:
-        return self._port(2, self.result_stream)
+        result = self.result_stream.spec
+        weights, activation = self.weights_stream.spec, self.activation_stream.spec
+        pe = self.pe
+        refused = _fields(result.form, (Loop(pe, 1),), "result", f"PE={pe}")
+        if refused is not None:
+            return refused
+        rows = weights.form.shape[0]
+        if result.form.shape[-1] != rows:
+            return reject("dotp-stream-form", f"results must have the weights' {rows} columns")
+        mine = beat_walk(result.form, rows)
+        if len(activation.markers) == 1:
+            # Frames the other ports refuse are theirs to report.
+            activation_frames = _frames(activation, activation.form)
+            weight_frames = _frames(activation, weights.form)
+            if (
+                activation_frames is not None
+                and weight_frames is not None
+                and (
+                    mine is None
+                    or walk_axis(activation_frames, 1) != walk_axis(mine, 1)
+                    or walk_axis(weight_frames, 1) != walk_axis(mine, 2)
+                )
+            ):
+                return reject(
+                    "dotp-stream-form",
+                    "each result beat must hold its frame's activation row and weight rows",
+                )
+        return self._port(self.result.stream, self.result_stream)
 
-    @view(semantics=PORTS_SEMANTICS)
-    def ports(self) -> Ports:
-        """Each port keyed by its stream input: activations and weights in, results out."""
-        return Ports.of(
-            activation_stream=consumes(self.activation_port),
-            weights_stream=consumes(self.weights_port),
-            result_stream=produces(self.result_port),
+    exports = {
+        MODULE: build_requirements,
+        PORT: {
+            activation_stream: activation_port,
+            weights_stream: weights_port,
+            result_stream: result_port,
+        },
+    }
+
+
+def _frames(activation: StreamSpec, form: Traversal) -> tuple[Step, ...] | None:
+    """The walk of ``form``'s frames, each frame one row: the activation marker period."""
+    walk = beat_walk(form, form.shape[-1])
+    framed = None if walk is None else split_walk(walk, activation.markers[0].period)
+    if framed is None or any(row for _, row, _ in framed[1]):
+        return None
+    return framed[0]
+
+
+def _fields(form: Traversal, required: tuple[Loop, ...], role: str, reads: str) -> Rejected | None:
+    """Refuse a stream whose beats do not carry the fields dotp reads."""
+    lanes = prod(loop.extent for loop in required)
+    if form.lanes != lanes:
+        return reject(
+            "dotp-stream-lanes", f"the {role} stream carries {form.lanes} lanes; dotp reads {reads}"
         )
-
-    exports = {MODULE: build_requirements, PORTS: ports}
+    if form.lane_loops != canonical_loops(required):
+        return reject("dotp-stream-form", f"the {role} stream's lanes are not {reads}")
+    return None
 
 
 __all__ = ["DotpAxiKernel"]

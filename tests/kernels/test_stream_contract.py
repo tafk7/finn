@@ -9,6 +9,7 @@ parameters are derived here from traversals alone and compared with the
 hard-coded values in ``finn-rtllib`` and ``transpose_decomposition``.
 """
 
+import math
 import os
 from pathlib import Path
 import random
@@ -45,10 +46,13 @@ from finn.kernels.physical.forms import (
     Reorder,
     Repetition,
     Traversal,
+    beat_walk,
     classify,
     pack,
+    split_walk,
     tile,
     vector_major,
+    walk_axis,
 )
 from finn.kernels.physical.lowering import lower_module_structure
 from finn.kernels.physical.stream import MarkerKind, ReadyValidStream, StreamMarker
@@ -125,6 +129,40 @@ def test_canonical_equality_is_equality_of_presented_sequences():
         first, second = _random_traversal(rng), _random_traversal(rng)
         same = list(first.positions()) == list(second.positions())
         assert same is (first == second), (first, second)
+
+
+def test_a_beat_walk_matches_the_first_field_of_every_beat():
+    rng = random.Random(2)
+    checked = 0
+    for _ in range(2000):
+        form = _random_traversal(rng)
+        width = form.shape[-1]
+        steps = beat_walk(form, width)
+        if steps is None:
+            continue
+        rows = Traversal((form.beats * width,), walk_axis(steps, 1), ())
+        columns = Traversal((width,), walk_axis(steps, 2), ())
+        for beat, fields in enumerate(form.positions()):
+            flat = sum(i * s for i, s in zip(fields[0], _row_major(form.shape)))
+            row, column = divmod(flat, width)
+            assert (rows.position(beat, 0)[0], columns.position(beat, 0)[0]) == (row, column)
+        checked += 1
+    assert checked > 500
+
+
+def _row_major(shape):
+    return tuple(math.prod(shape[axis + 1 :]) for axis in range(len(shape)))
+
+
+def test_a_walk_splits_into_groups_of_beats():
+    walk = beat_walk(vector_major((3, 6), 3).replayed(2, inner_beats=2), 6)
+    assert walk == ((3, 1, 0), (2, 0, 0), (2, 0, 3))
+    assert split_walk(walk, 2) == (((3, 1, 0), (2, 0, 0)), ((2, 0, 3),))
+    # A group may cut a loop: four beats of a (3, 8)-beat walk regroup the inner loop.
+    assert split_walk(((3, 1, 0), (8, 0, 1)), 4) == (((3, 1, 0), (2, 0, 4)), ((4, 0, 1),))
+    assert split_walk(((3, 1, 0), (8, 0, 1)), 3) is None
+    # A loop wrapping rows at an irregular point has no row/column walk.
+    assert beat_walk(Traversal((2, 6), (Loop(3, 4),), ()), 6) is None
 
 
 # -- stress cases: tiled MVU and Shuffle ---------------------------------------------------

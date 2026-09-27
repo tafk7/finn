@@ -93,7 +93,6 @@ def test_component_groups_its_interfaces_and_keeps_one_root_physical_output():
         "activation_port",
         "build_requirements",
         "interfaces",
-        "ports",
         "result_port",
         "weights_port",
     )
@@ -177,11 +176,11 @@ def test_dsp48_segment_length_is_ignored_by_rtl_but_preserved_as_supplied():
     [
         ({"pe": 0}, "dotp-geometry"),
         ({"simd": -1}, "dotp-geometry"),
-        ({"weights_dtype": DataType["UINT3"]}, "dotp-weight-type"),
-        ({"weights_dtype": DataType["TERNARY"]}, "dotp-weight-type"),
-        ({"activation_dtype": DataType["BINARY"]}, "dotp-activation-width"),
-        ({"activation_dtype": DataType["BIPOLAR"]}, "dotp-activation-type"),
-        ({"activation_dtype": DataType["FLOAT32"]}, "dotp-activation-type"),
+        ({"weights_dtype": DataType["UINT3"]}, "dtype-family"),
+        ({"weights_dtype": DataType["TERNARY"]}, "dtype-family"),
+        ({"activation_dtype": DataType["BINARY"]}, "dtype-minimum-bits"),
+        ({"activation_dtype": DataType["BIPOLAR"]}, "dtype-family"),
+        ({"activation_dtype": DataType["FLOAT32"]}, "dtype-family"),
         ({"activation_dtype": DataType["INT32"]}, "dotp-activation-width"),
         ({"activation_dtype": DataType["UINT24"]}, "dotp-activation-width"),
         (
@@ -192,9 +191,9 @@ def test_dsp48_segment_length_is_ignored_by_rtl_but_preserved_as_supplied():
             {"activation_dtype": DataType["UINT9"], "weights_dtype": DataType["INT8"]},
             "dotp-activation-width",
         ),
-        ({"weights_dtype": DataType["INT27"]}, "dotp-weight-type"),
-        ({"result_dtype": DataType["UINT9"]}, "dotp-result-type"),
-        ({"result_dtype": DataType["FLOAT32"]}, "dotp-result-type"),
+        ({"weights_dtype": DataType["INT27"]}, "dotp-weight-width"),
+        ({"result_dtype": DataType["UINT9"]}, "dtype-family"),
+        ({"result_dtype": DataType["FLOAT32"]}, "dtype-family"),
         ({"result_dtype": DataType["INT59"]}, "dotp-accumulator-width"),
         (
             {"result_dtype": DataType["INT49"], "target_dsp": DspBlock.DSP48E2},
@@ -205,16 +204,15 @@ def test_dsp48_segment_length_is_ignored_by_rtl_but_preserved_as_supplied():
         ({"simd": 1, "compute_pumping": True}, "dotp-pumping"),
     ],
 )
-def test_physical_view_preserves_support_refusals(updates, code):
+def test_physical_view_reports_each_refusal_once(updates, code):
+    # An encoding the port's scalar refuses is the scalar's finding; the support
+    # group adds only the DSP's own bounds, so no node reports a cause twice.
     physical = kernel(**updates).inspect(DotpAxiKernel.build_requirements)
     refused = physical.accepted_result
     assert isinstance(refused, Rejected), refused
-    assert code in {
-        finding.code
-        for answer in physical.constraints.results.values()
-        if isinstance(answer, Rejected)
-        for finding in answer.findings
-    }
+    found = [(finding.owner, finding.code) for finding in refused.findings]
+    assert code in {code for _, code in found}
+    assert len(found) == len(set(found)), found
 
 
 @pytest.mark.parametrize(
@@ -260,12 +258,12 @@ def test_physical_constraints_can_report_before_other_inputs_resolve():
         dict(
             target_dsp=DspBlock.DSP58,
             activation_dtype=DataType["INT3"],
-            weights_dtype=DataType["UINT3"],
+            weights_dtype=DataType["INT27"],
         ),
     )
     refusal = point.inspect(DotpAxiKernel.input_types_supported).result
     assert isinstance(refusal, Rejected)
-    assert {finding.code for finding in refusal.findings} == {"dotp-weight-type"}
+    assert {finding.code for finding in refusal.findings} == {"dotp-weight-width"}
 
 
 def test_result_dtype_and_pumping_are_required_without_any_workload_dimensions():

@@ -5,11 +5,12 @@
 
 A ``Stream`` is a node of its own, declared in the composite beside the
 kernels it joins. A kernel has one reference input per stream it sits on
-(``output_stream: Stream = Param()``) and exports its port
-records under ``PORTS``, keyed by those input names. Each record says whether
-the kernel produces into the stream or consumes from it: direction is domain
-data, carried by the kernel's own export. The stream sees the kernels that
-reference it through ``Users(PORTS)``; the one-producer-one-consumer rule,
+(``output_stream: Stream = Param()``) and exports, under ``PORT``, one contract
+per input: ``exports = {PORT: {output_stream: output_port}}``. The stream sees
+the kernels that reference it through ``Users(PORT)``, each with only the port
+it presents on this stream, so a port's refusal stays on its own stream. The
+contract's transport endpoint says whether the kernel produces into the stream
+(initiator) or consumes from it (target). The one-producer-one-consumer rule,
 compatibility and the AXIS boundary belong to this family, not to the engine.
 
 A stream with a user on one side only is a boundary of its composite. Its
@@ -32,7 +33,6 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
-from enum import Enum
 
 from finn.core.space import (
     Decision,
@@ -66,6 +66,7 @@ from finn.kernels.fifo import FifoKernel
 from finn.kernels.physical.axi_stream import AxiStream
 from finn.kernels.physical.composition import Composition, StreamEnd
 from finn.kernels.physical.contract import (
+    STREAM_CONTRACT,
     Mismatch,
     StreamContract,
     compatibility,
@@ -152,45 +153,8 @@ class StreamFifo(Space):
         )
 
 
-class Flow(Enum):
-    """Which way a kernel's port faces the stream it sits on."""
-
-    IN = "in"  # the kernel consumes the stream
-    OUT = "out"  # the kernel produces it
-
-
-@dataclass(frozen=True)
-class Port:
-    """One of a kernel's stream ports: its direction and its contract."""
-
-    flow: Flow
-    contract: StreamContract
-
-
-def produces(contract: StreamContract) -> Port:
-    return Port(Flow.OUT, contract)
-
-
-def consumes(contract: StreamContract) -> Port:
-    return Port(Flow.IN, contract)
-
-
-@dataclass(frozen=True)
-class Ports:
-    """A kernel's stream ports, keyed by the name of the reference input each sits on."""
-
-    entries: tuple[tuple[str, Port], ...]
-
-    @classmethod
-    def of(cls, **ports: Port) -> Ports:
-        return cls(tuple(ports.items()))
-
-    def __getitem__(self, name: str) -> Port:
-        return dict(self.entries)[name]
-
-
-PORTS_SEMANTICS = default_semantics(Ports)
-PORTS = ViewKey("ports", PORTS_SEMANTICS)
+PORT = ViewKey("port", STREAM_CONTRACT)
+"""A kernel's port on one stream, exported per reference input."""
 
 
 @dataclass(frozen=True)
@@ -224,23 +188,24 @@ ENDPOINTS = default_semantics(Endpoints)
 class Stream(Space):
     """A relation between the kernels that reference it: one producer, one consumer.
 
-    ``ends`` holds every present user's ``PORTS`` export, located by the user's
-    name and the input it references this stream through. A side without a
-    user is the composite's boundary, presented as the AXIS port ``port``.
+    ``ends`` holds the port each present user presents on this stream, located
+    by the user's name and the input it references this stream through. A side
+    without a user is the composite's boundary, presented as the AXIS port
+    ``port``.
     """
 
     spec: StreamSpec = Param(semantics=STREAM_SPEC)
     port: str = Param(required=False)
-    ends = Users(PORTS)
+    ends = Users(PORT)
 
     @derived(semantics=ENDPOINTS)
     def endpoints(self) -> Endpoints | Rejected:
         producers: list[tuple[str | None, StreamContract]] = []
         consumers: list[tuple[str | None, StreamContract]] = []
         for end in self.ends:
-            port = end.value[end.member]
-            side = producers if port.flow is Flow.OUT else consumers
-            side.append((end.node, port.contract))
+            contract = end.value
+            producing = contract.transport.endpoint is Endpoint.INITIATOR
+            (producers if producing else consumers).append((end.node, contract))
         if len(producers) > 1 or len(consumers) > 1:
             named = ", ".join(f"{end.node}.{end.member}" for end in self.ends)
             return reject(
@@ -470,18 +435,13 @@ __all__ = [
     "Composed",
     "Connection",
     "Endpoints",
-    "Flow",
     "MODULE",
-    "PORTS",
-    "Port",
-    "Ports",
+    "PORT",
     "STREAM_SPEC",
     "Stage",
     "Stream",
     "StreamFifo",
     "StreamSpec",
     "boundary_contract",
-    "consumes",
     "netlist",
-    "produces",
 ]
