@@ -55,8 +55,11 @@ fi
 source "${FINN_VENV:-$FINN_ROOT/.venv}/bin/activate"
 _finn_gecho "Activated FINN environment at $FINN_ROOT"
 
-# Select scratch without creating/repairing directories on shell activation.
-export FINN_BUILD_DIR="${FINN_HOST_BUILD_DIR:-/tmp/finn_build_$(id -u)}"
+# Scratch defaults to $FINN_HOME/build (~/.finn/build); FINN_HOST_BUILD_DIR selects
+# another directory. Nothing is created on shell activation.
+if [ -n "${FINN_HOST_BUILD_DIR:-}" ]; then
+    export FINN_BUILD_DIR="$FINN_HOST_BUILD_DIR"
+fi
 
 
 # Xilinx tools setup

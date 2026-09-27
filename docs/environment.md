@@ -120,9 +120,9 @@ part ahead of time.
 
 ```text
  declarations                         caches (first complete copy wins)
- 1 finn/_data/resources.toml          1 FINN_RESOURCES_CACHE        writable
- 2 packages: entry points  ─ merge ─► 2 /opt/finn/resources         read-only, image
-   "finn.resources" (add only)        3 ~/.cache/finn/resources     writable
+ 1 finn/_data/resources.toml          1 FINN_RESOURCES_DIR          writable
+ 2 packages: entry points  ─ merge ─►   (default ~/.finn/resources)
+   "finn.resources" (add only)        2 /opt/finn/resources         read-only, image
  3 project: pyproject.toml                 │
    [tool.finn.resources], or               ▼ missing: fetch (locked) ─► verify digest ─► rename
    FINN_RESOURCES_FILES (may redefine)       git commit (sparse) · archive + sha256

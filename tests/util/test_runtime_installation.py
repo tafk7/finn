@@ -9,6 +9,7 @@ import subprocess
 import sys
 import sysconfig
 import tarfile
+import tempfile
 import zipfile
 from pathlib import Path
 
@@ -29,11 +30,14 @@ def run(argv, cwd, env=None):
 
 
 def clean_env():
-    return {
+    env = {
         k: v
         for k, v in os.environ.items()
         if not k.startswith("FINN_") and k not in {"PYTHONPATH", "BASH_ENV"}
     }
+    # FINN's per-user state goes to temporary space, not the user's ~/.finn.
+    env["FINN_HOME"] = os.path.join(tempfile.gettempdir(), f"finn-home-test-{os.getuid()}")
+    return env
 
 
 def snapshot(destination):

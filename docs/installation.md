@@ -155,15 +155,19 @@ a FINN revision was validated against; fetching it needs SSH access, and
 
 ### Caches
 
-Searched in order; the first complete copy wins:
+FINN keeps its per-user state under `FINN_HOME` (default `~/.finn`): fetched
+resources in `resources/`, the `finn_xsi` builds in `xsi/`, and, natively, the
+build directory in `build/`. Containers set `FINN_HOME` inside their build
+directory, which outlives them.
 
-1. `FINN_RESOURCES_CACHE`, if set: writable, for a site-managed cache or one
-   carried to an offline machine.
+Resources are looked up in two places; the first complete copy wins:
+
+1. `FINN_RESOURCES_DIR` (default `$FINN_HOME/resources`): writable. Point it at a
+   site-managed directory or one carried to an offline machine.
 2. The system cache, `FINN_RESOURCES_SYSTEM_CACHE` (default `/opt/finn/resources`,
    if it exists): read-only, filled when an image is built.
-3. `${XDG_CACHE_HOME:-~/.cache}/finn/resources`.
 
-A fetch goes into the first writable one. Git sources are fetched as a single
+A fetch goes into the first. Git sources are fetched as a single
 commit, with only the declared subdirectory's files. The tree is built in a
 temporary directory, checked against its digest and renamed into place under a
 file lock, so concurrent first uses fetch once and nothing unverified is ever
@@ -179,10 +183,10 @@ Where the network is available, fetch into a directory:
 finn-resources fetch --all --dest /media/finn-resources
 ```
 
-and on the offline machine, use it as the cache:
+and on the offline machine, use it as the resource directory:
 
 ```bash
-export FINN_RESOURCES_CACHE=/media/finn-resources FINN_RESOURCES_OFFLINE=1
+export FINN_RESOURCES_DIR=/media/finn-resources FINN_RESOURCES_OFFLINE=1
 finn-resources check
 ```
 
@@ -288,7 +292,7 @@ those artifacts rather than assuming a checkpoint is a self-contained export.
 ## RTL simulation (finn_xsi)
 
 RTL simulation builds the `finn_xsi` extension against the selected Vivado the
-first time it is needed, into `$FINN_BUILD_DIR/finn_xsi/<abi>-<key>` (one build
+first time it is needed, into `$FINN_HOME/xsi/<abi>-<key>` (one build
 per Vivado installation and Python ABI; `FINN_XSI_BUILD_DIR` selects an exact
 directory). Concurrent first uses build once. Without a usable toolchain,
 simulation fails with the missing prerequisites. `python -m finn.xsi.setup`

@@ -77,7 +77,7 @@ def project(tmp_path, monkeypatch):
             "FINN_BOARD_FILES_PATH",
         ):
             monkeypatch.delenv(variable)
-    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "user-cache"))
+    monkeypatch.setenv("FINN_HOME", str(tmp_path / "finn-home"))
     monkeypatch.setenv("FINN_RESOURCES_SYSTEM_CACHE", str(tmp_path / "system-cache"))
     (tmp_path / "system-cache").mkdir()
     root = tmp_path / "project"
@@ -128,7 +128,7 @@ def test_finn_declares_hlslib_and_board_files(project):
 
 def test_sparse_fetch_places_subdir_into_root_and_caches(boards, tmp_path, monkeypatch):
     path = Path(resources.path("kv260-boards"))
-    assert path.parent == tmp_path / "user-cache/finn/resources"
+    assert path.parent == tmp_path / "finn-home/resources"
     assert path.name.startswith("kv260-boards-")
     assert (path / "kv260/board.xml").read_text() == "k\n"
     assert sorted(p.name for p in path.iterdir()) == [".finn-resource", "kv260"]
@@ -212,20 +212,20 @@ def test_cache_order_and_read_only_system_cache(boards, tmp_path, monkeypatch):
     try:
         # The system cache serves the resource; nothing is written elsewhere.
         assert Path(resources.path("kv260-boards")).parent == system
-        assert not (tmp_path / "user-cache").exists()
+        assert not (tmp_path / "finn-home").exists()
 
-        # A site cache comes first; fetches go there, not to the user cache.
+        # FINN_RESOURCES_DIR replaces $FINN_HOME/resources; fetches go there.
         site = tmp_path / "site-cache"
-        monkeypatch.setenv("FINN_RESOURCES_CACHE", str(site))
+        monkeypatch.setenv("FINN_RESOURCES_DIR", str(site))
         assert Path(resources.path("kv260-boards")).parent == system
         _store.fetch(resource, site)
         assert Path(resources.path("kv260-boards")).parent == site
         assert _store.fetch_root() == site
-        monkeypatch.delenv("FINN_RESOURCES_CACHE")
+        monkeypatch.delenv("FINN_RESOURCES_DIR")
 
         # An incomplete entry (no valid marker) is not a copy.
         (site / resource.entry / ".finn-resource").write_text("sha256:bad\n")
-        monkeypatch.setenv("FINN_RESOURCES_CACHE", str(site))
+        monkeypatch.setenv("FINN_RESOURCES_DIR", str(site))
         assert Path(resources.path("kv260-boards")).parent == system
     finally:
         system.chmod(0o755)
@@ -352,7 +352,7 @@ def test_invalid_declarations_are_rejected(fields, message):
         _declare.parse({"acme": fields}, "test")
 
 
-@pytest.mark.parametrize("name", ["Acme", "cache", "offline", "acme-url", "acme_rtl"])
+@pytest.mark.parametrize("name", ["Acme", "dir", "offline", "acme-url", "acme_rtl"])
 def test_names_are_restricted(name):
     with pytest.raises(resources.DeclarationError, match="resource"):
         _declare.parse({name: {"package": "m"}}, "test")
@@ -439,7 +439,7 @@ def test_cli_list_fetch_verify_and_digest(boards, tmp_path, capsys):
         '<component name="som" type="fpga"/></components></board>'
     )
     with pytest.MonkeyPatch.context() as patch:
-        patch.setenv("FINN_RESOURCES_CACHE", str(dest))
+        patch.setenv("FINN_RESOURCES_DIR", str(dest))
         out = cli(capsys, "list", "--boards", "--kind", "test-boards")[1]
         assert "xilinx.com:kv260_som:som:1.3  KV260" in out
         # ...which also changed the content: verify notices.

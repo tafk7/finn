@@ -26,6 +26,16 @@ MARKER = ".finn-resource"
 DEFAULT_SYSTEM_CACHE = "/opt/finn/resources"
 
 
+def home(environ=None):
+    """FINN's per-user directory: FINN_HOME, by default ``~/.finn``.
+
+    It holds fetched resources (``resources/``), the finn_xsi builds (``xsi/``)
+    and, natively, the build directory (``build/``); each has its own override.
+    """
+    env = os.environ if environ is None else environ
+    return Path(env.get("FINN_HOME") or Path.home() / ".finn").expanduser()
+
+
 def tree_digest(path):
     """Content digest of a directory tree: sorted relative paths and file hashes.
 
@@ -63,15 +73,11 @@ def _file_sha256(path):
 
 def roots():
     """Cache roots as (path, writable), in search order."""
-    result = []
-    site = os.environ.get(PREFIX + "CACHE")
-    if site:
-        result.append((Path(site), True))
+    own = os.environ.get(PREFIX + "DIR")
+    result = [(Path(own).expanduser() if own else home() / "resources", True)]
     system = os.environ.get(PREFIX + "SYSTEM_CACHE") or DEFAULT_SYSTEM_CACHE
     if Path(system).is_dir():
         result.append((Path(system), False))
-    user = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache")
-    result.append((user / "finn" / "resources", True))
     return result
 
 

@@ -20,6 +20,7 @@ def toolchain(tmp_path, monkeypatch):
     vivado.mkdir()
     monkeypatch.setenv("XILINX_VIVADO", str(vivado))
     monkeypatch.setenv("FINN_BUILD_DIR", str(tmp_path / "build"))
+    monkeypatch.setenv("FINN_HOME", str(tmp_path / "home"))
     monkeypatch.delenv("FINN_XSI_BUILD_DIR", raising=False)
     monkeypatch.setattr(xsi_setup, "check_prerequisites", lambda: [])
     log = tmp_path / "builds.log"
@@ -37,13 +38,13 @@ def toolchain(tmp_path, monkeypatch):
 
 
 def test_artifacts_are_keyed_by_vivado_installation(tmp_path, monkeypatch):
-    monkeypatch.setenv("FINN_BUILD_DIR", str(tmp_path))
+    monkeypatch.setenv("FINN_HOME", str(tmp_path))
     monkeypatch.delenv("FINN_XSI_BUILD_DIR", raising=False)
     monkeypatch.setenv("XILINX_VIVADO", "/tools/Xilinx/Vivado/2022.2")
     first = paths.xsi_artifact_dir()
     monkeypatch.setenv("XILINX_VIVADO", "/tools/Xilinx/2025.1/Vivado")
     second = paths.xsi_artifact_dir()
-    assert first != second and first.parent == second.parent == tmp_path / "finn_xsi"
+    assert first != second and first.parent == second.parent == tmp_path / "xsi"
     monkeypatch.setenv("FINN_XSI_BUILD_DIR", str(tmp_path / "exact"))
     assert paths.xsi_artifact_dir() == tmp_path / "exact"
 

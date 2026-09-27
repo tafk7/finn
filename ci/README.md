@@ -351,7 +351,7 @@ the image inputs, including the lock but not FINN's sources. CI mounts the check
 under test, and the container entrypoint installs it editable at start, so a shard
 always runs the commit it checked out. finn-hlslib and the board files come from
 the image's resource cache (`/opt/finn/resources`); the native setup stage keeps
-them in its persistent `XDG_CACHE_HOME`. The Package workflow separately builds
+them in its persistent `FINN_HOME`. The Package workflow separately builds
 the wheel and uses it from a clean environment, including fetching finn-hlslib. See `docs/installation.md` and the runtime
 validation record for available versus installation/licence-backed coverage.
 

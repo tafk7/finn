@@ -600,6 +600,7 @@ void runLocalSetupTest() {
           "FINN_HOST_BUILD_DIR=${buildDir}",
           "UV_CACHE_DIR=${uvCacheDir}",
           "XDG_CACHE_HOME=${xdgCacheDir}",
+          "FINN_HOME=${cacheRoot}/finn-home",
           "PATH+UV=${env.HOME}/.local/bin",
         ]) {
           // prune-pip-cache keeps uvCacheDir and deletes cache-key dirs older

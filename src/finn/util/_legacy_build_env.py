@@ -4,9 +4,9 @@ See docs/legacy-build-env-ledger.md. No function mutates the parent environment.
 """
 import os
 import re
-import tempfile
 from pathlib import Path
 
+from finn import resources
 from finn.util._toolchain import Selection
 
 
@@ -21,7 +21,7 @@ def checkout_root(root=None, environ=None):
 def build_directory(path=None, environ=None):
     env = os.environ if environ is None else environ
     value = path if path is not None else env.get("FINN_BUILD_DIR")
-    return str(Path(value or Path(tempfile.gettempdir()) / f"finn_build_{os.getuid()}").resolve())
+    return str(Path(value or resources.home(env) / "build").expanduser().resolve())
 
 
 def toolchain(environ=None):

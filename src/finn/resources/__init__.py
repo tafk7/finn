@@ -19,10 +19,10 @@ may only add resources; the project may also redefine them.
 ``FINN_RESOURCES_<NAME>=/dir`` replaces a resource with a local directory,
 unverified; FINN_HLSLIB_PATH is an alias for the hlslib one.
 
-Caches are searched in order: FINN_RESOURCES_CACHE, the read-only system cache
-FINN_RESOURCES_SYSTEM_CACHE (default /opt/finn/resources, if it exists), then
-``${XDG_CACHE_HOME:-~/.cache}/finn/resources``. FINN_RESOURCES_OFFLINE=1 turns a
-fetch into an error.
+Fetched resources live in FINN_RESOURCES_DIR (default ``$FINN_HOME/resources``,
+with FINN_HOME defaulting to ``~/.finn``); the read-only system cache
+FINN_RESOURCES_SYSTEM_CACHE (default /opt/finn/resources, if it exists) is
+searched too. FINN_RESOURCES_OFFLINE=1 turns a fetch into an error.
 
 This package uses only the standard library, so an image build can run it
 before FINN is installed: ``PYTHONPATH=src python -m finn.resources``.
@@ -34,7 +34,7 @@ from pathlib import Path
 
 from . import _declare, _store
 from ._declare import PREFIX, DeclarationError, Resource, ResourceError
-from ._store import tree_digest
+from ._store import home, tree_digest
 
 __all__ = [
     "DeclarationError",
@@ -43,6 +43,7 @@ __all__ = [
     "Status",
     "declarations",
     "fetch",
+    "home",
     "path",
     "paths",
     "status",

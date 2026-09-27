@@ -22,7 +22,7 @@ PREFIX = "FINN_RESOURCES_"
 
 _NAME = re.compile(r"[a-z0-9][a-z0-9-]*")
 # Names whose override variable would be one of the settings below.
-_RESERVED = {"cache", "system-cache", "files", "offline"}
+_RESERVED = {"dir", "system-cache", "files", "offline"}
 _DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
 _COMMIT = re.compile(r"[0-9a-f]{40}")
 _SHA256 = re.compile(r"[0-9a-f]{64}")
