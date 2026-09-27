@@ -1,55 +1,57 @@
-# spike/space-declarative-2 at bf59b537e; PATH includes /home/tkeller/Xilinx/2025.2/Vivado/bin
+# scripts/check-kernels.sh at 85322bdd87fe286ef76c05c364cdd44cf3df37e6 (docs/evidence changes only are uncommitted)
 Python 3.10.19
 ============================= test session starts ==============================
 platform linux -- Python 3.10.19, pytest-9.1.1, pluggy-1.6.0
 rootdir: /home/tkeller/prj-kernels/finn-space-declarative
 configfile: setup.cfg
 plugins: hypothesis-6.167.1
-collected 363 items
+collected 384 items
 
 tests/core/space/test_authoring_identity.py .......                      [  1%]
 tests/core/space/test_change_contract.py ...                             [  2%]
 tests/core/space/test_changes.py ..........                              [  5%]
 tests/core/space/test_choices_runtime.py .........                       [  7%]
 tests/core/space/test_codecs.py ..........                               [ 10%]
-tests/core/space/test_compiler.py ...................                    [ 15%]
-tests/core/space/test_declarations.py .................................  [ 25%]
+tests/core/space/test_collapse.py ....                                   [ 11%]
+tests/core/space/test_compiler.py ...................                    [ 16%]
+tests/core/space/test_declarations.py .................................  [ 24%]
 tests/core/space/test_design_graph.py ..............                     [ 28%]
 tests/core/space/test_domains.py .......                                 [ 30%]
-tests/core/space/test_evidence.py ......                                 [ 32%]
-tests/core/space/test_expressions.py .............                       [ 36%]
-tests/core/space/test_extensions.py ........                             [ 38%]
-tests/core/space/test_house.py .....                                     [ 39%]
-tests/core/space/test_inspection.py .......                              [ 41%]
-tests/core/space/test_instance_lifecycle.py .                            [ 41%]
-tests/core/space/test_invariants.py .                                    [ 42%]
-tests/core/space/test_lifecycle.py .....                                 [ 43%]
-tests/core/space/test_native_admission.py ................               [ 47%]
-tests/core/space/test_native_cleanup.py ................................ [ 56%]
-.....                                                                    [ 58%]
-tests/core/space/test_native_execution.py ..........................     [ 65%]
-tests/core/space/test_nested_parameter_bindings.py ..................    [ 70%]
-tests/core/space/test_public_snapshots.py .....                          [ 71%]
+tests/core/space/test_evidence.py ......                                 [ 31%]
+tests/core/space/test_expressions.py .............                       [ 35%]
+tests/core/space/test_extensions.py ........                             [ 37%]
+tests/core/space/test_house.py ......                                    [ 38%]
+tests/core/space/test_inspection.py .......                              [ 40%]
+tests/core/space/test_instance_lifecycle.py .                            [ 40%]
+tests/core/space/test_invariants.py .                                    [ 41%]
+tests/core/space/test_lifecycle.py .....                                 [ 42%]
+tests/core/space/test_native_admission.py ................               [ 46%]
+tests/core/space/test_native_cleanup.py ................................ [ 54%]
+.....                                                                    [ 56%]
+tests/core/space/test_native_execution.py ..........................     [ 63%]
+tests/core/space/test_nested_parameter_bindings.py ..................    [ 67%]
+tests/core/space/test_overrides.py ..............                        [ 71%]
+tests/core/space/test_public_snapshots.py .....                          [ 72%]
 tests/core/space/test_reference_misuse.py ............................   [ 79%]
-tests/core/space/test_references.py .........                            [ 81%]
+tests/core/space/test_references.py ...........                          [ 82%]
 tests/core/space/test_runtime.py ........                                [ 84%]
 tests/core/space/test_scopes.py ........                                 [ 86%]
 tests/core/space/test_selections.py ...........                          [ 89%]
-tests/core/space/test_semantics.py ....................                  [ 94%]
+tests/core/space/test_semantics.py ....................                  [ 95%]
 tests/core/space/test_surface_refinement.py ..................           [ 99%]
 tests/core/space/test_typing.py .                                        [100%]
 
-============================= 363 passed in 58.44s =============================
-62 files already formatted
+======================== 384 passed in 61.21s (0:01:01) ========================
+65 files already formatted
 All checks passed!
 Success: no issues found in 27 source files
-Success: no issues found in 35 source files
+Success: no issues found in 38 source files
 ============================= test session starts ==============================
 platform linux -- Python 3.10.19, pytest-9.1.1, pluggy-1.6.0
 rootdir: /home/tkeller/prj-kernels/finn-space-declarative
 configfile: setup.cfg
 plugins: hypothesis-6.167.1
-collected 761 items
+collected 763 items
 
 tests/kernels/artifacts/test_abi.py .................................... [  4%]
 ......                                                                   [  5%]
@@ -76,7 +78,7 @@ tests/kernels/artifacts/test_store.py .................................. [ 41%]
 tests/kernels/rtlsim/test_observed_transport.py ...                      [ 41%]
 tests/kernels/test_axi_stream.py ......                                  [ 42%]
 tests/kernels/test_axi_stream_declaration.py ........................... [ 45%]
-........                                                                 [ 47%]
+........                                                                 [ 46%]
 tests/kernels/test_boundaries.py ............                            [ 48%]
 tests/kernels/test_datatypes.py ........................................ [ 53%]
 ...................................                                      [ 58%]
@@ -90,14 +92,15 @@ tests/kernels/test_kernel_extensions.py ...................              [ 78%]
 tests/kernels/test_migrated_rich.py .....................                [ 81%]
 tests/kernels/test_migrated_simple.py ...............................    [ 85%]
 tests/kernels/test_mvau_assembly.py .....................                [ 88%]
+tests/kernels/test_mvau_collapse.py ..                                   [ 88%]
 tests/kernels/test_mvau_delivery_choice.py .................             [ 90%]
 tests/kernels/test_native_streams.py .....                               [ 91%]
 tests/kernels/test_scalar_policies.py ................                   [ 93%]
 tests/kernels/test_stream_contract.py .....................              [ 96%]
 tests/kernels/test_streaming_components.py ............................. [100%]
 
-======================= 761 passed in 292.78s (0:04:52) ========================
-99 files already formatted
+======================= 763 passed in 293.44s (0:04:53) ========================
+100 files already formatted
 All checks passed!
 Success: no issues found in 52 source files
 Success: no issues found in 10 source files

@@ -1,4 +1,4 @@
-finn     bf59b537e570010e21807e9634c9b53f72e29bb8  /home/tkeller/prj-kernels/finn-space-declarative
+finn     85322bdd87fe286ef76c05c364cdd44cf3df37e6  /home/tkeller/prj-kernels/finn-space-declarative
 Python 3.10.19
 pytest 9.1.1
 ruff 0.16.4
@@ -14,7 +14,7 @@ tests/dataflow/model/test_datatypes.py .....                             [ 31%]
 tests/dataflow/model/test_facade.py ....                                 [ 56%]
 tests/dataflow/test_package_boundaries.py .......                        [100%]
 
-============================== 16 passed in 8.02s ==============================
+============================== 16 passed in 8.22s ==============================
 21 files already formatted
 All checks passed!
 Success: no issues found in 16 source files

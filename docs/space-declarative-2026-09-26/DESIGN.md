@@ -1,694 +1,658 @@
-# Declarative design spaces: nodes, references, one compile step
+# Declarative design spaces: nodes, references, overrides, one compile step
 
-Date: 2026-09-26. Branch: `spike/space-declarative-2` (iteration 2), on
-`spike/space-declarative` at `35e59b442` (iteration 1, itself on
-`spike/space-design-graph` at `0acc51e1e`). Status: **design spike, at the
-human review gate.** Not for merge as is.
+Date: 2026-09-26. Branch: `spike/space-declarative-3` (iteration 3), on
+`spike/space-declarative-2` at `43d4576a6` (iteration 2), itself on
+`spike/space-declarative` at `35e59b442` (iteration 1). Status: **design
+spike, at the human review gate.** Not for merge as is.
 
 This spike replaces the composition layer of `finn.core.space` with a
-declarative graph of design spaces. The value graph and runtime stay as they
-are; only the authoring and linking layer changes. The engine has no domain
-notions: no ports, directions or carried values. Streams, their direction and
-their boundaries live in `finn.kernels.streams`.
+declarative graph of design spaces. The engine has no domain notions: no
+ports, directions or carried values. Streams, their direction and their
+boundaries live in `finn.kernels.streams`.
 
-This document describes the **current** model. §1 lists what iteration 2
-changed after the human review; iteration 1 text is kept only where it still
-applies (git has the rest).
+This document describes the **current** model. §1 lists what iteration 3
+changed after the second human review, and §2 is the **next pass** the review
+asked to flag. Earlier iterations' text is kept only where it still applies
+(git has the rest).
 
 ## 0. Summary
 
 | Question | Answer |
 |---|---|
-| What is a node? | Calling a family, `Room(area=12)` or bare `Room()`, returns a **node declaration**: a declaration-mode `Room` object holding its bindings. Nothing is compiled. |
-| What is an edge? | A binding at the call (`Room(area=kitchen.area)`), or an **assignment** after the call (`hall.area = kitchen.area`). |
-| What is a reference? | Attribute access on a node declaration: `kitchen.finish`. `House.kitchen.finish` from class level is the same reference. |
-| How does one node use another? | A **reference input**, `output: Param[Stream] = Param(Stream)`. A fresh node supplied to it is placed there; a node placed beside it is referenced. Several nodes may reference one node. |
-| How does a node see who uses it? | `Users(key)`, the mirror of `Members(key)`: every present node whose input references it, located by name and input. |
-| What is a structural choice? | `Decision(values={"boiler": Boiler(), "heat_pump": heat_pump, "none": None})`. |
-| How is a configuration made? | Only by `configure(House(budget=100))`, typed `House`. Preparing a model freezes the declarations in it. |
-| Typing | Option A. Nodes are typed as their family, references as their values, `self` in methods as a configuration. Every formal is optional at the type level; each keyword and each assignment is typed by `Param.__set__`. |
-| Engine verdict | The runtime (scheduler, snapshots, admission, selections, codecs) is unchanged except that a `members` node now carries one member name per entry. The IR gained `Scope.references` in iteration 2. |
-| Evidence | Both gates green with XSim executed: Space 363 passed, kernels 761 passed (0 skipped), dataflow 16 passed. The 6 MVAU fingerprints are identical to iteration 1, and with the cyclic instance renamed they are bit-identical to `0d700b1ab`. No MVAU decision key and no top-level ABI port name changed. |
+| What is a declaration? | Calling a family, `Room(area=12)` or bare `Room()`, returns a **declaration**: a template holding its assignments. Nothing is compiled. |
+| How is a member typed? | By its **annotation**: `area: int = Param()`, `finish: int = Decision(values=(1, 2, 3))`, `output: Stream = Param()`. The annotation is the single source of the value type. |
+| What is an edge? | A binding at the call (`Room(area=kitchen.area)`) or an **assignment** (`hall.area = kitchen.area`). |
+| Who may assign what? | Any body may assign any **Param, Decision or child node** of any descendant, at any depth (`middle.kernel.port.lanes = lanes`). The **outermost** assignment wins; one body assigning a target twice is an error; behaviour (derived values, constraints, views, `Members`/`Users`) is not assignable. |
+| What does overriding a Decision do? | A value **pins** it (its key disappears); another Decision **replaces** it under the same key. Both are checked against the declared domain. |
+| Who set a value? | Every supplied member records its **provenance**: `kitchen.area = 16 (set by House at house.py:42; declared 12 at room.py:10)`, in `inspection` and in refusals. |
+| How is a design space opened? | `design_space(House(budget=100))`, typed `House`. The vocabulary is declaration → model → design space → configuration → design point (§1.5). |
+| What does compilation optimize? | Chains of forwarding aliases collapse to their source: scopes, keys and names are unchanged, evaluation does not walk the chain (§1.3). |
+| Engine verdict | The runtime gained a pinned/contract domain check, `via` bookkeeping for collapsed reads, and a frame may now make several native calls. The IR gained provenance, pinned keys and a forwarding map. |
+| Evidence | Both gates green with XSim executed: Space **384 passed**, kernels **763 passed, 0 skipped** (9 XSim), dataflow **16 passed**. The 6 MVAU fingerprints are identical to iteration 2 and, with the cyclic instance renamed, bit-identical to `0d700b1ab`. No MVAU decision key, node key or top-level ABI port name changed. |
 
-**Flagged deviations and additions.** Each is the closest workable form of
-the decided design; §4 and §6 give the reasons.
+**Flagged deviations and additions.** Each is the closest workable form of a
+decision; the section named gives the reason.
 
-1. **Assignment through a path is an addition.** `kernel.port.dtype = dtype`
-   supplies a formal of a node *inside* `kernel`, for this placement of
-   `kernel` only. It keeps what `Bind` could do (reach an unsupplied formal
-   of a reusable family's internal node) without mutating the shared
-   class-body declaration (§4.6).
-2. **Reference inputs are typed only in methods.** `output: Param[Stream]`
-   (the annotation the review asked for) makes `self.output.spec` exact in a
-   method, but `output.spec` in the class body is not typed (`Param[Stream]`
-   has no attribute `spec`); it works at runtime (§5).
-3. **A kernel's `PORTS` export is one value.** A stream reads its users'
-   whole port records, so a refusal of one of a kernel's ports reaches every
-   stream the kernel sits on (§6, R16). The only visible case is dotp's
-   element-type refusal, which previously reached the weight stream alone.
-4. **A boundary stream without a `port` is unresolved, not refused**: its
-   `port` input is unsupplied (owner `x.port`), which says what to supply.
-5. **The formal of a reference input has a node**: a presence node (`k.output`,
-   a constant guarded by the referenced node's guard). A query of it is typed
-   as the family but answers `True` (§6, R19).
+1. **A located formal keeps a descriptor annotation**:
+   `a: LocatedParam[int] = LocatedParam()`. Its suppliers are typed `T` and its
+   value `Located[T]`; a value annotation (`Located[int]`) would reject
+   `Match(a=kitchen.finish)`. It is the one member not annotated with its
+   value type (§1.2).
+2. **A Decision over nodes is typed by its annotation only.** Its call returns
+   `Any` statically, because mypy joins a dict display to the candidates' common
+   base before it consults the annotation. The runtime checks every candidate
+   against the annotation instead (§1.2, R21).
+3. **A Decision over nodes cannot be pinned by a value.** A value would be a
+   case key, which the annotation (`Boiler | HeatPump`) cannot type, and pinning
+   would change which candidate scopes exist. It can be narrowed by another
+   Decision over nodes, down to a single case (the key stays) (§1.1).
+4. **A pin or a replacement keeps the declared domain as a contract.** A
+   replacement Decision's values are admitted only if the declared domain also
+   admits them, so widening is refused. This reads "behaviour is not
+   overridable" as covering the domain predicate (§1.1).
+5. **A view supplies a formal through `accepted(view)`.** A view is typed
+   `BoundView[T]` through a node and cannot type as the `T` a formal takes;
+   `accepted()` is a typed identity bridge (§1.2, R27).
+6. **Additions:** attribute projection (`output.spec.payload_bits` works at
+   runtime, not only in mypy), `Space.present()`, `composite(annotations=)`,
+   `inspection.provenance()`/`pinned()`, `EvidenceNode.via` (§1).
 
-## 1. Iteration 2 changes
-
-Each decision from the human review, and what implements it.
+## 1. Iteration 3 changes
 
 | # | Decision | Implemented as |
 |---|---|---|
-| 1 | Bare `Room()`; remove `OPEN` | `OPEN` is gone. A node call may leave any formal unsupplied. A required formal that nothing supplies is a `DefinitionError` when a family containing the node is prepared, naming the formal's declaration line and the node's call line. `Param` is no longer a `dataclass_transform` field specifier, so every formal is optional at the type level (§5). |
-| 2 | Kept: annotated formals, candidate handles, `None` in a choice's union, `decision.member` reads `Inapplicable` | Unchanged. |
-| 3 | Shared decisions must be named | An unnamed Decision supplies one formal and is keyed by it (`second.depth`). Used at two or more sites it is a `DefinitionError` naming every site and saying how to name it. `Decision(..., name="lanes")` is owned by the lowest common scope of its uses and keyed `<owner>.<name>`. First-use keying is removed (§4.4). |
-| 4 | Assignment replaces `Bind` | `Bind` is gone. `hall.area = kitchen.area`, `adder.back = register.q` (class body) and `current.width_in = previous.width_out` (a loop over plain nodes) all supply a formal. Assigning a supplied formal, or a formal of a frozen declaration, is refused. Alternatives are `x.formal = Present(a.out, b.out)`. `Param.__set__` types the value (§4.5). |
-| 5 | Reference-valued inputs | `Param(Family)` returns a reference input typed `Param[Family]`. A fresh (unplaced) node is placed at it; a node placed beside it is referenced; several nodes may reference one; place-once holds. In methods `self.output` is the referenced configuration. A reference resolves in the body that wrote it: a sibling, a candidate, or a forwarded input of that body (§4.7). |
-| 6 | `Users(key)` | A `members` node over the exports of the nodes whose inputs reference this one: `Located(node, member=<input name>, value)`, in declaration order, absent users omitted, obliged per user (§2.3). |
-| 7 | Streams are Spaces referenced by kernels | `Stream`, `BufferedStream`, `Port`/`Ports`/`PORTS`, `Flow`. Kernels (dotp, replay, cyclic delivery) have stream inputs and a `ports` export. MVAU and `Constants` are rewritten. Boundary names come from the stream's `port` input (§4.8). The anchoring rule is demonstrated (§2.4). |
-| 8 | Keep everything else | `Members`, `Present`, `Located` auto-location, `requires=`, `configure`/`commit`, `ReferenceUseError`, source locations, place-once and pre-compile inspection all stay. |
+| 1 | Parents override the data of any descendant | §1.1. `NodeDecl.overrides` keyed by member path; layered at link, outermost wins; same-body double assignment, behaviour and incompatible families refused; pins, replacements, child and choice replacement; provenance in `inspection`, refusals, stale selections |
+| 2 | Annotate formals with their value type | §1.2. `Param`/`Decision` take options only and are typed as their value; every family (engine tests, kernels, MVAU, streams, `Constants`, scripts) migrated; key-taking APIs accept keys typed as values |
+| 3 | Collapse value-derivation chains, never Spaces | §1.3. A post-link pass rewrites evaluation edges; method reads take the same shortcut at runtime; `explain` lists the aliases read through as `via` |
+| 4 | Fix the presence oddity | §1.4. `query(K.output)` answers the referenced configuration; `point.present(node) -> bool` |
+| 5 | Terminology | §1.5. `SpaceModel` → `Model`, `configure` → `design_space`, `compile_space` → `compile_model` |
+| 6 | Flag the next pass | §2 |
 
-## 2. The model
+### 1.1 Overrides and provenance
 
-A **family** is a `Space` subclass. Its class body declares members and nodes:
+```python
+class Room(Space):
+    area: int = Param(default=12)
+    finish: int = Decision(values=(1, 2, 3))
+
+class LargeRoom(Room):                       # a subclass may replace a Room
+    windows: int = Decision(values=(2, 4))
+
+class Wing(Space):
+    kitchen = Room(area=14)                  # Wing's body sets 14
+    study = Room()
+
+class House(Space):
+    wing = Wing()
+    wing.kitchen.area = 16                   # overrides Wing's 14
+    wing.study.finish = 2                    # pins a grandchild's Decision
+
+class Estate(Space):
+    home = House()
+    home.wing.kitchen.area = 18              # the outermost assignment wins
+    home.wing.kitchen.finish = Decision(values=(1, 2))   # narrows: same key
+    home.wing.study = LargeRoom(area=9)      # replaces a child node
+```
+
+**Where an assignment lives.** `a.b.c = x` in a body is stored on the first
+node of the path (`a`), keyed by the member path below it (`"b.c"`). A call
+keyword is exactly an assignment by the calling body. Keys are attribute
+paths, not record identities, so an assignment reaches whatever node an
+intermediate body placed at that path (a replacement included). A path
+through a Decision candidate is allowed (`mvau.cyclic.rom_style`, keyed
+`implementation.cyclic.rom_style`); a path through a reference input is not
+(assign the referenced node where it is placed).
+
+**Layering.** When a node is placed, the linker collects every setting of each
+of its members: the family's declaration (a `Param` default, the `Decision`, the
+child node), the node's own record (the body that declared it), and the record
+of every enclosing node that assigns through a path. Settings are ordered by
+how deep the writing body is; the **outermost** wins. Depth, not position,
+decides: a replacement node's own settings were written by the outer body that
+replaced it.
+
+**Rules.**
+
+- *Same-body double assignment* is a `DefinitionError`: at the assignment when
+  it hits the same record and path ("`kitchen.area is already assigned at
+  x.py:3 in this body`"), and at link when two settings of one member come from
+  one body by different routes (a replacement's keyword and a path assignment).
+- *Behaviour is not assignable*: a derived value, constraint, group, view,
+  `Members`, `Users`, `Const` or class-body alias is refused where it is
+  assigned: "behaviour belongs to the family; subclass it to change it".
+  A candidate handle is refused too ("override the Decision instead").
+- *A Decision member* overridden by a value is **pinned**: a `const` node (an
+  `alias` for a reference) under the same node key, with no decision key. By
+  another Decision it is **replaced** under the same key (the attribute path).
+  Either way the declared domain stays as a contract: a pinned value outside it
+  is refused where it is read, a replacement's candidate is admitted only if the
+  declared domain admits it too, and its advisory enumeration lists only what
+  the contract admits. The declared guard (`when=`) is kept.
+- *A formal* overridden where an inner body opened a coordinate with an inline
+  Decision closes that coordinate: its key disappears the same way.
+- *A child node* may be replaced by a **fresh** node of its family **or a
+  subclass**. A subclass keeps every member an enclosing body can name (Python
+  inheritance, plus collection's "override changes declaration kind / value
+  semantics" checks), so every reference into the slot still resolves with the
+  same types; mypy enforces the same rule (`wing.kitchen = Garden()` is an
+  error). A structurally similar family is refused: nothing would check the
+  names enclosing bodies use. The replacement takes the slot's guard and may
+  not declare its own `when=`; it keeps the slot's node name, and every
+  reference to the declared node reaches it.
+- *A Decision over nodes* may be replaced by a narrower one: a subset of the
+  cases, each a node of the declared candidate's family or a subclass (or
+  `None` where the declared case is `None`). Its key and candidate names stay.
+
+**Provenance.** Each supplied member's layers are kept in the model
+(`LinkedModel.provenance` by node, `scope_provenance` by replaced child,
+`pinned` by removed key) as a `Provenance(key, layers)`; each `Layer` has the
+body, the source line and the value as text:
+
+```
+home.wing.kitchen.area = 18 (set by Estate at estate.py:12; overrides 16 set by
+House at house.py:9; overrides 14 set by Wing at wing.py:4; declared 12 at room.py:2)
+```
+
+It is exposed by `inspection.provenance(subject, reference)`,
+`inspection.pinned(subject)`, and `NodeInfo.provenance` (so `members`,
+`dependencies` and `explain` carry it). Diagnostics:
+
+- a pinned value outside the declared domain: `domain-membership`, *"room.finish
+  = 7 (set by Wrong at x.py:5; declared Decision(values=(1, 2, 3)) at
+  room.py:3): 7 is outside the declared domain"*; a replacement's candidate the
+  contract refuses reads the same way;
+- a computation's own refusal appends the provenance of every **overridden**
+  value it read (two or more layers): *"area 30 exceeds 20;
+  home.wing.kitchen.area = 30 (set by Mansion at ...; overrides 16 set by House
+  at ...; declared 12 at ...)"*, also as `details["provenance"]`;
+- editing a pinned key: *"wing.study.finish is not an owned Decision: an
+  enclosing body pinned it (wing.study.finish = 2 (set by House at ...))"*;
+- a persisted selection holding a pinned key is refused on decode as **stale**,
+  with the provenance; `finn.kernels.configure.commit` refuses it the same way;
+  an in-memory `Selection` belongs to its model and is refused elsewhere.
+
+Removed: the "a formal has one supplier / already supplied" rule across bodies,
+the "assign formals only" rule, and "unknown formals" (now "unknown members",
+since a call may pin a Decision: `Room(finish=2)`).
+
+### 1.2 Annotated members and what typing gains and loses
+
+```python
+class Room(Space):
+    area: int = Param()                          # required
+    label: str = Param(required=False)           # optional, unsupplied if nobody binds it
+    finish: int = Decision(values=(1, 2, 3))
+    spec: StreamSpec = Param(semantics=STREAM_SPEC)   # custom value semantics
+
+class Kernel(Space):
+    output: Wire = Param()                       # a reference input
+    buffer = Buffer(word_bits=output.spec.payload_bits)   # typed in the class body
+    heating: Boiler | HeatPump | None = Decision(values={...})
+```
+
+- `Param(*, default=..., required=..., semantics=...)` and
+  `Decision(*, values=... | domain=..., semantics=, when=, name=)` take options
+  only. `UNSUPPLIED` is gone from the API: `required=False` says it.
+- The annotation is read when the class is created (or, for a forward
+  reference, when it is collected), evaluated in the module, the class and
+  the enclosing function's locals. A plain class gives default semantics; a
+  union, protocol or special form needs `semantics=`, which must agree with it.
+  A member without an annotation is a `DefinitionError` ("annotate the param
+  with its value type, as in `area: int = Param()`"). A member built as data
+  (outside a class body) takes its annotation from
+  `composite(..., annotations={"choice": int})`, or its value type from
+  `semantics=`.
+- A `Param` annotated with a family is a reference input (`FamilyFormal` is
+  gone). In the class body `output.spec` is a reference through it, and an
+  attribute of a referenced value projects: `output.spec.payload_bits` is a
+  derived node that reads the property, typed by its annotation.
+- An inline Decision (`Fifo(depth=Decision(values=(4, 8)))`) takes its value
+  type from the formal it supplies.
+- `@derived` members are typed as their value too, so a derived value supplies
+  a formal (`Stream(spec=activation_spec)`). `Present(...)` is typed as its
+  value. `accepted(view)` supplies a formal with a view's accepted value.
+
+Key-taking APIs accept keys typed as their values: `with_choices({Room.finish:
+2})`, `field(Room.finish) -> BoundDecision[int]`, `query(K.output) ->
+QueryResult[Wire]`, `inspection.decision_handle(point, House.kitchen.finish) ->
+DecisionHandle[int]`, `decision_info`, `value_handle`, `explain`, `codec_for`
+(and `commit`, which takes string keys, is unchanged).
+
+| Claim (mypy `--strict`) | Result |
+|---|---|
+| `Room.area` | `int` |
+| `Room()` | accepted; every member is optional at the call |
+| `Room(area="x")`, `hall.area = "x"`, `Room(finish="two")` | errors |
+| `Room(area=kitchen.area)`, `hall.area = kitchen.area` | accepted |
+| `output.spec.payload_bits` in the class body | `int` (**gained**: iteration 2 left `output.spec` untyped) |
+| `wing.kitchen = Garden()` (not a `Room`) | error |
+| `heating.kw` with `heating: Boiler \| HeatPump` | `int` (**gained**: no `Decision[...]` subscript) |
+| `point.query(K.output)` | `QueryResult[Wire]`, and it is true now |
+| `point.present(3)` | error |
+| `inspection.decision_handle(house, House.kitchen.finish)` | `DecisionHandle[int]` (**gained**: was `Any`) |
+
+What is **lost**, each with the reason:
+
+| Loss | Why |
+|---|---|
+| A `Param` key cannot be told from a `Decision` key: `point.field(Child.width).change(2)` type-checks and fails at runtime (`field` of a non-decision returns a `BoundValue`) | both are typed `int` |
+| A declaration's own attributes (`Family.x.semantics`, `.domain`, `__set_name__`) need a `cast` | class-level members are typed as values |
+| A Decision over nodes: a wrong annotation is not a mypy error | the call is `Any` (R21); collection checks each candidate against the annotation |
+| A view does not supply a formal without `accepted(...)` | `BoundView[T]` is not `T` (R27) |
+| Class-body arithmetic is `int`, not `Expr`: `number / 2`, `number ** 2` and `int + float` are not mypy errors | the operands are `int`; refused at runtime (`/` and `**` raise a `TypeError`, a non-`int` operand is a `DefinitionError` when linked) |
+| A missing required formal is not a mypy error (unchanged) | an assignment may still supply it |
+| `LocatedParam[int]` is the one descriptor annotation | its suppliers and value differ in type |
+| `Const(...)` members stay typed `Const[T]` | not asked; supplying a formal with a `Const` needs a cast |
+
+Evidence: `tests/core/space/typing/positive.py` (a new section: reads through
+a reference input, bare calls, pins, narrowing and replacement typed in a
+class body, keys), `negative.py.txt` (34 expected-error lines, matched line for
+line, including wrong-type pins, a wrong replacement family, a typo through a
+reference input, `present(3)` and a mistyped query), `extensions.py`,
+`expressions_*`, and the kernels' `typing/` fixtures, all under `--strict`.
+
+### 1.3 Collapsed forwarding chains
+
+A formal bound to a reference, a formal forwarded through composites, a named
+shared decision's uses and a class-body alias are `alias` nodes. After linking
+and type checks, `collapse()`:
+
+1. points each alias's `output` at the end of its chain, following the next
+   alias only when that alias's guard holds whenever this one's does (its
+   guard is this guard or an outer one);
+2. points every reader's edge (arguments, domain and contract arguments, view
+   and guard outputs, alternatives) straight at that source when the alias's
+   guard holds whenever the **reader's** does: a reader is evaluated only when
+   its own guard holds, so the alias could not have answered "inapplicable".
+
+Method reads (`self.width`) take the same shortcut at runtime, against the
+reading node's guard. An alias that pins a Decision (it has a domain) is not
+forwarding and is never bypassed. A reference input forwarded through
+composites already resolves, at link, to the node it finally references.
+
+**Unchanged:** every scope, node, node key, decision key, instance name and the
+netlist's hierarchy. Every node still answers when queried by name. The
+answers of **every node** are identical with and without collapse, for the
+house toy, the reference toys, a forwarding chain with a guarded middle, data
+pipelines and MVAU (`tests/core/space/test_collapse.py`,
+`tests/kernels/test_mvau_collapse.py`), findings and owners included, since an
+alias passes its source's answer through unchanged.
+
+**`explain`.** A bypassed alias is not evaluated, so it is not an evidence
+node; each evidence node lists the aliases it read through in `via` (by their
+authored key), and its dependency is the alias's source. Rejected: keeping
+aliases as synthetic evidence nodes (they were not evaluated, and their
+"result" would be a copy); and hiding them (the authored name a method read
+would vanish).
+
+**`Users`** is unchanged: the nodes that directly reference the node, in the
+body that wrote the reference. Whether a forwarding composite or its inner
+nodes count as users is deferred to the query-tools pass (§2).
+
+**Measured** (`collapse_probe.py`, [`evidence/collapse-probe.txt`](evidence/collapse-probe.txt)):
+
+| Case (read) | nodes | aliases | edges into aliases before → after | nodes evaluated before → after | aliases evaluated before → after |
+|---|---|---|---|---|---|
+| MVAU external (`structure`) | 217 | 32 | 12 → 0 | 168 → 142 | 26 → 0 |
+| MVAU cyclic + FIFO (`structure`) | 217 | 32 | 12 → 0 | 197 → 165 | 32 → 0 |
+| pipeline N=800 (last width) | 3200 | 799 | 0 → 0 | 3200 → 2401 | 799 → 0 |
+| composites N=200 (last width) | 1400 | 399 | 199 → 0 | 1400 → 1001 | 399 → 0 |
+
+Node counts are unchanged by construction; evaluated nodes drop by 15–29 %
+(every alias). The scale probe's time moves little (§8): an alias frame is
+cheap next to a callback.
+
+### 1.4 Presence
+
+`point.query(K.output)` on a reference input now answers the **referenced
+node's configuration**, as its static type says: `Available(<Stream>)` when
+present, `Inapplicable` when the referenced node is absent, `Unresolved` while
+its presence is undecided or the optional input is unsupplied. The same holds
+for any node reference: a child (`query(House.garage)`) or a candidate handle.
+
+`point.present(node) -> bool` is the typed presence accessor. It reads like a
+value: `True`/`False`, `False` for an unsupplied optional input, and an
+undecided presence raises `ValueUnavailableError` (inside a method it halts the
+method as unresolved, like any read). Inside a method it does not halt on an
+absent node: `self.present(K.output)` is `False`.
+
+### 1.5 Terminology
+
+| Term | Meaning | In the API |
+|---|---|---|
+| declaration | `Room(area=12)`: a template, not compiled | a family call; `inspection.declaration()`, `NodeDeclaration` |
+| model | compiled structure, no inputs | `Model` (was `SpaceModel`), `inspection.model()`, internal `compile_model()` |
+| design space | a model with inputs bound and every choice open | `design_space(House(budget=100))` (was `configure`) |
+| configuration | a design space after some choices: a partial point | the same `Space`-typed object; `with_choices`, `ConfigurationResult` |
+| design point | a configuration complete for the question asked | no type: completeness is relative to the question |
+
+- **`SpaceModel` → `Model`**: the package already qualifies it
+  (`finn.core.space.Model`); "Space" said nothing.
+- **`configure` → `design_space`**: the call makes no choice. It binds the
+  inputs and opens every choice, which is exactly the vocabulary's design
+  space; `configure` read as "make choices". The result is typed as the family
+  and is the empty configuration, so no second type appears.
+- **`compile_space` → `compile_model`**: it compiles a model.
+- **Kept:** `Space` (a family of design spaces), `with_choices` (it makes a
+  configuration), `ConfigurationResult`/`ConfigurationError` (they are about
+  configurations), and `finn.kernels.configure.commit` (it configures: commits
+  choices by key). No `DesignPoint` type: a point complete for one query is
+  partial for another.
+
+## 2. Next pass: query and search tools
+
+**Goal.** Now that compilation is decoupled from authoring, determine which
+query and search tools are needed and useful over Spaces: for authors in class
+bodies, for compiler passes over declarations, and for search over
+configurations. This pass only flags it; nothing below is implemented.
+
+**The idea under consideration.**
+
+- **One engine primitive, a presence-aware gather**: `Collect(refs)` returns
+  located values, each with its own obligation (its acceptance counts
+  separately), omitting absent sources.
+- **`Present` becomes `Collect(..., exactly_one=True)`**: unresolved while any
+  source is, refused on two, unsupplied on none, as today.
+- **Structural queries become plain Python over declarations at compile time**:
+  `children(space, exporting=K)`, `users(node)`, paths. They serve authors and
+  compiler passes alike, and the linker lowers their result to a `Collect`.
+- **`Members`, `Users` and `Present` would become compositions of these**: a
+  structural selection, then a gather.
+- **Open: how a class body names its own structure before the class exists**,
+  for example a deferred selector (`Collect(children(Self, exporting=COST))`
+  resolved at collection).
+
+**Deferred questions recorded for it.**
+
+- `Users` through forwarding composites: closure (a composite is the user and
+  re-exports its children's ports, today) or flattening (the inner nodes are
+  users, named from the referenced node's parent)?
+- Should `Ports`-style convenience views (a kernel's keyed `PORTS` record, one
+  export per user) stay domain-level, or does a keyed gather belong in the
+  engine (it would also fix R16's attribution)?
+
+## 3. The model
+
+A **family** is a `Space` subclass; its class body declares members and nodes.
+The complete toy is [`tests/core/space/test_house.py`](../../tests/core/space/test_house.py):
 
 ```python
 class House(Space):
-    budget: Param[int] = Param(int)                    # formal (annotated: typed call)
-    want_garage = Decision(bool, values=(False, True))
-    hall = Room()                                      # node; area assigned below
-    kitchen = Room(area=12)                            # node
+    budget: int = Param()
+    want_garage: bool = Decision(values=(False, True))
+    hall = Room()                                      # its area is assigned below
+    kitchen = Room(area=12)
     dining = Room(area=16)
     garage = Room(area=20, when=want_garage)           # guarded node
     heat_pump = HeatPump(kw=8)                         # a handle naming a candidate
-    heating = Decision[Boiler | HeatPump](values={"boiler": Boiler(kw=24), "heat_pump": heat_pump})
+    heating: Boiler | HeatPump = Decision(values={"boiler": Boiler(kw=24), "heat_pump": heat_pump})
     thermostat = Thermostat(kw=heating.kw)             # the selected candidate's kw
     hall.area = kitchen.area                           # an edge after its nodes
-    matched = Match(a=kitchen.finish, b=dining.finish) # Match.a: LocatedParam[int]
-    costs = Members(COST)                              # present children exporting COST
+    matched = Match(a=kitchen.finish, b=dining.finish)
+    costs = Members(COST)
 
-    @view(requires=(costs, within_budget, matched.agreed))
-    def total(self) -> int: ...
+class Estate(Space):
+    """An enclosing body customizes the house it contains: data, never behaviour."""
+    home = House(budget=300)
+    home.kitchen.area = 14                                          # overrides 12
+    home.kitchen.finish = 2                                         # pins: key gone
+    home.heating = Decision(values={"heat_pump": HeatPump(kw=6)})   # narrows the choice
+    home.garage = Room(area=24, finish=1)                           # replaces a child
 
-house = configure(House(budget=100))
-point = house.with_choices({House.heating: "heat_pump", House.heat_pump.cop: 3,
-                            House.kitchen.finish: 2})
+point = design_space(Estate()).with_choices({Estate.home.want_garage: True, ...})
 ```
 
-The complete toy is [`tests/core/space/test_house.py`](../../tests/core/space/test_house.py).
-Reference inputs and `Users`, in a toy with nothing about hardware
-([`tests/core/space/test_references.py`](../../tests/core/space/test_references.py)):
-
-```python
-class Budget(Space):
-    limit: Param[int] = Param(int)
-    rate: Param[int] = Param(int)
-    claims = Users(SPEND)                  # every present node that references this budget
-
-    @constraint
-    def covered(self) -> bool | Rejected: ...   # refuses as "sales.budget=30, research.budget=20 exceed 40"
-
-class Department(Space):
-    budget: Param[Budget] = Param(Budget)  # a reference input
-    staff = Decision(int, values=(1, 2, 3))
-
-    @view
-    def spend(self) -> int:
-        return self.staff * self.budget.rate    # the referenced node's configuration
-
-    exports = {SPEND: spend}
-
-class Company(Space):
-    open_lab = Decision(bool, values=(False, True))
-    shared = Budget(limit=100, rate=10)
-    sales = Department(budget=shared)      # placed beside it: a reference
-    research = Department()
-    research.budget = shared               # assigned like any formal
-    lab = Department(budget=shared, when=open_lab)  # absent: not a user
-```
-
-### 2.1 Concepts and their lowering
+### 3.1 Concepts and their lowering
 
 | Concept | Written | Lowers to (evaluation graph) |
 |---|---|---|
-| Node declaration | `Room(area=12)`, placed by a class attribute | one scope; its members become nodes keyed `kitchen.area`, ... |
-| Formal | `area: Param[int] = Param(int)` | `param` at the root (a runtime input); in a child: `const` (literal), `alias` (reference), `decision` (fresh Decision) |
-| Unsupplied formal | left out of the call, never assigned | optional: `const` of the default, or `present` with no alternatives (unsupplied); required: a definition error when preparing |
-| Assignment | `hall.area = kitchen.area` | exactly a binding at the call: the formal's node is an `alias` |
-| Assignment through a path | `kernel.port.dtype = dtype` | a binding of the node `kernel.port` in this placement of `kernel`; its supplier is read in the body that declared `kernel` |
-| Reference | `kitchen.finish`, `House.kitchen.finish`, `h.kitchen.finish` | resolved by node identity through `Scope.children` (and `Scope.references`) to the member's node |
-| Reference input, fresh node | `Estate(home=House(budget=1))` | the node's scope placed at `home`; a presence node `home` |
-| Reference input, placed node | `Department(budget=shared)` | `Scope.references[formal] = <shared's scope>`; a presence node `sales.budget` (a `const` guarded by `shared`'s guard) |
-| Forwarded input | `team = Department(budget=budget)` inside a family with `budget: Param[Budget]` | the same scope reference as the family's own input |
-| Users | `claims = Users(SPEND)` | a `members` node whose alternatives are the users' `SPEND` views, with one member name (the user's input) per entry |
-| Guard | `Room(..., when=c)` | a `guard` node on the scope |
-| Decision over nodes | `Decision(values={"a": A(), "b": B(), "n": None})` | a `decision` node keyed `heating` (str domain = keys), one scope per candidate keyed `heating.a`, guarded by a `$selected` node |
-| Member through a choice | `heating.kw` | a `select` node `heating.$member.kw` keyed by the selector |
-| Selected key | `selected(heating)` | an `alias` of the selector (read-only) |
-| Candidate handle | `cyclic = C(...)` then `values={"cyclic": cyclic}` | nothing: the candidate's scope is reachable by node identity |
+| Declaration | `Room(area=12)`, placed by a class attribute | one scope; members become nodes keyed `kitchen.area`, ... |
+| Formal | `area: int = Param()` | `param` at the root (a runtime input); in a child: `const` (literal), `alias` (reference), `decision` (fresh Decision) |
+| Unsupplied formal | never assigned | optional: `const` of the default, or `present` with no alternatives; required: a definition error when preparing |
+| Assignment | `hall.area = kitchen.area`, at any depth | a layer of the member; the outermost wins |
+| Pinned Decision | `room.finish = 2` from an enclosing body | `const` (or `alias`) with the declared domain as a check; no key |
+| Replaced Decision | `room.finish = Decision(values=(1, 2))` | `decision` under the same key, with a contract domain |
+| Replaced child | `wing.kitchen = LargeRoom()` | the new node's scope at the slot's name and guard |
+| Reference input | `output: Stream = Param()` | a presence node plus `Scope.references` (or a placement for a fresh node) |
+| Projection | `output.spec.payload_bits` | a `derived` node `...$project.N` reading the attribute |
+| Users | `claims = Users(SPEND)` | a `members` node over the users' exports |
+| Decision over nodes | `heating: A \| B = Decision(values={...})` | a selector keyed `heating`, one guarded scope per candidate |
+| Member through a choice | `heating.kw` | a `select` node `heating.$member.kw` |
 | Whichever is present | `Present(a.out, b.out)` | a `present` node |
-| Located formal | `a: LocatedParam[int] = Param(Located)`; `Match(a=kitchen.finish)` | a `locate` node; value `(node name relative to the reading scope, member name)` |
-| Quantification | `Members(COST)` | a `members` node over the children's exported views |
-| Obligation | `@view(requires=(costs, within, matched.agreed))` | view constraints; `Members` and `Users` oblige each entry |
-| Unnamed Decision | `Fifo(depth=Decision(int, values=(4, 8)))` | a `decision` at `second.depth` (one use only) |
-| Named shared Decision | `Decision(int, values=(1, 2), name="lanes")` at several calls | one `decision` keyed `<lowest common scope>.lanes`; each use an editable `alias` |
-| Graph as data | `composite("Pipeline", {"s0": s0, ...})` after assigning in a loop | a family, collected like a class body |
+| Forwarding alias | any `alias` without a domain | kept as a node; readers bypass it (§1.3) |
 
-The compile step: `configure(node)` checks that `node` is an unplaced
-declaration (a root) and that every required formal of the root is supplied.
-If every root binding is a plain value, it reuses the family's model (compiled
-once, cached on the family) and binds the values as runtime inputs. If a root
-binding supplies structure (a node, a reference, a fresh Decision, or a
-binding through a path), the model is compiled for that declaration and
-cached on it. Preparation then freezes the declarations (§4.5).
+The compile step: `design_space(node)` checks that `node` is an unplaced
+declaration and that the root's required formals are supplied. If every root
+setting is a plain value for its own formals, it reuses the family's model
+(compiled once, cached on the family) and binds the values as runtime inputs;
+otherwise (a node, a reference, a fresh Decision, a pin, or any path
+assignment) the model is compiled for that declaration and cached on it.
+Preparing a model freezes every declaration it instantiates, and
+`design_space` freezes its root: an assignment after that is refused, because
+the cached model would silently miss it (unchanged from iteration 2).
 
-### 2.2 Reference inputs
+### 3.2 Reference inputs and `Users`
 
-`Param(Stream)` returns, at runtime, a declaration-mode `Stream` object whose
-record is a `FamilyFormal`; it is typed `Param[Stream]`. Its supplier is a
-node declaration. Whether that node is placed *there* or *referenced* cannot
-be decided at the call: in `edge = Stream(); k = K(output=edge)` the stream is
-not yet placed when `K(...)` runs (class-body placement happens in
-`__set_name__`, after the body). The linker decides:
+A `Param` annotated with a family is a **reference input**. Its supplier is a
+declaration; whether it is placed there or referenced is decided at link,
+because class-body placement happens in `__set_name__`, after the body:
 
-- **fresh** (no class attribute, candidate or composite member placed it): the
-  node is placed at the input, nested, keyed below the node that placed it
-  (`k.output.spec`). A fresh node supplied to two inputs is refused ("placed
-  by none: place it so that each input references it").
-- **placed** (a class attribute or a candidate): a reference. The linker
-  resolves it after every scope is allocated, in scope order, in the body that
-  wrote it (§4.7).
+- **fresh** (no class attribute, candidate, replacement or composite member
+  placed it): placed at the input, keyed below the node that placed it
+  (`k.output.spec`). A fresh node supplied to two inputs is refused.
+- **placed**: a reference, resolved after every scope is allocated, in the body
+  that wrote it: a sibling, a candidate, or a forwarded reference input of that
+  body. A forwarded input resolves to the node it finally references.
 
-Either way the input gets a **presence node** keyed like the input
-(`compute.weights_stream`): a constant guarded by the reached node's guard. An
-unsupplied optional input (`Param(Stream, default=UNSUPPLIED)`) is a `present`
-node with no alternatives. Reading `self.output` in a method attaches the
-referenced scope; every read through it is inapplicable when that node is
-absent, exactly as for a guarded child. An unsupplied optional input reads its
-presence first, which halts the method as unsupplied.
+Either way the input gets a presence node keyed like the input (a constant
+guarded by the reached node's guard; `present` with no alternatives when an
+optional input is unsupplied). In a method `self.output` is the referenced
+configuration, inapplicable when that node is absent. A reference written by an
+enclosing body through a path (`department.team.account = central`) resolves
+in that body, so the user is named `department.team`.
 
-### 2.3 `Users(key)`
+`Users(key)` is declared in the referenced node: one `Located(node=<user's
+name beside this node>, member=<the user's input>, value=<the user's export of
+key>)` per (user, input), in declaration order; users that do not export `key`
+are omitted at link, absent ones at run time; as an obligation each user counts
+once. A composite forwarding its input is itself the user (closure); see §2.
 
-`Users(key)` is declared in the node that is referenced. It lists every
-present node whose input references this node directly: one entry per
-(user, input) pair, `Located(node=<user's name beside this node>,
-member=<the user's input name>, value=<the user's export of key>)`, in
-declaration order (scope order, then the user's formal order). Users that do
-not export `key` are omitted at link time; absent users (guarded off, an
-inactive candidate) are omitted at run time. As an obligation, each user's
-export is obliged separately; a user referencing the node through two inputs
-is obliged once. The engine attaches no meaning to the entries: direction,
-roles and cardinality are the reading family's business.
+### 3.3 Streams (`finn.kernels.streams`)
 
-A **user** is the node whose input names this node. When a composite forwards
-its own input to a child (`Division(budget=shared)` whose `team =
-Department(budget=budget)`), the user of `shared` is `division`, not
-`division.team`: a composite is a node like any other, and presents its
-children's exports itself if it wants to be seen (closure, acid test 6). A
-fresh node placed at an input has its placing node as user, named `None`
-(the placing node is its parent).
-
-### 2.4 Streams (finn.kernels.streams)
+A `Stream` is an ordinary Space that kernels reference: `spec: StreamSpec =
+Param(semantics=STREAM_SPEC)`, `port: str = Param(required=False)` (the AXIS
+name when it is a boundary), `ends = Users(PORTS)`. A kernel has one reference
+input per stream it sits on and exports `PORTS`, a `Ports` record keyed by
+those input names, each a `Port(Flow.IN | Flow.OUT, contract)`. The stream
+refuses a second producer or consumer and an unused stream, and turns a
+missing side into the composite's boundary named by `port`. A
+`BufferedStream` owns `transport: _Direct | StreamFifo = Decision(...)`.
+**The anchoring rule:** a stream's `spec` must not depend on its users (kernels
+read it to build their contracts); a violation is a dependency cycle reported
+with its path. MVAU now reads:
 
 ```python
-class Stream(Space):                         # a relation between its users
-    spec: Param[StreamSpec] = Param(STREAM_SPEC)
-    port: Param[str] = Param(str, default=UNSUPPLIED)   # the ABI name, if a boundary
-    ends = Users(PORTS)                      # each kernel exports its ports keyed by input name
-
-    @derived(semantics=ENDPOINTS)
-    def endpoints(self) -> Endpoints | Rejected: ...    # one producer "out", one consumer "in"
-    @constraint
-    def compatible(self) -> bool | Rejected: ...        # contracts (and a FIFO stage) agree
-    connection = View(link, requires=(compatible,))
-    exports = {CONNECTION: connection}
-
-class BufferedStream(Stream):
-    transport = Decision[_Direct | StreamFifo](
-        values={"direct": _Direct(), "fifo": StreamFifo(spec=Stream.spec)})
-    stage = View(transport.stage)
-```
-
-A kernel has one reference input per stream it sits on and exports
-`PORTS: ports`, a `Ports` record keyed by those input names; each `Port` is
-`Port(Flow.OUT | Flow.IN, contract)`. The stream classifies its users by flow,
-refuses a second producer or consumer (`stream-users`) and an unused stream
-(`stream-unused`), and turns a missing side into the composite's boundary:
-`boundary_contract(self.port, self.spec, ...)`, the AXIS target on the input
-side and the initiator on the output side. `netlist` is unchanged.
-
-MVAU now reads:
-
-```python
+class MVAU(Space):
+    repetitions: int = Param()
+    matrix_height: int = Param()
+    activation_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
+    weights: IntegerTensor = Param(semantics=INTEGER_TENSOR, required=False)
+    pe: int = Decision(domain=divisors_of(matrix_height))
+    ...
     activations = Stream(spec=activation_spec, port="in0_V")
-    replayed = Stream(spec=replayed_spec)
     weight_stream = BufferedStream(spec=weight_spec, port="in1_V")
-    results = Stream(spec=result_spec, port="out0_V")
-
-    replay = ReplayBuffer(input_stream=activations, output_stream=replayed,
-                          sequence_length=synapse_folds, replay_count=neuron_folds)
-    compute = DotpAxiKernel(..., activation_stream=replayed,
-                            weights_stream=weight_stream, result_stream=results)
+    compute = DotpAxiKernel(..., activation_stream=replayed, weights_stream=weight_stream)
     cyclic = CyclicDelivery(dtype=weights_dtype, form=weight_period, values=weights,
                             output_stream=weight_stream)
-    implementation = Decision(values={"external": None, "cyclic": cyclic})
+    implementation: CyclicDelivery | None = Decision(values={"external": None, "cyclic": cyclic})
     delivery = selected(implementation)
-    modules = Members(MODULE)
-    streams = Members(CONNECTION)
 ```
 
-In the external case `weight_stream` has one user (`compute`, a consumer), so
-it is the boundary `in1_V`. In the cyclic case the `cyclic` candidate
-references it as its producer and it is internal. The old `in0_V`/`in1_V`/
-`out0_V` views, the `external` derivation and the `Present(in1_V,
-cyclic.output)` are gone: "whichever driver is present" is now what `Users`
-sees.
+`Constants` (`tests/kernels/test_declared_streams.py`) and every kernel family
+use the same form.
 
-**The anchoring rule.** A stream's `spec` must not depend on its users: kernels
-read it to build their port contracts (dotp's `_port` reads
-`self.weights_stream.spec`). `tests/kernels/test_declared_streams.py` declares
-a stream that derives its spec from its producer's contract, with a producer
-whose contract reads the spec. The engine refuses it at evaluation with the
-cycle path:
+### 3.4 Rules carried from iterations 1–2 (unchanged)
 
-```
-edge.spec (dependency cycle): edge.spec (derived) -> edge.ends (value)
-  -> producer.ports (value) -> producer.ports (derived) -> edge.spec
-```
+- **Shared decisions are named.** An inline Decision supplying one member is
+  keyed by that member's path; supplying two or more it must be named: a class
+  attribute, or `Decision(..., name="lanes")`, owned by the lowest scope
+  containing its uses and keyed `<owner>.<name>`.
+- **Reference visibility is lexical:** a reference resolves in the body that
+  wrote it; a family reaches an ancestor's node only through an input.
+- **Place once:** a declaration is placed exactly once: a class attribute, a
+  Decision candidate, a replacement, or (when nothing else places it) the one
+  reference input it is supplied to. A class attribute naming a candidate of a
+  Decision in the same body is a handle.
+- **Boundary names** come from a stream's `port` input, not its node name (a
+  node name is identity and prefixes persisted keys).
+- **`Present(a, b)`** is the only way to write alternative suppliers.
+- **Literals** are recognized and frozen once, where they are written.
+- **Where errors appear:** unknown members, positional arguments, bad literals,
+  wrong families, behaviour targets and same-record double assignment at the
+  call or assignment; missing formals, double assignment by one body through
+  two routes, unresolvable references, unnamed shared decisions and
+  unresolvable annotations when preparing.
+- **`configure` rejected names** (iteration 1) still apply to its successor:
+  `compile` shadows a builtin, `instantiate` collides with calling a family.
 
-The replay buffer shows the anchored alternative: its output contract derives
-from its *input* stream's spec, not from `replayed.spec`, so nothing cycles.
+## 4. Public API
 
-## 3. Public API
-
-- **Families and nodes:** `Space`, a family call `F(**formals, when=...)` (any
-  formal may be left out), assignment `node.formal = value`, `configure(node)
-  -> F`, `composite(name, members, base=, exports=)`.
-- **Members:** `Param` (plus `LocatedParam` via `Param(Located)`, and a
-  reference input via `Param(Family)`, optional with `default=UNSUPPLIED`),
-  `UNSUPPLIED`, `Const`, `Decision` (over values, with `name=` for a shared
-  one, or over nodes via `values={key: node | None}`), `selected(decision)`,
-  `Derived`/`@derived`, `Constraint`/`@constraint`, `ConstraintGroup`,
-  `View`/`@view(requires=...)`, `ViewKey` + `exports`.
+- **Families and declarations:** `Space`, a family call `F(**members, when=...)`
+  (any member may be left out; a keyword may pin a Decision), assignment
+  `node.member = value` at any depth, `design_space(node) -> F`, `Model`,
+  `composite(name, members, base=, annotations=, exports=)`.
+- **Members:** `Param(default=, required=, semantics=)`, `LocatedParam()`,
+  `Const`, `Decision(values= | domain=, semantics=, when=, name=)`,
+  `selected(decision)`, `Derived`/`@derived`, `Constraint`/`@constraint`,
+  `ConstraintGroup`, `View`/`@view(requires=...)`, `ViewKey` + `exports`,
+  `accepted(view)`.
 - **Graph primitives:** `Present(*refs)`, `Members(key)`, `Users(key)`, `Located`.
-- **Configurations** (unchanged): reads, `query`, `inspect`, `view`, `field`,
-  `root`, `with_choices` / `try_with_choices` taking `{reference: value}`
-  mappings, `Change` objects, or keywords for the point's own decisions.
-- **Inspection:** as in iteration 1, and `inspection.declaration(node)` now
-  reports `bindings`, `nested` (formals assigned through a path, keyed
-  `"port.dtype"`), `unsupplied` (required formals not yet supplied) and
-  `frozen` (why assignment is closed), all before compiling.
-- **Errors:** `ReferenceUseError` (a `TypeError`) on value-like use of a
-  reference; `DefinitionError` for a formal nothing supplies, a formal
-  supplied twice, an assignment after freezing, an unnamed shared decision,
-  and an unresolvable reference.
-- **Kernels:** `finn.kernels.streams`: `Stream`, `BufferedStream`, `Port`,
-  `Ports`, `PORTS`, `Flow`, `produces`/`consumes`, `Endpoints`,
-  `CONNECTION`, `MODULE`, `netlist`. `commit(point, {key: value})` as before.
+- **Configurations:** reads, `query` (nodes answer their configuration),
+  `present`, `inspect`, `view`, `field`, `root`, `with_choices` /
+  `try_with_choices`.
+- **Inspection:** as before, plus `provenance`, `pinned`, `Provenance`,
+  `Layer`, `NodeInfo.provenance`, `EvidenceNode.via`.
+- **Errors:** as before; a pinned key is refused with its provenance, a stale
+  persisted key on decode.
 
-## 4. Decisions, with reasons and rejected alternatives
-
-### 4.1 The compile step is `configure` (iteration 1, unchanged)
-
-The result is a *configuration*, and the codebase already says so
-(`ConfigurationResult`, `ConfigurationError`). `compile` shadows a builtin,
-`space.compile` forces a qualified import, `instantiate` collides with calling
-a family, `realize` is vague. `compile_space(family)` survives as the
-internal, cached template compiler.
-
-### 4.2 `Members(ViewKey)` over structural alternatives (iteration 1, unchanged)
-
-Matching by member name cannot be typed (Python cannot project an attribute
-type out of a Protocol) and matches by accident; matching by a declaration
-forces a common base. A `ViewKey` export is an explicit, typed opt-in,
-independent of the family hierarchy. `Users` reuses it for the same reasons:
-`Users(PORTS)` sees only users that opted into `PORTS`.
-
-### 4.3 `requires=` instead of `constraints=` (iteration 1, unchanged)
-
-The list holds constraints, groups, views, references to child views,
-`Members` and now `Users`.
-
-### 4.4 Shared decisions are named
-
-A Decision that no class attribute names is *unnamed*. Every place it
-supplies a formal (a call keyword, an assignment, a path assignment) is
-recorded on the Decision as a site when the call or assignment runs.
-
-- **One site:** it belongs to the node whose formal it supplies, keyed by that
-  formal's path (`second.depth`). A family placed twice gets two decisions,
-  as for member decisions (`StreamFifo`'s inline depth is per placement).
-- **Two or more sites:** a `DefinitionError` when a model using it is
-  prepared, listing the sites: *"Decision (declared at probe.py:6) supplies 2
-  formals (Port.lanes (declared at probe.py:8), Port.lanes (declared at
-  probe.py:9)): a shared decision must be named. Make it a class attribute, or
-  pass Decision(..., name="..."); while configuring Shared node (declared at
-  probe.py:10)"*. The check uses the recorded sites, so it also catches one
-  object used in two different family bodies.
-- **Named by a class attribute:** owned by that family's scope, as always; its
-  uses are plain aliases.
-- **Named with `name=` (created outside a class body):** the ownership rule of
-  iteration 1 is kept. It is one decision owned by the **lowest common scope
-  of the nodes it supplies** (per instance of the authoring body), keyed
-  `<owner>.<name>`. It applies whenever its owner does; each use is an alias
-  that keeps its own node's guard and through which the decision may be
-  edited. A name that collides with a member of the owner is refused. A
-  single-use named decision is owned by the node it supplies
-  (`s.<name>`). Giving `name=` to a class attribute with a different
-  attribute name is refused.
-
-**Rejected: first-use keying** (iteration 1). Reordering declarations changed
-a persisted key. **Rejected: owning named decisions by the authoring body**
-rather than the lowest common scope: simpler, but the review asked to keep
-the rule, and it gives the tighter applicability (a decision used only inside
-`x` applies with `x`).
-
-### 4.5 Assignment, and how freezing happens
-
-`node.formal = value` goes through `Space.__setattr__` (hidden from mypy, see
-§5) to the same validation as a call keyword: unknown formals, literal
-recognition and snapshot, reference semantics, and node family checks happen
-at the assignment; everything that needs the graph happens at link. A binding
-records where it was written, so errors name both sites:
-
-```
-<Sink node (declared at test_design_graph.py:450)>.width (assigned at
-test_design_graph.py:451): the formal is already supplied at
-test_design_graph.py:450; a formal has one supplier (write alternatives as
-Present(a, b))
-```
-
-A formal has **one supplier**. Several suppliers are `Present(a.out, b.out)`.
-
-**Freezing.** A declaration is mutable until one of two things happens:
-
-1. a model containing it is prepared: after a successful link, `_publish`
-   freezes every node declaration instantiated as a scope in that model
-   (class-body nodes of every family involved, candidates, nested nodes, and
-   the root record when it is compiled per declaration);
-2. `configure()` takes it as a root (also when it reuses the family's model).
-
-An assignment checks the node that holds the binding (the path's first node)
-and is refused with the reason: *"... is frozen (Parent was prepared); a
-declaration can be assigned only until its family is prepared or configure()
-takes it"*. A failed preparation freezes nothing, so a definition error can be
-fixed by assignment and retried.
-
-The reason is the model cache: `compile_space` caches one model per family
-and `configure` one per structural root, and selections replay by model
-identity. An assignment after preparation would otherwise be silently
-invisible to the cached model, or produce two models of one declaration.
-
-- **Rejected: freeze at class creation.** Nothing is cached before
-  preparation, so there is nothing to protect yet; and it forbids joining a
-  graph built as data after `composite()` has named its nodes.
-- **Rejected: invalidate and relink on mutation.** Configurations and
-  selections already handed out would describe a declaration that no longer
-  exists.
-- **Rejected: snapshot at preparation, keep mutating.** A later assignment
-  would be accepted and ignored: a silent trap.
-
-### 4.6 Assignment through a path (addition)
-
-`Reusable` places `port = Port()` and leaves its formals to whoever places a
-`Reusable`. With `Bind` gone, the enclosing family writes `kernel.port.dtype =
-dtype`. Setting the binding on the `port` declaration itself would change
-*every* `Reusable`, so the binding is stored on the path's first node
-(`kernel`), keyed by the rest of the path, and applies to that placement
-only. Its supplier is read in the body that declared `kernel`. Two bodies
-supplying the same formal through different paths meet only at link, where
-it is the same "already supplied" definition error. Paths through a reference
-input or a Decision are refused: assign the node itself.
-
-- **Rejected: refuse path assignment** and require re-exposure by formals.
-  That works (`test_reexposed_nested_slot...` shows both), but loses a form
-  the review did not ask to remove.
-
-### 4.7 Reference visibility: where a reference input may point
-
-**Decided: a reference resolves lexically, in the body that wrote it.** It may
-name a node placed in that body (a sibling class attribute, a candidate or a
-candidate handle, a composite member), or forward one of that body's own
-reference inputs. It may not name a path into another node
-(`K(input=sub.inner)`), and it cannot name an ancestor's node except through a
-forwarded input.
-
-- **Hermeticity.** A family's meaning depends only on its formals. An upward
-  reference would make a family's graph depend on where it is placed; the
-  explicit way to reach an ancestor's node is to declare an input and have
-  the parent pass it down.
-- **One resolution rule.** It is the rule of value references (`kitchen.area`
-  resolves in the writing body by node identity), and place-once gives node
-  identity equal to placement identity.
-- **Users stay nameable.** Every user is then a descendant of the referenced
-  node's parent, so `Users` names it relative to that body (`"compute"`,
-  `"implementation.cyclic"`), the same frame as `Members`.
-- **Rejected: anything visible by path** (siblings' descendants). A user would
-  sit outside the referenced node's parent, `Users` would need upward names,
-  and `sub`'s internals would become part of its interface.
-- **Rejected: siblings only.** Forwarding is what makes a composite a node
-  like any other: `Division(budget=shared)` passes `shared` on to its team.
-
-The error for a node placed elsewhere: *"team.budget: references Budget node
-placed at Other.held (declared at ...), which is not placed in <root>: a
-reference input names a node placed beside it, or forwards an input of the
-enclosing family"*.
-
-### 4.8 Boundary streams are named by a `port` input
-
-**Decided: `Stream.port: Param[str] = Param(str, default=UNSUPPLIED)`**, the
-AXIS name presented when the stream is a boundary. MVAU:
-`weight_stream = BufferedStream(spec=weight_spec, port="in1_V")`.
-
-- A node name is identity: it prefixes persisted keys
-  (`weight_stream.transport`, `weight_stream.transport.fifo.buffer.depth`)
-  and instance names (`u_weight_stream_fifo`). An ABI name is an external
-  contract. They vary independently: `weight_stream` is `in1_V` only in the
-  external case.
-- An ABI name is legitimate design data of the stream, like its spec. It is
-  supplied where the stream is declared, next to the spec.
-- **Rejected: name the node by its port** (`in1_V = BufferedStream(...)`).
-  It renames the persisted FIFO and transport keys to `in1_V.transport...`
-  and gives an internal stream (the cyclic case) an ABI name as identity.
-- **Rejected: derive it from the user's input** (`weights_stream`). A
-  kernel's internal names would leak into the composite's ABI, and two
-  boundaries could collide.
-- **Rejected: a composite-level map** `{stream: name}`: a second place to keep
-  in sync with the streams.
-
-Direction is a `Flow` in the kernel's `Port` record, stated by the kernel.
-Deriving it from the transport's endpoint (initiator = produces) would work
-here, but conflates a signal role with a stream relation.
-
-### 4.9 What happens to `Present`
-
-`Present` is now the **only** way to write alternative suppliers
-(`sink.width = Present(a.out, b.out)`). Several `Bind`s to one formal used to
-be an implicit `Present`; several assignments are an error. `Present` stays
-usable wherever a value reference is (a call keyword, an assignment, a
-`View`'s source) and keeps its semantics: unresolved while any source is,
-refused if two are present, unsupplied if none is. In MVAU it disappeared:
-which weight driver is present is now a question the stream answers through
-`Users`, structurally, rather than a value-level choice between two contract
-references.
-
-### 4.10 The place-once rule (iteration 1, extended)
-
-A node declaration is placed exactly once: by a class attribute, as a
-Decision candidate, or (only when nothing else places it) at the one reference
-input it is supplied to. A class attribute naming a candidate of a Decision in
-the same body is a handle, not a placement. A second placement is refused and
-names both sites. A node supplied to a reference input *and* placed elsewhere
-is referenced, not placed twice. `configure()` refuses a node that is placed
-or supplied to an input.
-
-### 4.11 Smaller decisions
-
-- **Literals are frozen once, at the call or assignment.** An unrecognized
-  literal is a `DefinitionError` there.
-- **Where errors appear.** Unknown formals, positional arguments, bad
-  literals and wrong node families: at the call or assignment. Missing
-  formals, double supply across bodies, unresolvable references and unnamed
-  shared decisions: when preparing.
-- **The root's required formals** are checked by `configure` before
-  compiling: *"width is not supplied: Sink.width (declared at x.py:3) is
-  required; supply it at the call (width=...) or assign it before configure();
-  while configuring Sink node (declared at x.py:10)"*.
-- **`decision.member`** (iteration 1): a name several candidates share is
-  linked as a `select` node; one candidate's name resolves to that
-  candidate's own member.
-
-## 5. Typing results
-
-The mechanism: `SpaceMeta` is decorated with `dataclass_transform(kw_only_default=True,
-field_specifiers=(when-field,))`, and **formals are annotated**
-(`area: Param[int] = Param(int)`). `Param` is deliberately *not* a field
-specifier any more, so every annotated formal has a default at the type level
-and may be left out of a call. The type of each keyword, and of each
-assignment, is `Param.__set__`'s value type: `T | ValueRef[T] | View[T] |
-BoundView[T]` (plus `Located[T]` for a `LocatedParam[T]`). `Space.__setattr__`
-exists only at runtime (`if not TYPE_CHECKING`): a declared `__setattr__`
-would make mypy accept assignment to *any* attribute.
-
-Evidence: [`tests/core/space/typing/positive.py`](../../tests/core/space/typing/positive.py),
-`negative.py.txt` (28 expected errors, matched line for line),
-`extensions.py` / `extensions_negative.py.txt` (16), and the fixture in
-`test_nested_parameter_bindings.py`, all under `mypy --strict`.
-
-| Claim | mypy result |
-|---|---|
-| A bare `Room()` type-checks | **exact** (`configure(Room())` is `Room`). Accepted loss: a missing required formal is no longer a mypy error |
-| `hall.area = kitchen.area` in a class body, and `current.width_in = previous.width_out` in a loop | **checked** by `Param.__set__`: `bare.width = "four"` is an error |
-| Assignment to something that is not a formal | **error** (`"Child" has no attribute "depth"`), because `__setattr__` is hidden |
-| Reference input keyword and assignment | **exact**: `Producer(output=child)` and `later.output = child` with a non-`Stream` are errors |
-| `self.output` / `self.output.spec` in a method | **exact** (`Stream`, `int`); `return self.output.spec` from a `str` method is an error |
-| `output.spec` in a class body | **not typed**: `output` is `Param[Stream]`. It works at runtime (a `MemberRef` through the input) |
-| `Users(COST)` in a method | `tuple[Located[int], ...]`, exact |
-| `Decision(int, values=(1, 2), name="shared")` | `Decision[int]`, exact |
-| `kitchen.finish` / `kitchen.cost` in a class body, `self.kitchen.finish` | unchanged from iteration 1: `int`, `BoundView[int]`, `int` |
-| `heating.kw` with candidates `Boiler \| HeatPump` | exact only with `Decision[Boiler \| HeatPump](...)` (a dict display is joined) |
-| A `None` candidate | `N \| None` (kept, sound); class-body member access goes through a candidate handle |
-| Edits `{House.kitchen.finish: 2}` | keys are `Any` in the mapping: no static check |
-| `point.query(K.output)` (a reference input's presence) | typed `QueryResult[Stream]`, answers `Available(True)`: a typing lie (R19) |
-| `Department(budget=holder.inner)` (a path into another node) | **not an error** (the path is typed `Budget`); refused at the call at runtime |
-
-What mypy could not do: know that a later assignment supplies a formal (so
-missing formals are a preparation error); infer a union from a dict display;
-narrow `N | None` in a class body; tell a reference from its value (the
-premise of option A); type a member of a reference input in a class body.
-
-## 6. Resistance log: where the existing engine pushed back
+## 5. Resistance log: where the existing engine and mypy pushed back
 
 | # | Resistance | Change | Reading |
 |---|---|---|---|
-| R1 | In a class body, sibling declarations have no owner or placement until `__set_name__` runs after the body; `Room(finish=member)` and `Room(finish=Decision(...))` look alike, and so do `K(output=edge)` with `edge` a sibling and with `edge` fresh | Classification (fresh decision, member, and now fresh node vs reference) happens at the link | Node calls store raw suppliers; the call checks names, literals and families, the link checks structure |
-| R2 | `dataclass_transform` fields must be *annotated* | Formals annotated (`x: Param[int] = Param(int)`) | The one authoring cost of typed calls |
-| R3 | A field specifier call without `default=` makes the field required, so a bare `Room()` was a mypy error (iteration 1 needed `OPEN`) | `Param` removed from `field_specifiers`: every formal has a default at the type level; `__set__` still types values | The type level cannot know about later assignments; the runtime reports the missing formal when preparing |
-| R3b | A declared `__setattr__` makes mypy accept assignment to any attribute | `Space.__setattr__`/`__delattr__` defined under `if not TYPE_CHECKING` | Assignment is typed through the descriptors alone |
-| R4 | Dict displays are joined; `None` makes the union Optional | `Decision[A \| B](...)`; candidate handles | Kept as decided |
-| R5 | Every `Space` node is a descriptor, so class-level annotations and properties typed as a `Space` read through `__get__` | Instance-level attributes in records | Unchanged |
-| R6 | Python 3.10 wraps `__set_name__` exceptions in `RuntimeError` | `composite` unwraps | Assignment errors in a class body are not wrapped: they are raised by the statement |
-| R7 | The linked model is frozen, so `decision.member` cannot create a selection at query time | Shared names linked eagerly | Unchanged |
-| R8 | `Node.scope` meant both "owning scope" and "whose member map holds it" | A named shared decision gets its own node in the owner; uses are editable aliases | Now only for `name=` decisions |
-| R9–R13 | (iteration 1: constraint descriptors, mode detection, one model per family, dotted candidate names, selector identity) | Unchanged | |
-| R14 | Assignment through a path would mutate a class-body declaration shared by every placement | Stored on the path's first node, merged at link per placement; double supply across bodies detected at link | Per-placement bindings are link-time data, like `Bind` was |
-| R15 | A method halts only through a *blocked node read*; raising `ValueUnavailableError` manually is a programmer failure | Every reference input has a presence node; an unsupplied optional input reads it | A node reference needs a node in the value graph to be unsupplied |
-| R16 | `Users` reads one export per user | A kernel exports all its ports as one `Ports` value | A refusal of one port reaches every stream of the kernel (dotp's element check); finer attribution needs per-input exports |
-| R17 | A `members` node carried one member name (the key) | Its value is a tuple of member names, one per entry | The only runtime change; `Members` passes the key name for each entry |
-| R18 | Model caches (per family, per root) assume immutable declarations | Freezing on preparation and on `configure` | Mutability is bounded by the cache, not by class creation |
-| R19 | A reference input's presence node is found by the formal's declaration, which mypy types as `Param[Family]` | Accepted: `query(K.output)` is typed as the family but answers `True` | Presence could get its own typed accessor |
-| R20 | A stream's `spec` read by its users must not be derived from them | Documented and tested (anchoring rule); detected at evaluation with the cycle path | Method reads are discovered at run time, so the static order cannot see this cycle |
+| R1 | Sibling declarations have no owner until `__set_name__` runs after the body | Classification (fresh decision, member, fresh node vs reference) at link | Unchanged |
+| R2 | `dataclass_transform` fields must be annotated | Members annotated with their **value type** | Now the one source of the value type |
+| R3 | A field specifier without a default makes a field required | `Param`/`Decision` are no field specifiers and are typed as their value (`__new__` returns `T`) | Their call is a default: every member optional at the call |
+| R3b | A declared `__setattr__` accepts any attribute | Hidden under `if not TYPE_CHECKING` | Unchanged; the annotation types assignment |
+| R4 | Dict displays are joined; `None` makes the union Optional | Resolved by annotation (`heating: A \| B \| None`) | See R21 |
+| R14 | Assignment through a path would mutate a shared class-body declaration | Stored on the path's first node, keyed by **member path** | Paths survive a replaced intermediate node |
+| R15 | A method halts only through a blocked node read | Presence nodes; `present()` reads without halting on absence | |
+| R16 | `Users` reads one export per user | Unchanged: a kernel's port refusal reaches all its streams | Deferred to §2 (keyed gather) |
+| R17 | A `members` node carried one member name | Tuple of member names | Unchanged |
+| R18 | Model caches assume immutable declarations | Freezing on preparation and on `design_space` | Unchanged |
+| R19 | `query(K.output)` typed as the family, answered `True` | **Resolved**: answers the configuration; `present()` | |
+| R20 | A stream's `spec` must not derive from its users | Anchoring rule, detected at evaluation | Unchanged |
+| R21 | mypy infers a generic call's type variable from its arguments before the declared type, so a dict display of candidates joins to their base | A Decision over nodes returns `Any`; collection checks candidates against the annotation | The annotation types the choice |
+| R22 | Annotations are strings (`from __future__ import annotations`) and families declared in functions name function locals | The declaring frame's globals, class namespace and enclosing locals are captured when a member is created | Resolution works for local families and forward references |
+| R23 | `Param()` runs before its name or annotation exists, yet `output.spec` in the body needs the family | The Param finds itself in the class namespace being built and reads its annotation there | `__getattr__` only for members of the family: introspection is unaffected |
+| R24 | mypy honours a `__new__` that returns a non-instance only when there is no `__init__` | `Present` builds itself in `__new__` | |
+| R25 | A node frame could make only one native call | A frame may make another after its first returns | Contract checks call the declared domain after the replacement's |
+| R26 | A replacement node's own settings sit innermost structurally but were written by an outer body | Layers ordered by the writing body's depth | Outermost is a property of bodies, not records |
+| R27 | A view reads as `BoundView[T]` through a node | `accepted(view) -> T` | Views as values is an open question (§9) |
+| R28 | A key typed as its value cannot say whether it is a Param or a Decision | `field(T) -> BoundDecision[T]` | Decision operations on a Param fail at runtime |
+| R29 | Bypassing an alias drops its guard | Bypass only when the alias's guard is the reader's or an outer one | A guarded node's alias read from outside keeps its hop |
 
-Carried over and still open: the design-graph spike's R6 (a refusal that
-reaches a view through both its output and an obligation is reported twice)
-and R7 (whole-snapshot caches, §9).
+Carried over and still open: the design-graph spike's R6 (a refusal reaching a
+view through both its output and an obligation is reported twice) and R7
+(whole-snapshot caches).
 
-## 7. What was removed
+## 6. What was removed
 
-Iteration 2:
+Iteration 3: `Param(T)` / `Param(Family)` / `Param(Located)` value-type
+arguments, `Param[T]` annotations, `Decision(T, ...)` and `Decision[T](...)`,
+`UNSUPPLIED` (public), `FamilyFormal` and `family_formal`, `Param.__set__`,
+`PlacementPlan`/`placement_plan`, `NodeDecl.supplied_at` and the identity-keyed
+`nested` map, the across-bodies "already supplied" rule, `SpaceModel`,
+`configure`, `compile_space`. Earlier removals stand (iteration 2: `OPEN`,
+`Bind`, first-use keying, `StreamLink`; iteration 1: `Subspace`, `ScopeBuilder`,
+`ValueKey`, `External`, ...).
 
-- `finn.core.space`: `OPEN`, `Bind`, the "missing formals" error at the call,
-  first-use keying of shared unnamed decisions, `NodeDeclaration.open`.
-- `finn.kernels.streams`: `StreamLink`, `BufferedStreamLink`, `_end`; located
-  `source`/`sink` formals.
-- `finn.kernels.mvau`: the boundary views `in0_V`, `in1_V`, `out0_V`, the
-  `external` derivation, and the `Present` over the weight stream's drivers.
-- `finn.kernels.dotp`, `streaming`: stream *spec* formals (now stream inputs).
-
-Iteration 1 (still gone): `Subspace`, `SubspaceChoice`, `ScopeBuilder`,
-`ValueKey`, `DecisionRef`, `AcceptedViewRef`, `ScopedValueRef`, `LocatedRef`,
-`located()`, `ChoiceCaseRef`, `collect_placement`, `SpaceModel.bind`, the
-top-level `compile_space`, calling a family to get a configuration, inline
-`Param` suppliers, nested `bindings={...}`, `required=`, `constraints=`,
-`External`, the `STAGE` key, and `configure(space_type, facts, choices)`.
-
-## 8. Key and identity changes
+## 7. Key and identity changes
 
 - **MVAU decision keys: none changed.** `compute.compute_pumping`,
   `implementation`, `implementation.cyclic.rom_style`, `pe`, `simd`,
   `weight_stream.transport`, `weight_stream.transport.fifo.buffer.depth`,
-  `weight_stream.transport.fifo.buffer.ram_style`: identical to iteration 1
-  ([`evidence/mvau-keys.diff`](evidence/mvau-keys.diff), and
-  `tests/kernels/test_mvau_delivery_choice.py`).
+  `weight_stream.transport.fifo.buffer.ram_style`.
+- **MVAU node keys and kinds: none changed** (`mvau_keys.py` on
+  `43d4576a6` and on this branch: identical output, [`evidence/mvau-keys.diff`](evidence/mvau-keys.diff) is empty).
 - **Top-level ABI port names: none changed.** `in0_V`, `in1_V` (external),
-  `out0_V`, from the streams' `port` inputs.
-- **Instance names: none changed.** `u_replay`, `u_compute`,
-  `u_implementation_cyclic`, `u_weight_stream_fifo`, and connection names
-  `activations`, `replayed`, `weight_stream`, `results`.
-- **MVAU node keys (not persisted) that changed**, from the full diff in
-  [`evidence/mvau-keys.diff`](evidence/mvau-keys.diff):
-  - removed: `in0_V`, `in1_V`, `in1_V.$guard`, `out0_V`, `external`, and per
-    stream `<s>.contracts`, `<s>.source`, `<s>.sink` and their `$located` /
-    `$present` nodes;
-  - added: per stream `<s>.ends` (`members`), `<s>.endpoints`, `<s>.port`;
-    per kernel `ports` (and `$output`); presence nodes
-    `replay.output_stream`, `implementation.cyclic.output_stream`;
-  - changed kind: `compute.activation_stream`, `compute.weights_stream`,
-    `compute.result_stream`, `replay.input_stream` from `alias` (a spec) to
-    `const` (a presence).
-- **Generic keys.** A named shared decision is keyed `<owner>.<name>` (was:
-  its first use). An unnamed shared decision no longer links. Edge
-  declarations (`hall_area`, `loop`, `e4`) no longer have nodes: the formal's
-  own node is the alias.
-- **Iteration 1 changes, still in force:** the cyclic candidate's node name is
-  `implementation.cyclic` and its instance `u_implementation_cyclic`
-  (`0d700b1ab`: `u_weights`); the selector node is the Decision itself;
-  choice-member nodes are `<choice>.$member.<name>`.
+  `out0_V`.
+- **Instance names: none changed** (`u_implementation_cyclic` since iteration 1;
+  `0d700b1ab` named it `u_weights`).
+- **Generic:** a pinned Decision's key disappears (by design) and is listed by
+  `inspection.pinned`; a projection adds `...$project.N` nodes; the root of a
+  declaration that pins or overrides below it is compiled per declaration.
+- **Evidence shape:** `explain` no longer lists a bypassed alias as a node; it
+  appears in the reader's `via`.
+- **Messages:** "unknown formals" → "unknown members"; "while configuring" →
+  "while opening the design space of"; "already supplied" → "already assigned
+  ... in this body".
 
-## 9. Evidence
+## 8. Evidence
 
-All runs are on `spike/space-declarative-2`. Transcripts are under
-[`evidence/`](evidence/); `evidence/README.md` lists them.
+All runs are on `spike/space-declarative-3`; transcripts are under
+[`evidence/`](evidence/) (`evidence/README.md` lists them).
 
 | Evidence | Result |
 |---|---|
-| Gate `check-kernels.sh` (normal `PATH`, Xilinx 2025.2 `xelab`/`xsim` present) | Space **363 passed**; kernels **761 passed, 0 skipped**, including the 9 XSim tests; format, lint and strict mypy clean |
+| Gate `check-kernels.sh` (normal `PATH`, Xilinx 2025.2 `xelab`/`xsim`) | Space **384 passed**; kernels **763 passed, 0 skipped**, including the 9 XSim tests; format, lint, strict mypy clean |
 | XSim tests, run separately | **9 passed** ([`evidence/xsim-tests.txt`](evidence/xsim-tests.txt)) |
 | Gate `check-dataflow-design.sh` | **16 passed**, clean |
-| House toy | `tests/core/space/test_house.py`: 5 tests, bare `hall = Room()` + `hall.area = kitchen.area` |
-| Generic acid tests | `tests/core/space/test_design_graph.py`: 14 tests (13 functions). Accumulator loop by `adder.back = register.q`; pipeline built as data by assignment in a loop; `Present` by assignment; closure; reducibility; supplied-formal and unsupplied-formal errors |
-| References and users | `tests/core/space/test_references.py`: 9 tests. Shared `Budget` with `Users` refusing with located names; a guarded department dropping out; a choice candidate referencing the shared node; absent referenced node; fresh node placed at the input; forwarding; visibility, reach-into-a-node and placed-by-none errors |
-| Assignment rules | `test_nested_parameter_bindings.py`: unnamed shared decision error, named shared decision (and its name checks), path assignment, double supply, assignment after freezing, `configure` freezes its root |
-| Streams | `tests/kernels/test_declared_streams.py`: 8 tests. `Constants` in the stream form, two producers refused, a boundary without a port, the anchoring cycle |
-| Typing | as §5, all under `--strict` (`test_typing.py`, `test_extensions.py`, `test_nested_parameter_bindings.py`) |
-| MVAU fingerprints | [`evidence/fingerprints.txt`](evidence/fingerprints.txt): identical to iteration 1. `external`, `fifo-external`, `padded-output`, `pumped-dsp58` equal `0d700b1ab`; `cyclic-block` and `fifo-cyclic` differ only by the cyclic instance's name: [`fingerprints_renamed.py`](fingerprints_renamed.py) renames `u_implementation_cyclic` to `u_weights` before wiring, and then **all six are bit-identical to `0d700b1ab`** ([`evidence/fingerprints-renamed.txt`](evidence/fingerprints-renamed.txt)) |
-| Scale probe | [`scale_probe.py`](scale_probe.py) on the assignment API; [`evidence/scale-probe.txt`](evidence/scale-probe.txt) |
+| Overrides | `tests/core/space/test_overrides.py` (14): three layers, outermost wins, provenance text; pin removes the key; stale selection refused on decode, restore across models refused; narrowing keeps the key, widening refused by the contract; pinned value outside the domain refused with provenance; a refusal naming the overridden value; same-body double assignment (three routes); behaviour refused (5 kinds); child replacement (subclass accepted, other family and a placed node refused); a Decision over nodes narrowed (adding a case and pinning by value refused); a reference input rewired from an enclosing body; an assignment through a Decision candidate. Plus the house toy's `Estate` and `test_nested_parameter_bindings.py` |
+| Typing | §1.2 fixtures under `--strict` |
+| Collapse | `test_collapse.py` (4) and `tests/kernels/test_mvau_collapse.py` (2): every node's answer identical with and without collapse; keys and scopes identical; fewer nodes evaluated; `explain` via; a guarded alias keeps its hop. Measurements in [`evidence/collapse-probe.txt`](evidence/collapse-probe.txt) |
+| Presence | `test_references.py`: `query` of a reference input and of a guarded child, `present()` true/false/raising/unsupplied, `present()` inside a method; projection through a reference input |
+| MVAU fingerprints | [`evidence/fingerprints.txt`](evidence/fingerprints.txt) identical to iteration 2; [`evidence/fingerprints-renamed.txt`](evidence/fingerprints-renamed.txt) (cyclic instance renamed to `u_weights`) **bit-identical to `0d700b1ab`** |
+| Scale probe | [`evidence/scale-probe.txt`](evidence/scale-probe.txt), iteration 2 and 3 in the same session |
 
-**The scale probe got cheaper** (same session, same machine, in ms):
+**The scale probe** (same session, iteration 2 on its own sources, round 2 of
+[`evidence/scale-probe.txt`](evidence/scale-probe.txt), in ms):
 
-| | prepare (iteration 1) | prepare (now) | full read (it. 1) | full read (now) | read after one local edit (now) | callbacks re-run |
+| | prepare (it. 2) | prepare (now) | full read (it. 2) | full read (now) | read after one local edit (it. 2 / now) | callbacks re-run |
 |---|---|---|---|---|---|---|
-| N=50 | 42.5 | 31.6 | 18.0 | 15.5 | 15.3 | 50/50 |
-| N=200 | 156.2 | 119.2 | 70.0 | 61.5 | 60.7 | 200/200 |
-| N=800 | 616.9 | 462.5 | 277.9 | 243.2 | 235.1 | 800/800 |
+| N=50 | 31.3 | 36.9 | 15.5 | 15.1 | 15.4 / 16.1 | 50/50 |
+| N=200 | 118.4 | 139.0 | 61.6 | 60.1 | 60.7 / 58.4 | 200/200 |
+| N=800 | 459.9 | 533.1 | 241.3 | 235.1 | 234.4 / 225.7 | 800/800 |
 
-An assigned edge is the formal's own `alias`; a `Bind` was an extra node, and
-its open formal a `present` node over it. At N=800 the graph has 3200 nodes
-and 1599 edges (iteration 1: 3999 and 2398). One local edit still re-runs the
-whole graph: cross-snapshot cache reuse is a separate decision and was not
-attempted.
+Preparation is 16–18 % slower: every placement now layers its settings,
+records their provenance, dispatches on each member's annotated kind, and the
+collapse pass runs once. Reads are 2–4 % faster: the 799 forwarding aliases are
+no longer evaluated (an alias frame is cheap next to a callback, so the gain is
+small). One local edit still re-runs the whole graph: cross-snapshot cache
+reuse (R7) was not attempted.
 
-## 10. Open questions for human review
+## 9. Open questions for human review
 
-1. **Path assignment.** Keep `kernel.port.dtype = x` as a per-placement
-   binding (the reach `Bind` had), or require every nested formal to be
-   re-exposed as a formal of the enclosing family?
-2. **Users granularity.** One export per user makes a kernel's port refusal
-   reach all its streams. Should `Users` project one entry of a keyed export
-   (the user's own input), which needs a typed "export keyed by input" in the
-   engine, or should kernels export a port refusal inside the record?
-3. **Hierarchy of streams.** A composite that forwards a stream input to a
-   child is the stream's user and must re-export its child's ports. Is that
-   the closure we want, or should `Users` see through forwarding (transitive
-   users, named from the stream's parent)?
-4. **Class-body typing of reference inputs.** Accept `output.spec` untyped in
-   a class body, or annotate reference inputs as `output: Stream =
-   Param(Stream)` (typed in the body, but then the annotation is not a
-   `Param`)?
-5. **Ownership of named shared decisions.** Keep the lowest common scope
-   (a single-use named decision is keyed `node.<name>`), or own every
-   `name=` decision by the body that wrote it (`<body>.<name>`)?
+1. **Views as values.** A view is `BoundView[T]` through a node, so it needs
+   `accepted()` to supply a formal. Should a view read as its value (typed `T`,
+   raising unless accepted), with assessments only through
+   `point.inspect(Family.view)`? It would remove `accepted()` and R27, and make
+   `field()` of a view unnecessary; every `point.x.query()` call would change.
+2. **The declared domain as a contract.** A pin or a replacement is checked
+   against the declared domain (widening refused). Is that the intended reading
+   of "behaviour is not overridable", or should a replacement Decision replace
+   the domain outright?
+3. **Pinning a Decision over nodes.** Only narrowing is offered (down to one
+   case, key kept). Is a true pin (key removed, the other candidates never
+   placed) needed, and how should it be typed?
+4. **Persisted vs in-memory selections.** A persisted selection with a pinned
+   key is refused as stale; an in-memory `Selection` is bound to its model.
+   Should `restore` accept another model's selection by key?
+5. **Which values a refusal names.** A computation's refusal names the
+   overridden values it read directly. Transitively (through the derived values
+   it read) would be more complete but noisier; single-layer supplies are not
+   named at all.
 
-Further questions: should a boundary stream without `port` be refused rather
-than unresolved? Should a reference input's presence get a typed accessor
-(R19)? Should a failed preparation freeze nothing (today) or freeze what
-linked? Should the kernels gate run its XSim tests as a separate target?
+Further: `Users` through forwarding composites and keyed gathers (§2); should
+`Const` members be typed as their values like `@derived`; should a path
+assignment through a reference input be allowed (today: assign the node where it
+is placed); should the kernels gate run its XSim tests as a separate target.
