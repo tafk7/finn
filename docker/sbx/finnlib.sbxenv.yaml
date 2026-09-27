@@ -1,0 +1,18 @@
+{
+  "schemaVersion": "1",
+  "args": {
+    "finnlib": {
+      "required": true,
+      "description": "Absolute path of a FinnLib clone, mounted writable at the same path"
+    }
+  },
+  "additionalWorkspaces": [
+    {
+      "path": "${{ env.args.finnlib }}",
+      "readOnly": false
+    }
+  ],
+  "env": {
+    "FINN_RESOURCES_FINNLIB": "${{ env.args.finnlib }}"
+  }
+}

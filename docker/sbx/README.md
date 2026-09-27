@@ -169,5 +169,20 @@ additionalWorkspaces:
     readOnly: false
 ```
 
+## FinnLib
+
+`finn.kernels` and the MVAU/VVAU replay buffer compile against FinnLib, a private
+repository that changes together with FINN. A sandbox has no SSH credentials to
+fetch it, so mount a clone with the `finnlib` overlay; FINN then uses it through
+`FINN_RESOURCES_FINNLIB`, and an agent can edit and commit in it (push from the
+host):
+
+```bash
+cp docker/sbx/finnlib.sbxenv.yaml "$ENV_DIR/"
+FILES+=("$ENV_DIR/finnlib.sbxenv.yaml")
+ARGS+=(--env-arg finnlib=/absolute/path/to/finnlib)
+sbx env exec "${ARGS[@]}" "${FILES[@]}" -- finn-resources list
+```
+
 Deleting the sandbox deletes its environment changes; the next sandbox starts from
 the template again. See [installation](../../docs/installation.md).

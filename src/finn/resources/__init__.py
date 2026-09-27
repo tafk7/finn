@@ -3,8 +3,8 @@
 Each resource (finn-hlslib, Vivado board files, a user's RTL library...) is
 declared with a pinned source and a content digest, fetched on first use, and
 cached by digest; or it is used in place, from an installed package (``package``,
-as FINN's own bundled data is) or a local directory (``path``). Consumers ask for resources by kind, so they never need to
-know names::
+as FINN's own bundled data is) or a local directory (``path``). Consumers ask for
+resources by kind, so they never need to know names::
 
     from finn import resources
 

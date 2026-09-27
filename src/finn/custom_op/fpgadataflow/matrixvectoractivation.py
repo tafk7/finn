@@ -1050,9 +1050,7 @@ class MVAU(HWCustomOp):
                 self.generate_hdl_memstream(
                     fpgapart,
                     pumped_memory=self.get_nodeattr("pumpedMemory"),
-                    allow_missing_initializer=bool(
-                        self.get_nodeattr("runtime_writeable_weights")
-                    ),
+                    allow_missing_initializer=bool(self.get_nodeattr("runtime_writeable_weights")),
                 )
 
     def code_generation_ipi(self):
