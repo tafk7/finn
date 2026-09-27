@@ -48,7 +48,7 @@ is pushed. This supersedes [the 2026-09-25 status](../kernel-status-2026-09-25/S
 | D2 | The cyclic delivery instance rename (`u_weights` → `u_implementation_cyclic`) is accepted |
 | D3 | **Every worktree or clone has its own `deps/`.** A shared symlinked FinnLib is not allowed. Environment-management checkouts that don't use `deps/` are exempt |
 | D4 | **FinnLib is consolidated on one commit on a remote:** the newer `rtl/infra/…` layout, with the `replay_buffer` and dotp-backpressure fixes carried onto it |
-| D5 | **Runtime-writable weights use the existing HLS memstream for now.** The RTL `memstream_axi` (FINN `finn-rtllib/memstream/`: AXI-Lite write, `SETS` with a set-index stream, `INIT_FILE`, `RAM_STYLE`, `clk2x`) is to be ported into FinnLib later |
+| D5 | **Runtime-writable and multi-set weights use the RTL memstream, ported into FinnLib.** The source is FINN's `finn-rtllib/memstream/` (`memstream_axi`, `memstream`, and the `axilite` adapter): AXI-Lite write, `SETS` with a set-index stream, `INIT_FILE`, `RAM_STYLE`, `clk2x`. *Revised 2026-09-27:* this was first "HLS memstream now, RTL later". An HLS memstream needs an HLS-synthesis stage before `netlist` can place it, and has no `SETS`. The HLS synthesis stage becomes separate future work (Phase D) |
 | D6 | **The dotp core choice (R4) is deferred.** FinnLib's `dotp_axi` picks its INT8/DSP58 or soft-vector core internally. Soon, examine and decide how to split them into separate kernels or choices properly |
 | D7 | Key and ABI changes the increments need are accepted when recorded: replay becoming a `Decision`, the fused-activation stream, and dropping the unpumped `ap_clk2x` top pin (audit H3) |
 | D8 | Per-port refusal attribution is fixed now, in J2. A stream input names the one port it presents, so a refusal reaches only its own stream (audit H4) |
@@ -67,7 +67,7 @@ All of these are verified in the audit (§/probe references there).
 | **Shared `deps/finnlib`** | A symlink to a clone that other sessions use |
 | **Clock and reset routed by pin name** | `"clk2x" in name` in `streams.netlist`, and an unpumped design still exposes `ap_clk2x` |
 | **Only 3 of 11 kernels use the stream idiom** | Thresholding, eltwise and the input generator are standalone |
-| **HLS memstream can't be placed by `netlist`** | It yields HLS source requirements with no pin ABI. **This affects D5**, see §4 J8 |
+| **HLS kernels can't be placed by `netlist`** | They yield HLS source requirements with no pin ABI. No HLS kernel is on the current path (D5); the HLS synthesis stage is future work (Phase D) |
 | **An unused stream is refused**, and a boundary needs its port name declared up front | Optional streams need explicit `when=` guards |
 
 ## 4. Plan
@@ -80,7 +80,7 @@ has started.
 | Step | Content | Exit criteria |
 |---|---|---|
 | **A1. Per-worktree `deps/`** (D3) | Make `fetch-repos.sh` produce real per-checkout clones. Replace the `deps/finnlib` symlink in this checkout and in the spike worktree. Document the `FINNLIB_ROOT` override for local FinnLib development | Each checkout builds from its own pinned `deps/`; gates green |
-| **A2. FinnLib consolidation, J0** (D4) | One commit on the fork, pinned in `fetch-repos.sh`. Update the kernels' source manifests to the new layout. Re-baseline the fingerprints once and record the reason (source identities change). Open upstream PRs for `replay_buffer` and the dotp fix if wanted | One pin everywhere; gates, XSim and the MVAU numeric sweep green; fingerprint change recorded |
+| **A2. FinnLib consolidation, J0** (D4, D5) | One commit on the fork, pinned in `fetch-repos.sh`, which also ports `memstream_axi`, `memstream` and `axilite` from `finn-rtllib`, with their testbench if it's reusable. Update the kernels' source manifests to the new layout. Re-baseline the fingerprints once and record the reason (source identities change). Open upstream PRs for `replay_buffer`, the dotp fix and the memstream port if wanted | One pin everywhere; gates, XSim and the MVAU numeric sweep green; fingerprint change recorded |
 
 ### Phase B: correctness and infrastructure
 
@@ -97,15 +97,15 @@ has started.
 | **C1. J5: VVAU reuse**, plus a reusable delivery slot | Same families, `ACTIVATION_BROADCASTING=0`, a marker generator instead of replay. Needs E-048 (SWG→VVAU lane order) re-derived | B1 |
 | **C2. J6: fused thresholding** | Migrate thresholding to the stream idiom; compose MVAU → Thresholding | B1, B3 |
 | **C3. J7: replay as a choice** | `replay_buffer` or `input_gen`, as a `Decision` over nodes (D7) | B1, B2 |
-| **C4. J8: runtime-writable weights with the HLS memstream** (D5) | **Blocker to resolve first:** `netlist` can only place RTL modules. Either add an HLS-synthesis stage that turns `HlsSourceRequirements` into a placeable module (a new artifact capability, with Vitis HLS runs), or revisit D5 and port the RTL `memstream_axi` sooner. Also covers `ap_ctrl_hs` auto-restart | B3, A2, and a decision on the blocker |
-| **C5. J10: stream adapters** | Width conversion, lane regroup and reorder as a `Decision` over adapter nodes inside a stream, chosen by `classify()` | B1, C3 |
+| **C4. J8: an RTL memstream kernel, plus runtime-writable weights** (D5) | A fixed-interface kernel over FinnLib `memstream_axi`: `DEPTH`, `WIDTH`, `SETS`, `RAM_STYLE`, and pumped memory through the clock-domain Space (B2). Initial contents go through `INIT_FILE`: check whether the artifact layer's data-file contribution supports it, and add one if not. Its AXI-Lite bus is exported at the MVAU boundary (B3). MVAU gains a writable delivery candidate, and the numeric XSI harness gains an AXI-Lite write driver. Decide whether it replaces the kernel-local `cyclic_stream.sv` for read-only delivery, which needs equivalence evidence | A2, B2, B3 |
+| **C5. J9: multi-set delivery** (R7, MLO) | `SETS > 1`, with the set-index stream as an ordinary stream reference input of the memstream kernel. MLO drives the index from outside the op (V10) | C4 |
+| **C6. J10: stream adapters** | Width conversion, lane regroup and reorder as a `Decision` over adapter nodes inside a stream, chosen by `classify()` | B1, C3 |
 
 ### Phase D: planned and deferred work
 
 | Item | Plan |
 |---|---|
-| **J9: multi-set delivery** (R7, MLO) | Waits for the RTL memstream port: the HLS memstream has no `SETS`, and the RTL one provides the set-index stream directly |
-| **RTL `memstream_axi` into FinnLib** (D5) | Port it together with its `axilite` adapter. It then serves R6 and R7 on RTL, and replaces the kernel-local `cyclic_stream.sv` if it's equivalent |
+| **HLS synthesis stage** (future work) | Makes HLS kernels placeable, and is the path to HLS backends as choices, e.g. HLS MVAU and HLS thresholding (the audit's "HLS backend as a whole" gap). It needs five parts: (1) a background Vitis HLS runner with store caching keyed by sources, part, clock and tool version; (2) a generated-source contribution type, with tool version in build identity; (3) the pin interface predicted from the HLS interface directives for `netlist`, and verified after synthesis with `artifacts/rtl.check_abi` (option a, which reverses today's "no predicted HLS ABI" stance; the alternative, option b, is a two-stage flow binding the synthesized interface as a fact); (4) control-mode handling (`ap_ctrl_none` for free-running blocks); (5) an opt-in slow test tier. Plan it when HLS backends are wanted |
 | **dotp core split** (D6, R4) | Near term: examine FinnLib's `dotp_axi` core selection and the FINN wrapper-split precedent. Then decide how the cores become separate kernels or a `Decision` |
 | **Query and search tools** | The next Space-engine pass (design record §3). The audit's "queries wanted" list is its input |
 | **Reusing cached results across snapshots** | A local edit re-runs the whole graph. It matters once search runs over graphs of many kernels |
@@ -124,8 +124,8 @@ has started.
 
 ## 5. Open questions for later
 
-1. **C4's blocker:** build an HLS-synthesis stage, or port the RTL memstream
-   before writable weights?
+1. **The memstream boundary:** whether the RTL memstream also replaces the
+   kernel-local `cyclic_stream.sv` for read-only delivery (C4).
 2. **The upstream path for FinnLib:** which fixes go upstream, and on what
    schedule?
 3. **The dotp core split (D6):** separate kernels, or a `Decision` within one
