@@ -1,0 +1,8 @@
+94c94
+<  instance u_weight_stream_fifo finnlib.fifo 1
+---
+>  instance u_weight_stream_fifo finnlib.fifo 2
+149c149
+<  instance u_weight_stream_fifo finnlib.fifo 1
+---
+>  instance u_weight_stream_fifo finnlib.fifo 2
