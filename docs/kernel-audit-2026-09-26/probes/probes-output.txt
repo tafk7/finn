@@ -1,0 +1,48 @@
+## p1_clocks (HEAD 6aa0383cf, FinnLib b17eae6)
+pumped=False top ports: [('ap_clk', 'Clock'), ('ap_clk2x', 'Data'), ('ap_rst_n', 'Reset'), ('in0_V', 'Data'), ('in1_V', 'Data'), ('out0_V', 'Data')]
+   u_replay.clk <- ap_clk invert=False
+   u_replay.rst <- ap_rst_n invert=True
+   u_compute.ap_clk <- ap_clk invert=False
+   u_compute.ap_clk2x <- ap_clk2x invert=False
+   u_compute.ap_rst_n <- ap_rst_n invert=False
+pumped=True top ports: [('ap_clk', 'Clock'), ('ap_clk2x', 'Clock'), ('ap_rst_n', 'Reset'), ('in0_V', 'Data'), ('in1_V', 'Data'), ('out0_V', 'Data')]
+   u_replay.clk <- ap_clk invert=False
+   u_replay.rst <- ap_rst_n invert=True
+   u_compute.ap_clk <- ap_clk invert=False
+   u_compute.ap_clk2x <- ap_clk2x invert=False
+   u_compute.ap_rst_n <- ap_rst_n invert=False
+exit 0
+
+## p2_attribution (HEAD 6aa0383cf, FinnLib b17eae6)
+activations Available []
+replayed Rejected [('compute.weights_type.family', 'dtype-family')]
+weight_stream Rejected [('compute.weights_type.family', 'dtype-family')]
+results Rejected [('compute.weights_type.family', 'dtype-family')]
+structure Rejected 2
+    compute.input_types_supported dotp-weight-type
+    compute.weights_type.family dtype-family
+exit 0
+
+## p3_padded_child (HEAD 6aa0383cf, FinnLib b17eae6)
+a Available []
+w Available []
+r Rejected [('r.compatible', 'stream-padding', 'stream-padding: padding produced by a child cannot be discarded inside the composition')]
+o Available []
+exit 0
+
+## p4_thresholding_compose (HEAD 6aa0383cf, FinnLib b17eae6)
+input bits per bus: {'s_axilite': 49, 's_axis': 9, 'm_axis': 1, 's_axis_set': 9}
+PhysicalStructureError physical destination coverage is incomplete (missing=68, extra=0)
+exit 0
+
+## p5_dotp_form (HEAD 6aa0383cf, FinnLib b17eae6)
+good {'a': 'Available', 'w': 'Available', 'r': 'Available'}
+transposed weights {'a': 'Available', 'w': 'Available', 'r': 'Available'}
+1-lane acts {'a': 'Available', 'w': 'Available', 'r': 'Available'}
+netlist for 1-lane activations: Composed
+exit 0
+
+## p6_typed_keys (HEAD 6aa0383cf, FinnLib b17eae6)
+typed keys accepted; rom_style = block
+inline candidate reference: ChoiceMemberRef
+exit 0
