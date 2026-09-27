@@ -5,7 +5,6 @@
 
 import pytest
 
-import shutil
 import subprocess
 from pathlib import Path
 
@@ -26,7 +25,7 @@ from finn.kernels.streaming import (
     replay_buffer_interfaces,
 )
 from finn.kernels.resources import resource_root
-from kernels.helpers import finnlib_root
+from kernels.helpers import finnlib_root, vivado_simulator
 
 ROOT = Path(__file__).resolve().parents[2]
 ROOTS = {"kernels": resource_root(), "finnlib": finnlib_root()}
@@ -264,7 +263,7 @@ endmodule
 
 
 @pytest.mark.skipif(
-    not all(shutil.which(tool) for tool in ("xvlog", "xelab", "xsim")),
+    not vivado_simulator(),
     reason="Vivado simulator tools are unavailable",
 )
 def test_rtl_streams_preserve_words_framing_stalls_and_reset(tmp_path):

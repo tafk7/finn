@@ -14,7 +14,7 @@ from qonnx.core.datatype import DataType
 import pyslang
 from pyslang import ast, syntax
 
-from kernels.helpers import point_for
+from kernels.helpers import point_for, vivado_simulator
 from kernels.helpers import finnlib_root
 from finn.kernels import (
     EltwiseKernel,
@@ -478,7 +478,7 @@ def flow_case(case):
 
 
 @pytest.mark.skipif(
-    not all(shutil.which(tool) for tool in ("xvlog", "xelab", "xsim")),
+    not vivado_simulator(),
     reason="Vivado simulation is unavailable",
 )
 @pytest.mark.parametrize("case", ("fifo", "generator", "threshold", "integer", "float"))
@@ -536,7 +536,7 @@ endmodule
 
 
 @pytest.mark.skipif(
-    not all(shutil.which(tool) for tool in ("xvlog", "xelab", "xsim")),
+    not vivado_simulator(),
     reason="Vivado simulation is unavailable",
 )
 def test_combinational_conversion_uses_round_toward_zero(tmp_path):

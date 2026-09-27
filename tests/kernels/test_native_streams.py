@@ -1,7 +1,6 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-import shutil
 import subprocess
 
 import pytest
@@ -13,7 +12,7 @@ from finn.kernels.fifo import FifoKernel
 from finn.kernels.physical.stream import MarkerKind, ReadyValidStream, StreamMarker
 from kernels.test_migrated_rich import generator
 from kernels.test_migrated_simple import eltwise
-from kernels.helpers import finnlib_root
+from kernels.helpers import finnlib_root, vivado_simulator
 
 
 def test_native_streams_are_inspectable_without_storage_choices():
@@ -52,7 +51,7 @@ def test_axi_lowering_preserves_explicit_physical_mapping():
 
 
 @pytest.mark.skipif(
-    not all(shutil.which(tool) for tool in ("xvlog", "xelab", "xsim")),
+    not vivado_simulator(),
     reason="Vivado simulator tools are unavailable",
 )
 def test_fifo_capacity_and_effective_storage_agree_with_native_rtl(tmp_path):

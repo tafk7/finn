@@ -51,11 +51,6 @@ if [ -z "${UV_CACHE_DIR:-}" ] && [ -n "${FINN_BUILD_DIR:-}" ] \
    && mkdir -p "$FINN_BUILD_DIR/.uv-cache" 2>/dev/null; then
     export UV_CACHE_DIR="$FINN_BUILD_DIR/.uv-cache"
 fi
-# FINN_HOME (fetched resources, finn_xsi builds) likewise: the container's own
-# home does not outlive it.
-if [ -z "${FINN_HOME:-}" ] && [ -n "${FINN_BUILD_DIR:-}" ]; then
-    export FINN_HOME="$FINN_BUILD_DIR/.finn"
-fi
 
 # Install the checkout at FINN_ROOT editable into /opt/venv, with any difference
 # between its uv.lock and the image. This follows the

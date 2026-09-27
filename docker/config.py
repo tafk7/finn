@@ -396,6 +396,7 @@ def sh_assignments(data, create_build_dir=True):
     values.update(
         {
             "FINN_BUILD_DIR": build_dir,
+            "FINN_HOME": build_dir + "/.finn",
             "FINN_HOST_BUILD_DIR": build_dir,
             "FINN_GID": str(os.getgid()),
             "FINN_RUNTIMES": data["runtime_csv"],
@@ -449,6 +450,9 @@ def compose_override(data, services):
     environment.update(
         {
             "FINN_BUILD_DIR": build_dir,
+            # Fetched resources and finn_xsi builds outlive the container with
+            # the build directory; the container's own home does not.
+            "FINN_HOME": build_dir + "/.finn",
             "FINN_RUNTIMES": data["runtime_csv"],
         }
     )

@@ -6,6 +6,8 @@
 Supplied facts use exposed parameter keys. Required omissions are errors;
 partial evaluation uses explicit optional-Param or unresolved-Decision fixtures."""
 
+import os
+import shutil
 from collections.abc import Mapping
 from pathlib import Path
 from typing import TypeVar
@@ -53,3 +55,13 @@ def assess(point: Space, condition: Constraint) -> QueryResult[bool]:
 def finnlib_root() -> Path:
     """FinnLib as FINN resolves it: FINN_RESOURCES_FINNLIB, a cached copy, or a fetch."""
     return Path(resources.path("finnlib"))
+
+
+def vivado_simulator() -> bool:
+    """Whether a selected Vivado provides xvlog, xelab and xsim.
+
+    FINN images put tool shims on PATH, so a command being found does not mean
+    a Vivado installation is selected.
+    """
+    tools = ("xvlog", "xelab", "xsim")
+    return bool(os.environ.get("XILINX_VIVADO")) and all(shutil.which(tool) for tool in tools)

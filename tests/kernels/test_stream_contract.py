@@ -57,7 +57,7 @@ from finn.transformation.fpgadataflow.transpose_decomposition import (
     shuffle_perfect_loopnest_coeffs,
 )
 from kernels.test_migrated_simple import eltwise
-from kernels.helpers import finnlib_root
+from kernels.helpers import finnlib_root, vivado_simulator
 
 ROOT = Path(__file__).resolve().parents[2]
 INT3 = ScalarEncoding(DataType["INT3"])
@@ -431,7 +431,7 @@ def test_clock_domains_must_be_attached_and_equal():
 
 
 @pytest.mark.skipif(
-    not all(shutil.which(tool) for tool in ("xvlog", "xelab", "xsim")),
+    not vivado_simulator(),
     reason="Vivado simulator tools are unavailable",
 )
 def test_eltwise_with_cyclic_constant_computes_the_broadcast_sum(tmp_path):

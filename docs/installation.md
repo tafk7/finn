@@ -157,8 +157,8 @@ a FINN revision was validated against; fetching it needs SSH access, and
 
 FINN keeps its per-user state under `FINN_HOME` (default `~/.finn`): fetched
 resources in `resources/`, the `finn_xsi` builds in `xsi/`, and, natively, the
-build directory in `build/`. Containers set `FINN_HOME` inside their build
-directory, which outlives them.
+build directory in `build/`. `docker/run` and the Dev Container set `FINN_HOME`
+inside their build directory, which outlives the container.
 
 Resources are looked up in two places; the first complete copy wins:
 
