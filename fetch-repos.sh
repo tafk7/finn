@@ -50,7 +50,7 @@ AUPZU3_BDF_COMMIT="b595ecdf37c7204129517de1773b0895bcdcc2ed"
 # FinnLib supplies replay_buffer, dotp_axi, and their cores. Bump this together
 # with any change to their source manifests; FINNLIB_ROOT overrides the checkout
 # for local work.
-FINNLIB_COMMIT="dfeafac81cd2a6da27e647ee03915ade5532186e"
+FINNLIB_COMMIT="b17eae6a074ea678c633598fa42e7751e6cea194"
 
 QONNX_URL="https://github.com/tafk7/qonnx.git"
 FINN_EXP_URL="https://github.com/Xilinx/finn-experimental.git"
@@ -114,6 +114,14 @@ fetch_repo() {
     local REPO_DIR=$3
     # absolute path for the repo local copy
     local CLONE_TO=$SCRIPTPATH/deps/$REPO_DIR
+
+    # Each checkout owns its deps/. Checking out a pin through a symlink would
+    # move a clone that other checkouts share; FINNLIB_ROOT is the way to build
+    # against a working clone.
+    if [ -L "$SCRIPTPATH/deps" ] || [ -L "$CLONE_TO" ]; then
+        echo "fetch-repos: ERROR: $CLONE_TO is reached through a symlink; replace it with a real deps/ directory" >&2
+        return 1
+    fi
 
     # (re-)clone when the dir is missing or has no resolvable HEAD (what an
     # interrupted clone leaves behind, and what the checkout below needs)

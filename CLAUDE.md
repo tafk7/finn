@@ -54,12 +54,21 @@ Docker invocations sequentially.
 ### Running against FinnLib
 
 The kernels compile against FinnLib, which is a separate repository.
-`fetch-repos.sh` pins it under `deps/finnlib`; a local working clone is reached
-by mounting it and setting `FINNLIB_ROOT`:
+`fetch-repos.sh` pins it under `deps/finnlib`.
+
+**Every checkout and worktree owns its `deps/`.** Never symlink `deps/` or a
+clone inside it to another checkout: checking out a pin through the link moves
+a clone that other sessions build from. `fetch-repos.sh` refuses a symlinked
+dependency. To build against a local FinnLib working clone instead of the pin,
+set `FINNLIB_ROOT` (the XSI harnesses and `rtlbackend` read it); in Docker,
+also mount it:
 
 ```
 FINN_DOCKER_EXTRA="-v /path/to/finnlib:/path/to/finnlib -e FINNLIB_ROOT=/path/to/finnlib "
 ```
+
+The pytest gates read `deps/finnlib` directly, so a FinnLib change is gated
+only once it is pinned.
 
 Pin only commits that exist on the remote — `fetch-repos.sh` clones and then
 checks out, so a local unpushed hash fails the fetch for everyone.
