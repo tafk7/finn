@@ -64,6 +64,7 @@ Phase C is next.
 | D7 | Key and ABI changes the increments need are accepted when recorded: replay becoming a `Decision`, the fused-activation stream, and dropping the unpumped `ap_clk2x` top pin (audit H3) |
 | D8 | Per-port refusal attribution is fixed now, in J2. A stream input names the one port it presents, so a refusal reaches only its own stream (audit H4) |
 | D9 | The audit's reordered plan is approved: VVAU before thresholding, with J2 and J4 added (audit H6) |
+| D10 | *Added after B1.* B1's port checks are kept, but they are a kernel-side stopgap: dotp checks what it reads against the forms it is given. A stream that knows the whole tensor it iterates, and so which foldings of it are valid, is the robust model. That opens design questions about the `Stream` object and how much of the original dataflow modeling corpus to adopt or revise. **Parked** as the stream and dataflow modeling revision (Phase D) |
 
 ## 3. Known problems
 
@@ -121,7 +122,8 @@ are done (see the record); Phase C has not started.
 | **Query and search tools** | The next Space-engine pass (design record §3). The audit's "queries wanted" list is its input |
 | **Reusing cached results across snapshots** | A local edit re-runs the whole graph. It matters once search runs over graphs of many kernels |
 | **Other standalone kernels** (eltwise, input generator) | Move them to the stream idiom when a composite needs them |
-| **`finn.dataflow` model pass** | After robust MVAU |
+| **Stream and dataflow modeling revision** (D10, parked) | Streams that understand the full tensor they iterate and the valid folding configurations over it, instead of kernels checking the forms they are handed. Decide the shape of `Stream`, and how much of the dataflow modeling corpus (`finn.dataflow`, the roster's S1 contract, the parked dataflow model) to adopt or iterate on. It subsumes B1's dotp form checks and informs adapters (C6). Plan it together with the `finn.dataflow` model pass |
+| **`finn.dataflow` model pass** | After robust MVAU; to be planned with the stream and dataflow modeling revision |
 | **Diagrams** in `scratchpad/space/diagrams/` | Regenerate them for the new API |
 
 ### Coordination
