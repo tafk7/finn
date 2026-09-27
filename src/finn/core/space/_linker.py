@@ -364,6 +364,15 @@ class _Linker:
             self.override_indices[id(record)] = index
         return index
 
+    def depth(self, writer: int) -> int:
+        """How deep a writing body is: the root declaration is outermost."""
+        depth = 0
+        scope: int | None = None if writer == ROOT_WRITER else writer
+        while scope is not None:
+            depth += 1
+            scope = self.drafts[scope].parent
+        return depth
+
     def body_name(self, writer: int) -> str:
         if writer == ROOT_WRITER:
             return ROOT_BODY
@@ -394,6 +403,9 @@ class _Linker:
             carrier = outer.carrier
         slots: dict[str, Slot] = {}
         for member, layers in found.items():
+            # Outermost wins: order the settings by how deep their body is (a
+            # replacement node's own settings were written by an outer body).
+            layers.sort(key=lambda layer: -self.depth(layer[0]))
             key = _key(draft.name, member)
             declaration = draft.effective.members.get(member)
             if declaration is None:

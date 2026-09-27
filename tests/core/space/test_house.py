@@ -223,3 +223,35 @@ def test_keys_selections_and_inspection_use_declaration_paths() -> None:
     assert replayed.accepted and replayed.instance.thermostat.kw == 8
     (choice,) = inspection.choices(house)
     assert [case.name for case in choice.cases] == ["boiler", "heat_pump"]
+
+
+class Estate(Space):
+    """An enclosing body customizes the house it contains: data, never behaviour."""
+
+    home = House(budget=300)
+    home.kitchen.area = 14  # overrides House's 12
+    home.kitchen.finish = 2  # pins a Decision: its key disappears
+    home.heating = Decision(values={"heat_pump": HeatPump(kw=6)})  # narrows the choice
+    home.garage = Room(area=24, finish=1)  # replaces a child node (same family)
+
+
+def test_an_estate_overrides_the_house_it_contains() -> None:
+    estate = design_space(Estate())
+    keys = {item.key for item in inspection.decisions(estate)}
+    assert "home.kitchen.finish" not in keys and "home.garage.finish" not in keys
+    assert {"home.heating", "home.heating.heat_pump.cop"} <= keys
+    point = estate.with_choices(
+        {
+            Estate.home.want_garage: True,
+            Estate.home.heating: "heat_pump",
+            Estate.home.heat_pump.cop: 3,
+            Estate.home.hall.finish: 1,
+            Estate.home.dining.finish: 2,
+        }
+    )
+    assert point.home.hall.area == 14  # hall.area = kitchen.area follows the override
+    assert point.home.thermostat.kw == 6
+    assert point.home.total() == 14 + 28 + 32 + 24 + 36 + 2
+    provenance = inspection.provenance(point, Estate.home.kitchen.area)
+    assert provenance is not None
+    assert provenance.text().startswith("home.kitchen.area = 14 (set by Estate at test_house.py:")

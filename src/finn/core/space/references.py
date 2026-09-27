@@ -13,7 +13,7 @@ from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Generic, TypeVar, cast
 
-from ._nodes import unwrap
+from ._nodes import NodeChoice, unwrap
 from .declarations import (
     CaseRef,
     ChoiceMemberRef,
@@ -124,6 +124,9 @@ def resolve_reference(
 
     if type(scope) is not int or not 0 <= scope < len(scopes):
         raise RequestError("reference scope does not belong to this model")
+    if isinstance(reference, NodeChoice) and len(reference._space_path) > 1:
+        # ``Site.plant.heating``: a Decision over nodes reached through a node.
+        scope = _descend(scopes, scope, reference._space_path[:-1])
     reference = unwrap(reference)
     try:
         return scopes[scope].members[reference]

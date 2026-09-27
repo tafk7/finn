@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 """Reference inputs and ``Users``: several nodes share one node, which sees them.
 
-``budget: Param[Budget] = Param(Budget)`` is a reference input. Supplied with a
+``budget: Budget = Param()`` is a reference input. Supplied with a
 node placed beside it, it references that node: several departments share one
 budget, and inside their methods ``self.budget`` is the budget's configuration.
 Supplied with a fresh node, it places that node there. ``Users(SPEND)`` in the
@@ -11,6 +11,8 @@ the budget, located by its name and input. Nothing here is about hardware.
 """
 
 from __future__ import annotations
+
+from dataclasses import dataclass
 
 import pytest
 
@@ -26,6 +28,7 @@ from finn.core.space import (
     Space,
     Unresolved,
     Users,
+    ValueUnavailableError,
     ViewKey,
     composite,
     constraint,
@@ -249,3 +252,66 @@ def test_an_unsupplied_reference_input_is_reported_when_prepared() -> None:
 
     with pytest.raises(DefinitionError, match=r"team\.budget is not supplied"):
         design_space(Orphan())
+
+
+def test_a_reference_input_queries_as_the_referenced_node_and_has_a_typed_presence() -> None:
+    point = staffed(design_space(Company(limit=100)), sales=1)
+    # The query of a reference input answers the referenced node's configuration.
+    answer = point.sales.query(Department.budget)
+    assert isinstance(answer, Available) and isinstance(answer.value, Budget)
+    assert answer.value.limit == 100
+    assert point.sales.present(Department.budget) is True
+    # The node it references is absent: the input is inapplicable, and not present.
+    closed = point.with_choices(open_lab=False)
+    assert isinstance(closed.query(Company.lab), Inapplicable)
+    assert closed.present(Company.lab) is False
+    assert closed.lab.present(Department.budget) is True  # the budget itself is present
+    # Undecided presence reads like any value: it raises.
+    with pytest.raises(ValueUnavailableError):
+        point.present(Company.lab)
+    assert isinstance(point.query(Company.lab), Unresolved)
+    opened = point.with_choices(open_lab=True)
+    lab = opened.query(Company.lab)
+    assert isinstance(lab, Available) and isinstance(lab.value, Department)
+    assert opened.present(Company.lab) is True
+
+    class Optional(Space):
+        budget: Budget = Param(required=False)
+
+        @view
+        def funded(self) -> bool:
+            return self.present(Optional.budget)  # presence read inside a method
+
+    unsupplied = design_space(Optional())
+    assert isinstance(unsupplied.query(Optional.budget), Unresolved)
+    assert unsupplied.present(Optional.budget) is False
+    assert unsupplied.funded() is False
+
+
+def test_a_read_through_a_reference_input_is_typed_in_the_class_body() -> None:
+    @dataclass(frozen=True)
+    class Rate:
+        per_head: int
+        heads: int
+
+        @property
+        def total(self) -> int:
+            return self.per_head * self.heads
+
+    class Tariff(Space):
+        rate: Rate = Param()
+
+    class Ledger(Space):
+        amount: int = Param()
+
+    class Office(Space):
+        tariff: Tariff = Param()
+        ledger = Ledger(amount=tariff.rate.total)  # an attribute of the referenced value
+
+    class Firm(Space):
+        tariff = Tariff(rate=Rate(10, 3))
+        office = Office(tariff=tariff)
+
+    assert design_space(Firm()).office.ledger.amount == 30
+    with pytest.raises(AttributeError):
+        getattr(Office.tariff.rate, "missing")
