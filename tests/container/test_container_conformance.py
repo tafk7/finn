@@ -263,7 +263,7 @@ def test_04_bare_docker_exec(docker_daemon):
 
 @pytest.mark.parametrize("agent,fpga", [("shell", False), ("claude", False), ("claude", True)])
 def test_05_copied_native_examples(docker_daemon, tmp_path, agent, fpga):
-    """Native composition/lifecycle works outside an isolated mounted checkout.
+    """The root environment plus copied overlays compose and run from a checkout.
 
     Agent installation/selection is exercised without supplying credentials or
     asking a model to change files. This does not verify authenticated inference.
@@ -279,12 +279,10 @@ def test_05_copied_native_examples(docker_daemon, tmp_path, agent, fpga):
     if not template:
         run([REPO / "docker/build", "--sbx"], timeout=3600, check=True)
         template = run([REPO / "docker/build", "--sbx", "--print-tag"], check=True).stdout.strip()
-    files = [config / "sbxenv.yaml"]
+    files = [checkout / "sbxenv.yaml"]
     args = [
         "--env-arg",
         "name=" + name,
-        "--env-arg",
-        "workspace=" + str(checkout),
         "--env-arg",
         "template=" + template,
         "--env-arg",
@@ -294,32 +292,14 @@ def test_05_copied_native_examples(docker_daemon, tmp_path, agent, fpga):
         toolchain = tmp_path / "Xilinx"
         for tool in ("Vivado", "Vitis", "Vitis_HLS"):
             (toolchain / tool / "2022.2").mkdir(parents=True)
-        # This is a test-owned site overlay, not a FINN-generated environment.
-        site = config / "license.sbxenv.yaml"
-        site.write_text(
-            json.dumps(
-                {
-                    "args": {"vendor_port": {"required": True}},
-                    "kits": [
-                        {
-                            "source": "./site-license",
-                            "args": {
-                                "host": "${{ env.args.license_host }}",
-                                "manager_port": "${{ env.args.license_port }}",
-                                "vendor_port": "${{ env.args.vendor_port }}",
-                            },
-                        }
-                    ],
-                }
-            )
-        )
-        files.extend([config / "fpga.sbxenv.yaml", site])
+        # Overlays and the licence kit are read from a copy outside the checkout.
+        files.extend([config / "fpga.sbxenv.yaml", config / "license.sbxenv.yaml"])
         for key, value in {
             "toolchain": toolchain,
             "vivado": toolchain / "Vivado/2022.2",
             "vitis": toolchain / "Vitis/2022.2",
             "hls": toolchain / "Vitis_HLS/2022.2",
-            "license_host": "license.example.com",
+            "license_host": "192.0.2.1",
             "license_port": "2100",
             "vendor_port": "2101",
         }.items():

@@ -19,11 +19,12 @@
     },
     "license_host": {
       "required": true,
-      "description": "Floating licence host, for example license.example.com"
+      "description": "Licence server address; its IPv4 address when the network is closed (see the license overlay)"
     },
     "license_port": {
       "required": true,
-      "description": "Licence-manager port, for example 2100"
+      "description": "Licence manager port, as in XILINXD_LICENSE_FILE=port@host",
+      "pattern": "^[0-9]{1,5}$"
     }
   },
   "additionalWorkspaces": [

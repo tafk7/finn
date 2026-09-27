@@ -283,41 +283,20 @@ machine/organization policy and the selected agent and kits.
 .. code-block:: bash
 
   ./docker/build --sbx
-  TEMPLATE=$(./docker/build --sbx --print-tag)
-  CHECKOUT=$PWD
-  ENV_DIR=$(mktemp -d "$HOME/finn-native.XXXXXX")
-  cp docker/sbx/sbxenv.yaml docker/sbx/fpga.sbxenv.yaml "$ENV_DIR/"
-  cp -R docker/sbx/site-license "$ENV_DIR/"
-  FILES=("$ENV_DIR/sbxenv.yaml")
-  ARGS=(--env-arg name=finn-dev \
-    --env-arg workspace="$CHECKOUT" --env-arg template="$TEMPLATE")
-  sbx env plan "${ARGS[@]}" "${FILES[@]}"
-  sbx env create "${ARGS[@]}" "${FILES[@]}"
-  sbx env exec "${ARGS[@]}" "${FILES[@]}" -- python -c 'import finn'
-  sbx env run "${ARGS[@]}" "${FILES[@]}"
-  sbx env rm "${ARGS[@]}" "${FILES[@]}" --force
+  sbx env run --env-arg template="$(./docker/build --sbx --print-tag)"
 
-The base defaults to shell. Add ``--env-arg agent=claude`` before creating a new
-sandbox to select a coding agent. The generic FINN template does not contain
-coding-agent executables: after ``create``, install your client via native
-``sbx env exec`` (see ``docker/sbx/README.md``), or use a site-prepared template.
-For an agent with FPGA tools, also pass the
-copied ``fpga.sbxenv.yaml`` and explicit ``toolchain``, ``vivado``, ``vitis``,
-``hls``, ``license_host`` and ``license_port`` arguments. See
-``docker/sbx/README.md`` for a complete agent-plus-FPGA command and optional
-site-owned network mixin covering the licence-manager and pinned vendor-daemon ports.
-Licence-file and external platform mounts are deliberate site additions.
+This uses ``sbxenv.yaml`` at the repository root: the checkout as the workspace,
+FINN's image and no network grants. For FPGA tools, FinnLib and the licence
+server, copy the overlays in ``docker/sbx`` to a directory outside the checkout,
+put your site values in an arguments file there, and pass both; see
+``docker/sbx/README.md``. The FINN template contains no coding agent: install one
+in the sandbox or use a derived template.
 
-Keep copied files and kits together outside every mounted workspace. Lists
-concatenate under native composition; use the same files and arguments for every
-lifecycle command. Keep personal agent settings and credentials in user-owned
-native configuration. FINN supplies images and examples; users and sites own
-instantiated environments, while native sbx owns composition, approval and lifecycle.
+FINN needs no network in a sandbox except the licence server. Closing everything
+else is a machine or organization decision (``sbx policy init deny-all``); FINN's
+overlays only add grants. Requires sbx 0.43 or later; environments and kits are
+experimental in sbx.
 
-The examples are validated with sbx client/server 0.43.0. Native environments and
-kits remain experimental. Remove and recreate after changing templates, mounts
-or kit permissions. The base has no toolchain, no licence and no network
-grant for the FINN workload. It does not inherit Docker host discovery settings.
 This does not override existing machine policy or the selected agent's grants.
 sbx may separately use package-repository access while provisioning the microVM.
 

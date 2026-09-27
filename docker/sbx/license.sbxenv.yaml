@@ -8,7 +8,7 @@
   },
   "kits": [
     {
-      "source": "./site-license",
+      "source": "${{ env.fileDir }}/site-license",
       "args": {
         "host": "${{ env.args.license_host }}",
         "manager_port": "${{ env.args.license_port }}",

@@ -52,6 +52,15 @@ FINN uses the pinned commit, fetched over SSH into the resource cache. Move the
 pin with `finn-resources update finnlib --ref BRANCH`, and only to commits that
 exist on the remote.
 
+## Working in a sandbox
+
+In an sbx sandbox (`docker/sbx/README.md`) everything inside is yours to change,
+but network access is limited to what the machine's policy allows, often only the
+licence server. If a download, fetch or licence checkout fails because a host is
+blocked, report the host and port and stop that line of work: do not look for
+another route, and do not read "A valid license was not found" as a design problem.
+The checkout and the FinnLib clone are the user's real files, mounted writable.
+
 ## Vivado licensing on a development machine
 
 Versal parts (`xcvc1902`, ...) need a licensed `Synthesis` feature that a plain

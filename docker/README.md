@@ -96,13 +96,12 @@ user-owned native configuration.
 
 FINN supplies images and examples. Users and sites own instantiated environments,
 mounts and network policy; sbx owns composition, approval and lifecycle. FINN has
-no Cardinal contract. The development example has no optional FPGA mounts or
-site kit, and turns the shared skills store off. Effective networking still depends
+no Cardinal contract. The base environment (`sbxenv.yaml` at the repository root)
+has no FPGA mounts or network grants, and turns the shared skills store off. Effective networking still depends
 on machine/organization policy and the selected agent. Use a real licensed tool
 operation to validate FPGA licensing; policy readback or `lmstat` is insufficient.
 
-The examples were validated with client/server 0.43.0, which is a tested version,
-not a claim about the latest release. Native environment and kit interfaces are
+The environments require sbx 0.43 or later and were validated with 0.43.0. Native environment and kit interfaces are
 experimental.
 
 `compose.yaml` and `docker-bake.hcl` remain usable directly for debugging and
@@ -120,7 +119,7 @@ docker/build + Docker/sbx/SIF consumers
 docker/config.py                            host only
     -> shell assignments / Compose overrides
 
-user-owned copies of docker/sbx examples
+sbxenv.yaml + user-owned copies of the docker/sbx overlays
     -> native sbx env composition / approval / lifecycle
 
 image                                      guest only

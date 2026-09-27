@@ -55,10 +55,9 @@ Container examples:
 
 See [docker/README.md](docker/README.md) for runner and artifact details.
 
-`docker/run` provides Docker Compose execution. For agent isolation, prepare a
-template and copy the [native sbx examples](docker/sbx/README.md) outside mounted
-workspaces; use native `sbx env` commands to choose an agent and add explicit FPGA
-configuration. Users and sites own those environments and credentials. Export a
+`docker/run` provides Docker Compose execution. For agent isolation, use Docker
+Sandboxes: `sbxenv.yaml` at the root plus the overlays in
+[docker/sbx](docker/sbx/README.md) for FPGA tools, FinnLib and the licence server. Users and sites own those environments and credentials. Export a
 SIF for standard Apptainer/Singularity execution on HPC systems. Docker's `--fpga`
 option discovers your Xilinx installation and mounts it read-only.
 

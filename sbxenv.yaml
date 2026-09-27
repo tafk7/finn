@@ -2,12 +2,8 @@
   "schemaVersion": "1",
   "args": {
     "name": {
-      "required": true,
-      "description": "Unique sandbox name"
-    },
-    "workspace": {
-      "required": true,
-      "description": "Absolute FINN checkout path"
+      "default": "finn",
+      "description": "Sandbox name; give each concurrent sandbox its own"
     },
     "template": {
       "required": true,
@@ -15,12 +11,12 @@
     },
     "agent": {
       "default": "shell",
-      "description": "Native agent selection; personal settings belong in user configuration"
+      "description": "Agent to run: shell, or a coding agent such as claude"
     }
   },
   "name": "${{ env.args.name }}",
-  "workspace": "${{ env.args.workspace }}",
   "agent": "${{ env.args.agent }}",
+  "workspace": ".",
   "sandboxOptions": {
     "template": "${{ env.args.template }}",
     "pullPolicy": "never",
@@ -28,6 +24,6 @@
   },
   "env": {
     "FINN_BUILD_DIR": "/tmp/finn_build",
-    "FINN_ROOT": "${{ env.args.workspace }}"
+    "FINN_ROOT": "${{ env.fileDir }}"
   }
 }
