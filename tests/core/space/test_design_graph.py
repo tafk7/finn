@@ -122,10 +122,10 @@ def test_a_relation_node_reads_located_siblings_and_owns_its_refusal() -> None:
     refused = choose(point, 3, 4).inspect(Aligned.factor)
     assert isinstance(refused.accepted_result, Rejected)
     # Identity comes from the graph, not from literals: node and member names.
-    # (The reducer reports a refusal reached by both output and obligation twice.)
-    assert {(f.owner, f.message) for f in refused.accepted_result.findings} == {
+    # A refusal reached by both the output and the obligation is reported once.
+    assert [(f.owner, f.message) for f in refused.accepted_result.findings] == [
         ("aligned.equal", "first.factor=3, second.factor=4")
-    }
+    ]
     assert set(refused.constraints.results) == {"aligned.agreed"}
 
 

@@ -815,6 +815,10 @@ and reads `self.kitchen.cost`, so while `kitchen.finish` is open its accepted
 result lists that blocker twice (once through the obligation, once through the
 output). Iteration 3 behaved identically with `self.kitchen.cost()`.
 
+**R6 resolved at landing** ([`LANDING.md`](LANDING.md)): identical findings
+are kept once where answers are merged (the view reducer and a node's blocked
+inputs); distinct findings and their owners are all kept.
+
 ## 7. What was removed
 
 Iteration 4: `BoundView`, `Space.view()`, `accepted()`, `occurrence.bind_view`,
@@ -909,6 +913,8 @@ Iteration 4 (views read as values):
    views without a call makes the pattern common. Should a view's reduction
    de-duplicate findings by owner and code, or should an obligation that the
    output already reads be refused as redundant?
+   *Resolved at landing by de-duplicating identical findings where answers
+   merge; whether a redundant obligation should be refused stays open.*
 4. **Statically untyped obligations (R32).** `requires=` is `Sequence[object]`.
    Is the link-time refusal enough, or should obligations be written as a
    distinct marker (for example `requires=(accepted_by(kitchen.cost),)`)? That

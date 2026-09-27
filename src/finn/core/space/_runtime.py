@@ -30,6 +30,7 @@ from .results import (
     assess_constraints,
     assess_view,
     constraint_result,
+    merged_findings,
     owned_result,
     reject,
 )
@@ -107,12 +108,12 @@ class _TrialSnapshot(Snapshot):
 
 
 def _blocked(answers: list[QueryResult[object]]) -> NonValue | None:
-    """Required inputs retain all findings of the highest-precedence nonvalue."""
+    """Required inputs retain all distinct findings of the highest-precedence nonvalue."""
 
     for variant in (Unresolved, Rejected, Inapplicable):
         matches = tuple(answer for answer in answers if isinstance(answer, variant))
         if matches:
-            return variant(tuple(finding for answer in matches for finding in answer.findings))
+            return variant(merged_findings(matches))
     return None
 
 

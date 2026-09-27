@@ -92,6 +92,18 @@ def ordered_findings(findings: Iterable[Finding]) -> tuple[Finding, ...]:
     return tuple(sorted(findings, key=finding_sort_key))
 
 
+def merged_findings(answers: Iterable[NonValue]) -> tuple[Finding, ...]:
+    """The findings of several answers, each identical finding once.
+
+    One reason can reach a merge by two routes: a view that reads a value and
+    also requires it, or a computation that reads two aliases of one blocked
+    value. Findings are frozen values, so the same reason compares equal and is
+    kept once; findings that differ in anything, owner included, are all kept.
+    """
+
+    return tuple(dict.fromkeys(finding for answer in answers for finding in answer.findings))
+
+
 @dataclass(frozen=True, slots=True)
 class Available(NoTruthValue, Generic[T]):
     value: T
@@ -192,19 +204,12 @@ class DecisionState(Generic[T]):
 
 
 def _unresolved(answers: Iterable[QueryResult[object]]) -> Unresolved | None:
-    findings = tuple(
-        finding
-        for answer in answers
-        if isinstance(answer, Unresolved)
-        for finding in answer.findings
-    )
+    findings = merged_findings(answer for answer in answers if isinstance(answer, Unresolved))
     return Unresolved(findings) if findings else None
 
 
 def _rejected(answers: Iterable[QueryResult[object]]) -> Rejected | None:
-    findings = tuple(
-        finding for answer in answers if isinstance(answer, Rejected) for finding in answer.findings
-    )
+    findings = merged_findings(answer for answer in answers if isinstance(answer, Rejected))
     return Rejected(findings) if findings else None
 
 
@@ -343,6 +348,7 @@ __all__ = [
     "assess_view",
     "constraint_result",
     "finding_sort_key",
+    "merged_findings",
     "ordered_findings",
     "owned_result",
     "reject",
