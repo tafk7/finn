@@ -314,7 +314,7 @@ lifecycle command. Keep personal agent settings and credentials in user-owned
 native configuration. FINN supplies images and examples; users and sites own
 instantiated environments, while native sbx owns composition, approval and lifecycle.
 
-The examples are validated with sbx client/server 0.42.1. Native environments and
+The examples are validated with sbx client/server 0.43.0. Native environments and
 kits remain experimental. Remove and recreate after changing templates, mounts
 or kit permissions. The base has no toolchain, no licence and no network
 grant for the FINN workload. It does not inherit Docker host discovery settings.

@@ -3,7 +3,7 @@
 FINN supplies a prepared image and examples. You and your site own copied
 configuration, agents, credentials, mounts and network policy. Native sbx owns
 composition, approval and sandbox lifecycle. These files are JSON-form YAML.
-Validated with sbx client/server 0.42.1; native environments and kits are experimental.
+Validated with sbx client/server 0.43.0 (0.43 replaced `shareSkills` with `skills`); native environments and kits are experimental.
 
 ## Development
 
@@ -28,7 +28,7 @@ sbx env rm "${ARGS[@]}" "${FILES[@]}" --force
 ```
 
 These Bash arrays preserve the same files and arguments throughout the lifecycle.
-Put argument flags before file paths: sbx 0.42.1 `env exec` requires this order.
+Put argument flags before file paths: sbx `env exec` requires this order.
 The default agent is `shell`. To select a supported coding agent,
 append `--env-arg agent=claude` to `ARGS` before planning and creating a new sandbox.
 The FINN template has no coding-agent executable. Selecting an agent does not
@@ -53,7 +53,7 @@ registers credentials nor defines custom agents. Pass personal overlay paths
 explicitly: native commands with explicit paths skip `~/.sbxenv.yaml` defaults.
 
 The base has no FPGA mounts, licence settings or optional site kit. It sets
-`FINN_BUILD_DIR=/tmp/finn_build` and disables shared writable skills. Absence of
+`FINN_BUILD_DIR=/tmp/finn_build` and turns the shared skills store off. Absence of
 FINN network grants does not establish closed networking: machine/organization
 policy and selected agent kits determine connectivity. Provisioning can also
 require package-repository access.

@@ -97,11 +97,11 @@ user-owned native configuration.
 FINN supplies images and examples. Users and sites own instantiated environments,
 mounts and network policy; sbx owns composition, approval and lifecycle. FINN has
 no Cardinal contract. The development example has no optional FPGA mounts or
-site kit, and disables shared writable skills. Effective networking still depends
+site kit, and turns the shared skills store off. Effective networking still depends
 on machine/organization policy and the selected agent. Use a real licensed tool
 operation to validate FPGA licensing; policy readback or `lmstat` is insufficient.
 
-The examples were validated with client/server 0.42.1, which is a tested version,
+The examples were validated with client/server 0.43.0, which is a tested version,
 not a claim about the latest release. Native environment and kit interfaces are
 experimental.
 

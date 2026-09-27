@@ -24,7 +24,7 @@
   "sandboxOptions": {
     "template": "${{ env.args.template }}",
     "pullPolicy": "never",
-    "shareSkills": false
+    "skills": "off"
   },
   "env": {
     "FINN_BUILD_DIR": "/tmp/finn_build",
