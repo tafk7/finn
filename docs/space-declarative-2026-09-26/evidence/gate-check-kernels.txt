@@ -1,0 +1,108 @@
+Python 3.10.19
+============================= test session starts ==============================
+platform linux -- Python 3.10.19, pytest-9.1.1, pluggy-1.6.0
+rootdir: /home/tkeller/prj-kernels/finn-space-declarative
+configfile: setup.cfg
+plugins: hypothesis-6.167.1
+collected 418 items
+
+tests/core/space/test_authoring_identity.py .......                      [  1%]
+tests/core/space/test_change_contract.py ...                             [  2%]
+tests/core/space/test_changes.py ..........                              [  4%]
+tests/core/space/test_choices_runtime.py .........                       [  6%]
+tests/core/space/test_codecs.py ..........                               [  9%]
+tests/core/space/test_collapse.py ....                                   [ 10%]
+tests/core/space/test_compiler.py ...................                    [ 14%]
+tests/core/space/test_declarations.py .................................  [ 22%]
+tests/core/space/test_design_graph.py ..............                     [ 26%]
+tests/core/space/test_domains.py .......                                 [ 27%]
+tests/core/space/test_evidence.py ......                                 [ 29%]
+tests/core/space/test_expressions.py .............                       [ 32%]
+tests/core/space/test_extensions.py ........                             [ 34%]
+tests/core/space/test_house.py ......                                    [ 35%]
+tests/core/space/test_inspection.py .......                              [ 37%]
+tests/core/space/test_instance_lifecycle.py .                            [ 37%]
+tests/core/space/test_invariants.py .                                    [ 37%]
+tests/core/space/test_lifecycle.py .....                                 [ 38%]
+tests/core/space/test_native_admission.py ................               [ 42%]
+tests/core/space/test_native_cleanup.py ................................ [ 50%]
+.....                                                                    [ 51%]
+tests/core/space/test_native_execution.py ..........................     [ 57%]
+tests/core/space/test_nested_parameter_bindings.py ..................    [ 62%]
+tests/core/space/test_overrides.py ..............                        [ 65%]
+tests/core/space/test_public_snapshots.py .....                          [ 66%]
+tests/core/space/test_reference_misuse.py .............................. [ 73%]
+.......................                                                  [ 79%]
+tests/core/space/test_references.py ...........                          [ 82%]
+tests/core/space/test_runtime.py ........                                [ 83%]
+tests/core/space/test_scopes.py ........                                 [ 85%]
+tests/core/space/test_selections.py ...........                          [ 88%]
+tests/core/space/test_semantics.py ....................                  [ 93%]
+tests/core/space/test_surface_refinement.py ..................           [ 97%]
+tests/core/space/test_typing.py .                                        [ 97%]
+tests/core/space/test_view_values.py .........                           [100%]
+
+======================== 418 passed in 61.05s (0:01:01) ========================
+66 files already formatted
+All checks passed!
+Success: no issues found in 27 source files
+Success: no issues found in 39 source files
+============================= test session starts ==============================
+platform linux -- Python 3.10.19, pytest-9.1.1, pluggy-1.6.0
+rootdir: /home/tkeller/prj-kernels/finn-space-declarative
+configfile: setup.cfg
+plugins: hypothesis-6.167.1
+collected 763 items
+
+tests/kernels/artifacts/test_abi.py .................................... [  4%]
+......                                                                   [  5%]
+tests/kernels/artifacts/test_build.py ........................           [  8%]
+tests/kernels/artifacts/test_contributions.py .............              [ 10%]
+tests/kernels/artifacts/test_derivation.py ............................. [ 14%]
+                                                                         [ 14%]
+tests/kernels/artifacts/test_existing_identities.py .................... [ 16%]
+.                                                                        [ 16%]
+tests/kernels/artifacts/test_isolation.py ..................             [ 19%]
+tests/kernels/artifacts/test_packaging.py .............................. [ 23%]
+.                                                                        [ 23%]
+tests/kernels/artifacts/test_projection.py .......................       [ 26%]
+tests/kernels/artifacts/test_projection_properties.py ....               [ 26%]
+tests/kernels/artifacts/test_render.py ..............                    [ 28%]
+tests/kernels/artifacts/test_request.py ......................           [ 31%]
+tests/kernels/artifacts/test_rtl.py .............
+A7 parse rate: 133/134 (4 $KEY$ templates excluded)
+  declined: finn-rtllib/dwc/hdl/dwc.sv DiagCode(TypeRefDeclVar)
+.                       [ 33%]
+tests/kernels/artifacts/test_sources.py .........................        [ 36%]
+tests/kernels/artifacts/test_store.py .................................. [ 41%]
+                                                                         [ 41%]
+tests/kernels/rtlsim/test_observed_transport.py ...                      [ 41%]
+tests/kernels/test_axi_stream.py ......                                  [ 42%]
+tests/kernels/test_axi_stream_declaration.py ........................... [ 45%]
+........                                                                 [ 46%]
+tests/kernels/test_boundaries.py ............                            [ 48%]
+tests/kernels/test_datatypes.py ........................................ [ 53%]
+...................................                                      [ 58%]
+tests/kernels/test_declared_streams.py ........                          [ 59%]
+tests/kernels/test_dotp.py ............................................. [ 65%]
+................                                                         [ 67%]
+tests/kernels/test_flat_kernels.py ..................................... [ 72%]
+.............................                                            [ 76%]
+tests/kernels/test_installed_package.py .                                [ 76%]
+tests/kernels/test_kernel_extensions.py ...................              [ 78%]
+tests/kernels/test_migrated_rich.py .....................                [ 81%]
+tests/kernels/test_migrated_simple.py ...............................    [ 85%]
+tests/kernels/test_mvau_assembly.py .....................                [ 88%]
+tests/kernels/test_mvau_collapse.py ..                                   [ 88%]
+tests/kernels/test_mvau_delivery_choice.py .................             [ 90%]
+tests/kernels/test_native_streams.py .....                               [ 91%]
+tests/kernels/test_scalar_policies.py ................                   [ 93%]
+tests/kernels/test_stream_contract.py .....................              [ 96%]
+tests/kernels/test_streaming_components.py ............................. [100%]
+
+======================= 763 passed in 292.92s (0:04:52) ========================
+100 files already formatted
+All checks passed!
+Success: no issues found in 52 source files
+Success: no issues found in 10 source files
+exit status: 0
