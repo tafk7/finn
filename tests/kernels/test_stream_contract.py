@@ -57,6 +57,7 @@ from finn.transformation.fpgadataflow.transpose_decomposition import (
     shuffle_perfect_loopnest_coeffs,
 )
 from kernels.test_migrated_simple import eltwise
+from kernels.helpers import finnlib_root
 
 ROOT = Path(__file__).resolve().parents[2]
 INT3 = ScalarEncoding(DataType["INT3"])
@@ -438,7 +439,7 @@ def test_eltwise_with_cyclic_constant_computes_the_broadcast_sum(tmp_path):
     store = ArtifactStore(tmp_path / "store")
     prepared = prepare_module_build(
         requirements,
-        roots={"kernels": resource_root(), "finnlib": ROOT / "deps/finnlib"},
+        roots={"kernels": resource_root(), "finnlib": finnlib_root()},
         template_roots=(template_root(),),
         blobs=store,
     )

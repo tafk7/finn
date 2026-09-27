@@ -1,18 +1,19 @@
 # Working in this repository
 
-## Never block on a Docker RTL run
+## Never block on an RTL run
 
-Anything that goes through `run-docker.sh` — Vivado, `xelab`/XSI, IP packaging,
-synthesis — takes minutes to tens of minutes. Start it in a **background
-shell** and keep working; do not sit on a foreground call waiting for it.
+Anything that runs Vivado — `xelab`/XSI, IP packaging, synthesis — takes minutes
+to tens of minutes, natively or through `./docker/run --fpga`. Start it in a
+**background shell** and keep working; do not sit on a foreground call waiting
+for it.
 
 ```
 # right
 Bash(run_in_background=true):
-    FINN_DOCKER_EXTRA="..." bash run-docker.sh bash <runner>.sh
+    PYTHONPATH=src:tests python -m kernels.rtlsim.mvau_assembly_numeric --case packed
 
 # wrong
-Bash(timeout=3000): bash run-docker.sh ...          # blocks the whole session
+Bash(timeout=3000): python -m kernels.rtlsim...     # blocks the whole session
 ```
 
 Have the runner `tee` to a gitignored `*.log` and propagate the child's exit
@@ -36,33 +37,20 @@ substantial, launch an agent instead: it keeps the multi-hundred-line Vivado
 transcripts out of the main context and reports the conclusion. One agent per
 independent sweep.
 
-### Do not run two `run-docker.sh` invocations at once
-
-They race and one of them dies. `docker/finn_entrypoint.sh` moves
-`deps/qonnx/pyproject.toml` aside while it runs `pip install -e`, then moves it
-back. The repository is bind-mounted into every container, so that one file is
-shared: a second container entering the same window fails with
-
-```
-mv: cannot stat '.../deps/qonnx/pyproject.toml': No such file or directory
-```
-
-and exits before producing a log at all. The failure names qonnx and looks
-nothing like a concurrency problem, which is why it is written down here. Run
-Docker invocations sequentially.
-
 ### Running against FinnLib
 
-The kernels compile against FinnLib, which is a separate repository.
-`fetch-repos.sh` pins it under `deps/finnlib`; a local working clone is reached
-by mounting it and setting `FINNLIB_ROOT`:
+The kernels compile against FinnLib, a separate repository that FINN takes as
+the `finnlib` resource (`src/finn/_data/resources.toml`). Work against a clone:
 
 ```
-FINN_DOCKER_EXTRA="-v /path/to/finnlib:/path/to/finnlib -e FINNLIB_ROOT=/path/to/finnlib "
+export FINN_RESOURCES_FINNLIB=/path/to/finnlib       # native
+./docker/run --volume /path/to/finnlib:/path/to/finnlib -- ...   # plus the same variable
 ```
 
-Pin only commits that exist on the remote — `fetch-repos.sh` clones and then
-checks out, so a local unpushed hash fails the fetch for everyone.
+In sbx, use the `finnlib` overlay (`docker/sbx/README.md`). Without the override
+FINN uses the pinned commit, fetched over SSH into the resource cache. Move the
+pin with `finn-resources update finnlib --ref BRANCH`, and only to commits that
+exist on the remote.
 
 ## Vivado licensing on a development machine
 
@@ -97,17 +85,15 @@ finn.core.space  <-  finn.dataflow  <-  finn.kernels  <-  finn.parked
 - `finn.parked` — retired code kept as reference only. It is not tested, not
   shipped, and nothing live imports it.
 
-Gates (both use the kernel venv):
+Gates, in the project environment (`uv sync`, then `.venv/bin` on `PATH` or
+`source scripts/activate.sh`):
 
 ```
-PYTHON_BIN=/home/tkeller/prj-kernels/.kernel-venv/bin/python bash scripts/check-kernels.sh
-PYTHON_BIN=/home/tkeller/prj-kernels/.kernel-venv/bin/python bash scripts/check-dataflow-design.sh
+bash scripts/check-space.sh
+bash scripts/check-dataflow-design.sh
+bash scripts/check-kernels.sh      # includes check-space; needs FinnLib
 ```
 
 Run `ruff format` only on the paths you changed; formatting all of `src`
-rewrites unrelated FINN files.
-
-**mypy must not see `deps/qonnx/src` on `PYTHONPATH`.** With qonnx importable,
-its missing `py.typed` turns every qonnx import into a different error code and
-the `# type: ignore[import-not-found]` comments read as unused — dozens of
-false positives. The gates run mypy under `env -u PYTHONPATH`.
+rewrites unrelated FINN files. The Space, dataflow and kernel packages are
+formatted by ruff, the rest of FINN by black and isort (`.pre-commit-config.yaml`).

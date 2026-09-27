@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 """Builder output types and wrapper handles remain useful without generated stubs."""
 
-from typing_extensions import assert_type
+from typing import assert_type
 
 from finn.core.space import (
     Available,

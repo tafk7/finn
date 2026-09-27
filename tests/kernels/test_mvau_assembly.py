@@ -6,9 +6,10 @@
 from pathlib import Path
 
 import pytest
-from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
+from qonnx.core.datatype import DataType
 
 from kernels.helpers import assess, point_for, value
+from kernels.helpers import finnlib_root
 from finn.core.space import Available, Rejected, Unresolved
 from finn.kernels.artifacts.abi import Bus
 from finn.kernels.artifacts.build import prepare_module_build, render_module_sources
@@ -185,7 +186,7 @@ def test_build_is_complete_and_initializer_changes_identity(tmp_path, delivery):
     store = ArtifactStore(tmp_path / "store")
     prepared = prepare_module_build(
         built.requirements,
-        roots={"kernels": resource_root(), "finnlib": ROOT / "deps/finnlib"},
+        roots={"kernels": resource_root(), "finnlib": finnlib_root()},
         template_roots=(template_root(),),
         blobs=store,
     )
@@ -199,7 +200,7 @@ def test_build_is_complete_and_initializer_changes_identity(tmp_path, delivery):
         changed = assembly(weight_delivery=delivery, weights=[[1] * 4] * 4)
         changed_prepared = prepare_module_build(
             changed.requirements,
-            roots={"kernels": resource_root(), "finnlib": ROOT / "deps/finnlib"},
+            roots={"kernels": resource_root(), "finnlib": finnlib_root()},
             template_roots=(template_root(),),
             blobs=store,
         )

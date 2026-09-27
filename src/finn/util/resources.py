@@ -8,7 +8,7 @@ from importlib.resources import files
 from pathlib import Path
 
 
-def resource_path(family, *parts):
+def resource_path(family: str, *parts: str) -> str:
     """Return an existing path in rtllib, custom_hls, xsi or qnn-data."""
     if family not in {"rtllib", "custom_hls", "xsi", "qnn-data"}:
         raise KeyError(family)

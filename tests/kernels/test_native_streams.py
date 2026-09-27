@@ -1,7 +1,6 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-from pathlib import Path
 import shutil
 import subprocess
 
@@ -14,6 +13,7 @@ from finn.kernels.fifo import FifoKernel
 from finn.kernels.physical.stream import MarkerKind, ReadyValidStream, StreamMarker
 from kernels.test_migrated_rich import generator
 from kernels.test_migrated_simple import eltwise
+from kernels.helpers import finnlib_root
 
 
 def test_native_streams_are_inspectable_without_storage_choices():
@@ -74,7 +74,7 @@ def test_fifo_capacity_and_effective_storage_agree_with_native_rtl(tmp_path):
             f'.CAPACITY({storage.capacity}), .EFFECTIVE("{storage.effective_style}")) '
             f"c{index}(done[{index}]);"
         )
-    source = Path(__file__).resolve().parents[2] / "deps/finnlib/rtl/fifo.sv"
+    source = finnlib_root() / "rtl/fifo.sv"
     testbench = tmp_path / "fifo_capacity_test.sv"
     testbench.write_text(
         """

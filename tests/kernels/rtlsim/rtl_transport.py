@@ -36,7 +36,7 @@ from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any, cast
 
-import numpy as np  # type: ignore[import-not-found]
+import numpy as np
 
 from finn.xsi import close_rtlsim, compile_sim_obj, load_sim_obj, reset_rtlsim
 

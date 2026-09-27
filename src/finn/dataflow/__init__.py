@@ -24,8 +24,6 @@ the standard library. It never imports ``finn.kernels`` or ``finn.parked``.
 - ``datatypes``: the QONNX scalar datatype value boundary.
 - ``model.logical``: Regions, Networks, coordinate maps, validation,
   presentation, references, composition and their value semantics.
-- ``kernels.matmul`` and ``parameters.cyclic``: reference Regions and Networks
-  for concrete kernel families, built from the values above.
 
 This module deliberately re-exports nothing.  A value with two importable paths
 looks like a value with two owners.  Import from the module that owns it.

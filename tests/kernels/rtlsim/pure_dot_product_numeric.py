@@ -13,12 +13,11 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass
-import os
 from pathlib import Path
 import tempfile
 
-import numpy as np  # type: ignore[import-not-found]
-from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
+import numpy as np
+from qonnx.core.datatype import DataType
 
 from kernels.rtlsim.dotp_support import (
     Case,
@@ -28,6 +27,7 @@ from kernels.rtlsim.dotp_support import (
     _wrapper,
 )
 from kernels.rtlsim.rtl_transport import drive_observed
+from kernels.helpers import finnlib_root
 from finn.kernels.artifacts.contribution_types import CopiedSource
 from finn.kernels.dotp import DotpAxiKernel
 from finn.kernels.target import DspBlock
@@ -149,7 +149,7 @@ def run(configuration: Configuration, evidence: Path, *, backpressure_ticks: int
         padding = ((1 << stream.carrier_bits) - 1) ^ ((1 << stream.payload_bits) - 1)
         stimulus[name] = [beat | (padding if j % 2 else 0) for j, beat in enumerate(stimulus[name])]
     roots = {
-        "finnlib": Path(os.environ["FINNLIB_ROOT"]),
+        "finnlib": finnlib_root(),
         "kernels": resource_root(),
     }
     sources = []

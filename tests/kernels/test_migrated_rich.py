@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import cast
 
 import pytest
@@ -20,6 +19,7 @@ from finn.kernels.resources import template_root
 from finn.core.space import Param, Rejected, Space, Subspace, Unresolved
 from finn.core.space.errors import RequestError
 from finn.kernels.thresholding import ThresholdingAxiKernel
+from kernels.helpers import finnlib_root
 
 TABLE: ThresholdTable = (((-2, 0, 3), (-1, 1, 4)),)
 
@@ -233,7 +233,7 @@ def test_hls_view_preserves_cpp_types_interfaces_and_header_closure(dtype: str, 
     ]
     rendered = render_hls_sources(
         requirements,
-        roots={"finnlib": Path(__file__).resolve().parents[2] / "deps/finnlib"},
+        roots={"finnlib": finnlib_root()},
         template_roots=(template_root(),),
     )
     assert [name for name, _ in rendered] == [

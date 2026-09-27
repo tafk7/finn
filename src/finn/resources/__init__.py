@@ -135,7 +135,7 @@ def status(name):
     return Status(name, "missing", None, str(_store.fetch_root()))
 
 
-def path(name, fetch=True):
+def path(name: str, fetch: bool = True) -> str:
     """Return a resource's directory, fetching it into the cache if needed."""
     current = status(name)
     if current.path:
@@ -151,7 +151,7 @@ def path(name, fetch=True):
     return str(_store.fetch(resource, _store.fetch_root()))
 
 
-def paths(kind, fetch=True):
+def paths(kind: str, fetch: bool = True) -> list[str]:
     """Return the directories of every resource of a kind, in declaration order."""
     return [path(r.name, fetch) for r in declarations().values() if kind in r.kind]
 

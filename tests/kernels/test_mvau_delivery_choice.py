@@ -37,6 +37,7 @@ from finn.kernels.mvau import MVAU, WeightDelivery, mvau_assembly
 from finn.kernels.streams import TopInput
 from finn.kernels.resources import resource_root, template_root
 from finn.kernels.target import DspBlock
+from kernels.helpers import finnlib_root
 
 ROOT = Path(__file__).resolve().parents[2]
 IMAGE = CyclicDelivery.image
@@ -334,7 +335,7 @@ def test_rom_style_reaches_the_prepared_build_without_data_slots(tmp_path, style
     store = ArtifactStore(tmp_path / "store")
     prepared = prepare_module_build(
         built.requirements,
-        roots={"kernels": resource_root(), "finnlib": ROOT / "deps/finnlib"},
+        roots={"kernels": resource_root(), "finnlib": finnlib_root()},
         template_roots=(template_root(),),
         blobs=store,
     )

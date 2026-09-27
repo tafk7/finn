@@ -3,7 +3,7 @@
 
 """Explicit XSI matrix conformance for physical-only MVAU production builds.
 
-Run with FINN_ROOT, FINNLIB_ROOT and the XSI library path configured. The
+Run with FINN_ROOT, FinnLib (the finnlib resource) and the XSI library path configured. The
 observation wrapper only exposes child pins; all arithmetic and transport RTL
 comes from the materialized ModuleBuildRequirements. Each simulation uses a
 fresh process through the shared observed transport driver.
@@ -13,14 +13,14 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass
-import os
 from pathlib import Path
 import tempfile
 
-import numpy as np  # type: ignore[import-not-found]
-from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
+import numpy as np
+from qonnx.core.datatype import DataType
 
 from kernels.rtlsim.rtl_transport import drive_observed
+from kernels.helpers import finnlib_root
 from finn.kernels.artifacts.build import materialize_module_sources, prepare_module_build
 from finn.kernels.artifacts.store import ArtifactStore
 from finn.kernels.mvau import WeightDelivery, mvau_assembly
@@ -154,7 +154,7 @@ def run(
     store = ArtifactStore(directory / "store")
     prepared = prepare_module_build(
         built.requirements,
-        roots={"kernels": resource_root(), "finnlib": Path(os.environ["FINNLIB_ROOT"])},
+        roots={"kernels": resource_root(), "finnlib": finnlib_root()},
         template_roots=(template_root(),),
         blobs=store,
     )

@@ -19,7 +19,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Union, cast
 
-from jinja2 import Environment, TemplateError, meta, nodes  # type: ignore[import-not-found]
+from jinja2 import Environment, TemplateError, meta, nodes
 
 from finn.kernels.artifacts.abi import ClockAlignment, ComponentABI, Port
 from finn.kernels.artifacts.contributions import CopiedSource, DataSlot

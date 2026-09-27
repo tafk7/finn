@@ -1,12 +1,5 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
-#
-# msgspec is declared in requirements.txt but is not installed in the
-# interpreter the mypy gate runs under, so `Struct` resolves to Any and every
-# subclass and keyword here reads as an error.  The same situation qonnx is in
-# throughout this tree.  Waived for this module only; the runtime behaviour --
-# strict decode, forbidden unknown fields -- is what the tests next door check.
-# mypy: disable-error-code="call-arg, misc, no-any-return"
 
 """``artifact.json``: intrinsic derivation only, and a strict decode.
 
@@ -41,7 +34,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-import msgspec  # type: ignore[import-not-found]
+import msgspec
 
 #: Bumped when the manifest's *shape* changes.  A store can then say
 #: *unsupported schema* rather than reporting an unexplained miss.

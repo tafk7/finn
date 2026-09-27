@@ -2,17 +2,17 @@
 # SPDX-License-Identifier: BSD-3-Clause
 """Typed ports and scalars retain concrete child, field and view types."""
 
-from typing_extensions import assert_type
+from typing import assert_type
 
-from finn.kernels.datatypes.scalar import IntegerScalar, Scalar, ScalarEncoding
+from finn.core.space import BoundView, Param, QueryResult, Subspace, ValueRef, ViewAssessment
 from finn.dataflow.datatypes import QONNXDataType
+from finn.kernels.datatypes.scalar import IntegerScalar, Scalar, ScalarEncoding
 from finn.kernels.dotp import DotpAxiKernel
 from finn.kernels.eltwise import EltwiseKernel
 from finn.kernels.physical.axi_stream import AxiStream, AxiStreamPort
 from finn.kernels.physical.layout import PackedBeatLayout
 from finn.kernels.physical.ports import NativeStreamPort
 from finn.kernels.physical.stream import ReadyValidStream
-from finn.core.space import BoundView, Param, QueryResult, Subspace, ValueRef, ViewAssessment
 
 
 def check(point: DotpAxiKernel, eltwise: EltwiseKernel) -> None:

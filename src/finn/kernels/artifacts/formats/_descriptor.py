@@ -1,11 +1,5 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
-#
-# msgspec is declared in requirements.txt but is absent from the interpreter
-# the mypy gate runs under, so `Struct` resolves to Any and every subclass and
-# keyword reads as an error.  The same situation qonnx is in throughout this
-# tree.  Waived for this module only.
-# mypy: disable-error-code="call-arg, misc, no-any-return"
 
 """The ABI, written down and read back.
 
@@ -17,7 +11,7 @@ test does not change, which is the point of putting the codec here.
 
 from __future__ import annotations
 
-import msgspec  # type: ignore[import-not-found]
+import msgspec
 
 from finn.kernels.artifacts.abi import (
     AbiError,
@@ -341,25 +335,25 @@ def decode(data: bytes) -> ComponentABI:
         raise AbiError(f"not a component descriptor: {error}") from error
 
     ports: list[Port] = []
-    for port in record.ports:
-        if port.kind == "signal":
+    for entry in record.ports:
+        if entry.kind == "signal":
             ports.append(
-                Signal(port.name, Direction(port.direction), port.width, _role_in(port.role))
+                Signal(entry.name, Direction(entry.direction), entry.width, _role_in(entry.role))
             )
             continue
-        if port.kind != "bus":
-            raise AbiError(f"unknown descriptor port kind {port.kind!r}")
+        if entry.kind != "bus":
+            raise AbiError(f"unknown descriptor port kind {entry.kind!r}")
         ports.append(
             Bus(
-                port.name,
-                _protocol_in(port.protocol, port.protocol_spec),
+                entry.name,
+                _protocol_in(entry.protocol, entry.protocol_spec),
                 tuple(
-                    Member(logical, physical, width) for logical, physical, width in port.signals
+                    Member(logical, physical, width) for logical, physical, width in entry.signals
                 ),
-                endpoint=Endpoint(port.endpoint),
-                role=_role_in(port.role),
-                associated_clock=port.associated_clock,
-                associated_reset=port.associated_reset,
+                endpoint=Endpoint(entry.endpoint),
+                role=_role_in(entry.role),
+                associated_clock=entry.associated_clock,
+                associated_reset=entry.associated_reset,
             )
         )
     return ComponentABI(record.entry_point, tuple(ports), record.parameters)

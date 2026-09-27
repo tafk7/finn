@@ -41,13 +41,13 @@ from typing import Any
 # Jinja2 is a real dependency and is present in the container and the working
 # venv, but not in the interpreter the mypy gate runs under -- the same
 # situation qonnx is in throughout this tree, and handled the same way.
-from jinja2 import (  # type: ignore[import-not-found]
+from jinja2 import (
     FileSystemLoader,
     StrictUndefined,
     TemplateError,
     UndefinedError,
 )
-from jinja2.sandbox import SandboxedEnvironment  # type: ignore[import-not-found]
+from jinja2.sandbox import SandboxedEnvironment
 
 #: What a context value may be.  Everything else is refused at the boundary
 #: rather than stringified inside a template.

@@ -13,28 +13,28 @@ declaration — which is exactly what a descriptor overload silently loses.
 
 from __future__ import annotations
 
-from typing_extensions import assert_type
+from typing import assert_type
 
 from finn.core.space import (
-    QueryResult,
     BoundView,
+    ChoiceView,
     Const,
     Decision,
     Derived,
     Param,
+    QueryResult,
     Space,
     SpaceModel,
     Subspace,
     SubspaceChoice,
-    ChoiceView,
     ValueKey,
     ValueRef,
     View,
     ViewAssessment,
     compile_space,
+    constraint,
     derived,
     view,
-    constraint,
 )
 
 RESULT = ValueKey("result", int)

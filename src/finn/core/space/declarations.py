@@ -14,9 +14,7 @@ from __future__ import annotations
 import re
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Generic, TypeVar, cast, overload
-
-from typing_extensions import Self
+from typing import TYPE_CHECKING, Generic, Self, TypeVar, cast, overload
 
 from .domains import Domain, finite
 from .errors import DefinitionError

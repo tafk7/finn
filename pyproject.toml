@@ -24,12 +24,18 @@ dependencies = [
     "bitstring>=4.2.3,<5",
     "clize>=5.0.1,<6",
     "dataclasses-json>=0.5.7,<0.7",
+    # finn.core.space evaluates computations on greenlets.
+    "greenlet>=3.2.4,<4",
+    # finn.kernels.artifacts: templates, manifests and the RTL interface checker.
+    "jinja2>=3.1.6,<4",
+    "msgspec>=0.21.1,<0.22",
     "numpy>=1.26.4,<2",
     "onnx>=1.22.0,<1.23",
     "onnx-ir>=1.0.0,<2",
     "onnxruntime>=1.28.0,<1.29",
     "onnxscript>=0.6.2,<0.7",
     "pybind11>=2.11.1,<3",
+    "pyslang>=11.0.0,<12",
     "qonnx>=1.0.0",
     "scipy>=1.11.4,<2",
     "torch>=2.8.0,<3",
@@ -52,6 +58,7 @@ test = [
     "wheel>=0.45.1",
     "brevitas",
     "dataset-loading",
+    "hypothesis>=6.167.1,<7",
     "importlib-resources>=6.1.0",
     "nbconvert>=7",
     "nbformat>=5",
@@ -87,8 +94,15 @@ docs = [
     "sphinx>=5.0.2,<6",
     "sphinx-rtd-theme>=2.0.0,<3",
 ]
+# Format, lint and strict typing of finn.core.space, finn.dataflow and finn.kernels
+# (scripts/check-*.sh).
+gates = [
+    "mypy==2.3.1",
+    "ruff==0.16.4",
+]
 dev = [
     { include-group = "docs" },
+    { include-group = "gates" },
     "pip",
     "pre-commit>=3.5.0",
 ]
@@ -121,6 +135,34 @@ torchvision = { index = "pytorch-cpu" }
 name = "pytorch-cpu"
 url = "https://download.pytorch.org/whl/cpu"
 explicit = true
+
+[tool.mypy]
+# The strict gates (scripts/check-*.sh) pass --strict and their file lists on the
+# command line; this section only carries the overrides below.
+
+[[tool.mypy.overrides]]
+# finn.xsi loads Vivado's simulation extension by manipulating sys.path at call
+# time, so its imports cannot be resolved statically. follow_imports rather than
+# ignore_errors: it stops the module being checked as a side effect of an import,
+# but leaves it checkable when it is named on the command line.
+module = ["finn.xsi", "finn.xsi.*"]
+follow_imports = "skip"
+
+[[tool.mypy.overrides]]
+# QONNX ships no type information.
+module = ["qonnx", "qonnx.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# pyslang 11's generated stubs do not parse (a parameter named `with`).
+module = ["pyslang", "pyslang.*"]
+follow_imports = "skip"
+follow_imports_for_stubs = true
+
+[[tool.mypy.overrides]]
+# The compiled extension, which exists only after its first-use build.
+module = ["finn_xsi.*", "xsi"]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 addopts = "--verbose"

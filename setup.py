@@ -113,12 +113,26 @@ class Sdist(sdist):
 
 if __name__ == "__main__":
     packages = find_namespace_packages(
-        "src", exclude=["finn.qnn-data", "finn.qnn-data.*", "finn._data.*"]
+        "src",
+        exclude=[
+            "finn.qnn-data",
+            "finn.qnn-data.*",
+            "finn._data.*",
+            # Retired dataflow code, kept in the checkout as reference only.
+            "finn.parked",
+            "finn.parked.*",
+        ],
     )
     setup(
         cmdclass={"build_py": BuildPy, "sdist": Sdist},
         version=Path("VERSION").read_text().strip(),
         packages=packages,
         package_dir={"": "src"},
-        package_data={"finn._data": resource_files("src/finn/_data")},
+        package_data={
+            "finn._data": resource_files("src/finn/_data"),
+            "finn.core.space": ["py.typed"],
+            "finn.dataflow": ["py.typed"],
+            "finn.kernels": ["py.typed"],
+            "finn.kernels.resources": ["*.sv", "*.j2"],
+        },
     )

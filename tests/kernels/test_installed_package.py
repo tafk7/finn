@@ -6,7 +6,6 @@
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -14,11 +13,13 @@ import sys
 from email.parser import BytesParser
 import zipfile
 
+from finn import resources as finn_resources
+
 
 ROOT = Path(__file__).resolve().parents[2]
 # -I -S ignores PYTHONPATH, the current directory, user packages and .pth files.
-# Only the wheel target, a copied QONNX dependency and ordinary dependency
-# site-packages are added. No FINN source or test package is on this path.
+# Only the wheel target and ordinary dependency site-packages (which provide
+# QONNX) are added. No FINN source or test package is on this path.
 INSTALLED_BUILD = r"""
 import importlib.abc
 import json
@@ -28,7 +29,7 @@ import sys
 
 config = json.loads(sys.argv[1])
 installed = Path(config["installed"])
-sys.path[:0] = [str(installed), config["qonnx"], *config["site_packages"]]
+sys.path[:0] = [str(installed), *config["site_packages"]]
 sys.dont_write_bytecode = True
 
 class RejectGraphDependencies(importlib.abc.MetaPathFinder):
@@ -49,9 +50,7 @@ sys.meta_path.insert(0, RejectGraphDependencies())
 
 from finn.kernels import DotpAxiKernel, DspBlock, WeightDelivery, mvau_assembly
 from finn.core.space import Decision, Param, Space, derived, divisors_of, view
-import greenlet
-
-assert greenlet.__version__ == "3.2.4"
+import greenlet  # the Space engine's declared native dependency
 
 class Tiles(Space):
     extent = Param(int)
@@ -180,13 +179,12 @@ def _run(command: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
 
 
 def test_installed_wheel_materializes_independent_kernel_builds(tmp_path: Path) -> None:
-    finnlib = Path(os.environ.get("FINNLIB_ROOT", str(ROOT / "deps/finnlib"))).resolve()
-    qonnx = (ROOT / "deps/qonnx").resolve()
+    finnlib = Path(finn_resources.path("finnlib")).resolve()
     # Build from a clean temporary source snapshot: setuptools must neither
     # reuse a checkout build tree nor write generated metadata into the checkout.
     snapshot = tmp_path / "source"
     snapshot.mkdir()
-    for name in ("setup.py", "setup.cfg", "README.md"):
+    for name in ("setup.py", "pyproject.toml", "VERSION", "README.md"):
         shutil.copy2(ROOT / name, snapshot / name)
     shutil.copytree(
         ROOT / "src", snapshot / "src", ignore=shutil.ignore_patterns("__pycache__", "*.egg-info")
@@ -234,8 +232,10 @@ def test_installed_wheel_materializes_independent_kernel_builds(tmp_path: Path) 
         )
         metadata = BytesParser().parsebytes(archive.read(metadata_name))
         requirements = metadata.get_all("Requires-Dist", [])
-        assert "greenlet==3.2.4" in {value.replace(" ", "") for value in requirements}
-        assert any(value.startswith("typing_extensions") for value in requirements)
+        names = {value.split(";")[0].replace(" ", "") for value in requirements}
+        for dependency in ("greenlet", "jinja2", "msgspec", "pyslang"):
+            assert any(name.startswith(dependency) for name in names), dependency
+        assert not any(name.startswith("typing") for name in names)
     installed = tmp_path / "installed"
     _run(
         [
@@ -254,8 +254,6 @@ def test_installed_wheel_materializes_independent_kernel_builds(tmp_path: Path) 
         ],
         tmp_path,
     )
-    dependency_root = tmp_path / "dependency"
-    shutil.copytree(qonnx / "src/qonnx", dependency_root / "qonnx")
     # Include real dependency directories from this interpreter, including an
     # explicitly shared environment. Do not execute .pth files or add source
     # roots. Preserve overlay precedence so the native dependency comes from
@@ -269,7 +267,6 @@ def test_installed_wheel_materializes_independent_kernel_builds(tmp_path: Path) 
     assert dependency_paths
     config = {
         "installed": str(installed),
-        "qonnx": str(dependency_root),
         "finnlib": str(finnlib),
         "site_packages": dependency_paths,
         "store": str(tmp_path / "store"),

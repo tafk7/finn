@@ -226,7 +226,7 @@ def test_selection_reads_replay_and_codec_bindings_have_strict_types(tmp_path: P
     mypy = shutil.which("mypy")
     assert mypy is not None
     project = Path(__file__).resolve().parents[3]
-    common = """from typing_extensions import assert_type
+    common = """from typing import assert_type
 from finn.core.space import (
     Decision, Param, Space, ValueCodec, JSONValue, codec_for, compile_space,
     selections, Selection, ConfigurationResult,

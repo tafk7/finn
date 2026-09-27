@@ -49,7 +49,7 @@ from collections.abc import Callable
 import re
 from typing import Protocol, TypeGuard, cast
 
-from qonnx.core.datatype import (  # type: ignore[import-not-found]
+from qonnx.core.datatype import (
     BaseDataType,
     DataType,
 )

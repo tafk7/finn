@@ -7,7 +7,10 @@ Supplied facts use exposed parameter keys. Required omissions are errors;
 partial evaluation uses explicit optional-Param or unresolved-Decision fixtures."""
 
 from collections.abc import Mapping
+from pathlib import Path
 from typing import TypeVar
+
+from finn import resources
 
 from finn.core.space import Space, compile_space
 from finn.core.space import Constraint
@@ -45,3 +48,8 @@ def value(answer: QueryResult[T]) -> T:
 
 def assess(point: Space, condition: Constraint) -> QueryResult[bool]:
     return point.inspect(condition).result
+
+
+def finnlib_root() -> Path:
+    """FinnLib as FINN resolves it: FINN_RESOURCES_FINNLIB, a cached copy, or a fetch."""
+    return Path(resources.path("finnlib"))

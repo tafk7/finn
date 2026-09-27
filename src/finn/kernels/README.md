@@ -198,7 +198,9 @@ places a FIFO on the weight stream.
 Pass source roots explicitly to `finn.kernels.artifacts.build.prepare_module_build`:
 `roots={"kernels": resource_root(), "finnlib": finnlib_root}` and
 `template_roots=(template_root(),)`, importing both helpers from
-`finn.kernels.resources`. `finnlib_root` is a `Path` to the pinned FinnLib checkout;
+`finn.kernels.resources`. `finnlib_root` is `Path(finn.resources.path("finnlib"))`:
+FinnLib is a FINN resource, a working clone when `FINN_RESOURCES_FINNLIB` is set and
+otherwise the pinned commit;
 `blobs` is an `ArtifactStore`. `materialize_module_sources(prepared, store)` then
 produces the complete source set. Both resource helpers work from an installed
 package. Local source paths are relative to the resource directory; no source
@@ -209,10 +211,9 @@ generic Space and kernel code checks. From scratchpad, run
 `python space/check-examples.py --finn-root /path/to/finn-checkout`
 for executable documentation examples. The generic package has its own
 `py.typed` marker and uses the declared
-`greenlet==3.2.4` runtime dependency. Explicit XSI checks live in `tests/kernels/rtlsim`; run, for
+`greenlet` runtime dependency. Explicit XSI checks live in `tests/kernels/rtlsim`; run, for
 example, `python -m kernels.rtlsim.mvau_assembly_numeric --case packed` with
-`PYTHONPATH=src:tests:deps/qonnx/src`, `FINN_ROOT`, `FINNLIB_ROOT` and the Vivado
-library path configured. `pure_dot_product_numeric --stress` exercises sustained
+`PYTHONPATH=src:tests` and Vivado selected. `pure_dot_product_numeric --stress` exercises sustained
 one-beat reductions with long output stalls.
 
 `finn.kernels` builds on the canonical logical values in `finn.dataflow`
@@ -223,9 +224,9 @@ source reconstruction and graph transactions are outside this kernel API.
 The independent kernel gate does not claim those consumers work. The canonical
 physical definitions and shared support belong here.
 
-The source baseline now uses FinnLib's flat `rtl/` and `hls/` layout at
-`b17eae6a074ea678c633598fa42e7751e6cea194` (branch
-`kernel-contract-refinement-20260925`). Dotp output-buffer and AXI-Lite
+The source baseline uses FinnLib's flat `rtl/` and `hls/` layout; the pin is the
+`finnlib` declaration in `finn/_data/resources.toml`
+(`finn-resources update finnlib --ref REF` moves it). Dotp output-buffer and AXI-Lite
 declaration-order corrections are in FinnLib; there are no private copies in
 `resources`. Replay is also supplied by FinnLib. Eltwise's source closure
 includes its native `queue` module. Record and validate source revisions when

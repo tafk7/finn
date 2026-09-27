@@ -9,6 +9,7 @@ import pytest
 from qonnx.core.datatype import DataType
 
 from kernels.helpers import assess, point_for, value
+from kernels.helpers import finnlib_root
 from finn.core.space import (
     Available,
     Rejected,
@@ -317,7 +318,7 @@ def test_supported_signed_and_unsigned_dsp_boundaries(target, activation, weight
 def test_sources_materialize_from_the_assessed_requirements(tmp_path):
     requirements = kernel(compute_pumping=True).build_requirements()
     store = ArtifactStore(tmp_path / "store")
-    finnlib = Path(__file__).resolve().parents[2] / "deps" / "finnlib"
+    finnlib = finnlib_root()
     if not (finnlib / "rtl/dotp_axi.sv").is_file():
         pytest.skip("FinnLib sources are unavailable")
     prepared = prepare_module_build(

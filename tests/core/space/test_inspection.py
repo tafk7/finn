@@ -6,10 +6,9 @@
 from __future__ import annotations
 
 from dataclasses import FrozenInstanceError
-from typing import cast
+from typing import assert_type, cast
 
 import pytest
-from typing_extensions import assert_type
 
 from finn.core.space import (
     Available,

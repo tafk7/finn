@@ -140,11 +140,18 @@ Declared in `src/finn/_data/resources.toml`, which ships in the wheel:
 | `avnet-boards` | `vivado-boards` | [Avnet/bdf](https://github.com/Avnet/bdf) |
 | `rfsoc2x2-boards`, `kv260-som-boards` | `vivado-boards` | one board each from [XilinxBoardStore](https://github.com/Xilinx/XilinxBoardStore) |
 | `rfsoc4x2-boards`, `aup-zu3-boards` | `vivado-boards` | RealDigital's board support repositories |
+| `finnlib` | `kernel-sources` | FinnLib, the RTL/HLS component library of `finn.kernels` (private; SSH access) |
 
 The HLS include path is the `hlslib` resource. Every `vivado-boards` resource is
 added to Vivado's board repository paths. Board files are third-party files FINN
 does not redistribute: images built locally contain them, and the release image
 and `pip install finn` fetch them on first use.
+
+FinnLib changes together with FINN, so it is never baked into an image. Work
+against a clone: `FINN_RESOURCES_FINNLIB=../finnlib` (in sbx, see the `finnlib`
+overlay in [the sbx guide](../docker/sbx/README.md)). The pin records the commit
+a FINN revision was validated against; fetching it needs SSH access, and
+`finn-resources update finnlib --ref BRANCH` moves it once that commit is pushed.
 
 ### Caches
 

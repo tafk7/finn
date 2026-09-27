@@ -26,9 +26,10 @@ from finn.kernels.streaming import (
     replay_buffer_interfaces,
 )
 from finn.kernels.resources import resource_root
+from kernels.helpers import finnlib_root
 
 ROOT = Path(__file__).resolve().parents[2]
-ROOTS = {"kernels": resource_root(), "finnlib": ROOT / "deps/finnlib"}
+ROOTS = {"kernels": resource_root(), "finnlib": finnlib_root()}
 
 
 @pytest.mark.parametrize("bits,length,repeats", [(1, 1, 1), (13, 3, 2), (65, 5, 3)])

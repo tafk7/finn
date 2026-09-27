@@ -12,9 +12,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from types import MappingProxyType
-from typing import ClassVar, Generic, TypeVar, cast, overload
-
-from typing_extensions import Self
+from typing import ClassVar, Generic, Self, TypeVar, cast, overload
 
 from .declarations import (
     Constraint,
