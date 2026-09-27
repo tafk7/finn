@@ -1,0 +1,9 @@
+59,60d58
+< view compute.ports
+< derived compute.ports.$output
+145,146d142
+< view implementation.cyclic.ports
+< derived implementation.cyclic.ports.$output
+164,165d159
+< view replay.ports
+< derived replay.ports.$output

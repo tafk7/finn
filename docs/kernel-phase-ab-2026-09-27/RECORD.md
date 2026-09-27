@@ -101,3 +101,69 @@ Full values: `a1/fingerprints.txt`, `a2/fingerprints.txt`.
 their regression, and the memstream port. `replay_buffer`, its testbench and
 the backpressure testbench carry BSD-3-Clause headers while the library is
 MIT; relicensing them is the author's call before a PR.
+
+## B1. Ports that check their streams, with per-port attribution (J2)
+
+**Engine: per-input exports** ([proposal](PROPOSAL-per-input-exports.md), STATUS D8).
+An export may map a key to one view per reference input:
+`exports = {KEY: {input: view, ...}}`. `Users(KEY)` on a referenced node then
+yields only the view presented through the input that references it, and
+`Members(KEY)` one entry per input, located by the input's name. Definition-time
+checks: each inner key is a reference input of the family, each value a view
+with compatible semantics. A plain export keeps its meaning. Changes:
+`collection.py` (`EffectiveSpace.input_exports`), `_linker.py` (per-input
+member map, `Users`/`Members` gathering, semantics check), the widened
+`Space.exports` annotation, and the `Members`/`Users` docstrings. The
+canonical Space documentation (`scratchpad/space/{AUTHORING,DESIGN}.md`) gains
+the rule and one example.
+
+**Kernels.**
+
+- `streams.py`: the per-kernel `Ports` record, `Port`, `Flow`, `produces` and
+  `consumes` are removed. `PORT` is a key of `StreamContract`, exported per
+  stream input; a stream reads its users' contracts through `Users(PORT)` and
+  takes direction from the contract's transport endpoint (initiator produces).
+- dotp owns what it reads instead of adopting the stream's form:
+  - activation: SIMD lanes of consecutive columns, one frame marker, and a
+    frame (the marker period) within one activation row;
+  - weights: a matrix over the activation's columns, PE rows of SIMD columns per
+    beat (SIMD fastest), whose column walk equals the activation's beat by beat,
+    and one group of rows per frame;
+  - results: PE consecutive columns of the weights' rows, each beat holding its
+    frame's activation row and weight rows.
+
+  The checks compare row/column walks of the traversals (`forms.beat_walk`,
+  `walk_axis`, `split_walk`, new), not enumerated positions, so they cost the
+  size of the loop nests. Refusal codes: `dotp-stream-lanes`, `dotp-stream-form`.
+- Duplicate dotp checks are removed: the support group checks only the DSP's
+  own bounds (activation width against the B input, the INT8 special case,
+  weight width against the A input as `dotp-weight-width`, accumulator
+  capacity); the port scalars own the encodings (family, signedness, two bits).
+  `codegen` no longer repeats the support group's geometry and width checks.
+- `_port` takes its AXIS declaration instead of a tuple index.
+- `ReplayBuffer`'s contracts are a named `ReplayContracts(input, output)`, not a
+  tuple read through `cast`.
+- The kernel README's composition paragraph describes the landed model
+  (it still showed `TopInput`, `compose` and `Present`, audit D14).
+
+**Evidence.**
+
+| Evidence | Result | Transcript |
+|---|---|---|
+| `scripts/check-kernels.sh` on `d7a64b0be` (clean) | Space **427 passed** (+4 per-input export tests); kernels **772 passed, 0 skipped** (+7 port-contract tests, +2 walk tests); clean; exit 0 | `b1/gate-check-kernels.txt` |
+| `scripts/check-dataflow-design.sh` | **16 passed**; clean; exit 0 | `b1/gate-check-dataflow-design.txt` |
+| MVAU numeric XSI | **28/28 PASS** on the B1 tree before one annotation-only mypy fix (`list[Step]()` in `split_walk`), which the kernel gate above covers | `b1/mvau-numeric-*.txt` |
+| MVAU fingerprints | **identical to A2**: no build requirement changes | `b1/fingerprints.txt` |
+| Keys | decision keys identical; node keys lose `compute.ports`, `replay.ports`, `implementation.cyclic.ports` | `b1/keys-diff.txt` |
+| Space documentation examples (`scratchpad/space/check-examples.py`) | 25/25 pass (one new: per-input exports) | — |
+
+**Regressions for the audit probes** (`tests/kernels/test_port_contracts.py`):
+
+- P2: an MVAU with unsigned weights refuses `weight_stream` only
+  (`dtype-family`); `replayed` and `results` connect.
+- P5: a one-lane activation stream is refused at dotp's activation port
+  (`dotp-stream-lanes`); a transposed weight tile at the weight port
+  (`dotp-stream-form`).
+- Further form cases: weights whose column walk does not follow the
+  activations; results that swap the order of frames; a frame crossing
+  activation rows.
