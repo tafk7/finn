@@ -84,6 +84,31 @@ def test_each_value_like_use_of_a_reference_fails_loudly_and_specifically(name: 
     assert "Compute with it in a @derived or @view method instead" in message
 
 
+def kitchen_cost() -> object:
+    return Room(area=12).cost
+
+
+@pytest.mark.parametrize("name", sorted(MISUSES))
+def test_a_view_reference_is_refused_like_any_other_reference(name: str) -> None:
+    # A view reads as its accepted value, so a reference to it is typed as that
+    # value and every value-like use is refused exactly as for a formal.
+    misuse, what = MISUSES[name]
+    with pytest.raises(ReferenceUseError) as caught:
+        misuse(kitchen_cost())
+    message = str(caught.value)
+    assert f"is a declaration reference, not a value: {what}" in message
+    assert "Room node" in message and ".cost" in message
+    assert "test_reference_misuse.py:" in message
+
+
+def test_a_view_reference_has_no_assessment_accessors() -> None:
+    # Assessment is point.inspect(Room.cost); the reference itself is only a value.
+    cost = kitchen_cost()
+    for name in ("inspect", "query", "get"):
+        with pytest.raises(AttributeError):
+            getattr(cost, name)
+
+
 def test_misuse_in_a_class_body_names_the_node_by_its_declaration() -> None:
     # Inside the body the node is not named yet: its declaration line identifies it.
     with pytest.raises(ReferenceUseError, match=r"<Room node \(declared at .*\)>\.area .* truth"):
@@ -125,7 +150,7 @@ def test_a_view_reference_is_not_callable_in_a_class_body() -> None:
 
         class House(Space):
             kitchen = Room(area=12)
-            total = kitchen.cost() + 1
+            total = kitchen.cost() + 1  # type: ignore[operator]
 
 
 def test_a_declaration_is_not_a_configuration() -> None:
