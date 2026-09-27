@@ -14,12 +14,13 @@ PYTHONPATH=src:tests:deps/qonnx/src.
 from core.space._collapse_support import counts, open_space
 from kernels.test_mvau_collapse import _open
 
-from finn.core.space import Decision, Param, Space, accepted, composite, inspection, view
+from finn.core.space import Decision, Param, Space, composite, inspection, view
+from finn.kernels.mvau import MVAU
 
 
 def mvau(case: str) -> None:
-    def read(point: object) -> object:
-        return point.structure.query()  # type: ignore[attr-defined]
+    def read(point: Space) -> object:
+        return point.query(MVAU.structure)
 
     for collapsed in (False, True):
         result = counts(_open(case, collapsed=collapsed), read)
@@ -44,14 +45,14 @@ class Wrapped(Space):
 
     @view
     def width_out(self) -> int:
-        return self.inner.width_out()
+        return self.inner.width_out
 
 
 def pipeline(count: int, *, wrapped: bool) -> type[Space]:
     kind = Wrapped if wrapped else Stage
     stages = [kind(width_in=4), *(kind() for _ in range(1, count))]
     for previous, current in zip(stages, stages[1:]):
-        current.width_in = accepted(previous.width_out)
+        current.width_in = previous.width_out
     name = f"{'Wrapped' if wrapped else 'Probe'}{count}"
     return composite(name, {f"s{index}": stage for index, stage in enumerate(stages)})
 
@@ -61,7 +62,7 @@ def probe(count: int, *, wrapped: bool) -> None:
     key = "inner.growth" if wrapped else "growth"
 
     def read(point: Space) -> object:
-        return getattr(point, f"s{count - 1}").width_out()
+        return getattr(point, f"s{count - 1}").width_out
 
     for collapsed in (False, True):
         point = open_space(family(), collapsed=collapsed)

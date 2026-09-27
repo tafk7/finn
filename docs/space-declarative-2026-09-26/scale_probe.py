@@ -17,7 +17,6 @@ from finn.core.space import (
     Decision,
     Param,
     Space,
-    accepted,
     composite,
     design_space,
     inspection,
@@ -37,7 +36,7 @@ class Stage(Space):
 def pipeline(count: int) -> type[Space]:
     stages = [Stage(width_in=4), *(Stage() for _ in range(1, count))]
     for previous, current in zip(stages, stages[1:]):
-        current.width_in = accepted(previous.width_out)
+        current.width_in = previous.width_out
     return composite(f"Probe{count}", {f"s{index}": stage for index, stage in enumerate(stages)})
 
 
@@ -50,12 +49,12 @@ for count in (50, 200, 800):
     point = point.with_choices({handles[f"s{i}.growth"]: 1 for i in range(count)})
     last = getattr(point, f"s{count - 1}")
     start = time.perf_counter()
-    assert last.width_out() == 4 + count
+    assert last.width_out == 4 + count
     full = time.perf_counter() - start
     before = point._state.work.callback_starts  # type: ignore[attr-defined]
     edited = point.with_choices({handles[f"s{count - 1}.growth"]: 2})
     start = time.perf_counter()
-    assert getattr(edited, f"s{count - 1}").width_out() == 5 + count
+    assert getattr(edited, f"s{count - 1}").width_out == 5 + count
     local = time.perf_counter() - start
     calls = edited._state.work.callback_starts  # type: ignore[attr-defined]
     print(

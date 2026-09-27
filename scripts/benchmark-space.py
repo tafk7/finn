@@ -484,7 +484,7 @@ def self_workload(api, shape: str, depth: int, width: int) -> dict[str, object]:
     point = prepare_point()
     before_rss = rss_bytes()
     started = time.perf_counter()
-    assert point.output() == expected
+    assert point.output == expected
     cold_seconds = time.perf_counter() - started
     after_rss = rss_bytes()
     assert len(work) == callback_count and all(value == 1 for value in work.values()), work
@@ -492,7 +492,7 @@ def self_workload(api, shape: str, depth: int, width: int) -> dict[str, object]:
     hits = []
     for _ in range(30):
         started = time.perf_counter()
-        assert point.output() == expected
+        assert point.output == expected
         hits.append(time.perf_counter() - started)
     assert work == before_hits
     peak = peak_rss_bytes()
@@ -504,7 +504,7 @@ def self_workload(api, shape: str, depth: int, width: int) -> dict[str, object]:
     # high-water and ordinary timing above exclude allocation tracing.
     point = prepare_point()
     tracemalloc.start()
-    assert point.output() == expected
+    assert point.output == expected
     traced_live, traced_peak = tracemalloc.get_traced_memory()
     tracemalloc.stop()
     assert len(work) == callback_count and all(value == 1 for value in work.values()), work
@@ -548,7 +548,7 @@ def kernel_workload(api, name: str, trials: int) -> dict[str, object]:
             return point.with_choices(ram_style=("block", "distributed")[index % 2])
 
         def accepted(point):
-            return point.build_requirements()
+            return point.build_requirements
 
     elif name == "dotp":
         base = design_space(
@@ -567,7 +567,7 @@ def kernel_workload(api, name: str, trials: int) -> dict[str, object]:
             return point.with_choices(compute_pumping=bool(index % 2))
 
         def accepted(point):
-            return point.build_requirements()
+            return point.build_requirements
 
     else:
         assert name == "mvau"
@@ -593,7 +593,7 @@ def kernel_workload(api, name: str, trials: int) -> dict[str, object]:
             )
 
         def accepted(point):
-            return point.compute.build_requirements()
+            return point.compute.build_requirements
 
     # Warm compilation/import allocations before reporting exploration costs.
     warm = design_space(base, 0)

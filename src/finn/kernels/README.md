@@ -4,7 +4,9 @@ The supported authoring API is `finn.core.space`. A kernel declares the
 facts it consumes, its implementation decisions, and the typed views it can
 answer. Calling a kernel family with its facts declares a node;
 `design_space(node)` is the one compile step and returns its initial
-configuration. Commit choices on that configuration and call the view:
+configuration. Commit choices on that configuration and read the view: a view
+reads as its accepted value, like any member, and its assessment is an explicit
+`inspect` of the view declaration:
 
 ```python
 from finn.kernels import FifoKernel
@@ -12,17 +14,19 @@ from finn.core.space import Available, design_space
 
 fifo_base = design_space(FifoKernel(word_bits=16, depth=32))
 fifo_configuration = fifo_base.with_choices(ram_style="block")
-requirements = fifo_configuration.build_requirements()
-assessment = fifo_configuration.build_requirements.inspect()
-assert isinstance(assessment.accepted_result, Available)
-assert fifo_configuration.view(FifoKernel.build_requirements)() == requirements
+requirements = fifo_configuration.build_requirements
+assessment = fifo_configuration.inspect(FifoKernel.build_requirements)
+assert assessment.accepted_result == Available(requirements)
+assert fifo_configuration.query(FifoKernel.build_requirements) == Available(requirements)
 assert fifo_configuration.field(FifoKernel.ram_style).get() == "block"
 ```
 
 Each `design_space` call returns an independent configuration that freezes its own
 inputs; configurations of the same family share its compiled model. Choice
-replacement returns immutable successors. The raw output in an assessment does
-not establish that its constraints and readiness obligations are accepted.
+replacement returns immutable successors. Reading a view that is not accepted
+raises `ValueUnavailableError` carrying its result (`query` returns that result
+instead). The raw output in an assessment does not establish that its
+constraints and readiness obligations are accepted.
 See the [Space API guide](../../../../scratchpad/space/AUTHORING.md) for ordinary self methods,
 node declarations, Decisions over nodes, atomic refinement, inspection, and sparse selections.
 The [Space design](../../../../scratchpad/space/DESIGN.md),
@@ -84,8 +88,8 @@ dotp = design_space(
     )
 )
 assert dotp.activation.carrier_bits == 8
-assert dotp.activation_type.encoding().bits == 3
-assert dotp.activation.stream().payload_bits == 6
+assert dotp.activation_type.encoding.bits == 3
+assert dotp.activation.stream.payload_bits == 6
 ```
 
 The same policy constrains input and caller-selected output encodings.
@@ -160,17 +164,17 @@ point = commit(
         "simd": 2,
     },
 )
-structure = point.structure().structure
+structure = point.structure.structure
 assert [item.instance_id for item in structure.instances] == [
     "u_replay",
     "u_compute",
     "u_implementation_cyclic",
     "u_weight_stream_fifo",
 ]
-assert point.build_requirements() == point.structure().requirements
+assert point.build_requirements == point.structure.requirements
 saved = selections.capture(point)
 replayed = selections.restore(design_space(MVAU(**facts)), saved).instance  # weights omitted
-assert isinstance(replayed.structure.query(), Unresolved)
+assert isinstance(replayed.query(MVAU.structure), Unresolved)
 ```
 
 Changing a selector does not discard the old case's choices: clear
@@ -297,14 +301,14 @@ from finn.kernels.physical.forms import Adaptation, Repetition, classify, vector
 channels = vector_major((4,), 2)
 vector = design_space(CyclicDelivery(dtype=dtype("INT4"), form=channels, values=(1, -2, 7, -8)))
 rhs = vector.with_choices(rom_style="distributed")
-assert rhs.output().repetition is Repetition.CYCLIC
+assert rhs.output.repetition is Repetition.CYCLIC
 assert rhs.image == (0xE1, 0x87)
 pixels = vector_major((3, 4), 2)  # three pixels of four channels, two lanes
 assert classify(channels.repeated(3), channels.repeated(3)).adaptation is Adaptation.IDENTITY
 assert classify(vector_major((3, 4), 4), pixels).adaptation is Adaptation.WIDTH_CONVERSION
 ```
 
-FIFO's `ram_style` remains a native preference. Its accepted `storage()` view
+FIFO's `ram_style` remains a native preference. Its accepted `storage` view
 reports both the effective backing and capacity, including output storage.
 For example, `design_space(FifoKernel(word_bits=13, depth=2)).with_choices(ram_style="ultra")`
 reports shift storage and capacity five. This is native implementation
