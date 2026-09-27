@@ -1,0 +1,31 @@
+Validation on 2026-09-25. Base: FINN 240c33a11; FinnLib b17eae6a (unchanged); Space engine unchanged.
+
+Gate:
+PYTHON_BIN=/home/tkeller/prj-kernels/.kernel-venv/bin/python bash scripts/check-kernels.sh
+  301 Space tests passed; 757 kernel tests passed (previous: 750), no skips.
+  ruff format/check clean; mypy --strict clean (52 kernel sources, 10 typing/test files).
+  New/updated: tests/kernels/test_declared_streams.py (topology rules, boundary ports),
+  tests/kernels/test_mvau_delivery_choice.py (FIFO slot: placement, depth ownership and
+  applicability, persistence, atomic removal, adapter), tests/kernels/test_mvau_assembly.py
+  (all structural-equivalence assertions pass with stream-derived wiring).
+
+Documentation examples (scratchpad): 18 passed.
+
+MVAU numeric XSI (env as in docs/kernel-package-extraction/rtl/VALIDATION.md):
+python -m kernels.rtlsim.mvau_assembly_numeric --output /tmp/mvau-streams
+  20 PASS: 5 configurations x {external, cyclic} x {free, stalled output}, direct transport.
+python -m kernels.rtlsim.mvau_assembly_numeric --case {packed,int8_pumped} --weight-fifo-depth 2
+  8 PASS: weight_stream through a depth-2 FinnLib FIFO, both deliveries, free and stalled.
+
+No synthesis or place-and-route was run for this increment.
+
+Space-native streams revision (same day):
+  Gate: 301 Space tests, 758 kernel tests passed, no skips; format, lint, strict typing clean
+  (53 kernel sources, 10 typing/test files).
+  Build identity: module_build_fingerprint equal to ee5e8852e for six MVAU configurations
+  (external; cyclic block ROM; FIFO external; FIFO cyclic; padded output; pumped DSP58).
+  tests/kernels/test_declared_streams.py: two streams refusing independently with owners
+  first.compatible / second.compatible; explain shows per-stream connection/compatible nodes.
+  MVAU numeric XSI: 20 PASS direct; 8 PASS with --weight-fifo-depth 2 (packed, int8_pumped;
+  external and cyclic; free and stalled).
+  Documentation examples: 18 passed.

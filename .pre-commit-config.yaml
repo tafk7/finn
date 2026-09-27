@@ -54,6 +54,7 @@ repos:
   rev: 5.12.0
   hooks:
   - id: isort
+    exclude: '^(src/finn/dataflow/_engine/|tests/dataflow/engine/|src/finn/core/space/|tests/core/space/)'
 
 - repo: https://github.com/psf/black
   rev: 23.3.0
@@ -61,8 +62,11 @@ repos:
   - id: black
     language_version: python3
     args: [--line-length=100]
+    exclude: '^(src/finn/dataflow/_engine/|tests/dataflow/engine/|src/finn/core/space/|tests/core/space/)'
 
 - repo: https://github.com/astral-sh/ruff-pre-commit
-  rev: v0.15.10
+  rev: v0.16.4
   hooks:
     - id: ruff-check
+    - id: ruff-format
+      files: '^(src/finn/core/space/|tests/core/space/)'

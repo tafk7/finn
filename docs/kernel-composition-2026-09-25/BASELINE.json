@@ -1,0 +1,17 @@
+{
+  "finn_base": "b2d01750a",
+  "finn_branch": "feature/kernel-package-extraction",
+  "finnlib": {
+    "revision": "b17eae6a074ea678c633598fa42e7751e6cea194",
+    "branch": "kernel-contract-refinement-20260925",
+    "changed": false
+  },
+  "qonnx": {
+    "revision": "342dffbc949659aaef3fcec51895c9a4c3931038"
+  },
+  "python": "3.10.19",
+  "greenlet": "3.2.4",
+  "vivado": "2025.2",
+  "synthesis_part": "xczu3eg-sbva484-1-e",
+  "notes": "Engine (src/finn/core/space) unchanged. deps/finnlib and deps/qonnx are ignored local symlinks to the adjacent checkouts; FinnLib's untracked rtl/input_gen_lift* files were not touched. finn_xsi/xsi.so (ignored) was rebuilt with python -m finn.xsi.setup for the numeric XSI harness."
+}

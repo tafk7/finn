@@ -491,15 +491,14 @@ class MVAU(HWCustomOp):
     def get_exp_cycles(self):
         pe = self.get_nodeattr("PE")
         simd = self.get_nodeattr("SIMD")
-        th = self.get_nodeattr("TH")
         num_inp_vec = self.get_nodeattr("numInputVectors")
         mh = self.get_nodeattr("MH")
         mw = self.get_nodeattr("MW")
         # since mmv != 1 is not supported yet, we set mmv for now to 1
         mmv = 1
-        # Tiling/systolic reduces throughput
-        # TH>1 (tiling) reduces throughput by factor TH (tinner = PE*SIMD/TH)
-        exp_cycles = (mh / pe) * (mw / simd) * np.prod(num_inp_vec) * th / mmv
+        # TH interleaves vectors but does not add compute iterations:
+        # (R / TH) * NF * SF * TH = R * NF * SF.
+        exp_cycles = (mh / pe) * (mw / simd) * np.prod(num_inp_vec) / mmv
         return int(exp_cycles)
 
     def minimize_accumulator_width(self, model, datatype_only=False):
@@ -897,7 +896,10 @@ class MVAU(HWCustomOp):
                     weight_filename_rtl = "{}/memblock.dat".format(code_gen_dir)
                     self.make_weight_file(weights, "decoupled_verilog_dat", weight_filename_rtl)
         else:
-            if mem_mode not in ["external", "dynamic", "external_mem"]:
+            runtime_writable = self.get_nodeattr("runtime_writeable_weights")
+            if mem_mode not in ["external", "dynamic", "external_mem"] and not (
+                mem_mode == "internal_decoupled" and runtime_writable
+            ):
                 raise Exception(
                     """Invalid setting found, weight values not initialized,
                     but neither "external" case nor MLO."""
@@ -1046,7 +1048,11 @@ class MVAU(HWCustomOp):
                     ), """Layer with URAM weights must have runtime_writeable_weights=1
                         if Ultrascale device is targeted."""
                 self.generate_hdl_memstream(
-                    fpgapart, pumped_memory=self.get_nodeattr("pumpedMemory")
+                    fpgapart,
+                    pumped_memory=self.get_nodeattr("pumpedMemory"),
+                    allow_missing_initializer=bool(
+                        self.get_nodeattr("runtime_writeable_weights")
+                    ),
                 )
 
     def code_generation_ipi(self):

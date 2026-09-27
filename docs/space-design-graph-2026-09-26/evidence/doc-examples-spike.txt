@@ -1,0 +1,2 @@
+/home/tkeller/prj-kernels/finn-kernels-extraction/src/finn/kernels/README.md: 5 Python examples passed
+All 18 documentation examples passed

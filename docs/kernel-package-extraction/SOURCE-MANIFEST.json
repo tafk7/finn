@@ -1,0 +1,4724 @@
+{
+  "dependencies": {
+    "finnlib": "dfeafac81cd2a6da27e647ee03915ade5532186e",
+    "qonnx": "21d4c1a72334002aaf80ae099dbf5d167f001001"
+  },
+  "files": {
+    ".claude/agents/rtl-run.md": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "5cf4c3142ca50a3e64e8fb8e060d24ed90ae1b3f196b3c4f0cc53535c6ae0d2b"
+    },
+    ".coveragerc": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "bdc6cd7c772d683b1c47a5d74a9ad449f11d09220d29bc2bd55cccf7599230ff"
+    },
+    ".github/ISSUE_TEMPLATE/bug_report.md": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "78feda03da87981f9b52ace3154fdd74fcc810daf9bb0a4c1ed5155b61aa6f21"
+    },
+    ".github/ISSUE_TEMPLATE/config.yml": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "8c7b2b183e9ddd4a90d0e76dc22268d72128ea36816b154c91534df4aa341489"
+    },
+    ".github/ISSUE_TEMPLATE/feature_request.md": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "89f30f8e88835cae98aef6b6f2fae689ec3ff9a9c454b572084f60f92edb9ee9"
+    },
+    ".github/workflows/dataflow-design.yml": null,
+    ".github/workflows/pre-commit.yml": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "2bd440a3104132c58d1b9f85e28cad882f20f5abf06de23bdbdaec435cec5839"
+    },
+    ".github/workflows/quicktest-dev-pr.yml": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "4084db719e950483fa145e5be65acfcbeaf7105bcb61a8cf3f03cfbed741d818"
+    },
+    ".github/workflows/quicktest-local.yml": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "c2fb98e3a6d03cb31b5965768c9942dd81969ecc706e48d977b16c857b641683"
+    },
+    ".gitignore": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "642d31b4452a0f3fcc48c5c3dec5ec8b920f2982fe23cca0116fd32ec76661c7"
+    },
+    ".isort.cfg": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "72f8660badd83db9f87e5aecf09ef9a5cc8e4ccad3072cfa135c4011276d398e"
+    },
+    ".pre-commit-config.yaml": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "d3c5b3aecd13c8bc005019b230293202d50b498b9ab613a643bcc38c173a09dc"
+    },
+    ".readthedocs.yaml": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "fdace774b5c1f032b6ae24e0eb1e1f75042ad827f5bb2f59331de44ee77ae03e"
+    },
+    ".ruff.toml": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "388f0f9a6e2dc9d427ae75bc332dc3923ba99bcc8bb44228640209d5e0abdf52"
+    },
+    ".travis.yml": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "5986bbb61c37103bf1a1c63f3859af3cd332516b06a0b65158181827f7eb7044"
+    },
+    "AUTHORS.rst": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "9faa0db51780db56d2c77b58580e45f6afb3f771de87ae6e3a6bf22d86d710d2"
+    },
+    "CLAUDE.md": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "58a388b9704b5b15c0ccb1763094c74bc1326356a9a29fd523e75e0705d58c27"
+    },
+    "CONTRIBUTING.md": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "89c8f1b969af7538bb9751fee8dfacfaec4a705e61c0596375eeaccb863190f8"
+    },
+    "HDL_STYLE_GUIDE.md": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "a7b1e782edfc229c81532400ddf1aef4b518c3e44446251881e91d829ba415d4"
+    },
+    "LICENSE.txt": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "4abd10f778218fa44b426c88f86762fb91370893b5bc9e5cf105d0fc6e260f0f"
+    },
+    "PYTHON_STYLE_GUIDE.md": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "a9c9e2d15df07d35317f1b2b50480d2b07966335b4716f3dbd82264f21f81e90"
+    },
+    "README.md": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "9941587ec7aa63bc4a85e888c2e6c20548f01f1887d2a61baf18b67695da873e"
+    },
+    "ci/Jenkinsfile": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "e9941bb2cbac86e6723570b0eba91c99546490d23af809795fb561bfcf2f0cae"
+    },
+    "ci/Jenkinsfile_Brevitas": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "8859aa105a5115e82d5d3aefefe18feb208cb704397112bc7fe2125115d60888"
+    },
+    "ci/Jenkinsfile_CI": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "4712c73fb10516a78ec7df9eb6d839b6a138a2fe242103c16778cccac76e61b0"
+    },
+    "ci/Jenkinsfile_HW": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "edf9be1feebdbc12f5155f715a97d41db1fe45beed384677e45881cf5b1a08ec"
+    },
+    "ci/README.md": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "10f1dfa55fa2a4697d014c37de2c8e528bd2a04539f33f4e25b9829e2648fe04"
+    },
+    "ci/common.groovy": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "82665d6878279c24c8402bd18741b47f8f7272f6fd96ab0ab3aefbf0f3e970dd"
+    },
+    "ci/finn_ci/__init__.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "53b0c7803c7b660b5e7b42d311e479eea78665cf7b9abd49c25ddfac2f787e19"
+    },
+    "ci/finn_ci/__main__.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "95690b263c11996aa7b0f7da3fdc74b9ad57f1031cc40d05c83d251ebe900e8e"
+    },
+    "ci/finn_ci/config.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "51890d96fa230aead6c9c489726a8eb198ed08d36218d64b1ad16b94d52783ea"
+    },
+    "ci/finn_ci/failures.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "8b2b9dfe22ee2359cf9edf7afd19e7833ebe907b4a5d55ac2196cb861fbab51b"
+    },
+    "ci/finn_ci/hw.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "4a878f72fdff53d163397d52ea263ce835b97f6577739bea8943d6e70500dfb1"
+    },
+    "ci/finn_ci/jsonio.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "5d44f992016b940d298231ff053812965043fd49074a846834c9b3f7e85e1559"
+    },
+    "ci/finn_ci/lsf.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "65393bc1196e2e91205685bb54423a4edc4d6cea102bb9d361459933b12bb247"
+    },
+    "ci/finn_ci/plugin.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "0473adbc6597b0b4c3990968405cf586ee1fed96c6e54adba9bc53e810f0cc02"
+    },
+    "ci/finn_ci/retention.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "f4b972631a0650f9d5effb1e76ec7d88a5b6e6aecb77dc50e9a42ce1ebb16385"
+    },
+    "ci/finn_ci/rng_seed.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "e0123390436418c5b7e1009273ca80b89065ceda323e3dc2725c875d51cd9e8b"
+    },
+    "ci/finn_ci/sharding.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "cc7ee8ad878ab186cfce5d3434b1c7f2d2c5b024c305f9c0e9f2cf771eb9eed0"
+    },
+    "ci/finn_ci/timing.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "7a63e83526f74393bb337ce1301cb824e2c3c92966e9f0fddf54dad641dc94c0"
+    },
+    "ci/scripts/archive_failure_logs.sh": {
+      "kind": "file",
+      "mode": 493,
+      "sha256": "cd1d031f2ff0c20fafb46e65fc12060a535bba0f063dfefeff044b36ee532013"
+    },
+    "ci/scripts/failure_tails.sh": {
+      "kind": "file",
+      "mode": 493,
+      "sha256": "64a0a2cf32a92386ca9ecccc256ce830dec724d807b071845d7fba5ecb7648d7"
+    },
+    "ci/scripts/find_copy_zip.sh": {
+      "kind": "file",
+      "mode": 493,
+      "sha256": "b0653cbdc087dc4163183e3e08f85c235644f06f2207cad95027be87b2e2c34e"
+    },
+    "ci/scripts/lsf_summary.sh": {
+      "kind": "file",
+      "mode": 493,
+      "sha256": "67ca9908077963884876835220d86183158f4d761792eab9ac3c2c76527f3a14"
+    },
+    "ci/scripts/publish_board_zip_stage.sh": {
+      "kind": "file",
+      "mode": 493,
+      "sha256": "b47c1f8404e1fc77b709c7897ebb093f752f14768b29a769d634843efb03c8bc"
+    },
+    "ci/scripts/publish_docker_image.sh": {
+      "kind": "file",
+      "mode": 493,
+      "sha256": "d73922347dd34074fb11ce3a2444bafa3994a32d0f53182c69f79077c0ac9bf1"
+    },
+    "ci/test_bnn_hw_pytest.py": {
+      "kind": "file",
+      "mode": 493,
+      "sha256": "0792bc579f0a48052fea40ce196db64220f354923f90515299f5f1f24448be56"
+    },
+    "custom_hls/checksum.cpp": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "6fbd5a971dcca7f06e085bd60d265677138f3b527bfbd63edd8b166064e8bcd4"
+    },
+    "custom_hls/checksum.hpp": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "4192bb4ac0a3b6cd50e68e912a08ce5ddee91cf4667547b93dd3c2f91f9473d8"
+    },
+    "custom_hls/checksum_tb.sv": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "bb7985ca347af9103691c406e735813bc0e20a25cb4ec6990ce82491915f2dcd"
+    },
+    "custom_hls/lookup.hpp": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "d1f23fc7d1fc25a2162f289c3b09260f0b34c070b82ea1f036a5a81a5c14ea78"
+    },
+    "docker/Dockerfile.finn": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "ece63d941ea049abcc264c2048a831618eb10e872dc014ad7541dbc1907f6cb7"
+    },
+    "docker/finn_entrypoint.sh": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "5d1b66473a3c697a1dc975560ba3167bd168df3ba91d1367c592c1d26302b688"
+    },
+    "docker/quicktest.sh": {
+      "kind": "file",
+      "mode": 493,
+      "sha256": "35d93740d8bab0b4cdcd2d0fb5b34fe3c7fd0c91fefcbeac352c0fe0fd439e6e"
+    },
+    "docs/README.md": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "e2d521b16dbd6c477f96583f03f987356a07797af5a28a8cffdb325ffe440410"
+    },
+    "docs/finn/Makefile": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "8b6587b859607f200f116e2cb043fc358e1c3a26c326b563bf348453cfc68307"
+    },
+    "docs/finn/brevitas_export.rst": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "6d86827ad6c32ee119526a2f7072e780fda9498c24d680fd64c83dda424188a5"
+    },
+    "docs/finn/command_line.rst": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "d7a090fe56a5164657e325907abce8cab8dfae852506aa7122d32b0ad5651fcf"
+    },
+    "docs/finn/components/index.rst": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "d50b3cc749d66bd5496d8b6743da510a2f26a9c138e6e0673816bb6abdc5d1be"
+    },
+    "docs/finn/components/rtl-swg.rst": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "53d117f46e32274702a04e82d09fa935e142eadbc97cd201ecc160426fa6a8eb"
+    },
+    "docs/finn/concepts.rst": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "0d6640d96928fbf35935ee17aa4bf8b01df896bf5831adf7e642e366c115ad9f"
+    },
+    "docs/finn/conf.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "cd18a3044cd3f08cfb596c9792a0115c14c58e7924c91143c99a4601ba65cb50"
+    },
+    "docs/finn/developers.rst": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "9f86abc3b8985682a9d725a8eb2644e1be89bc189b1f3d0bb6851e6dac8ac996"
+    },
+    "docs/finn/end_to_end_flow.rst": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "1017c38dac966d928a558e35aac3a13bc5fbf5b560d8807f35169149b80ad2fb"
+    },
+    "docs/finn/example_networks.rst": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "b9a5bf28cae81baecf4c76ee6a049c28d0626f763e247409672923b61243b9ec"
+    },
+    "docs/finn/faq.rst": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "8ecd7b0fadd7d0854d2482fef912665de7b4e67cd02564bd92a17884f3741259"
+    },
+    "docs/finn/genindex.rst": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "ea434598a76b11d701f38681ee96b60bfa1e48b80b1664888f340de0922f715d"
+    },
+    "docs/finn/getting_started.rst": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "153ca76b26d4b4d317b0281d59e8cf66f4c9abbfc3720d2140a949f1725bffa1"
+    },
+    "docs/finn/hw_build.rst": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "b2d52c9147d08434b7fc627c3703149933c689d91d02de81eb98bc8d3528f200"
+    },
+    "docs/finn/img/brevitas-export.png": {
+      "kind": "file",
+      "mode": 493,
+      "sha256": "6de1daee766b0df8c5d55af36451b836383d1137d6f614376737cc6616aa7c5a"
+    },
+    "docs/finn/img/finn-hw-build.png": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "cb0f3cb13620ec7a37aeb28e84b5f89d3f7bb889a88cc02a2af0b9f4ab9b9458"
+    },
+    "docs/finn/img/finn-stack.png": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "6d14bf44686d926dfbabfdfbb8f3be38c511cdf8716a165bf204a1408f6d9eb4"
+    },
+    "docs/finn/img/mem_mode.png": {
+      "kind": "file",
+      "mode": 493,
+      "sha256": "2c5eaec1359a9538f791730343745ea37f8d177829bc63c7b114def8822d3168"
+    },
+    "docs/finn/img/nw-prep.png": {
+      "kind": "file",
+      "mode": 493,
+      "sha256": "8c71180318aef8d6abf31d2c47ee2cc440a780f8d841be09b62b6a37f9a78077"
+    },
+    "docs/finn/img/pynq-deploy.png": {
+      "kind": "file",
+      "mode": 493,
+      "sha256": "58021863aefd497279e34b57104e61a8fa5af93d4e605d65f899358056c6f4c9"
+    },
+    "docs/finn/img/repo-structure.png": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "32c6451498f219e75638848f2adc72494db9f65f1c553859c531818064116791"
+    },
+    "docs/finn/img/rtl_swg_impl_styles.png": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "373e4bae59a8ffc164f2dc534ed5cc28f47fc2e004c8925e62c7bf55262a10cd"
+    },
+    "docs/finn/img/vivado-synth.png": {
+      "kind": "file",
+      "mode": 493,
+      "sha256": "18c129d60efcc17daa2a1862bd2041d2632ce129b7f8c01bc4c25a211630a5c8"
+    },
+    "docs/finn/implementation/customop-pattern.rst": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "36511ac0ac9a84be24d51a4098f679bce976ebf25bfabc9c40a19143c5ca5a5b"
+    },
+    "docs/finn/implementation/hls-layers.rst": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "6cab542f666f03e8fa21ae796d21e836978a143861299cb3ef248566d438b326"
+    },
+    "docs/finn/implementation/index.rst": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "29800788bdc56ec03a5fa60b42d1fb051685589603e8f09b63a4bcda25a1f296"
+    },
+    "docs/finn/implementation/rtl-layers.rst": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "8d7e9e0672939dfc38d61158e9fcec41ba986e9630e2eefc4dd3957456c23c71"
+    },
+    "docs/finn/implementation/specialization-rules.rst": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "472a20a21088e60a0e342af3ca9d04ab0f67fb276870a439ec0a50e56c59adf6"
+    },
+    "docs/finn/implementation/unified-kernels.rst": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "b8f86f01902a9d46bc1beeb02a3c29775ae3abaa9d07b8c4c26e82d105928ac6"
+    },
+    "docs/finn/index.rst": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "6255deebf4829c357a003b60b8b4ee4997b76d3528ee36cdd2652c619fb8cc3c"
+    },
+    "docs/finn/make.bat": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "b593cd1da19314a43db9a0854f6f92f2c59217571502da3321f9498c02fa16c8"
+    },
+    "docs/finn/nw_prep.rst": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "a08cc155efc416e8109675df5cf0d788e8d9d76c4ac3532625677ce697d46e22"
+    },
+    "docs/finn/reference/folding-constraints.rst": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "a0601655762726055c9d8ba7654aa711c1172a6d73940cc7cad683eabb926eed"
+    },
+    "docs/finn/reference/index.rst": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "129d6d7abd28f1e6bb1e35f9367d5f0db1385197515b18658e1c180f2bdf3d45"
+    },
+    "docs/finn/reference/mem-modes.rst": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "a152fae3577fcfdcff53a3dee2606b7ce75d541ba265f177d8fa65371649bcb3"
+    },
+    "docs/finn/source_code/finn.analysis.fpgadataflow.rst": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "28f634962bf35f3d09e01403b9e82b5e0c49b16b77bd5871f8569e8d09898edf"
+    },
+    "docs/finn/source_code/finn.analysis.rst": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "ef5a7d079649bfa605479f9a69a7c6993a7671ea343abb1bd4de92dd201126da"
+    },
+    "docs/finn/source_code/finn.builder.rst": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "0d57bd30d4dd8c2ba0a059bbbf7fc9ccdb971a32da5f0f6d973c26d753e9f453"
+    },
+    "docs/finn/source_code/finn.core.rst": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "e2c3827971cf6de3aad9c51b06393a5981da8d94c260088054094af0ac540bb0"
+    },
+    "docs/finn/source_code/finn.custom_op.fpgadataflow.hls.rst": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "2b31b56dac5108f883f8dc433c3ab7b5d18f74cd4ddd69bee70e1b07f6049933"
+    },
+    "docs/finn/source_code/finn.custom_op.fpgadataflow.rst": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "ae1861f413a40fab48b0c91efa60e08fefca040b853705abe6122e7b270c9933"
+    },
+    "docs/finn/source_code/finn.custom_op.fpgadataflow.rtl.rst": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "fca45b170607e32bf59f3ec0aed1a4b4adb0983cea502c16b92b5a61b380f3b3"
+    },
+    "docs/finn/source_code/finn.custom_op.rst": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "14ef5e0999df59d6226b1c22f1d4b76d5c5357fd288fd9f370adfa47f2c3ecdd"
+    },
+    "docs/finn/source_code/finn.rst": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "1ba5e2039570b3b2f3cdc8d2ed069b66ff1418047bb33da94f5ecef98bf96542"
+    },
+    "docs/finn/source_code/finn.transformation.fpgadataflow.rst": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "874083d0f4dcb4658c66e21cd9136a4c6efede2f6b026102303d2535a0de185f"
+    },
+    "docs/finn/source_code/finn.transformation.qonnx.rst": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "318601158176dd2da34ab98bc902314f5eeed8bdf2e6ede52a2225d06cc20391"
+    },
+    "docs/finn/source_code/finn.transformation.rst": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "16787043f32178f517ff235e12903f539a1568761e800d630cc3e3a6144d3e01"
+    },
+    "docs/finn/source_code/finn.transformation.streamline.rst": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "4874adcad1a964acd69b7f452526431923087883477d9f5e3671daa9ff004d95"
+    },
+    "docs/finn/source_code/finn.util.rst": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "1ad79472fcd8884710227fcbcde3a4d2f794ca262f578c130371c8cddd5c3047"
+    },
+    "docs/finn/source_code/qonnx.custom_op.channels_last.rst": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "f059011e4f30805a014bd39cf7a4fe06fe94e5df3c31db087f191f99d13b7230"
+    },
+    "docs/finn/source_code/qonnx.custom_op.general.rst": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "497536790c8c52f959b8803728abf364c24825419c2b12c95690df6063e5d2cd"
+    },
+    "docs/finn/tutorials.rst": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "a551accee5993d1a90c5d5726a32927534e0ff7cadb92c28cd4ce2ac0451f8e0"
+    },
+    "docs/finn/verification.rst": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "760ed39fc18e521c0388f88c94782b1b548869102285d030c5ba3d38ee4154bf"
+    },
+    "docs/requirements.txt": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "a18f27b54dfe5bfeb473c60f0591efa668dfa55c4259bdcbb07f9f3ba59de493"
+    },
+    "fetch-repos.sh": {
+      "kind": "file",
+      "mode": 493,
+      "sha256": "9f9f817f36f7b415c59910490f319f7685c8138fc20a1273af6da46490f7dbea"
+    },
+    "finn-rtllib/axi/hdl/axilite.sv": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "b041ca2b83f5a2cb7994d8ee44046159a41c538a0ef21c2636f8653903503dc9"
+    },
+    "finn-rtllib/axi/sim/axilite_tb.sv": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "49894dabb08b2ef608cbc5d6e0e5aa265096c5bd60ef204354b024e1d5c9ced4"
+    },
+    "finn-rtllib/axi_info/component.xml": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "25767d10479d3761f54e016694adf8fe9137498a74542946fcb7fb5fbb2b079a"
+    },
+    "finn-rtllib/axi_info/hdl/axi_info.sv": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "2090d8d450aae3cfbff9505335657989b26c1919b1d02037aa6752e96314aecc"
+    },
+    "finn-rtllib/axi_info/hdl/axi_info_top.sv": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "5fc00120c53befcefbc8e39b5ab5f4b6f94c934e0cc32e2be9580355f8be98cf"
+    },
+    "finn-rtllib/axi_info/xgui/axi_info_top_v1_0.tcl": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "a6ec169330632915936d31b78ac2369e1b74c483aff498a79b5ff232d0d2c379"
+    },
+    "finn-rtllib/cdma/cdma_a/axi_dma_rd_a.sv": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "8233488ae184a43ecce3be07601a75e8cdfe2048a57fa2bcb70d07c01d15f24b"
+    },
+    "finn-rtllib/cdma/cdma_a/axi_dma_wr_a.sv": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "7196727b13b85c287e46d53248f30d8e16d69685d486e000048863febe86d38b"
+    },
+    "finn-rtllib/cdma/cdma_a/cdma_a.sv": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "8f7d591391be4738aa7bbc2b0b50e50ebb1b8928ac4442388ffe36231cc10da3"
+    },
+    "finn-rtllib/cdma/cdma_a/cdma_a_rd.sv": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "018b4262ceff3cadaf32ba7c8df25d5bb72d17d902fd44ac67d8be9bdbec0fc7"
+    },
+    "finn-rtllib/cdma/cdma_a/cdma_a_wr.sv": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "6ed0e4cff869172d3526d3793ebafa926f9b75e180a1fa01973694df6b5f927b"
+    },
+    "finn-rtllib/cdma/cdma_top.sv": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "f9df371ad1f5bf5e52e5a5f92ba3a79fff5cba58d0d9a1254e7480f1ea930067"
+    },
+    "finn-rtllib/cdma/cdma_u/axi_dma_rd_u.sv": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "dc649b971e9ec1a91618c139f0520099bab4c46e5793da8365078299e5eaaef2"
+    },
+    "finn-rtllib/cdma/cdma_u/axi_dma_wr_u.sv": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "01cfa04bb3908a4e6bf74782cd0f1fe5c98d7ac25a50b7f1c46b989ccb243fb3"
+    },
+    "finn-rtllib/cdma/cdma_u/cdma_u.sv": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "0b4d4ac994994435282ef1a50eac8a7647f9f00aef48b9bff86967c6301ca9f6"
+    },
+    "finn-rtllib/cdma/cdma_u/cdma_u_rd.sv": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "310044ea94d58b38b4b06a46788812b7cbdd553de0aae1747df4999621d6c976"
+    },
+    "finn-rtllib/cdma/cdma_u/cdma_u_wr.sv": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "b107956a2938c3b6c1358accb17f856911c67f0974302249dabf57bec3c05320"
+    },
+    "finn-rtllib/cdma/cdma_x/cdma_x.sv": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "fd1a7340079eb486a6c11cc51221039cb0ed5ec285fbb17ba255718e588252cd"
+    },
+    "finn-rtllib/cdma/cdma_x/cdma_x_rd.sv": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "c866752690bc98b32560509afac4c2e05c4f151b500e01c2f1332f476a75ef67"
+    },
+    "finn-rtllib/cdma/cdma_x/cdma_x_wr.sv": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "4e238669f0be6b099bf46dd73537fee04405f5b04d378dc898bc2e5395a51475"
+    },
+    "finn-rtllib/cdma/krnl_counter.sv": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "b0836881538d4ffef7c92018bdc4b435819e2e827e20d68499b036bdb19ac7e8"
+    },
+    "finn-rtllib/crop/hdl/crop.sv": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "258860535baf24869cf73f7333c0164712a6ae12de9328d3b6ad827239889b07"
+    },
+    "finn-rtllib/crop/hdl/crop_template.v": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "1e8aa65ded2fbaba9dc4e99c83fb2683a249127b94a379362ce1a6fc02341d90"
+    },
+    "finn-rtllib/dwc/hdl/axis_adapter.v": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "75e169281713bae86a1245df41402cd5c20fabaa8a0e021f28530eedc5f5132f"
+    },
+    "finn-rtllib/dwc/hdl/axis_dwc.sv": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "6e95a37c8d49ec60ee91b099aef3146e1cc54fb8710ee7c809ad5090e1eef948"
+    },
+    "finn-rtllib/dwc/hdl/axis_fifo.v": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "e3966de8a6315bcc3fe3808bb9ee5f0fab6ec6eacdc00b4f5c3f60f25d4335c9"
+    },
+    "finn-rtllib/dwc/hdl/axis_fifo_adapter.sv": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "c27cfd96e17742486c2d42eebdb02fa4e6c03ee7743d123bcc0a6218a7cacfaa"
+    },
+    "finn-rtllib/dwc/hdl/dwc.sv": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "8259259192ffe7337cd7855e90d375ae94ddb651f4bc0255865bab6d23c153ba"
+    },
+    "finn-rtllib/dwc/hdl/dwc_axi.sv": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "a41f033cfb64605f15504c83869613e9b5b48876f7d25c3c5305e6115a235c4b"
+    },
+    "finn-rtllib/dwc/hdl/dwc_template.v": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "3f4469b22e8f50b4637d8c53fc60b64c0e7da5a8a1fb5d2b74ccb9bc85cf9bb4"
+    },
+    "finn-rtllib/dwc/sim/dwc_axi_tb.sv": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "3cd6a6815bb91c0181334ae2308df6565c8b25434a8db95430b2500e13fa563a"
+    },
+    "finn-rtllib/dynload/hdl/dynamic_load.sv": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "920a716389b5b7cc8a1452db3b94171ad5840521faa29d15d057ddc289093891"
+    },
+    "finn-rtllib/dynload/hdl/dynamic_load_wrapper_template.v": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "ef6ac14ff8f14033e9e485939e993843ace9e0eb8e31ee1631c918fb68a8eb9f"
+    },
+    "finn-rtllib/eltwise/binopf.sv": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "fc5a246eedc6efbafc5d390c530ed875e656b2379b9ad5811402effa532a617d"
+    },
+    "finn-rtllib/eltwise/binopi.sv": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "118b6cbfb5540fcd07de09aceacd61f0829afcea628ceebedd408d9b8769df0f"
+    },
+    "finn-rtllib/eltwise/eltwise.sv": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "043e10c6fe0fc37eb04557d58e9057cd0d5f2e42e8a9dfc8a90b73d6ff36df5d"
+    },
+    "finn-rtllib/eltwise/eltwise_template.v": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "af7edf02aa5feb725164f8c93ea184b1064947fcf3404a77788c055ddc76ad98"
+    },
+    "finn-rtllib/eltwise/int_to_fp32.sv": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "fd06b36952ef6f2a7212f29c29cd00bd91be4dfbc4299bc20c6c7901d098c827"
+    },
+    "finn-rtllib/eltwise/queue.sv": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "b527f4cc5a9337f6d308e10a4d55d2ed02908722446ad10dbf2bc4f2ef8bea3a"
+    },
+    "finn-rtllib/fetch_weights/fetch_weights.sv": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "79330fcc1d0ec34375260de76becd29839e87d366c04557e7927ca600b023286"
+    },
+    "finn-rtllib/fetch_weights/fetch_weights_wrapper.v": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "b3919758ae014c9079fad623eee260598005cf5cfc070ff805a8d17aa07d4e68"
+    },
+    "finn-rtllib/fetch_weights/local_weight_buffer.sv": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "e69894b3448c2204d3b19fdff3c9e56c82aa5761e8288c4b283b82b6e58f5967"
+    },
+    "finn-rtllib/fifo/hdl/Q_srl.v": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "546fd652f734f4a266bc206d9dffa490695dfcbeaac205f8caeb2ae1663cebaf"
+    },
+    "finn-rtllib/fifo/hdl/fifo_gauge.sv": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "8b4779a73bffc1c2a855005c3e9f498043640703659dc47c90c60253e13099f6"
+    },
+    "finn-rtllib/fifo/hdl/fifo_gauge_tb.sv": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "882c294e68bbfe7dc2e59e3414e1df93890e9116355d0acc875049702c9f8ef7"
+    },
+    "finn-rtllib/fifo/hdl/fifo_template.v": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "14e37174e38847d9c60c96799d8b6e77c05d1bdc6dd3c08b7542629a1529f394"
+    },
+    "finn-rtllib/fifo/sim.sh": {
+      "kind": "file",
+      "mode": 493,
+      "sha256": "7b1ffafa947bd46a08fffcaa474b195b374df59896b24ed1e4448b5a9bf2430d"
+    },
+    "finn-rtllib/fmpadding/hdl/axi2we.sv": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "9c949df20f514b57bfd2b5efaf399459d2e4c28aac951d77b0d6db48440490fb"
+    },
+    "finn-rtllib/fmpadding/hdl/fmpadding.sv": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "e7902ad7fe28a19bd4ee477bbcfe0c3053e4d8547711b755d10e18660ce9c69a"
+    },
+    "finn-rtllib/fmpadding/hdl/fmpadding_axi.sv": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "96d840689c7572748cdb1ba62711ccbfa4d7355ec3a3f8ca3bef9470781d44c7"
+    },
+    "finn-rtllib/fmpadding/hdl/fmpadding_axi_tb.sv": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "ff3e678b9b2cb15266f67b419a15132a47b4753acf823760d89dee353e18d146"
+    },
+    "finn-rtllib/fmpadding/hdl/fmpadding_template.v": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "b6a02e480299a657c68aa98672a6cf42e8ddf792feaf8d86162cfd205a218987"
+    },
+    "finn-rtllib/inner_shuffle/elasticmem.sv": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "2da2033f62858d3f6aba294838e8364962130e3e5a96645cbcae0cd1c15cd027"
+    },
+    "finn-rtllib/inner_shuffle/inner_shuffle.sv": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "b008bb05bab50532feff152ec2b0cde33ef52388c274d403b8634d53599bb94a"
+    },
+    "finn-rtllib/inner_shuffle/inner_shuffle_template.v": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "e00e953f457e628f689883b77746552fb14c6ffee30629782fed6a44690c6d07"
+    },
+    "finn-rtllib/inner_shuffle/queue.sv": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "813a20b71897cf736959eb41ab5f52be9bd93733393125d35610ca7f803bb526"
+    },
+    "finn-rtllib/inner_shuffle/skid.sv": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "dd61e366518e96f70f67156e85c28d75866bde29bfacdff450d4a882f8f3de5a"
+    },
+    "finn-rtllib/layernorm/accuf.sv": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "ff34e05d6971f462b53682ef0302ed6b89722e708443c6b5ab4356a11a6d223a"
+    },
+    "finn-rtllib/layernorm/binopf.sv": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "baa1c445b08d93ece4f03cda4778c9cbd9346b7d42652a0608ad11a55aa238d9"
+    },
+    "finn-rtllib/layernorm/layernorm.sv": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "c4846521ec6831112bdb64b19435cfca8179153fb5a1b4673eb8a7ae74be8acd"
+    },
+    "finn-rtllib/layernorm/layernorm_wrapper_template.v": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "34864fab414351629bda9a715e12d3659b4bee43b5a448647e8e86eba39a2a85"
+    },
+    "finn-rtllib/layernorm/queue.sv": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "813a20b71897cf736959eb41ab5f52be9bd93733393125d35610ca7f803bb526"
+    },
+    "finn-rtllib/layernorm/rsqrtf.sv": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "c9e1407c2603541d30e97b0f6afe2a19fb9eb0ecc206c10e826f305572335df7"
+    },
+    "finn-rtllib/layernorm/tb/accuf_tb.sv": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "442ecadd3e525e1b300140ccf742a8985b7dfc9522411d5e3e2c01fa298089c7"
+    },
+    "finn-rtllib/layernorm/tb/binopf_tb.sv": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "43665742a95e90d3ae2b9d55669f78d6aab39dcf64ac66df95c914cd8a72989e"
+    },
+    "finn-rtllib/layernorm/tb/layernorm_tb.sv": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "2ee624d7f8cf690e5b2c91d9ab7d4a957b705d82ea557d97125a21610313cac4"
+    },
+    "finn-rtllib/layernorm/tb/queue_tb.sv": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "2ea9e16c45891372f13fca2ec1dd351919de9f6af8c9f971093e0ce090c4d03a"
+    },
+    "finn-rtllib/layernorm/tb/rsqrtf_tb.sv": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "3a7088665cb014db23026684b722d5ec58ac80c3881ab39197a33ce5332a2e3a"
+    },
+    "finn-rtllib/memstream/doc/README": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "0f75189f08ceeb44208cda5fdaa9b2b4576ef680c6d80f6e36457661b16fcea9"
+    },
+    "finn-rtllib/memstream/hdl/memstream.sv": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "dca7be8a6315d0fd0f0af10970af320c0d01f8739404a75ffd66c431c6dc441f"
+    },
+    "finn-rtllib/memstream/hdl/memstream_axi.sv": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "bb7505026a499735863e9b16c8c3bba51c981857702931d5cb36e17a72d46f0d"
+    },
+    "finn-rtllib/memstream/hdl/memstream_wrapper_template.v": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "cf98cbf15da74188a31a8298f79c26ba87cfaf92d76491573a8eb04eb813e710"
+    },
+    "finn-rtllib/memstream/sim/memstream_axi_tb.sv": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "dac2127715f447a2e1734729e5ab8e426c94a989af7f4b33f8c745c0df4fc5dc"
+    },
+    "finn-rtllib/memstream/sim/memstream_tb.sv": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "da521422114e9497b13ff92c02bc87c1d3287f5b46765893754acb6e58e82a51"
+    },
+    "finn-rtllib/mlo/address_config.sv": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "83d94e6dfb8b751f23dbb6cc3529f42f6acff168f32dda1feeaf7f1fba757885"
+    },
+    "finn-rtllib/mlo/address_config_wrapper.v": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "33f7b6a5328193a24668b02fac09f20f396be917af32e9907907acfd66e889ce"
+    },
+    "finn-rtllib/mlo/infrastructure/demux.sv": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "72b599de3e3607e29ae92a6916846cfc15603f76c5f2288a65d7ea7390ecf425"
+    },
+    "finn-rtllib/mlo/infrastructure/intermediate_frames.sv": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "e05767b933e458a9e6f1373717b52628aac4846dfe58e12529ce0337e23e4868"
+    },
+    "finn-rtllib/mlo/infrastructure/mux.sv": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "47a4eac7478bfcee65d0d445c7c43ff899a3cdbfbfd07c0b4babc37965d3b79c"
+    },
+    "finn-rtllib/mlo/loop_control.sv": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "eda801acf498d8f1b203b3b6360cf8508e2c87c0de3db6c9bbbc0a924000e76b"
+    },
+    "finn-rtllib/mlo/loop_control_wrapper.v": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "ab041be2cc4001444fbcaedf8b2fbffb513a0dca3c3bac11dbc8562ba934ba90"
+    },
+    "finn-rtllib/mvu/add_multi.sv": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "245c88f80677355afd487f9cb69d71b85c4873eceae5bb828b1dcac43ca71f94"
+    },
+    "finn-rtllib/mvu/mvu.sv": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "f76859aea15c36e4d4bef2a21669a70a9f644924699103e36e643e3fb490fdf3"
+    },
+    "finn-rtllib/mvu/mvu_pkg.sv": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "fae9380777d3644ec2c6fab3bd50afa85f45e1633d15b3b164ef5b75fe6ecc70"
+    },
+    "finn-rtllib/mvu/mvu_vvu_8sx9_dsp58.sv": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "31174b1c5fd374c06ae31e64793064e3b3cba2f9a33a37e541f546f45cf45acc"
+    },
+    "finn-rtllib/mvu/mvu_vvu_axi.sv": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "f4c91ae7cbb2887c92b034c2364481e9d40e31313bbd1aff82491c1350388dab"
+    },
+    "finn-rtllib/mvu/mvu_vvu_axi_wrapper.v": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "3192cd05f31f372f2b6286a6aed748320842f52cad93495b85d1a79250cb4ad5"
+    },
+    "finn-rtllib/mvu/tb/add_multi_tb.sv": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "afaa695ab1bf70926ed71fabdd74c7c510336b7f83e7434ebb52ff330ffb191a"
+    },
+    "finn-rtllib/mvu/tb/mvu_axi_tb.sv": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "b6cce161b805420543c0332f102fa3bb1313299808c4ace3523b7cc2afdffd89"
+    },
+    "finn-rtllib/mvu/tb/vvu_axi_tb.sv": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "d9a4430922f49318aaf9f64852eb550900192091efd877f100c78465eb92d864"
+    },
+    "finn-rtllib/mvu_tiled/acc_stage.sv": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "bbc5ec23fac0b0ec67ed071273cf8418bbfb7b56e94d6b0ae1f15e5501bcb078"
+    },
+    "finn-rtllib/mvu_tiled/cu_mvau_tiled.sv": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "5e8bd1dfb199b54b8cffdb40e43d3a411593e971f36890d7b91e93d347f8a520"
+    },
+    "finn-rtllib/mvu_tiled/input_gen.sv": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "8dc125f15e131ad06056329d1f5580be991747cded59b909e9abdfe60c1fffc0"
+    },
+    "finn-rtllib/mvu_tiled/mvu_tiled_axi.sv": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "2e776439f97eed1267380ae46a2336ed7929c76deae543855a28d0bbab766abf"
+    },
+    "finn-rtllib/mvu_tiled/mvu_tiled_axi_wrapper.v": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "6d671e0c4e69728362ef8f778ab1f65ba748a37c067a4974f9e7b249413bf8a1"
+    },
+    "finn-rtllib/mvu_tiled/tb/mvu_tiled_axi_tb.sv": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "c801ca661359e1241d9e68c894384ea9b6c784d40b4bdde6d54e2bbfe3196453"
+    },
+    "finn-rtllib/mvu_tiled/weights_buff_tile.sv": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "c71730bf994180c4532d788ce3e3c432fae9e94b3e67acb1fe0f3e66665613b5"
+    },
+    "finn-rtllib/pad1d/hdl/pad1d.sv": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "4f98719eaba91978129c66698ab3473c2cd561778afcd6337f4e6ed96f7dca81"
+    },
+    "finn-rtllib/pad1d/hdl/pad1d_template.v": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "ab5245a8e112c21838a54889f77f34f5f894d30003b6be7cd133224270dfe737"
+    },
+    "finn-rtllib/requant/hdl/queue.sv": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "813a20b71897cf736959eb41ab5f52be9bd93733393125d35610ca7f803bb526"
+    },
+    "finn-rtllib/requant/hdl/requant.sv": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "67c8ac59d83fd1fa7b55061c8e407497dd829bf9b07eb715065ec8fee7f2aba7"
+    },
+    "finn-rtllib/requant/hdl/requant_axi.sv": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "8a2a9d4863157cbf54d65f1fd3b59174bd22cb67d1958417679be75fcee16290"
+    },
+    "finn-rtllib/requant/hdl/requant_top.sv": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "4813d1a41e2e679e1642da1c1a01c08fa9eff1040b0bebdfd665a3de3a2d72b5"
+    },
+    "finn-rtllib/requant/hdl/requant_wrapper_template.sv": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "084379d0f41ba3908d24b47081eb1d26281d84f8a1bdc1a7af3fcba99e1b0b9a"
+    },
+    "finn-rtllib/requant/hdl/requant_wrapper_template.v": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "5becec678225348119a699427debc367bd0355af1166ca546a11a130481844fc"
+    },
+    "finn-rtllib/requant/sim/requant_axi_tb.sv": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "3bbb489e31c6ddd91da0bfd5ee47516b75be5c8b3bf6a807b37bf2c21c873bc9"
+    },
+    "finn-rtllib/requant/sim/requant_tb.sv": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "d978a1c7526d211924c98d232446da13aedac273fd906f19c1b2bfc7023b6ccf"
+    },
+    "finn-rtllib/sim/hdl/sim_ctrl.v": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "8a584ba3a9f494516d95b5ef085e025488c4fc83e9c4293a71115deee3b2b46c"
+    },
+    "finn-rtllib/skid/skid.sv": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "dd61e366518e96f70f67156e85c28d75866bde29bfacdff450d4a882f8f3de5a"
+    },
+    "finn-rtllib/skid/skid_tb.sv": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "24a7d61443ccf569396f22f6231a45ef8cf395e23b6ed938ac66ae76ae90b3c7"
+    },
+    "finn-rtllib/softmax_rtl/binopf.sv": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "baa1c445b08d93ece4f03cda4778c9cbd9346b7d42652a0608ad11a55aa238d9"
+    },
+    "finn-rtllib/softmax_rtl/int_to_fp32.sv": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "fd06b36952ef6f2a7212f29c29cd00bd91be4dfbc4299bc20c6c7901d098c827"
+    },
+    "finn-rtllib/softmax_rtl/pwpolyf.sv": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "9dd2a0343335b4b0ed1f056191a88cd21c2599728b896c7f891efd5b636b6786"
+    },
+    "finn-rtllib/softmax_rtl/pwpolyf_pkg.sv": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "0e405210d3ac8c23c8cb7d482323bad54f582dea6680dc0058f186e173f75b46"
+    },
+    "finn-rtllib/softmax_rtl/queue.sv": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "813a20b71897cf736959eb41ab5f52be9bd93733393125d35610ca7f803bb526"
+    },
+    "finn-rtllib/softmax_rtl/softmax_wrapper_template.v": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "a087104d5884e8ec78bcc8f426316b66c8d8607a48364bcf57160250ecf7923d"
+    },
+    "finn-rtllib/softmax_rtl/softmaxf.sv": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "be2ac41b7b1ded12144a895b230f7064cdff8a1e75a51b5adc20d47ee96dbf39"
+    },
+    "finn-rtllib/softmax_rtl/softmaxf_pkg.sv": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "c51ba05c4705a24b716788b3fd6e1334ccec60f17c1e429fe80ebd4f70dcee6e"
+    },
+    "finn-rtllib/stream_tap/hdl/stream_tap.sv": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "683fa1f11fdfd486e0649ab5bdf3fd91955f6647f61edfa8c7c15ecf116b8706"
+    },
+    "finn-rtllib/stream_tap/hdl/stream_tap_wrapper_template.v": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "1660395124ddb23da6a8c18273fb24c770cb39cba241f8c7e2101e82260035e6"
+    },
+    "finn-rtllib/stream_tap/tb/stream_tap_tb.sv": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "7076fe4f7878b3b55e55d024d15e4ac78244bf6a54fcb42086ecfbcb296196da"
+    },
+    "finn-rtllib/swg/swg_common.sv": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "cbaef6293f6fc41a8eafd2071d804c0f2718d887ee30c2880f6ef6c73564402c"
+    },
+    "finn-rtllib/swg/swg_pkg.sv": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "5212c2f69443ca041e92ecfc5829e2169055b0262ca410101de449a87badaab9"
+    },
+    "finn-rtllib/swg/swg_template_axilite.v": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "b66fb3fe16a016291760229c79171eb2c2d8455c4b400ae240e4262f2e08c8cb"
+    },
+    "finn-rtllib/swg/swg_template_default.sv": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "bd06b667e47b4d8f8bd6e081c5999acec1c7d22f7b81f93d7876e0dee28ea7c2"
+    },
+    "finn-rtllib/swg/swg_template_default_dynamic.sv": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "3de7a330a46abaf56302879846d092db65dc60462730245482a64dc775a8636c"
+    },
+    "finn-rtllib/swg/swg_template_parallel.sv": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "46759597e5ddc3757d724401e0808f4c4e181d5e64098dd8c3dac01a7cd08917"
+    },
+    "finn-rtllib/swg/swg_template_wrapper.v": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "8e8071ca1267ed97a03bb1197e017d25e417871680bfe90124db9d77a64d8eaa"
+    },
+    "finn-rtllib/swg/swg_template_wrapper_dynamic.v": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "3920422971dad8ab0a4b33ab18e105ba3bdae2a3719227312bab47410e0f1241"
+    },
+    "finn-rtllib/thresholding/hdl/thresholding.sv": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "706ca3232e5daab15374b9645f4a3696bd39787e6578f2905aa697f059f57772"
+    },
+    "finn-rtllib/thresholding/hdl/thresholding_axi.sv": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "72d8f3c70e701e50d4613c8cc5f0f9c3b9a618715d2fc5e2e84b9f80750391bc"
+    },
+    "finn-rtllib/thresholding/hdl/thresholding_template_wrapper.v": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "d8bd19ddf81ef783a981ce0a6782388a258b227fb724d244a9f8cd4f754fd585"
+    },
+    "finn-rtllib/thresholding/sim/thresh_gen.sv": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "d8f99f47873d34c163ace12cc6ea8c92cd45d033fe9c419b8840e4fc8310758d"
+    },
+    "finn-rtllib/thresholding/sim/thresholding_axi_tb.sv": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "559559d8bc87ec517f31b0a364d7685a5789da1d51751052deff5c2b6a3db9dd"
+    },
+    "finn-rtllib/thresholding/sim/thresholding_tb.sv": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "b8d3e1c5813531766484e5f284e68693c3b01407b30d41500f6f68ef5e3b712d"
+    },
+    "finn_xsi/finn_xsi/__init__.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "finn_xsi/finn_xsi/adapter.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "d18fa31acc421467f074c442ea533d38655be5194816d1e0afc3c9eae0c6323c"
+    },
+    "finn_xsi/finn_xsi/sim_engine.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "1ab53b1e321d2e5c2af15a50cd63b19cb6f7eeefe830c7b5b62dba56c54fe143"
+    },
+    "finn_xsi/finn_xsi/srcutil.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "4f10daf72333f9bff52d00774d62723344bcf1e3a7ce50459832499b8c4f57b8"
+    },
+    "finn_xsi/rtlsim_config.hpp.template": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "aa9922a761b6953f4e2956a09964fdac101c888a056272aa83c1e9905625ccc0"
+    },
+    "finn_xsi/rtlsim_xsi.cpp": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "b0069d8c82ca3ef971aba47efeb7cdea3ab045931f09739c8249024ab799951f"
+    },
+    "finn_xsi/testcase/StreamingEltwise_hls_0.v": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "93e4475a1e641fffc99c457b42dc452f41b518d70a70c89969cf5145741ff685"
+    },
+    "finn_xsi/testcase/StreamingEltwise_hls_0_flow_control_loop_pipe_no_ap_cont.v": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "e49497058ad9d4692a3f0fecc38fcaa585863900e100299f9dc881b30a291b40"
+    },
+    "finn_xsi/testcase/StreamingEltwise_hls_0_regslice_both.v": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "ad255bfa693ee4967a7c3ca574bd7bdf7ef5e77e4fa26b1812db6cb30ddacf5b"
+    },
+    "finn_xsi/xsi_bind.cpp": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "7dbbd454025a0b4f9dd17fded4691e04ec529f638c61d27d597fd5b050080dfe"
+    },
+    "finn_xsi/xsi_finn.cpp": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "b40cec212ba21ec6075fae45498f64292bf938286f4078f65b2d3678378d6fc2"
+    },
+    "finn_xsi/xsi_finn.hpp": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "9410d123aac0441199f9d28733847c985b4b6ce7cc1b924c9da8eabd352817b2"
+    },
+    "notebooks/LFCW1A1.onnx": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "ed3294080f166a4227f1e40aab3d89e3be43b0d40f7db34a4a074a2cde40c4f8"
+    },
+    "notebooks/advanced/0_custom_analysis_pass.ipynb": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "2ab6c8ceac2c172b091b41f4b55503e80577e4bb55bebf97d5824e65ff1f8669"
+    },
+    "notebooks/advanced/1_custom_transformation_pass.ipynb": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "c3f9214d0b4013f3a169d505875a96dfb88db8454a1669727fa8d1bee3fe6da1"
+    },
+    "notebooks/advanced/2_custom_op.ipynb": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "42cb4483c2767a98e6c38e570049b83d6ee67a68975bcc98bd364c8aa525f63d"
+    },
+    "notebooks/advanced/3_folding.ipynb": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "9fe215ae00d526102c14c117b4b03204fd9d6895f5001203a1ab497d0348dca0"
+    },
+    "notebooks/advanced/4_advanced_builder_settings.ipynb": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "11ddce6ce20047c5c845835852435cebc8fafa1f824b73b9b85c7fbf6f47fd7d"
+    },
+    "notebooks/advanced/cnv-w2a2_folding_config.json": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "51db6c12c38b4b536a221f0bc43e9ab20c6af66557d2bcbd93b5e4d002148b1e"
+    },
+    "notebooks/advanced/cybsec_PE_SIMD.onnx": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "05b31160193c8388f094620d9931a42768508cb13abbac246d76539d9a7c5ba8"
+    },
+    "notebooks/advanced/finn-dataflow.png": {
+      "kind": "file",
+      "mode": 493,
+      "sha256": "065248d53e739c7a96b4a38ea287b119d4b3e8bae0184f0aabab2ddab020fe7a"
+    },
+    "notebooks/advanced/finn-folding-mvau.png": {
+      "kind": "file",
+      "mode": 493,
+      "sha256": "f37d932e3b70f128ceb6762abc4f26787add7927e957186e9222ed3a42fe0bcb"
+    },
+    "notebooks/advanced/finn-folding.png": {
+      "kind": "file",
+      "mode": 493,
+      "sha256": "6a7d367d8a27838dd7796e26f80275960c40f8c5fbdc32f3694e256c3234a4b9"
+    },
+    "notebooks/basics/0_how_to_work_with_onnx.ipynb": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "47921e830d8ab88b773f16da86def3fc3d556697bdce0cf9c6b39fe29574f5b7"
+    },
+    "notebooks/basics/1_brevitas_network_import_via_QONNX.ipynb": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "34bf4b2445a3dea348a0890edfed5501f5e049eca4a7cf7d5e39b12e4e49efb9"
+    },
+    "notebooks/end2end_example/README.md": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "ec1364e64d3e448d0a196a33b1e670cddbae9291092d4538d1697afa2d76fa81"
+    },
+    "notebooks/end2end_example/bnn-pynq/StreamingDataflowPartition_1.pdf": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "e19beda502b75b9874721010b3ac510d1351aceecf1cee4015c662f78cb0a9c4"
+    },
+    "notebooks/end2end_example/bnn-pynq/cnv-mp-fc.png": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "d665b20cbed368eb3e09c8ca93bedf5188039565a464c17630591f81fef5fb2c"
+    },
+    "notebooks/end2end_example/bnn-pynq/cnv_end2end_example.ipynb": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "39a6c9ffcb57708a4057cf16f3dbcec57a4728ee4f16d2b302216e9e9b30f50b"
+    },
+    "notebooks/end2end_example/bnn-pynq/finn-design-flow-example.svg": {
+      "kind": "file",
+      "mode": 493,
+      "sha256": "c3768d002cab0af31c901635a5aa52efde0cf5d3bbe750189c17949672356db0"
+    },
+    "notebooks/end2end_example/bnn-pynq/finn-hw-arch.png": {
+      "kind": "file",
+      "mode": 493,
+      "sha256": "9cb377a8b3031d7afced7640524b4a6f5bdb7f42080843096cba33f68da4b638"
+    },
+    "notebooks/end2end_example/bnn-pynq/pynq_shell_project.png": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "d0dce64766a06926ab60e1f718ff8f88b6e34d1c371b0205919366a27af59ce3"
+    },
+    "notebooks/end2end_example/bnn-pynq/stitched_ip.png": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "771c42ab0c6f78ba6e8c6a3dfda597acdd1c5525072b8ed660fc0810c3d85fef"
+    },
+    "notebooks/end2end_example/bnn-pynq/tfc_end2end_example.ipynb": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "cd7e6db9b3413f2352eccb07cc09c8d86da2d99abfc44189a0df213538256826"
+    },
+    "notebooks/end2end_example/bnn-pynq/tfc_end2end_verification.ipynb": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "3987c8e2f6a6a73dd17ec69895ba48e84df4ec94c5522635544ffeb020405cde"
+    },
+    "notebooks/end2end_example/bnn-pynq/top.pdf": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "430cf53bcb4a10ab22c7e8b3520223e2aaac2ed5f3fb0d70a7b89ab9776e139f"
+    },
+    "notebooks/end2end_example/bnn-pynq/verification.svg": {
+      "kind": "file",
+      "mode": 493,
+      "sha256": "939f6dc27aa47f349793d46917cbf76f33ea289f8d9e09b6a8bba8084a6d29b1"
+    },
+    "notebooks/end2end_example/cybersecurity/1-train-mlp-with-brevitas.ipynb": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "a010410d627ffc6c416486934b2dea8d9360f2ea4ea47d38667a19937a78d399"
+    },
+    "notebooks/end2end_example/cybersecurity/2-import-into-finn-and-verify.ipynb": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "151c893a23eca8d40086de658c99f2d892870b10e258f3afae59054d47572987"
+    },
+    "notebooks/end2end_example/cybersecurity/3-build-accelerator-with-finn.ipynb": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "aa23c4f9023ed4fa6e88d556dacff221412bfe808c9d5376017b00bcf924270f"
+    },
+    "notebooks/end2end_example/cybersecurity/README.md": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "7b7294a4719a8fa331ad646e22835c731c6fac77c39a54466b814c3a497ced67"
+    },
+    "notebooks/end2end_example/cybersecurity/dataloader_quantized.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "d6df66970a15d79ecc7538ca23f6621cc3b834440e2a86be9d7265d026ea6fbf"
+    },
+    "notebooks/end2end_example/cybersecurity/finn-example.png": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "c978f120316b341e84e7c655197729d24e42d5492805ba29e731f9c0b4438deb"
+    },
+    "notebooks/end2end_example/cybersecurity/state_dict.pth": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "5b8b59c57874db3c0600fb510594e997ccebeefe77c24a818977a4eeafd53f0e"
+    },
+    "notebooks/end2end_example/cybersecurity/validate-unsw-nb15.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "acf741c8808665b37f377cc0f7a576e12b170f02ab485d232b3c384855fdeac9"
+    },
+    "requirements.txt": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "0b10a2f719fd45b325435aa84e2739208159f863997302e2c4aa7ffca9e39978"
+    },
+    "run-docker.sh": {
+      "kind": "file",
+      "mode": 493,
+      "sha256": "5b7a50e2a4986c712f60c0442a4cee23058645903de9650525ae1133314d6e5a"
+    },
+    "scripts/check-dataflow-design.sh": {
+      "kind": "file",
+      "mode": 493,
+      "sha256": "fea5910c070ba88e43e9681b3a2194e3ac0391302b93a0eec71c0c86f766409b"
+    },
+    "scripts/finn-env.sh": {
+      "kind": "file",
+      "mode": 493,
+      "sha256": "10bf07f01cad89bf52fff4e818674aa8b16b59031047b42ca2a969f149098af1"
+    },
+    "scripts/install-system-deps.sh": {
+      "kind": "file",
+      "mode": 493,
+      "sha256": "684e76bf701ac50195e32e63c7418b23d710837834c92ddc432ec5336ef2bb33"
+    },
+    "scripts/quicktest-local.sh": {
+      "kind": "file",
+      "mode": 493,
+      "sha256": "ac1007faf1cd04ee811fff9250d010e8a49f6ee0c460af9c88eeef9a7b01500f"
+    },
+    "scripts/rtl-log-summary.sh": {
+      "kind": "file",
+      "mode": 493,
+      "sha256": "11c8c685ed7e9c66c8bfce1b8c90add97f669666f2928c057f37ab961d8ebdaf"
+    },
+    "setup-local.sh": {
+      "kind": "file",
+      "mode": 493,
+      "sha256": "04389b4d743de8fee587c8cb9d40f27bd73eaccd13196353b6b6ff60b83da7af"
+    },
+    "setup.cfg": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "661dadfc41ed3dfc5b26dea25374b039365b36e7f153b45794c599246d021e2b"
+    },
+    "setup.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "748535156e0a49294da4305f86025e2de6f3966f350895c95697aa61a86b3118"
+    },
+    "src/finn/analysis/__init__.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "src/finn/analysis/fpgadataflow/__init__.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "src/finn/analysis/fpgadataflow/dataflow_performance.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "b91a9a7a8a47b72bbbd22248f3b44940a7adb648cdf43a6f4585c042dfc77e8c"
+    },
+    "src/finn/analysis/fpgadataflow/exp_cycles_per_layer.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "83eea1eae11137969176c0e68169d2f5b308a89c8b2e6634c5344f459a0dd27d"
+    },
+    "src/finn/analysis/fpgadataflow/fifo_transaction_counts.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "97f7597d5d3bfdc931bb954c68752521416bc4a53b4d8866aa6b9f5e7e28eb60"
+    },
+    "src/finn/analysis/fpgadataflow/floorplan_params.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "7b13cc10c2650032d09d7273d59f324bce93f763565bb8be122fbb0a49afb4ad"
+    },
+    "src/finn/analysis/fpgadataflow/hls_synth_res_estimation.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "f1f8919e237425c4b369889e697e30160692bc35b367913fe01f95cd41abe448"
+    },
+    "src/finn/analysis/fpgadataflow/op_and_param_counts.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "201df28ec99a6bd9b877d94978954a95da365e3a8ebee6c83c3d1981cdc09437"
+    },
+    "src/finn/analysis/fpgadataflow/post_synth_res.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "528bee4a23817c55dff1fcf348ed8dff50731df2b96d30840054735b5f2de472"
+    },
+    "src/finn/analysis/fpgadataflow/res_estimation.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "0fd06e5fd08c1687d77e9fea4d944854cb1eae0f59d871e6203a3fbbbfbdafa1"
+    },
+    "src/finn/analysis/fpgadataflow/validate_dataflow_conversion.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "691c588373a9e17b10c804b788fc45c71d15992a972049e66fc76beb82d7b7c5"
+    },
+    "src/finn/analysis/verify_custom_nodes.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "c4eff63818d3a909c342b975473a1d11ef4e3777de9feb1b29fcd5a31d42d644"
+    },
+    "src/finn/builder/__init__.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "src/finn/builder/build_dataflow.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "11c50745cb1a9b6011f2cc5fbc567d18946589bd2747b2944f4c3005d1379b66"
+    },
+    "src/finn/builder/build_dataflow_checks.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "40f157f94512b84d1c539bf8e084b8f41f6b46528fa8616e4982d29e2e8b3ca6"
+    },
+    "src/finn/builder/build_dataflow_config.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "a0bbdc18296a8b782d9d95d32a67895119954e29f1209dd44be1667bc783d37c"
+    },
+    "src/finn/builder/build_dataflow_phases.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "a8c6fe5824e6e7104e7655dcd0ae67b5bcdbef191ec7562d70cc3e6bc20811a0"
+    },
+    "src/finn/builder/build_dataflow_steps.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "5962cea77899932d711b68a4e4dcd4a35a245dda34a5773ec419ab830c1eb424"
+    },
+    "src/finn/core/__init__.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "src/finn/core/onnx_exec.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "26daf1cacd8c01d64953309a10e973a80c9b0972783a675df11d6e4c5ca058e3"
+    },
+    "src/finn/core/rtlsim_exec.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "3be90aece719fae7fc05d15697eb7841d5c2fb8fd73d3f613c4cda902e798d3a"
+    },
+    "src/finn/custom_op/dataflow/__init__.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "c574f848f0374cca76d15e9052b982f710ff3985fb699779ecd58839c3fa61c1"
+    },
+    "src/finn/custom_op/dataflow/py.typed": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+    },
+    "src/finn/custom_op/fpgadataflow/__init__.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "a52302c0ac42d54213c8297b91fb1d2460233026a31023db71d13cd533128d8c"
+    },
+    "src/finn/custom_op/fpgadataflow/concat.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "6f5d251eb4a9aeee3f7a9880c7c15fd1d68cd4fd56ef8bc00add5c14cca2e14a"
+    },
+    "src/finn/custom_op/fpgadataflow/convolutioninputgenerator.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "89ca766f56cef0a00d902c2303e501d83cea2d3ba0b67d74dc5478effd52da30"
+    },
+    "src/finn/custom_op/fpgadataflow/crop.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "b02c174922560b431539ba64fdfc9e851c412ffa1d8ea4ef08256e9f70001dbb"
+    },
+    "src/finn/custom_op/fpgadataflow/duplicatestreams.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "cc572d47374012bc2f82586b0846f78985104f6dc08fb2de48b322ff7615109a"
+    },
+    "src/finn/custom_op/fpgadataflow/elementwise_binary.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "a34013aa1d3000ac4f863a5986320b1a75d33514959f1b7fce64babe206a1c05"
+    },
+    "src/finn/custom_op/fpgadataflow/fmpadding.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "5195a5f182a3439ca6aad21af992451592eab491b8a77f13099e8c2764d41886"
+    },
+    "src/finn/custom_op/fpgadataflow/fmpadding_pixel.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "5df433bb1b47a904875a1e41082389138b48216a5fe316cc87449d575e920f1a"
+    },
+    "src/finn/custom_op/fpgadataflow/globalaccpool.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "be230326abc2f59890d339a9939f2d6d16eae921bd86f992372b9b7a8f6b6a9d"
+    },
+    "src/finn/custom_op/fpgadataflow/hls/__init__.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "2ea0914254710d2bf1602e6d9d36a9a7ebdd87eb4caf5566844a457343ce2b6a"
+    },
+    "src/finn/custom_op/fpgadataflow/hls/checksum_hls.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "cf3e16bce4c94c6a8650589a3d1d7181121a3fa3404bc03cb6914eb8d12a1ad8"
+    },
+    "src/finn/custom_op/fpgadataflow/hls/concat_hls.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "ce4a96f803f9fc9ddacbf0f7af24c5854caf430af3296fe9f8838302a3961ee6"
+    },
+    "src/finn/custom_op/fpgadataflow/hls/crop_hls.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "b1a8c7779f8351b22e49d10cf26d175cae2b5e77e5fe6b4af8c426a4c16ddb9a"
+    },
+    "src/finn/custom_op/fpgadataflow/hls/duplicatestreams_hls.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "9703894b802f45c8abe9b1c43d00f8606de8a11a3ca7eb38b864e164810f96f6"
+    },
+    "src/finn/custom_op/fpgadataflow/hls/elementwise_binary_hls.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "9335de4f960815f6f9a1728edd8fafafb83a4d54dd8e3aab2434110f6d413dd5"
+    },
+    "src/finn/custom_op/fpgadataflow/hls/fmpadding_pixel_hls.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "ecbbba3da33de94558b5e24851c61393d5256be68eaaa8663c23fefc3c979745"
+    },
+    "src/finn/custom_op/fpgadataflow/hls/globalaccpool_hls.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "fd785227ae5319635d4107c8a02049f9e66fe4b1385d583f362475ad8a13d673"
+    },
+    "src/finn/custom_op/fpgadataflow/hls/hwsoftmax_hls.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "b96ebede38b3f031a03ea1736e0ee2350486b8399ee2727daf5166fb5e22332a"
+    },
+    "src/finn/custom_op/fpgadataflow/hls/iodma_hls.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "f0ccfd2e0d9e807395805bf3160d58eb56344621526657ac03fbf3d85a8a50ca"
+    },
+    "src/finn/custom_op/fpgadataflow/hls/labelselect_hls.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "391006509e9ad3c1f8e122b4114c51003540a18691a7dd4a70cd7db67783d874"
+    },
+    "src/finn/custom_op/fpgadataflow/hls/layernorm_hls.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "94336a5ae56bcd234960252635687e9335e900ee5ab89c495c3c2387f6e742eb"
+    },
+    "src/finn/custom_op/fpgadataflow/hls/lookup_hls.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "c67a7eec8fee084a1d7c23d609a2a4c44a79df54ed0e014d3a72f2798591c42b"
+    },
+    "src/finn/custom_op/fpgadataflow/hls/matrixvectoractivation_hls.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "99e109e85a9b29a09c651cf9f0d65d5b163fd48b5886421a2d36740cb7cc972e"
+    },
+    "src/finn/custom_op/fpgadataflow/hls/outer_shuffle_hls.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "d9ac1f2b8bfb2cb353cba1db7752089ac586ad8057d31697463badb8fafac9e9"
+    },
+    "src/finn/custom_op/fpgadataflow/hls/pool_hls.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "ad7cca7e1696599ef9d494d223f48d3c7ec1f4794bb77693c32b8267b34ef152"
+    },
+    "src/finn/custom_op/fpgadataflow/hls/requant_hls.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "900ea4e8711f5a56904ab10ca5abd390683ffbb4791e436878e90e0ed3f3f7ed"
+    },
+    "src/finn/custom_op/fpgadataflow/hls/split_hls.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "d09cc017cccd3dce0fdf3924f8c0f2dfa6c8df30ff35731e7258bca962058963"
+    },
+    "src/finn/custom_op/fpgadataflow/hls/streamingdatawidthconverter_hls.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "07f3fc31de7011b7625141f51ba178c1f215f1c4eceef0bbf002677e7b580ea6"
+    },
+    "src/finn/custom_op/fpgadataflow/hls/thresholding_hls.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "060eb95ad7ab90a80fafeae84266108c4cb709b96c92020e9be3de2c585ecfaf"
+    },
+    "src/finn/custom_op/fpgadataflow/hls/tlastmarker_hls.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "b1312bf75c0a959f47606bbb834f9064a66d9bcafb9d49337855f7174e63392e"
+    },
+    "src/finn/custom_op/fpgadataflow/hls/upsampler_hls.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "291d49a766599086fd0214cfb2833191db6cf8ed8e4e03a0a2f11662d4eef721"
+    },
+    "src/finn/custom_op/fpgadataflow/hls/vectorvectoractivation_hls.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "a3148479c61e207e0ddc446f6c069c6ca28e0dc565af502d1f59b986a881772a"
+    },
+    "src/finn/custom_op/fpgadataflow/hlsbackend.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "502ca35b9a5fa2ee3c5d5c06bb0655b177a9408400f8a5396d424d4f7c8dff7a"
+    },
+    "src/finn/custom_op/fpgadataflow/hwcustomop.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "43d975eda6fb12ae45fed7cfb7b15c0282e71e7086b973e3ee3e004647123a77"
+    },
+    "src/finn/custom_op/fpgadataflow/hwsoftmax.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "b3f4b009c41ca8924da1f1d0fdb2146b11f81f434a12f9d6e030308efccd9427"
+    },
+    "src/finn/custom_op/fpgadataflow/inner_shuffle.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "311ad1d70648102a2b0315899f83699fd4890a2d343898ef0b4a8ddd7aebabe0"
+    },
+    "src/finn/custom_op/fpgadataflow/labelselect.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "343a0e60a258ac73bca6328478be3c07ed11d12a79b834dd194b9ee1aacb91df"
+    },
+    "src/finn/custom_op/fpgadataflow/layernorm.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "0979e0f7506926bf4f30100860061100599662ce93e7b2bec65532d61e8f3e4f"
+    },
+    "src/finn/custom_op/fpgadataflow/lookup.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "41ad942c70a1d3da017766cfe504a12ad814f96c5af3d97f5446adebd875ec2f"
+    },
+    "src/finn/custom_op/fpgadataflow/matrixvectoractivation.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "ef1609f1c4dc12c4cc1427ae510f9db9907c2a47fae8271518d1e0252f0676be"
+    },
+    "src/finn/custom_op/fpgadataflow/outer_shuffle.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "74176c81a149a7384b666152e3ecdc33a9a5c005194aadbab4e42af9268d475d"
+    },
+    "src/finn/custom_op/fpgadataflow/pad1d.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "ee10c43fa1c8b5c667042d8e2631082aa1502b823d769b0d9fd7115f728a4357"
+    },
+    "src/finn/custom_op/fpgadataflow/pool.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "15750641057e079aa7ac8e319b8121e7eade224284a46f6d96e429676928e438"
+    },
+    "src/finn/custom_op/fpgadataflow/requant.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "f0cb5ed85a3d2abedac8c3af0f11e5e3818c990a204d435fd0f966ead51fee92"
+    },
+    "src/finn/custom_op/fpgadataflow/rtl/__init__.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "11b0f2d1141dd3b0faa0f1bff68815e317350dd097f8ea238ae8bc9f96a1051a"
+    },
+    "src/finn/custom_op/fpgadataflow/rtl/convolutioninputgenerator_rtl.py": {
+      "kind": "file",
+      "mode": 493,
+      "sha256": "b7d04e5de78477aee4e484d9dd2ff94d7388db3e730b2322299a343449c8f471"
+    },
+    "src/finn/custom_op/fpgadataflow/rtl/crop_rtl.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "3dae973e2fa8c227c699e4729bce838542a01e3a2520bb5b9e3a685ca276a528"
+    },
+    "src/finn/custom_op/fpgadataflow/rtl/elementwise_binary_rtl.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "8d10b097d78270e4d35240e89e5dd3f860cb001da48d91d65bb11fce4fb5d387"
+    },
+    "src/finn/custom_op/fpgadataflow/rtl/finn_loop.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "afc8916d8471c6be64f8b21071f8774e3574fa108e5aa26a8ad52953203b0e88"
+    },
+    "src/finn/custom_op/fpgadataflow/rtl/fmpadding_rtl.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "48d44a30792e115bce942e25c25c627aaa3685ba5444f1582f9b7edd99509164"
+    },
+    "src/finn/custom_op/fpgadataflow/rtl/hwsoftmax_rtl.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "3e4061932b3526e7db6075815c554428967cb1ad13e50b37d4b2a65a2f064526"
+    },
+    "src/finn/custom_op/fpgadataflow/rtl/inner_shuffle_rtl.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "0bdb43e48fdbb21c2d71486d018153198c05c7b280d70592ad456220612f1a89"
+    },
+    "src/finn/custom_op/fpgadataflow/rtl/layernorm_rtl.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "e6fc76c303d78712048999a47d6c41889ad71e89738531a58353e0ffb5d07c86"
+    },
+    "src/finn/custom_op/fpgadataflow/rtl/matrixvectoractivation_rtl.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "95551a301a440b54025b9ca61049ec0f86e8a444cf9cf28e63d2ca82ec92bed2"
+    },
+    "src/finn/custom_op/fpgadataflow/rtl/pad1d_rtl.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "6e2ecf13eefa0dc9a00952b903baf8079824646b3ba16ef90659e107dedf9bd6"
+    },
+    "src/finn/custom_op/fpgadataflow/rtl/requant_rtl.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "796893ace589c389c5d8dda00fcc67157a864be1bc5ad27628225b504255f171"
+    },
+    "src/finn/custom_op/fpgadataflow/rtl/selecttoken_rtl.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "2061704ed06d49ccbc621f6d527b69adb01051634203d997b5ac687519141a73"
+    },
+    "src/finn/custom_op/fpgadataflow/rtl/streamingdatawidthconverter_rtl.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "efdaef14dafaa0fbd07effbadc072f1dc98ab694a74f9c36e2062af583774abb"
+    },
+    "src/finn/custom_op/fpgadataflow/rtl/streamingfifo_rtl.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "281cdcef608f7e5efc59163b6eb7d13fb81675bef479437b5b13ee7e1f56d35f"
+    },
+    "src/finn/custom_op/fpgadataflow/rtl/thresholding_rtl.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "0c4d2a6929ce2ca20089577f19a674a29c430d8bb64be561385b819cc81447d8"
+    },
+    "src/finn/custom_op/fpgadataflow/rtl/vectorvectoractivation_rtl.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "239eb364ca92f60c5b006a853289c6d301e52ba391ddc85a16ea7ea291904419"
+    },
+    "src/finn/custom_op/fpgadataflow/rtlbackend.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "1f9a9466489bf63c35a89691553e5756d8ca6cf4b15febaad9f0e8e7ef915037"
+    },
+    "src/finn/custom_op/fpgadataflow/selecttoken.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "9f6d9b23dc84003b83481e6287f643f74a6f1fd7c29cea89684be547f49c6d35"
+    },
+    "src/finn/custom_op/fpgadataflow/shuffle.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "efaebb21103a77763d199c7c32a4b44622977dd4f7094c9fd829d5210a3595b2"
+    },
+    "src/finn/custom_op/fpgadataflow/split.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "af6e23681b70325f3fea003e2125d3e29bcec3a4286161aff02cc29e2350da59"
+    },
+    "src/finn/custom_op/fpgadataflow/streamingdataflowpartition.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "2923d0f2228f8682e1d9961acaf3897cda893bb9e22bddcb64a94a9d006067fd"
+    },
+    "src/finn/custom_op/fpgadataflow/streamingdatawidthconverter.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "7a427142c31eee59005477036acabb14161e1caa630cb72bf0f0090096129e78"
+    },
+    "src/finn/custom_op/fpgadataflow/streamingfifo.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "c766bc5aa9c094e6d9f81f263387c79184386d01aed64978db1df51701aca869"
+    },
+    "src/finn/custom_op/fpgadataflow/templates.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "5cfbbae50b20b5bcf1ed0329a7372167b2aa51d787185ee34310fff575e6fc90"
+    },
+    "src/finn/custom_op/fpgadataflow/thresholding.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "15c84a466510a73cc80af21d67e42c43c86f4ffe00995ec2720c84ae6ce6d67c"
+    },
+    "src/finn/custom_op/fpgadataflow/upsampler.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "0126f71346e68e3dc5ad6d514251007507182c5a01cb80fb25dbd04911141ba0"
+    },
+    "src/finn/custom_op/fpgadataflow/vectorvectoractivation.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "e087242bdeb81961a982e8f1ecd22b1cb98b45bfb281e690c9da6d1952bb0a73"
+    },
+    "src/finn/dataflow/__init__.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "d64f1dbc24606e2b528ac0603006e87f4f40e9a2ba46274148b2c7ddd347b06d"
+    },
+    "src/finn/dataflow/_engine/__init__.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "45b2271e72e1f17fe6fabff4df1e0a8d9ab22239aec9db8a5c5fc717a1968563"
+    },
+    "src/finn/dataflow/_engine/conformance.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "dde19124ada99360a802e78252da2b78ef4c3fcd41fc489d1aedf757fcdc8b11"
+    },
+    "src/finn/dataflow/_engine/debug.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "81e673304ad6f03ca27030a073716b52a3c7367bafcf19a494faee7e5145d559"
+    },
+    "src/finn/dataflow/_engine/declarations.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "baf094b29ae952fcb02dc8342bc49a010c0ce052db065f6e94061e0bcf494a40"
+    },
+    "src/finn/dataflow/_engine/engine.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "63519d75633575b8fd2629a6a1193a26817d6799d83c621f5b94c532ecd8c72f"
+    },
+    "src/finn/dataflow/_engine/errors.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "384634ba7e1634177a645a82f4c5efeb7c854c6e126db341bd140867521fd1ad"
+    },
+    "src/finn/dataflow/_engine/evaluation.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "2d7ee6559ddb28a4dd8e66baae5469a17fcd20d74c19b310be8e094c146bed7a"
+    },
+    "src/finn/dataflow/_engine/facts.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "e474419c2ede4626010e512ae62ae193edc22caa8d9efd1d77ea88317dd09483"
+    },
+    "src/finn/dataflow/_engine/points.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "03ef5763cf15a89278989844243a06fe8ca38dacded6a019d4a5581736c74c1c"
+    },
+    "src/finn/dataflow/_engine/primitives.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "071a715beeb83362e72132d06a07cce6f1523a3bde71bba57591dd85cdf1664a"
+    },
+    "src/finn/dataflow/_engine/py.typed": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "src/finn/dataflow/_engine/requests.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "e6b3591e01a777b2b00e715d27c28d1b6a9623b52eb353194b76f80888acaf7c"
+    },
+    "src/finn/dataflow/_engine/results.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "f3ce63404d76d48acafda3e57714a8db22adc68e828e1929f2edb4c946b60170"
+    },
+    "src/finn/dataflow/_engine/safe.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "e829c4b5de581cd1723d4ec337c5529afa7b9f1204eed8c1351acaafa3f81d80"
+    },
+    "src/finn/dataflow/_engine/validation.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "0a8e9b471b22497d54cad538cb504af789621a4310b63cd47d066c4464b44a2f"
+    },
+    "src/finn/dataflow/analysis/__init__.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "9661cfc5c45e5c4b7b37b3c78beb68902e92c144831a59c22e4ad50b5c0d8dd3"
+    },
+    "src/finn/dataflow/analysis/integer_dot.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "985bf8fe72fc42d5d0d0688713bd59bab1e14ffeffbc9886d8fb82c4a854f8ea"
+    },
+    "src/finn/dataflow/artifacts/__init__.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "a6d57f99ff17e3a7e6394e8a916ce347b86825cdf16d13fba97ad13453315818"
+    },
+    "src/finn/dataflow/artifacts/abi.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "a8edb9d91b8c534f1ec75362db1aed711a0c18bbc197891b67de6d4d29786fd4"
+    },
+    "src/finn/dataflow/artifacts/build.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "39b61a71b791ec0abb23927f2573abde57711cd8eb65ce1b9774581193ddf54f"
+    },
+    "src/finn/dataflow/artifacts/contribution_types.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "7ee67049e9f1c252a5f6388b7e6d902d044f788d815bd2e208176240a0167ee5"
+    },
+    "src/finn/dataflow/artifacts/contributions.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "3e8f3ffe776d9f1b829a3453743eeaadf3187656d8a68342501ca5d1cccc9490"
+    },
+    "src/finn/dataflow/artifacts/derivation.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "cb367231e5e02bf3e611286c5cb7ee738ef6b68a6eda122fdbb23b14f1b2f408"
+    },
+    "src/finn/dataflow/artifacts/formats/__init__.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "76e6f92935c4bf3aae3b682d7631315e2c714ef57b0848b89eb9e2631df5c6cf"
+    },
+    "src/finn/dataflow/artifacts/formats/_descriptor.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "4b1b7dabb9b1c12b1d9051a02560f2b91c12257d751da584034631a36676dfce"
+    },
+    "src/finn/dataflow/artifacts/formats/rtl_module.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "438d63dc43038f5b1ae0bce3e673323eb7d20003adcdf0a73c40806c81a77fa4"
+    },
+    "src/finn/dataflow/artifacts/formats/tar.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "6583c20e0a41bb5d696ba2c42ba8838f655a2efed0530cb789f788b38b3e62b0"
+    },
+    "src/finn/dataflow/artifacts/lifecycle.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "80b025f95ae85a349f4b1211159ddadc13ea817af29b337f8f85d7a6c90e7d5e"
+    },
+    "src/finn/dataflow/artifacts/manifest.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "438e2e9b88d3251f993aa37e200f41e68808c51d828688caa2fc1de04a579711"
+    },
+    "src/finn/dataflow/artifacts/packaging.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "add123353ad3437561fa6552825dc77796e2e02c3a33b5c06e567433fc5f222a"
+    },
+    "src/finn/dataflow/artifacts/projection.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "33a2d33dbf5b9022ba3ea8c3f519e8b67ee1656bf31ec4e20ada1c42da5b97ca"
+    },
+    "src/finn/dataflow/artifacts/render.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "c9d49ff2649fabd8ac05e8e7b444d08e113ef83763c81d8405da0f4cfc9ae92e"
+    },
+    "src/finn/dataflow/artifacts/request.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "95f03ff20862a8f80561c4668a6b1e0b5f6b8ef9e4bc0448a8e6244a996246c9"
+    },
+    "src/finn/dataflow/artifacts/requirements.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "3493a09485a50dd5d972319fa5bde50ae4cc2d966c05d8c2088f44994f33502f"
+    },
+    "src/finn/dataflow/artifacts/rtl.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "ca6d4e2d9efd07dd6b4aadb40a3dc2a5a482169d1457ae88ebb890707b4d44ad"
+    },
+    "src/finn/dataflow/artifacts/sources.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "91b1bdc293d5677db48f4e17e2a40ecc834f6026b0f00fa54d632e45741b3ed0"
+    },
+    "src/finn/dataflow/artifacts/store.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "7d085dfc4a5d1a302130f416b49452575ec52808f2ced5b55a7098adee44172b"
+    },
+    "src/finn/dataflow/conformance.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "1aa37b9f7fa4a281388734ee00ee5d977b5769c038f6179e1b6978209758e2df"
+    },
+    "src/finn/dataflow/kernels/__init__.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "a725682966bacc049dec5bb24013970dd629a919daecff9134b98efbb19e6edc"
+    },
+    "src/finn/dataflow/kernels/dot_product.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "2067462dee01e3e87bbfe9906889ca3e826cadeb1a55dc5e105599719cceb7a9"
+    },
+    "src/finn/dataflow/kernels/dotp_axi.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "1621e2dda50b86bb9f860706325ae1538094c116d6cae6334b946758cdb2fcbe"
+    },
+    "src/finn/dataflow/kernels/dotp_axi_minimal.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "01e059408a2d9a798f310b9fe1a0e764aed8889c1bd53ce597939b46d63fd974"
+    },
+    "src/finn/dataflow/kernels/dotp_axi_region.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "0e41f7cb1e78f65a22487abc6bcef6482b08f77e6fa4cf4223a09d1ddb14be49"
+    },
+    "src/finn/dataflow/kernels/matmul/__init__.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "1bdedd315b55e7cd5aada476044351d2eb89c094d2238054097fbc63c6713f24"
+    },
+    "src/finn/dataflow/kernels/matmul/base.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "7a41ef3833df95bf14e1b61345d159a274612036b001b42b5c5d42b78f3fdda8"
+    },
+    "src/finn/dataflow/kernels/matmul/batch_interleaved.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "536e1ea9e668e606a72a16098b29e7c4461880c87ae70d78181dfc34d479064b"
+    },
+    "src/finn/dataflow/kernels/matmul/dot_product.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "0aaedf8960a9bf0fc9d04aa275e311992aa2f643ba05f1c6b255c217706dae54"
+    },
+    "src/finn/dataflow/kernels/matmul/networks.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "0c19fddc6f11365acd954329a437335e85859db6d6fdfe95c82c334b1fb07346"
+    },
+    "src/finn/dataflow/kernels/matmul/physical.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "de1647dcf21c201578076729846d63f693ed672d6a1b62ae9e5597a2f75b8de4"
+    },
+    "src/finn/dataflow/kernels/matmul/regions.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "10b289ef15a7f0cef490b0cb6ae93552793fef2b027c396924fd9cf67297511e"
+    },
+    "src/finn/dataflow/kernels/matmul/resources.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "a3c464c6ac1bf2b28f88662ac9c98a27e5df9795070444a7db41a439fe018ae6"
+    },
+    "src/finn/dataflow/kernels/matmul/supply.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "562d85a37c7e2d3837fbcda4854aafe2f9b93f31a35e55be1e201e8b145f431a"
+    },
+    "src/finn/dataflow/kernels/matmul/templates/decomposed_wrapper.sv.j2": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "3115c7181620dac035d6714ac6698723dada0099d980fdb5cefac30341676096"
+    },
+    "src/finn/dataflow/kernels/memstream.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "2020805536ffe30d405ed9cb288f033a473d0a83b637380cae5ed1b177af7266"
+    },
+    "src/finn/dataflow/kernels/mvau.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "4be914d5066953ff1efd5b87cf64d804a4dd740e75a0d6bc78055d74d1affb94"
+    },
+    "src/finn/dataflow/kernels/replay.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "290760a90f53c1b4fb328ea40a4f72571713e0d604c4445de1ea2edfb80c2e03"
+    },
+    "src/finn/dataflow/kernels/replay_buffer.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "3f48cfb5f9c52b436e94a80d2999eb0046ae4adf0a777ae38a3e62d89a01d899"
+    },
+    "src/finn/dataflow/kernels/resources/cyclic_stream.sv": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "0fca60b76592a308c354a84022722e52936261ec89e90f807156bea6be7f4173"
+    },
+    "src/finn/dataflow/kernels/resources/dotp_axi.sv": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "466397881624b4d0a4884762700620d548271541dc97bb265ea4b80129a5cd90"
+    },
+    "src/finn/dataflow/kernels/streaming.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "d07e8a054a87a21f890135f818d6a19c6e0c01e4b54f0df3b8393b7e54b7878b"
+    },
+    "src/finn/dataflow/kernels/target.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "f93fbe7326a64f72199a28283ecbc6dbc39454bf014542459a6ca144e5b22a30"
+    },
+    "src/finn/dataflow/kernels/typing.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "f129392233a0b0b42da45ee89170ccd15722382fbc39c8f5c2aef701e9f83fea"
+    },
+    "src/finn/dataflow/model/__init__.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "1ca1886135afa25f54f30ae7d40a21e69ce16eb94951f8745e56d73a71f59824"
+    },
+    "src/finn/dataflow/model/_authoring.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "76966e44279ddd1bd61975d2aec01e4dcfdeee975a36f9bf8732dc50e5387310"
+    },
+    "src/finn/dataflow/model/children.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "bc6aec6b5c6828ced48fb1ba487e90d74e092ad4662b57f70b81417727c1349a"
+    },
+    "src/finn/dataflow/model/identity.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "9075f202a3e8a20b2987b94ce137f79b5682e597ce4ca66507aaf089c9bba766"
+    },
+    "src/finn/dataflow/model/kernel.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "ca4f65a33dc549451af6fa855cb04e64ec8b03f34b48ee3d6add8ea261ae4e67"
+    },
+    "src/finn/dataflow/model/kernel_base.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "ff10ce7c82c45756b58220e8462a7be46809e9bfcb07e6ac95f7e47daaeec35e"
+    },
+    "src/finn/dataflow/model/logical/__init__.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "5a21716941ab9001694bc7e1a9d1b6cb614019f7bef7b4097f65c4663457a7ed"
+    },
+    "src/finn/dataflow/model/logical/_contract_support.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "8713cd8ba20a1631496b9206f52aeb7d3bd49178576788ab2ee0ffa2be789e93"
+    },
+    "src/finn/dataflow/model/logical/authoring.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "abd18f7b6f28dbb5eec294e0f0a3f92d86c932dac9129cffc6ca0d2ffba9610c"
+    },
+    "src/finn/dataflow/model/logical/composition.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "397250595442dcf9a04480b585098503b259b01a3eaa81d1039af58932517561"
+    },
+    "src/finn/dataflow/model/logical/contract_authoring.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "99f975af018ef2e3c580e3270123b88f8aa3a519e96780eb13a02bd21bda398c"
+    },
+    "src/finn/dataflow/model/logical/contract_expressions.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "f3236b26ae390a1fcce1d3d6dca82a25edbd0b6037444390049741f08fc97bbc"
+    },
+    "src/finn/dataflow/model/logical/datatype_domains.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "9f5ba68be450c9924afd3ef891c6e7cfa0213a6f470cd3e595d0fe33c2a31e63"
+    },
+    "src/finn/dataflow/model/logical/datatype_semantics.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "4132301479cc9607c3e88c4a05b6a9108ff9b1c505118b4bd7150f6a8340dd1b"
+    },
+    "src/finn/dataflow/model/logical/datatypes.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "efcd8d4b0d65b3d3cb6d8aecfeff275b6a73bdcda828a9ff027a8f522642e114"
+    },
+    "src/finn/dataflow/model/logical/interface.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "b377481cdae015e95564b2d03d4f11cd68955637dfd083414de88f0a281d9603"
+    },
+    "src/finn/dataflow/model/logical/interface_authoring.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "394b2abbda699a7335d814a8469829a75b4b8553bf29cee34d0c27eb6490b918"
+    },
+    "src/finn/dataflow/model/logical/maps.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "13ba1ede4801c0a4914b170489bb0871880289a0bc7cec265368aae4151628d9"
+    },
+    "src/finn/dataflow/model/logical/network.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "6d7ce9f10ab7c33e168c143f6080acd3da487b42e4ca6cbd5a72d80d66b5ce65"
+    },
+    "src/finn/dataflow/model/logical/network_validation.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "f7f325b89914fe97bceec4b6c35f752fc55677e1a488b06597c77a2c0a2803f1"
+    },
+    "src/finn/dataflow/model/logical/presentation.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "00519f503ee9d67efbd3c72b8a0d53eb4a1dca4b67d16512bdb6d50e7ec29f3d"
+    },
+    "src/finn/dataflow/model/logical/refs.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "e6bceb1d7b5a35a53218a028fa8c85360529d3c91efc48298b3fad047aabacf7"
+    },
+    "src/finn/dataflow/model/logical/region.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "8103e000c0ad2cdf13681fd63173a0e5c91fb6f4686653d64a6ceaf3f75426ca"
+    },
+    "src/finn/dataflow/model/logical/region_profiles.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "de807a51dc78b2c13a21747516dc0519bf0eb1c8f23750788c904924f4867e7b"
+    },
+    "src/finn/dataflow/model/logical/region_validation.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "2f4e7c4986a3ef8523a7612e850b664f749598796fec4f22f2ce71148bf5710d"
+    },
+    "src/finn/dataflow/model/logical/result_semantics.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "32109c059cf0104b20ed5f20da42e75f15a4b507659b6a3606f17c3e7e34c29c"
+    },
+    "src/finn/dataflow/model/logical/results.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "769b1ce20216c6d5e712c5b212f7d87bac7b5dafe35f2b8474383383e545fc05"
+    },
+    "src/finn/dataflow/model/logical/semantics.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "6744e4ae631fc55c3abba466b941bacaeba79b59fb6b9c1b1810bd5467ced2b1"
+    },
+    "src/finn/dataflow/model/logical/view.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "33e3b5b78e209790ef2df878105001399c433c412b12682176409e4ccd657aa3"
+    },
+    "src/finn/dataflow/model/logical/view_authoring.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "66666313837349e2d6980644fb773211a045622416c14b61d24b0e06962ce0a8"
+    },
+    "src/finn/dataflow/model/physical/__init__.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "1be865cd1f54ed1743c69e8dd11102ef8b9d943ad97b8b14653fcb93af161973"
+    },
+    "src/finn/dataflow/model/physical/authoring.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "d54e4cc569a7ce3f744d8dda38124a1de00b41d1fb3a43637da3de7f0c3b76ee"
+    },
+    "src/finn/dataflow/model/physical/axi_stream.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "26ef1ce1dbbcee269df354b956d06004d223fd2a68d6bc15d0fdc6841bca8d94"
+    },
+    "src/finn/dataflow/model/physical/axi_stream_binding.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "239afb4a8352ef669729bb459a77f872d9d811b0080822fdf6ba346b4e48fd9a"
+    },
+    "src/finn/dataflow/model/physical/axi_stream_contract.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "8b1173d89da61def049346089f8e78c480966dab0211ba20015951c5baf6ca08"
+    },
+    "src/finn/dataflow/model/physical/capture.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "3a85bc0c8e60c734aca548a2f538f81886fa9e9d766c0497bc8a992c9584592f"
+    },
+    "src/finn/dataflow/model/physical/interface.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "97b102a67e1bec2335ccca33b0d1a483ff0236359cb586e52a1b21f5b79c4286"
+    },
+    "src/finn/dataflow/model/physical/layout.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "3313915c6051c55392bbdb23b50eedd71f2538ce8b632934ef32baaab921e311"
+    },
+    "src/finn/dataflow/model/physical/lowering.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "1f52a817e406396c2f4d5847f9857480ce24f9421f940f5d72925d8bab5b4131"
+    },
+    "src/finn/dataflow/model/physical/structure.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "9c126304f508a479737591e583a69dbdff80ce90c3b63d3de157990852778c50"
+    },
+    "src/finn/dataflow/model/physical/validation.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "ef723eb6967dcac71d06c4d0b79c2ad01afc910eb321e7023fe20ad3455413de"
+    },
+    "src/finn/dataflow/model/physical/view.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "30009bee06aa0eb04a4d22cc97c7841c35d88da9a5baee5be7540517d8aad8a1"
+    },
+    "src/finn/dataflow/ops/__init__.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "9ab6a011a93f78b68eaf6673c2c66137ddf176a0f953f5399c639016f9f617bb"
+    },
+    "src/finn/dataflow/ops/base.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "3b2a66d92e65c4919c0deabac7c4d83d290024abb3bd3cd63e8bc6155404da20"
+    },
+    "src/finn/dataflow/ops/binding.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "1df3b058ebf45112348ab77fdf1025805a9e9a237e874b340e8878caf2c04bcb"
+    },
+    "src/finn/dataflow/ops/graph_context.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "590be9dc39c5b5f92ed799182471085f26e6c816f507998e70014177ce472922"
+    },
+    "src/finn/dataflow/ops/infer.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "d42d19aec9a85c58ae7bf843e11ea540392859353b88757b98fb9e96b6bc1173"
+    },
+    "src/finn/dataflow/ops/inference.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "268cbfe9bf5f4f6997e8f3959737ea7e5a8e0fc0adc2106aa69e3e63997a34da"
+    },
+    "src/finn/dataflow/ops/mapping.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "0523c888898d8c033000504f792867273d91c9ee44959838ea14028b4b0c40fa"
+    },
+    "src/finn/dataflow/ops/model_effects.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "8d9aad07061fbdfb019819adb1a8f276fd7a62f92023cfd20ad4adcc07a56b4b"
+    },
+    "src/finn/dataflow/ops/mvau/__init__.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "3f6fd1245f8ebf8509bd36bd2933e19fc41523db54b9161c57ed97fdf7859a46"
+    },
+    "src/finn/dataflow/ops/mvau/computation.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "b4d6a3a63f8a8770cc02d7c6c72d980125a6a54e7fa5d18c9b52e71713e5f969"
+    },
+    "src/finn/dataflow/ops/mvau/numerics.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "62054f9a9bac0133111a51ea6b97596749873188ffb4ee5d6f72353d8e543797"
+    },
+    "src/finn/dataflow/ops/mvau/op.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "34efebc91561f90405cf4c8f0b1cb0d68c21707e554ac018984d27c0d6f82c72"
+    },
+    "src/finn/dataflow/ops/native.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "2496cfbdaf09aeb982402c094a67f73dd1712656b2f39a850b642d9494f166e4"
+    },
+    "src/finn/dataflow/ops/persistence.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "abe7664d31ad5f33866b1329fa6b8d54a2a23d2be282636ea1fe9e49dc155b53"
+    },
+    "src/finn/dataflow/ops/physical.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "dba50fe843101cfff662fe71952bc289080c51e435c6c0167594ae30463fd40e"
+    },
+    "src/finn/dataflow/ops/reconstruction.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "a2bf6787f259270e28a97c4c32c634bb6fa4adfa05f720f72134f4460596bc90"
+    },
+    "src/finn/dataflow/ops/replay/__init__.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "64d2d9aea27130e40dcab0c7d902d53dc4ea6e6ebbba79809ddcbc66b9878915"
+    },
+    "src/finn/dataflow/ops/replay/op.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "78452eaa79c8afc2ba11b020f77f3217b2b26165cae77d5d8089c12ecdfbee08"
+    },
+    "src/finn/dataflow/ops/schema.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "1656a0341ec614efec9250b3ec35b4b06989795472e2694b3a87c9bff276565d"
+    },
+    "src/finn/dataflow/ops/source.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "5b3400b8e67d9531a88adbbc8b23e7471dc094a4ab8fe940e291fc3a0c8c44ea"
+    },
+    "src/finn/dataflow/ops/source_values.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "5c8a68e9707250d8814fad0987368533f013728aeb2e8131786800ff5d329d2e"
+    },
+    "src/finn/dataflow/ops/space.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "f9f3333d270f5418298b78adf69b65d048add1a0a377244281ecc2b1bc383c39"
+    },
+    "src/finn/dataflow/ops/tensor_summary.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "1d62b50cc086e5645c794223c1076168da24a9bea0b5a0648e13c1f3a9459cb4"
+    },
+    "src/finn/dataflow/ops/type_context.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "42163ef7ae4451c75cbd763118b47cb31ac95fc395e8d7223dff1f3d381647de"
+    },
+    "src/finn/dataflow/parameters/__init__.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "b30a938a3f0e4b47820ce4a2d07e4d87b44216315f8695f5796c74adeb6976d6"
+    },
+    "src/finn/dataflow/parameters/cyclic/__init__.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "63ac83e4d1c9a00a65116c8921e8df7e71cfaa60f5d6668bd1183539821d78bf"
+    },
+    "src/finn/dataflow/parameters/cyclic/region.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "0bed5dda8d7f13331398838649c2381aa3bd098920ba695dc11a6a378b36e9cc"
+    },
+    "src/finn/dataflow/py.typed": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+    },
+    "src/finn/dataflow/space/__init__.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "96e944c05bd642a6851f70de95a015556bacc5fbc609cfbf0f52d82a69f70f02"
+    },
+    "src/finn/dataflow/space/branching.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "6f9600dc042645f9701aa0fe031476cd5c31518fb6071fb93cbf0053a2c6d615"
+    },
+    "src/finn/dataflow/space/capabilities.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "14b06affcaa0ed9f379766ba57c079b1c28a0ff9c8e5055d31ebc11fa85a59a2"
+    },
+    "src/finn/dataflow/space/compiler.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "f5cd915330c48b036ed3d0832aa9e410d04a4abc0d45e5857b35e0c3933a8b16"
+    },
+    "src/finn/dataflow/space/declarations.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "3d9a003545c2d9708f6efb92f433522fcb9a883a67eda1339a7617bf6b13a8ad"
+    },
+    "src/finn/dataflow/space/domains.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "fd8ba958ddcebddc40f9ca3ac2bac1f406cee07767f33c1e5a576b315444b374"
+    },
+    "src/finn/dataflow/space/occurrence.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "f1ca38f59c80657160cbe908c666c368619cf880477bff0e00a1d3460ba88419"
+    },
+    "src/finn/dataflow/space/spec_algebra.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "96983ba5718984a5c1f3452c4b99ef0c02f11b91279fc99cf460f80352818a6e"
+    },
+    "src/finn/qnn-data/__init__.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "src/finn/qnn-data/build_dataflow/build.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "44fb0d4a31e84504ea713d78d80a344262eee865bae227f0ef7546f493f090a8"
+    },
+    "src/finn/qnn-data/build_dataflow/dataflow_build_config.json": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "c57f7efbd5614987e7fb5334eda9d7b599a219d498a2ba0077b0390aa3cc3d55"
+    },
+    "src/finn/qnn-data/build_dataflow/expected_output.npy": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "10534fdee86f310360048f83d9f9f53540dc2ef7b3fa4470dd04d1d46386be2b"
+    },
+    "src/finn/qnn-data/build_dataflow/folding_config.json": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "08a3a8b5a21abdfc00e44927fbb59bf4f68884a3fc7b523638d28a109609b678"
+    },
+    "src/finn/qnn-data/build_dataflow/input.npy": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "5b41603e515056108feedf32c87c0f95478632d768bfb2289cc14a183131b2e5"
+    },
+    "src/finn/qnn-data/build_dataflow/model.onnx": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "1706b590920df2a73dc5f256725292b9a8640f904e0e0345547722b607dea6a0"
+    },
+    "src/finn/qnn-data/build_dataflow/specialize_layers_config.json": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "88f3425eaf2bebf62fdaceb220fc551733f5dbeba5a7f3016997b53d8021ebda"
+    },
+    "src/finn/qnn-data/cifar10/cifar10-test-data-class3.npz": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "ec3834683933a0856058b616a139492654a3c29c10103d48e5c86374456d6c7a"
+    },
+    "src/finn/qnn-data/cpp/CNPY_LICENSE": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "1ff6fa94ad29d941ceb3bdd5ebfb260ddba4c3e962c50fb7a66c899e769de1ff"
+    },
+    "src/finn/qnn-data/cpp/README.md": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "482fe3c132f21200aa84d9f3bd9b617dcdd418db97d33918da742720ee7298ab"
+    },
+    "src/finn/qnn-data/cpp/cnpy.cpp": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "b7c7b54dcc6116121cfee5ffde2da21d20fd6303cb6ba18d5d81871e50e52ebe"
+    },
+    "src/finn/qnn-data/cpp/cnpy.h": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "9464a412aa34b702fea7f0e66a775a3e7e175979483a6d0fb263d25867453187"
+    },
+    "src/finn/qnn-data/cpp/npy2apintstream.hpp": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "192a2b08f85aa5559acb589aa024c9ae318e33ed6d12f8cc9791319e6fa1a0db"
+    },
+    "src/finn/qnn-data/cpp/npy2vectorstream.hpp": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "4fc32e67722b1fe1488d68dc54c13cdf09d801a3e60de63ab90ed94f5206d5dc"
+    },
+    "src/finn/qnn-data/cybsec-mlp/state_dict.pth": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "5b8b59c57874db3c0600fb510594e997ccebeefe77c24a818977a4eeafd53f0e"
+    },
+    "src/finn/qnn-data/cybsec-mlp/validate-unsw-nb15.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "7e39e8d0ee28e9bde51971ff80659129e888e0253d928e989a17e2e1a982e4a2"
+    },
+    "src/finn/qnn-data/mdd-data/finn_design.mdd": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "081bdc3b4c282a84d5b516714b32dce5a3da1521f2670fe7748888458930aa15"
+    },
+    "src/finn/qnn-data/mdd-data/finn_design.tcl": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "8b86bdd0f6e1b669207729ab4a60fdccdc67e552623bfc7f1b2d496a4e02dcda"
+    },
+    "src/finn/qnn-data/templates/driver/driver_base.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "6b8adc0753e7abc2382eda5dc1d6ca02d885017c9bb677697abe7ae9f5da3746"
+    },
+    "src/finn/qnn-data/templates/driver/validate.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "88dca7913a11bf1d6bc28be1efb5e487d7d9c659d621f52391f595827a26822f"
+    },
+    "src/finn/qnn-data/test_ext_weights/cnv-w2a2-extw.json": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "bf7e3e0c366bad55635733a194876031e59a3044dd0e8853ae876dcbf3412f84"
+    },
+    "src/finn/qnn-data/test_ext_weights/specialize_layers_config_cnv.json": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "388ee2244b21ca97cd22a59358a857ba9c4da627c99e95008022c3ba0087c919"
+    },
+    "src/finn/qnn-data/test_ext_weights/specialize_layers_config_tfc.json": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "f61ed7fb0028f08d0f98fea61d3c02bc1d44a324b837785cfb6ac2eb7e61f49c"
+    },
+    "src/finn/qnn-data/test_ext_weights/tfc-w2a2-extw.json": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "691d02f920b7ddb5af1b68b01f7bbe07a7a58030f88976ab7ae92b4696209a89"
+    },
+    "src/finn/qnn-data/testcase/residual_testcase.onnx": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "d08f43b1ccffe44fbd5e82d1621c3b84c7d5011db2c832826d408e56526018e5"
+    },
+    "src/finn/qnn-data/verilog/custom_axis_infrastructure.vh": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "062512fda5c62c8c5327f8012426c928d5c6c3bf855dfeaa657adcafb63d168e"
+    },
+    "src/finn/qnn-data/verilog/myadd/myadd_myadd.v": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "734a73bd71db9b566e2d1756813dcfb02fdeff6228a7cdfb3ff7718e43bf8432"
+    },
+    "src/finn/qnn-data/verilog/myadd/myadd_myadd_control_s_axi.v": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "31922302acb595f369c7dc9c0323f6ec94d21bf00ff174c4f886811b6a72c053"
+    },
+    "src/finn/transformation/__init__.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "src/finn/transformation/fpgadataflow/__init__.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "src/finn/transformation/fpgadataflow/absorb_into_requant.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "42695a41c88562d7cd165918af4fafed051e3d31f10c675108ea36f50ed8fa7c"
+    },
+    "src/finn/transformation/fpgadataflow/alveo_build.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "ce95f14c98041a4195fa6a365c6d46157ea55ae70402184866cc1d11257113e8"
+    },
+    "src/finn/transformation/fpgadataflow/annotate_cycles.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "77b1239cd8a05f812a3eb269e2a481999144ff0c30d2f42d2fead8194917971a"
+    },
+    "src/finn/transformation/fpgadataflow/annotate_resources.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "35650c8f64fd329b7c57176e626f7b06d393d736cd192db0c37226c44037186b"
+    },
+    "src/finn/transformation/fpgadataflow/assign_ddr_weight_offsets.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "389d1c5c457cb5712f8b047826f664c4070eb44d8e8ee955c8cac976683a4912"
+    },
+    "src/finn/transformation/fpgadataflow/cleanup.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "75ff40fad890cc35c9f9977761c8edf907e5ec7f30ea15b012f0536b004092a2"
+    },
+    "src/finn/transformation/fpgadataflow/compile_cppsim.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "7a2165c6eada2e12a0a9ec8ba615882134f521ecb05f20aec50835d42a4a60c2"
+    },
+    "src/finn/transformation/fpgadataflow/convert_to_hw_layers.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "0ecedafdee5431a378d3854bf70a3d7058fb6cee16e5efb8c445d79d1c9fd094"
+    },
+    "src/finn/transformation/fpgadataflow/create_dataflow_partition.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "5bd7786f989f8663b936f0007b707b03831f50e871a150ed61e00df3e1f3bf5b"
+    },
+    "src/finn/transformation/fpgadataflow/create_stitched_ip.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "49f9235902340d22d149b39e15205d8341d03d537fad8023872d82828613cecd"
+    },
+    "src/finn/transformation/fpgadataflow/derive_characteristic.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "4627cfc0022460cae55fe4eaecc3980dad99b21c6da0f709e1acd77f31f93395"
+    },
+    "src/finn/transformation/fpgadataflow/externalize_params.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "2fe7dad83427409918b979a5b6d1c23518d562b8324022235113af3c7bbbad0a"
+    },
+    "src/finn/transformation/fpgadataflow/floorplan.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "8701a6d76fe20acd924bba770011c668252bba8a53c3a0d78f655a7608c7f079"
+    },
+    "src/finn/transformation/fpgadataflow/hlssynth_ip.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "6f0198bd6fc26727af7353fad5d67636981174cf3c749f04b3af62d0ac448f75"
+    },
+    "src/finn/transformation/fpgadataflow/infer_pixel_padding_deconv.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "100db94ca2ec24739c55c8ad0c664739c58d643e5c2691eed9d13361b72bf031"
+    },
+    "src/finn/transformation/fpgadataflow/insert_dwc.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "e45486de856e2003ff31fc5ba22c72e32823cee068ecf942a55a4f1625cf2f5a"
+    },
+    "src/finn/transformation/fpgadataflow/insert_fifo.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "0a889f7800a31196173f5a3a661a0826ee00c3a5331f7eaf9ed6a21dc63e5a94"
+    },
+    "src/finn/transformation/fpgadataflow/insert_hook.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "d9227466afdbe11ff13542acabb48f9a61f26ac6b08dd9231fbe70eac6a6d20c"
+    },
+    "src/finn/transformation/fpgadataflow/insert_iodma.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "1ea3f783bae16c5db7d4e912ce7c8dd236a32c99768250824ced367d8b406409"
+    },
+    "src/finn/transformation/fpgadataflow/insert_tlastmarker.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "e2936cc0d8aa3ae147bc4ada0cb5ee683eb8a81068362f7dad805759c274f1c3"
+    },
+    "src/finn/transformation/fpgadataflow/loop_rolling.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "29527b78b4695bb5643926f72401d291b468d640516a1d8886cd3d93c84c6e33"
+    },
+    "src/finn/transformation/fpgadataflow/make_driver.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "2129f7715679e4d0b2fb748ff3d588069cc071d80902553dd82fa2ddc1eda3ae"
+    },
+    "src/finn/transformation/fpgadataflow/make_zynq_proj.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "cae75ff8847d8474581c6024904a1e1d4fa814c1fd0558f19b1f8a02dd32338a"
+    },
+    "src/finn/transformation/fpgadataflow/minimize_accumulator_width.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "7b6857fc18f5089e081fc817957f08c4f496c84b149179981503d6e28d2fc923"
+    },
+    "src/finn/transformation/fpgadataflow/minimize_weight_bit_width.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "8008f8b1565ffdca96bbde2a474cbfc7a1084bbda04d9cbf9db23a64ecd56b6e"
+    },
+    "src/finn/transformation/fpgadataflow/prepare_cppsim.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "fc63edb3feeda5a1af9669733a68591ad7ae69adead61fe5813e224bbe957c58"
+    },
+    "src/finn/transformation/fpgadataflow/prepare_ip.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "154453006af846c3b8ae4c6896c1ec1489b47d7a577a79cff183bc6a8b2e9f53"
+    },
+    "src/finn/transformation/fpgadataflow/prepare_rtlsim.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "c533ba015f841837c6f2183ac8973cf05c1ed2e20c531d9227e19e7ea544b26b"
+    },
+    "src/finn/transformation/fpgadataflow/raise_scalar_to_rank1.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "6d977ee6884256af20d676b675d38233ab4cf1fec8abefeab3266dbb2fd12038"
+    },
+    "src/finn/transformation/fpgadataflow/replace_verilog_relpaths.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "fba8e8ad29fc48e62fc1beddb12f480f50256f931102dcec0ebe2a3dc2b07f32"
+    },
+    "src/finn/transformation/fpgadataflow/set_exec_mode.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "86f18a5ee81e6be604aee2987d9a48fc15d9edbe5ea42443cb5d73f2bca9a298"
+    },
+    "src/finn/transformation/fpgadataflow/set_fifo_depths.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "0dc21c03334021f6283fb7cffbda3db0d3354f16884539c24850b34b4ad9b6d9"
+    },
+    "src/finn/transformation/fpgadataflow/set_folding.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "72bbb71a994fed5efd28f9a6b07f9e20a2ac7441d4e70bb9fc63c024f32259ab"
+    },
+    "src/finn/transformation/fpgadataflow/set_loop_boundary.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "a916f2f54c063e117c83a831f0bb943ff77cd7178b24c19783ec3d8258dc641c"
+    },
+    "src/finn/transformation/fpgadataflow/specialize_layers.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "2a4725cf1bca89e2f724cd58aa0f9d69e3063a390365f88480c3a80dffba0dba"
+    },
+    "src/finn/transformation/fpgadataflow/template_driver.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "3d3b141759ed8b2d46d9861ce8fa58a507c011d693ec5914da0c0ee9a118077e"
+    },
+    "src/finn/transformation/fpgadataflow/templates.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "8bf40f64613cd20c33c2518b5cb4fce57381d88dcbc6390ae9ecaba03073317a"
+    },
+    "src/finn/transformation/fpgadataflow/transpose_decomposition.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "d8b4dde151daef48aba830e40c6c6035b7a19ce3c1f14d0820cdb1a106cce3bd"
+    },
+    "src/finn/transformation/general.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "65a483c1662cd6e845a535b1eba2a2685049becb45b9688e9ac1754234490d45"
+    },
+    "src/finn/transformation/move_reshape.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "9bc47a182dd41c3968b92c8a91d62d44c6a0b06a6e83da33adec5291c723534e"
+    },
+    "src/finn/transformation/qonnx/__init__.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "src/finn/transformation/qonnx/convert_qonnx_to_finn.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "0a786657478fa323b7864c043cd734ea66928cbeb7bbad76710bf780367c6d22"
+    },
+    "src/finn/transformation/qonnx/fold_quant_weights.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "51d310988e09505aa1e1b1afc5702738c4855d689073b53be2aafcbb60bbbe35"
+    },
+    "src/finn/transformation/qonnx/infer_quant_avg_pool_2d.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "e45d8ca379b533bc02124e93b3fc43e89b38040a6c95ca2c413ec6e5f10273bc"
+    },
+    "src/finn/transformation/qonnx/qonnx_activation_handlers.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "06e85ea0f288cce5d17ef673f3f3d909f8f34458221644fadd1545c4de0a9124"
+    },
+    "src/finn/transformation/qonnx/quant_act_to_multithreshold.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "a12380c489cd76ae7f3a806f27c0fdbac703d304e36067a843feb88010393cab"
+    },
+    "src/finn/transformation/streamline/__init__.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "e9537833fc2b1d8c974f002fd873a278ad2361c0717743728b9c3e81d872b7e1"
+    },
+    "src/finn/transformation/streamline/absorb.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "0f6d0db1a54509d396d098ab5ee0bfb6bd4ddd13bb106e9d946b9295a677ae1f"
+    },
+    "src/finn/transformation/streamline/collapse_repeated.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "fd2ecf47b7e304a64e8eb2bbc8ca7b2a6349644cda98b04e74cad548c37f5de1"
+    },
+    "src/finn/transformation/streamline/extract_multithreshold_scale_bias.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "aaa7c6c9cbb36dfca221adf26d92b83ac202b8ca779baa71b5eb7036b88af927"
+    },
+    "src/finn/transformation/streamline/extract_norm_scale_bias.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "768da4812393694eb7431bdbc30dbeabe422045a276eaf98806334e8a2d8b357"
+    },
+    "src/finn/transformation/streamline/reorder.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "c534df3d4012b3906ba61bfac05a0f6b1c929a3d224089915f560c4edce31e3d"
+    },
+    "src/finn/transformation/streamline/round_thresholds.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "b28af8b769ce42eb06053598e41532b1045317660490f0e0ef489cfe6d70b129"
+    },
+    "src/finn/transformation/streamline/sign_to_thres.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "719e2255fd08302a21370eb30c320f0db0651c90f7cb66051666f8b91ad682ac"
+    },
+    "src/finn/util/__init__.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "src/finn/util/basic.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "b9f91ef6dddecc74117333863195acabc68814ae77806e8c2a9059103205ab09"
+    },
+    "src/finn/util/config.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "b640c624f6b5281bf7d90e1edad73536769c713602c231634a4f4bb278b8724b"
+    },
+    "src/finn/util/create.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "f63def39c212a3a1cb4995036e72142faceb8d0d92770c1194abc1fc0a790302"
+    },
+    "src/finn/util/data_packing.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "84995ab4251d0d1730bfa15fcc6e4713996e1ab5c9cbb141cc100c2ef14d90dd"
+    },
+    "src/finn/util/fpgadataflow.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "f024e721bc585a84242c9e5971d125ca101c90e8ac1ac1be90893f3d4da01dd3"
+    },
+    "src/finn/util/hls.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "b5e55f25190c766a0c0a4c5fb9da5df22cbe5333b2766f40f9eb63fb069a44f1"
+    },
+    "src/finn/util/imagenet.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "6d15b59b32f9019e8d366a0eed3ed117cf3b69055746bd36b2ae627cb476ab65"
+    },
+    "src/finn/util/onnxscript_helpers.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "986774dbde77ea48072a0a6bf5e7e675a816de420815cc0f7a2b84163454eb10"
+    },
+    "src/finn/util/platforms.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "a8d57b8ba07f97597499094b0a38e4fffe01de9214cfb8da051501c0df92f2c5"
+    },
+    "src/finn/util/pytorch.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "d1e9753c0dd6150e9915996393a4c355fa69d056ce690ab5cdfb33f543f53aa4"
+    },
+    "src/finn/util/rtlsim.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "07660dcfaf5229faeb217cdc60437fb419b0c09f39827dc0bbb0f5c1021ffa63"
+    },
+    "src/finn/util/test.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "f0e740516dd5b3c63ebb95400800c8b868615919ff77c7f68bb231f7085dc9bb"
+    },
+    "src/finn/util/visualization.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "8b4fea6b2ea04089c5bec9d747a721d2db1357a567c930a01524dbcb9e1049c3"
+    },
+    "src/finn/util/vivado.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "293c58a224b2a30a478c7b27e7aa5b6a2bf66ec52c2f7cedf72e04c328457c25"
+    },
+    "src/finn/xsi/__init__.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "20c8b534bab03ffdb7df4dd2e73b38c298d16b4a2c43394c5f58118451a18893"
+    },
+    "src/finn/xsi/setup.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "569e9691910a62405445fa36b4d33ee8b6edad12a719453ca858890d1d5bf8da"
+    },
+    "tests/README.md": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "db06dc725f21450e91369ea07e7b48b992a52ff5105ad6b043f00368c4f5eb63"
+    },
+    "tests/brevitas/king_charles.jpg": {
+      "kind": "file",
+      "mode": 493,
+      "sha256": "3e0ab9c142a886ae65b78a4d58885ed6e1e70c53b233b13873e0e9d61583a251"
+    },
+    "tests/brevitas/test_brevitas_avg_pool_export.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "ab1dd15446b6940777e60955f503196c55a9e9695b3e936ed2f637966eb0e85d"
+    },
+    "tests/brevitas/test_brevitas_cnv.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "eeedb32f456a4d3093a3279dfd8fdbe38aad11bf3bbeaef21f869380c3699deb"
+    },
+    "tests/brevitas/test_brevitas_debug.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "95072565e2691268a2a38efa9ec7d8b19dc8648c4c33eaada19d88bb799e75f5"
+    },
+    "tests/brevitas/test_brevitas_deconv.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "fdb56f583ba928ed2e53687e62a852db6aa0c73d1a20a684fc95028b31dcd2a0"
+    },
+    "tests/brevitas/test_brevitas_fc.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "6a748f8dccfc931d7c2ece13b127d684ca4a4deab3147a9cfe21ff1cbd68b5fc"
+    },
+    "tests/brevitas/test_brevitas_mobilenet.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "f8edf30b1f487607850a3e2ff410d5cd89007a4111471de0fcc98ebda9f94f68"
+    },
+    "tests/brevitas/test_brevitas_non_scaled_quanthardtanh_export.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "5e44d7dbc8308d96268ed97483991edde5fca92bb59c6de531004a9d4f1d72b9"
+    },
+    "tests/brevitas/test_brevitas_qconv2d.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "36c5756d84a188629619209c2be0d321c98cf4f152843b492e2a2a68d0d227ce"
+    },
+    "tests/brevitas/test_brevitas_qlinear.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "bf34ea5fe02143a217262829ad3503960b0922f2c340dc1f11e6d5e721a6216d"
+    },
+    "tests/brevitas/test_brevitas_quant_identity_export.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "1030e28488981f84bd9158ebd1cbd25dd169b4377a5b1c5b549d54eccb36dee3"
+    },
+    "tests/brevitas/test_brevitas_relu_act_export.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "1fb386ebc2dc01c0e4b2c171648efcd45269bea106214f1c5fe089d71b1b724b"
+    },
+    "tests/brevitas/test_brevitas_scaled_qhardtanh_export.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "1630cdc1135f297d71e3919bd4cce9758b6418a53d3a070428fda3979070ede4"
+    },
+    "tests/brevitas/test_brevitas_selu_act_export.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "9a833e0a0f9724ed0b87b4c228bddb9ade32ee5ccd00567996dea699ff5c59f4"
+    },
+    "tests/brevitas/test_brevitas_validate_mobilenet.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "3bc9b8cdddd1b63f8daf55ec22bb3000046764eeab43e42a2abbee970beef02a"
+    },
+    "tests/conftest.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "4c09fc6b002067cc9ea7a3f69ef0ed4c284773ead91a032dc7451d2586589db3"
+    },
+    "tests/dataflow/__init__.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "a408dc83ab686ce498c6cebba191cb9f5e758c35875e8b7638efc2d597f9a4f6"
+    },
+    "tests/dataflow/analysis/__init__.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "c9f66b4c7427e47ad29b12f8b83f60d4173da57050785c79d78d028c24a7b7af"
+    },
+    "tests/dataflow/analysis/test_integer_dot.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "590e776fb3363ed4c99e28317dd9d0f4b415e2c31d68c572e937b1a95b9c73bd"
+    },
+    "tests/dataflow/artifacts/__init__.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "a408dc83ab686ce498c6cebba191cb9f5e758c35875e8b7638efc2d597f9a4f6"
+    },
+    "tests/dataflow/artifacts/conftest.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "6d6c7caf9efcf3c8423b03be0365d638b18e7647f36957c97693cca3eee26279"
+    },
+    "tests/dataflow/artifacts/templates/decomposed_wrapper.sv.j2": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "818b56bfce2af44d8330d426ca635085ccdef3236d05017023ca13af3b044e20"
+    },
+    "tests/dataflow/artifacts/test_abi.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "0de448b1ba9d672ee0eaec546ec34213e6e893b3bc9dd505a45b7b5e7e7b2eae"
+    },
+    "tests/dataflow/artifacts/test_build.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "a0883c18f4afa8c0e557d32441505c37b1bbfa0a7e154050018c9e6ed077c0e3"
+    },
+    "tests/dataflow/artifacts/test_contributions.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "6a9bf5bcda0cee86897edb82c57f3c9a55e834e62dde5803c41cba6466df87c2"
+    },
+    "tests/dataflow/artifacts/test_derivation.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "94766363f9ea37e50a1aa46ce386d92e42ccfe8e575a6c2fb24dc14b6274d2ab"
+    },
+    "tests/dataflow/artifacts/test_existing_identities.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "6700b8ee026f10021613b87d1bf7380a232a6e9e5e74cc4a024701b3635f7ab0"
+    },
+    "tests/dataflow/artifacts/test_isolation.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "3bf73110db00f6fcd2da3d2afceaf29518848d286045b6902d494954728d55a6"
+    },
+    "tests/dataflow/artifacts/test_packaging.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "2ac42be79b5b2bb9bd098f0ee14f0023b99c53bdef83dee77e34769283fa37c6"
+    },
+    "tests/dataflow/artifacts/test_projection.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "02f6c5c7c35079adaece42cd2452c7fd94c64a3be7c7cdf06fc0f2855583891f"
+    },
+    "tests/dataflow/artifacts/test_projection_properties.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "1a53c590ea1fb69d4e4e3299fa3c0dad36f48286aacd88f540d924a58158b9a2"
+    },
+    "tests/dataflow/artifacts/test_render.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "07e0114a6d4d5fa325c81136d9bfdadf49e7e6b4f63662d418a1ca0777378a78"
+    },
+    "tests/dataflow/artifacts/test_request.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "3d6919783655865868bec8f0c75ae7e7347b26a95a742c7d512607910f52e2f3"
+    },
+    "tests/dataflow/artifacts/test_rtl.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "4b260c5bba249510e64437d1af332e76eda0856d0e7a46244d6bf9004d8468f0"
+    },
+    "tests/dataflow/artifacts/test_sources.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "95c09b92a4468ba97bf4603a856a3fbc349b7d7a2f6d90299c52c6b9e1d00fc3"
+    },
+    "tests/dataflow/artifacts/test_store.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "06bb2bb500bfd61a4b7f47953f14c9e2f1571d9a924032198ebf569872c8c8fa"
+    },
+    "tests/dataflow/engine/__init__.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "a408dc83ab686ce498c6cebba191cb9f5e758c35875e8b7638efc2d597f9a4f6"
+    },
+    "tests/dataflow/engine/helpers.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "0b0e331b4f31e0f049726da76852ac34bc22ad6d46311290e0baff53ce0e7fd4"
+    },
+    "tests/dataflow/engine/support/__init__.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "a408dc83ab686ce498c6cebba191cb9f5e758c35875e8b7638efc2d597f9a4f6"
+    },
+    "tests/dataflow/engine/support/mvau_design_space.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "39a5bde40012163de340a53869adbabb548c372ad2605dcf4d823017a909ef8c"
+    },
+    "tests/dataflow/engine/support/mvau_search.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "8b1981f7fcc28634414ac9a8a19c6e0c6476f63baeeca498f79615d32f5d27e2"
+    },
+    "tests/dataflow/engine/test_answers.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "5e99d2bb7909c76f016826316ad53ebb36fe4909c71c8e1b6d2afc0ddee226a0"
+    },
+    "tests/dataflow/engine/test_api_surface.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "94f594552e2df02315ebabb03c1f8e4c6e71889cdb4b7eb5da841adaa42803d6"
+    },
+    "tests/dataflow/engine/test_assessments.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "915f489d5a1841b1b695de4c031e76bbf8ad8a902b5b34c1280ef87a1a33a16e"
+    },
+    "tests/dataflow/engine/test_commitments.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "a6e7e5106e12bda85c21460bba7139d8e6fcf8883783ba9404c564289f824260"
+    },
+    "tests/dataflow/engine/test_conformance.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "36fdf38c71879b64b1f62dfd55ef34221ff532323f376af1d1b860a5238f43ec"
+    },
+    "tests/dataflow/engine/test_evaluation.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "0d67306db8437d5510ad456245db1ec6bc2896e6eeca72a5a26e8c3deef2f8ce"
+    },
+    "tests/dataflow/engine/test_mvau_example.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "9d979acb05153601325ff75ac432828ae8f4dee54d17937d1caa0eaf20bd00a7"
+    },
+    "tests/dataflow/engine/test_packaging.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "c24af347ee94cb48cf7a2f99d9a14554d1e650416535f6ced53cb84a3f800613"
+    },
+    "tests/dataflow/engine/test_primitives.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "803f134a96df7f172861f86aa6454b784a1e8d05536c3d3f0742a7de57a61e01"
+    },
+    "tests/dataflow/engine/test_proposal_parity.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "4b24445d2147a4fcede8121b8a2135c236223eda928f0f0499b15909ceca8a6c"
+    },
+    "tests/dataflow/engine/test_proposals.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "38a967569425373388cfc09675967b930e713b3858f8850ac7672b992f2f907e"
+    },
+    "tests/dataflow/engine/test_safe.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "61d97c3905548ad554029f5de24dc75240453bde09f8a27e0b978045e17d9c48"
+    },
+    "tests/dataflow/engine/test_scaling.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "8917b8a666cde8659a6dc3d5c77dc3ed5786bc174b595a14e89585db2a6ac585"
+    },
+    "tests/dataflow/engine/test_validation.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "93b424bc7269583f6b26e1ab4981aac19be873cbd932240cae9b7624524668a5"
+    },
+    "tests/dataflow/engine/test_value_semantics.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "a8e266ba905f3e14ab0d521db4c2dd49273a15423749f626b3386720006fa49f"
+    },
+    "tests/dataflow/kernels/__init__.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "a408dc83ab686ce498c6cebba191cb9f5e758c35875e8b7638efc2d597f9a4f6"
+    },
+    "tests/dataflow/kernels/rtlsim/__init__.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "a408dc83ab686ce498c6cebba191cb9f5e758c35875e8b7638efc2d597f9a4f6"
+    },
+    "tests/dataflow/kernels/rtlsim/dotp_axi_numeric.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "c63edf21edf416f026cbe0cd4f6ac4e2fa3b5b7443cfeca68299e7b02468d742"
+    },
+    "tests/dataflow/kernels/rtlsim/dotp_axi_synth.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "51600c80459cbc11a0b0416922d5bdebf62c1bd8e8d0f7af404e22a28f6a0a82"
+    },
+    "tests/dataflow/kernels/rtlsim/mvau_assembly_numeric.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "6d017dea080487dddac73c4f44ae1faf6280bfabe445ec67d834c3d1bf0a4069"
+    },
+    "tests/dataflow/kernels/rtlsim/pure_dot_product_numeric.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "e09e4516872dee9f37e81533c3a4063b9ccaaf545567b2ea82601e138003edc1"
+    },
+    "tests/dataflow/kernels/rtlsim/replay_buffer_numeric.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "5eb7b125e9332b00803204c75cccbec1c0814eb99d2c1d86524e9deb8718f385"
+    },
+    "tests/dataflow/kernels/rtlsim/replay_buffer_synth.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "61f72aeea2da74a4c152615961c6e441b5bec61439cc985dcfe18b96826d8cce"
+    },
+    "tests/dataflow/kernels/rtlsim/run_dotp_axi_numeric.sh": {
+      "kind": "file",
+      "mode": 493,
+      "sha256": "72be976d334435b66e46a343712722068b68e6330d9995453377babfdcf89a37"
+    },
+    "tests/dataflow/kernels/rtlsim/run_dotp_axi_synth.sh": {
+      "kind": "file",
+      "mode": 493,
+      "sha256": "c4aab2746291927ebaee74bd68aa8d1c8e2189fb230f10519442b40c5ca6bef0"
+    },
+    "tests/dataflow/kernels/rtlsim/run_replay_buffer_numeric.sh": {
+      "kind": "file",
+      "mode": 493,
+      "sha256": "7f694eba4cdfd5a406d9a705e8ad9be534b2780453be7d52e1e1c7b929cc33e6"
+    },
+    "tests/dataflow/kernels/rtlsim/run_replay_buffer_synth.sh": {
+      "kind": "file",
+      "mode": 493,
+      "sha256": "2b863f0af5b90df6e22928baf6621884e8c592d09f21bf52edf1b02a1c555907"
+    },
+    "tests/dataflow/kernels/test_artifacts.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "1354593d0d18a2d3ae962ff7b36f1f9e91f88e27b2b28c6c1483b68a1bf715f7"
+    },
+    "tests/dataflow/kernels/test_axi_stream.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "5ca8ba67cf65ba474fddd9568f2c302a370b267e90073fd1c3021b8d5825b017"
+    },
+    "tests/dataflow/kernels/test_axi_stream_contract.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "cf698c55a3f3db05d817e0dce5145ed3123f29eb32053a8c3948026ca8da8963"
+    },
+    "tests/dataflow/kernels/test_axi_stream_declaration.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "cd458c2df94e9cb1f2cd101140fd38c652f7eca9a9147b9bb0a745aaefcce746"
+    },
+    "tests/dataflow/kernels/test_composite_physical.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "55a3770f30effcceda585a3aae687bfdc67abb574cde261a2e1ec8b62752b21d"
+    },
+    "tests/dataflow/kernels/test_composition_boundary.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "e8ff766c5eaa26e6008e340638252944a81b0ef94aafca48cb132d78b58a22ce"
+    },
+    "tests/dataflow/kernels/test_dot_product.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "4604e2578b25f96aa60228acf949f0c229a7a5e5577cc1c9c39d929ecb360e10"
+    },
+    "tests/dataflow/kernels/test_dotp_axi.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "cea40b6b0ef1e750aad18c3ccd57940a082d878b995e11e61f12341b1d7018a9"
+    },
+    "tests/dataflow/kernels/test_dotp_axi_minimal.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "6a7e4c45d2450da19094988bcf1eb5d12deffe96c101969ab8b512f959b8fc13"
+    },
+    "tests/dataflow/kernels/test_dotp_axi_region.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "55528dc3bb7f5ba027522309e154a21974c739ea17fb9ec85e88693d0951292b"
+    },
+    "tests/dataflow/kernels/test_kernel.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "1763e3d55fce017672362a0b422603e14ebaeada84d3273e31e57b0e7d7cc52d"
+    },
+    "tests/dataflow/kernels/test_module_build_spec.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "477a4b4e32acc4579d8f5a6b8fb5f3af202ad39c634d38af59fb716a8ec97cab"
+    },
+    "tests/dataflow/kernels/test_mvau_assembly.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "4c1e09ab2dde5f7c988b3ede99a35142e114488578362542f9846489093f6be4"
+    },
+    "tests/dataflow/kernels/test_physical_bindings.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "bfe4148730324889b8881b969d582c287081bf1961c88b31f19bfad3e240bcfb"
+    },
+    "tests/dataflow/kernels/test_public_interface.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "fde93e5e9c7eb67e1f0daeaafa96b14123a2db7a4d5d70e2314d46bfc9a6f3bb"
+    },
+    "tests/dataflow/kernels/test_replay_buffer.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "a9ce6742941dfe6c12a6d129dd79e67433c8086e9d04ad9235edab8b792c0358"
+    },
+    "tests/dataflow/kernels/test_rtlsim_fixture.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "4328134c513ebadaf1dde64187b2bfb1dd2dfd46e60e5b7acff9e54715f15c5b"
+    },
+    "tests/dataflow/kernels/test_streaming_components.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "6b577395ebf6815ad92b12a65283b50d4dd941275eb25b0219f1c4522d7d70a6"
+    },
+    "tests/dataflow/kernels/test_view_contracts.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "bf1c8ea7cf0bc6ea3be2dab4f563e40d1a4377140d6c7487a55c6c5a8fa1dd92"
+    },
+    "tests/dataflow/model/__init__.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "a408dc83ab686ce498c6cebba191cb9f5e758c35875e8b7638efc2d597f9a4f6"
+    },
+    "tests/dataflow/model/contract_helpers.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "3404d382d5f3f179daf56a53f2a41052abae178b55d61dc0fc1bf0e49d7ad99c"
+    },
+    "tests/dataflow/model/supply_networks.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "e09c8c40fc8273106b0dd726eae516d9a803e7fee0d1c7bba13a3c8409e37d8c"
+    },
+    "tests/dataflow/model/test_compact_maps_large.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "3e767ffa23370d593fb619e5ed9bc0810d3a34804dcc1093feda3596976f85be"
+    },
+    "tests/dataflow/model/test_compact_window_fixture.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "a982885b0a0b28113b99677171e86d80d80fd7b3f87342a507284e1b826b8d64"
+    },
+    "tests/dataflow/model/test_composition.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "34fc697017d6a58ac5531e57bed7a21f2c5be86d95863b07ac13e609c686726a"
+    },
+    "tests/dataflow/model/test_contract_authoring.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "2d28baf0e3b103af3c05adef9d29759a3bed740d849d46dbc9e3dc40955e1925"
+    },
+    "tests/dataflow/model/test_datatypes.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "c9033c35f7ce6de318ca587ef712bb0b9bd81576ca71462cbff3f0bb3c729b79"
+    },
+    "tests/dataflow/model/test_facade.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "ee5aa4644d92b2b9c21493f88f594e48f85061598f91d4e273320428148d3e12"
+    },
+    "tests/dataflow/model/test_identity.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "37cb60bb0c9778339285200724453339379074c71ac6471d0c9263995b6c5938"
+    },
+    "tests/dataflow/model/test_map_equality_laws.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "29c10c553dfb44d53cb7b29601aec6894e444f7385bc58b0c7847080ce0f4c11"
+    },
+    "tests/dataflow/model/test_maps.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "bbead9dbd9fb0c3b66e7c98b1ffa5e2115cad38d090be3fbefcf25b0ff50f7cb"
+    },
+    "tests/dataflow/model/test_network.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "10b86b3215e1d13f32ae84e465b30fc3f49b684bbac941b944fd1560416bd615"
+    },
+    "tests/dataflow/model/test_network_validation.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "96dc6644ffd5a599d73f08f780df72479144ce241d029c4f11a18860431f6806"
+    },
+    "tests/dataflow/model/test_presentation.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "42636b86bf7421b6006502b8cf39f933d0adb2603b9359ec93d7f8171a2b9139"
+    },
+    "tests/dataflow/model/test_refs.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "94347fd54b981fec7a2cc683f280e2fd5697db0c98eb973acf9772b194bd1f01"
+    },
+    "tests/dataflow/model/test_region_primitives.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "a6152939ca347aad305f8bd35170500cec1ed1b8475cf050f9e65af4dee75abe"
+    },
+    "tests/dataflow/model/test_region_profiles.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "ca95b5dbcc123bccd0ee55dd4ab97e2286d73561f85369e84b44735d02118ddd"
+    },
+    "tests/dataflow/model/test_region_validation.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "9d67cebee92ef455a60f9de7231dcd168452f433ff02f87f0966cf829a9e6b18"
+    },
+    "tests/dataflow/ops/__init__.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "a408dc83ab686ce498c6cebba191cb9f5e758c35875e8b7638efc2d597f9a4f6"
+    },
+    "tests/dataflow/ops/factory.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "f309cae15cf0fa6f4205f8f502f7c6fcdbc5da3993083ea43245315d8f2daebd"
+    },
+    "tests/dataflow/ops/fixtures/legacy_selected/MANIFEST.json": null,
+    "tests/dataflow/ops/fixtures/legacy_selected/mvau-schema3-batch-interleaved.onnx": null,
+    "tests/dataflow/ops/fixtures/legacy_selected/mvau-schema3-dot-product.onnx": null,
+    "tests/dataflow/ops/fixtures/legacy_selected/mvau-schema3-partial.onnx": null,
+    "tests/dataflow/ops/fixtures/legacy_selected/replay-schema2-full.onnx": null,
+    "tests/dataflow/ops/fixtures/legacy_selected/replay-schema2-partial.onnx": null,
+    "tests/dataflow/ops/mvau/__init__.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "a408dc83ab686ce498c6cebba191cb9f5e758c35875e8b7638efc2d597f9a4f6"
+    },
+    "tests/dataflow/ops/mvau/test_batch_interleaved.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "718ae5aea3b37cdb5acded60363a1e740bf8cd51f078d84541730a278e040720"
+    },
+    "tests/dataflow/ops/mvau/test_dot_product_kernel.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "c929731a480df11c6b9e27cd2f20324f4d96ba2b9865227e686f0f176f8bde97"
+    },
+    "tests/dataflow/ops/mvau/test_dot_product_supply.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "1da5e762917c24063ac92da96224e7ae69510d26fbfd8fec67147ca5d5237b75"
+    },
+    "tests/dataflow/ops/mvau/test_regions.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "33707d3651ad7ac614e81f632a75e3445db0f7a2045bf669d847ca4bd842c3c5"
+    },
+    "tests/dataflow/ops/mvau/test_source_semantics.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "5741db383d5f7b899120bad36b1bb1be4af0f520134377b08b00a810d8cdeae7"
+    },
+    "tests/dataflow/ops/test_conformance.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "3639e25b8fbd948d1d77740765dc5163a318cef91d65796226b2f89e9b368c0c"
+    },
+    "tests/dataflow/ops/test_dataflow_op.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "68088423cb64824dfaabe482e30389fde3d025253ee82ad6fb3a09b3e12fd0f8"
+    },
+    "tests/dataflow/ops/test_graph_context.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "6e0cc7db7ff962592a0d62015792c425b511e66308ab745f9268aace834c6f55"
+    },
+    "tests/dataflow/ops/test_hydration.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "a06760a52074aa4cf6e738d60f227aa8aa4c5d66c5b8967d1078a6be46dc0bec"
+    },
+    "tests/dataflow/ops/test_infer_entry.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "10f6bac70741b4e848aaeb0d92557d9de9c948ae3008db6ab4d122003a011513"
+    },
+    "tests/dataflow/ops/test_inference_passes.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "eb2ea75d94d6d746308f73f8765205f1695fd8ff47d3faccf75edd6aa4e1cf89"
+    },
+    "tests/dataflow/ops/test_joint_lifecycle.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "2b52569706cd368db5f7dfa4c1a410f98f6972cfa97e590f65b29f2f48cecdae"
+    },
+    "tests/dataflow/ops/test_model_effects.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "13c6243ed403951dca9bb04b56d460c60bf83871a30fea7b82965ed8d2a120f4"
+    },
+    "tests/dataflow/ops/test_model_factory.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "e4cea44b8d1974284aec435edbaf145a02d482890e66c25d0d1d77867e06baef"
+    },
+    "tests/dataflow/ops/test_operand_mapping.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "842638a6c509e216ed7beb33c0dfffe9485135ffec814d849007b9cae5b3149b"
+    },
+    "tests/dataflow/ops/test_partial_type_graph.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "f195122b2317c887cf4ebedd38839a8ccc6da3f2c5a8a8185c7a2b9c60122456"
+    },
+    "tests/dataflow/ops/test_persistence_codecs.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "a2c59275f61d207237d3389b04ac226c537f0d4b70713319370b00e8e0d47bf9"
+    },
+    "tests/dataflow/ops/test_persistence_feasibility.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "4d9132696bab4ae9d597c37f4cd3be53df198e3407757fe1c2b64973e58d8917"
+    },
+    "tests/dataflow/ops/test_physical_build.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "18ff7f81363ff8b2e6221856859284695511d794c531b97ac446ca95a1ef3f84"
+    },
+    "tests/dataflow/ops/test_physical_use_integrity.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "a9e1db84a96e39f052bffde414d1a300d7d0de19bf6d4c71e0d57e76dee643fc"
+    },
+    "tests/dataflow/ops/test_public_binding.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "bb50eb045e5ff4484555c30ab4a40146766587a17d6ceab6830f203549c0dfcb"
+    },
+    "tests/dataflow/ops/test_reconstruction_regressions.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "91d19f7972bbe14996c1cb4c948b110cb990a82994a544a12df19984a65902e0"
+    },
+    "tests/dataflow/ops/test_save_space.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "b3a78df3cc280f4ebe60349eb3489f9c114326f96e086484e612b11c62337032"
+    },
+    "tests/dataflow/ops/test_tensor_summaries.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "b1767c92f9e773ccb74aa0ec703287da65864315faa250ea6e07c55a3b1f9afc"
+    },
+    "tests/dataflow/ops/test_type_propagation.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "09de63dff6427059befb77e612cebbc4992bda300fde03d13ac2f2c4f14f688b"
+    },
+    "tests/dataflow/ops/test_unscoped_dependencies.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "3303ebf8e8e8b1308e0cfd7818843e3ecf44081e65b17038be4d3e0e9cd7f351"
+    },
+    "tests/dataflow/parameters/test_cyclic_region.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "211f4926386e5bcb52cd927e95df5ce178db469650ddc2caefc1174e4dde9e8a"
+    },
+    "tests/dataflow/parity/__init__.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "tests/dataflow/parity/correspondence.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "31ad1c10654a6d378130a7bd5ec65a298a3fdb12c249c6fa9d3ceae07685e016"
+    },
+    "tests/dataflow/parity/fixtures.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "78d3c30c105c64102232ccb46c552169e1dbfa20e006a1c96057663bc5b44e94"
+    },
+    "tests/dataflow/parity/local.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "70257340a839fcad56c8185a4e696df4413ef160a15b435f636acfb9ba12c776"
+    },
+    "tests/dataflow/parity/oracle.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "412c1716787422e19f88afdc60814520297d201e62b6e02ec7aec1d3cbc10b96"
+    },
+    "tests/dataflow/parity/oracle_probe.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "fa0db68a799ffeae0f0b4a808b291a96e2ee0c3c06ecfe3af252c24c9941c37f"
+    },
+    "tests/dataflow/parity/test_association_parity.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "f0f44ad9f3f0bb2660c45a598142103e7d89a4e27466fa2c7700464eac917c02"
+    },
+    "tests/dataflow/parity/test_computation_profile_mapping.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "90b0011dccb7dce08a00ceae8aa0aa740b50d694bb6a2e3902f753315492607a"
+    },
+    "tests/dataflow/parity/test_narrowness_parity.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "b9454187feea3877297922637e6e0767e54a320ac857212e307b8fb2ba9efa21"
+    },
+    "tests/dataflow/parity/test_required_evidence.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "f8474f675f30999e84d5b8cc2307153cfc5ef36630b7ccb4f760fe73fcb6403c"
+    },
+    "tests/dataflow/parity/test_source_projection_parity.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "d173747ba93a0dc5da85949ebf6535456205b25e01d0a5a383df1f3b8b55e077"
+    },
+    "tests/dataflow/physical_fixture.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "b18b2907dc79a0c08eec8a1560fa6e0eebd8643d7e027900bc1705a34e3afd4b"
+    },
+    "tests/dataflow/rtlsim/op_owned_composed.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "63a385fec1ee48f4280b3ebd6e1763c7487ca49142f0cc52d40546d679b56a09"
+    },
+    "tests/dataflow/rtlsim/rtl_transport.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "ffe38d058ab3c313fe4c5689b6de8a818941f479469356159d6e95c6e8abb0c1"
+    },
+    "tests/dataflow/rtlsim/test_observed_transport.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "a5d68ff4260257ed17e8ece3f17a2f9e6c350f38e43aa304bbd49a2970f53f75"
+    },
+    "tests/dataflow/space/__init__.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "a408dc83ab686ce498c6cebba191cb9f5e758c35875e8b7638efc2d597f9a4f6"
+    },
+    "tests/dataflow/space/test_absence_tolerance.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "d7688a7b486486853d66cac8e8e7be58fd471270759d1d097f0830ec5377fe0f"
+    },
+    "tests/dataflow/space/test_branch_inspection.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "a1a738ddbb03adfee4743ece57faf278462497758ba2fd799256b87699d16f8f"
+    },
+    "tests/dataflow/space/test_branching.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "ae86647527902cb357cb62bdf70009b45b586f13b1d598127066f1a77d2c3f4b"
+    },
+    "tests/dataflow/space/test_choice_specialization.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "68e9f227e85d98089d2ce3cd44eb122f8ab513977a6345eb1bf1c04ac327d33a"
+    },
+    "tests/dataflow/space/test_compiler.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "faac2b4ccb70bcc316de76951539d4c589a7c58adc8182b4ceea7472d003ed71"
+    },
+    "tests/dataflow/space/test_declarations.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "903c0207efce204b04a0088d5a28a79214c496bb42ea734a8a67bb0532b03bab"
+    },
+    "tests/dataflow/space/test_occurrence.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "d43fb33a0774fc65ca8642293cfe639978e96aa970c00b26f0b78118ed0c02e1"
+    },
+    "tests/dataflow/space/test_persistence_identity.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "10cb4fd70e91920e8f2c8de3a6ad2f7dabd5372f1b3e8e264036c9ed1f7c9bdb"
+    },
+    "tests/dataflow/space/test_root_factory.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "2acd71714e5d9bfea4b64e22131e927f365b161a778d8ab4ed05941c6a1eef82"
+    },
+    "tests/dataflow/space/test_value_semantics.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "8c0ac2a79707982526175b094eb9cb43d943453394c22218e460ddaead9f04f7"
+    },
+    "tests/dataflow/test_composable_implementations.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "fba442790c3037b91d849d72b0693cc2a7b1d18d5b9f3493c4fa50e49c66f873"
+    },
+    "tests/dataflow/test_package_boundaries.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "9f8a99f4f0241c077bf405674293a0d3c1eaef1e71f6f598abd545b88d88741f"
+    },
+    "tests/dataflow/test_replay_buffer_source_ownership.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "fbd6f1a02d1d2536cf8b44ee41b83988126f55c2b734561b1b82523c54378d96"
+    },
+    "tests/dataflow/typing/model_facade_types.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "6fef733f0fb6fdb0923ec15f8a6bf1a58766ad763636a81665883eca3a5a7ddf"
+    },
+    "tests/dataflow/typing/space_descriptor_types.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "dff16a000730ed7c4eed72b8c447caade292f65a20be4a6caeb89c0aa93f2e35"
+    },
+    "tests/end2end/test_end2end_bnn_pynq.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "741bbd1fc98c4efc66e8fe6632fa0dd4cff7d4532f3946df815cc851bd79a3e3"
+    },
+    "tests/end2end/test_end2end_cybsec_mlp.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "433f8ef1f4997177c53bcc17c2723b7926b44006913490378e072f7f6856e785"
+    },
+    "tests/end2end/test_end2end_mobilenet_v1.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "dc9b1b77959b352dd10348eec638e21d2f03b0ae859b8bf5d7efe3f3989cbd0c"
+    },
+    "tests/end2end/test_ext_weights.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "18e7737a7cfc7c6e2a09a5ed5051d7466c168941f2509217c3a2d32c6f54ddec"
+    },
+    "tests/end2end/test_ooc_synthesis.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "38fa39994dd20d6c63fb05364093e04493024c055fd294ce1d96f3b63d33ef98"
+    },
+    "tests/fpgadataflow/test_code_gen_trafo.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "af307071b31f164e414c22459ccb8c7786ed0296c7594bc44a272e2bb5565fb4"
+    },
+    "tests/fpgadataflow/test_compilation_trafo.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "1a0a823a0ea3b41bde8570023405a535ab940108f24cd28a48d7524d9dafaa1b"
+    },
+    "tests/fpgadataflow/test_convert_to_hw_1d_conv_layer.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "714d4d61ce3dd3f7c1bdd6b49edcd2da9690566a0c416ee08a2765cdff4af99c"
+    },
+    "tests/fpgadataflow/test_convert_to_hw_conv_fc_transition.py": {
+      "kind": "file",
+      "mode": 493,
+      "sha256": "88f3e8cbbb1e677a1d85e449d281be32144a9d25baa6082ff03404520ac1cc7f"
+    },
+    "tests/fpgadataflow/test_convert_to_hw_conv_layer.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "9f903adc8fc1d0b20aac324ca9fe0dd3e2e02b2739a117e18d5e89e16f40d068"
+    },
+    "tests/fpgadataflow/test_convert_to_hw_layers_cnv.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "070f28cec6268d903a63013ead7ad3e5c0bdda144ecb7a67c2d497b75089b0c5"
+    },
+    "tests/fpgadataflow/test_convert_to_hw_layers_fc.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "100b91ff915d2fb3c19fb478cf9893c44cb54428416e619a6f90bb36b5f358ba"
+    },
+    "tests/fpgadataflow/test_convert_to_hw_layers_synthetic.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "3da3b0c848a59494007a44ac5bf82c7935f3975ed75288ed334915fbcf3247fe"
+    },
+    "tests/fpgadataflow/test_convert_to_hw_pool_batch.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "ca5416633d7498679efb21ca7b0f1c3dd840db56d31d11981c8838f9e7d59ca4"
+    },
+    "tests/fpgadataflow/test_depthwise_convolution.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "aeb5bc608153c9b744ba6fd66b2d4179ea7ca1110308ea5691429ebc7a50a170"
+    },
+    "tests/fpgadataflow/test_fifo_transaction_counts.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "a8f2bd25d6c530b75b501d5851d2acf4588be1278d499820c78b6897308ee5ca"
+    },
+    "tests/fpgadataflow/test_fifosizing.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "68b561de1110bafa32b5045403bfd84417bb2c8535fca94c1fea12d4f3966e2e"
+    },
+    "tests/fpgadataflow/test_fpgadataflow_addstreams.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "3b80448b022c3c7bacc7b46cf95e0221d969261a58d6d1f81b31ed0bea225f59"
+    },
+    "tests/fpgadataflow/test_fpgadataflow_checksum.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "c08e158b4d7029b8c3457eb486618e52186139614d9984dd9572b6cd24104af5"
+    },
+    "tests/fpgadataflow/test_fpgadataflow_concat.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "ae6a28e27d9a4189fb5f82c783b1dd2459d7a6b2c0fac779242f1c1addc626bf"
+    },
+    "tests/fpgadataflow/test_fpgadataflow_convinputgenerator.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "9510ea7e13b76a0b0e16b3d07aa1c1bb9d3e8e660da6a90ecc6acb2294af7e4a"
+    },
+    "tests/fpgadataflow/test_fpgadataflow_convinputgenerator_rtl_dynamic.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "d70a33d56951ab6a0d4e5237e0f1a86bdde7099172d348cf0686b81c0a8b0343"
+    },
+    "tests/fpgadataflow/test_fpgadataflow_crop.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "12a469ea33e42937d7b5b4aa16a1d3fd4ecd74f8b92819fe38f0a2da869128be"
+    },
+    "tests/fpgadataflow/test_fpgadataflow_deconv.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "8b14f2eeecd997767909592f9c3cbd19e0cc94037d73dc2cebe49915787f1dc6"
+    },
+    "tests/fpgadataflow/test_fpgadataflow_downsampler.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "88d3558f14a319de27b02c8eb29c98a85543637b5b8d2d5c4e5a85a441dd0d52"
+    },
+    "tests/fpgadataflow/test_fpgadataflow_duplicatestreams.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "c5e9b7a239572fa7c2223f5cff70c30fe465a0d7f0d31ed42a9ed1983a03e248"
+    },
+    "tests/fpgadataflow/test_fpgadataflow_dwc.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "6e9e9ed34b2ea55c6c2e959019a8b26e2c3c763f56fec0dfe76e302a65b885c5"
+    },
+    "tests/fpgadataflow/test_fpgadataflow_elementwise_absdiff.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "d58a093b72d8cbe095092fc4c6e9d56cd046d8750acdef3686a8f3a5029646f3"
+    },
+    "tests/fpgadataflow/test_fpgadataflow_elementwise_binary.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "7cc3d494cc6cc0a7ab6a2068d92d3592d4df6e802d9ccc79beb189d1fc1b7849"
+    },
+    "tests/fpgadataflow/test_fpgadataflow_elementwise_binary_rtl.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "1ef4f32983a42f4cf0880103438a6420eedc6be25cb2170b692a81fb6d4e01f9"
+    },
+    "tests/fpgadataflow/test_fpgadataflow_fifo.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "09e52fe10f3055ccbe317698225f538d61abdcacbe0057bd9fd326c441c536c9"
+    },
+    "tests/fpgadataflow/test_fpgadataflow_finnloop.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "d26b3a30e0ee945bff52b43814030e331425b78f3207fd6b66445967dfd20240"
+    },
+    "tests/fpgadataflow/test_fpgadataflow_fmpadding.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "b1901d4e22a36133dc04e2096965dce23663b6e210ef35c52dbcc680d495f0cf"
+    },
+    "tests/fpgadataflow/test_fpgadataflow_globalaccpool.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "9a8ae90c9392a76dd5593c6711b7b0953319c93b86e57c407a7824a5fd022385"
+    },
+    "tests/fpgadataflow/test_fpgadataflow_ipstitch.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "54f7fda9f73b8e4cff4b117af440b1a1d54fe90bc3573fa9d6f3dbdd5d0d8a35"
+    },
+    "tests/fpgadataflow/test_fpgadataflow_labelselect.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "afd24b3a07db4f4f063e98d38a6abf0246ca6256343a1062e64387553db3243e"
+    },
+    "tests/fpgadataflow/test_fpgadataflow_layernorm.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "744a2cd5da015fef2cb287488ce0b8f368671c820fb331a6603ba8ef168cad08"
+    },
+    "tests/fpgadataflow/test_fpgadataflow_lookup.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "47b1aeee24f74ac200f23c5fdf7825338465005ae884d390ec74993d68af552c"
+    },
+    "tests/fpgadataflow/test_fpgadataflow_mvau.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "26e7a61f7afc31554c03c87edb155836e141f94309185b2e8b9494bb11ffacc2"
+    },
+    "tests/fpgadataflow/test_fpgadataflow_pad1d.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "aa6f658a0d53d04264f083ee48f9881a573571f4baf5e9ef35d28c555c98b752"
+    },
+    "tests/fpgadataflow/test_fpgadataflow_relu_elementwisemax.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "ac541e05d1cd5e5ac0f5bb50ea63b1760b1ab3f0962b450016a1582331eb77aa"
+    },
+    "tests/fpgadataflow/test_fpgadataflow_requant.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "dbd7f3d41e839db7f71cb64c3d14ecca3c468e0be38d8caf4fcb0cb5745024bd"
+    },
+    "tests/fpgadataflow/test_fpgadataflow_res_estimate.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "8dec041f8a3cfb0116580b46895754b19f3ec32311bd5747389f641b957b2a23"
+    },
+    "tests/fpgadataflow/test_fpgadataflow_selecttoken.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "4fc720dc8ab697691931c535cdc9c8b486f1c54aefcdb3d74928b17ac7308103"
+    },
+    "tests/fpgadataflow/test_fpgadataflow_shuffle.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "c57f36483a9eb94ce0f1a77ac7adc0f69074ac1756e83c2f70f810fa5a9ebfb2"
+    },
+    "tests/fpgadataflow/test_fpgadataflow_softmax.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "7445d4339dc1482991f71ab4e80625f8f9761301dfcd9f5be237ea563fcb50e5"
+    },
+    "tests/fpgadataflow/test_fpgadataflow_split.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "5e21b6b874f0e37877480ee57df1ce395e0f5dce84c7727b4651e6d21d876011"
+    },
+    "tests/fpgadataflow/test_fpgadataflow_thresholding.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "69263906208354a38a96284420d18e18a41aacae476d8e4bb06ef827a68ed6f5"
+    },
+    "tests/fpgadataflow/test_fpgadataflow_thresholding_runtime.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "be2473c7c62baf0f2514ea482fb64ebfc21179e3702ce5389b1ceb554eb71041"
+    },
+    "tests/fpgadataflow/test_fpgadataflow_upsampler.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "3279dfc3e7efd140d02658fbca694b69756df3571d1d3b6778ec09baccc8f789"
+    },
+    "tests/fpgadataflow/test_fpgadataflow_vvau.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "49cc77aac4fddd5f3b4c375e6a4b823559eeebe2da3f8e70c5dde3e46450b262"
+    },
+    "tests/fpgadataflow/test_make_driver_minimal_deps.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "285ce3632795b2dc95f18f22fc7340c37d56404e694dd79455a8c18e64dfb493"
+    },
+    "tests/fpgadataflow/test_minimize_bit_width.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "ef1c9321a87044d98ad99b1174f5eacbe1c9d2d52db5064d39838e9d31ac3c9e"
+    },
+    "tests/fpgadataflow/test_mvau_cycle_estimate.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "25acd0e52e1a6682c63a8726d15d72584162fb0ccee025965dae82dd9cd701d0"
+    },
+    "tests/fpgadataflow/test_runtime_weights.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "c3616a3423cc237089bc39b3294bc41b879cfe9fab22969aa5416f19bc314b69"
+    },
+    "tests/fpgadataflow/test_set_folding.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "29be485784d6edb10d0cae43911f27bc9394db0e68cae9458f4b6d52b8afabcf"
+    },
+    "tests/fpgadataflow/test_split_large_fifos.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "f7d5e5222aae44085cd3497bf17f3e8c537d415af32ccafabef3d536937d8453"
+    },
+    "tests/fpgadataflow/test_validate_dataflow_conversion.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "1cfd205d86f1871edd7d165aaf34f25e6eb3f3766578655433de6cc3e886fc6e"
+    },
+    "tests/notebooks/test_jupyter_notebooks.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "bf077eb1966f9892abe793f300b0229eba835401cc310fa90f21616410806b21"
+    },
+    "tests/test_enforce_import_order.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "36069f65a55a0e1926518e9eed825c5e1eead09e675d962e83a5e443b50173f8"
+    },
+    "tests/transformation/streamline/test_absorb_mul_into_topk.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "51d361aca50b3bdc28e6d492fc412e40d9e51b6abe304b144f9bdb2d7b1efe61"
+    },
+    "tests/transformation/streamline/test_absorb_opposite_transposes.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "c30532c2bfdc6d96f74bdf1436aad703de4eebde0b3643144f1278f56d8b5a1a"
+    },
+    "tests/transformation/streamline/test_absorb_scalar_bias_into_multithreshold.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "d74b76391103bbc1ffeb6fc76350b7b7b9c524f49c031ae6afc534c1827bd364"
+    },
+    "tests/transformation/streamline/test_absorb_transp_into_flatten.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "c4e6302266c33036bc93ccd852ed7543c344b3f58a008d3947c5bef046cc24e0"
+    },
+    "tests/transformation/streamline/test_collapse_repeated_op.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "14410ea6d517677fd18a19115f17b3b463004e49efb029ddf322fe5618552d3e"
+    },
+    "tests/transformation/streamline/test_extract_multithreshold_scale_bias.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "837fcf4cca9c37b816cdc86cbaadc7742853001432a4afc237311d46baa9e868"
+    },
+    "tests/transformation/streamline/test_factor_out_mul_sign_magnitude.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "4d7b902510d0181ced033947b872e44d3cc72911e9a397e551cc2edc1bec6f69"
+    },
+    "tests/transformation/streamline/test_maxpool_nhwc.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "0f11e78a26073dfa6cb5ea8105b41bd96fb502007f040d25388f1993dfd86fd4"
+    },
+    "tests/transformation/streamline/test_move_add_past_mul.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "e2975e0ecf7a05cbeaf5d587ee41e870a3c25ccd83002e353134cf247dc2afb9"
+    },
+    "tests/transformation/streamline/test_move_chw_add_past_conv.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "74c09977fbacf161ce64b608977aa929ecc0fda8f15ff1ccd40766d6091cf5cb"
+    },
+    "tests/transformation/streamline/test_move_flatten_past_affine.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "67e32aa7c1978215ecce663552113cf61c48b5b8d9cc91c93d602e2d824834bf"
+    },
+    "tests/transformation/streamline/test_move_flatten_past_topk.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "833c2269e93fccb7cc4342795713618622aa684d4171ce810fc8f093b5dc6e6a"
+    },
+    "tests/transformation/streamline/test_move_identical_op_past_join_add.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "2f511f6078b8cdf830d2175a9a59ad5e9383ab558ca93e92b2485bc5ee97606c"
+    },
+    "tests/transformation/streamline/test_move_identical_op_past_join_add_broadcast.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "0b627d000ccfab8c7f7472d67e129dfc4ad792cbd02f8f02026f9cf853b718b6"
+    },
+    "tests/transformation/streamline/test_move_identical_op_past_join_concat.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "099552a88d64293afdfc0ed3e675c88a20d39837d172914467580a20d4f00dac"
+    },
+    "tests/transformation/streamline/test_move_identical_op_past_join_mul.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "a9274618e0a14fbe9da9ea98616632777813ca10223c858c3b402027c1f1fe44"
+    },
+    "tests/transformation/streamline/test_move_identical_op_past_split.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "70855a7217f5a19784b2701f564dd417091c753ffc4ff99635673adee8c675d6"
+    },
+    "tests/transformation/streamline/test_move_maxpool_past_multithreshold.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "6fb4fdac38d53657620e954a4bf91d6eec7e8a82d56ffb85df325b53d8cd1c3f"
+    },
+    "tests/transformation/streamline/test_move_mul_past_dw_conv.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "4f0aa16d97e2e1d0cedd3ee95dea028299ee3fd669765c7c29843623e9a2bd3f"
+    },
+    "tests/transformation/streamline/test_move_mul_past_maxpool.py": {
+      "kind": "file",
+      "mode": 493,
+      "sha256": "b2bbd0b47289662c0f7c2357a49d8cb80b797c085257935256787e65466613b8"
+    },
+    "tests/transformation/streamline/test_move_past_fork.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "a387659782ec3b9cb7931c3962a1f99f067df2de9b724d46a303dccedb28bd08"
+    },
+    "tests/transformation/streamline/test_move_scalar_past_conv.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "74c1e42625f35a7b168eee7054b981eb150681f9f1fbf41e2dc7f1434725ea92"
+    },
+    "tests/transformation/streamline/test_move_scalar_past_convtranspose.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "11a93327f94d62bdd23f99f5b88e846304fa3d27f4cb1452c7b87d47b84551c2"
+    },
+    "tests/transformation/streamline/test_move_scalar_past_matmul.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "874ef20d372ab3f79fc1828aa9ef966f27db8ce0a8a175f1c25e476d87488557"
+    },
+    "tests/transformation/streamline/test_move_transpose_past_scalar_mul.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "8a04cfa98480b77be3fad0bbeef2935869e126804f44bc0e099878b588452bcd"
+    },
+    "tests/transformation/streamline/test_round_thresholds.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "943bc61b476eee38318d514119ad745185ab5472e7ca176a41ca0cfa29717b92"
+    },
+    "tests/transformation/streamline/test_scale_resize_nhwc.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "3c4a9ad7b57859653334e7e4b9f65fd4b73f7477013d07ed9a035d067d176e7b"
+    },
+    "tests/transformation/streamline/test_sign_to_thres.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "8fbb5e62314aabf0dca3a8198082aac2ceb671d76a269f9bd3d942b5ebdd663f"
+    },
+    "tests/transformation/streamline/test_streamline_cnv.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "b87fa411c85e6c5db5edae79bd184d0536e935d1c790727edf7d57f899e9cafb"
+    },
+    "tests/transformation/streamline/test_streamline_fc.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "05de6d4e739c5d70227a750f04c21eaf87a64e4a382fdf59e8f1772585c23de1"
+    },
+    "tests/transformation/test_batchnorm_to_affine_bnn_pynq.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "5eeb4a47b03acde4ca81c1e9bef9df8e6eeb0464f99e199763dcd273f82a90f6"
+    },
+    "tests/transformation/test_general_transformation.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "bd153d57acaf72084503a392465f8256a6ad3cb6bdb28dd638787de08e8d5a00"
+    },
+    "tests/transformation/test_infer_data_layouts_cnv.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "ed4a01debd5a78bd83b519d09b53b49fd53265ce1ed0bcf9914777ecb8bf03c2"
+    },
+    "tests/transformation/test_infer_datatypes_lfc.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "efbfd9f5063fde93b15acdd70943d04445f68bdd933d905727af19abf9dfeaa9"
+    },
+    "tests/transformation/test_loop_rolling.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "4442cd95326d3b2b7484cd01a951af5d10d4a54f1c18bc6e9315fc30ce0605e0"
+    },
+    "tests/transformation/test_qonnx_to_finn.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "fdf33c809645d8ee3007ce85f2088cfed38cfddf8cfa5e045659e816cb48646a"
+    },
+    "tests/util/test_build_dataflow.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "5d012e4080e1bf8216e4a1982943580cd5998907e04137e8520141e44c25991e"
+    },
+    "tests/util/test_build_dataflow_checks.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "c9bdba26bbd1e2394d6e8a5532c9c949e7f862466617fde7fc2c1593444df515"
+    },
+    "tests/util/test_build_dataflow_step_injection.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "f4a6446fda49c02816083e06e23d4bf1177e0f4799bfb307813c03a23fcd9c69"
+    },
+    "tests/util/test_ci_config_sync.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "6725868c86cc09d4ea397dfc8972deaa986dbda784ebe72320aed3d8a6bd27bf"
+    },
+    "tests/util/test_config.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "8065e6d000f4c59356f4930b8d155b12f02d9384d1e7eebcb2994c4cf3f95408"
+    },
+    "tests/util/test_create.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "471dadd2efa5ec401b13ddad18be87345f092a143d7293da041a0c460bd14223"
+    },
+    "tests/util/test_data_packing.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "270a935b5c6ceaf1993914713bbca5189af7354c62217aa133d530c6d436df9d"
+    },
+    "tests/util/test_finn_ci_cli.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "6d99df88e79632f830f777a25652cdb19781b08286622194bf9a202c112a0295"
+    },
+    "tests/util/test_finn_ci_config.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "4171cf56e0dd14c894e8287a83ec6d1d2507fa3e45fcaa04fc9efbd9cb13ddd8"
+    },
+    "tests/util/test_finn_ci_failures.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "f9ffd43198fc2690eb48061b587ffdffd44dd19a87e3a4cee494022677dafc5d"
+    },
+    "tests/util/test_finn_ci_hw.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "4b500362a1c97fa692179dd1d95a80ebc16ba792b66663b6891ad8abd5108dbb"
+    },
+    "tests/util/test_finn_ci_jsonio.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "a67ed5df14634727463f66950e48db9584f5dc4d00ed32b05a1df86f17d90ce6"
+    },
+    "tests/util/test_finn_ci_lsf.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "8af0e6d848b72da3c7b7f04823af36df86afbf4dc82933f3db546926fa914ebc"
+    },
+    "tests/util/test_finn_ci_plugin.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "1aea4efe5310a782846bd18db19d6e243d2cbe09125760c5837fcffb610d9e43"
+    },
+    "tests/util/test_finn_ci_retention.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "f64fefc97419a49972461b876851f729496c8913d88c6cabfa51cb408c158a60"
+    },
+    "tests/util/test_finn_ci_sharding.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "bb5a1ef318727ec507de28b2cf19b7c79cc5a1e7c8d537c9a248a3f182231f90"
+    },
+    "tests/util/test_finn_ci_timing.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "803f7c2678deb9ffe33e474948ffd79dd48f337262534bae9ae9286eb3671ec8"
+    },
+    "tests/util/test_fpga_flow_tutorial.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "03edc6986510ecf4eb7d7d83ea0d0500ea51b7495eb8179d52ed498581f04892"
+    },
+    "tests/util/test_hls_vector.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "9162d675badc78b125d76c87a505a7c7c6c597c6af32e260f4a2129d4a28ca11"
+    },
+    "tests/util/test_modelwrapper.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "8bba6d4cc430545758e4bbd763db5633a8e99473751ecf60636795df782daea6"
+    },
+    "tests/util/test_onnx_exec.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "ba1ea26105140c4bdb21b95bde8bfc41d8778b424a7cdf02b695d62e612c54ad"
+    },
+    "tests/util/test_resolve_xilinx_tool.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "573fa1fa6902d4db7469195510dd7bf083180e366f3960e2aeabc35abf74d7c1"
+    },
+    "tests/util/test_rng_determinism.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "72b4d7f19342ce08312f859ea920ae411310017123f23e7b281928491485a397"
+    },
+    "tests/util/test_robust_rmtree.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "a069ea2f9d64a112df1e2527ca9a1d983e688c8e7f1e1f03e614b76d0f5abc8a"
+    },
+    "tests/util/test_rtlsim_liveness.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "c3ee0805d144ad771fb9e05aaaa60c75f1141845a25b3117c8acbafb8162d7f7"
+    },
+    "tests/util/test_rtlsim_performance.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "d504ffa672bb806f89263dbe2b62c1f542dc00046b0da7eb92cf40d8bac15b4c"
+    },
+    "tests/util/test_slash_link.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "9de7e4fb80cfaf326452b94fda56a5ea9ca4c61ad7a9f6f41361683e97752548"
+    },
+    "tests/util/test_test_helpers.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "4a36b0d04305e65c5342ac96e9c611ef2d4b4dc0114f9e5950880684b54fa709"
+    },
+    "tests/util/test_xsi_pkg_ordering.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "49d201ffca4bd3a49c050c84348d9cd28b74c19722b807b6241b7217980ec4d8"
+    },
+    "tutorials/fpga_flow/README.md": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "02384474347670541c1145dc031d7373b7a01cbda42926f74a4734eb7ae4c405"
+    },
+    "tutorials/fpga_flow/build.py": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "f51c5c788e2788cc935bbe83c5376b8194059860a5ca59e4a30285dcf23c529f"
+    },
+    "tutorials/fpga_flow/expected_output.npy": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "79a3ec9e5013300721fe2cc296c3d7016af2098b51ea46190de859dc1de8fb8e"
+    },
+    "tutorials/fpga_flow/folding_config.json": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "3f8f407c536c9ef6b75b7a948cea0fcee1de7477cdb80a2a53a2a75c7c79471e"
+    },
+    "tutorials/fpga_flow/gen_tb_data.py": {
+      "kind": "file",
+      "mode": 493,
+      "sha256": "778412c6c685a7cf5c4988f32df3be7783fca7b673713d168bb609fb1f26cf35"
+    },
+    "tutorials/fpga_flow/input.npy": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "b4f1515bbffda09ac3d51de26820bb7e523f190f808114292debf8c74fe8a073"
+    },
+    "tutorials/fpga_flow/model.onnx": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "1706b590920df2a73dc5f256725292b9a8640f904e0e0345547722b607dea6a0"
+    },
+    "tutorials/fpga_flow/numeral.png": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "c856922dc0b97d527d97c75a70efb2d1de5b4d5d5fe20eb5adaf220d21f6f855"
+    },
+    "tutorials/fpga_flow/templates/finn_testbench.template.sv": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "d6d253c94d8830edb4ac4c5087ee7050131a96d98a1e68b6369046d5f477c646"
+    },
+    "tutorials/fpga_flow/templates/make_sim_proj.template.tcl": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "2670124d42019042d05145167b57c930e0f5f41fa7bfd3bf8354bd76baef298f"
+    },
+    "tutorials/fpga_flow/testbench.sv": {
+      "kind": "file",
+      "mode": 420,
+      "sha256": "3524631d3539bb1f2283bac398112e3c6c10e100af20fbf882ad290af3dbec3f"
+    }
+  },
+  "head": "4f48708170219913fa20a38eb1321d666edf46d1",
+  "index_sha256": "8e15ceb6a8f93b498dd5b658cbcbf395e743706ab68f8981f95cd63613f6dfd9",
+  "source": "/home/tkeller/prj-kernels/finn-unified-space-stack",
+  "status": " D .github/workflows/dataflow-design.yml\n M setup.cfg\n M src/finn/dataflow/analysis/integer_dot.py\n M src/finn/dataflow/artifacts/build.py\n M src/finn/dataflow/artifacts/contributions.py\n M src/finn/dataflow/kernels/__init__.py\n M src/finn/dataflow/kernels/matmul/base.py\n M src/finn/dataflow/kernels/replay_buffer.py\n M src/finn/dataflow/kernels/target.py\n M src/finn/dataflow/model/kernel.py\n M src/finn/dataflow/model/logical/__init__.py\n M src/finn/dataflow/model/logical/composition.py\n M src/finn/dataflow/model/logical/datatypes.py\n M src/finn/dataflow/model/logical/semantics.py\n M src/finn/dataflow/model/logical/view.py\n M src/finn/dataflow/model/physical/interface.py\n M src/finn/dataflow/model/physical/layout.py\n M src/finn/dataflow/ops/mapping.py\n M tests/dataflow/artifacts/test_contributions.py\n M tests/dataflow/kernels/test_composition_boundary.py\n M tests/dataflow/model/test_identity.py\n D tests/dataflow/ops/fixtures/legacy_selected/MANIFEST.json\n D tests/dataflow/ops/fixtures/legacy_selected/mvau-schema3-batch-interleaved.onnx\n D tests/dataflow/ops/fixtures/legacy_selected/mvau-schema3-dot-product.onnx\n D tests/dataflow/ops/fixtures/legacy_selected/mvau-schema3-partial.onnx\n D tests/dataflow/ops/fixtures/legacy_selected/replay-schema2-full.onnx\n D tests/dataflow/ops/fixtures/legacy_selected/replay-schema2-partial.onnx\n M tests/dataflow/ops/test_joint_lifecycle.py\n M tests/dataflow/ops/test_operand_mapping.py\n M tests/dataflow/rtlsim/rtl_transport.py\n M tests/dataflow/test_package_boundaries.py\n?? src/finn/dataflow/artifacts/contribution_types.py\n?? src/finn/dataflow/artifacts/requirements.py\n?? src/finn/dataflow/kernels/dot_product.py\n?? src/finn/dataflow/kernels/dotp_axi_minimal.py\n?? src/finn/dataflow/kernels/dotp_axi_region.py\n?? src/finn/dataflow/kernels/mvau.py\n?? src/finn/dataflow/kernels/resources/cyclic_stream.sv\n?? src/finn/dataflow/kernels/resources/dotp_axi.sv\n?? src/finn/dataflow/kernels/streaming.py\n?? src/finn/dataflow/model/kernel_base.py\n?? src/finn/dataflow/model/logical/_contract_support.py\n?? src/finn/dataflow/model/logical/contract_authoring.py\n?? src/finn/dataflow/model/logical/contract_expressions.py\n?? src/finn/dataflow/model/logical/datatype_domains.py\n?? src/finn/dataflow/model/logical/datatype_semantics.py\n?? src/finn/dataflow/model/logical/result_semantics.py\n?? src/finn/dataflow/model/logical/results.py\n?? src/finn/dataflow/model/logical/view_authoring.py\n?? src/finn/dataflow/model/physical/axi_stream.py\n?? src/finn/dataflow/model/physical/axi_stream_binding.py\n?? src/finn/dataflow/model/physical/axi_stream_contract.py\n?? tests/dataflow/kernels/rtlsim/mvau_assembly_numeric.py\n?? tests/dataflow/kernels/rtlsim/pure_dot_product_numeric.py\n?? tests/dataflow/kernels/test_axi_stream.py\n?? tests/dataflow/kernels/test_axi_stream_contract.py\n?? tests/dataflow/kernels/test_axi_stream_declaration.py\n?? tests/dataflow/kernels/test_dot_product.py\n?? tests/dataflow/kernels/test_dotp_axi_minimal.py\n?? tests/dataflow/kernels/test_dotp_axi_region.py\n?? tests/dataflow/kernels/test_mvau_assembly.py\n?? tests/dataflow/kernels/test_streaming_components.py\n?? tests/dataflow/model/contract_helpers.py\n?? tests/dataflow/model/test_contract_authoring.py\n"
+}

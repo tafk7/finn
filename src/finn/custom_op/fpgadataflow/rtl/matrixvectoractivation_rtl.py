@@ -30,7 +30,7 @@ import numpy as np
 import os
 
 from finn.custom_op.fpgadataflow.matrixvectoractivation import MVAU
-from finn.custom_op.fpgadataflow.rtlbackend import RTLBackend
+from finn.custom_op.fpgadataflow.rtlbackend import RTLBackend, finnlib_source
 from finn.util.basic import get_dsp_block, get_dsp_datapath_limits
 from finn.util.data_packing import npy_to_rtlsim_input, rtlsim_output_to_npy
 from finn.util.resources import resource_path, tcl_quote
@@ -196,7 +196,6 @@ class MVAU_rtl(MVAU, RTLBackend):
             sourcefiles = [
                 "mvu_pkg.sv",
                 "mvu_vvu_axi.sv",
-                "replay_buffer.sv",
                 "mvu.sv",
                 "mvu_vvu_8sx9_dsp58.sv",
                 "add_multi.sv",
@@ -204,6 +203,8 @@ class MVAU_rtl(MVAU, RTLBackend):
         sourcefiles = [
             os.path.join(code_gen_dir, self.get_nodeattr("gen_top_module") + "_wrapper.v")
         ] + [rtllib_dir + _ for _ in sourcefiles]
+        if theight <= 1:
+            sourcefiles.insert(2, finnlib_source("rtl", "replay_buffer.sv"))
 
         for f in sourcefiles:
             cmd.append("add_files -norecurse %s" % tcl_quote(f))
@@ -484,6 +485,8 @@ class MVAU_rtl(MVAU, RTLBackend):
             verilog_files = [
                 os.path.join(code_gen_dir, self.get_nodeattr("gen_top_module") + "_wrapper.v")
             ] + [rtllib_dir + _ for _ in verilog_files]
+            if abspath:
+                verilog_files[3] = finnlib_source("rtl", "replay_buffer.sv")
 
         return verilog_files
 

@@ -78,8 +78,24 @@ fi
 gecho "  PASSED"
 echo ""
 
-# Test 2: Streamline transformation tests (no Vivado required)
-gecho "Test 2: Streamline transformation tests..."
+# Test 2: Dataflow model and design tests (no toolchain required)
+gecho "Test 2: Dataflow model and design tests..."
+
+cd "$FINN_ROOT"
+pytest tests/dataflow \
+    --maxfail=3 \
+    -q \
+    --tb=short
+
+if [ $? -ne 0 ]; then
+    recho "Dataflow tests failed!"
+    exit 1
+fi
+gecho "  PASSED"
+echo ""
+
+# Test 3: Streamline transformation tests (no Vivado required)
+gecho "Test 3: Streamline transformation tests..."
 
 cd "$FINN_ROOT"
 # Run only streamline tests - these are stable and don't have xfail/skip
@@ -98,8 +114,8 @@ fi
 gecho "  PASSED"
 echo ""
 
-# Test 3: Utility tests
-gecho "Test 3: Utility tests..."
+# Test 4: Utility tests
+gecho "Test 4: Utility tests..."
 
 # Run specific util tests that don't have xfail/skip
 pytest tests/util/test_create.py \
@@ -118,10 +134,10 @@ fi
 gecho "  PASSED"
 echo ""
 
-# Test 4: Vivado integration sanity test (optional)
+# Test 5: Vivado integration sanity test (optional)
 if [ "$MODE" = "vivado" ]; then
     if [ -n "$XILINX_VIVADO" ]; then
-        gecho "Test 4a: Vivado cppsim test (HLS LayerNorm)..."
+        gecho "Test 5a: Vivado cppsim test (HLS LayerNorm)..."
 
         # cppsim test - tests HLS C++ simulation
         pytest -k "test_fpgadataflow_hls_layernorm and cppsim and idt0 and ishape0" \
@@ -136,7 +152,7 @@ if [ "$MODE" = "vivado" ]; then
         gecho "  PASSED"
         echo ""
 
-        gecho "Test 4b: Vivado node-by-node rtlsim test (HLS LayerNorm)..."
+        gecho "Test 5b: Vivado node-by-node rtlsim test (HLS LayerNorm)..."
 
         # node_by_node rtlsim test - tests RTL simulation per node
         pytest -k "test_fpgadataflow_hls_layernorm and node_by_node and idt0 and ishape0" \
@@ -151,7 +167,7 @@ if [ "$MODE" = "vivado" ]; then
         gecho "  PASSED"
         echo ""
 
-        gecho "Test 4c: Vivado stitched IP rtlsim test (HLS LayerNorm)..."
+        gecho "Test 5c: Vivado stitched IP rtlsim test (HLS LayerNorm)..."
 
         # stitched_ip rtlsim test - tests RTL simulation of stitched IP
         pytest -k "test_fpgadataflow_hls_layernorm and stitched_ip and idt0 and ishape0" \
@@ -165,7 +181,7 @@ if [ "$MODE" = "vivado" ]; then
         fi
         gecho "  PASSED"
     else
-        yecho "Test 4: Skipping Vivado tests (XILINX_VIVADO not set)"
+        yecho "Test 5: Skipping Vivado tests (XILINX_VIVADO not set)"
     fi
     echo ""
 fi

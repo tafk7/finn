@@ -1,0 +1,200 @@
+{
+  "cases": 26,
+  "equal_after_explicit_relocation": true,
+  "normalization": {
+    "compile_order": "ordered rendered source paths compared exactly after path/name relocation",
+    "generated_names": "recomputed from relocated requirements; only top module declaration renamed",
+    "module_map": "relocation-map.json",
+    "source_paths": {
+      "src/finn/dataflow/kernels/resources/cyclic_stream.sv": "cyclic_stream.sv",
+      "src/finn/dataflow/kernels/resources/dotp_axi.sv": "dotp_axi.sv"
+    },
+    "source_root": {
+      "finn": "kernels"
+    }
+  },
+  "results": {
+    "dotp/DSP48E1/False": {
+      "new_entry_point": "dotp_axi",
+      "new_fingerprint": "4df9877100b3675da15ac4e6186bef430a49e6e6f3ae9dfb1d52ca42adc8f820",
+      "old_entry_point": "dotp_axi",
+      "old_fingerprint": "7a78671788bc3620ca7cf1b57804904a87da79ec7436206633af0e5ba868418d",
+      "source_count": 5
+    },
+    "dotp/DSP48E1/True": {
+      "new_entry_point": "dotp_axi",
+      "new_fingerprint": "52ed83cb9c8571936f707b393c300def4739e94b675c8811a815e6b4117cbee4",
+      "old_entry_point": "dotp_axi",
+      "old_fingerprint": "48e76fe27ee7c25117908468d34defe94243be6700cc923c298d86e8193fb561",
+      "source_count": 5
+    },
+    "dotp/DSP48E2/False": {
+      "new_entry_point": "dotp_axi",
+      "new_fingerprint": "73963088797464c4c29752e059d9f3f2322062566f8ea8f9395bc52f4d3a59ee",
+      "old_entry_point": "dotp_axi",
+      "old_fingerprint": "ee79fc4ec24644b6fa64f7cf4260fd9ebf87226b25322e467a7c2f5ca424d4a8",
+      "source_count": 5
+    },
+    "dotp/DSP48E2/True": {
+      "new_entry_point": "dotp_axi",
+      "new_fingerprint": "df41f89a3d9ad89b9798851aaeca65b9d3261f23eee4065266ac374fe09dec67",
+      "old_entry_point": "dotp_axi",
+      "old_fingerprint": "f890d66ca441046279859bc424d72b103fa2031a6a43261691ce6ff3e73d27f6",
+      "source_count": 5
+    },
+    "dotp/DSP58/False": {
+      "new_entry_point": "dotp_axi",
+      "new_fingerprint": "62de48f6130c377185190b76394acd96b88c81e72f2e4333ae90166be09913fe",
+      "old_entry_point": "dotp_axi",
+      "old_fingerprint": "c52bc9367cf3b65183c2a8105c4990ca9724b53143a7ddb31b3d307a4befde6c",
+      "source_count": 5
+    },
+    "dotp/DSP58/True": {
+      "new_entry_point": "dotp_axi",
+      "new_fingerprint": "45b4aceff4c2d6c64d76596cd792e946b13973ff1b6ef9a685e4d483443dcf36",
+      "old_entry_point": "dotp_axi",
+      "old_fingerprint": "4f6b388b0a1de91d7d05cee41a470ac6f2df4841edcf70fa75ff8cce0bde0032",
+      "source_count": 5
+    },
+    "mvau/DSP48E1/False/cyclic": {
+      "new_entry_point": "finn_mvau_cyclic__b41c58b4b4abc8fa4cc6c17b90b34916efd90d6176fd8008123d3812e6d193ae",
+      "new_fingerprint": "a4992aba574c50047b9f61d374a0bb28cf09d97b143816a7f98c9b350187ddab",
+      "old_entry_point": "finn_mvau_cyclic__0dddf4bc8a4e33d99ae49c20e4154890edcc8185239b13fca5ad8507c6e9ce46",
+      "old_fingerprint": "7f62b208b6061de301e2df2bf84874f0a3c2dbec45824f84fca4338b976e0140",
+      "source_count": 8
+    },
+    "mvau/DSP48E1/False/external": {
+      "new_entry_point": "finn_mvau_external__4e37f7f1f485a4c7c347603a486786a32157a33b08755d7cb5ba0795724f6f60",
+      "new_fingerprint": "eb37d5c5c670288ec55347e6f9454d7cb588267ab363fadc1de6ab60ae1f6d19",
+      "old_entry_point": "finn_mvau_external__c640bf591e64721dbef36cf496a93696fee59e9a3de803512b8e68d49f39ca29",
+      "old_fingerprint": "3821cbe6b133dd3b4094bdf2cb3c480e4febbab6b4b017f84d2f8c1768e52b7e",
+      "source_count": 7
+    },
+    "mvau/DSP48E1/True/cyclic": {
+      "new_entry_point": "finn_mvau_cyclic__1eef415a121be5f6bbe0ac554a605e0d6369c7206a4c82d24616d100bceb9900",
+      "new_fingerprint": "0746b6dcbfe6ecfb4a450d03fd68bf8a202b378030de3b5accea0f35587a42ee",
+      "old_entry_point": "finn_mvau_cyclic__8fb684c2872bafb387c1aeecbfc8f0aa2291b3013e8e18e94b0747ac6f7be484",
+      "old_fingerprint": "35947ca73bc7ad37e1b9758b2f53f9231f76eb906933bf7a6633d6193e678501",
+      "source_count": 8
+    },
+    "mvau/DSP48E1/True/external": {
+      "new_entry_point": "finn_mvau_external__6d2ca7c98f1d6f917e1b32e5c4b0790633b2962f326949585006c1a327d13144",
+      "new_fingerprint": "a401af7e475444b41f93b6abf9e3c819bea9d1af6533f03603146602fe605308",
+      "old_entry_point": "finn_mvau_external__6751ebe92876debafdf5b6546adef0e85a764de832e61f41b832947f8b4ec924",
+      "old_fingerprint": "dd8a70323f7ff55b994a7ef1bf0a373019de05bb74346415c2f2fd5d6b736af0",
+      "source_count": 7
+    },
+    "mvau/DSP48E2/False/cyclic": {
+      "new_entry_point": "finn_mvau_cyclic__814b321bf65b4a43c8c54fd31ad26ce074a1658aeeb50a731f54184968e3b502",
+      "new_fingerprint": "58ffd81c6dd930a463424690331c05cb67e5d0b09891411eb08442ab4d5b63e5",
+      "old_entry_point": "finn_mvau_cyclic__9243147dfb413ce3cd69e6932745e4244cbc8131e44a4fe1b95e0f2ab31a69b7",
+      "old_fingerprint": "e6dece8a2b25d63c1329b9962f6b6aa51378c955bb5e188943f2060f7772386b",
+      "source_count": 8
+    },
+    "mvau/DSP48E2/False/external": {
+      "new_entry_point": "finn_mvau_external__ca0abf29211d113d83c44c6bb3ad892ede61b4e0a2336deffcbf211d20f53140",
+      "new_fingerprint": "9d08adb213c7225556c1f0b31bb7540940aa00a84e2d4d5a8555d68762fe2342",
+      "old_entry_point": "finn_mvau_external__561df2d8007e90632c73c0f401196a786c077f8e26104017080d382f83ec66b8",
+      "old_fingerprint": "f05e5455d1eb88171df7269ab82471cfcaa40dff261a92bc3c219122e63cd1d4",
+      "source_count": 7
+    },
+    "mvau/DSP48E2/True/cyclic": {
+      "new_entry_point": "finn_mvau_cyclic__51fe3ba6df0bc58b3c96b507bf9590d50006f022e59eba3be08dd2c0cc062215",
+      "new_fingerprint": "cd206342e8a0dc948de0185ba9f82e24690fcbdb9670923da56023a6fb8f3df0",
+      "old_entry_point": "finn_mvau_cyclic__a22da0c7cb0e4f0946c75ac475f4a6d04e87414dbb7b1a988542cc592f205066",
+      "old_fingerprint": "e25ed366e1445827f66546a13ddd3f94cb922833a717da633a47d4bf58fd3171",
+      "source_count": 8
+    },
+    "mvau/DSP48E2/True/external": {
+      "new_entry_point": "finn_mvau_external__24158ab966e074b43e65a8355b9c3783cebc51420ac66d3c486db1e6526182d0",
+      "new_fingerprint": "69ce1a7497b30e92345108e4de9ba257dc1638608146deb00c806f7d307125ec",
+      "old_entry_point": "finn_mvau_external__e38d65f82fd852db16798d7b81cfc2f3b1609cec76c450982d6726848a84295a",
+      "old_fingerprint": "82a28edfc321e548a20073ffe5b7655637b31dd8819ecd52dabcce5a94252091",
+      "source_count": 7
+    },
+    "mvau/DSP58/False/cyclic": {
+      "new_entry_point": "finn_mvau_cyclic__a85c0db8884461e2e243814398986ee41b1bae24969053c182f3f17986d22afc",
+      "new_fingerprint": "e94bbffc90db1c0c16954b96dba52e8b24f84a6c20c93ad625eb6c0e2005347b",
+      "old_entry_point": "finn_mvau_cyclic__b2fa989fb9d6d4cf5854a09cd84876b52880a3a5a583bcb05e32c2de666a7668",
+      "old_fingerprint": "5752a0912e433e459d660dc789f723c3ab9b3e789425d1ed63cafb5c069e8955",
+      "source_count": 8
+    },
+    "mvau/DSP58/False/external": {
+      "new_entry_point": "finn_mvau_external__bdeabcf87b0a8ec3edfb7de908eef4994018f5476f0b4b71e7bcff18942980b5",
+      "new_fingerprint": "e0309fca004d2227ecf15ae0474c8e427822775bee18d4719a881acff5b23843",
+      "old_entry_point": "finn_mvau_external__ff3be49eae2455e9b62e6afe348306cd54335bcd6c1590e9a449a9402819569c",
+      "old_fingerprint": "9497744e7c4f5d5fdc90e32eb3fa7db7958a752d44adceeb42c5a27dc87ad060",
+      "source_count": 7
+    },
+    "mvau/DSP58/True/cyclic": {
+      "new_entry_point": "finn_mvau_cyclic__22307fbc6ed755b795aa04f704d1361c7d9612e2ecfb64365e347da2314329e9",
+      "new_fingerprint": "7c7549cb63621bb135b64561d397a3af77cd6401d55413d34ea4b798bbebffb8",
+      "old_entry_point": "finn_mvau_cyclic__f9d32d2713cdb6e9cca3a39cef3b45808ed650a94d06e67011c5099382ddfc45",
+      "old_fingerprint": "c74256009e4a115c31f13b98d8570c1961d9f1483d53b715b4733514c207433d",
+      "source_count": 8
+    },
+    "mvau/DSP58/True/external": {
+      "new_entry_point": "finn_mvau_external__26adc8e472a57d807bf1a073e0e2568c8d81c5cffd35d3fe6e4c8d05d4742db6",
+      "new_fingerprint": "ba55b890f4775e80c50128076b53cf0105cb68cbf72ac2c864a1b8e73c4ec728",
+      "old_entry_point": "finn_mvau_external__27090a00980765cda742e470d53eea09788d63a28d6b307a46102b5d9ffe8195",
+      "old_fingerprint": "f96f9d88aa9d107228091da0632623441553b0f225ff1fc1fbab94d34a13a678",
+      "source_count": 7
+    },
+    "stress/one_beat_dsp58": {
+      "new_entry_point": "dotp_axi",
+      "new_fingerprint": "d993426913b65c2d48228fe11e6fb54b8e70fc6d07eb484f87abb36b55f518b6",
+      "old_entry_point": "dotp_axi",
+      "old_fingerprint": "2131609dae9a919d147b53230f2f023762068d83917f43acabb318e9c74ae2a8",
+      "source_count": 5
+    },
+    "stress/one_beat_e1": {
+      "new_entry_point": "dotp_axi",
+      "new_fingerprint": "e7c3e2735dfd12e44ec0e52dc1cb8385676c41ab24bf405694086699bef09c78",
+      "old_entry_point": "dotp_axi",
+      "old_fingerprint": "f1a9bd711c258149f1df069aef17e605afe06d7c044fac5e185531f64155adbd",
+      "source_count": 5
+    },
+    "stress/one_beat_int8": {
+      "new_entry_point": "dotp_axi",
+      "new_fingerprint": "2faaab97aeb5b178480736fdbfd377ba403de82a8bbfbfd5b871ec075a01c60e",
+      "old_entry_point": "dotp_axi",
+      "old_fingerprint": "2baa09f12670a0e6675b1915c48f0b5a30d6829968a8fc284e4a44c4c60817d7",
+      "source_count": 5
+    },
+    "stress/one_beat_int8_pumped": {
+      "new_entry_point": "dotp_axi",
+      "new_fingerprint": "066cd476b9fe01d0d100d752a493d9e6f85ada6b5ae4356f142706a53876000c",
+      "old_entry_point": "dotp_axi",
+      "old_fingerprint": "9492deefe99444721c6be2e93b20144a80e493d0d4a9c252f1ebd874e8b5cd31",
+      "source_count": 5
+    },
+    "stress/one_beat_int8_segmented": {
+      "new_entry_point": "dotp_axi",
+      "new_fingerprint": "61f062d14139c8d32d113a4d6f47a37fdcb982d9fd9d38b362db6beea5950718",
+      "old_entry_point": "dotp_axi",
+      "old_fingerprint": "acd665512d6544de66a5ba9c59224bcf06212d5a94a9e263ed07fa4d24f1cd7c",
+      "source_count": 5
+    },
+    "stress/one_beat_segmented_pumped": {
+      "new_entry_point": "dotp_axi",
+      "new_fingerprint": "241a8da0b0f43e6156d52342a8e4f268aa5b89d0a02c3ffda88f648dfcb4cb8f",
+      "old_entry_point": "dotp_axi",
+      "old_fingerprint": "1fbe889519a049ab74f155e6ed0770c3005187e848d9e63523724edada70377c",
+      "source_count": 5
+    },
+    "stress/one_beat_softvec_pumped": {
+      "new_entry_point": "dotp_axi",
+      "new_fingerprint": "d055427eaaa7a9eaeaec8d1f916414491d2d740ff0ca6763d5c1711f8137988e",
+      "old_entry_point": "dotp_axi",
+      "old_fingerprint": "ba04f48adc5ae6d6723ac4f539259cb09ef06c9c45c557a5ae95f962c0b93bda",
+      "source_count": 5
+    },
+    "stress/single_e1": {
+      "new_entry_point": "dotp_axi",
+      "new_fingerprint": "2b740c66f7dc369d7d2c4f02e38d21d7439ab4634b75984c541c1360f3a5bfb7",
+      "old_entry_point": "dotp_axi",
+      "old_fingerprint": "fa35e4b5245db6602140528ec6415c2cca2fd54ba344abd08e5b4603575084ea",
+      "source_count": 5
+    }
+  }
+}

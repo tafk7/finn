@@ -1,0 +1,553 @@
+# Copyright (C) 2026, Advanced Micro Devices, Inc.
+# SPDX-License-Identifier: BSD-3-Clause
+
+"""Authoring examples assessed against native modules, not copied width formulas."""
+
+from pathlib import Path
+import os
+import shutil
+import struct
+import subprocess
+
+import pytest
+from qonnx.core.datatype import DataType
+import pyslang
+from pyslang import ast, syntax
+
+from kernels.helpers import point_for
+from finn.kernels import (
+    EltwiseKernel,
+    FifoKernel,
+    InputGeneratorKernel,
+    IntToFp32Kernel,
+    MemStreamHlsKernel,
+    ThresholdingAxiKernel,
+)
+from finn.kernels.artifacts.abi import Bus
+from finn.kernels.artifacts.build import prepare_module_build, render_module_sources
+from finn.kernels.artifacts.contribution_types import CopiedSource
+from finn.kernels.artifacts.hls import render_hls_sources
+from finn.kernels.artifacts.rtl import TOLERATED_DIAGNOSTICS
+from finn.kernels.artifacts.store import ArtifactStore
+from finn.kernels.resources import resource_root, template_root
+from finn.kernels.datatypes.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
+from finn.core.space import Param, Rejected, Space, Subspace, Unresolved
+from finn.core.space.errors import RequestError
+from finn.kernels.target import DspBlock
+
+ROOT = Path(__file__).resolve().parents[2]
+FINNLIB = ROOT / "deps/finnlib"
+SOURCE_ROOTS = {"finnlib": FINNLIB, "kernels": resource_root()}
+
+
+def fifo(**changes):
+    facts = dict(word_bits=13, depth=8)
+    facts.update(changes)
+    return point_for(FifoKernel, facts, ram_style="auto")
+
+
+def generator(**changes):
+    facts = dict(word_bits=13, frame_words=6, extents=(3, 6), strides=(0, 1))
+    facts.update(changes)
+    return point_for(InputGeneratorKernel, facts, ram_style="auto")
+
+
+def eltwise(**changes):
+    facts = dict(
+        operation="ADD",
+        pe=2,
+        lhs_dtype=DataType["INT3"],
+        rhs_dtype=DataType["INT3"],
+        b_scale=1.0,
+        target_dsp=DspBlock.DSP58,
+    )
+    facts.update(changes)
+    return point_for(EltwiseKernel, facts)
+
+
+def threshold(*, use_axilite=False, deep_pipeline=False, **changes):
+    facts = dict(
+        input_dtype=DataType["INT8"],
+        threshold_dtype=DataType["INT5"],
+        thresholds=(((-2, 0, 3), (-1, 1, 4)),),
+        pe=1,
+        bias=-1,
+        depth_trigger_bram=0,
+        depth_trigger_uram=0,
+    )
+    facts.update(changes)
+    return point_for(
+        ThresholdingAxiKernel, facts, use_axilite=use_axilite, deep_pipeline=deep_pipeline
+    )
+
+
+def converter(dtype="INT9"):
+    return point_for(IntToFp32Kernel, dict(input_dtype=DataType[dtype]))
+
+
+def memstream(dtype="INT9", depth=3):
+    return point_for(MemStreamHlsKernel, dict(element_dtype=DataType[dtype], depth=depth))
+
+
+def native_ports(requirements, tmp_path):
+    """Elaborate a real child so string/array parameters remain native SV values."""
+    options = ast.CompilationOptions()
+    options.topModules = {"probe"}
+    options.flags = ast.CompilationFlags.IgnoreUnknownModules
+    compilation = ast.Compilation(pyslang.Bag([options]))
+    for contribution in requirements.contributions:
+        assert isinstance(contribution, CopiedSource)
+        compilation.addSyntaxTree(
+            syntax.SyntaxTree.fromFile(str(SOURCE_ROOTS[contribution.root] / contribution.path))
+        )
+    parameters = ", ".join(f".{name}({raw})" for name, raw in requirements.abi.parameters)
+    wrapper = tmp_path / "probe.sv"
+    wrapper.write_text(
+        f"module probe; {requirements.abi.entry_point.value} #({parameters}) native(); endmodule\n"
+    )
+    compilation.addSyntaxTree(syntax.SyntaxTree.fromFile(str(wrapper)))
+    errors = [
+        d
+        for d in compilation.getAllDiagnostics()
+        if d.isError() and str(d.code) not in TOLERATED_DIAGNOSTICS
+    ]
+    if errors:
+        engine = pyslang.DiagnosticEngine(compilation.sourceManager)
+        client = pyslang.TextDiagnosticClient()
+        engine.addClient(client)
+        for diagnostic in errors:
+            engine.issue(diagnostic)
+        pytest.fail(client.getString())
+    probe = compilation.getRoot().topInstances[0]
+    native = next(member for member in probe.body if member.name == "native")
+    return {
+        port.name: (
+            {"In": "input", "Out": "output", "InOut": "inout"}[str(port.direction).split(".")[-1]],
+            port.type.bitstreamWidth,
+        )
+        for port in native.body.portList
+    }
+
+
+@pytest.mark.parametrize(
+    "factory",
+    [
+        fifo,
+        lambda: fifo(depth=64, word_bits=17),
+        generator,
+        lambda: generator(frame_words=56, extents=(3, 4, 2, 3), strides=(16, 1, 16, 2)),
+        converter,
+        lambda: converter("BINARY"),
+        lambda: converter("INT128"),
+        eltwise,
+        lambda: eltwise(operation="SUB", lhs_dtype=DataType["UINT7"], rhs_dtype=DataType["UINT7"]),
+        lambda: eltwise(operation="MUL", lhs_dtype=DataType["FLOAT32"]),
+        lambda: eltwise(lhs_dtype=DataType["FLOAT32"], rhs_dtype=DataType["FLOAT32"], b_scale=0.25),
+        threshold,
+        lambda: threshold(use_axilite=True, deep_pipeline=True),
+        lambda: threshold(pe=4),
+        lambda: threshold(thresholds=(((-2, 0, 3), (-1, 1, 4)), ((-3, 0, 5), (-2, 0, 6)))),
+    ],
+)
+def test_native_rtl_pin_names_directions_and_widths(factory, tmp_path):
+    point = factory()
+    requirements = point.build_requirements()
+    observed = native_ports(requirements, tmp_path)
+    declared = {}
+    for port in requirements.abi.ports:
+        if isinstance(port, Bus):
+            directions = dict(port.member_directions())
+            declared.update(
+                {
+                    member.physical: (directions[member.physical].value, member.width)
+                    for member in port.signals
+                }
+            )
+        else:
+            declared[port.name] = (port.direction.value, port.width)
+    assert observed == declared
+    prepared = prepare_module_build(
+        requirements,
+        roots=SOURCE_ROOTS,
+        template_roots=(),
+        blobs=ArtifactStore(tmp_path / "store"),
+    )
+    contents = dict(render_module_sources(prepared, ArtifactStore(tmp_path / "store")).contents)
+    assert set(contents) == {source.path for source in requirements.contributions}
+
+
+@pytest.mark.parametrize(
+    "factory",
+    [
+        lambda: fifo(word_bits=0),
+        lambda: fifo(depth=1),
+        lambda: generator(extents=()),
+        lambda: generator(strides=(1,)),
+        lambda: generator(extents=(2, 6), strides=(1, 1)),
+        lambda: generator(strides=(-1, 1)),
+        lambda: converter("FLOAT32"),
+        lambda: converter("BIPOLAR"),
+        lambda: converter("INT129"),
+        lambda: eltwise(pe=0),
+        lambda: eltwise(operation="DIV"),
+        lambda: eltwise(lhs_dtype=DataType["INT4"]),
+        lambda: eltwise(lhs_dtype=DataType["BIPOLAR"]),
+        lambda: eltwise(b_scale=1e100),
+        lambda: eltwise(b_scale=0.5),
+        lambda: eltwise(operation="MUL", lhs_dtype=DataType["FLOAT32"], b_scale=0.5),
+        lambda: eltwise(lhs_dtype=DataType["FLOAT32"], target_dsp=DspBlock.DSP48E2),
+        lambda: threshold(thresholds=()),
+        lambda: threshold(pe=0),
+        lambda: threshold(pe=3),
+        lambda: threshold(thresholds=(((2, 1),),)),
+        lambda: threshold(thresholds=(((0, 20),),)),
+        lambda: threshold(thresholds=(((0,), (0, 1)),)),
+        lambda: threshold(threshold_dtype=DataType["UINT5"]),
+        lambda: threshold(bias=1 << 31),
+        lambda: threshold(bias=-10),
+        lambda: threshold(use_axilite=True, thresholds=(((0, 1),), ((0, 1),))),
+        lambda: memstream(depth=1),
+        lambda: memstream(dtype="BIPOLAR"),
+    ],
+)
+def test_unsupported_cases_are_refused_without_constructing_invalid_interfaces(factory):
+    assert isinstance(factory().build_requirements.inspect().accepted_result, Rejected)
+
+
+def test_typed_integer_vectors_and_tables_reject_mutable_or_mistyped_payloads():
+    invalid_scale = eltwise(b_scale=float("nan"))
+    assert isinstance(invalid_scale.query(EltwiseKernel.native_scale), Rejected)
+    assert isinstance(invalid_scale.build_requirements.inspect().accepted_result, Rejected)
+    for bad in ([3, 6], (3, True), (3, [6])):
+        with pytest.raises(RequestError):
+            generator(extents=bad)
+    with pytest.raises(RequestError):
+        threshold(thresholds=(([-2, 0, 3],),))
+
+
+@pytest.mark.parametrize(
+    "operation,a,b,result",
+    [
+        ("ADD", "INT3", "INT3", "INT4"),
+        ("ADD", "UINT3", "UINT3", "UINT4"),
+        ("SUB", "UINT3", "UINT3", "INT4"),
+        ("SBR", "UINT3", "UINT3", "INT4"),
+        ("MUL", "UINT3", "UINT3", "UINT6"),
+        ("MUL", "INT3", "INT3", "INT6"),
+        ("ADD", "INT9", "FLOAT32", "FLOAT32"),
+    ],
+)
+def test_elementwise_output_encoding_follows_operation_and_operand_types(operation, a, b, result):
+    point = eltwise(operation=operation, lhs_dtype=DataType[a], rhs_dtype=DataType[b])
+    point.build_requirements()
+    assert point.result_dtype == DataType[result]
+
+
+def test_rounding_of_scale_is_explicit_and_precedes_native_support_checks():
+    point = eltwise(b_scale=1.0 + 2**-30)
+    assert point.native_scale == 1.0
+    assert dict(point.build_requirements().parameters)["B_SCALE"] == "1.0"
+
+
+def test_threshold_initialization_is_owned_and_changes_the_build_requirements():
+    a = threshold().build_requirements()
+    b = threshold(thresholds=(((-2, 0, 2), (-1, 1, 4)),)).build_requirements()
+    assert dict(a.parameters)["THRESHOLDS"] == "'{'{'{5'h1e, 5'h0, 5'h3}, '{5'h1f, 5'h1, 5'h4}}}"
+    assert a != b
+    assert threshold().result_dtype == DataType["INT3"]
+    assert threshold(bias=0).result_dtype == DataType["UINT2"]
+
+
+def test_required_root_bindings_and_explicit_optional_inputs_preserve_partial_queries():
+    for kernel in (
+        FifoKernel,
+        InputGeneratorKernel,
+        EltwiseKernel,
+        IntToFp32Kernel,
+        ThresholdingAxiKernel,
+        MemStreamHlsKernel,
+    ):
+        with pytest.raises(RequestError):
+            point_for(kernel, {})
+
+    class OptionalConverter(Space):
+        converter = Subspace(
+            IntToFp32Kernel,
+            input_dtype=Param(QONNX_DATATYPE_VALUE_SEMANTICS, required=False),
+        )
+
+    point = OptionalConverter().converter
+    assert point.result_dtype == DataType["FLOAT32"]
+    assert isinstance(point.build_requirements.inspect().accepted_result, Unresolved)
+    assert all(not isinstance(port, Bus) for port in fifo().build_requirements().abi.ports)
+    assert {port.name for port in converter().build_requirements().abi.ports} == {
+        "ival",
+        "fval",
+    }
+
+
+@pytest.mark.parametrize(
+    "dtype,cpp",
+    [
+        ("INT9", "ap_int<9>"),
+        ("UINT3", "ap_uint<3>"),
+        ("BINARY", "ap_uint<1>"),
+        ("FLOAT32", "float"),
+    ],
+)
+def test_hls_sources_have_native_function_interfaces_and_complete_header_closure(
+    dtype, cpp, tmp_path
+):
+    point = memstream(dtype=dtype)
+    requirements = point.build_requirements()
+    assert point.cpp_type == cpp
+    assert not hasattr(requirements, "abi")
+    assert [(p.name, p.cpp_type, p.shape, p.mode) for p in requirements.interfaces] == [
+        ("mem", cpp, (3,), "s_axilite"),
+        ("dst", cpp, (), "axis"),
+    ]
+    files = dict(
+        render_hls_sources(
+            requirements, roots={"finnlib": FINNLIB}, template_roots=(template_root(),)
+        )
+    )
+    assert set(files) == {"hls/util.hpp", "hls/memstream.hpp", "memstream_hls.cpp"}
+    top = files["memstream_hls.cpp"].decode()
+    assert f"using element_t = {cpp};" in top
+    assert "(&mem)[3]" in top
+    assert "port=return bundle=control" in top
+
+
+def test_generated_hls_top_executes_signed_values_and_wraps_with_real_vendor_headers(tmp_path):
+    requirements = memstream().build_requirements()
+    files = render_hls_sources(
+        requirements, roots={"finnlib": FINNLIB}, template_roots=(template_root(),)
+    )
+    for path, data in files:
+        target = tmp_path / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(data)
+    headers = Path(os.environ.get("VITIS_HLS_INCLUDE", "/home/tkeller/Xilinx/2025.2/Vitis/include"))
+    if not (headers / "hls_stream.h").is_file():
+        pytest.skip("Vitis headers are required for this explicit HLS C++ check")
+    testbench = tmp_path / "test.cpp"
+    testbench.write_text("""#include "memstream_hls.cpp"
+int main() {
+    const element_t memory[3] = {-256, 0, 255};
+    hls::stream<element_t> output;
+    for (int i=0; i<12; ++i) {
+        memstream_hls(memory, output);
+        if (output.read() != memory[i%3]) return 1;
+    }
+    return output.empty() ? 0 : 2;
+}
+""")
+    command = ["g++", "-std=c++17", "-Wno-unknown-pragmas", "-I" + str(headers)]
+    command += ["-I" + str(tmp_path / path) for path in requirements.include_directories]
+    command += [str(testbench), "-o", str(tmp_path / "test")]
+    compiled = subprocess.run(command, capture_output=True, text=True, timeout=120)
+    assert compiled.returncode == 0, compiled.stdout + compiled.stderr
+    subprocess.run([str(tmp_path / "test")], check=True, timeout=30)
+
+
+def simulate(requirements, body, tmp_path):
+    parameters = ", ".join(f".{key}({raw})" for key, raw in requirements.abi.parameters)
+    testbench = tmp_path / "numeric.sv"
+    testbench.write_text(
+        "`timescale 1ns/1ps\n"
+        + body.replace("@DUT@", requirements.abi.entry_point.value + " #(" + parameters + ")")
+    )
+    sources = [SOURCE_ROOTS[source.root] / source.path for source in requirements.contributions]
+    vivado = Path(os.environ.get("XILINX_VIVADO", str(Path(shutil.which("xelab")).parent.parent)))
+    sources.append(vivado / "data/verilog/src/glbl.v")
+    commands = (
+        ["xvlog", "--sv", *(str(path) for path in sources), str(testbench)],
+        [
+            "xelab",
+            "work.numeric",
+            "work.glbl",
+            "--mt",
+            "2",
+            "-L",
+            "unisims_ver",
+            "-L",
+            "unimacro_ver",
+            "--snapshot",
+            "numeric",
+            "--timescale",
+            "1ns/1ps",
+        ],
+        ["xsim", "numeric", "--runall"],
+    )
+    for index, command in enumerate(commands):
+        result = subprocess.run(command, cwd=tmp_path, capture_output=True, text=True, timeout=120)
+        (tmp_path / f"step-{index}.log").write_text(result.stdout + result.stderr)
+        assert result.returncode == 0, result.stdout + result.stderr
+    assert "FLAT_KERNEL_PASS" in result.stdout, result.stdout + result.stderr
+
+
+def float_bits(value):
+    return struct.unpack("<I", struct.pack("<f", value))[0]
+
+
+def flow_case(case):
+    """Independent numeric/sequence expectations, using each native interface."""
+    if case == "fifo":
+        point = fifo()
+        inputs = [0, 1, 8191, 42, 500, 127, 4096, 19]
+        return (
+            point,
+            13,
+            1,
+            13,
+            inputs,
+            [],
+            inputs,
+            "",
+            ".clk, .rst, .idat(adat), .ivld(avld), .irdy(ardy), .odat, .ovld, .ordy",
+        )
+    if case == "generator":
+        point = generator(frame_words=4, extents=(2, 4), strides=(0, 1))
+        inputs = [10, 20, 30, 40, 50, 60, 70, 80]
+        outputs = []
+        for frame in (inputs[:4], inputs[4:]):
+            for i, item in enumerate(frame * 2):
+                last = (2 if i % 4 == 3 else 0) | (1 if i == 7 else 0)
+                outputs.append(item | (last << 13))
+        extra = (
+            "wire [12:0] native_data; wire [1:0] native_last; "
+            "assign odat={native_last,native_data};"
+        )
+        return (
+            point,
+            13,
+            1,
+            15,
+            inputs,
+            [],
+            outputs,
+            extra,
+            ".clk, .rst, .idat(adat), .ivld(avld), .irdy(ardy), "
+            ".odat(native_data), .olst(native_last), .ovld, .ordy",
+        )
+    if case == "threshold":
+        point = threshold()
+        numbers = [-100, -1, 0, 4, 100, 0, -2, -100]
+        rows = ((-2, 0, 3), (-1, 1, 4))
+        outputs = [
+            (sum(t <= max(-16, min(15, item)) for t in rows[i % 2]) - 1) & 7
+            for i, item in enumerate(numbers)
+        ]
+        connections = (
+            ".ap_clk(clk), .ap_rst_n(!rst), .s_axis_tdata(adat), .s_axis_tvalid(avld), "
+            ".s_axis_tready(ardy), .m_axis_tdata(odat), .m_axis_tvalid(ovld), "
+            ".m_axis_tready(ordy), .s_axis_set_tdata('0), .s_axis_set_tvalid(1'b0), "
+            ".s_axilite_AWVALID(1'b0), .s_axilite_WVALID(1'b0), .s_axilite_BREADY(1'b0), "
+            ".s_axilite_ARVALID(1'b0), .s_axilite_RREADY(1'b0), .s_axilite_AWADDR('0), "
+            ".s_axilite_ARADDR('0), .s_axilite_WDATA('0), .s_axilite_WSTRB('0)"
+        )
+        return point, 8, 1, 8, [item & 255 for item in numbers], [], outputs, "", connections
+    connections = ".clk, .rst, .adat, .avld, .ardy, .bdat, .bvld, .brdy, .odat, .ovld, .ordy"
+    if case == "integer":
+        point = eltwise(operation="SUB", lhs_dtype=DataType["UINT3"], rhs_dtype=DataType["UINT3"])
+        a, b = [(0, 7), (3, 1), (7, 7), (2, 5)], [(7, 0), (1, 7), (7, 7), (6, 2)]
+
+        def pack3(row):
+            return row[0] | (row[1] << 3)
+
+        outputs = [((x[0] - y[0]) & 15) | (((x[1] - y[1]) & 15) << 4) for x, y in zip(a, b)]
+        return point, 6, 6, 8, list(map(pack3, a)), list(map(pack3, b)), outputs, "", connections
+    point = eltwise(pe=1, rhs_dtype=DataType["FLOAT32"])
+    a, b = [-4, 3, -1, 0], [1.5, -2.5, 0.5, -0.25]
+    return (
+        point,
+        3,
+        32,
+        32,
+        [item & 7 for item in a],
+        list(map(float_bits, b)),
+        [float_bits(x + y) for x, y in zip(a, b)],
+        "",
+        connections,
+    )
+
+
+@pytest.mark.skipif(
+    not all(shutil.which(tool) for tool in ("xvlog", "xelab", "xsim")),
+    reason="Vivado simulation is unavailable",
+)
+@pytest.mark.parametrize("case", ("fifo", "generator", "threshold", "integer", "float"))
+def test_generated_rtl_preserves_values_sequences_and_backpressure(case, tmp_path):
+    point, a_width, b_width, o_width, a, b, expected, extra, connections = flow_case(case)
+    requirements = point.build_requirements()
+
+    def array(values, width):
+        return "'{" + ",".join(f"{width}'h{item:x}" for item in values) + "}"
+
+    body = f"""module numeric;
+    logic clk=0; always #5 clk=~clk;
+    logic rst=1;
+    logic [{a_width - 1}:0] adat;
+    logic [{b_width - 1}:0] bdat;
+    logic avld=0, bvld=0, ordy=0;
+    wire ardy, brdy, ovld;
+    wire [{o_width - 1}:0] odat;
+    {extra}
+    @DUT@ dut({connections});
+    logic [{a_width - 1}:0] inputs_a[{len(a)}] = {array(a, a_width)};
+    logic [{b_width - 1}:0] inputs_b[{max(1, len(b))}] = {array(b or [0], b_width)};
+    logic [{o_width - 1}:0] expected[{len(expected)}] = {array(expected, o_width)};
+    integer sent_a=0, sent_b=0, received=0;
+    logic held=0; logic [{o_width - 1}:0] held_data;
+    initial begin
+        repeat(25) @(negedge clk);
+        rst=0;
+        for(integer cycle=0;cycle<500;cycle=cycle+1) begin
+            @(negedge clk);
+            avld=sent_a<{len(a)};
+            bvld=sent_b<{len(b)};
+            adat=avld ? inputs_a[sent_a] : '0;
+            bdat=bvld ? inputs_b[sent_b] : '0;
+            ordy=(cycle%7)>=3;
+            @(posedge clk);
+            if(held && (!ovld || odat !== held_data)) $fatal(1,"output changed while stalled");
+            held=ovld && !ordy; held_data=odat;
+            if(avld && ardy) sent_a=sent_a+1;
+            if(bvld && brdy) sent_b=sent_b+1;
+            if(ovld && ordy) begin
+                if(received>={len(expected)}) $fatal(1,"extra output");
+                if(odat !== expected[received])
+                    $fatal(1,"output %0d: got %h expected %h",received,odat,expected[received]);
+                received=received+1;
+            end
+        end
+        if(sent_a!={len(a)} || sent_b!={len(b)} || received!={len(expected)})
+            $fatal(1,"missing transfers %0d %0d %0d",sent_a,sent_b,received);
+        $display("FLAT_KERNEL_PASS"); $finish;
+    end
+endmodule
+"""
+    simulate(requirements, body, tmp_path)
+
+
+@pytest.mark.skipif(
+    not all(shutil.which(tool) for tool in ("xvlog", "xelab", "xsim")),
+    reason="Vivado simulation is unavailable",
+)
+def test_combinational_conversion_uses_round_toward_zero(tmp_path):
+    requirements = converter("INT32").build_requirements()
+    body = """module numeric;
+    logic [31:0] ival; wire [31:0] fval;
+    @DUT@ dut(.ival, .fval);
+    initial begin
+        ival=0; #1; if(fval!==32'h00000000) $fatal;
+        ival=1; #1; if(fval!==32'h3f800000) $fatal;
+        ival=-1; #1; if(fval!==32'hbf800000) $fatal;
+        ival=32'h80000000; #1; if(fval!==32'hcf000000) $fatal;
+        ival=16777219; #1; if(fval!==32'h4b800001) $fatal;
+        ival=-16777219; #1; if(fval!==32'hcb800001) $fatal;
+        $display("FLAT_KERNEL_PASS"); $finish;
+    end
+endmodule
+"""
+    simulate(requirements, body, tmp_path)

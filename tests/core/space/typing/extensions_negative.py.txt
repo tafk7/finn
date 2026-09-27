@@ -1,0 +1,20 @@
+
+from finn.core.space import Param, View, derived
+from finn.core.space import (
+    Param, ScopeBuilder, Space, ValueKey, ViewKey, QueryResult, Available, ValueSemantics,
+)
+
+builder = ScopeBuilder(Space)
+number = builder.add('number', Param(int))
+text = builder.add('text', Param(str))
+view = builder.add('complete', View(number))
+builder.bind(number, "wrong")  # E
+builder.export(ValueKey("number", int)).value(text)  # E
+builder.export(ViewKey("complete", str)).view(view)  # E
+builder.export(ValueKey("value", int)).value(view)  # E
+builder.export(ViewKey("view", int)).view(number)  # E
+
+def wrong(*, number: int) -> QueryResult[str]:
+    return Available(str(number))
+
+builder.add('wrong', derived(semantics=ValueSemantics.immutable_nominal(int))(wrong))  # E

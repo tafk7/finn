@@ -1,0 +1,89 @@
+{
+  "exceptions": {
+    "tests/dataflow/space/test_value_semantics.py": "retained Region-specific semantics coverage"
+  },
+  "modules": {
+    "dataflow.artifacts": "kernels.artifacts",
+    "dataflow.engine": "kernels.engine",
+    "dataflow.kernels.rtlsim.mvau_assembly_numeric": "kernels.rtlsim.mvau_assembly_numeric",
+    "dataflow.kernels.rtlsim.pure_dot_product_numeric": "kernels.rtlsim.pure_dot_product_numeric",
+    "dataflow.kernels.test_axi_stream_declaration": "kernels.test_axi_stream_declaration",
+    "dataflow.kernels.test_dotp_axi_minimal": "kernels.test_dotp",
+    "dataflow.kernels.test_mvau_assembly": "kernels.test_mvau_assembly",
+    "dataflow.kernels.test_streaming_components": "kernels.test_streaming_components",
+    "dataflow.model.contract_helpers": "kernels.helpers",
+    "dataflow.rtlsim.rtl_transport": "kernels.rtlsim.rtl_transport",
+    "dataflow.rtlsim.test_observed_transport": "kernels.rtlsim.test_observed_transport",
+    "dataflow.space": "kernels.space",
+    "dataflow.typing.space_descriptor_types": "kernels.typing.space_descriptor_types",
+    "finn.dataflow._engine": "finn.kernels._engine",
+    "finn.dataflow.artifacts": "finn.kernels.artifacts",
+    "finn.dataflow.kernels.dotp_axi_minimal": "finn.kernels.dotp",
+    "finn.dataflow.kernels.matmul.resources": "finn.kernels.resources",
+    "finn.dataflow.kernels.mvau": "finn.kernels.mvau",
+    "finn.dataflow.kernels.streaming": "finn.kernels.streaming",
+    "finn.dataflow.kernels.target": "finn.kernels.target",
+    "finn.dataflow.model.kernel_base": "finn.kernels.base",
+    "finn.dataflow.model.logical.datatype_domains": "finn.kernels.datatypes.domains",
+    "finn.dataflow.model.logical.datatype_semantics": "finn.kernels.datatypes.semantics",
+    "finn.dataflow.model.logical.datatypes": "finn.kernels.datatypes.values",
+    "finn.dataflow.model.physical.axi_stream": "finn.kernels.physical.axi_stream",
+    "finn.dataflow.model.physical.layout": "finn.kernels.physical.layout",
+    "finn.dataflow.model.physical.lowering": "finn.kernels.physical.lowering",
+    "finn.dataflow.model.physical.structure": "finn.kernels.physical.structure",
+    "finn.dataflow.model.physical.validation": "finn.kernels.physical.validation",
+    "finn.dataflow.space": "finn.kernels.space"
+  },
+  "paths": {
+    "src/finn/dataflow/_engine": "src/finn/kernels/_engine",
+    "src/finn/dataflow/artifacts": "src/finn/kernels/artifacts",
+    "src/finn/dataflow/kernels/dotp_axi_minimal.py": "src/finn/kernels/dotp.py",
+    "src/finn/dataflow/kernels/matmul/resources.py": "src/finn/kernels/resources/__init__.py",
+    "src/finn/dataflow/kernels/matmul/templates/decomposed_wrapper.sv.j2": "src/finn/kernels/resources/decomposed_wrapper.sv.j2",
+    "src/finn/dataflow/kernels/mvau.py": "src/finn/kernels/mvau.py",
+    "src/finn/dataflow/kernels/resources": "src/finn/kernels/resources",
+    "src/finn/dataflow/kernels/streaming.py": "src/finn/kernels/streaming.py",
+    "src/finn/dataflow/kernels/target.py": "src/finn/kernels/target.py",
+    "src/finn/dataflow/model/kernel_base.py": "src/finn/kernels/base.py",
+    "src/finn/dataflow/model/logical/datatype_domains.py": "src/finn/kernels/datatypes/domains.py",
+    "src/finn/dataflow/model/logical/datatype_semantics.py": "src/finn/kernels/datatypes/semantics.py",
+    "src/finn/dataflow/model/logical/datatypes.py": "src/finn/kernels/datatypes/values.py",
+    "src/finn/dataflow/model/physical/axi_stream.py": "src/finn/kernels/physical/axi_stream.py",
+    "src/finn/dataflow/model/physical/layout.py": "src/finn/kernels/physical/layout.py",
+    "src/finn/dataflow/model/physical/lowering.py": "src/finn/kernels/physical/lowering.py",
+    "src/finn/dataflow/model/physical/structure.py": "src/finn/kernels/physical/structure.py",
+    "src/finn/dataflow/model/physical/validation.py": "src/finn/kernels/physical/validation.py",
+    "src/finn/dataflow/space": "src/finn/kernels/space",
+    "tests/dataflow/artifacts": "tests/kernels/artifacts",
+    "tests/dataflow/engine": "tests/kernels/engine",
+    "tests/dataflow/kernels/rtlsim/mvau_assembly_numeric.py": "tests/kernels/rtlsim/mvau_assembly_numeric.py",
+    "tests/dataflow/kernels/rtlsim/pure_dot_product_numeric.py": "tests/kernels/rtlsim/pure_dot_product_numeric.py",
+    "tests/dataflow/kernels/test_axi_stream_declaration.py": "tests/kernels/test_axi_stream_declaration.py",
+    "tests/dataflow/kernels/test_dotp_axi_minimal.py": "tests/kernels/test_dotp.py",
+    "tests/dataflow/kernels/test_mvau_assembly.py": "tests/kernels/test_mvau_assembly.py",
+    "tests/dataflow/kernels/test_streaming_components.py": "tests/kernels/test_streaming_components.py",
+    "tests/dataflow/model/contract_helpers.py": "tests/kernels/helpers.py",
+    "tests/dataflow/rtlsim/rtl_transport.py": "tests/kernels/rtlsim/rtl_transport.py",
+    "tests/dataflow/rtlsim/test_observed_transport.py": "tests/kernels/rtlsim/test_observed_transport.py",
+    "tests/dataflow/space": "tests/kernels/space",
+    "tests/dataflow/typing/space_descriptor_types.py": "tests/kernels/typing/space_descriptor_types.py"
+  },
+  "splits": {
+    "tests/dataflow/kernels/rtlsim/dotp_axi_numeric.py": [
+      "tests/kernels/rtlsim/dotp_support.py",
+      "tests/dataflow/kernels/rtlsim/dotp_axi_numeric.py"
+    ],
+    "tests/dataflow/kernels/test_axi_stream.py": [
+      "tests/kernels/test_axi_stream.py",
+      "tests/dataflow/kernels/test_axi_stream.py"
+    ],
+    "tests/dataflow/model/test_datatypes.py": [
+      "tests/kernels/test_datatypes.py",
+      "tests/dataflow/model/test_datatypes.py"
+    ],
+    "tests/dataflow/space/test_declarations.py": [
+      "tests/kernels/space/test_declarations.py",
+      "tests/dataflow/test_space_model_boundary.py"
+    ]
+  }
+}

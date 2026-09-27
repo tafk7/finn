@@ -1,0 +1,65 @@
+ .github/workflows/dataflow-design.yml              |  84 --
+ setup.cfg                                          |   2 +
+ src/finn/dataflow/analysis/integer_dot.py          |  42 +-
+ src/finn/dataflow/artifacts/build.py               | 226 +-----
+ src/finn/dataflow/artifacts/contribution_types.py  | 110 +++
+ src/finn/dataflow/artifacts/contributions.py       |  98 +--
+ src/finn/dataflow/artifacts/requirements.py        | 247 ++++++
+ src/finn/dataflow/kernels/__init__.py              |  73 +-
+ src/finn/dataflow/kernels/dot_product.py           | 126 +++
+ src/finn/dataflow/kernels/dotp_axi_minimal.py      | 281 +++++++
+ src/finn/dataflow/kernels/dotp_axi_region.py       | 143 ++++
+ src/finn/dataflow/kernels/matmul/base.py           |   9 +-
+ src/finn/dataflow/kernels/mvau.py                  | 496 ++++++++++++
+ src/finn/dataflow/kernels/replay_buffer.py         |  73 +-
+ .../dataflow/kernels/resources/cyclic_stream.sv    |  45 ++
+ src/finn/dataflow/kernels/resources/dotp_axi.sv    | 365 +++++++++
+ src/finn/dataflow/kernels/streaming.py             | 166 ++++
+ src/finn/dataflow/kernels/target.py                |  17 +-
+ src/finn/dataflow/model/kernel.py                  |  29 +-
+ src/finn/dataflow/model/kernel_base.py             |  44 ++
+ src/finn/dataflow/model/logical/__init__.py        | 439 +++++++----
+ .../dataflow/model/logical/_contract_support.py    |  90 +++
+ src/finn/dataflow/model/logical/composition.py     |  72 +-
+ .../dataflow/model/logical/contract_authoring.py   | 849 +++++++++++++++++++++
+ .../dataflow/model/logical/contract_expressions.py | 256 +++++++
+ .../dataflow/model/logical/datatype_domains.py     | 126 +++
+ .../dataflow/model/logical/datatype_semantics.py   |  60 ++
+ src/finn/dataflow/model/logical/datatypes.py       |  18 +
+ .../dataflow/model/logical/result_semantics.py     |  23 +
+ src/finn/dataflow/model/logical/results.py         |  87 +++
+ src/finn/dataflow/model/logical/semantics.py       |  85 +--
+ src/finn/dataflow/model/logical/view.py            | 306 +-------
+ src/finn/dataflow/model/logical/view_authoring.py  | 326 ++++++++
+ src/finn/dataflow/model/physical/axi_stream.py     | 312 ++++++++
+ .../dataflow/model/physical/axi_stream_binding.py  |  47 ++
+ .../dataflow/model/physical/axi_stream_contract.py | 476 ++++++++++++
+ src/finn/dataflow/model/physical/interface.py      |  16 +-
+ src/finn/dataflow/model/physical/layout.py         |   1 +
+ src/finn/dataflow/ops/mapping.py                   |  28 +-
+ tests/dataflow/artifacts/test_contributions.py     |  51 +-
+ .../kernels/rtlsim/mvau_assembly_numeric.py        | 223 ++++++
+ .../kernels/rtlsim/pure_dot_product_numeric.py     | 204 +++++
+ tests/dataflow/kernels/test_axi_stream.py          | 141 ++++
+ tests/dataflow/kernels/test_axi_stream_contract.py | 262 +++++++
+ .../kernels/test_axi_stream_declaration.py         | 216 ++++++
+ .../dataflow/kernels/test_composition_boundary.py  |   2 +-
+ tests/dataflow/kernels/test_dot_product.py         | 150 ++++
+ tests/dataflow/kernels/test_dotp_axi_minimal.py    | 312 ++++++++
+ tests/dataflow/kernels/test_dotp_axi_region.py     |  66 ++
+ tests/dataflow/kernels/test_mvau_assembly.py       | 238 ++++++
+ .../dataflow/kernels/test_streaming_components.py  | 290 +++++++
+ tests/dataflow/model/contract_helpers.py           |  71 ++
+ tests/dataflow/model/test_contract_authoring.py    | 370 +++++++++
+ tests/dataflow/model/test_identity.py              |  50 ++
+ .../ops/fixtures/legacy_selected/MANIFEST.json     |  99 ---
+ .../mvau-schema3-batch-interleaved.onnx            | Bin 920 -> 0 bytes
+ .../legacy_selected/mvau-schema3-dot-product.onnx  | Bin 936 -> 0 bytes
+ .../legacy_selected/mvau-schema3-partial.onnx      | Bin 702 -> 0 bytes
+ .../legacy_selected/replay-schema2-full.onnx       | Bin 503 -> 0 bytes
+ .../legacy_selected/replay-schema2-partial.onnx    | Bin 482 -> 0 bytes
+ tests/dataflow/ops/test_joint_lifecycle.py         |   2 +-
+ tests/dataflow/ops/test_operand_mapping.py         |   3 +
+ tests/dataflow/rtlsim/rtl_transport.py             |  15 +-
+ tests/dataflow/test_package_boundaries.py          | 318 +++-----
+ 64 files changed, 7903 insertions(+), 1473 deletions(-)

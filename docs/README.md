@@ -21,3 +21,8 @@ Environment and runtime:
 * [Task spec: remaining work from P6](runtime-remaining-work.md)
 * [Runtime validation record](runtime-validation.md)
 * [XSI process-boundary investigation](xsi-process-boundary-investigation.md)
+
+Experimental Space design, authoring, internals and migration documentation is
+maintained in the separate scratchpad repository under `space/`, starting at
+`space/DESIGN.md`. Its example checker also lives there. FINN's standalone code
+validation command is `bash scripts/check-space.sh` and needs no documentation checkout.

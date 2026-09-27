@@ -30,11 +30,16 @@ import numpy as np
 import os
 from abc import ABC, abstractmethod
 
-from finn import xsi
+from finn import resources, xsi
 from finn.util.basic import make_build_dir
 from finn.util.data_packing import npy_to_rtlsim_input, rtlsim_output_to_npy
 
 finnxsi = xsi  # Native prerequisites are checked when simulation is requested.
+
+
+def finnlib_source(*parts):
+    """Return a path inside FinnLib, which FINN takes as the ``finnlib`` resource."""
+    return os.path.join(resources.path("finnlib"), *parts)
 
 
 class RTLBackend(ABC):

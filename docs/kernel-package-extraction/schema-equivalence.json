@@ -1,0 +1,20 @@
+{
+  "graph_context": {
+    "all_other_payload_fields_identical": true,
+    "changed_codec_fields": [
+      "accumulator_type",
+      "output_type"
+    ],
+    "new": "23b4ad5d41a4498308cb52216591f7c3e84ddea6bb1b6cc747d199b8d083eaac",
+    "old": "fe1dca5910a789071ab5690089b9e84cbf2e128ac6c2ababb076c0d835a242cb"
+  },
+  "source_semantics": {
+    "all_other_payload_fields_identical": true,
+    "changed_codec_fields": [
+      "accumulator_type",
+      "output_type"
+    ],
+    "new": "53a078177783974f90cec6ace924f122199064f25f139bcedd12cb7681fb9a8e",
+    "old": "c57ed799923038b5982420500f83dfeabd9adb027601126aa95617c53e0438f9"
+  }
+}

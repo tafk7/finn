@@ -1,0 +1,272 @@
+# Copyright (C) 2026, Advanced Micro Devices, Inc.
+# SPDX-License-Identifier: BSD-3-Clause
+"""Build reusable declaration bundles as ordinary named child Space templates.
+
+The builder owns only authoring data. Finishing creates one subclass through
+normal Python class construction; placement uses the same linker and evaluator
+as a handwritten Subspace. Parent classes and compiled records are never edited.
+"""
+
+from __future__ import annotations
+
+from types import MappingProxyType
+from typing import Generic, Protocol, TypeVar, cast, overload
+
+from ._bindings import collect_placement
+from ._configuration import Space
+from .collection import collect_space
+from .declarations import (
+    Declaration,
+    Param,
+    ScopedValueRef,
+    Subspace,
+    ValueKey,
+    ValueRef,
+    View,
+    ViewKey,
+    local_name,
+)
+from .errors import DefinitionError
+from .semantics import ValueSemantics
+
+T = TypeVar("T")
+S = TypeVar("S", bound=Space)
+D = TypeVar("D", bound=Declaration)
+
+
+class _ExportRecorder(Protocol):
+    def _record_export(
+        self, key: ValueKey[object] | ViewKey[object], source: Declaration
+    ) -> None: ...
+
+
+class _BindingRecorder(Protocol):
+    def _bind_reference(self, parameter: ValueRef[object], supplier: object) -> None: ...
+
+
+class BindingTarget(Generic[T]):
+    """Fix the nested slot's type before accepting its supplied value."""
+
+    def __init__(self, builder: _BindingRecorder, parameter: ValueRef[T]) -> None:
+        self._builder, self._parameter = builder, parameter
+
+    def to(self, supplier: T | ValueRef[T]) -> None:
+        self._builder._bind_reference(self._parameter, supplier)
+
+
+class ValueExport(Generic[T]):
+    """A key fixes T before its value is supplied, preserving type checking."""
+
+    def __init__(self, builder: _ExportRecorder, key: ValueKey[T]) -> None:
+        self._builder, self._key = builder, key
+
+    def value(self, source: ValueRef[T]) -> None:
+        self._builder._record_export(self._key, source)
+
+
+class ViewExport(Generic[T]):
+    def __init__(self, builder: _ExportRecorder, key: ViewKey[T]) -> None:
+        self._builder, self._key = builder, key
+
+    def view(self, source: View[T]) -> None:
+        self._builder._record_export(self._key, source)
+
+
+class ScopeBuilder(Generic[S]):
+    """A mutable authoring session which seals into one reusable child template.
+
+    Base-class fields keep their Python types. New fields are accessed through
+    their returned declarations or typed export keys. Bind external suppliers
+    explicitly; callbacks receive named dependencies and no implicit instance.
+    """
+
+    def __init__(self, base: type[S], *, name: str | None = None) -> None:
+        if not isinstance(base, type) or not issubclass(base, Space):
+            raise DefinitionError("ScopeBuilder requires a Space base class")
+        self._base = base
+        self._name = local_name(
+            name if name is not None else f"{base.__name__}Bundle", "extension template name"
+        )
+        effective = collect_space(base)
+        self._base_members = dict(effective.members)
+        self._base_names = {key for cls in base.__mro__ for key in vars(cls)}
+        self._names_by_identity = {id(source): key for source, key in effective.aliases.items()}
+        self._members: dict[str, Declaration] = {}
+        self._exports = dict(effective.exports)
+        self._bindings: dict[str, object] = {}
+        self._parameter_bindings: dict[ValueRef[object], object] = {}
+        self._sealed = False
+        self._template: type[S] | None = None
+        self._failure: Exception | None = None
+
+    @property
+    def sealed(self) -> bool:
+        return self._sealed
+
+    def _open(self) -> None:
+        if self._sealed:
+            raise DefinitionError(f"{self._name}: extension construction is sealed")
+
+    def add(self, name: str, declaration: D) -> D:
+        self._open()
+        local_name(name, "extension member name")
+        if name in self._members or name in self._base_names:
+            raise DefinitionError(f"{self._name}.{name}: duplicate or inherited member name")
+        if not isinstance(declaration, Declaration):
+            raise DefinitionError(f"{self._name}.{name}: expected an authoring declaration")
+        if declaration.owner is not None:
+            raise DefinitionError(
+                f"{self._name}.{name}: declaration already belongs to "
+                f"{declaration.owner.__qualname__}.{declaration.name}; "
+                "inherited fields need no re-add"
+            )
+        if id(declaration) in self._names_by_identity:
+            raise DefinitionError(
+                f"{self._name}.{name}: this declaration already has a member name"
+            )
+        self._members[name] = declaration
+        self._names_by_identity[id(declaration)] = name
+        return declaration
+
+    @overload
+    def export(self, key: ValueKey[T]) -> ValueExport[T]: ...
+
+    @overload
+    def export(self, key: ViewKey[T]) -> ViewExport[T]: ...
+
+    def export(self, key: ValueKey[T] | ViewKey[T]) -> ValueExport[T] | ViewExport[T]:
+        self._open()
+        if isinstance(key, ValueKey):
+            return ValueExport(self, key)
+        if isinstance(key, ViewKey):
+            return ViewExport(self, key)
+        raise DefinitionError("extension exports require typed ValueKey or ViewKey objects")
+
+    def _record_export(self, key: ValueKey[object] | ViewKey[object], source: Declaration) -> None:
+        self._open()
+        if id(source) not in self._names_by_identity:
+            raise DefinitionError(
+                f"{self._name}: export {key.name!r} is not a local or inherited member"
+            )
+        if any(existing.name == key.name for existing in self._exports):
+            raise DefinitionError(f"{self._name}: duplicate export name {key.name!r}")
+        if (isinstance(key, ValueKey) and not isinstance(source, ValueRef)) or (
+            isinstance(key, ViewKey) and not isinstance(source, View)
+        ):
+            raise DefinitionError(f"{self._name}: export {key.name!r} has the wrong kind")
+        self._exports[key] = source
+
+    def bind(self, parameter: Param[T], supplier: T | ValueRef[T]) -> None:
+        """Bind an invariant direct Param declaration."""
+        self._bind_reference(parameter, supplier)
+
+    def binding(self, parameter: ValueRef[T]) -> BindingTarget[T]:
+        """Bind a typed nested slot with ``builder.binding(target).to(value)``."""
+        self._open()
+        if not isinstance(parameter, (Param, ScopedValueRef)):
+            raise DefinitionError("extension bindings require direct or scoped Param references")
+        return BindingTarget(self, parameter)
+
+    def _bind_reference(self, parameter: ValueRef[object], supplier: object) -> None:
+        self._open()
+        if isinstance(parameter, ScopedValueRef):
+            if parameter in self._parameter_bindings:
+                raise DefinitionError(f"{self._name}: parameter is already bound")
+            semantics = parameter.semantics
+            if semantics is not None:
+                if isinstance(supplier, ValueRef):
+                    if supplier.semantics is not None and not semantics.is_compatible_with(
+                        cast(ValueSemantics[object], supplier.semantics)
+                    ):
+                        raise DefinitionError(
+                            f"{self._name}: incompatible supplier value semantics"
+                        )
+                else:
+                    try:
+                        supplier = semantics.freeze(supplier)
+                    except Exception as cause:
+                        raise DefinitionError(
+                            f"{self._name}: invalid nested literal binding"
+                        ) from cause
+            self._parameter_bindings[parameter] = supplier
+            return
+        if not isinstance(parameter, Param):
+            raise DefinitionError("extension bindings require a Param declaration")
+        name = self._names_by_identity.get(id(parameter))
+        if name is None:
+            raise DefinitionError(
+                f"{self._name}: binding parameter is not a local or inherited member"
+            )
+        if name in self._bindings:
+            raise DefinitionError(f"{self._name}.{name}: parameter is already bound")
+        assert parameter.semantics is not None
+        if isinstance(supplier, ValueRef):
+            if supplier.semantics is not None and not parameter.semantics.is_compatible_with(
+                cast(ValueSemantics[object], supplier.semantics)
+            ):
+                raise DefinitionError(f"{self._name}.{name}: incompatible supplier value semantics")
+            self._bindings[name] = supplier
+        else:
+            try:
+                self._bindings[name] = parameter.semantics.freeze(supplier)
+            except Exception as cause:
+                raise DefinitionError(
+                    f"{self._name}.{name}: invalid literal binding: {cause}"
+                ) from cause
+
+    def finish(self) -> type[S]:
+        """Create and validate one child class, then reject further authoring mutations."""
+        if self._template is not None:
+            return self._template
+        if self._failure is not None:
+            raise DefinitionError(
+                f"{self._name}: extension construction previously failed"
+            ) from self._failure
+        self._sealed = True
+        namespace: dict[str, object] = {
+            "__module__": self._base.__module__,
+            "exports": MappingProxyType(dict(self._exports)),
+            **self._members,
+        }
+        try:
+            template = cast(type[S], type(self._name, (self._base,), namespace))
+            collect_space(template)
+        except Exception as cause:
+            self._failure = cause
+            if isinstance(cause, DefinitionError):
+                raise
+            raise DefinitionError(
+                f"{self._name}: extension construction failed: {cause}"
+            ) from cause
+        self._template = template
+        return template
+
+    def place(self, *, when: ValueRef[bool] | None = None) -> Subspace[S]:
+        """Make an independent placement with the complete explicitly supplied bindings."""
+        template = self.finish()
+        declarations = {**self._base_members, **self._members}
+        bindings: dict[str, object] = {}
+        for name, supplier in self._bindings.items():
+            parameter = declarations[name]
+            assert isinstance(parameter, Param) and parameter.semantics is not None
+            try:
+                bindings[name] = (
+                    supplier
+                    if isinstance(supplier, ValueRef)
+                    else parameter.semantics.freeze(supplier)
+                )
+            except Exception as cause:
+                raise DefinitionError(
+                    f"{self._name}.{name}: invalid literal binding: {cause}"
+                ) from cause
+        placement = Subspace(
+            template,
+            when=when,
+            bindings=self._parameter_bindings,
+            **bindings,
+        )
+        collect_placement(placement)
+        return placement
+
+
+__all__ = ["BindingTarget", "ScopeBuilder", "ValueExport", "ViewExport"]

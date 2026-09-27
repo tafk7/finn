@@ -320,6 +320,7 @@ class HWCustomOp(CustomOp):
         width=None,
         init_file=None,
         ram_style=None,
+        allow_missing_initializer=False,
     ):
         """Helper function to generate verilog code for memstream component.
         Currently utilized by MVAU, VVAU, HLS Thresholding and RTL Requant layer.
@@ -352,7 +353,9 @@ class HWCustomOp(CustomOp):
                 ram_style = self.get_nodeattr("ram_style")
             if init_file is None:
                 init_file = code_gen_dir + "/memblock.dat"
-            if ram_style == "ultra" and not is_versal(fpgapart):
+            if (ram_style == "ultra" and not is_versal(fpgapart)) or (
+                allow_missing_initializer and not os.path.isfile(init_file)
+            ):
                 init_file = ""
             code_gen_dict = {
                 "$MODULE_NAME$": [mname],

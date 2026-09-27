@@ -1,6 +1,7 @@
-/******************************************************************************
+/****************************************************************************
  * Copyright (C) 2022-2023, Advanced Micro Devices, Inc.
  * All rights reserved.
+ * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
@@ -28,9 +29,22 @@
  * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF
  * ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  *
- * @brief	Replay buffer for counted sequences on an AXI-lite stream.
+ * @brief	Replay complete counted sequences on a ready/valid stream.
  * @author	Thomas B. Preußer <thomas.preusser@amd.com>
- *****************************************************************************/
+ * @author	Thomas Keller <thomas.keller@amd.com>
+ *
+ * @description
+ *  Input transfers are partitioned into consecutive sequences of LEN words.
+ *  Each complete sequence is emitted REP times before output advances to the
+ *  next input sequence. olast marks the final word of every emitted sequence;
+ *  ofin marks the final word of its last repetition. Both flags are meaningful
+ *  only while ovld is asserted, and all output signals remain stable while a
+ *  valid transfer is blocked by ordy.
+ *
+ *  LEN, REP, and W must be positive. Reset is synchronous and active-high.
+ *  REP == 1 selects a combinational identity path with no replay memory:
+ *  output validity and input readiness directly follow the opposing endpoint.
+ ***************************************************************************/
 
 module replay_buffer #(
 	int unsigned  LEN,	// Sequence length
@@ -50,7 +64,9 @@ module replay_buffer #(
 	output	logic  ovld,
 	input	logic  ordy
 );
+`default_nettype none
 
+	//=== Parameter Validation ==============================================
 	if(LEN == 0)  initial begin
 		$error("%m: Illegal zero sequence LEN.");
 		$finish;
@@ -59,12 +75,18 @@ module replay_buffer #(
 		$error("%m: Illegal zero REP count.");
 		$finish;
 	end
+	if(W == 0) initial begin
+		$error("%m: Illegal zero data width W.");
+		$finish;
+	end
 
-	// Track position in Sequence
+	//=== Sequence Position =================================================
 	uwire  last_item;
 	uwire  shift;
-	if(LEN == 1)  assign  last_item = 1;
-	else begin
+	if(LEN == 1) begin : genSingleItem
+		assign	last_item = 1;
+	end : genSingleItem
+	else begin : genMultiItem
 		typedef logic [$clog2(LEN)-1:0]  count_t;
 		count_t  Count = 0;
 		logic    Last  = 0;
@@ -79,9 +101,10 @@ module replay_buffer #(
 			end
 		end
 		assign	last_item = Last;
-	end
+	end : genMultiItem
 
-	if(REP == 1) begin
+	//=== Identity Specialization ===========================================
+	if(REP == 1) begin : genIdentity
 		assign	shift = ivld && ordy;
 
 		assign	irdy  = ordy;
@@ -89,10 +112,10 @@ module replay_buffer #(
 		assign	olast = last_item;
 		assign	ofin  = last_item;
 		assign	ovld  = ivld;
-	end
-	else begin
+	end : genIdentity
+	else begin : genReplay
 
-		// Track Repetitions
+		//=== Repetition Position ==========================================
 		uwire  last_rep;
 		if(1) begin : blkRep
 			typedef logic [$clog2(REP)-1:0]  rep_t;
@@ -115,7 +138,7 @@ module replay_buffer #(
 		typedef logic [AWIDTH  :0]  ptr_t;	// pointers with additional generational MSB
 		typedef logic [W     -1:0]  data_t;
 
-		// Output Registers
+		//=== Output Registers =============================================
 		data_t  ODat;
 		logic   OVld =  0;
 		logic   OLst = 'x;
@@ -125,13 +148,13 @@ module replay_buffer #(
 		assign	ofin  = OFin;
 		assign	ovld  = OVld;
 
-		// Buffer Memory Management
+		//=== Buffer Memory Management =====================================
 		data_t  Mem[2**AWIDTH];
 		ptr_t  WP = 0;	// Write Pointer
 		ptr_t  RP = 0;	// Read Pointer
 		ptr_t  FP = 0;	// Free Pointer
 
-		// Operational Guards
+		//=== Operational Guards ===========================================
 		//	Occupancy:    WP-FP
 		//	  WP-FP < 2**AWIDTH -> writing allowed
 		//		- increments WP
@@ -176,6 +199,7 @@ module replay_buffer #(
 			end
 		end
 
-	end
+	end : genReplay
 
+`default_nettype wire
 endmodule : replay_buffer

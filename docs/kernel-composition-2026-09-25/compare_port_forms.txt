@@ -1,0 +1,12 @@
+-- dtype=TERNARY limit=None
+contained: rules={'family': 'Rejected', 'maximum_bits': 'Unresolved', 'minimum_bits': 'Available'} stream=Unresolved declarations=25 scopes=3
+bound    : rules={'family': 'Rejected', 'maximum_bits': 'Unresolved', 'minimum_bits': 'Available'} stream=Unresolved declarations=28 scopes=3
+-- dtype=INT3 limit=None
+contained: rules={'family': 'Available', 'maximum_bits': 'Unresolved', 'minimum_bits': 'Available'} stream=Unresolved declarations=25 scopes=3
+bound    : rules={'family': 'Available', 'maximum_bits': 'Unresolved', 'minimum_bits': 'Available'} stream=Unresolved declarations=28 scopes=3
+-- dtype=INT3 limit=8
+contained: rules={'family': 'Available', 'maximum_bits': 'Available', 'minimum_bits': 'Available'} stream=Available declarations=25 scopes=3
+bound    : rules={'family': 'Available', 'maximum_bits': 'Available', 'minimum_bits': 'Available'} stream=Available declarations=28 scopes=3
+-- dtype=INT9 limit=8
+contained: rules={'family': 'Available', 'maximum_bits': 'Rejected', 'minimum_bits': 'Available'} stream=Rejected declarations=25 scopes=3
+bound    : rules={'family': 'Available', 'maximum_bits': 'Rejected', 'minimum_bits': 'Available'} stream=Rejected declarations=28 scopes=3
