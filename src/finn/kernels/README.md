@@ -129,7 +129,7 @@ into AXIS. `build_requirements` lowers that structure. Either end of a stream ma
 be a member of a Decision over nodes (`Present(in1_V, cyclic.output)`); only the
 selected candidate is evaluated. The `implementation` Decision places either
 nothing (`external`, presenting `in1_V`) or its `cyclic` CyclicDelivery candidate,
-named `implementation.cyclic`. A `BufferedStreamLink` owns a `transport`
+named `implementation.cyclic`. A `BufferedStream` owns a `transport`
 Decision over nodes: `direct`, or a `fifo` candidate whose depth and memory style
 are its own decisions. Whether a FIFO is needed and how deep is a compiler
 decision; the stream only provides the slot. `commit` (from
