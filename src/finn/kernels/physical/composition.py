@@ -8,7 +8,8 @@ connections, then produces a validated ``PhysicalStructure``. ``connect`` checks
 two stream contracts (including their clock domains) and emits every data,
 padding, handshake and marker wire; nothing about a stream is wired by hand.
 Clock and reset pins are routed with ``drive``, which derives reset inversion
-from the declared polarities.
+from the declared polarities; ``tie`` holds an input at a constant and
+``dispose`` leaves an output unconnected.
 """
 
 from __future__ import annotations
@@ -84,6 +85,17 @@ class Composition:
         )
         if isinstance(child.role, Clock):
             self._clock_of[(instance_id, pin)] = top_pin
+
+    def tie(self, instance_id: str, pin: str, value: int) -> None:
+        """Hold a child input at a constant."""
+        child = abi_pins(self._instances[instance_id].requirements.abi)[pin]
+        self._wires.append(
+            PhysicalWire(_slice(instance_id, pin, child.width), ConstantBits(child.width, value))
+        )
+
+    def dispose(self, instance_id: str, pin: str, reason: str) -> None:
+        """Leave a whole child output unconnected."""
+        self._unused.append(UnusedOutput(PhysicalPin(instance_id, pin), reason))
 
     def _domain(self, end: StreamEnd) -> str | None:
         clock = end.contract.transport.clock

@@ -25,7 +25,7 @@ from finn.kernels.artifacts.abi import (
     Clock,
     ClockAlignment,
     Data,
-    Derived as DerivedClock,
+    Derived as DerivedRate,
     Direction,
     Endpoint,
     Free,
@@ -60,7 +60,16 @@ from finn.kernels.physical.forms import (
     split_walk,
     walk_axis,
 )
-from finn.kernels.streams import MODULE, PORT, Stream, StreamSpec
+from finn.kernels.clocks import CLOCKING, CLOCKING_SEMANTICS, ClockDomain, Clocking, DerivedClock
+from finn.kernels.streams import (
+    MODULE,
+    PORT,
+    TIEOFFS,
+    TIEOFFS_SEMANTICS,
+    Stream,
+    StreamSpec,
+    Tieoffs,
+)
 from finn.core.space import (
     ConstraintGroup,
     Decision,
@@ -100,6 +109,9 @@ class DotpAxiKernel(Kernel):
     activation_type = integer_scalar(activation_dtype, Integer(min_bits=2))
     weights_type = integer_scalar(weights_dtype, SignedInteger(min_bits=2))
     result_type = integer_scalar(result_dtype, SignedInteger())
+    # The clock domains it runs in: the 2x domain only when compute is pumped.
+    clock: ClockDomain = Param(required=False)
+    fast_clock: DerivedClock = Param(required=False)
     # The streams dotp sits on, when a parent places it between streams: reference
     # inputs, each a Stream node placed beside dotp.
     activation_stream: Stream = Param(required=False)
@@ -238,7 +250,7 @@ class DotpAxiKernel(Kernel):
                     "ap_clk2x",
                     Direction.IN,
                     1,
-                    Clock(DerivedClock("ap_clk", 2)) if compute_pumping else Data(),
+                    Clock(DerivedRate("ap_clk", 2)) if compute_pumping else Data(),
                 ),
                 Signal(
                     "ap_rst_n",
@@ -384,8 +396,23 @@ class DotpAxiKernel(Kernel):
                 )
         return self._port(self.result.stream, self.result_stream)
 
+    @view(semantics=CLOCKING_SEMANTICS)
+    def clock_pins(self) -> Clocking:
+        return Clocking("ap_clk", "ap_rst_n")
+
+    @view(semantics=CLOCKING_SEMANTICS)
+    def fast_clock_pins(self) -> Clocking:
+        return Clocking("ap_clk2x") if self.compute_pumping else Clocking()
+
+    @view(semantics=TIEOFFS_SEMANTICS)
+    def tieoffs(self) -> Tieoffs:
+        # Unpumped, the RTL ignores its 2x clock input and no domain drives it.
+        return Tieoffs() if self.compute_pumping else Tieoffs((("ap_clk2x", 0),))
+
     exports = {
         MODULE: build_requirements,
+        CLOCKING: {clock: clock_pins, fast_clock: fast_clock_pins},
+        TIEOFFS: tieoffs,
         PORT: {
             activation_stream: activation_port,
             weights_stream: weights_port,

@@ -92,8 +92,11 @@ def test_component_groups_its_interfaces_and_keeps_one_root_physical_output():
     assert tuple(item.key for item in point.capabilities() if item.scope == "") == (
         "activation_port",
         "build_requirements",
+        "clock_pins",
+        "fast_clock_pins",
         "interfaces",
         "result_port",
+        "tieoffs",
         "weights_port",
     )
     assert point.interfaces == tuple(

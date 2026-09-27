@@ -100,6 +100,8 @@ def test_input_padding_is_ignored_and_child_padding_is_zero():
     assert zeros == {
         PinSlice(PhysicalPin("u_compute", "s_axis_input_tdata"), 6, 2): ConstantBits(2, 0),
         PinSlice(PhysicalPin("u_compute", "s_axis_weights_tdata"), 6, 2): ConstantBits(2, 0),
+        # Unpumped, no domain drives dotp's 2x clock input: it is tied low.
+        PinSlice(PhysicalPin("u_compute", "ap_clk2x"), 0, 1): ConstantBits(1, 0),
     }
     # INT8 is exact for six INT3 products, so use width=2 to observe output padding.
     padded = assembly(matrix_width=2, matrix_height=3, pe=1)

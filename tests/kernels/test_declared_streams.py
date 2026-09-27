@@ -29,6 +29,7 @@ from finn.core.space import (
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.build import ModuleBuildRequirements
 from finn.kernels.artifacts.derivation import ProducerIdentity
+from finn.kernels.clocks import DOMAIN, ClockDomain
 from finn.kernels.datatypes.scalar import ScalarEncoding
 from finn.kernels.delivery import CyclicDelivery
 from finn.kernels.physical.forms import vector_major
@@ -53,24 +54,38 @@ class Constants(Space):
 
     first_spec: StreamSpec = Param(semantics=STREAM_SPEC)
     second_spec: StreamSpec = Param(semantics=STREAM_SPEC)
+    clock = ClockDomain(clock="ap_clk", reset="ap_rst_n")
     # Each stream has only its producer: it is a boundary, named by its port.
-    first = Stream(spec=first_spec, port="out0_V")
-    second = Stream(spec=second_spec, port="out1_V")
+    first = Stream(spec=first_spec, port="out0_V", clock=clock)
+    second = Stream(spec=second_spec, port="out1_V", clock=clock)
 
     first_source = CyclicDelivery(
-        dtype=DataType["INT4"], form=PRODUCED, values=(1, 2, 3, 4), output_stream=first
+        dtype=DataType["INT4"],
+        form=PRODUCED,
+        values=(1, 2, 3, 4),
+        clock=clock,
+        output_stream=first,
     )
     second_source = CyclicDelivery(
-        dtype=DataType["INT4"], form=PRODUCED, values=(5, 6, 7, -8), output_stream=second
+        dtype=DataType["INT4"],
+        form=PRODUCED,
+        values=(5, 6, 7, -8),
+        clock=clock,
+        output_stream=second,
     )
     modules = Members(MODULE)
     streams = Members(CONNECTION)
+    domains = Members(DOMAIN)
 
-    @view(semantics=default_semantics(ModuleBuildRequirements), requires=(modules, streams))
+    @view(
+        semantics=default_semantics(ModuleBuildRequirements),
+        requires=(modules, streams, domains),
+    )
     def build(self) -> ModuleBuildRequirements:
         composed = netlist(
             self.modules,
             self.streams,
+            self.domains,
             module="constants",
             producer=ProducerIdentity("test.constants", "1"),
         )
@@ -146,7 +161,13 @@ def test_a_stream_waits_for_its_own_endpoints_only():
 
 
 def test_boundary_ports_are_axis_and_byte_aligned():
-    contract = boundary_contract("in0_V", StreamSpec(INT4, vector_major((3,), 3)), Endpoint.TARGET)
+    contract = boundary_contract(
+        "in0_V",
+        StreamSpec(INT4, vector_major((3,), 3)),
+        Endpoint.TARGET,
+        clock="ap_clk",
+        reset="ap_rst_n",
+    )
     assert contract.transport.data_width == 16
     assert contract.payload_bits == 12
 
@@ -154,7 +175,8 @@ def test_boundary_ports_are_axis_and_byte_aligned():
 def test_two_producers_on_one_stream_are_refused_by_the_stream():
     class Clash(Space):
         spec: StreamSpec = Param(semantics=STREAM_SPEC)
-        shared = Stream(spec=spec, port="out0_V")
+        clock = ClockDomain(clock="ap_clk", reset="ap_rst_n")
+        shared = Stream(spec=spec, port="out0_V", clock=clock)
         a = CyclicDelivery(
             dtype=DataType["INT4"], form=PRODUCED, values=(1, 2, 3, 4), output_stream=shared
         )
@@ -172,7 +194,8 @@ def test_two_producers_on_one_stream_are_refused_by_the_stream():
 def test_a_boundary_stream_needs_its_port_name():
     class Unnamed(Space):
         spec: StreamSpec = Param(semantics=STREAM_SPEC)
-        out = Stream(spec=spec)
+        clock = ClockDomain(clock="ap_clk", reset="ap_rst_n")
+        out = Stream(spec=spec, clock=clock)
         source = CyclicDelivery(
             dtype=DataType["INT4"], form=PRODUCED, values=(1, 2, 3, 4), output_stream=out
         )

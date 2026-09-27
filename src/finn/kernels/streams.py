@@ -27,6 +27,13 @@ and ``fifo``. The FIFO candidate owns its ``depth`` and the FIFO's
 ``ram_style``; it is an identity adapter, checked on both of its sides.
 ``Members(CONNECTION)`` collects a composite's streams and ``netlist`` wires
 them; instance names come from the located user names, never from literals.
+
+A stream lives in a clock domain (``clock``, a ``ClockDomain`` node): its AXIS
+boundary is associated with the domain's pins, and a transport stage runs in
+it. ``netlist`` also takes the composite's ``Members(DOMAIN)``, which drive
+every clock and reset pin, and ``Members(TIEOFFS)``: inputs a kernel holds
+constant and outputs it leaves unconnected in its configuration. No pin is
+routed by its name.
 """
 
 from __future__ import annotations
@@ -50,7 +57,7 @@ from finn.core.space import (
     reject,
     view,
 )
-from finn.kernels.artifacts.abi import Clock, ClockAlignment, Direction, Endpoint, Reset, Signal
+from finn.kernels.artifacts.abi import Clock, Direction, Endpoint, Reset, Signal
 from finn.kernels.artifacts.build import (
     EntryPointSourceName,
     FixedModuleName,
@@ -61,6 +68,7 @@ from finn.kernels.artifacts.build import (
     SELF_CONTAINED_JINJA_RENDERER,
 )
 from finn.kernels.artifacts.derivation import ProducerIdentity
+from finn.kernels.clocks import ClockDomain, Domain
 from finn.kernels.datatypes.scalar import ScalarEncoding
 from finn.kernels.fifo import FifoKernel
 from finn.kernels.physical.axi_stream import AxiStream
@@ -95,17 +103,34 @@ STREAM_SPEC = default_semantics(StreamSpec)
 
 
 MODULE = ViewKey("module", default_semantics(ModuleBuildRequirements))
-_CLOCKING = {"clock": "ap_clk", "reset": "ap_rst_n"}
 
 
-def boundary_contract(name: str, spec: StreamSpec, endpoint: Endpoint) -> StreamContract:
+@dataclass(frozen=True)
+class Tieoffs:
+    """Pins a kernel leaves out of the composition in this configuration.
+
+    ``inputs`` are held constant, as (pin, value); ``unused`` outputs are left
+    unconnected.
+    """
+
+    inputs: tuple[tuple[str, int], ...] = ()
+    unused: tuple[str, ...] = ()
+
+
+TIEOFFS_SEMANTICS = default_semantics(Tieoffs)
+TIEOFFS = ViewKey("tieoffs", TIEOFFS_SEMANTICS)
+
+
+def boundary_contract(
+    name: str, spec: StreamSpec, endpoint: Endpoint, *, clock: str, reset: str | None
+) -> StreamContract:
     """The AXIS port a composed module presents for one of its own streams."""
     if len(spec.markers) > 1:
         raise ValueError("an AXIS boundary carries at most one marker")
     stream = AxiStream(
         name, spec.element.dtype, spec.form.lanes, endpoint=endpoint, last=bool(spec.markers)
     )
-    transport = stream.native(**_CLOCKING)
+    transport = stream.native(clock=clock, reset=reset)
     markers = {transport.markers[0].signal: spec.markers[0]} if spec.markers else {}
     return StreamContract(transport, spec.element, spec.form, spec.repetition, markers)
 
@@ -159,13 +184,18 @@ PORT = ViewKey("port", STREAM_CONTRACT)
 
 @dataclass(frozen=True)
 class Connection:
-    """One checked stream; an owner of None is the composed module itself."""
+    """One checked stream; an owner of None is the composed module itself.
+
+    A stage runs in the stream's clock domain: ``clocking`` holds that
+    domain's top clock and reset pins when there is a stage.
+    """
 
     source_owner: str | None
     source: StreamContract
     sink_owner: str | None
     sink: StreamContract
     stage: Stage
+    clocking: tuple[str, str | None] | None = None
 
 
 CONNECTION_SEMANTICS = default_semantics(Connection)
@@ -191,11 +221,13 @@ class Stream(Space):
     ``ends`` holds the port each present user presents on this stream, located
     by the user's name and the input it references this stream through. A side
     without a user is the composite's boundary, presented as the AXIS port
-    ``port``.
+    ``port`` in the stream's ``clock`` domain, which also clocks a transport
+    stage. A stream with neither needs no domain.
     """
 
     spec: StreamSpec = Param(semantics=STREAM_SPEC)
     port: str = Param(required=False)
+    clock: ClockDomain = Param(required=False)
     ends = Users(PORT)
 
     @derived(semantics=ENDPOINTS)
@@ -224,7 +256,10 @@ class Stream(Space):
         return Endpoints(source[0], source[1], sink[0], sink[1])
 
     def _boundary(self, endpoint: Endpoint) -> StreamContract:
-        return boundary_contract(self.port, self.spec, endpoint)
+        domain = self.clock
+        return boundary_contract(
+            self.port, self.spec, endpoint, clock=domain.clock, reset=domain.reset
+        )
 
     @view(semantics=STAGE_SEMANTICS)
     def stage(self) -> Stage:
@@ -253,8 +288,13 @@ class Stream(Space):
 
     @derived(semantics=CONNECTION_SEMANTICS)
     def link(self) -> Connection:
-        ends = self.endpoints
-        return Connection(ends.source_owner, ends.source, ends.sink_owner, ends.sink, self.stage)
+        ends, stage = self.endpoints, self.stage
+        clocking = None
+        if stage.requirements is not None:
+            clocking = (self.clock.clock, self.clock.reset)
+        return Connection(
+            ends.source_owner, ends.source, ends.sink_owner, ends.sink, stage, clocking
+        )
 
     connection = View(link, requires=(compatible,))
     exports = {CONNECTION: connection}
@@ -290,14 +330,18 @@ def _instance(node: str | None) -> str | None:
 def netlist(
     modules: Sequence[Located[ModuleBuildRequirements]],
     streams: Sequence[Located[Connection]],
+    domains: Sequence[Located[Domain]],
+    tieoffs: Sequence[Located[Tieoffs]] = (),
     *,
     module: str,
     producer: ProducerIdentity,
 ) -> Composed | Rejected:
-    """Wire the composite's modules through its streams.
+    """Wire the composite's modules through its streams and clock domains.
 
     Each module is instantiated as ``u_<node>``, a FIFO stage as ``u_<stream>_fifo``.
-    A defect no single stream can see, such as a clock-domain conflict, is refused.
+    Every clock and reset pin is driven from the domain that names it and every
+    tied input from its kernel's ``Tieoffs``; an input nothing drives is refused, as
+    is a defect no single stream can see, such as a clock-domain conflict.
     """
     connections = [
         (
@@ -314,6 +358,8 @@ def netlist(
         return _wire(
             {str(_instance(item.node)): item.value for item in modules},
             connections,
+            [item.value for item in domains],
+            {str(_instance(item.node)): item.value for item in tieoffs},
             module,
             producer,
         )
@@ -324,15 +370,17 @@ def netlist(
 def _wire(
     placed: dict[str, ModuleBuildRequirements],
     connections: list[tuple[str, Connection]],
+    domains: list[Domain],
+    tieoffs: dict[str, Tieoffs],
     module: str,
     producer: ProducerIdentity,
 ) -> Composed:
-    fifos = {n: c.stage for n, c in connections if c.stage.requirements is not None}
+    fifos = {n: c for n, c in connections if c.stage.requirements is not None}
     boundary = [c.source for _, c in connections if c.source_owner is None] + [
         c.sink for _, c in connections if c.sink_owner is None
     ]
-    children = [*placed.values(), *(s.requirements for s in fifos.values() if s.requirements)]
-    composition = Composition(_top_abi(module, boundary, children))
+    composition = Composition(_top_abi(module, boundary, domains))
+    clocking = _clocking(domains)
     stream_pins: dict[str, set[str]] = {}
     for _, c in connections:
         for owner, contract in ((c.source_owner, c.source), (c.sink_owner, c.sink)):
@@ -342,13 +390,23 @@ def _wire(
                 )
     for name, requirements in placed.items():
         composition.add(name, requirements)
-        _drive(composition, name, requirements, stream_pins.get(name, set()))
-    for stream, stage in fifos.items():
-        assert stage.requirements and stage.input and stage.output
+        _drive(
+            composition,
+            name,
+            requirements,
+            stream_pins.get(name, set()),
+            clocking.get(name, {}),
+            tieoffs.get(name, Tieoffs()),
+        )
+    for stream, c in fifos.items():
+        stage = c.stage
+        assert stage.requirements and stage.input and stage.output and c.clocking
         instance = f"u_{stream}_fifo"
         composition.add(instance, stage.requirements)
         pins = {p.name for p in (*stage.input.transport.pins(), *stage.output.transport.pins())}
-        _drive(composition, instance, stage.requirements, pins)
+        _drive(
+            composition, instance, stage.requirements, pins, _stage_clocking(stage, c), Tieoffs()
+        )
     for name, c in connections:
         source, sink = StreamEnd(c.source_owner, c.source), StreamEnd(c.sink_owner, c.sink)
         if c.stage.input is not None and c.stage.output is not None:
@@ -374,37 +432,71 @@ def _wire(
     )
 
 
+def _clocking(domains: list[Domain]) -> dict[str, dict[str, str]]:
+    """Instance -> child clock or reset pin -> the top pin that drives it."""
+    driven: dict[str, dict[str, str]] = {}
+    for item in domains:
+        if item.clock is None:
+            continue
+        for node, pins in item.driven:
+            instance = driven.setdefault(str(_instance(node)), {})
+            if pins.clock is not None:
+                instance[pins.clock] = item.clock.name
+            if pins.reset is not None:
+                assert item.reset is not None  # a derived domain refuses reset pins
+                instance[pins.reset] = item.reset
+    return driven
+
+
+def _stage_clocking(stage: Stage, connection: Connection) -> dict[str, str]:
+    """A stage runs in its stream's domain: its clock and reset pins, by role."""
+    assert stage.requirements is not None and connection.clocking is not None
+    clock, reset = connection.clocking
+    pins: dict[str, str] = {}
+    for name, info in abi_pins(stage.requirements.abi).items():
+        if isinstance(info.role, Clock):
+            pins[name] = clock
+        elif isinstance(info.role, Reset) and reset is not None:
+            pins[name] = reset
+    return pins
+
+
 def _top_abi(
-    module: str, boundary: list[StreamContract], children: list[ModuleBuildRequirements]
+    module: str, boundary: list[StreamContract], domains: list[Domain]
 ) -> ModuleABIRequirements:
-    """Top clocks and reset follow the children's own AXIS clocking; boundary buses follow."""
-    signals: dict[str, Signal] = {}
-    alignments: list[ClockAlignment] = []
-    for requirements in children:
-        for port in requirements.abi.ports:
-            if isinstance(port, Signal) and port.name in ("ap_clk", "ap_clk2x", "ap_rst_n"):
-                signals.setdefault(port.name, port)
-        for alignment in requirements.abi.clock_alignments:
-            if alignment not in alignments:
-                alignments.append(alignment)
-    signals.setdefault("ap_clk", Signal("ap_clk", Direction.IN, 1, Clock()))
-    signals.setdefault(
-        "ap_rst_n",
+    """The used domains' clocks, then their resets, then the boundary buses."""
+    used = [item for item in domains if item.clock is not None]
+    clocks = [item.clock for item in used if item.clock is not None]
+    names = {clock.name for clock in clocks}
+    missing = [item.base for item in used if item.base and item.base not in names]
+    if missing:
+        raise ValueError(f"a derived clock runs from {missing[0]}, which no kernel uses")
+    resets = [
         Signal(
-            "ap_rst_n",
+            item.reset,
             Direction.IN,
             1,
-            Reset(active_low=True, synchronous=True, synchronous_to=("ap_clk",)),
-        ),
-    )
-    clocking = tuple(
-        signals[name] for name in ("ap_clk", "ap_clk2x", "ap_rst_n") if name in signals
-    )
+            Reset(
+                active_low=True,
+                synchronous=True,
+                synchronous_to=(
+                    item.clock.name,
+                    *(
+                        derived.clock.name
+                        for derived in used
+                        if derived.clock is not None and derived.base == item.clock.name
+                    ),
+                ),
+            ),
+        )
+        for item in used
+        if item.clock is not None and item.reset is not None
+    ]
     return ModuleABIRequirements(
         GeneratedModuleName(module),
-        (*clocking, *(contract.transport.axis_bus() for contract in boundary)),
+        (*clocks, *resets, *(contract.transport.axis_bus() for contract in boundary)),
         (),
-        tuple(alignments),
+        tuple(item.alignment for item in used if item.alignment is not None),
     )
 
 
@@ -413,19 +505,22 @@ def _drive(
     instance: str,
     requirements: ModuleBuildRequirements,
     stream_pins: set[str],
+    clocking: dict[str, str],
+    tieoffs: Tieoffs,
 ) -> None:
-    """Route every input outside the instance's streams: clocks and resets by role."""
+    """Drive every input outside the instance's streams from its domain or its tie-off."""
+    tied = dict(tieoffs.inputs)
     for name, info in abi_pins(requirements.abi).items():
-        if info.bus_id is not None or info.direction is not Direction.IN or name in stream_pins:
+        if info.direction is not Direction.IN or name in stream_pins:
             continue
-        if "clk2x" in name:
-            composition.drive(instance, name, "ap_clk2x")
-        elif isinstance(info.role, Clock):
-            composition.drive(instance, name, "ap_clk")
-        elif isinstance(info.role, Reset):
-            composition.drive(instance, name, "ap_rst_n")
-        else:
+        if name in clocking:
+            composition.drive(instance, name, clocking[name])
+        elif name in tied:
+            composition.tie(instance, name, tied[name])
+        elif info.bus_id is None:
             raise ValueError(f"{instance}.{name}: an input outside every stream has no driver")
+    for name in tieoffs.unused:
+        composition.dispose(instance, name, "tied off")
 
 
 __all__ = [
@@ -442,6 +537,9 @@ __all__ = [
     "Stream",
     "StreamFifo",
     "StreamSpec",
+    "TIEOFFS",
+    "TIEOFFS_SEMANTICS",
+    "Tieoffs",
     "boundary_contract",
     "netlist",
 ]

@@ -127,8 +127,11 @@ Ports check what they read: dotp refuses a stream whose lanes, lane order,
 column walk or frame rows differ from its PE/SIMD reading, rather than adopting
 the stream's form. Every stream owns a `compatible` constraint, and its accepted
 `connection` feeds the parent's `structure` view: `netlist` wires
-`Members(MODULE)` through `Members(CONNECTION)`, routes clocks and resets, and
-turns boundary streams into AXIS. `build_requirements` lowers that structure.
+`Members(MODULE)` through `Members(CONNECTION)`, drives every clock and reset
+pin from the composite's `ClockDomain` nodes (`Members(DOMAIN)`; each kernel
+names the pins a domain drives), holds tied-off inputs (`Members(TIEOFFS)`),
+and turns boundary streams into AXIS. A domain no kernel runs in is absent from
+the top: an unpumped MVAU has no `ap_clk2x`. `build_requirements` lowers that structure.
 The `implementation` Decision places either nothing (`external`: the weight
 stream has one user and is the boundary `in1_V`) or its `cyclic`
 CyclicDelivery candidate, named `implementation.cyclic`; only the selected
