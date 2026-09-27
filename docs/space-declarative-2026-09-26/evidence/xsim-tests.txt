@@ -1,0 +1,36 @@
+============================= test session starts ==============================
+platform linux -- Python 3.10.19, pytest-9.1.1, pluggy-1.6.0 -- /home/tkeller/prj-kernels/.kernel-venv/bin/python
+cachedir: .pytest_cache
+hypothesis profile 'default'
+rootdir: /home/tkeller/prj-kernels/finn-space-declarative
+configfile: setup.cfg
+plugins: hypothesis-6.167.1
+collecting ... collected 9 items
+
+tests/kernels/test_flat_kernels.py::test_generated_rtl_preserves_values_sequences_and_backpressure[fifo] PASSED [ 11%]
+tests/kernels/test_flat_kernels.py::test_generated_rtl_preserves_values_sequences_and_backpressure[generator] PASSED [ 22%]
+tests/kernels/test_flat_kernels.py::test_generated_rtl_preserves_values_sequences_and_backpressure[threshold] PASSED [ 33%]
+tests/kernels/test_flat_kernels.py::test_generated_rtl_preserves_values_sequences_and_backpressure[integer] PASSED [ 44%]
+tests/kernels/test_flat_kernels.py::test_generated_rtl_preserves_values_sequences_and_backpressure[float] PASSED [ 55%]
+tests/kernels/test_flat_kernels.py::test_combinational_conversion_uses_round_toward_zero PASSED [ 66%]
+tests/kernels/test_native_streams.py::test_fifo_capacity_and_effective_storage_agree_with_native_rtl PASSED [ 77%]
+tests/kernels/test_stream_contract.py::test_eltwise_with_cyclic_constant_computes_the_broadcast_sum PASSED [ 88%]
+tests/kernels/test_streaming_components.py::test_rtl_streams_preserve_words_framing_stalls_and_reset PASSED [100%]
+
+==================================== PASSES ====================================
+=========================== short test summary info ============================
+PASSED tests/kernels/test_flat_kernels.py::test_generated_rtl_preserves_values_sequences_and_backpressure[fifo]
+PASSED tests/kernels/test_flat_kernels.py::test_generated_rtl_preserves_values_sequences_and_backpressure[generator]
+PASSED tests/kernels/test_flat_kernels.py::test_generated_rtl_preserves_values_sequences_and_backpressure[threshold]
+PASSED tests/kernels/test_flat_kernels.py::test_generated_rtl_preserves_values_sequences_and_backpressure[integer]
+PASSED tests/kernels/test_flat_kernels.py::test_generated_rtl_preserves_values_sequences_and_backpressure[float]
+PASSED tests/kernels/test_flat_kernels.py::test_combinational_conversion_uses_round_toward_zero
+PASSED tests/kernels/test_native_streams.py::test_fifo_capacity_and_effective_storage_agree_with_native_rtl
+PASSED tests/kernels/test_stream_contract.py::test_eltwise_with_cyclic_constant_computes_the_broadcast_sum
+PASSED tests/kernels/test_streaming_components.py::test_rtl_streams_preserve_words_framing_stalls_and_reset
+======================== 9 passed in 246.53s (0:04:06) =========================
+exit status: 0
+/home/tkeller/Xilinx/2025.2/Vivado/bin/xelab
+/home/tkeller/Xilinx/2025.2/Vivado/bin/xsim
+/home/tkeller/Xilinx/2025.2/Vivado/bin/xvlog
+Vivado Simulator v2025.2

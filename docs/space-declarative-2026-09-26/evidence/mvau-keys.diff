@@ -1,0 +1,143 @@
+--- mvau keys at 35e59b442 (iteration 1)
++++ mvau keys on spike/space-declarative-2 (iteration 2)
+@@ -12,12 +12,10 @@
+ derived activation_spec
+ constraint activations.compatible
+ view activations.connection
+-derived activations.contracts
++derived activations.endpoints
++members activations.ends
+ derived activations.link
+-alias activations.sink
+-locate activations.sink.$located.0
+-alias activations.source
+-locate activations.source.$located.0
++const activations.port
+ alias activations.spec
+ view activations.stage
+ derived activations.stage.$output
+@@ -40,7 +38,7 @@
+ alias compute.activation_dtype
+ view compute.activation_port
+ derived compute.activation_port.$output
+-alias compute.activation_stream
++const compute.activation_stream
+ group compute.activation_type.admission
+ derived compute.activation_type.candidate
+ alias compute.activation_type.dtype
+@@ -58,6 +56,8 @@
+ view compute.interfaces
+ derived compute.interfaces.$output
+ alias compute.pe
++view compute.ports
++derived compute.ports.$output
+ constraint compute.pumping_supported
+ derived compute.result.candidate
+ derived compute.result.carrier_bits
+@@ -75,7 +75,7 @@
+ alias compute.result_dtype
+ view compute.result_port
+ derived compute.result_port.$output
+-alias compute.result_stream
++const compute.result_stream
+ group compute.result_type.admission
+ derived compute.result_type.candidate
+ alias compute.result_type.dtype
+@@ -109,7 +109,7 @@
+ alias compute.weights_dtype
+ view compute.weights_port
+ derived compute.weights_port.$output
+-alias compute.weights_stream
++const compute.weights_stream
+ group compute.weights_type.admission
+ derived compute.weights_type.candidate
+ alias compute.weights_type.dtype
+@@ -122,7 +122,6 @@
+ alias delivery
+ group dimensions
+ constraint dimensions_supported
+-derived external
+ derived folding
+ decision implementation
+ derived implementation.cyclic.$selected
+@@ -142,16 +141,15 @@
+ derived implementation.cyclic.image
+ view implementation.cyclic.output
+ derived implementation.cyclic.output.$output
++const implementation.cyclic.output_stream
++view implementation.cyclic.ports
++derived implementation.cyclic.ports.$output
+ decision implementation.cyclic.rom_style
+ alias implementation.cyclic.values
+-view in0_V
+-view in1_V
+-guard in1_V.$guard
+ param matrix_height
+ param matrix_width
+ members modules
+ derived neuron_folds
+-view out0_V
+ decision pe
+ param repetitions
+ view replay.build_requirements
+@@ -159,19 +157,20 @@
+ derived replay.contracts
+ view replay.input_port
+ derived replay.input_port.$output
+-alias replay.input_stream
++const replay.input_stream
+ view replay.output_port
+ derived replay.output_port.$output
++const replay.output_stream
++view replay.ports
++derived replay.ports.$output
+ alias replay.replay_count
+ alias replay.sequence_length
+ constraint replayed.compatible
+ view replayed.connection
+-derived replayed.contracts
++derived replayed.endpoints
++members replayed.ends
+ derived replayed.link
+-alias replayed.sink
+-locate replayed.sink.$located.0
+-alias replayed.source
+-locate replayed.source.$located.0
++present replayed.port
+ alias replayed.spec
+ view replayed.stage
+ derived replayed.stage.$output
+@@ -180,12 +179,10 @@
+ derived result_type
+ constraint results.compatible
+ view results.connection
+-derived results.contracts
++derived results.endpoints
++members results.ends
+ derived results.link
+-alias results.sink
+-locate results.sink.$located.0
+-alias results.source
+-locate results.source.$located.0
++const results.port
+ alias results.spec
+ view results.stage
+ derived results.stage.$output
+@@ -200,14 +197,10 @@
+ derived weight_spec
+ constraint weight_stream.compatible
+ view weight_stream.connection
+-derived weight_stream.contracts
++derived weight_stream.endpoints
++members weight_stream.ends
+ derived weight_stream.link
+-alias weight_stream.sink
+-locate weight_stream.sink.$located.0
+-alias weight_stream.source
+-locate weight_stream.source.$located.1
+-locate weight_stream.source.$located.2
+-present weight_stream.source.$present.0
++const weight_stream.port
+ alias weight_stream.spec
+ view weight_stream.stage
+ decision weight_stream.transport

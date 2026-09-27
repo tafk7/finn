@@ -1,3 +1,13 @@
-N=  50  prepare     42.6 ms  full read    17.5 ms  read after one local edit    17.2 ms  callbacks re-run 50 (first snapshot: 50)
-N= 200  prepare    156.7 ms  full read    70.3 ms  read after one local edit    68.7 ms  callbacks re-run 200 (first snapshot: 200)
-N= 800  prepare    616.7 ms  full read   278.5 ms  read after one local edit   284.2 ms  callbacks re-run 800 (first snapshot: 800)
+# docs/space-declarative-2026-09-26/scale_probe.py on spike/space-declarative-2 (assignment API)
+N=  50  prepare     31.6 ms  full read    15.5 ms  read after one local edit    15.3 ms  callbacks re-run 50 (first snapshot: 50)
+N= 200  prepare    119.2 ms  full read    61.5 ms  read after one local edit    60.7 ms  callbacks re-run 200 (first snapshot: 200)
+N= 800  prepare    462.5 ms  full read   243.2 ms  read after one local edit   235.1 ms  callbacks re-run 800 (first snapshot: 800)
+
+# the iteration-1 probe (35e59b442, Bind edges) in the same session, for comparison
+N=  50  prepare     42.5 ms  full read    18.0 ms  read after one local edit    17.2 ms  callbacks re-run 50 (first snapshot: 50)
+N= 200  prepare    156.2 ms  full read    70.0 ms  read after one local edit    67.9 ms  callbacks re-run 200 (first snapshot: 200)
+N= 800  prepare    616.9 ms  full read   277.9 ms  read after one local edit   284.6 ms  callbacks re-run 800 (first snapshot: 800)
+
+# graph size at N=800 (inspection.statistics): nodes, potential edges
+iteration 2: 3200 nodes, 1599 edges
+iteration 1: 3999 nodes, 2398 edges (one Bind node per edge, and a present node per open formal)
