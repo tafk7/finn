@@ -54,6 +54,14 @@ class ValueUnavailableError(SpaceError):
         super().__init__(f"value is unavailable: {type(result).__name__}")
 
 
+class ReferenceUseError(SpaceError, TypeError):
+    """A declaration reference was used as a value while a Space was declared.
+
+    References are typed as the values they stand for; this error makes each
+    value-like use fail at runtime, naming the reference and its source line.
+    """
+
+
 class ConfigurationError(SpaceError):
     """A well-formed configuration replacement could not be published."""
 
@@ -66,6 +74,7 @@ __all__ = [
     "DefinitionError",
     "EvaluationError",
     "ConfigurationError",
+    "ReferenceUseError",
     "RequestError",
     "SpaceError",
     "ValueUnavailableError",

@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 from collections.abc import Generator, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from threading import RLock
 from types import MappingProxyType
 from typing import TYPE_CHECKING, TypeAlias, cast
@@ -31,11 +31,12 @@ from .results import (
     assess_view,
     constraint_result,
     owned_result,
+    reject,
 )
 
 if TYPE_CHECKING:
     from ._configuration import Space
-    from .compiler import SpaceModel
+    from .compiler import Model
 
 Assessment: TypeAlias = ViewAssessment[object] | ConstraintAssessment
 
@@ -45,13 +46,15 @@ class Evaluation:
     result: QueryResult[object]
     dependencies: tuple[int, ...] = ()
     assessment: Assessment | None = None
+    # Method reads that went straight to a forwarding alias's source: (alias, source).
+    via: tuple[tuple[int, int], ...] = ()
 
 
 @dataclass(frozen=True, slots=True, eq=False)
 class Snapshot:
     """One root binding and commitment set with a local evaluation cache."""
 
-    model: SpaceModel[Space]
+    model: Model[Space]
     parameters: Mapping[int, object]
     assignments: Mapping[int, object] = field(default_factory=dict)
     lock: RLock = field(default_factory=RLock, repr=False)
@@ -163,6 +166,74 @@ def _constraint_members(
     return {snapshot.linked.nodes[reference].key: cast(QueryResult[bool], answer)}
 
 
+def _obligation(
+    snapshot: Snapshot, reference: int, answer: QueryResult[object]
+) -> QueryResult[object]:
+    """An obliged view contributes only its acceptance."""
+    if snapshot.linked.nodes[reference].kind == "view" and isinstance(answer, Available):
+        return Available(True)
+    return answer
+
+
+def _present(node: Node, answers: list[QueryResult[object]]) -> QueryResult[object]:
+    """The single present source. While any source is unresolved the answer is
+    unresolved too: a later commitment could still make a second one present."""
+    active = [answer for answer in answers if not isinstance(answer, Inapplicable)]
+    blocked = _blocked([answer for answer in active if not isinstance(answer, Available)])
+    if blocked is not None:
+        return blocked
+    if len(active) > 1:
+        return reject(
+            "multiple-suppliers",
+            f"{len(active)} sources are present; at most one may supply this value",
+            owner=node.owner,
+        )
+    if not active:
+        return Unresolved(
+            (
+                Finding(
+                    FindingKind.LIMITATION,
+                    "input-unsupplied",
+                    node.owner,
+                    "no present source supplies this value",
+                ),
+            )
+        )
+    return active[0]
+
+
+def _graph_frame(snapshot: Snapshot, node: Node) -> _execution.Frame:
+    from .graph import Located  # noqa: PLC0415 - value type of the graph primitives
+
+    if node.kind == "present":
+        answers: list[QueryResult[object]] = []
+        for _, target in node.alternatives:
+            answers.append(cast(QueryResult[object], (yield target)))
+        return Evaluation(_present(node, answers))
+    if node.kind == "locate":
+        assert node.output is not None
+        answer = cast(QueryResult[object], (yield node.output))
+        if not isinstance(answer, Available):
+            return Evaluation(answer)
+        where, member = cast(tuple[str | None, str], node.value)
+        return Evaluation(Available(Located(where, member, answer.value)))
+    assert node.kind == "members"
+    # Members and Users: one (node name, export) alternative per entry, with
+    # the member name of each entry (the key's name, or the user's input name).
+    located: list[Located[object]] = []
+    failures: list[QueryResult[object]] = []
+    for (name, target), member in zip(node.alternatives, cast(tuple[str, ...], node.value)):
+        answer = cast(QueryResult[object], (yield target))
+        if isinstance(answer, Inapplicable):
+            continue
+        if isinstance(answer, Available):
+            located.append(Located(name or None, member, answer.value))
+        else:
+            failures.append(answer)
+    blocked = _blocked(failures)
+    return Evaluation(blocked if blocked is not None else Available(tuple(located)))
+
+
 def _frame(snapshot: Snapshot, node: Node) -> _execution.Frame:
     if node.guard is not None:
         guard = cast(QueryResult[object], (yield node.guard))
@@ -186,7 +257,11 @@ def _frame(snapshot: Snapshot, node: Node) -> _execution.Frame:
             )
         )
     if node.kind == "const":
+        if node.domain is not None:
+            return (yield from _pinned(snapshot, node, Available(node.value)))
         return Evaluation(Available(node.value))
+    if node.kind in {"present", "locate", "members"}:
+        return (yield from _graph_frame(snapshot, node))
     if node.kind == "decision":
         if node.index in snapshot.assignments:
             return Evaluation(Available(snapshot.assignments[node.index]))
@@ -212,36 +287,31 @@ def _frame(snapshot: Snapshot, node: Node) -> _execution.Frame:
     if node.kind in {"alias", "guard"}:
         if node.output is None:
             raise EvaluationError(node.owner, node.kind, "missing output reference")
-        return Evaluation(cast(QueryResult[object], (yield node.output)))
+        answer = cast(QueryResult[object], (yield node.output))
+        if node.domain is not None:
+            return (yield from _pinned(snapshot, node, answer))
+        return Evaluation(answer)
     if node.kind == "select":
-        if node.selector is None:
-            if len(node.alternatives) != 1:
-                raise EvaluationError(node.owner, "selection", "missing selector")
-            selected = node.alternatives[0][1]
-        else:
-            selector = cast(QueryResult[object], (yield node.selector))
-            if not isinstance(selector, Available):
-                return Evaluation(selector)
-            case = selector.value
-            if type(case) is not str:
-                raise EvaluationError(node.owner, "selection", "selector is not a declared case")
-            if node.selection_index is not None:
-                target = node.selection_index.get(case)
-            elif len(node.alternatives) == 1 and node.alternatives[0][0] == case:
-                target = node.alternatives[0][1]
-            else:
-                target = None
-            if target is None:
-                raise EvaluationError(node.owner, "selection", "selector is not a declared case")
-            selected = target
-        return Evaluation(cast(QueryResult[object], (yield selected)))
+        if node.selector is None or node.selection_index is None:
+            raise EvaluationError(node.owner, "selection", "missing selector")
+        selector = cast(QueryResult[object], (yield node.selector))
+        if not isinstance(selector, Available):
+            return Evaluation(selector)
+        case = selector.value
+        if type(case) is not str:
+            raise EvaluationError(node.owner, "selection", "selector is not a declared case")
+        target = node.selection_index.get(case)
+        if target is None:
+            # The selected candidate is None, or has no such member: absent.
+            return Evaluation(Inapplicable())
+        return Evaluation(cast(QueryResult[object], (yield target)))
     if node.kind == "view":
         if node.output is None:
             raise EvaluationError(node.owner, "view", "missing output reference")
         output = cast(QueryResult[object], (yield node.output))
         constraints: dict[str, QueryResult[bool]] = {}
         for reference in node.constraints:
-            answer = cast(QueryResult[object], (yield reference))
+            answer = _obligation(snapshot, reference, cast(QueryResult[object], (yield reference)))
             constraints.update(_constraint_members(snapshot, reference, answer))
         view = assess_view(output, owner=node.key, constraints=constraints)
         return Evaluation(view.accepted_result, assessment=view)
@@ -278,6 +348,76 @@ def _frame(snapshot: Snapshot, node: Node) -> _execution.Frame:
         return Evaluation(Available(node.semantics.freeze(value)))
     except Exception as cause:
         raise EvaluationError(node.owner, node.kind, str(cause)) from cause
+
+
+def _refused(node: Node, value: object, answer: QueryResult[object]) -> QueryResult[object]:
+    """A supplied value outside the declared domain, reported with who supplied it."""
+    if not isinstance(answer, Rejected):
+        return answer
+    reason = "; ".join(finding.message for finding in answer.findings)
+    supplied = node.note or f"{node.key} = {value!r}"
+    return reject(
+        "domain-membership",
+        f"{supplied}: {value!r} is outside the declared domain ({reason})",
+        owner=node.owner,
+    )
+
+
+def _pinned(snapshot: Snapshot, node: Node, answer: QueryResult[object]) -> _execution.Frame:
+    """A pinned coordinate: the supplied value must be in the declared domain."""
+    if not isinstance(answer, Available):
+        return Evaluation(answer)
+    admission = yield from _membership_frame(snapshot, node, answer.value, check_guard=False)
+    if isinstance(admission.result, Available) and admission.result.value is True:
+        return Evaluation(answer)
+    return Evaluation(_refused(node, answer.value, admission.result))
+
+
+def supplied_provenance(snapshot: Snapshot, evaluation: Evaluation, index: int) -> Evaluation:
+    """A computation's own refusal names who set the overridden values it read.
+
+    ``kitchen.area = 16 (set by House at house.py:42; declared 12 at room.py:10)``
+    is appended to each finding the computation owns, for every value it read
+    that an enclosing body set over another setting.
+    """
+    result = evaluation.result
+    linked = snapshot.linked
+    if not isinstance(result, Rejected) or not linked.provenance:
+        return evaluation
+    node = linked.nodes[index]
+    if node.function is None:
+        return evaluation
+    read = (*evaluation.dependencies, *(alias for alias, _ in evaluation.via))
+    texts = tuple(
+        dict.fromkeys(
+            linked.provenance[item].text()
+            for item in read
+            if item in linked.provenance and len(linked.provenance[item].layers) > 1
+        )
+    )
+    if not texts:
+        return evaluation
+    findings = tuple(
+        replace(
+            finding,
+            message=f"{finding.message}; {'; '.join(texts)}",
+            details=(*finding.details, ("provenance", texts)),
+        )
+        if finding.owner == node.owner
+        else finding
+        for finding in result.findings
+    )
+    annotated = Rejected(findings)
+    assessment = evaluation.assessment
+    if isinstance(assessment, ConstraintAssessment):
+        assessment = ConstraintAssessment(
+            {
+                key: annotated if answer is result else answer
+                for key, answer in assessment.results.items()
+            },
+            annotated if assessment.result is result else assessment.result,
+        )
+    return Evaluation(annotated, evaluation.dependencies, assessment, evaluation.via)
 
 
 def _self_point(snapshot: Snapshot, scope: int) -> Space:
@@ -318,7 +458,34 @@ def _membership_frame(
         assert blocked is not None
         return Evaluation(blocked)
     assert isinstance(called, _execution._Returned)
-    return Evaluation(cast(QueryResult[object], called.value))
+    result = cast(QueryResult[object], called.value)
+    if node.contract is not None and isinstance(result, Available) and result.value is True:
+        # A replaced Decision: the declared domain still checks the candidate.
+        contract = yield from _contract_frame(snapshot, node, candidate)
+        if not (isinstance(contract, Available) and contract.value is True):
+            return Evaluation(_refused(node, candidate, contract))
+    return Evaluation(result)
+
+
+def _contract_frame(
+    snapshot: Snapshot, node: Node, candidate: object
+) -> Generator[int | _execution.Call, object, QueryResult[object]]:
+    assert node.contract is not None and node.semantics is not None
+    arguments, failure = yield from _arguments(snapshot.linked, node.contract_arguments, node.owner)
+    if failure is not None:
+        return failure
+    called = yield _execution.Call(
+        node.contract.membership,
+        (candidate, arguments),
+        {"semantics": node.semantics, "owner": node.owner},
+        "domain membership",
+    )
+    if isinstance(called, _execution._Halt):
+        blocked = _blocked(list(called.results))
+        assert blocked is not None
+        return blocked
+    assert isinstance(called, _execution._Returned)
+    return cast(QueryResult[object], called.value)
 
 
 def _enumeration_frame(snapshot: Snapshot, node: Node) -> _execution.Frame:
@@ -344,7 +511,18 @@ def _enumeration_frame(snapshot: Snapshot, node: Node) -> _execution.Frame:
         assert blocked is not None
         return Evaluation(blocked)
     assert isinstance(called, _execution._Returned)
-    return Evaluation(cast(QueryResult[object], called.value))
+    result = cast(QueryResult[object], called.value)
+    if node.contract is None or not isinstance(result, Available):
+        return Evaluation(result)
+    # Advisory enumeration of a replaced Decision lists what its contract admits.
+    admitted: list[object] = []
+    for candidate in cast(tuple[object, ...], result.value):
+        contract = yield from _contract_frame(snapshot, node, candidate)
+        if isinstance(contract, Available) and contract.value is True:
+            admitted.append(candidate)
+        elif not isinstance(contract, Rejected):
+            return Evaluation(contract)
+    return Evaluation(Available(tuple(admitted)))
 
 
 def _applicability(snapshot: Snapshot, node: Node) -> NonValue | None:
@@ -398,12 +576,17 @@ def copy_result(
         return Available(_clone(node, answer.value, owner=node.owner, role="public value snapshot"))
 
 
-def _copy_readiness(snapshot: Snapshot, assessment: ReadinessAssessment) -> ReadinessAssessment:
+def _copy_readiness(
+    snapshot: Snapshot, assessment: ReadinessAssessment, own: str
+) -> ReadinessAssessment:
+    def copy(key: str, answer: QueryResult[object]) -> QueryResult[object]:
+        index = snapshot.linked.keys[key]
+        if key != own and snapshot.linked.nodes[index].kind == "view":
+            return answer  # an obliged view contributes only its Boolean acceptance
+        return copy_result(snapshot, index, answer)
+
     return ReadinessAssessment(
-        {
-            key: copy_result(snapshot, snapshot.linked.keys[key], answer)
-            for key, answer in assessment.results.items()
-        },
+        {key: copy(key, answer) for key, answer in assessment.results.items()},
         assessment.result,
     )
 
@@ -426,7 +609,7 @@ def copy_assessment(snapshot: Snapshot, node_index: int, assessment: Assessment)
         )
         return ViewAssessment(
             output,
-            _copy_readiness(snapshot, assessment.readiness),
+            _copy_readiness(snapshot, assessment.readiness, node.key),
             assessment.constraints,
             accepted,
         )

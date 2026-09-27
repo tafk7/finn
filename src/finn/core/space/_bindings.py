@@ -1,175 +1,170 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
-"""Explicit child suppliers, nested parameter targets, and placement plans."""
+"""How each member of one placed node is supplied, layer by layer.
+
+A member may be set by the family's declaration (a Param default, a Decision,
+a child node), by the body that declared the node (at the call or by
+assignment), and by every enclosing body through a path. The outermost setting
+wins; the others are kept as its provenance.
+"""
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from dataclasses import dataclass
-from types import MappingProxyType
-from typing import Literal
+from typing import Literal, cast
 
-from ._configuration import Space
+from ._nodes import NodeDecision, NodeDecl
 from .declarations import (
+    MISSING,
+    UNSUPPLIED,
+    CaseRef,
+    ChoiceMemberRef,
+    Const,
     Decision,
-    DecisionRef,
     Declaration,
+    MemberRef,
     Param,
-    ScopedValueRef,
-    Subspace,
+    Present,
     ValueRef,
-    class_namespace,
+    View,
+    _path_text,
 )
+from .domains import Domain
 from .errors import DefinitionError
+from .expressions import Expr
+from .ir import Layer, Provenance
+
+BindingKind = Literal["literal", "reference", "local-decision", "parameter", "pin", "pin-reference"]
+
+# The writer of a root declaration's own settings: the design_space() call.
+ROOT_WRITER = -1
+ROOT_BODY = "the root declaration"
 
 
 @dataclass(frozen=True, slots=True)
 class PlacementBinding:
     supplier: object
-    kind: Literal["literal", "reference", "exposed-param", "local-decision"]
+    kind: BindingKind
+    # The scope whose body wrote the supplier: references are read there.
+    source_scope: int | None = None
+    origin: str | None = None
+    # A Decision member overridden by a value or a narrower Decision keeps its
+    # declared Decision as the contract every supplier is checked against.
+    # (Typed as a Declaration: a Decision-typed attribute reads through __get__.)
+    contract: Declaration | None = None
+    provenance: Provenance | None = None
 
 
 @dataclass(frozen=True, slots=True)
-class PlacementTarget:
-    path: tuple[Subspace[Space], ...]
-    member: Param[object]
-    name: str
+class Slot:
+    """The effective setting of one member of one placed node, with its history."""
+
+    supplier: object
+    writer: int  # ROOT_WRITER, or the scope whose body wrote it
+    scope: int  # where its references are read
+    origin: str | None
+    provenance: Provenance
+    # The suppliers of the inner layers it overrides, innermost first.
+    overridden: tuple[object, ...] = ()
+
+    @property
+    def opened(self) -> bool:
+        """Whether an overridden inner layer opened a coordinate (a fresh Decision)."""
+        return any(
+            isinstance(item, Decision) and item.owner is None and item.name is None
+            for item in self.overridden
+        )
 
 
-@dataclass(frozen=True, slots=True)
-class NestedBinding:
-    reference: ValueRef[object]
-    target: PlacementTarget
-    binding: PlacementBinding
+def supply_text(value: object) -> str:
+    """A supplier as provenance text: a literal, a reference path, a node or a Decision."""
+    if isinstance(value, NodeDecl):
+        return f"{value.family.__qualname__} node"
+    if isinstance(value, NodeDecision):
+        return f"Decision over {sorted(value.candidates)}"
+    if isinstance(value, Decision):
+        return decision_text(cast(Decision[object], value))
+    if isinstance(value, MemberRef):
+        return f"{_path_text(value.path)}.{value.member.name}"
+    if isinstance(value, ChoiceMemberRef):
+        return f"{_path_text(value.path)}.{value.member}"
+    if isinstance(value, CaseRef):
+        return f"selected({_path_text(value.path)})"
+    if isinstance(value, Present):
+        return f"Present({', '.join(supply_text(item) for item in value.sources)})"
+    if isinstance(value, Expr):
+        return "an expression"
+    if isinstance(value, Const):
+        return repr(value.value)
+    if isinstance(value, (Declaration, View)):
+        return str(getattr(value, "name", None) or type(value).__name__)
+    return repr(value)
 
 
-@dataclass(frozen=True, slots=True)
-class PlacementPlan:
-    bindings: Mapping[str, PlacementBinding]
-    nested_bindings: tuple[NestedBinding, ...] = ()
+def decision_text(decision: Decision[object]) -> str:
+    domain: Domain[object] = decision.domain
+    values = domain._finite_values
+    if values is not None:
+        return f"Decision(values={tuple(values)!r})"
+    return "Decision(domain=...)"
 
 
-class _TargetResolver:
-    """Resolve concrete typed paths without recursive template compilation."""
-
-    def __init__(self) -> None:
-        self.tables: dict[type[Space], tuple[dict[str, object], dict[int, str]]] = {}
-
-    def member(self, space_type: type[Space], reference: object) -> tuple[str, object]:
-        if space_type not in self.tables:
-            names = {
-                id(value): name
-                for base in reversed(space_type.__mro__)
-                for name, value in vars(base).items()
-                if isinstance(value, Declaration)
-            }
-            self.tables[space_type] = (class_namespace(space_type), names)
-        namespace, names = self.tables[space_type]
-        name = names.get(id(reference))
-        if name is None:
-            raise DefinitionError("binding reference is not a member of this child family")
-        return name, namespace[name]
-
-    def resolve(
-        self,
-        space_type: type[Space],
-        reference: object,
-    ) -> PlacementTarget:
-        path: list[Subspace[Space]] = []
-        seen: set[tuple[type[Space], int]] = set()
-        while isinstance(reference, ScopedValueRef):
-            if isinstance(reference, DecisionRef):
-                raise DefinitionError("binding targets require Param references, not DecisionRef")
-            identity = (space_type, id(reference))
-            if identity in seen:
-                raise DefinitionError("cyclic scoped parameter reference")
-            seen.add(identity)
-            _, placement = self.member(space_type, reference.placement)
-            if not isinstance(placement, Subspace):
-                raise DefinitionError("binding targets require concrete child placements")
-            path.append(placement)
-            space_type, reference = placement.space_type, reference.member
-        name, member = self.member(space_type, reference)
-        if not isinstance(member, Param):
-            raise DefinitionError("binding target is not a Param declaration")
-        return PlacementTarget(tuple(path), member, name)
+def declared_layer(declaration: Declaration) -> Layer | None:
+    """The family's own setting of a member, if it has one."""
+    body = declaration.owner.__name__ if declaration.owner is not None else "?"
+    if isinstance(declaration, Param):
+        default = declaration.default
+        if default is MISSING or default is UNSUPPLIED:
+            return None
+        return Layer(body, declaration.origin, repr(default), declared=True)
+    if isinstance(declaration, (NodeDecl, NodeDecision, Decision)):
+        return Layer(body, declaration.origin, supply_text(declaration), declared=True)
+    return None
 
 
-def _placement_binding(parameter: Param[object], supplier: object, label: str) -> PlacementBinding:
-    kind: Literal["literal", "reference", "exposed-param", "local-decision"]
-    if isinstance(supplier, Param) and supplier.owner is None:
-        kind = "exposed-param"
-    elif isinstance(supplier, Decision) and supplier.owner is None:
-        kind = "local-decision"
-    elif isinstance(supplier, ValueRef):
-        kind = "reference"
-    else:
-        kind = "literal"
-    assert parameter.semantics is not None
-    if isinstance(supplier, ValueRef):
-        if supplier.semantics is not None and not parameter.semantics.is_compatible_with(
-            supplier.semantics
-        ):
-            raise DefinitionError(f"{label}: binding has incompatible value semantics")
-    else:
-        try:
-            supplier = parameter.semantics.freeze(supplier)
-        except (TypeError, ValueError) as error:
-            raise DefinitionError(f"{label}: {error}") from error
-    return PlacementBinding(supplier, kind)
+def classify(
+    member: Declaration, slot: Slot, *, root_own: bool
+) -> tuple[BindingKind, object, Decision[object] | None]:
+    """How a value member is supplied: its binding kind, supplier and contract.
 
-
-def collect_placement(placement: Subspace[Space]) -> PlacementPlan:
-    """Validate named/direct bindings and explicitly targeted nested Params.
-
-    Nested target exposure is checked against the allocated scopes before any
-    callbacks are linked. It is not inferred by flattening child definitions.
+    A root's own plain values stay runtime inputs (``parameter``). A Decision
+    member overridden by a value is pinned; by a reference, pinned to it; by a
+    fresh Decision, replaced under the same key. Either keeps the declared
+    Decision as its contract.
     """
-    namespace = class_namespace(placement.space_type)
-    parameters = {name: value for name, value in namespace.items() if isinstance(value, Param)}
-    label = placement.name or placement.space_type.__qualname__
-    named = dict(placement.bindings)
-    extra = named.keys() - parameters.keys()
-    if extra:
-        raise DefinitionError(f"{label}: unknown child parameter bindings {sorted(extra)}")
-    resolver = _TargetResolver()
-    nested: list[NestedBinding] = []
-    targets: set[tuple[tuple[Subspace[Space], ...], str]] = set()
-    for reference, supplier in placement.parameter_bindings.items():
-        target = resolver.resolve(placement.space_type, reference)
-        identity = (target.path, target.name)
-        if identity in targets:
-            raise DefinitionError(f"{label}: duplicate parameter binding")
-        targets.add(identity)
-        if not target.path:
-            if target.name in named:
-                raise DefinitionError(f"{label}.{target.name}: duplicate named and mapped binding")
-            named[target.name] = supplier
-        else:
-            nested.append(
-                NestedBinding(
-                    reference,
-                    target,
-                    _placement_binding(target.member, supplier, f"{label}.{target.name}"),
-                )
-            )
-    missing = parameters.keys() - named.keys()
-    if missing:
-        raise DefinitionError(f"{label}: missing child parameter bindings {sorted(missing)}")
-    bindings = {
-        name: _placement_binding(parameter, named[name], f"{label}.{name}")
-        for name, parameter in parameters.items()
-    }
-    return PlacementPlan(MappingProxyType(bindings), tuple(nested))
+    value = slot.supplier
+    if isinstance(value, Param) and value.owner is None:
+        raise DefinitionError(
+            f"{slot.provenance.key}: an inline Param cannot supply a member; declare the "
+            "formal on the enclosing family and bind it"
+        )
+    fresh_decision = (
+        isinstance(value, Decision) and value.owner is None and not isinstance(value, NodeDecision)
+    )
+    if isinstance(value, Const) and value.owner is None:
+        value, literal = value.value, True
+    else:
+        literal = not isinstance(value, (ValueRef, View))
+    if isinstance(member, Decision):
+        decision = cast(Decision[object], member)
+        if fresh_decision:
+            return "local-decision", value, decision
+        return ("pin" if literal else "pin-reference"), value, decision
+    if fresh_decision:
+        return "local-decision", value, None
+    if literal:
+        return ("parameter" if root_own else "literal"), value, None
+    return "reference", value, None
 
 
-class PlacementPlans:
-    """Normalized placements owned by one collection/preparation session."""
-
-    def __init__(self) -> None:
-        self._plans: dict[Subspace[Space], PlacementPlan] = {}
-
-    def get(self, placement: Subspace[Space]) -> PlacementPlan:
-        if placement not in self._plans:
-            self._plans[placement] = collect_placement(placement)
-        return self._plans[placement]
+__all__ = [
+    "BindingKind",
+    "PlacementBinding",
+    "ROOT_BODY",
+    "ROOT_WRITER",
+    "Slot",
+    "classify",
+    "declared_layer",
+    "decision_text",
+    "supply_text",
+]

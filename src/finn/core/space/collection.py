@@ -6,11 +6,11 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
-from types import MappingProxyType
-from typing import cast
+from types import MappingProxyType, UnionType
+from typing import Union, cast, get_args, get_origin
 
-from ._bindings import PlacementPlans
 from ._configuration import Space
+from ._nodes import NodeDecision, NodeDecl, node_record, slot_declaration
 from ._signatures import (
     BoundFunction,
     bind_function,
@@ -20,17 +20,19 @@ from ._signatures import (
     source_semantics,
 )
 from .declarations import (
+    MISSING,
     Constraint,
     Decision,
     Declaration,
     Derived,
-    Subspace,
-    SubspaceChoice,
-    ValueKey,
+    Param,
     ValueRef,
     View,
     ViewKey,
+    _describe_formal,
+    at,
     class_namespace,
+    declared_annotation,
     local_name,
 )
 from .errors import DefinitionError
@@ -49,6 +51,7 @@ _RESERVED = frozenset(
         "_scope",
         "exports",
         "when",
+        "_space_path",
     }
 )
 
@@ -60,8 +63,7 @@ class EffectiveSpace:
     functions: Mapping[str, BoundFunction]
     semantics: Mapping[Declaration, ValueSemantics[object]]
     aliases: Mapping[Declaration, str]
-    exports: Mapping[ValueKey[object] | ViewKey[object], Declaration]
-    placements: PlacementPlans = field(default_factory=PlacementPlans, repr=False)
+    exports: Mapping[ViewKey[object], Declaration]
     guards: Mapping[Declaration, ValueRef[bool]] = field(
         default_factory=lambda: MappingProxyType({})
     )
@@ -80,6 +82,34 @@ def _function(declaration: Declaration) -> Callable[..., object] | None:
     return None
 
 
+def member_declaration(value: object) -> Declaration | None:
+    """The declaration a class attribute contributes: a record for a node or choice."""
+    return slot_declaration(value)
+
+
+def _check_choice_annotation(decision: NodeDecision) -> None:
+    """``heating: Boiler | HeatPump = Decision(values=...)``: the union names the candidates."""
+    annotation = declared_annotation(decision, "Decision")
+    if annotation is MISSING:
+        return  # a Decision over nodes persists its key; its annotation only types it
+    options = get_args(annotation) if get_origin(annotation) in (Union, UnionType) else ()
+    options = options or (annotation,)
+    label = _describe_formal(decision, "Decision")
+    for key, record in decision.candidates.items():
+        if record is None:
+            if type(None) not in options:
+                raise DefinitionError(
+                    f"{label}: candidate {key!r} is None, so the annotation must include None"
+                )
+        elif not any(
+            isinstance(option, type) and issubclass(record.family, option) for option in options
+        ):
+            raise DefinitionError(
+                f"{label}: candidate {key!r} is a {record.family.__qualname__} node, which the "
+                f"annotation {annotation!r} does not admit"
+            )
+
+
 def _collect_members(
     space_type: type[Space],
 ) -> tuple[
@@ -93,24 +123,35 @@ def _collect_members(
     inherited: dict[str, list[Declaration]] = {}
     for base in reversed(space_type.__mro__):
         for name, value in vars(base).items():
-            if isinstance(value, Declaration):
+            declaration = member_declaration(value)
+            if declaration is not None:
                 local_name(name, "declaration name")
                 if name in _RESERVED or name.startswith("__"):
                     raise DefinitionError(
                         f"{base.__qualname__}.{name}: reserved configuration name"
                     )
-                if value.owner is not base or value.name != name:
+                record = node_record(value)
+                if record is not None and record.candidate_of is not None:
+                    # A handle naming a candidate of a Decision in this body.
+                    decision = record.candidate_of
+                    if decision.owner is not base:
+                        raise DefinitionError(
+                            f"{base.__qualname__}.{name}: names a candidate of a Decision "
+                            f"that is not declared in {base.__qualname__}{at(record.origin)}"
+                        )
+                    continue
+                if declaration.owner is not base or declaration.name != name:
                     raise DefinitionError(
                         f"{base.__qualname__}.{name}: declaration was not bound at class creation"
                     )
-                previous_name = aliases.get(value)
+                previous_name = aliases.get(declaration)
                 if previous_name is not None and previous_name != name:
                     raise DefinitionError(
                         f"{space_type.__qualname__}.{name}: declaration also named {previous_name}"
                     )
-                inherited.setdefault(name, []).append(value)
-                aliases[value] = name
-                members[name] = value
+                inherited.setdefault(name, []).append(declaration)
+                aliases[declaration] = name
+                members[name] = declaration
             elif name in members:
                 raise DefinitionError(
                     f"{base.__qualname__}.{name}: ordinary attribute hides an inherited declaration"
@@ -122,17 +163,16 @@ def _collect_semantics(
     space_type: type[Space],
     members: Mapping[str, Declaration],
     inherited: Mapping[str, list[Declaration]],
-    placements: PlacementPlans,
     hints_for: Callable[[Callable[..., object], str], Mapping[str, object]],
 ) -> dict[Declaration, ValueSemantics[object]]:
     """Check overrides and infer the local semantics of each effective member."""
     semantics: dict[Declaration, ValueSemantics[object]] = {}
     for name, declaration in members.items():
         owner = f"{space_type.__qualname__}.{name}"
-        if isinstance(declaration, Subspace):
-            placements.get(declaration)
         providers = [
-            base for base in space_type.__mro__ if isinstance(vars(base).get(name), Declaration)
+            base
+            for base in space_type.__mro__
+            if member_declaration(vars(base).get(name)) is not None
         ]
         nearest = [
             base
@@ -151,6 +191,10 @@ def _collect_semantics(
         elif isinstance(declaration, (ValueRef, View)) and declaration.semantics is not None:
             semantics[declaration] = declaration.semantics
         for prior in inherited[name][:-1]:
+            if isinstance(prior, (NodeDecl, NodeDecision)) and isinstance(
+                declaration, (NodeDecl, NodeDecision)
+            ):
+                continue  # a node or choice may be replaced by another structural member
             if type(prior) is not type(declaration):
                 raise DefinitionError(f"{owner}: override changes declaration kind")
             old_semantics = getattr(prior, "semantics", None)
@@ -169,26 +213,25 @@ def _collect_semantics(
 
 
 def _collect_guards(effective: EffectiveSpace) -> Mapping[Declaration, ValueRef[bool]]:
-    members, placements, space_type = effective.members, effective.placements, effective.space_type
-    guard_candidates: list[tuple[str, Declaration]] = [
-        (name, declaration) for name, declaration in members.items()
-    ]
+    """Guards authored in this body: members, their candidates and fresh decisions."""
+    members, space_type = effective.members, effective.space_type
+    guard_candidates: list[tuple[str, Declaration]] = list(members.items())
     for name, declaration in members.items():
-        children: tuple[tuple[str, Subspace[Space]], ...] = ()
-        if isinstance(declaration, Subspace):
+        children: tuple[tuple[str, NodeDecl], ...] = ()
+        if isinstance(declaration, NodeDecl):
             children = ((name, declaration),)
-        elif isinstance(declaration, SubspaceChoice):
+        elif isinstance(declaration, NodeDecision):
             children = tuple(
-                (f"{name}.{case}", placement)
-                for case, placement in declaration.alternatives.items()
+                (f"{name}.{case}", record)
+                for case, record in declaration.candidates.items()
+                if record is not None
             )
             guard_candidates.extend(children)
-        for placement_name, placement in children:
-            plan = placements.get(placement)
+        for placement_name, record in children:
             guard_candidates.extend(
-                (f"{placement_name}.{parameter}", binding.supplier)
-                for parameter, binding in plan.bindings.items()
-                if binding.kind == "local-decision" and isinstance(binding.supplier, Decision)
+                (f"{placement_name}.{parameter}", supplier)
+                for parameter, supplier in record.bindings.items()
+                if isinstance(supplier, Decision) and supplier.owner is None
             )
     guards: dict[Declaration, ValueRef[bool]] = {}
     for name, declaration in guard_candidates:
@@ -205,30 +248,25 @@ def _collect_guards(effective: EffectiveSpace) -> Mapping[Declaration, ValueRef[
 
 def _collect_exports(
     effective: EffectiveSpace, declared_exports: object
-) -> Mapping[
-    ValueKey[object] | ViewKey[object],
-    Declaration,
-]:
+) -> Mapping[ViewKey[object], Declaration]:
     space_type, members = effective.space_type, effective.members
     aliases, semantics = effective.aliases, effective.semantics
-    exports: dict[ValueKey[object] | ViewKey[object], Declaration] = {}
+    exports: dict[ViewKey[object], Declaration] = {}
     if not isinstance(declared_exports, Mapping):
         raise DefinitionError(
             f"{space_type.__qualname__}: exports must map typed keys to declarations"
         )
     export_names: set[str] = set()
     for key, declaration in declared_exports.items():
-        if not isinstance(key, (ValueKey, ViewKey)):
-            raise DefinitionError(f"{space_type.__qualname__}: an export needs a typed key")
+        if not isinstance(key, ViewKey):
+            raise DefinitionError(f"{space_type.__qualname__}: an export needs a ViewKey")
         if key.name in export_names:
             raise DefinitionError(f"{space_type.__qualname__}: duplicate export key {key.name}")
         export_names.add(key.name)
         if not isinstance(declaration, Declaration) or declaration not in aliases:
             raise DefinitionError(f"{space_type.__qualname__}: export {key.name} is not a member")
         resolved = members[aliases[declaration]]
-        if (isinstance(key, ValueKey) and not isinstance(resolved, ValueRef)) or (
-            isinstance(key, ViewKey) and not isinstance(resolved, View)
-        ):
+        if not isinstance(resolved, View):
             raise DefinitionError(
                 f"{space_type.__qualname__}: export {key.name} has the wrong kind"
             )
@@ -249,13 +287,10 @@ def _collect_exports(
     return MappingProxyType(exports)
 
 
-def collect_space(
-    space_type: type[Space], *, placements: PlacementPlans | None = None
-) -> EffectiveSpace:
+def collect_space(space_type: type[Space]) -> EffectiveSpace:
     """Collect one scope and snapshot its signatures; child linking is separate."""
     if not isinstance(space_type, type) or not issubclass(space_type, Space):
         raise DefinitionError("collect_space expects a Space subclass")
-    placements = placements if placements is not None else PlacementPlans()
     namespace = class_namespace(space_type)
     annotation_namespace = _annotation_namespace(space_type)
     hint_cache: dict[int, dict[str, object]] = {}
@@ -267,7 +302,13 @@ def collect_space(
         return hint_cache[key]
 
     members, aliases, inherited = _collect_members(space_type)
-    semantics = _collect_semantics(space_type, members, inherited, placements, hints_for)
+    for declaration in members.values():
+        # The annotation is the single source of a member's value type.
+        if isinstance(declaration, NodeDecision):
+            _check_choice_annotation(declaration)
+        elif isinstance(declaration, (Param, Decision)):
+            declaration.resolve()
+    semantics = _collect_semantics(space_type, members, inherited, hints_for)
     preliminary = EffectiveSpace(
         space_type,
         MappingProxyType(members),
@@ -275,7 +316,6 @@ def collect_space(
         MappingProxyType(semantics),
         MappingProxyType(aliases),
         MappingProxyType({}),
-        placements=placements,
     )
     functions: dict[str, BoundFunction] = {}
     for name, declaration in members.items():

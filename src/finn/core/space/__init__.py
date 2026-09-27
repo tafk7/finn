@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: BSD-3-Clause
 """Typed design-space authoring, immutable specialization and public services."""
 
-from . import codecs, extensions, inspection, selections
-from ._configuration import BoundDecision, BoundValue, BoundView, ChoiceView, Space
+from . import codecs, extensions, graph, inspection, selections
+from ._configuration import BoundDecision, BoundValue, Space
 from ._execution import (
     CleanupFailure,
     NativeCancellationDetails,
@@ -11,24 +11,24 @@ from ._execution import (
     cancellation_details,
 )
 from .codecs import CodecBinding, JSONValue, SelectionSchema, ValueCodec, codec_for
-from .compiler import SpaceModel, compile_space
+from .compiler import Model, design_space
 from .declarations import (
-    AcceptedViewRef,
     Const,
     Constraint,
     ConstraintGroup,
     Decision,
-    DecisionRef,
     Derived,
+    LocatedParam,
+    Members,
     Param,
-    Subspace,
-    SubspaceChoice,
-    ValueKey,
+    Present,
+    Users,
     ValueRef,
     View,
     ViewKey,
     constraint,
     derived,
+    selected,
     view,
 )
 from .domains import Domain, divisors_of, domain, finite
@@ -37,11 +37,13 @@ from .errors import (
     ConfigurationError,
     DefinitionError,
     EvaluationError,
+    ReferenceUseError,
     RequestError,
     ValueUnavailableError,
 )
 from .expressions import Expr
-from .extensions import ScopeBuilder
+from .extensions import composite
+from .graph import Located
 from .references import DecisionHandle, ValueHandle
 from .results import (
     Available,
@@ -62,35 +64,35 @@ from .selections import Selection, SelectionEntry
 from .semantics import ValueSemantics, default_semantics
 
 __all__ = [
-    # Definitions and composition
+    # Families, node declarations and the compile step
     "Space",
-    "SpaceModel",
-    "compile_space",
+    "design_space",
+    "Model",
+    "composite",
     "Param",
+    "LocatedParam",
     "Const",
     "Decision",
+    "selected",
     "Derived",
     "Constraint",
     "ConstraintGroup",
     "View",
-    "Subspace",
-    "SubspaceChoice",
-    "ScopeBuilder",
+    # Graph primitives
+    "Present",
+    "Members",
+    "Users",
+    "Located",
     "derived",
     "constraint",
     "view",
     # Typed references and bound accessors
     "ValueRef",
-    "DecisionRef",
-    "AcceptedViewRef",
-    "ValueKey",
     "ViewKey",
     "ValueHandle",
     "DecisionHandle",
     "BoundValue",
     "BoundDecision",
-    "BoundView",
-    "ChoiceView",
     "Expr",
     # Domains and value semantics
     "Domain",
@@ -129,6 +131,7 @@ __all__ = [
     "DefinitionError",
     "RequestError",
     "EvaluationError",
+    "ReferenceUseError",
     "ConfigurationError",
     "ValueUnavailableError",
     "CleanupFailure",
@@ -138,6 +141,7 @@ __all__ = [
     # Public services
     "codecs",
     "extensions",
+    "graph",
     "inspection",
     "selections",
 ]

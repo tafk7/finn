@@ -6,13 +6,13 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
-from typing import TypeVar, cast
+from typing import Any, TypeVar, overload
 
 from . import _execution
 from ._changes import try_with_choices
 from ._configuration import Space
-from .compiler import SpaceModel
-from .declarations import Decision, DecisionRef
+from .compiler import Model
+from .declarations import Decision
 from .edits import Change, ConfigurationResult
 from .errors import EvaluationError, RequestError
 from .occurrence import state
@@ -23,7 +23,7 @@ T = TypeVar("T")
 S = TypeVar("S", bound=Space)
 
 
-def _check_nodes(model: SpaceModel[Space], indices: Iterable[int]) -> None:
+def _check_nodes(model: Model[Space], indices: Iterable[int]) -> None:
     seen: set[int] = set()
     for index in indices:
         if (
@@ -37,13 +37,13 @@ def _check_nodes(model: SpaceModel[Space], indices: Iterable[int]) -> None:
         seen.add(index)
 
 
-def _semantics(model: SpaceModel[Space], index: int) -> ValueSemantics[object]:
+def _semantics(model: Model[Space], index: int) -> ValueSemantics[object]:
     semantics = model.linked.nodes[index].semantics
     assert semantics is not None
     return semantics
 
 
-def _recognize(model: SpaceModel[Space], index: int, value: object) -> None:
+def _recognize(model: Model[Space], index: int, value: object) -> None:
     semantics = _semantics(model, index)
     node = model.linked.nodes[index]
     try:
@@ -57,7 +57,7 @@ def _recognize(model: SpaceModel[Space], index: int, value: object) -> None:
         )
 
 
-def _snapshot(model: SpaceModel[Space], index: int, value: object) -> object:
+def _snapshot(model: Model[Space], index: int, value: object) -> object:
     try:
         return _semantics(model, index).freeze(value)
     except Exception as cause:
@@ -89,7 +89,7 @@ class Selection:
     entries, equality operands, and replay values receive defensive snapshots.
     """
 
-    _model: SpaceModel[Space] = field(repr=False)
+    _model: Model[Space] = field(repr=False)
     _entries: tuple[_StoredEntry, ...] = field(repr=False)
 
     def __eq__(self, other: object) -> bool:
@@ -116,9 +116,7 @@ class Selection:
         return True
 
     @classmethod
-    def _from_values(
-        cls, model: SpaceModel[Space], values: Iterable[tuple[int, object]]
-    ) -> Selection:
+    def _from_values(cls, model: Model[Space], values: Iterable[tuple[int, object]]) -> Selection:
         pending = tuple(values)
         _check_nodes(model, (index for index, _ in pending))
         for index, value in pending:
@@ -148,14 +146,29 @@ class Selection:
     def keys(self) -> tuple[str, ...]:
         return tuple(decision_key(self._model.linked, entry.node) for entry in self._entries)
 
-    def value(self, reference: Decision[T] | DecisionRef[T]) -> T:
-        if not isinstance(reference, (Decision, DecisionRef)):
-            raise RequestError("selection lookup requires an owning Decision")
-        index = self._model.resolve(0, reference)
+    @overload
+    def value(self, reference: Decision[T] | DecisionHandle[T]) -> T: ...
+
+    @overload
+    def value(self, reference: Space | None) -> str: ...
+
+    @overload
+    def value(self, reference: T) -> T: ...
+
+    def value(self, reference: object) -> Any:
+        """The captured value of a decision: a Decision member, a reference, or a handle.
+
+        A Decision over nodes (typed as its candidates) captures its key; a
+        reference is typed as its value, so its captured value has that type.
+        """
+        try:
+            index = self._model.decision(0, reference)
+        except RequestError as cause:
+            raise RequestError(f"selection lookup requires an owning Decision: {cause}") from cause
         _check_nodes(self._model, (index,))
         for entry in self._entries:
             if entry.node == index:
-                return cast(T, _snapshot(self._model, index, entry.value))
+                return _snapshot(self._model, index, entry.value)
         raise KeyError(decision_key(self._model.linked, index))
 
 
