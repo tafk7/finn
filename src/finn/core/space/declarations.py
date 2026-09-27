@@ -1275,6 +1275,8 @@ class Members(ValueDecl[tuple[Located[T], ...]], Generic[T]):
     declaration order; as an obligation, each member's acceptance counts.
 
     Each entry is ``Located(node=<child name>, member=<key name>, value=<export>)``.
+    A child exporting ``key`` per input (``exports = {key: {input: view}}``)
+    contributes one entry per input, with ``member=<input name>``.
     """
 
     def __init__(self, key: ViewKey[T]) -> None:
@@ -1292,6 +1294,10 @@ class Users(Members[T], Generic[T]):
     A user reached through a Decision candidate or a guard is present only when
     that candidate is selected or that guard holds; a user that does not export
     ``key`` is omitted. As an obligation, each user's acceptance counts.
+
+    A user may export ``key`` per input, ``exports = {key: {input: view, ...}}``:
+    each node it references then sees only the view presented through the
+    input that references it, and an input without an entry is omitted.
     """
 
 

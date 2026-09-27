@@ -10,7 +10,7 @@ from types import MappingProxyType, UnionType
 from typing import Union, cast, get_args, get_origin
 
 from ._configuration import Space
-from ._nodes import NodeDecision, NodeDecl, node_record, slot_declaration
+from ._nodes import NodeDecision, NodeDecl, is_reference_input, node_record, slot_declaration
 from ._signatures import (
     BoundFunction,
     bind_function,
@@ -65,6 +65,10 @@ class EffectiveSpace:
     aliases: Mapping[Declaration, str]
     exports: Mapping[ViewKey[object], Declaration]
     guards: Mapping[Declaration, ValueRef[bool]] = field(
+        default_factory=lambda: MappingProxyType({})
+    )
+    # A per-input export: key -> (reference input name, view) in declared order.
+    input_exports: Mapping[ViewKey[object], tuple[tuple[str, Declaration], ...]] = field(
         default_factory=lambda: MappingProxyType({})
     )
 
@@ -246,12 +250,35 @@ def _collect_guards(effective: EffectiveSpace) -> Mapping[Declaration, ValueRef[
     return MappingProxyType(guards)
 
 
+def _exported_view(
+    effective: EffectiveSpace, key: ViewKey[object], declaration: object, label: str
+) -> View[object]:
+    space_type, members = effective.space_type, effective.members
+    if not isinstance(declaration, Declaration) or declaration not in effective.aliases:
+        raise DefinitionError(f"{space_type.__qualname__}: export {label} is not a member")
+    resolved = members[effective.aliases[declaration]]
+    if not isinstance(resolved, View):
+        raise DefinitionError(f"{space_type.__qualname__}: export {label} has the wrong kind")
+    exported_semantics = effective.semantics.get(resolved)
+    if exported_semantics is None and resolved.source is not None:
+        exported_semantics = source_semantics(resolved.source, effective)
+    if exported_semantics is not None and not key.semantics.is_compatible_with(exported_semantics):
+        raise DefinitionError(
+            f"{space_type.__qualname__}: export {label} has incompatible semantics"
+        )
+    return resolved
+
+
 def _collect_exports(
     effective: EffectiveSpace, declared_exports: object
-) -> Mapping[ViewKey[object], Declaration]:
-    space_type, members = effective.space_type, effective.members
-    aliases, semantics = effective.aliases, effective.semantics
+) -> tuple[
+    Mapping[ViewKey[object], Declaration],
+    Mapping[ViewKey[object], tuple[tuple[str, Declaration], ...]],
+]:
+    """Plain exports (one view) and per-input exports (one view per reference input)."""
+    space_type = effective.space_type
     exports: dict[ViewKey[object], Declaration] = {}
+    input_exports: dict[ViewKey[object], tuple[tuple[str, Declaration], ...]] = {}
     if not isinstance(declared_exports, Mapping):
         raise DefinitionError(
             f"{space_type.__qualname__}: exports must map typed keys to declarations"
@@ -263,28 +290,21 @@ def _collect_exports(
         if key.name in export_names:
             raise DefinitionError(f"{space_type.__qualname__}: duplicate export key {key.name}")
         export_names.add(key.name)
-        if not isinstance(declaration, Declaration) or declaration not in aliases:
-            raise DefinitionError(f"{space_type.__qualname__}: export {key.name} is not a member")
-        resolved = members[aliases[declaration]]
-        if not isinstance(resolved, View):
-            raise DefinitionError(
-                f"{space_type.__qualname__}: export {key.name} has the wrong kind"
-            )
-        exported_semantics = semantics.get(resolved)
-        if (
-            exported_semantics is None
-            and isinstance(resolved, View)
-            and resolved.source is not None
-        ):
-            exported_semantics = source_semantics(resolved.source, effective)
-        if exported_semantics is not None and not key.semantics.is_compatible_with(
-            exported_semantics
-        ):
-            raise DefinitionError(
-                f"{space_type.__qualname__}: export {key.name} has incompatible semantics"
-            )
-        exports[key] = resolved
-    return MappingProxyType(exports)
+        if not isinstance(declaration, Mapping):
+            exports[key] = _exported_view(effective, key, declaration, key.name)
+            continue
+        entries: list[tuple[str, Declaration]] = []
+        for reference, view in declaration.items():
+            name = effective.aliases.get(reference) if isinstance(reference, Declaration) else None
+            if name is None or not is_reference_input(effective.members[name]):
+                label = name or repr(reference)
+                raise DefinitionError(
+                    f"{space_type.__qualname__}: export {key.name}: {label} is not a "
+                    "reference input"
+                )
+            entries.append((name, _exported_view(effective, key, view, f"{key.name} for {name}")))
+        input_exports[key] = tuple(entries)
+    return MappingProxyType(exports), MappingProxyType(input_exports)
 
 
 def collect_space(space_type: type[Space]) -> EffectiveSpace:
@@ -332,9 +352,11 @@ def collect_space(space_type: type[Space]) -> EffectiveSpace:
             inferred = source_semantics(declaration, preliminary)
             if inferred is not None:
                 semantics[declaration] = inferred
+    exports, input_exports = _collect_exports(preliminary, namespace.get("exports", {}))
     return replace(
         preliminary,
         functions=MappingProxyType(functions),
         guards=_collect_guards(preliminary),
-        exports=_collect_exports(preliminary, namespace.get("exports", {})),
+        exports=exports,
+        input_exports=input_exports,
     )

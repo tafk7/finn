@@ -180,7 +180,10 @@ class Space(metaclass=SpaceMeta):
     when: _When = _when_field(default=None, kw_only=True)
     _state: ClassVar[object]
     _scope: ClassVar[int]
-    exports: ClassVar[Mapping[ViewKey[object], Declaration]] = MappingProxyType({})
+    # A key maps to one view, or per input to one view for each reference input.
+    exports: ClassVar[Mapping[ViewKey[object], Declaration | Mapping[Any, Declaration]]] = (
+        MappingProxyType({})
+    )
 
     def __set_name__(self, owner: type[object], name: str) -> None:
         path = declared_path(self)

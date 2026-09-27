@@ -98,6 +98,8 @@ class _ScopeDraft:
     references: dict[object, int] = field(default_factory=dict)
     # Each reference input's declaration -> the scope it reaches (None: unsupplied).
     targets: dict[object, int | None] = field(default_factory=dict)
+    # A per-input export: key -> (reference input name, view node) in declared order.
+    input_exports: dict[ViewKey[object], tuple[tuple[str, int], ...]] = field(default_factory=dict)
 
     def freeze(self) -> Scope:
         return Scope(
@@ -557,6 +559,10 @@ class _Linker:
                 draft.members[declaration] = draft.named_members[member_name]
         for export, declaration in draft.effective.exports.items():
             draft.members[export] = draft.members[declaration]
+        for export, entries in draft.effective.input_exports.items():
+            draft.input_exports[export] = tuple(
+                (name, draft.members[view]) for name, view in entries
+            )
         return index
 
     def unsupplied(
@@ -972,11 +978,15 @@ class _Linker:
             current = child
         return ".".join(names)
 
-    def members_candidates(self, scope: int, key: ViewKey[object]) -> list[tuple[str, int]]:
-        """Each child node's contribution for ``key``, candidates in key order."""
+    def members_candidates(self, scope: int, key: ViewKey[object]) -> list[tuple[str, str, int]]:
+        """Each child node's contribution for ``key``: (its name, member, view).
+
+        A plain export contributes one entry, named by the key; a per-input
+        export one entry per input, named by the input.
+        """
 
         draft = self.drafts[scope]
-        result: list[tuple[str, int]] = []
+        result: list[tuple[str, str, int]] = []
         for name, declaration in draft.effective.members.items():
             if isinstance(declaration, NodeDecl):
                 children = [draft.named_children[name]]
@@ -990,15 +1000,20 @@ class _Linker:
             else:
                 continue
             for child in children:
+                name = self.local_name(scope, child)
                 target = self.drafts[child].members.get(key)
-                if target is None:
-                    continue
-                if self.nodes[target].kind != "view":
-                    raise DefinitionError(
-                        f"{draft.name or '<root>'}: member {key.name} must be a view"
-                    )
-                result.append((self.local_name(scope, child), target))
+                if target is not None:
+                    self.check_view(child, key, target)
+                    result.append((name, key.name, target))
+                for member, target in self.drafts[child].input_exports.get(key, ()):
+                    result.append((name, member, target))
         return result
+
+    def check_view(self, scope: int, key: ViewKey[object], target: int) -> None:
+        if self.nodes[target].kind != "view":
+            raise DefinitionError(
+                f"{self.drafts[scope].name or '<root>'}: member {key.name} must be a view"
+            )
 
     def users_candidates(self, scope: int, key: ViewKey[object]) -> list[tuple[str, str, int]]:
         """Each user's export of ``key``: (its name beside this node, input, view)."""
@@ -1011,13 +1026,15 @@ class _Linker:
         for user, member in sorted(
             self.users.get(scope, ()), key=lambda item: (item[0], order[item[0]].index(item[1]))
         ):
-            target = self.drafts[user].members.get(key)
+            per_input = self.drafts[user].input_exports.get(key)
+            if per_input is not None:
+                target = dict(per_input).get(member)
+            else:
+                target = self.drafts[user].members.get(key)
+                if target is not None:
+                    self.check_view(user, key, target)
             if target is None:
                 continue
-            if self.nodes[target].kind != "view":
-                raise DefinitionError(
-                    f"{self.drafts[user].name or '<root>'}: member {key.name} must be a view"
-                )
             name = "" if parent is None or user == parent else self.local_name(parent, user)
             result.append((name, member, target))
         return result
@@ -1364,7 +1381,7 @@ class _Linker:
                 # A member family obliges each member's acceptance separately.
                 indices = [
                     target
-                    for _, target in self.members_candidates(
+                    for *_, target in self.members_candidates(
                         scope, cast(ViewKey[object], source.key)
                     )
                 ]
@@ -1588,13 +1605,12 @@ class _Linker:
                 ),
             )
         elif isinstance(declaration, Members):
+            entries = self.members_candidates(scope.index, cast(ViewKey[object], declaration.key))
             node = replace(
                 node,
-                alternatives=tuple(
-                    self.members_candidates(scope.index, cast(ViewKey[object], declaration.key))
-                ),
+                alternatives=tuple((name, target) for name, _, target in entries),
+                value=tuple(member for _, member, _ in entries),
             )
-            node = replace(node, value=(declaration.key.name,) * len(node.alternatives))
         elif isinstance(declaration, (MemberRef, ChoiceMemberRef, CaseRef)):
             anonymous = replace_owner(declaration)
             node = replace(node, output=self.reference(scope.index, anonymous, owner=node.key))
@@ -1653,8 +1669,17 @@ class _Linker:
                 raise DefinitionError(f"{owner}: dependency has no value semantics")
             validate_argument(dependency, semantics, owner=owner)
         for draft in self.drafts:
-            for export, declaration in draft.effective.exports.items():
-                semantics = self.nodes[draft.members[declaration]].semantics
+            exported = [
+                (export, draft.members[declaration])
+                for export, declaration in draft.effective.exports.items()
+            ]
+            exported += [
+                (export, target)
+                for export, entries in draft.input_exports.items()
+                for _, target in entries
+            ]
+            for export, target in exported:
+                semantics = self.nodes[target].semantics
                 if semantics is None or not export.semantics.is_compatible_with(semantics):
                     raise DefinitionError(
                         f"{draft.name}: export {export.name} has incompatible semantics"
