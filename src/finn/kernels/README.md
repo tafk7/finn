@@ -234,13 +234,16 @@ source reconstruction and graph transactions are outside this kernel API.
 The independent kernel gate does not claim those consumers work. The canonical
 physical definitions and shared support belong here.
 
-The source baseline now uses FinnLib's flat `rtl/` and `hls/` layout at
-`b17eae6a074ea678c633598fa42e7751e6cea194` (branch
-`kernel-contract-refinement-20260925`). Dotp output-buffer and AXI-Lite
-declaration-order corrections are in FinnLib; there are no private copies in
-`resources`. Replay is also supplied by FinnLib. Eltwise's source closure
-includes its native `queue` module. Record and validate source revisions when
-updating this dependency; matching filenames do not establish compatibility.
+The source baseline is FinnLib's grouped layout (`rtl/{arith,infra,linalg,
+nonlin,shape}/`, `hls/{infra,util}/`) at the `fetch-repos.sh` pin
+`11b5c64b6ddb2c89895cc539eb059e49ecf80630` (branch
+`kernels/consolidated-20260927` on the `tkeller/finnlib` fork): upstream `dev`
+plus `replay_buffer`, the dotp output-buffer and AXI-Lite declaration-order
+corrections, and `memstream`/`memstream_axi` ported from `finn-rtllib`. There
+are no private copies in `resources`. Eltwise's source closure includes the
+consolidated `fifo`, which replaced `queue`. Record and validate source
+revisions when updating this dependency; matching filenames do not establish
+compatibility.
 
 `Integer(...).domain()` and `integer_scalar(dtype, Integer(...))` share one
 policy for owned dtype choices and supplied facts. `integer_scalar` returns an

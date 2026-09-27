@@ -330,7 +330,7 @@ def test_sources_materialize_from_the_assessed_requirements(tmp_path):
     requirements = kernel(compute_pumping=True).build_requirements
     store = ArtifactStore(tmp_path / "store")
     finnlib = Path(__file__).resolve().parents[2] / "deps" / "finnlib"
-    if not (finnlib / "rtl/dotp_axi.sv").is_file():
+    if not (finnlib / "rtl/linalg/dotp_axi.sv").is_file():
         pytest.skip("FinnLib sources are unavailable")
     prepared = prepare_module_build(
         requirements,
@@ -340,11 +340,11 @@ def test_sources_materialize_from_the_assessed_requirements(tmp_path):
     )
     materialized = materialize_module_sources(prepared, store)
     upstream = {
-        "rtl/add_multi_pkg.sv",
-        "rtl/add_multi.sv",
-        "rtl/dotp_8sx9_dsp58.sv",
-        "rtl/dotp.sv",
-        "rtl/dotp_axi.sv",
+        "rtl/arith/add_multi_pkg.sv",
+        "rtl/arith/add_multi.sv",
+        "rtl/linalg/dotp_8sx9_dsp58.sv",
+        "rtl/linalg/dotp.sv",
+        "rtl/linalg/dotp_axi.sv",
     }
     expected = upstream
     emitted = {Path(name).name: Path(materialized.directory) / name for name in materialized.files}
@@ -352,7 +352,7 @@ def test_sources_materialize_from_the_assessed_requirements(tmp_path):
     for path in upstream:
         assert emitted[Path(path).name].read_bytes() == (finnlib / path).read_bytes()
     wrapper = next(
-        source for source in requirements.contributions if source.path == "rtl/dotp_axi.sv"
+        source for source in requirements.contributions if source.path == "rtl/linalg/dotp_axi.sv"
     )
     assert wrapper.root == "finnlib"
     assert wrapper.provides == ("module:dotp_axi",)

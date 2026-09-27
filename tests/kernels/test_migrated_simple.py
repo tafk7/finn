@@ -188,11 +188,11 @@ def test_eltwise_preserves_binary32_scale_rounding_and_source_order() -> None:
     assert [
         source.path for source in requirements.contributions if isinstance(source, CopiedSource)
     ] == [
-        "rtl/binopi.sv",
-        "rtl/binopf.sv",
-        "rtl/int_to_fp32.sv",
-        "rtl/queue.sv",
-        "rtl/eltwise.sv",
+        "rtl/arith/binopi.sv",
+        "rtl/arith/binopf.sv",
+        "rtl/arith/int_to_fp32.sv",
+        "rtl/infra/fifo.sv",
+        "rtl/arith/eltwise.sv",
     ]
     floating = eltwise(lhs="FLOAT32", rhs="FLOAT32", scale=0.25)
     assert dict(floating.build_requirements.parameters)["B_SCALE"] == "0.25"

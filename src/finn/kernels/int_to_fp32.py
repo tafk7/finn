@@ -54,7 +54,11 @@ class IntToFp32Kernel(Kernel):
                 ),
                 tuple((key, str(value)) for key, value in parameters),
             ),
-            (CopiedSource("finnlib", "rtl/int_to_fp32.sv", provides=("module:int_to_fp32",)),),
+            (
+                CopiedSource(
+                    "finnlib", "rtl/arith/int_to_fp32.sv", provides=("module:int_to_fp32",)
+                ),
+            ),
         )
 
 

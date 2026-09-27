@@ -5,7 +5,9 @@
 
 Words have no numerical datatype. DEPTH is the requested capacity; the native
 implementation may round its storage up and forces a shift FIFO for shallow
-depths. Reset is synchronous, active-high, and discards pending words.
+depths. ``auto`` selects by depth and word width: a shift register up to 64
+words narrower than 12 bits, LUTRAM up to 257 words, then block and UltraRAM.
+Reset is synchronous, active-high, and discards pending words.
 """
 
 from __future__ import annotations
@@ -44,7 +46,7 @@ class FifoStorage:
 
 class FifoKernel(Kernel):
     id = "finnlib.fifo"
-    version = "1"
+    version = "2"
 
     word_bits: int = Param()
     depth: int = Param()
@@ -61,22 +63,27 @@ class FifoKernel(Kernel):
 
     @view(semantics=default_semantics(FifoStorage), requires=(geometry_supported,))
     def storage(self) -> FifoStorage | Rejected:
-        depth, style = self.depth, self.ram_style
+        depth, style, bits = self.depth, self.ram_style, self.word_bits
         if not 2 <= depth <= 0xFFFFFFFF:
             return reject("fifo-geometry", "depth must fit native unsigned int and be at least two")
         effective = (
             "shift"
-            if depth <= 33 or style == "distributed"
+            if depth <= 33
             else style
             if style != "auto"
             else "shift"
-            if depth <= 64
+            if depth <= 64 and bits < 12
+            else "distributed"
+            if depth <= 257
             else "block"
             if depth <= 2028
             else "ultra"
         )
         if effective == "shift":
             capacity = max(5, depth)
+        elif effective == "distributed":
+            # DEPTH - 1 LUTRAM entries behind one output register.
+            capacity = depth
         else:
             # Native memory decomposition; include the BRAM read pipeline or
             # the URAM credit-limited output queue in accepted-word capacity.
@@ -132,7 +139,7 @@ class FifoKernel(Kernel):
             FifoKernel.version,
             parameters,
             abi,
-            (CopiedSource("finnlib", "rtl/fifo.sv", provides=("module:fifo",)),),
+            (CopiedSource("finnlib", "rtl/infra/fifo.sv", provides=("module:fifo",)),),
         )
 
 

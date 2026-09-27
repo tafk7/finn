@@ -50,7 +50,7 @@ def test_replay_requirements_match_native_rtl(bits, length, repeats):
     reset = next(port for port in abi.ports if isinstance(port, Signal) and port.name == "rst")
     assert reset.role == Reset(False, True, ("clk",))
     result = check_abi(
-        abi, [ROOTS["finnlib"] / "rtl/replay_buffer.sv"], abi.entry_point, abi.parameters
+        abi, [ROOTS["finnlib"] / "rtl/infra/replay_buffer.sv"], abi.entry_point, abi.parameters
     )
     assert not isinstance(result, Declined), result
     assert result == ()
@@ -270,7 +270,7 @@ def test_rtl_streams_preserve_words_framing_stalls_and_reset(tmp_path):
     testbench = tmp_path / "stream_test.sv"
     testbench.write_text("`timescale 1ns/1ps\n" + _CYCLIC_TESTBENCH)
     sources = [
-        ROOTS["finnlib"] / "rtl/replay_buffer.sv",
+        ROOTS["finnlib"] / "rtl/infra/replay_buffer.sv",
         resource_root() / "cyclic_stream.sv",
         testbench,
     ]

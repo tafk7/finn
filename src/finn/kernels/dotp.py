@@ -266,23 +266,23 @@ class DotpAxiKernel(Kernel):
         sources = tuple(
             CopiedSource(root, path, provides=(symbol,), requires=requires)
             for root, path, symbol, requires in (
-                ("finnlib", "rtl/add_multi_pkg.sv", "package:add_multi_pkg", ()),
+                ("finnlib", "rtl/arith/add_multi_pkg.sv", "package:add_multi_pkg", ()),
                 (
                     "finnlib",
-                    "rtl/add_multi.sv",
+                    "rtl/arith/add_multi.sv",
                     "module:add_multi",
                     ("package:add_multi_pkg",),
                 ),
-                ("finnlib", "rtl/dotp_8sx9_dsp58.sv", "module:dotp_8sx9_dsp58", ()),
+                ("finnlib", "rtl/linalg/dotp_8sx9_dsp58.sv", "module:dotp_8sx9_dsp58", ()),
                 (
                     "finnlib",
-                    "rtl/dotp.sv",
+                    "rtl/linalg/dotp.sv",
                     "module:dotp",
                     ("package:add_multi_pkg", "module:add_multi"),
                 ),
                 (
                     "finnlib",
-                    "rtl/dotp_axi.sv",
+                    "rtl/linalg/dotp_axi.sv",
                     "module:dotp_axi",
                     ("module:dotp", "module:dotp_8sx9_dsp58"),
                 ),

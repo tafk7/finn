@@ -107,8 +107,8 @@ assert dotp.activation.dtype.name == "INT3"
 assert dotp.activation.payload_bits == 6
 
 dotp_sources = {
-    "rtl/add_multi_pkg.sv", "rtl/add_multi.sv",
-    "rtl/dotp_8sx9_dsp58.sv", "rtl/dotp.sv", "rtl/dotp_axi.sv",
+    "rtl/arith/add_multi_pkg.sv", "rtl/arith/add_multi.sv",
+    "rtl/linalg/dotp_8sx9_dsp58.sv", "rtl/linalg/dotp.sv", "rtl/linalg/dotp_axi.sv",
 }
 store = ArtifactStore(Path(config["store"]))
 roots = {"kernels": resources, "finnlib": Path(config["finnlib"])}
@@ -143,7 +143,7 @@ def materialize(module, expected):
 materialize(answer, dotp_sources)
 for delivery in WeightDelivery:
     options = {}
-    expected = dotp_sources | {"rtl/replay_buffer.sv"}
+    expected = dotp_sources | {"rtl/infra/replay_buffer.sv"}
     if delivery is WeightDelivery.CYCLIC:
         options["weights"] = [[-4, -3, -2, -1], [0, 1, 2, 3], [3, 2, 1, 0], [-1, -2, -3, -4]]
         expected |= {"cyclic_stream.sv"}

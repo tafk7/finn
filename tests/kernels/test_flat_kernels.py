@@ -324,7 +324,7 @@ def test_hls_sources_have_native_function_interfaces_and_complete_header_closure
             requirements, roots={"finnlib": FINNLIB}, template_roots=(template_root(),)
         )
     )
-    assert set(files) == {"hls/util.hpp", "hls/memstream.hpp", "memstream_hls.cpp"}
+    assert set(files) == {"hls/util/util.hpp", "hls/infra/memstream.hpp", "memstream_hls.cpp"}
     top = files["memstream_hls.cpp"].decode()
     assert f"using element_t = {cpp};" in top
     assert "(&mem)[3]" in top

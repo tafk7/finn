@@ -46,7 +46,7 @@ from finn.kernels.artifacts.requirements import (
 )
 
 REPLAY_BUFFER_SOURCES = (
-    CopiedSource("finnlib", "rtl/replay_buffer.sv", provides=("module:replay_buffer",)),
+    CopiedSource("finnlib", "rtl/infra/replay_buffer.sv", provides=("module:replay_buffer",)),
 )
 
 

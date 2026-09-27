@@ -301,11 +301,13 @@ class ThresholdingAxiKernel(Kernel):
             tuple((key, str(value)) for key, value in parameters),
         )
         sources = (
-            CopiedSource("finnlib", "rtl/axilite.sv", provides=("module:axilite",)),
-            CopiedSource("finnlib", "rtl/thresholding.sv", provides=("module:thresholding",)),
+            CopiedSource("finnlib", "rtl/infra/axilite.sv", provides=("module:axilite",)),
+            CopiedSource(
+                "finnlib", "rtl/nonlin/thresholding.sv", provides=("module:thresholding",)
+            ),
             CopiedSource(
                 "finnlib",
-                "rtl/thresholding_axi.sv",
+                "rtl/nonlin/thresholding_axi.sv",
                 provides=("module:thresholding_axi",),
                 requires=("module:axilite", "module:thresholding"),
             ),

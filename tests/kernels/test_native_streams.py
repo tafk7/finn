@@ -62,6 +62,8 @@ def test_fifo_capacity_and_effective_storage_agree_with_native_rtl(tmp_path):
         (33, "block"),
         (64, "auto"),
         (65, "auto"),
+        (257, "auto"),
+        (40, "distributed"),
         (65, "ultra"),
         (650, "block"),
         (2029, "auto"),
@@ -77,7 +79,7 @@ def test_fifo_capacity_and_effective_storage_agree_with_native_rtl(tmp_path):
             f'.CAPACITY({storage.capacity}), .EFFECTIVE("{storage.effective_style}")) '
             f"c{index}(done[{index}]);"
         )
-    source = Path(__file__).resolve().parents[2] / "deps/finnlib/rtl/fifo.sv"
+    source = Path(__file__).resolve().parents[2] / "deps/finnlib/rtl/infra/fifo.sv"
     testbench = tmp_path / "fifo_capacity_test.sv"
     testbench.write_text(
         """
@@ -108,8 +110,8 @@ module fifo_capacity_case #(
     end
 endmodule
 module fifo_capacity_test;
-    wire [7:0] done;
 """
+        + f"    wire [{len(cases) - 1}:0] done;\n"
         + "\n".join(instances)
         + """
     initial begin

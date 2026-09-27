@@ -173,14 +173,14 @@ class EltwiseKernel(Kernel):
         sources = tuple(
             CopiedSource("finnlib", path, provides=(f"module:{name}",), requires=requires)
             for path, name, requires in (
-                ("rtl/binopi.sv", "binopi", ()),
-                ("rtl/binopf.sv", "binopf", ()),
-                ("rtl/int_to_fp32.sv", "int_to_fp32", ()),
-                ("rtl/queue.sv", "queue", ()),
+                ("rtl/arith/binopi.sv", "binopi", ()),
+                ("rtl/arith/binopf.sv", "binopf", ()),
+                ("rtl/arith/int_to_fp32.sv", "int_to_fp32", ()),
+                ("rtl/infra/fifo.sv", "fifo", ()),
                 (
-                    "rtl/eltwise.sv",
+                    "rtl/arith/eltwise.sv",
                     "eltwise",
-                    ("module:binopi", "module:binopf", "module:int_to_fp32", "module:queue"),
+                    ("module:binopi", "module:binopf", "module:int_to_fp32", "module:fifo"),
                 ),
             )
         )

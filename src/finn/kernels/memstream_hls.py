@@ -64,7 +64,7 @@ class MemStreamHlsKernel(Kernel):
     def build_requirements(self) -> HlsSourceRequirements:
         cpp = self.cpp_type
         depth = self.depth
-        includes = ("hls",)
+        includes = ("hls/infra", "hls/util")
         return HlsSourceRequirements(
             MemStreamHlsKernel.id,
             MemStreamHlsKernel.version,
@@ -77,14 +77,14 @@ class MemStreamHlsKernel(Kernel):
             (
                 CopiedSource(
                     "finnlib",
-                    "hls/util.hpp",
+                    "hls/util/util.hpp",
                     language=Language.CPP,
                     role=Role.HEADER,
                     provides=("header:util.hpp",),
                 ),
                 CopiedSource(
                     "finnlib",
-                    "hls/memstream.hpp",
+                    "hls/infra/memstream.hpp",
                     language=Language.CPP,
                     role=Role.HEADER,
                     provides=("header:memstream.hpp",),

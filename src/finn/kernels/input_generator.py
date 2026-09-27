@@ -131,7 +131,7 @@ class InputGeneratorKernel(Kernel):
             InputGeneratorKernel.version,
             parameters,
             abi,
-            (CopiedSource("finnlib", "rtl/input_gen.sv", provides=("module:input_gen",)),),
+            (CopiedSource("finnlib", "rtl/shape/input_gen.sv", provides=("module:input_gen",)),),
         )
 
 
