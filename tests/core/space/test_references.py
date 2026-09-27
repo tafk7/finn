@@ -224,6 +224,15 @@ def test_references_resolve_where_they_are_written() -> None:
         configure(Stray())
     assert isinstance(Other.held, Budget)
 
+    class Holder(Space):
+        inner = Budget(limit=1, rate=1)
+
+    with pytest.raises(DefinitionError, match=r"\.inner reaches into another node"):
+
+        class Deep(Space):
+            holder = Holder()
+            team = Department(budget=holder.inner)  # typed Budget: refused at the call
+
     loose = Budget(limit=1, rate=1)
     first, second = Department(budget=loose), Department(budget=loose)
     with pytest.raises(DefinitionError, match="placed by none"):

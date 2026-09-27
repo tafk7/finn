@@ -26,6 +26,7 @@ from .declarations import (
     ValueRef,
     View,
     _guard,
+    _path_text,
     at,
     declared_path,
     local_name,
@@ -242,6 +243,12 @@ def _supplier(name: str, formal: Declaration, value: object, label: str) -> obje
 
     if isinstance(formal, FamilyFormal):
         supplied = node_record(value)
+        path = declared_path(value) if isinstance(value, Space) else None
+        if supplied is None and path is not None and len(path) > 1:
+            raise DefinitionError(
+                f"{label}: {_path_text(path)} reaches into another node; a reference input "
+                "names a node placed beside it, or forwards an input of the enclosing family"
+            )
         if supplied is None:
             raise DefinitionError(f"{label}: a reference input takes a node declaration")
         if not issubclass(supplied.family, formal.family):
