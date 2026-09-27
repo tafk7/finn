@@ -34,17 +34,23 @@ could be changed to widen what the next sandbox may reach, and the plan sbx show
 before creating a sandbox lists a kit's source and arguments but not its
 permissions. Re-copy after reviewing changes to these files.
 
-Site values go in an arguments file, `~/.config/finn-sbx/site.args`, which no
-repository contains. Use the arguments your overlays declare:
+Site values go in arguments files beside the copies, one per overlay, which no
+repository contains. sbx rejects an argument no loaded file declares, so pass only
+the files of the overlays you use:
 
 ```text
+# ~/.config/finn-sbx/fpga.args
 toolchain=/opt/Xilinx
 vivado=/opt/Xilinx/2025.2/Vivado
 vitis=/opt/Xilinx/2025.2/Vitis
 hls=/opt/Xilinx/2025.2/Vitis
 license_host=10.0.0.5
 license_port=2100
+
+# ~/.config/finn-sbx/license.args
 vendor_port=2101
+
+# ~/.config/finn-sbx/finnlib.args
 finnlib=/home/you/finnlib
 ```
 
@@ -55,8 +61,11 @@ From the checkout, build the image and create a sandbox:
 ```bash
 ./docker/build --sbx
 C=~/.config/finn-sbx
-FILES=(sbxenv.yaml "$C/fpga.sbxenv.yaml" "$C/finnlib.sbxenv.yaml" "$C/license.sbxenv.yaml")
-ARGS=(--env-args-file "$C/site.args" --env-arg template="$(./docker/build --sbx --print-tag)")
+FILES=(sbxenv.yaml)
+ARGS=(--env-arg template="$(./docker/build --sbx --print-tag)")
+for overlay in fpga finnlib license; do   # the overlays you use
+    FILES+=("$C/$overlay.sbxenv.yaml"); ARGS+=(--env-args-file "$C/$overlay.args")
+done
 sbx env plan "${ARGS[@]}" "${FILES[@]}"
 sbx env create "${ARGS[@]}" "${FILES[@]}"
 sbx env exec "${ARGS[@]}" "${FILES[@]}" -- python -m finn.util.installation
@@ -64,8 +73,7 @@ sbx env run "${ARGS[@]}" "${FILES[@]}"
 sbx env rm "${ARGS[@]}" "${FILES[@]}" --force
 ```
 
-Leave out the overlays you don't need; `sbx env run` with no paths uses the base
-alone. Use the same files and arguments for every command, flags before file
+`license` needs `fpga`. `sbx env run` with no paths uses the base alone. Use the same files and arguments for every command, flags before file
 paths. `--env-arg name=...` gives a second sandbox its own name (default `finn`);
 `--env-arg agent=claude` selects a coding agent.
 

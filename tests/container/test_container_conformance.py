@@ -329,7 +329,11 @@ def test_05_copied_native_examples(docker_daemon, tmp_path, agent, fpga):
             check=True,
         )
         if agent == "claude":
-            # User-owned agent setup: FINN's generic template has no agent binary.
+            # User-owned agent setup: FINN's generic template has no agent binary,
+            # and the installer needs claude.ai, which the machine's policy may block.
+            check = run(["sbx", "policy", "check", "network", "--sandbox", name, "claude.ai:443"])
+            if "Allowed:" not in check.stdout:
+                pytest.skip("this machine's sbx policy blocks claude.ai, the agent installer")
             # Run the vendor installer only in this test-owned sandbox.
             run(
                 [
