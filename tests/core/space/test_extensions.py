@@ -1,6 +1,13 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
-"""Neutral extension bundles use ordinary scoped declarations and evaluation."""
+"""Neutral extension bundles are ordinary declarations composed into a family.
+
+``ScopeBuilder`` is gone. Declarations and nodes are plain Python values, and
+``composite(name, members, base=B, exports=...)`` names them as a new family
+exactly as a class body would. The typed surface is the base family: formals a
+caller binds are declared on ``B``; the members composite adds are reached by
+name (or through inspection handles).
+"""
 
 from __future__ import annotations
 
@@ -18,22 +25,20 @@ from finn.core.space import (
     Available,
     Const,
     Decision,
-    DecisionRef,
     DefinitionError,
     Param,
     Rejected,
-    ScopeBuilder,
     Space,
-    Subspace,
     Unresolved,
-    ValueKey,
-    ValueRef,
     ValueSemantics,
     View,
     ViewKey,
-    compile_space,
+    composite,
     constraint,
+    default_semantics,
     derived,
+    design_space,
+    inspection,
 )
 
 
@@ -52,12 +57,12 @@ class StreamValue:
 
 ENCODING = ValueSemantics.immutable_nominal(Encoding)
 STREAM = ViewKey("stream", StreamValue)
-BITS = ValueKey("bits", int)
+BITS = ViewKey("bits", int)
 
 
 class StreamShape(Space):
-    dtype = Param(ENCODING)
-    lanes = Param(int)
+    dtype: Encoding = Param(semantics=ENCODING)
+    lanes: int = Param()
 
     @derived
     def element_bits(*, dtype: Encoding) -> int:
@@ -68,26 +73,10 @@ class StreamShape(Space):
         return element_bits * lanes
 
 
-class StreamPlacement(Subspace[StreamShape]):
-    @property
-    def dtype(self) -> ValueRef[Encoding]:
-        return self.ref(StreamShape.dtype)
+class AdmissionFormals(StreamShape):
+    """The formals the admitted stream adds, declared so node calls stay typed."""
 
-    @property
-    def lanes(self) -> ValueRef[int]:
-        return self.ref(StreamShape.lanes)
-
-    @property
-    def lane_choice(self) -> DecisionRef[int]:
-        return self.decision_ref(StreamShape.lanes)
-
-    @property
-    def bits(self) -> ValueRef[int]:
-        return self.ref(StreamShape.bits)
-
-    @property
-    def stream(self) -> ValueRef[StreamValue]:
-        return self.accepted(STREAM)
+    maximum_bits: int = Param()
 
 
 def _admitted(*, dtype: Encoding, maximum_bits: int) -> bool:
@@ -102,51 +91,67 @@ def _stream(*, dtype: Encoding, lanes: int, bits: int) -> StreamValue:
     return StreamValue(dtype, lanes, bits)
 
 
+def admitted_stream_family() -> type[AdmissionFormals]:
+    """Admission checks and the accepted stream, built as data and named by composite."""
+    minimum = Const(1)
+    admission = constraint(
+        dtype=AdmissionFormals.dtype, maximum_bits=AdmissionFormals.maximum_bits
+    )(_admitted)
+    geometry = constraint(lanes=AdmissionFormals.lanes, minimum=minimum)(_positive_lanes)
+    value = derived(
+        dtype=AdmissionFormals.dtype, lanes=AdmissionFormals.lanes, bits=AdmissionFormals.bits
+    )(_stream)
+    stream = View(value, requires=(admission, geometry))
+    bits = View(AdmissionFormals.bits)
+    return composite(
+        "AdmittedStream",
+        {
+            "minimum_lanes": minimum,
+            "admitted": admission,
+            "positive_lanes": geometry,
+            "stream_value": value,
+            "stream": stream,
+            "bits_view": bits,
+        },
+        base=AdmissionFormals,
+        exports={STREAM: stream, BITS: bits},
+    )
+
+
+ADMITTED_STREAM = admitted_stream_family()
+
+
 def stream_shape(
     *,
-    dtype: Encoding | ValueRef[Encoding],
-    lanes: int | ValueRef[int],
-    maximum_bits: int | ValueRef[int],
-) -> StreamPlacement:
-    builder = ScopeBuilder(StreamShape, name="AdmittedStream")
-    limit = builder.add("maximum_bits", Param(int))
-    minimum = builder.add("minimum_lanes", Const(1))
-    admission = builder.add(
-        "admitted", constraint(dtype=StreamShape.dtype, maximum_bits=limit)(_admitted)
-    )
-    geometry = builder.add(
-        "positive_lanes", constraint(lanes=StreamShape.lanes, minimum=minimum)(_positive_lanes)
-    )
-    value = builder.add(
-        "stream_value",
-        derived(dtype=StreamShape.dtype, lanes=StreamShape.lanes, bits=StreamShape.bits)(_stream),
-    )
-    complete = builder.add("complete", View(value, constraints=(admission, geometry)))
-    builder.export(STREAM).view(complete)
-    builder.export(BITS).value(StreamShape.bits)
-    builder.bind(StreamShape.dtype, dtype)
-    builder.bind(StreamShape.lanes, lanes)
-    builder.bind(limit, maximum_bits)
-    placement = builder.place()
-    return StreamPlacement(
-        placement.space_type,
-        when=placement.when,
-        bindings=placement.parameter_bindings,
-        **placement.bindings,
-    )
+    dtype: Encoding,
+    lanes: int,
+    maximum_bits: int,
+) -> AdmissionFormals:
+    # Suppliers are typed as their values: a reference (``outer.lanes``) is an int.
+    """A fresh node of the admitted stream family for each call."""
+    return ADMITTED_STREAM(dtype=dtype, lanes=lanes, maximum_bits=maximum_bits)
+
+
+def stream_of(node: Space) -> StreamValue:
+    """A reference to the ``stream`` view composite added: reached by name, not by the
+    base's type. Like every reference through a node it is typed as its value."""
+    return cast(StreamValue, getattr(node, "stream"))
 
 
 def test_stream_shape_places_independent_choices_and_keeps_narrow_fields_available() -> None:
     class Pair(Space):
-        limit = Param(int, required=False)
+        limit: int = Param(required=False)
+        # Exposed inline Params are gone: the formals are declared here.
+        left_dtype: Encoding = Param(semantics=ENCODING)
+        right_dtype: Encoding = Param(semantics=ENCODING)
         left = stream_shape(
-            dtype=Param(ENCODING),
-            lanes=Decision(int, values=(1, 2, 4)),
+            dtype=left_dtype,
+            lanes=Decision(values=(1, 2, 4)),
             maximum_bits=limit,
         )
         right = stream_shape(
-            dtype=Param(ENCODING),
-            lanes=Decision(int, values=(1, 2, 4)),
+            dtype=right_dtype,
+            lanes=Decision(values=(1, 2, 4)),
             maximum_bits=limit,
         )
 
@@ -154,67 +159,67 @@ def test_stream_shape_places_independent_choices_and_keeps_narrow_fields_availab
         def balanced(*, a: int, b: int) -> bool:
             return a == b
 
-    assert "left_dtype" not in vars(Pair) and "maximum_bits" not in vars(Pair)
-    model = compile_space(Pair)
-    missing = model.bind({Pair.left.dtype: Encoding(3), Pair.right.dtype: Encoding(6)})
-    first = missing.with_choices(missing.field(Pair.left.lane_choice).change(2))
+    # The bundle's own members stay inside its family.
+    assert "maximum_bits" not in vars(Pair) and "minimum_lanes" not in vars(Pair)
+    missing = design_space(Pair(left_dtype=Encoding(3), right_dtype=Encoding(6)))
+    first = missing.with_choices({Pair.left.lanes: 2})
     assert first.left.bits == 6
     assert first.right.element_bits == 6
     assert isinstance(first.right.query(StreamShape.lanes), Unresolved)
-    assert isinstance(first.query(Pair.left.stream), Unresolved)
+    assert isinstance(first.query(stream_of(Pair.left)), Unresolved)
     assert isinstance(missing.left.query(StreamShape.lanes), Unresolved)
 
-    admitted = model.bind(
-        {
-            Pair.left.dtype: Encoding(3),
-            Pair.right.dtype: Encoding(6),
-            Pair.limit: 4,
-        }
-    )
-    selected = admitted.with_choices(
-        admitted.field(Pair.left.lane_choice).change(2),
-        admitted.field(Pair.right.lane_choice).change(1),
-    )
+    admitted = design_space(Pair(left_dtype=Encoding(3), right_dtype=Encoding(6), limit=4))
+    selected = admitted.with_choices({Pair.left.lanes: 2, Pair.right.lanes: 1})
     assert selected.left.bits == selected.right.bits == 6
     assert selected.inspect(Pair.balanced).verdict is True
-    assert selected.query(Pair.left.stream) == Available(StreamValue(Encoding(3), 2, 6))
-    refused = selected.query(Pair.right.stream)
+    assert selected.query(stream_of(Pair.left)) == Available(StreamValue(Encoding(3), 2, 6))
+    refused = selected.query(stream_of(Pair.right))
     assert isinstance(refused, Rejected)
     assert any("right" in finding.owner for finding in refused.findings)
 
 
-def test_builder_finish_is_pure_repeatable_and_placements_share_only_the_template() -> None:
+def test_composite_is_pure_and_nodes_share_only_the_family() -> None:
     calls: list[int] = []
-    builder = ScopeBuilder(Space)
-    value = builder.add("value", Param(int))
-    choice = builder.add("choice", Decision(int, values=(1, 2)))
+
+    class Scaled(Space):
+        value: int = Param()
 
     def compute(*, value: int, choice: int) -> int:
         calls.append(value)
         return value * choice
 
-    output = builder.add("output", derived(compute))
-    key = ValueKey("output", int)
-    builder.export(key).value(output)
-    builder.bind(value, 3)
-    template = builder.finish()
-    assert calls == [] and builder.sealed
-    assert builder.finish() is template
+    choice: int = Decision(values=(1, 2))
+    output = derived(compute)
+    exported = View(output)
+    key = ViewKey("output", int)
+    members = {"choice": choice, "output": output, "exported": exported}
+    template = composite(
+        "Template", members, base=Scaled, annotations={"choice": int}, exports={key: exported}
+    )
+    assert calls == []
+    # A declaration belongs to one family: the same members cannot be named twice.
+    with pytest.raises(DefinitionError, match="already belongs"):
+        composite("Again", members, base=Scaled)
 
     class Parent(Space):
-        first = builder.place()
-        second = builder.place()
+        first = template(value=3)
+        second = template(value=3)
 
-    assert Parent.first.space_type is Parent.second.space_type is template
-    point = Parent()
-    selected = point.with_choices(point.field(Parent.first.decision_ref(choice)).change(2))
-    assert selected.query(Parent.first.ref(key)) == Available(6)
+    first, second = inspection.declaration(Parent.first), inspection.declaration(Parent.second)
+    assert first.family is second.family is template
+    assert first.bindings == second.bindings == {"value": 3}
+    point = design_space(Parent())
+    handles = {item.key: item.reference for item in inspection.decisions(point)}
+    assert set(handles) == {"first.choice", "second.choice"}
+    selected = point.with_choices({handles["first.choice"]: 2})
+    assert selected.query(getattr(Parent.first, "exported")) == Available(6)
     assert isinstance(selected.second.query(choice), Unresolved)
     assert isinstance(point.first.query(choice), Unresolved)
     assert calls == [3]
 
 
-def test_closed_builder_rejects_add_after_declaration_construction() -> None:
+def test_a_compiled_composite_rejects_structural_changes() -> None:
     calls: list[int] = []
 
     def snapshot(value: int) -> int:
@@ -224,89 +229,90 @@ def test_closed_builder_rejects_add_after_declaration_construction() -> None:
     semantics = ValueSemantics(
         int, "integer", lambda value: type(value) is int, int.__eq__, snapshot
     )
-    builder = ScopeBuilder(Space)
-    value = builder.add("value", Param(int))
-    deferred_export = builder.export(ValueKey("value", int))
-    builder.finish()
-    with pytest.raises(DefinitionError, match="sealed"):
-        builder.add("too_late", Const(1, semantics=semantics))
-    with pytest.raises(DefinitionError, match="sealed"):
-        builder.add("too_late", Decision(semantics, values=(1,)))
-    with pytest.raises(DefinitionError, match="sealed"):
-        builder.bind(value, 1)
-    with pytest.raises(DefinitionError, match="sealed"):
-        deferred_export.value(value)
-    with pytest.raises(DefinitionError, match="sealed"):
-        builder.add("too_late", Const(1))
+    value = Const(1)
+    family = composite("Sealed", {"value": value, "physical": View(value)})
+    assert design_space(family()).query(value) == Available(1)
+    # There is no builder to seal: the compiled family itself refuses changes.
+    with pytest.raises(DefinitionError, match="finalized"):
+        setattr(family, "too_late", Const(1, semantics=semantics))
+    with pytest.raises(DefinitionError, match="finalized"):
+        setattr(family, "too_late", Decision(values=(1,), semantics=semantics))
+    with pytest.raises(DefinitionError, match="finalized"):
+        delattr(family, "value")
+    with pytest.raises(DefinitionError, match="finalized"):
+        setattr(family, "exports", {})
+    with pytest.raises(DefinitionError, match="finalized"):
+        setattr(family, "too_late", Const(1))
     assert calls == [1, 1]
-    assert builder.sealed
 
 
 def test_duplicate_names_owned_declarations_and_foreign_exports_are_definition_errors() -> None:
-    builder = ScopeBuilder(StreamShape)
-    with pytest.raises(DefinitionError, match="inherited member"):
-        builder.add("dtype", Param(int))
+    with pytest.raises(DefinitionError, match="override changes value semantics"):
+        composite("Shadow", {"dtype": Param(semantics=default_semantics(int))}, base=StreamShape)
     with pytest.raises(DefinitionError, match="already belongs"):
-        builder.add("renamed", StreamShape.dtype)
-    local = builder.add("constant", Const(3))
-    with pytest.raises(DefinitionError, match="duplicate"):
-        builder.add("constant", Const(4))
-    with pytest.raises(DefinitionError, match="already has a member name"):
-        builder.add("other_name", local)
-    with pytest.raises(DefinitionError, match="not a local or inherited member"):
-        builder.export(ValueKey("foreign", int)).value(Param(int))
-    builder.export(ValueKey("local", int)).value(local)
+        composite("Renamed", {"renamed": StreamShape.dtype}, base=StreamShape)
+    local = Const(3)
+    with pytest.raises(DefinitionError, match="already belongs"):
+        composite("Twice", {"constant": local, "other_name": local})
+    with pytest.raises(DefinitionError, match="not a member"):
+        composite("Foreign", {}, exports={ViewKey("foreign", int): View(StreamShape.bits)})
+    view = View(Const(3))
     with pytest.raises(DefinitionError, match="duplicate export"):
-        builder.export(ValueKey("local", int)).value(local)
+        composite(
+            "Duplicate",
+            {"complete": view},
+            exports={ViewKey("local", int): view, ViewKey("local", int): view},
+        )
+    constant = Const(4)
+    with pytest.raises(DefinitionError, match="wrong kind"):  # exports are views only
+        composite("Kind", {"constant": constant}, exports={ViewKey("constant", int): constant})
     with pytest.raises(DefinitionError, match="name segment"):
-        builder.add("invalid.name", Const(1))
+        composite("Invalid", {"invalid.name": Const(1)})
+    with pytest.raises(DefinitionError, match="name segment"):
+        composite("invalid.family", {})
 
 
 def test_missing_bindings_and_incompatible_exports_fail_without_descriptor_runtime_errors() -> None:
-    builder = ScopeBuilder(StreamShape)
-    builder.bind(StreamShape.dtype, Encoding(3))
-    with pytest.raises(DefinitionError, match="missing child parameter bindings"):
-        builder.place()
-    assert builder.finish() is builder.finish()
-    wrong = ScopeBuilder(Space)
-    integer = wrong.add("value", Const(3))
-    wrong.export(ValueKey("value", str)).value(cast(ValueRef[str], integer))
+    # A formal left unsupplied is refused where it would have to be supplied: when
+    # the family placing the node is prepared.
+    holder = composite("Holder", {"shape": StreamShape(dtype=Encoding(3))})
+    with pytest.raises(DefinitionError, match=r"shape\.lanes is not supplied"):
+        design_space(holder())
+    integer = Const(3)
+    view = View(integer)
+    members = {"value": integer, "complete": view}
     with pytest.raises(DefinitionError, match="incompatible semantics"):
-        wrong.finish()
-    with pytest.raises(DefinitionError, match="previously failed"):
-        wrong.finish()
+        composite("Wrong", members, exports={ViewKey("value", str): view})
+    # The refused family still owns its declarations: they cannot be renamed silently.
+    with pytest.raises(DefinitionError, match="already belongs"):
+        composite("Retry", members, exports={ViewKey("value", int): view})
 
 
-def test_external_bound_references_must_be_explicit_child_bindings() -> None:
+def test_external_references_must_be_explicit_formal_bindings() -> None:
     class Parent(Space):
-        limit = Param(int)
+        limit: int = Param()
 
-    builder = ScopeBuilder(StreamShape)
-    builder.add(
-        "hidden_parent", constraint(dtype=StreamShape.dtype, maximum_bits=Parent.limit)(_admitted)
-    )
+    hidden = constraint(dtype=StreamShape.dtype, maximum_bits=Parent.limit)(_admitted)
     with pytest.raises(DefinitionError, match="not declared in this effective scope"):
-        builder.finish()
+        composite("Hidden", {"hidden_parent": hidden}, base=StreamShape)
 
 
-def test_builder_literal_bindings_snapshot_before_sealing_and_each_placement() -> None:
+def test_literal_bindings_snapshot_at_the_node_call() -> None:
     class Vector(Space):
-        values: Param[list[int]] = Param(list)
+        values: list[int] = Param()
 
     source = [1, 2]
-    builder = ScopeBuilder(Vector)
-    builder.bind(Vector.values, source)
-    builder.finish()
+    node = Vector(values=source)
     source.append(9)
-    first = builder.place()
-    exposed = first.bindings["values"]
+    exposed = inspection.declaration(node).bindings["values"]
+    assert exposed == [1, 2]
     assert isinstance(exposed, list)
     exposed.append(8)
 
     class Parent(Space):
-        vector = builder.place()
+        vector = node
 
-    assert Parent().vector.values == [1, 2]
+    assert design_space(Parent()).vector.values == [1, 2]
 
 
 def test_extension_typing_fixture(tmp_path: Path) -> None:
@@ -314,7 +320,8 @@ def test_extension_typing_fixture(tmp_path: Path) -> None:
     assert mypy is not None
     project = Path(__file__).resolve().parents[3]
     fixtures = Path(__file__).with_name("typing")
-    environment = dict(os.environ, MYPYPATH=f"{project / 'src'}:{project / 'tests'}")
+    base_environment = {key: value for key, value in os.environ.items() if key != "PYTHONPATH"}
+    environment = dict(base_environment, MYPYPATH=f"{project / 'src'}:{project / 'tests'}")
     command = [
         mypy,
         "--strict",

@@ -6,25 +6,24 @@
 from __future__ import annotations
 
 from dataclasses import FrozenInstanceError
-from typing import cast
 
 import pytest
 from typing_extensions import assert_type
 
 from finn.core.space import (
     Available,
+    BoundDecision,
     Const,
     Decision,
-    DecisionRef,
+    Inapplicable,
     Param,
     Space,
-    Subspace,
-    SubspaceChoice,
     Unresolved,
     View,
     ViewKey,
-    compile_space,
+    composite,
     derived,
+    design_space,
     domain,
     inspection,
     view,
@@ -47,7 +46,7 @@ def test_inspection_does_not_run_domains_or_evaluators() -> None:
         return (1, 2, 4)
 
     class Family(Space):
-        lanes = Decision(int, domain=domain(accepts=membership, candidates=candidates))
+        lanes: int = Decision(domain=domain(accepts=membership, candidates=candidates))
 
         @derived
         def cost(*, lanes: int) -> int:
@@ -56,8 +55,8 @@ def test_inspection_does_not_run_domains_or_evaluators() -> None:
 
         physical = View(cost)
 
-    model = compile_space(Family)
-    point = model.bind()
+    point = design_space(Family())
+    model = inspection.model(point)
     decisions = inspection.decisions(point)
     assert [item.key for item in decisions] == ["lanes"]
     assert {item.key for item in inspection.members(model)} == {"lanes", "cost", "physical"}
@@ -72,8 +71,8 @@ def test_inspection_does_not_run_domains_or_evaluators() -> None:
     assert isinstance(options, Available)
     scores: list[tuple[int, object]] = []
     for value in options.value:
-        trial = point.with_choices(point.field(handle).change(value))
-        result = trial.physical.inspect().accepted_result
+        trial = point.with_choices({handle: value})
+        result = trial.inspect(Family.physical).accepted_result
         assert isinstance(result, Available)
         scores.append((result.value, value))
     assert min(scores, key=lambda item: item[0]) == (3, 4)
@@ -84,17 +83,15 @@ def test_inspection_does_not_run_domains_or_evaluators() -> None:
 
 def test_discovery_reports_owning_decisions_and_author_names_for_selectors() -> None:
     class Child(Space):
-        supplied = Param(int)
-        local = Decision(int, values=(1, 2))
+        supplied: int = Param()
+        local: int = Decision(values=(1, 2))
 
     class Root(Space):
-        source = Decision(int, values=(2, 4))
-        child = Subspace(Child, supplied=source)
-        implementation = SubspaceChoice(
-            {"a": Subspace(Child, supplied=1), "b": Subspace(Child, supplied=2)}
-        )
+        source: int = Decision(values=(2, 4))
+        child = Child(supplied=source)
+        implementation: Child = Decision(values={"a": Child(supplied=1), "b": Child(supplied=2)})
 
-    point = Root()
+    point = design_space(Root())
     decisions = inspection.decisions(point)
     assert {item.key for item in decisions} == {
         "source",
@@ -109,33 +106,39 @@ def test_discovery_reports_owning_decisions_and_author_names_for_selectors() -> 
     assert selectors[0].key == "implementation"
     assert selectors[0].cases == ("a", "b")
     choice = inspection.choices(point)[0]
-    assert choice.selector is not None
     assert_type(choice.selector, DecisionHandle[str])
-    chosen = point.with_choices(point.field(choice.selector).change("b"))
-    assert chosen.implementation.alternative("b").query(Child.supplied) == Available(2)
-    assert [(case.name, case.scope) for case in choice.cases] == [
-        ("a", "implementation.a"),
-        ("b", "implementation.b"),
+    assert choice.selector == selectors[0].reference
+    chosen = point.with_choices({choice.selector: "b"})
+    selected = chosen.implementation
+    assert isinstance(selected, Child) and selected.query(Child.supplied) == Available(2)
+    # An unselected candidate is still inspectable; its members are inapplicable.
+    other = inspection.candidate(chosen, Root.implementation, "a")
+    assert isinstance(other, Child) and isinstance(other.query(Child.supplied), Inapplicable)
+    assert [(case.name, case.scope, case.space_type) for case in choice.cases] == [
+        ("a", "implementation.a", Child),
+        ("b", "implementation.b", Child),
     ]
 
 
 def test_typed_handles_preserve_types_and_match_repeated_discovery() -> None:
     class Family(Space):
-        lanes = Decision(int, values=(1, 2))
+        lanes: int = Decision(values=(1, 2))
 
         @view
         def physical(*, lanes: int) -> int:
             return lanes
 
-    model = compile_space(Family)
-    point = model.bind()
+    model = inspection.model(Family)
+    point = design_space(Family())
     decision = inspection.decision_handle(model, Family.lanes)
     value = inspection.value_handle(model, Family.physical)
     assert_type(decision, DecisionHandle[int])
     assert_type(value, ValueHandle[int])
-    as_decision: DecisionRef[int] = decision
-    trial = point.with_choices(point.field(as_decision).change(2))
+    assert_type(point.field(Family.lanes), BoundDecision[int])
+    # DecisionRef is gone: a discovered handle is itself an edit key of the mapping form.
+    trial = point.with_choices({decision: 2})
     assert trial.query(value) == Available(2)
+    assert trial.query(decision) == Available(2)
     assert decision == inspection.decision_info(point, Family.lanes).reference
     assert hash(decision) == hash(inspection.decisions(point)[0].reference)
     with pytest.raises(FrozenInstanceError):
@@ -150,72 +153,84 @@ def test_foreign_handles_fail_before_callbacks_and_aliases_cannot_be_upgraded() 
         return candidate > 0
 
     class Child(Space):
-        supplied = Param(int)
+        supplied: int = Param()
 
     class Family(Space):
-        choice = Decision(int, domain=domain(accepts=membership))
-        child = Subspace(Child, supplied=choice)
+        choice: int = Decision(domain=domain(accepts=membership))
+        child = Child(supplied=choice)
 
     class OtherFamily(Family):
         pass
 
-    first_model = compile_space(Family)
-    second_model = compile_space(OtherFamily)
-    first = first_model.bind()
-    foreign = inspection.decision_handle(second_model, Family.choice)
+    first = design_space(Family())
+    foreign = inspection.decision_handle(OtherFamily, Family.choice)
     with pytest.raises(RequestError, match="different compiled model"):
-        first.with_choices(first.field(foreign).change(1))
+        first.with_choices({foreign: 1})
     with pytest.raises(RequestError, match="different compiled model"):
-        first.field(foreign).change(1)
+        first.field(foreign)
     with pytest.raises(RequestError, match="different compiled model"):
         first.query(foreign)
     assert calls == []
-    with pytest.raises(RequestError, match="parameter alias"):
-        inspection.decision_handle(first.child, cast(Decision[int], Child.supplied))
-    with pytest.raises(RequestError, match="Param alias"):
-        inspection.decision_handle(first, Family.child.decision_ref(Child.supplied))
+    # A formal bound to another member's decision is an alias, not an owned decision.
+    with pytest.raises(RequestError, match="not independently editable"):
+        inspection.decision_handle(first.child, Child.supplied)
+    with pytest.raises(RequestError, match="not independently editable"):
+        inspection.decision_handle(first, Family.child.supplied)
 
 
 def test_handles_follow_model_identity_across_starts_without_retaining_point_state() -> None:
     class Family(Space):
-        source = Param(int)
-        lanes = Decision(int, values=(1, 2))
+        source: int = Param()
+        lanes: int = Decision(values=(1, 2))
 
-    model = compile_space(Family)
-    first, second = model.bind({Family.source: 4}), model.bind({Family.source: 8})
+    model = inspection.model(Family)
+    first, second = design_space(Family(source=4)), design_space(Family(source=8))
     source = inspection.value_handle(model, Family.source)
     decision = inspection.decision_handle(first, Family.lanes)
     assert first.query(source) == Available(4)
     assert second.query(source) == Available(8)
-    assert second.with_choices(second.field(decision).change(2)).query(decision) == Available(2)
+    assert second.with_choices({decision: 2}).query(decision) == Available(2)
     assert isinstance(first.query(decision), Unresolved)
 
 
-def test_singleton_choice_metadata_exposes_no_editable_selector() -> None:
+def test_singleton_choice_metadata_exposes_an_ordinary_editable_selector() -> None:
+    # Replaces "a singleton choice exposes no editable selector": a Decision over
+    # nodes is an ordinary Decision, so even one candidate is an owned, editable
+    # selector. A None candidate places nothing and has no scope or family.
     class Child(Space):
         value = Const(1)
 
     class Root(Space):
-        implementation = SubspaceChoice({"only": Subspace(Child)})
+        implementation: Child = Decision(values={"only": Child()})
+        optional: Child | None = Decision(values={"none": None, "some": Child()})
 
-    model = compile_space(Root)
-    assert inspection.decisions(model) == ()
-    choice = inspection.choices(model)[0]
-    assert choice.selector is None
-    assert choice.cases[0].name == "only"
+    info = inspection.decision_info(Root, Root.implementation)
+    assert (info.key, info.selector, info.cases) == ("implementation", True, ("only",))
+    assert [item.key for item in inspection.decisions(Root)] == ["implementation", "optional"]
+    implementation, optional = inspection.choices(Root)
+    assert implementation.selector == info.reference
+    assert [(case.name, case.scope, case.space_type) for case in implementation.cases] == [
+        ("only", "implementation.only", Child)
+    ]
+    assert [(case.name, case.scope, case.space_type) for case in optional.cases] == [
+        ("none", None, None),
+        ("some", "optional.some", Child),
+    ]
+    point = design_space(Root())
+    assert isinstance(point.query(Root.implementation.value), Unresolved)
+    chosen = point.with_choices({implementation.selector: "only", optional.selector: "none"})
+    assert isinstance(chosen.implementation, Child) and chosen.implementation.value == 1
+    assert chosen.optional is None
 
 
 def test_statistics_counts_instantiated_members_and_direct_structure() -> None:
     class Leaf(Space):
-        value = Decision(int, values=(1, 2))
+        value: int = Decision(values=(1, 2))
         physical = View(value)
 
     def repeated(count: int) -> inspection.ModelStatistics:
-        family = cast(
-            type[Space],
-            type("Repeated", (Space,), {f"child{index}": Subspace(Leaf) for index in range(count)}),
-        )
-        return inspection.statistics(compile_space(family))
+        family = composite("Repeated", {f"child{index}": Leaf() for index in range(count)})
+        return inspection.statistics(family)
 
     small, large = repeated(2), repeated(4)
     # Each placement contributes its two effective members and the placement

@@ -8,7 +8,7 @@ from typing import cast
 
 import pytest
 
-from finn.core.space import Space, SpaceModel
+from finn.core.space import Model, Space
 from finn.core.space._runtime import Snapshot, decision_state, evaluate
 from finn.core.space.errors import ConfigurationError, EvaluationError, RequestError
 from finn.core.space.ir import Argument, LinkedModel, Node
@@ -180,7 +180,7 @@ def test_errors_keep_boundary_and_programming_failures_distinct() -> None:
         assert error.__cause__ is cause
 
 
-def prepared(*nodes: Node) -> SpaceModel[Space]:
+def prepared(*nodes: Node) -> Model[Space]:
     """Minimal prepared model for evaluator tests using hand-built explicit IR."""
     linked = LinkedModel(
         nodes,
@@ -191,7 +191,7 @@ def prepared(*nodes: Node) -> SpaceModel[Space]:
         {node.key: node.index for node in nodes},
     )
 
-    return SpaceModel(Space, linked)
+    return Model(Space, linked)
 
 
 INT = cast(ValueSemantics[object], default_semantics(int))

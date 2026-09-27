@@ -18,9 +18,9 @@ from finn.core.space import (
     Unresolved,
     ValueSemantics,
     View,
-    compile_space,
     constraint,
     derived,
+    design_space,
     view,
 )
 from finn.core.space.errors import EvaluationError
@@ -41,8 +41,8 @@ BAG = ValueSemantics(
 
 
 class Mutable(Space):
-    source = Param(BAG)
-    choice = Decision(BAG, values=(Bag([3]),))
+    source: Bag = Param(semantics=BAG)
+    choice: Bag = Decision(values=(Bag([3]),), semantics=BAG)
 
     @derived(semantics=BAG)
     def raw(*, source: Bag) -> Bag:
@@ -57,17 +57,20 @@ class Mutable(Space):
 
 def test_value_and_function_views_detach_all_public_assessment_payloads() -> None:
     original = Bag([1])
-    point = compile_space(Mutable).bind({Mutable.source: original})
+    point = design_space(Mutable(source=original))
     original.values.append(9)
+    # Both view forms read as their accepted value; each read is a detached copy.
+    point.physical.values.append(10)
+    point.computed.values.append(10)
+    assert (point.physical, point.computed) == (Bag([1]), Bag([1]))
     for declaration in (Mutable.physical, Mutable.computed):
-        bound = point.view(declaration)
-        value = bound()
-        value.values.append(10)
-        assert bound() == Bag([1])
-        queried = bound.query()
+        bound = point.field(declaration)
+        bound.get().values.append(10)
+        assert bound.get() == Bag([1])
+        queried = point.query(declaration)
         assert isinstance(queried, Available)
         queried.value.values.append(11)
-        assert bound.query() == Available(Bag([1]))
+        assert point.query(declaration) == Available(Bag([1]))
         assessment = point.inspect(declaration)
         assert isinstance(assessment.output_result, Available)
         assert isinstance(assessment.accepted_result, Available)
@@ -89,7 +92,7 @@ def test_value_and_function_views_detach_all_public_assessment_payloads() -> Non
 
 
 def test_decision_reads_and_candidates_cannot_mutate_frozen_commitments() -> None:
-    base = Mutable({Mutable.source: Bag([1])})
+    base = design_space(Mutable(source=Bag([1])))
     candidates = base.field(Mutable.choice).candidates()
     assert isinstance(candidates, Available)
     candidates.value[0].values.append(9)
@@ -116,11 +119,11 @@ def test_public_snapshot_failure_retains_declaration_role_and_cause() -> None:
     semantics = ValueSemantics(Bag, "bag", lambda value: type(value) is Bag, BAG.equal, snapshot)
 
     class Failing(Space):
-        source = Param(semantics)
+        source: Bag = Param(semantics=semantics)
         physical = View(source)
 
-    point = Failing({Failing.source: Bag([1])})
-    point.physical()
+    point = design_space(Failing(source=Bag([1])))
+    _ = point.physical  # a view read: warms the answer
     fail = True
     with pytest.raises(EvaluationError) as answer_error:
         point.query(Failing.source)
@@ -128,7 +131,7 @@ def test_public_snapshot_failure_retains_declaration_role_and_cause() -> None:
     assert answer_error.value.role == "public value snapshot"
     assert isinstance(answer_error.value.__cause__, RuntimeError)
     with pytest.raises(EvaluationError) as assessment_error:
-        point.physical.inspect()
+        point.inspect(Failing.physical)
     assert assessment_error.value.owner == "source"
     assert isinstance(assessment_error.value.__cause__, RuntimeError)
 
@@ -136,7 +139,7 @@ def test_public_snapshot_failure_retains_declaration_role_and_cause() -> None:
 def test_grouped_view_obligations_keep_refusals_visible_while_waiting() -> None:
     class Grouped(Space):
         output = Const(4)
-        lanes = Decision(int, values=(1, 2))
+        lanes: int = Decision(values=(1, 2))
 
         @constraint
         def refused() -> bool:
@@ -147,12 +150,12 @@ def test_grouped_view_obligations_keep_refusals_visible_while_waiting() -> None:
             return lanes > 0
 
         support = ConstraintGroup(refused, pending)
-        physical = View(output, constraints=(support,))
+        physical = View(output, requires=(support,))
 
-    point = Grouped()
+    point = design_space(Grouped())
     grouped = point.inspect(Grouped.support)
     for _ in range(2):
-        assessment = point.physical.inspect()
+        assessment = point.inspect(Grouped.physical)
         assert isinstance(assessment.accepted_result, Unresolved)
         assert assessment.constraints.refused == ("refused",)
         assert assessment.constraints.results == grouped.results
@@ -164,16 +167,16 @@ def test_grouped_view_obligations_keep_refusals_visible_while_waiting() -> None:
         assert readiness.ready is None
         assert isinstance(readiness.results["refused"], Rejected)
     committed = point.with_choices(lanes=1)
-    assert isinstance(committed.physical.inspect().accepted_result, Rejected)
-    assert committed.physical.inspect().readiness.ready is True
+    assert isinstance(committed.inspect(Grouped.physical).accepted_result, Rejected)
+    assert committed.inspect(Grouped.physical).readiness.ready is True
 
 
 def test_empty_named_obligations_can_be_assessed_without_value_semantics() -> None:
     class Empty(Space):
         output = Const(4)
         group = ConstraintGroup()
-        physical = View(output, constraints=(group,))
+        physical = View(output, requires=(group,))
 
-    point = Empty()
-    assert point.physical() == 4
-    assert point.physical.inspect().readiness.ready is True
+    point = design_space(Empty())
+    assert point.physical == 4
+    assert point.inspect(Empty.physical).readiness.ready is True

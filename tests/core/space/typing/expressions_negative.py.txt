@@ -1,22 +1,37 @@
 from finn.core.space import Param, Space
 from finn.core.space.expressions import Expr
 
-number = Param(int)
-text = Param(str)
-fraction = Param(float)
-
-bad_text = text + 1  # E
-bad_reflected = 1 + text  # E
-bad_literal = number + "x"  # E
-bad_float = number + fraction  # E
-bad_unary = -text  # E
-bad_division = number / 2  # E
-bad_power = number ** 2  # E
 bad_bool_type: Expr[bool]  # E
 
+class Values(Space):
+    # Formals are typed as their values: mypy checks arithmetic as on the values.
+    number: int = Param()
+    text: str = Param()
+    fraction: float = Param()
+    bad_text = text + 1  # E
+    bad_reflected = 1 + text  # E
+    bad_literal = number + "x"  # E
+    bad_unary = -text  # E
+    # Not reported (int + float, int / int and int ** int are valid on values):
+    # refused at runtime, where an expression takes int operands and + - * // % only.
+    float_sum = number + fraction
+    division = number / 2
+    power = number ** 2
+
+class Child(Space):
+    width: int = Param()
+    label: str = Param()
+
 class Example(Space):
-    extent = Param(int)
+    extent: int = Param()
     value = extent * 2
+    child = Child(width=extent, label="x")
+    # A reference is typed as its value, so mypy checks arithmetic on it as that value.
+    bad_reference = child.label + 1  # E
+    bad_mixed = child.label + extent  # E
+    reference_sum = child.width + 1
+    # Not reported: int / int is float for mypy; refused at runtime (no such operator).
+    reference_division = child.width / 2
 
 def wrong_read(point: Example) -> str:
     return point.value  # E
