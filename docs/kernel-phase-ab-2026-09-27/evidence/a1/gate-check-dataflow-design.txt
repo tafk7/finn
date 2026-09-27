@@ -1,0 +1,22 @@
+finn     26e224ca94caf209bc21af17dcbfaa66dbb49fb4  /home/tkeller/prj-kernels/finn-kernels-extraction
+Python 3.10.19
+pytest 9.1.1
+ruff 0.16.4
+mypy 2.3.1 (compiled: yes)
+============================= test session starts ==============================
+platform linux -- Python 3.10.19, pytest-9.1.1, pluggy-1.6.0
+rootdir: /home/tkeller/prj-kernels/finn-kernels-extraction
+configfile: setup.cfg
+plugins: hypothesis-6.167.1
+collected 16 items
+
+tests/dataflow/model/test_datatypes.py .....                             [ 31%]
+tests/dataflow/model/test_facade.py ....                                 [ 56%]
+tests/dataflow/test_package_boundaries.py .......                        [100%]
+
+============================== 16 passed in 8.29s ==============================
+21 files already formatted
+All checks passed!
+Success: no issues found in 18 source files
+Success: no issues found in 5 source files
+exit=0
