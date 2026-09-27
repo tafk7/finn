@@ -73,8 +73,22 @@ def _sv_constant(value: ConstantBits) -> str:
     return f"{value.bit_width}'h{value.value:x}"
 
 
+def _unconnected(structure: PhysicalStructure) -> set[PhysicalPin]:
+    """Child outputs disposed whole; a pin with only some bits disposed keeps its net."""
+    widths = {
+        PhysicalPin(instance.instance_id, name): info.width
+        for instance in structure.instances
+        for name, info in abi_pins(instance.requirements.abi).items()
+    }
+    bits: dict[PhysicalPin, int] = {}
+    for item in structure.unused_outputs:
+        width = widths[item.pin] - item.offset if item.width is None else item.width
+        bits[item.pin] = bits.get(item.pin, 0) + width
+    return {pin for pin, count in bits.items() if count == widths[pin]}
+
+
 def _sv_net_declarations(structure: PhysicalStructure) -> str:
-    unused = {item.pin for item in structure.unused_outputs}
+    unused = _unconnected(structure)
     lines = []
     for instance in structure.instances:
         for name, info in abi_pins(instance.requirements.abi).items():
@@ -116,7 +130,7 @@ def _sv_scalar(value: Scalar) -> str:
 
 
 def _sv_instances(structure: PhysicalStructure) -> str:
-    unused = {item.pin for item in structure.unused_outputs}
+    unused = _unconnected(structure)
     blocks = []
     for instance in structure.instances:
         name = cast(FixedModuleName, instance.requirements.abi.entry_point).value

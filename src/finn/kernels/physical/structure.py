@@ -93,13 +93,20 @@ class ModuleInstance:
 
 @dataclass(frozen=True, slots=True)
 class UnusedOutput:
+    """A child output left unconnected: the whole pin, or ``width`` bits from ``offset``."""
+
     pin: PhysicalPin
     reason: str
+    offset: int = 0
+    width: int | None = None
 
     def __post_init__(self) -> None:
         if self.pin.instance_id is None:
             raise PhysicalStructureError("only a child output may be explicitly unused")
         _identity(self.reason, "unused-output reason")
+        _natural(self.offset, "unused-output offset")
+        if self.width is not None:
+            _natural(self.width, "unused-output width", positive=True)
 
 
 @dataclass(frozen=True, slots=True)

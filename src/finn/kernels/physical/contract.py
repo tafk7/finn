@@ -13,7 +13,9 @@ A contract joins three levels, each owned elsewhere and checked here together:
 can only be repaired by an adapter kernel, which ``forms.classify`` names
 (reorder or replay, width conversion, lane regroup). A pure lane permutation,
 padding and reset polarity leave the sequence unchanged; they are properties of
-the connection, which ``Composition.connect`` realizes as wires.
+the connection, which ``Composition.connect`` realizes as wires: a producer's
+padding bits are left unconnected inside the composition, and a consumer's
+padding is driven with zeros.
 """
 
 from __future__ import annotations
@@ -150,13 +152,6 @@ def compatibility(
                 f"{signal} requires a marker every {rule.period} beats; none is produced",
             )
 
-    if not source_is_top and not sink_is_top:
-        if source.transport.data_width > source.payload_bits:
-            refuse(
-                Level.PHYSICAL,
-                "stream-padding",
-                "padding produced by a child cannot be discarded inside the composition",
-            )
     if source_is_top:
         consumed = {pair[0] for pair in marker_pairs(source, sink)}
         unused = [m.signal for m in source.transport.markers if m.signal not in consumed]

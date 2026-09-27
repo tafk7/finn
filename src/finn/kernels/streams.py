@@ -57,7 +57,7 @@ from finn.core.space import (
     reject,
     view,
 )
-from finn.kernels.artifacts.abi import Clock, Direction, Endpoint, Reset, Signal
+from finn.kernels.artifacts.abi import Bus, Clock, Direction, Endpoint, Reset, Signal
 from finn.kernels.artifacts.build import (
     EntryPointSourceName,
     FixedModuleName,
@@ -69,6 +69,7 @@ from finn.kernels.artifacts.build import (
 )
 from finn.kernels.artifacts.derivation import ProducerIdentity
 from finn.kernels.clocks import ClockDomain, Domain
+from finn.kernels.control import Exported
 from finn.kernels.datatypes.scalar import ScalarEncoding
 from finn.kernels.fifo import FifoKernel
 from finn.kernels.physical.axi_stream import AxiStream
@@ -332,15 +333,17 @@ def netlist(
     streams: Sequence[Located[Connection]],
     domains: Sequence[Located[Domain]],
     tieoffs: Sequence[Located[Tieoffs]] = (),
+    controls: Sequence[Located[tuple[Exported, ...]]] = (),
     *,
     module: str,
     producer: ProducerIdentity,
 ) -> Composed | Rejected:
-    """Wire the composite's modules through its streams and clock domains.
+    """Wire the composite's modules through its streams, clock domains and control buses.
 
     Each module is instantiated as ``u_<node>``, a FIFO stage as ``u_<stream>_fifo``.
-    Every clock and reset pin is driven from the domain that names it and every
-    tied input from its kernel's ``Tieoffs``; an input nothing drives is refused, as
+    Every clock and reset pin is driven from the domain that names it, every
+    exported control bus is wired through to its top port, and every tied input
+    is held by its kernel's ``Tieoffs``. An input nothing drives is refused, as
     is a defect no single stream can see, such as a clock-domain conflict.
     """
     connections = [
@@ -360,6 +363,7 @@ def netlist(
             connections,
             [item.value for item in domains],
             {str(_instance(item.node)): item.value for item in tieoffs},
+            [exported for item in controls for exported in item.value],
             module,
             producer,
         )
@@ -372,6 +376,7 @@ def _wire(
     connections: list[tuple[str, Connection]],
     domains: list[Domain],
     tieoffs: dict[str, Tieoffs],
+    exported: list[Exported],
     module: str,
     producer: ProducerIdentity,
 ) -> Composed:
@@ -379,7 +384,7 @@ def _wire(
     boundary = [c.source for _, c in connections if c.source_owner is None] + [
         c.sink for _, c in connections if c.sink_owner is None
     ]
-    composition = Composition(_top_abi(module, boundary, domains))
+    composition = Composition(_top_abi(module, boundary, domains, [item.top for item in exported]))
     clocking = _clocking(domains)
     stream_pins: dict[str, set[str]] = {}
     for _, c in connections:
@@ -388,6 +393,10 @@ def _wire(
                 stream_pins.setdefault(owner, set()).update(
                     pin.name for pin in contract.transport.pins()
                 )
+    for item in exported:
+        stream_pins.setdefault(str(_instance(item.node)), set()).update(
+            member.physical for member in item.child.signals
+        )
     for name, requirements in placed.items():
         composition.add(name, requirements)
         _drive(
@@ -398,6 +407,8 @@ def _wire(
             clocking.get(name, {}),
             tieoffs.get(name, Tieoffs()),
         )
+    for item in exported:
+        composition.export(str(_instance(item.node)), item.child, item.top)
     for stream, c in fifos.items():
         stage = c.stage
         assert stage.requirements and stage.input and stage.output and c.clocking
@@ -462,9 +473,9 @@ def _stage_clocking(stage: Stage, connection: Connection) -> dict[str, str]:
 
 
 def _top_abi(
-    module: str, boundary: list[StreamContract], domains: list[Domain]
+    module: str, boundary: list[StreamContract], domains: list[Domain], controls: list[Bus]
 ) -> ModuleABIRequirements:
-    """The used domains' clocks, then their resets, then the boundary buses."""
+    """The used domains' clocks, their resets, the boundary streams, the control buses."""
     used = [item for item in domains if item.clock is not None]
     clocks = [item.clock for item in used if item.clock is not None]
     names = {clock.name for clock in clocks}
@@ -494,7 +505,12 @@ def _top_abi(
     ]
     return ModuleABIRequirements(
         GeneratedModuleName(module),
-        (*clocks, *resets, *(contract.transport.axis_bus() for contract in boundary)),
+        (
+            *clocks,
+            *resets,
+            *(contract.transport.axis_bus() for contract in boundary),
+            *controls,
+        ),
         (),
         tuple(item.alignment for item in used if item.alignment is not None),
     )

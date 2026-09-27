@@ -8,15 +8,16 @@ connections, then produces a validated ``PhysicalStructure``. ``connect`` checks
 two stream contracts (including their clock domains) and emits every data,
 padding, handshake and marker wire; nothing about a stream is wired by hand.
 Clock and reset pins are routed with ``drive``, which derives reset inversion
-from the declared polarities; ``tie`` holds an input at a constant and
-``dispose`` leaves an output unconnected.
+from the declared polarities; ``tie`` holds an input at a constant,
+``dispose`` leaves an output unconnected, and ``export`` wires a child bus
+through to a top bus.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-from finn.kernels.artifacts.abi import Clock, Reset
+from finn.kernels.artifacts.abi import Bus, Clock, Direction, Reset
 from finn.kernels.artifacts.build import ModuleABIRequirements, ModuleBuildRequirements
 from finn.kernels.physical.contract import (
     Level,
@@ -92,6 +93,18 @@ class Composition:
         self._wires.append(
             PhysicalWire(_slice(instance_id, pin, child.width), ConstantBits(child.width, value))
         )
+
+    def export(self, instance_id: str, child: Bus, top: Bus) -> None:
+        """Wire a child bus member by member to a top bus of the same protocol."""
+        directions = dict(child.member_directions())
+        exposed = {member.logical: member.physical for member in top.signals}
+        for member in child.signals:
+            inner = _slice(instance_id, member.physical, member.width)
+            outer = _slice(None, exposed[member.logical], member.width)
+            if directions[member.physical] is Direction.IN:
+                self._wires.append(PhysicalWire(inner, outer))
+            else:
+                self._wires.append(PhysicalWire(outer, inner))
 
     def dispose(self, instance_id: str, pin: str, reason: str) -> None:
         """Leave a whole child output unconnected."""
@@ -176,6 +189,16 @@ class Composition:
                 )
         if source.owner is None and src.data_width > payload:
             self._ignored.append(_slice(None, src.data, src.data_width - payload, payload))
+        elif sink.owner is not None and src.data_width > payload:
+            # A child's padding is unspecified; a child consumer gets zeros instead.
+            self._unused.append(
+                UnusedOutput(
+                    PhysicalPin(source.owner, src.data),
+                    f"padding not carried to {sink.label}",
+                    payload,
+                    src.data_width - payload,
+                )
+            )
         self._wires.append(
             PhysicalWire(_slice(sink.owner, dst.valid), _slice(source.owner, src.valid))
         )

@@ -166,16 +166,19 @@ def validate_physical_structure(structure: PhysicalStructure) -> None:
             raise PhysicalStructureError("an ignored top input bit is also consumed")
         ignored |= qualified_ignored
 
-    unused: set[PhysicalPin] = set()
+    unused: set[tuple[PhysicalPin, int]] = set()
     for disposition in structure.unused_outputs:
         info = pin_info(disposition.pin, top=top, children=children)
         if disposition.pin.instance_id is None or info.direction is not Direction.OUT:
             raise PhysicalStructureError("an unused endpoint must be one child output pin")
-        if disposition.pin in unused:
+        width = info.width - disposition.offset if disposition.width is None else disposition.width
+        disposed = slice_bits(PinSlice(disposition.pin, disposition.offset, width), info)
+        qualified_unused = {(disposition.pin, bit) for bit in disposed}
+        if unused & qualified_unused:
             raise PhysicalStructureError("a child output is disposed more than once")
-        if any((disposition.pin, bit) in sources for bit in range(info.width)):
+        if qualified_unused & set(sources):
             raise PhysicalStructureError("a used child output cannot also be disposed")
-        unused.add(disposition.pin)
+        unused |= qualified_unused
 
     required_destinations: set[tuple[PhysicalPin, int]] = set()
     required_sources: set[tuple[PhysicalPin, int]] = set()
@@ -193,8 +196,7 @@ def validate_physical_structure(structure: PhysicalStructure) -> None:
             if info.direction is Direction.IN:
                 required_destinations |= _all_bits(pin, info)
             elif info.direction is Direction.OUT:
-                if pin not in unused:
-                    required_sources |= _all_bits(pin, info)
+                required_sources |= _all_bits(pin, info) - unused
             else:
                 raise PhysicalStructureError("the first profile does not support inout child pins")
     if destinations != required_destinations:
