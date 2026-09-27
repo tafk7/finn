@@ -5,10 +5,11 @@
 
 import pytest
 
-from finn.core.space import Available, Decision, Param, Rejected, Space, Unresolved, configure
+from finn.core.space import Available, Decision, Param, Rejected, Space, Unresolved, design_space
 from finn.kernels.datatypes.domains import Integer, SignedInteger
 from finn.kernels.datatypes.scalar import integer_scalar
 from finn.kernels.datatypes.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
+from finn.dataflow.datatypes import QONNXDataType
 from finn.dataflow.datatypes import resolve_qonnx_datatype_name as dtype
 from finn.kernels.int_to_fp32 import IntToFp32Kernel
 from finn.kernels.memstream_hls import MemStreamHlsKernel
@@ -18,13 +19,15 @@ from kernels.test_migrated_simple import eltwise
 
 
 class Precision(Space):
-    limit: Param[int] = Param(int)
-    dtype = Decision(QONNX_DATATYPE_VALUE_SEMANTICS, domain=SignedInteger(2, limit).domain())
+    limit: int = Param()
+    dtype: QONNXDataType = Decision(
+        domain=SignedInteger(2, limit).domain(), semantics=QONNX_DATATYPE_VALUE_SEMANTICS
+    )
     scalar = integer_scalar(dtype, SignedInteger(2, limit))
 
 
 def test_dtype_choice_and_scalar_admission_share_dynamic_limits():
-    base = configure(Precision(limit=5))
+    base = design_space(Precision(limit=5))
     candidates = base.field(Precision.dtype).candidates()
     assert isinstance(candidates, Available)
     assert [value.name for value in candidates.value] == ["INT2", "INT3", "INT4", "INT5"]
@@ -42,12 +45,12 @@ def test_dtype_choice_and_scalar_admission_share_dynamic_limits():
 
 
 def test_invalid_bound_is_a_domain_refusal():
-    base = configure(Precision(limit=0))
+    base = design_space(Precision(limit=0))
     assert not base.try_with_choices(dtype=dtype("INT3")).accepted
 
 
 def test_scalar_encoding_detaches_qonnx_values():
-    selected = configure(Precision(limit=5)).with_choices(dtype=dtype("INT3"))
+    selected = design_space(Precision(limit=5)).with_choices(dtype=dtype("INT3"))
     first = selected.scalar.encoding()
     mutable = first.dtype
     mutable._bitwidth = 100
@@ -57,7 +60,7 @@ def test_scalar_encoding_detaches_qonnx_values():
 
 @pytest.mark.parametrize("name", ("INT0", "UINT0", "BIPOLAR", "TERNARY", "FLOAT16", "INT129"))
 def test_converter_unsupported_encodings_refuse_without_pin_construction_errors(name):
-    point = configure(IntToFp32Kernel(input_dtype=dtype(name)))
+    point = design_space(IntToFp32Kernel(input_dtype=dtype(name)))
     assert isinstance(point.build_requirements.query(), Rejected)
 
 
@@ -65,7 +68,7 @@ def test_converter_unsupported_encodings_refuse_without_pin_construction_errors(
 def test_zero_width_encodings_refuse_across_consumers(name):
     assert isinstance(eltwise(lhs=name, rhs=name).build_requirements.query(), Rejected)
     assert isinstance(
-        configure(
+        design_space(
             MemStreamHlsKernel(element_dtype=dtype(name), depth=3)
         ).build_requirements.query(),
         Rejected,
@@ -96,9 +99,11 @@ def test_dotp_rejects_packed_width_overflow_even_when_dimensions_fit():
 
 def test_integer_policy_check_agrees_with_domain_admission():
     class Types(Space):
-        value = Decision(QONNX_DATATYPE_VALUE_SEMANTICS, domain=Integer(1, 4).domain())
+        value: QONNXDataType = Decision(
+            domain=Integer(1, 4).domain(), semantics=QONNX_DATATYPE_VALUE_SEMANTICS
+        )
 
-    base = configure(Types())
+    base = design_space(Types())
     for name in ("BINARY", "INT1", "INT4", "UINT4", "INT5", "INT0", "TERNARY"):
         offered = dtype(name)
         assert base.try_with_choices(value=offered).accepted is (

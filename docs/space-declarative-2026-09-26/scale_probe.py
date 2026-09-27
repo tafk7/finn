@@ -18,15 +18,15 @@ from finn.core.space import (
     Param,
     Space,
     composite,
-    configure,
+    design_space,
     inspection,
     view,
 )
 
 
 class Stage(Space):
-    width_in: Param[int] = Param(int)
-    growth = Decision(int, values=(0, 1, 2))
+    width_in: int = Param()
+    growth: int = Decision(values=(0, 1, 2))
 
     @view
     def width_out(self) -> int:
@@ -43,7 +43,7 @@ def pipeline(count: int) -> type[Space]:
 for count in (50, 200, 800):
     family = pipeline(count)
     start = time.perf_counter()
-    point = configure(family())
+    point = design_space(family())
     prepared = time.perf_counter() - start
     handles = {item.key: item.reference for item in inspection.decisions(point)}
     point = point.with_choices({handles[f"s{i}.growth"]: 1 for i in range(count)})

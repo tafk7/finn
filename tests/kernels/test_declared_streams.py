@@ -20,7 +20,7 @@ from finn.core.space import (
     Space,
     Unresolved,
     Users,
-    configure,
+    design_space,
     default_semantics,
     derived,
     inspection,
@@ -54,8 +54,8 @@ PRODUCED = vector_major((4,), 2)
 class Constants(Space):
     """Two constant vectors streamed to two outputs; each output's order is supplied."""
 
-    first_spec: Param[StreamSpec] = Param(STREAM_SPEC)
-    second_spec: Param[StreamSpec] = Param(STREAM_SPEC)
+    first_spec: StreamSpec = Param(semantics=STREAM_SPEC)
+    second_spec: StreamSpec = Param(semantics=STREAM_SPEC)
     # Each stream has only its producer: it is a boundary, named by its port.
     first = Stream(spec=first_spec, port="out0_V")
     second = Stream(spec=second_spec, port="out1_V")
@@ -82,7 +82,7 @@ class Constants(Space):
 
 
 def constants(first=PRODUCED, second=PRODUCED):
-    point = configure(
+    point = design_space(
         Constants(first_spec=StreamSpec(INT4, first), second_spec=StreamSpec(INT4, second))
     )
     return point.with_choices(
@@ -131,7 +131,7 @@ def test_explain_shows_per_stream_and_per_member_evidence():
 
 
 def test_a_stream_waits_for_its_own_endpoints_only():
-    point = configure(
+    point = design_space(
         Constants(first_spec=StreamSpec(INT4, PRODUCED), second_spec=StreamSpec(INT4, PRODUCED))
     )
     point = point.with_choices(point.first_source.field(CyclicDelivery.rom_style).change("auto"))
@@ -156,7 +156,7 @@ def test_boundary_ports_are_axis_and_byte_aligned():
 
 def test_two_producers_on_one_stream_are_refused_by_the_stream():
     class Clash(Space):
-        spec: Param[StreamSpec] = Param(STREAM_SPEC)
+        spec: StreamSpec = Param(semantics=STREAM_SPEC)
         shared = Stream(spec=spec, port="out0_V")
         a = CyclicDelivery(
             dtype=DataType["INT4"], form=PRODUCED, values=(1, 2, 3, 4), output_stream=shared
@@ -165,7 +165,7 @@ def test_two_producers_on_one_stream_are_refused_by_the_stream():
             dtype=DataType["INT4"], form=PRODUCED, values=(1, 2, 3, 4), output_stream=shared
         )
 
-    point = configure(Clash(spec=StreamSpec(INT4, PRODUCED)))
+    point = design_space(Clash(spec=StreamSpec(INT4, PRODUCED)))
     refused = point.shared.connection.query()
     assert isinstance(refused, Rejected)
     assert {f.code for f in refused.findings} == {"stream-users"}
@@ -174,13 +174,13 @@ def test_two_producers_on_one_stream_are_refused_by_the_stream():
 
 def test_a_boundary_stream_needs_its_port_name():
     class Unnamed(Space):
-        spec: Param[StreamSpec] = Param(STREAM_SPEC)
+        spec: StreamSpec = Param(semantics=STREAM_SPEC)
         out = Stream(spec=spec)
         source = CyclicDelivery(
             dtype=DataType["INT4"], form=PRODUCED, values=(1, 2, 3, 4), output_stream=out
         )
 
-    waiting = configure(Unnamed(spec=StreamSpec(INT4, PRODUCED))).out.connection.query()
+    waiting = design_space(Unnamed(spec=StreamSpec(INT4, PRODUCED))).out.connection.query()
     assert isinstance(waiting, Unresolved)
     assert {f.owner for f in waiting.findings} == {"out.port"}
 
@@ -203,7 +203,7 @@ class ProducerSpecStream(Space):
 class SpecReadingProducer(Space):
     """Builds its port contract from the stream's spec, as dotp does."""
 
-    output_stream: Param[ProducerSpecStream] = Param(ProducerSpecStream)
+    output_stream: ProducerSpecStream = Param()
     source = CyclicDelivery(dtype=DataType["INT4"], form=PRODUCED, values=(1, 2, 3, 4))
 
     @view(semantics=PORTS_SEMANTICS)
@@ -222,7 +222,7 @@ def test_a_spec_derived_from_its_users_is_refused_with_the_cycle_path():
         edge = ProducerSpecStream()
         producer = SpecReadingProducer(output_stream=edge)
 
-    point = configure(Unanchored())
+    point = design_space(Unanchored())
     with pytest.raises(EvaluationError, match="dependency cycle") as caught:
         point.edge.spec
     path = str(caught.value)

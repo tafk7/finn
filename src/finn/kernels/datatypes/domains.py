@@ -20,7 +20,8 @@ from finn.core.space import Domain, Rejected, ValueRef, domain, reject
 from finn.kernels.datatypes.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
 from finn.dataflow.datatypes import resolve_qonnx_datatype_name
 
-BitBound = int | ValueRef[int]
+# A literal bound, or a reference to one (references are typed as their values).
+BitBound = int
 
 
 def check_bit_bound(dtype: QONNXDataType, limit: int, *, minimum: bool) -> bool | Rejected:

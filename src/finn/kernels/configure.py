@@ -3,7 +3,7 @@
 
 """Commit a configuration's choices named by their stable keys.
 
-Facts are the root node's typed formals: ``configure(MVAU(pe=..., ...))``. Keys
+Facts are the root node's typed formals: ``design_space(MVAU(pe=..., ...))``. Keys
 are the ones ``inspection`` reports: ``"pe"``, ``"compute.compute_pumping"``, a
 structural Decision such as ``"implementation"``, or a candidate-local choice such
 as ``"implementation.cyclic.rom_style"``. All choices are committed in one atomic
@@ -40,6 +40,13 @@ def describe(results: Iterable[QueryResult[Any]]) -> str:
 def commit(point: S, choices: Mapping[str, object]) -> S:
     """Commit choices named by their stable decision keys, atomically."""
     owned = {item.key: item.reference for item in inspection.decisions(point)}
+    pinned = {item.key: item for item in inspection.pinned(point)}
+    stale = sorted(choices.keys() & pinned.keys())
+    if stale:
+        raise ValueError(
+            f"{type(point).__name__}: stale choices {stale}: "
+            + "; ".join(pinned[key].text() for key in stale)
+        )
     unknown = sorted(choices.keys() - owned.keys())
     if unknown:
         raise ValueError(f"{type(point).__name__}: unknown choices {unknown}")

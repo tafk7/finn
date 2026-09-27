@@ -3,14 +3,14 @@
 The supported authoring API is `finn.core.space`. A kernel declares the
 facts it consumes, its implementation decisions, and the typed views it can
 answer. Calling a kernel family with its facts declares a node;
-`configure(node)` is the one compile step and returns its initial
+`design_space(node)` is the one compile step and returns its initial
 configuration. Commit choices on that configuration and call the view:
 
 ```python
 from finn.kernels import FifoKernel
-from finn.core.space import Available, configure
+from finn.core.space import Available, design_space
 
-fifo_base = configure(FifoKernel(word_bits=16, depth=32))
+fifo_base = design_space(FifoKernel(word_bits=16, depth=32))
 fifo_configuration = fifo_base.with_choices(ram_style="block")
 requirements = fifo_configuration.build_requirements()
 assessment = fifo_configuration.build_requirements.inspect()
@@ -19,7 +19,7 @@ assert fifo_configuration.view(FifoKernel.build_requirements)() == requirements
 assert fifo_configuration.field(FifoKernel.ram_style).get() == "block"
 ```
 
-Each `configure` call returns an independent configuration that freezes its own
+Each `design_space` call returns an independent configuration that freezes its own
 inputs; configurations of the same family share its compiled model. Choice
 replacement returns immutable successors. The raw output in an assessment does
 not establish that its constraints and readiness obligations are accepted.
@@ -72,7 +72,7 @@ independently of their accepted `stream` view, which requires the scalar:
 from finn.kernels import DotpAxiKernel, DspBlock
 from finn.dataflow.datatypes import resolve_qonnx_datatype_name as dtype
 
-dotp = configure(
+dotp = design_space(
     DotpAxiKernel(
         activation_dtype=dtype("INT3"),
         weights_dtype=dtype("INT3"),
@@ -148,7 +148,7 @@ facts = dict(
 )
 identity = ((1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (0, 0, 0, 1))
 point = commit(
-    configure(MVAU(**facts, weights=identity)),
+    design_space(MVAU(**facts, weights=identity)),
     {
         "implementation": "cyclic",
         "implementation.cyclic.rom_style": "block",
@@ -169,7 +169,7 @@ assert [item.instance_id for item in structure.instances] == [
 ]
 assert point.build_requirements() == point.structure().requirements
 saved = selections.capture(point)
-replayed = selections.restore(configure(MVAU(**facts)), saved).instance  # weights omitted
+replayed = selections.restore(design_space(MVAU(**facts)), saved).instance  # weights omitted
 assert isinstance(replayed.structure.query(), Unresolved)
 ```
 
@@ -295,7 +295,7 @@ from finn.kernels import CyclicDelivery
 from finn.kernels.physical.forms import Adaptation, Repetition, classify, vector_major
 
 channels = vector_major((4,), 2)
-vector = configure(CyclicDelivery(dtype=dtype("INT4"), form=channels, values=(1, -2, 7, -8)))
+vector = design_space(CyclicDelivery(dtype=dtype("INT4"), form=channels, values=(1, -2, 7, -8)))
 rhs = vector.with_choices(rom_style="distributed")
 assert rhs.output().repetition is Repetition.CYCLIC
 assert rhs.image == (0xE1, 0x87)
@@ -306,7 +306,7 @@ assert classify(vector_major((3, 4), 4), pixels).adaptation is Adaptation.WIDTH_
 
 FIFO's `ram_style` remains a native preference. Its accepted `storage()` view
 reports both the effective backing and capacity, including output storage.
-For example, `configure(FifoKernel(word_bits=13, depth=2)).with_choices(ram_style="ultra")`
+For example, `design_space(FifoKernel(word_bits=13, depth=2)).with_choices(ram_style="ultra")`
 reports shift storage and capacity five. This is native implementation
 information, not a synthesis resource measurement.
 

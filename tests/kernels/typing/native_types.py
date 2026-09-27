@@ -3,7 +3,7 @@
 
 from typing_extensions import assert_type
 
-from finn.core.space import BoundView, configure
+from finn.core.space import BoundView, design_space
 from finn.dataflow.datatypes import QONNXDataType
 from finn.kernels.datatypes.scalar import IntegerScalar, ScalarEncoding
 from finn.kernels.fifo import FifoKernel, FifoStorage
@@ -17,8 +17,8 @@ def declare(dtype: QONNXDataType) -> None:
     assert_type(node, IntToFp32Kernel)
     assert_type(node.input, IntegerScalar)
     assert_type(node.input.dtype, QONNXDataType)
-    assert_type(configure(node), IntToFp32Kernel)
-    assert_type(configure(FifoKernel(word_bits=8, depth=4)), FifoKernel)
+    assert_type(design_space(node), IntToFp32Kernel)
+    assert_type(design_space(FifoKernel(word_bits=8, depth=4)), FifoKernel)
 
 
 def check(fifo: FifoKernel, converter: IntToFp32Kernel) -> None:

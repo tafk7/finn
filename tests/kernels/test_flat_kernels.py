@@ -31,13 +31,12 @@ from finn.kernels.artifacts.store import ArtifactStore
 from finn.kernels.resources import resource_root, template_root
 from finn.kernels.datatypes.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
 from finn.core.space import (
-    UNSUPPLIED,
     DefinitionError,
     Param,
     Rejected,
     Space,
     Unresolved,
-    configure,
+    design_space,
 )
 from finn.dataflow.datatypes import QONNXDataType
 from kernels.helpers import point_for
@@ -276,19 +275,17 @@ def test_required_root_bindings_and_explicit_optional_inputs_preserve_partial_qu
         ThresholdingAxiKernel,
         MemStreamHlsKernel,
     ):
-        # A missing required formal is refused when configure() prepares the root.
+        # A missing required formal is refused when design_space() prepares the root.
         with pytest.raises(DefinitionError, match="is not supplied"):
             point_for(kernel, {})
 
     # Replaces an inline exposed Param child binding: the parent declares the
     # optional formal itself and binds the child's formal to it by name.
     class OptionalConverter(Space):
-        input_dtype: Param[QONNXDataType] = Param(
-            QONNX_DATATYPE_VALUE_SEMANTICS, default=UNSUPPLIED
-        )
+        input_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS, required=False)
         converter = IntToFp32Kernel(input_dtype=input_dtype)
 
-    point = configure(OptionalConverter()).converter
+    point = design_space(OptionalConverter()).converter
     assert point.result_dtype == DataType["FLOAT32"]
     assert isinstance(point.build_requirements.inspect().accepted_result, Unresolved)
     assert all(not isinstance(port, Bus) for port in fifo().build_requirements().abi.ports)

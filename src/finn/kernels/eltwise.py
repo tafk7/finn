@@ -63,10 +63,10 @@ class EltwiseKernel(Kernel):
     id = "finnlib.eltwise"
     version = "1"
 
-    operation: Param[str] = Param(str)
-    pe: Param[int] = Param(int)
-    lhs_dtype: Param[QONNXDataType] = Param(QONNX_DATATYPE_VALUE_SEMANTICS)
-    rhs_dtype: Param[QONNXDataType] = Param(QONNX_DATATYPE_VALUE_SEMANTICS)
+    operation: str = Param()
+    pe: int = Param()
+    lhs_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
+    rhs_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
 
     @derived(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
     def result_dtype(self) -> QONNXDataType:
@@ -88,7 +88,7 @@ class EltwiseKernel(Kernel):
         "result", pe, Endpoint.INITIATOR, result_type, pins=("odat", "ovld", "ordy")
     )
 
-    b_scale: Param[float] = Param(float)
+    b_scale: float = Param()
 
     @derived(semantics=default_semantics(float))
     def native_scale(self) -> float | Rejected:
@@ -101,7 +101,7 @@ class EltwiseKernel(Kernel):
             return reject("eltwise-scale", "B_SCALE must be finite binary32")
         return rounded
 
-    target_dsp: Param[DspBlock] = Param(DspBlock)
+    target_dsp: DspBlock = Param()
 
     @constraint
     def implementation_supported(self) -> bool | Rejected:

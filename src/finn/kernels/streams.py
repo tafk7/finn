@@ -5,7 +5,7 @@
 
 A ``Stream`` is a node of its own, declared in the composite beside the
 kernels it joins. A kernel has one reference input per stream it sits on
-(``output_stream: Param[Stream] = Param(Stream)``) and exports its port
+(``output_stream: Stream = Param()``) and exports its port
 records under ``PORTS``, keyed by those input names. Each record says whether
 the kernel produces into the stream or consumes from it: direction is domain
 data, carried by the kernel's own export. The stream sees the kernels that
@@ -35,7 +35,6 @@ from dataclasses import dataclass, replace
 from enum import Enum
 
 from finn.core.space import (
-    UNSUPPLIED,
     Decision,
     Located,
     Param,
@@ -131,7 +130,7 @@ class _Direct(Space):
 class StreamFifo(Space):
     """An identity adapter: the stream's own spec on both sides of a native FIFO."""
 
-    spec: Param[StreamSpec] = Param(STREAM_SPEC)
+    spec: StreamSpec = Param(semantics=STREAM_SPEC)
 
     @derived
     def word_bits(self) -> int:
@@ -139,7 +138,7 @@ class StreamFifo(Space):
 
     buffer = FifoKernel(
         word_bits=word_bits,
-        depth=Decision(int, domain=domain(accepts=lambda *, candidate: 2 <= candidate < 2**32)),
+        depth=Decision(domain=domain(accepts=lambda *, candidate: 2 <= candidate < 2**32)),
     )
 
     @view(semantics=STAGE_SEMANTICS)
@@ -230,8 +229,8 @@ class Stream(Space):
     user is the composite's boundary, presented as the AXIS port ``port``.
     """
 
-    spec: Param[StreamSpec] = Param(STREAM_SPEC)
-    port: Param[str] = Param(str, default=UNSUPPLIED)
+    spec: StreamSpec = Param(semantics=STREAM_SPEC)
+    port: str = Param(required=False)
     ends = Users(PORTS)
 
     @derived(semantics=ENDPOINTS)
@@ -303,7 +302,7 @@ def _refusal(found: Sequence[Mismatch]) -> bool | Rejected:
 
 
 class BufferedStream(Stream):
-    transport = Decision[_Direct | StreamFifo](
+    transport: _Direct | StreamFifo = Decision(
         values={"direct": _Direct(), "fifo": StreamFifo(spec=Stream.spec)}
     )
     stage = View(transport.stage)

@@ -18,13 +18,12 @@ from finn.kernels.input_generator import InputGeneratorKernel
 from finn.kernels.memstream_hls import MemStreamHlsKernel
 from finn.kernels.resources import template_root
 from finn.core.space import (
-    UNSUPPLIED,
     DefinitionError,
     Param,
     Rejected,
     Space,
     Unresolved,
-    configure,
+    design_space,
 )
 from finn.kernels.thresholding import ThresholdingAxiKernel
 
@@ -38,7 +37,7 @@ def generator(
     extents: IntegerVector = (3, 6),
     strides: IntegerVector = (0, 1),
 ) -> InputGeneratorKernel:
-    return configure(
+    return design_space(
         InputGeneratorKernel(word_bits=bits, frame_words=frame, extents=extents, strides=strides)
     ).with_choices(ram_style="auto")
 
@@ -53,7 +52,7 @@ def threshold_base(
     bram: int = 0,
     uram: int = 0,
 ) -> ThresholdingAxiKernel:
-    return configure(
+    return design_space(
         ThresholdingAxiKernel(
             input_dtype=resolve_qonnx_datatype_name(input_dtype),
             threshold_dtype=resolve_qonnx_datatype_name(threshold_dtype),
@@ -93,7 +92,7 @@ def threshold(
 
 
 def memstream(dtype: str = "INT9", depth: int = 3) -> MemStreamHlsKernel:
-    return configure(
+    return design_space(
         MemStreamHlsKernel(element_dtype=resolve_qonnx_datatype_name(dtype), depth=depth)
     )
 
@@ -256,14 +255,14 @@ def test_hls_native_type_and_depth_limits_remain_explicit_refusals(dtype: str, d
 def test_rich_roots_require_parameters_and_optional_parent_depth_permits_narrow_hls_type() -> None:
     for family in (InputGeneratorKernel, ThresholdingAxiKernel, MemStreamHlsKernel):
         with pytest.raises(DefinitionError, match="is not supplied"):
-            configure(family())
+            design_space(family())
 
     # Replaces an inline exposed Param child binding: the optional depth is the
     # parent's own formal, bound to the child by name.
     class OptionalMemory(Space):
-        depth: Param[int] = Param(int, default=UNSUPPLIED)
+        depth: int = Param(required=False)
         memory = MemStreamHlsKernel(element_dtype=resolve_qonnx_datatype_name("INT9"), depth=depth)
 
-    point = configure(OptionalMemory())
+    point = design_space(OptionalMemory())
     assert point.memory.cpp_type == "ap_int<9>"
     assert isinstance(point.memory.build_requirements.inspect().accepted_result, Unresolved)

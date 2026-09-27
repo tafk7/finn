@@ -29,7 +29,7 @@ from kernels.rtlsim.dotp_support import (
 )
 from kernels.rtlsim.rtl_transport import drive_observed
 from finn.kernels.artifacts.contribution_types import CopiedSource
-from finn.core.space import configure
+from finn.core.space import design_space
 from finn.kernels.dotp import DotpAxiKernel
 from finn.kernels.target import DspBlock
 from finn.kernels.resources import resource_root
@@ -100,7 +100,7 @@ def run(configuration: Configuration, evidence: Path, *, backpressure_ticks: int
     while min(endpoints) < -(1 << (result_bits - 1)) or max(endpoints) >= (1 << (result_bits - 1)):
         result_bits += 1
     result_type = DataType[f"INT{result_bits}"]
-    point = configure(
+    point = design_space(
         DotpAxiKernel(
             pe=c.pe,
             simd=c.simd,

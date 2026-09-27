@@ -9,14 +9,13 @@ import pytest
 from qonnx.core.datatype import DataType
 
 from finn.core.space import (
-    UNSUPPLIED,
     Available,
     DefinitionError,
     Param,
     Rejected,
     Space,
     Unresolved,
-    configure,
+    design_space,
     inspection,
 )
 from finn.dataflow.datatypes import QONNXDataType
@@ -60,15 +59,15 @@ def kernel(**updates):
 
 
 class _PartialDotp(Space):
-    pe: Param[int] = Param(int, default=UNSUPPLIED)
-    simd: Param[int] = Param(int, default=UNSUPPLIED)
-    activation_dtype: Param[QONNXDataType] = Param(
-        QONNX_DATATYPE_VALUE_SEMANTICS, default=UNSUPPLIED
+    pe: int = Param(required=False)
+    simd: int = Param(required=False)
+    activation_dtype: QONNXDataType = Param(
+        semantics=QONNX_DATATYPE_VALUE_SEMANTICS, required=False
     )
-    weights_dtype: Param[QONNXDataType] = Param(QONNX_DATATYPE_VALUE_SEMANTICS, default=UNSUPPLIED)
-    result_dtype: Param[QONNXDataType] = Param(QONNX_DATATYPE_VALUE_SEMANTICS, default=UNSUPPLIED)
-    target_dsp: Param[DspBlock] = Param(DspBlock, default=UNSUPPLIED)
-    segment_length: Param[int] = Param(int, default=UNSUPPLIED)
+    weights_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS, required=False)
+    result_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS, required=False)
+    target_dsp: DspBlock = Param(required=False)
+    segment_length: int = Param(required=False)
     # Placed outside any stream: its optional stream formals stay unsupplied.
     component = DotpAxiKernel(
         pe=pe,
@@ -82,7 +81,7 @@ class _PartialDotp(Space):
 
 
 def partial(facts):
-    return configure(_PartialDotp(**facts)).component
+    return design_space(_PartialDotp(**facts)).component
 
 
 def test_component_groups_its_interfaces_and_keeps_one_root_physical_output():
@@ -292,7 +291,7 @@ def test_required_physical_facts_reject_omission_and_decision_remains_unresolved
         point = point_for(facts)
         assert isinstance(point.build_requirements.inspect().accepted_result, Unresolved)
     else:
-        # A bare call is legal; the missing formal is refused when configure() prepares it.
+        # A bare call is legal; the missing formal is refused when design_space() prepares it.
         with pytest.raises(DefinitionError, match=f"^{missing} is not supplied"):
             point_for(facts, **choices)
 

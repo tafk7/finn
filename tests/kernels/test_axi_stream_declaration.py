@@ -7,13 +7,13 @@ import pytest
 from qonnx.core.datatype import DataType
 
 from finn.core.space import (
-    UNSUPPLIED,
+    default_semantics,
     Available,
     Param,
     Rejected,
     Space,
     Unresolved,
-    configure,
+    design_space,
     derived,
     inspection,
 )
@@ -26,8 +26,8 @@ from finn.kernels.physical.axi_stream import AxiStreamPort, axi_stream
 
 
 class Ports(Space):
-    limit: Param[int] = Param(int)
-    dtype: Param[QONNXDataType] = Param(QONNX_DATATYPE_VALUE_SEMANTICS)
+    limit: int = Param()
+    dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
     values_type = integer_scalar(dtype, Integer(1, limit))
     signed_values_type = integer_scalar(dtype, SignedInteger(1, limit))
     results_type = Scalar(dtype=dtype)
@@ -37,8 +37,8 @@ class Ports(Space):
 
 
 class Harness(Space):
-    datatype: Param[QONNXDataType] = Param(QONNX_DATATYPE_VALUE_SEMANTICS, default=UNSUPPLIED)
-    limit: Param[int] = Param(int, default=UNSUPPLIED)
+    datatype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS, required=False)
+    limit: int = Param(required=False)
     ports = Ports(limit=limit, dtype=datatype)
 
 
@@ -48,7 +48,7 @@ def point(dtype=None, limit=8):
         facts["datatype"] = DataType[dtype]
     if limit is not None:
         facts["limit"] = limit
-    return configure(Harness(**facts)).ports
+    return design_space(Harness(**facts)).ports
 
 
 def answers(assessment):
@@ -161,12 +161,12 @@ def test_a_scalar_can_expose_its_own_dtype_without_colliding_with_parent_inputs(
     # now a formal declared on the enclosing family and bound by name. The parent's
     # own ``values_dtype`` input still does not collide with the scalar's ``dtype``.
     class Independent(Space):
-        values_dtype: Param[int] = Param(int)
-        scalar_dtype: Param[QONNXDataType] = Param(QONNX_DATATYPE_VALUE_SEMANTICS)
+        values_dtype: int = Param()
+        scalar_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
         values_type = integer_scalar(scalar_dtype, Integer(1, 8))
         values = axi_stream("values", 2, Endpoint.TARGET, values_type)
 
-    point = configure(Independent(values_dtype=99, scalar_dtype=DataType["INT3"]))
+    point = design_space(Independent(values_dtype=99, scalar_dtype=DataType["INT3"]))
     assert point.values_dtype == 99
     assert point.query(Independent.values_type.dtype) == Available(DataType["INT3"])
     assert point.values_type.dtype == DataType["INT3"]
@@ -182,7 +182,7 @@ def test_invalid_static_bit_bounds_are_authoring_errors(minimum, maximum):
 
 def test_dynamic_bounds_must_be_integer_declarations():
     with pytest.raises(TypeError, match="integer ValueRefs"):
-        Integer(2, Param(float))
+        Integer(2, Param(semantics=default_semantics(float)))
 
 
 def test_output_reuses_the_supplied_type_source_without_creating_an_input():
@@ -195,7 +195,7 @@ def test_output_reuses_the_supplied_type_source_without_creating_an_input():
 
 
 class DerivedOutput(Space):
-    bits: Param[int] = Param(int)
+    bits: int = Param()
 
     @derived(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
     def produced_type(self) -> QONNXDataType:
@@ -207,19 +207,19 @@ class DerivedOutput(Space):
 
 
 class DerivedHarness(Space):
-    bits: Param[int] = Param(int, default=UNSUPPLIED)
+    bits: int = Param(required=False)
     producer = DerivedOutput(bits=bits)
 
 
 def test_output_tracks_a_derived_type_and_remains_unresolved_until_its_source_is_known():
-    incomplete = configure(DerivedHarness()).producer
+    incomplete = design_space(DerivedHarness()).producer
     assert isinstance(incomplete.result.field(AxiStreamPort.dtype).query(), Unresolved)
     assert isinstance(incomplete.result.stream.query(), Unresolved)
     parameters = {
         member.key for member in inspection.members(DerivedOutput) if member.kind == "param"
     }
     assert parameters == {"bits"}
-    complete = configure(DerivedHarness(bits=5)).producer
+    complete = design_space(DerivedHarness(bits=5)).producer
     assert complete.result.dtype == DataType["INT5"]
     assert complete.result.payload_bits == 10
     assert complete.result.carrier_bits == 16
@@ -243,11 +243,11 @@ def test_direct_and_parent_consumed_accepted_views_share_admission():
 
 def test_output_policy_can_constrain_a_caller_supplied_encoding():
     class Producer(Space):
-        dtype: Param[QONNXDataType] = Param(QONNX_DATATYPE_VALUE_SEMANTICS)
+        dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
         output_type = integer_scalar(dtype, SignedInteger(1, 8))
         output = axi_stream("result", 2, Endpoint.INITIATOR, output_type)
 
-    supported = configure(Producer(dtype=DataType["INT4"]))
-    refused = configure(Producer(dtype=DataType["UINT4"]))
+    supported = design_space(Producer(dtype=DataType["INT4"]))
+    refused = design_space(Producer(dtype=DataType["UINT4"]))
     assert isinstance(supported.output.stream.query(), Available)
     assert isinstance(refused.output.stream.query(), Rejected)

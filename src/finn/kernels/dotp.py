@@ -59,7 +59,6 @@ from finn.kernels.streams import (
     produces,
 )
 from finn.core.space import (
-    UNSUPPLIED,
     ConstraintGroup,
     Decision,
     Param,
@@ -86,23 +85,23 @@ class DotpAxiKernel(Kernel):
     id = "exact_integer_dot_product_axi"
     version = "2"
 
-    pe: Param[int] = Param(int)
-    simd: Param[int] = Param(int)
-    target_dsp: Param[DspBlock] = Param(DspBlock)
-    segment_length: Param[int] = Param(int)
-    compute_pumping = Decision(bool, values=(False, True))
+    pe: int = Param()
+    simd: int = Param()
+    target_dsp: DspBlock = Param()
+    segment_length: int = Param()
+    compute_pumping: bool = Decision(values=(False, True))
 
-    activation_dtype: Param[QONNXDataType] = Param(QONNX_DATATYPE_VALUE_SEMANTICS)
-    weights_dtype: Param[QONNXDataType] = Param(QONNX_DATATYPE_VALUE_SEMANTICS)
-    result_dtype: Param[QONNXDataType] = Param(QONNX_DATATYPE_VALUE_SEMANTICS)
+    activation_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
+    weights_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
+    result_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
     activation_type = integer_scalar(activation_dtype, Integer(min_bits=2))
     weights_type = integer_scalar(weights_dtype, SignedInteger(min_bits=2))
     result_type = integer_scalar(result_dtype, SignedInteger())
     # The streams dotp sits on, when a parent places it between streams: reference
     # inputs, each a Stream node placed beside dotp.
-    activation_stream: Param[Stream] = Param(Stream, default=UNSUPPLIED)
-    weights_stream: Param[Stream] = Param(Stream, default=UNSUPPLIED)
-    result_stream: Param[Stream] = Param(Stream, default=UNSUPPLIED)
+    activation_stream: Stream = Param(required=False)
+    weights_stream: Stream = Param(required=False)
+    result_stream: Stream = Param(required=False)
     activation = axi_stream("s_axis_input", simd, Endpoint.TARGET, activation_type, last=True)
     weights = axi_stream("s_axis_weights", pe * simd, Endpoint.TARGET, weights_type)
     result = axi_stream("m_axis_output", pe, Endpoint.INITIATOR, result_type)

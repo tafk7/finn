@@ -7,8 +7,8 @@
 Example after installing the checkout or setting PYTHONPATH=src:
     python scripts/benchmark-space.py --output /tmp/space-performance.json
 
-Families are declared as nodes and configured with ``configure(Family(...))``.
-Compilation itself is measured through ``finn.core.space.compiler.compile_space``.
+Families are declared as nodes and their design spaces opened with ``design_space(Family(...))``.
+Compilation itself is measured through ``finn.core.space.compiler.compile_model``.
 Native self-read and real-kernel workloads run in fresh subprocesses.
 Time and memory are observations, not CI thresholds. Semantic work assertions
 check what was evaluated and that discarded point populations release caches.
@@ -67,13 +67,13 @@ def repository_state(root: Path) -> dict[str, object]:
         return {"revision": None, "dirty": None}
 
 
-def compile_space(api, family):
+def compile_model(api, family):
     """The canonical model of a family; imported here because it measures compilation."""
-    return importlib.import_module(f"{api.__name__}.compiler").compile_space(family)
+    return importlib.import_module(f"{api.__name__}.compiler").compile_model(family)
 
 
 def flat_family(api, count: int):
-    source = api.Param(int)
+    source = api.Param(semantics=api.default_semantics(int))
     members = {"source": source}
     for index in range(count):
         members[f"item{index}"] = api.Derived(increment, aliases={"value": source})
@@ -82,8 +82,8 @@ def flat_family(api, count: int):
 
 def repeated_family(api, count: int):
     class Child(api.Space):
-        extent: api.Param[int] = api.Param(int)
-        lanes = api.Decision(int, values=(1, 2, 4))
+        extent: int = api.Param()
+        lanes: int = api.Decision(values=(1, 2, 4))
         width = extent * lanes
         physical = api.View(width)
 
@@ -110,7 +110,7 @@ def compilation(api, label: str, count: int, factory) -> dict[str, object]:
     author_seconds = time.perf_counter() - started
     gc.collect()
     started = time.perf_counter()
-    timed_model = compile_space(api, family)
+    timed_model = compile_model(api, family)
     compile_seconds = time.perf_counter() - started
     counts = asdict(api.inspection.statistics(timed_model))
     del timed_model
@@ -123,14 +123,14 @@ def compilation(api, label: str, count: int, factory) -> dict[str, object]:
     tracemalloc.start()
     before = tracemalloc.get_traced_memory()[0]
     started = time.perf_counter()
-    retained_model = compile_space(api, retained_family)
+    retained_model = compile_model(api, retained_family)
     memory_compile_seconds = time.perf_counter() - started
     gc.collect()
     current, peak = tracemalloc.get_traced_memory()
     tracemalloc.stop()
     assert asdict(api.inspection.statistics(retained_model)) == counts
     started = time.perf_counter()
-    reused_model = compile_space(api, retained_family)
+    reused_model = compile_model(api, retained_family)
     reuse_seconds = time.perf_counter() - started
     assert reused_model is retained_model
     return {
@@ -164,11 +164,11 @@ def constant_expressions(api, terms: int, trials: int) -> dict[str, object]:
         },
     )
     started = time.perf_counter()
-    model = compile_space(api, family)
+    model = compile_model(api, family)
     prepare_seconds = time.perf_counter() - started
     expected = 7 * terms + terms * (terms - 1) // 2
-    # A formal-free root reuses the prepared model: each configure only binds.
-    points = [api.configure(family()) for _ in range(trials)]
+    # A formal-free root reuses the prepared model: each design_space only binds.
+    points = [api.design_space(family()) for _ in range(trials)]
     started = time.perf_counter()
     assert all(point.total == expected for point in points)
     cold_seconds = time.perf_counter() - started
@@ -206,15 +206,18 @@ def batch_updates(api, count: int, *, dependent: bool) -> dict[str, object]:
     requests = []
     for index in range(count):
         limit = api.Derived(prerequisite, aliases={"previous": previous})
-        decision = api.Decision(int, domain=api.domain(accepts=membership, limit=limit))
+        decision = api.Decision(
+            domain=api.domain(accepts=membership, limit=limit),
+            semantics=api.default_semantics(int),
+        )
         members[f"limit{index}"] = limit
         members[f"choice{index}"] = decision
         requests.append((decision, index + 1 if dependent else 1))
         if dependent:
             previous = decision
     family = api.composite("DependentBatch" if dependent else "IndependentBatch", members)
-    model = compile_space(api, family)
-    base = api.configure(family())
+    model = compile_model(api, family)
+    base = api.design_space(family())
     changes = [base.field(reference).change(value) for reference, value in reversed(requests)]
     started = time.perf_counter()
     report = base.try_with_choices(*changes)
@@ -248,11 +251,13 @@ def replacement_validation(api, count: int) -> dict[str, object]:
         return candidate in {0, 1}
 
     members = {
-        f"choice{index}": api.Decision(int, domain=api.domain(accepts=membership))
+        f"choice{index}": api.Decision(
+            domain=api.domain(accepts=membership), semantics=api.default_semantics(int)
+        )
         for index in range(count)
     }
     family = api.composite("ReplacementValidation", members)
-    base = api.configure(family())
+    base = api.design_space(family())
     configured = base.with_choices(
         *(base.field(reference).change(0) for reference in members.values())
     )
@@ -275,7 +280,7 @@ def narrow_query(api, branches: int) -> dict[str, object]:
     work = Counter()
 
     class Selected(api.Space):
-        value: api.Param[int] = api.Param(int)
+        value: int = api.Param()
 
         @api.view
         def physical(self) -> int:
@@ -288,7 +293,7 @@ def narrow_query(api, branches: int) -> dict[str, object]:
             work["inactive"] += 1
             raise AssertionError("an inactive alternative was demanded")
 
-    source = api.Param(int)
+    source = api.Param(semantics=api.default_semantics(int))
     members = {"source": source}
     for index in range(branches):
         # The structural choice is a Decision over nodes; ``choice.physical`` is
@@ -297,9 +302,9 @@ def narrow_query(api, branches: int) -> dict[str, object]:
         members[f"branch{index}"] = choice
         members[f"output{index}"] = api.View(choice.physical)
     family = api.composite("NarrowQuery", members)
-    model = compile_space(api, family)
+    model = compile_model(api, family)
     assert work == Counter()
-    base = api.configure(family(source=7))
+    base = api.design_space(family(source=7))
     selector = api.inspection.choices(model)[0].selector
     point = base.with_choices(base.field(selector).change("selected"))
     output = family.output0
@@ -338,13 +343,13 @@ def wide_choice(api, alternatives: int, trials: int = 30) -> dict[str, object]:
     family = api.composite(
         "WideChoice", {"implementation": choice, "physical": api.View(choice.physical)}
     )
-    model = compile_space(api, family)
+    model = compile_model(api, family)
     # A Decision over nodes always has a selector, even with one candidate.
     selector = api.inspection.choices(model)[0].selector
     output = family.physical
     measurements = []
     for _ in range(trials):
-        base = api.configure(family())
+        base = api.design_space(family())
         point = base.with_choices(base.field(selector).change(f"case{alternatives - 1}"))
         started = time.perf_counter()
         answer = point.query(output)
@@ -373,7 +378,7 @@ def cache_reclamation(api, population: int) -> dict[str, object]:
         return candidate >= 0
 
     class Family(api.Space):
-        choice = api.Decision(int, domain=api.domain(accepts=member))
+        choice: int = api.Decision(domain=api.domain(accepts=member))
 
         @api.derived(semantics=payload_semantics)
         def output(self) -> CachedPayload:
@@ -382,7 +387,7 @@ def cache_reclamation(api, population: int) -> dict[str, object]:
             created.append(weakref.ref(payload))
             return payload
 
-    base = api.configure(Family())
+    base = api.design_space(Family())
     configurations = []
     started = time.perf_counter()
     for candidate in range(population):
@@ -463,14 +468,14 @@ def self_workload(api, shape: str, depth: int, width: int) -> dict[str, object]:
     members["output"] = api.view(output)
     family = api.composite("Self" + shape.title(), members)
     started = time.perf_counter()
-    compile_space(api, family)
+    compile_model(api, family)
     prepare_seconds = time.perf_counter() - started
     expected = (2 * width if shape != "chain" else 0) + (depth + 1 if shape != "fan_in" else 0)
     callback_count = 1 + (width if shape != "chain" else 0) + (depth if shape != "fan_in" else 0)
 
     def prepare_point():
         work.clear()
-        point = api.configure(family())
+        point = api.design_space(family())
         if shape == "mixed":
             for index in range(width):
                 assert getattr(point, f"leaf{index}") == 2
@@ -534,19 +539,19 @@ def kernel_workload(api, name: str, trials: int) -> dict[str, object]:
         kernels.MVAU,
         kernels.WeightDelivery,
     )
-    configure_space = api.configure
+    design_space = api.design_space
     dtype = importlib.import_module("finn.dataflow.datatypes").resolve_qonnx_datatype_name
     if name == "fifo":
-        base = configure_space(FifoKernel(word_bits=16, depth=32))
+        base = design_space(FifoKernel(word_bits=16, depth=32))
 
-        def configure(point, index):
+        def design_space(point, index):
             return point.with_choices(ram_style=("block", "distributed")[index % 2])
 
         def accepted(point):
             return point.build_requirements()
 
     elif name == "dotp":
-        base = configure_space(
+        base = design_space(
             DotpAxiKernel(
                 activation_dtype=dtype("INT3"),
                 weights_dtype=dtype("INT3"),
@@ -558,7 +563,7 @@ def kernel_workload(api, name: str, trials: int) -> dict[str, object]:
             )
         )
 
-        def configure(point, index):
+        def design_space(point, index):
             return point.with_choices(compute_pumping=bool(index % 2))
 
         def accepted(point):
@@ -566,7 +571,7 @@ def kernel_workload(api, name: str, trials: int) -> dict[str, object]:
 
     else:
         assert name == "mvau"
-        base = configure_space(
+        base = design_space(
             MVAU(
                 repetitions=2,
                 matrix_width=4,
@@ -578,7 +583,7 @@ def kernel_workload(api, name: str, trials: int) -> dict[str, object]:
             )
         )
 
-        def configure(point, index):
+        def design_space(point, index):
             # The weight-delivery choice is the ``implementation`` Decision over nodes.
             return point.with_choices(
                 {MVAU.compute.compute_pumping: False},
@@ -591,7 +596,7 @@ def kernel_workload(api, name: str, trials: int) -> dict[str, object]:
             return point.compute.build_requirements()
 
     # Warm compilation/import allocations before reporting exploration costs.
-    warm = configure(base, 0)
+    warm = design_space(base, 0)
     accepted(warm)
     del warm
     gc.collect()
@@ -601,7 +606,7 @@ def kernel_workload(api, name: str, trials: int) -> dict[str, object]:
     point = base
     for index in range(trials):
         started = time.perf_counter()
-        point = configure(point, index)
+        point = design_space(point, index)
         times["replacement"].append(time.perf_counter() - started)
         root_refs.append(weakref.ref(point))
         started = time.perf_counter()
@@ -622,7 +627,7 @@ def kernel_workload(api, name: str, trials: int) -> dict[str, object]:
     tracemalloc.start()
     population = []
     for index in range(trials):
-        point = configure(base, index)
+        point = design_space(base, index)
         accepted(point)
         population.append(point)
     del point
@@ -897,7 +902,7 @@ def main() -> None:
     }
     if any(value < 1 for value in sizes.values()):
         parser.error("fixture sizes must be positive")
-    compile_space(api, api.composite("Warmup", {}))
+    compile_model(api, api.composite("Warmup", {}))
     root = Path(__file__).resolve().parents[1]
     report = {
         "schema_version": 2,

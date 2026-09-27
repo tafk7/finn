@@ -70,12 +70,12 @@ class ThresholdingAxiKernel(Kernel):
     id = "finnlib.thresholding_axi.integer"
     version = "1"
 
-    input_dtype: Param[QONNXDataType] = Param(QONNX_DATATYPE_VALUE_SEMANTICS)
-    threshold_dtype: Param[QONNXDataType] = Param(QONNX_DATATYPE_VALUE_SEMANTICS)
+    input_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
+    threshold_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
     input_encoding = integer_scalar(input_dtype, Integer())
     threshold_encoding = integer_scalar(threshold_dtype, Integer())
-    thresholds: Param[ThresholdTable] = Param(THRESHOLD_TABLE)
-    bias: Param[int] = Param(int)
+    thresholds: ThresholdTable = Param(semantics=THRESHOLD_TABLE)
+    bias: int = Param()
 
     @derived(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
     def result_dtype(self) -> QONNXDataType | Rejected:
@@ -93,11 +93,11 @@ class ThresholdingAxiKernel(Kernel):
         bits = 1 + (candidate - 1).bit_length()
         return resolve_qonnx_datatype_name(f"INT{bits}")
 
-    pe: Param[int] = Param(int)
-    use_axilite = Decision(bool, values=(False, True))
-    deep_pipeline = Decision(bool, values=(False, True))
-    depth_trigger_bram: Param[int] = Param(int)
-    depth_trigger_uram: Param[int] = Param(int)
+    pe: int = Param()
+    use_axilite: bool = Decision(values=(False, True))
+    deep_pipeline: bool = Decision(values=(False, True))
+    depth_trigger_bram: int = Param()
+    depth_trigger_uram: int = Param()
 
     @constraint
     def types_supported(self) -> bool | Rejected:

@@ -21,14 +21,13 @@ from finn.core.space import (
     ConfigurationResult,
     Const,
     Decision,
-    Derived,
     Param,
     QueryResult,
     Space,
     View,
     ViewAssessment,
     ViewKey,
-    configure,
+    design_space,
     constraint,
     derived,
     inspection,
@@ -41,8 +40,8 @@ RESULT = ViewKey("result", int)
 
 
 class FixedImplementation(Space):
-    size: Param[int] = Param(int)
-    lanes = Decision(int, values=(1, 2, 4))
+    size: int = Param()
+    lanes: int = Decision(values=(1, 2, 4))
     minimum = Const(1)
 
     @derived
@@ -54,7 +53,7 @@ class FixedImplementation(Space):
 
 
 class SmallImplementation(Space):
-    size: Param[int] = Param(int)
+    size: int = Param()
 
     @derived
     def result(self) -> int:
@@ -65,7 +64,7 @@ class SmallImplementation(Space):
 
 
 class Pipeline(Space):
-    size: Param[int] = Param(int)
+    size: int = Param()
     # Calling a family declares a node, typed as the family.
     fixed = FixedImplementation(size=size)
     assert_type(fixed, FixedImplementation)
@@ -88,7 +87,7 @@ class Pipeline(Space):
         return self.cycles
 
     # The structural choice: a Decision over nodes, typed as its candidates.
-    implementation = Decision[FixedImplementation | SmallImplementation](
+    implementation: FixedImplementation | SmallImplementation = Decision(
         values={
             "fast": FixedImplementation(size=size),
             "small": SmallImplementation(size=size),
@@ -106,19 +105,20 @@ class Pipeline(Space):
         return self.case
 
 
-# Class access is the schema key; a node keeps its concrete family.
+# Class access is the schema key; a node keeps its concrete family and every
+# member (formal, Decision, derived value) is typed as its value.
 assert_type(Pipeline.fixed, FixedImplementation)
 assert_type(Pipeline.fixed.result, int)
 assert_type(Pipeline.implementation, FixedImplementation | SmallImplementation)
-assert_type(Pipeline.size, Param[int])
+assert_type(Pipeline.size, int)
 assert_type(Pipeline.chosen, View[int])
 assert_type(FixedImplementation.minimum, Const[int])
-assert_type(FixedImplementation.result, Derived[int])
+assert_type(FixedImplementation.result, int)
 assert_type(FixedImplementation.physical, View[int])
-assert_type(FixedImplementation.lanes, Decision[int])
+assert_type(FixedImplementation.lanes, int)
 
 # The one compile step preserves the authored root family.
-assert_type(configure(Pipeline(size=8)), Pipeline)
+assert_type(design_space(Pipeline(size=8)), Pipeline)
 
 
 def check(pipeline: Pipeline) -> None:

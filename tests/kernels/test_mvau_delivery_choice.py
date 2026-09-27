@@ -25,7 +25,7 @@ from finn.core.space import (
     ValueCodec,
     codec_for,
     codecs,
-    configure,
+    design_space,
     inspection,
     selections,
 )
@@ -57,7 +57,7 @@ FACTS = dict(
 
 
 def base(**facts):
-    return configure(MVAU(**{**FACTS, **facts}))
+    return design_space(MVAU(**{**FACTS, **facts}))
 
 
 def selector(point, key="implementation"):

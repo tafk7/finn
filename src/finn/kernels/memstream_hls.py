@@ -36,7 +36,7 @@ class MemStreamHlsKernel(Kernel):
     id = "finnlib.memstream.hls"
     version = "1"
 
-    element_dtype: Param[QONNXDataType] = Param(QONNX_DATATYPE_VALUE_SEMANTICS)
+    element_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
 
     @derived(semantics=default_semantics(str))
     def cpp_type(self) -> str | Rejected:
@@ -48,7 +48,7 @@ class MemStreamHlsKernel(Kernel):
             return admitted
         return f"{'ap_int' if dtype.signed() else 'ap_uint'}<{dtype.bitwidth()}>"
 
-    depth: Param[int] = Param(int)
+    depth: int = Param()
 
     @constraint
     def depth_supported(self) -> bool | Rejected:

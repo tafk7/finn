@@ -46,8 +46,8 @@ class FifoKernel(Kernel):
     id = "finnlib.fifo"
     version = "1"
 
-    word_bits: Param[int] = Param(int)
-    depth: Param[int] = Param(int)
+    word_bits: int = Param()
+    depth: int = Param()
 
     @constraint
     def geometry_supported(self) -> bool | Rejected:
@@ -57,7 +57,7 @@ class FifoKernel(Kernel):
             return reject("fifo-geometry", "word_bits must be positive and depth at least two")
         return True
 
-    ram_style = Decision(str, values=("auto", "shift", "distributed", "block", "ultra"))
+    ram_style: str = Decision(values=("auto", "shift", "distributed", "block", "ultra"))
 
     @view(semantics=default_semantics(FifoStorage), requires=(geometry_supported,))
     def storage(self) -> FifoStorage | Rejected:

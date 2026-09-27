@@ -14,10 +14,10 @@ them directly with ``ReadyValidStream`` values.
 from __future__ import annotations
 
 from finn.core.space import (
+    accepted,
     Param,
     Rejected,
     Space,
-    ValueRef,
     View,
     constraint,
     default_semantics,
@@ -61,11 +61,11 @@ def lane_layout(
 class TypedStream(Space):
     """Shared lane facts of a typed port; subclasses add a transport profile."""
 
-    name: Param[str] = Param(str)
-    endpoint: Param[Endpoint] = Param(Endpoint)
-    lanes: Param[int] = Param(int)
-    dtype: Param[QONNXDataType] = Param(QONNX_DATATYPE_VALUE_SEMANTICS)
-    element: Param[ScalarEncoding] = Param(SCALAR_ENCODING)
+    name: str = Param()
+    endpoint: Endpoint = Param()
+    lanes: int = Param()
+    dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
+    element: ScalarEncoding = Param(semantics=SCALAR_ENCODING)
 
     @derived
     def element_bits(self) -> int:
@@ -85,11 +85,11 @@ class TypedStream(Space):
 class NativeStreamPort(TypedStream):
     """Unpadded native ready/valid pins carrying ``lanes`` packed elements."""
 
-    data: Param[str] = Param(str)
-    valid: Param[str] = Param(str)
-    ready: Param[str] = Param(str)
-    clock: Param[str] = Param(str)
-    reset: Param[str] = Param(str)
+    data: str = Param()
+    valid: str = Param()
+    ready: str = Param()
+    clock: str = Param()
+    reset: str = Param()
 
     @derived(semantics=default_semantics(PackedBeatLayout))
     def payload(self) -> PackedBeatLayout:
@@ -115,7 +115,7 @@ class NativeStreamPort(TypedStream):
 
 def native_stream(
     name: str,
-    lanes: int | ValueRef[int],
+    lanes: int,
     endpoint: Endpoint,
     element: Scalar,
     *,
@@ -130,7 +130,7 @@ def native_stream(
         endpoint=endpoint,
         lanes=lanes,
         dtype=element.dtype,
-        element=element.encoding,
+        element=accepted(element.encoding),
         data=data,
         valid=valid,
         ready=ready,

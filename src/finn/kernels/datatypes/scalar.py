@@ -78,7 +78,7 @@ SCALAR_ENCODING = default_semantics(ScalarEncoding)
 class Scalar(Space):
     """Any positive-width QONNX encoding; subclasses add admission constraints."""
 
-    dtype: Param[QONNXDataType] = Param(QONNX_DATATYPE_VALUE_SEMANTICS)
+    dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
 
     @derived
     def element_bits(self) -> int:
@@ -101,8 +101,8 @@ class Signedness(Enum):
 class IntegerScalar(Scalar):
     """An ordinary INT/UINT encoding with a minimum storage width."""
 
-    signedness: Param[Signedness] = Param(Signedness)
-    min_bits: Param[int] = Param(int)
+    signedness: Signedness = Param()
+    min_bits: int = Param()
 
     @constraint
     def family(self) -> bool | Rejected:
@@ -118,7 +118,7 @@ class IntegerScalar(Scalar):
 class BoundedIntegerScalar(IntegerScalar):
     """An integer encoding that additionally fits a maximum storage width."""
 
-    max_bits: Param[int] = Param(int)
+    max_bits: int = Param()
 
     @constraint
     def maximum_bits(self) -> bool | Rejected:
@@ -128,7 +128,7 @@ class BoundedIntegerScalar(IntegerScalar):
 
 
 def integer_scalar(
-    dtype: QONNXDataType | ValueRef[QONNXDataType],
+    dtype: QONNXDataType,
     policy: Integer,
     *,
     when: ValueRef[bool] | bool | None = None,

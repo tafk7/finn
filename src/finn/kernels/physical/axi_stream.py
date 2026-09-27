@@ -15,9 +15,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from finn.core.space import (
+    accepted,
     Param,
     Rejected,
-    ValueRef,
     View,
     default_semantics,
     derived,
@@ -123,7 +123,7 @@ class AxiStream:
 class AxiStreamPort(TypedStream):
     """A byte-aligned AXIS profile over lanes of an accepted scalar encoding."""
 
-    last: Param[bool] = Param(bool)
+    last: bool = Param()
 
     @derived
     def carrier_bits(self) -> int:
@@ -151,7 +151,7 @@ class AxiStreamPort(TypedStream):
 
 def axi_stream(
     name: str,
-    lanes: int | ValueRef[int],
+    lanes: int,
     endpoint: Endpoint,
     element: Scalar,
     *,
@@ -164,7 +164,7 @@ def axi_stream(
         lanes=lanes,
         last=last,
         dtype=element.dtype,
-        element=element.encoding,
+        element=accepted(element.encoding),
     )
 
 

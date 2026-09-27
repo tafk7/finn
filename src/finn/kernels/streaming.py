@@ -119,10 +119,10 @@ class ReplayBuffer(Kernel):
     version = "1"
 
     # The streams it sits on; its output contract derives from the input stream.
-    input_stream: Param[Stream] = Param(Stream)
-    output_stream: Param[Stream] = Param(Stream)
-    sequence_length: Param[int] = Param(int)
-    replay_count: Param[int] = Param(int)
+    input_stream: Stream = Param()
+    output_stream: Stream = Param()
+    sequence_length: int = Param()
+    replay_count: int = Param()
 
     @derived(semantics=default_semantics(tuple))
     def contracts(self) -> tuple[StreamContract, ...] | Rejected:

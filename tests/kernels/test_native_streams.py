@@ -7,7 +7,7 @@ import subprocess
 
 import pytest
 
-from finn.core.space import Available, Rejected, configure
+from finn.core.space import Available, Rejected, design_space
 from finn.kernels.artifacts.abi import Direction, Endpoint
 from finn.kernels.eltwise import EltwiseOperand
 from finn.kernels.fifo import FifoKernel
@@ -17,7 +17,7 @@ from kernels.test_migrated_simple import eltwise
 
 
 def test_native_streams_are_inspectable_without_storage_choices():
-    base = configure(FifoKernel(word_bits=13, depth=8))
+    base = design_space(FifoKernel(word_bits=13, depth=8))
     source, sink = base.interfaces()
     assert source.data_width == sink.data_width == 13
     assert [pin.direction for pin in source.pins()] == [Direction.IN, Direction.IN, Direction.OUT]
@@ -69,7 +69,9 @@ def test_fifo_capacity_and_effective_storage_agree_with_native_rtl(tmp_path):
     instances = []
     for index, (depth, style) in enumerate(cases):
         storage = (
-            configure(FifoKernel(word_bits=9, depth=depth)).with_choices(ram_style=style).storage()
+            design_space(FifoKernel(word_bits=9, depth=depth))
+            .with_choices(ram_style=style)
+            .storage()
         )
         instances.append(
             f'fifo_capacity_case #(.DEPTH({depth}), .STYLE("{style}"), '

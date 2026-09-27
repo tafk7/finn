@@ -42,10 +42,10 @@ class InputGeneratorKernel(Kernel):
     id = "finnlib.input_generator"
     version = "1"
 
-    word_bits: Param[int] = Param(int)
-    frame_words: Param[int] = Param(int)
-    extents: Param[IntegerVector] = Param(INTEGER_VECTOR)
-    strides: Param[IntegerVector] = Param(INTEGER_VECTOR)
+    word_bits: int = Param()
+    frame_words: int = Param()
+    extents: IntegerVector = Param(semantics=INTEGER_VECTOR)
+    strides: IntegerVector = Param(semantics=INTEGER_VECTOR)
 
     @constraint
     def traversal_supported(self) -> bool | Rejected:
@@ -72,7 +72,7 @@ class InputGeneratorKernel(Kernel):
             )
         return True
 
-    ram_style = Decision(str, values=("auto", "distributed", "block", "ultra"))
+    ram_style: str = Decision(values=("auto", "distributed", "block", "ultra"))
 
     @view(semantics=STREAM_INTERFACES)
     def interfaces(self) -> tuple[ReadyValidStream, ...] | Rejected:

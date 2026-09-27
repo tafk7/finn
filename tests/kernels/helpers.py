@@ -9,7 +9,7 @@ the node call. Choices use the stable decision keys ``inspection`` reports."""
 from collections.abc import Callable, Mapping
 from typing import TypeVar
 
-from finn.core.space import Constraint, Space, configure
+from finn.core.space import Constraint, Space, design_space
 from finn.core.space.results import Available, QueryResult
 from finn.kernels.configure import commit
 
@@ -18,7 +18,7 @@ S = TypeVar("S", bound=Space)
 
 
 def point_for(kernel: Callable[..., S], facts: Mapping[str, object], **choices: object) -> S:
-    return commit(configure(kernel(**facts)), choices)
+    return commit(design_space(kernel(**facts)), choices)
 
 
 def value(answer: QueryResult[T]) -> T:

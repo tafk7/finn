@@ -31,7 +31,7 @@ class IntToFp32Kernel(Kernel):
     id = "finnlib.int_to_fp32"
     version = "1"
 
-    input_dtype: Param[QONNXDataType] = Param(QONNX_DATATYPE_VALUE_SEMANTICS)
+    input_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
     input = integer_scalar(input_dtype, Integer(1, 128))
     result_dtype = Const(
         resolve_qonnx_datatype_name("FLOAT32"), semantics=QONNX_DATATYPE_VALUE_SEMANTICS

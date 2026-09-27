@@ -18,7 +18,7 @@ import subprocess
 import pytest
 from qonnx.core.datatype import DataType
 
-from finn.core.space import Rejected, Unresolved, configure
+from finn.core.space import Rejected, Unresolved, design_space
 from finn.kernels.artifacts.abi import Clock, Direction, Endpoint, Reset, Signal
 from finn.kernels.artifacts.build import (
     EntryPointSourceName,
@@ -162,7 +162,7 @@ def test_tiled_mvu_weight_chunks_are_a_width_conversion_a_delivery_can_avoid():
     assert classify(tile(MH, MW, PE_T, SIMD_T), chunked).adaptation is Adaptation.WIDTH_CONVERSION
     # A cyclic delivery can simply produce the chunked order: no adapter at all.
     values = tuple(tuple((row * MW + col) % 7 - 3 for col in range(MW)) for row in range(MH))
-    source = configure(CyclicDelivery(dtype=DataType["INT3"], form=chunked, values=values))
+    source = design_space(CyclicDelivery(dtype=DataType["INT3"], form=chunked, values=values))
     sink = contract(chunked.repeated(R // T), Endpoint.TARGET)
     produced = source.output()
     assert compatibility(produced, sink, source_is_top=False, sink_is_top=False) == ()
@@ -254,7 +254,7 @@ def test_contracts_reject_lanes_wider_than_the_word_and_unknown_marker_rules():
 
 def delivery(form=None, values=(1, -2, 7, -8), **choices):
     form = vector_major((4,), 2) if form is None else form
-    base = configure(CyclicDelivery(dtype=DataType["INT4"], form=form, values=values))
+    base = design_space(CyclicDelivery(dtype=DataType["INT4"], form=form, values=values))
     return base.with_choices(**choices) if choices else base
 
 
@@ -278,7 +278,7 @@ def test_delivery_publishes_a_cyclic_contract_and_waits_only_for_its_own_choice(
     ],
 )
 def test_delivery_refuses_values_outside_the_operand_contract(values, dtype, message):
-    point = configure(
+    point = design_space(
         CyclicDelivery(dtype=DataType[dtype], form=vector_major((4,), 2), values=values)
     )
     answer = point.with_choices(rom_style="auto").build_requirements.query()
@@ -383,8 +383,8 @@ def test_a_pure_lane_permutation_is_realized_as_free_wiring():
     assert verdict.adaptation is Adaptation.LANE_PERMUTATION
     assert verdict.lane_permutation == (0, 2, 1, 3)
     values = (((1, 2), (3, 4)), ((5, 6), (7, -8)))
-    source = configure(CyclicDelivery(dtype=DataType["INT4"], form=produced, values=values))
-    fifo = configure(FifoKernel(word_bits=16, depth=2)).with_choices(ram_style="auto")
+    source = design_space(CyclicDelivery(dtype=DataType["INT4"], form=produced, values=values))
+    fifo = design_space(FifoKernel(word_bits=16, depth=2)).with_choices(ram_style="auto")
     fifo_in, fifo_out = fifo.interfaces()
     out = AxiStream("out0_V", DataType["INT4"], 4, endpoint=Endpoint.INITIATOR)
     top = StreamContract(

@@ -20,7 +20,7 @@ the same either way.
 
 from __future__ import annotations
 
-from finn.core.space import UNSUPPLIED, Decision, Param, Rejected, derived, reject, view
+from finn.core.space import Decision, Param, Rejected, derived, reject, view
 from finn.dataflow.datatypes import QONNXDataType
 from finn.kernels.artifacts.requirements import ModuleBuildRequirements
 from finn.kernels.base import Kernel
@@ -49,13 +49,13 @@ class CyclicDelivery(Kernel):
     id = "finn.cyclic_delivery"
     version = "1"
 
-    dtype: Param[QONNXDataType] = Param(QONNX_DATATYPE_VALUE_SEMANTICS)
+    dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
     element = integer_scalar(dtype, Integer())
-    form: Param[Traversal] = Param(TRAVERSAL)
-    values: Param[IntegerTensor] = Param(INTEGER_TENSOR)
+    form: Traversal = Param(semantics=TRAVERSAL)
+    values: IntegerTensor = Param(semantics=INTEGER_TENSOR)
     # The stream it drives, when a parent places it beside a consumer.
-    output_stream: Param[Stream] = Param(Stream, default=UNSUPPLIED)
-    rom_style = Decision(str, values=CYCLIC_ROM_STYLES)
+    output_stream: Stream = Param(required=False)
+    rom_style: str = Decision(values=CYCLIC_ROM_STYLES)
 
     @derived(semantics=INTEGER_VECTOR)
     def image(self) -> IntegerVector | Rejected:

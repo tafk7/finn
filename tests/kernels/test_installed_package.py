@@ -48,14 +48,14 @@ class RejectGraphDependencies(importlib.abc.MetaPathFinder):
 sys.meta_path.insert(0, RejectGraphDependencies())
 
 from finn.kernels import DotpAxiKernel, DspBlock, WeightDelivery, mvau_assembly
-from finn.core.space import Decision, Param, Space, configure, derived, divisors_of, view
+from finn.core.space import Decision, Param, Space, design_space, derived, divisors_of, view
 import greenlet
 
 assert greenlet.__version__ == "3.2.4"
 
 class Tiles(Space):
-    extent: Param[int] = Param(int)
-    lanes = Decision(int, domain=divisors_of(extent))
+    extent: int = Param()
+    lanes: int = Decision(domain=divisors_of(extent))
 
     @derived
     def cycles(self) -> int:
@@ -65,7 +65,7 @@ class Tiles(Space):
     def shape(self) -> tuple[int, int]:
         return self.lanes, self.cycles
 
-tile = configure(Tiles(extent=12)).with_choices(lanes=3)
+tile = design_space(Tiles(extent=12)).with_choices(lanes=3)
 assert tile.shape() == (3, 4)
 assert tile.view(Tiles.shape)() == (3, 4)
 assert tile.field(Tiles.cycles).get() == 4
@@ -91,7 +91,7 @@ assert contributions.CopiedSource is contribution_types.CopiedSource
 assert requirements.ModuleBuildRequirements.__module__ == "finn.kernels.artifacts.build"
 assert contribution_types.CopiedSource.__module__ == "finn.kernels.artifacts.contributions"
 
-dotp = configure(DotpAxiKernel(
+dotp = design_space(DotpAxiKernel(
     activation_dtype=DataType["INT3"],
     weights_dtype=DataType["INT3"],
     result_dtype=DataType["INT8"],

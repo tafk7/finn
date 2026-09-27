@@ -4,7 +4,7 @@
 
 from typing_extensions import assert_type
 
-from finn.core.space import BoundView, Param, QueryResult, ViewAssessment
+from finn.core.space import BoundView, QueryResult, ViewAssessment
 from finn.dataflow.datatypes import QONNXDataType
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.datatypes.domains import Integer
@@ -29,7 +29,7 @@ def check(point: DotpAxiKernel, eltwise: EltwiseKernel) -> None:
     # Class access: nodes typed as their families, references typed as values.
     assert_type(DotpAxiKernel.activation, AxiStreamPort)
     assert_type(DotpAxiKernel.activation_type, IntegerScalar)
-    assert_type(DotpAxiKernel.activation_dtype, Param[QONNXDataType])
+    assert_type(DotpAxiKernel.activation_dtype, QONNXDataType)
     assert_type(DotpAxiKernel.activation.dtype, QONNXDataType)
     assert_type(DotpAxiKernel.activation.stream, BoundView[AxiStream])
     assert_type(DotpAxiKernel.activation_type.encoding, BoundView[ScalarEncoding])

@@ -63,7 +63,6 @@ from finn.kernels.streams import (
 )
 from finn.kernels.target import DspBlock
 from finn.core.space import (
-    UNSUPPLIED,
     Available,
     ConstraintGroup,
     Decision,
@@ -71,7 +70,7 @@ from finn.core.space import (
     Param,
     Rejected,
     Space,
-    configure,
+    design_space,
     constraint,
     default_semantics,
     derived,
@@ -170,16 +169,16 @@ class MVAU(Space):
     ``direct`` or a ``fifo`` with a committed depth.
     """
 
-    repetitions: Param[int] = Param(int)
-    matrix_width: Param[int] = Param(int)
-    matrix_height: Param[int] = Param(int)
-    activation_dtype: Param[QONNXDataType] = Param(QONNX_DATATYPE_VALUE_SEMANTICS)
-    weights_dtype: Param[QONNXDataType] = Param(QONNX_DATATYPE_VALUE_SEMANTICS)
-    target_dsp: Param[DspBlock] = Param(DspBlock)
-    segment_length: Param[int] = Param(int)
-    weights: Param[IntegerTensor] = Param(INTEGER_TENSOR, default=UNSUPPLIED)
-    pe = Decision(int, domain=divisors_of(matrix_height))
-    simd = Decision(int, domain=divisors_of(matrix_width))
+    repetitions: int = Param()
+    matrix_width: int = Param()
+    matrix_height: int = Param()
+    activation_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
+    weights_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
+    target_dsp: DspBlock = Param()
+    segment_length: int = Param()
+    weights: IntegerTensor = Param(semantics=INTEGER_TENSOR, required=False)
+    pe: int = Decision(domain=divisors_of(matrix_height))
+    simd: int = Decision(domain=divisors_of(matrix_width))
 
     @derived(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
     def result_type(self) -> QONNXDataType | Rejected:
@@ -274,7 +273,7 @@ class MVAU(Space):
     cyclic = CyclicDelivery(
         dtype=weights_dtype, form=weight_period, values=weights, output_stream=weight_stream
     )
-    implementation = Decision(
+    implementation: CyclicDelivery | None = Decision(
         values={WeightDelivery.EXTERNAL.value: None, WeightDelivery.CYCLIC.value: cyclic}
     )
     delivery = selected(implementation)
@@ -352,7 +351,7 @@ def mvau_assembly(
     if buffered:
         choices["weight_stream.transport.fifo.buffer.depth"] = weight_fifo_depth
         choices["weight_stream.transport.fifo.buffer.ram_style"] = "auto"
-    point = commit(configure(MVAU(**facts)), choices)
+    point = commit(design_space(MVAU(**facts)), choices)
     composed = point.structure.query()
     if not isinstance(composed, Available):
         raise ValueError(f"MVAU assembly is not accepted: {describe([composed])}")
