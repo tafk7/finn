@@ -167,3 +167,58 @@ the rule and one example.
 - Further form cases: weights whose column walk does not follow the
   activations; results that swap the order of frames; a frame crossing
   activation rows.
+
+## B2. Clock and reset as a Space (J3)
+
+**Model** (`src/finn/kernels/clocks.py`, new).
+
+- A `ClockDomain` is a node in the composite, named by its top pins
+  (`clock`, `reset`). A `DerivedClock` runs at twice its `base` domain's rate,
+  phase aligned, and has no reset of its own.
+- A kernel has one reference input per domain it runs in and exports, per
+  input, the `Clocking` (clock pin, reset pin) that domain drives. dotp:
+  `clock` drives `ap_clk`/`ap_rst_n`; `fast_clock` drives `ap_clk2x` only when
+  compute is pumped. `ReplayBuffer` and `CyclicDelivery` name `clk`/`rst`.
+- A domain sees its kernels through `Users(CLOCKING)` and exports a `Domain`
+  (`DOMAIN`). A domain no kernel runs in is absent from the top.
+- A stream references the domain it lives in (`Stream.clock`): its AXIS
+  boundary is associated with the domain's pins, and a transport stage (the
+  FIFO) is clocked by it.
+- `Tieoffs` (`TIEOFFS`): inputs a kernel holds constant, and outputs it leaves
+  unconnected, in its configuration. Unpumped dotp ties `ap_clk2x` low.
+
+**Netlist.** `netlist(modules, streams, domains, tieoffs, ...)` builds the top
+clocks and resets from the used domains (a base reset is synchronous to its
+clock and every used derived clock; derived clocks bring their alignment) and
+drives each child clock and reset pin from the domain that names it. The
+`"clk2x" in name` routing and the scan of child pin names for
+`ap_clk`/`ap_clk2x`/`ap_rst_n` are gone. An input that no stream, domain or
+tie-off drives is refused with its name. `Composition` gains `tie` and
+`dispose`.
+
+**MVAU.** `clock = ClockDomain(clock="ap_clk", reset="ap_rst_n")` and
+`fast_clock = DerivedClock(clock="ap_clk2x", base=clock)`, referenced by every
+stream and kernel. New node keys `clock` and `fast_clock`; decision keys
+unchanged.
+
+**Recorded ABI change (D7).** An unpumped MVAU no longer has a top `ap_clk2x`
+input; dotp's `ap_clk2x` pin is tied to 0. The five unpumped fingerprints
+change; `structure_dump.py` shows exactly two differences per unpumped
+configuration, the top ABI without `ap_clk2x` and the tie wire. The pumped
+configuration's fingerprint is unchanged: its top ABI, wires and their order are
+identical. The XSI engine drives `ap_clk2x` only when the top has it.
+
+| Evidence | Result | Transcript |
+|---|---|---|
+| `scripts/check-kernels.sh` on the B2 tree (`d7a64b0be` + the change committed unchanged as `b5b57e1e1`, cherry-picked as `bf9dfe0c9`) | Space **427**; kernels **777 passed, 0 skipped** (+5 clock-domain tests); clean; exit 0 | `b2/gate-check-kernels.txt` |
+| `scripts/check-dataflow-design.sh` | **16 passed**; clean; exit 0 | `b2/gate-check-dataflow-design.txt` |
+| MVAU numeric XSI | **28/28 PASS**; the unpumped cases run without a top `ap_clk2x` | `b2/mvau-numeric-*.txt` |
+| Structures against A2 (`structure_dump.py`) | 20 differing lines: for each of the five unpumped configurations, the top ABI without `ap_clk2x` and the tie wire; pumped identical | `b2/structure-diff.txt` |
+| Fingerprints | five unpumped changed, `pumped-dsp58` identical (`0669b3c963c01471…`) | `b2/fingerprints.txt` |
+| Keys | decision keys identical; nodes `clock`, `fast_clock` and the kernels' clocking and tie-off views added | `b2/keys-diff.txt` |
+
+Tests (`tests/kernels/test_clock_domains.py`): an unpumped MVAU has one domain
+and ties `ap_clk2x` (probe P1's `Data`-role top pin is gone); a pumped MVAU adds
+the derived domain, its alignment and the two-clock reset; a kernel whose pins
+follow no naming convention is driven from the domains that name its pins; a
+derived clock refuses a reset pin; an input nothing drives is refused by name.

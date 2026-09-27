@@ -1,0 +1,42 @@
+12a13
+> const activations.clock
+23a25,29
+> const clock.clock
+> members clock.clocked
+> view clock.domain
+> derived clock.domain.$output
+> const clock.reset
+51a58,60
+> const compute.clock
+> view compute.clock_pins
+> derived compute.clock_pins.$output
+53a63,65
+> const compute.fast_clock
+> view compute.fast_clock_pins
+> derived compute.fast_clock_pins.$output
+92a105,106
+> view compute.tieoffs
+> derived compute.tieoffs.$output
+122a137,142
+> members domains
+> const fast_clock.base
+> const fast_clock.clock
+> members fast_clock.clocked
+> view fast_clock.domain
+> derived fast_clock.domain.$output
+127a148,150
+> const implementation.cyclic.clock
+> view implementation.cyclic.clock_pins
+> derived implementation.cyclic.clock_pins.$output
+152a176,178
+> const replay.clock
+> view replay.clock_pins
+> derived replay.clock_pins.$output
+161a188
+> const replayed.clock
+173a201
+> const results.clock
+189a218
+> members tieoffs
+191a221
+> const weight_stream.clock
