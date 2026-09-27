@@ -2,27 +2,33 @@
 
 The supported authoring API is `finn.core.space`. A kernel declares the
 facts it consumes, its implementation decisions, and the typed views it can
-answer. Bind Params directly, commit choices, and call the view:
+answer. Calling a kernel family with its facts declares a node;
+`design_space(node)` is the one compile step and returns its initial
+configuration. Commit choices on that configuration and read the view: a view
+reads as its accepted value, like any member, and its assessment is an explicit
+`inspect` of the view declaration:
 
 ```python
 from finn.kernels import FifoKernel
-from finn.core.space import Available, compile_space
+from finn.core.space import Available, design_space
 
-fifo_model = compile_space(FifoKernel)
-fifo_base = fifo_model.bind(word_bits=16, depth=32)
+fifo_base = design_space(FifoKernel(word_bits=16, depth=32))
 fifo_configuration = fifo_base.with_choices(ram_style="block")
-requirements = fifo_configuration.build_requirements()
-assessment = fifo_configuration.build_requirements.inspect()
-assert isinstance(assessment.accepted_result, Available)
-assert fifo_configuration.view(FifoKernel.build_requirements)() == requirements
+requirements = fifo_configuration.build_requirements
+assessment = fifo_configuration.inspect(FifoKernel.build_requirements)
+assert assessment.accepted_result == Available(requirements)
+assert fifo_configuration.query(FifoKernel.build_requirements) == Available(requirements)
 assert fifo_configuration.field(FifoKernel.ram_style).get() == "block"
 ```
 
-The prepared definition can bind many independent configurations; each one freezes its own inputs.
-Choice replacement returns immutable successors. The raw output in an assessment does
-not establish that its constraints and readiness obligations are accepted.
+Each `design_space` call returns an independent configuration that freezes its own
+inputs; configurations of the same family share its compiled model. Choice
+replacement returns immutable successors. Reading a view that is not accepted
+raises `ValueUnavailableError` carrying its result (`query` returns that result
+instead). The raw output in an assessment does not establish that its
+constraints and readiness obligations are accepted.
 See the [Space API guide](../../../../scratchpad/space/AUTHORING.md) for ordinary self methods,
-scopes, guarded choices, atomic refinement, inspection, and sparse selections.
+node declarations, Decisions over nodes, atomic refinement, inspection, and sparse selections.
 The [Space design](../../../../scratchpad/space/DESIGN.md),
 [internals](../../../../scratchpad/space/INTERNALS.md), and
 [migration notes](../../../../scratchpad/space/MIGRATION.md) are maintained in
@@ -36,7 +42,7 @@ planned changes, not additional APIs already delivered here.
 ```text
 base.py                  neutral Kernel identity and capability metadata
 dotp.py                  operand scalars, AXIS ports and build requirements
-mvau.py                  folding, accepted dotp child, and a weight-delivery family choice
+mvau.py                  folding, dotp child node, and a weight-delivery Decision over nodes
 streaming.py             replay and initialized cyclic word delivery
 target.py                DSP targets and port capacities
 physical/                typed native/AXIS ports, detached packing, wiring and lowering
@@ -61,27 +67,29 @@ Space -> accepted build_requirements view -> ModuleBuildRequirements
 | `DotpAxiKernel` | `dotp.py` | Typed AXIS ports; target, pumping, segmentation and accumulator admission |
 
 Operand datatypes are ordinary kernel Params, such as
-`DotpAxiKernel.activation_dtype`. Each operand has a separately placed scalar
-Space that owns its admission, and each port binds to that scalar's raw dtype
-and accepted encoding. Ports expose narrow dtype, width and packing fields
+`DotpAxiKernel.activation_dtype`. Each operand has its own scalar node
+(`activation_type = integer_scalar(activation_dtype, ...)`) that owns its
+admission, and each port binds to that scalar's raw dtype and accepted encoding. Ports expose narrow dtype, width and packing fields
 independently of their accepted `stream` view, which requires the scalar:
 
 ```python
 from finn.kernels import DotpAxiKernel, DspBlock
 from finn.dataflow.datatypes import resolve_qonnx_datatype_name as dtype
 
-dotp = DotpAxiKernel(
-    activation_dtype=dtype("INT3"),
-    weights_dtype=dtype("INT3"),
-    result_dtype=dtype("INT8"),
-    pe=2,
-    simd=2,
-    target_dsp=DspBlock.DSP48E2,
-    segment_length=0,
+dotp = design_space(
+    DotpAxiKernel(
+        activation_dtype=dtype("INT3"),
+        weights_dtype=dtype("INT3"),
+        result_dtype=dtype("INT8"),
+        pe=2,
+        simd=2,
+        target_dsp=DspBlock.DSP48E2,
+        segment_length=0,
+    )
 )
 assert dotp.activation.carrier_bits == 8
-assert dotp.activation_type.encoding().bits == 3
-assert dotp.activation.stream().payload_bits == 6
+assert dotp.activation_type.encoding.bits == 3
+assert dotp.activation.stream.payload_bits == 6
 ```
 
 The same policy constrains input and caller-selected output encodings.
@@ -118,16 +126,20 @@ independent streams settle independently. Its accepted `connection` feeds the
 parent's `structure` view, a thin reduction (`compose`) that wires the accepted
 instances and connections, routes clocks and resets, and turns boundary ports
 into AXIS. `build_requirements` lowers that structure. Either end of a stream may
-be a `SubspaceChoice`; only the selected case is evaluated. A stream declared
-`buffered=True` owns a `transport` choice: `direct`, or a `fifo` case whose depth
-and memory style are its own decisions. Whether a FIFO is needed and how deep is
-a compiler decision; the stream only provides the slot. `configure` commits
-choices by their inspection keys in one batch:
+be a member of a Decision over nodes (`Present(in1_V, cyclic.output)`); only the
+selected candidate is evaluated. The `implementation` Decision places either
+nothing (`external`, presenting `in1_V`) or its `cyclic` CyclicDelivery candidate,
+named `implementation.cyclic`. A `BufferedStreamLink` owns a `transport`
+Decision over nodes: `direct`, or a `fifo` candidate whose depth and memory style
+are its own decisions. Whether a FIFO is needed and how deep is a compiler
+decision; the stream only provides the slot. `commit` (from
+`finn.kernels.configure`) commits choices by their inspection keys in one atomic
+batch on a configured point:
 
 ```python
 from finn.core.space import Unresolved, selections
 from finn.kernels import MVAU
-from finn.kernels.configure import configure
+from finn.kernels.configure import commit
 
 facts = dict(
     repetitions=2,
@@ -139,9 +151,8 @@ facts = dict(
     segment_length=0,
 )
 identity = ((1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (0, 0, 0, 1))
-point = configure(
-    MVAU,
-    {**facts, "weights": identity},
+point = commit(
+    design_space(MVAU(**facts, weights=identity)),
     {
         "implementation": "cyclic",
         "implementation.cyclic.rom_style": "block",
@@ -153,24 +164,24 @@ point = configure(
         "simd": 2,
     },
 )
-structure = point.structure().structure
+structure = point.structure.structure
 assert [item.instance_id for item in structure.instances] == [
     "u_replay",
     "u_compute",
-    "u_weights",
+    "u_implementation_cyclic",
     "u_weight_stream_fifo",
 ]
-assert point.build_requirements() == point.structure().requirements
+assert point.build_requirements == point.structure.requirements
 saved = selections.capture(point)
-replayed = selections.restore(MVAU(**facts), saved).instance  # weights omitted
-assert isinstance(replayed.structure.query(), Unresolved)
+replayed = selections.restore(design_space(MVAU(**facts)), saved).instance  # weights omitted
+assert isinstance(replayed.query(MVAU.structure), Unresolved)
 ```
 
 Changing a selector does not discard the old case's choices: clear
 `rom_style` (or a FIFO's depth and memory style) in the same batch when
 switching away from that case. The
-`mvau_assembly` adapter binds this same Space for callers with a complete
-configuration:
+`mvau_assembly` adapter configures this same family and commits every choice
+for callers with a complete configuration:
 
 ```python
 from finn.kernels import WeightDelivery, mvau_assembly
@@ -232,9 +243,9 @@ includes its native `queue` module. Record and validate source revisions when
 updating this dependency; matching filenames do not establish compatibility.
 
 `Integer(...).domain()` and `integer_scalar(dtype, Integer(...))` share one
-policy for owned dtype choices and supplied facts. `integer_scalar` places an
-`IntegerScalar` (or `BoundedIntegerScalar`) Space whose policy bounds are ordinary
-child bindings, including references to parent fields. Each admission rule is a
+policy for owned dtype choices and supplied facts. `integer_scalar` returns an
+`IntegerScalar` (or `BoundedIntegerScalar`) node declaration whose policy bounds
+are ordinary bindings, including references to parent fields. Each admission rule is a
 separate constraint, so type-family refusals remain visible while a dynamic bit
 bound is unresolved. `Scalar` itself admits any positive-width encoding; a
 kernel extends it by subclassing, as `EltwiseOperand` does for FLOAT32 or
@@ -288,18 +299,18 @@ from finn.kernels import CyclicDelivery
 from finn.kernels.physical.forms import Adaptation, Repetition, classify, vector_major
 
 channels = vector_major((4,), 2)
-vector = CyclicDelivery(dtype=dtype("INT4"), form=channels, values=(1, -2, 7, -8))
+vector = design_space(CyclicDelivery(dtype=dtype("INT4"), form=channels, values=(1, -2, 7, -8)))
 rhs = vector.with_choices(rom_style="distributed")
-assert rhs.output().repetition is Repetition.CYCLIC
+assert rhs.output.repetition is Repetition.CYCLIC
 assert rhs.image == (0xE1, 0x87)
 pixels = vector_major((3, 4), 2)  # three pixels of four channels, two lanes
 assert classify(channels.repeated(3), channels.repeated(3)).adaptation is Adaptation.IDENTITY
 assert classify(vector_major((3, 4), 4), pixels).adaptation is Adaptation.WIDTH_CONVERSION
 ```
 
-FIFO's `ram_style` remains a native preference. Its accepted `storage()` view
+FIFO's `ram_style` remains a native preference. Its accepted `storage` view
 reports both the effective backing and capacity, including output storage.
-For example, `FifoKernel(word_bits=13, depth=2).with_choices(ram_style="ultra")`
+For example, `design_space(FifoKernel(word_bits=13, depth=2)).with_choices(ram_style="ultra")`
 reports shift storage and capacity five. This is native implementation
 information, not a synthesis resource measurement.
 

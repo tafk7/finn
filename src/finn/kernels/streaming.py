@@ -10,6 +10,8 @@ on a rising edge with valid and ready asserted outside reset. Output payload and
 framing stay stable while a valid transfer is stalled.
 """
 
+from __future__ import annotations
+
 from collections.abc import Sequence
 from typing import cast
 
@@ -27,7 +29,15 @@ from finn.kernels.datatypes.scalar import ScalarEncoding
 from finn.kernels.physical.contract import STREAM_CONTRACT, StreamContract
 from finn.kernels.physical.forms import Every, Traversal
 from finn.kernels.physical.stream import ReadyValidStream, StreamMarker, MarkerKind
-from finn.kernels.streams import Port
+from finn.kernels.streams import (
+    MODULE,
+    PORTS,
+    PORTS_SEMANTICS,
+    Ports,
+    Stream,
+    consumes,
+    produces,
+)
 from finn.kernels.artifacts.contribution_types import CopiedSource
 from finn.kernels.artifacts.requirements import (
     FixedModuleName,
@@ -108,13 +118,15 @@ class ReplayBuffer(Kernel):
     id = "finnlib.replay_buffer"
     version = "1"
 
-    input_stream = Port(Endpoint.TARGET)
-    sequence_length = Param(int)
-    replay_count = Param(int)
+    # The streams it sits on; its output contract derives from the input stream.
+    input_stream: Stream = Param()
+    output_stream: Stream = Param()
+    sequence_length: int = Param()
+    replay_count: int = Param()
 
     @derived(semantics=default_semantics(tuple))
     def contracts(self) -> tuple[StreamContract, ...] | Rejected:
-        spec = self.input_stream
+        spec = self.input_stream.spec
         try:
             return replay_buffer_contracts(
                 spec.element,
@@ -133,16 +145,24 @@ class ReplayBuffer(Kernel):
     def output_port(self) -> StreamContract:
         return cast(StreamContract, self.contracts[1])
 
+    @view(semantics=PORTS_SEMANTICS)
+    def ports(self) -> Ports:
+        return Ports.of(
+            input_stream=consumes(self.input_port), output_stream=produces(self.output_port)
+        )
+
     @view(semantics=default_semantics(ModuleBuildRequirements))
     def build_requirements(self) -> ModuleBuildRequirements | Rejected:
         try:
             return replay_buffer_requirements(
-                word_bits=self.input_stream.payload_bits,
+                word_bits=self.input_stream.spec.payload_bits,
                 sequence_length=self.sequence_length,
                 replay_count=self.replay_count,
             )
         except ValueError as error:
             return reject("replay-geometry", str(error))
+
+    exports = {MODULE: build_requirements, PORTS: ports}
 
 
 def cyclic_stream_interface(*, word_bits: int) -> ReadyValidStream:

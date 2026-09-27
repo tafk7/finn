@@ -8,20 +8,29 @@ from pathlib import Path
 import pytest
 from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 
-from kernels.helpers import assess, point_for, value
 from finn.core.space import Available, Rejected, Unresolved
 from finn.kernels.artifacts.abi import Bus
 from finn.kernels.artifacts.build import prepare_module_build, render_module_sources
 from finn.kernels.artifacts.store import ArtifactStore
+from kernels.helpers import point_for
 from finn.kernels.mvau import MVAU, WeightDelivery, exact_result_dtype, mvau_assembly
 from finn.kernels.dotp import DotpAxiKernel
-from finn.core.space import Subspace, View, constraint, reject
+from finn.core.space import View, constraint, reject
 from finn.kernels.target import DspBlock
 from finn.kernels.physical.structure import ConstantBits, PhysicalPin, PinSlice
 from finn.kernels.resources import resource_root, template_root
 
 
 ROOT = Path(__file__).resolve().parents[2]
+FACTS = dict(
+    repetitions=2,
+    matrix_width=4,
+    matrix_height=4,
+    activation_dtype=DataType["INT3"],
+    weights_dtype=DataType["INT3"],
+    target_dsp=DspBlock.DSP48E2,
+    segment_length=0,
+)
 
 
 def assembly(**changes):
@@ -144,34 +153,30 @@ def test_invalid_configuration_fails_during_construction(changes, match):
 def test_space_selects_folding_and_constructs_without_a_logical_contract():
     base = point_for(
         MVAU,
-        dict(
-            repetitions=2,
-            matrix_width=4,
-            matrix_height=4,
-            activation_dtype=DataType["INT3"],
-            weights_dtype=DataType["INT3"],
-            target_dsp=DspBlock.DSP48E2,
-            segment_length=0,
-        ),
+        FACTS,
         pe=2,
         implementation="external",
         **{"weight_stream.transport": "direct"},
     )
     point = base.with_choices(simd=2)
-    assert isinstance(point.compute.build_requirements.inspect().accepted_result, Unresolved)
-    assert isinstance(point.structure.inspect().accepted_result, Unresolved)
+    assert isinstance(
+        point.compute.inspect(DotpAxiKernel.build_requirements).accepted_result, Unresolved
+    )
+    assert isinstance(point.inspect(MVAU.structure).accepted_result, Unresolved)
     point = point.compute.with_choices(compute_pumping=False).root
     assert point.result_type == DataType["INT8"]
-    assert value(assess(point, MVAU.dimensions_supported)) is True
+    assert point.inspect(MVAU.dimensions_supported).result == Available(True)
     assert point.compute.pe == point.pe
     assert point.compute.result.dtype == point.result_type
-    point.compute.build_requirements()
+    _ = point.compute.build_requirements
     assert point.folding.result_beats == 4
-    assert point.structure().requirements == point.build_requirements()
+    assert point.structure.requirements == point.build_requirements
     assert not hasattr(MVAU, "contract")
     refused = base.with_choices(simd=1).compute.with_choices(compute_pumping=True).root
-    assert isinstance(refused.compute.build_requirements.inspect().accepted_result, Rejected)
-    rejected = refused.structure.query()
+    assert isinstance(
+        refused.compute.inspect(DotpAxiKernel.build_requirements).accepted_result, Rejected
+    )
+    rejected = refused.query(MVAU.structure)
     assert isinstance(rejected, Rejected)
     assert "dotp-pumping" in {finding.code for finding in rejected.findings}
 
@@ -215,12 +220,11 @@ def test_mvau_honors_the_child_physical_view_not_just_its_raw_module(monkeypatch
             )
 
         build_requirements = View(
-            DotpAxiKernel.codegen, constraints=(DotpAxiKernel.support, view_only_rule)
+            DotpAxiKernel.codegen, requires=(DotpAxiKernel.support, view_only_rule)
         )
 
     class RestrictedMVAU(MVAU):
-        compute = Subspace(
-            RestrictedDotp,
+        compute = RestrictedDotp(
             activation_dtype=MVAU.activation_dtype,
             weights_dtype=MVAU.weights_dtype,
             result_dtype=MVAU.result_type,
@@ -228,22 +232,15 @@ def test_mvau_honors_the_child_physical_view_not_just_its_raw_module(monkeypatch
             simd=MVAU.simd,
             target_dsp=MVAU.target_dsp,
             segment_length=MVAU.segment_length,
-            activation_stream=MVAU.replayed.spec,
-            weights_stream=MVAU.weight_stream.spec,
-            result_stream=MVAU.results.spec,
+            # References to MVAU's stream nodes, which RestrictedMVAU inherits.
+            activation_stream=MVAU.replayed,
+            weights_stream=MVAU.weight_stream,
+            result_stream=MVAU.results,
         )
 
     point = point_for(
         RestrictedMVAU,
-        dict(
-            repetitions=2,
-            matrix_width=4,
-            matrix_height=4,
-            activation_dtype=DataType["INT3"],
-            weights_dtype=DataType["INT3"],
-            target_dsp=DspBlock.DSP48E2,
-            segment_length=0,
-        ),
+        FACTS,
         pe=2,
         simd=2,
         implementation="external",
@@ -251,8 +248,10 @@ def test_mvau_honors_the_child_physical_view_not_just_its_raw_module(monkeypatch
     )
     point = point.compute.with_choices(compute_pumping=False).root
     assert isinstance(point.compute.query(DotpAxiKernel.codegen), Available)
-    assert isinstance(point.compute.build_requirements.inspect().accepted_result, Rejected)
-    refused = point.structure.query()
+    assert isinstance(
+        point.compute.inspect(DotpAxiKernel.build_requirements).accepted_result, Rejected
+    )
+    refused = point.query(MVAU.structure)
     assert isinstance(refused, Rejected)
     assert "test-view-only" in {finding.code for finding in refused.findings}
     # Substitute a fully authored family to exercise the convenience entry

@@ -18,7 +18,7 @@ import subprocess
 import pytest
 from qonnx.core.datatype import DataType
 
-from finn.core.space import Rejected, Unresolved
+from finn.core.space import Rejected, Unresolved, design_space
 from finn.kernels.artifacts.abi import Clock, Direction, Endpoint, Reset, Signal
 from finn.kernels.artifacts.build import (
     EntryPointSourceName,
@@ -162,9 +162,9 @@ def test_tiled_mvu_weight_chunks_are_a_width_conversion_a_delivery_can_avoid():
     assert classify(tile(MH, MW, PE_T, SIMD_T), chunked).adaptation is Adaptation.WIDTH_CONVERSION
     # A cyclic delivery can simply produce the chunked order: no adapter at all.
     values = tuple(tuple((row * MW + col) % 7 - 3 for col in range(MW)) for row in range(MH))
-    source = CyclicDelivery(dtype=DataType["INT3"], form=chunked, values=values)
+    source = design_space(CyclicDelivery(dtype=DataType["INT3"], form=chunked, values=values))
     sink = contract(chunked.repeated(R // T), Endpoint.TARGET)
-    produced = source.output()
+    produced = source.output
     assert compatibility(produced, sink, source_is_top=False, sink_is_top=False) == ()
 
 
@@ -254,18 +254,18 @@ def test_contracts_reject_lanes_wider_than_the_word_and_unknown_marker_rules():
 
 def delivery(form=None, values=(1, -2, 7, -8), **choices):
     form = vector_major((4,), 2) if form is None else form
-    base = CyclicDelivery(dtype=DataType["INT4"], form=form, values=values)
+    base = design_space(CyclicDelivery(dtype=DataType["INT4"], form=form, values=values))
     return base.with_choices(**choices) if choices else base
 
 
 def test_delivery_publishes_a_cyclic_contract_and_waits_only_for_its_own_choice():
     base = delivery()
-    output = base.output()
+    output = base.output
     assert output.repetition is Repetition.CYCLIC and output.form == vector_major((4,), 2)
     assert output.payload_bits == output.transport.data_width == 8
     assert base.image == (0xE1, 0x87)
-    assert isinstance(base.build_requirements.query(), Unresolved)
-    requirements = delivery(rom_style="block").build_requirements()
+    assert isinstance(base.query(CyclicDelivery.build_requirements), Unresolved)
+    requirements = delivery(rom_style="block").build_requirements
     assert dict(requirements.parameters)["ROM_STYLE"] == '"block"'
 
 
@@ -278,8 +278,10 @@ def test_delivery_publishes_a_cyclic_contract_and_waits_only_for_its_own_choice(
     ],
 )
 def test_delivery_refuses_values_outside_the_operand_contract(values, dtype, message):
-    point = CyclicDelivery(dtype=DataType[dtype], form=vector_major((4,), 2), values=values)
-    answer = point.with_choices(rom_style="auto").build_requirements.query()
+    point = design_space(
+        CyclicDelivery(dtype=DataType[dtype], form=vector_major((4,), 2), values=values)
+    )
+    answer = point.with_choices(rom_style="auto").query(CyclicDelivery.build_requirements)
     assert isinstance(answer, Rejected)
     if message:
         assert any(message in finding.message for finding in answer.findings)
@@ -306,7 +308,7 @@ def eltwise_with_constant(*, form=None, rhs_form=None):
     rhs_form = vector_major((CHANNELS,), PE).repeated(PIXELS) if rhs_form is None else rhs_form
     compute = eltwise(operation="ADD", pe=PE, lhs="INT4", rhs="INT4")
     source = delivery(form, PARAMETERS, rom_style="distributed")
-    lhs, rhs, result = compute.interfaces()
+    lhs, rhs, result = compute.interfaces
     pixels = vector_major((PIXELS, CHANNELS), PE)
     int5 = ScalarEncoding(DataType["INT5"])
 
@@ -321,8 +323,8 @@ def eltwise_with_constant(*, form=None, rhs_form=None):
         (),
     )
     composition = Composition(top_abi)
-    composition.add("u_rhs", source.build_requirements())
-    composition.add("u_eltwise", compute.build_requirements())
+    composition.add("u_rhs", source.build_requirements)
+    composition.add("u_eltwise", compute.build_requirements)
     for owner in ("u_rhs", "u_eltwise"):
         composition.drive(owner, "clk", "ap_clk")
         composition.drive(owner, "rst", "ap_rst_n")
@@ -330,7 +332,7 @@ def eltwise_with_constant(*, form=None, rhs_form=None):
         StreamEnd(None, x_top), StreamEnd("u_eltwise", StreamContract(lhs, INT4, pixels))
     )
     composition.connect(
-        StreamEnd("u_rhs", source.output()),
+        StreamEnd("u_rhs", source.output),
         StreamEnd("u_eltwise", StreamContract(rhs, INT4, rhs_form)),
     )
     composition.connect(
@@ -381,9 +383,9 @@ def test_a_pure_lane_permutation_is_realized_as_free_wiring():
     assert verdict.adaptation is Adaptation.LANE_PERMUTATION
     assert verdict.lane_permutation == (0, 2, 1, 3)
     values = (((1, 2), (3, 4)), ((5, 6), (7, -8)))
-    source = CyclicDelivery(dtype=DataType["INT4"], form=produced, values=values)
-    fifo = FifoKernel(word_bits=16, depth=2).with_choices(ram_style="auto")
-    fifo_in, fifo_out = fifo.interfaces()
+    source = design_space(CyclicDelivery(dtype=DataType["INT4"], form=produced, values=values))
+    fifo = design_space(FifoKernel(word_bits=16, depth=2)).with_choices(ram_style="auto")
+    fifo_in, fifo_out = fifo.interfaces
     out = AxiStream("out0_V", DataType["INT4"], 4, endpoint=Endpoint.INITIATOR)
     top = StreamContract(
         out.native(clock="ap_clk", reset="ap_rst_n"), INT4, wanted, Repetition.CYCLIC
@@ -393,13 +395,13 @@ def test_a_pure_lane_permutation_is_realized_as_free_wiring():
             GeneratedModuleName("t"), (*CLOCKING, out.bus(clock="ap_clk", reset="ap_rst_n")), ()
         )
     )
-    composition.add("u_source", source.with_choices(rom_style="auto").build_requirements())
-    composition.add("u_fifo", fifo.build_requirements())
+    composition.add("u_source", source.with_choices(rom_style="auto").build_requirements)
+    composition.add("u_fifo", fifo.build_requirements)
     for owner in ("u_source", "u_fifo"):
         composition.drive(owner, "clk", "ap_clk")
         composition.drive(owner, "rst", "ap_rst_n")
     composition.connect(
-        StreamEnd("u_source", source.output()),
+        StreamEnd("u_source", source.output),
         StreamEnd("u_fifo", StreamContract(fifo_in, INT4, wanted)),
     )
     composition.connect(
@@ -420,8 +422,8 @@ def test_clock_domains_must_be_attached_and_equal():
     sink = native("i", 8, Endpoint.TARGET, clock="clk")
     top_abi = ModuleABIRequirements(GeneratedModuleName("t"), CLOCKING, ())
     composition = Composition(top_abi)
-    composition.add("a", delivery(rom_style="auto").build_requirements())
-    composition.add("b", delivery(rom_style="auto").build_requirements())
+    composition.add("a", delivery(rom_style="auto").build_requirements)
+    composition.add("b", delivery(rom_style="auto").build_requirements)
     found = composition.check(
         StreamEnd("a", StreamContract(stream, INT4, vector_major((4,), 2))),
         StreamEnd("b", StreamContract(sink, INT4, vector_major((4,), 2))),

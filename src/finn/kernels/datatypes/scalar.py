@@ -3,8 +3,8 @@
 
 """Scalar encoding admission independent of pins, streams, and implementation language.
 
-``Scalar`` and its subclasses are ordinary handwritten Spaces. A kernel places
-one per operand, binding its dtype and the policy's bounds like any other child
+``Scalar`` and its subclasses are ordinary handwritten Spaces. A kernel declares
+one node per operand, binding its dtype and the policy's bounds like any other
 formal; each admission rule is its own constraint, so a known family refusal
 remains visible while an unrelated bound is unresolved. Callers read the raw
 ``element_bits`` fact independently and consume the accepted ``encoding`` view.
@@ -22,7 +22,6 @@ from finn.core.space import (
     Param,
     Rejected,
     Space,
-    Subspace,
     ValueRef,
     View,
     constraint,
@@ -79,7 +78,7 @@ SCALAR_ENCODING = default_semantics(ScalarEncoding)
 class Scalar(Space):
     """Any positive-width QONNX encoding; subclasses add admission constraints."""
 
-    dtype = Param(QONNX_DATATYPE_VALUE_SEMANTICS)
+    dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
 
     @derived
     def element_bits(self) -> int:
@@ -90,7 +89,7 @@ class Scalar(Space):
         return ScalarEncoding.admit(self.dtype)
 
     admission = ConstraintGroup()
-    encoding = View(candidate, constraints=(admission,))
+    encoding = View(candidate, requires=(admission,))
 
 
 class Signedness(Enum):
@@ -102,8 +101,8 @@ class Signedness(Enum):
 class IntegerScalar(Scalar):
     """An ordinary INT/UINT encoding with a minimum storage width."""
 
-    signedness = Param(Signedness)
-    min_bits = Param(int)
+    signedness: Signedness = Param()
+    min_bits: int = Param()
 
     @constraint
     def family(self) -> bool | Rejected:
@@ -119,7 +118,7 @@ class IntegerScalar(Scalar):
 class BoundedIntegerScalar(IntegerScalar):
     """An integer encoding that additionally fits a maximum storage width."""
 
-    max_bits = Param(int)
+    max_bits: int = Param()
 
     @constraint
     def maximum_bits(self) -> bool | Rejected:
@@ -129,20 +128,21 @@ class BoundedIntegerScalar(IntegerScalar):
 
 
 def integer_scalar(
-    dtype: ValueRef[QONNXDataType], policy: Integer, *, when: ValueRef[bool] | None = None
-) -> Subspace[IntegerScalar]:
-    """Place a policy's admission; referenced bounds become ordinary child bindings."""
+    dtype: QONNXDataType,
+    policy: Integer,
+    *,
+    when: ValueRef[bool] | bool | None = None,
+) -> IntegerScalar:
+    """Declare a policy's admission node; referenced bounds become ordinary bindings."""
     signedness = Signedness(policy.signed)
     if policy.max_bits is None:
-        return Subspace(
-            IntegerScalar,
+        return IntegerScalar(
             when=when,
             dtype=dtype,
             signedness=signedness,
             min_bits=policy.min_bits,
         )
-    return Subspace(
-        BoundedIntegerScalar,
+    return BoundedIntegerScalar(
         when=when,
         dtype=dtype,
         signedness=signedness,

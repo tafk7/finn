@@ -12,10 +12,13 @@ The physical View accepts HlsSourceRequirements, not a predicted RTL pin ABI.
 The first datatype profile covers ordinary integers and IEEE FLOAT32.
 """
 
+from __future__ import annotations
+
 from finn.kernels.artifacts.contribution_types import CopiedSource, RenderedSource
 from finn.kernels.artifacts.hls import HlsInterface, HlsSourceRequirements
 from finn.kernels.artifacts.sources import CompileOptions, Language, Role
 from finn.kernels.base import Kernel
+from finn.dataflow.datatypes import QONNXDataType
 from finn.kernels.datatypes.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
 from finn.kernels.datatypes.domains import Integer
 from finn.core.space import (
@@ -33,7 +36,7 @@ class MemStreamHlsKernel(Kernel):
     id = "finnlib.memstream.hls"
     version = "1"
 
-    element_dtype = Param(QONNX_DATATYPE_VALUE_SEMANTICS)
+    element_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
 
     @derived(semantics=default_semantics(str))
     def cpp_type(self) -> str | Rejected:
@@ -45,7 +48,7 @@ class MemStreamHlsKernel(Kernel):
             return admitted
         return f"{'ap_int' if dtype.signed() else 'ap_uint'}<{dtype.bitwidth()}>"
 
-    depth = Param(int)
+    depth: int = Param()
 
     @constraint
     def depth_supported(self) -> bool | Rejected:
@@ -57,7 +60,7 @@ class MemStreamHlsKernel(Kernel):
             )
         return True
 
-    @view(constraints=(depth_supported,))
+    @view(requires=(depth_supported,))
     def build_requirements(self) -> HlsSourceRequirements:
         cpp = self.cpp_type
         depth = self.depth

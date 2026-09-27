@@ -8,6 +8,8 @@ implementation may round its storage up and forces a shift FIFO for shallow
 depths. Reset is synchronous, active-high, and discards pending words.
 """
 
+from __future__ import annotations
+
 from dataclasses import dataclass
 
 from finn.kernels.artifacts.abi import Clock, Direction, Endpoint, Reset, Signal
@@ -44,8 +46,8 @@ class FifoKernel(Kernel):
     id = "finnlib.fifo"
     version = "1"
 
-    word_bits = Param(int)
-    depth = Param(int)
+    word_bits: int = Param()
+    depth: int = Param()
 
     @constraint
     def geometry_supported(self) -> bool | Rejected:
@@ -55,9 +57,9 @@ class FifoKernel(Kernel):
             return reject("fifo-geometry", "word_bits must be positive and depth at least two")
         return True
 
-    ram_style = Decision(str, values=("auto", "shift", "distributed", "block", "ultra"))
+    ram_style: str = Decision(values=("auto", "shift", "distributed", "block", "ultra"))
 
-    @view(semantics=default_semantics(FifoStorage), constraints=(geometry_supported,))
+    @view(semantics=default_semantics(FifoStorage), requires=(geometry_supported,))
     def storage(self) -> FifoStorage | Rejected:
         depth, style = self.depth, self.ram_style
         if not 2 <= depth <= 0xFFFFFFFF:
@@ -104,12 +106,12 @@ class FifoKernel(Kernel):
             ),
         )
 
-    @view(semantics=default_semantics(ModuleBuildRequirements), constraints=(geometry_supported,))
+    @view(semantics=default_semantics(ModuleBuildRequirements), requires=(geometry_supported,))
     def build_requirements(self) -> ModuleBuildRequirements | Rejected:
         bits = self.word_bits
         depth = self.depth
-        ram = self.storage().requested_style
-        streams = self.interfaces()
+        ram = self.storage.requested_style
+        streams = self.interfaces
         parameters = (("DATA_WIDTH", bits), ("DEPTH", depth), ("RAM_STYLE", f'"{ram}"'))
         abi = ModuleABIRequirements(
             FixedModuleName("fifo"),

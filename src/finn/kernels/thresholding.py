@@ -18,6 +18,8 @@ Biases below -N-1 are refused: the native unsigned width expression creates a
 33-bit output, but the result addition zero-extends the negative 32-bit bias.
 """
 
+from __future__ import annotations
+
 from finn.kernels.base import Kernel
 from finn.kernels.artifacts.abi import (
     Bus,
@@ -38,6 +40,7 @@ from finn.kernels.artifacts.requirements import (
     ScalarTable,
 )
 from finn.kernels.datatypes.semantics import (
+    ThresholdTable,
     QONNX_DATATYPE_VALUE_SEMANTICS,
     THRESHOLD_TABLE,
 )
@@ -67,12 +70,12 @@ class ThresholdingAxiKernel(Kernel):
     id = "finnlib.thresholding_axi.integer"
     version = "1"
 
-    input_dtype = Param(QONNX_DATATYPE_VALUE_SEMANTICS)
-    threshold_dtype = Param(QONNX_DATATYPE_VALUE_SEMANTICS)
+    input_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
+    threshold_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
     input_encoding = integer_scalar(input_dtype, Integer())
     threshold_encoding = integer_scalar(threshold_dtype, Integer())
-    thresholds = Param(THRESHOLD_TABLE)
-    bias = Param(int)
+    thresholds: ThresholdTable = Param(semantics=THRESHOLD_TABLE)
+    bias: int = Param()
 
     @derived(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
     def result_dtype(self) -> QONNXDataType | Rejected:
@@ -90,11 +93,11 @@ class ThresholdingAxiKernel(Kernel):
         bits = 1 + (candidate - 1).bit_length()
         return resolve_qonnx_datatype_name(f"INT{bits}")
 
-    pe = Param(int)
-    use_axilite = Decision(bool, values=(False, True))
-    deep_pipeline = Decision(bool, values=(False, True))
-    depth_trigger_bram = Param(int)
-    depth_trigger_uram = Param(int)
+    pe: int = Param()
+    use_axilite: bool = Decision(values=(False, True))
+    deep_pipeline: bool = Decision(values=(False, True))
+    depth_trigger_bram: int = Param()
+    depth_trigger_uram: int = Param()
 
     @constraint
     def types_supported(self) -> bool | Rejected:
@@ -190,13 +193,13 @@ class ThresholdingAxiKernel(Kernel):
 
     @view(
         semantics=default_semantics(ModuleBuildRequirements),
-        constraints=(implementation_supported,),
+        requires=(implementation_supported,),
     )
     def build_requirements(self) -> ModuleBuildRequirements | Rejected:
         table = self.thresholds
         pe = self.pe
-        a = self.input_encoding.encoding().dtype
-        t = self.threshold_encoding.encoding().dtype
+        a = self.input_encoding.encoding.dtype
+        t = self.threshold_encoding.encoding.dtype
         result = self.result_dtype
         bias = self.bias
         axilite = self.use_axilite

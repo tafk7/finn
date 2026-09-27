@@ -48,14 +48,16 @@ class RejectGraphDependencies(importlib.abc.MetaPathFinder):
 sys.meta_path.insert(0, RejectGraphDependencies())
 
 from finn.kernels import DotpAxiKernel, DspBlock, WeightDelivery, mvau_assembly
-from finn.core.space import Decision, Param, Space, derived, divisors_of, view
+from finn.core.space import (
+    Available, Decision, Param, Space, design_space, derived, divisors_of, view,
+)
 import greenlet
 
 assert greenlet.__version__ == "3.2.4"
 
 class Tiles(Space):
-    extent = Param(int)
-    lanes = Decision(int, domain=divisors_of(extent))
+    extent: int = Param()
+    lanes: int = Decision(domain=divisors_of(extent))
 
     @derived
     def cycles(self) -> int:
@@ -65,9 +67,10 @@ class Tiles(Space):
     def shape(self) -> tuple[int, int]:
         return self.lanes, self.cycles
 
-tile = Tiles(extent=12).with_choices(lanes=3)
-assert tile.shape() == (3, 4)
-assert tile.view(Tiles.shape)() == (3, 4)
+tile = design_space(Tiles(extent=12)).with_choices(lanes=3)
+assert tile.shape == (3, 4)
+assert tile.field(Tiles.shape).get() == (3, 4)
+assert tile.inspect(Tiles.shape).accepted_result == Available((3, 4))
 assert tile.field(Tiles.cycles).get() == 4
 from finn.kernels.artifacts import build, contributions, contribution_types, requirements
 from finn.kernels.artifacts.manifest import decode
@@ -91,14 +94,13 @@ assert contributions.CopiedSource is contribution_types.CopiedSource
 assert requirements.ModuleBuildRequirements.__module__ == "finn.kernels.artifacts.build"
 assert contribution_types.CopiedSource.__module__ == "finn.kernels.artifacts.contributions"
 
-dotp = DotpAxiKernel({
-    DotpAxiKernel.activation_dtype: DataType["INT3"],
-    DotpAxiKernel.weights_dtype: DataType["INT3"],
-    DotpAxiKernel.result_dtype: DataType["INT8"],
-}, pe=2, simd=2, target_dsp=DspBlock.DSP48E2, segment_length=0).with_choices(
-    compute_pumping=False
-)
-answer = dotp.build_requirements()
+dotp = design_space(DotpAxiKernel(
+    activation_dtype=DataType["INT3"],
+    weights_dtype=DataType["INT3"],
+    result_dtype=DataType["INT8"],
+    pe=2, simd=2, target_dsp=DspBlock.DSP48E2, segment_length=0,
+)).with_choices(compute_pumping=False)
+answer = dotp.build_requirements
 assert isinstance(answer, requirements.ModuleBuildRequirements), answer
 assert dict(answer.parameters)["ACCU_WIDTH"] == 8
 assert dotp.activation.dtype.name == "INT3"

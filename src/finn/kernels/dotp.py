@@ -17,6 +17,8 @@ declared activation and signed weight values are admitted, including the most
 negative weight. NARROW_WEIGHTS is always zero.
 """
 
+from __future__ import annotations
+
 from finn.kernels.artifacts.abi import (
     Clock,
     ClockAlignment,
@@ -36,6 +38,7 @@ from finn.kernels.artifacts.requirements import (
 )
 from finn.kernels.target import DspBlock, dsp_widths
 from finn.kernels.base import Kernel
+from finn.dataflow.datatypes import QONNXDataType
 from finn.kernels.datatypes.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
 from finn.kernels.datatypes.domains import Integer, SignedInteger
 from finn.dataflow.datatypes import (
@@ -46,7 +49,15 @@ from finn.dataflow.datatypes import (
 from finn.kernels.datatypes.scalar import integer_scalar
 from finn.kernels.physical.axi_stream import AxiStream, axi_stream
 from finn.kernels.physical.contract import STREAM_CONTRACT, StreamContract
-from finn.kernels.streams import Port, StreamSpec
+from finn.kernels.streams import (
+    MODULE,
+    PORTS,
+    PORTS_SEMANTICS,
+    Ports,
+    Stream,
+    consumes,
+    produces,
+)
 from finn.core.space import (
     ConstraintGroup,
     Decision,
@@ -74,21 +85,23 @@ class DotpAxiKernel(Kernel):
     id = "exact_integer_dot_product_axi"
     version = "2"
 
-    pe = Param(int)
-    simd = Param(int)
-    target_dsp = Param(DspBlock)
-    segment_length = Param(int)
-    compute_pumping = Decision(bool, values=(False, True))
+    pe: int = Param()
+    simd: int = Param()
+    target_dsp: DspBlock = Param()
+    segment_length: int = Param()
+    compute_pumping: bool = Decision(values=(False, True))
 
-    activation_dtype = Param(QONNX_DATATYPE_VALUE_SEMANTICS)
-    weights_dtype = Param(QONNX_DATATYPE_VALUE_SEMANTICS)
-    result_dtype = Param(QONNX_DATATYPE_VALUE_SEMANTICS)
+    activation_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
+    weights_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
+    result_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
     activation_type = integer_scalar(activation_dtype, Integer(min_bits=2))
     weights_type = integer_scalar(weights_dtype, SignedInteger(min_bits=2))
     result_type = integer_scalar(result_dtype, SignedInteger())
-    activation_stream = Port(Endpoint.TARGET)
-    weights_stream = Port(Endpoint.TARGET)
-    result_stream = Port(Endpoint.INITIATOR)
+    # The streams dotp sits on, when a parent places it between streams: reference
+    # inputs, each a Stream node placed beside dotp.
+    activation_stream: Stream = Param(required=False)
+    weights_stream: Stream = Param(required=False)
+    result_stream: Stream = Param(required=False)
     activation = axi_stream("s_axis_input", simd, Endpoint.TARGET, activation_type, last=True)
     weights = axi_stream("s_axis_weights", pe * simd, Endpoint.TARGET, weights_type)
     result = axi_stream("m_axis_output", pe, Endpoint.INITIATOR, result_type)
@@ -196,9 +209,9 @@ class DotpAxiKernel(Kernel):
         simd = self.simd
         if not 1 <= pe <= 0xFFFFFFFF or not 1 <= simd <= 0xFFFFFFFF:
             return reject("dotp-geometry", "PE and SIMD must be positive native unsigned integers")
-        activation = self.activation.stream()
-        weights = self.weights.stream()
-        result = self.result.stream()
+        activation = self.activation.stream
+        weights = self.weights.stream
+        result = self.result.stream
         if any(stream.carrier_bits > 0xFFFFFFFF for stream in (activation, weights, result)):
             return reject("dotp-stream-width", "packed stream widths must fit native unsigned int")
         target_dsp = self.target_dsp
@@ -279,16 +292,17 @@ class DotpAxiKernel(Kernel):
             DotpAxiKernel.id, DotpAxiKernel.version, parameters, abi, sources
         )
 
-    build_requirements = View(codegen, constraints=(support,))
+    build_requirements = View(codegen, requires=(support,))
 
     @view(semantics=default_semantics(tuple))
     def interfaces(self) -> tuple[AxiStream, ...]:
         """Accepted (activation, weights, result) ports; framing is the caller's."""
-        return (self.activation.stream(), self.weights.stream(), self.result.stream())
+        return (self.activation.stream, self.weights.stream, self.result.stream)
 
-    def _port(self, index: int, spec: StreamSpec) -> StreamContract | Rejected:
-        """A port over its bound stream: the stream's order, dotp's own encoding."""
-        port = self.interfaces()[index]
+    def _port(self, index: int, stream: Stream) -> StreamContract | Rejected:
+        """A port over the stream it sits on: the stream's order, dotp's own encoding."""
+        spec = stream.spec
+        port = self.interfaces[index]
         if spec.element.datatype_name != port.dtype.name:
             return reject(
                 "dotp-stream-element",
@@ -313,6 +327,17 @@ class DotpAxiKernel(Kernel):
     @view(semantics=STREAM_CONTRACT)
     def result_port(self) -> StreamContract | Rejected:
         return self._port(2, self.result_stream)
+
+    @view(semantics=PORTS_SEMANTICS)
+    def ports(self) -> Ports:
+        """Each port keyed by its stream input: activations and weights in, results out."""
+        return Ports.of(
+            activation_stream=consumes(self.activation_port),
+            weights_stream=consumes(self.weights_port),
+            result_stream=produces(self.result_port),
+        )
+
+    exports = {MODULE: build_requirements, PORTS: ports}
 
 
 __all__ = ["DotpAxiKernel"]

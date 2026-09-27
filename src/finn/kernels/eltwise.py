@@ -12,6 +12,8 @@ Operation and scale describe the computation; they are supplied inputs, not
 interchangeable implementation choices.
 """
 
+from __future__ import annotations
+
 import math
 import struct
 
@@ -38,7 +40,6 @@ from finn.core.space import (
     ConstraintGroup,
     Param,
     Rejected,
-    Subspace,
     constraint,
     default_semantics,
     derived,
@@ -62,10 +63,10 @@ class EltwiseKernel(Kernel):
     id = "finnlib.eltwise"
     version = "1"
 
-    operation = Param(str)
-    pe = Param(int)
-    lhs_dtype = Param(QONNX_DATATYPE_VALUE_SEMANTICS)
-    rhs_dtype = Param(QONNX_DATATYPE_VALUE_SEMANTICS)
+    operation: str = Param()
+    pe: int = Param()
+    lhs_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
+    rhs_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
 
     @derived(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
     def result_dtype(self) -> QONNXDataType:
@@ -78,16 +79,16 @@ class EltwiseKernel(Kernel):
         signed = a.signed() or operation in ("SUB", "SBR")
         return resolve_qonnx_datatype_name(f"{'INT' if signed else 'UINT'}{bits}")
 
-    lhs_type = Subspace(EltwiseOperand, dtype=lhs_dtype)
-    rhs_type = Subspace(EltwiseOperand, dtype=rhs_dtype)
-    result_type = Subspace(Scalar, dtype=result_dtype)
+    lhs_type = EltwiseOperand(dtype=lhs_dtype)
+    rhs_type = EltwiseOperand(dtype=rhs_dtype)
+    result_type = Scalar(dtype=result_dtype)
     lhs = native_stream("lhs", pe, Endpoint.TARGET, lhs_type, pins=("adat", "avld", "ardy"))
     rhs = native_stream("rhs", pe, Endpoint.TARGET, rhs_type, pins=("bdat", "bvld", "brdy"))
     result = native_stream(
         "result", pe, Endpoint.INITIATOR, result_type, pins=("odat", "ovld", "ordy")
     )
 
-    b_scale = Param(float)
+    b_scale: float = Param()
 
     @derived(semantics=default_semantics(float))
     def native_scale(self) -> float | Rejected:
@@ -100,7 +101,7 @@ class EltwiseKernel(Kernel):
             return reject("eltwise-scale", "B_SCALE must be finite binary32")
         return rounded
 
-    target_dsp = Param(DspBlock)
+    target_dsp: DspBlock = Param()
 
     @constraint
     def implementation_supported(self) -> bool | Rejected:
@@ -129,11 +130,11 @@ class EltwiseKernel(Kernel):
     def interfaces(self) -> tuple[ReadyValidStream, ...] | Rejected:
         if not 1 <= self.pe <= 0xFFFFFFFF:
             return reject("eltwise-interface", "PE must be positive and fit native unsigned int")
-        return (self.lhs.stream(), self.rhs.stream(), self.result.stream())
+        return (self.lhs.stream, self.rhs.stream, self.result.stream)
 
     @view(
         semantics=default_semantics(ModuleBuildRequirements),
-        constraints=(implementation_supported,),
+        requires=(implementation_supported,),
     )
     def build_requirements(self) -> ModuleBuildRequirements | Rejected:
         operation = self.operation
@@ -141,7 +142,7 @@ class EltwiseKernel(Kernel):
         a = self.lhs_dtype
         b = self.rhs_dtype
         scale = self.native_scale
-        streams = self.interfaces()
+        streams = self.interfaces
         parameter_values: dict[str, BuildScalar] = {
             "OP": f'"{operation}"',
             "PE": pe,

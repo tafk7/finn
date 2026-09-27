@@ -10,6 +10,8 @@ of loop i and all inner loops, aligned with the output transfer. It is a native
 multi-bit marker, not AXI TLAST. Input and output words are opaque bits.
 """
 
+from __future__ import annotations
+
 from finn.kernels.base import Kernel
 from finn.kernels.artifacts.abi import Clock, Direction, Endpoint, Reset, Signal
 from finn.kernels.physical.stream import (
@@ -24,7 +26,7 @@ from finn.kernels.artifacts.requirements import (
     ModuleABIRequirements,
     ModuleBuildRequirements,
 )
-from finn.kernels.datatypes.semantics import INTEGER_VECTOR
+from finn.kernels.datatypes.semantics import INTEGER_VECTOR, IntegerVector
 from finn.core.space import (
     Decision,
     Param,
@@ -40,10 +42,10 @@ class InputGeneratorKernel(Kernel):
     id = "finnlib.input_generator"
     version = "1"
 
-    word_bits = Param(int)
-    frame_words = Param(int)
-    extents = Param(INTEGER_VECTOR)
-    strides = Param(INTEGER_VECTOR)
+    word_bits: int = Param()
+    frame_words: int = Param()
+    extents: IntegerVector = Param(semantics=INTEGER_VECTOR)
+    strides: IntegerVector = Param(semantics=INTEGER_VECTOR)
 
     @constraint
     def traversal_supported(self) -> bool | Rejected:
@@ -70,7 +72,7 @@ class InputGeneratorKernel(Kernel):
             )
         return True
 
-    ram_style = Decision(str, values=("auto", "distributed", "block", "ultra"))
+    ram_style: str = Decision(values=("auto", "distributed", "block", "ultra"))
 
     @view(semantics=STREAM_INTERFACES)
     def interfaces(self) -> tuple[ReadyValidStream, ...] | Rejected:
@@ -94,14 +96,14 @@ class InputGeneratorKernel(Kernel):
             ),
         )
 
-    @view(semantics=default_semantics(ModuleBuildRequirements), constraints=(traversal_supported,))
+    @view(semantics=default_semantics(ModuleBuildRequirements), requires=(traversal_supported,))
     def build_requirements(self) -> ModuleBuildRequirements | Rejected:
         bits = self.word_bits
         frame = self.frame_words
         extents = self.extents
         strides = self.strides
         ram = self.ram_style
-        streams = self.interfaces()
+        streams = self.interfaces
         parameters = (
             ("COEFS", "'{" + ", ".join(map(str, strides)) + "}"),
             ("D", len(extents)),

@@ -164,26 +164,27 @@ class RejectParked(importlib.abc.MetaPathFinder):
 
 
 sys.meta_path.insert(0, RejectParked())
+from finn.core.space import design_space
 from finn.kernels import DotpAxiKernel, DspBlock, WeightDelivery, mvau_assembly
 from finn.kernels.artifacts.requirements import ModuleBuildRequirements
 from finn.kernels.physical.axi_stream import AxiStream
 from qonnx.core.datatype import DataType
 
 
-point = DotpAxiKernel(
-    {
-        DotpAxiKernel.pe: 2,
-        DotpAxiKernel.simd: 2,
-        DotpAxiKernel.activation_dtype: DataType["INT3"],
-        DotpAxiKernel.weights_dtype: DataType["INT3"],
-        DotpAxiKernel.result_dtype: DataType["INT8"],
-        DotpAxiKernel.target_dsp: DspBlock.DSP48E2,
-        DotpAxiKernel.segment_length: 0,
-    }
+point = design_space(
+    DotpAxiKernel(
+        pe=2,
+        simd=2,
+        activation_dtype=DataType["INT3"],
+        weights_dtype=DataType["INT3"],
+        result_dtype=DataType["INT8"],
+        target_dsp=DspBlock.DSP48E2,
+        segment_length=0,
+    )
 ).with_choices(compute_pumping=False)
-answer = point.build_requirements()
+answer = point.build_requirements
 assert isinstance(answer, ModuleBuildRequirements)
-assert isinstance(point.activation.stream(), AxiStream)
+assert isinstance(point.activation.stream, AxiStream)
 assert point.activation.payload_bits == 6
 for mode in WeightDelivery:
     options = (
@@ -248,7 +249,7 @@ sys.meta_path.insert(0, RejectOtherLayers())
 api = importlib.import_module(package_name)
 if package_name == "finn.core.space":
     class Generic(api.Space):
-        value = api.Param(int)
+        value: int = api.Param()
 
         @api.derived
         def increment(self) -> int:
@@ -258,7 +259,7 @@ if package_name == "finn.core.space":
         def output(self) -> int:
             return self.increment
 
-    assert Generic(value=3).output() == 4
+    assert api.design_space(Generic(value=3)).output == 4
 loaded = {name for name in sys.modules if name.startswith("finn.")}
 parents = {package_name.rsplit(".", 1)[0]}
 assert all(

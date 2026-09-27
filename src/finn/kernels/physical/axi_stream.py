@@ -17,8 +17,6 @@ from dataclasses import dataclass
 from finn.core.space import (
     Param,
     Rejected,
-    Subspace,
-    ValueRef,
     View,
     default_semantics,
     derived,
@@ -124,7 +122,7 @@ class AxiStream:
 class AxiStreamPort(TypedStream):
     """A byte-aligned AXIS profile over lanes of an accepted scalar encoding."""
 
-    last = Param(bool)
+    last: bool = Param()
 
     @derived
     def carrier_bits(self) -> int:
@@ -147,26 +145,25 @@ class AxiStreamPort(TypedStream):
         except ValueError as error:
             return reject("interface-lanes", str(error))
 
-    stream = View(candidate, constraints=(TypedStream.lanes_valid,))
+    stream = View(candidate, requires=(TypedStream.lanes_valid,))
 
 
 def axi_stream(
     name: str,
-    lanes: int | ValueRef[int],
+    lanes: int,
     endpoint: Endpoint,
-    element: Subspace[Scalar],
+    element: Scalar,
     *,
     last: bool = False,
-) -> Subspace[AxiStreamPort]:
+) -> AxiStreamPort:
     """Bind an AXIS port to its scalar's raw dtype and accepted encoding."""
-    return Subspace(
-        AxiStreamPort,
+    return AxiStreamPort(
         name=name,
         endpoint=endpoint,
         lanes=lanes,
         last=last,
-        dtype=element.ref(Scalar.dtype),
-        element=element.accepted(Scalar.encoding),
+        dtype=element.dtype,
+        element=element.encoding,
     )
 
 
