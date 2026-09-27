@@ -121,8 +121,8 @@ def test_anonymous_expressions_work_in_aliases_domains_and_child_bindings() -> N
     point = design_space(Root(extent=5))
     assert point.result == 16
     assert point.field(Root.factor).candidates() == Available((1, 2, 5, 10))
-    assert point.child.physical() == 12
-    assert (point.other.width, point.other.physical()) == (7, 14)
+    assert point.child.physical == 12
+    assert (point.other.width, point.other.physical) == (7, 14)
 
 
 def test_arithmetic_errors_are_deferred_until_guarded_expression_is_demanded() -> None:
@@ -131,11 +131,11 @@ def test_arithmetic_errors_are_deferred_until_guarded_expression_is_demanded() -
         physical = View(Const(1) // 0, when=enabled)
 
     inactive = design_space(Family(enabled=False))
-    assert isinstance(inactive.physical.inspect().accepted_result, Inapplicable)
+    assert isinstance(inactive.inspect(Family.physical).accepted_result, Inapplicable)
     evidence = inspection.explain(inactive, Family.physical)
     assert not any(".$expr." in node.declaration.key for node in evidence.nodes)
     with pytest.raises(EvaluationError) as error:
-        design_space(Family(enabled=True)).physical()
+        design_space(Family(enabled=True)).physical
     assert error.value.owner == "physical"
     assert isinstance(error.value.__cause__, ZeroDivisionError)
 

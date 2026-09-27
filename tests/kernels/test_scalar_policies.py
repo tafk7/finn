@@ -11,8 +11,11 @@ from finn.kernels.datatypes.scalar import integer_scalar
 from finn.kernels.datatypes.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
 from finn.dataflow.datatypes import QONNXDataType
 from finn.dataflow.datatypes import resolve_qonnx_datatype_name as dtype
+from finn.kernels.dotp import DotpAxiKernel
+from finn.kernels.eltwise import EltwiseKernel
 from finn.kernels.int_to_fp32 import IntToFp32Kernel
 from finn.kernels.memstream_hls import MemStreamHlsKernel
+from finn.kernels.thresholding import ThresholdingAxiKernel
 from kernels.test_dotp import kernel as dotp
 from kernels.test_migrated_rich import threshold_base
 from kernels.test_migrated_simple import eltwise
@@ -51,50 +54,50 @@ def test_invalid_bound_is_a_domain_refusal():
 
 def test_scalar_encoding_detaches_qonnx_values():
     selected = design_space(Precision(limit=5)).with_choices(dtype=dtype("INT3"))
-    first = selected.scalar.encoding()
+    first = selected.scalar.encoding
     mutable = first.dtype
     mutable._bitwidth = 100
     assert first.bits == 3
-    assert selected.scalar.encoding().bits == 3
+    assert selected.scalar.encoding.bits == 3
 
 
 @pytest.mark.parametrize("name", ("INT0", "UINT0", "BIPOLAR", "TERNARY", "FLOAT16", "INT129"))
 def test_converter_unsupported_encodings_refuse_without_pin_construction_errors(name):
     point = design_space(IntToFp32Kernel(input_dtype=dtype(name)))
-    assert isinstance(point.build_requirements.query(), Rejected)
+    assert isinstance(point.query(IntToFp32Kernel.build_requirements), Rejected)
 
 
 @pytest.mark.parametrize("name", ("INT0", "UINT0"))
 def test_zero_width_encodings_refuse_across_consumers(name):
-    assert isinstance(eltwise(lhs=name, rhs=name).build_requirements.query(), Rejected)
+    assert isinstance(eltwise(lhs=name, rhs=name).query(EltwiseKernel.build_requirements), Rejected)
     assert isinstance(
-        design_space(
-            MemStreamHlsKernel(element_dtype=dtype(name), depth=3)
-        ).build_requirements.query(),
+        design_space(MemStreamHlsKernel(element_dtype=dtype(name), depth=3)).query(
+            MemStreamHlsKernel.build_requirements
+        ),
         Rejected,
     )
     assert isinstance(
         threshold_base(input_dtype=name)
         .with_choices(use_axilite=False, deep_pipeline=False)
-        .build_requirements.query(),
+        .query(ThresholdingAxiKernel.build_requirements),
         Rejected,
     )
 
 
 def test_threshold_type_refusal_precedes_unrelated_configuration_choices():
     base = threshold_base(input_dtype="BIPOLAR")
-    assessment = base.build_requirements.inspect()
+    assessment = base.inspect(ThresholdingAxiKernel.build_requirements)
     assert isinstance(assessment.constraints.results["types_supported"], Rejected)
     assert isinstance(assessment.accepted_result, Unresolved)
 
 
 @pytest.mark.parametrize("field", ("pe", "simd"))
 def test_dotp_rejects_native_parameter_overflow(field):
-    assert isinstance(dotp(**{field: 2**32}).build_requirements.query(), Rejected)
+    assert isinstance(dotp(**{field: 2**32}).query(DotpAxiKernel.build_requirements), Rejected)
 
 
 def test_dotp_rejects_packed_width_overflow_even_when_dimensions_fit():
-    assert isinstance(dotp(pe=2**30, simd=2).build_requirements.query(), Rejected)
+    assert isinstance(dotp(pe=2**30, simd=2).query(DotpAxiKernel.build_requirements), Rejected)
 
 
 def test_integer_policy_check_agrees_with_domain_admission():

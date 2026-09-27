@@ -1,12 +1,14 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
-"""The Space family type, its node declarations, and bound value and view accessors.
+"""The Space family type, its node declarations, and bound value accessors.
 
 A ``Space`` object is one of two things. Calling a family, ``Room(area=12)``,
 returns a *declaration*: a template with bindings that reads its members as
 symbolic references. ``design_space(node)`` returns a *configuration* (at
 first the whole design space, every choice open) whose members read values.
-Both are typed as the family.
+Both are typed as the family. Every value-like member follows this rule,
+views included: a view reads as its accepted value, and its assessment is
+``point.inspect(Family.view)``.
 """
 
 # Local dispatch imports keep configuration types independent of their operations.
@@ -44,27 +46,12 @@ if TYPE_CHECKING:
 T = TypeVar("T")
 
 
-class BoundView(Generic[T]):
-    def __init__(self, instance: Space, declaration: View[T]) -> None:
-        self.instance, self.declaration = instance, declaration
-
-    def __call__(self) -> T:
-        from .occurrence import read_value
-
-        return read_value(self.instance, self.declaration)
-
-    def get(self) -> T:
-        return self()
-
-    def inspect(self) -> ViewAssessment[T]:
-        return self.instance.inspect(self.declaration)
-
-    def query(self) -> QueryResult[T]:
-        return self.instance.query(self.declaration)
-
-
 class BoundValue(Generic[T]):
-    """A typed value reference bound to one configuration snapshot."""
+    """A typed value reference bound to one configuration snapshot.
+
+    Any member that reads as a value binds as one: a formal, a derived value,
+    a view (its accepted value) or a reference into a child.
+    """
 
     def __init__(self, instance: Space, reference: object) -> None:
         self.instance, self.reference = instance, reference
@@ -258,7 +245,7 @@ class Space(metaclass=SpaceMeta):
         return object.__repr__(self)
 
     @overload
-    def query(self, value: ValueRef[T] | View[T] | BoundView[T]) -> QueryResult[T]: ...
+    def query(self, value: ValueRef[T] | View[T]) -> QueryResult[T]: ...
 
     @overload
     def query(self, value: T) -> QueryResult[T]: ...
@@ -266,9 +253,11 @@ class Space(metaclass=SpaceMeta):
     def query(self, value: object) -> QueryResult[Any]:
         """Query a member or a reference (``House.kitchen.finish``) of this configuration.
 
-        A node (a child, a candidate handle, or a reference input such as
-        ``K.output``) answers its configuration: inapplicable when the node is
-        absent, unresolved while its presence is undecided or it is unsupplied.
+        The answer is what reading it would give, as a result rather than a
+        raise: a view (``House.total``) answers its accepted result. A node (a
+        child, a candidate handle, or a reference input such as ``K.output``)
+        answers its configuration: inapplicable when the node is absent,
+        unresolved while its presence is undecided or it is unsupplied.
         """
         from .occurrence import query
 
@@ -289,28 +278,32 @@ class Space(metaclass=SpaceMeta):
     def inspect(self, view: View[T]) -> ViewAssessment[T]: ...
 
     @overload
-    def inspect(self, view: Constraint | ConstraintGroup) -> ConstraintAssessment: ...
+    def inspect(  # type: ignore[overload-overlap]
+        self, view: Constraint | ConstraintGroup
+    ) -> ConstraintAssessment: ...
 
-    def inspect(
-        self, view: View[T] | Constraint | ConstraintGroup
-    ) -> ViewAssessment[T] | ConstraintAssessment:
+    @overload
+    def inspect(self, view: T) -> ViewAssessment[T]: ...
+
+    def inspect(self, view: object) -> ViewAssessment[Any] | ConstraintAssessment:
+        """The assessment of a view or a constraint of this configuration.
+
+        ``point.inspect(House.total)`` is the view's ``ViewAssessment``: its raw
+        output, readiness, obligation results and accepted result. A view of a
+        child is inspected on the child's configuration,
+        ``point.kitchen.inspect(Room.cost)`` (typed by the view declaration),
+        or through a path, ``point.inspect(House.kitchen.cost)`` (a reference
+        typed as its value, so a non-view member is refused only at runtime).
+        """
         from .occurrence import inspect
 
-        return inspect(self, view)
-
-    def view(self, reference: View[T]) -> BoundView[T]:
-        from .occurrence import bind_view
-
-        return bind_view(self, reference)
+        return inspect(self, cast("View[Any] | Constraint | ConstraintGroup", view))
 
     @overload
     def field(self, reference: Decision[T] | DecisionHandle[T]) -> BoundDecision[T]: ...
 
     @overload
-    def field(self, reference: View[T]) -> BoundView[T]: ...  # type: ignore[overload-overlap]
-
-    @overload
-    def field(self, reference: ValueRef[T]) -> BoundValue[T]: ...  # type: ignore[overload-overlap]
+    def field(self, reference: ValueRef[T] | View[T]) -> BoundValue[T]: ...  # type: ignore[overload-overlap]
 
     @overload
     def field(self, reference: Space | None) -> BoundDecision[str]: ...
@@ -318,9 +311,10 @@ class Space(metaclass=SpaceMeta):
     @overload
     def field(self, reference: T) -> BoundDecision[T]: ...
 
-    def field(self, reference: object) -> BoundValue[Any] | BoundDecision[Any] | BoundView[Any]:
-        """A bound accessor. A member typed as its value binds as a decision
-        accessor: its decision operations refuse a member that is not one."""
+    def field(self, reference: object) -> BoundValue[Any] | BoundDecision[Any]:
+        """A bound accessor. A view binds as a value accessor of its accepted
+        value, like a derived member. A member typed as its value binds as a
+        decision accessor: its decision operations refuse a member that is not one."""
         from .occurrence import bind_field
 
         return bind_field(self, cast("ValueRef[Any]", reference))

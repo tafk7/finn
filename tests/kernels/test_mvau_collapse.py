@@ -59,7 +59,7 @@ def test_collapse_keeps_mvau_keys_and_evaluates_fewer_aliases() -> None:
     ]
 
     def read(point: object) -> object:
-        return point.structure.query()  # type: ignore[attr-defined]
+        return point.query(MVAU.structure)  # type: ignore[attr-defined]
 
     before = counts(_open("cyclic-fifo", collapsed=False), read)
     after = counts(_open("cyclic-fifo", collapsed=True), read)

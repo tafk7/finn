@@ -111,7 +111,7 @@ def test_driver_operations_remain_sticky_when_caught(operation: str) -> None:
     saved = selections.capture(foreign)
     actions: dict[str, Callable[[Family], object]] = {
         "query": lambda point: point.query(Family.choice),
-        "inspect": lambda point: point.output.inspect(),
+        "inspect": lambda point: point.inspect(Family.output),
         "state": lambda point: point.field(Family.choice).state,
         "candidates": lambda point: point.field(Family.choice).candidates(),
         "change": lambda point: point.field(Family.choice).change(1),

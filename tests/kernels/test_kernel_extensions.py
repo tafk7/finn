@@ -118,14 +118,14 @@ def test_kernel_capabilities_have_independent_output_types_and_no_implicit_abi()
     capabilities = opaque.capabilities()
     assert [entry.key for entry in capabilities] == ["pins"]
     assert calls == []
-    assert opaque.pins() == Pins((("word", 13),), (("result", 13),))
+    assert opaque.pins == Pins((("word", 13),), (("result", 13),))
     answer = opaque.query(capabilities[0].reference)
     assert isinstance(answer, Available)
     assert answer.value == Pins((("word", 13),), (("result", 13),))
     axis = design_space(Axis(bits=13, lanes=3))
-    assert axis.stream() == AxisShape(39, 40)
+    assert axis.stream == AxisShape(39, 40)
     hls = design_space(Hls())
-    result = hls.sources()
+    result = hls.sources
     assert isinstance(result, HlsSourceRequirements)
     assert [entry.key for entry in hls.capabilities()] == ["sources"]
     assert not hasattr(result, "abi")
@@ -265,7 +265,7 @@ def test_explicit_dtype_semantics_support_typed_protocol_results_and_detached_va
     returned = point.result
     setattr(returned, "_bitwidth", 32)
     assert point.result.name == "INT8"
-    result = point.physical()
+    result = point.physical
     assert result.name == "INT8"
 
 

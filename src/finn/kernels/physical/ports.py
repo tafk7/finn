@@ -14,7 +14,6 @@ them directly with ``ReadyValidStream`` values.
 from __future__ import annotations
 
 from finn.core.space import (
-    accepted,
     Param,
     Rejected,
     Space,
@@ -130,7 +129,7 @@ def native_stream(
         endpoint=endpoint,
         lanes=lanes,
         dtype=element.dtype,
-        element=accepted(element.encoding),
+        element=element.encoding,
         data=data,
         valid=valid,
         ready=ready,

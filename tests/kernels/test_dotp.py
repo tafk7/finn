@@ -28,6 +28,7 @@ from kernels import helpers
 from finn.kernels.dotp import DotpAxiKernel
 from finn.kernels.target import DspBlock
 from finn.kernels.base import Kernel
+from finn.kernels.physical.axi_stream import AxiStreamPort
 from finn.kernels.physical.layout import UnusedBitPolicy
 from finn.kernels.resources import resource_root
 
@@ -96,10 +97,10 @@ def test_component_groups_its_interfaces_and_keeps_one_root_physical_output():
         "result_port",
         "weights_port",
     )
-    assert point.interfaces() == tuple(
-        port.stream() for port in (point.activation, point.weights, point.result)
+    assert point.interfaces == tuple(
+        port.stream for port in (point.activation, point.weights, point.result)
     )
-    point.build_requirements()
+    _ = point.build_requirements
     inputs = {item.key for item in inspection.members(point) if item.kind == "param"}
     assert inputs == {
         "pe",
@@ -128,7 +129,7 @@ def test_component_groups_its_interfaces_and_keeps_one_root_physical_output():
 def test_assessed_view_preserves_geometry_and_clocks(target, pumping):
     settings = parameters(target_dsp=target, compute_pumping=pumping)
     point = kernel(**settings)
-    requirements = point.build_requirements()
+    requirements = point.build_requirements
     rtl = dict(requirements.parameters)
     assert rtl["ACCU_WIDTH"] == 9
     assert rtl["PE"] == 2 and rtl["SIMD"] == 4
@@ -141,7 +142,7 @@ def test_assessed_view_preserves_geometry_and_clocks(target, pumping):
         ("ap_clk", "ap_clk2x") if pumping else ("ap_clk",)
     )
     for stream, width in ((point.activation, 16), (point.weights, 24), (point.result, 24)):
-        assert stream.stream().bus(clock="ap_clk", reset="ap_rst_n") == ports[stream.name]
+        assert stream.stream.bus(clock="ap_clk", reset="ap_rst_n") == ports[stream.name]
         assert (
             next(signal.width for signal in ports[stream.name].signals if signal.logical == "tdata")
             == width
@@ -150,7 +151,7 @@ def test_assessed_view_preserves_geometry_and_clocks(target, pumping):
 
 def test_physical_framing_has_no_workload_period_and_only_activation_has_last():
     point = kernel(pe=3, simd=5)
-    point.build_requirements()
+    _ = point.build_requirements
     assert point.activation.lanes == 5
     assert point.weights.lanes == 15
     assert point.result.lanes == 3
@@ -162,12 +163,12 @@ def test_physical_framing_has_no_workload_period_and_only_activation_has_last():
 
 @pytest.mark.parametrize("segment", (0, 2))
 def test_segment_length_is_explicit_and_reaches_rtl(segment):
-    requirements = kernel(simd=7, segment_length=segment, compute_pumping=True).build_requirements()
+    requirements = kernel(simd=7, segment_length=segment, compute_pumping=True).build_requirements
     assert dict(requirements.abi.parameters)["SEGMENTLEN"] == str(segment)
 
 
 def test_dsp48_segment_length_is_ignored_by_rtl_but_preserved_as_supplied():
-    requirements = kernel(target_dsp=DspBlock.DSP48E2, segment_length=100).build_requirements()
+    requirements = kernel(target_dsp=DspBlock.DSP48E2, segment_length=100).build_requirements
     assert dict(requirements.parameters)["SEGMENTLEN"] == 100
 
 
@@ -205,7 +206,7 @@ def test_dsp48_segment_length_is_ignored_by_rtl_but_preserved_as_supplied():
     ],
 )
 def test_physical_view_preserves_support_refusals(updates, code):
-    physical = kernel(**updates).build_requirements.inspect()
+    physical = kernel(**updates).inspect(DotpAxiKernel.build_requirements)
     refused = physical.accepted_result
     assert isinstance(refused, Rejected), refused
     assert code in {
@@ -236,7 +237,7 @@ def test_space_rejects_mistyped_values_at_binding(updates, error):
 
 def test_constraints_gate_acceptance_without_revalidating_raw_codegen():
     point = kernel(segment_length=-1)
-    physical = point.build_requirements.inspect()
+    physical = point.inspect(DotpAxiKernel.build_requirements)
     assert isinstance(physical.output_result, Available)
     assert point.query(DotpAxiKernel.codegen) == physical.output_result
     assert dict(physical.output_result.value.parameters)["SEGMENTLEN"] == -1
@@ -248,10 +249,10 @@ def test_constraints_gate_acceptance_without_revalidating_raw_codegen():
 @pytest.mark.parametrize("updates,stream", [({"simd": 0}, "activation"), ({"pe": 0}, "result")])
 def test_invalid_native_interface_is_a_rejection_not_a_callback_failure(updates, stream):
     point = kernel(**updates)
-    answer = getattr(point, stream).stream.query()
+    answer = getattr(point, stream).query(AxiStreamPort.stream)
     assert isinstance(answer, Rejected)
     assert {finding.code for finding in answer.findings} == {"interface-lanes"}
-    assert isinstance(point.build_requirements.inspect().accepted_result, Rejected)
+    assert isinstance(point.inspect(DotpAxiKernel.build_requirements).accepted_result, Rejected)
 
 
 def test_physical_constraints_can_report_before_other_inputs_resolve():
@@ -272,12 +273,12 @@ def test_result_dtype_and_pumping_are_required_without_any_workload_dimensions()
     facts.pop("result_dtype")
     facts.pop("compute_pumping")
     point = partial(facts)
-    assert isinstance(point.build_requirements.inspect().accepted_result, Unresolved)
+    assert isinstance(point.inspect(DotpAxiKernel.build_requirements).accepted_result, Unresolved)
     assert point.activation.element_bits == 3
     assert point.weights.lanes == 8
     facts["result_dtype"] = DataType["INT12"]
     point = point_for(facts)
-    assert isinstance(point.build_requirements.inspect().accepted_result, Unresolved)
+    assert isinstance(point.inspect(DotpAxiKernel.build_requirements).accepted_result, Unresolved)
 
 
 @pytest.mark.parametrize("missing", tuple(parameters()))
@@ -289,7 +290,9 @@ def test_required_physical_facts_reject_omission_and_decision_remains_unresolved
         choices["compute_pumping"] = facts.pop("compute_pumping")
     if missing == "compute_pumping":
         point = point_for(facts)
-        assert isinstance(point.build_requirements.inspect().accepted_result, Unresolved)
+        assert isinstance(
+            point.inspect(DotpAxiKernel.build_requirements).accepted_result, Unresolved
+        )
     else:
         # A bare call is legal; the missing formal is refused when design_space() prepares it.
         with pytest.raises(DefinitionError, match=f"^{missing} is not supplied"):
@@ -300,7 +303,7 @@ def test_required_physical_facts_reject_omission_and_decision_remains_unresolved
 def test_caller_selects_accumulator_capacity_and_owns_the_reduction_bound(bits):
     point = kernel(result_dtype=DataType[f"INT{bits}"])
     assert point.result.dtype == DataType[f"INT{bits}"]
-    assert dict(point.build_requirements().parameters)["ACCU_WIDTH"] == bits
+    assert dict(point.build_requirements.parameters)["ACCU_WIDTH"] == bits
 
 
 @pytest.mark.parametrize(
@@ -319,12 +322,12 @@ def test_supported_signed_and_unsigned_dsp_boundaries(target, activation, weight
         activation_dtype=DataType[activation],
         weights_dtype=DataType[weight],
         result_dtype=DataType["INT48"],
-    ).build_requirements()
+    ).build_requirements
     assert dict(requirements.parameters)["SIGNED_ACTIVATIONS"] == int(DataType[activation].signed())
 
 
 def test_sources_materialize_from_the_assessed_requirements(tmp_path):
-    requirements = kernel(compute_pumping=True).build_requirements()
+    requirements = kernel(compute_pumping=True).build_requirements
     store = ArtifactStore(tmp_path / "store")
     finnlib = Path(__file__).resolve().parents[2] / "deps" / "finnlib"
     if not (finnlib / "rtl/dotp_axi.sv").is_file():
@@ -364,7 +367,7 @@ def test_subbyte_result_padding_has_no_zero_fill_promise():
         weights_dtype=DataType["INT2"],
         result_dtype=DataType["INT4"],
     )
-    point.build_requirements()
+    _ = point.build_requirements
     assert point.result.payload_bits == 4 and point.result.carrier_bits == 8
     assert point.result.payload.unused[0].policy is UnusedBitPolicy.UNSPECIFIED
     assert point.activation.payload.unused[0].policy is UnusedBitPolicy.IGNORE_ON_RECEIVE

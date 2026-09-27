@@ -11,7 +11,6 @@ from typing_extensions import assert_type
 
 from finn.core.space import (
     Available,
-    BoundView,
     Param,
     QueryResult,
     Space,
@@ -65,7 +64,7 @@ def chain(count: int) -> type[Space]:
     stages = [Doubled(lanes=4), *(Doubled() for _ in range(1, count))]
     assert_type(stages, list[Shape])
     assert_type(stages[0].lanes, int)
-    assert_type(stages[0].physical, BoundView[int])
+    assert_type(stages[0].physical, int)  # a view reference is typed as its value
     for previous, current in zip(stages, stages[1:]):
         current.lanes = previous.lanes  # typed by Param.__set__
     nodes = {f"s{index}": node for index, node in enumerate(stages)}
@@ -86,7 +85,7 @@ def check(point: Parent) -> None:
     assert_type(Parent.first.lanes, int)
     assert_type(point.first, Shape)
     assert_type(point.first.lanes, int)
-    assert_type(point.first.physical(), int)
+    assert_type(point.first.physical, int)
     assert_type(design_space(Doubled(lanes=2)), Shape)
     assert_type(design_space(Parent(width=2)), Parent)
     assert_type(design_space(chain(3)()), Space)

@@ -39,7 +39,7 @@ class IntToFp32Kernel(Kernel):
 
     @view
     def build_requirements(self) -> ModuleBuildRequirements:
-        encoding = self.input.encoding()
+        encoding = self.input.encoding
         result = self.result_dtype
         parameters = (("SIGNED", int(encoding.signed)), ("WIDTH", encoding.bits))
         return ModuleBuildRequirements(

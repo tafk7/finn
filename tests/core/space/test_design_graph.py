@@ -34,7 +34,6 @@ from finn.core.space import (
     Unresolved,
     View,
     ViewKey,
-    accepted,
     composite,
     constraint,
     derived,
@@ -109,7 +108,7 @@ class Aligned(Space):
 
     @view(requires=(relations,))
     def factor(self) -> int:
-        return self.aligned.agreed()
+        return self.aligned.agreed
 
 
 def choose(point: Aligned, first: int, second: int) -> Aligned:
@@ -118,9 +117,9 @@ def choose(point: Aligned, first: int, second: int) -> Aligned:
 
 def test_a_relation_node_reads_located_siblings_and_owns_its_refusal() -> None:
     point = design_space(Aligned(extent=12))
-    assert isinstance(point.factor.query(), Unresolved)
-    assert choose(point, 3, 3).factor() == 3
-    refused = choose(point, 3, 4).factor.inspect()
+    assert isinstance(point.query(Aligned.factor), Unresolved)
+    assert choose(point, 3, 3).factor == 3
+    refused = choose(point, 3, 4).inspect(Aligned.factor)
     assert isinstance(refused.accepted_result, Rejected)
     # Identity comes from the graph, not from literals: node and member names.
     # (The reducer reports a refusal reached by both output and obligation twice.)
@@ -156,18 +155,18 @@ class Budgeted(Space):
 def test_members_range_over_present_nodes_with_per_member_obligations() -> None:
     point = design_space(Budgeted(limit=10)).with_choices(use_third=False)
     point = point.with_choices({Budgeted.a.factor: 4})
-    assessment = point.total.inspect()
+    assessment = point.inspect(Budgeted.total)
     # Only b is still open; the absent c is inapplicable and never refuses.
     results = assessment.constraints.results
     assert set(results) == {"a.cost", "b.cost", "c.cost", "within"}
     assert isinstance(results["b.cost"], Unresolved)
     assert isinstance(results["c.cost"], Inapplicable)
     point = point.with_choices({Budgeted.b.factor: 2})
-    assert point.total() == 3 + 4
+    assert point.total == 3 + 4
     assert point.costs == (Located("a", "cost", 3), Located("b", "cost", 4))
     third = point.with_choices(use_third=True)
     third = third.with_choices({Budgeted.c.factor: 1})
-    refused = third.total.query()
+    refused = third.query(Budgeted.total)
     assert codes(refused) == {"over-budget"} and owners(refused) == {"within"}
 
 
@@ -189,7 +188,7 @@ def pipeline(count: int) -> type[Space]:
     """Nodes are plain Python values, joined by assignment; ``composite`` names them."""
     stages = [Stage(width_in=4), *(Stage() for _ in range(1, count))]
     for previous, current in zip(stages, stages[1:]):
-        current.width_in = accepted(previous.width_out)
+        current.width_in = previous.width_out
     nodes = {f"s{index}": stage for index, stage in enumerate(stages)}
     return composite(f"Pipeline{count}", {**nodes, "widths": Members(WIDTH)})
 
@@ -303,7 +302,7 @@ class Accumulator(Space):
     width: int = Param()
     total: int = Param()
     adder = Adder(inp=width)  # back is supplied by the loop edge below
-    register = Register(width=total, d=accepted(adder.out))
+    register = Register(width=total, d=adder.out)
     adder.back = register.q
 
 
@@ -317,7 +316,7 @@ class Echo(Space):
 
 def test_a_cyclic_graph_evaluates_when_its_value_flow_is_anchored() -> None:
     point = design_space(Accumulator(width=4, total=12))
-    assert point.adder.out() == 13
+    assert point.adder.out == 13
     assert point.register.inspect(Register.fits).verdict is True
     wide = design_space(Accumulator(width=30, total=12))  # 31 does not fit twice 12
     assert isinstance(wide.register.inspect(Register.fits).result, Rejected)
@@ -327,11 +326,11 @@ def test_an_unanchored_value_cycle_fails_with_its_path() -> None:
     class Unanchored(Space):
         width: int = Param()
         adder = Adder(inp=width)
-        echo = Echo(d=accepted(adder.out))
-        adder.back = accepted(echo.q)
+        echo = Echo(d=adder.out)
+        adder.back = echo.q
 
     with pytest.raises(EvaluationError, match="cycle"):
-        design_space(Unanchored(width=4)).adder.out()
+        design_space(Unanchored(width=4)).adder.out
 
 
 # -- 6. closure: a composite is a node like any other ----------------------------------
@@ -342,7 +341,7 @@ class Pair(Space):
 
     width_in: int = Param()
     first = Stage(width_in=width_in)
-    second = Stage(width_in=accepted(first.width_out))
+    second = Stage(width_in=first.width_out)
     width_out = View(second.width_out)
     exports = {WIDTH: width_out}
 
@@ -350,7 +349,7 @@ class Pair(Space):
 class Chain(Space):
     head = Stage(width_in=2)
     body = Pair()
-    body.width_in = accepted(head.width_out)  # an edge, assigned
+    body.width_in = head.width_out  # an edge, assigned
     widths = Members(WIDTH)
 
 
@@ -430,7 +429,7 @@ def test_candidates_are_ordinary_nodes_with_declaration_path_keys() -> None:
     assert keys == {"choice", "choice.tuned.extra"}
     start = design_space(WithChoice(base=4))
     point = start.with_choices(choice="tuned").with_choices({WithChoice.tuned.extra: 1})
-    assert point.physical() == 5
+    assert point.physical == 5
     selected = point.choice
     assert isinstance(selected, Tuned) and selected.extra == 1
     fixed = inspection.candidate(point, WithChoice.choice, "fixed")
@@ -451,7 +450,7 @@ def test_assigning_a_formal_twice_in_one_body_is_a_definition_error() -> None:
         class Twice(Space):
             a = Source(width=3)
             sink = Sink(width=1)
-            sink.width = accepted(a.out)
+            sink.width = a.out
 
     # Both sites are named: the assignment, and the call that supplied the formal.
     message = str(caught.value)

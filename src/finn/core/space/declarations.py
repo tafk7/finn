@@ -44,7 +44,7 @@ from .results import QueryResult
 from .semantics import ValueSemantics, default_semantics, semantics_for
 
 if TYPE_CHECKING:
-    from ._configuration import BoundView, Space
+    from ._configuration import Space
     from .expressions import Expr
 
 T = TypeVar("T")
@@ -516,14 +516,7 @@ class LocatedParam(Param[Located[T]], Generic[T]):
     def __set__(
         self,
         instance: object,
-        value: T
-        | Located[T]
-        | ValueRef[T]
-        | ValueRef[Located[T]]
-        | View[T]
-        | View[Located[T]]
-        | BoundView[T]
-        | BoundView[Located[T]],
+        value: T | Located[T] | ValueRef[T] | ValueRef[Located[T]] | View[T] | View[Located[T]],
     ) -> None:
         from ._nodes import assign
 
@@ -798,19 +791,31 @@ class ConstraintGroup(_MemberOfNode, Declaration):
 
 
 # What a view may require: constraints, groups, other views (their acceptance),
-# references to views, and member families (each member's acceptance).
-Obligation: TypeAlias = (
-    "Constraint | ConstraintGroup | View[Any] | BoundView[Any] | Members[Any] | ValueRef[Any]"
-)
+# references to views or constraints through a node, and member families (each
+# member's acceptance). A reference through a node (``kitchen.cost``) is typed
+# as the value it stands for, so statically an obligation is any object; the
+# linker refuses anything else with a DefinitionError.
+Obligation: TypeAlias = object
 
 
 class View(Declaration, Generic[T]):
-    """One assessment declaration for either a value or an authored function."""
+    """One assessment declaration for either a value or an authored function.
+
+    A view reads as its **accepted** value, like every member typed as its
+    value: on a configuration ``point.total`` is the accepted value (a view
+    that is not accepted raises ``ValueUnavailableError`` carrying its result,
+    and inside a method the read blocks like any other); on a node declaration
+    ``kitchen.cost`` is a reference to that accepted value, typed ``T``, which
+    supplies a formal, feeds ``Present`` or joins ``requires=`` (where it
+    contributes only its acceptance). Class access, ``House.total``, is the
+    declaration itself: pass it to ``point.inspect`` for the assessment and to
+    ``point.query`` for the accepted result.
+    """
 
     @overload
     def __init__(
         self,
-        source: ValueRef[T] | View[T] | BoundView[T],
+        source: ValueRef[T] | View[T],
         *,
         requires: Sequence[Obligation] = (),
         when: Guard = None,
@@ -860,19 +865,17 @@ class View(Declaration, Generic[T]):
     def __get__(self, instance: None, owner: type[object] | None = None) -> Self: ...
 
     @overload
-    def __get__(self, instance: Space, owner: type[object] | None = None) -> BoundView[T]: ...
+    def __get__(self, instance: Space, owner: type[object] | None = None) -> T: ...
 
-    def __get__(
-        self, instance: Space | None, owner: type[object] | None = None
-    ) -> Self | BoundView[T]:
+    def __get__(self, instance: Space | None, owner: type[object] | None = None) -> Self | T:
         if instance is None:
             return self
         path = declared_path(instance)
         if path is not None:
-            return cast("BoundView[T]", MemberRef(path, self))
-        from ._configuration import BoundView
+            return cast(T, MemberRef(path, self))
+        from .occurrence import read_value
 
-        return BoundView(instance, self)
+        return read_value(instance, self)
 
 
 class _ViewDecorator:
@@ -1221,19 +1224,6 @@ class CaseRef(ValueDecl[str]):
         self.semantics = _STRING
 
 
-def accepted(view: View[T] | BoundView[T]) -> T:
-    """Supply a formal with a view's accepted value: ``stage.width_in = accepted(prev.out)``.
-
-    A view is an assessment, typed ``View[T]`` in its class body and
-    ``BoundView[T]`` through a node, so it does not type as the ``T`` a formal
-    takes. At runtime this returns the reference unchanged; the formal reads
-    the view's accepted result, exactly as it would without the call.
-    """
-    if not isinstance(view, (View, MemberRef)):
-        raise DefinitionError("accepted() takes a view or a reference to one")
-    return cast(T, view)
-
-
 def selected(decision: object) -> str:
     """The selected key of a Decision over nodes, as a read-only value.
 
@@ -1257,7 +1247,7 @@ class Present(ValueDecl[T], Generic[T]):
     @overload
     def __new__(  # type: ignore[misc]
         cls,
-        *sources: ValueRef[T] | View[T] | BoundView[T],
+        *sources: ValueRef[T] | View[T],
         semantics: ValueSemantics[T] | None = None,
     ) -> T: ...
 
@@ -1324,7 +1314,6 @@ __all__ = [
     "UNSUPPLIED",
     "Users",
     "ValueDecl",
-    "accepted",
     "ValueRef",
     "View",
     "ViewKey",

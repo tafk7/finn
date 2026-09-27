@@ -198,8 +198,8 @@ class ThresholdingAxiKernel(Kernel):
     def build_requirements(self) -> ModuleBuildRequirements | Rejected:
         table = self.thresholds
         pe = self.pe
-        a = self.input_encoding.encoding().dtype
-        t = self.threshold_encoding.encoding().dtype
+        a = self.input_encoding.encoding.dtype
+        t = self.threshold_encoding.encoding.dtype
         result = self.result_dtype
         bias = self.bias
         axilite = self.use_axilite

@@ -148,7 +148,7 @@ class ReplayBuffer(Kernel):
     @view(semantics=PORTS_SEMANTICS)
     def ports(self) -> Ports:
         return Ports.of(
-            input_stream=consumes(self.input_port()), output_stream=produces(self.output_port())
+            input_stream=consumes(self.input_port), output_stream=produces(self.output_port)
         )
 
     @view(semantics=default_semantics(ModuleBuildRequirements))

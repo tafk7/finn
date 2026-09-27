@@ -53,17 +53,17 @@ def test_fifo_configure_replace_and_inspect_is_immutable() -> None:
     model = inspection.model(Fifo)
     assert inspection.model(base) is model
     assert base.family == "fifo"
-    assert isinstance(base.physical.inspect().accepted_result, Unresolved)
+    assert isinstance(base.inspect(Fifo.physical).accepted_result, Unresolved)
     state = base.field(Fifo.ram_style).state
     assert isinstance(state, Available)
     assert state.value.status == "unassigned"
     assert isinstance(base.query(Fifo.ram_style), Unresolved)
     assert base.field(Fifo.ram_style).candidates() == Available(("auto", "block", "shift"))
     chosen = base.with_choices(ram_style="block")
-    assert chosen.physical() == FifoShape(13, 8, "block")
-    assert chosen.inspect(Fifo.physical) == chosen.physical.inspect()
-    assert chosen.view(Fifo.physical)() == FifoShape(13, 8, "block")
-    assert chosen.physical.query() == Available(FifoShape(13, 8, "block"))
+    assert chosen.physical == FifoShape(13, 8, "block")
+    assert chosen.inspect(Fifo.physical).accepted_result == chosen.query(Fifo.physical)
+    assert chosen.field(Fifo.physical).get() == FifoShape(13, 8, "block")
+    assert chosen.query(Fifo.physical) == Available(FifoShape(13, 8, "block"))
     assert chosen.field(Fifo.ram_style).get() == "block"
     assert chosen.field(Fifo.ram_style).query() == Available("block")
     assert isinstance(base.query(Fifo.ram_style), Unresolved)
@@ -71,15 +71,15 @@ def test_fifo_configure_replace_and_inspect_is_immutable() -> None:
     assert chosen.with_choices(ram_style="shift").ram_style == "shift"
     other = design_space(Fifo(word_bits=7, depth=4)).with_choices(ram_style="shift")
     assert inspection.model(other) is model
-    assert other.physical() == FifoShape(7, 4, "shift")
+    assert other.physical == FifoShape(7, 4, "shift")
 
 
 def test_final_constraint_refusal_remains_visible_while_output_unresolved() -> None:
     base = design_space(Fifo(word_bits=0, depth=8))
-    assessment = base.physical.inspect()
+    assessment = base.inspect(Fifo.physical)
     assert isinstance(assessment.accepted_result, Unresolved)
     assert assessment.constraints.refused == ("supported",)
-    ready = base.with_choices(ram_style="auto").physical.inspect()
+    ready = base.with_choices(ram_style="auto").inspect(Fifo.physical)
     assert isinstance(ready.accepted_result, Rejected)
 
 
@@ -131,7 +131,7 @@ def test_binding_and_callback_values_are_snapshots_without_requiring_a_codec() -
     assert base.payload == [1, 2]
     base.payload.append(4)
     assert base.payload == [1, 2]
-    assert base.physical() == 3
+    assert base.physical == 3
     assert calls == [2]
     other = design_space(Mutable(payload=[8]))
     assert inspection.model(other) is inspection.model(base)
@@ -173,7 +173,7 @@ def test_concurrent_reads_and_successors_are_deterministic() -> None:
     base = design_space(Fifo(word_bits=13, depth=8))
 
     def run(style: str) -> QueryResult[FifoShape]:
-        return base.with_choices(ram_style=style).physical.inspect().accepted_result
+        return base.with_choices(ram_style=style).inspect(Fifo.physical).accepted_result
 
     styles = ["auto", "block", "shift"] * 10
     with ThreadPoolExecutor(max_workers=4) as pool:
@@ -196,7 +196,7 @@ def test_generic_container_outputs_infer_nominal_snapshot_semantics() -> None:
 
     point = design_space(Collections(count=3))
     assert point.indices == (0, 1, 2)
-    first = point.materialized()
+    first = point.materialized
     first.append(99)
-    assert point.materialized() == [0, 1, 2]
-    assert point.materialized.query() == Available([0, 1, 2])
+    assert point.materialized == [0, 1, 2]
+    assert point.query(Collections.materialized) == Available([0, 1, 2])

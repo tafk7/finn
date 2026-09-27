@@ -15,7 +15,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from finn.core.space import (
-    accepted,
     Param,
     Rejected,
     View,
@@ -164,7 +163,7 @@ def axi_stream(
         lanes=lanes,
         last=last,
         dtype=element.dtype,
-        element=accepted(element.encoding),
+        element=element.encoding,
     )
 
 

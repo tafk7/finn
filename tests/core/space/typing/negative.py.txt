@@ -44,6 +44,9 @@ class Parent(Space):
     not_on_every_candidate = Child(width=heating.cop)  # E
     joined: Boiler | HeatPump = Decision(values={"boiler": Boiler(kw=1), "heat_pump": HeatPump(kw=2)})
     joined_member = Child(width=joined.kw)  # not an error: the annotation types the choice
+    from_view = Child(width=child.physical)  # not an error: a view reference is its value
+    view_called = Child(width=child.physical())  # E
+    view_wrong_type = Child(label=child.physical)  # E
 
     @derived
     def invalid_child_read(self) -> str:
@@ -53,6 +56,12 @@ class Parent(Space):
     def invalid_scalar_read(self) -> str:
         return self.child.lanes  # E
 
+    @view
+    def own(self) -> int:
+        return 1
+
+    own_supplied = Child(width=own)  # E
+
 def bad(point: Child, parent: Parent) -> None:
     wrong_value: str = point.width  # E
     wrong_descriptor: str = Child.width  # E
@@ -60,9 +69,13 @@ def bad(point: Child, parent: Parent) -> None:
     point.field(Child.lanes).change("two")  # E
     point.field(Child.width).change(2)  # not an error: a Param key types as a Decision's
     point.physical(3)  # E
-    wrong_assessment: int = point.physical.inspect()  # E
-    wrong_output: str = point.physical()  # E
-    point.physical.assess()  # E
+    point.physical()  # E
+    wrong_assessment: int = point.inspect(Child.physical)  # E
+    wrong_view_query: QueryResult[str] = point.query(Child.physical)  # E
+    wrong_output: str = point.physical  # E
+    point.physical.inspect()  # E
+    point.view(Child.physical)  # E
+    point.inspect(Child.width)  # not an error: a key typed as its value (refused at runtime)
     point.try_with_choices('not a change')  # E
     point.present(3)  # E
     wrong_query: QueryResult[int] = parent.producer.query(Producer.output)  # E

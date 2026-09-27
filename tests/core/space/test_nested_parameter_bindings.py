@@ -85,7 +85,7 @@ def test_outer_params_and_decisions_supply_interface_slots_without_new_choices()
     assert base.kernel.port.dtype == "INT8"
     assert isinstance(base.kernel.port.query(Port.lanes), Unresolved)
     chosen = base.with_choices(lanes=2)
-    assert chosen.kernel.port.physical() == ("INT8", 2)
+    assert chosen.kernel.port.physical == ("INT8", 2)
     assert [item.key for item in inspection.decisions(chosen)] == ["lanes"]
     assert len(selections.capture(chosen).entries) == 1
     # A formal supplied by an assignment is not a choice of its own.
@@ -141,7 +141,7 @@ def test_repeated_placements_keep_fresh_choices_independent() -> None:
 
     base = design_space(Pair())
     chosen = base.with_choices({Pair.first.port.lanes: 2})
-    assert chosen.first.port.physical() == ("INT4", 2)
+    assert chosen.first.port.physical == ("INT4", 2)
     assert isinstance(chosen.second.port.query(Port.lanes), Unresolved)
     assert isinstance(base.first.port.query(Port.lanes), Unresolved)
     keys = [item.key for item in inspection.decisions(base)]
@@ -174,13 +174,13 @@ def test_a_named_decision_shared_by_two_nodes_is_one_decision_of_their_common_sc
     base = design_space(Shared())
     # Either use edits the one decision; it applies whenever its owner does.
     point = base.with_choices({Shared.second.port.lanes: 4}, use_first=False)
-    assert point.second.port.physical() == ("INT8", 4)
+    assert point.second.port.physical == ("INT8", 4)
     assert isinstance(point.first.port.query(Port.lanes), Inapplicable)
     assert point.query(info.reference) == Available(4)
     both = point.with_choices({Shared.first.port.lanes: 2}, use_first=True)
-    assert both.first.port.physical() == ("INT4", 2)
-    assert both.second.port.physical() == ("INT8", 2)
-    assert both.with_choices(lanes=1).second.port.physical() == ("INT8", 1)
+    assert both.first.port.physical == ("INT4", 2)
+    assert both.second.port.physical == ("INT8", 2)
+    assert both.with_choices(lanes=1).second.port.physical == ("INT8", 1)
     assert len(selections.capture(both).entries) == 2
 
 
@@ -212,7 +212,7 @@ def test_unbound_exposure_is_a_formal_declared_on_the_enclosing_family() -> None
     assert omitted.kernel.port.dtype == "INT8"
     assert isinstance(omitted.kernel.port.query(Port.lanes), Unresolved)
     supplied = design_space(Parent(lanes=3))
-    assert supplied.kernel.port.physical() == ("INT8", 3)
+    assert supplied.kernel.port.physical == ("INT8", 3)
 
 
 def test_reexposed_nested_slot_can_be_bound_again_by_an_outer_placement() -> None:
@@ -227,7 +227,7 @@ def test_reexposed_nested_slot_can_be_bound_again_by_an_outer_placement() -> Non
 
     point = design_space(Outer())
     chosen = point.with_choices(lanes=4)
-    assert chosen.middle.kernel.port.physical() == ("INT3", 4)
+    assert chosen.middle.kernel.port.physical == ("INT3", 4)
     with pytest.raises(DefinitionError, match=r"kernel\.port\.dtype is not supplied"):
         design_space(Middle())
 
@@ -241,7 +241,7 @@ def test_reexposed_nested_slot_can_be_bound_again_by_an_outer_placement() -> Non
     class Top(Space):
         named = Named(dtype="INT5")
 
-    assert design_space(Top()).named.kernel.port.physical() == ("INT5", 2)
+    assert design_space(Top()).named.kernel.port.physical == ("INT5", 2)
 
 
 @pytest.mark.parametrize("kind", ["literal", "alias", "decision"])
@@ -266,7 +266,7 @@ def test_an_outer_assignment_overrides_an_internal_binding(kind: str) -> None:
     inner = [item.key for item in inspection.decisions(Internal)]
     assert inner == (["port.lanes"] if kind == "decision" else [])
     point = design_space(Parent())
-    assert point.child.port.physical() == ("INT8", 4)
+    assert point.child.port.physical == ("INT8", 4)
     assert [item.key for item in inspection.decisions(point)] == []
     provenance = inspection.provenance(point, Parent.child.port.lanes)
     assert provenance is not None
@@ -283,8 +283,8 @@ def test_an_outer_assignment_beside_an_inner_one_wins() -> None:
         middle = Middle()
         middle.kernel.port.dtype = "INT4"
 
-    assert design_space(Middle()).kernel.port.physical() == ("INT8", 2)
-    assert design_space(Outer()).middle.kernel.port.physical() == ("INT4", 2)
+    assert design_space(Middle()).kernel.port.physical == ("INT8", 2)
+    assert design_space(Outer()).middle.kernel.port.physical == ("INT4", 2)
 
 
 def test_assignment_targets_are_checked() -> None:
@@ -346,7 +346,7 @@ def test_configure_freezes_its_root() -> None:
     root.count = 3
     root.port.dtype = "INT8"
     root.port.lanes = 2
-    assert design_space(root).port.physical() == ("INT8", 2)
+    assert design_space(root).port.physical == ("INT8", 2)
     with pytest.raises(DefinitionError, match="is frozen"):
         root.count = 4
 
@@ -364,7 +364,7 @@ def test_a_graph_built_as_data_binds_nested_formals_and_keeps_their_types() -> N
     point = design_space(family())
     placed = getattr(point, "child")
     assert isinstance(placed, Reusable)
-    assert placed.port.physical() == ("INT8", 2)
+    assert placed.port.physical == ("INT8", 2)
     with pytest.raises(DefinitionError, match=r"child\.port\.dtype is not supplied"):
         design_space(composite("Unbound", {"child": Reusable(count=1)})())
 

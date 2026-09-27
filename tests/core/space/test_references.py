@@ -100,7 +100,7 @@ def test_several_nodes_reference_one_node_which_sees_them_as_users() -> None:
         Located("research", "budget", 30),
         Located("lab", "budget", 10),
     )
-    assert point.shared.remaining() == 40
+    assert point.shared.remaining == 40
     # Inside a method, and from the driver, the input reads as the referenced node.
     assert isinstance(point.sales.budget, Budget) and point.sales.budget.rate == 10
     # Place-once holds: one budget scope, referenced three times; none is copied.
@@ -114,24 +114,24 @@ def test_a_guarded_user_drops_out_of_users() -> None:
     )
     assert [claim.node for claim in closed.shared.claims] == ["sales", "research"]
     # As an obligation each user counts separately; the absent one is inapplicable.
-    results = closed.shared.remaining.inspect().constraints.results
+    results = closed.shared.inspect(Budget.remaining).constraints.results
     assert isinstance(results["lab.spend"], Inapplicable)
     assert isinstance(results["sales.spend"], Available)
-    assert closed.shared.remaining() == 80
+    assert closed.shared.remaining == 80
 
 
 def test_the_shared_node_refuses_with_located_names() -> None:
     point = staffed(
         design_space(Company(limit=40)).with_choices(open_lab=False), sales=3, research=2
     )
-    refused = point.shared.remaining.query()
+    refused = point.shared.query(Budget.remaining)
     assert codes(refused) == {"over-budget"}
     assert isinstance(refused, Rejected)
     assert refused.findings[0].owner == "shared.covered"
     assert refused.findings[0].message == "sales.budget=30, research.budget=20 exceed 40"
     # A user still undecided leaves the relation unresolved, not refused.
     pending = design_space(Company(limit=40)).with_choices(open_lab=False)
-    assert isinstance(pending.shared.remaining.query(), Unresolved)
+    assert isinstance(pending.shared.query(Budget.remaining), Unresolved)
 
 
 class Outsourced(Space):
@@ -179,9 +179,9 @@ def test_referencing_an_absent_node_reads_inapplicable() -> None:
         team = Department(budget=budget)
 
     point = design_space(Maybe()).with_choices({Maybe.team.staff: 2})
-    assert point.with_choices(funded=True).team.spend() == 4
+    assert point.with_choices(funded=True).team.spend == 4
     unfunded = point.with_choices(funded=False)
-    assert isinstance(unfunded.team.spend.query(), Inapplicable)
+    assert isinstance(unfunded.team.query(Department.spend), Inapplicable)
     assert isinstance(unfunded.team.query(Department.budget), Inapplicable)
 
 
@@ -191,7 +191,7 @@ def test_a_fresh_node_supplied_to_a_reference_input_is_placed_there() -> None:
 
     point = design_space(Solo()).with_choices({Solo.team.staff: 3})
     # Placed at the input: its keys live below the node that placed it.
-    assert point.team.budget.remaining() == 2
+    assert point.team.budget.remaining == 2
     assert point.team.budget.claims == (Located(None, "budget", 3),)
 
 
@@ -202,7 +202,7 @@ def test_a_composite_forwards_a_reference_input_to_its_children() -> None:
 
         @view
         def spend(self) -> int:
-            return self.team.spend()
+            return self.team.spend
 
         exports = {SPEND: spend}
 
@@ -285,7 +285,7 @@ def test_a_reference_input_queries_as_the_referenced_node_and_has_a_typed_presen
     unsupplied = design_space(Optional())
     assert isinstance(unsupplied.query(Optional.budget), Unresolved)
     assert unsupplied.present(Optional.budget) is False
-    assert unsupplied.funded() is False
+    assert unsupplied.funded is False
 
 
 def test_a_read_through_a_reference_input_is_typed_in_the_class_body() -> None:

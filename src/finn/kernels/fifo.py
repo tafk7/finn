@@ -110,8 +110,8 @@ class FifoKernel(Kernel):
     def build_requirements(self) -> ModuleBuildRequirements | Rejected:
         bits = self.word_bits
         depth = self.depth
-        ram = self.storage().requested_style
-        streams = self.interfaces()
+        ram = self.storage.requested_style
+        streams = self.interfaces
         parameters = (("DATA_WIDTH", bits), ("DEPTH", depth), ("RAM_STYLE", f'"{ram}"'))
         abi = ModuleABIRequirements(
             FixedModuleName("fifo"),

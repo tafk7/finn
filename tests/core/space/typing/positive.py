@@ -7,8 +7,11 @@ Declarations are typed as the values they stand for (option A): a node call
 ``int``. Formals and Decisions are annotated with their value type
 (``area: int = Param()``), so a class-level member is typed as its value too,
 and so is a read through a reference input in the class body
-(``output.spec.payload_bits``). Inside methods ``self`` is a configuration and
-every read is exact.
+(``output.spec.payload_bits``). A view is no exception: ``kitchen.cost`` in a
+class body and ``point.total`` on a configuration are typed as the view's
+value; class access (``House.total``) is the view declaration, which
+``point.inspect`` and ``point.query`` take. Inside methods ``self`` is a
+configuration and every read is exact.
 """
 
 from __future__ import annotations
@@ -20,11 +23,12 @@ from typing_extensions import assert_type
 from finn.core.space import (
     Available,
     BoundDecision,
-    BoundView,
+    BoundValue,
     Change,
     CodecBinding,
     ConfigurationResult,
     Const,
+    ConstraintAssessment,
     Decision,
     DecisionHandle,
     Located,
@@ -41,7 +45,6 @@ from finn.core.space import (
     View,
     ViewAssessment,
     ViewKey,
-    accepted,
     codec_for,
     constraint,
     derived,
@@ -118,7 +121,7 @@ class House(Space):
     # References in a class body are typed as the values they stand for.
     assert_type(kitchen, Room)
     assert_type(kitchen.finish, int)
-    assert_type(kitchen.cost, BoundView[int])
+    assert_type(kitchen.cost, int)  # a view reference: typed as its accepted value
     assert_type(heating, Boiler | HeatPump)
     assert_type(heating.kw, int)
     assert_type(maybe, Boiler | None)
@@ -128,7 +131,7 @@ class House(Space):
     def total(self) -> int:
         assert_type(self.kitchen, Room)
         assert_type(self.kitchen.finish, int)
-        assert_type(self.kitchen.cost(), int)
+        assert_type(self.kitchen.cost, int)
         assert_type(self.heating, Boiler | HeatPump)
         assert_type(self.heating.kw, int)
         assert_type(self.maybe, Boiler | None)
@@ -251,16 +254,14 @@ def check(point: Fifo, house: House, eltwise: Eltwise) -> None:
     assert_type(point.ram_style, str)
     assert_type(point.minimum_depth, int)
     assert_type(point.capacity, int)
-    assert_type(point.physical, BoundView[int])
-    assert_type(point.physical(), int)
-    assert_type(point.physical.inspect(), ViewAssessment[int])
-    assert_type(point.physical.query(), QueryResult[int])
-    assert_type(point.view(Fifo.physical), BoundView[int])
+    assert_type(point.physical, int)  # a view reads as its accepted value
+    assert_type(point.inspect(Fifo.physical), ViewAssessment[int])
+    assert_type(point.query(Fifo.physical), QueryResult[int])
     # A key typed as its value binds as a decision accessor (a Param or a
     # derived value cannot be told from a Decision statically).
     assert_type(point.field(Fifo.capacity), BoundDecision[int])
     assert_type(point.field(Fifo.ram_style), BoundDecision[str])
-    assert_type(point.field(Fifo.physical), BoundView[int])
+    assert_type(point.field(Fifo.physical), BoundValue[int])  # a view binds as a value
     assert_type(point.field(Fifo.ram_style).change("block"), Change[str])
     assert_type(point.inspect(Fifo.physical), ViewAssessment[int])
     assert_type(point.query(Fifo.capacity), QueryResult[int])
@@ -272,7 +273,7 @@ def check(point: Fifo, house: House, eltwise: Eltwise) -> None:
         ConfigurationResult[Fifo],
     )
     assert_type(eltwise.result_dtype, DType)
-    assert_type(eltwise.physical(), int)
+    assert_type(eltwise.physical, int)
     assert_type(house.kitchen.finish, int)
     assert_type(house.heating, Boiler | HeatPump)
     assert_type(house.maybe, Boiler | None)
@@ -318,7 +319,7 @@ class Board(Space):
     spare.buffer.depth = Decision(values=(2, 4))  # narrow it: same key
     spare.buffer = Buffer(word_bits=16)  # replace a child node (same family)
     lobby = Room(area=1)
-    stages = Room(area=accepted(lobby.cost))  # a view's accepted value supplies a formal
+    stages = Room(area=lobby.cost)  # a view's accepted value supplies a formal
 
 
 def keys(board: Board, house: House, codec: ValueCodec[int]) -> None:
@@ -335,3 +336,51 @@ def keys(board: Board, house: House, codec: ValueCodec[int]) -> None:
     assert_type(inspection.provenance(board, Board.kernel.buffer.depth), Provenance | None)
     assert_type(codec_for(Room.finish, codec), CodecBinding)
     assert_type(house.with_choices({House.kitchen.finish: 2}), House)
+
+
+# -- iteration 4: views read as values -------------------------------------------------
+
+
+class Wing(Space):
+    kitchen = Room(area=12)
+    dining = Room(area=16)
+    hall = Room()
+    hall.area = kitchen.cost  # a view reference supplies a formal, typed int
+    study = Room(area=dining.cost)
+    either = Room(area=Present(kitchen.cost, dining.cost))
+    assert_type(kitchen.cost, int)
+    assert_type(Present(kitchen.cost, dining.cost), int)
+
+    @view(requires=(kitchen.cost, dining.cost))  # view references as obligations
+    def total(self) -> int:
+        assert_type(self.kitchen.cost, int)  # inside a method: the accepted value
+        assert_type(self.hall.cost, int)
+        return self.kitchen.cost + self.dining.cost
+
+    checked = View(kitchen.cost, requires=(dining.cost, total))
+    assert_type(checked, View[int])
+
+
+def views(point: Wing, house: House, fifo: Fifo) -> None:
+    # On a configuration a view reads as its accepted value, like any member.
+    assert_type(point.total, int)
+    assert_type(point.checked, int)
+    assert_type(point.kitchen.cost, int)
+    assert_type(house.total, int)
+    # Class access is the view declaration; assessment and query are explicit calls.
+    assert_type(Wing.total, View[int])
+    assert_type(point.inspect(Wing.total), ViewAssessment[int])
+    assert_type(point.query(Wing.total), QueryResult[int])
+    assert_type(house.inspect(House.total), ViewAssessment[int])
+    assert_type(house.query(House.total), QueryResult[int])
+    assert_type(point.inspect(Wing.checked).accepted_result, QueryResult[int])
+    # A view of a child: on the child's configuration (precise), or through a path.
+    assert_type(point.kitchen.inspect(Room.cost), ViewAssessment[int])
+    assert_type(point.kitchen.query(Room.cost), QueryResult[int])
+    assert_type(point.inspect(Wing.kitchen.cost), ViewAssessment[int])
+    assert_type(point.query(Wing.kitchen.cost), QueryResult[int])
+    # A constraint is still assessed by the same call.
+    assert_type(fifo.inspect(Fifo.supported), ConstraintAssessment)
+    # A view binds as a value accessor of its accepted value.
+    assert_type(point.field(Wing.total), BoundValue[int])
+    assert_type(point.field(Wing.total).get(), int)

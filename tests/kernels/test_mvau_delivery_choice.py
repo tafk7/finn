@@ -87,7 +87,7 @@ def configured(point, case, *, style=None, pe=2, simd=2):
 
 
 def delivery(point):
-    names = {item.instance_id for item in point.structure().structure.instances}
+    names = {item.instance_id for item in point.structure.structure.instances}
     return WeightDelivery.CYCLIC if CYCLIC_INSTANCE in names else WeightDelivery.EXTERNAL
 
 
@@ -106,8 +106,8 @@ def test_families_share_typed_exports_but_keep_their_own_ports_and_components():
         (external, {"in0_V", "in1_V", "out0_V"}, ["u_replay", "u_compute"]),
         (cyclic, {"in0_V", "out0_V"}, ["u_replay", "u_compute", CYCLIC_INSTANCE]),
     ):
-        built = point.structure()
-        requirements = point.build_requirements()
+        built = point.structure
+        requirements = point.build_requirements
         assert isinstance(requirements, ModuleBuildRequirements)
         assert requirements == built.requirements
         assert {p.name for p in built.structure.top_abi.ports if isinstance(p, Bus)} == ports
@@ -124,10 +124,10 @@ def test_families_share_typed_exports_but_keep_their_own_ports_and_components():
         "implementation.cyclic",
     )
     assert [item.node for item in external.modules] == ["replay", "compute"]
-    rom = dict(cyclic.structure().structure.instances[2].requirements.parameters)
+    rom = dict(cyclic.structure.structure.instances[2].requirements.parameters)
     assert rom["ROM_STYLE"] == '"block"'
-    assert external.build_requirements().implementation_id != (
-        cyclic.build_requirements().implementation_id
+    assert external.build_requirements.implementation_id != (
+        cyclic.build_requirements.implementation_id
     )
 
 
@@ -203,12 +203,12 @@ def test_case_local_choices_are_owned_by_their_family():
 
 def test_missing_cyclic_weights_leave_only_the_selected_family_unresolved():
     external = configured(base(), "external")
-    assert isinstance(external.structure.query(), Available)
+    assert isinstance(external.query(MVAU.structure), Available)
     cyclic = configured(base(), "cyclic", style="distributed")
     family = cyclic.implementation
     assert family is not None and family.rom_style == "distributed"
     assert isinstance(family.query(IMAGE), Unresolved)
-    assessment = cyclic.structure.inspect()
+    assessment = cyclic.inspect(MVAU.structure)
     assert isinstance(assessment.accepted_result, Unresolved)
     # Only the selected family's module waits; every stream is already accepted.
     waiting = {
@@ -218,7 +218,7 @@ def test_missing_cyclic_weights_leave_only_the_selected_family_unresolved():
     }
     assert waiting == {"implementation.cyclic.build_requirements"}
     # The compute product and folding do not wait for the family's optional fact.
-    assert isinstance(cyclic.compute.build_requirements.query(), Available)
+    assert isinstance(cyclic.compute.query(DotpAxiKernel.build_requirements), Available)
     evidence = inspection.explain(cyclic, MVAU.structure)
     omitted = [node for node in evidence.nodes if node.input_presence == "omitted"]
     assert [node.declaration.key for node in omitted] == ["weights"]
@@ -226,24 +226,26 @@ def test_missing_cyclic_weights_leave_only_the_selected_family_unresolved():
 
 def test_cyclic_family_needs_its_own_rom_choice_and_refuses_bad_weights():
     uncommitted = configured(base(weights=WEIGHTS), "cyclic")
-    assert isinstance(uncommitted.structure.query(), Unresolved)
+    assert isinstance(uncommitted.query(MVAU.structure), Unresolved)
     bad = configured(base(weights=((4,) * 4,) * 4), "cyclic", style="auto")
-    refused = bad.structure.query()
+    refused = bad.query(MVAU.structure)
     assert isinstance(refused, Rejected)
     assert keys(refused) == {"cyclic-values"}
     assert owners(refused) == {"implementation.cyclic.image"}
     # A shape error is refused the same way, and never demanded by external delivery.
-    wrong = configured(base(weights=((0,),)), "cyclic", style="auto").structure.query()
+    wrong = configured(base(weights=((0,),)), "cyclic", style="auto").query(MVAU.structure)
     assert isinstance(wrong, Rejected) and "shape" in wrong.findings[0].message
-    assert isinstance(configured(base(weights=((0,),)), "external").structure.query(), Available)
+    assert isinstance(
+        configured(base(weights=((0,),)), "external").query(MVAU.structure), Available
+    )
 
 
 def test_known_refusals_remain_visible_while_the_family_is_unselected():
     point = base(weights=WEIGHTS).with_choices(pe=4, simd=2)
     point = point.compute.with_choices(compute_pumping=True).root
-    assessment = point.structure.inspect()
+    assessment = point.inspect(MVAU.structure)
     assert isinstance(assessment.accepted_result, Unresolved)
-    compute = point.compute.build_requirements.inspect()
+    compute = point.compute.inspect(DotpAxiKernel.build_requirements)
     assert isinstance(compute.accepted_result, Available)
     folding = base(weights=WEIGHTS).with_choices(simd=4)
     # Folding refusals settle before a PE, family or ROM style is chosen.
@@ -303,7 +305,7 @@ def test_selector_and_case_choices_round_trip_through_an_empty_root():
     fresh = base(weights=WEIGHTS)
     replayed = selections.restore(fresh, decoded)
     assert replayed.accepted
-    assert replayed.instance.structure() == point.structure()
+    assert replayed.instance.structure == point.structure
     # Replay under different supplied facts: the same choices, a new image.
     other = selections.restore(base(weights=tuple(row[::-1] for row in WEIGHTS)), decoded)
     assert other.accepted
@@ -311,7 +313,7 @@ def test_selector_and_case_choices_round_trip_through_an_empty_root():
     # Without the family's optional fact the choices replay but stay unresolved.
     unresolved = selections.restore(base(), decoded)
     assert unresolved.accepted
-    assert isinstance(unresolved.instance.structure.query(), Unresolved)
+    assert isinstance(unresolved.instance.query(MVAU.structure), Unresolved)
     # Facts that invalidate a saved folding refuse replay atomically.
     changed = base(weights=WEIGHTS, matrix_height=5)
     refused = selections.restore(changed, decoded)
@@ -347,7 +349,7 @@ def test_switching_families_is_atomic_and_requires_clearing_stale_case_choices()
         switched.field(rom_style(switched)).change("distributed"),
     )
     assert delivery(back) is WeightDelivery.CYCLIC
-    rom = dict(back.structure().structure.instances[2].requirements.parameters)
+    rom = dict(back.structure.structure.instances[2].requirements.parameters)
     assert rom["ROM_STYLE"] == '"distributed"'
     # A case-local choice for an unselected family is refused, not stored.
     early = switched.try_with_choices(switched.field(rom_style(switched)).change("block"))
@@ -367,7 +369,7 @@ def test_public_adapter_matches_the_space_path(delivery):
         delivery.value,
         style="auto" if cyclic else None,
     )
-    composed = point.structure()
+    composed = point.structure
     assert (adapted.structure, adapted.requirements) == (composed.structure, composed.requirements)
 
 
@@ -428,7 +430,7 @@ def test_a_buffered_stream_places_a_fifo_between_its_producer_and_consumer():
             base(weights=weights) if weights else base(), case, style=("auto" if weights else None)
         )
         fifo = buffered(point, depth=32)
-        built = fifo.structure()
+        built = fifo.structure
         instances = [item.instance_id for item in built.structure.instances]
         assert instances[-1] == "u_weight_stream_fifo"
         destinations = {
@@ -450,13 +452,13 @@ def test_fifo_depth_is_owned_by_the_stream_and_only_demanded_when_selected():
     assert records[FIFO_DEPTH].scope == "weight_stream.transport.fifo.buffer"
     assert isinstance(point.field(handle(point, FIFO_DEPTH)).query(), Inapplicable)
     undecided = buffered(point)
-    assert isinstance(undecided.structure.query(), Unresolved)
+    assert isinstance(undecided.query(MVAU.structure), Unresolved)
     with pytest.raises(ConfigurationError):
         buffered(point, depth=1)
     deep = buffered(point, depth=64)
     saved = selections.capture(deep)
     assert FIFO_DEPTH in saved.keys
-    assert selections.restore(base(), saved).instance.structure() == deep.structure()
+    assert selections.restore(base(), saved).instance.structure == deep.structure
     # Removing the FIFO requires clearing its stale depth and memory style atomically.
     stale = deep.try_with_choices(deep.field(transport(deep)).change("direct"))
     assert not stale.accepted
@@ -465,7 +467,7 @@ def test_fifo_depth_is_owned_by_the_stream_and_only_demanded_when_selected():
         deep.field(handle(deep, FIFO_DEPTH)).clear(),
         deep.field(handle(deep, FIFO_RAM_STYLE)).clear(),
     )
-    assert direct.structure() == point.structure()
+    assert direct.structure == point.structure
 
 
 def test_adapter_places_the_weight_fifo_on_request():

@@ -58,15 +58,15 @@ def test_two_child_placements_have_independent_choices_and_immutable_roots() -> 
     base = design_space(Pair(extent=12))
     first = base.first.with_choices(lanes=3)
     assert isinstance(first, Tile)
-    assert first.physical() == 4
+    assert first.physical == 4
     successor = cast(Pair, first.root)
     assert successor.first.lanes == 3
     assert isinstance(successor.second.query(Tile.lanes), Unresolved)
     assert isinstance(base.first.query(Tile.lanes), Unresolved)
     second = successor.second.with_choices(lanes=4)
     final = cast(Pair, second.root)
-    assert final.first.physical() == 4
-    assert final.second.physical() == 3
+    assert final.first.physical == 4
+    assert final.second.physical == 3
     assert isinstance(successor.second.query(Tile.lanes), Unresolved)
     assert final.query(Pair.first.extent) == Available(12)
 
@@ -93,7 +93,7 @@ def test_false_outer_scope_suppresses_inner_commitments_and_callbacks() -> None:
     assert isinstance(point.child.query(Guarded.lanes), Inapplicable)
     assert isinstance(point.child.field(Guarded.lanes).state, Inapplicable)
     assert isinstance(point.child.query(Guarded.raw), Inapplicable)
-    assert isinstance(point.child.physical.inspect().accepted_result, Inapplicable)
+    assert isinstance(point.child.inspect(Guarded.physical).accepted_result, Inapplicable)
     assert calls == []
     with pytest.raises(ConfigurationError):
         point.child.with_choices(lanes=1)
@@ -138,7 +138,7 @@ def test_selected_view_preserves_direct_refusal_and_skips_other_alternatives() -
     direct = child.inspect(Refused.physical).accepted_result
     assert isinstance(direct, Rejected)
     assert point.query(Root.accepted) == direct
-    assert point.physical.inspect().accepted_result == direct
+    assert point.inspect(Root.physical).accepted_result == direct
     assert point.with_choices(implementation="refused") is point
     point.with_choices(implementation="explodes")
     unselected = inspection.candidate(point, Root.implementation, "explodes")
@@ -236,7 +236,7 @@ def test_function_view_failure_names_its_authored_owner() -> None:
             raise ZeroDivisionError("broken calculation")
 
     with pytest.raises(EvaluationError) as raised:
-        design_space(Broken()).physical()
+        design_space(Broken()).physical
     assert raised.value.owner == "physical"
     assert isinstance(raised.value.__cause__, ZeroDivisionError)
 
@@ -255,7 +255,7 @@ def test_exposed_inputs_local_decisions_and_supplier_aliases_keep_distinct_right
         exposed = Child(width=exposed_width)
 
     base = design_space(Root(exposed_width=9))
-    assert base.exposed.physical() == 9
+    assert base.exposed.physical == 9
     chosen = base.with_choices(supplier=4)
     assert chosen.aliased.width == 4
     with pytest.raises(RequestError):

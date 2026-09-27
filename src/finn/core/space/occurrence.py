@@ -11,7 +11,7 @@ from collections.abc import Mapping
 from typing import TypeVar, cast, overload
 
 from . import _execution, _runtime
-from ._configuration import BoundDecision, BoundValue, BoundView, Space
+from ._configuration import BoundDecision, BoundValue, Space
 from ._linker import guard_implies
 from ._runtime import Snapshot
 from .compiler import Model
@@ -252,15 +252,6 @@ def _read_value(point: Space, reference: ValueRef[T] | View[T]) -> T:
     return cast(T, _read_index(point, index))
 
 
-def bind_view(point: Space, reference: View[T]) -> BoundView[T]:
-    current = state(point)
-    _execution.check_snapshot(current)
-    index = current.model.resolve(point._scope, reference)
-    if current.linked.nodes[index].kind != "view":
-        raise RequestError("view binding requires a View declaration")
-    return BoundView(point, reference)
-
-
 @overload
 def inspect(point: Space, reference: View[T]) -> ViewAssessment[T]: ...
 
@@ -276,9 +267,14 @@ def inspect(
     _execution.driver_only("assessment inspection")
     current = state(point)
     index = current.model.resolve(point._scope, reference)
+    node = current.linked.nodes[index]
+    if node.kind not in {"view", "constraint", "group"}:
+        raise RequestError(
+            f"{node.key} is not a view or a constraint: inspect() assesses those; "
+            "read or query() any other member"
+        )
     entry = _runtime.evaluate(current, index)
-    if entry.assessment is None:
-        raise RequestError("this declaration is not assessable")
+    assert entry.assessment is not None
     return cast(
         ViewAssessment[T] | ConstraintAssessment,
         _runtime.copy_assessment(current, index, entry.assessment),
@@ -305,17 +301,16 @@ def candidates(point: Space, reference: object) -> QueryResult[tuple[object, ...
     return _runtime.candidate_values(current, decision_index(point, reference))
 
 
-def bind_field(
-    point: Space, reference: ValueRef[T] | View[T]
-) -> BoundValue[T] | BoundDecision[T] | BoundView[T]:
+def bind_field(point: Space, reference: ValueRef[T] | View[T]) -> BoundValue[T] | BoundDecision[T]:
+    """A decision accessor for a Decision, a value accessor for anything else read as a value.
+
+    A view binds as a value accessor: ``get()`` is its accepted value and
+    ``query()`` its accepted result, exactly the attribute read and
+    ``point.query``; its assessment is ``point.inspect``.
+    """
     current = state(point)
     _execution.check_snapshot(current)
-    index = current.model.resolve(point._scope, reference)
-    node = current.linked.nodes[index]
-    if isinstance(reference, View):
-        return BoundView(point, reference)
-    if node.kind == "view":
-        return BoundView(point, cast(View[T], reference))
+    current.model.resolve(point._scope, reference)
     try:
         current.model.decision(point._scope, reference)
     except RequestError:

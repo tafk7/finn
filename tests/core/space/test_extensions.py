@@ -23,7 +23,6 @@ import pytest
 
 from finn.core.space import (
     Available,
-    BoundView,
     Const,
     Decision,
     DefinitionError,
@@ -133,9 +132,10 @@ def stream_shape(
     return ADMITTED_STREAM(dtype=dtype, lanes=lanes, maximum_bits=maximum_bits)
 
 
-def stream_of(node: Space) -> BoundView[StreamValue]:
-    """The ``stream`` view composite added: reached by name, not by the base's type."""
-    return cast("BoundView[StreamValue]", getattr(node, "stream"))
+def stream_of(node: Space) -> StreamValue:
+    """A reference to the ``stream`` view composite added: reached by name, not by the
+    base's type. Like every reference through a node it is typed as its value."""
+    return cast(StreamValue, getattr(node, "stream"))
 
 
 def test_stream_shape_places_independent_choices_and_keeps_narrow_fields_available() -> None:

@@ -59,15 +59,18 @@ def test_value_and_function_views_detach_all_public_assessment_payloads() -> Non
     original = Bag([1])
     point = design_space(Mutable(source=original))
     original.values.append(9)
+    # Both view forms read as their accepted value; each read is a detached copy.
+    point.physical.values.append(10)
+    point.computed.values.append(10)
+    assert (point.physical, point.computed) == (Bag([1]), Bag([1]))
     for declaration in (Mutable.physical, Mutable.computed):
-        bound = point.view(declaration)
-        value = bound()
-        value.values.append(10)
-        assert bound() == Bag([1])
-        queried = bound.query()
+        bound = point.field(declaration)
+        bound.get().values.append(10)
+        assert bound.get() == Bag([1])
+        queried = point.query(declaration)
         assert isinstance(queried, Available)
         queried.value.values.append(11)
-        assert bound.query() == Available(Bag([1]))
+        assert point.query(declaration) == Available(Bag([1]))
         assessment = point.inspect(declaration)
         assert isinstance(assessment.output_result, Available)
         assert isinstance(assessment.accepted_result, Available)
@@ -120,7 +123,7 @@ def test_public_snapshot_failure_retains_declaration_role_and_cause() -> None:
         physical = View(source)
 
     point = design_space(Failing(source=Bag([1])))
-    point.physical()
+    _ = point.physical  # a view read: warms the answer
     fail = True
     with pytest.raises(EvaluationError) as answer_error:
         point.query(Failing.source)
@@ -128,7 +131,7 @@ def test_public_snapshot_failure_retains_declaration_role_and_cause() -> None:
     assert answer_error.value.role == "public value snapshot"
     assert isinstance(answer_error.value.__cause__, RuntimeError)
     with pytest.raises(EvaluationError) as assessment_error:
-        point.physical.inspect()
+        point.inspect(Failing.physical)
     assert assessment_error.value.owner == "source"
     assert isinstance(assessment_error.value.__cause__, RuntimeError)
 
@@ -152,7 +155,7 @@ def test_grouped_view_obligations_keep_refusals_visible_while_waiting() -> None:
     point = design_space(Grouped())
     grouped = point.inspect(Grouped.support)
     for _ in range(2):
-        assessment = point.physical.inspect()
+        assessment = point.inspect(Grouped.physical)
         assert isinstance(assessment.accepted_result, Unresolved)
         assert assessment.constraints.refused == ("refused",)
         assert assessment.constraints.results == grouped.results
@@ -164,8 +167,8 @@ def test_grouped_view_obligations_keep_refusals_visible_while_waiting() -> None:
         assert readiness.ready is None
         assert isinstance(readiness.results["refused"], Rejected)
     committed = point.with_choices(lanes=1)
-    assert isinstance(committed.physical.inspect().accepted_result, Rejected)
-    assert committed.physical.inspect().readiness.ready is True
+    assert isinstance(committed.inspect(Grouped.physical).accepted_result, Rejected)
+    assert committed.inspect(Grouped.physical).readiness.ready is True
 
 
 def test_empty_named_obligations_can_be_assessed_without_value_semantics() -> None:
@@ -175,5 +178,5 @@ def test_empty_named_obligations_can_be_assessed_without_value_semantics() -> No
         physical = View(output, requires=(group,))
 
     point = design_space(Empty())
-    assert point.physical() == 4
-    assert point.physical.inspect().readiness.ready is True
+    assert point.physical == 4
+    assert point.inspect(Empty.physical).readiness.ready is True

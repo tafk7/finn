@@ -8,8 +8,8 @@ claims below are the ones a runtime test cannot make. A node declaration
 ``FixedImplementation(size=size)`` and the configuration ``pipeline.fixed``
 both *work* at runtime whatever the annotations say, so the thing worth
 pinning is that a contributor's editor and type checker see the authored
-family, references typed as the values they stand for, and the bound view,
-rather than ``Any`` or an internal declaration type.
+family, references typed as the values they stand for, and views read as
+their values, rather than ``Any`` or an internal declaration type.
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ from __future__ import annotations
 from typing_extensions import assert_type
 
 from finn.core.space import (
-    BoundView,
+    BoundValue,
     ConfigurationResult,
     Const,
     Decision,
@@ -70,7 +70,8 @@ class Pipeline(Space):
     assert_type(fixed, FixedImplementation)
     # A reference in a class body is typed as the value it stands for.
     assert_type(fixed.result, int)
-    assert_type(fixed.physical, BoundView[int])
+    # A view reference through a node declaration is typed as its value too.
+    assert_type(fixed.physical, int)
 
     @derived
     def cycles(self) -> int:
@@ -137,18 +138,18 @@ def check(pipeline: Pipeline) -> None:
     # A declared value read through a configuration has its declared type.
     assert_type(pipeline.fixed.result, int)
     assert_type(pipeline.fixed.with_choices(lanes=2), FixedImplementation)
-    assert_type(pipeline.fixed.physical, BoundView[int])
-    assert_type(pipeline.fixed.physical(), int)
-    assert_type(pipeline.fixed.physical.inspect(), ViewAssessment[int])
-    assert_type(pipeline.fixed.physical.query(), QueryResult[int])
+    # A view read through a configuration is its accepted value.
+    assert_type(pipeline.fixed.physical, int)
     assert_type(pipeline.fixed.inspect(FixedImplementation.physical), ViewAssessment[int])
-    assert_type(pipeline.fixed.view(FixedImplementation.physical), BoundView[int])
-    assert_type(pipeline.fixed.view(FixedImplementation.physical)(), int)
+    assert_type(pipeline.fixed.query(FixedImplementation.physical), QueryResult[int])
+    assert_type(pipeline.fixed.field(FixedImplementation.physical), BoundValue[int])
+    assert_type(pipeline.fixed.field(FixedImplementation.physical).get(), int)
+    assert_type(pipeline.fixed.field(FixedImplementation.physical).query(), QueryResult[int])
     assert_type(pipeline.fixed.field(FixedImplementation.result).get(), int)
     assert_type(pipeline.fixed.field(FixedImplementation.result).query(), QueryResult[int])
     assert_type(pipeline.fixed.field(FixedImplementation.lanes).get(), int)
     assert_type(pipeline.fixed.field(FixedImplementation.lanes).query(), QueryResult[int])
-    assert_type(pipeline.output(), int)
-    assert_type(pipeline.chosen(), int)
+    assert_type(pipeline.output, int)
+    assert_type(pipeline.chosen, int)
     assert_type(pipeline.fixed.query(FixedImplementation.result), QueryResult[int])
     assert_type(pipeline.query(Pipeline.fixed.result), QueryResult[int])

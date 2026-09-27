@@ -3,8 +3,9 @@
 """The house toy: a graph of design spaces in the declarative form.
 
 Calling a family declares a node; ``kitchen.finish`` is a reference to that
-node's member; a Decision over nodes is the structural choice; ``configure``
-is the one compile step. Nothing here is about hardware.
+node's member; a Decision over nodes is the structural choice; ``design_space``
+is the one compile step. A view reads as its accepted value (``point.total``);
+its assessment is ``point.inspect(House.total)``. Nothing here is about hardware.
 """
 
 from __future__ import annotations
@@ -131,7 +132,7 @@ class House(Space):
 
 def test_the_house_is_declared_then_configured() -> None:
     house = design_space(House(budget=200))
-    assert isinstance(house.total.query(), Unresolved)  # nothing decided yet
+    assert isinstance(house.query(House.total), Unresolved)  # nothing decided yet
     assert house.hall.area == 12  # supplied by the assignment hall.area = kitchen.area
     point = house.with_choices(
         {
@@ -151,7 +152,7 @@ def test_the_house_is_declared_then_configured() -> None:
         Located("heating.heat_pump", "cost", 38),
         Located("thermostat", "cost", 2),
     )
-    assert point.total() == 12 + 24 + 32 + 38 + 2
+    assert point.total == 12 + 24 + 32 + 38 + 2
 
 
 def test_a_structural_choice_reads_as_the_selected_candidate() -> None:
@@ -183,7 +184,7 @@ def test_the_relation_and_the_budget_own_their_refusals() -> None:
             House.garage.finish: 1,
         }
     )
-    refused = point.total.inspect()
+    refused = point.inspect(House.total)
     results = refused.constraints.results
     assert codes(results["matched.agreed"]) == {"mismatch"}
     assert "kitchen.finish=1, dining.finish=3" in {
@@ -201,7 +202,7 @@ def test_the_garage_is_present_only_when_wanted() -> None:
     with pytest.raises(ConfigurationError):
         without.with_choices({House.garage.finish: 2})
     wanted = house.with_choices(want_garage=True)
-    assert wanted.with_choices({House.garage.finish: 2}).garage.cost() == 40
+    assert wanted.with_choices({House.garage.finish: 2}).garage.cost == 40
 
 
 def test_keys_selections_and_inspection_use_declaration_paths() -> None:
@@ -251,7 +252,7 @@ def test_an_estate_overrides_the_house_it_contains() -> None:
     )
     assert point.home.hall.area == 14  # hall.area = kitchen.area follows the override
     assert point.home.thermostat.kw == 6
-    assert point.home.total() == 14 + 28 + 32 + 24 + 36 + 2
+    assert point.home.total == 14 + 28 + 32 + 24 + 36 + 2
     provenance = inspection.provenance(point, Estate.home.kitchen.area)
     assert provenance is not None
     assert provenance.text().startswith("home.kitchen.area = 14 (set by Estate at test_house.py:")

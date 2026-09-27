@@ -291,7 +291,7 @@ class MVAU(Space):
 
     @view(semantics=default_semantics(ModuleBuildRequirements), requires=(structure,))
     def build_requirements(self) -> ModuleBuildRequirements:
-        return self.structure().requirements
+        return self.structure.requirements
 
 
 ROM_STYLE = CyclicDelivery.rom_style
@@ -352,7 +352,7 @@ def mvau_assembly(
         choices["weight_stream.transport.fifo.buffer.depth"] = weight_fifo_depth
         choices["weight_stream.transport.fifo.buffer.ram_style"] = "auto"
     point = commit(design_space(MVAU(**facts)), choices)
-    composed = point.structure.query()
+    composed = point.query(MVAU.structure)
     if not isinstance(composed, Available):
         raise ValueError(f"MVAU assembly is not accepted: {describe([composed])}")
     folding = point.folding

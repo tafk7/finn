@@ -96,7 +96,7 @@ def test_known_family_refusal_survives_a_missing_dynamic_bound():
     assert isinstance(atomic["maximum_bits"], Unresolved)
     assert "dtype-family" in {finding.code for finding in atomic["family"].findings}
     # The port consumes the scalar's accepted encoding, so it reports the same state.
-    stream = ports.values.stream.inspect()
+    stream = ports.values.inspect(AxiStreamPort.stream)
     assert isinstance(stream.accepted_result, Unresolved)
 
 
@@ -116,7 +116,7 @@ def test_geometry_and_actual_dtype_do_not_wait_for_the_admission_bound():
 def test_domain_does_not_select_a_dtype_when_none_was_supplied():
     ports = point()
     assert isinstance(ports.values.field(AxiStreamPort.dtype).query(), Unresolved)
-    assert isinstance(ports.values.stream.query(), Unresolved)
+    assert isinstance(ports.values.query(AxiStreamPort.stream), Unresolved)
     assert ports.values_type.inspect(IntegerScalar.admission).verdict is None
 
 
@@ -139,7 +139,7 @@ def test_membership_does_not_use_value_admission_or_backend_methods(monkeypatch)
         monkeypatch.setattr(integer_type, method, unavailable)
     ports = point("INT128", limit=256)
     assert ports.values_type.inspect(IntegerScalar.admission).verdict is True
-    assert isinstance(ports.values.stream.query(), Available)
+    assert isinstance(ports.values.query(AxiStreamPort.stream), Available)
 
 
 def test_declarations_are_scoped_and_preserved_when_the_space_is_inherited():
@@ -171,7 +171,7 @@ def test_a_scalar_can_expose_its_own_dtype_without_colliding_with_parent_inputs(
     assert point.query(Independent.values_type.dtype) == Available(DataType["INT3"])
     assert point.values_type.dtype == DataType["INT3"]
     assert point.values.dtype == DataType["INT3"]
-    assert point.values.stream().payload_bits == 6
+    assert point.values.stream.payload_bits == 6
 
 
 @pytest.mark.parametrize("minimum,maximum", [(0, 8), (True, 8), (8, 2), (2, False)])
@@ -191,7 +191,7 @@ def test_output_reuses_the_supplied_type_source_without_creating_an_input():
     ports = point("UINT3", limit=None)
     assert ports.results.dtype == ports.values.dtype
     assert ports.results.payload_bits == 3
-    assert isinstance(ports.results.stream.query(), Available)
+    assert isinstance(ports.results.query(AxiStreamPort.stream), Available)
 
 
 class DerivedOutput(Space):
@@ -214,7 +214,7 @@ class DerivedHarness(Space):
 def test_output_tracks_a_derived_type_and_remains_unresolved_until_its_source_is_known():
     incomplete = design_space(DerivedHarness()).producer
     assert isinstance(incomplete.result.field(AxiStreamPort.dtype).query(), Unresolved)
-    assert isinstance(incomplete.result.stream.query(), Unresolved)
+    assert isinstance(incomplete.result.query(AxiStreamPort.stream), Unresolved)
     parameters = {
         member.key for member in inspection.members(DerivedOutput) if member.kind == "param"
     }
@@ -227,7 +227,7 @@ def test_output_tracks_a_derived_type_and_remains_unresolved_until_its_source_is
 
 def test_zero_width_output_encodings_are_refused_by_the_scalar():
     ports = point("INT0", limit=None)
-    refused = ports.results.stream.query()
+    refused = ports.results.query(AxiStreamPort.stream)
     assert isinstance(refused, Rejected)
     assert {finding.code for finding in refused.findings} == {"dtype-storage"}
     assert ports.results.payload_bits == 0
@@ -235,7 +235,7 @@ def test_zero_width_output_encodings_are_refused_by_the_scalar():
 
 def test_direct_and_parent_consumed_accepted_views_share_admission():
     ports = point("INT3", limit=None)
-    direct = ports.values.stream.inspect()
+    direct = ports.values.inspect(AxiStreamPort.stream)
     assert isinstance(direct.accepted_result, Unresolved)
     assert ports.query(Ports.values.stream) == direct.accepted_result
     assert isinstance(ports.values.query(AxiStreamPort.carrier_bits), Available)
@@ -249,5 +249,5 @@ def test_output_policy_can_constrain_a_caller_supplied_encoding():
 
     supported = design_space(Producer(dtype=DataType["INT4"]))
     refused = design_space(Producer(dtype=DataType["UINT4"]))
-    assert isinstance(supported.output.stream.query(), Available)
-    assert isinstance(refused.output.stream.query(), Rejected)
+    assert isinstance(supported.output.query(AxiStreamPort.stream), Available)
+    assert isinstance(refused.output.query(AxiStreamPort.stream), Rejected)

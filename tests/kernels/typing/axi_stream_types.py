@@ -4,7 +4,7 @@
 
 from typing_extensions import assert_type
 
-from finn.core.space import BoundView, QueryResult, ViewAssessment
+from finn.core.space import BoundValue, QueryResult, View, ViewAssessment
 from finn.dataflow.datatypes import QONNXDataType
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.datatypes.domains import Integer
@@ -31,19 +31,21 @@ def check(point: DotpAxiKernel, eltwise: EltwiseKernel) -> None:
     assert_type(DotpAxiKernel.activation_type, IntegerScalar)
     assert_type(DotpAxiKernel.activation_dtype, QONNXDataType)
     assert_type(DotpAxiKernel.activation.dtype, QONNXDataType)
-    assert_type(DotpAxiKernel.activation.stream, BoundView[AxiStream])
-    assert_type(DotpAxiKernel.activation_type.encoding, BoundView[ScalarEncoding])
+    assert_type(DotpAxiKernel.activation.stream, AxiStream)
+    assert_type(DotpAxiKernel.activation_type.encoding, ScalarEncoding)
+    assert_type(AxiStreamPort.stream, View[AxiStream])
     assert_type(point.query(DotpAxiKernel.activation.payload_bits), QueryResult[int])
     # Configuration reads.
     assert_type(point.activation, AxiStreamPort)
     assert_type(point.activation.dtype, QONNXDataType)
     assert_type(point.activation.payload_bits, int)
     assert_type(point.activation.payload, PackedBeatLayout)
-    assert_type(point.activation.stream, BoundView[AxiStream])
-    assert_type(point.activation.stream(), AxiStream)
-    assert_type(point.activation.stream.inspect(), ViewAssessment[AxiStream])
-    assert_type(point.activation_type.encoding(), ScalarEncoding)
+    assert_type(point.activation.stream, AxiStream)
+    assert_type(point.activation.inspect(AxiStreamPort.stream), ViewAssessment[AxiStream])
+    assert_type(point.activation.query(AxiStreamPort.stream), QueryResult[AxiStream])
+    assert_type(point.activation.field(AxiStreamPort.stream), BoundValue[AxiStream])
+    assert_type(point.activation_type.encoding, ScalarEncoding)
     assert_type(point.activation.field(AxiStreamPort.payload_bits).get(), int)
     assert_type(point.activation.field(AxiStreamPort.payload_bits).query(), QueryResult[int])
     assert_type(eltwise.lhs, NativeStreamPort)
-    assert_type(eltwise.lhs.stream(), ReadyValidStream)
+    assert_type(eltwise.lhs.stream, ReadyValidStream)

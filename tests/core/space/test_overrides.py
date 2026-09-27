@@ -204,7 +204,7 @@ def test_a_narrower_decision_keeps_its_key_and_the_declared_domain_still_checks(
     assert [item.key for item in inspection.decisions(Narrow)] == ["room.finish"]
     narrow = design_space(Narrow())
     assert narrow.room.field(Room.finish).candidates() == Available((1, 2))
-    assert narrow.with_choices({Narrow.room.finish: 2}).room.cost() == 24
+    assert narrow.with_choices({Narrow.room.finish: 2}).room.cost == 24
     with pytest.raises(ConfigurationError):
         narrow.with_choices({Narrow.room.finish: 3})
     # Widening is refused by the family's declared domain, with who supplied the Decision.
@@ -231,7 +231,7 @@ def test_a_pinned_value_outside_the_declared_domain_is_refused_with_its_provenan
     assert text.startswith("room.finish = 7 (set by Wrong at test_overrides.py:")
     assert re.search(r"declared Decision\(values=\(1, 2, 3\)\) at test_overrides.py:\d+", text)
     assert "7 is outside the declared domain" in text
-    assert isinstance(point.room.cost.query(), Rejected)
+    assert isinstance(point.room.query(Room.cost), Rejected)
 
 
 def test_a_refusal_names_who_set_the_overridden_value_it_read() -> None:
@@ -320,7 +320,7 @@ def test_a_child_node_is_replaced_by_a_node_of_its_family_or_a_subclass() -> Non
         ("kitchen", 19),
         ("study", 18),
     ]
-    assert chosen.home.total() == 37
+    assert chosen.home.total == 37
 
     with pytest.raises(DefinitionError, match="expected a Room node .or a subclass., got Garden"):
 

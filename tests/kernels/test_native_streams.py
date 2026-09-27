@@ -9,8 +9,9 @@ import pytest
 
 from finn.core.space import Available, Rejected, design_space
 from finn.kernels.artifacts.abi import Direction, Endpoint
-from finn.kernels.eltwise import EltwiseOperand
+from finn.kernels.eltwise import EltwiseKernel, EltwiseOperand
 from finn.kernels.fifo import FifoKernel
+from finn.kernels.physical.ports import NativeStreamPort
 from finn.kernels.physical.stream import MarkerKind, ReadyValidStream, StreamMarker
 from kernels.test_migrated_rich import generator
 from kernels.test_migrated_simple import eltwise
@@ -18,7 +19,7 @@ from kernels.test_migrated_simple import eltwise
 
 def test_native_streams_are_inspectable_without_storage_choices():
     base = design_space(FifoKernel(word_bits=13, depth=8))
-    source, sink = base.interfaces()
+    source, sink = base.interfaces
     assert source.data_width == sink.data_width == 13
     assert [pin.direction for pin in source.pins()] == [Direction.IN, Direction.IN, Direction.OUT]
     assert [pin.direction for pin in sink.pins()] == [Direction.OUT, Direction.OUT, Direction.IN]
@@ -28,7 +29,7 @@ def test_native_streams_are_inspectable_without_storage_choices():
 
 def test_loop_markers_remain_native_even_when_one_bit():
     for extents, strides in (((6,), (1,)), ((3, 6), (0, 1))):
-        output = generator(bits=16, extents=extents, strides=strides).interfaces()[1]
+        output = generator(bits=16, extents=extents, strides=strides).interfaces[1]
         assert output.markers == (StreamMarker("olst", MarkerKind.LOOP_END, len(extents)),)
         with pytest.raises(ValueError, match="single LAST"):
             output.axis_bus()
@@ -69,9 +70,7 @@ def test_fifo_capacity_and_effective_storage_agree_with_native_rtl(tmp_path):
     instances = []
     for index, (depth, style) in enumerate(cases):
         storage = (
-            design_space(FifoKernel(word_bits=9, depth=depth))
-            .with_choices(ram_style=style)
-            .storage()
+            design_space(FifoKernel(word_bits=9, depth=depth)).with_choices(ram_style=style).storage
         )
         instances.append(
             f'fifo_capacity_case #(.DEPTH({depth}), .STYLE("{style}"), '
@@ -135,7 +134,7 @@ endmodule
 
 def test_typed_native_ports_bind_separately_owned_operand_scalars():
     mixed = eltwise(lhs="INT5", rhs="FLOAT32", pe=3)
-    lhs, rhs, result = mixed.interfaces()
+    lhs, rhs, result = mixed.interfaces
     assert (lhs.data, lhs.valid, lhs.ready) == ("adat", "avld", "ardy")
     assert (lhs.data_width, rhs.data_width, result.data_width) == (15, 96, 96)
     assert [field.bit_offset for field in mixed.lhs.payload.fields] == [0, 5, 10]
@@ -145,8 +144,8 @@ def test_typed_native_ports_bind_separately_owned_operand_scalars():
     assert refused.lhs.payload_bits == 32
     admission = refused.lhs_type.inspect(EltwiseOperand.admission)
     assert admission.verdict is False
-    answer = refused.lhs.stream.query()
+    answer = refused.lhs.query(NativeStreamPort.stream)
     assert isinstance(answer, Rejected)
     assert {finding.owner for finding in answer.findings} == {"lhs_type.supported"}
-    assert isinstance(refused.build_requirements.query(), Rejected)
-    assert isinstance(eltwise().result.stream.query(), Available)
+    assert isinstance(refused.query(EltwiseKernel.build_requirements), Rejected)
+    assert isinstance(eltwise().result.query(NativeStreamPort.stream), Available)

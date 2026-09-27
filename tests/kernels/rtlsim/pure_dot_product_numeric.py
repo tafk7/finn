@@ -111,7 +111,7 @@ def run(configuration: Configuration, evidence: Path, *, backpressure_ticks: int
             segment_length=c.segment,
         )
     ).with_choices(compute_pumping=c.pumping)
-    module = point.build_requirements()
+    module = point.build_requirements
     case = Case(
         c.label,
         c.target,

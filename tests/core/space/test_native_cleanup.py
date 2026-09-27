@@ -118,7 +118,7 @@ def test_nonvalue_cleanup_preserves_primary_and_outer_cleanup(kind: str, warm: b
             finally:
                 events.append("middle started")
                 if kind == "rejected":
-                    self.rejected()
+                    _ = self.rejected
                 else:
                     _ = self.unavailable if kind == "unavailable" else self.inapplicable
                 events.append("middle finished")
@@ -133,7 +133,7 @@ def test_nonvalue_cleanup_preserves_primary_and_outer_cleanup(kind: str, warm: b
     point = design_space(Family(fact=7, enabled=False))
     if warm:
         if kind == "rejected":
-            point.rejected.inspect()
+            point.inspect(Family.rejected)
         else:
             point.query(Family.unavailable if kind == "unavailable" else Family.inapplicable)
     with pytest.raises(NativeEvaluationError) as caught:
@@ -534,7 +534,7 @@ def test_interruption_before_failure_delivery_keeps_pending_primary() -> None:
         @derived
         def output(self) -> int:
             try:
-                return self.failed()
+                return self.failed
             finally:
                 events.append(self.cleanup)
 

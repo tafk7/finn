@@ -3,7 +3,7 @@
 """Typed design-space authoring, immutable specialization and public services."""
 
 from . import codecs, extensions, graph, inspection, selections
-from ._configuration import BoundDecision, BoundValue, BoundView, Space
+from ._configuration import BoundDecision, BoundValue, Space
 from ._execution import (
     CleanupFailure,
     NativeCancellationDetails,
@@ -26,7 +26,6 @@ from .declarations import (
     ValueRef,
     View,
     ViewKey,
-    accepted,
     constraint,
     derived,
     selected,
@@ -84,7 +83,6 @@ __all__ = [
     "Members",
     "Users",
     "Located",
-    "accepted",
     "derived",
     "constraint",
     "view",
@@ -95,7 +93,6 @@ __all__ = [
     "DecisionHandle",
     "BoundValue",
     "BoundDecision",
-    "BoundView",
     "Expr",
     # Domains and value semantics
     "Domain",

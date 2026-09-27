@@ -59,7 +59,7 @@ class CyclicDelivery(Kernel):
 
     @derived(semantics=INTEGER_VECTOR)
     def image(self) -> IntegerVector | Rejected:
-        encoding = self.element.encoding()
+        encoding = self.element.encoding
         low, high = ordinary_integer_bounds(encoding.dtype)
         try:
             words = pack(self.form, self.values, encoding.bits)
@@ -74,7 +74,7 @@ class CyclicDelivery(Kernel):
 
     @view(semantics=STREAM_CONTRACT)
     def output(self) -> StreamContract:
-        encoding = self.element.encoding()
+        encoding = self.element.encoding
         form = self.form
         return StreamContract(
             cyclic_stream_interface(word_bits=form.lanes * encoding.bits),
@@ -87,7 +87,7 @@ class CyclicDelivery(Kernel):
     def build_requirements(self) -> ModuleBuildRequirements:
         image = self.image
         return cyclic_stream_requirements(
-            word_bits=self.output().payload_bits,
+            word_bits=self.output.payload_bits,
             depth=len(image),
             image=image,
             rom_style=self.rom_style,
@@ -95,7 +95,7 @@ class CyclicDelivery(Kernel):
 
     @view(semantics=PORTS_SEMANTICS)
     def ports(self) -> Ports:
-        return Ports.of(output_stream=produces(self.output()))
+        return Ports.of(output_stream=produces(self.output))
 
     exports = {MODULE: build_requirements, PORTS: ports}
 

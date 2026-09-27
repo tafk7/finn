@@ -103,7 +103,7 @@ class InputGeneratorKernel(Kernel):
         extents = self.extents
         strides = self.strides
         ram = self.ram_style
-        streams = self.interfaces()
+        streams = self.interfaces
         parameters = (
             ("COEFS", "'{" + ", ".join(map(str, strides)) + "}"),
             ("D", len(extents)),

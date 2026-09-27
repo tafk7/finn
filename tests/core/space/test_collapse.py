@@ -22,7 +22,6 @@ from finn.core.space import (
     Inapplicable,
     Param,
     Space,
-    accepted,
     composite,
     design_space,
     inspection,
@@ -122,7 +121,7 @@ def test_a_chain_collapses_to_its_source_but_keeps_every_scope_and_key() -> None
 
 def test_evaluation_skips_forwarding_nodes_and_explain_still_names_them() -> None:
     def read(point: Space) -> object:
-        return cast(Outer, point).middle.leaf.bits.query()
+        return cast(Outer, point).middle.leaf.query(Leaf.bits)
 
     lanes = {"middle.leaf.lanes": 2}
     before = counts(_choices(open_space(Outer(width=3), collapsed=False), **lanes), read)
@@ -149,7 +148,7 @@ def test_a_pipeline_built_as_data_answers_the_same() -> None:
 
     stages = [Stage(width_in=4), *(Stage() for _ in range(9))]
     for previous, current in zip(stages, stages[1:]):
-        current.width_in = accepted(previous.width_out)
+        current.width_in = previous.width_out
     family = composite("Pipeline", {f"s{index}": stage for index, stage in enumerate(stages)})
     choices = {f"s{index}.growth": 1 for index in range(10)}
     collapsed = _choices(open_space(family(), collapsed=True), **choices)

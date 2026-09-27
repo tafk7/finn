@@ -182,9 +182,9 @@ point = design_space(
         segment_length=0,
     )
 ).with_choices(compute_pumping=False)
-answer = point.build_requirements()
+answer = point.build_requirements
 assert isinstance(answer, ModuleBuildRequirements)
-assert isinstance(point.activation.stream(), AxiStream)
+assert isinstance(point.activation.stream, AxiStream)
 assert point.activation.payload_bits == 6
 for mode in WeightDelivery:
     options = (
@@ -259,7 +259,7 @@ if package_name == "finn.core.space":
         def output(self) -> int:
             return self.increment
 
-    assert api.design_space(Generic(value=3)).output() == 4
+    assert api.design_space(Generic(value=3)).output == 4
 loaded = {name for name in sys.modules if name.startswith("finn.")}
 parents = {package_name.rsplit(".", 1)[0]}
 assert all(

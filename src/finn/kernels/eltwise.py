@@ -130,7 +130,7 @@ class EltwiseKernel(Kernel):
     def interfaces(self) -> tuple[ReadyValidStream, ...] | Rejected:
         if not 1 <= self.pe <= 0xFFFFFFFF:
             return reject("eltwise-interface", "PE must be positive and fit native unsigned int")
-        return (self.lhs.stream(), self.rhs.stream(), self.result.stream())
+        return (self.lhs.stream, self.rhs.stream, self.result.stream)
 
     @view(
         semantics=default_semantics(ModuleBuildRequirements),
@@ -142,7 +142,7 @@ class EltwiseKernel(Kernel):
         a = self.lhs_dtype
         b = self.rhs_dtype
         scale = self.native_scale
-        streams = self.interfaces()
+        streams = self.interfaces
         parameter_values: dict[str, BuildScalar] = {
             "OP": f'"{operation}"',
             "PE": pe,

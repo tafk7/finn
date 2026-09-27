@@ -92,7 +92,7 @@ def constants(first=PRODUCED, second=PRODUCED):
 
 
 def test_matching_streams_compose_into_one_module():
-    built = constants().build()
+    built = constants().build
     names = {port.name for port in built.abi.ports}
     assert {"ap_clk", "ap_rst_n", "out0_V", "out1_V"} <= names
 
@@ -101,7 +101,7 @@ def test_each_stream_owns_its_refusal_and_independent_refusals_are_all_visible()
     # Four lanes cannot be fed by a two-lane source: both streams refuse.
     wide = vector_major((4,), 4)
     point = constants(first=wide, second=wide)
-    assessment = point.build.inspect()
+    assessment = point.inspect(Constants.build)
     results = assessment.constraints.results
     assert isinstance(results["first.connection"], Rejected)
     assert isinstance(results["second.connection"], Rejected)
@@ -110,8 +110,8 @@ def test_each_stream_owns_its_refusal_and_independent_refusals_are_all_visible()
     assert {f.owner for f in refusal.findings} == {"first.compatible", "second.compatible"}
     # One stream refusing leaves the other stream's connection accepted.
     mixed = constants(first=wide)
-    assert isinstance(mixed.first.connection.query(), Rejected)
-    assert isinstance(mixed.second.connection.query(), Available)
+    assert isinstance(mixed.first.query(Stream.connection), Rejected)
+    assert isinstance(mixed.second.query(Stream.connection), Available)
 
 
 def test_explain_shows_per_stream_and_per_member_evidence():
@@ -136,14 +136,14 @@ def test_a_stream_waits_for_its_own_endpoints_only():
     )
     point = point.with_choices(point.first_source.field(CyclicDelivery.rom_style).change("auto"))
     # The ROM choice feeds only the module, not either stream's contracts.
-    assert isinstance(point.first.connection.query(), Available)
-    assert isinstance(point.second.connection.query(), Available)
-    assert isinstance(point.build.query(), Unresolved)
+    assert isinstance(point.first.query(Stream.connection), Available)
+    assert isinstance(point.second.query(Stream.connection), Available)
+    assert isinstance(point.query(Constants.build), Unresolved)
     # A stream sees its users by declaration name and by the input that references it.
     (end,) = point.first.ends
     assert (end.node, end.member) == ("first_source", "output_stream")
     assert end.value["output_stream"].flow is Flow.OUT
-    connection = point.first.connection()
+    connection = point.first.connection
     assert (connection.source_owner, connection.sink_owner) == ("first_source", None)
     assert connection.sink.transport.name == "out0_V"
 
@@ -166,7 +166,7 @@ def test_two_producers_on_one_stream_are_refused_by_the_stream():
         )
 
     point = design_space(Clash(spec=StreamSpec(INT4, PRODUCED)))
-    refused = point.shared.connection.query()
+    refused = point.shared.query(Stream.connection)
     assert isinstance(refused, Rejected)
     assert {f.code for f in refused.findings} == {"stream-users"}
     assert "a.output_stream, b.output_stream" in refused.findings[0].message
@@ -180,7 +180,7 @@ def test_a_boundary_stream_needs_its_port_name():
             dtype=DataType["INT4"], form=PRODUCED, values=(1, 2, 3, 4), output_stream=out
         )
 
-    waiting = design_space(Unnamed(spec=StreamSpec(INT4, PRODUCED))).out.connection.query()
+    waiting = design_space(Unnamed(spec=StreamSpec(INT4, PRODUCED))).out.query(Stream.connection)
     assert isinstance(waiting, Unresolved)
     assert {f.owner for f in waiting.findings} == {"out.port"}
 
@@ -208,7 +208,7 @@ class SpecReadingProducer(Space):
 
     @view(semantics=PORTS_SEMANTICS)
     def ports(self) -> Ports:
-        contract = self.source.output()
+        contract = self.source.output
         spec = self.output_stream.spec  # the stream's spec shapes the port
         return Ports.of(
             output_stream=produces(type(contract)(contract.transport, spec.element, spec.form))

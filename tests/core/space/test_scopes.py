@@ -86,8 +86,8 @@ def test_composite_keeps_narrow_fields_available_and_reuses_accepted_children() 
 
     base = design_space(Composite())
     assert base.narrow == 12
-    assert isinstance(base.activation.physical.inspect().accepted_result, Unresolved)
-    assert isinstance(base.weights.physical.inspect().accepted_result, Unresolved)
+    assert isinstance(base.activation.inspect(Interface.physical).accepted_result, Unresolved)
+    assert isinstance(base.weights.inspect(Interface.physical).accepted_result, Unresolved)
     assert isinstance(base.optional.query(Interface.lanes), Inapplicable)
     field = base.optional.field(Interface.lanes)
     assert isinstance(field, BoundDecision)
@@ -97,10 +97,10 @@ def test_composite_keeps_narrow_fields_available_and_reuses_accepted_children() 
     assert isinstance(selected, Refused)
     direct = selected.inspect(Refused.physical).accepted_result
     assert isinstance(direct, Rejected)
-    assert successor.physical.inspect().accepted_result == direct
+    assert successor.inspect(Composite.physical).accepted_result == direct
     assert successor.query(Composite.implementation.width) == Available(-1)
     assert successor.selected_width == -1
-    assert isinstance(base.physical.inspect().accepted_result, Unresolved)
+    assert isinstance(base.inspect(Composite.physical).accepted_result, Unresolved)
 
 
 def test_local_decision_domain_uses_parent_suppliers_and_exposure_is_explicit() -> None:
@@ -121,7 +121,7 @@ def test_local_decision_domain_uses_parent_suppliers_and_exposure_is_explicit() 
     assert isinstance(owned, BoundDecision)  # a fresh inline Decision is owned
     assert owned.candidates() == Available((1, 2, 3, 4, 6, 12))
     chosen = base.with_choices({Root.owned.value: 3})
-    assert chosen.owned.physical() == 3
+    assert chosen.owned.physical == 3
     assert isinstance(chosen.exposed.query(Child.value), Unresolved)
     with pytest.raises(ConfigurationError):
         base.with_choices({Root.owned.value: 5})
@@ -163,7 +163,7 @@ def test_nested_handles_and_named_aliases_keep_frozen_interpretations() -> None:
     # the source declaration later cannot retarget that old compiled reference.
     original_accepted.source = Root.outer.inner.other
     assert base.query(original_accepted) == Available(5)
-    assert design_space(Root()).accepted() == 5
+    assert design_space(Root()).accepted == 5
 
 
 def test_two_thousand_guarded_scopes_compile_and_query_iteratively() -> None:
@@ -222,7 +222,7 @@ def test_choice_members_are_validated_over_all_cases_before_selection() -> None:
 
     base = design_space(Partial())
     assert isinstance(base.query(Partial.physical), Unresolved)
-    assert base.with_choices(implementation="complete").physical() == 1
+    assert base.with_choices(implementation="complete").physical == 1
     assert isinstance(
         base.with_choices(implementation="missing").query(Partial.physical), Inapplicable
     )

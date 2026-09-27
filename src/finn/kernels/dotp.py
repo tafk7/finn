@@ -209,9 +209,9 @@ class DotpAxiKernel(Kernel):
         simd = self.simd
         if not 1 <= pe <= 0xFFFFFFFF or not 1 <= simd <= 0xFFFFFFFF:
             return reject("dotp-geometry", "PE and SIMD must be positive native unsigned integers")
-        activation = self.activation.stream()
-        weights = self.weights.stream()
-        result = self.result.stream()
+        activation = self.activation.stream
+        weights = self.weights.stream
+        result = self.result.stream
         if any(stream.carrier_bits > 0xFFFFFFFF for stream in (activation, weights, result)):
             return reject("dotp-stream-width", "packed stream widths must fit native unsigned int")
         target_dsp = self.target_dsp
@@ -297,12 +297,12 @@ class DotpAxiKernel(Kernel):
     @view(semantics=default_semantics(tuple))
     def interfaces(self) -> tuple[AxiStream, ...]:
         """Accepted (activation, weights, result) ports; framing is the caller's."""
-        return (self.activation.stream(), self.weights.stream(), self.result.stream())
+        return (self.activation.stream, self.weights.stream, self.result.stream)
 
     def _port(self, index: int, stream: Stream) -> StreamContract | Rejected:
         """A port over the stream it sits on: the stream's order, dotp's own encoding."""
         spec = stream.spec
-        port = self.interfaces()[index]
+        port = self.interfaces[index]
         if spec.element.datatype_name != port.dtype.name:
             return reject(
                 "dotp-stream-element",
@@ -332,9 +332,9 @@ class DotpAxiKernel(Kernel):
     def ports(self) -> Ports:
         """Each port keyed by its stream input: activations and weights in, results out."""
         return Ports.of(
-            activation_stream=consumes(self.activation_port()),
-            weights_stream=consumes(self.weights_port()),
-            result_stream=produces(self.result_port()),
+            activation_stream=consumes(self.activation_port),
+            weights_stream=consumes(self.weights_port),
+            result_stream=produces(self.result_port),
         )
 
     exports = {MODULE: build_requirements, PORTS: ports}

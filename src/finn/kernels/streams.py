@@ -144,9 +144,9 @@ class StreamFifo(Space):
     @view(semantics=STAGE_SEMANTICS)
     def stage(self) -> Stage:
         spec = self.spec
-        source, sink = self.buffer.interfaces()
+        source, sink = self.buffer.interfaces
         return Stage(
-            self.buffer.build_requirements(),
+            self.buffer.build_requirements,
             StreamContract(source, spec.element, spec.form),
             StreamContract(sink, spec.element, spec.form),
         )
@@ -268,7 +268,7 @@ class Stream(Space):
     @constraint
     def compatible(self) -> bool | Rejected:
         ends = self.endpoints
-        stage = self.stage()
+        stage = self.stage
         source_top, sink_top = ends.source_owner is None, ends.sink_owner is None
         if stage.requirements is None:
             found = list(
@@ -289,7 +289,7 @@ class Stream(Space):
     @derived(semantics=CONNECTION_SEMANTICS)
     def link(self) -> Connection:
         ends = self.endpoints
-        return Connection(ends.source_owner, ends.source, ends.sink_owner, ends.sink, self.stage())
+        return Connection(ends.source_owner, ends.source, ends.sink_owner, ends.sink, self.stage)
 
     connection = View(link, requires=(compatible,))
     exports = {CONNECTION: connection}
