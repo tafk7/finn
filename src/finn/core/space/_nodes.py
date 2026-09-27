@@ -48,6 +48,17 @@ if TYPE_CHECKING:
     from ._configuration import Space
 
 _STRING = default_semantics(str)
+_SPACE: list[type[Space]] = []
+
+
+def _space() -> type[Space]:
+    """The Space base, imported once (the configuration module imports this one)."""
+    if not _SPACE:
+        from ._configuration import Space
+
+        _SPACE.append(Space)
+    return _SPACE[0]
+
 
 # What an assignment may target. Data is overridable; behaviour is not.
 SlotKind = Literal["param", "reference", "decision", "choice", "node", "behaviour"]
@@ -153,9 +164,7 @@ def is_fresh(record: NodeDecl) -> bool:
 
 def node_record(value: object) -> NodeDecl | None:
     """The record of a node declaration object, or None for anything else."""
-    from ._configuration import Space
-
-    if not isinstance(value, Space):
+    if not isinstance(value, _space()):
         return None
     path = declared_path(value)
     if path is None or len(path) != 1 or not isinstance(path[0], NodeDecl):
@@ -176,13 +185,11 @@ def path_proxy(family: type[Space], path: tuple[Declaration, ...]) -> Space:
 
 def slot_declaration(value: object) -> Declaration | None:
     """The declaration a class attribute contributes: a record for a node or choice."""
-    from ._configuration import Space
-
     if isinstance(value, Declaration):
         return value
     if isinstance(value, NodeChoice):
         return value._space_decision()
-    if isinstance(value, Space):
+    if isinstance(value, _space()):
         path = declared_path(value)
         if path is not None and len(path) == 1:
             return path[0]

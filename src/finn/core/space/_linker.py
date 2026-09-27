@@ -1733,6 +1733,17 @@ def guard_implies(
     return False
 
 
+def _reads_any(node: Node, targets: set[int]) -> bool:
+    """Whether a rewritable edge of ``node`` names one of ``targets``."""
+    return (
+        node.output in targets
+        or any(argument.node in targets for argument in node.arguments)
+        or any(argument.node in targets for argument in node.domain_arguments)
+        or any(argument.node in targets for argument in node.contract_arguments)
+        or any(target in targets for _, target in node.alternatives)
+    )
+
+
 def collapse(nodes: list[Node], order: tuple[int, ...]) -> tuple[int, ...]:
     """Collapse chains of forwarding aliases to their source, in place.
 
@@ -1766,8 +1777,9 @@ def collapse(nodes: list[Node], order: tuple[int, ...]) -> tuple[int, ...]:
             return forward[target]
         return target
 
+    aliases = {index for index, source in enumerate(forward) if source != index}
     for index, node in enumerate(nodes):
-        if node.kind == "alias":
+        if node.kind == "alias" or not _reads_any(node, aliases):
             continue
         via: list[tuple[int, int]] = []
         changes: dict[str, Any] = {}

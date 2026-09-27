@@ -17,6 +17,7 @@ from finn.core.space import (
     Decision,
     Param,
     Space,
+    accepted,
     composite,
     design_space,
     inspection,
@@ -36,7 +37,7 @@ class Stage(Space):
 def pipeline(count: int) -> type[Space]:
     stages = [Stage(width_in=4), *(Stage() for _ in range(1, count))]
     for previous, current in zip(stages, stages[1:]):
-        current.width_in = previous.width_out
+        current.width_in = accepted(previous.width_out)
     return composite(f"Probe{count}", {f"s{index}": stage for index, stage in enumerate(stages)})
 
 

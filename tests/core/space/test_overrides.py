@@ -417,3 +417,22 @@ def test_an_outer_body_may_override_a_reference_input_below_it() -> None:
     assert isinstance(point.department.team.query(Team.account), Available)
     assert isinstance(point.department.query(Department.team), Available)
     assert not isinstance(point.query(Company.department), Inapplicable)
+
+
+def test_an_assignment_reaches_a_member_of_a_decision_candidate() -> None:
+    class Leaf(Space):
+        style: str = Decision(values=("a", "b"))
+
+    class Holder(Space):
+        leaf = Leaf()  # a handle naming the candidate
+        choice: Leaf | None = Decision(values={"leaf": leaf, "none": None})
+
+    class Outer(Space):
+        holder = Holder()
+        holder.leaf.style = "b"  # keyed by the candidate's path: choice.leaf.style
+
+    point = design_space(Outer())
+    assert [item.key for item in inspection.decisions(point)] == ["holder.choice"]
+    assert [item.key for item in inspection.pinned(point)] == ["holder.choice.leaf.style"]
+    chosen = point.with_choices({Outer.holder.choice: "leaf"})
+    assert isinstance(chosen.holder.choice, Leaf) and chosen.holder.choice.style == "b"
