@@ -18,7 +18,7 @@ from . import _declare, _store
 from ._declare import PREFIX, ResourceError
 
 _ENTRY = re.compile(r"(?P<name>[a-z0-9][a-z0-9-]*)-[0-9a-f]{16}")
-_SETTINGS = {PREFIX + s for s in ("CACHE", "SYSTEM_CACHE", "FILES", "OFFLINE")}
+_SETTINGS = {PREFIX + s for s in ("DIR", "SYSTEM_CACHE", "FILES", "OFFLINE")}
 
 
 def main(argv=None):
@@ -170,7 +170,7 @@ def _verify(args):
         resource = api.declarations().get(name)
         if resource is None:
             raise ResourceError(f"No resource named {name!r} is declared")
-        if resource.package:
+        if resource.local:
             continue
         copies = [r / resource.entry for r, _ in _store.roots()]
         copies = [entry for entry in copies if _store.complete(entry, resource.digest)]
@@ -251,7 +251,7 @@ def _digest(args):
 
 
 def _clean(args):
-    used = {r.entry for r in api.declarations().values() if not r.package}
+    used = {r.entry for r in api.declarations().values() if not r.local}
     for root, writable in _store.roots():
         if not writable or not root.is_dir():
             continue
@@ -287,7 +287,7 @@ def _check(args):
     if existing is None or not os.access(existing, os.W_OK):
         problems.append(f"the cache {root} is not writable, so resources cannot be fetched")
     overrides = {r.env for r in declared.values()} | set(api._ALIASES)
-    sources = {r.env + "_URL" for r in declared.values() if not r.package}
+    sources = {r.env + "_URL" for r in declared.values() if not r.local}
     for variable, value in sorted(os.environ.items()):
         if variable in api._REMOVED:
             problems.append(f"{variable} is set but no longer used: {api._REMOVED[variable]}")
@@ -296,7 +296,7 @@ def _check(args):
         elif variable.startswith(PREFIX) and variable not in overrides | sources | _SETTINGS:
             problems.append(f"{variable} matches no declared resource")
     if os.environ.get(PREFIX + "OFFLINE", "") not in ("", "0"):
-        missing = [r.name for r in declared.values() if not r.package and not _store.lookup(r)]
+        missing = [r.name for r in declared.values() if not r.local and not _store.lookup(r)]
         if missing:
             problems.append(f"offline, and not in any cache: {', '.join(missing)}")
     for problem in problems:

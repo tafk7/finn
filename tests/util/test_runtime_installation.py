@@ -132,20 +132,20 @@ def test_checkout_and_sdist_wheels_have_same_assets_and_work_without_checkout(tm
     assert data == contents(rebuilt)
     assert json.loads(data["finn/_build_info.json"])["revision"] == revision
     assert not any(name.startswith("_finn_") for name in data)
-    assert "finn/_data/rtllib/sim/hdl/sim_ctrl.v" in data
+    assert "finn/bundled/rtllib/sim/hdl/sim_ctrl.v" in data
     assert (
-        "finn/_data/rtllib/memstream/component.xml" not in data
-        or data["finn/_data/rtllib/memstream/component.xml"]
+        "finn/bundled/rtllib/memstream/component.xml" not in data
+        or data["finn/bundled/rtllib/memstream/component.xml"]
     )
-    assert "finn/_data/qnn-data/cpp/CNPY_LICENSE" in data
-    assert "finn/_data/resources.toml" in data and "finn/resources/_cli.py" in data
+    assert "finn/bundled/qnn-data/cpp/CNPY_LICENSE" in data
+    assert "finn/bundled/resources.toml" in data and "finn/resources/_cli.py" in data
     assert not any(
         "/testcase/" in name or "_tb." in name or "/build_dataflow/" in name for name in data
     )
     installed = tmp_path / "environment"
     python = python_env(installed)
     install(python, tmp_path, wheel)
-    resources = next((installed / "lib").glob("python*/site-packages/finn/_data"))
+    resources = next((installed / "lib").glob("python*/site-packages/finn/bundled"))
     for path in resources.rglob("*"):
         path.chmod(0o555 if path.is_dir() else 0o444)
     resources.chmod(0o555)
@@ -191,7 +191,7 @@ def test_two_editable_environments_observe_only_selected_code_and_resources(tmp_
         environments.append((python, source))
     first = environments[0][1]
     (first / "src/finn/util/runtime_edit_probe.py").write_text('value = "selected change"\n')
-    asset = first / "src/finn/_data/rtllib/fifo/hdl/fifo.sv"
+    asset = first / "src/finn/bundled/rtllib/fifo/hdl/fifo.sv"
     replacement = asset.with_suffix(".new")
     replacement.write_text(asset.read_text() + "\n// selected resource change\n")
     replacement.replace(asset)

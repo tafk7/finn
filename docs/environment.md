@@ -66,9 +66,10 @@ part ahead of time.
 ```
 
 * The tag hashes `docker/image-inputs.txt`: the Dockerfile, `pyproject.toml`,
-  `uv.lock`, the resource pins (`finn/_data/resources.toml`) and `finn.resources`,
-  which fetches them, the container scripts and the runtime manifests. FINN's
-  other sources are not an input.
+  `uv.lock`, the pins of the resources the image bakes in (from
+  `finn/bundled/resources.toml`; FinnLib's is never baked, so moving it changes
+  nothing) and `finn.resources`, which fetches them, the container scripts and the
+  runtime manifests. FINN's other sources are not an input.
 * `dev` is the default target and the base of `sbx`. Only images built locally
   contain third-party board files; `release` builds on `runtime`, so it carries
   only resources declared `redistributable`.
@@ -120,7 +121,7 @@ part ahead of time.
 
 ```text
  declarations                         caches (first complete copy wins)
- 1 finn/_data/resources.toml          1 FINN_RESOURCES_DIR          writable
+ 1 finn/bundled/resources.toml          1 FINN_RESOURCES_DIR          writable
  2 packages: entry points  ─ merge ─►   (default ~/.finn/resources)
    "finn.resources" (add only)        2 /opt/finn/resources         read-only, image
  3 project: pyproject.toml                 │

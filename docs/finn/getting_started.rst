@@ -451,7 +451,7 @@ replacement for academic use. The old board mappings remain available, but
 their board files are no longer downloaded or exercised by CI. Re-enabling
 them requires removing the boards from ``retired_pynq_boards`` and declaring
 their board files as a ``vivado-boards`` resource, in
-``finn/_data/resources.toml`` or in your project's ``pyproject.toml`` (see
+``finn/bundled/resources.toml`` or in your project's ``pyproject.toml`` (see
 ``docs/installation.md``).
 
 PYNQ board first-time setup

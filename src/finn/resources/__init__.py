@@ -2,7 +2,8 @@
 
 Each resource (finn-hlslib, Vivado board files, a user's RTL library...) is
 declared with a pinned source and a content digest, fetched on first use, and
-cached by digest. Consumers ask for resources by kind, so they never need to
+cached by digest; or it is used in place, from an installed package (``package``,
+as FINN's own bundled data is) or a local directory (``path``). Consumers ask for resources by kind, so they never need to
 know names::
 
     from finn import resources
@@ -10,7 +11,7 @@ know names::
     resources.path("hlslib")               # one resource, fetched if needed
     resources.paths("vivado-boards")       # every resource of a kind
 
-Declarations come from FINN (``finn/_data/resources.toml``), then installed
+Declarations come from FINN (``finn/bundled/resources.toml``), then installed
 packages (the ``finn.resources`` entry-point group, naming a module that
 contains a ``resources.toml``), then the nearest ``pyproject.toml``
 (``[tool.finn.resources]``) and files listed in FINN_RESOURCES_FILES. Packages
@@ -62,7 +63,7 @@ _cache = {}
 
 @dataclass(frozen=True)
 class Status:
-    """Where a resource comes from: 'override', 'package', 'cached' or 'missing'."""
+    """Where a resource comes from: 'override', 'package', 'path', 'cached' or 'missing'."""
 
     name: str
     state: str
@@ -109,17 +110,23 @@ def _override(resource):
 def _package_path(resource):
     from importlib.resources import files  # noqa: PLC0415
 
-    module, _, subdir = resource.package.partition(":")
+    module, subdir = resource.package, resource.subdir
     try:
         location = files(module).joinpath(subdir) if subdir else files(module)
     except ModuleNotFoundError:
         raise ResourceError(f"Resource {resource.name}: module {module} is not installed") from None
     if not os.path.isdir(str(location)):
         raise ResourceError(
-            f"Resource {resource.name}: {resource.package} is not a directory in an "
+            f"Resource {resource.name}: {resource.source} is not a directory in an "
             "unpacked installation"
         )
     return os.path.realpath(str(location))
+
+
+def _local_path(resource):
+    if not os.path.isdir(resource.location):
+        raise ResourceError(f"Resource {resource.name}: {resource.location} is not a directory")
+    return os.path.realpath(resource.location)
 
 
 def status(name):
@@ -130,6 +137,8 @@ def status(name):
         return Status(name, "override", override[1], override[0])
     if resource.package:
         return Status(name, "package", _package_path(resource), resource.package)
+    if resource.path:
+        return Status(name, "path", _local_path(resource), resource.origin)
     entry = _store.lookup(resource)
     if entry:
         return Status(name, "cached", str(entry), str(entry.parent))
@@ -162,8 +171,8 @@ def fetch(names, dest=None):
 
     Unlike path(), this ignores overrides and existing copies elsewhere: it fills
     one cache, e.g. an image's system cache or a directory to carry offline.
-    Package resources need no fetching and are skipped. Returns the entries.
+    Package and path resources need no fetching and are skipped. Returns the entries.
     """
     root = Path(dest) if dest else _store.fetch_root()
     declared = [_get(name) for name in names]
-    return [str(_store.fetch(r, root)) for r in declared if not r.package]
+    return [str(_store.fetch(r, root)) for r in declared if not r.local]

@@ -97,6 +97,22 @@ finn_image_revision () (
                 exit 2
             fi
         done < "$manifest"
+        # Resource pins, only of the resources the image bakes in: the
+        # redistributable ones (python stage) and the board files (dev stage) of
+        # docker/Dockerfile.finn. Moving another pin, such as FinnLib's, which is
+        # never baked, leaves the image as it is.
+        [ ! -f src/finn/bundled/resources.toml ] \
+            || python3 -B - src/finn/bundled/resources.toml <<'PY' || exit 2
+import sys, tomllib
+with open(sys.argv[1], "rb") as file:
+    declared = tomllib.load(file)["resources"]
+for name, fields in declared.items():
+    if "package" in fields or "path" in fields:
+        continue
+    if fields.get("redistributable") or "vivado-boards" in fields.get("kind", []):
+        pin = [fields.get(key, "") for key in ("git", "commit", "url", "sha256", "subdir", "into")]
+        print("resource=" + name, *pin, fields["digest"])
+PY
         # Build arguments that change image contents without changing a file.
         # The runtime set is part of the tag suffix instead.
         printf 'arg=UBUNTU_TAG=%s\n' "${UBUNTU_TAG:-noble-20240605}"

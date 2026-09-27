@@ -793,6 +793,37 @@ def test_image_revision_changes_with_image_inputs_and_build_args(tmp_path):
     assert changed_file != changed_arg
 
 
+def test_image_revision_counts_only_baked_resource_pins(tmp_path):
+    root = _make_image_input_fixture(tmp_path)
+    declarations = root / "src/finn/bundled/resources.toml"
+    declarations.parent.mkdir(parents=True)
+
+    def pins(hlslib, finnlib):
+        declarations.write_text(
+            f"""
+[resources.hlslib]
+redistributable = true
+git = "https://example.invalid/hlslib.git"
+commit = "{"1" * 40}"
+digest = "sha256:{hlslib * 64}"
+
+[resources.finnlib]
+git = "git@example.invalid:finnlib.git"
+commit = "{"2" * 40}"
+digest = "sha256:{finnlib * 64}"
+
+[resources.rtllib]
+package = "finn.bundled"
+subdir = "rtllib"
+"""
+        )
+        return _provenance(root)[0]
+
+    original = pins("a", "b")
+    assert pins("a", "c") == original  # FinnLib is never baked into an image
+    assert pins("d", "b") != original
+
+
 def test_source_commit_changes_without_changing_image_revision(tmp_path):
     image_root = _make_image_input_fixture(tmp_path)
     source_root = tmp_path / "source"
@@ -829,7 +860,6 @@ def test_image_input_manifest_covers_dockerfile_sources():
         "pyproject.toml",
         "uv.lock",
         "src/finn/resources/*.py",
-        "src/finn/_data/resources.toml",
         "docker/Dockerfile.finn",
         "docker/finn_entrypoint.sh",
         "docker/quicktest.sh",
@@ -842,12 +872,17 @@ def test_image_input_manifest_covers_dockerfile_sources():
         assert path in patterns
     # Every file the Dockerfile reads from the context is an input.
     dockerfile = (Path(REPO) / "docker/Dockerfile.finn").read_text()
+    # resources.toml counts through the pins of the resources the image bakes in
+    # (finn_image_revision in docker/lib.sh), so moving FinnLib's pin does not
+    # change the image.
+    lib = (Path(REPO) / "docker/lib.sh").read_text()
+    assert "src/finn/bundled/resources.toml" in lib
     for source in re.findall(r"--mount=type=bind,source=([^,\s]+),target", dockerfile):
-        if source != ".":
+        if source not in (".", "src/finn/bundled/resources.toml"):
             assert any(fnmatch.fnmatch(source, p) or p.startswith(source) for p in patterns), source
     # FINN's own sources are installed from the mounted checkout, not baked.
     # finn.resources is the exception: the image fetches its resources with it.
-    resources = {"src/finn/resources/*.py", "src/finn/_data/resources.toml"}
+    resources = {"src/finn/resources/*.py"}
     assert not any(p.startswith("src/") and p not in resources for p in patterns)
     for launcher in ("docker/config.py", "docker/run", "docs/finn/getting_started.rst"):
         assert launcher not in patterns

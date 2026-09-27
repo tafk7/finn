@@ -8,15 +8,15 @@ global-exclude *.pyc *.so
 global-exclude *_tb.v *_tb.sv
 
 # Keep source archives free of resource test fixtures as well.
-prune src/finn/_data/rtllib/axi/sim
-prune src/finn/_data/rtllib/dwc/sim
-prune src/finn/_data/rtllib/layernorm/tb
-prune src/finn/_data/rtllib/memstream/sim
-prune src/finn/_data/rtllib/mvu/tb
-prune src/finn/_data/rtllib/mvu_tiled/tb
-prune src/finn/_data/rtllib/requant/sim
-prune src/finn/_data/rtllib/stream_tap/tb
-prune src/finn/_data/rtllib/thresholding/sim
+prune src/finn/bundled/rtllib/axi/sim
+prune src/finn/bundled/rtllib/dwc/sim
+prune src/finn/bundled/rtllib/layernorm/tb
+prune src/finn/bundled/rtllib/memstream/sim
+prune src/finn/bundled/rtllib/mvu/tb
+prune src/finn/bundled/rtllib/mvu_tiled/tb
+prune src/finn/bundled/rtllib/requant/sim
+prune src/finn/bundled/rtllib/stream_tap/tb
+prune src/finn/bundled/rtllib/thresholding/sim
 prune src/finn/qnn-data/build_dataflow
 prune src/finn/qnn-data/cifar10
 prune src/finn/qnn-data/cybsec-mlp

@@ -317,11 +317,11 @@ def test_project_redefinition_is_logged_and_packages_cannot_redefine(
     assert f"{extra} redefines resource 'hlslib'" in caplog.text
 
     finn = _declare.load(_declare.FINN_FILE, ("resources",))
-    package = _declare.parse({"hlslib": {"package": "acme:hls"}}, "package acme")
+    package = _declare.parse({"hlslib": {"package": "acme", "subdir": "hls"}}, "package acme")
     with pytest.raises(resources.DeclarationError, match="already declared by .*resources.toml"):
         _declare.merge(finn, package, [])
-    first = _declare.parse({"acme": {"package": "acme:a"}}, "package acme")
-    second = _declare.parse({"acme": {"package": "other:a"}}, "package other")
+    first = _declare.parse({"acme": {"package": "acme", "subdir": "a"}}, "package acme")
+    second = _declare.parse({"acme": {"package": "other", "subdir": "a"}}, "package other")
     with pytest.raises(resources.DeclarationError, match="package other.*package acme"):
         _declare.merge([], first + second, [])
 
@@ -337,7 +337,7 @@ def test_project_redefinition_is_logged_and_packages_cannot_redefine(
             {"url": "u", "sha256": "0" * 64, "digest": "sha256:" + "0" * 64, "subdir": "../x"},
             "relative",
         ),
-        ({"package": "m:d", "into": "x"}, "package source"),
+        ({"package": "m", "into": "x"}, "package source"),
         ({"package": "m", "kind": "rtl"}, "kind must be a list"),
         ({"package": "m", "extra": 1}, "unknown field"),
         ({"package": "m", "mirrors": ["u"]}, "package source"),
@@ -361,13 +361,38 @@ def test_names_are_restricted(name):
 def test_package_source_resolves_installed_data(project, tmp_path, monkeypatch):
     write(tmp_path / "site", {"acme_data/__init__.py": "", "acme_data/rtl/core.v": "m\n"})
     monkeypatch.syspath_prepend(str(tmp_path / "site"))
-    declare(project, '[tool.finn.resources.acme]\nkind = ["rtl"]\npackage = "acme_data:rtl"\n')
+    declare(
+        project,
+        '[tool.finn.resources.acme]\nkind = ["rtl"]\npackage = "acme_data"\nsubdir = "rtl"\n',
+    )
     assert resources.path("acme") == str(tmp_path / "site/acme_data/rtl")
     assert resources.status("acme").state == "package"
 
 
+def test_package_source_names_a_module_not_a_path(tmp_path):
+    with pytest.raises(resources.DeclarationError, match="put a directory inside it in subdir"):
+        _declare.parse({"acme": {"package": "acme_data:rtl"}}, "test")
+    with pytest.raises(resources.DeclarationError, match="no into, digest or mirrors"):
+        _declare.parse({"acme": {"package": "acme_data", "into": "x"}}, "test")
+
+
+def test_path_source_is_used_in_place(project, tmp_path):
+    write(tmp_path / "libs", {"acme-rtl/core.v": "m\n"})
+    declare(project, '[tool.finn.resources.acme]\nkind = ["rtl"]\npath = "../libs/acme-rtl"\n')
+    assert resources.path("acme") == str(tmp_path / "libs/acme-rtl")
+    assert resources.status("acme").state == "path"
+    assert resources.fetch(["acme"]) == []
+    # An override still wins, and a missing directory is an error, not a fetch.
+    declare(project, '[tool.finn.resources.acme]\npath = "/nonexistent/acme"\n')
+    resources._cache.clear()
+    with pytest.raises(resources.ResourceError, match="is not a directory"):
+        resources.path("acme")
+    with pytest.raises(resources.DeclarationError, match="a path source is a directory"):
+        _declare.parse({"acme": {"path": "x", "digest": "sha256:" + "0" * 64}}, "test")
+
+
 def test_project_is_the_nearest_pyproject(project, tmp_path):
-    declare(project, '[tool.finn.resources.acme]\npackage = "acme:rtl"\n')
+    declare(project, '[tool.finn.resources.acme]\npackage = "acme"\nsubdir = "rtl"\n')
     nested = project / "a/b"
     nested.mkdir(parents=True)
     assert [f for f, _ in _declare.project_files(nested)] == [project / "pyproject.toml"]
@@ -556,7 +581,8 @@ def test_packages_add_resources_but_only_the_project_redefines(
         """
         [resources.acme-rtl]
         kind = ["rtl"]
-        package = "acme_finn:rtl"
+        package = "acme_finn"
+        subdir = "rtl"
         """,
     )
     monkeypatch.syspath_prepend(str(site))
@@ -598,7 +624,7 @@ def test_package_declarations_in_a_virtual_environment(tmp_path):
         site,
         "acme-finn",
         "acme_finn",
-        '[resources.acme-rtl]\nkind = ["rtl"]\npackage = "acme_finn:rtl"\n',
+        '[resources.acme-rtl]\nkind = ["rtl"]\npackage = "acme_finn"\nsubdir = "rtl"\n',
     )
 
     def run(*args):
@@ -693,3 +719,14 @@ def test_github_archive_urls():
         )
     assert _store.github_archive("https://gitlab.com/a/b.git", commit) is None
     assert _store.github_archive("git@github.com:a/b.git", commit) is None
+
+
+def test_bundled_families_are_resources_a_directory_can_replace(project, tmp_path, monkeypatch):
+    from finn.util.resources import resource_path  # noqa: PLC0415
+
+    assert resources.status("rtllib").state == "package"
+    assert Path(resource_path("rtllib", "mvu")).is_dir()
+    write(tmp_path / "my-rtllib", {"mvu/mvu.sv": "module mvu; endmodule\n"})
+    monkeypatch.setenv("FINN_RESOURCES_RTLLIB", str(tmp_path / "my-rtllib"))
+    assert resource_path("rtllib", "mvu/mvu.sv") == str(tmp_path / "my-rtllib/mvu/mvu.sv")
+    assert resource_path("custom_hls") == resources.path("custom-hls")

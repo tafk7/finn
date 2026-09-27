@@ -1,4 +1,4 @@
-# FINN's external resources: directory trees FINN uses but does not contain.
+# FINN's resources: its own bundled data, and directory trees it uses but does not contain.
 # Each is fetched from its pinned source on first use and verified against its
 # digest. See finn/resources/__init__.py, or run `finn-resources list`.
 #
@@ -76,3 +76,30 @@ commit = "b595ecdf37c7204129517de1773b0895bcdcc2ed"
 subdir = "board-files/aup-zu3-8gb"
 into = "aup-zu3-8gb"
 digest = "sha256:a14a0213c0df8bef64d9918930ce025f703777ac5ae89e35eabe4c2e7a8b797d"
+
+# FINN's own data, shipped in the wheel under finn/bundled/ and used in place.
+# Declared so that each can be replaced with a directory of your own, e.g.
+# FINN_RESOURCES_RTLLIB=/path/to/rtllib.
+[resources.rtllib]
+description = "FINN's RTL library"
+redistributable = true
+package = "finn.bundled"
+subdir = "rtllib"
+
+[resources.custom-hls]
+description = "FINN's custom HLS sources"
+redistributable = true
+package = "finn.bundled"
+subdir = "custom_hls"
+
+[resources.xsi]
+description = "Sources of the finn_xsi simulation bridge"
+redistributable = true
+package = "finn.bundled"
+subdir = "xsi"
+
+[resources.qnn-data]
+description = "FINN's C++ support code, templates and reference data"
+redistributable = true
+package = "finn.bundled"
+subdir = "qnn-data"

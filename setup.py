@@ -117,7 +117,7 @@ if __name__ == "__main__":
         exclude=[
             "finn.qnn-data",
             "finn.qnn-data.*",
-            "finn._data.*",
+            "finn.bundled.*",
             # Retired dataflow code, kept in the checkout as reference only.
             "finn.parked",
             "finn.parked.*",
@@ -129,7 +129,7 @@ if __name__ == "__main__":
         packages=packages,
         package_dir={"": "src"},
         package_data={
-            "finn._data": resource_files("src/finn/_data"),
+            "finn.bundled": resource_files("src/finn/bundled"),
             "finn.core.space": ["py.typed"],
             "finn.dataflow": ["py.typed"],
             "finn.kernels": ["py.typed"],

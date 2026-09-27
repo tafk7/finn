@@ -1,7 +1,7 @@
 """Resource declarations: parsing, validation and merging.
 
 A declaration is a TOML table naming one resource and its pinned source. FINN's
-own declarations ship in ``finn/_data/resources.toml``. Installed packages add
+own declarations ship in ``finn/bundled/resources.toml``. Installed packages add
 theirs through the ``finn.resources`` entry-point group: each entry point names
 a module (package) containing a ``resources.toml``. A project may add or
 redefine resources in ``[tool.finn.resources]`` of its ``pyproject.toml`` or in
@@ -17,7 +17,7 @@ from pathlib import Path, PurePosixPath
 
 logger = logging.getLogger("finn.resources")
 
-FINN_FILE = Path(__file__).resolve().parent.parent / "_data" / "resources.toml"
+FINN_FILE = Path(__file__).resolve().parent.parent / "bundled" / "resources.toml"
 PREFIX = "FINN_RESOURCES_"
 
 _NAME = re.compile(r"[a-z0-9][a-z0-9-]*")
@@ -26,7 +26,7 @@ _RESERVED = {"dir", "system-cache", "files", "offline"}
 _DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
 _COMMIT = re.compile(r"[0-9a-f]{40}")
 _SHA256 = re.compile(r"[0-9a-f]{64}")
-_SOURCES = {"git": ("commit",), "url": ("sha256",), "package": ()}
+_SOURCES = {"git": ("commit",), "url": ("sha256",), "package": (), "path": ()}
 _LISTS = ("kind", "mirrors")
 _FIELDS = {
     "description",
@@ -37,6 +37,7 @@ _FIELDS = {
     "url",
     "sha256",
     "package",
+    "path",
     "subdir",
     "into",
     "digest",
@@ -64,6 +65,7 @@ class Resource:
     url: str = None
     sha256: str = None
     package: str = None
+    path: str = None
     subdir: str = None
     into: str = None
     digest: str = None
@@ -80,9 +82,21 @@ class Resource:
         return f"{self.name}-{self.digest.removeprefix('sha256:')[:16]}"
 
     @property
+    def local(self):
+        """A package or path source: used in place, never fetched or digested."""
+        return bool(self.package or self.path)
+
+    @property
+    def location(self):
+        """A path source's directory; a relative path is relative to its declaring file."""
+        return str(Path(self.origin).parent / Path(self.path).expanduser())
+
+    @property
     def source(self):
         if self.package:
-            return f"package {self.package}"
+            return f"package {self.package}" + (f" ({self.subdir})" if self.subdir else "")
+        if self.path:
+            return f"path {self.location}"
         where = f"{self.git}@{self.commit[:12]}" if self.git else self.url
         return f"{where} ({self.subdir})" if self.subdir else where
 
@@ -109,7 +123,7 @@ def _resource(name, fields, origin):
         fail(f"unknown field(s) {', '.join(sorted(unknown))}")
     sources = [key for key in _SOURCES if key in fields]
     if len(sources) != 1:
-        fail("give exactly one source: git and commit, url and sha256, or package")
+        fail("give exactly one source: git and commit, url and sha256, package, or path")
     source = sources[0]
     for key in ("commit", "sha256"):
         if (key in fields) != (key in _SOURCES[source]):
@@ -129,12 +143,17 @@ def _resource(name, fields, origin):
     if source == "url" and not _SHA256.fullmatch(fields["sha256"]):
         fail("sha256 must be 64 lower-case hex digits")
     if source == "package":
-        module, _, subdir = fields["package"].partition(":")
-        if not module or any(key in fields for key in ("subdir", "into", "digest", "mirrors")):
-            fail(
-                "a package source is 'module.name:subdir', with no subdir, into, digest or mirrors"
-            )
-        _relative(subdir or ".", "package subdir", fail)
+        if not re.fullmatch(r"[A-Za-z_][\w]*(\.[A-Za-z_][\w]*)*", fields["package"]):
+            fail("package is an importable module name; put a directory inside it in subdir")
+        if any(key in fields for key in ("into", "digest", "mirrors")):
+            fail("a package source takes only subdir: no into, digest or mirrors")
+        if "subdir" in fields:
+            _relative(fields["subdir"], "subdir", fail)
+    elif source == "path":
+        if not fields["path"] or any(
+            key in fields for key in ("subdir", "into", "digest", "mirrors")
+        ):
+            fail("a path source is a directory, with no subdir, into, digest or mirrors")
     else:
         if not _DIGEST.fullmatch(fields.get("digest", "")):
             fail(

@@ -11,11 +11,11 @@ implementation this replaced is preserved at the checkpoint `5dd9df9bc`.
 
 ## Implemented
 
-- **Packaging:** resources in `finn._data`; installed FINN works without a checkout.
+- **Packaging:** resources in `finn.bundled`; installed FINN works without a checkout.
 - **Dependencies:** `pyproject.toml` (runtime ranges, dependency groups, uv sources
   for unreleased commits) and `uv.lock`, reproducing the previous image's versions.
 - **External resources:** finn-hlslib and the board files (five repositories) are
-  declared with pinned commits and tree digests in `finn/_data/resources.toml`,
+  declared with pinned commits and tree digests in `finn/bundled/resources.toml`,
   fetched on first use and cached by digest (`finn.resources`, `finn-resources`);
   projects and installed packages declare their own. No submodules, no uv
   workspace, no `finn[hw]` extra.

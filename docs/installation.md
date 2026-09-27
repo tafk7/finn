@@ -86,7 +86,7 @@ script changes.
 * **Python package:** add it to `[project] dependencies` (or a dependency group),
   with a `[tool.uv.sources]` git entry if it is unreleased, then `uv lock`.
 * **Build data** (HLS or RTL libraries, board files, Tcl libraries): declare it as
-  an [external resource](#external-resources) in `src/finn/_data/resources.toml`
+  an [external resource](#external-resources) in `src/finn/bundled/resources.toml`
   and look it up by kind with `finn.resources.paths(kind)`. Say whether FINN may
   redistribute it (`redistributable`); the images follow that.
 
@@ -105,8 +105,8 @@ where.
 ## Package data and external resources
 
 `finn.util.resources.resource_path(family, *parts)` resolves stable read-only
-paths in `rtllib`, `custom_hls`, `xsi`, or `qnn-data`, under `finn._data`
-(`src/finn/_data/` in a checkout). The Python XSI driver lives at `src/finn_xsi/`.
+paths in `rtllib`, `custom_hls`, `xsi`, or `qnn-data`, under `finn.bundled`
+(`src/finn/bundled/` in a checkout). The Python XSI driver lives at `src/finn_xsi/`.
 Editable installations observe changes to these directly. Generated RTL, driver
 files and compiled XSI extensions belong in writable build storage, never in the
 installed distribution.
@@ -132,7 +132,7 @@ finn-resources check             # git, caches and overrides
 
 ### FINN's resources
 
-Declared in `src/finn/_data/resources.toml`, which ships in the wheel:
+Declared in `src/finn/bundled/resources.toml`, which ships in the wheel:
 
 | Name | Kind | Source |
 |---|---|---|
@@ -256,12 +256,21 @@ top-level directory is unpacked into that directory's place, as source archives
 usually are.) Then `finn-resources list --boards` shows the new board, and
 `finn.resources.paths("rtl")` returns the library's directory.
 
+A library you keep yourself needs no pin: a `path` source is used in place, with
+no fetch and no digest. A relative path is relative to the declaring file.
+
+```toml
+[tool.finn.resources.my-rtl]
+kind = ["rtl"]
+path = "../my-rtl"
+```
+
 | Field | Meaning |
 |---|---|
-| `git` and `commit`, `url` and `sha256`, or `package` | The source: a full commit id; a tar or zip archive and its checksum; or `"module:subdir"`, data installed with a Python package |
-| `subdir` | Only this directory of the source |
+| `git` and `commit`, `url` and `sha256`, `package`, or `path` | The source: a full commit id; a tar or zip archive and its checksum; a module whose installed data it is; or a local directory |
+| `subdir` | Only this directory of the source (not for `path`) |
 | `into` | Where to place it inside the resource root |
-| `digest` | The tree digest of the resource root (not for `package`) |
+| `digest` | The tree digest of the resource root (not for `package` or `path`) |
 | `kind` | Tags consumers look resources up by |
 | `redistributable` | Whether FINN may put it into published images (default `false`) |
 | `mirrors` | Alternative URLs, tried in order after the source |
@@ -269,6 +278,10 @@ usually are.) Then `finn-resources list --boards` shows the new board, and
 
 Kinds are free-form. FINN itself uses `hls-include` and `vivado-boards`; other
 kinds are for your own code to look up.
+
+FINN's bundled data (`rtllib`, `custom-hls`, `xsi`, `qnn-data` under
+`finn/bundled/`) is declared the same way, as `package` resources, so
+`FINN_RESOURCES_RTLLIB=/path/to/rtllib` or a project declaration replaces it.
 
 A Python package can ship declarations too: put a `resources.toml` with
 `[resources.NAME]` tables in one of its modules and name that module in the
@@ -280,7 +293,7 @@ A Python package can ship declarations too: put a `resources.toml` with
 acme = "acme_finn"
 ```
 
-Its resources usually use `package = "acme_finn:rtl"`. Packages may add
+Its resources usually use `package = "acme_finn"` with `subdir = "rtl"`. Packages may add
 resources but not redefine FINN's or another package's; only the project may.
 
 Saved projects contain absolute installed-resource and intermediate-artifact

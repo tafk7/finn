@@ -168,7 +168,7 @@ Apptainer, and access to run the GitHub and Jenkins pipelines.
 
 Rebuild the history on a new branch; the existing branches stay as records.
 
-1. The resource move into `finn._data` as its own pure-rename commit.
+1. The resource move into `finn.bundled` as its own pure-rename commit.
 2. One commit, or a short series, per migration step: packaging, dependencies
    and lock, image, entrypoint, toolchain selection, simulation session, CI.
 3. External resources as its own group, if D0 accepted it.
