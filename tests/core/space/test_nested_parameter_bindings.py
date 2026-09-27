@@ -184,6 +184,22 @@ def test_a_named_decision_shared_by_two_nodes_is_one_decision_of_their_common_sc
     assert len(selections.capture(both).entries) == 2
 
 
+def test_a_decision_name_is_checked_where_it_becomes_a_key() -> None:
+    # A class attribute takes its attribute name; a different name= is refused.
+    with pytest.raises(DefinitionError, match="a class attribute takes its attribute name"):
+        composite("Renamed", {"lanes": Decision(int, values=(1,), name="other")})
+    # A named shared decision is a member of its owner: it may not shadow one.
+    lanes = Decision(int, values=(1, 2), name="width")
+
+    class Clash(Space):
+        width = Const(4)
+        first = Kernel(count=1, port=Port(dtype="INT4", lanes=lanes))
+        second = Kernel(count=2, port=Port(dtype="INT8", lanes=lanes))
+
+    with pytest.raises(DefinitionError, match="is named like a member"):
+        configure(Clash())
+
+
 def test_unbound_exposure_is_a_formal_declared_on_the_enclosing_family() -> None:
     # An exposed inline Param is gone: declare the formal here, bind it by name.
     class Parent(Space):
