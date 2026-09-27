@@ -1,5 +1,7 @@
 # A graph of design spaces
 
+Status: **superseded** by [`../space-declarative-2026-09-26/DESIGN.md`](../space-declarative-2026-09-26/DESIGN.md).
+
 Date: 2026-09-26. Base: `feature/kernel-package-extraction` at `39482b480`.
 Spike: `spike/space-design-graph` at `0acc51e1e`. Status: **design
 spike for human review.** It supersedes the Port/Net/Interface/Fold model in
