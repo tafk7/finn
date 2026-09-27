@@ -1,0 +1,12 @@
+# commit: bfb31ad48ccdc846415d77cc7c108b1fd456ba45; 2026-09-26T22:51:35-07:00
+# env: PYTHONPATH=src:tests:deps/qonnx/src FINN_ROOT=/home/tkeller/prj-kernels/finn-kernels-extraction FINNLIB_ROOT=/home/tkeller/prj-kernels/finn-kernels-extraction/deps/finnlib FINN_XELAB_MT=2 LD_LIBRARY_PATH=/home/tkeller/Xilinx/2025.2/Vivado/lib/lnx64.o
+# finnlib: b17eae6a074ea678c633598fa42e7751e6cea194
+# simulator: Vivado Simulator v2025.2
+$ python -m kernels.rtlsim.mvau_assembly_numeric --case packed --weight-fifo-depth 2 --output /tmp/mvau-landing-fifo
+Evidence: /tmp/mvau-landing-fifo
+PASS packed external_fifo2 stalled=False result=INT8
+PASS packed external_fifo2 stalled=True result=INT8
+PASS packed cyclic_fifo2 stalled=False result=INT8
+PASS packed cyclic_fifo2 stalled=True result=INT8
+# elapsed: 83 s
+exit status: 0

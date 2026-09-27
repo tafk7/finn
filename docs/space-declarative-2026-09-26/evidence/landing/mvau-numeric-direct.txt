@@ -1,0 +1,28 @@
+# commit: bfb31ad48ccdc846415d77cc7c108b1fd456ba45; 2026-09-26T22:45:03-07:00
+# env: PYTHONPATH=src:tests:deps/qonnx/src FINN_ROOT=/home/tkeller/prj-kernels/finn-kernels-extraction FINNLIB_ROOT=/home/tkeller/prj-kernels/finn-kernels-extraction/deps/finnlib FINN_XELAB_MT=2 LD_LIBRARY_PATH=/home/tkeller/Xilinx/2025.2/Vivado/lib/lnx64.o
+# finnlib: b17eae6a074ea678c633598fa42e7751e6cea194
+# simulator: Vivado Simulator v2025.2
+$ python -m kernels.rtlsim.mvau_assembly_numeric --output /tmp/mvau-landing
+Evidence: /tmp/mvau-landing
+PASS single external stalled=False result=INT4
+PASS single external stalled=True result=INT4
+PASS single cyclic stalled=False result=INT4
+PASS single cyclic stalled=True result=INT4
+PASS packed external stalled=False result=INT8
+PASS packed external stalled=True result=INT8
+PASS packed cyclic stalled=False result=INT8
+PASS packed cyclic stalled=True result=INT8
+PASS one_beat_reductions external stalled=False result=INT8
+PASS one_beat_reductions external stalled=True result=INT8
+PASS one_beat_reductions cyclic stalled=False result=INT8
+PASS one_beat_reductions cyclic stalled=True result=INT8
+PASS padded_output external stalled=False result=INT7
+PASS padded_output external stalled=True result=INT7
+PASS padded_output cyclic stalled=False result=INT7
+PASS padded_output cyclic stalled=True result=INT7
+PASS int8_pumped external stalled=False result=INT19
+PASS int8_pumped external stalled=True result=INT19
+PASS int8_pumped cyclic stalled=False result=INT19
+PASS int8_pumped cyclic stalled=True result=INT19
+# elapsed: 386 s
+exit status: 0

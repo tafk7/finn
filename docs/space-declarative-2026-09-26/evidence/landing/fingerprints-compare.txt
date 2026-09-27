@@ -1,0 +1,18 @@
+# Fingerprint comparison on the landed branch
+
+$ diff docs/space-graph-composition-2026-09-25/evidence/fingerprints-baseline-0d700b1ab.txt docs/space-declarative-2026-09-26/evidence/landing/fingerprints-renamed.txt
+(no differences: bit-identical)
+
+$ diff docs/space-graph-composition-2026-09-25/evidence/fingerprints-baseline-0d700b1ab.txt docs/space-declarative-2026-09-26/evidence/landing/fingerprints.txt
+2c2
+< cyclic-block   7c2110dd3785287e1d1a17498700d6faaa53ae27a432ab6a0094cd933985a31c
+---
+> cyclic-block   36d7f9e02cfae22e81d5ccda802bff7eb7b5d6ec678fe7a27242fd3a29c664aa
+4c4
+< fifo-cyclic    468292e6070bb1878743fd04b5b0b310370562cb0569ed9db9ce13be6fce5066
+---
+> fifo-cyclic    24f47e030dd0d8de7f84943d27847f41664499ebadf1ee29ef7a5c2c83e820c0
+(exit 1; only the two cyclic configurations differ: accepted instance rename)
+
+$ diff docs/space-declarative-2026-09-26/evidence/fingerprints.txt docs/space-declarative-2026-09-26/evidence/landing/fingerprints.txt
+(no differences: identical to the spike, iteration 4)

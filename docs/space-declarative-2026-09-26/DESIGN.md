@@ -1,5 +1,8 @@
 # Declarative design spaces: nodes, references, overrides, one compile step
 
+Status: **landed** on `feature/kernel-package-extraction` (2026-09-26); see
+[`LANDING.md`](LANDING.md). The text below is the spike's record as reviewed.
+
 Date: 2026-09-26. Branch: `spike/space-declarative-4` (iteration 4), on
 `spike/space-declarative-3` at `426882411` (iteration 3), on
 `spike/space-declarative-2` at `43d4576a6` (iteration 2), itself on

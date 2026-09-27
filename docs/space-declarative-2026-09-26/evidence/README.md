@@ -1,5 +1,9 @@
 # Evidence for the declarative-space spike (iteration 4)
 
+Evidence for the landing on `feature/kernel-package-extraction` (gates, XSim,
+fingerprints and the MVAU numeric XSI sweep) is in [`landing/`](landing/),
+described in [`../LANDING.md`](../LANDING.md) section 2.
+
 All runs are on `spike/space-declarative-4`. The gates used
 `PYTHON_BIN=/home/tkeller/prj-kernels/.kernel-venv/bin/python`, ruff and mypy
 from `PATH`, and the normal `PATH`, which includes the Xilinx 2025.2 tools
