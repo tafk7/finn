@@ -40,8 +40,8 @@ local (no Docker): the kernel venv, ruff and mypy from `PATH`, Vivado 2025.2
 
 **FinnLib (`tkeller/finnlib`, branch `kernels/consolidated-20260927`, pushed).**
 Base: upstream `tpreusse/finnlib` `dev` at `5306111`, the latest upstream,
-rather than `dfeafac8`'s older `dev`; the newer base adds only upstream
-hardening (`dotp` parameter checks, `requantf`, `vpc`). On top:
+rather than `dfeafac8`'s older `dev`; the newer base adds upstream work only
+(`dotp` parameter checks, `fmaf`, `requantf`, `vpc`). On top:
 
 | Commit | Content |
 |---|---|
