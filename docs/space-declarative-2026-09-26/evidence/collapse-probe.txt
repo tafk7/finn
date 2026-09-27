@@ -1,4 +1,4 @@
-# collapse_probe.py on spike/space-declarative-3
+# collapse_probe.py on spike/space-declarative-4
 MVAU external     before  nodes   217  aliases   32  edges into aliases   12  evaluated   168  aliases evaluated   26
 MVAU external     after   nodes   217  aliases   32  edges into aliases    0  evaluated   142  aliases evaluated    0
 MVAU cyclic-fifo  before  nodes   217  aliases   32  edges into aliases   12  evaluated   197  aliases evaluated   32

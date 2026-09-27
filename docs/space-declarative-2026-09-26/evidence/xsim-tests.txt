@@ -27,7 +27,7 @@ PASSED tests/kernels/test_flat_kernels.py::test_combinational_conversion_uses_ro
 PASSED tests/kernels/test_native_streams.py::test_fifo_capacity_and_effective_storage_agree_with_native_rtl
 PASSED tests/kernels/test_stream_contract.py::test_eltwise_with_cyclic_constant_computes_the_broadcast_sum
 PASSED tests/kernels/test_streaming_components.py::test_rtl_streams_preserve_words_framing_stalls_and_reset
-======================== 9 passed in 247.54s (0:04:07) =========================
+======================== 9 passed in 247.31s (0:04:07) =========================
 exit status: 0
 == simulator
 /home/tkeller/Xilinx/2025.2/Vivado/bin/xsim
