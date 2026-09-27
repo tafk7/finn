@@ -1,8 +1,14 @@
 # Kernel layer status and plan
 
 Date: 2026-09-27. Worktree `finn-kernels-extraction`, branch
-`feature/kernel-package-extraction`, head `e218f9f76` plus this record. Nothing
-is pushed. This supersedes [the 2026-09-25 status](../kernel-status-2026-09-25/STATUS.md).
+`feature/kernel-package-extraction`. Nothing in this repository is pushed; the
+consolidated FinnLib branch is pushed to the `tkeller/finnlib` fork (A2). This
+supersedes [the 2026-09-25 status](../kernel-status-2026-09-25/STATUS.md).
+
+**Update (same day): phases A and B are done.** Record, evidence and the
+recorded fingerprint and ABI changes:
+[`../kernel-phase-ab-2026-09-27/RECORD.md`](../kernel-phase-ab-2026-09-27/RECORD.md).
+Phase C is next.
 
 ## 1. Where things stand
 
@@ -12,6 +18,11 @@ is pushed. This supersedes [the 2026-09-25 status](../kernel-status-2026-09-25/S
 | `902efb29f` | Robust MVAU task spec | [spec](../robust-mvau-2026-09-26/SPEC.md) |
 | `6aa0383cf` | Kernel README: `BufferedStream` | — |
 | `e218f9f76` | Kernel audit on the landed model | [audit](../kernel-audit-2026-09-26/AUDIT.md), [coverage](../kernel-audit-2026-09-26/COVERAGE.md), [roster reconciliation](../kernel-audit-2026-09-26/ROSTER-RECONCILIATION.md) |
+| `56475970c` | A1: per-checkout `deps/` | [record](../kernel-phase-ab-2026-09-27/RECORD.md) |
+| `34d734de8` | A2: FinnLib consolidated on `11b5c64b` (fork branch `kernels/consolidated-20260927`), memstream ported | same |
+| `d42dc05c6`, `d7a64b0be` | B1: per-input exports (engine); ports check their streams; per-port attribution | same, [engine proposal](../kernel-phase-ab-2026-09-27/PROPOSAL-per-input-exports.md) |
+| `bf9dfe0c9` | B2: clock domains as referenced Spaces; unpumped `ap_clk2x` dropped | same |
+| `75595eedb` | B3: control buses, tie-offs, sidebands, child padding; thresholding on streams | same |
 
 **Validation at the landing (`545981eea`):**
 
@@ -60,29 +71,29 @@ All of these are verified in the audit (§/probe references there).
 
 | Problem | Why it matters |
 |---|---|
-| **dotp accepts streams it can't consume** (`k/dotp.py:302-317` checks only the element type) | A wrong lane count or a transposed weight order still builds a netlist. MVAU is correct only because its own specs are |
-| **Refusals are reported by every stream a kernel touches** | One `ports` export per kernel: a bad weight dtype shows on 3 streams |
-| **No non-stream interfaces** | AXI-Lite and sideband buses can't be driven or exported, so thresholding can't compose (68 undriven bits). A padded AXIS child can't feed a child |
-| **FinnLib pinned three ways** | The kernels use `b17eae6a` (flat layout, with the fixes). `fetch-repos.sh` pins `dfeafac8` (new layout, no fixes). Upstream has neither |
-| **Shared `deps/finnlib`** | A symlink to a clone that other sessions use |
-| **Clock and reset routed by pin name** | `"clk2x" in name` in `streams.netlist`, and an unpumped design still exposes `ap_clk2x` |
-| **Only 3 of 11 kernels use the stream idiom** | Thresholding, eltwise and the input generator are standalone |
+| ~~dotp accepts streams it can't consume~~ | Fixed in B1: dotp checks lanes, lane order, column walk and frame rows |
+| ~~Refusals are reported by every stream a kernel touches~~ | Fixed in B1: per-input `PORT` exports |
+| ~~No non-stream interfaces~~ | Fixed in B3: control buses exported or tied off, sideband streams, child padding |
+| ~~FinnLib pinned three ways~~ | Fixed in A2: one pin, `11b5c64b`, on the fork. Upstream has none of the carried commits yet |
+| ~~Shared `deps/finnlib`~~ | Fixed in A1 |
+| ~~Clock and reset routed by pin name~~ | Fixed in B2: clock-domain nodes; an unpumped design has no `ap_clk2x` |
+| **Only 4 of 11 kernels use the stream idiom** | Thresholding joined in B3 (streams, control, tie-offs; not yet fused into MVAU). Eltwise and the input generator are standalone |
 | **HLS kernels can't be placed by `netlist`** | They yield HLS source requirements with no pin ABI. No HLS kernel is on the current path (D5); the HLS synthesis stage is future work (Phase D) |
 | **An unused stream is refused**, and a boundary needs its port name declared up front | Optional streams need explicit `when=` guards |
 
 ## 4. Plan
 
-Each step is independently landable and ends at a review gate. Nothing below
-has started.
+Each step is independently landable and ends at a review gate. Phases A and B
+are done (see the record); Phase C has not started.
 
-### Phase A: foundations
+### Phase A: foundations (done)
 
 | Step | Content | Exit criteria |
 |---|---|---|
 | **A1. Per-worktree `deps/`** (D3) | Make `fetch-repos.sh` produce real per-checkout clones. Replace the `deps/finnlib` symlink in this checkout and in the spike worktree. Document the `FINNLIB_ROOT` override for local FinnLib development | Each checkout builds from its own pinned `deps/`; gates green |
 | **A2. FinnLib consolidation, J0** (D4, D5) | One commit on the fork, pinned in `fetch-repos.sh`, which also ports `memstream_axi`, `memstream` and `axilite` from `finn-rtllib`, with their testbench if it's reusable. Update the kernels' source manifests to the new layout. Re-baseline the fingerprints once and record the reason (source identities change). Open upstream PRs for `replay_buffer`, the dotp fix and the memstream port if wanted | One pin everywhere; gates, XSim and the MVAU numeric sweep green; fingerprint change recorded |
 
-### Phase B: correctness and infrastructure
+### Phase B: correctness and infrastructure (done)
 
 | Step | Content | Depends on |
 |---|---|---|
@@ -95,7 +106,7 @@ has started.
 | Step | Content | Depends on |
 |---|---|---|
 | **C1. J5: VVAU reuse**, plus a reusable delivery slot | Same families, `ACTIVATION_BROADCASTING=0`, a marker generator instead of replay. Needs E-048 (SWG→VVAU lane order) re-derived | B1 |
-| **C2. J6: fused thresholding** | Migrate thresholding to the stream idiom; compose MVAU → Thresholding | B1, B3 |
+| **C2. J6: fused thresholding** | Thresholding already sits on streams and a control bus (B3). Remaining: compose MVAU → Thresholding as an optional node with `when=`-guarded streams, and the numeric sweep over the fused output | B1, B3 |
 | **C3. J7: replay as a choice** | `replay_buffer` or `input_gen`, as a `Decision` over nodes (D7) | B1, B2 |
 | **C4. J8: an RTL memstream kernel, plus runtime-writable weights** (D5) | A fixed-interface kernel over FinnLib `memstream_axi`: `DEPTH`, `WIDTH`, `SETS`, `RAM_STYLE`, and pumped memory through the clock-domain Space (B2). Initial contents go through `INIT_FILE`: check whether the artifact layer's data-file contribution supports it, and add one if not. Its AXI-Lite bus is exported at the MVAU boundary (B3). MVAU gains a writable delivery candidate, and the numeric XSI harness gains an AXI-Lite write driver. Decide whether it replaces the kernel-local `cyclic_stream.sv` for read-only delivery, which needs equivalence evidence | A2, B2, B3 |
 | **C5. J9: multi-set delivery** (R7, MLO) | `SETS > 1`, with the set-index stream as an ordinary stream reference input of the memstream kernel. MLO drives the index from outside the op (V10) | C4 |
@@ -127,7 +138,8 @@ has started.
 1. **The memstream boundary:** whether the RTL memstream also replaces the
    kernel-local `cyclic_stream.sv` for read-only delivery (C4).
 2. **The upstream path for FinnLib:** which fixes go upstream, and on what
-   schedule?
+   schedule? `replay_buffer` and two testbenches carry BSD-3-Clause headers in
+   an MIT library; relicensing is the author's call before a PR.
 3. **The dotp core split (D6):** separate kernels, or a `Decision` within one
    dotp family?
 4. **The Space model's open questions** (design record §10): a view used in its

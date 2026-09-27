@@ -222,3 +222,74 @@ and ties `ap_clk2x` (probe P1's `Data`-role top pin is gone); a pumped MVAU adds
 the derived domain, its alignment and the two-clock reset; a kernel whose pins
 follow no naming convention is driven from the domains that name its pins; a
 derived clock refuses a reset pin; an input nothing drives is refused by name.
+
+## B3. Non-stream interfaces (J4)
+
+**Control buses** (`src/finn/kernels/control.py`, new). A `ControlBus` node
+is named by the top port it presents and clocked by a `ClockDomain`. A kernel
+with a control interface references it and exports, per input, the `Control`
+it presents there (its bus, or none in this configuration). The node sees its
+kernel through `Users(CONTROL)` and exports the bus renamed to its port
+(`<port>_<MEMBER>`, target, associated with the domain's pins); `netlist` adds
+it to the top ABI after the streams and wires it member by member
+(`Composition.export`). One kernel per control bus.
+
+**Tie-offs.** A kernel's `Tieoffs` hold inputs constant and leave outputs
+unconnected (from B2). Thresholding uses them for AXI-Lite when its thresholds
+are not runtime-writable, and for the set selector of a single set.
+Runtime-writable thresholds without a control bus are refused
+(`threshold-control`).
+
+**Sidebands.** A set-index stream is an ordinary `Stream`. Thresholding with
+several sets sits on a `set_stream` whose port requires one index per input
+beat (`threshold-set-stream`); a single set takes none.
+
+**Child padding.** A padded AXIS child may now feed a child: `compatibility`
+no longer refuses child-to-child padding, and `Composition.connect` leaves the
+producer's padding bits unconnected and drives the consumer's padding with
+zeros. `UnusedOutput` gains a bit range (`offset`, `width`); validation counts
+disposed bits, and lowering leaves a pin unconnected only when all its bits are
+disposed.
+
+**Thresholding in the stream idiom (the part B3 needs of C2).**
+`ThresholdingAxiKernel` gains `clock`, `input_stream`, `output_stream`,
+`set_stream` and `control` reference inputs and exports per-input ports,
+clocking, control and tie-offs. The input port requires channels innermost
+with PE per beat (`vector_major`), the output keeps the input's order. The
+AXI-Lite bus and the AXIS ports become derived values shared by the module and
+the ports; the module's build requirements are unchanged. Fusing it into MVAU
+(C2) is not part of B3.
+
+| Evidence | Result | Transcript |
+|---|---|---|
+| `scripts/check-kernels.sh` on `75595eedb` | Space **427**; kernels **784 passed, 0 skipped** (+7 interface tests, two of them XSim); clean; exit 0 | `b3/gate-check-kernels.txt` |
+| `scripts/check-dataflow-design.sh` | **16 passed**; clean; exit 0 | `b3/gate-check-dataflow-design.txt` |
+| dotp → thresholding in XSim (`test_interfaces.py`) | The composed module's four levels equal the thresholded dot products, with the AXI-Lite bus tied and with it exported (held idle by the testbench) | in the gate |
+| MVAU numeric XSI | **28/28 PASS**, run on the B3 tree before a guard for malformed threshold tables that the first gate run found (MVAU does not import thresholding) | `b3/mvau-numeric-*.txt` |
+| MVAU fingerprints and keys | identical to B2 | `b3/fingerprints.txt` |
+
+Tests (`tests/kernels/test_interfaces.py`): probe P3 (dotp's padded INT9
+result feeds thresholding; bits 9–15 unconnected, the consumer's padding
+zero); probe P4 (read-only thresholds: every input driven, AXI-Lite and the
+set selector tied, their outputs unconnected, nothing exported); writable
+thresholds export `s_axilite` through the control node, and are refused without
+one; a two-set table takes a set-selector stream and refuses a short one.
+
+## Outcome
+
+Phases A and B are complete; each ended green on both gates with XSim
+executed, and on the 28-case MVAU numeric sweep.
+
+| | A1 | A2 | B1 | B2 | B3 |
+|---|---|---|---|---|---|
+| Space tests | 423 | 423 | 427 | 427 | 427 |
+| Kernel tests (0 skipped) | 763 | 763 | 772 | 777 | 784 |
+| Dataflow tests | 16 | 16 | 16 | 16 | 16 |
+| MVAU numeric XSI | 28/28 | 28/28 | 28/28 | 28/28 | 28/28 |
+| MVAU fingerprints | = landing | all six change (sources) | = A2 | five unpumped change (`ap_clk2x`) | = B2 |
+
+**Left for later.** FinnLib upstream PRs (and the licence headers); the
+remaining stream migrations (eltwise, input generator); the query pass items
+the work touched: the `when=` guards an optional stream still needs, and
+`Users` through forwarding composites (a FIFO stage is clocked from its
+stream's domain rather than as a user of it).
