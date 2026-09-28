@@ -40,8 +40,12 @@ import subprocess
 from pathlib import Path
 
 
-def resource_files(directory):
-    """Ship source resources and notices, excluding tests and native artifacts."""
+def resource_files(directory, prefix="", extra=()):
+    """Ship source resources and notices, excluding tests and native artifacts.
+
+    Paths are relative to the package that owns ``directory``: ``prefix`` is the
+    directory's path inside that package. ``extra`` adds suffixes to ship.
+    """
     allowed = {
         ".v",
         ".sv",
@@ -68,13 +72,12 @@ def resource_files(directory):
             x in rel.parts for x in ("test", "tests", "testcase", "tb", "__pycache__", "build")
         ):
             continue
-        if "_tb." in path.name or (
-            "sim" in rel.parts and rel.parts[:3] != ("rtllib", "sim", "hdl")
-        ):
+        # rtllib/sim/hdl holds the stitched-IP simulation controller, not a testbench.
+        if "_tb." in path.name or ("sim" in rel.parts and rel.parts[:2] != ("sim", "hdl")):
             continue
-        if notice or path.suffix in allowed or rel.parts[0] == "qnn-data":
+        if notice or path.suffix in allowed or path.suffix in extra:
             if path.suffix not in {".pyc", ".so"}:
-                result.append(rel.as_posix())
+                result.append(prefix + rel.as_posix())
     return sorted(result)
 
 
@@ -117,7 +120,13 @@ if __name__ == "__main__":
         exclude=[
             "finn.qnn-data",
             "finn.qnn-data.*",
-            "finn.bundled.*",
+            # Data directories inside packages, not packages of their own.
+            "finn.rtllib.*",
+            "finn.custom_hls.*",
+            "finn.xsi.src",
+            "finn.xsi.src.*",
+            "finn.deploy.data",
+            "finn.deploy.data.*",
             # Retired dataflow code, kept in the checkout as reference only.
             "finn.parked",
             "finn.parked.*",
@@ -129,7 +138,11 @@ if __name__ == "__main__":
         packages=packages,
         package_dir={"": "src"},
         package_data={
-            "finn.bundled": resource_files("src/finn/bundled"),
+            "finn": ["resources.toml"],
+            "finn.rtllib": resource_files("src/finn/rtllib"),
+            "finn.custom_hls": resource_files("src/finn/custom_hls"),
+            "finn.xsi": resource_files("src/finn/xsi/src", prefix="src/"),
+            "finn.deploy": resource_files("src/finn/deploy/data", prefix="data/", extra=(".py",)),
             "finn.core.space": ["py.typed"],
             "finn.dataflow": ["py.typed"],
             "finn.kernels": ["py.typed"],

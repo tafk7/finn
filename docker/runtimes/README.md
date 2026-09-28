@@ -48,7 +48,7 @@ against it.
 - **SLASH** — `MakeCPPDriver` builds `finn-vrt-driver` against VRT.
 - **slashkit** — the Slash Alveo link flow executes this linker in the image.
 - **PyNQ** — does NOT belong. `from pynq import ...` occurs only in
-  `src/finn/qnn-data/templates/driver/driver_base.py`, which is a template
+  `src/finn/deploy/data/pynq_driver/driver_base.py`, which is a template
   copied to the board. Nothing in the image imports it.
 
 ## What does not belong here

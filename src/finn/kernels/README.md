@@ -225,7 +225,7 @@ The independent kernel gate does not claim those consumers work. The canonical
 physical definitions and shared support belong here.
 
 The source baseline uses FinnLib's flat `rtl/` and `hls/` layout; the pin is the
-`finnlib` declaration in `finn/bundled/resources.toml`
+`finnlib` declaration in `finn/resources.toml`
 (`finn-resources update finnlib --ref REF` moves it). Dotp output-buffer and AXI-Lite
 declaration-order corrections are in FinnLib; there are no private copies in
 `resources`. Replay is also supplied by FinnLib. Eltwise's source closure

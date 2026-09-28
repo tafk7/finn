@@ -132,23 +132,27 @@ def test_checkout_and_sdist_wheels_have_same_assets_and_work_without_checkout(tm
     assert data == contents(rebuilt)
     assert json.loads(data["finn/_build_info.json"])["revision"] == revision
     assert not any(name.startswith("_finn_") for name in data)
-    assert "finn/bundled/rtllib/sim/hdl/sim_ctrl.v" in data
+    assert "finn/rtllib/sim/hdl/sim_ctrl.v" in data
     assert (
-        "finn/bundled/rtllib/memstream/component.xml" not in data
-        or data["finn/bundled/rtllib/memstream/component.xml"]
+        "finn/rtllib/memstream/component.xml" not in data
+        or data["finn/rtllib/memstream/component.xml"]
     )
-    assert "finn/bundled/qnn-data/cpp/CNPY_LICENSE" in data
-    assert "finn/bundled/resources.toml" in data and "finn/resources/_cli.py" in data
+    assert "finn/custom_hls/CNPY_LICENSE" in data and "finn/custom_hls/cnpy.cpp" in data
+    assert "finn/xsi/src/xsi_finn.cpp" in data
+    assert "finn/deploy/data/mdd/finn_design.mdd" in data
+    assert "finn/deploy/data/pynq_driver/driver_base.py" in data
+    assert "finn/resources.toml" in data and "finn/resources/_cli.py" in data
     assert not any(
         "/testcase/" in name or "_tb." in name or "/build_dataflow/" in name for name in data
     )
     installed = tmp_path / "environment"
     python = python_env(installed)
     install(python, tmp_path, wheel)
-    resources = next((installed / "lib").glob("python*/site-packages/finn/bundled"))
-    for path in resources.rglob("*"):
-        path.chmod(0o555 if path.is_dir() else 0o444)
-    resources.chmod(0o555)
+    package = next((installed / "lib").glob("python*/site-packages/finn"))
+    for resources in ("rtllib", "custom_hls", "xsi/src", "deploy/data"):
+        for path in (package / resources).rglob("*"):
+            path.chmod(0o555 if path.is_dir() else 0o444)
+        (package / resources).chmod(0o555)
     smoke = tmp_path / "smoke.py"
     shutil.copy2(SMOKE, smoke)
     # Remove the exact source trees used for both wheels. This is an installed
@@ -191,7 +195,7 @@ def test_two_editable_environments_observe_only_selected_code_and_resources(tmp_
         environments.append((python, source))
     first = environments[0][1]
     (first / "src/finn/util/runtime_edit_probe.py").write_text('value = "selected change"\n')
-    asset = first / "src/finn/bundled/rtllib/fifo/hdl/fifo.sv"
+    asset = first / "src/finn/rtllib/fifo/hdl/fifo.sv"
     replacement = asset.with_suffix(".new")
     replacement.write_text(asset.read_text() + "\n// selected resource change\n")
     replacement.replace(asset)

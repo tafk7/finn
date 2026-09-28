@@ -795,7 +795,7 @@ def test_image_revision_changes_with_image_inputs_and_build_args(tmp_path):
 
 def test_image_revision_counts_only_baked_resource_pins(tmp_path):
     root = _make_image_input_fixture(tmp_path)
-    declarations = root / "src/finn/bundled/resources.toml"
+    declarations = root / "src/finn/resources.toml"
     declarations.parent.mkdir(parents=True)
 
     def pins(hlslib, finnlib):
@@ -813,8 +813,7 @@ commit = "{"2" * 40}"
 digest = "sha256:{finnlib * 64}"
 
 [resources.rtllib]
-package = "finn.bundled"
-subdir = "rtllib"
+package = "finn.rtllib"
 """
         )
         return _provenance(root)[0]
@@ -876,9 +875,9 @@ def test_image_input_manifest_covers_dockerfile_sources():
     # (finn_image_revision in docker/lib.sh), so moving FinnLib's pin does not
     # change the image.
     lib = (Path(REPO) / "docker/lib.sh").read_text()
-    assert "src/finn/bundled/resources.toml" in lib
+    assert "src/finn/resources.toml" in lib
     for source in re.findall(r"--mount=type=bind,source=([^,\s]+),target", dockerfile):
-        if source not in (".", "src/finn/bundled/resources.toml"):
+        if source not in (".", "src/finn/resources.toml"):
             assert any(fnmatch.fnmatch(source, p) or p.startswith(source) for p in patterns), source
     # FINN's own sources are installed from the mounted checkout, not baked.
     # finn.resources is the exception: the image fetches its resources with it.
@@ -998,7 +997,7 @@ def test_container_docs_do_not_reference_retired_interfaces():
 def test_sbx_docs_distinguish_provisioning_from_workload_egress():
     with open(os.path.join(REPO, "docs/finn/getting_started.rst"), errors="replace") as handle:
         body = handle.read()
-    assert "no network\ngrant for the FINN workload" in body
+    assert "no network grants" in body
     assert "package-repository access while provisioning" in body
 
 

@@ -1,9 +1,14 @@
-# FINN C++ Utilities for NumPy I/O
+# FINN's custom HLS sources
 
-This directory contains C++ utilities for reading and writing NumPy files in HLS simulations.
+HLS C++ that FINN compiles with its HLS operations, on the include path of both
+C++ simulation and synthesis. FinnLib is intended to replace the operation
+sources here. Other code finds this directory as the `custom-hls` resource
+(`finn.resources.path("custom-hls")`), not by its location.
 
 ## Files
 
+- `checksum.hpp`, `checksum.cpp`, `checksum_tb.sv` - the checksum operation
+- `lookup.hpp` - the lookup operation
 - `npy2apintstream.hpp` - Convert NumPy arrays to/from `ap_int` streams
 - `npy2vectorstream.hpp` - Convert NumPy arrays to/from HLS vector streams
 - `cnpy.h`, `cnpy.cpp` - NumPy file I/O library (MIT License)

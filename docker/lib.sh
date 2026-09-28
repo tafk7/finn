@@ -101,8 +101,8 @@ finn_image_revision () (
         # redistributable ones (python stage) and the board files (dev stage) of
         # docker/Dockerfile.finn. Moving another pin, such as FinnLib's, which is
         # never baked, leaves the image as it is.
-        [ ! -f src/finn/bundled/resources.toml ] \
-            || python3 -B - src/finn/bundled/resources.toml <<'PY' || exit 2
+        [ ! -f src/finn/resources.toml ] \
+            || python3 -B - src/finn/resources.toml <<'PY' || exit 2
 import sys, tomllib
 with open(sys.argv[1], "rb") as file:
     declared = tomllib.load(file)["resources"]

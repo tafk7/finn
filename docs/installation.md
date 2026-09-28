@@ -86,7 +86,7 @@ script changes.
 * **Python package:** add it to `[project] dependencies` (or a dependency group),
   with a `[tool.uv.sources]` git entry if it is unreleased, then `uv lock`.
 * **Build data** (HLS or RTL libraries, board files, Tcl libraries): declare it as
-  an [external resource](#external-resources) in `src/finn/bundled/resources.toml`
+  an [external resource](#external-resources) in `src/finn/resources.toml`
   and look it up by kind with `finn.resources.paths(kind)`. Say whether FINN may
   redistribute it (`redistributable`); the images follow that.
 
@@ -104,9 +104,13 @@ where.
 
 ## Package data and external resources
 
-`finn.util.resources.resource_path(family, *parts)` resolves stable read-only
-paths in `rtllib`, `custom_hls`, `xsi`, or `qnn-data`, under `finn.bundled`
-(`src/finn/bundled/` in a checkout). The Python XSI driver lives at `src/finn_xsi/`.
+FINN's own RTL and HLS sources are packages in the wheel: `finn/rtllib` and
+`finn/custom_hls` (both expected to give way to FinnLib), and the XSI bridge
+sources in `finn/xsi/src`. Look them up by resource name, not location:
+`finn.resources.path("rtllib")`, `"custom-hls"` or `"xsi"`; inside FINN,
+`finn.util.resources.resource_path(family, *parts)` does the same. Deployment
+data (the Vitis driver descriptor, PYNQ driver templates) is in `finn/deploy/data`.
+The Python XSI driver lives at `src/finn_xsi/`.
 Editable installations observe changes to these directly. Generated RTL, driver
 files and compiled XSI extensions belong in writable build storage, never in the
 installed distribution.
@@ -132,7 +136,7 @@ finn-resources check             # git, caches and overrides
 
 ### FINN's resources
 
-Declared in `src/finn/bundled/resources.toml`, which ships in the wheel:
+Declared in `src/finn/resources.toml`, which ships in the wheel:
 
 | Name | Kind | Source |
 |---|---|---|
@@ -279,9 +283,9 @@ path = "../my-rtl"
 Kinds are free-form. FINN itself uses `hls-include` and `vivado-boards`; other
 kinds are for your own code to look up.
 
-FINN's bundled data (`rtllib`, `custom-hls`, `xsi`, `qnn-data` under
-`finn/bundled/`) is declared the same way, as `package` resources, so
-`FINN_RESOURCES_RTLLIB=/path/to/rtllib` or a project declaration replaces it.
+FINN's own sources (`rtllib`, `custom-hls`, `xsi`) are declared the same way, as
+`package` resources, so `FINN_RESOURCES_RTLLIB=/path/to/rtllib` or a project
+declaration replaces one.
 
 A Python package can ship declarations too: put a `resources.toml` with
 `[resources.NAME]` tables in one of its modules and name that module in the

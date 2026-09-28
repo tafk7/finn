@@ -40,7 +40,7 @@ independent sweep.
 ### Running against FinnLib
 
 The kernels compile against FinnLib, a separate repository that FINN takes as
-the `finnlib` resource (`src/finn/bundled/resources.toml`). Work against a clone:
+the `finnlib` resource (`src/finn/resources.toml`). Work against a clone:
 
 ```
 export FINN_RESOURCES_FINNLIB=/path/to/finnlib       # native

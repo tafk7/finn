@@ -82,7 +82,9 @@ if [ -n "$FINN_XILINX_PATH" ] && [ -n "$FINN_XILINX_VERSION" ]; then
     # WHERE the tools are; finn-toolchain.sh takes that and applies it. The
     # image sources the same second file, so the bare host and the container
     # apply the toolchain through identical code.
-    eval "$("$FINN_ROOT/docker/config.py" inspect --tier build --format sh 2>/dev/null | sed 's/^/export /')"
+    # Only the toolchain: native scratch and FINN_HOME keep their own defaults.
+    eval "$("$FINN_ROOT/docker/config.py" inspect --tier build --format sh 2>/dev/null \
+        | grep -v -E '^(FINN_BUILD_DIR|FINN_HOST_BUILD_DIR)=' | sed 's/^/export /')"
     . "$FINN_ROOT/docker/finn-toolchain.sh"
 
     if [ -n "${XILINX_VIVADO:-}" ]; then

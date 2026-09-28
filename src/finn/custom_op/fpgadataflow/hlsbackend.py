@@ -273,7 +273,6 @@ class HLSBackend(ABC):
         builder = CppBuilder(toolchain=toolchain)
         builder.append_includes(
             [
-                "-I" + resource_path("qnn-data", "cpp"),
                 "-I" + resources.path("hlslib"),
                 "-I" + resource_path("custom_hls"),
                 "-I" + hls_path + "/include",
@@ -294,7 +293,7 @@ class HLSBackend(ABC):
         )
         for source in sorted(glob.glob(os.path.join(code_gen_dir, "*.cpp"))):
             builder.append_sources(source)
-        builder.append_sources(resource_path("qnn-data", "cpp/cnpy.cpp"))
+        builder.append_sources(resource_path("custom_hls", "cnpy.cpp"))
         builder.set_executable_path(code_gen_dir + "/node_model")
         builder.build(code_gen_dir)
         self.set_nodeattr("executable_path", builder.executable_path)

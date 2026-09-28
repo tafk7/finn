@@ -108,10 +108,10 @@ g++ -o test_npy2apintstream test.cpp {} \
 -I{}/include -I{}/include -I{} \
 -I{} \
 --std=c++17 -lz""".format(
-        shlex.quote(resource_path("qnn-data", "cpp/cnpy.cpp")),
+        shlex.quote(resource_path("custom_hls", "cnpy.cpp")),
         os.environ["HLS_PATH"],
         os.environ["VITIS_PATH"],
-        shlex.quote(resource_path("qnn-data", "cpp")),
+        shlex.quote(resource_path("custom_hls")),
         shlex.quote(resources.path("hlslib")),
     )
     with open(test_dir + "/compile.sh", "w") as f:

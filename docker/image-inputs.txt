@@ -14,7 +14,7 @@ docker/Dockerfile.finn
 pyproject.toml
 uv.lock
 src/finn/resources/*.py
-# src/finn/bundled/resources.toml counts only through the pins of the resources
+# src/finn/resources.toml counts only through the pins of the resources
 # the image bakes in; see finn_image_revision in docker/lib.sh.
 docker/finn_entrypoint.sh
 docker/quicktest.sh

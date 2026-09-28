@@ -98,10 +98,10 @@ def test_npy2vectorstream(test_shape, dtype):
 g++ -o test_npy2vectorstream test.cpp {} \
 -I{}/include -I{}/include -I{} \
 --std=c++17 -lz """.format(
-        shlex.quote(resource_path("qnn-data", "cpp/cnpy.cpp")),
+        shlex.quote(resource_path("custom_hls", "cnpy.cpp")),
         os.environ["HLS_PATH"],
         os.environ["VITIS_PATH"],
-        shlex.quote(resource_path("qnn-data", "cpp")),
+        shlex.quote(resource_path("custom_hls")),
     )
     with open(test_dir + "/compile.sh", "w") as f:
         f.write(cmd_compile)

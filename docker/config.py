@@ -396,7 +396,6 @@ def sh_assignments(data, create_build_dir=True):
     values.update(
         {
             "FINN_BUILD_DIR": build_dir,
-            "FINN_HOME": build_dir + "/.finn",
             "FINN_HOST_BUILD_DIR": build_dir,
             "FINN_GID": str(os.getgid()),
             "FINN_RUNTIMES": data["runtime_csv"],

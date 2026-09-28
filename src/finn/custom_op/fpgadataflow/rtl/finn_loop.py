@@ -38,7 +38,7 @@ from qonnx.custom_op.registry import getCustomOp, is_custom_op
 from qonnx.util.basic import get_by_name, qonnx_make_model, roundup_to_integer_multiple
 
 import finn.core.onnx_exec as oxe
-from finn import xsi
+from finn import deploy, xsi
 from finn.analysis.fpgadataflow.dataflow_performance import dataflow_performance
 from finn.custom_op.fpgadataflow import templates
 from finn.custom_op.fpgadataflow.hwcustomop import HWCustomOp
@@ -1285,7 +1285,7 @@ class FINNLoop(HWCustomOp, RTLBackend):
             "set_property value_resolve_type user [ipx::get_bus_parameters "
             "-of [ipx::get_bus_interfaces -of [ipx::current_core ]]]"
         )
-        example_data_dir = resource_path("qnn-data", "mdd-data")
+        example_data_dir = deploy.data_path("mdd")
         shutil.copytree(example_data_dir, vivado_stitch_proj_dir + "/data")
 
         template = templates.ip_gen_loop_op

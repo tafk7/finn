@@ -38,6 +38,7 @@ from qonnx.transformation.base import Transformation
 from qonnx.util.basic import get_num_default_workers
 from shutil import copytree
 
+from finn import deploy
 from finn.transformation.fpgadataflow.replace_verilog_relpaths import (
     ReplaceVerilogRelPaths,
 )
@@ -673,7 +674,7 @@ class CreateStitchedIP(Transformation):
                 "[ipx::get_file_groups xilinx_simulationcheckpoint]" % block_name
             )
         # add a rudimentary driver mdd to get correct ranges in xparameters.h later on
-        example_data_dir = resource_path("qnn-data", "mdd-data")
+        example_data_dir = deploy.data_path("mdd")
         copytree(example_data_dir, vivado_stitch_proj_dir + "/data")
 
         #####

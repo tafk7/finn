@@ -71,7 +71,9 @@ def test_generated_hls_tcl_resolves_resources_and_external_input(tmp_path, monke
     assert "$HLSLIB$" not in script and "$::env(FINN_" not in script
     assert tcl_quote(external) in script
     assert tcl_quote(resource_path("custom_hls")) in script
-    assert '-I\\"$config_bnnlibdir\\"' in script
+    # Unquoted: Vitis HLS passes quote characters in -cflags through to the
+    # compiler, so -I"dir" names a directory that does not exist.
+    assert '-cflags "-std=c++14 -I$config_bnnlibdir -I$config_customhlsdir"' in script
 
 
 def test_resource_path_rejects_escape():

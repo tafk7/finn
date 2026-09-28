@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 from qonnx.core.modelwrapper import ModelWrapper
 
+from finn import deploy
 from finn.custom_op.fpgadataflow import templates
 from finn.custom_op.fpgadataflow.rtl.streamingfifo_rtl import StreamingFIFO_rtl
 from finn.transformation.fpgadataflow.make_driver import MakePYNQDriver
@@ -19,9 +20,10 @@ for family, member in [
     ("rtllib", "fifo/hdl/fifo.sv"),
     ("custom_hls", "checksum.hpp"),
     ("xsi", "xsi_finn.cpp"),
-    ("qnn-data", "cpp/CNPY_LICENSE"),
+    ("custom_hls", "CNPY_LICENSE"),
 ]:
     assert Path(resource_path(family, member)).is_file()
+assert Path(deploy.data_path("mdd/finn_design.mdd")).is_file()
 node = oh.make_node(
     "StreamingFIFO_rtl",
     ["in"],

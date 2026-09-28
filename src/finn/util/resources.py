@@ -1,4 +1,4 @@
-"""Stable, read-only paths to FINN's bundled data (``finn/bundled``).
+"""Stable, read-only paths to FINN's own sources: rtllib, custom_hls and xsi.
 
 Wheels must be unpacked (as pip normally installs them). Generated projects may
 retain these absolute paths: keep this installation in place for their lifetime.
@@ -8,14 +8,14 @@ from pathlib import Path
 
 from finn import resources
 
-# Families of FINN's bundled data, by the name of the resource that supplies each.
-_FAMILIES = {"rtllib": "rtllib", "custom_hls": "custom-hls", "xsi": "xsi", "qnn-data": "qnn-data"}
+# Families of FINN's own sources, by the name of the resource that supplies each.
+_FAMILIES = {"rtllib": "rtllib", "custom_hls": "custom-hls", "xsi": "xsi"}
 
 
 def resource_path(family: str, *parts: str) -> str:
-    """Return an existing path in rtllib, custom_hls, xsi or qnn-data.
+    """Return an existing path in rtllib, custom_hls or xsi.
 
-    Each family is a FINN resource (finn/bundled/resources.toml), so
+    Each family is a FINN resource (finn/resources.toml), so
     FINN_RESOURCES_<NAME> or a project declaration can replace it.
     """
     if family not in _FAMILIES:

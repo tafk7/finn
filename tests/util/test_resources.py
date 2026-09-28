@@ -721,7 +721,7 @@ def test_github_archive_urls():
     assert _store.github_archive("git@github.com:a/b.git", commit) is None
 
 
-def test_bundled_families_are_resources_a_directory_can_replace(project, tmp_path, monkeypatch):
+def test_finn_sources_are_resources_a_directory_can_replace(project, tmp_path, monkeypatch):
     from finn.util.resources import resource_path  # noqa: PLC0415
 
     assert resources.status("rtllib").state == "package"

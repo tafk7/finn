@@ -197,10 +197,10 @@ RUN test "$(uv pip list --format freeze | wc -l)" -gt 100 && \
     rm -rf /tmp/pytest-probe
 
 # Redistributable external resources (finn-hlslib) in the read-only system cache,
-# at the pins in finn/bundled/resources.toml. finn.resources uses only the standard
+# at the pins in finn/resources.toml. finn.resources uses only the standard
 # library, so it runs from the mounted sources before FINN is installed.
 RUN --mount=type=bind,source=src/finn/resources,target=/tmp/src/finn/resources \
-    --mount=type=bind,source=src/finn/bundled/resources.toml,target=/tmp/src/finn/bundled/resources.toml \
+    --mount=type=bind,source=src/finn/resources.toml,target=/tmp/src/finn/resources.toml \
     PYTHONPATH=/tmp/src python -B -m finn.resources fetch --all --redistributable-only \
         --dest /opt/finn/resources >/dev/null && \
     rm -f /opt/finn/resources/.*.lock
@@ -237,7 +237,7 @@ USER agent
 FROM runtime AS dev
 USER root
 RUN --mount=type=bind,source=src/finn/resources,target=/tmp/src/finn/resources \
-    --mount=type=bind,source=src/finn/bundled/resources.toml,target=/tmp/src/finn/bundled/resources.toml \
+    --mount=type=bind,source=src/finn/resources.toml,target=/tmp/src/finn/resources.toml \
     PYTHONPATH=/tmp/src python -B -m finn.resources fetch --kind vivado-boards \
         --dest /opt/finn/resources >/dev/null && \
     rm -f /opt/finn/resources/.*.lock

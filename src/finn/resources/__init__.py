@@ -3,7 +3,7 @@
 Each resource (finn-hlslib, Vivado board files, a user's RTL library...) is
 declared with a pinned source and a content digest, fetched on first use, and
 cached by digest; or it is used in place, from an installed package (``package``,
-as FINN's own bundled data is) or a local directory (``path``). Consumers ask for
+as FINN's own RTL and HLS sources are) or a local directory (``path``). Consumers ask for
 resources by kind, so they never need to know names::
 
     from finn import resources
@@ -11,7 +11,7 @@ resources by kind, so they never need to know names::
     resources.path("hlslib")               # one resource, fetched if needed
     resources.paths("vivado-boards")       # every resource of a kind
 
-Declarations come from FINN (``finn/bundled/resources.toml``), then installed
+Declarations come from FINN (``finn/resources.toml``), then installed
 packages (the ``finn.resources`` entry-point group, naming a module that
 contains a ``resources.toml``), then the nearest ``pyproject.toml``
 (``[tool.finn.resources]``) and files listed in FINN_RESOURCES_FILES. Packages

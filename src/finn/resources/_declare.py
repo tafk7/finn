@@ -1,7 +1,7 @@
 """Resource declarations: parsing, validation and merging.
 
 A declaration is a TOML table naming one resource and its pinned source. FINN's
-own declarations ship in ``finn/bundled/resources.toml``. Installed packages add
+own declarations ship in ``finn/resources.toml``. Installed packages add
 theirs through the ``finn.resources`` entry-point group: each entry point names
 a module (package) containing a ``resources.toml``. A project may add or
 redefine resources in ``[tool.finn.resources]`` of its ``pyproject.toml`` or in
@@ -17,7 +17,7 @@ from pathlib import Path, PurePosixPath
 
 logger = logging.getLogger("finn.resources")
 
-FINN_FILE = Path(__file__).resolve().parent.parent / "bundled" / "resources.toml"
+FINN_FILE = Path(__file__).resolve().parent.parent / "resources.toml"
 PREFIX = "FINN_RESOURCES_"
 
 _NAME = re.compile(r"[a-z0-9][a-z0-9-]*")

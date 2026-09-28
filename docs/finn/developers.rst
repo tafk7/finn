@@ -120,7 +120,7 @@ To test against another commit, change its ``rev`` and run
 ``uv lock --upgrade-package NAME``.
 
 finn-hlslib and the Vivado board files are external resources, declared in
-``src/finn/bundled/resources.toml`` with pinned commits and content digests,
+``src/finn/resources.toml`` with pinned commits and content digests,
 fetched on first use and cached (``finn.resources``; ``finn-resources list``
 shows them). To co-develop finn-hlslib, point FINN at a checkout with
 ``FINN_RESOURCES_HLSLIB=../finn-hlslib``; ``finn-resources update hlslib --ref
