@@ -65,6 +65,7 @@ Phase C is next.
 | D8 | Per-port refusal attribution is fixed now, in J2. A stream input names the one port it presents, so a refusal reaches only its own stream (audit H4) |
 | D9 | The audit's reordered plan is approved: VVAU before thresholding, with J2 and J4 added (audit H6) |
 | D11 | *Added after B3.* **A Kernel owns the design choices of one generated module.** It may compose sub-kernels inside that module and exposes a complete pin interface for it: pin roles, clock relations and buses. It does not wire its own instance into a design. Instance wiring (the design's clocks and frequencies, clock-domain crossing, edges between separately generated modules) consumes that interface and belongs to the dataflow or artifact-integration layer. Consequences: B2's `ClockDomain`/`DerivedClock` nodes and `Stream.clock` are removed. Composites drive child clocks by pin role, and the only clock choices are per-kernel pumping. The target clock period is a kernel input: dotp derives its DSP58 segmentation from it, as FINN's RTL MVAU does |
+| D12 | *Added after the B2 revision.* **`MatMulKernel`**: MVAU is renamed and dissolved with VVAU into one design space; thresholding is cut out; fused HLS designs are left behind. Where RTL combines what should be design-space choices, and where kernel distinctions should collapse, is decided first. Task spec: [`../matmul-kernel-2026-09-27/SPEC.md`](../matmul-kernel-2026-09-27/SPEC.md) |
 | D10 | *Added after B1.* B1's port checks are kept, but they are a kernel-side stopgap: dotp checks what it reads against the forms it is given. A stream that knows the whole tensor it iterates, and so which foldings of it are valid, is the robust model. That opens design questions about the `Stream` object and how much of the original dataflow modeling corpus to adopt or revise. **Parked** as the stream and dataflow modeling revision (Phase D) |
 
 ## 3. Known problems
@@ -103,14 +104,17 @@ are done (see the record); Phase C has not started.
 | **B2. J3: clock and reset** | As built: a clock-domain family referenced by kernels. Revised (D11): child clocks and resets are driven by pin role, not by domain nodes or names; the unpumped `ap_clk2x` is dropped (D7); the target clock period sets dotp's segmentation | A2 |
 | **B3. J4: non-stream interfaces** | AXI-Lite export and tie-off, sideband buses, and padding disposal between children | B2 |
 
-### Phase C: robust MVAU capabilities (the audit's order)
+### Phase C: robust matmul capabilities
 
 | Step | Content | Depends on |
 |---|---|---|
-| **C1. J5: VVAU reuse**, plus a reusable delivery slot | Same families, `ACTIVATION_BROADCASTING=0`, a marker generator instead of replay. Needs E-048 (SWG→VVAU lane order) re-derived | B1 |
-| **C2. J6: fused thresholding** | Thresholding already sits on streams and a control bus (B3). Remaining: compose MVAU → Thresholding as an optional node with `when=`-guarded streams, and the numeric sweep over the fused output | B1, B3 |
+| **C0. `MatMulKernel`** (D12) | The [task spec](../matmul-kernel-2026-09-27/SPEC.md), increments M0–M4: the collapse and split analysis at a human gate, then the rename, dotp's per-channel mode, and one composite for the dense and per-channel contractions | B1–B3 |
+| ~~C1. J5: VVAU reuse~~ **Replaced** by the [`MatMulKernel` spec](../matmul-kernel-2026-09-27/SPEC.md): MVAU and VVAU dissolve into one design space; thresholding is cut out | — | — |
+| *(was C1)* VVAU reuse, plus a reusable delivery slot | Same families, `ACTIVATION_BROADCASTING=0`, a marker generator instead of replay. Needs E-048 (SWG→VVAU lane order) re-derived | B1 |
+| ~~C2. J6: fused thresholding~~ **Dropped** by the `MatMulKernel` spec: thresholding stays its own kernel; placing it with a matmul in one module is an operation-to-module mapping decision of the dataflow layer (D10, D11) | — | — |
+| *(was C2)* fused thresholding | Thresholding already sits on streams and a control bus (B3). Remaining: compose MVAU → Thresholding as an optional node with `when=`-guarded streams, and the numeric sweep over the fused output | B1, B3 |
 | **C3. J7: replay as a choice** | `replay_buffer` or `input_gen`, as a `Decision` over nodes (D7) | B1, B2 |
-| **C4. J8: an RTL memstream kernel, plus runtime-writable weights** (D5) | A fixed-interface kernel over FinnLib `memstream_axi`: `DEPTH`, `WIDTH`, `SETS`, `RAM_STYLE`, and pumped memory through the clock-domain Space (B2). Initial contents go through `INIT_FILE`: check whether the artifact layer's data-file contribution supports it, and add one if not. Its AXI-Lite bus is exported at the MVAU boundary (B3). MVAU gains a writable delivery candidate, and the numeric XSI harness gains an AXI-Lite write driver. Decide whether it replaces the kernel-local `cyclic_stream.sv` for read-only delivery, which needs equivalence evidence | A2, B2, B3 |
+| **C4. J8: an RTL memstream kernel, plus runtime-writable weights** (D5) | A fixed-interface kernel over FinnLib `memstream_axi`: `DEPTH`, `WIDTH`, `SETS`, `RAM_STYLE`, and pumped memory as a Decision of the memstream kernel (its 2x clock pin driven by role). Initial contents go through `INIT_FILE`: check whether the artifact layer's data-file contribution supports it, and add one if not. Its AXI-Lite bus is exported at the module boundary (B3). `MatMulKernel` gains a writable delivery candidate, and the numeric XSI harness gains an AXI-Lite write driver. Decide whether it replaces the kernel-local `cyclic_stream.sv` for read-only delivery, which needs equivalence evidence | A2, B2, B3, C0 |
 | **C5. J9: multi-set delivery** (R7, MLO) | `SETS > 1`, with the set-index stream as an ordinary stream reference input of the memstream kernel. MLO drives the index from outside the op (V10) | C4 |
 | **C6. J10: stream adapters** | Width conversion, lane regroup and reorder as a `Decision` over adapter nodes inside a stream, chosen by `classify()` | B1, C3 |
 
