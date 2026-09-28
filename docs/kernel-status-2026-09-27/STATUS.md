@@ -87,7 +87,7 @@ All of these are verified in the audit (§/probe references there).
 ## 4. Plan
 
 Each step is independently landable and ends at a review gate. Phases A and B
-are done (see the record); Phase C has not started.
+are done (see the record). Phase C is executing (M0 answered 2026-09-27).
 
 ### Phase A: foundations (done)
 
@@ -116,7 +116,8 @@ are done (see the record); Phase C has not started.
 | **C3. J7: replay as a choice** | `replay_buffer` or `input_gen`, as a `Decision` over nodes (D7) | B1, B2 |
 | **C4. J8: an RTL memstream kernel, plus runtime-writable weights** (D5) | A fixed-interface kernel over FinnLib `memstream_axi`: `DEPTH`, `WIDTH`, `SETS`, `RAM_STYLE`, and pumped memory as a Decision of the memstream kernel (its 2x clock pin driven by role). Initial contents go through `INIT_FILE`: check whether the artifact layer's data-file contribution supports it, and add one if not. Its AXI-Lite bus is exported at the module boundary (B3). `MatMulKernel` gains a writable delivery candidate, and the numeric XSI harness gains an AXI-Lite write driver. Decide whether it replaces the kernel-local `cyclic_stream.sv` for read-only delivery, which needs equivalence evidence | A2, B2, B3, C0 |
 | **C5. J9: multi-set delivery** (R7, MLO) | `SETS > 1`, with the set-index stream as an ordinary stream reference input of the memstream kernel. MLO drives the index from outside the op (V10) | C4 |
-| **C6. J10: stream adapters** | Width conversion, lane regroup and reorder as a `Decision` over adapter nodes inside a stream, chosen by `classify()` | B1, C3 |
+| **C5.5. D10 design round** | A first-principles design of the dataflow `Stream` for kernel Spaces, by a fresh-context review of the prior corpus (scratchpad `dataflow/`, `space/`, `open/`) taken as wary inputs. Output: [`../stream-model-2026-09-27/DESIGN.md`](../stream-model-2026-09-27/DESIGN.md), for review. Design only; implementing it is Phase D | B1–B3 |
+| **C6. J10: stream adapters** | Width conversion (FinnLib `vpc`), lane regroup and reorder (`inner_shuffle`) as a `Decision` over adapter nodes inside a stream, chosen by `classify()`. Within one generated module only; edges between modules are D10's. Built consistently with the C5.5 design | B1, C3, C5.5 |
 
 ### Phase D: planned and deferred work
 
@@ -128,6 +129,10 @@ are done (see the record); Phase C has not started.
 | **Reusing cached results across snapshots** | A local edit re-runs the whole graph. It matters once search runs over graphs of many kernels |
 | **Other standalone kernels** (eltwise, input generator) | Move them to the stream idiom when a composite needs them |
 | **Stream and dataflow modeling revision** (D10, parked) | Streams that understand the full tensor they iterate and the valid folding configurations over it, instead of kernels checking the forms they are handed. Decide the shape of `Stream`, and how much of the dataflow modeling corpus (`finn.dataflow`, the roster's S1 contract, the parked dataflow model) to adopt or iterate on. It subsumes B1's dotp form checks and informs adapters (C6). It also owns instance wiring (D11): edges between separately generated modules, and the design's clocks. Whether a stitched design is one more composite wired by the same `netlist` is a question for this pass. Plan it together with the `finn.dataflow` model pass |
+| **MatMul device coverage** (flagged important) | A LUT dot-product core; native per-channel on DSP48E1/E2; further device and behaviour permutations. Each lands as another core kernel or candidate in `MatMulKernel`'s space |
+| **Choosing among valid candidates** | Compatibility filters candidates; where several remain, choosing is optimization (DSE passes), future work |
+| **Revisit: `NARROW_WEIGHTS`** | Provisionally derived from known weights (cyclic delivery), 0 otherwise. The user wants to revisit it |
+| **Revisit: cyclic vs memstream** | Both stay delivery candidates. Whether to eliminate or consolidate one is a future optimization question |
 | **`finn.dataflow` model pass** | After robust MVAU; to be planned with the stream and dataflow modeling revision |
 | **Diagrams** in `scratchpad/space/diagrams/` | Regenerate them for the new API |
 
@@ -142,13 +147,13 @@ are done (see the record); Phase C has not started.
 
 ## 5. Open questions for later
 
-1. **The memstream boundary:** whether the RTL memstream also replaces the
-   kernel-local `cyclic_stream.sv` for read-only delivery (C4).
+1. ~~The memstream boundary~~ *Answered 2026-09-27:* both stay delivery
+   candidates; consolidation is a future optimization question (Phase D).
 2. **The upstream path for FinnLib:** which fixes go upstream, and on what
    schedule? `replay_buffer` and two testbenches carry BSD-3-Clause headers in
    an MIT library; relicensing is the author's call before a PR.
-3. **The dotp core split (D6):** separate kernels, or a `Decision` within one
-   dotp family?
+3. ~~The dotp core split (D6)~~ *Answered 2026-09-27:* each meaningfully
+   different core is its own kernel, selected by a Decision (MatMul spec, M0).
 4. **The Space model's open questions** (design record §10): a view used in its
    own class body (`cast`), the path form of `inspect`, and redundant
    obligations.

@@ -1,6 +1,6 @@
 # Task spec: `MatMulKernel`, one design space for the dot-product units
 
-Date: 2026-09-27. Status: **specified, not started.** It replaces Phase C's C1
+Date: 2026-09-27. Status: **M0 answered; executing.** It replaces Phase C's C1
 (VVAU reuse) and C2 (fused thresholding) in
 [`STATUS.md`](../kernel-status-2026-09-27/STATUS.md). It supersedes the
 MVAU framing of the [robust MVAU spec](../robust-mvau-2026-09-26/SPEC.md),
@@ -15,6 +15,33 @@ whose remaining capabilities (R3, R6, R7, R8) now apply to this kernel.
 | M-D3 | **MVAU, VVAU and their subcases dissolve into one composed design space.** What distinguishes them is derived from the operation where the operation determines it, and is a Decision where it is a genuine choice |
 | M-D4 | **The fused HLS designs are left behind for now**: HLS MVAU/VVAU with thresholds in the loop, binary/xnor, `resType=lut`. The kernel is RTL on FinnLib |
 | M-D5 | Before building, **decide where to collapse and where to split**: which choices RTL modules make internally that should be design-space choices, and which kernel-level distinctions are really one thing (§4) |
+
+### M0 answers (human gate, 2026-09-27)
+
+The user answered §4 and §5 before the analysis; the analysis in
+[`M0.md`](M0.md) checks them against the RTL and records any contradiction.
+
+| Item | Answer |
+|---|---|
+| Principle | Pure mathematical and device compatibility filter the options, ideally to one. Where several remain, they stay candidates of a Decision; choosing among them by optimization (DSE passes) is future work |
+| Q1 | A pattern enum (`DENSE`, `PER_CHANNEL`) plus extents, deliberately minimal so D10 replaces it |
+| Q2, X1 | **Each meaningfully different dot-product core is its own kernel**; selecting one is a Decision over core nodes in the design space. FinnLib's internal core selection in `dotp_axi` gives way to that (FinnLib change on a new fork branch) |
+| Q3, X8 | The dense (block-diagonal) realization of a per-channel operation is offered, as a Decision present for per-channel operations; on targets without the native per-channel core it is the only candidate |
+| Q4 | Evidence in M0; per-channel on DSP48E1/E2 natively, and any LUT core, are **flagged future work** (below), not built |
+| Q5 | The per-channel activation order is declared as a traversal |
+| Q6 | Renames accepted (module `finn_matmul_*`, changed keys), recorded as D7 changes |
+| Q7 | The per-channel port relation is added in B1's form and recorded, with the dense one, as the stopgap D10 replaces |
+| X3 | `NUM_LANES` derived; `NARROW_WEIGHTS` derived from known weights under cyclic delivery, 0 otherwise. **Provisional: the user wants to revisit it** |
+| X4 | SEGMENTLEN stays derived from the target period |
+| X6 | `auto` styles stay candidates |
+| X7 | Memory pumping is a Decision of the memstream kernel (C4) |
+| X9 | `FORCE_BEHAVIORAL` pinned 0 |
+| X10 | One composite |
+
+**Flagged future work** (important, not in this package): a LUT dot-product
+core; native per-channel on DSP48E1/E2; the other device and behaviour
+permutations full MatMul coverage needs. The foundation is built so they add
+incrementally, as further core kernels and candidates.
 
 Standing constraints: the engine stays generic (an engine change is a separate
 proposal); a kernel owns one generated module and exposes its pin interface
