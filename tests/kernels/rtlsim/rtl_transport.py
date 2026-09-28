@@ -172,12 +172,18 @@ def drive_observed(
     drain_cycles: int = LIVENESS,
     input_stalls: bool | None = None,
     backpressure_ticks: int = BACKPRESSURE_TICKS,
+    data_files: dict[str, str] | None = None,
+    axilite_writes: dict[str, list[tuple[int, int]]] | None = None,
 ) -> dict[str, Any]:
     """Run an observed production artifact, retaining request, response and compile files.
 
     Stream names are complete ABI bus names. Each observation names actual
     read-only data/valid/ready pins and optionally last; absent pins refuse.
     input_stalls=False keeps producers continuous while output stalls remain enabled.
+    data_files (name -> text) are placed where the simulation resolves relative
+    file names, such as an INIT_FILE. axilite_writes (bus -> [(byte address,
+    32-bit word)]) are carried out, in order, after reset and before any
+    stream starts.
     """
     if type(backpressure_ticks) is not int or backpressure_ticks < 0:
         raise ValueError("backpressure_ticks must be a nonnegative integer")
@@ -197,6 +203,8 @@ def drive_observed(
                 "backpressure_ticks": backpressure_ticks,
                 "work_directory": str(directory / "compile"),
                 "drain_cycles": drain_cycles,
+                "data_files": data_files or {},
+                "axilite_writes": axilite_writes or {},
             },
             indent=2,
         )
@@ -219,9 +227,78 @@ def drive_observed(
     return cast("dict[str, Any]", payload)
 
 
+class _AxiLiteWriter:
+    """Carry out AXI-Lite writes one at a time: address and data, then the response."""
+
+    def __init__(self, top: Any, bus: str, writes: list[tuple[int, int]]) -> None:
+        self.pins = {
+            name: top.getPort(f"{bus}_{name}")
+            for name in (
+                "AWVALID",
+                "AWREADY",
+                "AWADDR",
+                "AWPROT",
+                "WVALID",
+                "WREADY",
+                "WDATA",
+                "WSTRB",
+                "BVALID",
+                "BREADY",
+                "ARVALID",
+                "ARPROT",
+                "ARADDR",
+                "RREADY",
+            )
+        }
+        missing = [name for name, port in self.pins.items() if port is None]
+        if missing:
+            raise ValueError(f"{bus}: missing AXI-Lite pins {missing}")
+        self.writes = list(writes)
+        self.address = self.data = self.response = False
+        self.started = False
+
+    def __call__(self, _sim: Any) -> dict[Any, str] | None:
+        pins = self.pins
+        if not self.started:
+            self.started = True
+            return {pins[name]: "0" for name in ("ARVALID", "ARPROT", "ARADDR", "RREADY")}
+        updates: dict[Any, str] = {}
+        if self.address and pins["AWREADY"].read().as_bool():
+            self.address = False
+            updates[pins["AWVALID"]] = "0"
+        if self.data and pins["WREADY"].read().as_bool():
+            self.data = False
+            updates[pins["WVALID"]] = "0"
+        if self.response and pins["BVALID"].read().as_bool():
+            self.response = False
+            updates[pins["BREADY"]] = "0"
+        if self.address or self.data or self.response:
+            return updates
+        if not self.writes:
+            return None
+        address, data = self.writes.pop(0)
+        self.address = self.data = self.response = True
+        updates.update(
+            {
+                pins["AWVALID"]: "1",
+                pins["AWADDR"]: f"{address:x}",
+                pins["AWPROT"]: "0",
+                pins["WVALID"]: "1",
+                pins["WDATA"]: f"{data:x}",
+                pins["WSTRB"]: "f",
+                pins["BREADY"]: "1",
+            }
+        )
+        return updates
+
+
 def _simulate_observed(sim_dir: str, so_rel: str, request: dict[str, Any]) -> dict[str, Any]:
     sim = load_sim_obj(sim_dir, so_rel)
     reset_rtlsim(sim)
+    for bus, writes in request.get("axilite_writes", {}).items():
+        sim.enlist(_AxiLiteWriter(sim.top, bus, [(int(a), int(d)) for a, d in writes]))
+        if sim.run(cycles=LIVENESS):
+            raise AssertionError(f"{bus}: AXI-Lite writes did not complete")
     stimulus = request["stimulus"]
     expected = request["expected_outputs"]
     drain_cycles = request["drain_cycles"]
@@ -363,6 +440,8 @@ def simulate_once(request_path: str, response_path: str) -> int:
         if "observations" in request:
             scratch = Path(request["work_directory"])
             scratch.mkdir(parents=True, exist_ok=False)
+            for name, contents in cast("dict[str, str]", request.get("data_files", {})).items():
+                (scratch / name).write_text(contents)
             sim_dir, so_rel = compile_sim_obj(
                 request["top_module"],
                 request["sources"],

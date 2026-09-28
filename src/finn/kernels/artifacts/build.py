@@ -22,7 +22,7 @@ from typing import Union, cast
 from jinja2 import Environment, TemplateError, meta, nodes  # type: ignore[import-not-found]
 
 from finn.kernels.artifacts.abi import ClockAlignment, ComponentABI, Port
-from finn.kernels.artifacts.contributions import CopiedSource, DataSlot
+from finn.kernels.artifacts.contributions import CopiedSource, DataSlot, GeneratedData
 from finn.kernels.artifacts.derivation import (
     ArtifactRef,
     ContentRef,
@@ -460,6 +460,15 @@ def prepare_module_build(
     for contribution in requirements.contributions:
         if isinstance(contribution, DataSlot):
             slots.append(contribution)
+            continue
+        if isinstance(contribution, GeneratedData):
+            path = _relative_path(contribution.path, label="module output tree")
+            reference = _put_checked(blobs, contribution.data, label=path)
+            try:
+                data_file = SourceFile(reference, path, Language.DATA, role=Role.DATA)
+            except SourceError as error:
+                raise BuildError(str(error)) from error
+            drafts.append(PreparedCopiedSource(data_file))
             continue
         if isinstance(contribution, CopiedSource):
             root = roots.get(contribution.root)

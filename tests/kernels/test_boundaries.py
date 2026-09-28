@@ -189,7 +189,7 @@ assert point.activation.payload_bits == 6
 for mode in WeightDelivery:
     options = (
         {"weights": [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]]}
-        if mode is WeightDelivery.CYCLIC
+        if mode is not WeightDelivery.EXTERNAL
         else {}
     )
     assembly = matmul_assembly(

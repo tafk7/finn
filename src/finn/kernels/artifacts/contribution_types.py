@@ -65,6 +65,26 @@ class RenderedSource:
 
 
 @dataclass(frozen=True)
+class GeneratedData:
+    """A data file whose contents the kernel generates, such as a memory image.
+
+    The contents are part of the requirements, so they enter the build identity
+    like a copied source's bytes. ``path`` is the name the RTL reads it under
+    (an ``INIT_FILE``), relative to the unit directory; a consumer places the
+    file where its tool resolves that name.
+    """
+
+    path: str
+    data: bytes
+
+    def __post_init__(self) -> None:
+        if not self.path or self.path.startswith("/") or ".." in self.path.split("/"):
+            raise ContributionError(f"{self.path!r} is not a name relative to the unit directory")
+        if type(self.data) is not bytes:
+            raise ContributionError("generated data is bytes")
+
+
+@dataclass(frozen=True)
 class DataSlotSpec:
     """The shape of a hole a parameter image will fill."""
 
@@ -93,17 +113,25 @@ class DataSlot:
             raise ContributionError("a data slot needs a name")
 
 
-Contribution = Union[CopiedSource, RenderedSource, DataSlot]
+Contribution = Union[CopiedSource, RenderedSource, GeneratedData, DataSlot]
 
 
 # Declaration and processing modules share one facade identity in this package.
-for _type in (ContributionError, CopiedSource, RenderedSource, DataSlotSpec, DataSlot):
+for _type in (
+    ContributionError,
+    CopiedSource,
+    RenderedSource,
+    GeneratedData,
+    DataSlotSpec,
+    DataSlot,
+):
     _type.__module__ = "finn.kernels.artifacts.contributions"
 
 __all__ = [
     "ContributionError",
     "CopiedSource",
     "RenderedSource",
+    "GeneratedData",
     "DataSlotSpec",
     "DataSlot",
     "Contribution",

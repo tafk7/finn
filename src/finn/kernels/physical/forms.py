@@ -238,6 +238,13 @@ def _common_refinement(
     return None if a is None or b is None else (a, b)
 
 
+def regrouped(form: Traversal, lanes: int) -> Traversal:
+    """The same element sequence, ``lanes`` elements a beat: a width conversion."""
+    flat = _canonical((*form.beat_loops, *form.lane_loops))
+    beats, fields = _split_at(flat, lanes)
+    return Traversal(form.shape, beats, fields)
+
+
 def split_beats(form: Traversal, inner_beats: int) -> tuple[tuple[Loop, ...], tuple[Loop, ...]]:
     """The beat loops above each group of ``inner_beats`` beats, and those within one."""
     return _split_at(form.beat_loops, inner_beats)
@@ -520,6 +527,7 @@ __all__ = [
     "classify",
     "is_repetition",
     "pack",
+    "regrouped",
     "split_beats",
     "split_walk",
     "tile",

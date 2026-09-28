@@ -137,25 +137,42 @@ def run(
     rom_style: str = "auto",
     weight_fifo_depth: int | None = None,
     replay: str = "buffer",
+    pumped_memory: bool = False,
+    writable: bool = False,
+    sets: int = 1,
 ) -> None:
+    """One configuration and delivery, free and stalled.
+
+    ``writable`` rewrites the memstream's weights through AXI-Lite before any
+    stream starts and checks the rows computed after the write took effect.
+    ``sets`` stores several weight sets and selects one per row through in2_V.
+    """
     c = configuration
-    rows = 4
+    # Writable: enough rows that some follow the words prefetched before the write.
+    rows = 20 if writable else 4
     a_type, w_type = DataType[c.activation], DataType[c.weight]
     rng = np.random.RandomState(83)
     shape = (rows, c.width, c.height) if c.per_channel else (rows, c.width)
     activations = rng.randint(int(a_type.min()), int(a_type.max()) + 1, shape)
     lowest = int(w_type.min()) + (1 if c.narrow else 0)
-    weights = rng.randint(lowest, int(w_type.max()) + 1, (c.height, c.width))
+    stored = rng.randint(lowest, int(w_type.max()) + 1, (sets, c.height, c.width))
     activations[0] = int(a_type.min())
     activations[1] = int(a_type.max())
-    weights[0, :] = lowest
+    stored[:, 0, :] = lowest
     if c.height > 1:
-        weights[1, :] = int(w_type.max())
+        stored[:, 1, :] = int(w_type.max())
+    # The set each row selects, and (writable) the weights written at run time.
+    indices = [(3 * r + 1) % sets for r in range(rows)]
+    written = rng.randint(lowest, int(w_type.max()) + 1, (c.height, c.width))
+    weights = written if writable else stored[0]
+    selected = [weights if sets == 1 else stored[indices[r]] for r in range(rows)]
     if c.per_channel:
         # Y[r, c] = sum over k of X[r, k, c] * W[c, k]
-        expected = np.einsum("rkc,ck->rc", activations, weights)
+        expected = np.stack(
+            [np.einsum("kc,ck->c", activations[r], selected[r]) for r in range(rows)]
+        )
     else:
-        expected = activations @ weights.T
+        expected = np.stack([activations[r] @ selected[r].T for r in range(rows)])
     built = matmul_assembly(
         rows=rows,
         reduction=c.width,
@@ -171,8 +188,13 @@ def run(
         realization=c.realization or ("native" if c.per_channel else None),
         replay=replay,
         weight_delivery=delivery,
-        weights=weights.tolist() if delivery is WeightDelivery.CYCLIC else None,
+        weights=None
+        if delivery is WeightDelivery.EXTERNAL
+        else (stored[0] if sets == 1 else stored).tolist(),
         rom_style=rom_style,
+        pumped_memory=pumped_memory,
+        writable_weights=writable,
+        weight_sets=sets,
         weight_fifo_depth=weight_fifo_depth,
     )
     # A densely realized per-channel operation reads rows of window x channels
@@ -180,11 +202,23 @@ def run(
     dense = not c.per_channel or c.realization == "dense"
     width = c.width * c.height if c.per_channel and dense else c.width
     rows_read = activations.reshape(rows, width) if dense else activations
-    matrix = weights
-    if c.per_channel and dense:
-        matrix = np.zeros((c.height, width), dtype=weights.dtype)
+
+    def datapath(operand):
+        if not (c.per_channel and dense):
+            return operand
+        matrix = np.zeros((c.height, width), dtype=operand.dtype)
         for channel in range(c.height):
-            matrix[channel, channel :: c.height] = weights[channel]
+            matrix[channel, channel :: c.height] = operand[channel]
+        return matrix
+
+    def image(operand):
+        matrix = datapath(operand)
+        return [
+            _pack(matrix[row : row + c.pe, start : start + c.simd].flat, w_type.bitwidth())
+            for row in range(0, c.height, c.pe)
+            for start in range(0, width, c.simd)
+        ]
+
     sf, nf = width // c.simd, c.height // c.pe
     if not dense:
         # Beats: row, channel fold, window fold; field s * PE + p is X[r, k, c].
@@ -208,16 +242,15 @@ def run(
             for start in range(0, width, c.simd)
         ]
     activation_bits = c.simd * (1 if dense else c.pe) * a_type.bitwidth()
-    weight_image = [
-        _pack(matrix[row : row + c.pe, start : start + c.simd].flat, w_type.bitwidth())
-        for row in range(0, c.height, c.pe)
-        for start in range(0, width, c.simd)
-    ]
+    weight_image = image(weights)
+    stored_images = [image(stored[index]) for index in range(sets)]
     stimulus = {"in0_V": activation_words}
     if delivery is WeightDelivery.EXTERNAL:
         stimulus["in1_V"] = weight_image * rows
     else:
-        assert built.initializer == tuple(weight_image)
+        assert built.initializer == tuple(word for item in stored_images for word in item)
+    if sets > 1:
+        stimulus["in2_V"] = indices
     for name, bits in (
         ("in0_V", activation_bits),
         ("in1_V", c.pe * c.simd * w_type.bitwidth()),
@@ -230,6 +263,9 @@ def run(
     suffix = "_" + rom_style if delivery is WeightDelivery.CYCLIC and rom_style != "auto" else ""
     suffix += "_input_gen" if replay == "input_gen" and not c.per_channel else ""
     suffix += f"_fifo{weight_fifo_depth}" if weight_fifo_depth else ""
+    suffix += "_pumped_memory" if pumped_memory else ""
+    suffix += "_writable" if writable else ""
+    suffix += f"_sets{sets}" if sets > 1 else ""
     directory = evidence / (c.label + "_" + delivery.value + suffix)
     directory.mkdir(parents=True, exist_ok=False)
     store = ArtifactStore(directory / "store")
@@ -240,7 +276,20 @@ def run(
         blobs=store,
     )
     materialized = materialize_module_sources(prepared, store)
-    sources = [str(Path(materialized.directory) / path) for path in materialized.files]
+    files = [Path(materialized.directory) / path for path in materialized.files]
+    # Memory images (INIT_FILE) go where the simulation resolves them.
+    sources = [str(path) for path in files if path.suffix != ".dat"]
+    data_files = {path.name: path.read_text() for path in files if path.suffix == ".dat"}
+    writes = {}
+    if writable:
+        # Each word takes 2**ceil(log2(ceil(W/32))) 32-bit segments, low first.
+        bits = c.pe * c.simd * w_type.bitwidth()
+        segments = 1 << (-(-bits // 32) - 1).bit_length()
+        writes["s_axilite"] = [
+            ((word * segments + segment) * 4, (value >> (32 * segment)) & 0xFFFFFFFF)
+            for word, value in enumerate(weight_image)
+            for segment in range(segments)
+        ]
     top, wrapper, observations = _observation_wrapper(
         built.structure.top_abi,
         prepared.abi.entry_point,
@@ -284,21 +333,46 @@ def run(
             stalls=stalled,
             input_stalls=False,
             directory=directory / ("stalled" if stalled else "free"),
+            data_files=data_files,
+            axilite_writes=writes,
         )
         actual = [word & result_mask for word in measured["outputs"]["out0_V"]]
-        assert actual == expected_words, (c.label, delivery, stalled, actual, expected_words)
         trace = measured["observations"]
         assert trace["replay"]["words"] == replay_expected
         assert trace["replay"]["last"] == last_expected
         consumed_weights = trace["weights"]["words"]
-        assert consumed_weights[: built.weight_beats] == weight_image * rows
-        if delivery is WeightDelivery.EXTERNAL:
-            assert len(consumed_weights) == built.weight_beats
-        else:
-            assert all(
-                word == weight_image[index % len(weight_image)]
-                for index, word in enumerate(consumed_weights)
+        assert len(actual) == len(expected_words)
+        if writable:
+            # Words the memory prefetched before the write are the stored ones;
+            # every row read wholly after them uses the written weights.
+            period = len(weight_image)
+            stale = next(
+                start
+                for start in range(len(consumed_weights) + 1)
+                if all(
+                    word == weight_image[index % period]
+                    for index, word in enumerate(consumed_weights[start:], start)
+                )
             )
+            # memstream holds at most FULL_CREDIT = 8 words in flight (memstream.sv).
+            assert stale <= 8, (c.label, "prefetched words", stale)
+            first = -(-stale // period)
+            assert first <= rows // 2, (c.label, "rows after the write", first)
+            assert actual[first * nf :] == expected_words[first * nf :], (c.label, stalled)
+        elif sets > 1:
+            assert actual == expected_words, (c.label, delivery, stalled, actual, expected_words)
+            selected_words = [word for index in indices for word in stored_images[index]]
+            assert consumed_weights[: built.weight_beats] == selected_words
+        else:
+            assert actual == expected_words, (c.label, delivery, stalled, actual, expected_words)
+            assert consumed_weights[: built.weight_beats] == weight_image * rows
+            if delivery is WeightDelivery.EXTERNAL:
+                assert len(consumed_weights) == built.weight_beats
+            else:
+                assert all(
+                    word == weight_image[index % len(weight_image)]
+                    for index, word in enumerate(consumed_weights)
+                )
         print(
             f"PASS {c.label} {delivery.value}{suffix} stalled={stalled} "
             f"result={built.result_dtype.name}",
@@ -318,6 +392,9 @@ def main() -> None:
     parser.add_argument("--rom-style", default="auto", choices=("auto", "distributed", "block"))
     parser.add_argument("--weight-fifo-depth", type=int)
     parser.add_argument("--replay", default="buffer", choices=("buffer", "input_gen"))
+    parser.add_argument("--pumped-memory", action="store_true", help="memstream at ap_clk2x")
+    parser.add_argument("--writable", action="store_true", help="rewrite memstream weights")
+    parser.add_argument("--sets", type=int, default=1, help="memstream weight sets")
     args = parser.parse_args()
     directory = args.output or Path(tempfile.mkdtemp(prefix="matmul-evidence-"))
     print(f"Evidence: {directory}", flush=True)
@@ -328,6 +405,9 @@ def main() -> None:
                 known = delivery is not WeightDelivery.EXTERNAL
                 if (case.realization == "dense" or case.narrow) and not known:
                     continue
+                memory = args.pumped_memory or args.writable or args.sets > 1
+                if memory and delivery is not WeightDelivery.MEMSTREAM:
+                    continue
                 if args.delivery is None or args.delivery == delivery.value:
                     run(
                         case,
@@ -336,6 +416,9 @@ def main() -> None:
                         args.rom_style,
                         args.weight_fifo_depth,
                         args.replay,
+                        args.pumped_memory,
+                        args.writable,
+                        args.sets,
                     )
 
 

@@ -144,23 +144,33 @@ materialize(answer, dotp_sources)
 for delivery in WeightDelivery:
     options = {}
     expected = dotp_sources | {"rtl/infra/replay_buffer.sv"}
-    if delivery is WeightDelivery.CYCLIC:
+    if delivery is not WeightDelivery.EXTERNAL:
         options["weights"] = [[-4, -3, -2, -1], [0, 1, 2, 3], [3, 2, 1, 0], [-1, -2, -3, -4]]
+    if delivery is WeightDelivery.CYCLIC:
         expected |= {"cyclic_stream.sv"}
+    if delivery is WeightDelivery.MEMSTREAM:
+        expected |= {"rtl/infra/axilite.sv", "rtl/infra/memstream.sv", "rtl/infra/memstream_axi.sv"}
     assembly = matmul_assembly(
         rows=3, reduction=4, outputs=4, pe=2, simd=2,
         activation_dtype=DataType["INT3"], weights_dtype=DataType["INT3"],
         target_dsp=DspBlock.DSP48E2, weight_delivery=delivery, **options,
     )
     assert (assembly.activation_beats, assembly.weight_beats, assembly.result_beats) == (6, 12, 6)
+    # A memory image ships as generated data, named by its contents.
+    expected |= {
+        item.path
+        for item in assembly.requirements.contributions
+        if isinstance(item, contributions.GeneratedData)
+    }
     wrapper = materialize(assembly.requirements, expected).read_text()
     assert ".ACCU_WIDTH(8)" in wrapper
-    assert ".olast(n__u_replay__olast)" in wrapper
+    assert ".olast(n__u_replay_buffer__olast)" in wrapper
     if delivery is WeightDelivery.CYCLIC:
-        assert assembly.initializer == (0x22C, 0x6BE, 0xDD3, 0x941)
         assert ".INIT_DATA(48'h941dd36be22c)" in wrapper
-    else:
+    if delivery is WeightDelivery.EXTERNAL:
         assert assembly.initializer == ()
+    else:
+        assert assembly.initializer == (0x22C, 0x6BE, 0xDD3, 0x941)
 
 # Catch namespace or editable-install leakage even if the import was permitted.
 for name, module in tuple(sys.modules.items()):
@@ -171,7 +181,7 @@ for name, module in tuple(sys.modules.items()):
             assert Path(location).resolve().is_relative_to(installed), (name, location)
         for location in getattr(module, "__path__", ()):
             assert Path(location).resolve().is_relative_to(installed), (name, location)
-print("installed dotp, external and cyclic MatMul manifests verified")
+print("installed dotp, external, cyclic and memstream MatMul manifests verified")
 """
 
 
@@ -277,4 +287,6 @@ def test_installed_wheel_materializes_independent_kernel_builds(tmp_path: Path) 
         "store": str(tmp_path / "store"),
     }
     result = _run([sys.executable, "-I", "-S", "-c", INSTALLED_BUILD, json.dumps(config)], tmp_path)
-    assert "installed dotp, external and cyclic MatMul manifests verified" in result.stdout
+    assert (
+        "installed dotp, external, cyclic and memstream MatMul manifests verified" in result.stdout
+    )

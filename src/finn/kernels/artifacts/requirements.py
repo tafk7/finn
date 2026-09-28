@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Protocol, Union
 from finn.kernels.artifacts.abi import ClockAlignment, ComponentABI, Port
-from finn.kernels.artifacts.contribution_types import CopiedSource, DataSlot
+from finn.kernels.artifacts.contribution_types import CopiedSource, DataSlot, GeneratedData
 from finn.kernels.artifacts.derivation import ContentRef, ProducerIdentity, Scalar
 from finn.kernels.artifacts.sources import DEFAULT_LIBRARY, CompileOptions, Language, Role
 
@@ -163,7 +163,7 @@ class RenderedSourceRequirement:
         object.__setattr__(self, "requires", _symbols(self.requires, label="requires"))
 
 
-RequirementContribution = Union[CopiedSource, RenderedSourceRequirement, DataSlot]
+RequirementContribution = Union[CopiedSource, RenderedSourceRequirement, GeneratedData, DataSlot]
 
 
 @dataclass(frozen=True, slots=True)
@@ -190,10 +190,13 @@ class ModuleBuildRequirements:
             )
         contributions = tuple(self.contributions)
         if any(
-            not isinstance(item, (CopiedSource, RenderedSourceRequirement, DataSlot))
+            not isinstance(item, (CopiedSource, RenderedSourceRequirement, GeneratedData, DataSlot))
             for item in contributions
         ):
-            raise BuildError("module contributions are copied sources, rendered sources, or slots")
+            raise BuildError(
+                "module contributions are copied sources, rendered sources, generated data, "
+                "or slots"
+            )
         declared_arguments = {
             argument
             for item in contributions

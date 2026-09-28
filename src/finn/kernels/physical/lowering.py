@@ -17,7 +17,7 @@ from finn.kernels.artifacts.build import (
     RenderedSourceRequirement,
     SELF_CONTAINED_JINJA_RENDERER,
 )
-from finn.kernels.artifacts.contributions import CopiedSource, DataSlot
+from finn.kernels.artifacts.contributions import CopiedSource, DataSlot, GeneratedData
 from finn.kernels.artifacts.derivation import ProducerIdentity, Scalar
 from finn.kernels.physical.structure import (
     ConstantBits,
@@ -155,18 +155,26 @@ def _sv_instances(structure: PhysicalStructure) -> str:
     return "\n\n".join(blocks)
 
 
-def _flatten_contributions(instances: Sequence[ModuleInstance]) -> tuple[CopiedSource, ...]:
-    result: list[CopiedSource] = []
-    destinations: dict[tuple[str, str], CopiedSource] = {}
+def _flatten_contributions(
+    instances: Sequence[ModuleInstance],
+) -> tuple[CopiedSource | GeneratedData, ...]:
+    result: list[CopiedSource | GeneratedData] = []
+    destinations: dict[tuple[str, str], CopiedSource | GeneratedData] = {}
     for instance in instances:
         if instance.requirements.render_inputs:
             raise PhysicalStructureError("a composed structure does not nest a rendered child")
         for contribution in instance.requirements.contributions:
             if isinstance(contribution, DataSlot):
                 raise PhysicalStructureError("a composed structure cannot flatten a data slot")
-            if not isinstance(contribution, CopiedSource):
-                raise PhysicalStructureError("a composed structure flattens copied sources only")
-            coordinate = (contribution.library, contribution.path)
+            if not isinstance(contribution, (CopiedSource, GeneratedData)):
+                raise PhysicalStructureError(
+                    "a composed structure flattens copied sources and generated data only"
+                )
+            coordinate = (
+                (contribution.library, contribution.path)
+                if isinstance(contribution, CopiedSource)
+                else ("", contribution.path)
+            )
             previous = destinations.get(coordinate)
             if previous is not None:
                 if previous != contribution:

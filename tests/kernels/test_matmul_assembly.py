@@ -191,7 +191,7 @@ def test_space_selects_folding_and_constructs_without_a_logical_contract():
 @pytest.mark.parametrize("delivery", tuple(WeightDelivery))
 def test_build_is_complete_and_initializer_changes_identity(tmp_path, delivery):
     options = dict(weight_delivery=delivery)
-    if delivery is WeightDelivery.CYCLIC:
+    if delivery is not WeightDelivery.EXTERNAL:
         options["weights"] = [[0] * 4] * 4
     built = assembly(**options)
     store = ArtifactStore(tmp_path / "store")
@@ -208,6 +208,8 @@ def test_build_is_complete_and_initializer_changes_identity(tmp_path, delivery):
     assert prepared.slots == ()
     if delivery is WeightDelivery.CYCLIC:
         assert ".INIT_DATA(48'h0)" in wrapper
+    if delivery is not WeightDelivery.EXTERNAL:
+        # The image is part of the identity: a ROM parameter or a memory INIT_FILE.
         changed = assembly(weight_delivery=delivery, weights=[[1] * 4] * 4)
         changed_prepared = prepare_module_build(
             changed.requirements,

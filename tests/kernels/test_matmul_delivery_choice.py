@@ -34,6 +34,7 @@ from finn.kernels.artifacts.abi import Bus
 from finn.kernels.artifacts.build import ModuleBuildRequirements, prepare_module_build
 from finn.kernels.artifacts.store import ArtifactStore
 from finn.kernels.delivery import CyclicDelivery
+from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.dotp import DotpAxiKernel
 from finn.kernels.matmul import MatMulKernel, WeightDelivery, matmul_assembly
 from finn.kernels.resources import resource_root, template_root
@@ -181,6 +182,8 @@ def test_case_local_choices_are_owned_by_their_family():
         "compute_pumping",
         "delivery",
         "delivery.cyclic.rom_style",
+        "delivery.memstream.pumped_memory",
+        "delivery.memstream.ram_style",
         "realization",
         "replay",
         "replay.input_gen.ram_style",
@@ -189,7 +192,7 @@ def test_case_local_choices_are_owned_by_their_family():
         "weight_stream.transport.fifo.buffer.ram_style",
     }
     assert records["delivery"].selector
-    assert records["delivery"].cases == ("external", "cyclic")
+    assert records["delivery"].cases == ("external", "cyclic", "memstream")
     local = records["delivery.cyclic.rom_style"]
     # The choice belongs to the reusable delivery kernel placed by the family.
     assert local.scope == "delivery.cyclic" and not local.selector
@@ -200,6 +203,7 @@ def test_case_local_choices_are_owned_by_their_family():
     assert cases == {
         "external": (None, None),
         "cyclic": ("delivery.cyclic", CyclicDelivery),
+        "memstream": ("delivery.memstream", MemStreamKernel),
     }
     # Applicability of a case-local choice waits for the selector, and names it.
     unselected = base().cyclic.field(ROM_STYLE)
@@ -373,16 +377,21 @@ def test_switching_families_is_atomic_and_requires_clearing_stale_case_choices()
 @pytest.mark.parametrize("delivery", tuple(WeightDelivery))
 def test_public_adapter_matches_the_space_path(delivery):
     cyclic = delivery is WeightDelivery.CYCLIC
+    known = delivery is not WeightDelivery.EXTERNAL
     adapted = matmul_assembly(
         **{**FACTS, "pe": 2, "simd": 2},
         weight_delivery=delivery,
-        weights=[list(row) for row in WEIGHTS] if cyclic else None,
+        weights=[list(row) for row in WEIGHTS] if known else None,
     )
     point = configured(
-        base(weights=WEIGHTS) if cyclic else base(),
+        base(weights=WEIGHTS) if known else base(),
         delivery.value,
         style="auto" if cyclic else None,
     )
+    if delivery is WeightDelivery.MEMSTREAM:
+        point = point.with_choices(
+            {MatMulKernel.memstream.ram_style: "auto", MatMulKernel.memstream.pumped_memory: False}
+        )
     composed = point.structure
     assert (adapted.structure, adapted.requirements) == (composed.structure, composed.requirements)
 

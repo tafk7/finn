@@ -58,7 +58,9 @@ from finn.dataflow.datatypes import (
     resolve_qonnx_datatype_name,
 )
 from finn.kernels.configure import commit, compatible, describe
+from finn.kernels.control import EXPORTED, ControlBus
 from finn.kernels.delivery import CyclicDelivery
+from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.dotp import Contraction, DotpAxiKernel, Int8Dsp58DotpKernel, PackedDotpKernel
 from finn.kernels.physical.forms import (
     TRAVERSAL,
@@ -107,6 +109,7 @@ from finn.core.space import (
 class WeightDelivery(Enum):
     EXTERNAL = "external"
     CYCLIC = "cyclic"
+    MEMSTREAM = "memstream"
 
 
 def _positive(value: int, name: str) -> None:
@@ -211,10 +214,19 @@ class MatMulKernel(Space):
     target_dsp: DspBlock = Param()
     target_period_ns: float = Param()
     weights: IntegerTensor = Param(semantics=INTEGER_TENSOR, required=False)
+    # Software rewrites the weights at run time through AXI-Lite (memstream only).
+    writable_weights: bool = Param(default=False)
+    # Several weight sets, one selected per row by an index on ``in2_V`` (memstream
+    # only); ``weights`` then holds one operand per set.
+    weight_sets: int = Param(default=1)
 
     @derived
     def per_channel(self) -> bool:
         return self.contraction is Contraction.PER_CHANNEL
+
+    @derived
+    def multi_set(self) -> bool:
+        return self.weight_sets > 1
 
     # A per-channel operation runs natively (one channel per PE lane, INT8 DSP58
     # only) or on the dense datapath with block-diagonal weights, on any core.
@@ -245,10 +257,16 @@ class MatMulKernel(Space):
         if not (self.per_channel and self.datapath is Contraction.DENSE):
             return weights
         channels = self.outputs
-        return tuple(
-            tuple(value if other == channel else 0 for value in row for other in range(channels))
-            for channel, row in enumerate(cast("tuple[tuple[int, ...], ...]", weights))
-        )
+
+        def blocks(operand: object) -> IntegerTensor:
+            return tuple(
+                tuple(
+                    value if other == channel else 0 for value in row for other in range(channels)
+                )
+                for channel, row in enumerate(cast("tuple[tuple[int, ...], ...]", operand))
+            )
+
+        return tuple(blocks(item) for item in weights) if self.multi_set else blocks(weights)
 
     pe: int = Decision(domain=divisors_of(outputs))
     simd: int = Decision(domain=divisors_of(datapath_reduction))
@@ -281,6 +299,15 @@ class MatMulKernel(Space):
         return isinstance(self.folding, _Folding)
 
     @constraint
+    def delivery_supported(self) -> bool | Rejected:
+        memstream = self.delivered == WeightDelivery.MEMSTREAM.value
+        if self.writable_weights and not memstream:
+            return reject("matmul-writable", "runtime-writable weights need the memstream delivery")
+        if self.multi_set and not memstream:
+            return reject("matmul-sets", "several weight sets need the memstream delivery")
+        return True
+
+    @constraint
     def realization_supported(self) -> bool | Rejected:
         if self.per_channel and self.realization == "dense" and self.delivered == "external":
             return reject(
@@ -289,7 +316,7 @@ class MatMulKernel(Space):
             )
         return True
 
-    dimensions = ConstraintGroup(dimensions_supported, realization_supported)
+    dimensions = ConstraintGroup(dimensions_supported, realization_supported, delivery_supported)
 
     @derived
     def reduction_folds(self) -> int:
@@ -348,6 +375,14 @@ class MatMulKernel(Space):
         return StreamSpec(element, self.weight_period.repeated(self.folding.rows))
 
     @derived(semantics=STREAM_SPEC)
+    def set_spec(self) -> StreamSpec:
+        """One set index per row, as wide as the memory's selector."""
+        sets = self.weight_sets
+        bits = (sets - 1).bit_length() if sets > 2 else 1
+        index = ScalarEncoding(resolve_qonnx_datatype_name(f"UINT{bits}"))
+        return StreamSpec(index, vector_major((self.folding.rows,), 1))
+
+    @derived(semantics=STREAM_SPEC)
     def result_spec(self) -> StreamSpec | Rejected:
         f, element = self.folding, ScalarEncoding.admit(self.result_type)
         if isinstance(element, Rejected):
@@ -360,6 +395,7 @@ class MatMulKernel(Space):
     replayed = Stream(spec=replayed_spec)
     weight_stream = BufferedStream(spec=weight_spec, port="in1_V")
     results = Stream(spec=result_spec, port="out0_V")
+    set_index = Stream(spec=set_spec, port="in2_V", when=multi_set)
 
     # Replay: dense rows are read once per output fold, by a replay buffer or an
     # input generator (a choice). Per-channel rows pass once; a one-repetition
@@ -393,8 +429,11 @@ class MatMulKernel(Space):
     def narrow_weights(self) -> bool:
         """Known weights that avoid their type's most negative value let the packed core
         pack more lanes (NARROW_WEIGHTS). Provisional: the user means to revisit it."""
-        if self.delivered != WeightDelivery.CYCLIC.value:
-            return False  # weights arriving at run time promise nothing
+        read_only = self.delivered == WeightDelivery.CYCLIC.value or (
+            self.delivered == WeightDelivery.MEMSTREAM.value and not self.writable_weights
+        )
+        if not read_only:
+            return False  # weights arriving or rewritten at run time promise nothing
         low, _ = ordinary_integer_bounds(self.weights_dtype)
         return all(value > low for value in _leaves(self.weights))
 
@@ -440,20 +479,39 @@ class MatMulKernel(Space):
         values=datapath_weights,
         output_stream=weight_stream,
     )
-    delivery: CyclicDelivery | None = Decision(
-        values={WeightDelivery.EXTERNAL.value: None, WeightDelivery.CYCLIC.value: cyclic}
+    # The memstream candidate: a RAM image in the same order, optionally
+    # rewritable through the ``config`` control bus, exported as ``s_axilite``.
+    config = ControlBus(port="s_axilite")
+    memstream = MemStreamKernel(
+        dtype=weights_dtype,
+        form=weight_period,
+        values=datapath_weights,
+        writable=writable_weights,
+        sets=weight_sets,
+        output_stream=weight_stream,
+        set_stream=set_index,
+        control=config,
+    )
+    delivery: CyclicDelivery | MemStreamKernel | None = Decision(
+        values={
+            WeightDelivery.EXTERNAL.value: None,
+            WeightDelivery.CYCLIC.value: cyclic,
+            WeightDelivery.MEMSTREAM.value: memstream,
+        }
     )
     delivered = selected(delivery)
     modules = Members(MODULE)
     streams = Members(CONNECTION)
     tieoffs = Members(TIEOFFS)
+    controls = Members(EXPORTED)
 
-    @view(semantics=COMPOSED, requires=(dimensions, modules, streams, tieoffs))
+    @view(semantics=COMPOSED, requires=(dimensions, modules, streams, tieoffs, controls))
     def structure(self) -> Composed | Rejected:
         return netlist(
             self.modules,
             self.streams,
             self.tieoffs,
+            self.controls,
             module="finn_matmul_" + self.delivered,
             producer=ProducerIdentity("finn.matmul." + self.delivered, "1"),
         )
@@ -461,6 +519,13 @@ class MatMulKernel(Space):
     @view(semantics=default_semantics(ModuleBuildRequirements), requires=(structure,))
     def build_requirements(self) -> ModuleBuildRequirements:
         return self.structure.requirements
+
+
+def _frozen(values: object) -> object:
+    """Nested sequences as nested tuples."""
+    if isinstance(values, Sequence):
+        return tuple(_frozen(item) for item in values)
+    return values
 
 
 def _leaves(values: object) -> tuple[int, ...]:
@@ -506,8 +571,12 @@ def matmul_assembly(
     realization: str | None = None,
     replay: str = "buffer",
     weight_delivery: WeightDelivery = WeightDelivery.EXTERNAL,
-    weights: Sequence[Sequence[int]] | None = None,
+    weights: Sequence[object] | None = None,
     rom_style: str = "auto",
+    ram_style: str = "auto",
+    pumped_memory: bool = False,
+    writable_weights: bool = False,
+    weight_sets: int = 1,
     weight_fifo_depth: int | None = None,
 ) -> MatMulAssembly:
     """Bind operation facts, commit every choice, then assemble.
@@ -527,8 +596,9 @@ def matmul_assembly(
     if not isinstance(weight_delivery, WeightDelivery):
         raise ValueError("weight_delivery must be a WeightDelivery value")
     cyclic = weight_delivery is WeightDelivery.CYCLIC
-    if cyclic != (weights is not None):
-        raise ValueError("cyclic delivery requires weights; external delivery has no initializer")
+    known = weight_delivery is not WeightDelivery.EXTERNAL
+    if known != (weights is not None):
+        raise ValueError("stored delivery requires weights; external delivery has no initializer")
     facts: dict[str, Any] = dict(
         rows=rows,
         reduction=reduction,
@@ -538,9 +608,11 @@ def matmul_assembly(
         weights_dtype=weights_dtype,
         target_dsp=target_dsp,
         target_period_ns=target_period_ns,
+        writable_weights=writable_weights,
+        weight_sets=weight_sets,
     )
     if weights is not None:
-        facts["weights"] = tuple(tuple(row) for row in weights)
+        facts["weights"] = _frozen(weights)
     case = weight_delivery.value
     buffered = weight_fifo_depth is not None
     choices: dict[str, object] = {
@@ -552,6 +624,9 @@ def matmul_assembly(
     }
     if cyclic:
         choices["delivery.cyclic.rom_style"] = rom_style
+    if weight_delivery is WeightDelivery.MEMSTREAM:
+        choices["delivery.memstream.ram_style"] = ram_style
+        choices["delivery.memstream.pumped_memory"] = pumped_memory
     if buffered:
         choices["weight_stream.transport.fifo.buffer.depth"] = weight_fifo_depth
         choices["weight_stream.transport.fifo.buffer.ram_style"] = "auto"
@@ -604,7 +679,11 @@ def matmul_assembly(
         weight_delivery,
         composed.value.structure,
         composed.value.requirements,
-        point.cyclic.image if cyclic else (),
+        point.cyclic.image
+        if cyclic
+        else point.memstream.image
+        if weight_delivery is WeightDelivery.MEMSTREAM
+        else (),
     )
 
 

@@ -34,6 +34,8 @@ from finn.kernels.artifacts.derivation import ContentRef
 from finn.kernels.artifacts.projection import content_digest
 from finn.kernels.artifacts.render import RenderError, render_template
 from finn.kernels.artifacts.sources import (
+    Language,
+    Role,
     SourceDefinition,
     SourceError,
     SourceFile,
@@ -44,6 +46,7 @@ from finn.kernels.artifacts.contribution_types import (
     ContributionError,
     CopiedSource,
     RenderedSource,
+    GeneratedData,
     DataSlotSpec,
     DataSlot,
     Contribution,
@@ -111,6 +114,16 @@ def resolve(
         if isinstance(contribution, DataSlot):
             slots.append(contribution)
             continue
+        if isinstance(contribution, GeneratedData):
+            files.append(
+                SourceFile(
+                    ContentRef(content_digest(contribution.data)),
+                    contribution.path,
+                    Language.DATA,
+                    role=Role.DATA,
+                )
+            )
+            continue
         if isinstance(contribution, CopiedSource):
             root = roots.get(contribution.root)
             if root is None:
@@ -169,6 +182,7 @@ __all__ = [
     "ContributionError",
     "CopiedSource",
     "DataBinding",
+    "GeneratedData",
     "DataSlot",
     "DataSlotSpec",
     "ParameterImageRef",
