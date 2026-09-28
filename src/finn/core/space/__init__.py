@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 """Typed design-space authoring, immutable specialization and public services."""
 
-from . import codecs, extensions, graph, inspection, selections
+from . import codecs, extensions, graph, inspection, selections, settling
 from ._configuration import BoundDecision, BoundValue, Space
 from ._execution import (
     CleanupFailure,
@@ -28,6 +28,7 @@ from .declarations import (
     ViewKey,
     constraint,
     derived,
+    required,
     selected,
     view,
 )
@@ -62,6 +63,7 @@ from .results import (
 )
 from .selections import Selection, SelectionEntry
 from .semantics import ValueSemantics, default_semantics
+from .settling import Settlement, settle
 
 __all__ = [
     # Families, node declarations and the compile step
@@ -73,6 +75,7 @@ __all__ = [
     "LocatedParam",
     "Const",
     "Decision",
+    "required",
     "selected",
     "Derived",
     "Constraint",
@@ -122,6 +125,8 @@ __all__ = [
     "ConfigurationResult",
     "Selection",
     "SelectionEntry",
+    "Settlement",
+    "settle",
     "CodecBinding",
     "JSONValue",
     "SelectionSchema",
@@ -144,4 +149,5 @@ __all__ = [
     "graph",
     "inspection",
     "selections",
+    "settling",
 ]

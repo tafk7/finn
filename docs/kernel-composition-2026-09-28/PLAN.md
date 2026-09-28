@@ -61,7 +61,7 @@ class MatMulKernel(Kernel):
 - **Errors, not refusals.** An unsupplied required input of a candidate is an
   authoring error naming the candidate, not an incompatibility.
 - **`required()`.** A base declares members every subclass must define
-  (`schedule: Schedule = required()` on `Kernel`); a class that leaves one
+  (`schedule = required(Schedule)` on `Kernel`); a class that leaves one
   unmet cannot be placed, and naming it in a Decision is a compile error.
 - **`settle(point)`** commits every Decision with exactly one compatible
   candidate. Several survivors remain a design choice (future DSE).

@@ -539,10 +539,21 @@ class Decision(ValueDecl[T], Generic[T]):
 
     ``finish: int = Decision(values=(1, 2, 3))`` chooses a value; the
     annotation is its value type, ``semantics=`` gives custom value semantics.
-    ``heating: Boiler | HeatPump = Decision(values={"boiler": Boiler(), ...})``
-    chooses a node: the persisted value is the key; each candidate is a node
-    named ``<decision>.<key>`` whose presence derives from the decision; a
-    ``None`` candidate places nothing.
+    ``heating: Boiler | HeatPump = Decision({"boiler": Boiler, "pump": HeatPump(cop=4)},
+    area=area)`` chooses a node: the persisted value is the key; each candidate
+    is a node named ``<decision>.<key>`` whose presence derives from the
+    decision. An entry is a family (a fresh node) or a call on one carrying the
+    bindings only that candidate takes; the keyword arguments are shared
+    bindings, supplied to every candidate, each of which must declare them.
+    ``optional=True`` adds a ``None`` candidate keyed ``"none"``, which places
+    nothing. ``values={"boiler": Boiler(), ...}`` is the earlier spelling of the
+    same choice, without shared bindings.
+
+    ``heating.area`` reads a member every candidate declares;
+    ``heating["pump"].cop`` reads one candidate's member, inapplicable while
+    another is selected. An enclosing body pins the choice with a key
+    (``house.heating = "pump"``) or narrows it with a Decision over keys
+    (``Decision(values=("boiler",))``), keeping the declared candidates.
 
     A Decision that is not a class attribute takes its value type from the
     formal it supplies. It may supply exactly one formal
@@ -563,11 +574,23 @@ class Decision(ValueDecl[T], Generic[T]):
     sites: list[str]
 
     @overload
-    def __new__(cls, *, values: Mapping[str, Space | None], when: Guard = None) -> Any: ...
+    def __new__(
+        cls,
+        entries: Mapping[str, type[Space] | Space],
+        /,
+        *,
+        optional: bool = False,
+        when: Guard = None,
+        **shared: object,
+    ) -> Any: ...
+
+    @overload
+    def __new__(cls, /, *, values: Mapping[str, Space | None], when: Guard = None) -> Any: ...
 
     @overload
     def __new__(  # type: ignore[misc]
         cls,
+        /,
         *,
         values: Iterable[T],
         semantics: ValueSemantics[T] | None = None,
@@ -578,6 +601,7 @@ class Decision(ValueDecl[T], Generic[T]):
     @overload
     def __new__(  # type: ignore[misc]
         cls,
+        /,
         *,
         domain: Domain[T],
         semantics: ValueSemantics[T] | None = None,
@@ -587,13 +611,42 @@ class Decision(ValueDecl[T], Generic[T]):
 
     def __new__(
         cls,
+        entries: object = None,
+        /,
         *,
         domain: object = None,
         values: object = None,
         semantics: object = None,
         when: object = None,
         name: object = None,
+        optional: object = False,
+        **shared: object,
     ) -> Any:
+        if entries is not None:
+            reserved = {
+                key: value
+                for key, value in (
+                    ("domain", domain),
+                    ("values", values),
+                    ("semantics", semantics),
+                    ("name", name),
+                )
+                if value is not None
+            }
+            if reserved:
+                raise DefinitionError(
+                    f"Decision{at(source_origin())}: shared bindings {sorted(reserved)} are "
+                    "named like the Decision's own arguments; rename the Param (values -> "
+                    "contents), or write the binding on each entry that takes it"
+                )
+            from ._nodes import entry_choice
+
+            return entry_choice(entries, shared, optional=optional, when=_guard(when))
+        if shared or optional is not False:
+            raise DefinitionError(
+                "optional= and shared bindings apply to a Decision over candidate entries: "
+                'Decision({"key": Family, ...}, ...)'
+            )
         if domain is None and isinstance(values, Mapping):
             if semantics is not None or name is not None:
                 raise DefinitionError(
@@ -651,6 +704,67 @@ class Decision(ValueDecl[T], Generic[T]):
         )
         self.resolved = True
         return self
+
+
+class Required:
+    """A member every subclass must define: ``schedule = required(Schedule)``.
+
+    It is not a member itself: collection ignores it. A subclass defines the
+    member with any attribute (a Param, a derived value, a view, a method). A
+    family whose effective attribute is still this marker is unfinished: it
+    cannot be placed, and naming it as a candidate is a definition error.
+    """
+
+    __slots__ = ("kind", "name", "owner")
+
+    def __init__(self, kind: type[object]) -> None:
+        self.kind = kind
+        self.name: str | None = None
+        self.owner: type[object] | None = None
+
+    def __set_name__(self, owner: type[object], name: str) -> None:
+        self.owner, self.name = owner, name
+
+    def __repr__(self) -> str:
+        where = f"{self.owner.__qualname__}." if self.owner is not None else ""
+        return f"required({where}{self.name}: {self.kind.__qualname__})"
+
+
+def required(kind: type[T]) -> T:
+    """Declare a member of type ``kind`` that every subclass must define.
+
+    It is typed as its value, like a derived member, so the family's own
+    methods read ``self.schedule`` as a ``Schedule``; it is not a formal, so it
+    is never a keyword of the family call.
+    """
+    if not isinstance(kind, type):
+        raise DefinitionError("required() takes the member's value type, as in required(int)")
+    return cast(T, Required(kind))
+
+
+def unmet_required(family: type[object]) -> tuple[str, ...]:
+    """``family.X`` for every member whose effective attribute is still ``required()``."""
+    unmet: list[str] = []
+    seen: set[str] = set()
+    for base in family.__mro__:
+        for name, value in vars(base).items():
+            if name in seen:
+                continue
+            seen.add(name)
+            if isinstance(value, Required):
+                unmet.append(f"{base.__qualname__}.{name}")
+    return tuple(unmet)
+
+
+def unfinished(family: type[object], where: str) -> DefinitionError | None:
+    """The error for placing ``family`` while it leaves required members unmet."""
+    unmet = unmet_required(family)
+    if not unmet:
+        return None
+    return DefinitionError(
+        f"{family.__qualname__}{where} leaves required members unmet: {', '.join(unmet)}; a "
+        "family with an unmet required() member cannot be placed (define them in a subclass)"
+    )
 
 
 def _guard(when: object) -> ValueRef[bool] | None:
@@ -1317,6 +1431,7 @@ __all__ = [
     "Param",
     "Present",
     "Projection",
+    "Required",
     "UNSUPPLIED",
     "Users",
     "ValueDecl",
@@ -1325,6 +1440,9 @@ __all__ = [
     "ViewKey",
     "constraint",
     "derived",
+    "required",
     "selected",
+    "unfinished",
+    "unmet_required",
     "view",
 ]

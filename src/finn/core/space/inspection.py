@@ -91,7 +91,8 @@ class ChoiceInfo:
     key: str
     scope: str
     cases: tuple[CaseInfo, ...]
-    selector: DecisionHandle[str]
+    # None when an enclosing body pinned the choice: its key is then listed as pinned.
+    selector: DecisionHandle[str] | None
     guard: ValueHandle[bool] | None
 
 
@@ -341,7 +342,9 @@ def choices(subject: Space | Model[S] | type[Space]) -> tuple[ChoiceInfo, ...]:
                 else CaseInfo(name, linked.scopes[index].name, linked.scopes[index].space_type)
                 for name, index in choice.cases
             ),
-            DecisionHandle[str](linked, choice.selector),
+            DecisionHandle[str](linked, choice.selector)
+            if linked.nodes[choice.selector].kind == "decision"
+            else None,
             None if choice.guard is None else ValueHandle[bool](linked, choice.guard),
         )
         for choice in sorted(linked.choices, key=lambda item: item.key)

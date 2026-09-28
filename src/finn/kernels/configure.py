@@ -1,28 +1,37 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Commit a configuration's choices named by their stable keys.
+"""Commit a configuration's choices named by their stable keys, and settle the rest.
 
 Facts are the root node's typed formals: ``design_space(MatMulKernel(rows=..., ...))``. Keys
 are the ones ``inspection`` reports: ``"pe"``, ``"compute.compute_pumping"``, a
 structural Decision such as ``"delivery"``, or a candidate-local choice such
 as ``"delivery.cyclic.rom_style"``. All choices are committed in one atomic
 batch. Refusals are raised as ``ValueError`` with their findings.
+
+``settle`` commits every Decision over kernels that compatibility decides: the
+engine's ``settle`` with the kernels' convention for a candidate's refusal,
+its ``admission`` member (a constraint group, a constraint or a view).
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping
-from typing import Any, TypeVar
+from typing import Any, TypeVar, cast
 
 from finn.core.space import (
     Available,
     ConfigurationError,
+    Constraint,
+    ConstraintGroup,
     QueryResult,
     RequestError,
+    Settlement,
     Space,
+    View,
     inspection,
 )
+from finn.core.space import settle as settle_space
 
 S = TypeVar("S", bound=Space)
 
@@ -87,4 +96,24 @@ def compatible(
     return tuple(accepted)
 
 
-__all__ = ["commit", "compatible", "describe"]
+def admission(candidate: Space) -> QueryResult[object] | None:
+    """A kernel's own refusal of its configuration: its ``admission`` member, if any."""
+    member = getattr(type(candidate), "admission", None)
+    if isinstance(member, (Constraint, ConstraintGroup)):
+        return cast("QueryResult[object]", candidate.inspect(member).result)
+    if isinstance(member, View):
+        return cast("QueryResult[object]", candidate.query(member))
+    return None
+
+
+def settle(point: S) -> Settlement[S]:
+    """Commit every Decision over kernels with exactly one compatible candidate.
+
+    A candidate is compatible when committing it is accepted and its
+    ``admission`` admits the configuration. Several compatible candidates are
+    a design choice, left open in the settlement.
+    """
+    return settle_space(point, admission=admission)
+
+
+__all__ = ["admission", "commit", "compatible", "describe", "settle"]

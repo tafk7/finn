@@ -373,11 +373,16 @@ def test_a_decision_over_nodes_is_narrowed_under_its_key() -> None:
             plant = Plant()
             plant.heating = Decision(values={"solar": Boiler(kw=1)})
 
-    with pytest.raises(DefinitionError, match="a value cannot pin it"):
+    # A key pins the choice: the declared candidate is selected, with its own
+    # bindings, and the key disappears (it is listed as pinned).
+    class Pinned(Space):
+        plant = Plant()
+        plant.heating = "pump"  # type: ignore[assignment]
 
-        class Pinned(Space):
-            plant = Plant()
-            plant.heating = "pump"  # type: ignore[assignment]
+    assert "plant.heating" not in {item.key for item in inspection.decisions(Pinned)}
+    assert [item.key for item in inspection.pinned(Pinned)] == ["plant.heating"]
+    pinned = design_space(Pinned())
+    assert isinstance(pinned.plant.heating, Pump) and pinned.plant.heating.kw == 8
 
 
 def test_an_outer_body_may_override_a_reference_input_below_it() -> None:

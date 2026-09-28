@@ -159,6 +159,11 @@ def _check_case(schema: SelectionSchema, index: int, value: object) -> None:
         choice = schema._model.linked.choices[choice_index]
         if type(value) is not str or not any(value == name for name, _ in choice.cases):
             raise RequestError(f"{choice.key}: unknown structural case {value!r}")
+        # An enclosing body may have narrowed the cases: the selector's domain holds them.
+        kept = schema._model.linked.nodes[index].domain
+        cases = None if kept is None else kept._finite_values
+        if cases is not None and value not in cases:
+            raise RequestError(f"{choice.key}: case {value!r} is narrowed out")
 
 
 def encode(selection: Selection, schema: SelectionSchema) -> dict[str, JSONValue]:

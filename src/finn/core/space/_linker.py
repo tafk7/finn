@@ -30,6 +30,7 @@ from ._bindings import (
 from ._configuration import Space
 from ._graph import dependency_order
 from ._nodes import (
+    KeySelection,
     NodeDecision,
     NodeDecl,
     fallback,
@@ -648,9 +649,19 @@ class _Linker:
             self.scope_provenance[child] = slot.provenance
 
     def choice(self, scope: _ScopeDraft, name: str, declared: NodeDecision) -> None:
-        """A Decision over nodes, or the narrower one an enclosing body replaced it with."""
+        """A Decision over nodes, or the narrower one an enclosing body replaced it with.
+
+        An enclosing body's key selection keeps the declared candidates, with
+        the bindings of the body that declared them: a pin makes the selector a
+        constant (its key disappears, as a pinned value's does), a narrowing
+        restricts its domain under the same key.
+        """
         key = _key(scope.name, name)
         slot = scope.slots.get(name)
+        selection: KeySelection | None = None
+        if slot is not None and isinstance(slot.supplier, KeySelection):
+            selection, slot = slot.supplier, None
+            provenance = scope.slots[name].provenance
         decision, source, writer = declared, scope.index, scope.index
         if slot is not None:
             decision = cast(NodeDecision, slot.supplier)
@@ -664,18 +675,30 @@ class _Linker:
         )
         if slot is not None and decision.when is not None:
             guard = self.guarded(source, guard, decision.when, key + ".$when", owner=key)
+        pinned = selection is not None and selection.pin
         selector = self.reserve(
             scope.index,
             key,
-            "decision",
+            "const" if pinned else "decision",
             cast(ValueSemantics[object], _STRING),
             guard=guard,
             origin=decision.origin,
         )
-        self.nodes[selector] = replace(
-            self.nodes[selector],
-            domain=cast(Domain[object], finite(decision.candidates, _STRING)),
-        )
+        if selection is None:
+            self.nodes[selector] = replace(
+                self.nodes[selector],
+                domain=cast(Domain[object], finite(decision.candidates, _STRING)),
+            )
+        elif selection.pin:
+            self.nodes[selector] = replace(self.nodes[selector], value=selection.keys[0])
+            self.pinned[key] = provenance
+            self.provenance[selector] = provenance
+        else:
+            self.nodes[selector] = replace(
+                self.nodes[selector],
+                domain=cast(Domain[object], finite(selection.keys, _STRING)),
+            )
+            self.provenance[selector] = provenance
         scope.named_members[name] = selector
         if slot is not None:
             self.provenance[selector] = slot.provenance

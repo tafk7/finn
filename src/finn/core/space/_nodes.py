@@ -39,6 +39,7 @@ from .declarations import (
     declared_path,
     local_name,
     source_origin,
+    unfinished,
 )
 from .domains import finite
 from .errors import DefinitionError, EvaluationError
@@ -120,6 +121,8 @@ class NodeDecision(Decision[str]):
     proxy: NodeChoice
     # Where it replaces another Decision over nodes, if it is an override.
     replaces: str | None
+    # Declared with candidate entries: a direct read needs a member every candidate has.
+    strict: bool
 
     def describe(self) -> str:
         where = f"{self.owner.__qualname__}.{self.name}" if self.owner is not None else None
@@ -330,12 +333,61 @@ def _reference_supplier(formal: Param[object], value: object, label: str) -> obj
     return supplied
 
 
-def _choice_supplier(original: NodeDecision, value: object, label: str) -> NodeDecision:
-    """A Decision over nodes may be narrowed: fewer cases, each a compatible node."""
+class KeySelection:
+    """An enclosing body's pin (one key) or narrowing (several keys) of a Decision over nodes.
+
+    The declared candidates stay placed, with the bindings of the body that
+    declared them; the selection only restricts which of them may be selected.
+    """
+
+    __slots__ = ("keys", "pin")
+
+    def __init__(self, keys: tuple[str, ...], pin: bool) -> None:
+        self.keys, self.pin = keys, pin
+
+    def __repr__(self) -> str:
+        return repr(self.keys[0]) if self.pin else f"Decision(values={self.keys!r})"
+
+
+def _key_selection(original: NodeDecision, value: object, label: str) -> KeySelection | None:
+    """``"pump"`` pins a Decision over nodes; ``Decision(values=("pump", ...))`` narrows it."""
+    keys: tuple[str, ...]
+    if isinstance(value, str):
+        keys, pin = (value,), True
+    elif isinstance(value, Decision) and not isinstance(value, NodeDecision):
+        found = value.domain._finite_values
+        if (
+            value.when is not None
+            or value.name is not None
+            or found is None
+            or any(type(item) is not str for item in found)
+        ):
+            raise DefinitionError(
+                f"{label}: narrow a Decision over nodes with Decision(values=(<keys>, ...))"
+            )
+        keys, pin = tuple(cast(tuple[str, ...], found)), False
+    else:
+        return None
+    unknown = [key for key in keys if key not in original.candidates]
+    if unknown:
+        raise DefinitionError(
+            f"{label}: {unknown} are not cases of {original.describe()}; an override narrows "
+            "the cases, it does not add one"
+        )
+    return KeySelection(keys, pin)
+
+
+def _choice_supplier(
+    original: NodeDecision, value: object, label: str
+) -> NodeDecision | KeySelection:
+    """A Decision over nodes may be pinned or narrowed by key, or replaced by a narrower one."""
+    selection = _key_selection(original, value, label)
+    if selection is not None:
+        return selection
     if not isinstance(value, NodeChoice) or len(value._space_path) != 1:
         raise DefinitionError(
-            f"{label}: a Decision over nodes is overridden by another Decision over nodes "
-            "(a narrower one); a value cannot pin it"
+            f"{label}: a Decision over nodes is pinned by a key, narrowed by a Decision over "
+            "keys, or replaced by another Decision over nodes (a narrower one)"
         )
     decision = value._space_decision()
     if decision.owner is not None or decision.replaces is not None:
@@ -432,6 +484,9 @@ def declare_node(family: type[Space], keywords: Mapping[str, object]) -> Space:
     """
 
     origin = source_origin()
+    error = unfinished(family, at(origin))
+    if error is not None:
+        raise error
     keywords = dict(keywords)
     when = _guard(keywords.pop("when", None))
     members, handles = family_members(family)
@@ -595,7 +650,23 @@ class NodeChoice:
     def __getattr__(self, name: str) -> Any:
         if name.startswith("_"):
             raise AttributeError(name)
+        decision = self._space_decision()
+        if getattr(decision, "strict", False):
+            _check_direct_read(decision, name)
         return ChoiceMemberRef(self._space_path, name)
+
+    def __getitem__(self, case: str) -> Any:
+        """``choice["pump"]``: one candidate's node, for its own members."""
+        decision = self._space_decision()
+        if case not in decision.candidates:
+            raise DefinitionError(
+                f"{decision.describe()}: no candidate {case!r}; its candidates are "
+                f"{list(decision.candidates)}"
+            )
+        record = decision.candidates[case]
+        if record is None:
+            raise DefinitionError(f"{decision.describe()}: candidate {case!r} places nothing")
+        return path_proxy(record.family, (*self._space_path[:-1], record))
 
     def __setattr__(self, name: str, value: object) -> None:
         raise AttributeError("a Decision over nodes is immutable")
@@ -623,6 +694,7 @@ def node_choice(values: Mapping[object, object], *, when: ValueRef[bool] | None)
     decision = Declaration.__new__(NodeDecision)
     object.__setattr__(decision, "_body", _class_body())
     decision.replaces = None
+    decision.strict = False
     candidates: dict[str, NodeDecl | None] = {}
     for key, value in values.items():
         local_name(cast(str, key), "candidate key")
@@ -649,6 +721,144 @@ def node_choice(values: Mapping[object, object], *, when: ValueRef[bool] | None)
     return proxy
 
 
+NONE_CASE = "none"
+
+
+def entry_choice(
+    entries: object,
+    shared: Mapping[str, object],
+    *,
+    optional: object,
+    when: ValueRef[bool] | None,
+) -> NodeChoice:
+    """``Decision({"a": A, "b": B(own=...)}, shared=..., optional=...)``: a Decision over nodes.
+
+    Each entry becomes a candidate node: a family is called with no bindings,
+    a call keeps its own. Every shared binding is supplied to every candidate,
+    each of which must declare it, and none of which may bind it already.
+    ``optional=True`` adds a ``None`` candidate keyed ``"none"``, first.
+    """
+    origin = source_origin()
+    where = at(origin)
+    if not isinstance(entries, Mapping) or not entries:
+        raise DefinitionError(
+            f"Decision{where}: candidate entries map keys to families or calls on them"
+        )
+    if type(optional) is not bool:
+        raise DefinitionError(f"Decision{where}: optional= is True or False")
+    space = _space()
+    families: dict[str, type[Space]] = {}
+    records: dict[str, NodeDecl] = {}
+    for key, entry in entries.items():
+        local_name(key, "candidate key")
+        if optional and key == NONE_CASE:
+            raise DefinitionError(f"Decision{where}: {key!r} is the key of the None candidate")
+        if isinstance(entry, type) and issubclass(entry, space):
+            error = unfinished(entry, f" (candidate {key!r} of a Decision{where})")
+            if error is not None:
+                raise error
+            families[key] = entry
+            continue
+        record = node_record(entry)
+        if record is None:
+            raise DefinitionError(
+                f"Decision{where}: candidate {key!r} must be a family or a call on one"
+            )
+        families[key], records[key] = record.family, record
+    _check_shared(families, records, shared, where)
+    values: dict[object, object] = {NONE_CASE: None} if optional else {}
+    for key, family in families.items():
+        node = records[key].instance if key in records else family()
+        record = cast(NodeDecl, node_record(node))
+        members, _ = family_members(family)
+        for name, value in shared.items():
+            label = f"{family.__qualname__}.{name} (shared binding of candidate {key!r}{where})"
+            record.overrides[name] = (
+                check_supplier(family, name, members[name], value, label),
+                origin,
+            )
+        values[key] = node
+    choice = node_choice(values, when=when)
+    choice._space_decision().strict = True
+    return choice
+
+
+def _check_shared(
+    families: Mapping[str, type[Space]],
+    records: Mapping[str, NodeDecl],
+    shared: Mapping[str, object],
+    where: str,
+) -> None:
+    """Every candidate declares every shared binding; no entry binds one already."""
+    problems: list[str] = []
+    for name in shared:
+        lacking = []
+        for key, family in families.items():
+            member = family_members(family)[0].get(name)
+            if member is None or slot_kind(member) == "behaviour":
+                lacking.append(f"{key} ({family.__qualname__})")
+        if lacking:
+            problems.append(f"shared binding {name!r} is not declared by candidates {lacking}")
+    if problems:
+        raise DefinitionError(
+            f"Decision{where}: "
+            + "; ".join(problems)
+            + ". A shared binding goes to every candidate: write it on the entries that take it"
+        )
+    for key, record in records.items():
+        for name in shared:
+            earlier = record.overrides.get(name)
+            if earlier is not None:
+                raise DefinitionError(
+                    f"Decision{where}: candidate {key!r} already binds {name} (at {earlier[1]}), "
+                    "and the shared bindings bind it again; a body sets a member once: remove "
+                    "it from the entry or from the shared bindings"
+                )
+
+
+def _check_direct_read(decision: NodeDecision, name: str) -> None:
+    """``choice.member`` needs a member every candidate declares, of one value type."""
+    having: dict[str, Declaration] = {}
+    lacking: list[str] = []
+    for case, record in decision.candidates.items():
+        if record is None:
+            continue  # reading through the None candidate is inapplicable, not a lack
+        member = family_members(record.family)[0].get(name)
+        if member is None:
+            lacking.append(case)
+        else:
+            having[case] = member
+    if not having:
+        raise AttributeError(name)
+    if lacking:
+        raise DefinitionError(
+            f"{decision.describe()}.{name}: a direct read needs a member every candidate "
+            f"declares; candidates {lacking} do not declare {name!r}. Read it qualified, as "
+            f'{decision.name or "choice"}["{next(iter(having))}"].{name}'
+        )
+    from .collection import collect_space
+
+    known: list[tuple[str, ValueSemantics[object]]] = []
+    for case, member in having.items():
+        family = cast(NodeDecl, decision.candidates[case]).family
+        try:
+            semantics = collect_space(family).semantics.get(member)
+        except DefinitionError:
+            semantics = None  # known only when linking: checked there
+        if semantics is None:
+            semantics = getattr(member, "semantics", None)
+        if isinstance(semantics, ValueSemantics):
+            known.append((case, semantics))
+    for case, semantics in known[1:]:
+        first_case, first = known[0]
+        if not first.is_compatible_with(semantics):
+            raise DefinitionError(
+                f"{decision.describe()}.{name}: candidates declare {name!r} with different "
+                f"value types ({first_case}: {first.name}, {case}: {semantics.name}); read "
+                "each qualified"
+            )
+
+
 def unwrap(value: object) -> object:
     """The record behind a class-body node or choice face; anything else unchanged."""
     if isinstance(value, NodeChoice):
@@ -658,12 +868,15 @@ def unwrap(value: object) -> object:
 
 
 __all__ = [
+    "KeySelection",
+    "NONE_CASE",
     "NodeChoice",
     "NodeDecision",
     "NodeDecl",
     "assign",
     "check_supplier",
     "declare_node",
+    "entry_choice",
     "fallback",
     "family_formals",
     "family_members",
