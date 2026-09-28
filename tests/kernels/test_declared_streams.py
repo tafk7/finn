@@ -32,7 +32,7 @@ from finn.kernels.artifacts.build import ModuleBuildRequirements
 from finn.kernels.artifacts.derivation import ProducerIdentity
 from finn.dataflow.tensor import TENSOR, ScalarEncoding, Tensor
 from finn.kernels.delivery import CyclicDelivery
-from finn.dataflow.traversal import Every, Presentation, vector_major
+from finn.dataflow.traversal import LevelEnd, Presentation, vector_major
 from finn.kernels.physical.axi_stream import AxiStream
 from finn.kernels.physical.contract import STREAM_CONTRACT, StreamContract
 from finn.kernels.streams import (
@@ -171,7 +171,7 @@ class Replaying(Space):
         stream = AxiStream("s_axis", DataType["INT4"], 2, endpoint=Endpoint.TARGET, last=True)
         transport = stream.native(clock="ap_clk", reset="ap_rst_n")
         form = vector_major((2, 4), 2).replayed(3, inner_beats=2)
-        return StreamContract(transport, INT4, form, markers={"s_axis_tlast": Every(2)})
+        return StreamContract(transport, INT4, form, markers={"s_axis_tlast": LevelEnd(2)})
 
     exports = {PORT: {input_stream: port}}
 

@@ -40,18 +40,15 @@ from finn.kernels.physical.composition import Composition, StreamEnd
 from finn.kernels.physical.contract import StreamContract, StreamMismatch, compatibility
 from finn.dataflow.traversal import (
     Adaptation,
-    Every,
+    LevelEnd,
     Loop,
     Reorder,
     Repetition,
     Traversal,
-    axis_walk,
     classify,
     pack,
-    split_walk,
     tile,
     vector_major,
-    walk_loops,
 )
 from finn.kernels.physical.lowering import lower_module_structure
 from finn.kernels.physical.stream import MarkerKind, ReadyValidStream, StreamMarker
@@ -106,7 +103,7 @@ def test_repetition_and_replay_are_stride_zero_loops():
         vector_major((5,), 2)
     with pytest.raises(ValueError, match="shape"):
         pack(vector, (1, 2, 3), 4)
-    assert Every(3).asserted(2) and not Every(3).asserted(3)
+    assert LevelEnd(3).asserted(2) and not LevelEnd(3).asserted(3)
 
 
 def _random_traversal(rng):
@@ -128,39 +125,6 @@ def test_canonical_equality_is_equality_of_presented_sequences():
         first, second = _random_traversal(rng), _random_traversal(rng)
         same = list(first.positions()) == list(second.positions())
         assert same is (first == second), (first, second)
-
-
-def test_an_axis_walk_matches_the_first_field_of_every_beat():
-    rng = random.Random(2)
-    checked = 0
-    for _ in range(2000):
-        form = _random_traversal(rng)
-        walk = axis_walk(form)
-        if walk is None:
-            continue
-        axes = [
-            Traversal((extent,), walk_loops(walk, axis), ())
-            for axis, extent in enumerate(form.shape)
-        ]
-        for beat, fields in enumerate(form.positions()):
-            assert tuple(axis.position(beat, 0)[0] for axis in axes) == fields[0]
-        checked += 1
-    assert checked > 500
-
-
-def test_a_walk_splits_into_groups_of_beats():
-    walk = axis_walk(vector_major((3, 6), 3).replayed(2, inner_beats=2))
-    assert walk == ((3, (1, 0)), (2, (0, 0)), (2, (0, 3)))
-    assert split_walk(walk, 2) == (((3, (1, 0)), (2, (0, 0))), ((2, (0, 3)),))
-    # A group may cut a loop: four beats of a (3, 8)-beat walk regroup the inner loop.
-    rows = ((3, (1, 0)), (8, (0, 1)))
-    assert split_walk(rows, 4) == (((3, (1, 0)), (2, (0, 4))), ((4, (0, 1)),))
-    assert split_walk(rows, 3) is None
-    # A loop wrapping an axis at an irregular point has no per-axis walk.
-    assert axis_walk(Traversal((2, 6), (Loop(3, 4),), ())) is None
-    # A rank-3 operand (row, window, channel): channel folds, then window folds.
-    channels = Traversal((2, 4, 4), (Loop(2, 16), Loop(2, 2), Loop(2, 8)), (Loop(2, 4), Loop(2, 1)))
-    assert axis_walk(channels) == ((2, (1, 0, 0)), (2, (0, 0, 2)), (2, (0, 2, 0)))
 
 
 # -- stress cases: tiled MVU and Shuffle ---------------------------------------------------
@@ -268,10 +232,10 @@ def test_element_repetition_direction_and_marker_rules_are_checked():
     )
     last = (StreamMarker("s_m", MarkerKind.LAST),)
     produced = StreamContract(
-        native("s", 6, Endpoint.INITIATOR, markers=last), INT3, fold, markers={"s_m": Every(2)}
+        native("s", 6, Endpoint.INITIATOR, markers=last), INT3, fold, markers={"s_m": LevelEnd(2)}
     )
     required = StreamContract(
-        native("s", 6, Endpoint.TARGET, markers=last), INT3, fold, markers={"s_m": Every(3)}
+        native("s", 6, Endpoint.TARGET, markers=last), INT3, fold, markers={"s_m": LevelEnd(1)}
     )
     assert "stream-marker" in codes(
         compatibility(produced, required, source_is_top=False, sink_is_top=False)
@@ -282,7 +246,16 @@ def test_contracts_reject_lanes_wider_than_the_word_and_unknown_marker_rules():
     with pytest.raises(ValueError, match="exceed"):
         contract(vector_major((4,), 4), Endpoint.TARGET, width=8)
     with pytest.raises(ValueError, match="marker"):
-        contract(vector_major((4,), 2), Endpoint.TARGET, markers={"missing": Every(2)})
+        contract(vector_major((4,), 2), Endpoint.TARGET, markers={"missing": LevelEnd(2)})
+    # A marker closes a loop level of its form: three beats close none of two.
+    last = (StreamMarker("s_m", MarkerKind.LAST),)
+    with pytest.raises(ValueError, match="closes no loop level"):
+        StreamContract(
+            native("s", 6, Endpoint.TARGET, markers=last),
+            INT3,
+            vector_major((4,), 2),
+            markers={"s_m": LevelEnd(3)},
+        )
 
 
 # -- the delivery kernel -----------------------------------------------------------------

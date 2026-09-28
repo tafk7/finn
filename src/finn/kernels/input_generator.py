@@ -46,7 +46,7 @@ from finn.core.space import (
     view,
 )
 from finn.kernels.physical.contract import STREAM_CONTRACT, StreamContract
-from finn.dataflow.traversal import TRAVERSAL, Every, Loop, Traversal, split_beats
+from finn.dataflow.traversal import TRAVERSAL, LevelEnd, Loop, Traversal, split_beats
 from finn.kernels.streams import MODULE, PORT, Stream
 
 
@@ -184,7 +184,9 @@ class InputGeneratorKernel(Kernel):
     @view(semantics=STREAM_CONTRACT)
     def output_port(self) -> StreamContract:
         element, extents = self.input_stream.tensor.element, self.extents
-        markers = {f"olst[{level}]": Every(prod(extents[level:])) for level in range(len(extents))}
+        markers = {
+            f"olst[{level}]": LevelEnd(prod(extents[level:])) for level in range(len(extents))
+        }
         return StreamContract(self.interfaces[1], element, self.output_form, markers=markers)
 
     exports = {

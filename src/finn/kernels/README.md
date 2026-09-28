@@ -298,7 +298,7 @@ directly rather than publishing unpadded words as AXI buses.
 A `StreamContract` (`physical/contract.py`) adds the logical sequence to a
 transport: the element encoding, a `Traversal` (`finn.dataflow.traversal`), a
 `Repetition` (`ONCE`, or `CYCLIC` for a free-running source) and periodic marker
-rules (`Every(k)`). A traversal is a loop nest over the row-major operand:
+rules (`LevelEnd(k)`). A traversal is a loop nest over the row-major operand:
 `beat_loops` step from beat to beat, `lane_loops` from field to field (field
 zero is least significant), and a stride of zero replays positions. Tiles,
 chunked tiles, transposes and replay are all loop nests; `vector_major` is

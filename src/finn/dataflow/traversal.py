@@ -188,22 +188,6 @@ def tile(rows: int, cols: int, pe: int, simd: int) -> Traversal:
     )
 
 
-def channel_tile(rows: int, window: int, channels: int, pe: int, simd: int) -> Traversal:
-    """A (rows, window, channels) operand read PE channels by SIMD window positions a beat.
-
-    Beats walk rows, then channel folds, then window folds, so each window
-    reduction is a run of beats. Field s * PE + p is window position s of
-    channel p: channels fastest, FinnLib's per-channel dot-product order.
-    """
-    if channels % pe or window % simd:
-        raise ValueError("PE must divide the channels and SIMD the window")
-    return Traversal.over(
-        (rows, window, channels),
-        ((0, rows, 1), (2, channels // pe, pe), (1, window // simd, simd)),
-        ((1, simd, 1), (2, pe, 1)),
-    )
-
-
 def _split(loop: Loop, boundary: int) -> tuple[Loop, ...] | None:
     """Split one nonzero-stride loop at a stride boundary strictly inside it."""
     low, high = loop.stride, loop.stride * loop.extent
@@ -374,80 +358,6 @@ def canonical_loops(loops: Sequence[Loop]) -> tuple[Loop, ...]:
     return _canonical(loops)
 
 
-Walk = tuple[tuple[int, tuple[int, ...]], ...]
-"""Beat loops outer first, each as (extent, step along every operand axis)."""
-
-
-def axis_walk(form: Traversal) -> Walk | None:
-    """Where each beat starts, as one step per operand axis for every beat loop.
-
-    A loop whose stride lies within one axis steps that axis; one that runs on
-    into the next outer axis is split where it wraps, and a replay loop steps
-    nothing. None when a loop crosses axes any other way, so no per-axis walk
-    describes it, or when an axis's steps would carry into the next outer one.
-    """
-    strides = axis_strides(form.shape)
-    steps: list[tuple[int, tuple[int, ...]]] = []
-    for loop in form.beat_loops:
-        pieces = _axis_steps(loop, form.shape, strides)
-        if pieces is None:
-            return None
-        steps += pieces
-    for axis, extent in enumerate(form.shape):
-        if sum((count - 1) * step[axis] for count, step in steps) >= extent:
-            return None
-    return tuple(steps)
-
-
-def _axis_steps(
-    loop: Loop, shape: tuple[int, ...], strides: tuple[int, ...]
-) -> list[tuple[int, tuple[int, ...]]] | None:
-    rank = len(shape)
-    if not loop.stride:
-        return [(loop.extent, (0,) * rank)]
-    axis = next(axis for axis in range(rank) if loop.stride >= strides[axis])
-    if loop.stride % strides[axis]:
-        return None
-    step = loop.stride // strides[axis]
-    unit = tuple(step if index == axis else 0 for index in range(rank))
-    if (loop.extent - 1) * step < shape[axis]:
-        return [(loop.extent, unit)]
-    # The loop runs on into the next outer axis: split it where it wraps.
-    if not axis or shape[axis] % step or loop.extent % (shape[axis] // step):
-        return None
-    inner = shape[axis] // step
-    outer = _axis_steps(Loop(loop.extent // inner, strides[axis - 1]), shape, strides)
-    return None if outer is None else [*outer, (inner, unit)]
-
-
-def walk_loops(walk: Walk, axis: int) -> tuple[Loop, ...]:
-    """The canonical walk of one operand axis."""
-    return _canonical(tuple(Loop(extent, step[axis]) for extent, step in walk))
-
-
-def split_walk(walk: Walk, inner_beats: int) -> tuple[Walk, Walk] | None:
-    """Split a walk into its groups of ``inner_beats`` beats and the walk within one."""
-    _positive(inner_beats, "inner_beats")
-    outer, inner = list(walk), list[tuple[int, tuple[int, ...]]]()
-    remaining = inner_beats
-    while remaining > 1:
-        if not outer:
-            return None
-        extent, step = outer.pop()
-        if extent <= remaining:
-            if remaining % extent:
-                return None
-            inner.insert(0, (extent, step))
-            remaining //= extent
-            continue
-        if extent % remaining:
-            return None
-        outer.append((extent // remaining, tuple(value * remaining for value in step)))
-        inner.insert(0, (remaining, step))
-        remaining = 1
-    return tuple(outer), tuple(inner)
-
-
 def is_repetition(sink: Traversal, source: Traversal) -> bool:
     """Whether ``sink`` is ``source`` presented a whole number of times."""
     if sink == source:
@@ -456,16 +366,34 @@ def is_repetition(sink: Traversal, source: Traversal) -> bool:
 
 
 @dataclass(frozen=True)
-class Every:
-    """A marker asserted on every ``period``-th beat of a pass (the last of each group)."""
+class LevelEnd:
+    """A marker closing a loop level: asserted on the last beat of every ``beats`` beats.
 
-    period: int
+    The level is named by the number of beats it spans, not by a loop's name:
+    canonical traversals merge contiguous loops, and loop names do not cross
+    kernels. On a presentation it must close whole innermost loops
+    (``aligned``). A periodic pin (AXIS ``TLAST``, ``replay_buffer``'s
+    ``olast``) and a loop-completion pin (``input_gen``'s ``olst[d]``) carry the
+    same rule.
+    """
+
+    beats: int
 
     def __post_init__(self) -> None:
-        _positive(self.period, "marker period")
+        _positive(self.beats, "a marker's level")
 
     def asserted(self, beat: int) -> bool:
-        return (beat + 1) % self.period == 0
+        return (beat + 1) % self.beats == 0
+
+    def aligned(self, form: Traversal) -> bool:
+        """Whether the level closes whole innermost loops of ``form``."""
+        if form.beats % self.beats:
+            return False
+        try:
+            split_beats(form, self.beats)
+        except ValueError:
+            return False
+        return True
 
 
 class Repetition(Enum):
@@ -484,14 +412,17 @@ class Presentation:
 
     form: Traversal
     repetition: Repetition = Repetition.ONCE
-    markers: tuple[Every, ...] = ()
+    markers: tuple[LevelEnd, ...] = ()
 
     def __post_init__(self) -> None:
         if not isinstance(self.form, Traversal) or not isinstance(self.repetition, Repetition):
             raise TypeError("a presentation has a Traversal and a Repetition")
         object.__setattr__(self, "markers", tuple(self.markers))
-        if not all(isinstance(rule, Every) for rule in self.markers):
-            raise TypeError("marker rules are Every values")
+        if not all(isinstance(rule, LevelEnd) for rule in self.markers):
+            raise TypeError("marker rules are LevelEnd values")
+        for rule in self.markers:
+            if not rule.aligned(self.form):
+                raise ValueError(f"a marker every {rule.beats} beats closes no loop level")
 
 
 PRESENTATION: ValueSemantics[Presentation] = ValueSemantics(
@@ -558,7 +489,7 @@ __all__ = [
     "Adaptation",
     "AxisStep",
     "Classification",
-    "Every",
+    "LevelEnd",
     "Loop",
     "PRESENTATION",
     "Position",
@@ -567,19 +498,14 @@ __all__ = [
     "Repetition",
     "TRAVERSAL",
     "Traversal",
-    "Walk",
     "axis_strides",
-    "axis_walk",
     "canonical_loops",
-    "channel_tile",
     "classify",
     "is_repetition",
     "pack",
     "regrouped",
     "split_beats",
-    "split_walk",
     "tile",
     "unreplayed",
     "vector_major",
-    "walk_loops",
 ]

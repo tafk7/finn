@@ -46,7 +46,7 @@ from indexed_ports import (  # noqa: E402
     present,
 )
 
-from finn.kernels.physical.forms import (  # noqa: E402
+from finn.dataflow.traversal import (  # noqa: E402
     Adaptation,
     Loop,
     Reorder,
@@ -321,7 +321,7 @@ def check_levels() -> None:
     X = Access(Operand("X", (R, K)), ({"r": 1}, {"kf": SIMD, "s": 1}))
     form = present(nest, X, fields=("s",))
     frame = frame_period(nest, ("kf",))
-    assert frame.period == SF and level_aligned(form, SF)
+    assert frame.beats == SF and level_aligned(form, SF)
     assert level_aligned(form, SF * NF) and not level_aligned(form, 3)
     # Canonical loops merge contiguous levels, so a level cannot be named by
     # position in the canonical nest; it is named by the beats it spans.

@@ -17,7 +17,7 @@ from finn.kernels.configure import commit
 from finn.dataflow.tensor import ScalarEncoding
 from finn.kernels.matmul import Contraction, MatMulKernel, matmul_assembly
 from finn.kernels.physical.contract import StreamContract
-from finn.dataflow.traversal import Every, vector_major
+from finn.dataflow.traversal import LevelEnd, vector_major
 from finn.kernels.physical.stream import MarkerKind, ReadyValidStream, StreamMarker
 from finn.kernels.physical.structure import PhysicalPin, PinSlice, UnusedOutput
 from finn.kernels.target import DspBlock
@@ -96,8 +96,8 @@ def test_a_marker_rule_names_a_whole_one_bit_marker_or_one_bit_of_a_wider_one():
         (StreamMarker("olst", MarkerKind.LOOP_END, 2),),
     )
     element, form = ScalarEncoding(DataType["INT3"]), vector_major((3, 4), 2)
-    contract = StreamContract(transport, element, form, markers={"olst[1]": Every(2)})
-    assert contract.rules == {"olst[1]": Every(2)}
+    contract = StreamContract(transport, element, form, markers={"olst[1]": LevelEnd(2)})
+    assert contract.rules == {"olst[1]": LevelEnd(2)}
     for key in ("olst[2]", "olst"):
         with pytest.raises(ValueError, match="marker bit"):
-            StreamContract(transport, element, form, markers={key: Every(2)})
+            StreamContract(transport, element, form, markers={key: LevelEnd(2)})

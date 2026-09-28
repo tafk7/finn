@@ -13,14 +13,18 @@ The ``contraction`` fixes how activations meet the weights.
   W[c, k], Y[row, c] = sum over k of X[row, k, c] * W[c, k]. Each output
   channel reads its own activations, so nothing is replayed. Activation beats
   traverse (row, channel fold, window fold) with PE channels of SIMD window
-  positions, channel fastest (``channel_tile``).
+  positions, channel fastest.
 
-Compute and external weights traverse (row, output fold, reduction fold);
-weight fields are (PE, SIMD), SIMD fastest and low-first. Results traverse
-(row, output fold), with PE low-first fields. Internal last closes every
-reduction-fold group. There is no top-level last: the declared extents
-determine all stream lengths. Input high padding is ignored; output high
-padding is unspecified.
+Each contraction is an einsum over index letters (``Contraction.einsum``).
+PE folds the output index, SIMD the reduced one, and the folded nest walks the
+output's indices, then the reduction (``finn.dataflow.nest``). Every stream's
+presentation derives from that one iteration through dotp's port conventions
+(``dotp_presentations``): compute and external weights traverse (row, output
+fold, reduction fold) with (PE, SIMD) fields, results (row, output fold) with
+PE fields, and the frame marker closes every reduction. A densely realized
+per-channel operation reads its (R, K, C) activations as an (R, K * C) view.
+There is no top-level last: the declared extents determine all stream lengths.
+Input high padding is ignored; output high padding is unspecified.
 
 No Region, logical operand mapping, or dataflow graph is required.
 ``MatMulKernel`` is a graph of design spaces: four ``Stream`` nodes, and
@@ -61,18 +65,18 @@ from finn.kernels.configure import commit, compatible, describe
 from finn.kernels.control import EXPORTED, ControlBus
 from finn.kernels.delivery import CyclicDelivery
 from finn.kernels.memstream import MemStreamKernel
-from finn.kernels.dotp import Contraction, DotpAxiKernel, Int8Dsp58DotpKernel, PackedDotpKernel
-from finn.dataflow.tensor import TENSOR, Tensor
-from finn.dataflow.traversal import (
-    PRESENTATION,
-    TRAVERSAL,
-    Every,
-    Presentation,
-    Traversal,
-    channel_tile,
-    tile,
-    vector_major,
+from finn.kernels.dotp import (
+    DOTP_PRESENTATIONS,
+    Contraction,
+    DotpAxiKernel,
+    DotpPresentations,
+    Int8Dsp58DotpKernel,
+    PackedDotpKernel,
+    dotp_presentations,
 )
+from finn.dataflow.tensor import TENSOR, Tensor
+from finn.dataflow.nest import ITERATION, Einsum, Iteration, accesses, fold, period
+from finn.dataflow.traversal import TRAVERSAL, Traversal, unreplayed
 from finn.kernels.physical.structure import PhysicalStructure
 from finn.kernels.input_generator import InputGeneratorKernel
 from finn.kernels.streaming import ReplayBuffer
@@ -348,44 +352,57 @@ class MatMulKernel(Space):
     def replay_strides(self) -> IntegerVector:
         return (0, 1)
 
-    # The tensors the streams carry, and what each end presents of them.
+    # The iteration the datapath computes, the tensors the streams carry, and
+    # what each end presents of them.
+
+    @derived(semantics=ITERATION)
+    def iteration(self) -> Iteration | Rejected:
+        """The datapath's contraction folded by PE (outputs) and SIMD (reduction)."""
+        f, contraction = self.folding, self.datapath
+        einsum = Einsum(contraction.einsum)
+        (reduced,) = einsum.reduced
+        output = einsum.output[-1]
+        extents = {einsum.output[0]: f.rows, reduced: f.reduction, output: f.outputs}
+        try:
+            nest = fold(einsum, extents, {output: f.pe, reduced: f.simd})
+        except ValueError as error:
+            return reject("matmul-folding", str(error))
+        x, w, y = accesses(einsum, nest, extents)
+        if self.per_channel and contraction is Contraction.DENSE:
+            # The dense datapath reads each (K, C) row of the operand as K * C.
+            x = x.viewing((f.rows, self.reduction, f.outputs))
+        return Iteration(nest, (x, w, y))
+
+    @derived(semantics=DOTP_PRESENTATIONS)
+    def presentations(self) -> DotpPresentations | Rejected:
+        """What the compute core's ports present, whichever core computes."""
+        return dotp_presentations(
+            self.iteration, pe=self.pe, simd=self.simd, contraction=self.datapath
+        )
 
     @derived(semantics=TRAVERSAL)
     def activation_form(self) -> Traversal:
         """Each activation row once: the boundary's order and the replay's input."""
-        f = self.folding
-        if f.per_channel:
-            return channel_tile(f.rows, f.reduction, f.outputs, f.pe, f.simd)
-        return vector_major((f.rows, f.reduction), f.simd)
+        return unreplayed(self.presentations.activation.form)
 
     @derived(semantics=TENSOR)
     def activation_tensor(self) -> Tensor | Rejected:
         element = ScalarEncoding.admit(self.activation_dtype)
         if isinstance(element, Rejected):
             return element
-        return Tensor(self.activation_form.shape, element)
-
-    @derived(semantics=PRESENTATION)
-    def replayed_presentation(self) -> Presentation:
-        f = self.folding
-        form = self.activation_form.replayed(f.reuse, inner_beats=f.reduction_folds)
-        return Presentation(form, markers=(Every(f.reduction_folds),))
+        return Tensor(self.iteration.operands[0].tensor, element)
 
     @derived(semantics=TRAVERSAL)
     def weight_period(self) -> Traversal:
-        f = self.folding
-        return tile(f.outputs, f.reduction, f.pe, f.simd)
+        """One pass of the weights: what a stored delivery repeats."""
+        return period(self.presentations.weights.form)
 
     @derived(semantics=TENSOR)
     def weight_tensor(self) -> Tensor | Rejected:
         element = ScalarEncoding.admit(self.weights_dtype)
         if isinstance(element, Rejected):
             return element
-        return Tensor(self.weight_period.shape, element)
-
-    @derived(semantics=PRESENTATION)
-    def weight_presentation(self) -> Presentation:
-        return Presentation(self.weight_period.repeated(self.folding.rows))
+        return Tensor(self.iteration.operands[1].tensor, element)
 
     @derived(semantics=TENSOR)
     def set_tensor(self) -> Tensor:
@@ -397,15 +414,10 @@ class MatMulKernel(Space):
 
     @derived(semantics=TENSOR)
     def result_tensor(self) -> Tensor | Rejected:
-        f, element = self.folding, ScalarEncoding.admit(self.result_type)
+        element = ScalarEncoding.admit(self.result_type)
         if isinstance(element, Rejected):
             return element
-        return Tensor((f.rows, f.outputs), element)
-
-    @derived(semantics=PRESENTATION)
-    def result_presentation(self) -> Presentation:
-        f = self.folding
-        return Presentation(vector_major((f.rows, f.outputs), f.pe))
+        return Tensor(self.iteration.operands[2].tensor, element)
 
     # Streams: relations between the kernels that reference them. A stream with a
     # single user is a boundary of the kernel and presents its ABI port name.
@@ -474,9 +486,7 @@ class MatMulKernel(Space):
         activation_stream=replayed,
         weights_stream=weight_stream,
         result_stream=results,
-        activation_presentation=replayed_presentation,
-        weights_presentation=weight_presentation,
-        result_presentation=result_presentation,
+        iteration=iteration,
     )
     int8_dsp58 = Int8Dsp58DotpKernel(
         activation_dtype=activation_dtype,
@@ -491,9 +501,7 @@ class MatMulKernel(Space):
         activation_stream=replayed,
         weights_stream=weight_stream,
         result_stream=results,
-        activation_presentation=replayed_presentation,
-        weights_presentation=weight_presentation,
-        result_presentation=result_presentation,
+        iteration=iteration,
     )
     compute: PackedDotpKernel | Int8Dsp58DotpKernel = Decision(
         values={"packed": packed, "int8_dsp58": int8_dsp58}

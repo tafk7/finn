@@ -21,6 +21,17 @@ closes one nonempty reduction frame and produces one PE-wide result beat;
 weights and results have no TLAST. The caller supplies matching weight beats
 and terminates every frame.
 
+Placed between streams, dotp takes its ``iteration``: the nest of the
+contraction it computes and the accesses of its activations X, weights W and
+results Y (``finn.dataflow.nest``). Every port's presentation derives from it
+(``dotp_presentations``) under dotp_axi's field conventions: weights
+``(p, s)``, results ``(p)``, and activations ``(s)`` when broadcast or
+``(s, p)`` (field ``s * PE + p``) per channel. The frame marker closes the
+reduced levels. One admission rule replaces per-port checks: one output lane
+level P (PE) and one reduction lane level S (SIMD); weights use both,
+activations use S, and use P exactly when per channel; the reduced beat levels
+are the innermost.
+
 ``result_dtype`` specifies the signed accumulator encoding, not a proof that an
 arbitrary frame fits it. The caller must bound each frame's accumulation to that
 encoding (including intermediate sums); overflow is not exact arithmetic.
@@ -28,8 +39,9 @@ encoding (including intermediate sums); overflow is not exact arithmetic.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from enum import Enum
-from math import ceil, floor, prod
+from math import ceil, floor
 from typing import ClassVar
 
 from finn.kernels.artifacts.abi import (
@@ -62,18 +74,8 @@ from finn.dataflow.datatypes import (
 from finn.kernels.datatypes.scalar import integer_scalar
 from finn.kernels.physical.axi_stream import AxiStream, axi_stream
 from finn.kernels.physical.contract import STREAM_CONTRACT, StreamContract
-from finn.dataflow.traversal import (
-    PRESENTATION,
-    Loop,
-    Presentation,
-    Traversal,
-    Walk,
-    axis_strides,
-    axis_walk,
-    canonical_loops,
-    split_walk,
-    walk_loops,
-)
+from finn.dataflow.nest import ITERATION, Iteration, Refused, frame, present
+from finn.dataflow.traversal import Presentation
 from finn.kernels.streams import (
     MODULE,
     PORT,
@@ -97,22 +99,82 @@ from finn.core.space import (
 
 
 class Contraction(Enum):
-    """How activations meet the PE lanes: shared by all, or one channel per lane."""
+    """How activations meet the PE lanes: shared by all, or one channel per lane.
+
+    Each is a contraction over index letters (``einsum``): rows ``r``, the
+    reduced window ``k``, and outputs ``n`` or channels ``c``.
+    """
 
     DENSE = "dense"
     PER_CHANNEL = "per_channel"
+
+    @property
+    def einsum(self) -> str:
+        return _EINSUM[self]
+
+
+_EINSUM = {Contraction.DENSE: "rk,nk->rn", Contraction.PER_CHANNEL: "rkc,ck->rc"}
 
 
 _DSP_VERSION = {DspBlock.DSP48E1: 1, DspBlock.DSP48E2: 2, DspBlock.DSP58: 3}
 # FINN's DSP58 chain timing model (rtl/matrixvectoractivation_rtl.py).
 _FIRST_DSP_NS, _NEXT_DSP_NS = 0.741, 0.605
 
-# The index of each operand axis, outer first: activations, weights, results.
-_LABELS = {
-    Contraction.DENSE: (("r", "k"), ("n", "k"), ("r", "n")),
-    Contraction.PER_CHANNEL: (("r", "k", "c"), ("c", "k"), ("r", "c")),
-}
-_REDUCED = "k"
+
+@dataclass(frozen=True)
+class DotpPresentations:
+    """What dotp's activation, weight and result ports present of their tensors."""
+
+    activation: Presentation
+    weights: Presentation
+    result: Presentation
+
+
+def dotp_presentations(
+    iteration: Iteration, *, pe: int, simd: int, contraction: Contraction
+) -> DotpPresentations | Rejected:
+    """Each port's presentation, derived from ``iteration``; refused unless dotp_axi admits it."""
+
+    def refuse(message: str) -> Rejected:
+        return reject("dotp-iteration", message)
+
+    if len(iteration.operands) != 3:
+        return refuse("dotp reads three operands: activations, weights and results")
+    nest, (x, w, y) = iteration.nest, iteration.operands
+    outputs = [level for level in nest.lanes if y.uses(level.name)]
+    reductions = [level for level in nest.lanes if not y.uses(level.name)]
+    if len(outputs) != 1 or len(reductions) != 1:
+        return refuse("dotp has one output lane level (PE) and one reduction lane level (SIMD)")
+    (p,), (s,) = outputs, reductions
+    if (p.extent, s.extent) != (pe, simd):
+        return refuse(
+            f"the nest's lanes are {p.extent} x {s.extent}, dotp's PE x SIMD {pe} x {simd}"
+        )
+    if not (w.uses(p.name) and w.uses(s.name)):
+        return refuse("the weights must differ in every lane")
+    if not x.uses(s.name):
+        return refuse("the activation lanes must be the reduction lanes")
+    per_channel = contraction is Contraction.PER_CHANNEL
+    if x.uses(p.name) != per_channel:
+        return refuse(
+            "each PE lane reads its own channel's activations only per channel"
+            if per_channel
+            else "dense activations are broadcast to every PE lane"
+        )
+    reduced = [level.name for level in nest.beats if not y.uses(level.name)]
+    try:
+        marker = frame(nest, reduced)
+        fields = (s.name, p.name) if per_channel else (s.name,)
+        return DotpPresentations(
+            Presentation(present(nest, x, fields=fields), markers=(marker,)),
+            Presentation(present(nest, w, fields=(p.name, s.name))),
+            Presentation(present(nest, y, fields=(p.name,), reduced=reduced)),
+        )
+    except Refused as error:
+        return refuse(str(error))
+
+
+DOTP_PRESENTATIONS = default_semantics(DotpPresentations)
 
 
 class DotpAxiKernel(Kernel):
@@ -145,14 +207,12 @@ class DotpAxiKernel(Kernel):
     weights_type = integer_scalar(weights_dtype, SignedInteger(min_bits=2))
     result_type = integer_scalar(result_dtype, SignedInteger())
     # The streams dotp sits on, when a parent places it between streams: reference
-    # inputs, each a Stream node placed beside dotp, and what each port presents
-    # of its stream's tensor, supplied by the parent.
+    # inputs, each a Stream node placed beside dotp, and the iteration its ports
+    # present, supplied by the parent.
     activation_stream: Stream = Param(required=False)
     weights_stream: Stream = Param(required=False)
     result_stream: Stream = Param(required=False)
-    activation_presentation: Presentation = Param(semantics=PRESENTATION, required=False)
-    weights_presentation: Presentation = Param(semantics=PRESENTATION, required=False)
-    result_presentation: Presentation = Param(semantics=PRESENTATION, required=False)
+    iteration: Iteration = Param(semantics=ITERATION, required=False)
 
     @derived
     def activation_lanes(self) -> int:
@@ -327,150 +387,31 @@ class DotpAxiKernel(Kernel):
         transport = port.native(clock="ap_clk", reset="ap_rst_n")
         markers = {}
         if transport.markers:
-            if len(presentation.markers) != 1:
-                return reject("dotp-framing", "the activation stream needs one frame marker rule")
             markers = {transport.markers[0].signal: presentation.markers[0]}
         return StreamContract(
             transport, element, presentation.form, presentation.repetition, markers
         )
 
-    # What dotp reads, as a relation between labelled operand axes (_LABELS):
-    # activations X, weights W and results Y, with k reduced. Each port's lanes
-    # are the loops dotp reads. Beat by beat, activation and weight walks agree
-    # on every index they share. Each frame (the activation marker period) moves
-    # only along k, and produces one result beat: frame by frame, each result
-    # index follows the operand that carries it.
-
-    @derived
-    def lane_reads(self) -> tuple[tuple[tuple[str, int], ...], ...]:
-        """(index, extent) of each operand's lane loops, outer first."""
-        pe, simd = self.pe, self.simd
-        if self.contraction is Contraction.PER_CHANNEL:
-            return ((("k", simd), ("c", pe)), (("c", pe), ("k", simd)), (("c", pe),))
-        return ((("k", simd),), (("n", pe), ("k", simd)), (("n", pe),))
-
-    def _operand(self, role: int, presentation: Presentation, name: str) -> Rejected | None:
-        """Refuse a stream of the wrong rank, or whose beats do not carry the fields dotp reads."""
-        labels = _LABELS[self.contraction][role]
-        form = presentation.form
-        if len(form.shape) != len(labels):
-            return reject(
-                "dotp-stream-form",
-                f"the {name} stream must be an operand over ({', '.join(labels)})",
-            )
-        strides = axis_strides(form.shape)
-        reads = self.lane_reads[role]
-        required = tuple(Loop(extent, strides[labels.index(index)]) for index, extent in reads)
-        text = " of ".join(f"{extent} {index}" for index, extent in reads)
-        if form.lanes != prod(extent for _, extent in reads):
-            return reject(
-                "dotp-stream-lanes",
-                f"the {name} stream carries {form.lanes} lanes; dotp reads {text}",
-            )
-        if form.lane_loops != canonical_loops(required):
-            return reject("dotp-stream-form", f"the {name} stream's lanes are not {text}")
-        return None
-
-    def _frames(self, role: int, form: Traversal) -> Walk | None:
-        """The walk of ``form``'s frames, when each frame moves only along k."""
-        markers = self.activation_presentation.markers
-        labels = _LABELS[self.contraction][role]
-        walk = axis_walk(form)
-        framed = None if walk is None else split_walk(walk, markers[0].period)
-        if framed is None or any(
-            step[axis]
-            for _, step in framed[1]
-            for axis, label in enumerate(labels)
-            if label != _REDUCED
-        ):
-            return None
-        return framed[0]
+    @derived(semantics=DOTP_PRESENTATIONS)
+    def presentations(self) -> DotpPresentations | Rejected:
+        return dotp_presentations(
+            self.iteration, pe=self.pe, simd=self.simd, contraction=self.contraction
+        )
 
     @view(semantics=STREAM_CONTRACT)
     def activation_port(self) -> StreamContract | Rejected:
-        spec = self.activation_presentation
-        refused = self._operand(0, spec, "activation")
-        if refused is not None:
-            return refused
-        if len(spec.markers) == 1 and self._frames(0, spec.form) is None:
-            return reject(
-                "dotp-stream-form", "a reduction frame must stay within one activation row"
-            )
-        return self._port(self.activation.stream, self.activation_stream, spec)
+        presented = self.presentations.activation
+        return self._port(self.activation.stream, self.activation_stream, presented)
 
     @view(semantics=STREAM_CONTRACT)
     def weights_port(self) -> StreamContract | Rejected:
-        weights, activation = self.weights_presentation, self.activation_presentation
-        refused = self._operand(1, weights, "weights")
-        if refused is not None:
-            return refused
-        labels = _LABELS[self.contraction]
-        if len(activation.form.shape) != len(labels[0]):
-            # The activation port's refusal.
-            return self._port(self.weights.stream, self.weights_stream, weights)
-        shared = [index for index in labels[1] if index in labels[0]]
-        extents = {index: activation.form.shape[labels[0].index(index)] for index in shared}
-        if any(weights.form.shape[labels[1].index(index)] != extents[index] for index in shared):
-            return reject(
-                "dotp-stream-form",
-                "weights must span the activation's "
-                + " and ".join(f"{extents[index]} {index}" for index in shared),
-            )
-        mine, theirs = axis_walk(weights.form), axis_walk(activation.form)
-        if (
-            mine is None
-            or theirs is None
-            or any(
-                walk_loops(mine, labels[1].index(index))
-                != walk_loops(theirs, labels[0].index(index))
-                for index in shared
-            )
-        ):
-            return reject("dotp-stream-form", "weight columns do not follow the activation columns")
-        if len(activation.markers) == 1 and self._frames(1, weights.form) is None:
-            return reject(
-                "dotp-stream-form", "a reduction frame must read one group of weight rows"
-            )
-        return self._port(self.weights.stream, self.weights_stream, weights)
+        presented = self.presentations.weights
+        return self._port(self.weights.stream, self.weights_stream, presented)
 
     @view(semantics=STREAM_CONTRACT)
     def result_port(self) -> StreamContract | Rejected:
-        result = self.result_presentation
-        weights, activation = self.weights_presentation, self.activation_presentation
-        refused = self._operand(2, result, "result")
-        if refused is not None:
-            return refused
-        labels = _LABELS[self.contraction]
-        operands = (activation.form, weights.form)
-        if any(len(form.shape) != len(labels[role]) for role, form in enumerate(operands)):
-            # The other ports' refusal.
-            return self._port(self.result.stream, self.result_stream, result)
-        # Each result index follows the operand carrying it: the rows the
-        # activations, every other index the weights.
-        carriers = tuple((0 if index not in labels[1] else 1, index) for index in labels[2])
-        for axis, (role, index) in enumerate(carriers):
-            extent = operands[role].shape[labels[role].index(index)]
-            if result.form.shape[axis] != extent:
-                return reject(
-                    "dotp-stream-form",
-                    f"results must have the {extent} {index} of the "
-                    + ("activations" if role == 0 else "weights"),
-                )
-        if len(activation.markers) == 1:
-            frames = (self._frames(0, operands[0]), self._frames(1, operands[1]))
-            mine = axis_walk(result.form)
-            # Frames the other ports refuse are theirs to report.
-            if frames[0] is not None and frames[1] is not None:
-                walks = (frames[0], frames[1])
-                if mine is None or any(
-                    walk_loops(mine, axis) != walk_loops(walks[role], labels[role].index(index))
-                    for axis, (role, index) in enumerate(carriers)
-                ):
-                    return reject(
-                        "dotp-stream-form",
-                        "each result beat must hold its frame's activation row and weight rows",
-                    )
-        return self._port(self.result.stream, self.result_stream, result)
+        presented = self.presentations.result
+        return self._port(self.result.stream, self.result_stream, presented)
 
     @view(semantics=TIEOFFS_SEMANTICS)
     def tieoffs(self) -> Tieoffs:

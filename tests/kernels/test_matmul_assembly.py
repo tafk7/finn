@@ -249,9 +249,7 @@ def test_matmul_honors_the_child_physical_view_not_just_its_raw_module(monkeypat
                     activation_stream=MatMulKernel.replayed,
                     weights_stream=MatMulKernel.weight_stream,
                     result_stream=MatMulKernel.results,
-                    activation_presentation=MatMulKernel.replayed_presentation,
-                    weights_presentation=MatMulKernel.weight_presentation,
-                    result_presentation=MatMulKernel.result_presentation,
+                    iteration=MatMulKernel.iteration,
                 )
             }
         )

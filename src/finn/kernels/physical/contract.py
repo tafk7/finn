@@ -31,7 +31,7 @@ from finn.kernels.artifacts.abi import Endpoint
 from finn.dataflow.tensor import ScalarEncoding
 from finn.dataflow.traversal import (
     Adaptation,
-    Every,
+    LevelEnd,
     Presentation,
     Repetition,
     Traversal,
@@ -68,7 +68,7 @@ class StreamContract:
     element: ScalarEncoding
     form: Traversal
     repetition: Repetition = Repetition.ONCE
-    markers: Mapping[str, Every] | tuple[tuple[str, Every], ...] = ()
+    markers: Mapping[str, LevelEnd] | tuple[tuple[str, LevelEnd], ...] = ()
 
     def __post_init__(self) -> None:
         if not isinstance(self.transport, ReadyValidStream):
@@ -87,8 +87,10 @@ class StreamContract:
         for key, rule in markers.items():
             signal, bit = marker_bit(key)
             width = widths.get(signal, 0)
-            if (width != 1 if bit is None else bit >= width) or not isinstance(rule, Every):
+            if (width != 1 if bit is None else bit >= width) or not isinstance(rule, LevelEnd):
                 raise ValueError(f"{key}: a rule needs a one-bit transport marker or marker bit")
+            if not rule.aligned(self.form):
+                raise ValueError(f"{key}: a marker every {rule.beats} beats closes no loop level")
         object.__setattr__(self, "markers", tuple(sorted(markers.items())))
 
     @property
@@ -100,7 +102,7 @@ class StreamContract:
         return self.form.lanes * self.element.bits
 
     @property
-    def rules(self) -> dict[str, Every]:
+    def rules(self) -> dict[str, LevelEnd]:
         return dict(self.markers)
 
     @property
@@ -167,7 +169,7 @@ def compatibility(
             refuse(
                 Level.LOGICAL,
                 "stream-marker",
-                f"{signal} requires a marker every {rule.period} beats; none is produced",
+                f"{signal} requires a marker every {rule.beats} beats; none is produced",
             )
 
     if source_is_top:
@@ -188,12 +190,18 @@ def compatibility(
 
 
 def _presented(source: StreamContract, sink: StreamContract) -> Traversal | None:
-    """The sequence a source presents over one consumer pass (None if it cannot align)."""
+    """The sequence a source presents over one consumer pass (None if it cannot align).
+
+    A cyclic source repeats its pass as many times as the consumer's pass holds
+    its elements; the lanes of the two need not agree.
+    """
     if source.repetition is Repetition.ONCE or source.form.shape != sink.form.shape:
         return source.form
-    if sink.form.beats % source.form.beats:
+    produced = source.form.beats * source.form.lanes
+    consumed = sink.form.beats * sink.form.lanes
+    if consumed % produced:
         return None
-    count = sink.form.beats // source.form.beats
+    count = consumed // produced
     return source.form if count == 1 else source.form.repeated(count)
 
 

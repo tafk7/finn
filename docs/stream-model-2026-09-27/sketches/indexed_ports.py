@@ -30,7 +30,7 @@ from math import prod
 
 from finn.dataflow.traversal import (
     Adaptation,
-    Every,
+    LevelEnd,
     Loop,
     Traversal,
     classify,
@@ -125,13 +125,13 @@ def present(
     return Traversal(access.operand.shape, beats, lanes)
 
 
-def frame_period(nest: Nest, reduced: Sequence[str]) -> Every:
+def frame_period(nest: Nest, reduced: Sequence[str]) -> LevelEnd:
     """The marker closing each reduction: the reduced levels must be the beat suffix."""
     names = [level.name for level in nest.beats]
     suffix = names[len(names) - len(reduced) :]
     if sorted(suffix) != sorted(reduced):
         raise Refused(f"reduction levels {list(reduced)} are not innermost in {names}")
-    return Every(prod(nest.level(name).extent for name in reduced))
+    return LevelEnd(prod(nest.level(name).extent for name in reduced))
 
 
 def once(form: Traversal) -> Traversal:
@@ -176,7 +176,7 @@ def check_dense(R: int, K: int, N: int, PE: int, SIMD: int) -> None:
     assert activation == hand_replayed, (activation, hand_replayed)
     assert weights == hand_weights, (weights, hand_weights)
     assert results == hand_results
-    assert frame == Every(SF)
+    assert frame == LevelEnd(SF)
 
     # Broadcast is derived: X does not use the output lane level p.
     assert not X.uses("p")

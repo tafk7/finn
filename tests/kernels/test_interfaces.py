@@ -26,7 +26,8 @@ from finn.kernels.artifacts.store import ArtifactStore
 from finn.kernels.control import EXPORTED, ControlBus
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.dotp import PackedDotpKernel
-from finn.dataflow.traversal import Every, Presentation, tile, vector_major
+from finn.dataflow.nest import Einsum, Iteration, accesses, fold
+from finn.dataflow.traversal import vector_major
 from finn.kernels.streaming import ReplayBuffer
 from finn.kernels.physical.structure import ConstantBits, PinSlice
 from finn.kernels.physical.validation import abi_pins
@@ -49,9 +50,10 @@ FOLDS = WIDTH // SIMD
 A, W, R = DataType["INT3"], DataType["INT3"], DataType["INT9"]
 THRESHOLDS = (((-5, 0, 7), (-2, 3, 10)),)
 ROWS = vector_major((REPETITIONS, WIDTH), SIMD)
-REPLAYED = Presentation(ROWS.replayed(HEIGHT, inner_beats=FOLDS), markers=(Every(FOLDS),))
-WEIGHTS = Presentation(tile(HEIGHT, WIDTH, 1, SIMD).repeated(REPETITIONS))
-RESULTS = Presentation(vector_major((REPETITIONS, HEIGHT), 1))
+DENSE = Einsum("rk,nk->rn")
+EXTENTS = {"r": REPETITIONS, "k": WIDTH, "n": HEIGHT}
+NEST = fold(DENSE, EXTENTS, {"n": 1, "k": SIMD})
+ITERATION = Iteration(NEST, accesses(DENSE, NEST, EXTENTS))
 X = Tensor((REPETITIONS, WIDTH), ScalarEncoding(A))
 WEIGHT_TENSOR = Tensor((HEIGHT, WIDTH), ScalarEncoding(W))
 RESULT_TENSOR = Tensor((REPETITIONS, HEIGHT), ScalarEncoding(R))
@@ -85,9 +87,7 @@ class Activated(Space):
         activation_stream=replayed,
         weights_stream=weights,
         result_stream=results,
-        activation_presentation=REPLAYED,
-        weights_presentation=WEIGHTS,
-        result_presentation=RESULTS,
+        iteration=ITERATION,
     )
     activate = ThresholdingAxiKernel(
         input_dtype=R,

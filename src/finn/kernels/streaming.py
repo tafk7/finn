@@ -27,7 +27,7 @@ from finn.core.space import Param, Rejected, default_semantics, derived, reject,
 from finn.kernels.base import Kernel
 from finn.dataflow.tensor import ScalarEncoding
 from finn.kernels.physical.contract import STREAM_CONTRACT, StreamContract
-from finn.dataflow.traversal import TRAVERSAL, Every, Traversal
+from finn.dataflow.traversal import TRAVERSAL, LevelEnd, Traversal
 from finn.kernels.physical.stream import ReadyValidStream, StreamMarker, MarkerKind
 from finn.kernels.streams import MODULE, PORT, Stream
 from finn.kernels.artifacts.contribution_types import CopiedSource
@@ -108,8 +108,8 @@ def replay_buffer_contracts(
             element,
             form.replayed(replay_count, inner_beats=sequence_length),
             markers={
-                "olast": Every(sequence_length),
-                "ofin": Every(sequence_length * replay_count),
+                "olast": LevelEnd(sequence_length),
+                "ofin": LevelEnd(sequence_length * replay_count),
             },
         ),
     )
