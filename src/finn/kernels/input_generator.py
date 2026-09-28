@@ -46,7 +46,7 @@ from finn.core.space import (
     view,
 )
 from finn.kernels.physical.contract import STREAM_CONTRACT, StreamContract
-from finn.kernels.physical.forms import Every, Loop, Traversal, split_beats
+from finn.dataflow.traversal import TRAVERSAL, Every, Loop, Traversal, split_beats
 from finn.kernels.streams import MODULE, PORT, Stream
 
 
@@ -85,9 +85,11 @@ class InputGeneratorKernel(Kernel):
         return True
 
     ram_style: str = Decision(values=("auto", "distributed", "block", "ultra"))
-    # The streams it sits on, when a parent places it between streams.
+    # The streams it sits on, when a parent places it between streams, and the
+    # form its input presents.
     input_stream: Stream = Param(required=False)
     output_stream: Stream = Param(required=False)
+    input_form: Traversal = Param(semantics=TRAVERSAL, required=False)
 
     @view(semantics=STREAM_INTERFACES)
     def interfaces(self) -> tuple[ReadyValidStream, ...] | Rejected:
@@ -152,7 +154,7 @@ class InputGeneratorKernel(Kernel):
     @derived(semantics=default_semantics(Traversal))
     def output_form(self) -> Traversal | Rejected:
         """The input's frames, each presented through the loop nest."""
-        form, frame = self.input_stream.spec.form, self.frame_words
+        form, frame = self.input_form, self.frame_words
         if form.beats % frame:
             return reject("input-generator-frame", f"{frame}-beat frames do not divide the stream")
         try:
@@ -172,18 +174,18 @@ class InputGeneratorKernel(Kernel):
 
     @view(semantics=STREAM_CONTRACT)
     def input_port(self) -> StreamContract | Rejected:
-        spec = self.input_stream.spec
-        if spec.payload_bits != self.word_bits:
+        element, form = self.input_stream.tensor.element, self.input_form
+        if form.lanes * element.bits != self.word_bits:
             return reject(
                 "input-generator-word", "the stream's beats are not the generator's words"
             )
-        return StreamContract(self.interfaces[0], spec.element, spec.form, spec.repetition)
+        return StreamContract(self.interfaces[0], element, form)
 
     @view(semantics=STREAM_CONTRACT)
     def output_port(self) -> StreamContract:
-        spec, extents = self.input_stream.spec, self.extents
+        element, extents = self.input_stream.tensor.element, self.extents
         markers = {f"olst[{level}]": Every(prod(extents[level:])) for level in range(len(extents))}
-        return StreamContract(self.interfaces[1], spec.element, self.output_form, markers=markers)
+        return StreamContract(self.interfaces[1], element, self.output_form, markers=markers)
 
     exports = {
         MODULE: build_requirements,

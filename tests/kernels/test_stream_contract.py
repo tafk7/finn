@@ -32,13 +32,13 @@ from finn.kernels.artifacts.build import (
 )
 from finn.kernels.artifacts.derivation import ProducerIdentity
 from finn.kernels.artifacts.store import ArtifactStore
-from finn.kernels.datatypes.scalar import ScalarEncoding
+from finn.dataflow.tensor import ScalarEncoding
 from finn.kernels.delivery import CyclicDelivery
 from finn.kernels.fifo import FifoKernel
 from finn.kernels.physical.axi_stream import AxiStream
 from finn.kernels.physical.composition import Composition, StreamEnd
 from finn.kernels.physical.contract import StreamContract, StreamMismatch, compatibility
-from finn.kernels.physical.forms import (
+from finn.dataflow.traversal import (
     Adaptation,
     Every,
     Loop,

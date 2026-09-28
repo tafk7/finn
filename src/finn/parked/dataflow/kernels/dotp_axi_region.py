@@ -10,8 +10,8 @@ multiply-accumulate arithmetic is implemented by the referenced dotp RTL.
 """
 
 from finn.dataflow.datatypes import QONNXDataType
-from finn.dataflow.model.logical.maps import OccurrenceAxis, RectangularDomain
-from finn.dataflow.model.logical.region import (
+from finn.parked.dataflow.logical_values.maps import OccurrenceAxis, RectangularDomain
+from finn.parked.dataflow.logical_values.region import (
     BeatSequence,
     DataflowRegion,
     InputInterface,

@@ -9,7 +9,7 @@ from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING
 
-from finn.dataflow.model.logical.semantics import DATAFLOW_LOGICAL_RESULT_SEMANTICS
+from finn.parked.dataflow.logical_values.semantics import DATAFLOW_LOGICAL_RESULT_SEMANTICS
 from finn.kernels.space.capabilities import (
     AssessedCapabilityOutput,
     canonicalize_assessed_capability_outputs,

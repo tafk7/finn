@@ -3,7 +3,7 @@
 
 """Non-stream interfaces: exported control buses, tie-offs and child padding.
 
-dotp feeds thresholding inside one composite. dotp's padded AXIS result feeds
+A replay feeds dotp, which feeds thresholding inside one composite. dotp's padded AXIS result feeds
 a child: the padding bits stay unconnected and the consumer's padding is
 zero. Thresholding's AXI-Lite bus is exported through a ``ControlBus`` when
 its thresholds are runtime-writable and otherwise held idle by its tie-offs,
@@ -24,9 +24,10 @@ from finn.kernels.artifacts.build import materialize_module_sources, prepare_mod
 from finn.kernels.artifacts.derivation import ProducerIdentity
 from finn.kernels.artifacts.store import ArtifactStore
 from finn.kernels.control import EXPORTED, ControlBus
-from finn.kernels.datatypes.scalar import ScalarEncoding
+from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.dotp import PackedDotpKernel
-from finn.kernels.physical.forms import Every, tile, vector_major
+from finn.dataflow.traversal import Every, Presentation, tile, vector_major
+from finn.kernels.streaming import ReplayBuffer
 from finn.kernels.physical.structure import ConstantBits, PinSlice
 from finn.kernels.physical.validation import abi_pins
 from finn.kernels.resources import resource_root, template_root
@@ -37,7 +38,6 @@ from finn.kernels.streams import (
     TIEOFFS,
     Composed,
     Stream,
-    StreamSpec,
     netlist,
 )
 from finn.kernels.target import DspBlock
@@ -48,24 +48,32 @@ REPETITIONS, WIDTH, HEIGHT, SIMD = 2, 4, 2, 2
 FOLDS = WIDTH // SIMD
 A, W, R = DataType["INT3"], DataType["INT3"], DataType["INT9"]
 THRESHOLDS = (((-5, 0, 7), (-2, 3, 10)),)
-ACTIVATIONS = StreamSpec(
-    ScalarEncoding(A),
-    vector_major((REPETITIONS, WIDTH), SIMD).replayed(HEIGHT, inner_beats=FOLDS),
-    markers=(Every(FOLDS),),
-)
-WEIGHTS = StreamSpec(ScalarEncoding(W), tile(HEIGHT, WIDTH, 1, SIMD).repeated(REPETITIONS))
-RESULTS = StreamSpec(ScalarEncoding(R), vector_major((REPETITIONS, HEIGHT), 1))
-LEVELS = StreamSpec(ScalarEncoding(DataType["UINT2"]), vector_major((REPETITIONS, HEIGHT), 1))
+ROWS = vector_major((REPETITIONS, WIDTH), SIMD)
+REPLAYED = Presentation(ROWS.replayed(HEIGHT, inner_beats=FOLDS), markers=(Every(FOLDS),))
+WEIGHTS = Presentation(tile(HEIGHT, WIDTH, 1, SIMD).repeated(REPETITIONS))
+RESULTS = Presentation(vector_major((REPETITIONS, HEIGHT), 1))
+X = Tensor((REPETITIONS, WIDTH), ScalarEncoding(A))
+WEIGHT_TENSOR = Tensor((HEIGHT, WIDTH), ScalarEncoding(W))
+RESULT_TENSOR = Tensor((REPETITIONS, HEIGHT), ScalarEncoding(R))
+LEVEL_TENSOR = Tensor((REPETITIONS, HEIGHT), ScalarEncoding(DataType["UINT2"]))
 
 
 class Activated(Space):
-    """dotp, then thresholding: a padded child result feeding a child."""
+    """A replay, dotp, then thresholding: a padded child result feeding a child."""
 
-    activations = Stream(spec=ACTIVATIONS, port="in0_V")
-    weights = Stream(spec=WEIGHTS, port="in1_V")
-    results = Stream(spec=RESULTS)
-    levels = Stream(spec=LEVELS, port="out0_V")
+    activations = Stream(tensor=X, port="in0_V")
+    replayed = Stream(tensor=X)
+    weights = Stream(tensor=WEIGHT_TENSOR, port="in1_V")
+    results = Stream(tensor=RESULT_TENSOR)
+    levels = Stream(tensor=LEVEL_TENSOR, port="out0_V")
     config = ControlBus(port="s_axilite")
+    replay = ReplayBuffer(
+        input_stream=activations,
+        output_stream=replayed,
+        input_form=ROWS,
+        sequence_length=FOLDS,
+        replay_count=HEIGHT,
+    )
     compute = PackedDotpKernel(
         activation_dtype=A,
         weights_dtype=W,
@@ -74,9 +82,12 @@ class Activated(Space):
         simd=SIMD,
         target_dsp=DspBlock.DSP48E2,
         target_period_ns=5.0,
-        activation_stream=activations,
+        activation_stream=replayed,
         weights_stream=weights,
         result_stream=results,
+        activation_presentation=REPLAYED,
+        weights_presentation=WEIGHTS,
+        result_presentation=RESULTS,
     )
     activate = ThresholdingAxiKernel(
         input_dtype=R,
@@ -231,11 +242,9 @@ def test_the_composed_module_computes_thresholded_dot_products(tmp_path, writabl
     def word(values):
         return sum((v & 7) << (3 * i) for i, v in enumerate(values))
 
+    # Each row once: the replay inside the module presents it HEIGHT times, framed.
     activation_words = [
-        word(x[r][f * SIMD : (f + 1) * SIMD])
-        for r in range(REPETITIONS)
-        for _ in range(HEIGHT)
-        for f in range(FOLDS)
+        word(x[r][f * SIMD : (f + 1) * SIMD]) for r in range(REPETITIONS) for f in range(FOLDS)
     ]
     weight_words = [
         word(w[h][f * SIMD : (f + 1) * SIMD])
@@ -243,7 +252,7 @@ def test_the_composed_module_computes_thresholded_dot_products(tmp_path, writabl
         for h in range(HEIGHT)
         for f in range(FOLDS)
     ]
-    count = len(activation_words)
+    count = len(weight_words)
 
     def table(name, bits, words):
         values = ", ".join(f"{bits}'h{value:x}" for value in words)
@@ -260,7 +269,7 @@ def test_the_composed_module_computes_thresholded_dot_products(tmp_path, writabl
     testbench.write_text(f"""`timescale 1ns/1ps
 module check;
     logic ap_clk = 0, ap_rst_n = 0;
-    logic [7:0] in0_V_tdata = 0; logic in0_V_tvalid = 0, in0_V_tlast = 0; wire in0_V_tready;
+    logic [7:0] in0_V_tdata = 0; logic in0_V_tvalid = 0; wire in0_V_tready;
     logic [7:0] in1_V_tdata = 0; logic in1_V_tvalid = 0; wire in1_V_tready;
     wire [7:0] out0_V_tdata; wire out0_V_tvalid; logic out0_V_tready = 1;
     {control}
@@ -280,9 +289,8 @@ module check;
         end
     end
     always @* begin
-        in0_V_tvalid = ap_rst_n && a < {count};
-        in0_V_tdata = a < {count} ? activations[a] : 0;
-        in0_V_tlast = (a % {FOLDS}) == {FOLDS - 1};
+        in0_V_tvalid = ap_rst_n && a < {len(activation_words)};
+        in0_V_tdata = a < {len(activation_words)} ? activations[a] : 0;
         in1_V_tvalid = ap_rst_n && b < {count};
         in1_V_tdata = b < {count} ? weights[b] : 0;
     end
@@ -323,15 +331,13 @@ endmodule
 
 def test_several_threshold_sets_take_a_set_selector_stream():
     # A sideband is an ordinary stream: one set index per input beat.
-    selectors = StreamSpec(
-        ScalarEncoding(DataType["UINT1"]), vector_major((REPETITIONS, HEIGHT), 1)
-    )
+    selectors = Tensor((REPETITIONS * HEIGHT,), ScalarEncoding(DataType["UINT1"]))
     two_sets = (THRESHOLDS[0], ((-4, 1, 8), (-3, 2, 9)))
 
     class Selected(Space):
-        values = Stream(spec=RESULTS, port="in0_V")
-        sets = Stream(spec=selectors, port="in1_V")
-        levels = Stream(spec=LEVELS, port="out0_V")
+        values = Stream(tensor=RESULT_TENSOR, port="in0_V")
+        sets = Stream(tensor=selectors, port="in1_V")
+        levels = Stream(tensor=LEVEL_TENSOR, port="out0_V")
         activate = ThresholdingAxiKernel(
             input_dtype=R,
             threshold_dtype=R,
@@ -351,10 +357,10 @@ def test_several_threshold_sets_take_a_set_selector_stream():
     connection = point.sets.query(Stream.connection)
     assert connection.value.sink.transport.name == "s_axis_set"  # type: ignore[union-attr]
     # One set index for every input beat: a shorter selector stream is refused.
-    short = StreamSpec(ScalarEncoding(DataType["UINT1"]), vector_major((1, HEIGHT), 1))
+    short = Tensor((HEIGHT,), ScalarEncoding(DataType["UINT1"]))
 
     class Short(Selected):
-        sets = Stream(spec=short, port="in1_V")
+        sets = Stream(tensor=short, port="in1_V")
 
     refused = design_space(Short()).sets.query(Stream.connection)
     assert isinstance(refused, Rejected)

@@ -26,8 +26,8 @@ from finn.parked.dataflow.model.children import (
     kernel_choice_members,
 )
 from finn.parked.dataflow.model.logical.authoring import RegionDeclaration
-from finn.dataflow.model.logical.composition import RegionResult
-from finn.dataflow.model.logical.region import DataflowRegion
+from finn.parked.dataflow.logical_values.composition import RegionResult
+from finn.parked.dataflow.logical_values.region import DataflowRegion
 from finn.parked.dataflow.model.logical.interface_authoring import attach_public_interface
 from finn.parked.dataflow.model.logical.view_authoring import (
     attach_composite_logical,
@@ -45,7 +45,7 @@ from finn.kernels.space.occurrence import ChoiceView, layer_runtime
 
 if TYPE_CHECKING:
     from finn.parked.dataflow.model.physical.interface import KernelStreamBinding
-    from finn.dataflow.model.logical.composition import LogicalResult
+    from finn.parked.dataflow.logical_values.composition import LogicalResult
     from finn.kernels.space.declarations import Derived, Projection
 
 

@@ -14,11 +14,20 @@ and only there: a kernel exports one port per stream it references.
 from qonnx.core.datatype import DataType
 
 from finn.core.space import Available, Rejected, Space, design_space
-from finn.kernels.datatypes.scalar import ScalarEncoding
+from finn.dataflow.tensor import ScalarEncoding
 from finn.kernels.dotp import Contraction, Int8Dsp58DotpKernel, PackedDotpKernel
 from finn.kernels.matmul import MatMulKernel
-from finn.kernels.physical.forms import Every, Loop, Traversal, channel_tile, tile, vector_major
-from finn.kernels.streams import Stream, StreamSpec
+from finn.dataflow.tensor import Tensor
+from finn.dataflow.traversal import (
+    Every,
+    Loop,
+    Presentation,
+    Traversal,
+    channel_tile,
+    tile,
+    vector_major,
+)
+from finn.kernels.streams import Stream
 from finn.kernels.target import DspBlock
 
 A, W, R = DataType["INT3"], DataType["INT3"], DataType["INT8"]
@@ -29,12 +38,9 @@ RESULTS = vector_major((1, 2), 2)
 
 def chain(activations=ACTIVATIONS, weights=WEIGHTS, results=RESULTS, frame=2):
     class Chain(Space):
-        a = Stream(
-            spec=StreamSpec(ScalarEncoding(A), activations, markers=(Every(frame),)),
-            port="in0_V",
-        )
-        w = Stream(spec=StreamSpec(ScalarEncoding(W), weights), port="in1_V")
-        r = Stream(spec=StreamSpec(ScalarEncoding(R), results), port="out0_V")
+        a = Stream(tensor=Tensor(activations.shape, ScalarEncoding(A)), port="in0_V")
+        w = Stream(tensor=Tensor(weights.shape, ScalarEncoding(W)), port="in1_V")
+        r = Stream(tensor=Tensor(results.shape, ScalarEncoding(R)), port="out0_V")
         compute = PackedDotpKernel(
             activation_dtype=A,
             weights_dtype=W,
@@ -46,21 +52,31 @@ def chain(activations=ACTIVATIONS, weights=WEIGHTS, results=RESULTS, frame=2):
             activation_stream=a,
             weights_stream=w,
             result_stream=r,
+            activation_presentation=Presentation(activations, markers=(Every(frame),)),
+            weights_presentation=Presentation(weights),
+            result_presentation=Presentation(results),
         )
 
     return design_space(Chain()).with_choices({Chain.compute.compute_pumping: False})
 
 
 def refusals(point):
-    """Each stream's refusal codes; an accepted stream maps to an empty set."""
+    """Each stream's refusal codes; an accepted stream maps to an empty set.
+
+    The activations enter at a boundary, which presents no frame marker and no
+    replay: the receiver's stream realizes both (a plan, S3). Those refusals are
+    the stream's, not dotp's, so they are left out here.
+    """
     answers = {name: getattr(point, name).query(Stream.connection) for name in "awr"}
     assert all(isinstance(answer, (Available, Rejected)) for answer in answers.values())
-    return {
+    found = {
         name: {finding.code for finding in answer.findings}
         if isinstance(answer, Rejected)
         else set()
         for name, answer in answers.items()
     }
+    found["a"] -= {"stream-marker", "stream-form"}
+    return found
 
 
 def test_matching_streams_are_accepted():
@@ -159,11 +175,9 @@ CHANNEL_RESULTS = vector_major((C_ROWS, C_CHANNELS), 2)
 
 def per_channel(activations=CHANNEL_ACTIVATIONS, weights=CHANNEL_WEIGHTS, results=CHANNEL_RESULTS):
     class Channels(Space):
-        a = Stream(
-            spec=StreamSpec(ScalarEncoding(A), activations, markers=(Every(2),)), port="in0_V"
-        )
-        w = Stream(spec=StreamSpec(ScalarEncoding(W), weights), port="in1_V")
-        r = Stream(spec=StreamSpec(ScalarEncoding(R), results), port="out0_V")
+        a = Stream(tensor=Tensor(activations.shape, ScalarEncoding(A)), port="in0_V")
+        w = Stream(tensor=Tensor(weights.shape, ScalarEncoding(W)), port="in1_V")
+        r = Stream(tensor=Tensor(results.shape, ScalarEncoding(R)), port="out0_V")
         compute = Int8Dsp58DotpKernel(
             activation_dtype=A,
             weights_dtype=W,
@@ -176,6 +190,9 @@ def per_channel(activations=CHANNEL_ACTIVATIONS, weights=CHANNEL_WEIGHTS, result
             activation_stream=a,
             weights_stream=w,
             result_stream=r,
+            activation_presentation=Presentation(activations, markers=(Every(2),)),
+            weights_presentation=Presentation(weights),
+            result_presentation=Presentation(results),
         )
 
     return design_space(Channels()).with_choices({Channels.compute.compute_pumping: False})

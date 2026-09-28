@@ -30,9 +30,9 @@ from finn.dataflow.datatypes import (
     canonical_qonnx_datatype,
     encode_datatype,
 )
-from finn.dataflow.model.logical.maps import RectangularDomain
-from finn.dataflow.model.logical.network import DataflowNetwork, PassCorrespondence, PositionMap
-from finn.dataflow.model.logical.region import BeatSequence
+from finn.parked.dataflow.logical_values.maps import RectangularDomain
+from finn.parked.dataflow.logical_values.network import DataflowNetwork, PassCorrespondence, PositionMap
+from finn.parked.dataflow.logical_values.region import BeatSequence
 from finn.parked.dataflow.ops.mapping import External, OperandMapping
 from finn.parked.dataflow.ops.model_effects import (
     ModelReadExpectation,

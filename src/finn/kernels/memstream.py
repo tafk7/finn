@@ -74,7 +74,7 @@ from finn.kernels.datatypes.semantics import (
 )
 from finn.kernels.physical.axi_stream import AxiStream
 from finn.kernels.physical.contract import STREAM_CONTRACT, StreamContract
-from finn.kernels.physical.forms import TRAVERSAL, Repetition, Traversal, pack
+from finn.dataflow.traversal import TRAVERSAL, Repetition, Traversal, pack, vector_major
 from finn.kernels.physical.stream import ReadyValidStream
 from finn.kernels.streams import MODULE, PORT, TIEOFFS, TIEOFFS_SEMANTICS, Stream, Tieoffs
 
@@ -276,21 +276,22 @@ class MemStreamKernel(Kernel):
         encoding = self.element.encoding
         transport = self.output_interface.native(clock="clk", reset="rst")
         if self.sets > 1:
-            passes = self.set_stream.spec.form.beats
+            passes = self.set_stream.tensor.size
             return StreamContract(transport, encoding, self.form.repeated(passes))
         return StreamContract(transport, encoding, self.form, Repetition.CYCLIC)
 
     @view(semantics=STREAM_CONTRACT)
     def set_port(self) -> StreamContract | Rejected:
-        spec = self.set_stream.spec
+        """One index a beat, one beat per pass of the weights."""
+        tensor = self.set_stream.tensor
         if self.sets < 2:
             return reject("memstream-set-stream", "a single set takes no set stream")
         index = resolve_qonnx_datatype_name(f"UINT{self.set_bits}")
-        if spec.element.datatype_name != index.name or spec.form.lanes != 1:
+        if tensor.element.datatype_name != index.name or len(tensor.shape) != 1:
             return reject(
-                "memstream-set-stream", f"the set stream carries one {index.name} index a beat"
+                "memstream-set-stream", f"the set stream carries a vector of {index.name} indices"
             )
-        return StreamContract(self.set_interface, spec.element, spec.form, spec.repetition)
+        return StreamContract(self.set_interface, tensor.element, vector_major(tensor.shape, 1))
 
     @view(semantics=CONTROL_SEMANTICS)
     def control_bus(self) -> Control:

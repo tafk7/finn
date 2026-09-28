@@ -8,11 +8,11 @@ from collections.abc import Sequence
 from typing import TypeVar, cast
 from finn.kernels._engine import DesignPoint, Engine
 from finn.parked.dataflow.model._authoring import GENERATED_MEMBERS, authored_member, generated_member
-from finn.dataflow.model.logical.results import LogicalResult, NetworkResult, RegionResult
-from finn.dataflow.model.logical.network import DataflowNetwork
-from finn.dataflow.model.logical.region import DataflowRegion
-from finn.dataflow.model.logical.region_validation import validate_region
-from finn.dataflow.model.logical.semantics import DATAFLOW_LOGICAL_RESULT_SEMANTICS
+from finn.parked.dataflow.logical_values.results import LogicalResult, NetworkResult, RegionResult
+from finn.parked.dataflow.logical_values.network import DataflowNetwork
+from finn.parked.dataflow.logical_values.region import DataflowRegion
+from finn.parked.dataflow.logical_values.region_validation import validate_region
+from finn.parked.dataflow.logical_values.semantics import DATAFLOW_LOGICAL_RESULT_SEMANTICS
 from finn.kernels.space.compiler import _CompiledSpace
 from finn.kernels.space.declarations import (
     AuthoringError,
@@ -69,7 +69,7 @@ def _logical_value_valid(output: ValueSource[object]) -> _LogicalValidityConstra
             )
             prefix = "kernel-region"
         elif isinstance(output, NetworkResult):
-            from finn.dataflow.model.logical.network_validation import validate_network  # noqa: PLC0415
+            from finn.parked.dataflow.logical_values.network_validation import validate_network  # noqa: PLC0415
 
             issues = tuple(
                 (issue.code, issue.message, issue.path)

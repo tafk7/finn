@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 
-from finn.dataflow.model.logical.network import (
+from finn.parked.dataflow.logical_values.network import (
     BoundaryContract,
     DataflowNetwork,
     DirectConnection,
@@ -20,11 +20,11 @@ from finn.dataflow.model.logical.network import (
     RegionEndpoint,
     SinkContract,
 )
-from finn.dataflow.model.logical.network_validation import validate_network
-from finn.dataflow.model.logical.region import InputInterface
+from finn.parked.dataflow.logical_values.network_validation import validate_network
+from finn.parked.dataflow.logical_values.region import InputInterface
 
 
-from finn.dataflow.model.logical.results import (
+from finn.parked.dataflow.logical_values.results import (
     _ATOM,
     CompositionError,
     ImplementationPath,

@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from finn.dataflow.datatypes import QONNXDataType, canonical_qonnx_datatype
-from finn.dataflow.model.logical.maps import (
+from finn.parked.dataflow.logical_values.maps import (
     AffineRankMap,
     Coordinate,
     CoordinateSet,
@@ -17,9 +17,9 @@ from finn.dataflow.model.logical.maps import (
     IdentityCoordinateMap,
     RectangularDomain,
 )
-from finn.dataflow.model.logical.network import DataflowNetwork, PositionMap, RegionEndpoint
-from finn.dataflow.model.logical.refs import DataflowOperandRef, RegionInputRef, RegionOutputRef
-from finn.dataflow.model.logical.region import InputInterface, Operand, Port
+from finn.parked.dataflow.logical_values.network import DataflowNetwork, PositionMap, RegionEndpoint
+from finn.parked.dataflow.logical_values.refs import DataflowOperandRef, RegionInputRef, RegionOutputRef
+from finn.parked.dataflow.logical_values.region import InputInterface, Operand, Port
 
 
 class InterfaceError(ValueError):

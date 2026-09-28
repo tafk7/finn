@@ -28,10 +28,11 @@ from enum import Enum
 
 from finn.core.space import ValueSemantics, default_semantics
 from finn.kernels.artifacts.abi import Endpoint
-from finn.kernels.datatypes.scalar import ScalarEncoding
-from finn.kernels.physical.forms import (
+from finn.dataflow.tensor import ScalarEncoding
+from finn.dataflow.traversal import (
     Adaptation,
     Every,
+    Presentation,
     Repetition,
     Traversal,
     classify,
@@ -101,6 +102,11 @@ class StreamContract:
     @property
     def rules(self) -> dict[str, Every]:
         return dict(self.markers)
+
+    @property
+    def presentation(self) -> Presentation:
+        """The logical sequence this end presents, without its transport."""
+        return Presentation(self.form, self.repetition, tuple(self.rules.values()))
 
 
 STREAM_CONTRACT: ValueSemantics[StreamContract] = default_semantics(StreamContract)

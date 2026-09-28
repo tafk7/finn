@@ -4,7 +4,7 @@
 """Kernel-domain values and authoring framework.
 
 The package root is intentionally lightweight. Detached logical values live in
-:mod:`finn.dataflow.model.logical`; importing them must not load the Space
+:mod:`finn.parked.dataflow.logical_values`; importing them must not load the Space
 runtime or Kernel authoring adapters.
 """
 
@@ -25,7 +25,7 @@ if TYPE_CHECKING:
     from finn.parked.dataflow.model.logical.view import LogicalView, kernel_dataflow
     from finn.parked.dataflow.model.physical.authoring import ModuleParameter, PhysicallyUnsupported
     from finn.parked.dataflow.model.physical.view import PhysicalView, kernel_physical
-    from finn.dataflow.model.logical.interface import PublicOperand, OperandExport, OperandTarget
+    from finn.parked.dataflow.logical_values.interface import PublicOperand, OperandExport, OperandTarget
     from finn.parked.dataflow.model.logical.interface_authoring import PublicOperandDeclaration
 
 _LAZY_EXPORTS = {
@@ -43,9 +43,9 @@ _LAZY_EXPORTS = {
         "PhysicallyUnsupported",
     ),
     "PhysicalView": ("finn.parked.dataflow.model.physical.view", "PhysicalView"),
-    "PublicOperand": ("finn.dataflow.model.logical.interface", "PublicOperand"),
-    "OperandExport": ("finn.dataflow.model.logical.interface", "OperandExport"),
-    "OperandTarget": ("finn.dataflow.model.logical.interface", "OperandTarget"),
+    "PublicOperand": ("finn.parked.dataflow.logical_values.interface", "PublicOperand"),
+    "OperandExport": ("finn.parked.dataflow.logical_values.interface", "OperandExport"),
+    "OperandTarget": ("finn.parked.dataflow.logical_values.interface", "OperandTarget"),
     "PublicOperandDeclaration": (
         "finn.parked.dataflow.model.logical.interface_authoring",
         "PublicOperandDeclaration",

@@ -14,11 +14,11 @@ owns them.
 """
 
 from finn.core.space import ValueSemantics
-from finn.dataflow.model.logical.network import DataflowNetwork, PositionMap
-from finn.dataflow.model.logical.network_validation import NetworkValidationReport
-from finn.dataflow.model.logical.region import DataflowRegion
-from finn.dataflow.model.logical.region_validation import RegionValidationReport
-from finn.dataflow.model.logical.results import LogicalResult, NetworkResult, RegionResult
+from finn.parked.dataflow.logical_values.network import DataflowNetwork, PositionMap
+from finn.parked.dataflow.logical_values.network_validation import NetworkValidationReport
+from finn.parked.dataflow.logical_values.region import DataflowRegion
+from finn.parked.dataflow.logical_values.region_validation import RegionValidationReport
+from finn.parked.dataflow.logical_values.results import LogicalResult, NetworkResult, RegionResult
 
 DATAFLOW_REGION_SEMANTICS = ValueSemantics.immutable_nominal(
     DataflowRegion,

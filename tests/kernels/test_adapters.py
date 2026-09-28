@@ -15,8 +15,8 @@ from qonnx.core.datatype import DataType
 from finn.core.space import Members, Rejected, Space, design_space, view
 from finn.kernels.adapters import TransposeKernel, WidthConverterKernel
 from finn.kernels.artifacts.derivation import ProducerIdentity
-from finn.kernels.datatypes.scalar import ScalarEncoding
-from finn.kernels.physical.forms import Adaptation, Traversal, classify, regrouped, vector_major
+from finn.dataflow.tensor import ScalarEncoding, Tensor
+from finn.dataflow.traversal import Adaptation, Traversal, classify, vector_major
 from finn.kernels.streams import (
     COMPOSED,
     CONNECTION,
@@ -24,21 +24,21 @@ from finn.kernels.streams import (
     TIEOFFS,
     Composed,
     Stream,
-    StreamSpec,
     netlist,
 )
 
 ELEMENT = ScalarEncoding(DataType["INT4"])
 
 
-def widths(before: int, after: int, shape=(3, 12), presented=None):
+def widths(before: int, after: int, shape=(3, 12)):
     source = vector_major(shape, before)
-    presented = regrouped(source, after) if presented is None else presented
 
     class Widened(Space):
-        a = Stream(spec=StreamSpec(ELEMENT, source), port="in0_V")
-        b = Stream(spec=StreamSpec(ELEMENT, presented), port="out0_V")
-        convert = WidthConverterKernel(lanes=after, input_stream=a, output_stream=b)
+        a = Stream(tensor=Tensor(shape, ELEMENT), port="in0_V")
+        b = Stream(tensor=Tensor(shape, ELEMENT), port="out0_V")
+        convert = WidthConverterKernel(
+            lanes=after, input_stream=a, output_stream=b, input_form=source
+        )
         modules = Members(MODULE)
         streams = Members(CONNECTION)
         tieoffs = Members(TIEOFFS)
@@ -60,19 +60,9 @@ def transposed(rows: int, cols: int, simd: int, batches: int = 2):
     source = vector_major((batches, rows, cols), simd)
 
     class Transposed(Space):
-        a = Stream(spec=StreamSpec(ELEMENT, source), port="in0_V")
-        b = Stream(
-            spec=StreamSpec(
-                ELEMENT,
-                Traversal.over(
-                    (batches, rows, cols),
-                    ((0, batches, 1), (2, cols, 1), (1, rows // simd, simd)),
-                    ((1, simd, 1),),
-                ),
-            ),
-            port="out0_V",
-        )
-        shuffle = TransposeKernel(input_stream=a, output_stream=b)
+        a = Stream(tensor=Tensor(source.shape, ELEMENT), port="in0_V")
+        b = Stream(tensor=Tensor(source.shape, ELEMENT), port="out0_V")
+        shuffle = TransposeKernel(input_stream=a, output_stream=b, input_form=source)
         modules = Members(MODULE)
         streams = Members(CONNECTION)
         tieoffs = Members(TIEOFFS)
@@ -104,7 +94,7 @@ def test_a_width_converter_regroups_the_same_sequence(before, after, vector):
 
 def test_a_width_converter_refuses_partial_vectors():
     # Four elements in pairs make no whole six-element vector for three lanes.
-    point = widths(2, 3, shape=(1, 4), presented=vector_major((1, 4), 2))
+    point = widths(2, 3, shape=(1, 4))
     refused = point.convert.query(WidthConverterKernel.build_requirements)
     assert isinstance(refused, Rejected)
     assert {finding.code for finding in refused.findings} == {"vpc-geometry"}
@@ -125,9 +115,9 @@ def test_a_transpose_needs_row_major_rows():
     column_major = Traversal.over((4, 6), ((1, 6, 1), (0, 2, 2)), ((0, 2, 1),))
 
     class Wrong(Space):
-        a = Stream(spec=StreamSpec(ELEMENT, column_major), port="in0_V")
-        b = Stream(spec=StreamSpec(ELEMENT, vector_major((4, 6), 2)), port="out0_V")
-        shuffle = TransposeKernel(input_stream=a, output_stream=b)
+        a = Stream(tensor=Tensor((4, 6), ELEMENT), port="in0_V")
+        b = Stream(tensor=Tensor((4, 6), ELEMENT), port="out0_V")
+        shuffle = TransposeKernel(input_stream=a, output_stream=b, input_form=column_major)
 
     point = design_space(Wrong()).with_choices({Wrong.shuffle.ram_style: "auto"})
     refused = point.shuffle.query(TransposeKernel.build_requirements)

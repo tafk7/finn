@@ -38,7 +38,7 @@ from finn.kernels.space.declarations import Input, derived
 from finn.parked.dataflow.model.kernel import Kernel
 from finn.parked.dataflow.model.logical.authoring import RegionDeclaration
 from finn.parked.dataflow.model.physical.authoring import ModuleParameter
-from finn.dataflow.model.logical.region import DataflowRegion, NumericElementType, element_width
+from finn.parked.dataflow.logical_values.region import DataflowRegion, NumericElementType, element_width
 from finn.parked.dataflow.kernels.matmul.regions import construct_activation_replay_region
 from finn.kernels.streaming import REPLAY_BUFFER_SOURCES, replay_buffer_requirements
 from finn.kernels.artifacts.requirements import FixedModuleName

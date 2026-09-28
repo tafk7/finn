@@ -8,7 +8,8 @@ from finn.core.space import BoundValue, QueryResult, View, ViewAssessment
 from finn.dataflow.datatypes import QONNXDataType
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.datatypes.domains import Integer
-from finn.kernels.datatypes.scalar import IntegerScalar, Scalar, ScalarEncoding, integer_scalar
+from finn.dataflow.tensor import ScalarEncoding
+from finn.kernels.datatypes.scalar import IntegerScalar, Scalar, integer_scalar
 from finn.kernels.dotp import DotpAxiKernel
 from finn.kernels.eltwise import EltwiseKernel
 from finn.kernels.physical.axi_stream import AxiStream, AxiStreamPort, axi_stream

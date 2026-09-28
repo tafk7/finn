@@ -35,7 +35,7 @@ from finn.kernels.datatypes.semantics import (
 )
 from finn.dataflow.datatypes import ordinary_integer_bounds
 from finn.kernels.physical.contract import STREAM_CONTRACT, StreamContract
-from finn.kernels.physical.forms import TRAVERSAL, Repetition, Traversal, pack
+from finn.dataflow.traversal import TRAVERSAL, Repetition, Traversal, pack
 from finn.kernels.streaming import (
     CYCLIC_ROM_STYLES,
     cyclic_stream_interface,

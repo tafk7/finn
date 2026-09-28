@@ -26,8 +26,8 @@ from finn.parked.dataflow.model.logical._contract_support import (
 from finn.parked.dataflow.model.logical.contract_authoring import LocalContract, PortDeclaration
 from finn.parked.dataflow.model.logical.contract_expressions import Index
 from finn.dataflow.datatypes import QONNXDataType
-from finn.dataflow.model.logical.maps import AffineRankMap, RectangularDomain
-from finn.dataflow.model.logical.region import DataflowRegion
+from finn.parked.dataflow.logical_values.maps import AffineRankMap, RectangularDomain
+from finn.parked.dataflow.logical_values.region import DataflowRegion
 from finn.kernels.physical.axi_stream import AxiStream
 from finn.kernels.physical.layout import PeriodicLast
 from finn.parked.dataflow.model.physical.view import PhysicalView

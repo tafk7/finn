@@ -22,7 +22,7 @@ if TYPE_CHECKING:
         qonnx_datatype_width,
         resolve_qonnx_datatype_name,
     )
-    from finn.dataflow.model.logical.composition import (
+    from finn.parked.dataflow.logical_values.composition import (
         NetworkFragment,
         ParentBoundary,
         ParentConnection,
@@ -31,7 +31,7 @@ if TYPE_CHECKING:
         qualify_network,
         qualify_region,
     )
-    from finn.dataflow.model.logical.maps import (
+    from finn.parked.dataflow.logical_values.maps import (
         AffineRankMap,
         Coordinate,
         CoordinateSet,
@@ -55,7 +55,7 @@ if TYPE_CHECKING:
         encode_coordinate_set,
         encode_requirement_rule,
     )
-    from finn.dataflow.model.logical.region import (
+    from finn.parked.dataflow.logical_values.region import (
         BeatSequence,
         BeatType,
         DataflowRegion,
@@ -74,7 +74,7 @@ if TYPE_CHECKING:
         element_width,
         is_element_type,
     )
-    from finn.dataflow.model.logical.region_profiles import (
+    from finn.parked.dataflow.logical_values.region_profiles import (
         CanonicalExtentProfile,
         ProfileCertificationError,
         ProfileCertificationIssue,
@@ -82,13 +82,13 @@ if TYPE_CHECKING:
         explicit_beat_sequence,
         lexicographic_occurrence_to_field,
     )
-    from finn.dataflow.model.logical.region_validation import (
+    from finn.parked.dataflow.logical_values.region_validation import (
         RegionValidationIssue,
         RegionValidationReport,
         is_structurally_well_formed,
         validate_region,
     )
-    from finn.dataflow.model.logical.network import (
+    from finn.parked.dataflow.logical_values.network import (
         BoundaryContract,
         ChannelSpec,
         DataflowNetwork,
@@ -103,14 +103,14 @@ if TYPE_CHECKING:
         RegionEndpoint,
         SinkContract,
     )
-    from finn.dataflow.model.logical.network_validation import (
+    from finn.parked.dataflow.logical_values.network_validation import (
         NetworkValidationBudget,
         NetworkValidationIssue,
         NetworkValidationReport,
         is_network_structurally_well_formed,
         validate_network,
     )
-    from finn.dataflow.model.logical.refs import (
+    from finn.parked.dataflow.logical_values.refs import (
         DataflowOperandRef,
         NetworkOperandError,
         RegionInputRef,
@@ -118,7 +118,7 @@ if TYPE_CHECKING:
         resolve_input,
         resolve_output,
     )
-    from finn.dataflow.model.logical.presentation import (
+    from finn.parked.dataflow.logical_values.presentation import (
         boundary_presented_position_set,
         boundary_presented_positions,
         edge_presented_position_set,
@@ -128,7 +128,7 @@ if TYPE_CHECKING:
         unpresented_position_set,
         unpresented_positions,
     )
-    from finn.dataflow.model.logical.results import (
+    from finn.parked.dataflow.logical_values.results import (
         CompositionError,
         ImplementationPath,
         LogicalResult,
@@ -148,7 +148,7 @@ _EXPORT_GROUPS = {
         "qonnx_datatype_width",
         "resolve_qonnx_datatype_name",
     ),
-    "finn.dataflow.model.logical.composition": (
+    "finn.parked.dataflow.logical_values.composition": (
         "NetworkFragment",
         "ParentBoundary",
         "ParentConnection",
@@ -157,7 +157,7 @@ _EXPORT_GROUPS = {
         "qualify_network",
         "qualify_region",
     ),
-    "finn.dataflow.model.logical.maps": (
+    "finn.parked.dataflow.logical_values.maps": (
         "AffineRankMap",
         "Coordinate",
         "CoordinateSet",
@@ -181,7 +181,7 @@ _EXPORT_GROUPS = {
         "encode_coordinate_set",
         "encode_requirement_rule",
     ),
-    "finn.dataflow.model.logical.region": (
+    "finn.parked.dataflow.logical_values.region": (
         "BeatSequence",
         "BeatType",
         "DataflowRegion",
@@ -200,7 +200,7 @@ _EXPORT_GROUPS = {
         "element_width",
         "is_element_type",
     ),
-    "finn.dataflow.model.logical.region_profiles": (
+    "finn.parked.dataflow.logical_values.region_profiles": (
         "CanonicalExtentProfile",
         "ProfileCertificationError",
         "ProfileCertificationIssue",
@@ -208,13 +208,13 @@ _EXPORT_GROUPS = {
         "explicit_beat_sequence",
         "lexicographic_occurrence_to_field",
     ),
-    "finn.dataflow.model.logical.region_validation": (
+    "finn.parked.dataflow.logical_values.region_validation": (
         "RegionValidationIssue",
         "RegionValidationReport",
         "is_structurally_well_formed",
         "validate_region",
     ),
-    "finn.dataflow.model.logical.network": (
+    "finn.parked.dataflow.logical_values.network": (
         "BoundaryContract",
         "ChannelSpec",
         "DataflowNetwork",
@@ -229,14 +229,14 @@ _EXPORT_GROUPS = {
         "RegionEndpoint",
         "SinkContract",
     ),
-    "finn.dataflow.model.logical.network_validation": (
+    "finn.parked.dataflow.logical_values.network_validation": (
         "NetworkValidationBudget",
         "NetworkValidationIssue",
         "NetworkValidationReport",
         "is_network_structurally_well_formed",
         "validate_network",
     ),
-    "finn.dataflow.model.logical.refs": (
+    "finn.parked.dataflow.logical_values.refs": (
         "DataflowOperandRef",
         "NetworkOperandError",
         "RegionInputRef",
@@ -244,7 +244,7 @@ _EXPORT_GROUPS = {
         "resolve_input",
         "resolve_output",
     ),
-    "finn.dataflow.model.logical.presentation": (
+    "finn.parked.dataflow.logical_values.presentation": (
         "boundary_presented_position_set",
         "boundary_presented_positions",
         "edge_presented_position_set",
@@ -254,7 +254,7 @@ _EXPORT_GROUPS = {
         "unpresented_position_set",
         "unpresented_positions",
     ),
-    "finn.dataflow.model.logical.results": (
+    "finn.parked.dataflow.logical_values.results": (
         "CompositionError",
         "ImplementationPath",
         "LogicalResult",

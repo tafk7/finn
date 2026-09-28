@@ -9,7 +9,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
 
-from finn.dataflow.model.logical.maps import (
+from finn.parked.dataflow.logical_values.maps import (
     AffineRankMap,
     CoordinateMap,
     CoordinateSet,
@@ -18,25 +18,25 @@ from finn.dataflow.model.logical.maps import (
     MaterializationRequired,
     RectangularDomain,
 )
-from finn.dataflow.model.logical.network import DataflowNetwork, PositionMap
-from finn.dataflow.model.logical.network_validation import validate_network
-from finn.dataflow.model.logical.presentation import (
+from finn.parked.dataflow.logical_values.network import DataflowNetwork, PositionMap
+from finn.parked.dataflow.logical_values.network_validation import validate_network
+from finn.parked.dataflow.logical_values.presentation import (
     boundary_presented_position_set,
     edge_presented_position_set,
     exposing_boundaries,
     exposing_ports,
     unpresented_position_set,
 )
-from finn.dataflow.model.logical.refs import (
+from finn.parked.dataflow.logical_values.refs import (
     DataflowOperandRef,
     NetworkOperandError,
     RegionInputRef,
     resolve_input,
     resolve_output,
 )
-from finn.dataflow.model.logical.region import Coordinate
+from finn.parked.dataflow.logical_values.region import Coordinate
 from finn.parked.dataflow.ops.source import SourceNode
-from finn.dataflow.model.logical.interface import OperandExport, validate_operand_export
+from finn.parked.dataflow.logical_values.interface import OperandExport, validate_operand_export
 
 
 class CoordinateMapping(str, Enum):

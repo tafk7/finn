@@ -18,12 +18,12 @@ from finn.parked.dataflow.model.logical.authoring import (
     composite_logical_property,
     network_property,
 )
-from finn.dataflow.model.logical.composition import LogicalResult, NetworkResult, RegionResult
-from finn.dataflow.model.logical.network import DataflowNetwork
-from finn.dataflow.model.logical.network_validation import validate_network
-from finn.dataflow.model.logical.region import DataflowRegion
-from finn.dataflow.model.logical.region_validation import validate_region
-from finn.dataflow.model.logical.semantics import (
+from finn.parked.dataflow.logical_values.composition import LogicalResult, NetworkResult, RegionResult
+from finn.parked.dataflow.logical_values.network import DataflowNetwork
+from finn.parked.dataflow.logical_values.network_validation import validate_network
+from finn.parked.dataflow.logical_values.region import DataflowRegion
+from finn.parked.dataflow.logical_values.region_validation import validate_region
+from finn.parked.dataflow.logical_values.semantics import (
     DATAFLOW_LOGICAL_RESULT_SEMANTICS,
     DATAFLOW_NETWORK_SEMANTICS,
     DATAFLOW_REGION_SEMANTICS,

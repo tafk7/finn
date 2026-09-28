@@ -14,7 +14,6 @@ them in its ``admission`` group.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from enum import Enum
 
 from finn.core.space import (
@@ -25,54 +24,15 @@ from finn.core.space import (
     ValueRef,
     View,
     constraint,
-    default_semantics,
     derived,
-    reject,
 )
 from finn.kernels.datatypes.domains import Integer, check_bit_bound, check_integer_family
 from finn.kernels.datatypes.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
 from finn.dataflow.datatypes import (
     QONNXDataType,
-    canonical_qonnx_datatype,
     qonnx_datatype_width,
-    resolve_qonnx_datatype_name,
 )
-
-
-@dataclass(frozen=True, init=False)
-class ScalarEncoding:
-    """Positive-width QONNX storage encoding, detached by canonical identity."""
-
-    datatype_name: str
-
-    def __init__(self, dtype: QONNXDataType) -> None:
-        canonical = canonical_qonnx_datatype(dtype)
-        if qonnx_datatype_width(canonical) < 1:
-            raise ValueError("a scalar storage encoding must have positive width")
-        object.__setattr__(self, "datatype_name", canonical.name)
-
-    @classmethod
-    def admit(cls, dtype: QONNXDataType) -> ScalarEncoding | Rejected:
-        """The encoding, or a ``dtype-storage`` refusal for a zero-width dtype."""
-        try:
-            return cls(dtype)
-        except ValueError as error:
-            return reject("dtype-storage", str(error))
-
-    @property
-    def dtype(self) -> QONNXDataType:
-        return resolve_qonnx_datatype_name(self.datatype_name)
-
-    @property
-    def bits(self) -> int:
-        return qonnx_datatype_width(self.dtype)
-
-    @property
-    def signed(self) -> bool:
-        return self.dtype.signed()
-
-
-SCALAR_ENCODING = default_semantics(ScalarEncoding)
+from finn.dataflow.tensor import SCALAR_ENCODING, ScalarEncoding
 
 
 class Scalar(Space):
@@ -154,9 +114,7 @@ def integer_scalar(
 __all__ = [
     "BoundedIntegerScalar",
     "IntegerScalar",
-    "SCALAR_ENCODING",
     "Scalar",
-    "ScalarEncoding",
     "Signedness",
     "integer_scalar",
 ]

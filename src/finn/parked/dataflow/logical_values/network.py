@@ -9,7 +9,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, replace
 from enum import Enum
 
-from finn.dataflow.model.logical.maps import (
+from finn.parked.dataflow.logical_values.maps import (
     AffineRankMap,
     CoordinateSet,
     ExplicitCoordinateMap,
@@ -20,7 +20,7 @@ from finn.dataflow.model.logical.maps import (
     check_materialization_budget,
     normalize_coordinate,
 )
-from finn.dataflow.model.logical.region import BeatSequence, Coordinate, DataflowRegion, Port
+from finn.parked.dataflow.logical_values.region import BeatSequence, Coordinate, DataflowRegion, Port
 
 
 def _require_string(value: object, field_name: str) -> str:

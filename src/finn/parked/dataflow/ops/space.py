@@ -44,9 +44,9 @@ from finn.kernels.space.occurrence import (
     occurrence_answer_at,
     occurrence_persistable,
 )
-from finn.dataflow.model.logical.network import DataflowNetwork
-from finn.dataflow.model.logical.composition import NetworkResult, RegionResult, logical_network
-from finn.dataflow.model.logical.refs import DataflowOperandRef, NetworkOperandError
+from finn.parked.dataflow.logical_values.network import DataflowNetwork
+from finn.parked.dataflow.logical_values.composition import NetworkResult, RegionResult, logical_network
+from finn.parked.dataflow.logical_values.refs import DataflowOperandRef, NetworkOperandError
 from finn.parked.dataflow.ops.mapping import OperandMapping
 from finn.parked.dataflow.ops.native import (
     AttributeCodec,

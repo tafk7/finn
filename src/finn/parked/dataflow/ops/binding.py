@@ -264,12 +264,12 @@ def operand_facet(operation: Any, key: str, name: str) -> Answer[Any]:
         answer = cast("Answer[Any]", getattr(interface_authoring, name)(target.value, key))
     if name == "operand_domain" and isinstance(answer, Decided):
         from finn.parked.dataflow.ops.mapping import CoordinateMapping, checked_boundary_map
-        from finn.dataflow.model.logical.maps import (
+        from finn.parked.dataflow.logical_values.maps import (
             IdentityCoordinateMap,
             AffineRankMap,
             ExplicitCoordinateMap,
         )
-        from finn.dataflow.model.logical.network import PositionMap
+        from finn.parked.dataflow.logical_values.network import PositionMap
         from finn.kernels._engine import Absent, Finding, FindingKind, QualifiedPath
 
         explicit = isinstance(

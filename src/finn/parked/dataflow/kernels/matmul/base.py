@@ -25,18 +25,18 @@ from finn.parked.dataflow.analysis.integer_dot import (
     analyze_integer_dot_ranges,
 )
 from finn.dataflow.datatypes import QONNXDataType, resolve_qonnx_datatype_name
-from finn.dataflow.model.logical.composition import LogicalResult, logical_network
-from finn.dataflow.model.logical.interface import (
+from finn.parked.dataflow.logical_values.composition import LogicalResult, logical_network
+from finn.parked.dataflow.logical_values.interface import (
     PublicOperand,
     OperandExport,
     OperandTarget,
     body_operand,
 )
 from finn.parked.dataflow.model.logical.interface_authoring import PublicOperandDeclaration
-from finn.dataflow.model.logical.maps import RectangularDomain
-from finn.dataflow.model.logical.network import PositionMap, RegionEndpoint
-from finn.dataflow.model.logical.refs import DataflowOperandRef, RegionInputRef, RegionOutputRef
-from finn.dataflow.model.logical.region import InputInterface
+from finn.parked.dataflow.logical_values.maps import RectangularDomain
+from finn.parked.dataflow.logical_values.network import PositionMap, RegionEndpoint
+from finn.parked.dataflow.logical_values.refs import DataflowOperandRef, RegionInputRef, RegionOutputRef
+from finn.parked.dataflow.logical_values.region import InputInterface
 from finn.parked.dataflow.kernels.typing import operand_types_supported, operand_widths_supported
 from finn.kernels.target import DspBlock
 from finn.kernels.space.declarations import (

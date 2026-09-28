@@ -13,7 +13,7 @@ from typing import cast
 
 from finn.kernels._engine import ABSENT
 from finn.parked.dataflow.model.children import KernelChoice, choice_role, kernel_choice_members
-from finn.dataflow.model.logical.composition import (
+from finn.parked.dataflow.logical_values.composition import (
     CompositionError,
     ImplementationPath,
     LogicalResult,
@@ -24,9 +24,9 @@ from finn.dataflow.model.logical.composition import (
     compose_network,
     qualify_logical,
 )
-from finn.dataflow.model.logical.network import DataflowNetwork, PositionMap
-from finn.dataflow.model.logical.region import DataflowRegion, RegionRefused
-from finn.dataflow.model.logical.semantics import (
+from finn.parked.dataflow.logical_values.network import DataflowNetwork, PositionMap
+from finn.parked.dataflow.logical_values.region import DataflowRegion, RegionRefused
+from finn.parked.dataflow.logical_values.semantics import (
     DATAFLOW_LOGICAL_RESULT_SEMANTICS,
     DATAFLOW_NETWORK_SEMANTICS,
     DATAFLOW_REGION_SEMANTICS,

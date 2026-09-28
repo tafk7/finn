@@ -14,9 +14,9 @@ its output contract from the input's, so the adaptation it performs is the one
   of a column a beat (``LANE_REGROUP``).
 
 Neither emits markers, so a consumer that needs frame markers is refused. A
-stream does not yet choose among adapters: that Decision needs each end to
-present its own form (the D10 design, increment S1). Here they are ordinary
-nodes a composite places between two of its streams.
+stream does not yet choose among adapters (the D10 design, increment S3). Here
+they are ordinary nodes a composite places between two of its streams, given
+the form their input presents.
 """
 
 from __future__ import annotations
@@ -42,7 +42,7 @@ from finn.kernels.artifacts.requirements import (
 )
 from finn.kernels.base import Kernel
 from finn.kernels.physical.contract import STREAM_CONTRACT, StreamContract
-from finn.kernels.physical.forms import TRAVERSAL, Traversal, regrouped
+from finn.dataflow.traversal import TRAVERSAL, Traversal, regrouped
 from finn.kernels.physical.stream import ReadyValidStream
 from finn.kernels.streams import MODULE, PORT, Stream
 
@@ -80,14 +80,15 @@ class WidthConverterKernel(Kernel):
     lanes: int = Param()
     input_stream: Stream = Param()
     output_stream: Stream = Param()
+    input_form: Traversal = Param(semantics=TRAVERSAL)
 
     @derived
     def vector(self) -> int:
-        return lcm(self.input_stream.spec.form.lanes, self.lanes)
+        return lcm(self.input_form.lanes, self.lanes)
 
     @constraint
     def geometry_supported(self) -> bool | Rejected:
-        form, lanes = self.input_stream.spec.form, self.lanes
+        form, lanes = self.input_form, self.lanes
         elements = form.beats * form.lanes
         if lanes < 1 or elements % self.vector:
             return reject(
@@ -99,32 +100,32 @@ class WidthConverterKernel(Kernel):
     @derived(semantics=TRAVERSAL)
     def output_form(self) -> Traversal | Rejected:
         try:
-            return regrouped(self.input_stream.spec.form, self.lanes)
+            return regrouped(self.input_form, self.lanes)
         except ValueError as error:
             return reject("vpc-geometry", str(error))
 
     @view(semantics=STREAM_CONTRACT)
     def input_port(self) -> StreamContract:
-        spec = self.input_stream.spec
-        transport = _native("input", spec.payload_bits, Endpoint.TARGET)
-        return StreamContract(transport, spec.element, spec.form, spec.repetition)
+        element, form = self.input_stream.tensor.element, self.input_form
+        transport = _native("input", form.lanes * element.bits, Endpoint.TARGET)
+        return StreamContract(transport, element, form)
 
     @view(semantics=STREAM_CONTRACT)
     def output_port(self) -> StreamContract:
-        spec = self.input_stream.spec
-        transport = _native("output", self.lanes * spec.element.bits, Endpoint.INITIATOR)
-        return StreamContract(transport, spec.element, self.output_form)
+        element = self.input_stream.tensor.element
+        transport = _native("output", self.lanes * element.bits, Endpoint.INITIATOR)
+        return StreamContract(transport, element, self.output_form)
 
     @view(semantics=default_semantics(ModuleBuildRequirements), requires=(geometry_supported,))
     def build_requirements(self) -> ModuleBuildRequirements:
-        spec = self.input_stream.spec
+        element = self.input_stream.tensor.element
         parameters = (
             ("N", self.vector),
             ("PAD_ZEROS", 1),
-            ("PI", spec.form.lanes),
+            ("PI", self.input_form.lanes),
             ("PO", self.lanes),
             ("RELAX_THROUGHPUT", 0),
-            ("W", spec.element.bits),
+            ("W", element.bits),
         )
         abi = ModuleABIRequirements(
             FixedModuleName("vpc"),
@@ -168,12 +169,13 @@ class TransposeKernel(Kernel):
 
     input_stream: Stream = Param()
     output_stream: Stream = Param()
+    input_form: Traversal = Param(semantics=TRAVERSAL)
     ram_style: str = Decision(values=("auto", "distributed", "block", "ultra"))
 
     @derived(semantics=default_semantics(tuple))
     def matrix(self) -> tuple[int, int, int] | Rejected:
         """(I, J, SIMD) of the input, which must be row-major with SIMD lanes along J."""
-        form = self.input_stream.spec.form
+        form = self.input_form
         shape, simd = form.shape, form.lanes
         if len(shape) < 2 or shape[-1] % simd or shape[-2] % simd:
             return reject("transpose-form", "a matrix whose sides SIMD divides is required")
@@ -195,7 +197,7 @@ class TransposeKernel(Kernel):
 
     @derived(semantics=TRAVERSAL)
     def output_form(self) -> Traversal:
-        form = self.input_stream.spec.form
+        form = self.input_form
         rows, cols, simd = self.matrix
         shape, last = form.shape, len(form.shape) - 1
         return Traversal.over(
@@ -210,22 +212,22 @@ class TransposeKernel(Kernel):
 
     @view(semantics=STREAM_CONTRACT)
     def input_port(self) -> StreamContract:
-        spec = self.input_stream.spec
-        transport = _native("input", spec.payload_bits, Endpoint.TARGET)
-        return StreamContract(transport, spec.element, spec.form, spec.repetition)
+        element, form = self.input_stream.tensor.element, self.input_form
+        transport = _native("input", form.lanes * element.bits, Endpoint.TARGET)
+        return StreamContract(transport, element, form)
 
     @view(semantics=STREAM_CONTRACT)
     def output_port(self) -> StreamContract:
-        spec = self.input_stream.spec
-        transport = _native("output", spec.payload_bits, Endpoint.INITIATOR)
-        return StreamContract(transport, spec.element, self.output_form)
+        element, form = self.input_stream.tensor.element, self.input_form
+        transport = _native("output", form.lanes * element.bits, Endpoint.INITIATOR)
+        return StreamContract(transport, element, self.output_form)
 
     @view(semantics=default_semantics(ModuleBuildRequirements))
     def build_requirements(self) -> ModuleBuildRequirements:
-        spec = self.input_stream.spec
+        element = self.input_stream.tensor.element
         rows, cols, simd = self.matrix
         parameters = (
-            ("BITS", spec.element.bits),
+            ("BITS", element.bits),
             ("I", rows),
             ("J", cols),
             ("RAM_STYLE", f'"{self.ram_style}"'),

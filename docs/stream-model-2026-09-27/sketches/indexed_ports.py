@@ -3,7 +3,7 @@
 
 """Sketch for DESIGN.md: port traversals derived from one indexed nest.
 
-Nothing here is production code. It imports only ``finn.kernels.physical.forms``
+Nothing here is production code. It imports only ``finn.dataflow.traversal``
 (read-only) and checks, by construction and by enumeration, that:
 
 1. the four MVAU stream forms that ``mvau.py`` writes by hand (activation,
@@ -28,7 +28,7 @@ from dataclasses import dataclass
 from itertools import product
 from math import prod
 
-from finn.kernels.physical.forms import (
+from finn.dataflow.traversal import (
     Adaptation,
     Every,
     Loop,
@@ -340,7 +340,13 @@ def check_reduction_order() -> None:
 
 
 if __name__ == "__main__":
-    for shape in [(1, 4, 2, 2, 2), (3, 8, 6, 3, 2), (2, 12, 8, 4, 3), (4, 6, 6, 1, 6), (2, 4, 4, 4, 1)]:
+    for shape in [
+        (1, 4, 2, 2, 2),
+        (3, 8, 6, 3, 2),
+        (2, 12, 8, 4, 3),
+        (4, 6, 6, 1, 6),
+        (2, 4, 4, 4, 1),
+    ]:
         check_dense(*shape)
     for shape in [(1, 4, 4, 2, 2), (3, 6, 4, 3, 2), (2, 8, 9, 4, 3)]:
         check_per_channel(*shape)

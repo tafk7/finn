@@ -8,7 +8,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Tuple
 
-from finn.dataflow.model.logical.region import (
+from finn.parked.dataflow.logical_values.region import (
     DataflowRegion,
     InputInterface,
     Operand,
@@ -16,7 +16,7 @@ from finn.dataflow.model.logical.region import (
     RegionInput,
     element_width,
 )
-from finn.dataflow.model.logical.maps import (
+from finn.parked.dataflow.logical_values.maps import (
     CoordinateSet,
     InvalidMapError,
     SeparableAffineRequirements,

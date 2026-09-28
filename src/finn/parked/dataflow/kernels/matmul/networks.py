@@ -16,7 +16,7 @@ would not be comparable to this one.
 
 from __future__ import annotations
 
-from finn.dataflow.model.logical.network import (
+from finn.parked.dataflow.logical_values.network import (
     BoundaryContract,
     DataflowNetwork,
     Edge,
@@ -25,7 +25,7 @@ from finn.dataflow.model.logical.network import (
     RegionEndpoint,
     SinkContract,
 )
-from finn.dataflow.model.logical.region import DataflowRegion, Port
+from finn.parked.dataflow.logical_values.region import DataflowRegion, Port
 
 REPLAY_NODE = "replay"
 DOT_PRODUCT_NODE = "compute"

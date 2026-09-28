@@ -7,8 +7,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 import re
 from typing import TypeAlias
-from finn.dataflow.model.logical.network import DataflowNetwork
-from finn.dataflow.model.logical.region import DataflowRegion
+from finn.parked.dataflow.logical_values.network import DataflowNetwork
+from finn.parked.dataflow.logical_values.region import DataflowRegion
 
 _ATOM = re.compile(r"[A-Za-z_][A-Za-z0-9_-]*\Z")
 
@@ -75,7 +75,7 @@ for _type in (
     QualifiedChildResult,
     NetworkResult,
 ):
-    _type.__module__ = "finn.dataflow.model.logical.composition"
+    _type.__module__ = "finn.parked.dataflow.logical_values.composition"
 
 __all__ = [
     "CompositionError",

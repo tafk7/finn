@@ -122,6 +122,10 @@ def test_component_groups_its_interfaces_and_keeps_one_root_physical_output():
         "target_period_ns",
         "contraction",
         "narrow_weights",
+        # What each port presents of its stream, supplied by a placing parent.
+        "activation_presentation",
+        "weights_presentation",
+        "result_presentation",
     }
     # Optional reference inputs, supplied with Stream nodes by a parent that places
     # dotp between streams; alone, each is an unsupplied presence.

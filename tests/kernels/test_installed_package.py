@@ -228,7 +228,7 @@ def test_installed_wheel_materializes_independent_kernel_builds(tmp_path: Path) 
             "finn/core/space/py.typed",
             "finn/dataflow/py.typed",
             "finn/dataflow/datatypes.py",
-            "finn/dataflow/model/logical/region.py",
+            "finn/dataflow/traversal.py",
             "finn/kernels/resources/cyclic_stream.sv",
             "finn/kernels/resources/decomposed_wrapper.sv.j2",
         } <= set(archive.namelist())

@@ -8,7 +8,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from finn.kernels.artifacts.abi import Bus, Endpoint, StandardProtocol
 from finn.kernels.artifacts.build import ModuleABIRequirements, ModuleBuildRequirements
-from finn.dataflow.model.logical.region import DataflowRegion, InputInterface, Port, element_width
+from finn.parked.dataflow.logical_values.region import DataflowRegion, InputInterface, Port, element_width
 from finn.kernels.physical.layout import (
     FieldPlacement,
     PackedBeatLayout,

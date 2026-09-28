@@ -40,7 +40,7 @@ from finn.parked.dataflow.model.physical.capture import (
     capture_assessment_dependencies,
 )
 from finn.parked.dataflow.model.physical.interface import PhysicalPort, PhysicalResult
-from finn.dataflow.model.logical.region import element_width
+from finn.parked.dataflow.logical_values.region import element_width
 from finn.parked.dataflow.ops.space import DataflowSpace, DataflowOpError
 from finn.parked.dataflow.ops.model_effects import (
     ModelReadExpectation,

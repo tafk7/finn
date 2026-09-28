@@ -5,7 +5,8 @@ from typing_extensions import assert_type
 
 from finn.core.space import BoundValue, QueryResult, ViewAssessment, design_space
 from finn.dataflow.datatypes import QONNXDataType
-from finn.kernels.datatypes.scalar import IntegerScalar, ScalarEncoding
+from finn.dataflow.tensor import ScalarEncoding
+from finn.kernels.datatypes.scalar import IntegerScalar
 from finn.kernels.fifo import FifoKernel, FifoStorage
 from finn.kernels.int_to_fp32 import IntToFp32Kernel
 from finn.kernels.physical.stream import ReadyValidStream

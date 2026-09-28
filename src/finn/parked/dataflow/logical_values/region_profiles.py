@@ -9,12 +9,12 @@ from itertools import product
 from math import prod
 from typing import Callable, Iterable, Mapping, Optional, Sequence, Tuple, TypeVar
 
-from finn.dataflow.model.logical.maps import (
+from finn.parked.dataflow.logical_values.maps import (
     MaterializationRequired,
     OccurrenceAxis,
     RectangularDomain,
 )
-from finn.dataflow.model.logical.region import (
+from finn.parked.dataflow.logical_values.region import (
     BeatSequence,
     Coordinate,
     LogicalSchedule,

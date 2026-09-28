@@ -14,10 +14,10 @@ from qonnx.core.datatype import DataType
 from finn.core.space import design_space, inspection
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.configure import commit
-from finn.kernels.datatypes.scalar import ScalarEncoding
+from finn.dataflow.tensor import ScalarEncoding
 from finn.kernels.matmul import Contraction, MatMulKernel, matmul_assembly
 from finn.kernels.physical.contract import StreamContract
-from finn.kernels.physical.forms import Every, vector_major
+from finn.dataflow.traversal import Every, vector_major
 from finn.kernels.physical.stream import MarkerKind, ReadyValidStream, StreamMarker
 from finn.kernels.physical.structure import PhysicalPin, PinSlice, UnusedOutput
 from finn.kernels.target import DspBlock

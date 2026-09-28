@@ -4,8 +4,9 @@
 """Streams as ordinary Spaces: kernels reference them, and each stream sees its users.
 
 Every stream owns its refusals; a stream with one user is a boundary of the
-composite and presents its ``port`` name; a stream's spec is anchored in the
-composite, and deriving it from a user is refused as a dependency cycle.
+composite and presents its ``port`` name, by the boundary rule; a stream's
+tensor is anchored in the composite, and deriving it from a user is refused as
+a dependency cycle.
 """
 
 import pytest
@@ -29,33 +30,33 @@ from finn.core.space import (
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.build import ModuleBuildRequirements
 from finn.kernels.artifacts.derivation import ProducerIdentity
-from finn.kernels.datatypes.scalar import ScalarEncoding
+from finn.dataflow.tensor import TENSOR, ScalarEncoding, Tensor
 from finn.kernels.delivery import CyclicDelivery
-from finn.kernels.physical.forms import vector_major
+from finn.dataflow.traversal import Every, Presentation, vector_major
+from finn.kernels.physical.axi_stream import AxiStream
 from finn.kernels.physical.contract import STREAM_CONTRACT, StreamContract
 from finn.kernels.streams import (
     CONNECTION,
     MODULE,
     PORT,
-    STREAM_SPEC,
     Stream,
-    StreamSpec,
     boundary_contract,
     netlist,
 )
 
 INT4 = ScalarEncoding(DataType["INT4"])
 PRODUCED = vector_major((4,), 2)
+VECTOR = Tensor((4,), INT4)
 
 
 class Constants(Space):
-    """Two constant vectors streamed to two outputs; each output's order is supplied."""
+    """Two constant vectors streamed to two outputs; each stream's tensor is supplied."""
 
-    first_spec: StreamSpec = Param(semantics=STREAM_SPEC)
-    second_spec: StreamSpec = Param(semantics=STREAM_SPEC)
+    first_tensor: Tensor = Param(semantics=TENSOR)
+    second_tensor: Tensor = Param(semantics=TENSOR)
     # Each stream has only its producer: it is a boundary, named by its port.
-    first = Stream(spec=first_spec, port="out0_V")
-    second = Stream(spec=second_spec, port="out1_V")
+    first = Stream(tensor=first_tensor, port="out0_V")
+    second = Stream(tensor=second_tensor, port="out1_V")
 
     first_source = CyclicDelivery(
         dtype=DataType["INT4"],
@@ -87,10 +88,8 @@ class Constants(Space):
         return composed.requirements
 
 
-def constants(first=PRODUCED, second=PRODUCED):
-    point = design_space(
-        Constants(first_spec=StreamSpec(INT4, first), second_spec=StreamSpec(INT4, second))
-    )
+def constants(first=VECTOR, second=VECTOR):
+    point = design_space(Constants(first_tensor=first, second_tensor=second))
     return point.with_choices(
         point.first_source.field(CyclicDelivery.rom_style).change("auto"),
         point.second_source.field(CyclicDelivery.rom_style).change("distributed"),
@@ -104,8 +103,8 @@ def test_matching_streams_compose_into_one_module():
 
 
 def test_each_stream_owns_its_refusal_and_independent_refusals_are_all_visible():
-    # Four lanes cannot be fed by a two-lane source: both streams refuse.
-    wide = vector_major((4,), 4)
+    # A source traversing four elements cannot carry an eight-element tensor.
+    wide = Tensor((8,), INT4)
     point = constants(first=wide, second=wide)
     assessment = point.inspect(Constants.build)
     results = assessment.constraints.results
@@ -113,7 +112,8 @@ def test_each_stream_owns_its_refusal_and_independent_refusals_are_all_visible()
     assert isinstance(results["second.connection"], Rejected)
     refusal = assessment.accepted_result
     assert isinstance(refusal, Rejected)
-    assert {f.owner for f in refusal.findings} == {"first.compatible", "second.compatible"}
+    assert {f.owner for f in refusal.findings} == {"first.well_formed", "second.well_formed"}
+    assert {f.code for f in refusal.findings} == {"stream-tensor"}
     # One stream refusing leaves the other stream's connection accepted.
     mixed = constants(first=wide)
     assert isinstance(mixed.first.query(Stream.connection), Rejected)
@@ -127,6 +127,7 @@ def test_explain_shows_per_stream_and_per_member_evidence():
     assert {
         "first.connection",
         "second.connection",
+        "first.well_formed",
         "first.compatible",
         "first.ends",
         "first_source.output",
@@ -137,9 +138,7 @@ def test_explain_shows_per_stream_and_per_member_evidence():
 
 
 def test_a_stream_waits_for_its_own_endpoints_only():
-    point = design_space(
-        Constants(first_spec=StreamSpec(INT4, PRODUCED), second_spec=StreamSpec(INT4, PRODUCED))
-    )
+    point = design_space(Constants(first_tensor=VECTOR, second_tensor=VECTOR))
     point = point.with_choices(point.first_source.field(CyclicDelivery.rom_style).change("auto"))
     # The ROM choice feeds only the module, not either stream's contracts.
     assert isinstance(point.first.query(Stream.connection), Available)
@@ -155,15 +154,45 @@ def test_a_stream_waits_for_its_own_endpoints_only():
 
 
 def test_boundary_ports_are_axis_and_byte_aligned():
-    contract = boundary_contract("in0_V", StreamSpec(INT4, vector_major((3,), 3)), Endpoint.TARGET)
+    contract = boundary_contract(
+        "in0_V", INT4, Presentation(vector_major((3,), 3)), Endpoint.TARGET
+    )
     assert contract.transport.data_width == 16
     assert contract.payload_bits == 12
 
 
+class Replaying(Space):
+    """A consumer reading each two-beat group of its input three times, framed."""
+
+    input_stream: Stream = Param()
+
+    @view(semantics=STREAM_CONTRACT)
+    def port(self) -> StreamContract:
+        stream = AxiStream("s_axis", DataType["INT4"], 2, endpoint=Endpoint.TARGET, last=True)
+        transport = stream.native(clock="ap_clk", reset="ap_rst_n")
+        form = vector_major((2, 4), 2).replayed(3, inner_beats=2)
+        return StreamContract(transport, INT4, form, markers={"s_axis_tlast": Every(2)})
+
+    exports = {PORT: {input_stream: port}}
+
+
+def test_a_boundary_presents_its_internal_end_without_the_replay_the_receiver_realizes():
+    class Receiver(Space):
+        edge = Stream(tensor=Tensor((2, 4), INT4), port="in0_V")
+        reader = Replaying(input_stream=edge)
+
+    ends = design_space(Receiver()).edge.endpoints
+    assert ends.source_owner is None and ends.sink_owner == "reader"
+    # Each row once, no marker: the replay and the frame are the receiver's to realize.
+    assert ends.source.form == vector_major((2, 4), 2)
+    assert ends.source.transport.name == "in0_V" and not ends.source.rules
+    assert ends.sink.form == vector_major((2, 4), 2).replayed(3, inner_beats=2)
+
+
 def test_two_producers_on_one_stream_are_refused_by_the_stream():
     class Clash(Space):
-        spec: StreamSpec = Param(semantics=STREAM_SPEC)
-        shared = Stream(spec=spec, port="out0_V")
+        tensor: Tensor = Param(semantics=TENSOR)
+        shared = Stream(tensor=tensor, port="out0_V")
         a = CyclicDelivery(
             dtype=DataType["INT4"], form=PRODUCED, values=(1, 2, 3, 4), output_stream=shared
         )
@@ -171,7 +200,7 @@ def test_two_producers_on_one_stream_are_refused_by_the_stream():
             dtype=DataType["INT4"], form=PRODUCED, values=(1, 2, 3, 4), output_stream=shared
         )
 
-    point = design_space(Clash(spec=StreamSpec(INT4, PRODUCED)))
+    point = design_space(Clash(tensor=VECTOR))
     refused = point.shared.query(Stream.connection)
     assert isinstance(refused, Rejected)
     assert {f.code for f in refused.findings} == {"stream-users"}
@@ -180,54 +209,54 @@ def test_two_producers_on_one_stream_are_refused_by_the_stream():
 
 def test_a_boundary_stream_needs_its_port_name():
     class Unnamed(Space):
-        spec: StreamSpec = Param(semantics=STREAM_SPEC)
-        out = Stream(spec=spec)
+        tensor: Tensor = Param(semantics=TENSOR)
+        out = Stream(tensor=tensor)
         source = CyclicDelivery(
             dtype=DataType["INT4"], form=PRODUCED, values=(1, 2, 3, 4), output_stream=out
         )
 
-    waiting = design_space(Unnamed(spec=StreamSpec(INT4, PRODUCED))).out.query(Stream.connection)
+    waiting = design_space(Unnamed(tensor=VECTOR)).out.query(Stream.connection)
     assert isinstance(waiting, Unresolved)
     assert {f.owner for f in waiting.findings} == {"out.port"}
 
 
-# -- the anchoring rule: a stream's spec must not depend on its users ------------------
+# -- the anchoring rule: a stream's tensor must not depend on its users ----------------
 
 
-class ProducerSpecStream(Space):
-    """A stream that derives its spec from its producer's contract: not anchored."""
+class ProducerTensorStream(Space):
+    """A stream that derives its tensor from its producer's contract: not anchored."""
 
     ends = Users(PORT)
 
-    @derived(semantics=STREAM_SPEC)
-    def spec(self) -> StreamSpec:
+    @derived(semantics=TENSOR)
+    def tensor(self) -> Tensor:
         (end,) = self.ends
-        return StreamSpec(end.value.element, end.value.form)
+        return Tensor(end.value.form.shape, end.value.element)
 
 
-class SpecReadingProducer(Space):
-    """Builds its port contract from the stream's spec, as dotp does."""
+class TensorReadingProducer(Space):
+    """Builds its port contract from the stream's tensor, as every kernel does."""
 
-    output_stream: ProducerSpecStream = Param()
+    output_stream: ProducerTensorStream = Param()
     source = CyclicDelivery(dtype=DataType["INT4"], form=PRODUCED, values=(1, 2, 3, 4))
 
     @view(semantics=STREAM_CONTRACT)
     def port(self) -> StreamContract:
         contract = self.source.output
-        spec = self.output_stream.spec  # the stream's spec shapes the port
-        return StreamContract(contract.transport, spec.element, spec.form)
+        tensor = self.output_stream.tensor  # the stream's tensor shapes the port
+        return StreamContract(contract.transport, tensor.element, vector_major(tensor.shape, 2))
 
     exports = {PORT: {output_stream: port}}
 
 
-def test_a_spec_derived_from_its_users_is_refused_with_the_cycle_path():
+def test_a_tensor_derived_from_its_users_is_refused_with_the_cycle_path():
     class Unanchored(Space):
-        edge = ProducerSpecStream()
-        producer = SpecReadingProducer(output_stream=edge)
+        edge = ProducerTensorStream()
+        producer = TensorReadingProducer(output_stream=edge)
 
     point = design_space(Unanchored())
     with pytest.raises(EvaluationError, match="dependency cycle") as caught:
-        point.edge.spec
+        point.edge.tensor
     path = str(caught.value)
-    # The cycle, in evaluation order: the spec reads the users, a user's ports read the spec.
-    assert "edge.spec" in path and "edge.ends" in path and "producer.port" in path
+    # The cycle, in evaluation order: the tensor reads the users, a user's port reads the tensor.
+    assert "edge.tensor" in path and "edge.ends" in path and "producer.port" in path

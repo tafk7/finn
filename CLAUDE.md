@@ -101,7 +101,8 @@ finn.core.space  <-  finn.dataflow  <-  finn.kernels  <-  finn.parked
 ```
 
 - `finn.core.space` — the generic Space engine.
-- `finn.dataflow` — canonical logical dataflow values (Regions, Networks, maps).
+- `finn.dataflow` — canonical logical dataflow values (tensors, traversals,
+  presentations).
 - `finn.kernels` — kernels bound to RTL/HLS sources.
 - `finn.parked` — retired code kept as reference only. It is not tested, not
   shipped, and nothing live imports it.

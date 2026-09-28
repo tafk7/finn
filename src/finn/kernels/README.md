@@ -114,11 +114,14 @@ relative to a staging directory; retain that layout and use the declared
 
 `MatMulKernel` owns the operation's facts (the `contraction`, `DENSE` or
 `PER_CHANNEL`, and the extents), PE/SIMD folding and result precision, and
-declares its connections as streams (`finn.kernels.streams`). It derives a
-`StreamSpec` (element, traversal, repetition, markers) for each stream;
+declares its connections as streams (`finn.kernels.streams`). Each stream
+carries a `Tensor` (shape and element encoding, `finn.dataflow.tensor`);
 kernels reference the streams they sit on through reference inputs and export
 one port contract per input (`exports = {PORT: {activation_stream:
-activation_port, ...}}`). Each slot is a node, a Decision over nodes, or a
+activation_port, ...}}`), each presenting the end's own traversal of the
+tensor (a `Presentation`: traversal, repetition, markers). A boundary stream
+presents what its internal end presents, without the replay the receiver
+realizes and without markers. Each slot is a node, a Decision over nodes, or a
 derived node, and each Decision is present only where its case applies:
 
 ```text
@@ -293,7 +296,7 @@ scalar: FIFO, input generation and replay construct `ReadyValidStream` values
 directly rather than publishing unpadded words as AXI buses.
 
 A `StreamContract` (`physical/contract.py`) adds the logical sequence to a
-transport: the element encoding, a `Traversal` (`physical/forms.py`), a
+transport: the element encoding, a `Traversal` (`finn.dataflow.traversal`), a
 `Repetition` (`ONCE`, or `CYCLIC` for a free-running source) and periodic marker
 rules (`Every(k)`). A traversal is a loop nest over the row-major operand:
 `beat_loops` step from beat to beat, `lane_loops` from field to field (field
@@ -327,7 +330,7 @@ beside one:
 
 ```python
 from finn.kernels import CyclicDelivery
-from finn.kernels.physical.forms import Adaptation, Repetition, classify, vector_major
+from finn.dataflow.traversal import Adaptation, Repetition, classify, vector_major
 
 channels = vector_major((4,), 2)
 vector = design_space(CyclicDelivery(dtype=dtype("INT4"), form=channels, values=(1, -2, 7, -8)))

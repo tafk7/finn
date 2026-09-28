@@ -59,14 +59,13 @@ from finn.dataflow.datatypes import (
 from finn.kernels.control import CONTROL, CONTROL_SEMANTICS, Control, ControlBus
 from finn.kernels.physical.axi_stream import AxiStream
 from finn.kernels.physical.contract import STREAM_CONTRACT, StreamContract
-from finn.kernels.physical.forms import vector_major
+from finn.dataflow.traversal import TRAVERSAL, Traversal, vector_major
 from finn.kernels.streams import (
     MODULE,
     PORT,
     TIEOFFS,
     TIEOFFS_SEMANTICS,
     Stream,
-    StreamSpec,
     Tieoffs,
 )
 from finn.core.space import (
@@ -356,47 +355,49 @@ class ThresholdingAxiKernel(Kernel):
             ThresholdingAxiKernel.id, ThresholdingAxiKernel.version, parameters, abi, sources
         )
 
-    def _contract(self, port: AxiStream, spec: StreamSpec) -> StreamContract | Rejected:
-        if spec.element.datatype_name != port.dtype.name:
+    def _contract(
+        self, port: AxiStream, stream: Stream, form: Traversal
+    ) -> StreamContract | Rejected:
+        element = stream.tensor.element
+        if element.datatype_name != port.dtype.name:
             return reject(
                 "threshold-stream-element",
-                f"the stream carries {spec.element.datatype_name}, the port {port.dtype.name}",
-            )
-        if spec.form.lanes != port.elements_per_beat:
-            return reject(
-                "threshold-stream-lanes",
-                f"the stream carries {spec.form.lanes} lanes; the port reads PE="
-                f"{port.elements_per_beat}",
+                f"the stream carries {element.datatype_name}, the port {port.dtype.name}",
             )
         transport = port.native(clock="ap_clk", reset="ap_rst_n")
-        return StreamContract(transport, spec.element, spec.form, spec.repetition)
+        return StreamContract(transport, element, form)
 
-    @view(semantics=STREAM_CONTRACT)
-    def input_port(self) -> StreamContract | Rejected:
-        spec, pe, channels = self.input_stream.spec, self.pe, len(self.thresholds[0])
-        # Channels are the innermost axis, PE consecutive channels per beat.
-        if spec.form.shape[-1] != channels or spec.form != vector_major(spec.form.shape, pe):
+    @derived(semantics=TRAVERSAL)
+    def input_form(self) -> Traversal | Rejected:
+        """PE consecutive channels a beat, channels the innermost axis of the tensor."""
+        shape, pe, channels = self.input_stream.tensor.shape, self.pe, len(self.thresholds[0])
+        if shape[-1] != channels or channels % pe:
             return reject(
                 "threshold-stream-form",
                 f"the input must walk its {channels} channels innermost, PE={pe} per beat",
             )
-        return self._contract(self.interfaces[0], spec)
+        return vector_major(shape, pe)
+
+    @view(semantics=STREAM_CONTRACT)
+    def input_port(self) -> StreamContract | Rejected:
+        return self._contract(self.interfaces[0], self.input_stream, self.input_form)
 
     @view(semantics=STREAM_CONTRACT)
     def output_port(self) -> StreamContract | Rejected:
-        spec = self.output_stream.spec
-        if spec.form != self.input_stream.spec.form:
-            return reject("threshold-stream-form", "the output keeps the input's order")
-        return self._contract(self.interfaces[1], spec)
+        # The output keeps the input's order, over a tensor of the input's shape.
+        form = self.input_form
+        if self.output_stream.tensor.shape != form.shape:
+            return reject("threshold-stream-form", "the output keeps the input's shape")
+        return self._contract(self.interfaces[1], self.output_stream, form)
 
     @view(semantics=STREAM_CONTRACT)
     def set_port(self) -> StreamContract | Rejected:
-        spec, sets = self.set_stream.spec, len(self.thresholds)
+        shape, sets = self.set_stream.tensor.shape, len(self.thresholds)
         if sets < 2:
             return reject("threshold-set-stream", "a single threshold set takes no set stream")
-        if spec.form.beats != self.input_stream.spec.form.beats:
+        if shape != (self.input_form.beats,):
             return reject("threshold-set-stream", "each input beat needs one set index")
-        return self._contract(self.interfaces[2], spec)
+        return self._contract(self.interfaces[2], self.set_stream, vector_major(shape, 1))
 
     @view(semantics=CONTROL_SEMANTICS)
     def control_bus(self) -> Control:

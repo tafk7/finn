@@ -34,8 +34,8 @@ from finn.parked.dataflow.model.logical.contract_expressions import (
 from finn.kernels.datatypes.domains import DatatypeDomain
 from finn.kernels.datatypes.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
 from finn.dataflow.datatypes import QONNXDataType, qonnx_datatype_width
-from finn.dataflow.model.logical.maps import MapCapabilityError, OccurrenceAxis
-from finn.dataflow.model.logical.region import (
+from finn.parked.dataflow.logical_values.maps import MapCapabilityError, OccurrenceAxis
+from finn.parked.dataflow.logical_values.region import (
     BeatSequence,
     DataflowRegion,
     InputInterface,
@@ -50,7 +50,7 @@ from finn.dataflow.model.logical.region import (
     ScheduleLevel,
     is_element_type,
 )
-from finn.dataflow.model.logical.region_validation import validate_region
+from finn.parked.dataflow.logical_values.region_validation import validate_region
 from finn.kernels.space.declarations import (
     AuthoringError,
     Constraint,

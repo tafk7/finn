@@ -16,8 +16,8 @@ layer turns into a rejecting absence rather than a crash.
 
 from __future__ import annotations
 
-from finn.dataflow.model.logical.maps import OccurrenceAxis, RectangularDomain
-from finn.dataflow.model.logical.region import (
+from finn.parked.dataflow.logical_values.maps import OccurrenceAxis, RectangularDomain
+from finn.parked.dataflow.logical_values.region import (
     BeatSequence,
     Coordinate,
     DataflowRegion,

@@ -21,7 +21,7 @@ from finn.kernels.artifacts.contributions import ContributionError, GeneratedDat
 from finn.kernels.artifacts.store import ArtifactStore
 from finn.kernels.matmul import MatMulKernel, WeightDelivery, matmul_assembly
 from finn.kernels.memstream import MemStreamKernel
-from finn.kernels.physical.forms import tile
+from finn.dataflow.traversal import tile
 from finn.kernels.resources import resource_root, template_root
 from finn.kernels.target import DspBlock
 

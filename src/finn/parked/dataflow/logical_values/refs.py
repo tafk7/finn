@@ -29,8 +29,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from finn.dataflow.model.logical.network import DataflowNetwork
-from finn.dataflow.model.logical.region import OutputInterface, RegionInput
+from finn.parked.dataflow.logical_values.network import DataflowNetwork
+from finn.parked.dataflow.logical_values.region import OutputInterface, RegionInput
 
 
 @dataclass(frozen=True, slots=True)

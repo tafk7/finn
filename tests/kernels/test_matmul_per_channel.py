@@ -16,7 +16,7 @@ from qonnx.core.datatype import DataType
 from finn.core.space import Rejected, design_space
 from finn.kernels.configure import commit
 from finn.kernels.matmul import Contraction, MatMulKernel, WeightDelivery, matmul_assembly
-from finn.kernels.physical.forms import channel_tile
+from finn.dataflow.traversal import channel_tile
 from finn.kernels.physical.structure import PhysicalPin, PinSlice
 from finn.kernels.target import DspBlock
 
@@ -52,9 +52,11 @@ def point(**facts):
 def test_per_channel_rows_pass_once_with_a_frame_per_window():
     configured = point()
     assert configured.reuse == 1
-    assert configured.activations.spec.form == channel_tile(2, 9, 4, 2, 3)
-    assert configured.replayed.spec.form == configured.activations.spec.form
-    assert [every.period for every in configured.replayed.spec.markers] == [3]
+    boundary = configured.activations.endpoints.source
+    assert boundary.transport.name == "in0_V" and boundary.form == channel_tile(2, 9, 4, 2, 3)
+    framed = configured.replayed.endpoints.sink
+    assert framed.form == boundary.form
+    assert [every.period for every in framed.rules.values()] == [3]
     structure = configured.structure.structure
     replay, compute = (dict(item.requirements.parameters) for item in structure.instances)
     assert replay == {"LEN": 3, "REP": 1, "W": 24}

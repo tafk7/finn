@@ -21,7 +21,7 @@ from finn.dataflow.datatypes import (
     canonical_qonnx_datatype,
     qonnx_datatype_width,
 )
-from finn.dataflow.model.logical.maps import (
+from finn.parked.dataflow.logical_values.maps import (
     AffineRankMap,
     Coordinate as _Coordinate,
     CoordinateSet,

@@ -22,7 +22,7 @@ from finn.parked.dataflow.model._authoring import (
     use_authored_or_generated,
 )
 from finn.parked.dataflow.model.logical.authoring import RegionDeclaration
-from finn.dataflow.model.logical.region import DataflowRegion
+from finn.parked.dataflow.logical_values.region import DataflowRegion
 from finn.parked.dataflow.model.physical.view import PhysicalView
 from finn.parked.dataflow.model.physical.interface import validate_kernel_stream_bindings
 from finn.parked.dataflow.model.physical.interface import KernelStreamBinding

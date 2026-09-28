@@ -61,16 +61,16 @@ arms -- not as a substitute for validation.
 
 from __future__ import annotations
 
-from finn.dataflow.model.logical.maps import CoordinateSet, MaterializationRequired
-from finn.dataflow.model.logical.network import BoundaryContract, DataflowNetwork, RegionEndpoint
-from finn.dataflow.model.logical.refs import (
+from finn.parked.dataflow.logical_values.maps import CoordinateSet, MaterializationRequired
+from finn.parked.dataflow.logical_values.network import BoundaryContract, DataflowNetwork, RegionEndpoint
+from finn.parked.dataflow.logical_values.refs import (
     DataflowOperandRef,
     NetworkOperandError,
     RegionInputRef,
     resolve_input,
     resolve_output,
 )
-from finn.dataflow.model.logical.region import Coordinate, InputInterface, RegionInput
+from finn.parked.dataflow.logical_values.region import Coordinate, InputInterface, RegionInput
 
 
 def exposing_ports(network: DataflowNetwork, ref: DataflowOperandRef) -> tuple[RegionEndpoint, ...]:

@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Logical stream order as a loop nest over a row-major operand.
+"""Logical stream order as a loop nest over a row-major tensor.
 
 A ``Traversal`` walks an operand of ``shape`` with two loop nests, both listed
 outer to inner. Each iteration of ``beat_loops`` is one beat; each iteration of
@@ -16,6 +16,12 @@ compares two traversals of one operand and names the adapter a mismatch needs:
 free lane wiring, a loop-nest reorder with its ``input_gen`` parameters, a width
 conversion, a lane regroup, or none at all. It corresponds to the canon
 ``BeatSequence`` without adopting Regions.
+
+A ``Presentation`` is what one end of a stream presents of the tensor it
+carries: its traversal per pass, whether the pass repeats (``Repetition``),
+and the marker rules it offers or requires. ``unreplayed`` is the boundary
+rule: the receiver of a stream realizes its own replay, while whole-pass
+repetition stays part of the interface.
 """
 
 from __future__ import annotations
@@ -469,6 +475,46 @@ class Repetition(Enum):
     CYCLIC = "cyclic"
 
 
+@dataclass(frozen=True)
+class Presentation:
+    """One stream end's view of its tensor: traversal, pass repetition and marker rules.
+
+    For a producer the markers are guarantees; for a consumer, requirements.
+    """
+
+    form: Traversal
+    repetition: Repetition = Repetition.ONCE
+    markers: tuple[Every, ...] = ()
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.form, Traversal) or not isinstance(self.repetition, Repetition):
+            raise TypeError("a presentation has a Traversal and a Repetition")
+        object.__setattr__(self, "markers", tuple(self.markers))
+        if not all(isinstance(rule, Every) for rule in self.markers):
+            raise TypeError("marker rules are Every values")
+
+
+PRESENTATION: ValueSemantics[Presentation] = ValueSemantics(
+    Presentation,
+    "presentation",
+    lambda value: type(value) is Presentation,
+    lambda left, right: left == right,
+    lambda value: value,
+)
+
+
+def unreplayed(form: Traversal) -> Traversal:
+    """``form`` without replay: its stride-0 beat loops inside a moving loop.
+
+    Outermost stride-0 loops repeat the whole pass and stay: that repetition is
+    part of an interface, while replay is realized by the receiver.
+    """
+    loops = form.beat_loops
+    moving = next((index for index, loop in enumerate(loops) if loop.stride), len(loops))
+    kept = (*loops[:moving], *(loop for loop in loops[moving:] if loop.stride))
+    return Traversal(form.shape, kept, form.lane_loops)
+
+
 def pack(form: Traversal, values: object, bits: int) -> tuple[int, ...]:
     """Pack an integer operand of ``form.shape`` into one raw word per beat, field zero lowest."""
     _positive(bits, "bits")
@@ -514,7 +560,9 @@ __all__ = [
     "Classification",
     "Every",
     "Loop",
+    "PRESENTATION",
     "Position",
+    "Presentation",
     "Reorder",
     "Repetition",
     "TRAVERSAL",
@@ -531,6 +579,7 @@ __all__ = [
     "split_beats",
     "split_walk",
     "tile",
+    "unreplayed",
     "vector_major",
     "walk_loops",
 ]

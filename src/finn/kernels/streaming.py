@@ -25,9 +25,9 @@ from finn.kernels.artifacts.abi import (
 )
 from finn.core.space import Param, Rejected, default_semantics, derived, reject, view
 from finn.kernels.base import Kernel
-from finn.kernels.datatypes.scalar import ScalarEncoding
+from finn.dataflow.tensor import ScalarEncoding
 from finn.kernels.physical.contract import STREAM_CONTRACT, StreamContract
-from finn.kernels.physical.forms import Every, Traversal
+from finn.dataflow.traversal import TRAVERSAL, Every, Traversal
 from finn.kernels.physical.stream import ReadyValidStream, StreamMarker, MarkerKind
 from finn.kernels.streams import MODULE, PORT, Stream
 from finn.kernels.artifacts.contribution_types import CopiedSource
@@ -121,19 +121,20 @@ class ReplayBuffer(Kernel):
     id = "finnlib.replay_buffer"
     version = "1"
 
-    # The streams it sits on; its output contract derives from the input stream.
+    # The streams it sits on, and the form its input presents; its output
+    # contract derives from that form.
     input_stream: Stream = Param()
     output_stream: Stream = Param()
+    input_form: Traversal = Param(semantics=TRAVERSAL)
     sequence_length: int = Param()
     replay_count: int = Param()
 
     @derived(semantics=REPLAY_CONTRACTS)
     def contracts(self) -> ReplayContracts | Rejected:
-        spec = self.input_stream.spec
         try:
             return replay_buffer_contracts(
-                spec.element,
-                spec.form,
+                self.input_stream.tensor.element,
+                self.input_form,
                 sequence_length=self.sequence_length,
                 replay_count=self.replay_count,
             )
@@ -152,7 +153,7 @@ class ReplayBuffer(Kernel):
     def build_requirements(self) -> ModuleBuildRequirements | Rejected:
         try:
             return replay_buffer_requirements(
-                word_bits=self.input_stream.spec.payload_bits,
+                word_bits=self.contracts.input.payload_bits,
                 sequence_length=self.sequence_length,
                 replay_count=self.replay_count,
             )

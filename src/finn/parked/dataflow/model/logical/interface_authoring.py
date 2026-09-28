@@ -12,14 +12,14 @@ from typing import Literal, cast
 
 from finn.kernels._engine import Answer, Decided
 from finn.parked.dataflow.model._authoring import GENERATED_MEMBERS, generated_member
-from finn.dataflow.model.logical.composition import LogicalResult, logical_network
+from finn.parked.dataflow.logical_values.composition import LogicalResult, logical_network
 from finn.dataflow.datatypes import QONNXDataType, QONNX_DATATYPE_TOKEN
-from finn.dataflow.model.logical.interface import (
+from finn.parked.dataflow.logical_values.interface import (
     OperandExport,
     PublicOperand,
     validate_operand_export,
 )
-from finn.dataflow.model.logical.maps import RectangularDomain
+from finn.parked.dataflow.logical_values.maps import RectangularDomain
 from finn.kernels.space.declarations import (
     AuthoringError,
     Constraint,

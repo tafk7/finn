@@ -27,7 +27,7 @@ from finn.parked.dataflow.model.identity import (
     comparison_type_identity,
     implementation_identity,
 )
-from finn.dataflow.model.logical.composition import ImplementationPath
+from finn.parked.dataflow.logical_values.composition import ImplementationPath
 from finn.parked.dataflow.model.physical.authoring import PhysicallyUnsupported
 from finn.parked.dataflow.model.physical.interface import KernelRealizationFacts, KernelStreamBinding
 from finn.kernels.space.declarations import (

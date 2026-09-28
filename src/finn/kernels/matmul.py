@@ -43,7 +43,7 @@ from finn.kernels.artifacts.build import (
     ModuleBuildRequirements,
 )
 from finn.kernels.artifacts.derivation import ProducerIdentity
-from finn.kernels.datatypes.scalar import ScalarEncoding
+from finn.dataflow.tensor import ScalarEncoding
 from finn.kernels.datatypes.semantics import (
     INTEGER_TENSOR,
     INTEGER_VECTOR,
@@ -62,9 +62,12 @@ from finn.kernels.control import EXPORTED, ControlBus
 from finn.kernels.delivery import CyclicDelivery
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.dotp import Contraction, DotpAxiKernel, Int8Dsp58DotpKernel, PackedDotpKernel
-from finn.kernels.physical.forms import (
+from finn.dataflow.tensor import TENSOR, Tensor
+from finn.dataflow.traversal import (
+    PRESENTATION,
     TRAVERSAL,
     Every,
+    Presentation,
     Traversal,
     channel_tile,
     tile,
@@ -77,12 +80,10 @@ from finn.kernels.streams import (
     COMPOSED,
     CONNECTION,
     MODULE,
-    STREAM_SPEC,
     TIEOFFS,
     BufferedStream,
     Composed,
     Stream,
-    StreamSpec,
     netlist,
 )
 from finn.kernels.target import DspBlock
@@ -336,7 +337,7 @@ class MatMulKernel(Space):
 
     @derived
     def activation_word_bits(self) -> int:
-        return self.activation_spec.payload_bits
+        return self.activation_form.lanes * self.activation_tensor.element.bits
 
     @derived(semantics=INTEGER_VECTOR)
     def replay_extents(self) -> IntegerVector:
@@ -347,55 +348,72 @@ class MatMulKernel(Space):
     def replay_strides(self) -> IntegerVector:
         return (0, 1)
 
-    @derived(semantics=STREAM_SPEC)
-    def activation_spec(self) -> StreamSpec | Rejected:
-        f, element = self.folding, ScalarEncoding.admit(self.activation_dtype)
+    # The tensors the streams carry, and what each end presents of them.
+
+    @derived(semantics=TRAVERSAL)
+    def activation_form(self) -> Traversal:
+        """Each activation row once: the boundary's order and the replay's input."""
+        f = self.folding
+        if f.per_channel:
+            return channel_tile(f.rows, f.reduction, f.outputs, f.pe, f.simd)
+        return vector_major((f.rows, f.reduction), f.simd)
+
+    @derived(semantics=TENSOR)
+    def activation_tensor(self) -> Tensor | Rejected:
+        element = ScalarEncoding.admit(self.activation_dtype)
         if isinstance(element, Rejected):
             return element
-        if f.per_channel:
-            return StreamSpec(element, channel_tile(f.rows, f.reduction, f.outputs, f.pe, f.simd))
-        return StreamSpec(element, vector_major((f.rows, f.reduction), f.simd))
+        return Tensor(self.activation_form.shape, element)
 
-    @derived(semantics=STREAM_SPEC)
-    def replayed_spec(self) -> StreamSpec:
-        f, spec = self.folding, self.activation_spec
-        form = spec.form.replayed(f.reuse, inner_beats=f.reduction_folds)
-        return StreamSpec(spec.element, form, markers=(Every(f.reduction_folds),))
+    @derived(semantics=PRESENTATION)
+    def replayed_presentation(self) -> Presentation:
+        f = self.folding
+        form = self.activation_form.replayed(f.reuse, inner_beats=f.reduction_folds)
+        return Presentation(form, markers=(Every(f.reduction_folds),))
 
     @derived(semantics=TRAVERSAL)
     def weight_period(self) -> Traversal:
         f = self.folding
         return tile(f.outputs, f.reduction, f.pe, f.simd)
 
-    @derived(semantics=STREAM_SPEC)
-    def weight_spec(self) -> StreamSpec | Rejected:
+    @derived(semantics=TENSOR)
+    def weight_tensor(self) -> Tensor | Rejected:
         element = ScalarEncoding.admit(self.weights_dtype)
         if isinstance(element, Rejected):
             return element
-        return StreamSpec(element, self.weight_period.repeated(self.folding.rows))
+        return Tensor(self.weight_period.shape, element)
 
-    @derived(semantics=STREAM_SPEC)
-    def set_spec(self) -> StreamSpec:
+    @derived(semantics=PRESENTATION)
+    def weight_presentation(self) -> Presentation:
+        return Presentation(self.weight_period.repeated(self.folding.rows))
+
+    @derived(semantics=TENSOR)
+    def set_tensor(self) -> Tensor:
         """One set index per row, as wide as the memory's selector."""
         sets = self.weight_sets
         bits = (sets - 1).bit_length() if sets > 2 else 1
         index = ScalarEncoding(resolve_qonnx_datatype_name(f"UINT{bits}"))
-        return StreamSpec(index, vector_major((self.folding.rows,), 1))
+        return Tensor((self.folding.rows,), index)
 
-    @derived(semantics=STREAM_SPEC)
-    def result_spec(self) -> StreamSpec | Rejected:
+    @derived(semantics=TENSOR)
+    def result_tensor(self) -> Tensor | Rejected:
         f, element = self.folding, ScalarEncoding.admit(self.result_type)
         if isinstance(element, Rejected):
             return element
-        return StreamSpec(element, vector_major((f.rows, f.outputs), f.pe))
+        return Tensor((f.rows, f.outputs), element)
+
+    @derived(semantics=PRESENTATION)
+    def result_presentation(self) -> Presentation:
+        f = self.folding
+        return Presentation(vector_major((f.rows, f.outputs), f.pe))
 
     # Streams: relations between the kernels that reference them. A stream with a
     # single user is a boundary of the kernel and presents its ABI port name.
-    activations = Stream(spec=activation_spec, port="in0_V")
-    replayed = Stream(spec=replayed_spec)
-    weight_stream = BufferedStream(spec=weight_spec, port="in1_V")
-    results = Stream(spec=result_spec, port="out0_V")
-    set_index = Stream(spec=set_spec, port="in2_V", when=multi_set)
+    activations = Stream(tensor=activation_tensor, port="in0_V")
+    replayed = Stream(tensor=activation_tensor)
+    weight_stream = BufferedStream(tensor=weight_tensor, port="in1_V")
+    results = Stream(tensor=result_tensor, port="out0_V")
+    set_index = Stream(tensor=set_tensor, port="in2_V", when=multi_set)
 
     # Replay: dense rows are read once per output fold, by a replay buffer or an
     # input generator (a choice). Per-channel rows pass once; a one-repetition
@@ -403,6 +421,7 @@ class MatMulKernel(Space):
     buffer = ReplayBuffer(
         input_stream=activations,
         output_stream=replayed,
+        input_form=activation_form,
         sequence_length=reduction_folds,
         replay_count=reuse,
     )
@@ -413,6 +432,7 @@ class MatMulKernel(Space):
         strides=replay_strides,
         input_stream=activations,
         output_stream=replayed,
+        input_form=activation_form,
     )
     replay: ReplayBuffer | InputGeneratorKernel = Decision(
         values={"buffer": buffer, "input_gen": input_gen}, when=reused
@@ -420,6 +440,7 @@ class MatMulKernel(Space):
     markers = ReplayBuffer(
         input_stream=activations,
         output_stream=replayed,
+        input_form=activation_form,
         sequence_length=reduction_folds,
         replay_count=reuse,
         when=single_pass,
@@ -453,6 +474,9 @@ class MatMulKernel(Space):
         activation_stream=replayed,
         weights_stream=weight_stream,
         result_stream=results,
+        activation_presentation=replayed_presentation,
+        weights_presentation=weight_presentation,
+        result_presentation=result_presentation,
     )
     int8_dsp58 = Int8Dsp58DotpKernel(
         activation_dtype=activation_dtype,
@@ -467,6 +491,9 @@ class MatMulKernel(Space):
         activation_stream=replayed,
         weights_stream=weight_stream,
         result_stream=results,
+        activation_presentation=replayed_presentation,
+        weights_presentation=weight_presentation,
+        result_presentation=result_presentation,
     )
     compute: PackedDotpKernel | Int8Dsp58DotpKernel = Decision(
         values={"packed": packed, "int8_dsp58": int8_dsp58}

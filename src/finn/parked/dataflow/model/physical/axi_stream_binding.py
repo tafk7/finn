@@ -3,7 +3,7 @@
 
 """Optional adapters between AXIS streams and logical composition bindings."""
 
-from finn.dataflow.model.logical.region import DataflowRegion
+from finn.parked.dataflow.logical_values.region import DataflowRegion
 from finn.kernels.physical.axi_stream import AxiStream
 from finn.parked.dataflow.model.physical.interface import KernelStreamBinding, region_ports
 from finn.kernels.physical.layout import PeriodicLast

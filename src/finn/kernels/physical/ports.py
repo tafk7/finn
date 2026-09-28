@@ -24,7 +24,8 @@ from finn.core.space import (
     reject,
 )
 from finn.kernels.artifacts.abi import Endpoint
-from finn.kernels.datatypes.scalar import SCALAR_ENCODING, Scalar, ScalarEncoding
+from finn.dataflow.tensor import SCALAR_ENCODING, ScalarEncoding
+from finn.kernels.datatypes.scalar import Scalar
 from finn.kernels.datatypes.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
 from finn.dataflow.datatypes import QONNXDataType, qonnx_datatype_width
 from finn.kernels.physical.layout import (

@@ -62,8 +62,10 @@ from finn.dataflow.datatypes import (
 from finn.kernels.datatypes.scalar import integer_scalar
 from finn.kernels.physical.axi_stream import AxiStream, axi_stream
 from finn.kernels.physical.contract import STREAM_CONTRACT, StreamContract
-from finn.kernels.physical.forms import (
+from finn.dataflow.traversal import (
+    PRESENTATION,
     Loop,
+    Presentation,
     Traversal,
     Walk,
     axis_strides,
@@ -78,7 +80,6 @@ from finn.kernels.streams import (
     TIEOFFS,
     TIEOFFS_SEMANTICS,
     Stream,
-    StreamSpec,
     Tieoffs,
 )
 from finn.core.space import (
@@ -144,10 +145,14 @@ class DotpAxiKernel(Kernel):
     weights_type = integer_scalar(weights_dtype, SignedInteger(min_bits=2))
     result_type = integer_scalar(result_dtype, SignedInteger())
     # The streams dotp sits on, when a parent places it between streams: reference
-    # inputs, each a Stream node placed beside dotp.
+    # inputs, each a Stream node placed beside dotp, and what each port presents
+    # of its stream's tensor, supplied by the parent.
     activation_stream: Stream = Param(required=False)
     weights_stream: Stream = Param(required=False)
     result_stream: Stream = Param(required=False)
+    activation_presentation: Presentation = Param(semantics=PRESENTATION, required=False)
+    weights_presentation: Presentation = Param(semantics=PRESENTATION, required=False)
+    result_presentation: Presentation = Param(semantics=PRESENTATION, required=False)
 
     @derived
     def activation_lanes(self) -> int:
@@ -309,21 +314,25 @@ class DotpAxiKernel(Kernel):
         """Accepted (activation, weights, result) ports; framing is the caller's."""
         return (self.activation.stream, self.weights.stream, self.result.stream)
 
-    def _port(self, port: AxiStream, stream: Stream) -> StreamContract | Rejected:
-        """A port over the stream it sits on: the stream's order, dotp's own encoding."""
-        spec = stream.spec
-        if spec.element.datatype_name != port.dtype.name:
+    def _port(
+        self, port: AxiStream, stream: Stream, presentation: Presentation
+    ) -> StreamContract | Rejected:
+        """A port over the stream it sits on: its presentation, dotp's own encoding."""
+        element = stream.tensor.element
+        if element.datatype_name != port.dtype.name:
             return reject(
                 "dotp-stream-element",
-                f"the stream carries {spec.element.datatype_name}, the port {port.dtype.name}",
+                f"the stream carries {element.datatype_name}, the port {port.dtype.name}",
             )
         transport = port.native(clock="ap_clk", reset="ap_rst_n")
         markers = {}
         if transport.markers:
-            if len(spec.markers) != 1:
+            if len(presentation.markers) != 1:
                 return reject("dotp-framing", "the activation stream needs one frame marker rule")
-            markers = {transport.markers[0].signal: spec.markers[0]}
-        return StreamContract(transport, spec.element, spec.form, spec.repetition, markers)
+            markers = {transport.markers[0].signal: presentation.markers[0]}
+        return StreamContract(
+            transport, element, presentation.form, presentation.repetition, markers
+        )
 
     # What dotp reads, as a relation between labelled operand axes (_LABELS):
     # activations X, weights W and results Y, with k reduced. Each port's lanes
@@ -340,10 +349,10 @@ class DotpAxiKernel(Kernel):
             return ((("k", simd), ("c", pe)), (("c", pe), ("k", simd)), (("c", pe),))
         return ((("k", simd),), (("n", pe), ("k", simd)), (("n", pe),))
 
-    def _operand(self, role: int, spec: StreamSpec, name: str) -> Rejected | None:
+    def _operand(self, role: int, presentation: Presentation, name: str) -> Rejected | None:
         """Refuse a stream of the wrong rank, or whose beats do not carry the fields dotp reads."""
         labels = _LABELS[self.contraction][role]
-        form = spec.form
+        form = presentation.form
         if len(form.shape) != len(labels):
             return reject(
                 "dotp-stream-form",
@@ -364,7 +373,7 @@ class DotpAxiKernel(Kernel):
 
     def _frames(self, role: int, form: Traversal) -> Walk | None:
         """The walk of ``form``'s frames, when each frame moves only along k."""
-        markers = self.activation_stream.spec.markers
+        markers = self.activation_presentation.markers
         labels = _LABELS[self.contraction][role]
         walk = axis_walk(form)
         framed = None if walk is None else split_walk(walk, markers[0].period)
@@ -379,7 +388,7 @@ class DotpAxiKernel(Kernel):
 
     @view(semantics=STREAM_CONTRACT)
     def activation_port(self) -> StreamContract | Rejected:
-        spec = self.activation_stream.spec
+        spec = self.activation_presentation
         refused = self._operand(0, spec, "activation")
         if refused is not None:
             return refused
@@ -387,17 +396,18 @@ class DotpAxiKernel(Kernel):
             return reject(
                 "dotp-stream-form", "a reduction frame must stay within one activation row"
             )
-        return self._port(self.activation.stream, self.activation_stream)
+        return self._port(self.activation.stream, self.activation_stream, spec)
 
     @view(semantics=STREAM_CONTRACT)
     def weights_port(self) -> StreamContract | Rejected:
-        weights, activation = self.weights_stream.spec, self.activation_stream.spec
+        weights, activation = self.weights_presentation, self.activation_presentation
         refused = self._operand(1, weights, "weights")
         if refused is not None:
             return refused
         labels = _LABELS[self.contraction]
         if len(activation.form.shape) != len(labels[0]):
-            return self._port(self.weights.stream, self.weights_stream)  # the activation port's
+            # The activation port's refusal.
+            return self._port(self.weights.stream, self.weights_stream, weights)
         shared = [index for index in labels[1] if index in labels[0]]
         extents = {index: activation.form.shape[labels[0].index(index)] for index in shared}
         if any(weights.form.shape[labels[1].index(index)] != extents[index] for index in shared):
@@ -421,19 +431,20 @@ class DotpAxiKernel(Kernel):
             return reject(
                 "dotp-stream-form", "a reduction frame must read one group of weight rows"
             )
-        return self._port(self.weights.stream, self.weights_stream)
+        return self._port(self.weights.stream, self.weights_stream, weights)
 
     @view(semantics=STREAM_CONTRACT)
     def result_port(self) -> StreamContract | Rejected:
-        result = self.result_stream.spec
-        weights, activation = self.weights_stream.spec, self.activation_stream.spec
+        result = self.result_presentation
+        weights, activation = self.weights_presentation, self.activation_presentation
         refused = self._operand(2, result, "result")
         if refused is not None:
             return refused
         labels = _LABELS[self.contraction]
         operands = (activation.form, weights.form)
         if any(len(form.shape) != len(labels[role]) for role, form in enumerate(operands)):
-            return self._port(self.result.stream, self.result_stream)  # the other ports'
+            # The other ports' refusal.
+            return self._port(self.result.stream, self.result_stream, result)
         # Each result index follows the operand carrying it: the rows the
         # activations, every other index the weights.
         carriers = tuple((0 if index not in labels[1] else 1, index) for index in labels[2])
@@ -459,7 +470,7 @@ class DotpAxiKernel(Kernel):
                         "dotp-stream-form",
                         "each result beat must hold its frame's activation row and weight rows",
                     )
-        return self._port(self.result.stream, self.result_stream)
+        return self._port(self.result.stream, self.result_stream, result)
 
     @view(semantics=TIEOFFS_SEMANTICS)
     def tieoffs(self) -> Tieoffs:

@@ -134,30 +134,10 @@ def test_nothing_outside_parked_imports_parked_code() -> None:
         assert not any(_within(name, "finn.parked") for name in named), path
 
 
-def test_the_logical_facade_loads_no_model_until_a_public_name_is_requested() -> None:
-    script = "\n".join(
-        (
-            "import sys",
-            "import finn.dataflow.model.logical",
-            "loaded = [name for name in (",
-            "    'finn.dataflow.model.logical.region',",
-            "    'finn.dataflow.model.logical.network',",
-            "    'finn.dataflow.model.logical.composition',",
-            "    'finn.dataflow.datatypes',",
-            ") if name in sys.modules]",
-            "raise SystemExit('loaded: ' + ', '.join(loaded) if loaded else 0)",
-        )
-    )
-    completed = subprocess.run(
-        [sys.executable, "-c", script], capture_output=True, text=True, check=False
-    )
-    assert completed.returncode == 0, completed.stdout + completed.stderr
-
-
 def test_package_roots_re_export_nothing() -> None:
     """One import path per concept: owning modules, not package roots."""
 
-    for name in ("finn.dataflow", "finn.dataflow.model"):
+    for name in ("finn.dataflow",):
         root = import_module(name)
         assert not hasattr(root, "__all__"), name
         assert not hasattr(root, "__getattr__"), name
@@ -168,6 +148,6 @@ def test_package_roots_re_export_nothing() -> None:
 def test_every_canonical_module_is_importable() -> None:
     package = import_module("finn.dataflow")
     names = [info.name for info in pkgutil.walk_packages(package.__path__, "finn.dataflow.")]
-    assert "finn.dataflow.model.logical.semantics" in names
+    assert {"finn.dataflow.tensor", "finn.dataflow.traversal"} <= set(names)
     for name in names:
         import_module(name)

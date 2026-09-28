@@ -9,7 +9,7 @@ from collections import Counter
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 
-from finn.dataflow.model.logical.maps import (
+from finn.parked.dataflow.logical_values.maps import (
     AffineRankMap,
     IdentityCoordinateMap,
     InvalidMapError,
@@ -18,7 +18,7 @@ from finn.dataflow.model.logical.maps import (
     rank_transform_affine,
     require_int,
 )
-from finn.dataflow.model.logical.network import (
+from finn.parked.dataflow.logical_values.network import (
     BoundaryContract,
     DataflowNetwork,
     DirectConnection,
@@ -30,8 +30,8 @@ from finn.dataflow.model.logical.network import (
     PositionMap,
     RegionEndpoint,
 )
-from finn.dataflow.model.logical.region import InputInterface, OutputInterface, Port
-from finn.dataflow.model.logical.region_validation import validate_region
+from finn.parked.dataflow.logical_values.region import InputInterface, OutputInterface, Port
+from finn.parked.dataflow.logical_values.region_validation import validate_region
 
 
 @dataclass(frozen=True)

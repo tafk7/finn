@@ -4,29 +4,37 @@
 """Streams as ordinary Spaces that kernels reference.
 
 A ``Stream`` is a node of its own, declared in the composite beside the
-kernels it joins. A kernel has one reference input per stream it sits on
-(``output_stream: Stream = Param()``) and exports, under ``PORT``, one contract
-per input: ``exports = {PORT: {output_stream: output_port}}``. The stream sees
-the kernels that reference it through ``Users(PORT)``, each with only the port
-it presents on this stream, so a port's refusal stays on its own stream. The
-contract's transport endpoint says whether the kernel produces into the stream
-(initiator) or consumes from it (target). The one-producer-one-consumer rule,
-compatibility and the AXIS boundary belong to this family, not to the engine.
+kernels it joins. It carries one ``tensor``: its shape and element encoding,
+supplied by the composite. A kernel has one reference input per stream it sits
+on (``output_stream: Stream = Param()``) and exports, under ``PORT``, one
+contract per input: ``exports = {PORT: {output_stream: output_port}}``. Each
+end presents its own traversal of the tensor in that contract, reading only
+the stream's ``tensor``. The stream sees the kernels that reference it through
+``Users(PORT)``, each with only the port it presents on this stream, so a
+port's refusal stays on its own stream. The contract's transport endpoint says
+whether the kernel produces into the stream (initiator) or consumes from it
+(target). The one-producer-one-consumer rule, the tensor each end must
+traverse, compatibility and the AXIS boundary belong to this family, not to
+the engine.
 
 A stream with a user on one side only is a boundary of its composite. Its
 ``port`` input names the top-level AXIS port (``in0_V``): an ABI name is
 design data of the stream, independent of the stream's node name, which is
-its identity and the prefix of its persisted decision keys.
+its identity and the prefix of its persisted decision keys. The boundary
+presents what its internal end presents, by one rule: an input boundary
+without the replay its receiver realizes (``unreplayed``), an output boundary
+as produced, neither with markers and both as a single pass.
 
-A stream's ``spec`` is supplied by the composite and must not depend on its
-users: kernels read it (``self.output_stream.spec``) to build their port
-contracts, so a spec derived from a user's contract is a dependency cycle.
+The tensor is supplied by the composite and must not depend on the stream's
+users: kernels read it to build their port contracts, so a tensor derived from
+a user's contract is a dependency cycle.
 
 A ``BufferedStream`` owns a ``transport`` Decision over two nodes, ``direct``
 and ``fifo``. The FIFO candidate owns its ``depth`` and the FIFO's
-``ram_style``; it is an identity adapter, checked on both of its sides.
-``Members(CONNECTION)`` collects a composite's streams and ``netlist`` wires
-them; instance names come from the located user names, never from literals.
+``ram_style``; it is an identity adapter presenting what arrives at it, checked
+on both of its sides. ``Members(CONNECTION)`` collects a composite's streams
+and ``netlist`` wires them; instance names come from the located user names,
+never from literals.
 
 A composite is one generated module with one clock: ``ap_clk`` and the
 active-low reset ``ap_rst_n``, plus ``ap_clk2x`` when a child needs an aligned
@@ -81,7 +89,6 @@ from finn.kernels.artifacts.build import (
 )
 from finn.kernels.artifacts.derivation import ProducerIdentity
 from finn.kernels.control import Exported, top_bus
-from finn.kernels.datatypes.scalar import ScalarEncoding
 from finn.kernels.fifo import FifoKernel
 from finn.kernels.physical.axi_stream import AxiStream
 from finn.kernels.physical.composition import Composition, StreamEnd
@@ -91,27 +98,11 @@ from finn.kernels.physical.contract import (
     StreamContract,
     compatibility,
 )
-from finn.kernels.physical.forms import Every, Repetition, Traversal
+from finn.dataflow.tensor import TENSOR, ScalarEncoding, Tensor
+from finn.dataflow.traversal import PRESENTATION, Presentation, unreplayed
 from finn.kernels.physical.lowering import lower_module_structure
 from finn.kernels.physical.structure import PhysicalStructure
 from finn.kernels.physical.validation import abi_pins
-
-
-@dataclass(frozen=True)
-class StreamSpec:
-    """The logical sequence a stream carries per consumer pass."""
-
-    element: ScalarEncoding
-    form: Traversal
-    repetition: Repetition = Repetition.ONCE
-    markers: tuple[Every, ...] = ()
-
-    @property
-    def payload_bits(self) -> int:
-        return self.form.lanes * self.element.bits
-
-
-STREAM_SPEC = default_semantics(StreamSpec)
 
 
 MODULE = ViewKey("module", default_semantics(ModuleBuildRequirements))
@@ -136,16 +127,30 @@ TIEOFFS_SEMANTICS = default_semantics(Tieoffs)
 TIEOFFS = ViewKey("tieoffs", TIEOFFS_SEMANTICS)
 
 
-def boundary_contract(name: str, spec: StreamSpec, endpoint: Endpoint) -> StreamContract:
+def boundary_contract(
+    name: str, element: ScalarEncoding, presentation: Presentation, endpoint: Endpoint
+) -> StreamContract:
     """The AXIS port a composed module presents for one of its own streams."""
-    if len(spec.markers) > 1:
+    if len(presentation.markers) > 1:
         raise ValueError("an AXIS boundary carries at most one marker")
+    form = presentation.form
     stream = AxiStream(
-        name, spec.element.dtype, spec.form.lanes, endpoint=endpoint, last=bool(spec.markers)
+        name, element.dtype, form.lanes, endpoint=endpoint, last=bool(presentation.markers)
     )
     transport = stream.native(clock=CLOCK, reset=RESET)
-    markers = {transport.markers[0].signal: spec.markers[0]} if spec.markers else {}
-    return StreamContract(transport, spec.element, spec.form, spec.repetition, markers)
+    markers = {transport.markers[0].signal: presentation.markers[0]} if presentation.markers else {}
+    return StreamContract(transport, element, form, presentation.repetition, markers)
+
+
+def boundary_presentation(internal: StreamContract, *, receiving: bool) -> Presentation:
+    """What a boundary presents for its internal end: the receiver realizes replay.
+
+    An input boundary (``receiving``) presents its consumer's form without
+    replay; an output boundary presents its producer's form. Neither carries
+    markers, and a boundary streams a single pass.
+    """
+    form = unreplayed(internal.form) if receiving else internal.form
+    return Presentation(form)
 
 
 @dataclass(frozen=True)
@@ -167,13 +172,14 @@ class _Direct(Space):
 
 
 class StreamFifo(Space):
-    """An identity adapter: the stream's own spec on both sides of a native FIFO."""
+    """An identity adapter: what arrives at it, presented on both sides of a native FIFO."""
 
-    spec: StreamSpec = Param(semantics=STREAM_SPEC)
+    tensor: Tensor = Param(semantics=TENSOR)
+    arriving: Presentation = Param(semantics=PRESENTATION)
 
     @derived
     def word_bits(self) -> int:
-        return self.spec.payload_bits
+        return self.arriving.form.lanes * self.tensor.element.bits
 
     buffer = FifoKernel(
         word_bits=word_bits,
@@ -182,12 +188,12 @@ class StreamFifo(Space):
 
     @view(semantics=STAGE_SEMANTICS)
     def stage(self) -> Stage:
-        spec = self.spec
+        element, arriving = self.tensor.element, self.arriving
         source, sink = self.buffer.interfaces
         return Stage(
             self.buffer.build_requirements,
-            StreamContract(source, spec.element, spec.form),
-            StreamContract(sink, spec.element, spec.form),
+            StreamContract(source, element, arriving.form, arriving.repetition),
+            StreamContract(sink, element, arriving.form, arriving.repetition),
         )
 
 
@@ -229,10 +235,10 @@ class Stream(Space):
     ``ends`` holds the port each present user presents on this stream, located
     by the user's name and the input it references this stream through. A side
     without a user is the composite's boundary, presented as the AXIS port
-    ``port``.
+    ``port`` (``boundary_presentation``).
     """
 
-    spec: StreamSpec = Param(semantics=STREAM_SPEC)
+    tensor: Tensor = Param(semantics=TENSOR)
     port: str = Param(required=False)
     ends = Users(PORT)
 
@@ -255,14 +261,46 @@ class Stream(Space):
         try:
             # A side without a user is the boundary. Seen from inside, the
             # composite's input is the AXIS target and its output the initiator.
-            source = producers[0] if producers else (None, self._boundary(Endpoint.TARGET))
-            sink = consumers[0] if consumers else (None, self._boundary(Endpoint.INITIATOR))
+            if not producers:
+                inside = consumers[0][1]
+                producers.append((None, self._boundary(inside, Endpoint.TARGET)))
+            if not consumers:
+                inside = producers[0][1]
+                consumers.append((None, self._boundary(inside, Endpoint.INITIATOR)))
         except ValueError as error:
             return reject("stream-boundary", str(error))
-        return Endpoints(source[0], source[1], sink[0], sink[1])
+        (source_owner, source), (sink_owner, sink) = producers[0], consumers[0]
+        return Endpoints(source_owner, source, sink_owner, sink)
 
-    def _boundary(self, endpoint: Endpoint) -> StreamContract:
-        return boundary_contract(self.port, self.spec, endpoint)
+    def _boundary(self, inside: StreamContract, endpoint: Endpoint) -> StreamContract:
+        receiving = endpoint is Endpoint.TARGET
+        presentation = boundary_presentation(inside, receiving=receiving)
+        return boundary_contract(self.port, self.tensor.element, presentation, endpoint)
+
+    @constraint
+    def well_formed(self) -> bool | Rejected:
+        """Every end traverses this stream's tensor, in its element encoding."""
+        tensor = self.tensor
+        for end in self.ends:
+            contract = end.value
+            if contract.form.shape != tensor.shape:
+                return reject(
+                    "stream-tensor",
+                    f"{end.node}.{end.member} traverses a {contract.form.shape} tensor; "
+                    f"the stream carries {tensor.shape}",
+                )
+            if contract.element != tensor.element:
+                return reject(
+                    "stream-tensor",
+                    f"{end.node}.{end.member} carries {contract.element.datatype_name}; "
+                    f"the stream carries {tensor.element.datatype_name}",
+                )
+        return True
+
+    @derived(semantics=PRESENTATION)
+    def arriving(self) -> Presentation:
+        """What the source presents: the presentation any stage inside the stream receives."""
+        return self.endpoints.source.presentation
 
     @view(semantics=STAGE_SEMANTICS)
     def stage(self) -> Stage:
@@ -294,7 +332,7 @@ class Stream(Space):
         ends = self.endpoints
         return Connection(ends.source_owner, ends.source, ends.sink_owner, ends.sink, self.stage)
 
-    connection = View(link, requires=(compatible,))
+    connection = View(link, requires=(well_formed, compatible))
     exports = {CONNECTION: connection}
 
 
@@ -306,7 +344,10 @@ def _refusal(found: Sequence[Mismatch]) -> bool | Rejected:
 
 class BufferedStream(Stream):
     transport: _Direct | StreamFifo = Decision(
-        values={"direct": _Direct(), "fifo": StreamFifo(spec=Stream.spec)}
+        values={
+            "direct": _Direct(),
+            "fifo": StreamFifo(tensor=Stream.tensor, arriving=Stream.arriving),
+        }
     )
     stage = View(transport.stage)
 
@@ -521,14 +562,13 @@ __all__ = [
     "MODULE",
     "PORT",
     "RESET",
-    "STREAM_SPEC",
     "Stage",
     "Stream",
     "StreamFifo",
-    "StreamSpec",
     "TIEOFFS",
     "TIEOFFS_SEMANTICS",
     "Tieoffs",
     "boundary_contract",
+    "boundary_presentation",
     "netlist",
 ]

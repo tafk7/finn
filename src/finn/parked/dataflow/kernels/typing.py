@@ -3,7 +3,7 @@
 
 """Canonical integer operand support for the admitted dot-product families."""
 
-from finn.dataflow.model.logical.region import NumericElementType, element_width
+from finn.parked.dataflow.logical_values.region import NumericElementType, element_width
 from finn.kernels.space.declarations import reject
 
 _MULTIPLIABLE_FAMILIES = ("INT", "UINT")
