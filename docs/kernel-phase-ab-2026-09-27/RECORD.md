@@ -170,6 +170,9 @@ the rule and one example.
 
 ## B2. Clock and reset as a Space (J3)
 
+*Revised after B3: the domain nodes below are removed. See "B2 revision"
+at the end of this record.*
+
 **Model** (`src/finn/kernels/clocks.py`, new).
 
 - A `ClockDomain` is a node in the composite, named by its top pins
@@ -293,3 +296,61 @@ remaining stream migrations (eltwise, input generator); the query pass items
 the work touched: the `when=` guards an optional stream still needs, and
 `Users` through forwarding composites (a FIFO stage is clocked from its
 stream's domain rather than as a user of it).
+
+## B2 revision (D11, after B3)
+
+**Decision (D11).** A Kernel owns the design choices of one generated module.
+It may compose sub-kernels inside that module and exposes a complete pin
+interface for it. It does not wire its own instance into a design: the design's
+clocks and frequencies, clock-domain crossing, and edges between separately
+generated modules belong to the dataflow or artifact-integration layer.
+
+**Why the domain nodes went.** FINN's baseline MVAU exposes exactly two clock
+choices, `pumpedCompute` and `pumpedMemory`. The interface names follow from
+them (`ap_clk`, `ap_rst_n`, and `ap_clk2x` only when pumped), and
+`CreateStitchedIP` makes one design-wide clock plus an optional 2x clock. The
+clock also enters code generation as the target period: `_resolve_segment_len`
+derives the DSP58 segmentation from it. B2's `ClockDomain`/`DerivedClock`
+nodes carried no choice: they restated the kernels' pin roles and modelled
+instance wiring inside the kernel layer.
+
+**Change (`f23564641`).**
+
+- `clocks.py`, `Stream.clock`, the kernels' `clock`/`fast_clock` inputs and
+  clocking views, and `Members(DOMAIN)` are removed.
+- A composite drives each child clock and reset pin by its declared role: a
+  free clock from `ap_clk`, a clock at twice another from `ap_clk2x`, a reset
+  from `ap_rst_n` with its polarity. The module has `ap_clk2x`, its alignment,
+  and a reset synchronous to both only when some child declares a double-rate
+  clock. Any other clock ratio is refused, as is an input nothing drives.
+- Kept from B2: tie-offs, the unpumped `ap_clk2x` drop (dotp ties its input
+  low), and no routing by name.
+- `ControlBus` no longer references a domain; `netlist` associates an exported
+  bus with the module's clock and reset.
+- dotp takes `target_period_ns` instead of a literal `segment_length`, and
+  derives SEGMENTLEN by FINN's timing model: 0.741 ns through the first DSP58,
+  0.605 ns through each further one, against half the period when pumped,
+  capped at the chain length. MVAU forwards it; `mvau_assembly` defaults to
+  5 ns (200 MHz). A period that fits no DSP stage is refused
+  (`dotp-clock-period`).
+
+**Recorded fingerprint change.** Before the period change the revised
+structures equal B3's exactly (fingerprints identical). The period change
+moves SEGMENTLEN from 0 to 1 in all six fingerprinted configurations: their
+chains are one DSP58 long (SIMD 2, or SIMD 4 pumped), so 0 (unsegmented) and 1
+build the same pipeline. Every fingerprint changes by that parameter alone.
+
+| Evidence | Result | Transcript (`b2-revision/`) |
+|---|---|---|
+| `scripts/check-kernels.sh` on the revision tree (`3c974c89b` + the change, committed unchanged as `f23564641`) | Space **427**; kernels **787 passed, 0 skipped**; clean; exit 0 | `gate-check-kernels.txt` |
+| `scripts/check-dataflow-design.sh` | **16 passed**; clean; exit 0 | `gate-check-dataflow-design.txt` |
+| MVAU numeric XSI | **28/28 PASS** with the derived segmentation | `mvau-numeric-*.txt` |
+| dotp numeric XSI (`pure_dot_product_numeric`) | **13/13 configurations PASS**, free and stalled output. The four segmented cases now reach SEGMENTLEN 1 through the period (1.2 ns, or 2.4 ns pumped) | `pure-dot-product-numeric.txt` |
+| dotp stress sweep (`--stress`) | **8/8 PASS**: sustained one-beat reductions with long stalls, including the segmented cases | `pure-dot-product-stress.txt` |
+| Structures | equal to B3's before the period change (`fingerprints-before-period.txt` equals B3); after it, only SEGMENTLEN differs | `structure-diff-period.txt` |
+| Keys | decision keys identical; nodes of the domain model removed; the MVAU formal `segment_length` becomes `target_period_ns`, and dotp's `segment_length` is derived | `keys-diff.txt` |
+
+Tests (`tests/kernels/test_clocking.py`): the unpumped and pumped MVAU
+clocking; a child's pins driven by role whatever their names; an undriven input
+and a 3x clock refused. `test_dotp.py`: the segmentation follows the period
+(five cases), and an infeasible period is refused.

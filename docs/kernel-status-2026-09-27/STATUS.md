@@ -21,7 +21,7 @@ Phase C is next.
 | `56475970c` | A1: per-checkout `deps/` | [record](../kernel-phase-ab-2026-09-27/RECORD.md) |
 | `34d734de8` | A2: FinnLib consolidated on `11b5c64b` (fork branch `kernels/consolidated-20260927`), memstream ported | same |
 | `d42dc05c6`, `d7a64b0be` | B1: per-input exports (engine); ports check their streams; per-port attribution | same, [engine proposal](../kernel-phase-ab-2026-09-27/PROPOSAL-per-input-exports.md) |
-| `bf9dfe0c9` | B2: clock domains as referenced Spaces; unpumped `ap_clk2x` dropped | same |
+| `bf9dfe0c9` | B2: clock domains as referenced Spaces; unpumped `ap_clk2x` dropped. *Revised after B3 (D11): domain nodes removed, clocks driven by role, target period added* | same |
 | `75595eedb` | B3: control buses, tie-offs, sidebands, child padding; thresholding on streams | same |
 
 **Validation at the landing (`545981eea`):**
@@ -64,6 +64,7 @@ Phase C is next.
 | D7 | Key and ABI changes the increments need are accepted when recorded: replay becoming a `Decision`, the fused-activation stream, and dropping the unpumped `ap_clk2x` top pin (audit H3) |
 | D8 | Per-port refusal attribution is fixed now, in J2. A stream input names the one port it presents, so a refusal reaches only its own stream (audit H4) |
 | D9 | The audit's reordered plan is approved: VVAU before thresholding, with J2 and J4 added (audit H6) |
+| D11 | *Added after B3.* **A Kernel owns the design choices of one generated module.** It may compose sub-kernels inside that module and exposes a complete pin interface for it: pin roles, clock relations and buses. It does not wire its own instance into a design. Instance wiring (the design's clocks and frequencies, clock-domain crossing, edges between separately generated modules) consumes that interface and belongs to the dataflow or artifact-integration layer. Consequences: B2's `ClockDomain`/`DerivedClock` nodes and `Stream.clock` are removed. Composites drive child clocks by pin role, and the only clock choices are per-kernel pumping. The target clock period is a kernel input: dotp derives its DSP58 segmentation from it, as FINN's RTL MVAU does |
 | D10 | *Added after B1.* B1's port checks are kept, but they are a kernel-side stopgap: dotp checks what it reads against the forms it is given. A stream that knows the whole tensor it iterates, and so which foldings of it are valid, is the robust model. That opens design questions about the `Stream` object and how much of the original dataflow modeling corpus to adopt or revise. **Parked** as the stream and dataflow modeling revision (Phase D) |
 
 ## 3. Known problems
@@ -77,7 +78,7 @@ All of these are verified in the audit (§/probe references there).
 | ~~No non-stream interfaces~~ | Fixed in B3: control buses exported or tied off, sideband streams, child padding |
 | ~~FinnLib pinned three ways~~ | Fixed in A2: one pin, `11b5c64b`, on the fork. Upstream has none of the carried commits yet |
 | ~~Shared `deps/finnlib`~~ | Fixed in A1 |
-| ~~Clock and reset routed by pin name~~ | Fixed in B2: clock-domain nodes; an unpumped design has no `ap_clk2x` |
+| ~~Clock and reset routed by pin name~~ | Fixed in B2 and its revision: child clocks and resets are driven by declared role; an unpumped design has no `ap_clk2x` |
 | **Only 4 of 11 kernels use the stream idiom** | Thresholding joined in B3 (streams, control, tie-offs; not yet fused into MVAU). Eltwise and the input generator are standalone |
 | **HLS kernels can't be placed by `netlist`** | They yield HLS source requirements with no pin ABI. No HLS kernel is on the current path (D5); the HLS synthesis stage is future work (Phase D) |
 | **An unused stream is refused**, and a boundary needs its port name declared up front | Optional streams need explicit `when=` guards |
@@ -99,7 +100,7 @@ are done (see the record); Phase C has not started.
 | Step | Content | Depends on |
 |---|---|---|
 | **B1. J2: ports that check their streams** | Every stream port verifies lanes, form, repetition and markers against its stream. Per-port attribution (D8): the small engine addition where a stream input names its presented port, and `Users` yields only that port | A2 |
-| **B2. J3: clock and reset as a Space** | A clock-domain family referenced by kernels. The netlist drives pins from references, not names, and the unpumped `ap_clk2x` is dropped (D7) | A2 |
+| **B2. J3: clock and reset** | As built: a clock-domain family referenced by kernels. Revised (D11): child clocks and resets are driven by pin role, not by domain nodes or names; the unpumped `ap_clk2x` is dropped (D7); the target clock period sets dotp's segmentation | A2 |
 | **B3. J4: non-stream interfaces** | AXI-Lite export and tie-off, sideband buses, and padding disposal between children | B2 |
 
 ### Phase C: robust MVAU capabilities (the audit's order)
@@ -122,7 +123,7 @@ are done (see the record); Phase C has not started.
 | **Query and search tools** | The next Space-engine pass (design record §3). The audit's "queries wanted" list is its input |
 | **Reusing cached results across snapshots** | A local edit re-runs the whole graph. It matters once search runs over graphs of many kernels |
 | **Other standalone kernels** (eltwise, input generator) | Move them to the stream idiom when a composite needs them |
-| **Stream and dataflow modeling revision** (D10, parked) | Streams that understand the full tensor they iterate and the valid folding configurations over it, instead of kernels checking the forms they are handed. Decide the shape of `Stream`, and how much of the dataflow modeling corpus (`finn.dataflow`, the roster's S1 contract, the parked dataflow model) to adopt or iterate on. It subsumes B1's dotp form checks and informs adapters (C6). Plan it together with the `finn.dataflow` model pass |
+| **Stream and dataflow modeling revision** (D10, parked) | Streams that understand the full tensor they iterate and the valid folding configurations over it, instead of kernels checking the forms they are handed. Decide the shape of `Stream`, and how much of the dataflow modeling corpus (`finn.dataflow`, the roster's S1 contract, the parked dataflow model) to adopt or iterate on. It subsumes B1's dotp form checks and informs adapters (C6). It also owns instance wiring (D11): edges between separately generated modules, and the design's clocks. Whether a stitched design is one more composite wired by the same `netlist` is a question for this pass. Plan it together with the `finn.dataflow` model pass |
 | **`finn.dataflow` model pass** | After robust MVAU; to be planned with the stream and dataflow modeling revision |
 | **Diagrams** in `scratchpad/space/diagrams/` | Regenerate them for the new API |
 

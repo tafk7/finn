@@ -1,0 +1,29 @@
+Evidence: /tmp/b2r/pure
+PASS tiny stalled=False result=INT4
+PASS tiny stalled=True result=INT4
+PASS packed_e1 stalled=False result=INT9
+PASS packed_e1 stalled=True result=INT9
+PASS packed_e2_pumped stalled=False result=INT9
+PASS packed_e2_pumped stalled=True result=INT9
+PASS packed_dsp58 stalled=False result=INT9
+PASS packed_dsp58 stalled=True result=INT9
+PASS int8_signed stalled=False result=INT19
+PASS int8_signed stalled=True result=INT19
+PASS int8_unsigned stalled=False result=INT19
+PASS int8_unsigned stalled=True result=INT19
+PASS int8_odd_pumped stalled=False result=INT19
+PASS int8_odd_pumped stalled=True result=INT19
+PASS int8_segmented_pumped stalled=False result=INT20
+PASS int8_segmented_pumped stalled=True result=INT20
+PASS signed9 stalled=False result=INT19
+PASS signed9 stalled=True result=INT19
+PASS unsigned17 stalled=False result=INT21
+PASS unsigned17 stalled=True result=INT21
+PASS signed18 stalled=False result=INT22
+PASS signed18 stalled=True result=INT22
+PASS unsigned23 stalled=False result=INT27
+PASS unsigned23 stalled=True result=INT27
+PASS int8_segmented stalled=False result=INT19
+PASS int8_segmented stalled=True result=INT19
+PASS 13 configurations, two transport modes each
+exit=0
