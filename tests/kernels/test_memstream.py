@@ -27,6 +27,7 @@ from finn.kernels.target import DspBlock
 
 ROOT = Path(__file__).resolve().parents[2]
 WEIGHTS = ((-4, -3, -2, -1), (0, 1, 2, 3), (3, 2, 1, 0), (-1, -2, -3, -4))
+# MatMul stores its weights (k, n): WEIGHTS read by output.
 MATMUL = dict(
     rows=3,
     reduction=4,
@@ -37,7 +38,7 @@ MATMUL = dict(
     simd=2,
     target_dsp=DspBlock.DSP48E2,
     weight_delivery=WeightDelivery.MEMSTREAM,
-    weights=WEIGHTS,
+    weights=tuple(zip(*WEIGHTS)),
 )
 
 

@@ -6,10 +6,11 @@
 The first layer produces its results PE = 4 lanes a beat, each row once; the
 second reads them as activations, SIMD = 2 lanes a beat, each row once per
 output fold, framed by reduction. Neither kernel knows the other: each
-presents its own traversal of the hidden tensor, derived from its own nest.
+presents its own traversal of the hidden tensor, derived from its own schedule.
 The stream between them plans a width conversion, a replay and the frame, and
 its adapter places a ``vpc`` and an ``input_gen``. The composed module computes
-``(x @ W1.T) @ W2.T`` in XSim; a stream that admits no adapter refuses it.
+``(x @ W1) @ W2`` in XSim, weights stored ``(k, n)``; a stream that admits no
+adapter refuses it.
 """
 
 from __future__ import annotations
@@ -23,16 +24,17 @@ import pytest
 from qonnx.core.datatype import DataType
 
 from finn.core.space import Members, Rejected, Space, design_space, view
-from finn.dataflow.nest import period
 from finn.dataflow.plan import Step
+from finn.dataflow.gemm import Form
 from finn.dataflow.tensor import ScalarEncoding, Tensor
+from finn.dataflow.traversal import period
 from finn.kernels.artifacts.build import materialize_module_sources, prepare_module_build
 from finn.kernels.artifacts.derivation import ProducerIdentity
 from finn.kernels.artifacts.store import ArtifactStore
 from finn.kernels.configure import commit
 from finn.kernels.delivery import CyclicDelivery
-from finn.kernels.dotp import Contraction, PackedDotpKernel, dotp_presentations
-from finn.kernels.matmul import contraction_iteration, exact_result_dtype
+from finn.kernels.dotp import PackedDotpKernel, dotp_sequences
+from finn.kernels.matmul import exact_result_dtype, matmul_schedule
 from finn.kernels.resources import resource_root, template_root
 from finn.kernels.streams import (
     COMPOSED,
@@ -52,21 +54,17 @@ PE1, SIMD1, PE2, SIMD2 = 4, 2, 2, 2
 A = W = DataType["INT3"]
 H = exact_result_dtype(INPUTS, A, W)
 Y = exact_result_dtype(HIDDEN, H, W)
-W1 = tuple(tuple((3 * n + 2 * k) % 7 - 3 for k in range(INPUTS)) for n in range(HIDDEN))
-W2 = tuple(tuple((2 * n + 5 * k) % 7 - 3 for k in range(HIDDEN)) for n in range(OUTPUTS))
+W1 = tuple(tuple((3 * n + 2 * k) % 7 - 3 for n in range(HIDDEN)) for k in range(INPUTS))
+W2 = tuple(tuple((2 * n + 5 * k) % 7 - 3 for n in range(OUTPUTS)) for k in range(HIDDEN))
 X = tuple(tuple((5 * r + 3 * k) % 8 - 4 for k in range(INPUTS)) for r in range(ROWS))
 
-FIRST = contraction_iteration(
-    Contraction.DENSE, rows=ROWS, reduction=INPUTS, outputs=HIDDEN, pe=PE1, simd=SIMD1
-)
-SECOND = contraction_iteration(
-    Contraction.DENSE, rows=ROWS, reduction=HIDDEN, outputs=OUTPUTS, pe=PE2, simd=SIMD2
-)
+FIRST = matmul_schedule(rows=ROWS, reduction=INPUTS, outputs=HIDDEN, pe=PE1, simd=SIMD1)
+SECOND = matmul_schedule(rows=ROWS, reduction=HIDDEN, outputs=OUTPUTS, pe=PE2, simd=SIMD2)
 
 
-def weight_period(iteration, pe: int, simd: int):
+def weight_period(schedule, pe: int, simd: int):
     """One pass of the weights in the order the layer reads them."""
-    presented = dotp_presentations(iteration, pe=pe, simd=simd, contraction=Contraction.DENSE)
+    presented = dotp_sequences(schedule, Form.DENSE, pe=pe, simd=simd)
     assert not isinstance(presented, Rejected)
     return period(presented.weights.form)
 
@@ -74,9 +72,9 @@ def weight_period(iteration, pe: int, simd: int):
 def layered(*, adaptable: bool = True):
     class Layered(Space):
         x = Stream(tensor=Tensor((ROWS, INPUTS), ScalarEncoding(A)), port="in0_V")
-        w1 = Stream(tensor=Tensor((HIDDEN, INPUTS), ScalarEncoding(W)))
+        w1 = Stream(tensor=Tensor((INPUTS, HIDDEN), ScalarEncoding(W)))
         h = Stream(tensor=Tensor((ROWS, HIDDEN), ScalarEncoding(H)), adaptable=adaptable)
-        w2 = Stream(tensor=Tensor((OUTPUTS, HIDDEN), ScalarEncoding(W)))
+        w2 = Stream(tensor=Tensor((HIDDEN, OUTPUTS), ScalarEncoding(W)))
         y = Stream(tensor=Tensor((ROWS, OUTPUTS), ScalarEncoding(Y)), port="out0_V")
         rom1 = CyclicDelivery(
             dtype=W, form=weight_period(FIRST, PE1, SIMD1), values=W1, output_stream=w1
@@ -92,7 +90,7 @@ def layered(*, adaptable: bool = True):
             simd=SIMD1,
             target_dsp=DspBlock.DSP48E2,
             target_period_ns=5.0,
-            iteration=FIRST,
+            schedule=FIRST,
             activation_stream=x,
             weights_stream=w1,
             result_stream=h,
@@ -105,7 +103,7 @@ def layered(*, adaptable: bool = True):
             simd=SIMD2,
             target_dsp=DspBlock.DSP48E2,
             target_period_ns=5.0,
-            iteration=SECOND,
+            schedule=SECOND,
             activation_stream=h,
             weights_stream=w2,
             result_stream=y,
@@ -187,10 +185,10 @@ def test_the_two_layers_compute_in_xsim(tmp_path, stalled):
     materialized = materialize_module_sources(prepared, store)
     sources = [str(Path(materialized.directory) / path) for path in materialized.files]
     hidden = [
-        [sum(X[r][k] * W1[n][k] for k in range(INPUTS)) for n in range(HIDDEN)] for r in range(ROWS)
+        [sum(X[r][k] * W1[k][n] for k in range(INPUTS)) for n in range(HIDDEN)] for r in range(ROWS)
     ]
     y = [
-        [sum(hidden[r][k] * W2[n][k] for k in range(HIDDEN)) for n in range(OUTPUTS)]
+        [sum(hidden[r][k] * W2[k][n] for k in range(HIDDEN)) for n in range(OUTPUTS)]
         for r in range(ROWS)
     ]
     a_bits, y_bits = A.bitwidth(), Y.bitwidth()

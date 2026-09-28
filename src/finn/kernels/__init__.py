@@ -14,7 +14,6 @@ if TYPE_CHECKING:
     from finn.kernels.configure import commit
     from finn.kernels.delivery import CyclicDelivery
     from finn.kernels.dotp import (
-        Contraction,
         DotpAxiKernel,
         Int8Dsp58DotpKernel,
         PackedDotpKernel,
@@ -32,7 +31,6 @@ if TYPE_CHECKING:
 _LAZY_EXPORTS = {
     "CyclicDelivery": ("finn.kernels.delivery", "CyclicDelivery"),
     "commit": ("finn.kernels.configure", "commit"),
-    "Contraction": ("finn.kernels.dotp", "Contraction"),
     "DotpAxiKernel": ("finn.kernels.dotp", "DotpAxiKernel"),
     "Int8Dsp58DotpKernel": ("finn.kernels.dotp", "Int8Dsp58DotpKernel"),
     "PackedDotpKernel": ("finn.kernels.dotp", "PackedDotpKernel"),
@@ -64,7 +62,6 @@ def __getattr__(name: str) -> object:
 __all__ = [
     "CyclicDelivery",
     "commit",
-    "Contraction",
     "DotpAxiKernel",
     "Int8Dsp58DotpKernel",
     "PackedDotpKernel",

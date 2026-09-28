@@ -27,7 +27,7 @@ from finn.kernels.artifacts.store import ArtifactStore
 from finn.kernels.control import EXPORTED, ControlBus
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.dotp import PackedDotpKernel
-from finn.dataflow.nest import Einsum, Iteration, accesses, fold
+from finn.kernels.matmul import matmul_schedule
 from finn.kernels.physical.structure import ConstantBits, PinSlice
 from finn.kernels.physical.validation import abi_pins
 from finn.kernels.resources import resource_root, template_root
@@ -49,12 +49,9 @@ REPETITIONS, WIDTH, HEIGHT, SIMD = 2, 4, 2, 2
 FOLDS = WIDTH // SIMD
 A, W, R = DataType["INT3"], DataType["INT3"], DataType["INT9"]
 THRESHOLDS = (((-5, 0, 7), (-2, 3, 10)),)
-DENSE = Einsum("rk,nk->rn")
-EXTENTS = {"r": REPETITIONS, "k": WIDTH, "n": HEIGHT}
-NEST = fold(DENSE, EXTENTS, {"n": 1, "k": SIMD})
-ITERATION = Iteration(NEST, accesses(DENSE, NEST, EXTENTS))
+SCHEDULE = matmul_schedule(rows=REPETITIONS, reduction=WIDTH, outputs=HEIGHT, pe=1, simd=SIMD)
 X = Tensor((REPETITIONS, WIDTH), ScalarEncoding(A))
-WEIGHT_TENSOR = Tensor((HEIGHT, WIDTH), ScalarEncoding(W))
+WEIGHT_TENSOR = Tensor((WIDTH, HEIGHT), ScalarEncoding(W))
 RESULT_TENSOR = Tensor((REPETITIONS, HEIGHT), ScalarEncoding(R))
 LEVEL_TENSOR = Tensor((REPETITIONS, HEIGHT), ScalarEncoding(DataType["UINT2"]))
 
@@ -78,7 +75,7 @@ class Activated(Space):
         activation_stream=activations,
         weights_stream=weights,
         result_stream=results,
-        iteration=ITERATION,
+        schedule=SCHEDULE,
     )
     activate = ThresholdingAxiKernel(
         input_dtype=R,

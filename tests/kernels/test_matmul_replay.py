@@ -21,7 +21,8 @@ from finn.dataflow.tensor import ScalarEncoding
 from finn.dataflow.traversal import LevelEnd, vector_major
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.configure import commit
-from finn.kernels.matmul import Contraction, MatMulKernel, matmul_assembly
+from finn.dataflow.gemm import Form
+from finn.kernels.matmul import MatMulKernel, matmul_assembly
 from finn.kernels.physical.contract import StreamContract
 from finn.kernels.physical.stream import MarkerKind, ReadyValidStream, StreamMarker
 from finn.kernels.physical.structure import PhysicalPin, PinSlice, UnusedOutput
@@ -60,13 +61,13 @@ def test_the_activation_stream_plans_the_replay_and_its_frame():
     keys = {item.key for item in inspection.decisions(point)}
     assert {"activations.adapter", "activations.adapter_ram_style"} <= keys
     assert "replay" not in keys and not hasattr(MatMulKernel, "replayed")
-    # A per-channel row passes once: the plan is the frame marker alone.
-    facts = {**FACTS, "target_dsp": DspBlock.DSP58, "contraction": Contraction.PER_CHANNEL}
-    per_channel = commit(
+    # A depthwise row passes once: the plan is the frame marker alone.
+    facts = {**FACTS, "target_dsp": DspBlock.DSP58, "form": Form.DEPTHWISE}
+    depthwise = commit(
         design_space(MatMulKernel(**facts, target_period_ns=5.0)),
         {**CHOICES, "compute": "int8_dsp58", "realization": "native"},
     )
-    assert per_channel.activations.plan.steps == (Step.MARKERS,)
+    assert depthwise.activations.plan.steps == (Step.MARKERS,)
 
 
 def test_the_input_gen_replays_each_row_and_closes_each_fold_group():

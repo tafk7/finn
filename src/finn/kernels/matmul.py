@@ -3,26 +3,25 @@
 
 """A matrix-multiply unit on streams, with external or cyclic on-chip weights.
 
-The ``contraction`` fixes how activations meet the weights.
+The ``form`` (``finn.dataflow.gemm``) fixes how activations meet the weights,
+in canonical GEMM indices: ``m`` the rows, ``n`` the outputs, ``k`` the
+reduction. Weights are stored ``(k, n)``, as ONNX ``MatMul`` stores them.
 
-- ``DENSE``: for activations X[row, k] and weights W[output, k], the result is
-  Y[row, output] = sum over k of X[row, k] * W[output, k]. Every output reads
-  the whole activation row, so the row is replayed once per output fold.
-  Activation beats traverse (row, reduction fold) with SIMD low-first fields.
-- ``PER_CHANNEL`` (depthwise): for activations X[row, k, c] and weights
-  W[c, k], Y[row, c] = sum over k of X[row, k, c] * W[c, k]. Each output
+- ``DENSE``: Y[m, n] = sum over k of X[m, k] * W[k, n]. Every output reads the
+  whole activation row, so the row is replayed once per output fold.
+  Activation beats traverse (m, k fold) with SIMD low-first fields.
+- ``DEPTHWISE``: Y[m, n] = sum over k of X[m, k, n] * W[k, n]. Each output
   channel reads its own activations, so nothing is replayed. Activation beats
-  traverse (row, channel fold, window fold) with PE channels of SIMD window
-  positions, channel fastest.
+  traverse (m, n fold, k fold) with PE channels of SIMD window positions,
+  channel fastest.
 
-Each contraction is an einsum over index letters (``Contraction.einsum``).
-PE folds the output index, SIMD the reduced one, and the folded nest walks the
-output's indices, then the reduction (``finn.dataflow.nest``). Every stream's
-presentation derives from that one iteration through dotp's port conventions
-(``dotp_presentations``): compute and external weights traverse (row, output
-fold, reduction fold) with (PE, SIMD) fields, results (row, output fold) with
-PE fields, and the frame marker closes every reduction. A densely realized
-per-channel operation reads its (R, K, C) activations as an (R, K * C) view.
+PE folds ``n``, SIMD folds ``k``, and the ``schedule`` walks ``m``, then
+``n``, then the reduction (``finn.dataflow.schedule``). Every stream's beat
+sequence derives from that one schedule through dotp's port conventions
+(``dotp_sequences``): compute and external weights traverse (m, n fold, k
+fold) with (PE, SIMD) fields, results (m, n fold) with PE fields, and the
+frame marker closes every reduction. A densely realized depthwise operation
+reads its (M, K, N) activations as an (M, K * N) view.
 There is no top-level last: the declared extents determine all stream lengths.
 Input high padding is ignored; output high padding is unspecified.
 
@@ -68,17 +67,17 @@ from finn.kernels.control import EXPORTED, ControlBus
 from finn.kernels.delivery import CyclicDelivery
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.dotp import (
-    DOTP_PRESENTATIONS,
-    Contraction,
+    DOTP_SEQUENCES,
     DotpAxiKernel,
-    DotpPresentations,
+    DotpSequences,
     Int8Dsp58DotpKernel,
     PackedDotpKernel,
-    dotp_presentations,
+    dotp_sequences,
 )
+from finn.dataflow.gemm import Form, k, m, n
+from finn.dataflow.schedule import SCHEDULE, Schedule
 from finn.dataflow.tensor import TENSOR, Tensor
-from finn.dataflow.nest import ITERATION, Einsum, Iteration, accesses, fold, period
-from finn.dataflow.traversal import TRAVERSAL, Traversal
+from finn.dataflow.traversal import TRAVERSAL, Traversal, period
 from finn.kernels.physical.structure import PhysicalStructure
 from finn.kernels.streams import (
     COMPOSED,
@@ -145,7 +144,7 @@ class _Folding:
     outputs: int
     pe: int
     simd: int
-    per_channel: bool = False
+    depthwise: bool = False
 
     def __post_init__(self) -> None:
         for name in ("rows", "reduction", "outputs", "pe", "simd"):
@@ -163,7 +162,7 @@ class _Folding:
 
     @property
     def activation_beats(self) -> int:
-        channel_folds = self.output_folds if self.per_channel else 1
+        channel_folds = self.output_folds if self.depthwise else 1
         return self.rows * channel_folds * self.reduction_folds
 
     @property
@@ -198,8 +197,8 @@ class MatMulKernel(Space):
     with a frame marker (markers only, per channel), and its ``adapter``
     realizes that plan. dotp consumes it with ``weight_stream`` and produces
     ``results`` for ``out0_V``. The
-    ``compute`` Decision places one core kernel; a per-channel contraction is
-    read only by the INT8 DSP58 core. The ``delivery`` Decision decides what drives
+    ``compute`` Decision places one core kernel; a depthwise form is read
+    natively only by the INT8 DSP58 core. The ``delivery`` Decision decides what drives
     ``weight_stream``: ``external`` places nothing, so the stream has only its
     consumer and is the boundary ``in1_V``; ``cyclic`` places the ``cyclic``
     CyclicDelivery node, which references the stream as its producer and owns
@@ -210,7 +209,7 @@ class MatMulKernel(Space):
     rows: int = Param()
     reduction: int = Param()
     outputs: int = Param()
-    contraction: Contraction = Param(default=Contraction.DENSE)
+    form: Form = Param(default=Form.DENSE)
     activation_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
     weights_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
     target_dsp: DspBlock = Param()
@@ -223,49 +222,51 @@ class MatMulKernel(Space):
     weight_sets: int = Param(default=1)
 
     @derived
-    def per_channel(self) -> bool:
-        return self.contraction is Contraction.PER_CHANNEL
+    def depthwise(self) -> bool:
+        return self.form is Form.DEPTHWISE
 
     @derived
     def multi_set(self) -> bool:
         return self.weight_sets > 1
 
-    # A per-channel operation runs natively (one channel per PE lane, INT8 DSP58
+    # A depthwise operation runs natively (one channel per PE lane, INT8 DSP58
     # only) or on the dense datapath with block-diagonal weights, on any core.
-    realization: str = Decision(values=("native", "dense"), when=per_channel)
+    realization: str = Decision(values=("native", "dense"), when=depthwise)
 
     @derived
-    def datapath(self) -> Contraction:
-        """The contraction the datapath computes: densely realized, a per-channel one is dense."""
-        if self.contraction is Contraction.DENSE or self.realization == "dense":
-            return Contraction.DENSE
-        return Contraction.PER_CHANNEL
+    def datapath(self) -> Form:
+        """The form the datapath computes: densely realized, a depthwise one is dense."""
+        if self.form is Form.DENSE or self.realization == "dense":
+            return Form.DENSE
+        return Form.DEPTHWISE
+
+    @derived
+    def dense_view(self) -> bool:
+        """Whether the datapath reads depthwise activations (M, K, N) as (M, K * N)."""
+        return self.depthwise and self.datapath is Form.DENSE
 
     @derived
     def datapath_reduction(self) -> int:
         """The datapath's K: the window times the channels when densely realized."""
-        if self.per_channel and self.datapath is Contraction.DENSE:
-            return self.reduction * self.outputs
-        return self.reduction
+        return self.reduction * self.outputs if self.dense_view else self.reduction
 
     @derived(semantics=INTEGER_TENSOR)
     def datapath_weights(self) -> IntegerTensor:
-        """The weights the datapath reads: block-diagonal when densely realized.
+        """The weights the datapath reads, ``(k, n)``: block-diagonal when densely realized.
 
-        W'[c, k * C + c'] = W[c, k] when c' = c, and 0 otherwise: the densely read
-        activation row (k, c') meets only its own channel's weights.
+        W'[k * N + c, n] = W[k, n] when c = n, and 0 otherwise: the densely read
+        activation row (k, c) meets only its own channel's weights.
         """
         weights = self.weights
-        if not (self.per_channel and self.datapath is Contraction.DENSE):
+        if not self.dense_view:
             return weights
         channels = self.outputs
 
         def blocks(operand: object) -> IntegerTensor:
             return tuple(
-                tuple(
-                    value if other == channel else 0 for value in row for other in range(channels)
-                )
-                for channel, row in enumerate(cast("tuple[tuple[int, ...], ...]", operand))
+                tuple(value if channel == output else 0 for output, value in enumerate(row))
+                for row in cast("tuple[tuple[int, ...], ...]", operand)
+                for channel in range(channels)
             )
 
         return tuple(blocks(item) for item in weights) if self.multi_set else blocks(weights)
@@ -290,7 +291,7 @@ class MatMulKernel(Space):
                 self.outputs,
                 self.pe,
                 self.simd,
-                self.datapath is Contraction.PER_CHANNEL,
+                self.datapath is Form.DEPTHWISE,
             )
         except ValueError as error:
             return reject("matmul-folding", str(error))
@@ -311,7 +312,7 @@ class MatMulKernel(Space):
 
     @constraint
     def realization_supported(self) -> bool | Rejected:
-        if self.per_channel and self.realization == "dense" and self.delivered == "external":
+        if self.depthwise and self.realization == "dense" and self.delivered == "external":
             return reject(
                 "matmul-realization",
                 "a dense realization builds block-diagonal weights, so it needs known weights",
@@ -320,33 +321,34 @@ class MatMulKernel(Space):
 
     dimensions = ConstraintGroup(dimensions_supported, realization_supported, delivery_supported)
 
-    # The iteration the datapath computes, the tensors the streams carry, and
+    # The schedule the datapath computes, the tensors the streams carry, and
     # what each end presents of them.
 
-    @derived(semantics=ITERATION)
-    def iteration(self) -> Iteration | Rejected:
-        """The datapath's contraction folded by PE (outputs) and SIMD (reduction)."""
-        f, contraction = self.folding, self.datapath
-        # The dense datapath reads each (K, C) row of a per-channel operand as K * C.
-        dense_view = self.per_channel and contraction is Contraction.DENSE
-        try:
-            return contraction_iteration(
-                contraction,
-                rows=f.rows,
-                reduction=f.reduction,
-                outputs=f.outputs,
-                pe=f.pe,
-                simd=f.simd,
-                activations=(f.rows, self.reduction, f.outputs) if dense_view else None,
-            )
-        except ValueError as error:
-            return reject("matmul-folding", str(error))
+    @derived(semantics=SCHEDULE)
+    def schedule(self) -> Schedule:
+        """The datapath's indices folded by PE (``n``) and SIMD (``k``), reduction innermost."""
+        f = self.folding
+        return matmul_schedule(
+            rows=f.rows, reduction=f.reduction, outputs=f.outputs, pe=f.pe, simd=f.simd
+        )
 
-    @derived(semantics=DOTP_PRESENTATIONS)
-    def presentations(self) -> DotpPresentations | Rejected:
+    @derived(semantics=default_semantics(tuple))
+    def activation_shape(self) -> tuple[int, ...]:
+        """The activation tensor: (M, K), or (M, K, N) depthwise, however it is read."""
+        f = self.folding  # reading it propagates its refusal of the extents
+        if self.depthwise:
+            return (f.rows, self.reduction, f.outputs)
+        return (f.rows, f.reduction)
+
+    @derived(semantics=DOTP_SEQUENCES)
+    def sequences(self) -> DotpSequences | Rejected:
         """What the compute core's ports present, whichever core computes."""
-        return dotp_presentations(
-            self.iteration, pe=self.pe, simd=self.simd, contraction=self.datapath
+        return dotp_sequences(
+            self.schedule,
+            self.datapath,
+            pe=self.pe,
+            simd=self.simd,
+            activations=self.activation_shape if self.dense_view else (),
         )
 
     @derived(semantics=TENSOR)
@@ -354,19 +356,20 @@ class MatMulKernel(Space):
         element = ScalarEncoding.admit(self.activation_dtype)
         if isinstance(element, Rejected):
             return element
-        return Tensor(self.iteration.operands[0].tensor, element)
+        return Tensor(self.activation_shape, element)
 
     @derived(semantics=TRAVERSAL)
     def weight_period(self) -> Traversal:
         """One pass of the weights: what a stored delivery repeats."""
-        return period(self.presentations.weights.form)
+        return period(self.sequences.weights.form)
 
     @derived(semantics=TENSOR)
     def weight_tensor(self) -> Tensor | Rejected:
         element = ScalarEncoding.admit(self.weights_dtype)
         if isinstance(element, Rejected):
             return element
-        return Tensor(self.iteration.operands[1].tensor, element)
+        f = self.folding
+        return Tensor((f.reduction, f.outputs), element)
 
     @derived(semantics=TENSOR)
     def set_tensor(self) -> Tensor:
@@ -381,7 +384,8 @@ class MatMulKernel(Space):
         element = ScalarEncoding.admit(self.result_type)
         if isinstance(element, Rejected):
             return element
-        return Tensor(self.iteration.operands[2].tensor, element)
+        f = self.folding
+        return Tensor((f.rows, f.outputs), element)
 
     # Streams: relations between the kernels that reference them. A stream with a
     # single user is a boundary of the kernel and presents its ABI port name.
@@ -404,6 +408,11 @@ class MatMulKernel(Space):
         low, _ = ordinary_integer_bounds(self.weights_dtype)
         return all(value > low for value in _leaves(self.weights))
 
+    @derived(semantics=default_semantics(tuple))
+    def dotp_activation_shape(self) -> tuple[int, ...]:
+        """The activation tensor dotp reads through a view, when densely realized."""
+        return self.activation_shape if self.dense_view else ()
+
     # The compute cores: handles naming the candidates of ``compute``. Each
     # refuses what its core cannot build; both share the pumping choice.
     packed = PackedDotpKernel(
@@ -415,12 +424,13 @@ class MatMulKernel(Space):
         target_dsp=target_dsp,
         target_period_ns=target_period_ns,
         compute_pumping=compute_pumping,
-        contraction=datapath,
+        form=datapath,
         narrow_weights=narrow_weights,
         activation_stream=activations,
         weights_stream=weight_stream,
         result_stream=results,
-        iteration=iteration,
+        schedule=schedule,
+        activation_shape=dotp_activation_shape,
     )
     int8_dsp58 = Int8Dsp58DotpKernel(
         activation_dtype=activation_dtype,
@@ -431,11 +441,12 @@ class MatMulKernel(Space):
         target_dsp=target_dsp,
         target_period_ns=target_period_ns,
         compute_pumping=compute_pumping,
-        contraction=datapath,
+        form=datapath,
         activation_stream=activations,
         weights_stream=weight_stream,
         result_stream=results,
-        iteration=iteration,
+        schedule=schedule,
+        activation_shape=dotp_activation_shape,
     )
     compute: PackedDotpKernel | Int8Dsp58DotpKernel = Decision(
         values={"packed": packed, "int8_dsp58": int8_dsp58}
@@ -490,28 +501,9 @@ class MatMulKernel(Space):
         return self.structure.requirements
 
 
-def contraction_iteration(
-    contraction: Contraction,
-    *,
-    rows: int,
-    reduction: int,
-    outputs: int,
-    pe: int,
-    simd: int,
-    activations: tuple[int, ...] | None = None,
-) -> Iteration:
-    """A contraction's nest folded by PE (its output index) and SIMD (its reduction).
-
-    ``activations`` is the shape of the activation tensor when the contraction
-    reads it through a row-major view.
-    """
-    einsum = Einsum(contraction.einsum)
-    (reduced,) = einsum.reduced
-    output = einsum.output[-1]
-    extents = {einsum.output[0]: rows, reduced: reduction, output: outputs}
-    nest = fold(einsum, extents, {output: pe, reduced: simd})
-    x, w, y = accesses(einsum, nest, extents)
-    return Iteration(nest, (x if activations is None else x.viewing(activations), w, y))
+def matmul_schedule(*, rows: int, reduction: int, outputs: int, pe: int, simd: int) -> Schedule:
+    """MatMul's schedule: ``n`` folded by PE, ``k`` by SIMD; ``m``, then ``n``, then ``k``."""
+    return Schedule({m: rows, n: outputs, k: reduction}, folds={n: pe, k: simd}, beats=(m, n, k))
 
 
 def _frozen(values: object) -> object:
@@ -557,7 +549,7 @@ def matmul_assembly(
     pe: int,
     simd: int,
     target_dsp: DspBlock,
-    contraction: Contraction = Contraction.DENSE,
+    form: Form = Form.DENSE,
     target_period_ns: float = 5.0,
     compute_pumping: bool = False,
     core: str | None = None,
@@ -573,8 +565,8 @@ def matmul_assembly(
 ) -> MatMulAssembly:
     """Bind operation facts, commit every choice, then assemble.
 
-    ``reduction`` is K and ``outputs`` N; for a per-channel ``contraction`` they
-    are the window and the channels, and ``weights`` is (channels, window).
+    ``reduction`` is K and ``outputs`` N; for a depthwise ``form`` they are the
+    window and the channels. ``weights`` is stored (K, N) either way.
 
     Weights are required by, and only accepted with, cyclic delivery. ``rom_style``
     applies to cyclic delivery; the ``auto`` default leaves memory inference to
@@ -595,7 +587,7 @@ def matmul_assembly(
         rows=rows,
         reduction=reduction,
         outputs=outputs,
-        contraction=contraction,
+        form=form,
         activation_dtype=activation_dtype,
         weights_dtype=weights_dtype,
         target_dsp=target_dsp,
@@ -623,7 +615,7 @@ def matmul_assembly(
         choices["weight_stream.transport.fifo.buffer.depth"] = weight_fifo_depth
         choices["weight_stream.transport.fifo.buffer.ram_style"] = "auto"
     base = design_space(MatMulKernel(**facts))
-    if contraction is Contraction.PER_CHANNEL:
+    if form is Form.DEPTHWISE:
         # The realization sets the datapath's reduction, and so the SIMD domain:
         # each is committed together with the folding.
         if realization is None:
@@ -675,12 +667,11 @@ def matmul_assembly(
 
 
 __all__ = [
-    "Contraction",
     "MatMulAssembly",
     "MatMulKernel",
     "ROM_STYLE",
     "WeightDelivery",
-    "contraction_iteration",
     "exact_result_dtype",
     "matmul_assembly",
+    "matmul_schedule",
 ]

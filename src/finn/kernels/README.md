@@ -42,7 +42,7 @@ planned changes, not additional APIs already delivered here.
 ```text
 base.py                  neutral Kernel identity and capability metadata
 dotp.py                  dotp_axi: operand scalars, AXIS ports, one kernel per compute core
-matmul.py                MatMulKernel: contraction, folding, and Decisions over its child nodes
+matmul.py                MatMulKernel: form, folding, and Decisions over its child nodes
 streaming.py             initialized cyclic word delivery
 memstream.py             FinnLib memstream_axi as a delivery kernel (writable, sets, INIT_FILE)
 streams.py               Stream: tensor, ends, plan, adapter and transport Decisions; netlist
@@ -70,7 +70,7 @@ Space -> accepted build_requirements view -> ModuleBuildRequirements
 | `EltwiseKernel` | `eltwise.py` | Integer/float operand scalars, dependent type constraints, typed unpadded ports |
 | `IntToFp32Kernel` | `int_to_fp32.py` | Combinational pins and a fixed FLOAT32 result; no clock or stream |
 | `MemStreamHlsKernel` | `memstream_hls.py` | C++ type and memory/interface declarations before HLS synthesis |
-| `PackedDotpKernel`, `Int8Dsp58DotpKernel` | `dotp.py` | One kernel per `dotp_axi` compute core over the shared `DotpAxiKernel`: typed AXIS ports; target, contraction, pumping, segmentation and accumulator admission |
+| `PackedDotpKernel`, `Int8Dsp58DotpKernel` | `dotp.py` | One kernel per `dotp_axi` compute core over the shared `DotpAxiKernel`: typed AXIS ports; target, form, pumping, segmentation and accumulator admission |
 
 Operand datatypes are ordinary kernel Params, such as
 `DotpAxiKernel.activation_dtype`. Each operand has its own scalar node
@@ -114,15 +114,16 @@ relative to a staging directory; retain that layout and use the declared
 `include_directories`. Its AXI-Lite memory and `ap_ctrl_hs` registers share the
 `control` bundle; software must enable start/auto-restart for continuous output.
 
-`MatMulKernel` owns the operation's facts (the `contraction`, `DENSE` or
-`PER_CHANNEL`, and the extents), PE/SIMD folding and result precision, and
+`MatMulKernel` owns the operation's facts (the `form`, `DENSE` or
+`DEPTHWISE` in canonical GEMM indices `m`, `n`, `k`, and the extents; weights
+stored `(k, n)`), PE/SIMD folding and result precision, and
 declares its connections as streams (`finn.kernels.streams`). Each stream
 carries a `Tensor` (shape and element encoding, `finn.dataflow.tensor`);
 kernels reference the streams they sit on through reference inputs and export
 one port contract per input (`exports = {PORT: {activation_stream:
 activation_port, ...}}`), each presenting the end's own traversal of the
-tensor (a `Presentation`: traversal, repetition, markers), derived from the
-contraction's nest (`finn.dataflow.nest`: the einsum folded by PE and SIMD). A
+tensor (a `BeatSequence`: traversal, repetition, markers), derived from the
+operation's schedule (`finn.dataflow.schedule`: `n` folded by PE, `k` by SIMD). A
 boundary stream presents what its internal end presents, without the replay
 the receiver realizes and without markers. Each slot is a node, a Decision over
 nodes, or a derived node, and each Decision is present only where its case
@@ -131,9 +132,9 @@ applies:
 ```text
 in0_V ─activations─[adapter: input_gen]─► compute ─results─► out0_V
           dense: replay + frame                 ▲
-          per-channel: frame only               └── weight_stream ── delivery
+          depthwise: frame only                 └── weight_stream ── delivery
    compute: packed (dotp) | int8_dsp58 (dotp_8sx9_dsp58); compute_pumping
-   per-channel: realization: native | dense (block-diagonal weights)
+   depthwise: realization: native | dense (block-diagonal weights)
    delivery: external (in1_V) | cyclic (ROM) | memstream (RAM: ram_style,
              pumped_memory; writable_weights → s_axilite; weight_sets > 1 → in2_V)
    weight_stream: transport: direct | fifo
@@ -153,9 +154,10 @@ joins a PE = 4 producer to a SIMD = 2 consumer through `vpc` and `input_gen`.
 
 A stream sees each user's port on that stream only (`Users(PORT)`), so a port's
 refusal names its own stream and independent streams settle independently.
-Ports present what their kernel's nest derives: dotp takes its iteration (the
-nest and the accesses of its activations, weights and results) and refuses one
-it cannot compute (`dotp-iteration`), rather than checking forms it is handed.
+Ports present what their kernel's schedule derives: dotp takes its schedule
+(the extents of `m`, `n` and `k`, their folds and the beat order) and its form,
+and refuses a schedule it cannot compute (`dotp-schedule`), rather than
+checking forms it is handed.
 Every stream owns `well_formed`, `realizable` and `compatible` constraints, and its accepted
 `connection` feeds the parent's `structure` view: `netlist` wires
 `Members(MODULE)` through `Members(CONNECTION)`, drives every child clock and
@@ -169,7 +171,7 @@ The `delivery` Decision places either nothing (`external`: the weight
 stream has one user and is the boundary `in1_V`) or one of its candidates,
 the `cyclic` CyclicDelivery (`delivery.cyclic`) or the `memstream`
 MemStreamKernel; only the selected candidate is evaluated. Compatibility
-filters the candidates (a per-channel contraction is read only by the INT8
+filters the candidates (a depthwise form is read natively only by the INT8
 DSP58 core, runtime-writable weights need the memstream); where several remain,
 the choice is the caller's. A `BufferedStream` owns a `transport`
 Decision over nodes: `direct`, or a `fifo` candidate whose depth and memory style

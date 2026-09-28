@@ -32,7 +32,7 @@ from finn.kernels.artifacts.build import ModuleBuildRequirements
 from finn.kernels.artifacts.derivation import ProducerIdentity
 from finn.dataflow.tensor import TENSOR, ScalarEncoding, Tensor
 from finn.kernels.delivery import CyclicDelivery
-from finn.dataflow.traversal import LevelEnd, Presentation, vector_major
+from finn.dataflow.traversal import LevelEnd, BeatSequence, vector_major
 from finn.kernels.physical.axi_stream import AxiStream
 from finn.kernels.physical.contract import STREAM_CONTRACT, StreamContract
 from finn.kernels.streams import (
@@ -155,7 +155,7 @@ def test_a_stream_waits_for_its_own_endpoints_only():
 
 def test_boundary_ports_are_axis_and_byte_aligned():
     contract = boundary_contract(
-        "in0_V", INT4, Presentation(vector_major((3,), 3)), Endpoint.TARGET
+        "in0_V", INT4, BeatSequence(vector_major((3,), 3)), Endpoint.TARGET
     )
     assert contract.transport.data_width == 16
     assert contract.payload_bits == 12

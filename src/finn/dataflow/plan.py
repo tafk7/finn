@@ -1,11 +1,11 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""What must happen between two presentations of one tensor: a stream's plan.
+"""What must happen between two beat sequences of one tensor: a stream's plan.
 
 ``plan(source, sink)`` compares what a producer presents with what a consumer
 requires and returns the canonical chain of steps that turns one into the
-other, each step between two presentations:
+other, each step between two beat sequences:
 
 - ``REORDER``: a buffered loop-nest reorder, replay included (``classify``'s
   ``Reorder`` carries the ``input_gen`` parameters);
@@ -37,7 +37,7 @@ from math import gcd
 from finn.core.space import default_semantics
 from finn.dataflow.traversal import (
     Adaptation,
-    Presentation,
+    BeatSequence,
     Reorder,
     Repetition,
     Traversal,
@@ -57,14 +57,14 @@ class Hop:
     """One step of a plan: ``source`` in, ``sink`` out."""
 
     step: Step
-    source: Presentation
-    sink: Presentation
+    source: BeatSequence
+    sink: BeatSequence
     reorder: Reorder | None = None
 
 
 @dataclass(frozen=True)
 class Plan:
-    """The steps between two presentations; empty when they connect directly."""
+    """The steps between two beat sequences; empty when they connect directly."""
 
     hops: tuple[Hop, ...] = ()
 
@@ -86,10 +86,10 @@ PLAN = default_semantics(Plan)
 
 
 class Unrealizable(ValueError):
-    """No chain of steps turns the source's presentation into the sink's."""
+    """No chain of steps turns the source's beat sequence into the sink's."""
 
 
-def presented(source: Presentation, sink: Presentation) -> Traversal:
+def presented(source: BeatSequence, sink: BeatSequence) -> Traversal:
     """What ``source`` presents over one pass of ``sink``: a cyclic source repeats.
 
     A cyclic source repeats its pass as many times as the consumer's pass holds
@@ -155,18 +155,18 @@ def _sequence(produced: Traversal, wanted: Traversal) -> _Steps:
     return steps
 
 
-def plan(source: Presentation, sink: Presentation) -> Plan:
-    """The canonical steps from ``source``'s presentation to ``sink``'s."""
+def plan(source: BeatSequence, sink: BeatSequence) -> Plan:
+    """The canonical steps from ``source``'s beat sequence to ``sink``'s."""
     produced = presented(source, sink)
     hops: list[Hop] = []
-    current = Presentation(produced, markers=source.markers)
+    current = BeatSequence(produced, markers=source.markers)
     for step, form, reorder in _sequence(produced, sink.form):
-        after = Presentation(form)
+        after = BeatSequence(form)
         hops.append(Hop(step, current, after, reorder))
         current = after
     missing = tuple(rule for rule in sink.markers if rule not in current.markers)
     if missing:
-        marked = Presentation(current.form, markers=(*current.markers, *missing))
+        marked = BeatSequence(current.form, markers=(*current.markers, *missing))
         hops.append(Hop(Step.MARKERS, current, marked))
     return Plan(tuple(hops))
 

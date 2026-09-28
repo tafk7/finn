@@ -14,14 +14,14 @@ Construction canonicalizes the nests, so two traversals are equal exactly when
 they present the same positions in the same beats and fields. ``classify``
 compares two traversals of one operand and names the adapter a mismatch needs:
 free lane wiring, a loop-nest reorder with its ``input_gen`` parameters, a width
-conversion, a lane regroup, or none at all. It corresponds to the canon
-``BeatSequence`` without adopting Regions.
+conversion, a lane regroup, or none at all.
 
-A ``Presentation`` is what one end of a stream presents of the tensor it
-carries: its traversal per pass, whether the pass repeats (``Repetition``),
-and the marker rules it offers or requires. ``unreplayed`` is the boundary
-rule: the receiver of a stream realizes its own replay, while whole-pass
-repetition stays part of the interface.
+A ``BeatSequence`` (the canon's name, without its Regions) is what one end of
+a stream presents of the tensor it carries: its traversal per pass, whether
+the pass repeats (``Repetition``), and the marker rules it offers or requires.
+``unreplayed`` is the boundary rule: the receiver of a stream realizes its own
+replay, while whole-pass repetition stays part of the interface. ``once`` and
+``period`` strip replay and whole-pass repetition from a traversal.
 """
 
 from __future__ import annotations
@@ -371,7 +371,7 @@ class LevelEnd:
 
     The level is named by the number of beats it spans, not by a loop's name:
     canonical traversals merge contiguous loops, and loop names do not cross
-    kernels. On a presentation it must close whole innermost loops
+    kernels. On a beat sequence it must close whole innermost loops
     (``aligned``). A periodic pin (AXIS ``TLAST``, ``replay_buffer``'s
     ``olast``) and a loop-completion pin (``input_gen``'s ``olst[d]``) carry the
     same rule.
@@ -404,7 +404,7 @@ class Repetition(Enum):
 
 
 @dataclass(frozen=True)
-class Presentation:
+class BeatSequence:
     """One stream end's view of its tensor: traversal, pass repetition and marker rules.
 
     For a producer the markers are guarantees; for a consumer, requirements.
@@ -416,7 +416,7 @@ class Presentation:
 
     def __post_init__(self) -> None:
         if not isinstance(self.form, Traversal) or not isinstance(self.repetition, Repetition):
-            raise TypeError("a presentation has a Traversal and a Repetition")
+            raise TypeError("a beat sequence has a Traversal and a Repetition")
         object.__setattr__(self, "markers", tuple(self.markers))
         if not all(isinstance(rule, LevelEnd) for rule in self.markers):
             raise TypeError("marker rules are LevelEnd values")
@@ -425,10 +425,10 @@ class Presentation:
                 raise ValueError(f"a marker every {rule.beats} beats closes no loop level")
 
 
-PRESENTATION: ValueSemantics[Presentation] = ValueSemantics(
-    Presentation,
-    "presentation",
-    lambda value: type(value) is Presentation,
+BEAT_SEQUENCE: ValueSemantics[BeatSequence] = ValueSemantics(
+    BeatSequence,
+    "beat_sequence",
+    lambda value: type(value) is BeatSequence,
     lambda left, right: left == right,
     lambda value: value,
 )
@@ -444,6 +444,18 @@ def unreplayed(form: Traversal) -> Traversal:
     moving = next((index for index, loop in enumerate(loops) if loop.stride), len(loops))
     kept = (*loops[:moving], *(loop for loop in loops[moving:] if loop.stride))
     return Traversal(form.shape, kept, form.lane_loops)
+
+
+def once(form: Traversal) -> Traversal:
+    """The same traversal with every replay (stride-0) beat loop removed."""
+    return Traversal(form.shape, [loop for loop in form.beat_loops if loop.stride], form.lane_loops)
+
+
+def period(form: Traversal) -> Traversal:
+    """The traversal without its outermost stride-0 loops: one period of a repetition."""
+    loops = form.beat_loops
+    moving = next((index for index, loop in enumerate(loops) if loop.stride), len(loops))
+    return Traversal(form.shape, loops[moving:], form.lane_loops)
 
 
 def pack(form: Traversal, values: object, bits: int) -> tuple[int, ...]:
@@ -488,12 +500,12 @@ TRAVERSAL: ValueSemantics[Traversal] = ValueSemantics(
 __all__ = [
     "Adaptation",
     "AxisStep",
+    "BEAT_SEQUENCE",
+    "BeatSequence",
     "Classification",
     "LevelEnd",
     "Loop",
-    "PRESENTATION",
     "Position",
-    "Presentation",
     "Reorder",
     "Repetition",
     "TRAVERSAL",
@@ -502,7 +514,9 @@ __all__ = [
     "canonical_loops",
     "classify",
     "is_repetition",
+    "once",
     "pack",
+    "period",
     "regrouped",
     "split_beats",
     "tile",

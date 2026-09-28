@@ -29,8 +29,8 @@ from finn.kernels.artifacts.build import materialize_module_sources, prepare_mod
 from finn.kernels.artifacts.store import ArtifactStore
 import finn.kernels.dotp as dotp_axi
 from kernels import helpers
+from finn.dataflow.gemm import Form
 from finn.kernels.dotp import (
-    Contraction,
     DotpAxiKernel,
     Int8Dsp58DotpKernel,
     PackedDotpKernel,
@@ -120,10 +120,12 @@ def test_component_groups_its_interfaces_and_keeps_one_root_physical_output():
         "result_dtype",
         "target_dsp",
         "target_period_ns",
-        "contraction",
+        "form",
         "narrow_weights",
-        # The nest and operand accesses its ports present, from a placing parent.
-        "iteration",
+        # The schedule its ports present, and the activation tensor it reads
+        # through a view, from a placing parent.
+        "schedule",
+        "activation_shape",
     }
     # Optional reference inputs, supplied with Stream nodes by a parent that places
     # dotp between streams; alone, each is an unsupplied presence.
@@ -437,11 +439,11 @@ def test_the_int8_core_takes_signed_nine_by_eight_products_on_dsp58_only(updates
         assert isinstance(accepted.query(DotpAxiKernel.build_requirements), Available)
 
 
-def test_per_channel_activations_carry_pe_channels_of_simd_and_only_int8_reads_them():
-    point = kernel(Int8Dsp58DotpKernel, contraction=Contraction.PER_CHANNEL, pe=3, simd=2)
+def test_depthwise_activations_carry_pe_channels_of_simd_and_only_int8_reads_them():
+    point = kernel(Int8Dsp58DotpKernel, form=Form.DEPTHWISE, pe=3, simd=2)
     rtl = dict(point.build_requirements.parameters)
     assert rtl["ACTIVATION_BROADCASTING"] == 0
     assert point.activation.lanes == 6 and point.weights.lanes == 6 and point.result.lanes == 3
-    refused = kernel(contraction=Contraction.PER_CHANNEL).query(DotpAxiKernel.build_requirements)
+    refused = kernel(form=Form.DEPTHWISE).query(DotpAxiKernel.build_requirements)
     assert isinstance(refused, Rejected)
-    assert {finding.code for finding in refused.findings} == {"dotp-contraction"}
+    assert {finding.code for finding in refused.findings} == {"dotp-form"}

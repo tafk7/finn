@@ -3,7 +3,7 @@
 
 """Every realized plan moves the data right, checked against the modules' own semantics.
 
-``plan`` names the steps between two presentations and ``realize`` maps them
+``plan`` names the steps between two beat sequences and ``realize`` maps them
 onto FinnLib modules. The reference here is independent of both: it models
 ``input_gen`` and ``vpc`` from their RTL headers alone (per frame of
 ``FM_SIZE`` words, the word at ``f * FM_SIZE + sum(COEFS[k] * i_k)`` over
@@ -28,7 +28,7 @@ from finn.dataflow.traversal import (
     LevelEnd,
     Loop,
     Position,
-    Presentation,
+    BeatSequence,
     Traversal,
     axis_strides,
     tile,
@@ -93,7 +93,7 @@ def convert(beats: Beats, module: Convert) -> Beats:
     ]
 
 
-def check(source: Presentation, sink: Presentation) -> tuple[str, ...]:
+def check(source: BeatSequence, sink: BeatSequence) -> tuple[str, ...]:
     """Run the realized chain on the source's positions; return its module kinds."""
     found = plan(source, sink)
     stages = realize(found)
@@ -149,28 +149,28 @@ def framed(rng: random.Random, form: Traversal) -> tuple[LevelEnd, ...]:
 
 def test_known_plans_realize_as_their_candidates():
     rows = vector_major((3, 8), 2)
-    replayed = Presentation(rows.replayed(2, inner_beats=4), markers=(LevelEnd(4),))
-    assert check(Presentation(rows), replayed) == ("input_gen",)
-    assert check(Presentation(vector_major((3, 8), 4)), replayed) == ("vpc", "input_gen")
-    assert check(Presentation(vector_major((4, 4), 1)), Presentation(tile(4, 4, 2, 2))) == (
+    replayed = BeatSequence(rows.replayed(2, inner_beats=4), markers=(LevelEnd(4),))
+    assert check(BeatSequence(rows), replayed) == ("input_gen",)
+    assert check(BeatSequence(vector_major((3, 8), 4)), replayed) == ("vpc", "input_gen")
+    assert check(BeatSequence(vector_major((4, 4), 1)), BeatSequence(tile(4, 4, 2, 2))) == (
         "input_gen",
         "vpc",
     )
     rows_as_lanes = Traversal.over((3, 4), ((1, 4, 1),), ((0, 3, 1),))
-    assert check(Presentation(rows_as_lanes), Presentation(vector_major((3, 4), 2))) == (
+    assert check(BeatSequence(rows_as_lanes), BeatSequence(vector_major((3, 4), 2))) == (
         "vpc",
         "input_gen",
         "vpc",
     )
     # A frame of one beat (SIMD = K), with and without a replay.
-    assert check(Presentation(rows), Presentation(rows, markers=(LevelEnd(1),))) == ("input_gen",)
+    assert check(BeatSequence(rows), BeatSequence(rows, markers=(LevelEnd(1),))) == ("input_gen",)
     one = vector_major((3, 2), 2)
     assert check(
-        Presentation(one), Presentation(one.replayed(3, inner_beats=1), markers=(LevelEnd(1),))
+        BeatSequence(one), BeatSequence(one.replayed(3, inner_beats=1), markers=(LevelEnd(1),))
     ) == ("input_gen",)
     # A level wider than one reorder frame groups frames.
     columns = Traversal.over((2, 4), ((1, 4, 1), (0, 2, 1)), ())
-    assert check(Presentation(columns.replayed(1, inner_beats=1)), Presentation(columns)) == ()
+    assert check(BeatSequence(columns.replayed(1, inner_beats=1)), BeatSequence(columns)) == ()
 
 
 @pytest.mark.parametrize("seed", range(4))
@@ -183,9 +183,9 @@ def test_random_plans_move_every_element_to_its_place(seed):
             continue
         source = random_form(rng, shape, replay=False)
         sink_form = random_form(rng, shape, replay=rng.random() < 0.4)
-        sink = Presentation(sink_form, markers=framed(rng, sink_form))
+        sink = BeatSequence(sink_form, markers=framed(rng, sink_form))
         try:
-            check(Presentation(source), sink)
+            check(BeatSequence(source), sink)
         except Unrealizable:
             refused += 1
             continue

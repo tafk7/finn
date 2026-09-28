@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Canonical logical dataflow values: tensors, their traversals and presentations.
+"""Canonical logical dataflow values: tensors, schedules, traversals and beat sequences.
 
 The dependency direction is fixed:
 
@@ -24,11 +24,14 @@ the standard library. It never imports ``finn.kernels`` or ``finn.parked``.
 - ``datatypes``: the QONNX scalar datatype value boundary.
 - ``tensor``: a stream's fact, a ``Tensor`` of one ``ScalarEncoding``.
 - ``traversal``: how one end presents a tensor (``Traversal``,
-  ``Presentation``), marker rules (``LevelEnd``), and ``classify``, which names
+  ``BeatSequence``), marker rules (``LevelEnd``), and ``classify``, which names
   the adapter between two traversals of one tensor.
-- ``nest``: a kernel's iteration space (``Nest``, ``Access``, ``Einsum``) and
-  ``present``, which derives each port's traversal from it.
-- ``plan``: the canonical steps between two presentations of one tensor.
+- ``schedule``: named indices (``Index``, with affine arithmetic) and a
+  kernel's ``Schedule`` over them, whose ``present`` derives each port's
+  traversal.
+- ``gemm``: matrix multiplication's canonical indices ``m``, ``n``, ``k`` and
+  its operand ``Form``s.
+- ``plan``: the canonical steps between two beat sequences of one tensor.
 
 The earlier Region/Network model was retired to
 ``finn.parked.dataflow.logical_values`` (D10, G0.1): its concepts live on in

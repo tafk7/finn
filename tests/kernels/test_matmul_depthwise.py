@@ -1,13 +1,14 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""One MatMulKernel space for dense and per-channel (depthwise) contractions.
+"""One MatMulKernel space for dense and depthwise forms.
 
-The contraction is a fact of the operation; what follows from it is derived:
-whether activations are broadcast, whether rows are replayed, the activation
-traversal. A per-channel operation is realized natively (only the INT8 DSP58
-core reads one channel per lane) or densely, with block-diagonal weights on
-any core; the dense realization needs the weights, so not external delivery.
+The form is a fact of the operation; what follows from it is derived: whether
+activations are broadcast, whether rows are replayed, the activation traversal.
+A depthwise operation is realized natively (only the INT8 DSP58 core reads one
+channel per lane) or densely, with block-diagonal weights on any core; the
+dense realization needs the weights, so not external delivery. Weights are
+stored (k, n): window by channel.
 """
 
 import pytest
@@ -17,7 +18,8 @@ from finn.core.space import Rejected, design_space
 from finn.dataflow.plan import Step
 from finn.kernels.configure import commit
 from finn.kernels.streams import commit_adapters
-from finn.kernels.matmul import Contraction, MatMulKernel, WeightDelivery, matmul_assembly
+from finn.dataflow.gemm import Form
+from finn.kernels.matmul import MatMulKernel, WeightDelivery, matmul_assembly
 from finn.dataflow.traversal import Traversal
 from finn.kernels.physical.structure import PhysicalPin, PinSlice
 from finn.kernels.target import DspBlock
@@ -26,7 +28,7 @@ FACTS = dict(
     rows=2,
     reduction=9,  # the window
     outputs=4,  # the channels
-    contraction=Contraction.PER_CHANNEL,
+    form=Form.DEPTHWISE,
     activation_dtype=DataType["INT4"],
     weights_dtype=DataType["INT4"],
     target_dsp=DspBlock.DSP58,
@@ -44,7 +46,7 @@ CHOICES = {
 def point(**facts):
     facts = {**FACTS, "target_period_ns": 5.0, **facts}
     choices = dict(CHOICES)
-    if facts["contraction"] is Contraction.PER_CHANNEL:
+    if facts["form"] is Form.DEPTHWISE:
         choices["realization"] = "native"
     return commit_adapters(commit(design_space(MatMulKernel(**facts)), choices))
 
@@ -58,7 +60,7 @@ def parameters(structure, instance):
     return found
 
 
-def test_per_channel_rows_pass_once_with_a_frame_per_window():
+def test_depthwise_rows_pass_once_with_a_frame_per_window():
     configured = point()
     # Nothing is replayed: the stream only closes each window's frame.
     assert configured.activations.plan.steps == (Step.MARKERS,)
@@ -94,17 +96,17 @@ def test_per_channel_rows_pass_once_with_a_frame_per_window():
     assert last == PinSlice(PhysicalPin("u_activations_input_gen", "olst"), 0, 1)
 
 
-def test_a_dense_contraction_replays_each_row_per_output_fold():
-    dense = point(contraction=Contraction.DENSE)
+def test_a_dense_form_replays_each_row_per_output_fold():
+    dense = point(form=Form.DENSE)
     assert dense.activations.plan.steps == (Step.REORDER, Step.MARKERS)
     compute = parameters(dense.structure.structure, "u_compute_int8_dsp58")
     assert compute["ACTIVATION_BROADCASTING"] == 1
 
 
-def test_only_the_int8_dsp58_core_reads_a_per_channel_contraction():
+def test_only_the_int8_dsp58_core_reads_a_depthwise_form():
     packed = point().with_choices(compute="packed").query(MatMulKernel.structure)
     assert isinstance(packed, Rejected)
-    assert "dotp-contraction" in {finding.code for finding in packed.findings}
+    assert "dotp-form" in {finding.code for finding in packed.findings}
     facts = {**FACTS, "pe": 2, "simd": 3}
     # External weights exclude the dense realization; natively, one core fits.
     assert matmul_assembly(**facts).requirements is not None
@@ -112,8 +114,8 @@ def test_only_the_int8_dsp58_core_reads_a_per_channel_contraction():
         matmul_assembly(**{**facts, "target_dsp": DspBlock.DSP48E2})
 
 
-def test_per_channel_cyclic_weights_are_the_channel_tile():
-    weights = [[(c + k) % 16 - 8 for k in range(9)] for c in range(4)]
+def test_depthwise_cyclic_weights_are_the_channel_tile():
+    weights = [[(c + k) % 16 - 8 for c in range(4)] for k in range(9)]
     built = matmul_assembly(
         **FACTS,
         pe=2,
@@ -128,12 +130,14 @@ def test_per_channel_cyclic_weights_are_the_channel_tile():
     assert (built.activation_beats, built.weight_beats, built.result_beats) == (12, 12, 4)
 
 
-WEIGHTS = ((1, -2, 3, -4), (2, 3, -1, 0), (-3, 1, 2, 1))
+# By channel, then stored (k, n): window by channel.
+BY_CHANNEL = ((1, -2, 3, -4), (2, 3, -1, 0), (-3, 1, 2, 1))
+WEIGHTS = tuple(zip(*BY_CHANNEL))
 DENSE = dict(
     rows=2,
     reduction=4,
     outputs=3,
-    contraction=Contraction.PER_CHANNEL,
+    form=Form.DEPTHWISE,
     activation_dtype=DataType["INT4"],
     weights_dtype=DataType["INT4"],
     pe=3,
@@ -155,9 +159,9 @@ def test_a_dense_realization_reads_window_by_channel_rows_against_block_diagonal
     assert compute["ACTIVATION_BROADCASTING"] == 1 and compute["SIMD"] == 4
     # Rows of 4 x 3 = 12 activations in three SIMD beats, replayed once (PE = C).
     assert (built.activation_beats, built.weight_beats, built.result_beats) == (6, 6, 2)
-    # W'[c, k * 3 + c'] = W[c, k] where c' = c: each weight beat is one tile of W'.
+    # W'[k * 3 + c', c] = W[k, c] where c' = c: each weight beat is one tile of W'.
     blocks = [
-        [WEIGHTS[c][k] if other == c else 0 for k in range(4) for other in range(3)]
+        [BY_CHANNEL[c][k] if other == c else 0 for k in range(4) for other in range(3)]
         for c in range(3)
     ]
     mask = 0xF
@@ -187,12 +191,12 @@ def test_the_dense_realization_needs_known_weights_and_either_may_be_chosen_on_d
     "weights,delivery,narrow",
     [
         (WEIGHTS, WeightDelivery.CYCLIC, 1),  # no weight is INT4's -8
-        (((-8, 0, 0, 0), (0,) * 4, (0,) * 4), WeightDelivery.CYCLIC, 0),
+        (((-8, 0, 0), (0,) * 3, (0,) * 3, (0,) * 3), WeightDelivery.CYCLIC, 0),
         (None, WeightDelivery.EXTERNAL, 0),  # weights at run time promise nothing
     ],
 )
 def test_narrow_weights_follow_known_weights(weights, delivery, narrow):
-    facts = {**DENSE, "contraction": Contraction.DENSE, "outputs": 3, "pe": 3}
+    facts = {**DENSE, "form": Form.DENSE, "outputs": 3, "pe": 3}
     built = matmul_assembly(
         target_dsp=DspBlock.DSP48E2, **{**facts, "weights": weights, "weight_delivery": delivery}
     )

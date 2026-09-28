@@ -9,28 +9,27 @@ lanes packed into DSP48E1, DSP48E2 or DSP58 slices) and
 chooses between them with a Decision over nodes; each refuses what its core
 cannot build. ``DotpAxiKernel`` is their shared declaration and places no core.
 
-The ``contraction`` says how activations meet the PE lanes. ``DENSE``
-(``Y[r, n] = sum_k X[r, k] W[n, k]``): each activation beat carries SIMD fields,
-broadcast to the PE accumulators. ``PER_CHANNEL`` (``Y[r, c] = sum_k X[r, k, c]
-W[c, k]``): each activation beat carries SIMD window positions of PE channels,
-channel fastest, and lane p accumulates channel p alone; only the INT8 core
-reads it. Each weight beat carries PE * SIMD fields, SIMD varying fastest.
+The ``form`` (``finn.dataflow.gemm``) says how activations meet the PE lanes.
+``DENSE`` (``Y[m, n] = sum_k X[m, k] W[k, n]``): each activation beat carries
+SIMD fields, broadcast to the PE accumulators. ``DEPTHWISE`` (``Y[m, n] =
+sum_k X[m, k, n] W[k, n]``): each activation beat carries SIMD window positions
+of PE channels, channel fastest, and lane p accumulates channel p alone; only
+the INT8 core reads it. Each weight beat carries PE * SIMD fields, SIMD varying
+fastest.
 Fields are packed low first; only the complete beat is padded to a byte
 boundary. The core pairs activation and weight beats in order. Activation TLAST
 closes one nonempty reduction frame and produces one PE-wide result beat;
 weights and results have no TLAST. The caller supplies matching weight beats
 and terminates every frame.
 
-Placed between streams, dotp takes its ``iteration``: the nest of the
-contraction it computes and the accesses of its activations X, weights W and
-results Y (``finn.dataflow.nest``). Every port's presentation derives from it
-(``dotp_presentations``) under dotp_axi's field conventions: weights
-``(p, s)``, results ``(p)``, and activations ``(s)`` when broadcast or
-``(s, p)`` (field ``s * PE + p``) per channel. The frame marker closes the
-reduced levels. One admission rule replaces per-port checks: one output lane
-level P (PE) and one reduction lane level S (SIMD); weights use both,
-activations use S, and use P exactly when per channel; the reduced beat levels
-are the innermost.
+Placed between streams, dotp takes its ``schedule`` (``finn.dataflow.schedule``):
+the extents of ``m``, ``n`` and ``k``, their folds and the beat order. Every
+port's beat sequence derives from it and the form (``dotp_sequences``) under
+dotp_axi's field conventions: weights ``(n, k)``, results ``(n)``, and
+activations ``(k)`` when broadcast or ``(k, n)`` (field ``s * PE + p``)
+depthwise. The frame marker closes each reduction. One admission rule replaces
+per-port checks: the schedule folds ``n`` by PE, ``k`` by SIMD and nothing
+else, and ``k`` is the innermost beats.
 
 ``result_dtype`` specifies the signed accumulator encoding, not a proof that an
 arbitrary frame fits it. The caller must bound each frame's accumulation to that
@@ -40,7 +39,6 @@ encoding (including intermediate sums); overflow is not exact arithmetic.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from enum import Enum
 from math import ceil, floor
 from typing import ClassVar
 
@@ -74,8 +72,9 @@ from finn.dataflow.datatypes import (
 from finn.kernels.datatypes.scalar import integer_scalar
 from finn.kernels.physical.axi_stream import AxiStream, axi_stream
 from finn.kernels.physical.contract import STREAM_CONTRACT, StreamContract
-from finn.dataflow.nest import ITERATION, Iteration, Refused, frame, present
-from finn.dataflow.traversal import Presentation
+from finn.dataflow.gemm import Form, k, n
+from finn.dataflow.schedule import SCHEDULE, Index, Refused, Schedule
+from finn.dataflow.traversal import BeatSequence
 from finn.kernels.streams import (
     MODULE,
     PORT,
@@ -98,83 +97,74 @@ from finn.core.space import (
 )
 
 
-class Contraction(Enum):
-    """How activations meet the PE lanes: shared by all, or one channel per lane.
-
-    Each is a contraction over index letters (``einsum``): rows ``r``, the
-    reduced window ``k``, and outputs ``n`` or channels ``c``.
-    """
-
-    DENSE = "dense"
-    PER_CHANNEL = "per_channel"
-
-    @property
-    def einsum(self) -> str:
-        return _EINSUM[self]
-
-
-_EINSUM = {Contraction.DENSE: "rk,nk->rn", Contraction.PER_CHANNEL: "rkc,ck->rc"}
-
-
 _DSP_VERSION = {DspBlock.DSP48E1: 1, DspBlock.DSP48E2: 2, DspBlock.DSP58: 3}
 # FINN's DSP58 chain timing model (rtl/matrixvectoractivation_rtl.py).
 _FIRST_DSP_NS, _NEXT_DSP_NS = 0.741, 0.605
 
 
 @dataclass(frozen=True)
-class DotpPresentations:
+class DotpSequences:
     """What dotp's activation, weight and result ports present of their tensors."""
 
-    activation: Presentation
-    weights: Presentation
-    result: Presentation
+    activation: BeatSequence
+    weights: BeatSequence
+    result: BeatSequence
 
 
-def dotp_presentations(
-    iteration: Iteration, *, pe: int, simd: int, contraction: Contraction
-) -> DotpPresentations | Rejected:
-    """Each port's presentation, derived from ``iteration``; refused unless dotp_axi admits it."""
+def dotp_sequences(
+    schedule: Schedule,
+    form: Form,
+    *,
+    pe: int,
+    simd: int,
+    activations: tuple[int, ...] = (),
+) -> DotpSequences | Rejected:
+    """Each port's beat sequence, derived from ``schedule``; refused unless dotp_axi admits it.
+
+    ``activations`` is the activation tensor's shape when dotp reads it through
+    a row-major view of the form's shape (a densely realized depthwise
+    operation); empty, dotp reads the form's shape itself.
+    """
 
     def refuse(message: str) -> Rejected:
-        return reject("dotp-iteration", message)
+        return reject("dotp-schedule", message)
 
-    if len(iteration.operands) != 3:
-        return refuse("dotp reads three operands: activations, weights and results")
-    nest, (x, w, y) = iteration.nest, iteration.operands
-    outputs = [level for level in nest.lanes if y.uses(level.name)]
-    reductions = [level for level in nest.lanes if not y.uses(level.name)]
-    if len(outputs) != 1 or len(reductions) != 1:
-        return refuse("dotp has one output lane level (PE) and one reduction lane level (SIMD)")
-    (p,), (s,) = outputs, reductions
-    if (p.extent, s.extent) != (pe, simd):
+    indices = schedule.beats
+    missing = [index for index in (*form.x, *form.w) if index not in indices]
+    if missing:
+        return refuse(f"the schedule has no index {missing[0]!r}")
+    if (schedule.fold(n), schedule.fold(k)) != (pe, simd):
         return refuse(
-            f"the nest's lanes are {p.extent} x {s.extent}, dotp's PE x SIMD {pe} x {simd}"
+            f"the schedule folds n and k by {schedule.fold(n)} x {schedule.fold(k)}, "
+            f"dotp's PE x SIMD {pe} x {simd}"
         )
-    if not (w.uses(p.name) and w.uses(s.name)):
-        return refuse("the weights must differ in every lane")
-    if not x.uses(s.name):
-        return refuse("the activation lanes must be the reduction lanes")
-    per_channel = contraction is Contraction.PER_CHANNEL
-    if x.uses(p.name) != per_channel:
-        return refuse(
-            "each PE lane reads its own channel's activations only per channel"
-            if per_channel
-            else "dense activations are broadcast to every PE lane"
-        )
-    reduced = [level.name for level in nest.beats if not y.uses(level.name)]
+    if any(schedule.fold(index) > 1 for index in indices if index not in (n, k)):
+        return refuse("dotp's lanes fold only n (PE) and k (SIMD)")
+
+    def shape(operand: tuple[Index, ...]) -> tuple[int, ...]:
+        return tuple(schedule.extent(index) for index in operand)
+
+    x = shape(form.x)
     try:
-        marker = frame(nest, reduced)
-        fields = (s.name, p.name) if per_channel else (s.name,)
-        return DotpPresentations(
-            Presentation(present(nest, x, fields=fields), markers=(marker,)),
-            Presentation(present(nest, w, fields=(p.name, s.name))),
-            Presentation(present(nest, y, fields=(p.name,), reduced=reduced)),
+        marker = schedule.closing((k,))
+        return DotpSequences(
+            BeatSequence(
+                schedule.present(
+                    activations or x,
+                    form.x,
+                    lanes=(k, n) if form is Form.DEPTHWISE else (k,),
+                    view=x if activations else None,
+                ),
+                markers=(marker,),
+            ),
+            BeatSequence(schedule.present(shape(form.w), form.w, lanes=(n, k))),
+            BeatSequence(schedule.present(shape(form.y), form.y, lanes=(n,), reduces=(k,))),
         )
     except Refused as error:
         return refuse(str(error))
 
 
-DOTP_PRESENTATIONS = default_semantics(DotpPresentations)
+DOTP_SEQUENCES = default_semantics(DotpSequences)
 
 
 class DotpAxiKernel(Kernel):
@@ -197,7 +187,7 @@ class DotpAxiKernel(Kernel):
     simd: int = Param()
     target_dsp: DspBlock = Param()
     target_period_ns: float = Param()
-    contraction: Contraction = Param(default=Contraction.DENSE)
+    form: Form = Param(default=Form.DENSE)
     compute_pumping: bool = Decision(values=(False, True))
 
     activation_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
@@ -207,17 +197,20 @@ class DotpAxiKernel(Kernel):
     weights_type = integer_scalar(weights_dtype, SignedInteger(min_bits=2))
     result_type = integer_scalar(result_dtype, SignedInteger())
     # The streams dotp sits on, when a parent places it between streams: reference
-    # inputs, each a Stream node placed beside dotp, and the iteration its ports
+    # inputs, each a Stream node placed beside dotp, and the schedule its ports
     # present, supplied by the parent.
     activation_stream: Stream = Param(required=False)
     weights_stream: Stream = Param(required=False)
     result_stream: Stream = Param(required=False)
-    iteration: Iteration = Param(semantics=ITERATION, required=False)
+    schedule: Schedule = Param(semantics=SCHEDULE, required=False)
+    # The activation tensor's shape when dotp reads it through a view of the
+    # form's shape (``dotp_sequences``); empty, it reads the form's shape.
+    activation_shape: tuple[int, ...] = Param(default=(), semantics=default_semantics(tuple))
 
     @derived
     def activation_lanes(self) -> int:
         """SIMD fields, times PE when each lane reads its own channel."""
-        return self.simd * (self.pe if self.contraction is Contraction.PER_CHANNEL else 1)
+        return self.simd * (self.pe if self.form is Form.DEPTHWISE else 1)
 
     activation = axi_stream(
         "s_axis_input", activation_lanes, Endpoint.TARGET, activation_type, last=True
@@ -251,7 +244,7 @@ class DotpAxiKernel(Kernel):
     @constraint
     def core_supported(self) -> bool | Rejected:
         # The scalars admit the encodings (integer family, signedness, two bits);
-        # these are the core's own bounds on them and on the contraction.
+        # these are the core's own bounds on them and on the form.
         try:
             ordinary_integer_bounds(self.activation_dtype)
         except DatatypeError:
@@ -327,7 +320,7 @@ class DotpAxiKernel(Kernel):
             "PUMPED_COMPUTE": int(compute_pumping),
             "SEGMENTLEN": self.segment_length,
             "VERSION": _DSP_VERSION[self.target_dsp],
-            "ACTIVATION_BROADCASTING": int(self.contraction is Contraction.DENSE),
+            "ACTIVATION_BROADCASTING": int(self.form is Form.DENSE),
             "FORCE_BEHAVIORAL": 0,
             "CORE": f'"{self.core}"',
         }
@@ -375,9 +368,9 @@ class DotpAxiKernel(Kernel):
         return (self.activation.stream, self.weights.stream, self.result.stream)
 
     def _port(
-        self, port: AxiStream, stream: Stream, presentation: Presentation
+        self, port: AxiStream, stream: Stream, sequence: BeatSequence
     ) -> StreamContract | Rejected:
-        """A port over the stream it sits on: its presentation, dotp's own encoding."""
+        """A port over the stream it sits on: its beat sequence, dotp's own encoding."""
         element = stream.tensor.element
         if element.datatype_name != port.dtype.name:
             return reject(
@@ -387,30 +380,32 @@ class DotpAxiKernel(Kernel):
         transport = port.native(clock="ap_clk", reset="ap_rst_n")
         markers = {}
         if transport.markers:
-            markers = {transport.markers[0].signal: presentation.markers[0]}
-        return StreamContract(
-            transport, element, presentation.form, presentation.repetition, markers
-        )
+            markers = {transport.markers[0].signal: sequence.markers[0]}
+        return StreamContract(transport, element, sequence.form, sequence.repetition, markers)
 
-    @derived(semantics=DOTP_PRESENTATIONS)
-    def presentations(self) -> DotpPresentations | Rejected:
-        return dotp_presentations(
-            self.iteration, pe=self.pe, simd=self.simd, contraction=self.contraction
+    @derived(semantics=DOTP_SEQUENCES)
+    def sequences(self) -> DotpSequences | Rejected:
+        return dotp_sequences(
+            self.schedule,
+            self.form,
+            pe=self.pe,
+            simd=self.simd,
+            activations=self.activation_shape,
         )
 
     @view(semantics=STREAM_CONTRACT)
     def activation_port(self) -> StreamContract | Rejected:
-        presented = self.presentations.activation
+        presented = self.sequences.activation
         return self._port(self.activation.stream, self.activation_stream, presented)
 
     @view(semantics=STREAM_CONTRACT)
     def weights_port(self) -> StreamContract | Rejected:
-        presented = self.presentations.weights
+        presented = self.sequences.weights
         return self._port(self.weights.stream, self.weights_stream, presented)
 
     @view(semantics=STREAM_CONTRACT)
     def result_port(self) -> StreamContract | Rejected:
-        presented = self.presentations.result
+        presented = self.sequences.result
         return self._port(self.result.stream, self.result_stream, presented)
 
     @view(semantics=TIEOFFS_SEMANTICS)
@@ -460,10 +455,8 @@ class PackedDotpKernel(DotpAxiKernel):
     narrow_weights: bool = Param(default=False)
 
     def _core_refusal(self) -> Rejected | None:
-        if self.contraction is not Contraction.DENSE:
-            return reject(
-                "dotp-contraction", "the packed core broadcasts activations to every PE lane"
-            )
+        if self.form is not Form.DENSE:
+            return reject("dotp-form", "the packed core broadcasts activations to every PE lane")
         a_bits, b_bits, _ = dsp_widths(self.target_dsp)
         unsigned = not self.activation_dtype.signed()
         if qonnx_datatype_width(self.activation_dtype) + unsigned > b_bits:
@@ -494,7 +487,7 @@ class Int8Dsp58DotpKernel(DotpAxiKernel):
     """FinnLib ``dotp_8sx9_dsp58``: three 9x8 signed products per DSP58 in INT8 mode.
 
     It takes signed weights of at most 8 bits and activations that fit 9 signed
-    bits, broadcast (``DENSE``) or one channel per lane (``PER_CHANNEL``).
+    bits, broadcast (``DENSE``) or one channel per lane (``DEPTHWISE``).
     """
 
     id = "finnlib.dotp_axi.dotp_8sx9_dsp58"
@@ -522,4 +515,11 @@ class Int8Dsp58DotpKernel(DotpAxiKernel):
         )
 
 
-__all__ = ["Contraction", "DotpAxiKernel", "Int8Dsp58DotpKernel", "PackedDotpKernel"]
+__all__ = [
+    "DOTP_SEQUENCES",
+    "DotpAxiKernel",
+    "DotpSequences",
+    "Int8Dsp58DotpKernel",
+    "PackedDotpKernel",
+    "dotp_sequences",
+]

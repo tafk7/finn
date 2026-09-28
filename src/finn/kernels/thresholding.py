@@ -59,7 +59,7 @@ from finn.dataflow.datatypes import (
 from finn.kernels.control import CONTROL, CONTROL_SEMANTICS, Control, ControlBus
 from finn.kernels.physical.axi_stream import AxiStream
 from finn.kernels.physical.contract import STREAM_CONTRACT, StreamContract
-from finn.dataflow.nest import Access, Level, Nest, Refused, present
+from finn.dataflow.schedule import Index, Refused, Schedule
 from finn.dataflow.traversal import TRAVERSAL, Traversal, vector_major
 from finn.kernels.streams import (
     MODULE,
@@ -372,8 +372,8 @@ class ThresholdingAxiKernel(Kernel):
     def input_form(self) -> Traversal | Rejected:
         """PE consecutive channels a beat, channels the innermost axis of the tensor.
 
-        The nest walks every outer axis, then the channel folds, with PE lane
-        channels: T[..., cf * PE + p]. PE above the channel count would fold
+        The schedule walks every outer axis, then the channels folded by PE:
+        T[..., c]. PE above the channel count would fold
         rows into the lanes as well, which needs rows divisible by PE / C; that
         is not modelled yet.
         """
@@ -383,11 +383,11 @@ class ThresholdingAxiKernel(Kernel):
                 "threshold-stream-form",
                 f"the input must walk its {channels} channels innermost, PE={pe} per beat",
             )
-        outer = tuple(Level(f"a{axis}", extent) for axis, extent in enumerate(shape[:-1]))
-        nest = Nest((*outer, Level("cf", channels // pe)), (Level("p", pe),))
-        access = Access(shape, (*({level.name: 1} for level in outer), {"cf": pe, "p": 1}))
+        outer = tuple(Index(f"a{axis}") for axis in range(len(shape) - 1))
+        c = Index("c")
+        schedule = Schedule(dict(zip((*outer, c), shape)), folds={c: pe})
         try:
-            return present(nest, access, fields=("p",))
+            return schedule.present(shape, (*outer, c), lanes=(c,))
         except Refused as error:
             return reject("threshold-stream-form", str(error))
 

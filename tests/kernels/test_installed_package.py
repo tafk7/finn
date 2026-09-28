@@ -145,7 +145,8 @@ for delivery in WeightDelivery:
     options = {}
     expected = dotp_sources | {"rtl/shape/input_gen.sv"}
     if delivery is not WeightDelivery.EXTERNAL:
-        options["weights"] = [[-4, -3, -2, -1], [0, 1, 2, 3], [3, 2, 1, 0], [-1, -2, -3, -4]]
+        # Stored (k, n): the columns of the by-output rows.
+        options["weights"] = [[-4, 0, 3, -1], [-3, 1, 2, -2], [-2, 2, 1, -3], [-1, 3, 0, -4]]
     if delivery is WeightDelivery.CYCLIC:
         expected |= {"cyclic_stream.sv"}
     if delivery is WeightDelivery.MEMSTREAM:

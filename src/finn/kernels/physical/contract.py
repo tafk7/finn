@@ -32,7 +32,7 @@ from finn.dataflow.tensor import ScalarEncoding
 from finn.dataflow.traversal import (
     Adaptation,
     LevelEnd,
-    Presentation,
+    BeatSequence,
     Repetition,
     Traversal,
     classify,
@@ -106,9 +106,9 @@ class StreamContract:
         return dict(self.markers)
 
     @property
-    def presentation(self) -> Presentation:
+    def sequence(self) -> BeatSequence:
         """The logical sequence this end presents, without its transport."""
-        return Presentation(self.form, self.repetition, tuple(self.rules.values()))
+        return BeatSequence(self.form, self.repetition, tuple(self.rules.values()))
 
 
 STREAM_CONTRACT: ValueSemantics[StreamContract] = default_semantics(StreamContract)

@@ -56,7 +56,7 @@ from finn.core.space import (
 )
 from finn.dataflow.plan import PLAN, Hop, Plan, Step, Unrealizable
 from finn.dataflow.tensor import TENSOR, ScalarEncoding, Tensor
-from finn.dataflow.traversal import LevelEnd, Presentation, Reorder
+from finn.dataflow.traversal import LevelEnd, BeatSequence, Reorder
 from finn.kernels.artifacts.abi import Clock, Direction, Endpoint, Free, Reset, Signal
 from finn.kernels.artifacts.contribution_types import CopiedSource
 from finn.kernels.artifacts.requirements import (
@@ -212,11 +212,11 @@ class Convert:
 
 @dataclass(frozen=True)
 class RealizedStage:
-    """A module and the presentations of its two ports."""
+    """A module and the beat sequences of its two ports."""
 
     module: Generate | Convert
-    source: Presentation
-    sink: Presentation
+    source: BeatSequence
+    sink: BeatSequence
 
     @property
     def kind(self) -> str:
@@ -269,7 +269,7 @@ def _generated(hop: Hop, marked: Hop | None) -> RealizedStage:
     generate = _closing(generate, required, source.form.beats)
     form = hop.sink.form
     offered = tuple(level for level in generate.levels if level.aligned(form))
-    return RealizedStage(generate, source, Presentation(form, markers=offered))
+    return RealizedStage(generate, source, BeatSequence(form, markers=offered))
 
 
 def realize(plan: Plan) -> tuple[RealizedStage, ...]:

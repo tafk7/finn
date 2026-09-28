@@ -47,7 +47,9 @@ ROM_STYLE = CyclicDelivery.rom_style
 # The cyclic candidate of the ``delivery`` Decision is named ``delivery.cyclic``.
 CYCLIC_INSTANCE = "u_delivery_cyclic"
 ADAPTER_INSTANCE = "u_activations_input_gen"
-WEIGHTS = ((-4, -3, -2, -1), (0, 1, 2, 3), (3, 2, 1, 0), (-1, -2, -3, -4))
+# Written by output, stored (k, n).
+BY_OUTPUT = ((-4, -3, -2, -1), (0, 1, 2, 3), (3, 2, 1, 0), (-1, -2, -3, -4))
+WEIGHTS = tuple(zip(*BY_OUTPUT))
 FACTS = dict(
     rows=3,
     reduction=4,

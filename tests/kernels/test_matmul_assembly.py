@@ -76,7 +76,9 @@ def test_external_construction_owns_replay_and_exact_precision():
 
 
 def test_cyclic_image_has_output_then_reduction_then_pe_simd_order():
-    weights = [[-4, -3, -2, -1], [0, 1, 2, 3], [3, 2, 1, 0], [-1, -2, -3, -4]]
+    # Written by output, stored (k, n).
+    by_output = [[-4, -3, -2, -1], [0, 1, 2, 3], [3, 2, 1, 0], [-1, -2, -3, -4]]
+    weights = [list(column) for column in zip(*by_output)]
     built = assembly(weight_delivery=WeightDelivery.CYCLIC, weights=weights)
     # Hand-packed INT3 fields: p0/s0, p0/s1, p1/s0, p1/s1, low first.
     assert built.initializer == (0x22C, 0x6BE, 0xDD3, 0x941)
@@ -262,7 +264,7 @@ def test_matmul_honors_the_child_physical_view_not_just_its_raw_module(monkeypat
                     activation_stream=MatMulKernel.activations,
                     weights_stream=MatMulKernel.weight_stream,
                     result_stream=MatMulKernel.results,
-                    iteration=MatMulKernel.iteration,
+                    schedule=MatMulKernel.schedule,
                 )
             }
         )

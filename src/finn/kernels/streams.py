@@ -115,7 +115,7 @@ from finn.kernels.physical.contract import (
 )
 from finn.dataflow.plan import PLAN, Plan, Unrealizable, plan
 from finn.dataflow.tensor import TENSOR, ScalarEncoding, Tensor
-from finn.dataflow.traversal import PRESENTATION, Presentation, unreplayed
+from finn.dataflow.traversal import BEAT_SEQUENCE, BeatSequence, unreplayed
 from finn.kernels.adapters import (
     INPUT_GEN_RAM_STYLES,
     STAGE_SEMANTICS,
@@ -159,21 +159,21 @@ TIEOFFS = ViewKey("tieoffs", TIEOFFS_SEMANTICS)
 
 
 def boundary_contract(
-    name: str, element: ScalarEncoding, presentation: Presentation, endpoint: Endpoint
+    name: str, element: ScalarEncoding, sequence: BeatSequence, endpoint: Endpoint
 ) -> StreamContract:
     """The AXIS port a composed module presents for one of its own streams."""
-    if len(presentation.markers) > 1:
+    if len(sequence.markers) > 1:
         raise ValueError("an AXIS boundary carries at most one marker")
-    form = presentation.form
+    form = sequence.form
     stream = AxiStream(
-        name, element.dtype, form.lanes, endpoint=endpoint, last=bool(presentation.markers)
+        name, element.dtype, form.lanes, endpoint=endpoint, last=bool(sequence.markers)
     )
     transport = stream.native(clock=CLOCK, reset=RESET)
-    markers = {transport.markers[0].signal: presentation.markers[0]} if presentation.markers else {}
-    return StreamContract(transport, element, form, presentation.repetition, markers)
+    markers = {transport.markers[0].signal: sequence.markers[0]} if sequence.markers else {}
+    return StreamContract(transport, element, form, sequence.repetition, markers)
 
 
-def boundary_presentation(internal: StreamContract, *, receiving: bool) -> Presentation:
+def boundary_sequence(internal: StreamContract, *, receiving: bool) -> BeatSequence:
     """What a boundary presents for its internal end: the receiver realizes replay.
 
     An input boundary (``receiving``) presents its consumer's form without
@@ -181,7 +181,7 @@ def boundary_presentation(internal: StreamContract, *, receiving: bool) -> Prese
     markers, and a boundary streams a single pass.
     """
     form = unreplayed(internal.form) if receiving else internal.form
-    return Presentation(form)
+    return BeatSequence(form)
 
 
 class _Direct(Space):
@@ -194,7 +194,7 @@ class StreamFifo(Space):
     """An identity adapter: what arrives at it, presented on both sides of a native FIFO."""
 
     tensor: Tensor = Param(semantics=TENSOR)
-    arriving: Presentation = Param(semantics=PRESENTATION)
+    arriving: BeatSequence = Param(semantics=BEAT_SEQUENCE)
 
     @derived
     def word_bits(self) -> int:
@@ -255,7 +255,7 @@ class Stream(Space):
     ``ends`` holds the port each present user presents on this stream, located
     by the user's name and the input it references this stream through. A side
     without a user is the composite's boundary, presented as the AXIS port
-    ``port`` (``boundary_presentation``).
+    ``port`` (``boundary_sequence``).
     """
 
     tensor: Tensor = Param(semantics=TENSOR)
@@ -294,8 +294,8 @@ class Stream(Space):
 
     def _boundary(self, inside: StreamContract, endpoint: Endpoint) -> StreamContract:
         receiving = endpoint is Endpoint.TARGET
-        presentation = boundary_presentation(inside, receiving=receiving)
-        return boundary_contract(self.port, self.tensor.element, presentation, endpoint)
+        sequence = boundary_sequence(inside, receiving=receiving)
+        return boundary_contract(self.port, self.tensor.element, sequence, endpoint)
 
     @constraint
     def well_formed(self) -> bool | Rejected:
@@ -319,10 +319,10 @@ class Stream(Space):
 
     @derived(semantics=PLAN)
     def plan(self) -> Plan | Rejected:
-        """What must happen between the source's presentation and the sink's."""
+        """What must happen between the source's beat sequence and the sink's."""
         ends = self.endpoints
         try:
-            return plan(ends.source.presentation, ends.sink.presentation)
+            return plan(ends.source.sequence, ends.sink.sequence)
         except Unrealizable as error:
             return reject("stream-plan", f"no adapter can join the ends: {error}")
 
@@ -379,12 +379,12 @@ class Stream(Space):
         """The adapter's stages, in order; none when the ends connect directly."""
         return self.adapter_stages if self.adapting else ()
 
-    @derived(semantics=PRESENTATION)
-    def arriving(self) -> Presentation:
-        """What arrives after the adapter: the presentation a transport stage receives."""
+    @derived(semantics=BEAT_SEQUENCE)
+    def arriving(self) -> BeatSequence:
+        """What arrives after the adapter: the beat sequence a transport stage receives."""
         adapted = self.adapted
         output = adapted[-1].output if adapted else None
-        return self.endpoints.source.presentation if output is None else output.presentation
+        return self.endpoints.source.sequence if output is None else output.sequence
 
     @view(semantics=STAGES)
     def stages(self) -> tuple[Stage, ...]:
@@ -704,7 +704,7 @@ __all__ = [
     "TIEOFFS_SEMANTICS",
     "Tieoffs",
     "boundary_contract",
-    "boundary_presentation",
+    "boundary_sequence",
     "commit_adapters",
     "netlist",
 ]
