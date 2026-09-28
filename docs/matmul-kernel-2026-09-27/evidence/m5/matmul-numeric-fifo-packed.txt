@@ -1,0 +1,6 @@
+Evidence: /tmp/mm/m5/sim-fifo-packed
+PASS packed external_fifo2 stalled=False result=INT8
+PASS packed external_fifo2 stalled=True result=INT8
+PASS packed cyclic_fifo2 stalled=False result=INT8
+PASS packed cyclic_fifo2 stalled=True result=INT8
+exit=0

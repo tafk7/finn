@@ -1,0 +1,6 @@
+Evidence: /tmp/mm/m5/sim-fifo-int8_pumped
+PASS int8_pumped external_fifo2 stalled=False result=INT19
+PASS int8_pumped external_fifo2 stalled=True result=INT19
+PASS int8_pumped cyclic_fifo2 stalled=False result=INT19
+PASS int8_pumped cyclic_fifo2 stalled=True result=INT19
+exit=0

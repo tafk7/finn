@@ -1,0 +1,28 @@
+Evidence: /tmp/mm/c3/sim-input-gen
+PASS single external_input_gen stalled=False result=INT4
+PASS single external_input_gen stalled=True result=INT4
+PASS single cyclic_input_gen stalled=False result=INT4
+PASS single cyclic_input_gen stalled=True result=INT4
+PASS packed external_input_gen stalled=False result=INT8
+PASS packed external_input_gen stalled=True result=INT8
+PASS packed cyclic_input_gen stalled=False result=INT8
+PASS packed cyclic_input_gen stalled=True result=INT8
+PASS one_beat_reductions external_input_gen stalled=False result=INT8
+PASS one_beat_reductions external_input_gen stalled=True result=INT8
+PASS one_beat_reductions cyclic_input_gen stalled=False result=INT8
+PASS one_beat_reductions cyclic_input_gen stalled=True result=INT8
+PASS padded_output external_input_gen stalled=False result=INT7
+PASS padded_output external_input_gen stalled=True result=INT7
+PASS padded_output cyclic_input_gen stalled=False result=INT7
+PASS padded_output cyclic_input_gen stalled=True result=INT7
+PASS int8_pumped external_input_gen stalled=False result=INT19
+PASS int8_pumped external_input_gen stalled=True result=INT19
+PASS int8_pumped cyclic_input_gen stalled=False result=INT19
+PASS int8_pumped cyclic_input_gen stalled=True result=INT19
+PASS int8_narrow external_input_gen stalled=False result=INT8
+PASS int8_narrow external_input_gen stalled=True result=INT8
+PASS int8_narrow cyclic_input_gen stalled=False result=INT8
+PASS int8_narrow cyclic_input_gen stalled=True result=INT8
+PASS narrow_weights cyclic_input_gen stalled=False result=INT10
+PASS narrow_weights cyclic_input_gen stalled=True result=INT10
+exit=0

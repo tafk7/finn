@@ -119,3 +119,75 @@ only adds frame markers, `REP = 1`). `matmul_assembly(contraction=...)`.
   which baseline FINN's RTL VVAU never offered.
 - Unit tests (`test_matmul_per_channel.py`): derived reuse and markers,
   widths, the packed core's refusal, and no compatible core on DSP48E2.
+
+## M5: the dense realization, and derived NARROW_WEIGHTS
+
+**Dense realization (X8).** `realization` (`native`, `dense`) is a Decision
+present only for a per-channel contraction. Densely realized, the datapath is
+dense: rows of `window × channels` activations (the operand `(R, K, C)` read
+row-major) against block-diagonal weights `W'[c, k·C + c'] = W[c, k]` if
+`c' = c`, else 0 (`datapath_weights`). SIMD divides `K·C`; the result
+precision stays the operation's (a window of K products). It needs the
+weights, so it is refused under external delivery (`matmul-realization`). On
+targets without the INT8 DSP58 core it is the only realization: per-channel
+operations now run on DSP48E1/E2, at C times the MACs and weight memory.
+
+**NARROW_WEIGHTS (X3, provisional).** Derived by the composite: 1 when the
+weights are known (cyclic, later read-only memstream) and none is its type's
+most negative value, else 0; passed to the packed core, whose lane packing it
+changes. One consequence is visible in the tests: under cyclic delivery the
+packed core now waits for the weights, and before the delivery is chosen it
+waits for that choice.
+
+**The adapter.** Per channel, `matmul_assembly` commits the realization
+together with the folding (the SIMD domain depends on it). Left out, the one
+compatible realization is taken; on DSP58 with known weights both are, and
+it asks for a choice.
+
+**Evidence** (`evidence/m5/`).
+
+- Dense sweep, rerun because cyclic modules may now carry NARROW_WEIGHTS:
+  34/34 (the 7 cases × 2 deliveries × 2 stalls, less the external
+  `narrow_weights`, plus the weight FIFO runs). `narrow_weights` exercises
+  `NARROW_WEIGHTS = 1` on the packed core (DSP48E2, INT4 weights in −7..7).
+- Per-channel sweep: 22/22, adding `ch_dense_e2`, the dense realization on
+  DSP48E2 with cyclic weights.
+- Unit tests: the block-diagonal image hand-packed, the realization refusals
+  and the DSP58 ambiguity, NARROW_WEIGHTS for narrow, full-range and external
+  weights.
+
+## C3: replay as a choice
+
+Dense rows are read once per output fold. `MatMulKernel.replay` is now a
+Decision over two nodes, present only on a dense datapath:
+
+- `buffer`: FinnLib `replay_buffer` (as before, now the instance
+  `u_replay_buffer`);
+- `input_gen`: FinnLib `input_gen` with one frame per row (`FM_SIZE` = the
+  reduction folds), `DIMS = (reuse, folds)` and `COEFS = (0, 1)`, which owns
+  its `ram_style` (`replay.input_gen.ram_style`).
+
+A per-channel datapath has no replay choice: `markers`, a one-repetition
+replay buffer, adds the frame markers (M0 X5). `matmul_assembly(replay=...)`
+defaults to `buffer`: both replays are always compatible, so the adapter's
+default is the caller's choice made explicit, not a filter.
+
+**Kernel layer.**
+
+- `InputGeneratorKernel` joins the stream idiom: optional `input_stream` and
+  `output_stream`, with the output contract derived from the input's. A
+  frame's beats must be one run; each nest loop steps `stride` beats of it.
+  `forms.split_beats` names the frame split.
+- A marker rule may name one bit of a wider loop-completion marker,
+  `olst[1]`. `Composition.connect` wires that bit as a slice and disposes the
+  unread bits (`UnusedOutput` with a bit range, from B3). dotp's TLAST is
+  `olst[1]`; `olst[0]` is disposed.
+
+**Evidence** (`evidence/c3/`).
+
+- Numeric XSI, every dense case and delivery through the input generator,
+  free and stalled, with the replayed words and frame markers observed at the
+  generator's output: 26/26.
+- Unit tests (`test_matmul_replay.py`): the keys, the `input_gen` parameters,
+  `olst[1]` wired as a one-bit slice and `olst[0]` disposed, marker-bit
+  validation.
