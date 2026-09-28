@@ -98,7 +98,7 @@ dotp = design_space(DotpAxiKernel(
     activation_dtype=DataType["INT3"],
     weights_dtype=DataType["INT3"],
     result_dtype=DataType["INT8"],
-    pe=2, simd=2, target_dsp=DspBlock.DSP48E2, segment_length=0,
+    pe=2, simd=2, target_dsp=DspBlock.DSP48E2, target_period_ns=5.0,
 )).with_choices(compute_pumping=False)
 answer = dotp.build_requirements
 assert isinstance(answer, requirements.ModuleBuildRequirements), answer

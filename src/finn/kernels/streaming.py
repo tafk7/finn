@@ -29,7 +29,6 @@ from finn.kernels.datatypes.scalar import ScalarEncoding
 from finn.kernels.physical.contract import STREAM_CONTRACT, StreamContract
 from finn.kernels.physical.forms import Every, Traversal
 from finn.kernels.physical.stream import ReadyValidStream, StreamMarker, MarkerKind
-from finn.kernels.clocks import CLOCKING, CLOCKING_SEMANTICS, ClockDomain, Clocking
 from finn.kernels.streams import MODULE, PORT, Stream
 from finn.kernels.artifacts.contribution_types import CopiedSource
 from finn.kernels.artifacts.requirements import (
@@ -122,7 +121,6 @@ class ReplayBuffer(Kernel):
     id = "finnlib.replay_buffer"
     version = "1"
 
-    clock: ClockDomain = Param(required=False)
     # The streams it sits on; its output contract derives from the input stream.
     input_stream: Stream = Param()
     output_stream: Stream = Param()
@@ -161,14 +159,9 @@ class ReplayBuffer(Kernel):
         except ValueError as error:
             return reject("replay-geometry", str(error))
 
-    @view(semantics=CLOCKING_SEMANTICS)
-    def clock_pins(self) -> Clocking:
-        return Clocking("clk", "rst")
-
     exports = {
         MODULE: build_requirements,
         PORT: {input_stream: input_port, output_stream: output_port},
-        CLOCKING: {clock: clock_pins},
     }
 
 

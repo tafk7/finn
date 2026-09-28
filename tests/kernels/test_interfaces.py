@@ -23,7 +23,6 @@ from finn.kernels.artifacts.abi import Bus, Direction, Endpoint, StandardProtoco
 from finn.kernels.artifacts.build import materialize_module_sources, prepare_module_build
 from finn.kernels.artifacts.derivation import ProducerIdentity
 from finn.kernels.artifacts.store import ArtifactStore
-from finn.kernels.clocks import DOMAIN, ClockDomain, DerivedClock
 from finn.kernels.control import EXPORTED, ControlBus
 from finn.kernels.datatypes.scalar import ScalarEncoding
 from finn.kernels.dotp import DotpAxiKernel
@@ -62,13 +61,11 @@ LEVELS = StreamSpec(ScalarEncoding(DataType["UINT2"]), vector_major((REPETITIONS
 class Activated(Space):
     """dotp, then thresholding: a padded child result feeding a child."""
 
-    clock = ClockDomain(clock="ap_clk", reset="ap_rst_n")
-    fast_clock = DerivedClock(clock="ap_clk2x", base=clock)
-    activations = Stream(spec=ACTIVATIONS, port="in0_V", clock=clock)
-    weights = Stream(spec=WEIGHTS, port="in1_V", clock=clock)
-    results = Stream(spec=RESULTS, clock=clock)
-    levels = Stream(spec=LEVELS, port="out0_V", clock=clock)
-    config = ControlBus(port="s_axilite", clock=clock)
+    activations = Stream(spec=ACTIVATIONS, port="in0_V")
+    weights = Stream(spec=WEIGHTS, port="in1_V")
+    results = Stream(spec=RESULTS)
+    levels = Stream(spec=LEVELS, port="out0_V")
+    config = ControlBus(port="s_axilite")
     compute = DotpAxiKernel(
         activation_dtype=A,
         weights_dtype=W,
@@ -76,9 +73,7 @@ class Activated(Space):
         pe=1,
         simd=SIMD,
         target_dsp=DspBlock.DSP48E2,
-        segment_length=0,
-        clock=clock,
-        fast_clock=fast_clock,
+        target_period_ns=5.0,
         activation_stream=activations,
         weights_stream=weights,
         result_stream=results,
@@ -91,23 +86,20 @@ class Activated(Space):
         pe=1,
         depth_trigger_bram=0,
         depth_trigger_uram=0,
-        clock=clock,
         input_stream=results,
         output_stream=levels,
         control=config,
     )
     modules = Members(MODULE)
     streams = Members(CONNECTION)
-    domains = Members(DOMAIN)
     tieoffs = Members(TIEOFFS)
     controls = Members(EXPORTED)
 
-    @view(semantics=COMPOSED, requires=(modules, streams, domains, tieoffs, controls))
+    @view(semantics=COMPOSED, requires=(modules, streams, tieoffs, controls))
     def structure(self) -> Composed | Rejected:
         return netlist(
             self.modules,
             self.streams,
-            self.domains,
             self.tieoffs,
             self.controls,
             module="activated",
@@ -194,7 +186,6 @@ def test_writable_thresholds_without_a_control_bus_are_refused():
             pe=1,
             depth_trigger_bram=0,
             depth_trigger_uram=0,
-            clock=Activated.clock,
             input_stream=Activated.results,
             output_stream=Activated.levels,
         )
@@ -338,10 +329,9 @@ def test_several_threshold_sets_take_a_set_selector_stream():
     two_sets = (THRESHOLDS[0], ((-4, 1, 8), (-3, 2, 9)))
 
     class Selected(Space):
-        clock = ClockDomain(clock="ap_clk", reset="ap_rst_n")
-        values = Stream(spec=RESULTS, port="in0_V", clock=clock)
-        sets = Stream(spec=selectors, port="in1_V", clock=clock)
-        levels = Stream(spec=LEVELS, port="out0_V", clock=clock)
+        values = Stream(spec=RESULTS, port="in0_V")
+        sets = Stream(spec=selectors, port="in1_V")
+        levels = Stream(spec=LEVELS, port="out0_V")
         activate = ThresholdingAxiKernel(
             input_dtype=R,
             threshold_dtype=R,
@@ -350,7 +340,6 @@ def test_several_threshold_sets_take_a_set_selector_stream():
             pe=1,
             depth_trigger_bram=0,
             depth_trigger_uram=0,
-            clock=clock,
             input_stream=values,
             output_stream=levels,
             set_stream=sets,
@@ -365,7 +354,7 @@ def test_several_threshold_sets_take_a_set_selector_stream():
     short = StreamSpec(ScalarEncoding(DataType["UINT1"]), vector_major((1, HEIGHT), 1))
 
     class Short(Selected):
-        sets = Stream(spec=short, port="in1_V", clock=Selected.clock)
+        sets = Stream(spec=short, port="in1_V")
 
     refused = design_space(Short()).sets.query(Stream.connection)
     assert isinstance(refused, Rejected)

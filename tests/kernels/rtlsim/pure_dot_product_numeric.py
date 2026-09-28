@@ -45,7 +45,7 @@ class Configuration:
     activation: str
     weight: str
     pumping: bool = False
-    segment: int = 0
+    period: float = 5.0  # target clock period (ns); sets the DSP58 segmentation
     repetitions: int = 4
 
 
@@ -57,12 +57,12 @@ CASES = (
     Configuration("int8_signed", DspBlock.DSP58, 8, 2, 4, "INT8", "INT8"),
     Configuration("int8_unsigned", DspBlock.DSP58, 8, 4, 4, "UINT8", "INT8"),
     Configuration("int8_odd_pumped", DspBlock.DSP58, 6, 2, 3, "UINT8", "INT8", True),
-    Configuration("int8_segmented_pumped", DspBlock.DSP58, 14, 2, 7, "UINT8", "INT8", True, 1),
+    Configuration("int8_segmented_pumped", DspBlock.DSP58, 14, 2, 7, "UINT8", "INT8", True, 2.4),
     Configuration("signed9", DspBlock.DSP58, 6, 2, 3, "INT9", "INT8"),
     Configuration("unsigned17", DspBlock.DSP48E2, 4, 2, 2, "UINT17", "INT2"),
     Configuration("signed18", DspBlock.DSP48E2, 4, 2, 2, "INT18", "INT2"),
     Configuration("unsigned23", DspBlock.DSP58, 4, 2, 2, "UINT23", "INT2"),
-    Configuration("int8_segmented", DspBlock.DSP58, 12, 2, 6, "INT8", "INT8", False, 1),
+    Configuration("int8_segmented", DspBlock.DSP58, 12, 2, 6, "INT8", "INT8", False, 1.2),
 )
 
 
@@ -78,10 +78,10 @@ STRESS_CASES = (
         "one_beat_int8_pumped", DspBlock.DSP58, 3, 2, 3, "UINT8", "INT8", True, repetitions=32
     ),
     Configuration(
-        "one_beat_int8_segmented", DspBlock.DSP58, 24, 2, 24, "INT8", "INT8", False, 1, 32
+        "one_beat_int8_segmented", DspBlock.DSP58, 24, 2, 24, "INT8", "INT8", False, 1.2, 32
     ),
     Configuration(
-        "one_beat_segmented_pumped", DspBlock.DSP58, 7, 2, 7, "UINT8", "INT8", True, 1, 32
+        "one_beat_segmented_pumped", DspBlock.DSP58, 7, 2, 7, "UINT8", "INT8", True, 2.4, 32
     ),
 )
 
@@ -108,7 +108,7 @@ def run(configuration: Configuration, evidence: Path, *, backpressure_ticks: int
             weights_dtype=w_type,
             result_dtype=result_type,
             target_dsp=c.target,
-            segment_length=c.segment,
+            target_period_ns=c.period,
         )
     ).with_choices(compute_pumping=c.pumping)
     module = point.build_requirements

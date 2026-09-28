@@ -13,7 +13,6 @@ and only there: a kernel exports one port per stream it references.
 from qonnx.core.datatype import DataType
 
 from finn.core.space import Available, Rejected, Space, design_space
-from finn.kernels.clocks import ClockDomain
 from finn.kernels.datatypes.scalar import ScalarEncoding
 from finn.kernels.dotp import DotpAxiKernel
 from finn.kernels.mvau import MVAU
@@ -29,14 +28,12 @@ RESULTS = vector_major((1, 2), 2)
 
 def chain(activations=ACTIVATIONS, weights=WEIGHTS, results=RESULTS, frame=2):
     class Chain(Space):
-        clock = ClockDomain(clock="ap_clk", reset="ap_rst_n")
         a = Stream(
             spec=StreamSpec(ScalarEncoding(A), activations, markers=(Every(frame),)),
             port="in0_V",
-            clock=clock,
         )
-        w = Stream(spec=StreamSpec(ScalarEncoding(W), weights), port="in1_V", clock=clock)
-        r = Stream(spec=StreamSpec(ScalarEncoding(R), results), port="out0_V", clock=clock)
+        w = Stream(spec=StreamSpec(ScalarEncoding(W), weights), port="in1_V")
+        r = Stream(spec=StreamSpec(ScalarEncoding(R), results), port="out0_V")
         compute = DotpAxiKernel(
             activation_dtype=A,
             weights_dtype=W,
@@ -44,7 +41,7 @@ def chain(activations=ACTIVATIONS, weights=WEIGHTS, results=RESULTS, frame=2):
             pe=2,
             simd=2,
             target_dsp=DspBlock.DSP48E2,
-            segment_length=0,
+            target_period_ns=5.0,
             activation_stream=a,
             weights_stream=w,
             result_stream=r,
@@ -131,7 +128,7 @@ def test_one_kernel_refusal_reaches_only_its_own_stream():
             activation_dtype=DataType["INT3"],
             weights_dtype=DataType["UINT3"],
             target_dsp=DspBlock.DSP48E2,
-            segment_length=0,
+            target_period_ns=5.0,
         )
     ).with_choices(
         {

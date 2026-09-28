@@ -4,13 +4,14 @@
 """Control buses as ordinary Spaces that kernels reference.
 
 A ``ControlBus`` is a node declared in the composite, named by the top-level
-port it presents (``port``) and clocked by a ``ClockDomain``. A kernel with a
+port it presents (``port``). A kernel with a
 control interface (an AXI-Lite configuration bus, say) has a reference input
 for it (``control: ControlBus = Param(required=False)``) and exports, under
 ``CONTROL``, the bus it presents there: ``exports = {CONTROL: {control:
 control_bus}}``. The node sees its kernel through ``Users(CONTROL)`` and
 exports an ``Exported`` bus under ``EXPORTED``; ``netlist`` renames the bus to
-the node's port and wires it through to the top. One kernel is controlled
+the node's port, associates it with the module's clock and reset, and wires it
+through to the top. One kernel is controlled
 through one bus node.
 
 A kernel whose control interface is not referenced, or that exposes none in
@@ -34,7 +35,6 @@ from finn.core.space import (
     view,
 )
 from finn.kernels.artifacts.abi import Bus, Endpoint, Member
-from finn.kernels.clocks import ClockDomain
 
 
 @dataclass(frozen=True)
@@ -50,11 +50,11 @@ CONTROL = ViewKey("control", CONTROL_SEMANTICS)
 
 @dataclass(frozen=True)
 class Exported:
-    """A kernel's control bus, the node it belongs to, and the top bus it becomes."""
+    """A kernel's control bus, the node it belongs to, and the top port it becomes."""
 
     node: str
     child: Bus
-    top: Bus
+    port: str
 
 
 EXPORTED_SEMANTICS = default_semantics(tuple)
@@ -82,7 +82,6 @@ class ControlBus(Space):
     """A control interface of the composite: one kernel's bus, presented at ``port``."""
 
     port: str = Param()
-    clock: ClockDomain = Param()
     users = Users(CONTROL)
 
     @view(semantics=EXPORTED_SEMANTICS, requires=(users,))
@@ -91,12 +90,7 @@ class ControlBus(Space):
         if len(present) > 1:
             named = ", ".join(node for node, _ in present)
             return reject("control-users", f"one kernel per control bus; referenced by {named}")
-        domain = self.clock
-        return tuple(
-            Exported(node, bus, top_bus(bus, self.port, domain.clock, domain.reset))
-            for node, bus in present
-            if bus is not None
-        )
+        return tuple(Exported(node, bus, self.port) for node, bus in present if bus is not None)
 
     exports = {EXPORTED: exported}
 

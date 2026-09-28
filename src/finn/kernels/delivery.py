@@ -42,7 +42,6 @@ from finn.kernels.streaming import (
     cyclic_stream_requirements,
 )
 from finn.core.space import default_semantics
-from finn.kernels.clocks import CLOCKING, CLOCKING_SEMANTICS, ClockDomain, Clocking
 from finn.kernels.streams import MODULE, PORT, Stream
 
 
@@ -54,7 +53,6 @@ class CyclicDelivery(Kernel):
     element = integer_scalar(dtype, Integer())
     form: Traversal = Param(semantics=TRAVERSAL)
     values: IntegerTensor = Param(semantics=INTEGER_TENSOR)
-    clock: ClockDomain = Param(required=False)
     # The stream it drives, when a parent places it beside a consumer.
     output_stream: Stream = Param(required=False)
     rom_style: str = Decision(values=CYCLIC_ROM_STYLES)
@@ -95,14 +93,9 @@ class CyclicDelivery(Kernel):
             rom_style=self.rom_style,
         )
 
-    @view(semantics=CLOCKING_SEMANTICS)
-    def clock_pins(self) -> Clocking:
-        return Clocking("clk", "rst")
-
     exports = {
         MODULE: build_requirements,
         PORT: {output_stream: output},
-        CLOCKING: {clock: clock_pins},
     }
 
 

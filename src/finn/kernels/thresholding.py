@@ -56,7 +56,6 @@ from finn.dataflow.datatypes import (
     ordinary_integer_bounds,
     resolve_qonnx_datatype_name,
 )
-from finn.kernels.clocks import CLOCKING, CLOCKING_SEMANTICS, ClockDomain, Clocking
 from finn.kernels.control import CONTROL, CONTROL_SEMANTICS, Control, ControlBus
 from finn.kernels.physical.axi_stream import AxiStream
 from finn.kernels.physical.contract import STREAM_CONTRACT, StreamContract
@@ -111,9 +110,8 @@ class ThresholdingAxiKernel(Kernel):
         return resolve_qonnx_datatype_name(f"INT{bits}")
 
     pe: int = Param()
-    # Where a parent places it: its clock domain, its streams, and the control
+    # Where a parent places it: its streams, and the control
     # bus that exports its AXI-Lite interface when thresholds are runtime-writable.
-    clock: ClockDomain = Param(required=False)
     input_stream: Stream = Param(required=False)
     output_stream: Stream = Param(required=False)
     set_stream: Stream = Param(required=False)
@@ -400,10 +398,6 @@ class ThresholdingAxiKernel(Kernel):
             return reject("threshold-set-stream", "each input beat needs one set index")
         return self._contract(self.interfaces[2], spec)
 
-    @view(semantics=CLOCKING_SEMANTICS)
-    def clock_pins(self) -> Clocking:
-        return Clocking("ap_clk", "ap_rst_n")
-
     @view(semantics=CONTROL_SEMANTICS)
     def control_bus(self) -> Control:
         return Control(self.config_bus if self.use_axilite else None)
@@ -432,7 +426,6 @@ class ThresholdingAxiKernel(Kernel):
     exports = {
         MODULE: build_requirements,
         PORT: {input_stream: input_port, output_stream: output_port, set_stream: set_port},
-        CLOCKING: {clock: clock_pins},
         CONTROL: {control: control_bus},
         TIEOFFS: tieoffs,
     }

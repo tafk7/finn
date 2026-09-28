@@ -179,7 +179,7 @@ point = design_space(
         weights_dtype=DataType["INT3"],
         result_dtype=DataType["INT8"],
         target_dsp=DspBlock.DSP48E2,
-        segment_length=0,
+        target_period_ns=5.0,
     )
 ).with_choices(compute_pumping=False)
 answer = point.build_requirements
@@ -201,7 +201,7 @@ for mode in WeightDelivery:
         pe=2,
         simd=2,
         target_dsp=DspBlock.DSP48E2,
-        segment_length=0,
+        target_period_ns=5.0,
         compute_pumping=False,
         weight_delivery=mode,
         **options,

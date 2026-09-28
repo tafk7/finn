@@ -29,7 +29,7 @@ FACTS = dict(
     activation_dtype=DataType["INT3"],
     weights_dtype=DataType["INT3"],
     target_dsp=DspBlock.DSP48E2,
-    segment_length=0,
+    target_period_ns=5.0,
 )
 
 
@@ -233,7 +233,7 @@ def test_mvau_honors_the_child_physical_view_not_just_its_raw_module(monkeypatch
             pe=MVAU.pe,
             simd=MVAU.simd,
             target_dsp=MVAU.target_dsp,
-            segment_length=MVAU.segment_length,
+            target_period_ns=MVAU.target_period_ns,
             # References to MVAU's stream nodes, which RestrictedMVAU inherits.
             activation_stream=MVAU.replayed,
             weights_stream=MVAU.weight_stream,

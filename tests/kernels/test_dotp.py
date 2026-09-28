@@ -41,7 +41,7 @@ def parameters(**updates):
         weights_dtype=DataType["INT3"],
         result_dtype=DataType["INT9"],
         target_dsp=DspBlock.DSP58,
-        segment_length=0,
+        target_period_ns=5.0,
         compute_pumping=False,
     )
     result.update(updates)
@@ -68,13 +68,13 @@ class _PartialDotp(Space):
     weights_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS, required=False)
     result_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS, required=False)
     target_dsp: DspBlock = Param(required=False)
-    segment_length: int = Param(required=False)
+    target_period_ns: float = Param(required=False)
     # Placed outside any stream: its optional stream formals stay unsupplied.
     component = DotpAxiKernel(
         pe=pe,
         simd=simd,
         target_dsp=target_dsp,
-        segment_length=segment_length,
+        target_period_ns=target_period_ns,
         activation_dtype=activation_dtype,
         weights_dtype=weights_dtype,
         result_dtype=result_dtype,
@@ -92,8 +92,6 @@ def test_component_groups_its_interfaces_and_keeps_one_root_physical_output():
     assert tuple(item.key for item in point.capabilities() if item.scope == "") == (
         "activation_port",
         "build_requirements",
-        "clock_pins",
-        "fast_clock_pins",
         "interfaces",
         "result_port",
         "tieoffs",
@@ -111,7 +109,7 @@ def test_component_groups_its_interfaces_and_keeps_one_root_physical_output():
         "weights_dtype",
         "result_dtype",
         "target_dsp",
-        "segment_length",
+        "target_period_ns",
     }
     # Optional reference inputs, supplied with Stream nodes by a parent that places
     # dotp between streams; alone, each is an unsupplied presence.
@@ -163,15 +161,26 @@ def test_physical_framing_has_no_workload_period_and_only_activation_has_last():
     assert [field.bit_offset for field in point.weights.payload.fields] == list(range(0, 45, 3))
 
 
-@pytest.mark.parametrize("segment", (0, 2))
-def test_segment_length_is_explicit_and_reaches_rtl(segment):
-    requirements = kernel(simd=7, segment_length=segment, compute_pumping=True).build_requirements
-    assert dict(requirements.abi.parameters)["SEGMENTLEN"] == str(segment)
+@pytest.mark.parametrize(
+    "period,pumping,segment",
+    [
+        # SIMD 7: a chain of three DSP58s, or two when pumped (six products each).
+        (5.0, False, 3),  # 7 DSPs fit 5 ns; the whole chain is one segment
+        (1.5, False, 2),  # 0.741 + 0.605 ns: two DSPs per segment
+        (1.0, False, 1),
+        (5.0, True, 2),  # pumped: against 2.5 ns, still the whole chain
+        (2.0, True, 1),
+    ],
+)
+def test_segment_length_follows_the_target_period(period, pumping, segment):
+    point = kernel(simd=7, target_period_ns=period, compute_pumping=pumping)
+    assert point.segment_length == segment
+    assert dict(point.build_requirements.abi.parameters)["SEGMENTLEN"] == str(segment)
 
 
-def test_dsp48_segment_length_is_ignored_by_rtl_but_preserved_as_supplied():
-    requirements = kernel(target_dsp=DspBlock.DSP48E2, segment_length=100).build_requirements
-    assert dict(requirements.parameters)["SEGMENTLEN"] == 100
+def test_dsp48_carries_the_segment_length_the_rtl_ignores():
+    requirements = kernel(target_dsp=DspBlock.DSP48E2, simd=7).build_requirements
+    assert dict(requirements.parameters)["SEGMENTLEN"] == 3
 
 
 @pytest.mark.parametrize(
@@ -202,8 +211,8 @@ def test_dsp48_segment_length_is_ignored_by_rtl_but_preserved_as_supplied():
             {"result_dtype": DataType["INT49"], "target_dsp": DspBlock.DSP48E2},
             "dotp-accumulator-width",
         ),
-        ({"segment_length": -1}, "dotp-segment"),
-        ({"segment_length": 3}, "dotp-segment"),
+        ({"target_period_ns": 0.7}, "dotp-clock-period"),
+        ({"target_period_ns": 1.4, "compute_pumping": True}, "dotp-clock-period"),
         ({"simd": 1, "compute_pumping": True}, "dotp-pumping"),
     ],
 )
@@ -224,7 +233,7 @@ def test_physical_view_reports_each_refusal_once(updates, code):
         # A mistyped formal is refused at the node call; a mistyped choice at commit.
         ({"pe": True}, DefinitionError),
         ({"simd": 2.5}, DefinitionError),
-        ({"segment_length": True}, DefinitionError),
+        ({"target_period_ns": "5"}, DefinitionError),
         ({"compute_pumping": 1}, ValueError),
         ({"target_dsp": "DSP58"}, DefinitionError),
         ({"activation_dtype": "INT3"}, DefinitionError),
@@ -237,14 +246,14 @@ def test_space_rejects_mistyped_values_at_binding(updates, error):
 
 
 def test_constraints_gate_acceptance_without_revalidating_raw_codegen():
-    point = kernel(segment_length=-1)
+    point = kernel(simd=1, compute_pumping=True)
     physical = point.inspect(DotpAxiKernel.build_requirements)
     assert isinstance(physical.output_result, Available)
     assert point.query(DotpAxiKernel.codegen) == physical.output_result
-    assert dict(physical.output_result.value.parameters)["SEGMENTLEN"] == -1
+    assert dict(physical.output_result.value.parameters)["PUMPED_COMPUTE"] == 1
     refused = physical.accepted_result
     assert isinstance(refused, Rejected)
-    assert {finding.code for finding in refused.findings} == {"dotp-segment"}
+    assert {finding.code for finding in refused.findings} == {"dotp-pumping"}
 
 
 @pytest.mark.parametrize("updates,stream", [({"simd": 0}, "activation"), ({"pe": 0}, "result")])

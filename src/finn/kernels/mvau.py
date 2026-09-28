@@ -16,9 +16,8 @@ No Region, logical operand mapping, or dataflow graph is required. ``MVAU`` is a
 graph of design spaces: four ``Stream`` nodes, and kernel nodes that reference
 them. Each stream sees its users; one with a single user is a boundary of MVAU
 and presents its ``port`` name (``in0_V``, ``in1_V``, ``out0_V``). ``structure``
-wires ``Members(MODULE)`` through ``Members(CONNECTION)``, clocked by
-``Members(DOMAIN)``: ``clock`` (``ap_clk``/``ap_rst_n``) and, only when compute
-is pumped, ``fast_clock`` (``ap_clk2x``). ``mvau_assembly`` is
+wires ``Members(MODULE)`` through ``Members(CONNECTION)``; the module has
+``ap_clk2x`` only when compute is pumped. ``mvau_assembly`` is
 a convenience adapter: it configures concrete facts, commits the choices and
 packs the views into an ``MVAUAssembly``.
 """
@@ -47,7 +46,6 @@ from finn.dataflow.datatypes import (
     resolve_qonnx_datatype_name,
 )
 from finn.kernels.configure import commit, describe
-from finn.kernels.clocks import DOMAIN, ClockDomain, DerivedClock
 from finn.kernels.delivery import CyclicDelivery
 from finn.kernels.dotp import DotpAxiKernel
 from finn.kernels.physical.forms import TRAVERSAL, Every, Traversal, tile, vector_major
@@ -179,7 +177,7 @@ class MVAU(Space):
     activation_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
     weights_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
     target_dsp: DspBlock = Param()
-    segment_length: int = Param()
+    target_period_ns: float = Param()
     weights: IntegerTensor = Param(semantics=INTEGER_TENSOR, required=False)
     pe: int = Decision(domain=divisors_of(matrix_height))
     simd: int = Decision(domain=divisors_of(matrix_width))
@@ -247,20 +245,14 @@ class MVAU(Space):
             return element
         return StreamSpec(element, vector_major((f.repetitions, f.matrix_height), f.pe))
 
-    # Clock domains, named by their top pins; the 2x domain is present only when
-    # the compute kernel runs in it.
-    clock = ClockDomain(clock="ap_clk", reset="ap_rst_n")
-    fast_clock = DerivedClock(clock="ap_clk2x", base=clock)
-
     # Streams: relations between the kernels that reference them. A stream with a
     # single user is a boundary of MVAU and presents its ABI port name.
-    activations = Stream(spec=activation_spec, port="in0_V", clock=clock)
-    replayed = Stream(spec=replayed_spec, clock=clock)
-    weight_stream = BufferedStream(spec=weight_spec, port="in1_V", clock=clock)
-    results = Stream(spec=result_spec, port="out0_V", clock=clock)
+    activations = Stream(spec=activation_spec, port="in0_V")
+    replayed = Stream(spec=replayed_spec)
+    weight_stream = BufferedStream(spec=weight_spec, port="in1_V")
+    results = Stream(spec=result_spec, port="out0_V")
 
     replay = ReplayBuffer(
-        clock=clock,
         input_stream=activations,
         output_stream=replayed,
         sequence_length=synapse_folds,
@@ -273,9 +265,7 @@ class MVAU(Space):
         pe=pe,
         simd=simd,
         target_dsp=target_dsp,
-        segment_length=segment_length,
-        clock=clock,
-        fast_clock=fast_clock,
+        target_period_ns=target_period_ns,
         activation_stream=replayed,
         weights_stream=weight_stream,
         result_stream=results,
@@ -286,7 +276,6 @@ class MVAU(Space):
         dtype=weights_dtype,
         form=weight_period,
         values=weights,
-        clock=clock,
         output_stream=weight_stream,
     )
     implementation: CyclicDelivery | None = Decision(
@@ -295,15 +284,13 @@ class MVAU(Space):
     delivery = selected(implementation)
     modules = Members(MODULE)
     streams = Members(CONNECTION)
-    domains = Members(DOMAIN)
     tieoffs = Members(TIEOFFS)
 
-    @view(semantics=COMPOSED, requires=(dimensions, modules, streams, domains, tieoffs))
+    @view(semantics=COMPOSED, requires=(dimensions, modules, streams, tieoffs))
     def structure(self) -> Composed | Rejected:
         return netlist(
             self.modules,
             self.streams,
-            self.domains,
             self.tieoffs,
             module="finn_mvau_" + self.delivery,
             producer=ProducerIdentity("finn.mvau." + self.delivery, "1"),
@@ -327,7 +314,7 @@ def mvau_assembly(
     pe: int,
     simd: int,
     target_dsp: DspBlock,
-    segment_length: int = 0,
+    target_period_ns: float = 5.0,
     compute_pumping: bool = False,
     weight_delivery: WeightDelivery = WeightDelivery.EXTERNAL,
     weights: Sequence[Sequence[int]] | None = None,
@@ -340,6 +327,8 @@ def mvau_assembly(
     applies to cyclic delivery; the ``auto`` default leaves memory inference to
     synthesis, as the ROM did before the choice existed. ``weight_fifo_depth``
     places a FIFO on the weight stream; ``None`` connects it directly.
+    ``target_period_ns`` is the clock the module must meet (5 ns: 200 MHz); it
+    sets dotp's DSP58 chain segmentation.
     """
     if not isinstance(weight_delivery, WeightDelivery):
         raise ValueError("weight_delivery must be a WeightDelivery value")
@@ -353,7 +342,7 @@ def mvau_assembly(
         activation_dtype=activation_dtype,
         weights_dtype=weights_dtype,
         target_dsp=target_dsp,
-        segment_length=segment_length,
+        target_period_ns=target_period_ns,
     )
     if weights is not None:
         facts["weights"] = tuple(tuple(row) for row in weights)

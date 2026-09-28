@@ -19,7 +19,7 @@ negative weight. NARROW_WEIGHTS is always zero.
 
 from __future__ import annotations
 
-from math import prod
+from math import ceil, floor, prod
 
 from finn.kernels.artifacts.abi import (
     Clock,
@@ -60,7 +60,6 @@ from finn.kernels.physical.forms import (
     split_walk,
     walk_axis,
 )
-from finn.kernels.clocks import CLOCKING, CLOCKING_SEMANTICS, ClockDomain, Clocking, DerivedClock
 from finn.kernels.streams import (
     MODULE,
     PORT,
@@ -84,14 +83,19 @@ from finn.core.space import (
 )
 
 _DSP_VERSION = {DspBlock.DSP48E1: 1, DspBlock.DSP48E2: 2, DspBlock.DSP58: 3}
+# FINN's DSP58 chain timing model (rtl/matrixvectoractivation_rtl.py).
+_FIRST_DSP_NS, _NEXT_DSP_NS = 0.741, 0.605
 
 
 class DotpAxiKernel(Kernel):
     """Physical dot-product space and its assessed module-building view.
 
-    SEGMENTLEN is literal: zero selects the RTL's full chain, and DSP48
-    implementations ignore positive values. Pumped compute requires a
-    phase-aligned 2x clock. The caller owns framing and accumulation bounds.
+    ``target_period_ns`` is the clock period the module must meet. It sets
+    SEGMENTLEN, the DSP58 chain length between pipeline registers, by FINN's
+    timing model: about 0.741 ns through the first DSP and 0.605 ns through each
+    further one, against half the period when compute is pumped. DSP48
+    implementations ignore SEGMENTLEN. Pumped compute requires a phase-aligned
+    2x clock. The caller owns framing and accumulation bounds.
     """
 
     id = "exact_integer_dot_product_axi"
@@ -100,7 +104,7 @@ class DotpAxiKernel(Kernel):
     pe: int = Param()
     simd: int = Param()
     target_dsp: DspBlock = Param()
-    segment_length: int = Param()
+    target_period_ns: float = Param()
     compute_pumping: bool = Decision(values=(False, True))
 
     activation_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
@@ -109,9 +113,6 @@ class DotpAxiKernel(Kernel):
     activation_type = integer_scalar(activation_dtype, Integer(min_bits=2))
     weights_type = integer_scalar(weights_dtype, SignedInteger(min_bits=2))
     result_type = integer_scalar(result_dtype, SignedInteger())
-    # The clock domains it runs in: the 2x domain only when compute is pumped.
-    clock: ClockDomain = Param(required=False)
-    fast_clock: DerivedClock = Param(required=False)
     # The streams dotp sits on, when a parent places it between streams: reference
     # inputs, each a Stream node placed beside dotp.
     activation_stream: Stream = Param(required=False)
@@ -191,17 +192,19 @@ class DotpAxiKernel(Kernel):
             return reject("dotp-pumping", "pumping must be boolean and requires SIMD >= 2")
         return True
 
-    @constraint
-    def segment_length_supported(self) -> bool | Rejected:
-        target = self.target_dsp
-        segment = self.segment_length
-        simd = self.simd
+    @derived(semantics=default_semantics(int))
+    def segment_length(self) -> int | Rejected:
+        """The longest DSP58 chain segment that meets the target period, at most the chain."""
         pumping = self.compute_pumping
-        products_per_stage = 6 if pumping else 3
-        chain_length = (simd + products_per_stage - 1) // products_per_stage
-        if segment < 0 or (target is DspBlock.DSP58 and segment > chain_length):
-            return reject("dotp-segment", "SEGMENTLEN must be zero or fit the DSP58 compute chain")
-        return True
+        period = self.target_period_ns / 2 if pumping else self.target_period_ns
+        if not period > _FIRST_DSP_NS:
+            return reject(
+                "dotp-clock-period",
+                f"a {self.target_period_ns} ns target leaves no time for one DSP stage",
+            )
+        meets = floor((period - _FIRST_DSP_NS) / _NEXT_DSP_NS + 1)
+        chain = ceil(self.simd / (6 if pumping else 3))
+        return min(meets, chain)
 
     support = ConstraintGroup(
         target_supported,
@@ -210,7 +213,6 @@ class DotpAxiKernel(Kernel):
         input_types_supported,
         accumulator_width_supported,
         pumping_supported,
-        segment_length_supported,
     )
 
     @derived(semantics=default_semantics(ModuleBuildRequirements))
@@ -396,22 +398,13 @@ class DotpAxiKernel(Kernel):
                 )
         return self._port(self.result.stream, self.result_stream)
 
-    @view(semantics=CLOCKING_SEMANTICS)
-    def clock_pins(self) -> Clocking:
-        return Clocking("ap_clk", "ap_rst_n")
-
-    @view(semantics=CLOCKING_SEMANTICS)
-    def fast_clock_pins(self) -> Clocking:
-        return Clocking("ap_clk2x") if self.compute_pumping else Clocking()
-
     @view(semantics=TIEOFFS_SEMANTICS)
     def tieoffs(self) -> Tieoffs:
-        # Unpumped, the RTL ignores its 2x clock input and no domain drives it.
+        # Unpumped, the RTL ignores its 2x clock input: hold it low.
         return Tieoffs() if self.compute_pumping else Tieoffs((("ap_clk2x", 0),))
 
     exports = {
         MODULE: build_requirements,
-        CLOCKING: {clock: clock_pins, fast_clock: fast_clock_pins},
         TIEOFFS: tieoffs,
         PORT: {
             activation_stream: activation_port,

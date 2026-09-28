@@ -52,7 +52,7 @@ FACTS = dict(
     activation_dtype=DataType["INT3"],
     weights_dtype=DataType["INT3"],
     target_dsp=DspBlock.DSP48E2,
-    segment_length=0,
+    target_period_ns=5.0,
 )
 
 
@@ -150,7 +150,6 @@ def test_the_inactive_family_is_never_demanded():
     assert set(reached) == {
         "implementation.cyclic.$selected",
         "implementation.cyclic.build_requirements",
-        "implementation.cyclic.clock_pins",
         "implementation.cyclic.output",
     }
     assert all(
