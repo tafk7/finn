@@ -1,0 +1,10 @@
+======================== 427 passed in 60.99s (0:01:00) ========================
+All checks passed!
+Success: no issues found in 27 source files
+Success: no issues found in 41 source files
+======================= 824 passed in 368.39s (0:06:08) ========================
+All checks passed!
+Success: no issues found in 55 source files
+Success: no issues found in 10 source files
+gate exit=0
+doc examples (scratchpad space/check-examples.py): All 25 documentation examples passed

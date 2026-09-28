@@ -1,0 +1,69 @@
+diff --git a/rtl/shape/inner_shuffle_tb.sv b/rtl/shape/inner_shuffle_tb.sv
+index 15de6e1..120077d 100644
+--- a/rtl/shape/inner_shuffle_tb.sv
++++ b/rtl/shape/inner_shuffle_tb.sv
+@@ -83,28 +83,13 @@ module inner_shuffle_tb;
+ 
+ 
+ 	// Set of tests to run in parallel
+-	localparam int unsigned TEST_COUNT = 20;
++	localparam int unsigned TEST_COUNT = 5;
+ 	localparam cfg_t TESTS[TEST_COUNT] = '{
+-			'{1,150,30},  // (150,30)  -> (30, 150) SIMD:1 (timingout?)
+-			'{2,144,30},  // (144,30)  -> (30,144)  SIMD:2
+-			'{3,6,7},     // (6,7)     -> (7,6)     SIMD:3
+-			'{4,128,384}, // (128,384) -> (384,128) SIMD:4
+-			'{4,8,10},    // (8,10)    -> (10,8)    SIMD:4
+-			'{4,12,10},   // (12,10)   -> (10,12)   SIMD:4
+-			'{4,16,10},   // (16,10)   -> (10,16)   SIMD:4
+-			'{4,128,1024},// (128,1024)-> (1024,128)SIMD:4 (BERT Large)
+-			'{5,100,100}, // (100,100) -> (100,100) SIMD:5
+-			'{6,36,24},   // (36,24)   -> (24,36)   SIMD:6
+-			'{6,12,14},   // (12,14)   -> (14,12)   SIMD:6
+-			'{6,12,15},   // (12,15)   -> (15,12)   SIMD:6
+-			'{6,12,16},   // (12,16)   -> (16,12)   SIMD:6
+-			'{7,42,150},  // (42,150)  -> (150,42)  SIMD:7
+-			'{8, 80, 96}, // (80,96)   -> (96,80)   SIMD:8
+-			'{9, 36, 103},// (36,103)  -> (103,36)  SIMD:9
+-			'{10, 20, 11},// (20,11)   -> (11,20)  SIMD:10
+-			'{10, 20, 12},// (20,12)   -> (12,20)  SIMD:10
+-			'{10, 20, 15},// (20,15)   -> (15,20)  SIMD:10
+-			'{10, 20, 18} // (20,18)   -> (18,20)  SIMD:10
++			'{4, 8, 10},  // known: (8,10) -> (10,8) SIMD:4
++			'{4, 4, 4},   // probe: I == J == SIMD
++			'{4, 8, 4},   // probe: J == SIMD
++			'{4, 4, 8},   // probe: I == SIMD
++			'{2, 4, 4}    // probe: control
+ 	};
+ 
+ 	bit [TEST_COUNT-1:0] done = 0;
+@@ -179,20 +164,25 @@ module inner_shuffle_tb;
+ 			@(posedge clk iff !rst);
+ 			repeat(ROUNDS) begin
+ 				for(int unsigned  i = 0; i < BEATS; i++) begin
+-					while($urandom()%37 == 0)  @(posedge clk);
++					// probe: bursts of two beats, then three idle cycles
++					if((i % 2) == 0 && i > 0) begin
++						ivld <= 0;
++						idat <= 'x;
++						repeat(3) @(posedge clk);
++					end
+ 					ivld <= 1;
+ 					idat <= helper.flat_test_input[i];
+ 					@(posedge clk iff irdy);
+-					ivld <=  0;
+-					idat <= 'x;
+ 				end
++				ivld <=  0;
++				idat <= 'x;
+ 			end
+ 		end
+ 
+ 		//- Output Checking -------------
+ 		always_ff @(posedge clk) begin
+ 			if(rst)  ordy <= 0;
+-			else if(!ordy || ovld)  ordy <= $urandom()%7 != 0;
++			else  ordy <= 1;  // probe: no output backpressure
+ 		end
+ 
+ 		int unsigned  RxCnt = 0;

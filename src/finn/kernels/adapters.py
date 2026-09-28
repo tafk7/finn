@@ -156,6 +156,11 @@ class TransposeKernel(Kernel):
     elements of a row a beat; any outer axes are a sequence of matrices. The
     output presents each matrix column by column, SIMD elements of a column a
     beat. SIMD divides I and J.
+
+    Known defect (FinnLib ``b9262df``): with SIMD 4 and a side of 4 or 8, the
+    RTL emits undefined lanes when its input arrives in bursts with idle cycles
+    between them; FinnLib's own testbench fails the same way with that input
+    timing. The condition is not characterized, so nothing is refused yet.
     """
 
     id = "finnlib.inner_shuffle"

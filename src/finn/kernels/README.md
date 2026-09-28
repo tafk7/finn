@@ -42,8 +42,10 @@ planned changes, not additional APIs already delivered here.
 ```text
 base.py                  neutral Kernel identity and capability metadata
 dotp.py                  dotp_axi: operand scalars, AXIS ports, one kernel per compute core
-matmul.py                folding, dotp child node, and a weight-delivery Decision over nodes
+matmul.py                MatMulKernel: contraction, folding, and Decisions over its child nodes
 streaming.py             replay and initialized cyclic word delivery
+memstream.py             FinnLib memstream_axi as a delivery kernel (writable, sets, INIT_FILE)
+adapters.py              stream adapters: vpc width conversion, inner_shuffle transpose
 target.py                DSP targets and port capacities
 physical/                typed native/AXIS ports, detached packing, wiring and lowering
 datatypes/               QONNX identity, integer policies, scalar Spaces and codecs
@@ -59,7 +61,9 @@ Space -> accepted build_requirements view -> ModuleBuildRequirements
 | Declaration | File | Native interface and authoring concern |
 |---|---|---|
 | `FifoKernel` | `fifo.py` | Opaque unpadded words; depth and RAM-style choice |
-| `InputGeneratorKernel` | `input_generator.py` | Immutable extent/stride vectors; native multi-bit loop markers |
+| `InputGeneratorKernel` | `input_generator.py` | Immutable extent/stride vectors; native multi-bit loop markers; a derived output contract between two streams |
+| `MemStreamKernel` | `memstream.py` | A stored operand in its consumer's order; RAM style, pumped memory, AXI-Lite, set selection |
+| `WidthConverterKernel`, `TransposeKernel` | `adapters.py` | Stream adapters between two streams: `vpc` and `inner_shuffle` |
 | `ThresholdingAxiKernel` | `thresholding.py` | Threshold tables, output encoding, AXI-Lite and set selection |
 | `EltwiseKernel` | `eltwise.py` | Integer/float operand scalars, dependent type constraints, typed unpadded ports |
 | `IntToFp32Kernel` | `int_to_fp32.py` | Combinational pins and a fixed FLOAT32 result; no clock or stream |
@@ -108,17 +112,25 @@ relative to a staging directory; retain that layout and use the declared
 `include_directories`. Its AXI-Lite memory and `ap_ctrl_hs` registers share the
 `control` bundle; software must enable start/auto-restart for continuous output.
 
-`MatMulKernel` owns operand extents, PE/SIMD folding and result precision, and declares
-its connections as streams (`finn.kernels.streams`). It derives a `StreamSpec`
-(element, traversal, repetition, markers) for each stream; kernels reference
-the streams they sit on through reference inputs and export one port contract
-per input (`exports = {PORT: {activation_stream: activation_port, ...}}`):
+`MatMulKernel` owns the operation's facts (the `contraction`, `DENSE` or
+`PER_CHANNEL`, and the extents), PE/SIMD folding and result precision, and
+declares its connections as streams (`finn.kernels.streams`). It derives a
+`StreamSpec` (element, traversal, repetition, markers) for each stream;
+kernels reference the streams they sit on through reference inputs and export
+one port contract per input (`exports = {PORT: {activation_stream:
+activation_port, ...}}`). Each slot is a node, a Decision over nodes, or a
+derived node, and each Decision is present only where its case applies:
 
 ```text
-in0_V ─activations─► replay ─replayed─► compute (dotp) ─results─► out0_V
-                                           ▲
-             delivery ─── weight_stream ───┘   (buffered: direct | fifo)
-       external: boundary in1_V  |  cyclic: CyclicDelivery (rom_style, weights)
+in0_V ─activations─► replay ─replayed─► compute ─results─► out0_V
+                        ▲                  ▲
+                        │                  └── weight_stream ── delivery
+   dense:       replay: buffer | input_gen      (transport: direct | fifo)
+   per-channel: markers (derived, REP = 1)
+   compute: packed (dotp) | int8_dsp58 (dotp_8sx9_dsp58); compute_pumping
+   per-channel: realization: native | dense (block-diagonal weights)
+   delivery: external (in1_V) | cyclic (ROM) | memstream (RAM: ram_style,
+             pumped_memory; writable_weights → s_axilite; weight_sets > 1 → in2_V)
 ```
 
 A stream sees each user's port on that stream only (`Users(PORT)`), so a port's
@@ -135,9 +147,12 @@ module has `ap_clk2x` only when a child needs it: an unpumped MatMulKernel has n
 kernel generates one module and exposes its interface; wiring that module's
 instance into a design is the consumer's. `build_requirements` lowers that structure.
 The `delivery` Decision places either nothing (`external`: the weight
-stream has one user and is the boundary `in1_V`) or its `cyclic`
-CyclicDelivery candidate, named `delivery.cyclic`; only the selected
-candidate is evaluated. A `BufferedStream` owns a `transport`
+stream has one user and is the boundary `in1_V`) or one of its candidates,
+the `cyclic` CyclicDelivery (`delivery.cyclic`) or the `memstream`
+MemStreamKernel; only the selected candidate is evaluated. Compatibility
+filters the candidates (a per-channel contraction is read only by the INT8
+DSP58 core, runtime-writable weights need the memstream); where several remain,
+the choice is the caller's. A `BufferedStream` owns a `transport`
 Decision over nodes: `direct`, or a `fifo` candidate whose depth and memory style
 are its own decisions. Whether a FIFO is needed and how deep is a compiler
 decision; the stream only provides the slot. `commit` (from

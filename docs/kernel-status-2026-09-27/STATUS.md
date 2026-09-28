@@ -8,7 +8,12 @@ supersedes [the 2026-09-25 status](../kernel-status-2026-09-25/STATUS.md).
 **Update (same day): phases A and B are done.** Record, evidence and the
 recorded fingerprint and ABI changes:
 [`../kernel-phase-ab-2026-09-27/RECORD.md`](../kernel-phase-ab-2026-09-27/RECORD.md).
-Phase C is next.
+
+**Update (2026-09-28): Phase C is done through C6**, with one part of C6 held
+for D10 (below). Record and evidence:
+[`../matmul-kernel-2026-09-27/RECORD.md`](../matmul-kernel-2026-09-27/RECORD.md).
+The D10 design round is written for review:
+[`../stream-model-2026-09-27/DESIGN.md`](../stream-model-2026-09-27/DESIGN.md).
 
 ## 1. Where things stand
 
@@ -23,6 +28,11 @@ Phase C is next.
 | `d42dc05c6`, `d7a64b0be` | B1: per-input exports (engine); ports check their streams; per-port attribution | same, [engine proposal](../kernel-phase-ab-2026-09-27/PROPOSAL-per-input-exports.md) |
 | `bf9dfe0c9` | B2: clock domains as referenced Spaces; unpumped `ap_clk2x` dropped. *Revised after B3 (D11): domain nodes removed, clocks driven by role, target period added* | same |
 | `75595eedb` | B3: control buses, tie-offs, sidebands, child padding; thresholding on streams | same |
+| `538b53951`, `f815f4c20` | C0 M0: the user's answers and the collapse/split analysis; M1: `MVAU` becomes `MatMulKernel` | [spec](../matmul-kernel-2026-09-27/SPEC.md), [M0](../matmul-kernel-2026-09-27/M0.md), [record](../matmul-kernel-2026-09-27/RECORD.md) |
+| `1182e8025` | C0 M2–M4: one kernel per dotp core (FinnLib `CORE`, pin `b9262df`), the per-channel mode, one composite for dense and per-channel | same |
+| `f5dc725c2` | C0 M5: the dense realization of per-channel operations; derived NARROW_WEIGHTS | same |
+| `ae68b558a` | C3: replay as a choice (`replay_buffer` or `input_gen`); marker bits | same |
+| `cca9ae9e3` | C4–C6: memstream delivery (writable, pumped, several sets); adapter kernels (`vpc`, `inner_shuffle`) | same |
 
 **Validation at the landing (`545981eea`):**
 
@@ -80,14 +90,18 @@ All of these are verified in the audit (§/probe references there).
 | ~~FinnLib pinned three ways~~ | Fixed in A2: one pin, `11b5c64b`, on the fork. Upstream has none of the carried commits yet |
 | ~~Shared `deps/finnlib`~~ | Fixed in A1 |
 | ~~Clock and reset routed by pin name~~ | Fixed in B2 and its revision: child clocks and resets are driven by declared role; an unpumped design has no `ap_clk2x` |
-| **Only 4 of 11 kernels use the stream idiom** | Thresholding joined in B3 (streams, control, tie-offs; not yet fused into MVAU). Eltwise and the input generator are standalone |
+| **Some kernels are still standalone** | The stream idiom now covers the dotp cores, replay, cyclic and memstream delivery, FIFO, thresholding, the input generator and the adapters. Eltwise and int-to-float remain standalone |
+| **FinnLib `inner_shuffle` emits undefined lanes** (found in C6) | SIMD 4 with a side of 4 or 8, input in bursts with idle cycles. Reproduced in FinnLib's own testbench by changing only its input timing. Blocks the transpose adapter until fixed upstream |
+| **A stream holds one form** | Both ends adopt the composite's form, so a stream cannot place an adapter between two presentations. D10's S1 is the fix (C6's held part) |
+| **Parameter images are in the build identity** | Cyclic `INIT_DATA` and memstream `INIT_FILE` (`GeneratedData`) key the module by its weights. The artifact layer's intent is late-bound slots (`DataSlot`/`DataBinding`), so one component serves every weight value |
 | **HLS kernels can't be placed by `netlist`** | They yield HLS source requirements with no pin ABI. No HLS kernel is on the current path (D5); the HLS synthesis stage is future work (Phase D) |
 | **An unused stream is refused**, and a boundary needs its port name declared up front | Optional streams need explicit `when=` guards |
 
 ## 4. Plan
 
 Each step is independently landable and ends at a review gate. Phases A and B
-are done (see the record). Phase C is executing (M0 answered 2026-09-27).
+are done (see the record). Phase C is done through C6 (2026-09-28), except the
+in-stream adapter Decision, which waits for D10's S1.
 
 ### Phase A: foundations (done)
 
@@ -108,16 +122,16 @@ are done (see the record). Phase C is executing (M0 answered 2026-09-27).
 
 | Step | Content | Depends on |
 |---|---|---|
-| **C0. `MatMulKernel`** (D12) | The [task spec](../matmul-kernel-2026-09-27/SPEC.md), increments M0–M4: the collapse and split analysis at a human gate, then the rename, dotp's per-channel mode, and one composite for the dense and per-channel contractions | B1–B3 |
+| **C0. `MatMulKernel`** (D12) | *Done: M0–M5 (the spec's M4 became M4 and M5).* The [task spec](../matmul-kernel-2026-09-27/SPEC.md), increments M0–M4: the collapse and split analysis at a human gate, then the rename, dotp's per-channel mode, and one composite for the dense and per-channel contractions | B1–B3 |
 | ~~C1. J5: VVAU reuse~~ **Replaced** by the [`MatMulKernel` spec](../matmul-kernel-2026-09-27/SPEC.md): MVAU and VVAU dissolve into one design space; thresholding is cut out | — | — |
 | *(was C1)* VVAU reuse, plus a reusable delivery slot | Same families, `ACTIVATION_BROADCASTING=0`, a marker generator instead of replay. Needs E-048 (SWG→VVAU lane order) re-derived | B1 |
 | ~~C2. J6: fused thresholding~~ **Dropped** by the `MatMulKernel` spec: thresholding stays its own kernel; placing it with a matmul in one module is an operation-to-module mapping decision of the dataflow layer (D10, D11) | — | — |
 | *(was C2)* fused thresholding | Thresholding already sits on streams and a control bus (B3). Remaining: compose MVAU → Thresholding as an optional node with `when=`-guarded streams, and the numeric sweep over the fused output | B1, B3 |
-| **C3. J7: replay as a choice** | `replay_buffer` or `input_gen`, as a `Decision` over nodes (D7) | B1, B2 |
-| **C4. J8: an RTL memstream kernel, plus runtime-writable weights** (D5) | A fixed-interface kernel over FinnLib `memstream_axi`: `DEPTH`, `WIDTH`, `SETS`, `RAM_STYLE`, and pumped memory as a Decision of the memstream kernel (its 2x clock pin driven by role). Initial contents go through `INIT_FILE`: check whether the artifact layer's data-file contribution supports it, and add one if not. Its AXI-Lite bus is exported at the module boundary (B3). `MatMulKernel` gains a writable delivery candidate, and the numeric XSI harness gains an AXI-Lite write driver. Decide whether it replaces the kernel-local `cyclic_stream.sv` for read-only delivery, which needs equivalence evidence | A2, B2, B3, C0 |
-| **C5. J9: multi-set delivery** (R7, MLO) | `SETS > 1`, with the set-index stream as an ordinary stream reference input of the memstream kernel. MLO drives the index from outside the op (V10) | C4 |
-| **C5.5. D10 design round** | A first-principles design of the dataflow `Stream` for kernel Spaces, by a fresh-context review of the prior corpus (scratchpad `dataflow/`, `space/`, `open/`) taken as wary inputs. Output: [`../stream-model-2026-09-27/DESIGN.md`](../stream-model-2026-09-27/DESIGN.md), for review. Design only; implementing it is Phase D | B1–B3 |
-| **C6. J10: stream adapters** | Width conversion (FinnLib `vpc`), lane regroup and reorder (`inner_shuffle`) as a `Decision` over adapter nodes inside a stream, chosen by `classify()`. Within one generated module only; edges between modules are D10's. Built consistently with the C5.5 design | B1, C3, C5.5 |
+| **C3. J7: replay as a choice** | *Done (`ae68b558a`).* `replay_buffer` or `input_gen`, as a `Decision` over nodes (D7) | B1, B2 |
+| **C4. J8: an RTL memstream kernel, plus runtime-writable weights** (D5) | *Done (`cca9ae9e3`); both deliveries stay candidates (user, 2026-09-27).* A fixed-interface kernel over FinnLib `memstream_axi`: `DEPTH`, `WIDTH`, `SETS`, `RAM_STYLE`, and pumped memory as a Decision of the memstream kernel (its 2x clock pin driven by role). Initial contents go through `INIT_FILE`: check whether the artifact layer's data-file contribution supports it, and add one if not. Its AXI-Lite bus is exported at the module boundary (B3). `MatMulKernel` gains a writable delivery candidate, and the numeric XSI harness gains an AXI-Lite write driver. Decide whether it replaces the kernel-local `cyclic_stream.sv` for read-only delivery, which needs equivalence evidence | A2, B2, B3, C0 |
+| **C5. J9: multi-set delivery** (R7, MLO) | *Done (`cca9ae9e3`).* `SETS > 1`, with the set-index stream as an ordinary stream reference input of the memstream kernel. MLO drives the index from outside the op (V10) | C4 |
+| **C5.5. D10 design round** | *Done: written for review.* A first-principles design of the dataflow `Stream` for kernel Spaces, by a fresh-context review of the prior corpus (scratchpad `dataflow/`, `space/`, `open/`) taken as wary inputs. Output: [`../stream-model-2026-09-27/DESIGN.md`](../stream-model-2026-09-27/DESIGN.md), for review. Design only; implementing it is Phase D | B1–B3 |
+| **C6. J10: stream adapters** | *Done in part (`cca9ae9e3`): the `vpc` and `inner_shuffle` adapter kernels, as nodes between two streams. The in-stream Decision waits for D10's S1; see the record.* Width conversion (FinnLib `vpc`), lane regroup and reorder (`inner_shuffle`) as a `Decision` over adapter nodes inside a stream, chosen by `classify()`. Within one generated module only; edges between modules are D10's. Built consistently with the C5.5 design | B1, C3, C5.5 |
 
 ### Phase D: planned and deferred work
 
@@ -129,6 +143,9 @@ are done (see the record). Phase C is executing (M0 answered 2026-09-27).
 | **Reusing cached results across snapshots** | A local edit re-runs the whole graph. It matters once search runs over graphs of many kernels |
 | **Other standalone kernels** (eltwise, input generator) | Move them to the stream idiom when a composite needs them |
 | **Stream and dataflow modeling revision** (D10, parked) | Streams that understand the full tensor they iterate and the valid folding configurations over it, instead of kernels checking the forms they are handed. Decide the shape of `Stream`, and how much of the dataflow modeling corpus (`finn.dataflow`, the roster's S1 contract, the parked dataflow model) to adopt or iterate on. It subsumes B1's dotp form checks and informs adapters (C6). It also owns instance wiring (D11): edges between separately generated modules, and the design's clocks. Whether a stitched design is one more composite wired by the same `netlist` is a question for this pass. Plan it together with the `finn.dataflow` model pass |
+| **D10 implementation** (after review) | The design round recommends increments S1 (presentation at the ends; then C6's in-stream adapter Decision), S2 (the loop nest that derives port forms; retires the labelled-relation stopgap) and onward; §11 lists the user's decisions |
+| **FinnLib `inner_shuffle` fix** | Characterize and fix the defect found in C6 (repro in the MatMul record's evidence), then pin it |
+| **Late-bound parameter images** | Move cyclic `INIT_DATA` and memstream `INIT_FILE` to `DataSlot` + `DataBinding`, with the artifact-integration work |
 | **MatMul device coverage** (flagged important) | A LUT dot-product core; native per-channel on DSP48E1/E2; further device and behaviour permutations. Each lands as another core kernel or candidate in `MatMulKernel`'s space |
 | **Choosing among valid candidates** | Compatibility filters candidates; where several remain, choosing is optimization (DSE passes), future work |
 | **Revisit: `NARROW_WEIGHTS`** | Provisionally derived from known weights (cyclic delivery), 0 otherwise. The user wants to revisit it |

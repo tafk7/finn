@@ -123,6 +123,39 @@ The attributes are at `fpd/vectorvectoractivation.py:47-105`.
 | Reduction marker (baseline `replay_buffer` with REP=1, V19) | `ReplayBuffer(replay_count=1)` still produces `olast` (`FL/rtl/replay_buffer.sv:107-113`), so the MVAU `replay` node already expresses it. | RTL | V |
 | SWG→VVAU lane order (E-048) | gap. FinnLib's VVU input order is field `simd*PE + pe`, with no SIMD reversal (`FL/rtl/dotp_axi.sv:109-120`). This must be declared as the port's form (AUDIT §6). | RTL | V |
 
+## 2a. After Phase C (2026-09-28): MVAU and VVAU as one `MatMulKernel`
+
+Sections 1 and 2 are the audit as of 2026-09-26. Phase C dissolved MVAU and
+VVAU into `MatMulKernel` (`k/matmul.py`; record:
+`../matmul-kernel-2026-09-27/RECORD.md`). The rows below are the attributes
+whose mapping changed; the rest of sections 1 and 2 stand, with `MVAU.x`
+read as `MatMulKernel.x` and `matrix_width`/`matrix_height`/`repetitions`
+as `reduction`/`outputs`/`rows`.
+
+| Baseline attribute or variant | MatMulKernel coordinate | FinnLib |
+|---|---|---|
+| MVAU vs VVAU (`IS_MVU`, `ACTIVATION_BROADCASTING`) | `contraction` Param, `DENSE` or `PER_CHANNEL`; broadcasting is derived | RTL |
+| VVAU `Channels`, `Kernel` (window), `Dim` | `outputs` (channels), `reduction` (window), `rows` (pixels) | — |
+| VVAU `PE`, `SIMD` | `pe` divides the channels, `simd` the window | RTL |
+| VVAU activation order (E-048) | declared: `channel_tile`, field `s·PE + p` | RTL |
+| VVAU reduction marker | `markers`, a derived one-repetition replay buffer | RTL |
+| VVAU on non-DSP58 targets | `realization = "dense"` (block-diagonal weights), known weights only | RTL |
+| dotp core (packed vs INT8) | `compute` Decision over `PackedDotpKernel` and `Int8Dsp58DotpKernel` | RTL (`CORE`, pin `b9262df`) |
+| `pumpedCompute` | `compute_pumping` Decision (per-channel too, which baseline RTL VVAU never offered) | RTL |
+| RTL `SEGMENTLEN` | derived from `target_period_ns` (B2 revision) | RTL |
+| RTL `NARROW_WEIGHTS` | derived from known weights (cyclic, read-only memstream); provisional | RTL |
+| RTL internal replay | `replay` Decision: `buffer` or `input_gen` | RTL |
+| `mem_mode=internal_decoupled` | `delivery`: `cyclic` (ROM) or `memstream` (RAM, `ram_style`) | RTL (`memstream_axi`) |
+| `runtime_writeable_weights` | `writable_weights`, memstream only; AXI-Lite exported as `s_axilite` | RTL |
+| `pumpedMemory` | `delivery.memstream.pumped_memory` | RTL |
+| `mlo_max_iter` / memstream `SETS` | `weight_sets`, memstream only; one index per row on `in2_V` | RTL |
+| `ram_style=ultra` | `delivery.memstream.ram_style = "ultra"` | RTL |
+| `noActivation=0` (fused thresholds) | not in the kernel (M-D2): adjacent kernels, composed by the dataflow layer | — |
+
+Still gaps (flagged future work): `resType=lut` and HLS backends,
+per-channel natively on DSP48E1/E2, binary/xnor and unsigned weights,
+`internal_embedded`, `dynamic`, `external_mem`, `TH>1`, MMV.
+
 ## 3. Thresholding (Thresholding_hls, Thresholding_rtl)
 
 | Baseline attribute or variant | `ThresholdingAxiKernel` coordinate, or gap | FinnLib | V/I |

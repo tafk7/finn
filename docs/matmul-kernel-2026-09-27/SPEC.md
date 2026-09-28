@@ -1,6 +1,6 @@
 # Task spec: `MatMulKernel`, one design space for the dot-product units
 
-Date: 2026-09-27. Status: **M0 answered; executing.** It replaces Phase C's C1
+Date: 2026-09-27. Status: **done (M0–M5), 2026-09-28**; see the [record](RECORD.md). It replaces Phase C's C1
 (VVAU reuse) and C2 (fused thresholding) in
 [`STATUS.md`](../kernel-status-2026-09-27/STATUS.md). It supersedes the
 MVAU framing of the [robust MVAU spec](../robust-mvau-2026-09-26/SPEC.md),

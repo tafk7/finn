@@ -54,7 +54,11 @@ def _build(point, directory):
 
 
 WIDTHS = ((2, 3), (4, 2), (3, 12), (6, 4))
-TRANSPOSES = ((4, 6, 2), (6, 6, 3), (4, 4, 4))
+TRANSPOSES = ((4, 6, 2), (6, 6, 3), (4, 4, 2), (6, 9, 3))
+# FinnLib inner_shuffle (b9262df) emits undefined lanes for these when its input
+# arrives in bursts with idle cycles between them and its output never stalls;
+# FinnLib's own testbench fails the same way with that input timing (C6 record).
+KNOWN_DEFECTS = ((4, 4, 4), (8, 4, 4), (4, 8, 4))
 
 
 def run_width(before, after, evidence):
@@ -106,12 +110,15 @@ def run_transpose(rows, cols, simd, evidence):
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path)
+    parser.add_argument(
+        "--known-defects", action="store_true", help="run the inner_shuffle defect cases"
+    )
     args = parser.parse_args()
     directory = args.output or Path(tempfile.mkdtemp(prefix="adapter-evidence-"))
     print(f"Evidence: {directory}", flush=True)
     for before, after in WIDTHS:
         run_width(before, after, directory)
-    for rows, cols, simd in TRANSPOSES:
+    for rows, cols, simd in KNOWN_DEFECTS if args.known_defects else TRANSPOSES:
         run_transpose(rows, cols, simd, directory)
 
 

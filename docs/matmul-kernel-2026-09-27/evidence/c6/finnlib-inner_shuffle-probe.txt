@@ -1,0 +1,4 @@
+# FinnLib b9262df, rtl/shape/inner_shuffle_tb.sv with finnlib-inner_shuffle-probe.diff applied
+# (input in bursts of two beats with three idle cycles; no output backpressure)
+[SIMD:4, I:4, J:4] PASS (4 beats)
+Error: [SIMD:4, I:4, J:4] Mismatch at beat 0: got xxxxxxxx00040000, expected 000c000800040000.
