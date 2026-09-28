@@ -248,6 +248,20 @@ def test_site_probe_preserves_override_remote_name_and_argv(tmp_path):
         Selection(settings=("settings64.sh",), launcher=("site",))
 
 
+def test_probes_run_once_per_selection(tmp_path):
+    log = tmp_path / "calls"
+    executable(
+        tmp_path / "vitis-run",
+        f"import sys\nopen({str(log)!r}, 'a').write(' '.join(sys.argv[1:]) + '\\n')\n"
+        "print('vitis-run v2025.2 (hls)')\n",
+    )
+    tc = Selection(command_dir=str(tmp_path), hls_frontend="vitis-run").prepare({})
+    for _ in range(3):
+        frontend, args = tc.hls_command("script.tcl")
+        assert (frontend, args) == ("vitis-run", ["--mode", "hls", "--tcl", "script.tcl"])
+    assert log.read_text().splitlines() == ["--version", "--help"]
+
+
 def test_failure_logs_status_and_settings_errors(tmp_path, caplog):
     executable(
         tmp_path / "vivado",

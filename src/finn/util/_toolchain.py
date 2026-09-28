@@ -14,6 +14,12 @@ from types import MappingProxyType
 
 _LOG = logging.getLogger(__name__)
 
+# Vendor tools start slowly (a JVM behind vitis-run), and much more slowly when a
+# build launches many at once. Probe answers are cached per process, keyed by the
+# selection and the environment's PATH, so parallel HLS synthesis probes once.
+PROBE_TIMEOUT = 120
+_PROBES = {}
+
 
 def _child_environment(environment):
     # Bash reads BASH_ENV even with --noprofile --norc. Exported shell functions
@@ -227,8 +233,14 @@ class Toolchain:
             Path(str(replay) + ".stderr.log").write_bytes(result.stderr)
         return result
 
-    def probe(self, tool, timeout=10):
+    def _probe_key(self, *what):
+        return (*what, self.selection, self.environment.get("PATH", ""))
+
+    def probe(self, tool, timeout=PROBE_TIMEOUT):
         """Query identity through exactly the execution route. Not a licence test."""
+        key = self._probe_key("version", tool)
+        if key in _PROBES:
+            return _PROBES[key]
         try:
             result = self.run(
                 tool, ["--version" if tool == "vitis-run" else "-version"], timeout=timeout
@@ -244,9 +256,10 @@ class Toolchain:
             raise RuntimeError(f"{tool} did not report a recognizable AMD version")
         version = tuple(map(int, match.groups()))
         _LOG.info("identity tool=%s version=%s.%s", tool, *version)
+        _PROBES[key] = version
         return version
 
-    def hls_command(self, script, timeout=10):
+    def hls_command(self, script, timeout=PROBE_TIMEOUT):
         frontend = self.selection.hls_frontend
         version = self.probe(frontend, timeout)
         # These are FINN code-generation constraints, separate from whether a
@@ -261,11 +274,13 @@ class Toolchain:
                 f"FINN HLS frontend {frontend} is incompatible with {version}; "
                 "select the matching frontend explicitly"
             )
-        if frontend == "vitis-run":
+        capability = self._probe_key("hls-capability", frontend)
+        if frontend == "vitis-run" and capability not in _PROBES:
             help_result = self.run(frontend, ["--help"], timeout=timeout)
             help_text = (help_result.stdout + help_result.stderr).decode("utf-8", errors="replace")
             if "hls" not in help_text.lower():
                 raise RuntimeError("Selected vitis-run does not advertise HLS capability")
             _LOG.info("capability tool=vitis-run hls=advertised")
+            _PROBES[capability] = True
         args = ["--mode", "hls", "--tcl", script] if frontend == "vitis-run" else ["-f", script]
         return frontend, args
