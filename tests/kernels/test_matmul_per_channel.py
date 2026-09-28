@@ -5,8 +5,9 @@
 
 The contraction is a fact of the operation; what follows from it is derived:
 whether activations are broadcast, whether rows are replayed, the activation
-traversal. A per-channel contraction is read only by the INT8 DSP58 core, so on
-any other target no core is compatible.
+traversal. A per-channel operation is realized natively (only the INT8 DSP58
+core reads one channel per lane) or densely, with block-diagonal weights on
+any core; the dense realization needs the weights, so not external delivery.
 """
 
 import pytest
@@ -39,9 +40,11 @@ CHOICES = {
 
 
 def point(**facts):
-    return commit(
-        design_space(MatMulKernel(**{**FACTS, "target_period_ns": 5.0, **facts})), CHOICES
-    )
+    facts = {**FACTS, "target_period_ns": 5.0, **facts}
+    choices = dict(CHOICES)
+    if facts["contraction"] is Contraction.PER_CHANNEL:
+        choices["realization"] = "native"
+    return commit(design_space(MatMulKernel(**facts)), choices)
 
 
 def test_per_channel_rows_pass_once_with_a_frame_per_window():
@@ -84,17 +87,94 @@ def test_only_the_int8_dsp58_core_reads_a_per_channel_contraction():
     assert isinstance(packed, Rejected)
     assert "dotp-contraction" in {finding.code for finding in packed.findings}
     facts = {**FACTS, "pe": 2, "simd": 3}
-    assert matmul_assembly(**facts).requirements is not None  # the one compatible core
-    with pytest.raises(ValueError, match="no compute core is compatible"):
+    # External weights exclude the dense realization; natively, one core fits.
+    assert matmul_assembly(**facts).requirements is not None
+    with pytest.raises(ValueError, match="realizations compatible with this configuration: none"):
         matmul_assembly(**{**facts, "target_dsp": DspBlock.DSP48E2})
 
 
 def test_per_channel_cyclic_weights_are_the_channel_tile():
     weights = [[(c + k) % 16 - 8 for k in range(9)] for c in range(4)]
     built = matmul_assembly(
-        **FACTS, pe=2, simd=3, weight_delivery=WeightDelivery.CYCLIC, weights=weights
+        **FACTS,
+        pe=2,
+        simd=3,
+        realization="native",
+        weight_delivery=WeightDelivery.CYCLIC,
+        weights=weights,
     )
     assert "in1_V" not in {port.name for port in built.structure.top_abi.ports}
     # Channel folds, then window folds; PE channels of SIMD taps a beat, SIMD fastest.
     assert len(built.initializer) == 2 * 3
     assert (built.activation_beats, built.weight_beats, built.result_beats) == (12, 12, 4)
+
+
+WEIGHTS = ((1, -2, 3, -4), (2, 3, -1, 0), (-3, 1, 2, 1))
+DENSE = dict(
+    rows=2,
+    reduction=4,
+    outputs=3,
+    contraction=Contraction.PER_CHANNEL,
+    activation_dtype=DataType["INT4"],
+    weights_dtype=DataType["INT4"],
+    pe=3,
+    simd=4,
+    weight_delivery=WeightDelivery.CYCLIC,
+    weights=WEIGHTS,
+)
+
+
+def test_a_dense_realization_reads_window_by_channel_rows_against_block_diagonal_weights():
+    # On DSP48E2 only the dense realization computes it: the packed core.
+    built = matmul_assembly(target_dsp=DspBlock.DSP48E2, **DENSE)
+    assert [item.instance_id for item in built.structure.instances] == [
+        "u_replay",
+        "u_compute_packed",
+        "u_delivery_cyclic",
+    ]
+    compute = dict(built.structure.instances[1].requirements.parameters)
+    assert compute["ACTIVATION_BROADCASTING"] == 1 and compute["SIMD"] == 4
+    # Rows of 4 x 3 = 12 activations in three SIMD beats, replayed once (PE = C).
+    assert (built.activation_beats, built.weight_beats, built.result_beats) == (6, 6, 2)
+    # W'[c, k * 3 + c'] = W[c, k] where c' = c: each weight beat is one tile of W'.
+    blocks = [
+        [WEIGHTS[c][k] if other == c else 0 for k in range(4) for other in range(3)]
+        for c in range(3)
+    ]
+    mask = 0xF
+    expected = tuple(
+        sum((blocks[p][start + s] & mask) << (4 * (p * 4 + s)) for p in range(3) for s in range(4))
+        for start in range(0, 12, 4)
+    )
+    assert built.initializer == expected
+    # The result precision is the operation's: a window of 4, not 12.
+    assert built.result_dtype == DataType["INT10"]
+
+
+def test_the_dense_realization_needs_known_weights_and_either_may_be_chosen_on_dsp58():
+    external = {**DENSE, "weight_delivery": WeightDelivery.EXTERNAL, "weights": None}
+    with pytest.raises(ValueError, match="matmul-realization"):
+        matmul_assembly(target_dsp=DspBlock.DSP48E2, realization="dense", **external)
+    with pytest.raises(ValueError, match="native, dense"):
+        matmul_assembly(target_dsp=DspBlock.DSP58, **DENSE)
+    for realization, core in (("native", "int8_dsp58"), ("dense", "packed")):
+        built = matmul_assembly(
+            target_dsp=DspBlock.DSP58, realization=realization, core=core, **DENSE
+        )
+        assert built.structure.instances[1].instance_id == f"u_compute_{core}"
+
+
+@pytest.mark.parametrize(
+    "weights,delivery,narrow",
+    [
+        (WEIGHTS, WeightDelivery.CYCLIC, 1),  # no weight is INT4's -8
+        (((-8, 0, 0, 0), (0,) * 4, (0,) * 4), WeightDelivery.CYCLIC, 0),
+        (None, WeightDelivery.EXTERNAL, 0),  # weights at run time promise nothing
+    ],
+)
+def test_narrow_weights_follow_known_weights(weights, delivery, narrow):
+    facts = {**DENSE, "contraction": Contraction.DENSE, "outputs": 3, "pe": 3}
+    built = matmul_assembly(
+        target_dsp=DspBlock.DSP48E2, **{**facts, "weights": weights, "weight_delivery": delivery}
+    )
+    assert dict(built.structure.instances[1].requirements.parameters)["NARROW_WEIGHTS"] == narrow

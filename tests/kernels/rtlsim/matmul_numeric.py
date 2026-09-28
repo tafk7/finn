@@ -42,6 +42,8 @@ class Configuration:
     pumping: bool = False
     core: str | None = None
     per_channel: bool = False  # width is the window, height the channels
+    realization: str | None = None  # per-channel only: "native" or "dense"
+    narrow: bool = False  # weights avoid their type's minimum (NARROW_WEIGHTS)
 
 
 CASES = (
@@ -51,6 +53,7 @@ CASES = (
     Configuration("padded_output", DspBlock.DSP48E2, 2, 3, 1, 2, "UINT3", "INT3"),
     Configuration("int8_pumped", DspBlock.DSP58, 6, 4, 2, 3, "UINT8", "INT8", True, "int8_dsp58"),
     Configuration("int8_narrow", DspBlock.DSP58, 4, 8, 2, 4, "INT3", "INT3", core="int8_dsp58"),
+    Configuration("narrow_weights", DspBlock.DSP48E2, 6, 4, 2, 3, "INT4", "INT4", narrow=True),
 )
 
 # Depthwise: the INT8 DSP58 core, one channel per PE lane. width = window, height = channels.
@@ -60,6 +63,19 @@ PER_CHANNEL_CASES = (
     Configuration("ch_wide", DspBlock.DSP58, 9, 6, 3, 9, "INT8", "INT8", per_channel=True),
     Configuration("ch_pumped", DspBlock.DSP58, 6, 4, 2, 3, "UINT8", "INT8", True, per_channel=True),
     Configuration("ch_one_beat", DspBlock.DSP58, 3, 4, 4, 3, "INT9", "INT8", per_channel=True),
+    # The dense realization: block-diagonal weights on the packed core, any DSP.
+    Configuration(
+        "ch_dense_e2",
+        DspBlock.DSP48E2,
+        4,
+        3,
+        3,
+        4,
+        "INT4",
+        "INT4",
+        per_channel=True,
+        realization="dense",
+    ),
 )
 
 
@@ -114,10 +130,11 @@ def run(
     rng = np.random.RandomState(83)
     shape = (rows, c.width, c.height) if c.per_channel else (rows, c.width)
     activations = rng.randint(int(a_type.min()), int(a_type.max()) + 1, shape)
-    weights = rng.randint(int(w_type.min()), int(w_type.max()) + 1, (c.height, c.width))
+    lowest = int(w_type.min()) + (1 if c.narrow else 0)
+    weights = rng.randint(lowest, int(w_type.max()) + 1, (c.height, c.width))
     activations[0] = int(a_type.min())
     activations[1] = int(a_type.max())
-    weights[0, :] = int(w_type.min())
+    weights[0, :] = lowest
     if c.height > 1:
         weights[1, :] = int(w_type.max())
     if c.per_channel:
@@ -137,13 +154,24 @@ def run(
         contraction=Contraction.PER_CHANNEL if c.per_channel else Contraction.DENSE,
         compute_pumping=c.pumping,
         core=c.core,
+        realization=c.realization or ("native" if c.per_channel else None),
         weight_delivery=delivery,
         weights=weights.tolist() if delivery is WeightDelivery.CYCLIC else None,
         rom_style=rom_style,
         weight_fifo_depth=weight_fifo_depth,
     )
-    sf, nf = c.width // c.simd, c.height // c.pe
-    if c.per_channel:
+    # A densely realized per-channel operation reads rows of window x channels
+    # against block-diagonal weights: W'[c, k * C + c'] = W[c, k] if c' = c, else 0.
+    dense = not c.per_channel or c.realization == "dense"
+    width = c.width * c.height if c.per_channel and dense else c.width
+    rows_read = activations.reshape(rows, width) if dense else activations
+    matrix = weights
+    if c.per_channel and dense:
+        matrix = np.zeros((c.height, width), dtype=weights.dtype)
+        for channel in range(c.height):
+            matrix[channel, channel :: c.height] = weights[channel]
+    sf, nf = width // c.simd, c.height // c.pe
+    if not dense:
         # Beats: row, channel fold, window fold; field s * PE + p is X[r, k, c].
         activation_words = [
             _pack(
@@ -161,14 +189,14 @@ def run(
     else:
         activation_words = [
             _pack(row[start : start + c.simd], a_type.bitwidth())
-            for row in activations
-            for start in range(0, c.width, c.simd)
+            for row in rows_read
+            for start in range(0, width, c.simd)
         ]
-    activation_bits = c.simd * (c.pe if c.per_channel else 1) * a_type.bitwidth()
+    activation_bits = c.simd * (1 if dense else c.pe) * a_type.bitwidth()
     weight_image = [
-        _pack(weights[row : row + c.pe, start : start + c.simd].flat, w_type.bitwidth())
+        _pack(matrix[row : row + c.pe, start : start + c.simd].flat, w_type.bitwidth())
         for row in range(0, c.height, c.pe)
-        for start in range(0, c.width, c.simd)
+        for start in range(0, width, c.simd)
     ]
     stimulus = {"in0_V": activation_words}
     if delivery is WeightDelivery.EXTERNAL:
@@ -213,7 +241,7 @@ def run(
     # Dense rows are replayed once per output fold; per-channel beats pass once.
     replay_expected = (
         activation_words
-        if c.per_channel
+        if not dense
         else [
             word
             for rep in range(rows)
@@ -278,6 +306,10 @@ def main() -> None:
     for case in cases:
         if (args.case is None and case.per_channel is args.per_channel) or args.case == case.label:
             for delivery in WeightDelivery:
+                # A dense realization needs known weights; narrow weights need cyclic.
+                known = delivery is not WeightDelivery.EXTERNAL
+                if (case.realization == "dense" or case.narrow) and not known:
+                    continue
                 if args.delivery is None or args.delivery == delivery.value:
                     run(case, delivery, directory, args.rom_style, args.weight_fifo_depth)
 

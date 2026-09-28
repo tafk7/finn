@@ -37,7 +37,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any
+from typing import Any, cast
 
 from finn.kernels.artifacts.build import (
     ModuleBuildRequirements,
@@ -84,6 +84,7 @@ from finn.kernels.target import DspBlock
 from finn.core.space import (
     Available,
     ConstraintGroup,
+    QueryResult,
     Decision,
     Members,
     Param,
@@ -207,8 +208,47 @@ class MatMulKernel(Space):
     target_dsp: DspBlock = Param()
     target_period_ns: float = Param()
     weights: IntegerTensor = Param(semantics=INTEGER_TENSOR, required=False)
+
+    @derived
+    def per_channel(self) -> bool:
+        return self.contraction is Contraction.PER_CHANNEL
+
+    # A per-channel operation runs natively (one channel per PE lane, INT8 DSP58
+    # only) or on the dense datapath with block-diagonal weights, on any core.
+    realization: str = Decision(values=("native", "dense"), when=per_channel)
+
+    @derived
+    def datapath(self) -> Contraction:
+        """The contraction the datapath computes: densely realized, a per-channel one is dense."""
+        if self.contraction is Contraction.DENSE or self.realization == "dense":
+            return Contraction.DENSE
+        return Contraction.PER_CHANNEL
+
+    @derived
+    def datapath_reduction(self) -> int:
+        """The datapath's K: the window times the channels when densely realized."""
+        if self.per_channel and self.datapath is Contraction.DENSE:
+            return self.reduction * self.outputs
+        return self.reduction
+
+    @derived(semantics=INTEGER_TENSOR)
+    def datapath_weights(self) -> IntegerTensor:
+        """The weights the datapath reads: block-diagonal when densely realized.
+
+        W'[c, k * C + c'] = W[c, k] when c' = c, and 0 otherwise: the densely read
+        activation row (k, c') meets only its own channel's weights.
+        """
+        weights = self.weights
+        if not (self.per_channel and self.datapath is Contraction.DENSE):
+            return weights
+        channels = self.outputs
+        return tuple(
+            tuple(value if other == channel else 0 for value in row for other in range(channels))
+            for channel, row in enumerate(cast("tuple[tuple[int, ...], ...]", weights))
+        )
+
     pe: int = Decision(domain=divisors_of(outputs))
-    simd: int = Decision(domain=divisors_of(reduction))
+    simd: int = Decision(domain=divisors_of(datapath_reduction))
     compute_pumping: bool = Decision(values=(False, True))
 
     @derived(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
@@ -223,11 +263,11 @@ class MatMulKernel(Space):
         try:
             return _Folding(
                 self.rows,
-                self.reduction,
+                self.datapath_reduction,
                 self.outputs,
                 self.pe,
                 self.simd,
-                self.contraction is Contraction.PER_CHANNEL,
+                self.datapath is Contraction.PER_CHANNEL,
             )
         except ValueError as error:
             return reject("matmul-folding", str(error))
@@ -237,7 +277,16 @@ class MatMulKernel(Space):
         # Reading the folding propagates its refusal to this constraint.
         return isinstance(self.folding, _Folding)
 
-    dimensions = ConstraintGroup(dimensions_supported)
+    @constraint
+    def realization_supported(self) -> bool | Rejected:
+        if self.per_channel and self.realization == "dense" and self.delivered == "external":
+            return reject(
+                "matmul-realization",
+                "a dense realization builds block-diagonal weights, so it needs known weights",
+            )
+        return True
+
+    dimensions = ConstraintGroup(dimensions_supported, realization_supported)
 
     @derived
     def reduction_folds(self) -> int:
@@ -294,6 +343,16 @@ class MatMulKernel(Space):
         sequence_length=reduction_folds,
         replay_count=reuse,
     )
+
+    @derived
+    def narrow_weights(self) -> bool:
+        """Known weights that avoid their type's most negative value let the packed core
+        pack more lanes (NARROW_WEIGHTS). Provisional: the user means to revisit it."""
+        if self.delivered != WeightDelivery.CYCLIC.value:
+            return False  # weights arriving at run time promise nothing
+        low, _ = ordinary_integer_bounds(self.weights_dtype)
+        return all(value > low for value in _leaves(self.weights))
+
     # The compute cores: handles naming the candidates of ``compute``. Each
     # refuses what its core cannot build; both share the pumping choice.
     packed = PackedDotpKernel(
@@ -305,7 +364,8 @@ class MatMulKernel(Space):
         target_dsp=target_dsp,
         target_period_ns=target_period_ns,
         compute_pumping=compute_pumping,
-        contraction=contraction,
+        contraction=datapath,
+        narrow_weights=narrow_weights,
         activation_stream=replayed,
         weights_stream=weight_stream,
         result_stream=results,
@@ -319,7 +379,7 @@ class MatMulKernel(Space):
         target_dsp=target_dsp,
         target_period_ns=target_period_ns,
         compute_pumping=compute_pumping,
-        contraction=contraction,
+        contraction=datapath,
         activation_stream=replayed,
         weights_stream=weight_stream,
         result_stream=results,
@@ -332,7 +392,7 @@ class MatMulKernel(Space):
     cyclic = CyclicDelivery(
         dtype=weights_dtype,
         form=weight_period,
-        values=weights,
+        values=datapath_weights,
         output_stream=weight_stream,
     )
     delivery: CyclicDelivery | None = Decision(
@@ -358,7 +418,30 @@ class MatMulKernel(Space):
         return self.structure.requirements
 
 
+def _leaves(values: object) -> tuple[int, ...]:
+    if type(values) is int:
+        return (values,)
+    assert isinstance(values, tuple)
+    return tuple(leaf for item in values for leaf in _leaves(item))
+
+
 ROM_STYLE = CyclicDelivery.rom_style
+
+
+def _realizes(base: MatMulKernel, choices: dict[str, object]) -> QueryResult[bool]:
+    """Accepted when the choices commit, the realization's own rule holds, and some
+    core can compute it."""
+    try:
+        point = commit(base, choices)
+    except ValueError as error:
+        return reject("matmul-realization", str(error))
+    rule = point.inspect(MatMulKernel.realization_supported).result
+    if not isinstance(rule, Available):
+        return rule
+    cores = compatible(
+        point, "compute", lambda item: item.compute.inspect(DotpAxiKernel.support).result
+    )
+    return Available(True) if cores else reject("matmul-realization", "no core computes it")
 
 
 def matmul_assembly(
@@ -375,6 +458,7 @@ def matmul_assembly(
     target_period_ns: float = 5.0,
     compute_pumping: bool = False,
     core: str | None = None,
+    realization: str | None = None,
     weight_delivery: WeightDelivery = WeightDelivery.EXTERNAL,
     weights: Sequence[Sequence[int]] | None = None,
     rom_style: str = "auto",
@@ -425,7 +509,22 @@ def matmul_assembly(
     if buffered:
         choices["weight_stream.transport.fifo.buffer.depth"] = weight_fifo_depth
         choices["weight_stream.transport.fifo.buffer.ram_style"] = "auto"
-    point = commit(design_space(MatMulKernel(**facts)), choices)
+    base = design_space(MatMulKernel(**facts))
+    if contraction is Contraction.PER_CHANNEL:
+        # The realization sets the datapath's reduction, and so the SIMD domain:
+        # each is committed together with the folding.
+        if realization is None:
+            viable = [
+                case
+                for case in ("native", "dense")
+                if isinstance(_realizes(base, {**choices, "realization": case}), Available)
+            ]
+            if len(viable) != 1:
+                named = ", ".join(viable) or "none"
+                raise ValueError(f"realizations compatible with this configuration: {named}")
+            realization = viable[0]
+        choices["realization"] = realization
+    point = commit(base, choices)
     if core is None:
         cores = compatible(
             point, "compute", lambda item: item.compute.inspect(DotpAxiKernel.support).result

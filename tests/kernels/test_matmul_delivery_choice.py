@@ -179,6 +179,7 @@ def test_case_local_choices_are_owned_by_their_family():
         "compute_pumping",
         "delivery",
         "delivery.cyclic.rom_style",
+        "realization",
         "weight_stream.transport",
         "weight_stream.transport.fifo.buffer.depth",
         "weight_stream.transport.fifo.buffer.ram_style",
@@ -219,9 +220,9 @@ def test_missing_cyclic_weights_leave_only_the_selected_family_unresolved():
         for key, result in assessment.constraints.results.items()
         if not isinstance(result, (Available, Inapplicable))
     }
-    assert waiting == {"delivery.cyclic.build_requirements"}
-    # The compute product and folding do not wait for the family's optional fact.
-    assert isinstance(cyclic.compute.query(DotpAxiKernel.build_requirements), Available)
+    # The packed core waits too: known weights decide its NARROW_WEIGHTS.
+    assert waiting == {"delivery.cyclic.build_requirements", "compute.packed.build_requirements"}
+    assert owners(cyclic.compute.query(DotpAxiKernel.build_requirements)) == {"weights"}
     evidence = inspection.explain(cyclic, MatMulKernel.structure)
     omitted = [node for node in evidence.nodes if node.input_presence == "omitted"]
     assert [node.declaration.key for node in omitted] == ["weights"]
@@ -247,8 +248,11 @@ def test_known_refusals_remain_visible_while_the_family_is_unselected():
     point = base(weights=WEIGHTS).with_choices(pe=4, simd=2, compute="packed", compute_pumping=True)
     assessment = point.inspect(MatMulKernel.structure)
     assert isinstance(assessment.accepted_result, Unresolved)
+    # The packed core waits only for the delivery, which decides whether its
+    # weights are known (NARROW_WEIGHTS); its own refusals settle meanwhile.
     compute = point.compute.inspect(DotpAxiKernel.build_requirements)
-    assert isinstance(compute.accepted_result, Available)
+    assert owners(compute.accepted_result) == {"delivery"}
+    assert point.compute.inspect(DotpAxiKernel.support).result == Available(True)
     folding = base(weights=WEIGHTS).with_choices(simd=4)
     # Folding refusals settle before a PE, family or ROM style is chosen.
     trial = folding.try_with_choices(pe=3)
