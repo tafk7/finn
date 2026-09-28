@@ -321,7 +321,7 @@ COMPOSED = default_semantics(Composed)
 
 
 def _instance(node: str | None) -> str | None:
-    """``u_<node>``; a candidate of a Decision (``implementation.cyclic``) joins with ``_``."""
+    """``u_<node>``; a candidate of a Decision (``delivery.cyclic``) joins with ``_``."""
     return None if node is None else "u_" + node.replace(".", "_")
 
 

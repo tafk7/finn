@@ -42,7 +42,7 @@ planned changes, not additional APIs already delivered here.
 ```text
 base.py                  neutral Kernel identity and capability metadata
 dotp.py                  operand scalars, AXIS ports and build requirements
-mvau.py                  folding, dotp child node, and a weight-delivery Decision over nodes
+matmul.py                folding, dotp child node, and a weight-delivery Decision over nodes
 streaming.py             replay and initialized cyclic word delivery
 target.py                DSP targets and port capacities
 physical/                typed native/AXIS ports, detached packing, wiring and lowering
@@ -108,7 +108,7 @@ relative to a staging directory; retain that layout and use the declared
 `include_directories`. Its AXI-Lite memory and `ap_ctrl_hs` registers share the
 `control` bundle; software must enable start/auto-restart for continuous output.
 
-`MVAU` owns matrix geometry, PE/SIMD folding and result precision, and declares
+`MatMulKernel` owns operand extents, PE/SIMD folding and result precision, and declares
 its connections as streams (`finn.kernels.streams`). It derives a `StreamSpec`
 (element, traversal, repetition, markers) for each stream; kernels reference
 the streams they sit on through reference inputs and export one port contract
@@ -117,7 +117,7 @@ per input (`exports = {PORT: {activation_stream: activation_port, ...}}`):
 ```text
 in0_V ─activations─► replay ─replayed─► compute (dotp) ─results─► out0_V
                                            ▲
-       implementation ─── weight_stream ───┘   (buffered: direct | fifo)
+             delivery ─── weight_stream ───┘   (buffered: direct | fifo)
        external: boundary in1_V  |  cyclic: CyclicDelivery (rom_style, weights)
 ```
 
@@ -131,12 +131,12 @@ the stream's form. Every stream owns a `compatible` constraint, and its accepted
 reset pin by its declared role (`ap_clk`, `ap_clk2x` for a clock at twice
 `ap_clk`, `ap_rst_n`), holds tied-off inputs (`Members(TIEOFFS)`), exports
 control buses (`Members(EXPORTED)`), and turns boundary streams into AXIS. The
-module has `ap_clk2x` only when a child needs it: an unpumped MVAU has none. A
+module has `ap_clk2x` only when a child needs it: an unpumped MatMulKernel has none. A
 kernel generates one module and exposes its interface; wiring that module's
 instance into a design is the consumer's. `build_requirements` lowers that structure.
-The `implementation` Decision places either nothing (`external`: the weight
+The `delivery` Decision places either nothing (`external`: the weight
 stream has one user and is the boundary `in1_V`) or its `cyclic`
-CyclicDelivery candidate, named `implementation.cyclic`; only the selected
+CyclicDelivery candidate, named `delivery.cyclic`; only the selected
 candidate is evaluated. A `BufferedStream` owns a `transport`
 Decision over nodes: `direct`, or a `fifo` candidate whose depth and memory style
 are its own decisions. Whether a FIFO is needed and how deep is a compiler
@@ -146,13 +146,13 @@ batch on a configured point:
 
 ```python
 from finn.core.space import Unresolved, selections
-from finn.kernels import MVAU
+from finn.kernels import MatMulKernel
 from finn.kernels.configure import commit
 
 facts = dict(
-    repetitions=2,
-    matrix_width=4,
-    matrix_height=4,
+    rows=2,
+    reduction=4,
+    outputs=4,
     activation_dtype=dtype("INT3"),
     weights_dtype=dtype("INT3"),
     target_dsp=DspBlock.DSP48E2,
@@ -160,10 +160,10 @@ facts = dict(
 )
 identity = ((1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (0, 0, 0, 1))
 point = commit(
-    design_space(MVAU(**facts, weights=identity)),
+    design_space(MatMulKernel(**facts, weights=identity)),
     {
-        "implementation": "cyclic",
-        "implementation.cyclic.rom_style": "block",
+        "delivery": "cyclic",
+        "delivery.cyclic.rom_style": "block",
         "weight_stream.transport": "fifo",
         "weight_stream.transport.fifo.buffer.depth": 16,
         "weight_stream.transport.fifo.buffer.ram_style": "auto",
@@ -176,28 +176,30 @@ structure = point.structure.structure
 assert [item.instance_id for item in structure.instances] == [
     "u_replay",
     "u_compute",
-    "u_implementation_cyclic",
+    "u_delivery_cyclic",
     "u_weight_stream_fifo",
 ]
 assert point.build_requirements == point.structure.requirements
 saved = selections.capture(point)
-replayed = selections.restore(design_space(MVAU(**facts)), saved).instance  # weights omitted
-assert isinstance(replayed.query(MVAU.structure), Unresolved)
+replayed = selections.restore(
+    design_space(MatMulKernel(**facts)), saved
+).instance  # weights omitted
+assert isinstance(replayed.query(MatMulKernel.structure), Unresolved)
 ```
 
 Changing a selector does not discard the old case's choices: clear
 `rom_style` (or a FIFO's depth and memory style) in the same batch when
 switching away from that case. The
-`mvau_assembly` adapter configures this same family and commits every choice
+`matmul_assembly` adapter configures this same family and commits every choice
 for callers with a complete configuration:
 
 ```python
-from finn.kernels import WeightDelivery, mvau_assembly
+from finn.kernels import WeightDelivery, matmul_assembly
 
-built = mvau_assembly(
-    repetitions=2,
-    matrix_width=4,
-    matrix_height=4,
+built = matmul_assembly(
+    rows=2,
+    reduction=4,
+    outputs=4,
     activation_dtype=dtype("INT3"),
     weights_dtype=dtype("INT3"),
     pe=2,
@@ -229,7 +231,7 @@ generic Space and kernel code checks. From scratchpad, run
 for executable documentation examples. The generic package has its own
 `py.typed` marker and uses the declared
 `greenlet==3.2.4` runtime dependency. Explicit XSI checks live in `tests/kernels/rtlsim`; run, for
-example, `python -m kernels.rtlsim.mvau_assembly_numeric --case packed` with
+example, `python -m kernels.rtlsim.matmul_numeric --case packed` with
 `PYTHONPATH=src:tests:deps/qonnx/src`, `FINN_ROOT`, `FINNLIB_ROOT` and the Vivado
 library path configured. `pure_dot_product_numeric --stress` exercises sustained
 one-beat reductions with long output stalls.
@@ -302,7 +304,7 @@ OuterShuffle coefficients exactly (see `tests/kernels/test_stream_contract.py`).
 `CyclicDelivery` streams a constant integer operand in whatever traversal its
 consumer reads, from an initialized ROM, so the consumer's order needs no
 adapter. Its `output` view is a cyclic stream contract; the same kernel feeds
-MVAU weight tiles or an eltwise channel vector, inside an operation kernel or
+matmul weight tiles or an eltwise channel vector, inside an operation kernel or
 beside one:
 
 ```python

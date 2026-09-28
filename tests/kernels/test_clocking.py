@@ -6,7 +6,7 @@
 A composite is one generated module with ``ap_clk`` and ``ap_rst_n``, plus
 ``ap_clk2x`` only when a child declares a clock at twice ``ap_clk``. An
 unpumped dotp holds its 2x clock input low through its tie-offs, so an
-unpumped MVAU has no ``ap_clk2x`` pin.
+unpumped MatMulKernel has no ``ap_clk2x`` pin.
 """
 
 import pytest
@@ -25,15 +25,15 @@ from finn.kernels.artifacts.abi import (
 from finn.kernels.artifacts.build import ModuleBuildRequirements
 from finn.kernels.artifacts.derivation import ProducerIdentity
 from finn.kernels.artifacts.requirements import FixedModuleName, ModuleABIRequirements
-from finn.kernels.mvau import mvau_assembly
+from finn.kernels.matmul import matmul_assembly
 from finn.kernels.physical.structure import ConstantBits, PinSlice
 from finn.kernels.streams import Composed, netlist
 from finn.kernels.target import DspBlock
 
-MVAU_FACTS = dict(
-    repetitions=2,
-    matrix_width=4,
-    matrix_height=4,
+MATMUL_FACTS = dict(
+    rows=2,
+    reduction=4,
+    outputs=4,
     activation_dtype=DataType["INT3"],
     weights_dtype=DataType["INT3"],
     pe=2,
@@ -54,8 +54,8 @@ def drivers(structure, instance):
     }
 
 
-def test_an_unpumped_mvau_has_one_clock_and_ties_the_2x_input():
-    built = mvau_assembly(**MVAU_FACTS)
+def test_an_unpumped_matmul_has_one_clock_and_ties_the_2x_input():
+    built = matmul_assembly(**MATMUL_FACTS)
     top = {port.name: port for port in built.structure.top_abi.ports}
     assert "ap_clk2x" not in top
     assert top["ap_clk"] == Signal("ap_clk", Direction.IN, 1, Clock(Free()))
@@ -75,8 +75,8 @@ def test_an_unpumped_mvau_has_one_clock_and_ties_the_2x_input():
     assert reset.invert
 
 
-def test_a_pumped_mvau_adds_the_2x_clock_and_its_alignment():
-    built = mvau_assembly(**{**MVAU_FACTS, "compute_pumping": True})
+def test_a_pumped_matmul_adds_the_2x_clock_and_its_alignment():
+    built = matmul_assembly(**{**MATMUL_FACTS, "compute_pumping": True})
     top = built.structure.top_abi
     ports = {port.name: port for port in top.ports}
     assert [port.name for port in top.ports][:3] == ["ap_clk", "ap_clk2x", "ap_rst_n"]

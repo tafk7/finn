@@ -11,7 +11,7 @@ it to a consumer port through a stream instead of wiring pins: supplied with a
 stream's producer. The image is embedded in the build requirements; there is
 no initialization file.
 
-The same kernel serves a matrix tile walk (MVAU/VVAU weights), a chunked or
+The same kernel serves a matrix tile walk (matmul weights), a chunked or
 replicated tile (tiled MVU), a channel vector (elementwise parameters) or any
 other traversal, so the consumer's order is produced directly with no adapter.
 A parent may place it inside an operation kernel or beside one; the contract is

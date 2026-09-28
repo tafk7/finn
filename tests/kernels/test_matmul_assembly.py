@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Physical-only MVAU construction, packing, precision, and portable builds."""
+"""Physical-only MatMulKernel construction, packing, precision, and portable builds."""
 
 from pathlib import Path
 
@@ -13,7 +13,7 @@ from finn.kernels.artifacts.abi import Bus
 from finn.kernels.artifacts.build import prepare_module_build, render_module_sources
 from finn.kernels.artifacts.store import ArtifactStore
 from kernels.helpers import point_for
-from finn.kernels.mvau import MVAU, WeightDelivery, exact_result_dtype, mvau_assembly
+from finn.kernels.matmul import MatMulKernel, WeightDelivery, exact_result_dtype, matmul_assembly
 from finn.kernels.dotp import DotpAxiKernel
 from finn.core.space import View, constraint, reject
 from finn.kernels.target import DspBlock
@@ -23,9 +23,9 @@ from finn.kernels.resources import resource_root, template_root
 
 ROOT = Path(__file__).resolve().parents[2]
 FACTS = dict(
-    repetitions=2,
-    matrix_width=4,
-    matrix_height=4,
+    rows=2,
+    reduction=4,
+    outputs=4,
     activation_dtype=DataType["INT3"],
     weights_dtype=DataType["INT3"],
     target_dsp=DspBlock.DSP48E2,
@@ -35,9 +35,9 @@ FACTS = dict(
 
 def assembly(**changes):
     values = dict(
-        repetitions=3,
-        matrix_width=4,
-        matrix_height=4,
+        rows=3,
+        reduction=4,
+        outputs=4,
         activation_dtype=DataType["INT3"],
         weights_dtype=DataType["INT3"],
         pe=2,
@@ -45,7 +45,7 @@ def assembly(**changes):
         target_dsp=DspBlock.DSP48E2,
     )
     values.update(changes)
-    return mvau_assembly(**values)
+    return matmul_assembly(**values)
 
 
 def test_external_construction_owns_replay_and_exact_precision():
@@ -70,7 +70,7 @@ def test_external_construction_owns_replay_and_exact_precision():
     )
 
 
-def test_cyclic_image_has_neuron_then_synapse_then_pe_simd_order():
+def test_cyclic_image_has_output_then_reduction_then_pe_simd_order():
     weights = [[-4, -3, -2, -1], [0, 1, 2, 3], [3, 2, 1, 0], [-1, -2, -3, -4]]
     built = assembly(weight_delivery=WeightDelivery.CYCLIC, weights=weights)
     # Hand-packed INT3 fields: p0/s0, p0/s1, p1/s0, p1/s1, low first.
@@ -87,7 +87,7 @@ def test_cyclic_image_has_neuron_then_synapse_then_pe_simd_order():
 
 
 def test_input_padding_is_ignored_and_child_padding_is_zero():
-    built = assembly(matrix_width=6, matrix_height=3, pe=1)
+    built = assembly(reduction=6, outputs=3, pe=1)
     assert built.structure.ignored_top_input_bits == (
         PinSlice(PhysicalPin(None, "in0_V_tdata"), 6, 2),
         PinSlice(PhysicalPin(None, "in1_V_tdata"), 6, 2),
@@ -104,7 +104,7 @@ def test_input_padding_is_ignored_and_child_padding_is_zero():
         PinSlice(PhysicalPin("u_compute", "ap_clk2x"), 0, 1): ConstantBits(1, 0),
     }
     # INT8 is exact for six INT3 products, so use width=2 to observe output padding.
-    padded = assembly(matrix_width=2, matrix_height=3, pe=1)
+    padded = assembly(reduction=2, outputs=3, pe=1)
     assert padded.result_dtype == DataType["INT7"]
     assert any(
         wire.destination == PinSlice(PhysicalPin(None, "out0_V_tdata"), 7, 1)
@@ -136,9 +136,9 @@ def test_precision_covers_full_ranges_and_is_minimal(activation, weight, length,
     [
         ({"pe": 3}, "domain-membership"),
         ({"simd": 3}, "domain-membership"),
-        ({"repetitions": 0}, "positive"),
+        ({"rows": 0}, "positive"),
         # Both the replay's native length and dotp's accumulator refuse this width.
-        ({"matrix_width": 1 << 48}, "replay-geometry|dotp-accumulator-width"),
+        ({"reduction": 1 << 48}, "replay-geometry|dotp-accumulator-width"),
         ({"weight_delivery": "external"}, "WeightDelivery"),
         ({"weight_delivery": WeightDelivery.CYCLIC}, "requires weights"),
         ({"weights": [[0] * 4] * 4}, "no initializer"),
@@ -154,31 +154,31 @@ def test_invalid_configuration_fails_during_construction(changes, match):
 
 def test_space_selects_folding_and_constructs_without_a_logical_contract():
     base = point_for(
-        MVAU,
+        MatMulKernel,
         FACTS,
         pe=2,
-        implementation="external",
+        delivery="external",
         **{"weight_stream.transport": "direct"},
     )
     point = base.with_choices(simd=2)
     assert isinstance(
         point.compute.inspect(DotpAxiKernel.build_requirements).accepted_result, Unresolved
     )
-    assert isinstance(point.inspect(MVAU.structure).accepted_result, Unresolved)
+    assert isinstance(point.inspect(MatMulKernel.structure).accepted_result, Unresolved)
     point = point.compute.with_choices(compute_pumping=False).root
     assert point.result_type == DataType["INT8"]
-    assert point.inspect(MVAU.dimensions_supported).result == Available(True)
+    assert point.inspect(MatMulKernel.dimensions_supported).result == Available(True)
     assert point.compute.pe == point.pe
     assert point.compute.result.dtype == point.result_type
     _ = point.compute.build_requirements
     assert point.folding.result_beats == 4
     assert point.structure.requirements == point.build_requirements
-    assert not hasattr(MVAU, "contract")
+    assert not hasattr(MatMulKernel, "contract")
     refused = base.with_choices(simd=1).compute.with_choices(compute_pumping=True).root
     assert isinstance(
         refused.compute.inspect(DotpAxiKernel.build_requirements).accepted_result, Rejected
     )
-    rejected = refused.query(MVAU.structure)
+    rejected = refused.query(MatMulKernel.structure)
     assert isinstance(rejected, Rejected)
     assert "dotp-pumping" in {finding.code for finding in rejected.findings}
 
@@ -213,7 +213,7 @@ def test_build_is_complete_and_initializer_changes_identity(tmp_path, delivery):
         assert prepared.name != changed_prepared.name
 
 
-def test_mvau_honors_the_child_physical_view_not_just_its_raw_module(monkeypatch):
+def test_matmul_honors_the_child_physical_view_not_just_its_raw_module(monkeypatch):
     class RestrictedDotp(DotpAxiKernel):
         @constraint
         def view_only_rule(self) -> bool | Rejected:
@@ -225,27 +225,27 @@ def test_mvau_honors_the_child_physical_view_not_just_its_raw_module(monkeypatch
             DotpAxiKernel.codegen, requires=(DotpAxiKernel.support, view_only_rule)
         )
 
-    class RestrictedMVAU(MVAU):
+    class RestrictedMatMul(MatMulKernel):
         compute = RestrictedDotp(
-            activation_dtype=MVAU.activation_dtype,
-            weights_dtype=MVAU.weights_dtype,
-            result_dtype=MVAU.result_type,
-            pe=MVAU.pe,
-            simd=MVAU.simd,
-            target_dsp=MVAU.target_dsp,
-            target_period_ns=MVAU.target_period_ns,
-            # References to MVAU's stream nodes, which RestrictedMVAU inherits.
-            activation_stream=MVAU.replayed,
-            weights_stream=MVAU.weight_stream,
-            result_stream=MVAU.results,
+            activation_dtype=MatMulKernel.activation_dtype,
+            weights_dtype=MatMulKernel.weights_dtype,
+            result_dtype=MatMulKernel.result_type,
+            pe=MatMulKernel.pe,
+            simd=MatMulKernel.simd,
+            target_dsp=MatMulKernel.target_dsp,
+            target_period_ns=MatMulKernel.target_period_ns,
+            # References to MatMulKernel's stream nodes, which RestrictedMatMul inherits.
+            activation_stream=MatMulKernel.replayed,
+            weights_stream=MatMulKernel.weight_stream,
+            result_stream=MatMulKernel.results,
         )
 
     point = point_for(
-        RestrictedMVAU,
+        RestrictedMatMul,
         FACTS,
         pe=2,
         simd=2,
-        implementation="external",
+        delivery="external",
         **{"weight_stream.transport": "direct"},
     )
     point = point.compute.with_choices(compute_pumping=False).root
@@ -253,11 +253,11 @@ def test_mvau_honors_the_child_physical_view_not_just_its_raw_module(monkeypatch
     assert isinstance(
         point.compute.inspect(DotpAxiKernel.build_requirements).accepted_result, Rejected
     )
-    refused = point.query(MVAU.structure)
+    refused = point.query(MatMulKernel.structure)
     assert isinstance(refused, Rejected)
     assert "test-view-only" in {finding.code for finding in refused.findings}
     # Substitute a fully authored family to exercise the convenience entry
     # point through the same accepted-view path, without mutating declarations.
-    monkeypatch.setattr("finn.kernels.mvau.MVAU", RestrictedMVAU)
+    monkeypatch.setattr("finn.kernels.matmul.MatMulKernel", RestrictedMatMul)
     with pytest.raises(ValueError, match="test-view-only"):
         assembly()

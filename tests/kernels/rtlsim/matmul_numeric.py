@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Explicit XSI matrix conformance for physical-only MVAU production builds.
+"""Explicit XSI matrix conformance for physical-only MatMulKernel production builds.
 
 Run with FINN_ROOT, FINNLIB_ROOT and the XSI library path configured. The
 observation wrapper only exposes child pins; all arithmetic and transport RTL
@@ -23,7 +23,7 @@ from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 from kernels.rtlsim.rtl_transport import drive_observed
 from finn.kernels.artifacts.build import materialize_module_sources, prepare_module_build
 from finn.kernels.artifacts.store import ArtifactStore
-from finn.kernels.mvau import WeightDelivery, mvau_assembly
+from finn.kernels.matmul import WeightDelivery, matmul_assembly
 from finn.kernels.target import DspBlock
 from finn.kernels.physical.validation import abi_pins
 from finn.kernels.resources import resource_root, template_root
@@ -80,7 +80,7 @@ def _observation_wrapper(abi, entry_point, directory, activation_bits, weight_bi
             assignments.append(f"assign {name} = dut.{child}.{signal};")
             observation[role] = name
         observations[label] = observation
-    top = "observe_mvau"
+    top = "observe_matmul"
     text = f"module {top}(\n" + ",\n".join(ports) + ");\n"
     text += f"{entry_point} dut (" + ", ".join(connections) + ");\n"
     text += "\n".join(assignments) + "\nendmodule\n"
@@ -97,10 +97,10 @@ def run(
     weight_fifo_depth: int | None = None,
 ) -> None:
     c = configuration
-    repetitions = 4
+    rows = 4
     a_type, w_type = DataType[c.activation], DataType[c.weight]
     rng = np.random.RandomState(83)
-    activations = rng.randint(int(a_type.min()), int(a_type.max()) + 1, (repetitions, c.width))
+    activations = rng.randint(int(a_type.min()), int(a_type.max()) + 1, (rows, c.width))
     weights = rng.randint(int(w_type.min()), int(w_type.max()) + 1, (c.height, c.width))
     activations[0, :] = int(a_type.min())
     activations[1, :] = int(a_type.max())
@@ -108,10 +108,10 @@ def run(
     if c.height > 1:
         weights[1, :] = int(w_type.max())
     expected = activations @ weights.T
-    built = mvau_assembly(
-        repetitions=repetitions,
-        matrix_width=c.width,
-        matrix_height=c.height,
+    built = matmul_assembly(
+        rows=rows,
+        reduction=c.width,
+        outputs=c.height,
         activation_dtype=a_type,
         weights_dtype=w_type,
         pe=c.pe,
@@ -135,7 +135,7 @@ def run(
     ]
     stimulus = {"in0_V": activation_words}
     if delivery is WeightDelivery.EXTERNAL:
-        stimulus["in1_V"] = weight_image * repetitions
+        stimulus["in1_V"] = weight_image * rows
     else:
         assert built.initializer == tuple(weight_image)
     for name, bits in (
@@ -171,11 +171,11 @@ def run(
     sf, nf = c.width // c.simd, c.height // c.pe
     replay_expected = [
         word
-        for rep in range(repetitions)
+        for rep in range(rows)
         for _ in range(nf)
         for word in activation_words[rep * sf : (rep + 1) * sf]
     ]
-    last_expected = [int(index == sf - 1) for _ in range(repetitions * nf) for index in range(sf)]
+    last_expected = [int(index == sf - 1) for _ in range(rows * nf) for index in range(sf)]
     result_bits = built.result_dtype.bitwidth()
     result_mask = (1 << (c.pe * result_bits)) - 1
     expected_words = [
@@ -200,7 +200,7 @@ def run(
         assert trace["replay"]["words"] == replay_expected
         assert trace["replay"]["last"] == last_expected
         consumed_weights = trace["weights"]["words"]
-        assert consumed_weights[: built.weight_beats] == weight_image * repetitions
+        assert consumed_weights[: built.weight_beats] == weight_image * rows
         if delivery is WeightDelivery.EXTERNAL:
             assert len(consumed_weights) == built.weight_beats
         else:
@@ -223,7 +223,7 @@ def main() -> None:
     parser.add_argument("--rom-style", default="auto", choices=("auto", "distributed", "block"))
     parser.add_argument("--weight-fifo-depth", type=int)
     args = parser.parse_args()
-    directory = args.output or Path(tempfile.mkdtemp(prefix="mvau-assembly-evidence-"))
+    directory = args.output or Path(tempfile.mkdtemp(prefix="matmul-evidence-"))
     print(f"Evidence: {directory}", flush=True)
     for case in CASES:
         if args.case is None or args.case == case.label:

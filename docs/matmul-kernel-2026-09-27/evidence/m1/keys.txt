@@ -1,0 +1,8 @@
+compute.compute_pumping
+delivery
+delivery.cyclic.rom_style
+pe
+simd
+weight_stream.transport
+weight_stream.transport.fifo.buffer.depth
+weight_stream.transport.fifo.buffer.ram_style

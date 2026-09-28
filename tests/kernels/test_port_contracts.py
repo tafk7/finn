@@ -15,7 +15,7 @@ from qonnx.core.datatype import DataType
 from finn.core.space import Available, Rejected, Space, design_space
 from finn.kernels.datatypes.scalar import ScalarEncoding
 from finn.kernels.dotp import DotpAxiKernel
-from finn.kernels.mvau import MVAU
+from finn.kernels.matmul import MatMulKernel
 from finn.kernels.physical.forms import Every, Loop, Traversal, tile, vector_major
 from finn.kernels.streams import Stream, StreamSpec
 from finn.kernels.target import DspBlock
@@ -121,10 +121,10 @@ def test_one_kernel_refusal_reaches_only_its_own_stream():
     # activations and the results are untouched; before per-input ports all
     # three streams reported the weight refusal.
     point = design_space(
-        MVAU(
-            repetitions=3,
-            matrix_width=4,
-            matrix_height=4,
+        MatMulKernel(
+            rows=3,
+            reduction=4,
+            outputs=4,
             activation_dtype=DataType["INT3"],
             weights_dtype=DataType["UINT3"],
             target_dsp=DspBlock.DSP48E2,
@@ -132,11 +132,11 @@ def test_one_kernel_refusal_reaches_only_its_own_stream():
         )
     ).with_choices(
         {
-            MVAU.pe: 2,
-            MVAU.simd: 2,
-            MVAU.implementation: "external",
-            MVAU.weight_stream.transport: "direct",
-            MVAU.compute.compute_pumping: False,
+            MatMulKernel.pe: 2,
+            MatMulKernel.simd: 2,
+            MatMulKernel.delivery: "external",
+            MatMulKernel.weight_stream.transport: "direct",
+            MatMulKernel.compute.compute_pumping: False,
         }
     )
     assert isinstance(point.replayed.query(Stream.connection), Available)

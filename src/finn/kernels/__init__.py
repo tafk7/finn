@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Physical components and the supported explicit MVAU assembly.
+"""Physical components and the supported explicit MatMul assembly.
 
 The public construction path needs no compiler node. Scalar datatype values
 and canonical logical values come from :mod:`finn.dataflow`, below this package.
@@ -20,7 +20,7 @@ if TYPE_CHECKING:
     from finn.kernels.int_to_fp32 import IntToFp32Kernel
     from finn.kernels.memstream_hls import MemStreamHlsKernel
     from finn.kernels.thresholding import ThresholdingAxiKernel
-    from finn.kernels.mvau import MVAU, MVAUAssembly, WeightDelivery, mvau_assembly
+    from finn.kernels.matmul import MatMulAssembly, MatMulKernel, WeightDelivery, matmul_assembly
     from finn.kernels.streaming import (
         cyclic_stream_requirements,
         replay_buffer_requirements,
@@ -37,10 +37,10 @@ _LAZY_EXPORTS = {
     "IntToFp32Kernel": ("finn.kernels.int_to_fp32", "IntToFp32Kernel"),
     "MemStreamHlsKernel": ("finn.kernels.memstream_hls", "MemStreamHlsKernel"),
     "ThresholdingAxiKernel": ("finn.kernels.thresholding", "ThresholdingAxiKernel"),
-    "MVAU": ("finn.kernels.mvau", "MVAU"),
-    "MVAUAssembly": ("finn.kernels.mvau", "MVAUAssembly"),
-    "WeightDelivery": ("finn.kernels.mvau", "WeightDelivery"),
-    "mvau_assembly": ("finn.kernels.mvau", "mvau_assembly"),
+    "MatMulKernel": ("finn.kernels.matmul", "MatMulKernel"),
+    "MatMulAssembly": ("finn.kernels.matmul", "MatMulAssembly"),
+    "WeightDelivery": ("finn.kernels.matmul", "WeightDelivery"),
+    "matmul_assembly": ("finn.kernels.matmul", "matmul_assembly"),
     "replay_buffer_requirements": ("finn.kernels.streaming", "replay_buffer_requirements"),
     "cyclic_stream_requirements": ("finn.kernels.streaming", "cyclic_stream_requirements"),
     "DspBlock": ("finn.kernels.target", "DspBlock"),
@@ -67,10 +67,10 @@ __all__ = [
     "IntToFp32Kernel",
     "MemStreamHlsKernel",
     "ThresholdingAxiKernel",
-    "MVAU",
-    "MVAUAssembly",
+    "MatMulKernel",
+    "MatMulAssembly",
     "WeightDelivery",
-    "mvau_assembly",
+    "matmul_assembly",
     "replay_buffer_requirements",
     "cyclic_stream_requirements",
     "DspBlock",

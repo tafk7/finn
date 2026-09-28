@@ -1,25 +1,26 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Bounded physical MVAU assembly, with external or cyclic on-chip weights.
+"""A matrix-multiply unit on streams, with external or cyclic on-chip weights.
 
-For X[repetition, column], W[row, column], the output is X @ W.T. Input
-activation beats traverse (repetition, synapse fold), with SIMD low-first
-fields. Replay repeats each vector for every neuron fold. Compute and external
-weights traverse (repetition, neuron fold, synapse fold); weight fields are
-(PE, SIMD), SIMD fastest and low-first. Results traverse (repetition, neuron
-fold), with PE low-first fields. Internal last closes every synapse-fold group.
-There is no top-level last: the declared extents determine all stream lengths.
-Input high padding is ignored; output high padding is unspecified.
+For activations X[row, k] and weights W[output, k], the result is
+Y[row, output] = sum over k of X[row, k] * W[output, k]. Activation beats
+traverse (row, reduction fold), with SIMD low-first fields. Replay repeats each
+row for every output fold. Compute and external weights traverse (row, output
+fold, reduction fold); weight fields are (PE, SIMD), SIMD fastest and
+low-first. Results traverse (row, output fold), with PE low-first fields.
+Internal last closes every reduction-fold group. There is no top-level last:
+the declared extents determine all stream lengths. Input high padding is
+ignored; output high padding is unspecified.
 
-No Region, logical operand mapping, or dataflow graph is required. ``MVAU`` is a
-graph of design spaces: four ``Stream`` nodes, and kernel nodes that reference
-them. Each stream sees its users; one with a single user is a boundary of MVAU
-and presents its ``port`` name (``in0_V``, ``in1_V``, ``out0_V``). ``structure``
-wires ``Members(MODULE)`` through ``Members(CONNECTION)``; the module has
-``ap_clk2x`` only when compute is pumped. ``mvau_assembly`` is
-a convenience adapter: it configures concrete facts, commits the choices and
-packs the views into an ``MVAUAssembly``.
+No Region, logical operand mapping, or dataflow graph is required.
+``MatMulKernel`` is a graph of design spaces: four ``Stream`` nodes, and
+kernel nodes that reference them. Each stream sees its users; one with a single
+user is a boundary of the kernel and presents its ``port`` name (``in0_V``,
+``in1_V``, ``out0_V``). ``structure`` wires ``Members(MODULE)`` through
+``Members(CONNECTION)``; the module has ``ap_clk2x`` only when compute is
+pumped. ``matmul_assembly`` is a convenience adapter: it configures concrete
+facts, commits the choices and packs the views into a ``MatMulAssembly``.
 """
 
 from __future__ import annotations
@@ -110,41 +111,41 @@ def exact_result_dtype(
 class _Folding:
     """Concrete stream extents and the native PE/SIMD packing order above."""
 
-    repetitions: int
-    matrix_width: int
-    matrix_height: int
+    rows: int
+    reduction: int
+    outputs: int
     pe: int
     simd: int
 
     def __post_init__(self) -> None:
-        for name in ("repetitions", "matrix_width", "matrix_height", "pe", "simd"):
+        for name in ("rows", "reduction", "outputs", "pe", "simd"):
             _positive(getattr(self, name), name)
-        if self.matrix_width % self.simd or self.matrix_height % self.pe:
-            raise ValueError("SIMD must divide matrix_width and PE must divide matrix_height")
+        if self.reduction % self.simd or self.outputs % self.pe:
+            raise ValueError("SIMD must divide the reduction and PE must divide the outputs")
 
     @property
-    def synapse_folds(self) -> int:
-        return self.matrix_width // self.simd
+    def reduction_folds(self) -> int:
+        return self.reduction // self.simd
 
     @property
-    def neuron_folds(self) -> int:
-        return self.matrix_height // self.pe
+    def output_folds(self) -> int:
+        return self.outputs // self.pe
 
     @property
     def activation_beats(self) -> int:
-        return self.repetitions * self.synapse_folds
+        return self.rows * self.reduction_folds
 
     @property
     def weight_beats(self) -> int:
-        return self.repetitions * self.neuron_folds * self.synapse_folds
+        return self.rows * self.output_folds * self.reduction_folds
 
     @property
     def result_beats(self) -> int:
-        return self.repetitions * self.neuron_folds
+        return self.rows * self.output_folds
 
 
 @dataclass(frozen=True, slots=True)
-class MVAUAssembly:
+class MatMulAssembly:
     activation_beats: int
     weight_beats: int
     result_beats: int
@@ -158,12 +159,12 @@ class MVAUAssembly:
 FOLDING = default_semantics(_Folding)
 
 
-class MVAU(Space):
-    """Workload facts, folding choices, and kernels that reference declared streams.
+class MatMulKernel(Space):
+    """Operation facts, folding choices, and kernels that reference declared streams.
 
-    ``activations`` enters at ``in0_V`` and is replayed once per neuron fold into
+    ``activations`` enters at ``in0_V`` and is replayed once per output fold into
     ``replayed``; dotp consumes it with ``weight_stream`` and produces ``results``
-    for ``out0_V``. The ``implementation`` Decision decides what drives
+    for ``out0_V``. The ``delivery`` Decision decides what drives
     ``weight_stream``: ``external`` places nothing, so the stream has only its
     consumer and is the boundary ``in1_V``; ``cyclic`` places the ``cyclic``
     CyclicDelivery node, which references the stream as its producer and owns
@@ -171,32 +172,30 @@ class MVAU(Space):
     ``direct`` or a ``fifo`` with a committed depth.
     """
 
-    repetitions: int = Param()
-    matrix_width: int = Param()
-    matrix_height: int = Param()
+    rows: int = Param()
+    reduction: int = Param()
+    outputs: int = Param()
     activation_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
     weights_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
     target_dsp: DspBlock = Param()
     target_period_ns: float = Param()
     weights: IntegerTensor = Param(semantics=INTEGER_TENSOR, required=False)
-    pe: int = Decision(domain=divisors_of(matrix_height))
-    simd: int = Decision(domain=divisors_of(matrix_width))
+    pe: int = Decision(domain=divisors_of(outputs))
+    simd: int = Decision(domain=divisors_of(reduction))
 
     @derived(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
     def result_type(self) -> QONNXDataType | Rejected:
         try:
-            return exact_result_dtype(self.matrix_width, self.activation_dtype, self.weights_dtype)
+            return exact_result_dtype(self.reduction, self.activation_dtype, self.weights_dtype)
         except ValueError as error:
-            return reject("mvau-arithmetic", str(error))
+            return reject("matmul-arithmetic", str(error))
 
     @derived(semantics=FOLDING)
     def folding(self) -> _Folding | Rejected:
         try:
-            return _Folding(
-                self.repetitions, self.matrix_width, self.matrix_height, self.pe, self.simd
-            )
+            return _Folding(self.rows, self.reduction, self.outputs, self.pe, self.simd)
         except ValueError as error:
-            return reject("mvau-folding", str(error))
+            return reject("matmul-folding", str(error))
 
     @constraint
     def dimensions_supported(self) -> bool:
@@ -206,47 +205,47 @@ class MVAU(Space):
     dimensions = ConstraintGroup(dimensions_supported)
 
     @derived
-    def synapse_folds(self) -> int:
-        return self.folding.synapse_folds
+    def reduction_folds(self) -> int:
+        return self.folding.reduction_folds
 
     @derived
-    def neuron_folds(self) -> int:
-        return self.folding.neuron_folds
+    def output_folds(self) -> int:
+        return self.folding.output_folds
 
     @derived(semantics=STREAM_SPEC)
     def activation_spec(self) -> StreamSpec | Rejected:
         f, element = self.folding, ScalarEncoding.admit(self.activation_dtype)
         if isinstance(element, Rejected):
             return element
-        return StreamSpec(element, vector_major((f.repetitions, f.matrix_width), f.simd))
+        return StreamSpec(element, vector_major((f.rows, f.reduction), f.simd))
 
     @derived(semantics=STREAM_SPEC)
     def replayed_spec(self) -> StreamSpec:
         f, spec = self.folding, self.activation_spec
-        form = spec.form.replayed(f.neuron_folds, inner_beats=f.synapse_folds)
-        return StreamSpec(spec.element, form, markers=(Every(f.synapse_folds),))
+        form = spec.form.replayed(f.output_folds, inner_beats=f.reduction_folds)
+        return StreamSpec(spec.element, form, markers=(Every(f.reduction_folds),))
 
     @derived(semantics=TRAVERSAL)
     def weight_period(self) -> Traversal:
         f = self.folding
-        return tile(f.matrix_height, f.matrix_width, f.pe, f.simd)
+        return tile(f.outputs, f.reduction, f.pe, f.simd)
 
     @derived(semantics=STREAM_SPEC)
     def weight_spec(self) -> StreamSpec | Rejected:
         element = ScalarEncoding.admit(self.weights_dtype)
         if isinstance(element, Rejected):
             return element
-        return StreamSpec(element, self.weight_period.repeated(self.folding.repetitions))
+        return StreamSpec(element, self.weight_period.repeated(self.folding.rows))
 
     @derived(semantics=STREAM_SPEC)
     def result_spec(self) -> StreamSpec | Rejected:
         f, element = self.folding, ScalarEncoding.admit(self.result_type)
         if isinstance(element, Rejected):
             return element
-        return StreamSpec(element, vector_major((f.repetitions, f.matrix_height), f.pe))
+        return StreamSpec(element, vector_major((f.rows, f.outputs), f.pe))
 
     # Streams: relations between the kernels that reference them. A stream with a
-    # single user is a boundary of MVAU and presents its ABI port name.
+    # single user is a boundary of the kernel and presents its ABI port name.
     activations = Stream(spec=activation_spec, port="in0_V")
     replayed = Stream(spec=replayed_spec)
     weight_stream = BufferedStream(spec=weight_spec, port="in1_V")
@@ -255,8 +254,8 @@ class MVAU(Space):
     replay = ReplayBuffer(
         input_stream=activations,
         output_stream=replayed,
-        sequence_length=synapse_folds,
-        replay_count=neuron_folds,
+        sequence_length=reduction_folds,
+        replay_count=output_folds,
     )
     compute = DotpAxiKernel(
         activation_dtype=activation_dtype,
@@ -278,10 +277,10 @@ class MVAU(Space):
         values=weights,
         output_stream=weight_stream,
     )
-    implementation: CyclicDelivery | None = Decision(
+    delivery: CyclicDelivery | None = Decision(
         values={WeightDelivery.EXTERNAL.value: None, WeightDelivery.CYCLIC.value: cyclic}
     )
-    delivery = selected(implementation)
+    delivered = selected(delivery)
     modules = Members(MODULE)
     streams = Members(CONNECTION)
     tieoffs = Members(TIEOFFS)
@@ -292,8 +291,8 @@ class MVAU(Space):
             self.modules,
             self.streams,
             self.tieoffs,
-            module="finn_mvau_" + self.delivery,
-            producer=ProducerIdentity("finn.mvau." + self.delivery, "1"),
+            module="finn_matmul_" + self.delivered,
+            producer=ProducerIdentity("finn.matmul." + self.delivered, "1"),
         )
 
     @view(semantics=default_semantics(ModuleBuildRequirements), requires=(structure,))
@@ -304,11 +303,11 @@ class MVAU(Space):
 ROM_STYLE = CyclicDelivery.rom_style
 
 
-def mvau_assembly(
+def matmul_assembly(
     *,
-    repetitions: int,
-    matrix_width: int,
-    matrix_height: int,
+    rows: int,
+    reduction: int,
+    outputs: int,
     activation_dtype: QONNXDataType,
     weights_dtype: QONNXDataType,
     pe: int,
@@ -320,8 +319,8 @@ def mvau_assembly(
     weights: Sequence[Sequence[int]] | None = None,
     rom_style: str = "auto",
     weight_fifo_depth: int | None = None,
-) -> MVAUAssembly:
-    """Bind workload facts, commit every choice, then assemble.
+) -> MatMulAssembly:
+    """Bind operation facts, commit every choice, then assemble.
 
     Weights are required by, and only accepted with, cyclic delivery. ``rom_style``
     applies to cyclic delivery; the ``auto`` default leaves memory inference to
@@ -336,9 +335,9 @@ def mvau_assembly(
     if cyclic != (weights is not None):
         raise ValueError("cyclic delivery requires weights; external delivery has no initializer")
     facts: dict[str, Any] = dict(
-        repetitions=repetitions,
-        matrix_width=matrix_width,
-        matrix_height=matrix_height,
+        rows=rows,
+        reduction=reduction,
+        outputs=outputs,
         activation_dtype=activation_dtype,
         weights_dtype=weights_dtype,
         target_dsp=target_dsp,
@@ -349,23 +348,23 @@ def mvau_assembly(
     case = weight_delivery.value
     buffered = weight_fifo_depth is not None
     choices: dict[str, object] = {
-        "implementation": case,
+        "delivery": case,
         "weight_stream.transport": "fifo" if buffered else "direct",
         "compute.compute_pumping": compute_pumping,
         "pe": pe,
         "simd": simd,
     }
     if cyclic:
-        choices["implementation.cyclic.rom_style"] = rom_style
+        choices["delivery.cyclic.rom_style"] = rom_style
     if buffered:
         choices["weight_stream.transport.fifo.buffer.depth"] = weight_fifo_depth
         choices["weight_stream.transport.fifo.buffer.ram_style"] = "auto"
-    point = commit(design_space(MVAU(**facts)), choices)
-    composed = point.query(MVAU.structure)
+    point = commit(design_space(MatMulKernel(**facts)), choices)
+    composed = point.query(MatMulKernel.structure)
     if not isinstance(composed, Available):
-        raise ValueError(f"MVAU assembly is not accepted: {describe([composed])}")
+        raise ValueError(f"MatMul assembly is not accepted: {describe([composed])}")
     folding = point.folding
-    return MVAUAssembly(
+    return MatMulAssembly(
         folding.activation_beats,
         folding.weight_beats,
         folding.result_beats,
@@ -378,10 +377,10 @@ def mvau_assembly(
 
 
 __all__ = [
-    "MVAU",
-    "MVAUAssembly",
+    "MatMulAssembly",
+    "MatMulKernel",
     "ROM_STYLE",
     "WeightDelivery",
     "exact_result_dtype",
-    "mvau_assembly",
+    "matmul_assembly",
 ]

@@ -165,7 +165,7 @@ class RejectParked(importlib.abc.MetaPathFinder):
 
 sys.meta_path.insert(0, RejectParked())
 from finn.core.space import design_space
-from finn.kernels import DotpAxiKernel, DspBlock, WeightDelivery, mvau_assembly
+from finn.kernels import DotpAxiKernel, DspBlock, WeightDelivery, matmul_assembly
 from finn.kernels.artifacts.requirements import ModuleBuildRequirements
 from finn.kernels.physical.axi_stream import AxiStream
 from qonnx.core.datatype import DataType
@@ -192,10 +192,10 @@ for mode in WeightDelivery:
         if mode is WeightDelivery.CYCLIC
         else {}
     )
-    assembly = mvau_assembly(
-        repetitions=2,
-        matrix_width=4,
-        matrix_height=4,
+    assembly = matmul_assembly(
+        rows=2,
+        reduction=4,
+        outputs=4,
         activation_dtype=DataType["INT3"],
         weights_dtype=DataType["INT3"],
         pe=2,
@@ -279,7 +279,7 @@ def test_no_duplicate_shared_implementation() -> None:
         "artifacts",
         "model/kernel_base.py",
         "kernels/dotp_axi_minimal.py",
-        "kernels/mvau.py",
+        "kernels/matmul.py",
         "kernels/streaming.py",
         "kernels/target.py",
         "kernels/resources",

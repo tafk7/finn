@@ -47,7 +47,7 @@ class RejectGraphDependencies(importlib.abc.MetaPathFinder):
 
 sys.meta_path.insert(0, RejectGraphDependencies())
 
-from finn.kernels import DotpAxiKernel, DspBlock, WeightDelivery, mvau_assembly
+from finn.kernels import DotpAxiKernel, DspBlock, WeightDelivery, matmul_assembly
 from finn.core.space import (
     Available, Decision, Param, Space, design_space, derived, divisors_of, view,
 )
@@ -147,8 +147,8 @@ for delivery in WeightDelivery:
     if delivery is WeightDelivery.CYCLIC:
         options["weights"] = [[-4, -3, -2, -1], [0, 1, 2, 3], [3, 2, 1, 0], [-1, -2, -3, -4]]
         expected |= {"cyclic_stream.sv"}
-    assembly = mvau_assembly(
-        repetitions=3, matrix_width=4, matrix_height=4, pe=2, simd=2,
+    assembly = matmul_assembly(
+        rows=3, reduction=4, outputs=4, pe=2, simd=2,
         activation_dtype=DataType["INT3"], weights_dtype=DataType["INT3"],
         target_dsp=DspBlock.DSP48E2, weight_delivery=delivery, **options,
     )
@@ -171,7 +171,7 @@ for name, module in tuple(sys.modules.items()):
             assert Path(location).resolve().is_relative_to(installed), (name, location)
         for location in getattr(module, "__path__", ()):
             assert Path(location).resolve().is_relative_to(installed), (name, location)
-print("installed dotp, external MVAU and cyclic MVAU manifests verified")
+print("installed dotp, external and cyclic MatMul manifests verified")
 """
 
 
@@ -277,4 +277,4 @@ def test_installed_wheel_materializes_independent_kernel_builds(tmp_path: Path) 
         "store": str(tmp_path / "store"),
     }
     result = _run([sys.executable, "-I", "-S", "-c", INSTALLED_BUILD, json.dumps(config)], tmp_path)
-    assert "installed dotp, external MVAU and cyclic MVAU manifests verified" in result.stdout
+    assert "installed dotp, external and cyclic MatMul manifests verified" in result.stdout

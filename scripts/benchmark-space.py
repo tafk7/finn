@@ -532,11 +532,11 @@ def self_workload(api, shape: str, depth: int, width: int) -> dict[str, object]:
 def kernel_workload(api, name: str, trials: int) -> dict[str, object]:
     """Measure repeated replacement, cold/cached accepted views and retention."""
     kernels = importlib.import_module("finn.kernels")
-    DotpAxiKernel, DspBlock, FifoKernel, MVAU, WeightDelivery = (
+    DotpAxiKernel, DspBlock, FifoKernel, MatMulKernel, WeightDelivery = (
         kernels.DotpAxiKernel,
         kernels.DspBlock,
         kernels.FifoKernel,
-        kernels.MVAU,
+        kernels.MatMulKernel,
         kernels.WeightDelivery,
     )
     design_space = api.design_space
@@ -559,7 +559,7 @@ def kernel_workload(api, name: str, trials: int) -> dict[str, object]:
                 pe=2,
                 simd=2,
                 target_dsp=DspBlock.DSP48E2,
-                segment_length=0,
+                target_period_ns=5.0,
             )
         )
 
@@ -570,26 +570,26 @@ def kernel_workload(api, name: str, trials: int) -> dict[str, object]:
             return point.build_requirements
 
     else:
-        assert name == "mvau"
+        assert name == "matmul"
         base = design_space(
-            MVAU(
-                repetitions=2,
-                matrix_width=4,
-                matrix_height=4,
+            MatMulKernel(
+                rows=2,
+                reduction=4,
+                outputs=4,
                 activation_dtype=dtype("INT3"),
                 weights_dtype=dtype("INT3"),
                 target_dsp=DspBlock.DSP48E2,
-                segment_length=0,
+                target_period_ns=5.0,
             )
         )
 
         def design_space(point, index):
-            # The weight-delivery choice is the ``implementation`` Decision over nodes.
+            # The weight-delivery choice is the ``delivery`` Decision over nodes.
             return point.with_choices(
-                {MVAU.compute.compute_pumping: False},
+                {MatMulKernel.compute.compute_pumping: False},
                 pe=(1, 2)[index % 2],
                 simd=2,
-                implementation=WeightDelivery.EXTERNAL.value,
+                delivery=WeightDelivery.EXTERNAL.value,
             )
 
         def accepted(point):
@@ -644,7 +644,7 @@ def kernel_workload(api, name: str, trials: int) -> dict[str, object]:
     return {
         "kernel": name,
         "trials": trials,
-        "view": "compute.build_requirements" if name == "mvau" else "build_requirements",
+        "view": "compute.build_requirements" if name == "matmul" else "build_requirements",
         "seconds": {
             label: {"median": statistics.median(values), "min": min(values), "max": max(values)}
             for label, values in times.items()
@@ -796,7 +796,7 @@ def markdown(report: dict[str, object]) -> str:
         lines += [
             "## Repeated kernel configurations",
             "",
-            "Choices alternate on each immutable replacement. MVAU measures its accepted "
+            "Choices alternate on each immutable replacement. MatMul measures its accepted "
             "compute child requirements; FIFO and Dotp measure their direct requirements "
             "views. Timings exclude source rendering and hardware execution. A separate "
             "allocation run holds an independent population and then releases it.",
@@ -952,7 +952,7 @@ def main() -> None:
         ]
     if arguments.suite in ("all", "kernels"):
         report["kernel_workloads"] = [
-            isolated_workload("kernels", name, sizes) for name in ("fifo", "dotp", "mvau")
+            isolated_workload("kernels", name, sizes) for name in ("fifo", "dotp", "matmul")
         ]
     arguments.output.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
     if arguments.markdown is not None:
