@@ -902,3 +902,25 @@ Open questions (no recommendation yet):
     recommendation until §4.7), or model it as width conversion plus a pad step?
 12. **Design level** (§6.3): per-module IP packaging vs one flat netlist
     wrapper, and where FIFO sizing (bounded-channel analysis) plugs in.
+
+## Addendum 2026-09-28: as built (S0–S3)
+
+The increments are built; [RECORD.md](RECORD.md) has the evidence. Where the
+build refined this design:
+
+- **The boundary presentation is a rule, not a Param** (G0.2): a receiver
+  realizes its own replay; whole-pass repetition stays part of the interface
+  (`unreplayed`).
+- **Markers are `LevelEnd(beats)`** (G0.4): a level is named by the beats it
+  spans, since canonical loops merge and loop names do not cross kernels, and
+  it must close whole innermost loops of its presentation.
+- **The adapter Decision's candidates are the seven shapes a plan can take**
+  (fixed chains of `input_gen` and `vpc`), so exactly one carries out a
+  realizable plan; the Decision applies only under a non-empty plan, and
+  `adaptable=False` replaces "pinning the adapter to `None`".
+- **`transport` stays on `BufferedStream`** rather than moving onto every
+  `Stream`, keeping its keys and avoiding a FIFO choice on every stream.
+- **The reduction-order Decision is value-level** until a family reduces
+  several indices (MatMul reduces one).
+- **`replay_buffer` is not wrapped** (G0.6); `input_gen` replays at about four
+  times the storage (measured).

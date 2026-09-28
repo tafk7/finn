@@ -1,6 +1,7 @@
 # Plan: the stream model (D10), increment 1
 
-Date: 2026-09-28. Status: **proposed**. Design: [DESIGN.md](DESIGN.md).
+Date: 2026-09-28. Status: **built, S0–S3** (record: [RECORD.md](RECORD.md)).
+Design: [DESIGN.md](DESIGN.md).
 Plan of record: [`../kernel-status-2026-09-27/STATUS.md`](../kernel-status-2026-09-27/STATUS.md).
 
 ## Goal

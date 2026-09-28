@@ -94,9 +94,9 @@ def test_generated_data_is_a_relative_name_with_bytes():
 def test_matmul_memstream_delivery_materializes_its_image(tmp_path):
     built = matmul_assembly(**MATMUL)
     assert [item.instance_id for item in built.structure.instances] == [
-        "u_replay_buffer",
         "u_compute_packed",
         "u_delivery_memstream",
+        "u_activations_input_gen",
     ]
     assert built.initializer == (0x22C, 0x6BE, 0xDD3, 0x941)
     assert "in1_V" not in {port.name for port in built.structure.top_abi.ports}
@@ -128,7 +128,11 @@ def test_several_weight_sets_take_a_set_index_per_row():
     built = matmul_assembly(**{**MATMUL, "weights": sets}, weight_sets=2)
     ports = {port.name: port for port in built.structure.top_abi.ports}
     assert "in2_V" in ports
-    memstream = dict(built.structure.instances[2].requirements.parameters)
+    (memstream,) = (
+        dict(item.requirements.parameters)
+        for item in built.structure.instances
+        if item.instance_id == "u_delivery_memstream"
+    )
     assert memstream["SETS"] == 2
     assert len(built.initializer) == 8  # both sets, set after set
     with pytest.raises(ValueError, match="matmul-sets"):

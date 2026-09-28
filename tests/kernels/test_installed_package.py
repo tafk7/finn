@@ -143,7 +143,7 @@ def materialize(module, expected):
 materialize(answer, dotp_sources)
 for delivery in WeightDelivery:
     options = {}
-    expected = dotp_sources | {"rtl/infra/replay_buffer.sv"}
+    expected = dotp_sources | {"rtl/shape/input_gen.sv"}
     if delivery is not WeightDelivery.EXTERNAL:
         options["weights"] = [[-4, -3, -2, -1], [0, 1, 2, 3], [3, 2, 1, 0], [-1, -2, -3, -4]]
     if delivery is WeightDelivery.CYCLIC:
@@ -164,7 +164,7 @@ for delivery in WeightDelivery:
     }
     wrapper = materialize(assembly.requirements, expected).read_text()
     assert ".ACCU_WIDTH(8)" in wrapper
-    assert ".olast(n__u_replay_buffer__olast)" in wrapper
+    assert ".olst(n__u_activations_input_gen__olst)" in wrapper
     if delivery is WeightDelivery.CYCLIC:
         assert ".INIT_DATA(48'h941dd36be22c)" in wrapper
     if delivery is WeightDelivery.EXTERNAL:

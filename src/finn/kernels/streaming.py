@@ -1,19 +1,22 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Physical ready/valid components for opaque words.
+"""A physical ready/valid component for opaque words: the cyclic stream.
 
 These requirements describe transport and initialization only. Payload bits are
-preserved without padding, signed interpretation, or element reordering. Both
-components use ``clk`` and a synchronous active-high ``rst``; a transfer occurs
-on a rising edge with valid and ready asserted outside reset. Output payload and
-framing stay stable while a valid transfer is stalled.
+preserved without padding, signed interpretation, or element reordering. The
+component uses ``clk`` and a synchronous active-high ``rst``; a transfer occurs
+on a rising edge with valid and ready asserted outside reset. Output payload is
+stable while a valid transfer is stalled.
+
+FinnLib's ``replay_buffer`` is not wrapped: ``input_gen`` realizes every replay
+it could, and marker synthesis too, as a stage of the consuming stream
+(``finn.kernels.adapters``).
 """
 
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass
 
 from finn.kernels.artifacts.abi import (
     Clock,
@@ -23,22 +26,12 @@ from finn.kernels.artifacts.abi import (
     Reset,
     Signal,
 )
-from finn.core.space import Param, Rejected, default_semantics, derived, reject, view
-from finn.kernels.base import Kernel
-from finn.dataflow.tensor import ScalarEncoding
-from finn.kernels.physical.contract import STREAM_CONTRACT, StreamContract
-from finn.dataflow.traversal import TRAVERSAL, LevelEnd, Traversal
-from finn.kernels.physical.stream import ReadyValidStream, StreamMarker, MarkerKind
-from finn.kernels.streams import MODULE, PORT, Stream
+from finn.kernels.physical.stream import ReadyValidStream
 from finn.kernels.artifacts.contribution_types import CopiedSource
 from finn.kernels.artifacts.requirements import (
     FixedModuleName,
     ModuleABIRequirements,
     ModuleBuildRequirements,
-)
-
-REPLAY_BUFFER_SOURCES = (
-    CopiedSource("finnlib", "rtl/infra/replay_buffer.sv", provides=("module:replay_buffer",)),
 )
 
 
@@ -59,156 +52,10 @@ def _clock_reset() -> tuple[Signal, Signal]:
     )
 
 
-def replay_buffer_interfaces(*, word_bits: int) -> tuple[ReadyValidStream, ...]:
-    """Native opaque streams with sequence-end and final-replay markers."""
-    _positive("word_bits", word_bits)
-    return (
-        ReadyValidStream("input", word_bits, Endpoint.TARGET, "idat", "ivld", "irdy", "clk", "rst"),
-        ReadyValidStream(
-            "output",
-            word_bits,
-            Endpoint.INITIATOR,
-            "odat",
-            "ovld",
-            "ordy",
-            "clk",
-            "rst",
-            (StreamMarker("olast", MarkerKind.LAST), StreamMarker("ofin", MarkerKind.REPLAY_END)),
-        ),
-    )
-
-
-@dataclass(frozen=True)
-class ReplayContracts:
-    """The replay's two ends: what it consumes and what it produces."""
-
-    input: StreamContract
-    output: StreamContract
-
-
-REPLAY_CONTRACTS = default_semantics(ReplayContracts)
-
-
-def replay_buffer_contracts(
-    element: ScalarEncoding, form: Traversal, *, sequence_length: int, replay_count: int
-) -> ReplayContracts:
-    """Input and output contracts of a replay over ``form``.
-
-    Every consecutive ``sequence_length`` beats are presented ``replay_count``
-    times: a replay loop is inserted above that group. ``olast`` closes every
-    sequence and ``ofin`` its final repetition, so both are periodic rules.
-    """
-    _positive("sequence_length", sequence_length)
-    _positive("replay_count", replay_count)
-    source, sink = replay_buffer_interfaces(word_bits=form.lanes * element.bits)
-    return ReplayContracts(
-        StreamContract(source, element, form),
-        StreamContract(
-            sink,
-            element,
-            form.replayed(replay_count, inner_beats=sequence_length),
-            markers={
-                "olast": LevelEnd(sequence_length),
-                "ofin": LevelEnd(sequence_length * replay_count),
-            },
-        ),
-    )
-
-
-class ReplayBuffer(Kernel):
-    """FinnLib replay as a stream kernel: its output contract is derived, not declared."""
-
-    id = "finnlib.replay_buffer"
-    version = "1"
-
-    # The streams it sits on, and the form its input presents; its output
-    # contract derives from that form.
-    input_stream: Stream = Param()
-    output_stream: Stream = Param()
-    input_form: Traversal = Param(semantics=TRAVERSAL)
-    sequence_length: int = Param()
-    replay_count: int = Param()
-
-    @derived(semantics=REPLAY_CONTRACTS)
-    def contracts(self) -> ReplayContracts | Rejected:
-        try:
-            return replay_buffer_contracts(
-                self.input_stream.tensor.element,
-                self.input_form,
-                sequence_length=self.sequence_length,
-                replay_count=self.replay_count,
-            )
-        except ValueError as error:
-            return reject("replay-geometry", str(error))
-
-    @view(semantics=STREAM_CONTRACT)
-    def input_port(self) -> StreamContract:
-        return self.contracts.input
-
-    @view(semantics=STREAM_CONTRACT)
-    def output_port(self) -> StreamContract:
-        return self.contracts.output
-
-    @view(semantics=default_semantics(ModuleBuildRequirements))
-    def build_requirements(self) -> ModuleBuildRequirements | Rejected:
-        try:
-            return replay_buffer_requirements(
-                word_bits=self.contracts.input.payload_bits,
-                sequence_length=self.sequence_length,
-                replay_count=self.replay_count,
-            )
-        except ValueError as error:
-            return reject("replay-geometry", str(error))
-
-    exports = {
-        MODULE: build_requirements,
-        PORT: {input_stream: input_port, output_stream: output_port},
-    }
-
-
 def cyclic_stream_interface(*, word_bits: int) -> ReadyValidStream:
     _positive("word_bits", word_bits)
     return ReadyValidStream(
         "output", word_bits, Endpoint.INITIATOR, "odat", "ovld", "ordy", "clk", "rst"
-    )
-
-
-def replay_buffer_requirements(
-    *, word_bits: int, sequence_length: int, replay_count: int
-) -> ModuleBuildRequirements:
-    """Replay each consecutive ``sequence_length`` input words ``replay_count`` times.
-
-    ``out0.tlast``/``olast`` marks the final word of every output sequence.
-    ``ofin`` marks that word only on its last repetition, completing one input
-    sequence's replay. Both are valid-qualified levels, held under backpressure;
-    neither is a separate completion pulse. Input sequences are counted and
-    have no last pin. Reset discards buffered words and restarts both counters.
-
-    A replay count of one selects FinnLib's combinational identity path. Its
-    valid/ready signals remain combinational during reset, so endpoints must
-    disregard transfers while reset is asserted.
-    """
-    _positive("word_bits", word_bits)
-    _positive("sequence_length", sequence_length)
-    _positive("replay_count", replay_count)
-    parameters = (("LEN", sequence_length), ("REP", replay_count), ("W", word_bits))
-    return ModuleBuildRequirements(
-        "replay_buffer",
-        "1",
-        parameters,
-        ModuleABIRequirements(
-            FixedModuleName("replay_buffer"),
-            (
-                *_clock_reset(),
-                *(
-                    pin
-                    for stream in replay_buffer_interfaces(word_bits=word_bits)
-                    for pin in stream.pins()
-                ),
-            ),
-            tuple((name, str(value)) for name, value in parameters),
-        ),
-        REPLAY_BUFFER_SOURCES,
     )
 
 
@@ -272,11 +119,6 @@ def cyclic_stream_requirements(
 
 __all__ = [
     "CYCLIC_ROM_STYLES",
-    "ReplayBuffer",
-    "ReplayContracts",
-    "replay_buffer_contracts",
-    "replay_buffer_requirements",
     "cyclic_stream_requirements",
-    "replay_buffer_interfaces",
     "cyclic_stream_interface",
 ]

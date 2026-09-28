@@ -8,11 +8,11 @@ its activations, weights and results; every port presents what that nest
 derives, so a wrong lane count or a transposed tile can no longer be written
 into dotp. What dotp cannot compute is refused by one admission rule
 (``dotp-iteration``). A producer presenting another order is the stream's to
-judge: it refuses, naming the adapter the difference needs, unless the
-difference is a field order, which is wires. The B1 probes map as follows:
-a wrong lane count and a transposed tile become stream verdicts, a frame
-crossing rows becomes an admission refusal, and results that swap frames have
-no analogue, since results are derived.
+judge: its plan names the steps and its adapter carries them out, a field
+order is wires, and a stream admitting no adapter refuses the plan. The B1
+probes map as follows: a wrong lane count and a transposed tile become plans,
+a frame crossing rows becomes an admission refusal, and results that swap
+frames have no analogue, since results are derived.
 """
 
 from __future__ import annotations
@@ -23,6 +23,7 @@ from qonnx.core.datatype import DataType
 
 from finn.core.space import Available, Rejected, Space, design_space
 from finn.dataflow.nest import Einsum, Iteration, Nest, accesses, fold
+from finn.dataflow.plan import Step
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import (
     Adaptation,
@@ -35,7 +36,7 @@ from finn.dataflow.traversal import (
 from finn.kernels.delivery import CyclicDelivery
 from finn.kernels.dotp import Contraction, DotpAxiKernel, Int8Dsp58DotpKernel, PackedDotpKernel
 from finn.kernels.matmul import MatMulKernel
-from finn.kernels.streams import Stream
+from finn.kernels.streams import Stream, commit_adapters
 from finn.kernels.target import DspBlock
 
 A, W, R = DataType["INT3"], DataType["INT3"], DataType["INT8"]
@@ -64,6 +65,7 @@ def placed(
     nested: Iteration | None = None,
     weights_form: Traversal | None = None,
     pe: int = PE,
+    adaptable: bool = True,
 ):
     """dotp between boundary activations and results, its weights from a cyclic ROM."""
     nested = iteration(contraction) if nested is None else nested
@@ -73,7 +75,7 @@ def placed(
 
     class Placed(Space):
         a = Stream(tensor=Tensor(x.tensor, ScalarEncoding(A)), port="in0_V")
-        w_s = Stream(tensor=Tensor(w.tensor, ScalarEncoding(W)))
+        w_s = Stream(tensor=Tensor(w.tensor, ScalarEncoding(W)), adaptable=adaptable)
         r = Stream(tensor=Tensor(y.tensor, ScalarEncoding(R)), port="out0_V")
         weights = CyclicDelivery(
             dtype=W, form=form, values=weight_values(w.tensor), output_stream=w_s
@@ -138,25 +140,28 @@ def test_what_dotp_cannot_compute_is_one_admission_refusal():
     assert codes(point.compute.query(DotpAxiKernel.presentations)) == {"dotp-iteration"}
 
 
-def test_a_producer_presenting_another_order_is_refused_by_the_stream_naming_the_adapter():
+def test_a_producer_presenting_another_order_is_a_plan_its_stream_adapts():
     # Probe: the weight tile walked column fold first; the same PE x SIMD lanes.
     columns_first = Traversal.over(
         (OUTPUTS, REDUCTION),
         ((1, REDUCTION // SIMD, SIMD), (0, OUTPUTS // PE, PE)),
         ((0, PE, 1), (1, SIMD, 1)),
     )
-    refused = placed(weights_form=columns_first).w_s.query(Stream.connection)
-    assert codes(refused) == {"stream-form"} and "reorder" in str(refused)
+    point = placed(weights_form=columns_first)
+    assert point.w_s.plan.steps == (Step.REORDER,)
+    assert codes(commit_adapters(point).w_s.query(Stream.connection)) == set()
     # Probe: the tile's own sequence, one weight a beat where dotp reads PE x SIMD.
     narrow = placed(weights_form=regrouped(tile(OUTPUTS, REDUCTION, PE, SIMD), 1))
-    refused = narrow.w_s.query(Stream.connection)
-    assert codes(refused) == {"stream-form"} and "width_conversion" in str(refused)
-    # Another order at other lanes, the row-major weights one a beat: a regroup.
+    assert narrow.w_s.plan.steps == (Step.WIDTH,)
+    # Another order at other lanes, the row-major weights one a beat.
     rows = placed(weights_form=vector_major((OUTPUTS, REDUCTION), 1))
-    refused = rows.w_s.query(Stream.connection)
-    assert codes(refused) == {"stream-form"} and "lane_regroup" in str(refused)
+    assert rows.w_s.plan.steps == (Step.REORDER, Step.WIDTH)
     # dotp's own port is untouched by the producer's order.
     assert isinstance(narrow.compute.query(DotpAxiKernel.weights_port), Available)
+    # A stream that admits no adapter refuses the plan, naming it.
+    fixed = placed(weights_form=columns_first, adaptable=False)
+    refused = fixed.w_s.query(Stream.connection)
+    assert "stream-plan" in codes(refused) and "reorder" in str(refused)
 
 
 def test_a_producer_s_field_order_is_wires():
@@ -177,7 +182,7 @@ def test_a_producer_s_field_order_is_wires():
 
 
 def test_one_kernel_refusal_reaches_only_its_own_stream():
-    # Probe P2: unsigned weights are refused by dotp's weight port. The replayed
+    # Probe P2: unsigned weights are refused by dotp's weight port. The
     # activations and the results are untouched.
     point = design_space(
         MatMulKernel(
@@ -196,10 +201,10 @@ def test_one_kernel_refusal_reaches_only_its_own_stream():
             MatMulKernel.delivery: "external",
             MatMulKernel.weight_stream.transport: "direct",
             MatMulKernel.compute: "packed",
-            MatMulKernel.replay: "buffer",
             MatMulKernel.compute_pumping: False,
         }
     )
-    assert isinstance(point.replayed.query(Stream.connection), Available)
+    point = commit_adapters(point)
+    assert isinstance(point.activations.query(Stream.connection), Available)
     assert isinstance(point.results.query(Stream.connection), Available)
     assert codes(point.weight_stream.query(Stream.connection)) == {"dtype-family"}

@@ -27,13 +27,17 @@ There is no top-level last: the declared extents determine all stream lengths.
 Input high padding is ignored; output high padding is unspecified.
 
 No Region, logical operand mapping, or dataflow graph is required.
-``MatMulKernel`` is a graph of design spaces: four ``Stream`` nodes, and
-kernel nodes that reference them. Each stream sees its users; one with a single
-user is a boundary of the kernel and presents its ``port`` name (``in0_V``,
-``in1_V``, ``out0_V``). ``structure`` wires ``Members(MODULE)`` through
-``Members(CONNECTION)``; the module has ``ap_clk2x`` only when compute is
-pumped. ``matmul_assembly`` is a convenience adapter: it configures concrete
-facts, commits the choices and packs the views into a ``MatMulAssembly``.
+``MatMulKernel`` is a graph of design spaces: ``Stream`` nodes (activations,
+weights, results, and the set index with several weight sets), and kernel
+nodes that reference them. Each stream sees its users; one with a single user
+is a boundary of the kernel and presents its ``port`` name (``in0_V``,
+``in1_V``, ``out0_V``, ``in2_V``). The activation stream's plan replays each
+dense row and frames each reduction, and its adapter carries that out.
+``structure`` wires ``Members(MODULE)`` through ``Members(CONNECTION)``; the
+module has ``ap_clk2x`` only when compute is pumped. ``matmul_assembly`` is a
+convenience adapter: it configures concrete facts, commits the choices (each
+stream's one compatible adapter included) and packs the views into a
+``MatMulAssembly``.
 """
 
 from __future__ import annotations
@@ -50,10 +54,8 @@ from finn.kernels.artifacts.derivation import ProducerIdentity
 from finn.dataflow.tensor import ScalarEncoding
 from finn.kernels.datatypes.semantics import (
     INTEGER_TENSOR,
-    INTEGER_VECTOR,
     QONNX_DATATYPE_VALUE_SEMANTICS,
     IntegerTensor,
-    IntegerVector,
 )
 from finn.dataflow.datatypes import (
     QONNXDataType,
@@ -76,10 +78,8 @@ from finn.kernels.dotp import (
 )
 from finn.dataflow.tensor import TENSOR, Tensor
 from finn.dataflow.nest import ITERATION, Einsum, Iteration, accesses, fold, period
-from finn.dataflow.traversal import TRAVERSAL, Traversal, unreplayed
+from finn.dataflow.traversal import TRAVERSAL, Traversal
 from finn.kernels.physical.structure import PhysicalStructure
-from finn.kernels.input_generator import InputGeneratorKernel
-from finn.kernels.streaming import ReplayBuffer
 from finn.kernels.streams import (
     COMPOSED,
     CONNECTION,
@@ -88,6 +88,7 @@ from finn.kernels.streams import (
     BufferedStream,
     Composed,
     Stream,
+    commit_adapters,
     netlist,
 )
 from finn.kernels.target import DspBlock
@@ -161,11 +162,6 @@ class _Folding:
         return self.outputs // self.pe
 
     @property
-    def reuse(self) -> int:
-        """How many times each activation row is read: once per output fold when dense."""
-        return 1 if self.per_channel else self.output_folds
-
-    @property
     def activation_beats(self) -> int:
         channel_folds = self.output_folds if self.per_channel else 1
         return self.rows * channel_folds * self.reduction_folds
@@ -197,10 +193,11 @@ FOLDING = default_semantics(_Folding)
 class MatMulKernel(Space):
     """Operation facts, folding choices, and kernels that reference declared streams.
 
-    ``activations`` enters at ``in0_V``; the replay node presents each row
-    ``reuse`` times into ``replayed``, with a frame marker per reduction: once
-    per output fold when dense, once (markers only) per channel. dotp consumes
-    it with ``weight_stream`` and produces ``results`` for ``out0_V``. The
+    ``activations`` enters at ``in0_V`` and feeds dotp directly: the stream's
+    plan replays each dense row once per output fold and closes each reduction
+    with a frame marker (markers only, per channel), and its ``adapter``
+    realizes that plan. dotp consumes it with ``weight_stream`` and produces
+    ``results`` for ``out0_V``. The
     ``compute`` Decision places one core kernel; a per-channel contraction is
     read only by the INT8 DSP58 core. The ``delivery`` Decision decides what drives
     ``weight_stream``: ``external`` places nothing, so the stream has only its
@@ -323,35 +320,6 @@ class MatMulKernel(Space):
 
     dimensions = ConstraintGroup(dimensions_supported, realization_supported, delivery_supported)
 
-    @derived
-    def reduction_folds(self) -> int:
-        return self.folding.reduction_folds
-
-    @derived
-    def reuse(self) -> int:
-        return self.folding.reuse
-
-    @derived
-    def reused(self) -> bool:
-        return self.datapath is Contraction.DENSE
-
-    @derived
-    def single_pass(self) -> bool:
-        return self.datapath is Contraction.PER_CHANNEL
-
-    @derived
-    def activation_word_bits(self) -> int:
-        return self.activation_form.lanes * self.activation_tensor.element.bits
-
-    @derived(semantics=INTEGER_VECTOR)
-    def replay_extents(self) -> IntegerVector:
-        """The input generator's nest: each row ``reuse`` times, its folds in order."""
-        return (self.reuse, self.reduction_folds)
-
-    @derived(semantics=INTEGER_VECTOR)
-    def replay_strides(self) -> IntegerVector:
-        return (0, 1)
-
     # The iteration the datapath computes, the tensors the streams carry, and
     # what each end presents of them.
 
@@ -359,19 +327,20 @@ class MatMulKernel(Space):
     def iteration(self) -> Iteration | Rejected:
         """The datapath's contraction folded by PE (outputs) and SIMD (reduction)."""
         f, contraction = self.folding, self.datapath
-        einsum = Einsum(contraction.einsum)
-        (reduced,) = einsum.reduced
-        output = einsum.output[-1]
-        extents = {einsum.output[0]: f.rows, reduced: f.reduction, output: f.outputs}
+        # The dense datapath reads each (K, C) row of a per-channel operand as K * C.
+        dense_view = self.per_channel and contraction is Contraction.DENSE
         try:
-            nest = fold(einsum, extents, {output: f.pe, reduced: f.simd})
+            return contraction_iteration(
+                contraction,
+                rows=f.rows,
+                reduction=f.reduction,
+                outputs=f.outputs,
+                pe=f.pe,
+                simd=f.simd,
+                activations=(f.rows, self.reduction, f.outputs) if dense_view else None,
+            )
         except ValueError as error:
             return reject("matmul-folding", str(error))
-        x, w, y = accesses(einsum, nest, extents)
-        if self.per_channel and contraction is Contraction.DENSE:
-            # The dense datapath reads each (K, C) row of the operand as K * C.
-            x = x.viewing((f.rows, self.reduction, f.outputs))
-        return Iteration(nest, (x, w, y))
 
     @derived(semantics=DOTP_PRESENTATIONS)
     def presentations(self) -> DotpPresentations | Rejected:
@@ -379,11 +348,6 @@ class MatMulKernel(Space):
         return dotp_presentations(
             self.iteration, pe=self.pe, simd=self.simd, contraction=self.datapath
         )
-
-    @derived(semantics=TRAVERSAL)
-    def activation_form(self) -> Traversal:
-        """Each activation row once: the boundary's order and the replay's input."""
-        return unreplayed(self.presentations.activation.form)
 
     @derived(semantics=TENSOR)
     def activation_tensor(self) -> Tensor | Rejected:
@@ -421,42 +385,12 @@ class MatMulKernel(Space):
 
     # Streams: relations between the kernels that reference them. A stream with a
     # single user is a boundary of the kernel and presents its ABI port name.
+    # The activations enter at in0_V, each row once; the stream's adapter
+    # replays them for dotp and closes each reduction with a frame marker.
     activations = Stream(tensor=activation_tensor, port="in0_V")
-    replayed = Stream(tensor=activation_tensor)
     weight_stream = BufferedStream(tensor=weight_tensor, port="in1_V")
     results = Stream(tensor=result_tensor, port="out0_V")
     set_index = Stream(tensor=set_tensor, port="in2_V", when=multi_set)
-
-    # Replay: dense rows are read once per output fold, by a replay buffer or an
-    # input generator (a choice). Per-channel rows pass once; a one-repetition
-    # replay buffer only adds the frame markers (derived, no choice).
-    buffer = ReplayBuffer(
-        input_stream=activations,
-        output_stream=replayed,
-        input_form=activation_form,
-        sequence_length=reduction_folds,
-        replay_count=reuse,
-    )
-    input_gen = InputGeneratorKernel(
-        word_bits=activation_word_bits,
-        frame_words=reduction_folds,
-        extents=replay_extents,
-        strides=replay_strides,
-        input_stream=activations,
-        output_stream=replayed,
-        input_form=activation_form,
-    )
-    replay: ReplayBuffer | InputGeneratorKernel = Decision(
-        values={"buffer": buffer, "input_gen": input_gen}, when=reused
-    )
-    markers = ReplayBuffer(
-        input_stream=activations,
-        output_stream=replayed,
-        input_form=activation_form,
-        sequence_length=reduction_folds,
-        replay_count=reuse,
-        when=single_pass,
-    )
 
     @derived
     def narrow_weights(self) -> bool:
@@ -483,7 +417,7 @@ class MatMulKernel(Space):
         compute_pumping=compute_pumping,
         contraction=datapath,
         narrow_weights=narrow_weights,
-        activation_stream=replayed,
+        activation_stream=activations,
         weights_stream=weight_stream,
         result_stream=results,
         iteration=iteration,
@@ -498,7 +432,7 @@ class MatMulKernel(Space):
         target_period_ns=target_period_ns,
         compute_pumping=compute_pumping,
         contraction=datapath,
-        activation_stream=replayed,
+        activation_stream=activations,
         weights_stream=weight_stream,
         result_stream=results,
         iteration=iteration,
@@ -556,6 +490,30 @@ class MatMulKernel(Space):
         return self.structure.requirements
 
 
+def contraction_iteration(
+    contraction: Contraction,
+    *,
+    rows: int,
+    reduction: int,
+    outputs: int,
+    pe: int,
+    simd: int,
+    activations: tuple[int, ...] | None = None,
+) -> Iteration:
+    """A contraction's nest folded by PE (its output index) and SIMD (its reduction).
+
+    ``activations`` is the shape of the activation tensor when the contraction
+    reads it through a row-major view.
+    """
+    einsum = Einsum(contraction.einsum)
+    (reduced,) = einsum.reduced
+    output = einsum.output[-1]
+    extents = {einsum.output[0]: rows, reduced: reduction, output: outputs}
+    nest = fold(einsum, extents, {output: pe, reduced: simd})
+    x, w, y = accesses(einsum, nest, extents)
+    return Iteration(nest, (x if activations is None else x.viewing(activations), w, y))
+
+
 def _frozen(values: object) -> object:
     """Nested sequences as nested tuples."""
     if isinstance(values, Sequence):
@@ -604,7 +562,6 @@ def matmul_assembly(
     compute_pumping: bool = False,
     core: str | None = None,
     realization: str | None = None,
-    replay: str = "buffer",
     weight_delivery: WeightDelivery = WeightDelivery.EXTERNAL,
     weights: Sequence[object] | None = None,
     rom_style: str = "auto",
@@ -681,11 +638,6 @@ def matmul_assembly(
             realization = viable[0]
         choices["realization"] = realization
     point = commit(base, choices)
-    if point.reused:
-        replayed: dict[str, object] = {"replay": replay}
-        if replay == "input_gen":
-            replayed["replay.input_gen.ram_style"] = "auto"
-        point = commit(point, replayed)
     if core is None:
         cores = compatible(
             point, "compute", lambda item: item.compute.inspect(DotpAxiKernel.support).result
@@ -693,7 +645,7 @@ def matmul_assembly(
         if not cores:
             cases = point.field(MatMulKernel.compute).candidates()
             refusals = (
-                commit(point, {"compute": case}).query(MatMulKernel.structure)
+                commit(point, {"compute": case}).compute.inspect(DotpAxiKernel.support).result
                 for case in (cases.value if isinstance(cases, Available) else ())
             )
             raise ValueError(f"no compute core is compatible: {describe(refusals)}")
@@ -701,7 +653,7 @@ def matmul_assembly(
             named = ", ".join(map(str, cores))
             raise ValueError(f"compute cores {named} are all compatible; choose one")
         core = str(cores[0])
-    point = commit(point, {"compute": core})
+    point = commit_adapters(commit(point, {"compute": core}))
     composed = point.query(MatMulKernel.structure)
     if not isinstance(composed, Available):
         raise ValueError(f"MatMul assembly is not accepted: {describe([composed])}")
@@ -728,6 +680,7 @@ __all__ = [
     "MatMulKernel",
     "ROM_STYLE",
     "WeightDelivery",
+    "contraction_iteration",
     "exact_result_dtype",
     "matmul_assembly",
 ]

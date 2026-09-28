@@ -43,9 +43,11 @@ planned changes, not additional APIs already delivered here.
 base.py                  neutral Kernel identity and capability metadata
 dotp.py                  dotp_axi: operand scalars, AXIS ports, one kernel per compute core
 matmul.py                MatMulKernel: contraction, folding, and Decisions over its child nodes
-streaming.py             replay and initialized cyclic word delivery
+streaming.py             initialized cyclic word delivery
 memstream.py             FinnLib memstream_axi as a delivery kernel (writable, sets, INIT_FILE)
-adapters.py              stream adapters: vpc width conversion, inner_shuffle transpose
+streams.py               Stream: tensor, ends, plan, adapter and transport Decisions; netlist
+adapters.py              a stream's adapter candidates: input_gen / vpc chains carrying out a plan
+transpose.py             FinnLib inner_shuffle, placed explicitly between two streams
 target.py                DSP targets and port capacities
 physical/                typed native/AXIS ports, detached packing, wiring and lowering
 datatypes/               QONNX identity, integer policies, scalar Spaces and codecs
@@ -61,9 +63,9 @@ Space -> accepted build_requirements view -> ModuleBuildRequirements
 | Declaration | File | Native interface and authoring concern |
 |---|---|---|
 | `FifoKernel` | `fifo.py` | Opaque unpadded words; depth and RAM-style choice |
-| `InputGeneratorKernel` | `input_generator.py` | Immutable extent/stride vectors; native multi-bit loop markers; a derived output contract between two streams |
+| `InputGeneratorKernel` | `input_generator.py` | Immutable extent/stride vectors; native multi-bit loop markers (the flat module; on a stream it is an adapter stage) |
 | `MemStreamKernel` | `memstream.py` | A stored operand in its consumer's order; RAM style, pumped memory, AXI-Lite, set selection |
-| `WidthConverterKernel`, `TransposeKernel` | `adapters.py` | Stream adapters between two streams: `vpc` and `inner_shuffle` |
+| `TransposeKernel` | `transpose.py` | `inner_shuffle` between two streams (not a stream adapter candidate: FinnLib defect under bursty input) |
 | `ThresholdingAxiKernel` | `thresholding.py` | Threshold tables, output encoding, AXI-Lite and set selection |
 | `EltwiseKernel` | `eltwise.py` | Integer/float operand scalars, dependent type constraints, typed unpadded ports |
 | `IntToFp32Kernel` | `int_to_fp32.py` | Combinational pins and a fixed FLOAT32 result; no clock or stream |
@@ -119,28 +121,42 @@ carries a `Tensor` (shape and element encoding, `finn.dataflow.tensor`);
 kernels reference the streams they sit on through reference inputs and export
 one port contract per input (`exports = {PORT: {activation_stream:
 activation_port, ...}}`), each presenting the end's own traversal of the
-tensor (a `Presentation`: traversal, repetition, markers). A boundary stream
-presents what its internal end presents, without the replay the receiver
-realizes and without markers. Each slot is a node, a Decision over nodes, or a
-derived node, and each Decision is present only where its case applies:
+tensor (a `Presentation`: traversal, repetition, markers), derived from the
+contraction's nest (`finn.dataflow.nest`: the einsum folded by PE and SIMD). A
+boundary stream presents what its internal end presents, without the replay
+the receiver realizes and without markers. Each slot is a node, a Decision over
+nodes, or a derived node, and each Decision is present only where its case
+applies:
 
 ```text
-in0_V ─activations─► replay ─replayed─► compute ─results─► out0_V
-                        ▲                  ▲
-                        │                  └── weight_stream ── delivery
-   dense:       replay: buffer | input_gen      (transport: direct | fifo)
-   per-channel: markers (derived, REP = 1)
+in0_V ─activations─[adapter: input_gen]─► compute ─results─► out0_V
+          dense: replay + frame                 ▲
+          per-channel: frame only               └── weight_stream ── delivery
    compute: packed (dotp) | int8_dsp58 (dotp_8sx9_dsp58); compute_pumping
    per-channel: realization: native | dense (block-diagonal weights)
    delivery: external (in1_V) | cyclic (ROM) | memstream (RAM: ram_style,
              pumped_memory; writable_weights → s_axilite; weight_sets > 1 → in2_V)
+   weight_stream: transport: direct | fifo
 ```
+
+A stream compares what its source presents with what its sink requires and
+derives a `plan` (`finn.dataflow.plan`): empty when the two connect directly
+(a field permutation is wires), otherwise reorders (replay included), width
+conversions and marker synthesis. A non-empty plan opens the stream's
+`adapter` Decision over seven fixed chains of FinnLib `input_gen` and `vpc`
+(`finn.kernels.adapters`); each refuses a plan it does not carry out, so one
+survives, and `commit_adapters` commits it. `adapter_ram_style` chooses the
+`input_gen`'s memory. A stream constructed with `adaptable=False` admits no
+adapter and refuses a non-empty plan (`stream-plan`). Between two kernels the
+same stream joins independently folded ends: `tests/kernels/test_two_kernels.py`
+joins a PE = 4 producer to a SIMD = 2 consumer through `vpc` and `input_gen`.
 
 A stream sees each user's port on that stream only (`Users(PORT)`), so a port's
 refusal names its own stream and independent streams settle independently.
-Ports check what they read: dotp refuses a stream whose lanes, lane order,
-column walk or frame rows differ from its PE/SIMD reading, rather than adopting
-the stream's form. Every stream owns a `compatible` constraint, and its accepted
+Ports present what their kernel's nest derives: dotp takes its iteration (the
+nest and the accesses of its activations, weights and results) and refuses one
+it cannot compute (`dotp-iteration`), rather than checking forms it is handed.
+Every stream owns `well_formed`, `realizable` and `compatible` constraints, and its accepted
 `connection` feeds the parent's `structure` view: `netlist` wires
 `Members(MODULE)` through `Members(CONNECTION)`, drives every child clock and
 reset pin by its declared role (`ap_clk`, `ap_clk2x` for a clock at twice
@@ -166,6 +182,7 @@ batch on a configured point:
 from finn.core.space import Unresolved, selections
 from finn.kernels import MatMulKernel
 from finn.kernels.configure import commit
+from finn.kernels.streams import commit_adapters
 
 facts = dict(
     rows=2,
@@ -187,16 +204,17 @@ point = commit(
         "weight_stream.transport.fifo.buffer.ram_style": "auto",
         "compute": "packed",
         "compute_pumping": False,
-        "replay": "buffer",
         "pe": 2,
         "simd": 2,
     },
 )
+# The activation stream's plan (replay and frame) needs an adapter; commit the one.
+point = commit_adapters(point)
 structure = point.structure.structure
 assert [item.instance_id for item in structure.instances] == [
-    "u_replay_buffer",
     "u_compute_packed",
     "u_delivery_cyclic",
+    "u_activations_input_gen",
     "u_weight_stream_fifo",
 ]
 assert point.build_requirements == point.structure.requirements
@@ -268,7 +286,7 @@ The source baseline is FinnLib's grouped layout (`rtl/{arith,infra,linalg,
 nonlin,shape}/`, `hls/{infra,util}/`) at the `fetch-repos.sh` pin
 `b9262df1ba4ee7623f0bbd996e2c7566c411bc5f` (branch
 `kernels/matmul-20260927` on the `tkeller/finnlib` fork): upstream `dev`
-plus `replay_buffer`, the dotp output-buffer and AXI-Lite declaration-order
+plus `replay_buffer` (no longer wrapped), the dotp output-buffer and AXI-Lite declaration-order
 corrections, `memstream`/`memstream_axi` ported from `finn-rtllib`, and the
 `dotp_axi` `CORE` parameter that lets each core be its own kernel. There
 are no private copies in `resources`. Eltwise's source closure includes the
@@ -292,7 +310,7 @@ byte-aligned data and at most one LAST marker; it does not pad words or relabel
 loop/replay completion markers. `AxiStream` uses this same transport lowering
 while retaining its typed packing. Typed ports (`native_stream`, `axi_stream`)
 produce these records from lanes of an accepted scalar. Opaque words need no
-scalar: FIFO, input generation and replay construct `ReadyValidStream` values
+scalar: FIFO, input generation and width conversion construct `ReadyValidStream` values
 directly rather than publishing unpadded words as AXI buses.
 
 A `StreamContract` (`physical/contract.py`) adds the logical sequence to a
@@ -316,7 +334,8 @@ sequences.
 | `lane_regroup` | the lane axis changes | inner shuffle (banked transpose) |
 | `incompatible` | different positions | nothing |
 
-`compatibility` accepts the first two and refuses the rest, naming the adapter.
+`compatibility` accepts the first two on one hop and refuses the rest, naming
+the adapter; a stream's plan (above) chains the rest through its adapter.
 `Composition.connect` checks clock domains too, then emits every data (with any
 lane permutation), padding, handshake and marker wire. The derived reorders
 reproduce the tiled MVU's two hard-coded `input_gen` stages and FINN's

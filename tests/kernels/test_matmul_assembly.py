@@ -12,6 +12,7 @@ from finn.core.space import Available, Rejected, Unresolved
 from finn.kernels.artifacts.abi import Bus
 from finn.kernels.artifacts.build import prepare_module_build, render_module_sources
 from finn.kernels.artifacts.store import ArtifactStore
+from finn.kernels.configure import commit
 from kernels.helpers import point_for
 from finn.kernels.matmul import MatMulKernel, WeightDelivery, exact_result_dtype, matmul_assembly
 from finn.kernels.dotp import DotpAxiKernel, PackedDotpKernel
@@ -53,12 +54,13 @@ def test_external_construction_owns_replay_and_exact_precision():
     assert built.result_dtype == DataType["INT8"]
     assert (built.activation_beats, built.weight_beats, built.result_beats) == (6, 12, 6)
     assert built.initializer == ()
+    # The activation stream's adapter replays each row once per output fold.
     assert [item.instance_id for item in built.structure.instances] == [
-        "u_replay_buffer",
         "u_compute_packed",
+        "u_activations_input_gen",
     ]
-    replay, dotp = (dict(item.requirements.parameters) for item in built.structure.instances)
-    assert replay == {"LEN": 2, "REP": 2, "W": 6}
+    dotp, replay = (dict(item.requirements.parameters) for item in built.structure.instances)
+    assert (replay["FM_SIZE"], replay["DIMS"], replay["COEFS"]) == (2, "'{2, 2}", "'{0, 1}")
     assert dotp["ACCU_WIDTH"] == 8
     assert dotp["NARROW_WEIGHTS"] == 0
     assert {port.name for port in built.structure.top_abi.ports if isinstance(port, Bus)} == {
@@ -68,7 +70,7 @@ def test_external_construction_owns_replay_and_exact_precision():
     }
     assert any(
         wire.destination.pin == PhysicalPin("u_compute_packed", "s_axis_input_tlast")
-        and wire.source == PinSlice(PhysicalPin("u_replay_buffer", "olast"), 0, 1)
+        and wire.source == PinSlice(PhysicalPin("u_activations_input_gen", "olst"), 1, 1)
         for wire in built.structure.wires
     )
 
@@ -79,7 +81,11 @@ def test_cyclic_image_has_output_then_reduction_then_pe_simd_order():
     # Hand-packed INT3 fields: p0/s0, p0/s1, p1/s0, p1/s1, low first.
     assert built.initializer == (0x22C, 0x6BE, 0xDD3, 0x941)
     assert "in1_V" not in {port.name for port in built.structure.top_abi.ports}
-    cyclic = dict(built.structure.instances[2].requirements.parameters)
+    (cyclic,) = (
+        dict(item.requirements.parameters)
+        for item in built.structure.instances
+        if item.instance_id == "u_delivery_cyclic"
+    )
     assert cyclic == {
         "DEPTH": 4,
         "W": 12,
@@ -140,8 +146,8 @@ def test_precision_covers_full_ranges_and_is_minimal(activation, weight, length,
         ({"pe": 3}, "domain-membership"),
         ({"simd": 3}, "domain-membership"),
         ({"rows": 0}, "positive"),
-        # Both the replay's native length and dotp's accumulator refuse this width.
-        ({"reduction": 1 << 48}, "replay-geometry|dotp-accumulator-width"),
+        # dotp's accumulator refuses this width.
+        ({"reduction": 1 << 48}, "dotp-accumulator-width"),
         ({"weight_delivery": "external"}, "WeightDelivery"),
         ({"weight_delivery": WeightDelivery.CYCLIC}, "requires weights"),
         ({"weights": [[0] * 4] * 4}, "no initializer"),
@@ -162,10 +168,14 @@ def test_space_selects_folding_and_constructs_without_a_logical_contract():
         pe=2,
         delivery="external",
         compute="packed",
-        replay="buffer",
         **{"weight_stream.transport": "direct"},
     )
-    point = base.with_choices(simd=2)
+    # The activation stream's adapter applies once its plan is known, which the
+    # folding decides.
+    point = commit(
+        base.with_choices(simd=2),
+        {"activations.adapter": "input_gen", "activations.adapter_ram_style": "auto"},
+    )
     assert isinstance(
         point.compute.inspect(DotpAxiKernel.build_requirements).accepted_result, Unresolved
     )
@@ -179,7 +189,10 @@ def test_space_selects_folding_and_constructs_without_a_logical_contract():
     assert point.folding.result_beats == 4
     assert point.structure.requirements == point.build_requirements
     assert not hasattr(MatMulKernel, "contract")
-    refused = base.with_choices(simd=1, compute_pumping=True)
+    refused = commit(
+        base.with_choices(simd=1, compute_pumping=True),
+        {"activations.adapter": "input_gen", "activations.adapter_ram_style": "auto"},
+    )
     assert isinstance(
         refused.compute.inspect(DotpAxiKernel.build_requirements).accepted_result, Rejected
     )
@@ -204,7 +217,7 @@ def test_build_is_complete_and_initializer_changes_identity(tmp_path, delivery):
     rendered = render_module_sources(prepared, store)
     wrapper = dict(rendered.contents)[prepared.abi.entry_point + ".sv"].decode()
     assert ".ACCU_WIDTH(8)" in wrapper
-    assert ".olast(n__u_replay_buffer__olast)" in wrapper
+    assert ".olst(n__u_activations_input_gen__olst)" in wrapper
     assert prepared.slots == ()
     if delivery is WeightDelivery.CYCLIC:
         assert ".INIT_DATA(48'h0)" in wrapper
@@ -246,7 +259,7 @@ def test_matmul_honors_the_child_physical_view_not_just_its_raw_module(monkeypat
                     target_period_ns=MatMulKernel.target_period_ns,
                     compute_pumping=MatMulKernel.compute_pumping,
                     # References to MatMulKernel's stream nodes, which RestrictedMatMul inherits.
-                    activation_stream=MatMulKernel.replayed,
+                    activation_stream=MatMulKernel.activations,
                     weights_stream=MatMulKernel.weight_stream,
                     result_stream=MatMulKernel.results,
                     iteration=MatMulKernel.iteration,
@@ -262,7 +275,7 @@ def test_matmul_honors_the_child_physical_view_not_just_its_raw_module(monkeypat
         delivery="external",
         compute="packed",
         compute_pumping=False,
-        replay="buffer",
+        **{"activations.adapter": "input_gen", "activations.adapter_ram_style": "auto"},
         **{"weight_stream.transport": "direct"},
     )
     assert isinstance(point.compute.query(DotpAxiKernel.codegen), Available)

@@ -61,18 +61,21 @@ def enumerate_positions(
     return rows
 
 
-def matmul(contraction: str, extents: dict[str, int], pe: int, simd: int):
+def matmul(
+    contraction: str, extents: dict[str, int], pe: int, simd: int
+) -> tuple[Nest, Access, Access, Access]:
     einsum = Einsum(contraction)
     (reduced,) = einsum.reduced
     output = einsum.output[-1]
     nest = fold(einsum, extents, {output: pe, reduced: simd})
-    return nest, *accesses(einsum, nest, extents)
+    x, w, y = accesses(einsum, nest, extents)
+    return nest, x, w, y
 
 
 # -- einsum and folding ------------------------------------------------------------------
 
 
-def test_an_einsum_names_its_indices_and_reductions():
+def test_an_einsum_names_its_indices_and_reductions() -> None:
     dense = Einsum("rk,nk->rn")
     assert dense.operands == ("rk", "nk") and dense.output == "rn"
     assert dense.indices == ("r", "k", "n") and dense.reduced == ("k",)
@@ -82,7 +85,7 @@ def test_an_einsum_names_its_indices_and_reductions():
             Einsum(bad)
 
 
-def test_a_fold_splits_each_folded_index_into_a_beat_and_a_lane_level():
+def test_a_fold_splits_each_folded_index_into_a_beat_and_a_lane_level() -> None:
     nest = fold(Einsum("rk,nk->rn"), {"r": 3, "k": 8, "n": 6}, {"n": 3, "k": 2})
     assert nest.beats == (Level("r", 3), Level("n", 2), Level("k", 4))
     assert set(nest.lanes) == {Level(lane("n"), 3), Level(lane("k"), 2)}
@@ -102,7 +105,9 @@ def test_a_fold_splits_each_folded_index_into_a_beat_and_a_lane_level():
 @pytest.mark.parametrize(
     "R,K,N,PE,SIMD", [(1, 4, 2, 2, 2), (3, 8, 6, 3, 2), (2, 12, 8, 4, 3), (4, 6, 6, 1, 6)]
 )
-def test_dense_forms_are_mvau_s_hand_written_ones(R, K, N, PE, SIMD):
+def test_dense_forms_are_mvau_s_hand_written_ones(
+    R: int, K: int, N: int, PE: int, SIMD: int
+) -> None:
     nest, x, w, y = matmul("rk,nk->rn", {"r": R, "k": K, "n": N}, PE, SIMD)
     p, s = lane("n"), lane("k")
     SF, NF = K // SIMD, N // PE
@@ -120,7 +125,9 @@ def test_dense_forms_are_mvau_s_hand_written_ones(R, K, N, PE, SIMD):
 
 
 @pytest.mark.parametrize("R,C,K,PE,SIMD", [(1, 4, 4, 2, 2), (3, 6, 4, 3, 2), (2, 8, 9, 4, 3)])
-def test_per_channel_fields_are_finnlib_s_s_times_pe_plus_p(R, C, K, PE, SIMD):
+def test_per_channel_fields_are_finnlib_s_s_times_pe_plus_p(
+    R: int, C: int, K: int, PE: int, SIMD: int
+) -> None:
     nest, x, w, y = matmul("rkc,ck->rc", {"r": R, "k": K, "c": C}, PE, SIMD)
     p, s = lane("c"), lane("k")
     assert x.uses(p)  # each lane reads its own channel: not broadcast
@@ -137,7 +144,7 @@ def test_per_channel_fields_are_finnlib_s_s_times_pe_plus_p(R, C, K, PE, SIMD):
     assert present(nest, y, fields=(p,), reduced=("k",)) == vector_major((R, C), PE)
 
 
-def test_a_dense_realization_reads_the_per_channel_operand_as_a_view():
+def test_a_dense_realization_reads_the_per_channel_operand_as_a_view() -> None:
     R, K, C, PE, SIMD = 2, 3, 4, 2, 4
     nest, x, _, _ = matmul("rk,nk->rn", {"r": R, "k": K * C, "n": C}, PE, SIMD)
     view = x.viewing((R, K, C))
@@ -156,7 +163,7 @@ def test_a_dense_realization_reads_the_per_channel_operand_as_a_view():
 # -- tiled MVU, SWG, thresholding, eltwise, transpose ------------------------------------
 
 
-def test_tiled_mvu_forms_and_finn_s_input_gen_parameters():
+def test_tiled_mvu_forms_and_finn_s_input_gen_parameters() -> None:
     R, MW, MH, PE, SIMD, T = 6, 8, 6, 3, 2, 3
     SF, NF = MW // SIMD, MH // PE
     nest = Nest(
@@ -180,7 +187,7 @@ def test_tiled_mvu_forms_and_finn_s_input_gen_parameters():
         frame(nest, ("kf",))
 
 
-def test_sliding_windows_are_one_affine_access():
+def test_sliding_windows_are_one_affine_access() -> None:
     H, W, C, KH, KW, S, D, SIMD = 7, 7, 2, 2, 3, 2, 2, 1
     OH, OW = (H - D * (KH - 1) - 1) // S + 1, (W - D * (KW - 1) - 1) // S + 1
     nest = Nest(
@@ -196,7 +203,7 @@ def test_sliding_windows_are_one_affine_access():
     assert list(present(nest, x, fields=("s",)).positions()) == want
 
 
-def test_thresholding_and_a_broadcast_operand():
+def test_thresholding_and_a_broadcast_operand() -> None:
     R, C, PE = 3, 8, 4
     nest = Nest((Level("r", R), Level("cf", C // PE)), (Level("p", PE),))
     t = Access((R, C), ({"r": 1}, {"cf": PE, "p": 1}))
@@ -211,7 +218,7 @@ def test_thresholding_and_a_broadcast_operand():
         present(nest, t, fields=())
 
 
-def test_a_transpose_is_a_lane_regroup():
+def test_a_transpose_is_a_lane_regroup() -> None:
     I, J, SIMD = 4, 6, 2  # noqa: E741
     nest = Nest((Level("j", J), Level("if", I // SIMD)), (Level("s", SIMD),))
     columns = present(nest, Access((I, J), ({"if": SIMD, "s": 1}, {"j": 1})), fields=("s",))
@@ -221,7 +228,7 @@ def test_a_transpose_is_a_lane_regroup():
 # -- the reduction-order dial and admission ----------------------------------------------
 
 
-def test_reduction_orders_are_legal_nests_a_reorder_apart():
+def test_reduction_orders_are_legal_nests_a_reorder_apart() -> None:
     R, KH, KW, C, N, PE, SIMD = 2, 3, 3, 4, 4, 2, 2
     einsum = Einsum("rhwc,nhwc->rn")
     extents = {"r": R, "h": KH, "w": KW, "c": C, "n": N}
@@ -237,7 +244,7 @@ def test_reduction_orders_are_legal_nests_a_reorder_apart():
         assert classify(canonical, form).adaptation is expected, order
 
 
-def test_a_reduction_presented_before_it_closes_is_refused():
+def test_a_reduction_presented_before_it_closes_is_refused() -> None:
     nest, _, _, y = matmul("rk,nk->rn", {"r": 2, "k": 4, "n": 2}, 1, 2)
     with pytest.raises(Refused, match="not reduced"):
         present(nest, y, fields=(lane("n"),), reduced=("r",))

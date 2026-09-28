@@ -119,15 +119,15 @@ def _observation_wrapper(
     return top, path, observations
 
 
-def _replay_node(instances):
-    """The node feeding dotp's activations, and its frame-marker pin."""
-    (node,) = [
-        item.instance_id
-        for item in instances
-        if item.instance_id.startswith(("u_replay", "u_markers"))
+def _replay_node(structure):
+    """The activation stream's adapter feeding dotp, and the frame-marker bit dotp reads."""
+    (source,) = [
+        wire.source
+        for wire in structure.wires
+        if (wire.destination.pin.instance_id or "").startswith("u_compute")
+        and wire.destination.pin.signal_id == "s_axis_input_tlast"
     ]
-    # input_gen's olst[1] closes each reduction; the replay buffer's olast does.
-    return node, "olst[1]" if node.endswith("input_gen") else "olast"
+    return source.pin.instance_id, f"{source.pin.signal_id}[{source.bit_offset}]"
 
 
 def run(
@@ -136,7 +136,6 @@ def run(
     evidence: Path,
     rom_style: str = "auto",
     weight_fifo_depth: int | None = None,
-    replay: str = "buffer",
     pumped_memory: bool = False,
     writable: bool = False,
     sets: int = 1,
@@ -186,7 +185,6 @@ def run(
         compute_pumping=c.pumping,
         core=c.core,
         realization=c.realization or ("native" if c.per_channel else None),
-        replay=replay,
         weight_delivery=delivery,
         weights=None
         if delivery is WeightDelivery.EXTERNAL
@@ -261,7 +259,6 @@ def run(
                 word | (padding if index % 2 else 0) for index, word in enumerate(stimulus[name])
             ]
     suffix = "_" + rom_style if delivery is WeightDelivery.CYCLIC and rom_style != "auto" else ""
-    suffix += "_input_gen" if replay == "input_gen" and not c.per_channel else ""
     suffix += f"_fifo{weight_fifo_depth}" if weight_fifo_depth else ""
     suffix += "_pumped_memory" if pumped_memory else ""
     suffix += "_writable" if writable else ""
@@ -301,7 +298,7 @@ def run(
             for item in built.structure.instances
             if item.instance_id.startswith("u_compute")
         ),
-        *_replay_node(built.structure.instances),
+        *_replay_node(built.structure),
     )
     sources.append(str(wrapper))
     # Dense rows are replayed once per output fold; per-channel beats pass once.
@@ -391,7 +388,6 @@ def main() -> None:
     parser.add_argument("--output", type=Path)
     parser.add_argument("--rom-style", default="auto", choices=("auto", "distributed", "block"))
     parser.add_argument("--weight-fifo-depth", type=int)
-    parser.add_argument("--replay", default="buffer", choices=("buffer", "input_gen"))
     parser.add_argument("--pumped-memory", action="store_true", help="memstream at ap_clk2x")
     parser.add_argument("--writable", action="store_true", help="rewrite memstream weights")
     parser.add_argument("--sets", type=int, default=1, help="memstream weight sets")
@@ -415,7 +411,6 @@ def main() -> None:
                         directory,
                         args.rom_style,
                         args.weight_fifo_depth,
-                        args.replay,
                         args.pumped_memory,
                         args.writable,
                         args.sets,

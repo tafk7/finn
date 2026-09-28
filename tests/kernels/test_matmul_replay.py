@@ -1,25 +1,31 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Replay as a choice: a replay buffer or an input generator presents each dense row.
+"""Replay is the activation stream's plan, and its adapter carries it out.
 
-Both present the same replayed sequence; the input generator's frame marker is
-one bit of its loop-completion vector (``olst[1]``), wired as a slice. A
-per-channel row passes once, so it has no replay choice, only a marker source.
+The module receives each activation row once at ``in0_V``; dotp reads it once
+per output fold, framed by reduction. The stream between them plans a reorder
+(the replay) and the frame marker, and its ``input_gen`` adapter realizes both:
+per frame of one row's folds, the row once per output fold, with ``olst``
+closing each fold group. A per-channel row passes once, so its plan is the
+marker alone. ``input_gen`` is the only replay hardware; FinnLib's
+``replay_buffer`` is not wrapped.
 """
 
 import pytest
 from qonnx.core.datatype import DataType
 
 from finn.core.space import design_space, inspection
+from finn.dataflow.plan import Step
+from finn.dataflow.tensor import ScalarEncoding
+from finn.dataflow.traversal import LevelEnd, vector_major
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.configure import commit
-from finn.dataflow.tensor import ScalarEncoding
 from finn.kernels.matmul import Contraction, MatMulKernel, matmul_assembly
 from finn.kernels.physical.contract import StreamContract
-from finn.dataflow.traversal import LevelEnd, vector_major
 from finn.kernels.physical.stream import MarkerKind, ReadyValidStream, StreamMarker
 from finn.kernels.physical.structure import PhysicalPin, PinSlice, UnusedOutput
+from finn.kernels.streams import commit_adapters
 from finn.kernels.target import DspBlock
 
 FACTS = dict(
@@ -30,28 +36,46 @@ FACTS = dict(
     weights_dtype=DataType["INT3"],
     target_dsp=DspBlock.DSP48E2,
 )
+CHOICES = {
+    "pe": 2,
+    "simd": 2,
+    "delivery": "external",
+    "weight_stream.transport": "direct",
+    "compute": "packed",
+    "compute_pumping": False,
+}
 
 
-def test_dense_rows_choose_their_replay_and_per_channel_rows_take_markers():
-    base = design_space(MatMulKernel(**FACTS, target_period_ns=5.0))
-    keys = {item.key for item in inspection.decisions(base)}
-    assert {"replay", "replay.input_gen.ram_style"} <= keys
-    per_channel = design_space(
-        MatMulKernel(**FACTS, target_period_ns=5.0, contraction=Contraction.PER_CHANNEL)
+def test_the_activation_stream_plans_the_replay_and_its_frame():
+    point = commit(design_space(MatMulKernel(**FACTS, target_period_ns=5.0)), CHOICES)
+    stream = point.activations
+    assert stream.plan.steps == (Step.REORDER, Step.MARKERS)
+    (reorder, _) = stream.plan.hops
+    assert reorder.reorder is not None
+    assert (reorder.reorder.frame_beats, reorder.reorder.dims, reorder.reorder.coefs) == (
+        2,
+        (2, 2),
+        (0, 1),
     )
-    configured = commit(per_channel, {"realization": "native"})
-    assert not configured.reused and configured.single_pass
-    assert configured.present(MatMulKernel.markers)
+    keys = {item.key for item in inspection.decisions(point)}
+    assert {"activations.adapter", "activations.adapter_ram_style"} <= keys
+    assert "replay" not in keys and not hasattr(MatMulKernel, "replayed")
+    # A per-channel row passes once: the plan is the frame marker alone.
+    facts = {**FACTS, "target_dsp": DspBlock.DSP58, "contraction": Contraction.PER_CHANNEL}
+    per_channel = commit(
+        design_space(MatMulKernel(**facts, target_period_ns=5.0)),
+        {**CHOICES, "compute": "int8_dsp58", "realization": "native"},
+    )
+    assert per_channel.activations.plan.steps == (Step.MARKERS,)
 
 
-def test_both_replays_present_the_same_sequence():
-    buffer = matmul_assembly(**FACTS, pe=2, simd=2)
-    generator = matmul_assembly(**FACTS, pe=2, simd=2, replay="input_gen")
-    assert [item.instance_id for item in generator.structure.instances] == [
-        "u_replay_input_gen",
+def test_the_input_gen_replays_each_row_and_closes_each_fold_group():
+    built = matmul_assembly(**FACTS, pe=2, simd=2)
+    assert [item.instance_id for item in built.structure.instances] == [
         "u_compute_packed",
+        "u_activations_input_gen",
     ]
-    parameters = dict(generator.structure.instances[0].requirements.parameters)
+    parameters = dict(built.structure.instances[1].requirements.parameters)
     # Per row (a two-beat frame): each row twice, its folds in order.
     assert parameters == {
         "COEFS": "'{0, 1}",
@@ -61,26 +85,36 @@ def test_both_replays_present_the_same_sequence():
         "FM_SIZE": 2,
         "RAM_STYLE": '"auto"',
     }
-    structure = generator.structure
+    structure = built.structure
     (last,) = [
         wire.source
         for wire in structure.wires
         if wire.destination.pin == PhysicalPin("u_compute_packed", "s_axis_input_tlast")
     ]
-    assert last == PinSlice(PhysicalPin("u_replay_input_gen", "olst"), 1, 1)
+    assert last == PinSlice(PhysicalPin("u_activations_input_gen", "olst"), 1, 1)
     assert structure.unused_outputs == (
         UnusedOutput(
-            PhysicalPin("u_replay_input_gen", "olst"),
+            PhysicalPin("u_activations_input_gen", "olst"),
             "marker not required by u_compute_packed.s_axis_input",
             0,
             1,
         ),
     )
-    assert (buffer.activation_beats, buffer.weight_beats, buffer.result_beats) == (
-        generator.activation_beats,
-        generator.weight_beats,
-        generator.result_beats,
-    )
+    assert (built.activation_beats, built.weight_beats, built.result_beats) == (6, 12, 6)
+
+
+def test_one_output_fold_and_one_beat_frames_close_every_beat():
+    # PE = N: no replay; SIMD = K: a frame is one beat, closed by a level of one.
+    built = matmul_assembly(**FACTS, pe=4, simd=4)
+    parameters = dict(built.structure.instances[1].requirements.parameters)
+    assert (parameters["FM_SIZE"], parameters["DIMS"], parameters["COEFS"]) == (1, "'{1}", "'{1}")
+
+
+def test_the_adapter_s_memory_is_a_choice_of_the_stream():
+    point = commit(design_space(MatMulKernel(**FACTS, target_period_ns=5.0)), CHOICES)
+    configured = commit_adapters(point, ram_style="distributed")
+    (generator,) = [stage for stage in configured.activations.connection.stages]
+    assert dict(generator.requirements.parameters)["RAM_STYLE"] == '"distributed"'
 
 
 def test_a_marker_rule_names_a_whole_one_bit_marker_or_one_bit_of_a_wider_one():

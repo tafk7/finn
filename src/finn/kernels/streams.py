@@ -29,12 +29,23 @@ The tensor is supplied by the composite and must not depend on the stream's
 users: kernels read it to build their port contracts, so a tensor derived from
 a user's contract is a dependency cycle.
 
+The stream compares what its source presents with what its sink requires and
+derives a ``plan`` (``finn.dataflow.plan``): nothing, when the two connect
+directly or differ only in field order (wires); otherwise reorders, width
+conversions and marker synthesis. A plan that no chain of steps carries out
+is refused (``stream-plan``). A non-empty plan opens the stream's ``adapter``
+Decision over nodes, whose candidates are fixed chains of FinnLib modules
+(``finn.kernels.adapters``); each refuses a plan it does not carry out, so at
+most one survives. A stream whose ``adaptable`` input is False admits no
+adapter and refuses any plan. The adapter's modules are the stream's stages,
+each checked on both of its sides.
+
 A ``BufferedStream`` owns a ``transport`` Decision over two nodes, ``direct``
-and ``fifo``. The FIFO candidate owns its ``depth`` and the FIFO's
-``ram_style``; it is an identity adapter presenting what arrives at it, checked
-on both of its sides. ``Members(CONNECTION)`` collects a composite's streams
-and ``netlist`` wires them; instance names come from the located user names,
-never from literals.
+and ``fifo``, after its adapter. The FIFO candidate owns its ``depth`` and the
+FIFO's ``ram_style``; it is an identity stage presenting what arrives at it.
+``Members(CONNECTION)`` collects a composite's streams and ``netlist`` wires
+them, each stage as ``u_<stream>_<stage>``; instance names come from the
+located user names, never from literals.
 
 A composite is one generated module with one clock: ``ap_clk`` and the
 active-low reset ``ap_rst_n``, plus ``ap_clk2x`` when a child needs an aligned
@@ -50,8 +61,10 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
+from typing import Any, TypeVar
 
 from finn.core.space import (
+    Available,
     Decision,
     Located,
     Param,
@@ -61,6 +74,7 @@ from finn.core.space import (
     View,
     ViewKey,
     constraint,
+    inspection,
     default_semantics,
     derived,
     domain,
@@ -88,6 +102,7 @@ from finn.kernels.artifacts.build import (
     SELF_CONTAINED_JINJA_RENDERER,
 )
 from finn.kernels.artifacts.derivation import ProducerIdentity
+from finn.kernels.configure import commit, compatible
 from finn.kernels.control import Exported, top_bus
 from finn.kernels.fifo import FifoKernel
 from finn.kernels.physical.axi_stream import AxiStream
@@ -98,8 +113,24 @@ from finn.kernels.physical.contract import (
     StreamContract,
     compatibility,
 )
+from finn.dataflow.plan import PLAN, Plan, Unrealizable, plan
 from finn.dataflow.tensor import TENSOR, ScalarEncoding, Tensor
 from finn.dataflow.traversal import PRESENTATION, Presentation, unreplayed
+from finn.kernels.adapters import (
+    INPUT_GEN_RAM_STYLES,
+    STAGE_SEMANTICS,
+    STAGES,
+    InputGenAdapter,
+    RegroupAdapter,
+    RegroupMarkersAdapter,
+    ReorderWidthAdapter,
+    ReorderWidthMarkersAdapter,
+    Stage,
+    StreamAdapter,
+    WidthAdapter,
+    WidthReorderAdapter,
+    buffers,
+)
 from finn.kernels.physical.lowering import lower_module_structure
 from finn.kernels.physical.structure import PhysicalStructure
 from finn.kernels.physical.validation import abi_pins
@@ -153,18 +184,6 @@ def boundary_presentation(internal: StreamContract, *, receiving: bool) -> Prese
     return Presentation(form)
 
 
-@dataclass(frozen=True)
-class Stage:
-    """A transport stage inside a stream: none (direct) or a module with two ports."""
-
-    requirements: ModuleBuildRequirements | None = None
-    input: StreamContract | None = None
-    output: StreamContract | None = None
-
-
-STAGE_SEMANTICS = default_semantics(Stage)
-
-
 class _Direct(Space):
     @view(semantics=STAGE_SEMANTICS)
     def stage(self) -> Stage:
@@ -194,6 +213,7 @@ class StreamFifo(Space):
             self.buffer.build_requirements,
             StreamContract(source, element, arriving.form, arriving.repetition),
             StreamContract(sink, element, arriving.form, arriving.repetition),
+            "fifo",
         )
 
 
@@ -209,7 +229,7 @@ class Connection:
     source: StreamContract
     sink_owner: str | None
     sink: StreamContract
-    stage: Stage
+    stages: tuple[Stage, ...] = ()
 
 
 CONNECTION_SEMANTICS = default_semantics(Connection)
@@ -297,42 +317,102 @@ class Stream(Space):
                 )
         return True
 
+    @derived(semantics=PLAN)
+    def plan(self) -> Plan | Rejected:
+        """What must happen between the source's presentation and the sink's."""
+        ends = self.endpoints
+        try:
+            return plan(ends.source.presentation, ends.sink.presentation)
+        except Unrealizable as error:
+            return reject("stream-plan", f"no adapter can join the ends: {error}")
+
+    # False admits no adapter: the ends must connect directly.
+    adaptable: bool = Param(default=True)
+
+    @derived
+    def adapting(self) -> bool:
+        return self.adaptable and bool(self.plan)
+
+    @constraint
+    def realizable(self) -> bool | Rejected:
+        found = self.plan
+        if found and not self.adaptable:
+            return reject(
+                "stream-plan",
+                f"the ends need {found.describe()}, and this stream admits no adapter",
+            )
+        return True
+
+    @derived
+    def buffering(self) -> bool:
+        """Whether the adapter the plan takes has an ``input_gen``, whose memory is a choice."""
+        return self.adapting and buffers(self.plan)
+
+    adapter_ram_style: str = Decision(values=INPUT_GEN_RAM_STYLES, when=buffering)
+    adapter: StreamAdapter = Decision(
+        values={
+            "input_gen": InputGenAdapter(tensor=tensor, plan=plan, ram_style=adapter_ram_style),
+            "vpc": WidthAdapter(tensor=tensor, plan=plan),
+            "vpc_input_gen": WidthReorderAdapter(
+                tensor=tensor, plan=plan, ram_style=adapter_ram_style
+            ),
+            "input_gen_vpc": ReorderWidthAdapter(
+                tensor=tensor, plan=plan, ram_style=adapter_ram_style
+            ),
+            "input_gen_vpc_input_gen": ReorderWidthMarkersAdapter(
+                tensor=tensor, plan=plan, ram_style=adapter_ram_style
+            ),
+            "vpc_input_gen_vpc": RegroupAdapter(
+                tensor=tensor, plan=plan, ram_style=adapter_ram_style
+            ),
+            "vpc_input_gen_vpc_input_gen": RegroupMarkersAdapter(
+                tensor=tensor, plan=plan, ram_style=adapter_ram_style
+            ),
+        },
+        when=adapting,
+    )
+    adapter_admitted = View(adapter.admitted)
+    adapter_stages = View(adapter.stages)
+
+    @derived(semantics=STAGES)
+    def adapted(self) -> tuple[Stage, ...]:
+        """The adapter's stages, in order; none when the ends connect directly."""
+        return self.adapter_stages if self.adapting else ()
+
     @derived(semantics=PRESENTATION)
     def arriving(self) -> Presentation:
-        """What the source presents: the presentation any stage inside the stream receives."""
-        return self.endpoints.source.presentation
+        """What arrives after the adapter: the presentation a transport stage receives."""
+        adapted = self.adapted
+        output = adapted[-1].output if adapted else None
+        return self.endpoints.source.presentation if output is None else output.presentation
 
-    @view(semantics=STAGE_SEMANTICS)
-    def stage(self) -> Stage:
-        return Stage()
+    @view(semantics=STAGES)
+    def stages(self) -> tuple[Stage, ...]:
+        return self.adapted
 
     @constraint
     def compatible(self) -> bool | Rejected:
+        """Each hop, source through every stage to sink, connects directly."""
         ends = self.endpoints
-        stage = self.stage
-        source_top, sink_top = ends.source_owner is None, ends.sink_owner is None
-        if stage.requirements is None:
-            found = list(
-                compatibility(
-                    ends.source, ends.sink, source_is_top=source_top, sink_is_top=sink_top
-                )
-            )
-        else:
+        found: list[Mismatch] = []
+        current, current_top = ends.source, ends.source_owner is None
+        for stage in self.stages:
             assert stage.input is not None and stage.output is not None
-            found = [
-                *compatibility(
-                    ends.source, stage.input, source_is_top=source_top, sink_is_top=False
-                ),
-                *compatibility(stage.output, ends.sink, source_is_top=False, sink_is_top=sink_top),
-            ]
+            found += compatibility(
+                current, stage.input, source_is_top=current_top, sink_is_top=False
+            )
+            current, current_top = stage.output, False
+        found += compatibility(
+            current, ends.sink, source_is_top=current_top, sink_is_top=ends.sink_owner is None
+        )
         return _refusal(found)
 
     @derived(semantics=CONNECTION_SEMANTICS)
     def link(self) -> Connection:
         ends = self.endpoints
-        return Connection(ends.source_owner, ends.source, ends.sink_owner, ends.sink, self.stage)
+        return Connection(ends.source_owner, ends.source, ends.sink_owner, ends.sink, self.stages)
 
-    connection = View(link, requires=(well_formed, compatible))
+    connection = View(link, requires=(well_formed, realizable, compatible))
     exports = {CONNECTION: connection}
 
 
@@ -343,13 +423,62 @@ def _refusal(found: Sequence[Mismatch]) -> bool | Rejected:
 
 
 class BufferedStream(Stream):
+    """A stream whose ``transport`` after its adapter is direct or a FIFO."""
+
     transport: _Direct | StreamFifo = Decision(
         values={
             "direct": _Direct(),
             "fifo": StreamFifo(tensor=Stream.tensor, arriving=Stream.arriving),
         }
     )
-    stage = View(transport.stage)
+    transport_stage = View(transport.stage)
+
+    @view(semantics=STAGES)
+    def stages(self) -> tuple[Stage, ...]:
+        fifo = self.transport_stage
+        return (*self.adapted, *((fifo,) if fifo.requirements is not None else ()))
+
+
+S = TypeVar("S", bound=Space)
+
+
+def _node(point: Any, path: str) -> Any:
+    for name in path.split(".") if path else ():
+        point = getattr(point, name)
+    return point
+
+
+def commit_adapters(point: S, *, ram_style: str = "auto") -> S:
+    """Commit, on every stream whose plan needs one, its one compatible adapter.
+
+    Compatibility filters the candidates (each refuses a plan it does not carry
+    out); several compatible candidates are a design choice this does not make.
+    A stream whose adapter buffers in an ``input_gen`` takes ``ram_style``.
+    """
+    decisions = {item.key for item in inspection.decisions(point)}
+    choices: dict[str, object] = {}
+    for key in sorted(decisions):
+        if key != "adapter" and not key.endswith(".adapter"):
+            continue
+        path = key[: -len("adapter")].rstrip(".")
+        stream = _node(point, path)
+        if not isinstance(stream, Stream):
+            continue
+        adapting = stream.query(Stream.adapting)
+        if not (isinstance(adapting, Available) and adapting.value):
+            continue  # an absent stream, or ends that connect directly
+
+        def admitted(item: S, path: str = path) -> Any:
+            return _node(item, path).query(Stream.adapter_admitted)
+
+        cases = compatible(point, key, admitted)
+        if len(cases) != 1:
+            found = ", ".join(map(str, cases)) or "none"
+            raise ValueError(f"{path}: adapters compatible with its plan: {found}")
+        choices[key] = cases[0]
+        if stream.buffering:
+            choices[f"{key}_ram_style"] = ram_style
+    return commit(point, choices) if choices else point
 
 
 @dataclass(frozen=True)
@@ -377,7 +506,8 @@ def netlist(
 ) -> Composed | Rejected:
     """Wire the composite's modules through its streams and control buses.
 
-    Each module is instantiated as ``u_<node>``, a FIFO stage as ``u_<stream>_fifo``.
+    Each module is instantiated as ``u_<node>``, each stage of a stream as
+    ``u_<stream>_<stage>`` (``u_activations_input_gen``, ``u_weights_fifo``).
     Every clock and reset pin is driven by its role (a free clock from
     ``ap_clk``, a clock at twice another from ``ap_clk2x``, a reset from
     ``ap_rst_n``), every exported control bus is wired through to its top port,
@@ -417,13 +547,18 @@ def _wire(
     module: str,
     producer: ProducerIdentity,
 ) -> Composed:
-    fifos = {n: c for n, c in connections if c.stage.requirements is not None}
+    staged = [
+        (f"u_{name}_{stage.name}", stage)
+        for name, c in connections
+        for stage in c.stages
+        if stage.requirements is not None
+    ]
     boundary = [c.source for _, c in connections if c.source_owner is None] + [
         c.sink for _, c in connections if c.sink_owner is None
     ]
     children = [
         *placed.values(),
-        *(c.stage.requirements for c in fifos.values() if c.stage.requirements),
+        *(stage.requirements for _, stage in staged if stage.requirements),
     ]
     doubled = any(_clock_roles(child.abi).get(CLOCK2X) for child in children)
     tops = [top_bus(item.child, item.port, CLOCK, RESET) for item in exported]
@@ -452,20 +587,20 @@ def _wire(
         composition.export(
             str(_instance(item.node)), item.child, top_bus(item.child, item.port, CLOCK, RESET)
         )
-    for stream, c in fifos.items():
-        stage = c.stage
+    for instance, stage in staged:
         assert stage.requirements and stage.input and stage.output
-        instance = f"u_{stream}_fifo"
         composition.add(instance, stage.requirements)
         pins = {p.name for p in (*stage.input.transport.pins(), *stage.output.transport.pins())}
         _drive(composition, instance, stage.requirements, pins, Tieoffs())
     for name, c in connections:
-        source, sink = StreamEnd(c.source_owner, c.source), StreamEnd(c.sink_owner, c.sink)
-        if c.stage.input is not None and c.stage.output is not None:
-            instance = f"u_{name}_fifo"
-            composition.connect(source, StreamEnd(instance, c.stage.input))
-            source = StreamEnd(instance, c.stage.output)
-        composition.connect(source, sink)
+        source = StreamEnd(c.source_owner, c.source)
+        for stage in c.stages:
+            if stage.input is None or stage.output is None:
+                continue
+            instance = f"u_{name}_{stage.name}"
+            composition.connect(source, StreamEnd(instance, stage.input))
+            source = StreamEnd(instance, stage.output)
+        composition.connect(source, StreamEnd(c.sink_owner, c.sink))
     structure = composition.finish()
     wrapper = RenderedSourceRequirement(
         EntryPointSourceName(),
@@ -570,5 +705,6 @@ __all__ = [
     "Tieoffs",
     "boundary_contract",
     "boundary_presentation",
+    "commit_adapters",
     "netlist",
 ]

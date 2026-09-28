@@ -14,7 +14,9 @@ import pytest
 from qonnx.core.datatype import DataType
 
 from finn.core.space import Rejected, design_space
+from finn.dataflow.plan import Step
 from finn.kernels.configure import commit
+from finn.kernels.streams import commit_adapters
 from finn.kernels.matmul import Contraction, MatMulKernel, WeightDelivery, matmul_assembly
 from finn.dataflow.traversal import Traversal
 from finn.kernels.physical.structure import PhysicalPin, PinSlice
@@ -44,14 +46,22 @@ def point(**facts):
     choices = dict(CHOICES)
     if facts["contraction"] is Contraction.PER_CHANNEL:
         choices["realization"] = "native"
-    else:
-        choices["replay"] = "buffer"
-    return commit(design_space(MatMulKernel(**facts)), choices)
+    return commit_adapters(commit(design_space(MatMulKernel(**facts)), choices))
+
+
+def parameters(structure, instance):
+    (found,) = (
+        dict(item.requirements.parameters)
+        for item in structure.instances
+        if item.instance_id == instance
+    )
+    return found
 
 
 def test_per_channel_rows_pass_once_with_a_frame_per_window():
     configured = point()
-    assert configured.reuse == 1
+    # Nothing is replayed: the stream only closes each window's frame.
+    assert configured.activations.plan.steps == (Step.MARKERS,)
     boundary = configured.activations.endpoints.source
     # Rows, then channel folds, then window folds; field s * PE + p is window
     # position s of channel p.
@@ -59,12 +69,14 @@ def test_per_channel_rows_pass_once_with_a_frame_per_window():
         (2, 9, 4), ((0, 2, 1), (2, 2, 2), (1, 3, 3)), ((1, 3, 1), (2, 2, 1))
     )
     assert boundary.transport.name == "in0_V" and boundary.form == channel_tile
-    framed = configured.replayed.endpoints.sink
+    framed = configured.activations.endpoints.sink
     assert framed.form == boundary.form
     assert [level.beats for level in framed.rules.values()] == [3]
     structure = configured.structure.structure
-    replay, compute = (dict(item.requirements.parameters) for item in structure.instances)
-    assert replay == {"LEN": 3, "REP": 1, "W": 24}
+    compute = parameters(structure, "u_compute_int8_dsp58")
+    # An input_gen passing three-beat frames in order, closing each.
+    markers = parameters(structure, "u_activations_input_gen")
+    assert (markers["FM_SIZE"], markers["DIMS"], markers["COEFS"]) == (3, "'{3}", "'{1}")
     assert compute["ACTIVATION_BROADCASTING"] == 0
     assert compute["CORE"] == '"dotp_8sx9_dsp58"'
     widths = {
@@ -74,20 +86,18 @@ def test_per_channel_rows_pass_once_with_a_frame_per_window():
     }
     # PE channels of SIMD window positions per activation beat; the result is exact.
     assert widths == {"in0_V": 24, "in1_V": 24, "out0_V": 24}
-    # One repetition: the replay's sequence and final-repetition markers coincide.
     (last,) = [
         wire.source
         for wire in structure.wires
         if wire.destination.pin == PhysicalPin("u_compute_int8_dsp58", "s_axis_input_tlast")
     ]
-    assert isinstance(last, PinSlice) and last.pin.instance_id == "u_markers"
-    assert last.pin.signal_id in {"olast", "ofin"}
+    assert last == PinSlice(PhysicalPin("u_activations_input_gen", "olst"), 0, 1)
 
 
 def test_a_dense_contraction_replays_each_row_per_output_fold():
     dense = point(contraction=Contraction.DENSE)
-    assert dense.reuse == 2
-    compute = dict(dense.structure.structure.instances[1].requirements.parameters)
+    assert dense.activations.plan.steps == (Step.REORDER, Step.MARKERS)
+    compute = parameters(dense.structure.structure, "u_compute_int8_dsp58")
     assert compute["ACTIVATION_BROADCASTING"] == 1
 
 
@@ -137,11 +147,11 @@ def test_a_dense_realization_reads_window_by_channel_rows_against_block_diagonal
     # On DSP48E2 only the dense realization computes it: the packed core.
     built = matmul_assembly(target_dsp=DspBlock.DSP48E2, **DENSE)
     assert [item.instance_id for item in built.structure.instances] == [
-        "u_replay_buffer",
         "u_compute_packed",
         "u_delivery_cyclic",
+        "u_activations_input_gen",
     ]
-    compute = dict(built.structure.instances[1].requirements.parameters)
+    compute = parameters(built.structure, "u_compute_packed")
     assert compute["ACTIVATION_BROADCASTING"] == 1 and compute["SIMD"] == 4
     # Rows of 4 x 3 = 12 activations in three SIMD beats, replayed once (PE = C).
     assert (built.activation_beats, built.weight_beats, built.result_beats) == (6, 6, 2)
@@ -170,7 +180,7 @@ def test_the_dense_realization_needs_known_weights_and_either_may_be_chosen_on_d
         built = matmul_assembly(
             target_dsp=DspBlock.DSP58, realization=realization, core=core, **DENSE
         )
-        assert built.structure.instances[1].instance_id == f"u_compute_{core}"
+        assert built.structure.instances[0].instance_id == f"u_compute_{core}"
 
 
 @pytest.mark.parametrize(
@@ -186,4 +196,4 @@ def test_narrow_weights_follow_known_weights(weights, delivery, narrow):
     built = matmul_assembly(
         target_dsp=DspBlock.DSP48E2, **{**facts, "weights": weights, "weight_delivery": delivery}
     )
-    assert dict(built.structure.instances[1].requirements.parameters)["NARROW_WEIGHTS"] == narrow
+    assert parameters(built.structure, "u_compute_packed")["NARROW_WEIGHTS"] == narrow

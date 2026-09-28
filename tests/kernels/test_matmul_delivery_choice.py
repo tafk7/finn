@@ -37,6 +37,7 @@ from finn.kernels.delivery import CyclicDelivery
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.dotp import DotpAxiKernel
 from finn.kernels.matmul import MatMulKernel, WeightDelivery, matmul_assembly
+from finn.kernels.streams import commit_adapters
 from finn.kernels.resources import resource_root, template_root
 from finn.kernels.target import DspBlock
 
@@ -45,6 +46,7 @@ IMAGE = CyclicDelivery.image
 ROM_STYLE = CyclicDelivery.rom_style
 # The cyclic candidate of the ``delivery`` Decision is named ``delivery.cyclic``.
 CYCLIC_INSTANCE = "u_delivery_cyclic"
+ADAPTER_INSTANCE = "u_activations_input_gen"
 WEIGHTS = ((-4, -3, -2, -1), (0, 1, 2, 3), (3, 2, 1, 0), (-1, -2, -3, -4))
 FACTS = dict(
     rows=3,
@@ -83,9 +85,19 @@ def configured(point, case, *, style=None, pe=2, simd=2):
     ]
     if style is not None:
         changes.append(point.field(rom_style(point)).change(style))
-    return point.with_choices(
-        *changes, pe=pe, simd=simd, compute="packed", compute_pumping=False, replay="buffer"
+    # The activation stream's adapter follows from the folding: commit the one that fits.
+    return commit_adapters(
+        point.with_choices(*changes, pe=pe, simd=simd, compute="packed", compute_pumping=False)
     )
+
+
+def instance_parameters(point, instance):
+    (found,) = (
+        dict(item.requirements.parameters)
+        for item in point.structure.structure.instances
+        if item.instance_id == instance
+    )
+    return found
 
 
 def delivery(point):
@@ -105,8 +117,8 @@ def test_families_share_typed_exports_but_keep_their_own_ports_and_components():
     external = configured(base(), "external")
     cyclic = configured(base(weights=WEIGHTS), "cyclic", style="block")
     for point, ports, instances in (
-        (external, {"in0_V", "in1_V", "out0_V"}, ["u_replay_buffer", "u_compute_packed"]),
-        (cyclic, {"in0_V", "out0_V"}, ["u_replay_buffer", "u_compute_packed", CYCLIC_INSTANCE]),
+        (external, {"in0_V", "in1_V", "out0_V"}, ["u_compute_packed", ADAPTER_INSTANCE]),
+        (cyclic, {"in0_V", "out0_V"}, ["u_compute_packed", CYCLIC_INSTANCE, ADAPTER_INSTANCE]),
     ):
         built = point.structure
         requirements = point.build_requirements
@@ -120,17 +132,13 @@ def test_families_share_typed_exports_but_keep_their_own_ports_and_components():
     assert isinstance(cyclic.delivery, CyclicDelivery) and cyclic.delivered == "cyclic"
     assert cyclic.delivery.image == (0x22C, 0x6BE, 0xDD3, 0x941)
     # Instance names come from the located node names: the candidate is delivery.cyclic.
-    assert [item.node for item in cyclic.modules] == [
-        "replay.buffer",
-        "compute.packed",
-        "delivery.cyclic",
-    ]
-    assert [(item.node, item.value.source_owner) for item in cyclic.streams][2] == (
+    assert [item.node for item in cyclic.modules] == ["compute.packed", "delivery.cyclic"]
+    assert [(item.node, item.value.source_owner) for item in cyclic.streams][1] == (
         "weight_stream",
         "delivery.cyclic",
     )
-    assert [item.node for item in external.modules] == ["replay.buffer", "compute.packed"]
-    rom = dict(cyclic.structure.structure.instances[2].requirements.parameters)
+    assert [item.node for item in external.modules] == ["compute.packed"]
+    rom = instance_parameters(cyclic, CYCLIC_INSTANCE)
     assert rom["ROM_STYLE"] == '"block"'
     assert external.build_requirements.implementation_id != (
         cyclic.build_requirements.implementation_id
@@ -185,8 +193,15 @@ def test_case_local_choices_are_owned_by_their_family():
         "delivery.memstream.pumped_memory",
         "delivery.memstream.ram_style",
         "realization",
-        "replay",
-        "replay.input_gen.ram_style",
+        # Every stream may need an adapter; each Decision applies only under a plan.
+        "activations.adapter",
+        "activations.adapter_ram_style",
+        "results.adapter",
+        "results.adapter_ram_style",
+        "set_index.adapter",
+        "set_index.adapter_ram_style",
+        "weight_stream.adapter",
+        "weight_stream.adapter_ram_style",
         "weight_stream.transport",
         "weight_stream.transport.fifo.buffer.depth",
         "weight_stream.transport.fifo.buffer.ram_style",
@@ -296,7 +311,8 @@ def schema(point):
             codec_for(MatMulKernel.pe, INTEGER),
             codec_for(MatMulKernel.simd, INTEGER),
             codec_for(MatMulKernel.compute, STRING),
-            codec_for(MatMulKernel.replay, STRING),
+            codec_for(MatMulKernel.activations.adapter, STRING),
+            codec_for(MatMulKernel.activations.adapter_ram_style, STRING),
             codec_for(MatMulKernel.compute_pumping, BOOLEAN),
         ),
     )
@@ -306,12 +322,13 @@ def test_selector_and_case_choices_round_trip_through_an_empty_root():
     point = configured(base(weights=WEIGHTS), "cyclic", style="block")
     saved = selections.capture(point)
     assert saved.keys == (
+        "activations.adapter",
+        "activations.adapter_ram_style",
         "compute",
         "compute_pumping",
         "delivery",
         "delivery.cyclic.rom_style",
         "pe",
-        "replay",
         "simd",
         "weight_stream.transport",
     )
@@ -353,11 +370,12 @@ def test_switching_families_is_atomic_and_requires_clearing_stale_case_choices()
     )
     assert delivery(switched) is WeightDelivery.EXTERNAL
     assert selections.capture(switched).keys == (
+        "activations.adapter",
+        "activations.adapter_ram_style",
         "compute",
         "compute_pumping",
         "delivery",
         "pe",
-        "replay",
         "simd",
         "weight_stream.transport",
     )
@@ -367,7 +385,7 @@ def test_switching_families_is_atomic_and_requires_clearing_stale_case_choices()
         switched.field(rom_style(switched)).change("distributed"),
     )
     assert delivery(back) is WeightDelivery.CYCLIC
-    rom = dict(back.structure.structure.instances[2].requirements.parameters)
+    rom = instance_parameters(back, CYCLIC_INSTANCE)
     assert rom["ROM_STYLE"] == '"distributed"'
     # A case-local choice for an unselected family is refused, not stored.
     early = switched.try_with_choices(switched.field(rom_style(switched)).change("block"))

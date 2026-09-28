@@ -64,13 +64,13 @@ def test_an_unpumped_matmul_has_one_clock_and_ties_the_2x_input():
     compute = drivers(built.structure, "u_compute_packed")
     assert compute["ap_clk"] == "ap_clk" and compute["ap_rst_n"] == "ap_rst_n"
     assert compute["ap_clk2x"] == ConstantBits(1, 0)
-    replay = drivers(built.structure, "u_replay_buffer")
+    replay = drivers(built.structure, "u_activations_input_gen")
     assert (replay["clk"], replay["rst"]) == ("ap_clk", "ap_rst_n")
-    # The active-high replay reset is driven inverted from the active-low top reset.
+    # The active-high adapter reset is driven inverted from the active-low top reset.
     (reset,) = [
         wire
         for wire in built.structure.wires
-        if wire.destination.pin.instance_id == "u_replay_buffer"
+        if wire.destination.pin.instance_id == "u_activations_input_gen"
         and wire.destination.pin.signal_id == "rst"
     ]
     assert reset.invert

@@ -3,7 +3,8 @@
 
 """Non-stream interfaces: exported control buses, tie-offs and child padding.
 
-A replay feeds dotp, which feeds thresholding inside one composite. dotp's padded AXIS result feeds
+dotp feeds thresholding inside one composite; the activation stream's adapter
+replays each row for dotp. dotp's padded AXIS result feeds
 a child: the padding bits stay unconnected and the consumer's padding is
 zero. Thresholding's AXI-Lite bus is exported through a ``ControlBus`` when
 its thresholds are runtime-writable and otherwise held idle by its tie-offs,
@@ -27,8 +28,6 @@ from finn.kernels.control import EXPORTED, ControlBus
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.dotp import PackedDotpKernel
 from finn.dataflow.nest import Einsum, Iteration, accesses, fold
-from finn.dataflow.traversal import vector_major
-from finn.kernels.streaming import ReplayBuffer
 from finn.kernels.physical.structure import ConstantBits, PinSlice
 from finn.kernels.physical.validation import abi_pins
 from finn.kernels.resources import resource_root, template_root
@@ -39,6 +38,7 @@ from finn.kernels.streams import (
     TIEOFFS,
     Composed,
     Stream,
+    commit_adapters,
     netlist,
 )
 from finn.kernels.target import DspBlock
@@ -49,7 +49,6 @@ REPETITIONS, WIDTH, HEIGHT, SIMD = 2, 4, 2, 2
 FOLDS = WIDTH // SIMD
 A, W, R = DataType["INT3"], DataType["INT3"], DataType["INT9"]
 THRESHOLDS = (((-5, 0, 7), (-2, 3, 10)),)
-ROWS = vector_major((REPETITIONS, WIDTH), SIMD)
 DENSE = Einsum("rk,nk->rn")
 EXTENTS = {"r": REPETITIONS, "k": WIDTH, "n": HEIGHT}
 NEST = fold(DENSE, EXTENTS, {"n": 1, "k": SIMD})
@@ -61,21 +60,13 @@ LEVEL_TENSOR = Tensor((REPETITIONS, HEIGHT), ScalarEncoding(DataType["UINT2"]))
 
 
 class Activated(Space):
-    """A replay, dotp, then thresholding: a padded child result feeding a child."""
+    """dotp, then thresholding: a padded child result feeding a child."""
 
     activations = Stream(tensor=X, port="in0_V")
-    replayed = Stream(tensor=X)
     weights = Stream(tensor=WEIGHT_TENSOR, port="in1_V")
     results = Stream(tensor=RESULT_TENSOR)
     levels = Stream(tensor=LEVEL_TENSOR, port="out0_V")
     config = ControlBus(port="s_axilite")
-    replay = ReplayBuffer(
-        input_stream=activations,
-        output_stream=replayed,
-        input_form=ROWS,
-        sequence_length=FOLDS,
-        replay_count=HEIGHT,
-    )
     compute = PackedDotpKernel(
         activation_dtype=A,
         weights_dtype=W,
@@ -84,7 +75,7 @@ class Activated(Space):
         simd=SIMD,
         target_dsp=DspBlock.DSP48E2,
         target_period_ns=5.0,
-        activation_stream=replayed,
+        activation_stream=activations,
         weights_stream=weights,
         result_stream=results,
         iteration=ITERATION,
@@ -119,12 +110,14 @@ class Activated(Space):
 
 
 def activated(*, writable: bool):
-    return design_space(Activated()).with_choices(
-        {
-            Activated.compute.compute_pumping: False,
-            Activated.activate.use_axilite: writable,
-            Activated.activate.deep_pipeline: False,
-        }
+    return commit_adapters(
+        design_space(Activated()).with_choices(
+            {
+                Activated.compute.compute_pumping: False,
+                Activated.activate.use_axilite: writable,
+                Activated.activate.deep_pipeline: False,
+            }
+        )
     )
 
 
@@ -242,7 +235,7 @@ def test_the_composed_module_computes_thresholded_dot_products(tmp_path, writabl
     def word(values):
         return sum((v & 7) << (3 * i) for i, v in enumerate(values))
 
-    # Each row once: the replay inside the module presents it HEIGHT times, framed.
+    # Each row once: the stream's input_gen presents it HEIGHT times, framed.
     activation_words = [
         word(x[r][f * SIMD : (f + 1) * SIMD]) for r in range(REPETITIONS) for f in range(FOLDS)
     ]
