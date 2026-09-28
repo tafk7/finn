@@ -1,0 +1,17 @@
+external             71754f4fca82db9bf31cc7f8e2624bc5101611ba0f6bc49a20a2354bc68bab3a
+cyclic-block         1aa289868c2d8b340270fa9f2008591547e1037c6d1c3ba9b7646110d533b0a7
+fifo-external        987cba9770fc338406b2f8d96def15df454a9a58568cdda01bc115e2be9196ac
+fifo-cyclic          0d0c3c1fe9f47624b04ee0ad80dbe01078abe8ce336edd7ced782bf1701f072e
+padded-output        d4fb19fbd9ce801cf8c56be1876a665abc9f5b10511d16261f77383b1d1ce0fe
+pumped-dsp58         7a0ce6cd4ff92fe4dce4c316e50fd3cef07d7e5d3834d766fa1c3b9689dc3870
+replay-input-gen     71754f4fca82db9bf31cc7f8e2624bc5101611ba0f6bc49a20a2354bc68bab3a
+memstream            551fd89b77c19b15062acfb22cf978b4c5b270862edb4c72e1c7745d90d31be5
+memstream-pumped     bc5c98eefbc93a80874daa5b249d934bace90bed40f82b7e3be82c9dbdf88192
+memstream-writable   5ed2feee84ba27ac518d21da9eec314b74e4805eaf74e4772f582d47091f4c94
+memstream-sets       bb7284313429a66fa42bc256d645b1eb0036bb38dce09f23a8c72c94d7fc3e21
+per-channel-native   25d23d4c56b60cb347f930bbae0a2590f77bd53e2bf0adcde53c4b1b9362aef2
+per-channel-cyclic   a2fc43c8eed699340bbeb4761b47c72c26d431da8f6b1ce938c14575abb252aa
+per-channel-dense    ef1510380ddcfd1369c322f5de5d036859c0bfe6214697b0769ad266753dffcc
+keys dense: activations.adapter activations.adapter_ram_style compute compute_pumping delivery delivery.cyclic.rom_style delivery.memstream.pumped_memory delivery.memstream.ram_style pe realization results.adapter results.adapter_ram_style set_index.adapter set_index.adapter_ram_style simd weight_stream.adapter weight_stream.adapter_ram_style weight_stream.transport weight_stream.transport.fifo.buffer.depth weight_stream.transport.fifo.buffer.ram_style
+keys per-channel: activations.adapter activations.adapter_ram_style compute compute_pumping delivery delivery.cyclic.rom_style delivery.memstream.pumped_memory delivery.memstream.ram_style pe realization results.adapter results.adapter_ram_style set_index.adapter set_index.adapter_ram_style simd weight_stream.adapter weight_stream.adapter_ram_style weight_stream.transport weight_stream.transport.fifo.buffer.depth weight_stream.transport.fifo.buffer.ram_style
+keys sets: activations.adapter activations.adapter_ram_style compute compute_pumping delivery delivery.cyclic.rom_style delivery.memstream.pumped_memory delivery.memstream.ram_style pe realization results.adapter results.adapter_ram_style set_index.adapter set_index.adapter_ram_style simd weight_stream.adapter weight_stream.adapter_ram_style weight_stream.transport weight_stream.transport.fifo.buffer.depth weight_stream.transport.fifo.buffer.ram_style

@@ -72,7 +72,7 @@ Findings that shape S1–S3:
   cyclic and dense). Gates: Space 427, kernels 825, dataflow 11; ruff and mypy
   clean. XSim on the S1 snapshot: dense 40/40, FIFO 6/6 (packed) and 6/6
   (INT8 pumped), per-channel 34/34, input-gen replay 40/40, memstream 14/14 and
-  per-channel memstream 12/12, 0 failures.
+  per-channel memstream 12/12, 0 failures (`evidence/s1/`).
 
 ## S2. The nest (`158830d4d`)
 
@@ -183,3 +183,53 @@ Findings that shape S1–S3:
     stream admitting no adapter refuses the pair.
   - `tests/kernels/test_interfaces.py`: the dotp → thresholding module, now
     replayed by its stream's adapter, passes XSim.
+  - **XSim sweeps on the S3 snapshot** (`evidence/s3/`), 0 failures:
+    dense 40/40 (replay now always `input_gen`, including one-beat frames
+    closed by the added unit loop), FIFO 6/6 packed and 6/6 INT8 pumped,
+    per-channel 34/34 (marker synthesis by an identity `input_gen`,
+    `ch_one_beat` included), memstream 14/14 and per-channel memstream 12/12,
+    pumped memory 14/14, writable weights 14/14, weight sets 14/14, pure dotp
+    27/27 and stress 17/17, and the adapter harness 26/26: `vpc` at four lane
+    pairs, `input_gen` reorders, `vpc → input_gen`, `input_gen → vpc` and
+    `vpc → input_gen → vpc` (each free and stalled, against the tensor's
+    row-major values), plus `inner_shuffle` placed explicitly.
+  - Gates: Space 427, kernels 819, dataflow 33; ruff and mypy clean.
+- **Deviations from PLAN.md.**
+  - `BufferedStream.transport` stays on `BufferedStream` rather than moving
+    onto every `Stream`: its keys are unchanged, and no FIFO choice appears
+    on streams that never needed one. A FIFO sits after the adapter.
+  - "Pinning adapters to `None`" is a stream Param, `adaptable=False`: the
+    adapter Decision applies only under a non-empty plan, so it has no `None`
+    case to pin.
+  - Candidates are whole chains (seven), not one kind per candidate: each is a
+    distinct hardware realization of a plan, and only chains make the
+    candidates mutually exclusive.
+  - MatMul's boundary presentation is the G0.2 rule, not a Param.
+- **Held.** `inner_shuffle` as a candidate (FinnLib defect, unchanged); SWG
+  reorders and thresholding PE > C (the S0 gaps); a Space reduction-order
+  Decision (G0.5 deviation above).
+
+## Close
+
+- **Engine.** Untouched: every feature S3 uses (per-input exports, `Users`,
+  Decisions over nodes whose candidates bind a parent's derived value and
+  refuse themselves, guarded Decisions) existed. The canonical Space
+  documentation needs no change.
+- **For review.**
+  1. G0.3 went ahead on the recommendation (the enum stays, each member an
+     einsum); confirm or ask for an open einsum.
+  2. G0.6: `input_gen` replays at about four times `replay_buffer`'s storage
+     (measured above). Keep the scrap, or restore `replay_buffer` as a second
+     replay candidate (the adapter Decision would then offer two candidates
+     for a pure replay, a DSE choice).
+  3. The declared key set grew by two guarded keys per stream
+     (`<stream>.adapter`, `<stream>.adapter_ram_style`).
+- **Handoff: S4, the `Design` composite.** A kernel composite exports its
+  boundary streams' contracts under `PORT` (the `boundary_contract` it already
+  computes) and takes reference inputs for the design streams it sits on; a
+  `Design` Space places composites beside inter-module `Stream`s, whose plans
+  and adapters are this increment's, unchanged. Verify nested lowering (a
+  composed module as a child of `netlist`) first, as DESIGN §6.3 says. The
+  boundary rule then decides where adaptation is packaged: on the receiving
+  side, inside the consumer's module or on the design stream. Plan it with the
+  artifact-integration work.

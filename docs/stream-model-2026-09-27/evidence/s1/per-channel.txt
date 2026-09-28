@@ -1,0 +1,36 @@
+Evidence: /tmp/d10/s1/sim-per-channel
+PASS ch_small external stalled=False result=INT10
+PASS ch_small external stalled=True result=INT10
+PASS ch_small cyclic stalled=False result=INT10
+PASS ch_small cyclic stalled=True result=INT10
+PASS ch_small memstream stalled=False result=INT10
+PASS ch_small memstream stalled=True result=INT10
+PASS ch_pe1 external stalled=False result=INT20
+PASS ch_pe1 external stalled=True result=INT20
+PASS ch_pe1 cyclic stalled=False result=INT20
+PASS ch_pe1 cyclic stalled=True result=INT20
+PASS ch_pe1 memstream stalled=False result=INT20
+PASS ch_pe1 memstream stalled=True result=INT20
+PASS ch_wide external stalled=False result=INT19
+PASS ch_wide external stalled=True result=INT19
+PASS ch_wide cyclic stalled=False result=INT19
+PASS ch_wide cyclic stalled=True result=INT19
+PASS ch_wide memstream stalled=False result=INT19
+PASS ch_wide memstream stalled=True result=INT19
+PASS ch_pumped external stalled=False result=INT19
+PASS ch_pumped external stalled=True result=INT19
+PASS ch_pumped cyclic stalled=False result=INT19
+PASS ch_pumped cyclic stalled=True result=INT19
+PASS ch_pumped memstream stalled=False result=INT19
+PASS ch_pumped memstream stalled=True result=INT19
+PASS ch_one_beat external stalled=False result=INT18
+PASS ch_one_beat external stalled=True result=INT18
+PASS ch_one_beat cyclic stalled=False result=INT18
+PASS ch_one_beat cyclic stalled=True result=INT18
+PASS ch_one_beat memstream stalled=False result=INT18
+PASS ch_one_beat memstream stalled=True result=INT18
+PASS ch_dense_e2 cyclic stalled=False result=INT10
+PASS ch_dense_e2 cyclic stalled=True result=INT10
+PASS ch_dense_e2 memstream stalled=False result=INT10
+PASS ch_dense_e2 memstream stalled=True result=INT10
+exit=0

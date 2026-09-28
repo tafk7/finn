@@ -1,0 +1,14 @@
+Evidence: /tmp/d10/s3/sim-memstream-per-channel
+PASS ch_small memstream stalled=False result=INT10
+PASS ch_small memstream stalled=True result=INT10
+PASS ch_pe1 memstream stalled=False result=INT20
+PASS ch_pe1 memstream stalled=True result=INT20
+PASS ch_wide memstream stalled=False result=INT19
+PASS ch_wide memstream stalled=True result=INT19
+PASS ch_pumped memstream stalled=False result=INT19
+PASS ch_pumped memstream stalled=True result=INT19
+PASS ch_one_beat memstream stalled=False result=INT18
+PASS ch_one_beat memstream stalled=True result=INT18
+PASS ch_dense_e2 memstream stalled=False result=INT10
+PASS ch_dense_e2 memstream stalled=True result=INT10
+exit=0
