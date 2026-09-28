@@ -46,8 +46,10 @@ from finn.kernels.artifacts.derivation import ProducerIdentity
 from finn.kernels.datatypes.scalar import ScalarEncoding
 from finn.kernels.datatypes.semantics import (
     INTEGER_TENSOR,
+    INTEGER_VECTOR,
     QONNX_DATATYPE_VALUE_SEMANTICS,
     IntegerTensor,
+    IntegerVector,
 )
 from finn.dataflow.datatypes import (
     QONNXDataType,
@@ -67,6 +69,7 @@ from finn.kernels.physical.forms import (
     vector_major,
 )
 from finn.kernels.physical.structure import PhysicalStructure
+from finn.kernels.input_generator import InputGeneratorKernel
 from finn.kernels.streaming import ReplayBuffer
 from finn.kernels.streams import (
     COMPOSED,
@@ -296,6 +299,27 @@ class MatMulKernel(Space):
     def reuse(self) -> int:
         return self.folding.reuse
 
+    @derived
+    def reused(self) -> bool:
+        return self.datapath is Contraction.DENSE
+
+    @derived
+    def single_pass(self) -> bool:
+        return self.datapath is Contraction.PER_CHANNEL
+
+    @derived
+    def activation_word_bits(self) -> int:
+        return self.activation_spec.payload_bits
+
+    @derived(semantics=INTEGER_VECTOR)
+    def replay_extents(self) -> IntegerVector:
+        """The input generator's nest: each row ``reuse`` times, its folds in order."""
+        return (self.reuse, self.reduction_folds)
+
+    @derived(semantics=INTEGER_VECTOR)
+    def replay_strides(self) -> IntegerVector:
+        return (0, 1)
+
     @derived(semantics=STREAM_SPEC)
     def activation_spec(self) -> StreamSpec | Rejected:
         f, element = self.folding, ScalarEncoding.admit(self.activation_dtype)
@@ -337,11 +361,32 @@ class MatMulKernel(Space):
     weight_stream = BufferedStream(spec=weight_spec, port="in1_V")
     results = Stream(spec=result_spec, port="out0_V")
 
-    replay = ReplayBuffer(
+    # Replay: dense rows are read once per output fold, by a replay buffer or an
+    # input generator (a choice). Per-channel rows pass once; a one-repetition
+    # replay buffer only adds the frame markers (derived, no choice).
+    buffer = ReplayBuffer(
         input_stream=activations,
         output_stream=replayed,
         sequence_length=reduction_folds,
         replay_count=reuse,
+    )
+    input_gen = InputGeneratorKernel(
+        word_bits=activation_word_bits,
+        frame_words=reduction_folds,
+        extents=replay_extents,
+        strides=replay_strides,
+        input_stream=activations,
+        output_stream=replayed,
+    )
+    replay: ReplayBuffer | InputGeneratorKernel = Decision(
+        values={"buffer": buffer, "input_gen": input_gen}, when=reused
+    )
+    markers = ReplayBuffer(
+        input_stream=activations,
+        output_stream=replayed,
+        sequence_length=reduction_folds,
+        replay_count=reuse,
+        when=single_pass,
     )
 
     @derived
@@ -459,6 +504,7 @@ def matmul_assembly(
     compute_pumping: bool = False,
     core: str | None = None,
     realization: str | None = None,
+    replay: str = "buffer",
     weight_delivery: WeightDelivery = WeightDelivery.EXTERNAL,
     weights: Sequence[Sequence[int]] | None = None,
     rom_style: str = "auto",
@@ -525,6 +571,11 @@ def matmul_assembly(
             realization = viable[0]
         choices["realization"] = realization
     point = commit(base, choices)
+    if point.reused:
+        replayed: dict[str, object] = {"replay": replay}
+        if replay == "input_gen":
+            replayed["replay.input_gen.ram_style"] = "auto"
+        point = commit(point, replayed)
     if core is None:
         cores = compatible(
             point, "compute", lambda item: item.compute.inspect(DotpAxiKernel.support).result

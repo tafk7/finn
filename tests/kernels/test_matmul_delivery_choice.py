@@ -82,7 +82,9 @@ def configured(point, case, *, style=None, pe=2, simd=2):
     ]
     if style is not None:
         changes.append(point.field(rom_style(point)).change(style))
-    return point.with_choices(*changes, pe=pe, simd=simd, compute="packed", compute_pumping=False)
+    return point.with_choices(
+        *changes, pe=pe, simd=simd, compute="packed", compute_pumping=False, replay="buffer"
+    )
 
 
 def delivery(point):
@@ -102,8 +104,8 @@ def test_families_share_typed_exports_but_keep_their_own_ports_and_components():
     external = configured(base(), "external")
     cyclic = configured(base(weights=WEIGHTS), "cyclic", style="block")
     for point, ports, instances in (
-        (external, {"in0_V", "in1_V", "out0_V"}, ["u_replay", "u_compute_packed"]),
-        (cyclic, {"in0_V", "out0_V"}, ["u_replay", "u_compute_packed", CYCLIC_INSTANCE]),
+        (external, {"in0_V", "in1_V", "out0_V"}, ["u_replay_buffer", "u_compute_packed"]),
+        (cyclic, {"in0_V", "out0_V"}, ["u_replay_buffer", "u_compute_packed", CYCLIC_INSTANCE]),
     ):
         built = point.structure
         requirements = point.build_requirements
@@ -118,7 +120,7 @@ def test_families_share_typed_exports_but_keep_their_own_ports_and_components():
     assert cyclic.delivery.image == (0x22C, 0x6BE, 0xDD3, 0x941)
     # Instance names come from the located node names: the candidate is delivery.cyclic.
     assert [item.node for item in cyclic.modules] == [
-        "replay",
+        "replay.buffer",
         "compute.packed",
         "delivery.cyclic",
     ]
@@ -126,7 +128,7 @@ def test_families_share_typed_exports_but_keep_their_own_ports_and_components():
         "weight_stream",
         "delivery.cyclic",
     )
-    assert [item.node for item in external.modules] == ["replay", "compute.packed"]
+    assert [item.node for item in external.modules] == ["replay.buffer", "compute.packed"]
     rom = dict(cyclic.structure.structure.instances[2].requirements.parameters)
     assert rom["ROM_STYLE"] == '"block"'
     assert external.build_requirements.implementation_id != (
@@ -180,6 +182,8 @@ def test_case_local_choices_are_owned_by_their_family():
         "delivery",
         "delivery.cyclic.rom_style",
         "realization",
+        "replay",
+        "replay.input_gen.ram_style",
         "weight_stream.transport",
         "weight_stream.transport.fifo.buffer.depth",
         "weight_stream.transport.fifo.buffer.ram_style",
@@ -288,6 +292,7 @@ def schema(point):
             codec_for(MatMulKernel.pe, INTEGER),
             codec_for(MatMulKernel.simd, INTEGER),
             codec_for(MatMulKernel.compute, STRING),
+            codec_for(MatMulKernel.replay, STRING),
             codec_for(MatMulKernel.compute_pumping, BOOLEAN),
         ),
     )
@@ -302,6 +307,7 @@ def test_selector_and_case_choices_round_trip_through_an_empty_root():
         "delivery",
         "delivery.cyclic.rom_style",
         "pe",
+        "replay",
         "simd",
         "weight_stream.transport",
     )
@@ -347,6 +353,7 @@ def test_switching_families_is_atomic_and_requires_clearing_stale_case_choices()
         "compute_pumping",
         "delivery",
         "pe",
+        "replay",
         "simd",
         "weight_stream.transport",
     )

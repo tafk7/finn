@@ -138,6 +138,7 @@ def test_one_kernel_refusal_reaches_only_its_own_stream():
             MatMulKernel.delivery: "external",
             MatMulKernel.weight_stream.transport: "direct",
             MatMulKernel.compute: "packed",
+            MatMulKernel.replay: "buffer",
             MatMulKernel.compute_pumping: False,
         }
     )

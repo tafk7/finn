@@ -54,7 +54,7 @@ def test_external_construction_owns_replay_and_exact_precision():
     assert (built.activation_beats, built.weight_beats, built.result_beats) == (6, 12, 6)
     assert built.initializer == ()
     assert [item.instance_id for item in built.structure.instances] == [
-        "u_replay",
+        "u_replay_buffer",
         "u_compute_packed",
     ]
     replay, dotp = (dict(item.requirements.parameters) for item in built.structure.instances)
@@ -68,7 +68,7 @@ def test_external_construction_owns_replay_and_exact_precision():
     }
     assert any(
         wire.destination.pin == PhysicalPin("u_compute_packed", "s_axis_input_tlast")
-        and wire.source == PinSlice(PhysicalPin("u_replay", "olast"), 0, 1)
+        and wire.source == PinSlice(PhysicalPin("u_replay_buffer", "olast"), 0, 1)
         for wire in built.structure.wires
     )
 
@@ -162,6 +162,7 @@ def test_space_selects_folding_and_constructs_without_a_logical_contract():
         pe=2,
         delivery="external",
         compute="packed",
+        replay="buffer",
         **{"weight_stream.transport": "direct"},
     )
     point = base.with_choices(simd=2)
@@ -203,7 +204,7 @@ def test_build_is_complete_and_initializer_changes_identity(tmp_path, delivery):
     rendered = render_module_sources(prepared, store)
     wrapper = dict(rendered.contents)[prepared.abi.entry_point + ".sv"].decode()
     assert ".ACCU_WIDTH(8)" in wrapper
-    assert ".olast(n__u_replay__olast)" in wrapper
+    assert ".olast(n__u_replay_buffer__olast)" in wrapper
     assert prepared.slots == ()
     if delivery is WeightDelivery.CYCLIC:
         assert ".INIT_DATA(48'h0)" in wrapper
@@ -258,6 +259,7 @@ def test_matmul_honors_the_child_physical_view_not_just_its_raw_module(monkeypat
         delivery="external",
         compute="packed",
         compute_pumping=False,
+        replay="buffer",
         **{"weight_stream.transport": "direct"},
     )
     assert isinstance(point.compute.query(DotpAxiKernel.codegen), Available)

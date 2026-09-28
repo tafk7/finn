@@ -44,6 +44,8 @@ def point(**facts):
     choices = dict(CHOICES)
     if facts["contraction"] is Contraction.PER_CHANNEL:
         choices["realization"] = "native"
+    else:
+        choices["replay"] = "buffer"
     return commit(design_space(MatMulKernel(**facts)), choices)
 
 
@@ -71,7 +73,7 @@ def test_per_channel_rows_pass_once_with_a_frame_per_window():
         for wire in structure.wires
         if wire.destination.pin == PhysicalPin("u_compute_int8_dsp58", "s_axis_input_tlast")
     ]
-    assert isinstance(last, PinSlice) and last.pin.instance_id == "u_replay"
+    assert isinstance(last, PinSlice) and last.pin.instance_id == "u_markers"
     assert last.pin.signal_id in {"olast", "ofin"}
 
 
@@ -128,7 +130,7 @@ def test_a_dense_realization_reads_window_by_channel_rows_against_block_diagonal
     # On DSP48E2 only the dense realization computes it: the packed core.
     built = matmul_assembly(target_dsp=DspBlock.DSP48E2, **DENSE)
     assert [item.instance_id for item in built.structure.instances] == [
-        "u_replay",
+        "u_replay_buffer",
         "u_compute_packed",
         "u_delivery_cyclic",
     ]

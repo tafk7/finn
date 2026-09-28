@@ -8,9 +8,17 @@ loop order described by extents. Zero strides repeat words. This declaration
 admits finite traversals wholly within each frame. olst[i] marks completion
 of loop i and all inner loops, aligned with the output transfer. It is a native
 multi-bit marker, not AXI TLAST. Input and output words are opaque bits.
+
+Placed between two streams (``input_stream``, ``output_stream``), its output
+contract is derived from the input's: the frames' beats are one run, and each
+loop of the nest steps ``stride`` beats of it, so a replay (stride 0) or a
+reorder of the frame is an ordinary loop nest. Each ``olst[i]`` is a marker bit
+closing every ``extents[i] * ... * extents[-1]`` output beats.
 """
 
 from __future__ import annotations
+
+from math import prod
 
 from finn.kernels.base import Kernel
 from finn.kernels.artifacts.abi import Clock, Direction, Endpoint, Reset, Signal
@@ -33,9 +41,13 @@ from finn.core.space import (
     Rejected,
     constraint,
     default_semantics,
+    derived,
     reject,
     view,
 )
+from finn.kernels.physical.contract import STREAM_CONTRACT, StreamContract
+from finn.kernels.physical.forms import Every, Loop, Traversal, split_beats
+from finn.kernels.streams import MODULE, PORT, Stream
 
 
 class InputGeneratorKernel(Kernel):
@@ -73,6 +85,9 @@ class InputGeneratorKernel(Kernel):
         return True
 
     ram_style: str = Decision(values=("auto", "distributed", "block", "ultra"))
+    # The streams it sits on, when a parent places it between streams.
+    input_stream: Stream = Param(required=False)
+    output_stream: Stream = Param(required=False)
 
     @view(semantics=STREAM_INTERFACES)
     def interfaces(self) -> tuple[ReadyValidStream, ...] | Rejected:
@@ -133,6 +148,47 @@ class InputGeneratorKernel(Kernel):
             abi,
             (CopiedSource("finnlib", "rtl/shape/input_gen.sv", provides=("module:input_gen",)),),
         )
+
+    @derived(semantics=default_semantics(Traversal))
+    def output_form(self) -> Traversal | Rejected:
+        """The input's frames, each presented through the loop nest."""
+        form, frame = self.input_stream.spec.form, self.frame_words
+        if form.beats % frame:
+            return reject("input-generator-frame", f"{frame}-beat frames do not divide the stream")
+        try:
+            outer, inner = split_beats(form, frame)
+        except ValueError as error:
+            return reject("input-generator-frame", str(error))
+        if len(inner) > 1:
+            return reject("input-generator-frame", "a frame's beats must be one run of the stream")
+        unit = inner[0].stride if inner else 0
+        nest = tuple(
+            Loop(extent, stride * unit) for extent, stride in zip(self.extents, self.strides)
+        )
+        try:
+            return Traversal(form.shape, (*outer, *nest), form.lane_loops)
+        except ValueError as error:
+            return reject("input-generator-frame", str(error))
+
+    @view(semantics=STREAM_CONTRACT)
+    def input_port(self) -> StreamContract | Rejected:
+        spec = self.input_stream.spec
+        if spec.payload_bits != self.word_bits:
+            return reject(
+                "input-generator-word", "the stream's beats are not the generator's words"
+            )
+        return StreamContract(self.interfaces[0], spec.element, spec.form, spec.repetition)
+
+    @view(semantics=STREAM_CONTRACT)
+    def output_port(self) -> StreamContract:
+        spec, extents = self.input_stream.spec, self.extents
+        markers = {f"olst[{level}]": Every(prod(extents[level:])) for level in range(len(extents))}
+        return StreamContract(self.interfaces[1], spec.element, self.output_form, markers=markers)
+
+    exports = {
+        MODULE: build_requirements,
+        PORT: {input_stream: input_port, output_stream: output_port},
+    }
 
 
 __all__ = ["InputGeneratorKernel"]

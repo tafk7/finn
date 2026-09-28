@@ -84,7 +84,9 @@ def _pack(values, bits):
     return sum((int(value) & mask) << (index * bits) for index, value in enumerate(values))
 
 
-def _observation_wrapper(abi, entry_point, directory, activation_bits, weight_bits, compute):
+def _observation_wrapper(
+    abi, entry_point, directory, activation_bits, weight_bits, compute, replay, last
+):
     ports, connections = [], []
     for name, info in abi_pins(abi).items():
         width = f" [{info.width - 1}:0]" if info.width > 1 else ""
@@ -92,7 +94,7 @@ def _observation_wrapper(abi, entry_point, directory, activation_bits, weight_bi
         connections.append(f".{name}({name})")
     observations, assignments = {}, []
     for label, child, names, bits in (
-        ("replay", "u_replay", ("odat", "ovld", "ordy", "olast"), activation_bits),
+        ("replay", replay, ("odat", "ovld", "ordy", last), activation_bits),
         (
             "weights",
             compute,
@@ -117,12 +119,24 @@ def _observation_wrapper(abi, entry_point, directory, activation_bits, weight_bi
     return top, path, observations
 
 
+def _replay_node(instances):
+    """The node feeding dotp's activations, and its frame-marker pin."""
+    (node,) = [
+        item.instance_id
+        for item in instances
+        if item.instance_id.startswith(("u_replay", "u_markers"))
+    ]
+    # input_gen's olst[1] closes each reduction; the replay buffer's olast does.
+    return node, "olst[1]" if node.endswith("input_gen") else "olast"
+
+
 def run(
     configuration: Configuration,
     delivery: WeightDelivery,
     evidence: Path,
     rom_style: str = "auto",
     weight_fifo_depth: int | None = None,
+    replay: str = "buffer",
 ) -> None:
     c = configuration
     rows = 4
@@ -155,6 +169,7 @@ def run(
         compute_pumping=c.pumping,
         core=c.core,
         realization=c.realization or ("native" if c.per_channel else None),
+        replay=replay,
         weight_delivery=delivery,
         weights=weights.tolist() if delivery is WeightDelivery.CYCLIC else None,
         rom_style=rom_style,
@@ -213,6 +228,7 @@ def run(
                 word | (padding if index % 2 else 0) for index, word in enumerate(stimulus[name])
             ]
     suffix = "_" + rom_style if delivery is WeightDelivery.CYCLIC and rom_style != "auto" else ""
+    suffix += "_input_gen" if replay == "input_gen" and not c.per_channel else ""
     suffix += f"_fifo{weight_fifo_depth}" if weight_fifo_depth else ""
     directory = evidence / (c.label + "_" + delivery.value + suffix)
     directory.mkdir(parents=True, exist_ok=False)
@@ -236,6 +252,7 @@ def run(
             for item in built.structure.instances
             if item.instance_id.startswith("u_compute")
         ),
+        *_replay_node(built.structure.instances),
     )
     sources.append(str(wrapper))
     # Dense rows are replayed once per output fold; per-channel beats pass once.
@@ -300,6 +317,7 @@ def main() -> None:
     parser.add_argument("--output", type=Path)
     parser.add_argument("--rom-style", default="auto", choices=("auto", "distributed", "block"))
     parser.add_argument("--weight-fifo-depth", type=int)
+    parser.add_argument("--replay", default="buffer", choices=("buffer", "input_gen"))
     args = parser.parse_args()
     directory = args.output or Path(tempfile.mkdtemp(prefix="matmul-evidence-"))
     print(f"Evidence: {directory}", flush=True)
@@ -311,7 +329,14 @@ def main() -> None:
                 if (case.realization == "dense" or case.narrow) and not known:
                     continue
                 if args.delivery is None or args.delivery == delivery.value:
-                    run(case, delivery, directory, args.rom_style, args.weight_fifo_depth)
+                    run(
+                        case,
+                        delivery,
+                        directory,
+                        args.rom_style,
+                        args.weight_fifo_depth,
+                        args.replay,
+                    )
 
 
 if __name__ == "__main__":

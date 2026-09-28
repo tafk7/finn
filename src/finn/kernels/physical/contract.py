@@ -20,6 +20,8 @@ padding is driven with zeros.
 
 from __future__ import annotations
 
+import re
+
 from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
@@ -54,9 +56,11 @@ class Mismatch:
 class StreamContract:
     """One stream end: its transport plus the logical sequence it carries.
 
-    ``markers`` maps a transport marker signal to the rule it follows. For a
-    producer these are guarantees; for a consumer, requirements. Transport
-    markers without a rule can be neither required nor matched.
+    ``markers`` maps a transport marker to the rule it follows: a one-bit
+    marker by its signal (``olast``), or one bit of a wider loop-completion
+    marker as ``signal[bit]`` (``olst[1]``). For a producer these are
+    guarantees; for a consumer, requirements. Transport markers without a rule
+    can be neither required nor matched.
     """
 
     transport: ReadyValidStream
@@ -79,9 +83,11 @@ class StreamContract:
             )
         markers = dict(self.markers)
         widths = {marker.signal: marker.width for marker in self.transport.markers}
-        for signal, rule in markers.items():
-            if signal not in widths or widths[signal] != 1 or not isinstance(rule, Every):
-                raise ValueError(f"{signal}: a rule needs a one-bit transport marker")
+        for key, rule in markers.items():
+            signal, bit = marker_bit(key)
+            width = widths.get(signal, 0)
+            if (width != 1 if bit is None else bit >= width) or not isinstance(rule, Every):
+                raise ValueError(f"{key}: a rule needs a one-bit transport marker or marker bit")
         object.__setattr__(self, "markers", tuple(sorted(markers.items())))
 
     @property
@@ -98,6 +104,12 @@ class StreamContract:
 
 
 STREAM_CONTRACT: ValueSemantics[StreamContract] = default_semantics(StreamContract)
+
+
+def marker_bit(key: str) -> tuple[str, int | None]:
+    """The signal a marker rule key names, and the bit of it (None for a one-bit marker)."""
+    match = re.fullmatch(r"(\w+)\[(\d+)\]", key)
+    return (match[1], int(match[2])) if match else (key, None)
 
 
 def compatibility(
@@ -153,7 +165,7 @@ def compatibility(
             )
 
     if source_is_top:
-        consumed = {pair[0] for pair in marker_pairs(source, sink)}
+        consumed = {marker_bit(pair[0])[0] for pair in marker_pairs(source, sink)}
         unused = [m.signal for m in source.transport.markers if m.signal not in consumed]
         if unused:
             refuse(
@@ -162,7 +174,8 @@ def compatibility(
                 f"top input markers {unused} would be left unconsumed",
             )
     if sink_is_top and sink.transport.markers:
-        missing = [m.signal for m in sink.transport.markers if m.signal not in sink.rules]
+        ruled = {marker_bit(key)[0] for key in sink.rules}
+        missing = [m.signal for m in sink.transport.markers if m.signal not in ruled]
         if missing:
             refuse(Level.PROTOCOL, "stream-top-marker", f"top output markers {missing} lack rules")
     return tuple(found)
@@ -217,5 +230,6 @@ __all__ = [
     "StreamMismatch",
     "compatibility",
     "lane_permutation",
+    "marker_bit",
     "marker_pairs",
 ]

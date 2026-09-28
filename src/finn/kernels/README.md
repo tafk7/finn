@@ -169,13 +169,14 @@ point = commit(
         "weight_stream.transport.fifo.buffer.ram_style": "auto",
         "compute": "packed",
         "compute_pumping": False,
+        "replay": "buffer",
         "pe": 2,
         "simd": 2,
     },
 )
 structure = point.structure.structure
 assert [item.instance_id for item in structure.instances] == [
-    "u_replay",
+    "u_replay_buffer",
     "u_compute_packed",
     "u_delivery_cyclic",
     "u_weight_stream_fifo",

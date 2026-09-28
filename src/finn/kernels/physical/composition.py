@@ -26,6 +26,7 @@ from finn.kernels.physical.contract import (
     StreamMismatch,
     compatibility,
     lane_permutation,
+    marker_bit,
     marker_pairs,
 )
 from finn.kernels.physical.structure import (
@@ -206,22 +207,35 @@ class Composition:
             PhysicalWire(_slice(source.owner, src.ready), _slice(sink.owner, dst.ready))
         )
         pairs = marker_pairs(produced, consumed)
-        for produced_signal, consumed_signal in pairs:
+        for produced_key, consumed_key in pairs:
+            (produced_signal, produced_bit), (consumed_signal, consumed_bit) = (
+                marker_bit(produced_key),
+                marker_bit(consumed_key),
+            )
             self._wires.append(
                 PhysicalWire(
-                    _slice(sink.owner, consumed_signal), _slice(source.owner, produced_signal)
+                    _slice(sink.owner, consumed_signal, 1, consumed_bit or 0),
+                    _slice(source.owner, produced_signal, 1, produced_bit or 0),
                 )
             )
         if source.owner is not None:
-            used = {signal for signal, _ in pairs}
+            used = {marker_bit(key) for key, _ in pairs}
             for marker in src.markers:
-                if marker.signal not in used:
+                taken = {bit for signal, bit in used if signal == marker.signal}
+                reason = f"marker not required by {sink.label}"
+                if not taken:
                     self._unused.append(
-                        UnusedOutput(
-                            PhysicalPin(source.owner, marker.signal),
-                            f"marker not required by {sink.label}",
-                        )
+                        UnusedOutput(PhysicalPin(source.owner, marker.signal), reason)
                     )
+                elif None not in taken:
+                    # A wider loop-completion marker: only its unread bits are disposed.
+                    for bit in range(marker.width):
+                        if bit not in taken:
+                            self._unused.append(
+                                UnusedOutput(
+                                    PhysicalPin(source.owner, marker.signal), reason, bit, 1
+                                )
+                            )
 
     def finish(self) -> PhysicalStructure:
         return PhysicalStructure(

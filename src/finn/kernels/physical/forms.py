@@ -238,6 +238,11 @@ def _common_refinement(
     return None if a is None or b is None else (a, b)
 
 
+def split_beats(form: Traversal, inner_beats: int) -> tuple[tuple[Loop, ...], tuple[Loop, ...]]:
+    """The beat loops above each group of ``inner_beats`` beats, and those within one."""
+    return _split_at(form.beat_loops, inner_beats)
+
+
 def _split_at(loops: Sequence[Loop], inner_beats: int) -> tuple[tuple[Loop, ...], tuple[Loop, ...]]:
     _positive(inner_beats, "inner_beats")
     outer: list[Loop] = list(loops)
@@ -515,6 +520,7 @@ __all__ = [
     "classify",
     "is_repetition",
     "pack",
+    "split_beats",
     "split_walk",
     "tile",
     "vector_major",
