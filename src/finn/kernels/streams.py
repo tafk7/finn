@@ -3,19 +3,20 @@
 
 """Streams as ordinary Spaces that kernels reference.
 
-A ``Stream`` is a node of its own, declared in the composite beside the
-kernels it joins. It carries one ``tensor``: its shape and element encoding,
-supplied by the composite. A kernel has one reference input per stream it sits
-on (``output_stream: Stream = Param()``) and exports, under ``PORT``, one
+A ``Stream`` is the physical form of the logical stream
+(``finn.dataflow.stream``): a node of its own, declared in the composite
+beside the kernels it joins, carrying one ``tensor`` supplied by the
+composite. A kernel has one reference input per stream it sits on
+(``output_stream: Stream = Param()``) and exports, under ``PORT``, one
 contract per input: ``exports = {PORT: {output_stream: output_port}}``. Each
 end presents its own traversal of the tensor in that contract, reading only
 the stream's ``tensor``. The stream sees the kernels that reference it through
-``Users(PORT)``, each with only the port it presents on this stream, so a
-port's refusal stays on its own stream. The contract's transport endpoint says
-whether the kernel produces into the stream (initiator) or consumes from it
-(target). The one-producer-one-consumer rule, the tensor each end must
-traverse, compatibility and the AXIS boundary belong to this family, not to
-the engine.
+``users = Users(PORT)``, each with only the port it presents on this stream,
+so a port's refusal stays on its own stream. The contract's transport
+endpoint says whether the kernel produces into the stream (initiator) or
+consumes from it (target). The one-producer-one-consumer rule, compatibility
+and the AXIS boundary belong to this family, not to the engine; the tensor
+each end must traverse and the plan are the logical stream's.
 
 A stream with a user on one side only is a boundary of its composite. Its
 ``port`` input names the top-level AXIS port (``in0_V``): an ABI name is
@@ -25,15 +26,9 @@ presents what its internal end presents, by one rule: an input boundary
 without the replay its receiver realizes (``unreplayed``), an output boundary
 as produced, neither with markers and both as a single pass.
 
-The tensor is supplied by the composite and must not depend on the stream's
-users: kernels read it to build their port contracts, so a tensor derived from
-a user's contract is a dependency cycle.
-
-The stream compares what its source presents with what its sink requires and
-derives a ``plan`` (``finn.dataflow.plan``): nothing, when the two connect
-directly or differ only in field order (wires); otherwise reorders, width
-conversions and marker synthesis. A plan that no chain of steps carries out
-is refused (``stream-plan``). A non-empty plan opens the stream's ``adapter``
+The logical stream derives the ``plan`` between the two ends' beat
+sequences and refuses one it cannot carry out (``stream-plan``); ``ends`` is
+the contracts' logical part. A non-empty plan opens the stream's ``adapter``
 Decision over nodes, whose candidates are fixed chains of FinnLib modules
 (``finn.kernels.adapters``); each refuses a plan it does not carry out, so at
 most one survives. A stream whose ``adaptable`` input is False admits no
@@ -113,7 +108,8 @@ from finn.kernels.physical.contract import (
     StreamContract,
     compatibility,
 )
-from finn.dataflow.plan import PLAN, Plan, Unrealizable, plan
+from finn.dataflow.stream import ENDS, End, Ends
+from finn.dataflow.stream import Stream as LogicalStream
 from finn.dataflow.tensor import TENSOR, ScalarEncoding, Tensor
 from finn.dataflow.traversal import BEAT_SEQUENCE, BeatSequence, unreplayed
 from finn.kernels.adapters import (
@@ -249,29 +245,28 @@ class Endpoints:
 ENDPOINTS = default_semantics(Endpoints)
 
 
-class Stream(Space):
+class Stream(LogicalStream):
     """A relation between the kernels that reference it: one producer, one consumer.
 
-    ``ends`` holds the port each present user presents on this stream, located
-    by the user's name and the input it references this stream through. A side
-    without a user is the composite's boundary, presented as the AXIS port
-    ``port`` (``boundary_sequence``).
+    ``users`` holds the port each present user presents on this stream,
+    located by the user's name and the input it references this stream
+    through. A side without a user is the composite's boundary, presented as
+    the AXIS port ``port`` (``boundary_sequence``).
     """
 
-    tensor: Tensor = Param(semantics=TENSOR)
     port: str = Param(required=False)
-    ends = Users(PORT)
+    users = Users(PORT)
 
     @derived(semantics=ENDPOINTS)
     def endpoints(self) -> Endpoints | Rejected:
         producers: list[tuple[str | None, StreamContract]] = []
         consumers: list[tuple[str | None, StreamContract]] = []
-        for end in self.ends:
+        for end in self.users:
             contract = end.value
             producing = contract.transport.endpoint is Endpoint.INITIATOR
             (producers if producing else consumers).append((end.node, contract))
         if len(producers) > 1 or len(consumers) > 1:
-            named = ", ".join(f"{end.node}.{end.member}" for end in self.ends)
+            named = ", ".join(f"{end.node}.{end.member}" for end in self.users)
             return reject(
                 "stream-users",
                 f"a stream has at most one producer and one consumer; referenced by {named}",
@@ -297,51 +292,14 @@ class Stream(Space):
         sequence = boundary_sequence(inside, receiving=receiving)
         return boundary_contract(self.port, self.tensor.element, sequence, endpoint)
 
-    @constraint
-    def well_formed(self) -> bool | Rejected:
-        """Every end traverses this stream's tensor, in its element encoding."""
-        tensor = self.tensor
-        for end in self.ends:
-            contract = end.value
-            if contract.form.shape != tensor.shape:
-                return reject(
-                    "stream-tensor",
-                    f"{end.node}.{end.member} traverses a {contract.form.shape} tensor; "
-                    f"the stream carries {tensor.shape}",
-                )
-            if contract.element != tensor.element:
-                return reject(
-                    "stream-tensor",
-                    f"{end.node}.{end.member} carries {contract.element.datatype_name}; "
-                    f"the stream carries {tensor.element.datatype_name}",
-                )
-        return True
-
-    @derived(semantics=PLAN)
-    def plan(self) -> Plan | Rejected:
-        """What must happen between the source's beat sequence and the sink's."""
-        ends = self.endpoints
-        try:
-            return plan(ends.source.sequence, ends.sink.sequence)
-        except Unrealizable as error:
-            return reject("stream-plan", f"no adapter can join the ends: {error}")
-
-    # False admits no adapter: the ends must connect directly.
-    adaptable: bool = Param(default=True)
-
-    @derived
-    def adapting(self) -> bool:
-        return self.adaptable and bool(self.plan)
-
-    @constraint
-    def realizable(self) -> bool | Rejected:
-        found = self.plan
-        if found and not self.adaptable:
-            return reject(
-                "stream-plan",
-                f"the ends need {found.describe()}, and this stream admits no adapter",
-            )
-        return True
+    @derived(semantics=ENDS)
+    def ends(self) -> Ends:
+        """The logical part of the two contracts: element and beat sequence."""
+        found = self.endpoints
+        return Ends(
+            End(found.source_owner, found.source.element, found.source.sequence),
+            End(found.sink_owner, found.sink.element, found.sink.sequence),
+        )
 
     @derived
     def buffering(self) -> bool:
@@ -351,25 +309,27 @@ class Stream(Space):
     adapter_ram_style: str = Decision(values=INPUT_GEN_RAM_STYLES, when=buffering)
     adapter: StreamAdapter = Decision(
         values={
-            "input_gen": InputGenAdapter(tensor=tensor, plan=plan, ram_style=adapter_ram_style),
-            "vpc": WidthAdapter(tensor=tensor, plan=plan),
+            "input_gen": InputGenAdapter(
+                tensor=LogicalStream.tensor, plan=LogicalStream.plan, ram_style=adapter_ram_style
+            ),
+            "vpc": WidthAdapter(tensor=LogicalStream.tensor, plan=LogicalStream.plan),
             "vpc_input_gen": WidthReorderAdapter(
-                tensor=tensor, plan=plan, ram_style=adapter_ram_style
+                tensor=LogicalStream.tensor, plan=LogicalStream.plan, ram_style=adapter_ram_style
             ),
             "input_gen_vpc": ReorderWidthAdapter(
-                tensor=tensor, plan=plan, ram_style=adapter_ram_style
+                tensor=LogicalStream.tensor, plan=LogicalStream.plan, ram_style=adapter_ram_style
             ),
             "input_gen_vpc_input_gen": ReorderWidthMarkersAdapter(
-                tensor=tensor, plan=plan, ram_style=adapter_ram_style
+                tensor=LogicalStream.tensor, plan=LogicalStream.plan, ram_style=adapter_ram_style
             ),
             "vpc_input_gen_vpc": RegroupAdapter(
-                tensor=tensor, plan=plan, ram_style=adapter_ram_style
+                tensor=LogicalStream.tensor, plan=LogicalStream.plan, ram_style=adapter_ram_style
             ),
             "vpc_input_gen_vpc_input_gen": RegroupMarkersAdapter(
-                tensor=tensor, plan=plan, ram_style=adapter_ram_style
+                tensor=LogicalStream.tensor, plan=LogicalStream.plan, ram_style=adapter_ram_style
             ),
         },
-        when=adapting,
+        when=LogicalStream.adapting,
     )
     adapter_admitted = View(adapter.admitted)
     adapter_stages = View(adapter.stages)
@@ -412,7 +372,9 @@ class Stream(Space):
         ends = self.endpoints
         return Connection(ends.source_owner, ends.source, ends.sink_owner, ends.sink, self.stages)
 
-    connection = View(link, requires=(well_formed, realizable, compatible))
+    connection = View(
+        link, requires=(LogicalStream.well_formed, LogicalStream.realizable, compatible)
+    )
     exports = {CONNECTION: connection}
 
 

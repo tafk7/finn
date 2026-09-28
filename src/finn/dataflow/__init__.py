@@ -32,6 +32,9 @@ the standard library. It never imports ``finn.kernels`` or ``finn.parked``.
 - ``gemm``: matrix multiplication's canonical indices ``m``, ``n``, ``k`` and
   its operand ``Form``s.
 - ``plan``: the canonical steps between two beat sequences of one tensor.
+- ``stream``: the logical ``Stream`` Space: a tensor, its two ends and the plan
+  between them; ``finn.kernels.streams`` finds the ends among the kernels
+  that reference it.
 
 The earlier Region/Network model was retired to
 ``finn.parked.dataflow.logical_values`` (D10, G0.1): its concepts live on in

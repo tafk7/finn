@@ -76,3 +76,41 @@ the gate results as observed, key and name changes (D7), and deviations.
   `tests/core/space/test_candidate_entries.py`), kernels 819 passed, ruff and
   mypy clean, exit 0. `scripts/check-dataflow-design.sh`: 33 passed, exit 0.
   The kernel gate is unchanged, as E1 requires (nothing migrated).
+
+## V1: values
+
+- **`finn.dataflow`:**
+  - `schedule`: `Index` (named, with affine arithmetic: `Affine`), `Schedule`
+    (extents, folds, beat order; `present`, with `lanes`, `reduces`, `holds`
+    and `view`; `closing`), `Refused`.
+  - `gemm`: `m`, `n`, `k`, `Signature`, `Form` (`DENSE`, `DEPTHWISE`).
+  - `traversal`: `Presentation` renamed `BeatSequence` (`BEAT_SEQUENCE`);
+    `once` and `period` moved here.
+  - `stream`: the logical `Stream` (tensor, `adaptable`, `ends =
+    required(Ends)`, `well_formed`, `plan`, `adapting`, `realizable`); `End`,
+    `Ends`. `finn.kernels.streams.Stream` subclasses it, finds the ends among
+    its `users` (was `ends = Users(PORT)`) and defines `ends` from its
+    contracts.
+- **Removed.** `finn.dataflow.nest` (`Level`, `Nest`, `Access`, `Iteration`,
+  `Einsum`, `fold`, `accesses`), `Contraction`, `contraction_iteration`,
+  `DotpPresentations`/`dotp_presentations` (now `DotpSequences`/
+  `dotp_sequences` over a schedule and a form, until K1 removes them).
+- **Weights stored `(k, n)`** (G0.2, proceeding on the recommendation):
+  MatMul's `weights`, the block-diagonal dense realization
+  (`W'[k * N + c, n]`), the tests' literals (written by output, transposed)
+  and the numeric harness (generates by output, passes the transpose).
+- **Renamed.** Per-channel is depthwise throughout (`Form.DEPTHWISE`,
+  `test_matmul_depthwise.py`, the harness's `--depthwise`); `contraction=`
+  is `form=`; refusal codes `dotp-iteration` → `dotp-schedule`,
+  `dotp-contraction` → `dotp-form`; the stream's `ends` (users) → `users`.
+- **Tests.** `test_nest.py` → `test_schedule.py` (19: the S0 roster over
+  `Schedule`, including the weights' MVAU tile order as `(k, n)` positions and
+  a held operand); `test_stream.py` (4) for the logical stream.
+- **Identity.** `identity.py` (13 configurations: D10's 14 less
+  `replay-input-gen`, which S3 made the dense default): module parameters,
+  memory images, top ports, wire counts, beat counts, wrapper fingerprints and
+  decision keys are identical before and after V1
+  (`evidence/identity-d10.txt`, `evidence/identity-v1.txt`).
+- **Gates.** Kernel gate: Space 446, kernels 819, ruff and mypy clean.
+  Dataflow gate: 40 passed, ruff and mypy clean.
+- **Not run.** XSim: no module parameter, image or wrapper changed.

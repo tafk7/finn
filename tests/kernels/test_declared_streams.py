@@ -145,7 +145,7 @@ def test_a_stream_waits_for_its_own_endpoints_only():
     assert isinstance(point.second.query(Stream.connection), Available)
     assert isinstance(point.query(Constants.build), Unresolved)
     # A stream sees its users by declaration name and by the input that references it.
-    (end,) = point.first.ends
+    (end,) = point.first.users
     assert (end.node, end.member) == ("first_source", "output_stream")
     assert end.value.transport.endpoint is Endpoint.INITIATOR  # the source produces
     connection = point.first.connection
