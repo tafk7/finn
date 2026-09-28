@@ -39,6 +39,7 @@ MATMUL_FACTS = dict(
     pe=2,
     simd=2,
     target_dsp=DspBlock.DSP58,
+    core="packed",
 )
 
 
@@ -60,7 +61,7 @@ def test_an_unpumped_matmul_has_one_clock_and_ties_the_2x_input():
     assert "ap_clk2x" not in top
     assert top["ap_clk"] == Signal("ap_clk", Direction.IN, 1, Clock(Free()))
     assert top["ap_rst_n"].role == Reset(True, True, ("ap_clk",))
-    compute = drivers(built.structure, "u_compute")
+    compute = drivers(built.structure, "u_compute_packed")
     assert compute["ap_clk"] == "ap_clk" and compute["ap_rst_n"] == "ap_rst_n"
     assert compute["ap_clk2x"] == ConstantBits(1, 0)
     replay = drivers(built.structure, "u_replay")
@@ -83,7 +84,7 @@ def test_a_pumped_matmul_adds_the_2x_clock_and_its_alignment():
     assert ports["ap_clk2x"].role == Clock(Derived("ap_clk", 2))
     assert ports["ap_rst_n"].role == Reset(True, True, ("ap_clk", "ap_clk2x"))
     assert top.clock_alignments == (ClockAlignment("ap_clk", "ap_clk2x"),)
-    assert drivers(built.structure, "u_compute")["ap_clk2x"] == "ap_clk2x"
+    assert drivers(built.structure, "u_compute_packed")["ap_clk2x"] == "ap_clk2x"
 
 
 def odd(*signals: Signal) -> tuple[Located[ModuleBuildRequirements], ...]:

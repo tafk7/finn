@@ -1,25 +1,36 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Physical FinnLib ``dotp_axi`` with caller-owned reduction bounds.
+"""Physical FinnLib ``dotp_axi`` around one compute core, with caller-owned bounds.
 
-Each activation beat contains SIMD fields, broadcast to PE accumulators. Each
-weight beat contains PE * SIMD fields, SIMD varying fastest. Fields are packed
-low first; only the complete beat is padded to a byte boundary. The core pairs
-activation and weight beats in order. Activation TLAST closes one nonempty
-reduction frame and produces one PE-wide result beat; weights and results have
-no TLAST. The caller supplies matching weight beats and terminates every frame.
+Each compute core is its own kernel: ``PackedDotpKernel`` (FinnLib ``dotp``,
+lanes packed into DSP48E1, DSP48E2 or DSP58 slices) and
+``Int8Dsp58DotpKernel`` (``dotp_8sx9_dsp58``, the INT8 mode of DSP58). A parent
+chooses between them with a Decision over nodes; each refuses what its core
+cannot build. ``DotpAxiKernel`` is their shared declaration and places no core.
+
+The ``contraction`` says how activations meet the PE lanes. ``DENSE``
+(``Y[r, n] = sum_k X[r, k] W[n, k]``): each activation beat carries SIMD fields,
+broadcast to the PE accumulators. ``PER_CHANNEL`` (``Y[r, c] = sum_k X[r, k, c]
+W[c, k]``): each activation beat carries SIMD window positions of PE channels,
+channel fastest, and lane p accumulates channel p alone; only the INT8 core
+reads it. Each weight beat carries PE * SIMD fields, SIMD varying fastest.
+Fields are packed low first; only the complete beat is padded to a byte
+boundary. The core pairs activation and weight beats in order. Activation TLAST
+closes one nonempty reduction frame and produces one PE-wide result beat;
+weights and results have no TLAST. The caller supplies matching weight beats
+and terminates every frame.
 
 ``result_dtype`` specifies the signed accumulator encoding, not a proof that an
 arbitrary frame fits it. The caller must bound each frame's accumulation to that
-encoding (including intermediate sums); overflow is not exact arithmetic. All
-declared activation and signed weight values are admitted, including the most
-negative weight. NARROW_WEIGHTS is always zero.
+encoding (including intermediate sums); overflow is not exact arithmetic.
 """
 
 from __future__ import annotations
 
+from enum import Enum
 from math import ceil, floor, prod
+from typing import ClassVar
 
 from finn.kernels.artifacts.abi import (
     Clock,
@@ -53,12 +64,13 @@ from finn.kernels.physical.axi_stream import AxiStream, axi_stream
 from finn.kernels.physical.contract import STREAM_CONTRACT, StreamContract
 from finn.kernels.physical.forms import (
     Loop,
-    Step,
     Traversal,
-    beat_walk,
+    Walk,
+    axis_strides,
+    axis_walk,
     canonical_loops,
     split_walk,
-    walk_axis,
+    walk_loops,
 )
 from finn.kernels.streams import (
     MODULE,
@@ -82,29 +94,47 @@ from finn.core.space import (
     view,
 )
 
+
+class Contraction(Enum):
+    """How activations meet the PE lanes: shared by all, or one channel per lane."""
+
+    DENSE = "dense"
+    PER_CHANNEL = "per_channel"
+
+
 _DSP_VERSION = {DspBlock.DSP48E1: 1, DspBlock.DSP48E2: 2, DspBlock.DSP58: 3}
 # FINN's DSP58 chain timing model (rtl/matrixvectoractivation_rtl.py).
 _FIRST_DSP_NS, _NEXT_DSP_NS = 0.741, 0.605
 
+# The index of each operand axis, outer first: activations, weights, results.
+_LABELS = {
+    Contraction.DENSE: (("r", "k"), ("n", "k"), ("r", "n")),
+    Contraction.PER_CHANNEL: (("r", "k", "c"), ("c", "k"), ("r", "c")),
+}
+_REDUCED = "k"
+
 
 class DotpAxiKernel(Kernel):
-    """Physical dot-product space and its assessed module-building view.
+    """The ``dotp_axi`` space shared by its core kernels; it places no core itself.
 
     ``target_period_ns`` is the clock period the module must meet. It sets
     SEGMENTLEN, the DSP58 chain length between pipeline registers, by FINN's
     timing model: about 0.741 ns through the first DSP and 0.605 ns through each
-    further one, against half the period when compute is pumped. DSP48
-    implementations ignore SEGMENTLEN. Pumped compute requires a phase-aligned
-    2x clock. The caller owns framing and accumulation bounds.
+    further one, against half the period when compute is pumped. Only the INT8
+    core reads SEGMENTLEN. Pumped compute requires a phase-aligned 2x clock. The
+    caller owns framing and accumulation bounds.
     """
 
-    id = "exact_integer_dot_product_axi"
-    version = "2"
+    id = "finnlib.dotp_axi"
+    version = "1"
+    # FinnLib's CORE parameter: the name of the compute core module.
+    core: ClassVar[str] = ""
 
     pe: int = Param()
     simd: int = Param()
     target_dsp: DspBlock = Param()
     target_period_ns: float = Param()
+    contraction: Contraction = Param(default=Contraction.DENSE)
     compute_pumping: bool = Decision(values=(False, True))
 
     activation_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
@@ -118,7 +148,15 @@ class DotpAxiKernel(Kernel):
     activation_stream: Stream = Param(required=False)
     weights_stream: Stream = Param(required=False)
     result_stream: Stream = Param(required=False)
-    activation = axi_stream("s_axis_input", simd, Endpoint.TARGET, activation_type, last=True)
+
+    @derived
+    def activation_lanes(self) -> int:
+        """SIMD fields, times PE when each lane reads its own channel."""
+        return self.simd * (self.pe if self.contraction is Contraction.PER_CHANNEL else 1)
+
+    activation = axi_stream(
+        "s_axis_input", activation_lanes, Endpoint.TARGET, activation_type, last=True
+    )
     weights = axi_stream("s_axis_weights", pe * simd, Endpoint.TARGET, weights_type)
     result = axi_stream("m_axis_output", pe, Endpoint.INITIATOR, result_type)
 
@@ -146,30 +184,18 @@ class DotpAxiKernel(Kernel):
         return True
 
     @constraint
-    def input_types_supported(self) -> bool | Rejected:
+    def core_supported(self) -> bool | Rejected:
         # The scalars admit the encodings (integer family, signedness, two bits);
-        # these are the DSP's own bounds on them.
-        target = self.target_dsp
-        activation = self.activation_dtype
-        weight = self.weights_dtype
+        # these are the core's own bounds on them and on the contraction.
         try:
-            ordinary_integer_bounds(activation)
+            ordinary_integer_bounds(self.activation_dtype)
         except DatatypeError:
             return True  # not an integer: refused by the activation scalar
-        a_bits, b_bits, _ = dsp_widths(target)
-        activation_bits = qonnx_datatype_width(activation)
-        weight_bits = qonnx_datatype_width(weight)
-        unsigned = not activation.signed()
-        if activation_bits + unsigned > b_bits:
-            return reject(
-                "dotp-activation-width", "activation values must fit the signed DSP B input"
-            )
-        # dotp_axi selects its signed 9x8 INT8 path for this boundary case.
-        if target is DspBlock.DSP58 and unsigned and activation_bits == 9 and weight_bits <= 8:
-            return reject("dotp-activation-width", "the native INT8 path needs a ninth sign bit")
-        if weight_bits >= a_bits:
-            return reject("dotp-weight-width", "signed weights need room for a DSP sign guard")
-        return True
+        refused = self._core_refusal()
+        return True if refused is None else refused
+
+    def _core_refusal(self) -> Rejected | None:
+        return reject("dotp-core", "dotp_axi is placed through one of its core kernels")
 
     @constraint
     def accumulator_width_supported(self) -> bool | Rejected:
@@ -210,40 +236,37 @@ class DotpAxiKernel(Kernel):
         target_supported,
         geometry_supported,
         stream_widths_supported,
-        input_types_supported,
+        core_supported,
         accumulator_width_supported,
         pumping_supported,
     )
 
+    def _narrow_weights(self) -> bool:
+        return False
+
     @derived(semantics=default_semantics(ModuleBuildRequirements))
     def codegen(self) -> ModuleBuildRequirements:
         # Geometry and widths are the support group's; build_requirements requires it.
-        pe = self.pe
-        simd = self.simd
         activation = self.activation.stream
         weights = self.weights.stream
         result = self.result.stream
-        target_dsp = self.target_dsp
-        segment_length = self.segment_length
         compute_pumping = self.compute_pumping
-        parameters = tuple(
-            sorted(
-                {
-                    "PE": pe,
-                    "SIMD": simd,
-                    "ACTIVATION_WIDTH": activation.element_bits,
-                    "WEIGHT_WIDTH": weights.element_bits,
-                    "ACCU_WIDTH": result.element_bits,
-                    "SIGNED_ACTIVATIONS": int(activation.dtype.signed()),
-                    "NARROW_WEIGHTS": 0,
-                    "PUMPED_COMPUTE": int(compute_pumping),
-                    "SEGMENTLEN": segment_length,
-                    "VERSION": _DSP_VERSION[target_dsp],
-                    "ACTIVATION_BROADCASTING": 1,
-                    "FORCE_BEHAVIORAL": 0,
-                }.items()
-            )
-        )
+        settings: dict[str, int | str] = {
+            "PE": self.pe,
+            "SIMD": self.simd,
+            "ACTIVATION_WIDTH": activation.element_bits,
+            "WEIGHT_WIDTH": weights.element_bits,
+            "ACCU_WIDTH": result.element_bits,
+            "SIGNED_ACTIVATIONS": int(activation.dtype.signed()),
+            "NARROW_WEIGHTS": int(self._narrow_weights()),
+            "PUMPED_COMPUTE": int(compute_pumping),
+            "SEGMENTLEN": self.segment_length,
+            "VERSION": _DSP_VERSION[self.target_dsp],
+            "ACTIVATION_BROADCASTING": int(self.contraction is Contraction.DENSE),
+            "FORCE_BEHAVIORAL": 0,
+            "CORE": f'"{self.core}"',
+        }
+        parameters = tuple(sorted(settings.items()))
         abi = ModuleABIRequirements(
             FixedModuleName("dotp_axi"),
             (
@@ -272,34 +295,12 @@ class DotpAxiKernel(Kernel):
             tuple((name, str(value)) for name, value in parameters),
             (ClockAlignment("ap_clk", "ap_clk2x"),) if compute_pumping else (),
         )
-        sources = tuple(
-            CopiedSource(root, path, provides=(symbol,), requires=requires)
-            for root, path, symbol, requires in (
-                ("finnlib", "rtl/arith/add_multi_pkg.sv", "package:add_multi_pkg", ()),
-                (
-                    "finnlib",
-                    "rtl/arith/add_multi.sv",
-                    "module:add_multi",
-                    ("package:add_multi_pkg",),
-                ),
-                ("finnlib", "rtl/linalg/dotp_8sx9_dsp58.sv", "module:dotp_8sx9_dsp58", ()),
-                (
-                    "finnlib",
-                    "rtl/linalg/dotp.sv",
-                    "module:dotp",
-                    ("package:add_multi_pkg", "module:add_multi"),
-                ),
-                (
-                    "finnlib",
-                    "rtl/linalg/dotp_axi.sv",
-                    "module:dotp_axi",
-                    ("module:dotp", "module:dotp_8sx9_dsp58"),
-                ),
-            )
-        )
         return ModuleBuildRequirements(
-            DotpAxiKernel.id, DotpAxiKernel.version, parameters, abi, sources
+            type(self).id, type(self).version, parameters, abi, self._sources()
         )
+
+    def _sources(self) -> tuple[CopiedSource, ...]:
+        return ()
 
     build_requirements = View(codegen, requires=(support,))
 
@@ -324,21 +325,65 @@ class DotpAxiKernel(Kernel):
             markers = {transport.markers[0].signal: spec.markers[0]}
         return StreamContract(transport, spec.element, spec.form, spec.repetition, markers)
 
-    # What dotp reads. Activation beats carry SIMD consecutive columns of a
-    # (rows, K) operand; weight beats carry PE rows of those same K columns, SIMD
-    # fastest; result beats carry PE consecutive columns of a (rows, N) result.
-    # Beat by beat the weight columns are the activation columns; each frame
-    # (the activation marker period) stays within one activation row and one
-    # group of weight rows, and produces one result beat whose row is the
-    # activation row and whose columns are those weight rows.
+    # What dotp reads, as a relation between labelled operand axes (_LABELS):
+    # activations X, weights W and results Y, with k reduced. Each port's lanes
+    # are the loops dotp reads. Beat by beat, activation and weight walks agree
+    # on every index they share. Each frame (the activation marker period) moves
+    # only along k, and produces one result beat: frame by frame, each result
+    # index follows the operand that carries it.
+
+    @derived
+    def lane_reads(self) -> tuple[tuple[tuple[str, int], ...], ...]:
+        """(index, extent) of each operand's lane loops, outer first."""
+        pe, simd = self.pe, self.simd
+        if self.contraction is Contraction.PER_CHANNEL:
+            return ((("k", simd), ("c", pe)), (("c", pe), ("k", simd)), (("c", pe),))
+        return ((("k", simd),), (("n", pe), ("k", simd)), (("n", pe),))
+
+    def _operand(self, role: int, spec: StreamSpec, name: str) -> Rejected | None:
+        """Refuse a stream of the wrong rank, or whose beats do not carry the fields dotp reads."""
+        labels = _LABELS[self.contraction][role]
+        form = spec.form
+        if len(form.shape) != len(labels):
+            return reject(
+                "dotp-stream-form",
+                f"the {name} stream must be an operand over ({', '.join(labels)})",
+            )
+        strides = axis_strides(form.shape)
+        reads = self.lane_reads[role]
+        required = tuple(Loop(extent, strides[labels.index(index)]) for index, extent in reads)
+        text = " of ".join(f"{extent} {index}" for index, extent in reads)
+        if form.lanes != prod(extent for _, extent in reads):
+            return reject(
+                "dotp-stream-lanes",
+                f"the {name} stream carries {form.lanes} lanes; dotp reads {text}",
+            )
+        if form.lane_loops != canonical_loops(required):
+            return reject("dotp-stream-form", f"the {name} stream's lanes are not {text}")
+        return None
+
+    def _frames(self, role: int, form: Traversal) -> Walk | None:
+        """The walk of ``form``'s frames, when each frame moves only along k."""
+        markers = self.activation_stream.spec.markers
+        labels = _LABELS[self.contraction][role]
+        walk = axis_walk(form)
+        framed = None if walk is None else split_walk(walk, markers[0].period)
+        if framed is None or any(
+            step[axis]
+            for _, step in framed[1]
+            for axis, label in enumerate(labels)
+            if label != _REDUCED
+        ):
+            return None
+        return framed[0]
 
     @view(semantics=STREAM_CONTRACT)
     def activation_port(self) -> StreamContract | Rejected:
-        spec, simd = self.activation_stream.spec, self.simd
-        refused = _fields(spec.form, (Loop(simd, 1),), "activation", f"SIMD={simd}")
+        spec = self.activation_stream.spec
+        refused = self._operand(0, spec, "activation")
         if refused is not None:
             return refused
-        if len(spec.markers) == 1 and _frames(spec, spec.form) is None:
+        if len(spec.markers) == 1 and self._frames(0, spec.form) is None:
             return reject(
                 "dotp-stream-form", "a reduction frame must stay within one activation row"
             )
@@ -347,21 +392,32 @@ class DotpAxiKernel(Kernel):
     @view(semantics=STREAM_CONTRACT)
     def weights_port(self) -> StreamContract | Rejected:
         weights, activation = self.weights_stream.spec, self.activation_stream.spec
-        pe, simd = self.pe, self.simd
-        width = activation.form.shape[-1]
-        if len(weights.form.shape) != 2 or weights.form.shape[1] != width:
-            return reject(
-                "dotp-stream-form",
-                f"weights must be a matrix over the activation's {width} columns",
-            )
-        required = (Loop(pe, width), Loop(simd, 1))
-        refused = _fields(weights.form, required, "weights", f"PE={pe} rows of SIMD={simd}")
+        refused = self._operand(1, weights, "weights")
         if refused is not None:
             return refused
-        mine, theirs = beat_walk(weights.form, width), beat_walk(activation.form, width)
-        if mine is None or theirs is None or walk_axis(mine, 2) != walk_axis(theirs, 2):
+        labels = _LABELS[self.contraction]
+        if len(activation.form.shape) != len(labels[0]):
+            return self._port(self.weights.stream, self.weights_stream)  # the activation port's
+        shared = [index for index in labels[1] if index in labels[0]]
+        extents = {index: activation.form.shape[labels[0].index(index)] for index in shared}
+        if any(weights.form.shape[labels[1].index(index)] != extents[index] for index in shared):
+            return reject(
+                "dotp-stream-form",
+                "weights must span the activation's "
+                + " and ".join(f"{extents[index]} {index}" for index in shared),
+            )
+        mine, theirs = axis_walk(weights.form), axis_walk(activation.form)
+        if (
+            mine is None
+            or theirs is None
+            or any(
+                walk_loops(mine, labels[1].index(index))
+                != walk_loops(theirs, labels[0].index(index))
+                for index in shared
+            )
+        ):
             return reject("dotp-stream-form", "weight columns do not follow the activation columns")
-        if len(activation.markers) == 1 and _frames(activation, weights.form) is None:
+        if len(activation.markers) == 1 and self._frames(1, weights.form) is None:
             return reject(
                 "dotp-stream-form", "a reduction frame must read one group of weight rows"
             )
@@ -371,31 +427,38 @@ class DotpAxiKernel(Kernel):
     def result_port(self) -> StreamContract | Rejected:
         result = self.result_stream.spec
         weights, activation = self.weights_stream.spec, self.activation_stream.spec
-        pe = self.pe
-        refused = _fields(result.form, (Loop(pe, 1),), "result", f"PE={pe}")
+        refused = self._operand(2, result, "result")
         if refused is not None:
             return refused
-        rows = weights.form.shape[0]
-        if result.form.shape[-1] != rows:
-            return reject("dotp-stream-form", f"results must have the weights' {rows} columns")
-        mine = beat_walk(result.form, rows)
-        if len(activation.markers) == 1:
-            # Frames the other ports refuse are theirs to report.
-            activation_frames = _frames(activation, activation.form)
-            weight_frames = _frames(activation, weights.form)
-            if (
-                activation_frames is not None
-                and weight_frames is not None
-                and (
-                    mine is None
-                    or walk_axis(activation_frames, 1) != walk_axis(mine, 1)
-                    or walk_axis(weight_frames, 1) != walk_axis(mine, 2)
-                )
-            ):
+        labels = _LABELS[self.contraction]
+        operands = (activation.form, weights.form)
+        if any(len(form.shape) != len(labels[role]) for role, form in enumerate(operands)):
+            return self._port(self.result.stream, self.result_stream)  # the other ports'
+        # Each result index follows the operand carrying it: the rows the
+        # activations, every other index the weights.
+        carriers = tuple((0 if index not in labels[1] else 1, index) for index in labels[2])
+        for axis, (role, index) in enumerate(carriers):
+            extent = operands[role].shape[labels[role].index(index)]
+            if result.form.shape[axis] != extent:
                 return reject(
                     "dotp-stream-form",
-                    "each result beat must hold its frame's activation row and weight rows",
+                    f"results must have the {extent} {index} of the "
+                    + ("activations" if role == 0 else "weights"),
                 )
+        if len(activation.markers) == 1:
+            frames = (self._frames(0, operands[0]), self._frames(1, operands[1]))
+            mine = axis_walk(result.form)
+            # Frames the other ports refuse are theirs to report.
+            if frames[0] is not None and frames[1] is not None:
+                walks = (frames[0], frames[1])
+                if mine is None or any(
+                    walk_loops(mine, axis) != walk_loops(walks[role], labels[role].index(index))
+                    for axis, (role, index) in enumerate(carriers)
+                ):
+                    return reject(
+                        "dotp-stream-form",
+                        "each result beat must hold its frame's activation row and weight rows",
+                    )
         return self._port(self.result.stream, self.result_stream)
 
     @view(semantics=TIEOFFS_SEMANTICS)
@@ -414,25 +477,97 @@ class DotpAxiKernel(Kernel):
     }
 
 
-def _frames(activation: StreamSpec, form: Traversal) -> tuple[Step, ...] | None:
-    """The walk of ``form``'s frames, each frame one row: the activation marker period."""
-    walk = beat_walk(form, form.shape[-1])
-    framed = None if walk is None else split_walk(walk, activation.markers[0].period)
-    if framed is None or any(row for _, row, _ in framed[1]):
+_ADD_MULTI = (
+    CopiedSource("finnlib", "rtl/arith/add_multi_pkg.sv", provides=("package:add_multi_pkg",)),
+    CopiedSource(
+        "finnlib",
+        "rtl/arith/add_multi.sv",
+        provides=("module:add_multi",),
+        requires=("package:add_multi_pkg",),
+    ),
+)
+
+
+def _dotp_axi(core: str) -> CopiedSource:
+    return CopiedSource(
+        "finnlib", "rtl/linalg/dotp_axi.sv", provides=("module:dotp_axi",), requires=(core,)
+    )
+
+
+class PackedDotpKernel(DotpAxiKernel):
+    """FinnLib ``dotp``: activation and weight lanes packed into DSP48E1, DSP48E2 or DSP58.
+
+    Activations are broadcast (``DENSE`` only). ``narrow_weights`` promises that
+    no weight is the most negative value of its type, which packs more lanes
+    per DSP; the caller must keep that promise.
+    """
+
+    id = "finnlib.dotp_axi.dotp"
+    version = "1"
+    core = "dotp"
+    narrow_weights: bool = Param(default=False)
+
+    def _core_refusal(self) -> Rejected | None:
+        if self.contraction is not Contraction.DENSE:
+            return reject(
+                "dotp-contraction", "the packed core broadcasts activations to every PE lane"
+            )
+        a_bits, b_bits, _ = dsp_widths(self.target_dsp)
+        unsigned = not self.activation_dtype.signed()
+        if qonnx_datatype_width(self.activation_dtype) + unsigned > b_bits:
+            return reject(
+                "dotp-activation-width", "activation values must fit the signed DSP B input"
+            )
+        if qonnx_datatype_width(self.weights_dtype) >= a_bits:
+            return reject("dotp-weight-width", "signed weights need room for a DSP sign guard")
         return None
-    return framed[0]
 
+    def _narrow_weights(self) -> bool:
+        return self.narrow_weights
 
-def _fields(form: Traversal, required: tuple[Loop, ...], role: str, reads: str) -> Rejected | None:
-    """Refuse a stream whose beats do not carry the fields dotp reads."""
-    lanes = prod(loop.extent for loop in required)
-    if form.lanes != lanes:
-        return reject(
-            "dotp-stream-lanes", f"the {role} stream carries {form.lanes} lanes; dotp reads {reads}"
+    def _sources(self) -> tuple[CopiedSource, ...]:
+        return (
+            *_ADD_MULTI,
+            CopiedSource(
+                "finnlib",
+                "rtl/linalg/dotp.sv",
+                provides=("module:dotp",),
+                requires=("package:add_multi_pkg", "module:add_multi"),
+            ),
+            _dotp_axi("module:dotp"),
         )
-    if form.lane_loops != canonical_loops(required):
-        return reject("dotp-stream-form", f"the {role} stream's lanes are not {reads}")
-    return None
 
 
-__all__ = ["DotpAxiKernel"]
+class Int8Dsp58DotpKernel(DotpAxiKernel):
+    """FinnLib ``dotp_8sx9_dsp58``: three 9x8 signed products per DSP58 in INT8 mode.
+
+    It takes signed weights of at most 8 bits and activations that fit 9 signed
+    bits, broadcast (``DENSE``) or one channel per lane (``PER_CHANNEL``).
+    """
+
+    id = "finnlib.dotp_axi.dotp_8sx9_dsp58"
+    version = "1"
+    core = "dotp_8sx9_dsp58"
+
+    def _core_refusal(self) -> Rejected | None:
+        if self.target_dsp is not DspBlock.DSP58:
+            return reject("dotp-target", "the INT8 core is a DSP58 mode")
+        unsigned = not self.activation_dtype.signed()
+        if qonnx_datatype_width(self.activation_dtype) + unsigned > 9:
+            return reject(
+                "dotp-activation-width", "activation values must fit the 9-bit signed INT8 lanes"
+            )
+        if qonnx_datatype_width(self.weights_dtype) > 8:
+            return reject("dotp-weight-width", "weights must fit the 8-bit INT8 lanes")
+        return None
+
+    def _sources(self) -> tuple[CopiedSource, ...]:
+        return (
+            CopiedSource(
+                "finnlib", "rtl/linalg/dotp_8sx9_dsp58.sv", provides=("module:dotp_8sx9_dsp58",)
+            ),
+            _dotp_axi("module:dotp_8sx9_dsp58"),
+        )
+
+
+__all__ = ["Contraction", "DotpAxiKernel", "Int8Dsp58DotpKernel", "PackedDotpKernel"]

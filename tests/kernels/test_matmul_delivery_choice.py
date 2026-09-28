@@ -79,11 +79,10 @@ def configured(point, case, *, style=None, pe=2, simd=2):
     changes = [
         point.field(selector(point)).change(case),
         point.field(transport(point)).change("direct"),
-        point.compute.field(DotpAxiKernel.compute_pumping).change(False),
     ]
     if style is not None:
         changes.append(point.field(rom_style(point)).change(style))
-    return point.with_choices(*changes, pe=pe, simd=simd)
+    return point.with_choices(*changes, pe=pe, simd=simd, compute="packed", compute_pumping=False)
 
 
 def delivery(point):
@@ -103,8 +102,8 @@ def test_families_share_typed_exports_but_keep_their_own_ports_and_components():
     external = configured(base(), "external")
     cyclic = configured(base(weights=WEIGHTS), "cyclic", style="block")
     for point, ports, instances in (
-        (external, {"in0_V", "in1_V", "out0_V"}, ["u_replay", "u_compute"]),
-        (cyclic, {"in0_V", "out0_V"}, ["u_replay", "u_compute", CYCLIC_INSTANCE]),
+        (external, {"in0_V", "in1_V", "out0_V"}, ["u_replay", "u_compute_packed"]),
+        (cyclic, {"in0_V", "out0_V"}, ["u_replay", "u_compute_packed", CYCLIC_INSTANCE]),
     ):
         built = point.structure
         requirements = point.build_requirements
@@ -118,12 +117,16 @@ def test_families_share_typed_exports_but_keep_their_own_ports_and_components():
     assert isinstance(cyclic.delivery, CyclicDelivery) and cyclic.delivered == "cyclic"
     assert cyclic.delivery.image == (0x22C, 0x6BE, 0xDD3, 0x941)
     # Instance names come from the located node names: the candidate is delivery.cyclic.
-    assert [item.node for item in cyclic.modules] == ["replay", "compute", "delivery.cyclic"]
+    assert [item.node for item in cyclic.modules] == [
+        "replay",
+        "compute.packed",
+        "delivery.cyclic",
+    ]
     assert [(item.node, item.value.source_owner) for item in cyclic.streams][2] == (
         "weight_stream",
         "delivery.cyclic",
     )
-    assert [item.node for item in external.modules] == ["replay", "compute"]
+    assert [item.node for item in external.modules] == ["replay", "compute.packed"]
     rom = dict(cyclic.structure.structure.instances[2].requirements.parameters)
     assert rom["ROM_STYLE"] == '"block"'
     assert external.build_requirements.implementation_id != (
@@ -172,7 +175,8 @@ def test_case_local_choices_are_owned_by_their_family():
     assert set(records) == {
         "pe",
         "simd",
-        "compute.compute_pumping",
+        "compute",
+        "compute_pumping",
         "delivery",
         "delivery.cyclic.rom_style",
         "weight_stream.transport",
@@ -184,9 +188,8 @@ def test_case_local_choices_are_owned_by_their_family():
     local = records["delivery.cyclic.rom_style"]
     # The choice belongs to the reusable delivery kernel placed by the family.
     assert local.scope == "delivery.cyclic" and not local.selector
-    cases = {
-        case.name: (case.scope, case.space_type) for case in inspection.choices(base())[0].cases
-    }
+    (choice,) = [item for item in inspection.choices(base()) if item.key == "delivery"]
+    cases = {case.name: (case.scope, case.space_type) for case in choice.cases}
     # External delivery places nothing (a None candidate, formerly the empty External
     # family); cyclic places the reusable delivery kernel.
     assert cases == {
@@ -214,7 +217,7 @@ def test_missing_cyclic_weights_leave_only_the_selected_family_unresolved():
     waiting = {
         key
         for key, result in assessment.constraints.results.items()
-        if not isinstance(result, Available)
+        if not isinstance(result, (Available, Inapplicable))
     }
     assert waiting == {"delivery.cyclic.build_requirements"}
     # The compute product and folding do not wait for the family's optional fact.
@@ -241,8 +244,7 @@ def test_cyclic_family_needs_its_own_rom_choice_and_refuses_bad_weights():
 
 
 def test_known_refusals_remain_visible_while_the_family_is_unselected():
-    point = base(weights=WEIGHTS).with_choices(pe=4, simd=2)
-    point = point.compute.with_choices(compute_pumping=True).root
+    point = base(weights=WEIGHTS).with_choices(pe=4, simd=2, compute="packed", compute_pumping=True)
     assessment = point.inspect(MatMulKernel.structure)
     assert isinstance(assessment.accepted_result, Unresolved)
     compute = point.compute.inspect(DotpAxiKernel.build_requirements)
@@ -281,9 +283,8 @@ def schema(point):
             codec_for(MatMulKernel.cyclic.rom_style, STRING),
             codec_for(MatMulKernel.pe, INTEGER),
             codec_for(MatMulKernel.simd, INTEGER),
-            codec_for(
-                inspection.decision_handle(point.compute, DotpAxiKernel.compute_pumping), BOOLEAN
-            ),
+            codec_for(MatMulKernel.compute, STRING),
+            codec_for(MatMulKernel.compute_pumping, BOOLEAN),
         ),
     )
 
@@ -292,7 +293,8 @@ def test_selector_and_case_choices_round_trip_through_an_empty_root():
     point = configured(base(weights=WEIGHTS), "cyclic", style="block")
     saved = selections.capture(point)
     assert saved.keys == (
-        "compute.compute_pumping",
+        "compute",
+        "compute_pumping",
         "delivery",
         "delivery.cyclic.rom_style",
         "pe",
@@ -337,7 +339,8 @@ def test_switching_families_is_atomic_and_requires_clearing_stale_case_choices()
     )
     assert delivery(switched) is WeightDelivery.EXTERNAL
     assert selections.capture(switched).keys == (
-        "compute.compute_pumping",
+        "compute",
+        "compute_pumping",
         "delivery",
         "pe",
         "simd",
@@ -441,7 +444,7 @@ def test_a_buffered_stream_places_a_fifo_between_its_producer_and_consumer():
         }
         producer = CYCLIC_INSTANCE if case == "cyclic" else None
         assert ("u_weight_stream_fifo", producer) in destinations
-        assert ("u_compute", "u_weight_stream_fifo") in destinations
+        assert ("u_compute_packed", "u_weight_stream_fifo") in destinations
         depth = dict(built.structure.instances[-1].requirements.parameters)["DEPTH"]
         assert depth == 32
 

@@ -71,7 +71,8 @@ def _offsets(loops: Sequence[Loop]) -> Iterator[int]:
             yield index * head.stride + offset
 
 
-def _axis_strides(shape: Sequence[int]) -> tuple[int, ...]:
+def axis_strides(shape: Sequence[int]) -> tuple[int, ...]:
+    """Row-major element strides of each axis, outer first."""
     return tuple(prod(shape[axis + 1 :]) for axis in range(len(shape)))
 
 
@@ -113,7 +114,7 @@ class Traversal:
         cls, shape: Sequence[int], beats: Sequence[AxisStep], lanes: Sequence[AxisStep]
     ) -> Traversal:
         """Build from (axis, extent, step) loops; axis None is a replay loop."""
-        strides = _axis_strides(tuple(shape))
+        strides = axis_strides(tuple(shape))
 
         def loops(steps: Sequence[AxisStep]) -> tuple[Loop, ...]:
             return tuple(
@@ -178,6 +179,22 @@ def tile(rows: int, cols: int, pe: int, simd: int) -> Traversal:
         (rows, cols),
         ((0, rows // pe, pe), (1, cols // simd, simd)),
         ((0, pe, 1), (1, simd, 1)),
+    )
+
+
+def channel_tile(rows: int, window: int, channels: int, pe: int, simd: int) -> Traversal:
+    """A (rows, window, channels) operand read PE channels by SIMD window positions a beat.
+
+    Beats walk rows, then channel folds, then window folds, so each window
+    reduction is a run of beats. Field s * PE + p is window position s of
+    channel p: channels fastest, FinnLib's per-channel dot-product order.
+    """
+    if channels % pe or window % simd:
+        raise ValueError("PE must divide the channels and SIMD the window")
+    return Traversal.over(
+        (rows, window, channels),
+        ((0, rows, 1), (2, channels // pe, pe), (1, window // simd, simd)),
+        ((1, simd, 1), (2, pe, 1)),
     )
 
 
@@ -339,63 +356,76 @@ def canonical_loops(loops: Sequence[Loop]) -> tuple[Loop, ...]:
     return _canonical(loops)
 
 
-Step = tuple[int, int, int]
-"""(extent, row step, column step) of one beat loop, outer first."""
+Walk = tuple[tuple[int, tuple[int, ...]], ...]
+"""Beat loops outer first, each as (extent, step along every operand axis)."""
 
 
-def beat_walk(form: Traversal, width: int) -> tuple[Step, ...] | None:
-    """Where each beat starts, reading the operand as rows of ``width`` elements.
+def axis_walk(form: Traversal) -> Walk | None:
+    """Where each beat starts, as one step per operand axis for every beat loop.
 
-    A loop stepping whole rows moves the row, a loop inside a row moves the
-    column, and a loop that runs on across rows is split where it wraps. None
-    when a loop crosses rows any other way, so no row/column walk describes it.
+    A loop whose stride lies within one axis steps that axis; one that runs on
+    into the next outer axis is split where it wraps, and a replay loop steps
+    nothing. None when a loop crosses axes any other way, so no per-axis walk
+    describes it, or when an axis's steps would carry into the next outer one.
     """
-    _positive(width, "width")
-    steps: list[Step] = []
+    strides = axis_strides(form.shape)
+    steps: list[tuple[int, tuple[int, ...]]] = []
     for loop in form.beat_loops:
-        extent, stride = loop.extent, loop.stride
-        if stride % width == 0:
-            steps.append((extent, stride // width, 0))
-        elif width % stride == 0 and extent * stride <= width:
-            steps.append((extent, 0, stride))
-        elif width % stride == 0 and (extent * stride) % width == 0:
-            per_row = width // stride
-            steps += [(extent // per_row, 1, 0), (per_row, 0, stride)]
-        else:
+        pieces = _axis_steps(loop, form.shape, strides)
+        if pieces is None:
             return None
-    # The column steps together must stay inside one row, or a beat's column
-    # would carry into its row.
-    if sum((extent - 1) * column for extent, _, column in steps) >= width:
-        return None
+        steps += pieces
+    for axis, extent in enumerate(form.shape):
+        if sum((count - 1) * step[axis] for count, step in steps) >= extent:
+            return None
     return tuple(steps)
 
 
-def walk_axis(steps: Sequence[Step], axis: int) -> tuple[Loop, ...]:
-    """The canonical walk of one component: 1 for rows, 2 for columns."""
-    return _canonical(tuple(Loop(step[0], step[axis]) for step in steps))
+def _axis_steps(
+    loop: Loop, shape: tuple[int, ...], strides: tuple[int, ...]
+) -> list[tuple[int, tuple[int, ...]]] | None:
+    rank = len(shape)
+    if not loop.stride:
+        return [(loop.extent, (0,) * rank)]
+    axis = next(axis for axis in range(rank) if loop.stride >= strides[axis])
+    if loop.stride % strides[axis]:
+        return None
+    step = loop.stride // strides[axis]
+    unit = tuple(step if index == axis else 0 for index in range(rank))
+    if (loop.extent - 1) * step < shape[axis]:
+        return [(loop.extent, unit)]
+    # The loop runs on into the next outer axis: split it where it wraps.
+    if not axis or shape[axis] % step or loop.extent % (shape[axis] // step):
+        return None
+    inner = shape[axis] // step
+    outer = _axis_steps(Loop(loop.extent // inner, strides[axis - 1]), shape, strides)
+    return None if outer is None else [*outer, (inner, unit)]
 
 
-def split_walk(
-    steps: Sequence[Step], inner_beats: int
-) -> tuple[tuple[Step, ...], tuple[Step, ...]] | None:
+def walk_loops(walk: Walk, axis: int) -> tuple[Loop, ...]:
+    """The canonical walk of one operand axis."""
+    return _canonical(tuple(Loop(extent, step[axis]) for extent, step in walk))
+
+
+def split_walk(walk: Walk, inner_beats: int) -> tuple[Walk, Walk] | None:
     """Split a walk into its groups of ``inner_beats`` beats and the walk within one."""
     _positive(inner_beats, "inner_beats")
-    outer, inner = list(steps), list[Step]()
+    outer, inner = list(walk), list[tuple[int, tuple[int, ...]]]()
     remaining = inner_beats
     while remaining > 1:
         if not outer:
             return None
-        extent, row, column = outer.pop()
+        extent, step = outer.pop()
         if extent <= remaining:
             if remaining % extent:
                 return None
-            inner.insert(0, (extent, row, column))
+            inner.insert(0, (extent, step))
             remaining //= extent
             continue
         if extent % remaining:
             return None
-        outer.append((extent // remaining, row * remaining, column * remaining))
-        inner.insert(0, (remaining, row, column))
+        outer.append((extent // remaining, tuple(value * remaining for value in step)))
+        inner.insert(0, (remaining, step))
         remaining = 1
     return tuple(outer), tuple(inner)
 
@@ -475,16 +505,18 @@ __all__ = [
     "Position",
     "Reorder",
     "Repetition",
-    "Step",
     "TRAVERSAL",
     "Traversal",
-    "beat_walk",
+    "Walk",
+    "axis_strides",
+    "axis_walk",
     "canonical_loops",
+    "channel_tile",
     "classify",
     "is_repetition",
     "pack",
     "split_walk",
     "tile",
     "vector_major",
-    "walk_axis",
+    "walk_loops",
 ]

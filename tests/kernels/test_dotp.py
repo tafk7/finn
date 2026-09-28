@@ -1,7 +1,11 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Physical dotp accepts caller-owned geometry and accumulation requirements."""
+"""Physical dotp accepts caller-owned geometry and accumulation requirements.
+
+Each compute core is its own kernel over the shared ``DotpAxiKernel``
+declaration; most cases exercise the packed core, which every DSP target has.
+"""
 
 from pathlib import Path
 
@@ -25,7 +29,12 @@ from finn.kernels.artifacts.build import materialize_module_sources, prepare_mod
 from finn.kernels.artifacts.store import ArtifactStore
 import finn.kernels.dotp as dotp_axi
 from kernels import helpers
-from finn.kernels.dotp import DotpAxiKernel
+from finn.kernels.dotp import (
+    Contraction,
+    DotpAxiKernel,
+    Int8Dsp58DotpKernel,
+    PackedDotpKernel,
+)
 from finn.kernels.target import DspBlock
 from finn.kernels.base import Kernel
 from finn.kernels.physical.axi_stream import AxiStreamPort
@@ -48,15 +57,15 @@ def parameters(**updates):
     return result
 
 
-def point_for(facts, **choices):
+def point_for(facts, family=PackedDotpKernel, **choices):
     """Configure a dotp node from its formals, then commit choices by stable key."""
-    return helpers.point_for(DotpAxiKernel, facts, **choices)
+    return helpers.point_for(family, facts, **choices)
 
 
-def kernel(**updates):
+def kernel(family=PackedDotpKernel, **updates):
     facts = parameters(**updates)
     pumping = facts.pop("compute_pumping")
-    return point_for(facts, compute_pumping=pumping)
+    return point_for(facts, family, compute_pumping=pumping)
 
 
 class _PartialDotp(Space):
@@ -70,7 +79,7 @@ class _PartialDotp(Space):
     target_dsp: DspBlock = Param(required=False)
     target_period_ns: float = Param(required=False)
     # Placed outside any stream: its optional stream formals stay unsupplied.
-    component = DotpAxiKernel(
+    component = PackedDotpKernel(
         pe=pe,
         simd=simd,
         target_dsp=target_dsp,
@@ -87,6 +96,7 @@ def partial(facts):
 
 def test_component_groups_its_interfaces_and_keeps_one_root_physical_output():
     assert DotpAxiKernel.__bases__ == (Kernel,)
+    assert PackedDotpKernel.__bases__ == Int8Dsp58DotpKernel.__bases__ == (DotpAxiKernel,)
     assert not hasattr(dotp_axi, "dotp_axi_requirements")
     point = kernel()
     assert tuple(item.key for item in point.capabilities() if item.scope == "") == (
@@ -110,6 +120,8 @@ def test_component_groups_its_interfaces_and_keeps_one_root_physical_output():
         "result_dtype",
         "target_dsp",
         "target_period_ns",
+        "contraction",
+        "narrow_weights",
     }
     # Optional reference inputs, supplied with Stream nodes by a parent that places
     # dotp between streams; alone, each is an unsupplied presence.
@@ -199,10 +211,6 @@ def test_dsp48_carries_the_segment_length_the_rtl_ignores():
             {"activation_dtype": DataType["UINT18"], "target_dsp": DspBlock.DSP48E2},
             "dotp-activation-width",
         ),
-        (
-            {"activation_dtype": DataType["UINT9"], "weights_dtype": DataType["INT8"]},
-            "dotp-activation-width",
-        ),
         ({"weights_dtype": DataType["INT27"]}, "dotp-weight-width"),
         ({"result_dtype": DataType["UINT9"]}, "dtype-family"),
         ({"result_dtype": DataType["FLOAT32"]}, "dtype-family"),
@@ -273,7 +281,7 @@ def test_physical_constraints_can_report_before_other_inputs_resolve():
             weights_dtype=DataType["INT27"],
         ),
     )
-    refusal = point.inspect(DotpAxiKernel.input_types_supported).result
+    refusal = point.inspect(DotpAxiKernel.core_supported).result
     assert isinstance(refusal, Rejected)
     assert {finding.code for finding in refusal.findings} == {"dotp-weight-width"}
 
@@ -352,7 +360,6 @@ def test_sources_materialize_from_the_assessed_requirements(tmp_path):
     upstream = {
         "rtl/arith/add_multi_pkg.sv",
         "rtl/arith/add_multi.sv",
-        "rtl/linalg/dotp_8sx9_dsp58.sv",
         "rtl/linalg/dotp.sv",
         "rtl/linalg/dotp_axi.sv",
     }
@@ -366,7 +373,13 @@ def test_sources_materialize_from_the_assessed_requirements(tmp_path):
     )
     assert wrapper.root == "finnlib"
     assert wrapper.provides == ("module:dotp_axi",)
-    assert wrapper.requires == ("module:dotp", "module:dotp_8sx9_dsp58")
+    assert wrapper.requires == ("module:dotp",)
+    int8 = kernel(Int8Dsp58DotpKernel).build_requirements
+    assert [source.path for source in int8.contributions] == [
+        "rtl/linalg/dotp_8sx9_dsp58.sv",
+        "rtl/linalg/dotp_axi.sv",
+    ]
+    assert int8.contributions[1].requires == ("module:dotp_8sx9_dsp58",)
 
 
 def test_subbyte_result_padding_has_no_zero_fill_promise():
@@ -384,3 +397,49 @@ def test_subbyte_result_padding_has_no_zero_fill_promise():
     field = point.result.payload.fields[0]
     mask = (1 << field.bit_width) - 1
     assert (0xFF >> field.bit_offset) & mask == (0x0F >> field.bit_offset) & mask
+
+
+def test_each_core_kernel_names_its_core_and_the_shared_base_places_none():
+    for family, core in ((PackedDotpKernel, "dotp"), (Int8Dsp58DotpKernel, "dotp_8sx9_dsp58")):
+        requirements = kernel(family).build_requirements
+        assert requirements.implementation_id == family.id
+        assert dict(requirements.parameters)["CORE"] == f'"{core}"'
+    refused = kernel(DotpAxiKernel).inspect(DotpAxiKernel.build_requirements).accepted_result
+    assert isinstance(refused, Rejected)
+    assert {finding.code for finding in refused.findings} == {"dotp-core"}
+
+
+@pytest.mark.parametrize(
+    "updates,code",
+    [
+        ({"target_dsp": DspBlock.DSP48E2}, "dotp-target"),
+        (
+            {"activation_dtype": DataType["UINT9"], "weights_dtype": DataType["INT8"]},
+            "dotp-activation-width",
+        ),
+        ({"activation_dtype": DataType["INT10"]}, "dotp-activation-width"),
+        ({"weights_dtype": DataType["INT9"]}, "dotp-weight-width"),
+    ],
+)
+def test_the_int8_core_takes_signed_nine_by_eight_products_on_dsp58_only(updates, code):
+    refused = kernel(Int8Dsp58DotpKernel, **updates).query(DotpAxiKernel.build_requirements)
+    assert isinstance(refused, Rejected)
+    assert code in {finding.code for finding in refused.findings}
+    for activation in ("INT9", "UINT8"):
+        accepted = kernel(
+            Int8Dsp58DotpKernel,
+            activation_dtype=DataType[activation],
+            weights_dtype=DataType["INT8"],
+            result_dtype=DataType["INT32"],
+        )
+        assert isinstance(accepted.query(DotpAxiKernel.build_requirements), Available)
+
+
+def test_per_channel_activations_carry_pe_channels_of_simd_and_only_int8_reads_them():
+    point = kernel(Int8Dsp58DotpKernel, contraction=Contraction.PER_CHANNEL, pe=3, simd=2)
+    rtl = dict(point.build_requirements.parameters)
+    assert rtl["ACTIVATION_BROADCASTING"] == 0
+    assert point.activation.lanes == 6 and point.weights.lanes == 6 and point.result.lanes == 3
+    refused = kernel(contraction=Contraction.PER_CHANNEL).query(DotpAxiKernel.build_requirements)
+    assert isinstance(refused, Rejected)
+    assert {finding.code for finding in refused.findings} == {"dotp-contraction"}

@@ -14,8 +14,8 @@ from finn.kernels.artifacts.build import prepare_module_build, render_module_sou
 from finn.kernels.artifacts.store import ArtifactStore
 from kernels.helpers import point_for
 from finn.kernels.matmul import MatMulKernel, WeightDelivery, exact_result_dtype, matmul_assembly
-from finn.kernels.dotp import DotpAxiKernel
-from finn.core.space import View, constraint, reject
+from finn.kernels.dotp import DotpAxiKernel, PackedDotpKernel
+from finn.core.space import Decision, View, constraint, reject
 from finn.kernels.target import DspBlock
 from finn.kernels.physical.structure import ConstantBits, PhysicalPin, PinSlice
 from finn.kernels.resources import resource_root, template_root
@@ -53,7 +53,10 @@ def test_external_construction_owns_replay_and_exact_precision():
     assert built.result_dtype == DataType["INT8"]
     assert (built.activation_beats, built.weight_beats, built.result_beats) == (6, 12, 6)
     assert built.initializer == ()
-    assert [item.instance_id for item in built.structure.instances] == ["u_replay", "u_compute"]
+    assert [item.instance_id for item in built.structure.instances] == [
+        "u_replay",
+        "u_compute_packed",
+    ]
     replay, dotp = (dict(item.requirements.parameters) for item in built.structure.instances)
     assert replay == {"LEN": 2, "REP": 2, "W": 6}
     assert dotp["ACCU_WIDTH"] == 8
@@ -64,7 +67,7 @@ def test_external_construction_owns_replay_and_exact_precision():
         "out0_V",
     }
     assert any(
-        wire.destination.pin == PhysicalPin("u_compute", "s_axis_input_tlast")
+        wire.destination.pin == PhysicalPin("u_compute_packed", "s_axis_input_tlast")
         and wire.source == PinSlice(PhysicalPin("u_replay", "olast"), 0, 1)
         for wire in built.structure.wires
     )
@@ -98,17 +101,17 @@ def test_input_padding_is_ignored_and_child_padding_is_zero():
         if isinstance(wire.source, ConstantBits)
     }
     assert zeros == {
-        PinSlice(PhysicalPin("u_compute", "s_axis_input_tdata"), 6, 2): ConstantBits(2, 0),
-        PinSlice(PhysicalPin("u_compute", "s_axis_weights_tdata"), 6, 2): ConstantBits(2, 0),
+        PinSlice(PhysicalPin("u_compute_packed", "s_axis_input_tdata"), 6, 2): ConstantBits(2, 0),
+        PinSlice(PhysicalPin("u_compute_packed", "s_axis_weights_tdata"), 6, 2): ConstantBits(2, 0),
         # Unpumped, no domain drives dotp's 2x clock input: it is tied low.
-        PinSlice(PhysicalPin("u_compute", "ap_clk2x"), 0, 1): ConstantBits(1, 0),
+        PinSlice(PhysicalPin("u_compute_packed", "ap_clk2x"), 0, 1): ConstantBits(1, 0),
     }
     # INT8 is exact for six INT3 products, so use width=2 to observe output padding.
     padded = assembly(reduction=2, outputs=3, pe=1)
     assert padded.result_dtype == DataType["INT7"]
     assert any(
         wire.destination == PinSlice(PhysicalPin(None, "out0_V_tdata"), 7, 1)
-        and wire.source == PinSlice(PhysicalPin("u_compute", "m_axis_output_tdata"), 7, 1)
+        and wire.source == PinSlice(PhysicalPin("u_compute_packed", "m_axis_output_tdata"), 7, 1)
         for wire in padded.structure.wires
     )
 
@@ -158,6 +161,7 @@ def test_space_selects_folding_and_constructs_without_a_logical_contract():
         FACTS,
         pe=2,
         delivery="external",
+        compute="packed",
         **{"weight_stream.transport": "direct"},
     )
     point = base.with_choices(simd=2)
@@ -165,7 +169,7 @@ def test_space_selects_folding_and_constructs_without_a_logical_contract():
         point.compute.inspect(DotpAxiKernel.build_requirements).accepted_result, Unresolved
     )
     assert isinstance(point.inspect(MatMulKernel.structure).accepted_result, Unresolved)
-    point = point.compute.with_choices(compute_pumping=False).root
+    point = point.with_choices(compute_pumping=False)
     assert point.result_type == DataType["INT8"]
     assert point.inspect(MatMulKernel.dimensions_supported).result == Available(True)
     assert point.compute.pe == point.pe
@@ -174,7 +178,7 @@ def test_space_selects_folding_and_constructs_without_a_logical_contract():
     assert point.folding.result_beats == 4
     assert point.structure.requirements == point.build_requirements
     assert not hasattr(MatMulKernel, "contract")
-    refused = base.with_choices(simd=1).compute.with_choices(compute_pumping=True).root
+    refused = base.with_choices(simd=1, compute_pumping=True)
     assert isinstance(
         refused.compute.inspect(DotpAxiKernel.build_requirements).accepted_result, Rejected
     )
@@ -214,7 +218,7 @@ def test_build_is_complete_and_initializer_changes_identity(tmp_path, delivery):
 
 
 def test_matmul_honors_the_child_physical_view_not_just_its_raw_module(monkeypatch):
-    class RestrictedDotp(DotpAxiKernel):
+    class RestrictedDotp(PackedDotpKernel):
         @constraint
         def view_only_rule(self) -> bool | Rejected:
             return reject(
@@ -222,22 +226,28 @@ def test_matmul_honors_the_child_physical_view_not_just_its_raw_module(monkeypat
             )
 
         build_requirements = View(
-            DotpAxiKernel.codegen, requires=(DotpAxiKernel.support, view_only_rule)
+            PackedDotpKernel.codegen, requires=(PackedDotpKernel.support, view_only_rule)
         )
 
     class RestrictedMatMul(MatMulKernel):
-        compute = RestrictedDotp(
-            activation_dtype=MatMulKernel.activation_dtype,
-            weights_dtype=MatMulKernel.weights_dtype,
-            result_dtype=MatMulKernel.result_type,
-            pe=MatMulKernel.pe,
-            simd=MatMulKernel.simd,
-            target_dsp=MatMulKernel.target_dsp,
-            target_period_ns=MatMulKernel.target_period_ns,
-            # References to MatMulKernel's stream nodes, which RestrictedMatMul inherits.
-            activation_stream=MatMulKernel.replayed,
-            weights_stream=MatMulKernel.weight_stream,
-            result_stream=MatMulKernel.results,
+        # A narrower compute Decision whose one candidate is the restricted core.
+        compute = Decision(
+            values={
+                "packed": RestrictedDotp(
+                    activation_dtype=MatMulKernel.activation_dtype,
+                    weights_dtype=MatMulKernel.weights_dtype,
+                    result_dtype=MatMulKernel.result_type,
+                    pe=MatMulKernel.pe,
+                    simd=MatMulKernel.simd,
+                    target_dsp=MatMulKernel.target_dsp,
+                    target_period_ns=MatMulKernel.target_period_ns,
+                    compute_pumping=MatMulKernel.compute_pumping,
+                    # References to MatMulKernel's stream nodes, which RestrictedMatMul inherits.
+                    activation_stream=MatMulKernel.replayed,
+                    weights_stream=MatMulKernel.weight_stream,
+                    result_stream=MatMulKernel.results,
+                )
+            }
         )
 
     point = point_for(
@@ -246,9 +256,10 @@ def test_matmul_honors_the_child_physical_view_not_just_its_raw_module(monkeypat
         pe=2,
         simd=2,
         delivery="external",
+        compute="packed",
+        compute_pumping=False,
         **{"weight_stream.transport": "direct"},
     )
-    point = point.compute.with_choices(compute_pumping=False).root
     assert isinstance(point.compute.query(DotpAxiKernel.codegen), Available)
     assert isinstance(
         point.compute.inspect(DotpAxiKernel.build_requirements).accepted_result, Rejected

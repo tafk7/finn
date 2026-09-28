@@ -70,8 +70,8 @@ class ExtractedModule:
 
     name: str
     ports: tuple[ObservedPort, ...]
-    parameters: tuple[tuple[str, int], ...]
-    local_parameters: tuple[tuple[str, int], ...]
+    parameters: tuple[tuple[str, int | str], ...]
+    local_parameters: tuple[tuple[str, int | str], ...]
 
 
 @dataclass(frozen=True)
@@ -94,8 +94,11 @@ class Declined:
 Extraction = Union[ExtractedModule, Declined]
 
 
-def _integer(value: pyslang.ConstantValue) -> int | None:
+def _constant(value: pyslang.ConstantValue) -> int | str | None:
+    """An integer or string parameter value; anything else is not established."""
     inner = value.value
+    if isinstance(inner, str):
+        return inner
     if not isinstance(inner, pyslang.SVInt) or inner.hasUnknown:
         return None
     return int(inner)
@@ -161,14 +164,16 @@ def extract(
             return Declined("unresolved port width", (f"{port.name}: {port.type}",))
         ports.append(ObservedPort(port.name, direction, width))
 
-    declared: list[tuple[str, int]] = []
-    local: list[tuple[str, int]] = []
+    declared: list[tuple[str, int | str]] = []
+    local: list[tuple[str, int | str]] = []
     for member in body:
         if type(member).__name__ != "ParameterSymbol":
             continue
-        value = _integer(member.value)
+        value = _constant(member.value)
         if value is None:
-            return Declined("non-integer parameter", (f"{member.name}: {member.value}",))
+            return Declined(
+                "neither an integer nor a string parameter", (f"{member.name}: {member.value}",)
+            )
         (local if member.isLocalParam else declared).append((member.name, value))
 
     supplied = {name for name, _ in parameters}

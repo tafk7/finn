@@ -25,7 +25,7 @@ from finn.kernels.artifacts.derivation import ProducerIdentity
 from finn.kernels.artifacts.store import ArtifactStore
 from finn.kernels.control import EXPORTED, ControlBus
 from finn.kernels.datatypes.scalar import ScalarEncoding
-from finn.kernels.dotp import DotpAxiKernel
+from finn.kernels.dotp import PackedDotpKernel
 from finn.kernels.physical.forms import Every, tile, vector_major
 from finn.kernels.physical.structure import ConstantBits, PinSlice
 from finn.kernels.physical.validation import abi_pins
@@ -66,7 +66,7 @@ class Activated(Space):
     results = Stream(spec=RESULTS)
     levels = Stream(spec=LEVELS, port="out0_V")
     config = ControlBus(port="s_axilite")
-    compute = DotpAxiKernel(
+    compute = PackedDotpKernel(
         activation_dtype=A,
         weights_dtype=W,
         result_dtype=R,

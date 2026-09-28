@@ -47,7 +47,7 @@ class RejectGraphDependencies(importlib.abc.MetaPathFinder):
 
 sys.meta_path.insert(0, RejectGraphDependencies())
 
-from finn.kernels import DotpAxiKernel, DspBlock, WeightDelivery, matmul_assembly
+from finn.kernels import DspBlock, PackedDotpKernel, WeightDelivery, matmul_assembly
 from finn.core.space import (
     Available, Decision, Param, Space, design_space, derived, divisors_of, view,
 )
@@ -94,7 +94,7 @@ assert contributions.CopiedSource is contribution_types.CopiedSource
 assert requirements.ModuleBuildRequirements.__module__ == "finn.kernels.artifacts.build"
 assert contribution_types.CopiedSource.__module__ == "finn.kernels.artifacts.contributions"
 
-dotp = design_space(DotpAxiKernel(
+dotp = design_space(PackedDotpKernel(
     activation_dtype=DataType["INT3"],
     weights_dtype=DataType["INT3"],
     result_dtype=DataType["INT8"],
@@ -108,7 +108,7 @@ assert dotp.activation.payload_bits == 6
 
 dotp_sources = {
     "rtl/arith/add_multi_pkg.sv", "rtl/arith/add_multi.sv",
-    "rtl/linalg/dotp_8sx9_dsp58.sv", "rtl/linalg/dotp.sv", "rtl/linalg/dotp_axi.sv",
+    "rtl/linalg/dotp.sv", "rtl/linalg/dotp_axi.sv",
 }
 store = ArtifactStore(Path(config["store"]))
 roots = {"kernels": resources, "finnlib": Path(config["finnlib"])}

@@ -3,9 +3,10 @@
 
 """Ports check the streams they sit on, and each refusal stays on its own stream.
 
-dotp reads SIMD activation lanes, PE x SIMD weight lanes and PE result lanes;
-beat by beat its weight columns follow the activation columns, and each frame
-yields one result beat holding the frame's activation row and weight rows. A
+dotp reads SIMD activation lanes (PE x SIMD, channel fastest, per channel),
+PE x SIMD weight lanes and PE result lanes; beat by beat its weight columns
+follow the activation columns, and each frame yields one result beat holding
+the frame's activation row and weight rows (or channels). A
 stream that carries anything else is refused at dotp's port on that stream,
 and only there: a kernel exports one port per stream it references.
 """
@@ -14,9 +15,9 @@ from qonnx.core.datatype import DataType
 
 from finn.core.space import Available, Rejected, Space, design_space
 from finn.kernels.datatypes.scalar import ScalarEncoding
-from finn.kernels.dotp import DotpAxiKernel
+from finn.kernels.dotp import Contraction, Int8Dsp58DotpKernel, PackedDotpKernel
 from finn.kernels.matmul import MatMulKernel
-from finn.kernels.physical.forms import Every, Loop, Traversal, tile, vector_major
+from finn.kernels.physical.forms import Every, Loop, Traversal, channel_tile, tile, vector_major
 from finn.kernels.streams import Stream, StreamSpec
 from finn.kernels.target import DspBlock
 
@@ -34,7 +35,7 @@ def chain(activations=ACTIVATIONS, weights=WEIGHTS, results=RESULTS, frame=2):
         )
         w = Stream(spec=StreamSpec(ScalarEncoding(W), weights), port="in1_V")
         r = Stream(spec=StreamSpec(ScalarEncoding(R), results), port="out0_V")
-        compute = DotpAxiKernel(
+        compute = PackedDotpKernel(
             activation_dtype=A,
             weights_dtype=W,
             result_dtype=R,
@@ -136,7 +137,8 @@ def test_one_kernel_refusal_reaches_only_its_own_stream():
             MatMulKernel.simd: 2,
             MatMulKernel.delivery: "external",
             MatMulKernel.weight_stream.transport: "direct",
-            MatMulKernel.compute.compute_pumping: False,
+            MatMulKernel.compute: "packed",
+            MatMulKernel.compute_pumping: False,
         }
     )
     assert isinstance(point.replayed.query(Stream.connection), Available)
@@ -144,3 +146,86 @@ def test_one_kernel_refusal_reaches_only_its_own_stream():
     refused = point.weight_stream.query(Stream.connection)
     assert isinstance(refused, Rejected)
     assert {finding.code for finding in refused.findings} == {"dtype-family"}
+
+
+# -- per-channel: lane p carries channel p's activations, weight row and result --
+
+C_ROWS, C_WINDOW, C_CHANNELS = 2, 4, 4
+CHANNEL_ACTIVATIONS = channel_tile(C_ROWS, C_WINDOW, C_CHANNELS, 2, 2)
+CHANNEL_WEIGHTS = tile(C_CHANNELS, C_WINDOW, 2, 2).repeated(C_ROWS)
+CHANNEL_RESULTS = vector_major((C_ROWS, C_CHANNELS), 2)
+
+
+def per_channel(activations=CHANNEL_ACTIVATIONS, weights=CHANNEL_WEIGHTS, results=CHANNEL_RESULTS):
+    class Channels(Space):
+        a = Stream(
+            spec=StreamSpec(ScalarEncoding(A), activations, markers=(Every(2),)), port="in0_V"
+        )
+        w = Stream(spec=StreamSpec(ScalarEncoding(W), weights), port="in1_V")
+        r = Stream(spec=StreamSpec(ScalarEncoding(R), results), port="out0_V")
+        compute = Int8Dsp58DotpKernel(
+            activation_dtype=A,
+            weights_dtype=W,
+            result_dtype=R,
+            pe=2,
+            simd=2,
+            target_dsp=DspBlock.DSP58,
+            target_period_ns=5.0,
+            contraction=Contraction.PER_CHANNEL,
+            activation_stream=a,
+            weights_stream=w,
+            result_stream=r,
+        )
+
+    return design_space(Channels()).with_choices({Channels.compute.compute_pumping: False})
+
+
+def test_per_channel_streams_are_accepted():
+    assert CHANNEL_ACTIVATIONS.lanes == 4
+    # Lane s*PE + p is window position s of channel p (FinnLib's order).
+    first = next(CHANNEL_ACTIVATIONS.positions())
+    assert first == ((0, 0, 0), (0, 0, 1), (0, 1, 0), (0, 1, 1))
+    assert refusals(per_channel()) == {"a": set(), "w": set(), "r": set()}
+
+
+def test_per_channel_activations_must_carry_channels_fastest():
+    # The same fields with window positions fastest: the hlslib order, not FinnLib's.
+    window_fastest = Traversal(
+        CHANNEL_ACTIVATIONS.shape, CHANNEL_ACTIVATIONS.beat_loops, (Loop(2, 1), Loop(2, 4))
+    )
+    assert refusals(per_channel(activations=window_fastest))["a"] == {"dotp-stream-form"}
+    # A dense activation operand is the wrong rank for a per-channel contraction.
+    dense = vector_major((C_ROWS, C_WINDOW), 2)
+    assert refusals(per_channel(activations=dense))["a"] == {"dotp-stream-form"}
+
+
+def test_per_channel_frames_must_stay_within_one_channel_group():
+    # Window folds outside channel folds: each two-beat frame spans two channel groups.
+    crossing = Traversal(
+        CHANNEL_ACTIVATIONS.shape,
+        (Loop(C_ROWS, 16), Loop(2, 8), Loop(2, 2)),
+        CHANNEL_ACTIVATIONS.lane_loops,
+    )
+    assert "dotp-stream-form" in refusals(per_channel(activations=crossing))["a"]
+
+
+def test_per_channel_weights_follow_the_activation_channels_and_window():
+    # Weight beats walking window folds before channel folds pair channel group 0's
+    # activations with channel group 1's weights.
+    swapped = Traversal(
+        CHANNEL_WEIGHTS.shape, (Loop(C_ROWS, 0), Loop(2, 2), Loop(2, 8)), CHANNEL_WEIGHTS.lane_loops
+    )
+    assert refusals(per_channel(weights=swapped)) == {
+        "a": set(),
+        "w": {"dotp-stream-form"},
+        "r": set(),
+    }
+
+
+def test_per_channel_results_hold_their_frames_row_and_channels():
+    swapped = Traversal.over((C_ROWS, C_CHANNELS), ((1, 2, 2), (0, C_ROWS, 1)), ((1, 2, 1),))
+    assert refusals(per_channel(results=swapped)) == {
+        "a": set(),
+        "w": set(),
+        "r": {"dotp-stream-form"},
+    }

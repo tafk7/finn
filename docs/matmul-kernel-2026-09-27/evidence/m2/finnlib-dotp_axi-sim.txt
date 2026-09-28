@@ -1,0 +1,13 @@
+Test #0: Successfully performed 217 checks.
+Test #1: Successfully performed 217 checks.
+Test #2: Successfully performed 217 checks.
+Test #3: Successfully performed 217 checks.
+Test #4: Successfully performed 217 checks.
+Test #5: Successfully performed 217 checks.
+Test #6: Successfully performed 217 checks.
+Test #7: Successfully performed 217 checks.
+Test #8: Successfully performed 217 checks.
+Test #9: Successfully performed 217 checks.
+Test #10: Successfully performed 217 checks.
+$finish called at time : 358465 ns : File "/home/tkeller/prj-kernels/finnlib-j0/rtl/linalg/dotp_axi_tb.sv" Line 55
+DOTP_BACKPRESSURE_PASS

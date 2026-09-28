@@ -30,7 +30,7 @@ from kernels.rtlsim.dotp_support import (
 from kernels.rtlsim.rtl_transport import drive_observed
 from finn.kernels.artifacts.contribution_types import CopiedSource
 from finn.core.space import design_space
-from finn.kernels.dotp import DotpAxiKernel
+from finn.kernels.dotp import Int8Dsp58DotpKernel, PackedDotpKernel
 from finn.kernels.target import DspBlock
 from finn.kernels.resources import resource_root
 
@@ -47,6 +47,7 @@ class Configuration:
     pumping: bool = False
     period: float = 5.0  # target clock period (ns); sets the DSP58 segmentation
     repetitions: int = 4
+    int8: bool = False  # the INT8 DSP58 core, else the packed core
 
 
 CASES = (
@@ -54,15 +55,19 @@ CASES = (
     Configuration("packed_e1", DspBlock.DSP48E1, 8, 2, 4, "INT3", "INT3"),
     Configuration("packed_e2_pumped", DspBlock.DSP48E2, 6, 2, 3, "UINT3", "INT3", True),
     Configuration("packed_dsp58", DspBlock.DSP58, 8, 2, 4, "INT3", "INT3"),
-    Configuration("int8_signed", DspBlock.DSP58, 8, 2, 4, "INT8", "INT8"),
-    Configuration("int8_unsigned", DspBlock.DSP58, 8, 4, 4, "UINT8", "INT8"),
-    Configuration("int8_odd_pumped", DspBlock.DSP58, 6, 2, 3, "UINT8", "INT8", True),
-    Configuration("int8_segmented_pumped", DspBlock.DSP58, 14, 2, 7, "UINT8", "INT8", True, 2.4),
-    Configuration("signed9", DspBlock.DSP58, 6, 2, 3, "INT9", "INT8"),
+    Configuration("int8_signed", DspBlock.DSP58, 8, 2, 4, "INT8", "INT8", int8=True),
+    Configuration("int8_unsigned", DspBlock.DSP58, 8, 4, 4, "UINT8", "INT8", int8=True),
+    Configuration("int8_odd_pumped", DspBlock.DSP58, 6, 2, 3, "UINT8", "INT8", True, int8=True),
+    Configuration(
+        "int8_segmented_pumped", DspBlock.DSP58, 14, 2, 7, "UINT8", "INT8", True, 2.4, int8=True
+    ),
+    Configuration("signed9", DspBlock.DSP58, 6, 2, 3, "INT9", "INT8", int8=True),
     Configuration("unsigned17", DspBlock.DSP48E2, 4, 2, 2, "UINT17", "INT2"),
     Configuration("signed18", DspBlock.DSP48E2, 4, 2, 2, "INT18", "INT2"),
     Configuration("unsigned23", DspBlock.DSP58, 4, 2, 2, "UINT23", "INT2"),
-    Configuration("int8_segmented", DspBlock.DSP58, 12, 2, 6, "INT8", "INT8", False, 1.2),
+    Configuration(
+        "int8_segmented", DspBlock.DSP58, 12, 2, 6, "INT8", "INT8", False, 1.2, int8=True
+    ),
 )
 
 
@@ -73,15 +78,46 @@ STRESS_CASES = (
     Configuration(
         "one_beat_softvec_pumped", DspBlock.DSP58, 2, 2, 2, "INT3", "INT3", True, repetitions=32
     ),
-    Configuration("one_beat_int8", DspBlock.DSP58, 1, 2, 1, "INT8", "INT8", repetitions=32),
     Configuration(
-        "one_beat_int8_pumped", DspBlock.DSP58, 3, 2, 3, "UINT8", "INT8", True, repetitions=32
+        "one_beat_int8", DspBlock.DSP58, 1, 2, 1, "INT8", "INT8", repetitions=32, int8=True
     ),
     Configuration(
-        "one_beat_int8_segmented", DspBlock.DSP58, 24, 2, 24, "INT8", "INT8", False, 1.2, 32
+        "one_beat_int8_pumped",
+        DspBlock.DSP58,
+        3,
+        2,
+        3,
+        "UINT8",
+        "INT8",
+        True,
+        repetitions=32,
+        int8=True,
     ),
     Configuration(
-        "one_beat_segmented_pumped", DspBlock.DSP58, 7, 2, 7, "UINT8", "INT8", True, 2.4, 32
+        "one_beat_int8_segmented",
+        DspBlock.DSP58,
+        24,
+        2,
+        24,
+        "INT8",
+        "INT8",
+        False,
+        1.2,
+        32,
+        int8=True,
+    ),
+    Configuration(
+        "one_beat_segmented_pumped",
+        DspBlock.DSP58,
+        7,
+        2,
+        7,
+        "UINT8",
+        "INT8",
+        True,
+        2.4,
+        32,
+        int8=True,
     ),
 )
 
@@ -100,8 +136,9 @@ def run(configuration: Configuration, evidence: Path, *, backpressure_ticks: int
     while min(endpoints) < -(1 << (result_bits - 1)) or max(endpoints) >= (1 << (result_bits - 1)):
         result_bits += 1
     result_type = DataType[f"INT{result_bits}"]
+    family = Int8Dsp58DotpKernel if c.int8 else PackedDotpKernel
     point = design_space(
-        DotpAxiKernel(
+        family(
             pe=c.pe,
             simd=c.simd,
             activation_dtype=a_type,

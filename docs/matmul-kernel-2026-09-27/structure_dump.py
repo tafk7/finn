@@ -45,6 +45,7 @@ CONFIGS = {
         "weights_dtype": DataType["INT8"],
         "target_dsp": DspBlock.DSP58,
         "compute_pumping": True,
+        "core": "int8_dsp58",
         "reduction": 8,
         "simd": 4,
     },

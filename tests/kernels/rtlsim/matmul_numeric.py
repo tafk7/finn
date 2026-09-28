@@ -23,7 +23,7 @@ from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 from kernels.rtlsim.rtl_transport import drive_observed
 from finn.kernels.artifacts.build import materialize_module_sources, prepare_module_build
 from finn.kernels.artifacts.store import ArtifactStore
-from finn.kernels.matmul import WeightDelivery, matmul_assembly
+from finn.kernels.matmul import Contraction, WeightDelivery, matmul_assembly
 from finn.kernels.target import DspBlock
 from finn.kernels.physical.validation import abi_pins
 from finn.kernels.resources import resource_root, template_root
@@ -40,14 +40,26 @@ class Configuration:
     activation: str
     weight: str
     pumping: bool = False
+    core: str | None = None
+    per_channel: bool = False  # width is the window, height the channels
 
 
 CASES = (
     Configuration("single", DspBlock.DSP48E1, 1, 1, 1, 1, "INT2", "INT2"),
     Configuration("packed", DspBlock.DSP48E2, 6, 6, 3, 2, "INT3", "INT3"),
-    Configuration("one_beat_reductions", DspBlock.DSP58, 4, 8, 2, 4, "INT3", "INT3"),
+    Configuration("one_beat_reductions", DspBlock.DSP58, 4, 8, 2, 4, "INT3", "INT3", core="packed"),
     Configuration("padded_output", DspBlock.DSP48E2, 2, 3, 1, 2, "UINT3", "INT3"),
-    Configuration("int8_pumped", DspBlock.DSP58, 6, 4, 2, 3, "UINT8", "INT8", True),
+    Configuration("int8_pumped", DspBlock.DSP58, 6, 4, 2, 3, "UINT8", "INT8", True, "int8_dsp58"),
+    Configuration("int8_narrow", DspBlock.DSP58, 4, 8, 2, 4, "INT3", "INT3", core="int8_dsp58"),
+)
+
+# Depthwise: the INT8 DSP58 core, one channel per PE lane. width = window, height = channels.
+PER_CHANNEL_CASES = (
+    Configuration("ch_small", DspBlock.DSP58, 4, 4, 2, 2, "INT4", "INT4", per_channel=True),
+    Configuration("ch_pe1", DspBlock.DSP58, 9, 3, 1, 3, "UINT8", "INT8", per_channel=True),
+    Configuration("ch_wide", DspBlock.DSP58, 9, 6, 3, 9, "INT8", "INT8", per_channel=True),
+    Configuration("ch_pumped", DspBlock.DSP58, 6, 4, 2, 3, "UINT8", "INT8", True, per_channel=True),
+    Configuration("ch_one_beat", DspBlock.DSP58, 3, 4, 4, 3, "INT9", "INT8", per_channel=True),
 )
 
 
@@ -56,7 +68,7 @@ def _pack(values, bits):
     return sum((int(value) & mask) << (index * bits) for index, value in enumerate(values))
 
 
-def _observation_wrapper(abi, entry_point, directory, activation_bits, weight_bits):
+def _observation_wrapper(abi, entry_point, directory, activation_bits, weight_bits, compute):
     ports, connections = [], []
     for name, info in abi_pins(abi).items():
         width = f" [{info.width - 1}:0]" if info.width > 1 else ""
@@ -67,7 +79,7 @@ def _observation_wrapper(abi, entry_point, directory, activation_bits, weight_bi
         ("replay", "u_replay", ("odat", "ovld", "ordy", "olast"), activation_bits),
         (
             "weights",
-            "u_compute",
+            compute,
             ("s_axis_weights_tdata", "s_axis_weights_tvalid", "s_axis_weights_tready"),
             weight_bits,
         ),
@@ -100,14 +112,19 @@ def run(
     rows = 4
     a_type, w_type = DataType[c.activation], DataType[c.weight]
     rng = np.random.RandomState(83)
-    activations = rng.randint(int(a_type.min()), int(a_type.max()) + 1, (rows, c.width))
+    shape = (rows, c.width, c.height) if c.per_channel else (rows, c.width)
+    activations = rng.randint(int(a_type.min()), int(a_type.max()) + 1, shape)
     weights = rng.randint(int(w_type.min()), int(w_type.max()) + 1, (c.height, c.width))
-    activations[0, :] = int(a_type.min())
-    activations[1, :] = int(a_type.max())
+    activations[0] = int(a_type.min())
+    activations[1] = int(a_type.max())
     weights[0, :] = int(w_type.min())
     if c.height > 1:
         weights[1, :] = int(w_type.max())
-    expected = activations @ weights.T
+    if c.per_channel:
+        # Y[r, c] = sum over k of X[r, k, c] * W[c, k]
+        expected = np.einsum("rkc,ck->rc", activations, weights)
+    else:
+        expected = activations @ weights.T
     built = matmul_assembly(
         rows=rows,
         reduction=c.width,
@@ -117,17 +134,37 @@ def run(
         pe=c.pe,
         simd=c.simd,
         target_dsp=c.target,
+        contraction=Contraction.PER_CHANNEL if c.per_channel else Contraction.DENSE,
         compute_pumping=c.pumping,
+        core=c.core,
         weight_delivery=delivery,
         weights=weights.tolist() if delivery is WeightDelivery.CYCLIC else None,
         rom_style=rom_style,
         weight_fifo_depth=weight_fifo_depth,
     )
-    activation_words = [
-        _pack(row[start : start + c.simd], a_type.bitwidth())
-        for row in activations
-        for start in range(0, c.width, c.simd)
-    ]
+    sf, nf = c.width // c.simd, c.height // c.pe
+    if c.per_channel:
+        # Beats: row, channel fold, window fold; field s * PE + p is X[r, k, c].
+        activation_words = [
+            _pack(
+                [
+                    activations[r, kf * c.simd + s, cf * c.pe + p]
+                    for s in range(c.simd)
+                    for p in range(c.pe)
+                ],
+                a_type.bitwidth(),
+            )
+            for r in range(rows)
+            for cf in range(nf)
+            for kf in range(sf)
+        ]
+    else:
+        activation_words = [
+            _pack(row[start : start + c.simd], a_type.bitwidth())
+            for row in activations
+            for start in range(0, c.width, c.simd)
+        ]
+    activation_bits = c.simd * (c.pe if c.per_channel else 1) * a_type.bitwidth()
     weight_image = [
         _pack(weights[row : row + c.pe, start : start + c.simd].flat, w_type.bitwidth())
         for row in range(0, c.height, c.pe)
@@ -139,7 +176,7 @@ def run(
     else:
         assert built.initializer == tuple(weight_image)
     for name, bits in (
-        ("in0_V", c.simd * a_type.bitwidth()),
+        ("in0_V", activation_bits),
         ("in1_V", c.pe * c.simd * w_type.bitwidth()),
     ):
         if name in stimulus:
@@ -164,17 +201,26 @@ def run(
         built.structure.top_abi,
         prepared.abi.entry_point,
         directory,
-        c.simd * a_type.bitwidth(),
+        activation_bits,
         (c.pe * c.simd * w_type.bitwidth() + 7) // 8 * 8,
+        next(
+            item.instance_id
+            for item in built.structure.instances
+            if item.instance_id.startswith("u_compute")
+        ),
     )
     sources.append(str(wrapper))
-    sf, nf = c.width // c.simd, c.height // c.pe
-    replay_expected = [
-        word
-        for rep in range(rows)
-        for _ in range(nf)
-        for word in activation_words[rep * sf : (rep + 1) * sf]
-    ]
+    # Dense rows are replayed once per output fold; per-channel beats pass once.
+    replay_expected = (
+        activation_words
+        if c.per_channel
+        else [
+            word
+            for rep in range(rows)
+            for _ in range(nf)
+            for word in activation_words[rep * sf : (rep + 1) * sf]
+        ]
+    )
     last_expected = [int(index == sf - 1) for _ in range(rows * nf) for index in range(sf)]
     result_bits = built.result_dtype.bitwidth()
     result_mask = (1 << (c.pe * result_bits)) - 1
@@ -217,7 +263,11 @@ def run(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--case", choices=[case.label for case in CASES])
+    cases = CASES + PER_CHANNEL_CASES
+    parser.add_argument("--case", choices=[case.label for case in cases])
+    parser.add_argument(
+        "--per-channel", action="store_true", help="run the per-channel (depthwise) cases"
+    )
     parser.add_argument("--delivery", choices=[delivery.value for delivery in WeightDelivery])
     parser.add_argument("--output", type=Path)
     parser.add_argument("--rom-style", default="auto", choices=("auto", "distributed", "block"))
@@ -225,8 +275,8 @@ def main() -> None:
     args = parser.parse_args()
     directory = args.output or Path(tempfile.mkdtemp(prefix="matmul-evidence-"))
     print(f"Evidence: {directory}", flush=True)
-    for case in CASES:
-        if args.case is None or args.case == case.label:
+    for case in cases:
+        if (args.case is None and case.per_channel is args.per_channel) or args.case == case.label:
             for delivery in WeightDelivery:
                 if args.delivery is None or args.delivery == delivery.value:
                     run(case, delivery, directory, args.rom_style, args.weight_fifo_depth)

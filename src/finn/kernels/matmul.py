@@ -3,15 +3,24 @@
 
 """A matrix-multiply unit on streams, with external or cyclic on-chip weights.
 
-For activations X[row, k] and weights W[output, k], the result is
-Y[row, output] = sum over k of X[row, k] * W[output, k]. Activation beats
-traverse (row, reduction fold), with SIMD low-first fields. Replay repeats each
-row for every output fold. Compute and external weights traverse (row, output
-fold, reduction fold); weight fields are (PE, SIMD), SIMD fastest and
-low-first. Results traverse (row, output fold), with PE low-first fields.
-Internal last closes every reduction-fold group. There is no top-level last:
-the declared extents determine all stream lengths. Input high padding is
-ignored; output high padding is unspecified.
+The ``contraction`` fixes how activations meet the weights.
+
+- ``DENSE``: for activations X[row, k] and weights W[output, k], the result is
+  Y[row, output] = sum over k of X[row, k] * W[output, k]. Every output reads
+  the whole activation row, so the row is replayed once per output fold.
+  Activation beats traverse (row, reduction fold) with SIMD low-first fields.
+- ``PER_CHANNEL`` (depthwise): for activations X[row, k, c] and weights
+  W[c, k], Y[row, c] = sum over k of X[row, k, c] * W[c, k]. Each output
+  channel reads its own activations, so nothing is replayed. Activation beats
+  traverse (row, channel fold, window fold) with PE channels of SIMD window
+  positions, channel fastest (``channel_tile``).
+
+Compute and external weights traverse (row, output fold, reduction fold);
+weight fields are (PE, SIMD), SIMD fastest and low-first. Results traverse
+(row, output fold), with PE low-first fields. Internal last closes every
+reduction-fold group. There is no top-level last: the declared extents
+determine all stream lengths. Input high padding is ignored; output high
+padding is unspecified.
 
 No Region, logical operand mapping, or dataflow graph is required.
 ``MatMulKernel`` is a graph of design spaces: four ``Stream`` nodes, and
@@ -46,10 +55,17 @@ from finn.dataflow.datatypes import (
     ordinary_integer_bounds,
     resolve_qonnx_datatype_name,
 )
-from finn.kernels.configure import commit, describe
+from finn.kernels.configure import commit, compatible, describe
 from finn.kernels.delivery import CyclicDelivery
-from finn.kernels.dotp import DotpAxiKernel
-from finn.kernels.physical.forms import TRAVERSAL, Every, Traversal, tile, vector_major
+from finn.kernels.dotp import Contraction, DotpAxiKernel, Int8Dsp58DotpKernel, PackedDotpKernel
+from finn.kernels.physical.forms import (
+    TRAVERSAL,
+    Every,
+    Traversal,
+    channel_tile,
+    tile,
+    vector_major,
+)
 from finn.kernels.physical.structure import PhysicalStructure
 from finn.kernels.streaming import ReplayBuffer
 from finn.kernels.streams import (
@@ -116,6 +132,7 @@ class _Folding:
     outputs: int
     pe: int
     simd: int
+    per_channel: bool = False
 
     def __post_init__(self) -> None:
         for name in ("rows", "reduction", "outputs", "pe", "simd"):
@@ -132,8 +149,14 @@ class _Folding:
         return self.outputs // self.pe
 
     @property
+    def reuse(self) -> int:
+        """How many times each activation row is read: once per output fold when dense."""
+        return 1 if self.per_channel else self.output_folds
+
+    @property
     def activation_beats(self) -> int:
-        return self.rows * self.reduction_folds
+        channel_folds = self.output_folds if self.per_channel else 1
+        return self.rows * channel_folds * self.reduction_folds
 
     @property
     def weight_beats(self) -> int:
@@ -162,9 +185,12 @@ FOLDING = default_semantics(_Folding)
 class MatMulKernel(Space):
     """Operation facts, folding choices, and kernels that reference declared streams.
 
-    ``activations`` enters at ``in0_V`` and is replayed once per output fold into
-    ``replayed``; dotp consumes it with ``weight_stream`` and produces ``results``
-    for ``out0_V``. The ``delivery`` Decision decides what drives
+    ``activations`` enters at ``in0_V``; the replay node presents each row
+    ``reuse`` times into ``replayed``, with a frame marker per reduction: once
+    per output fold when dense, once (markers only) per channel. dotp consumes
+    it with ``weight_stream`` and produces ``results`` for ``out0_V``. The
+    ``compute`` Decision places one core kernel; a per-channel contraction is
+    read only by the INT8 DSP58 core. The ``delivery`` Decision decides what drives
     ``weight_stream``: ``external`` places nothing, so the stream has only its
     consumer and is the boundary ``in1_V``; ``cyclic`` places the ``cyclic``
     CyclicDelivery node, which references the stream as its producer and owns
@@ -175,6 +201,7 @@ class MatMulKernel(Space):
     rows: int = Param()
     reduction: int = Param()
     outputs: int = Param()
+    contraction: Contraction = Param(default=Contraction.DENSE)
     activation_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
     weights_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
     target_dsp: DspBlock = Param()
@@ -182,6 +209,7 @@ class MatMulKernel(Space):
     weights: IntegerTensor = Param(semantics=INTEGER_TENSOR, required=False)
     pe: int = Decision(domain=divisors_of(outputs))
     simd: int = Decision(domain=divisors_of(reduction))
+    compute_pumping: bool = Decision(values=(False, True))
 
     @derived(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
     def result_type(self) -> QONNXDataType | Rejected:
@@ -193,7 +221,14 @@ class MatMulKernel(Space):
     @derived(semantics=FOLDING)
     def folding(self) -> _Folding | Rejected:
         try:
-            return _Folding(self.rows, self.reduction, self.outputs, self.pe, self.simd)
+            return _Folding(
+                self.rows,
+                self.reduction,
+                self.outputs,
+                self.pe,
+                self.simd,
+                self.contraction is Contraction.PER_CHANNEL,
+            )
         except ValueError as error:
             return reject("matmul-folding", str(error))
 
@@ -209,20 +244,22 @@ class MatMulKernel(Space):
         return self.folding.reduction_folds
 
     @derived
-    def output_folds(self) -> int:
-        return self.folding.output_folds
+    def reuse(self) -> int:
+        return self.folding.reuse
 
     @derived(semantics=STREAM_SPEC)
     def activation_spec(self) -> StreamSpec | Rejected:
         f, element = self.folding, ScalarEncoding.admit(self.activation_dtype)
         if isinstance(element, Rejected):
             return element
+        if f.per_channel:
+            return StreamSpec(element, channel_tile(f.rows, f.reduction, f.outputs, f.pe, f.simd))
         return StreamSpec(element, vector_major((f.rows, f.reduction), f.simd))
 
     @derived(semantics=STREAM_SPEC)
     def replayed_spec(self) -> StreamSpec:
         f, spec = self.folding, self.activation_spec
-        form = spec.form.replayed(f.output_folds, inner_beats=f.reduction_folds)
+        form = spec.form.replayed(f.reuse, inner_beats=f.reduction_folds)
         return StreamSpec(spec.element, form, markers=(Every(f.reduction_folds),))
 
     @derived(semantics=TRAVERSAL)
@@ -255,9 +292,11 @@ class MatMulKernel(Space):
         input_stream=activations,
         output_stream=replayed,
         sequence_length=reduction_folds,
-        replay_count=output_folds,
+        replay_count=reuse,
     )
-    compute = DotpAxiKernel(
+    # The compute cores: handles naming the candidates of ``compute``. Each
+    # refuses what its core cannot build; both share the pumping choice.
+    packed = PackedDotpKernel(
         activation_dtype=activation_dtype,
         weights_dtype=weights_dtype,
         result_dtype=result_type,
@@ -265,9 +304,28 @@ class MatMulKernel(Space):
         simd=simd,
         target_dsp=target_dsp,
         target_period_ns=target_period_ns,
+        compute_pumping=compute_pumping,
+        contraction=contraction,
         activation_stream=replayed,
         weights_stream=weight_stream,
         result_stream=results,
+    )
+    int8_dsp58 = Int8Dsp58DotpKernel(
+        activation_dtype=activation_dtype,
+        weights_dtype=weights_dtype,
+        result_dtype=result_type,
+        pe=pe,
+        simd=simd,
+        target_dsp=target_dsp,
+        target_period_ns=target_period_ns,
+        compute_pumping=compute_pumping,
+        contraction=contraction,
+        activation_stream=replayed,
+        weights_stream=weight_stream,
+        result_stream=results,
+    )
+    compute: PackedDotpKernel | Int8Dsp58DotpKernel = Decision(
+        values={"packed": packed, "int8_dsp58": int8_dsp58}
     )
     # A handle naming the cyclic candidate; the Decision places it. It references
     # weight_stream as its producer, so only when selected is the stream internal.
@@ -313,8 +371,10 @@ def matmul_assembly(
     pe: int,
     simd: int,
     target_dsp: DspBlock,
+    contraction: Contraction = Contraction.DENSE,
     target_period_ns: float = 5.0,
     compute_pumping: bool = False,
+    core: str | None = None,
     weight_delivery: WeightDelivery = WeightDelivery.EXTERNAL,
     weights: Sequence[Sequence[int]] | None = None,
     rom_style: str = "auto",
@@ -322,12 +382,17 @@ def matmul_assembly(
 ) -> MatMulAssembly:
     """Bind operation facts, commit every choice, then assemble.
 
+    ``reduction`` is K and ``outputs`` N; for a per-channel ``contraction`` they
+    are the window and the channels, and ``weights`` is (channels, window).
+
     Weights are required by, and only accepted with, cyclic delivery. ``rom_style``
     applies to cyclic delivery; the ``auto`` default leaves memory inference to
     synthesis, as the ROM did before the choice existed. ``weight_fifo_depth``
     places a FIFO on the weight stream; ``None`` connects it directly.
     ``target_period_ns`` is the clock the module must meet (5 ns: 200 MHz); it
-    sets dotp's DSP58 chain segmentation.
+    sets dotp's DSP58 chain segmentation. ``core`` names the compute core
+    (``packed`` or ``int8_dsp58``); left out, the one core compatible with the
+    configuration is taken, and several compatible cores must be chosen from.
     """
     if not isinstance(weight_delivery, WeightDelivery):
         raise ValueError("weight_delivery must be a WeightDelivery value")
@@ -338,6 +403,7 @@ def matmul_assembly(
         rows=rows,
         reduction=reduction,
         outputs=outputs,
+        contraction=contraction,
         activation_dtype=activation_dtype,
         weights_dtype=weights_dtype,
         target_dsp=target_dsp,
@@ -350,7 +416,7 @@ def matmul_assembly(
     choices: dict[str, object] = {
         "delivery": case,
         "weight_stream.transport": "fifo" if buffered else "direct",
-        "compute.compute_pumping": compute_pumping,
+        "compute_pumping": compute_pumping,
         "pe": pe,
         "simd": simd,
     }
@@ -360,6 +426,22 @@ def matmul_assembly(
         choices["weight_stream.transport.fifo.buffer.depth"] = weight_fifo_depth
         choices["weight_stream.transport.fifo.buffer.ram_style"] = "auto"
     point = commit(design_space(MatMulKernel(**facts)), choices)
+    if core is None:
+        cores = compatible(
+            point, "compute", lambda item: item.compute.inspect(DotpAxiKernel.support).result
+        )
+        if not cores:
+            cases = point.field(MatMulKernel.compute).candidates()
+            refusals = (
+                commit(point, {"compute": case}).query(MatMulKernel.structure)
+                for case in (cases.value if isinstance(cases, Available) else ())
+            )
+            raise ValueError(f"no compute core is compatible: {describe(refusals)}")
+        if len(cores) > 1:
+            named = ", ".join(map(str, cores))
+            raise ValueError(f"compute cores {named} are all compatible; choose one")
+        core = str(cores[0])
+    point = commit(point, {"compute": core})
     composed = point.query(MatMulKernel.structure)
     if not isinstance(composed, Available):
         raise ValueError(f"MatMul assembly is not accepted: {describe([composed])}")
@@ -377,6 +459,7 @@ def matmul_assembly(
 
 
 __all__ = [
+    "Contraction",
     "MatMulAssembly",
     "MatMulKernel",
     "ROM_STYLE",

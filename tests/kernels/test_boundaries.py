@@ -165,14 +165,14 @@ class RejectParked(importlib.abc.MetaPathFinder):
 
 sys.meta_path.insert(0, RejectParked())
 from finn.core.space import design_space
-from finn.kernels import DotpAxiKernel, DspBlock, WeightDelivery, matmul_assembly
+from finn.kernels import DspBlock, PackedDotpKernel, WeightDelivery, matmul_assembly
 from finn.kernels.artifacts.requirements import ModuleBuildRequirements
 from finn.kernels.physical.axi_stream import AxiStream
 from qonnx.core.datatype import DataType
 
 
 point = design_space(
-    DotpAxiKernel(
+    PackedDotpKernel(
         pe=2,
         simd=2,
         activation_dtype=DataType["INT3"],

@@ -41,7 +41,7 @@ planned changes, not additional APIs already delivered here.
 
 ```text
 base.py                  neutral Kernel identity and capability metadata
-dotp.py                  operand scalars, AXIS ports and build requirements
+dotp.py                  dotp_axi: operand scalars, AXIS ports, one kernel per compute core
 matmul.py                folding, dotp child node, and a weight-delivery Decision over nodes
 streaming.py             replay and initialized cyclic word delivery
 target.py                DSP targets and port capacities
@@ -64,7 +64,7 @@ Space -> accepted build_requirements view -> ModuleBuildRequirements
 | `EltwiseKernel` | `eltwise.py` | Integer/float operand scalars, dependent type constraints, typed unpadded ports |
 | `IntToFp32Kernel` | `int_to_fp32.py` | Combinational pins and a fixed FLOAT32 result; no clock or stream |
 | `MemStreamHlsKernel` | `memstream_hls.py` | C++ type and memory/interface declarations before HLS synthesis |
-| `DotpAxiKernel` | `dotp.py` | Typed AXIS ports; target, pumping, segmentation and accumulator admission |
+| `PackedDotpKernel`, `Int8Dsp58DotpKernel` | `dotp.py` | One kernel per `dotp_axi` compute core over the shared `DotpAxiKernel`: typed AXIS ports; target, contraction, pumping, segmentation and accumulator admission |
 
 Operand datatypes are ordinary kernel Params, such as
 `DotpAxiKernel.activation_dtype`. Each operand has its own scalar node
@@ -73,11 +73,11 @@ admission, and each port binds to that scalar's raw dtype and accepted encoding.
 independently of their accepted `stream` view, which requires the scalar:
 
 ```python
-from finn.kernels import DotpAxiKernel, DspBlock
+from finn.kernels import DspBlock, PackedDotpKernel
 from finn.dataflow.datatypes import resolve_qonnx_datatype_name as dtype
 
 dotp = design_space(
-    DotpAxiKernel(
+    PackedDotpKernel(
         activation_dtype=dtype("INT3"),
         weights_dtype=dtype("INT3"),
         result_dtype=dtype("INT8"),
@@ -167,7 +167,8 @@ point = commit(
         "weight_stream.transport": "fifo",
         "weight_stream.transport.fifo.buffer.depth": 16,
         "weight_stream.transport.fifo.buffer.ram_style": "auto",
-        "compute.compute_pumping": False,
+        "compute": "packed",
+        "compute_pumping": False,
         "pe": 2,
         "simd": 2,
     },
@@ -175,7 +176,7 @@ point = commit(
 structure = point.structure.structure
 assert [item.instance_id for item in structure.instances] == [
     "u_replay",
-    "u_compute",
+    "u_compute_packed",
     "u_delivery_cyclic",
     "u_weight_stream_fifo",
 ]
@@ -246,10 +247,11 @@ physical definitions and shared support belong here.
 
 The source baseline is FinnLib's grouped layout (`rtl/{arith,infra,linalg,
 nonlin,shape}/`, `hls/{infra,util}/`) at the `fetch-repos.sh` pin
-`11b5c64b6ddb2c89895cc539eb059e49ecf80630` (branch
-`kernels/consolidated-20260927` on the `tkeller/finnlib` fork): upstream `dev`
+`b9262df1ba4ee7623f0bbd996e2c7566c411bc5f` (branch
+`kernels/matmul-20260927` on the `tkeller/finnlib` fork): upstream `dev`
 plus `replay_buffer`, the dotp output-buffer and AXI-Lite declaration-order
-corrections, and `memstream`/`memstream_axi` ported from `finn-rtllib`. There
+corrections, `memstream`/`memstream_axi` ported from `finn-rtllib`, and the
+`dotp_axi` `CORE` parameter that lets each core be its own kernel. There
 are no private copies in `resources`. Eltwise's source closure includes the
 consolidated `fifo`, which replaced `queue`. Record and validate source
 revisions when updating this dependency; matching filenames do not establish
