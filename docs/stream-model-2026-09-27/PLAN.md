@@ -28,14 +28,27 @@ the `inner_shuffle` fix (a FinnLib task that runs in parallel).
 
 ## Human gate G0: decisions before building
 
-| # | Decision | Recommended | Blocks |
+| # | Decision | Answer (2026-09-28) | Blocks |
 |---|---|---|---|
-| 1 | Where the values live: `Tensor`, `Traversal`, `Nest`, `Access`, `classify`, `plan` in `finn.dataflow`; retire the untested logical model | yes | S1 (the move) |
-| 2 | A module's boundary presentation is an explicit composite Param, defaulting to the internal end's | yes | S1 |
-| 3 | Contraction syntax: an einsum string for MatMul, `Access` objects elsewhere | yes | S2 |
-| 4 | Canonical marker: `Every(period)`, or `Level(d)` (completion of a named nest level) | `Level`, with `Every` derived for AXIS `TLAST` | S2 |
-| 5 | Reduction order: declare the Decision, one candidate until an optimizer exists | yes | S2 |
-| 6 | Keep delivery and replay as separate Decisions | yes, revisit after S3 | S3 |
+| 1 | Where the values live: `Tensor`, `Traversal`, `Nest`, `Access`, `classify`, `plan` in `finn.dataflow`; retire the untested logical model into `finn.parked` | **agreed** | S1 (the move) |
+| 2 | Who fixes a module's boundary presentation | **a rule, not a Param**: a producer presents its data honestly, in its native form, and is never pre-adapted to a consumer; the receiver adapts. See below | S1 |
+| 3 | Contraction syntax | **pending confirmation**: keep the `Contraction` enum as the Param, each member defined by an einsum; the nest derives everything from the einsum | S2 |
+| 4 | Canonical marker | **agreed: `Level`**, anchored to the presentation's beat loops (not nest names, which do not cross kernels); `Every` derived at periodic pins (AXIS `TLAST`) | S2 |
+| 5 | Reduction order | **agreed**: declare the Decision; compatibility leaves the canonical order only until DSE exists; float collapses to canonical | S2 |
+| 6 | Delivery and replay | **delivery stays a Decision; flag unifying it with stream reuse for revisit after S3.** Replay moves onto the stream (S3), and **`replay_buffer` is scrapped**: `input_gen` is a superset and the resource saving is not worth a second kernel | S3 |
+
+**Decision 2 in detail.** Compatibility does most of the filtering; what
+remains is a design choice, and choosing among survivors is future DSE (as for
+compute cores). Hence:
+
+- A kernel's output presents its native traversal, derived from its nest.
+- A kernel's input boundary presents what it consumes before any adaptation:
+  the `once` form of its internal end. For MatMul that is today's `in0_V`.
+- Any adaptation (replay, width, reorder, markers) is a stream adapter on the
+  receiving side. Where that adapter is packaged at the design level is an S4
+  question.
+- Cheaper fixes on the producer's side, such as refolding it to match, are a
+  producer folding Decision picked by future DSE, not a presentation knob.
 
 ## Increments
 
@@ -69,8 +82,9 @@ roster.
   - Every kernel publishes its own presentation: MatMul computes the same
     forms as today but hands them to the ends, and thresholding derives its
     own.
-  - Boundary contracts come from the `boundary` Param.
-  - If G0.1 is yes, the values move to `finn.dataflow`.
+  - Boundary contracts come from the G0.2 rule (derived, not a Param).
+  - The values move to `finn.dataflow`; `finn.dataflow.model.logical` moves
+    to `finn.parked`.
 - **Stays.** All form checks, `netlist`, and every Decision.
 - **Gate.**
   - Fingerprints and decision keys are identical.
@@ -111,16 +125,20 @@ roster.
     bind to the plan and refuse themselves.
   - `netlist` wires a list of stages per stream.
   - Adapter candidates:
-    - `replay_buffer` and `input_gen`: replay leaves MatMul and becomes a
-      reorder on the activation stream, so C3 moves here;
-    - marker synthesis;
+    - `input_gen`: replay leaves MatMul and becomes a reorder on the
+      activation stream, so C3 moves here. It also synthesizes markers
+      (identity coefficients, `olst[d]`), which replaces the per-channel
+      `markers` node;
     - `vpc`;
     - `inner_shuffle`, once FinnLib is fixed.
-  - MatMul's boundary presentation, which lets reuse be realized inside the
-    module or upstream.
+  - `replay_buffer` is removed (G0.6): the `ReplayBuffer` kernel, MatMul's
+    `replay` Decision and `markers` node, their exports, tests and the
+    harness's `--replay` option. Before removing it, measure `input_gen`'s
+    buffer for the identity (marker-only) case against `replay_buffer`'s
+    zero-storage `REP=1`, and record the result.
 - **Keys and names.**
-  - Keys: `replay` → `activations.adapter.*`, and `BufferedStream.transport`
-    moves onto `Stream` with its keys unchanged.
+  - Keys: `replay` and `markers` → `activations.adapter.input_gen.*`, and
+    `BufferedStream.transport` moves onto `Stream` with its keys unchanged.
   - Instance names follow the adapter stages.
   - Both are recorded under D7.
 - **Gate.**
