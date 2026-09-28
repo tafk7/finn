@@ -31,9 +31,9 @@ from finn.kernels.streams import Composed, netlist
 from finn.kernels.target import DspBlock
 
 MATMUL_FACTS = dict(
-    rows=2,
-    reduction=4,
-    outputs=4,
+    m=2,
+    k=4,
+    n=4,
     activation_dtype=DataType["INT3"],
     weights_dtype=DataType["INT3"],
     pe=2,

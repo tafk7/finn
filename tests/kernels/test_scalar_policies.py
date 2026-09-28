@@ -72,7 +72,7 @@ def test_zero_width_encodings_refuse_across_consumers(name):
     assert isinstance(eltwise(lhs=name, rhs=name).query(EltwiseKernel.build_requirements), Rejected)
     assert isinstance(
         design_space(MemStreamHlsKernel(element_dtype=dtype(name), depth=3)).query(
-            MemStreamHlsKernel.build_requirements
+            MemStreamHlsKernel.sources
         ),
         Rejected,
     )

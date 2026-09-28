@@ -6,7 +6,8 @@
 The first layer produces its results PE = 4 lanes a beat, each row once; the
 second reads them as activations, SIMD = 2 lanes a beat, each row once per
 output fold, framed by reduction. Neither kernel knows the other: each
-presents its own traversal of the hidden tensor, derived from its own schedule.
+presents its own traversal of the hidden tensor, derived from its own schedule
+over its own folds.
 The stream between them plans a width conversion, a replay and the frame, and
 its adapter places a ``vpc`` and an ``input_gen``. The composed module computes
 ``(x @ W1) @ W2`` in XSim, weights stored ``(k, n)``; a stream that admits no
@@ -23,18 +24,17 @@ from pathlib import Path
 import pytest
 from qonnx.core.datatype import DataType
 
-from finn.core.space import Members, Rejected, Space, design_space, view
+from finn.core.space import Members, Rejected, Space, derived, design_space, view
 from finn.dataflow.plan import Step
-from finn.dataflow.gemm import Form
 from finn.dataflow.tensor import ScalarEncoding, Tensor
-from finn.dataflow.traversal import period
+from finn.dataflow.traversal import TRAVERSAL, Traversal, period
 from finn.kernels.artifacts.build import materialize_module_sources, prepare_module_build
 from finn.kernels.artifacts.derivation import ProducerIdentity
 from finn.kernels.artifacts.store import ArtifactStore
 from finn.kernels.configure import commit
-from finn.kernels.delivery import CyclicDelivery
-from finn.kernels.dotp import PackedDotpKernel, dotp_sequences
-from finn.kernels.matmul import exact_result_dtype, matmul_schedule
+from finn.kernels.rom import RomKernel
+from finn.kernels.dotp import PackedDotpKernel
+from finn.kernels.matmul import exact_result_dtype
 from finn.kernels.resources import resource_root, template_root
 from finn.kernels.streams import (
     COMPOSED,
@@ -43,10 +43,10 @@ from finn.kernels.streams import (
     TIEOFFS,
     Composed,
     Stream,
-    commit_adapters,
     netlist,
 )
 from finn.kernels.target import DspBlock
+from kernels.helpers import settled
 
 ROOT = Path(__file__).resolve().parents[2]
 ROWS, INPUTS, HIDDEN, OUTPUTS = 3, 4, 4, 4
@@ -58,16 +58,6 @@ W1 = tuple(tuple((3 * n + 2 * k) % 7 - 3 for n in range(HIDDEN)) for k in range(
 W2 = tuple(tuple((2 * n + 5 * k) % 7 - 3 for n in range(OUTPUTS)) for k in range(HIDDEN))
 X = tuple(tuple((5 * r + 3 * k) % 8 - 4 for k in range(INPUTS)) for r in range(ROWS))
 
-FIRST = matmul_schedule(rows=ROWS, reduction=INPUTS, outputs=HIDDEN, pe=PE1, simd=SIMD1)
-SECOND = matmul_schedule(rows=ROWS, reduction=HIDDEN, outputs=OUTPUTS, pe=PE2, simd=SIMD2)
-
-
-def weight_period(schedule, pe: int, simd: int):
-    """One pass of the weights in the order the layer reads them."""
-    presented = dotp_sequences(schedule, Form.DENSE, pe=pe, simd=simd)
-    assert not isinstance(presented, Rejected)
-    return period(presented.weights.form)
-
 
 def layered(*, adaptable: bool = True):
     class Layered(Space):
@@ -76,38 +66,24 @@ def layered(*, adaptable: bool = True):
         h = Stream(tensor=Tensor((ROWS, HIDDEN), ScalarEncoding(H)), adaptable=adaptable)
         w2 = Stream(tensor=Tensor((HIDDEN, OUTPUTS), ScalarEncoding(W)))
         y = Stream(tensor=Tensor((ROWS, OUTPUTS), ScalarEncoding(Y)), port="out0_V")
-        rom1 = CyclicDelivery(
-            dtype=W, form=weight_period(FIRST, PE1, SIMD1), values=W1, output_stream=w1
-        )
-        rom2 = CyclicDelivery(
-            dtype=W, form=weight_period(SECOND, PE2, SIMD2), values=W2, output_stream=w2
-        )
         first = PackedDotpKernel(
-            activation_dtype=A,
-            weights_dtype=W,
-            result_dtype=H,
-            pe=PE1,
-            simd=SIMD1,
-            target_dsp=DspBlock.DSP48E2,
-            target_period_ns=5.0,
-            schedule=FIRST,
-            activation_stream=x,
-            weights_stream=w1,
-            result_stream=h,
+            target_dsp=DspBlock.DSP48E2, target_period_ns=5.0, x_stream=x, w_stream=w1, y_stream=h
         )
         second = PackedDotpKernel(
-            activation_dtype=H,
-            weights_dtype=W,
-            result_dtype=Y,
-            pe=PE2,
-            simd=SIMD2,
-            target_dsp=DspBlock.DSP48E2,
-            target_period_ns=5.0,
-            schedule=SECOND,
-            activation_stream=h,
-            weights_stream=w2,
-            result_stream=y,
+            target_dsp=DspBlock.DSP48E2, target_period_ns=5.0, x_stream=h, w_stream=w2, y_stream=y
         )
+
+        # One pass of each layer's weights, in the order that layer reads them.
+        @derived(semantics=TRAVERSAL)
+        def first_period(self) -> Traversal:
+            return period(self.first.w.sequence.form)
+
+        @derived(semantics=TRAVERSAL)
+        def second_period(self) -> Traversal:
+            return period(self.second.w.sequence.form)
+
+        rom1 = RomKernel(dtype=W, form=first_period, contents=W1, output_stream=w1)
+        rom2 = RomKernel(dtype=W, form=second_period, contents=W2, output_stream=w2)
         modules = Members(MODULE)
         streams = Members(CONNECTION)
         tieoffs = Members(TIEOFFS)
@@ -127,12 +103,16 @@ def layered(*, adaptable: bool = True):
         {
             "rom1.rom_style": "auto",
             "rom2.rom_style": "auto",
+            "first.pe": PE1,
+            "first.simd": SIMD1,
             "first.compute_pumping": False,
+            "second.pe": PE2,
+            "second.simd": SIMD2,
             "second.compute_pumping": False,
         },
     )
-    # A stream admitting no adapter keeps its Decision closed; the others commit theirs.
-    return commit_adapters(point)
+    # A stream admitting no adapter keeps its Decision closed; the others settle theirs.
+    return settled(point)
 
 
 def test_the_hidden_stream_plans_width_replay_and_frame_and_places_vpc_and_input_gen():
@@ -143,6 +123,9 @@ def test_the_hidden_stream_plans_width_replay_and_frame_and_places_vpc_and_input
     assert point.x.plan.steps == (Step.MARKERS,)
     instances = [item.instance_id for item in point.structure.structure.instances]
     assert {"u_first", "u_second", "u_x_input_gen", "u_h_vpc", "u_h_input_gen"} <= set(instances)
+    # The ends belong to the layers' ports; the instances are the layers'.
+    connection = point.h.connection
+    assert (connection.source_owner, connection.sink_owner) == ("first.y", "second.x")
     vpc = dict(point.h.connection.stages[0].requirements.parameters)
     assert (vpc["PI"], vpc["PO"]) == (PE1, SIMD2)
     generator = dict(point.h.connection.stages[1].requirements.parameters)

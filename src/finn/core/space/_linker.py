@@ -243,6 +243,8 @@ class _Linker:
         self.pending: list[_ReferenceTask] = []
         # Referenced scope -> the (user scope, input name) pairs that reference it.
         self.users: dict[int, list[tuple[int, str]]] = {}
+        # A forwarded reference input: (scope, input) -> the input it forwards.
+        self.forwarded: dict[tuple[int, str], tuple[int, str]] = {}
         # Required formals nothing supplies, reported together after allocation.
         self.missing: list[str] = []
         # Who set each supplied member (by node) and each replaced child (by scope).
@@ -846,7 +848,10 @@ class _Linker:
         or forwards one of that body's own reference inputs. Nothing else is
         visible: a family reaches an ancestor's node only through its inputs.
         A forwarded input resolves to the node it finally references, so no
-        chain of forwarding composites is walked when reading it.
+        chain of forwarding composites is walked when reading it. The
+        forwarding node is a user of that node too, represented by the nodes
+        it forwards through (``users_candidates``): ``Users`` sees a kernel's
+        port that references a stream through its kernel's input.
         """
         for task in self.pending:
             draft = self.drafts[task.scope]
@@ -862,6 +867,12 @@ class _Linker:
                         f"{source.effective.space_type.__qualname__}"
                     )
                 target = source.targets[supplier]
+                if target is not None:
+                    self.users.setdefault(target, []).append((task.scope, task.name))
+                    self.forwarded[(task.scope, task.name)] = (
+                        task.source_scope,
+                        str(supplier.name),
+                    )
             else:
                 target = source.children.get(supplier)
                 if target is None:
@@ -1038,8 +1049,28 @@ class _Linker:
                 f"{self.drafts[scope].name or '<root>'}: member {key.name} must be a view"
             )
 
+    def exports_through(self, user: int, member: str, key: ViewKey[object]) -> bool:
+        """Whether ``user`` exports ``key`` for its input ``member`` (or for every input)."""
+        per_input = self.drafts[user].input_exports.get(key)
+        if per_input is not None:
+            return member in dict(per_input)
+        return self.drafts[user].members.get(key) is not None
+
+    def represented(self, user: int, member: str, key: ViewKey[object]) -> bool:
+        """A forwarding user whose forwarder exports ``key`` for that input: it answers for it."""
+        via = self.forwarded.get((user, member))
+        while via is not None:
+            if self.exports_through(*via, key):
+                return True
+            via = self.forwarded.get(via)
+        return False
+
     def users_candidates(self, scope: int, key: ViewKey[object]) -> list[tuple[str, str, int]]:
-        """Each user's export of ``key``: (its name beside this node, input, view)."""
+        """Each user's export of ``key``: (its name beside this node, input, view).
+
+        A user reaching this node through inputs it was forwarded is left out
+        when a node it forwards through exports ``key`` for that input.
+        """
 
         parent = self.drafts[scope].parent
         order = {
@@ -1049,6 +1080,8 @@ class _Linker:
         for user, member in sorted(
             self.users.get(scope, ()), key=lambda item: (item[0], order[item[0]].index(item[1]))
         ):
+            if self.represented(user, member, key):
+                continue
             per_input = self.drafts[user].input_exports.get(key)
             if per_input is not None:
                 target = dict(per_input).get(member)

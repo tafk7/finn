@@ -7,7 +7,7 @@ The form is a fact of the operation; what follows from it is derived: whether
 activations are broadcast, whether rows are replayed, the activation traversal.
 A depthwise operation is realized natively (only the INT8 DSP58 core reads one
 channel per lane) or densely, with block-diagonal weights on any core; the
-dense realization needs the weights, so not external delivery. Weights are
+dense realization needs the weights, so a weight memory. Weights are
 stored (k, n): window by channel.
 """
 
@@ -17,7 +17,7 @@ from qonnx.core.datatype import DataType
 from finn.core.space import Rejected, design_space
 from finn.dataflow.plan import Step
 from finn.kernels.configure import commit
-from finn.kernels.streams import commit_adapters
+from kernels.helpers import settled
 from finn.dataflow.gemm import Form
 from finn.kernels.matmul import MatMulKernel, WeightDelivery, matmul_assembly
 from finn.dataflow.traversal import Traversal
@@ -25,30 +25,29 @@ from finn.kernels.physical.structure import PhysicalPin, PinSlice
 from finn.kernels.target import DspBlock
 
 FACTS = dict(
-    rows=2,
-    reduction=9,  # the window
-    outputs=4,  # the channels
+    m=2,
+    k=9,  # the window
+    n=4,  # the channels
     form=Form.DEPTHWISE,
     activation_dtype=DataType["INT4"],
     weights_dtype=DataType["INT4"],
     target_dsp=DspBlock.DSP58,
 )
-CHOICES = {
-    "pe": 2,
-    "simd": 3,
-    "delivery": "external",
-    "weight_stream.transport": "direct",
-    "compute": "int8_dsp58",
-    "compute_pumping": False,
-}
 
 
-def point(**facts):
+def point(core="int8_dsp58", **facts):
     facts = {**FACTS, "target_period_ns": 5.0, **facts}
-    choices = dict(CHOICES)
+    choices = {
+        "memory": "none",
+        "weight_stream.transport": "direct",
+        "compute": core,
+        f"compute.{core}.pe": 2,
+        f"compute.{core}.simd": 3,
+        f"compute.{core}.compute_pumping": False,
+    }
     if facts["form"] is Form.DEPTHWISE:
         choices["realization"] = "native"
-    return commit_adapters(commit(design_space(MatMulKernel(**facts)), choices))
+    return settled(commit(design_space(MatMulKernel(**facts)), choices))
 
 
 def parameters(structure, instance):
@@ -104,7 +103,7 @@ def test_a_dense_form_replays_each_row_per_output_fold():
 
 
 def test_only_the_int8_dsp58_core_reads_a_depthwise_form():
-    packed = point().with_choices(compute="packed").query(MatMulKernel.structure)
+    packed = point("packed").query(MatMulKernel.structure)
     assert isinstance(packed, Rejected)
     assert "dotp-form" in {finding.code for finding in packed.findings}
     facts = {**FACTS, "pe": 2, "simd": 3}
@@ -134,9 +133,9 @@ def test_depthwise_cyclic_weights_are_the_channel_tile():
 BY_CHANNEL = ((1, -2, 3, -4), (2, 3, -1, 0), (-3, 1, 2, 1))
 WEIGHTS = tuple(zip(*BY_CHANNEL))
 DENSE = dict(
-    rows=2,
-    reduction=4,
-    outputs=3,
+    m=2,
+    k=4,
+    n=3,
     form=Form.DEPTHWISE,
     activation_dtype=DataType["INT4"],
     weights_dtype=DataType["INT4"],
@@ -152,7 +151,7 @@ def test_a_dense_realization_reads_window_by_channel_rows_against_block_diagonal
     built = matmul_assembly(target_dsp=DspBlock.DSP48E2, **DENSE)
     assert [item.instance_id for item in built.structure.instances] == [
         "u_compute_packed",
-        "u_delivery_cyclic",
+        "u_memory_rom",
         "u_activations_input_gen",
     ]
     compute = parameters(built.structure, "u_compute_packed")
@@ -196,7 +195,7 @@ def test_the_dense_realization_needs_known_weights_and_either_may_be_chosen_on_d
     ],
 )
 def test_narrow_weights_follow_known_weights(weights, delivery, narrow):
-    facts = {**DENSE, "form": Form.DENSE, "outputs": 3, "pe": 3}
+    facts = {**DENSE, "form": Form.DENSE, "n": 3, "pe": 3}
     built = matmul_assembly(
         target_dsp=DspBlock.DSP48E2, **{**facts, "weights": weights, "weight_delivery": delivery}
     )

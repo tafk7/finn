@@ -6,7 +6,9 @@ from typing_extensions import assert_type
 
 from finn.core.space import BoundValue, QueryResult, View, ViewAssessment
 from finn.dataflow.datatypes import QONNXDataType
-from finn.kernels.artifacts.abi import Endpoint
+from finn.dataflow.schedule import Schedule
+from finn.dataflow.traversal import BeatSequence
+from finn.kernels.artifacts.abi import Bus, Endpoint
 from finn.kernels.datatypes.domains import Integer
 from finn.dataflow.tensor import ScalarEncoding
 from finn.kernels.datatypes.scalar import IntegerScalar, Scalar, integer_scalar
@@ -16,6 +18,7 @@ from finn.kernels.physical.axi_stream import AxiStream, AxiStreamPort, axi_strea
 from finn.kernels.physical.layout import PackedBeatLayout
 from finn.kernels.physical.ports import NativeStreamPort
 from finn.kernels.physical.stream import ReadyValidStream
+from finn.kernels.port import Port, ScheduledPort
 
 
 def declare(dtype: QONNXDataType) -> None:
@@ -28,25 +31,23 @@ def declare(dtype: QONNXDataType) -> None:
 
 def check(point: DotpAxiKernel, eltwise: EltwiseKernel) -> None:
     # Class access: nodes typed as their families, references typed as values.
-    assert_type(DotpAxiKernel.activation, AxiStreamPort)
-    assert_type(DotpAxiKernel.activation_type, IntegerScalar)
-    assert_type(DotpAxiKernel.activation_dtype, QONNXDataType)
-    assert_type(DotpAxiKernel.activation.dtype, QONNXDataType)
-    assert_type(DotpAxiKernel.activation.stream, AxiStream)
-    assert_type(DotpAxiKernel.activation_type.encoding, ScalarEncoding)
-    assert_type(AxiStreamPort.stream, View[AxiStream])
-    assert_type(point.query(DotpAxiKernel.activation.payload_bits), QueryResult[int])
+    assert_type(DotpAxiKernel.x, ScheduledPort)
+    assert_type(DotpAxiKernel.x.element, ScalarEncoding)
+    assert_type(DotpAxiKernel.x.axis, AxiStream)
+    assert_type(DotpAxiKernel.x.sequence, BeatSequence)
+    assert_type(Port.bus, View[Bus])
+    assert_type(point.query(DotpAxiKernel.pe), QueryResult[int])
     # Configuration reads.
-    assert_type(point.activation, AxiStreamPort)
-    assert_type(point.activation.dtype, QONNXDataType)
-    assert_type(point.activation.payload_bits, int)
-    assert_type(point.activation.payload, PackedBeatLayout)
-    assert_type(point.activation.stream, AxiStream)
-    assert_type(point.activation.inspect(AxiStreamPort.stream), ViewAssessment[AxiStream])
-    assert_type(point.activation.query(AxiStreamPort.stream), QueryResult[AxiStream])
-    assert_type(point.activation.field(AxiStreamPort.stream), BoundValue[AxiStream])
-    assert_type(point.activation_type.encoding, ScalarEncoding)
-    assert_type(point.activation.field(AxiStreamPort.payload_bits).get(), int)
-    assert_type(point.activation.field(AxiStreamPort.payload_bits).query(), QueryResult[int])
+    assert_type(point.x, ScheduledPort)
+    assert_type(point.x.element, ScalarEncoding)
+    assert_type(point.x.axis, AxiStream)
+    assert_type(point.x.axis.payload, PackedBeatLayout)
+    assert_type(point.x.bus, Bus)
+    assert_type(point.x.inspect(Port.bus), ViewAssessment[Bus])
+    assert_type(point.x.query(Port.bus), QueryResult[Bus])
+    assert_type(point.x.field(Port.bus), BoundValue[Bus])
+    assert_type(point.pe, int)
+    assert_type(point.schedule, Schedule)
+    assert_type(AxiStreamPort.stream, View[AxiStream])
     assert_type(eltwise.lhs, NativeStreamPort)
     assert_type(eltwise.lhs.stream, ReadyValidStream)

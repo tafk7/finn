@@ -233,7 +233,7 @@ def test_threshold_rejects_existing_unsupported_profiles_and_malformed_tables() 
 )
 def test_hls_view_preserves_cpp_types_interfaces_and_header_closure(dtype: str, cpp: str) -> None:
     point = memstream(dtype)
-    requirements = point.build_requirements
+    requirements = point.sources
     assert isinstance(requirements, HlsSourceRequirements)
     assert point.cpp_type == cpp
     assert not hasattr(requirements, "abi")
@@ -259,7 +259,7 @@ def test_hls_view_preserves_cpp_types_interfaces_and_header_closure(dtype: str, 
 @pytest.mark.parametrize(("dtype", "depth"), (("BIPOLAR", 3), ("INT1025", 3), ("INT9", 1)))
 def test_hls_native_type_and_depth_limits_remain_explicit_refusals(dtype: str, depth: int) -> None:
     assert isinstance(
-        memstream(dtype, depth).inspect(MemStreamHlsKernel.build_requirements).accepted_result,
+        memstream(dtype, depth).inspect(MemStreamHlsKernel.sources).accepted_result,
         Rejected,
     )
 
@@ -277,6 +277,4 @@ def test_rich_roots_require_parameters_and_optional_parent_depth_permits_narrow_
 
     point = design_space(OptionalMemory())
     assert point.memory.cpp_type == "ap_int<9>"
-    assert isinstance(
-        point.memory.inspect(MemStreamHlsKernel.build_requirements).accepted_result, Unresolved
-    )
+    assert isinstance(point.memory.inspect(MemStreamHlsKernel.sources).accepted_result, Unresolved)

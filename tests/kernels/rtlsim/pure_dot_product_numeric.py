@@ -27,9 +27,9 @@ from kernels.rtlsim.dotp_support import (
     _weight_beats,
     _wrapper,
 )
+from kernels.helpers import placed_dotp
 from kernels.rtlsim.rtl_transport import drive_observed
 from finn.kernels.artifacts.contribution_types import CopiedSource
-from finn.core.space import design_space
 from finn.kernels.dotp import Int8Dsp58DotpKernel, PackedDotpKernel
 from finn.kernels.target import DspBlock
 from finn.kernels.resources import resource_root
@@ -137,17 +137,21 @@ def run(configuration: Configuration, evidence: Path, *, backpressure_ticks: int
         result_bits += 1
     result_type = DataType[f"INT{result_bits}"]
     family = Int8Dsp58DotpKernel if c.int8 else PackedDotpKernel
-    point = design_space(
-        family(
-            pe=c.pe,
-            simd=c.simd,
-            activation_dtype=a_type,
-            weights_dtype=w_type,
-            result_dtype=result_type,
-            target_dsp=c.target,
-            target_period_ns=c.period,
-        )
-    ).with_choices(compute_pumping=c.pumping)
+    # The core between three streams: its extents are the case's, its folds PE and SIMD.
+    point = placed_dotp(
+        family,
+        activation_dtype=a_type,
+        weights_dtype=w_type,
+        result_dtype=result_type,
+        pe=c.pe,
+        simd=c.simd,
+        compute_pumping=c.pumping,
+        rows=c.repetitions,
+        outputs=4,
+        reduction=c.width,
+        target_dsp=c.target,
+        target_period_ns=c.period,
+    )
     module = point.build_requirements
     case = Case(
         c.label,
@@ -183,7 +187,7 @@ def run(configuration: Configuration, evidence: Path, *, backpressure_ticks: int
         "in1": _weight_beats(case, weights, w_type.bitwidth()),
     }
     # Exercise ignored high input padding, rather than supplying only zero fill.
-    for name, stream in (("in0", point.activation), ("in1", point.weights)):
+    for name, stream in (("in0", point.x.axis), ("in1", point.w.axis)):
         padding = ((1 << stream.carrier_bits) - 1) ^ ((1 << stream.payload_bits) - 1)
         stimulus[name] = [beat | (padding if j % 2 else 0) for j, beat in enumerate(stimulus[name])]
     roots = {

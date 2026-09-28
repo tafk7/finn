@@ -29,9 +29,9 @@ ROOT = Path(__file__).resolve().parents[2]
 WEIGHTS = ((-4, -3, -2, -1), (0, 1, 2, 3), (3, 2, 1, 0), (-1, -2, -3, -4))
 # MatMul stores its weights (k, n): WEIGHTS read by output.
 MATMUL = dict(
-    rows=3,
-    reduction=4,
-    outputs=4,
+    m=3,
+    k=4,
+    n=4,
     activation_dtype=DataType["INT3"],
     weights_dtype=DataType["INT3"],
     pe=2,
@@ -43,7 +43,7 @@ MATMUL = dict(
 
 
 def memory(**changes):
-    facts = {"dtype": DataType["INT3"], "form": tile(4, 4, 2, 2), "values": WEIGHTS, **changes}
+    facts = {"dtype": DataType["INT3"], "form": tile(4, 4, 2, 2), "contents": WEIGHTS, **changes}
     return design_space(MemStreamKernel(**facts)).with_choices(
         ram_style="block", pumped_memory=False
     )
@@ -62,13 +62,13 @@ def test_the_image_is_the_consumers_order_in_a_content_named_init_file():
     assert (parameters["DEPTH"], parameters["WIDTH"], parameters["SETS"]) == (4, 12, 1)
     assert init in requirements.contributions
     # Other contents, another file and another identity.
-    other = memory(values=tuple(tuple(-value - 1 for value in row) for row in WEIGHTS))
+    other = memory(contents=tuple(tuple(-value - 1 for value in row) for row in WEIGHTS))
     assert other.init_file.path != init.path
 
 
 def test_a_pumped_memory_stores_half_words_low_first():
     point = design_space(
-        MemStreamKernel(dtype=DataType["INT3"], form=tile(4, 4, 2, 2), values=WEIGHTS)
+        MemStreamKernel(dtype=DataType["INT3"], form=tile(4, 4, 2, 2), contents=WEIGHTS)
     ).with_choices(ram_style="auto", pumped_memory=True)
     # 12-bit words as 6-bit halves: 0x22C -> 0x2C, 0x08.
     assert point.init_file.data.split(b"\n")[:4] == [b"2c", b"08", b"3e", b"1a"]
@@ -96,7 +96,7 @@ def test_matmul_memstream_delivery_materializes_its_image(tmp_path):
     built = matmul_assembly(**MATMUL)
     assert [item.instance_id for item in built.structure.instances] == [
         "u_compute_packed",
-        "u_delivery_memstream",
+        "u_memory_memstream",
         "u_activations_input_gen",
     ]
     assert built.initializer == (0x22C, 0x6BE, 0xDD3, 0x941)
@@ -118,7 +118,7 @@ def test_writable_weights_export_axilite_and_need_the_memstream():
     (bus,) = [port for port in built.structure.top_abi.ports if isinstance(port, Bus)][-1:]
     assert bus.name == "s_axilite"
     assert {member.physical for member in bus.signals} >= {"s_axilite_AWADDR", "s_axilite_WDATA"}
-    with pytest.raises(ValueError, match="matmul-writable"):
+    with pytest.raises(ValueError, match="rom-writable"):
         matmul_assembly(
             **{**MATMUL, "weight_delivery": WeightDelivery.CYCLIC}, writable_weights=True
         )
@@ -132,15 +132,15 @@ def test_several_weight_sets_take_a_set_index_per_row():
     (memstream,) = (
         dict(item.requirements.parameters)
         for item in built.structure.instances
-        if item.instance_id == "u_delivery_memstream"
+        if item.instance_id == "u_memory_memstream"
     )
     assert memstream["SETS"] == 2
     assert len(built.initializer) == 8  # both sets, set after set
-    with pytest.raises(ValueError, match="matmul-sets"):
+    with pytest.raises(ValueError, match="rom-sets"):
         matmul_assembly(
             **{**MATMUL, "weights": sets, "weight_delivery": WeightDelivery.CYCLIC}, weight_sets=2
         )
-    facts = {name: MATMUL[name] for name in ("rows", "reduction", "outputs", "target_dsp")}
+    facts = {name: MATMUL[name] for name in ("m", "k", "n", "target_dsp")}
     base = design_space(
         MatMulKernel(
             **facts,
@@ -150,4 +150,4 @@ def test_several_weight_sets_take_a_set_index_per_row():
         )
     )
     keys = {item.key for item in inspection.decisions(base)}
-    assert {"delivery.memstream.ram_style", "delivery.memstream.pumped_memory"} <= keys
+    assert {"memory.memstream.ram_style", "memory.memstream.pumped_memory"} <= keys

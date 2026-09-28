@@ -174,9 +174,9 @@ def run(
     else:
         expected = np.stack([activations[r] @ selected[r].T for r in range(rows)])
     built = matmul_assembly(
-        rows=rows,
-        reduction=c.width,
-        outputs=c.height,
+        m=rows,
+        k=c.width,
+        n=c.height,
         activation_dtype=a_type,
         weights_dtype=w_type,
         pe=c.pe,

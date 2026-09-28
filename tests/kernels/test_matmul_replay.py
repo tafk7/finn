@@ -26,25 +26,31 @@ from finn.kernels.matmul import MatMulKernel, matmul_assembly
 from finn.kernels.physical.contract import StreamContract
 from finn.kernels.physical.stream import MarkerKind, ReadyValidStream, StreamMarker
 from finn.kernels.physical.structure import PhysicalPin, PinSlice, UnusedOutput
-from finn.kernels.streams import commit_adapters
+from kernels.helpers import settled
 from finn.kernels.target import DspBlock
 
 FACTS = dict(
-    rows=3,
-    reduction=4,
-    outputs=4,
+    m=3,
+    k=4,
+    n=4,
     activation_dtype=DataType["INT3"],
     weights_dtype=DataType["INT3"],
     target_dsp=DspBlock.DSP48E2,
 )
-CHOICES = {
-    "pe": 2,
-    "simd": 2,
-    "delivery": "external",
-    "weight_stream.transport": "direct",
-    "compute": "packed",
-    "compute_pumping": False,
-}
+
+
+def choices(core: str = "packed") -> dict[str, object]:
+    return {
+        "memory": "none",
+        "weight_stream.transport": "direct",
+        "compute": core,
+        f"compute.{core}.pe": 2,
+        f"compute.{core}.simd": 2,
+        f"compute.{core}.compute_pumping": False,
+    }
+
+
+CHOICES = choices()
 
 
 def test_the_activation_stream_plans_the_replay_and_its_frame():
@@ -65,7 +71,7 @@ def test_the_activation_stream_plans_the_replay_and_its_frame():
     facts = {**FACTS, "target_dsp": DspBlock.DSP58, "form": Form.DEPTHWISE}
     depthwise = commit(
         design_space(MatMulKernel(**facts, target_period_ns=5.0)),
-        {**CHOICES, "compute": "int8_dsp58", "realization": "native"},
+        {**choices("int8_dsp58"), "realization": "native"},
     )
     assert depthwise.activations.plan.steps == (Step.MARKERS,)
 
@@ -113,7 +119,7 @@ def test_one_output_fold_and_one_beat_frames_close_every_beat():
 
 def test_the_adapter_s_memory_is_a_choice_of_the_stream():
     point = commit(design_space(MatMulKernel(**FACTS, target_period_ns=5.0)), CHOICES)
-    configured = commit_adapters(point, ram_style="distributed")
+    configured = settled(point, ram_style="distributed")
     (generator,) = [stage for stage in configured.activations.connection.stages]
     assert dict(generator.requirements.parameters)["RAM_STYLE"] == '"distributed"'
 

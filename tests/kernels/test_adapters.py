@@ -23,7 +23,7 @@ from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import Traversal, vector_major
 from finn.kernels.artifacts.derivation import ProducerIdentity
 from finn.kernels.configure import commit, compatible
-from finn.kernels.delivery import CyclicDelivery
+from finn.kernels.rom import RomKernel
 from finn.kernels.streams import (
     COMPOSED,
     CONNECTION,
@@ -31,10 +31,10 @@ from finn.kernels.streams import (
     TIEOFFS,
     Composed,
     Stream,
-    commit_adapters,
     netlist,
 )
 from finn.kernels.thresholding import ThresholdingAxiKernel
+from kernels.helpers import settled
 from finn.kernels.transpose import TransposeKernel
 
 ELEMENT = ScalarEncoding(DataType["INT4"])
@@ -58,8 +58,8 @@ def adapted(source: Traversal, pe: int, *, adaptable: bool = True, commit_all: b
     class Adapted(Space):
         x = Stream(tensor=Tensor(source.shape, ELEMENT), adaptable=adaptable)
         y = Stream(tensor=Tensor(source.shape, ScalarEncoding(DataType["UINT4"])), port="out0_V")
-        producer = CyclicDelivery(
-            dtype=DataType["INT4"], form=source, values=values(rows, channels), output_stream=x
+        producer = RomKernel(
+            dtype=DataType["INT4"], form=source, contents=values(rows, channels), output_stream=x
         )
         activate = ThresholdingAxiKernel(
             input_dtype=DataType["INT4"],
@@ -94,7 +94,7 @@ def adapted(source: Traversal, pe: int, *, adaptable: bool = True, commit_all: b
             "activate.deep_pipeline": False,
         },
     )
-    return commit_adapters(point) if commit_all else point
+    return settled(point) if commit_all else point
 
 
 def columns_first(rows: int, channels: int, lanes: int) -> Traversal:

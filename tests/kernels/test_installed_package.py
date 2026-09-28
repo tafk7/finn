@@ -48,6 +48,9 @@ class RejectGraphDependencies(importlib.abc.MetaPathFinder):
 sys.meta_path.insert(0, RejectGraphDependencies())
 
 from finn.kernels import DspBlock, PackedDotpKernel, WeightDelivery, matmul_assembly
+from finn.dataflow.tensor import ScalarEncoding, Tensor
+from finn.kernels.configure import commit
+from finn.kernels.streams import Stream
 from finn.core.space import (
     Available, Decision, Param, Space, design_space, derived, divisors_of, view,
 )
@@ -94,17 +97,24 @@ assert contributions.CopiedSource is contribution_types.CopiedSource
 assert requirements.ModuleBuildRequirements.__module__ == "finn.kernels.artifacts.build"
 assert contribution_types.CopiedSource.__module__ == "finn.kernels.artifacts.contributions"
 
-dotp = design_space(PackedDotpKernel(
-    activation_dtype=DataType["INT3"],
-    weights_dtype=DataType["INT3"],
-    result_dtype=DataType["INT8"],
-    pe=2, simd=2, target_dsp=DspBlock.DSP48E2, target_period_ns=5.0,
-)).with_choices(compute_pumping=False)
+class PlacedDotp(Space):
+    x = Stream(tensor=Tensor((1, 2), ScalarEncoding(DataType["INT3"])), port="in0_V")
+    w = Stream(tensor=Tensor((2, 2), ScalarEncoding(DataType["INT3"])), port="in1_V")
+    y = Stream(tensor=Tensor((1, 2), ScalarEncoding(DataType["INT8"])), port="out0_V")
+    compute = PackedDotpKernel(
+        target_dsp=DspBlock.DSP48E2, target_period_ns=5.0, x_stream=x, w_stream=w, y_stream=y
+    )
+
+
+dotp = commit(
+    design_space(PlacedDotp()),
+    {"compute.pe": 2, "compute.simd": 2, "compute.compute_pumping": False},
+).compute
 answer = dotp.build_requirements
 assert isinstance(answer, requirements.ModuleBuildRequirements), answer
 assert dict(answer.parameters)["ACCU_WIDTH"] == 8
-assert dotp.activation.dtype.name == "INT3"
-assert dotp.activation.payload_bits == 6
+assert dotp.x.element.dtype.name == "INT3"
+assert dotp.x.axis.payload_bits == 6
 
 dotp_sources = {
     "rtl/arith/add_multi_pkg.sv", "rtl/arith/add_multi.sv",
@@ -152,7 +162,7 @@ for delivery in WeightDelivery:
     if delivery is WeightDelivery.MEMSTREAM:
         expected |= {"rtl/infra/axilite.sv", "rtl/infra/memstream.sv", "rtl/infra/memstream_axi.sv"}
     assembly = matmul_assembly(
-        rows=3, reduction=4, outputs=4, pe=2, simd=2,
+        m=3, k=4, n=4, pe=2, simd=2,
         activation_dtype=DataType["INT3"], weights_dtype=DataType["INT3"],
         target_dsp=DspBlock.DSP48E2, weight_delivery=delivery, **options,
     )

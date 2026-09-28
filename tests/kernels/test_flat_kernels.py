@@ -312,7 +312,7 @@ def test_hls_sources_have_native_function_interfaces_and_complete_header_closure
     dtype, cpp, tmp_path
 ):
     point = memstream(dtype=dtype)
-    requirements = point.build_requirements
+    requirements = point.sources
     assert point.cpp_type == cpp
     assert not hasattr(requirements, "abi")
     assert [(p.name, p.cpp_type, p.shape, p.mode) for p in requirements.interfaces] == [
@@ -332,7 +332,7 @@ def test_hls_sources_have_native_function_interfaces_and_complete_header_closure
 
 
 def test_generated_hls_top_executes_signed_values_and_wraps_with_real_vendor_headers(tmp_path):
-    requirements = memstream().build_requirements
+    requirements = memstream().sources
     files = render_hls_sources(
         requirements, roots={"finnlib": FINNLIB}, template_roots=(template_root(),)
     )

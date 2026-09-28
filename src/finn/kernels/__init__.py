@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from finn.kernels.configure import commit
-    from finn.kernels.delivery import CyclicDelivery
+    from finn.kernels.rom import RomKernel
     from finn.kernels.dotp import (
         DotpAxiKernel,
         Int8Dsp58DotpKernel,
@@ -29,7 +29,7 @@ if TYPE_CHECKING:
     from finn.kernels.target import DspBlock
 
 _LAZY_EXPORTS = {
-    "CyclicDelivery": ("finn.kernels.delivery", "CyclicDelivery"),
+    "RomKernel": ("finn.kernels.rom", "RomKernel"),
     "commit": ("finn.kernels.configure", "commit"),
     "DotpAxiKernel": ("finn.kernels.dotp", "DotpAxiKernel"),
     "Int8Dsp58DotpKernel": ("finn.kernels.dotp", "Int8Dsp58DotpKernel"),
@@ -60,7 +60,7 @@ def __getattr__(name: str) -> object:
 
 
 __all__ = [
-    "CyclicDelivery",
+    "RomKernel",
     "commit",
     "DotpAxiKernel",
     "Int8Dsp58DotpKernel",

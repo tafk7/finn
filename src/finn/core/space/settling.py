@@ -4,10 +4,13 @@
 
 ``settle(point)`` looks at every applicable, undecided Decision over nodes. A
 case is compatible when committing it alone is accepted and, if an
-``admission`` is given, the candidate it places admits the configuration
-(``admission(candidate)`` is ``Available``, or None for no rule). A Decision
-with exactly one compatible case is committed; one with several is a design
-choice and stays open, as does one with none. Settling repeats until nothing
+``admission`` is given, the candidate it places does not refuse the
+configuration (``admission(candidate)`` is not ``Rejected``; ``None`` is no
+rule). An admission still waiting on an open choice (``Unresolved``) does not
+refuse: when every other case is refused, the remaining one is the only one
+that can be built, whatever the open choice. A Decision with exactly one
+compatible case is committed; one with several is a design choice and stays
+open, as does one with none. Settling repeats until nothing
 changes, since a commitment can open another Decision (an adapter follows the
 core it feeds). Scalar Decisions are never settled: they have no candidate
 that could refuse itself.
@@ -24,7 +27,7 @@ from typing import Generic, TypeVar
 from ._configuration import Space
 from .occurrence import _attach, state
 from .references import DecisionHandle
-from .results import Available, QueryResult
+from .results import Available, QueryResult, Rejected
 
 S = TypeVar("S", bound=Space)
 
@@ -60,7 +63,7 @@ def compatible_cases(point: S, key: str, admission: Admission | None = None) -> 
         scope = scopes[case]
         if scope is not None and admission is not None:
             verdict = admission(_attach(state(report.instance), scope))
-            if verdict is not None and not isinstance(verdict, Available):
+            if isinstance(verdict, Rejected):
                 continue
         result.append(case)
     return tuple(result)

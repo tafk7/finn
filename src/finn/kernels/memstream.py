@@ -3,13 +3,13 @@
 
 """FinnLib ``memstream_axi``: a stored integer operand streamed in its consumer's order.
 
-As for ``CyclicDelivery``, the consumer supplies the operand ``values`` and the
+As for ``RomKernel``, the consumer supplies the operand ``contents`` and the
 beat ``form`` it reads them in; the kernel packs one image per set in that form
 into the memory. Initial contents go through INIT_FILE, a generated data file
 named by its contents, so they are part of the build identity.
 
 - With one set, the image streams cyclically, like the ROM.
-- With ``sets`` > 1, ``values`` holds one operand per set, and each index
+- With ``sets`` > 1, ``contents`` holds one operand per set, and each index
   accepted on ``set_stream`` streams one whole set. The output presents one
   pass per index; the set stream is an ordinary stream reference input.
 - ``writable`` exports the AXI-Lite port through ``control``, so software can
@@ -88,7 +88,7 @@ class MemStreamKernel(Kernel):
     dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
     element = integer_scalar(dtype, Integer())
     form: Traversal = Param(semantics=TRAVERSAL)
-    values: IntegerTensor = Param(semantics=INTEGER_TENSOR)
+    contents: IntegerTensor = Param(semantics=INTEGER_TENSOR)
     sets: int = Param(default=1)
     writable: bool = Param(default=False)
     # Where a parent places it: the stream it drives, the set-index stream
@@ -128,10 +128,10 @@ class MemStreamKernel(Kernel):
         """Packed words, set after set, each set in the consumer's ``form``."""
         encoding = self.element.encoding
         low, high = ordinary_integer_bounds(encoding.dtype)
-        values, sets = self.values, self.sets
+        values, sets = self.contents, self.sets
         groups = values if sets > 1 else (values,)
         if sets > 1 and (not isinstance(values, tuple) or len(values) != sets):
-            return reject("memstream-values", f"values must hold one operand per set ({sets})")
+            return reject("memstream-values", f"contents must hold one operand per set ({sets})")
         try:
             words = tuple(
                 word for group in groups for word in pack(self.form, group, encoding.bits)
@@ -217,9 +217,9 @@ class MemStreamKernel(Kernel):
             "rst",
         )
 
-    support = ConstraintGroup(geometry_supported)
+    admission = ConstraintGroup(geometry_supported)
 
-    @view(semantics=default_semantics(ModuleBuildRequirements), requires=(support,))
+    @view(semantics=default_semantics(ModuleBuildRequirements), requires=(admission,))
     def build_requirements(self) -> ModuleBuildRequirements:
         init = self.init_file
         pumped = self.pumped_memory

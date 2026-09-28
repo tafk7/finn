@@ -27,7 +27,6 @@ from finn.kernels.artifacts.store import ArtifactStore
 from finn.kernels.control import EXPORTED, ControlBus
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.dotp import PackedDotpKernel
-from finn.kernels.matmul import matmul_schedule
 from finn.kernels.physical.structure import ConstantBits, PinSlice
 from finn.kernels.physical.validation import abi_pins
 from finn.kernels.resources import resource_root, template_root
@@ -38,18 +37,17 @@ from finn.kernels.streams import (
     TIEOFFS,
     Composed,
     Stream,
-    commit_adapters,
     netlist,
 )
 from finn.kernels.target import DspBlock
 from finn.kernels.thresholding import ThresholdingAxiKernel
+from kernels.helpers import settled
 
 ROOT = Path(__file__).resolve().parents[2]
 REPETITIONS, WIDTH, HEIGHT, SIMD = 2, 4, 2, 2
 FOLDS = WIDTH // SIMD
 A, W, R = DataType["INT3"], DataType["INT3"], DataType["INT9"]
 THRESHOLDS = (((-5, 0, 7), (-2, 3, 10)),)
-SCHEDULE = matmul_schedule(rows=REPETITIONS, reduction=WIDTH, outputs=HEIGHT, pe=1, simd=SIMD)
 X = Tensor((REPETITIONS, WIDTH), ScalarEncoding(A))
 WEIGHT_TENSOR = Tensor((WIDTH, HEIGHT), ScalarEncoding(W))
 RESULT_TENSOR = Tensor((REPETITIONS, HEIGHT), ScalarEncoding(R))
@@ -65,17 +63,11 @@ class Activated(Space):
     levels = Stream(tensor=LEVEL_TENSOR, port="out0_V")
     config = ControlBus(port="s_axilite")
     compute = PackedDotpKernel(
-        activation_dtype=A,
-        weights_dtype=W,
-        result_dtype=R,
-        pe=1,
-        simd=SIMD,
         target_dsp=DspBlock.DSP48E2,
         target_period_ns=5.0,
-        activation_stream=activations,
-        weights_stream=weights,
-        result_stream=results,
-        schedule=SCHEDULE,
+        x_stream=activations,
+        w_stream=weights,
+        y_stream=results,
     )
     activate = ThresholdingAxiKernel(
         input_dtype=R,
@@ -107,9 +99,11 @@ class Activated(Space):
 
 
 def activated(*, writable: bool):
-    return commit_adapters(
+    return settled(
         design_space(Activated()).with_choices(
             {
+                Activated.compute.pe: 1,
+                Activated.compute.simd: SIMD,
                 Activated.compute.compute_pumping: False,
                 Activated.activate.use_axilite: writable,
                 Activated.activate.deep_pipeline: False,

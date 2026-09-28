@@ -12,7 +12,7 @@ from finn.core.space import Available, Rejected, Unresolved
 from finn.kernels.artifacts.abi import Bus
 from finn.kernels.artifacts.build import prepare_module_build, render_module_sources
 from finn.kernels.artifacts.store import ArtifactStore
-from finn.kernels.configure import commit
+from finn.kernels.configure import commit, settle
 from kernels.helpers import point_for
 from finn.kernels.matmul import MatMulKernel, WeightDelivery, exact_result_dtype, matmul_assembly
 from finn.kernels.dotp import DotpAxiKernel, PackedDotpKernel
@@ -24,9 +24,9 @@ from finn.kernels.resources import resource_root, template_root
 
 ROOT = Path(__file__).resolve().parents[2]
 FACTS = dict(
-    rows=2,
-    reduction=4,
-    outputs=4,
+    m=2,
+    k=4,
+    n=4,
     activation_dtype=DataType["INT3"],
     weights_dtype=DataType["INT3"],
     target_dsp=DspBlock.DSP48E2,
@@ -36,9 +36,9 @@ FACTS = dict(
 
 def assembly(**changes):
     values = dict(
-        rows=3,
-        reduction=4,
-        outputs=4,
+        m=3,
+        k=4,
+        n=4,
         activation_dtype=DataType["INT3"],
         weights_dtype=DataType["INT3"],
         pe=2,
@@ -86,7 +86,7 @@ def test_cyclic_image_has_output_then_reduction_then_pe_simd_order():
     (cyclic,) = (
         dict(item.requirements.parameters)
         for item in built.structure.instances
-        if item.instance_id == "u_delivery_cyclic"
+        if item.instance_id == "u_memory_rom"
     )
     assert cyclic == {
         "DEPTH": 4,
@@ -98,7 +98,7 @@ def test_cyclic_image_has_output_then_reduction_then_pe_simd_order():
 
 
 def test_input_padding_is_ignored_and_child_padding_is_zero():
-    built = assembly(reduction=6, outputs=3, pe=1)
+    built = assembly(k=6, n=3, pe=1)
     assert built.structure.ignored_top_input_bits == (
         PinSlice(PhysicalPin(None, "in0_V_tdata"), 6, 2),
         PinSlice(PhysicalPin(None, "in1_V_tdata"), 6, 2),
@@ -115,7 +115,7 @@ def test_input_padding_is_ignored_and_child_padding_is_zero():
         PinSlice(PhysicalPin("u_compute_packed", "ap_clk2x"), 0, 1): ConstantBits(1, 0),
     }
     # INT8 is exact for six INT3 products, so use width=2 to observe output padding.
-    padded = assembly(reduction=2, outputs=3, pe=1)
+    padded = assembly(k=2, n=3, pe=1)
     assert padded.result_dtype == DataType["INT7"]
     assert any(
         wire.destination == PinSlice(PhysicalPin(None, "out0_V_tdata"), 7, 1)
@@ -147,9 +147,9 @@ def test_precision_covers_full_ranges_and_is_minimal(activation, weight, length,
     [
         ({"pe": 3}, "domain-membership"),
         ({"simd": 3}, "domain-membership"),
-        ({"rows": 0}, "positive"),
+        ({"m": 0}, "matmul-extents"),
         # dotp's accumulator refuses this width.
-        ({"reduction": 1 << 48}, "dotp-accumulator-width"),
+        ({"k": 1 << 48}, "dotp-accumulator-width"),
         ({"weight_delivery": "external"}, "WeightDelivery"),
         ({"weight_delivery": WeightDelivery.CYCLIC}, "requires weights"),
         ({"weights": [[0] * 4] * 4}, "no initializer"),
@@ -163,37 +163,46 @@ def test_invalid_configuration_fails_during_construction(changes, match):
         assembly(**changes)
 
 
-def test_space_selects_folding_and_constructs_without_a_logical_contract():
+def test_the_space_settles_the_core_and_the_core_owns_its_folds():
     base = point_for(
         MatMulKernel,
         FACTS,
-        pe=2,
-        delivery="external",
-        compute="packed",
+        memory="none",
         **{"weight_stream.transport": "direct"},
+    )
+    # On DSP48E2 only the packed core admits the configuration, before any fold.
+    settled_core = settle(base)
+    assert settled_core.committed == {"compute": "packed"}
+    point = commit(
+        settled_core.point,
+        {"compute.packed.pe": 2, "compute.packed.simd": 2},
     )
     # The activation stream's adapter applies once its plan is known, which the
     # folding decides.
     point = commit(
-        base.with_choices(simd=2),
-        {"activations.adapter": "input_gen", "activations.adapter_ram_style": "auto"},
+        point, {"activations.adapter": "input_gen", "activations.adapter_ram_style": "auto"}
     )
     assert isinstance(
         point.compute.inspect(DotpAxiKernel.build_requirements).accepted_result, Unresolved
     )
     assert isinstance(point.inspect(MatMulKernel.structure).accepted_result, Unresolved)
-    point = point.with_choices(compute_pumping=False)
+    point = commit(point, {"compute.packed.compute_pumping": False})
     assert point.result_type == DataType["INT8"]
-    assert point.inspect(MatMulKernel.dimensions_supported).result == Available(True)
-    assert point.compute.pe == point.pe
-    assert point.compute.result.dtype == point.result_type
+    assert point.inspect(MatMulKernel.dimensions).result == Available(True)
+    assert point.compute.y.element.dtype == point.result_type
     _ = point.compute.build_requirements
-    assert point.folding.result_beats == 4
+    assert point.compute.y.sequence.form.beats == 4
     assert point.structure.requirements == point.build_requirements
-    assert not hasattr(MatMulKernel, "contract")
+    assert not hasattr(MatMulKernel, "contract") and not hasattr(MatMulKernel, "pe")
     refused = commit(
-        base.with_choices(simd=1, compute_pumping=True),
-        {"activations.adapter": "input_gen", "activations.adapter_ram_style": "auto"},
+        settled_core.point,
+        {
+            "compute.packed.pe": 2,
+            "compute.packed.simd": 1,
+            "compute.packed.compute_pumping": True,
+            "activations.adapter": "input_gen",
+            "activations.adapter_ram_style": "auto",
+        },
     )
     assert isinstance(
         refused.compute.inspect(DotpAxiKernel.build_requirements).accepted_result, Rejected
@@ -244,41 +253,36 @@ def test_matmul_honors_the_child_physical_view_not_just_its_raw_module(monkeypat
             )
 
         build_requirements = View(
-            PackedDotpKernel.codegen, requires=(PackedDotpKernel.support, view_only_rule)
+            PackedDotpKernel.codegen, requires=(PackedDotpKernel.admission, view_only_rule)
         )
 
     class RestrictedMatMul(MatMulKernel):
-        # A narrower compute Decision whose one candidate is the restricted core.
+        # A compute Decision whose one candidate is the restricted core, on
+        # MatMulKernel's stream nodes, which RestrictedMatMul inherits.
         compute = Decision(
-            values={
-                "packed": RestrictedDotp(
-                    activation_dtype=MatMulKernel.activation_dtype,
-                    weights_dtype=MatMulKernel.weights_dtype,
-                    result_dtype=MatMulKernel.result_type,
-                    pe=MatMulKernel.pe,
-                    simd=MatMulKernel.simd,
-                    target_dsp=MatMulKernel.target_dsp,
-                    target_period_ns=MatMulKernel.target_period_ns,
-                    compute_pumping=MatMulKernel.compute_pumping,
-                    # References to MatMulKernel's stream nodes, which RestrictedMatMul inherits.
-                    activation_stream=MatMulKernel.activations,
-                    weights_stream=MatMulKernel.weight_stream,
-                    result_stream=MatMulKernel.results,
-                    schedule=MatMulKernel.schedule,
-                )
-            }
+            {"packed": RestrictedDotp},
+            form=MatMulKernel.datapath,
+            target_dsp=MatMulKernel.target_dsp,
+            target_period_ns=MatMulKernel.target_period_ns,
+            reshape_activations=MatMulKernel.dense_view,
+            x_stream=MatMulKernel.activations,
+            w_stream=MatMulKernel.weight_stream,
+            y_stream=MatMulKernel.results,
         )
 
     point = point_for(
         RestrictedMatMul,
         FACTS,
-        pe=2,
-        simd=2,
-        delivery="external",
+        memory="none",
         compute="packed",
-        compute_pumping=False,
-        **{"activations.adapter": "input_gen", "activations.adapter_ram_style": "auto"},
-        **{"weight_stream.transport": "direct"},
+        **{
+            "compute.packed.pe": 2,
+            "compute.packed.simd": 2,
+            "compute.packed.compute_pumping": False,
+            "activations.adapter": "input_gen",
+            "activations.adapter_ram_style": "auto",
+            "weight_stream.transport": "direct",
+        },
     )
     assert isinstance(point.compute.query(DotpAxiKernel.codegen), Available)
     assert isinstance(

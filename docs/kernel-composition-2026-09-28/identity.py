@@ -12,7 +12,8 @@ then the decision keys per fact set. Two revisions are compared by diffing the o
 ``--api`` names the revision's MatMul interface:
 
 - ``d10``: ``contraction=Contraction``, weights stored ``(n, k)`` (before V1);
-- ``v1``: ``form=Form``, weights stored ``(k, n)``.
+- ``v1``: ``form=Form``, weights stored ``(k, n)``;
+- ``k1``: as ``v1``, with the facts ``m``, ``n``, ``k``.
 
 Run from the FINN checkout with src, tests and deps/qonnx/src on PYTHONPATH.
 """
@@ -106,7 +107,7 @@ def translate(arguments: dict[str, Any], assembly: bool) -> dict[str, Any]:
         from finn.kernels.matmul import WeightDelivery
 
         if "weight_delivery" in arguments:
-            arguments["weight_delivery"] = WeightDelivery(arguments["weight_delivery"])
+            arguments["weight_delivery"] = WeightDelivery[arguments["weight_delivery"].upper()]
     if API == "d10":
         from finn.kernels.matmul import Contraction  # type: ignore[attr-defined]
 
@@ -119,6 +120,10 @@ def translate(arguments: dict[str, Any], assembly: bool) -> dict[str, Any]:
             arguments["weights"] = transposed(
                 arguments["weights"], arguments.get("weight_sets", 1) > 1
             )
+    if API == "k1":
+        for old, new in (("rows", "m"), ("outputs", "n"), ("reduction", "k")):
+            if old in arguments:
+                arguments[new] = arguments.pop(old)
     return arguments
 
 

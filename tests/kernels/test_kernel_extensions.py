@@ -70,7 +70,12 @@ def test_kernel_identity_is_validated_at_class_creation() -> None:
         id = "test.empty"
 
     assert Empty.version == "1"
-    assert design_space(Empty()).capabilities() == ()
+    # The protocol's views; a kernel that declares no module builds none.
+    empty = design_space(Empty())
+    assert [item.key for item in empty.capabilities()] == ["build_requirements", "tieoffs"]
+    refused = empty.query(Empty.build_requirements)
+    assert isinstance(refused, Rejected)
+    assert {finding.code for finding in refused.findings} == {"kernel-module"}
 
 
 def test_kernel_capabilities_have_independent_output_types_and_no_implicit_abi() -> None:
@@ -116,10 +121,10 @@ def test_kernel_capabilities_have_independent_output_types_and_no_implicit_abi()
 
     opaque = design_space(OpaqueWord(bits=13))
     capabilities = opaque.capabilities()
-    assert [entry.key for entry in capabilities] == ["pins"]
+    assert [entry.key for entry in capabilities] == ["build_requirements", "pins", "tieoffs"]
     assert calls == []
     assert opaque.pins == Pins((("word", 13),), (("result", 13),))
-    answer = opaque.query(capabilities[0].reference)
+    answer = opaque.query(OpaqueWord.pins)
     assert isinstance(answer, Available)
     assert answer.value == Pins((("word", 13),), (("result", 13),))
     axis = design_space(Axis(bits=13, lanes=3))
@@ -127,7 +132,11 @@ def test_kernel_capabilities_have_independent_output_types_and_no_implicit_abi()
     hls = design_space(Hls())
     result = hls.sources
     assert isinstance(result, HlsSourceRequirements)
-    assert [entry.key for entry in hls.capabilities()] == ["sources"]
+    assert [entry.key for entry in hls.capabilities()] == [
+        "build_requirements",
+        "sources",
+        "tieoffs",
+    ]
     assert not hasattr(result, "abi")
 
     class Invalid(Hls):
@@ -324,4 +333,5 @@ def test_composite_extends_kernel_with_typed_optional_views_and_independent_node
     assert point.query(activation_ports) == Available(Pins((("word", 8),), ()))
     assert isinstance(point.query(weights_ports), Rejected)
     assert point.query(getattr(Pair.weights, "payload_bits")) == Available(32)
-    assert [info.key for info in point.capabilities()] == ["activation.ports", "weights.ports"]
+    authored = [info.key for info in point.capabilities() if info.key.endswith("ports")]
+    assert authored == ["activation.ports", "weights.ports"]

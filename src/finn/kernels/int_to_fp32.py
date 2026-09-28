@@ -9,6 +9,7 @@ ordinary integer encodings up to 128 bits, whose converted values remain finite.
 
 from __future__ import annotations
 
+
 from finn.kernels.artifacts.abi import Direction, Signal
 from finn.kernels.artifacts.contribution_types import CopiedSource
 from finn.kernels.artifacts.requirements import (
@@ -30,6 +31,8 @@ from finn.core.space import Const, Param, view
 class IntToFp32Kernel(Kernel):
     id = "finnlib.int_to_fp32"
     version = "1"
+    # Off the Kernel protocol until K2: it exports nothing of its own.
+    exports = {}
 
     input_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
     input = integer_scalar(input_dtype, Integer(1, 128))

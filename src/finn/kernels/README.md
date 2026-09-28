@@ -40,11 +40,13 @@ work while preserving the independent Space and artifact systems. It describes
 planned changes, not additional APIs already delivered here.
 
 ```text
-base.py                  neutral Kernel identity and capability metadata
-dotp.py                  dotp_axi: operand scalars, AXIS ports, one kernel per compute core
-matmul.py                MatMulKernel: form, folding, and Decisions over its child nodes
+base.py                  the Kernel protocol: module, ports' buses, parameters, clocking, admission
+port.py                  Port nodes: one stream interface each (element admission, sequence, pins)
+dotp.py                  dotp_axi on three ports, one kernel per compute core, its own folds
+matmul.py                MatMulKernel: facts m, n, k and form; compute and memory Decisions
+rom.py                   RomKernel: a stored operand streamed cyclically from a ROM
 streaming.py             initialized cyclic word delivery
-memstream.py             FinnLib memstream_axi as a delivery kernel (writable, sets, INIT_FILE)
+memstream.py             FinnLib memstream_axi as a weight memory (writable, sets, INIT_FILE)
 streams.py               Stream: tensor, ends, plan, adapter and transport Decisions; netlist
 adapters.py              a stream's adapter candidates: input_gen / vpc chains carrying out a plan
 transpose.py             FinnLib inner_shuffle, placed explicitly between two streams
@@ -70,35 +72,46 @@ Space -> accepted build_requirements view -> ModuleBuildRequirements
 | `EltwiseKernel` | `eltwise.py` | Integer/float operand scalars, dependent type constraints, typed unpadded ports |
 | `IntToFp32Kernel` | `int_to_fp32.py` | Combinational pins and a fixed FLOAT32 result; no clock or stream |
 | `MemStreamHlsKernel` | `memstream_hls.py` | C++ type and memory/interface declarations before HLS synthesis |
-| `PackedDotpKernel`, `Int8Dsp58DotpKernel` | `dotp.py` | One kernel per `dotp_axi` compute core over the shared `DotpAxiKernel`: typed AXIS ports; target, form, pumping, segmentation and accumulator admission |
+| `PackedDotpKernel`, `Int8Dsp58DotpKernel` | `dotp.py` | One kernel per `dotp_axi` compute core over the shared `DotpAxiKernel`: three ports, its own PE/SIMD/pumping; target, form, segmentation and accumulator admission |
+| `RomKernel` | `rom.py` | A stored operand in its consumer's order, streamed cyclically; ROM style |
 
-Operand datatypes are ordinary kernel Params, such as
-`DotpAxiKernel.activation_dtype`. Each operand has its own scalar node
-(`activation_type = integer_scalar(activation_dtype, ...)`) that owns its
-admission, and each port binds to that scalar's raw dtype and accepted encoding. Ports expose narrow dtype, width and packing fields
-independently of their accepted `stream` view, which requires the scalar:
+A kernel on the protocol (`base.py`) declares its RTL `module`, `sources()`,
+`parameters()`, its `clocking` when not plain `ap_clk`/`ap_rst_n`, one `Port`
+node per stream interface, and an `admission` group. The base derives the
+module's ABI (clocking, then every port's bus), `build_requirements` (accepted
+under `admission`), `tieoffs` and the `MODULE`/`TIEOFFS` exports. A port
+(`port.py`) takes its element from the stream it sits on and admits it by an
+integer policy; a `ScheduledPort` presents its kernel's schedule through the
+indices it reads. A core therefore sits between streams, whose tensors give
+its elements and extents; its folds are its own Decisions:
 
 ```python
-from finn.kernels import DspBlock, PackedDotpKernel
+from finn.core.space import Space
 from finn.dataflow.datatypes import resolve_qonnx_datatype_name as dtype
+from finn.dataflow.tensor import ScalarEncoding, Tensor
+from finn.kernels import DspBlock, PackedDotpKernel
+from finn.kernels.configure import commit
+from finn.kernels.streams import Stream
 
-dotp = design_space(
-    PackedDotpKernel(
-        activation_dtype=dtype("INT3"),
-        weights_dtype=dtype("INT3"),
-        result_dtype=dtype("INT8"),
-        pe=2,
-        simd=2,
-        target_dsp=DspBlock.DSP48E2,
-        target_period_ns=5.0,
+
+class Placed(Space):
+    x = Stream(tensor=Tensor((1, 2), ScalarEncoding(dtype("INT3"))), port="in0_V")
+    w = Stream(tensor=Tensor((2, 2), ScalarEncoding(dtype("INT3"))), port="in1_V")
+    y = Stream(tensor=Tensor((1, 2), ScalarEncoding(dtype("INT8"))), port="out0_V")
+    dotp = PackedDotpKernel(
+        target_dsp=DspBlock.DSP48E2, target_period_ns=5.0, x_stream=x, w_stream=w, y_stream=y
     )
-)
-assert dotp.activation.carrier_bits == 8
-assert dotp.activation_type.encoding.bits == 3
-assert dotp.activation.stream.payload_bits == 6
+
+
+dotp = commit(
+    design_space(Placed()), {"dotp.pe": 2, "dotp.simd": 2, "dotp.compute_pumping": False}
+).dotp
+assert dotp.x.axis.carrier_bits == 8
+assert dotp.x.element.bits == 3
+assert dotp.x.axis.payload_bits == 6
 ```
 
-The same policy constrains input and caller-selected output encodings.
+The same policy constrains input and result encodings.
 
 The [original authoring-pass notes](../../../docs/kernel-authoring-pass/README.md)
 retain the adopted physical profiles and native-source findings. Their old
@@ -114,28 +127,28 @@ relative to a staging directory; retain that layout and use the declared
 `include_directories`. Its AXI-Lite memory and `ap_ctrl_hs` registers share the
 `control` bundle; software must enable start/auto-restart for continuous output.
 
-`MatMulKernel` owns the operation's facts (the `form`, `DENSE` or
-`DEPTHWISE` in canonical GEMM indices `m`, `n`, `k`, and the extents; weights
-stored `(k, n)`), PE/SIMD folding and result precision, and
-declares its connections as streams (`finn.kernels.streams`). Each stream
+`MatMulKernel` owns the operation's facts (the extents `m`, `n` and `k`; the
+`form`, `DENSE` or `DEPTHWISE`; weights stored `(k, n)`) and result precision,
+and declares its connections as streams (`finn.kernels.streams`). Each stream
 carries a `Tensor` (shape and element encoding, `finn.dataflow.tensor`);
-kernels reference the streams they sit on through reference inputs and export
-one port contract per input (`exports = {PORT: {activation_stream:
-activation_port, ...}}`), each presenting the end's own traversal of the
-tensor (a `BeatSequence`: traversal, repetition, markers), derived from the
-operation's schedule (`finn.dataflow.schedule`: `n` folded by PE, `k` by SIMD). A
-boundary stream presents what its internal end presents, without the replay
-the receiver realizes and without markers. Each slot is a node, a Decision over
-nodes, or a derived node, and each Decision is present only where its case
+kernels reference the streams they sit on through reference inputs, and each
+of their ports exports its contract for its stream (`exports = {PORT:
+{stream: contract}}`), presenting the end's own traversal of the tensor (a
+`BeatSequence`: traversal, repetition, markers) derived from its kernel's
+schedule (`finn.dataflow.schedule`: `n` folded by PE, `k` by SIMD). A boundary
+stream presents what its internal end presents, without the replay the
+receiver realizes and without markers. Each slot is a node, a Decision over
+kernels, or a derived node, and each Decision is present only where its case
 applies:
 
 ```text
 in0_V ─activations─[adapter: input_gen]─► compute ─results─► out0_V
           dense: replay + frame                 ▲
-          depthwise: frame only                 └── weight_stream ── delivery
-   compute: packed (dotp) | int8_dsp58 (dotp_8sx9_dsp58); compute_pumping
+          depthwise: frame only                 └── weight_stream ── memory
+   compute: packed (dotp) | int8_dsp58 (dotp_8sx9_dsp58); each owns pe, simd,
+            compute_pumping
    depthwise: realization: native | dense (block-diagonal weights)
-   delivery: external (in1_V) | cyclic (ROM) | memstream (RAM: ram_style,
+   memory (optional): none (in1_V) | rom (rom_style) | memstream (RAM: ram_style,
              pumped_memory; writable_weights → s_axilite; weight_sets > 1 → in2_V)
    weight_stream: transport: direct | fifo
 ```
@@ -146,7 +159,7 @@ derives a `plan` (`finn.dataflow.plan`): empty when the two connect directly
 conversions and marker synthesis. A non-empty plan opens the stream's
 `adapter` Decision over seven fixed chains of FinnLib `input_gen` and `vpc`
 (`finn.kernels.adapters`); each refuses a plan it does not carry out, so one
-survives, and `commit_adapters` commits it. `adapter_ram_style` chooses the
+survives, and `settle` (`finn.kernels.configure`) commits it. `adapter_ram_style` chooses the
 `input_gen`'s memory. A stream constructed with `adaptable=False` admits no
 adapter and refuses a non-empty plan (`stream-plan`). Between two kernels the
 same stream joins independently folded ends: `tests/kernels/test_two_kernels.py`
@@ -154,10 +167,10 @@ joins a PE = 4 producer to a SIMD = 2 consumer through `vpc` and `input_gen`.
 
 A stream sees each user's port on that stream only (`Users(PORT)`), so a port's
 refusal names its own stream and independent streams settle independently.
-Ports present what their kernel's schedule derives: dotp takes its schedule
-(the extents of `m`, `n` and `k`, their folds and the beat order) and its form,
-and refuses a schedule it cannot compute (`dotp-schedule`), rather than
-checking forms it is handed.
+Ports present what their kernel's schedule derives: dotp takes its extents
+from its streams and folds them by its own PE and SIMD, so a form it cannot
+read is never handed to it. A stream end presented by a kernel's port belongs
+to that kernel's instance in `netlist`.
 Every stream owns `well_formed`, `realizable` and `compatible` constraints, and its accepted
 `connection` feeds the parent's `structure` view: `netlist` wires
 `Members(MODULE)` through `Members(CONNECTION)`, drives every child clock and
@@ -167,13 +180,14 @@ control buses (`Members(EXPORTED)`), and turns boundary streams into AXIS. The
 module has `ap_clk2x` only when a child needs it: an unpumped MatMulKernel has none. A
 kernel generates one module and exposes its interface; wiring that module's
 instance into a design is the consumer's. `build_requirements` lowers that structure.
-The `delivery` Decision places either nothing (`external`: the weight
+The optional `memory` Decision places either nothing (`none`: the weight
 stream has one user and is the boundary `in1_V`) or one of its candidates,
-the `cyclic` CyclicDelivery (`delivery.cyclic`) or the `memstream`
-MemStreamKernel; only the selected candidate is evaluated. Compatibility
-filters the candidates (a depthwise form is read natively only by the INT8
-DSP58 core, runtime-writable weights need the memstream); where several remain,
-the choice is the caller's. A `BufferedStream` owns a `transport`
+the `rom` RomKernel (`memory.rom`) or the `memstream` MemStreamKernel; only
+the selected candidate is evaluated. Compatibility filters the candidates
+(a depthwise form is read natively only by the INT8 DSP58 core; a ROM refuses
+runtime-writable weights or several sets) and `settle` commits a Decision
+with one compatible candidate; where several remain, the choice is the
+caller's. A `BufferedStream` owns a `transport`
 Decision over nodes: `direct`, or a `fifo` candidate whose depth and memory style
 are its own decisions. Whether a FIFO is needed and how deep is a compiler
 decision; the stream only provides the slot. `commit` (from
@@ -183,13 +197,12 @@ batch on a configured point:
 ```python
 from finn.core.space import Unresolved, selections
 from finn.kernels import MatMulKernel
-from finn.kernels.configure import commit
-from finn.kernels.streams import commit_adapters
+from finn.kernels.configure import commit, settle
 
 facts = dict(
-    rows=2,
-    reduction=4,
-    outputs=4,
+    m=2,
+    k=4,
+    n=4,
     activation_dtype=dtype("INT3"),
     weights_dtype=dtype("INT3"),
     target_dsp=DspBlock.DSP48E2,
@@ -199,23 +212,24 @@ identity = ((1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (0, 0, 0, 1))
 point = commit(
     design_space(MatMulKernel(**facts, weights=identity)),
     {
-        "delivery": "cyclic",
-        "delivery.cyclic.rom_style": "block",
+        "memory": "rom",
+        "memory.rom.rom_style": "block",
         "weight_stream.transport": "fifo",
         "weight_stream.transport.fifo.buffer.depth": 16,
         "weight_stream.transport.fifo.buffer.ram_style": "auto",
         "compute": "packed",
-        "compute_pumping": False,
-        "pe": 2,
-        "simd": 2,
+        "compute.packed.compute_pumping": False,
+        "compute.packed.pe": 2,
+        "compute.packed.simd": 2,
     },
 )
-# The activation stream's plan (replay and frame) needs an adapter; commit the one.
-point = commit_adapters(point)
+# The activation stream's plan (replay and frame) needs an adapter: settle the one,
+# then choose its memory.
+point = commit(settle(point).point, {"activations.adapter_ram_style": "auto"})
 structure = point.structure.structure
 assert [item.instance_id for item in structure.instances] == [
     "u_compute_packed",
-    "u_delivery_cyclic",
+    "u_memory_rom",
     "u_activations_input_gen",
     "u_weight_stream_fifo",
 ]
@@ -237,9 +251,9 @@ for callers with a complete configuration:
 from finn.kernels import WeightDelivery, matmul_assembly
 
 built = matmul_assembly(
-    rows=2,
-    reduction=4,
-    outputs=4,
+    m=2,
+    k=4,
+    n=4,
     activation_dtype=dtype("INT3"),
     weights_dtype=dtype("INT3"),
     pe=2,
@@ -250,11 +264,11 @@ built = matmul_assembly(
 )
 ```
 
-`built.structure` exposes wiring, `built.initializer` contains packed cyclic
-weights, and `built.requirements` is the artifact handoff. External weight
-delivery uses `WeightDelivery.EXTERNAL` and omits `weights`; `rom_style`
-(default `auto`) applies only to cyclic delivery, and `weight_fifo_depth`
-places a FIFO on the weight stream.
+`built.structure` exposes wiring, `built.initializer` contains packed stored
+weights, and `built.requirements` is the artifact handoff. External weights
+use `WeightDelivery.EXTERNAL` (the `memory` Decision's `none`) and omit
+`weights`; `rom_style` (default `auto`) applies only to the ROM, and
+`weight_fifo_depth` places a FIFO on the weight stream.
 
 Pass source roots explicitly to `finn.kernels.artifacts.build.prepare_module_build`:
 `roots={"kernels": resource_root(), "finnlib": finnlib_root}` and
@@ -350,11 +364,11 @@ matmul weight tiles or an eltwise channel vector, inside an operation kernel or
 beside one:
 
 ```python
-from finn.kernels import CyclicDelivery
+from finn.kernels import RomKernel
 from finn.dataflow.traversal import Adaptation, Repetition, classify, vector_major
 
 channels = vector_major((4,), 2)
-vector = design_space(CyclicDelivery(dtype=dtype("INT4"), form=channels, values=(1, -2, 7, -8)))
+vector = design_space(RomKernel(dtype=dtype("INT4"), form=channels, contents=(1, -2, 7, -8)))
 rhs = vector.with_choices(rom_style="distributed")
 assert rhs.output.repetition is Repetition.CYCLIC
 assert rhs.image == (0xE1, 0x87)

@@ -31,7 +31,7 @@ from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.build import ModuleBuildRequirements
 from finn.kernels.artifacts.derivation import ProducerIdentity
 from finn.dataflow.tensor import TENSOR, ScalarEncoding, Tensor
-from finn.kernels.delivery import CyclicDelivery
+from finn.kernels.rom import RomKernel
 from finn.dataflow.traversal import LevelEnd, BeatSequence, vector_major
 from finn.kernels.physical.axi_stream import AxiStream
 from finn.kernels.physical.contract import STREAM_CONTRACT, StreamContract
@@ -58,16 +58,16 @@ class Constants(Space):
     first = Stream(tensor=first_tensor, port="out0_V")
     second = Stream(tensor=second_tensor, port="out1_V")
 
-    first_source = CyclicDelivery(
+    first_source = RomKernel(
         dtype=DataType["INT4"],
         form=PRODUCED,
-        values=(1, 2, 3, 4),
+        contents=(1, 2, 3, 4),
         output_stream=first,
     )
-    second_source = CyclicDelivery(
+    second_source = RomKernel(
         dtype=DataType["INT4"],
         form=PRODUCED,
-        values=(5, 6, 7, -8),
+        contents=(5, 6, 7, -8),
         output_stream=second,
     )
     modules = Members(MODULE)
@@ -91,8 +91,8 @@ class Constants(Space):
 def constants(first=VECTOR, second=VECTOR):
     point = design_space(Constants(first_tensor=first, second_tensor=second))
     return point.with_choices(
-        point.first_source.field(CyclicDelivery.rom_style).change("auto"),
-        point.second_source.field(CyclicDelivery.rom_style).change("distributed"),
+        point.first_source.field(RomKernel.rom_style).change("auto"),
+        point.second_source.field(RomKernel.rom_style).change("distributed"),
     )
 
 
@@ -139,7 +139,7 @@ def test_explain_shows_per_stream_and_per_member_evidence():
 
 def test_a_stream_waits_for_its_own_endpoints_only():
     point = design_space(Constants(first_tensor=VECTOR, second_tensor=VECTOR))
-    point = point.with_choices(point.first_source.field(CyclicDelivery.rom_style).change("auto"))
+    point = point.with_choices(point.first_source.field(RomKernel.rom_style).change("auto"))
     # The ROM choice feeds only the module, not either stream's contracts.
     assert isinstance(point.first.query(Stream.connection), Available)
     assert isinstance(point.second.query(Stream.connection), Available)
@@ -193,11 +193,11 @@ def test_two_producers_on_one_stream_are_refused_by_the_stream():
     class Clash(Space):
         tensor: Tensor = Param(semantics=TENSOR)
         shared = Stream(tensor=tensor, port="out0_V")
-        a = CyclicDelivery(
-            dtype=DataType["INT4"], form=PRODUCED, values=(1, 2, 3, 4), output_stream=shared
+        a = RomKernel(
+            dtype=DataType["INT4"], form=PRODUCED, contents=(1, 2, 3, 4), output_stream=shared
         )
-        b = CyclicDelivery(
-            dtype=DataType["INT4"], form=PRODUCED, values=(1, 2, 3, 4), output_stream=shared
+        b = RomKernel(
+            dtype=DataType["INT4"], form=PRODUCED, contents=(1, 2, 3, 4), output_stream=shared
         )
 
     point = design_space(Clash(tensor=VECTOR))
@@ -211,8 +211,8 @@ def test_a_boundary_stream_needs_its_port_name():
     class Unnamed(Space):
         tensor: Tensor = Param(semantics=TENSOR)
         out = Stream(tensor=tensor)
-        source = CyclicDelivery(
-            dtype=DataType["INT4"], form=PRODUCED, values=(1, 2, 3, 4), output_stream=out
+        source = RomKernel(
+            dtype=DataType["INT4"], form=PRODUCED, contents=(1, 2, 3, 4), output_stream=out
         )
 
     waiting = design_space(Unnamed(tensor=VECTOR)).out.query(Stream.connection)
@@ -238,7 +238,7 @@ class TensorReadingProducer(Space):
     """Builds its port contract from the stream's tensor, as every kernel does."""
 
     output_stream: ProducerTensorStream = Param()
-    source = CyclicDelivery(dtype=DataType["INT4"], form=PRODUCED, values=(1, 2, 3, 4))
+    source = RomKernel(dtype=DataType["INT4"], form=PRODUCED, contents=(1, 2, 3, 4))
 
     @view(semantics=STREAM_CONTRACT)
     def port(self) -> StreamContract:

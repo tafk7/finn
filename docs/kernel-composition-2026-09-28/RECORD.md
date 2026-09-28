@@ -114,3 +114,82 @@ the gate results as observed, key and name changes (D7), and deviations.
 - **Gates.** Kernel gate: Space 446, kernels 819, ruff and mypy clean.
   Dataflow gate: 40 passed, ruff and mypy clean.
 - **Not run.** XSim: no module parameter, image or wrapper changed.
+
+## K1: the Kernel protocol, ports, and MatMul
+
+- **The protocol** (`finn.kernels.base`): a kernel declares its RTL `module`,
+  `sources()`, `parameters()`, `clocking` (a `Clocking` value: `ap_clk`,
+  `ap_rst_n`, and a doubled clock held low while unused) and an `admission`
+  group; the base derives `codegen` (clocking, then every port's bus, then
+  parameters), `build_requirements` (accepted under `admission`), `tieoffs`
+  and the `MODULE`/`TIEOFFS` exports. `MODULE`, `TIEOFFS` and `Tieoffs` moved
+  here from `streams`. Kernels not yet on the protocol (eltwise, FIFO,
+  int-to-fp32, the HLS memstream) declare `exports = {}` until K2.
+- **Ports** (`finn.kernels.port`): `Port` (stream reference, element from the
+  stream's tensor admitted by an `Integer` policy, `sequence = required(...)`,
+  AXIS pins; exports `PORT` for its stream and `BUS`) and `ScheduledPort`
+  (the kernel's schedule through `index`, `lanes`, `reduces`, `holds`,
+  `closes`, `reshaped`).
+- **dotp**: `DotpAxiKernel` on three ports `x`, `w`, `y` over `x_stream`,
+  `w_stream`, `y_stream`; extents from the streams' tensors; `pe`, `simd` and
+  `compute_pumping` are its Decisions; `schedule` derived; one `admission`
+  group (target, core, accumulator, stream widths, pumping). Removed: the
+  dtype Params and scalar nodes, `axi_stream` ports, `schedule`/`iteration`
+  inputs, `DotpSequences`/`dotp_sequences`, the element cross-check,
+  `support` (now `admission`).
+- **MatMul**: facts `m`, `n`, `k` (were `rows`, `outputs`, `reduction`);
+  `compute = Decision({"packed": packed, "int8_dsp58": Int8Dsp58DotpKernel},
+  form=..., target_dsp=..., target_period_ns=..., reshape_activations=...,
+  x_stream=..., w_stream=..., y_stream=...)` with the `packed` handle carrying
+  `narrow_weights`; `memory = Decision({"rom": RomKernel, "memstream":
+  MemStreamKernel(set_stream=..., control=...)}, optional=True, dtype=...,
+  form=weight_period, contents=..., writable=..., sets=..., output_stream=...)`.
+  `weight_period` reads the selected core's weight port. `matmul_assembly`
+  commits facts and the caller's choices, settles the core, commits its
+  folds, settles the adapters. Removed: `pe`/`simd`/`compute_pumping` Params,
+  `matmul_schedule`, `_Folding`, `sequences`, `delivery`, `commit_adapters`.
+- **Memories**: `CyclicDelivery` → `RomKernel` (`rom.py`), refusing writable
+  weights or several sets (`rom-writable`, `rom-sets`); `values` → `contents`
+  on both memories; memstream's `support` → `admission`. `WeightDelivery`
+  keeps its names with the `memory` cases as values (`none`, `rom`,
+  `memstream`).
+- **Streams**: `netlist` names a stream end after its nearest module owner
+  (G0.5), so a core's ports keep the core's instance (`u_compute_packed`).
+  Stream adapters have an `admission` group (`realizes`).
+- **Engine additions** (not in E0's list):
+  - `Users` sees a node that reaches the referenced node through a forwarded
+    input (the deferred "Users through forwarding composites"), unless a node
+    it forwards through exports the key for that input (that node answers
+    for it, as `test_references` requires).
+  - `settle` counts a candidate compatible unless its admission is
+    `Rejected`; an admission waiting on an open choice does not refuse.
+    `finn.kernels.configure.admission` refuses a group as soon as one of its
+    constraints refuses (the engine's group result waits for the open ones).
+- **Protocol views on every kernel.** `build_requirements` and `tieoffs` are
+  capabilities of every `Kernel`; a kernel without a module refuses
+  `build_requirements` (`kernel-module`). `test_kernel_extensions` updated.
+  The HLS memstream's `build_requirements` view is renamed `sources` (an HLS
+  source bundle is not a module).
+- **Keys (D7).** `pe`, `simd`, `compute_pumping` → `compute.<core>.pe`,
+  `.simd`, `.compute_pumping`; `delivery` → `memory` with cases `none`,
+  `rom`, `memstream`; `delivery.cyclic.rom_style` → `memory.rom.rom_style`;
+  `delivery.memstream.*` → `memory.memstream.*`.
+- **Names.** Instances `u_delivery_cyclic` → `u_memory_rom`,
+  `u_delivery_memstream` → `u_memory_memstream`; top modules
+  `finn_matmul_external`/`_cyclic` → `finn_matmul_none`/`_rom`; stream
+  users are port nodes (`compute.packed.y`).
+- **Tests.** `test_dotp.py` rewritten over placed cores (60);
+  `test_port_contracts.py`, `test_two_kernels.py`, `test_interfaces.py`,
+  the MatMul tests (`test_matmul_delivery_choice.py` →
+  `test_matmul_memory_choice.py`), `test_memstream.py`,
+  `test_boundaries.py`, `test_installed_package.py`, the typing test, and the
+  harnesses migrated; `helpers.placed_dotp` and `helpers.settled`. Probes
+  with no analogue dropped: a schedule handed to dotp in another beat order
+  or with other folds (dotp derives its own), a dense core handed depthwise
+  accesses.
+- **Identity.** Over the 13 configurations, every module's parameters, the
+  memory images, the top ports, wire counts and beat counts are identical to
+  V1 (`evidence/identity-k1.txt`); only top module names, wrapper
+  fingerprints and keys change.
+- **Gates.** Kernel gate: Space 447, kernels 810, ruff and mypy clean.
+  Dataflow gate: 40. Documentation examples: 27.

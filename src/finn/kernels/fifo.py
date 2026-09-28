@@ -12,6 +12,7 @@ Reset is synchronous, active-high, and discards pending words.
 
 from __future__ import annotations
 
+
 from dataclasses import dataclass
 
 from finn.kernels.artifacts.abi import Clock, Direction, Endpoint, Reset, Signal
@@ -47,6 +48,8 @@ class FifoStorage:
 class FifoKernel(Kernel):
     id = "finnlib.fifo"
     version = "2"
+    # Off the Kernel protocol until K2: it exports nothing of its own.
+    exports = {}
 
     word_bits: int = Param()
     depth: int = Param()

@@ -1,10 +1,12 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Physical dotp accepts caller-owned geometry and accumulation requirements.
+"""Physical dotp on the Kernel protocol: three ports, its own folds, one admission.
 
 Each compute core is its own kernel over the shared ``DotpAxiKernel``
 declaration; most cases exercise the packed core, which every DSP target has.
+A core sits between three streams (``helpers.placed_dotp``): its elements and
+extents come from their tensors, and PE, SIMD and pumping are its Decisions.
 """
 
 from pathlib import Path
@@ -15,31 +17,21 @@ from qonnx.core.datatype import DataType
 from finn.core.space import (
     Available,
     DefinitionError,
-    Param,
     Rejected,
-    Space,
     Unresolved,
-    design_space,
     inspection,
 )
-from finn.dataflow.datatypes import QONNXDataType
-from finn.kernels.datatypes.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
+from finn.dataflow.gemm import Form
 from finn.kernels.artifacts.abi import Clock, Data, Derived as DerivedClock
 from finn.kernels.artifacts.build import materialize_module_sources, prepare_module_build
 from finn.kernels.artifacts.store import ArtifactStore
-import finn.kernels.dotp as dotp_axi
-from kernels import helpers
-from finn.dataflow.gemm import Form
-from finn.kernels.dotp import (
-    DotpAxiKernel,
-    Int8Dsp58DotpKernel,
-    PackedDotpKernel,
-)
-from finn.kernels.target import DspBlock
 from finn.kernels.base import Kernel
-from finn.kernels.physical.axi_stream import AxiStreamPort
+from finn.kernels.dotp import DotpAxiKernel, Int8Dsp58DotpKernel, PackedDotpKernel
 from finn.kernels.physical.layout import UnusedBitPolicy
+from finn.kernels.port import ScheduledPort
 from finn.kernels.resources import resource_root
+from finn.kernels.target import DspBlock
+from kernels import helpers
 
 
 def parameters(**updates):
@@ -57,94 +49,52 @@ def parameters(**updates):
     return result
 
 
-def point_for(facts, family=PackedDotpKernel, **choices):
-    """Configure a dotp node from its formals, then commit choices by stable key."""
-    return helpers.point_for(family, facts, **choices)
-
-
 def kernel(family=PackedDotpKernel, **updates):
-    facts = parameters(**updates)
-    pumping = facts.pop("compute_pumping")
-    return point_for(facts, family, compute_pumping=pumping)
+    return helpers.placed_dotp(family, **parameters(**updates))
 
 
-class _PartialDotp(Space):
-    pe: int = Param(required=False)
-    simd: int = Param(required=False)
-    activation_dtype: QONNXDataType = Param(
-        semantics=QONNX_DATATYPE_VALUE_SEMANTICS, required=False
-    )
-    weights_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS, required=False)
-    result_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS, required=False)
-    target_dsp: DspBlock = Param(required=False)
-    target_period_ns: float = Param(required=False)
-    # Placed outside any stream: its optional stream formals stay unsupplied.
-    component = PackedDotpKernel(
-        pe=pe,
-        simd=simd,
-        target_dsp=target_dsp,
-        target_period_ns=target_period_ns,
-        activation_dtype=activation_dtype,
-        weights_dtype=weights_dtype,
-        result_dtype=result_dtype,
-    )
+def codes(result):
+    assert isinstance(result, Rejected), result
+    return {finding.code for finding in result.findings}
 
 
-def partial(facts):
-    return design_space(_PartialDotp(**facts)).component
-
-
-def test_component_groups_its_interfaces_and_keeps_one_root_physical_output():
+def test_a_core_declares_ports_folds_and_facts_and_the_base_derives_the_module():
     assert DotpAxiKernel.__bases__ == (Kernel,)
     assert PackedDotpKernel.__bases__ == Int8Dsp58DotpKernel.__bases__ == (DotpAxiKernel,)
-    assert not hasattr(dotp_axi, "dotp_axi_requirements")
     point = kernel()
-    assert tuple(item.key for item in point.capabilities() if item.scope == "") == (
-        "activation_port",
-        "build_requirements",
-        "interfaces",
-        "result_port",
-        "tieoffs",
-        "weights_port",
-    )
-    assert point.interfaces == tuple(
-        port.stream for port in (point.activation, point.weights, point.result)
-    )
-    _ = point.build_requirements
-    inputs = {item.key for item in inspection.members(point) if item.kind == "param"}
-    assert inputs == {
-        "pe",
-        "simd",
-        "activation_dtype",
-        "weights_dtype",
-        "result_dtype",
-        "target_dsp",
-        "target_period_ns",
-        "form",
-        "narrow_weights",
-        # The schedule its ports present, and the activation tensor it reads
-        # through a view, from a placing parent.
-        "schedule",
-        "activation_shape",
+    assert [item.key for item in point.capabilities() if item.scope == "compute"] == [
+        "compute.build_requirements",
+        "compute.tieoffs",
+    ]
+    for port in (point.x, point.w, point.y):
+        assert isinstance(port, ScheduledPort)
+    found = {item.key: item.kind for item in inspection.members(point)}
+    # Facts, supplied by the placing parent (constants of this placement).
+    facts = {key for key, kind in found.items() if kind == "const" and key.count(".") == 1}
+    assert facts == {
+        "compute.form",
+        "compute.target_dsp",
+        "compute.target_period_ns",
+        "compute.reshape_activations",
+        "compute.narrow_weights",
+        "compute.x_stream",
+        "compute.w_stream",
+        "compute.y_stream",
     }
-    # Optional reference inputs, supplied with Stream nodes by a parent that places
-    # dotp between streams; alone, each is an unsupplied presence.
-    streams = {item.key: item.kind for item in inspection.members(point)}
-    assert {name: streams[name] for name in ("activation_stream", "result_stream")} == {
-        "activation_stream": "present",
-        "result_stream": "present",
+    # The core's own choices.
+    assert {item.key for item in inspection.decisions(point)} == {
+        "compute.pe",
+        "compute.simd",
+        "compute.compute_pumping",
     }
-    # Operand dtypes are kernel facts; scalars and ports bind to them.
-    assert point.activation.dtype == point.activation_type.dtype == point.activation_dtype
-    for name in ("contract", "region", "logical", "binding", "realization", "reference"):
+    for name in ("activation_dtype", "activation_type", "activation", "iteration", "contraction"):
         assert not hasattr(DotpAxiKernel, name)
 
 
 @pytest.mark.parametrize("target", tuple(DspBlock))
 @pytest.mark.parametrize("pumping", (False, True))
 def test_assessed_view_preserves_geometry_and_clocks(target, pumping):
-    settings = parameters(target_dsp=target, compute_pumping=pumping)
-    point = kernel(**settings)
+    point = kernel(target_dsp=target, compute_pumping=pumping)
     requirements = point.build_requirements
     rtl = dict(requirements.parameters)
     assert rtl["ACCU_WIDTH"] == 9
@@ -157,24 +107,32 @@ def test_assessed_view_preserves_geometry_and_clocks(target, pumping):
     assert ports["ap_rst_n"].role.synchronous_to == (
         ("ap_clk", "ap_clk2x") if pumping else ("ap_clk",)
     )
-    for stream, width in ((point.activation, 16), (point.weights, 24), (point.result, 24)):
-        assert stream.stream.bus(clock="ap_clk", reset="ap_rst_n") == ports[stream.name]
-        assert (
-            next(signal.width for signal in ports[stream.name].signals if signal.logical == "tdata")
-            == width
-        )
+    for port, width in ((point.x, 16), (point.w, 24), (point.y, 24)):
+        assert port.bus == ports[port.name]
+        tdata = next(signal for signal in ports[port.name].signals if signal.logical == "tdata")
+        assert tdata.width == width
+    assert point.tieoffs.inputs == (() if pumping else (("ap_clk2x", 0),))
 
 
-def test_physical_framing_has_no_workload_period_and_only_activation_has_last():
+def test_physical_framing_follows_the_schedule_and_only_activation_has_last():
     point = kernel(pe=3, simd=5)
     _ = point.build_requirements
-    assert point.activation.lanes == 5
-    assert point.weights.lanes == 15
-    assert point.result.lanes == 3
-    assert point.activation.last
-    assert not point.weights.last and not point.result.last
+    assert point.x.axis.elements_per_beat == 5
+    assert point.w.axis.elements_per_beat == 15
+    assert point.y.axis.elements_per_beat == 3
+    assert point.x.axis.last and not point.w.axis.last and not point.y.axis.last
     # Weight field p*SIMD+s is low-field-first, matching the native RTL array.
-    assert [field.bit_offset for field in point.weights.payload.fields] == list(range(0, 45, 3))
+    assert [field.bit_offset for field in point.w.axis.payload.fields] == list(range(0, 45, 3))
+
+
+def test_the_schedule_folds_n_by_pe_and_k_by_simd():
+    point = kernel(pe=2, simd=2, outputs=4, reduction=6, rows=3)
+    assert (point.rows, point.outputs, point.reduction) == (3, 4, 6)
+    x, w, y = (port.sequence.form for port in (point.x, point.w, point.y))
+    assert (x.beats, x.lanes) == (3 * 2 * 3, 2)  # each row replayed per output fold
+    assert (w.beats, w.lanes) == (3 * 2 * 3, 4)
+    assert (y.beats, y.lanes) == (3 * 2, 2)
+    assert [rule.beats for rule in point.x.sequence.markers] == [3]
 
 
 @pytest.mark.parametrize(
@@ -202,8 +160,6 @@ def test_dsp48_carries_the_segment_length_the_rtl_ignores():
 @pytest.mark.parametrize(
     "updates,code",
     [
-        ({"pe": 0}, "dotp-geometry"),
-        ({"simd": -1}, "dotp-geometry"),
         ({"weights_dtype": DataType["UINT3"]}, "dtype-family"),
         ({"weights_dtype": DataType["TERNARY"]}, "dtype-family"),
         ({"activation_dtype": DataType["BINARY"]}, "dtype-minimum-bits"),
@@ -229,8 +185,8 @@ def test_dsp48_carries_the_segment_length_the_rtl_ignores():
     ],
 )
 def test_physical_view_reports_each_refusal_once(updates, code):
-    # An encoding the port's scalar refuses is the scalar's finding; the support
-    # group adds only the DSP's own bounds, so no node reports a cause twice.
+    # An encoding a port refuses is that port's finding; the admission group
+    # adds only the DSP's own bounds, so no node reports a cause twice.
     physical = kernel(**updates).inspect(DotpAxiKernel.build_requirements)
     refused = physical.accepted_result
     assert isinstance(refused, Rejected), refused
@@ -242,19 +198,25 @@ def test_physical_view_reports_each_refusal_once(updates, code):
 @pytest.mark.parametrize(
     "updates,error",
     [
-        # A mistyped formal is refused at the node call; a mistyped choice at commit.
-        ({"pe": True}, DefinitionError),
-        ({"simd": 2.5}, DefinitionError),
+        # A mistyped fact is refused at the node call; a mistyped fold at commit.
         ({"target_period_ns": "5"}, DefinitionError),
-        ({"compute_pumping": 1}, ValueError),
         ({"target_dsp": "DSP58"}, DefinitionError),
-        ({"activation_dtype": "INT3"}, DefinitionError),
-        ({"result_dtype": None}, DefinitionError),
+        ({"form": "dense"}, DefinitionError),
+        ({"pe": True}, ValueError),
+        ({"simd": 2.5}, ValueError),
+        ({"compute_pumping": 1}, ValueError),
     ],
 )
 def test_space_rejects_mistyped_values_at_binding(updates, error):
     with pytest.raises(error):
         kernel(**updates)
+
+
+@pytest.mark.parametrize("fold", ("pe", "simd"))
+def test_a_fold_must_divide_its_extent(fold):
+    extents = {"outputs": 6, "reduction": 6}
+    with pytest.raises(ValueError, match=f"compute.{fold}"):
+        kernel(**{**extents, fold: 4})
 
 
 def test_constraints_gate_acceptance_without_revalidating_raw_codegen():
@@ -263,68 +225,37 @@ def test_constraints_gate_acceptance_without_revalidating_raw_codegen():
     assert isinstance(physical.output_result, Available)
     assert point.query(DotpAxiKernel.codegen) == physical.output_result
     assert dict(physical.output_result.value.parameters)["PUMPED_COMPUTE"] == 1
-    refused = physical.accepted_result
-    assert isinstance(refused, Rejected)
-    assert {finding.code for finding in refused.findings} == {"dotp-pumping"}
+    assert codes(physical.accepted_result) == {"dotp-pumping"}
 
 
-@pytest.mark.parametrize("updates,stream", [({"simd": 0}, "activation"), ({"pe": 0}, "result")])
-def test_invalid_native_interface_is_a_rejection_not_a_callback_failure(updates, stream):
-    point = kernel(**updates)
-    answer = getattr(point, stream).query(AxiStreamPort.stream)
-    assert isinstance(answer, Rejected)
-    assert {finding.code for finding in answer.findings} == {"interface-lanes"}
-    assert isinstance(point.inspect(DotpAxiKernel.build_requirements).accepted_result, Rejected)
-
-
-def test_physical_constraints_can_report_before_other_inputs_resolve():
-    point = partial(
-        dict(
-            target_dsp=DspBlock.DSP58,
-            activation_dtype=DataType["INT3"],
-            weights_dtype=DataType["INT27"],
-        ),
+def test_the_core_refuses_before_its_folds_are_chosen():
+    point = kernel(weights_dtype=DataType["INT27"], pe=None, simd=None, compute_pumping=None)
+    assert codes(point.inspect(DotpAxiKernel.core_supported).result) == {"dotp-weight-width"}
+    # The module waits on the folds; the refusal is already known.
+    module = point.inspect(DotpAxiKernel.build_requirements).accepted_result
+    assert not isinstance(module, Available)
+    # Folds left open leave an admissible core unresolved, not refused.
+    open_folds = kernel(pe=None, simd=None, compute_pumping=None)
+    assert isinstance(open_folds.inspect(DotpAxiKernel.core_supported).result, Available)
+    assert isinstance(
+        open_folds.inspect(DotpAxiKernel.build_requirements).accepted_result, Unresolved
     )
-    refusal = point.inspect(DotpAxiKernel.core_supported).result
-    assert isinstance(refusal, Rejected)
-    assert {finding.code for finding in refusal.findings} == {"dotp-weight-width"}
+    assert open_folds.x.element.bits == 3
 
 
-def test_result_dtype_and_pumping_are_required_without_any_workload_dimensions():
-    facts = parameters()
-    facts.pop("result_dtype")
-    facts.pop("compute_pumping")
-    point = partial(facts)
-    assert isinstance(point.inspect(DotpAxiKernel.build_requirements).accepted_result, Unresolved)
-    assert point.activation.element_bits == 3
-    assert point.weights.lanes == 8
-    facts["result_dtype"] = DataType["INT12"]
-    point = point_for(facts)
-    assert isinstance(point.inspect(DotpAxiKernel.build_requirements).accepted_result, Unresolved)
-
-
-@pytest.mark.parametrize("missing", tuple(parameters()))
-def test_required_physical_facts_reject_omission_and_decision_remains_unresolved(missing):
+@pytest.mark.parametrize("missing", ("target_dsp", "target_period_ns"))
+def test_required_physical_facts_reject_omission(missing):
     facts = parameters()
     facts.pop(missing)
-    choices = {}
-    if "compute_pumping" in facts:
-        choices["compute_pumping"] = facts.pop("compute_pumping")
-    if missing == "compute_pumping":
-        point = point_for(facts)
-        assert isinstance(
-            point.inspect(DotpAxiKernel.build_requirements).accepted_result, Unresolved
-        )
-    else:
-        # A bare call is legal; the missing formal is refused when design_space() prepares it.
-        with pytest.raises(DefinitionError, match=f"^{missing} is not supplied"):
-            point_for(facts, **choices)
+    # A bare call is legal; the missing formal is refused when design_space() prepares it.
+    with pytest.raises(DefinitionError, match=f"compute.{missing} is not supplied"):
+        helpers.placed_dotp(PackedDotpKernel, **facts)
 
 
 @pytest.mark.parametrize("bits", (4, 9, 12, 58))
-def test_caller_selects_accumulator_capacity_and_owns_the_reduction_bound(bits):
+def test_the_results_stream_selects_accumulator_capacity(bits):
     point = kernel(result_dtype=DataType[f"INT{bits}"])
-    assert point.result.dtype == DataType[f"INT{bits}"]
+    assert point.y.element.dtype == DataType[f"INT{bits}"]
     assert dict(point.build_requirements.parameters)["ACCU_WIDTH"] == bits
 
 
@@ -367,9 +298,8 @@ def test_sources_materialize_from_the_assessed_requirements(tmp_path):
         "rtl/linalg/dotp.sv",
         "rtl/linalg/dotp_axi.sv",
     }
-    expected = upstream
     emitted = {Path(name).name: Path(materialized.directory) / name for name in materialized.files}
-    assert set(emitted) == {Path(name).name for name in expected}
+    assert set(emitted) == {Path(name).name for name in upstream}
     for path in upstream:
         assert emitted[Path(path).name].read_bytes() == (finnlib / path).read_bytes()
     wrapper = next(
@@ -395,10 +325,11 @@ def test_subbyte_result_padding_has_no_zero_fill_promise():
         result_dtype=DataType["INT4"],
     )
     _ = point.build_requirements
-    assert point.result.payload_bits == 4 and point.result.carrier_bits == 8
-    assert point.result.payload.unused[0].policy is UnusedBitPolicy.UNSPECIFIED
-    assert point.activation.payload.unused[0].policy is UnusedBitPolicy.IGNORE_ON_RECEIVE
-    field = point.result.payload.fields[0]
+    result, activation = point.y.axis, point.x.axis
+    assert result.payload_bits == 4 and result.carrier_bits == 8
+    assert result.payload.unused[0].policy is UnusedBitPolicy.UNSPECIFIED
+    assert activation.payload.unused[0].policy is UnusedBitPolicy.IGNORE_ON_RECEIVE
+    field = result.payload.fields[0]
     mask = (1 << field.bit_width) - 1
     assert (0xFF >> field.bit_offset) & mask == (0x0F >> field.bit_offset) & mask
 
@@ -409,8 +340,7 @@ def test_each_core_kernel_names_its_core_and_the_shared_base_places_none():
         assert requirements.implementation_id == family.id
         assert dict(requirements.parameters)["CORE"] == f'"{core}"'
     refused = kernel(DotpAxiKernel).inspect(DotpAxiKernel.build_requirements).accepted_result
-    assert isinstance(refused, Rejected)
-    assert {finding.code for finding in refused.findings} == {"dotp-core"}
+    assert codes(refused) == {"dotp-core"}
 
 
 @pytest.mark.parametrize(
@@ -427,8 +357,7 @@ def test_each_core_kernel_names_its_core_and_the_shared_base_places_none():
 )
 def test_the_int8_core_takes_signed_nine_by_eight_products_on_dsp58_only(updates, code):
     refused = kernel(Int8Dsp58DotpKernel, **updates).query(DotpAxiKernel.build_requirements)
-    assert isinstance(refused, Rejected)
-    assert code in {finding.code for finding in refused.findings}
+    assert code in codes(refused)
     for activation in ("INT9", "UINT8"):
         accepted = kernel(
             Int8Dsp58DotpKernel,
@@ -443,7 +372,7 @@ def test_depthwise_activations_carry_pe_channels_of_simd_and_only_int8_reads_the
     point = kernel(Int8Dsp58DotpKernel, form=Form.DEPTHWISE, pe=3, simd=2)
     rtl = dict(point.build_requirements.parameters)
     assert rtl["ACTIVATION_BROADCASTING"] == 0
-    assert point.activation.lanes == 6 and point.weights.lanes == 6 and point.result.lanes == 3
+    lanes = [port.axis.elements_per_beat for port in (point.x, point.w, point.y)]
+    assert lanes == [6, 6, 3]
     refused = kernel(form=Form.DEPTHWISE).query(DotpAxiKernel.build_requirements)
-    assert isinstance(refused, Rejected)
-    assert {finding.code for finding in refused.findings} == {"dotp-form"}
+    assert codes(refused) == {"dotp-form"}

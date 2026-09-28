@@ -25,6 +25,7 @@ from finn.core.space import (
     Constraint,
     ConstraintGroup,
     QueryResult,
+    Rejected,
     RequestError,
     Settlement,
     Space,
@@ -97,9 +98,20 @@ def compatible(
 
 
 def admission(candidate: Space) -> QueryResult[object] | None:
-    """A kernel's own refusal of its configuration: its ``admission`` member, if any."""
+    """A kernel's own refusal of its configuration: its ``admission`` member, if any.
+
+    A group refuses as soon as one of its constraints does, even while another
+    still waits on an open choice: a core that cannot target the DSP is refused
+    before its folds are chosen.
+    """
     member = getattr(type(candidate), "admission", None)
-    if isinstance(member, (Constraint, ConstraintGroup)):
+    if isinstance(member, ConstraintGroup):
+        assessment = candidate.inspect(member)
+        refused = [result for result in assessment.results.values() if isinstance(result, Rejected)]
+        if refused:
+            return Rejected(tuple(finding for result in refused for finding in result.findings))
+        return cast("QueryResult[object]", assessment.result)
+    if isinstance(member, Constraint):
         return cast("QueryResult[object]", candidate.inspect(member).result)
     if isinstance(member, View):
         return cast("QueryResult[object]", candidate.query(member))

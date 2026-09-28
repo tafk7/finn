@@ -56,10 +56,8 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
-from typing import Any, TypeVar
 
 from finn.core.space import (
-    Available,
     Decision,
     Located,
     Param,
@@ -69,7 +67,6 @@ from finn.core.space import (
     View,
     ViewKey,
     constraint,
-    inspection,
     default_semantics,
     derived,
     domain,
@@ -97,7 +94,7 @@ from finn.kernels.artifacts.build import (
     SELF_CONTAINED_JINJA_RENDERER,
 )
 from finn.kernels.artifacts.derivation import ProducerIdentity
-from finn.kernels.configure import commit, compatible
+from finn.kernels.base import MODULE, TIEOFFS, TIEOFFS_SEMANTICS, Tieoffs
 from finn.kernels.control import Exported, top_bus
 from finn.kernels.fifo import FifoKernel
 from finn.kernels.physical.axi_stream import AxiStream
@@ -132,26 +129,8 @@ from finn.kernels.physical.structure import PhysicalStructure
 from finn.kernels.physical.validation import abi_pins
 
 
-MODULE = ViewKey("module", default_semantics(ModuleBuildRequirements))
-
 # The composed module's clocking pins: its interface convention, not a routing rule.
 CLOCK, CLOCK2X, RESET = "ap_clk", "ap_clk2x", "ap_rst_n"
-
-
-@dataclass(frozen=True)
-class Tieoffs:
-    """Pins a kernel leaves out of the composition in this configuration.
-
-    ``inputs`` are held constant, as (pin, value); ``unused`` outputs are left
-    unconnected.
-    """
-
-    inputs: tuple[tuple[str, int], ...] = ()
-    unused: tuple[str, ...] = ()
-
-
-TIEOFFS_SEMANTICS = default_semantics(Tieoffs)
-TIEOFFS = ViewKey("tieoffs", TIEOFFS_SEMANTICS)
 
 
 def boundary_contract(
@@ -401,48 +380,6 @@ class BufferedStream(Stream):
         return (*self.adapted, *((fifo,) if fifo.requirements is not None else ()))
 
 
-S = TypeVar("S", bound=Space)
-
-
-def _node(point: Any, path: str) -> Any:
-    for name in path.split(".") if path else ():
-        point = getattr(point, name)
-    return point
-
-
-def commit_adapters(point: S, *, ram_style: str = "auto") -> S:
-    """Commit, on every stream whose plan needs one, its one compatible adapter.
-
-    Compatibility filters the candidates (each refuses a plan it does not carry
-    out); several compatible candidates are a design choice this does not make.
-    A stream whose adapter buffers in an ``input_gen`` takes ``ram_style``.
-    """
-    decisions = {item.key for item in inspection.decisions(point)}
-    choices: dict[str, object] = {}
-    for key in sorted(decisions):
-        if key != "adapter" and not key.endswith(".adapter"):
-            continue
-        path = key[: -len("adapter")].rstrip(".")
-        stream = _node(point, path)
-        if not isinstance(stream, Stream):
-            continue
-        adapting = stream.query(Stream.adapting)
-        if not (isinstance(adapting, Available) and adapting.value):
-            continue  # an absent stream, or ends that connect directly
-
-        def admitted(item: S, path: str = path) -> Any:
-            return _node(item, path).query(Stream.adapter_admitted)
-
-        cases = compatible(point, key, admitted)
-        if len(cases) != 1:
-            found = ", ".join(map(str, cases)) or "none"
-            raise ValueError(f"{path}: adapters compatible with its plan: {found}")
-        choices[key] = cases[0]
-        if stream.buffering:
-            choices[f"{key}_ram_style"] = ram_style
-    return commit(point, choices) if choices else point
-
-
 @dataclass(frozen=True)
 class Composed:
     structure: PhysicalStructure
@@ -453,8 +390,25 @@ COMPOSED = default_semantics(Composed)
 
 
 def _instance(node: str | None) -> str | None:
-    """``u_<node>``; a candidate of a Decision (``delivery.cyclic``) joins with ``_``."""
+    """``u_<node>``; a candidate of a Decision (``memory.rom``) joins with ``_``."""
     return None if node is None else "u_" + node.replace(".", "_")
+
+
+def _owner(node: str | None, modules: set[str]) -> str | None:
+    """The module a stream end belongs to: its nearest ancestor that owns a module.
+
+    A kernel's ``Port`` node presents the end (``compute.packed.x``); the
+    instance is its kernel's (``compute.packed``). A node owning no module and
+    below none is its own owner.
+    """
+    if node is None:
+        return None
+    parts = node.split(".")
+    for end in range(len(parts), 0, -1):
+        candidate = ".".join(parts[:end])
+        if candidate in modules:
+            return candidate
+    return node
 
 
 def netlist(
@@ -469,7 +423,8 @@ def netlist(
     """Wire the composite's modules through its streams and control buses.
 
     Each module is instantiated as ``u_<node>``, each stage of a stream as
-    ``u_<stream>_<stage>`` (``u_activations_input_gen``, ``u_weights_fifo``).
+    ``u_<stream>_<stage>`` (``u_activations_input_gen``, ``u_weights_fifo``). A
+    stream end presented by a kernel's port belongs to that kernel's instance.
     Every clock and reset pin is driven by its role (a free clock from
     ``ap_clk``, a clock at twice another from ``ap_clk2x``, a reset from
     ``ap_rst_n``), every exported control bus is wired through to its top port,
@@ -477,13 +432,14 @@ def netlist(
     drives is refused, as is a defect no single stream can see, such as a
     clock-domain conflict.
     """
+    owners = {str(item.node) for item in modules}
     connections = [
         (
             str(stream.node).replace(".", "_"),
             replace(
                 stream.value,
-                source_owner=_instance(stream.value.source_owner),
-                sink_owner=_instance(stream.value.sink_owner),
+                source_owner=_instance(_owner(stream.value.source_owner, owners)),
+                sink_owner=_instance(_owner(stream.value.sink_owner, owners)),
             ),
         )
         for stream in streams
@@ -667,6 +623,5 @@ __all__ = [
     "Tieoffs",
     "boundary_contract",
     "boundary_sequence",
-    "commit_adapters",
     "netlist",
 ]

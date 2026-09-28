@@ -14,6 +14,7 @@ The first datatype profile covers ordinary integers and IEEE FLOAT32.
 
 from __future__ import annotations
 
+
 from finn.kernels.artifacts.contribution_types import CopiedSource, RenderedSource
 from finn.kernels.artifacts.hls import HlsInterface, HlsSourceRequirements
 from finn.kernels.artifacts.sources import CompileOptions, Language, Role
@@ -35,6 +36,8 @@ from finn.core.space import (
 class MemStreamHlsKernel(Kernel):
     id = "finnlib.memstream.hls"
     version = "1"
+    # Off the Kernel protocol until K2: it exports nothing of its own.
+    exports = {}
 
     element_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
 
@@ -61,7 +64,7 @@ class MemStreamHlsKernel(Kernel):
         return True
 
     @view(requires=(depth_supported,))
-    def build_requirements(self) -> HlsSourceRequirements:
+    def sources(self) -> HlsSourceRequirements:  # type: ignore[override]
         cpp = self.cpp_type
         depth = self.depth
         includes = ("hls/infra", "hls/util")

@@ -164,28 +164,33 @@ class RejectParked(importlib.abc.MetaPathFinder):
 
 
 sys.meta_path.insert(0, RejectParked())
-from finn.core.space import design_space
+from finn.core.space import Space, design_space
+from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels import DspBlock, PackedDotpKernel, WeightDelivery, matmul_assembly
 from finn.kernels.artifacts.requirements import ModuleBuildRequirements
+from finn.kernels.configure import commit
 from finn.kernels.physical.axi_stream import AxiStream
+from finn.kernels.streams import Stream
 from qonnx.core.datatype import DataType
 
 
-point = design_space(
-    PackedDotpKernel(
-        pe=2,
-        simd=2,
-        activation_dtype=DataType["INT3"],
-        weights_dtype=DataType["INT3"],
-        result_dtype=DataType["INT8"],
-        target_dsp=DspBlock.DSP48E2,
-        target_period_ns=5.0,
+class Placed(Space):
+    x = Stream(tensor=Tensor((1, 2), ScalarEncoding(DataType["INT3"])), port="in0_V")
+    w = Stream(tensor=Tensor((2, 2), ScalarEncoding(DataType["INT3"])), port="in1_V")
+    y = Stream(tensor=Tensor((1, 2), ScalarEncoding(DataType["INT8"])), port="out0_V")
+    compute = PackedDotpKernel(
+        target_dsp=DspBlock.DSP48E2, target_period_ns=5.0, x_stream=x, w_stream=w, y_stream=y
     )
-).with_choices(compute_pumping=False)
+
+
+point = commit(
+    design_space(Placed()),
+    {"compute.pe": 2, "compute.simd": 2, "compute.compute_pumping": False},
+).compute
 answer = point.build_requirements
 assert isinstance(answer, ModuleBuildRequirements)
-assert isinstance(point.activation.stream, AxiStream)
-assert point.activation.payload_bits == 6
+assert isinstance(point.x.axis, AxiStream)
+assert point.x.axis.payload_bits == 6
 for mode in WeightDelivery:
     options = (
         {"weights": [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]]}
@@ -193,9 +198,9 @@ for mode in WeightDelivery:
         else {}
     )
     assembly = matmul_assembly(
-        rows=2,
-        reduction=4,
-        outputs=4,
+        m=2,
+        k=4,
+        n=4,
         activation_dtype=DataType["INT3"],
         weights_dtype=DataType["INT3"],
         pe=2,

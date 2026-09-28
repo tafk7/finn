@@ -1,13 +1,13 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""MatMulKernel weight delivery as a Decision over nodes: nothing, or a cyclic delivery node.
+"""MatMulKernel's weight memory as an optional Decision over kernels: none, or a ROM.
 
-External delivery places no node, so ``weight_stream`` has only its consumer and
-is the boundary ``in1_V``; cyclic delivery places the ``cyclic`` CyclicDelivery
-node, which references the stream as its producer and has its own
-initialization fact and local choice. These tests cover laziness, optional
-facts, persistence, atomic switching and diagnostics.
+The ``none`` case places nothing, so ``weight_stream`` has only its consumer
+and is the boundary ``in1_V``; ``rom`` places a ``RomKernel``, which
+references the stream as its producer and has its own contents and local
+choice. These tests cover laziness, optional facts, persistence, atomic
+switching and diagnostics.
 """
 
 from pathlib import Path
@@ -33,27 +33,27 @@ from finn.core.space.errors import ConfigurationError, RequestError
 from finn.kernels.artifacts.abi import Bus
 from finn.kernels.artifacts.build import ModuleBuildRequirements, prepare_module_build
 from finn.kernels.artifacts.store import ArtifactStore
-from finn.kernels.delivery import CyclicDelivery
+from finn.kernels.rom import RomKernel
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.dotp import DotpAxiKernel
 from finn.kernels.matmul import MatMulKernel, WeightDelivery, matmul_assembly
-from finn.kernels.streams import commit_adapters
+from kernels.helpers import settled
 from finn.kernels.resources import resource_root, template_root
 from finn.kernels.target import DspBlock
 
 ROOT = Path(__file__).resolve().parents[2]
-IMAGE = CyclicDelivery.image
-ROM_STYLE = CyclicDelivery.rom_style
-# The cyclic candidate of the ``delivery`` Decision is named ``delivery.cyclic``.
-CYCLIC_INSTANCE = "u_delivery_cyclic"
+IMAGE = RomKernel.image
+ROM_STYLE = RomKernel.rom_style
+# The ROM candidate of the ``memory`` Decision is named ``memory.rom``.
+CYCLIC_INSTANCE = "u_memory_rom"
 ADAPTER_INSTANCE = "u_activations_input_gen"
 # Written by output, stored (k, n).
 BY_OUTPUT = ((-4, -3, -2, -1), (0, 1, 2, 3), (3, 2, 1, 0), (-1, -2, -3, -4))
 WEIGHTS = tuple(zip(*BY_OUTPUT))
 FACTS = dict(
-    rows=3,
-    reduction=4,
-    outputs=4,
+    m=3,
+    k=4,
+    n=4,
     activation_dtype=DataType["INT3"],
     weights_dtype=DataType["INT3"],
     target_dsp=DspBlock.DSP48E2,
@@ -65,7 +65,7 @@ def base(**facts):
     return design_space(MatMulKernel(**{**FACTS, **facts}))
 
 
-def selector(point, key="delivery"):
+def selector(point, key="memory"):
     (choice,) = [item for item in inspection.choices(point) if item.key == key]
     assert choice.selector is not None
     return choice.selector
@@ -75,9 +75,13 @@ def transport(point):
     return selector(point, "weight_stream.transport")
 
 
-def rom_style(point):
+def rom(point):
     # The candidate's configuration exists whether or not it is selected.
-    return inspection.decision_handle(point.cyclic, CyclicDelivery.rom_style)
+    return inspection.candidate(point, MatMulKernel.memory, "rom")
+
+
+def rom_style(point):
+    return inspection.decision_handle(rom(point), RomKernel.rom_style)
 
 
 def configured(point, case, *, style=None, pe=2, simd=2):
@@ -87,9 +91,16 @@ def configured(point, case, *, style=None, pe=2, simd=2):
     ]
     if style is not None:
         changes.append(point.field(rom_style(point)).change(style))
-    # The activation stream's adapter follows from the folding: commit the one that fits.
-    return commit_adapters(
-        point.with_choices(*changes, pe=pe, simd=simd, compute="packed", compute_pumping=False)
+    # The activation stream's adapter follows from the folding: settle the one that fits.
+    point = point.with_choices(*changes, compute="packed")
+    return settled(
+        point.with_choices(
+            {
+                MatMulKernel.packed.pe: pe,
+                MatMulKernel.packed.simd: simd,
+                MatMulKernel.packed.compute_pumping: False,
+            }
+        )
     )
 
 
@@ -116,8 +127,8 @@ def owners(result):
 
 
 def test_families_share_typed_exports_but_keep_their_own_ports_and_components():
-    external = configured(base(), "external")
-    cyclic = configured(base(weights=WEIGHTS), "cyclic", style="block")
+    external = configured(base(), "none")
+    cyclic = configured(base(weights=WEIGHTS), "rom", style="block")
     for point, ports, instances in (
         (external, {"in0_V", "in1_V", "out0_V"}, ["u_compute_packed", ADAPTER_INSTANCE]),
         (cyclic, {"in0_V", "out0_V"}, ["u_compute_packed", CYCLIC_INSTANCE, ADAPTER_INSTANCE]),
@@ -130,14 +141,14 @@ def test_families_share_typed_exports_but_keep_their_own_ports_and_components():
         assert [item.instance_id for item in built.structure.instances] == instances
     assert delivery(external) is WeightDelivery.EXTERNAL
     # The Decision reads as the selected candidate's configuration, or None.
-    assert external.delivery is None and external.delivered == "external"
-    assert isinstance(cyclic.delivery, CyclicDelivery) and cyclic.delivered == "cyclic"
-    assert cyclic.delivery.image == (0x22C, 0x6BE, 0xDD3, 0x941)
-    # Instance names come from the located node names: the candidate is delivery.cyclic.
-    assert [item.node for item in cyclic.modules] == ["compute.packed", "delivery.cyclic"]
+    assert external.memory is None and external.supplied == "none"
+    assert isinstance(cyclic.memory, RomKernel) and cyclic.supplied == "rom"
+    assert cyclic.memory.image == (0x22C, 0x6BE, 0xDD3, 0x941)
+    # Instance names come from the located node names: the candidate is memory.rom.
+    assert [item.node for item in cyclic.modules] == ["compute.packed", "memory.rom"]
     assert [(item.node, item.value.source_owner) for item in cyclic.streams][1] == (
         "weight_stream",
-        "delivery.cyclic",
+        "memory.rom",
     )
     assert [item.node for item in external.modules] == ["compute.packed"]
     rom = instance_parameters(cyclic, CYCLIC_INSTANCE)
@@ -148,52 +159,53 @@ def test_families_share_typed_exports_but_keep_their_own_ports_and_components():
 
 
 def test_the_inactive_family_is_never_demanded():
-    point = configured(base(), "external")
+    point = configured(base(), "none")
     evidence = inspection.explain(point, MatMulKernel.structure)
     visited = {node.declaration.key for node in evidence.nodes}
     # External delivery places no node: the stream sees only its consumer and is the
     # boundary in1_V. The Decision over nodes is itself the selector.
-    assert {"delivery", "weight_stream.ends", "weight_stream.endpoints"} <= visited
-    assert [node.selector for node in evidence.nodes if node.declaration.key == "delivery"] == [
-        True
-    ]
+    assert {"memory", "weight_stream.ends", "weight_stream.endpoints"} <= visited
+    assert [node.selector for node in evidence.nodes if node.declaration.key == "memory"] == [True]
     # The inactive family is reached only to settle its guard; none of its work runs.
     reached = {
         node.declaration.key: node.result
         for node in evidence.nodes
-        if node.declaration.key.startswith("delivery.cyclic.")
+        if node.declaration.key.startswith("memory.rom.")
     }
     assert set(reached) == {
-        "delivery.cyclic.$selected",
-        "delivery.cyclic.build_requirements",
-        "delivery.cyclic.output",
+        "memory.rom.$selected",
+        "memory.rom.build_requirements",
+        "memory.rom.output",
     }
     assert all(
         isinstance(result, Inapplicable)
         for key, result in reached.items()
-        if key != "delivery.cyclic.$selected"
+        if key != "memory.rom.$selected"
     )
     assert "weights" not in visited
     # The unselected candidate's configuration is still reachable, selected or not.
-    inactive = point.cyclic
-    assert point.delivery is None
-    assert inspection.candidate(point, MatMulKernel.delivery, "external") is None
-    assert isinstance(inspection.candidate(point, MatMulKernel.delivery, "cyclic"), CyclicDelivery)
+    inactive = rom(point)
+    assert point.memory is None
+    assert inspection.candidate(point, MatMulKernel.memory, "none") is None
+    assert isinstance(inactive, RomKernel)
     assert isinstance(inactive.query(IMAGE), Inapplicable)
-    assert isinstance(inactive.field(CyclicDelivery.rom_style).query(), Inapplicable)
+    assert isinstance(inactive.field(RomKernel.rom_style).query(), Inapplicable)
 
 
 def test_case_local_choices_are_owned_by_their_family():
     records = {item.key: item for item in inspection.decisions(base())}
     assert set(records) == {
-        "pe",
-        "simd",
         "compute",
-        "compute_pumping",
-        "delivery",
-        "delivery.cyclic.rom_style",
-        "delivery.memstream.pumped_memory",
-        "delivery.memstream.ram_style",
+        "compute.packed.pe",
+        "compute.packed.simd",
+        "compute.packed.compute_pumping",
+        "compute.int8_dsp58.pe",
+        "compute.int8_dsp58.simd",
+        "compute.int8_dsp58.compute_pumping",
+        "memory",
+        "memory.rom.rom_style",
+        "memory.memstream.pumped_memory",
+        "memory.memstream.ram_style",
         "realization",
         # Every stream may need an adapter; each Decision applies only under a plan.
         "activations.adapter",
@@ -208,33 +220,32 @@ def test_case_local_choices_are_owned_by_their_family():
         "weight_stream.transport.fifo.buffer.depth",
         "weight_stream.transport.fifo.buffer.ram_style",
     }
-    assert records["delivery"].selector
-    assert records["delivery"].cases == ("external", "cyclic", "memstream")
-    local = records["delivery.cyclic.rom_style"]
-    # The choice belongs to the reusable delivery kernel placed by the family.
-    assert local.scope == "delivery.cyclic" and not local.selector
-    (choice,) = [item for item in inspection.choices(base()) if item.key == "delivery"]
+    assert records["memory"].selector
+    assert records["memory"].cases == ("none", "rom", "memstream")
+    local = records["memory.rom.rom_style"]
+    # The choice belongs to the reusable memory kernel placed by the family.
+    assert local.scope == "memory.rom" and not local.selector
+    (choice,) = [item for item in inspection.choices(base()) if item.key == "memory"]
     cases = {case.name: (case.scope, case.space_type) for case in choice.cases}
-    # External delivery places nothing (a None candidate, formerly the empty External
-    # family); cyclic places the reusable delivery kernel.
+    # The optional Decision's none case places nothing; rom places the reusable ROM.
     assert cases == {
-        "external": (None, None),
-        "cyclic": ("delivery.cyclic", CyclicDelivery),
-        "memstream": ("delivery.memstream", MemStreamKernel),
+        "none": (None, None),
+        "rom": ("memory.rom", RomKernel),
+        "memstream": ("memory.memstream", MemStreamKernel),
     }
     # Applicability of a case-local choice waits for the selector, and names it.
-    unselected = base().cyclic.field(ROM_STYLE)
+    unselected = rom(base()).field(ROM_STYLE)
     pending = unselected.candidates()
-    assert isinstance(pending, Unresolved) and owners(pending) == {"delivery"}
-    chosen = base().with_choices(delivery="cyclic").cyclic
+    assert isinstance(pending, Unresolved) and owners(pending) == {"memory"}
+    chosen = base().with_choices(memory="rom").memory
     assert chosen.field(ROM_STYLE).candidates() == Available(("auto", "distributed", "block"))
 
 
 def test_missing_cyclic_weights_leave_only_the_selected_family_unresolved():
-    external = configured(base(), "external")
+    external = configured(base(), "none")
     assert isinstance(external.query(MatMulKernel.structure), Available)
-    cyclic = configured(base(), "cyclic", style="distributed")
-    family = cyclic.delivery
+    cyclic = configured(base(), "rom", style="distributed")
+    family = cyclic.memory
     assert family is not None and family.rom_style == "distributed"
     assert isinstance(family.query(IMAGE), Unresolved)
     assessment = cyclic.inspect(MatMulKernel.structure)
@@ -246,7 +257,7 @@ def test_missing_cyclic_weights_leave_only_the_selected_family_unresolved():
         if not isinstance(result, (Available, Inapplicable))
     }
     # The packed core waits too: known weights decide its NARROW_WEIGHTS.
-    assert waiting == {"delivery.cyclic.build_requirements", "compute.packed.build_requirements"}
+    assert waiting == {"memory.rom.build_requirements", "compute.packed.build_requirements"}
     assert owners(cyclic.compute.query(DotpAxiKernel.build_requirements)) == {"weights"}
     evidence = inspection.explain(cyclic, MatMulKernel.structure)
     omitted = [node for node in evidence.nodes if node.input_presence == "omitted"]
@@ -254,33 +265,41 @@ def test_missing_cyclic_weights_leave_only_the_selected_family_unresolved():
 
 
 def test_cyclic_family_needs_its_own_rom_choice_and_refuses_bad_weights():
-    uncommitted = configured(base(weights=WEIGHTS), "cyclic")
+    uncommitted = configured(base(weights=WEIGHTS), "rom")
     assert isinstance(uncommitted.query(MatMulKernel.structure), Unresolved)
-    bad = configured(base(weights=((4,) * 4,) * 4), "cyclic", style="auto")
+    bad = configured(base(weights=((4,) * 4,) * 4), "rom", style="auto")
     refused = bad.query(MatMulKernel.structure)
     assert isinstance(refused, Rejected)
     assert keys(refused) == {"cyclic-values"}
-    assert owners(refused) == {"delivery.cyclic.image"}
+    assert owners(refused) == {"memory.rom.image"}
     # A shape error is refused the same way, and never demanded by external delivery.
-    wrong = configured(base(weights=((0,),)), "cyclic", style="auto").query(MatMulKernel.structure)
+    wrong = configured(base(weights=((0,),)), "rom", style="auto").query(MatMulKernel.structure)
     assert isinstance(wrong, Rejected) and "shape" in wrong.findings[0].message
     assert isinstance(
-        configured(base(weights=((0,),)), "external").query(MatMulKernel.structure), Available
+        configured(base(weights=((0,),)), "none").query(MatMulKernel.structure), Available
     )
 
 
 def test_known_refusals_remain_visible_while_the_family_is_unselected():
-    point = base(weights=WEIGHTS).with_choices(pe=4, simd=2, compute="packed", compute_pumping=True)
+    point = base(weights=WEIGHTS).with_choices(compute="packed")
+    point = point.with_choices(
+        {
+            MatMulKernel.packed.pe: 4,
+            MatMulKernel.packed.simd: 2,
+            MatMulKernel.packed.compute_pumping: True,
+        }
+    )
     assessment = point.inspect(MatMulKernel.structure)
     assert isinstance(assessment.accepted_result, Unresolved)
-    # The packed core waits only for the delivery, which decides whether its
+    # The packed core waits only for the memory, which decides whether its
     # weights are known (NARROW_WEIGHTS); its own refusals settle meanwhile.
     compute = point.compute.inspect(DotpAxiKernel.build_requirements)
-    assert owners(compute.accepted_result) == {"delivery"}
-    assert point.compute.inspect(DotpAxiKernel.support).result == Available(True)
-    folding = base(weights=WEIGHTS).with_choices(simd=4)
-    # Folding refusals settle before a PE, family or ROM style is chosen.
-    trial = folding.try_with_choices(pe=3)
+    assert owners(compute.accepted_result) == {"memory"}
+    assert point.compute.inspect(DotpAxiKernel.admission).result == Available(True)
+    folding = base(weights=WEIGHTS).with_choices(compute="packed")
+    folding = folding.with_choices({MatMulKernel.packed.simd: 4})
+    # Folding refusals settle before a PE, memory or ROM style is chosen.
+    trial = folding.try_with_choices({MatMulKernel.packed.pe: 3})
     assert not trial.accepted
     assert "domain-membership" in {
         finding.code for outcome in trial.outcomes for finding in outcome.result.findings
@@ -309,29 +328,29 @@ def schema(point):
             codec_for(selector(point), STRING),
             codec_for(transport(point), STRING),
             # A reference into the candidate is accepted as well as a handle.
-            codec_for(MatMulKernel.cyclic.rom_style, STRING),
-            codec_for(MatMulKernel.pe, INTEGER),
-            codec_for(MatMulKernel.simd, INTEGER),
+            codec_for(MatMulKernel.memory["rom"].rom_style, STRING),  # type: ignore[index]
+            codec_for(MatMulKernel.packed.pe, INTEGER),
+            codec_for(MatMulKernel.packed.simd, INTEGER),
             codec_for(MatMulKernel.compute, STRING),
             codec_for(MatMulKernel.activations.adapter, STRING),
             codec_for(MatMulKernel.activations.adapter_ram_style, STRING),
-            codec_for(MatMulKernel.compute_pumping, BOOLEAN),
+            codec_for(MatMulKernel.packed.compute_pumping, BOOLEAN),
         ),
     )
 
 
 def test_selector_and_case_choices_round_trip_through_an_empty_root():
-    point = configured(base(weights=WEIGHTS), "cyclic", style="block")
+    point = configured(base(weights=WEIGHTS), "rom", style="block")
     saved = selections.capture(point)
     assert saved.keys == (
         "activations.adapter",
         "activations.adapter_ram_style",
         "compute",
-        "compute_pumping",
-        "delivery",
-        "delivery.cyclic.rom_style",
-        "pe",
-        "simd",
+        "compute.packed.compute_pumping",
+        "compute.packed.pe",
+        "compute.packed.simd",
+        "memory",
+        "memory.rom.rom_style",
         "weight_stream.transport",
     )
     document = codecs.encode(saved, schema(point))
@@ -344,13 +363,13 @@ def test_selector_and_case_choices_round_trip_through_an_empty_root():
     # Replay under different supplied facts: the same choices, a new image.
     other = selections.restore(base(weights=tuple(row[::-1] for row in WEIGHTS)), decoded)
     assert other.accepted
-    assert other.instance.cyclic.image != point.cyclic.image
+    assert other.instance.memory.image != point.memory.image
     # Without the family's optional fact the choices replay but stay unresolved.
     unresolved = selections.restore(base(), decoded)
     assert unresolved.accepted
     assert isinstance(unresolved.instance.query(MatMulKernel.structure), Unresolved)
     # Facts that invalidate a saved folding refuse replay atomically.
-    changed = base(weights=WEIGHTS, outputs=5)
+    changed = base(weights=WEIGHTS, n=5)
     refused = selections.restore(changed, decoded)
     assert not refused.accepted and refused.instance is changed
     # A configured receiver is not a replay target.
@@ -359,15 +378,15 @@ def test_selector_and_case_choices_round_trip_through_an_empty_root():
 
 
 def test_switching_families_is_atomic_and_requires_clearing_stale_case_choices():
-    cyclic = configured(base(weights=WEIGHTS), "cyclic", style="block")
-    stale = cyclic.try_with_choices(cyclic.field(selector(cyclic)).change("external"))
+    cyclic = configured(base(weights=WEIGHTS), "rom", style="block")
+    stale = cyclic.try_with_choices(cyclic.field(selector(cyclic)).change("none"))
     assert not stale.accepted and stale.instance is cyclic
     refused = {outcome.owner: outcome for outcome in stale.outcomes if outcome.status == "refused"}
-    assert set(refused) == {"delivery.cyclic.rom_style"}
-    assert isinstance(refused["delivery.cyclic.rom_style"].result, Inapplicable)
+    assert set(refused) == {"memory.rom.rom_style"}
+    assert isinstance(refused["memory.rom.rom_style"].result, Inapplicable)
     assert delivery(cyclic) is WeightDelivery.CYCLIC
     switched = cyclic.with_choices(
-        cyclic.field(selector(cyclic)).change("external"),
+        cyclic.field(selector(cyclic)).change("none"),
         cyclic.field(rom_style(cyclic)).clear(),
     )
     assert delivery(switched) is WeightDelivery.EXTERNAL
@@ -375,15 +394,15 @@ def test_switching_families_is_atomic_and_requires_clearing_stale_case_choices()
         "activations.adapter",
         "activations.adapter_ram_style",
         "compute",
-        "compute_pumping",
-        "delivery",
-        "pe",
-        "simd",
+        "compute.packed.compute_pumping",
+        "compute.packed.pe",
+        "compute.packed.simd",
+        "memory",
         "weight_stream.transport",
     )
     # Switching back commits the case-local choice in the same batch.
     back = switched.with_choices(
-        switched.field(selector(switched)).change("cyclic"),
+        switched.field(selector(switched)).change("rom"),
         switched.field(rom_style(switched)).change("distributed"),
     )
     assert delivery(back) is WeightDelivery.CYCLIC
@@ -410,7 +429,10 @@ def test_public_adapter_matches_the_space_path(delivery):
     )
     if delivery is WeightDelivery.MEMSTREAM:
         point = point.with_choices(
-            {MatMulKernel.memstream.ram_style: "auto", MatMulKernel.memstream.pumped_memory: False}
+            {
+                MatMulKernel.memory["memstream"].ram_style: "auto",  # type: ignore[index]
+                MatMulKernel.memory["memstream"].pumped_memory: False,  # type: ignore[index]
+            }
         )
     composed = point.structure
     assert (adapted.structure, adapted.requirements) == (composed.structure, composed.requirements)
@@ -468,7 +490,7 @@ def buffered(point, depth=None):
 
 
 def test_a_buffered_stream_places_a_fifo_between_its_producer_and_consumer():
-    for case, weights in (("external", None), ("cyclic", WEIGHTS)):
+    for case, weights in (("none", None), ("rom", WEIGHTS)):
         point = configured(
             base(weights=weights) if weights else base(), case, style=("auto" if weights else None)
         )
@@ -482,7 +504,7 @@ def test_a_buffered_stream_places_a_fifo_between_its_producer_and_consumer():
             if hasattr(wire.source, "pin")
             and wire.destination.pin.signal_id in ("idat", "s_axis_weights_tdata")
         }
-        producer = CYCLIC_INSTANCE if case == "cyclic" else None
+        producer = CYCLIC_INSTANCE if case == "rom" else None
         assert ("u_weight_stream_fifo", producer) in destinations
         assert ("u_compute_packed", "u_weight_stream_fifo") in destinations
         depth = dict(built.structure.instances[-1].requirements.parameters)["DEPTH"]
@@ -490,7 +512,7 @@ def test_a_buffered_stream_places_a_fifo_between_its_producer_and_consumer():
 
 
 def test_fifo_depth_is_owned_by_the_stream_and_only_demanded_when_selected():
-    point = configured(base(), "external")
+    point = configured(base(), "none")
     records = {item.key: item for item in inspection.decisions(point)}
     assert records[FIFO_DEPTH].scope == "weight_stream.transport.fifo.buffer"
     assert isinstance(point.field(handle(point, FIFO_DEPTH)).query(), Inapplicable)

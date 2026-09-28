@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Traversals, stream contracts, checked composition, and reusable cyclic delivery.
+"""Traversals, stream contracts, checked composition, and reusable ROM.
 
 The stress cases come from baseline FINN: the tiled MVU's two internal
 ``input_gen`` adapters and the Shuffle op's inner/outer decomposition. Their
@@ -33,7 +33,7 @@ from finn.kernels.artifacts.build import (
 from finn.kernels.artifacts.derivation import ProducerIdentity
 from finn.kernels.artifacts.store import ArtifactStore
 from finn.dataflow.tensor import ScalarEncoding
-from finn.kernels.delivery import CyclicDelivery
+from finn.kernels.rom import RomKernel
 from finn.kernels.fifo import FifoKernel
 from finn.kernels.physical.axi_stream import AxiStream
 from finn.kernels.physical.composition import Composition, StreamEnd
@@ -160,9 +160,9 @@ def test_tiled_mvu_weight_chunks_are_a_width_conversion_a_delivery_can_avoid():
     )
     assert chunked.lanes == PE_T * SIMD_T // T
     assert classify(tile(MH, MW, PE_T, SIMD_T), chunked).adaptation is Adaptation.WIDTH_CONVERSION
-    # A cyclic delivery can simply produce the chunked order: no adapter at all.
+    # A ROM can simply produce the chunked order: no adapter at all.
     values = tuple(tuple((row * MW + col) % 7 - 3 for col in range(MW)) for row in range(MH))
-    source = design_space(CyclicDelivery(dtype=DataType["INT3"], form=chunked, values=values))
+    source = design_space(RomKernel(dtype=DataType["INT3"], form=chunked, contents=values))
     sink = contract(chunked.repeated(R // T), Endpoint.TARGET)
     produced = source.output
     assert compatibility(produced, sink, source_is_top=False, sink_is_top=False) == ()
@@ -263,7 +263,7 @@ def test_contracts_reject_lanes_wider_than_the_word_and_unknown_marker_rules():
 
 def delivery(form=None, values=(1, -2, 7, -8), **choices):
     form = vector_major((4,), 2) if form is None else form
-    base = design_space(CyclicDelivery(dtype=DataType["INT4"], form=form, values=values))
+    base = design_space(RomKernel(dtype=DataType["INT4"], form=form, contents=values))
     return base.with_choices(**choices) if choices else base
 
 
@@ -273,7 +273,7 @@ def test_delivery_publishes_a_cyclic_contract_and_waits_only_for_its_own_choice(
     assert output.repetition is Repetition.CYCLIC and output.form == vector_major((4,), 2)
     assert output.payload_bits == output.transport.data_width == 8
     assert base.image == (0xE1, 0x87)
-    assert isinstance(base.query(CyclicDelivery.build_requirements), Unresolved)
+    assert isinstance(base.query(RomKernel.build_requirements), Unresolved)
     requirements = delivery(rom_style="block").build_requirements
     assert dict(requirements.parameters)["ROM_STYLE"] == '"block"'
 
@@ -288,9 +288,9 @@ def test_delivery_publishes_a_cyclic_contract_and_waits_only_for_its_own_choice(
 )
 def test_delivery_refuses_values_outside_the_operand_contract(values, dtype, message):
     point = design_space(
-        CyclicDelivery(dtype=DataType[dtype], form=vector_major((4,), 2), values=values)
+        RomKernel(dtype=DataType[dtype], form=vector_major((4,), 2), contents=values)
     )
-    answer = point.with_choices(rom_style="auto").query(CyclicDelivery.build_requirements)
+    answer = point.with_choices(rom_style="auto").query(RomKernel.build_requirements)
     assert isinstance(answer, Rejected)
     if message:
         assert any(message in finding.message for finding in answer.findings)
@@ -392,7 +392,7 @@ def test_a_pure_lane_permutation_is_realized_as_free_wiring():
     assert verdict.adaptation is Adaptation.LANE_PERMUTATION
     assert verdict.lane_permutation == (0, 2, 1, 3)
     values = (((1, 2), (3, 4)), ((5, 6), (7, -8)))
-    source = design_space(CyclicDelivery(dtype=DataType["INT4"], form=produced, values=values))
+    source = design_space(RomKernel(dtype=DataType["INT4"], form=produced, contents=values))
     fifo = design_space(FifoKernel(word_bits=16, depth=2)).with_choices(ram_style="auto")
     fifo_in, fifo_out = fifo.interfaces
     out = AxiStream("out0_V", DataType["INT4"], 4, endpoint=Endpoint.INITIATOR)

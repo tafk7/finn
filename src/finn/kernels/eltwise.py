@@ -14,6 +14,7 @@ interchangeable implementation choices.
 
 from __future__ import annotations
 
+
 import math
 import struct
 
@@ -62,6 +63,8 @@ class EltwiseOperand(Scalar):
 class EltwiseKernel(Kernel):
     id = "finnlib.eltwise"
     version = "1"
+    # Off the Kernel protocol until K2: it exports nothing of its own.
+    exports = {}
 
     operation: str = Param()
     pe: int = Param()

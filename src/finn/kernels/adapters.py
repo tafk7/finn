@@ -45,6 +45,7 @@ from math import lcm, prod
 from typing import ClassVar
 
 from finn.core.space import (
+    ConstraintGroup,
     Param,
     Rejected,
     Space,
@@ -373,6 +374,9 @@ class StreamAdapter(Space):
                 f"which takes {' -> '.join(kinds)}",
             )
         return True
+
+    # The kernels' convention for a refusal (``finn.kernels.configure.admission``).
+    admission = ConstraintGroup(realizes)
 
     @view(semantics=default_semantics(str), requires=(realizes,))
     def admitted(self) -> str:

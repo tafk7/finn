@@ -30,7 +30,9 @@ from finn.core.space import (
     RequestError,
     SelectionSchema,
     Space,
+    Users,
     View,
+    ViewKey,
     codec_for,
     codecs,
     composite,
@@ -552,3 +554,43 @@ def test_settle_skips_a_pinned_choice_and_settles_a_narrowed_one() -> None:
     assert settle(design_space(Narrowed()), admission=admission).committed == {
         "unit.compute": "stub"
     }
+
+
+# -- users through a forwarded input -----------------------------------------------------
+
+REACH = ViewKey("reach", int)
+
+
+class Target(Space):
+    users = Users(REACH)
+
+    @view
+    def count(self) -> int:
+        return len(self.users)
+
+
+class Leaf(Space):
+    target: Target = Param(required=False)
+
+    @view
+    def reach(self) -> int:
+        return 1
+
+    exports = {REACH: {target: reach}}
+
+
+class Wrapper(Space):
+    """References the target only to forward it to its leaf; it exports nothing."""
+
+    target: Target = Param(required=False)
+    leaf = Leaf(target=target)
+
+
+def test_a_node_forwarding_an_input_is_a_user_of_the_node_it_reaches() -> None:
+    class Top(Space):
+        shared = Target()
+        wrapper = Wrapper(target=shared)
+
+    point = design_space(Top())
+    assert [(user.node, user.member) for user in point.shared.users] == [("wrapper.leaf", "target")]
+    assert point.shared.count == 1
