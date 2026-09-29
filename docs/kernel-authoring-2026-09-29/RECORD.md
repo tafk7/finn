@@ -14,7 +14,9 @@ Baseline at `6278ac53a`: Space 448, kernels 805 with XSim, graph 6, dataflow 40.
 
 ### What landed
 
-Fast gates (Vivado off `PATH`), as observed:
+Commits: `59299e0a3` (the harness and its cases), `a0e881750` (fixes from the
+first XSim sweep, below). Fast gates at both (Vivado off `PATH`), as observed;
+identical counts:
 
 | Gate | Result |
 |---|---|
@@ -49,7 +51,10 @@ Fast gates (Vivado off `PATH`), as observed:
      packed with `traversal.pack` in `unreplayed(port form)` order, outputs in
      the port's order; `xsim.stream_through`, free and stalled. Failures are
      collected over all samples and raised together (`NonConformance`, with
-     `failures` per sample and mode).
+     `failures` per sample and mode). A design fed by a cyclic source (the
+     adapter sample, memstream) repeats, so each output is compared over its
+     first pass (`stream_through(..., repeating=True)`: ready low after the
+     expected words).
   5. **Adapter sample.** On the middle plain configuration, the first input's
      stream is fed by a read-only `MemStreamKernel` (`ram_style` `auto`,
      unpumped) presenting `vector_major` at the first lane count dividing the
@@ -89,6 +94,11 @@ Fast gates (Vivado off `PATH`), as observed:
   so the two orders differ in every sample. Tests: `ChannelsFirst` passes
   every Python check; in XSim it must fail in every sample and both modes;
   `RowsFirst` passes both.
+  Why thresholding and not dotp (reasoned, not simulated): `dotp_axi` pairs its
+  activation and weight frames beat by beat, so a dotp declaring `n` outside
+  `m` would likely still compute every result correctly, in the order it
+  declared. thresholding's RTL counts channel folds itself, so a declared order
+  it does not walk applies the wrong thresholds.
 - **The checks refuse.** Two more test kernels: `Misnamed` (memstream with its
   output bus named `m_axis_1`) is refused by `check_abi`; `Unbound`
   (memstream without `RAM_STYLE`, which `memstream_axi` declares with a
@@ -96,8 +106,10 @@ Fast gates (Vivado off `PATH`), as observed:
 - **Runner.** `a1/xsim.sh <commit>`: snapshot, one pytest process per
   conformance XSim test in parallel, and the rest of `tests/kernels` with
   Vivado on `PATH`.
+- **`tests/kernels/xsim.py`.** `stream_through` gains `repeating` (default
+  False: every existing caller unchanged).
 
-No `src/` change. No key or name changes.
+No `src/` change. No decision key or name changes. New test-side names: `conformance`, `samples`, `place`, `SAMPLED`, `ALL`, `Sample`, `NonConformance`, `RtlDeclined`, `--strict-rtl`, `stream_through(repeating=)`.
 
 ### The RTL checker's decline rate, as measured
 
@@ -116,7 +128,40 @@ So the ABI and parameter-name checks bind for 13 of the 32 case samples. Under
 `--strict-rtl` six Python tests fail (packed dotp, eltwise, thresholding,
 `RowsFirst`, transpose, and the wrong-order Python test).
 
-XSIM_RESULTS
+### XSim from the commits
+
+**First sweep, `59299e0a3`** (snapshot `/tmp/a1-xsim-59299e0a3`):
+
+- Passed: dotp packed, dotp INT8, dotp INT8 depthwise, eltwise (4 samples x
+  free and stalled each), and the wrong-order test.
+- **memstream** failed every sample at word N (24, 8, 4, 4: one past the last
+  expected word), and **thresholding** / **`RowsFirst`** failed their adapter
+  sample at word 6 / 9 (one past the last): every expected word matched, then
+  the cyclic source kept the design producing and `stream_through` compared a
+  word beyond its table. A harness defect, fixed in `a0e881750` (`repeating`).
+- **transpose** failed every sample before simulating: xvlog refuses FinnLib
+  `d03f2fc`'s `rtl/shape/inner_shuffle.sv` ("[VRFC 10-3380] identifier
+  'read_addr' is used before its declaration", line 294; declared at 309), the
+  same defect slang declines on. `TransposeKernel` had no XSim test before.
+  Its XSim case is now `xfail(strict=True, raises=NonConformance)`.
+- The rest of `tests/kernels` with Vivado on `PATH`: 805 passed (the baseline
+  count).
+
+**Second sweep, `a0e881750`** (snapshot `/tmp/a1-xsim-a0e881750`), as
+observed:
+
+| Test | Result |
+|---|---|
+| `dotp-packed`, `dotp-int8`, `dotp-int8-depthwise` | passed (4 samples x 2 modes each) |
+| `thresholding`, `thresholding-rows-first`, `eltwise` | passed (4 x 2 each) |
+| `memstream` | passed (4 x 2) |
+| `transpose` | xfailed (inner_shuffle does not compile) |
+| wrong loop order (`ChannelsFirst`) | passed: all 4 samples fail in both modes, each at an output word: `pe=1` word 2 (`00` for `1`), `pe=2` word 1 (`09` for `d`), `pe=3` word 1 (`01` for `13`), adapter `pe=2` word 1 (`08` for `d`) |
+| rest of `tests/kernels`, Vivado on `PATH` | 805 passed (baseline count) |
+| `tests/graph`, Vivado on `PATH` | 6 passed |
+
+The same module with the RTL's order (`RowsFirst`) passes, so the failure is
+the declared order and nothing else in the test kernel.
 
 ### Deviations
 
@@ -138,6 +183,9 @@ XSIM_RESULTS
   configuration: it is distinguished by what feeds the first input.
 - **memstream has no adapter sample** (no input); its fourth sample is a
   `tile` form.
+- **Transpose is not simulated.** Its XSim case is an expected failure until
+  FinnLib's `inner_shuffle.sv` compiles; its Python checks run (its ABI check
+  declines for the same reason).
 - **Not added (as instructed):** D5's unplaced-output check (A6).
 
 ### Follow-ups this surfaced
@@ -147,3 +195,9 @@ XSIM_RESULTS
   slang refuses and Vivado accepts. Establishing names without values would
   let the parameter-name check bind for thresholding and eltwise; that is a
   change to `artifacts/rtl.py`, outside A1.
+- FinnLib `inner_shuffle.sv` (`d03f2fc`) uses `read_addr` before declaring
+  it; neither xvlog nor slang accepts it. A FinnLib fix, then a new pin, lets
+  the transpose case run (its `xfail` is strict, so the fix will be noticed).
+- A stream fed by a cyclic source makes the whole design repeat; the boundary
+  presents a single pass by rule, but nothing stops the design after it. The
+  harness compares the first pass; whether a composite should say so is open.
