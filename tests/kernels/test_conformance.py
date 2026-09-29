@@ -10,10 +10,16 @@ memstream with an identity reference. Folds that are still Params
 (thresholding's and eltwise's ``pe``, transpose's SIMD inside ``input_form``,
 memstream's ``form``) are given explicitly.
 
-The harness's reason to exist: a thresholding kernel that declares its
-channels outer and its rows inner, where the RTL walks rows outer, passes
-every Python check and fails in XSim. The same kernel declaring the RTL's
-order passes both.
+The harness's reason to exist: a thresholding kernel that declares an order
+its RTL does not walk passes every Python check and fails in XSim, for the
+loop order (channel folds outer, rows inner, where the RTL walks rows outer)
+and for the lane order (the two levels of a split channel index swapped). The
+same kernels declaring the RTL's orders pass both.
+
+transpose's samples at SIMD 3 and 6 fail stalled, and its adapter sample fails
+in both modes: FinnLib's bursty-input ``inner_shuffle`` defect
+(``finn.kernels.transpose``). They are known failures, strictly: the case
+reports when FinnLib fixes it.
 """
 
 from __future__ import annotations
@@ -40,7 +46,14 @@ from finn.kernels.port import GivenPort, ScheduledPort
 from finn.kernels.target import DspBlock
 from finn.kernels.thresholding import ThresholdingAxiKernel
 from finn.kernels.transpose import TransposeKernel
-from kernels.conformance import NonConformance, conformance, samples
+from kernels.conformance import (
+    MODES,
+    NonConformance,
+    Sample,
+    _settle_known,
+    conformance,
+    samples,
+)
 from kernels.xsim import requires_xsim
 
 
@@ -165,6 +178,61 @@ def scheduled(family: type[RowsFirst]) -> dict[str, Any]:
     )
 
 
+# -- the lane-order proof: every channel in one beat, the channel index split ---------------
+
+co, ci = Index("co"), Index("ci")
+
+
+def split_ports(schedule: Any, lanes: tuple[Index, ...]) -> tuple[ScheduledPort, ScheduledPort]:
+    """Input and output reading channel ``c = 3 co + ci``, fields in ``lanes`` order."""
+    ports = (
+        ("s_axis", Endpoint.TARGET, ThresholdingAxiKernel.input_stream),
+        ("m_axis", Endpoint.INITIATOR, ThresholdingAxiKernel.output_stream),
+    )
+    input, output = (
+        ScheduledPort(
+            name=name,
+            endpoint=endpoint,
+            stream=stream,
+            schedule=schedule,
+            index=(r, co * 3 + ci),
+            lanes=lanes,
+        )
+        for name, endpoint, stream in ports
+    )
+    return input, output
+
+
+class LanesInOrder(ThresholdingAxiKernel):
+    """PE = C: all channels a beat, field ``3 co + ci`` holding channel ``3 co + ci``."""
+
+    id = "test.thresholding_axi.lanes_in_order"
+
+    @derived(semantics=SCHEDULE)
+    def schedule(self) -> Schedule:
+        rows, channels = self.input_stream.tensor.shape
+        folds = {co: channels // 3, ci: 3}
+        return Schedule({r: rows, **folds}, folds=folds)
+
+    input, output = split_ports(schedule, (co, ci))
+
+
+class LanesReversed(LanesInOrder):
+    """The same module declared with its lane levels swapped: field ``2 ci + co``."""
+
+    id = "test.thresholding_axi.lanes_reversed"
+    input, output = split_ports(LanesInOrder.schedule, (ci, co))
+
+
+def split(family: type[LanesInOrder]) -> dict[str, Any]:
+    return dict(
+        thresholding(),
+        family=family,
+        outputs={"output_stream": tensor((PIXELS, CHANNELS), "UINT2")},
+        folds=({"pe": CHANNELS},),
+    )
+
+
 # -- eltwise, transpose, memstream ----------------------------------------------------------
 
 
@@ -190,13 +258,22 @@ def eltwise() -> dict[str, Any]:
 
 
 MATRICES = (2, 6, 6)
+BURSTY = "FinnLib inner_shuffle emits undefined lanes under bursty input"
+# Labels name the input form as beats x lanes: SIMD 3 is 24x3, SIMD 6 is 12x6.
+TRANSPOSE_BURSTY = {
+    ("input_form=24x3", "stalled"): BURSTY,
+    ("input_form=12x6", "stalled"): BURSTY,
+    ("adapter, input_form=24x3", "free"): BURSTY + ", here behind a vpc",
+    ("adapter, input_form=24x3", "stalled"): BURSTY,
+}
 
 
 def transpose() -> dict[str, Any]:
     """Rows in, columns out: the same tensor in another order, so the reference is identity.
 
     Its output stream is required, so the harness cannot read the element with it
-    unplaced: the output is given a Tensor.
+    unplaced: the output is given a Tensor. Under stalls ``inner_shuffle`` emits
+    undefined lanes at SIMD above 1 (``TRANSPOSE_BURSTY``).
     """
     return dict(
         family=TransposeKernel,
@@ -205,6 +282,7 @@ def transpose() -> dict[str, Any]:
         reference=lambda input_stream: {"output_stream": input_stream},
         folds=tuple({"input_form": vector_major(MATRICES, simd)} for simd in (1, 3, 6)),
         choices={"ram_style": "auto"},
+        known=TRANSPOSE_BURSTY,
     )
 
 
@@ -234,6 +312,7 @@ CASES = {
     "dotp-int8-depthwise": lambda: dotp(Int8Dsp58DotpKernel, DspBlock.DSP58, 8, Form.DEPTHWISE),
     "thresholding": thresholding,
     "thresholding-rows-first": lambda: scheduled(RowsFirst),
+    "thresholding-lanes-in-order": lambda: split(LanesInOrder),
     "eltwise": eltwise,
     "transpose": transpose,
     "memstream": memstream,
@@ -264,39 +343,43 @@ def test_the_kernel_conforms(case: str) -> None:
     conformance(**CASES[case]())
 
 
-# FinnLib d03f2fc: inner_shuffle.sv:294 reads read_addr before line 309 declares it;
-# xvlog refuses the file (VRFC 10-3380), as the RTL checker's slang does.
-UNCOMPILED = pytest.mark.xfail(
-    raises=NonConformance, strict=True, reason="inner_shuffle.sv does not compile in xvlog"
-)
-
-
 @requires_xsim
-@pytest.mark.parametrize(
-    "case",
-    [
-        pytest.param(case, marks=UNCOMPILED) if case == "transpose" else case
-        for case in sorted(CASES)
-    ],
-)
+@pytest.mark.parametrize("case", sorted(CASES))
 def test_the_kernel_conforms_in_xsim(case: str, tmp_path: Path) -> None:
     conformance(**CASES[case](), xsim=tmp_path)
 
 
-def test_a_wrong_loop_order_passes_every_python_check() -> None:
-    conformance(**scheduled(ChannelsFirst))
+# A declared order the RTL does not walk: channel folds outer, or the lane levels swapped.
+WRONG = {"loop-order": lambda: scheduled(ChannelsFirst), "lane-order": lambda: split(LanesReversed)}
+
+
+@pytest.mark.parametrize("wrong", sorted(WRONG))
+def test_a_wrong_order_passes_every_python_check(wrong: str) -> None:
+    conformance(**WRONG[wrong]())
 
 
 @requires_xsim
-def test_a_wrong_loop_order_fails_in_xsim(tmp_path: Path) -> None:
-    case = scheduled(ChannelsFirst)
+@pytest.mark.parametrize("wrong", sorted(WRONG))
+def test_a_wrong_order_fails_in_xsim(wrong: str, tmp_path: Path) -> None:
+    case = WRONG[wrong]()
     with pytest.raises(NonConformance) as caught:
         conformance(**case, xsim=tmp_path)
     failed = {(sample.label, mode) for sample, mode, _ in caught.value.failures}
     # Every failure is an output word the RTL computed differently, not a build error.
     assert all("output_stream word" in message for _, _, message in caught.value.failures)
     chosen = samples(**{key: value for key, value in case.items() if key != "reference"})
-    assert failed == {(sample.label, mode) for sample in chosen for mode in ("free", "stalled")}
+    assert failed == {(sample.label, mode) for sample in chosen for mode in MODES}
+
+
+def test_known_failures_are_strict() -> None:
+    a, b = Sample("a", {}), Sample("b", {})
+    _settle_known((a, b), [(a, "free", "word 1")], {("a", "free"): "a defect"})
+    with pytest.raises(NonConformance, match="b \\(free\\)"):
+        _settle_known((a, b), [(b, "free", "word 1")], {})
+    with pytest.raises(AssertionError, match="now pass: a \\(free\\): a defect"):
+        _settle_known((a, b), [], {("a", "free"): "a defect"})
+    with pytest.raises(ValueError, match="name no simulation"):
+        _settle_known((a,), [], {("c", "free"): "a defect"})
 
 
 # -- the checks refuse ----------------------------------------------------------------------

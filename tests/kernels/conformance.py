@@ -41,6 +41,10 @@ element with that output unplaced. A kernel whose port takes its stream's
 element, or that cannot be built without that stream, is given a ``Tensor``.
 
 ``reference`` maps named input arrays to named output arrays.
+
+``known`` names the (sample label, mode) simulations a known defect makes fail,
+each with its reason. It is strict: one of them passing fails the check, as
+does any other failure.
 """
 
 from __future__ import annotations
@@ -86,6 +90,7 @@ from kernels.helpers import settled
 from kernels.xsim import materialize, stream_through
 
 KERNEL, SOURCE = "kernel", "source"
+MODES = ("free", "stalled")
 SAMPLED, ALL = "sampled", "all"
 Folds = str | Sequence[Mapping[str, object]]
 Outputs = Mapping[str, tuple[int, ...] | Tensor]
@@ -129,6 +134,7 @@ def conformance(
     choices: Mapping[str, object] = EMPTY,
     facts: Mapping[str, object] = EMPTY,
     xsim: Path | None = None,
+    known: Mapping[tuple[str, str], str] | None = None,
 ) -> tuple[Sample, ...]:
     """Check ``family`` over its samples, simulating each under ``xsim`` when given."""
     chosen = samples(
@@ -148,9 +154,29 @@ def conformance(
             failures += _simulate(
                 point, family, sample, values, reference, inputs, outputs, directory
             )
-    if failures:
-        raise NonConformance(failures)
+    if xsim is not None:
+        _settle_known(chosen, failures, known or {})
     return chosen
+
+
+def _settle_known(
+    chosen: Sequence[Sample],
+    failures: Sequence[tuple[Sample, str, str]],
+    known: Mapping[tuple[str, str], str],
+) -> None:
+    """Every failure is a known one, and every known one fails."""
+    simulated = {(sample.label, mode) for sample in chosen for mode in MODES}
+    stray = sorted(set(known) - simulated)
+    if stray:
+        raise ValueError(f"known failures name no simulation: {stray}")
+    unknown = [failure for failure in failures if (failure[0].label, failure[1]) not in known]
+    if unknown:
+        raise NonConformance(unknown)
+    failed = {(sample.label, mode) for sample, mode, _ in failures}
+    fixed = sorted(set(known) - failed)
+    assert not fixed, "known failures now pass: " + "; ".join(
+        f"{label} ({mode}): {known[label, mode]}" for label, mode in fixed
+    )
 
 
 # -- sampling ------------------------------------------------------------------------------
@@ -517,8 +543,8 @@ def _simulate(
         ends[name].repetition is Repetition.CYCLIC for name in produced
     )
     failures = []
-    for stalled in (False, True):
-        mode = "stalled" if stalled else "free"
+    for mode in MODES:
+        stalled = mode == "stalled"
         (directory / mode).mkdir(parents=True)
         try:
             stream_through(

@@ -122,7 +122,7 @@ Python run, every sample (warnings, `-W always`):
 | dotp, packed core | smallest (SIMD 1) | interior, largest, adapter: `add_multi.sv:45` "cannot call a function declared inside a generate block in a constant expression" (slang; Vivado accepts it) |
 | thresholding (and `RowsFirst`, `ChannelsFirst`) | none | `THRESHOLDS` is an array parameter: `extract` takes integer and string values only |
 | eltwise | none | `B_SCALE` is a real parameter, same rule |
-| transpose | none | `inner_shuffle.sv:294` uses `read_addr` before its declaration (slang refuses; Vivado accepts) |
+| transpose | none | `inner_shuffle.sv:294` uses `read_addr` before its declaration (slang refuses; `xvlog --relax` accepts it with a warning) |
 
 So the ABI and parameter-name checks bind for 13 of the 32 case samples. Under
 `--strict-rtl` six Python tests fail (packed dotp, eltwise, thresholding,
@@ -139,11 +139,15 @@ So the ABI and parameter-name checks bind for 13 of the 32 case samples. Under
   sample at word 6 / 9 (one past the last): every expected word matched, then
   the cyclic source kept the design producing and `stream_through` compared a
   word beyond its table. A harness defect, fixed in `a0e881750` (`repeating`).
-- **transpose** failed every sample before simulating: xvlog refuses FinnLib
-  `d03f2fc`'s `rtl/shape/inner_shuffle.sv` ("[VRFC 10-3380] identifier
-  'read_addr' is used before its declaration", line 294; declared at 309), the
-  same defect slang declines on. `TransposeKernel` had no XSim test before.
-  Its XSim case is now `xfail(strict=True, raises=NonConformance)`.
+- **transpose** failed every sample before simulating: strict `xvlog --sv`
+  refuses FinnLib `d03f2fc`'s `rtl/shape/inner_shuffle.sv` ("[VRFC 10-3380]
+  identifier 'read_addr' is used before its declaration", line 294; declared
+  at 309). **Corrected in review:** that is the harness being stricter than
+  FINN's flow (`finn_xsi` elaborates with `xelab -relax`; `xvlog --relax`
+  accepts the file with a warning), and `inner_shuffle` *had* been simulated
+  (`tests/kernels/rtlsim/adapter_numeric.py`, `TRANSPOSES`, the "adapters 26"
+  sweep). The `xfail` added here ("does not compile") was wrong; see the
+  follow-up below.
 - The rest of `tests/kernels` with Vivado on `PATH`: 805 passed (the baseline
   count).
 
@@ -155,7 +159,7 @@ observed:
 | `dotp-packed`, `dotp-int8`, `dotp-int8-depthwise` | passed (4 samples x 2 modes each) |
 | `thresholding`, `thresholding-rows-first`, `eltwise` | passed (4 x 2 each) |
 | `memstream` | passed (4 x 2) |
-| `transpose` | xfailed (inner_shuffle does not compile) |
+| `transpose` | xfailed (for a wrong reason; see the follow-up) |
 | wrong loop order (`ChannelsFirst`) | passed: all 4 samples fail in both modes, each at an output word: `pe=1` word 2 (`00` for `1`), `pe=2` word 1 (`09` for `d`), `pe=3` word 1 (`01` for `13`), adapter `pe=2` word 1 (`08` for `d`) |
 | rest of `tests/kernels`, Vivado on `PATH` | 805 passed (baseline count) |
 | `tests/graph`, Vivado on `PATH` | 6 passed |
@@ -183,9 +187,6 @@ the declared order and nothing else in the test kernel.
   configuration: it is distinguished by what feeds the first input.
 - **memstream has no adapter sample** (no input); its fourth sample is a
   `tile` form.
-- **Transpose is not simulated.** Its XSim case is an expected failure until
-  FinnLib's `inner_shuffle.sv` compiles; its Python checks run (its ABI check
-  declines for the same reason).
 - **Not added (as instructed):** D5's unplaced-output check (A6).
 
 ### Follow-ups this surfaced
@@ -195,9 +196,55 @@ the declared order and nothing else in the test kernel.
   slang refuses and Vivado accepts. Establishing names without values would
   let the parameter-name check bind for thresholding and eltwise; that is a
   change to `artifacts/rtl.py`, outside A1.
-- FinnLib `inner_shuffle.sv` (`d03f2fc`) uses `read_addr` before declaring
-  it; neither xvlog nor slang accepts it. A FinnLib fix, then a new pin, lets
-  the transpose case run (its `xfail` is strict, so the fix will be noticed).
+- FinnLib `inner_shuffle.sv` (`d03f2fc`) declares `read_addr` after its first
+  use. Strict tools refuse it (slang, `xvlog --sv`); relaxed ones accept it. A
+  non-blocking FinnLib cleanliness report, separate from its bursty-input
+  defect (A1 follow-up).
 - A stream fed by a cyclic source makes the whole design repeat; the boundary
   presents a single pass by rule, but nothing stops the design after it. The
   harness compares the first pass; whether a composite should say so is open.
+
+### A1 review and follow-up
+
+Review (2026-09-29): A1 accepted; the spec deviations above accepted; one
+correction (transpose), done in this follow-up.
+
+- **`xsim.simulate` relaxes xvlog** (`--sv --relax`), as FINN's own flow does
+  (`finn_xsi`: `xelab -relax`). Strict mode refused `inner_shuffle.sv` only.
+- **transpose simulates, and finds the bursty-input defect.** Observed at the
+  working tree before the commit (`/tmp/a1f-transpose`), matching the review's
+  scratch run:
+
+  | Sample | free | stalled |
+  |---|---|---|
+  | SIMD 1 (`input_form=72x1`) | pass | pass |
+  | SIMD 3 (`24x3`) | pass | fail: `output_stream word 13: 0xab != 3ab` |
+  | SIMD 6 (`12x6`) | pass | fail: `word 6: x569a8 != 7569a8` |
+  | adapter (a `vpc` feeding SIMD 3) | fail: `word 12: 0x6a != 76a` | fail: same word |
+
+  Undefined upper lanes: the defect `transpose.py` documented at SIMD 4 with
+  a side of 4 or 8, here at SIMD 3 and 6 under the harness's stall pattern.
+- **Known failures, strict and per simulation.** `conformance(..., known=)`
+  maps (sample label, mode) to a reason: any other failure raises
+  `NonConformance`; a known one that passes fails ("known failures now pass");
+  a key naming no simulation is a `ValueError`. The transpose case names the
+  four failing simulations above (`TRANSPOSE_BURSTY`); SIMD 1 and the free
+  SIMD 3 and 6 runs must pass. The `UNCOMPILED` xfail is gone. A unit test
+  covers the strictness.
+- **`transpose.py`'s defect note** now records SIMD 3 and 6 at `d03f2fc`.
+- **A second planted error, lane order.** `LanesInOrder`: thresholding with
+  PE = C = 6, the channel index split `c = 3 co + ci`, fields `(co, ci)` (the
+  RTL's, contiguous). `LanesReversed`: fields `(ci, co)`, a lane permutation.
+  Both pass every Python check (coverage, boundary, beats), including an
+  adapter sample; `LanesInOrder` is a conformance case, and `LanesReversed`
+  must fail in XSim in every sample and mode on an output word. The wrong-order
+  tests are parametrized over `loop-order` and `lane-order`.
+- **Planned:** the RTL checker establishing parameter names without values, a
+  small increment before A4 (PLAN, `A3b`).
+
+Fast gates (Vivado off `PATH`), as observed: Space 448; kernels 807 passed,
+25 skipped (+3 Python tests: the `thresholding-lanes-in-order` case, the
+lane-order Python test, the strictness test; +2 XSim skipped); graph 4 + 2
+skipped; dataflow 40; ruff and mypy clean.
+
+FOLLOWUP_XSIM

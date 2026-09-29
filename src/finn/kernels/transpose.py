@@ -49,10 +49,13 @@ class TransposeKernel(Kernel):
     output presents each matrix column by column, SIMD elements of a column a
     beat. SIMD divides I and J.
 
-    Known defect (FinnLib ``b9262df``): with SIMD 4 and a side of 4 or 8, the
-    RTL emits undefined lanes when its input arrives in bursts with idle cycles
-    between them; FinnLib's own testbench fails the same way with that input
-    timing. The condition is not characterized, so nothing is refused yet.
+    Known defect: the RTL emits undefined lanes when its input arrives in
+    bursts with idle cycles between them. First seen at FinnLib ``b9262df``
+    with SIMD 4 and a side of 4 or 8 (FinnLib's own testbench fails the same
+    way with that input timing); at ``d03f2fc`` the conformance harness's stall
+    pattern shows it at SIMD 3 and 6 on 6 x 6 matrices, and behind a ``vpc``
+    even free-running (``tests/kernels/test_conformance.py``). The condition is
+    not characterized, so nothing is refused yet.
     """
 
     id = "finnlib.inner_shuffle"

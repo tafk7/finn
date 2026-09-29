@@ -318,6 +318,7 @@ G0.4 (thresholding and eltwise `pe`, transpose `simd`), recorded under D7.
 | **A1** | `fetch-repos.sh` in this worktree first (the kernel gate needs `deps/`). D1 on today's API: `conformance` for dotp (packed, INT8), thresholding, eltwise, transpose, memstream (identity reference) | kernel gate (green with `deps/`); XSim from the commit | sampled sweeps pass; a deliberately wrong loop order in a test kernel fails in XSim and passes every Python check (the harness's reason to exist) | 2 d |
 | **A2** | D2: the engine rule (the P0 patch) with P0.1's tests moved into the Space suite, then the 88 removals | Space + kernel + dataflow gates with `deps/`; identity dump identical (the removals, not the rule, are what could move it); 27 doc examples | counts removed per constant, against `p0/count_semantics.out` | 1 d |
 | **A3** | D3: `bind_extents` + tests (plain, shared, affine, view, disagreement, coverage) | dataflow gate | the S0 roster's shapes bind; the too-wide-x probe is refused | 1 d |
+| **A3b** | The RTL checker (`artifacts/rtl.py`) establishes parameter names without values, so an array or real parameter no longer declines the whole module (review of A1: it bound 13 of 32 conformance samples); still refusal-only | kernel gate | conformance's parameter-name check binds for thresholding and eltwise; the decline table re-measured | 0.5 d |
 | **A4** | D4: `AxiStreamPort` with its `ACCESS` export, base `extents`/`bound_schedule`/`extent_of`; dotp migrated; G0.3 applied (idle lanes from folds; flat builds kept for extent-free modules) | all gates; identity; A1's conformance for dotp | `shapes_agree`-class checks deleted; dotp getters gone | 2 d |
 | **A5** | thresholding, eltwise, transpose, memstream migrated; their folds become Decisions (G0.4); `StreamPort`/`ScheduledPort`/`GivenPort` deleted | all gates; identity; A1's conformance for each | one port class in `finn.kernels`; eltwise's hand-built broadcast gone | 2 d |
 | **A6** | D5: every producer states `dtype`; the unplaced-output rule checked by conformance; one refusal code for an element mismatch (`stream-tensor`) | all gates; graph XSim | every output element stated by its kernel; the graph shim's inference now checked against it | 1 d |
@@ -325,7 +326,7 @@ G0.4 (thresholding and eltwise `pe`, transpose `simd`), recorded under D7.
 | **Close** | STATUS, RECORD, XSim sweeps from the final commit | — | — | — |
 
 Order: P0 → A1 (the safety net everything after is checked against) → A2
-(independent; may run beside A3) → A3 → A4 → A5 → A6 → A7. Each increment is
+(independent; may run beside A3) → A3 → A3b → A4 → A5 → A6 → A7. Each increment is
 committed after its fast gates; XSim runs from a snapshot of the commit while
 work continues, as in the composition plan.
 
