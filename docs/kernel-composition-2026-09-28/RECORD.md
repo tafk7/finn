@@ -414,3 +414,13 @@ path is a design note: `docs/constant-weights-2026-09-28/DESIGN.md`.
   skipped, graph 4 + 2, dataflow 40).
 - **G1's XSim from its commit** (`d6952761d`): kernels 815, graph 6, all
   pass.
+
+## Final XSim
+
+- **ROM removal** (`b865e8c38`, snapshot): every numeric sweep passes: dense
+  26, FIFO 4 and 4, depthwise 22, memstream 14 and 12, pumped 14, writable
+  14, sets 14, dotp 27, dotp-stress 17, adapters 26 (208; the ROM's
+  configurations are gone). These cover S4's sweeps. XSim tests: 802 pass,
+  4 fail on FinnLib's memstream padding (fixed next).
+- **FinnLib pin** (`9118a3cb1`, snapshot, FinnLib `d03f2fc`): the kernel suite
+  with every XSim test passes (806); every numeric sweep passes, the same 208.

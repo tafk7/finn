@@ -15,7 +15,8 @@ Branch `feature/kernel-package-extraction`, local commits only, nothing pushed.
 | K2 every kernel on the protocol | `8d68a7c4b` | Space 448, kernels 806 (XSim in pytest included), dataflow 40 | sweeps from the commit: see below |
 | S4 composites and the Design | `c7764f7f9` | Space 448, kernels 800 + 15 XSim skipped, dataflow 40 | Design gate passed locally; full run from the commit: see below |
 | G1 graph adapter (`finn.graph`) | `d6952761d` | kernels 800, graph 4 (+ XSim skipped), dataflow 40 | ONNX gate passed locally; pytest XSim from the commit: see below |
-| ROM removed; constant-weights design note | this commit | kernels 792, graph 4 (+ XSim skipped), dataflow 40 | full run from the commit: see below |
+| ROM removed; constant-weights design note | `b865e8c38` | kernels 792, graph 4 (+ XSim skipped), dataflow 40 | sweeps 208 pass; 4 XSim tests hit a FinnLib defect |
+| FinnLib pin `d03f2fc` (memstream padding) | `9118a3cb1` | same | everything passes: XSim tests 806, sweeps 208 |
 
 Every step keeps ruff and mypy clean and the 27 documentation examples
 passing; module parameters and memory images are unchanged over the identity
@@ -34,8 +35,10 @@ run's results are recorded in RECORD.md in a follow-up commit.
 - K2 sweeps: all pass (224), recorded.
 - S4: XSim pytest passes (815), recorded; its sweeps could not start (the
   snapshot lacked `finn_xsi/xsi.so`), covered by the next commit's run.
-- G1 (XSim pytest): `/tmp/xsim/g1/summary.log`.
-- ROM removal (everything): `/tmp/xsim/norom/summary.log`.
+- G1: XSim tests pass (kernels 815, graph 6), recorded.
+- ROM removal: every sweep passes (208, S4's included); 4 XSim tests failed
+  on FinnLib's memstream padding, fixed and pinned (`9118a3cb1`, FinnLib
+  `d03f2fc`), where everything passes: XSim tests 806, sweeps 208.
 
 ## Decisions recorded for the user
 
