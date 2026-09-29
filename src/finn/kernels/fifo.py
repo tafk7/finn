@@ -12,27 +12,25 @@ Reset is synchronous, active-high, and discards pending words.
 
 from __future__ import annotations
 
-
+from collections.abc import Mapping
 from dataclasses import dataclass
 
-from finn.kernels.artifacts.abi import Clock, Direction, Endpoint, Reset, Signal
-from finn.kernels.physical.stream import STREAM_INTERFACES, ReadyValidStream
-from finn.kernels.artifacts.contribution_types import CopiedSource
-from finn.kernels.artifacts.requirements import (
-    FixedModuleName,
-    ModuleABIRequirements,
-    ModuleBuildRequirements,
-)
-from finn.kernels.base import Kernel
 from finn.core.space import (
+    ConstraintGroup,
     Decision,
     Param,
     Rejected,
     constraint,
     default_semantics,
+    derived,
     reject,
     view,
 )
+from finn.kernels.artifacts.abi import Endpoint
+from finn.kernels.artifacts.contribution_types import CopiedSource
+from finn.kernels.base import CLOCKING, NATIVE_CLOCKING, Clocking, Kernel
+from finn.kernels.physical.stream import STREAM_INTERFACES, ReadyValidStream
+from finn.kernels.port import WordPort
 
 
 @dataclass(frozen=True)
@@ -48,8 +46,7 @@ class FifoStorage:
 class FifoKernel(Kernel):
     id = "finnlib.fifo"
     version = "2"
-    # Off the Kernel protocol until K2: it exports nothing of its own.
-    exports = {}
+    module = "fifo"
 
     word_bits: int = Param()
     depth: int = Param()
@@ -62,6 +59,7 @@ class FifoKernel(Kernel):
             return reject("fifo-geometry", "word_bits must be positive and depth at least two")
         return True
 
+    admission = ConstraintGroup(geometry_supported)
     ram_style: str = Decision(values=("auto", "shift", "distributed", "block", "ultra"))
 
     @view(semantics=default_semantics(FifoStorage), requires=(geometry_supported,))
@@ -102,48 +100,23 @@ class FifoKernel(Kernel):
             capacity = (1 << lo) + ((1 << hi) if hi else 0) + (17 if ultra else 2)
         return FifoStorage(style, effective, depth, capacity)
 
+    input = WordPort(name="input", endpoint=Endpoint.TARGET, bits=word_bits)
+    output = WordPort(name="output", endpoint=Endpoint.INITIATOR, bits=word_bits)
+
     @view(semantics=STREAM_INTERFACES)
     def interfaces(self) -> tuple[ReadyValidStream, ...] | Rejected:
-        bits = self.word_bits
-        if not 1 <= bits <= 0xFFFFFFFF:
-            return reject(
-                "fifo-interface", "word_bits must be positive and fit native unsigned int"
-            )
-        return (
-            ReadyValidStream("input", bits, Endpoint.TARGET, "idat", "ivld", "irdy", "clk", "rst"),
-            ReadyValidStream(
-                "output", bits, Endpoint.INITIATOR, "odat", "ovld", "ordy", "clk", "rst"
-            ),
-        )
+        return (self.input.transport, self.output.transport)
 
-    @view(semantics=default_semantics(ModuleBuildRequirements), requires=(geometry_supported,))
-    def build_requirements(self) -> ModuleBuildRequirements | Rejected:
-        bits = self.word_bits
-        depth = self.depth
+    @derived(semantics=CLOCKING)
+    def clocking(self) -> Clocking:
+        return NATIVE_CLOCKING
+
+    def parameters(self) -> Mapping[str, int | str]:
         ram = self.storage.requested_style
-        streams = self.interfaces
-        parameters = (("DATA_WIDTH", bits), ("DEPTH", depth), ("RAM_STYLE", f'"{ram}"'))
-        abi = ModuleABIRequirements(
-            FixedModuleName("fifo"),
-            (
-                Signal("clk", Direction.IN, 1, Clock()),
-                Signal(
-                    "rst",
-                    Direction.IN,
-                    1,
-                    Reset(active_low=False, synchronous=True, synchronous_to=("clk",)),
-                ),
-                *(pin for stream in streams for pin in stream.pins()),
-            ),
-            tuple((key, str(value)) for key, value in parameters),
-        )
-        return ModuleBuildRequirements(
-            FifoKernel.id,
-            FifoKernel.version,
-            parameters,
-            abi,
-            (CopiedSource("finnlib", "rtl/infra/fifo.sv", provides=("module:fifo",)),),
-        )
+        return {"DATA_WIDTH": self.word_bits, "DEPTH": self.depth, "RAM_STYLE": f'"{ram}"'}
+
+    def sources(self) -> tuple[CopiedSource, ...]:
+        return (CopiedSource("finnlib", "rtl/infra/fifo.sv", provides=("module:fifo",)),)
 
 
 __all__ = ["FifoKernel", "FifoStorage"]

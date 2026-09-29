@@ -2,13 +2,15 @@
 # SPDX-License-Identifier: BSD-3-Clause
 """Typed ports and scalars retain concrete node, field and view types."""
 
+from typing import Any
+
 from typing_extensions import assert_type
 
 from finn.core.space import BoundValue, QueryResult, View, ViewAssessment
 from finn.dataflow.datatypes import QONNXDataType
 from finn.dataflow.schedule import Schedule
 from finn.dataflow.traversal import BeatSequence
-from finn.kernels.artifacts.abi import Bus, Endpoint
+from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.datatypes.domains import Integer
 from finn.dataflow.tensor import ScalarEncoding
 from finn.kernels.datatypes.scalar import IntegerScalar, Scalar, integer_scalar
@@ -16,9 +18,8 @@ from finn.kernels.dotp import DotpAxiKernel
 from finn.kernels.eltwise import EltwiseKernel
 from finn.kernels.physical.axi_stream import AxiStream, AxiStreamPort, axi_stream
 from finn.kernels.physical.layout import PackedBeatLayout
-from finn.kernels.physical.ports import NativeStreamPort
 from finn.kernels.physical.stream import ReadyValidStream
-from finn.kernels.port import Port, ScheduledPort
+from finn.kernels.port import GivenPort, ScheduledPort, StreamPort
 
 
 def declare(dtype: QONNXDataType) -> None:
@@ -35,19 +36,19 @@ def check(point: DotpAxiKernel, eltwise: EltwiseKernel) -> None:
     assert_type(DotpAxiKernel.x.element, ScalarEncoding)
     assert_type(DotpAxiKernel.x.axis, AxiStream)
     assert_type(DotpAxiKernel.x.sequence, BeatSequence)
-    assert_type(Port.bus, View[Bus])
+    assert_type(StreamPort.pins, View[tuple[Any, ...]])
     assert_type(point.query(DotpAxiKernel.pe), QueryResult[int])
     # Configuration reads.
     assert_type(point.x, ScheduledPort)
     assert_type(point.x.element, ScalarEncoding)
     assert_type(point.x.axis, AxiStream)
     assert_type(point.x.axis.payload, PackedBeatLayout)
-    assert_type(point.x.bus, Bus)
-    assert_type(point.x.inspect(Port.bus), ViewAssessment[Bus])
-    assert_type(point.x.query(Port.bus), QueryResult[Bus])
-    assert_type(point.x.field(Port.bus), BoundValue[Bus])
+    assert_type(point.x.pins, tuple[Any, ...])
+    assert_type(point.x.inspect(StreamPort.pins), ViewAssessment[tuple[Any, ...]])
+    assert_type(point.x.query(StreamPort.pins), QueryResult[tuple[Any, ...]])
+    assert_type(point.x.field(StreamPort.pins), BoundValue[tuple[Any, ...]])
     assert_type(point.pe, int)
     assert_type(point.schedule, Schedule)
     assert_type(AxiStreamPort.stream, View[AxiStream])
-    assert_type(eltwise.lhs, NativeStreamPort)
-    assert_type(eltwise.lhs.stream, ReadyValidStream)
+    assert_type(eltwise.lhs, GivenPort)
+    assert_type(eltwise.lhs.transport, ReadyValidStream)

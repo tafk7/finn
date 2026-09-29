@@ -109,8 +109,8 @@ class House(Space):
     dining = Room(area=budget, label="dining")
     garage = Room(area=kitchen.area, when=want_garage)
     heat_pump = HeatPump(kw=8)
-    heating: Boiler | HeatPump = Decision(values={"boiler": Boiler(kw=24), "heat_pump": heat_pump})
-    maybe: Boiler | None = Decision(values={"none": None, "boiler": Boiler(kw=3)})
+    heating: Boiler | HeatPump = Decision({"boiler": Boiler(kw=24), "heat_pump": heat_pump})
+    maybe: Boiler | None = Decision({"boiler": Boiler(kw=3)}, optional=True)
     thermostat = Thermostat(kw=heating.kw)
     hall.area = kitchen.area  # typed by the annotation: an int reference
     matched = Match(a=kitchen.finish, b=dining.finish)

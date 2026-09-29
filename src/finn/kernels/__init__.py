@@ -25,8 +25,8 @@ if TYPE_CHECKING:
     from finn.kernels.memstream_hls import MemStreamHlsKernel
     from finn.kernels.thresholding import ThresholdingAxiKernel
     from finn.kernels.matmul import MatMulAssembly, MatMulKernel, WeightDelivery, matmul_assembly
-    from finn.kernels.streaming import cyclic_stream_requirements
     from finn.kernels.target import DspBlock
+    from finn.kernels.vpc import VpcKernel
 
 _LAZY_EXPORTS = {
     "RomKernel": ("finn.kernels.rom", "RomKernel"),
@@ -44,7 +44,7 @@ _LAZY_EXPORTS = {
     "MatMulAssembly": ("finn.kernels.matmul", "MatMulAssembly"),
     "WeightDelivery": ("finn.kernels.matmul", "WeightDelivery"),
     "matmul_assembly": ("finn.kernels.matmul", "matmul_assembly"),
-    "cyclic_stream_requirements": ("finn.kernels.streaming", "cyclic_stream_requirements"),
+    "VpcKernel": ("finn.kernels.vpc", "VpcKernel"),
     "DspBlock": ("finn.kernels.target", "DspBlock"),
 }
 
@@ -75,6 +75,6 @@ __all__ = [
     "MatMulAssembly",
     "WeightDelivery",
     "matmul_assembly",
-    "cyclic_stream_requirements",
+    "VpcKernel",
     "DspBlock",
 ]

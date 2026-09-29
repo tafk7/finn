@@ -23,6 +23,7 @@ driven by role, and tied low when unpumped.
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Mapping
 from math import ceil
 
 from finn.core.space import (
@@ -41,28 +42,20 @@ from finn.dataflow.datatypes import (
     ordinary_integer_bounds,
     resolve_qonnx_datatype_name,
 )
-from finn.kernels.artifacts.abi import (
-    Bus,
-    Clock,
-    ClockAlignment,
-    Data,
-    Derived as DerivedRate,
-    Direction,
-    Endpoint,
-    Free,
-    Member,
-    Reset,
-    Signal,
-    StandardProtocol,
+from finn.dataflow.traversal import (
+    BEAT_SEQUENCE,
+    TRAVERSAL,
+    BeatSequence,
+    Repetition,
+    Traversal,
+    pack,
+    vector_major,
 )
+from finn.kernels.artifacts.abi import Bus, Endpoint, Member, Signal, StandardProtocol
 from finn.kernels.artifacts.contribution_types import CopiedSource, GeneratedData
-from finn.kernels.artifacts.requirements import (
-    FixedModuleName,
-    ModuleABIRequirements,
-    ModuleBuildRequirements,
-)
-from finn.kernels.base import Kernel
-from finn.kernels.control import CONTROL, CONTROL_SEMANTICS, Control, ControlBus
+from finn.kernels.artifacts.requirements import RequirementContribution
+from finn.kernels.base import CLOCKING, Clocking, Kernel, Tieoffs
+from finn.kernels.control import CONTROL, CONTROL_SEMANTICS, Control, ControlBus, held_bus
 from finn.kernels.datatypes.domains import Integer
 from finn.kernels.datatypes.scalar import integer_scalar
 from finn.kernels.datatypes.semantics import (
@@ -72,11 +65,9 @@ from finn.kernels.datatypes.semantics import (
     IntegerTensor,
     IntegerVector,
 )
-from finn.kernels.physical.axi_stream import AxiStream
-from finn.kernels.physical.contract import STREAM_CONTRACT, StreamContract
-from finn.dataflow.traversal import TRAVERSAL, Repetition, Traversal, pack, vector_major
-from finn.kernels.physical.stream import ReadyValidStream
-from finn.kernels.streams import MODULE, PORT, TIEOFFS, TIEOFFS_SEMANTICS, Stream, Tieoffs
+from finn.kernels.port import GivenPort
+from finn.kernels.rom import stored_element
+from finn.kernels.streams import Stream
 
 MEMSTREAM_RAM_STYLES = ("auto", "distributed", "block", "ultra")
 
@@ -84,6 +75,7 @@ MEMSTREAM_RAM_STYLES = ("auto", "distributed", "block", "ultra")
 class MemStreamKernel(Kernel):
     id = "finnlib.memstream_axi"
     version = "1"
+    module = "memstream_axi"
 
     dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
     element = integer_scalar(dtype, Integer())
@@ -109,6 +101,10 @@ class MemStreamKernel(Kernel):
         sets = self.sets
         return (sets - 1).bit_length() if sets > 2 else 1
 
+    @derived(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
+    def set_dtype(self) -> QONNXDataType:
+        return resolve_qonnx_datatype_name(f"UINT{self.set_bits}")
+
     @derived
     def address_bits(self) -> int:
         # $clog2(SETS * DEPTH * 2**$clog2(ceil(WIDTH/32))) + 2
@@ -122,6 +118,33 @@ class MemStreamKernel(Kernel):
         if self.pumped_memory and self.word_bits < 2:
             return reject("memstream-pumping", "a pumped memory splits words of at least 2 bits")
         return True
+
+    @constraint
+    def carried(self) -> bool | Rejected:
+        """The stream it drives, when placed, carries the element it stores."""
+        if not self.present(MemStreamKernel.output_stream):
+            return True
+        return stored_element(self.output_stream.tensor.element, self.element.encoding)
+
+    @constraint
+    def selected(self) -> bool | Rejected:
+        """Several sets take a set stream of indices, one a beat; a single set none."""
+        placed = self.present(MemStreamKernel.set_stream)
+        if self.sets < 2:
+            if placed:
+                return reject("memstream-set-stream", "a single set takes no set stream")
+            return True
+        if not placed:
+            return reject("memstream-set-stream", "several sets take a set stream")
+        tensor = self.set_stream.tensor
+        index = self.set_dtype
+        if tensor.element.datatype_name != index.name or len(tensor.shape) != 1:
+            return reject(
+                "memstream-set-stream", f"the set stream carries a vector of {index.name} indices"
+            )
+        return True
+
+    admission = ConstraintGroup(geometry_supported, carried, selected)
 
     @derived(semantics=INTEGER_VECTOR)
     def image(self) -> IntegerVector | Rejected:
@@ -198,64 +221,57 @@ class MemStreamKernel(Kernel):
             associated_reset="rst",
         )
 
-    @derived(semantics=default_semantics(AxiStream))
-    def output_interface(self) -> AxiStream:
-        return AxiStream(
-            "m_axis_0", self.element.encoding.dtype, self.form.lanes, endpoint=Endpoint.INITIATOR
-        )
+    @derived(semantics=BEAT_SEQUENCE)
+    def set_sequence(self) -> BeatSequence:
+        """One index a beat, one beat per pass of the weights."""
+        return BeatSequence(vector_major(self.set_stream.tensor.shape, 1))
 
-    @derived(semantics=default_semantics(ReadyValidStream))
-    def set_interface(self) -> ReadyValidStream:
-        return ReadyValidStream(
-            "set",
-            self.set_bits,
-            Endpoint.TARGET,
-            "s_axis_0_tdata",
-            "s_axis_0_tvalid",
-            "s_axis_0_tready",
-            "clk",
-            "rst",
-        )
+    @derived(semantics=BEAT_SEQUENCE)
+    def output_sequence(self) -> BeatSequence:
+        """One set streams cyclically; several stream one pass per accepted index."""
+        if self.sets > 1:
+            return BeatSequence(self.form.repeated(self.set_stream.tensor.size))
+        return BeatSequence(self.form, Repetition.CYCLIC)
 
-    admission = ConstraintGroup(geometry_supported)
+    set = GivenPort(
+        name="set",
+        endpoint=Endpoint.TARGET,
+        stream=set_stream,
+        sequence=set_sequence,
+        idle_dtype=set_dtype,
+        signals=("s_axis_0_tdata", "s_axis_0_tvalid", "s_axis_0_tready"),
+        clock="clk",
+        reset="rst",
+    )
+    output = GivenPort(
+        name="m_axis_0",
+        endpoint=Endpoint.INITIATOR,
+        stream=output_stream,
+        sequence=output_sequence,
+        idle_dtype=dtype,
+        idle_lanes=output_sequence.form.lanes,
+        clock="clk",
+        reset="rst",
+    )
 
-    @view(semantics=default_semantics(ModuleBuildRequirements), requires=(admission,))
-    def build_requirements(self) -> ModuleBuildRequirements:
-        init = self.init_file
+    @derived(semantics=CLOCKING)
+    def clocking(self) -> Clocking:
+        """``clk2x`` runs a pumped memory, and is held low otherwise."""
         pumped = self.pumped_memory
-        parameters = (
-            ("DEPTH", self.form.beats),
-            ("INIT_FILE", f'"{init.path}"'),
-            ("PUMPED_MEMORY", int(pumped)),
-            ("RAM_STYLE", f'"{self.ram_style}"'),
-            ("SETS", self.sets),
-            ("WIDTH", self.word_bits),
-        )
-        abi = ModuleABIRequirements(
-            FixedModuleName("memstream_axi"),
-            (
-                Signal("clk", Direction.IN, 1, Clock(Free())),
-                Signal(
-                    "clk2x", Direction.IN, 1, Clock(DerivedRate("clk", 2)) if pumped else Data()
-                ),
-                Signal(
-                    "rst",
-                    Direction.IN,
-                    1,
-                    Reset(
-                        active_low=False,
-                        synchronous=True,
-                        synchronous_to=("clk", "clk2x") if pumped else ("clk",),
-                    ),
-                ),
-                self.config_bus,
-                *self.set_interface.pins(),
-                *self.output_interface.native(clock="clk", reset="rst").pins(),
-            ),
-            tuple((name, str(value)) for name, value in parameters),
-            (ClockAlignment("clk", "clk2x"),) if pumped else (),
-        )
-        sources = (
+        return Clocking("clk", "rst", doubled="clk2x", doubling=pumped, active_low=False)
+
+    def parameters(self) -> Mapping[str, int | str]:
+        return {
+            "DEPTH": self.form.beats,
+            "INIT_FILE": f'"{self.init_file.path}"',
+            "PUMPED_MEMORY": int(self.pumped_memory),
+            "RAM_STYLE": f'"{self.ram_style}"',
+            "SETS": self.sets,
+            "WIDTH": self.word_bits,
+        }
+
+    def sources(self) -> tuple[RequirementContribution, ...]:
+        return (
             CopiedSource("finnlib", "rtl/infra/axilite.sv", provides=("module:axilite",)),
             CopiedSource("finnlib", "rtl/infra/memstream.sv", provides=("module:memstream",)),
             CopiedSource(
@@ -264,68 +280,25 @@ class MemStreamKernel(Kernel):
                 provides=("module:memstream_axi",),
                 requires=("module:axilite", "module:memstream"),
             ),
-            init,
-        )
-        return ModuleBuildRequirements(
-            MemStreamKernel.id, MemStreamKernel.version, parameters, abi, sources
+            self.init_file,
         )
 
-    @view(semantics=STREAM_CONTRACT)
-    def output_port(self) -> StreamContract:
-        """One set streams cyclically; several stream one pass per accepted index."""
-        encoding = self.element.encoding
-        transport = self.output_interface.native(clock="clk", reset="rst")
-        if self.sets > 1:
-            passes = self.set_stream.tensor.size
-            return StreamContract(transport, encoding, self.form.repeated(passes))
-        return StreamContract(transport, encoding, self.form, Repetition.CYCLIC)
+    def other_pins(self) -> tuple[Signal | Bus, ...]:
+        return (self.config_bus,)
 
-    @view(semantics=STREAM_CONTRACT)
-    def set_port(self) -> StreamContract | Rejected:
-        """One index a beat, one beat per pass of the weights."""
-        tensor = self.set_stream.tensor
-        if self.sets < 2:
-            return reject("memstream-set-stream", "a single set takes no set stream")
-        index = resolve_qonnx_datatype_name(f"UINT{self.set_bits}")
-        if tensor.element.datatype_name != index.name or len(tensor.shape) != 1:
-            return reject(
-                "memstream-set-stream", f"the set stream carries a vector of {index.name} indices"
-            )
-        return StreamContract(self.set_interface, tensor.element, vector_major(tensor.shape, 1))
+    def held(self) -> Tieoffs | Rejected:
+        """AXI-Lite, unless writable."""
+        if not self.writable:
+            return held_bus(self.config_bus)
+        if not self.present(MemStreamKernel.control):
+            return reject("memstream-control", "a runtime-writable memory needs a control bus")
+        return Tieoffs()
 
     @view(semantics=CONTROL_SEMANTICS)
     def control_bus(self) -> Control:
         return Control(self.config_bus if self.writable else None)
 
-    @view(semantics=TIEOFFS_SEMANTICS)
-    def tieoffs(self) -> Tieoffs | Rejected:
-        """Hold the unused interfaces idle: AXI-Lite unless writable, the set selector
-        with a single set, and the 2x clock unless pumped."""
-        inputs: list[tuple[str, int]] = []
-        unused: list[str] = []
-        if self.writable and not self.present(MemStreamKernel.control):
-            return reject("memstream-control", "a runtime-writable memory needs a control bus")
-        if not self.writable:
-            directions = dict(self.config_bus.member_directions())
-            for member in self.config_bus.signals:
-                if directions[member.physical] is Direction.IN:
-                    inputs.append((member.physical, 0))
-                else:
-                    unused.append(member.physical)
-        if self.sets < 2:
-            selector = self.set_interface
-            inputs += [(selector.data, 0), (selector.valid, 0)]
-            unused.append(selector.ready)
-        if not self.pumped_memory:
-            inputs.append(("clk2x", 0))
-        return Tieoffs(tuple(inputs), tuple(unused))
-
-    exports = {
-        MODULE: build_requirements,
-        PORT: {output_stream: output_port, set_stream: set_port},
-        CONTROL: {control: control_bus},
-        TIEOFFS: tieoffs,
-    }
+    exports = {**Kernel.exports, CONTROL: {control: control_bus}}
 
 
 def _leaves(values: object) -> tuple[int, ...]:

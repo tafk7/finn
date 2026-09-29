@@ -28,12 +28,14 @@ it merges into the same module, whose ``olst[d]`` bits close the levels
 ``DIMS[d:]``, split or grouped until every required level is one of them.
 Marker synthesis alone is an ``input_gen`` that passes its frames in order. A
 width conversion is a ``vpc`` over vectors of the two lane counts' least common
-multiple, which the stream must hold whole. Each module becomes a ``Stage``:
-its build requirements and the contracts of its two ports, which the stream
-checks like any other end.
+multiple, which the stream must hold whole. Each candidate places its modules
+as kernel children (``InputGeneratorKernel``, ``VpcKernel``) named by stage,
+and each becomes a ``Stage``: the child's build requirements and the contracts
+of its two ports, which the stream checks like any other end.
 
-FinnLib's ``inner_shuffle`` realizes one shape of lane regroup directly, but is
-not a candidate yet: it emits undefined lanes under bursty input
+FinnLib's ``replay_buffer`` is not wrapped: ``input_gen`` realizes every replay
+it could. FinnLib's ``inner_shuffle`` realizes one shape of lane regroup
+directly, but is not a candidate yet: it emits undefined lanes under bursty input
 (``finn.kernels.transpose``).
 """
 
@@ -42,7 +44,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 from math import lcm, prod
-from typing import ClassVar
+from typing import Annotated, ClassVar
 
 from finn.core.space import (
     ConstraintGroup,
@@ -56,19 +58,13 @@ from finn.core.space import (
     view,
 )
 from finn.dataflow.plan import PLAN, Hop, Plan, Step, Unrealizable
-from finn.dataflow.tensor import TENSOR, ScalarEncoding, Tensor
-from finn.dataflow.traversal import LevelEnd, BeatSequence, Reorder
-from finn.kernels.artifacts.abi import Clock, Direction, Endpoint, Free, Reset, Signal
-from finn.kernels.artifacts.contribution_types import CopiedSource
-from finn.kernels.artifacts.requirements import (
-    FixedModuleName,
-    ModuleABIRequirements,
-    ModuleBuildRequirements,
-)
+from finn.dataflow.tensor import TENSOR, Tensor
+from finn.dataflow.traversal import BeatSequence, LevelEnd, Reorder
+from finn.kernels.artifacts.requirements import ModuleBuildRequirements
+from finn.kernels.datatypes.semantics import INTEGER_VECTOR, IntegerVector
+from finn.kernels.input_generator import InputGeneratorKernel
 from finn.kernels.physical.contract import StreamContract
-from finn.kernels.physical.stream import MarkerKind, ReadyValidStream, StreamMarker
-
-INPUT_GEN_RAM_STYLES = ("auto", "distributed", "block", "ultra")
+from finn.kernels.vpc import VpcKernel
 
 
 @dataclass(frozen=True)
@@ -83,107 +79,6 @@ class Stage:
 
 STAGE_SEMANTICS = default_semantics(Stage)
 STAGES = default_semantics(tuple)
-
-
-def clock_reset() -> tuple[Signal, Signal]:
-    """FinnLib's native ``clk`` and synchronous active-high ``rst``."""
-    return (
-        Signal("clk", Direction.IN, 1, Clock(Free())),
-        Signal(
-            "rst",
-            Direction.IN,
-            1,
-            Reset(active_low=False, synchronous=True, synchronous_to=("clk",)),
-        ),
-    )
-
-
-def native(
-    name: str, bits: int, endpoint: Endpoint, markers: tuple[StreamMarker, ...] = ()
-) -> ReadyValidStream:
-    """A FinnLib ``idat``/``ivld``/``irdy`` or ``odat``/``ovld``/``ordy`` port."""
-    side = "i" if endpoint is Endpoint.TARGET else "o"
-    return ReadyValidStream(
-        name, bits, endpoint, f"{side}dat", f"{side}vld", f"{side}rdy", "clk", "rst", markers
-    )
-
-
-# -- the modules -------------------------------------------------------------------------
-
-
-def input_gen_interfaces(word_bits: int, rank: int) -> tuple[ReadyValidStream, ReadyValidStream]:
-    """Opaque words in; words out with the ``olst`` loop-completion vector."""
-    return (
-        native("input", word_bits, Endpoint.TARGET),
-        native(
-            "output",
-            word_bits,
-            Endpoint.INITIATOR,
-            (StreamMarker("olst", MarkerKind.LOOP_END, rank),),
-        ),
-    )
-
-
-def input_gen_requirements(
-    *,
-    word_bits: int,
-    frame: int,
-    dims: Sequence[int],
-    coefs: Sequence[int],
-    ram_style: str,
-) -> ModuleBuildRequirements:
-    """FinnLib ``input_gen``: per frame, the word at ``sum(index[i] * coefs[i])`` over ``dims``."""
-    parameters = (
-        ("COEFS", "'{" + ", ".join(map(str, coefs)) + "}"),
-        ("D", len(dims)),
-        ("DATA_WIDTH", word_bits),
-        ("DIMS", "'{" + ", ".join(map(str, dims)) + "}"),
-        ("FM_SIZE", frame),
-        ("RAM_STYLE", f'"{ram_style}"'),
-    )
-    ports = input_gen_interfaces(word_bits, len(dims))
-    abi = ModuleABIRequirements(
-        FixedModuleName("input_gen"),
-        (*clock_reset(), *(pin for port in ports for pin in port.pins())),
-        tuple((key, str(value)) for key, value in parameters),
-    )
-    return ModuleBuildRequirements(
-        "finnlib.input_generator",
-        "1",
-        parameters,
-        abi,
-        (CopiedSource("finnlib", "rtl/shape/input_gen.sv", provides=("module:input_gen",)),),
-    )
-
-
-def vpc_requirements(
-    *, element_bits: int, lanes_in: int, lanes_out: int
-) -> ModuleBuildRequirements:
-    """FinnLib ``vpc``: vectors of ``lcm(lanes_in, lanes_out)`` elements, regrouped."""
-    parameters = (
-        ("N", lcm(lanes_in, lanes_out)),
-        ("PAD_ZEROS", 1),
-        ("PI", lanes_in),
-        ("PO", lanes_out),
-        ("RELAX_THROUGHPUT", 0),
-        ("W", element_bits),
-    )
-    abi = ModuleABIRequirements(
-        FixedModuleName("vpc"),
-        (
-            *clock_reset(),
-            *native("input", lanes_in * element_bits, Endpoint.TARGET).pins(),
-            *native("output", lanes_out * element_bits, Endpoint.INITIATOR).pins(),
-        ),
-        tuple((name, str(value)) for name, value in parameters),
-    )
-    return ModuleBuildRequirements(
-        "finnlib.vpc",
-        "1",
-        parameters,
-        abi,
-        (CopiedSource("finnlib", "rtl/shape/vpc.sv", provides=("module:vpc",)),),
-    )
 
 
 # -- realizing a plan --------------------------------------------------------------------
@@ -303,59 +198,48 @@ def _stage_name(kinds: Sequence[str], index: int) -> str:
     return kind if not earlier else f"{kind}_{earlier}"
 
 
-def _stage(stage: RealizedStage, element: ScalarEncoding, name: str, ram_style: str) -> Stage:
-    source, sink, module = stage.source, stage.sink, stage.module
-    word_in = source.form.lanes * element.bits
-    word_out = sink.form.lanes * element.bits
-    if isinstance(module, Convert):
-        requirements = vpc_requirements(
-            element_bits=element.bits, lanes_in=module.lanes_in, lanes_out=module.lanes_out
-        )
-        return Stage(
-            requirements,
-            StreamContract(native("input", word_in, Endpoint.TARGET), element, source.form),
-            StreamContract(native("output", word_out, Endpoint.INITIATOR), element, sink.form),
-            name,
-        )
-    requirements = input_gen_requirements(
-        word_bits=word_in,
-        frame=module.frame,
-        dims=module.dims,
-        coefs=module.coefs,
-        ram_style=ram_style,
-    )
-    ports = input_gen_interfaces(word_in, len(module.dims))
-    offered = {
-        f"olst[{depth}]": level
-        for depth, level in enumerate(module.levels)
-        if level in sink.markers
-    }
-    return Stage(
-        requirements,
-        StreamContract(ports[0], element, source.form),
-        StreamContract(ports[1], element, sink.form, markers=offered),
-        name,
-    )
-
-
 # -- the candidates of a stream's adapter Decision ---------------------------------------
 
 
 REALIZATION = default_semantics(tuple)
 
 
+@dataclass(frozen=True)
+class InputGenFacts:
+    """An ``input_gen`` stage's facts: its word, frame and nest."""
+
+    word_bits: int
+    frame: int
+    dims: Annotated[IntegerVector, INTEGER_VECTOR]
+    coefs: Annotated[IntegerVector, INTEGER_VECTOR]
+
+
+@dataclass(frozen=True)
+class VpcFacts:
+    """A ``vpc`` stage's facts: its element and the two lane counts."""
+
+    element_bits: int
+    lanes_in: int
+    lanes_out: int
+
+
+INPUT_GEN_FACTS = default_semantics(InputGenFacts)
+VPC_FACTS = default_semantics(VpcFacts)
+
+
 class StreamAdapter(Space):
     """A fixed chain of FinnLib modules carrying out a stream's plan, or refusing it.
 
-    ``ram_style`` is the stream's choice for the memory of an ``input_gen``
-    stage; it is read only by a chain that has one.
+    Each candidate places its modules as kernel children named by stage
+    (``input_gen``, ``vpc``, then ``input_gen_1``, ``vpc_1``), their facts
+    derived from the realization. An ``input_gen`` child owns its memory's
+    ``ram_style``.
     """
 
     modules: ClassVar[tuple[str, ...]] = ()
 
     tensor: Tensor = Param(semantics=TENSOR)
     plan: Plan = Param(semantics=PLAN)
-    ram_style: str = Param(required=False)
 
     @derived(semantics=REALIZATION)
     def realization(self) -> tuple[RealizedStage, ...] | Rejected:
@@ -378,6 +262,48 @@ class StreamAdapter(Space):
     # The kernels' convention for a refusal (``finn.kernels.configure.admission``).
     admission = ConstraintGroup(realizes)
 
+    def _named(self, name: str) -> RealizedStage | Rejected:
+        realization: tuple[RealizedStage, ...] = self.realization
+        kinds = [stage.kind for stage in realization]
+        for index, stage in enumerate(realization):
+            if _stage_name(kinds, index) == name:
+                return stage
+        return reject("adapter-plan", f"the plan's chain has no {name} stage")
+
+    def _generator(self, name: str) -> InputGenFacts | Rejected:
+        stage = self._named(name)
+        if isinstance(stage, Rejected):
+            return stage
+        module = stage.module
+        assert isinstance(module, Generate)
+        bits = stage.source.form.lanes * self.tensor.element.bits
+        return InputGenFacts(bits, module.frame, module.dims, module.coefs)
+
+    def _converter(self, name: str) -> VpcFacts | Rejected:
+        stage = self._named(name)
+        if isinstance(stage, Rejected):
+            return stage
+        module = stage.module
+        assert isinstance(module, Convert)
+        return VpcFacts(self.tensor.element.bits, module.lanes_in, module.lanes_out)
+
+    # The facts of every stage a chain can name; each chain reads its own.
+    @derived(semantics=INPUT_GEN_FACTS)
+    def input_gen_facts(self) -> InputGenFacts | Rejected:
+        return self._generator("input_gen")
+
+    @derived(semantics=INPUT_GEN_FACTS)
+    def input_gen_1_facts(self) -> InputGenFacts | Rejected:
+        return self._generator("input_gen_1")
+
+    @derived(semantics=VPC_FACTS)
+    def vpc_facts(self) -> VpcFacts | Rejected:
+        return self._converter("vpc")
+
+    @derived(semantics=VPC_FACTS)
+    def vpc_1_facts(self) -> VpcFacts | Rejected:
+        return self._converter("vpc_1")
+
     @view(semantics=default_semantics(str), requires=(realizes,))
     def admitted(self) -> str:
         """Accepted exactly when this chain carries out the plan, whatever the memory."""
@@ -385,44 +311,86 @@ class StreamAdapter(Space):
 
     @view(semantics=STAGES, requires=(realizes,))
     def stages(self) -> tuple[Stage, ...]:
+        """Each child's module and the contracts of its two ports."""
         element = self.tensor.element
         realization = self.realization
         kinds = [stage.kind for stage in realization]
-        ram_style = self.ram_style if "input_gen" in kinds else ""
-        return tuple(
-            _stage(stage, element, _stage_name(kinds, index), ram_style)
-            for index, stage in enumerate(realization)
-        )
+        found: list[Stage] = []
+        for index, stage in enumerate(realization):
+            name = _stage_name(kinds, index)
+            kernel = getattr(self, name)
+            offered: dict[str, LevelEnd] = {}
+            if isinstance(stage.module, Generate):
+                offered = {
+                    f"olst[{depth}]": level
+                    for depth, level in enumerate(stage.module.levels)
+                    if level in stage.sink.markers
+                }
+            found.append(
+                Stage(
+                    kernel.build_requirements,
+                    StreamContract(kernel.input.transport, element, stage.source.form),
+                    StreamContract(
+                        kernel.output.transport, element, stage.sink.form, markers=offered
+                    ),
+                    name,
+                )
+            )
+        return tuple(found)
+
+
+def _input_gen(facts: InputGenFacts) -> InputGeneratorKernel:
+    return InputGeneratorKernel(
+        word_bits=facts.word_bits,
+        frame_words=facts.frame,
+        extents=facts.dims,
+        strides=facts.coefs,
+    )
+
+
+def _vpc(facts: VpcFacts) -> VpcKernel:
+    return VpcKernel(
+        element_bits=facts.element_bits, lanes_in=facts.lanes_in, lanes_out=facts.lanes_out
+    )
 
 
 class InputGenAdapter(StreamAdapter):
     """One ``input_gen``: a reorder (replay included) and the markers it closes."""
 
     modules = ("input_gen",)
+    input_gen = _input_gen(StreamAdapter.input_gen_facts)
 
 
 class WidthAdapter(StreamAdapter):
     """One ``vpc``: the same element order, another number of lanes a beat."""
 
     modules = ("vpc",)
+    vpc = _vpc(StreamAdapter.vpc_facts)
 
 
 class WidthReorderAdapter(StreamAdapter):
     """A ``vpc``, then an ``input_gen``: new lanes, then a reorder or markers."""
 
     modules = ("vpc", "input_gen")
+    vpc = _vpc(StreamAdapter.vpc_facts)
+    input_gen = _input_gen(StreamAdapter.input_gen_facts)
 
 
 class ReorderWidthAdapter(StreamAdapter):
     """An ``input_gen``, then a ``vpc``: a reorder at the source's lanes, then new lanes."""
 
     modules = ("input_gen", "vpc")
+    input_gen = _input_gen(StreamAdapter.input_gen_facts)
+    vpc = _vpc(StreamAdapter.vpc_facts)
 
 
 class RegroupAdapter(StreamAdapter):
     """``vpc``, ``input_gen``, ``vpc``: a lane regroup through the common lane count."""
 
     modules = ("vpc", "input_gen", "vpc")
+    vpc = _vpc(StreamAdapter.vpc_facts)
+    input_gen = _input_gen(StreamAdapter.input_gen_facts)
+    vpc_1 = _vpc(StreamAdapter.vpc_1_facts)
 
 
 class ReorderWidthMarkersAdapter(StreamAdapter):
@@ -432,27 +400,27 @@ class ReorderWidthMarkersAdapter(StreamAdapter):
     """
 
     modules = ("input_gen", "vpc", "input_gen")
+    input_gen = _input_gen(StreamAdapter.input_gen_facts)
+    vpc = _vpc(StreamAdapter.vpc_facts)
+    input_gen_1 = _input_gen(StreamAdapter.input_gen_1_facts)
 
 
 class RegroupMarkersAdapter(StreamAdapter):
     """``vpc``, ``input_gen``, ``vpc``, ``input_gen``: a lane regroup, then markers."""
 
     modules = ("vpc", "input_gen", "vpc", "input_gen")
-
-
-def buffers(plan: Plan) -> bool:
-    """Whether the chain that carries out ``plan`` has an ``input_gen``."""
-    try:
-        return any(stage.kind == "input_gen" for stage in realize(plan))
-    except Unrealizable:
-        return False
+    vpc = _vpc(StreamAdapter.vpc_facts)
+    input_gen = _input_gen(StreamAdapter.input_gen_facts)
+    vpc_1 = _vpc(StreamAdapter.vpc_1_facts)
+    input_gen_1 = _input_gen(StreamAdapter.input_gen_1_facts)
 
 
 __all__ = [
     "Convert",
     "Generate",
-    "INPUT_GEN_RAM_STYLES",
+    "INPUT_GEN_FACTS",
     "InputGenAdapter",
+    "InputGenFacts",
     "RealizedStage",
     "RegroupAdapter",
     "RegroupMarkersAdapter",
@@ -462,13 +430,9 @@ __all__ = [
     "STAGE_SEMANTICS",
     "Stage",
     "StreamAdapter",
+    "VPC_FACTS",
+    "VpcFacts",
     "WidthAdapter",
     "WidthReorderAdapter",
-    "buffers",
-    "clock_reset",
-    "input_gen_interfaces",
-    "input_gen_requirements",
-    "native",
     "realize",
-    "vpc_requirements",
 ]

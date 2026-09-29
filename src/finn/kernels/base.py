@@ -8,19 +8,21 @@ declares only what is its own:
 
 - ``module``: the RTL module it instantiates, and ``sources()``, the source
   files that provide it;
-- one ``Port`` node per stream interface (``finn.kernels.port``): each
-  admits its element, presents its beat sequence and exports its bus;
+- one ``Port`` node per interface (``finn.kernels.port``): each exports its
+  pins, and what it holds while idle;
 - ``parameters()``: the module's parameters, from its choices;
 - ``clocking``: its clock and reset pins, when not the plain ``ap_clk`` and
   ``ap_rst_n``;
 - ``admission``: the constraint group by which it refuses a configuration it
-  cannot build.
+  cannot build;
+- ``other_pins()`` and ``held()``: pins that are no port's (an AXI-Lite bus)
+  and what it holds of them.
 
-The base derives the rest: the module's ABI (clocking, then every port's bus),
-``build_requirements`` (accepted under ``admission``), the ``tieoffs`` of
-pins the configuration leaves unused, and the exports ``MODULE`` and
-``TIEOFFS``. A composite kernel wires its children's modules through streams
-instead (``finn.kernels.streams.netlist``).
+The base derives the rest: the module's ABI (clocking, other pins, then every
+port's pins), ``build_requirements`` (accepted under ``admission``), the
+``tieoffs`` (the doubled clock while unused, idle ports, and what it holds
+itself) and the exports ``MODULE`` and ``TIEOFFS``. A composite kernel wires
+its children's modules through streams instead (``finn.kernels.streams.netlist``).
 """
 
 from __future__ import annotations
@@ -54,19 +56,23 @@ from finn.kernels.artifacts.abi import (
     Reset,
     Signal,
 )
-from finn.kernels.artifacts.contribution_types import CopiedSource
+from finn.kernels.physical.contract import STREAM_CONTRACT
 from finn.kernels.artifacts.requirements import (
     FixedModuleName,
     ModuleABIRequirements,
     ModuleBuildRequirements,
+    RequirementContribution,
 )
 
 MODULE_REQUIREMENTS = default_semantics(ModuleBuildRequirements)
 MODULE = ViewKey("module", MODULE_REQUIREMENTS)
 """A kernel's generated module, collected by its composite."""
 
-BUS = ViewKey("bus", default_semantics(Bus))
-"""A port's pins, collected by its kernel into the module's ABI."""
+PORT = ViewKey("port", STREAM_CONTRACT)
+"""A kernel's port on one stream, exported per reference input."""
+
+PINS = ViewKey("pins", default_semantics(tuple))
+"""A port's pins (signals, or one bus), collected by its kernel into the module's ABI."""
 
 
 @dataclass(frozen=True)
@@ -83,13 +89,24 @@ class Tieoffs:
 
 TIEOFFS_SEMANTICS = default_semantics(Tieoffs)
 TIEOFFS = ViewKey("tieoffs", TIEOFFS_SEMANTICS)
+HELD = ViewKey("held", TIEOFFS_SEMANTICS)
+"""What an idle port holds, collected by its kernel's tie-offs."""
+
+
+def merged(*parts: Tieoffs) -> Tieoffs:
+    """Every part's held inputs and unused outputs, in order."""
+    return Tieoffs(
+        tuple(pin for part in parts for pin in part.inputs),
+        tuple(pin for part in parts for pin in part.unused),
+    )
 
 
 @dataclass(frozen=True)
 class Clocking:
     """A module's clock and reset pins.
 
-    ``clock`` is free-running and ``reset`` active low and synchronous. A
+    ``clock`` is free-running and ``reset`` synchronous, active low unless
+    ``active_low`` is False (FinnLib's native ``clk`` and ``rst``). A
     ``doubled`` pin, when the module has one, is a clock at twice ``clock``
     while ``doubling``, and otherwise an unused input held low.
     """
@@ -98,6 +115,7 @@ class Clocking:
     reset: str = "ap_rst_n"
     doubled: str | None = None
     doubling: bool = False
+    active_low: bool = True
 
     def signals(self) -> tuple[Signal, ...]:
         doubled = () if self.doubled is None else (self.doubled,)
@@ -117,7 +135,7 @@ class Clocking:
                 self.reset,
                 Direction.IN,
                 1,
-                Reset(active_low=True, synchronous=True, synchronous_to=clocks),
+                Reset(active_low=self.active_low, synchronous=True, synchronous_to=clocks),
             ),
         )
 
@@ -134,6 +152,8 @@ class Clocking:
 
 
 CLOCKING = default_semantics(Clocking)
+NATIVE_CLOCKING = Clocking(clock="clk", reset="rst", active_low=False)
+"""FinnLib's native ``clk`` and synchronous active-high ``rst``."""
 
 
 class Kernel(Space):
@@ -162,16 +182,25 @@ class Kernel(Space):
 
     # -- the protocol: what a kernel declares ----------------------------------------------
 
-    buses = Members(BUS)
+    port_pins = Members(PINS)
+    port_holds = Members(HELD)
     admission = ConstraintGroup()
 
-    def parameters(self) -> Mapping[str, int | str]:
-        """The module's parameters, read from the kernel's choices."""
+    def parameters(self) -> Mapping[str, int | str] | Rejected:
+        """The module's parameters, read from the kernel's choices; refused when it has none."""
         return {}
 
-    def sources(self) -> tuple[CopiedSource, ...]:
-        """The source files that provide ``module``."""
+    def sources(self) -> tuple[RequirementContribution, ...]:
+        """The source files that provide ``module``, and any data they read."""
         return ()
+
+    def other_pins(self) -> tuple[Signal | Bus, ...]:
+        """Pins that are no port's, such as an AXI-Lite configuration bus."""
+        return ()
+
+    def held(self) -> Tieoffs | Rejected:
+        """What the kernel itself holds idle, beyond its idle ports and doubled clock."""
+        return Tieoffs()
 
     @derived(semantics=CLOCKING)
     def clocking(self) -> Clocking:
@@ -181,15 +210,19 @@ class Kernel(Space):
 
     @derived(semantics=MODULE_REQUIREMENTS)
     def codegen(self) -> ModuleBuildRequirements | Rejected:
-        """The module: clocking, then every port's bus in declaration order, and parameters."""
+        """The module: clocking, its other pins, then every port's pins; and parameters."""
         family = type(self)
         if not family.module:
             return reject("kernel-module", f"{family.__qualname__} declares no module")
         clocking = self.clocking
-        parameters = tuple(sorted(self.parameters().items()))
+        chosen = self.parameters()
+        if isinstance(chosen, Rejected):
+            return chosen
+        parameters = tuple(sorted(chosen.items()))
+        pins = tuple(pin for item in self.port_pins for pin in item.value)
         abi = ModuleABIRequirements(
             FixedModuleName(family.module),
-            (*clocking.signals(), *(item.value for item in self.buses)),
+            (*clocking.signals(), *self.other_pins(), *pins),
             tuple((name, str(value)) for name, value in parameters),
             clocking.alignments(),
         )
@@ -198,20 +231,30 @@ class Kernel(Space):
     build_requirements = View(codegen, requires=(admission,))
 
     @view(semantics=TIEOFFS_SEMANTICS)
-    def tieoffs(self) -> Tieoffs:
-        return Tieoffs(self.clocking.held())
+    def tieoffs(self) -> Tieoffs | Rejected:
+        held = self.held()
+        if isinstance(held, Rejected):
+            return held
+        return merged(
+            Tieoffs(self.clocking.held()), *(item.value for item in self.port_holds), held
+        )
 
+    # A kernel adding exports of its own extends these: ``{**Kernel.exports, KEY: ...}``.
     exports = {MODULE: build_requirements, TIEOFFS: tieoffs}
 
 
 __all__ = [
-    "BUS",
     "CLOCKING",
     "Clocking",
+    "HELD",
     "Kernel",
     "MODULE",
     "MODULE_REQUIREMENTS",
+    "NATIVE_CLOCKING",
+    "PINS",
+    "PORT",
     "TIEOFFS",
     "TIEOFFS_SEMANTICS",
     "Tieoffs",
+    "merged",
 ]

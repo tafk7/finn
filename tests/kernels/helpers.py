@@ -7,13 +7,14 @@ Facts are the root node's typed formals; a missing required one is refused at
 the node call. Choices use the stable decision keys ``inspection`` reports."""
 
 from collections.abc import Callable, Mapping
+from fnmatch import fnmatchcase
 from typing import TypeVar
 
 from finn.core.space import Constraint, Space, design_space, inspection
 from finn.dataflow.datatypes import QONNXDataType
 from finn.dataflow.gemm import Form
 from finn.dataflow.tensor import ScalarEncoding, Tensor
-from finn.kernels.streams import Stream
+from finn.kernels.streams import ADAPTER_RAM_STYLES, Stream
 from finn.core.space.results import Available, QueryResult
 from finn.kernels.configure import commit, settle
 
@@ -80,12 +81,12 @@ def placed_dotp(
 
 
 def settled(point: S, ram_style: str = "auto") -> S:
-    """Settle every Decision over kernels; an adapter's input_gen memory takes ``ram_style``."""
+    """Settle every Decision over kernels; each adapter input_gen's memory takes ``ram_style``."""
     point = settle(point).point
     styles = [
         item.key
         for item in inspection.decisions(point)
-        if item.key.endswith("adapter_ram_style")
+        if fnmatchcase(item.key, ADAPTER_RAM_STYLES)
         and isinstance(state := point.field(item.reference).state, Available)
         and state.value.status != "committed"
     ]

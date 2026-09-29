@@ -201,3 +201,81 @@ the gate results as observed, key and name changes (D7), and deviations.
 - **G0.2 answered after the fact** (user, 2026-09-28): weights stay `(k, n)`
   for now, to be revisited in detail, specifically how weight files are
   generated.
+
+## K2: every other kernel on the protocol; adapters and transport
+
+- **Ports** (`finn.kernels.port`). `Port` is the base: a required
+  `transport`, pins under `PINS`, and what it holds while `idle` under
+  `HELD`. `WordPort`: opaque words on FinnLib's native `idat`/`ivld`/`irdy`
+  or `odat`/`ovld`/`ordy`, with markers. `StreamPort` (K1's `Port`): on a
+  stream, an AXIS bus, or with `signals` (data, valid, ready) those native
+  pins carrying the lanes' bits exactly; idle without a stream, its pins
+  then from `idle_dtype` and `idle_lanes`; `admits` defaults to `None` (the
+  kernel admits the element itself). `ScheduledPort` and `GivenPort` as in K1.
+- **The protocol** (`finn.kernels.base`). `PORT`, `PINS`, `HELD` beside
+  `MODULE` and `TIEOFFS`; `Clocking.active_low` and `NATIVE_CLOCKING` (`clk`,
+  active-high `rst`); `other_pins()` (an AXI-Lite bus) and `held()` (which may
+  refuse); `parameters()` may refuse (an `inspect` evaluates `codegen` even
+  when admission refuses); `sources()` takes any requirement contribution (an
+  INIT_FILE). The ABI is clocking, other pins, then ports' pins in
+  declaration order; `tieoffs` merges the doubled clock, idle ports and
+  `held()`. A kernel adding exports extends the base's:
+  `{**Kernel.exports, CONTROL: ...}`.
+- **Kernels on the protocol.** `FifoKernel` (two `WordPort`s);
+  `InputGeneratorKernel` (`olst` of its rank on its output); a new
+  `VpcKernel` (`finn.kernels.vpc`); `RomKernel` (the `cyclic_stream` module;
+  id `cyclic_stream`, the build identity it always had; native output pins
+  through `signals`); `MemStreamKernel` (set port idle with one set, AXIS
+  output, AXI-Lite through `other_pins()`/`held()`, `clk2x` through
+  `Clocking`); `ThresholdingAxiKernel` (three AXIS ports, the selector idle
+  with one set, AXI-Lite likewise); `EltwiseKernel` (three native ports, now
+  with optional `lhs_stream`/`rhs_stream`/`result_stream`: each walked
+  row-major, PE a beat, a trailing-shape `rhs` presented once per `lhs`
+  element it meets); `TransposeKernel` (`inner_shuffle`, native ports). Each
+  checks that a placed stream carries the element it stores or takes
+  (`memory-element`, `threshold-stream-element`, `eltwise-stream-element`,
+  `transpose-element`). Off the protocol, recorded: `IntToFp32Kernel`
+  (combinational, no clock) and `MemStreamHlsKernel` (an HLS source bundle).
+- **Adapters.** Each chain places its modules as kernel children named by
+  stage (`input_gen`, `vpc`, `input_gen_1`, `vpc_1`), their facts derived
+  from the realization (`input_gen_facts`, `vpc_facts`, ...); `stages` builds
+  each `Stage` from the child's `build_requirements` and port transports.
+  Q3 option C: `ram_style` is the `InputGeneratorKernel`'s own Decision. The
+  stream's `adapter` and `transport` Decisions are in the entries form
+  (shared `tensor`, `plan`; `when=adapting`); `StreamFifo` reads its FIFO's
+  port transports. `ADAPTER_RAM_STYLES` (`*.adapter.*.ram_style`) is the key
+  pattern `matmul_assembly` and `helpers.settled` commit to `auto`.
+- **Engine.** A class body reads an attribute of its own derived value
+  (`facts.word_bits`), as it already could of a reference input; a value
+  type names a field's semantics with `Annotated[T, SEMANTICS]`; projection
+  finds dataclass fields without defaults. Q2: `Decision(values={...})` is
+  refused, pointing at entries; every site (kernels, 39 Space test sites and
+  four by hand, the typing fixtures, the Space docs) is migrated, and an
+  empty entry mapping says it needs a candidate.
+- **Removed.** `finn.kernels.streaming` (`cyclic_stream_requirements`, whose
+  tests moved onto `RomKernel`); the adapters' `input_gen_requirements`,
+  `vpc_requirements`, `input_gen_interfaces`, `clock_reset`, `native`,
+  `buffers`; the stream's `buffering` and `adapter_ram_style`;
+  `physical.ports.NativeStreamPort` and `native_stream`; every hand-written
+  ABI and tie-off (memstream, thresholding, ROM, FIFO, `input_gen`, `vpc`,
+  `inner_shuffle`, eltwise).
+- **Keys and names (D7).** `<stream>.adapter_ram_style` →
+  `<stream>.adapter.<chain>.<stage>.ram_style` (one per `input_gen` of each
+  chain). Memory and transpose stream users are port nodes
+  (`memory.rom.output`, `first_source.output`); their contracts read as
+  `.output.contract`. Removed views: the ROM's `output` contract (now a
+  port), memstream's `output_port`, `set_port`, `output_interface`,
+  `set_interface`, thresholding's `interfaces`, `input_port`, `output_port`,
+  `set_port`, `input_form`, `implementation_supported` (now `admission`),
+  the transpose's `output_form` (now `output_sequence`).
+- **Deviation.** The flat-kernel tests were not moved onto streams: an
+  unplaced kernel's ports are idle and take their pins from the kernel's own
+  dtypes, so the flat build is the placed one. Streams are exercised by the
+  composite tests, and eltwise on streams by `test_port_contracts`.
+- **Identity.** Over the 13 configurations, module parameters, images, top
+  ports, wire and beat counts are unchanged from K1; wrapper fingerprints are
+  unchanged except the four memstream configurations (its `m_axis_0` is an
+  AXIS bus in its ABI, and its tie-offs are in protocol order); keys change
+  as above (`evidence/identity-k2.txt`).
+- **Gates.** Space 448, kernels 806 (XSim in pytest included), dataflow 40;
+  ruff and mypy clean; documentation examples 27.

@@ -34,7 +34,8 @@ from finn.core.space import (
     reject,
     view,
 )
-from finn.kernels.artifacts.abi import Bus, Endpoint, Member
+from finn.kernels.artifacts.abi import Bus, Direction, Endpoint, Member
+from finn.kernels.base import Tieoffs
 
 
 @dataclass(frozen=True)
@@ -78,6 +79,20 @@ def top_bus(child: Bus, port: str, clock: str, reset: str) -> Bus:
     )
 
 
+def held_bus(bus: Bus) -> Tieoffs:
+    """A bus left unexposed: its inputs held low, its outputs unconnected."""
+    directions = dict(bus.member_directions())
+    inputs = tuple(
+        (member.physical, 0)
+        for member in bus.signals
+        if directions[member.physical] is Direction.IN
+    )
+    unused = tuple(
+        member.physical for member in bus.signals if directions[member.physical] is not Direction.IN
+    )
+    return Tieoffs(inputs, unused)
+
+
 class ControlBus(Space):
     """A control interface of the composite: one kernel's bus, presented at ``port``."""
 
@@ -103,5 +118,6 @@ __all__ = [
     "EXPORTED",
     "EXPORTED_SEMANTICS",
     "Exported",
+    "held_bus",
     "top_bus",
 ]

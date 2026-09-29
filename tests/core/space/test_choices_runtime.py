@@ -125,7 +125,7 @@ def test_selected_view_preserves_direct_refusal_and_skips_other_alternatives() -
         # A Decision over nodes replaces SubspaceChoice; ``implementation.physical``
         # reads the selected candidate's member by name (was accepted(PHYSICAL)).
         implementation: Refused | Explodes = Decision(
-            values={"refused": Refused(), "explodes": Explodes()}
+            {"refused": Refused(), "explodes": Explodes()}
         )
         accepted = View(implementation.physical)
         physical = View(accepted)
@@ -157,7 +157,7 @@ def test_singleton_choice_needs_a_commitment_and_respects_its_outer_guard() -> N
 
     class Root(Space):
         enabled: bool = Param()
-        implementation: Only = Decision(values={"only": Only()}, when=enabled)
+        implementation: Only = Decision({"only": Only()}, when=enabled)
         accepted = View(implementation.physical)
 
     active = design_space(Root(enabled=True))
@@ -181,7 +181,7 @@ def test_nested_choice_selection_retains_its_owning_scope() -> None:
         value = Const(2)
 
     class Family(Space):
-        implementation: A | B = Decision(values={"a": A(), "b": B()})
+        implementation: A | B = Decision({"a": A(), "b": B()})
 
     class Root(Space):
         first = Family()
@@ -210,7 +210,7 @@ def test_choice_metadata_and_handles_retain_the_compiled_definition() -> None:
         value = Const(2)
 
     class Root(Space):
-        implementation: A | B = Decision(values={"a": A(), "b": B()})
+        implementation: A | B = Decision({"a": A(), "b": B()})
 
     base = design_space(Root())
     (saved,) = inspection.choices(base)
@@ -218,7 +218,7 @@ def test_choice_metadata_and_handles_retain_the_compiled_definition() -> None:
     with pytest.raises(AttributeError, match="immutable"):
         setattr(Root.implementation, "candidates", {"renamed": A()})
     with pytest.raises(DefinitionError, match="finalized"):
-        Root.implementation = Decision(values={"renamed": A()})
+        Root.implementation = Decision({"renamed": A()})
     assert [case.name for case in saved.cases] == ["a", "b"]
     chosen = base.with_choices({saved.selector: "b"})
     b = inspection.candidate(chosen, Root.implementation, "b")
@@ -283,9 +283,7 @@ def test_wide_selected_outputs_keep_frozen_case_order_and_exact_targets() -> Non
         exports = {PHYSICAL: physical}
 
     class Root(Space):
-        implementation: Leaf = Decision(
-            values={f"case{index}": Leaf(value=index) for index in range(128)}
-        )
+        implementation: Leaf = Decision({f"case{index}": Leaf(value=index) for index in range(128)})
         physical = View(implementation.physical)
 
     model = inspection.model(Root)

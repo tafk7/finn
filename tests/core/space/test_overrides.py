@@ -352,12 +352,12 @@ def test_a_decision_over_nodes_is_narrowed_under_its_key() -> None:
 
     class Plant(Space):
         heating: Boiler | Pump | None = Decision(
-            values={"boiler": Boiler(kw=24), "pump": Pump(kw=8), "none": None}
+            {"boiler": Boiler(kw=24), "pump": Pump(kw=8)}, optional=True
         )
 
     class Site(Space):
         plant = Plant()
-        plant.heating = Decision(values={"pump": Pump(kw=10), "none": None})
+        plant.heating = Decision({"pump": Pump(kw=10)}, optional=True)
 
     assert {item.key for item in inspection.decisions(Site)} == {
         "plant.heating",
@@ -371,7 +371,7 @@ def test_a_decision_over_nodes_is_narrowed_under_its_key() -> None:
 
         class Added(Space):
             plant = Plant()
-            plant.heating = Decision(values={"solar": Boiler(kw=1)})
+            plant.heating = Decision({"solar": Boiler(kw=1)})
 
     # A key pins the choice: the declared candidate is selected, with its own
     # bindings, and the key disappears (it is listed as pinned).
@@ -430,7 +430,7 @@ def test_an_assignment_reaches_a_member_of_a_decision_candidate() -> None:
 
     class Holder(Space):
         leaf = Leaf()  # a handle naming the candidate
-        choice: Leaf | None = Decision(values={"leaf": leaf, "none": None})
+        choice: Leaf | None = Decision({"leaf": leaf}, optional=True)
 
     class Outer(Space):
         holder = Holder()

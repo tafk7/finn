@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Physical stream requirements, complete initialization, and RTL transport."""
+"""The ROM's cyclic stream: complete initialization, identity, and RTL transport."""
 
 import pytest
 
@@ -9,6 +9,10 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from qonnx.core.datatype import DataType
+
+from finn.core.space import Rejected, design_space
+from finn.dataflow.traversal import vector_major
 from finn.kernels.artifacts.build import (
     materialize_module_sources,
     module_build_fingerprint,
@@ -19,20 +23,26 @@ from finn.kernels.artifacts.build import (
 )
 from finn.kernels.artifacts.rtl import Declined, check_abi
 from finn.kernels.artifacts.store import ArtifactStore
-from finn.kernels.streaming import (
-    cyclic_stream_requirements,
-)
 from finn.kernels.resources import resource_root
+from finn.kernels.rom import CYCLIC_ROM_STYLES, RomKernel
 
 ROOT = Path(__file__).resolve().parents[2]
 ROOTS = {"kernels": resource_root(), "finnlib": ROOT / "deps/finnlib"}
 
 
+def rom(bits, image, rom_style="auto"):
+    """A ROM of one-lane unsigned words: its image is its contents."""
+    point = design_space(
+        RomKernel(
+            dtype=DataType[f"UINT{bits}"], form=vector_major((len(image),), 1), contents=image
+        )
+    )
+    return point.with_choices(rom_style=rom_style)
+
+
 @pytest.mark.parametrize("bits,image", [(1, (1,)), (13, (0, 8191, 37)), (65, (1 << 64, 7))])
 def test_cyclic_image_is_complete_and_buildable(tmp_path, bits, image):
-    requirements = cyclic_stream_requirements(
-        word_bits=bits, depth=len(image), image=image, rom_style="auto"
-    )
+    requirements = rom(bits, image).build_requirements
     parameters = dict(requirements.parameters)
     literal_width, packed_hex = parameters["INIT_DATA"].split("'h")
     assert int(literal_width) == bits * len(image)
@@ -51,8 +61,8 @@ def test_cyclic_image_is_complete_and_buildable(tmp_path, bits, image):
 
 
 def test_cyclic_image_changes_concrete_identity_without_changing_reusable_source(tmp_path):
-    first = cyclic_stream_requirements(word_bits=8, depth=3, image=(1, 2, 3), rom_style="auto")
-    second = cyclic_stream_requirements(word_bits=8, depth=3, image=(1, 2, 4), rom_style="auto")
+    first = rom(8, (1, 2, 3)).build_requirements
+    second = rom(8, (1, 2, 4)).build_requirements
     assert module_build_fingerprint(first) != module_build_fingerprint(second)
     store = ArtifactStore(tmp_path / "store")
     prepared = [
@@ -64,28 +74,25 @@ def test_cyclic_image_changes_concrete_identity_without_changing_reusable_source
 
 
 @pytest.mark.parametrize(
-    "arguments,match",
+    "image,code",
     [
-        ({"word_bits": 0, "depth": 1, "image": (0,)}, "word_bits"),
-        ({"word_bits": 8, "depth": 0, "image": ()}, "depth"),
-        ({"word_bits": 8, "depth": True, "image": (0,)}, "depth"),
-        ({"word_bits": 8, "depth": 3, "image": (1, 2)}, "exactly depth"),
-        ({"word_bits": 8, "depth": 1, "image": (256,)}, "fitting word_bits"),
-        ({"word_bits": 8, "depth": 1, "image": (-1,)}, "unsigned integers"),
-        ({"word_bits": 8, "depth": 1, "image": (True,)}, "unsigned integers"),
-        ({"word_bits": 8, "depth": 1, "image": (0,), "rom_style": "ultra"}, "rom_style"),
+        ((256,), "cyclic-values"),  # a word wider than its element
+        ((-1,), "cyclic-values"),  # below an unsigned element
     ],
 )
-def test_cyclic_rejects_incomplete_or_invalid_initialization(arguments, match):
-    with pytest.raises(ValueError, match=match):
-        cyclic_stream_requirements(**{"rom_style": "auto", **arguments})
+def test_cyclic_refuses_contents_outside_its_element(image, code):
+    point = design_space(
+        RomKernel(dtype=DataType["UINT8"], form=vector_major((1,), 1), contents=image)
+    ).with_choices(rom_style="auto")
+    answer = point.query(RomKernel.build_requirements)
+    assert isinstance(answer, Rejected)
+    assert code in {finding.code for finding in answer.findings}
 
 
-def test_cyclic_snapshots_the_image():
-    image = [0, 255]
-    requirements = cyclic_stream_requirements(word_bits=8, depth=2, image=image, rom_style="auto")
-    image[0] = 11
-    assert dict(requirements.parameters)["INIT_DATA"] == "16'hff00"
+def test_ultraram_is_no_rom_style():
+    assert "ultra" not in CYCLIC_ROM_STYLES
+    with pytest.raises(Exception, match="refused"):
+        rom(8, (0,), rom_style="ultra")
 
 
 _CYCLIC_TESTBENCH = r"""

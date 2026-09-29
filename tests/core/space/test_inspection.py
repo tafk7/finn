@@ -89,7 +89,7 @@ def test_discovery_reports_owning_decisions_and_author_names_for_selectors() -> 
     class Root(Space):
         source: int = Decision(values=(2, 4))
         child = Child(supplied=source)
-        implementation: Child = Decision(values={"a": Child(supplied=1), "b": Child(supplied=2)})
+        implementation: Child = Decision({"a": Child(supplied=1), "b": Child(supplied=2)})
 
     point = design_space(Root())
     decisions = inspection.decisions(point)
@@ -202,8 +202,8 @@ def test_singleton_choice_metadata_exposes_an_ordinary_editable_selector() -> No
         value = Const(1)
 
     class Root(Space):
-        implementation: Child = Decision(values={"only": Child()})
-        optional: Child | None = Decision(values={"none": None, "some": Child()})
+        implementation: Child = Decision({"only": Child()})
+        optional: Child | None = Decision({"some": Child()}, optional=True)
 
     info = inspection.decision_info(Root, Root.implementation)
     assert (info.key, info.selector, info.cases) == ("implementation", True, ("only",))

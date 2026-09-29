@@ -55,7 +55,7 @@ def test_static_alternatives_and_demanded_evidence_are_separate() -> None:
     # selected candidate's member by name (formerly SubspaceChoice.accepted).
     class Root(Space):
         size: int = Param()
-        implementation: Good | Bad = Decision(values={"good": Good(size=size), "bad": Bad()})
+        implementation: Good | Bad = Decision({"good": Good(size=size), "bad": Bad()})
         physical = View(implementation.physical)
 
     output = Root.physical

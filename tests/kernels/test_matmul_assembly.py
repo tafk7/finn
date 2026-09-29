@@ -180,7 +180,11 @@ def test_the_space_settles_the_core_and_the_core_owns_its_folds():
     # The activation stream's adapter applies once its plan is known, which the
     # folding decides.
     point = commit(
-        point, {"activations.adapter": "input_gen", "activations.adapter_ram_style": "auto"}
+        point,
+        {
+            "activations.adapter": "input_gen",
+            "activations.adapter.input_gen.input_gen.ram_style": "auto",
+        },
     )
     assert isinstance(
         point.compute.inspect(DotpAxiKernel.build_requirements).accepted_result, Unresolved
@@ -201,7 +205,7 @@ def test_the_space_settles_the_core_and_the_core_owns_its_folds():
             "compute.packed.simd": 1,
             "compute.packed.compute_pumping": True,
             "activations.adapter": "input_gen",
-            "activations.adapter_ram_style": "auto",
+            "activations.adapter.input_gen.input_gen.ram_style": "auto",
         },
     )
     assert isinstance(
@@ -280,7 +284,7 @@ def test_matmul_honors_the_child_physical_view_not_just_its_raw_module(monkeypat
             "compute.packed.simd": 2,
             "compute.packed.compute_pumping": False,
             "activations.adapter": "input_gen",
-            "activations.adapter_ram_style": "auto",
+            "activations.adapter.input_gen.input_gen.ram_style": "auto",
             "weight_stream.transport": "direct",
         },
     )

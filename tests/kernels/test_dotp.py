@@ -108,7 +108,7 @@ def test_assessed_view_preserves_geometry_and_clocks(target, pumping):
         ("ap_clk", "ap_clk2x") if pumping else ("ap_clk",)
     )
     for port, width in ((point.x, 16), (point.w, 24), (point.y, 24)):
-        assert port.bus == ports[port.name]
+        assert port.pins == (ports[port.name],)
         tdata = next(signal for signal in ports[port.name].signals if signal.logical == "tdata")
         assert tdata.width == width
     assert point.tieoffs.inputs == (() if pumping else (("ap_clk2x", 0),))

@@ -146,7 +146,7 @@ class Earlier(Space):
 
     width: int = Param()
     compute: PackedCore | StubCore = Decision(
-        values={
+        {
             "packed": PackedCore(width=width, narrow_weights=True),
             "stub": StubCore(width=width),
         }

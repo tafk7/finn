@@ -9,33 +9,47 @@ admits finite traversals wholly within each frame. olst[i] marks completion
 of loop i and all inner loops, aligned with the output transfer. It is a native
 multi-bit marker, not AXI TLAST. Input and output words are opaque bits.
 
-This is the flat module. On a stream, ``input_gen`` is a stage of the stream's
-adapter (``finn.kernels.adapters``), which derives these parameters from the
-stream's plan.
+On a stream, ``input_gen`` is a stage of the stream's adapter
+(``finn.kernels.adapters``), which derives these facts from the stream's plan.
 """
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 from finn.core.space import (
+    ConstraintGroup,
     Decision,
     Param,
     Rejected,
     constraint,
-    default_semantics,
+    derived,
     reject,
     view,
 )
-from finn.kernels.adapters import INPUT_GEN_RAM_STYLES, input_gen_interfaces, input_gen_requirements
-from finn.kernels.artifacts.requirements import ModuleBuildRequirements
-from finn.kernels.base import Kernel
+from finn.kernels.artifacts.abi import Endpoint
+from finn.kernels.artifacts.contribution_types import CopiedSource
+from finn.kernels.base import CLOCKING, NATIVE_CLOCKING, Clocking, Kernel
 from finn.kernels.datatypes.semantics import INTEGER_VECTOR, IntegerVector
-from finn.kernels.physical.stream import STREAM_INTERFACES, ReadyValidStream
-from finn.kernels.streams import MODULE
+from finn.kernels.physical.stream import (
+    STREAM_INTERFACES,
+    MarkerKind,
+    ReadyValidStream,
+    StreamMarker,
+)
+from finn.kernels.port import MARKERS, WordPort
+
+INPUT_GEN_RAM_STYLES = ("auto", "distributed", "block", "ultra")
+
+
+def _vector(values: IntegerVector) -> str:
+    return "'{" + ", ".join(map(str, values)) + "}"
 
 
 class InputGeneratorKernel(Kernel):
     id = "finnlib.input_generator"
     version = "1"
+    module = "input_gen"
 
     word_bits: int = Param()
     frame_words: int = Param()
@@ -67,29 +81,40 @@ class InputGeneratorKernel(Kernel):
             )
         return True
 
+    admission = ConstraintGroup(traversal_supported)
     ram_style: str = Decision(values=INPUT_GEN_RAM_STYLES)
+
+    @derived(semantics=MARKERS)
+    def loop_ends(self) -> tuple[StreamMarker, ...] | Rejected:
+        """``olst``: one bit per loop, closing that loop and every inner one."""
+        rank = len(self.extents)
+        if rank < 1:
+            return reject("input-generator-interface", "a traversal has at least one loop")
+        return (StreamMarker("olst", MarkerKind.LOOP_END, rank),)
+
+    input = WordPort(name="input", endpoint=Endpoint.TARGET, bits=word_bits)
+    output = WordPort(name="output", endpoint=Endpoint.INITIATOR, bits=word_bits, markers=loop_ends)
 
     @view(semantics=STREAM_INTERFACES)
     def interfaces(self) -> tuple[ReadyValidStream, ...] | Rejected:
-        bits, rank = self.word_bits, len(self.extents)
-        if not 1 <= bits <= 0xFFFFFFFF or rank < 1:
-            return reject(
-                "input-generator-interface", "positive native word width and rank are required"
-            )
-        return input_gen_interfaces(bits, rank)
+        return (self.input.transport, self.output.transport)
 
-    @view(semantics=default_semantics(ModuleBuildRequirements), requires=(traversal_supported,))
-    def build_requirements(self) -> ModuleBuildRequirements:
-        _ = self.interfaces  # refuses a word width or rank no pins have
-        return input_gen_requirements(
-            word_bits=self.word_bits,
-            frame=self.frame_words,
-            dims=self.extents,
-            coefs=self.strides,
-            ram_style=self.ram_style,
-        )
+    @derived(semantics=CLOCKING)
+    def clocking(self) -> Clocking:
+        return NATIVE_CLOCKING
 
-    exports = {MODULE: build_requirements}
+    def parameters(self) -> Mapping[str, int | str]:
+        return {
+            "COEFS": _vector(self.strides),
+            "D": len(self.extents),
+            "DATA_WIDTH": self.word_bits,
+            "DIMS": _vector(self.extents),
+            "FM_SIZE": self.frame_words,
+            "RAM_STYLE": f'"{self.ram_style}"',
+        }
+
+    def sources(self) -> tuple[CopiedSource, ...]:
+        return (CopiedSource("finnlib", "rtl/shape/input_gen.sv", provides=("module:input_gen",)),)
 
 
-__all__ = ["InputGeneratorKernel"]
+__all__ = ["INPUT_GEN_RAM_STYLES", "InputGeneratorKernel"]

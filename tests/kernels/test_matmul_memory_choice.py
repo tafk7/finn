@@ -60,6 +60,18 @@ FACTS = dict(
     target_period_ns=5.0,
 )
 
+# Each adapter chain's input_gen stages, by the key below the stream's adapter.
+INPUT_GEN_STAGES = (
+    "input_gen.input_gen",
+    "vpc_input_gen.input_gen",
+    "input_gen_vpc.input_gen",
+    "input_gen_vpc_input_gen.input_gen",
+    "input_gen_vpc_input_gen.input_gen_1",
+    "vpc_input_gen_vpc.input_gen",
+    "vpc_input_gen_vpc_input_gen.input_gen",
+    "vpc_input_gen_vpc_input_gen.input_gen_1",
+)
+
 
 def base(**facts):
     return design_space(MatMulKernel(**{**FACTS, **facts}))
@@ -146,9 +158,10 @@ def test_families_share_typed_exports_but_keep_their_own_ports_and_components():
     assert cyclic.memory.image == (0x22C, 0x6BE, 0xDD3, 0x941)
     # Instance names come from the located node names: the candidate is memory.rom.
     assert [item.node for item in cyclic.modules] == ["compute.packed", "memory.rom"]
+    # The stream's producer is the ROM's output port; netlist names its module's instance.
     assert [(item.node, item.value.source_owner) for item in cyclic.streams][1] == (
         "weight_stream",
-        "memory.rom",
+        "memory.rom.output",
     )
     assert [item.node for item in external.modules] == ["compute.packed"]
     rom = instance_parameters(cyclic, CYCLIC_INSTANCE)
@@ -175,7 +188,8 @@ def test_the_inactive_family_is_never_demanded():
     assert set(reached) == {
         "memory.rom.$selected",
         "memory.rom.build_requirements",
-        "memory.rom.output",
+        "memory.rom.tieoffs",
+        "memory.rom.output.contract",
     }
     assert all(
         isinstance(result, Inapplicable)
@@ -208,14 +222,15 @@ def test_case_local_choices_are_owned_by_their_family():
         "memory.memstream.ram_style",
         "realization",
         # Every stream may need an adapter; each Decision applies only under a plan.
-        "activations.adapter",
-        "activations.adapter_ram_style",
-        "results.adapter",
-        "results.adapter_ram_style",
-        "set_index.adapter",
-        "set_index.adapter_ram_style",
-        "weight_stream.adapter",
-        "weight_stream.adapter_ram_style",
+        # Each input_gen stage of each chain owns its memory's ram_style.
+        *(
+            key
+            for stream in ("activations", "results", "set_index", "weight_stream")
+            for key in (
+                f"{stream}.adapter",
+                *(f"{stream}.adapter.{chain}.ram_style" for chain in INPUT_GEN_STAGES),
+            )
+        ),
         "weight_stream.transport",
         "weight_stream.transport.fifo.buffer.depth",
         "weight_stream.transport.fifo.buffer.ram_style",
@@ -333,7 +348,7 @@ def schema(point):
             codec_for(MatMulKernel.packed.simd, INTEGER),
             codec_for(MatMulKernel.compute, STRING),
             codec_for(MatMulKernel.activations.adapter, STRING),
-            codec_for(MatMulKernel.activations.adapter_ram_style, STRING),
+            codec_for(MatMulKernel.activations.adapter["input_gen"].input_gen.ram_style, STRING),
             codec_for(MatMulKernel.packed.compute_pumping, BOOLEAN),
         ),
     )
@@ -344,7 +359,7 @@ def test_selector_and_case_choices_round_trip_through_an_empty_root():
     saved = selections.capture(point)
     assert saved.keys == (
         "activations.adapter",
-        "activations.adapter_ram_style",
+        "activations.adapter.input_gen.input_gen.ram_style",
         "compute",
         "compute.packed.compute_pumping",
         "compute.packed.pe",
@@ -392,7 +407,7 @@ def test_switching_families_is_atomic_and_requires_clearing_stale_case_choices()
     assert delivery(switched) is WeightDelivery.EXTERNAL
     assert selections.capture(switched).keys == (
         "activations.adapter",
-        "activations.adapter_ram_style",
+        "activations.adapter.input_gen.input_gen.ram_style",
         "compute",
         "compute.packed.compute_pumping",
         "compute.packed.pe",

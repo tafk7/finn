@@ -220,7 +220,7 @@ def test_selected_case_identity_is_authored_and_unknown_cases_are_diagnosed() ->
         pass
 
     class Family(Space):
-        implementation: Child = Decision(values={"small": Child(), "fast": Child()})
+        implementation: Child = Decision({"small": Child(), "fast": Child()})
 
     # The selector is bound through the class-level reference to the Decision over nodes.
     schema = SelectionSchema(
@@ -315,7 +315,7 @@ def test_encoded_stale_case_entries_are_rejected_by_atomic_replay() -> None:
 
     class Family(Space):
         left = Child()
-        implementation: Child = Decision(values={"left": left, "right": Child()})
+        implementation: Child = Decision({"left": left, "right": Child()})
 
     base = design_space(Family())
     selector = inspection.choices(base)[0].selector

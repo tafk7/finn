@@ -14,29 +14,10 @@ interchangeable implementation choices.
 
 from __future__ import annotations
 
-
 import math
 import struct
+from collections.abc import Mapping
 
-from finn.kernels.artifacts.abi import Clock, Direction, Endpoint, Reset, Signal
-from finn.kernels.artifacts.contribution_types import CopiedSource
-from finn.kernels.artifacts.derivation import Scalar as BuildScalar
-from finn.kernels.artifacts.requirements import (
-    FixedModuleName,
-    ModuleABIRequirements,
-    ModuleBuildRequirements,
-    ScalarTable,
-)
-from finn.kernels.base import Kernel
-from finn.kernels.datatypes.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
-from finn.kernels.datatypes.domains import Integer
-from finn.kernels.datatypes.scalar import Scalar
-from finn.kernels.physical.ports import native_stream
-from finn.kernels.physical.stream import STREAM_INTERFACES, ReadyValidStream
-from finn.dataflow.datatypes import (
-    QONNXDataType,
-    resolve_qonnx_datatype_name,
-)
 from finn.core.space import (
     ConstraintGroup,
     Param,
@@ -47,6 +28,17 @@ from finn.core.space import (
     reject,
     view,
 )
+from finn.dataflow.datatypes import QONNXDataType, resolve_qonnx_datatype_name
+from finn.dataflow.traversal import BEAT_SEQUENCE, BeatSequence, vector_major
+from finn.kernels.artifacts.abi import Endpoint
+from finn.kernels.artifacts.contribution_types import CopiedSource
+from finn.kernels.base import CLOCKING, NATIVE_CLOCKING, Clocking, Kernel
+from finn.kernels.datatypes.domains import Integer
+from finn.kernels.datatypes.scalar import Scalar
+from finn.kernels.datatypes.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
+from finn.kernels.physical.stream import STREAM_INTERFACES, ReadyValidStream
+from finn.kernels.port import GivenPort
+from finn.kernels.streams import Stream
 from finn.kernels.target import DspBlock
 
 
@@ -61,15 +53,26 @@ class EltwiseOperand(Scalar):
 
 
 class EltwiseKernel(Kernel):
+    """PE results a beat of ``lhs`` and ``rhs``, element by element.
+
+    Placed on streams, each operand's tensor is walked row-major, PE elements
+    of its innermost axis a beat. An ``rhs`` whose shape is a trailing part of
+    ``lhs``'s (a channel vector, say) is broadcast: the port presents it once
+    per ``lhs`` element it meets, and its stream's adapter replays it.
+    """
+
     id = "finnlib.eltwise"
     version = "1"
-    # Off the Kernel protocol until K2: it exports nothing of its own.
-    exports = {}
+    module = "eltwise"
 
     operation: str = Param()
     pe: int = Param()
     lhs_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
     rhs_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
+    # The streams it sits on, when a parent places it.
+    lhs_stream: Stream = Param(required=False)
+    rhs_stream: Stream = Param(required=False)
+    result_stream: Stream = Param(required=False)
 
     @derived(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
     def result_dtype(self) -> QONNXDataType:
@@ -85,11 +88,6 @@ class EltwiseKernel(Kernel):
     lhs_type = EltwiseOperand(dtype=lhs_dtype)
     rhs_type = EltwiseOperand(dtype=rhs_dtype)
     result_type = Scalar(dtype=result_dtype)
-    lhs = native_stream("lhs", pe, Endpoint.TARGET, lhs_type, pins=("adat", "avld", "ardy"))
-    rhs = native_stream("rhs", pe, Endpoint.TARGET, rhs_type, pins=("bdat", "bvld", "brdy"))
-    result = native_stream(
-        "result", pe, Endpoint.INITIATOR, result_type, pins=("odat", "ovld", "ordy")
-    )
 
     b_scale: float = Param()
 
@@ -129,27 +127,115 @@ class EltwiseKernel(Kernel):
             return reject("eltwise-target", "native floating-point arithmetic requires DSP58")
         return True
 
+    @constraint
+    def operands_supported(self) -> bool | Rejected:
+        """Each operand's encoding is one the arithmetic takes."""
+        _ = (self.lhs_type.encoding, self.rhs_type.encoding, self.result_type.encoding)
+        return True
+
+    @constraint
+    def carried(self) -> bool | Rejected:
+        """Each placed stream carries its operand's element."""
+        placed: list[tuple[str, str, QONNXDataType]] = []
+        if self.present(EltwiseKernel.lhs_stream):
+            placed.append(("lhs", self.lhs_stream.tensor.element.datatype_name, self.lhs_dtype))
+        if self.present(EltwiseKernel.rhs_stream):
+            placed.append(("rhs", self.rhs_stream.tensor.element.datatype_name, self.rhs_dtype))
+        if self.present(EltwiseKernel.result_stream):
+            placed.append(
+                ("result", self.result_stream.tensor.element.datatype_name, self.result_dtype)
+            )
+        for name, carried, dtype in placed:
+            if carried != dtype.name:
+                return reject(
+                    "eltwise-stream-element",
+                    f"the {name} stream carries {carried}, the operand {dtype.name}",
+                )
+        return True
+
+    admission = ConstraintGroup(implementation_supported, operands_supported, carried)
+
+    def _walk(self, shape: tuple[int, ...]) -> BeatSequence | Rejected:
+        try:
+            return BeatSequence(vector_major(shape, self.pe))
+        except ValueError as error:
+            return reject("eltwise-stream-form", f"PE={self.pe}: {error}")
+
+    @derived(semantics=BEAT_SEQUENCE)
+    def lhs_sequence(self) -> BeatSequence | Rejected:
+        return self._walk(self.lhs_stream.tensor.shape)
+
+    @derived(semantics=BEAT_SEQUENCE)
+    def rhs_sequence(self) -> BeatSequence | Rejected:
+        """``lhs``'s shape, or a trailing part of it presented once per element it meets."""
+        shape, full = self.rhs_stream.tensor.shape, self.lhs_stream.tensor.shape
+        if full[len(full) - len(shape) :] != shape:
+            return reject(
+                "eltwise-stream-form", f"rhs {shape} is not a trailing part of lhs {full}"
+            )
+        sequence = self._walk(shape)
+        if isinstance(sequence, Rejected):
+            return sequence
+        count = self.lhs_stream.tensor.size // self.rhs_stream.tensor.size
+        return sequence if count == 1 else BeatSequence(sequence.form.repeated(count))
+
+    @derived(semantics=BEAT_SEQUENCE)
+    def result_sequence(self) -> BeatSequence | Rejected:
+        shape = self.result_stream.tensor.shape
+        if shape != self.lhs_stream.tensor.shape:
+            return reject("eltwise-stream-form", "the result keeps lhs's shape")
+        return self._walk(shape)
+
+    lhs = GivenPort(
+        name="lhs",
+        endpoint=Endpoint.TARGET,
+        stream=lhs_stream,
+        sequence=lhs_sequence,
+        idle_dtype=lhs_dtype,
+        idle_lanes=pe,
+        signals=("adat", "avld", "ardy"),
+        clock="clk",
+        reset="rst",
+    )
+    rhs = GivenPort(
+        name="rhs",
+        endpoint=Endpoint.TARGET,
+        stream=rhs_stream,
+        sequence=rhs_sequence,
+        idle_dtype=rhs_dtype,
+        idle_lanes=pe,
+        signals=("bdat", "bvld", "brdy"),
+        clock="clk",
+        reset="rst",
+    )
+    result = GivenPort(
+        name="result",
+        endpoint=Endpoint.INITIATOR,
+        stream=result_stream,
+        sequence=result_sequence,
+        idle_dtype=result_dtype,
+        idle_lanes=pe,
+        signals=("odat", "ovld", "ordy"),
+        clock="clk",
+        reset="rst",
+    )
+
     @view(semantics=STREAM_INTERFACES)
     def interfaces(self) -> tuple[ReadyValidStream, ...] | Rejected:
         if not 1 <= self.pe <= 0xFFFFFFFF:
             return reject("eltwise-interface", "PE must be positive and fit native unsigned int")
-        return (self.lhs.stream, self.rhs.stream, self.result.stream)
+        return (self.lhs.transport, self.rhs.transport, self.result.transport)
 
-    @view(
-        semantics=default_semantics(ModuleBuildRequirements),
-        requires=(implementation_supported,),
-    )
-    def build_requirements(self) -> ModuleBuildRequirements | Rejected:
-        operation = self.operation
-        pe = self.pe
-        a = self.lhs_dtype
-        b = self.rhs_dtype
-        scale = self.native_scale
-        streams = self.interfaces
-        parameter_values: dict[str, BuildScalar] = {
-            "OP": f'"{operation}"',
-            "PE": pe,
-            "B_SCALE": repr(scale),
+    @derived(semantics=CLOCKING)
+    def clocking(self) -> Clocking:
+        return NATIVE_CLOCKING
+
+    def parameters(self) -> Mapping[str, int | str]:
+        a, b = self.lhs_dtype, self.rhs_dtype
+        return {
+            "OP": f'"{self.operation}"',
+            "PE": self.pe,
+            "B_SCALE": repr(self.native_scale),
             "A_FLOAT": int(a.name == "FLOAT32"),
             "B_FLOAT": int(b.name == "FLOAT32"),
             "A_WIDTH": a.bitwidth(),
@@ -158,22 +244,9 @@ class EltwiseKernel(Kernel):
             "B_SIGNED": int(b.signed()),
             "FORCE_BEHAVIORAL": 0,
         }
-        parameters: ScalarTable = tuple(sorted(parameter_values.items()))
-        abi = ModuleABIRequirements(
-            FixedModuleName("eltwise"),
-            (
-                Signal("clk", Direction.IN, 1, Clock()),
-                Signal(
-                    "rst",
-                    Direction.IN,
-                    1,
-                    Reset(active_low=False, synchronous=True, synchronous_to=("clk",)),
-                ),
-                *(pin for stream in streams for pin in stream.pins()),
-            ),
-            tuple((key, str(value)) for key, value in parameters),
-        )
-        sources = tuple(
+
+    def sources(self) -> tuple[CopiedSource, ...]:
+        return tuple(
             CopiedSource("finnlib", path, provides=(f"module:{name}",), requires=requires)
             for path, name, requires in (
                 ("rtl/arith/binopi.sv", "binopi", ()),
@@ -187,9 +260,6 @@ class EltwiseKernel(Kernel):
                 ),
             )
         )
-        return ModuleBuildRequirements(
-            EltwiseKernel.id, EltwiseKernel.version, parameters, abi, sources
-        )
 
 
-__all__ = ["EltwiseKernel"]
+__all__ = ["EltwiseKernel", "EltwiseOperand"]

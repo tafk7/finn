@@ -65,7 +65,7 @@ def test_the_activation_stream_plans_the_replay_and_its_frame():
         (0, 1),
     )
     keys = {item.key for item in inspection.decisions(point)}
-    assert {"activations.adapter", "activations.adapter_ram_style"} <= keys
+    assert {"activations.adapter", "activations.adapter.input_gen.input_gen.ram_style"} <= keys
     assert "replay" not in keys and not hasattr(MatMulKernel, "replayed")
     # A depthwise row passes once: the plan is the frame marker alone.
     facts = {**FACTS, "target_dsp": DspBlock.DSP58, "form": Form.DEPTHWISE}

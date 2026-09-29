@@ -11,7 +11,6 @@ from finn.core.space import Available, Rejected, design_space
 from finn.kernels.artifacts.abi import Direction, Endpoint
 from finn.kernels.eltwise import EltwiseKernel, EltwiseOperand
 from finn.kernels.fifo import FifoKernel
-from finn.kernels.physical.ports import NativeStreamPort
 from finn.kernels.physical.stream import MarkerKind, ReadyValidStream, StreamMarker
 from kernels.test_migrated_rich import generator
 from kernels.test_migrated_simple import eltwise
@@ -134,20 +133,17 @@ endmodule
     assert "FIFO_CAPACITY_PASS" in result.stdout, result.stdout + result.stderr
 
 
-def test_typed_native_ports_bind_separately_owned_operand_scalars():
+def test_eltwise_ports_carry_their_operands_unpadded_on_native_pins():
     mixed = eltwise(lhs="INT5", rhs="FLOAT32", pe=3)
     lhs, rhs, result = mixed.interfaces
     assert (lhs.data, lhs.valid, lhs.ready) == ("adat", "avld", "ardy")
     assert (lhs.data_width, rhs.data_width, result.data_width) == (15, 96, 96)
-    assert [field.bit_offset for field in mixed.lhs.payload.fields] == [0, 5, 10]
-    assert mixed.lhs.payload.unused == ()  # native ports are never padded
-    # Raw port facts do not wait for admission; the accepted stream does.
+    # An operand the arithmetic does not take refuses the kernel, naming the operand.
     refused = eltwise(lhs="FLOAT16", rhs="FLOAT16")
-    assert refused.lhs.payload_bits == 32
-    admission = refused.lhs_type.inspect(EltwiseOperand.admission)
-    assert admission.verdict is False
-    answer = refused.lhs.query(NativeStreamPort.stream)
+    assert refused.lhs.transport.data_width == 32  # the pins do not wait for admission
+    assessment = refused.lhs_type.inspect(EltwiseOperand.admission)
+    assert assessment.verdict is False
+    answer = refused.query(EltwiseKernel.build_requirements)
     assert isinstance(answer, Rejected)
-    assert {finding.owner for finding in answer.findings} == {"lhs_type.supported"}
-    assert isinstance(refused.query(EltwiseKernel.build_requirements), Rejected)
-    assert isinstance(eltwise().result.query(NativeStreamPort.stream), Available)
+    assert "lhs_type.supported" in {finding.owner for finding in answer.findings}
+    assert isinstance(eltwise().query(EltwiseKernel.build_requirements), Available)

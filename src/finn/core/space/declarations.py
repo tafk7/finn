@@ -23,6 +23,7 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
+    Annotated,
     Any,
     Generic,
     NoReturn,
@@ -30,6 +31,7 @@ from typing import (
     TypeVar,
     Union,
     cast,
+    get_args,
     get_origin,
     get_type_hints,
     overload,
@@ -546,8 +548,7 @@ class Decision(ValueDecl[T], Generic[T]):
     bindings only that candidate takes; the keyword arguments are shared
     bindings, supplied to every candidate, each of which must declare them.
     ``optional=True`` adds a ``None`` candidate keyed ``"none"``, which places
-    nothing. ``values={"boiler": Boiler(), ...}`` is the earlier spelling of the
-    same choice, without shared bindings.
+    nothing.
 
     ``heating.area`` reads a member every candidate declares;
     ``heating["pump"].cop`` reads one candidate's member, inapplicable while
@@ -583,9 +584,6 @@ class Decision(ValueDecl[T], Generic[T]):
         when: Guard = None,
         **shared: object,
     ) -> Any: ...
-
-    @overload
-    def __new__(cls, /, *, values: Mapping[str, Space | None], when: Guard = None) -> Any: ...
 
     @overload
     def __new__(  # type: ignore[misc]
@@ -648,13 +646,11 @@ class Decision(ValueDecl[T], Generic[T]):
                 'Decision({"key": Family, ...}, ...)'
             )
         if domain is None and isinstance(values, Mapping):
-            if semantics is not None or name is not None:
-                raise DefinitionError(
-                    "a Decision over nodes persists its key: it takes no semantics= or name="
-                )
-            from ._nodes import node_choice
-
-            return node_choice(values, when=_guard(when))
+            raise DefinitionError(
+                f"Decision{at(source_origin())}: a Decision over nodes lists its candidates as "
+                'entries, Decision({"key": Family, "other": Family(...)}); optional=True adds '
+                'the None candidate "none"'
+            )
         if (domain is None) == (values is None):
             raise DefinitionError("a Decision needs exactly one of domain= or values=")
         if semantics is not None and not isinstance(semantics, ValueSemantics):
@@ -790,6 +786,12 @@ class Derived(ValueDecl[T], Generic[T]):
         self.semantics = semantics
         self.aliases = MappingProxyType(dict(aliases or {}))
         self.when = _guard(when)
+
+    if not TYPE_CHECKING:
+
+        def __getattr__(self, name: str) -> Projection[Any]:
+            # ``facts.word_bits`` in a class body: an attribute of this derived value.
+            return project(self, name)
 
 
 class _DerivedDecorator:
@@ -1256,14 +1258,12 @@ def _attribute_type(owner: object, name: str) -> object:
 
     if not isinstance(owner, type):
         return MISSING
-    try:
-        attribute = inspect.getattr_static(owner, name)
-    except AttributeError:
-        return MISSING
+    # A dataclass field without a default is annotated but no class attribute.
+    attribute = inspect.getattr_static(owner, name, None)
     try:
         if isinstance(attribute, property) and attribute.fget is not None:
-            return get_type_hints(attribute.fget).get("return", MISSING)
-        return get_type_hints(owner).get(name, MISSING)
+            return get_type_hints(attribute.fget, include_extras=True).get("return", MISSING)
+        return get_type_hints(owner, include_extras=True).get(name, MISSING)
     except Exception:
         return MISSING
 
@@ -1286,10 +1286,20 @@ def project(source: ValueRef[Any], name: str) -> Projection[Any]:
 
 
 class Projection(_Symbolic, ValueRef[T], Generic[T]):
-    """An attribute of a referenced value, read in the class body (``spec.payload_bits``)."""
+    """An attribute of a referenced value, read in the class body (``spec.payload_bits``).
+
+    Its semantics are the attribute's class's, or the ``ValueSemantics`` its
+    annotation names (``dims: Annotated[tuple[int, ...], INTEGER_VECTOR]``).
+    """
 
     def __init__(self, source: ValueRef[Any], attribute: str, annotation: object) -> None:
         self.source, self.attribute = source, attribute
+        if get_origin(annotation) is Annotated:
+            named = [item for item in get_args(annotation) if isinstance(item, ValueSemantics)]
+            if named:
+                self.semantics = cast("ValueSemantics[T]", named[0])
+                return
+            annotation = get_args(annotation)[0]
         origin = get_origin(annotation)
         nominal = origin if origin is not None else annotation
         self.semantics = (

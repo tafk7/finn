@@ -29,7 +29,7 @@ def test_authored_names_are_unambiguous_segments(name: str) -> None:
     with pytest.raises(DefinitionError, match="name segment"):
         ViewKey(name, int)
     with pytest.raises(DefinitionError, match="name segment"):
-        Decision(values={name: Space()})
+        Decision({name: Space()})
     with pytest.raises(DefinitionError, match="name segment"):
         composite("Named", {name: Const(3)})
     family = type("BadIdentity", (Space,), {name: Const(3)})
@@ -46,14 +46,17 @@ def test_malformed_candidates_fail_as_definitions() -> None:
 
     with pytest.raises(DefinitionError, match="Space base family"):
         composite("NotSpace", {}, base=cast(type[Space], int))
-    with pytest.raises(DefinitionError, match="expected a node declaration or None"):
-        Decision(values={"case": cast(Space, 4)})
+    with pytest.raises(DefinitionError, match="must be a family or a call on one"):
+        Decision({"case": cast(Space, 4)})
+    # The mapping spelling is retired: candidates are entries.
+    with pytest.raises(DefinitionError, match="lists its candidates as entries"):
+        Decision(values={"case": Holder()})
     with pytest.raises(DefinitionError, match="takes a node declaration"):
         Holder(held=cast(Space, 4))
     with pytest.raises(DefinitionError, match="at least one candidate"):
-        Decision(values={})
-    with pytest.raises(DefinitionError, match="needs a node candidate"):
-        Decision(values={"none": None})
+        Decision({})
+    with pytest.raises(DefinitionError, match="at least one candidate"):
+        Decision({}, optional=True)  # the None candidate alone places nothing
     # Choice exports are removed; a duplicate export name is refused on the family.
     first = ViewKey("result", int)
     second = ViewKey("result", int)
@@ -69,7 +72,7 @@ def test_malformed_candidates_fail_as_definitions() -> None:
 
 def test_case_ids_can_use_hyphens_without_becoming_paths() -> None:
     class Root(Space):
-        implementation: Space = Decision(values={"low-area": Space()})
+        implementation: Space = Decision({"low-area": Space()})
 
     point = design_space(Root())
     (choice,) = inspection.choices(point)

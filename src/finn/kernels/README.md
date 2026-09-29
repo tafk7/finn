@@ -40,15 +40,17 @@ work while preserving the independent Space and artifact systems. It describes
 planned changes, not additional APIs already delivered here.
 
 ```text
-base.py                  the Kernel protocol: module, ports' buses, parameters, clocking, admission
-port.py                  Port nodes: one stream interface each (element admission, sequence, pins)
+base.py                  the Kernel protocol: module, ports' pins, parameters, clocking, admission
+port.py                  Port nodes: native word ports and stream ports (admission, sequence, pins)
 dotp.py                  dotp_axi on three ports, one kernel per compute core, its own folds
 matmul.py                MatMulKernel: facts m, n, k and form; compute and memory Decisions
 rom.py                   RomKernel: a stored operand streamed cyclically from a ROM
-streaming.py             initialized cyclic word delivery
 memstream.py             FinnLib memstream_axi as a weight memory (writable, sets, INIT_FILE)
 streams.py               Stream: tensor, ends, plan, adapter and transport Decisions; netlist
 adapters.py              a stream's adapter candidates: input_gen / vpc chains carrying out a plan
+input_generator.py       FinnLib input_gen: a buffered reorder with loop-end markers
+vpc.py                   FinnLib vpc: the same elements, another number a beat
+fifo.py                  FinnLib fifo: opaque words, a stream's transport stage
 transpose.py             FinnLib inner_shuffle, placed explicitly between two streams
 target.py                DSP targets and port capacities
 physical/                typed native/AXIS ports, detached packing, wiring and lowering
@@ -159,8 +161,9 @@ derives a `plan` (`finn.dataflow.plan`): empty when the two connect directly
 conversions and marker synthesis. A non-empty plan opens the stream's
 `adapter` Decision over seven fixed chains of FinnLib `input_gen` and `vpc`
 (`finn.kernels.adapters`); each refuses a plan it does not carry out, so one
-survives, and `settle` (`finn.kernels.configure`) commits it. `adapter_ram_style` chooses the
-`input_gen`'s memory. A stream constructed with `adaptable=False` admits no
+survives, and `settle` (`finn.kernels.configure`) commits it. Each chain places its
+modules as kernel children (`InputGeneratorKernel`, `VpcKernel`), and each
+`input_gen` child chooses its memory (`<stream>.adapter.<chain>.<stage>.ram_style`). A stream constructed with `adaptable=False` admits no
 adapter and refuses a non-empty plan (`stream-plan`). Between two kernels the
 same stream joins independently folded ends: `tests/kernels/test_two_kernels.py`
 joins a PE = 4 producer to a SIMD = 2 consumer through `vpc` and `input_gen`.
@@ -225,7 +228,7 @@ point = commit(
 )
 # The activation stream's plan (replay and frame) needs an adapter: settle the one,
 # then choose its memory.
-point = commit(settle(point).point, {"activations.adapter_ram_style": "auto"})
+point = commit(settle(point).point, {"activations.adapter.input_gen.input_gen.ram_style": "auto"})
 structure = point.structure.structure
 assert [item.instance_id for item in structure.instances] == [
     "u_compute_packed",
@@ -324,10 +327,10 @@ accepted `encoding` view before building pins.
 associations. `pins()` preserves their exact widths. `axis_bus()` requires
 byte-aligned data and at most one LAST marker; it does not pad words or relabel
 loop/replay completion markers. `AxiStream` uses this same transport lowering
-while retaining its typed packing. Typed ports (`native_stream`, `axi_stream`)
-produce these records from lanes of an accepted scalar. Opaque words need no
-scalar: FIFO, input generation and width conversion construct `ReadyValidStream` values
-directly rather than publishing unpadded words as AXI buses.
+while retaining its typed packing. A kernel's `Port` nodes (`finn.kernels.port`)
+produce these records: a `StreamPort` from lanes of its stream's element, on an
+AXIS bus or on named native pins; a `WordPort` for opaque words (FIFO, input
+generation and width conversion), never published as AXI buses.
 
 A `StreamContract` (`physical/contract.py`) adds the logical sequence to a
 transport: the element encoding, a `Traversal` (`finn.dataflow.traversal`), a
@@ -357,9 +360,9 @@ lane permutation), padding, handshake and marker wire. The derived reorders
 reproduce the tiled MVU's two hard-coded `input_gen` stages and FINN's
 OuterShuffle coefficients exactly (see `tests/kernels/test_stream_contract.py`).
 
-`CyclicDelivery` streams a constant integer operand in whatever traversal its
+`RomKernel` streams a constant integer operand in whatever traversal its
 consumer reads, from an initialized ROM, so the consumer's order needs no
-adapter. Its `output` view is a cyclic stream contract; the same kernel feeds
+adapter. Its `output` port presents a cyclic stream contract; the same kernel feeds
 matmul weight tiles or an eltwise channel vector, inside an operation kernel or
 beside one:
 
@@ -370,7 +373,7 @@ from finn.dataflow.traversal import Adaptation, Repetition, classify, vector_maj
 channels = vector_major((4,), 2)
 vector = design_space(RomKernel(dtype=dtype("INT4"), form=channels, contents=(1, -2, 7, -8)))
 rhs = vector.with_choices(rom_style="distributed")
-assert rhs.output.repetition is Repetition.CYCLIC
+assert rhs.output.contract.repetition is Repetition.CYCLIC
 assert rhs.image == (0xE1, 0x87)
 pixels = vector_major((3, 4), 2)  # three pixels of four channels, two lanes
 assert classify(channels.repeated(3), channels.repeated(3)).adaptation is Adaptation.IDENTITY

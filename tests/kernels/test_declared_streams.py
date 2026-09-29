@@ -130,7 +130,7 @@ def test_explain_shows_per_stream_and_per_member_evidence():
         "first.well_formed",
         "first.compatible",
         "first.ends",
-        "first_source.output",
+        "first_source.output.contract",
         "first_source.build_requirements",
         "modules",
         "streams",
@@ -146,10 +146,10 @@ def test_a_stream_waits_for_its_own_endpoints_only():
     assert isinstance(point.query(Constants.build), Unresolved)
     # A stream sees its users by declaration name and by the input that references it.
     (end,) = point.first.users
-    assert (end.node, end.member) == ("first_source", "output_stream")
+    assert (end.node, end.member) == ("first_source.output", "stream")
     assert end.value.transport.endpoint is Endpoint.INITIATOR  # the source produces
     connection = point.first.connection
-    assert (connection.source_owner, connection.sink_owner) == ("first_source", None)
+    assert (connection.source_owner, connection.sink_owner) == ("first_source.output", None)
     assert connection.sink.transport.name == "out0_V"
 
 
@@ -204,7 +204,7 @@ def test_two_producers_on_one_stream_are_refused_by_the_stream():
     refused = point.shared.query(Stream.connection)
     assert isinstance(refused, Rejected)
     assert {f.code for f in refused.findings} == {"stream-users"}
-    assert "a.output_stream, b.output_stream" in refused.findings[0].message
+    assert "a.output.stream, b.output.stream" in refused.findings[0].message
 
 
 def test_a_boundary_stream_needs_its_port_name():
@@ -242,7 +242,7 @@ class TensorReadingProducer(Space):
 
     @view(semantics=STREAM_CONTRACT)
     def port(self) -> StreamContract:
-        contract = self.source.output
+        contract = self.source.output.contract
         tensor = self.output_stream.tensor  # the stream's tensor shapes the port
         return StreamContract(contract.transport, tensor.element, vector_major(tensor.shape, 2))
 

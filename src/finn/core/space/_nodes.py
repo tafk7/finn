@@ -740,9 +740,13 @@ def entry_choice(
     """
     origin = source_origin()
     where = at(origin)
-    if not isinstance(entries, Mapping) or not entries:
+    if not isinstance(entries, Mapping):
         raise DefinitionError(
             f"Decision{where}: candidate entries map keys to families or calls on them"
+        )
+    if not entries:
+        raise DefinitionError(
+            f"Decision{where}: a Decision over nodes needs at least one candidate"
         )
     if type(optional) is not bool:
         raise DefinitionError(f"Decision{where}: optional= is True or False")

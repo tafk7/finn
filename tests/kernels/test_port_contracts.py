@@ -36,8 +36,9 @@ from finn.dataflow.traversal import (
 )
 from finn.kernels.configure import commit
 from finn.kernels.dotp import Int8Dsp58DotpKernel, PackedDotpKernel
+from finn.kernels.eltwise import EltwiseKernel
 from finn.kernels.matmul import MatMulKernel
-from finn.kernels.port import Port
+from finn.kernels.port import StreamPort
 from finn.kernels.rom import RomKernel
 from finn.kernels.streams import Stream
 from finn.kernels.target import DspBlock
@@ -159,7 +160,7 @@ def test_a_producer_presenting_another_order_is_a_plan_its_stream_adapts():
     rows = placed(weights_form=vector_major((REDUCTION, OUTPUTS), 1))
     assert rows.w_s.plan.steps == (Step.REORDER, Step.WIDTH)
     # dotp's own port is untouched by the producer's order.
-    assert isinstance(narrow.compute.w.query(Port.contract), Available)
+    assert isinstance(narrow.compute.w.query(StreamPort.contract), Available)
     # A stream that admits no adapter refuses the plan, naming it.
     fixed = placed(weights_form=columns_first, adaptable=False)
     refused = fixed.w_s.query(Stream.connection)
@@ -211,3 +212,47 @@ def test_one_kernel_refusal_reaches_only_its_own_stream():
     assert isinstance(point.activations.query(Stream.connection), Available)
     assert isinstance(point.results.query(Stream.connection), Available)
     assert codes(point.weight_stream.query(Stream.connection)) == {"dtype-family"}
+
+
+def eltwise_between(rhs_shape: tuple[int, ...], rhs_dtype: str = "INT4") -> Any:
+    """An ADD between boundary streams: lhs (3, 4), rhs of ``rhs_shape``, PE 2."""
+    int4 = DataType["INT4"]
+
+    class Added(Space):
+        lhs = Stream(tensor=Tensor((3, 4), ScalarEncoding(int4)), port="in0_V")
+        rhs = Stream(tensor=Tensor(rhs_shape, ScalarEncoding(DataType[rhs_dtype])), port="in1_V")
+        out = Stream(tensor=Tensor((3, 4), ScalarEncoding(DataType["INT5"])), port="out0_V")
+        add = EltwiseKernel(
+            operation="ADD",
+            pe=2,
+            lhs_dtype=int4,
+            rhs_dtype=int4,
+            b_scale=1.0,
+            target_dsp=DspBlock.DSP58,
+            lhs_stream=lhs,
+            rhs_stream=rhs,
+            result_stream=out,
+        )
+
+    return design_space(Added())
+
+
+def test_eltwise_broadcasts_a_channel_vector_once_per_pixel():
+    point = eltwise_between((4,))
+    # The rhs port presents the channel vector once per pixel it meets: a whole
+    # pass repeated, which a boundary presents as it is.
+    repeated = vector_major((4,), 2).repeated(3)
+    assert point.add.rhs.sequence.form == repeated
+    assert point.rhs.connection.source.form == repeated
+    assert all(stream.plan.steps == () for stream in (point.lhs, point.rhs, point.out))
+    assert dict(point.add.build_requirements.parameters)["PE"] == 2
+
+
+def test_eltwise_refuses_an_operand_it_cannot_broadcast_or_does_not_carry():
+    misshaped = eltwise_between((3,))
+    refused = misshaped.add.query(EltwiseKernel.rhs_sequence)
+    assert isinstance(refused, Rejected)
+    assert {finding.code for finding in refused.findings} == {"eltwise-stream-form"}
+    other = eltwise_between((4,), rhs_dtype="INT3").add.query(EltwiseKernel.build_requirements)
+    assert isinstance(other, Rejected)
+    assert "eltwise-stream-element" in {finding.code for finding in other.findings}

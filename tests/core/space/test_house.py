@@ -112,7 +112,7 @@ class House(Space):
     garage = Room(area=20, when=want_garage)
     # A class attribute may name a candidate: a typed handle, not a placement.
     heat_pump = HeatPump(kw=8)
-    heating: Boiler | HeatPump = Decision(values={"boiler": Boiler(kw=24), "heat_pump": heat_pump})
+    heating: Boiler | HeatPump = Decision({"boiler": Boiler(kw=24), "heat_pump": heat_pump})
     thermostat = Thermostat(kw=heating.kw)
     hall.area = kitchen.area  # an edge declared after its nodes
     matched = Match(a=kitchen.finish, b=dining.finish)
@@ -232,7 +232,7 @@ class Estate(Space):
     home = House(budget=300)
     home.kitchen.area = 14  # overrides House's 12
     home.kitchen.finish = 2  # pins a Decision: its key disappears
-    home.heating = Decision(values={"heat_pump": HeatPump(kw=6)})  # narrows the choice
+    home.heating = Decision({"heat_pump": HeatPump(kw=6)})  # narrows the choice
     home.garage = Room(area=24, finish=1)  # replaces a child node (same family)
 
 

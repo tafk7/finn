@@ -213,7 +213,7 @@ def test_a_transpose_turns_rows_into_columns():
     point = transposed(4, 6, 2)
     shuffle = dict(point.shuffle.build_requirements.parameters)
     assert (shuffle["I"], shuffle["J"], shuffle["SIMD"]) == (4, 6, 2)
-    first = next(point.shuffle.output_form.positions())
+    first = next(point.shuffle.output_sequence.form.positions())
     assert first == ((0, 0, 0), (0, 1, 0))  # column 0, rows 0 and 1
     _ = point.structure
 

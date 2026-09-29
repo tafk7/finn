@@ -143,7 +143,7 @@ def test_nested_custom_instance_initialization_is_rejected() -> None:
         compile_model(Parent)
 
     class ChoiceParent(Space):
-        child: Child = Decision(values={"only": Child(value=1)})
+        child: Child = Decision({"only": Child(value=1)})
 
     with pytest.raises(DefinitionError, match="custom instance __init__"):
         compile_model(ChoiceParent)
@@ -151,8 +151,8 @@ def test_nested_custom_instance_initialization_is_rejected() -> None:
 
 def test_structural_choices_cannot_be_shadowed_on_instances() -> None:
     class Family(Space):
-        implementation: Space = Decision(values={"a": Space(), "b": Space()})
-        singleton: Space = Decision(values={"only": Space()})
+        implementation: Space = Decision({"a": Space(), "b": Space()})
+        singleton: Space = Decision({"only": Space()})
 
     instance = design_space(Family()).with_choices(implementation="a")
     with pytest.raises(AttributeError, match="immutable configuration field"):

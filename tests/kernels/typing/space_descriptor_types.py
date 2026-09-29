@@ -89,7 +89,7 @@ class Pipeline(Space):
 
     # The structural choice: a Decision over nodes, typed as its candidates.
     implementation: FixedImplementation | SmallImplementation = Decision(
-        values={
+        {
             "fast": FixedImplementation(size=size),
             "small": SmallImplementation(size=size),
         }

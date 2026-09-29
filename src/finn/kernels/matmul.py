@@ -44,6 +44,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import Enum
+from fnmatch import fnmatchcase
 from typing import Any, cast
 
 from finn.core.space import (
@@ -88,6 +89,7 @@ from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.physical.structure import PhysicalStructure
 from finn.kernels.rom import RomKernel
 from finn.kernels.streams import (
+    ADAPTER_RAM_STYLES,
     COMPOSED,
     CONNECTION,
     MODULE,
@@ -376,11 +378,11 @@ def _realizes(base: MatMulKernel, choices: dict[str, object]) -> QueryResult[boo
     return Available(True) if cores else reject("matmul-realization", "no core computes it")
 
 
-def _undecided(point: Any, suffix: str) -> list[str]:
-    """Keys ending in ``suffix`` of applicable Decisions not yet committed."""
+def _undecided(point: Any, pattern: str) -> list[str]:
+    """Keys matching ``pattern`` (``fnmatch``) of applicable Decisions not yet committed."""
     found = []
     for item in inspection.decisions(point):
-        if not item.key.endswith(suffix):
+        if not fnmatchcase(item.key, pattern):
             continue
         state = point.field(item.reference).state
         if isinstance(state, Available) and state.value.status != "committed":
@@ -499,7 +501,7 @@ def matmul_assembly(
     )
     # Each stream's one compatible adapter; an input_gen's memory is inferred.
     point = settle(point).point
-    styles = _undecided(point, "adapter_ram_style")
+    styles = _undecided(point, ADAPTER_RAM_STYLES)
     if styles:
         point = commit(point, dict.fromkeys(styles, "auto"))
     composed = point.query(MatMulKernel.structure)

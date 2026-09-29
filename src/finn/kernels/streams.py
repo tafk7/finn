@@ -94,13 +94,12 @@ from finn.kernels.artifacts.build import (
     SELF_CONTAINED_JINJA_RENDERER,
 )
 from finn.kernels.artifacts.derivation import ProducerIdentity
-from finn.kernels.base import MODULE, TIEOFFS, TIEOFFS_SEMANTICS, Tieoffs
+from finn.kernels.base import MODULE, PORT, TIEOFFS, TIEOFFS_SEMANTICS, Tieoffs
 from finn.kernels.control import Exported, top_bus
 from finn.kernels.fifo import FifoKernel
 from finn.kernels.physical.axi_stream import AxiStream
 from finn.kernels.physical.composition import Composition, StreamEnd
 from finn.kernels.physical.contract import (
-    STREAM_CONTRACT,
     Mismatch,
     StreamContract,
     compatibility,
@@ -110,7 +109,6 @@ from finn.dataflow.stream import Stream as LogicalStream
 from finn.dataflow.tensor import TENSOR, ScalarEncoding, Tensor
 from finn.dataflow.traversal import BEAT_SEQUENCE, BeatSequence, unreplayed
 from finn.kernels.adapters import (
-    INPUT_GEN_RAM_STYLES,
     STAGE_SEMANTICS,
     STAGES,
     InputGenAdapter,
@@ -122,7 +120,6 @@ from finn.kernels.adapters import (
     StreamAdapter,
     WidthAdapter,
     WidthReorderAdapter,
-    buffers,
 )
 from finn.kernels.physical.lowering import lower_module_structure
 from finn.kernels.physical.structure import PhysicalStructure
@@ -131,6 +128,9 @@ from finn.kernels.physical.validation import abi_pins
 
 # The composed module's clocking pins: its interface convention, not a routing rule.
 CLOCK, CLOCK2X, RESET = "ap_clk", "ap_clk2x", "ap_rst_n"
+
+ADAPTER_RAM_STYLES = "*.adapter.*.ram_style"
+"""The keys (``fnmatch``) of every adapter stage's memory choice, an ``input_gen``'s."""
 
 
 def boundary_contract(
@@ -182,18 +182,13 @@ class StreamFifo(Space):
 
     @view(semantics=STAGE_SEMANTICS)
     def stage(self) -> Stage:
-        element, arriving = self.tensor.element, self.arriving
-        source, sink = self.buffer.interfaces
+        element, arriving, buffer = self.tensor.element, self.arriving, self.buffer
         return Stage(
-            self.buffer.build_requirements,
-            StreamContract(source, element, arriving.form, arriving.repetition),
-            StreamContract(sink, element, arriving.form, arriving.repetition),
+            buffer.build_requirements,
+            StreamContract(buffer.input.transport, element, arriving.form, arriving.repetition),
+            StreamContract(buffer.output.transport, element, arriving.form, arriving.repetition),
             "fifo",
         )
-
-
-PORT = ViewKey("port", STREAM_CONTRACT)
-"""A kernel's port on one stream, exported per reference input."""
 
 
 @dataclass(frozen=True)
@@ -280,35 +275,19 @@ class Stream(LogicalStream):
             End(found.sink_owner, found.sink.element, found.sink.sequence),
         )
 
-    @derived
-    def buffering(self) -> bool:
-        """Whether the adapter the plan takes has an ``input_gen``, whose memory is a choice."""
-        return self.adapting and buffers(self.plan)
-
-    adapter_ram_style: str = Decision(values=INPUT_GEN_RAM_STYLES, when=buffering)
     adapter: StreamAdapter = Decision(
-        values={
-            "input_gen": InputGenAdapter(
-                tensor=LogicalStream.tensor, plan=LogicalStream.plan, ram_style=adapter_ram_style
-            ),
-            "vpc": WidthAdapter(tensor=LogicalStream.tensor, plan=LogicalStream.plan),
-            "vpc_input_gen": WidthReorderAdapter(
-                tensor=LogicalStream.tensor, plan=LogicalStream.plan, ram_style=adapter_ram_style
-            ),
-            "input_gen_vpc": ReorderWidthAdapter(
-                tensor=LogicalStream.tensor, plan=LogicalStream.plan, ram_style=adapter_ram_style
-            ),
-            "input_gen_vpc_input_gen": ReorderWidthMarkersAdapter(
-                tensor=LogicalStream.tensor, plan=LogicalStream.plan, ram_style=adapter_ram_style
-            ),
-            "vpc_input_gen_vpc": RegroupAdapter(
-                tensor=LogicalStream.tensor, plan=LogicalStream.plan, ram_style=adapter_ram_style
-            ),
-            "vpc_input_gen_vpc_input_gen": RegroupMarkersAdapter(
-                tensor=LogicalStream.tensor, plan=LogicalStream.plan, ram_style=adapter_ram_style
-            ),
+        {
+            "input_gen": InputGenAdapter,
+            "vpc": WidthAdapter,
+            "vpc_input_gen": WidthReorderAdapter,
+            "input_gen_vpc": ReorderWidthAdapter,
+            "input_gen_vpc_input_gen": ReorderWidthMarkersAdapter,
+            "vpc_input_gen_vpc": RegroupAdapter,
+            "vpc_input_gen_vpc_input_gen": RegroupMarkersAdapter,
         },
         when=LogicalStream.adapting,
+        tensor=LogicalStream.tensor,
+        plan=LogicalStream.plan,
     )
     adapter_admitted = View(adapter.admitted)
     adapter_stages = View(adapter.stages)
@@ -367,8 +346,8 @@ class BufferedStream(Stream):
     """A stream whose ``transport`` after its adapter is direct or a FIFO."""
 
     transport: _Direct | StreamFifo = Decision(
-        values={
-            "direct": _Direct(),
+        {
+            "direct": _Direct,
             "fifo": StreamFifo(tensor=Stream.tensor, arriving=Stream.arriving),
         }
     )
@@ -424,7 +403,8 @@ def netlist(
 
     Each module is instantiated as ``u_<node>``, each stage of a stream as
     ``u_<stream>_<stage>`` (``u_activations_input_gen``, ``u_weights_fifo``). A
-    stream end presented by a kernel's port belongs to that kernel's instance.
+    stream end presented by a kernel's port belongs to that kernel's instance,
+    and a module placed inside a stream is one of that stream's stages.
     Every clock and reset pin is driven by its role (a free clock from
     ``ap_clk``, a clock at twice another from ``ap_clk2x``, a reset from
     ``ap_rst_n``), every exported control bus is wired through to its top port,
@@ -432,6 +412,11 @@ def netlist(
     drives is refused, as is a defect no single stream can see, such as a
     clock-domain conflict.
     """
+    # A module placed inside a stream (an adapter's or a FIFO's) is one of its
+    # stages, wired by the stream as u_<stream>_<stage>.
+    inside = tuple(str(item.node) + "." for item in streams)
+    modules = [item for item in modules if not str(item.node).startswith(inside)]
+    tieoffs = [item for item in tieoffs if not str(item.node).startswith(inside)]
     owners = {str(item.node) for item in modules}
     connections = [
         (
@@ -604,6 +589,7 @@ def _drive(
 
 
 __all__ = [
+    "ADAPTER_RAM_STYLES",
     "BufferedStream",
     "CLOCK",
     "CLOCK2X",

@@ -460,7 +460,7 @@ def test_guards_are_collected_separately_and_respect_inherited_overrides() -> No
         physical = View(result, requires=(support,), when=enabled)
         child = Child(value=1, when=enabled)
         # A singleton structural choice is an ordinary Decision over nodes.
-        implementation: Child = Decision(values={"only": Child(value=1)}, when=enabled)
+        implementation: Child = Decision({"only": Child(value=1)}, when=enabled)
 
     class OverrideGuard(Guarded):
         enabled: bool = Param()
@@ -490,7 +490,7 @@ def test_guards_on_fresh_local_choices_and_alternatives_use_the_placement_scope(
     class Parent(Space):
         enabled: bool = Param()
         child = Child(value=Decision(values=(1,), when=enabled))
-        choice: Child = Decision(values={"one": Child(value=1, when=enabled)})
+        choice: Child = Decision({"one": Child(value=1, when=enabled)})
 
     effective = collect_space(Parent)
     decision = inspection.declaration(Parent.child).bindings["value"]

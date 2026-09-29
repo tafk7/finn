@@ -70,7 +70,7 @@ def test_composite_keeps_narrow_fields_available_and_reuses_accepted_children() 
         optional = Interface(width=16, when=enabled)
         # The structural choice is a Decision over nodes (was SubspaceChoice + exports).
         implementation: Interface | Refused = Decision(
-            values={"normal": Interface(width=32), "refused": Refused()}
+            {"normal": Interface(width=32), "refused": Refused()}
         )
 
         @derived(activation=activation.width, weights=weights.width)
@@ -194,9 +194,10 @@ def test_recursive_structure_is_rejected_before_occurrence_allocation() -> None:
 
 
 def test_choice_members_are_validated_over_all_cases_before_selection() -> None:
-    # SubspaceChoice exports are gone. A member read through a Decision over nodes
-    # is matched by name over every candidate when the family is configured,
-    # before anything is selected; a selected candidate lacking it is inapplicable.
+    # A member read through a Decision over nodes is checked over every candidate
+    # where it is written, before anything is selected. A direct read needs a
+    # member every candidate declares; a qualified read names one candidate and is
+    # inapplicable while another is selected.
     class Complete(Space):
         value = Const(1)
         physical = View(value)
@@ -204,21 +205,27 @@ def test_choice_members_are_validated_over_all_cases_before_selection() -> None:
     class Missing(Space):
         value = Const(2)
 
-    class Nowhere(Space):
-        implementation: Complete | Missing = Decision(
-            values={"complete": Complete(), "missing": Missing()}
-        )
-        absent = View(implementation.absent)  # type: ignore[union-attr]
+    with pytest.raises(AttributeError, match="absent"):
 
-    with pytest.raises(DefinitionError, match="no candidate of implementation has a member absent"):
-        design_space(Nowhere())
+        class Nowhere(Space):
+            implementation: Complete | Missing = Decision(
+                {"complete": Complete(), "missing": Missing()}
+            )
+            absent = View(implementation.absent)  # type: ignore[union-attr]
+
+    with pytest.raises(DefinitionError, match=r"candidates \['missing'\] do not declare"):
+
+        class Unqualified(Space):
+            implementation: Complete | Missing = Decision(
+                {"complete": Complete(), "missing": Missing()}
+            )
+            physical = View(cast(Complete, implementation).physical)
 
     class Partial(Space):
         implementation: Complete | Missing = Decision(
-            values={"complete": Complete(), "missing": Missing()}
+            {"complete": Complete(), "missing": Missing()}
         )
-        # mypy accepts a by-name read only when every candidate has the member.
-        physical = View(cast(Complete, implementation).physical)
+        physical = View(implementation["complete"].physical)  # type: ignore[index]
 
     base = design_space(Partial())
     assert isinstance(base.query(Partial.physical), Unresolved)
@@ -257,7 +264,7 @@ def test_false_choice_guard_does_not_demand_selector_or_case_condition() -> None
     class Root(Space):
         disabled = Const(False)
         unknown: bool = Decision(values=(False, True))
-        choice: Leaf = Decision(values={"a": Leaf(when=unknown), "b": Leaf()}, when=disabled)
+        choice: Leaf = Decision({"a": Leaf(when=unknown), "b": Leaf()}, when=disabled)
 
     point = design_space(Root())
     assert isinstance(point.query(Root.choice), Inapplicable)

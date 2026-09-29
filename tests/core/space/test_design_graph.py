@@ -382,7 +382,7 @@ class WithChoice(Space):
 
     base: int = Param(required=False)
     tuned = Tuned(base=base)
-    choice: Fixed | Tuned = Decision(values={"fixed": Fixed(width=8), "tuned": tuned})
+    choice: Fixed | Tuned = Decision({"fixed": Fixed(width=8), "tuned": tuned})
     physical = View(choice.physical)
 
 

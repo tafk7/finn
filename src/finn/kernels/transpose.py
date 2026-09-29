@@ -13,27 +13,24 @@ lane count instead.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 from finn.core.space import (
+    ConstraintGroup,
     Decision,
     Param,
     Rejected,
+    constraint,
     default_semantics,
     derived,
     reject,
-    view,
 )
-from finn.dataflow.traversal import TRAVERSAL, Traversal
-from finn.kernels.adapters import clock_reset, native
+from finn.dataflow.traversal import BEAT_SEQUENCE, TRAVERSAL, BeatSequence, Traversal
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.contribution_types import CopiedSource
-from finn.kernels.artifacts.requirements import (
-    FixedModuleName,
-    ModuleABIRequirements,
-    ModuleBuildRequirements,
-)
-from finn.kernels.base import Kernel
-from finn.kernels.physical.contract import STREAM_CONTRACT, StreamContract
-from finn.kernels.streams import MODULE, PORT, Stream
+from finn.kernels.base import CLOCKING, NATIVE_CLOCKING, Clocking, Kernel
+from finn.kernels.port import GivenPort
+from finn.kernels.streams import Stream
 
 
 class TransposeKernel(Kernel):
@@ -52,6 +49,7 @@ class TransposeKernel(Kernel):
 
     id = "finnlib.inner_shuffle"
     version = "1"
+    module = "inner_shuffle"
 
     input_stream: Stream = Param()
     output_stream: Stream = Param()
@@ -81,79 +79,90 @@ class TransposeKernel(Kernel):
             )
         return (rows, cols, simd)
 
-    @derived(semantics=TRAVERSAL)
-    def output_form(self) -> Traversal:
+    @constraint
+    def transposable(self) -> bool | Rejected:
+        """A banked matrix, and the same element out as in."""
+        _ = self.matrix
+        carried, produced = self.input_stream.tensor.element, self.output_stream.tensor.element
+        if carried != produced:
+            return reject(
+                "transpose-element",
+                f"the output carries {produced.datatype_name}, the input {carried.datatype_name}",
+            )
+        return True
+
+    admission = ConstraintGroup(transposable)
+
+    @derived(semantics=BEAT_SEQUENCE)
+    def input_sequence(self) -> BeatSequence:
+        return BeatSequence(self.input_form)
+
+    @derived(semantics=BEAT_SEQUENCE)
+    def output_sequence(self) -> BeatSequence:
         form = self.input_form
         rows, cols, simd = self.matrix
         shape, last = form.shape, len(form.shape) - 1
-        return Traversal.over(
-            shape,
-            (
-                *((axis, shape[axis], 1) for axis in range(last - 1)),
-                (last, cols, 1),
-                (last - 1, rows // simd, simd),
-            ),
-            ((last - 1, simd, 1),),
+        return BeatSequence(
+            Traversal.over(
+                shape,
+                (
+                    *((axis, shape[axis], 1) for axis in range(last - 1)),
+                    (last, cols, 1),
+                    (last - 1, rows // simd, simd),
+                ),
+                ((last - 1, simd, 1),),
+            )
         )
 
-    @view(semantics=STREAM_CONTRACT)
-    def input_port(self) -> StreamContract:
-        element, form = self.input_stream.tensor.element, self.input_form
-        transport = native("input", form.lanes * element.bits, Endpoint.TARGET)
-        return StreamContract(transport, element, form)
+    input = GivenPort(
+        name="input",
+        endpoint=Endpoint.TARGET,
+        stream=input_stream,
+        sequence=input_sequence,
+        signals=("idat", "ivld", "irdy"),
+        clock="clk",
+        reset="rst",
+    )
+    output = GivenPort(
+        name="output",
+        endpoint=Endpoint.INITIATOR,
+        stream=output_stream,
+        sequence=output_sequence,
+        signals=("odat", "ovld", "ordy"),
+        clock="clk",
+        reset="rst",
+    )
 
-    @view(semantics=STREAM_CONTRACT)
-    def output_port(self) -> StreamContract:
-        element, form = self.input_stream.tensor.element, self.input_form
-        transport = native("output", form.lanes * element.bits, Endpoint.INITIATOR)
-        return StreamContract(transport, element, self.output_form)
+    @derived(semantics=CLOCKING)
+    def clocking(self) -> Clocking:
+        return NATIVE_CLOCKING
 
-    @view(semantics=default_semantics(ModuleBuildRequirements))
-    def build_requirements(self) -> ModuleBuildRequirements:
-        element = self.input_stream.tensor.element
+    def parameters(self) -> Mapping[str, int | str]:
         rows, cols, simd = self.matrix
-        parameters = (
-            ("BITS", element.bits),
-            ("I", rows),
-            ("J", cols),
-            ("RAM_STYLE", f'"{self.ram_style}"'),
-            ("SIMD", simd),
-        )
-        abi = ModuleABIRequirements(
-            FixedModuleName("inner_shuffle"),
-            (
-                *clock_reset(),
-                *self.input_port.transport.pins(),
-                *self.output_port.transport.pins(),
-            ),
-            tuple((name, str(value)) for name, value in parameters),
-        )
-        return ModuleBuildRequirements(
-            TransposeKernel.id,
-            TransposeKernel.version,
-            parameters,
-            abi,
-            (
-                CopiedSource("finnlib", "rtl/infra/fifo.sv", provides=("module:fifo",)),
-                CopiedSource(
-                    "finnlib",
-                    "rtl/infra/elasticmem.sv",
-                    provides=("module:elasticmem",),
-                    requires=("module:fifo",),
-                ),
-                CopiedSource(
-                    "finnlib",
-                    "rtl/shape/inner_shuffle.sv",
-                    provides=("module:inner_shuffle",),
-                    requires=("module:elasticmem", "module:fifo"),
-                ),
-            ),
-        )
+        return {
+            "BITS": self.input_stream.tensor.element.bits,
+            "I": rows,
+            "J": cols,
+            "RAM_STYLE": f'"{self.ram_style}"',
+            "SIMD": simd,
+        }
 
-    exports = {
-        MODULE: build_requirements,
-        PORT: {input_stream: input_port, output_stream: output_port},
-    }
+    def sources(self) -> tuple[CopiedSource, ...]:
+        return (
+            CopiedSource("finnlib", "rtl/infra/fifo.sv", provides=("module:fifo",)),
+            CopiedSource(
+                "finnlib",
+                "rtl/infra/elasticmem.sv",
+                provides=("module:elasticmem",),
+                requires=("module:fifo",),
+            ),
+            CopiedSource(
+                "finnlib",
+                "rtl/shape/inner_shuffle.sv",
+                provides=("module:inner_shuffle",),
+                requires=("module:elasticmem", "module:fifo"),
+            ),
+        )
 
 
 __all__ = ["TransposeKernel"]

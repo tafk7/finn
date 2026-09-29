@@ -164,7 +164,7 @@ def test_tiled_mvu_weight_chunks_are_a_width_conversion_a_delivery_can_avoid():
     values = tuple(tuple((row * MW + col) % 7 - 3 for col in range(MW)) for row in range(MH))
     source = design_space(RomKernel(dtype=DataType["INT3"], form=chunked, contents=values))
     sink = contract(chunked.repeated(R // T), Endpoint.TARGET)
-    produced = source.output
+    produced = source.output.contract
     assert compatibility(produced, sink, source_is_top=False, sink_is_top=False) == ()
 
 
@@ -269,7 +269,7 @@ def delivery(form=None, values=(1, -2, 7, -8), **choices):
 
 def test_delivery_publishes_a_cyclic_contract_and_waits_only_for_its_own_choice():
     base = delivery()
-    output = base.output
+    output = base.output.contract
     assert output.repetition is Repetition.CYCLIC and output.form == vector_major((4,), 2)
     assert output.payload_bits == output.transport.data_width == 8
     assert base.image == (0xE1, 0x87)
@@ -341,7 +341,7 @@ def eltwise_with_constant(*, form=None, rhs_form=None):
         StreamEnd(None, x_top), StreamEnd("u_eltwise", StreamContract(lhs, INT4, pixels))
     )
     composition.connect(
-        StreamEnd("u_rhs", source.output),
+        StreamEnd("u_rhs", source.output.contract),
         StreamEnd("u_eltwise", StreamContract(rhs, INT4, rhs_form)),
     )
     composition.connect(
@@ -410,7 +410,7 @@ def test_a_pure_lane_permutation_is_realized_as_free_wiring():
         composition.drive(owner, "clk", "ap_clk")
         composition.drive(owner, "rst", "ap_rst_n")
     composition.connect(
-        StreamEnd("u_source", source.output),
+        StreamEnd("u_source", source.output.contract),
         StreamEnd("u_fifo", StreamContract(fifo_in, INT4, wanted)),
     )
     composition.connect(

@@ -121,7 +121,7 @@ def test_misuse_in_a_class_body_names_the_node_by_its_declaration() -> None:
     with pytest.raises(ReferenceUseError, match=r"Decision over \['boiler'\].*\.kw"):
 
         class Heated(Space):
-            heating: Boiler = Decision(values={"boiler": Boiler(kw=3)})
+            heating: Boiler = Decision({"boiler": Boiler(kw=3)})
             size = max(heating.kw, 10)
 
 

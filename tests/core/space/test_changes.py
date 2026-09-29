@@ -273,7 +273,7 @@ def test_selector_and_nested_edit_share_atomic_order_and_inactive_edits_refuse()
         value: int = Decision(values=(1, 2))
 
     class Root(Space):
-        implementation: Child = Decision(values={"a": Child(), "b": Child()})
+        implementation: Child = Decision({"a": Child(), "b": Child()})
 
     base = design_space(Root())
     selector = choices(base)[0].selector
@@ -330,7 +330,7 @@ def test_programmer_failure_after_provisional_admission_never_publishes_a_succes
 
 def test_selector_report_uses_authored_owner() -> None:
     class Root(Space):
-        implementation: Space = Decision(values={"a": Space(), "b": Space()})
+        implementation: Space = Decision({"a": Space(), "b": Space()})
 
     point = design_space(Root())
     selector = choices(point)[0].selector

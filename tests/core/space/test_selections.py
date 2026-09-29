@@ -103,7 +103,7 @@ def test_selector_change_requires_explicit_case_clearing_before_capture() -> Non
 
     class Family(Space):
         left = Child()  # a class attribute naming a candidate: a typed handle
-        implementation: Child = Decision(values={"left": left, "right": Child()})
+        implementation: Child = Decision({"left": left, "right": Child()})
 
     base = design_space(Family())
     selector = inspection.choices(base)[0].selector
@@ -126,7 +126,7 @@ def test_singleton_choices_persist_their_selector_like_any_decision() -> None:
         lanes: int = Decision(values=(1,))
 
     class Family(Space):
-        implementation: Child = Decision(values={"only": Child()})
+        implementation: Child = Decision({"only": Child()})
 
     base = design_space(Family())
     assert isinstance(base.query(Family.implementation.lanes), Unresolved)
@@ -334,7 +334,7 @@ def test_singleton_structural_selection_is_committed_and_replays_on_an_empty_roo
         value: int = Decision(values=(1,))
 
     class Family(Space):
-        choice: Child = Decision(values={"only": Child()})
+        choice: Child = Decision({"only": Child()})
 
     base = design_space(Family())
     committed = base.with_choices(choice="only")

@@ -13,6 +13,7 @@ the budget, located by its name and input. Nothing here is about hardware.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Annotated
 
 import pytest
 
@@ -28,10 +29,13 @@ from finn.core.space import (
     Space,
     Unresolved,
     Users,
+    ValueSemantics,
     ValueUnavailableError,
     ViewKey,
     composite,
     constraint,
+    default_semantics,
+    derived,
     design_space,
     inspection,
     reject,
@@ -150,7 +154,7 @@ class Firm(Space):
     sales = Department(budget=shared)
     inhouse = Department(budget=shared)  # a candidate handle that references the budget
     support: Department | Outsourced | None = Decision(
-        values={"inhouse": inhouse, "outsourced": Outsourced(budget=shared), "none": None}
+        {"inhouse": inhouse, "outsourced": Outsourced(budget=shared)}, optional=True
     )
 
 
@@ -315,3 +319,47 @@ def test_a_read_through_a_reference_input_is_typed_in_the_class_body() -> None:
     assert design_space(Firm()).office.ledger.amount == 30
     with pytest.raises(AttributeError):
         getattr(Office.tariff.rate, "missing")
+
+
+PAIR: ValueSemantics[tuple[int, int]] = ValueSemantics(
+    tuple[int, int],
+    "pair",
+    lambda value: type(value) is tuple and len(value) == 2,
+    lambda left, right: left == right,
+    lambda value: value,
+)
+
+
+@dataclass(frozen=True)
+class Split:
+    head: int
+    tail: int
+    both: Annotated[tuple[int, int], PAIR]
+
+
+def test_an_attribute_of_a_derived_value_is_read_in_the_class_body() -> None:
+    class Ledger(Space):
+        amount: int = Param()
+
+    class Office(Space):
+        total: int = Param()
+
+        @derived(semantics=default_semantics(Split))
+        def split(self) -> Split:
+            head = self.total // 3
+            return Split(head, self.total - head, (head, self.total - head))
+
+        ledger = Ledger(amount=split.tail)  # an attribute of this body's own derived value
+
+    class Paired(Space):
+        pair: tuple[int, int] = Param(semantics=PAIR)
+
+    class Branch(Office):
+        second = Ledger(amount=Office.split.head)  # inherited, read the same way
+        paired = Paired(pair=Office.split.both)  # semantics named by the annotation
+
+    point = design_space(Branch(total=30))
+    assert point.ledger.amount == 20 and point.second.amount == 10
+    assert point.paired.pair == (10, 20)
+    with pytest.raises(AttributeError):
+        getattr(Office.split, "missing")
