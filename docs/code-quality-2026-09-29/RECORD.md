@@ -64,3 +64,32 @@ XSim skipped, dataflow 40; identity identical to `identity-norom.txt`.
 - **Lines.** src −47 net, tests −10 net (12 files, +445 −502, mostly the move).
 - **Gates.** As A: Space 448, kernels 791 + 14 skipped, graph 4 + 2,
   dataflow 40; ruff and mypy clean; examples 27; identity unchanged.
+
+## C: a port carries its kernel's element; the stream checks it
+
+- **Found.** Every stream end's contract took its element from the stream's
+  own tensor, so `Stream.well_formed`'s element check (and `compatibility`'s
+  `stream-element`) could never fail on a live composition. Instead four
+  kernels each re-checked their dtypes against their placed streams:
+  memstream (`carried`, `stored_element`, and the element half of
+  `selected`), thresholding, eltwise and transpose.
+- **Changed.** A `GivenPort` presents the element its kernel gives it
+  (`dtype`, placed or idle); the stream's `well_formed` refuses an end of
+  another element (`stream-tensor`, naming the end). A `ScheduledPort`
+  (dotp) still carries its stream's element, which its `admits` policy
+  admits. `TransposeKernel` gives both ports its input's element, so a
+  transpose between streams of different elements is refused by its output
+  stream. The five kernel checks are deleted.
+- **Names.** `StreamPort.idle_dtype` → `dtype`. Removed:
+  `memstream.stored_element`, the `carried` constraints of memstream,
+  thresholding and eltwise. Refusal codes `memory-element`,
+  `threshold-stream-element`, `eltwise-stream-element` and
+  `transpose-element` are gone: the stream refuses with `stream-tensor` (and
+  its hops with `stream-element`). The refusal moves from the kernel's
+  `build_requirements` and `admission` to the stream's `connection`; a
+  composite still refuses, through its `structure`. No key changed.
+- **Tests.** `test_port_contracts`: the eltwise operand of another element is
+  refused by its stream (`stream-tensor`).
+- **Lines.** src −53 net, tests −2 net (6 files, +48 −100).
+- **Gates.** Space 448, kernels 791 + 14 skipped, graph 4 + 2, dataflow 40;
+  ruff and mypy clean; examples 27; identity unchanged.

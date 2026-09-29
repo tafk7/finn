@@ -254,6 +254,7 @@ def test_eltwise_refuses_an_operand_it_cannot_broadcast_or_does_not_carry():
     refused = misshaped.add.query(EltwiseKernel.rhs_sequence)
     assert isinstance(refused, Rejected)
     assert {finding.code for finding in refused.findings} == {"eltwise-stream-form"}
-    other = eltwise_between((4,), rhs_dtype="INT3").add.query(EltwiseKernel.build_requirements)
+    # An operand stream of another element: the stream refuses the port's end.
+    other = eltwise_between((4,), rhs_dtype="INT3").rhs.query(Stream.connection)
     assert isinstance(other, Rejected)
-    assert "eltwise-stream-element" in {finding.code for finding in other.findings}
+    assert "stream-tensor" in {finding.code for finding in other.findings}

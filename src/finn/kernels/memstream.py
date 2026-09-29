@@ -42,7 +42,6 @@ from finn.dataflow.datatypes import (
     ordinary_integer_bounds,
     resolve_qonnx_datatype_name,
 )
-from finn.dataflow.tensor import ScalarEncoding
 from finn.dataflow.traversal import (
     BEAT_SEQUENCE,
     TRAVERSAL,
@@ -70,16 +69,6 @@ from finn.kernels.port import GivenPort
 from finn.kernels.streams import Stream
 
 MEMSTREAM_RAM_STYLES = ("auto", "distributed", "block", "ultra")
-
-
-def stored_element(carried: ScalarEncoding, stored: ScalarEncoding) -> bool | Rejected:
-    """A memory's output stream carries the element the memory stores."""
-    if carried != stored:
-        return reject(
-            "memory-element",
-            f"the stream carries {carried.datatype_name}, the memory stores {stored.datatype_name}",
-        )
-    return True
 
 
 class MemStreamKernel(Kernel):
@@ -130,13 +119,6 @@ class MemStreamKernel(Kernel):
         return True
 
     @constraint
-    def carried(self) -> bool | Rejected:
-        """The stream it drives, when placed, carries the element it stores."""
-        if not self.present(MemStreamKernel.output_stream):
-            return True
-        return stored_element(self.output_stream.tensor.element, self.element.encoding)
-
-    @constraint
     def selected(self) -> bool | Rejected:
         """Several sets take a set stream of indices, one a beat; a single set none."""
         placed = self.present(MemStreamKernel.set_stream)
@@ -146,15 +128,11 @@ class MemStreamKernel(Kernel):
             return True
         if not placed:
             return reject("memstream-set-stream", "several sets take a set stream")
-        tensor = self.set_stream.tensor
-        index = self.set_dtype
-        if tensor.element.datatype_name != index.name or len(tensor.shape) != 1:
-            return reject(
-                "memstream-set-stream", f"the set stream carries a vector of {index.name} indices"
-            )
+        if len(self.set_stream.tensor.shape) != 1:
+            return reject("memstream-set-stream", "the set stream carries a vector of indices")
         return True
 
-    admission = ConstraintGroup(geometry_supported, carried, selected)
+    admission = ConstraintGroup(geometry_supported, selected)
 
     @derived(semantics=INTEGER_VECTOR)
     def image(self) -> IntegerVector | Rejected:
@@ -248,7 +226,7 @@ class MemStreamKernel(Kernel):
         endpoint=Endpoint.TARGET,
         stream=set_stream,
         sequence=set_sequence,
-        idle_dtype=set_dtype,
+        dtype=set_dtype,
         signals=("s_axis_0_tdata", "s_axis_0_tvalid", "s_axis_0_tready"),
         clock="clk",
         reset="rst",
@@ -258,7 +236,7 @@ class MemStreamKernel(Kernel):
         endpoint=Endpoint.INITIATOR,
         stream=output_stream,
         sequence=output_sequence,
-        idle_dtype=dtype,
+        dtype=dtype,
         idle_lanes=output_sequence.form.lanes,
         clock="clk",
         reset="rst",
@@ -318,4 +296,4 @@ def _leaves(values: object) -> tuple[int, ...]:
     return tuple(leaf for item in values for leaf in _leaves(item))
 
 
-__all__ = ["MEMSTREAM_RAM_STYLES", "MemStreamKernel", "stored_element"]
+__all__ = ["MEMSTREAM_RAM_STYLES", "MemStreamKernel"]

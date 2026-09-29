@@ -25,10 +25,12 @@ from finn.core.space import (
     derived,
     reject,
 )
+from finn.dataflow.datatypes import QONNXDataType
 from finn.dataflow.traversal import BEAT_SEQUENCE, TRAVERSAL, BeatSequence, Traversal
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.contribution_types import CopiedSource
 from finn.kernels.base import CLOCKING, NATIVE_CLOCKING, Clocking, Kernel
+from finn.kernels.datatypes.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
 from finn.kernels.port import GivenPort
 from finn.kernels.streams import Stream
 
@@ -81,15 +83,14 @@ class TransposeKernel(Kernel):
 
     @constraint
     def transposable(self) -> bool | Rejected:
-        """A banked matrix, and the same element out as in."""
+        """A banked matrix: row-major, SIMD dividing both sides."""
         _ = self.matrix
-        carried, produced = self.input_stream.tensor.element, self.output_stream.tensor.element
-        if carried != produced:
-            return reject(
-                "transpose-element",
-                f"the output carries {produced.datatype_name}, the input {carried.datatype_name}",
-            )
         return True
+
+    @derived(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
+    def dtype(self) -> QONNXDataType:
+        """The element it moves: the input's, unchanged."""
+        return self.input_stream.tensor.element.dtype
 
     admission = ConstraintGroup(transposable)
 
@@ -119,6 +120,7 @@ class TransposeKernel(Kernel):
         endpoint=Endpoint.TARGET,
         stream=input_stream,
         sequence=input_sequence,
+        dtype=dtype,
         signals=("idat", "ivld", "irdy"),
         clock="clk",
         reset="rst",
@@ -128,6 +130,7 @@ class TransposeKernel(Kernel):
         endpoint=Endpoint.INITIATOR,
         stream=output_stream,
         sequence=output_sequence,
+        dtype=dtype,
         signals=("odat", "ovld", "ordy"),
         clock="clk",
         reset="rst",
