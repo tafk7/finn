@@ -28,7 +28,8 @@ the standard library. It never imports ``finn.kernels`` or ``finn.parked``.
   the adapter between two traversals of one tensor.
 - ``schedule``: named indices (``Index``, with affine arithmetic) and a
   kernel's ``Schedule`` over them, whose ``present`` derives each port's
-  traversal.
+  traversal; ``bind_extents`` takes the indices' extents from the tensors the
+  ports read (``Access``).
 - ``gemm``: matrix multiplication's canonical indices ``m``, ``n``, ``k`` and
   its operand ``Form``s.
 - ``plan``: the canonical steps between two beat sequences of one tensor.

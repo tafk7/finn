@@ -34,6 +34,25 @@ reads a depthwise operand ``(M, K, N)`` as ``(M, K * N)``.
 
 ``closing`` is the marker a reduction ends with: the reduced indices must be
 the innermost beats.
+
+``bind_extents`` gives the indices their extents from the tensors the ports
+read (each an ``Access``), so a kernel states which index addresses which
+axis and never writes an extent getter:
+
+- An axis addressed by a plain index gives that index the axis's extent; an
+  index given two different extents (by one port or two) is refused.
+- An axis addressed by any other expression (a sliding window
+  ``oh * S + kh``) binds nothing: its indices take their extents from another
+  axis or from the author (``extents``), and it is checked to stay inside the
+  axis.
+- A reshaped access binds nothing (its view's extents are its indices'), and
+  is checked: its indices bound elsewhere, its view the tensor's size.
+- An index nothing binds and the author does not give is refused.
+
+An index bound from an axis walks exactly that axis, so a port whose axes are
+all bound (or read through a checked view) presents every position of its
+tensor: a tensor wider than its kernel's other ports disagrees on an index and
+is refused, not silently left partly unread.
 """
 
 from __future__ import annotations
@@ -241,4 +260,103 @@ class Schedule:
         return LevelEnd(prod(self.steps(index) for index in reduces))
 
 
-__all__ = ["Affine", "Index", "Refused", "Schedule"]
+@dataclass(frozen=True)
+class Access:
+    """One port's read of a tensor: its ``shape`` and the expression of each axis.
+
+    ``name`` names the port in refusals. A ``reshaped`` access reads a
+    row-major view of ``shape`` whose axes are ``index``, each as long as its
+    index's extent (``Schedule.present``'s ``view``).
+    """
+
+    name: str
+    shape: tuple[int, ...]
+    index: tuple[Index | Affine, ...]
+    reshaped: bool = False
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.name, str) or not self.name:
+            raise ValueError("an access has a nonempty name")
+        shape, index = tuple(self.shape), tuple(self.index)
+        for extent in shape:
+            _positive(extent, f"{self.name}'s tensor extent")
+        for axis in index:
+            if not isinstance(axis, (Index, Affine)):
+                raise TypeError("an access's index is built from Index values")
+        if type(self.reshaped) is not bool:
+            raise TypeError("reshaped is a bool")
+        object.__setattr__(self, "shape", shape)
+        object.__setattr__(self, "index", index)
+
+
+def _plain(axis: Index | Affine) -> Index | None:
+    """The index an axis is addressed by alone (coefficient one), if any."""
+    terms = Affine.of(axis).terms
+    return terms[0][0] if len(terms) == 1 and terms[0][1] == 1 else None
+
+
+def bind_extents(
+    accesses: Sequence[Access], extents: Mapping[Index, int] | None = None
+) -> dict[Index, int]:
+    """Each index's extent, from the axes it alone addresses and the ``extents`` given.
+
+    Raises ``Refused`` naming the access and axis: a rank mismatch, an index
+    given two extents, an index without one, a windowed axis reaching past its
+    extent, or a view of another size.
+    """
+    bound: dict[Index, int] = {}
+    origin: dict[Index, str] = {}
+    for index, extent in (extents or {}).items():
+        if not isinstance(index, Index):
+            raise TypeError("extents are given to Index values")
+        if type(extent) is not int or extent < 1:
+            raise Refused(f"the extent given to {index!r} must be a positive integer")
+        bound[index], origin[index] = extent, "given"
+    for access in accesses:
+        if access.reshaped:
+            if any(_plain(axis) is None for axis in access.index):
+                raise Refused(f"{access.name}: a reshaped port reads plain indices")
+        elif len(access.index) != len(access.shape):
+            raise Refused(
+                f"{access.name}: {len(access.index)} indices for a rank-{len(access.shape)} tensor"
+            )
+    # Binding: every plain axis of every access that is not a view.
+    for access in accesses:
+        if access.reshaped:
+            continue
+        for axis, (extent, expression) in enumerate(zip(access.shape, access.index)):
+            plain = _plain(expression)
+            if plain is None:
+                continue
+            here = f"{access.name} axis {axis}"
+            known = bound.setdefault(plain, extent)
+            origin.setdefault(plain, here)
+            if known != extent:
+                raise Refused(f"{plain!r} is {known} ({origin[plain]}) and {extent} ({here})")
+    # Checking: every index has an extent, windows stay inside, views keep the size.
+    for access in accesses:
+        for axis, expression in enumerate(access.index):
+            for index in Affine.of(expression).indices:
+                if index not in bound:
+                    raise Refused(
+                        f"{access.name} axis {axis}: {index!r} has no extent "
+                        "(no axis addresses it alone and none is given)"
+                    )
+        if access.reshaped:
+            view = tuple(bound[Affine.of(axis).indices[0]] for axis in access.index)
+            if prod(view) != prod(access.shape):
+                raise Refused(f"{access.name}: a {access.shape} tensor cannot be viewed as {view}")
+            continue
+        for axis, (extent, expression) in enumerate(zip(access.shape, access.index)):
+            if _plain(expression) is None:
+                terms = Affine.of(expression).terms
+                reach = sum(c * (bound[i] - 1) for i, c in terms)
+                if reach >= extent:
+                    raise Refused(
+                        f"{access.name} axis {axis}: {expression!r} reaches {reach}, "
+                        f"beyond extent {extent}"
+                    )
+    return bound
+
+
+__all__ = ["Access", "Affine", "Index", "Refused", "Schedule", "bind_extents"]
