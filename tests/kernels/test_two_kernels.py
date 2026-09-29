@@ -30,9 +30,7 @@ from finn.kernels.configure import commit
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.dotp import PackedDotpKernel
 from finn.kernels.matmul import exact_result_dtype
-from finn.kernels.streams import (
-    Stream,
-)
+from finn.kernels.streams import Stream
 from finn.kernels.target import DspBlock
 from kernels.helpers import settled
 from kernels.xsim import pack, requires_xsim, stream_through

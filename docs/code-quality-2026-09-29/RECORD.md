@@ -43,3 +43,24 @@ XSim skipped, dataflow 40; identity identical to `identity-norom.txt`.
 - **Gates.** Space 448, kernels 791 + 14 skipped (the dropped port test),
   graph 4 + 2, dataflow 40; ruff and mypy clean; examples 27; identity
   unchanged.
+
+## B: the wiring moves to the composite; one Connection
+
+- **Split.** `streams.py` held two things: the stream family and the wiring
+  of a composite's module. The wiring (`Parts`, `merge_parts`, `netlist`,
+  `Composed`, and the clock, tie-off and wrapper helpers) moves unchanged to
+  `composite.py`, its only consumer; `streams.py` keeps `Stream`,
+  `BufferedStream`, `StreamFifo`, `Connection` and the boundary contract
+  (776 → 415 lines; `composite.py` 176 → 535).
+- **One value.** `Endpoints` was `Connection` without its stages: `endpoints`
+  now derives a `Connection` and `link` adds the stages with `replace`.
+  `boundary_sequence` (one caller) is inlined into the stream's boundary.
+- **Re-exports removed.** `streams` re-exported `MODULE`, `PORT`, `TIEOFFS`,
+  `TIEOFFS_SEMANTICS`, `Tieoffs` and `Stage`; `port` re-exported `PINS` and
+  `HELD`. Each is imported from its owner (`base`, `adapters`).
+- **Names moved.** `finn.kernels.streams.{netlist, merge_parts, Parts, PARTS,
+  PARTS_SEMANTICS, Composed, COMPOSED}` → `finn.kernels.composite`.
+  **Removed:** `Endpoints`, `ENDPOINTS`, `boundary_sequence`. No key changed.
+- **Lines.** src −47 net, tests −10 net (12 files, +445 −502, mostly the move).
+- **Gates.** As A: Space 448, kernels 791 + 14 skipped, graph 4 + 2,
+  dataflow 40; ruff and mypy clean; examples 27; identity unchanged.

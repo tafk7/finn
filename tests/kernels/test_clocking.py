@@ -27,7 +27,7 @@ from finn.kernels.artifacts.derivation import ProducerIdentity
 from finn.kernels.artifacts.requirements import FixedModuleName, ModuleABIRequirements
 from finn.kernels.matmul import matmul_assembly
 from finn.kernels.physical.structure import ConstantBits, PinSlice
-from finn.kernels.streams import Composed, netlist
+from finn.kernels.composite import Composed, netlist
 from finn.kernels.target import DspBlock
 
 MATMUL_FACTS = dict(

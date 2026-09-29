@@ -25,9 +25,7 @@ from finn.dataflow.traversal import Traversal, vector_major
 from finn.kernels.composite import Design
 from finn.kernels.configure import admission, commit
 from finn.kernels.memstream import MemStreamKernel
-from finn.kernels.streams import (
-    Stream,
-)
+from finn.kernels.streams import Stream
 from finn.kernels.thresholding import ThresholdingAxiKernel
 from kernels.helpers import settled
 from finn.kernels.transpose import TransposeKernel

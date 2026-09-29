@@ -75,6 +75,7 @@ from finn.dataflow.gemm import Form
 from finn.dataflow.tensor import TENSOR, ScalarEncoding, Tensor
 from finn.dataflow.traversal import TRAVERSAL, Traversal, period
 from finn.kernels.artifacts.build import ModuleBuildRequirements
+from finn.kernels.base import PORT
 from finn.kernels.artifacts.derivation import ProducerIdentity
 from finn.kernels.configure import admission, commit, describe, settle
 from finn.kernels.control import ControlBus
@@ -87,7 +88,7 @@ from finn.kernels.dotp import Int8Dsp58DotpKernel, PackedDotpKernel
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.physical.structure import PhysicalStructure
 from finn.kernels.composite import Composite
-from finn.kernels.streams import ADAPTER_RAM_STYLES, PORT, BufferedStream, Stream
+from finn.kernels.streams import ADAPTER_RAM_STYLES, BufferedStream, Stream
 from finn.kernels.target import DspBlock
 
 

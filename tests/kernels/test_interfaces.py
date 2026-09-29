@@ -30,9 +30,7 @@ from finn.kernels.dotp import PackedDotpKernel
 from finn.kernels.physical.structure import ConstantBits, PinSlice
 from finn.kernels.physical.validation import abi_pins
 from finn.kernels.resources import resource_root, template_root
-from finn.kernels.streams import (
-    Stream,
-)
+from finn.kernels.streams import Stream
 from finn.kernels.target import DspBlock
 from finn.kernels.thresholding import ThresholdingAxiKernel
 from kernels.helpers import settled

@@ -73,7 +73,7 @@ class Stage:
 
     ``stream`` names the stream that places it when that is not the connection
     it sits in: a stage of a flattened composite's stream, spliced into its
-    parent's connection (``finn.kernels.streams.netlist``).
+    parent's connection (``finn.kernels.composite.netlist``).
     """
 
     requirements: ModuleBuildRequirements | None = None

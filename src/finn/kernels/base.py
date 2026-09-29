@@ -22,7 +22,7 @@ The base derives the rest: the module's ABI (clocking, other pins, then every
 port's pins), ``build_requirements`` (accepted under ``admission``), the
 ``tieoffs`` (the doubled clock while unused, idle ports, and what it holds
 itself) and the exports ``MODULE`` and ``TIEOFFS``. A composite kernel wires
-its children's modules through streams instead (``finn.kernels.streams.netlist``).
+its children's modules through streams instead (``finn.kernels.composite``).
 """
 
 from __future__ import annotations

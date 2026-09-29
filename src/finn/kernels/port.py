@@ -264,11 +264,9 @@ class GivenPort(StreamPort):
 __all__ = [
     "AXI_STREAM",
     "GivenPort",
-    "HELD",
     "INDICES",
     "INTEGER_POLICY",
     "MARKERS",
-    "PINS",
     "Port",
     "SIGNAL_NAMES",
     "ScheduledPort",
