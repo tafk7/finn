@@ -26,7 +26,6 @@ from finn.core.space import (
     default_semantics,
     derived,
     reject,
-    view,
 )
 from finn.dataflow.datatypes import QONNXDataType, resolve_qonnx_datatype_name
 from finn.dataflow.traversal import BEAT_SEQUENCE, BeatSequence, vector_major
@@ -36,7 +35,6 @@ from finn.kernels.base import CLOCKING, NATIVE_CLOCKING, Clocking, Kernel
 from finn.kernels.datatypes.domains import Integer
 from finn.kernels.datatypes.scalar import Scalar
 from finn.kernels.datatypes.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
-from finn.kernels.physical.stream import STREAM_INTERFACES, ReadyValidStream
 from finn.kernels.port import GivenPort
 from finn.kernels.streams import Stream
 from finn.kernels.target import DspBlock
@@ -219,12 +217,6 @@ class EltwiseKernel(Kernel):
         clock="clk",
         reset="rst",
     )
-
-    @view(semantics=STREAM_INTERFACES)
-    def interfaces(self) -> tuple[ReadyValidStream, ...] | Rejected:
-        if not 1 <= self.pe <= 0xFFFFFFFF:
-            return reject("eltwise-interface", "PE must be positive and fit native unsigned int")
-        return (self.lhs.transport, self.rhs.transport, self.result.transport)
 
     @derived(semantics=CLOCKING)
     def clocking(self) -> Clocking:

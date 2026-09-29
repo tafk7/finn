@@ -13,8 +13,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 
-from finn.core.space import ValueSemantics, default_semantics
-
 from finn.kernels.artifacts.abi import Bus, Direction, Endpoint, Member, Signal, StandardProtocol
 
 
@@ -104,7 +102,4 @@ class ReadyValidStream:
         )
 
 
-STREAM_INTERFACES: ValueSemantics[tuple[ReadyValidStream, ...]] = default_semantics(tuple)
-
-
-__all__ = ["MarkerKind", "ReadyValidStream", "StreamMarker", "STREAM_INTERFACES"]
+__all__ = ["MarkerKind", "ReadyValidStream", "StreamMarker"]

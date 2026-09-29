@@ -299,7 +299,6 @@ class Stream(LogicalStream):
         tensor=LogicalStream.tensor,
         plan=LogicalStream.plan,
     )
-    adapter_admitted = View(adapter.admitted)
     adapter_stages = View(adapter.stages)
 
     @derived(semantics=STAGES)

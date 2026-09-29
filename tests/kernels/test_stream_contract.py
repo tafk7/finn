@@ -331,7 +331,7 @@ def eltwise_with_constant(*, form=None, rhs_form=None):
     rhs_form = vector_major((CHANNELS,), PE).repeated(PIXELS) if rhs_form is None else rhs_form
     compute = eltwise(operation="ADD", pe=PE, lhs="INT4", rhs="INT4")
     source = delivery(form, PARAMETERS, ram_style="distributed", pumped_memory=False)
-    lhs, rhs, result = compute.interfaces
+    lhs, rhs, result = (compute.lhs.transport, compute.rhs.transport, compute.result.transport)
     pixels = vector_major((PIXELS, CHANNELS), PE)
     int5 = ScalarEncoding(DataType["INT5"])
 
@@ -409,7 +409,7 @@ def test_a_pure_lane_permutation_is_realized_as_free_wiring():
     values = (((1, 2), (3, 4)), ((5, 6), (7, -8)))
     source = design_space(MemStreamKernel(dtype=DataType["INT4"], form=produced, contents=values))
     fifo = design_space(FifoKernel(word_bits=16, depth=2)).with_choices(ram_style="auto")
-    fifo_in, fifo_out = fifo.interfaces
+    fifo_in, fifo_out = fifo.input.transport, fifo.output.transport
     out = AxiStream("out0_V", DataType["INT4"], 4, endpoint=Endpoint.INITIATOR)
     top = StreamContract(
         out.native(clock="ap_clk", reset="ap_rst_n"), INT4, wanted, Repetition.CYCLIC

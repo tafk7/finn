@@ -25,18 +25,12 @@ from finn.core.space import (
     constraint,
     derived,
     reject,
-    view,
 )
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.contribution_types import CopiedSource
 from finn.kernels.base import CLOCKING, NATIVE_CLOCKING, Clocking, Kernel
 from finn.kernels.datatypes.semantics import INTEGER_VECTOR, IntegerVector
-from finn.kernels.physical.stream import (
-    STREAM_INTERFACES,
-    MarkerKind,
-    ReadyValidStream,
-    StreamMarker,
-)
+from finn.kernels.physical.stream import MarkerKind, StreamMarker
 from finn.kernels.port import MARKERS, WordPort
 
 INPUT_GEN_RAM_STYLES = ("auto", "distributed", "block", "ultra")
@@ -94,10 +88,6 @@ class InputGeneratorKernel(Kernel):
 
     input = WordPort(name="input", endpoint=Endpoint.TARGET, bits=word_bits)
     output = WordPort(name="output", endpoint=Endpoint.INITIATOR, bits=word_bits, markers=loop_ends)
-
-    @view(semantics=STREAM_INTERFACES)
-    def interfaces(self) -> tuple[ReadyValidStream, ...] | Rejected:
-        return (self.input.transport, self.output.transport)
 
     @derived(semantics=CLOCKING)
     def clocking(self) -> Clocking:

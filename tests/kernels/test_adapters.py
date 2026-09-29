@@ -18,11 +18,12 @@ import pytest
 from qonnx.core.datatype import DataType
 
 from finn.core.space import Rejected, Space, design_space
+from finn.core.space.settling import compatible_cases
 from finn.dataflow.plan import Step
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import Traversal, vector_major
 from finn.kernels.composite import Design
-from finn.kernels.configure import commit, compatible
+from finn.kernels.configure import admission, commit
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.streams import (
     Stream,
@@ -160,10 +161,9 @@ def test_exactly_one_candidate_carries_out_each_plan():
         (columns_first(ROWS, CHANNELS, 4), 2, "vpc_input_gen"),
     ):
         point = adapted(source, pe, commit_all=False)
-        found = compatible(point, "x.adapter", lambda p: p.x.query(Stream.adapter_admitted))
-        assert found == (case,)
+        assert compatible_cases(point, "x.adapter", admission) == (case,)
         chosen = commit(point, {"x.adapter": "vpc_input_gen_vpc"})
-        refused = chosen.x.query(Stream.adapter_admitted)
+        refused = admission(chosen.x.adapter)
         assert isinstance(refused, Rejected)
         assert {finding.code for finding in refused.findings} == {"adapter-plan"}
 

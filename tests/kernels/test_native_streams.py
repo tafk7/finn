@@ -18,7 +18,7 @@ from kernels.test_migrated_simple import eltwise
 
 def test_native_streams_are_inspectable_without_storage_choices():
     base = design_space(FifoKernel(word_bits=13, depth=8))
-    source, sink = base.interfaces
+    source, sink = base.input.transport, base.output.transport
     assert source.data_width == sink.data_width == 13
     assert [pin.direction for pin in source.pins()] == [Direction.IN, Direction.IN, Direction.OUT]
     assert [pin.direction for pin in sink.pins()] == [Direction.OUT, Direction.OUT, Direction.IN]
@@ -28,7 +28,7 @@ def test_native_streams_are_inspectable_without_storage_choices():
 
 def test_loop_markers_remain_native_even_when_one_bit():
     for extents, strides in (((6,), (1,)), ((3, 6), (0, 1))):
-        output = generator(bits=16, extents=extents, strides=strides).interfaces[1]
+        output = generator(bits=16, extents=extents, strides=strides).output.transport
         assert output.markers == (StreamMarker("olst", MarkerKind.LOOP_END, len(extents)),)
         with pytest.raises(ValueError, match="single LAST"):
             output.axis_bus()
@@ -135,7 +135,7 @@ endmodule
 
 def test_eltwise_ports_carry_their_operands_unpadded_on_native_pins():
     mixed = eltwise(lhs="INT5", rhs="FLOAT32", pe=3)
-    lhs, rhs, result = mixed.interfaces
+    lhs, rhs, result = mixed.lhs.transport, mixed.rhs.transport, mixed.result.transport
     assert (lhs.data, lhs.valid, lhs.ready) == ("adat", "avld", "ardy")
     assert (lhs.data_width, rhs.data_width, result.data_width) == (15, 96, 96)
     # An operand the arithmetic does not take refuses the kernel, naming the operand.

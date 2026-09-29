@@ -20,8 +20,8 @@ A ``BeatSequence`` (the canon's name, without its Regions) is what one end of
 a stream presents of the tensor it carries: its traversal per pass, whether
 the pass repeats (``Repetition``), and the marker rules it offers or requires.
 ``unreplayed`` is the boundary rule: the receiver of a stream realizes its own
-replay, while whole-pass repetition stays part of the interface. ``once`` and
-``period`` strip replay and whole-pass repetition from a traversal.
+replay, while whole-pass repetition stays part of the interface; ``period``
+strips the whole-pass repetition.
 """
 
 from __future__ import annotations
@@ -235,11 +235,6 @@ def regrouped(form: Traversal, lanes: int) -> Traversal:
     return Traversal(form.shape, beats, fields)
 
 
-def split_beats(form: Traversal, inner_beats: int) -> tuple[tuple[Loop, ...], tuple[Loop, ...]]:
-    """The beat loops above each group of ``inner_beats`` beats, and those within one."""
-    return _split_at(form.beat_loops, inner_beats)
-
-
 def _split_at(loops: Sequence[Loop], inner_beats: int) -> tuple[tuple[Loop, ...], tuple[Loop, ...]]:
     _positive(inner_beats, "inner_beats")
     outer: list[Loop] = list(loops)
@@ -353,18 +348,6 @@ def _reorder(source: Sequence[Loop], sink: Sequence[Loop]) -> Reorder | None:
     )
 
 
-def canonical_loops(loops: Sequence[Loop]) -> tuple[Loop, ...]:
-    """A loop nest in the canonical form a ``Traversal`` stores."""
-    return _canonical(loops)
-
-
-def is_repetition(sink: Traversal, source: Traversal) -> bool:
-    """Whether ``sink`` is ``source`` presented a whole number of times."""
-    if sink == source:
-        return True
-    return sink.beats % source.beats == 0 and sink == source.repeated(sink.beats // source.beats)
-
-
 @dataclass(frozen=True)
 class LevelEnd:
     """A marker closing a loop level: asserted on the last beat of every ``beats`` beats.
@@ -390,7 +373,7 @@ class LevelEnd:
         if form.beats % self.beats:
             return False
         try:
-            split_beats(form, self.beats)
+            _split_at(form.beat_loops, self.beats)
         except ValueError:
             return False
         return True
@@ -444,11 +427,6 @@ def unreplayed(form: Traversal) -> Traversal:
     moving = next((index for index, loop in enumerate(loops) if loop.stride), len(loops))
     kept = (*loops[:moving], *(loop for loop in loops[moving:] if loop.stride))
     return Traversal(form.shape, kept, form.lane_loops)
-
-
-def once(form: Traversal) -> Traversal:
-    """The same traversal with every replay (stride-0) beat loop removed."""
-    return Traversal(form.shape, [loop for loop in form.beat_loops if loop.stride], form.lane_loops)
 
 
 def period(form: Traversal) -> Traversal:
@@ -511,14 +489,10 @@ __all__ = [
     "TRAVERSAL",
     "Traversal",
     "axis_strides",
-    "canonical_loops",
     "classify",
-    "is_repetition",
-    "once",
     "pack",
     "period",
     "regrouped",
-    "split_beats",
     "tile",
     "unreplayed",
     "vector_major",

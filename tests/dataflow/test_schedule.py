@@ -25,7 +25,6 @@ from finn.dataflow.traversal import (
     Reorder,
     Traversal,
     classify,
-    once,
     period,
     tile,
     unreplayed,
@@ -118,7 +117,7 @@ def test_dense_forms_are_mvau_s_hand_written_ones(
     )
     assert schedule.closing((k,)) == LevelEnd(SF)
     # The boundary presents each row once; the replay is the receiver's.
-    assert unreplayed(activation) == once(activation) == vector_major((M, K), SIMD)
+    assert unreplayed(activation) == vector_major((M, K), SIMD)
     # A stored delivery repeats one period of the weights.
     assert period(weights).beats == NF * SF
 

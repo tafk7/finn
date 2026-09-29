@@ -310,11 +310,6 @@ class StreamAdapter(Space):
     def vpc_1_facts(self) -> VpcFacts | Rejected:
         return self._converter("vpc_1")
 
-    @view(semantics=default_semantics(str), requires=(realizes,))
-    def admitted(self) -> str:
-        """Accepted exactly when this chain carries out the plan, whatever the memory."""
-        return self.plan.describe()
-
     @view(semantics=STAGES, requires=(realizes,))
     def stages(self) -> tuple[Stage, ...]:
         """Each child's module and the contracts of its two ports."""
