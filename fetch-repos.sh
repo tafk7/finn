@@ -51,7 +51,7 @@ AUPZU3_BDF_COMMIT="b595ecdf37c7204129517de1773b0895bcdcc2ed"
 # memstream, thresholding, eltwise and input_gen. Bump this together with any
 # change to their source manifests; FINNLIB_ROOT overrides the checkout for
 # local work.
-FINNLIB_COMMIT="b9262df1ba4ee7623f0bbd996e2c7566c411bc5f"
+FINNLIB_COMMIT="d03f2fc3fcb9d0e89eed7fea235078fbef90e086"
 
 QONNX_URL="https://github.com/tafk7/qonnx.git"
 FINN_EXP_URL="https://github.com/Xilinx/finn-experimental.git"

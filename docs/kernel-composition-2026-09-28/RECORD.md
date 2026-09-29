@@ -394,3 +394,23 @@ path is a design note: `docs/constant-weights-2026-09-28/DESIGN.md`.
   and the key `memory.rom.rom_style` are gone.
 - **Fast gates**: Space 448, kernels 792 + 14 XSim skipped, graph 4 + 2 XSim
   skipped, dataflow 40; ruff and mypy clean; documentation examples 27.
+
+## FinnLib: memstream_axi's padding (found by XSim, 2026-09-28)
+
+- **Found.** With the ROM removed, the Design and two-layer XSim tests run
+  memstreams whose words are not byte-aligned (12 bits). FinnLib's
+  `memstream_axi` then drove the padded `m_axis_0_tdata` twice (the data
+  zero-extended, and the padding again): strict `xelab` refuses it (VRFC
+  10-3823). FINN's XSI flow elaborates with `-relax`, which tolerates it,
+  and both drivers write zeros, so the numeric memstream sweeps passed all
+  along. Four XSim tests failed from `b865e8c38`; the graph XSim tests would
+  have too.
+- **Fixed in FinnLib** (user approved the push): `d03f2fc` on the fork,
+  branch `kernels/memstream-padding-20260928`, drives only the data bits in
+  both the plain and the pumped path. Pinned in `fetch-repos.sh`.
+- **Verified** with strict elaboration: the Design (fused and unfused), the
+  two-layer demo, the stream-contract tests (32) and the graph tests with
+  their XSim (6) pass; fast gates green (Space 448, kernels 792 + 14 XSim
+  skipped, graph 4 + 2, dataflow 40).
+- **G1's XSim from its commit** (`d6952761d`): kernels 815, graph 6, all
+  pass.
