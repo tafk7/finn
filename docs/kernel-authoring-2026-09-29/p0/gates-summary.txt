@@ -1,0 +1,81 @@
+# run_gates.sh d2 (patch applied)
+======================== 448 passed in 62.54s (0:01:02) ========================
+All checks passed!
+=== exit=0 :: env PYTHON_BIN=/home/tkeller/prj-kernels/.kernel-venv/bin/python bash scripts/check-space.sh
+============ 46 failed, 744 passed, 15 skipped in 168.06s (0:02:48) ============
+=== exit=1 :: env PYTHONPATH=src:tests /home/tkeller/prj-kernels/.kernel-venv/bin/python -m pytest -q -p no:cacheprovider --confcutdir=tests/kernels tests/kernels
+========================= 2 failed, 4 passed in 22.29s =========================
+=== exit=1 :: env PYTHONPATH=src:tests /home/tkeller/prj-kernels/.kernel-venv/bin/python -m pytest -q -p no:cacheprovider --confcutdir=tests/graph tests/graph
+=== exit=0 :: ruff format --check src/finn/kernels tests/kernels src/finn/graph tests/graph scripts/benchmark-space.py
+All checks passed!
+=== exit=0 :: ruff check src/finn/kernels tests/kernels src/finn/graph tests/graph scripts/benchmark-space.py
+=== exit=0 :: env -u PYTHONPATH MYPYPATH=src:tests mypy --no-incremental --strict --explicit-package-bases -p finn.kernels -p finn.graph
+============================== 40 passed in 8.16s ==============================
+All checks passed!
+=== exit=0 :: env PYTHON_BIN=/home/tkeller/prj-kernels/.kernel-venv/bin/python bash scripts/check-dataflow-design.sh
+
+# run_gates.sh base
+======================== 448 passed in 62.03s (0:01:02) ========================
+All checks passed!
+=== exit=0 :: env PYTHON_BIN=/home/tkeller/prj-kernels/.kernel-venv/bin/python bash scripts/check-space.sh
+============ 46 failed, 744 passed, 15 skipped in 168.06s (0:02:48) ============
+=== exit=1 :: env PYTHONPATH=src:tests /home/tkeller/prj-kernels/.kernel-venv/bin/python -m pytest -q -p no:cacheprovider --confcutdir=tests/kernels tests/kernels
+========================= 2 failed, 4 passed in 21.77s =========================
+=== exit=1 :: env PYTHONPATH=src:tests /home/tkeller/prj-kernels/.kernel-venv/bin/python -m pytest -q -p no:cacheprovider --confcutdir=tests/graph tests/graph
+=== exit=0 :: ruff format --check src/finn/kernels tests/kernels src/finn/graph tests/graph scripts/benchmark-space.py
+All checks passed!
+=== exit=0 :: ruff check src/finn/kernels tests/kernels src/finn/graph tests/graph scripts/benchmark-space.py
+=== exit=0 :: env -u PYTHONPATH MYPYPATH=src:tests mypy --no-incremental --strict --explicit-package-bases -p finn.kernels -p finn.graph
+============================== 40 passed in 8.20s ==============================
+All checks passed!
+=== exit=0 :: env PYTHON_BIN=/home/tkeller/prj-kernels/.kernel-venv/bin/python bash scripts/check-dataflow-design.sh
+
+# FAILED (identical in both runs: diff of sorted lists is empty)
+FAILED tests/graph/test_adapter.py::test_the_design_computes_what_onnx_computes[False]
+FAILED tests/graph/test_adapter.py::test_the_design_computes_what_onnx_computes[True]
+FAILED tests/kernels/test_design.py::test_the_design_computes_in_xsim_fused_or_not[False]
+FAILED tests/kernels/test_design.py::test_the_design_computes_in_xsim_fused_or_not[True]
+FAILED tests/kernels/test_flat_kernels.py::test_combinational_conversion_uses_round_toward_zero
+FAILED tests/kernels/test_flat_kernels.py::test_generated_hls_top_executes_signed_values_and_wraps_with_real_vendor_headers
+FAILED tests/kernels/test_flat_kernels.py::test_generated_rtl_preserves_values_sequences_and_backpressure[fifo]
+FAILED tests/kernels/test_flat_kernels.py::test_generated_rtl_preserves_values_sequences_and_backpressure[float]
+FAILED tests/kernels/test_flat_kernels.py::test_generated_rtl_preserves_values_sequences_and_backpressure[generator]
+FAILED tests/kernels/test_flat_kernels.py::test_generated_rtl_preserves_values_sequences_and_backpressure[integer]
+FAILED tests/kernels/test_flat_kernels.py::test_generated_rtl_preserves_values_sequences_and_backpressure[threshold]
+FAILED tests/kernels/test_flat_kernels.py::test_hls_sources_have_native_function_interfaces_and_complete_header_closure[BINARY-ap_uint<1>]
+FAILED tests/kernels/test_flat_kernels.py::test_hls_sources_have_native_function_interfaces_and_complete_header_closure[FLOAT32-float]
+FAILED tests/kernels/test_flat_kernels.py::test_hls_sources_have_native_function_interfaces_and_complete_header_closure[INT9-ap_int<9>]
+FAILED tests/kernels/test_flat_kernels.py::test_hls_sources_have_native_function_interfaces_and_complete_header_closure[UINT3-ap_uint<3>]
+FAILED tests/kernels/test_flat_kernels.py::test_native_rtl_pin_names_directions_and_widths[converter]
+FAILED tests/kernels/test_flat_kernels.py::test_native_rtl_pin_names_directions_and_widths[eltwise]
+FAILED tests/kernels/test_flat_kernels.py::test_native_rtl_pin_names_directions_and_widths[fifo]
+FAILED tests/kernels/test_flat_kernels.py::test_native_rtl_pin_names_directions_and_widths[generator]
+FAILED tests/kernels/test_flat_kernels.py::test_native_rtl_pin_names_directions_and_widths[<lambda>0]
+FAILED tests/kernels/test_flat_kernels.py::test_native_rtl_pin_names_directions_and_widths[<lambda>1]
+FAILED tests/kernels/test_flat_kernels.py::test_native_rtl_pin_names_directions_and_widths[<lambda>2]
+FAILED tests/kernels/test_flat_kernels.py::test_native_rtl_pin_names_directions_and_widths[<lambda>3]
+FAILED tests/kernels/test_flat_kernels.py::test_native_rtl_pin_names_directions_and_widths[<lambda>4]
+FAILED tests/kernels/test_flat_kernels.py::test_native_rtl_pin_names_directions_and_widths[<lambda>5]
+FAILED tests/kernels/test_flat_kernels.py::test_native_rtl_pin_names_directions_and_widths[<lambda>6]
+FAILED tests/kernels/test_flat_kernels.py::test_native_rtl_pin_names_directions_and_widths[<lambda>7]
+FAILED tests/kernels/test_flat_kernels.py::test_native_rtl_pin_names_directions_and_widths[<lambda>8]
+FAILED tests/kernels/test_flat_kernels.py::test_native_rtl_pin_names_directions_and_widths[<lambda>9]
+FAILED tests/kernels/test_flat_kernels.py::test_native_rtl_pin_names_directions_and_widths[threshold]
+FAILED tests/kernels/test_installed_package.py::test_installed_wheel_materializes_independent_kernel_builds
+FAILED tests/kernels/test_interfaces.py::test_the_composed_module_computes_thresholded_dot_products[False]
+FAILED tests/kernels/test_interfaces.py::test_the_composed_module_computes_thresholded_dot_products[True]
+FAILED tests/kernels/test_matmul_assembly.py::test_build_is_complete_and_initializer_changes_identity[WeightDelivery.EXTERNAL]
+FAILED tests/kernels/test_matmul_assembly.py::test_build_is_complete_and_initializer_changes_identity[WeightDelivery.MEMSTREAM]
+FAILED tests/kernels/test_matmul_memory_choice.py::test_ram_style_reaches_the_prepared_build_without_data_slots[auto]
+FAILED tests/kernels/test_matmul_memory_choice.py::test_ram_style_reaches_the_prepared_build_without_data_slots[block]
+FAILED tests/kernels/test_matmul_memory_choice.py::test_ram_style_reaches_the_prepared_build_without_data_slots[distributed]
+FAILED tests/kernels/test_matmul_memory_choice.py::test_ram_style_reaches_the_prepared_build_without_data_slots[ultra]
+FAILED tests/kernels/test_memstream.py::test_matmul_memstream_delivery_materializes_its_image
+FAILED tests/kernels/test_migrated_rich.py::test_hls_view_preserves_cpp_types_interfaces_and_header_closure[BINARY-ap_uint<1>]
+FAILED tests/kernels/test_migrated_rich.py::test_hls_view_preserves_cpp_types_interfaces_and_header_closure[FLOAT32-float]
+FAILED tests/kernels/test_migrated_rich.py::test_hls_view_preserves_cpp_types_interfaces_and_header_closure[INT9-ap_int<9>]
+FAILED tests/kernels/test_migrated_rich.py::test_hls_view_preserves_cpp_types_interfaces_and_header_closure[UINT3-ap_uint<3>]
+FAILED tests/kernels/test_native_streams.py::test_fifo_capacity_and_effective_storage_agree_with_native_rtl
+FAILED tests/kernels/test_stream_contract.py::test_eltwise_with_cyclic_constant_computes_the_broadcast_sum
+FAILED tests/kernels/test_two_kernels.py::test_the_two_layers_compute_in_xsim[False]
+FAILED tests/kernels/test_two_kernels.py::test_the_two_layers_compute_in_xsim[True]

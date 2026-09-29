@@ -1,6 +1,7 @@
 # Plan: kernel authoring — one port, one schedule, checked against the RTL
 
-Date: 2026-09-29. Status: **G0 answered** (2026-09-29); P0 next. Branch
+Date: 2026-09-29. Status: **G0 answered; P0 done and reviewed** (2026-09-29,
+[`p0/REPORT.md`](p0/REPORT.md)); its corrections are folded in below. A1 next. Branch
 `feature/kernel-authoring`, worktree `/home/tkeller/prj-kernels/finn-kernel-authoring`,
 from `347f24f6d` (`feature/kernel-package-extraction` with the code-quality pass
 merged). Nothing is built yet.
@@ -122,8 +123,10 @@ For each sampled fold configuration:
    part of the simulated path.
 
 `Folds`: `SAMPLED` (the four above, deduplicated), `ALL`, or explicit tuples.
-Sampling reads each fold Decision's domain through the engine
-(`compatible_cases`), so a refused fold is never sampled. One simulation per
+Sampling enumerates each scalar fold Decision's domain with
+`point.field(<fold>).candidates()` (`compatible_cases` serves Decisions over
+nodes only; P0 correction 5), so a refused fold is never sampled. A fold whose
+domain is empty while the kernel is flat (eltwise's, G0.4b) is sampled placed. One simulation per
 process holds: `simulate` runs the xsim tools in a subprocess.
 
 ### D2. Engine rule: `T | Rejected` infers `T` (`core/space/_signatures.py`)
@@ -135,12 +138,22 @@ infers the value type's default semantics, as `_answer_value_type` already does
 for `QueryResult[T]`. Explicit `semantics=` still overrides and is still
 checked against the annotation. Protocols and other unions still need it.
 
-Then remove every explicit `semantics=` that the annotation now implies: most
-of the 115 in `finn.kernels` and `finn.dataflow` (`BEAT_SEQUENCE`, `TENSOR`,
-`INDICES`, `CLOCKING`, `SCHEDULE`, `PLAN`, `TRAVERSAL`, ...). What stays: the
-QONNX datatypes (a Protocol), union-typed Params such as `INTEGER_POLICY`
-(`Integer | None`), and named integer tensors (`INTEGER_TENSOR`,
-`INTEGER_VECTOR`, `THRESHOLD_TABLE`). `BEAT_SEQUENCE` and `TRAVERSAL` differ from
+The rule is [`p0/p1_output_semantics.patch`](p0/p1_output_semantics.patch)
+(a `_marked_value_type` helper applied after the `QueryResult` branch). It also
+closes a gap: today an explicit `semantics=` on a union return is never checked
+against its annotation; with the rule it is.
+
+Then remove every explicit `semantics=` the annotation implies: 88 of the 115
+in `finn.kernels` and `finn.dataflow` (P0 count, `p0/count_semantics.out`).
+Of those, **50 are redundant on today's engine** (every `CLOCKING`, `INDICES`
+and `SCHEDULE`, `STAGES`, most `TENSOR`, the 10 plain `BEAT_SEQUENCE`/`TRAVERSAL`)
+and **38 need the rule** (`T | Rejected` returns: `TENSOR`, `SCALAR_ENCODING`,
+`TRANSPORT`, the adapter facts, 7 `BEAT_SEQUENCE`, ...). Constants that also key
+a `ViewKey` (`TIEOFFS_SEMANTICS`, `CONTROL_SEMANTICS`, `CONNECTION_SEMANTICS`,
+`PARTS_SEMANTICS`, `MODULE_REQUIREMENTS`, `EXPORTED_SEMANTICS`) stay as
+constants; only their `semantics=` uses go. What stays (27): the QONNX
+datatypes (a Protocol, 19), `INTEGER_POLICY` (`Integer | None`), and named
+integer tensors (`INTEGER_TENSOR`, `INTEGER_VECTOR`, `THRESHOLD_TABLE`). `BEAT_SEQUENCE` and `TRAVERSAL` differ from
 their defaults only in `name` (used in messages; compatibility compares
 `type_token`) and in snapshotting by identity rather than `deepcopy` (both are
 frozen values), so they are deleted with their uses; A2 confirms the identity
@@ -159,12 +172,17 @@ def bind_extents(accesses: Sequence[Access]) -> dict[Index, int]   # raises Refu
 
 - An axis addressed by a plain `Index` gives that index its extent.
 - An index seen on two axes (one port or two) with different extents is refused.
+- An index no axis addresses alone, and no explicit extent gives, is refused
+  (`kernel-extents`).
 - An axis addressed by an `Affine` of several indices (a sliding window) binds
   nothing; its indices need extents from another axis or from the author
   (`bound_schedule(extents={...})`), and the axis is checked:
   `reach < extent`.
-- A port read through a view (`reshaped`) binds from the view's axes and checks
-  `prod(view) == prod(shape)`.
+- A port read through a view (`reshaped`) **binds nothing** (its view's
+  extents are its indices' extents, so binding from them would be circular). It
+  is checked after binding: every index it reads is bound by another port (or
+  given), and `prod(view) == prod(shape)`. dotp's `x` under the dense
+  realization is bound by `w` (`k`) and `y` (`m`). (P0 correction 2.)
 - **Coverage**: an index bound this way walks its whole axis, so a port's
   traversal covers its tensor exactly when every axis is bound. That closes the
   finding that a too-wide tensor settles silently.
@@ -189,16 +207,32 @@ Derived as today: `sequence` (from the schedule unless given), `element`
 lanes from the folds of its `lanes` indices, known without extents (G0.3);
 `idle_lanes` is deleted.
 
-Kernel base (`finn.kernels.base`) gains two helpers, both reading only its own
-`AxiStreamPort` declarations and their streams' tensors:
+Kernel base (`finn.kernels.base`) gains three helpers, reading only its own
+ports' declarations and their streams' tensors:
 
-- `extents` (derived): `bind_extents` over every placed port with a schedule;
-  refused as `kernel-extents`.
+- **The access export.** Each `AxiStreamPort` with a schedule exports its access
+  (its stream's shape, `index`, `reshaped`) under a new `ACCESS` view key; an
+  idle port exports nothing. The base collects them with `Members(ACCESS)`, as
+  it collects pins with `Members(PINS)`. The export reads Params only, never the
+  port's sequence, so it does not cycle. (Review of P0: the probe's class walk
+  through the private `_nodes.node_record` is not carried into `src`; A4's first
+  test confirms this spelling.)
+- `extents` (derived): `bind_extents` over `Members(ACCESS)`; a `Refused`
+  becomes `reject("kernel-extents", …)`.
 - `bound_schedule(beats, folds, extents=None)`: a `Schedule` over the bound
   extents (plus any explicit ones).
-- `extent_of(index)`: a derived member reading `extents[index]`, for a fold
-  Decision's `divisors_of` domain. (A fold's domain cannot read the schedule,
-  which reads the fold.) Every fold is a Decision (G0.4); a kernel whose fold
+- `extent_of(index)`: a factory returning a derived member that reads
+  `extents[index]` (refused as `kernel-extents` when no port binds it), for a
+  fold Decision's `divisors_of` domain. **It must be named in the class body**
+  (`channels = extent_of(c)`); inline use inside `divisors_of(...)` is refused
+  when the model is linked (P0 correction 3). (A fold's domain cannot read the
+  schedule, which reads the fold.)
+- **Flat folds (G0.4b).** The engine cannot commit a fold whose domain reads an
+  absent stream's extent (P0.5). A kernel whose module needs no extents
+  (eltwise) takes a domain over `extents` itself: the RTL's own bound
+  (`1 <= pe < 2**32`) while unplaced, the divisors once placed. Its name and
+  place (a base helper or not) are settled in A4/A5; it is a domain, not a
+  family. Every fold is a Decision (G0.4); a kernel whose fold
   extent is a fact of its own (thresholding's channels, from its table) uses that
   fact instead, which keeps its flat build.
 
@@ -206,7 +240,10 @@ Kernel base (`finn.kernels.base`) gains two helpers, both reading only its own
 
 Every producing `AxiStreamPort` states `dtype`; the stream's `well_formed`
 refuses a tensor of another element (`stream-tensor`), as code-quality C does
-for `GivenPort`. The `accumulator_fits`-style checks of a type someone else
+for `GivenPort`. The producer's element is `dtype`, placed or idle (P0.4: a
+3-line override on the port). One mismatch is refused today under two codes,
+`stream-tensor` (logical) and `stream-element` (`physical/contract.py`
+`compatibility`); A6 keeps the logical one. The `accumulator_fits`-style checks of a type someone else
 chose become the producer's own `dtype`.
 
 **Rule:** a producer's `dtype` depends on the kernel's facts, choices and input
@@ -277,12 +314,12 @@ G0.4 (thresholding and eltwise `pe`, transpose `simd`), recorded under D7.
 | # | Content | Gate | Evidence | Cost |
 |---|---|---|---|---|
 | **P0** | Probes, in a scratch file: (1) the D2 rule on a copy of `output_semantics`; (2) `bind_extents` read by a kernel's `schedule` (the `sketches/bound_probe.py` result, as a test); (3) `divisors_of(extent_of(c))` with `extent_of` reading a derived dict; (4) a producer port's `dtype` read with its output stream absent; (5) a fold Decision whose `divisors_of` domain reads an absent stream's extent (G0.4b) | report | `docs/kernel-authoring-2026-09-29/p0/` | 0.5 d |
-| **A1** | D1 on today's API: `conformance` for dotp (packed, INT8), thresholding, eltwise, transpose, memstream (identity reference) | kernel gate; XSim from the commit | sampled sweeps pass; a deliberately wrong loop order in a test kernel fails in XSim and passes every Python check (the harness's reason to exist) | 2 d |
-| **A2** | D2: the engine rule, then the mechanical `semantics=` removal | Space + kernel + dataflow gates; identity dump identical; 27 doc examples | counts removed per constant | 1 d |
+| **A1** | `fetch-repos.sh` in this worktree first (the kernel gate needs `deps/`). D1 on today's API: `conformance` for dotp (packed, INT8), thresholding, eltwise, transpose, memstream (identity reference) | kernel gate (green with `deps/`); XSim from the commit | sampled sweeps pass; a deliberately wrong loop order in a test kernel fails in XSim and passes every Python check (the harness's reason to exist) | 2 d |
+| **A2** | D2: the engine rule (the P0 patch) with P0.1's tests moved into the Space suite, then the 88 removals | Space + kernel + dataflow gates with `deps/`; identity dump identical (the removals, not the rule, are what could move it); 27 doc examples | counts removed per constant, against `p0/count_semantics.out` | 1 d |
 | **A3** | D3: `bind_extents` + tests (plain, shared, affine, view, disagreement, coverage) | dataflow gate | the S0 roster's shapes bind; the too-wide-x probe is refused | 1 d |
-| **A4** | D4: `AxiStreamPort`, base `extents`/`bound_schedule`/`extent_of`; dotp migrated; G0.3 applied (idle lanes from folds; flat builds kept for extent-free modules) | all gates; identity; A1's conformance for dotp | `shapes_agree`-class checks deleted; dotp getters gone | 2 d |
+| **A4** | D4: `AxiStreamPort` with its `ACCESS` export, base `extents`/`bound_schedule`/`extent_of`; dotp migrated; G0.3 applied (idle lanes from folds; flat builds kept for extent-free modules) | all gates; identity; A1's conformance for dotp | `shapes_agree`-class checks deleted; dotp getters gone | 2 d |
 | **A5** | thresholding, eltwise, transpose, memstream migrated; their folds become Decisions (G0.4); `StreamPort`/`ScheduledPort`/`GivenPort` deleted | all gates; identity; A1's conformance for each | one port class in `finn.kernels`; eltwise's hand-built broadcast gone | 2 d |
-| **A6** | D5: every producer states `dtype`; the unplaced-output rule checked by conformance | all gates; graph XSim | every output element stated by its kernel; the graph shim's inference now checked against it | 1 d |
+| **A6** | D5: every producer states `dtype`; the unplaced-output rule checked by conformance; one refusal code for an element mismatch (`stream-tensor`) | all gates; graph XSim | every output element stated by its kernel; the graph shim's inference now checked against it | 1 d |
 | **A7** | D6: the authoring guide, `accpool_axi` sketch as its example | doc examples | — | 0.5 d |
 | **Close** | STATUS, RECORD, XSim sweeps from the final commit | — | — | — |
 
@@ -293,16 +330,18 @@ work continues, as in the composition plan.
 
 ## Environment
 
-This worktree has no `deps/` yet. Fast gates need only the kernel venv:
+This worktree owns its `deps/` (fetched with `fetch-repos.sh`, never a
+symlink). The kernel gate needs them, not only XSim: without `deps/`, 46
+`tests/kernels` and 2 `tests/graph` tests fail reading FinnLib or qonnx sources
+(P0 correction 6). Gates (kernel venv):
 
 ```
 PYTHON_BIN=/home/tkeller/prj-kernels/.kernel-venv/bin/python bash scripts/check-kernels.sh
 PYTHON_BIN=/home/tkeller/prj-kernels/.kernel-venv/bin/python bash scripts/check-dataflow-design.sh
 ```
 
-XSim and the conformance sources need FinnLib: run `fetch-repos.sh` in this
-worktree (its own `deps/`, never a symlink) before A1's XSim step. `pyslang`
-11.0.0 is in the venv (D1 step 2).
+`pyslang` 11.0.0 is in the venv (D1 step 2). The P0 probes run without
+`deps/` (see `p0/REPORT.md`, "How to run").
 
 ## Non-goals
 
