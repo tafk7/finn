@@ -9,7 +9,9 @@ testbench module ``check`` against sources and requires it to display
 ``PASS``. ``stream_through`` drives a composed module's AXIS inputs with
 words (under stalls on both sides unless ``stalled`` is False) and checks
 that each AXIS output presents its words, compared on their payload bits (an
-AXIS word is padded to bytes); every other top input is held at zero.
+AXIS word is padded to bytes); every other top input is held at zero. A
+``repeating`` design (fed by a cyclic source) never stops producing: each
+output then takes exactly its words and holds its ready low after them.
 """
 
 from __future__ import annotations
@@ -113,6 +115,7 @@ def stream_through(
     inputs: Mapping[str, Words],
     outputs: Mapping[str, Words],
     stalled: bool = True,
+    repeating: bool = False,
 ) -> None:
     top, sources, data = materialize(requirements, directory)
     for name, text in data.items():  # $readmemh reads an INIT_FILE from the simulator's directory
@@ -156,7 +159,8 @@ def stream_through(
                 {port}_received <= {port}_received + 1;
             end"""
         )
-        drive.append(f"{port}_tready = {ready};")
+        taken = f"{port}_received < {len(words)} && " if repeating else ""
+        drive.append(f"{port}_tready = {taken}({ready});")
         done.append(f"{port}_received == {len(words)}")
     newline = "\n    "
     simulate(

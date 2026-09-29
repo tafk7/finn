@@ -8,7 +8,7 @@ ROOT=$(git rev-parse --show-toplevel)
 SHA=$(git -C "$ROOT" rev-parse --short "$1")
 SNAP=/tmp/a1-xsim-$SHA
 PY=/home/tkeller/prj-kernels/.kernel-venv/bin/python
-rm -rf "$SNAP" && mkdir -p "$SNAP/deps" "$SNAP/logs"
+rm -rf "$SNAP" && mkdir -p "$SNAP/deps" "$SNAP/logs" "$SNAP/tmp"
 git -C "$ROOT" archive "$SHA" | tar -x -C "$SNAP"
 cp -r "$ROOT/deps/finnlib" "$ROOT/deps/qonnx" "$SNAP/deps/"
 cd "$SNAP" || exit 1
@@ -20,7 +20,8 @@ run() {  # <log name> <pytest args...>
     echo "exit=$?" >> "logs/$name.log"
 }
 mapfile -t ids < <("$PY" -m pytest -q --collect-only -p no:cacheprovider --confcutdir=tests/kernels \
-    tests/kernels/test_conformance.py -k xsim | grep "::")
+    tests/kernels/test_conformance.py -k xsim \
+    | sed -n 's#^ *<Function \(.*\)>$#tests/kernels/test_conformance.py::\1#p')
 for id in "${ids[@]}"; do
     run "$(echo "${id#*::}" | tr -c 'A-Za-z0-9_\n-' '_')" "$id" &
 done

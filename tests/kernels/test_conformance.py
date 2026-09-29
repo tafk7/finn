@@ -264,8 +264,21 @@ def test_the_kernel_conforms(case: str) -> None:
     conformance(**CASES[case]())
 
 
+# FinnLib d03f2fc: inner_shuffle.sv:294 reads read_addr before line 309 declares it;
+# xvlog refuses the file (VRFC 10-3380), as the RTL checker's slang does.
+UNCOMPILED = pytest.mark.xfail(
+    raises=NonConformance, strict=True, reason="inner_shuffle.sv does not compile in xvlog"
+)
+
+
 @requires_xsim
-@pytest.mark.parametrize("case", sorted(CASES))
+@pytest.mark.parametrize(
+    "case",
+    [
+        pytest.param(case, marks=UNCOMPILED) if case == "transpose" else case
+        for case in sorted(CASES)
+    ],
+)
 def test_the_kernel_conforms_in_xsim(case: str, tmp_path: Path) -> None:
     conformance(**CASES[case](), xsim=tmp_path)
 
@@ -280,6 +293,8 @@ def test_a_wrong_loop_order_fails_in_xsim(tmp_path: Path) -> None:
     with pytest.raises(NonConformance) as caught:
         conformance(**case, xsim=tmp_path)
     failed = {(sample.label, mode) for sample, mode, _ in caught.value.failures}
+    # Every failure is an output word the RTL computed differently, not a build error.
+    assert all("output_stream word" in message for _, _, message in caught.value.failures)
     chosen = samples(**{key: value for key, value in case.items() if key != "reference"})
     assert failed == {(sample.label, mode) for sample in chosen for mode in ("free", "stalled")}
 

@@ -20,7 +20,8 @@ each sample it
 4. given an ``xsim`` directory, streams random integers in each input's range
    through the design, free and stalled, and compares every output with
    ``reference``: each input packed in the order its boundary presents, each
-   output in its port's order.
+   output in its port's order. Fed by a cyclic source, the design repeats,
+   and each output is compared over its first pass.
 
 The adapter sample feeds the first input from a read-only ``MemStreamKernel``
 presenting ``vector_major`` at another lane count, so that input's stream
@@ -70,7 +71,7 @@ from finn.core.space import (
 from finn.dataflow.datatypes import DatatypeError, ordinary_integer_bounds
 from finn.dataflow.plan import Step
 from finn.dataflow.tensor import ScalarEncoding, Tensor
-from finn.dataflow.traversal import Traversal, pack, unreplayed, vector_major
+from finn.dataflow.traversal import Repetition, Traversal, pack, unreplayed, vector_major
 from finn.kernels.artifacts.abi import ComponentABI
 from finn.kernels.artifacts.requirements import ModuleBuildRequirements
 from finn.kernels.artifacts.rtl import Declined, ExtractedModule, check_abi, extract
@@ -511,13 +512,22 @@ def _simulate(
         assert low <= array.min() and array.max() <= high, f"{name} leaves {end.element}"
         checked[name] = _words(end.form, array.astype(np.int64), end.element)
     requirements = point.structure.requirements
+    # A cyclic source (the adapter sample's memory, or the kernel itself) never stops.
+    repeating = sample.adapter or any(
+        ends[name].repetition is Repetition.CYCLIC for name in produced
+    )
     failures = []
     for stalled in (False, True):
         mode = "stalled" if stalled else "free"
         (directory / mode).mkdir(parents=True)
         try:
             stream_through(
-                requirements, directory / mode, inputs=driven, outputs=checked, stalled=stalled
+                requirements,
+                directory / mode,
+                inputs=driven,
+                outputs=checked,
+                stalled=stalled,
+                repeating=repeating,
             )
         except AssertionError as error:
             failures.append((sample, mode, _brief(str(error))))
