@@ -77,19 +77,7 @@ from finn.dataflow.stream import ENDS, End, Ends
 from finn.dataflow.stream import Stream as LogicalStream
 from finn.dataflow.tensor import TENSOR, ScalarEncoding, Tensor
 from finn.dataflow.traversal import BEAT_SEQUENCE, BeatSequence, unreplayed
-from finn.kernels.adapters import (
-    STAGE_SEMANTICS,
-    STAGES,
-    InputGenAdapter,
-    RegroupAdapter,
-    RegroupMarkersAdapter,
-    ReorderWidthAdapter,
-    ReorderWidthMarkersAdapter,
-    Stage,
-    StreamAdapter,
-    WidthAdapter,
-    WidthReorderAdapter,
-)
+from finn.kernels.adapters import ADAPTERS, STAGE_SEMANTICS, STAGES, Stage, StreamAdapter
 
 
 # The composed module's clocking pins: its interface convention, not a routing rule.
@@ -229,15 +217,7 @@ class Stream(LogicalStream):
         )
 
     adapter: StreamAdapter = Decision(
-        {
-            "input_gen": InputGenAdapter,
-            "vpc": WidthAdapter,
-            "vpc_input_gen": WidthReorderAdapter,
-            "input_gen_vpc": ReorderWidthAdapter,
-            "input_gen_vpc_input_gen": ReorderWidthMarkersAdapter,
-            "vpc_input_gen_vpc": RegroupAdapter,
-            "vpc_input_gen_vpc_input_gen": RegroupMarkersAdapter,
-        },
+        ADAPTERS,
         when=LogicalStream.adapting,
         tensor=LogicalStream.tensor,
         plan=LogicalStream.plan,

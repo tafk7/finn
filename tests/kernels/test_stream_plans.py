@@ -34,32 +34,9 @@ from finn.dataflow.traversal import (
     tile,
     vector_major,
 )
-from finn.kernels.adapters import (
-    Convert,
-    Generate,
-    InputGenAdapter,
-    RegroupAdapter,
-    RegroupMarkersAdapter,
-    ReorderWidthAdapter,
-    ReorderWidthMarkersAdapter,
-    WidthAdapter,
-    WidthReorderAdapter,
-    realize,
-)
+from finn.kernels.adapters import CHAINS, Convert, Generate, realize
 
 Beats = list[tuple[Position, ...]]
-CANDIDATES = {
-    adapter.modules
-    for adapter in (
-        InputGenAdapter,
-        WidthAdapter,
-        WidthReorderAdapter,
-        ReorderWidthAdapter,
-        ReorderWidthMarkersAdapter,
-        RegroupAdapter,
-        RegroupMarkersAdapter,
-    )
-}
 
 
 def generate(beats: Beats, module: Generate) -> tuple[Beats, list[tuple[bool, ...]]]:
@@ -116,7 +93,7 @@ def check(source: BeatSequence, sink: BeatSequence) -> tuple[str, ...]:
             asserted = [mark[depth] for mark in marks]
             assert asserted == [rule.asserted(beat) for beat in range(len(beats))]
     kinds = tuple(stage.kind for stage in stages)
-    assert not found or kinds in CANDIDATES, kinds
+    assert not found or kinds in CHAINS, kinds
     return kinds
 
 

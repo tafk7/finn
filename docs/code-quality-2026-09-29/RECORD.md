@@ -93,3 +93,21 @@ XSim skipped, dataflow 40; identity identical to `identity-norom.txt`.
 - **Lines.** src −53 net, tests −2 net (6 files, +48 −100).
 - **Gates.** Space 448, kernels 791 + 14 skipped, graph 4 + 2, dataflow 40;
   ruff and mypy clean; examples 27; identity unchanged.
+
+## D: the adapter chains are a table
+
+- **Changed.** The seven adapter classes differed only in their stage tuple.
+  `CHAINS` lists the tuples; `ADAPTERS` builds each candidate with the
+  engine's `composite(...)` over `StreamAdapter`, keyed by its modules joined
+  (`vpc_input_gen`), each child named by its stage (`input_gen`, `vpc`,
+  `input_gen_1`, `vpc_1`) and bound to that stage's facts, as before. The
+  stream's `adapter` Decision takes `ADAPTERS`.
+- **Names.** Removed: `InputGenAdapter`, `WidthAdapter`,
+  `WidthReorderAdapter`, `ReorderWidthAdapter`, `ReorderWidthMarkersAdapter`,
+  `RegroupAdapter`, `RegroupMarkersAdapter`. New: `CHAINS`, `ADAPTERS`. The
+  adapter keys (`<stream>.adapter` cases and
+  `<stream>.adapter.<chain>.<stage>.ram_style`) are unchanged.
+- **Tests.** `test_stream_plans` checks each realized chain against `CHAINS`.
+- **Lines.** src −74 net, tests −7 net (3 files, +34 −115).
+- **Gates.** Space 448, kernels 791 + 14 skipped, graph 4 + 2, dataflow 40;
+  ruff and mypy clean; examples 27; identity unchanged.
