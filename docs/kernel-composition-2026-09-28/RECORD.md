@@ -327,3 +327,35 @@ the gate results as observed, key and name changes (D7), and deviations.
   448, kernels 800 + 15 XSim skipped, dataflow 40; ruff and mypy clean;
   documentation examples 27. Before the commit, both XSim variants of the
   Design gate passed locally (fused and unfused).
+
+## G1: the graph adapter, for MatMul
+
+- **Layer.** `finn.kernels` never reads a graph (`test_boundaries` forbids
+  `qonnx.core.modelwrapper` there), so the adapter is a new layer above it,
+  `finn.graph` (`core.space <- dataflow <- kernels <- graph`), tested in
+  `tests/graph` by the kernel gate; `finn.kernels` may not import it.
+- **`graph_design(model, target_dsp=, target_period_ns=)`** reads the model
+  once into a generated `Design`: a stream per exchanged tensor (graph inputs
+  and outputs are `inN_V`/`outN_V` in graph order; leading axes are rows), a
+  `MatMulKernel` per `MatMul` node. An initializer is the kernel's weights,
+  `(k, n)` as ONNX stores them; without one the weights are a stream and
+  `memory` is pinned to `none` (`GraphDesign.pinned`). Each MatMul's exact
+  result type flows downstream; a narrower annotation of that tensor is
+  refused (`FLOAT32` admits anything), as is any other operator
+  (`GraphError`).
+- **FINN attributes.** `MatMulKernel.finn_attributes` (a view) gives the MVAU
+  attributes from the configuration alone: `MW`, `MH`, `SIMD`, `PE`,
+  `numInputVectors`, the three data types and `accDataType`, `mem_mode`
+  (standardization, recorded: none → `external`, ROM → `internal_embedded`,
+  memstream → `internal_decoupled`), `ram_style` (the memory's style),
+  `runtime_writeable_weights`, `pumpedMemory`, `resType` `dsp`,
+  `noActivation` 1; a depthwise MatMul (FINN's VVAU) is refused.
+  `finn_model(model, point, kernels)` rewrites each MatMul as an `MVAU` node
+  with them and annotates its result; FINN's own `MVAU` reads them back.
+- **Tests.** `tests/kernels/xsim.py` is a shared one-in, one-out XSim harness
+  (the Design test uses it). `tests/graph/test_adapter.py`: two MatMuls with
+  initializers compute in XSim what `execute_onnx` computes, fused and
+  unfused; weights without an initializer become `in1_V`; refusals.
+- **Fast gates.** Space 448, kernels 800 + 15 XSim skipped, graph 4 + 2 XSim
+  skipped, dataflow 40; ruff and mypy clean. The XSim tests passed locally
+  before the commit and run again from it.

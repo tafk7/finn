@@ -19,12 +19,14 @@ fi
 # outside this command; their compatibility is not claimed.
 PYTHON_BIN="$PYTHON_BIN" RUFF_BIN="$RUFF_BIN" MYPY_BIN="$MYPY_BIN" bash scripts/check-space.sh
 PYTHONPATH="$RUN_PYTHONPATH" "$PYTHON_BIN" -m pytest -q --confcutdir=tests/kernels tests/kernels
-"$RUFF_BIN" format --check src/finn/kernels tests/kernels \
+# The graph adapters, the layer above finn.kernels.
+PYTHONPATH="$RUN_PYTHONPATH" "$PYTHON_BIN" -m pytest -q --confcutdir=tests/graph tests/graph
+"$RUFF_BIN" format --check src/finn/kernels tests/kernels src/finn/graph tests/graph \
     scripts/benchmark-space.py
-"$RUFF_BIN" check src/finn/kernels tests/kernels \
+"$RUFF_BIN" check src/finn/kernels tests/kernels src/finn/graph tests/graph \
     scripts/benchmark-space.py
 env -u PYTHONPATH MYPYPATH=src:tests "$MYPY_BIN" \
-    --no-incremental --strict --explicit-package-bases -p finn.kernels
+    --no-incremental --strict --explicit-package-bases -p finn.kernels -p finn.graph
 env -u PYTHONPATH MYPYPATH=src:tests "$MYPY_BIN" \
     --no-incremental --strict --explicit-package-bases \
     tests/kernels/typing tests/kernels/helpers.py \

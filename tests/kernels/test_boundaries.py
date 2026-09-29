@@ -90,9 +90,10 @@ def within(name: str, prefix: str) -> bool:
 
 
 def test_kernel_sources_and_tests_have_no_parked_dependency() -> None:
-    """``finn.kernels`` builds on ``finn.dataflow`` and never on parked code."""
+    """``finn.kernels`` builds on ``finn.dataflow``, never on parked code or on a graph."""
     forbidden = (
         "finn.parked",
+        "finn.graph",
         "finn.custom_op.dataflow",
         "finn.kernels.space",
         "qonnx.core.modelwrapper",

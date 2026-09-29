@@ -55,12 +55,14 @@ from finn.core.space import (
     QueryResult,
     Rejected,
     constraint,
+    default_semantics,
     derived,
     design_space,
     inspection,
     reject,
     selected,
     View,
+    view,
 )
 from finn.core.space.settling import compatible_cases
 from finn.dataflow.datatypes import (
@@ -88,6 +90,10 @@ from finn.kernels.rom import RomKernel
 from finn.kernels.composite import Composite
 from finn.kernels.streams import ADAPTER_RAM_STYLES, PORT, BufferedStream, Stream
 from finn.kernels.target import DspBlock
+
+
+FinnAttributes = tuple[tuple[str, int | str | tuple[int, ...]], ...]
+FINN_ATTRIBUTES = default_semantics(tuple)
 
 
 class WeightDelivery(Enum):
@@ -335,6 +341,49 @@ class MatMulKernel(Composite):
 
     admission = ConstraintGroup(extents_supported, realization_supported, supply_supported)
 
+    @view(semantics=FINN_ATTRIBUTES, requires=(admission,))
+    def finn_attributes(self) -> FinnAttributes | Rejected:
+        """FINN's ``MVAU`` node attributes, from this configuration alone.
+
+        The memory maps onto FINN's ``mem_mode``: none is ``external``, the ROM
+        ``internal_embedded`` (constant weights in the design), memstream
+        ``internal_decoupled`` (FINN's memstream); its memory style is
+        ``ram_style``. A depthwise MatMul is FINN's ``VVAU``, not mapped yet.
+        """
+        if self.depthwise:
+            return reject("finn-attributes", "a depthwise MatMul is FINN's VVAU, not mapped yet")
+        memory = self.memory
+        mode = {"none": "external", "rom": "internal_embedded", "memstream": "internal_decoupled"}
+        if memory is None:
+            style = "auto"
+        elif isinstance(memory, RomKernel):
+            style = memory.rom_style
+        else:
+            style = memory.ram_style
+        pumped = isinstance(memory, MemStreamKernel) and memory.pumped_memory
+        compute = self.compute
+        attributes: dict[str, int | str | tuple[int, ...]] = {
+            "MW": self.k,
+            "MH": self.n,
+            "SIMD": compute.simd,
+            "PE": compute.pe,
+            "numInputVectors": (self.m,),
+            "inputDataType": self.activation_dtype.name,
+            "weightDataType": self.weights_dtype.name,
+            "outputDataType": self.result_type.name,
+            "accDataType": self.result_type.name,
+            "mem_mode": mode[self.supplied],
+            "ram_style": style,
+            "runtime_writeable_weights": int(self.writable_weights),
+            "pumpedMemory": int(pumped),
+            "resType": "dsp",
+            "noActivation": 1,
+            "binaryXnorMode": 0,
+            "backend": "fpgadataflow",
+            "preferred_impl_style": "rtl",
+        }
+        return tuple(sorted(attributes.items()))
+
     def stem(self) -> str:
         return "finn_matmul_" + self.supplied
 
@@ -521,6 +570,8 @@ def matmul_assembly(
 
 
 __all__ = [
+    "FINN_ATTRIBUTES",
+    "FinnAttributes",
     "MatMulAssembly",
     "MatMulKernel",
     "ROM_STYLE",

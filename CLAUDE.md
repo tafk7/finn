@@ -97,13 +97,16 @@ compile+load+run in a fresh interpreter.
 ## Packages and gates
 
 ```
-finn.core.space  <-  finn.dataflow  <-  finn.kernels  <-  finn.parked
+finn.core.space  <-  finn.dataflow  <-  finn.kernels  <-  finn.graph
+                                                     <-  finn.parked
 ```
 
 - `finn.core.space` — the generic Space engine.
 - `finn.dataflow` — canonical logical dataflow values (tensors, schedules,
   traversals, beat sequences).
-- `finn.kernels` — kernels bound to RTL/HLS sources.
+- `finn.kernels` — kernels bound to RTL/HLS sources. It never reads an ONNX graph.
+- `finn.graph` — graph adapters: ONNX models as Designs of kernels, and back to
+  FINN nodes. Tested in `tests/graph` by the kernel gate.
 - `finn.parked` — retired code kept as reference only. It is not tested, not
   shipped, and nothing live imports it.
 
