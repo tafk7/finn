@@ -44,7 +44,6 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import Enum
-from fnmatch import fnmatchcase
 from typing import Any, cast
 
 from finn.core.space import (
@@ -58,7 +57,6 @@ from finn.core.space import (
     default_semantics,
     derived,
     design_space,
-    inspection,
     reject,
     selected,
     View,
@@ -77,12 +75,14 @@ from finn.dataflow.traversal import TRAVERSAL, Traversal, period
 from finn.kernels.artifacts.build import ModuleBuildRequirements
 from finn.kernels.base import PORT
 from finn.kernels.artifacts.derivation import ProducerIdentity
-from finn.kernels.configure import admission, commit, describe, settle
+from finn.kernels.configure import admission, commit, describe, settle, undecided
 from finn.kernels.control import ControlBus
+from finn.kernels.datatypes.domains import set_index_dtype
 from finn.kernels.datatypes.semantics import (
     INTEGER_TENSOR,
     QONNX_DATATYPE_VALUE_SEMANTICS,
     IntegerTensor,
+    integers,
 )
 from finn.kernels.dotp import Int8Dsp58DotpKernel, PackedDotpKernel
 from finn.kernels.memstream import MemStreamKernel
@@ -245,9 +245,7 @@ class MatMulKernel(Composite):
     @derived(semantics=TENSOR)
     def set_tensor(self) -> Tensor | Rejected:
         """One set index per row, as wide as the memory's selector."""
-        sets = self.weight_sets
-        bits = (sets - 1).bit_length() if sets > 2 else 1
-        return self._tensor((self.m,), resolve_qonnx_datatype_name(f"UINT{bits}"))
+        return self._tensor((self.m,), set_index_dtype(self.weight_sets))
 
     # Streams: relations between the kernels that reference them. A stream with a
     # single user is a boundary of the kernel and presents its ABI port name.
@@ -283,7 +281,7 @@ class MatMulKernel(Composite):
         if not read_only:
             return False  # weights arriving or rewritten at run time promise nothing
         low, _ = ordinary_integer_bounds(self.weights_dtype)
-        return all(value > low for value in _leaves(self.weights))
+        return all(value > low for value in integers(self.weights))
 
     # The compute cores. Each refuses what its core cannot build and owns its
     # folds; ``packed`` names the entry for its own binding.
@@ -396,13 +394,6 @@ def _frozen(values: object) -> object:
     return values
 
 
-def _leaves(values: object) -> tuple[int, ...]:
-    if type(values) is int:
-        return (values,)
-    assert isinstance(values, tuple)
-    return tuple(leaf for item in values for leaf in _leaves(item))
-
-
 def _realizes(base: MatMulKernel, choices: dict[str, object]) -> QueryResult[bool]:
     """Accepted when the choices commit, the realization's own rule holds, and some
     core can compute it."""
@@ -415,18 +406,6 @@ def _realizes(base: MatMulKernel, choices: dict[str, object]) -> QueryResult[boo
         return rule
     cores = compatible_cases(point, "compute", admission)
     return Available(True) if cores else reject("matmul-realization", "no core computes it")
-
-
-def _undecided(point: Any, pattern: str) -> list[str]:
-    """Keys matching ``pattern`` (``fnmatch``) of applicable Decisions not yet committed."""
-    found = []
-    for item in inspection.decisions(point):
-        if not fnmatchcase(item.key, pattern):
-            continue
-        state = point.field(item.reference).state
-        if isinstance(state, Available) and state.value.status != "committed":
-            found.append(item.key)
-    return found
 
 
 def matmul_assembly(
@@ -537,7 +516,7 @@ def matmul_assembly(
     )
     # Each stream's one compatible adapter; an input_gen's memory is inferred.
     point = settle(point).point
-    styles = _undecided(point, ADAPTER_RAM_STYLES)
+    styles = undecided(point, ADAPTER_RAM_STYLES)
     if styles:
         point = commit(point, dict.fromkeys(styles, "auto"))
     composed = point.query(MatMulKernel.structure)

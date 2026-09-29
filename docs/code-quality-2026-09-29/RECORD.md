@@ -111,3 +111,25 @@ XSim skipped, dataflow 40; identity identical to `identity-norom.txt`.
 - **Lines.** src −74 net, tests −7 net (3 files, +34 −115).
 - **Gates.** Space 448, kernels 791 + 14 skipped, graph 4 + 2, dataflow 40;
   ruff and mypy clean; examples 27; identity unchanged.
+
+## E: derivations and helpers stated once
+
+- **Sequences.** Thresholding's input sequence built a one-index `Schedule`
+  that is `vector_major(shape, pe)`; the transpose's expected input form
+  spelled out `vector_major(shape, simd)`. Both now say so (checked equal
+  over several shapes and folds before the change).
+- **Cyclic sources.** `physical.contract._presented` restated
+  `finn.dataflow.plan.presented`; it now calls it for a cyclic source (a
+  single pass is compared as it is, as before, so the codes are unchanged).
+- **Helpers.** FinnLib's set selector width was computed three times (MatMul's
+  `set_tensor`, memstream's `set_bits`/`set_dtype`, thresholding's
+  `selector_dtype`): now `datatypes.domains.set_index_dtype`. The walk over
+  a nested operand's integers was written twice (`_leaves` in MatMul and
+  memstream): now `datatypes.semantics.integers`. The undecided-keys query
+  was written twice (`matmul._undecided` and `helpers.settled`): now
+  `configure.undecided`.
+- **Names.** New: `set_index_dtype`, `integers`, `configure.undecided`.
+  Removed: `MemStreamKernel.set_bits`. No key changed.
+- **Lines.** src −24 net, tests −7 net (9 files, +64 −95).
+- **Gates.** Space 448, kernels 791 + 14 skipped, graph 4 + 2, dataflow 40;
+  ruff and mypy clean; examples 27; identity unchanged.

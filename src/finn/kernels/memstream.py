@@ -40,7 +40,6 @@ from finn.core.space import (
 from finn.dataflow.datatypes import (
     QONNXDataType,
     ordinary_integer_bounds,
-    resolve_qonnx_datatype_name,
 )
 from finn.dataflow.traversal import (
     BEAT_SEQUENCE,
@@ -56,7 +55,7 @@ from finn.kernels.artifacts.contribution_types import CopiedSource, GeneratedDat
 from finn.kernels.artifacts.requirements import RequirementContribution
 from finn.kernels.base import CLOCKING, Clocking, Kernel, Tieoffs
 from finn.kernels.control import CONTROL, CONTROL_SEMANTICS, Control, ControlBus, held_bus
-from finn.kernels.datatypes.domains import Integer
+from finn.kernels.datatypes.domains import Integer, set_index_dtype
 from finn.kernels.datatypes.scalar import integer_scalar
 from finn.kernels.datatypes.semantics import (
     INTEGER_TENSOR,
@@ -64,6 +63,7 @@ from finn.kernels.datatypes.semantics import (
     QONNX_DATATYPE_VALUE_SEMANTICS,
     IntegerTensor,
     IntegerVector,
+    integers,
 )
 from finn.kernels.port import GivenPort
 from finn.kernels.streams import Stream
@@ -94,15 +94,9 @@ class MemStreamKernel(Kernel):
     def word_bits(self) -> int:
         return self.form.lanes * self.element.encoding.bits
 
-    @derived
-    def set_bits(self) -> int:
-        # SET_BITS = SETS > 2 ? $clog2(SETS) : 1
-        sets = self.sets
-        return (sets - 1).bit_length() if sets > 2 else 1
-
     @derived(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
     def set_dtype(self) -> QONNXDataType:
-        return resolve_qonnx_datatype_name(f"UINT{self.set_bits}")
+        return set_index_dtype(self.sets)
 
     @derived
     def address_bits(self) -> int:
@@ -149,7 +143,7 @@ class MemStreamKernel(Kernel):
             )
         except ValueError as error:
             return reject("memstream-values", str(error))
-        if any(not low <= value <= high for value in _leaves(values)):
+        if any(not low <= value <= high for value in integers(values)):
             return reject(
                 "memstream-values",
                 f"every value must be an integer admitted by {encoding.datatype_name}",
@@ -287,13 +281,6 @@ class MemStreamKernel(Kernel):
         return Control(self.config_bus if self.writable else None)
 
     exports = {**Kernel.exports, CONTROL: {control: control_bus}}
-
-
-def _leaves(values: object) -> tuple[int, ...]:
-    if type(values) is int:
-        return (values,)
-    assert isinstance(values, tuple)
-    return tuple(leaf for item in values for leaf in _leaves(item))
 
 
 __all__ = ["MEMSTREAM_RAM_STYLES", "MemStreamKernel"]

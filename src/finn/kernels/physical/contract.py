@@ -28,6 +28,7 @@ from enum import Enum
 
 from finn.core.space import ValueSemantics, default_semantics
 from finn.kernels.artifacts.abi import Endpoint
+from finn.dataflow.plan import Unrealizable, presented
 from finn.dataflow.tensor import ScalarEncoding
 from finn.dataflow.traversal import (
     Adaptation,
@@ -190,19 +191,14 @@ def compatibility(
 
 
 def _presented(source: StreamContract, sink: StreamContract) -> Traversal | None:
-    """The sequence a source presents over one consumer pass (None if it cannot align).
-
-    A cyclic source repeats its pass as many times as the consumer's pass holds
-    its elements; the lanes of the two need not agree.
-    """
-    if source.repetition is Repetition.ONCE or source.form.shape != sink.form.shape:
+    """What a source presents over one consumer pass (``plan.presented``); None if it
+    cannot align. A single pass is compared as it is."""
+    if source.repetition is Repetition.ONCE:
         return source.form
-    produced = source.form.beats * source.form.lanes
-    consumed = sink.form.beats * sink.form.lanes
-    if consumed % produced:
+    try:
+        return presented(source.sequence, sink.sequence)
+    except Unrealizable:
         return None
-    count = consumed // produced
-    return source.form if count == 1 else source.form.repeated(count)
 
 
 def lane_permutation(source: StreamContract, sink: StreamContract) -> tuple[int, ...]:

@@ -17,6 +17,7 @@ its ``admission`` member (a constraint group, a constraint or a view).
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
+from fnmatch import fnmatchcase
 from typing import Any, TypeVar, cast
 
 from finn.core.space import (
@@ -72,6 +73,18 @@ def commit(point: S, choices: Mapping[str, object]) -> S:
     return report.instance
 
 
+def undecided(point: Space, pattern: str) -> list[str]:
+    """Keys matching ``pattern`` (``fnmatch``) of applicable Decisions not yet committed."""
+    found = []
+    for item in inspection.decisions(point):
+        if not fnmatchcase(item.key, pattern):
+            continue
+        state = point.field(item.reference).state
+        if isinstance(state, Available) and state.value.status != "committed":
+            found.append(item.key)
+    return found
+
+
 def admission(candidate: Space) -> QueryResult[object] | None:
     """A kernel's own refusal of its configuration: its ``admission`` member, if any.
 
@@ -103,4 +116,4 @@ def settle(point: S) -> Settlement[S]:
     return settle_space(point, admission=admission)
 
 
-__all__ = ["admission", "commit", "describe", "settle"]
+__all__ = ["admission", "commit", "describe", "settle", "undecided"]

@@ -43,13 +43,12 @@ from finn.dataflow.datatypes import (
     ordinary_integer_bounds,
     resolve_qonnx_datatype_name,
 )
-from finn.dataflow.schedule import Index, Refused, Schedule
 from finn.dataflow.traversal import BEAT_SEQUENCE, BeatSequence, vector_major
 from finn.kernels.artifacts.abi import Bus, Endpoint, Member, Signal, StandardProtocol
 from finn.kernels.artifacts.contribution_types import CopiedSource
 from finn.kernels.base import Kernel, Tieoffs
 from finn.kernels.control import CONTROL, CONTROL_SEMANTICS, Control, ControlBus, held_bus
-from finn.kernels.datatypes.domains import Integer
+from finn.kernels.datatypes.domains import Integer, set_index_dtype
 from finn.kernels.datatypes.scalar import integer_scalar
 from finn.kernels.datatypes.semantics import (
     QONNX_DATATYPE_VALUE_SEMANTICS,
@@ -234,17 +233,14 @@ class ThresholdingAxiKernel(Kernel):
 
     @derived(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
     def selector_dtype(self) -> QONNXDataType:
-        sets = len(self.thresholds)
-        return resolve_qonnx_datatype_name(f"UINT{(sets - 1).bit_length() if sets > 2 else 1}")
+        return set_index_dtype(len(self.thresholds))
 
     @derived(semantics=BEAT_SEQUENCE)
     def input_sequence(self) -> BeatSequence | Rejected:
-        """PE consecutive channels a beat, channels the innermost axis of the tensor.
+        """Row-major, PE consecutive channels a beat, channels the innermost axis.
 
-        The schedule walks every outer axis, then the channels folded by PE:
-        T[..., c]. PE above the channel count would fold
-        rows into the lanes as well, which needs rows divisible by PE / C; that
-        is not modelled yet.
+        PE above the channel count would fold rows into the lanes as well, which
+        needs rows divisible by PE / C; that is not modelled yet.
         """
         shape, pe, channels = self.input_stream.tensor.shape, self.pe, len(self.thresholds[0])
         if shape[-1] != channels or channels % pe:
@@ -252,13 +248,7 @@ class ThresholdingAxiKernel(Kernel):
                 "threshold-stream-form",
                 f"the input must walk its {channels} channels innermost, PE={pe} per beat",
             )
-        outer = tuple(Index(f"a{axis}") for axis in range(len(shape) - 1))
-        c = Index("c")
-        schedule = Schedule(dict(zip((*outer, c), shape)), folds={c: pe})
-        try:
-            return BeatSequence(schedule.present(shape, (*outer, c), lanes=(c,)))
-        except Refused as error:
-            return reject("threshold-stream-form", str(error))
+        return BeatSequence(vector_major(shape, pe))
 
     @derived(semantics=BEAT_SEQUENCE)
     def output_sequence(self) -> BeatSequence | Rejected:

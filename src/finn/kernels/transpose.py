@@ -26,7 +26,13 @@ from finn.core.space import (
     reject,
 )
 from finn.dataflow.datatypes import QONNXDataType
-from finn.dataflow.traversal import BEAT_SEQUENCE, TRAVERSAL, BeatSequence, Traversal
+from finn.dataflow.traversal import (
+    BEAT_SEQUENCE,
+    TRAVERSAL,
+    BeatSequence,
+    Traversal,
+    vector_major,
+)
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.contribution_types import CopiedSource
 from finn.kernels.base import CLOCKING, NATIVE_CLOCKING, Clocking, Kernel
@@ -65,21 +71,11 @@ class TransposeKernel(Kernel):
         shape, simd = form.shape, form.lanes
         if len(shape) < 2 or shape[-1] % simd or shape[-2] % simd:
             return reject("transpose-form", "a matrix whose sides SIMD divides is required")
-        rows, cols, last = shape[-2], shape[-1], len(shape) - 1
-        expected = Traversal.over(
-            shape,
-            (
-                *((axis, shape[axis], 1) for axis in range(last - 1)),
-                (last - 1, rows, 1),
-                (last, cols // simd, simd),
-            ),
-            ((last, simd, 1),),
-        )
-        if form != expected:
+        if form != vector_major(shape, simd):
             return reject(
                 "transpose-form", "the input must walk its matrices row-major, SIMD per beat"
             )
-        return (rows, cols, simd)
+        return (shape[-2], shape[-1], simd)
 
     @constraint
     def transposable(self) -> bool | Rejected:
