@@ -15,6 +15,7 @@ Branch `feature/kernel-package-extraction`, local commits only, nothing pushed.
 | K2 every kernel on the protocol | `8d68a7c4b` | Space 448, kernels 806 (XSim in pytest included), dataflow 40 | sweeps from the commit: see below |
 | S4 composites and the Design | `c7764f7f9` | Space 448, kernels 800 + 15 XSim skipped, dataflow 40 | Design gate passed locally; full run from the commit: see below |
 | G1 graph adapter (`finn.graph`) | `d6952761d` | kernels 800, graph 4 (+ XSim skipped), dataflow 40 | ONNX gate passed locally; pytest XSim from the commit: see below |
+| ROM removed; constant-weights design note | this commit | kernels 792, graph 4 (+ XSim skipped), dataflow 40 | full run from the commit: see below |
 
 Every step keeps ruff and mypy clean and the 27 documentation examples
 passing; module parameters and memory images are unchanged over the identity
@@ -30,9 +31,11 @@ and `/tmp/xsim-pytest.sh <commit> <tag>`; results in `/tmp/xsim/<tag>/`.
 Findings are fixed when found or batched after the next stage, and each
 run's results are recorded in RECORD.md in a follow-up commit.
 
-- K2 sweeps: `/tmp/k2/sweeps.log`.
-- S4 (all XSim): `/tmp/xsim/s4/summary.log`.
+- K2 sweeps: all pass (224), recorded.
+- S4: XSim pytest passes (815), recorded; its sweeps could not start (the
+  snapshot lacked `finn_xsi/xsi.so`), covered by the next commit's run.
 - G1 (XSim pytest): `/tmp/xsim/g1/summary.log`.
+- ROM removal (everything): `/tmp/xsim/norom/summary.log`.
 
 ## Decisions recorded for the user
 
@@ -47,8 +50,11 @@ run's results are recorded in RECORD.md in a follow-up commit.
 - A fused composite with a control bus is refused (`composite-control`);
   unfused, its bus is exported as `<composite>_<port>`.
 - `finn.graph` is a new layer above `finn.kernels` (which never reads a
-  graph). FINN `mem_mode` mapping: none → `external`, ROM →
-  `internal_embedded`, memstream → `internal_decoupled`.
+  graph). FINN `mem_mode` mapping: none → `external`, memstream →
+  `internal_decoupled`.
+- The cyclic ROM is removed (user): it eliminated no constants. A
+  constant-weight RTL dot product is proposed in
+  `docs/constant-weights-2026-09-28/DESIGN.md`, with five questions.
 - The flat-kernel tests stay flat: an unplaced kernel's idle ports take their
   pins from its own dtypes.
 

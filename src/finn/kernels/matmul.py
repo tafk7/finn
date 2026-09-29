@@ -27,9 +27,9 @@ kernel and presents its ``port`` name (``in0_V``, ``in1_V``, ``out0_V``,
   folds (``compute.<core>.pe``, ``.simd``, ``.compute_pumping``) and derives
   every stream's beat sequence from its schedule.
 - ``memory`` is an optional Decision over the weight memories: none (the
-  weight stream is the boundary ``in1_V``), a ``rom`` or a ``memstream``. Each
-  stores one period of the order the core reads, and refuses what it cannot
-  hold (a ROM refuses writable weights or several sets).
+  weight stream is the boundary ``in1_V``) or a ``memstream``, which stores
+  one period of the order the core reads, per weight set, read-only unless
+  the weights are writable.
 - The activation stream's plan replays each dense row and frames each
   reduction; its adapter carries that out.
 
@@ -86,7 +86,6 @@ from finn.kernels.datatypes.semantics import (
 from finn.kernels.dotp import Int8Dsp58DotpKernel, PackedDotpKernel
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.physical.structure import PhysicalStructure
-from finn.kernels.rom import RomKernel
 from finn.kernels.composite import Composite
 from finn.kernels.streams import ADAPTER_RAM_STYLES, PORT, BufferedStream, Stream
 from finn.kernels.target import DspBlock
@@ -100,7 +99,6 @@ class WeightDelivery(Enum):
     """Where the weights come from: the ``memory`` Decision's case for each."""
 
     EXTERNAL = "none"
-    CYCLIC = "rom"
     MEMSTREAM = "memstream"
 
 
@@ -309,8 +307,8 @@ class MatMulKernel(Composite):
     # when one is selected is the stream internal; a writable memstream exports
     # its AXI-Lite port through ``config`` (s_axilite).
     config = ControlBus(port="s_axilite")
-    memory: RomKernel | MemStreamKernel | None = Decision(
-        {"rom": RomKernel, "memstream": MemStreamKernel(set_stream=set_index, control=config)},
+    memory: MemStreamKernel | None = Decision(
+        {"memstream": MemStreamKernel(set_stream=set_index, control=config)},
         optional=True,
         dtype=weights_dtype,
         form=weight_period,
@@ -345,22 +343,16 @@ class MatMulKernel(Composite):
     def finn_attributes(self) -> FinnAttributes | Rejected:
         """FINN's ``MVAU`` node attributes, from this configuration alone.
 
-        The memory maps onto FINN's ``mem_mode``: none is ``external``, the ROM
-        ``internal_embedded`` (constant weights in the design), memstream
-        ``internal_decoupled`` (FINN's memstream); its memory style is
+        The memory maps onto FINN's ``mem_mode``: none is ``external``,
+        memstream ``internal_decoupled`` (FINN's memstream); its memory style is
         ``ram_style``. A depthwise MatMul is FINN's ``VVAU``, not mapped yet.
         """
         if self.depthwise:
             return reject("finn-attributes", "a depthwise MatMul is FINN's VVAU, not mapped yet")
         memory = self.memory
-        mode = {"none": "external", "rom": "internal_embedded", "memstream": "internal_decoupled"}
-        if memory is None:
-            style = "auto"
-        elif isinstance(memory, RomKernel):
-            style = memory.rom_style
-        else:
-            style = memory.ram_style
-        pumped = isinstance(memory, MemStreamKernel) and memory.pumped_memory
+        mode = {"none": "external", "memstream": "internal_decoupled"}
+        style = "auto" if memory is None else memory.ram_style
+        pumped = memory is not None and memory.pumped_memory
         compute = self.compute
         attributes: dict[str, int | str | tuple[int, ...]] = {
             "MW": self.k,
@@ -410,9 +402,6 @@ def _leaves(values: object) -> tuple[int, ...]:
     return tuple(leaf for item in values for leaf in _leaves(item))
 
 
-ROM_STYLE = RomKernel.rom_style
-
-
 def _realizes(base: MatMulKernel, choices: dict[str, object]) -> QueryResult[bool]:
     """Accepted when the choices commit, the realization's own rule holds, and some
     core can compute it."""
@@ -456,7 +445,6 @@ def matmul_assembly(
     realization: str | None = None,
     weight_delivery: WeightDelivery = WeightDelivery.EXTERNAL,
     weights: Sequence[object] | None = None,
-    rom_style: str = "auto",
     ram_style: str = "auto",
     pumped_memory: bool = False,
     writable_weights: bool = False,
@@ -467,8 +455,8 @@ def matmul_assembly(
 
     ``m`` rows, ``n`` outputs and the reduction ``k``; for a depthwise ``form``,
     ``k`` is the window and ``n`` the channels. ``weights`` is stored (K, N),
-    and is required by, and only accepted with, a memory. ``rom_style`` applies
-    to the ROM; the ``auto`` default leaves memory inference to synthesis.
+    and is required by, and only accepted with, a memory. The ``auto``
+    ``ram_style`` default leaves memory inference to synthesis.
     ``weight_fifo_depth`` places a FIFO on the weight stream; ``None`` connects
     it directly. ``target_period_ns`` is the clock the module must meet (5 ns:
     200 MHz); it sets dotp's DSP58 chain segmentation. ``core`` names the
@@ -501,8 +489,6 @@ def matmul_assembly(
         "memory": case,
         "weight_stream.transport": "fifo" if buffered else "direct",
     }
-    if weight_delivery is WeightDelivery.CYCLIC:
-        choices["memory.rom.rom_style"] = rom_style
     if weight_delivery is WeightDelivery.MEMSTREAM:
         choices["memory.memstream.ram_style"] = ram_style
         choices["memory.memstream.pumped_memory"] = pumped_memory
@@ -574,7 +560,6 @@ __all__ = [
     "FinnAttributes",
     "MatMulAssembly",
     "MatMulKernel",
-    "ROM_STYLE",
     "WeightDelivery",
     "exact_result_dtype",
     "matmul_assembly",

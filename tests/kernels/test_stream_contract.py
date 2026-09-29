@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Traversals, stream contracts, checked composition, and reusable ROM.
+"""Traversals, stream contracts, checked composition, and a reusable memory.
 
 The stress cases come from baseline FINN: the tiled MVU's two internal
 ``input_gen`` adapters and the Shuffle op's inner/outer decomposition. Their
@@ -33,7 +33,7 @@ from finn.kernels.artifacts.build import (
 from finn.kernels.artifacts.derivation import ProducerIdentity
 from finn.kernels.artifacts.store import ArtifactStore
 from finn.dataflow.tensor import ScalarEncoding
-from finn.kernels.rom import RomKernel
+from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.fifo import FifoKernel
 from finn.kernels.physical.axi_stream import AxiStream
 from finn.kernels.physical.composition import Composition, StreamEnd
@@ -160,9 +160,9 @@ def test_tiled_mvu_weight_chunks_are_a_width_conversion_a_delivery_can_avoid():
     )
     assert chunked.lanes == PE_T * SIMD_T // T
     assert classify(tile(MH, MW, PE_T, SIMD_T), chunked).adaptation is Adaptation.WIDTH_CONVERSION
-    # A ROM can simply produce the chunked order: no adapter at all.
+    # A memory can simply produce the chunked order: no adapter at all.
     values = tuple(tuple((row * MW + col) % 7 - 3 for col in range(MW)) for row in range(MH))
-    source = design_space(RomKernel(dtype=DataType["INT3"], form=chunked, contents=values))
+    source = design_space(MemStreamKernel(dtype=DataType["INT3"], form=chunked, contents=values))
     sink = contract(chunked.repeated(R // T), Endpoint.TARGET)
     produced = source.output.contract
     assert compatibility(produced, sink, source_is_top=False, sink_is_top=False) == ()
@@ -261,9 +261,21 @@ def test_contracts_reject_lanes_wider_than_the_word_and_unknown_marker_rules():
 # -- the delivery kernel -----------------------------------------------------------------
 
 
+def hold(composition, instance, kernel):
+    """Tie off what an unplaced memory holds, but the output this test connects itself."""
+    connected = {pin.name for pin in kernel.output.contract.transport.pins()}
+    tieoffs = kernel.tieoffs
+    for pin, value in tieoffs.inputs:
+        if pin not in connected:
+            composition.tie(instance, pin, value)
+    for pin in tieoffs.unused:
+        if pin not in connected:
+            composition.dispose(instance, pin, "tied off")
+
+
 def delivery(form=None, values=(1, -2, 7, -8), **choices):
     form = vector_major((4,), 2) if form is None else form
-    base = design_space(RomKernel(dtype=DataType["INT4"], form=form, contents=values))
+    base = design_space(MemStreamKernel(dtype=DataType["INT4"], form=form, contents=values))
     return base.with_choices(**choices) if choices else base
 
 
@@ -273,9 +285,9 @@ def test_delivery_publishes_a_cyclic_contract_and_waits_only_for_its_own_choice(
     assert output.repetition is Repetition.CYCLIC and output.form == vector_major((4,), 2)
     assert output.payload_bits == output.transport.data_width == 8
     assert base.image == (0xE1, 0x87)
-    assert isinstance(base.query(RomKernel.build_requirements), Unresolved)
-    requirements = delivery(rom_style="block").build_requirements
-    assert dict(requirements.parameters)["ROM_STYLE"] == '"block"'
+    assert isinstance(base.query(MemStreamKernel.build_requirements), Unresolved)
+    requirements = delivery(ram_style="block", pumped_memory=False).build_requirements
+    assert dict(requirements.parameters)["RAM_STYLE"] == '"block"'
 
 
 @pytest.mark.parametrize(
@@ -288,9 +300,11 @@ def test_delivery_publishes_a_cyclic_contract_and_waits_only_for_its_own_choice(
 )
 def test_delivery_refuses_values_outside_the_operand_contract(values, dtype, message):
     point = design_space(
-        RomKernel(dtype=DataType[dtype], form=vector_major((4,), 2), contents=values)
+        MemStreamKernel(dtype=DataType[dtype], form=vector_major((4,), 2), contents=values)
     )
-    answer = point.with_choices(rom_style="auto").query(RomKernel.build_requirements)
+    answer = point.with_choices(ram_style="auto", pumped_memory=False).query(
+        MemStreamKernel.build_requirements
+    )
     assert isinstance(answer, Rejected)
     if message:
         assert any(message in finding.message for finding in answer.findings)
@@ -316,7 +330,7 @@ def eltwise_with_constant(*, form=None, rhs_form=None):
     form = vector_major((CHANNELS,), PE) if form is None else form
     rhs_form = vector_major((CHANNELS,), PE).repeated(PIXELS) if rhs_form is None else rhs_form
     compute = eltwise(operation="ADD", pe=PE, lhs="INT4", rhs="INT4")
-    source = delivery(form, PARAMETERS, rom_style="distributed")
+    source = delivery(form, PARAMETERS, ram_style="distributed", pumped_memory=False)
     lhs, rhs, result = compute.interfaces
     pixels = vector_major((PIXELS, CHANNELS), PE)
     int5 = ScalarEncoding(DataType["INT5"])
@@ -337,6 +351,7 @@ def eltwise_with_constant(*, form=None, rhs_form=None):
     for owner in ("u_rhs", "u_eltwise"):
         composition.drive(owner, "clk", "ap_clk")
         composition.drive(owner, "rst", "ap_rst_n")
+    hold(composition, "u_rhs", source)
     composition.connect(
         StreamEnd(None, x_top), StreamEnd("u_eltwise", StreamContract(lhs, INT4, pixels))
     )
@@ -392,7 +407,7 @@ def test_a_pure_lane_permutation_is_realized_as_free_wiring():
     assert verdict.adaptation is Adaptation.LANE_PERMUTATION
     assert verdict.lane_permutation == (0, 2, 1, 3)
     values = (((1, 2), (3, 4)), ((5, 6), (7, -8)))
-    source = design_space(RomKernel(dtype=DataType["INT4"], form=produced, contents=values))
+    source = design_space(MemStreamKernel(dtype=DataType["INT4"], form=produced, contents=values))
     fifo = design_space(FifoKernel(word_bits=16, depth=2)).with_choices(ram_style="auto")
     fifo_in, fifo_out = fifo.interfaces
     out = AxiStream("out0_V", DataType["INT4"], 4, endpoint=Endpoint.INITIATOR)
@@ -404,11 +419,13 @@ def test_a_pure_lane_permutation_is_realized_as_free_wiring():
             GeneratedModuleName("t"), (*CLOCKING, out.bus(clock="ap_clk", reset="ap_rst_n")), ()
         )
     )
-    composition.add("u_source", source.with_choices(rom_style="auto").build_requirements)
+    source = source.with_choices(ram_style="auto", pumped_memory=False)
+    composition.add("u_source", source.build_requirements)
     composition.add("u_fifo", fifo.build_requirements)
     for owner in ("u_source", "u_fifo"):
         composition.drive(owner, "clk", "ap_clk")
         composition.drive(owner, "rst", "ap_rst_n")
+    hold(composition, "u_source", source)
     composition.connect(
         StreamEnd("u_source", source.output.contract),
         StreamEnd("u_fifo", StreamContract(fifo_in, INT4, wanted)),
@@ -431,8 +448,8 @@ def test_clock_domains_must_be_attached_and_equal():
     sink = native("i", 8, Endpoint.TARGET, clock="clk")
     top_abi = ModuleABIRequirements(GeneratedModuleName("t"), CLOCKING, ())
     composition = Composition(top_abi)
-    composition.add("a", delivery(rom_style="auto").build_requirements)
-    composition.add("b", delivery(rom_style="auto").build_requirements)
+    composition.add("a", delivery(ram_style="auto", pumped_memory=False).build_requirements)
+    composition.add("b", delivery(ram_style="auto", pumped_memory=False).build_requirements)
     found = composition.check(
         StreamEnd("a", StreamContract(stream, INT4, vector_major((4,), 2))),
         StreamEnd("b", StreamContract(sink, INT4, vector_major((4,), 2))),
@@ -454,7 +471,11 @@ def test_eltwise_with_cyclic_constant_computes_the_broadcast_sum(tmp_path):
         blobs=store,
     )
     materialized = materialize_module_sources(prepared, store)
-    sources = [str(Path(materialized.directory) / path) for path in materialized.files]
+    files = [Path(materialized.directory) / path for path in materialized.files]
+    sources = [str(path) for path in files if path.suffix != ".dat"]
+    for path in files:  # $readmemh reads an INIT_FILE from the simulator's directory
+        if path.suffix == ".dat":
+            (tmp_path / path.name).write_bytes(path.read_bytes())
     inputs = [(-8 + 3 * index) % 16 - 8 for index in range(CHANNELS * PIXELS)]
     expected = [value + PARAMETERS[index % CHANNELS] for index, value in enumerate(inputs)]
 

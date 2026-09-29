@@ -45,8 +45,7 @@ port.py                  Port nodes: native word ports and stream ports (admissi
 dotp.py                  dotp_axi on three ports, one kernel per compute core, its own folds
 matmul.py                MatMulKernel: facts m, n, k and form; compute and memory Decisions
 composite.py             Composite and Design: children wired into one module, or a parent's parts
-rom.py                   RomKernel: a stored operand streamed cyclically from a ROM
-memstream.py             FinnLib memstream_axi as a weight memory (writable, sets, INIT_FILE)
+memstream.py             FinnLib memstream_axi: a stored operand in its consumer's order (INIT_FILE)
 streams.py               Stream: tensor, ends, plan, adapter and transport Decisions; netlist
 adapters.py              a stream's adapter candidates: input_gen / vpc chains carrying out a plan
 input_generator.py       FinnLib input_gen: a buffered reorder with loop-end markers
@@ -57,7 +56,7 @@ target.py                DSP targets and port capacities
 physical/                typed native/AXIS ports, detached packing, wiring and lowering
 datatypes/               QONNX identity, integer policies, scalar Spaces and codecs
 artifacts/               requirements, source resolution, rendering and builds
-resources/               cyclic RTL and source-generation templates
+resources/               source-generation templates
 
 Space -> accepted build_requirements view -> ModuleBuildRequirements
                                          |
@@ -76,7 +75,6 @@ Space -> accepted build_requirements view -> ModuleBuildRequirements
 | `IntToFp32Kernel` | `int_to_fp32.py` | Combinational pins and a fixed FLOAT32 result; no clock or stream |
 | `MemStreamHlsKernel` | `memstream_hls.py` | C++ type and memory/interface declarations before HLS synthesis |
 | `PackedDotpKernel`, `Int8Dsp58DotpKernel` | `dotp.py` | One kernel per `dotp_axi` compute core over the shared `DotpAxiKernel`: three ports, its own PE/SIMD/pumping; target, form, segmentation and accumulator admission |
-| `RomKernel` | `rom.py` | A stored operand in its consumer's order, streamed cyclically; ROM style |
 
 A kernel on the protocol (`base.py`) declares its RTL `module`, `sources()`,
 `parameters()`, its `clocking` when not plain `ap_clk`/`ap_rst_n`, one `Port`
@@ -151,8 +149,8 @@ in0_V ─activations─[adapter: input_gen]─► compute ─results─► out0_
    compute: packed (dotp) | int8_dsp58 (dotp_8sx9_dsp58); each owns pe, simd,
             compute_pumping
    depthwise: realization: native | dense (block-diagonal weights)
-   memory (optional): none (in1_V) | rom (rom_style) | memstream (RAM: ram_style,
-             pumped_memory; writable_weights → s_axilite; weight_sets > 1 → in2_V)
+   memory (optional): none (in1_V) | memstream (ram_style, pumped_memory;
+             writable_weights → s_axilite; weight_sets > 1 → in2_V)
    weight_stream: transport: direct | fifo
 ```
 
@@ -201,13 +199,12 @@ own module, splicing each boundary stream with the parent stream it sits on
 `tests/kernels/test_design.py` computes two MatMuls and a thresholding both
 ways in XSim.
 The optional `memory` Decision places either nothing (`none`: the weight
-stream has one user and is the boundary `in1_V`) or one of its candidates,
-the `rom` RomKernel (`memory.rom`) or the `memstream` MemStreamKernel; only
-the selected candidate is evaluated. Compatibility filters the candidates
-(a depthwise form is read natively only by the INT8 DSP58 core; a ROM refuses
-runtime-writable weights or several sets) and `settle` commits a Decision
-with one compatible candidate; where several remain, the choice is the
-caller's. A `BufferedStream` owns a `transport`
+stream has one user and is the boundary `in1_V`) or the `memstream`
+MemStreamKernel (`memory.memstream`); only the selected candidate is
+evaluated. Compatibility filters the candidates (a depthwise form is read
+natively only by the INT8 DSP58 core; runtime-writable weights or several sets
+need a memory) and `settle` commits a Decision with one compatible candidate;
+where several remain, the choice is the caller's. A `BufferedStream` owns a `transport`
 Decision over nodes: `direct`, or a `fifo` candidate whose depth and memory style
 are its own decisions. Whether a FIFO is needed and how deep is a compiler
 decision; the stream only provides the slot. `commit` (from
@@ -232,8 +229,9 @@ identity = ((1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (0, 0, 0, 1))
 point = commit(
     design_space(MatMulKernel(**facts, weights=identity)),
     {
-        "memory": "rom",
-        "memory.rom.rom_style": "block",
+        "memory": "memstream",
+        "memory.memstream.ram_style": "block",
+        "memory.memstream.pumped_memory": False,
         "weight_stream.transport": "fifo",
         "weight_stream.transport.fifo.buffer.depth": 16,
         "weight_stream.transport.fifo.buffer.ram_style": "auto",
@@ -249,7 +247,7 @@ point = commit(settle(point).point, {"activations.adapter.input_gen.input_gen.ra
 structure = point.structure.structure
 assert [item.instance_id for item in structure.instances] == [
     "u_compute_packed",
-    "u_memory_rom",
+    "u_memory_memstream",
     "u_activations_input_gen",
     "u_weight_stream_fifo",
 ]
@@ -262,7 +260,7 @@ assert isinstance(replayed.query(MatMulKernel.structure), Unresolved)
 ```
 
 Changing a selector does not discard the old case's choices: clear
-`rom_style` (or a FIFO's depth and memory style) in the same batch when
+a memory's `ram_style` (or a FIFO's depth and memory style) in the same batch when
 switching away from that case. The
 `matmul_assembly` adapter configures this same family and commits every choice
 for callers with a complete configuration:
@@ -279,7 +277,7 @@ built = matmul_assembly(
     pe=2,
     simd=2,
     target_dsp=DspBlock.DSP48E2,
-    weight_delivery=WeightDelivery.CYCLIC,
+    weight_delivery=WeightDelivery.MEMSTREAM,
     weights=[[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]],
 )
 ```
@@ -287,7 +285,7 @@ built = matmul_assembly(
 `built.structure` exposes wiring, `built.initializer` contains packed stored
 weights, and `built.requirements` is the artifact handoff. External weights
 use `WeightDelivery.EXTERNAL` (the `memory` Decision's `none`) and omit
-`weights`; `rom_style` (default `auto`) applies only to the ROM, and
+`weights`; `ram_style` (default `auto`) applies to the memstream, and
 `weight_fifo_depth` places a FIFO on the weight stream.
 
 Pass source roots explicitly to `finn.kernels.artifacts.build.prepare_module_build`:
@@ -377,19 +375,19 @@ lane permutation), padding, handshake and marker wire. The derived reorders
 reproduce the tiled MVU's two hard-coded `input_gen` stages and FINN's
 OuterShuffle coefficients exactly (see `tests/kernels/test_stream_contract.py`).
 
-`RomKernel` streams a constant integer operand in whatever traversal its
-consumer reads, from an initialized ROM, so the consumer's order needs no
-adapter. Its `output` port presents a cyclic stream contract; the same kernel feeds
-matmul weight tiles or an eltwise channel vector, inside an operation kernel or
+`MemStreamKernel` stores a constant integer operand in whatever traversal its
+consumer reads, so the consumer's order needs no adapter. Its `output` port
+presents a cyclic stream contract with one set; the same kernel feeds matmul
+weight tiles or an eltwise channel vector, inside an operation kernel or
 beside one:
 
 ```python
-from finn.kernels import RomKernel
+from finn.kernels import MemStreamKernel
 from finn.dataflow.traversal import Adaptation, Repetition, classify, vector_major
 
 channels = vector_major((4,), 2)
-vector = design_space(RomKernel(dtype=dtype("INT4"), form=channels, contents=(1, -2, 7, -8)))
-rhs = vector.with_choices(rom_style="distributed")
+vector = design_space(MemStreamKernel(dtype=dtype("INT4"), form=channels, contents=(1, -2, 7, -8)))
+rhs = vector.with_choices(ram_style="distributed", pumped_memory=False)
 assert rhs.output.contract.repetition is Repetition.CYCLIC
 assert rhs.image == (0xE1, 0x87)
 pixels = vector_major((3, 4), 2)  # three pixels of four channels, two lanes

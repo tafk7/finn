@@ -6,7 +6,7 @@
 Facts are the root node's typed formals: ``design_space(MatMulKernel(rows=..., ...))``. Keys
 are the ones ``inspection`` reports: ``"pe"``, ``"compute.compute_pumping"``, a
 structural Decision such as ``"delivery"``, or a candidate-local choice such
-as ``"delivery.cyclic.rom_style"``. All choices are committed in one atomic
+as ``"memory.memstream.ram_style"``. All choices are committed in one atomic
 batch. Refusals are raised as ``ValueError`` with their findings.
 
 ``settle`` commits every Decision over kernels that compatibility decides: the

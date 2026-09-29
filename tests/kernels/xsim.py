@@ -4,8 +4,10 @@
 """XSim a composed module with one AXIS input and one AXIS output.
 
 ``stream_through`` builds ``requirements``, drives ``in0_V`` with ``words_in``
-under stalls on both sides, and checks that ``out0_V`` presents ``words_out``,
-each compared on its low ``out_bits`` (an AXIS word is padded to bytes).
+(under stalls on both sides unless ``stalled`` is False), and checks that
+``out0_V`` presents ``words_out``, each compared on its low ``out_bits`` (an
+AXIS word is padded to bytes). A memory's INIT_FILE is placed where
+``$readmemh`` reads it.
 """
 
 from __future__ import annotations
@@ -48,6 +50,7 @@ def stream_through(
     in_bits: int,
     words_out: Sequence[int],
     out_bits: int,
+    stalled: bool = True,
 ) -> None:
     store = ArtifactStore(directory / "store")
     prepared = prepare_module_build(
@@ -57,10 +60,15 @@ def stream_through(
         blobs=store,
     )
     materialized = materialize_module_sources(prepared, store)
-    sources = [str(Path(materialized.directory) / path) for path in materialized.files]
+    files = [Path(materialized.directory) / path for path in materialized.files]
+    sources = [str(path) for path in files if path.suffix != ".dat"]
+    for path in files:  # $readmemh reads an INIT_FILE from the simulator's directory
+        if path.suffix == ".dat":
+            (directory / path.name).write_bytes(path.read_bytes())
     in_width, out_width = (in_bits + 7) // 8 * 8, (out_bits + 7) // 8 * 8
     table_in = ", ".join(f"{in_width}'h{word:x}" for word in words_in)
     table_out = ", ".join(f"{out_bits}'h{word:x}" for word in words_out)
+    valid, ready = ("cycle % 3 != 0", "cycle % 4 != 1") if stalled else ("1", "1")
     testbench = directory / "check.sv"
     testbench.write_text(f"""`timescale 1ns/1ps
 module check;
@@ -84,9 +92,9 @@ module check;
         end
     end
     always @(negedge ap_clk) begin
-        in0_V_tvalid = ap_rst_n && sent < {len(words_in)} && (cycle % 3 != 0);
+        in0_V_tvalid = ap_rst_n && sent < {len(words_in)} && ({valid});
         in0_V_tdata = words_in[sent < {len(words_in)} ? sent : 0];
-        out0_V_tready = cycle % 4 != 1;
+        out0_V_tready = {ready};
     end
     initial begin
         repeat (16) @(posedge ap_clk);  // past the DSP models' startup recovery (GSR)

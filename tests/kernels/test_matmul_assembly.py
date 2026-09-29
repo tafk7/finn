@@ -75,24 +75,24 @@ def test_external_construction_owns_replay_and_exact_precision():
     )
 
 
-def test_cyclic_image_has_output_then_reduction_then_pe_simd_order():
+def test_stored_image_has_output_then_reduction_then_pe_simd_order():
     # Written by output, stored (k, n).
     by_output = [[-4, -3, -2, -1], [0, 1, 2, 3], [3, 2, 1, 0], [-1, -2, -3, -4]]
     weights = [list(column) for column in zip(*by_output)]
-    built = assembly(weight_delivery=WeightDelivery.CYCLIC, weights=weights)
+    built = assembly(weight_delivery=WeightDelivery.MEMSTREAM, weights=weights)
     # Hand-packed INT3 fields: p0/s0, p0/s1, p1/s0, p1/s1, low first.
     assert built.initializer == (0x22C, 0x6BE, 0xDD3, 0x941)
     assert "in1_V" not in {port.name for port in built.structure.top_abi.ports}
-    (cyclic,) = (
+    (memory,) = (
         dict(item.requirements.parameters)
         for item in built.structure.instances
-        if item.instance_id == "u_memory_rom"
+        if item.instance_id == "u_memory_memstream"
     )
-    assert cyclic == {
+    assert {name: memory[name] for name in ("DEPTH", "WIDTH", "SETS", "RAM_STYLE")} == {
         "DEPTH": 4,
-        "W": 12,
-        "INIT_DATA": "48'h941dd36be22c",
-        "ROM_STYLE": '"auto"',
+        "WIDTH": 12,
+        "SETS": 1,
+        "RAM_STYLE": '"auto"',
     }
     assert built.weight_beats == 12
 
@@ -151,11 +151,11 @@ def test_precision_covers_full_ranges_and_is_minimal(activation, weight, length,
         # dotp's accumulator refuses this width.
         ({"k": 1 << 48}, "dotp-accumulator-width"),
         ({"weight_delivery": "external"}, "WeightDelivery"),
-        ({"weight_delivery": WeightDelivery.CYCLIC}, "requires weights"),
+        ({"weight_delivery": WeightDelivery.MEMSTREAM}, "requires weights"),
         ({"weights": [[0] * 4] * 4}, "no initializer"),
-        ({"weight_delivery": WeightDelivery.CYCLIC, "weights": [[0]]}, "shape"),
-        ({"weight_delivery": WeightDelivery.CYCLIC, "weights": [[4] * 4] * 4}, "admitted"),
-        ({"weight_delivery": WeightDelivery.CYCLIC, "weights": [[0.5] * 4] * 4}, "integer"),
+        ({"weight_delivery": WeightDelivery.MEMSTREAM, "weights": [[0]]}, "shape"),
+        ({"weight_delivery": WeightDelivery.MEMSTREAM, "weights": [[4] * 4] * 4}, "admitted"),
+        ({"weight_delivery": WeightDelivery.MEMSTREAM, "weights": [[0.5] * 4] * 4}, "integer"),
     ],
 )
 def test_invalid_configuration_fails_during_construction(changes, match):
@@ -234,10 +234,10 @@ def test_build_is_complete_and_initializer_changes_identity(tmp_path, delivery):
     assert ".ACCU_WIDTH(8)" in wrapper
     assert ".olst(n__u_activations_input_gen__olst)" in wrapper
     assert prepared.slots == ()
-    if delivery is WeightDelivery.CYCLIC:
-        assert ".INIT_DATA(48'h0)" in wrapper
+    if delivery is WeightDelivery.MEMSTREAM:
+        assert '.INIT_FILE("memstream_' in wrapper
     if delivery is not WeightDelivery.EXTERNAL:
-        # The image is part of the identity: a ROM parameter or a memory INIT_FILE.
+        # The image is part of the identity: its content-named INIT_FILE.
         changed = assembly(weight_delivery=delivery, weights=[[1] * 4] * 4)
         changed_prepared = prepare_module_build(
             changed.requirements,

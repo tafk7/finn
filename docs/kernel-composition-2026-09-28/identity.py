@@ -15,6 +15,8 @@ then the decision keys per fact set. Two revisions are compared by diffing the o
 - ``v1``: ``form=Form``, weights stored ``(k, n)``;
 - ``k1``: as ``v1``, with the facts ``m``, ``n``, ``k``.
 
+Once the ROM is removed, its configurations print as removed.
+
 Run from the FINN checkout with src, tests and deps/qonnx/src on PYTHONPATH.
 """
 
@@ -144,7 +146,15 @@ def modules(built: Any) -> list[str]:
 def main() -> None:
     from finn.kernels.matmul import MatMulKernel, matmul_assembly
 
+    from finn.kernels.matmul import WeightDelivery
+
     for name, overrides in CONFIGS.items():
+        if (
+            overrides.get("weight_delivery") == "cyclic"
+            and "CYCLIC" not in WeightDelivery.__members__
+        ):
+            print(f"{name}: the ROM is removed")
+            continue
         built = matmul_assembly(**translate({**BASE, **overrides}, True))
         top = built.structure.top_abi
         print(f"{name}:")

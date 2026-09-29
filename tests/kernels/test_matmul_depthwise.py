@@ -120,7 +120,7 @@ def test_depthwise_cyclic_weights_are_the_channel_tile():
         pe=2,
         simd=3,
         realization="native",
-        weight_delivery=WeightDelivery.CYCLIC,
+        weight_delivery=WeightDelivery.MEMSTREAM,
         weights=weights,
     )
     assert "in1_V" not in {port.name for port in built.structure.top_abi.ports}
@@ -141,7 +141,7 @@ DENSE = dict(
     weights_dtype=DataType["INT4"],
     pe=3,
     simd=4,
-    weight_delivery=WeightDelivery.CYCLIC,
+    weight_delivery=WeightDelivery.MEMSTREAM,
     weights=WEIGHTS,
 )
 
@@ -151,7 +151,7 @@ def test_a_dense_realization_reads_window_by_channel_rows_against_block_diagonal
     built = matmul_assembly(target_dsp=DspBlock.DSP48E2, **DENSE)
     assert [item.instance_id for item in built.structure.instances] == [
         "u_compute_packed",
-        "u_memory_rom",
+        "u_memory_memstream",
         "u_activations_input_gen",
     ]
     compute = parameters(built.structure, "u_compute_packed")
@@ -189,8 +189,8 @@ def test_the_dense_realization_needs_known_weights_and_either_may_be_chosen_on_d
 @pytest.mark.parametrize(
     "weights,delivery,narrow",
     [
-        (WEIGHTS, WeightDelivery.CYCLIC, 1),  # no weight is INT4's -8
-        (((-8, 0, 0), (0,) * 3, (0,) * 3, (0,) * 3), WeightDelivery.CYCLIC, 0),
+        (WEIGHTS, WeightDelivery.MEMSTREAM, 1),  # no weight is INT4's -8
+        (((-8, 0, 0), (0,) * 3, (0,) * 3, (0,) * 3), WeightDelivery.MEMSTREAM, 0),
         (None, WeightDelivery.EXTERNAL, 0),  # weights at run time promise nothing
     ],
 )

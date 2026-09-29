@@ -3,12 +3,12 @@
 
 """FinnLib ``memstream_axi``: a stored integer operand streamed in its consumer's order.
 
-As for ``RomKernel``, the consumer supplies the operand ``contents`` and the
-beat ``form`` it reads them in; the kernel packs one image per set in that form
-into the memory. Initial contents go through INIT_FILE, a generated data file
+The consumer supplies the operand ``contents`` and the beat ``form`` it reads
+them in; the kernel packs one image per set in that form into the memory, so
+the consumer's order needs no adapter. Initial contents go through INIT_FILE, a generated data file
 named by its contents, so they are part of the build identity.
 
-- With one set, the image streams cyclically, like the ROM.
+- With one set, the image streams cyclically.
 - With ``sets`` > 1, ``contents`` holds one operand per set, and each index
   accepted on ``set_stream`` streams one whole set. The output presents one
   pass per index; the set stream is an ordinary stream reference input.
@@ -42,6 +42,7 @@ from finn.dataflow.datatypes import (
     ordinary_integer_bounds,
     resolve_qonnx_datatype_name,
 )
+from finn.dataflow.tensor import ScalarEncoding
 from finn.dataflow.traversal import (
     BEAT_SEQUENCE,
     TRAVERSAL,
@@ -66,10 +67,19 @@ from finn.kernels.datatypes.semantics import (
     IntegerVector,
 )
 from finn.kernels.port import GivenPort
-from finn.kernels.rom import stored_element
 from finn.kernels.streams import Stream
 
 MEMSTREAM_RAM_STYLES = ("auto", "distributed", "block", "ultra")
+
+
+def stored_element(carried: ScalarEncoding, stored: ScalarEncoding) -> bool | Rejected:
+    """A memory's output stream carries the element the memory stores."""
+    if carried != stored:
+        return reject(
+            "memory-element",
+            f"the stream carries {carried.datatype_name}, the memory stores {stored.datatype_name}",
+        )
+    return True
 
 
 class MemStreamKernel(Kernel):
@@ -308,4 +318,4 @@ def _leaves(values: object) -> tuple[int, ...]:
     return tuple(leaf for item in values for leaf in _leaves(item))
 
 
-__all__ = ["MEMSTREAM_RAM_STYLES", "MemStreamKernel"]
+__all__ = ["MEMSTREAM_RAM_STYLES", "MemStreamKernel", "stored_element"]

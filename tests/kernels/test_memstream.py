@@ -118,10 +118,6 @@ def test_writable_weights_export_axilite_and_need_the_memstream():
     (bus,) = [port for port in built.structure.top_abi.ports if isinstance(port, Bus)][-1:]
     assert bus.name == "s_axilite"
     assert {member.physical for member in bus.signals} >= {"s_axilite_AWADDR", "s_axilite_WDATA"}
-    with pytest.raises(ValueError, match="rom-writable"):
-        matmul_assembly(
-            **{**MATMUL, "weight_delivery": WeightDelivery.CYCLIC}, writable_weights=True
-        )
 
 
 def test_several_weight_sets_take_a_set_index_per_row():
@@ -136,10 +132,6 @@ def test_several_weight_sets_take_a_set_index_per_row():
     )
     assert memstream["SETS"] == 2
     assert len(built.initializer) == 8  # both sets, set after set
-    with pytest.raises(ValueError, match="rom-sets"):
-        matmul_assembly(
-            **{**MATMUL, "weights": sets, "weight_delivery": WeightDelivery.CYCLIC}, weight_sets=2
-        )
     facts = {name: MATMUL[name] for name in ("m", "k", "n", "target_dsp")}
     base = design_space(
         MatMulKernel(

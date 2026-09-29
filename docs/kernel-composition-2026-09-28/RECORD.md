@@ -359,3 +359,38 @@ the gate results as observed, key and name changes (D7), and deviations.
 - **Fast gates.** Space 448, kernels 800 + 15 XSim skipped, graph 4 + 2 XSim
   skipped, dataflow 40; ruff and mypy clean. The XSim tests passed locally
   before the commit and run again from it.
+
+## XSim from the commits
+
+- **K2** (`8d68a7c4b`, snapshot): every numeric sweep passes: dense 40, FIFO
+  6 and 6, depthwise 34, memstream 14 and 12, pumped 14, writable 14, sets
+  14, dotp 27, dotp-stress 17, adapters 26 (224).
+- **S4** (`c7764f7f9`, snapshot): the kernel suite with its XSim tests passes
+  (815), the Design gate fused and unfused among them. Its numeric sweeps did
+  not run: the snapshot lacked the locally built XSI extension
+  (`finn_xsi/xsi.so`, ignored build output), so every sweep failed to start.
+  The runner now copies it; the sweeps run from the next commit instead,
+  whose hardware includes S4's.
+
+## ROM removed (user, 2026-09-28)
+
+The cyclic ROM (`RomKernel`, `cyclic_stream.sv`) embedded no eliminable
+constants: its words reached the DSP cores through a registered stream, as a
+read-only memstream's do, so it duplicated the memstream with fewer options.
+Removed: `finn.kernels.rom`, `resources/cyclic_stream.sv`,
+`WeightDelivery.CYCLIC`, `matmul_assembly(rom_style=)`, `ROM_STYLE`, the
+`rom` candidate of `memory` (now `none` or `memstream`), and
+`test_streaming_components` (the ROM's own tests). `stored_element` moved to
+`finn.kernels.memstream`. Tests and harnesses that used the ROM as a constant
+producer use a read-only `MemStreamKernel`; hand-wired compositions tie off
+what it holds; XSim harnesses place its INIT_FILE where `$readmemh` reads it
+(the shared `tests/kernels/xsim.py`, the adapter harness, the
+stream-contract test); `test_two_kernels` uses the shared harness. FINN's
+`mem_mode` for the memstream stays `internal_decoupled`. The real embedded
+path is a design note: `docs/constant-weights-2026-09-28/DESIGN.md`.
+
+- **Identity** (`evidence/identity-norom.txt`): every remaining configuration
+  is identical to S4's, fingerprints included; the four ROM configurations
+  and the key `memory.rom.rom_style` are gone.
+- **Fast gates**: Space 448, kernels 792 + 14 XSim skipped, graph 4 + 2 XSim
+  skipped, dataflow 40; ruff and mypy clean; documentation examples 27.

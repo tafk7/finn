@@ -23,7 +23,7 @@ from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import Traversal, vector_major
 from finn.kernels.composite import Design
 from finn.kernels.configure import commit, compatible
-from finn.kernels.rom import RomKernel
+from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.streams import (
     Stream,
 )
@@ -52,7 +52,7 @@ def adapted(source: Traversal, pe: int, *, adaptable: bool = True, commit_all: b
     class Adapted(Design):
         x = Stream(tensor=Tensor(source.shape, ELEMENT), adaptable=adaptable)
         y = Stream(tensor=Tensor(source.shape, ScalarEncoding(DataType["UINT4"])), port="out0_V")
-        producer = RomKernel(
+        producer = MemStreamKernel(
             dtype=DataType["INT4"], form=source, contents=values(rows, channels), output_stream=x
         )
         activate = ThresholdingAxiKernel(
@@ -70,7 +70,8 @@ def adapted(source: Traversal, pe: int, *, adaptable: bool = True, commit_all: b
     point = commit(
         design_space(Adapted()),
         {
-            "producer.rom_style": "distributed",
+            "producer.ram_style": "distributed",
+            "producer.pumped_memory": False,
             "activate.use_axilite": False,
             "activate.deep_pipeline": False,
         },

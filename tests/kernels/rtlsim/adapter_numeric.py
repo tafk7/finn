@@ -54,9 +54,11 @@ def _build(point, directory):
         blobs=store,
     )
     materialized = materialize_module_sources(prepared, store)
-    return prepared.abi.entry_point, [
-        str(Path(materialized.directory) / path) for path in materialized.files
-    ]
+    files = [Path(materialized.directory) / path for path in materialized.files]
+    sources = [str(path) for path in files if path.suffix != ".dat"]
+    # A memory's INIT_FILE, read by $readmemh from the simulator's directory.
+    data = {path.name: path.read_text() for path in files if path.suffix == ".dat"}
+    return prepared.abi.entry_point, sources, data
 
 
 ROWS, CHANNELS = 3, 12
@@ -89,10 +91,10 @@ def run_adapted(label, source, pe, modules, evidence):
     assert kinds == modules, (label, kinds)
     levels = [value + 8 for row in values(*source.shape) for value in row]
     expected = [_pack(levels[start : start + pe], 4) for start in range(0, len(levels), pe)]
-    top, sources = _build(point, evidence / f"adapted_{label}")
+    top, sources, data = _build(point, evidence / f"adapted_{label}")
     mask = (1 << (4 * pe)) - 1
     for stalls in (False, True):
-        out = drive(top, sources, {}, len(expected), stalls=stalls)
+        out = drive(top, sources, {}, len(expected), stalls=stalls, data_files=data)
         assert [word & mask for word in out] == expected, (label, stalls)
         print(f"PASS {label} ({' -> '.join(modules)}) stalled={stalls}", flush=True)
 
@@ -113,11 +115,18 @@ def run_transpose(rows, cols, simd, evidence):
         for j in range(cols)
         for start in range(0, rows, simd)
     ]
-    top, sources = _build(transposed(rows, cols, simd), evidence / f"shuffle_{rows}_{cols}_{simd}")
+    top, sources, data = _build(
+        transposed(rows, cols, simd), evidence / f"shuffle_{rows}_{cols}_{simd}"
+    )
     mask = (1 << (simd * BITS)) - 1
     for stalls in (False, True):
         out = drive(
-            top, sources, {"in0": _padded(stimulus, simd * BITS)}, len(expected), stalls=stalls
+            top,
+            sources,
+            {"in0": _padded(stimulus, simd * BITS)},
+            len(expected),
+            stalls=stalls,
+            data_files=data,
         )
         assert [word & mask for word in out] == expected, (rows, cols, simd, stalls)
         print(f"PASS inner_shuffle {rows}x{cols}/{simd} stalled={stalls}", flush=True)

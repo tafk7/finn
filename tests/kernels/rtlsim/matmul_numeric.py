@@ -135,7 +135,7 @@ def run(
     configuration: Configuration,
     delivery: WeightDelivery,
     evidence: Path,
-    rom_style: str = "auto",
+    ram_style: str = "auto",
     weight_fifo_depth: int | None = None,
     pumped_memory: bool = False,
     writable: bool = False,
@@ -191,7 +191,7 @@ def run(
         weights=None
         if delivery is WeightDelivery.EXTERNAL
         else (stored[0].T if sets == 1 else np.swapaxes(stored, 1, 2)).tolist(),
-        rom_style=rom_style,
+        ram_style=ram_style,
         pumped_memory=pumped_memory,
         writable_weights=writable,
         weight_sets=sets,
@@ -260,7 +260,7 @@ def run(
             stimulus[name] = [
                 word | (padding if index % 2 else 0) for index, word in enumerate(stimulus[name])
             ]
-    suffix = "_" + rom_style if delivery is WeightDelivery.CYCLIC and rom_style != "auto" else ""
+    suffix = "_" + ram_style if delivery is WeightDelivery.MEMSTREAM and ram_style != "auto" else ""
     suffix += f"_fifo{weight_fifo_depth}" if weight_fifo_depth else ""
     suffix += "_pumped_memory" if pumped_memory else ""
     suffix += "_writable" if writable else ""
@@ -386,7 +386,9 @@ def main() -> None:
     parser.add_argument("--depthwise", action="store_true", help="run the depthwise cases")
     parser.add_argument("--delivery", choices=[delivery.value for delivery in WeightDelivery])
     parser.add_argument("--output", type=Path)
-    parser.add_argument("--rom-style", default="auto", choices=("auto", "distributed", "block"))
+    parser.add_argument(
+        "--ram-style", default="auto", choices=("auto", "distributed", "block", "ultra")
+    )
     parser.add_argument("--weight-fifo-depth", type=int)
     parser.add_argument("--pumped-memory", action="store_true", help="memstream at ap_clk2x")
     parser.add_argument("--writable", action="store_true", help="rewrite memstream weights")
@@ -397,7 +399,7 @@ def main() -> None:
     for case in cases:
         if (args.case is None and case.depthwise is args.depthwise) or args.case == case.label:
             for delivery in WeightDelivery:
-                # A dense realization needs known weights; narrow weights need cyclic.
+                # A dense realization and narrow weights need known weights.
                 known = delivery is not WeightDelivery.EXTERNAL
                 if (case.realization == "dense" or case.narrow) and not known:
                     continue
@@ -409,7 +411,7 @@ def main() -> None:
                         case,
                         delivery,
                         directory,
-                        args.rom_style,
+                        args.ram_style,
                         args.weight_fifo_depth,
                         args.pumped_memory,
                         args.writable,

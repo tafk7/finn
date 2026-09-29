@@ -157,8 +157,6 @@ for delivery in WeightDelivery:
     if delivery is not WeightDelivery.EXTERNAL:
         # Stored (k, n): the columns of the by-output rows.
         options["weights"] = [[-4, 0, 3, -1], [-3, 1, 2, -2], [-2, 2, 1, -3], [-1, 3, 0, -4]]
-    if delivery is WeightDelivery.CYCLIC:
-        expected |= {"cyclic_stream.sv"}
     if delivery is WeightDelivery.MEMSTREAM:
         expected |= {"rtl/infra/axilite.sv", "rtl/infra/memstream.sv", "rtl/infra/memstream_axi.sv"}
     assembly = matmul_assembly(
@@ -176,8 +174,8 @@ for delivery in WeightDelivery:
     wrapper = materialize(assembly.requirements, expected).read_text()
     assert ".ACCU_WIDTH(8)" in wrapper
     assert ".olst(n__u_activations_input_gen__olst)" in wrapper
-    if delivery is WeightDelivery.CYCLIC:
-        assert ".INIT_DATA(48'h941dd36be22c)" in wrapper
+    if delivery is WeightDelivery.MEMSTREAM:
+        assert '.INIT_FILE("memstream_' in wrapper
     if delivery is WeightDelivery.EXTERNAL:
         assert assembly.initializer == ()
     else:
@@ -240,7 +238,6 @@ def test_installed_wheel_materializes_independent_kernel_builds(tmp_path: Path) 
             "finn/dataflow/py.typed",
             "finn/dataflow/datatypes.py",
             "finn/dataflow/traversal.py",
-            "finn/kernels/resources/cyclic_stream.sv",
             "finn/kernels/resources/decomposed_wrapper.sv.j2",
         } <= set(archive.namelist())
         assert not any(

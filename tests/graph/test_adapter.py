@@ -72,7 +72,7 @@ def configured(wrapped: ModelWrapper, *, fused: bool = True) -> Any:
             f"{kernel}.weight_stream.transport": "direct",
         }
         if f"{kernel}.memory" not in dict(design.pinned):
-            choices[f"{kernel}.memory"] = "rom"
+            choices[f"{kernel}.memory"] = "memstream"
     point = settled(commit(design.point, choices))
     folds: dict[str, object] = {}
     for _, kernel in design.kernels:
@@ -81,8 +81,9 @@ def configured(wrapped: ModelWrapper, *, fused: bool = True) -> Any:
             f"{kernel}.compute.packed.simd": SIMD,
             f"{kernel}.compute.packed.compute_pumping": False,
         }
-        if getattr(point, kernel).supplied == "rom":
-            folds[f"{kernel}.memory.rom.rom_style"] = "auto"
+        if getattr(point, kernel).supplied == "memstream":
+            folds[f"{kernel}.memory.memstream.ram_style"] = "auto"
+            folds[f"{kernel}.memory.memstream.pumped_memory"] = False
     return design, settled(commit(point, folds))
 
 
@@ -133,7 +134,7 @@ def test_the_finn_model_carries_each_kernels_mvau_attributes():
         "MH": HIDDEN,
         "SIMD": SIMD,
         "PE": PE,
-        "mem_mode": "internal_embedded",
+        "mem_mode": "internal_decoupled",
     }
     assert op.get_nodeattr("outputDataType") == H.name
     assert op.get_nodeattr("weightDataType") == W.name

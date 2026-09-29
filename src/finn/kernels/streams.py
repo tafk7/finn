@@ -419,7 +419,7 @@ PARTS = ViewKey("parts", PARTS_SEMANTICS)
 
 
 def _instance(node: str | None) -> str | None:
-    """``u_<node>``; a candidate of a Decision (``memory.rom``) joins with ``_``."""
+    """``u_<node>``; a candidate of a Decision (``memory.memstream``) joins with ``_``."""
     return None if node is None else "u_" + node.replace(".", "_")
 
 

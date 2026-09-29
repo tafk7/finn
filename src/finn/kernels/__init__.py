@@ -13,7 +13,6 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from finn.kernels.composite import Composite, Design
     from finn.kernels.configure import commit
-    from finn.kernels.rom import RomKernel
     from finn.kernels.dotp import (
         DotpAxiKernel,
         Int8Dsp58DotpKernel,
@@ -23,6 +22,7 @@ if TYPE_CHECKING:
     from finn.kernels.fifo import FifoKernel
     from finn.kernels.input_generator import InputGeneratorKernel
     from finn.kernels.int_to_fp32 import IntToFp32Kernel
+    from finn.kernels.memstream import MemStreamKernel
     from finn.kernels.memstream_hls import MemStreamHlsKernel
     from finn.kernels.thresholding import ThresholdingAxiKernel
     from finn.kernels.matmul import MatMulAssembly, MatMulKernel, WeightDelivery, matmul_assembly
@@ -30,7 +30,7 @@ if TYPE_CHECKING:
     from finn.kernels.vpc import VpcKernel
 
 _LAZY_EXPORTS = {
-    "RomKernel": ("finn.kernels.rom", "RomKernel"),
+    "MemStreamKernel": ("finn.kernels.memstream", "MemStreamKernel"),
     "commit": ("finn.kernels.configure", "commit"),
     "Composite": ("finn.kernels.composite", "Composite"),
     "Design": ("finn.kernels.composite", "Design"),
@@ -63,7 +63,7 @@ def __getattr__(name: str) -> object:
 
 
 __all__ = [
-    "RomKernel",
+    "MemStreamKernel",
     "commit",
     "Composite",
     "Design",

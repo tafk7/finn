@@ -27,9 +27,10 @@ CHOICES = {
         "compute.packed.pe": 2,
         "compute.packed.simd": 2,
     },
-    "rom-fifo": {
-        "memory": "rom",
-        "memory.rom.rom_style": "block",
+    "memstream-fifo": {
+        "memory": "memstream",
+        "memory.memstream.ram_style": "block",
+        "memory.memstream.pumped_memory": False,
         "weight_stream.transport": "fifo",
         "weight_stream.transport.fifo.buffer.depth": 8,
         "weight_stream.transport.fifo.buffer.ram_style": "auto",
@@ -44,7 +45,7 @@ CHOICES = {
 
 
 def _open(case: str, *, collapsed: bool) -> MatMulKernel:
-    facts = {**FACTS, "weights": WEIGHTS} if case == "rom-fifo" else FACTS
+    facts = {**FACTS, "weights": WEIGHTS} if case == "memstream-fifo" else FACTS
     return commit(open_space(MatMulKernel(**facts), collapsed=collapsed), CHOICES[case])
 
 
@@ -58,8 +59,8 @@ def test_every_matmul_node_answers_the_same_with_and_without_collapse() -> None:
 
 
 def test_collapse_keeps_matmul_keys_and_evaluates_fewer_aliases() -> None:
-    collapsed = _open("rom-fifo", collapsed=True)
-    plain = _open("rom-fifo", collapsed=False)
+    collapsed = _open("memstream-fifo", collapsed=True)
+    plain = _open("memstream-fifo", collapsed=False)
     assert [item.key for item in inspection.decisions(collapsed)] == [
         item.key for item in inspection.decisions(plain)
     ]
@@ -67,8 +68,8 @@ def test_collapse_keeps_matmul_keys_and_evaluates_fewer_aliases() -> None:
     def read(point: object) -> object:
         return point.query(MatMulKernel.structure)  # type: ignore[attr-defined]
 
-    before = counts(_open("rom-fifo", collapsed=False), read)
-    after = counts(_open("rom-fifo", collapsed=True), read)
+    before = counts(_open("memstream-fifo", collapsed=False), read)
+    after = counts(_open("memstream-fifo", collapsed=True), read)
     assert after.nodes == before.nodes and after.aliases == before.aliases
     assert after.alias_edges < before.alias_edges
     assert after.aliases_evaluated < before.aliases_evaluated

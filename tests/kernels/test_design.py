@@ -80,7 +80,7 @@ def chain(*, fused: bool) -> Chain:
     for layer in ("first", "second"):
         choices |= {
             f"{layer}.fused": fused,
-            f"{layer}.memory": "rom",
+            f"{layer}.memory": "memstream",
             f"{layer}.weight_stream.transport": "direct",
         }
     point = settled(commit(design_space(Chain()), choices))
@@ -90,7 +90,8 @@ def chain(*, fused: bool) -> Chain:
             f"{layer}.compute.packed.pe": PE,
             f"{layer}.compute.packed.simd": SIMD,
             f"{layer}.compute.packed.compute_pumping": False,
-            f"{layer}.memory.rom.rom_style": "auto",
+            f"{layer}.memory.memstream.ram_style": "auto",
+            f"{layer}.memory.memstream.pumped_memory": False,
         }
     return settled(commit(point, folds))
 
@@ -106,7 +107,7 @@ def test_a_fused_matmul_is_one_nested_module_on_the_design_streams():
     # The design's streams connect directly: each MatMul presents its boundary.
     assert all(stream.plan.steps == () for stream in (point.x, point.hidden, point.levels))
     first = point.structure.structure.instances[0].requirements
-    assert first.abi.entry_point.value.startswith("finn_matmul_rom__")  # type: ignore[union-attr]
+    assert first.abi.entry_point.value.startswith("finn_matmul_memstream__")  # type: ignore[union-attr]
     assert {port.name for port in first.abi.ports} >= {"in0_V", "out0_V"}
     # The design's own ports are its boundary streams.
     top = {port.name for port in point.structure.structure.top_abi.ports}
@@ -118,11 +119,11 @@ def test_an_unfused_matmul_joins_the_design_module_spliced_on_its_streams():
     names = instances(point)
     assert {
         "u_first_compute_packed",
-        "u_first_memory_rom",
+        "u_first_memory_memstream",
         "u_first_activations_input_gen",
         "u_activate",
         "u_second_compute_packed",
-        "u_second_memory_rom",
+        "u_second_memory_memstream",
         "u_second_activations_input_gen",
     } == set(names)
     # It exports its parts, not a module; each boundary names its internal stream.

@@ -39,7 +39,7 @@ from finn.kernels.dotp import Int8Dsp58DotpKernel, PackedDotpKernel
 from finn.kernels.eltwise import EltwiseKernel
 from finn.kernels.matmul import MatMulKernel
 from finn.kernels.port import StreamPort
-from finn.kernels.rom import RomKernel
+from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.streams import Stream
 from finn.kernels.target import DspBlock
 from kernels.helpers import settled
@@ -82,7 +82,7 @@ def placed(
         a = Stream(tensor=Tensor(x, ScalarEncoding(A)), port="in0_V")
         w_s = Stream(tensor=Tensor(w, ScalarEncoding(W)), adaptable=adaptable)
         r = Stream(tensor=Tensor(y, ScalarEncoding(R)), port="out0_V")
-        weights = RomKernel(dtype=W, form=tiled, contents=weight_values(w), output_stream=w_s)
+        weights = MemStreamKernel(dtype=W, form=tiled, contents=weight_values(w), output_stream=w_s)
         compute = core(
             target_dsp=DspBlock.DSP58,
             target_period_ns=5.0,
@@ -98,7 +98,8 @@ def placed(
             "compute.pe": pe,
             "compute.simd": SIMD,
             "compute.compute_pumping": False,
-            "weights.rom_style": "auto",
+            "weights.ram_style": "auto",
+            "weights.pumped_memory": False,
         },
     )
 
