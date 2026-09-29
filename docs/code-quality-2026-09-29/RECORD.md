@@ -162,3 +162,14 @@ XSim skipped, dataflow 40; identity identical to `identity-norom.txt`.
 - **Lines.** tests −194 net (10 files, +264 −458).
 - **Gates.** Space 448, kernels 791 + 14 skipped, graph 4 + 2, dataflow 40;
   ruff and mypy clean; examples 27; identity unchanged.
+
+## XSim from the commits
+
+Snapshots via `git archive` with their own `deps` and `xsi.so`; sweep counts
+compared with the post-ROM-removal baseline (`/tmp/xsim/norom`: dense 26,
+FIFO 4 and 4, depthwise 22, memstream 14 and 12, pumped 14, writable 14, sets
+14, dotp 27, dotp-stress 17, adapters 26).
+
+- **A** (`b99691538`, XSim pytest): kernels 805, graph 6, all pass.
+- **C** (`bdd00a0e2`, everything; covers B and C): pytest 805, graph 6; every
+  sweep passes with the baseline count (214 passes, no failures).
