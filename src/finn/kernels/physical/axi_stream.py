@@ -1,38 +1,53 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Typed, low-field-first AXIS values and ports for codegen and logical binding.
+"""Typed, low-field-first AXIS values for codegen and logical binding.
 
 One declaration supplies the pins and the packing. Scalar encodings keep their
 QONNX widths; only the complete beat is padded to a byte boundary. This describes
 the interface of a core, not a converter that changes its RTL implementation.
-``AxiStreamPort`` is the typed AXI profile of a ``TypedStream``: like the native
-port, it binds to a separately owned scalar rather than admitting a dtype itself.
+A kernel's ``StreamPort`` (``finn.kernels.port``) builds one from its lanes.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-from finn.core.space import (
-    Param,
-    Rejected,
-    View,
-    default_semantics,
-    derived,
-    reject,
-)
 from finn.kernels.artifacts.abi import Bus, Endpoint
-from finn.kernels.datatypes.scalar import Scalar
 from finn.dataflow.datatypes import (
     QONNXDataType,
     canonical_qonnx_datatype,
     qonnx_datatype_width,
     resolve_qonnx_datatype_name,
 )
-from finn.kernels.physical.layout import PackedBeatLayout
-from finn.kernels.physical.ports import TypedStream, lane_layout
+from finn.kernels.physical.layout import (
+    FieldPlacement,
+    PackedBeatLayout,
+    UnusedBitPolicy,
+    UnusedBitRange,
+)
 from finn.kernels.physical.stream import MarkerKind, ReadyValidStream, StreamMarker
+
+
+def lane_layout(
+    element_bits: int, lanes: int, carrier_bits: int, endpoint: Endpoint
+) -> PackedBeatLayout:
+    """Element zero in the least-significant field; padding follows the payload."""
+    payload = element_bits * lanes
+    return PackedBeatLayout(
+        tuple(FieldPlacement(index, index * element_bits, element_bits) for index in range(lanes)),
+        ()
+        if payload == carrier_bits
+        else (
+            UnusedBitRange(
+                payload,
+                carrier_bits - payload,
+                UnusedBitPolicy.IGNORE_ON_RECEIVE
+                if endpoint is Endpoint.TARGET
+                else UnusedBitPolicy.UNSPECIFIED,
+            ),
+        ),
+    )
 
 
 @dataclass(frozen=True, init=False)
@@ -119,52 +134,4 @@ class AxiStream:
         )
 
 
-class AxiStreamPort(TypedStream):
-    """A byte-aligned AXIS profile over lanes of an accepted scalar encoding."""
-
-    last: bool = Param()
-
-    @derived
-    def carrier_bits(self) -> int:
-        return (self.payload_bits + 7) // 8 * 8
-
-    @derived(semantics=default_semantics(PackedBeatLayout))
-    def payload(self) -> PackedBeatLayout:
-        return lane_layout(self.element_bits, self.lanes, self.carrier_bits, self.endpoint)
-
-    @derived(semantics=default_semantics(AxiStream))
-    def candidate(self) -> AxiStream | Rejected:
-        try:
-            return AxiStream(
-                self.name,
-                self.element.dtype,
-                self.lanes,
-                endpoint=self.endpoint,
-                last=self.last,
-            )
-        except ValueError as error:
-            return reject("interface-lanes", str(error))
-
-    stream = View(candidate, requires=(TypedStream.lanes_valid,))
-
-
-def axi_stream(
-    name: str,
-    lanes: int,
-    endpoint: Endpoint,
-    element: Scalar,
-    *,
-    last: bool = False,
-) -> AxiStreamPort:
-    """Bind an AXIS port to its scalar's raw dtype and accepted encoding."""
-    return AxiStreamPort(
-        name=name,
-        endpoint=endpoint,
-        lanes=lanes,
-        last=last,
-        dtype=element.dtype,
-        element=element.encoding,
-    )
-
-
-__all__ = ["AxiStream", "AxiStreamPort", "axi_stream"]
+__all__ = ["AxiStream", "lane_layout"]

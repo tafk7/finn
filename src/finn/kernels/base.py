@@ -22,7 +22,7 @@ The base derives the rest: the module's ABI (clocking, other pins, then every
 port's pins), ``build_requirements`` (accepted under ``admission``), the
 ``tieoffs`` (the doubled clock while unused, idle ports, and what it holds
 itself) and the exports ``MODULE`` and ``TIEOFFS``. A composite kernel wires
-its children's modules through streams instead (``finn.kernels.streams.netlist``).
+its children's modules through streams instead (``finn.kernels.composite``).
 """
 
 from __future__ import annotations
@@ -91,14 +91,6 @@ TIEOFFS_SEMANTICS = default_semantics(Tieoffs)
 TIEOFFS = ViewKey("tieoffs", TIEOFFS_SEMANTICS)
 HELD = ViewKey("held", TIEOFFS_SEMANTICS)
 """What an idle port holds, collected by its kernel's tie-offs."""
-
-
-def merged(*parts: Tieoffs) -> Tieoffs:
-    """Every part's held inputs and unused outputs, in order."""
-    return Tieoffs(
-        tuple(pin for part in parts for pin in part.inputs),
-        tuple(pin for part in parts for pin in part.unused),
-    )
 
 
 @dataclass(frozen=True)
@@ -235,8 +227,10 @@ class Kernel(Space):
         held = self.held()
         if isinstance(held, Rejected):
             return held
-        return merged(
-            Tieoffs(self.clocking.held()), *(item.value for item in self.port_holds), held
+        parts = (Tieoffs(self.clocking.held()), *(item.value for item in self.port_holds), held)
+        return Tieoffs(
+            tuple(pin for part in parts for pin in part.inputs),
+            tuple(pin for part in parts for pin in part.unused),
         )
 
     # A kernel adding exports of its own extends these: ``{**Kernel.exports, KEY: ...}``.
@@ -256,5 +250,4 @@ __all__ = [
     "TIEOFFS",
     "TIEOFFS_SEMANTICS",
     "Tieoffs",
-    "merged",
 ]

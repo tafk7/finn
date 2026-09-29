@@ -1,13 +1,15 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""XSim a composed module with one AXIS input and one AXIS output.
+"""XSim harness: build a module's sources, run a testbench, stream words through a Design.
 
-``stream_through`` builds ``requirements``, drives ``in0_V`` with ``words_in``
-(under stalls on both sides unless ``stalled`` is False), and checks that
-``out0_V`` presents ``words_out``, each compared on its low ``out_bits`` (an
-AXIS word is padded to bytes). A memory's INIT_FILE is placed where
-``$readmemh`` reads it.
+``materialize`` builds ``requirements`` into a directory and places each
+memory's INIT_FILE where ``$readmemh`` reads it. ``simulate`` elaborates a
+testbench module ``check`` against sources and requires it to display
+``PASS``. ``stream_through`` drives a composed module's AXIS inputs with
+words (under stalls on both sides unless ``stalled`` is False) and checks
+that each AXIS output presents its words, compared on their payload bits (an
+AXIS word is padded to bytes); every other top input is held at zero.
 """
 
 from __future__ import annotations
@@ -15,17 +17,19 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 import pytest
 
+from finn.kernels.artifacts.abi import Clock, Direction, Reset
 from finn.kernels.artifacts.build import (
     ModuleBuildRequirements,
     materialize_module_sources,
     prepare_module_build,
 )
 from finn.kernels.artifacts.store import ArtifactStore
+from finn.kernels.physical.validation import abi_pins
 from finn.kernels.resources import resource_root, template_root
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -35,6 +39,9 @@ requires_xsim = pytest.mark.skipif(
     reason="Vivado simulator tools are unavailable",
 )
 
+Words = tuple[Sequence[int], int]
+"""A port's words, and the payload bits of each."""
+
 
 def pack(values: Sequence[int], bits: int) -> int:
     """Lanes low first, each ``bits`` wide."""
@@ -42,74 +49,35 @@ def pack(values: Sequence[int], bits: int) -> int:
     return sum((value & mask) << (index * bits) for index, value in enumerate(values))
 
 
-def stream_through(
-    requirements: ModuleBuildRequirements,
-    directory: Path,
-    *,
-    words_in: Sequence[int],
-    in_bits: int,
-    words_out: Sequence[int],
-    out_bits: int,
-    stalled: bool = True,
-) -> None:
+def materialize(
+    requirements: ModuleBuildRequirements, directory: Path
+) -> tuple[str, list[str], dict[str, str]]:
+    """The top module, its HDL sources, and each INIT_FILE's name and contents.
+
+    FinnLib is ``FINNLIB_ROOT``, or the pinned checkout under ``deps``.
+    """
     store = ArtifactStore(directory / "store")
+    finnlib = Path(os.environ.get("FINNLIB_ROOT", str(ROOT / "deps/finnlib")))
     prepared = prepare_module_build(
         requirements,
-        roots={"kernels": resource_root(), "finnlib": ROOT / "deps/finnlib"},
+        roots={"kernels": resource_root(), "finnlib": finnlib},
         template_roots=(template_root(),),
         blobs=store,
     )
     materialized = materialize_module_sources(prepared, store)
     files = [Path(materialized.directory) / path for path in materialized.files]
     sources = [str(path) for path in files if path.suffix != ".dat"]
-    for path in files:  # $readmemh reads an INIT_FILE from the simulator's directory
-        if path.suffix == ".dat":
-            (directory / path.name).write_bytes(path.read_bytes())
-    in_width, out_width = (in_bits + 7) // 8 * 8, (out_bits + 7) // 8 * 8
-    table_in = ", ".join(f"{in_width}'h{word:x}" for word in words_in)
-    table_out = ", ".join(f"{out_bits}'h{word:x}" for word in words_out)
-    valid, ready = ("cycle % 3 != 0", "cycle % 4 != 1") if stalled else ("1", "1")
-    testbench = directory / "check.sv"
-    testbench.write_text(f"""`timescale 1ns/1ps
-module check;
-    logic ap_clk = 0, ap_rst_n = 0;
-    logic [{in_width - 1}:0] in0_V_tdata; logic in0_V_tvalid = 0; wire in0_V_tready;
-    wire [{out_width - 1}:0] out0_V_tdata; wire out0_V_tvalid; logic out0_V_tready = 0;
-    logic [{in_width - 1}:0] words_in [{len(words_in)}] = '{{{table_in}}};
-    logic [{out_bits - 1}:0] words_out [{len(words_out)}] = '{{{table_out}}};
-    always #5 ap_clk = !ap_clk;
-    {prepared.abi.entry_point} dut (.*);
-    int sent = 0, received = 0, cycle = 0;
-    always @(posedge ap_clk) begin
-        cycle <= cycle + 1;
-        if (ap_rst_n) begin
-            if (in0_V_tvalid && in0_V_tready) sent <= sent + 1;
-            if (out0_V_tvalid && out0_V_tready) begin
-                if (out0_V_tdata[{out_bits - 1}:0] !== words_out[received])
-                    $fatal(1, "word %0d: %h != %h", received, out0_V_tdata, words_out[received]);
-                received <= received + 1;
-            end
-        end
-    end
-    always @(negedge ap_clk) begin
-        in0_V_tvalid = ap_rst_n && sent < {len(words_in)} && ({valid});
-        in0_V_tdata = words_in[sent < {len(words_in)} ? sent : 0];
-        out0_V_tready = {ready};
-    end
-    initial begin
-        repeat (16) @(posedge ap_clk);  // past the DSP models' startup recovery (GSR)
-        ap_rst_n = 1;
-        wait (received == {len(words_out)});
-        repeat (4) @(posedge ap_clk);
-        $display("STREAM_PASS");
-        $finish;
-    end
-    initial begin #400000; $fatal(1, "watchdog"); end
-endmodule
-""")
+    data = {path.name: path.read_text() for path in files if path.suffix == ".dat"}
+    return str(prepared.abi.entry_point), sources, data
+
+
+def simulate(sources: Sequence[str | Path], testbench: str, directory: Path) -> None:
+    """Elaborate the testbench module ``check`` over ``sources``; it must display PASS."""
+    bench = directory / "check.sv"
+    bench.write_text("`timescale 1ns/1ps\n" + testbench)
     vivado = Path(os.environ.get("XILINX_VIVADO", str(Path(str(shutil.which("xelab"))).parents[1])))
     commands = (
-        ["xvlog", "--sv", *sources, str(vivado / "data/verilog/src/glbl.v"), str(testbench)],
+        ["xvlog", "--sv", *map(str, sources), str(vivado / "data/verilog/src/glbl.v"), str(bench)],
         [
             "xelab",
             "work.check",
@@ -118,6 +86,8 @@ endmodule
             "2",
             "-L",
             "unisims_ver",
+            "-L",
+            "unimacro_ver",
             "--snapshot",
             "check",
             "--timescale",
@@ -128,4 +98,94 @@ endmodule
     for command in commands:
         result = subprocess.run(command, cwd=directory, capture_output=True, text=True, timeout=300)
         assert result.returncode == 0, result.stdout + result.stderr
-    assert "STREAM_PASS" in result.stdout, result.stdout + result.stderr
+    assert "PASS" in result.stdout, result.stdout + result.stderr
+
+
+def _table(name: str, bits: int, words: Sequence[int]) -> str:
+    values = ", ".join(f"{bits}'h{word:x}" for word in words)
+    return f"logic [{bits - 1}:0] {name} [{len(words)}] = '{{{values}}};"
+
+
+def stream_through(
+    requirements: ModuleBuildRequirements,
+    directory: Path,
+    *,
+    inputs: Mapping[str, Words],
+    outputs: Mapping[str, Words],
+    stalled: bool = True,
+) -> None:
+    top, sources, data = materialize(requirements, directory)
+    for name, text in data.items():  # $readmemh reads an INIT_FILE from the simulator's directory
+        (directory / name).write_text(text)
+    valid, ready = ("cycle % 3 != 0", "cycle % 4 != 1") if stalled else ("1", "1")
+    streams = {**inputs, **outputs}
+    lines: list[str] = []
+    for name, info in abi_pins(requirements.abi).items():
+        if isinstance(info.role, (Clock, Reset)) or info.bus_id in streams:
+            continue
+        width = "" if info.width == 1 else f"[{info.width - 1}:0] "
+        held = info.direction is Direction.IN
+        lines.append(f"logic {width}{name} = 0;" if held else f"wire {width}{name};")
+    drive: list[str] = []
+    count: list[str] = []
+    done: list[str] = []
+    for port, (words, bits) in inputs.items():
+        carrier, total = (bits + 7) // 8 * 8, len(words)
+        lines += [
+            f"logic [{carrier - 1}:0] {port}_tdata; logic {port}_tvalid = 0; wire {port}_tready;",
+            _table(f"{port}_words", carrier, words),
+            f"int {port}_sent = 0;",
+        ]
+        count.append(f"if ({port}_tvalid && {port}_tready) {port}_sent <= {port}_sent + 1;")
+        drive += [
+            f"{port}_tvalid = ap_rst_n && {port}_sent < {total} && ({valid});",
+            f"{port}_tdata = {port}_words[{port}_sent < {total} ? {port}_sent : 0];",
+        ]
+    for port, (words, bits) in outputs.items():
+        carrier = (bits + 7) // 8 * 8
+        lines += [
+            f"wire [{carrier - 1}:0] {port}_tdata; wire {port}_tvalid; logic {port}_tready = 0;",
+            _table(f"{port}_words", bits, words),
+            f"int {port}_received = 0;",
+        ]
+        count.append(
+            f"""if ({port}_tvalid && {port}_tready) begin
+                if ({port}_tdata[{bits - 1}:0] !== {port}_words[{port}_received])
+                    $fatal(1, "{port} word %0d: %h != %h", {port}_received,
+                        {port}_tdata, {port}_words[{port}_received]);
+                {port}_received <= {port}_received + 1;
+            end"""
+        )
+        drive.append(f"{port}_tready = {ready};")
+        done.append(f"{port}_received == {len(words)}")
+    newline = "\n    "
+    simulate(
+        sources,
+        f"""module check;
+    logic ap_clk = 0, ap_rst_n = 0;
+    {newline.join(lines)}
+    always #5 ap_clk = !ap_clk;
+    {top} dut (.*);
+    int cycle = 0;
+    always @(posedge ap_clk) begin
+        cycle <= cycle + 1;
+        if (ap_rst_n) begin
+            {(newline + "        ").join(count)}
+        end
+    end
+    always @(negedge ap_clk) begin
+        {(newline + "    ").join(drive)}
+    end
+    initial begin
+        repeat (16) @(posedge ap_clk);  // past the DSP models' startup recovery (GSR)
+        ap_rst_n = 1;
+        wait ({" && ".join(done)});
+        repeat (4) @(posedge ap_clk);
+        $display("STREAM_PASS");
+        $finish;
+    end
+    initial begin #400000; $fatal(1, "watchdog"); end
+endmodule
+""",
+        directory,
+    )

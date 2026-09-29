@@ -35,15 +35,9 @@ from finn.kernels.memstream import MemStreamKernel
 from finn.dataflow.traversal import LevelEnd, BeatSequence, vector_major
 from finn.kernels.physical.axi_stream import AxiStream
 from finn.kernels.physical.contract import STREAM_CONTRACT, StreamContract
-from finn.kernels.streams import (
-    CONNECTION,
-    MODULE,
-    PORT,
-    TIEOFFS,
-    Stream,
-    boundary_contract,
-    netlist,
-)
+from finn.kernels.base import MODULE, PORT, TIEOFFS
+from finn.kernels.composite import netlist
+from finn.kernels.streams import CONNECTION, Stream, boundary_contract
 
 INT4 = ScalarEncoding(DataType["INT4"])
 PRODUCED = vector_major((4,), 2)

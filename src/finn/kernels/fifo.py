@@ -29,7 +29,6 @@ from finn.core.space import (
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.contribution_types import CopiedSource
 from finn.kernels.base import CLOCKING, NATIVE_CLOCKING, Clocking, Kernel
-from finn.kernels.physical.stream import STREAM_INTERFACES, ReadyValidStream
 from finn.kernels.port import WordPort
 
 
@@ -102,10 +101,6 @@ class FifoKernel(Kernel):
 
     input = WordPort(name="input", endpoint=Endpoint.TARGET, bits=word_bits)
     output = WordPort(name="output", endpoint=Endpoint.INITIATOR, bits=word_bits)
-
-    @view(semantics=STREAM_INTERFACES)
-    def interfaces(self) -> tuple[ReadyValidStream, ...] | Rejected:
-        return (self.input.transport, self.output.transport)
 
     @derived(semantics=CLOCKING)
     def clocking(self) -> Clocking:

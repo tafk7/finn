@@ -3,10 +3,10 @@
 
 """Commit a configuration's choices named by their stable keys, and settle the rest.
 
-Facts are the root node's typed formals: ``design_space(MatMulKernel(rows=..., ...))``. Keys
-are the ones ``inspection`` reports: ``"pe"``, ``"compute.compute_pumping"``, a
-structural Decision such as ``"delivery"``, or a candidate-local choice such
-as ``"memory.memstream.ram_style"``. All choices are committed in one atomic
+Facts are the root node's typed formals: ``design_space(MatMulKernel(m=..., ...))``. Keys
+are the ones ``inspection`` reports: a structural Decision such as ``"memory"``,
+or a candidate-local choice such as ``"compute.packed.pe"`` or
+``"memory.memstream.ram_style"``. All choices are committed in one atomic
 batch. Refusals are raised as ``ValueError`` with their findings.
 
 ``settle`` commits every Decision over kernels that compatibility decides: the
@@ -16,7 +16,8 @@ its ``admission`` member (a constraint group, a constraint or a view).
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Iterable, Mapping
+from fnmatch import fnmatchcase
 from typing import Any, TypeVar, cast
 
 from finn.core.space import (
@@ -72,29 +73,16 @@ def commit(point: S, choices: Mapping[str, object]) -> S:
     return report.instance
 
 
-def compatible(
-    point: S, choice: str, requirement: Callable[[S], QueryResult[Any]]
-) -> tuple[object, ...]:
-    """The candidates of the Decision keyed ``choice`` under which ``requirement`` is accepted.
-
-    Each candidate is committed on its own over ``point``, whose other choices
-    are kept; ``requirement`` reads the resulting configuration. This filters
-    by compatibility only: choosing among several compatible candidates is the
-    caller's.
-    """
-    owned = {item.key: item.reference for item in inspection.decisions(point)}
-    if choice not in owned:
-        raise ValueError(f"{type(point).__name__}: unknown choice {choice!r}")
-    candidates = point.field(owned[choice]).candidates()
-    if not isinstance(candidates, Available):
-        found = describe([] if candidates is None else [candidates])
-        raise ValueError(f"{choice}: candidates unavailable: {found}")
-    accepted: list[object] = []
-    for case in candidates.value:
-        report = point.try_with_choices({owned[choice]: case})
-        if report.accepted and isinstance(requirement(report.instance), Available):
-            accepted.append(case)
-    return tuple(accepted)
+def undecided(point: Space, pattern: str) -> list[str]:
+    """Keys matching ``pattern`` (``fnmatch``) of applicable Decisions not yet committed."""
+    found = []
+    for item in inspection.decisions(point):
+        if not fnmatchcase(item.key, pattern):
+            continue
+        state = point.field(item.reference).state
+        if isinstance(state, Available) and state.value.status != "committed":
+            found.append(item.key)
+    return found
 
 
 def admission(candidate: Space) -> QueryResult[object] | None:
@@ -128,4 +116,4 @@ def settle(point: S) -> Settlement[S]:
     return settle_space(point, admission=admission)
 
 
-__all__ = ["admission", "commit", "compatible", "describe", "settle"]
+__all__ = ["admission", "commit", "describe", "settle", "undecided"]

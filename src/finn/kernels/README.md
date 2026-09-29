@@ -44,16 +44,16 @@ base.py                  the Kernel protocol: module, ports' pins, parameters, c
 port.py                  Port nodes: native word ports and stream ports (admission, sequence, pins)
 dotp.py                  dotp_axi on three ports, one kernel per compute core, its own folds
 matmul.py                MatMulKernel: facts m, n, k and form; compute and memory Decisions
-composite.py             Composite and Design: children wired into one module, or a parent's parts
+composite.py             Composite and Design: children wired into one module (netlist), or a parent's parts
 memstream.py             FinnLib memstream_axi: a stored operand in its consumer's order (INIT_FILE)
-streams.py               Stream: tensor, ends, plan, adapter and transport Decisions; netlist
+streams.py               Stream: tensor, ends, plan, adapter and transport Decisions
 adapters.py              a stream's adapter candidates: input_gen / vpc chains carrying out a plan
 input_generator.py       FinnLib input_gen: a buffered reorder with loop-end markers
 vpc.py                   FinnLib vpc: the same elements, another number a beat
 fifo.py                  FinnLib fifo: opaque words, a stream's transport stage
 transpose.py             FinnLib inner_shuffle, placed explicitly between two streams
 target.py                DSP targets and port capacities
-physical/                typed native/AXIS ports, detached packing, wiring and lowering
+physical/                native and AXIS transport, packing, stream contracts, wiring and lowering
 datatypes/               QONNX identity, integer policies, scalar Spaces and codecs
 artifacts/               requirements, source resolution, rendering and builds
 resources/               source-generation templates

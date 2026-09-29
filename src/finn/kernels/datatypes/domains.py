@@ -24,6 +24,11 @@ from finn.dataflow.datatypes import resolve_qonnx_datatype_name
 BitBound = int
 
 
+def set_index_dtype(sets: int) -> QONNXDataType:
+    """FinnLib's set selector: ``SET_BITS = SETS > 2 ? $clog2(SETS) : 1`` unsigned bits."""
+    return resolve_qonnx_datatype_name(f"UINT{(sets - 1).bit_length() if sets > 2 else 1}")
+
+
 def check_bit_bound(dtype: QONNXDataType, limit: int, *, minimum: bool) -> bool | Rejected:
     if type(limit) is not int or limit < 1:
         return reject("dtype-bound-invalid", "a storage-bit bound must be a positive integer")
@@ -142,4 +147,5 @@ __all__ = [
     "SignedInteger",
     "check_bit_bound",
     "check_integer_family",
+    "set_index_dtype",
 ]

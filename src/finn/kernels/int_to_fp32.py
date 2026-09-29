@@ -31,7 +31,7 @@ from finn.core.space import Const, Param, view
 class IntToFp32Kernel(Kernel):
     id = "finnlib.int_to_fp32"
     version = "1"
-    # Off the Kernel protocol until K2: it exports nothing of its own.
+    # Off the Kernel protocol: combinational, with no clock or stream.
     exports = {}
 
     input_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)

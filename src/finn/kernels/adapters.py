@@ -19,8 +19,9 @@ that chain does not realize, so at most one candidate survives a plan:
 - ``vpc_input_gen_vpc`` and ``vpc_input_gen_vpc_input_gen``: a lane regroup
   through the common lane count, then markers.
 
-These are every shape a plan can take, so every realizable plan has exactly one
-candidate.
+These are every shape a plan can take (``CHAINS``), so every realizable plan
+has exactly one candidate; each is keyed by its modules, joined
+(``vpc_input_gen``).
 
 ``realize`` maps a plan onto modules. A reorder becomes an ``input_gen`` whose
 frame, ``DIMS`` and ``COEFS`` are ``classify``'s; the marker step that follows
@@ -48,6 +49,7 @@ from typing import Annotated, ClassVar
 
 from finn.core.space import (
     ConstraintGroup,
+    composite,
     Param,
     Rejected,
     Space,
@@ -73,7 +75,7 @@ class Stage:
 
     ``stream`` names the stream that places it when that is not the connection
     it sits in: a stage of a flattened composite's stream, spliced into its
-    parent's connection (``finn.kernels.streams.netlist``).
+    parent's connection (``finn.kernels.composite.netlist``).
     """
 
     requirements: ModuleBuildRequirements | None = None
@@ -310,11 +312,6 @@ class StreamAdapter(Space):
     def vpc_1_facts(self) -> VpcFacts | Rejected:
         return self._converter("vpc_1")
 
-    @view(semantics=default_semantics(str), requires=(realizes,))
-    def admitted(self) -> str:
-        """Accepted exactly when this chain carries out the plan, whatever the memory."""
-        return self.plan.describe()
-
     @view(semantics=STAGES, requires=(realizes,))
     def stages(self) -> tuple[Stage, ...]:
         """Each child's module and the contracts of its two ports."""
@@ -360,85 +357,45 @@ def _vpc(facts: VpcFacts) -> VpcKernel:
     )
 
 
-class InputGenAdapter(StreamAdapter):
-    """One ``input_gen``: a reorder (replay included) and the markers it closes."""
-
-    modules = ("input_gen",)
-    input_gen = _input_gen(StreamAdapter.input_gen_facts)
-
-
-class WidthAdapter(StreamAdapter):
-    """One ``vpc``: the same element order, another number of lanes a beat."""
-
-    modules = ("vpc",)
-    vpc = _vpc(StreamAdapter.vpc_facts)
+CHAINS: tuple[tuple[str, ...], ...] = (
+    ("input_gen",),
+    ("vpc",),
+    ("vpc", "input_gen"),
+    ("input_gen", "vpc"),
+    ("input_gen", "vpc", "input_gen"),
+    ("vpc", "input_gen", "vpc"),
+    ("vpc", "input_gen", "vpc", "input_gen"),
+)
+"""Every chain a plan can take, each a candidate of a stream's ``adapter`` Decision."""
 
 
-class WidthReorderAdapter(StreamAdapter):
-    """A ``vpc``, then an ``input_gen``: new lanes, then a reorder or markers."""
-
-    modules = ("vpc", "input_gen")
-    vpc = _vpc(StreamAdapter.vpc_facts)
-    input_gen = _input_gen(StreamAdapter.input_gen_facts)
-
-
-class ReorderWidthAdapter(StreamAdapter):
-    """An ``input_gen``, then a ``vpc``: a reorder at the source's lanes, then new lanes."""
-
-    modules = ("input_gen", "vpc")
-    input_gen = _input_gen(StreamAdapter.input_gen_facts)
-    vpc = _vpc(StreamAdapter.vpc_facts)
+def _chain(modules: tuple[str, ...]) -> type[StreamAdapter]:
+    """The candidate placing ``modules`` in order, each child named by its stage."""
+    members: dict[str, object] = {"modules": modules}
+    for index, kind in enumerate(modules):
+        name = _stage_name(modules, index)
+        facts = getattr(StreamAdapter, f"{name}_facts")
+        members[name] = _input_gen(facts) if kind == "input_gen" else _vpc(facts)
+    return composite("_".join(modules), members, base=StreamAdapter)
 
 
-class RegroupAdapter(StreamAdapter):
-    """``vpc``, ``input_gen``, ``vpc``: a lane regroup through the common lane count."""
-
-    modules = ("vpc", "input_gen", "vpc")
-    vpc = _vpc(StreamAdapter.vpc_facts)
-    input_gen = _input_gen(StreamAdapter.input_gen_facts)
-    vpc_1 = _vpc(StreamAdapter.vpc_1_facts)
-
-
-class ReorderWidthMarkersAdapter(StreamAdapter):
-    """``input_gen``, ``vpc``, ``input_gen``: markers after a reorder and new lanes.
-
-    A ``vpc`` carries no markers, so the frame is closed after it.
-    """
-
-    modules = ("input_gen", "vpc", "input_gen")
-    input_gen = _input_gen(StreamAdapter.input_gen_facts)
-    vpc = _vpc(StreamAdapter.vpc_facts)
-    input_gen_1 = _input_gen(StreamAdapter.input_gen_1_facts)
-
-
-class RegroupMarkersAdapter(StreamAdapter):
-    """``vpc``, ``input_gen``, ``vpc``, ``input_gen``: a lane regroup, then markers."""
-
-    modules = ("vpc", "input_gen", "vpc", "input_gen")
-    vpc = _vpc(StreamAdapter.vpc_facts)
-    input_gen = _input_gen(StreamAdapter.input_gen_facts)
-    vpc_1 = _vpc(StreamAdapter.vpc_1_facts)
-    input_gen_1 = _input_gen(StreamAdapter.input_gen_1_facts)
+ADAPTERS: dict[str, type[StreamAdapter]] = {"_".join(chain): _chain(chain) for chain in CHAINS}
+"""The candidates by key: each chain's modules, joined."""
 
 
 __all__ = [
+    "ADAPTERS",
+    "CHAINS",
     "Convert",
     "Generate",
     "INPUT_GEN_FACTS",
-    "InputGenAdapter",
     "InputGenFacts",
     "RealizedStage",
-    "RegroupAdapter",
-    "RegroupMarkersAdapter",
-    "ReorderWidthAdapter",
-    "ReorderWidthMarkersAdapter",
     "STAGES",
     "STAGE_SEMANTICS",
     "Stage",
     "StreamAdapter",
     "VPC_FACTS",
     "VpcFacts",
-    "WidthAdapter",
-    "WidthReorderAdapter",
     "realize",
 ]

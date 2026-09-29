@@ -48,6 +48,14 @@ INTEGER_VECTOR: ValueSemantics[IntegerVector] = ValueSemantics(
 IntegerTensor = tuple[object, ...]
 
 
+def integers(values: object) -> tuple[int, ...]:
+    """Every integer of a nested operand, in order."""
+    if type(values) is int:
+        return (values,)
+    assert isinstance(values, tuple)
+    return tuple(leaf for item in values for leaf in integers(item))
+
+
 def _is_tensor(value: object) -> bool:
     """A nonempty rectangular nest of tuples with int leaves (rank at least one)."""
 
@@ -103,4 +111,5 @@ __all__ = [
     "QONNX_DATATYPE_VALUE_SEMANTICS",
     "THRESHOLD_TABLE",
     "ThresholdTable",
+    "integers",
 ]

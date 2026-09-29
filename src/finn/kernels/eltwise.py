@@ -26,7 +26,6 @@ from finn.core.space import (
     default_semantics,
     derived,
     reject,
-    view,
 )
 from finn.dataflow.datatypes import QONNXDataType, resolve_qonnx_datatype_name
 from finn.dataflow.traversal import BEAT_SEQUENCE, BeatSequence, vector_major
@@ -36,7 +35,6 @@ from finn.kernels.base import CLOCKING, NATIVE_CLOCKING, Clocking, Kernel
 from finn.kernels.datatypes.domains import Integer
 from finn.kernels.datatypes.scalar import Scalar
 from finn.kernels.datatypes.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
-from finn.kernels.physical.stream import STREAM_INTERFACES, ReadyValidStream
 from finn.kernels.port import GivenPort
 from finn.kernels.streams import Stream
 from finn.kernels.target import DspBlock
@@ -133,27 +131,7 @@ class EltwiseKernel(Kernel):
         _ = (self.lhs_type.encoding, self.rhs_type.encoding, self.result_type.encoding)
         return True
 
-    @constraint
-    def carried(self) -> bool | Rejected:
-        """Each placed stream carries its operand's element."""
-        placed: list[tuple[str, str, QONNXDataType]] = []
-        if self.present(EltwiseKernel.lhs_stream):
-            placed.append(("lhs", self.lhs_stream.tensor.element.datatype_name, self.lhs_dtype))
-        if self.present(EltwiseKernel.rhs_stream):
-            placed.append(("rhs", self.rhs_stream.tensor.element.datatype_name, self.rhs_dtype))
-        if self.present(EltwiseKernel.result_stream):
-            placed.append(
-                ("result", self.result_stream.tensor.element.datatype_name, self.result_dtype)
-            )
-        for name, carried, dtype in placed:
-            if carried != dtype.name:
-                return reject(
-                    "eltwise-stream-element",
-                    f"the {name} stream carries {carried}, the operand {dtype.name}",
-                )
-        return True
-
-    admission = ConstraintGroup(implementation_supported, operands_supported, carried)
+    admission = ConstraintGroup(implementation_supported, operands_supported)
 
     def _walk(self, shape: tuple[int, ...]) -> BeatSequence | Rejected:
         try:
@@ -191,7 +169,7 @@ class EltwiseKernel(Kernel):
         endpoint=Endpoint.TARGET,
         stream=lhs_stream,
         sequence=lhs_sequence,
-        idle_dtype=lhs_dtype,
+        dtype=lhs_dtype,
         idle_lanes=pe,
         signals=("adat", "avld", "ardy"),
         clock="clk",
@@ -202,7 +180,7 @@ class EltwiseKernel(Kernel):
         endpoint=Endpoint.TARGET,
         stream=rhs_stream,
         sequence=rhs_sequence,
-        idle_dtype=rhs_dtype,
+        dtype=rhs_dtype,
         idle_lanes=pe,
         signals=("bdat", "bvld", "brdy"),
         clock="clk",
@@ -213,18 +191,12 @@ class EltwiseKernel(Kernel):
         endpoint=Endpoint.INITIATOR,
         stream=result_stream,
         sequence=result_sequence,
-        idle_dtype=result_dtype,
+        dtype=result_dtype,
         idle_lanes=pe,
         signals=("odat", "ovld", "ordy"),
         clock="clk",
         reset="rst",
     )
-
-    @view(semantics=STREAM_INTERFACES)
-    def interfaces(self) -> tuple[ReadyValidStream, ...] | Rejected:
-        if not 1 <= self.pe <= 0xFFFFFFFF:
-            return reject("eltwise-interface", "PE must be positive and fit native unsigned int")
-        return (self.lhs.transport, self.rhs.transport, self.result.transport)
 
     @derived(semantics=CLOCKING)
     def clocking(self) -> Clocking:

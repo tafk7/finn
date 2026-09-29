@@ -10,13 +10,12 @@ from finn.core.space import BoundValue, QueryResult, View, ViewAssessment
 from finn.dataflow.datatypes import QONNXDataType
 from finn.dataflow.schedule import Schedule
 from finn.dataflow.traversal import BeatSequence
-from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.datatypes.domains import Integer
 from finn.dataflow.tensor import ScalarEncoding
 from finn.kernels.datatypes.scalar import IntegerScalar, Scalar, integer_scalar
 from finn.kernels.dotp import DotpAxiKernel
 from finn.kernels.eltwise import EltwiseKernel
-from finn.kernels.physical.axi_stream import AxiStream, AxiStreamPort, axi_stream
+from finn.kernels.physical.axi_stream import AxiStream
 from finn.kernels.physical.layout import PackedBeatLayout
 from finn.kernels.physical.stream import ReadyValidStream
 from finn.kernels.port import GivenPort, ScheduledPort, StreamPort
@@ -27,7 +26,6 @@ def declare(dtype: QONNXDataType) -> None:
     scalar = integer_scalar(dtype, Integer(min_bits=2))
     assert_type(scalar, IntegerScalar)
     assert_type(Scalar(dtype=dtype), Scalar)
-    assert_type(axi_stream("values", 2, Endpoint.TARGET, scalar), AxiStreamPort)
 
 
 def check(point: DotpAxiKernel, eltwise: EltwiseKernel) -> None:
@@ -49,6 +47,5 @@ def check(point: DotpAxiKernel, eltwise: EltwiseKernel) -> None:
     assert_type(point.x.field(StreamPort.pins), BoundValue[tuple[Any, ...]])
     assert_type(point.pe, int)
     assert_type(point.schedule, Schedule)
-    assert_type(AxiStreamPort.stream, View[AxiStream])
     assert_type(eltwise.lhs, GivenPort)
     assert_type(eltwise.lhs.transport, ReadyValidStream)

@@ -21,7 +21,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 
-from finn.core.space import default_semantics
 from finn.dataflow.schedule import Index
 
 m, n, k = Index("m"), Index("n"), Index("k")
@@ -55,7 +54,4 @@ class Form(Enum):
         return self.value.y
 
 
-FORM = default_semantics(Form)
-
-
-__all__ = ["FORM", "Form", "Signature", "k", "m", "n"]
+__all__ = ["Form", "Signature", "k", "m", "n"]

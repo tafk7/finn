@@ -1,9 +1,6 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-from pathlib import Path
-import shutil
-import subprocess
 
 import pytest
 
@@ -14,11 +11,12 @@ from finn.kernels.fifo import FifoKernel
 from finn.kernels.physical.stream import MarkerKind, ReadyValidStream, StreamMarker
 from kernels.test_migrated_rich import generator
 from kernels.test_migrated_simple import eltwise
+from kernels.xsim import ROOT, requires_xsim, simulate
 
 
 def test_native_streams_are_inspectable_without_storage_choices():
     base = design_space(FifoKernel(word_bits=13, depth=8))
-    source, sink = base.interfaces
+    source, sink = base.input.transport, base.output.transport
     assert source.data_width == sink.data_width == 13
     assert [pin.direction for pin in source.pins()] == [Direction.IN, Direction.IN, Direction.OUT]
     assert [pin.direction for pin in sink.pins()] == [Direction.OUT, Direction.OUT, Direction.IN]
@@ -28,7 +26,7 @@ def test_native_streams_are_inspectable_without_storage_choices():
 
 def test_loop_markers_remain_native_even_when_one_bit():
     for extents, strides in (((6,), (1,)), ((3, 6), (0, 1))):
-        output = generator(bits=16, extents=extents, strides=strides).interfaces[1]
+        output = generator(bits=16, extents=extents, strides=strides).output.transport
         assert output.markers == (StreamMarker("olst", MarkerKind.LOOP_END, len(extents)),)
         with pytest.raises(ValueError, match="single LAST"):
             output.axis_bus()
@@ -51,10 +49,7 @@ def test_axi_lowering_preserves_explicit_physical_mapping():
     assert bus.associated_clock == "clk" and bus.associated_reset == "rst"
 
 
-@pytest.mark.skipif(
-    not all(shutil.which(tool) for tool in ("xvlog", "xelab", "xsim")),
-    reason="Vivado simulator tools are unavailable",
-)
+@requires_xsim
 def test_fifo_capacity_and_effective_storage_agree_with_native_rtl(tmp_path):
     cases = (
         (2, "ultra"),
@@ -78,9 +73,8 @@ def test_fifo_capacity_and_effective_storage_agree_with_native_rtl(tmp_path):
             f'.CAPACITY({storage.capacity}), .EFFECTIVE("{storage.effective_style}")) '
             f"c{index}(done[{index}]);"
         )
-    source = Path(__file__).resolve().parents[2] / "deps/finnlib/rtl/infra/fifo.sv"
-    testbench = tmp_path / "fifo_capacity_test.sv"
-    testbench.write_text(
+    simulate(
+        [ROOT / "deps/finnlib/rtl/infra/fifo.sv"],
         """
 module fifo_capacity_case #(
     parameter int DEPTH=2, CAPACITY=5,
@@ -108,7 +102,7 @@ module fifo_capacity_case #(
         done=1;
     end
 endmodule
-module fifo_capacity_test;
+module check;
 """
         + f"    wire [{len(cases) - 1}:0] done;\n"
         + "\n".join(instances)
@@ -120,22 +114,14 @@ module fifo_capacity_test;
     end
     initial begin #100000; $fatal(1,"FIFO capacity watchdog"); end
 endmodule
-"""
+""",
+        tmp_path,
     )
-    commands = (
-        ["xvlog", "--sv", str(source), str(testbench)],
-        ["xelab", "fifo_capacity_test", "-s", "fifo_capacity_test", "-timescale", "1ns/1ps"],
-        ["xsim", "fifo_capacity_test", "-runall"],
-    )
-    for command in commands:
-        result = subprocess.run(command, cwd=tmp_path, capture_output=True, text=True, timeout=120)
-        assert result.returncode == 0, result.stdout + result.stderr
-    assert "FIFO_CAPACITY_PASS" in result.stdout, result.stdout + result.stderr
 
 
 def test_eltwise_ports_carry_their_operands_unpadded_on_native_pins():
     mixed = eltwise(lhs="INT5", rhs="FLOAT32", pe=3)
-    lhs, rhs, result = mixed.interfaces
+    lhs, rhs, result = mixed.lhs.transport, mixed.rhs.transport, mixed.result.transport
     assert (lhs.data, lhs.valid, lhs.ready) == ("adat", "avld", "ardy")
     assert (lhs.data_width, rhs.data_width, result.data_width) == (15, 96, 96)
     # An operand the arithmetic does not take refuses the kernel, naming the operand.

@@ -13,15 +13,16 @@ outputs unused.
 - A ``WordPort`` carries opaque words on FinnLib's native pins (``idat``,
   ``ivld``, ``irdy`` for a target, ``odat``, ``ovld``, ``ordy`` for an
   initiator, on ``clk`` and ``rst``), with any loop-completion ``markers``.
-- A ``StreamPort`` sits on a stream (``stream``). It admits the stream's
-  element (``admits``, an integer policy; absent when its kernel admits the
-  element itself), presents its ``sequence`` of the
-  stream's tensor, and derives an AXIS bus named ``name`` carrying the
-  sequence's lanes each beat, with a ``TLAST`` when the sequence carries a
-  marker; or, given ``signals`` (data, valid, ready), those ready/valid pins
-  carrying the lanes' bits exactly, without a marker. It exports its contract
-  under ``PORT`` through its stream. A port left without a stream is idle,
-  with the pins of ``idle_dtype`` and ``idle_lanes``.
+- A ``StreamPort`` sits on a stream (``stream``). It carries an ``element``,
+  admits it (``admits``, an integer policy; absent when its kernel admits the
+  element itself), presents its ``sequence`` of the stream's tensor, and
+  derives an AXIS bus named ``name`` carrying the sequence's lanes each beat,
+  with a ``TLAST`` when the sequence carries a marker; or, given ``signals``
+  (data, valid, ready), those ready/valid pins carrying the lanes' bits
+  exactly, without a marker. It exports its contract under ``PORT`` through
+  its stream, which refuses an end whose element it does not carry. A port
+  left without a stream is idle, with the pins of ``dtype`` and
+  ``idle_lanes``.
 
 A ``StreamPort``'s ``sequence`` is required. A ``ScheduledPort`` derives it
 from its kernel's ``Schedule``: the indices it reads (``index``), its lane
@@ -29,8 +30,8 @@ order (``lanes``, outer first), the indices it presents after (``reduces``) or
 before (``holds``), and the reduction its marker closes (``closes``). With
 ``reshaped`` it reads its stream's tensor as a row-major view of the shape its
 indices address (a densely realized depthwise operation reads (M, K, N)
-activations as (M, K * N)). A ``GivenPort`` presents the sequence its kernel
-gives it.
+activations as (M, K * N)), and carries its stream's element. A ``GivenPort``
+presents the sequence and the element (``dtype``) its kernel gives it.
 """
 
 from __future__ import annotations
@@ -141,8 +142,8 @@ class StreamPort(Port):
 
     stream: Stream = Param(required=False)
     admits: Integer | None = Param(default=None, semantics=INTEGER_POLICY)
-    # The pins of a port left without a stream.
-    idle_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS, required=False)
+    # The element of a port left without a stream (every element of a GivenPort's), and its lanes.
+    dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS, required=False)
     idle_lanes: int = Param(default=1)
     # Ready/valid pins (data, valid, ready) carrying the words instead of an AXIS bus.
     signals: tuple[str, ...] = Param(default=(), semantics=SIGNAL_NAMES)
@@ -154,9 +155,9 @@ class StreamPort(Port):
 
     @derived(semantics=SCALAR_ENCODING)
     def element(self) -> ScalarEncoding | Rejected:
-        """The stream's element: a port carries what its stream carries."""
+        """The stream's element; ``dtype`` while idle."""
         if self.idle:
-            return ScalarEncoding.admit(self.idle_dtype)
+            return ScalarEncoding.admit(self.dtype)
         return self.stream.tensor.element
 
     @constraint
@@ -256,19 +257,22 @@ class ScheduledPort(StreamPort):
 
 
 class GivenPort(StreamPort):
-    """A stream port presenting the beat sequence its kernel gives it."""
+    """A stream port presenting the beat sequence and element its kernel gives it."""
 
     sequence: BeatSequence = Param(semantics=BEAT_SEQUENCE)
+
+    @derived(semantics=SCALAR_ENCODING)
+    def element(self) -> ScalarEncoding | Rejected:
+        """The kernel's ``dtype``, placed or idle: its stream refuses another."""
+        return ScalarEncoding.admit(self.dtype)
 
 
 __all__ = [
     "AXI_STREAM",
     "GivenPort",
-    "HELD",
     "INDICES",
     "INTEGER_POLICY",
     "MARKERS",
-    "PINS",
     "Port",
     "SIGNAL_NAMES",
     "ScheduledPort",

@@ -30,9 +30,7 @@ from finn.kernels.configure import commit
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.dotp import PackedDotpKernel
 from finn.kernels.matmul import exact_result_dtype
-from finn.kernels.streams import (
-    Stream,
-)
+from finn.kernels.streams import Stream
 from finn.kernels.target import DspBlock
 from kernels.helpers import settled
 from kernels.xsim import pack, requires_xsim, stream_through
@@ -138,13 +136,25 @@ def test_the_two_layers_compute_in_xsim(tmp_path, stalled):
     stream_through(
         layered().structure.requirements,
         tmp_path,
-        words_in=[
-            pack(X[r][f : f + SIMD1], a_bits) for r in range(ROWS) for f in range(0, INPUTS, SIMD1)
-        ],
-        in_bits=SIMD1 * a_bits,
-        words_out=[
-            pack(y[r][f : f + PE2], y_bits) for r in range(ROWS) for f in range(0, OUTPUTS, PE2)
-        ],
-        out_bits=PE2 * y_bits,
+        inputs={
+            "in0_V": (
+                [
+                    pack(X[r][f : f + SIMD1], a_bits)
+                    for r in range(ROWS)
+                    for f in range(0, INPUTS, SIMD1)
+                ],
+                SIMD1 * a_bits,
+            )
+        },
+        outputs={
+            "out0_V": (
+                [
+                    pack(y[r][f : f + PE2], y_bits)
+                    for r in range(ROWS)
+                    for f in range(0, OUTPUTS, PE2)
+                ],
+                PE2 * y_bits,
+            )
+        },
         stalled=stalled,
     )

@@ -149,16 +149,24 @@ def test_the_design_computes_what_onnx_computes(tmp_path, fused):
     stream_through(
         point.structure.requirements,
         tmp_path,
-        words_in=[
-            pack(X[r][f : f + SIMD].tolist(), A.bitwidth())
-            for r in range(ROWS)
-            for f in range(0, INPUTS, SIMD)
-        ],
-        in_bits=SIMD * A.bitwidth(),
-        words_out=[
-            pack(y[r][f : f + PE].tolist(), Y.bitwidth())
-            for r in range(ROWS)
-            for f in range(0, OUTPUTS, PE)
-        ],
-        out_bits=PE * Y.bitwidth(),
+        inputs={
+            "in0_V": (
+                [
+                    pack(X[r][f : f + SIMD].tolist(), A.bitwidth())
+                    for r in range(ROWS)
+                    for f in range(0, INPUTS, SIMD)
+                ],
+                SIMD * A.bitwidth(),
+            )
+        },
+        outputs={
+            "out0_V": (
+                [
+                    pack(y[r][f : f + PE].tolist(), Y.bitwidth())
+                    for r in range(ROWS)
+                    for f in range(0, OUTPUTS, PE)
+                ],
+                PE * Y.bitwidth(),
+            )
+        },
     )
