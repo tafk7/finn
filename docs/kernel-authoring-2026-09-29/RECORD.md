@@ -336,6 +336,10 @@ change and passed 6 from `78a574dd4`.)
   `evidence/identity-norom.txt`.
 - The 27 documentation examples pass (`scratchpad/space/check-examples.py
   --finn-root`).
+- XSim from `68e68ee8a` (snapshot `/tmp/a1-xsim-68e68ee8a`): every
+  conformance case passes (transpose with exactly its four known failures),
+  both planted errors fail in every sample and mode, the rest of
+  `tests/kernels` 805 passed, `tests/graph` 6 passed.
 
 ### Deviations
 
