@@ -5,7 +5,6 @@
 
 from pathlib import Path
 import os
-import shutil
 import struct
 import subprocess
 
@@ -41,6 +40,7 @@ from finn.core.space import (
 from finn.dataflow.datatypes import QONNXDataType
 from kernels.helpers import point_for
 from finn.kernels.target import DspBlock
+from kernels.xsim import requires_xsim, simulate
 
 ROOT = Path(__file__).resolve().parents[2]
 FINNLIB = ROOT / "deps/finnlib"
@@ -363,40 +363,11 @@ int main() {
     subprocess.run([str(tmp_path / "test")], check=True, timeout=30)
 
 
-def simulate(requirements, body, tmp_path):
+def run(requirements, body, tmp_path):
     parameters = ", ".join(f".{key}({raw})" for key, raw in requirements.abi.parameters)
-    testbench = tmp_path / "numeric.sv"
-    testbench.write_text(
-        "`timescale 1ns/1ps\n"
-        + body.replace("@DUT@", requirements.abi.entry_point.value + " #(" + parameters + ")")
-    )
+    dut = requirements.abi.entry_point.value + " #(" + parameters + ")"
     sources = [SOURCE_ROOTS[source.root] / source.path for source in requirements.contributions]
-    vivado = Path(os.environ.get("XILINX_VIVADO", str(Path(shutil.which("xelab")).parent.parent)))
-    sources.append(vivado / "data/verilog/src/glbl.v")
-    commands = (
-        ["xvlog", "--sv", *(str(path) for path in sources), str(testbench)],
-        [
-            "xelab",
-            "work.numeric",
-            "work.glbl",
-            "--mt",
-            "2",
-            "-L",
-            "unisims_ver",
-            "-L",
-            "unimacro_ver",
-            "--snapshot",
-            "numeric",
-            "--timescale",
-            "1ns/1ps",
-        ],
-        ["xsim", "numeric", "--runall"],
-    )
-    for index, command in enumerate(commands):
-        result = subprocess.run(command, cwd=tmp_path, capture_output=True, text=True, timeout=120)
-        (tmp_path / f"step-{index}.log").write_text(result.stdout + result.stderr)
-        assert result.returncode == 0, result.stdout + result.stderr
-    assert "FLAT_KERNEL_PASS" in result.stdout, result.stdout + result.stderr
+    simulate(sources, body.replace("@DUT@", dut), tmp_path)
 
 
 def float_bits(value):
@@ -485,10 +456,7 @@ def flow_case(case):
     )
 
 
-@pytest.mark.skipif(
-    not all(shutil.which(tool) for tool in ("xvlog", "xelab", "xsim")),
-    reason="Vivado simulation is unavailable",
-)
+@requires_xsim
 @pytest.mark.parametrize("case", ("fifo", "generator", "threshold", "integer", "float"))
 def test_generated_rtl_preserves_values_sequences_and_backpressure(case, tmp_path):
     point, a_width, b_width, o_width, a, b, expected, extra, connections = flow_case(case)
@@ -497,7 +465,7 @@ def test_generated_rtl_preserves_values_sequences_and_backpressure(case, tmp_pat
     def array(values, width):
         return "'{" + ",".join(f"{width}'h{item:x}" for item in values) + "}"
 
-    body = f"""module numeric;
+    body = f"""module check;
     logic clk=0; always #5 clk=~clk;
     logic rst=1;
     logic [{a_width - 1}:0] adat;
@@ -540,16 +508,13 @@ def test_generated_rtl_preserves_values_sequences_and_backpressure(case, tmp_pat
     end
 endmodule
 """
-    simulate(requirements, body, tmp_path)
+    run(requirements, body, tmp_path)
 
 
-@pytest.mark.skipif(
-    not all(shutil.which(tool) for tool in ("xvlog", "xelab", "xsim")),
-    reason="Vivado simulation is unavailable",
-)
+@requires_xsim
 def test_combinational_conversion_uses_round_toward_zero(tmp_path):
     requirements = converter("INT32").build_requirements
-    body = """module numeric;
+    body = """module check;
     logic [31:0] ival; wire [31:0] fval;
     @DUT@ dut(.ival, .fval);
     initial begin
@@ -563,4 +528,4 @@ def test_combinational_conversion_uses_round_toward_zero(tmp_path):
     end
 endmodule
 """
-    simulate(requirements, body, tmp_path)
+    run(requirements, body, tmp_path)

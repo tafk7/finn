@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass
-import os
 from pathlib import Path
 import tempfile
 
@@ -21,13 +20,11 @@ import numpy as np  # type: ignore[import-not-found]
 from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 
 from kernels.rtlsim.rtl_transport import drive_observed
-from finn.kernels.artifacts.build import materialize_module_sources, prepare_module_build
-from finn.kernels.artifacts.store import ArtifactStore
+from kernels.xsim import materialize
 from finn.dataflow.gemm import Form
 from finn.kernels.matmul import WeightDelivery, matmul_assembly
 from finn.kernels.target import DspBlock
 from finn.kernels.physical.validation import abi_pins
-from finn.kernels.resources import resource_root, template_root
 
 
 @dataclass(frozen=True)
@@ -267,18 +264,8 @@ def run(
     suffix += f"_sets{sets}" if sets > 1 else ""
     directory = evidence / (c.label + "_" + delivery.value + suffix)
     directory.mkdir(parents=True, exist_ok=False)
-    store = ArtifactStore(directory / "store")
-    prepared = prepare_module_build(
-        built.requirements,
-        roots={"kernels": resource_root(), "finnlib": Path(os.environ["FINNLIB_ROOT"])},
-        template_roots=(template_root(),),
-        blobs=store,
-    )
-    materialized = materialize_module_sources(prepared, store)
-    files = [Path(materialized.directory) / path for path in materialized.files]
     # Memory images (INIT_FILE) go where the simulation resolves them.
-    sources = [str(path) for path in files if path.suffix != ".dat"]
-    data_files = {path.name: path.read_text() for path in files if path.suffix == ".dat"}
+    entry_point, sources, data_files = materialize(built.requirements, directory)
     writes = {}
     if writable:
         # Each word takes 2**ceil(log2(ceil(W/32))) 32-bit segments, low first.
@@ -291,7 +278,7 @@ def run(
         ]
     top, wrapper, observations = _observation_wrapper(
         built.structure.top_abi,
-        prepared.abi.entry_point,
+        entry_point,
         directory,
         activation_bits,
         (c.pe * c.simd * w_type.bitwidth() + 7) // 8 * 8,

@@ -17,7 +17,6 @@ runs in a fresh process.
 from __future__ import annotations
 
 import argparse
-import os
 import tempfile
 from pathlib import Path
 
@@ -26,9 +25,7 @@ import numpy as np  # type: ignore[import-not-found]
 from kernels.rtlsim.rtl_transport import drive
 from finn.dataflow.traversal import Traversal, vector_major
 from kernels.test_adapters import ELEMENT, adapted, columns_first, transposed, values
-from finn.kernels.artifacts.build import materialize_module_sources, prepare_module_build
-from finn.kernels.artifacts.store import ArtifactStore
-from finn.kernels.resources import resource_root, template_root
+from kernels.xsim import materialize
 
 BITS = ELEMENT.bits
 
@@ -46,19 +43,7 @@ def _padded(words, bits):
 
 
 def _build(point, directory):
-    store = ArtifactStore(directory / "store")
-    prepared = prepare_module_build(
-        point.structure.requirements,
-        roots={"kernels": resource_root(), "finnlib": Path(os.environ["FINNLIB_ROOT"])},
-        template_roots=(template_root(),),
-        blobs=store,
-    )
-    materialized = materialize_module_sources(prepared, store)
-    files = [Path(materialized.directory) / path for path in materialized.files]
-    sources = [str(path) for path in files if path.suffix != ".dat"]
-    # A memory's INIT_FILE, read by $readmemh from the simulator's directory.
-    data = {path.name: path.read_text() for path in files if path.suffix == ".dat"}
-    return prepared.abi.entry_point, sources, data
+    return materialize(point.structure.requirements, directory)
 
 
 ROWS, CHANNELS = 3, 12

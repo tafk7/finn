@@ -9,35 +9,29 @@ parameters are derived here from traversals alone and compared with the
 hard-coded values in ``finn-rtllib`` and ``transpose_decomposition``.
 """
 
-import os
 from pathlib import Path
 import random
-import shutil
-import subprocess
 
 import pytest
 from qonnx.core.datatype import DataType
 
 from finn.core.space import Rejected, Unresolved, design_space
+from finn.kernels.composite import Design
+from finn.kernels.configure import commit
+from finn.kernels.eltwise import EltwiseKernel
+from finn.kernels.streams import Stream
+from finn.kernels.target import DspBlock
 from finn.kernels.artifacts.abi import Clock, Direction, Endpoint, Reset, Signal
 from finn.kernels.artifacts.build import (
-    EntryPointSourceName,
-    FixedModuleName,
     GeneratedModuleName,
     ModuleABIRequirements,
-    RenderedSourceRequirement,
-    SELF_CONTAINED_JINJA_RENDERER,
-    materialize_module_sources,
-    prepare_module_build,
 )
-from finn.kernels.artifacts.derivation import ProducerIdentity
-from finn.kernels.artifacts.store import ArtifactStore
-from finn.dataflow.tensor import ScalarEncoding
+from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.fifo import FifoKernel
 from finn.kernels.physical.axi_stream import AxiStream
 from finn.kernels.physical.composition import Composition, StreamEnd
-from finn.kernels.physical.contract import StreamContract, StreamMismatch, compatibility
+from finn.kernels.physical.contract import StreamContract, compatibility
 from finn.dataflow.traversal import (
     Adaptation,
     LevelEnd,
@@ -50,13 +44,11 @@ from finn.dataflow.traversal import (
     tile,
     vector_major,
 )
-from finn.kernels.physical.lowering import lower_module_structure
 from finn.kernels.physical.stream import MarkerKind, ReadyValidStream, StreamMarker
-from finn.kernels.resources import resource_root, template_root
 from finn.transformation.fpgadataflow.transpose_decomposition import (
     shuffle_perfect_loopnest_coeffs,
 )
-from kernels.test_migrated_simple import eltwise
+from kernels.xsim import pack as xsim_pack, requires_xsim, stream_through
 
 ROOT = Path(__file__).resolve().parents[2]
 INT3 = ScalarEncoding(DataType["INT3"])
@@ -325,77 +317,46 @@ CHANNELS, PE, PIXELS = 4, 2, 3
 PARAMETERS = (1, -2, 7, -8)
 
 
-def eltwise_with_constant(*, form=None, rhs_form=None):
-    """Eltwise ADD whose rhs is a cyclic channel vector, composed through contracts."""
+def eltwise_with_constant(form=None):
+    """Eltwise ADD whose rhs is a memory's cyclic channel vector, joined directly."""
     form = vector_major((CHANNELS,), PE) if form is None else form
-    rhs_form = vector_major((CHANNELS,), PE).repeated(PIXELS) if rhs_form is None else rhs_form
-    compute = eltwise(operation="ADD", pe=PE, lhs="INT4", rhs="INT4")
-    source = delivery(form, PARAMETERS, ram_style="distributed", pumped_memory=False)
-    lhs, rhs, result = (compute.lhs.transport, compute.rhs.transport, compute.result.transport)
-    pixels = vector_major((PIXELS, CHANNELS), PE)
-    int5 = ScalarEncoding(DataType["INT5"])
+    int4, int5 = DataType["INT4"], DataType["INT5"]
 
-    def top(name, element, endpoint):
-        stream = AxiStream(name, element.dtype, PE, endpoint=endpoint)
-        return StreamContract(stream.native(clock="ap_clk", reset="ap_rst_n"), element, pixels)
+    class Constant(Design):
+        x = Stream(tensor=Tensor((PIXELS, CHANNELS), INT4), port="in0_V")
+        c = Stream(tensor=Tensor((CHANNELS,), INT4), adaptable=False)
+        y = Stream(tensor=Tensor((PIXELS, CHANNELS), ScalarEncoding(int5)), port="out0_V")
+        rhs = MemStreamKernel(dtype=int4, form=form, contents=PARAMETERS, output_stream=c)
+        add = EltwiseKernel(
+            operation="ADD",
+            pe=PE,
+            lhs_dtype=int4,
+            rhs_dtype=int4,
+            b_scale=1.0,
+            target_dsp=DspBlock.DSP58,
+            lhs_stream=x,
+            rhs_stream=c,
+            result_stream=y,
+        )
 
-    x_top, y_top = top("in0_V", INT4, Endpoint.TARGET), top("out0_V", int5, Endpoint.INITIATOR)
-    top_abi = ModuleABIRequirements(
-        GeneratedModuleName("eltwise_constant"),
-        (*CLOCKING, x_top.transport.axis_bus(), y_top.transport.axis_bus()),
-        (),
+    return commit(
+        design_space(Constant()), {"rhs.ram_style": "distributed", "rhs.pumped_memory": False}
     )
-    composition = Composition(top_abi)
-    composition.add("u_rhs", source.build_requirements)
-    composition.add("u_eltwise", compute.build_requirements)
-    for owner in ("u_rhs", "u_eltwise"):
-        composition.drive(owner, "clk", "ap_clk")
-        composition.drive(owner, "rst", "ap_rst_n")
-    hold(composition, "u_rhs", source)
-    composition.connect(
-        StreamEnd(None, x_top), StreamEnd("u_eltwise", StreamContract(lhs, INT4, pixels))
-    )
-    composition.connect(
-        StreamEnd("u_rhs", source.output.contract),
-        StreamEnd("u_eltwise", StreamContract(rhs, INT4, rhs_form)),
-    )
-    composition.connect(
-        StreamEnd("u_eltwise", StreamContract(result, int5, pixels)), StreamEnd(None, y_top)
-    )
-    structure = composition.finish()
-    wrapper = RenderedSourceRequirement(
-        EntryPointSourceName(),
-        "decomposed_wrapper.sv.j2",
-        ("PORT_DECLARATIONS", "NET_DECLARATIONS", "ASSIGNMENTS", "INSTANCES"),
-        SELF_CONTAINED_JINJA_RENDERER,
-        requires=tuple(
-            "module:" + instance.requirements.abi.entry_point.value
-            for instance in structure.instances
-            if isinstance(instance.requirements.abi.entry_point, FixedModuleName)
-        ),
-        provides_entry_point=True,
-    )
-    requirements = lower_module_structure(
-        structure, producer=ProducerIdentity("test.eltwise_constant", "1"), wrapper_template=wrapper
-    )
-    return requirements, structure
-
-
-def _rhs_wires(structure):
-    return {
-        (wire.destination.bit_offset, wire.source.bit_offset)
-        for wire in structure.wires
-        if wire.destination.pin.signal_id == "bdat"
-    }
 
 
 def test_the_delivery_kernel_serves_a_second_consumer_through_the_same_contract():
-    _, structure = eltwise_with_constant()
-    assert _rhs_wires(structure) == {(0, 0), (4, 4)}
+    structure = eltwise_with_constant().structure.structure
+    assert {
+        (wire.destination.bit_offset, wire.source.bit_offset)
+        for wire in structure.wires
+        if wire.destination.pin.signal_id == "bdat"
+    } == {(0, 0), (4, 4)}
     # A delivery whose lanes carry other positions (0,2),(1,3) needs a lane regroup.
     strided = Traversal.over((CHANNELS,), ((0, 2, 1),), ((0, 2, 2),))
-    with pytest.raises(StreamMismatch, match="lane_regroup"):
-        eltwise_with_constant(form=strided, rhs_form=vector_major((CHANNELS,), 2).repeated(PIXELS))
+    refused = eltwise_with_constant(strided).c.query(Stream.connection)
+    assert isinstance(refused, Rejected)
+    (plan,) = [finding for finding in refused.findings if finding.code == "stream-plan"]
+    assert "another lane axis" in plan.message
 
 
 def test_a_pure_lane_permutation_is_realized_as_free_wiring():
@@ -457,95 +418,15 @@ def test_clock_domains_must_be_attached_and_equal():
     assert "stream-clock" in codes(found)
 
 
-@pytest.mark.skipif(
-    not all(shutil.which(tool) for tool in ("xvlog", "xelab", "xsim")),
-    reason="Vivado simulator tools are unavailable",
-)
+@requires_xsim
 def test_eltwise_with_cyclic_constant_computes_the_broadcast_sum(tmp_path):
-    requirements, _ = eltwise_with_constant()
-    store = ArtifactStore(tmp_path / "store")
-    prepared = prepare_module_build(
-        requirements,
-        roots={"kernels": resource_root(), "finnlib": ROOT / "deps/finnlib"},
-        template_roots=(template_root(),),
-        blobs=store,
-    )
-    materialized = materialize_module_sources(prepared, store)
-    files = [Path(materialized.directory) / path for path in materialized.files]
-    sources = [str(path) for path in files if path.suffix != ".dat"]
-    for path in files:  # $readmemh reads an INIT_FILE from the simulator's directory
-        if path.suffix == ".dat":
-            (tmp_path / path.name).write_bytes(path.read_bytes())
     inputs = [(-8 + 3 * index) % 16 - 8 for index in range(CHANNELS * PIXELS)]
     expected = [value + PARAMETERS[index % CHANNELS] for index, value in enumerate(inputs)]
-
-    def pack_words(values, bits):
-        return [
-            sum(
-                (value & ((1 << bits) - 1)) << (lane * bits)
-                for lane, value in enumerate(values[i : i + PE])
-            )
-            for i in range(0, len(values), PE)
-        ]
-
-    words_in, words_out = pack_words(inputs, 4), pack_words(expected, 5)
-    count = len(words_in)
-    testbench = tmp_path / "check.sv"
-    testbench.write_text(f"""`timescale 1ns/1ps
-module check;
-    logic ap_clk = 0, ap_rst_n = 0;
-    logic [7:0] in0_V_tdata; logic in0_V_tvalid = 0; wire in0_V_tready;
-    wire [15:0] out0_V_tdata; wire out0_V_tvalid; logic out0_V_tready = 0;
-    logic [7:0] words_in [{count}] = '{{{", ".join(f"8'h{w:02x}" for w in words_in)}}};
-    logic [9:0] words_out [{count}] = '{{{", ".join(f"10'h{w:03x}" for w in words_out)}}};
-    always #5 ap_clk = !ap_clk;
-    {prepared.abi.entry_point} dut (.*);
-    int sent = 0, received = 0, cycle = 0;
-    always @(posedge ap_clk) begin
-        cycle <= cycle + 1;
-        if (ap_rst_n) begin
-            if (in0_V_tvalid && in0_V_tready) sent <= sent + 1;
-            if (out0_V_tvalid && out0_V_tready) begin
-                if (out0_V_tdata[9:0] !== words_out[received])
-                    $fatal(1, "word %0d: %h != %h", received, out0_V_tdata, words_out[received]);
-                received <= received + 1;
-            end
-        end
-    end
-    always @(negedge ap_clk) begin
-        in0_V_tvalid = ap_rst_n && sent < {count} && cycle % 3 != 0;
-        in0_V_tdata = words_in[sent < {count} ? sent : 0];
-        out0_V_tready = cycle % 4 != 1;
-    end
-    initial begin
-        repeat (4) @(posedge ap_clk);
-        ap_rst_n = 1;
-        wait (received == {count});
-        $display("ELTWISE_CONSTANT_PASS");
-        $finish;
-    end
-    initial begin #50000; $fatal(1, "timeout"); end
-endmodule
-""")
-    vivado = Path(os.environ.get("XILINX_VIVADO", str(Path(shutil.which("xelab")).parent.parent)))
-    commands = (
-        ["xvlog", "--sv", *sources, str(vivado / "data/verilog/src/glbl.v"), str(testbench)],
-        [
-            "xelab",
-            "work.check",
-            "work.glbl",
-            "--mt",
-            "2",
-            "-L",
-            "unisims_ver",
-            "--snapshot",
-            "check",
-            "--timescale",
-            "1ns/1ps",
-        ],
-        ["xsim", "check", "--runall"],
+    words_in = [xsim_pack(inputs[i : i + PE], 4) for i in range(0, len(inputs), PE)]
+    words_out = [xsim_pack(expected[i : i + PE], 5) for i in range(0, len(expected), PE)]
+    stream_through(
+        eltwise_with_constant().structure.requirements,
+        tmp_path,
+        inputs={"in0_V": (words_in, 4 * PE)},
+        outputs={"out0_V": (words_out, 5 * PE)},
     )
-    for command in commands:
-        result = subprocess.run(command, cwd=tmp_path, capture_output=True, text=True, timeout=180)
-        assert result.returncode == 0, result.stdout + result.stderr
-    assert "ELTWISE_CONSTANT_PASS" in result.stdout, result.stdout

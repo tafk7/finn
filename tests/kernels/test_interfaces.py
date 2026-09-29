@@ -11,31 +11,22 @@ its thresholds are runtime-writable and otherwise held idle by its tie-offs,
 as is the set selector of a single threshold set.
 """
 
-import os
-from pathlib import Path
-import shutil
-import subprocess
-
 import pytest
 from qonnx.core.datatype import DataType
 
 from finn.core.space import Rejected, Space, design_space
 from finn.kernels.composite import Design
-from finn.kernels.artifacts.abi import Bus, Direction, Endpoint, StandardProtocol
-from finn.kernels.artifacts.build import materialize_module_sources, prepare_module_build
-from finn.kernels.artifacts.store import ArtifactStore
+from finn.kernels.artifacts.abi import Bus, Endpoint, StandardProtocol
 from finn.kernels.control import ControlBus
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.dotp import PackedDotpKernel
 from finn.kernels.physical.structure import ConstantBits, PinSlice
-from finn.kernels.physical.validation import abi_pins
-from finn.kernels.resources import resource_root, template_root
 from finn.kernels.streams import Stream
 from finn.kernels.target import DspBlock
 from finn.kernels.thresholding import ThresholdingAxiKernel
 from kernels.helpers import settled
+from kernels.xsim import requires_xsim, stream_through
 
-ROOT = Path(__file__).resolve().parents[2]
 REPETITIONS, WIDTH, HEIGHT, SIMD = 2, 4, 2, 2
 FOLDS = WIDTH // SIMD
 A, W, R = DataType["INT3"], DataType["INT3"], DataType["INT9"]
@@ -174,24 +165,12 @@ def test_writable_thresholds_without_a_control_bus_are_refused():
     assert {finding.code for finding in refused.findings} == {"threshold-control"}
 
 
-@pytest.mark.skipif(
-    not all(shutil.which(tool) for tool in ("xvlog", "xelab", "xsim")),
-    reason="Vivado simulator tools are unavailable",
-)
+@requires_xsim
 @pytest.mark.parametrize("writable", (False, True))
 def test_the_composed_module_computes_thresholded_dot_products(tmp_path, writable):
-    # Writable, the exported AXI-Lite bus is held idle by the testbench: the
-    # thresholds are still the initial table.
+    # Writable, the exported AXI-Lite bus is held idle (every other top input is
+    # held at zero): the thresholds are still the initial table.
     requirements = activated(writable=writable).structure.requirements
-    store = ArtifactStore(tmp_path / "store")
-    prepared = prepare_module_build(
-        requirements,
-        roots={"kernels": resource_root(), "finnlib": ROOT / "deps/finnlib"},
-        template_roots=(template_root(),),
-        blobs=store,
-    )
-    materialized = materialize_module_sources(prepared, store)
-    sources = [str(Path(materialized.directory) / path) for path in materialized.files]
     x = [[(3 * r + 5 * k) % 8 - 4 for k in range(WIDTH)] for r in range(REPETITIONS)]
     w = [[(7 * h + 3 * k) % 8 - 4 for k in range(WIDTH)] for h in range(HEIGHT)]
     levels = [
@@ -213,81 +192,12 @@ def test_the_composed_module_computes_thresholded_dot_products(tmp_path, writabl
         for h in range(HEIGHT)
         for f in range(FOLDS)
     ]
-    count = len(weight_words)
-
-    def table(name, bits, words):
-        values = ", ".join(f"{bits}'h{value:x}" for value in words)
-        return f"logic [{bits - 1}:0] {name} [{len(words)}] = '{{{values}}};"
-
-    control = " ".join(
-        f"logic [{info.width - 1}:0] {name} = 0;"
-        if info.direction is Direction.IN
-        else f"wire [{info.width - 1}:0] {name};"
-        for name, info in abi_pins(requirements.abi).items()
-        if name.startswith("s_axilite_")
+    stream_through(
+        requirements,
+        tmp_path,
+        inputs={"in0_V": (activation_words, 3 * SIMD), "in1_V": (weight_words, 3 * SIMD)},
+        outputs={"out0_V": (levels, 2)},
     )
-    testbench = tmp_path / "check.sv"
-    testbench.write_text(f"""`timescale 1ns/1ps
-module check;
-    logic ap_clk = 0, ap_rst_n = 0;
-    logic [7:0] in0_V_tdata = 0; logic in0_V_tvalid = 0; wire in0_V_tready;
-    logic [7:0] in1_V_tdata = 0; logic in1_V_tvalid = 0; wire in1_V_tready;
-    wire [7:0] out0_V_tdata; wire out0_V_tvalid; logic out0_V_tready = 1;
-    {control}
-    {table("activations", 8, activation_words)}
-    {table("weights", 8, weight_words)}
-    {table("expected", 2, levels)}
-    always #5 ap_clk = !ap_clk;
-    {prepared.abi.entry_point} dut (.*);
-    int a = 0, b = 0, received = 0;
-    always @(posedge ap_clk) if (ap_rst_n) begin
-        if (in0_V_tvalid && in0_V_tready) a <= a + 1;
-        if (in1_V_tvalid && in1_V_tready) b <= b + 1;
-        if (out0_V_tvalid && out0_V_tready) begin
-            if (out0_V_tdata[1:0] !== expected[received])
-                $fatal(1, "level %0d: %0d != %0d", received, out0_V_tdata[1:0], expected[received]);
-            received <= received + 1;
-        end
-    end
-    always @* begin
-        in0_V_tvalid = ap_rst_n && a < {len(activation_words)};
-        in0_V_tdata = a < {len(activation_words)} ? activations[a] : 0;
-        in1_V_tvalid = ap_rst_n && b < {count};
-        in1_V_tdata = b < {count} ? weights[b] : 0;
-    end
-    initial begin
-        repeat (16) @(posedge ap_clk);  // past the DSP models' startup recovery (GSR)
-        ap_rst_n <= 1;
-        wait (received == {len(levels)});
-        repeat (4) @(posedge ap_clk);
-        $display("ACTIVATED_PASS");
-        $finish;
-    end
-    initial begin #20000; $fatal(1, "watchdog"); end
-endmodule
-""")
-    vivado = Path(os.environ.get("XILINX_VIVADO", str(Path(str(shutil.which("xelab"))).parents[1])))
-    commands = (
-        ["xvlog", "--sv", *sources, str(vivado / "data/verilog/src/glbl.v"), str(testbench)],
-        [
-            "xelab",
-            "work.check",
-            "work.glbl",
-            "--mt",
-            "2",
-            "-L",
-            "unisims_ver",
-            "--snapshot",
-            "check",
-            "--timescale",
-            "1ns/1ps",
-        ],
-        ["xsim", "check", "--runall"],
-    )
-    for command in commands:
-        result = subprocess.run(command, cwd=tmp_path, capture_output=True, text=True, timeout=300)
-        assert result.returncode == 0, result.stdout + result.stderr
-    assert "ACTIVATED_PASS" in result.stdout, result.stdout + result.stderr
 
 
 def test_several_threshold_sets_take_a_set_selector_stream():

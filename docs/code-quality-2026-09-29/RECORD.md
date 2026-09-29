@@ -133,3 +133,32 @@ XSim skipped, dataflow 40; identity identical to `identity-norom.txt`.
 - **Lines.** src −24 net, tests −7 net (9 files, +64 −95).
 - **Gates.** Space 448, kernels 791 + 14 skipped, graph 4 + 2, dataflow 40;
   ruff and mypy clean; examples 27; identity unchanged.
+
+## F: one XSim harness
+
+- **Shared** (`tests/kernels/xsim.py`): `materialize` (build a module's
+  sources and collect its INIT_FILEs; FinnLib from `FINNLIB_ROOT` or the
+  pinned `deps`), `simulate` (elaborate a testbench module `check`, require
+  `PASS`), and `stream_through`, now over any number of AXIS ports
+  (`inputs`/`outputs`: port → words and payload bits), holding every other
+  top input at zero.
+- **Onto it.**
+  - `test_interfaces`: its inline testbench for the thresholded dot products
+    (two inputs, an idle AXI-Lite bus) is `stream_through`.
+  - `test_stream_contract`: the eltwise-with-a-constant composition was
+    hand-wired through `Composition`, re-implementing `netlist` down to the
+    wrapper; it is a `Design` (`adaptable=False` on the constant's stream, so a
+    memory of other lanes is refused by the stream's plan), and its XSim test
+    is `stream_through`.
+  - `test_flat_kernels` and the FIFO capacity bench in `test_native_streams`
+    run through `simulate`; the three inline `skipif`s are `requires_xsim`.
+  - `rtlsim/adapter_numeric` and `rtlsim/matmul_numeric` build through
+    `materialize`.
+  - The one-in, one-out callers (`test_two_kernels`, `test_design`,
+    `tests/graph/test_adapter`) pass port mappings.
+- **XSim, locally before the commit.** Every rewritten XSim test passed:
+  kernels 109 (+1 failure of a new, non-XSim assertion's wording, fixed),
+  graph 6.
+- **Lines.** tests −194 net (10 files, +264 −458).
+- **Gates.** Space 448, kernels 791 + 14 skipped, graph 4 + 2, dataflow 40;
+  ruff and mypy clean; examples 27; identity unchanged.

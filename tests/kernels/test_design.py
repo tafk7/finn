@@ -161,14 +161,26 @@ def test_the_design_computes_in_xsim_fused_or_not(tmp_path: Path, fused: bool) -
     stream_through(
         chain(fused=fused).structure.requirements,
         tmp_path,
-        words_in=[
-            pack(X[r][f : f + SIMD], a_bits) for r in range(ROWS) for f in range(0, INPUTS, SIMD)
-        ],
-        in_bits=SIMD * a_bits,
-        words_out=[
-            pack(y[r][f : f + PE], y_bits) for r in range(ROWS) for f in range(0, OUTPUTS, PE)
-        ],
-        out_bits=PE * y_bits,
+        inputs={
+            "in0_V": (
+                [
+                    pack(X[r][f : f + SIMD], a_bits)
+                    for r in range(ROWS)
+                    for f in range(0, INPUTS, SIMD)
+                ],
+                SIMD * a_bits,
+            )
+        },
+        outputs={
+            "out0_V": (
+                [
+                    pack(y[r][f : f + PE], y_bits)
+                    for r in range(ROWS)
+                    for f in range(0, OUTPUTS, PE)
+                ],
+                PE * y_bits,
+            )
+        },
     )
 
 
