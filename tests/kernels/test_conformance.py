@@ -51,7 +51,9 @@ from kernels.conformance import (
     NonConformance,
     Sample,
     _settle_known,
+    _values,
     conformance,
+    place,
     samples,
 )
 from kernels.xsim import requires_xsim
@@ -95,8 +97,10 @@ def dotp(family: type[Any], dsp: DspBlock, bits: int, form: Form = Form.DENSE) -
 # -- thresholding --------------------------------------------------------------------------
 
 PIXELS, CHANNELS = 3, 6
-# Three thresholds a channel, each channel's its own: a level names its channel's thresholds.
-THRESHOLDS = (tuple((-6 + c, -1 + c, 1 + c) for c in range(CHANNELS)),)
+# Three thresholds a channel, two apart from the next channel's, so that a value
+# thresholded against another channel's row often lands on another level: the
+# planted-error tests below need their stimulus to tell channels apart.
+THRESHOLDS = (tuple((-8 + 2 * c, -7 + 2 * c, -6 + 2 * c) for c in range(CHANNELS)),)
 
 
 def levels(values: np.ndarray) -> np.ndarray:
@@ -356,6 +360,40 @@ WRONG = {"loop-order": lambda: scheduled(ChannelsFirst), "lane-order": lambda: s
 @pytest.mark.parametrize("wrong", sorted(WRONG))
 def test_a_wrong_order_passes_every_python_check(wrong: str) -> None:
     conformance(**WRONG[wrong]())
+
+
+@pytest.mark.parametrize("wrong", sorted(WRONG))
+def test_the_stimulus_tells_the_wrong_order_apart(wrong: str) -> None:
+    """In every sample, the RTL walking its own order computes some other level.
+
+    thresholding_axi applies the thresholds of the channel at each position of
+    its own order (row-major, PE channels a beat) to whatever arrives there. A
+    sample whose random values happened to give the same levels either way
+    would pass XSim and prove nothing.
+    """
+    case = WRONG[wrong]()
+    family, inputs, table = case["family"], case["inputs"], np.array(THRESHOLDS[0])
+    for sample in samples(**{key: value for key, value in case.items() if key != "reference"}):
+        values = _values(family, sample, inputs)
+        placed = place(
+            family,
+            sample,
+            inputs,
+            case["outputs"],
+            choices=case["choices"],
+            facts=case["facts"],
+            values=values,
+        )
+        x = values["input_stream"]
+        declared = placed.input_stream.endpoints.sink.form
+        walked = vector_major(declared.shape, sample.folds["pe"])
+        arrive = [p for beat in declared.positions() for p in beat]
+        applied = [p[1] for beat in walked.positions() for p in beat]
+        differ = sum(
+            int((x[p] >= table[c]).sum() != (x[p] >= table[p[1]]).sum())
+            for p, c in zip(arrive, applied)
+        )
+        assert differ, f"{sample.label}: the values give every level either way"
 
 
 @requires_xsim

@@ -247,4 +247,31 @@ Fast gates (Vivado off `PATH`), as observed: Space 448; kernels 807 passed,
 lane-order Python test, the strictness test; +2 XSim skipped); graph 4 + 2
 skipped; dataflow 40; ruff and mypy clean.
 
-FOLLOWUP_XSIM
+XSim from `78a574dd4` (snapshot `/tmp/a1-xsim-78a574dd4`), as observed:
+every conformance case passes (transpose with exactly its four known
+failures), the wrong-loop-order test passes, the rest of `tests/kernels` 805
+passed, `tests/graph` 6 passed. **The wrong-lane-order test failed:** its
+direct sample failed as planted (both modes, `output_stream word 0: 00bc !=
+07c`), but its adapter sample passed XSim.
+
+Diagnosis: not the stream. The adapter (`input_gen`, then `vpc`) delivers
+exactly the reversed field order the kernel declares; the wiring into the
+kernel is straight. The sample's random values simply gave the same levels
+under either order (0 of 18 positions differ, against 4 of 18 in the direct
+sample): neighbouring channels' thresholds were one apart.
+
+Fix:
+- The thresholding table is two apart per channel (`(-8 + 2c, -7 + 2c,
+  -6 + 2c)`), for every thresholding case.
+- A fast test, `test_the_stimulus_tells_the_wrong_order_apart`, models
+  `thresholding_axi` walking its own order (row-major, PE channels a beat) over
+  what each planted-error sample feeds it, and requires some position to reach
+  another level. With the old table it fails for the lane-order case; with the
+  new one both planted errors pass it in every sample.
+
+Fast gates (Vivado off `PATH`, `FORCE_COLOR` unset: the restarted shell sets
+`FORCE_COLOR=3`, which puts ANSI codes in mypy output and fails five Space
+typing-fixture tests): Space 448; kernels 809 passed, 25 skipped (+2: the
+stimulus test per planted error); graph 4 + 2; dataflow 40; ruff, mypy clean.
+
+FOLLOWUP2
