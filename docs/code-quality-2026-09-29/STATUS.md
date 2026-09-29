@@ -118,10 +118,8 @@ down to its wrapper) is a `Design`.
     depthwise 22, memstream 14 and 12, pumped 14, writable 14, sets 14, dotp
     27, dotp-stress 17, adapters 26: all pass, every count equal to the
     baseline.
-  - F (covers D, E, F, including the new harness): pytest 805, graph 6 and
-    the sweeps through `sets` pass with baseline counts; dotp, dotp-stress
-    and adapters still running at the time of writing
-    (`/tmp/xsim/cq-F/summary.log`).
+  - F (covers D, E, F, including the new harness): pytest 805, graph 6;
+    every sweep passes with the baseline count (214 passes, no failures).
   - Before F's commit, every rewritten XSim test passed locally.
 
 ## Considered and not done

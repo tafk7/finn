@@ -173,3 +173,6 @@ FIFO 4 and 4, depthwise 22, memstream 14 and 12, pumped 14, writable 14, sets
 - **A** (`b99691538`, XSim pytest): kernels 805, graph 6, all pass.
 - **C** (`bdd00a0e2`, everything; covers B and C): pytest 805, graph 6; every
   sweep passes with the baseline count (214 passes, no failures).
+- **F** (`2a0a809fb`, everything; covers D, E and F, including the new test
+  harness and the numeric harnesses built through it): pytest 805, graph 6;
+  every sweep passes with the baseline count (214 passes, no failures).
