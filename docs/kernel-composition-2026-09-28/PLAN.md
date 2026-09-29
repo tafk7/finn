@@ -90,7 +90,7 @@ candidates.
 | # | Decision | Answer | Blocks |
 |---|---|---|---|
 | 1 | Where weight memory lives | **settled (F10)**: a `memory` Decision in the composite | K1 |
-| 2 | Weights stored `(k, n)`, as ONNX `MatMul` and FINN's MVAU initializer, not the kernel layer's current `(n, k)`. Bank conflicts do not bear on it: the memory image follows the consumer's traversal, not the tensor's axis order | **open**, recommended yes; V1 proceeds with `(k, n)` unless the user says otherwise before V1 starts | V1 |
+| 2 | Weights stored `(k, n)`, as ONNX `MatMul` and FINN's MVAU initializer, not the kernel layer's current `(n, k)`. Bank conflicts do not bear on it: the memory image follows the consumer's traversal, not the tensor's axis order | **kept for now** (user, 2026-09-28, after V1 built it); to be revisited in detail, specifically how weight files (memory images) are generated | V1 |
 | 3 | `required()` ships with the Decision refinement | **agreed** | E0 |
 | 4 | Registration of kernels | **dropped**: candidates are listed in the Decision; revisit registration later | — |
 | 5 | A port node's contract is named, in `netlist`, after the nearest ancestor that owns a module (`u_compute_packed` stays the core's instance, not `u_compute_packed_x`) | **agreed** | K1 |
@@ -280,6 +280,7 @@ V1 can start beside E1, since it touches values only. K1 needs E1 and V1.
 - FIFO sizing.
 - The `inner_shuffle` fix (FinnLib).
 - The HLS synthesis stage.
+- The detailed revisit of weight layout and weight-file generation (G0.2).
 
 ## Estimate
 
@@ -295,5 +296,9 @@ About five to six and a half weeks:
 | S4 | 1–2 weeks |
 | G1 | 1 week |
 
-The one open human decision is G0.2, needed before V1. E0's review is done by
-an agent; the rest are reviewed as they land.
+G0.2 is kept for now and flagged for a detailed revisit (weight-file generation).
+E0's review is done by an agent; the rest are reviewed as they land. The user
+accepted E1/K1's engine additions (`Users` through forwarded inputs, `settle`
+treating a pending admission as not refused), the `build_requirements` and
+`tieoffs` views on every kernel, and retiring the mapping form at K2's close
+(2026-09-28).

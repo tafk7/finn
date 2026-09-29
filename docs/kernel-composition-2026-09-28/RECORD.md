@@ -193,3 +193,11 @@ the gate results as observed, key and name changes (D7), and deviations.
   fingerprints and keys change.
 - **Gates.** Kernel gate: Space 447, kernels 810, ruff and mypy clean.
   Dataflow gate: 40. Documentation examples: 27.
+- **XSim.** Every numeric sweep from a snapshot of `1e44982cb`, one
+  simulation per process: dense 40, FIFO transport 6 (packed) and 6 (INT8
+  pumped), depthwise 34, memstream 14 and 12 (depthwise), pumped memory 14,
+  writable 14, three sets 14, pure dotp 27 and its stress set 17, adapters 26;
+  224 passes, no failures.
+- **G0.2 answered after the fact** (user, 2026-09-28): weights stay `(k, n)`
+  for now, to be revisited in detail, specifically how weight files are
+  generated.
