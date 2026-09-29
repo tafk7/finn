@@ -24,7 +24,7 @@ from qonnx.core.datatype import DataType
 from finn.core.space import Rejected, derived, design_space
 from finn.dataflow.plan import Step
 from finn.dataflow.tensor import ScalarEncoding, Tensor
-from finn.dataflow.traversal import TRAVERSAL, Traversal, period
+from finn.dataflow.traversal import Traversal, period
 from finn.kernels.composite import Design
 from finn.kernels.configure import commit
 from finn.kernels.memstream import MemStreamKernel
@@ -61,11 +61,11 @@ def layered(*, adaptable: bool = True):
         )
 
         # One pass of each layer's weights, in the order that layer reads them.
-        @derived(semantics=TRAVERSAL)
+        @derived
         def first_period(self) -> Traversal:
             return period(self.first.w.sequence.form)
 
-        @derived(semantics=TRAVERSAL)
+        @derived
         def second_period(self) -> Traversal:
             return period(self.second.w.sequence.form)
 

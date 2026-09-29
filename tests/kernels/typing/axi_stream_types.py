@@ -2,8 +2,6 @@
 # SPDX-License-Identifier: BSD-3-Clause
 """Typed ports and scalars retain concrete node, field and view types."""
 
-from typing import Any
-
 from typing_extensions import assert_type
 
 from finn.core.space import BoundValue, QueryResult, View, ViewAssessment
@@ -34,17 +32,17 @@ def check(point: DotpAxiKernel, eltwise: EltwiseKernel) -> None:
     assert_type(DotpAxiKernel.x.element, ScalarEncoding)
     assert_type(DotpAxiKernel.x.axis, AxiStream)
     assert_type(DotpAxiKernel.x.sequence, BeatSequence)
-    assert_type(StreamPort.pins, View[tuple[Any, ...]])
+    assert_type(StreamPort.pins, View[tuple[object, ...]])
     assert_type(point.query(DotpAxiKernel.pe), QueryResult[int])
     # Configuration reads.
     assert_type(point.x, ScheduledPort)
     assert_type(point.x.element, ScalarEncoding)
     assert_type(point.x.axis, AxiStream)
     assert_type(point.x.axis.payload, PackedBeatLayout)
-    assert_type(point.x.pins, tuple[Any, ...])
-    assert_type(point.x.inspect(StreamPort.pins), ViewAssessment[tuple[Any, ...]])
-    assert_type(point.x.query(StreamPort.pins), QueryResult[tuple[Any, ...]])
-    assert_type(point.x.field(StreamPort.pins), BoundValue[tuple[Any, ...]])
+    assert_type(point.x.pins, tuple[object, ...])
+    assert_type(point.x.inspect(StreamPort.pins), ViewAssessment[tuple[object, ...]])
+    assert_type(point.x.query(StreamPort.pins), QueryResult[tuple[object, ...]])
+    assert_type(point.x.field(StreamPort.pins), BoundValue[tuple[object, ...]])
     assert_type(point.pe, int)
     assert_type(point.schedule, Schedule)
     assert_type(eltwise.lhs, GivenPort)

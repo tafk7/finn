@@ -14,7 +14,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from math import prod
 
-from finn.core.space import Rejected, default_semantics, reject
+from finn.core.space import Rejected, reject
 from finn.dataflow.datatypes import (
     QONNXDataType,
     canonical_qonnx_datatype,
@@ -56,9 +56,6 @@ class ScalarEncoding:
         return self.dtype.signed()
 
 
-SCALAR_ENCODING = default_semantics(ScalarEncoding)
-
-
 @dataclass(frozen=True)
 class Tensor:
     """A row-major tensor: positive ``shape`` extents, every position an ``element``."""
@@ -79,7 +76,4 @@ class Tensor:
         return prod(self.shape)
 
 
-TENSOR = default_semantics(Tensor)
-
-
-__all__ = ["SCALAR_ENCODING", "ScalarEncoding", "TENSOR", "Tensor"]
+__all__ = ["ScalarEncoding", "Tensor"]

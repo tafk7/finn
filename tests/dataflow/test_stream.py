@@ -22,7 +22,7 @@ from finn.core.space import (
     design_space,
 )
 from finn.dataflow.plan import Step
-from finn.dataflow.stream import ENDS, End, Ends, Stream
+from finn.dataflow.stream import End, Ends, Stream
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, LevelEnd, vector_major
 
@@ -37,7 +37,7 @@ class Given(Stream):
     source: BeatSequence = Param(semantics=SEQUENCE)
     sink: BeatSequence = Param(semantics=SEQUENCE)
 
-    @derived(semantics=ENDS)
+    @derived
     def ends(self) -> Ends:
         return Ends(End("producer", INT4, self.source), End("consumer", INT4, self.sink))
 

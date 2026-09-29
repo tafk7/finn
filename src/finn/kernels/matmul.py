@@ -54,7 +54,6 @@ from finn.core.space import (
     QueryResult,
     Rejected,
     constraint,
-    default_semantics,
     derived,
     design_space,
     reject,
@@ -70,8 +69,8 @@ from finn.dataflow.datatypes import (
     resolve_qonnx_datatype_name,
 )
 from finn.dataflow.gemm import Form
-from finn.dataflow.tensor import TENSOR, ScalarEncoding, Tensor
-from finn.dataflow.traversal import TRAVERSAL, Traversal, period
+from finn.dataflow.tensor import ScalarEncoding, Tensor
+from finn.dataflow.traversal import Traversal, period
 from finn.kernels.artifacts.build import ModuleBuildRequirements
 from finn.kernels.base import PORT
 from finn.kernels.artifacts.derivation import ProducerIdentity
@@ -93,7 +92,6 @@ from finn.kernels.target import DspBlock
 
 
 FinnAttributes = tuple[tuple[str, int | str | tuple[int, ...]], ...]
-FINN_ATTRIBUTES = default_semantics(tuple)
 
 
 class WeightDelivery(Enum):
@@ -228,21 +226,21 @@ class MatMulKernel(Composite):
         except ValueError as error:
             return reject("matmul-extents", str(error))
 
-    @derived(semantics=TENSOR)
+    @derived
     def activation_tensor(self) -> Tensor | Rejected:
         """(M, K), or (M, K, N) depthwise, however the datapath reads it."""
         shape = (self.m, self.k, self.n) if self.depthwise else (self.m, self.k)
         return self._tensor(shape, self.activation_dtype)
 
-    @derived(semantics=TENSOR)
+    @derived
     def weight_tensor(self) -> Tensor | Rejected:
         return self._tensor((self.datapath_k, self.n), self.weights_dtype)
 
-    @derived(semantics=TENSOR)
+    @derived
     def result_tensor(self) -> Tensor | Rejected:
         return self._tensor((self.m, self.n), self.result_type)
 
-    @derived(semantics=TENSOR)
+    @derived
     def set_tensor(self) -> Tensor | Rejected:
         """One set index per row, as wide as the memory's selector."""
         return self._tensor((self.m,), set_index_dtype(self.weight_sets))
@@ -297,7 +295,7 @@ class MatMulKernel(Composite):
         y_stream=results,
     )
 
-    @derived(semantics=TRAVERSAL)
+    @derived
     def weight_period(self) -> Traversal:
         """One pass of the weights in the order the core reads them: what a memory stores."""
         return period(self.compute.w.sequence.form)
@@ -338,7 +336,7 @@ class MatMulKernel(Composite):
 
     admission = ConstraintGroup(extents_supported, realization_supported, supply_supported)
 
-    @view(semantics=FINN_ATTRIBUTES, requires=(admission,))
+    @view(requires=(admission,))
     def finn_attributes(self) -> FinnAttributes | Rejected:
         """FINN's ``MVAU`` node attributes, from this configuration alone.
 
@@ -536,7 +534,6 @@ def matmul_assembly(
 
 
 __all__ = [
-    "FINN_ATTRIBUTES",
     "FinnAttributes",
     "MatMulAssembly",
     "MatMulKernel",

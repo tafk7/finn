@@ -32,7 +32,6 @@ from finn.core.space import (
     Param,
     Rejected,
     constraint,
-    default_semantics,
     derived,
     reject,
     view,
@@ -43,11 +42,11 @@ from finn.dataflow.datatypes import (
     ordinary_integer_bounds,
     resolve_qonnx_datatype_name,
 )
-from finn.dataflow.traversal import BEAT_SEQUENCE, BeatSequence, vector_major
+from finn.dataflow.traversal import BeatSequence, vector_major
 from finn.kernels.artifacts.abi import Bus, Endpoint, Member, Signal, StandardProtocol
 from finn.kernels.artifacts.contribution_types import CopiedSource
 from finn.kernels.base import Kernel, Tieoffs
-from finn.kernels.control import CONTROL, CONTROL_SEMANTICS, Control, ControlBus, held_bus
+from finn.kernels.control import CONTROL, Control, ControlBus, held_bus
 from finn.kernels.datatypes.domains import Integer, set_index_dtype
 from finn.kernels.datatypes.scalar import integer_scalar
 from finn.kernels.datatypes.semantics import (
@@ -191,7 +190,7 @@ class ThresholdingAxiKernel(Kernel):
         configuration_supported,
     )
 
-    @derived(semantics=default_semantics(Bus))
+    @derived
     def config_bus(self) -> Bus | Rejected:
         """The AXI-Lite configuration bus, present in every configuration."""
         table, pe, bits = self.thresholds, self.pe, self.threshold_dtype.bitwidth()
@@ -235,7 +234,7 @@ class ThresholdingAxiKernel(Kernel):
     def selector_dtype(self) -> QONNXDataType:
         return set_index_dtype(len(self.thresholds))
 
-    @derived(semantics=BEAT_SEQUENCE)
+    @derived
     def input_sequence(self) -> BeatSequence | Rejected:
         """Row-major, PE consecutive channels a beat, channels the innermost axis.
 
@@ -250,7 +249,7 @@ class ThresholdingAxiKernel(Kernel):
             )
         return BeatSequence(vector_major(shape, pe))
 
-    @derived(semantics=BEAT_SEQUENCE)
+    @derived
     def output_sequence(self) -> BeatSequence | Rejected:
         """The input's order, over a tensor of the input's shape."""
         sequence = self.input_sequence
@@ -258,7 +257,7 @@ class ThresholdingAxiKernel(Kernel):
             return reject("threshold-stream-form", "the output keeps the input's shape")
         return sequence
 
-    @derived(semantics=BEAT_SEQUENCE)
+    @derived
     def set_sequence(self) -> BeatSequence | Rejected:
         """One set index for each input beat."""
         shape = self.set_stream.tensor.shape
@@ -355,7 +354,7 @@ class ThresholdingAxiKernel(Kernel):
             return reject("threshold-control", "runtime-writable thresholds need a control bus")
         return Tieoffs()
 
-    @view(semantics=CONTROL_SEMANTICS)
+    @view
     def control_bus(self) -> Control:
         return Control(self.config_bus if self.use_axilite else None)
 

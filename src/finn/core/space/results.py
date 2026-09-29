@@ -5,11 +5,12 @@
 
 from __future__ import annotations
 
+import types
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, replace
 from enum import Enum
 from types import MappingProxyType
-from typing import Generic, Literal, TypeAlias, TypeVar, cast
+from typing import Generic, Literal, TypeAlias, TypeVar, Union, cast, get_args, get_origin
 
 from .semantics import NoTruthValue
 
@@ -139,6 +140,16 @@ class Unresolved(NoTruthValue):
 
 QueryResult: TypeAlias = Available[T] | Inapplicable | Rejected | Unresolved
 NonValue: TypeAlias = Inapplicable | Rejected | Unresolved
+
+
+def marked_value_type(annotation: object) -> object | None:
+    """The value type ``T`` of an output annotated ``T | Rejected`` (any of the markers)."""
+    if get_origin(annotation) not in (Union, types.UnionType):
+        return None
+    values = [
+        arg for arg in get_args(annotation) if arg not in (Inapplicable, Rejected, Unresolved)
+    ]
+    return values[0] if len(values) == 1 else None
 
 
 def reject(
@@ -333,6 +344,7 @@ def assess_view(
 
 __all__ = [
     "QueryResult",
+    "marked_value_type",
     "ConstraintAssessment",
     "Available",
     "DecisionState",

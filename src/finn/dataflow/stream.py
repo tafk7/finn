@@ -31,13 +31,12 @@ from finn.core.space import (
     Rejected,
     Space,
     constraint,
-    default_semantics,
     derived,
     reject,
     required,
 )
-from finn.dataflow.plan import PLAN, Plan, Unrealizable, plan
-from finn.dataflow.tensor import TENSOR, ScalarEncoding, Tensor
+from finn.dataflow.plan import Plan, Unrealizable, plan
+from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence
 
 
@@ -62,13 +61,10 @@ class Ends:
     sink: End
 
 
-ENDS = default_semantics(Ends)
-
-
 class Stream(Space):
     """One tensor, its two ends, and the plan that joins them."""
 
-    tensor: Tensor = Param(semantics=TENSOR)
+    tensor: Tensor = Param()
     # False admits no adapter: the ends must connect directly.
     adaptable: bool = Param(default=True)
     ends = required(Ends)
@@ -93,7 +89,7 @@ class Stream(Space):
                 )
         return True
 
-    @derived(semantics=PLAN)
+    @derived
     def plan(self) -> Plan | Rejected:
         """What must happen between the source's beat sequence and the sink's."""
         ends = self.ends
@@ -117,4 +113,4 @@ class Stream(Space):
         return True
 
 
-__all__ = ["ENDS", "End", "Ends", "Stream"]
+__all__ = ["End", "Ends", "Stream"]

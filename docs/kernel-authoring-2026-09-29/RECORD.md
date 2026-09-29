@@ -274,4 +274,73 @@ Fast gates (Vivado off `PATH`, `FORCE_COLOR` unset: the restarted shell sets
 typing-fixture tests): Space 448; kernels 809 passed, 25 skipped (+2: the
 stimulus test per planted error); graph 4 + 2; dataflow 40; ruff, mypy clean.
 
-FOLLOWUP2
+XSim from `eabb488fb` (snapshot `/tmp/a1-xsim-eabb488fb`), as observed: every
+conformance case passes (transpose with exactly its four known failures); both
+planted errors (loop order, lane order) fail in every sample and both modes on
+an output word; the rest of `tests/kernels` 805 passed. (`tests/graph` did not
+change and passed 6 from `78a574dd4`.)
+
+## A2: a `T | Rejected` output takes `T`'s semantics
+
+### What landed
+
+- **The engine rule** (`_signatures.output_semantics`): a return annotation of
+  one value type and the engine's result markers (`Rejected`, `Inapplicable`,
+  `Unresolved`) infers the value type's default semantics. An explicit
+  `semantics=` still overrides and is now checked against `T` (before, a union
+  skipped the check). Protocols and unions of values still need it. The helper
+  is `results.marked_value_type`, shared by the two places below.
+- **Two refinements the removals needed** (neither in the plan):
+  - *Projection.* `facts.word_bits` in a class body (`adapters._input_gen`)
+    projects an attribute of a derived value before collection, and read its
+    type from `semantics=`. Without it, `project` now reads the value type from
+    the derived function's return annotation, under the same rule. Removing the
+    adapters' `INPUT_GEN_FACTS`/`VPC_FACTS` without this made `finn.kernels`
+    fail to import.
+  - *Static types.* The plain `derived`/`view` decorators took
+    `Callable[..., T]`, so a `T | Rejected` member was typed `T | Rejected`
+    (mypy refused `point.plan.steps`). They now take `Callable[..., T |
+    NonValue]` and give `T`, as the `semantics=` overload already did.
+- **Removals.** All 88 explicit `semantics=` the P0 count found redundant, by
+  constant: `BEAT_SEQUENCE` 14, `CLOCKING` 8, `TENSOR` 7, `INDICES` 7, `STAGES`
+  4, `TRAVERSAL` 3, `SCALAR_ENCODING` 3, `default_semantics(tuple)` 3, two each
+  of `CONTROL_SEMANTICS`, `default_semantics(Bus)`, `SCHEDULE`,
+  `STREAM_CONTRACT`, `TRANSPORT`, `MARKERS`, `TIEOFFS_SEMANTICS`,
+  `CONNECTION_SEMANTICS`, `STAGE_SEMANTICS`, `PLAN`, `VPC_FACTS`,
+  `INPUT_GEN_FACTS`, `MODULE_REQUIREMENTS`, and one each of the rest.
+  `count_semantics.py` now finds 25 member sites, all "stays" (17 QONNX
+  datatypes, `INTEGER_VECTOR` 3, `INTEGER_TENSOR` 3, `INTEGER_POLICY`,
+  `THRESHOLD_TABLE`), plus the two non-member QONNX uses.
+- **Constants deleted** once nothing used them: `BEAT_SEQUENCE`, `TRAVERSAL`
+  (`finn.dataflow.traversal`), `SCHEDULE`, `PLAN`, `SCALAR_ENCODING`, `TENSOR`,
+  `ENDS` (`finn.dataflow`), `CLOCKING` (`kernels.base`), `INDICES`, `MARKERS`,
+  `SIGNAL_NAMES`, `AXI_STREAM`, `TRANSPORT` (`kernels.port`), `STAGES`,
+  `STAGE_SEMANTICS`, `INPUT_GEN_FACTS`, `VPC_FACTS`, `REALIZATION`
+  (`kernels.adapters`), `COMPOSED` (`kernels.composite`), `FINN_ATTRIBUTES`
+  (`kernels.matmul`). Kept, as they key a `ViewKey` or are shared:
+  `MODULE_REQUIREMENTS`, `TIEOFFS_SEMANTICS`, `CONTROL_SEMANTICS`,
+  `CONNECTION_SEMANTICS`, `PARTS_SEMANTICS`, `EXPORTED_SEMANTICS`,
+  `STREAM_CONTRACT`. Test uses of the deleted names became bare
+  `@derived`/`Param()`.
+- **Tests.** P0.1's tests moved into the Space suite as
+  `tests/core/space/test_marked_outputs.py` (6: inference, override, override
+  checked, Protocol, unions, projection). A typing fixture now reads a port's
+  `pins` as `tuple[object, ...]` (its annotation), not `tuple[Any, ...]`.
+
+### Evidence, as observed
+
+- Fast gates (Vivado off `PATH`, `FORCE_COLOR` unset): Space 454 (448 + 6);
+  kernels 809 passed, 25 skipped; graph 4 + 2; dataflow 40; ruff and mypy
+  clean.
+- Identity dump (`identity.py --api=k1`) identical to
+  `evidence/identity-norom.txt`.
+- The 27 documentation examples pass (`scratchpad/space/check-examples.py
+  --finn-root`).
+
+### Deviations
+
+- The two engine refinements above (projection, static types) were needed and
+  are not in the plan.
+- The scratchpad's `space/AUTHORING.md` and `MIGRATION.md` are not updated:
+  they live in another repository, outside this worktree. Their examples still
+  pass. Outstanding.

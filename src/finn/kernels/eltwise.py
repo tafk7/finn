@@ -23,15 +23,14 @@ from finn.core.space import (
     Param,
     Rejected,
     constraint,
-    default_semantics,
     derived,
     reject,
 )
 from finn.dataflow.datatypes import QONNXDataType, resolve_qonnx_datatype_name
-from finn.dataflow.traversal import BEAT_SEQUENCE, BeatSequence, vector_major
+from finn.dataflow.traversal import BeatSequence, vector_major
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.contribution_types import CopiedSource
-from finn.kernels.base import CLOCKING, NATIVE_CLOCKING, Clocking, Kernel
+from finn.kernels.base import NATIVE_CLOCKING, Clocking, Kernel
 from finn.kernels.datatypes.domains import Integer
 from finn.kernels.datatypes.scalar import Scalar
 from finn.kernels.datatypes.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
@@ -89,7 +88,7 @@ class EltwiseKernel(Kernel):
 
     b_scale: float = Param()
 
-    @derived(semantics=default_semantics(float))
+    @derived
     def native_scale(self) -> float | Rejected:
         scale = self.b_scale
         try:
@@ -139,11 +138,11 @@ class EltwiseKernel(Kernel):
         except ValueError as error:
             return reject("eltwise-stream-form", f"PE={self.pe}: {error}")
 
-    @derived(semantics=BEAT_SEQUENCE)
+    @derived
     def lhs_sequence(self) -> BeatSequence | Rejected:
         return self._walk(self.lhs_stream.tensor.shape)
 
-    @derived(semantics=BEAT_SEQUENCE)
+    @derived
     def rhs_sequence(self) -> BeatSequence | Rejected:
         """``lhs``'s shape, or a trailing part of it presented once per element it meets."""
         shape, full = self.rhs_stream.tensor.shape, self.lhs_stream.tensor.shape
@@ -157,7 +156,7 @@ class EltwiseKernel(Kernel):
         count = self.lhs_stream.tensor.size // self.rhs_stream.tensor.size
         return sequence if count == 1 else BeatSequence(sequence.form.repeated(count))
 
-    @derived(semantics=BEAT_SEQUENCE)
+    @derived
     def result_sequence(self) -> BeatSequence | Rejected:
         shape = self.result_stream.tensor.shape
         if shape != self.lhs_stream.tensor.shape:
@@ -198,7 +197,7 @@ class EltwiseKernel(Kernel):
         reset="rst",
     )
 
-    @derived(semantics=CLOCKING)
+    @derived
     def clocking(self) -> Clocking:
         return NATIVE_CLOCKING
 

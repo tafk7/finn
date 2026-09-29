@@ -32,7 +32,6 @@ from finn.core.space import (
     Param,
     Rejected,
     constraint,
-    default_semantics,
     derived,
     reject,
     view,
@@ -42,8 +41,6 @@ from finn.dataflow.datatypes import (
     ordinary_integer_bounds,
 )
 from finn.dataflow.traversal import (
-    BEAT_SEQUENCE,
-    TRAVERSAL,
     BeatSequence,
     Repetition,
     Traversal,
@@ -53,8 +50,8 @@ from finn.dataflow.traversal import (
 from finn.kernels.artifacts.abi import Bus, Endpoint, Member, Signal, StandardProtocol
 from finn.kernels.artifacts.contribution_types import CopiedSource, GeneratedData
 from finn.kernels.artifacts.requirements import RequirementContribution
-from finn.kernels.base import CLOCKING, Clocking, Kernel, Tieoffs
-from finn.kernels.control import CONTROL, CONTROL_SEMANTICS, Control, ControlBus, held_bus
+from finn.kernels.base import Clocking, Kernel, Tieoffs
+from finn.kernels.control import CONTROL, Control, ControlBus, held_bus
 from finn.kernels.datatypes.domains import Integer, set_index_dtype
 from finn.kernels.datatypes.scalar import integer_scalar
 from finn.kernels.datatypes.semantics import (
@@ -78,7 +75,7 @@ class MemStreamKernel(Kernel):
 
     dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
     element = integer_scalar(dtype, Integer())
-    form: Traversal = Param(semantics=TRAVERSAL)
+    form: Traversal = Param()
     contents: IntegerTensor = Param(semantics=INTEGER_TENSOR)
     sets: int = Param(default=1)
     writable: bool = Param(default=False)
@@ -150,7 +147,7 @@ class MemStreamKernel(Kernel):
             )
         return words
 
-    @derived(semantics=default_semantics(GeneratedData))
+    @derived
     def init_file(self) -> GeneratedData:
         """``$readmemh`` contents: one word per line; a pumped memory stores each word
         as its low half, then its high half."""
@@ -168,7 +165,7 @@ class MemStreamKernel(Kernel):
         name = f"memstream_{hashlib.sha256(data).hexdigest()[:16]}.dat"
         return GeneratedData(name, data)
 
-    @derived(semantics=default_semantics(Bus))
+    @derived
     def config_bus(self) -> Bus:
         """The AXI-Lite configuration port, present in every configuration."""
         address = self.address_bits
@@ -203,12 +200,12 @@ class MemStreamKernel(Kernel):
             associated_reset="rst",
         )
 
-    @derived(semantics=BEAT_SEQUENCE)
+    @derived
     def set_sequence(self) -> BeatSequence:
         """One index a beat, one beat per pass of the weights."""
         return BeatSequence(vector_major(self.set_stream.tensor.shape, 1))
 
-    @derived(semantics=BEAT_SEQUENCE)
+    @derived
     def output_sequence(self) -> BeatSequence:
         """One set streams cyclically; several stream one pass per accepted index."""
         if self.sets > 1:
@@ -236,7 +233,7 @@ class MemStreamKernel(Kernel):
         reset="rst",
     )
 
-    @derived(semantics=CLOCKING)
+    @derived
     def clocking(self) -> Clocking:
         """``clk2x`` runs a pumped memory, and is held low otherwise."""
         pumped = self.pumped_memory
@@ -276,7 +273,7 @@ class MemStreamKernel(Kernel):
             return reject("memstream-control", "a runtime-writable memory needs a control bus")
         return Tieoffs()
 
-    @view(semantics=CONTROL_SEMANTICS)
+    @view
     def control_bus(self) -> Control:
         return Control(self.config_bus if self.writable else None)
 

@@ -32,7 +32,7 @@ from finn.dataflow.datatypes import (
     QONNXDataType,
     qonnx_datatype_width,
 )
-from finn.dataflow.tensor import SCALAR_ENCODING, ScalarEncoding
+from finn.dataflow.tensor import ScalarEncoding
 
 
 class Scalar(Space):
@@ -44,7 +44,7 @@ class Scalar(Space):
     def element_bits(self) -> int:
         return qonnx_datatype_width(self.dtype)
 
-    @derived(semantics=SCALAR_ENCODING)
+    @derived
     def candidate(self) -> ScalarEncoding | Rejected:
         return ScalarEncoding.admit(self.dtype)
 

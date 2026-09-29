@@ -34,7 +34,7 @@ from qonnx.core.datatype import DataType
 
 from finn.core.space import derived
 from finn.dataflow.gemm import Form
-from finn.dataflow.schedule import SCHEDULE, Index, Schedule
+from finn.dataflow.schedule import Index, Schedule
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import tile, vector_major
 from finn.kernels.artifacts.abi import Endpoint
@@ -142,7 +142,7 @@ class RowsFirst(ThresholdingAxiKernel):
     id = "test.thresholding_axi.rows_first"
     beats: ClassVar[tuple[Index, ...]] = (r, c)
 
-    @derived(semantics=SCHEDULE)
+    @derived
     def schedule(self) -> Schedule:
         rows, channels = self.input_stream.tensor.shape
         return Schedule({r: rows, c: channels}, folds={c: self.pe}, beats=type(self).beats)
@@ -212,7 +212,7 @@ class LanesInOrder(ThresholdingAxiKernel):
 
     id = "test.thresholding_axi.lanes_in_order"
 
-    @derived(semantics=SCHEDULE)
+    @derived
     def schedule(self) -> Schedule:
         rows, channels = self.input_stream.tensor.shape
         folds = {co: channels // 3, ci: 3}

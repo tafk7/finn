@@ -21,14 +21,13 @@ from finn.core.space import (
     Param,
     Rejected,
     constraint,
-    default_semantics,
     derived,
     reject,
     view,
 )
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.contribution_types import CopiedSource
-from finn.kernels.base import CLOCKING, NATIVE_CLOCKING, Clocking, Kernel
+from finn.kernels.base import NATIVE_CLOCKING, Clocking, Kernel
 from finn.kernels.port import WordPort
 
 
@@ -61,7 +60,7 @@ class FifoKernel(Kernel):
     admission = ConstraintGroup(geometry_supported)
     ram_style: str = Decision(values=("auto", "shift", "distributed", "block", "ultra"))
 
-    @view(semantics=default_semantics(FifoStorage), requires=(geometry_supported,))
+    @view(requires=(geometry_supported,))
     def storage(self) -> FifoStorage | Rejected:
         depth, style, bits = self.depth, self.ram_style, self.word_bits
         if not 2 <= depth <= 0xFFFFFFFF:
@@ -102,7 +101,7 @@ class FifoKernel(Kernel):
     input = WordPort(name="input", endpoint=Endpoint.TARGET, bits=word_bits)
     output = WordPort(name="output", endpoint=Endpoint.INITIATOR, bits=word_bits)
 
-    @derived(semantics=CLOCKING)
+    @derived
     def clocking(self) -> Clocking:
         return NATIVE_CLOCKING
 

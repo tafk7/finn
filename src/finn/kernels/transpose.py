@@ -21,21 +21,18 @@ from finn.core.space import (
     Param,
     Rejected,
     constraint,
-    default_semantics,
     derived,
     reject,
 )
 from finn.dataflow.datatypes import QONNXDataType
 from finn.dataflow.traversal import (
-    BEAT_SEQUENCE,
-    TRAVERSAL,
     BeatSequence,
     Traversal,
     vector_major,
 )
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.contribution_types import CopiedSource
-from finn.kernels.base import CLOCKING, NATIVE_CLOCKING, Clocking, Kernel
+from finn.kernels.base import NATIVE_CLOCKING, Clocking, Kernel
 from finn.kernels.datatypes.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
 from finn.kernels.port import GivenPort
 from finn.kernels.streams import Stream
@@ -64,10 +61,10 @@ class TransposeKernel(Kernel):
 
     input_stream: Stream = Param()
     output_stream: Stream = Param()
-    input_form: Traversal = Param(semantics=TRAVERSAL)
+    input_form: Traversal = Param()
     ram_style: str = Decision(values=("auto", "distributed", "block", "ultra"))
 
-    @derived(semantics=default_semantics(tuple))
+    @derived
     def matrix(self) -> tuple[int, int, int] | Rejected:
         """(I, J, SIMD) of the input, which must be row-major with SIMD lanes along J."""
         form = self.input_form
@@ -93,11 +90,11 @@ class TransposeKernel(Kernel):
 
     admission = ConstraintGroup(transposable)
 
-    @derived(semantics=BEAT_SEQUENCE)
+    @derived
     def input_sequence(self) -> BeatSequence:
         return BeatSequence(self.input_form)
 
-    @derived(semantics=BEAT_SEQUENCE)
+    @derived
     def output_sequence(self) -> BeatSequence:
         form = self.input_form
         rows, cols, simd = self.matrix
@@ -135,7 +132,7 @@ class TransposeKernel(Kernel):
         reset="rst",
     )
 
-    @derived(semantics=CLOCKING)
+    @derived
     def clocking(self) -> Clocking:
         return NATIVE_CLOCKING
 

@@ -143,7 +143,6 @@ class Clocking:
         return ((self.doubled, 0),)
 
 
-CLOCKING = default_semantics(Clocking)
 NATIVE_CLOCKING = Clocking(clock="clk", reset="rst", active_low=False)
 """FinnLib's native ``clk`` and synchronous active-high ``rst``."""
 
@@ -194,13 +193,13 @@ class Kernel(Space):
         """What the kernel itself holds idle, beyond its idle ports and doubled clock."""
         return Tieoffs()
 
-    @derived(semantics=CLOCKING)
+    @derived
     def clocking(self) -> Clocking:
         return Clocking()
 
     # -- derived plumbing ------------------------------------------------------------------
 
-    @derived(semantics=MODULE_REQUIREMENTS)
+    @derived
     def codegen(self) -> ModuleBuildRequirements | Rejected:
         """The module: clocking, its other pins, then every port's pins; and parameters."""
         family = type(self)
@@ -222,7 +221,7 @@ class Kernel(Space):
 
     build_requirements = View(codegen, requires=(admission,))
 
-    @view(semantics=TIEOFFS_SEMANTICS)
+    @view
     def tieoffs(self) -> Tieoffs | Rejected:
         held = self.held()
         if isinstance(held, Rejected):
@@ -238,7 +237,6 @@ class Kernel(Space):
 
 
 __all__ = [
-    "CLOCKING",
     "Clocking",
     "HELD",
     "Kernel",

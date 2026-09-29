@@ -26,7 +26,6 @@ from finn.core.space import (
     Param,
     Rejected,
     constraint,
-    default_semantics,
     derived,
     reject,
     view,
@@ -41,7 +40,7 @@ class MemStreamHlsKernel(Kernel):
 
     element_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
 
-    @derived(semantics=default_semantics(str))
+    @derived
     def cpp_type(self) -> str | Rejected:
         dtype = self.element_dtype
         if dtype.name == "FLOAT32":

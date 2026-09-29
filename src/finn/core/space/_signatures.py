@@ -26,7 +26,7 @@ from .declarations import (
 )
 from .errors import DefinitionError
 from .expressions import Expr
-from .results import Available, Inapplicable, Rejected, Unresolved
+from .results import Available, Inapplicable, Rejected, Unresolved, marked_value_type
 from .semantics import ValueSemantics, default_semantics
 
 if TYPE_CHECKING:
@@ -84,6 +84,8 @@ def output_semantics(
     if answer_type is not None and semantics is None:
         raise DefinitionError(f"{owner}: QueryResult[T] returns require explicit semantics=")
     value_type = answer_type if answer_type is not None else annotation
+    marked_type = marked_value_type(value_type)
+    value_type = marked_type if marked_type is not None else value_type
     origin = get_origin(value_type)
     nominal_type = origin if origin is not None else value_type
     if semantics is None:

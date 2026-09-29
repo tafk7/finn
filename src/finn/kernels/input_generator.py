@@ -28,10 +28,10 @@ from finn.core.space import (
 )
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.contribution_types import CopiedSource
-from finn.kernels.base import CLOCKING, NATIVE_CLOCKING, Clocking, Kernel
+from finn.kernels.base import NATIVE_CLOCKING, Clocking, Kernel
 from finn.kernels.datatypes.semantics import INTEGER_VECTOR, IntegerVector
 from finn.kernels.physical.stream import MarkerKind, StreamMarker
-from finn.kernels.port import MARKERS, WordPort
+from finn.kernels.port import WordPort
 
 INPUT_GEN_RAM_STYLES = ("auto", "distributed", "block", "ultra")
 
@@ -78,7 +78,7 @@ class InputGeneratorKernel(Kernel):
     admission = ConstraintGroup(traversal_supported)
     ram_style: str = Decision(values=INPUT_GEN_RAM_STYLES)
 
-    @derived(semantics=MARKERS)
+    @derived
     def loop_ends(self) -> tuple[StreamMarker, ...] | Rejected:
         """``olst``: one bit per loop, closing that loop and every inner one."""
         rank = len(self.extents)
@@ -89,7 +89,7 @@ class InputGeneratorKernel(Kernel):
     input = WordPort(name="input", endpoint=Endpoint.TARGET, bits=word_bits)
     output = WordPort(name="output", endpoint=Endpoint.INITIATOR, bits=word_bits, markers=loop_ends)
 
-    @derived(semantics=CLOCKING)
+    @derived
     def clocking(self) -> Clocking:
         return NATIVE_CLOCKING
 

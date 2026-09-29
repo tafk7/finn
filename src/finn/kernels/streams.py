@@ -68,16 +68,15 @@ from finn.kernels.base import PORT
 from finn.kernels.fifo import FifoKernel
 from finn.kernels.physical.axi_stream import AxiStream
 from finn.kernels.physical.contract import (
-    STREAM_CONTRACT,
     Mismatch,
     StreamContract,
     compatibility,
 )
-from finn.dataflow.stream import ENDS, End, Ends
+from finn.dataflow.stream import End, Ends
 from finn.dataflow.stream import Stream as LogicalStream
-from finn.dataflow.tensor import TENSOR, ScalarEncoding, Tensor
-from finn.dataflow.traversal import BEAT_SEQUENCE, BeatSequence, unreplayed
-from finn.kernels.adapters import ADAPTERS, STAGE_SEMANTICS, STAGES, Stage, StreamAdapter
+from finn.dataflow.tensor import ScalarEncoding, Tensor
+from finn.dataflow.traversal import BeatSequence, unreplayed
+from finn.kernels.adapters import ADAPTERS, Stage, StreamAdapter
 
 
 # The composed module's clocking pins: its interface convention, not a routing rule.
@@ -103,7 +102,7 @@ def boundary_contract(
 
 
 class _Direct(Space):
-    @view(semantics=STAGE_SEMANTICS)
+    @view
     def stage(self) -> Stage:
         return Stage()
 
@@ -111,8 +110,8 @@ class _Direct(Space):
 class StreamFifo(Space):
     """An identity adapter: what arrives at it, presented on both sides of a native FIFO."""
 
-    tensor: Tensor = Param(semantics=TENSOR)
-    arriving: BeatSequence = Param(semantics=BEAT_SEQUENCE)
+    tensor: Tensor = Param()
+    arriving: BeatSequence = Param()
 
     @derived
     def word_bits(self) -> int:
@@ -123,7 +122,7 @@ class StreamFifo(Space):
         depth=Decision(domain=domain(accepts=lambda *, candidate: 2 <= candidate < 2**32)),
     )
 
-    @view(semantics=STAGE_SEMANTICS)
+    @view
     def stage(self) -> Stage:
         element, arriving, buffer = self.tensor.element, self.arriving, self.buffer
         return Stage(
@@ -169,7 +168,7 @@ class Stream(LogicalStream):
     port: str = Param(required=False)
     users = Users(PORT)
 
-    @derived(semantics=CONNECTION_SEMANTICS)
+    @derived
     def endpoints(self) -> Connection | Rejected:
         """The producing and consuming ends, without the stages between them."""
         producers: list[tuple[str | None, StreamContract, str]] = []
@@ -207,7 +206,7 @@ class Stream(LogicalStream):
         form = unreplayed(inside.form) if endpoint is Endpoint.TARGET else inside.form
         return boundary_contract(self.port, self.tensor.element, BeatSequence(form), endpoint)
 
-    @derived(semantics=ENDS)
+    @derived
     def ends(self) -> Ends:
         """The logical part of the two contracts: element and beat sequence."""
         found = self.endpoints
@@ -224,19 +223,19 @@ class Stream(LogicalStream):
     )
     adapter_stages = View(adapter.stages)
 
-    @derived(semantics=STAGES)
+    @derived
     def adapted(self) -> tuple[Stage, ...]:
         """The adapter's stages, in order; none when the ends connect directly."""
         return self.adapter_stages if self.adapting else ()
 
-    @derived(semantics=BEAT_SEQUENCE)
+    @derived
     def arriving(self) -> BeatSequence:
         """What arrives after the adapter: the beat sequence a transport stage receives."""
         adapted = self.adapted
         output = adapted[-1].output if adapted else None
         return self.endpoints.source.sequence if output is None else output.sequence
 
-    @view(semantics=STAGES)
+    @view
     def stages(self) -> tuple[Stage, ...]:
         return self.adapted
 
@@ -257,7 +256,7 @@ class Stream(LogicalStream):
         )
         return _refusal(found)
 
-    @derived(semantics=CONNECTION_SEMANTICS)
+    @derived
     def link(self) -> Connection:
         return replace(self.endpoints, stages=self.stages)
 
@@ -265,7 +264,7 @@ class Stream(LogicalStream):
         link, requires=(LogicalStream.well_formed, LogicalStream.realizable, compatible)
     )
 
-    @view(semantics=STREAM_CONTRACT)
+    @view
     def boundary(self) -> StreamContract | Rejected:
         """The port its composite presents for it: the side without a user."""
         ends = self.endpoints
@@ -295,7 +294,7 @@ class BufferedStream(Stream):
     )
     transport_stage = View(transport.stage)
 
-    @view(semantics=STAGES)
+    @view
     def stages(self) -> tuple[Stage, ...]:
         fifo = self.transport_stage
         return (*self.adapted, *((fifo,) if fifo.requirements is not None else ()))

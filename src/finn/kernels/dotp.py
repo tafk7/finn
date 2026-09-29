@@ -43,20 +43,19 @@ from finn.core.space import (
     Param,
     Rejected,
     constraint,
-    default_semantics,
     derived,
     divisors_of,
     reject,
 )
 from finn.dataflow.datatypes import DatatypeError, ordinary_integer_bounds
 from finn.dataflow.gemm import Form, k, m, n
-from finn.dataflow.schedule import SCHEDULE, Index, Schedule
+from finn.dataflow.schedule import Index, Schedule
 from finn.dataflow.stream import Stream
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.contribution_types import CopiedSource
-from finn.kernels.base import CLOCKING, Clocking, Kernel
+from finn.kernels.base import Clocking, Kernel
 from finn.kernels.datatypes.domains import Integer
-from finn.kernels.port import INDICES, ScheduledPort
+from finn.kernels.port import ScheduledPort
 from finn.kernels.target import DspBlock, dsp_widths
 
 _DSP_VERSION = {DspBlock.DSP48E1: 1, DspBlock.DSP48E2: 2, DspBlock.DSP58: 3}
@@ -108,7 +107,7 @@ class DotpAxiKernel(Kernel):
     simd: int = Decision(domain=divisors_of(reduction))
     compute_pumping: bool = Decision(values=(False, True))
 
-    @derived(semantics=SCHEDULE)
+    @derived
     def schedule(self) -> Schedule:
         """``n`` folded by PE and ``k`` by SIMD; ``m``, then ``n``, then the reduction."""
         return Schedule(
@@ -117,11 +116,11 @@ class DotpAxiKernel(Kernel):
             beats=(m, n, k),
         )
 
-    @derived(semantics=INDICES)
+    @derived
     def x_index(self) -> tuple[Index, ...]:
         return self.form.x
 
-    @derived(semantics=INDICES)
+    @derived
     def x_lanes(self) -> tuple[Index, ...]:
         """dotp_axi's activation fields: SIMD alone, or ``s * PE + p`` depthwise."""
         return (k, n) if self.form is Form.DEPTHWISE else (k,)
@@ -202,7 +201,7 @@ class DotpAxiKernel(Kernel):
             return reject("dotp-pumping", "pumping requires SIMD >= 2")
         return True
 
-    @derived(semantics=default_semantics(int))
+    @derived
     def segment_length(self) -> int | Rejected:
         """The longest DSP58 chain segment that meets the target period, at most the chain."""
         pumping = self.compute_pumping
@@ -224,7 +223,7 @@ class DotpAxiKernel(Kernel):
         pumping_supported,
     )
 
-    @derived(semantics=CLOCKING)
+    @derived
     def clocking(self) -> Clocking:
         # Unpumped, the RTL ignores its 2x clock input: it is held low.
         return Clocking(doubled="ap_clk2x", doubling=self.compute_pumping)

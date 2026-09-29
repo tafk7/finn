@@ -42,7 +42,6 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from math import prod
 
-from finn.core.space import default_semantics
 from finn.dataflow.traversal import LevelEnd, Loop, Traversal, axis_strides
 
 
@@ -242,7 +241,4 @@ class Schedule:
         return LevelEnd(prod(self.steps(index) for index in reduces))
 
 
-SCHEDULE = default_semantics(Schedule)
-
-
-__all__ = ["Affine", "Index", "Refused", "SCHEDULE", "Schedule"]
+__all__ = ["Affine", "Index", "Refused", "Schedule"]

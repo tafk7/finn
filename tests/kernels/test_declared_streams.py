@@ -30,7 +30,7 @@ from finn.core.space import (
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.build import ModuleBuildRequirements
 from finn.kernels.artifacts.derivation import ProducerIdentity
-from finn.dataflow.tensor import TENSOR, ScalarEncoding, Tensor
+from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.memstream import MemStreamKernel
 from finn.dataflow.traversal import LevelEnd, BeatSequence, vector_major
 from finn.kernels.physical.axi_stream import AxiStream
@@ -47,8 +47,8 @@ VECTOR = Tensor((4,), INT4)
 class Constants(Space):
     """Two constant vectors streamed to two outputs; each stream's tensor is supplied."""
 
-    first_tensor: Tensor = Param(semantics=TENSOR)
-    second_tensor: Tensor = Param(semantics=TENSOR)
+    first_tensor: Tensor = Param()
+    second_tensor: Tensor = Param()
     # Each stream has only its producer: it is a boundary, named by its port.
     first = Stream(tensor=first_tensor, port="out0_V")
     second = Stream(tensor=second_tensor, port="out1_V")
@@ -193,7 +193,7 @@ def test_a_boundary_presents_its_internal_end_without_the_replay_the_receiver_re
 
 def test_two_producers_on_one_stream_are_refused_by_the_stream():
     class Clash(Space):
-        tensor: Tensor = Param(semantics=TENSOR)
+        tensor: Tensor = Param()
         shared = Stream(tensor=tensor, port="out0_V")
         a = MemStreamKernel(
             dtype=DataType["INT4"], form=PRODUCED, contents=(1, 2, 3, 4), output_stream=shared
@@ -211,7 +211,7 @@ def test_two_producers_on_one_stream_are_refused_by_the_stream():
 
 def test_a_boundary_stream_needs_its_port_name():
     class Unnamed(Space):
-        tensor: Tensor = Param(semantics=TENSOR)
+        tensor: Tensor = Param()
         out = Stream(tensor=tensor)
         source = MemStreamKernel(
             dtype=DataType["INT4"], form=PRODUCED, contents=(1, 2, 3, 4), output_stream=out
@@ -230,7 +230,7 @@ class ProducerTensorStream(Space):
 
     ends = Users(PORT)
 
-    @derived(semantics=TENSOR)
+    @derived
     def tensor(self) -> Tensor:
         (end,) = self.ends
         return Tensor(end.value.form.shape, end.value.element)

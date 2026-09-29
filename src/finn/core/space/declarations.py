@@ -42,7 +42,7 @@ from typing_extensions import Self
 from .domains import Domain, finite
 from .errors import DefinitionError, ReferenceUseError
 from .graph import LOCATED, Located
-from .results import QueryResult
+from .results import NonValue, QueryResult, marked_value_type
 from .semantics import ValueSemantics, default_semantics, semantics_for
 
 if TYPE_CHECKING:
@@ -798,8 +798,9 @@ class _DerivedDecorator:
     def __init__(self, aliases: Mapping[str, object], when: Guard) -> None:
         self.aliases, self.when = aliases, when
 
-    def __call__(self, function: Callable[..., T]) -> T:
+    def __call__(self, function: Callable[..., T | NonValue]) -> T:
         # Typed as its value, like a formal: it may supply a formal in the class body.
+        # ``T | Rejected`` is typed ``T``, as its value semantics are ``T``'s.
         return cast(T, Derived(function, aliases=self.aliases, when=self.when))
 
 
@@ -814,7 +815,7 @@ class _SemanticDerivedDecorator(Generic[T]):
 
 
 @overload
-def derived(function: Callable[..., T], /) -> T: ...
+def derived(function: Callable[..., T | NonValue], /) -> T: ...
 
 
 @overload
@@ -1000,7 +1001,7 @@ class _ViewDecorator:
     ) -> None:
         self.aliases, self.requires, self.when = aliases, requires, when
 
-    def __call__(self, function: Callable[..., T]) -> View[T]:
+    def __call__(self, function: Callable[..., T | NonValue]) -> View[T]:
         return View.from_function(
             function,
             semantics=None,
@@ -1025,7 +1026,7 @@ class _SemanticViewDecorator(Generic[T]):
 
 
 @overload
-def view(function: Callable[..., T], /) -> View[T]: ...
+def view(function: Callable[..., T | NonValue], /) -> View[T]: ...
 
 
 @overload
@@ -1268,6 +1269,16 @@ def _attribute_type(owner: object, name: str) -> object:
         return MISSING
 
 
+def _returned_type(function: Callable[..., object]) -> object:
+    """``T`` of a ``T`` or ``T | Rejected`` return annotation; None when unresolvable."""
+    try:
+        annotation = get_type_hints(function).get("return")
+    except Exception:
+        return None
+    marked = marked_value_type(annotation)
+    return marked if marked is not None else annotation
+
+
 def project(source: ValueRef[Any], name: str) -> Projection[Any]:
     """``output.spec.payload_bits``: an attribute of a referenced value, typed by its class.
 
@@ -1276,6 +1287,9 @@ def project(source: ValueRef[Any], name: str) -> Projection[Any]:
     """
     semantics = source.semantics
     token = None if semantics is None else semantics.type_token
+    if token is None and isinstance(source, Derived) and source.function is not None:
+        # No semantics= yet: the value type the return annotation names (``T | Rejected``).
+        token = _returned_type(source.function)
     token = get_origin(token) or token
     if name.startswith("_") or not isinstance(token, type):
         raise AttributeError(name)

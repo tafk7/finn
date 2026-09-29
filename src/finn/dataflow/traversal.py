@@ -32,7 +32,6 @@ from dataclasses import dataclass
 from enum import Enum
 from math import prod
 
-from finn.core.space import ValueSemantics
 
 Position = tuple[int, ...]
 
@@ -408,15 +407,6 @@ class BeatSequence:
                 raise ValueError(f"a marker every {rule.beats} beats closes no loop level")
 
 
-BEAT_SEQUENCE: ValueSemantics[BeatSequence] = ValueSemantics(
-    BeatSequence,
-    "beat_sequence",
-    lambda value: type(value) is BeatSequence,
-    lambda left, right: left == right,
-    lambda value: value,
-)
-
-
 def unreplayed(form: Traversal) -> Traversal:
     """``form`` without replay: its stride-0 beat loops inside a moving loop.
 
@@ -466,19 +456,9 @@ def _check_shape(values: object, shape: tuple[int, ...]) -> None:
         _check_shape(item, shape[1:])
 
 
-TRAVERSAL: ValueSemantics[Traversal] = ValueSemantics(
-    Traversal,
-    "traversal",
-    lambda value: type(value) is Traversal,
-    lambda left, right: left == right,
-    lambda value: value,
-)
-
-
 __all__ = [
     "Adaptation",
     "AxisStep",
-    "BEAT_SEQUENCE",
     "BeatSequence",
     "Classification",
     "LevelEnd",
@@ -486,7 +466,6 @@ __all__ = [
     "Position",
     "Reorder",
     "Repetition",
-    "TRAVERSAL",
     "Traversal",
     "axis_strides",
     "classify",

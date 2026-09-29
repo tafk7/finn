@@ -42,23 +42,22 @@ from finn.core.space import (
     Space,
     ValueSemantics,
     constraint,
-    default_semantics,
     derived,
     reject,
     required,
     view,
 )
 from finn.dataflow.datatypes import QONNXDataType
-from finn.dataflow.schedule import SCHEDULE, Affine, Index, Refused, Schedule
+from finn.dataflow.schedule import Affine, Index, Refused, Schedule
 from finn.dataflow.stream import Stream
-from finn.dataflow.tensor import SCALAR_ENCODING, ScalarEncoding
-from finn.dataflow.traversal import BEAT_SEQUENCE, BeatSequence
+from finn.dataflow.tensor import ScalarEncoding
+from finn.dataflow.traversal import BeatSequence
 from finn.kernels.artifacts.abi import Direction, Endpoint
-from finn.kernels.base import HELD, PINS, PORT, TIEOFFS_SEMANTICS, Tieoffs
+from finn.kernels.base import HELD, PINS, PORT, Tieoffs
 from finn.kernels.datatypes.domains import Integer
 from finn.kernels.datatypes.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
 from finn.kernels.physical.axi_stream import AxiStream
-from finn.kernels.physical.contract import STREAM_CONTRACT, StreamContract
+from finn.kernels.physical.contract import StreamContract
 from finn.kernels.physical.stream import ReadyValidStream, StreamMarker
 
 INTEGER_POLICY: ValueSemantics[Integer | None] = ValueSemantics(
@@ -69,11 +68,6 @@ INTEGER_POLICY: ValueSemantics[Integer | None] = ValueSemantics(
     lambda value: value,
 )
 """An integer policy a port's hardware takes; None when its kernel admits the element."""
-INDICES = default_semantics(tuple)
-MARKERS = default_semantics(tuple)
-SIGNAL_NAMES = default_semantics(tuple)
-AXI_STREAM = default_semantics(AxiStream)
-TRANSPORT = default_semantics(ReadyValidStream)
 
 
 class Port(Space):
@@ -89,11 +83,11 @@ class Port(Space):
     def idle(self) -> bool:
         return False
 
-    @view(semantics=default_semantics(tuple))
+    @view
     def pins(self) -> tuple[object, ...]:
         return self.transport.pins()
 
-    @view(semantics=TIEOFFS_SEMANTICS)
+    @view
     def held(self) -> Tieoffs:
         """While idle: the forward pins of a target and the ready of an initiator held low."""
         if not self.idle:
@@ -115,11 +109,11 @@ class WordPort(Port):
     """Opaque words on FinnLib's native ready/valid pins, with optional markers."""
 
     bits: int = Param()
-    markers: tuple[StreamMarker, ...] = Param(default=(), semantics=MARKERS)
+    markers: tuple[StreamMarker, ...] = Param(default=())
     clock: str = Param(default="clk")
     reset: str = Param(default="rst")
 
-    @derived(semantics=TRANSPORT)
+    @derived
     def transport(self) -> ReadyValidStream | Rejected:
         side = "i" if self.endpoint is Endpoint.TARGET else "o"
         if not 1 <= self.bits <= 0xFFFFFFFF:
@@ -146,14 +140,14 @@ class StreamPort(Port):
     dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS, required=False)
     idle_lanes: int = Param(default=1)
     # Ready/valid pins (data, valid, ready) carrying the words instead of an AXIS bus.
-    signals: tuple[str, ...] = Param(default=(), semantics=SIGNAL_NAMES)
+    signals: tuple[str, ...] = Param(default=())
     sequence = required(BeatSequence)
 
     @derived
     def idle(self) -> bool:
         return not self.present(StreamPort.stream)
 
-    @derived(semantics=SCALAR_ENCODING)
+    @derived
     def element(self) -> ScalarEncoding | Rejected:
         """The stream's element; ``dtype`` while idle."""
         if self.idle:
@@ -174,7 +168,7 @@ class StreamPort(Port):
     def marker_count(self) -> int:
         return 0 if self.idle else len(self.sequence.markers)
 
-    @derived(semantics=AXI_STREAM)
+    @derived
     def axis(self) -> AxiStream | Rejected:
         if self.marker_count > 1:
             return reject("port-markers", f"{self.name} has one TLAST; the sequence needs more")
@@ -189,7 +183,7 @@ class StreamPort(Port):
         except ValueError as error:
             return reject("port-lanes", f"{self.name}: {error}")
 
-    @derived(semantics=TRANSPORT)
+    @derived
     def transport(self) -> ReadyValidStream | Rejected:
         if not self.signals:
             return self.axis.native(clock=self.clock, reset=self.reset)
@@ -206,13 +200,13 @@ class StreamPort(Port):
         except ValueError as error:
             return reject("port-width", f"{self.name}: {error}")
 
-    @view(semantics=default_semantics(tuple), requires=(admitted,))
+    @view(requires=(admitted,))
     def pins(self) -> tuple[object, ...]:
         if self.signals:
             return self.transport.pins()
         return (self.axis.bus(clock=self.clock, reset=self.reset),)
 
-    @view(semantics=STREAM_CONTRACT, requires=(admitted,))
+    @view(requires=(admitted,))
     def contract(self) -> StreamContract:
         sequence = self.sequence
         transport = self.transport
@@ -225,15 +219,15 @@ class StreamPort(Port):
 class ScheduledPort(StreamPort):
     """A stream port presenting its kernel's schedule through the indices it reads."""
 
-    schedule: Schedule = Param(semantics=SCHEDULE)
-    index: tuple[Index | Affine, ...] = Param(semantics=INDICES)
-    lanes: tuple[Index, ...] = Param(default=(), semantics=INDICES)
-    reduces: tuple[Index, ...] = Param(default=(), semantics=INDICES)
-    holds: tuple[Index, ...] = Param(default=(), semantics=INDICES)
-    closes: tuple[Index, ...] = Param(default=(), semantics=INDICES)
+    schedule: Schedule = Param()
+    index: tuple[Index | Affine, ...] = Param()
+    lanes: tuple[Index, ...] = Param(default=())
+    reduces: tuple[Index, ...] = Param(default=())
+    holds: tuple[Index, ...] = Param(default=())
+    closes: tuple[Index, ...] = Param(default=())
     reshaped: bool = Param(default=False)
 
-    @derived(semantics=BEAT_SEQUENCE)
+    @derived
     def sequence(self) -> BeatSequence | Rejected:
         schedule, index = self.schedule, self.index
         try:
@@ -259,24 +253,19 @@ class ScheduledPort(StreamPort):
 class GivenPort(StreamPort):
     """A stream port presenting the beat sequence and element its kernel gives it."""
 
-    sequence: BeatSequence = Param(semantics=BEAT_SEQUENCE)
+    sequence: BeatSequence = Param()
 
-    @derived(semantics=SCALAR_ENCODING)
+    @derived
     def element(self) -> ScalarEncoding | Rejected:
         """The kernel's ``dtype``, placed or idle: its stream refuses another."""
         return ScalarEncoding.admit(self.dtype)
 
 
 __all__ = [
-    "AXI_STREAM",
     "GivenPort",
-    "INDICES",
     "INTEGER_POLICY",
-    "MARKERS",
     "Port",
-    "SIGNAL_NAMES",
     "ScheduledPort",
     "StreamPort",
-    "TRANSPORT",
     "WordPort",
 ]

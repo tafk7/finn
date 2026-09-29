@@ -23,7 +23,7 @@ from finn.core.space import (
 )
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.contribution_types import CopiedSource
-from finn.kernels.base import CLOCKING, NATIVE_CLOCKING, Clocking, Kernel
+from finn.kernels.base import NATIVE_CLOCKING, Clocking, Kernel
 from finn.kernels.port import WordPort
 
 
@@ -47,7 +47,7 @@ class VpcKernel(Kernel):
     input = WordPort(name="input", endpoint=Endpoint.TARGET, bits=lanes_in * element_bits)
     output = WordPort(name="output", endpoint=Endpoint.INITIATOR, bits=lanes_out * element_bits)
 
-    @derived(semantics=CLOCKING)
+    @derived
     def clocking(self) -> Clocking:
         return NATIVE_CLOCKING
 

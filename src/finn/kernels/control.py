@@ -99,7 +99,7 @@ class ControlBus(Space):
     port: str = Param()
     users = Users(CONTROL)
 
-    @view(semantics=EXPORTED_SEMANTICS, requires=(users,))
+    @view(requires=(users,))
     def exported(self) -> tuple[Exported, ...] | Rejected:
         present = [(str(user.node), user.value.bus) for user in self.users if user.value.bus]
         if len(present) > 1:

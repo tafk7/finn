@@ -34,7 +34,6 @@ from dataclasses import dataclass
 from enum import Enum
 from math import gcd
 
-from finn.core.space import default_semantics
 from finn.dataflow.traversal import (
     Adaptation,
     BeatSequence,
@@ -80,9 +79,6 @@ class Plan:
 
     def describe(self) -> str:
         return " -> ".join(step.value for step in self.steps) or "direct"
-
-
-PLAN = default_semantics(Plan)
 
 
 class Unrealizable(ValueError):
@@ -171,4 +167,4 @@ def plan(source: BeatSequence, sink: BeatSequence) -> Plan:
     return Plan(tuple(hops))
 
 
-__all__ = ["Hop", "PLAN", "Plan", "Step", "Unrealizable", "plan", "presented"]
+__all__ = ["Hop", "Plan", "Step", "Unrealizable", "plan", "presented"]

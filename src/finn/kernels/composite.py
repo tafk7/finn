@@ -73,7 +73,7 @@ from finn.kernels.artifacts.build import (
     SELF_CONTAINED_JINJA_RENDERER,
 )
 from finn.kernels.artifacts.derivation import ProducerIdentity
-from finn.kernels.base import MODULE, MODULE_REQUIREMENTS, TIEOFFS, Kernel, Tieoffs
+from finn.kernels.base import MODULE, TIEOFFS, Kernel, Tieoffs
 from finn.kernels.control import EXPORTED, Exported, top_bus
 from finn.kernels.physical.composition import Composition, StreamEnd
 from finn.kernels.physical.contract import StreamContract
@@ -87,9 +87,6 @@ from finn.kernels.streams import CLOCK, CLOCK2X, CONNECTION, RESET, Connection
 class Composed:
     structure: PhysicalStructure
     requirements: ModuleBuildRequirements
-
-
-COMPOSED = default_semantics(Composed)
 
 
 @dataclass(frozen=True)
@@ -492,7 +489,6 @@ class Composite(Kernel):
         return True
 
     @view(
-        semantics=COMPOSED,
         requires=(Kernel.admission, seated, modules, streams, tied, controls, flattened),
     )
     def structure(self) -> Composed | Rejected:
@@ -506,7 +502,7 @@ class Composite(Kernel):
             producer=self.producer_identity(),
         )
 
-    @view(semantics=MODULE_REQUIREMENTS, requires=(structure,))
+    @view(requires=(structure,))
     def build_requirements(self) -> ModuleBuildRequirements:
         return self.structure.requirements
 
@@ -525,7 +521,6 @@ class Composite(Kernel):
     module_export = View(build_requirements, when=fused, requires=(uncontrolled,))
 
     @view(
-        semantics=PARTS_SEMANTICS,
         requires=(Kernel.admission, seated, modules, streams, tied, controls, flattened),
         when=parted,
     )
@@ -559,7 +554,6 @@ class Design(Composite):
 
 
 __all__ = [
-    "COMPOSED",
     "Composed",
     "Composite",
     "Design",

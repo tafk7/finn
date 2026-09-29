@@ -54,13 +54,12 @@ from finn.core.space import (
     Rejected,
     Space,
     constraint,
-    default_semantics,
     derived,
     reject,
     view,
 )
-from finn.dataflow.plan import PLAN, Hop, Plan, Step, Unrealizable
-from finn.dataflow.tensor import TENSOR, Tensor
+from finn.dataflow.plan import Hop, Plan, Step, Unrealizable
+from finn.dataflow.tensor import Tensor
 from finn.dataflow.traversal import BeatSequence, LevelEnd, Reorder
 from finn.kernels.artifacts.requirements import ModuleBuildRequirements
 from finn.kernels.datatypes.semantics import INTEGER_VECTOR, IntegerVector
@@ -83,10 +82,6 @@ class Stage:
     output: StreamContract | None = None
     name: str = ""
     stream: str = ""
-
-
-STAGE_SEMANTICS = default_semantics(Stage)
-STAGES = default_semantics(tuple)
 
 
 # -- realizing a plan --------------------------------------------------------------------
@@ -209,9 +204,6 @@ def _stage_name(kinds: Sequence[str], index: int) -> str:
 # -- the candidates of a stream's adapter Decision ---------------------------------------
 
 
-REALIZATION = default_semantics(tuple)
-
-
 @dataclass(frozen=True)
 class InputGenFacts:
     """An ``input_gen`` stage's facts: its word, frame and nest."""
@@ -231,10 +223,6 @@ class VpcFacts:
     lanes_out: int
 
 
-INPUT_GEN_FACTS = default_semantics(InputGenFacts)
-VPC_FACTS = default_semantics(VpcFacts)
-
-
 class StreamAdapter(Space):
     """A fixed chain of FinnLib modules carrying out a stream's plan, or refusing it.
 
@@ -246,10 +234,10 @@ class StreamAdapter(Space):
 
     modules: ClassVar[tuple[str, ...]] = ()
 
-    tensor: Tensor = Param(semantics=TENSOR)
-    plan: Plan = Param(semantics=PLAN)
+    tensor: Tensor = Param()
+    plan: Plan = Param()
 
-    @derived(semantics=REALIZATION)
+    @derived
     def realization(self) -> tuple[RealizedStage, ...] | Rejected:
         try:
             return realize(self.plan)
@@ -296,23 +284,23 @@ class StreamAdapter(Space):
         return VpcFacts(self.tensor.element.bits, module.lanes_in, module.lanes_out)
 
     # The facts of every stage a chain can name; each chain reads its own.
-    @derived(semantics=INPUT_GEN_FACTS)
+    @derived
     def input_gen_facts(self) -> InputGenFacts | Rejected:
         return self._generator("input_gen")
 
-    @derived(semantics=INPUT_GEN_FACTS)
+    @derived
     def input_gen_1_facts(self) -> InputGenFacts | Rejected:
         return self._generator("input_gen_1")
 
-    @derived(semantics=VPC_FACTS)
+    @derived
     def vpc_facts(self) -> VpcFacts | Rejected:
         return self._converter("vpc")
 
-    @derived(semantics=VPC_FACTS)
+    @derived
     def vpc_1_facts(self) -> VpcFacts | Rejected:
         return self._converter("vpc_1")
 
-    @view(semantics=STAGES, requires=(realizes,))
+    @view(requires=(realizes,))
     def stages(self) -> tuple[Stage, ...]:
         """Each child's module and the contracts of its two ports."""
         element = self.tensor.element
@@ -388,14 +376,10 @@ __all__ = [
     "CHAINS",
     "Convert",
     "Generate",
-    "INPUT_GEN_FACTS",
     "InputGenFacts",
     "RealizedStage",
-    "STAGES",
-    "STAGE_SEMANTICS",
     "Stage",
     "StreamAdapter",
-    "VPC_FACTS",
     "VpcFacts",
     "realize",
 ]
