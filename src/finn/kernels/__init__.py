@@ -11,6 +11,7 @@ from importlib import import_module
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from finn.kernels.composite import Composite, Design
     from finn.kernels.configure import commit
     from finn.kernels.rom import RomKernel
     from finn.kernels.dotp import (
@@ -31,6 +32,8 @@ if TYPE_CHECKING:
 _LAZY_EXPORTS = {
     "RomKernel": ("finn.kernels.rom", "RomKernel"),
     "commit": ("finn.kernels.configure", "commit"),
+    "Composite": ("finn.kernels.composite", "Composite"),
+    "Design": ("finn.kernels.composite", "Design"),
     "DotpAxiKernel": ("finn.kernels.dotp", "DotpAxiKernel"),
     "Int8Dsp58DotpKernel": ("finn.kernels.dotp", "Int8Dsp58DotpKernel"),
     "PackedDotpKernel": ("finn.kernels.dotp", "PackedDotpKernel"),
@@ -62,6 +65,8 @@ def __getattr__(name: str) -> object:
 __all__ = [
     "RomKernel",
     "commit",
+    "Composite",
+    "Design",
     "DotpAxiKernel",
     "Int8Dsp58DotpKernel",
     "PackedDotpKernel",

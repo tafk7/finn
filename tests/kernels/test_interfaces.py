@@ -19,25 +19,19 @@ import subprocess
 import pytest
 from qonnx.core.datatype import DataType
 
-from finn.core.space import Members, Rejected, Space, design_space, view
+from finn.core.space import Rejected, Space, design_space
+from finn.kernels.composite import Design
 from finn.kernels.artifacts.abi import Bus, Direction, Endpoint, StandardProtocol
 from finn.kernels.artifacts.build import materialize_module_sources, prepare_module_build
-from finn.kernels.artifacts.derivation import ProducerIdentity
 from finn.kernels.artifacts.store import ArtifactStore
-from finn.kernels.control import EXPORTED, ControlBus
+from finn.kernels.control import ControlBus
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.dotp import PackedDotpKernel
 from finn.kernels.physical.structure import ConstantBits, PinSlice
 from finn.kernels.physical.validation import abi_pins
 from finn.kernels.resources import resource_root, template_root
 from finn.kernels.streams import (
-    CONNECTION,
-    COMPOSED,
-    MODULE,
-    TIEOFFS,
-    Composed,
     Stream,
-    netlist,
 )
 from finn.kernels.target import DspBlock
 from finn.kernels.thresholding import ThresholdingAxiKernel
@@ -54,7 +48,7 @@ RESULT_TENSOR = Tensor((REPETITIONS, HEIGHT), ScalarEncoding(R))
 LEVEL_TENSOR = Tensor((REPETITIONS, HEIGHT), ScalarEncoding(DataType["UINT2"]))
 
 
-class Activated(Space):
+class Activated(Design):
     """dotp, then thresholding: a padded child result feeding a child."""
 
     activations = Stream(tensor=X, port="in0_V")
@@ -81,21 +75,6 @@ class Activated(Space):
         output_stream=levels,
         control=config,
     )
-    modules = Members(MODULE)
-    streams = Members(CONNECTION)
-    tieoffs = Members(TIEOFFS)
-    controls = Members(EXPORTED)
-
-    @view(semantics=COMPOSED, requires=(modules, streams, tieoffs, controls))
-    def structure(self) -> Composed | Rejected:
-        return netlist(
-            self.modules,
-            self.streams,
-            self.tieoffs,
-            self.controls,
-            module="activated",
-            producer=ProducerIdentity("test.activated", "1"),
-        )
 
 
 def activated(*, writable: bool):

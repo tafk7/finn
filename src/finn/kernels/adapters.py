@@ -69,12 +69,18 @@ from finn.kernels.vpc import VpcKernel
 
 @dataclass(frozen=True)
 class Stage:
-    """A module inside a stream, with the contracts of its two ports; none when direct."""
+    """A module inside a stream, with the contracts of its two ports; none when direct.
+
+    ``stream`` names the stream that places it when that is not the connection
+    it sits in: a stage of a flattened composite's stream, spliced into its
+    parent's connection (``finn.kernels.streams.netlist``).
+    """
 
     requirements: ModuleBuildRequirements | None = None
     input: StreamContract | None = None
     output: StreamContract | None = None
     name: str = ""
+    stream: str = ""
 
 
 STAGE_SEMANTICS = default_semantics(Stage)

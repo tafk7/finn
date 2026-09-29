@@ -286,6 +286,18 @@ def module_build_fingerprint(requirements: ModuleBuildRequirements) -> str:
     return digest(("module-requirements-v1", _typed_canonical(requirements)))
 
 
+def nested_module_name(requirements: ModuleBuildRequirements) -> str:
+    """The fixed name of a generated module nested in another: its stem and fingerprint.
+
+    A nested module is instantiated by name before any build is prepared, so
+    its name follows from its requirements alone; equal requirements share it.
+    """
+    entry = requirements.abi.entry_point
+    if not isinstance(entry, GeneratedModuleName):
+        raise BuildError("only a generated module is nested under a derived name")
+    return f"{_sanitize_stem(entry.stem)}__{module_build_fingerprint(requirements)[:16]}"
+
+
 def prepared_module_fingerprint(prepared: PreparedModuleBuild) -> str:
     return digest(("prepared-module-v1", _typed_canonical(prepared)))
 
@@ -508,7 +520,13 @@ def prepare_module_build(
                 f"template {contribution.template!r} reads {sorted(variables)!r}, while its "
                 f"declared arguments authorize {sorted(expected)!r}"
             )
-        selected = tuple((name, render_values[name]) for name in contribution.arguments)
+        if contribution.values:
+            # A nested module's wrapper: its own bindings, its own module name.
+            own = dict(contribution.values)
+            selected = tuple((name, own[name]) for name in sorted(variables))
+            uses_module_name = False
+        else:
+            selected = tuple((name, render_values[name]) for name in contribution.arguments)
         drafts.append(
             _RenderedDraft(
                 contribution.output,
@@ -986,6 +1004,7 @@ __all__ = [
     "ScalarTable",
     "materialize_module_sources",
     "module_build_fingerprint",
+    "nested_module_name",
     "module_source_derivation",
     "portable_module_component",
     "prepare_module_build",

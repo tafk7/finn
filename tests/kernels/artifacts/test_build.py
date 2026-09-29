@@ -34,12 +34,14 @@ from finn.kernels.artifacts.build import (
     materialize_module_sources,
     module_build_fingerprint,
     module_source_derivation,
+    nested_module_name,
     portable_module_component,
     prepare_module_build,
     prepared_module_fingerprint,
     render_module_sources,
 )
 from finn.kernels.artifacts.contributions import CopiedSource, DataSlot, DataSlotSpec
+from finn.kernels.physical.lowering import nested
 from finn.kernels.artifacts.derivation import (
     ArtifactRef,
     ContentRef,
@@ -666,3 +668,45 @@ def test_generated_name_covers_reset_domains_and_clock_alignment(tmp_path: Path)
     )
     assert baseline.abi.entry_point != reset_changed.abi.entry_point
     assert baseline.abi.entry_point != alignment_changed.abi.entry_point
+
+
+def test_a_rendered_source_with_its_own_values_binds_its_arguments_and_name() -> None:
+    wrapper = RenderedSourceRequirement(
+        "child.sv",
+        "wrapper.sv.j2",
+        ("BODY",),
+        SELF_CONTAINED_JINJA_RENDERER,
+        provides=("module:child",),
+        values=(("BODY", "// child"), (MODULE_NAME_ARGUMENT, "child")),
+    )
+    # Its values are its own: a module carrying it declares no render inputs for it.
+    ModuleBuildRequirements(
+        "carrier",
+        "1",
+        (),
+        ModuleABIRequirements(FixedModuleName("child"), (), ()),
+        (wrapper,),
+    )
+    with pytest.raises(BuildError, match="bind its arguments"):
+        replace(wrapper, values=(("BODY", "// child"),))
+    with pytest.raises(BuildError, match="fixed output name"):
+        replace(wrapper, output=EntryPointSourceName(".sv"))
+
+
+def test_a_nested_generated_module_is_a_fixed_module_rendered_from_its_own_values(
+    tmp_path: Path,
+) -> None:
+    _write_generated(tmp_path)
+    composed = _generated_requirements(body="// the child's body")
+    child = nested(composed)
+    name = nested_module_name(composed)
+    assert name == nested_module_name(_generated_requirements(body="// the child's body"))
+    assert name != nested_module_name(_generated_requirements(body="// another body"))
+    assert child.abi.entry_point == FixedModuleName(name) and not child.render_inputs
+    assert name.startswith("generated_top__")
+    store = ArtifactStore(tmp_path / "store")
+    prepared = prepare_module_build(
+        child, roots={"fixture": tmp_path}, template_roots=(tmp_path,), blobs=store
+    )
+    text = dict(render_module_sources(prepared, store).contents)[f"{name}.sv"]
+    assert f"module {name};".encode() in text and b"// the child's body" in text

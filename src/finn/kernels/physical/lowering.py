@@ -1,11 +1,18 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Lower detached physical structures to portable module requirements."""
+"""Lower detached physical structures to portable module requirements.
+
+A composed module is a generated module: its name is derived when its build is
+prepared. Nested in another composed module (``nested``), it becomes a fixed
+module named by its requirements' fingerprint, its wrapper rendered from the
+values it carries itself, so the parent can instantiate it by name.
+"""
 
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import replace
 from typing import cast
 
 from finn.kernels.artifacts.abi import Signal
@@ -13,10 +20,13 @@ from finn.kernels.artifacts.build import (
     EntryPointSourceName,
     FixedModuleName,
     GeneratedModuleName,
+    ModuleABIRequirements,
     ModuleBuildRequirements,
     RenderedSourceRequirement,
     SELF_CONTAINED_JINJA_RENDERER,
+    nested_module_name,
 )
+from finn.kernels.artifacts.requirements import MODULE_NAME_ARGUMENT
 from finn.kernels.artifacts.contributions import CopiedSource, DataSlot, GeneratedData
 from finn.kernels.artifacts.derivation import ProducerIdentity, Scalar
 from finn.kernels.physical.structure import (
@@ -155,26 +165,65 @@ def _sv_instances(structure: PhysicalStructure) -> str:
     return "\n\n".join(blocks)
 
 
+Flattened = CopiedSource | GeneratedData | RenderedSourceRequirement
+
+
+def nested(requirements: ModuleBuildRequirements) -> ModuleBuildRequirements:
+    """A composed module as a child: a fixed module named by its fingerprint.
+
+    Its generated wrapper becomes a rendered source with a fixed output, bound
+    to its own render inputs and name; any other requirements pass unchanged.
+    """
+    if not isinstance(requirements.abi.entry_point, GeneratedModuleName):
+        return requirements
+    name = nested_module_name(requirements)
+    contributions = []
+    for item in requirements.contributions:
+        if isinstance(item, RenderedSourceRequirement) and item.provides_entry_point:
+            item = replace(
+                item,
+                output=f"{name}.sv",
+                provides=(*item.provides, f"module:{name}"),
+                provides_entry_point=False,
+                values=(*requirements.render_inputs, (MODULE_NAME_ARGUMENT, name)),
+            )
+        contributions.append(item)
+    abi = requirements.abi
+    return ModuleBuildRequirements(
+        requirements.implementation_id,
+        requirements.implementation_version,
+        requirements.parameters,
+        ModuleABIRequirements(
+            FixedModuleName(name), abi.ports, abi.parameters, abi.clock_alignments
+        ),
+        tuple(contributions),
+    )
+
+
 def _flatten_contributions(
     instances: Sequence[ModuleInstance],
-) -> tuple[CopiedSource | GeneratedData, ...]:
-    result: list[CopiedSource | GeneratedData] = []
-    destinations: dict[tuple[str, str], CopiedSource | GeneratedData] = {}
+) -> tuple[Flattened, ...]:
+    result: list[Flattened] = []
+    destinations: dict[tuple[str, str], Flattened] = {}
     for instance in instances:
         if instance.requirements.render_inputs:
-            raise PhysicalStructureError("a composed structure does not nest a rendered child")
+            raise PhysicalStructureError(
+                "a composed child is nested first (finn.kernels.physical.lowering.nested)"
+            )
         for contribution in instance.requirements.contributions:
             if isinstance(contribution, DataSlot):
                 raise PhysicalStructureError("a composed structure cannot flatten a data slot")
-            if not isinstance(contribution, (CopiedSource, GeneratedData)):
+            if isinstance(contribution, RenderedSourceRequirement) and not contribution.values:
                 raise PhysicalStructureError(
-                    "a composed structure flattens copied sources and generated data only"
+                    "a composed structure flattens a rendered source only with its own values"
                 )
-            coordinate = (
-                (contribution.library, contribution.path)
-                if isinstance(contribution, CopiedSource)
-                else ("", contribution.path)
-            )
+            if isinstance(contribution, CopiedSource):
+                coordinate = (contribution.library, contribution.path)
+            elif isinstance(contribution, GeneratedData):
+                coordinate = ("", contribution.path)
+            else:
+                assert isinstance(contribution.output, str)
+                coordinate = (contribution.library, contribution.output)
             previous = destinations.get(coordinate)
             if previous is not None:
                 if previous != contribution:
@@ -223,4 +272,4 @@ def lower_module_structure(
     )
 
 
-__all__ = ["lower_module_structure"]
+__all__ = ["lower_module_structure", "nested"]

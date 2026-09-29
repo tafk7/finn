@@ -17,21 +17,15 @@ from __future__ import annotations
 import pytest
 from qonnx.core.datatype import DataType
 
-from finn.core.space import Members, Rejected, Space, design_space, view
+from finn.core.space import Rejected, Space, design_space
 from finn.dataflow.plan import Step
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import Traversal, vector_major
-from finn.kernels.artifacts.derivation import ProducerIdentity
+from finn.kernels.composite import Design
 from finn.kernels.configure import commit, compatible
 from finn.kernels.rom import RomKernel
 from finn.kernels.streams import (
-    COMPOSED,
-    CONNECTION,
-    MODULE,
-    TIEOFFS,
-    Composed,
     Stream,
-    netlist,
 )
 from finn.kernels.thresholding import ThresholdingAxiKernel
 from kernels.helpers import settled
@@ -55,7 +49,7 @@ def adapted(source: Traversal, pe: int, *, adaptable: bool = True, commit_all: b
     """A cyclic producer presenting ``source``, thresholding ``pe`` channels a beat."""
     rows, channels = source.shape
 
-    class Adapted(Space):
+    class Adapted(Design):
         x = Stream(tensor=Tensor(source.shape, ELEMENT), adaptable=adaptable)
         y = Stream(tensor=Tensor(source.shape, ScalarEncoding(DataType["UINT4"])), port="out0_V")
         producer = RomKernel(
@@ -72,19 +66,6 @@ def adapted(source: Traversal, pe: int, *, adaptable: bool = True, commit_all: b
             input_stream=x,
             output_stream=y,
         )
-        modules = Members(MODULE)
-        streams = Members(CONNECTION)
-        tieoffs = Members(TIEOFFS)
-
-        @view(semantics=COMPOSED, requires=(modules, streams, tieoffs))
-        def structure(self) -> Composed | Rejected:
-            return netlist(
-                self.modules,
-                self.streams,
-                self.tieoffs,
-                module="finn_adapted",
-                producer=ProducerIdentity("test.adapted", "1"),
-            )
 
     point = commit(
         design_space(Adapted()),
@@ -108,23 +89,10 @@ def transposed(rows: int, cols: int, simd: int, batches: int = 2):
     """``inner_shuffle`` placed between two boundary streams: rows in, columns out."""
     source = vector_major((batches, rows, cols), simd)
 
-    class Transposed(Space):
+    class Transposed(Design):
         a = Stream(tensor=Tensor(source.shape, ELEMENT), port="in0_V")
         b = Stream(tensor=Tensor(source.shape, ELEMENT), port="out0_V")
         shuffle = TransposeKernel(input_stream=a, output_stream=b, input_form=source)
-        modules = Members(MODULE)
-        streams = Members(CONNECTION)
-        tieoffs = Members(TIEOFFS)
-
-        @view(semantics=COMPOSED, requires=(modules, streams, tieoffs))
-        def structure(self) -> Composed | Rejected:
-            return netlist(
-                self.modules,
-                self.streams,
-                self.tieoffs,
-                module="finn_transposed",
-                producer=ProducerIdentity("test.transposed", "1"),
-            )
 
     return design_space(Transposed()).with_choices({Transposed.shuffle.ram_style: "auto"})
 

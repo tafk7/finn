@@ -221,6 +221,7 @@ def test_case_local_choices_are_owned_by_their_family():
         "memory.memstream.pumped_memory",
         "memory.memstream.ram_style",
         "realization",
+        "fused",  # applies only where a parent places it
         # Every stream may need an adapter; each Decision applies only under a plan.
         # Each input_gen stage of each chain owns its memory's ram_style.
         *(

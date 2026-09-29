@@ -100,6 +100,7 @@ from finn.kernels.fifo import FifoKernel
 from finn.kernels.physical.axi_stream import AxiStream
 from finn.kernels.physical.composition import Composition, StreamEnd
 from finn.kernels.physical.contract import (
+    STREAM_CONTRACT,
     Mismatch,
     StreamContract,
     compatibility,
@@ -121,7 +122,7 @@ from finn.kernels.adapters import (
     WidthAdapter,
     WidthReorderAdapter,
 )
-from finn.kernels.physical.lowering import lower_module_structure
+from finn.kernels.physical.lowering import lower_module_structure, nested
 from finn.kernels.physical.structure import PhysicalStructure
 from finn.kernels.physical.validation import abi_pins
 
@@ -193,13 +194,19 @@ class StreamFifo(Space):
 
 @dataclass(frozen=True)
 class Connection:
-    """One checked stream; an owner of None is the composed module itself."""
+    """One checked stream; an owner of None is the composed module itself.
+
+    ``source_input`` and ``sink_input`` name the reference input each owner
+    presents its end through (``y_stream``); empty at a boundary.
+    """
 
     source_owner: str | None
     source: StreamContract
     sink_owner: str | None
     sink: StreamContract
     stages: tuple[Stage, ...] = ()
+    source_input: str = ""
+    sink_input: str = ""
 
 
 CONNECTION_SEMANTICS = default_semantics(Connection)
@@ -214,6 +221,8 @@ class Endpoints:
     source: StreamContract
     sink_owner: str | None
     sink: StreamContract
+    source_input: str = ""
+    sink_input: str = ""
 
 
 ENDPOINTS = default_semantics(Endpoints)
@@ -233,12 +242,12 @@ class Stream(LogicalStream):
 
     @derived(semantics=ENDPOINTS)
     def endpoints(self) -> Endpoints | Rejected:
-        producers: list[tuple[str | None, StreamContract]] = []
-        consumers: list[tuple[str | None, StreamContract]] = []
+        producers: list[tuple[str | None, StreamContract, str]] = []
+        consumers: list[tuple[str | None, StreamContract, str]] = []
         for end in self.users:
             contract = end.value
             producing = contract.transport.endpoint is Endpoint.INITIATOR
-            (producers if producing else consumers).append((end.node, contract))
+            (producers if producing else consumers).append((end.node, contract, end.member))
         if len(producers) > 1 or len(consumers) > 1:
             named = ", ".join(f"{end.node}.{end.member}" for end in self.users)
             return reject(
@@ -252,14 +261,15 @@ class Stream(LogicalStream):
             # composite's input is the AXIS target and its output the initiator.
             if not producers:
                 inside = consumers[0][1]
-                producers.append((None, self._boundary(inside, Endpoint.TARGET)))
+                producers.append((None, self._boundary(inside, Endpoint.TARGET), ""))
             if not consumers:
                 inside = producers[0][1]
-                consumers.append((None, self._boundary(inside, Endpoint.INITIATOR)))
+                consumers.append((None, self._boundary(inside, Endpoint.INITIATOR), ""))
         except ValueError as error:
             return reject("stream-boundary", str(error))
-        (source_owner, source), (sink_owner, sink) = producers[0], consumers[0]
-        return Endpoints(source_owner, source, sink_owner, sink)
+        (source_owner, source, source_input) = producers[0]
+        (sink_owner, sink, sink_input) = consumers[0]
+        return Endpoints(source_owner, source, sink_owner, sink, source_input, sink_input)
 
     def _boundary(self, inside: StreamContract, endpoint: Endpoint) -> StreamContract:
         receiving = endpoint is Endpoint.TARGET
@@ -328,11 +338,30 @@ class Stream(LogicalStream):
     @derived(semantics=CONNECTION_SEMANTICS)
     def link(self) -> Connection:
         ends = self.endpoints
-        return Connection(ends.source_owner, ends.source, ends.sink_owner, ends.sink, self.stages)
+        return Connection(
+            ends.source_owner,
+            ends.source,
+            ends.sink_owner,
+            ends.sink,
+            self.stages,
+            ends.source_input,
+            ends.sink_input,
+        )
 
     connection = View(
         link, requires=(LogicalStream.well_formed, LogicalStream.realizable, compatible)
     )
+
+    @view(semantics=STREAM_CONTRACT)
+    def boundary(self) -> StreamContract | Rejected:
+        """The port its composite presents for it: the side without a user."""
+        ends = self.endpoints
+        if ends.source_owner is None:
+            return ends.source
+        if ends.sink_owner is None:
+            return ends.sink
+        return reject("stream-internal", "both ends of this stream are its composite's children")
+
     exports = {CONNECTION: connection}
 
 
@@ -368,6 +397,27 @@ class Composed:
 COMPOSED = default_semantics(Composed)
 
 
+@dataclass(frozen=True)
+class Parts:
+    """A composite's netlist inputs, for its parent to place in its own module.
+
+    ``boundaries`` pairs each reference input through which the composite sits
+    on a stream of its parent (``x_stream``) with the internal stream that is
+    its boundary there (``activations``). Names are the composite's own.
+    """
+
+    modules: tuple[Located[ModuleBuildRequirements], ...] = ()
+    streams: tuple[Located[Connection], ...] = ()
+    tieoffs: tuple[Located[Tieoffs], ...] = ()
+    controls: tuple[Located[tuple[Exported, ...]], ...] = ()
+    boundaries: tuple[tuple[str, str], ...] = ()
+
+
+PARTS_SEMANTICS = default_semantics(Parts)
+PARTS = ViewKey("parts", PARTS_SEMANTICS)
+"""A composite's parts, exported instead of its module when its parent places them."""
+
+
 def _instance(node: str | None) -> str | None:
     """``u_<node>``; a candidate of a Decision (``memory.rom``) joins with ``_``."""
     return None if node is None else "u_" + node.replace(".", "_")
@@ -395,6 +445,7 @@ def netlist(
     streams: Sequence[Located[Connection]],
     tieoffs: Sequence[Located[Tieoffs]] = (),
     controls: Sequence[Located[tuple[Exported, ...]]] = (),
+    parts: Sequence[Located[Parts]] = (),
     *,
     module: str,
     producer: ProducerIdentity,
@@ -404,14 +455,27 @@ def netlist(
     Each module is instantiated as ``u_<node>``, each stage of a stream as
     ``u_<stream>_<stage>`` (``u_activations_input_gen``, ``u_weights_fifo``). A
     stream end presented by a kernel's port belongs to that kernel's instance,
-    and a module placed inside a stream is one of that stream's stages.
+    and a module placed inside a stream is one of that stream's stages. A
+    composed child module is nested (``finn.kernels.physical.lowering.nested``).
     Every clock and reset pin is driven by its role (a free clock from
     ``ap_clk``, a clock at twice another from ``ap_clk2x``, a reset from
     ``ap_rst_n``), every exported control bus is wired through to its top port,
     and every tied input is held by its kernel's ``Tieoffs``. An input nothing
     drives is refused, as is a defect no single stream can see, such as a
     clock-domain conflict.
+
+    A child placed as ``parts`` joins this module: its modules, streams,
+    tie-offs and control buses are named below it (``u_mm_compute_packed``,
+    its buses' ports ``mm_s_axilite``), and each of its boundary streams is
+    spliced with the stream of this composite it sits on there, the two
+    stream's stages in order between the outer end and the inner one.
     """
+    try:
+        modules, streams, tieoffs, controls = merge_parts(
+            list(modules), list(streams), list(tieoffs), list(controls), parts
+        )
+    except ValueError as error:
+        return reject("stream-composition", str(error))
     # A module placed inside a stream (an adapter's or a FIFO's) is one of its
     # stages, wired by the stream as u_<stream>_<stage>.
     inside = tuple(str(item.node) + "." for item in streams)
@@ -431,7 +495,7 @@ def netlist(
     ]
     try:
         return _wire(
-            {str(_instance(item.node)): item.value for item in modules},
+            {str(_instance(item.node)): nested(item.value) for item in modules},
             connections,
             {str(_instance(item.node)): item.value for item in tieoffs},
             [exported for item in controls for exported in item.value],
@@ -440,6 +504,96 @@ def netlist(
         )
     except ValueError as error:
         return reject("stream-composition", str(error))
+
+
+def _below(child: str, node: str | None) -> str | None:
+    return None if node is None else f"{child}.{node}" if node else child
+
+
+def _tagged(stages: Sequence[Stage], stream: str) -> tuple[Stage, ...]:
+    """Stages named by the stream that placed them, once they share another's connection."""
+    return tuple(stage if stage.stream else replace(stage, stream=stream) for stage in stages)
+
+
+def merge_parts(
+    modules: list[Located[ModuleBuildRequirements]],
+    streams: list[Located[Connection]],
+    tieoffs: list[Located[Tieoffs]],
+    controls: list[Located[tuple[Exported, ...]]],
+    parts: Sequence[Located[Parts]],
+) -> tuple[
+    list[Located[ModuleBuildRequirements]],
+    list[Located[Connection]],
+    list[Located[Tieoffs]],
+    list[Located[tuple[Exported, ...]]],
+]:
+    """Every child's parts named below it; each child boundary spliced with its stream here.
+
+    Raises ``ValueError`` for a child boundary that sits on no stream here.
+    """
+    boundary: dict[tuple[str, str], tuple[str, Connection]] = {}
+    for item in parts:
+        child, part = str(item.node), item.value
+        at = {stream: name for name, stream in part.boundaries}
+        modules += [Located(_below(child, m.node), m.member, m.value) for m in part.modules]
+        tieoffs += [Located(_below(child, t.node), t.member, t.value) for t in part.tieoffs]
+        controls += [
+            Located(
+                _below(child, c.node),
+                c.member,
+                tuple(
+                    replace(
+                        e,
+                        node=str(_below(child, e.node)),
+                        port=f"{child.replace('.', '_')}_{e.port}",
+                    )
+                    for e in c.value
+                ),
+            )
+            for c in part.controls
+        ]
+        for located in part.streams:
+            name, value = str(_below(child, located.node)), located.value
+            renamed = replace(
+                value,
+                source_owner=_below(child, value.source_owner),
+                sink_owner=_below(child, value.sink_owner),
+                stages=_tagged(value.stages, name),
+            )
+            reference = at.get(str(located.node))
+            if reference is not None and None in (value.source_owner, value.sink_owner):
+                boundary[(child, reference)] = (name, renamed)
+            else:
+                streams.append(Located(name, located.member, renamed))
+    spliced: list[Located[Connection]] = []
+    for located in streams:
+        outer = located.value
+        name = str(located.node)
+        inner = boundary.pop((str(outer.sink_owner), outer.sink_input), None)
+        if inner is not None:
+            # The child's input boundary: the outer stream's stages, then the inner one's.
+            outer = replace(
+                outer,
+                sink_owner=inner[1].sink_owner,
+                sink=inner[1].sink,
+                sink_input=inner[1].sink_input,
+                stages=(*_tagged(outer.stages, name), *inner[1].stages),
+            )
+        inner = boundary.pop((str(outer.source_owner), outer.source_input), None)
+        if inner is not None:
+            # The child's output boundary: the inner stream's stages, then the outer one's.
+            outer = replace(
+                outer,
+                source_owner=inner[1].source_owner,
+                source=inner[1].source,
+                source_input=inner[1].source_input,
+                stages=(*inner[1].stages, *_tagged(outer.stages, name)),
+            )
+        spliced.append(Located(located.node, located.member, outer))
+    if boundary:
+        unplaced = ", ".join(f"{child}.{reference}" for child, reference in boundary)
+        raise ValueError(f"the boundaries {unplaced} of a placed composite sit on no stream")
+    return modules, spliced, tieoffs, controls
 
 
 def _wire(
@@ -451,7 +605,7 @@ def _wire(
     producer: ProducerIdentity,
 ) -> Composed:
     staged = [
-        (f"u_{name}_{stage.name}", stage)
+        (_stage_instance(name, stage), stage)
         for name, c in connections
         for stage in c.stages
         if stage.requirements is not None
@@ -500,7 +654,7 @@ def _wire(
         for stage in c.stages:
             if stage.input is None or stage.output is None:
                 continue
-            instance = f"u_{name}_{stage.name}"
+            instance = _stage_instance(name, stage)
             composition.connect(source, StreamEnd(instance, stage.input))
             source = StreamEnd(instance, stage.output)
         composition.connect(source, StreamEnd(c.sink_owner, c.sink))
@@ -520,6 +674,11 @@ def _wire(
     return Composed(
         structure, lower_module_structure(structure, producer=producer, wrapper_template=wrapper)
     )
+
+
+def _stage_instance(connection: str, stage: Stage) -> str:
+    """``u_<stream>_<stage>``, by the stream that placed it."""
+    return f"u_{(stage.stream or connection).replace('.', '_')}_{stage.name}"
 
 
 def _clock_roles(abi: ModuleABIRequirements) -> dict[str, list[str]]:
@@ -582,7 +741,7 @@ def _drive(
             composition.tie(instance, name, tied[name])
         elif name in clocking:
             composition.drive(instance, name, clocking[name])
-        elif info.bus_id is None:
+        else:
             raise ValueError(f"{instance}.{name}: an input outside every stream has no driver")
     for name in tieoffs.unused:
         composition.dispose(instance, name, "tied off")
@@ -599,7 +758,10 @@ __all__ = [
     "Connection",
     "Endpoints",
     "MODULE",
+    "PARTS",
+    "PARTS_SEMANTICS",
     "PORT",
+    "Parts",
     "RESET",
     "Stage",
     "Stream",
@@ -609,5 +771,6 @@ __all__ = [
     "Tieoffs",
     "boundary_contract",
     "boundary_sequence",
+    "merge_parts",
     "netlist",
 ]

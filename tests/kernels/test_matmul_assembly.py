@@ -192,7 +192,7 @@ def test_the_space_settles_the_core_and_the_core_owns_its_folds():
     assert isinstance(point.inspect(MatMulKernel.structure).accepted_result, Unresolved)
     point = commit(point, {"compute.packed.compute_pumping": False})
     assert point.result_type == DataType["INT8"]
-    assert point.inspect(MatMulKernel.dimensions).result == Available(True)
+    assert point.inspect(MatMulKernel.admission).result == Available(True)
     assert point.compute.y.element.dtype == point.result_type
     _ = point.compute.build_requirements
     assert point.compute.y.sequence.form.beats == 4

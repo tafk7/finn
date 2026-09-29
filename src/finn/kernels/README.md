@@ -44,6 +44,7 @@ base.py                  the Kernel protocol: module, ports' pins, parameters, c
 port.py                  Port nodes: native word ports and stream ports (admission, sequence, pins)
 dotp.py                  dotp_axi on three ports, one kernel per compute core, its own folds
 matmul.py                MatMulKernel: facts m, n, k and form; compute and memory Decisions
+composite.py             Composite and Design: children wired into one module, or a parent's parts
 rom.py                   RomKernel: a stored operand streamed cyclically from a ROM
 memstream.py             FinnLib memstream_axi as a weight memory (writable, sets, INIT_FILE)
 streams.py               Stream: tensor, ends, plan, adapter and transport Decisions; netlist
@@ -183,6 +184,22 @@ control buses (`Members(EXPORTED)`), and turns boundary streams into AXIS. The
 module has `ap_clk2x` only when a child needs it: an unpumped MatMulKernel has none. A
 kernel generates one module and exposes its interface; wiring that module's
 instance into a design is the consumer's. `build_requirements` lowers that structure.
+
+`MatMulKernel` is a `Composite` (`finn.kernels.composite`), and a `Design` is
+a composite at the top: kernels, Decisions over kernels and the streams
+between them, its boundary streams its module's ports. A composite placed in
+another sits on its parent's streams through reference inputs (MatMul's
+`x_stream`, `w_stream`, `y_stream`, `set_stream`), each paired in
+`boundaries` with the internal stream that is its boundary there, and
+presents on each what that stream's boundary presents; a parent stream of
+another tensor is refused (`composite-tensor`). Its `fused` Decision chooses
+what it becomes: one module, which the parent nests (a composed child is a
+fixed module named by its requirements' fingerprint, its wrapper rendered from
+the values it carries), or its parts (`PARTS`), which the parent places in its
+own module, splicing each boundary stream with the parent stream it sits on
+(instances `u_<composite>_<node>`, control ports `<composite>_<port>`).
+`tests/kernels/test_design.py` computes two MatMuls and a thresholding both
+ways in XSim.
 The optional `memory` Decision places either nothing (`none`: the weight
 stream has one user and is the boundary `in1_V`) or one of its candidates,
 the `rom` RomKernel (`memory.rom`) or the `memstream` MemStreamKernel; only

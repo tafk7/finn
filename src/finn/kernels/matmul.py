@@ -51,19 +51,16 @@ from finn.core.space import (
     Available,
     ConstraintGroup,
     Decision,
-    Members,
     Param,
     QueryResult,
     Rejected,
-    Space,
     constraint,
-    default_semantics,
     derived,
     design_space,
     inspection,
     reject,
     selected,
-    view,
+    View,
 )
 from finn.core.space.settling import compatible_cases
 from finn.dataflow.datatypes import (
@@ -78,7 +75,7 @@ from finn.dataflow.traversal import TRAVERSAL, Traversal, period
 from finn.kernels.artifacts.build import ModuleBuildRequirements
 from finn.kernels.artifacts.derivation import ProducerIdentity
 from finn.kernels.configure import admission, commit, describe, settle
-from finn.kernels.control import EXPORTED, ControlBus
+from finn.kernels.control import ControlBus
 from finn.kernels.datatypes.semantics import (
     INTEGER_TENSOR,
     QONNX_DATATYPE_VALUE_SEMANTICS,
@@ -88,17 +85,8 @@ from finn.kernels.dotp import Int8Dsp58DotpKernel, PackedDotpKernel
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.physical.structure import PhysicalStructure
 from finn.kernels.rom import RomKernel
-from finn.kernels.streams import (
-    ADAPTER_RAM_STYLES,
-    COMPOSED,
-    CONNECTION,
-    MODULE,
-    TIEOFFS,
-    BufferedStream,
-    Composed,
-    Stream,
-    netlist,
-)
+from finn.kernels.composite import Composite
+from finn.kernels.streams import ADAPTER_RAM_STYLES, PORT, BufferedStream, Stream
 from finn.kernels.target import DspBlock
 
 
@@ -140,8 +128,11 @@ class MatMulAssembly:
     initializer: tuple[int, ...]
 
 
-class MatMulKernel(Space):
+class MatMulKernel(Composite):
     """Operation facts, and the kernels and Decisions over kernels on its streams."""
+
+    id = "finn.matmul"
+    version = "1"
 
     m: int = Param()
     n: int = Param()
@@ -262,6 +253,23 @@ class MatMulKernel(Space):
     results = Stream(tensor=result_tensor, port="out0_V")
     set_index = Stream(tensor=set_tensor, port="in2_V", when=multi_set)
 
+    # Placed in a parent, it sits on the parent's streams through these inputs,
+    # each the boundary stream of the same tensor (``finn.kernels.composite``).
+    x_stream: Stream = Param(required=False)
+    w_stream: Stream = Param(required=False)
+    y_stream: Stream = Param(required=False)
+    set_stream: Stream = Param(required=False)
+    boundaries = {
+        "x_stream": "activations",
+        "w_stream": "weight_stream",
+        "y_stream": "results",
+        "set_stream": "set_index",
+    }
+    x_port = View(activations.boundary, requires=(Composite.seated,))
+    w_port = View(weight_stream.boundary, requires=(Composite.seated,))
+    y_port = View(results.boundary, requires=(Composite.seated,))
+    set_port = View(set_index.boundary, requires=(Composite.seated,))
+
     @derived
     def narrow_weights(self) -> bool:
         """Known weights that avoid their type's most negative value let the packed core
@@ -325,26 +333,18 @@ class MatMulKernel(Space):
             )
         return True
 
-    dimensions = ConstraintGroup(extents_supported, realization_supported, supply_supported)
-    modules = Members(MODULE)
-    streams = Members(CONNECTION)
-    tieoffs = Members(TIEOFFS)
-    controls = Members(EXPORTED)
+    admission = ConstraintGroup(extents_supported, realization_supported, supply_supported)
 
-    @view(semantics=COMPOSED, requires=(dimensions, modules, streams, tieoffs, controls))
-    def structure(self) -> Composed | Rejected:
-        return netlist(
-            self.modules,
-            self.streams,
-            self.tieoffs,
-            self.controls,
-            module="finn_matmul_" + self.supplied,
-            producer=ProducerIdentity("finn.matmul." + self.supplied, "1"),
-        )
+    def stem(self) -> str:
+        return "finn_matmul_" + self.supplied
 
-    @view(semantics=default_semantics(ModuleBuildRequirements), requires=(structure,))
-    def build_requirements(self) -> ModuleBuildRequirements:
-        return self.structure.requirements
+    def producer_identity(self) -> ProducerIdentity:
+        return ProducerIdentity("finn.matmul." + self.supplied, "1")
+
+    exports = {
+        **Composite.exports,
+        PORT: {x_stream: x_port, w_stream: w_port, y_stream: y_port, set_stream: set_port},
+    }
 
 
 def _frozen(values: object) -> object:

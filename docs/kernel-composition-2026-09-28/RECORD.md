@@ -279,3 +279,51 @@ the gate results as observed, key and name changes (D7), and deviations.
   as above (`evidence/identity-k2.txt`).
 - **Gates.** Space 448, kernels 806 (XSim in pytest included), dataflow 40;
   ruff and mypy clean; documentation examples 27.
+
+## S4: composable kernels and the Design
+
+- **Nested lowering, verified first, failed as the plan's risk anticipated.**
+  `_flatten_contributions` refused a rendered child and validation required
+  fixed child names: a generated module's name is known only when its build
+  is prepared. The fix is in the artifact layer, additive:
+  `RenderedSourceRequirement.values` (a rendered source carrying its own
+  bindings, `MODULE_NAME` among them, with a fixed output) and
+  `nested_module_name` (stem and requirements fingerprint, so equal nested
+  modules share one name). `finn.kernels.physical.lowering.nested` turns a
+  composed child into a fixed module whose wrapper renders from its own
+  values; `netlist` nests every composed child, and flattening accepts such
+  wrappers (deduplicated by output).
+- **Composites** (`finn.kernels.composite`). `Composite(Kernel)`: `modules`,
+  `streams`, `tied` (children's tie-offs), `controls`, `flattened`
+  (children's parts), `structure` and `build_requirements`; `stem()` and
+  `producer_identity()` name the module. Placed in a parent through the
+  reference inputs its `boundaries` pair with internal streams, it exports
+  each boundary stream's contract under `PORT` (`Stream.boundary`) and, by
+  its `fused` Decision (applicable only when placed), `MODULE` or `PARTS`.
+  `seated` refuses a parent stream of another tensor (`composite-tensor`);
+  `uncontrolled` refuses a fused composite exposing a control bus
+  (`composite-control`), which its parent cannot export yet. `Design` is a
+  composite at the top.
+- **Parts and splicing** (`finn.kernels.streams`). `Parts` carries a
+  composite's netlist inputs; `merge_parts` names a child's parts below it
+  (instances `u_<child>_<node>`, control ports `<child>_<port>`) and splices
+  each child boundary stream with the parent stream it sits on, matched by
+  the reference input now recorded on each end (`Connection.source_input`,
+  `sink_input`); stages keep the stream that placed them (`Stage.stream`).
+  `netlist` refuses any input nothing drives, bus members included (a nested
+  child's unexported bus is no longer skipped silently).
+- **MatMulKernel** is a `Composite`: `x_stream`, `w_stream`, `y_stream`,
+  `set_stream`; `admission` (was `dimensions`).
+- **Test composites** in `test_adapters`, `test_two_kernels` (the D10
+  two-kernel demo) and `test_interfaces` are `Design`s.
+- **Keys.** `fused` is a new key of every composite (inapplicable at the
+  top). **Identity.** Module parameters, images, top ports, wire and beat
+  counts unchanged; every composed wrapper fingerprint changes once, because
+  `RenderedSourceRequirement` gained a field (its canonical form); the
+  rendered wrapper inputs are byte-identical to K2's
+  (`evidence/identity-s4.txt`). The wrapper template's stale header comment
+  is corrected.
+- **Fast gates** (XSim tests skipped, run separately from the commit): Space
+  448, kernels 800 + 15 XSim skipped, dataflow 40; ruff and mypy clean;
+  documentation examples 27. Before the commit, both XSim variants of the
+  Design gate passed locally (fused and unfused).

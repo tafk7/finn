@@ -140,6 +140,9 @@ class RenderedSourceRequirement:
     provides: tuple[str, ...] = ()
     requires: tuple[str, ...] = ()
     provides_entry_point: bool = False
+    # A nested module's wrapper carries its own bindings, its fixed MODULE_NAME
+    # among them; its arguments read these instead of the module's render inputs.
+    values: ScalarTable = ()
 
     def __post_init__(self) -> None:
         if isinstance(self.output, str):
@@ -158,6 +161,15 @@ class RenderedSourceRequirement:
             raise BuildError("a rendered source argument has a non-empty name")
         if not self.library:
             raise BuildError("a rendered source names its compilation library")
+        if self.values:
+            values = _table(self.values, label="rendered-source values", renderable=True)
+            if {name for name, _ in values} != {*arguments, MODULE_NAME_ARGUMENT}:
+                raise BuildError(
+                    f"a rendered source's own values bind its arguments and {MODULE_NAME_ARGUMENT}"
+                )
+            if not isinstance(self.output, str) or self.provides_entry_point:
+                raise BuildError("a rendered source with its own values has a fixed output name")
+            object.__setattr__(self, "values", values)
         object.__setattr__(self, "arguments", tuple(sorted(arguments)))
         object.__setattr__(self, "provides", _symbols(self.provides, label="provides"))
         object.__setattr__(self, "requires", _symbols(self.requires, label="requires"))
@@ -200,7 +212,7 @@ class ModuleBuildRequirements:
         declared_arguments = {
             argument
             for item in contributions
-            if isinstance(item, RenderedSourceRequirement)
+            if isinstance(item, RenderedSourceRequirement) and not item.values
             for argument in item.arguments
         }
         input_names = {name for name, _ in render_inputs}

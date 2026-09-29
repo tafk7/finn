@@ -24,26 +24,20 @@ from pathlib import Path
 import pytest
 from qonnx.core.datatype import DataType
 
-from finn.core.space import Members, Rejected, Space, derived, design_space, view
+from finn.core.space import Rejected, derived, design_space
 from finn.dataflow.plan import Step
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import TRAVERSAL, Traversal, period
 from finn.kernels.artifacts.build import materialize_module_sources, prepare_module_build
-from finn.kernels.artifacts.derivation import ProducerIdentity
 from finn.kernels.artifacts.store import ArtifactStore
+from finn.kernels.composite import Design
 from finn.kernels.configure import commit
 from finn.kernels.rom import RomKernel
 from finn.kernels.dotp import PackedDotpKernel
 from finn.kernels.matmul import exact_result_dtype
 from finn.kernels.resources import resource_root, template_root
 from finn.kernels.streams import (
-    COMPOSED,
-    CONNECTION,
-    MODULE,
-    TIEOFFS,
-    Composed,
     Stream,
-    netlist,
 )
 from finn.kernels.target import DspBlock
 from kernels.helpers import settled
@@ -60,7 +54,7 @@ X = tuple(tuple((5 * r + 3 * k) % 8 - 4 for k in range(INPUTS)) for r in range(R
 
 
 def layered(*, adaptable: bool = True):
-    class Layered(Space):
+    class Layered(Design):
         x = Stream(tensor=Tensor((ROWS, INPUTS), ScalarEncoding(A)), port="in0_V")
         w1 = Stream(tensor=Tensor((INPUTS, HIDDEN), ScalarEncoding(W)))
         h = Stream(tensor=Tensor((ROWS, HIDDEN), ScalarEncoding(H)), adaptable=adaptable)
@@ -84,19 +78,6 @@ def layered(*, adaptable: bool = True):
 
         rom1 = RomKernel(dtype=W, form=first_period, contents=W1, output_stream=w1)
         rom2 = RomKernel(dtype=W, form=second_period, contents=W2, output_stream=w2)
-        modules = Members(MODULE)
-        streams = Members(CONNECTION)
-        tieoffs = Members(TIEOFFS)
-
-        @view(semantics=COMPOSED, requires=(modules, streams, tieoffs))
-        def structure(self) -> Composed | Rejected:
-            return netlist(
-                self.modules,
-                self.streams,
-                self.tieoffs,
-                module="finn_two_layers",
-                producer=ProducerIdentity("test.two_layers", "1"),
-            )
 
     point = commit(
         design_space(Layered()),
