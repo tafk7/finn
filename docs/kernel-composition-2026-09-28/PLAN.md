@@ -1,6 +1,6 @@
 # Plan: kernel choices, one interface per port, composable kernels
 
-Date: 2026-09-28. Status: **approved; executing** (see Execution). Follows the D10 stream model
+Date: 2026-09-28. Status: **executed** through G1 (see STATUS.md). Follows the D10 stream model
 ([`../stream-model-2026-09-27/RECORD.md`](../stream-model-2026-09-27/RECORD.md)).
 Plan of record: [`../kernel-status-2026-09-27/STATUS.md`](../kernel-status-2026-09-27/STATUS.md).
 
