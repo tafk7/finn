@@ -622,7 +622,12 @@ adapters 32 passes (26 before, plus the 6 folded `inner_shuffle` cases).
   passed, 25 skipped; graph 4 + 2; dataflow 61; ruff and mypy clean.
 - Identity dump identical to `evidence/identity-norom.txt`.
 
-A6_XSIM
+- XSim from `dd1ba4568`, as observed: all 12 conformance XSim tests pass
+  (every case, and both planted errors failing in every sample and mode); the
+  rest of `tests/kernels` 828 passed; `tests/graph` 6 passed; numeric sweeps
+  at the baseline counts (dense 26, fifo-packed 4, fifo-int8-pumped 4,
+  depthwise 22, memstream 14, memstream-depthwise 12, pumped-memory 14,
+  writable 14, sets 14, dotp 27, dotp-stress 17, adapters 32); no failures.
 
 ## A7: the authoring guide
 

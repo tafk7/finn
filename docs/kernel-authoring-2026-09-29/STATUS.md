@@ -30,8 +30,8 @@ RTL in XSim. Guide: [`src/finn/kernels/AUTHORING.md`](../../src/finn/kernels/AUT
 | `inner_shuffle` fix adopted (lane C) | FinnLib `99d75e8`; FINN `b2cb336a3` | kernels 822 | transpose passes; adapters 32 |
 | A4 `AxiStreamPort`, base extents, dotp | `2b6572282` | kernels 830 | all cases; sweeps at baseline |
 | A5 every kernel migrated; folds are Decisions | `7dafec804` | kernels 832 | all cases; sweeps at baseline |
-| A6 producers state their element | `dd1ba4568` | kernels 834 | A6_STATUS |
-| A7 authoring guide; close | this commit | kernels 834; examples 33 | code identical to A6 |
+| A6 producers state their element | `dd1ba4568` | kernels 834 | all cases; graph 6; sweeps at baseline |
+| A7 authoring guide; close | `6ecb83720`, then the XSim record | kernels 834; examples 33 | code identical to A6 |
 
 Every step keeps ruff and mypy clean; the identity dump
 (`docs/kernel-composition-2026-09-28/identity.py --api=k1`) is identical to
