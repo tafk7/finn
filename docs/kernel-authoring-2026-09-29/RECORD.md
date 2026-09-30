@@ -348,3 +348,78 @@ change and passed 6 from `78a574dd4`.)
 - The scratchpad's `space/AUTHORING.md` and `MIGRATION.md` are not updated:
   they live in another repository, outside this worktree. Their examples still
   pass. Outstanding.
+
+## Wave 1: extents from the ports, and a wider RTL checker (parallel lanes)
+
+Run as parallel lanes from `a361697be`, each in its own worktree and branch,
+each with its own record under [`lanes/`](lanes/). Merged at `a12bd9ea1`.
+
+| Lane | Branch | Commits | Record |
+|---|---|---|---|
+| A: extent binding (A3) | `lane/extent-binding` | `451c4747b`, `22e12e9a3` (fast-forwarded) | [`lanes/extent-binding.md`](lanes/extent-binding.md) |
+| B: parameter names without values (A3b) | `lane/rtl-param-names` | `ecaad8080`, `36036a62f`, `4e974e6dd` (merged, `a12bd9ea1`) | [`lanes/rtl-param-names.md`](lanes/rtl-param-names.md) |
+| C: FinnLib `inner_shuffle` | `fix/inner-shuffle` (FINN and FinnLib worktrees) | running | scratchpad `issues/inner-shuffle-bursty-input.md` |
+| D: Space docs for the A2 rule | scratchpad (uncommitted) | — | scratchpad `issues/README.md`, "Closed" |
+
+### Lane A (extents)
+
+`finn.dataflow.schedule` gains `Access(name, shape, index, reshaped)` and
+`bind_extents(accesses, extents=None) -> dict[Index, int]` (raises `Refused`,
+naming the access and axis). A plain axis binds; any other axis and any view
+bind nothing and are checked (window reach, view size); an index nothing binds
+is refused. The too-wide tensor is refused (`k is 6 (x axis 1) and 4 (w axis
+0)`). Every S0 roster member binds; the tiled MVU needs its tile extents given
+and then has a coverage hole (recorded as a known limit in a test). 21 tests.
+Deviations from D3 (all in the lane record): `Access` is a named dataclass,
+explicit extents are a second argument, every non-plain axis binds nothing,
+a bad given extent is a `Refused`.
+
+Carried to the port step (D4): `bound_schedule` builds from its beats' extents
+only; kernels of any rank must generate leading indices from the stream's rank;
+open questions: solving a one-unbound-index affine axis (the tiled MVU), member
+vs bus name in messages, thresholding's table as a binding access.
+
+### Lane B (RTL checker)
+
+- A parameter whose value is not an integer or string (an array, a real, a
+  type) is reported by name with value `None` ("not established";
+  `ExtractedModule.unestablished`); nothing fills it in. The pin comparison
+  reads only ports and resolved widths. The undeclared-override refusal is
+  unchanged.
+- `TOLERATED_WITHIN`: two slang errors Vivado accepts are tolerated only
+  inside the constructs that confine them, and declined anywhere else:
+  `ConstEvalFunctionInsideGenerate` inside generate constructs (FinnLib
+  `add_multi.sv:45`), `UsedBeforeDeclared` inside continuous assignments and
+  procedural blocks (`inner_shuffle.sv:294, 314`). `TOLERATED_DIAGNOSTICS` is
+  unchanged.
+- The harness elaborates once and compares ports with `check_against_rtl`.
+- Coverage: the checker binds for **34 of 34** conformance samples (13 before);
+  `--strict-rtl` passes. No kernel's `parameters()` disagrees with its module's
+  names (`dotp_axi` 13, `thresholding_axi` 15, `eltwise` 10, `inner_shuffle` 5,
+  `memstream_axi` 6).
+- Finding, not handled: slang rejects `thresholding_axi`'s own default for
+  `THRESHOLDS` (`thresholding_axi.sv:29`), so a binding without `THRESHOLDS`
+  declines. Every kernel binding supplies it.
+
+### Integration, as observed at `a12bd9ea1`
+
+Fast gates (Vivado off `PATH`, `FORCE_COLOR` unset): Space 454; kernels 822
+passed, 25 skipped, no `RtlDeclined` warnings; graph 4 + 2; dataflow 61; ruff
+and mypy clean. `test_conformance.py --strict-rtl`: 20 passed, 11 skipped.
+
+XSim from `a12bd9ea1` (snapshot `/tmp/a1-xsim-a12bd9ea1`), as observed: every
+conformance case passes (transpose with exactly its four known failures), both
+planted errors fail in every sample and mode, the rest of `tests/kernels` 816
+passed (805 + lane B's 11 new checker tests), `tests/graph` 6 passed.
+
+### Lane C (reported; not adopted)
+
+Root cause found and fixed in FinnLib `99d75e8` (on `d03f2fc`, branch
+`fix/inner-shuffle` in `finnlib-inner-shuffle`; not pushed): the read guard
+protected only page A, and a page was marked written one beat early. FINN side
+at `da7a3e214` (branch `fix/inner-shuffle`, worktree `finn-inner-shuffle`):
+transpose's known failures removed, `transpose.py`'s note rewritten, the
+`adapter_numeric` defect cases folded in. Record:
+`finn-inner-shuffle/docs/kernel-authoring-2026-09-29/lanes/inner-shuffle.md`.
+Adoption (push the FinnLib commit, bump `FINNLIB_COMMIT`, merge the FINN side)
+awaits the user.
