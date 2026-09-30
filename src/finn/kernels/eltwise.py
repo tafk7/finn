@@ -20,6 +20,7 @@ from collections.abc import Mapping
 
 from finn.core.space import (
     ConstraintGroup,
+    Decision,
     Param,
     Rejected,
     constraint,
@@ -27,16 +28,18 @@ from finn.core.space import (
     reject,
 )
 from finn.dataflow.datatypes import QONNXDataType, resolve_qonnx_datatype_name
-from finn.dataflow.traversal import BeatSequence, vector_major
+from finn.dataflow.schedule import Index, Schedule
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.contribution_types import CopiedSource
-from finn.kernels.base import NATIVE_CLOCKING, Clocking, Kernel
+from finn.kernels.base import NATIVE_CLOCKING, Clocking, Kernel, fold_domain
 from finn.kernels.datatypes.domains import Integer
 from finn.kernels.datatypes.scalar import Scalar
 from finn.kernels.datatypes.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
-from finn.kernels.port import GivenPort
+from finn.kernels.port import AxiStreamPort
 from finn.kernels.streams import Stream
 from finn.kernels.target import DspBlock
+
+c = Index("c")
 
 
 class EltwiseOperand(Scalar):
@@ -53,9 +56,11 @@ class EltwiseKernel(Kernel):
     """PE results a beat of ``lhs`` and ``rhs``, element by element.
 
     Placed on streams, each operand's tensor is walked row-major, PE elements
-    of its innermost axis a beat. An ``rhs`` whose shape is a trailing part of
-    ``lhs``'s (a channel vector, say) is broadcast: the port presents it once
-    per ``lhs`` element it meets, and its stream's adapter replays it.
+    of its innermost axis a beat, on one schedule over ``lhs``'s axes. An
+    ``rhs`` whose shape is a trailing part of ``lhs``'s (a channel vector, say)
+    reads the trailing indices, so it is broadcast: the port presents it once
+    per ``lhs`` element it meets, and its stream's adapter replays it. An
+    ``rhs`` of another shape disagrees on an extent (``kernel-extents``).
     """
 
     id = "finnlib.eltwise"
@@ -63,7 +68,8 @@ class EltwiseKernel(Kernel):
     module = "eltwise"
 
     operation: str = Param()
-    pe: int = Param()
+    # PE elements of the innermost axis a beat: its divisors placed, any the RTL takes flat.
+    pe: int = Decision(domain=fold_domain(c))
     lhs_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
     rhs_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
     # The streams it sits on, when a parent places it.
@@ -132,66 +138,62 @@ class EltwiseKernel(Kernel):
 
     admission = ConstraintGroup(implementation_supported, operands_supported)
 
-    def _walk(self, shape: tuple[int, ...]) -> BeatSequence | Rejected:
-        try:
-            return BeatSequence(vector_major(shape, self.pe))
-        except ValueError as error:
-            return reject("eltwise-stream-form", f"PE={self.pe}: {error}")
+    @derived
+    def indices(self) -> tuple[Index, ...]:
+        """lhs's axes, ``c`` innermost; the result keeps lhs's shape."""
+        rank = len(self.lhs_stream.tensor.shape)
+        return (*(Index(f"a{axis}") for axis in range(rank - 1)), c)
 
     @derived
-    def lhs_sequence(self) -> BeatSequence | Rejected:
-        return self._walk(self.lhs_stream.tensor.shape)
+    def rhs_indices(self) -> tuple[Index, ...]:
+        """rhs reads the trailing axes of lhs: a broadcast it presents once per element it meets."""
+        indices, rank = self.indices, len(self.rhs_stream.tensor.shape)
+        return indices[max(0, len(indices) - rank) :]  # a longer rhs is refused by rank
 
     @derived
-    def rhs_sequence(self) -> BeatSequence | Rejected:
-        """``lhs``'s shape, or a trailing part of it presented once per element it meets."""
-        shape, full = self.rhs_stream.tensor.shape, self.lhs_stream.tensor.shape
-        if full[len(full) - len(shape) :] != shape:
-            return reject(
-                "eltwise-stream-form", f"rhs {shape} is not a trailing part of lhs {full}"
-            )
-        sequence = self._walk(shape)
-        if isinstance(sequence, Rejected):
-            return sequence
-        count = self.lhs_stream.tensor.size // self.rhs_stream.tensor.size
-        return sequence if count == 1 else BeatSequence(sequence.form.repeated(count))
+    def folds(self) -> dict[Index, int]:
+        return {c: self.pe}
 
     @derived
-    def result_sequence(self) -> BeatSequence | Rejected:
-        shape = self.result_stream.tensor.shape
-        if shape != self.lhs_stream.tensor.shape:
-            return reject("eltwise-stream-form", "the result keeps lhs's shape")
-        return self._walk(shape)
+    def schedule(self) -> Schedule | Rejected:
+        """Row-major over lhs's axes, ``c`` folded by PE innermost."""
+        return self.bound_schedule(self.indices, self.folds)
 
-    lhs = GivenPort(
+    lhs = AxiStreamPort(
         name="lhs",
         endpoint=Endpoint.TARGET,
         stream=lhs_stream,
-        sequence=lhs_sequence,
+        schedule=schedule,
+        folds=folds,
+        index=indices,
+        lanes=(c,),
         dtype=lhs_dtype,
-        idle_lanes=pe,
         signals=("adat", "avld", "ardy"),
         clock="clk",
         reset="rst",
     )
-    rhs = GivenPort(
+    rhs = AxiStreamPort(
         name="rhs",
         endpoint=Endpoint.TARGET,
         stream=rhs_stream,
-        sequence=rhs_sequence,
+        schedule=schedule,
+        folds=folds,
+        index=rhs_indices,
+        lanes=(c,),
         dtype=rhs_dtype,
-        idle_lanes=pe,
         signals=("bdat", "bvld", "brdy"),
         clock="clk",
         reset="rst",
     )
-    result = GivenPort(
+    result = AxiStreamPort(
         name="result",
         endpoint=Endpoint.INITIATOR,
         stream=result_stream,
-        sequence=result_sequence,
+        schedule=schedule,
+        folds=folds,
+        index=indices,
+        lanes=(c,),
         dtype=result_dtype,
-        idle_lanes=pe,
         signals=("odat", "ovld", "ordy"),
         clock="clk",
         reset="rst",

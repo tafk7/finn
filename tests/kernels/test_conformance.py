@@ -6,9 +6,9 @@
 Each case places one kernel between boundary streams over sampled folds
 (``kernels.conformance``): dotp on both cores (packed; INT8, dense and
 depthwise), thresholding, eltwise with a broadcast operand, transpose, and
-memstream with an identity reference. Folds that are still Params
-(thresholding's and eltwise's ``pe``, transpose's SIMD inside ``input_form``,
-memstream's ``form``) are given explicitly.
+memstream with an identity reference. Every fold is a Decision (dotp's PE and
+SIMD sampled; thresholding's and eltwise's PE and transpose's SIMD given as
+configurations); memstream's ``form``, a fact of its consumer, is given.
 
 The harness's reason to exist: a thresholding kernel that declares an order
 its RTL does not walk passes every Python check and fails in XSim, for the
@@ -36,7 +36,7 @@ import numpy as np
 import pytest
 from qonnx.core.datatype import DataType
 
-from finn.core.space import derived
+from finn.core.space import Rejected, derived
 from finn.dataflow.gemm import Form
 from finn.dataflow.schedule import Index, Schedule
 from finn.dataflow.tensor import ScalarEncoding, Tensor
@@ -46,7 +46,7 @@ from finn.kernels.dotp import Int8Dsp58DotpKernel, PackedDotpKernel
 from finn.kernels.eltwise import EltwiseKernel
 from finn.kernels.matmul import exact_result_dtype
 from finn.kernels.memstream import MemStreamKernel
-from finn.kernels.port import GivenPort, ScheduledPort
+from finn.kernels.port import AxiStreamPort
 from finn.kernels.target import DspBlock
 from finn.kernels.thresholding import ThresholdingAxiKernel
 from finn.kernels.transpose import TransposeKernel
@@ -141,39 +141,23 @@ r, c = Index("r"), Index("c")
 
 
 class RowsFirst(ThresholdingAxiKernel):
-    """thresholding_axi over a schedule of rows, then channels folded by PE: the RTL's order."""
+    """thresholding_axi declaring its rows outer, channels folded by PE inner: the RTL's order."""
 
     id = "test.thresholding_axi.rows_first"
-    beats: ClassVar[tuple[Index, ...]] = (r, c)
+    channels_outer: ClassVar[bool] = False
 
     @derived
-    def schedule(self) -> Schedule:
-        rows, channels = self.input_stream.tensor.shape
-        return Schedule({r: rows, c: channels}, folds={c: self.pe}, beats=type(self).beats)
-
-    input = ScheduledPort(
-        name="s_axis",
-        endpoint=Endpoint.TARGET,
-        stream=ThresholdingAxiKernel.input_stream,
-        schedule=schedule,
-        index=(r, c),
-        lanes=(c,),
-    )
-    output = ScheduledPort(
-        name="m_axis",
-        endpoint=Endpoint.INITIATOR,
-        stream=ThresholdingAxiKernel.output_stream,
-        schedule=schedule,
-        index=(r, c),
-        lanes=(c,),
-    )
+    def schedule(self) -> Schedule | Rejected:
+        *outer, last = self.indices
+        order = (last, *outer) if type(self).channels_outer else (*outer, last)
+        return self.bound_schedule(tuple(order), self.folds, extents={last: self.channels})
 
 
 class ChannelsFirst(RowsFirst):
     """The same module declared with the wrong loop order: channel folds outer, rows inner."""
 
     id = "test.thresholding_axi.channels_first"
-    beats: ClassVar[tuple[Index, ...]] = (c, r)
+    channels_outer: ClassVar[bool] = True
 
 
 def scheduled(family: type[RowsFirst]) -> dict[str, Any]:
@@ -191,22 +175,25 @@ def scheduled(family: type[RowsFirst]) -> dict[str, Any]:
 co, ci = Index("co"), Index("ci")
 
 
-def split_ports(schedule: Any, lanes: tuple[Index, ...]) -> tuple[ScheduledPort, ScheduledPort]:
+def split_ports(schedule: Any, lanes: tuple[Index, ...]) -> tuple[AxiStreamPort, AxiStreamPort]:
     """Input and output reading channel ``c = 3 co + ci``, fields in ``lanes`` order."""
-    ports = (
-        ("s_axis", Endpoint.TARGET, ThresholdingAxiKernel.input_stream),
-        ("m_axis", Endpoint.INITIATOR, ThresholdingAxiKernel.output_stream),
+    input = AxiStreamPort(
+        name="s_axis",
+        endpoint=Endpoint.TARGET,
+        stream=ThresholdingAxiKernel.input_stream,
+        schedule=schedule,
+        index=(r, co * 3 + ci),
+        lanes=lanes,
+        dtype=ThresholdingAxiKernel.input_dtype,
     )
-    input, output = (
-        ScheduledPort(
-            name=name,
-            endpoint=endpoint,
-            stream=stream,
-            schedule=schedule,
-            index=(r, co * 3 + ci),
-            lanes=lanes,
-        )
-        for name, endpoint, stream in ports
+    output = AxiStreamPort(
+        name="m_axis",
+        endpoint=Endpoint.INITIATOR,
+        stream=ThresholdingAxiKernel.output_stream,
+        schedule=schedule,
+        index=(r, co * 3 + ci),
+        lanes=lanes,
+        dtype=ThresholdingAxiKernel.result_dtype,
     )
     return input, output
 
@@ -217,10 +204,10 @@ class LanesInOrder(ThresholdingAxiKernel):
     id = "test.thresholding_axi.lanes_in_order"
 
     @derived
-    def schedule(self) -> Schedule:
-        rows, channels = self.input_stream.tensor.shape
-        folds = {co: channels // 3, ci: 3}
-        return Schedule({r: rows, **folds}, folds=folds)
+    def schedule(self) -> Schedule | Rejected:
+        # The window axis binds nothing: the split's extents are the author's.
+        split = {co: self.channels // 3, ci: 3}
+        return self.bound_schedule((r, co, ci), folds=split, extents=split)
 
     input, output = split_ports(schedule, (co, ci))
 
@@ -281,7 +268,7 @@ def transpose() -> dict[str, Any]:
         inputs={"input_stream": tensor(MATRICES, "INT4")},
         outputs={"output_stream": tensor(MATRICES, "INT4")},
         reference=lambda input_stream: {"output_stream": input_stream},
-        folds=tuple({"input_form": vector_major(MATRICES, simd)} for simd in (1, 3, 6)),
+        folds=tuple({"simd": simd} for simd in (1, 3, 6)),
         choices={"ram_style": "auto"},
     )
 
@@ -423,7 +410,7 @@ class Misnamed(MemStreamKernel):
     """memstream_axi with its output bus misnamed: the source has no such pins."""
 
     id = "test.memstream_axi.misnamed"
-    output = GivenPort(
+    output = AxiStreamPort(
         name="m_axis_1",
         endpoint=Endpoint.INITIATOR,
         stream=MemStreamKernel.output_stream,

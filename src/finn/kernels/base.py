@@ -29,10 +29,11 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
-from typing import ClassVar
+from typing import ClassVar, cast
 
 from finn.core.space import (
     ConstraintGroup,
+    Domain,
     Members,
     Rejected,
     Space,
@@ -40,9 +41,12 @@ from finn.core.space import (
     ViewKey,
     default_semantics,
     derived,
+    divisors_of,
+    domain,
     reject,
     view,
 )
+
 from finn.core.space.errors import DefinitionError
 from finn.core.space.inspection import NodeInfo, members
 from finn.kernels.artifacts.abi import (
@@ -292,6 +296,34 @@ def extent_of(index: Index) -> int:
     return derived(extent)
 
 
+def fold_domain(index: Index, bound: int = 1 << 32) -> Domain[int]:
+    """A fold Decision's domain: the divisors of ``index``'s bound extent.
+
+    While no placed port binds ``index`` (a flat build of a module whose
+    parameters need no extents), the fold is any the RTL takes, ``1 <= fold <
+    bound``, and is committed as a choice; there is nothing to enumerate.
+    """
+    candidates = divisors_of(1).candidates
+    assert candidates is not None
+
+    def accepts(*, candidate: int, extents: Mapping[Index, int]) -> bool:
+        if type(candidate) is not int or candidate < 1:
+            return False
+        return extents[index] % candidate == 0 if index in extents else candidate < bound
+
+    def enumerate_(*, extents: Mapping[Index, int]) -> tuple[int, ...] | Rejected:
+        if index not in extents:
+            return reject("kernel-extents", f"{index!r} is bound by no placed port")
+        return tuple(cast("tuple[int, ...]", candidates(extent=extents[index])))
+
+    return domain(
+        accepts=accepts,
+        candidates=enumerate_,
+        semantics=default_semantics(int),
+        extents=Kernel.extents,
+    )
+
+
 __all__ = [
     "ACCESS",
     "Clocking",
@@ -306,4 +338,5 @@ __all__ = [
     "TIEOFFS_SEMANTICS",
     "Tieoffs",
     "extent_of",
+    "fold_domain",
 ]

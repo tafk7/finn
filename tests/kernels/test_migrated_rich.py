@@ -45,7 +45,6 @@ def generator(
 def threshold_base(
     *,
     table: ThresholdTable = TABLE,
-    pe: int = 1,
     bias: int = -1,
     input_dtype: str = "INT8",
     threshold_dtype: str = "INT5",
@@ -57,7 +56,6 @@ def threshold_base(
             input_dtype=resolve_qonnx_datatype_name(input_dtype),
             threshold_dtype=resolve_qonnx_datatype_name(threshold_dtype),
             thresholds=table,
-            pe=pe,
             bias=bias,
             depth_trigger_bram=bram,
             depth_trigger_uram=uram,
@@ -68,7 +66,7 @@ def threshold_base(
 def threshold(
     *,
     table: ThresholdTable = TABLE,
-    pe: int = 1,
+    pe: int | None = 1,
     bias: int = -1,
     input_dtype: str = "INT8",
     threshold_dtype: str = "INT5",
@@ -77,16 +75,17 @@ def threshold(
     axilite: bool = False,
     deep: bool = False,
 ) -> ThresholdingAxiKernel:
+    """PE is committed as a choice; ``None`` leaves it open (a table without channels has none)."""
     base = threshold_base(
         table=table,
-        pe=pe,
         bias=bias,
         input_dtype=input_dtype,
         threshold_dtype=threshold_dtype,
         bram=bram,
         uram=uram,
     )
-    report = base.try_with_choices(use_axilite=axilite, deep_pipeline=deep)
+    folds = {} if pe is None else {"pe": pe}
+    report = base.try_with_choices(use_axilite=axilite, deep_pipeline=deep, **folds)
     assert report.accepted
     return report.instance
 
@@ -159,7 +158,7 @@ def test_threshold_output_initialization_and_configuration_profiles_are_preserve
     enabled = threshold(axilite=True, deep=True).build_requirements
     assert dict(enabled.parameters)["USE_AXILITE"] == 1
     assert dict(enabled.parameters)["DEEP_PIPELINE"] == 1
-    assert dict(threshold(pe=4).build_requirements.parameters)["PE"] == 4
+    assert dict(threshold(pe=2).build_requirements.parameters)["PE"] == 2
     config = next(
         port
         for port in requirements.abi.ports
@@ -201,9 +200,7 @@ def test_threshold_partial_dtype_query_does_not_adopt_implementation_decisions()
 
 def test_threshold_rejects_existing_unsupported_profiles_and_malformed_tables() -> None:
     profiles = (
-        threshold(table=()),
-        threshold(pe=0),
-        threshold(pe=3),
+        threshold(table=(), pe=None),
         threshold(table=(((2, 1),),)),
         threshold(table=(((0, 20),),)),
         threshold(table=(((0,), (0, 1)),)),
@@ -220,6 +217,9 @@ def test_threshold_rejects_existing_unsupported_profiles_and_malformed_tables() 
     )
     with pytest.raises(DefinitionError, match="threshold table"):
         threshold(table=cast(ThresholdTable, (([-2, 0, 3],),)))
+    # PE is a divisor of the table's channels: another is refused where it is committed.
+    for pe in (0, 3, 4):
+        assert not threshold_base().try_with_choices(pe=pe).accepted
 
 
 @pytest.mark.parametrize(

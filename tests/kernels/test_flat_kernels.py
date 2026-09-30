@@ -59,32 +59,34 @@ def generator(**changes):
     return point_for(InputGeneratorKernel, facts, ram_style="auto")
 
 
-def eltwise(**changes):
+def eltwise(pe=2, **changes):
+    """Flat: no stream binds its extent, so its fold is any the RTL takes, committed as a choice."""
     facts = dict(
         operation="ADD",
-        pe=2,
         lhs_dtype=DataType["INT3"],
         rhs_dtype=DataType["INT3"],
         b_scale=1.0,
         target_dsp=DspBlock.DSP58,
     )
     facts.update(changes)
-    return point_for(EltwiseKernel, facts)
+    return point_for(EltwiseKernel, facts, pe=pe)
 
 
-def threshold(*, use_axilite=False, deep_pipeline=False, **changes):
+def threshold(*, use_axilite=False, deep_pipeline=False, pe=1, **changes):
+    """Its PE's domain is the divisors of its table's channels, known flat; ``pe=None``
+    leaves it open (a table without channels has no PE to commit)."""
     facts = dict(
         input_dtype=DataType["INT8"],
         threshold_dtype=DataType["INT5"],
         thresholds=(((-2, 0, 3), (-1, 1, 4)),),
-        pe=1,
         bias=-1,
         depth_trigger_bram=0,
         depth_trigger_uram=0,
     )
     facts.update(changes)
+    folds = {} if pe is None else {"pe": pe}
     return point_for(
-        ThresholdingAxiKernel, facts, use_axilite=use_axilite, deep_pipeline=deep_pipeline
+        ThresholdingAxiKernel, facts, use_axilite=use_axilite, deep_pipeline=deep_pipeline, **folds
     )
 
 
@@ -152,7 +154,7 @@ def native_ports(requirements, tmp_path):
         lambda: eltwise(lhs_dtype=DataType["FLOAT32"], rhs_dtype=DataType["FLOAT32"], b_scale=0.25),
         threshold,
         lambda: threshold(use_axilite=True, deep_pipeline=True),
-        lambda: threshold(pe=4),
+        lambda: threshold(pe=2),
         lambda: threshold(thresholds=(((-2, 0, 3), (-1, 1, 4)), ((-3, 0, 5), (-2, 0, 6)))),
     ],
 )
@@ -195,7 +197,6 @@ def test_native_rtl_pin_names_directions_and_widths(factory, tmp_path):
         lambda: converter("FLOAT32"),
         lambda: converter("BIPOLAR"),
         lambda: converter("INT129"),
-        lambda: eltwise(pe=0),
         lambda: eltwise(operation="DIV"),
         lambda: eltwise(lhs_dtype=DataType["INT4"]),
         lambda: eltwise(lhs_dtype=DataType["BIPOLAR"]),
@@ -203,9 +204,7 @@ def test_native_rtl_pin_names_directions_and_widths(factory, tmp_path):
         lambda: eltwise(b_scale=0.5),
         lambda: eltwise(operation="MUL", lhs_dtype=DataType["FLOAT32"], b_scale=0.5),
         lambda: eltwise(lhs_dtype=DataType["FLOAT32"], target_dsp=DspBlock.DSP48E2),
-        lambda: threshold(thresholds=()),
-        lambda: threshold(pe=0),
-        lambda: threshold(pe=3),
+        lambda: threshold(thresholds=(), pe=None),
         lambda: threshold(thresholds=(((2, 1),),)),
         lambda: threshold(thresholds=(((0, 20),),)),
         lambda: threshold(thresholds=(((0,), (0, 1)),)),
@@ -221,6 +220,22 @@ def test_unsupported_cases_are_refused_without_constructing_invalid_interfaces(f
     point = factory()
     assessment = point.inspect(type(point).build_requirements)
     assert isinstance(assessment.accepted_result, Rejected)
+
+
+@pytest.mark.parametrize(
+    "factory",
+    [
+        lambda: eltwise(pe=0),
+        lambda: eltwise(pe=1 << 32),  # beyond the RTL's 32-bit PE
+        lambda: threshold(pe=0),
+        lambda: threshold(pe=3),
+        # PE above C would fold rows into the lanes (the RTL takes it; the model does not).
+        lambda: threshold(pe=4),
+    ],
+)
+def test_a_fold_outside_its_domain_is_refused_where_it_is_committed(factory):
+    with pytest.raises(ValueError, match="domain-membership"):
+        factory()
 
 
 def test_typed_integer_vectors_and_tables_reject_mutable_or_mistyped_payloads():

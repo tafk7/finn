@@ -16,7 +16,7 @@ from finn.kernels.eltwise import EltwiseKernel
 from finn.kernels.physical.axi_stream import AxiStream
 from finn.kernels.physical.layout import PackedBeatLayout
 from finn.kernels.physical.stream import ReadyValidStream
-from finn.kernels.port import AxiStreamPort, GivenPort
+from finn.kernels.port import AxiStreamPort
 
 
 def declare(dtype: QONNXDataType) -> None:
@@ -45,5 +45,5 @@ def check(point: DotpAxiKernel, eltwise: EltwiseKernel) -> None:
     assert_type(point.x.field(AxiStreamPort.pins), BoundValue[tuple[object, ...]])
     assert_type(point.pe, int)
     assert_type(point.schedule, Schedule)
-    assert_type(eltwise.lhs, GivenPort)
+    assert_type(eltwise.lhs, AxiStreamPort)
     assert_type(eltwise.lhs.transport, ReadyValidStream)

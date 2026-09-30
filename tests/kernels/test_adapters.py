@@ -17,7 +17,7 @@ from __future__ import annotations
 import pytest
 from qonnx.core.datatype import DataType
 
-from finn.core.space import Rejected, Space, design_space
+from finn.core.space import Rejected, design_space
 from finn.core.space.settling import compatible_cases
 from finn.dataflow.plan import Step
 from finn.dataflow.tensor import ScalarEncoding, Tensor
@@ -87,14 +87,14 @@ def columns_first(rows: int, channels: int, lanes: int) -> Traversal:
 
 def transposed(rows: int, cols: int, simd: int, batches: int = 2):
     """``inner_shuffle`` placed between two boundary streams: rows in, columns out."""
-    source = vector_major((batches, rows, cols), simd)
+    shape = (batches, rows, cols)
 
     class Transposed(Design):
-        a = Stream(tensor=Tensor(source.shape, ELEMENT), port="in0_V")
-        b = Stream(tensor=Tensor(source.shape, ELEMENT), port="out0_V")
-        shuffle = TransposeKernel(input_stream=a, output_stream=b, input_form=source)
+        a = Stream(tensor=Tensor(shape, ELEMENT), port="in0_V")
+        b = Stream(tensor=Tensor(shape, ELEMENT), port="out0_V")
+        shuffle = TransposeKernel(input_stream=a, output_stream=b)
 
-    return design_space(Transposed()).with_choices({Transposed.shuffle.ram_style: "auto"})
+    return commit(design_space(Transposed()), {"shuffle.ram_style": "auto", "shuffle.simd": simd})
 
 
 def stage_parameters(point):
@@ -180,20 +180,14 @@ def test_a_transpose_turns_rows_into_columns():
     point = transposed(4, 6, 2)
     shuffle = dict(point.shuffle.build_requirements.parameters)
     assert (shuffle["I"], shuffle["J"], shuffle["SIMD"]) == (4, 6, 2)
-    first = next(point.shuffle.output_sequence.form.positions())
+    assert point.shuffle.input.presented.form == vector_major((2, 4, 6), 2)
+    first = next(point.shuffle.output.presented.form.positions())
     assert first == ((0, 0, 0), (0, 1, 0))  # column 0, rows 0 and 1
     _ = point.structure
 
 
-def test_a_transpose_needs_row_major_rows():
-    column_major = Traversal.over((4, 6), ((1, 6, 1), (0, 2, 2)), ((0, 2, 1),))
-
-    class Wrong(Space):
-        a = Stream(tensor=Tensor((4, 6), ELEMENT), port="in0_V")
-        b = Stream(tensor=Tensor((4, 6), ELEMENT), port="out0_V")
-        shuffle = TransposeKernel(input_stream=a, output_stream=b, input_form=column_major)
-
-    point = design_space(Wrong()).with_choices({Wrong.shuffle.ram_style: "auto"})
-    refused = point.shuffle.query(TransposeKernel.build_requirements)
-    assert isinstance(refused, Rejected)
-    assert {finding.code for finding in refused.findings} == {"transpose-form"}
+def test_a_transposes_simd_divides_both_sides():
+    """SIMD is a Decision over the common divisors of I and J (both bound from the ports)."""
+    assert transposed(4, 6, 1).shuffle.field(TransposeKernel.simd).candidates().value == (1, 2)
+    with pytest.raises(ValueError, match="domain-membership"):
+        transposed(4, 6, 3)  # divides J, not I

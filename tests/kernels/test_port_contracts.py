@@ -243,17 +243,20 @@ def test_eltwise_broadcasts_a_channel_vector_once_per_pixel():
     # The rhs port presents the channel vector once per pixel it meets: a whole
     # pass repeated, which a boundary presents as it is.
     repeated = vector_major((4,), 2).repeated(3)
-    assert point.add.rhs.sequence.form == repeated
+    assert point.add.rhs.presented.form == repeated
     assert point.rhs.connection.source.form == repeated
     assert all(stream.plan.steps == () for stream in (point.lhs, point.rhs, point.out))
     assert dict(point.add.build_requirements.parameters)["PE"] == 2
 
 
 def test_eltwise_refuses_an_operand_it_cannot_broadcast_or_does_not_carry():
+    # A channel vector of another length disagrees with lhs on the channels.
     misshaped = eltwise_between((3,))
-    refused = misshaped.add.query(EltwiseKernel.rhs_sequence)
+    refused = misshaped.add.query(EltwiseKernel.extents)
     assert isinstance(refused, Rejected)
-    assert {finding.code for finding in refused.findings} == {"eltwise-stream-form"}
+    assert {(finding.code, finding.message) for finding in refused.findings} == {
+        ("kernel-extents", "c is 4 (lhs axis 1) and 3 (rhs axis 0)")
+    }
     # An operand stream of another element: the stream refuses the port's end.
     other = eltwise_between((4,), rhs_dtype="INT3").rhs.query(Stream.connection)
     assert isinstance(other, Rejected)

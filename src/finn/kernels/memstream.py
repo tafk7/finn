@@ -40,6 +40,7 @@ from finn.dataflow.datatypes import (
     QONNXDataType,
     ordinary_integer_bounds,
 )
+from finn.dataflow.schedule import Index
 from finn.dataflow.traversal import (
     BeatSequence,
     Repetition,
@@ -62,8 +63,11 @@ from finn.kernels.datatypes.semantics import (
     IntegerVector,
     integers,
 )
-from finn.kernels.port import GivenPort
+from finn.kernels.port import AxiStreamPort
 from finn.kernels.streams import Stream
+
+FIELD = Index("field")
+"""The fields of a stored word, one per lane of the consumer's form."""
 
 MEMSTREAM_RAM_STYLES = ("auto", "distributed", "block", "ultra")
 
@@ -212,7 +216,12 @@ class MemStreamKernel(Kernel):
             return BeatSequence(self.form.repeated(self.set_stream.tensor.size))
         return BeatSequence(self.form, Repetition.CYCLIC)
 
-    set = GivenPort(
+    @derived
+    def word_folds(self) -> dict[Index, int]:
+        """The lanes of a word: the form's fields, carried by an idle output too."""
+        return {FIELD: self.form.lanes}
+
+    set = AxiStreamPort(
         name="set",
         endpoint=Endpoint.TARGET,
         stream=set_stream,
@@ -222,13 +231,14 @@ class MemStreamKernel(Kernel):
         clock="clk",
         reset="rst",
     )
-    output = GivenPort(
+    output = AxiStreamPort(
         name="m_axis_0",
         endpoint=Endpoint.INITIATOR,
         stream=output_stream,
         sequence=output_sequence,
         dtype=dtype,
-        idle_lanes=output_sequence.form.lanes,
+        lanes=(FIELD,),
+        folds=word_folds,
         clock="clk",
         reset="rst",
     )

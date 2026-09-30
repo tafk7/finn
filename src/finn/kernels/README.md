@@ -345,7 +345,7 @@ associations. `pins()` preserves their exact widths. `axis_bus()` requires
 byte-aligned data and at most one LAST marker; it does not pad words or relabel
 loop/replay completion markers. `AxiStream` uses this same transport lowering
 while retaining its typed packing. A kernel's `Port` nodes (`finn.kernels.port`)
-produce these records: a `StreamPort` from lanes of its stream's element, on an
+produce these records: an `AxiStreamPort` from lanes of its element, on an
 AXIS bus or on named native pins; a `WordPort` for opaque words (FIFO, input
 generation and width conversion), never published as AXI buses.
 

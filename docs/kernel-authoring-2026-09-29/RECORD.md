@@ -439,7 +439,11 @@ awaits the user.
   454; kernels 822 passed, 25 skipped, no `RtlDeclined`; graph 4 + 2; dataflow
   61. `--strict-rtl` conformance: 20 passed, 11 skipped.
 
-ADOPT_XSIM
+XSim: the adoption commit's conformance and pytest run passed (every case,
+transpose with no known failures; the rest of `tests/kernels` 816; graph 6).
+Its numeric sweep did not start (its runner lacked Vivado's `LD_LIBRARY_PATH`);
+the sweep from the A4 commit below, which carries the same pin, covers it:
+adapters 32 passes (26 before, plus the 6 folded `inner_shuffle` cases).
 
 ## A4: one port class, extents bound in the kernel base, dotp migrated
 
@@ -492,7 +496,14 @@ ADOPT_XSIM
   passed, 25 skipped (822 + 8); graph 4 + 2; dataflow 61; ruff and mypy clean.
 - Identity dump identical to `evidence/identity-norom.txt`.
 
-A4_XSIM
+- XSim from `2b6572282` (`a1/xsim.sh` and the new `xsim-sweeps.sh`), as
+  observed: every conformance case passes (transpose with no known failures),
+  both planted errors fail in every sample and mode, the rest of
+  `tests/kernels` 824 passed; numeric sweeps at the baseline counts: dense
+  26, fifo-packed 4, fifo-int8-pumped 4, depthwise 22, memstream 14,
+  memstream-depthwise 12, pumped-memory 14, writable 14, sets 14, dotp 27,
+  dotp-stress 17, adapters 32 (26 + the 6 folded `inner_shuffle` cases); no
+  failures.
 
 ### Deviations
 
@@ -505,3 +516,68 @@ A4_XSIM
 - The Lane A open questions are settled as: refusals name the port member
   (`x axis 1`); no solving of one-unbound-index affine axes (not needed by
   any kernel here); thresholding's table stays a check (next increment).
+
+## A5: thresholding, eltwise, transpose and memstream migrated; one port class
+
+### What landed
+
+- **thresholding**: `pe` is a Decision over the divisors of `channels` (the
+  table's C, known flat: G0.4a); input and output are `AxiStreamPort`s on one
+  schedule over the input's axes (`a0..`, `c` folded by PE innermost) with
+  `extents={c: channels}`, so a stream whose channels disagree with the table
+  is `kernel-extents`; the set port keeps a given `sequence=` (it indexes
+  beats). The `folding_supported` constraint is gone (the domain holds it),
+  and PE above C, accepted flat before, is now refused where it is committed
+  (`domain-membership`).
+- **eltwise**: `pe` is a Decision over `fold_domain(c)` (new in
+  `finn.kernels.base`: the divisors of `c`'s bound extent; while nothing binds
+  it, any `1 <= pe < 2**32`, committed as a choice: G0.4b, P0.5's fallback).
+  One schedule over lhs's axes; rhs reads the trailing indices, so its
+  broadcast repetition derives (the hand-built `.repeated(count)` is gone); an
+  rhs of another shape is `kernel-extents` (was `eltwise-stream-form`).
+- **transpose**: `input_form` is gone. `rows`/`cols` are `extent_of(i)`/`(j)`;
+  `simd` is a Decision over the divisors of their gcd; input and output are
+  two schedules (`rows_in`: `(…, i, j)`, lanes `j`; `columns_out`:
+  `(…, j, i)`, lanes `i`). `matrix` and `transposable` are gone: a row-major
+  input holds by construction.
+- **memstream**: its output presents a given `sequence=` (the consumer's form,
+  a demand); an idle output carries the form's lanes through the port's
+  `folds` of one field index (`FIELD`); the set port a given `sequence=`.
+- **`StreamPort`, `ScheduledPort` and `GivenPort` are deleted**: every kernel
+  stream interface is an `AxiStreamPort`; `WordPort` stays for stream stages.
+- **Tests**: flat tests commit PE as a choice (G0.4); a fold outside its domain
+  is refused where committed (thresholding PE 0, 3, 4; eltwise PE 0, 2**32);
+  transpose's SIMD domain and refusal; eltwise's misshaped rhs refused as
+  `kernel-extents`; the planted-error kernels rewritten on the new port
+  (`RowsFirst`/`ChannelsFirst` override only the schedule's order).
+
+### Keys and names (D7)
+
+- New decision keys: `<node>.pe` for thresholding and eltwise, `<node>.simd`
+  for transpose. A parent may pin them at the call (`ThresholdingAxiKernel(
+  pe=2)` pins), which is how existing composite tests keep working.
+- Removed: `TransposeKernel.input_form`, `matrix`, `transposable`;
+  `ThresholdingAxiKernel.folding_supported`, `input_sequence`,
+  `output_sequence`; `EltwiseKernel.lhs_sequence`, `rhs_sequence`,
+  `result_sequence`; `idle_lanes`; `StreamPort`, `ScheduledPort`,
+  `GivenPort`. Refusal codes gone: `threshold-folding`,
+  `threshold-stream-form`, `eltwise-stream-form`, `transpose-form`.
+- Added: `fold_domain` (`finn.kernels.base`); `FIELD` (`finn.kernels.memstream`).
+
+### Evidence, as observed
+
+- Fast gates (Vivado off `PATH`, `FORCE_COLOR` unset): Space 454; kernels 832
+  passed, 25 skipped; graph 4 + 2; dataflow 61; ruff and mypy clean.
+- Identity dump identical to `evidence/identity-norom.txt` (its MatMul
+  configurations do not read the new keys).
+
+A5_XSIM
+
+### Deviations
+
+- Done in one serial pass, not four parallel lanes: once the port class
+  existed each migration was a few dozen lines, and the old classes' deletion
+  and the tests shared by several kernels would have been merge conflicts.
+- memstream's idle lane count uses a field index (`FIELD`) with the port's
+  `folds`, since G0.3's rule (idle lanes from the folds of the lane indices)
+  needs an index and a given sequence has none.

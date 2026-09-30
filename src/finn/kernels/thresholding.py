@@ -9,6 +9,13 @@ saturated to the threshold dtype before comparison, as the native RTL specifies.
 Output is the threshold count plus bias. Runtime writes must preserve sorted
 rows. With multiple sets, each input beat requires a matching set-selector beat.
 
+PE, the channels a beat, is a Decision over the divisors of the table's C,
+known without a stream, so a flat build commits it as a choice. Placed, the
+input and output walk one schedule row-major, ``c`` folded by PE innermost;
+their tensors bind the extents, and the channel count must agree with the
+table's (``kernel-extents``). The set port indexes beats, which no index of a
+tensor expresses, so it presents a given sequence.
+
 All native pins remain present when AXI-Lite or set selection is disabled;
 disabled outputs may be unspecified. Placed in a composite, the kernel sits on
 an input, an output and (with several sets) a set-selector stream; its AXI-Lite
@@ -33,6 +40,7 @@ from finn.core.space import (
     Rejected,
     constraint,
     derived,
+    divisors_of,
     reject,
     view,
 )
@@ -42,6 +50,7 @@ from finn.dataflow.datatypes import (
     ordinary_integer_bounds,
     resolve_qonnx_datatype_name,
 )
+from finn.dataflow.schedule import Index, Schedule
 from finn.dataflow.traversal import BeatSequence, vector_major
 from finn.kernels.artifacts.abi import Bus, Endpoint, Member, Signal, StandardProtocol
 from finn.kernels.artifacts.contribution_types import CopiedSource
@@ -54,8 +63,10 @@ from finn.kernels.datatypes.semantics import (
     THRESHOLD_TABLE,
     ThresholdTable,
 )
-from finn.kernels.port import GivenPort
+from finn.kernels.port import AxiStreamPort
 from finn.kernels.streams import Stream
+
+c = Index("c")
 
 
 class ThresholdingAxiKernel(Kernel):
@@ -86,7 +97,16 @@ class ThresholdingAxiKernel(Kernel):
         bits = 1 + (candidate - 1).bit_length()
         return resolve_qonnx_datatype_name(f"INT{bits}")
 
-    pe: int = Param()
+    @derived
+    def channels(self) -> int | Rejected:
+        """C, the table's: known without a stream, so a flat build has its fold domain."""
+        table = self.thresholds
+        if not table or not table[0]:
+            return reject("threshold-shape", "a nonempty threshold table is required")
+        return len(table[0])
+
+    # PE channels a beat; PE above C would fold rows into the lanes, not modelled yet.
+    pe: int = Decision(domain=divisors_of(channels))
     # Where a parent places it: its streams, and the control
     # bus that exports its AXI-Lite interface when thresholds are runtime-writable.
     input_stream: Stream = Param(required=False)
@@ -139,18 +159,6 @@ class ThresholdingAxiKernel(Kernel):
         return True
 
     @constraint
-    def folding_supported(self) -> bool | Rejected:
-        table, pe = self.thresholds, self.pe
-        if not table or not table[0] or not 1 <= pe <= 0xFFFFFFFF:
-            return reject(
-                "threshold-shape", "nonempty channels and positive native PE are required"
-            )
-        channels = len(table[0])
-        if channels % pe and pe % channels:
-            return reject("threshold-folding", "channels must divide PE or PE must divide channels")
-        return True
-
-    @constraint
     def memory_supported(self) -> bool | Rejected:
         if not all(
             0 <= value <= 0xFFFFFFFF for value in (self.depth_trigger_bram, self.depth_trigger_uram)
@@ -184,7 +192,6 @@ class ThresholdingAxiKernel(Kernel):
     admission = ConstraintGroup(
         types_supported,
         table_supported,
-        folding_supported,
         memory_supported,
         bias_supported,
         configuration_supported,
@@ -235,27 +242,20 @@ class ThresholdingAxiKernel(Kernel):
         return set_index_dtype(len(self.thresholds))
 
     @derived
-    def input_sequence(self) -> BeatSequence | Rejected:
-        """Row-major, PE consecutive channels a beat, channels the innermost axis.
-
-        PE above the channel count would fold rows into the lanes as well, which
-        needs rows divisible by PE / C; that is not modelled yet.
-        """
-        shape, pe, channels = self.input_stream.tensor.shape, self.pe, len(self.thresholds[0])
-        if shape[-1] != channels or channels % pe:
-            return reject(
-                "threshold-stream-form",
-                f"the input must walk its {channels} channels innermost, PE={pe} per beat",
-            )
-        return BeatSequence(vector_major(shape, pe))
+    def indices(self) -> tuple[Index, ...]:
+        """The input's axes: any leading ones, then the channels ``c``, innermost."""
+        rank = len(self.input_stream.tensor.shape)
+        return (*(Index(f"a{axis}") for axis in range(rank - 1)), c)
 
     @derived
-    def output_sequence(self) -> BeatSequence | Rejected:
-        """The input's order, over a tensor of the input's shape."""
-        sequence = self.input_sequence
-        if self.output_stream.tensor.shape != sequence.form.shape:
-            return reject("threshold-stream-form", "the output keeps the input's shape")
-        return sequence
+    def folds(self) -> dict[Index, int]:
+        return {c: self.pe}
+
+    @derived
+    def schedule(self) -> Schedule | Rejected:
+        """Row-major over the input's axes, ``c`` (the table's C) folded by PE innermost."""
+        indices = self.indices
+        return self.bound_schedule(indices, self.folds, extents={c: self.channels})
 
     @derived
     def set_sequence(self) -> BeatSequence | Rejected:
@@ -263,27 +263,32 @@ class ThresholdingAxiKernel(Kernel):
         shape = self.set_stream.tensor.shape
         if len(self.thresholds) < 2:
             return reject("threshold-set-stream", "a single threshold set takes no set stream")
-        if shape != (self.input_sequence.form.beats,):
+        if shape != (self.input.presented.form.beats,):
             return reject("threshold-set-stream", "each input beat needs one set index")
         return BeatSequence(vector_major(shape, 1))
 
-    input = GivenPort(
+    input = AxiStreamPort(
         name="s_axis",
         endpoint=Endpoint.TARGET,
         stream=input_stream,
-        sequence=input_sequence,
+        schedule=schedule,
+        folds=folds,
+        index=indices,
+        lanes=(c,),
         dtype=input_dtype,
-        idle_lanes=pe,
     )
-    output = GivenPort(
+    output = AxiStreamPort(
         name="m_axis",
         endpoint=Endpoint.INITIATOR,
         stream=output_stream,
-        sequence=output_sequence,
+        schedule=schedule,
+        folds=folds,
+        index=indices,
+        lanes=(c,),
         dtype=result_dtype,
-        idle_lanes=pe,
     )
-    set = GivenPort(
+    # The set port indexes beats (``c``'s folds), which no index of a tensor expresses.
+    set = AxiStreamPort(
         name="s_axis_set",
         endpoint=Endpoint.TARGET,
         stream=set_stream,

@@ -6,7 +6,7 @@
 One declaration supplies the pins and the packing. Scalar encodings keep their
 QONNX widths; only the complete beat is padded to a byte boundary. This describes
 the interface of a core, not a converter that changes its RTL implementation.
-A kernel's ``StreamPort`` (``finn.kernels.port``) builds one from its lanes.
+A kernel's ``AxiStreamPort`` (``finn.kernels.port``) builds one from its lanes.
 """
 
 from __future__ import annotations
