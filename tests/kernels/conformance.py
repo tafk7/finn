@@ -18,7 +18,9 @@ each sample it
 3. checks the model: every port's traversal covers its tensor, a scheduled
    port presents the schedule's beats less the ones it drops, each boundary
    presents its port's traversal (an input's ``unreplayed``), and
-   ``parameters()`` names exactly the module's parameters;
+   ``parameters()`` names exactly the module's parameters, and with its
+   outputs unplaced the kernel still states every output element (a
+   producer's element never reads its own output stream);
 4. given an ``xsim`` directory, streams random integers in each input's range
    through the design, free and stalled, and compares every output with
    ``reference``: each input packed in the order its boundary presents, each
@@ -39,8 +41,8 @@ is committed, a Param is given (a fold that is still a Param). The adapter
 sample reuses the middle configuration.
 
 An output given as a shape takes its element from the kernel: its port's
-element with that output unplaced. A kernel whose port takes its stream's
-element, or that cannot be built without that stream, is given a ``Tensor``.
+element with that output unplaced. An output given as a ``Tensor`` (a test
+that means to fix it) is checked against that element all the same.
 
 ``reference`` maps named input arrays to named output arrays.
 
@@ -151,6 +153,7 @@ def conformance(
         with tempfile.TemporaryDirectory() as scratch:
             names = _check_rtl(family, sample, requirements, Path(scratch))
         _check_model(point, family, sample, inputs, outputs, requirements, names)
+        _check_unplaced_outputs(point, family, sample, inputs, outputs, choices, facts)
         if xsim is not None:
             directory = xsim / f"{index}-{re.sub(r'[^A-Za-z0-9_.=-]+', '_', sample.label)}"
             failures += _simulate(
@@ -483,6 +486,34 @@ def _check_model(
         assert declared == names, (
             f"{where}: parameters() names {sorted(declared - names)} the module does not "
             f"declare, and omits {sorted(names - declared)}"
+        )
+
+
+def _check_unplaced_outputs(
+    point: Any,
+    family: type[Kernel],
+    sample: Sample,
+    inputs: Mapping[str, Tensor],
+    outputs: Outputs,
+    choices: Mapping[str, object],
+    facts: Mapping[str, object],
+) -> None:
+    """With its outputs unplaced, the kernel still states every output element, the same.
+
+    A producer's element reads its kernel's facts, choices and input elements,
+    never its own output stream: a compiler infers output types node by node.
+    """
+    where, ports = _where(family, sample), _ports(family)
+    probe = getattr(_committed(family, sample.folds, inputs, EMPTY, choices, facts), KERNEL)
+    placed = _ends(point, family, sample, list(outputs))
+    for name in outputs:
+        port = getattr(probe, ports[name])
+        stated = port.query(type(port).element)
+        assert isinstance(stated, Available), (
+            f"{where}: {ports[name]} states no element with {name} unplaced: {describe((stated,))}"
+        )
+        assert stated.value == placed[name].element, (
+            f"{where}: {ports[name]} states {stated.value} unplaced, {placed[name].element} placed"
         )
 
 

@@ -73,7 +73,7 @@ ROWS, REDUCTION, OUTPUTS = 2, 6, 4
 
 
 def dotp(family: type[Any], dsp: DspBlock, bits: int, form: Form = Form.DENSE) -> dict[str, Any]:
-    """Y = X @ W, or per channel (depthwise); the result element is the stream's until A6."""
+    """Y = X @ W, or per channel (depthwise); the accumulator type is the parent's fact."""
     a = w = DataType[f"INT{bits}"]
     depthwise = form is Form.DEPTHWISE
     reduction = 3 if depthwise else REDUCTION
@@ -89,12 +89,15 @@ def dotp(family: type[Any], dsp: DspBlock, bits: int, form: Form = Form.DENSE) -
             "x_stream": Tensor(x_shape, ScalarEncoding(a)),
             "w_stream": Tensor((reduction, OUTPUTS), ScalarEncoding(w)),
         },
-        outputs={
-            "y_stream": Tensor((ROWS, OUTPUTS), ScalarEncoding(exact_result_dtype(reduction, a, w)))
-        },
+        outputs={"y_stream": (ROWS, OUTPUTS)},
         reference=reference,
         choices={"compute_pumping": False},
-        facts={"target_dsp": dsp, "target_period_ns": 5.0, "form": form},
+        facts={
+            "target_dsp": dsp,
+            "target_period_ns": 5.0,
+            "form": form,
+            "result_dtype": exact_result_dtype(reduction, a, w),
+        },
     )
 
 
@@ -258,15 +261,14 @@ MATRICES = (2, 6, 6)
 def transpose() -> dict[str, Any]:
     """Rows in, columns out: the same tensor in another order, so the reference is identity.
 
-    Its output stream is required, so the harness cannot read the element with it
-    unplaced: the output is given a Tensor. The stalled input (and a ``vpc``
+    The stalled input (and a ``vpc``
     feeding the adapter sample) lets the output catch up with the input, which
     FinnLib's ``inner_shuffle`` survives only with its page-guard fix.
     """
     return dict(
         family=TransposeKernel,
         inputs={"input_stream": tensor(MATRICES, "INT4")},
-        outputs={"output_stream": tensor(MATRICES, "INT4")},
+        outputs={"output_stream": MATRICES},
         reference=lambda input_stream: {"output_stream": input_stream},
         folds=tuple({"simd": simd} for simd in (1, 3, 6)),
         choices={"ram_style": "auto"},

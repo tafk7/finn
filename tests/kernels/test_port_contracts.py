@@ -87,6 +87,7 @@ def placed(
             target_dsp=DspBlock.DSP58,
             target_period_ns=5.0,
             form=form,
+            result_dtype=R,
             x_stream=a,
             w_stream=w_s,
             y_stream=r,

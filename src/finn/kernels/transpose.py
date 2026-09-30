@@ -61,8 +61,8 @@ class TransposeKernel(Kernel):
     version = "1"
     module = "inner_shuffle"
 
-    input_stream: Stream = Param()
-    output_stream: Stream = Param()
+    input_stream: Stream = Param(required=False)
+    output_stream: Stream = Param(required=False)
     ram_style: str = Decision(values=("auto", "distributed", "block", "ultra"))
 
     rows = extent_of(i)  # I

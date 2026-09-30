@@ -54,10 +54,20 @@ def layered(*, adaptable: bool = True):
         w2 = Stream(tensor=Tensor((HIDDEN, OUTPUTS), ScalarEncoding(W)))
         y = Stream(tensor=Tensor((ROWS, OUTPUTS), ScalarEncoding(Y)), port="out0_V")
         first = PackedDotpKernel(
-            target_dsp=DspBlock.DSP48E2, target_period_ns=5.0, x_stream=x, w_stream=w1, y_stream=h
+            target_dsp=DspBlock.DSP48E2,
+            target_period_ns=5.0,
+            result_dtype=H,
+            x_stream=x,
+            w_stream=w1,
+            y_stream=h,
         )
         second = PackedDotpKernel(
-            target_dsp=DspBlock.DSP48E2, target_period_ns=5.0, x_stream=h, w_stream=w2, y_stream=y
+            target_dsp=DspBlock.DSP48E2,
+            target_period_ns=5.0,
+            result_dtype=Y,
+            x_stream=h,
+            w_stream=w2,
+            y_stream=y,
         )
 
         # One pass of each layer's weights, in the order that layer reads them.

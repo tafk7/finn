@@ -143,6 +143,19 @@ def test_a_composite_on_a_stream_of_another_tensor_is_refused():
     assert {finding.code for finding in refused.findings} == {"composite-tensor"}
 
 
+def test_a_matmul_on_a_stream_of_another_element_is_refused():
+    """The result type MatMul states (its core's ``result_dtype``) meets the stream's."""
+
+    class Widened(Design):
+        x = Stream(tensor=Tensor((ROWS, INPUTS), ScalarEncoding(A)), port="in0_V")
+        y = Stream(tensor=Tensor((ROWS, HIDDEN), ScalarEncoding(DataType["INT32"])), port="out0_V")
+        first = matmul(INPUTS, HIDDEN, A, W1, x_stream=x, y_stream=y)
+
+    refused = design_space(Widened()).first.query(Composite.seated)
+    assert isinstance(refused, Rejected)
+    assert {finding.code for finding in refused.findings} == {"composite-tensor"}
+
+
 @requires_xsim
 @pytest.mark.parametrize("fused", (True, False))
 def test_the_design_computes_in_xsim_fused_or_not(tmp_path: Path, fused: bool) -> None:

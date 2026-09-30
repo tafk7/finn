@@ -571,7 +571,13 @@ adapters 32 passes (26 before, plus the 6 folded `inner_shuffle` cases).
 - Identity dump identical to `evidence/identity-norom.txt` (its MatMul
   configurations do not read the new keys).
 
-A5_XSIM
+- XSim from `7dafec804`, as observed: every conformance case passes (the
+  migrated thresholding, eltwise, transpose and memstream included), both
+  planted errors fail in every sample and mode, the rest of `tests/kernels`
+  826 passed; numeric sweeps at the baseline counts (dense 26, fifo-packed 4,
+  fifo-int8-pumped 4, depthwise 22, memstream 14, memstream-depthwise 12,
+  pumped-memory 14, writable 14, sets 14, dotp 27, dotp-stress 17, adapters
+  32); no failures.
 
 ### Deviations
 
@@ -581,3 +587,39 @@ A5_XSIM
 - memstream's idle lane count uses a field index (`FIELD`) with the port's
   `folds`, since G0.3's rule (idle lanes from the folds of the lane indices)
   needs an index and a given sequence has none.
+
+## A6: producers state their element
+
+### What landed
+
+- **The rule, in the port.** An `AxiStreamPort` that produces (an initiator)
+  must give `dtype`; without it its element is refused (`port-element: a
+  producer states its dtype`). Every producer states it from its kernel's
+  facts, choices and input elements: dotp from a new `result_dtype` fact
+  (MatMul binds its `result_type`), thresholding its `result_dtype`, eltwise
+  its `result_dtype`, transpose its input's element, memstream its `dtype`.
+- **One code for an element mismatch at a stream.** `Stream.compatible` no
+  longer repeats `stream-element` for a mismatch `well_formed` already refuses
+  as `stream-tensor`. The physical `compatibility` function keeps the code for
+  standalone contract checks.
+- **Conformance checks the rule** (`_check_unplaced_outputs`): each sample is
+  built again with only its inputs placed and its folds and choices
+  committed, and every output port must state its element, equal to the one
+  placed. Outputs are now given as shapes for every case but the planted-error
+  kernels (dotp and transpose no longer need a `Tensor`: the D1 deviation is
+  retired).
+- **Transpose's streams are optional** (`required=False`, like every other
+  kernel's), so it can be built with its output unplaced.
+- **The graph shim's inference is checked**: it infers the same exact result
+  type MatMul states, and a stream of another element is refused where MatMul
+  seats (`composite-tensor`; new test on a hand-made stream).
+- **Tests**: the pool test kernel states its output type; a producer without
+  `dtype` is refused; every direct dotp placement passes `result_dtype`.
+
+### Evidence, as observed
+
+- Fast gates (Vivado off `PATH`, `FORCE_COLOR` unset): Space 454; kernels 834
+  passed, 25 skipped; graph 4 + 2; dataflow 61; ruff and mypy clean.
+- Identity dump identical to `evidence/identity-norom.txt`.
+
+A6_XSIM

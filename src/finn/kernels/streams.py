@@ -241,7 +241,11 @@ class Stream(LogicalStream):
 
     @constraint
     def compatible(self) -> bool | Rejected:
-        """Each hop, source through every stage to sink, connects directly."""
+        """Each hop, source through every stage to sink, connects directly.
+
+        An element mismatch is ``well_formed``'s (``stream-tensor``: each end
+        against the tensor), so it is not reported here a second time.
+        """
         ends = self.endpoints
         found: list[Mismatch] = []
         current, current_top = ends.source, ends.source_owner is None
@@ -254,7 +258,7 @@ class Stream(LogicalStream):
         found += compatibility(
             current, ends.sink, source_is_top=current_top, sink_is_top=ends.sink_owner is None
         )
-        return _refusal(found)
+        return _refusal([item for item in found if item.code != "stream-element"])
 
     @derived
     def link(self) -> Connection:

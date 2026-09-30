@@ -76,6 +76,7 @@ def test_a_core_declares_ports_folds_and_facts_and_the_base_derives_the_module()
         "compute.target_dsp",
         "compute.target_period_ns",
         "compute.reshape_activations",
+        "compute.result_dtype",
         "compute.narrow_weights",
         "compute.x_stream",
         "compute.w_stream",

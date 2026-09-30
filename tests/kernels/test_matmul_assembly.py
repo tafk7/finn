@@ -269,6 +269,7 @@ def test_matmul_honors_the_child_physical_view_not_just_its_raw_module(monkeypat
             target_dsp=MatMulKernel.target_dsp,
             target_period_ns=MatMulKernel.target_period_ns,
             reshape_activations=MatMulKernel.dense_view,
+            result_dtype=MatMulKernel.result_type,
             x_stream=MatMulKernel.activations,
             w_stream=MatMulKernel.weight_stream,
             y_stream=MatMulKernel.results,

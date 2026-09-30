@@ -290,6 +290,7 @@ class MatMulKernel(Composite):
         target_dsp=target_dsp,
         target_period_ns=target_period_ns,
         reshape_activations=dense_view,
+        result_dtype=result_type,
         x_stream=activations,
         w_stream=weight_stream,
         y_stream=results,

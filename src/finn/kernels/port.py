@@ -21,7 +21,8 @@ outputs unused.
   or before (``holds``) and the reduction its marker closes (``closes``),
   through a row-major view when ``reshaped``; or, for a traversal no schedule
   derives, a given ``sequence``. Its element is its ``dtype`` when given
-  (its stream refuses another) and otherwise its stream's; ``admits`` is the
+  (its stream refuses another; a producer must give it) and otherwise its
+  stream's; ``admits`` is the
   integer policy its hardware takes. It is an AXIS bus named ``name``, with a
   ``TLAST`` when what it presents carries a marker; or, given ``signals``
   (data, valid, ready), those ready/valid pins, without a marker. Placed with
@@ -167,7 +168,10 @@ class AxiStreamPort(Port):
     tensor (``ACCESS``), from which its kernel binds its indices' extents.
 
     Its element is ``dtype`` when given, placed or idle (its stream refuses
-    another), and otherwise its stream's. ``admits`` is the integer policy its
+    another), and otherwise its stream's. A producer (an initiator) must give
+    it, from its kernel's facts, choices and input elements, never from its
+    own output stream: a compiler asks a kernel for its output types before
+    the downstream tensor exists. ``admits`` is the integer policy its
     hardware takes. Idle (no stream), it carries the lanes of the ``folds`` of
     its ``lanes`` indices. It is an AXIS bus named ``name``, with a ``TLAST``
     when what it presents carries a marker; or, given ``signals`` (data, valid,
@@ -240,6 +244,9 @@ class AxiStreamPort(Port):
         dtype = self.dtype
         if dtype is not None:
             return ScalarEncoding.admit(dtype)
+        if self.endpoint is Endpoint.INITIATOR:
+            # From facts, choices and input elements only: an op asks before its output exists.
+            return reject("port-element", f"{self.name}: a producer states its dtype")
         if self.idle:
             return reject("port-element", f"{self.name}: an idle port states its dtype")
         return self.stream.tensor.element

@@ -48,6 +48,7 @@ class Activated(Design):
     compute = PackedDotpKernel(
         target_dsp=DspBlock.DSP48E2,
         target_period_ns=5.0,
+        result_dtype=R,
         x_stream=activations,
         w_stream=weights,
         y_stream=results,

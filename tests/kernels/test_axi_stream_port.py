@@ -81,6 +81,7 @@ class Pool(Kernel):
         index=(b, c),
         lanes=(c,),
         reduces=(s,),
+        dtype=DataType["INT8"],
     )
 
     def parameters(self) -> Mapping[str, int | str]:
@@ -126,7 +127,6 @@ def test_an_idle_port_carries_the_lanes_of_its_folds() -> None:
     class Half(Space):
         x = stream((1, 4, 8), "INT4", "in0_V")
         kernel = Pool(x_stream=x)
-        kernel.y.dtype = DataType["INT8"]
 
     point = commit(design_space(Half()), {"kernel.pe": 2})
     assert point.kernel.y.idle and point.kernel.y.lane_count == 2
@@ -183,7 +183,7 @@ def test_a_stated_element_is_the_ports_and_its_stream_refuses_another() -> None:
         x = stream((1, 4, 8), "INT4", "in0_V")
         y = stream((1, 8), "INT8", "out0_V")
         kernel = Pool(x_stream=x, y_stream=y)
-        kernel.y.dtype = DataType["INT9"]
+        kernel.y.dtype = DataType["INT9"]  # a parent may pin what the producer states
 
     point = commit(design_space(Stated()), {"kernel.pe": 4})
     assert point.kernel.y.element == ScalarEncoding(DataType["INT9"])
@@ -201,6 +201,7 @@ def test_dotp_binds_from_its_ports_through_the_dense_view() -> None:
             reshape_activations=True,
             target_dsp=DspBlock.DSP58,
             target_period_ns=5.0,
+            result_dtype=DataType["INT9"],
             x_stream=x,
             w_stream=w,
             y_stream=y,
@@ -215,6 +216,7 @@ def test_dotp_binds_from_its_ports_through_the_dense_view() -> None:
         compute = PackedDotpKernel(
             target_dsp=DspBlock.DSP58,
             target_period_ns=5.0,
+            result_dtype=DataType["INT9"],
             x_stream=x,
             w_stream=Placed.w,
             y_stream=Placed.y,
@@ -224,3 +226,26 @@ def test_dotp_binds_from_its_ports_through_the_dense_view() -> None:
     assert codes(wide.query(PackedDotpKernel.extents)) == {
         ("kernel-extents", "k is 14 (x axis 1) and 12 (w axis 0)")
     }
+
+
+def test_a_producer_states_its_element() -> None:
+    class Silent(Pool):
+        id = "test.accpool.silent"
+        y = AxiStreamPort(
+            name="m_axis_output",
+            endpoint=Endpoint.INITIATOR,
+            stream=Pool.y_stream,
+            schedule=Pool.schedule,
+            index=(b, c),
+            lanes=(c,),
+            reduces=(s,),
+        )
+
+    class Placed(Space):
+        x = stream((1, 4, 8), "INT4", "in0_V")
+        y = stream((1, 8), "INT8", "out0_V")
+        kernel = Silent(x_stream=x, y_stream=y)
+
+    point = commit(design_space(Placed()), {"kernel.pe": 4})
+    ((code, message),) = codes(point.kernel.y.query(AxiStreamPort.element))
+    assert code == "port-element" and message.startswith("m_axis_output: a producer states")

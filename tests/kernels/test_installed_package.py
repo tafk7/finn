@@ -102,7 +102,12 @@ class PlacedDotp(Space):
     w = Stream(tensor=Tensor((2, 2), ScalarEncoding(DataType["INT3"])), port="in1_V")
     y = Stream(tensor=Tensor((1, 2), ScalarEncoding(DataType["INT8"])), port="out0_V")
     compute = PackedDotpKernel(
-        target_dsp=DspBlock.DSP48E2, target_period_ns=5.0, x_stream=x, w_stream=w, y_stream=y
+        target_dsp=DspBlock.DSP48E2,
+        target_period_ns=5.0,
+        result_dtype=DataType["INT8"],
+        x_stream=x,
+        w_stream=w,
+        y_stream=y,
     )
 
 

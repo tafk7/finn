@@ -63,7 +63,7 @@ def placed_dotp(
         x = Stream(tensor=Tensor(x_shape, ScalarEncoding(activation_dtype)), port="in0_V")
         w = Stream(tensor=Tensor((k, n), ScalarEncoding(weights_dtype)), port="in1_V")
         y = Stream(tensor=Tensor((rows, n), ScalarEncoding(result_dtype)), port="out0_V")
-        compute = family(x_stream=x, w_stream=w, y_stream=y, **facts)
+        compute = family(x_stream=x, w_stream=w, y_stream=y, result_dtype=result_dtype, **facts)
 
     choices = {
         key: value

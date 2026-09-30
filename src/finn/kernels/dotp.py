@@ -27,9 +27,10 @@ and its ``schedule`` walks ``m``, then ``n``, then ``k`` innermost; every
 port's beat sequence derives from it. ``reshape_activations`` reads (M, K, N)
 activations as (M, K * N): a densely realized depthwise operation.
 
-The result's element is the accumulator encoding the results stream carries,
-not a proof that an arbitrary frame fits it: the parent must bound each
-frame's accumulation to it (including intermediate sums).
+The result's element is ``result_dtype``, the accumulator encoding its parent
+chooses (its stream refuses another), not a proof that an arbitrary frame fits
+it: the parent must bound each frame's accumulation to it (including
+intermediate sums).
 """
 
 from __future__ import annotations
@@ -55,7 +56,9 @@ from finn.dataflow.stream import Stream
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.contribution_types import CopiedSource
 from finn.kernels.base import Clocking, Kernel, extent_of
+from finn.dataflow.datatypes import QONNXDataType
 from finn.kernels.datatypes.domains import Integer
+from finn.kernels.datatypes.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
 from finn.kernels.port import AxiStreamPort
 from finn.kernels.target import DspBlock, dsp_widths
 
@@ -84,6 +87,9 @@ class DotpAxiKernel(Kernel):
     target_dsp: DspBlock = Param()
     target_period_ns: float = Param()
     reshape_activations: bool = Param(default=False)
+    # The accumulator encoding it produces: its parent's choice (MatMul binds its
+    # result type), so that it is known before the results stream exists.
+    result_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
     # The streams dotp sits on: reference inputs, each a Stream placed beside it.
     x_stream: Stream = Param(required=False)
     w_stream: Stream = Param(required=False)
@@ -141,6 +147,7 @@ class DotpAxiKernel(Kernel):
         index=(m, n),
         lanes=(n,),
         reduces=(k,),
+        dtype=result_dtype,
     )
 
     @constraint
