@@ -21,8 +21,8 @@ share a schedule agree by construction.
 
 - Each index's beat part becomes a beat loop, in the schedule's order; one the
   port does not read steps by zero, a replay.
-- ``lanes`` orders the lane parts a port carries, outer first (field zero is
-  the innermost): the hardware's field convention. An index with lanes that the
+- ``lanes`` orders the lane parts a port carries, outer first (lane zero is
+  the innermost): the hardware's convention. An index with lanes that the
   port does not carry must not move its position: a broadcast.
 - ``reduces`` lists the indices whose beats a port is presented *after* (an
   output closing a reduction), ``holds`` those it is presented *before* (an
@@ -239,7 +239,7 @@ class Schedule:
 
         for i in self.beats:
             if self.factor(i) > 1 and i not in lanes and stride(i):
-                raise Refused(f"{i!r}'s lanes move the position; carry them as a field")
+                raise Refused(f"{i!r}'s lanes move the position; carry them as lanes")
         dropped = (*reduces, *holds)
         for i in dropped:
             if stride(i):
@@ -248,9 +248,9 @@ class Schedule:
         beats = [
             Loop(self.steps(i), self.factor(i) * stride(i)) for i in self.beats if i not in dropped
         ]
-        fields = [Loop(self.factor(i), stride(i)) for i in lanes]
+        lane_loops = [Loop(self.factor(i), stride(i)) for i in lanes]
         try:
-            return Traversal(shape, beats, fields)
+            return Traversal(shape, beats, lane_loops)
         except ValueError as error:
             raise Refused(str(error)) from error
 

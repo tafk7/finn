@@ -107,7 +107,7 @@ def test_dense_forms_are_mvau_s_hand_written_ones(
     assert activation == vector_major((M, K), SIMD).replayed(NF, inner_beats=SF)
     weights = schedule.present((K, N), Form.DENSE.w, lanes=(n, k))
     # Stored (k, n), the weights present MVAU's tile order: the same positions,
-    # beat for beat and field for field, as the (n, k) tile, transposed.
+    # beat for beat and lane for lane, as the (n, k) tile, transposed.
     reference = tile(N, K, PE, SIMD).repeated(M)
     assert [tuple(p[::-1] for p in beat) for beat in weights.positions()] == list(
         reference.positions()
@@ -127,7 +127,7 @@ def test_dense_activations_are_broadcast_to_the_output_lanes() -> None:
     # X does not read n, so n's lanes need not be carried.
     schedule.present((2, 4), Form.DENSE.x, lanes=(k,))
     # W reads n, so they must be.
-    with pytest.raises(Refused, match="field"):
+    with pytest.raises(Refused, match="carry them as lanes"):
         schedule.present((4, 4), Form.DENSE.w, lanes=(k,))
 
 
@@ -216,8 +216,8 @@ def test_thresholding_and_a_broadcast_operand() -> None:
     # A channel vector broadcast over rows, and a per-row scalar within each beat.
     assert schedule.present((C,), (c,), lanes=(c,)) == vector_major((C,), PE).repeated(M)
     assert schedule.present((M,), (m,)) == Traversal((M,), (Loop(M, 1), Loop(C // PE, 0)), ())
-    # An index with lanes that moves the position must be carried as a field.
-    with pytest.raises(Refused, match="field"):
+    # An index with lanes that moves the position must be carried as lanes.
+    with pytest.raises(Refused, match="carry them as lanes"):
         schedule.present((M, C), (m, c))
 
 

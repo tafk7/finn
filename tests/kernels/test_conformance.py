@@ -179,7 +179,7 @@ co, ci = Index("co"), Index("ci")
 
 
 def split_ports(schedule: Any, lanes: tuple[Index, ...]) -> tuple[AxiStreamPort, AxiStreamPort]:
-    """Input and output reading channel ``c = 3 co + ci``, fields in ``lanes`` order."""
+    """Input and output reading channel ``c = 3 co + ci``, lanes in ``lanes`` order."""
     input = AxiStreamPort(
         name="s_axis",
         endpoint=Endpoint.TARGET,
@@ -202,7 +202,7 @@ def split_ports(schedule: Any, lanes: tuple[Index, ...]) -> tuple[AxiStreamPort,
 
 
 class LanesInOrder(ThresholdingAxiKernel):
-    """PE = C: all channels a beat, field ``3 co + ci`` holding channel ``3 co + ci``."""
+    """PE = C: all channels a beat, lane ``3 co + ci`` holding channel ``3 co + ci``."""
 
     id = "test.thresholding_axi.lanes_in_order"
 
@@ -216,7 +216,7 @@ class LanesInOrder(ThresholdingAxiKernel):
 
 
 class LanesReversed(LanesInOrder):
-    """The same module declared with its lane levels swapped: field ``2 ci + co``."""
+    """The same module declared with its lane levels swapped: lane ``2 ci + co``."""
 
     id = "test.thresholding_axi.lanes_reversed"
     input, output = split_ports(LanesInOrder.schedule, (ci, co))

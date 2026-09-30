@@ -162,11 +162,11 @@ class Composition:
         produced, consumed = source.contract, sink.contract
         src, dst = produced.transport, consumed.transport
         bits = produced.element.bits
-        for field_index, source_field in enumerate(lane_permutation(produced, consumed)):
+        for lane, source_lane in enumerate(lane_permutation(produced, consumed)):
             self._wires.append(
                 PhysicalWire(
-                    _slice(sink.owner, dst.data, bits, field_index * bits),
-                    _slice(source.owner, src.data, bits, source_field * bits),
+                    _slice(sink.owner, dst.data, bits, lane * bits),
+                    _slice(source.owner, src.data, bits, source_lane * bits),
                 )
             )
         payload = produced.payload_bits

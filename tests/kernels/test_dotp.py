@@ -122,7 +122,7 @@ def test_physical_framing_follows_the_schedule_and_only_activation_has_last():
     assert point.w.axis.elements_per_beat == 15
     assert point.y.axis.elements_per_beat == 3
     assert point.x.axis.last and not point.w.axis.last and not point.y.axis.last
-    # Weight field p*SIMD+s is low-field-first, matching the native RTL array.
+    # Weight lane p*SIMD+s sits lane zero lowest, matching the native RTL array.
     assert [field.bit_offset for field in point.w.axis.payload.fields] == list(range(0, 45, 3))
 
 

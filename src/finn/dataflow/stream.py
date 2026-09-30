@@ -8,7 +8,7 @@ carries one ``tensor``, supplied by its composite; each end presents its own
 ``BeatSequence`` of that tensor. The stream reads its two ends (``ends``: the
 source and the sink, each with its element and sequence) and derives the
 ``plan`` between them (``finn.dataflow.plan``): nothing, when they connect
-directly or differ only in field order, otherwise reorders, width
+directly or differ only in lane order, otherwise reorders, width
 conversions and marker synthesis. A plan no chain of steps carries out is
 refused (``stream-plan``), as is any plan on a stream whose ``adaptable``
 input is False.

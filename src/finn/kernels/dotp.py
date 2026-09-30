@@ -10,11 +10,11 @@ chooses between them with a Decision over kernels; each refuses what its core
 cannot build. ``DotpAxiKernel`` is their shared declaration.
 
 dotp computes ``Y[m, n] = sum_k X * W`` in the ``form`` (``finn.dataflow.gemm``)
-its parent gives. ``DENSE``: each activation beat carries SIMD fields,
+its parent gives. ``DENSE``: each activation beat carries SIMD lanes,
 broadcast to the PE accumulators. ``DEPTHWISE``: each activation beat carries
 SIMD window positions of PE channels, channel fastest, and lane p accumulates
 channel p alone; only the INT8 core reads it. Each weight beat carries PE *
-SIMD fields, SIMD varying fastest; each result beat PE fields. Fields are
+SIMD lanes, SIMD varying fastest; each result beat PE lanes. Lanes are
 packed low first; only the complete beat is padded to a byte boundary.
 Activation TLAST closes each reduction and produces one result beat.
 
@@ -115,7 +115,7 @@ class DotpAxiKernel(Kernel):
 
     @derived
     def x_lanes(self) -> tuple[Index, ...]:
-        """dotp_axi's activation fields: SIMD alone, or ``s * PE + p`` depthwise."""
+        """dotp_axi's activation lanes: SIMD alone, or ``s * PE + p`` depthwise."""
         return (k, n) if self.form is Form.DEPTHWISE else (k,)
 
     x = AxiStreamPort(

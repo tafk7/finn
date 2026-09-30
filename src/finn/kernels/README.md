@@ -168,7 +168,7 @@ in0_V ─activations─[adapter: input_gen]─► compute ─results─► out0_
 
 A stream compares what its source presents with what its sink requires and
 derives a `plan` (`finn.dataflow.plan`): empty when the two connect directly
-(a field permutation is wires), otherwise reorders (replay included), width
+(a lane permutation is wires), otherwise reorders (replay included), width
 conversions and marker synthesis. A non-empty plan opens the stream's
 `adapter` Decision over seven fixed chains of FinnLib `input_gen` and `vpc`
 (`finn.kernels.adapters`); each refuses a plan it does not carry out, so one
@@ -363,7 +363,7 @@ A `StreamContract` (`physical/contract.py`) adds the logical sequence to a
 transport: the element encoding, a `Traversal` (`finn.dataflow.traversal`), a
 `Repetition` (`ONCE`, or `CYCLIC` for a free-running source) and periodic marker
 rules (`LevelEnd(k)`). A traversal is a loop nest over the row-major operand:
-`beat_loops` step from beat to beat, `lane_loops` from field to field (field
+`beat_loops` step from beat to beat, `lane_loops` from lane to lane (lane
 zero is least significant), and a stride of zero replays positions. Tiles,
 chunked tiles, transposes and replay are all loop nests; `vector_major` is
 FINN's default order. Traversals are canonical, so equal values present equal
@@ -374,7 +374,7 @@ sequences.
 | Adaptation | Meaning | Realized by |
 |---|---|---|
 | `identity` | same sequence | nothing |
-| `lane_permutation` | same positions per beat, other field order | wires (free) |
+| `lane_permutation` | same positions per beat, other lane order | wires (free) |
 | `reorder` | same lanes, other beat order or replay | `input_gen` / outer shuffle, with derived `DIMS`/`COEFS` |
 | `width_conversion` | same element order, other lane count | data-width converter |
 | `lane_regroup` | the lane axis changes | inner shuffle (banked transpose) |

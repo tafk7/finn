@@ -64,7 +64,7 @@ def test_depthwise_rows_pass_once_with_a_frame_per_window():
     # Nothing is replayed: the stream only closes each window's frame.
     assert configured.activations.plan.steps == (Step.MARKERS,)
     boundary = configured.activations.endpoints.source
-    # Rows, then channel folds, then window folds; field s * PE + p is window
+    # Rows, then channel folds, then window folds; lane s * PE + p is window
     # position s of channel p.
     channel_tile = Traversal.over(
         (2, 9, 4), ((0, 2, 1), (2, 2, 2), (1, 3, 3)), ((1, 3, 1), (2, 2, 1))

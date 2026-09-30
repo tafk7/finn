@@ -66,8 +66,8 @@ from finn.kernels.datatypes.semantics import (
 from finn.kernels.port import AxiStreamPort
 from finn.kernels.streams import Stream
 
-FIELD = Index("field")
-"""The fields of a stored word, one per lane of the consumer's form."""
+LANE = Index("lane")
+"""The lanes of a stored word, one per lane of the consumer's form."""
 
 MEMSTREAM_RAM_STYLES = ("auto", "distributed", "block", "ultra")
 
@@ -218,8 +218,8 @@ class MemStreamKernel(Kernel):
 
     @derived
     def word_factors(self) -> dict[Index, int]:
-        """The lanes of a word: the form's fields, carried by an idle output too."""
-        return {FIELD: self.form.lanes}
+        """The lanes of a word: the form's lanes, carried by an idle output too."""
+        return {LANE: self.form.lanes}
 
     set = AxiStreamPort(
         name="set",
@@ -237,7 +237,7 @@ class MemStreamKernel(Kernel):
         stream=output_stream,
         sequence=output_sequence,
         dtype=dtype,
-        lanes=(FIELD,),
+        lanes=(LANE,),
         factors=word_factors,
         clock="clk",
         reset="rst",

@@ -10,9 +10,9 @@ onto FinnLib modules. The reference here is independent of both: it models
 ``DIMS``, with ``olst[d]`` asserted when loops ``d..`` all complete; a ``vpc``
 regroups the element sequence), runs the realized chain on the source's
 positions, and compares the result with the sink's positions and required
-markers, up to the one fixed field permutation the connection wires. Random
+markers, up to the one fixed lane permutation the connection wires. Random
 pairs cover mismatched lane counts, lane axes, beat orders, replays and
-markers (the plan's mutation probes: NF other than SF, swapped field orders).
+markers (the plan's mutation probes: NF other than SF, swapped lane orders).
 """
 
 from __future__ import annotations
@@ -84,10 +84,10 @@ def check(source: BeatSequence, sink: BeatSequence) -> tuple[str, ...]:
             beats, marks, levels = convert(beats, stage.module), [], ()
     if found:
         wanted = list(sink.form.positions())
-        # A field order that differs is wired by the connection: one fixed
-        # permutation of the fields for every beat.
+        # A lane order that differs is wired by the connection: one fixed
+        # permutation of the lanes for every beat.
         wiring = [beats[0].index(position) for position in wanted[0]]
-        assert [tuple(beat[field] for field in wiring) for beat in beats] == wanted
+        assert [tuple(beat[lane] for lane in wiring) for beat in beats] == wanted
         for rule in sink.markers:
             depth = levels.index(rule)
             asserted = [mark[depth] for mark in marks]

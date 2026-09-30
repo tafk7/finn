@@ -202,7 +202,7 @@ def _presented(source: StreamContract, sink: StreamContract) -> Traversal | None
 
 
 def lane_permutation(source: StreamContract, sink: StreamContract) -> tuple[int, ...]:
-    """Sink field -> source field; the identity unless the lanes are only reordered."""
+    """Sink lane -> source lane; the identity unless the lanes are only reordered."""
     produced = _presented(source, sink)
     if produced is not None:
         verdict = classify(produced, sink.form)

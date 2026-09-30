@@ -23,9 +23,9 @@ ROWS = vector_major((R, K), SIMD)
 REPLAYED = BeatSequence(ROWS.replayed(NF, inner_beats=K // SIMD), markers=(LevelEnd(K // SIMD),))
 
 
-def test_equal_presentations_and_field_orders_need_nothing() -> None:
+def test_equal_presentations_and_lane_orders_need_nothing() -> None:
     assert not plan(BeatSequence(ROWS), BeatSequence(ROWS))
-    # A field permutation is wires, not a step.
+    # A lane permutation is wires, not a step.
     weights = tile(4, 4, 2, 2)
     swapped = Traversal(weights.shape, weights.beat_loops, tuple(reversed(weights.lane_loops)))
     assert plan(BeatSequence(weights), BeatSequence(swapped)).steps == ()

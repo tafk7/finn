@@ -80,7 +80,7 @@ def test_stored_image_has_output_then_reduction_then_pe_simd_order():
     by_output = [[-4, -3, -2, -1], [0, 1, 2, 3], [3, 2, 1, 0], [-1, -2, -3, -4]]
     weights = [list(column) for column in zip(*by_output)]
     built = assembly(weight_delivery=WeightDelivery.MEMSTREAM, weights=weights)
-    # Hand-packed INT3 fields: p0/s0, p0/s1, p1/s0, p1/s1, low first.
+    # Hand-packed INT3 lanes: p0/s0, p0/s1, p1/s0, p1/s1, low first.
     assert built.initializer == (0x22C, 0x6BE, 0xDD3, 0x941)
     assert "in1_V" not in {port.name for port in built.structure.top_abi.ports}
     (memory,) = (

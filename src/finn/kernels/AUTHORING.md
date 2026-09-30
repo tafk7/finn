@@ -43,7 +43,7 @@ extent are refused), or `semantics=` on ordinary values.
    as the RTL walks it. This is the one order the model cannot check; the
    conformance harness does, in simulation.
 4. **Each interface.** One `AxiStreamPort`: the indices it reads (`index`), its
-   lane order (`lanes`, outer first: field zero is the innermost), what it is
+   lane order (`lanes`, outer first: lane zero is the innermost), what it is
    presented after (`reduces`) or before (`holds`), and the reduction its TLAST
    closes (`closes`). A traversal no schedule derives is given as `sequence=`.
 5. **Elements.** A producer states its `dtype` from the kernel's facts, choices

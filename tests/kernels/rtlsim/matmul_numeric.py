@@ -218,7 +218,7 @@ def run(
 
     sf, nf = width // c.simd, c.height // c.pe
     if not dense:
-        # Beats: row, channel fold, window fold; field s * PE + p is X[r, k, c].
+        # Beats: row, channel fold, window fold; lane s * PE + p is X[r, k, c].
         activation_words = [
             _pack(
                 [

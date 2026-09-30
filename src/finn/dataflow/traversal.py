@@ -5,13 +5,13 @@
 
 A ``Traversal`` walks an operand of ``shape`` with two loop nests, both listed
 outer to inner. Each iteration of ``beat_loops`` is one beat; each iteration of
-``lane_loops`` is one field of that beat, field zero first (least significant).
+``lane_loops`` is one lane of that beat, lane zero first (least significant).
 A loop advances the operand's flat row-major index by ``stride`` elements per
 step; a stride of zero repeats (replays) positions. Tiles, chunked tiles,
 transposes, sliding windows and replay are all ordinary loop nests.
 
 Construction canonicalizes the nests, so two traversals are equal exactly when
-they present the same positions in the same beats and fields. ``classify``
+they present the same positions in the same beats and lanes. ``classify``
 compares two traversals of one operand and names the adapter a mismatch needs:
 free lane wiring, a loop-nest reorder with its ``input_gen`` parameters, a width
 conversion, a lane regroup, or none at all.
@@ -137,9 +137,9 @@ class Traversal:
     def beats(self) -> int:
         return prod(loop.extent for loop in self.beat_loops)
 
-    def position(self, beat: int, field: int) -> Position:
+    def position(self, beat: int, lane: int) -> Position:
         flat = 0
-        for loops, index in ((self.beat_loops, beat), (self.lane_loops, field)):
+        for loops, index in ((self.beat_loops, beat), (self.lane_loops, lane)):
             for loop in reversed(loops):
                 index, digit = divmod(index, loop.extent)
                 flat += digit * loop.stride
@@ -151,7 +151,7 @@ class Traversal:
 
     def positions(self) -> Iterator[tuple[Position, ...]]:
         for beat in range(self.beats):
-            yield tuple(self.position(beat, field) for field in range(self.lanes))
+            yield tuple(self.position(beat, lane) for lane in range(self.lanes))
 
     def repeated(self, count: int) -> Traversal:
         """The whole pass presented ``count`` times."""
@@ -166,7 +166,7 @@ class Traversal:
 
 
 def vector_major(shape: Sequence[int], lanes: int) -> Traversal:
-    """FINN's default order: row-major, the innermost axis split into ``lanes`` fields."""
+    """FINN's default order: row-major, the innermost axis split into ``lanes`` lanes."""
     shape = tuple(shape)
     _positive(lanes, "lanes")
     if shape[-1] % lanes:
@@ -230,8 +230,8 @@ def _common_refinement(
 def regrouped(form: Traversal, lanes: int) -> Traversal:
     """The same element sequence, ``lanes`` elements a beat: a width conversion."""
     flat = _canonical((*form.beat_loops, *form.lane_loops))
-    beats, fields = _split_at(flat, lanes)
-    return Traversal(form.shape, beats, fields)
+    beats, lane_loops = _split_at(flat, lanes)
+    return Traversal(form.shape, beats, lane_loops)
 
 
 def _split_at(loops: Sequence[Loop], inner_beats: int) -> tuple[tuple[Loop, ...], tuple[Loop, ...]]:
@@ -298,7 +298,7 @@ def classify(source: Traversal, sink: Traversal) -> Classification:
         if Counter(offsets) == Counter(wanted):
             return Classification(
                 Adaptation.LANE_PERMUTATION,
-                "the same positions in each beat, in another field order",
+                "the same positions in each beat, in another lane order",
                 lane_permutation=tuple(offsets.index(offset) for offset in wanted),
             )
     if source.lane_loops == sink.lane_loops:
@@ -427,7 +427,7 @@ def period(form: Traversal) -> Traversal:
 
 
 def pack(form: Traversal, values: object, bits: int) -> tuple[int, ...]:
-    """Pack an integer operand of ``form.shape`` into one raw word per beat, field zero lowest."""
+    """Pack an integer operand of ``form.shape`` into one raw word per beat, lane zero lowest."""
     _positive(bits, "bits")
     _check_shape(values, form.shape)
     mask = (1 << bits) - 1
@@ -442,7 +442,7 @@ def pack(form: Traversal, values: object, bits: int) -> tuple[int, ...]:
         return item
 
     return tuple(
-        sum((lookup(position) & mask) << (field * bits) for field, position in enumerate(beat))
+        sum((lookup(position) & mask) << (lane * bits) for lane, position in enumerate(beat))
         for beat in form.positions()
     )
 

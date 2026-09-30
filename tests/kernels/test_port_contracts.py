@@ -7,7 +7,7 @@ dotp takes its extents from the streams it sits on, and its folding factors are 
 Decisions; every port presents what its schedule derives, so a wrong lane
 count or a transposed tile can no longer be written into dotp. A producer
 presenting another order is the stream's to judge: its plan names the steps
-and its adapter carries them out, a field order is wires, and a stream
+and its adapter carries them out, a lane order is wires, and a stream
 admitting no adapter refuses the plan. The B1 probes map as follows: a wrong
 lane count and a transposed tile become plans; a folding factor that does not
 divide its extent is refused where it is committed; a frame crossing rows,
@@ -135,7 +135,7 @@ def test_depthwise_activations_carry_pe_channels_of_simd_window_positions():
     point = placed(Form.DEPTHWISE)
     form = point.compute.x.presented.form
     assert form.lanes == PE * SIMD and form.shape == (ROWS, REDUCTION, OUTPUTS)
-    # Field s * PE + p is window position s of channel p (FinnLib's order).
+    # Lane s * PE + p is window position s of channel p (FinnLib's order).
     assert next(form.positions()) == ((0, 0, 0), (0, 0, 1), (0, 1, 0), (0, 1, 1))
     assert codes(point.w_s.query(Stream.connection)) == set()
 
@@ -169,8 +169,8 @@ def test_a_producer_presenting_another_order_is_a_plan_its_stream_adapts():
     assert "stream-plan" in codes(refused) and "reorder" in str(refused)
 
 
-def test_a_producer_s_field_order_is_wires():
-    # Probe: SIMD fields outer, PE fields inner; the same positions in each beat.
+def test_a_producer_s_lane_order_is_wires():
+    # Probe: SIMD lanes outer, PE lanes inner; the same positions in each beat.
     transposed = Traversal.over(
         (REDUCTION, OUTPUTS),
         ((1, OUTPUTS // PE, PE), (0, REDUCTION // SIMD, SIMD)),
@@ -178,7 +178,7 @@ def test_a_producer_s_field_order_is_wires():
     )
     assert codes(placed(weights_form=transposed).w_s.query(Stream.connection)) == set()
     # E-048: hlslib's per-channel order (window positions fastest) is likewise a
-    # field permutation of FinnLib's.
+    # lane permutation of FinnLib's.
     finnlib = placed(Form.DEPTHWISE).compute.x.presented.form
     window_fastest = Traversal(
         finnlib.shape, finnlib.beat_loops, tuple(reversed(finnlib.lane_loops))

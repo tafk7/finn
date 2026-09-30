@@ -80,7 +80,7 @@ def test_tile_is_the_mvau_weight_order_and_packs_the_known_image():
     assert first == ((0, 0), (0, 1), (1, 0), (1, 1))
     assert second == ((0, 2), (0, 3), (1, 2), (1, 3))
     matrix = ((-4, -3, -2, -1), (0, 1, 2, 3), (3, 2, 1, 0), (-1, -2, -3, -4))
-    # Hand-packed INT3 fields: p0/s0, p0/s1, p1/s0, p1/s1, low first.
+    # Hand-packed INT3 lanes: p0/s0, p0/s1, p1/s0, p1/s1, low first.
     assert pack(weights, matrix, 3) == (0x22C, 0x6BE, 0xDD3, 0x941)
 
 
