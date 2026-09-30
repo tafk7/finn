@@ -33,6 +33,14 @@ Three things measured against real sources rather than assumed (the A0 gate):
 One thing slang will not do for us: an **undeclared parameter override is
 silently ignored**.  So the override set is checked against the declared
 parameters here, or a typo'd binding would pass as a match.
+
+**A name is established before its value is.**  Every declared parameter is
+reported by name, but its value only when it is an integer or a string; an
+unpacked array (``thresholding_axi``'s ``THRESHOLDS``) or a real
+(``eltwise``'s ``B_SCALE``) is reported with the value ``None``, *not
+established*.  The module is not declined for it: the ports and their widths
+are what slang resolved under the binding, and nothing the checker compares
+reads a parameter value.
 """
 
 from __future__ import annotations
@@ -66,12 +74,26 @@ _DIRECTIONS = {
 
 @dataclass(frozen=True)
 class ExtractedModule:
-    """What the source says, as far as the checker could establish it."""
+    """What the source says, as far as the checker could establish it.
+
+    Every port is established with its direction and resolved width, and every
+    parameter and localparam by name, in declaration order.  A value is
+    established only when it is an integer or a string; any other value (an
+    unpacked array, a real, a type) is ``None``: the name is known, the value is
+    not, and nothing here stands in for it.
+    """
 
     name: str
     ports: tuple[ObservedPort, ...]
-    parameters: tuple[tuple[str, int | str], ...]
-    local_parameters: tuple[tuple[str, int | str], ...]
+    parameters: tuple[tuple[str, int | str | None], ...]
+    local_parameters: tuple[tuple[str, int | str | None], ...]
+
+    @property
+    def unestablished(self) -> tuple[str, ...]:
+        """Parameters and localparams declared by name whose value is not established."""
+        return tuple(
+            name for name, value in (*self.parameters, *self.local_parameters) if value is None
+        )
 
 
 @dataclass(frozen=True)
@@ -104,6 +126,15 @@ def _constant(value: pyslang.ConstantValue) -> int | str | None:
     return int(inner)
 
 
+def _errors(compilation: ast.Compilation) -> list[pyslang.Diagnostic]:
+    """The errors that are grounds to decline: every one not tolerated."""
+    return [
+        diagnostic
+        for diagnostic in compilation.getAllDiagnostics()
+        if diagnostic.isError() and str(diagnostic.code) not in TOLERATED_DIAGNOSTICS
+    ]
+
+
 def _report(compilation: ast.Compilation, diagnostics: list[pyslang.Diagnostic]) -> tuple[str, ...]:
     engine = pyslang.DiagnosticEngine(compilation.sourceManager)
     client = pyslang.TextDiagnosticClient()
@@ -116,11 +147,13 @@ def _report(compilation: ast.Compilation, diagnostics: list[pyslang.Diagnostic])
 def extract(
     files: Sequence[Path], top: str, parameters: Sequence[tuple[str, str]] = ()
 ) -> Extraction:
-    """Elaborate ``top`` and report its ports, widths and parameter values.
+    """Elaborate ``top`` and report its ports, widths, parameter names and values.
 
     ``parameters`` is the binding the declaration supplies.  Without it a
     module whose parameters have no defaults cannot be elaborated at all, and
-    the checker declines rather than inventing widths.
+    the checker declines rather than inventing widths.  A parameter value that
+    is not an integer or a string is reported as ``None`` rather than declining
+    the module (``ExtractedModule``).
     """
 
     options = ast.CompilationOptions()
@@ -135,12 +168,7 @@ def extract(
     for path in files:
         compilation.addSyntaxTree(syntax.SyntaxTree.fromFile(str(path)))
 
-    diagnostics = compilation.getAllDiagnostics()
-    errors = [
-        diagnostic
-        for diagnostic in diagnostics
-        if diagnostic.isError() and str(diagnostic.code) not in TOLERATED_DIAGNOSTICS
-    ]
+    errors = _errors(compilation)
     if errors:
         return Declined("elaboration failed", _report(compilation, errors))
 
@@ -164,16 +192,17 @@ def extract(
             return Declined("unresolved port width", (f"{port.name}: {port.type}",))
         ports.append(ObservedPort(port.name, direction, width))
 
-    declared: list[tuple[str, int | str]] = []
-    local: list[tuple[str, int | str]] = []
+    declared: list[tuple[str, int | str | None]] = []
+    local: list[tuple[str, int | str | None]] = []
     for member in body:
-        if type(member).__name__ != "ParameterSymbol":
+        kind = type(member).__name__
+        if kind == "ParameterSymbol":
+            # Not an integer or a string: the name is established, the value is not.
+            value = _constant(member.value)
+        elif kind == "TypeParameterSymbol":
+            value = None
+        else:
             continue
-        value = _constant(member.value)
-        if value is None:
-            return Declined(
-                "neither an integer nor a string parameter", (f"{member.name}: {member.value}",)
-            )
         (local if member.isLocalParam else declared).append((member.name, value))
 
     supplied = {name for name, _ in parameters}
@@ -200,6 +229,10 @@ def check_abi(
     non-empty tuple of refusals when they do not, and ``Declined`` when the
     checker could not establish either.  Three outcomes, because collapsing
     "agrees" and "could not tell" is how a guarantee becomes a claim.
+
+    The comparison reads the ports alone -- names, directions and the widths
+    slang resolved under the binding -- so a parameter whose value is not
+    established cannot enter it.
     """
 
     extracted = extract(files, top, parameters)

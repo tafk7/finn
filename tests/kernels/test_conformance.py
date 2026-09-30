@@ -16,6 +16,11 @@ loop order (channel folds outer, rows inner, where the RTL walks rows outer)
 and for the lane order (the two levels of a split channel index swapped). The
 same kernels declaring the RTL's orders pass both.
 
+The checks refuse: a module whose pins its sources contradict, and a kernel
+whose ``parameters()`` omit a module parameter, including for modules with a
+parameter whose value the RTL checker does not establish (thresholding's
+array, eltwise's real, which is itself the omission checked).
+
 transpose's samples at SIMD 3 and 6 fail stalled, and its adapter sample fails
 in both modes: FinnLib's bursty-input ``inner_shuffle`` defect
 (``finn.kernels.transpose``). They are known failures, strictly: the case
@@ -447,11 +452,46 @@ class Unbound(MemStreamKernel):
         return {key: value for key, value in super().parameters().items() if key != "RAM_STYLE"}
 
 
+class Unpipelined(ThresholdingAxiKernel):
+    """thresholding_axi without DEEP_PIPELINE, which the module declares with a default.
+
+    Checked at all only because THRESHOLDS, an array, no longer declines the
+    module. Omitting THRESHOLDS itself cannot show it: slang refuses the
+    module's default for it (``'{default: ...}`` "invalid target type"), so
+    that binding declines.
+    """
+
+    id = "test.thresholding_axi.unpipelined"
+
+    def parameters(self) -> Mapping[str, int | str]:
+        return {key: value for key, value in super().parameters().items() if key != "DEEP_PIPELINE"}
+
+
+class Unscaled(EltwiseKernel):
+    """eltwise without B_SCALE: a real, named by the checker but not valued."""
+
+    id = "test.eltwise.unscaled"
+
+    def parameters(self) -> Mapping[str, int | str]:
+        return {key: value for key, value in super().parameters().items() if key != "B_SCALE"}
+
+
 def test_a_module_whose_sources_contradict_its_pins_is_refused() -> None:
     with pytest.raises(AssertionError, match="memstream_axi refuses its ABI: .*m_axis_1_tdata"):
         conformance(**dict(memstream(), family=Misnamed))
 
 
-def test_parameters_must_name_every_module_parameter() -> None:
-    with pytest.raises(AssertionError, match=r"omits \['RAM_STYLE'\]"):
-        conformance(**dict(memstream(), family=Unbound))
+@pytest.mark.parametrize(
+    ("case", "family", "omitted"),
+    [
+        (memstream, Unbound, "RAM_STYLE"),
+        # Modules with a parameter whose value the checker does not establish.
+        (thresholding, Unpipelined, "DEEP_PIPELINE"),
+        (eltwise, Unscaled, "B_SCALE"),
+    ],
+)
+def test_parameters_must_name_every_module_parameter(
+    case: Any, family: type[Any], omitted: str
+) -> None:
+    with pytest.raises(AssertionError, match=rf"omits \['{omitted}'\]"):
+        conformance(**dict(case(), family=family))

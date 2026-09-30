@@ -9,10 +9,12 @@ each sample it
 1. places the kernel in a generated ``Design`` between boundary streams, one
    per reference input, commits the sample's folds and the pinned ``choices``,
    and settles the adapter chains;
-2. checks the kernel's module against its materialized sources
-   (``artifacts.rtl.check_abi``) under the declared parameter binding: a
-   refusal fails; a decline is a warning (``RtlDeclined``), and fails under
-   ``--strict-rtl``;
+2. checks the kernel's module against its materialized sources under the
+   declared parameter binding (``artifacts.rtl.extract``, then the comparison
+   ``check_abi`` makes, on the one extraction): a refusal fails; a decline is a
+   warning (``RtlDeclined``), and fails under ``--strict-rtl``. A parameter
+   whose value the checker does not establish (an array, a real) does not
+   decline: its name is still established;
 3. checks the model: every port's traversal covers its tensor, a scheduled
    port presents the schedule's beats less the ones it drops, each boundary
    presents its port's traversal (an input's ``unreplayed``), and
@@ -76,9 +78,9 @@ from finn.dataflow.datatypes import DatatypeError, ordinary_integer_bounds
 from finn.dataflow.plan import Step
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import Repetition, Traversal, pack, unreplayed, vector_major
-from finn.kernels.artifacts.abi import ComponentABI
+from finn.kernels.artifacts.abi import ComponentABI, check_against_rtl
 from finn.kernels.artifacts.requirements import ModuleBuildRequirements
-from finn.kernels.artifacts.rtl import Declined, ExtractedModule, check_abi, extract
+from finn.kernels.artifacts.rtl import Declined, extract
 from finn.kernels.base import Kernel
 from finn.kernels.composite import Design
 from finn.kernels.configure import commit, describe, undecided
@@ -411,17 +413,17 @@ def _check_rtl(
     top, sources, _ = materialize(requirements, directory)
     abi = requirements.abi
     component = ComponentABI(top, abi.ports, abi.parameters, abi.clock_alignments)
-    files = [Path(source) for source in sources]
-    issues = check_abi(component, files, top, abi.parameters)
-    if isinstance(issues, Declined):
-        message = f"{_where(family, sample)}: the RTL checker declined {top}: {issues}"
+    extracted = extract([Path(source) for source in sources], top, abi.parameters)
+    if isinstance(extracted, Declined):
+        message = f"{_where(family, sample)}: the RTL checker declined {top}: {extracted}"
         if STRICT_RTL:
             raise AssertionError(message)
         warnings.warn(message, RtlDeclined, stacklevel=3)
         return None
+    # check_abi's comparison, on the one extraction: the ports, never a parameter value.
+    issues = check_against_rtl(component, extracted.ports)
     assert not issues, f"{_where(family, sample)}: {top} refuses its ABI: " + "; ".join(issues)
-    extracted = extract(files, top, abi.parameters)
-    assert isinstance(extracted, ExtractedModule), extracted
+    # Every declared name, whether or not its value was established.
     return {name for name, _ in extracted.parameters}
 
 
