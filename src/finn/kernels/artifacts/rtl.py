@@ -28,7 +28,9 @@ Three things measured against real sources rather than assumed (the A0 gate):
   LRM 22.8, tolerated by Vivado, rejected by slang, and present in 66 of the
   155 files we compile.  It is tolerated here by an explicit list rather than
   by relaxing the error filter, because the two are different: one names what
-  is forgiven and why, the other forgives whatever turns up.
+  is forgiven and why, the other forgives whatever turns up.  Two more codes
+  Vivado accepts are forgiven only *inside* the constructs that keep them from
+  a port or a parameter (``TOLERATED_WITHIN``), and declined anywhere else.
 
 One thing slang will not do for us: an **undeclared parameter override is
 silently ignored**.  So the override set is checked against the declared
@@ -45,9 +47,10 @@ reads a parameter value.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from types import MappingProxyType
 from typing import Union
 
 import pyslang  # type: ignore[import-not-found]
@@ -62,6 +65,43 @@ TOLERATED_DIAGNOSTICS = frozenset(
         # FinnLib writes `default_nettype between the port list and the body.
         # Illegal per LRM 22.8 and unable to change a port width either way.
         "DiagCode(DirectiveInsideDesignElement)",
+    }
+)
+
+#: Diagnostics tolerated only *inside* the named constructs, and declined
+#: anywhere else.  The same code elsewhere can reach a port or a parameter, so
+#: an entry names the constructs that confine it, with the reason they do.
+TOLERATED_WITHIN: Mapping[str, frozenset[str]] = MappingProxyType(
+    {
+        # FinnLib's add_multi calls a function declared in its generate block to
+        # build a localparam of that block (LRM 13.4.3 forbids it; Vivado
+        # accepts it).  A constant of a generate block reaches module level only
+        # by a hierarchical name, which slang refuses in a constant expression
+        # (ConstEvalHierarchicalName, not tolerated), no port or module
+        # parameter is declared inside one, and a generate condition only
+        # chooses which blocks exist.  Called from module level, the same
+        # function raises this code outside any generate construct: declined.
+        "DiagCode(ConstEvalFunctionInsideGenerate)": frozenset(
+            {"IfGenerate", "LoopGenerate", "CaseGenerate"}
+        ),
+        # FinnLib's inner_shuffle reads a net in a continuous assignment above
+        # its declaration (``xelab -relax`` accepts it).  A continuous
+        # assignment or a procedural block reads nets and variables, which no
+        # constant expression can depend on (a constant declared inside a
+        # procedural block is local to it), so no port width or parameter
+        # value.  On a declaration -- a localparam reading one declared later --
+        # the same code is declined: slang leaves that value unset.
+        "DiagCode(UsedBeforeDeclared)": frozenset(
+            {
+                "ContinuousAssign",
+                "AlwaysBlock",
+                "AlwaysCombBlock",
+                "AlwaysFFBlock",
+                "AlwaysLatchBlock",
+                "InitialBlock",
+                "FinalBlock",
+            }
+        ),
     }
 )
 
@@ -126,12 +166,48 @@ def _constant(value: pyslang.ConstantValue) -> int | str | None:
     return int(inner)
 
 
-def _errors(compilation: ast.Compilation) -> list[pyslang.Diagnostic]:
-    """The errors that are grounds to decline: every one not tolerated."""
-    return [
+def _confining(
+    trees: Sequence[syntax.SyntaxTree], kinds: frozenset[str]
+) -> dict[str, list[pyslang.SourceRange]]:
+    """The source range of every construct of ``kinds`` in ``trees``, by kind."""
+    found: dict[str, list[pyslang.SourceRange]] = {kind: [] for kind in kinds}
+
+    def record(node: syntax.SyntaxNode) -> None:
+        found[node.kind.name].append(node.sourceRange)
+
+    table = {getattr(syntax.SyntaxKind, kind): record for kind in kinds}
+    for tree in trees:
+        tree.root.visit(lookup_table=table)
+    return found
+
+
+def _within(location: pyslang.SourceLocation, ranges: Sequence[pyslang.SourceRange]) -> bool:
+    return any(
+        location.buffer == area.start.buffer
+        and area.start.offset <= location.offset < area.end.offset
+        for area in ranges
+    )
+
+
+def _errors(
+    compilation: ast.Compilation, trees: Sequence[syntax.SyntaxTree]
+) -> list[pyslang.Diagnostic]:
+    """The errors that are grounds to decline: every one not tolerated where it arose."""
+    errors = [
         diagnostic
         for diagnostic in compilation.getAllDiagnostics()
         if diagnostic.isError() and str(diagnostic.code) not in TOLERATED_DIAGNOSTICS
+    ]
+    if not any(str(diagnostic.code) in TOLERATED_WITHIN for diagnostic in errors):
+        return errors
+    ranges = _confining(trees, frozenset().union(*TOLERATED_WITHIN.values()))
+    return [
+        diagnostic
+        for diagnostic in errors
+        if not any(
+            _within(diagnostic.location, ranges[kind])
+            for kind in TOLERATED_WITHIN.get(str(diagnostic.code), ())
+        )
     ]
 
 
@@ -165,10 +241,11 @@ def extract(
     options.paramOverrides = [f"{name}={value}" for name, value in parameters]
     compilation = ast.Compilation(pyslang.Bag([options]))
 
-    for path in files:
-        compilation.addSyntaxTree(syntax.SyntaxTree.fromFile(str(path)))
+    trees = [syntax.SyntaxTree.fromFile(str(path)) for path in files]
+    for tree in trees:
+        compilation.addSyntaxTree(tree)
 
-    errors = _errors(compilation)
+    errors = _errors(compilation, trees)
     if errors:
         return Declined("elaboration failed", _report(compilation, errors))
 
@@ -266,6 +343,7 @@ def check_symbols(modules: Sequence[tuple[str, ExtractedModule]]) -> tuple[str, 
 
 __all__ = [
     "TOLERATED_DIAGNOSTICS",
+    "TOLERATED_WITHIN",
     "Declined",
     "Extraction",
     "ExtractedModule",
