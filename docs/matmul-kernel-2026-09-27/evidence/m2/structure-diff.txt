@@ -1,4 +1,0 @@
-# M1 vs M2 structure_dump, normalizing: instance u_compute -> u_compute_<core>, the CORE parameter,
-# the implementation id (exact_integer_dot_product_axi 2 -> finnlib.dotp_axi.<core> 1) and source lists:
-identical
-# source lists after: packed [add_multi_pkg, add_multi, dotp, dotp_axi]; int8 [dotp_8sx9_dsp58, dotp_axi]

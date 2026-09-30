@@ -1,7 +1,0 @@
-# MVAU top-level ABI port names; identical at 426882411 (iteration 3) and on spike/space-declarative-4
-external       ['ap_clk', 'ap_clk2x', 'ap_rst_n', 'in0_V', 'in1_V', 'out0_V']
-cyclic-block   ['ap_clk', 'ap_clk2x', 'ap_rst_n', 'in0_V', 'out0_V']
-fifo-external  ['ap_clk', 'ap_clk2x', 'ap_rst_n', 'in0_V', 'in1_V', 'out0_V']
-fifo-cyclic    ['ap_clk', 'ap_clk2x', 'ap_rst_n', 'in0_V', 'out0_V']
-padded-output  ['ap_clk', 'ap_clk2x', 'ap_rst_n', 'in0_V', 'in1_V', 'out0_V']
-pumped-dsp58   ['ap_clk', 'ap_clk2x', 'ap_rst_n', 'in0_V', 'in1_V', 'out0_V']

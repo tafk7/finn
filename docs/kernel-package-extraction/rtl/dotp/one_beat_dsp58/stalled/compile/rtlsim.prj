@@ -1,7 +1,0 @@
-verilog work /home/tkeller/Xilinx/2025.2/Vivado/data/verilog/src/glbl.v
-sv work  /home/tkeller/prj-kernels/finn-kernels-extraction/deps/finnlib/rtl/arith/add_multi_pkg.sv
-sv work  /home/tkeller/prj-kernels/finn-kernels-extraction/deps/finnlib/rtl/arith/add_multi.sv
-sv work  /home/tkeller/prj-kernels/finn-kernels-extraction/deps/finnlib/rtl/linalg/dotp_8sx9_dsp58.sv
-sv work  /home/tkeller/prj-kernels/finn-kernels-extraction/deps/finnlib/rtl/linalg/dotp.sv
-sv work  /home/tkeller/prj-kernels/finn-kernels-extraction/src/finn/kernels/resources/dotp_axi.sv
-sv work  /tmp/kernel-extraction-rtl-ICkDVH/dotp/one_beat_dsp58/pure_dotp_one_beat_dsp58.sv

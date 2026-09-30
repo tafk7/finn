@@ -4,8 +4,7 @@
 
 Branch `feature/external-resources` from `09fb86df7`: finn-hlslib and the board
 files as external resources (`finn.resources`), replacing the finn-hlslib
-workspace package, its submodule and `finn.util.external`. Plan and decisions in
-[external-resources-plan.md](external-resources-plan.md). Same host as below.
+workspace package, its submodule and `finn.util.external`. Same host as below.
 
 | Check | Result |
 | --- | --- |

@@ -1,3 +1,0 @@
- PASS              - linalg/dotp_axi_backpressure
- PASS              - linalg/dotp_axi
-exit=0

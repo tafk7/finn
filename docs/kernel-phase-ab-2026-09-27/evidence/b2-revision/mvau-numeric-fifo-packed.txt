@@ -1,6 +1,0 @@
-Evidence: /tmp/b2r/gates/sim-fifo
-PASS packed external_fifo2 stalled=False result=INT8
-PASS packed external_fifo2 stalled=True result=INT8
-PASS packed cyclic_fifo2 stalled=False result=INT8
-PASS packed cyclic_fifo2 stalled=True result=INT8
-exit=0

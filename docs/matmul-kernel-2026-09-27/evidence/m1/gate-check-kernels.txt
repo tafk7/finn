@@ -1,6 +1,0 @@
-======================== 427 passed in 61.64s (0:01:01) ========================
-All checks passed!
-Success: no issues found in 27 source files
-Success: no issues found in 41 source files
-======================= 787 passed in 361.62s (0:06:01) ========================
-ruff format --check (after README line split): 104 files already formatted

@@ -1,8 +1,0 @@
-Evidence: /tmp/d10/s3/sim-fifo-int8-pumped
-PASS int8_pumped external_fifo2 stalled=False result=INT19
-PASS int8_pumped external_fifo2 stalled=True result=INT19
-PASS int8_pumped cyclic_fifo2 stalled=False result=INT19
-PASS int8_pumped cyclic_fifo2 stalled=True result=INT19
-PASS int8_pumped memstream_fifo2 stalled=False result=INT19
-PASS int8_pumped memstream_fifo2 stalled=True result=INT19
-exit=0

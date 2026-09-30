@@ -1,3 +1,0 @@
-head: 75595eedb + working tree
-
-finnlib: 11b5c64b6ddb2c89895cc539eb059e49ecf80630  qonnx: 21d4c1a72334002aaf80ae099dbf5d167f001001

@@ -18,11 +18,9 @@ Environment and runtime:
 * [Installation and development](installation.md)
 * [Environment design](environment.md)
 * [Remaining legacy environment obligations](legacy-build-env-ledger.md)
-* [Task spec: remaining work from P6](runtime-remaining-work.md)
 * [Runtime validation record](runtime-validation.md)
-* [XSI process-boundary investigation](xsi-process-boundary-investigation.md)
 
-Experimental Space design, authoring, internals and migration documentation is
-maintained in the separate scratchpad repository under `space/`, starting at
-`space/DESIGN.md`. Its example checker also lives there. FINN's standalone code
-validation command is `bash scripts/check-space.sh` and needs no documentation checkout.
+The experimental `finn.core.space`, `finn.dataflow` and `finn.kernels`
+packages are documented outside this repository until they are final; their
+code checks are `bash scripts/check-space.sh`, `scripts/check-dataflow-design.sh`
+and `scripts/check-kernels.sh`.

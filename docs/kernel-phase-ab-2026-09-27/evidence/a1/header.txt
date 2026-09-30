@@ -1,4 +1,0 @@
-head: 26e224ca9 + working tree
- M fetch-repos.sh
-
-finnlib: b17eae6a074ea678c633598fa42e7751e6cea194  qonnx: 21d4c1a72334002aaf80ae099dbf5d167f001001

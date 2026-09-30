@@ -1,4 +1,0 @@
-# structure_dump (docs/kernel-phase-ab-2026-09-27) before vs docs/matmul-kernel-2026-09-27/structure_dump.py after,
-# with finn_mvau_/finn_matmul_ and u_implementation_cyclic/u_delivery_cyclic normalized:
-identical
-# raw differing lines: 24
