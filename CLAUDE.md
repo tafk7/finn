@@ -30,6 +30,13 @@ A run that was never checked is not evidence.
 **Never report an RTL result you did not see.** If a background run is still
 going when the turn ends, say so.
 
+### Every XSim check, from a commit
+
+`bash scripts/xsim-sweep.sh [OUT]` runs every conformance XSim test, the rest of
+the kernel suite and the numeric XSI sweeps in parallel from the checkout it
+sits in. For evidence about a commit, run it in a worktree detached at that
+commit with its own `.venv`, and keep developing elsewhere.
+
 ### Delegate a long sweep to an agent
 
 For a matrix of Vivado runs, or when the analysis of the output is itself
