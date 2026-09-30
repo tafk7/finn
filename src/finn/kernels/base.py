@@ -224,11 +224,11 @@ class Kernel(Space):
     def bound_schedule(
         self,
         beats: tuple[Index, ...],
-        folds: Mapping[Index, int] | None = None,
+        factors: Mapping[Index, int] | None = None,
         extents: Mapping[Index, int] | None = None,
     ) -> Schedule | Rejected:
         """The schedule over ``beats`` (outer to inner), each index's extent bound from the
-        ports' tensors (and any ``extents`` the kernel gives), folded by ``folds``."""
+        ports' tensors (and any ``extents`` the kernel gives), with folding ``factors``."""
         bound = self.extents if extents is None else self._bound(extents)
         if isinstance(bound, Rejected):
             return bound
@@ -236,7 +236,7 @@ class Kernel(Space):
         if missing:
             return reject("kernel-extents", f"{missing} are bound by no placed port")
         try:
-            return Schedule({index: bound[index] for index in beats}, folds, beats)
+            return Schedule({index: bound[index] for index in beats}, factors, beats)
         except ValueError as error:
             return reject("kernel-schedule", str(error))
 
@@ -283,7 +283,7 @@ def extent_of(index: Index) -> int:
     """A derived member: ``index``'s extent, bound from the kernel's placed ports.
 
     Name it in the class body (``channels = extent_of(c)``) and read that name,
-    in a fold's ``divisors_of`` domain for instance; used inline inside another
+    in a folding factor's ``divisors_of`` domain for instance; used inline inside another
     declaration it is not a member of the class, and linking refuses it.
     """
 
@@ -296,12 +296,12 @@ def extent_of(index: Index) -> int:
     return derived(extent)
 
 
-def fold_domain(index: Index, bound: int = 1 << 32) -> Domain[int]:
-    """A fold Decision's domain: the divisors of ``index``'s bound extent.
+def factor_domain(index: Index, bound: int = 1 << 32) -> Domain[int]:
+    """A folding factor Decision's domain: the divisors of ``index``'s bound extent.
 
     While no placed port binds ``index`` (a flat build of a module whose
-    parameters need no extents), the fold is any the RTL takes, ``1 <= fold <
-    bound``, and is committed as a choice; there is nothing to enumerate.
+    parameters need no extents), the factor is any the RTL takes, ``1 <= factor
+    < bound``, and is committed as a choice; there is nothing to enumerate.
     """
     candidates = divisors_of(1).candidates
     assert candidates is not None
@@ -338,5 +338,5 @@ __all__ = [
     "TIEOFFS_SEMANTICS",
     "Tieoffs",
     "extent_of",
-    "fold_domain",
+    "factor_domain",
 ]

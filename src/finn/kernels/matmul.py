@@ -24,7 +24,7 @@ kernel and presents its ``port`` name (``in0_V``, ``in1_V``, ``out0_V``,
 
 - ``compute`` is a Decision over the dot-product cores. They share the facts
   and streams; the packed core also takes ``narrow_weights``. Each core owns its
-  folds (``compute.<core>.pe``, ``.simd``, ``.compute_pumping``) and derives
+  folding factors (``compute.<core>.pe``, ``.simd``, ``.compute_pumping``) and derives
   every stream's beat sequence from its schedule.
 - ``memory`` is an optional Decision over the weight memories: none (the
   weight stream is the boundary ``in1_V``) or a ``memstream``, which stores
@@ -282,7 +282,7 @@ class MatMulKernel(Composite):
         return all(value > low for value in integers(self.weights))
 
     # The compute cores. Each refuses what its core cannot build and owns its
-    # folds; ``packed`` names the entry for its own binding.
+    # folding factors; ``packed`` names the entry for its own binding.
     packed = PackedDotpKernel(narrow_weights=narrow_weights)
     compute: PackedDotpKernel | Int8Dsp58DotpKernel = Decision(
         {"packed": packed, "int8_dsp58": Int8Dsp58DotpKernel},
@@ -477,7 +477,7 @@ def matmul_assembly(
     base = design_space(MatMulKernel(**facts))
     if form is Form.DEPTHWISE:
         # The realization sets the datapath's reduction, so it is committed with
-        # the other choices before the core's folds.
+        # the other choices before the core's folding factors.
         if realization is None:
             viable = [
                 case

@@ -90,7 +90,7 @@ def admission(candidate: Space) -> QueryResult[object] | None:
 
     A group refuses as soon as one of its constraints does, even while another
     still waits on an open choice: a core that cannot target the DSP is refused
-    before its folds are chosen.
+    before its folding factors are chosen.
     """
     member = getattr(type(candidate), "admission", None)
     if isinstance(member, ConstraintGroup):

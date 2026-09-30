@@ -17,8 +17,8 @@ pixels, `c` channels). Its datasheet says:
 | Datasheet fact | In the kernel |
 |---|---|
 | module `accpool_axi`, from FinnLib `rtl/pool/accpool_axi.sv` | `module`, `sources()` |
-| generics `CHANNELS`, `PIXELS`, `PE`, `IN_WIDTH`, `OUT_WIDTH`, `SIGNED` | `parameters()`, from extents, folds and elements |
-| `PE` channels a beat, PE dividing the channels | a fold: `pe = Decision(domain=divisors_of(channels))` |
+| generics `CHANNELS`, `PIXELS`, `PE`, `IN_WIDTH`, `OUT_WIDTH`, `SIGNED` | `parameters()`, from extents, folding factors and elements |
+| `PE` channels a beat, PE dividing the channels | a folding factor: `pe = Decision(domain=divisors_of(channels))` |
 | images, then pixels, then channel folds (channels innermost) | the loop nest: `bound_schedule(beats=(b, s, c), ...)` |
 | `s_axis_input`: `X[b, s, c]`, PE channels a beat, no TLAST | a target `AxiStreamPort`: `index=(b, s, c)`, `lanes=(c,)` |
 | `m_axis_output`: `Y[b, c]`, PE channels a beat, after the last pixel of an image | an initiator `AxiStreamPort`: `index=(b, c)`, `lanes=(c,)`, `reduces=(s,)` |
@@ -26,7 +26,7 @@ pixels, `c` channels). Its datasheet says:
 | accumulators are at most 32 bits | `admission`: only what the RTL itself cannot build |
 
 What the author does not write: extent getters (the ports' tensors bind them),
-fold domains beyond the divisor rule, traversals (each port's is the
+folding factor domains beyond the divisor rule, traversals (each port's is the
 schedule's projection), idle widths, shape checks (ports that disagree on an
 extent are refused), or `semantics=` on ordinary values.
 
@@ -35,10 +35,11 @@ extent are refused), or `semantics=` on ordinary values.
 1. **Indices.** Name one `Index` per dimension of the operation. An index a
    port reads alone takes its extent from that tensor axis; an axis read by an
    expression (a sliding window, `oh * 2 + kh`) binds nothing and is checked.
-2. **Folds.** Each parallel factor is a `Decision` on an index (`pe` on `c`),
-   its domain the divisors of that index's extent, read from a named
-   `extent_of` member. A parent may pin or narrow it by key (`pool.pe`).
-3. **The loop nest.** `bound_schedule(beats, folds)`, outer to inner, exactly
+2. **Folding factors.** Each is a `Decision` on an index (`pe` on `c`), the
+   lanes it spreads over each beat; its domain is the divisors of that index's
+   extent, read from a named `extent_of` member. A parent may pin or narrow it
+   by key (`pool.pe`).
+3. **The loop nest.** `bound_schedule(beats, factors)`, outer to inner, exactly
    as the RTL walks it. This is the one order the model cannot check; the
    conformance harness does, in simulation.
 4. **Each interface.** One `AxiStreamPort`: the indices it reads (`index`), its
@@ -104,7 +105,7 @@ class AccPoolKernel(Kernel):
     @derived
     def schedule(self) -> Schedule | Rejected:
         """The RTL's loop nest: images, then pixels, then channel folds."""
-        return self.bound_schedule(beats=(b, s, c), folds={c: self.pe})
+        return self.bound_schedule(beats=(b, s, c), factors={c: self.pe})
 
     @derived(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
     def sum_dtype(self) -> QONNXDataType:
@@ -160,7 +161,7 @@ class AccPoolKernel(Kernel):
 
 ## Placing it, and what the model derives
 
-Place it between two streams and commit its fold. Each port presents the
+Place it between two streams and commit its folding factor. Each port presents the
 schedule's projection: the input `PIXELS * CHANNELS / PE` beats of PE lanes an
 image, the output `CHANNELS / PE` beats after the pixels.
 
@@ -192,7 +193,7 @@ assert dict(point.pool.build_requirements.parameters) == {
 }
 ```
 
-The fold's domain is the divisors of the bound channel count, and a parent may
+The folding factor's domain is the divisors of the bound channel count, and a parent may
 pin it by key (`pool.pe = 4` in its body). Ports that disagree on an extent
 are refused, naming the ports and axes, rather than leaving part of a tensor
 unread:
@@ -241,7 +242,7 @@ for lanes, steps in ((4, ()), (2, ("width_conversion",))):
     produced = BeatSequence(vector_major((2, 4, 8), lanes))
     assert tuple(step.value for step in plan(produced, wanted).steps) == steps
 
-channels_outer = Schedule({b: 2, s: 4, c: 8}, folds={c: 4}, beats=(b, c, s))
+channels_outer = Schedule({b: 2, s: 4, c: 8}, factors={c: 4}, beats=(b, c, s))
 reordered = BeatSequence(channels_outer.present((2, 4, 8), (b, s, c), lanes=(c,)))
 produced = BeatSequence(vector_major((2, 4, 8), 4))
 assert tuple(step.value for step in plan(produced, reordered).steps) == ("reorder",)
@@ -250,7 +251,7 @@ assert tuple(step.value for step in plan(produced, reordered).steps) == ("reorde
 ## The conformance test
 
 `tests/kernels/conformance.py` checks a kernel against its RTL over sampled
-folds (the smallest, an interior, the largest, and one fed through a width
+folding factors (the smallest, an interior, the largest, and one fed through a width
 converter): its pins and parameter names against the sources, the model's
 consistency (coverage, beat counts, boundary presentation, every output
 element stated with the outputs unplaced), and, in XSim, stalled and free, its
@@ -268,7 +269,7 @@ def test_accpool_conforms(tmp_path):
         inputs={"x_stream": Tensor((2, 16, 8), ScalarEncoding(INT4))},
         outputs={"y_stream": (2, 8)},  # its element is the kernel's sum_dtype
         reference=lambda x_stream: {"y_stream": x_stream.sum(axis=1)},
-        folds=SAMPLED,
+        factors=SAMPLED,
         xsim=tmp_path,
     )
 ```

@@ -137,7 +137,7 @@ def run(configuration: Configuration, evidence: Path, *, backpressure_ticks: int
         result_bits += 1
     result_type = DataType[f"INT{result_bits}"]
     family = Int8Dsp58DotpKernel if c.int8 else PackedDotpKernel
-    # The core between three streams: its extents are the case's, its folds PE and SIMD.
+    # The core between three streams: its extents are the case's, its folding factors PE and SIMD.
     point = placed_dotp(
         family,
         activation_dtype=a_type,

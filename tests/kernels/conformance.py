@@ -3,11 +3,11 @@
 
 """Conformance: a kernel placed between boundary streams, checked against its RTL.
 
-``conformance`` checks one kernel family over sampled fold configurations. For
+``conformance`` checks one kernel family over sampled folding configurations. For
 each sample it
 
 1. places the kernel in a generated ``Design`` between boundary streams, one
-   per reference input, commits the sample's folds and the pinned ``choices``,
+   per reference input, commits the sample's factors and the pinned ``choices``,
    and settles the adapter chains;
 2. checks the kernel's module against its materialized sources under the
    declared parameter binding (``artifacts.rtl.extract``, then the comparison
@@ -32,12 +32,12 @@ presenting ``vector_major`` at another lane count, so that input's stream
 places a width conversion and the adapter is part of the simulated path. A
 kernel without inputs has none.
 
-Folds: ``SAMPLED`` takes the smallest, an interior and the largest
+Factors: ``SAMPLED`` takes the smallest, an interior and the largest
 configuration of the kernel's scalar Decisions that ``choices`` leaves open,
-each fold's candidates read from ``point.field(<fold>).candidates()`` with the
-folds before it committed, and deduplicates them; ``ALL`` takes every
+each folding factor's candidates read from ``point.field(<factor>).candidates()`` with the
+factors before it committed, and deduplicates them; ``ALL`` takes every
 combination. Explicit configurations name the kernel's own members: a Decision
-is committed, a Param is given (a fold that is still a Param). The adapter
+is committed, a Param is given (a folding factor that is still a Param). The adapter
 sample reuses the middle configuration.
 
 An output given as a shape takes its element from the kernel: its port's
@@ -96,7 +96,7 @@ from kernels.xsim import materialize, stream_through
 KERNEL, SOURCE = "kernel", "source"
 MODES = ("free", "stalled")
 SAMPLED, ALL = "sampled", "all"
-Folds = str | Sequence[Mapping[str, object]]
+Factors = str | Sequence[Mapping[str, object]]
 Outputs = Mapping[str, tuple[int, ...] | Tensor]
 Reference = Callable[..., Mapping[str, Any]]
 EMPTY: Mapping[str, object] = MappingProxyType({})
@@ -111,10 +111,10 @@ class RtlDeclined(UserWarning):
 
 @dataclass(frozen=True)
 class Sample:
-    """One fold configuration by the kernel's member names; ``adapter`` feeds the first input."""
+    """One folding configuration by the kernel's member names; ``adapter`` feeds the first input."""
 
     label: str
-    folds: Mapping[str, object]
+    factors: Mapping[str, object]
     adapter: bool = False
 
 
@@ -134,7 +134,7 @@ def conformance(
     inputs: Mapping[str, Tensor],
     outputs: Outputs,
     reference: Reference,
-    folds: Folds = SAMPLED,
+    factors: Factors = SAMPLED,
     choices: Mapping[str, object] = EMPTY,
     facts: Mapping[str, object] = EMPTY,
     xsim: Path | None = None,
@@ -142,7 +142,7 @@ def conformance(
 ) -> tuple[Sample, ...]:
     """Check ``family`` over its samples, simulating each under ``xsim`` when given."""
     chosen = samples(
-        family, inputs=inputs, outputs=outputs, folds=folds, choices=choices, facts=facts
+        family, inputs=inputs, outputs=outputs, factors=factors, choices=choices, facts=facts
     )
     failures: list[tuple[Sample, str, str]] = []
     for index, sample in enumerate(chosen):
@@ -192,26 +192,26 @@ def samples(
     *,
     inputs: Mapping[str, Tensor],
     outputs: Outputs,
-    folds: Folds = SAMPLED,
+    factors: Factors = SAMPLED,
     choices: Mapping[str, object] = EMPTY,
     facts: Mapping[str, object] = EMPTY,
 ) -> tuple[Sample, ...]:
     """The plain samples, deduplicated, then the adapter sample."""
-    if isinstance(folds, str):
-        if folds not in (SAMPLED, ALL):
-            raise ValueError(f"folds are SAMPLED, ALL or configurations, not {folds!r}")
+    if isinstance(factors, str):
+        if factors not in (SAMPLED, ALL):
+            raise ValueError(f"factors are SAMPLED, ALL or configurations, not {factors!r}")
         base = _committed(family, EMPTY, inputs, outputs, choices, facts)
-        configurations = _enumerated(base, folds)
+        configurations = _enumerated(base, factors)
     else:
-        configurations = [(_label(config), dict(config)) for config in folds]
+        configurations = [(_label(config), dict(config)) for config in factors]
     plain: list[Sample] = []
     for label, config in configurations:
-        if all(sample.folds != config for sample in plain):
+        if all(sample.factors != config for sample in plain):
             plain.append(Sample(label, config))
     if not plain:
-        raise ValueError(f"{family.__name__}: no fold configuration to sample")
+        raise ValueError(f"{family.__name__}: no folding configuration to sample")
     middle = plain[len(plain) // 2]
-    adapter = (Sample(f"adapter, {middle.label}", middle.folds, adapter=True),) if inputs else ()
+    adapter = (Sample(f"adapter, {middle.label}", middle.factors, adapter=True),) if inputs else ()
     return (*plain, *adapter)
 
 
@@ -229,7 +229,7 @@ def _candidates(point: Space, key: str) -> tuple[object, ...]:
     return tuple(found.value)
 
 
-def _enumerated(base: Space, folds: str) -> list[tuple[str, dict[str, object]]]:
+def _enumerated(base: Space, factors: str) -> list[tuple[str, dict[str, object]]]:
     """Configurations of the kernel's open scalar Decisions, each committed in turn."""
     selectors = {info.key for info in inspection.decisions(base) if info.selector}
     keys = [key for key in undecided(base, f"{KERNEL}.*") if key not in selectors]
@@ -243,7 +243,7 @@ def _enumerated(base: Space, folds: str) -> list[tuple[str, dict[str, object]]]:
             config[key[local:]] = value
         return config
 
-    if folds == SAMPLED:
+    if factors == SAMPLED:
         return [
             ("smallest", pick(lambda found: found[0])),
             ("interior", pick(lambda found: found[len(found) // 2])),
@@ -374,7 +374,7 @@ def place(
     The memory presents ``vector_major`` at the first lane count, of those
     dividing the innermost extent, that makes the stream convert widths.
     """
-    plain = settled(_committed(family, sample.folds, inputs, outputs, choices, facts))
+    plain = settled(_committed(family, sample.factors, inputs, outputs, choices, facts))
     if not sample.adapter:
         return plain
     name = next(iter(inputs))
@@ -387,7 +387,7 @@ def place(
         if other == lanes:
             continue
         fed = (name, vector_major(tensor.shape, other), contents)
-        point = settled(_committed(family, sample.folds, inputs, outputs, choices, facts, fed))
+        point = settled(_committed(family, sample.factors, inputs, outputs, choices, facts, fed))
         stream = getattr(point, name)
         found = stream.query(Stream.plan)
         if isinstance(found, Available) and Step.WIDTH in found.value.steps:
@@ -504,7 +504,7 @@ def _check_unplaced_outputs(
     never its own output stream: a compiler infers output types node by node.
     """
     where, ports = _where(family, sample), _ports(family)
-    probe = getattr(_committed(family, sample.folds, inputs, EMPTY, choices, facts), KERNEL)
+    probe = getattr(_committed(family, sample.factors, inputs, EMPTY, choices, facts), KERNEL)
     placed = _ends(point, family, sample, list(outputs))
     for name in outputs:
         port = getattr(probe, ports[name])

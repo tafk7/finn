@@ -28,7 +28,7 @@ outputs unused.
   (data, valid, ready), those ready/valid pins, without a marker. Placed with
   a schedule, it exports its read of the tensor under ``ACCESS``, from which
   its kernel binds its indices' extents. Left without a stream it is idle,
-  with the pins of its ``dtype`` and of the ``folds`` of its ``lanes``.
+  with the pins of its ``dtype`` and of the ``factors`` of its ``lanes``.
 """
 
 from __future__ import annotations
@@ -172,8 +172,8 @@ class AxiStreamPort(Port):
     it, from its kernel's facts, choices and input elements, never from its
     own output stream: a compiler asks a kernel for its output types before
     the downstream tensor exists. ``admits`` is the integer policy its
-    hardware takes. Idle (no stream), it carries the lanes of the ``folds`` of
-    its ``lanes`` indices. It is an AXIS bus named ``name``, with a ``TLAST``
+    hardware takes. Idle (no stream), it carries the lanes of the ``factors``
+    of its ``lanes`` indices. It is an AXIS bus named ``name``, with a ``TLAST``
     when what it presents carries a marker; or, given ``signals`` (data, valid,
     ready), those ready/valid pins, without a marker.
     """
@@ -186,7 +186,7 @@ class AxiStreamPort(Port):
     holds: tuple[Index, ...] = Param(default=())
     closes: tuple[Index, ...] = Param(default=())
     reshaped: bool = Param(default=False)
-    folds: dict[Index, int] = Param(default={})
+    factors: dict[Index, int] = Param(default={})
     sequence: BeatSequence | None = Param(default=None, semantics=OPTIONAL_SEQUENCE)
     dtype: QONNXDataType | None = Param(default=None, semantics=OPTIONAL_DTYPE)
     admits: Integer | None = Param(default=None, semantics=INTEGER_POLICY)
@@ -260,8 +260,8 @@ class AxiStreamPort(Port):
     @derived
     def lane_count(self) -> int:
         if self.idle:
-            folds = self.folds
-            return prod(folds.get(index, 1) for index in self.lanes)
+            factors = self.factors
+            return prod(factors.get(index, 1) for index in self.lanes)
         return self.presented.form.lanes
 
     @derived

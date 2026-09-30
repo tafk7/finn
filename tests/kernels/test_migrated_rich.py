@@ -84,8 +84,8 @@ def threshold(
         bram=bram,
         uram=uram,
     )
-    folds = {} if pe is None else {"pe": pe}
-    report = base.try_with_choices(use_axilite=axilite, deep_pipeline=deep, **folds)
+    factors = {} if pe is None else {"pe": pe}
+    report = base.try_with_choices(use_axilite=axilite, deep_pipeline=deep, **factors)
     assert report.accepted
     return report.instance
 

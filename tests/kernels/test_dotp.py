@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Physical dotp on the Kernel protocol: three ports, its own folds, one admission.
+"""Physical dotp on the Kernel protocol: three ports, its own folding factors, one admission.
 
 Each compute core is its own kernel over the shared ``DotpAxiKernel``
 declaration; most cases exercise the packed core, which every DSP target has.
@@ -58,7 +58,7 @@ def codes(result):
     return {finding.code for finding in result.findings}
 
 
-def test_a_core_declares_ports_folds_and_facts_and_the_base_derives_the_module():
+def test_a_core_declares_ports_folding_factors_and_facts_and_the_base_derives_the_module():
     assert DotpAxiKernel.__bases__ == (Kernel,)
     assert PackedDotpKernel.__bases__ == Int8Dsp58DotpKernel.__bases__ == (DotpAxiKernel,)
     point = kernel()
@@ -126,7 +126,7 @@ def test_physical_framing_follows_the_schedule_and_only_activation_has_last():
     assert [field.bit_offset for field in point.w.axis.payload.fields] == list(range(0, 45, 3))
 
 
-def test_the_schedule_folds_n_by_pe_and_k_by_simd():
+def test_the_schedule_splits_n_by_pe_and_k_by_simd():
     point = kernel(pe=2, simd=2, outputs=4, reduction=6, rows=3)
     assert (point.rows, point.outputs, point.reduction) == (3, 4, 6)
     x, w, y = (port.presented.form for port in (point.x, point.w, point.y))
@@ -199,7 +199,7 @@ def test_physical_view_reports_each_refusal_once(updates, code):
 @pytest.mark.parametrize(
     "updates,error",
     [
-        # A mistyped fact is refused at the node call; a mistyped fold at commit.
+        # A mistyped fact is refused at the node call; a mistyped folding factor at commit.
         ({"target_period_ns": "5"}, DefinitionError),
         ({"target_dsp": "DSP58"}, DefinitionError),
         ({"form": "dense"}, DefinitionError),
@@ -213,11 +213,11 @@ def test_space_rejects_mistyped_values_at_binding(updates, error):
         kernel(**updates)
 
 
-@pytest.mark.parametrize("fold", ("pe", "simd"))
-def test_a_fold_must_divide_its_extent(fold):
+@pytest.mark.parametrize("factor", ("pe", "simd"))
+def test_a_folding_factor_must_divide_its_extent(factor):
     extents = {"outputs": 6, "reduction": 6}
-    with pytest.raises(ValueError, match=f"compute.{fold}"):
-        kernel(**{**extents, fold: 4})
+    with pytest.raises(ValueError, match=f"compute.{factor}"):
+        kernel(**{**extents, factor: 4})
 
 
 def test_constraints_gate_acceptance_without_revalidating_raw_codegen():
@@ -229,19 +229,19 @@ def test_constraints_gate_acceptance_without_revalidating_raw_codegen():
     assert codes(physical.accepted_result) == {"dotp-pumping"}
 
 
-def test_the_core_refuses_before_its_folds_are_chosen():
+def test_the_core_refuses_before_its_folding_factors_are_chosen():
     point = kernel(weights_dtype=DataType["INT27"], pe=None, simd=None, compute_pumping=None)
     assert codes(point.inspect(DotpAxiKernel.core_supported).result) == {"dotp-weight-width"}
-    # The module waits on the folds; the refusal is already known.
+    # The module waits on the folding factors; the refusal is already known.
     module = point.inspect(DotpAxiKernel.build_requirements).accepted_result
     assert not isinstance(module, Available)
-    # Folds left open leave an admissible core unresolved, not refused.
-    open_folds = kernel(pe=None, simd=None, compute_pumping=None)
-    assert isinstance(open_folds.inspect(DotpAxiKernel.core_supported).result, Available)
+    # Folding factors left open leave an admissible core unresolved, not refused.
+    open_factors = kernel(pe=None, simd=None, compute_pumping=None)
+    assert isinstance(open_factors.inspect(DotpAxiKernel.core_supported).result, Available)
     assert isinstance(
-        open_folds.inspect(DotpAxiKernel.build_requirements).accepted_result, Unresolved
+        open_factors.inspect(DotpAxiKernel.build_requirements).accepted_result, Unresolved
     )
-    assert open_folds.x.element.bits == 3
+    assert open_factors.x.element.bits == 3
 
 
 @pytest.mark.parametrize("missing", ("target_dsp", "target_period_ns"))

@@ -11,7 +11,7 @@ rows. With multiple sets, each input beat requires a matching set-selector beat.
 
 PE, the channels a beat, is a Decision over the divisors of the table's C,
 known without a stream, so a flat build commits it as a choice. Placed, the
-input and output walk one schedule row-major, ``c`` folded by PE innermost;
+input and output walk one schedule row-major, ``c`` split by PE innermost;
 their tensors bind the extents, and the channel count must agree with the
 table's (``kernel-extents``). The set port indexes beats, which no index of a
 tensor expresses, so it presents a given sequence.
@@ -99,13 +99,13 @@ class ThresholdingAxiKernel(Kernel):
 
     @derived
     def channels(self) -> int | Rejected:
-        """C, the table's: known without a stream, so a flat build has its fold domain."""
+        """C, the table's: known without a stream, so a flat build has its factor domain."""
         table = self.thresholds
         if not table or not table[0]:
             return reject("threshold-shape", "a nonempty threshold table is required")
         return len(table[0])
 
-    # PE channels a beat; PE above C would fold rows into the lanes, not modelled yet.
+    # PE channels a beat; PE above C would carry rows in the lanes, not modelled yet.
     pe: int = Decision(domain=divisors_of(channels))
     # Where a parent places it: its streams, and the control
     # bus that exports its AXI-Lite interface when thresholds are runtime-writable.
@@ -248,14 +248,14 @@ class ThresholdingAxiKernel(Kernel):
         return (*(Index(f"a{axis}") for axis in range(rank - 1)), c)
 
     @derived
-    def folds(self) -> dict[Index, int]:
+    def factors(self) -> dict[Index, int]:
         return {c: self.pe}
 
     @derived
     def schedule(self) -> Schedule | Rejected:
-        """Row-major over the input's axes, ``c`` (the table's C) folded by PE innermost."""
+        """Row-major over the input's axes, ``c`` (the table's C) split by PE innermost."""
         indices = self.indices
-        return self.bound_schedule(indices, self.folds, extents={c: self.channels})
+        return self.bound_schedule(indices, self.factors, extents={c: self.channels})
 
     @derived
     def set_sequence(self) -> BeatSequence | Rejected:
@@ -272,7 +272,7 @@ class ThresholdingAxiKernel(Kernel):
         endpoint=Endpoint.TARGET,
         stream=input_stream,
         schedule=schedule,
-        folds=folds,
+        factors=factors,
         index=indices,
         lanes=(c,),
         dtype=input_dtype,
@@ -282,7 +282,7 @@ class ThresholdingAxiKernel(Kernel):
         endpoint=Endpoint.INITIATOR,
         stream=output_stream,
         schedule=schedule,
-        folds=folds,
+        factors=factors,
         index=indices,
         lanes=(c,),
         dtype=result_dtype,

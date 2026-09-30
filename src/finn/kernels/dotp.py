@@ -22,7 +22,7 @@ Its three ports (``x``, ``w``, ``y``) sit on the streams its parent supplies
 (``x_stream``, ``w_stream``, ``y_stream``). The extents are bound from the
 tensors the ports read, which must agree (``kernel-extents``): x reads
 ``(m, k)`` (``(m, k, n)`` depthwise), w ``(k, n)`` (weights stored ``(k, n)``)
-and y ``(m, n)``. PE and SIMD are dotp's own Decisions, the folds of ``n`` and ``k``,
+and y ``(m, n)``. PE and SIMD are dotp's own Decisions, the folding factors of ``n`` and ``k``,
 and its ``schedule`` walks ``m``, then ``n``, then ``k`` innermost; every
 port's beat sequence derives from it. ``reshape_activations`` reads (M, K, N)
 activations as (M, K * N): a densely realized depthwise operation.
@@ -106,8 +106,8 @@ class DotpAxiKernel(Kernel):
 
     @derived
     def schedule(self) -> Schedule | Rejected:
-        """``n`` folded by PE and ``k`` by SIMD; ``m``, then ``n``, then the reduction."""
-        return self.bound_schedule(beats=(m, n, k), folds={n: self.pe, k: self.simd})
+        """``n`` split by PE and ``k`` by SIMD; ``m``, then ``n``, then the reduction."""
+        return self.bound_schedule(beats=(m, n, k), factors={n: self.pe, k: self.simd})
 
     @derived
     def x_index(self) -> tuple[Index, ...]:

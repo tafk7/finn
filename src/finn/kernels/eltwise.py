@@ -31,7 +31,7 @@ from finn.dataflow.datatypes import QONNXDataType, resolve_qonnx_datatype_name
 from finn.dataflow.schedule import Index, Schedule
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.contribution_types import CopiedSource
-from finn.kernels.base import NATIVE_CLOCKING, Clocking, Kernel, fold_domain
+from finn.kernels.base import NATIVE_CLOCKING, Clocking, Kernel, factor_domain
 from finn.kernels.datatypes.domains import Integer
 from finn.kernels.datatypes.scalar import Scalar
 from finn.kernels.datatypes.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
@@ -69,7 +69,7 @@ class EltwiseKernel(Kernel):
 
     operation: str = Param()
     # PE elements of the innermost axis a beat: its divisors placed, any the RTL takes flat.
-    pe: int = Decision(domain=fold_domain(c))
+    pe: int = Decision(domain=factor_domain(c))
     lhs_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
     rhs_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
     # The streams it sits on, when a parent places it.
@@ -151,20 +151,20 @@ class EltwiseKernel(Kernel):
         return indices[max(0, len(indices) - rank) :]  # a longer rhs is refused by rank
 
     @derived
-    def folds(self) -> dict[Index, int]:
+    def factors(self) -> dict[Index, int]:
         return {c: self.pe}
 
     @derived
     def schedule(self) -> Schedule | Rejected:
-        """Row-major over lhs's axes, ``c`` folded by PE innermost."""
-        return self.bound_schedule(self.indices, self.folds)
+        """Row-major over lhs's axes, ``c`` split by PE innermost."""
+        return self.bound_schedule(self.indices, self.factors)
 
     lhs = AxiStreamPort(
         name="lhs",
         endpoint=Endpoint.TARGET,
         stream=lhs_stream,
         schedule=schedule,
-        folds=folds,
+        factors=factors,
         index=indices,
         lanes=(c,),
         dtype=lhs_dtype,
@@ -177,7 +177,7 @@ class EltwiseKernel(Kernel):
         endpoint=Endpoint.TARGET,
         stream=rhs_stream,
         schedule=schedule,
-        folds=folds,
+        factors=factors,
         index=rhs_indices,
         lanes=(c,),
         dtype=rhs_dtype,
@@ -190,7 +190,7 @@ class EltwiseKernel(Kernel):
         endpoint=Endpoint.INITIATOR,
         stream=result_stream,
         schedule=schedule,
-        folds=folds,
+        factors=factors,
         index=indices,
         lanes=(c,),
         dtype=result_dtype,

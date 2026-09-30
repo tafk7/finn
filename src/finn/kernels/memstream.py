@@ -217,7 +217,7 @@ class MemStreamKernel(Kernel):
         return BeatSequence(self.form, Repetition.CYCLIC)
 
     @derived
-    def word_folds(self) -> dict[Index, int]:
+    def word_factors(self) -> dict[Index, int]:
         """The lanes of a word: the form's fields, carried by an idle output too."""
         return {FIELD: self.form.lanes}
 
@@ -238,7 +238,7 @@ class MemStreamKernel(Kernel):
         sequence=output_sequence,
         dtype=dtype,
         lanes=(FIELD,),
-        folds=word_folds,
+        factors=word_factors,
         clock="clk",
         reset="rst",
     )

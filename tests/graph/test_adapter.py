@@ -74,17 +74,17 @@ def configured(wrapped: ModelWrapper, *, fused: bool = True) -> Any:
         if f"{kernel}.memory" not in dict(design.pinned):
             choices[f"{kernel}.memory"] = "memstream"
     point = settled(commit(design.point, choices))
-    folds: dict[str, object] = {}
+    core_choices: dict[str, object] = {}
     for _, kernel in design.kernels:
-        folds |= {
+        core_choices |= {
             f"{kernel}.compute.packed.pe": PE,
             f"{kernel}.compute.packed.simd": SIMD,
             f"{kernel}.compute.packed.compute_pumping": False,
         }
         if getattr(point, kernel).supplied == "memstream":
-            folds[f"{kernel}.memory.memstream.ram_style"] = "auto"
-            folds[f"{kernel}.memory.memstream.pumped_memory"] = False
-    return design, settled(commit(point, folds))
+            core_choices[f"{kernel}.memory.memstream.ram_style"] = "auto"
+            core_choices[f"{kernel}.memory.memstream.pumped_memory"] = False
+    return design, settled(commit(point, core_choices))
 
 
 H = exact_result_dtype(INPUTS, A, W)

@@ -163,14 +163,14 @@ def test_invalid_configuration_fails_during_construction(changes, match):
         assembly(**changes)
 
 
-def test_the_space_settles_the_core_and_the_core_owns_its_folds():
+def test_the_space_settles_the_core_and_the_core_owns_its_folding_factors():
     base = point_for(
         MatMulKernel,
         FACTS,
         memory="none",
         **{"weight_stream.transport": "direct"},
     )
-    # On DSP48E2 only the packed core admits the configuration, before any fold.
+    # On DSP48E2 only the packed core admits the configuration, before any folding factor.
     settled_core = settle(base)
     assert settled_core.committed == {"compute": "packed"}
     point = commit(

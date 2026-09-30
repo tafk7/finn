@@ -51,8 +51,8 @@ def enumerate_positions(
 
 
 def gemm(M: int, N: int, K: int, pe: int, simd: int) -> Schedule:
-    """MatMul's schedule: outputs folded by PE, the reduction by SIMD, reduction innermost."""
-    return Schedule({m: M, n: N, k: K}, folds={n: pe, k: simd}, beats=(m, n, k))
+    """MatMul's schedule: outputs split by PE, the reduction by SIMD, reduction innermost."""
+    return Schedule({m: M, n: N, k: K}, factors={n: pe, k: simd}, beats=(m, n, k))
 
 
 # -- indices, expressions and schedules ---------------------------------------------------
@@ -74,17 +74,17 @@ def test_index_arithmetic_builds_affine_expressions() -> None:
 def test_a_schedule_folds_each_index_into_beats_and_lanes() -> None:
     schedule = gemm(3, 6, 8, pe=3, simd=2)
     assert schedule.beats == (m, n, k)
-    assert (schedule.fold(n), schedule.fold(k), schedule.fold(m)) == (3, 2, 1)
+    assert (schedule.factor(n), schedule.factor(k), schedule.factor(m)) == (3, 2, 1)
     assert (schedule.steps(m), schedule.steps(n), schedule.steps(k)) == (3, 2, 4)
     assert schedule.beat_count == 24
     # The beats default to the extents' order.
     assert Schedule({k: 4, m: 2}).beats == (k, m)
     with pytest.raises(ValueError, match="divide"):
-        Schedule({m: 1, k: 5}, folds={k: 2})
+        Schedule({m: 1, k: 5}, factors={k: 2})
     with pytest.raises(ValueError, match="once"):
         Schedule({m: 1, k: 2}, beats=(m,))
     with pytest.raises(ValueError, match="no extent"):
-        Schedule({m: 1}, folds={k: 2})
+        Schedule({m: 1}, factors={k: 2})
 
 
 def test_the_forms_name_canonical_gemm_operands() -> None:
@@ -176,7 +176,9 @@ def test_tiled_mvu_forms_and_finn_s_input_gen_parameters() -> None:
     M, K, N, PE, SIMD, T = 6, 8, 6, 3, 2, 3
     SF, NF = K // SIMD, N // PE
     mt, t = Index("mt"), Index("t")
-    schedule = Schedule({mt: M // T, n: N, k: K, t: T}, folds={n: PE, k: SIMD}, beats=(mt, n, k, t))
+    schedule = Schedule(
+        {mt: M // T, n: N, k: K, t: T}, factors={n: PE, k: SIMD}, beats=(mt, n, k, t)
+    )
     core_in = schedule.present((M, K), (mt * T + t, k), lanes=(k,))
     core_out = schedule.present((M, N), (mt * T + t, n), lanes=(n,), reduces=(k,))
     assert core_in == Traversal.over(
@@ -196,7 +198,7 @@ def test_sliding_windows_are_one_affine_expression() -> None:
     H, W, C, KH, KW, S, D, SIMD = 7, 7, 2, 2, 3, 2, 2, 1
     OH, OW = (H - D * (KH - 1) - 1) // S + 1, (W - D * (KW - 1) - 1) // S + 1
     oh, ow, kh, kw, c = (Index(name) for name in ("oh", "ow", "kh", "kw", "c"))
-    schedule = Schedule({oh: OH, ow: OW, kh: KH, kw: KW, c: C}, folds={c: SIMD})
+    schedule = Schedule({oh: OH, ow: OW, kh: KH, kw: KW, c: C}, factors={c: SIMD})
     x = (oh * S + kh * D, ow * S + kw * D, c)
     want = enumerate_positions(
         (("oh", OH), ("ow", OW), ("kh", KH), ("kw", KW), ("c", C)),
@@ -209,12 +211,12 @@ def test_sliding_windows_are_one_affine_expression() -> None:
 def test_thresholding_and_a_broadcast_operand() -> None:
     M, C, PE = 3, 8, 4
     c = Index("c")
-    schedule = Schedule({m: M, c: C}, folds={c: PE})
+    schedule = Schedule({m: M, c: C}, factors={c: PE})
     assert schedule.present((M, C), (m, c), lanes=(c,)) == vector_major((M, C), PE)
     # A channel vector broadcast over rows, and a per-row scalar within each beat.
     assert schedule.present((C,), (c,), lanes=(c,)) == vector_major((C,), PE).repeated(M)
     assert schedule.present((M,), (m,)) == Traversal((M,), (Loop(M, 1), Loop(C // PE, 0)), ())
-    # A folded index that moves the position must be carried as a field.
+    # An index with lanes that moves the position must be carried as a field.
     with pytest.raises(Refused, match="field"):
         schedule.present((M, C), (m, c))
 
@@ -222,7 +224,7 @@ def test_thresholding_and_a_broadcast_operand() -> None:
 def test_a_transpose_is_a_lane_regroup() -> None:
     I, J, SIMD = 4, 6, 2  # noqa: E741
     i, j = Index("i"), Index("j")
-    schedule = Schedule({j: J, i: I}, folds={i: SIMD})
+    schedule = Schedule({j: J, i: I}, factors={i: SIMD})
     columns = schedule.present((I, J), (i, j), lanes=(i,))
     assert classify(vector_major((I, J), SIMD), columns).adaptation is Adaptation.LANE_REGROUP
 
@@ -236,7 +238,7 @@ def test_reduction_orders_are_legal_schedules_a_reorder_apart() -> None:
     extents = {m: M, n: N, h: KH, w: KW, c: C}
     forms = {}
     for order in permutations((h, w, c)):
-        schedule = Schedule(extents, folds={n: PE, c: SIMD}, beats=(m, n, *order))
+        schedule = Schedule(extents, factors={n: PE, c: SIMD}, beats=(m, n, *order))
         assert schedule.closing(order) == LevelEnd(KH * KW * C // SIMD)
         forms[order] = schedule.present((M, KH, KW, C), (m, h, w, c), lanes=(c,))
     canonical = forms[(h, w, c)]
@@ -249,7 +251,7 @@ def test_a_held_operand_is_presented_once_per_outer_beat() -> None:
     # Weight-stationary: tiles of n, then of k, rows innermost; each weight tile
     # is presented once, before the rows it serves.
     M, N, K, ROWS, COLS = 4, 6, 8, 2, 3
-    schedule = Schedule({m: M, n: N, k: K}, folds={k: ROWS, n: COLS}, beats=(n, k, m))
+    schedule = Schedule({m: M, n: N, k: K}, factors={k: ROWS, n: COLS}, beats=(n, k, m))
     held = schedule.present((K, N), Form.DENSE.w, lanes=(k, n), holds=(m,))
     assert held.beats == (N // COLS) * (K // ROWS)
     assert all(loop.stride for loop in held.beat_loops)
@@ -261,7 +263,7 @@ def test_a_reduction_presented_before_it_closes_is_refused() -> None:
     schedule = gemm(2, 2, 4, 1, 2)
     with pytest.raises(Refused, match="reduced"):
         schedule.present((2, 2), Form.DENSE.y, lanes=(n,), reduces=(m,))
-    reordered = Schedule({m: 2, n: 2, k: 4}, folds={n: 1, k: 2}, beats=(n, k, m))
+    reordered = Schedule({m: 2, n: 2, k: 4}, factors={n: 1, k: 2}, beats=(n, k, m))
     with pytest.raises(Refused, match="innermost"):
         reordered.closing((k,))
     with pytest.raises(Refused, match="not an index"):

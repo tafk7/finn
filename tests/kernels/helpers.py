@@ -48,11 +48,11 @@ def placed_dotp(
     reduction: int | None = None,
     **facts: object,
 ) -> S:
-    """A dot-product core between three boundary streams, its folds committed.
+    """A dot-product core between three boundary streams, its folding factors committed.
 
     The core takes its extents from the streams: ``outputs`` (N) defaults to PE
-    and ``reduction`` (K) to SIMD, one fold each. A fold left ``None`` stays
-    open.
+    and ``reduction`` (K) to SIMD, one fold each. A folding factor left ``None``
+    stays open.
     """
     form = facts.get("form", Form.DENSE)
     n = outputs if outputs is not None else (pe if isinstance(pe, int) and pe > 0 else 1)

@@ -208,26 +208,26 @@ def test_mismatches_name_the_adapter_that_would_repair_them():
 
 
 def test_element_repetition_direction_and_marker_rules_are_checked():
-    fold = vector_major((4,), 2)
-    ok = contract(fold, Endpoint.INITIATOR)
-    wider = contract(fold, Endpoint.TARGET, element=INT4, width=8)
+    form = vector_major((4,), 2)
+    ok = contract(form, Endpoint.INITIATOR)
+    wider = contract(form, Endpoint.TARGET, element=INT4, width=8)
     assert "stream-element" in codes(
         compatibility(ok, wider, source_is_top=False, sink_is_top=False)
     )
-    cyclic_sink = contract(fold, Endpoint.TARGET, repetition=Repetition.CYCLIC)
+    cyclic_sink = contract(form, Endpoint.TARGET, repetition=Repetition.CYCLIC)
     assert "stream-repetition" in codes(
         compatibility(ok, cyclic_sink, source_is_top=False, sink_is_top=False)
     )
-    backwards = contract(fold, Endpoint.INITIATOR)
+    backwards = contract(form, Endpoint.INITIATOR)
     assert "stream-direction" in codes(
         compatibility(ok, backwards, source_is_top=False, sink_is_top=False)
     )
     last = (StreamMarker("s_m", MarkerKind.LAST),)
     produced = StreamContract(
-        native("s", 6, Endpoint.INITIATOR, markers=last), INT3, fold, markers={"s_m": LevelEnd(2)}
+        native("s", 6, Endpoint.INITIATOR, markers=last), INT3, form, markers={"s_m": LevelEnd(2)}
     )
     required = StreamContract(
-        native("s", 6, Endpoint.TARGET, markers=last), INT3, fold, markers={"s_m": LevelEnd(1)}
+        native("s", 6, Endpoint.TARGET, markers=last), INT3, form, markers={"s_m": LevelEnd(1)}
     )
     assert "stream-marker" in codes(
         compatibility(produced, required, source_is_top=False, sink_is_top=False)

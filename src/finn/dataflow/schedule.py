@@ -7,12 +7,13 @@ An ``Index`` names one dimension of an operation (``m``, ``n``, ``k``). Index
 arithmetic builds the affine expressions a port reads its tensor by
 (``oh * S + kh * D``); a plain index is the expression of coefficient one.
 
-A ``Schedule`` is a kernel's iteration: each index's extent, its fold (the
-lanes it spreads over each beat; one when unfolded) and the order of the beats,
-outer to inner. A folded index ``i`` of extent ``E`` and fold ``F`` walks
-``E / F`` beats, each carrying ``F`` lanes, at the position ``i_beat * F +
-i_lane``. An index split into several temporal parts (a tile) is several
-indices, joined in the expression a port reads by (``mt * T + t``).
+A ``Schedule`` is a kernel's iteration: each index's extent, its folding
+factor (the lanes it spreads over each beat; one when it has none) and the
+order of the beats, outer to inner. An index ``i`` of extent ``E`` and folding
+factor ``F`` walks ``E / F`` beats (its fold, ``steps``), each carrying ``F``
+lanes, at the position ``i_beat * F + i_lane``. An index split into several
+temporal parts (a tile) is several indices, joined in the expression a port
+reads by (``mt * T + t``).
 
 ``present`` projects the schedule through one port's expressions into the
 ``Traversal`` it presents; it is the single derivation rule, so ports that
@@ -21,8 +22,8 @@ share a schedule agree by construction.
 - Each index's beat part becomes a beat loop, in the schedule's order; one the
   port does not read steps by zero, a replay.
 - ``lanes`` orders the lane parts a port carries, outer first (field zero is
-  the innermost): the hardware's field convention. A folded index the port does
-  not carry must not move its position: a broadcast.
+  the innermost): the hardware's field convention. An index with lanes that the
+  port does not carry must not move its position: a broadcast.
 - ``reduces`` lists the indices whose beats a port is presented *after* (an
   output closing a reduction), ``holds`` those it is presented *before* (an
   operand held while they run). Either way the port does not step through
@@ -146,33 +147,35 @@ class Affine:
 
 @dataclass(frozen=True, init=False)
 class Schedule:
-    """Each index's extent and fold, and the beats' order, outer to inner."""
+    """Each index's extent and folding factor, and the beats' order, outer to inner."""
 
     extents: tuple[tuple[Index, int], ...]
-    folds: tuple[tuple[Index, int], ...]
+    factors: tuple[tuple[Index, int], ...]
 
     def __init__(
         self,
         extents: Mapping[Index, int],
-        folds: Mapping[Index, int] | None = None,
+        factors: Mapping[Index, int] | None = None,
         beats: Sequence[Index] | None = None,
     ) -> None:
         order = tuple(extents) if beats is None else tuple(beats)
         if sorted(order) != sorted(extents) or len(set(order)) != len(order):
             raise ValueError(f"the beats {list(order)} order each index {list(extents)} once")
-        folded = dict(folds or {})
-        for index in folded:
+        given = dict(factors or {})
+        for index in given:
             if index not in extents:
-                raise ValueError(f"{index!r} is folded but has no extent")
+                raise ValueError(f"{index!r} has a folding factor but no extent")
         for index in order:
-            extent, fold = extents[index], folded.get(index, 1)
+            extent, factor = extents[index], given.get(index, 1)
             _positive(extent, f"{index!r}'s extent")
-            _positive(fold, f"{index!r}'s fold")
-            if extent % fold:
-                raise ValueError(f"a fold of {fold} does not divide {index!r}'s extent {extent}")
+            _positive(factor, f"{index!r}'s folding factor")
+            if extent % factor:
+                raise ValueError(
+                    f"a folding factor of {factor} does not divide {index!r}'s extent {extent}"
+                )
         object.__setattr__(self, "extents", tuple((index, extents[index]) for index in order))
         object.__setattr__(
-            self, "folds", tuple((index, folded[index]) for index in order if index in folded)
+            self, "factors", tuple((index, given[index]) for index in order if index in given)
         )
 
     @property
@@ -183,15 +186,15 @@ class Schedule:
     def extent(self, index: Index) -> int:
         return dict(self.extents)[index]
 
-    def fold(self, index: Index) -> int:
-        """The lanes ``index`` spreads over each beat; one when unfolded."""
+    def factor(self, index: Index) -> int:
+        """The lanes ``index`` spreads over each beat, its folding factor; one when it has none."""
         if index not in dict(self.extents):
             raise KeyError(index)
-        return dict(self.folds).get(index, 1)
+        return dict(self.factors).get(index, 1)
 
     def steps(self, index: Index) -> int:
-        """The beats ``index`` walks: its extent over its fold."""
-        return self.extent(index) // self.fold(index)
+        """The beats ``index`` walks, its fold: its extent over its folding factor."""
+        return self.extent(index) // self.factor(index)
 
     @property
     def beat_count(self) -> int:
@@ -235,7 +238,7 @@ class Schedule:
             return sum(axis.coefficient(i) * strides[j] for j, axis in enumerate(axes))
 
         for i in self.beats:
-            if self.fold(i) > 1 and i not in lanes and stride(i):
+            if self.factor(i) > 1 and i not in lanes and stride(i):
                 raise Refused(f"{i!r}'s lanes move the position; carry them as a field")
         dropped = (*reduces, *holds)
         for i in dropped:
@@ -243,9 +246,9 @@ class Schedule:
                 word = "reduced" if i in reduces else "held"
                 raise Refused(f"{i!r} moves the position, so it cannot be {word} away")
         beats = [
-            Loop(self.steps(i), self.fold(i) * stride(i)) for i in self.beats if i not in dropped
+            Loop(self.steps(i), self.factor(i) * stride(i)) for i in self.beats if i not in dropped
         ]
-        fields = [Loop(self.fold(i), stride(i)) for i in lanes]
+        fields = [Loop(self.factor(i), stride(i)) for i in lanes]
         try:
             return Traversal(shape, beats, fields)
         except ValueError as error:

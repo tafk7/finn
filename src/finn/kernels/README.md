@@ -46,7 +46,7 @@ planned changes, not additional APIs already delivered here.
 ```text
 base.py                  the Kernel protocol: module, ports' pins, parameters, clocking, admission
 port.py                  Port nodes: native word ports and stream ports (admission, sequence, pins)
-dotp.py                  dotp_axi on three ports, one kernel per compute core, its own folds
+dotp.py                  dotp_axi on three ports, one kernel per compute core, its own folding factors
 matmul.py                MatMulKernel: facts m, n, k and form; compute and memory Decisions
 composite.py             Composite and Design: children wired into one module (netlist), or a parent's parts
 memstream.py             FinnLib memstream_axi: a stored operand in its consumer's order (INIT_FILE)
@@ -90,8 +90,8 @@ integer policy; an `AxiStreamPort` presents its kernel's schedule through the
 indices it reads, and the kernel binds each index's extent from the tensors
 its ports read (`Kernel.extents`, `extent_of`; ports that disagree are refused
 as `kernel-extents`). A core therefore sits between streams, whose tensors give
-its extents and its consumed elements, and states what it produces; its folds
-are its own Decisions:
+its extents and its consumed elements, and states what it produces; its folding
+factors are its own Decisions:
 
 ```python
 from finn.core.space import Space
@@ -148,7 +148,7 @@ kernels reference the streams they sit on through reference inputs, and each
 of their ports exports its contract for its stream (`exports = {PORT:
 {stream: contract}}`), presenting the end's own traversal of the tensor (a
 `BeatSequence`: traversal, repetition, markers) derived from its kernel's
-schedule (`finn.dataflow.schedule`: `n` folded by PE, `k` by SIMD). A boundary
+schedule (`finn.dataflow.schedule`: `n` split by PE, `k` by SIMD). A boundary
 stream presents what its internal end presents, without the replay the
 receiver realizes and without markers. Each slot is a node, a Decision over
 kernels, or a derived node, and each Decision is present only where its case
@@ -182,7 +182,7 @@ joins a PE = 4 producer to a SIMD = 2 consumer through `vpc` and `input_gen`.
 A stream sees each user's port on that stream only (`Users(PORT)`), so a port's
 refusal names its own stream and independent streams settle independently.
 Ports present what their kernel's schedule derives: dotp takes its extents
-from its streams and folds them by its own PE and SIMD, so a form it cannot
+from its streams and splits them by its own PE and SIMD, so a form it cannot
 read is never handed to it. A stream end presented by a kernel's port belongs
 to that kernel's instance in `netlist`.
 Every stream owns `well_formed`, `realizable` and `compatible` constraints, and its accepted

@@ -3,16 +3,16 @@
 
 """dotp's ports derive from its schedule, and each refusal stays on its own stream.
 
-dotp takes its extents from the streams it sits on, and its folds are its own
+dotp takes its extents from the streams it sits on, and its folding factors are its own
 Decisions; every port presents what its schedule derives, so a wrong lane
 count or a transposed tile can no longer be written into dotp. A producer
 presenting another order is the stream's to judge: its plan names the steps
 and its adapter carries them out, a field order is wires, and a stream
 admitting no adapter refuses the plan. The B1 probes map as follows: a wrong
-lane count and a transposed tile become plans; a fold that does not divide its
-extent is refused where it is committed; a frame crossing rows, results that
-swap frames and depthwise operands under a dense core have no analogue, since
-dotp derives its own schedule and the form is its own.
+lane count and a transposed tile become plans; a folding factor that does not
+divide its extent is refused where it is committed; a frame crossing rows,
+results that swap frames and depthwise operands under a dense core have no
+analogue, since dotp derives its own schedule and the form is its own.
 """
 
 from __future__ import annotations
@@ -140,7 +140,7 @@ def test_depthwise_activations_carry_pe_channels_of_simd_window_positions():
     assert codes(point.w_s.query(Stream.connection)) == set()
 
 
-def test_a_fold_that_does_not_divide_its_extent_is_refused_where_it_is_committed():
+def test_a_folding_factor_that_does_not_divide_its_extent_is_refused_where_it_is_committed():
     with pytest.raises(ValueError, match="compute.pe"):
         placed(pe=3)
 

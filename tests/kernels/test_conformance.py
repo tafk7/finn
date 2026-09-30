@@ -3,10 +3,10 @@
 
 """Every kernel on streams, checked against its RTL by the conformance harness.
 
-Each case places one kernel between boundary streams over sampled folds
+Each case places one kernel between boundary streams over sampled folding factors
 (``kernels.conformance``): dotp on both cores (packed; INT8, dense and
 depthwise), thresholding, eltwise with a broadcast operand, transpose, and
-memstream with an identity reference. Every fold is a Decision (dotp's PE and
+memstream with an identity reference. Every folding factor is a Decision (dotp's PE and
 SIMD sampled; thresholding's and eltwise's PE and transpose's SIMD given as
 configurations); memstream's ``form``, a fact of its consumer, is given.
 
@@ -123,7 +123,7 @@ THRESHOLDING_FACTS = dict(
     depth_trigger_uram=0,
 )
 THRESHOLDING_CHOICES = {"use_axilite": False, "deep_pipeline": False}
-PE_FOLDS = ({"pe": 1}, {"pe": 3}, {"pe": CHANNELS})
+PE_FACTORS = ({"pe": 1}, {"pe": 3}, {"pe": CHANNELS})
 
 
 def thresholding() -> dict[str, Any]:
@@ -132,7 +132,7 @@ def thresholding() -> dict[str, Any]:
         inputs={"input_stream": tensor((PIXELS, CHANNELS), "INT4")},
         outputs={"output_stream": (PIXELS, CHANNELS)},
         reference=lambda input_stream: {"output_stream": levels(input_stream)},
-        folds=PE_FOLDS,
+        factors=PE_FACTORS,
         choices=THRESHOLDING_CHOICES,
         facts=THRESHOLDING_FACTS,
     )
@@ -144,7 +144,7 @@ r, c = Index("r"), Index("c")
 
 
 class RowsFirst(ThresholdingAxiKernel):
-    """thresholding_axi declaring its rows outer, channels folded by PE inner: the RTL's order."""
+    """thresholding_axi declaring its rows outer, channels split by PE inner: the RTL's order."""
 
     id = "test.thresholding_axi.rows_first"
     channels_outer: ClassVar[bool] = False
@@ -153,7 +153,7 @@ class RowsFirst(ThresholdingAxiKernel):
     def schedule(self) -> Schedule | Rejected:
         *outer, last = self.indices
         order = (last, *outer) if type(self).channels_outer else (*outer, last)
-        return self.bound_schedule(tuple(order), self.folds, extents={last: self.channels})
+        return self.bound_schedule(tuple(order), self.factors, extents={last: self.channels})
 
 
 class ChannelsFirst(RowsFirst):
@@ -169,7 +169,7 @@ def scheduled(family: type[RowsFirst]) -> dict[str, Any]:
         thresholding(),
         family=family,
         outputs={"output_stream": tensor((PIXELS, CHANNELS), "UINT2")},
-        folds=({"pe": 1}, {"pe": 2}, {"pe": 3}),
+        factors=({"pe": 1}, {"pe": 2}, {"pe": 3}),
     )
 
 
@@ -210,7 +210,7 @@ class LanesInOrder(ThresholdingAxiKernel):
     def schedule(self) -> Schedule | Rejected:
         # The window axis binds nothing: the split's extents are the author's.
         split = {co: self.channels // 3, ci: 3}
-        return self.bound_schedule((r, co, ci), folds=split, extents=split)
+        return self.bound_schedule((r, co, ci), factors=split, extents=split)
 
     input, output = split_ports(schedule, (co, ci))
 
@@ -227,7 +227,7 @@ def split(family: type[LanesInOrder]) -> dict[str, Any]:
         thresholding(),
         family=family,
         outputs={"output_stream": tensor((PIXELS, CHANNELS), "UINT2")},
-        folds=({"pe": CHANNELS},),
+        factors=({"pe": CHANNELS},),
     )
 
 
@@ -244,7 +244,7 @@ def eltwise() -> dict[str, Any]:
         },
         outputs={"result_stream": (PIXELS, CHANNELS)},
         reference=lambda lhs_stream, rhs_stream: {"result_stream": lhs_stream + rhs_stream},
-        folds=PE_FOLDS,
+        factors=PE_FACTORS,
         facts=dict(
             operation="ADD",
             lhs_dtype=DataType["INT4"],
@@ -270,7 +270,7 @@ def transpose() -> dict[str, Any]:
         inputs={"input_stream": tensor(MATRICES, "INT4")},
         outputs={"output_stream": MATRICES},
         reference=lambda input_stream: {"output_stream": input_stream},
-        folds=tuple({"simd": simd} for simd in (1, 3, 6)),
+        factors=tuple({"simd": simd} for simd in (1, 3, 6)),
         choices={"ram_style": "auto"},
     )
 
@@ -286,7 +286,7 @@ def memstream() -> dict[str, Any]:
         inputs={},
         outputs={"output_stream": STORED},
         reference=lambda: {"output_stream": np.array(CONTENTS)},
-        folds=(
+        factors=(
             *({"form": vector_major(STORED, lanes)} for lanes in (1, 3, 6)),
             {"form": tile(*STORED, 2, 3)},
         ),
@@ -308,11 +308,11 @@ CASES = {
 }
 
 
-def test_sampled_folds_are_smallest_interior_largest_then_an_adapter() -> None:
+def test_sampled_folding_factors_are_smallest_interior_largest_then_an_adapter() -> None:
     case = dotp(PackedDotpKernel, DspBlock.DSP48E2, 4)
     del case["reference"]
     chosen = samples(**case)
-    assert [(sample.label, dict(sample.folds), sample.adapter) for sample in chosen] == [
+    assert [(sample.label, dict(sample.factors), sample.adapter) for sample in chosen] == [
         ("smallest", {"pe": 1, "simd": 1}, False),
         ("interior", {"pe": 2, "simd": 3}, False),
         ("largest", {"pe": 4, "simd": 6}, False),
@@ -323,7 +323,7 @@ def test_sampled_folds_are_smallest_interior_largest_then_an_adapter() -> None:
 def test_sampling_deduplicates_and_a_kernel_without_inputs_has_no_adapter_sample() -> None:
     case = memstream()
     del case["reference"]
-    case["folds"] = (*case["folds"], case["folds"][0])
+    case["factors"] = (*case["factors"], case["factors"][0])
     assert [sample.adapter for sample in samples(**case)] == [False] * 4
 
 
@@ -371,7 +371,7 @@ def test_the_stimulus_tells_the_wrong_order_apart(wrong: str) -> None:
         )
         x = values["input_stream"]
         declared = placed.input_stream.endpoints.sink.form
-        walked = vector_major(declared.shape, sample.folds["pe"])
+        walked = vector_major(declared.shape, sample.factors["pe"])
         arrive = [p for beat in declared.positions() for p in beat]
         applied = [p[1] for beat in walked.positions() for p in beat]
         differ = sum(

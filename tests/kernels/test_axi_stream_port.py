@@ -6,9 +6,10 @@
 ``AxiStreamPort`` presents its kernel's schedule through the indices it reads,
 or a given sequence (exactly one). Placed with a schedule it exports its read
 of the tensor, and its kernel binds each index's extent from those reads
-(``Kernel.extents``): a kernel writes no extent getter, its folds' domains read
-``extent_of`` members, and ports disagreeing on an extent are refused
-(``kernel-extents``). An idle port carries the lanes of its folds.
+(``Kernel.extents``): a kernel writes no extent getter, its folding factors'
+domains read ``extent_of`` members, and ports disagreeing on an extent are
+refused (``kernel-extents``). An idle port carries the lanes of its folding
+factors.
 """
 
 from __future__ import annotations
@@ -56,19 +57,19 @@ class Pool(Kernel):
     pe: int = Decision(domain=divisors_of(channels))
 
     @derived
-    def folds(self) -> dict[Index, int]:
+    def factors(self) -> dict[Index, int]:
         return {c: self.pe}
 
     @derived
     def schedule(self) -> Schedule | Rejected:
-        return self.bound_schedule(beats=(b, s, c), folds=self.folds)
+        return self.bound_schedule(beats=(b, s, c), factors=self.factors)
 
     x = AxiStreamPort(
         name="s_axis_input",
         endpoint=Endpoint.TARGET,
         stream=x_stream,
         schedule=schedule,
-        folds=folds,
+        factors=factors,
         index=(b, s, c),
         lanes=(c,),
     )
@@ -77,7 +78,7 @@ class Pool(Kernel):
         endpoint=Endpoint.INITIATOR,
         stream=y_stream,
         schedule=schedule,
-        folds=folds,
+        factors=factors,
         index=(b, c),
         lanes=(c,),
         reduces=(s,),
@@ -106,7 +107,7 @@ def codes(result: object) -> set[tuple[str, str]]:
     return {(finding.code, finding.message) for finding in result.findings}
 
 
-def test_a_kernel_binds_its_extents_from_its_ports_and_folds_over_them() -> None:
+def test_a_kernel_binds_its_extents_from_its_ports_and_its_folding_factors_divide_them() -> None:
     point = pool()
     assert point.kernel.extents == {b: 1, s: 4, c: 8}
     assert point.kernel.field(Pool.pe).candidates().value == (1, 2, 4, 8)
@@ -123,7 +124,7 @@ def test_ports_that_disagree_on_an_extent_are_refused() -> None:
     assert codes(point.kernel.query(Pool.build_requirements)) == expected
 
 
-def test_an_idle_port_carries_the_lanes_of_its_folds() -> None:
+def test_an_idle_port_carries_the_lanes_of_its_folding_factors() -> None:
     class Half(Space):
         x = stream((1, 4, 8), "INT4", "in0_V")
         kernel = Pool(x_stream=x)

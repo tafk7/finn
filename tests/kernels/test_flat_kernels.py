@@ -60,7 +60,8 @@ def generator(**changes):
 
 
 def eltwise(pe=2, **changes):
-    """Flat: no stream binds its extent, so its fold is any the RTL takes, committed as a choice."""
+    """Flat: no stream binds its extent, so its folding factor is any the RTL takes, committed
+    as a choice."""
     facts = dict(
         operation="ADD",
         lhs_dtype=DataType["INT3"],
@@ -84,9 +85,13 @@ def threshold(*, use_axilite=False, deep_pipeline=False, pe=1, **changes):
         depth_trigger_uram=0,
     )
     facts.update(changes)
-    folds = {} if pe is None else {"pe": pe}
+    factors = {} if pe is None else {"pe": pe}
     return point_for(
-        ThresholdingAxiKernel, facts, use_axilite=use_axilite, deep_pipeline=deep_pipeline, **folds
+        ThresholdingAxiKernel,
+        facts,
+        use_axilite=use_axilite,
+        deep_pipeline=deep_pipeline,
+        **factors,
     )
 
 
@@ -229,11 +234,11 @@ def test_unsupported_cases_are_refused_without_constructing_invalid_interfaces(f
         lambda: eltwise(pe=1 << 32),  # beyond the RTL's 32-bit PE
         lambda: threshold(pe=0),
         lambda: threshold(pe=3),
-        # PE above C would fold rows into the lanes (the RTL takes it; the model does not).
+        # PE above C would carry rows in the lanes (the RTL takes it; the model does not).
         lambda: threshold(pe=4),
     ],
 )
-def test_a_fold_outside_its_domain_is_refused_where_it_is_committed(factory):
+def test_a_folding_factor_outside_its_domain_is_refused_where_it_is_committed(factory):
     with pytest.raises(ValueError, match="domain-membership"):
         factory()
 

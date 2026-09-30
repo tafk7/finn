@@ -84,16 +84,16 @@ def chain(*, fused: bool) -> Chain:
             f"{layer}.weight_stream.transport": "direct",
         }
     point = settled(commit(design_space(Chain()), choices))
-    folds: dict[str, object] = {}
+    core_choices: dict[str, object] = {}
     for layer in ("first", "second"):
-        folds |= {
+        core_choices |= {
             f"{layer}.compute.packed.pe": PE,
             f"{layer}.compute.packed.simd": SIMD,
             f"{layer}.compute.packed.compute_pumping": False,
             f"{layer}.memory.memstream.ram_style": "auto",
             f"{layer}.memory.memstream.pumped_memory": False,
         }
-    return settled(commit(point, folds))
+    return settled(commit(point, core_choices))
 
 
 def instances(point: Chain) -> list[str]:
