@@ -29,6 +29,7 @@
 import errno
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -39,7 +40,10 @@ from qonnx.custom_op.registry import getCustomOp
 from qonnx.util.basic import gen_finn_dt_tensor, roundup_to_integer_multiple
 from typing import Dict, Optional, Tuple
 
+from finn.util._legacy_build_env import build_directory, checkout_root
+from finn.util._toolchain import Selection, run_process
 from finn.util.data_packing import finnpy_to_packed_bytearray
+from finn.util.resources import resource_path
 
 # mapping from PYNQ board names to FPGA part names
 pynq_part_map = dict()
@@ -128,16 +132,18 @@ def get_rtlsim_trace_depth():
 
 
 def get_finn_root():
-    "Return the root directory that FINN is cloned into."
+    """Legacy checkout-only API; package data uses resource_path instead."""
+    return checkout_root()
 
-    try:
-        return os.environ["FINN_ROOT"]
-    except KeyError:
-        raise Exception(
-            """Environment variable FINN_ROOT must be set
-        correctly. Please ensure you have launched the Docker contaier correctly.
-        """
-        )
+
+def fifo_rtl_files(abspath=True, gauge=False):
+    """Return the shared FIFO RTL sources, referenced in place so that the flat
+    elaboration namespace only ever sees one declaration of module fifo."""
+    names = (["fifo_gauge.sv"] if gauge else []) + ["fifo.sv"]
+    if not abspath:
+        return names
+    rtlsrc = resource_path("rtllib", "fifo/hdl")
+    return [os.path.join(rtlsrc, n) for n in names]
 
 
 def get_vivado_root():
@@ -196,14 +202,7 @@ def make_build_dir(prefix=""):
     """Creates a folder with given prefix to be used as a build dir.
     Use this function instead of tempfile.mkdtemp to ensure any generated files
     will survive on the host after the FINN Docker container exits."""
-    try:
-        build_dir = os.environ["FINN_BUILD_DIR"]
-    except KeyError:
-        raise Exception(
-            """Environment variable FINN_BUILD_DIR must be set
-        correctly. Please ensure you have launched the Docker container correctly.
-        """
-        )
+    build_dir = build_directory()
     os.makedirs(build_dir, exist_ok=True)
     new_dir = tempfile.mkdtemp(prefix=prefix, dir=build_dir)
     os.chmod(new_dir, 0o755)
@@ -235,7 +234,8 @@ class CppBuilder:
     """Builds the g++ compiler command to produces the executable of the c++ code
     in code_gen_dir which is passed to the function build() of this class."""
 
-    def __init__(self):
+    def __init__(self, toolchain=None):
+        self.toolchain = toolchain
         self.include_paths = []
         self.cpp_files = []
         self.executable_path = ""
@@ -243,42 +243,35 @@ class CppBuilder:
         self.compile_components = []
         self.compile_script = ""
 
-    def append_includes(self, library_path):
-        """Adds given library path to include_paths list."""
-        self.include_paths.append(library_path)
+    def append_includes(self, flags):
+        """Append argv flags, or a shell-quoted flag string for existing callers."""
+        self.include_paths.extend(shlex.split(flags) if isinstance(flags, str) else flags)
 
     def append_sources(self, cpp_file):
-        """Adds given c++ file to cpp_files list."""
-        self.cpp_files.append(cpp_file)
+        """Append one literal source path; callers expand source globs explicitly."""
+        self.cpp_files.append(os.fspath(cpp_file))
 
     def set_executable_path(self, path):
-        """Sets member variable "executable_path" to given path."""
-        self.executable_path = path
+        self.executable_path = os.fspath(path)
 
-    def build(self, code_gen_dir):
-        """Builds the g++ compiler command according to entries in include_paths
-        and cpp_files lists. Saves it in bash script in given folder and
-        executes it."""
-        # raise error if includes are empty
-        self.code_gen_dir = code_gen_dir
-        self.compile_components.append("g++ -o " + str(self.executable_path))
-        for cpp_file in self.cpp_files:
-            self.compile_components.append(cpp_file)
-        for lib in self.include_paths:
-            self.compile_components.append(lib)
-        bash_compile = ""
-        for component in self.compile_components:
-            bash_compile += str(component) + " "
-        self.compile_script = str(self.code_gen_dir) + "/compile.sh"
-        with open(self.compile_script, "w") as f:
-            f.write("#!/bin/bash \n")
-            f.write(bash_compile + "\n")
-        bash_command = ["bash", self.compile_script]
-        process_compile = subprocess.Popen(bash_command, stdout=subprocess.PIPE)
-        process_compile.communicate()
+    def build(self, code_gen_dir, *, timeout=None, cancel=None):
+        """Compile with argv, explicit cwd/environment, checked status and replay logs."""
+        self.code_gen_dir = os.fspath(code_gen_dir)
+        self.compile_script = os.path.join(self.code_gen_dir, "compile.sh")
+        toolchain = self.toolchain or Selection().prepare()
+        args = ["-o", self.executable_path, *self.cpp_files, *self.include_paths]
+        self.compile_components = toolchain.command("g++", *args)
+        return toolchain.run(
+            "g++",
+            args,
+            cwd=self.code_gen_dir,
+            replay=self.compile_script,
+            timeout=timeout,
+            cancel=cancel,
+        )
 
 
-def launch_process_helper(args, proc_env=None, cwd=None, check=False):
+def launch_process_helper(args, proc_env=None, cwd=None, check=False, timeout=None, cancel=None):
     """Launch a process and capture its output for logging with Python loggers.
 
     Returns ``(cmd_out, cmd_err)`` as UTF-8 strings, with undecodable bytes in
@@ -291,17 +284,9 @@ def launch_process_helper(args, proc_env=None, cwd=None, check=False):
     log is still visible on failure. That is why the return code is checked by
     hand rather than relying on ``subprocess.run(check=True)``.
     """
-    if proc_env is None:
-        proc_env = os.environ.copy()
-    proc = subprocess.run(
-        args,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        env=proc_env,
-        cwd=cwd,
-        encoding="utf-8",
-        errors="replace",
-    )
+    proc = run_process(args, env=proc_env, cwd=cwd, check=False, timeout=timeout, cancel=cancel)
+    proc.stdout = proc.stdout.decode("utf-8", errors="replace")
+    proc.stderr = proc.stderr.decode("utf-8", errors="replace")
     cmd_out = proc.stdout
     cmd_err = proc.stderr
     sys.stdout.write(cmd_out)
@@ -354,15 +339,8 @@ def resolve_xilinx_tool(tool_name):
     bare tool names. Raises FileNotFoundError when the resolved command is
     not found, so all the default names must have a corresponding shim filename.
     """
-    dir_override = os.environ.get(_XILINX_TOOL_DIR_ENV)
-    tool = os.path.join(dir_override, tool_name) if dir_override else tool_name
-    if which(tool) is None:
-        if dir_override:
-            raise FileNotFoundError(
-                "%s not found (%s=%r)" % (tool, _XILINX_TOOL_DIR_ENV, dir_override)
-            )
-        raise FileNotFoundError("%s not found in PATH" % tool)
-    return tool
+    selection = Selection(command_dir=os.environ.get(_XILINX_TOOL_DIR_ENV, ""))
+    return selection.prepare().command(tool_name)[0]
 
 
 mem_primitives_versal = {
@@ -434,6 +412,20 @@ def get_dsp_block(fpgapart):
         return "DSP48E1"
     else:
         return "DSP48E2"
+
+
+def get_dsp_datapath_limits(dsp_block):
+    """Return the maximum (activation, weight, accumulator) operand widths in bits
+    that fit the datapath of the given DSP block. These correspond to the DSP B, A
+    and P ports respectively. Widths exceeding these limits would be silently
+    truncated (or fail synthesis) if mapped onto the DSP-based RTL MVU."""
+    if dsp_block == "DSP58":
+        max_act_width, max_weight_width, max_acc_width = 24, 27, 58
+    elif dsp_block == "DSP48E2":
+        max_act_width, max_weight_width, max_acc_width = 18, 27, 48
+    else:  # DSP48E1
+        max_act_width, max_weight_width, max_acc_width = 18, 25, 48
+    return max_act_width, max_weight_width, max_acc_width
 
 
 def get_driver_shapes(model: ModelWrapper) -> Dict:

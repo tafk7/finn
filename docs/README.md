@@ -13,6 +13,15 @@ Sphinx either by:
 If you're looking for content that was hosted on the FINN project page
 with GitHub Pages, that has moved to the [github-pages branch](https://github.com/Xilinx/finn/tree/github-pages).
 
+Environment and runtime:
+
+* [Installation and development](installation.md)
+* [Environment design](environment.md)
+* [Remaining legacy environment obligations](legacy-build-env-ledger.md)
+* [Task spec: remaining work from P6](runtime-remaining-work.md)
+* [Runtime validation record](runtime-validation.md)
+* [XSI process-boundary investigation](xsi-process-boundary-investigation.md)
+
 Experimental Space design, authoring, internals and migration documentation is
 maintained in the separate scratchpad repository under `space/`, starting at
 `space/DESIGN.md`. Its example checker also lives there. FINN's standalone code

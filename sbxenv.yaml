@@ -1,0 +1,29 @@
+{
+  "schemaVersion": "1",
+  "args": {
+    "name": {
+      "default": "finn",
+      "description": "Sandbox name; give each concurrent sandbox its own"
+    },
+    "template": {
+      "required": true,
+      "description": "Image reference from docker/build --sbx --print-tag"
+    },
+    "agent": {
+      "default": "shell",
+      "description": "Agent to run: shell, or a coding agent such as claude"
+    }
+  },
+  "name": "${{ env.args.name }}",
+  "agent": "${{ env.args.agent }}",
+  "workspace": ".",
+  "sandboxOptions": {
+    "template": "${{ env.args.template }}",
+    "pullPolicy": "never",
+    "skills": "off"
+  },
+  "env": {
+    "FINN_BUILD_DIR": "/tmp/finn_build",
+    "FINN_ROOT": "${{ env.fileDir }}"
+  }
+}

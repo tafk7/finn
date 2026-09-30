@@ -7,7 +7,7 @@ results); a reference through it is typed as its value; ``composite(...,
 base=B)`` is a ``type[B]``, so the base's formals type the new family's calls.
 """
 
-from typing_extensions import assert_type
+from typing import assert_type
 
 from finn.core.space import (
     Available,

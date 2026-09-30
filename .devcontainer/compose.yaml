@@ -1,0 +1,10 @@
+services:
+  dev:
+    command: ["sleep", "infinity"]
+    working_dir: /workspace/finn
+    volumes:
+      - .:/workspace/finn
+    environment:
+      FINN_ROOT: /workspace/finn
+      FINN_BUILD_DIR: /workspace/finn/.finn-build
+      FINN_HOME: /workspace/finn/.finn-build/.finn

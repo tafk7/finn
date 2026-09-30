@@ -8,12 +8,13 @@
 ############################################################################
 import math
 import os
-import shutil
 from qonnx.core.datatype import DataType
 from typing import Optional
 
 from finn.custom_op.fpgadataflow.inner_shuffle import InnerShuffle
 from finn.custom_op.fpgadataflow.rtlbackend import RTLBackend
+from finn.util.basic import fifo_rtl_files
+from finn.util.resources import resource_path, tcl_quote
 
 
 def auto_size_simd(I_dim: int, SIMD: int) -> Optional[int]:
@@ -76,7 +77,7 @@ class InnerShuffle_rtl(InnerShuffle, RTLBackend):
         return code_gen_dict
 
     def generate_hdl(self, model, fpgapart, clk):
-        rtlsrc = f'{os.environ["FINN_ROOT"]}/finn-rtllib/inner_shuffle'
+        rtlsrc = resource_path("rtllib", "inner_shuffle")
         template_path = f"{rtlsrc}/inner_shuffle_template.v"
         code_gen_dir = self.get_nodeattr("code_gen_dir_ipgen")
         dt = DataType[self.get_nodeattr("data_type")]
@@ -103,16 +104,13 @@ class InnerShuffle_rtl(InnerShuffle, RTLBackend):
         # (e.g. by GiveUniqueNodeNames(prefix) during MakeZynqProject)
         self.set_nodeattr("gen_top_module", self.get_verilog_top_module_name())
 
-        sv_files = ["inner_shuffle.sv", "skid.sv", "elasticmem.sv", "queue.sv"]
-        for sv_files in sv_files:
-            shutil.copy(f"{rtlsrc}/{sv_files}", code_gen_dir)
         self.set_nodeattr("ipgen_path", code_gen_dir)
         self.set_nodeattr("ip_path", code_gen_dir)
 
     def get_rtl_file_list(self, abspath=False):
         if abspath:
             code_gen_dir = f"{self.get_nodeattr('code_gen_dir_ipgen')}/"
-            rtllib_dir = f'{os.environ["FINN_ROOT"]}/finn-rtllib/inner_shuffle'
+            rtllib_dir = resource_path("rtllib", "inner_shuffle")
         else:
             code_gen_dir = ""
             rtllib_dir = ""
@@ -122,27 +120,16 @@ class InnerShuffle_rtl(InnerShuffle, RTLBackend):
             f"{rtllib_dir}/inner_shuffle.sv",
             f"{rtllib_dir}/skid.sv",
             f"{rtllib_dir}/elasticmem.sv",
-            f"{rtllib_dir}/queue.sv",
             f"{code_gen_dir}{top_module}.v",
-        ]
+        ] + fifo_rtl_files(abspath)
 
     def code_generation_ipi(self):
         """Constructs and returns the TCL for node instantiation in Vivado IPI."""
-        code_gen_dir = self.get_nodeattr("code_gen_dir_ipgen")
         top_module = self.get_nodeattr("gen_top_module")
-        sourcefiles = [
-            "inner_shuffle.sv",
-            "skid.sv",
-            "queue.sv",
-            "elasticmem.sv",
-            f"{top_module}.v",
-        ]
-        sourcefiles = [os.path.join(code_gen_dir, f) for f in sourcefiles]
-
         cmd = []
-        for vf in sourcefiles:
-            cmd += [f"add_files -norecurse {vf}"]
-        cmd += [f"create_bd_cell -type module -reference {top_module} {self.onnx_node.name}"]
+        for f in self.get_rtl_file_list(abspath=True):
+            cmd.append(f"add_files -norecurse {tcl_quote(f)}")
+        cmd.append(f"create_bd_cell -type module -reference {top_module} {self.onnx_node.name}")
         return cmd
 
     def execute_node(self, context, graph):

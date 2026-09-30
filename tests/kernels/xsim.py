@@ -33,11 +33,11 @@ from finn.kernels.artifacts.build import (
 from finn.kernels.artifacts.store import ArtifactStore
 from finn.kernels.physical.validation import abi_pins
 from finn.kernels.resources import resource_root, template_root
+from kernels.helpers import finnlib_root, vivado_simulator
 
-ROOT = Path(__file__).resolve().parents[2]
 
 requires_xsim = pytest.mark.skipif(
-    not all(shutil.which(tool) for tool in ("xvlog", "xelab", "xsim")),
+    not vivado_simulator(),
     reason="Vivado simulator tools are unavailable",
 )
 
@@ -56,10 +56,10 @@ def materialize(
 ) -> tuple[str, list[str], dict[str, str]]:
     """The top module, its HDL sources, and each INIT_FILE's name and contents.
 
-    FinnLib is ``FINNLIB_ROOT``, or the pinned checkout under ``deps``.
+    FinnLib is the ``finnlib`` resource (``FINN_RESOURCES_FINNLIB`` overrides it).
     """
     store = ArtifactStore(directory / "store")
-    finnlib = Path(os.environ.get("FINNLIB_ROOT", str(ROOT / "deps/finnlib")))
+    finnlib = finnlib_root()
     prepared = prepare_module_build(
         requirements,
         roots={"kernels": resource_root(), "finnlib": finnlib},

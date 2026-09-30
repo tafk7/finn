@@ -1,0 +1,115 @@
+#!/bin/bash
+# Copyright (C) 2026, Advanced Micro Devices, Inc.
+# SPDX-License-Identifier: BSD-3-Clause
+
+# activate.sh - Environment activation for a bare-host FINN installation.
+#
+# Source this script to set up the FINN environment:
+#   source scripts/activate.sh
+#
+# RENAMED from scripts/finn-env.sh, which was a near-homograph of
+# docker/config.py doing an unrelated job -- and did not even wrap it. The two
+# programs it DOES use are named below.
+#
+# This script:
+#   - Activates the Python virtual environment
+#   - Sets FINN-specific environment variables
+#   - Sources Xilinx tools if configured
+#   - Sets up library paths for finn_xsi
+
+# Color definitions
+YELLOW='\033[0;33m'
+GREEN='\033[0;32m'
+NC='\033[0m'
+
+_finn_gecho() {
+    echo -e "${GREEN}$1${NC}"
+}
+
+_finn_yecho() {
+    echo -e "${YELLOW}$1${NC}"
+}
+
+# Determine FINN_ROOT from script location
+if [ -n "${BASH_SOURCE[0]}" ]; then
+    _SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    FINN_ROOT="$(cd "$_SCRIPT_DIR/.." && pwd)"
+    export FINN_ROOT
+else
+    # Fallback if BASH_SOURCE is not available
+    if [ -z "$FINN_ROOT" ]; then
+        echo "ERROR: Could not determine FINN_ROOT. Please set it manually."
+        return 1
+    fi
+fi
+
+# Check if virtual environment exists
+if [ ! -d "${FINN_VENV:-$FINN_ROOT/.venv}" ]; then
+    echo "ERROR: Virtual environment not found at ${FINN_VENV:-$FINN_ROOT/.venv}"
+    echo "Please run ./setup-local.sh first."
+    return 1
+fi
+
+# Activate virtual environment
+# shellcheck source=/dev/null
+source "${FINN_VENV:-$FINN_ROOT/.venv}/bin/activate"
+_finn_gecho "Activated FINN environment at $FINN_ROOT"
+
+# Scratch defaults to $FINN_HOME/build (~/.finn/build); FINN_HOST_BUILD_DIR selects
+# another directory. Nothing is created on shell activation.
+if [ -n "${FINN_HOST_BUILD_DIR:-}" ]; then
+    export FINN_BUILD_DIR="$FINN_HOST_BUILD_DIR"
+fi
+
+
+# Xilinx tools setup
+# The Xilinx toolchain, resolved by docker/config.py -- the same program the
+# container uses, and the same one setup-local.sh calls.
+#
+# This block used to be a fifth copy of the toolchain logic, and it carried the
+# same defect the others did:
+#
+#     export VIVADO_PATH="$FINN_XILINX_PATH/Vivado/$FINN_XILINX_VERSION"
+#
+# which is the PRE-2024.2 directory layout only. AMD reorganised the tree after
+# 2024.2, so on any recent installation this reported "Vivado not found" at a
+# path the user could see was wrong. docker/config.py probes both layouts.
+#
+# It also duplicated the LD_LIBRARY_PATH additions (lib/lnx64.o, fpo_v7_1) and
+# the XRT sourcing, both of which docker/config.py now owns.
+if [ -n "$FINN_XILINX_PATH" ] && [ -n "$FINN_XILINX_VERSION" ]; then
+    # Two steps, and the split is the point. docker/config.py probes the host and says
+    # WHERE the tools are; finn-toolchain.sh takes that and applies it. The
+    # image sources the same second file, so the bare host and the container
+    # apply the toolchain through identical code.
+    # Only the toolchain: native scratch and FINN_HOME keep their own defaults.
+    eval "$("$FINN_ROOT/docker/config.py" inspect --tier build --format sh 2>/dev/null \
+        | grep -v -E '^(FINN_BUILD_DIR|FINN_HOST_BUILD_DIR)=' | sed 's/^/export /')"
+    . "$FINN_ROOT/docker/finn-toolchain.sh"
+
+    if [ -n "${XILINX_VIVADO:-}" ]; then
+        _finn_gecho "Xilinx toolchain configured: $XILINX_VIVADO"
+    else
+        _finn_yecho "No Vivado found under $FINN_XILINX_PATH for $FINN_XILINX_VERSION"
+    fi
+else
+    _finn_yecho "FINN_XILINX_PATH and/or FINN_XILINX_VERSION not set"
+    _finn_yecho "Vivado, Vitis, HLS and rtlsim are unavailable."
+fi
+
+export XILINX_LOCAL_USER_DATA=no
+
+# Site Tcl initialization is an explicit preparation action; activation only
+# selects the environment. Copy selected site scripts during setup if needed.
+
+# Vivado IP cache directory
+export VIVADO_IP_CACHE="${VIVADO_IP_CACHE:-$FINN_BUILD_DIR/vivado_ip_cache}"
+
+echo ""
+_finn_gecho "FINN environment ready!"
+echo "  FINN_ROOT=$FINN_ROOT"
+echo "  FINN_BUILD_DIR=$FINN_BUILD_DIR"
+if [ -n "$XILINX_VIVADO" ]; then
+    echo "  XILINX_VIVADO=$XILINX_VIVADO"
+fi
+echo ""

@@ -12,9 +12,6 @@ RUFF_BIN=${RUFF_BIN:-ruff}
 MYPY_BIN=${MYPY_BIN:-mypy}
 cd "$FINN_ROOT"
 RUN_PYTHONPATH="$FINN_ROOT/src:$FINN_ROOT/tests"
-if [ -d "$FINN_ROOT/deps/qonnx/src" ]; then
-    RUN_PYTHONPATH="$RUN_PYTHONPATH:$FINN_ROOT/deps/qonnx/src"
-fi
 # These are independent Space/kernel gates. Parked dataflow/graph tests remain
 # outside this command; their compatibility is not claimed.
 PYTHON_BIN="$PYTHON_BIN" RUFF_BIN="$RUFF_BIN" MYPY_BIN="$MYPY_BIN" bash scripts/check-space.sh

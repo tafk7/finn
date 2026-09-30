@@ -17,9 +17,17 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, ClassVar, Generic, TypeVar, cast, overload
-
-from typing_extensions import Self, dataclass_transform
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    ClassVar,
+    Generic,
+    Self,
+    TypeVar,
+    cast,
+    dataclass_transform,
+    overload,
+)
 
 from .declarations import (
     Constraint,

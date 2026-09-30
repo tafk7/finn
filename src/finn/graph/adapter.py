@@ -31,8 +31,8 @@ from dataclasses import dataclass
 from math import prod
 from typing import Any
 
-from onnx import helper  # type: ignore[import-not-found]
-from qonnx.core.modelwrapper import ModelWrapper  # type: ignore[import-not-found]
+from onnx import helper
+from qonnx.core.modelwrapper import ModelWrapper
 
 from finn.core.space import composite, design_space
 from finn.dataflow.datatypes import (
@@ -184,17 +184,17 @@ def finn_model(model: ModelWrapper, point: Any, kernels: Sequence[tuple[str, str
     for index, node in enumerate(list(result.graph.node)):
         label = node.name or f"{node.op_type}_{index}"
         configured = getattr(point, kernel[label])
-        attributes = dict(configured.finn_attributes)
+        attributes: dict[str, Any] = {
+            key: list(value) if isinstance(value, tuple) else value
+            for key, value in dict(configured.finn_attributes).items()
+        }
         replacement = helper.make_node(
             "MVAU",
             list(node.input),
             list(node.output),
             name=node.name or label,
             domain=FINN_DOMAIN,
-            **{
-                key: list(value) if isinstance(value, tuple) else value
-                for key, value in attributes.items()
-            },
+            **attributes,
         )
         result.graph.node.remove(node)
         result.graph.node.insert(index, replacement)

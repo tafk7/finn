@@ -1,0 +1,43 @@
+name: Space and dataflow gates
+
+# Format, lint, strict typing and tests of finn.core.space and finn.dataflow.
+# The kernel gate (scripts/check-kernels.sh) needs FinnLib, a private resource,
+# so it runs where FinnLib is reachable rather than here. Python 3.11 is covered
+# by the unit-test job of the Package workflow.
+
+on:
+  pull_request:
+    paths:
+      - "src/finn/core/space/**"
+      - "src/finn/dataflow/**"
+      - "tests/core/space/**"
+      - "tests/dataflow/**"
+      - "scripts/check-space.sh"
+      - "scripts/check-dataflow-design.sh"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".ruff.toml"
+      - ".github/workflows/gates.yml"
+  push:
+    branches: [main, dev]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  gates:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - name: Environment
+        run: |
+          UV_PROJECT_ENVIRONMENT=/tmp/gates uv sync --frozen --no-default-groups \
+            --group test --group gates
+          echo /tmp/gates/bin >> "$GITHUB_PATH"
+      - run: bash scripts/check-space.sh
+      - run: bash scripts/check-dataflow-design.sh

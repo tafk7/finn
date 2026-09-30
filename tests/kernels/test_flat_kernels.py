@@ -38,12 +38,12 @@ from finn.core.space import (
     design_space,
 )
 from finn.dataflow.datatypes import QONNXDataType
-from kernels.helpers import point_for
+from kernels.helpers import finnlib_root, point_for
 from finn.kernels.target import DspBlock
 from kernels.xsim import requires_xsim, simulate
 
 ROOT = Path(__file__).resolve().parents[2]
-FINNLIB = ROOT / "deps/finnlib"
+FINNLIB = finnlib_root()
 SOURCE_ROOTS = {"finnlib": FINNLIB, "kernels": resource_root()}
 
 
@@ -360,7 +360,11 @@ def test_generated_hls_top_executes_signed_values_and_wraps_with_real_vendor_hea
         target = tmp_path / path
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(data)
-    headers = Path(os.environ.get("VITIS_HLS_INCLUDE", "/home/tkeller/Xilinx/2025.2/Vitis/include"))
+    installs = ("XILINX_HLS", "HLS_PATH", "XILINX_VITIS", "VITIS_PATH")
+    install = next((os.environ[name] for name in installs if os.environ.get(name)), None)
+    headers = Path(
+        os.environ.get("VITIS_HLS_INCLUDE") or Path(install or "/nonexistent") / "include"
+    )
     if not (headers / "hls_stream.h").is_file():
         pytest.skip("Vitis headers are required for this explicit HLS C++ check")
     testbench = tmp_path / "test.cpp"

@@ -25,7 +25,44 @@ ownership, validation, and intentional identity changes.
 
 ## Getting Started
 
-Please see the [Getting Started](https://finn.readthedocs.io/en/latest/getting_started.html) page for more information on requirements, installation, and how to run FINN in different modes. Due to the complex nature of the dependencies of the project, **we only support Docker-based execution of the FINN compiler at this time**.
+FINN is a Python package: `pip install finn`. Hardware flows also need Vivado;
+FINN fetches finn-hlslib and board files on first use. For development, there are
+the two setup paths below; both use the same locked environment
+([installation and development](docs/installation.md)). See the
+[Getting Started](https://finn.readthedocs.io/en/latest/getting_started.html)
+page for the complete guide.
+
+| Setup | Command | Use it when |
+|---|---|---|
+| **Native** | `./setup-local.sh` | You work on the host (uv provides Python 3.12) |
+| **Docker-built environment** | `./docker/run` | You want the reference OS environment, agent isolation, or an HPC image |
+
+Native quickstart:
+
+```bash
+git clone https://github.com/Xilinx/finn.git && cd finn
+./setup-local.sh
+source scripts/activate.sh
+```
+
+Container examples:
+
+```bash
+./docker/run -- quicktest.sh
+./docker/build --sbx  # prepare a template for direct native sbx use
+./docker/build --export-sif ./finn.sif
+```
+
+See [docker/README.md](docker/README.md) for runner and artifact details.
+
+`docker/run` provides Docker Compose execution. For agent isolation, use Docker
+Sandboxes: `sbxenv.yaml` at the root plus the overlays in
+[docker/sbx](docker/sbx/README.md) for FPGA tools, FinnLib and the licence server. Users and sites own those environments and credentials. Export a
+SIF for standard Apptainer/Singularity execution on HPC systems. Docker's `--fpga`
+option discovers your Xilinx installation and mounts it read-only.
+
+Due to the complex dependencies of this project, we recommend one of the
+container-based methods.
 
 ## What's New in FINN?
 

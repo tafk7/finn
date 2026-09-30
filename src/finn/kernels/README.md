@@ -303,7 +303,9 @@ use `WeightDelivery.EXTERNAL` (the `memory` Decision's `none`) and omit
 Pass source roots explicitly to `finn.kernels.artifacts.build.prepare_module_build`:
 `roots={"kernels": resource_root(), "finnlib": finnlib_root}` and
 `template_roots=(template_root(),)`, importing both helpers from
-`finn.kernels.resources`. `finnlib_root` is a `Path` to the pinned FinnLib checkout;
+`finn.kernels.resources`. `finnlib_root` is `Path(finn.resources.path("finnlib"))`:
+FinnLib is a FINN resource, a working clone when `FINN_RESOURCES_FINNLIB` is set and
+otherwise the pinned commit;
 `blobs` is an `ArtifactStore`. `materialize_module_sources(prepared, store)` then
 produces the complete source set. Both resource helpers work from an installed
 package. Local source paths are relative to the resource directory; no source
@@ -314,10 +316,9 @@ generic Space and kernel code checks. From scratchpad, run
 `python space/check-examples.py --finn-root /path/to/finn-checkout`
 for executable documentation examples. The generic package has its own
 `py.typed` marker and uses the declared
-`greenlet==3.2.4` runtime dependency. Explicit XSI checks live in `tests/kernels/rtlsim`; run, for
+`greenlet` runtime dependency. Explicit XSI checks live in `tests/kernels/rtlsim`; run, for
 example, `python -m kernels.rtlsim.matmul_numeric --case packed` with
-`PYTHONPATH=src:tests:deps/qonnx/src`, `FINN_ROOT`, `FINNLIB_ROOT` and the Vivado
-library path configured. `pure_dot_product_numeric --stress` exercises sustained
+`PYTHONPATH=src:tests` and Vivado selected. `pure_dot_product_numeric --stress` exercises sustained
 one-beat reductions with long output stalls.
 
 `finn.kernels` builds on the canonical logical values in `finn.dataflow`
@@ -329,9 +330,8 @@ The independent kernel gate does not claim those consumers work. The canonical
 physical definitions and shared support belong here.
 
 The source baseline is FinnLib's grouped layout (`rtl/{arith,infra,linalg,
-nonlin,shape}/`, `hls/{infra,util}/`) at the `fetch-repos.sh` pin
-`b9262df1ba4ee7623f0bbd996e2c7566c411bc5f` (branch
-`kernels/matmul-20260927` on the `tkeller/finnlib` fork): upstream `dev`
+nonlin,shape}/`, `hls/{infra,util}/`) at the `finnlib` pin in
+`finn/resources.toml` (`finn-resources update finnlib --ref REF` moves it): upstream `dev`
 plus `replay_buffer` (no longer wrapped), the dotp output-buffer and AXI-Lite declaration-order
 corrections, `memstream`/`memstream_axi` ported from `finn-rtllib`, and the
 `dotp_axi` `CORE` parameter that lets each core be its own kernel. There

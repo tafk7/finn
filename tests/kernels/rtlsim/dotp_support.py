@@ -11,8 +11,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-import numpy as np  # type: ignore[import-not-found]
-from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
+import numpy as np
+from qonnx.core.datatype import DataType
 
 from finn.kernels.target import DspBlock
 

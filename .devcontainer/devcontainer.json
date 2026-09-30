@@ -1,0 +1,29 @@
+{
+  "name": "FINN (dev)",
+  "initializeCommand": "bash .devcontainer/initialize.sh",
+  "dockerComposeFile": [
+    "../compose.yaml",
+    "compose.yaml",
+    "image.compose.json"
+  ],
+  "service": "dev",
+  "workspaceFolder": "/workspace/finn",
+  "remoteUser": "agent",
+  "updateRemoteUserUID": true,
+  "hostRequirements": {
+    "cpus": 4,
+    "memory": "8gb",
+    "storage": "32gb"
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-python.python",
+        "ms-toolsai.jupyter"
+      ],
+      "settings": {
+        "python.defaultInterpreterPath": "/opt/venv/bin/python"
+      }
+    }
+  }
+}

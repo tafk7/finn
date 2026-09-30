@@ -78,17 +78,17 @@ fi
 gecho "  PASSED"
 echo ""
 
-# Test 2: Dataflow model and design tests (no toolchain required)
-gecho "Test 2: Dataflow model and design tests..."
+# Test 2: Space engine and dataflow model tests (no toolchain required)
+gecho "Test 2: Space engine and dataflow model tests..."
 
 cd "$FINN_ROOT"
-pytest tests/dataflow \
+pytest tests/core/space tests/dataflow \
     --maxfail=3 \
     -q \
     --tb=short
 
 if [ $? -ne 0 ]; then
-    recho "Dataflow tests failed!"
+    recho "Space or dataflow tests failed!"
     exit 1
 fi
 gecho "  PASSED"

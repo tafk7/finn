@@ -113,6 +113,7 @@ from finn.transformation.fpgadataflow.derive_characteristic import (
     DeriveCharacteristic,
     DeriveFIFOSizes,
 )
+from finn.transformation.fpgadataflow.export_portable_rtl import ExportPortableRTL
 from finn.transformation.fpgadataflow.hlssynth_ip import HLSSynthIP
 from finn.transformation.fpgadataflow.insert_dwc import InsertDWC
 from finn.transformation.fpgadataflow.insert_fifo import InsertFIFO
@@ -135,7 +136,6 @@ from finn.transformation.fpgadataflow.set_exec_mode import SetExecMode
 from finn.transformation.fpgadataflow.set_fifo_depths import (
     InsertAndSetFIFODepths,
     RemoveShallowFIFOs,
-    SplitLargeFIFOs,
     xsi_fifosim,
 )
 from finn.transformation.fpgadataflow.set_folding import SetFolding
@@ -306,33 +306,6 @@ def verify_step(
 
 
 def prepare_for_stitched_ip_rtlsim(verify_model, cfg):
-    if not cfg.rtlsim_use_vivado_comps:
-        need_restitch = False
-        # switch impl_style=vivado components to rtl
-        # StreamingFIFO must have impl_style=rtl
-        for fifo_layer in verify_model.get_nodes_by_op_type("StreamingFIFO_rtl"):
-            inst = getCustomOp(fifo_layer)
-            if inst.get_nodeattr("impl_style") != "rtl":
-                inst.set_nodeattr("impl_style", "rtl")
-                inst.set_nodeattr("code_gen_dir_ipgen", "")
-                inst.set_nodeattr("ipgen_path", "")
-                need_restitch = True
-        # if we've made alterations to the model, need to do some re-prep
-        if need_restitch:
-            print("Need to regen/re-stitch some IP for STITCHED_IP_RTLSIM")
-            verify_model = verify_model.transform(
-                PrepareIP(cfg._resolve_fpga_part(), cfg._resolve_hls_clk_period())
-            )
-            verify_model = verify_model.transform(HLSSynthIP(cfg._resolve_fpga_part()))
-            verify_model = verify_model.transform(
-                CreateStitchedIP(
-                    cfg._resolve_fpga_part(),
-                    cfg.synth_clk_period_ns,
-                )
-            )
-    else:
-        print("rtlsim_use_vivado_comps is enabled, may yield incorrect results")
-
     # set top-level prop for stitched-ip rtlsim and launch
     verify_model.set_metadata_prop("exec_mode", "rtlsim")
     # TODO make configurable
@@ -536,6 +509,7 @@ def step_convert_to_hw(model: ModelWrapper, cfg: DataflowBuildConfig):
         to_hw.InferElementwiseBinaryOperation(),
         "elementwise binary operations",
     )
+    model = apply_if_relevant(model, ["Where"], to_hw.InferWhereLayer(), "where selection")
     model = apply_if_relevant(
         model, ["Relu"], to_hw.InferReLUAsElementwiseMax(), "ReLU as elementwise max"
     )
@@ -558,6 +532,13 @@ def step_convert_to_hw(model: ModelWrapper, cfg: DataflowBuildConfig):
 
     # Activation functions
     model = apply_if_relevant(model, ["Softmax"], to_hw.InferHWSoftmax(), "softmax layers")
+    # Piecewise polynomial activations (GELU, SiLU, Sigmoid, Tanh)
+    model = apply_if_relevant(
+        model,
+        ["PWPolyF", "Gelu", "Sigmoid", "Tanh", "Erf"],
+        to_hw.InferPWPolyFLayer(),
+        "piecewise polynomial activations",
+    )
 
     # Normalization layers
     model = apply_if_relevant(
@@ -823,8 +804,26 @@ def step_generate_estimate_reports(model: ModelWrapper, cfg: DataflowBuildConfig
     return model
 
 
+def step_minimize_bit_width_datatype_only(model: ModelWrapper, cfg: DataflowBuildConfig):
+    """First pass: datatype-based bit width minimization before specialization.
+
+    Always runs (ignores cfg.minimize_bit_width) because specialization needs
+    realistic bit widths for correct RTL/HLS decisions. Uses worst-case datatype
+    bounds, not actual values. See also: step_minimize_bit_width (second pass).
+    """
+    model = model.transform(MinimizeWeightBitWidth(datatype_only=True), apply_to_subgraphs=True)
+    model = model.transform(MinimizeAccumulatorWidth(datatype_only=True), apply_to_subgraphs=True)
+    model = model.transform(InferDataTypes(), apply_to_subgraphs=True)
+    return model
+
+
 def step_minimize_bit_width(model: ModelWrapper, cfg: DataflowBuildConfig):
-    """Tighten the weight and accumulator bit widths for each layer."""
+    """Second pass: bit width minimization after folding decisions.
+
+    Uses value-based minimization where safe, datatype-based otherwise (e.g.,
+    runtime_writeable_weights). Runs RoundAndClipThresholds and verification.
+    See also: step_minimize_bit_width_datatype_only (first pass).
+    """
     if cfg.minimize_bit_width:
         model = model.transform(MinimizeWeightBitWidth(), apply_to_subgraphs=True)
         model = model.transform(MinimizeAccumulatorWidth(), apply_to_subgraphs=True)
@@ -832,6 +831,7 @@ def step_minimize_bit_width(model: ModelWrapper, cfg: DataflowBuildConfig):
         model = model.transform(InferDataTypes(), apply_to_subgraphs=True)
     else:
         print("minimize_bit_width set to False, only run RoundAndClipThresholds.")
+
     # Always run RoundAndClipThresholds after accumulator widths are determined
     model = model.transform(RoundAndClipThresholds(), apply_to_subgraphs=True)
     model = model.transform(InferDataTypes(), apply_to_subgraphs=True)
@@ -976,8 +976,6 @@ def step_set_fifo_depths(model: ModelWrapper, cfg: DataflowBuildConfig):
             model = model.transform(DeriveFIFOSizes())
             model = model.transform(
                 InsertFIFO(
-                    vivado_ram_style=cfg.large_fifo_mem_style,
-                    max_qsrl_depth=256,
                     create_shallow_fifos=True,
                 )
             )
@@ -1015,7 +1013,6 @@ def step_set_fifo_depths(model: ModelWrapper, cfg: DataflowBuildConfig):
                     cfg._resolve_fpga_part(),
                     cfg._resolve_hls_clk_period(),
                     swg_exception=cfg.default_swg_exception,
-                    vivado_ram_style=cfg.large_fifo_mem_style,
                     fifosim_input_throttle=cfg.fifosim_input_throttle,
                     cfg_n_inferences=cfg.fifosim_n_inferences,
                     debug_log_dir=(_fifo_debug_live_dir(cfg) if cfg.debug_fifo else None),
@@ -1055,7 +1052,6 @@ def step_set_fifo_depths(model: ModelWrapper, cfg: DataflowBuildConfig):
         "parallel_window",
         "ram_style",
         "depth",
-        "impl_style",
         "resType",
         "mem_mode",
         "runtime_writeable_weights",
@@ -1074,11 +1070,9 @@ def step_set_fifo_depths(model: ModelWrapper, cfg: DataflowBuildConfig):
     else:
         extract_model_config_to_json(model, cfg.output_dir + "/final_hw_config.json", hw_attrs)
 
-    # perform FIFO splitting and shallow FIFO removal only after the final config
-    # json file has been written. otherwise, since these transforms may add/remove
-    # FIFOs, we get name mismatch problems when trying to reuse the final config.
-    if cfg.split_large_fifos:
-        model = model.transform(SplitLargeFIFOs())
+    # perform shallow FIFO removal only after the final config json file has been
+    # written. otherwise, since this transform removes FIFOs, we get name mismatch
+    # problems when trying to reuse the final config.
     model = model.transform(RemoveShallowFIFOs())
 
     # after FIFOs are ready to go, call PrepareIP and HLSSynthIP again
@@ -1174,6 +1168,48 @@ def step_create_stitched_ip(model: ModelWrapper, cfg: DataflowBuildConfig):
                 for loop_node in verify_model.get_nodes_by_op_type("FINNLoop"):
                     snapshot_fifo_logs(cfg, "stitched_ip_rtlsim", loop_context=loop_node.name)
             snapshot_fifo_logs(cfg, "stitched_ip_rtlsim")
+    return model
+
+
+def step_export_portable_rtl(model: ModelWrapper, cfg: DataflowBuildConfig):
+    """Export a self-contained, portable RTL project.
+
+    If STITCHED_IP was not requested, this step will run CreateStitchedIP
+    internally (without synthesis) to generate the wrapper and file lists
+    needed for the portable export.
+
+    The export contains:
+    - All Verilog/SystemVerilog source files with relative paths
+    - All .dat memory initialization files
+    - A filelist.f for simulator tools (Verilator, QuestaSim, ModelSim)
+    - A sources.tcl for Vivado non-IPI projects
+    """
+
+    if DataflowOutputType.PORTABLE_RTL in cfg.generate_outputs:
+        # If stitched IP wasn't created yet, run CreateStitchedIP to generate
+        # the wrapper and file lists (without synthesis)
+        vivado_stitch_proj = model.get_metadata_prop("vivado_stitch_proj")
+        if not vivado_stitch_proj:
+            print("Creating stitched IP for portable RTL export (synthesis disabled)...")
+            model = model.transform(
+                CreateStitchedIP(
+                    cfg._resolve_fpga_part(),
+                    cfg.synth_clk_period_ns,
+                    run_synth=False,
+                    run_pnr=False,
+                    signature=cfg.signature,
+                )
+            )
+
+        export_dir = cfg.output_dir + "/portable_rtl"
+        model = model.transform(ExportPortableRTL(export_dir))
+        print("Portable RTL export written to " + export_dir)
+    else:
+        print(
+            """DataflowOutputType.PORTABLE_RTL not in requested outputs,
+            skipping step_export_portable_rtl."""
+        )
+
     return model
 
 
@@ -1439,7 +1475,6 @@ def step_loop_body_set_fifo_depths(model: ModelWrapper, cfg: DataflowBuildConfig
             cfg._resolve_fpga_part(),
             cfg._resolve_hls_clk_period(),
             swg_exception=cfg.default_swg_exception,
-            vivado_ram_style=cfg.large_fifo_mem_style,
             fifosim_input_throttle=cfg.fifosim_input_throttle,
             debug_log_dir=(_fifo_debug_live_dir(cfg) if cfg.debug_fifo else None),
             debug_log_prefix=(loop_context + "_") if loop_context else "",
@@ -1447,7 +1482,6 @@ def step_loop_body_set_fifo_depths(model: ModelWrapper, cfg: DataflowBuildConfig
     )
     # snapshot per-FIFO debug logs for this loop body before the live dir is reused
     snapshot_fifo_logs(cfg, "fifo_sizing", loop_context=loop_context)
-    model = model.transform(SplitLargeFIFOs())
     model = model.transform(RemoveShallowFIFOs())
     # Re-apply the enclosing FINNLoop name as a prefix so loop-body node (and
     # hence IP/module) names stay unique across the whole design. Without this
@@ -1535,6 +1569,7 @@ build_dataflow_step_lookup = {
     "step_hw_ipgen": step_hw_ipgen,
     "step_set_fifo_depths": step_set_fifo_depths,
     "step_create_stitched_ip": step_create_stitched_ip,
+    "step_export_portable_rtl": step_export_portable_rtl,
     "step_measure_rtlsim_performance": step_measure_rtlsim_performance,
     "step_make_driver": step_make_driver,
     "step_synthesize_bitfile": step_synthesize_bitfile,

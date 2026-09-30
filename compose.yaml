@@ -1,0 +1,46 @@
+# Static FINN service definitions.
+#
+# Host-specific identity, workspace, build directory, toolchain and licence
+# mounts are rendered at launch by:
+#
+#   ./docker/config.py compose --tier dev --service dev
+#
+# `docker/run` does this automatically. The Dev Container has a fixed-path
+# dev-only overlay and relies on the Dev Containers uid mapper. This separation
+# keeps the base file portable and leaves host capability discovery in
+# docker/config.py.
+
+x-image: &image
+  image: ${FINN_IMAGE:-xilinx/finn:local}
+  platform: linux/amd64
+  # Images are prepared by Bake through docker/build or docker/run.
+
+x-common: &common
+  <<: *image
+  init: false                 # tini is already PID 1 in the image
+
+services:
+  dev:
+    <<: *common
+
+  build:
+    <<: *common
+    profiles: [fpga]
+
+  notebook:
+    <<: *common
+    profiles: [notebook]
+    environment:
+      JUPYTER_PORT: ${JUPYTER_PORT:-8888}
+      NETRON_PORT: ${NETRON_PORT:-8081}
+    ports:
+      - "${JUPYTER_PORT:-8888}:${JUPYTER_PORT:-8888}"
+      - "${NETRON_PORT:-8081}:${NETRON_PORT:-8081}"
+    command:
+      - jupyter
+      - notebook
+      - --no-browser
+      - --ip=0.0.0.0
+      - --port
+      - "${JUPYTER_PORT:-8888}"
+      - notebooks

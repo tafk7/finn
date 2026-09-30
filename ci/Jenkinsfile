@@ -90,6 +90,21 @@ int finnCiMinFreeGB() {
 @Field
 static final String FINN_BUILD_LABEL = 'finn-build'
 
+// Workspace-relative directory build-images.sh writes its provenance and digest
+// into. archiveArtifacts globs are resolved against the workspace, so metadata
+// destined for Jenkins has to land here first and be copied out to NFS second.
+@Field
+static final String CI_IMAGE_METADATA_DIR = 'ci-image-metadata'
+
+// The commit every stage checks out. Resolved once from the branch tip on the
+// first checkoutPinned() call (Validate) and reused unchanged for the rest of
+// the build, so every stage tests the same mounted FINN source even if the
+// branch moves mid-run. Image tags are source-neutral environment revisions;
+// PINNED_SCM_COMMIT is the separate source half of the provenance tuple.
+// @Field so the SHA survives CPS replay across stages/agents.
+@Field
+String PINNED_SCM_COMMIT = ''
+
 // Optional setup-local.sh stage label and cache root.
 // Read via helpers, not @Field, so env resolution happens
 // inside the running pipeline rather than at script load.
@@ -126,6 +141,10 @@ pipeline {
   agent none
   options {
     timeout(time: 72, unit: 'HOURS')
+    // Every stage checks out through checkoutPinned() instead of the implicit
+    // per-agent checkout, so the whole build tests one commit even if the
+    // branch is pushed mid-run. See checkoutPinned() / PINNED_SCM_COMMIT.
+    skipDefaultCheckout()
   }
   parameters {
     // STAGES choices mirror finn_ci.config.jenkins_stage_choices(). Drift
@@ -151,6 +170,7 @@ pipeline {
       agent { label "${FINN_BUILD_LABEL}" }
       steps {
         script {
+          checkoutPinned()
           wipeStaleWorkspace()
           announceCiMode()
           loadStageConfig()
@@ -165,14 +185,14 @@ pipeline {
     stage('Build Docker Image') {
       agent { label "${FINN_BUILD_LABEL}" }
       environment { FINN_DOCKER_PREBUILT = '0' }
-      steps { script { wipeStaleWorkspace(); withAgentNfsEnv(exposeSharedImage: false) { buildAndPublishDockerImage() } } }
+      steps { script { checkoutPinned(); wipeStaleWorkspace(); withAgentNfsEnv(exposeSharedImage: false) { buildAndPublishDockerImage() } } }
     }
     stage('Run Tests') {
       steps { script { runParallelOrFail(buildParallelStageMap()) } }
     }
     stage('Check Stage Results') {
       agent { label "${FINN_BUILD_LABEL}" }
-      steps { script { withAgentNfsEnv { aggregateReports() } } }
+      steps { script { checkoutPinned(); withAgentNfsEnv { aggregateReports() } } }
     }
   }
   // post { always } runs on graceful completion AND graceful abort. It is
@@ -356,13 +376,66 @@ void rotateBuildTrees() {
 // Build-Docker-Image stage helpers
 // ============================================================================
 
+// The CI image tier. Python-only shards do not need Vivado, a licence or the
+// large Xilinx mount. Select the grant tier explicitly per job.
+//
+// The tier no longer selects an IMAGE -- there is one -- it selects what the
+// shard mounts and is allowed to reach. It is still worth setting.
+String ciImageTier() {
+  return env.FINN_CI_IMAGE_TIER ?: 'build'
+}
+
+// Which accelerator stacks the published image carries. Comma-separated names
+// from docker/runtimes/. Empty is the base image.
+//
+// MIGRATION: this publishes `xilinx/finn:<git>.xrt`, where the old path
+// published `xilinx/finn:<git>-dirty.<xrt-deb-name>`. Anything downstream that
+// pattern-matches the old tag shape must be re-pointed. The exact XRT version
+// is no longer in the tag; read the dev.finn.runtimes label and
+// docker/runtimes/xrt.env at the recorded commit.
+String ciRuntimes() {
+  return env.FINN_RUNTIMES ?: 'xrt'
+}
+
+// Delegated to docker/lib.sh rather than reimplemented in Groovy. This was a
+// fourth copy of "runtime set -> target name", and the copies had drifted.
+String ciBakeTarget() {
+  return sh(returnStdout: true, script:
+    ". ./docker/lib.sh && finn_bake_target ${shellQuote(ciRuntimes())}").trim()
+}
+
 void buildAndPublishDockerImage() {
   // -a -f reclaims the whole local image cache. The FINN builder agent is
   // assumed single-tenant so this will not evict another job's images.
   sh 'docker system prune -a -f'
-  sh "./run-docker.sh echo 'Docker image build complete'"
   String imageDir = buildDockerImageDir()
+  // Build via bake and emit the provenance tuple into the WORKSPACE, then copy
+  // it out to NFS. It used to be written straight to imageDir, which lives
+  // under FINN_CI_NFS_ROOT and therefore outside the workspace -- so the
+  // workspace-relative `**/finn-image-provenance.json` glob below matched
+  // nothing on every NFS-enabled build, and allowEmptyArchive turned archiving
+  // nothing into a silent success. No build has ever carried this artifact.
+  //
+  // The image digest alone does NOT identify what was tested: FINN source is
+  // mounted rather than baked, so the digest describes the environment and the
+  // finn_commit + resolved dependency commits describe the code. Shards need
+  // all of it, which is why it is worth archiving at all.
+  sh "rm -rf ${shellQuote(CI_IMAGE_METADATA_DIR)} && mkdir -p ${shellQuote(CI_IMAGE_METADATA_DIR)}"
+  sh "ci/scripts/build-images.sh ${shellQuote(ciBakeTarget())} ${shellQuote(CI_IMAGE_METADATA_DIR)}"
+  // Exact paths, no recursive wildcard, and deliberately no allowEmptyArchive:
+  // the step directly above is required to have written both files, so an
+  // empty archive here means the container build did not produce its declared
+  // metadata. That is a container integration failure, not an optional report.
+  archiveArtifacts artifacts: "${CI_IMAGE_METADATA_DIR}/finn-image-provenance.json," +
+                              "${CI_IMAGE_METADATA_DIR}/finn-image-digest.txt"
   if (imageDir) {
+    // The published NFS layout is unchanged: the same two filenames land in
+    // the same build-scoped directory, next to the archive and tag that
+    // publishSharedDockerImage writes.
+    sh "mkdir -p ${shellQuote(imageDir)}"
+    sh "cp ${shellQuote(CI_IMAGE_METADATA_DIR)}/finn-image-provenance.json " +
+       "${shellQuote(CI_IMAGE_METADATA_DIR)}/finn-image-digest.txt " +
+       "${shellQuote(imageDir)}/"
     publishSharedDockerImage(imageDir)
   } else {
     echo "buildAndPublishDockerImage: local fallback mode, skipping image publish"
@@ -376,14 +449,24 @@ String buildDockerImageDir() {
   return "${parent}/${env.BUILD_NUMBER}"
 }
 
-// Other agents docker-load this image instead of rebuilding. Tag comes from
-// `./run-docker.sh print-tag`. The build-scoped imageDir keeps cross-build
-// readers away from in-progress writes. publish_docker_image.sh handles the
-// same-build-retry serialisation.
+// Other agents docker-load this image instead of rebuilding. The build-scoped
+// imageDir keeps cross-build readers away from in-progress writes.
+// publish_docker_image.sh handles the same-build-retry serialisation.
 void publishSharedDockerImage(String imageDir) {
-  def tag = sh(returnStdout: true, script: './run-docker.sh print-tag').trim()
+  // READ the tag build-images.sh already recorded, one stage earlier, rather
+  // than asking bake again.
+  //
+  // The previous version recomputed it here, and carried two defects the
+  // launchers had already fixed: no `-f docker-bake.hcl`, so bake also
+  // auto-loaded compose.yaml and died on ${FINN_XILINX_PATH:?} interpolation on
+  // any agent with no Xilinx configured; and no `sed -n '/^{/,$p'`, so a single
+  // bake progress line ahead of the JSON would break the parse. Reading the
+  // artifact cannot drift from the artifact.
+  def provenance = "${imageDir}/finn-image-provenance.json"
+  def tag = sh(returnStdout: true, script:
+    "python3 -c \"import json;print(json.load(open('${provenance}'))['tag'])\"").trim()
   if (!tag || tag.contains('\n')) {
-    error "run-docker.sh print-tag must emit exactly one Docker tag line. Got: ${tag}"
+    error "no single tag in ${provenance}. Got: ${tag}"
   }
   sh "mkdir -p ${shellQuote(imageDir)}"
   sh "ci/scripts/publish_docker_image.sh " +
@@ -425,7 +508,7 @@ void runShard(Map entry) {
   node(FINN_BUILD_LABEL) {
     withAgentNfsEnv {
       stage(stageName) {
-        checkout scm
+        checkoutPinned()
         wipeStaleWorkspace()
         String perBuildRoot = finnCiPerBuildRoot()
         String buildDir = "${perBuildRoot}/${stashName}"
@@ -491,46 +574,50 @@ void runShardBody(Map entry, String buildDir, String startMarker) {
   }
 }
 
-// setup-local.sh expects apt + python3.10 on the agent. Override
-// FINN_LOCAL_BUILD_LABEL when the main build pool lacks those.
+// setup-local.sh expects git and g++ on the agent; this stage installs uv if it
+// is missing, and uv provides Python 3.12. Override FINN_LOCAL_BUILD_LABEL when
+// the main build pool lacks those.
 void runLocalSetupTest() {
   node(finnLocalBuildLabel()) {
     withAgentNfsEnv {
       stage('Local Setup (non-Docker) with Vivado') {
-        checkout scm
+        checkoutPinned()
         wipeStaleWorkspace()
         String perBuildRoot = finnCiPerBuildRoot()
         String buildDir = "${perBuildRoot}/local_setup"
         echo "[stage-map] build=${env.BUILD_NUMBER} stage='Local Setup (non-Docker) with Vivado' stash=local_setup shard=1/1 node=${env.NODE_NAME} workspace=${env.WORKSPACE} build_dir=${buildDir}"
-        // Cache key tracks the dep inputs so changes force a fresh download.
-        String pipCacheKey = sh(
+        // Cache key tracks the lock so a change starts a fresh package cache.
+        String uvCacheKey = sh(
           returnStdout: true,
-          script: 'sha256sum requirements.txt setup.py setup.cfg pyproject.toml 2>/dev/null | sha256sum | cut -c1-16'
+          script: 'sha256sum uv.lock | cut -c1-16'
         ).trim()
-        if (!pipCacheKey) { pipCacheKey = "build-${env.BUILD_NUMBER}" }
+        if (!uvCacheKey) { uvCacheKey = "build-${env.BUILD_NUMBER}" }
         String cacheRoot   = finnCiLocalCacheRoot()
-        String pipCacheRoot = "${cacheRoot}/pip"
-        String pipCacheDir  = "${pipCacheRoot}/${pipCacheKey}"
-        String xdgCacheDir  = "${cacheRoot}/xdg"
+        String uvCacheRoot = "${cacheRoot}/uv"
+        String uvCacheDir  = "${uvCacheRoot}/${uvCacheKey}"
+        String xdgCacheDir = "${cacheRoot}/xdg"
         withEnv([
           "FINN_HOST_BUILD_DIR=${buildDir}",
-          "PIP_CACHE_DIR=${pipCacheDir}",
+          "UV_CACHE_DIR=${uvCacheDir}",
           "XDG_CACHE_HOME=${xdgCacheDir}",
+          "FINN_HOME=${cacheRoot}/finn-home",
+          "PATH+UV=${env.HOME}/.local/bin",
         ]) {
-          // prune-pip-cache keeps pipCacheDir and deletes cache-key dirs older
+          // prune-pip-cache keeps uvCacheDir and deletes cache-key dirs older
           // than 14 days. It tolerates concurrent deletion, so two builds
           // GC'ing at once needs no lock (flock is local-only on NFS anyway).
           sh """
-mkdir -p ${shellQuote(perBuildRoot)} ${shellQuote(pipCacheDir)} ${shellQuote(xdgCacheDir)}
+mkdir -p ${shellQuote(perBuildRoot)} ${shellQuote(uvCacheDir)} ${shellQuote(xdgCacheDir)}
 ${CI_TOOL} prune-pip-cache \\
-  ${shellQuote(pipCacheRoot)} ${shellQuote(pipCacheDir)} 14 || true
+  ${shellQuote(uvCacheRoot)} ${shellQuote(uvCacheDir)} 14 || true
+command -v uv >/dev/null || python3 -m pip install --user uv==0.10.0
 """
           cleanPreviousBuildFiles(buildDir)
           catchError(stageResult: 'FAILURE') {
             sh './setup-local.sh'
             sh '''#!/bin/bash
 set -eo pipefail
-source scripts/finn-env.sh
+source scripts/activate.sh
 ./scripts/quicktest-local.sh vivado
 '''
           }
@@ -594,7 +681,7 @@ void runPytest(Map opts) {
       "#!/bin/bash\nset -eo pipefail\n${envLines.join('\n')}\n${cmd}\n"
   // invoke via bash so we do not depend on the workspace file having the
   // execute bit set (writeFile creates 0644 by default).
-  runDockerCommand('./run-docker.sh bash run-tests.sh')
+  runDockerCommand('bash run-tests.sh')
 }
 
 
@@ -620,7 +707,7 @@ void aggregateReports() {
   publishStageMap()
   catchError(buildResult: null, stageResult: 'UNSTABLE',
              message: 'pytest_html_merger failed, per-stage HTMLs still archived') {
-    runDockerCommand('./run-docker.sh pytest_html_merger -i reports/ -o reports/test_report_final.html')
+    runDockerCommand('pytest_html_merger -i reports/ -o reports/test_report_final.html')
   }
   catchError(buildResult: null, stageResult: 'UNSTABLE',
              message: 'archiveArtifacts (xml) failed') {
@@ -662,7 +749,7 @@ done
     '''
     // pytest-cov ships its own coverage. Run via the same docker image so
     // the merge uses the same Python/library versions as the per-shard runs.
-    runDockerCommand("./run-docker.sh bash -c 'cd coverage_data && coverage combine && " +
+    runDockerCommand("bash -c 'cd coverage_data && coverage combine && " +
                      "coverage html -d ../coverage_combined'")
     archiveArtifacts artifacts: 'coverage_combined/**/*', allowEmptyArchive: true
   }
@@ -834,6 +921,29 @@ void findCopyZip(String testType, String board, String findDir, String copyDir) 
 // Cross-cutting helpers
 // ============================================================================
 
+// Single checkout entry point for every stage (skipDefaultCheckout() is set, so
+// nothing else clones). The first call (Validate) resolves the branch tip and
+// records it in PINNED_SCM_COMMIT; every later call — on any agent — checks out
+// that exact SHA, reusing the job's configured remotes/extensions/browser so
+// credentials, refspecs and tag fetching match a plain `checkout scm`. This
+// keeps mounted source constant across stages even if the branch moves
+// mid-build. Must run before wipeStaleWorkspace(), which needs a
+// populated git workspace to `git clean`/`git status`.
+void checkoutPinned() {
+  if (!PINNED_SCM_COMMIT) {
+    def vars = checkout scm
+    PINNED_SCM_COMMIT = vars.GIT_COMMIT
+    echo "checkoutPinned: pinned build to ${PINNED_SCM_COMMIT}"
+  } else {
+    checkout([
+      $class: 'GitSCM',
+      branches: [[name: PINNED_SCM_COMMIT]],
+      userRemoteConfigs: scm.userRemoteConfigs,
+      extensions: scm.extensions,
+    ])
+  }
+}
+
 // Per-shard scratch lives under WORKSPACE_TMP (a sibling of the git
 // workspace) so git clean has no deep NFS scratch tree to walk. We still
 // reap the prior build's scratch here to reclaim space. A stuck NFS handle
@@ -993,7 +1103,7 @@ void withAgentNfsEnv(Closure body) { withAgentNfsEnv([:], body) }
 // FINN_DOCKER_EXTRA is interpolated. Composes prepareAgentCaches +
 // agentCachesDockerExtra with the shared-image-dir or local-build toggle.
 // The Build-Docker-Image stage passes exposeSharedImage:false because imageDir
-// is not published there yet, so exposing it would make run-docker.sh log a
+// is not published there yet, so exposing it would make the CI image loader log a
 // spurious "no usable shared image" fallback. That stage relies on its own
 // FINN_DOCKER_PREBUILT=0 to build locally.
 void withAgentNfsEnv(Map opts, Closure body) {

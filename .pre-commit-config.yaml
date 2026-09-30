@@ -26,10 +26,11 @@
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-exclude: '^docs/conf.py'
+# Parked code and recorded evidence are reference material, not maintained code.
+exclude: '^(docs/conf.py|src/finn/parked/|docs/(kernel|space)-[^/]+/)'
 
 default_language_version:
-    python: python3.10
+    python: python3.12
 
 repos:
 - repo: https://github.com/pre-commit/pre-commit-hooks
@@ -54,7 +55,8 @@ repos:
   rev: 5.12.0
   hooks:
   - id: isort
-    exclude: '^(src/finn/dataflow/_engine/|tests/dataflow/engine/|src/finn/core/space/|tests/core/space/)'
+    # The Space, dataflow and kernel packages are formatted by ruff (below).
+    exclude: '^(src/finn/(core/space|dataflow|kernels)/|tests/(core/space|dataflow|kernels)/)'
 
 - repo: https://github.com/psf/black
   rev: 23.3.0
@@ -62,11 +64,11 @@ repos:
   - id: black
     language_version: python3
     args: [--line-length=100]
-    exclude: '^(src/finn/dataflow/_engine/|tests/dataflow/engine/|src/finn/core/space/|tests/core/space/)'
+    exclude: '^(src/finn/(core/space|dataflow|kernels)/|tests/(core/space|dataflow|kernels)/)'
 
 - repo: https://github.com/astral-sh/ruff-pre-commit
   rev: v0.16.4
   hooks:
     - id: ruff-check
     - id: ruff-format
-      files: '^(src/finn/core/space/|tests/core/space/)'
+      files: '^(src/finn/(core/space|dataflow|kernels)/|tests/(core/space|dataflow|kernels)/)'

@@ -30,9 +30,10 @@ import numpy as np
 import os
 
 from finn.custom_op.fpgadataflow.matrixvectoractivation import MVAU
-from finn.custom_op.fpgadataflow.rtlbackend import RTLBackend, get_finnlib_root
-from finn.util.basic import get_dsp_block
+from finn.custom_op.fpgadataflow.rtlbackend import RTLBackend, finnlib_source
+from finn.util.basic import get_dsp_block, get_dsp_datapath_limits
 from finn.util.data_packing import npy_to_rtlsim_input, rtlsim_output_to_npy
+from finn.util.resources import resource_path, tcl_quote
 
 # ONNX i/o tensor shape assumptions for MatrixVectorActivation_rtl:
 # input 0 is the input tensor, shape (.., i_size) = (..., MW)
@@ -157,7 +158,7 @@ class MVAU_rtl(MVAU, RTLBackend):
                 )
             )
 
-    def lut_estimation(self):
+    def lut_estimation(self, fpgapart):
         return 0
 
     def dsp_estimation(self, fpgapart):
@@ -179,9 +180,8 @@ class MVAU_rtl(MVAU, RTLBackend):
         theight = self.get_nodeattr("TH")
 
         if theight > 1:
-            rtllib_dir = os.path.join(os.environ["FINN_ROOT"], "finn-rtllib/mvu_tiled/")
+            rtllib_dir = resource_path("rtllib", "mvu_tiled") + "/"
             sourcefiles = [
-                "../fifo/hdl/Q_srl.v",
                 "../skid/skid.sv",
                 "../mvu/mvu_pkg.sv",
                 "../mvu/add_multi.sv",
@@ -192,7 +192,7 @@ class MVAU_rtl(MVAU, RTLBackend):
                 "weights_buff_tile.sv",
             ]
         else:
-            rtllib_dir = os.path.join(os.environ["FINN_ROOT"], "finn-rtllib/mvu/")
+            rtllib_dir = resource_path("rtllib", "mvu") + "/"
             sourcefiles = [
                 "mvu_pkg.sv",
                 "mvu_vvu_axi.sv",
@@ -204,12 +204,10 @@ class MVAU_rtl(MVAU, RTLBackend):
             os.path.join(code_gen_dir, self.get_nodeattr("gen_top_module") + "_wrapper.v")
         ] + [rtllib_dir + _ for _ in sourcefiles]
         if theight <= 1:
-            sourcefiles.insert(
-                2, os.path.join(get_finnlib_root(), "rtl", "infra", "replay_buffer.sv")
-            )
+            sourcefiles.insert(2, finnlib_source("rtl", "replay_buffer.sv"))
 
         for f in sourcefiles:
-            cmd.append("add_files -norecurse %s" % (f))
+            cmd.append("add_files -norecurse %s" % tcl_quote(f))
         if self.get_nodeattr("mem_mode") in [
             "internal_decoupled",
             "dynamic",
@@ -345,11 +343,9 @@ class MVAU_rtl(MVAU, RTLBackend):
 
     def prepare_codegen_default(self, fpgapart, clk):
         if self.get_nodeattr("TH") > 1:
-            template_path = (
-                os.environ["FINN_ROOT"] + "/finn-rtllib/mvu_tiled/mvu_tiled_axi_wrapper.v"
-            )
+            template_path = resource_path("rtllib", "mvu_tiled/mvu_tiled_axi_wrapper.v")
         else:
-            template_path = os.environ["FINN_ROOT"] + "/finn-rtllib/mvu/mvu_vvu_axi_wrapper.v"
+            template_path = resource_path("rtllib", "mvu/mvu_vvu_axi_wrapper.v")
 
         # check if settings are valid
         pumped_compute = self.get_nodeattr("pumpedCompute")
@@ -396,6 +392,43 @@ class MVAU_rtl(MVAU, RTLBackend):
                 )
 
         dsp_block = get_dsp_block(fpgapart)
+
+        # the operand and accumulator widths must fit the target DSP datapath
+        # (activation->B, weight->A, accumulator->P); wider values would be
+        # silently truncated or fail synthesis on the DSP-based RTL MVU
+        max_act, max_weight, max_acc = get_dsp_datapath_limits(dsp_block)
+        idt = self.get_input_datatype(0)
+        signed_act = 1 if idt.signed() else 0
+        act_width = idt.bitwidth()
+        weight_width = self.get_input_datatype(1).bitwidth()
+        acc_width = self.get_output_datatype().bitwidth()
+        # activations sit in the signed B datapath; unsigned activations cost one
+        # extra bit, so the effective width must stay below the B datapath width
+        if act_width - signed_act >= max_act:
+            raise Exception(
+                "%s: %s activation width of %d bits exceeds the %s activation datapath "
+                "limit of %d bits. Use the HLS MVAU for wider activations."
+                % (
+                    self.onnx_node.name,
+                    "signed" if signed_act else "unsigned",
+                    act_width,
+                    dsp_block,
+                    max_act - 1 + signed_act,
+                )
+            )
+        if weight_width > max_weight:
+            raise Exception(
+                "%s: weight width of %d bits exceeds the %s weight datapath "
+                "limit of %d bits. Use the HLS MVAU for wider weights."
+                % (self.onnx_node.name, weight_width, dsp_block, max_weight)
+            )
+        if acc_width > max_acc:
+            raise Exception(
+                "%s: accumulator width of %d bits exceeds the %s accumulator datapath "
+                "limit of %d bits. Use the HLS MVAU for wider accumulators."
+                % (self.onnx_node.name, acc_width, dsp_block, max_acc)
+            )
+
         code_gen_dict = {}
         code_gen_dict["$IS_MVU$"] = [str(1)]
         code_gen_dict["$VERSION$"] = [str(self._resolve_dsp_version(dsp_block))]
@@ -419,16 +452,15 @@ class MVAU_rtl(MVAU, RTLBackend):
         if abspath:
             code_gen_dir = self.get_nodeattr("code_gen_dir_ipgen") + "/"
             if self.get_nodeattr("TH") > 1:
-                rtllib_dir = os.path.join(os.environ["FINN_ROOT"], "finn-rtllib/mvu_tiled/")
+                rtllib_dir = resource_path("rtllib", "mvu_tiled") + "/"
             else:
-                rtllib_dir = os.path.join(os.environ["FINN_ROOT"], "finn-rtllib/mvu/")
+                rtllib_dir = resource_path("rtllib", "mvu") + "/"
         else:
             code_gen_dir = ""
             rtllib_dir = ""
 
         if self.get_nodeattr("TH") > 1:
             verilog_files = [
-                "../fifo/hdl/Q_srl.v",
                 "../skid/skid.sv",
                 "../mvu/mvu_pkg.sv",
                 "../mvu/add_multi.sv",
@@ -454,17 +486,14 @@ class MVAU_rtl(MVAU, RTLBackend):
                 os.path.join(code_gen_dir, self.get_nodeattr("gen_top_module") + "_wrapper.v")
             ] + [rtllib_dir + _ for _ in verilog_files]
             if abspath:
-                verilog_files[3] = os.path.join(
-                    get_finnlib_root(), "rtl", "infra", "replay_buffer.sv"
-                )
+                verilog_files[3] = finnlib_source("rtl", "replay_buffer.sv")
 
         return verilog_files
 
     def get_verilog_paths(self):
         verilog_paths = super().get_verilog_paths()
         if self.get_nodeattr("TH") > 1:
-            verilog_paths.append(os.environ["FINN_ROOT"] + "/finn-rtllib/mvu_tiled")
+            verilog_paths.append(resource_path("rtllib", "mvu_tiled") + "/")
         else:
-            verilog_paths.append(os.environ["FINN_ROOT"] + "/finn-rtllib/mvu")
-            verilog_paths.append(os.path.join(get_finnlib_root(), "rtl", "infra"))
+            verilog_paths.append(resource_path("rtllib", "mvu") + "/")
         return verilog_paths

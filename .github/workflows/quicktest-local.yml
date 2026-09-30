@@ -13,15 +13,20 @@ jobs:
 
   test:
     name: Run quicktest with local installation (no Docker)
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Install system dependencies
         run: |
           sudo ./scripts/install-system-deps.sh
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.10.0"
 
       - name: Setup local FINN environment
         run: |
@@ -31,5 +36,5 @@ jobs:
       - name: Run quicktest
         run: |
           export FINN_HOST_BUILD_DIR=/tmp/finn_gha
-          source scripts/finn-env.sh
+          source scripts/activate.sh
           ./scripts/quicktest-local.sh

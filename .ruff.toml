@@ -3,6 +3,12 @@ line-length = 100
 exclude = [
     "*.ipynb",
 ]
+# Parked code and recorded evidence are reference material, not maintained code.
+extend-exclude = [
+    "src/finn/parked",
+    "docs/kernel-*",
+    "docs/space-*",
+]
 
 [lint]
 select = ["E", "F", "PLC"]

@@ -29,11 +29,11 @@
 import json
 import numpy as np
 import os
+import shlex
 from qonnx.custom_op.registry import getCustomOp
 
 from finn import xsi
 from finn.util.basic import (
-    get_finn_root,
     get_rtlsim_timeout_error_message,
     get_vivado_root,
     get_watchdog_timeout_cycles,
@@ -41,21 +41,39 @@ from finn.util.basic import (
     make_build_dir,
 )
 from finn.util.data_packing import npy_to_rtlsim_input, rtlsim_output_to_npy
+from finn.util.resources import resource_path
 from finn.util.rtlsim import dat_file_to_numpy_array, mlo_prehook_func_factory
 
-finnxsi = xsi if xsi.is_available() else None
+finnxsi = xsi  # Native prerequisites are checked when simulation is requested.
+
+
+def has_s_axis_port(node_onnx, node_inp_ind):
+    """Whether input `node_inp_ind` of `node_onnx` is backed by an s_axis port.
+
+    Mirrors the skip rule in CreateStitchedIP.connect_s_axis_external: an input
+    beyond the node's declared s_axis interfaces gets no external port and does
+    not consume an s_axis_<n> index. Requant_rtl in MLO mode is such a case, as
+    it packs its bias (input[2]) into the input[1] parameter memstream.
+    """
+    s_axis_names = getCustomOp(node_onnx).get_verilog_top_module_intf_names()["s_axis"]
+    return node_inp_ind < len(s_axis_names)
 
 
 def prep_rtlsim_io_dict(model, execution_context):
     # extract i/o info to prepare io_dict
     io_dict = {"inputs": {}, "outputs": {}}
     if_dict = eval(model.get_metadata_prop("vivado_stitch_ifnames"))
-    # go over and prepare inputs
-    for i, i_vi in enumerate(model.graph.input):
+    # go over and prepare inputs, skipping those without an s_axis port so that
+    # the rest stay aligned with if_dict
+    i = -1
+    for i_vi in model.graph.input:
         i_name = i_vi.name
+        first_node_onnx = model.find_consumer(i_name)
+        if not has_s_axis_port(first_node_onnx, list(first_node_onnx.input).index(i_name)):
+            continue
+        i += 1
         i_tensor = execution_context[i_name]
         i_dt = model.get_tensor_datatype(i_name)
-        first_node_onnx = model.find_consumer(i_name)
         first_node = getCustomOp(first_node_onnx)
         node_inp_ind = list(first_node_onnx.input).index(i_name)
         if node_inp_ind == 0:
@@ -134,7 +152,7 @@ def rtlsim_exec_cppxsi(
     dummy data or real data. The execution_context parameter must be formatted
     according to whether dummy or real data is used.
     If behav=True (default), FINN_SIMULATION is defined and fifo_gauge is used.
-    If behav=False, Q_srl is used instead (no debug logging).
+    If behav=False, the synthesizable fifo.sv is used instead (no debug logging).
 
     Example with dummy_data = True::
 
@@ -200,7 +218,7 @@ def rtlsim_exec_cppxsi(
         sim_base, sim_rel = rtlsim_so.split("xsim.dir")
         sim_rel = "xsim.dir" + sim_rel
     # prepare the C++ sim driver template
-    finnxsi_dir = get_finn_root() + "/finn_xsi"
+    finnxsi_dir = resource_path("xsi")
     fifosim_config_fname = finnxsi_dir + "/rtlsim_config.hpp.template"
     with open(fifosim_config_fname, "r") as f:
         fifsom_config_template = f.read()
@@ -213,6 +231,9 @@ def rtlsim_exec_cppxsi(
         assert first_node is not None, "Failed to find consumer for " + iname
         fnode_inst = getCustomOp(first_node)
         top_ind = list(first_node.input).index(iname)
+        # skip inputs without an s_axis port to stay aligned with ifnames below
+        if not has_s_axis_port(first_node, top_ind):
+            continue
         ishape_folded = fnode_inst.get_folded_input_shape(ind=top_ind)
         instream_iters.append(np.prod(ishape_folded[:-1]))
     for top_out in model.graph.output:
@@ -237,6 +258,12 @@ def rtlsim_exec_cppxsi(
         ), f"cppxsi sim doesn't know how to handle full AXI MM interfaces: {ifnames['aximm']}"
     instream_names = [x[0] for x in ifnames["s_axis"]]
     outstream_names = [x[0] for x in ifnames["m_axis"]]
+    assert len(instream_names) == len(
+        instream_iters
+    ), "stitched-IP s_axis ports (%d) don't match streamed graph inputs (%d)" % (
+        len(instream_names),
+        len(instream_iters),
+    )
     instream_descrs = [
         (instream_names[i], instream_iters[i], instream_iters[i] + throttle_cycles)
         for i in range(len(instream_names))
@@ -294,7 +321,7 @@ def rtlsim_exec_cppxsi(
     ]
     # write compilation command to a file for easy re-running/debugging
     with open(sim_base + "/compile_rtlsim.sh", "w") as f:
-        f.write(" ".join(build_cmd))
+        f.write(shlex.join(build_cmd) + "\n")
     launch_process_helper(build_cmd, cwd=sim_base)
     assert os.path.isfile(sim_base + "/rtlsim_xsi"), "Failed to compile rtlsim executable"
 
@@ -306,7 +333,7 @@ def rtlsim_exec_cppxsi(
     with open(sim_base + "/run_rtlsim.sh", "w") as f:
         ld_path = runsim_env["LD_LIBRARY_PATH"]
         f.write(
-            f"LD_LIBRARY_PATH={ld_path}"
+            f"LD_LIBRARY_PATH={shlex.quote(ld_path)}"
             " ./rtlsim_xsi > rtlsim_xsi_log.txt"
             " 2> rtlsim_xsi_stderr.log"
         )

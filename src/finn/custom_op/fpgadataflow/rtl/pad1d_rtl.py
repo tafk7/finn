@@ -8,10 +8,11 @@ from qonnx.core.datatype import DataType
 from finn.custom_op.fpgadataflow.pad1d import Pad1D
 from finn.custom_op.fpgadataflow.rtlbackend import RTLBackend
 from finn.util.data_packing import npy_to_rtlsim_input, rtlsim_output_to_npy
+from finn.util.resources import resource_path, tcl_quote
 
 
 def _rtlsrc_dir():
-    return os.environ["FINN_ROOT"] + "/finn-rtllib/pad1d/hdl"
+    return resource_path("rtllib", "pad1d/hdl")
 
 
 class Pad1D_rtl(Pad1D, RTLBackend):
@@ -144,15 +145,13 @@ class Pad1D_rtl(Pad1D, RTLBackend):
         return ["pad1d.sv", self.get_nodeattr("gen_top_module") + ".v"]
 
     def code_generation_ipi(self):
-        sourcefiles = self.get_rtl_file_list(abspath=True)
-        source_target = "./ip/verilog/rtl_ops/%s" % self.onnx_node.name
-        cmd = ["file mkdir %s" % source_target]
-        for f in sourcefiles:
-            cmd += ["add_files -copy_to %s -norecurse %s" % (source_target, f)]
-        cmd += [
+        cmd = []
+        for f in self.get_rtl_file_list(abspath=True):
+            cmd.append("add_files -norecurse %s" % tcl_quote(f))
+        cmd.append(
             "create_bd_cell -type module -reference %s %s"
             % (self.get_nodeattr("gen_top_module"), self.onnx_node.name)
-        ]
+        )
         return cmd
 
     def execute_node(self, context, graph):

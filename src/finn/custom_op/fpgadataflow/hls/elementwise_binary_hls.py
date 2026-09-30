@@ -45,6 +45,7 @@ from finn.util.data_packing import (
     pack_innermost_dim_as_hex_string,
     rtlsim_output_to_npy,
 )
+from finn.util.resources import resource_path, tcl_quote
 
 # Mapping of memory resource attributes to the corresponding C++ HLS
 # pragma directives
@@ -688,8 +689,7 @@ class ElementwiseBinaryOperation_hls(
         return intf_names
 
     def code_generation_ipi(self):
-        source_target = "./ip/verilog/rtl_ops/%s" % self.onnx_node.name
-        cmd = ["file mkdir %s" % source_target]
+        cmd = []
         # add streamer if needed
         mem_mode = self.get_nodeattr("mem_mode")
         mlo = self.get_nodeattr("mlo_max_iter")
@@ -729,8 +729,8 @@ class ElementwiseBinaryOperation_hls(
             )
             # instantiate a streamer and connect it to the IP
             code_gen_dir = self.get_nodeattr("code_gen_dir_ipgen")
-            axi_dir = os.path.join(os.environ["FINN_ROOT"], "finn-rtllib/axi/hdl/")
-            ms_rtllib_dir = os.path.join(os.environ["FINN_ROOT"], "finn-rtllib/memstream/hdl/")
+            axi_dir = resource_path("rtllib", "axi/hdl") + "/"
+            ms_rtllib_dir = resource_path("rtllib", "memstream/hdl") + "/"
             file_suffix = "_memstream_wrapper.v"
             # automatically find memstream verilog component in code generation directory
             for fname in os.listdir(code_gen_dir):
@@ -744,7 +744,7 @@ class ElementwiseBinaryOperation_hls(
                 ms_rtllib_dir + "memstream.sv",
             ]
             for f in sourcefiles:
-                cmd += ["add_files -copy_to %s -norecurse %s" % (source_target, f)]
+                cmd += ["add_files -norecurse %s" % tcl_quote(f)]
             strm_inst = node_name + "_wstrm"
             cmd.append(
                 "create_bd_cell -type hier -reference %s /%s/%s"

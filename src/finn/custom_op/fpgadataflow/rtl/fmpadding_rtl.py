@@ -28,11 +28,11 @@
 
 import math
 import os
-import shutil
 from qonnx.util.basic import roundup_to_integer_multiple
 
 from finn.custom_op.fpgadataflow.fmpadding import FMPadding
 from finn.custom_op.fpgadataflow.rtlbackend import RTLBackend
+from finn.util.resources import resource_path, tcl_quote
 
 
 class FMPadding_rtl(FMPadding, RTLBackend):
@@ -108,7 +108,7 @@ class FMPadding_rtl(FMPadding, RTLBackend):
         return config
 
     def generate_hdl(self, model, fpgapart, clk):
-        rtlsrc = os.environ["FINN_ROOT"] + "/finn-rtllib/fmpadding/hdl"
+        rtlsrc = resource_path("rtllib", "fmpadding/hdl") + "/"
         template_path = rtlsrc + "/fmpadding_template.v"
         dims = self.get_nodeattr("ImgDim")
         pads = self.get_nodeattr("Padding")
@@ -134,9 +134,6 @@ class FMPadding_rtl(FMPadding, RTLBackend):
         ) as f:
             f.write(template)
 
-        sv_files = ["fmpadding_axi.sv", "fmpadding.sv", "axi2we.sv"]
-        for sv_file in sv_files:
-            shutil.copy(rtlsrc + "/" + sv_file, code_gen_dir)
         # set ipgen_path and ip_path so that HLS-Synth transformation
         # and stich_ip transformation do not complain
         self.set_nodeattr("ipgen_path", code_gen_dir)
@@ -145,7 +142,7 @@ class FMPadding_rtl(FMPadding, RTLBackend):
     def get_rtl_file_list(self, abspath=False):
         if abspath:
             code_gen_dir = self.get_nodeattr("code_gen_dir_ipgen") + "/"
-            rtllib_dir = os.path.join(os.environ["FINN_ROOT"], "finn-rtllib/fmpadding/hdl/")
+            rtllib_dir = resource_path("rtllib", "fmpadding/hdl") + "/"
         else:
             code_gen_dir = ""
             rtllib_dir = ""
@@ -160,24 +157,13 @@ class FMPadding_rtl(FMPadding, RTLBackend):
 
     def code_generation_ipi(self):
         """Constructs and returns the TCL for node instantiation in Vivado IPI."""
-        code_gen_dir = self.get_nodeattr("code_gen_dir_ipgen")
-
-        sourcefiles = [
-            "fmpadding_axi.sv",
-            "fmpadding.sv",
-            "axi2we.sv",
-            self.get_nodeattr("gen_top_module") + ".v",
-        ]
-
-        sourcefiles = [os.path.join(code_gen_dir, f) for f in sourcefiles]
-
         cmd = []
-        for f in sourcefiles:
-            cmd += ["add_files -norecurse %s" % (f)]
-        cmd += [
+        for f in self.get_rtl_file_list(abspath=True):
+            cmd.append("add_files -norecurse %s" % tcl_quote(f))
+        cmd.append(
             "create_bd_cell -type module -reference %s %s"
             % (self.get_nodeattr("gen_top_module"), self.onnx_node.name)
-        ]
+        )
         return cmd
 
     def execute_node(self, context, graph):

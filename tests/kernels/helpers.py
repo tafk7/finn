@@ -6,8 +6,13 @@
 Facts are the root node's typed formals; a missing required one is refused at
 the node call. Choices use the stable decision keys ``inspection`` reports."""
 
+import os
+import shutil
 from collections.abc import Callable, Mapping
+from pathlib import Path
 from typing import TypeVar
+
+from finn import resources
 
 from finn.core.space import Constraint, Space, design_space
 from finn.dataflow.datatypes import QONNXDataType
@@ -84,3 +89,18 @@ def settled(point: S, ram_style: str = "auto") -> S:
     point = settle(point).point
     styles = undecided(point, ADAPTER_RAM_STYLES)
     return commit(point, dict.fromkeys(styles, ram_style)) if styles else point
+
+
+def finnlib_root() -> Path:
+    """FinnLib as FINN resolves it: FINN_RESOURCES_FINNLIB, a cached copy, or a fetch."""
+    return Path(resources.path("finnlib"))
+
+
+def vivado_simulator() -> bool:
+    """Whether a selected Vivado provides xvlog, xelab and xsim.
+
+    FINN images put tool shims on PATH, so a command being found does not mean
+    a Vivado installation is selected.
+    """
+    tools = ("xvlog", "xelab", "xsim")
+    return bool(os.environ.get("XILINX_VIVADO")) and all(shutil.which(tool) for tool in tools)

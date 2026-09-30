@@ -137,7 +137,7 @@ def test_internal_layers_are_independent(directory: Path, allowed: tuple[str, ..
 
 
 def test_generic_space_imports_only_generic_dependencies() -> None:
-    allowed = {*sys.stdlib_module_names, "greenlet", "typing_extensions"}
+    allowed = {*sys.stdlib_module_names, "greenlet"}
     for path in SPACE_PACKAGE.rglob("*.py"):
         invalid = {
             name

@@ -222,9 +222,9 @@ class LoopExtraction(Transformation):
         assert isinstance(hierarchy_list, list), "Hierarchy list must be a list of strings"
         for hlist in hierarchy_list:
             assert isinstance(hlist, list), "Each hierarchy entry must be a list of strings"
-            assert all(isinstance(item, str) for item in hlist), (
-                "All items in hierarchy sub-list must be strings"
-            )
+            assert all(
+                isinstance(item, str) for item in hlist
+            ), "All items in hierarchy sub-list must be strings"
         self.hierarchy_list = hierarchy_list
         if loop_body_template_path is None:
             template_dir = make_build_dir("loop_body_template_")
@@ -293,9 +293,9 @@ class LoopExtraction(Transformation):
             model_ir, pattern_rewrite_rules=[change_layers_to_function_calls]
         )
 
-        model_layers_replaced.functions[self.loop_body_template.function.identifier()] = (
-            self.loop_body_template.function
-        )
+        model_layers_replaced.functions[
+            self.loop_body_template.function.identifier()
+        ] = self.loop_body_template.function
         model_layers_replaced.graph.opset_imports["loop"] = 0
 
         model_proto = onnxscript.ir.serde.serialize_model(model_layers_replaced)
@@ -308,9 +308,9 @@ def add_finn_datatype_if_needed(tensor):
     if not tensor_has_finn_datatype(tensor):
         if "quant_parameter_tensor_names" not in tensor.meta:
             tensor.meta["quant_parameter_tensor_names"] = {}
-        tensor.meta["quant_parameter_tensor_names"]["finn_datatype"] = (
-            osh.tensor_type_to_finn_datatype_string(tensor.type)
-        )
+        tensor.meta["quant_parameter_tensor_names"][
+            "finn_datatype"
+        ] = osh.tensor_type_to_finn_datatype_string(tensor.type)
 
 
 def validate_loop_type(loop_node: ir.Node):
@@ -321,9 +321,9 @@ def validate_loop_attributes(loop_node: ir.Node):
     required_attrs = ["body", "backend", "iteration", "inputDataType", "outputDataType"]
     for attr in required_attrs:
         assert attr in loop_node.attributes, f"FINNLoop node missing required attribute: {attr}"
-    assert loop_node.attributes["backend"].value == "fpgadataflow", (
-        "FINNLoop backend attribute must be 'fpgadataflow'"
-    )
+    assert (
+        loop_node.attributes["backend"].value == "fpgadataflow"
+    ), "FINNLoop backend attribute must be 'fpgadataflow'"
     assert (
         isinstance(loop_node.attributes["iteration"].value, int)
         and loop_node.attributes["iteration"].value > 0
@@ -353,12 +353,12 @@ def tensor_shapes_match(value_a, value_b):
 
 
 def validate_loop_io_tensor_pair(tensor_a, tensor_b):
-    assert tensor_types_match(tensor_a, tensor_b), (
-        f"FINNLoop body activation input/output type mismatch {tensor_a.type} != {tensor_b.type}"
-    )
-    assert tensor_shapes_match(tensor_a, tensor_b), (
-        f"FINNLoop body activation input/output shape mismatch {tensor_a.shape} != {tensor_b.shape}"
-    )
+    assert tensor_types_match(
+        tensor_a, tensor_b
+    ), f"FINNLoop body activation input/output type mismatch {tensor_a.type} != {tensor_b.type}"
+    assert tensor_shapes_match(
+        tensor_a, tensor_b
+    ), f"FINNLoop body activation input/output shape mismatch {tensor_a.shape} != {tensor_b.shape}"
 
     add_finn_datatype_if_needed(tensor_a)
     add_finn_datatype_if_needed(tensor_b)
@@ -367,8 +367,8 @@ def validate_loop_io_tensor_pair(tensor_a, tensor_b):
         tensor_a.meta["quant_parameter_tensor_names"]["finn_datatype"],
         tensor_b.meta["quant_parameter_tensor_names"]["finn_datatype"],
     ), f"""FINNLoop body activation input/output finn_datatype mismatch
-       {tensor_a.meta["quant_parameter_tensor_names"]["finn_datatype"]} !=
-       {tensor_b.meta["quant_parameter_tensor_names"]["finn_datatype"]}"""
+       {tensor_a.meta['quant_parameter_tensor_names']['finn_datatype']} !=
+       {tensor_b.meta['quant_parameter_tensor_names']['finn_datatype']}"""
 
 
 def validate_loop_io_tensors(loop_node: ir.Node):
@@ -487,36 +487,40 @@ class LoopRolling(Transformation):
         # TODO: write a check to ensure that there is only one
         #       set of consecutive nodes.
         nodes = osh.find_nodes_of_optype(graph, LoopBody.function.name)
+        # MLO requires at least two repetitions of the loop body to roll into a
+        # FINNLoop. A single instance (iteration=1) cannot be handled by the
+        # downstream MLO machinery.
+        if len(nodes) < 2:
+            raise Exception(
+                f"LoopRolling: MLO requires at least 2 repetitions of the loop "
+                f"body, but found {len(nodes)}. A single-instance model cannot be "
+                f"rolled into a FINNLoop. Disable 'mlo' (or fix 'loop_body_hierarchy'/"
+                f"'loop_body_range') for this model."
+            )
         # Loop through all the nodes (execept the last one) and
         # identify the input to output pairs
 
         # my loop rolling code assumes that the activation inputs are listed first and
         # that corresponding output activations have the same index as the input
         input_swaps = []
-        if len(nodes) == 1:
-            # find and label the activation inputs
-            for i, input in enumerate(nodes[0].inputs):
-                if not input.is_initializer():
-                    if input.is_graph_input() or input.producer().op_type != "Constant":
-                        input_swaps.append((len(input_swaps), i))
-        else:
-            for i in range(len(nodes) - 1):
-                a_node = nodes[i]
-                b_node = nodes[i + 1]
+        # nodes is guaranteed to have >= 2 entries (checked above).
+        for i in range(len(nodes) - 1):
+            a_node = nodes[i]
+            b_node = nodes[i + 1]
 
-                for a_out in a_node.outputs:
-                    # Require that outputs of a have a single use of b_node
-                    assert len(a_out.uses()) == 1
-                    assert a_out.uses()[0][0] is b_node
+            for a_out in a_node.outputs:
+                # Require that outputs of a have a single use of b_node
+                assert len(a_out.uses()) == 1
+                assert a_out.uses()[0][0] is b_node
 
-                    a_use_index = a_out.uses()[0][1]
-                    input_swap = (a_out.index(), a_use_index)
-                    if i == 0:
-                        # add swaps from the first node
-                        input_swaps.append(input_swap)
-                    else:
-                        # check that they are the same in the rest
-                        assert input_swap in input_swaps
+                a_use_index = a_out.uses()[0][1]
+                input_swap = (a_out.index(), a_use_index)
+                if i == 0:
+                    # add swaps from the first node
+                    input_swaps.append(input_swap)
+                else:
+                    # check that they are the same in the rest
+                    assert input_swap in input_swaps
 
         # apply the input swaps to each nodes
         for node in nodes:

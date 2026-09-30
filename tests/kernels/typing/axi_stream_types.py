@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 """Typed ports and scalars retain concrete node, field and view types."""
 
-from typing_extensions import assert_type
+from typing import assert_type
 
 from finn.core.space import BoundValue, QueryResult, View, ViewAssessment
 from finn.dataflow.datatypes import QONNXDataType

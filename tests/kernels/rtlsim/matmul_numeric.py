@@ -3,7 +3,7 @@
 
 """Explicit XSI matrix conformance for physical-only MatMulKernel production builds.
 
-Run with FINN_ROOT, FINNLIB_ROOT and the XSI library path configured. The
+Run with Vivado selected (FinnLib is the ``finnlib`` resource). The
 observation wrapper only exposes child pins; all arithmetic and transport RTL
 comes from the materialized ModuleBuildRequirements. Each simulation uses a
 fresh process through the shared observed transport driver.

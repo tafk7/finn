@@ -8,19 +8,19 @@
 ############################################################################
 import numpy as np
 import os
-import shutil
 from qonnx.core.datatype import DataType
 
 from finn.custom_op.fpgadataflow import elementwise_binary
 from finn.custom_op.fpgadataflow.elementwise_binary import ElementwiseBinaryOperation
 from finn.custom_op.fpgadataflow.rtlbackend import RTLBackend
 from finn.transformation.fpgadataflow.loop_rolling import LoopBodyInputType
-from finn.util.basic import roundup_to_integer_multiple
+from finn.util.basic import fifo_rtl_files, roundup_to_integer_multiple
 from finn.util.data_packing import (
     npy_to_rtlsim_input,
     pack_innermost_dim_as_hex_string,
     rtlsim_output_to_npy,
 )
+from finn.util.resources import resource_path, tcl_quote
 
 
 class ElementwiseBinary_rtl(ElementwiseBinaryOperation, RTLBackend):
@@ -139,7 +139,7 @@ class ElementwiseBinary_rtl(ElementwiseBinaryOperation, RTLBackend):
         if has_const:
             self.generate_params(model, code_gen_dir)
 
-        rtlsrc = f'{os.environ["FINN_ROOT"]}/finn-rtllib/eltwise'
+        rtlsrc = resource_path("rtllib", "eltwise") + "/"
         template_path = f"{rtlsrc}/eltwise_template.v"
         pe = self.get_nodeattr("PE")
 
@@ -176,16 +176,13 @@ class ElementwiseBinary_rtl(ElementwiseBinaryOperation, RTLBackend):
         if has_const or mlo:
             self.generate_hdl_memstream(fpgapart)
 
-        sv_files = ["eltwise.sv", "binopf.sv", "binopi.sv", "int_to_fp32.sv", "queue.sv"]
-        for sv_file in sv_files:
-            shutil.copy(f"{rtlsrc}/{sv_file}", code_gen_dir)
         self.set_nodeattr("ipgen_path", code_gen_dir)
         self.set_nodeattr("ip_path", code_gen_dir)
 
     def get_rtl_file_list(self, abspath=False):
         if abspath:
             code_gen_dir = f"{self.get_nodeattr('code_gen_dir_ipgen')}/"
-            rtllib_dir = f'{os.environ["FINN_ROOT"]}/finn-rtllib/eltwise/'
+            rtllib_dir = resource_path("rtllib", "eltwise") + "/"
         else:
             code_gen_dir = ""
             rtllib_dir = ""
@@ -196,9 +193,8 @@ class ElementwiseBinary_rtl(ElementwiseBinaryOperation, RTLBackend):
             f"{rtllib_dir}binopf.sv",
             f"{rtllib_dir}binopi.sv",
             f"{rtllib_dir}int_to_fp32.sv",
-            f"{rtllib_dir}queue.sv",
             f"{code_gen_dir}{top_module}.v",
-        ]
+        ] + fifo_rtl_files(abspath)
 
     def get_verilog_top_module_intf_names(self):
         """
@@ -235,9 +231,7 @@ class ElementwiseBinary_rtl(ElementwiseBinaryOperation, RTLBackend):
 
     def code_generation_ipi(self):
         """Constructs and returns the TCL for node instantiation in Vivado IPI."""
-        source_target = "./ip/verilog/rtl_ops/%s" % self.onnx_node.name
-        cmd = ["file mkdir %s" % source_target]
-
+        cmd = []
         node_name = self.onnx_node.name
         intf = self.get_verilog_top_module_intf_names()
         clk_name = intf["clk"][0]
@@ -300,8 +294,8 @@ class ElementwiseBinary_rtl(ElementwiseBinaryOperation, RTLBackend):
             code_gen_dir = self.get_nodeattr("code_gen_dir_ipgen")
             runtime_writable = self.get_nodeattr("runtime_writeable_weights") == 1
 
-            axi_dir = os.path.join(os.environ["FINN_ROOT"], "finn-rtllib/axi/hdl/")
-            ms_rtllib_dir = os.path.join(os.environ["FINN_ROOT"], "finn-rtllib/memstream/hdl/")
+            axi_dir = resource_path("rtllib", "axi/hdl") + "/"
+            ms_rtllib_dir = resource_path("rtllib", "memstream/hdl") + "/"
             file_suffix = "_memstream_wrapper.v"
 
             strm_tmpl = None
@@ -320,7 +314,7 @@ class ElementwiseBinary_rtl(ElementwiseBinaryOperation, RTLBackend):
                 ms_rtllib_dir + "memstream.sv",
             ]
             for f in sourcefiles:
-                cmd += ["add_files -copy_to %s -norecurse %s" % (source_target, f)]
+                cmd.append("add_files -norecurse %s" % tcl_quote(f))
             strm_inst = node_name + "_wstrm"
             cmd.append(
                 "create_bd_cell -type hier -reference %s /%s/%s"
@@ -367,12 +361,9 @@ class ElementwiseBinary_rtl(ElementwiseBinaryOperation, RTLBackend):
     def instantiate_ip(self, cmd):
         node_name = self.onnx_node.name
         top_module = self.get_nodeattr("gen_top_module")
-        source_target = "./ip/verilog/rtl_ops/%s" % node_name
 
-        sourcefiles = self.get_rtl_file_list(abspath=True)
-
-        for f in sourcefiles:
-            cmd.append("add_files -copy_to %s -norecurse %s" % (source_target, f))
+        for f in self.get_rtl_file_list(abspath=True):
+            cmd.append("add_files -norecurse %s" % tcl_quote(f))
 
         # Always create the core inside the hierarchical wrapper
         cmd.append(

@@ -10,7 +10,7 @@ v to the level v + 8, so every output word identifies the elements that
 reached it; the expected words are the tensor's values in row-major order,
 packed here independently of the kernels' forms. ``inner_shuffle`` (not a
 stream candidate) runs placed between two boundary streams. Run with
-FINN_ROOT, FINNLIB_ROOT and the XSI library path configured; each simulation
+Vivado selected (FinnLib is the ``finnlib`` resource); each simulation
 runs in a fresh process.
 """
 

@@ -1,0 +1,19 @@
+{
+  "schemaVersion": "1",
+  "args": {
+    "vendor_port": {
+      "required": true,
+      "description": "Port of the licence server's vendor daemon (xilinxd)"
+    }
+  },
+  "kits": [
+    {
+      "source": "${{ env.fileDir }}/site-license",
+      "args": {
+        "host": "${{ env.args.license_host }}",
+        "manager_port": "${{ env.args.license_port }}",
+        "vendor_port": "${{ env.args.vendor_port }}"
+      }
+    }
+  ]
+}

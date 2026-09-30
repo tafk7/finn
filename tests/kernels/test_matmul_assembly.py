@@ -3,8 +3,6 @@
 
 """Physical-only MatMulKernel construction, packing, precision, and portable builds."""
 
-from pathlib import Path
-
 import pytest
 from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 
@@ -13,7 +11,7 @@ from finn.kernels.artifacts.abi import Bus
 from finn.kernels.artifacts.build import prepare_module_build, render_module_sources
 from finn.kernels.artifacts.store import ArtifactStore
 from finn.kernels.configure import commit, settle
-from kernels.helpers import point_for
+from kernels.helpers import finnlib_root, point_for
 from finn.kernels.matmul import MatMulKernel, WeightDelivery, exact_result_dtype, matmul_assembly
 from finn.kernels.dotp import DotpAxiKernel, PackedDotpKernel
 from finn.core.space import Decision, View, constraint, reject
@@ -22,7 +20,6 @@ from finn.kernels.physical.structure import ConstantBits, PhysicalPin, PinSlice
 from finn.kernels.resources import resource_root, template_root
 
 
-ROOT = Path(__file__).resolve().parents[2]
 FACTS = dict(
     m=2,
     k=4,
@@ -225,7 +222,7 @@ def test_build_is_complete_and_initializer_changes_identity(tmp_path, delivery):
     store = ArtifactStore(tmp_path / "store")
     prepared = prepare_module_build(
         built.requirements,
-        roots={"kernels": resource_root(), "finnlib": ROOT / "deps/finnlib"},
+        roots={"kernels": resource_root(), "finnlib": finnlib_root()},
         template_roots=(template_root(),),
         blobs=store,
     )
@@ -241,7 +238,7 @@ def test_build_is_complete_and_initializer_changes_identity(tmp_path, delivery):
         changed = assembly(weight_delivery=delivery, weights=[[1] * 4] * 4)
         changed_prepared = prepare_module_build(
             changed.requirements,
-            roots={"kernels": resource_root(), "finnlib": ROOT / "deps/finnlib"},
+            roots={"kernels": resource_root(), "finnlib": finnlib_root()},
             template_roots=(template_root(),),
             blobs=store,
         )

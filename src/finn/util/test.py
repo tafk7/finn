@@ -27,16 +27,12 @@
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-import pytest
-
-import importlib_resources as importlib
 import numpy as np
 import onnx
 import onnx.numpy_helper as nph
 import os
-import torchvision.transforms.functional as torchvision_util
 import warnings
-from brevitas_examples import bnn_pynq, imagenet_classification
+from importlib import resources as importlib
 from pkgutil import get_data
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.registry import getCustomOp
@@ -52,26 +48,27 @@ from finn.util.basic import (
     vitis_part_map,
 )
 
-# map of (wbits,abits) -> model
-example_map = {
-    ("CNV", 1, 1): bnn_pynq.cnv_1w1a,
-    ("CNV", 1, 2): bnn_pynq.cnv_1w2a,
-    ("CNV", 2, 2): bnn_pynq.cnv_2w2a,
-    ("LFC", 1, 1): bnn_pynq.lfc_1w1a,
-    ("LFC", 1, 2): bnn_pynq.lfc_1w2a,
-    ("SFC", 1, 1): bnn_pynq.sfc_1w1a,
-    ("SFC", 1, 2): bnn_pynq.sfc_1w2a,
-    ("SFC", 2, 2): bnn_pynq.sfc_2w2a,
-    ("TFC", 1, 1): bnn_pynq.tfc_1w1a,
-    ("TFC", 1, 2): bnn_pynq.tfc_1w2a,
-    ("TFC", 2, 2): bnn_pynq.tfc_2w2a,
-    ("mobilenet", 4, 4): imagenet_classification.quant_mobilenet_v1_4b,
-}
-
 
 def get_test_model(netname, wbits, abits, pretrained):
     """Returns the model specified by input arguments from the Brevitas BNN-PYNQ
     test networks. Pretrained weights loaded if pretrained is True."""
+    from brevitas_examples import bnn_pynq, imagenet_classification  # noqa: PLC0415
+
+    # map of (wbits,abits) -> model
+    example_map = {
+        ("CNV", 1, 1): bnn_pynq.cnv_1w1a,
+        ("CNV", 1, 2): bnn_pynq.cnv_1w2a,
+        ("CNV", 2, 2): bnn_pynq.cnv_2w2a,
+        ("LFC", 1, 1): bnn_pynq.lfc_1w1a,
+        ("LFC", 1, 2): bnn_pynq.lfc_1w2a,
+        ("SFC", 1, 1): bnn_pynq.sfc_1w1a,
+        ("SFC", 1, 2): bnn_pynq.sfc_1w2a,
+        ("SFC", 2, 2): bnn_pynq.sfc_2w2a,
+        ("TFC", 1, 1): bnn_pynq.tfc_1w1a,
+        ("TFC", 1, 2): bnn_pynq.tfc_1w2a,
+        ("TFC", 2, 2): bnn_pynq.tfc_2w2a,
+        ("mobilenet", 4, 4): imagenet_classification.quant_mobilenet_v1_4b,
+    }
     model_cfg = (netname, wbits, abits)
     model_def_fxn = example_map[model_cfg]
     fc = model_def_fxn(pretrained)
@@ -109,6 +106,8 @@ def load_test_checkpoint_or_skip(filename):
         return model
     else:
         warnings.warn(filename + " not found from previous test step, skipping")
+        import pytest  # noqa: PLC0415
+
         pytest.skip(filename + " not found from previous test step, skipping")
 
 
@@ -194,9 +193,13 @@ def execute_parent(parent_path, child_path, input_tensor_npy, return_full_ctx=Fa
 def resize_smaller_side(target_pixels, img):
     """Resizes smallest side of image to target pixels and resizes larger side with
     same ratio. Expects a PIL image."""
+    import torchvision.transforms.functional as torchvision_util  # noqa: PLC0415
+
     return torchvision_util.resize(img, target_pixels)
 
 
 def crop_center(size, img):
     """Crop central size*size window out of a PIL image."""
+    import torchvision.transforms.functional as torchvision_util  # noqa: PLC0415
+
     return torchvision_util.center_crop(img, size)

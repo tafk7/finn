@@ -1,5 +1,6 @@
 #!/bin/bash
 # Copyright (c) 2021, Xilinx
+# Copyright (C) 2022-2026, Advanced Micro Devices, Inc.
 # All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
@@ -27,145 +28,52 @@
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-
-# Fail fast so a partial deps/ tree is caught early
+# Container start: a usable HOME, then the mounted FINN checkout linked into the
+# image's environment, then the command. Nothing here is fatal: a container must
+# start even without a checkout (sbx starts PID 1 before any workspace is used).
 set -e
-
-export HOME=/tmp/home_dir
-export SHELL=/bin/bash
-export LANG="en_US.UTF-8"
-export LC_ALL="en_US.UTF-8"
-export LANGUAGE="en_US:en"
-# colorful terminal output
-export PS1='\[\033[1;36m\]\u\[\033[1;31m\]@\[\033[1;32m\]\h:\[\033[1;35m\]\w\[\033[1;31m\]\$\[\033[0m\] '
-
-YELLOW='\033[0;33m'
-GREEN='\033[0;32m'
-RED='\033[0;31m'
-NC='\033[0m' # No Color
-
-yecho () {
-  echo -e "${YELLOW}WARNING: $1${NC}"
-}
-
-gecho () {
-  echo -e "${GREEN}$1${NC}"
-}
-
-recho () {
-  echo -e "${RED}ERROR: $1${NC}"
-}
-
-# qonnx (using workaround for https://github.com/pypa/pip/issues/7953)
-# to be fixed in future Ubuntu versions (https://bugs.launchpad.net/ubuntu/+source/setuptools/+bug/1994016)
-# set -e propagates pip failures, so the trap covers only the qonnx-only swap.
-_qonnx_pyproj_toml="${FINN_ROOT}/deps/qonnx/pyproject.toml"
-_qonnx_pyproj_tmp="${FINN_ROOT}/deps/qonnx/pyproject.tmp"
-mv "$_qonnx_pyproj_toml" "$_qonnx_pyproj_tmp"
-trap 'mv "$_qonnx_pyproj_tmp" "$_qonnx_pyproj_toml" 2>/dev/null || true' EXIT
-pip install --user -e "${FINN_ROOT}/deps/qonnx"
-mv "$_qonnx_pyproj_tmp" "$_qonnx_pyproj_toml"
-trap - EXIT
-
-# finn-experimental
-pip install --user -e "${FINN_ROOT}/deps/finn-experimental"
-# brevitas
-pip install --user -e "${FINN_ROOT}/deps/brevitas"
-
-if [ -f "${FINN_ROOT}/setup.py" ];then
-  # run pip install for finn
-  pip install --user -e "${FINN_ROOT}"
-else
-  recho "Unable to find FINN source code in ${FINN_ROOT}"
-  recho "Ensure you have passed -v <path-to-finn-repo>:<path-to-finn-repo> to the docker run command"
-  exit -1
+if [ -z "${HOME:-}" ] || [ "$HOME" = / ] || ! mkdir -p "$HOME" 2>/dev/null || [ ! -w "$HOME" ]; then
+    HOME="/tmp/finn-home-$(id -u)"
+    export HOME
+fi
+mkdir -p "$HOME"
+# `id -un` prints the numeric uid (and fails) for a uid with no passwd entry.
+if [ -z "${USER:-}" ]; then
+    USER=$(id -un 2>/dev/null) || true
+    USER="${USER:-finn}"
+fi
+export USER
+export LOGNAME="${LOGNAME:-$USER}"
+export PATH="$PATH:$HOME/.local/bin"
+# Keep uv's cache in the build directory, which outlives the container, so the
+# editable builds below are reused instead of redone on every start.
+if [ -z "${UV_CACHE_DIR:-}" ] && [ -n "${FINN_BUILD_DIR:-}" ] \
+   && mkdir -p "$FINN_BUILD_DIR/.uv-cache" 2>/dev/null; then
+    export UV_CACHE_DIR="$FINN_BUILD_DIR/.uv-cache"
 fi
 
-if [ -f "$VITIS_PATH/settings64.sh" ];then
-  # source Vitis env.vars
-  export XILINX_VITIS=$VITIS_PATH
-  export XILINX_XRT=/opt/xilinx/xrt
-  # env scripts may return non-zero, so do not let that abort the container
-  source "$VITIS_PATH/settings64.sh" || true
-  gecho "Found Vitis at $VITIS_PATH"
-  if [ -f "$XILINX_XRT/setup.sh" ];then
-    # source XRT
-    source "$XILINX_XRT/setup.sh" || true
-    gecho "Found XRT at $XILINX_XRT"
-  else
-    recho "XRT not found on $XILINX_XRT, did you skip the download or did the installation fail?"
-    exit -1
-  fi
-else
-  yecho "Unable to find $VITIS_PATH/settings64.sh"
-  yecho "Functionality dependent on Vitis will not be available."
-  yecho "If you need Vitis, ensure VITIS_PATH is set correctly and mounted into the Docker container."
-  if [ -f "$VIVADO_PATH/settings64.sh" ];then
-    # source Vivado env.vars
-    export XILINX_VIVADO=$VIVADO_PATH
-    source "$VIVADO_PATH/settings64.sh" || true
-    gecho "Found Vivado at $VIVADO_PATH"
-  else
-    yecho "Unable to find $VIVADO_PATH/settings64.sh"
-    yecho "Functionality dependent on Vivado will not be available."
-    yecho "If you need Vivado, ensure VIVADO_PATH is set correctly and mounted into the Docker container."
-  fi
-fi
-
-if [ -z "${XILINX_VIVADO}" ]; then
-  yecho "finnxsi will be unavailable since Vivado was not found"
-else
-  # Build finn_xsi using the new Python-based setup
-  if [ -f "${FINN_ROOT}/finn_xsi/xsi.so" ]; then
-    gecho "Found existing finn_xsi at ${FINN_ROOT}/finn_xsi/xsi.so"
-  else
-    gecho "Building finn_xsi using finn.xsi.setup..."
-    if python -m finn.xsi.setup --quiet; then
-      gecho "finn_xsi built successfully"
-    else
-      # finn_xsi is optional, so a failed build is non-fatal
-      recho "Failed to build finn_xsi"
+# Install the checkout at FINN_ROOT editable into /opt/venv, with any difference
+# between its uv.lock and the image. This follows the
+# committed lock exactly; set FINN_SYNC=0 to skip it.
+finn_sync() {
+    [ "${FINN_SYNC:-1}" != 0 ] || return 0
+    root="${FINN_ROOT:-}"
+    if [ -z "$root" ] || [ ! -f "$root/uv.lock" ]; then
+        echo "finn: no FINN checkout at FINN_ROOT; using the image environment" >&2
+        return 0
     fi
-  fi
-  export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/lib/x86_64-linux-gnu/:${XILINX_VIVADO}/lib/lnx64.o
-fi
+    set -- uv sync --frozen --inexact --quiet --project "$root" \
+        --no-build-isolation-package finn
+    # Offline first: normally nothing needs downloading. Online only when the
+    # checkout's uv.lock asks for packages the image does not have.
+    "$@" --offline 2>/dev/null || "$@" || {
+        echo "finn: could not install $root into the image environment (see above)." >&2
+        echo "finn: rebuild the image (docker/build), or run uv sync with network access." >&2
+    }
+}
+finn_sync || true
+# Readiness marker: docker exec and sbx exec do not wait for the entrypoint, so
+# scripts that exec into a just-started container can wait for this file.
+touch /tmp/finn-ready 2>/dev/null || true
 
-if [ -f "$HLS_PATH/settings64.sh" ];then
-  # source Vitis HLS env.vars
-  source "$HLS_PATH/settings64.sh" || true
-  gecho "Found Vitis HLS at $HLS_PATH"
-else
-  yecho "Unable to find $HLS_PATH/settings64.sh"
-  yecho "Functionality dependent on Vitis HLS will not be available."
-  yecho "Please note that FINN needs at least version 2020.2 for Vitis HLS support. Our recommendation is to use version 2022.2"
-  yecho "If you need Vitis HLS, ensure HLS_PATH is set correctly and mounted into the Docker container."
-fi
-
-if [ -d "$FINN_ROOT/.Xilinx" ]; then
-  mkdir -p "$HOME/.Xilinx"
-  if [ -f "$FINN_ROOT/.Xilinx/HLS_init.tcl" ]; then
-    cp "$FINN_ROOT/.Xilinx/HLS_init.tcl" "$HOME/.Xilinx/"
-    gecho "Found HLS_init.tcl and copied to $HOME/.Xilinx/HLS_init.tcl"
-  else
-    yecho "Unable to find $FINN_ROOT/.Xilinx/HLS_init.tcl"
-  fi
-
-  if [ -f "$FINN_ROOT/.Xilinx/Vivado/Vivado_init.tcl" ]; then
-    mkdir -p "$HOME/.Xilinx/Vivado/"
-    cp "$FINN_ROOT/.Xilinx/Vivado/Vivado_init.tcl" "$HOME/.Xilinx/Vivado/"
-    gecho "Found Vivado_init.tcl and copied to $HOME/.Xilinx/Vivado/Vivado_init.tcl"
-
-  else
-    yecho "Unable to find $FINN_ROOT/.Xilinx/Vivado/Vivado_init.tcl"
-  fi
-else
-  echo "If you need to enable a beta device, ensure .Xilinx/HLS_init.tcl and/or .Xilinx/Vivado/Vivado_init.tcl are set correctly and mounted"
-  echo "See https://docs.xilinx.com/r/en-US/ug835-vivado-tcl-commands/Tcl-Initialization-Scripts"
-fi
-
-export LD_LIBRARY_PATH="$LD_LIBRARY_PATH:$VITIS_PATH/lnx64/tools/fpo_v7_1:$HLS_PATH/lnx64/tools/fpo_v7_1"
-
-export PATH=$PATH:$HOME/.local/bin
-
-# execute the provided command(s) as root
 exec "$@"

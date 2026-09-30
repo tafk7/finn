@@ -61,7 +61,9 @@ class HLSSynthIP(NodeLocalTransformation):
                 # lookup op_type in registry of CustomOps
                 inst = registry.getCustomOp(node)
                 # ensure that code is generated
-                assert inst.get_nodeattr("code_gen_dir_ipgen") != "", """Node
+                assert (
+                    inst.get_nodeattr("code_gen_dir_ipgen") != ""
+                ), """Node
                 attribute "code_gen_dir_ipgen" is empty. Please run
                 transformation PrepareIP first."""
                 if not (
@@ -73,7 +75,9 @@ class HLSSynthIP(NodeLocalTransformation):
                 else:
                     warnings.warn("Using pre-existing IP for %s" % node.name)
                 # ensure that executable path is now set
-                assert inst.get_nodeattr("ipgen_path") != "", """Transformation
+                assert (
+                    inst.get_nodeattr("ipgen_path") != ""
+                ), """Transformation
                 HLSSynthIP was not successful. Node attribute "ipgen_path"
                 is empty."""
             except KeyError:

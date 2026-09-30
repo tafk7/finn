@@ -11,7 +11,8 @@ from finn.kernels.fifo import FifoKernel
 from finn.kernels.physical.stream import MarkerKind, ReadyValidStream, StreamMarker
 from kernels.test_migrated_rich import generator
 from kernels.test_migrated_simple import eltwise
-from kernels.xsim import ROOT, requires_xsim, simulate
+from kernels.helpers import finnlib_root
+from kernels.xsim import requires_xsim, simulate
 
 
 def test_native_streams_are_inspectable_without_storage_choices():
@@ -74,7 +75,7 @@ def test_fifo_capacity_and_effective_storage_agree_with_native_rtl(tmp_path):
             f"c{index}(done[{index}]);"
         )
     simulate(
-        [ROOT / "deps/finnlib/rtl/infra/fifo.sv"],
+        [finnlib_root() / "rtl/infra/fifo.sv"],
         """
 module fifo_capacity_case #(
     parameter int DEPTH=2, CAPACITY=5,

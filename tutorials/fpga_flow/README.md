@@ -4,7 +4,7 @@ This example demonstrates how to bring a FINN compiled model into the Vivado FPG
 
 If you are new to the command-line flow, more information can be found [here](https://finn.readthedocs.io/en/latest/command_line.html).
 
-This demo was created using Vivado 2022.1.
+This demo was created using Vivado 2024.2.
 
 ## Compiling the Model in FINN
 
@@ -28,7 +28,7 @@ Prior to running, insure the following prerequisites have been met:
 - Ensure you have the `FINN_XILINX_PATH` and `FINN_XILINX_VERSION` env variables set appropriately for your install.  For example:
 ```shell
 export FINN_XILINX_PATH=/opt/Xilinx
-export FINN_XILINX_VERSION=2022.1
+export FINN_XILINX_VERSION=2024.2
 ```
 
 - Set the env variable for your `finn` install top directory (where you cloned the FINN compiler repo):
@@ -39,13 +39,13 @@ export FINN_ROOT=/home/foo/finn
 Then, change to `finn` install directory and invoke the build as follows:
 ```shell
 cd ${FINN_ROOT}
-./run-docker.sh build_custom ${FINN_ROOT}/tutorials/fpga_flow/
+./docker/run --fpga -- bash -lc 'cd tutorials/fpga_flow && python build.py'
 ```
 
 Alternatively, since the tutorials folder is already part of the FINN compiler installation, you can invoke it from within the Docker container:
 ```shell
 cd ${FINN_ROOT}
-./run-docker.sh
+./docker/run --fpga
 cd tutorials/fpga_flow
 python build.py
 ```

@@ -24,8 +24,8 @@ from finn.kernels.memstream import MemStreamKernel
 from finn.dataflow.traversal import tile
 from finn.kernels.resources import resource_root, template_root
 from finn.kernels.target import DspBlock
+from kernels.helpers import finnlib_root
 
-ROOT = Path(__file__).resolve().parents[2]
 WEIGHTS = ((-4, -3, -2, -1), (0, 1, 2, 3), (3, 2, 1, 0), (-1, -2, -3, -4))
 # MatMul stores its weights (k, n): WEIGHTS read by output.
 MATMUL = dict(
@@ -104,7 +104,7 @@ def test_matmul_memstream_delivery_materializes_its_image(tmp_path):
     store = ArtifactStore(tmp_path / "store")
     prepared = prepare_module_build(
         built.requirements,
-        roots={"kernels": resource_root(), "finnlib": ROOT / "deps/finnlib"},
+        roots={"kernels": resource_root(), "finnlib": finnlib_root()},
         template_roots=(template_root(),),
         blobs=store,
     )

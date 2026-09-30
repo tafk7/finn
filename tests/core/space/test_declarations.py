@@ -5,10 +5,9 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import cast
+from typing import Self, cast
 
 import pytest
-from typing_extensions import Self
 
 from finn.core.space import (
     Const,
@@ -302,10 +301,12 @@ def test_incompatible_override_collision_and_reserved_names() -> None:
 
 def test_duplicate_declaration_reuse_is_attributable() -> None:
     value: int = Param()
-    with pytest.raises(RuntimeError) as exc:
+    # Python 3.11 wraps a __set_name__ failure in RuntimeError; 3.12 raises it directly.
+    with pytest.raises((RuntimeError, DefinitionError)) as exc:
         type("Duplicate", (Space,), {"one": value, "two": value})
-    assert isinstance(exc.value.__cause__, DefinitionError)
-    assert "Duplicate.two" in str(exc.value.__cause__)
+    error = exc.value.__cause__ if isinstance(exc.value, RuntimeError) else exc.value
+    assert isinstance(error, DefinitionError)
+    assert "Duplicate.two" in str(error)
 
 
 def test_unbound_late_declarations_and_bad_exports_are_rejected() -> None:

@@ -10,8 +10,6 @@ local choices. These tests cover laziness, optional facts, persistence, atomic
 switching and diagnostics.
 """
 
-from pathlib import Path
-
 import pytest
 from qonnx.core.datatype import DataType
 
@@ -36,11 +34,10 @@ from finn.kernels.artifacts.store import ArtifactStore
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.dotp import DotpAxiKernel
 from finn.kernels.matmul import MatMulKernel, WeightDelivery, matmul_assembly
-from kernels.helpers import settled
+from kernels.helpers import finnlib_root, settled
 from finn.kernels.resources import resource_root, template_root
 from finn.kernels.target import DspBlock
 
-ROOT = Path(__file__).resolve().parents[2]
 IMAGE = MemStreamKernel.image
 RAM_STYLE = MemStreamKernel.ram_style
 # The memstream candidate of the ``memory`` Decision is named ``memory.memstream``.
@@ -465,7 +462,7 @@ def test_ram_style_reaches_the_prepared_build_without_data_slots(tmp_path, style
     store = ArtifactStore(tmp_path / "store")
     prepared = prepare_module_build(
         built.requirements,
-        roots={"kernels": resource_root(), "finnlib": ROOT / "deps/finnlib"},
+        roots={"kernels": resource_root(), "finnlib": finnlib_root()},
         template_roots=(template_root(),),
         blobs=store,
     )

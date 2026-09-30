@@ -1,11 +1,16 @@
 # FINN Jenkins CI guide
 
+Container-related Jenkins and shared-image changes require team agreement
+before changing shared agent or transport behavior.
+
 ## How the pipeline works
 
 The [Jenkinsfile](./Jenkinsfile) is a declarative pipeline of four stages, delegating most logic to the `finn_ci` Python package.
 
 1. **Validate**: computes the sharding plan once, prepares a timing snapshot from historical records, checks executor budget, and prunes the shared trees.
-2. **Build Docker Image**: builds the FINN image with `run-docker.sh` and publishes it to NFS (if `FINN_CI_NFS_ROOT` is set) so the test shards load it instead of rebuilding.
+2. **Build Docker Image**: builds the FINN image with Buildx Bake through
+   `ci/scripts/build-images.sh` and publishes it to NFS (if
+   `FINN_CI_NFS_ROOT` is set) so test shards load it instead of rebuilding.
 3. **Run Tests**: fans out one parallel branch per shard. Each branch runs `python -m pytest -m <marker> --num-shards N --shard-id i` inside the container and stashes results/artifacts.
 4. **Check Stage Results** unstashes every shard's reports, aggregates one board zip per `(hwTestType, board)`, and refreshes the persistent timing master file.
 
@@ -29,7 +34,7 @@ For external contributors who would like to write or edit tests in FINN:
 You do not need Jenkins to run the same tests locally. From a checkout:
 
 ```bash
-./run-docker.sh python -m pytest -m sanity_bnn
+./docker/run -- python -m pytest -m sanity_bnn
 ```
 
 substituting any marker from the `STAGES` table in [finn_ci/config.py](./finn_ci/config.py). The sharding flags are optional and change nothing when omitted. If running tests in parallel locally with `-n <N>` (i.e. multiple workers), add `--dist loadgroup` too, so the checkpoint-linked tests stay on one worker.
@@ -197,6 +202,55 @@ This guards conservatively against under-provisioning while bounding how long an
 
 To inspect timing state, open `reports/ci_timings_master.json` from any archived build.
 
+### Shared Docker image transport
+
+There is no registry, so "Build Docker Image" saves the built image to NFS and
+every test shard `docker load`s it instead of rebuilding. The build-scoped
+image directory holds four files:
+
+```
+${FINN_CI_NFS_ROOT}/docker_images/<jobKey>/<BUILD>/
+      finn-docker-image.tar.gz    the gzipped `docker save` archive
+      finn-docker-tag.txt         the tag it was saved under
+      finn-image-digest.txt       the image ID that tag resolved to at build time
+      finn-image-provenance.json  target, tag, digest, finn_commit, resolved deps
+```
+
+The first two are the historical transport contract. The second two come from
+`ci/scripts/build-images.sh` and are what makes the transport checkable.
+
+`ci/scripts/load-shared-image.sh`, invoked explicitly by `ci/common.groovy` before `docker/run --no-build` on each shard,
+behaves as follows:
+
+- **Digest present.** The sidecar must hold exactly one image ID in
+  `sha256:<hex>` form; an empty, multi-line or malformed file fails the shard
+  *before* the multi-gigabyte load. After the load and any compatibility
+  re-tag, the loader reads back the image ID of the tag it was asked for and
+  fails if it is not the recorded one, printing `Verified <tag> against
+  recorded image ID <id>` when it matches. Either way the shard never reaches
+  pytest with an image whose identity does not match what was published.
+- **Digest absent.** Archives published before the sidecar existed still load.
+  The loader prints one `WARNING: no finn-image-digest.txt ... legacy, tag-only
+  archive` line and follows the historical path. A missing sidecar is never on
+  its own a failure.
+
+The distinction between the two load modes is unchanged. With
+`FINN_DOCKER_PREBUILT=1` the shared image is authoritative and a failed load is
+fatal; without it the shared directory is an optional cache and a failed load
+warns and falls back.
+
+What this does **not** do: the shard still runs the image by tag, so nothing
+stops a concurrent build from reassigning that tag between the load and the
+container starting. Verification narrows the window to that interval rather
+than closing it. Closing it needs run-by-image-ID, build-specific tags or a
+registry, all of which change concurrency behavior and need team agreement.
+
+`finn-image-provenance.json` and `finn-image-digest.txt` are also archived as
+Jenkins build artifacts. The build stage writes them into a `ci-image-metadata/`
+directory in the agent workspace, archives those two exact paths, and then
+copies them to the NFS image directory above. Archival happens before the NFS
+branch, so a build with `FINN_CI_NFS_ROOT` unset still carries them.
+
 ### Build-to-HW zip handoff
 
 The build pipeline stages board deployment directories per shard, then "Check Stage Results" aggregates those staged deployments into one board bitstream zip plus a `.READY` marker in the per-build directory.
@@ -256,6 +310,7 @@ The "Validate" stage rotates the image, artifact, and timing-snapshot trees via 
 - `reports/shard_map.txt` and `reports/shard_map.json` merged across all shards.
 - `reports/ci_timings_master.json` archived timing preview from this build. Its `last_update` field records the observed group count and whether the shared master was updated.
 - `reports/<stash>.empty-shard` per shard that collected zero items. Useful for distinguishing "shard had no work" from "shard crashed".
+- `ci-image-metadata/finn-image-provenance.json` and `ci-image-metadata/finn-image-digest.txt` from "Build Docker Image". Together they identify the container environment every shard ran in and the FINN commit that was mounted into it. Unlike the report artifacts these are not `allowEmptyArchive`: the build step is required to have produced them.
 - `coverage_combined/` one merged HTML report across all rows with `coverage: true`. Per-shard pytest runs write raw `.coverage` data files (one per shard, named via `COVERAGE_FILE=<stash>.coverage`), `aggregateReports` runs `coverage combine` and `coverage html` on the union, and the merged result is archived. Skipped silently when no row opted in.
 - `${FINN_CI_NFS_ROOT}/artifacts/ci_runs/<jobKey>/<BUILD_NUMBER>/zips/<hwTestType>/<board>.zip` per row with a `zipArtifacts` entry. `aggregateReports()` runs `assertZipArtifactsEmitted()` which marks the build UNSTABLE (non-fatal) when an active row declared `zipArtifacts` but no `.READY` was written.
 - `${FINN_CI_NFS_ROOT}/artifacts/ci_runs/<jobKey>/<BUILD_NUMBER>/zips/<hwTestType>/<board>.zip.READY` per-board handshake marker, touched only after the zip is in place. Publishing is idempotent for same-build retries.
@@ -271,14 +326,14 @@ nodeid=<nodeid> stage=<stage> shard=<i>/<n> stash=<stash> group=<group> weight_s
 
 ### DSL environment variables
 
-These are the other env vars a job DSL typically sets for a build-pipeline job, on top of the CI-specific ones in "Infrastructure configuration" (`FINN_CI_NFS_ROOT` and the optional overrides). They are consumed by `run-docker.sh` and the FINN flow rather than by the pipeline itself, so the defaults and meanings match a normal local `run-docker.sh` run.
+These are the other env vars a job DSL typically sets for a build-pipeline job, on top of the CI-specific ones in "Infrastructure configuration" (`FINN_CI_NFS_ROOT` and the optional overrides). They are consumed by the temporary Jenkins compatibility launcher and the FINN flow rather than by the pipeline itself. Migrating those callers requires agreement with the CI owners.
 
 | Env var               | What it sets                                                                                                                                                  |
 | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `FINN_XILINX_PATH`    | Path to the Xilinx tools install. `run-docker.sh` warns when unset, and Vivado/Vitis/HLS steps need it.                                                       |
-| `FINN_XILINX_VERSION` | Xilinx tool version (for example `2022.2`).                                                                                                                   |
+| `FINN_XILINX_PATH`    | Path to the Xilinx tools install. The Jenkins compatibility launcher warns when unset, and Vivado/Vitis/HLS steps need it.                                  |
+| `FINN_XILINX_VERSION` | Xilinx tool version (for example `2024.2`).                                                                                                                   |
 | `PLATFORM_REPO_PATHS` | Vitis platform (DSA) files, required for Vitis-based Alveo cards.                                                                                             |
-| `FINN_DOCKER_EXTRA`   | Extra `docker run` arguments (bind mounts, licence, network, and any `-e` vars the tool-dispatch layer needs). The pipeline appends a per-agent `--hostname` and the NFS cache mounts to whatever the DSL sets. |
+| `FINN_DOCKER_EXTRA`   | Legacy extra `docker compose run` arguments. The pipeline appends a per-agent `--hostname` and cache mounts to whatever the DSL sets. Prefer adding generally useful host facts to `docker/config.py` instead. |
 | `NUM_DEFAULT_WORKERS` | Default xdist worker count for ad-hoc runs. Per-shard worker counts come from `STAGES`, not this.                                                             |
 
 A site that offloads the heavy Xilinx tools to a compute farm (see "Running tools on LSF") needs no pipeline changes. The tool wrapper and its configuration ride into the container through `FINN_DOCKER_EXTRA`, and the only variable FINN itself reads is the shim-directory override below:
@@ -288,3 +343,19 @@ A site that offloads the heavy Xilinx tools to a compute farm (see "Running tool
 | `FINN_TOOL_DIR_OVERRIDE` | Shim directory. `finn.util.basic.resolve_xilinx_tool()` resolves `vivado`/`v++`/`vitis_hls`/`vitis-run`/`xelab`/`slashkit` to `<dir>/<tool>` when set.        |
 
 The wrapper's own variables are deployment-specific.
+
+### Runtime identity
+
+The image holds the locked dependencies (`uv.lock`) in `/opt/venv`; its tag hashes
+the image inputs, including the lock but not FINN's sources. CI mounts the checkout
+under test, and the container entrypoint installs it editable at start, so a shard
+always runs the commit it checked out. finn-hlslib and the board files come from
+the image's resource cache (`/opt/finn/resources`); the native setup stage keeps
+them in its persistent `FINN_HOME`. The Package workflow separately builds
+the wheel and uses it from a clean environment, including fetching finn-hlslib. See `docs/installation.md` and the runtime
+validation record for available versus installation/licence-backed coverage.
+
+Bake owns targets, tags and labels; Compose consumes prepared image references.
+CI provenance records the actual image digest, image revision, `uv.lock` hash and
+the packages installed in the built image (read from the image, not the checkout),
+with the source commit and dirty state of the checkout the image was built from.

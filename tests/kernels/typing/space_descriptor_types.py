@@ -14,7 +14,7 @@ their values, rather than ``Any`` or an internal declaration type.
 
 from __future__ import annotations
 
-from typing_extensions import assert_type
+from typing import assert_type
 
 from finn.core.space import (
     BoundValue,

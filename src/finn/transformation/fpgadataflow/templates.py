@@ -51,8 +51,8 @@ create_project finn_zynq_link ./ -part $FPGA_PART
 # set board part repo paths to find PYNQ-Z1/Z2
 set paths_prop [get_property BOARD_PART_REPO_PATHS [current_project]]
 set paths_param [get_param board.repoPaths]
-lappend paths_prop $::env(FINN_ROOT)/deps/board_files
-lappend paths_param $::env(FINN_ROOT)/deps/board_files
+lappend paths_prop $BOARD_FILES$
+lappend paths_param $BOARD_FILES$
 set_property BOARD_PART_REPO_PATHS $paths_prop [current_project]
 set_param board.repoPaths $paths_param
 
@@ -230,7 +230,7 @@ close_project
 """
 
 vitis_gen_xml_report_tcl_template = """
-open_project $VITIS_PROJ_PATH$/_x/link/vivado/vpl/prj/prj.xpr
+open_project $VITIS_PROJECT$
 open_run impl_1
-report_utilization -hierarchical -hierarchical_depth 5 -file $VITIS_PROJ_PATH$/synth_report.xml -format xml
+report_utilization -hierarchical -hierarchical_depth 5 -file $VITIS_REPORT$ -format xml
 """

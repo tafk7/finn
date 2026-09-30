@@ -11,7 +11,7 @@
 #   sudo ./scripts/install-system-deps.sh
 #
 # Supported distributions:
-#   - Ubuntu 22.04 (primary, tested)
+#   - Ubuntu 24.04 (primary, tested)
 #   - Debian 11+ (should work)
 #   - Other apt-based distributions (may work)
 
@@ -77,10 +77,33 @@ if command -v apt-get &> /dev/null; then
         pybind11-dev \
         libboost-dev
 
+    # ncurses 6 ABI (Vivado 2024.2 and later), as in docker/Dockerfile.finn.
+    apt-get install -y libncurses6
+
+    # LSB loader. lmutil and several tool wrappers request the interpreter
+    # /lib64/ld-lsb-x86-64.so.3. Without it they fail to exec with "No such file
+    # or directory" naming a file that plainly exists -- the classic missing-ELF-
+    # interpreter error, and a confusing one to chase. `lsb-core` no longer
+    # exists on noble, so create the alias directly.
+    if [ ! -e /lib64/ld-lsb-x86-64.so.3 ]; then
+        loader=$(ls /lib/*-linux-gnu/ld-linux-x86-64.so.2 2>/dev/null | head -1)
+        if [ -n "$loader" ]; then
+            mkdir -p /lib64
+            ln -sf "$loader" /lib64/ld-lsb-x86-64.so.3
+            gecho "  Created the LSB loader alias for lmutil"
+        else
+            yecho "no ld-linux-x86-64.so.2 found; lmutil will fail to exec"
+        fi
+    fi
+
     gecho "System dependencies installed successfully!"
     echo ""
+    echo "This is a SUBSET of what docker/Dockerfile.finn installs -- enough to"
+    echo "build and run FINN on a bare host. The image additionally carries"
+    echo "tcsh (LSF esub), locales, cmake, g++-10 and several -dev packages that"
+    echo "matter only inside the container."
+    echo ""
     echo "Optional packages (install if needed):"
-    echo "  - libtinfo5: may be required by some Vivado versions"
     echo "  - libglib2.0-0 libsm6 libxext6 libxrender-dev: for matplotlib/visualization"
 
 elif command -v dnf &> /dev/null; then

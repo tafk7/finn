@@ -1,0 +1,73 @@
+#!/bin/bash
+# Transparent shim for a mounted Xilinx vendor tool.
+#
+# Installed into /usr/local/lib/finn/toolchain-bin and symlinked once per tool
+# (vivado, vitis_hls, v++, xelab, ...). That directory is EARLY on PATH, so
+#
+#     docker exec <container> vivado -version
+#     sbx exec <sandbox> vivado -version
+#
+# work with no wrapper, no shell, and no caller cooperation.
+#
+# WHY THIS EXISTS
+# ---------------
+# Neither `docker exec` nor `sbx exec` runs the image ENTRYPOINT, so nothing the
+# entrypoint exports is visible to them. FINN's own documentation recommends
+# `docker exec` for opening a second terminal, so this is not an exotic path.
+#
+# An explicit wrapper -- `finn-env exec vivado ...` -- does not solve it. A
+# generic agent or CI system issues the bare command; it has no reason to know
+# FINN's calling convention. Requiring it to relocates the special-casing to the
+# caller rather than removing it. The shim removes it.
+#
+# Coverage, by invocation style:
+#
+#   interactive shell / bash -c     BASH_ENV sources the environment
+#   bare exec with no shell         THIS
+#   Python                          finn_paths.py, at interpreter startup
+#
+# IDEMPOTENCE AND RECURSION
+# -------------------------
+# Two hazards, both of which have bitten:
+#
+#   1. Re-sourcing on every nested call is slow and can duplicate PATH entries.
+#      FINN_ENV_APPLIED short-circuits that; finn-toolchain.sh sets it.
+#   2. If the shim directory is still on PATH when we dispatch, `command -v`
+#      finds the shim again and we recurse until the process dies. So the
+#      real executable is resolved with the shim directory REMOVED from PATH,
+#      and never by re-running a bare name.
+#
+# This used to dispatch through `finn-env exec`, which spawned Python (85 ms)
+# to spawn a bash to source the scripts and diff the environment. It now sources
+# the same shell file every other path sources.
+#
+# BASH, not sh. AMD's settings64.sh calls the `source` builtin, which dash does
+# not have. Under /bin/sh it fails with "source: not found" and, because each
+# source is `|| true`, it fails SILENTLY -- PATH is untouched and this script
+# then reports 127 for a tool that is plainly installed.
+
+set -e
+
+SHIM_DIR=/usr/local/lib/finn/toolchain-bin
+tool=$(basename "$0")
+
+# Apply the toolchain unless an outer shell already did. Sourcing is 7 ms and
+# the file is idempotent, so this is the cheap path either way.
+if [ "${FINN_ENV_APPLIED:-}" != "1" ] && [ -r /etc/finn-toolchain.sh ]; then
+    # shellcheck source=/dev/null
+    . /etc/finn-toolchain.sh 2>/dev/null || true
+fi
+
+# Resolve the real tool with the shim directory taken out of PATH, so we cannot
+# find ourselves.
+PATH=$(printf '%s' "$PATH" | tr ':' '\n' | grep -vxF "$SHIM_DIR" | paste -sd: -)
+export PATH
+
+real=$(command -v "$tool" 2>/dev/null) || real=""
+if [ -z "$real" ]; then
+    echo "finn: $tool not found after the toolchain was configured." >&2
+    echo "finn: the Xilinx install may not be mounted in this container," >&2
+    echo "finn: or XILINX_VIVADO/XILINX_VITIS/XILINX_HLS may be unset." >&2
+    exit 127
+fi
+exec "$real" "$@"

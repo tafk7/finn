@@ -30,20 +30,16 @@ import numpy as np
 import os
 from abc import ABC, abstractmethod
 
-from finn import xsi
+from finn import resources, xsi
 from finn.util.basic import make_build_dir
 from finn.util.data_packing import npy_to_rtlsim_input, rtlsim_output_to_npy
 
-finnxsi = xsi if xsi.is_available() else None
+finnxsi = xsi  # Native prerequisites are checked when simulation is requested.
 
 
-def get_finnlib_root() -> str:
-    """Return the configured FinnLib checkout, defaulting to FINN's dependency."""
-
-    override = os.environ.get("FINNLIB_ROOT")
-    if override:
-        return override
-    return os.path.join(os.environ["FINN_ROOT"], "deps", "finnlib")
+def finnlib_source(*parts):
+    """Return a path inside FinnLib, which FINN takes as the ``finnlib`` resource."""
+    return os.path.join(resources.path("finnlib"), *parts)
 
 
 class RTLBackend(ABC):
@@ -105,7 +101,10 @@ class RTLBackend(ABC):
                 exp_ishape = tuple(self.get_normal_input_shape(i))
                 folded_ishape = self.get_folded_input_shape(i)
                 inp_val = context[inp]
-                assert str(inp_val.dtype) == "float32", "Input datatype is not float32"
+                assert str(inp_val.dtype) in [
+                    "float32",
+                    "float16",
+                ], "Input datatype is not float32 or float16"
                 assert inp_val.shape == exp_ishape, "Input shape doesn't match expected shape."
                 export_idt = self.get_input_datatype(i)
 

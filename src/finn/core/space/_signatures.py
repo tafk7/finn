@@ -8,9 +8,7 @@ import inspect
 import types
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Literal, Union, cast, get_args, get_origin, get_type_hints
-
-from typing_extensions import Self
+from typing import TYPE_CHECKING, Literal, Self, Union, cast, get_args, get_origin, get_type_hints
 
 from ._configuration import Space
 from .declarations import (

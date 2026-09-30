@@ -19,7 +19,7 @@ from __future__ import annotations
 from typing import Any, cast
 
 import pytest
-from qonnx.core.datatype import BaseDataType, DataType  # type: ignore[import-not-found]
+from qonnx.core.datatype import BaseDataType, DataType
 
 from finn.kernels.datatypes.semantics import QONNX_DATATYPE_SEMANTICS
 from finn.dataflow.datatypes import (

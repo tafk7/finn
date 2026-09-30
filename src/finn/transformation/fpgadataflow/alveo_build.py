@@ -29,7 +29,6 @@
 
 import json
 import os
-import subprocess
 from enum import Enum
 from pathlib import Path
 from qonnx.core.modelwrapper import ModelWrapper
@@ -52,17 +51,20 @@ from finn.transformation.fpgadataflow.insert_fifo import InsertFIFO
 from finn.transformation.fpgadataflow.insert_iodma import InsertIODMA
 from finn.transformation.fpgadataflow.prepare_ip import PrepareIP
 from finn.transformation.fpgadataflow.specialize_layers import SpecializeLayers
-from finn.util.basic import make_build_dir, resolve_xilinx_tool
+from finn.util._legacy_build_env import toolchain as legacy_toolchain
+from finn.util.basic import make_build_dir
+from finn.util.resources import tcl_quote
 
 from . import templates
 
 
-def _check_vitis_envvars():
-    assert "VITIS_PATH" in os.environ, "VITIS_PATH must be set for Vitis"
-    assert "PLATFORM_REPO_PATHS" in os.environ, "PLATFORM_REPO_PATHS must be set for Vitis"
-    assert "XILINX_XRT" in os.environ, (
-        "XILINX_XRT must be set for Vitis, ensure the XRT env is sourced"
-    )
+def _check_vitis_envvars(environ=None):
+    environ = os.environ if environ is None else environ
+    assert "VITIS_PATH" in environ or "XILINX_VITIS" in environ, "Select the Vitis installation"
+    assert "PLATFORM_REPO_PATHS" in environ, "PLATFORM_REPO_PATHS must be set for Vitis"
+    assert (
+        "XILINX_XRT" in environ
+    ), "XILINX_XRT must be set for Vitis, ensure the XRT env is sourced"
 
 
 _SLASH_ALLOWED_AXILITE_STEMS = {"s_axi_control"}
@@ -117,12 +119,14 @@ class CreateVitisXO(Transformation):
     The object file can be found under the ip subdirectory.
     """
 
-    def __init__(self, ip_name="finn_design"):
+    def __init__(self, ip_name="finn_design", toolchain=None):
         super().__init__()
         self.ip_name = ip_name
+        self.toolchain = toolchain
 
     def apply(self, model):
-        _check_vitis_envvars()
+        toolchain = self.toolchain or legacy_toolchain()
+        _check_vitis_envvars(toolchain.environment)
         vivado_proj_dir = model.get_metadata_prop("vivado_stitch_proj")
         stitched_ip_dir = vivado_proj_dir + "/ip"
         interfaces = json.loads(model.get_metadata_prop("vivado_stitch_ifnames"))
@@ -170,9 +174,9 @@ class CreateVitisXO(Transformation):
 
         # generate the package_xo command in a tcl script
         package_xo_string = "package_xo -force -xo_path %s -kernel_name %s -ip_directory %s" % (
-            xo_path,
-            self.ip_name,
-            stitched_ip_dir,
+            tcl_quote(xo_path),
+            tcl_quote(self.ip_name),
+            tcl_quote(stitched_ip_dir),
         )
         for arg in args_string:
             package_xo_string += " -kernel_xml_args " + arg
@@ -181,16 +185,12 @@ class CreateVitisXO(Transformation):
 
         # create a shell script and call Vivado
         package_xo_sh = vivado_proj_dir + "/gen_xo.sh"
-        working_dir = os.environ["PWD"]
-        vivado_cmd = resolve_xilinx_tool("vivado")
-        with open(package_xo_sh, "w") as f:
-            f.write("#!/bin/bash \n")
-            f.write("cd {}\n".format(vivado_proj_dir))
-            f.write("{} -mode batch -source gen_xo.tcl\n".format(vivado_cmd))
-            f.write("cd {}\n".format(working_dir))
-        bash_command = ["bash", package_xo_sh]
-        process_compile = subprocess.Popen(bash_command, stdout=subprocess.PIPE)
-        process_compile.communicate()
+        toolchain.run(
+            "vivado",
+            ["-mode", "batch", "-source", "gen_xo.tcl"],
+            cwd=vivado_proj_dir,
+            replay=package_xo_sh,
+        )
         assert os.path.isfile(xo_path), (
             "Vitis .xo file not created, check logs under %s" % vivado_proj_dir
         )
@@ -286,15 +286,18 @@ class VitisLink(Transformation):
         period_ns,
         strategy=VitisOptStrategy.PERFORMANCE,
         enable_debug=False,
+        toolchain=None,
     ):
         super().__init__()
+        self.toolchain = toolchain
         self.vitis_platform = vitis_platform
         self.f_mhz = round(1000 / period_ns)
         self.strategy = strategy
         self.enable_debug = enable_debug
 
     def apply(self, model):
-        _check_vitis_envvars()
+        toolchain = self.toolchain or legacy_toolchain()
+        _check_vitis_envvars(toolchain.environment)
         # create a config file and empty list of xo files
         config = ["[connectivity]"]
         object_files = []
@@ -403,39 +406,32 @@ class VitisLink(Transformation):
 
         # create tcl script to generate resource report in XML format
         gen_rep_xml = templates.vitis_gen_xml_report_tcl_template
-        gen_rep_xml = gen_rep_xml.replace("$VITIS_PROJ_PATH$", link_dir)
+        gen_rep_xml = gen_rep_xml.replace(
+            "$VITIS_PROJECT$", tcl_quote(link_dir + "/_x/link/vivado/vpl/prj/prj.xpr")
+        ).replace("$VITIS_REPORT$", tcl_quote(link_dir + "/synth_report.xml"))
         with open(link_dir + "/gen_report_xml.tcl", "w") as f:
             f.write(gen_rep_xml)
 
-        debug_commands = []
+        args = [
+            "-t",
+            "hw",
+            "--platform",
+            self.vitis_platform,
+            "--link",
+            *object_files,
+            "--kernel_frequency",
+            str(self.f_mhz),
+            "--config",
+            "config.txt",
+            "--optimize",
+            self.strategy.value,
+            "--save-temps",
+            "-R2",
+        ]
         if self.enable_debug:
-            for inst in list(instance_names.values()):
-                debug_commands.append("--dk chipscope:%s" % inst)
-
-        # create a shell script and call Vitis
-        script = link_dir + "/run_vitis_link.sh"
-        working_dir = os.environ["PWD"]
-        vxx_cmd = resolve_xilinx_tool("v++")
-        with open(script, "w") as f:
-            f.write("#!/bin/bash \n")
-            f.write("cd {}\n".format(link_dir))
-            f.write(
-                "%s -t hw --platform %s --link %s"
-                " --kernel_frequency %d --config config.txt --optimize %s"
-                " --save-temps -R2 %s\n"
-                % (
-                    vxx_cmd,
-                    self.vitis_platform,
-                    " ".join(object_files),
-                    self.f_mhz,
-                    self.strategy.value,
-                    " ".join(debug_commands),
-                )
-            )
-            f.write("cd {}\n".format(working_dir))
-        bash_command = ["bash", script]
-        process_compile = subprocess.Popen(bash_command, stdout=subprocess.PIPE)
-        process_compile.communicate()
+            for instance in instance_names.values():
+                args.extend(["--dk", "chipscope:" + instance])
+        toolchain.run("v++", args, cwd=link_dir, replay=link_dir + "/run_vitis_link.sh")
         # TODO rename xclbin appropriately here?
         xclbin = link_dir + "/a.xclbin"
         assert os.path.isfile(xclbin), (
@@ -445,16 +441,12 @@ class VitisLink(Transformation):
 
         # run Vivado to gen xml report
         gen_rep_xml_sh = link_dir + "/gen_report_xml.sh"
-        working_dir = os.environ["PWD"]
-        vivado_cmd = resolve_xilinx_tool("vivado")
-        with open(gen_rep_xml_sh, "w") as f:
-            f.write("#!/bin/bash \n")
-            f.write("cd {}\n".format(link_dir))
-            f.write("%s -mode batch -source %s\n" % (vivado_cmd, link_dir + "/gen_report_xml.tcl"))
-            f.write("cd {}\n".format(working_dir))
-        bash_command = ["bash", gen_rep_xml_sh]
-        process_genxml = subprocess.Popen(bash_command, stdout=subprocess.PIPE)
-        process_genxml.communicate()
+        toolchain.run(
+            "vivado",
+            ["-mode", "batch", "-source", "gen_report_xml.tcl"],
+            cwd=link_dir,
+            replay=gen_rep_xml_sh,
+        )
         # filename for the synth utilization report
         synth_report_filename = link_dir + "/synth_report.xml"
         model.set_metadata_prop("vivado_synth_rpt", synth_report_filename)
@@ -484,11 +476,12 @@ def _slash_link_command(tool, config_path, vbin_path, component_xml_paths, build
     ] + [str(path) for path in component_xml_paths]
 
 
-def _slash_link_argv(config_path, vbin_path, component_xml_paths, build_hardware):
-    slash_linker = resolve_xilinx_tool("slashkit")
-    return _slash_link_command(
-        slash_linker, config_path, vbin_path, component_xml_paths, build_hardware
+def _slash_link_argv(config_path, vbin_path, component_xml_paths, build_hardware, toolchain=None):
+    toolchain = toolchain or legacy_toolchain()
+    args = _slash_link_command(
+        "slashkit", config_path, vbin_path, component_xml_paths, build_hardware
     )
+    return toolchain.command("slashkit", *args[1:])
 
 
 class SlashLink(Transformation):
@@ -503,9 +496,10 @@ class SlashLink(Transformation):
             Otherwise, it will create a simulation image.
     """
 
-    def __init__(self, build_hardware=True):
+    def __init__(self, build_hardware=True, toolchain=None):
         super().__init__()
         self.build_hardware = build_hardware
+        self.toolchain = toolchain
 
     def apply(self, model):
         # create a temporary folder for the project and check out SLASH
@@ -591,23 +585,33 @@ class SlashLink(Transformation):
 
         # Construct the linker invocation
         vbin_path = link_dir / "finn.vbin"
-        command = _slash_link_argv(config_path, vbin_path, component_xml_paths, self.build_hardware)
+        toolchain = self.toolchain or legacy_toolchain()
+        command = _slash_link_command(
+            "slashkit", config_path, vbin_path, component_xml_paths, self.build_hardware
+        )
 
         # Run the linker
         log_path = link_dir / "slash.log"
-        with open(log_path, "w") as log_file:
-            subprocess.run(command, check=True, stdout=log_file, stderr=log_file)
-
-        assert vbin_path.is_file(), (
-            f"SLASH linking failed, no bitfile generated. Check {log_path} for details."
+        result = toolchain.run(
+            "slashkit",
+            command[1:],
+            cwd=link_dir,
+            replay=link_dir / "link.sh",
+            check=False,
         )
+        log_path.write_bytes(result.stdout + result.stderr)
+        result.check_returncode()
+
+        assert (
+            vbin_path.is_file()
+        ), f"SLASH linking failed, no bitfile generated. Check {log_path} for details."
         model.set_metadata_prop("bitfile", str(vbin_path))
 
         if self.build_hardware:
             report_path = link_dir / "finn.vbin.prj" / "report_utilization_finn.xml"
-            assert report_path.is_file(), (
-                f"SLASH linking failed, no report generated. Check {log_path} for details."
-            )
+            assert (
+                report_path.is_file()
+            ), f"SLASH linking failed, no report generated. Check {log_path} for details."
             model.set_metadata_prop("slash_report", str(report_path))
 
         return (model, False)

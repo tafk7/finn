@@ -56,10 +56,9 @@ class RegionRefused(ValueError):
     only this exception; anything else stays an ``EvaluationError``.
 
     It lives with the Region rather than with the Kernel layer because the
-    constructors that raise it are pure model functions.
-    ``kernels.matmul.regions`` is the one authority for the MVAU family and must
-    stay importable without the engine; a refusal type reachable only through
-    ``model.kernel`` would force every semantic constructor to drag the compiler
+    constructors that raise it are pure model functions, which must stay
+    importable without the engine; a refusal type reachable only through a
+    kernel module would force every semantic constructor to drag the compiler
     in behind it.
 
     It subclasses ``ValueError`` so a caller invoking the constructor directly --

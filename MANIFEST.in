@@ -1,0 +1,24 @@
+include VERSION LICENSE.txt
+include FINN_BUILD_INFO.json
+include docs/installation.md docs/legacy-build-env-ledger.md docs/runtime-validation.md
+prune tests
+prune build
+prune dist
+global-exclude *.pyc *.so
+global-exclude *_tb.v *_tb.sv
+
+# Keep source archives free of resource test fixtures as well.
+prune src/finn/rtllib/axi/sim
+prune src/finn/rtllib/dwc/sim
+prune src/finn/rtllib/layernorm/tb
+prune src/finn/rtllib/memstream/sim
+prune src/finn/rtllib/mvu/tb
+prune src/finn/rtllib/mvu_tiled/tb
+prune src/finn/rtllib/requant/sim
+prune src/finn/rtllib/stream_tap/tb
+prune src/finn/rtllib/thresholding/sim
+prune src/finn/qnn-data/build_dataflow
+prune src/finn/qnn-data/cifar10
+prune src/finn/qnn-data/cybsec-mlp
+prune src/finn/qnn-data/test_ext_weights
+prune src/finn/qnn-data/testcase

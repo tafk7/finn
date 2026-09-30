@@ -1,0 +1,21 @@
+# Build-context allowlist: exclude everything, then re-include exactly what
+# docker/Dockerfile.finn reads. The dependency layers use only pyproject.toml,
+# uv.lock, src/finn/resources and src/finn/resources.toml; the release stage
+# also builds a wheel from the sources below.
+*
+
+!docker/
+!pyproject.toml
+!uv.lock
+!setup.py
+!setup.cfg
+!MANIFEST.in
+!VERSION
+!README.md
+!LICENSE.txt
+!src/
+**/__pycache__/
+**/*.pyc
+**/*.so
+**/*.egg-info/
+**/.git

@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-from typing_extensions import assert_type
+from typing import assert_type
 
 from finn.core.space import BoundValue, ViewAssessment, design_space
 from finn.dataflow.datatypes import QONNXDataType

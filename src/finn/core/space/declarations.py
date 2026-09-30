@@ -27,6 +27,7 @@ from typing import (
     Any,
     Generic,
     NoReturn,
+    Self,
     TypeAlias,
     TypeVar,
     Union,
@@ -36,8 +37,6 @@ from typing import (
     get_type_hints,
     overload,
 )
-
-from typing_extensions import Self
 
 from .domains import Domain, finite
 from .errors import DefinitionError, ReferenceUseError

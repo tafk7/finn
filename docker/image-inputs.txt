@@ -1,0 +1,27 @@
+# Files whose contents define the FINN image, hashed into its tag.
+#
+# One shell-style glob per line, relative to the repository root; prefix a
+# pattern with ? when it is optional. Keep this in sync with the COPY and
+# RUN --mount sources in docker/Dockerfile.finn. FINN's own sources are not
+# listed: containers install the mounted checkout, so editing FINN never needs
+# a new image. (The release target also builds from them; it is tagged by
+# source revision.)
+
+.dockerignore
+docker-bake.hcl
+docker/image-inputs.txt
+docker/Dockerfile.finn
+pyproject.toml
+uv.lock
+src/finn/resources/*.py
+# src/finn/resources.toml counts only through the pins of the resources
+# the image bakes in; see finn_image_revision in docker/lib.sh.
+docker/finn_entrypoint.sh
+docker/quicktest.sh
+docker/toolchain-shim
+docker/finn-bashenv.sh
+docker/finn-toolchain.sh
+docker/install-runtimes.sh
+docker/runtimes/*.env
+?docker/packages/*.deb
+?docker/packages/*.rpm

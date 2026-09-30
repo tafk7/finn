@@ -1,0 +1,210 @@
+#!/usr/bin/env bash
+# Run FINN's Docker-built environment through Compose.
+
+set -euo pipefail
+
+SCRIPT=$(readlink -f "$0")
+DOCKER_DIR=$(dirname "$SCRIPT")
+REPO=$(dirname "$DOCKER_DIR")
+
+# shellcheck source=/dev/null
+. "$DOCKER_DIR/lib.sh"
+
+run_docker () {
+    : "${FINN_DOCKER_PREBUILT:=0}"
+    : "${FINN_DOCKER_EXTRA:=}"
+    : "${FINN_DOCKER_BUILD_EXTRA:=}"
+    : "${FINN_DOCKER_RUN_AS_ROOT:=0}"
+    : "${FINN_SKIP_DEP_REPOS:=0}"
+    : "${JUPYTER_PORT:=8888}"
+    : "${NETRON_PORT:=8081}"
+    : "${IMAGENET_VAL_PATH:=}"
+    : "${FINN_DOCKER_CACHE_DIR:=}"
+    : "${FINN_SSH_KEY_DIR:=}"
+    RUN_TMP=$(mktemp -d -t finn-compose-XXXXXX)
+    RUN_ENV="$RUN_TMP/env"
+    COMPOSE_OVERRIDE="$RUN_TMP/override.json"
+    cleanup_run_files () { rm -rf "$RUN_TMP"; }
+    trap cleanup_run_files EXIT
+
+    FINN_IMAGE=$(finn_bake_tag "$(finn_bake_target "$FINN_RUNTIMES")")
+    [ -n "$FINN_IMAGE" ] || { recho "could not resolve the image tag"; exit 2; }
+    export FINN_IMAGE
+
+    SERVICE="$TIER"
+    COMPOSE_TIER="$TIER"
+    COMPOSE_PROFILE=()
+    [ "$TIER" != "dev" ] && COMPOSE_PROFILE=(--profile fpga)
+
+    # Optional per-site mounts stay FLAGS rather than compose services, because
+    # compose cannot conditionally omit a bind mount and a `${VAR:-/dev/null}`
+    # placeholder is worse than an explicit flag.
+    RUN_OPTS=()
+    for volume in "${VOLUMES[@]}"; do RUN_OPTS+=(--volume "$volume"); done
+    [ "$FINN_DOCKER_RUN_AS_ROOT" = "1" ] && RUN_OPTS+=(--user 0:0)
+    [ -z "${FINN_CONTAINER_NAME:-}" ] || RUN_OPTS+=(--name "$FINN_CONTAINER_NAME")
+    if [ -n "$FINN_SSH_KEY_DIR" ] && [ -d "$FINN_SSH_KEY_DIR" ]; then
+        # Opt-in now. It used to be mounted unconditionally from a directory this
+        # script created, which put a secret path into the default profile for a
+        # deployment feature most runs never use.
+        RUN_OPTS+=(-v "$FINN_SSH_KEY_DIR:$HOME/.ssh")
+    fi
+    if [ -n "$FINN_DOCKER_CACHE_DIR" ]; then
+        mkdir -p "$FINN_DOCKER_CACHE_DIR/torch" "$FINN_DOCKER_CACHE_DIR/huggingface"
+        RUN_OPTS+=(-v "$FINN_DOCKER_CACHE_DIR:/finn_cache"
+                   -e TORCH_HOME=/finn_cache/torch -e HF_HOME=/finn_cache/huggingface)
+    fi
+    if [ "${VERIFICATION_EN:-0}" = "1" ]; then
+        for v in FINN_EXAMPLES_ROOT VERIFICATION_IO; do
+            eval "val=\${$v:-}"
+            [ -n "$val" ] || { recho "VERIFICATION_EN=1 but $v is unset"; exit 1; }
+            [ -d "$val" ] || { recho "$v=$val is not a directory"; exit 1; }
+            RUN_OPTS+=(-e "$v=$val" -v "$val:$val")
+        done
+        RUN_OPTS+=(-e VERIFICATION_EN=1)
+    fi
+    # A site escape hatch, kept because sites depend on it. `docker compose run`
+    # accepts -v/-e/-p/--user/-w, which covers what it is actually used for.
+    # Word-split deliberately: it is a flag string, not a path.
+    # shellcheck disable=SC2206
+    [ -n "$FINN_DOCKER_EXTRA" ] && RUN_OPTS+=($FINN_DOCKER_EXTRA)
+
+    CMD=("$@")
+    if [ "$NOTEBOOK" = 1 ]; then
+        SERVICE=notebook
+        COMPOSE_TIER=dev
+        COMPOSE_PROFILE=(--profile notebook)
+    elif [ "$#" = 0 ]; then
+        CMD=(bash)
+        RUN_OPTS+=(-it)
+    fi
+
+    ./docker/config.py inspect --tier "$COMPOSE_TIER" --workspace-policy mirror \
+        --format sh > "$RUN_ENV" || { recho "docker/config.py inspect failed"; exit 1; }
+    printf "JUPYTER_PORT='%s'\n" "$JUPYTER_PORT" >> "$RUN_ENV"
+    printf "NETRON_PORT='%s'\n" "$NETRON_PORT" >> "$RUN_ENV"
+
+    ./docker/config.py compose --tier "$COMPOSE_TIER" --workspace-policy mirror \
+        --service "$SERVICE" > "$COMPOSE_OVERRIDE" \
+        || { recho "docker/config.py compose failed"; exit 1; }
+
+    finn_prepare_image "$(finn_bake_target "$FINN_RUNTIMES")" || exit 1
+
+    COMPOSE=(docker compose --env-file "$RUN_ENV" -f compose.yaml -f "$COMPOSE_OVERRIDE")
+    if [ "$SERVICE" = "notebook" ]; then
+        "${COMPOSE[@]}" "${COMPOSE_PROFILE[@]}" up notebook
+        exit $?
+    fi
+
+    "${COMPOSE[@]}" "${COMPOSE_PROFILE[@]}" run --rm \
+        "${RUN_OPTS[@]}" "$SERVICE" "${CMD[@]}"
+}
+
+usage () {
+    cat <<'EOF'
+Usage: docker/run [OPTIONS] [-- COMMAND...]
+
+Options:
+  -n, --name NAME    set the Docker container name
+  --fpga             grant access to the configured Xilinx toolchain
+  --volume SPEC      pass an explicit Compose volume (repeatable)
+  --runtime NAME     add image content such as xrt; repeatable
+  --notebook         start the Docker notebook service
+  --rebuild          rebuild image layers without cache
+  --no-build         require an existing prepared artifact
+  --print            print the resolved request without running it
+  -h, --help         show this help
+
+With no command, Docker opens a shell.
+EOF
+}
+
+FPGA=0
+NOTEBOOK=0
+PRINT_ONLY=0
+INSTANCE_NAME=""
+NAME_EXPLICIT=0
+RUNTIMES="${FINN_RUNTIMES:-}"
+VOLUMES=()
+
+
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        -n|--name)
+            [ "$#" -ge 2 ] || { echo "$1 needs a value" >&2; exit 2; }
+            INSTANCE_NAME=$2; NAME_EXPLICIT=1; shift 2 ;;
+        --name=*) INSTANCE_NAME=${1#*=}; NAME_EXPLICIT=1; shift ;;
+        --fpga) FPGA=1; shift ;;
+        --volume)
+            [ "$#" -ge 2 ] || { echo "--volume needs a mount specification" >&2; exit 2; }
+            VOLUMES+=("$2"); shift 2 ;;
+        --runtime)
+            [ "$#" -ge 2 ] || { echo "--runtime needs a value" >&2; exit 2; }
+            RUNTIMES="${RUNTIMES:+$RUNTIMES,}$2"; shift 2 ;;
+        --runtime=*)
+            value=${1#*=}; RUNTIMES="${RUNTIMES:+$RUNTIMES,}$value"; shift ;;
+        --deps|--deps=*|--dependencies|--venv)
+            echo "$1 was removed: the container installs the mounted checkout; see docs/installation.md" >&2
+            exit 2 ;;
+        --notebook) NOTEBOOK=1; shift ;;
+        --rebuild) export FINN_CONTAINER_REBUILD=1; shift ;;
+        --no-build) export FINN_CONTAINER_NO_BUILD=1; shift ;;
+        --print) PRINT_ONLY=1; shift ;;
+        -h|--help) usage; exit 0 ;;
+        --) shift; break ;;
+        -*) echo "Unknown option: $1" >&2; usage >&2; exit 2 ;;
+        *) break ;;
+    esac
+done
+
+if [ -n "${FINN_DEPS:-}" ]; then
+    echo "FINN_DEPS was removed: dependencies come from uv.lock; see docs/installation.md" >&2
+    exit 2
+fi
+if [ "$NOTEBOOK" = 1 ] && [ "$#" -gt 0 ]; then
+    echo "--notebook does not accept a command" >&2
+    exit 2
+fi
+if [ "$NOTEBOOK" = 1 ] && [ "${#VOLUMES[@]}" -gt 0 ]; then
+    echo "--notebook volumes belong in a Compose override; --volume applies to run" >&2
+    exit 2
+fi
+if [ "${FINN_CONTAINER_REBUILD:-0}" = 1 ] && [ "${FINN_CONTAINER_NO_BUILD:-0}" = 1 ]; then
+    echo "--rebuild and --no-build are mutually exclusive" >&2
+    exit 2
+fi
+
+RUNTIMES=$(finn_normalize_runtimes "$RUNTIMES")
+finn_set_provenance
+TIER=dev
+[ "$FPGA" = 1 ] && TIER=build
+if [ "$NAME_EXPLICIT" != 1 ]; then
+    INSTANCE_NAME="${FINN_CONTAINER_NAME:-}"
+fi
+
+export FINN_RUNTIMES="$RUNTIMES"
+export FINN_DOCKER_TARGET="$TIER"
+[ -z "$INSTANCE_NAME" ] || export FINN_CONTAINER_NAME="$INSTANCE_NAME"
+
+if [ "$PRINT_ONLY" = 1 ]; then
+    target=$(finn_bake_target "$RUNTIMES")
+    printf 'runner=docker\n'
+    printf 'tier=%s\n' "$TIER"
+    printf 'runtimes=%s\n' "$RUNTIMES"
+    printf 'bake_target=%s\n' "$target"
+    printf 'image_revision=%s\n' "$FINN_IMAGE_REVISION"
+    printf 'source_revision=%s\n' "$FINN_SOURCE_REVISION"
+    printf 'source_describe=%s\n' "$FINN_SOURCE_DESCRIBE"
+    printf 'source_dirty=%s\n' "$FINN_SOURCE_DIRTY"
+    printf 'operation=run\n'
+    printf 'rebuild=%s\n' "${FINN_CONTAINER_REBUILD:-0}"
+    printf 'no_build=%s\n' "${FINN_CONTAINER_NO_BUILD:-0}"
+    printf 'name=%s\n' "$INSTANCE_NAME"
+    printf 'command='
+    [ "$#" -gt 0 ] && printf '%q ' "$@"
+    printf '\n'
+    exit 0
+fi
+
+cd "$REPO"
+run_docker "$@"

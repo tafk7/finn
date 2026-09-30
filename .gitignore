@@ -27,6 +27,12 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 # Temporary and binary files
+# Editor backup files. NOTE this also matches a directory literally named `~`,
+# which is how a stray one went unnoticed here for a month: a tilde only expands
+# in a shell, unquoted, at the start of a word -- never from inside a variable,
+# and never in a Docker Compose env file. `FINN_HOST_BUILD_DIR=~/builds`
+# therefore produced a bind mount into a directory called `~`.
+# docker/config.py now expands every path it emits; see hostpath() there.
 *~
 *.py[cod]
 *.so
@@ -74,6 +80,10 @@ docs/_build/*
 cover/*
 MANIFEST
 
+# Jenkins workspace copy of the image provenance/digest that build-images.sh
+# emits, staged here so archiveArtifacts can see it before it is copied to NFS.
+/ci-image-metadata/
+
 # Per-project virtualenvs
 .venv*/
 
@@ -96,3 +106,21 @@ MANIFEST
 
 # downloaded dep repos
 /deps/
+
+# Host-specific environment files from older/manual Compose workflows.
+/.env
+
+# Retained so caches from the retired user launcher do not become untracked.
+/.finn-run.env
+
+# Build scratch used by the Dev Container.
+/.finn-build/
+/.devcontainer/image.compose.json
+
+# Vendor runtime packages: supplied by the user, never redistributed by FINN.
+# See docker/runtimes/README.md.
+docker/packages/*.deb
+docker/packages/*.rpm
+
+# Exported Apptainer/Singularity images are generated build artifacts.
+*.sif

@@ -1,6 +1,0 @@
-# Standalone Space validation, without FINN's hardware or graph dependencies.
-greenlet==3.2.4
-mypy==2.3.1
-pytest==9.1.1
-ruff==0.16.4
-typing_extensions==4.16.0

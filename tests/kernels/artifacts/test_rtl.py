@@ -13,10 +13,12 @@ is permitted and the honest scope of the guarantee is whatever is left.
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 import pytest
+
+from finn import resources
+from finn.util.resources import resource_path
 
 from finn.kernels.artifacts.abi import (
     Bus,
@@ -31,7 +33,7 @@ from finn.kernels.artifacts.abi import (
     Signal,
     StandardProtocol,
 )
-import pyslang  # type: ignore[import-not-found]
+import pyslang
 from pyslang import ast, syntax
 
 from finn.kernels.artifacts.rtl import (
@@ -136,29 +138,36 @@ INNER_SHUFFLE_CLOSURE = (
 INNER_SHUFFLE_PARAMETERS = (("BITS", "4"), ("I", "6"), ("J", "6"), ("SIMD", "3"))
 
 
+def _finnlib_root() -> Path:
+    try:
+        return Path(resources.path("finnlib"))
+    except resources.ResourceError as error:
+        pytest.skip(f"FinnLib is not available: {error}")
+
+
 @pytest.fixture(name="replay")
 def _replay(finn_root: Path) -> Path:
-    finnlib_root = Path(os.environ.get("FINNLIB_ROOT", finn_root / "deps/finnlib"))
+    finnlib_root = _finnlib_root()
     path = finnlib_root / "rtl/infra/replay_buffer.sv"
     if not path.is_file():
-        pytest.skip("FinnLib is not fetched; set FINNLIB_ROOT or run fetch-repos.sh")
+        pytest.skip("FinnLib lacks a file this test reads")
     return path
 
 
 @pytest.fixture(name="finnlib")
 def _finnlib(finn_root: Path) -> tuple[Path, ...]:
-    finnlib_root = Path(os.environ.get("FINNLIB_ROOT", finn_root / "deps/finnlib"))
+    finnlib_root = _finnlib_root()
     files = tuple(finnlib_root / name for name in FINNLIB_CLOSURE)
     if any(not path.is_file() for path in files):
-        pytest.skip("FinnLib is not fetched; set FINNLIB_ROOT or run fetch-repos.sh")
+        pytest.skip("FinnLib lacks a file this test reads")
     return files
 
 
 def _finnlib_files(finn_root: Path, names: tuple[str, ...]) -> tuple[Path, ...]:
-    finnlib_root = Path(os.environ.get("FINNLIB_ROOT", finn_root / "deps/finnlib"))
+    finnlib_root = _finnlib_root()
     files = tuple(finnlib_root / name for name in names)
     if any(not path.is_file() for path in files):
-        pytest.skip("FinnLib is not fetched; set FINNLIB_ROOT or run fetch-repos.sh")
+        pytest.skip("FinnLib lacks a file this test reads")
     return files
 
 
@@ -678,9 +687,7 @@ def test_the_parse_rate_over_everything_we_compile_is_recorded(
     silently would overstate what was examined.
     """
 
-    roots = [finn_root / "deps/finnlib/rtl", finn_root / "finn-rtllib"]
-    if any(not root.is_dir() for root in roots):
-        pytest.skip("FinnLib or finn-rtllib is not present")
+    roots = [_finnlib_root() / "rtl", Path(resource_path("rtllib"))]
 
     files = sorted(
         path for root in roots for path in root.rglob("*.sv") if not path.name.endswith("_tb.sv")
@@ -706,7 +713,8 @@ def test_the_parse_rate_over_everything_we_compile_is_recorded(
             f"({len(templates)} $KEY$ templates excluded)"
         )
         for path, code in failed:
-            print(f"  declined: {path.relative_to(finn_root)} {code}")
+            root = next(root for root in roots if path.is_relative_to(root))
+            print(f"  declined: {root.name}/{path.relative_to(root)} {code}")
 
     # Recorded rather than pinned to a number: this is a measurement, and a
     # tight bound would fail whenever FinnLib grows a file.  What is asserted

@@ -578,6 +578,11 @@ class TestEnd2End:
         build_data = get_build_env(board, target_clk_ns)
         prev_chkpt_name = get_checkpoint_name(board, topology, wbits, abits, "convert_to_hw_layers")
         model = load_test_checkpoint_or_skip(prev_chkpt_name)
+        # First pass: datatype-only bit width minimization before specialization
+        # Gives specialization realistic bit widths for RTL/HLS decisions
+        model = model.transform(MinimizeWeightBitWidth(datatype_only=True))
+        model = model.transform(MinimizeAccumulatorWidth(datatype_only=True))
+        model = model.transform(InferDataTypes())
         model = model.transform(SpecializeLayers(build_data["part"]))
         model = model.transform(GiveUniqueNodeNames())
         model.save(get_checkpoint_name(board, topology, wbits, abits, "specialize_layers"))
@@ -701,9 +706,6 @@ class TestEnd2End:
         model = model.transform(AnnotateCycles())
         perf = model.analysis(dataflow_performance)
         latency = perf["critical_path_cycles"]
-        # rtlsim only supports impl_style=rtl for StreamingFIFO, ensure that
-        for fifo_layer in model.get_nodes_by_op_type("StreamingFIFO_rtl"):
-            getCustomOp(fifo_layer).set_nodeattr("impl_style", "rtl")
         model = model.transform(PrepareIP(test_fpga_part, target_clk_ns))
         model = model.transform(HLSSynthIP())
         model = model.transform(CreateStitchedIP(test_fpga_part, target_clk_ns))

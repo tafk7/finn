@@ -29,7 +29,6 @@
 import math
 import numpy as np
 import os
-import shutil
 from qonnx.custom_op.general import im2col
 from qonnx.custom_op.general.im2col import compute_conv_output_dim
 from qonnx.custom_op.registry import getCustomOp
@@ -39,6 +38,7 @@ from finn.custom_op.fpgadataflow.convolutioninputgenerator import (
     ConvolutionInputGenerator,
 )
 from finn.custom_op.fpgadataflow.rtlbackend import RTLBackend
+from finn.util.resources import resource_path, tcl_quote
 
 # RTL Convolution Input Generator / Sliding Window Generator (SWG)
 # Matches and extends the functionality of all ConvolutionInputGenerator_* functions
@@ -178,7 +178,7 @@ class ConvolutionInputGenerator_rtl(ConvolutionInputGenerator, RTLBackend):
 
         return int(exp_cycles)
 
-    def bram_estimation(self):
+    def bram_estimation(self, fpgapart):
         simd = self.get_nodeattr("SIMD")
         ram_style = self.get_nodeattr("ram_style")
         impl_style = self.select_impl_style()
@@ -238,7 +238,7 @@ class ConvolutionInputGenerator_rtl(ConvolutionInputGenerator, RTLBackend):
         else:
             return 0
 
-    def lut_estimation(self):
+    def lut_estimation(self, fpgapart):
         simd = self.get_nodeattr("SIMD")
         ram_style = self.get_nodeattr("ram_style")
         buffer_width = simd * self.get_input_datatype().bitwidth()
@@ -249,7 +249,7 @@ class ConvolutionInputGenerator_rtl(ConvolutionInputGenerator, RTLBackend):
             ram_luts = 0
         return 300 + ram_luts
 
-    def uram_estimation(self):
+    def uram_estimation(self, fpgapart):
         simd = self.get_nodeattr("SIMD")
         ram_style = self.get_nodeattr("ram_style")
         impl_style = self.select_impl_style()
@@ -277,7 +277,7 @@ class ConvolutionInputGenerator_rtl(ConvolutionInputGenerator, RTLBackend):
         else:
             return 0
 
-    def uram_efficiency_estimation(self):
+    def uram_efficiency_estimation(self, fpgapart):
         # TODO: Versal URAM supports flexible bit widths (9/18/36/72) unlike
         # UltraScale+ which only supports 72-bit. This could improve efficiency
         # for narrow data types on Versal devices.
@@ -302,7 +302,7 @@ class ConvolutionInputGenerator_rtl(ConvolutionInputGenerator, RTLBackend):
             buffer_depth = (ifm_dim_w - kernel_width) + ifm_dim_w * (dilation_h - 1)
             buffer_count = k_h - 1
 
-        uram_est = self.uram_estimation()
+        uram_est = self.uram_estimation(fpgapart)
         if uram_est == 0:
             return 1
         used_bits = buffer_width * buffer_depth * buffer_count
@@ -336,10 +336,10 @@ class ConvolutionInputGenerator_rtl(ConvolutionInputGenerator, RTLBackend):
         """Fills code generation dict for the default implementation style by computing
         the incremental addressing scheme for the circular buffer."""
         if self.get_nodeattr("dynamic_mode"):
-            template_select = "/finn-rtllib/swg/swg_template_default_dynamic.sv"
+            template_select = "swg/swg_template_default_dynamic.sv"
         else:
-            template_select = "/finn-rtllib/swg/swg_template_default.sv"
-        template_path = os.environ["FINN_ROOT"] + template_select
+            template_select = "swg/swg_template_default.sv"
+        template_path = resource_path("rtllib", template_select)
         code_gen_dict = {}
 
         ifm_ch = self.get_nodeattr("IFMChannels")
@@ -518,7 +518,7 @@ class ConvolutionInputGenerator_rtl(ConvolutionInputGenerator, RTLBackend):
         the loop controller configuration and partitioning the fixed buffer into
         shift-registers (for parallel read access) and line buffers (for efficient
         LUTRAM/BRAM/URAM implementation)."""
-        template_path = os.environ["FINN_ROOT"] + "/finn-rtllib/swg/swg_template_parallel.sv"
+        template_path = resource_path("rtllib", "swg/swg_template_parallel.sv")
         code_gen_dict = {}
 
         ifm_ch = self.get_nodeattr("IFMChannels")
@@ -855,12 +855,12 @@ class ConvolutionInputGenerator_rtl(ConvolutionInputGenerator, RTLBackend):
         with open(template_path, "r") as f:
             template = f.read()
         if self.get_nodeattr("dynamic_mode"):
-            template_select = "/finn-rtllib/swg/swg_template_wrapper_dynamic.v"
+            template_select = "swg/swg_template_wrapper_dynamic.v"
         else:
-            template_select = "/finn-rtllib/swg/swg_template_wrapper.v"
-        with open(os.environ["FINN_ROOT"] + template_select, "r") as f:
+            template_select = "swg/swg_template_wrapper.v"
+        with open(resource_path("rtllib", template_select), "r") as f:
             template_wrapper = f.read()
-        with open(os.environ["FINN_ROOT"] + "/finn-rtllib/swg/swg_template_axilite.v", "r") as f:
+        with open(resource_path("rtllib", "swg/swg_template_axilite.v"), "r") as f:
             template_axilite = f.read()
         for key in code_gen_dict:
             # transform list into long string separated by '\n'
@@ -887,10 +887,6 @@ class ConvolutionInputGenerator_rtl(ConvolutionInputGenerator, RTLBackend):
             ) as f:
                 f.write(template_axilite)
 
-        # Copy static source file for common core components
-        shutil.copy2(os.environ["FINN_ROOT"] + "/finn-rtllib/swg/swg_common.sv", code_gen_dir)
-        shutil.copy2(os.environ["FINN_ROOT"] + "/finn-rtllib/swg/swg_pkg.sv", code_gen_dir)
-
         # set ipgen_path and ip_path so that HLS-Synth transformation
         # and stich_ip transformation do not complain
         self.set_nodeattr("ipgen_path", code_gen_dir)
@@ -899,7 +895,7 @@ class ConvolutionInputGenerator_rtl(ConvolutionInputGenerator, RTLBackend):
     def get_rtl_file_list(self, abspath=False):
         if abspath:
             code_gen_dir = self.get_nodeattr("code_gen_dir_ipgen") + "/"
-            rtllib_dir = os.path.join(os.environ["FINN_ROOT"], "finn-rtllib/swg/")
+            rtllib_dir = resource_path("rtllib", "swg") + "/"
         else:
             code_gen_dir = ""
             rtllib_dir = ""
@@ -916,27 +912,13 @@ class ConvolutionInputGenerator_rtl(ConvolutionInputGenerator, RTLBackend):
 
     def code_generation_ipi(self):
         """Constructs and returns the TCL for node instantiation in Vivado IPI."""
-        code_gen_dir = self.get_nodeattr("code_gen_dir_ipgen")
-
-        sourcefiles = [
-            "swg_pkg.sv",
-            self.get_nodeattr("gen_top_module") + "_wrapper.v",
-            self.get_nodeattr("gen_top_module") + "_impl.sv",
-            "swg_common.sv",
-        ]
-
-        if self.get_nodeattr("dynamic_mode"):
-            sourcefiles += [self.get_nodeattr("gen_top_module") + "_axilite.v"]
-
-        sourcefiles = [os.path.join(code_gen_dir, f) for f in sourcefiles]
-
         cmd = []
-        for f in sourcefiles:
-            cmd += ["add_files -norecurse %s" % (f)]
-        cmd += [
+        for f in self.get_rtl_file_list(abspath=True):
+            cmd.append("add_files -norecurse %s" % tcl_quote(f))
+        cmd.append(
             "create_bd_cell -type module -reference %s %s"
             % (self.get_nodeattr("gen_top_module"), self.onnx_node.name)
-        ]
+        )
         return cmd
 
     def get_verilog_top_module_intf_names(self):

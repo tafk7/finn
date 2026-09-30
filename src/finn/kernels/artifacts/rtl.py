@@ -53,7 +53,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Union
 
-import pyslang  # type: ignore[import-not-found]
+import pyslang
 from pyslang import ast, syntax
 
 from finn.kernels.artifacts.abi import ComponentABI, Direction, ObservedPort, check_against_rtl
