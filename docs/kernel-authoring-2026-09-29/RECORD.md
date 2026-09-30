@@ -423,3 +423,20 @@ transpose's known failures removed, `transpose.py`'s note rewritten, the
 `finn-inner-shuffle/docs/kernel-authoring-2026-09-29/lanes/inner-shuffle.md`.
 Adoption (push the FinnLib commit, bump `FINNLIB_COMMIT`, merge the FINN side)
 awaits the user.
+
+### Lane C adopted (the `inner_shuffle` fix)
+
+- FinnLib `99d75e8` pushed to the FinnLib remote as branch
+  `kernels/inner-shuffle-20260929` (on `d03f2fc`; only `inner_shuffle.sv` and
+  its testbench change). `FINNLIB_COMMIT` bumped; `deps/` refetched.
+- The FINN side (`da7a3e214`) merged: transpose's known failures gone,
+  `transpose.py`'s note rewritten, `adapter_numeric`'s defect cases folded into
+  `TRANSPOSES`. One conflict (the `test_conformance.py` docstring) resolved.
+- `TOLERATED_WITHIN` loses `UsedBeforeDeclared`: the fix declares its nets
+  before reading them, and nothing else needs it. `inner_shuffle` now
+  elaborates with no error at all; a use-before-declaration declines anywhere.
+- Fast gates at the new pin (Vivado off `PATH`, `FORCE_COLOR` unset): Space
+  454; kernels 822 passed, 25 skipped, no `RtlDeclined`; graph 4 + 2; dataflow
+  61. `--strict-rtl` conformance: 20 passed, 11 skipped.
+
+ADOPT_XSIM

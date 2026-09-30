@@ -514,14 +514,11 @@ def test_packed_dotp_above_simd_one_binds_through_its_generate_block_function(
     assert widths["s_axis_input_tdata"] == 16
 
 
-def test_inner_shuffle_binds_despite_nets_read_above_their_declaration(finn_root: Path) -> None:
-    """Both reads are continuous assignments: slang's only errors."""
+def test_inner_shuffle_elaborates_without_an_error(finn_root: Path) -> None:
+    """FinnLib 99d75e8 declares its nets before reading them; nothing is forgiven."""
 
     files = _finnlib_files(finn_root, INNER_SHUFFLE_CLOSURE)
-    assert _diagnosed(files, "inner_shuffle", INNER_SHUFFLE_PARAMETERS) == {
-        ("DiagCode(UsedBeforeDeclared)", "inner_shuffle.sv", 294),
-        ("DiagCode(UsedBeforeDeclared)", "inner_shuffle.sv", 314),
-    }
+    assert _diagnosed(files, "inner_shuffle", INNER_SHUFFLE_PARAMETERS) == set()
     module = _module(extract(files, "inner_shuffle", INNER_SHUFFLE_PARAMETERS))
     assert {port.name: port.width for port in module.ports}["idat"] == 12
     assert [name for name, _ in module.parameters] == ["BITS", "I", "J", "SIMD", "RAM_STYLE"]
@@ -590,14 +587,16 @@ def test_a_generate_block_function_is_tolerated_only_inside_generate_blocks(
     assert "hierarchical name is not allowed in a constant expression" in str(declined)
 
 
-def test_use_before_declaration_is_tolerated_only_in_statements(tmp_path: Path) -> None:
-    """The localparam's value is left unset by slang, so that one declines."""
+def test_use_before_declaration_declines(tmp_path: Path) -> None:
+    """Not forgiven anywhere: on a localparam slang leaves its value unset."""
 
     path, top = _source(tmp_path, USED_BEFORE_DECLARED)
     declined = extract((path,), top)
     assert isinstance(declined, Declined)
     errors = [line for line in declined.details if "error:" in line]
-    assert len(errors) == 1 and "identifier 'B' used before its declaration" in errors[0]
+    assert len(errors) == 2
+    assert any("identifier 'B' used before its declaration" in line for line in errors)
+    assert any("identifier 'w' used before its declaration" in line for line in errors)
 
 
 # -- declining, and the three outcomes --------------------------------------

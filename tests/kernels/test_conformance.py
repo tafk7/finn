@@ -21,10 +21,9 @@ whose ``parameters()`` omit a module parameter, including for modules with a
 parameter whose value the RTL checker does not establish (thresholding's
 array, eltwise's real, which is itself the omission checked).
 
-transpose's samples at SIMD 3 and 6 fail stalled, and its adapter sample fails
-in both modes: FinnLib's bursty-input ``inner_shuffle`` defect
-(``finn.kernels.transpose``). They are known failures, strictly: the case
-reports when FinnLib fixes it.
+transpose needs FinnLib with the ``inner_shuffle`` page-guard fix (pinned at
+``99d75e8``; ``finn.kernels.transpose``): at ``d03f2fc`` its samples at SIMD 3
+and 6 failed stalled, and its adapter sample failed in both modes.
 """
 
 from __future__ import annotations
@@ -267,22 +266,15 @@ def eltwise() -> dict[str, Any]:
 
 
 MATRICES = (2, 6, 6)
-BURSTY = "FinnLib inner_shuffle emits undefined lanes under bursty input"
-# Labels name the input form as beats x lanes: SIMD 3 is 24x3, SIMD 6 is 12x6.
-TRANSPOSE_BURSTY = {
-    ("input_form=24x3", "stalled"): BURSTY,
-    ("input_form=12x6", "stalled"): BURSTY,
-    ("adapter, input_form=24x3", "free"): BURSTY + ", here behind a vpc",
-    ("adapter, input_form=24x3", "stalled"): BURSTY,
-}
 
 
 def transpose() -> dict[str, Any]:
     """Rows in, columns out: the same tensor in another order, so the reference is identity.
 
     Its output stream is required, so the harness cannot read the element with it
-    unplaced: the output is given a Tensor. Under stalls ``inner_shuffle`` emits
-    undefined lanes at SIMD above 1 (``TRANSPOSE_BURSTY``).
+    unplaced: the output is given a Tensor. The stalled input (and a ``vpc``
+    feeding the adapter sample) lets the output catch up with the input, which
+    FinnLib's ``inner_shuffle`` survives only with its page-guard fix.
     """
     return dict(
         family=TransposeKernel,
@@ -291,7 +283,6 @@ def transpose() -> dict[str, Any]:
         reference=lambda input_stream: {"output_stream": input_stream},
         folds=tuple({"input_form": vector_major(MATRICES, simd)} for simd in (1, 3, 6)),
         choices={"ram_style": "auto"},
-        known=TRANSPOSE_BURSTY,
     )
 
 

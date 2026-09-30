@@ -28,9 +28,9 @@ Three things measured against real sources rather than assumed (the A0 gate):
   LRM 22.8, tolerated by Vivado, rejected by slang, and present in 66 of the
   155 files we compile.  It is tolerated here by an explicit list rather than
   by relaxing the error filter, because the two are different: one names what
-  is forgiven and why, the other forgives whatever turns up.  Two more codes
-  Vivado accepts are forgiven only *inside* the constructs that keep them from
-  a port or a parameter (``TOLERATED_WITHIN``), and declined anywhere else.
+  is forgiven and why, the other forgives whatever turns up.  One more code
+  Vivado accepts is forgiven only *inside* the constructs that keep it from a
+  port or a parameter (``TOLERATED_WITHIN``), and declined anywhere else.
 
 One thing slang will not do for us: an **undeclared parameter override is
 silently ignored**.  So the override set is checked against the declared
@@ -83,24 +83,6 @@ TOLERATED_WITHIN: Mapping[str, frozenset[str]] = MappingProxyType(
         # function raises this code outside any generate construct: declined.
         "DiagCode(ConstEvalFunctionInsideGenerate)": frozenset(
             {"IfGenerate", "LoopGenerate", "CaseGenerate"}
-        ),
-        # FinnLib's inner_shuffle reads a net in a continuous assignment above
-        # its declaration (``xelab -relax`` accepts it).  A continuous
-        # assignment or a procedural block reads nets and variables, which no
-        # constant expression can depend on (a constant declared inside a
-        # procedural block is local to it), so no port width or parameter
-        # value.  On a declaration -- a localparam reading one declared later --
-        # the same code is declined: slang leaves that value unset.
-        "DiagCode(UsedBeforeDeclared)": frozenset(
-            {
-                "ContinuousAssign",
-                "AlwaysBlock",
-                "AlwaysCombBlock",
-                "AlwaysFFBlock",
-                "AlwaysLatchBlock",
-                "InitialBlock",
-                "FinalBlock",
-            }
         ),
     }
 )
