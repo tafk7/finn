@@ -7,8 +7,9 @@
 #   - the rest of the kernel suite with Vivado selected,
 #   - the numeric XSI sweeps (MatMul, dotp, adapters), one simulation per process.
 #
-# For "XSim from a commit", run it in a worktree detached at that commit, with
-# its own .venv (uv sync). FinnLib is the `finnlib` resource, as in every run.
+# For "XSim from a commit", run it in a worktree or clone at that commit: natively
+# with its own .venv (uv sync), or in a sandbox with the image's environment.
+# FinnLib is the `finnlib` resource, as in every run.
 #
 #   bash scripts/xsim-sweep.sh [OUT]      -> OUT/summary.log, exit 0 only if all pass
 #
@@ -30,7 +31,9 @@ if [ -z "${XILINX_VIVADO:-}" ]; then
     echo "no Vivado selected: set FINN_XILINX_PATH/FINN_XILINX_VERSION or XILINX_VIVADO" >&2
     exit 2
 fi
+# The checkout's own environment natively; the image's active one in a container or sandbox.
 PY="$ROOT/.venv/bin/python"
+[ -x "$PY" ] || PY=$(command -v python3)
 export PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$ROOT/src:$ROOT/tests" FINN_ROOT="$ROOT"
 export FINN_XELAB_MT="${FINN_XELAB_MT:-2}"
 unset FORCE_COLOR
