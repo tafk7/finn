@@ -36,6 +36,7 @@ from pyslang import ast, syntax
 
 from finn.kernels.artifacts.rtl import (
     TOLERATED_DIAGNOSTICS,
+    TOLERATED_WITHIN,
     Declined,
     ExtractedModule,
     check_abi,
@@ -68,6 +69,72 @@ FINNLIB_CLOSURE = (
     "rtl/linalg/dotp_axi.sv",
 )
 
+#: ``thresholding_axi``: ``THRESHOLDS`` is an unpacked array, [SETS][C][N] of WT bits.
+THRESHOLDING_CLOSURE = (
+    "rtl/infra/axilite.sv",
+    "rtl/nonlin/thresholding.sv",
+    "rtl/nonlin/thresholding_axi.sv",
+)
+THRESHOLDING_PARAMETERS = (
+    ("WI", "4"),
+    ("WT", "4"),
+    ("N", "3"),
+    ("C", "2"),
+    ("PE", "2"),
+    ("USE_AXILITE", "0"),
+    ("THRESHOLDS", "'{'{'{4'h1, 4'h2, 4'h3}, '{4'h4, 4'h5, 4'h6}}}"),
+)
+
+#: ``eltwise``: ``B_SCALE`` is a ``shortreal``.
+ELTWISE_CLOSURE = (
+    "rtl/arith/binopi.sv",
+    "rtl/arith/binopf.sv",
+    "rtl/arith/int_to_fp32.sv",
+    "rtl/infra/fifo.sv",
+    "rtl/arith/eltwise.sv",
+)
+ELTWISE_PARAMETERS = (
+    ("OP", '"ADD"'),
+    ("PE", "2"),
+    ("B_SCALE", "0.5"),
+    ("A_FLOAT", "0"),
+    ("B_FLOAT", "0"),
+    ("A_WIDTH", "4"),
+    ("A_SIGNED", "1"),
+    ("B_WIDTH", "4"),
+    ("B_SIGNED", "1"),
+)
+
+#: The packed ``dotp`` core at SIMD 3: ``add_multi`` builds an adder tree.
+PACKED_DOTP_CLOSURE = (
+    "rtl/arith/add_multi_pkg.sv",
+    "rtl/arith/add_multi.sv",
+    "rtl/linalg/dotp.sv",
+    "rtl/linalg/dotp_axi.sv",
+)
+PACKED_DOTP_PARAMETERS = (
+    ("VERSION", "2"),
+    ("CORE", '"dotp"'),
+    ("ACTIVATION_BROADCASTING", "1"),
+    ("PE", "2"),
+    ("SIMD", "3"),
+    ("SEGMENTLEN", "1"),
+    ("ACTIVATION_WIDTH", "4"),
+    ("WEIGHT_WIDTH", "4"),
+    ("ACCU_WIDTH", "10"),
+    ("NARROW_WEIGHTS", "0"),
+    ("SIGNED_ACTIVATIONS", "1"),
+    ("PUMPED_COMPUTE", "0"),
+    ("FORCE_BEHAVIORAL", "0"),
+)
+
+INNER_SHUFFLE_CLOSURE = (
+    "rtl/infra/fifo.sv",
+    "rtl/infra/elasticmem.sv",
+    "rtl/shape/inner_shuffle.sv",
+)
+INNER_SHUFFLE_PARAMETERS = (("BITS", "4"), ("I", "6"), ("J", "6"), ("SIMD", "3"))
+
 
 @pytest.fixture(name="replay")
 def _replay(finn_root: Path) -> Path:
@@ -85,6 +152,24 @@ def _finnlib(finn_root: Path) -> tuple[Path, ...]:
     if any(not path.is_file() for path in files):
         pytest.skip("FinnLib is not fetched; set FINNLIB_ROOT or run fetch-repos.sh")
     return files
+
+
+def _finnlib_files(finn_root: Path, names: tuple[str, ...]) -> tuple[Path, ...]:
+    finnlib_root = Path(os.environ.get("FINNLIB_ROOT", finn_root / "deps/finnlib"))
+    files = tuple(finnlib_root / name for name in names)
+    if any(not path.is_file() for path in files):
+        pytest.skip("FinnLib is not fetched; set FINNLIB_ROOT or run fetch-repos.sh")
+    return files
+
+
+@pytest.fixture(name="thresholding")
+def _thresholding(finn_root: Path) -> tuple[Path, ...]:
+    return _finnlib_files(finn_root, THRESHOLDING_CLOSURE)
+
+
+@pytest.fixture(name="eltwise")
+def _eltwise(finn_root: Path) -> tuple[Path, ...]:
+    return _finnlib_files(finn_root, ELTWISE_CLOSURE)
 
 
 def _module(extraction: object) -> ExtractedModule:
@@ -225,6 +310,294 @@ def test_a_declared_stream_is_checked_through_its_flipped_signature(
     assert not isinstance(issues, Declined)
     # Only the ports this partial ABI omits, and none about the ones it declares.
     assert all("s_axis_weights" not in issue for issue in issues)
+
+
+# -- a name is established before its value ------------------------------------
+
+
+def test_an_array_parameter_is_named_and_its_value_is_not_invented(
+    thresholding: tuple[Path, ...],
+) -> None:
+    """``THRESHOLDS`` used to decline the whole module; now only its value is unknown."""
+
+    module = _module(extract(thresholding, "thresholding_axi", THRESHOLDING_PARAMETERS))
+    parameters = dict(module.parameters)
+    assert set(parameters) == {
+        "WI", "WT", "N", "C", "PE", "SIGNED", "FPARG", "BIAS", "SETS", "THRESHOLDS",
+        "THRESHOLDS_FILE", "USE_AXILITE", "DEPTH_TRIGGER_URAM", "DEPTH_TRIGGER_BRAM",
+        "DEEP_PIPELINE",
+    }  # fmt: skip
+    assert parameters["THRESHOLDS"] is None
+    assert module.unestablished == ("THRESHOLDS",)
+    # The values that are integers are still established, and derived ones evaluated.
+    assert parameters["C"] == 2 and parameters["PE"] == 2
+    assert dict(module.local_parameters)["ADDR_WIDTH"] == 5  # $clog2(PE) + $clog2(N) + 2
+    widths = {port.name: port.width for port in module.ports}
+    # Both byte-padded: PE * WI = 8, PE * O_BITS = 4 -> 8.
+    assert widths["s_axis_tdata"] == 8 and widths["m_axis_tdata"] == 8
+
+
+def test_a_real_parameter_is_named_and_its_value_is_not_invented(
+    eltwise: tuple[Path, ...],
+) -> None:
+    module = _module(extract(eltwise, "eltwise", ELTWISE_PARAMETERS))
+    parameters = dict(module.parameters)
+    assert "B_SCALE" in parameters and parameters["B_SCALE"] is None
+    assert module.unestablished == ("B_SCALE",)
+    assert parameters["PE"] == 2 and parameters["A_WIDTH"] == 4
+    widths = {port.name: port.width for port in module.ports}
+    assert widths["adat"] == 8 and widths["bdat"] == 8 and widths["odat"] == 10
+
+
+def test_a_value_that_is_not_an_integer_or_string_is_never_supplied(tmp_path: Path) -> None:
+    """Every kind of such parameter, declared and local: the name, and ``None``."""
+
+    source = tmp_path / "mixed.sv"
+    source.write_text(
+        "module mixed #(\n"
+        "  parameter int W = 4,\n"
+        "  parameter real SCALE = 1.5,\n"
+        "  parameter bit [3:0] TABLE [2] = '{4'd1, 4'd2},\n"
+        "  parameter type T = logic [W-1:0],\n"
+        '  parameter string NAME = "x"\n'
+        ") (input T a, output logic [W-1:0] y);\n"
+        "  localparam real HALF = SCALE / 2;\n"
+        "  localparam int TWICE = 2 * W;\n"
+        "  assign y = a;\n"
+        "endmodule\n"
+    )
+    module = _module(extract((source,), "mixed", (("W", "8"), ("SCALE", "2.5"))))
+    assert module.parameters == (
+        ("W", 8),
+        ("SCALE", None),
+        ("TABLE", None),
+        ("T", None),
+        ("NAME", "x"),
+    )
+    assert module.local_parameters == (("HALF", None), ("TWICE", 16))
+    assert module.unestablished == ("SCALE", "TABLE", "T", "HALF")
+    assert {port.name: port.width for port in module.ports} == {"a": 8, "y": 8}
+
+
+def _thresholding_abi(data: str, width: int) -> ComponentABI:
+    """``thresholding_axi``'s pins at C = PE = 2, WI = WT = 4, N = 3; the input bus as given.
+
+    Five address bits: ``$clog2(PE) + $clog2(N) + 2``.
+    """
+
+    axilite = (
+        ("AWVALID", Direction.IN, 1), ("AWREADY", Direction.OUT, 1),
+        ("AWADDR", Direction.IN, 5), ("WVALID", Direction.IN, 1),
+        ("WREADY", Direction.OUT, 1), ("WDATA", Direction.IN, 32),
+        ("WSTRB", Direction.IN, 4), ("BVALID", Direction.OUT, 1),
+        ("BREADY", Direction.IN, 1), ("BRESP", Direction.OUT, 2),
+        ("ARVALID", Direction.IN, 1), ("ARREADY", Direction.OUT, 1),
+        ("ARADDR", Direction.IN, 5), ("RVALID", Direction.OUT, 1),
+        ("RREADY", Direction.IN, 1), ("RDATA", Direction.OUT, 32),
+        ("RRESP", Direction.OUT, 2),
+    )  # fmt: skip
+    return ComponentABI(
+        entry_point="thresholding_axi",
+        ports=(
+            Signal("ap_clk", Direction.IN, 1, Clock(Free())),
+            Signal("ap_rst_n", Direction.IN, 1, Reset(active_low=True)),
+            *(Signal(f"s_axilite_{name}", direction, bits) for name, direction, bits in axilite),
+            Signal("s_axis_set_tready", Direction.OUT, 1),
+            Signal("s_axis_set_tvalid", Direction.IN, 1),
+            Signal("s_axis_set_tdata", Direction.IN, 8),
+            Signal("s_axis_tready", Direction.OUT, 1),
+            Signal("s_axis_tvalid", Direction.IN, 1),
+            Signal(data, Direction.IN, width),
+            Signal("m_axis_tready", Direction.IN, 1),
+            Signal("m_axis_tvalid", Direction.OUT, 1),
+            Signal("m_axis_tdata", Direction.OUT, 8),
+        ),
+    )
+
+
+def test_a_module_with_an_unestablished_value_is_still_checked(
+    thresholding: tuple[Path, ...],
+) -> None:
+    """The pins agree, so the comparison ran and found nothing to refuse."""
+
+    abi = _thresholding_abi("s_axis_tdata", 8)
+    assert check_abi(abi, thresholding, "thresholding_axi", THRESHOLDING_PARAMETERS) == ()
+
+
+def test_a_wrong_pin_is_refused_beside_an_unestablished_value(
+    thresholding: tuple[Path, ...], eltwise: tuple[Path, ...]
+) -> None:
+    wide = check_abi(
+        _thresholding_abi("s_axis_tdata", 16),
+        thresholding,
+        "thresholding_axi",
+        THRESHOLDING_PARAMETERS,
+    )
+    assert not isinstance(wide, Declined)
+    assert any("s_axis_tdata" in issue and "16 bits" in issue for issue in wide)
+
+    misnamed = check_abi(
+        _thresholding_abi("s_axis_TDATA", 8),
+        thresholding,
+        "thresholding_axi",
+        THRESHOLDING_PARAMETERS,
+    )
+    assert not isinstance(misnamed, Declined)
+    assert any("s_axis_TDATA" in issue and "case sensitive" in issue for issue in misnamed)
+
+    narrow = check_abi(
+        ComponentABI("eltwise", (Signal("adat", Direction.IN, 4),)),
+        eltwise,
+        "eltwise",
+        ELTWISE_PARAMETERS,
+    )
+    assert not isinstance(narrow, Declined)
+    assert any("adat" in issue and "4 bits" in issue for issue in narrow)
+
+
+def test_a_binding_naming_an_undeclared_parameter_still_declines_beside_an_array(
+    thresholding: tuple[Path, ...],
+) -> None:
+    declined = extract(
+        thresholding, "thresholding_axi", THRESHOLDING_PARAMETERS + (("THRESHOLD", "0"),)
+    )
+    assert isinstance(declined, Declined)
+    assert declined.details == ("THRESHOLD",)
+
+
+# -- diagnostics tolerated only where they cannot reach a port or parameter ------
+
+
+def _diagnosed(
+    files: tuple[Path, ...], top: str, parameters: tuple[tuple[str, str], ...]
+) -> set[tuple[str, str, int]]:
+    """Every error slang reports, by code, file and line, the tolerances aside."""
+
+    options = ast.CompilationOptions()
+    options.topModules = {top}
+    options.flags = ast.CompilationFlags.IgnoreUnknownModules
+    options.paramOverrides = [f"{name}={value}" for name, value in parameters]
+    compilation = ast.Compilation(pyslang.Bag([options]))
+    for path in files:
+        compilation.addSyntaxTree(syntax.SyntaxTree.fromFile(str(path)))
+    manager = compilation.sourceManager
+    return {
+        (
+            str(diagnostic.code),
+            Path(manager.getFileName(diagnostic.location)).name,
+            manager.getLineNumber(diagnostic.location),
+        )
+        for diagnostic in compilation.getAllDiagnostics()
+        if diagnostic.isError() and str(diagnostic.code) not in TOLERATED_DIAGNOSTICS
+    }
+
+
+def test_every_confining_construct_is_a_syntax_kind() -> None:
+    for kinds in TOLERATED_WITHIN.values():
+        for kind in kinds:
+            assert isinstance(getattr(syntax.SyntaxKind, kind), syntax.SyntaxKind)
+
+
+def test_packed_dotp_above_simd_one_binds_through_its_generate_block_function(
+    finn_root: Path,
+) -> None:
+    """``add_multi`` calls a function of its generate block in a constant: slang's only error."""
+
+    files = _finnlib_files(finn_root, PACKED_DOTP_CLOSURE)
+    assert _diagnosed(files, "dotp_axi", PACKED_DOTP_PARAMETERS) == {
+        ("DiagCode(ConstEvalFunctionInsideGenerate)", "add_multi.sv", 45)
+    }
+    module = _module(extract(files, "dotp_axi", PACKED_DOTP_PARAMETERS))
+    widths = {port.name: port.width for port in module.ports}
+    # Byte-padded: PE * SIMD * WEIGHT_WIDTH = 24, SIMD * ACTIVATION_WIDTH = 12 -> 16.
+    assert widths["s_axis_weights_tdata"] == 24
+    assert widths["s_axis_input_tdata"] == 16
+
+
+def test_inner_shuffle_binds_despite_nets_read_above_their_declaration(finn_root: Path) -> None:
+    """Both reads are continuous assignments: slang's only errors."""
+
+    files = _finnlib_files(finn_root, INNER_SHUFFLE_CLOSURE)
+    assert _diagnosed(files, "inner_shuffle", INNER_SHUFFLE_PARAMETERS) == {
+        ("DiagCode(UsedBeforeDeclared)", "inner_shuffle.sv", 294),
+        ("DiagCode(UsedBeforeDeclared)", "inner_shuffle.sv", 314),
+    }
+    module = _module(extract(files, "inner_shuffle", INNER_SHUFFLE_PARAMETERS))
+    assert {port.name: port.width for port in module.ports}["idat"] == 12
+    assert [name for name, _ in module.parameters] == ["BITS", "I", "J", "SIMD", "RAM_STYLE"]
+
+
+GENERATE_LOCAL = """
+module generate_local #(parameter int N = 3) (input logic [N-1:0] x, output logic [N-1:0] y);
+  if (N > 1) begin : g
+    function automatic int f(); return N + 1; endfunction
+    localparam int L = f();
+  end
+  assign y = x;
+endmodule
+"""
+#: Called from module level, the same function would feed a module parameter.
+MODULE_LEVEL_CALL = """
+module module_level_call #(parameter int N = 3) (input logic [N-1:0] x);
+  if (1) begin : g
+    function automatic int f(); return N + 1; endfunction
+  end
+  localparam int Q = g.f();
+endmodule
+"""
+#: Read by name instead, the generate block's constant is refused outright.
+HIERARCHICAL_READ = """
+module hierarchical_read #(parameter int N = 3) (input logic [N-1:0] x);
+  if (1) begin : g
+    function automatic int f(); return N + 1; endfunction
+    localparam int L = f();
+  end
+  localparam int Q = g.L;
+endmodule
+"""
+USED_BEFORE_DECLARED = """
+module used_before_declared #(parameter int N = 3) (input logic [N-1:0] x, output logic [N-1:0] y);
+  assign y = w;
+  logic [N-1:0] w;
+  assign w = x;
+  localparam int A = B;
+  localparam int B = 5;
+endmodule
+"""
+
+
+def _source(tmp_path: Path, text: str) -> tuple[Path, str]:
+    top = text.removeprefix("\nmodule ").split(" ", maxsplit=1)[0]
+    path = tmp_path / f"{top}.sv"
+    path.write_text(text)
+    return path, top
+
+
+def test_a_generate_block_function_is_tolerated_only_inside_generate_blocks(
+    tmp_path: Path,
+) -> None:
+    path, top = _source(tmp_path, GENERATE_LOCAL)
+    assert dict(_module(extract((path,), top)).parameters) == {"N": 3}
+
+    path, top = _source(tmp_path, MODULE_LEVEL_CALL)
+    declined = extract((path,), top)
+    assert isinstance(declined, Declined)
+    assert "cannot call a function declared inside a generate block" in str(declined)
+
+    path, top = _source(tmp_path, HIERARCHICAL_READ)
+    declined = extract((path,), top)
+    assert isinstance(declined, Declined)
+    assert "hierarchical name is not allowed in a constant expression" in str(declined)
+
+
+def test_use_before_declaration_is_tolerated_only_in_statements(tmp_path: Path) -> None:
+    """The localparam's value is left unset by slang, so that one declines."""
+
+    path, top = _source(tmp_path, USED_BEFORE_DECLARED)
+    declined = extract((path,), top)
+    assert isinstance(declined, Declined)
+    errors = [line for line in declined.details if "error:" in line]
+    assert len(errors) == 1 and "identifier 'B' used before its declaration" in errors[0]
 
 
 # -- declining, and the three outcomes --------------------------------------
