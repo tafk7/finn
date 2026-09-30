@@ -63,11 +63,11 @@ def layered(*, adaptable: bool = True):
         # One pass of each layer's weights, in the order that layer reads them.
         @derived
         def first_period(self) -> Traversal:
-            return period(self.first.w.sequence.form)
+            return period(self.first.w.presented.form)
 
         @derived
         def second_period(self) -> Traversal:
-            return period(self.second.w.sequence.form)
+            return period(self.second.w.presented.form)
 
         rom1 = MemStreamKernel(dtype=W, form=first_period, contents=W1, output_stream=w1)
         rom2 = MemStreamKernel(dtype=W, form=second_period, contents=W2, output_stream=w2)

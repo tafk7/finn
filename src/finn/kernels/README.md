@@ -82,8 +82,10 @@ node per stream interface, and an `admission` group. The base derives the
 module's ABI (clocking, then every port's bus), `build_requirements` (accepted
 under `admission`), `tieoffs` and the `MODULE`/`TIEOFFS` exports. A port
 (`port.py`) takes its element from the stream it sits on and admits it by an
-integer policy; a `ScheduledPort` presents its kernel's schedule through the
-indices it reads. A core therefore sits between streams, whose tensors give
+integer policy; an `AxiStreamPort` presents its kernel's schedule through the
+indices it reads, and the kernel binds each index's extent from the tensors
+its ports read (`Kernel.extents`, `extent_of`; ports that disagree are refused
+as `kernel-extents`). A core therefore sits between streams, whose tensors give
 its elements and extents; its folds are its own Decisions:
 
 ```python

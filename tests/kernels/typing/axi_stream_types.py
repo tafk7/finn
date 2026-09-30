@@ -16,7 +16,7 @@ from finn.kernels.eltwise import EltwiseKernel
 from finn.kernels.physical.axi_stream import AxiStream
 from finn.kernels.physical.layout import PackedBeatLayout
 from finn.kernels.physical.stream import ReadyValidStream
-from finn.kernels.port import GivenPort, ScheduledPort, StreamPort
+from finn.kernels.port import AxiStreamPort, GivenPort
 
 
 def declare(dtype: QONNXDataType) -> None:
@@ -28,21 +28,21 @@ def declare(dtype: QONNXDataType) -> None:
 
 def check(point: DotpAxiKernel, eltwise: EltwiseKernel) -> None:
     # Class access: nodes typed as their families, references typed as values.
-    assert_type(DotpAxiKernel.x, ScheduledPort)
+    assert_type(DotpAxiKernel.x, AxiStreamPort)
     assert_type(DotpAxiKernel.x.element, ScalarEncoding)
     assert_type(DotpAxiKernel.x.axis, AxiStream)
-    assert_type(DotpAxiKernel.x.sequence, BeatSequence)
-    assert_type(StreamPort.pins, View[tuple[object, ...]])
+    assert_type(DotpAxiKernel.x.presented, BeatSequence)
+    assert_type(AxiStreamPort.pins, View[tuple[object, ...]])
     assert_type(point.query(DotpAxiKernel.pe), QueryResult[int])
     # Configuration reads.
-    assert_type(point.x, ScheduledPort)
+    assert_type(point.x, AxiStreamPort)
     assert_type(point.x.element, ScalarEncoding)
     assert_type(point.x.axis, AxiStream)
     assert_type(point.x.axis.payload, PackedBeatLayout)
     assert_type(point.x.pins, tuple[object, ...])
-    assert_type(point.x.inspect(StreamPort.pins), ViewAssessment[tuple[object, ...]])
-    assert_type(point.x.query(StreamPort.pins), QueryResult[tuple[object, ...]])
-    assert_type(point.x.field(StreamPort.pins), BoundValue[tuple[object, ...]])
+    assert_type(point.x.inspect(AxiStreamPort.pins), ViewAssessment[tuple[object, ...]])
+    assert_type(point.x.query(AxiStreamPort.pins), QueryResult[tuple[object, ...]])
+    assert_type(point.x.field(AxiStreamPort.pins), BoundValue[tuple[object, ...]])
     assert_type(point.pe, int)
     assert_type(point.schedule, Schedule)
     assert_type(eltwise.lhs, GivenPort)

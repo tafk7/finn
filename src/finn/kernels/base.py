@@ -28,7 +28,7 @@ its children's modules through streams instead (``finn.kernels.composite``).
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import ClassVar
 
 from finn.core.space import (
@@ -56,6 +56,7 @@ from finn.kernels.artifacts.abi import (
     Reset,
     Signal,
 )
+from finn.dataflow.schedule import Access, Index, Refused, Schedule, bind_extents
 from finn.kernels.physical.contract import STREAM_CONTRACT
 from finn.kernels.artifacts.requirements import (
     FixedModuleName,
@@ -73,6 +74,10 @@ PORT = ViewKey("port", STREAM_CONTRACT)
 
 PINS = ViewKey("pins", default_semantics(tuple))
 """A port's pins (signals, or one bus), collected by its kernel into the module's ABI."""
+
+ACCESS = ViewKey("access", default_semantics(Access))
+"""A placed scheduled port's read of its stream's tensor, collected by its kernel to bind
+the extents of its indices (``finn.dataflow.schedule.bind_extents``)."""
 
 
 @dataclass(frozen=True)
@@ -175,6 +180,7 @@ class Kernel(Space):
 
     port_pins = Members(PINS)
     port_holds = Members(HELD)
+    port_accesses = Members(ACCESS)
     admission = ConstraintGroup()
 
     def parameters(self) -> Mapping[str, int | str] | Rejected:
@@ -196,6 +202,39 @@ class Kernel(Space):
     @derived
     def clocking(self) -> Clocking:
         return Clocking()
+
+    # -- extents and the schedule --------------------------------------------------------
+
+    def _bound(self, extents: Mapping[Index, int] | None = None) -> dict[Index, int] | Rejected:
+        accesses = [replace(item.value, name=item.node or "") for item in self.port_accesses]
+        try:
+            return bind_extents(accesses, extents)
+        except Refused as error:
+            return reject("kernel-extents", str(error))
+
+    @derived
+    def extents(self) -> dict[Index, int] | Rejected:
+        """Each index's extent, bound from the tensors its placed ports read."""
+        return self._bound()
+
+    def bound_schedule(
+        self,
+        beats: tuple[Index, ...],
+        folds: Mapping[Index, int] | None = None,
+        extents: Mapping[Index, int] | None = None,
+    ) -> Schedule | Rejected:
+        """The schedule over ``beats`` (outer to inner), each index's extent bound from the
+        ports' tensors (and any ``extents`` the kernel gives), folded by ``folds``."""
+        bound = self.extents if extents is None else self._bound(extents)
+        if isinstance(bound, Rejected):
+            return bound
+        missing = [index for index in beats if index not in bound]
+        if missing:
+            return reject("kernel-extents", f"{missing} are bound by no placed port")
+        try:
+            return Schedule({index: bound[index] for index in beats}, folds, beats)
+        except ValueError as error:
+            return reject("kernel-schedule", str(error))
 
     # -- derived plumbing ------------------------------------------------------------------
 
@@ -236,7 +275,25 @@ class Kernel(Space):
     exports = {MODULE: build_requirements, TIEOFFS: tieoffs}
 
 
+def extent_of(index: Index) -> int:
+    """A derived member: ``index``'s extent, bound from the kernel's placed ports.
+
+    Name it in the class body (``channels = extent_of(c)``) and read that name,
+    in a fold's ``divisors_of`` domain for instance; used inline inside another
+    declaration it is not a member of the class, and linking refuses it.
+    """
+
+    def extent(self: Kernel) -> int | Rejected:
+        extents = self.extents
+        if index not in extents:
+            return reject("kernel-extents", f"{index!r} is bound by no placed port")
+        return extents[index]
+
+    return derived(extent)
+
+
 __all__ = [
+    "ACCESS",
     "Clocking",
     "HELD",
     "Kernel",
@@ -248,4 +305,5 @@ __all__ = [
     "TIEOFFS",
     "TIEOFFS_SEMANTICS",
     "Tieoffs",
+    "extent_of",
 ]

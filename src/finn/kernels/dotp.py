@@ -19,9 +19,10 @@ packed low first; only the complete beat is padded to a byte boundary.
 Activation TLAST closes each reduction and produces one result beat.
 
 Its three ports (``x``, ``w``, ``y``) sit on the streams its parent supplies
-(``x_stream``, ``w_stream``, ``y_stream``). The extents come from those
-streams' tensors: M and N from the results, K from the weights, stored
-``(k, n)``. PE and SIMD are dotp's own Decisions, the folds of ``n`` and ``k``,
+(``x_stream``, ``w_stream``, ``y_stream``). The extents are bound from the
+tensors the ports read, which must agree (``kernel-extents``): x reads
+``(m, k)`` (``(m, k, n)`` depthwise), w ``(k, n)`` (weights stored ``(k, n)``)
+and y ``(m, n)``. PE and SIMD are dotp's own Decisions, the folds of ``n`` and ``k``,
 and its ``schedule`` walks ``m``, then ``n``, then ``k`` innermost; every
 port's beat sequence derives from it. ``reshape_activations`` reads (M, K, N)
 activations as (M, K * N): a densely realized depthwise operation.
@@ -53,9 +54,9 @@ from finn.dataflow.schedule import Index, Schedule
 from finn.dataflow.stream import Stream
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.contribution_types import CopiedSource
-from finn.kernels.base import Clocking, Kernel
+from finn.kernels.base import Clocking, Kernel, extent_of
 from finn.kernels.datatypes.domains import Integer
-from finn.kernels.port import ScheduledPort
+from finn.kernels.port import AxiStreamPort
 from finn.kernels.target import DspBlock, dsp_widths
 
 _DSP_VERSION = {DspBlock.DSP48E1: 1, DspBlock.DSP48E2: 2, DspBlock.DSP58: 3}
@@ -88,33 +89,19 @@ class DotpAxiKernel(Kernel):
     w_stream: Stream = Param(required=False)
     y_stream: Stream = Param(required=False)
 
-    @derived
-    def rows(self) -> int:
-        """M: the results' rows."""
-        return self.y_stream.tensor.shape[0]
-
-    @derived
-    def outputs(self) -> int:
-        """N: the results' columns."""
-        return self.y_stream.tensor.shape[-1]
-
-    @derived
-    def reduction(self) -> int:
-        """K: the weights' rows, stored (k, n)."""
-        return self.w_stream.tensor.shape[0]
+    # Each extent bound from the tensors the ports read (``Kernel.extents``).
+    rows = extent_of(m)  # M: the results' rows
+    outputs = extent_of(n)  # N: the results' columns
+    reduction = extent_of(k)  # K: the weights' rows, stored (k, n)
 
     pe: int = Decision(domain=divisors_of(outputs))
     simd: int = Decision(domain=divisors_of(reduction))
     compute_pumping: bool = Decision(values=(False, True))
 
     @derived
-    def schedule(self) -> Schedule:
+    def schedule(self) -> Schedule | Rejected:
         """``n`` folded by PE and ``k`` by SIMD; ``m``, then ``n``, then the reduction."""
-        return Schedule(
-            {m: self.rows, n: self.outputs, k: self.reduction},
-            folds={n: self.pe, k: self.simd},
-            beats=(m, n, k),
-        )
+        return self.bound_schedule(beats=(m, n, k), folds={n: self.pe, k: self.simd})
 
     @derived
     def x_index(self) -> tuple[Index, ...]:
@@ -125,7 +112,7 @@ class DotpAxiKernel(Kernel):
         """dotp_axi's activation fields: SIMD alone, or ``s * PE + p`` depthwise."""
         return (k, n) if self.form is Form.DEPTHWISE else (k,)
 
-    x = ScheduledPort(
+    x = AxiStreamPort(
         name="s_axis_input",
         endpoint=Endpoint.TARGET,
         stream=x_stream,
@@ -136,7 +123,7 @@ class DotpAxiKernel(Kernel):
         closes=(k,),
         reshaped=reshape_activations,
     )
-    w = ScheduledPort(
+    w = AxiStreamPort(
         name="s_axis_weights",
         endpoint=Endpoint.TARGET,
         stream=w_stream,
@@ -145,7 +132,7 @@ class DotpAxiKernel(Kernel):
         index=(k, n),
         lanes=(n, k),
     )
-    y = ScheduledPort(
+    y = AxiStreamPort(
         name="m_axis_output",
         endpoint=Endpoint.INITIATOR,
         stream=y_stream,

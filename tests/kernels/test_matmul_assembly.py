@@ -195,7 +195,7 @@ def test_the_space_settles_the_core_and_the_core_owns_its_folds():
     assert point.inspect(MatMulKernel.admission).result == Available(True)
     assert point.compute.y.element.dtype == point.result_type
     _ = point.compute.build_requirements
-    assert point.compute.y.sequence.form.beats == 4
+    assert point.compute.y.presented.form.beats == 4
     assert point.structure.requirements == point.build_requirements
     assert not hasattr(MatMulKernel, "contract") and not hasattr(MatMulKernel, "pe")
     refused = commit(

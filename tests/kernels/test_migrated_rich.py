@@ -34,11 +34,11 @@ def generator(
     *,
     bits: int = 13,
     frame: int = 6,
-    extents: IntegerVector = (3, 6),
+    dims: IntegerVector = (3, 6),
     strides: IntegerVector = (0, 1),
 ) -> InputGeneratorKernel:
     return design_space(
-        InputGeneratorKernel(word_bits=bits, frame_words=frame, extents=extents, strides=strides)
+        InputGeneratorKernel(word_bits=bits, frame_words=frame, dims=dims, strides=strides)
     ).with_choices(ram_style="auto")
 
 
@@ -112,7 +112,7 @@ def test_generator_preserves_zero_stride_replay_and_multibit_native_markers() ->
     assert widths["idat"] == widths["odat"] == 13
     assert widths["olst"] == 2
     assert all(isinstance(port, Signal) for port in requirements.abi.ports)
-    ranked = generator(frame=56, extents=(3, 4, 2, 3), strides=(16, 1, 16, 2))
+    ranked = generator(frame=56, dims=(3, 4, 2, 3), strides=(16, 1, 16, 2))
     ports = ranked.build_requirements.abi.ports
     assert (
         next(port.width for port in ports if isinstance(port, Signal) and port.name == "olst") == 4
@@ -120,14 +120,14 @@ def test_generator_preserves_zero_stride_replay_and_multibit_native_markers() ->
 
 
 @pytest.mark.parametrize(
-    ("extents", "strides"),
+    ("dims", "strides"),
     (((), ()), ((3, 6), (1,)), ((2, 6), (1, 1)), ((3, 6), (-1, 1)), ((0, 6), (0, 1))),
 )
 def test_generator_refuses_invalid_loop_geometry(
-    extents: IntegerVector, strides: IntegerVector
+    dims: IntegerVector, strides: IntegerVector
 ) -> None:
     assert isinstance(
-        generator(extents=extents, strides=strides)
+        generator(dims=dims, strides=strides)
         .inspect(InputGeneratorKernel.build_requirements)
         .accepted_result,
         Rejected,
@@ -138,7 +138,7 @@ def test_generator_refuses_invalid_loop_geometry(
 def test_generator_requires_exact_immutable_integer_vectors(bad: object) -> None:
     # A bad literal is refused at the node call.
     with pytest.raises(DefinitionError, match="integer vector"):
-        generator(extents=cast(IntegerVector, bad))
+        generator(dims=cast(IntegerVector, bad))
 
 
 def test_threshold_output_initialization_and_configuration_profiles_are_preserved() -> None:

@@ -54,7 +54,7 @@ def fifo(**changes):
 
 
 def generator(**changes):
-    facts = dict(word_bits=13, frame_words=6, extents=(3, 6), strides=(0, 1))
+    facts = dict(word_bits=13, frame_words=6, dims=(3, 6), strides=(0, 1))
     facts.update(changes)
     return point_for(InputGeneratorKernel, facts, ram_style="auto")
 
@@ -142,7 +142,7 @@ def native_ports(requirements, tmp_path):
         fifo,
         lambda: fifo(depth=64, word_bits=17),
         generator,
-        lambda: generator(frame_words=56, extents=(3, 4, 2, 3), strides=(16, 1, 16, 2)),
+        lambda: generator(frame_words=56, dims=(3, 4, 2, 3), strides=(16, 1, 16, 2)),
         converter,
         lambda: converter("BINARY"),
         lambda: converter("INT128"),
@@ -188,9 +188,9 @@ def test_native_rtl_pin_names_directions_and_widths(factory, tmp_path):
     [
         lambda: fifo(word_bits=0),
         lambda: fifo(depth=1),
-        lambda: generator(extents=()),
+        lambda: generator(dims=()),
         lambda: generator(strides=(1,)),
-        lambda: generator(extents=(2, 6), strides=(1, 1)),
+        lambda: generator(dims=(2, 6), strides=(1, 1)),
         lambda: generator(strides=(-1, 1)),
         lambda: converter("FLOAT32"),
         lambda: converter("BIPOLAR"),
@@ -232,7 +232,7 @@ def test_typed_integer_vectors_and_tables_reject_mutable_or_mistyped_payloads():
     # A mistyped formal is refused at the node call.
     for bad in ([3, 6], (3, True), (3, [6])):
         with pytest.raises(DefinitionError):
-            generator(extents=bad)
+            generator(dims=bad)
     with pytest.raises(DefinitionError):
         threshold(thresholds=(([-2, 0, 3],),))
 
@@ -391,7 +391,7 @@ def flow_case(case):
             ".clk, .rst, .idat(adat), .ivld(avld), .irdy(ardy), .odat, .ovld, .ordy",
         )
     if case == "generator":
-        point = generator(frame_words=4, extents=(2, 4), strides=(0, 1))
+        point = generator(frame_words=4, dims=(2, 4), strides=(0, 1))
         inputs = [10, 20, 30, 40, 50, 60, 70, 80]
         outputs = []
         for frame in (inputs[:4], inputs[4:]):

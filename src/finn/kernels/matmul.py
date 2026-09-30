@@ -298,7 +298,7 @@ class MatMulKernel(Composite):
     @derived
     def weight_period(self) -> Traversal:
         """One pass of the weights in the order the core reads them: what a memory stores."""
-        return period(self.compute.w.sequence.form)
+        return period(self.compute.w.presented.form)
 
     # The weight memories. Each references weight_stream as its producer, so only
     # when one is selected is the stream internal; a writable memstream exports
@@ -523,8 +523,8 @@ def matmul_assembly(
     compute = point.compute
     return MatMulAssembly(
         point.activations.ends.source.sequence.form.beats,
-        compute.w.sequence.form.beats,
-        compute.y.sequence.form.beats,
+        compute.w.presented.form.beats,
+        compute.y.presented.form.beats,
         point.result_type,
         weight_delivery,
         composed.value.structure,

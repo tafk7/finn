@@ -4,7 +4,8 @@
 """Buffered, same-word-width traversal of consecutive input frames.
 
 For each frame, emit the word at sum(index[i] * strides[i]) in the nested
-loop order described by extents. Zero strides repeat words. This declaration
+loop order described by its loop extents (``dims``). Zero strides repeat words.
+This declaration
 admits finite traversals wholly within each frame. olst[i] marks completion
 of loop i and all inner loops, aligned with the output transfer. It is a native
 multi-bit marker, not AXI TLAST. Input and output words are opaque bits.
@@ -47,14 +48,14 @@ class InputGeneratorKernel(Kernel):
 
     word_bits: int = Param()
     frame_words: int = Param()
-    extents: IntegerVector = Param(semantics=INTEGER_VECTOR)
+    dims: IntegerVector = Param(semantics=INTEGER_VECTOR)
     strides: IntegerVector = Param(semantics=INTEGER_VECTOR)
 
     @constraint
     def traversal_supported(self) -> bool | Rejected:
         bits = self.word_bits
         frame = self.frame_words
-        extents = self.extents
+        extents = self.dims
         strides = self.strides
         if bits < 1 or frame < 1 or not extents or len(extents) != len(strides):
             return reject(
@@ -81,7 +82,7 @@ class InputGeneratorKernel(Kernel):
     @derived
     def loop_ends(self) -> tuple[StreamMarker, ...] | Rejected:
         """``olst``: one bit per loop, closing that loop and every inner one."""
-        rank = len(self.extents)
+        rank = len(self.dims)
         if rank < 1:
             return reject("input-generator-interface", "a traversal has at least one loop")
         return (StreamMarker("olst", MarkerKind.LOOP_END, rank),)
@@ -96,9 +97,9 @@ class InputGeneratorKernel(Kernel):
     def parameters(self) -> Mapping[str, int | str]:
         return {
             "COEFS": _vector(self.strides),
-            "D": len(self.extents),
+            "D": len(self.dims),
             "DATA_WIDTH": self.word_bits,
-            "DIMS": _vector(self.extents),
+            "DIMS": _vector(self.dims),
             "FM_SIZE": self.frame_words,
             "RAM_STYLE": f'"{self.ram_style}"',
         }

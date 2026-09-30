@@ -440,3 +440,68 @@ awaits the user.
   61. `--strict-rtl` conformance: 20 passed, 11 skipped.
 
 ADOPT_XSIM
+
+## A4: one port class, extents bound in the kernel base, dotp migrated
+
+### What landed
+
+- **`AxiStreamPort`** (`finn.kernels.port`), beside the old port classes until
+  the remaining kernels move (next increment):
+  - presents either its kernel's `schedule` through `index`, `lanes`,
+    `reduces`, `holds`, `closes`, `reshaped` (the old `ScheduledPort`), or a
+    given `sequence=` (the old `GivenPort`); exactly one, refused as
+    `port-presentation`. The derived beat sequence is `presented` (a derived
+    value cannot be supplied at a call, so `sequence=` is the Param and the
+    derived needed another name).
+  - `schedule`, `sequence` and `dtype` are optional values defaulting to
+    `None`, through a new `or_none(semantics)` (the engine's `present()`
+    answers for nodes only, so "was this value given" is `is None`).
+  - element: `dtype` when given, placed or idle (its stream refuses another,
+    `stream-tensor`); otherwise the stream's. An idle port without `dtype` is
+    refused (`port-element`).
+  - idle lanes: the product of its `folds` of its `lanes` indices (`folds`, a
+    Param, default none); `idle_lanes` is not on the new class.
+  - exports its read of the tensor under `ACCESS` when placed and reading
+    indices (`binds`; it reads `index`, not `schedule`, which would cycle
+    through the extents).
+- **Kernel base** (`finn.kernels.base`): `port_accesses = Members(ACCESS)`;
+  `extents` (derived: `bind_extents` over them, named by the port member,
+  refused as `kernel-extents`); `bound_schedule(beats, folds, extents=None)`
+  (refuses an unbound beat as `kernel-extents`, a bad fold as
+  `kernel-schedule`); `extent_of(index)` (a derived member; must be named in
+  the class body).
+- **dotp**: `rows`, `outputs`, `reduction` are `extent_of(m/n/k)`; its schedule
+  is `bound_schedule(beats=(m, n, k), folds={n: pe, k: simd})`; its ports are
+  `AxiStreamPort`s. The extents now come from all three ports and must agree,
+  so a too-wide activation tensor is refused (`k is 14 (x axis 1) and 12 (w
+  axis 0)`) instead of settling with columns unread.
+- **Rename:** `InputGeneratorKernel.extents` (a fact) is now `dims` (FinnLib's
+  `DIMS`), which the base's `extents` would otherwise shadow. Not a decision
+  key.
+- **Readers:** MatMul and the tests read a port's `presented`; the harness
+  recognizes `AxiStreamPort`.
+- **Tests:** `tests/kernels/test_axi_stream_port.py` (8): binding and folds on
+  a model-only accpool kernel, disagreement refused, idle lanes from folds,
+  unplaced kernel refusal, `extent_of` named-member rule, schedule xor
+  sequence, stated element refused by its stream, dotp through the dense view
+  and the too-wide refusal.
+
+### Evidence, as observed
+
+- Fast gates (Vivado off `PATH`, `FORCE_COLOR` unset): Space 454; kernels 830
+  passed, 25 skipped (822 + 8); graph 4 + 2; dataflow 61; ruff and mypy clean.
+- Identity dump identical to `evidence/identity-norom.txt`.
+
+A4_XSIM
+
+### Deviations
+
+- `presented` is the derived beat sequence; `sequence=` is the escape-hatch
+  Param (G0.2's spelling). Readers of `port.sequence` moved to
+  `port.presented`.
+- Idle lanes come from a `folds` Param on the port (the kernel passes the same
+  mapping it gives `bound_schedule`): a flat kernel has no schedule, so the
+  port cannot read its folds from it.
+- The Lane A open questions are settled as: refusals name the port member
+  (`x axis 1`); no solving of one-unbound-index affine axes (not needed by
+  any kernel here); thresholding's table stays a check (next increment).

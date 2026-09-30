@@ -38,7 +38,7 @@ from finn.kernels.configure import commit
 from finn.kernels.dotp import Int8Dsp58DotpKernel, PackedDotpKernel
 from finn.kernels.eltwise import EltwiseKernel
 from finn.kernels.matmul import MatMulKernel
-from finn.kernels.port import StreamPort
+from finn.kernels.port import AxiStreamPort
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.streams import Stream
 from finn.kernels.target import DspBlock
@@ -111,7 +111,7 @@ def codes(answer: object) -> set[str]:
 
 def test_every_port_presents_what_the_schedule_derives():
     point = placed()
-    x, w, y = (port.sequence for port in (point.compute.x, point.compute.w, point.compute.y))
+    x, w, y = (port.presented for port in (point.compute.x, point.compute.w, point.compute.y))
     assert x.form == vector_major((ROWS, REDUCTION), SIMD).replayed(
         OUTPUTS // PE, inner_beats=REDUCTION // SIMD
     )
@@ -132,7 +132,7 @@ def test_every_port_presents_what_the_schedule_derives():
 
 def test_depthwise_activations_carry_pe_channels_of_simd_window_positions():
     point = placed(Form.DEPTHWISE)
-    form = point.compute.x.sequence.form
+    form = point.compute.x.presented.form
     assert form.lanes == PE * SIMD and form.shape == (ROWS, REDUCTION, OUTPUTS)
     # Field s * PE + p is window position s of channel p (FinnLib's order).
     assert next(form.positions()) == ((0, 0, 0), (0, 0, 1), (0, 1, 0), (0, 1, 1))
@@ -161,7 +161,7 @@ def test_a_producer_presenting_another_order_is_a_plan_its_stream_adapts():
     rows = placed(weights_form=vector_major((REDUCTION, OUTPUTS), 1))
     assert rows.w_s.plan.steps == (Step.REORDER, Step.WIDTH)
     # dotp's own port is untouched by the producer's order.
-    assert isinstance(narrow.compute.w.query(StreamPort.contract), Available)
+    assert isinstance(narrow.compute.w.query(AxiStreamPort.contract), Available)
     # A stream that admits no adapter refuses the plan, naming it.
     fixed = placed(weights_form=columns_first, adaptable=False)
     refused = fixed.w_s.query(Stream.connection)
@@ -178,7 +178,7 @@ def test_a_producer_s_field_order_is_wires():
     assert codes(placed(weights_form=transposed).w_s.query(Stream.connection)) == set()
     # E-048: hlslib's per-channel order (window positions fastest) is likewise a
     # field permutation of FinnLib's.
-    finnlib = placed(Form.DEPTHWISE).compute.x.sequence.form
+    finnlib = placed(Form.DEPTHWISE).compute.x.presented.form
     window_fastest = Traversal(
         finnlib.shape, finnlib.beat_loops, tuple(reversed(finnlib.lane_loops))
     )

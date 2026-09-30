@@ -25,9 +25,9 @@ def test_native_streams_are_inspectable_without_storage_choices():
 
 
 def test_loop_markers_remain_native_even_when_one_bit():
-    for extents, strides in (((6,), (1,)), ((3, 6), (0, 1))):
-        output = generator(bits=16, extents=extents, strides=strides).output.transport
-        assert output.markers == (StreamMarker("olst", MarkerKind.LOOP_END, len(extents)),)
+    for dims, strides in (((6,), (1,)), ((3, 6), (0, 1))):
+        output = generator(bits=16, dims=dims, strides=strides).output.transport
+        assert output.markers == (StreamMarker("olst", MarkerKind.LOOP_END, len(dims)),)
         with pytest.raises(ValueError, match="single LAST"):
             output.axis_bus()
 

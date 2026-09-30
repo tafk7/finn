@@ -28,7 +28,7 @@ from finn.kernels.artifacts.store import ArtifactStore
 from finn.kernels.base import Kernel
 from finn.kernels.dotp import DotpAxiKernel, Int8Dsp58DotpKernel, PackedDotpKernel
 from finn.kernels.physical.layout import UnusedBitPolicy
-from finn.kernels.port import ScheduledPort
+from finn.kernels.port import AxiStreamPort
 from finn.kernels.resources import resource_root
 from finn.kernels.target import DspBlock
 from kernels import helpers
@@ -67,7 +67,7 @@ def test_a_core_declares_ports_folds_and_facts_and_the_base_derives_the_module()
         "compute.tieoffs",
     ]
     for port in (point.x, point.w, point.y):
-        assert isinstance(port, ScheduledPort)
+        assert isinstance(port, AxiStreamPort)
     found = {item.key: item.kind for item in inspection.members(point)}
     # Facts, supplied by the placing parent (constants of this placement).
     facts = {key for key, kind in found.items() if kind == "const" and key.count(".") == 1}
@@ -128,11 +128,11 @@ def test_physical_framing_follows_the_schedule_and_only_activation_has_last():
 def test_the_schedule_folds_n_by_pe_and_k_by_simd():
     point = kernel(pe=2, simd=2, outputs=4, reduction=6, rows=3)
     assert (point.rows, point.outputs, point.reduction) == (3, 4, 6)
-    x, w, y = (port.sequence.form for port in (point.x, point.w, point.y))
+    x, w, y = (port.presented.form for port in (point.x, point.w, point.y))
     assert (x.beats, x.lanes) == (3 * 2 * 3, 2)  # each row replayed per output fold
     assert (w.beats, w.lanes) == (3 * 2 * 3, 4)
     assert (y.beats, y.lanes) == (3 * 2, 2)
-    assert [rule.beats for rule in point.x.sequence.markers] == [3]
+    assert [rule.beats for rule in point.x.presented.markers] == [3]
 
 
 @pytest.mark.parametrize(

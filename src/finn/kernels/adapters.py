@@ -334,7 +334,7 @@ def _input_gen(facts: InputGenFacts) -> InputGeneratorKernel:
     return InputGeneratorKernel(
         word_bits=facts.word_bits,
         frame_words=facts.frame,
-        extents=facts.dims,
+        dims=facts.dims,
         strides=facts.coefs,
     )
 

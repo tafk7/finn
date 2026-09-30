@@ -86,7 +86,7 @@ from finn.kernels.composite import Design
 from finn.kernels.configure import commit, describe, undecided
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.physical.contract import StreamContract
-from finn.kernels.port import ScheduledPort, StreamPort
+from finn.kernels.port import AxiStreamPort, ScheduledPort, StreamPort
 from finn.kernels.streams import Stream
 from kernels.helpers import settled
 from kernels.xsim import materialize, stream_through
@@ -272,7 +272,9 @@ def _ports(family: type[Kernel]) -> dict[str, str]:
             except RequestError:
                 continue
             stream = declared.bindings.get("stream")
-            if issubclass(declared.family, StreamPort) and isinstance(stream, Param):
+            if issubclass(declared.family, (StreamPort, AxiStreamPort)) and isinstance(
+                stream, Param
+            ):
                 found[str(stream.name)] = name
     return found
 
@@ -309,7 +311,8 @@ def _stated(
         probe = _design(family, inputs, facts)
     except DefinitionError as error:
         raise ValueError(f"{family.__name__} is not built without {name}; {hint}") from error
-    found = getattr(getattr(probe, KERNEL), port).query(StreamPort.element)
+    node = getattr(getattr(probe, KERNEL), port)
+    found = node.query(type(node).element)
     if not isinstance(found, Available):
         raise ValueError(f"{family.__name__}.{port} states no element unplaced; {hint}: {found}")
     assert isinstance(found.value, ScalarEncoding)
@@ -464,7 +467,9 @@ def _check_model(
     for name, end in _ends(point, family, sample, [*inputs, *outputs]).items():
         form, port = end.form, getattr(kernel, ports[name])
         assert _covers(form), f"{where}: {ports[name]} does not cover its {form.shape} tensor"
-        if isinstance(port, ScheduledPort):
+        if isinstance(port, ScheduledPort) or (
+            isinstance(port, AxiStreamPort) and port.schedule is not None
+        ):
             schedule = port.schedule
             dropped = prod(schedule.steps(index) for index in (*port.reduces, *port.holds))
             assert form.beats == schedule.beat_count // dropped, (
