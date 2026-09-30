@@ -39,6 +39,20 @@ Every step keeps ruff and mypy clean; the identity dump
 and `FORCE_COLOR` unset (a restarted shell sets it, and ANSI codes in mypy's
 output fail five Space typing-fixture tests).
 
+## Renamed after the plan
+
+The code now uses the dataflow theory's terms
+([`docs/dataflow-model/THEORY.md`](../dataflow-model/THEORY.md)); this record,
+RECORD.md and PLAN.md keep the names they were written with:
+
+| Written here | Now |
+|---|---|
+| `Schedule(folds=)`, `.folds`, `.fold(i)` (the lanes, `F_i`) | `factors=`, `.factors`, `.factor(i)`: the folding factor; the fold `E_i / F_i` is `.steps(i)` |
+| `bound_schedule(beats, folds)`, `AxiStreamPort(folds=)`, `fold_domain`, kernels' `folds` | `bound_schedule(order, factors)`, `factors=`, `factor_domain`, `factors` |
+| `Schedule(beats=)`, `Schedule.beats` (the beat order) | `order=`, `Schedule.order`; `Traversal.beats` (a count) is unchanged |
+| a lane index "field": `Traversal.position(beat, field)`, memstream's `FIELD` | a lane: `position(beat, lane)`, `LANE`; the physical packing keeps "field" for a lane's bits |
+| `conformance(..., folds=)`, `Sample.folds` | `factors=`, `Sample.factors` |
+
 ## Open
 
 - The compiler-facing op wrapping one kernel: designed next, from the plan's
