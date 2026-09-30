@@ -52,7 +52,7 @@ def enumerate_positions(
 
 def gemm(M: int, N: int, K: int, pe: int, simd: int) -> Schedule:
     """MatMul's schedule: outputs split by PE, the reduction by SIMD, reduction innermost."""
-    return Schedule({m: M, n: N, k: K}, factors={n: pe, k: simd}, beats=(m, n, k))
+    return Schedule({m: M, n: N, k: K}, factors={n: pe, k: simd}, order=(m, n, k))
 
 
 # -- indices, expressions and schedules ---------------------------------------------------
@@ -73,16 +73,16 @@ def test_index_arithmetic_builds_affine_expressions() -> None:
 
 def test_a_schedule_folds_each_index_into_beats_and_lanes() -> None:
     schedule = gemm(3, 6, 8, pe=3, simd=2)
-    assert schedule.beats == (m, n, k)
+    assert schedule.order == (m, n, k)
     assert (schedule.factor(n), schedule.factor(k), schedule.factor(m)) == (3, 2, 1)
     assert (schedule.steps(m), schedule.steps(n), schedule.steps(k)) == (3, 2, 4)
     assert schedule.beat_count == 24
     # The beats default to the extents' order.
-    assert Schedule({k: 4, m: 2}).beats == (k, m)
+    assert Schedule({k: 4, m: 2}).order == (k, m)
     with pytest.raises(ValueError, match="divide"):
         Schedule({m: 1, k: 5}, factors={k: 2})
     with pytest.raises(ValueError, match="once"):
-        Schedule({m: 1, k: 2}, beats=(m,))
+        Schedule({m: 1, k: 2}, order=(m,))
     with pytest.raises(ValueError, match="no extent"):
         Schedule({m: 1}, factors={k: 2})
 
@@ -177,7 +177,7 @@ def test_tiled_mvu_forms_and_finn_s_input_gen_parameters() -> None:
     SF, NF = K // SIMD, N // PE
     mt, t = Index("mt"), Index("t")
     schedule = Schedule(
-        {mt: M // T, n: N, k: K, t: T}, factors={n: PE, k: SIMD}, beats=(mt, n, k, t)
+        {mt: M // T, n: N, k: K, t: T}, factors={n: PE, k: SIMD}, order=(mt, n, k, t)
     )
     core_in = schedule.present((M, K), (mt * T + t, k), lanes=(k,))
     core_out = schedule.present((M, N), (mt * T + t, n), lanes=(n,), reduces=(k,))
@@ -238,7 +238,7 @@ def test_reduction_orders_are_legal_schedules_a_reorder_apart() -> None:
     extents = {m: M, n: N, h: KH, w: KW, c: C}
     forms = {}
     for order in permutations((h, w, c)):
-        schedule = Schedule(extents, factors={n: PE, c: SIMD}, beats=(m, n, *order))
+        schedule = Schedule(extents, factors={n: PE, c: SIMD}, order=(m, n, *order))
         assert schedule.closing(order) == LevelEnd(KH * KW * C // SIMD)
         forms[order] = schedule.present((M, KH, KW, C), (m, h, w, c), lanes=(c,))
     canonical = forms[(h, w, c)]
@@ -251,7 +251,7 @@ def test_a_held_operand_is_presented_once_per_outer_beat() -> None:
     # Weight-stationary: tiles of n, then of k, rows innermost; each weight tile
     # is presented once, before the rows it serves.
     M, N, K, ROWS, COLS = 4, 6, 8, 2, 3
-    schedule = Schedule({m: M, n: N, k: K}, factors={k: ROWS, n: COLS}, beats=(n, k, m))
+    schedule = Schedule({m: M, n: N, k: K}, factors={k: ROWS, n: COLS}, order=(n, k, m))
     held = schedule.present((K, N), Form.DENSE.w, lanes=(k, n), holds=(m,))
     assert held.beats == (N // COLS) * (K // ROWS)
     assert all(loop.stride for loop in held.beat_loops)
@@ -263,7 +263,7 @@ def test_a_reduction_presented_before_it_closes_is_refused() -> None:
     schedule = gemm(2, 2, 4, 1, 2)
     with pytest.raises(Refused, match="reduced"):
         schedule.present((2, 2), Form.DENSE.y, lanes=(n,), reduces=(m,))
-    reordered = Schedule({m: 2, n: 2, k: 4}, factors={n: 1, k: 2}, beats=(n, k, m))
+    reordered = Schedule({m: 2, n: 2, k: 4}, factors={n: 1, k: 2}, order=(n, k, m))
     with pytest.raises(Refused, match="innermost"):
         reordered.closing((k,))
     with pytest.raises(Refused, match="not an index"):

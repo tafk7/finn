@@ -223,20 +223,20 @@ class Kernel(Space):
 
     def bound_schedule(
         self,
-        beats: tuple[Index, ...],
+        order: tuple[Index, ...],
         factors: Mapping[Index, int] | None = None,
         extents: Mapping[Index, int] | None = None,
     ) -> Schedule | Rejected:
-        """The schedule over ``beats`` (outer to inner), each index's extent bound from the
+        """The schedule in beat ``order`` (outer to inner), each index's extent bound from the
         ports' tensors (and any ``extents`` the kernel gives), with folding ``factors``."""
         bound = self.extents if extents is None else self._bound(extents)
         if isinstance(bound, Rejected):
             return bound
-        missing = [index for index in beats if index not in bound]
+        missing = [index for index in order if index not in bound]
         if missing:
             return reject("kernel-extents", f"{missing} are bound by no placed port")
         try:
-            return Schedule({index: bound[index] for index in beats}, factors, beats)
+            return Schedule({index: bound[index] for index in order}, factors, order)
         except ValueError as error:
             return reject("kernel-schedule", str(error))
 

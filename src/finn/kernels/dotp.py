@@ -107,7 +107,7 @@ class DotpAxiKernel(Kernel):
     @derived
     def schedule(self) -> Schedule | Rejected:
         """``n`` split by PE and ``k`` by SIMD; ``m``, then ``n``, then the reduction."""
-        return self.bound_schedule(beats=(m, n, k), factors={n: self.pe, k: self.simd})
+        return self.bound_schedule(order=(m, n, k), factors={n: self.pe, k: self.simd})
 
     @derived
     def x_index(self) -> tuple[Index, ...]:

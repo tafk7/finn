@@ -19,7 +19,7 @@ pixels, `c` channels). Its datasheet says:
 | module `accpool_axi`, from FinnLib `rtl/pool/accpool_axi.sv` | `module`, `sources()` |
 | generics `CHANNELS`, `PIXELS`, `PE`, `IN_WIDTH`, `OUT_WIDTH`, `SIGNED` | `parameters()`, from extents, folding factors and elements |
 | `PE` channels a beat, PE dividing the channels | a folding factor: `pe = Decision(domain=divisors_of(channels))` |
-| images, then pixels, then channel folds (channels innermost) | the loop nest: `bound_schedule(beats=(b, s, c), ...)` |
+| images, then pixels, then channel folds (channels innermost) | the loop nest: `bound_schedule(order=(b, s, c), ...)` |
 | `s_axis_input`: `X[b, s, c]`, PE channels a beat, no TLAST | a target `AxiStreamPort`: `index=(b, s, c)`, `lanes=(c,)` |
 | `m_axis_output`: `Y[b, c]`, PE channels a beat, after the last pixel of an image | an initiator `AxiStreamPort`: `index=(b, c)`, `lanes=(c,)`, `reduces=(s,)` |
 | the sum's width: the input's range times the pixels, signed | the producer's `dtype`, stated by the kernel |
@@ -39,7 +39,7 @@ extent are refused), or `semantics=` on ordinary values.
    lanes it spreads over each beat; its domain is the divisors of that index's
    extent, read from a named `extent_of` member. A parent may pin or narrow it
    by key (`pool.pe`).
-3. **The loop nest.** `bound_schedule(beats, factors)`, outer to inner, exactly
+3. **The loop nest.** `bound_schedule(order, factors)`, outer to inner, exactly
    as the RTL walks it. This is the one order the model cannot check; the
    conformance harness does, in simulation.
 4. **Each interface.** One `AxiStreamPort`: the indices it reads (`index`), its
@@ -105,7 +105,7 @@ class AccPoolKernel(Kernel):
     @derived
     def schedule(self) -> Schedule | Rejected:
         """The RTL's loop nest: images, then pixels, then channel folds."""
-        return self.bound_schedule(beats=(b, s, c), factors={c: self.pe})
+        return self.bound_schedule(order=(b, s, c), factors={c: self.pe})
 
     @derived(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
     def sum_dtype(self) -> QONNXDataType:
@@ -226,7 +226,7 @@ assert "stream-tensor" in {f.code for f in wrong.y.query(KernelStream.connection
 The RTL's order decides what the stream in front must do. With channels
 innermost, a producer presenting the input row-major at the same PE connects
 directly, and at another PE takes a width conversion (`vpc`). Had the RTL
-walked channel folds outer and pixels inner (`beats=(b, c, s)`), the same
+walked channel folds outer and pixels inner (`order=(b, c, s)`), the same
 producer would need a reorder buffer (`input_gen`) on the stream in front:
 the order the kernel declares is the adapter every producer pays for. Keep
 accumulators in the kernel (channels innermost, one accumulator per channel)
@@ -242,7 +242,7 @@ for lanes, steps in ((4, ()), (2, ("width_conversion",))):
     produced = BeatSequence(vector_major((2, 4, 8), lanes))
     assert tuple(step.value for step in plan(produced, wanted).steps) == steps
 
-channels_outer = Schedule({b: 2, s: 4, c: 8}, factors={c: 4}, beats=(b, c, s))
+channels_outer = Schedule({b: 2, s: 4, c: 8}, factors={c: 4}, order=(b, c, s))
 reordered = BeatSequence(channels_outer.present((2, 4, 8), (b, s, c), lanes=(c,)))
 produced = BeatSequence(vector_major((2, 4, 8), 4))
 assert tuple(step.value for step in plan(produced, reordered).steps) == ("reorder",)

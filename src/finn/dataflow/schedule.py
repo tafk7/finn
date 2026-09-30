@@ -147,7 +147,7 @@ class Affine:
 
 @dataclass(frozen=True, init=False)
 class Schedule:
-    """Each index's extent and folding factor, and the beats' order, outer to inner."""
+    """Each index's extent and folding factor, and the beat order, outer to inner."""
 
     extents: tuple[tuple[Index, int], ...]
     factors: tuple[tuple[Index, int], ...]
@@ -156,11 +156,11 @@ class Schedule:
         self,
         extents: Mapping[Index, int],
         factors: Mapping[Index, int] | None = None,
-        beats: Sequence[Index] | None = None,
+        order: Sequence[Index] | None = None,
     ) -> None:
-        order = tuple(extents) if beats is None else tuple(beats)
+        order = tuple(extents) if order is None else tuple(order)
         if sorted(order) != sorted(extents) or len(set(order)) != len(order):
-            raise ValueError(f"the beats {list(order)} order each index {list(extents)} once")
+            raise ValueError(f"the beat order {list(order)} names each index {list(extents)} once")
         given = dict(factors or {})
         for index in given:
             if index not in extents:
@@ -179,8 +179,8 @@ class Schedule:
         )
 
     @property
-    def beats(self) -> tuple[Index, ...]:
-        """The indices in beat order, outer to inner."""
+    def order(self) -> tuple[Index, ...]:
+        """The beat order: the indices, outer to inner."""
         return tuple(index for index, _ in self.extents)
 
     def extent(self, index: Index) -> int:
@@ -198,7 +198,7 @@ class Schedule:
 
     @property
     def beat_count(self) -> int:
-        return prod(self.steps(index) for index in self.beats)
+        return prod(self.steps(index) for index in self.order)
 
     def present(
         self,
@@ -224,7 +224,7 @@ class Schedule:
         axes = tuple(Affine.of(axis) for axis in index)
         if len(axes) != len(viewed):
             raise Refused(f"{len(axes)} expressions for a rank-{len(viewed)} tensor")
-        known = set(self.beats)
+        known = set(self.order)
         for axis in axes:
             for used in axis.indices:
                 if used not in known:
@@ -237,7 +237,7 @@ class Schedule:
         def stride(i: Index) -> int:
             return sum(axis.coefficient(i) * strides[j] for j, axis in enumerate(axes))
 
-        for i in self.beats:
+        for i in self.order:
             if self.factor(i) > 1 and i not in lanes and stride(i):
                 raise Refused(f"{i!r}'s lanes move the position; carry them as lanes")
         dropped = (*reduces, *holds)
@@ -246,7 +246,7 @@ class Schedule:
                 word = "reduced" if i in reduces else "held"
                 raise Refused(f"{i!r} moves the position, so it cannot be {word} away")
         beats = [
-            Loop(self.steps(i), self.factor(i) * stride(i)) for i in self.beats if i not in dropped
+            Loop(self.steps(i), self.factor(i) * stride(i)) for i in self.order if i not in dropped
         ]
         lane_loops = [Loop(self.factor(i), stride(i)) for i in lanes]
         try:
@@ -256,7 +256,7 @@ class Schedule:
 
     def closing(self, reduces: Sequence[Index]) -> LevelEnd:
         """The marker ending each reduction: the reduced indices must be the innermost beats."""
-        order = self.beats
+        order = self.order
         suffix = order[len(order) - len(reduces) :] if reduces else ()
         if not reduces or sorted(suffix) != sorted(reduces):
             raise Refused(f"the reduced {list(reduces)} are not the innermost of {list(order)}")

@@ -134,7 +134,7 @@ def test_an_access_is_a_checked_value() -> None:
 def test_bound_extents_make_every_bound_port_cover_its_tensor() -> None:
     M, K, N, PE, SIMD = 3, 8, 6, 3, 2
     x, w, y = dense(M, K, N)
-    schedule = Schedule(bind_extents([x, w, y]), factors={n: PE, k: SIMD}, beats=(m, n, k))
+    schedule = Schedule(bind_extents([x, w, y]), factors={n: PE, k: SIMD}, order=(m, n, k))
     assert covers(schedule.present(x.shape, x.index, lanes=(k,)))
     assert covers(schedule.present(w.shape, w.index, lanes=(n, k)))
     assert covers(schedule.present(y.shape, y.index, lanes=(n,), reduces=(k,)))
@@ -148,7 +148,7 @@ def test_a_tensor_too_wide_for_the_other_ports_is_refused() -> None:
         bind_extents([x, w, y])
     # Without the binding, a schedule taking k from w presents x silently: two
     # columns of every row are never read.
-    schedule = Schedule({m: M, n: N, k: K}, factors={k: 2}, beats=(m, n, k))
+    schedule = Schedule({m: M, n: N, k: K}, factors={k: 2}, order=(m, n, k))
     assert not covers(schedule.present(x.shape, x.index, lanes=(k,)))
 
 
@@ -184,7 +184,7 @@ class Member:
     extents: dict[Index, int]
     given: dict[Index, int]
     factors: dict[Index, int]
-    beats: tuple[Index, ...]
+    order: tuple[Index, ...]
     unscheduled: tuple[Access, ...] = ()
     uncovered: tuple[str, ...] = ()
 
@@ -195,7 +195,7 @@ class Member:
     def present(self, port: Port) -> Traversal:
         bound = self.bound()
         schedule = Schedule(
-            {i: bound[i] for i in self.beats}, factors=self.factors, beats=self.beats
+            {i: bound[i] for i in self.order}, factors=self.factors, order=self.order
         )
         access = port.access
         view = None
@@ -342,6 +342,6 @@ def test_the_tiled_mvu_binds_only_with_its_tiles_given() -> None:
         bind_extents(accesses, {t: T})
     # A known limit: its rows are a window's axis, checked and not bound, so
     # tiles given too few pass the check and leave rows unread.
-    short = Member(tiled.ports, {}, {mt: 1, t: T}, tiled.factors, tiled.beats)
+    short = Member(tiled.ports, {}, {mt: 1, t: T}, tiled.factors, tiled.order)
     assert short.bound() == {mt: 1, t: T, k: K_T, n: N_T}
     assert not covers(short.present(tiled.ports[0]))

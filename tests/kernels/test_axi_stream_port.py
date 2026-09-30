@@ -62,7 +62,7 @@ class Pool(Kernel):
 
     @derived
     def schedule(self) -> Schedule | Rejected:
-        return self.bound_schedule(beats=(b, s, c), factors=self.factors)
+        return self.bound_schedule(order=(b, s, c), factors=self.factors)
 
     x = AxiStreamPort(
         name="s_axis_input",
