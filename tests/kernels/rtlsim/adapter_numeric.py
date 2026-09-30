@@ -60,11 +60,9 @@ ADAPTED = (
     ("input_gen_vpc", columns_first(ROWS, CHANNELS, 1), 4, ("input_gen", "vpc")),
     ("vpc_input_gen_vpc", ROWS_AS_LANES, 2, ("vpc", "input_gen", "vpc")),
 )
-TRANSPOSES = ((4, 6, 2), (6, 6, 3), (4, 4, 2), (6, 9, 3))
-# FinnLib inner_shuffle (b9262df) emits undefined lanes for these when its input
-# arrives in bursts with idle cycles between them and its output never stalls;
-# FinnLib's own testbench fails the same way with that input timing (C6 record).
-KNOWN_DEFECTS = ((4, 4, 4), (8, 4, 4), (4, 8, 4))
+# SIMD 4 at 4x4, 8x4 and 4x8 stalled needs FinnLib's inner_shuffle page-guard
+# fix (finn.kernels.transpose); the pinned d03f2fc fails them.
+TRANSPOSES = ((4, 6, 2), (6, 6, 3), (4, 4, 2), (6, 9, 3), (4, 4, 4), (8, 4, 4), (4, 8, 4))
 
 
 def run_adapted(label, source, pe, modules, evidence):
@@ -120,15 +118,12 @@ def run_transpose(rows, cols, simd, evidence):
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path)
-    parser.add_argument(
-        "--known-defects", action="store_true", help="run the inner_shuffle defect cases"
-    )
     args = parser.parse_args()
     directory = args.output or Path(tempfile.mkdtemp(prefix="adapter-evidence-"))
     print(f"Evidence: {directory}", flush=True)
     for label, source, pe, modules in ADAPTED:
         run_adapted(label, source, pe, modules, directory)
-    for rows, cols, simd in KNOWN_DEFECTS if args.known_defects else TRANSPOSES:
+    for rows, cols, simd in TRANSPOSES:
         run_transpose(rows, cols, simd, directory)
 
 

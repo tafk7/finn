@@ -4,11 +4,11 @@
 """FinnLib ``inner_shuffle`` as a node between two streams: a banked matrix transpose.
 
 A row-major ``(I, J)`` matrix, SIMD elements of a row a beat, becomes its
-columns, SIMD elements of a column a beat (``LANE_REGROUP``). It is not yet a
-candidate of a stream's ``adapter`` Decision (``finn.kernels.adapters``): under
-bursty input it emits undefined lanes (see ``TransposeKernel``), so a composite
-places it explicitly, and a stream realizes lane regroups through the common
-lane count instead.
+columns, SIMD elements of a column a beat (``LANE_REGROUP``). It is not a
+candidate of a stream's ``adapter`` Decision (``finn.kernels.adapters``): a
+composite places it explicitly, and a stream realizes lane regroups through the
+common lane count instead. The defect that kept it out (see
+``TransposeKernel``) is fixed in FinnLib, which reopens that option.
 """
 
 from __future__ import annotations
@@ -46,13 +46,18 @@ class TransposeKernel(Kernel):
     output presents each matrix column by column, SIMD elements of a column a
     beat. SIMD divides I and J.
 
-    Known defect: the RTL emits undefined lanes when its input arrives in
-    bursts with idle cycles between them. First seen at FinnLib ``b9262df``
-    with SIMD 4 and a side of 4 or 8 (FinnLib's own testbench fails the same
-    way with that input timing); at ``d03f2fc`` the conformance harness's stall
-    pattern shows it at SIMD 3 and 6 on 6 x 6 matrices, and behind a ``vpc``
-    even free-running (``tests/kernels/test_conformance.py``). The condition is
-    not characterized, so nothing is refused yet.
+    Needs FinnLib ``99d75e8`` ("inner_shuffle: read a page only once all of it
+    is written"); the pinned ``d03f2fc`` predates it. The RTL writes matrices
+    alternately into two pages. Before the fix its read guard held the reader
+    back from the first page only, so whenever the output drained faster than
+    the input arrived (stalled or bursty input, as behind a ``vpc``) it read the
+    second page before that page's last rows were written: undefined lanes, the
+    lanes of the last rows. And a page counted as written once the write address
+    reached its last beat, before that beat was written, so an input pausing
+    there released the page early and then replayed it. Every SIMD (1 included)
+    and shape tried failed under a slow enough input; a free-running input
+    never failed. ``tests/kernels/test_conformance.py``'s transpose case fails
+    against ``d03f2fc``.
     """
 
     id = "finnlib.inner_shuffle"
