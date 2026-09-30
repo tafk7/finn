@@ -123,7 +123,7 @@ def test_physical_framing_follows_the_schedule_and_only_activation_has_last():
     assert point.y.axis.elements_per_beat == 3
     assert point.x.axis.last and not point.w.axis.last and not point.y.axis.last
     # Weight lane p*SIMD+s sits lane zero lowest, matching the native RTL array.
-    assert [field.bit_offset for field in point.w.axis.payload.fields] == list(range(0, 45, 3))
+    assert [lane.bit_offset for lane in point.w.axis.payload.lanes] == list(range(0, 45, 3))
 
 
 def test_the_schedule_splits_n_by_pe_and_k_by_simd():
@@ -330,9 +330,9 @@ def test_subbyte_result_padding_has_no_zero_fill_promise():
     assert result.payload_bits == 4 and result.carrier_bits == 8
     assert result.payload.unused[0].policy is UnusedBitPolicy.UNSPECIFIED
     assert activation.payload.unused[0].policy is UnusedBitPolicy.IGNORE_ON_RECEIVE
-    field = result.payload.fields[0]
-    mask = (1 << field.bit_width) - 1
-    assert (0xFF >> field.bit_offset) & mask == (0x0F >> field.bit_offset) & mask
+    lane = result.payload.lanes[0]
+    mask = (1 << lane.bit_width) - 1
+    assert (0xFF >> lane.bit_offset) & mask == (0x0F >> lane.bit_offset) & mask
 
 
 def test_each_core_kernel_names_its_core_and_the_shared_base_places_none():

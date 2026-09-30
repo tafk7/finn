@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Typed, low-field-first AXIS values for codegen and logical binding.
+"""Typed AXIS values, lane zero lowest, for codegen and logical binding.
 
 One declaration supplies the pins and the packing. Scalar encodings keep their
 QONNX widths; only the complete beat is padded to a byte boundary. This describes
@@ -21,7 +21,7 @@ from finn.dataflow.datatypes import (
     resolve_qonnx_datatype_name,
 )
 from finn.kernels.physical.layout import (
-    FieldPlacement,
+    LanePlacement,
     PackedBeatLayout,
     UnusedBitPolicy,
     UnusedBitRange,
@@ -32,10 +32,10 @@ from finn.kernels.physical.stream import MarkerKind, ReadyValidStream, StreamMar
 def lane_layout(
     element_bits: int, lanes: int, carrier_bits: int, endpoint: Endpoint
 ) -> PackedBeatLayout:
-    """Element zero in the least-significant field; padding follows the payload."""
+    """Lane zero in the least-significant bits; padding follows the payload."""
     payload = element_bits * lanes
     return PackedBeatLayout(
-        tuple(FieldPlacement(index, index * element_bits, element_bits) for index in range(lanes)),
+        tuple(LanePlacement(lane, lane * element_bits, element_bits) for lane in range(lanes)),
         ()
         if payload == carrier_bits
         else (
@@ -52,7 +52,7 @@ def lane_layout(
 
 @dataclass(frozen=True, init=False)
 class AxiStream:
-    """A homogeneous beat with element zero in the least-significant field.
+    """A homogeneous beat with lane zero in the least-significant bits.
 
     ``last`` declares the pin. Its workload-dependent meaning is supplied when
     binding to a logical port. The canonical dtype name snapshots QONNX's mutable

@@ -74,17 +74,18 @@ def configured(wrapped: ModelWrapper, *, fused: bool = True) -> Any:
         if f"{kernel}.memory" not in dict(design.pinned):
             choices[f"{kernel}.memory"] = "memstream"
     point = settled(commit(design.point, choices))
-    core_choices: dict[str, object] = {}
+    # The Decisions inside the subspaces just selected, each keyed by its owner.
+    nested: dict[str, object] = {}
     for _, kernel in design.kernels:
-        core_choices |= {
+        nested |= {
             f"{kernel}.compute.packed.pe": PE,
             f"{kernel}.compute.packed.simd": SIMD,
             f"{kernel}.compute.packed.compute_pumping": False,
         }
         if getattr(point, kernel).supplied == "memstream":
-            core_choices[f"{kernel}.memory.memstream.ram_style"] = "auto"
-            core_choices[f"{kernel}.memory.memstream.pumped_memory"] = False
-    return design, settled(commit(point, core_choices))
+            nested[f"{kernel}.memory.memstream.ram_style"] = "auto"
+            nested[f"{kernel}.memory.memstream.pumped_memory"] = False
+    return design, settled(commit(point, nested))
 
 
 H = exact_result_dtype(INPUTS, A, W)

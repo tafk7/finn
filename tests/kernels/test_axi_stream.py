@@ -7,14 +7,14 @@ import pytest
 from qonnx.core.datatype import DataType
 from finn.kernels.artifacts.abi import Direction, Endpoint
 from finn.kernels.physical.axi_stream import AxiStream
-from finn.kernels.physical.layout import FieldPlacement, UnusedBitPolicy, UnusedBitRange
+from finn.kernels.physical.layout import LanePlacement, UnusedBitPolicy, UnusedBitRange
 
 
 @pytest.mark.parametrize("endpoint", tuple(Endpoint))
 def test_subbyte_scalars_pack_tightly_and_padding_follows_direction(endpoint):
     stream = AxiStream("data", DataType["INT3"], 2, endpoint=endpoint)
     assert stream.data_width == 8
-    assert stream.payload.fields == (FieldPlacement(0, 0, 3), FieldPlacement(1, 3, 3))
+    assert stream.payload.lanes == (LanePlacement(0, 0, 3), LanePlacement(1, 3, 3))
     assert stream.payload.unused == (
         UnusedBitRange(
             6,

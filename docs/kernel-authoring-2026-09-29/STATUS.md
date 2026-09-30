@@ -50,7 +50,7 @@ RECORD.md and PLAN.md keep the names they were written with:
 | `Schedule(folds=)`, `.folds`, `.fold(i)` (the lanes, `F_i`) | `factors=`, `.factors`, `.factor(i)`: the folding factor; the fold `E_i / F_i` is `.steps(i)` |
 | `bound_schedule(beats, folds)`, `AxiStreamPort(folds=)`, `fold_domain`, kernels' `folds` | `bound_schedule(order, factors)`, `factors=`, `factor_domain`, `factors` |
 | `Schedule(beats=)`, `Schedule.beats` (the beat order) | `order=`, `Schedule.order`; `Traversal.beats` (a count) is unchanged |
-| a lane index "field": `Traversal.position(beat, field)`, memstream's `FIELD` | a lane: `position(beat, lane)`, `LANE`; the physical packing keeps "field" for a lane's bits |
+| a lane index "field": `Traversal.position(beat, field)`, memstream's `FIELD`, `FieldPlacement(field_index, …)`, `PackedBeatLayout.fields` | a lane: `position(beat, lane)`, `LANE`, `LanePlacement(lane, …)`, `PackedBeatLayout.lanes` |
 | `conformance(..., folds=)`, `Sample.folds` | `factors=`, `Sample.factors` |
 
 ## Open

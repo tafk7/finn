@@ -132,7 +132,7 @@ A stream's word carries one beat. With element width `w` bits:
 
 ```
 payload width  W = N_L · w
-lane φ         occupies bits [φ·w, (φ+1)·w)          (lane 0 lowest; the physical layer's field)
+lane φ         occupies bits [φ·w, (φ+1)·w)          (lane 0 lowest; code: LanePlacement)
 AXIS carrier   8·⌈W / 8⌉                            (only the whole beat is padded)
 ```
 
@@ -266,7 +266,8 @@ spread over lanes. In `Y[m,n] = Σ_k X·W`, **PE** is `F_n` and **SIMD** is `F_k
 *Terminology note.* This follows FINN, whose documentation calls PE and SIMD
 "folding factors". In VLSI DSP usage [P1] the *folding factor* is instead the
 number of operations time-multiplexed onto one unit, which is `S_i` here.
-"Fold" alone always means `S_i` in this document.
+"Fold" alone always means `S_i` in this document; one step of it, a value of
+the beat part `i_b`, is also called a fold, as in "once per output fold".
 
 ### 4.2 Accesses
 

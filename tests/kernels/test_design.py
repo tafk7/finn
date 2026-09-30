@@ -84,16 +84,17 @@ def chain(*, fused: bool) -> Chain:
             f"{layer}.weight_stream.transport": "direct",
         }
     point = settled(commit(design_space(Chain()), choices))
-    core_choices: dict[str, object] = {}
+    # The Decisions inside the subspaces just selected, each keyed by its owner.
+    nested: dict[str, object] = {}
     for layer in ("first", "second"):
-        core_choices |= {
+        nested |= {
             f"{layer}.compute.packed.pe": PE,
             f"{layer}.compute.packed.simd": SIMD,
             f"{layer}.compute.packed.compute_pumping": False,
             f"{layer}.memory.memstream.ram_style": "auto",
             f"{layer}.memory.memstream.pumped_memory": False,
         }
-    return settled(commit(point, core_choices))
+    return settled(commit(point, nested))
 
 
 def instances(point: Chain) -> list[str]:

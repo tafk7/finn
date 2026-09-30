@@ -6,7 +6,7 @@
 A contract joins three levels, each owned elsewhere and checked here together:
 
 - logical: element encoding, lanes, beat form, repetition and marker rules;
-- physical: low-field-first packing of the element into the transport word;
+- physical: packing of the lanes into the transport word, lane zero lowest;
 - protocol: the ready/valid (or AXIS) pins, marker pins and clock/reset names.
 
 ``compatibility`` compares a producing and a consuming end. A logical mismatch

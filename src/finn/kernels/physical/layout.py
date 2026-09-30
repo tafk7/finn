@@ -21,15 +21,17 @@ class UnusedBitPolicy(Enum):
 
 
 @dataclass(frozen=True)
-class FieldPlacement:
-    field_index: int
+class LanePlacement:
+    """Where one lane sits in the transport word."""
+
+    lane: int
     bit_offset: int
     bit_width: int
 
     def __post_init__(self) -> None:
-        _natural(self.field_index, "field index")
-        _natural(self.bit_offset, "field offset")
-        _natural(self.bit_width, "field width", positive=True)
+        _natural(self.lane, "lane")
+        _natural(self.bit_offset, "lane offset")
+        _natural(self.bit_width, "lane width", positive=True)
 
 
 @dataclass(frozen=True)
@@ -47,20 +49,20 @@ class UnusedBitRange:
 
 @dataclass(frozen=True)
 class PackedBeatLayout:
-    fields: tuple[FieldPlacement, ...]
+    lanes: tuple[LanePlacement, ...]
     unused: tuple[UnusedBitRange, ...] = ()
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "fields", tuple(self.fields))
+        object.__setattr__(self, "lanes", tuple(self.lanes))
         object.__setattr__(self, "unused", tuple(self.unused))
-        if any(not isinstance(item, FieldPlacement) for item in self.fields):
-            raise TypeError("payload fields must be FieldPlacement values")
+        if any(not isinstance(item, LanePlacement) for item in self.lanes):
+            raise TypeError("payload lanes must be LanePlacement values")
         if any(not isinstance(item, UnusedBitRange) for item in self.unused):
             raise TypeError("payload padding must be UnusedBitRange values")
 
 
 __all__ = [
-    "FieldPlacement",
+    "LanePlacement",
     "PackedBeatLayout",
     "UnusedBitPolicy",
     "UnusedBitRange",
