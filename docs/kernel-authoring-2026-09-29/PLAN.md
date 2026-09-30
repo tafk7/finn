@@ -1,9 +1,8 @@
 # Plan: kernel authoring — one port, one schedule, checked against the RTL
 
 Date: 2026-09-29. Status: **G0 answered; P0 done and reviewed** (2026-09-29,
-[`p0/REPORT.md`](p0/REPORT.md)); its corrections are folded in below. **A1 done and
-reviewed; A2, A3 and A3b done (A3 and A3b as parallel lanes), for review**
-([`RECORD.md`](RECORD.md)). Branch
+[`p0/REPORT.md`](p0/REPORT.md)); its corrections are folded in below. **Executed through A7**
+(2026-09-29); see [`STATUS.md`](STATUS.md) and [`RECORD.md`](RECORD.md). Branch
 `feature/kernel-authoring`, worktree `/home/tkeller/prj-kernels/finn-kernel-authoring`,
 from `347f24f6d` (`feature/kernel-package-extraction` with the code-quality pass
 merged).

@@ -1,5 +1,9 @@
 # Physical kernels
 
+To integrate a new RTL module as a kernel, start with the
+[authoring guide](AUTHORING.md): the datasheet-to-model checklist, a worked
+example, and the conformance test that checks the kernel against its RTL.
+
 The supported authoring API is `finn.core.space`. A kernel declares the
 facts it consumes, its implementation decisions, and the typed views it can
 answer. Calling a kernel family with its facts declares a node;
@@ -86,7 +90,8 @@ integer policy; an `AxiStreamPort` presents its kernel's schedule through the
 indices it reads, and the kernel binds each index's extent from the tensors
 its ports read (`Kernel.extents`, `extent_of`; ports that disagree are refused
 as `kernel-extents`). A core therefore sits between streams, whose tensors give
-its elements and extents; its folds are its own Decisions:
+its extents and its consumed elements, and states what it produces; its folds
+are its own Decisions:
 
 ```python
 from finn.core.space import Space
@@ -102,7 +107,12 @@ class Placed(Space):
     w = Stream(tensor=Tensor((2, 2), ScalarEncoding(dtype("INT3"))), port="in1_V")
     y = Stream(tensor=Tensor((1, 2), ScalarEncoding(dtype("INT8"))), port="out0_V")
     dotp = PackedDotpKernel(
-        target_dsp=DspBlock.DSP48E2, target_period_ns=5.0, x_stream=x, w_stream=w, y_stream=y
+        target_dsp=DspBlock.DSP48E2,
+        target_period_ns=5.0,
+        result_dtype=dtype("INT8"),  # the accumulator its parent chooses; y states it
+        x_stream=x,
+        w_stream=w,
+        y_stream=y,
     )
 
 

@@ -623,3 +623,22 @@ adapters 32 passes (26 before, plus the 6 folded `inner_shuffle` cases).
 - Identity dump identical to `evidence/identity-norom.txt`.
 
 A6_XSIM
+
+## A7: the authoring guide
+
+- `src/finn/kernels/AUTHORING.md`: the datasheet-to-model table and checklist
+  (indices, folds, the loop nest, each interface's index, lanes, reduces and
+  TLAST, elements, admission), the worked `accpool_axi` example (model only:
+  no RTL exists), placing it and what the model derives (extents, forms,
+  parameters, the fold domain, a disagreement refused, the output element
+  stated with the output unplaced, a mismatched stream refused), the loop-order
+  trade-off priced as stream plans (same order: direct; other lanes: a width
+  conversion; channel folds outer: a reorder), and the conformance test
+  (defined, not run: no RTL).
+- Linked from the top of `src/finn/kernels/README.md`. The scratchpad checker
+  (`space/check-examples.py`) runs it when the FINN tree has one.
+- **Found here:** A6 (`dd1ba4568`) broke the README's dotp example (dotp's new
+  required `result_dtype`); the documentation examples are not a fast gate, so
+  only this step's run caught it. Fixed.
+- Documentation examples: **33 passed** (Space DESIGN 1, AUTHORING 21, kernel
+  README 5, kernel AUTHORING 6).
