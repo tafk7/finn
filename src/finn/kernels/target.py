@@ -33,8 +33,4 @@ def dsp_widths(target: object) -> tuple[int, int, int]:
         raise ValueError(f"unsupported target DSP {name!r}") from error
 
 
-def target_accumulator_bits(target: object) -> int:
-    return dsp_widths(target)[2]
-
-
-__all__ = ["DspBlock", "dsp_widths", "target_accumulator_bits"]
+__all__ = ["DspBlock", "dsp_widths"]

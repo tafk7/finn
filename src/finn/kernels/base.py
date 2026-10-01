@@ -48,7 +48,6 @@ from finn.core.space import (
 )
 
 from finn.core.space.errors import DefinitionError
-from finn.core.space.inspection import NodeInfo, members
 from finn.kernels.artifacts.abi import (
     Bus,
     Clock,
@@ -174,11 +173,6 @@ class Kernel(Space):
             value = getattr(cls, name)
             if type(value) is not str or not value:
                 raise DefinitionError(f"{cls.__qualname__} must declare a nonempty string {name}")
-
-    def capabilities(self) -> tuple[NodeInfo, ...]:
-        """Inspect authored views in this scope and its children without evaluating."""
-
-        return tuple(member for member in members(self) if member.kind == "view")
 
     # -- the protocol: what a kernel declares ----------------------------------------------
 

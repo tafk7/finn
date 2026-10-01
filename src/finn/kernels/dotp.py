@@ -151,12 +151,6 @@ class DotpAxiKernel(Kernel):
     )
 
     @constraint
-    def target_supported(self) -> bool | Rejected:
-        if self.target_dsp not in _DSP_VERSION:
-            return reject("dotp-target", "the RTL has no implementation for this DSP target")
-        return True
-
-    @constraint
     def core_supported(self) -> bool | Rejected:
         # The ports admit the encodings (integer family, signedness, two bits);
         # these are the core's own bounds on them and on the form.
@@ -210,7 +204,6 @@ class DotpAxiKernel(Kernel):
         return min(meets, chain)
 
     admission = ConstraintGroup(
-        target_supported,
         core_supported,
         accumulator_width_supported,
         stream_widths_supported,

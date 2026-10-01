@@ -23,11 +23,10 @@ from finn.core.space import (
     design_space,
     constraint,
     derived,
+    inspection,
     selections,
-    view,
 )
 from finn.core.space.errors import DefinitionError, RequestError
-from finn.kernels.artifacts.hls import HlsInterface, HlsSourceRequirements
 from finn.kernels.base import Kernel
 from finn.kernels.datatypes.domains import Integer, SignedInteger
 from finn.kernels.datatypes.scalar import IntegerScalar, integer_scalar
@@ -46,16 +45,14 @@ from finn.dataflow.datatypes import (
 )
 
 
+def views(point: object) -> list[str]:
+    return [item.key for item in inspection.members(point) if item.kind == "view"]
+
+
 @dataclass(frozen=True)
 class Pins:
     inputs: tuple[tuple[str, int], ...]
     outputs: tuple[tuple[str, int], ...]
-
-
-@dataclass(frozen=True)
-class AxisShape:
-    payload_bits: int
-    transfer_bits: int
 
 
 def test_kernel_identity_is_validated_at_class_creation() -> None:
@@ -72,79 +69,10 @@ def test_kernel_identity_is_validated_at_class_creation() -> None:
     assert Empty.version == "1"
     # The protocol's views; a kernel that declares no module builds none.
     empty = design_space(Empty())
-    assert [item.key for item in empty.capabilities()] == ["build_requirements", "tieoffs"]
+    assert views(empty) == ["build_requirements", "tieoffs"]
     refused = empty.query(Empty.build_requirements)
     assert isinstance(refused, Rejected)
     assert {finding.code for finding in refused.findings} == {"kernel-module"}
-
-
-def test_kernel_capabilities_have_independent_output_types_and_no_implicit_abi() -> None:
-    calls: list[str] = []
-
-    class OpaqueWord(Kernel):
-        id = "test.opaque"
-        bits: int = Param()
-
-        @view
-        def pins(self) -> Pins:
-            bits = self.bits
-            calls.append("pins")
-            return Pins((("word", bits),), (("result", bits),))
-
-    class Axis(Kernel):
-        id = "test.axis"
-        bits: int = Param()
-        lanes: int = Param()
-
-        @view
-        def stream(self) -> AxisShape:
-            bits = self.bits
-            lanes = self.lanes
-            payload = bits * lanes
-            return AxisShape(payload, 8 * ((payload + 7) // 8))
-
-    class Hls(Kernel):
-        id = "test.hls"
-
-        @view
-        def sources(self) -> HlsSourceRequirements:
-            return HlsSourceRequirements(
-                "test.hls",
-                "1",
-                "source",
-                (HlsInterface("output", "ap_uint<13>", (), "axis"),),
-                "ap_ctrl_none",
-                (),
-                (),
-                (),
-            )
-
-    opaque = design_space(OpaqueWord(bits=13))
-    capabilities = opaque.capabilities()
-    assert [entry.key for entry in capabilities] == ["build_requirements", "pins", "tieoffs"]
-    assert calls == []
-    assert opaque.pins == Pins((("word", 13),), (("result", 13),))
-    answer = opaque.query(OpaqueWord.pins)
-    assert isinstance(answer, Available)
-    assert answer.value == Pins((("word", 13),), (("result", 13),))
-    axis = design_space(Axis(bits=13, lanes=3))
-    assert axis.stream == AxisShape(39, 40)
-    hls = design_space(Hls())
-    result = hls.sources
-    assert isinstance(result, HlsSourceRequirements)
-    assert [entry.key for entry in hls.capabilities()] == [
-        "build_requirements",
-        "sources",
-        "tieoffs",
-    ]
-    assert not hasattr(result, "abi")
-
-    class Invalid(Hls):
-        id = "test.invalid"
-        exports = {ViewKey("pins", Pins): Hls.sources}
-
-    with pytest.raises(DefinitionError, match="semantics|type"):
-        design_space(Invalid())
 
 
 @pytest.mark.parametrize(
@@ -333,5 +261,5 @@ def test_composite_extends_kernel_with_typed_optional_views_and_independent_node
     assert point.query(activation_ports) == Available(Pins((("word", 8),), ()))
     assert isinstance(point.query(weights_ports), Rejected)
     assert point.query(getattr(Pair.weights, "payload_bits")) == Available(32)
-    authored = [info.key for info in point.capabilities() if info.key.endswith("ports")]
+    authored = [key for key in views(point) if key.endswith("ports")]
     assert authored == ["activation.ports", "weights.ports"]

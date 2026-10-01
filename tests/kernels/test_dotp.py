@@ -62,7 +62,11 @@ def test_a_core_declares_ports_folding_factors_and_facts_and_the_base_derives_th
     assert DotpAxiKernel.__bases__ == (Kernel,)
     assert PackedDotpKernel.__bases__ == Int8Dsp58DotpKernel.__bases__ == (DotpAxiKernel,)
     point = kernel()
-    assert [item.key for item in point.capabilities() if item.scope == "compute"] == [
+    assert [
+        item.key
+        for item in inspection.members(point)
+        if item.kind == "view" and item.scope == "compute"
+    ] == [
         "compute.build_requirements",
         "compute.tieoffs",
     ]

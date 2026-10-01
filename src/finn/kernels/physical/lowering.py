@@ -37,7 +37,7 @@ from finn.kernels.physical.structure import (
     PhysicalStructureError,
     PinSlice,
 )
-from finn.kernels.physical.validation import abi_pins, pin_info, validate_physical_structure
+from finn.kernels.physical.validation import abi_pins, pin_info
 
 PORT_DECLARATIONS = "PORT_DECLARATIONS"
 NET_DECLARATIONS = "NET_DECLARATIONS"
@@ -242,9 +242,9 @@ def lower_module_structure(
     producer: ProducerIdentity,
     wrapper_template: RenderedSourceRequirement,
 ) -> ModuleBuildRequirements:
-    """Lower one validated structure to model-free generated-module inputs."""
+    """Lower one validated structure (``PhysicalStructure`` validates itself) to
+    model-free generated-module inputs."""
 
-    validate_physical_structure(structure)
     if not isinstance(structure.top_abi.entry_point, GeneratedModuleName):
         raise PhysicalStructureError("a composed module requires a generated top name")
     if wrapper_template.renderer != SELF_CONTAINED_JINJA_RENDERER:

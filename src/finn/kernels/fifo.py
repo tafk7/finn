@@ -33,11 +33,10 @@ from finn.kernels.port import WordPort
 
 @dataclass(frozen=True)
 class FifoStorage:
-    """Native storage selection and capacity; synthesis resource inference is separate."""
+    """The storage the native RTL selects for ``ram_style`` and DEPTH, and the words it
+    accepts; synthesis resource inference is separate."""
 
-    requested_style: str
     effective_style: str
-    requested_depth: int
     capacity: int
 
 
@@ -57,14 +56,11 @@ class FifoKernel(Kernel):
             return reject("fifo-geometry", "word_bits must be positive and depth at least two")
         return True
 
-    admission = ConstraintGroup(geometry_supported)
     ram_style: str = Decision(values=("auto", "shift", "distributed", "block", "ultra"))
 
     @view(requires=(geometry_supported,))
     def storage(self) -> FifoStorage | Rejected:
         depth, style, bits = self.depth, self.ram_style, self.word_bits
-        if not 2 <= depth <= 0xFFFFFFFF:
-            return reject("fifo-geometry", "depth must fit native unsigned int and be at least two")
         effective = (
             "shift"
             if depth <= 33
@@ -96,7 +92,15 @@ class FifoKernel(Kernel):
             if lo >= 32:
                 return reject("fifo-capacity", "native memory size overflows unsigned int")
             capacity = (1 << lo) + ((1 << hi) if hi else 0) + (17 if ultra else 2)
-        return FifoStorage(style, effective, depth, capacity)
+        return FifoStorage(effective, capacity)
+
+    @constraint
+    def capacity_supported(self) -> bool | Rejected:
+        """The native memory the storage decomposes into is addressable."""
+        _ = self.storage
+        return True
+
+    admission = ConstraintGroup(geometry_supported, capacity_supported)
 
     input = WordPort(name="input", endpoint=Endpoint.TARGET, bits=word_bits)
     output = WordPort(name="output", endpoint=Endpoint.INITIATOR, bits=word_bits)
@@ -106,8 +110,11 @@ class FifoKernel(Kernel):
         return NATIVE_CLOCKING
 
     def parameters(self) -> Mapping[str, int | str]:
-        ram = self.storage.requested_style
-        return {"DATA_WIDTH": self.word_bits, "DEPTH": self.depth, "RAM_STYLE": f'"{ram}"'}
+        return {
+            "DATA_WIDTH": self.word_bits,
+            "DEPTH": self.depth,
+            "RAM_STYLE": f'"{self.ram_style}"',
+        }
 
     def sources(self) -> tuple[CopiedSource, ...]:
         return (CopiedSource("finnlib", "rtl/infra/fifo.sv", provides=("module:fifo",)),)

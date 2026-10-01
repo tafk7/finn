@@ -81,13 +81,19 @@ class ThresholdingAxiKernel(Kernel):
     thresholds: ThresholdTable = Param(semantics=THRESHOLD_TABLE)
     bias: int = Param()
 
+    @derived
+    def shape(self) -> tuple[int, int, int] | Rejected:
+        """SETS, C and N, as the table's first row states them (``table_supported``
+        refuses a table that is not rectangular)."""
+        table = self.thresholds
+        if not table or not table[0] or not table[0][0]:
+            return reject("threshold-shape", "nonempty sets/channels/thresholds are required")
+        return len(table), len(table[0]), len(table[0][0])
+
     @derived(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
     def result_dtype(self) -> QONNXDataType | Rejected:
-        table = self.thresholds
         bias = self.bias
-        if not table or not table[0] or not table[0][0]:
-            return reject("threshold-shape", "a nonempty threshold table is required")
-        count = len(table[0][0])
+        _, _, count = self.shape
         if bias >= 0:
             bits = max(1, (count + bias).bit_length())
             return resolve_qonnx_datatype_name(f"UINT{bits}")
@@ -98,12 +104,9 @@ class ThresholdingAxiKernel(Kernel):
         return resolve_qonnx_datatype_name(f"INT{bits}")
 
     @derived
-    def channels(self) -> int | Rejected:
+    def channels(self) -> int:
         """C, the table's: known without a stream, so a flat build has its factor domain."""
-        table = self.thresholds
-        if not table or not table[0]:
-            return reject("threshold-shape", "a nonempty threshold table is required")
-        return len(table[0])
+        return self.shape[1]
 
     # PE channels a beat; PE above C would carry rows in the lanes, not modelled yet.
     pe: int = Decision(domain=divisors_of(channels))
@@ -133,10 +136,7 @@ class ThresholdingAxiKernel(Kernel):
 
     @constraint
     def table_supported(self) -> bool | Rejected:
-        table = self.thresholds
-        if not table or not table[0] or not table[0][0]:
-            return reject("threshold-shape", "nonempty sets/channels/thresholds are required")
-        channels, count = len(table[0]), len(table[0][0])
+        table, (_, channels, count) = self.thresholds, self.shape
         if any(
             len(group) != channels or any(len(row) != count for row in group) for group in table
         ):
@@ -168,12 +168,10 @@ class ThresholdingAxiKernel(Kernel):
 
     @constraint
     def bias_supported(self) -> bool | Rejected:
-        bias, table = self.bias, self.thresholds
-        if not table or not table[0] or not table[0][0]:
-            return reject("threshold-shape", "a nonempty threshold table is required")
+        bias, (_, _, count) = self.bias, self.shape
         if not -(1 << 31) <= bias < (1 << 31):
             return reject("threshold-bias", "BIAS must fit native signed int")
-        if bias < -len(table[0][0]) - 1:
+        if bias < -count - 1:
             return reject(
                 "threshold-negative-range",
                 "native RTL does not sign-extend BIAS correctly below -N-1",
@@ -182,7 +180,7 @@ class ThresholdingAxiKernel(Kernel):
 
     @constraint
     def configuration_supported(self) -> bool | Rejected:
-        if self.use_axilite and len(self.thresholds) > 1:
+        if self.use_axilite and self.shape[0] > 1:
             return reject(
                 "threshold-config-sets",
                 "the native AXI wrapper does not address multiple configuration sets",
@@ -200,10 +198,8 @@ class ThresholdingAxiKernel(Kernel):
     @derived
     def config_bus(self) -> Bus | Rejected:
         """The AXI-Lite configuration bus, present in every configuration."""
-        table, pe, bits = self.thresholds, self.pe, self.threshold_dtype.bitwidth()
-        if not table or not table[0] or not table[0][0] or pe < 1:
-            return reject("threshold-shape", "a nonempty table and a positive PE are required")
-        channels, count = len(table[0]), len(table[0][0])
+        (_, channels, count), pe = self.shape, self.pe
+        bits = self.threshold_dtype.bitwidth()
         cf, cpe = max(1, channels // pe), min(channels, pe)
         address_bits = (
             sum((value - 1).bit_length() for value in (cf, cpe, count, (bits + 31) // 32)) + 2
@@ -239,7 +235,7 @@ class ThresholdingAxiKernel(Kernel):
 
     @derived(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
     def selector_dtype(self) -> QONNXDataType:
-        return set_index_dtype(len(self.thresholds))
+        return set_index_dtype(self.shape[0])
 
     @derived
     def indices(self) -> tuple[Index, ...]:
@@ -261,7 +257,7 @@ class ThresholdingAxiKernel(Kernel):
     def set_sequence(self) -> BeatSequence | Rejected:
         """One set index for each input beat."""
         shape = self.set_stream.tensor.shape
-        if len(self.thresholds) < 2:
+        if self.shape[0] < 2:
             return reject("threshold-set-stream", "a single threshold set takes no set stream")
         if shape != (self.input.presented.form.beats,):
             return reject("threshold-set-stream", "each input beat needs one set index")
@@ -296,10 +292,8 @@ class ThresholdingAxiKernel(Kernel):
         dtype=selector_dtype,
     )
 
-    def parameters(self) -> Mapping[str, int | str] | Rejected:
-        table = self.thresholds
-        if not table or not table[0] or not table[0][0]:
-            return reject("threshold-shape", "a nonempty threshold table is required")
+    def parameters(self) -> Mapping[str, int | str]:
+        table, (sets, channels, count) = self.thresholds, self.shape
         a = self.input_encoding.encoding.dtype
         bits = self.threshold_encoding.encoding.dtype.bitwidth()
         mask = (1 << bits) - 1
@@ -319,13 +313,13 @@ class ThresholdingAxiKernel(Kernel):
         return {
             "WI": a.bitwidth(),
             "WT": bits,
-            "N": len(table[0][0]),
-            "C": len(table[0]),
+            "N": count,
+            "C": channels,
             "PE": self.pe,
             "SIGNED": int(a.signed()),
             "FPARG": 0,
             "BIAS": self.bias,
-            "SETS": len(table),
+            "SETS": sets,
             "THRESHOLDS": image,
             "THRESHOLDS_FILE": '""',
             "USE_AXILITE": int(self.use_axilite),

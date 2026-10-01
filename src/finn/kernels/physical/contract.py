@@ -10,8 +10,8 @@ A contract joins three levels, each owned elsewhere and checked here together:
 - protocol: the ready/valid (or AXIS) pins, marker pins and clock/reset names.
 
 ``compatibility`` compares a producing and a consuming end. A logical mismatch
-can only be repaired by an adapter kernel, which ``forms.classify`` names
-(reorder or replay, width conversion, lane regroup). A pure lane permutation,
+can only be repaired by an adapter, which ``finn.dataflow.traversal.classify``
+names (reorder or replay, width conversion, lane regroup). A pure lane permutation,
 padding and reset polarity leave the sequence unchanged; they are properties of
 the connection, which ``Composition.connect`` realizes as wires: a producer's
 padding bits are left unconnected inside the composition, and a consumer's

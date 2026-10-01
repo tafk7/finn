@@ -19,7 +19,6 @@ from finn.kernels.artifacts.abi import Bus, Direction, Endpoint, Member, Signal,
 class MarkerKind(Enum):
     LAST = "last"
     LOOP_END = "loop_end"
-    REPLAY_END = "replay_end"
 
 
 @dataclass(frozen=True)
@@ -34,7 +33,7 @@ class StreamMarker:
         if type(self.width) is not int or self.width < 1:
             raise ValueError("a stream marker has positive width")
         if self.kind is not MarkerKind.LOOP_END and self.width != 1:
-            raise ValueError("last and final-replay markers are one bit")
+            raise ValueError("a last marker is one bit")
 
 
 @dataclass(frozen=True)
@@ -43,7 +42,6 @@ class ReadyValidStream:
 
     LAST only identifies a frame boundary; the kernel supplies its cross-port
     meaning. LOOP_END carries the native nested-loop completion vector.
-    REPLAY_END marks the last transfer of the final sequence repetition.
     """
 
     name: str
