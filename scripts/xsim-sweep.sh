@@ -32,9 +32,14 @@ if [ -z "${XILINX_VIVADO:-}" ]; then
     exit 2
 fi
 # A selected but unapplied Vivado (an sbx sandbox, a bare shell): the sweeps load
-# the simulation kernel in-process and need its library path.
-# shellcheck source=/dev/null
-[ "${FINN_ENV_APPLIED:-}" = 1 ] || . "$ROOT/docker/finn-toolchain.sh"
+# the simulation kernel in-process and need its library path. AMD's settings
+# scripts read unset variables, so not under set -u.
+if [ "${FINN_ENV_APPLIED:-}" != 1 ]; then
+    set +u
+    # shellcheck source=/dev/null
+    . "$ROOT/docker/finn-toolchain.sh"
+    set -u
+fi
 # The checkout's own environment natively; the image's active one in a container or sandbox.
 PY="$ROOT/.venv/bin/python"
 [ -x "$PY" ] || PY=$(command -v python3)
