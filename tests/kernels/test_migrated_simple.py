@@ -11,14 +11,11 @@ import pytest
 
 from finn.kernels.artifacts.abi import Direction, Signal
 from finn.kernels.artifacts.contribution_types import CopiedSource
-from finn.kernels.datatypes.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
-from finn.dataflow.datatypes import QONNXDataType, resolve_qonnx_datatype_name
+from finn.dataflow.datatypes import resolve_qonnx_datatype_name
 from finn.kernels.eltwise import EltwiseKernel
 from finn.kernels.fifo import FifoKernel
-from finn.kernels.int_to_fp32 import IntToFp32Kernel
 from finn.core.space import (
     Available,
-    DefinitionError,
     Param,
     QueryResult,
     Rejected,
@@ -89,49 +86,6 @@ def test_fifo_geometry_refusal_remains_visible_before_and_after_ram_choice(
     with pytest.raises(ValueUnavailableError) as error:
         _ = chosen.build_requirements
     assert isinstance(error.value.result, Rejected)
-
-
-@pytest.mark.parametrize(
-    ("name", "width", "signed"), (("INT9", 9, 1), ("BINARY", 1, 0), ("INT128", 128, 1))
-)
-def test_converter_has_only_native_combinational_pins(name: str, width: int, signed: int) -> None:
-    point = design_space(IntToFp32Kernel(input_dtype=resolve_qonnx_datatype_name(name)))
-    assert point.result_dtype.name == "FLOAT32"
-    requirements = point.build_requirements
-    assert requirements.parameters == (("SIGNED", signed), ("WIDTH", width))
-    assert [
-        (port.name, port.direction, port.width)
-        for port in requirements.abi.ports
-        if isinstance(port, Signal)
-    ] == [("ival", Direction.IN, width), ("fval", Direction.OUT, 32)]
-
-
-@pytest.mark.parametrize("name", ("FLOAT32", "BIPOLAR", "TERNARY", "INT129"))
-def test_converter_refuses_unsupported_encodings_and_widths(name: str) -> None:
-    point = design_space(IntToFp32Kernel(input_dtype=resolve_qonnx_datatype_name(name)))
-    assert isinstance(point.inspect(IntToFp32Kernel.build_requirements).accepted_result, Rejected)
-
-
-def test_required_root_inputs_fail_binding_and_optional_parent_exposure_keeps_partial_read() -> (
-    None
-):
-    # A missing required formal is refused when design_space() prepares the root.
-    with pytest.raises(DefinitionError, match="depth is not supplied"):
-        design_space(FifoKernel(word_bits=13))
-    with pytest.raises(DefinitionError, match="is not supplied"):
-        design_space(IntToFp32Kernel())
-
-    # Replaces an inline exposed Param child binding: the parent declares the
-    # optional formal itself and binds the child's formal to it by name.
-    class OptionalConverter(Space):
-        input_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS, required=False)
-        converter = IntToFp32Kernel(input_dtype=input_dtype)
-
-    point = design_space(OptionalConverter())
-    assert point.converter.result_dtype.name == "FLOAT32"
-    assert isinstance(
-        point.converter.inspect(IntToFp32Kernel.build_requirements).accepted_result, Unresolved
-    )
 
 
 def eltwise(

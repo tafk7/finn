@@ -9,7 +9,7 @@ outside this repository until the package is final.
 | Module | Holds |
 |---|---|
 | `base.py`, `composite.py`, `port.py`, `streams.py`, `adapters.py` | the kernel base, composite kernels, `AxiStreamPort`, streams and the adapters planned between them |
-| `dotp.py`, `matmul.py`, `thresholding.py`, `eltwise.py`, `fifo.py`, `memstream.py`, `memstream_hls.py`, `input_generator.py`, `transpose.py`, `vpc.py`, `int_to_fp32.py` | the kernels |
+| `dotp.py`, `matmul.py`, `thresholding.py`, `eltwise.py`, `fifo.py`, `memstream.py`, `input_generator.py`, `transpose.py`, `vpc.py` | the kernels |
 | `configure.py` | committing and settling choices by key |
 | `control.py`, `target.py` | control buses, clocks and target devices |
 | `datatypes/` | scalar datatype domains and semantics |

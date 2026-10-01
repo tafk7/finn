@@ -20,34 +20,7 @@ from finn.dataflow.datatypes import (
     qonnx_datatype_width,
     resolve_qonnx_datatype_name,
 )
-from finn.kernels.physical.layout import (
-    LanePlacement,
-    PackedBeatLayout,
-    UnusedBitPolicy,
-    UnusedBitRange,
-)
 from finn.kernels.physical.stream import MarkerKind, ReadyValidStream, StreamMarker
-
-
-def lane_layout(
-    element_bits: int, lanes: int, carrier_bits: int, endpoint: Endpoint
-) -> PackedBeatLayout:
-    """Lane zero in the least-significant bits; padding follows the payload."""
-    payload = element_bits * lanes
-    return PackedBeatLayout(
-        tuple(LanePlacement(lane, lane * element_bits, element_bits) for lane in range(lanes)),
-        ()
-        if payload == carrier_bits
-        else (
-            UnusedBitRange(
-                payload,
-                carrier_bits - payload,
-                UnusedBitPolicy.IGNORE_ON_RECEIVE
-                if endpoint is Endpoint.TARGET
-                else UnusedBitPolicy.UNSPECIFIED,
-            ),
-        ),
-    )
 
 
 @dataclass(frozen=True, init=False)
@@ -109,12 +82,6 @@ class AxiStream:
     def carrier_bits(self) -> int:
         return (self.payload_bits + 7) // 8 * 8
 
-    @property
-    def payload(self) -> PackedBeatLayout:
-        return lane_layout(
-            self.element_bits, self.elements_per_beat, self.data_width, self.endpoint
-        )
-
     def bus(self, *, clock: str | None = None, reset: str | None = None) -> Bus:
         """Lower to the existing, purely physical ABI representation."""
         return self.native(clock=clock, reset=reset).axis_bus()
@@ -134,4 +101,4 @@ class AxiStream:
         )
 
 
-__all__ = ["AxiStream", "lane_layout"]
+__all__ = ["AxiStream"]

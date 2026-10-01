@@ -156,15 +156,11 @@ NATIVE_CLOCKING = Clocking(clock="clk", reset="rst", active_low=False)
 
 
 class Kernel(Space):
-    """A named family configuring one module; see the module docstring for the protocol.
-
-    A kernel may describe plain pins, a stream boundary, source requirements,
-    or other values. Identity does not imply any particular interface or view.
-    """
+    """A named family configuring one module; see the module docstring for the protocol."""
 
     id: ClassVar[str] = ""
     version: ClassVar[str] = "1"
-    # The RTL module it instantiates; empty for a kernel off the protocol.
+    # The RTL module it instantiates; empty for a composite, which generates its own.
     module: ClassVar[str] = ""
 
     def __init_subclass__(cls, **kwargs: object) -> None:

@@ -10,22 +10,16 @@ from typing import cast
 import pytest
 
 from finn.kernels.artifacts.abi import Bus, Signal
-from finn.kernels.artifacts.hls import HlsSourceRequirements, render_hls_sources
 from finn.kernels.datatypes.semantics import IntegerVector, ThresholdTable
 from finn.dataflow.datatypes import resolve_qonnx_datatype_name
 from finn.kernels.input_generator import InputGeneratorKernel
-from finn.kernels.memstream_hls import MemStreamHlsKernel
-from finn.kernels.resources import template_root
 from finn.core.space import (
     DefinitionError,
-    Param,
     Rejected,
-    Space,
     Unresolved,
     design_space,
 )
 from finn.kernels.thresholding import ThresholdingAxiKernel
-from kernels.helpers import finnlib_root
 
 TABLE: ThresholdTable = (((-2, 0, 3), (-1, 1, 4)),)
 
@@ -88,12 +82,6 @@ def threshold(
     report = base.try_with_choices(use_axilite=axilite, deep_pipeline=deep, **factors)
     assert report.accepted
     return report.instance
-
-
-def memstream(dtype: str = "INT9", depth: int = 3) -> MemStreamHlsKernel:
-    return design_space(
-        MemStreamHlsKernel(element_dtype=resolve_qonnx_datatype_name(dtype), depth=depth)
-    )
 
 
 def test_generator_preserves_zero_stride_replay_and_multibit_native_markers() -> None:
@@ -220,61 +208,3 @@ def test_threshold_rejects_existing_unsupported_profiles_and_malformed_tables() 
     # PE is a divisor of the table's channels: another is refused where it is committed.
     for pe in (0, 3, 4):
         assert not threshold_base().try_with_choices(pe=pe).accepted
-
-
-@pytest.mark.parametrize(
-    ("dtype", "cpp"),
-    (
-        ("INT9", "ap_int<9>"),
-        ("UINT3", "ap_uint<3>"),
-        ("BINARY", "ap_uint<1>"),
-        ("FLOAT32", "float"),
-    ),
-)
-def test_hls_view_preserves_cpp_types_interfaces_and_header_closure(dtype: str, cpp: str) -> None:
-    point = memstream(dtype)
-    requirements = point.sources
-    assert isinstance(requirements, HlsSourceRequirements)
-    assert point.cpp_type == cpp
-    assert not hasattr(requirements, "abi")
-    assert [(p.name, p.cpp_type, p.shape, p.mode) for p in requirements.interfaces] == [
-        ("mem", cpp, (3,), "s_axilite"),
-        ("dst", cpp, (), "axis"),
-    ]
-    rendered = render_hls_sources(
-        requirements,
-        roots={"finnlib": finnlib_root()},
-        template_roots=(template_root(),),
-    )
-    assert [name for name, _ in rendered] == [
-        "hls/util/util.hpp",
-        "hls/infra/memstream.hpp",
-        "memstream_hls.cpp",
-    ]
-    top = dict(rendered)["memstream_hls.cpp"].decode()
-    assert f"using element_t = {cpp};" in top
-    assert "(&mem)[3]" in top
-
-
-@pytest.mark.parametrize(("dtype", "depth"), (("BIPOLAR", 3), ("INT1025", 3), ("INT9", 1)))
-def test_hls_native_type_and_depth_limits_remain_explicit_refusals(dtype: str, depth: int) -> None:
-    assert isinstance(
-        memstream(dtype, depth).inspect(MemStreamHlsKernel.sources).accepted_result,
-        Rejected,
-    )
-
-
-def test_rich_roots_require_parameters_and_optional_parent_depth_permits_narrow_hls_type() -> None:
-    for family in (InputGeneratorKernel, ThresholdingAxiKernel, MemStreamHlsKernel):
-        with pytest.raises(DefinitionError, match="is not supplied"):
-            design_space(family())
-
-    # Replaces an inline exposed Param child binding: the optional depth is the
-    # parent's own formal, bound to the child by name.
-    class OptionalMemory(Space):
-        depth: int = Param(required=False)
-        memory = MemStreamHlsKernel(element_dtype=resolve_qonnx_datatype_name("INT9"), depth=depth)
-
-    point = design_space(OptionalMemory())
-    assert point.memory.cpp_type == "ap_int<9>"
-    assert isinstance(point.memory.inspect(MemStreamHlsKernel.sources).accepted_result, Unresolved)

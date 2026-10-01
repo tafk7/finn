@@ -4,9 +4,7 @@
 """Authoring examples assessed against native modules, not copied width formulas."""
 
 from pathlib import Path
-import os
 import struct
-import subprocess
 
 import pytest
 from qonnx.core.datatype import DataType
@@ -17,27 +15,18 @@ from finn.kernels import (
     EltwiseKernel,
     FifoKernel,
     InputGeneratorKernel,
-    IntToFp32Kernel,
-    MemStreamHlsKernel,
     ThresholdingAxiKernel,
 )
 from finn.kernels.artifacts.abi import Bus
 from finn.kernels.artifacts.build import prepare_module_build, render_module_sources
 from finn.kernels.artifacts.contribution_types import CopiedSource
-from finn.kernels.artifacts.hls import render_hls_sources
 from finn.kernels.artifacts.rtl import TOLERATED_DIAGNOSTICS
 from finn.kernels.artifacts.store import ArtifactStore
-from finn.kernels.resources import resource_root, template_root
-from finn.kernels.datatypes.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
+from finn.kernels.resources import resource_root
 from finn.core.space import (
     DefinitionError,
-    Param,
     Rejected,
-    Space,
-    Unresolved,
-    design_space,
 )
-from finn.dataflow.datatypes import QONNXDataType
 from kernels.helpers import finnlib_root, point_for
 from finn.kernels.target import DspBlock
 from kernels.xsim import requires_xsim, simulate
@@ -95,14 +84,6 @@ def threshold(*, use_axilite=False, deep_pipeline=False, pe=1, **changes):
     )
 
 
-def converter(dtype="INT9"):
-    return point_for(IntToFp32Kernel, dict(input_dtype=DataType[dtype]))
-
-
-def memstream(dtype="INT9", depth=3):
-    return point_for(MemStreamHlsKernel, dict(element_dtype=DataType[dtype], depth=depth))
-
-
 def native_ports(requirements, tmp_path):
     """Elaborate a real child so string/array parameters remain native SV values."""
     options = ast.CompilationOptions()
@@ -150,9 +131,6 @@ def native_ports(requirements, tmp_path):
         lambda: fifo(depth=64, word_bits=17),
         generator,
         lambda: generator(frame_words=56, dims=(3, 4, 2, 3), strides=(16, 1, 16, 2)),
-        converter,
-        lambda: converter("BINARY"),
-        lambda: converter("INT128"),
         eltwise,
         lambda: eltwise(operation="SUB", lhs_dtype=DataType["UINT7"], rhs_dtype=DataType["UINT7"]),
         lambda: eltwise(operation="MUL", lhs_dtype=DataType["FLOAT32"]),
@@ -199,9 +177,6 @@ def test_native_rtl_pin_names_directions_and_widths(factory, tmp_path):
         lambda: generator(strides=(1,)),
         lambda: generator(dims=(2, 6), strides=(1, 1)),
         lambda: generator(strides=(-1, 1)),
-        lambda: converter("FLOAT32"),
-        lambda: converter("BIPOLAR"),
-        lambda: converter("INT129"),
         lambda: eltwise(operation="DIV"),
         lambda: eltwise(lhs_dtype=DataType["INT4"]),
         lambda: eltwise(lhs_dtype=DataType["BIPOLAR"]),
@@ -217,8 +192,6 @@ def test_native_rtl_pin_names_directions_and_widths(factory, tmp_path):
         lambda: threshold(bias=1 << 31),
         lambda: threshold(bias=-10),
         lambda: threshold(use_axilite=True, thresholds=(((0, 1),), ((0, 1),))),
-        lambda: memstream(depth=1),
-        lambda: memstream(dtype="BIPOLAR"),
     ],
 )
 def test_unsupported_cases_are_refused_without_constructing_invalid_interfaces(factory):
@@ -295,96 +268,13 @@ def test_required_root_bindings_and_explicit_optional_inputs_preserve_partial_qu
         FifoKernel,
         InputGeneratorKernel,
         EltwiseKernel,
-        IntToFp32Kernel,
         ThresholdingAxiKernel,
-        MemStreamHlsKernel,
     ):
         # A missing required formal is refused when design_space() prepares the root.
         with pytest.raises(DefinitionError, match="is not supplied"):
             point_for(kernel, {})
 
-    # Replaces an inline exposed Param child binding: the parent declares the
-    # optional formal itself and binds the child's formal to it by name.
-    class OptionalConverter(Space):
-        input_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS, required=False)
-        converter = IntToFp32Kernel(input_dtype=input_dtype)
-
-    point = design_space(OptionalConverter()).converter
-    assert point.result_dtype == DataType["FLOAT32"]
-    assert isinstance(point.inspect(IntToFp32Kernel.build_requirements).accepted_result, Unresolved)
     assert all(not isinstance(port, Bus) for port in fifo().build_requirements.abi.ports)
-    assert {port.name for port in converter().build_requirements.abi.ports} == {
-        "ival",
-        "fval",
-    }
-
-
-@pytest.mark.parametrize(
-    "dtype,cpp",
-    [
-        ("INT9", "ap_int<9>"),
-        ("UINT3", "ap_uint<3>"),
-        ("BINARY", "ap_uint<1>"),
-        ("FLOAT32", "float"),
-    ],
-)
-def test_hls_sources_have_native_function_interfaces_and_complete_header_closure(
-    dtype, cpp, tmp_path
-):
-    point = memstream(dtype=dtype)
-    requirements = point.sources
-    assert point.cpp_type == cpp
-    assert not hasattr(requirements, "abi")
-    assert [(p.name, p.cpp_type, p.shape, p.mode) for p in requirements.interfaces] == [
-        ("mem", cpp, (3,), "s_axilite"),
-        ("dst", cpp, (), "axis"),
-    ]
-    files = dict(
-        render_hls_sources(
-            requirements, roots={"finnlib": FINNLIB}, template_roots=(template_root(),)
-        )
-    )
-    assert set(files) == {"hls/util/util.hpp", "hls/infra/memstream.hpp", "memstream_hls.cpp"}
-    top = files["memstream_hls.cpp"].decode()
-    assert f"using element_t = {cpp};" in top
-    assert "(&mem)[3]" in top
-    assert "port=return bundle=control" in top
-
-
-def test_generated_hls_top_executes_signed_values_and_wraps_with_real_vendor_headers(tmp_path):
-    requirements = memstream().sources
-    files = render_hls_sources(
-        requirements, roots={"finnlib": FINNLIB}, template_roots=(template_root(),)
-    )
-    for path, data in files:
-        target = tmp_path / path
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(data)
-    installs = ("XILINX_HLS", "HLS_PATH", "XILINX_VITIS", "VITIS_PATH")
-    install = next((os.environ[name] for name in installs if os.environ.get(name)), None)
-    headers = Path(
-        os.environ.get("VITIS_HLS_INCLUDE") or Path(install or "/nonexistent") / "include"
-    )
-    if not (headers / "hls_stream.h").is_file():
-        pytest.skip("Vitis headers are required for this explicit HLS C++ check")
-    testbench = tmp_path / "test.cpp"
-    testbench.write_text("""#include "memstream_hls.cpp"
-int main() {
-    const element_t memory[3] = {-256, 0, 255};
-    hls::stream<element_t> output;
-    for (int i=0; i<12; ++i) {
-        memstream_hls(memory, output);
-        if (output.read() != memory[i%3]) return 1;
-    }
-    return output.empty() ? 0 : 2;
-}
-""")
-    command = ["g++", "-std=c++17", "-Wno-unknown-pragmas", "-I" + str(headers)]
-    command += ["-I" + str(tmp_path / path) for path in requirements.include_directories]
-    command += [str(testbench), "-o", str(tmp_path / "test")]
-    compiled = subprocess.run(command, capture_output=True, text=True, timeout=120)
-    assert compiled.returncode == 0, compiled.stdout + compiled.stderr
-    subprocess.run([str(tmp_path / "test")], check=True, timeout=30)
 
 
 def run(requirements, body, tmp_path):
@@ -528,26 +418,6 @@ def test_generated_rtl_preserves_values_sequences_and_backpressure(case, tmp_pat
         end
         if(sent_a!={len(a)} || sent_b!={len(b)} || received!={len(expected)})
             $fatal(1,"missing transfers %0d %0d %0d",sent_a,sent_b,received);
-        $display("FLAT_KERNEL_PASS"); $finish;
-    end
-endmodule
-"""
-    run(requirements, body, tmp_path)
-
-
-@requires_xsim
-def test_combinational_conversion_uses_round_toward_zero(tmp_path):
-    requirements = converter("INT32").build_requirements
-    body = """module check;
-    logic [31:0] ival; wire [31:0] fval;
-    @DUT@ dut(.ival, .fval);
-    initial begin
-        ival=0; #1; if(fval!==32'h00000000) $fatal;
-        ival=1; #1; if(fval!==32'h3f800000) $fatal;
-        ival=-1; #1; if(fval!==32'hbf800000) $fatal;
-        ival=32'h80000000; #1; if(fval!==32'hcf000000) $fatal;
-        ival=16777219; #1; if(fval!==32'h4b800001) $fatal;
-        ival=-16777219; #1; if(fval!==32'hcb800001) $fatal;
         $display("FLAT_KERNEL_PASS"); $finish;
     end
 endmodule

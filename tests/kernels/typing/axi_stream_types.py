@@ -14,7 +14,6 @@ from finn.kernels.datatypes.scalar import IntegerScalar, Scalar, integer_scalar
 from finn.kernels.dotp import DotpAxiKernel
 from finn.kernels.eltwise import EltwiseKernel
 from finn.kernels.physical.axi_stream import AxiStream
-from finn.kernels.physical.layout import PackedBeatLayout
 from finn.kernels.physical.stream import ReadyValidStream
 from finn.kernels.port import AxiStreamPort
 
@@ -38,7 +37,6 @@ def check(point: DotpAxiKernel, eltwise: EltwiseKernel) -> None:
     assert_type(point.x, AxiStreamPort)
     assert_type(point.x.element, ScalarEncoding)
     assert_type(point.x.axis, AxiStream)
-    assert_type(point.x.axis.payload, PackedBeatLayout)
     assert_type(point.x.pins, tuple[object, ...])
     assert_type(point.x.inspect(AxiStreamPort.pins), ViewAssessment[tuple[object, ...]])
     assert_type(point.x.query(AxiStreamPort.pins), QueryResult[tuple[object, ...]])

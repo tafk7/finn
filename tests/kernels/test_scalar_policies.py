@@ -13,8 +13,6 @@ from finn.dataflow.datatypes import QONNXDataType
 from finn.dataflow.datatypes import resolve_qonnx_datatype_name as dtype
 from finn.kernels.dotp import DotpAxiKernel
 from finn.kernels.eltwise import EltwiseKernel
-from finn.kernels.int_to_fp32 import IntToFp32Kernel
-from finn.kernels.memstream_hls import MemStreamHlsKernel
 from finn.kernels.thresholding import ThresholdingAxiKernel
 from kernels.test_dotp import kernel as dotp
 from kernels.test_migrated_rich import threshold_base
@@ -61,21 +59,9 @@ def test_scalar_encoding_detaches_qonnx_values():
     assert selected.scalar.encoding.bits == 3
 
 
-@pytest.mark.parametrize("name", ("INT0", "UINT0", "BIPOLAR", "TERNARY", "FLOAT16", "INT129"))
-def test_converter_unsupported_encodings_refuse_without_pin_construction_errors(name):
-    point = design_space(IntToFp32Kernel(input_dtype=dtype(name)))
-    assert isinstance(point.query(IntToFp32Kernel.build_requirements), Rejected)
-
-
 @pytest.mark.parametrize("name", ("INT0", "UINT0"))
 def test_zero_width_encodings_refuse_across_consumers(name):
     assert isinstance(eltwise(lhs=name, rhs=name).query(EltwiseKernel.build_requirements), Rejected)
-    assert isinstance(
-        design_space(MemStreamHlsKernel(element_dtype=dtype(name), depth=3)).query(
-            MemStreamHlsKernel.sources
-        ),
-        Rejected,
-    )
     assert isinstance(
         threshold_base(input_dtype=name)
         .with_choices(use_axilite=False, deep_pipeline=False)

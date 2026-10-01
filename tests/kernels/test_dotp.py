@@ -27,7 +27,6 @@ from finn.kernels.artifacts.build import materialize_module_sources, prepare_mod
 from finn.kernels.artifacts.store import ArtifactStore
 from finn.kernels.base import Kernel
 from finn.kernels.dotp import DotpAxiKernel, Int8Dsp58DotpKernel, PackedDotpKernel
-from finn.kernels.physical.layout import UnusedBitPolicy
 from finn.kernels.port import AxiStreamPort
 from finn.kernels.resources import resource_root
 from finn.kernels.target import DspBlock
@@ -126,8 +125,6 @@ def test_physical_framing_follows_the_schedule_and_only_activation_has_last():
     assert point.w.axis.elements_per_beat == 15
     assert point.y.axis.elements_per_beat == 3
     assert point.x.axis.last and not point.w.axis.last and not point.y.axis.last
-    # Weight lane p*SIMD+s sits lane zero lowest, matching the native RTL array.
-    assert [lane.bit_offset for lane in point.w.axis.payload.lanes] == list(range(0, 45, 3))
 
 
 def test_the_schedule_splits_n_by_pe_and_k_by_simd():
@@ -321,7 +318,7 @@ def test_sources_materialize_from_the_assessed_requirements(tmp_path):
     assert int8.contributions[1].requires == ("module:dotp_8sx9_dsp58",)
 
 
-def test_subbyte_result_padding_has_no_zero_fill_promise():
+def test_a_subbyte_result_is_padded_to_a_byte():
     point = kernel(
         pe=1,
         simd=1,
@@ -330,13 +327,8 @@ def test_subbyte_result_padding_has_no_zero_fill_promise():
         result_dtype=DataType["INT4"],
     )
     _ = point.build_requirements
-    result, activation = point.y.axis, point.x.axis
+    result = point.y.axis
     assert result.payload_bits == 4 and result.carrier_bits == 8
-    assert result.payload.unused[0].policy is UnusedBitPolicy.UNSPECIFIED
-    assert activation.payload.unused[0].policy is UnusedBitPolicy.IGNORE_ON_RECEIVE
-    lane = result.payload.lanes[0]
-    mask = (1 << lane.bit_width) - 1
-    assert (0xFF >> lane.bit_offset) & mask == (0x0F >> lane.bit_offset) & mask
 
 
 def test_each_core_kernel_names_its_core_and_the_shared_base_places_none():
