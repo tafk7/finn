@@ -94,8 +94,10 @@ The template contains Claude Code at the version pinned by
 `CLAUDE_CODE_VERSION` in `docker/Dockerfile.finn`, with auto-update off; build with
 `--build-arg CLAUDE_CODE_VERSION=` for a template without it. `--env-arg
 agent=claude` starts it. sbx injects the credential through its proxy, so it
-never enters the sandbox: store it once with `sbx secret set anthropic`.
-For another agent, install it in the sandbox (which needs network access to the
+never enters the sandbox: store it once with `sbx secret set anthropic`. The agent
+adds a sandbox-scoped rule for Anthropic's own hosts, so it works under a closed
+policy; a company gateway (`ANTHROPIC_BASE_URL`) needs its own allow rule and
+secret. For another agent, install it in the sandbox (which needs network access to the
 vendor's download) or build a derived template.
 
 ## Lanes: a private clone per sandbox
