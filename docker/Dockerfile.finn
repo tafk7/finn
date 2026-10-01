@@ -280,14 +280,20 @@ USER agent
 #   npm prefix       global npm installs land in a directory that is on PATH.
 #   /etc/sandbox-persistent.sh
 #                    sbx-managed; it must exist for BASH_ENV to source.
+#   Claude Code      sbx's built-in `claude` agent runs the template's `claude`;
+#                    pinned, auto-update off, session directories pre-created as
+#                    in docker/sandbox-templates:claude-code. Empty skips it.
 FROM dev AS sbx
+ARG CLAUDE_CODE_VERSION=2.1.284
 USER root
 COPY docker/finn-bashenv.sh /etc/finn-bashenv.sh
 ENV BASH_ENV=/etc/finn-bashenv.sh \
     NO_PROXY=localhost,127.0.0.1,::1,172.17.0.0/16 \
     no_proxy=localhost,127.0.0.1,::1,172.17.0.0/16 \
     NPM_CONFIG_PREFIX=/usr/local/share/npm-global \
-    PATH=/usr/local/share/npm-global/bin:/opt/venv/bin:/usr/local/lib/finn/toolchain-bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+    CLAUDE_ENV_FILE=/etc/sandbox-persistent.sh \
+    DISABLE_AUTOUPDATER=1 \
+    PATH=/home/agent/.local/bin:/usr/local/share/npm-global/bin:/opt/venv/bin:/usr/local/lib/finn/toolchain-bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 RUN set -eu; \
     usermod -aG sudo agent; \
     echo "agent ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/agent; \
@@ -300,3 +306,13 @@ RUN set -eu; \
     touch /etc/sandbox-persistent.sh; \
     chmod 0644 /etc/sandbox-persistent.sh
 USER agent
+RUN set -eu; \
+    if [ -n "$CLAUDE_CODE_VERSION" ]; then \
+        mkdir -p /home/agent/.claude/projects /home/agent/.claude/sessions \
+                 /home/agent/.claude/todos /home/agent/.claude/shell-snapshots \
+                 /home/agent/.claude/statsig; \
+        wget -qO /tmp/claude-install.sh https://claude.ai/install.sh; \
+        bash /tmp/claude-install.sh "$CLAUDE_CODE_VERSION"; \
+        rm /tmp/claude-install.sh; \
+        claude --version; \
+    fi

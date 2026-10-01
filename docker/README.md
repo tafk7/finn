@@ -101,7 +101,7 @@ has no FPGA mounts or network grants, and turns the shared skills store off. Eff
 on machine/organization policy and the selected agent. Use a real licensed tool
 operation to validate FPGA licensing; policy readback or `lmstat` is insufficient.
 
-The environments require sbx 0.43 or later and were validated with 0.43.0. Native environment and kit interfaces are
+The environments require sbx 0.43 or later and were validated with 0.46.0. Native environment and kit interfaces are
 experimental.
 
 `compose.yaml` and `docker-bake.hcl` remain usable directly for debugging and

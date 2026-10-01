@@ -289,13 +289,13 @@ This uses ``sbxenv.yaml`` at the repository root: the checkout as the workspace,
 FINN's image and no network grants. For FPGA tools, FinnLib and the licence
 server, copy the overlays in ``docker/sbx`` to a directory outside the checkout,
 put your site values in an arguments file there, and pass both; see
-``docker/sbx/README.md``. The FINN template contains no coding agent: install one
-in the sandbox or use a derived template.
+``docker/sbx/README.md``. The FINN template contains Claude Code
+(``--env-arg agent=claude``); sbx injects its credential through the proxy.
 
 FINN needs no network in a sandbox except the licence server. Closing everything
 else is a machine or organization decision (``sbx policy init deny-all``); FINN's
-overlays only add grants. Requires sbx 0.43 or later; environments and kits are
-experimental in sbx.
+overlays only add grants. Requires sbx 0.43 or later, validated with 0.46.0;
+environments and kits are experimental in sbx.
 
 This does not override existing machine policy or the selected agent's grants.
 sbx may separately use package-repository access while provisioning the microVM.

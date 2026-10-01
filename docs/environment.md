@@ -60,8 +60,8 @@ part ahead of time.
  system ──► python ─────────────────────► runtime ──────────► dev ──────────► sbx
  apt,       uv; /opt/venv from uv.lock      XRT/SLASH          board files     NOPASSWD sudo,
  ncurses6,  (no FINN); active via ENV;      (FINN_RUNTIMES)    (not redistri-  BASH_ENV, npm,
- LSB,       finn-hlslib (redistributable        │              butable; local  proxy env_keep
- libudev    resources); entrypoint              │              images only)
+ LSB,       finn-hlslib (redistributable        │              butable; local  proxy env_keep,
+ libudev    resources); entrypoint              │              images only)    Claude Code (pinned)
                                                 └──► release: FINN wheel; board files on first use
 ```
 
@@ -88,6 +88,8 @@ part ahead of time.
       │
       ▼
  tini ─► finn_entrypoint.sh
+      ├─ sbx clone mode: FINN_ROOT still being cloned ──► the steps below run
+      │  in the background once git has written the checkout; exec at once
       ├─ no checkout at FINN_ROOT ──► note; image environment only ─────────┐
       ▼                                                                      │
  uv sync --frozen --inexact --project $FINN_ROOT                             │

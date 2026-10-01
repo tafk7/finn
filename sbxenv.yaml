@@ -1,10 +1,6 @@
 {
   "schemaVersion": "1",
   "args": {
-    "name": {
-      "default": "finn",
-      "description": "Sandbox name; give each concurrent sandbox its own"
-    },
     "template": {
       "required": true,
       "description": "Image reference from docker/build --sbx --print-tag"
@@ -14,7 +10,7 @@
       "description": "Agent to run: shell, or a coding agent such as claude"
     }
   },
-  "name": "${{ env.args.name }}",
+  "name": "finn",
   "agent": "${{ env.args.agent }}",
   "workspace": ".",
   "sandboxOptions": {

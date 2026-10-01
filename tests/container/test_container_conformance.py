@@ -265,8 +265,8 @@ def test_04_bare_docker_exec(docker_daemon):
 def test_05_copied_native_examples(docker_daemon, tmp_path, agent, fpga):
     """The root environment plus copied overlays compose and run from a checkout.
 
-    Agent installation/selection is exercised without supplying credentials or
-    asking a model to change files. This does not verify authenticated inference.
+    The template's own agent is selected without supplying credentials or asking a
+    model to change files. This does not verify authenticated inference.
     Synthetic FPGA paths and policy readback do not prove licence checkout.
     """
     require_command("sbx")
@@ -281,8 +281,8 @@ def test_05_copied_native_examples(docker_daemon, tmp_path, agent, fpga):
         template = run([REPO / "docker/build", "--sbx", "--print-tag"], check=True).stdout.strip()
     files = [checkout / "sbxenv.yaml"]
     args = [
-        "--env-arg",
-        "name=" + name,
+        "--name",
+        name,
         "--env-arg",
         "template=" + template,
         "--env-arg",
@@ -328,42 +328,6 @@ def test_05_copied_native_examples(docker_daemon, tmp_path, agent, fpga):
             ],
             check=True,
         )
-        if agent == "claude":
-            # User-owned agent setup: FINN's generic template has no agent binary,
-            # and the installer needs claude.ai, which the machine's policy may block.
-            check = run(["sbx", "policy", "check", "network", "--sandbox", name, "claude.ai:443"])
-            if "Allowed:" not in check.stdout:
-                pytest.skip("this machine's sbx policy blocks claude.ai, the agent installer")
-            # Run the vendor installer only in this test-owned sandbox.
-            run(
-                [
-                    "sbx",
-                    "env",
-                    "exec",
-                    *args,
-                    "--",
-                    "bash",
-                    "-o",
-                    "pipefail",
-                    "-c",
-                    "wget -qO- https://claude.ai/install.sh | bash -s -- stable",
-                ],
-                timeout=600,
-                check=True,
-            )
-            run(
-                [
-                    "sbx",
-                    "env",
-                    "exec",
-                    *args,
-                    "--",
-                    "sh",
-                    "-c",
-                    'sudo ln -sf "$HOME/.local/bin/claude" /usr/local/bin/claude',
-                ],
-                check=True,
-            )
         run(["sbx", "env", "run", *args, "--auto-approve", "--detached"], check=True)
         run(
             ["sbx", "env", "exec", *args, "--", "test", "-f", checkout / "native-marker"],
@@ -379,7 +343,7 @@ def test_05_copied_native_examples(docker_daemon, tmp_path, agent, fpga):
         if fpga:
             code = (
                 "import os; from pathlib import Path; "
-                "assert os.environ['XILINXD_LICENSE_FILE']=='2100@license.example.com'; "
+                "assert os.environ['XILINXD_LICENSE_FILE']=='2100@192.0.2.1'; "
                 "assert os.environ['XILINX_VIVADO']==os.environ['VIVADO_PATH']; "
                 "assert os.environ['XILINX_VITIS']==os.environ['VITIS_PATH']; "
                 "assert os.environ['XILINX_HLS']==os.environ['HLS_PATH']; "
@@ -391,8 +355,8 @@ def test_05_copied_native_examples(docker_daemon, tmp_path, agent, fpga):
             assert write.returncode != 0
             assert not (toolchain / "must-not-write").exists()
             policy = run(["sbx", "policy", "ls", name, "--json"], check=True).stdout
-            assert "license.example.com:2100" in policy
-            assert "license.example.com:2101" in policy
+            assert "192.0.2.1:2100" in policy
+            assert "192.0.2.1:2101" in policy
     finally:
         run(["sbx", "env", "rm", *args, "--force"], timeout=120, check=True)
     inventory = json.loads(run(["sbx", "ls", "--json"], check=True).stdout)["sandboxes"]

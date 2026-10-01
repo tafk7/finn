@@ -6,13 +6,13 @@ machine's network policy, agents, credentials and site values. sbx owns
 composition, approval and sandbox lifecycle.
 
 Requires sbx 0.43 or later (0.43 renamed `shareSkills` to `skills` and fixed
-allow rules for IP addresses); validated with 0.43.0. sbx environments and kits
+allow rules for IP addresses); validated with 0.46.0. sbx environments and kits
 are experimental and change between minor releases: check the
 [release notes](https://docs.docker.com/ai/sandboxes/release-notes/) when upgrading.
 
 | File | Adds |
 |---|---|
-| `sbxenv.yaml` (repository root) | The checkout as the workspace, FINN's image, no network grants |
+| `sbxenv.yaml` (repository root) | The checkout as the workspace, FINN's image (with Claude Code), no network grants |
 | `fpga.sbxenv.yaml` | Your Xilinx installation, read-only, and `XILINXD_LICENSE_FILE` |
 | `finnlib.sbxenv.yaml` | A FinnLib clone, writable, as the `finnlib` resource |
 | `license.sbxenv.yaml` + `site-license/` | Network access to the licence server's two ports |
@@ -73,9 +73,14 @@ sbx env run "${ARGS[@]}" "${FILES[@]}"
 sbx env rm "${ARGS[@]}" "${FILES[@]}" --force
 ```
 
-`license` needs `fpga`. `sbx env run` with no paths uses the base alone. Use the same files and arguments for every command, flags before file
-paths. `--env-arg name=...` gives a second sandbox its own name (default `finn`);
+`license` needs `fpga`. `sbx env run` with no paths uses the base alone. Use the
+same files, arguments and `--name` for every command, flags before file paths.
+`--name finn-2` gives a second sandbox its own name (default `finn`);
 `--env-arg agent=claude` selects a coding agent.
+
+The default sandbox gets every host CPU and half the host memory, at most 32 GiB.
+For heavy parallel simulation, raise it in an overlay of your own:
+`sandboxOptions: {memory: 96g}`.
 
 When the sandbox starts, the image entrypoint installs the checkout editable into
 the active `/opt/venv`; finn-hlslib and the board files are already in the image.
@@ -83,16 +88,31 @@ It then writes `/tmp/finn-ready`, which scripts that `exec` right after `create`
 can wait for. After pulling a change to `uv.lock`, run `uv sync --inexact` in the
 sandbox or recreate it.
 
-The FINN template contains no coding agent. After `create`, install one inside the
-sandbox, which needs network access to the vendor's download, or build a derived
-template that contains it. For Claude:
+## Coding agents
+
+The template contains Claude Code at the version pinned by
+`CLAUDE_CODE_VERSION` in `docker/Dockerfile.finn`, with auto-update off; build with
+`--build-arg CLAUDE_CODE_VERSION=` for a template without it. `--env-arg
+agent=claude` starts it. sbx injects the credential through its proxy, so it
+never enters the sandbox: store it once with `sbx secret set anthropic`.
+For another agent, install it in the sandbox (which needs network access to the
+vendor's download) or build a derived template.
+
+## Lanes: a private clone per sandbox
+
+Clone mode gives the sandbox its own clone of the checkout, so its edits and
+commits stay out of your working tree while `fpga` and `finnlib` stay direct
+mounts. Run it from a main clone (sbx refuses `--clone` from a `git worktree`):
 
 ```bash
-sbx env exec "${ARGS[@]}" "${FILES[@]}" -- bash -o pipefail -c \
-  'wget -qO- https://claude.ai/install.sh | bash -s -- stable'
-sbx env exec "${ARGS[@]}" "${FILES[@]}" -- sh -c \
-  'sudo ln -sf "$HOME/.local/bin/claude" /usr/local/bin/claude'
+sbx env create --clone --name finn-lane-1 "${ARGS[@]}" "${FILES[@]}"
 ```
+
+The clone appears at the checkout's path inside the sandbox; the entrypoint
+installs it once git has written it (`/tmp/finn-ready`, as before). sbx adds a
+`sandbox-finn-lane-1` remote to your checkout: `git fetch sandbox-finn-lane-1`
+brings the agent's branches back for review. Removing the sandbox removes the
+clone.
 
 ## FPGA tools
 

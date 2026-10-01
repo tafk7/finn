@@ -55,7 +55,8 @@ Editing FINN never requires a new image.
 interpreter is `/opt/venv/bin/python`; there is no setup step.
 
 **sbx:** see [the sbx guide](../docker/sbx/README.md). The same entrypoint installs
-the workspace checkout when the sandbox starts.
+the workspace checkout when the sandbox starts, or, in clone mode, once sbx has
+cloned it. The sbx template also contains Claude Code.
 
 `docker exec` and `sbx exec` do not wait for the entrypoint. A script that execs
 into a container it has just started can wait for `/tmp/finn-ready`.

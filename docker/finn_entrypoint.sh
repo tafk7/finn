@@ -71,9 +71,31 @@ finn_sync() {
         echo "finn: rebuild the image (docker/build), or run uv sync with network access." >&2
     }
 }
-finn_sync || true
 # Readiness marker: docker exec and sbx exec do not wait for the entrypoint, so
 # scripts that exec into a just-started container can wait for this file.
-touch /tmp/finn-ready 2>/dev/null || true
+finn_sync_and_mark() {
+    finn_sync || true
+    touch /tmp/finn-ready 2>/dev/null || true
+}
+# sbx clone mode clones into FINN_ROOT after the container starts, so here it
+# is a fresh volume (empty but for lost+found) or a clone in progress. Sync once
+# git has finished the checkout, in the background so the sandbox's own command
+# still starts at once.
+root="${FINN_ROOT:-}"
+if [ -n "$root" ] && [ ! -f "$root/uv.lock" ] && { [ -e "$root/.git" ] \
+   || [ -z "$(ls -A "$root" 2>/dev/null | grep -vx lost+found)" ]; }; then
+    (
+        for _ in $(seq 600); do
+            if [ -f "$root/uv.lock" ] && [ -f "$root/.git/index" ] \
+               && [ ! -e "$root/.git/index.lock" ]; then
+                break
+            fi
+            sleep 1
+        done
+        finn_sync_and_mark
+    ) &
+else
+    finn_sync_and_mark
+fi
 
 exec "$@"
