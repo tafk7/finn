@@ -52,6 +52,11 @@ if [ -z "${UV_CACHE_DIR:-}" ] && [ -n "${FINN_BUILD_DIR:-}" ] \
     export UV_CACHE_DIR="$FINN_BUILD_DIR/.uv-cache"
 fi
 
+# In sbx the checkout is the sandbox's workspace, which sbx names WORKSPACE_DIR.
+if [ -z "${FINN_ROOT:-}" ] && [ -n "${WORKSPACE_DIR:-}" ]; then
+    export FINN_ROOT="$WORKSPACE_DIR"
+fi
+
 # Install the checkout at FINN_ROOT editable into /opt/venv, with any difference
 # between its uv.lock and the image. This follows the
 # committed lock exactly; set FINN_SYNC=0 to skip it.

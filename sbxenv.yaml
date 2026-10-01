@@ -19,7 +19,6 @@
     "skills": "off"
   },
   "env": {
-    "FINN_BUILD_DIR": "/tmp/finn_build",
-    "FINN_ROOT": "${{ env.fileDir }}"
+    "FINN_BUILD_DIR": "/tmp/finn_build"
   }
 }
