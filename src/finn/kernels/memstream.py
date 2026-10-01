@@ -41,6 +41,7 @@ from finn.dataflow.datatypes import (
     ordinary_integer_bounds,
 )
 from finn.dataflow.schedule import Index
+from finn.dataflow.tensor import ScalarEncoding
 from finn.dataflow.traversal import (
     BeatSequence,
     Repetition,
@@ -54,7 +55,6 @@ from finn.kernels.artifacts.requirements import RequirementContribution
 from finn.kernels.base import Clocking, Kernel, Tieoffs
 from finn.kernels.control import CONTROL, Control, ControlBus, held_bus
 from finn.kernels.datatypes.domains import Integer, set_index_dtype
-from finn.kernels.datatypes.scalar import integer_scalar
 from finn.kernels.datatypes.semantics import (
     INTEGER_TENSOR,
     INTEGER_VECTOR,
@@ -78,7 +78,6 @@ class MemStreamKernel(Kernel):
     module = "memstream_axi"
 
     dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
-    element = integer_scalar(dtype, Integer())
     form: Traversal = Param()
     contents: IntegerTensor = Param(semantics=INTEGER_TENSOR)
     sets: int = Param(default=1)
@@ -92,8 +91,14 @@ class MemStreamKernel(Kernel):
     pumped_memory: bool = Decision(values=(False, True))
 
     @derived
+    def element(self) -> ScalarEncoding | Rejected:
+        """The stored element: an ordinary integer encoding."""
+        admitted = Integer().check(self.dtype)
+        return admitted if isinstance(admitted, Rejected) else ScalarEncoding.admit(self.dtype)
+
+    @derived
     def word_bits(self) -> int:
-        return self.form.lanes * self.element.encoding.bits
+        return self.form.lanes * self.element.bits
 
     @derived(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
     def set_dtype(self) -> QONNXDataType:
@@ -132,7 +137,7 @@ class MemStreamKernel(Kernel):
     @derived(semantics=INTEGER_VECTOR)
     def image(self) -> IntegerVector | Rejected:
         """Packed words, set after set, each set in the consumer's ``form``."""
-        encoding = self.element.encoding
+        encoding = self.element
         low, high = ordinary_integer_bounds(encoding.dtype)
         values, sets = self.contents, self.sets
         groups = values if sets > 1 else (values,)

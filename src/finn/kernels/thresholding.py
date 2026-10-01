@@ -57,7 +57,6 @@ from finn.kernels.artifacts.contribution_types import CopiedSource
 from finn.kernels.base import Kernel, Tieoffs
 from finn.kernels.control import CONTROL, Control, ControlBus, held_bus
 from finn.kernels.datatypes.domains import Integer, set_index_dtype
-from finn.kernels.datatypes.scalar import integer_scalar
 from finn.kernels.datatypes.semantics import (
     QONNX_DATATYPE_VALUE_SEMANTICS,
     THRESHOLD_TABLE,
@@ -76,8 +75,6 @@ class ThresholdingAxiKernel(Kernel):
 
     input_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
     threshold_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
-    input_encoding = integer_scalar(input_dtype, Integer())
-    threshold_encoding = integer_scalar(threshold_dtype, Integer())
     thresholds: ThresholdTable = Param(semantics=THRESHOLD_TABLE)
     bias: int = Param()
 
@@ -294,8 +291,7 @@ class ThresholdingAxiKernel(Kernel):
 
     def parameters(self) -> Mapping[str, int | str]:
         table, (sets, channels, count) = self.thresholds, self.shape
-        a = self.input_encoding.encoding.dtype
-        bits = self.threshold_encoding.encoding.dtype.bitwidth()
+        a, bits = self.input_dtype, self.threshold_dtype.bitwidth()
         mask = (1 << bits) - 1
         image = (
             "'{"

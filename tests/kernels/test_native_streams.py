@@ -6,7 +6,7 @@ import pytest
 
 from finn.core.space import Available, Rejected, design_space
 from finn.kernels.artifacts.abi import Direction, Endpoint
-from finn.kernels.eltwise import EltwiseKernel, EltwiseOperand
+from finn.kernels.eltwise import EltwiseKernel
 from finn.kernels.fifo import FifoKernel
 from finn.kernels.physical.stream import MarkerKind, ReadyValidStream, StreamMarker
 from kernels.test_migrated_rich import generator
@@ -128,9 +128,7 @@ def test_eltwise_ports_carry_their_operands_unpadded_on_native_pins():
     # An operand the arithmetic does not take refuses the kernel, naming the operand.
     refused = eltwise(lhs="FLOAT16", rhs="FLOAT16")
     assert refused.lhs.transport.data_width == 32  # the pins do not wait for admission
-    assessment = refused.lhs_type.inspect(EltwiseOperand.admission)
-    assert assessment.verdict is False
     answer = refused.query(EltwiseKernel.build_requirements)
     assert isinstance(answer, Rejected)
-    assert "lhs_type.supported" in {finding.owner for finding in answer.findings}
+    assert "operands_supported" in {finding.owner for finding in answer.findings}
     assert isinstance(eltwise().query(EltwiseKernel.build_requirements), Available)

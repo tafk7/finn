@@ -5,24 +5,14 @@
 from typing import assert_type
 
 from finn.core.space import BoundValue, QueryResult, View, ViewAssessment
-from finn.dataflow.datatypes import QONNXDataType
 from finn.dataflow.schedule import Schedule
 from finn.dataflow.traversal import BeatSequence
-from finn.kernels.datatypes.domains import Integer
 from finn.dataflow.tensor import ScalarEncoding
-from finn.kernels.datatypes.scalar import IntegerScalar, Scalar, integer_scalar
 from finn.kernels.dotp import DotpAxiKernel
 from finn.kernels.eltwise import EltwiseKernel
 from finn.kernels.physical.axi_stream import AxiStream
 from finn.kernels.physical.stream import ReadyValidStream
 from finn.kernels.port import AxiStreamPort
-
-
-def declare(dtype: QONNXDataType) -> None:
-    # The node helpers return node declarations typed as their families.
-    scalar = integer_scalar(dtype, Integer(min_bits=2))
-    assert_type(scalar, IntegerScalar)
-    assert_type(Scalar(dtype=dtype), Scalar)
 
 
 def check(point: DotpAxiKernel, eltwise: EltwiseKernel) -> None:

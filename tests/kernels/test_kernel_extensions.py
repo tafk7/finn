@@ -14,7 +14,6 @@ from finn.core.space import (
     Param,
     Rejected,
     SelectionSchema,
-    Unresolved,
     View,
     ViewKey,
     codec_for,
@@ -28,8 +27,7 @@ from finn.core.space import (
 )
 from finn.core.space.errors import DefinitionError, RequestError
 from finn.kernels.base import Kernel
-from finn.kernels.datatypes.domains import Integer, SignedInteger
-from finn.kernels.datatypes.scalar import IntegerScalar, integer_scalar
+from finn.kernels.datatypes.domains import Integer
 from finn.kernels.datatypes.semantics import (
     INTEGER_VECTOR,
     QONNX_DATATYPE_CODEC,
@@ -132,41 +130,6 @@ def test_dtype_portable_selection_is_optional_and_uses_exact_canonical_encoding(
     )
     with pytest.raises(RequestError):
         base.with_choices(dtype=cast(QONNXDataType, "TERNARY"))
-
-
-def test_integer_admission_retains_dynamic_bounds_and_inspectable_family_refusal() -> None:
-    class IntegerAdmission(Kernel):
-        id = "test.integer"
-        dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
-        width: int = Decision(values=(0, 8, 16))
-
-        @derived
-        def limit(self) -> int:
-            return self.width
-
-        admitted = integer_scalar(dtype, Integer(max_bits=limit, signed=False))
-
-    unknown = design_space(IntegerAdmission(dtype=resolve_qonnx_datatype_name("TERNARY")))
-    assert unknown.admitted.dtype.name == "TERNARY"
-    assessment = unknown.admitted.inspect(IntegerScalar.admission)
-    assert assessment.refused == ("admitted.family",)
-    assert isinstance(assessment.result, Unresolved)
-    for name, accepted in (
-        ("UINT8", True),
-        ("BINARY", True),
-        ("INT8", False),
-        ("UINT16", False),
-        ("BIPOLAR", False),
-    ):
-        point = design_space(IntegerAdmission(dtype=resolve_qonnx_datatype_name(name)))
-        point = point.with_choices(width=8)
-        assert point.admitted.inspect(IntegerScalar.admission).verdict is accepted
-    invalid = design_space(IntegerAdmission(dtype=resolve_qonnx_datatype_name("UINT8")))
-    invalid = invalid.with_choices(width=0)
-    refused = invalid.admitted.inspect(IntegerScalar.admission).results["admitted.maximum_bits"]
-    assert isinstance(refused, Rejected)
-    assert refused.findings[0].code == "dtype-bound-invalid"
-    assert SignedInteger(max_bits=8).signed is True
 
 
 def test_tuple_adapters_preserve_exact_integer_structure_without_geometry_validation() -> None:

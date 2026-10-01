@@ -33,23 +33,12 @@ from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.contribution_types import CopiedSource
 from finn.kernels.base import NATIVE_CLOCKING, Clocking, Kernel, factor_domain
 from finn.kernels.datatypes.domains import Integer
-from finn.kernels.datatypes.scalar import Scalar
 from finn.kernels.datatypes.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
 from finn.kernels.port import AxiStreamPort
 from finn.kernels.streams import Stream
 from finn.kernels.target import DspBlock
 
 c = Index("c")
-
-
-class EltwiseOperand(Scalar):
-    """FLOAT32, or an ordinary integer of at most 128 bits."""
-
-    @constraint
-    def supported(self) -> bool | Rejected:
-        return True if self.dtype.name == "FLOAT32" else Integer(1, 128).check(self.dtype)
-
-    admission = ConstraintGroup(supported)
 
 
 class EltwiseKernel(Kernel):
@@ -87,10 +76,6 @@ class EltwiseKernel(Kernel):
         bits = 2 * a.bitwidth() if operation == "MUL" else a.bitwidth() + 1
         signed = a.signed() or operation in ("SUB", "SBR")
         return resolve_qonnx_datatype_name(f"{'INT' if signed else 'UINT'}{bits}")
-
-    lhs_type = EltwiseOperand(dtype=lhs_dtype)
-    rhs_type = EltwiseOperand(dtype=rhs_dtype)
-    result_type = Scalar(dtype=result_dtype)
 
     b_scale: float = Param()
 
@@ -132,8 +117,12 @@ class EltwiseKernel(Kernel):
 
     @constraint
     def operands_supported(self) -> bool | Rejected:
-        """Each operand's encoding is one the arithmetic takes."""
-        _ = (self.lhs_type.encoding, self.rhs_type.encoding, self.result_type.encoding)
+        """Each operand is FLOAT32 or an ordinary integer of at most 128 bits."""
+        for dtype in (self.lhs_dtype, self.rhs_dtype):
+            if dtype.name != "FLOAT32":
+                admitted = Integer(1, 128).check(dtype)
+                if isinstance(admitted, Rejected):
+                    return admitted
         return True
 
     admission = ConstraintGroup(implementation_supported, operands_supported)
@@ -235,4 +224,4 @@ class EltwiseKernel(Kernel):
         )
 
 
-__all__ = ["EltwiseKernel", "EltwiseOperand"]
+__all__ = ["EltwiseKernel"]
