@@ -29,10 +29,9 @@ from kernels.rtlsim.dotp_support import (
 from kernels.helpers import placed_dotp
 from kernels.rtlsim.rtl_transport import drive_observed
 from kernels.helpers import finnlib_root
-from finn.kernels.artifacts.contribution_types import CopiedSource
+from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.dotp import Int8Dsp58DotpKernel, PackedDotpKernel
 from finn.kernels.target import DspBlock
-from finn.kernels.resources import resource_root
 
 
 @dataclass(frozen=True)
@@ -190,10 +189,7 @@ def run(configuration: Configuration, evidence: Path, *, backpressure_ticks: int
     for name, stream in (("in0", point.x.axis), ("in1", point.w.axis)):
         padding = ((1 << stream.carrier_bits) - 1) ^ ((1 << stream.payload_bits) - 1)
         stimulus[name] = [beat | (padding if j % 2 else 0) for j, beat in enumerate(stimulus[name])]
-    roots = {
-        "finnlib": finnlib_root(),
-        "kernels": resource_root(),
-    }
+    roots = {"finnlib": finnlib_root()}
     sources = []
     for source in module.contributions:
         assert isinstance(source, CopiedSource)

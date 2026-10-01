@@ -63,16 +63,12 @@ from finn.kernels.artifacts.abi import (
     Reset,
     Signal,
 )
-from finn.kernels.artifacts.build import (
-    EntryPointSourceName,
-    FixedModuleName,
+from finn.kernels.artifacts.requirements import (
     GeneratedModuleName,
     ModuleABIRequirements,
     ModuleBuildRequirements,
-    RenderedSourceRequirement,
-    SELF_CONTAINED_JINJA_RENDERER,
+    ProducerIdentity,
 )
-from finn.kernels.artifacts.derivation import ProducerIdentity
 from finn.kernels.base import MODULE, TIEOFFS, Kernel, Tieoffs
 from finn.kernels.control import EXPORTED, Exported, top_bus
 from finn.kernels.physical.composition import Composition, StreamEnd
@@ -351,21 +347,7 @@ def _wire(
             source = StreamEnd(instance, stage.output)
         composition.connect(source, StreamEnd(c.sink_owner, c.sink))
     structure = composition.finish()
-    wrapper = RenderedSourceRequirement(
-        EntryPointSourceName(),
-        "decomposed_wrapper.sv.j2",
-        ("PORT_DECLARATIONS", "NET_DECLARATIONS", "ASSIGNMENTS", "INSTANCES"),
-        SELF_CONTAINED_JINJA_RENDERER,
-        requires=tuple(
-            "module:" + instance.requirements.abi.entry_point.value
-            for instance in structure.instances
-            if isinstance(instance.requirements.abi.entry_point, FixedModuleName)
-        ),
-        provides_entry_point=True,
-    )
-    return Composed(
-        structure, lower_module_structure(structure, producer=producer, wrapper_template=wrapper)
-    )
+    return Composed(structure, lower_module_structure(structure, producer=producer))
 
 
 def _stage_instance(connection: str, stage: Stage) -> str:

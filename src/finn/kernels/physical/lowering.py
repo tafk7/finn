@@ -3,10 +3,11 @@
 
 """Lower detached physical structures to portable module requirements.
 
-A composed module is a generated module: its name is derived when its build is
-prepared. Nested in another composed module (``nested``), it becomes a fixed
-module named by its requirements' fingerprint, its wrapper rendered from the
-values it carries itself, so the parent can instantiate it by name.
+A composed module is a generated module: its name is derived when it is
+emitted (``finn.kernels.artifacts.build``). Nested in another composed module
+(``nested``), it becomes a fixed module named by its requirements' fingerprint,
+its wrapper rendered from the values it carries itself, so the parent can
+instantiate it by name.
 """
 
 from __future__ import annotations
@@ -16,19 +17,19 @@ from dataclasses import replace
 from typing import cast
 
 from finn.kernels.artifacts.abi import Signal
-from finn.kernels.artifacts.build import (
+from finn.kernels.artifacts.contributions import CopiedSource, GeneratedData
+from finn.kernels.artifacts.requirements import (
+    MODULE_NAME_ARGUMENT,
     EntryPointSourceName,
     FixedModuleName,
     GeneratedModuleName,
     ModuleABIRequirements,
     ModuleBuildRequirements,
+    ProducerIdentity,
     RenderedSourceRequirement,
-    SELF_CONTAINED_JINJA_RENDERER,
+    Scalar,
     nested_module_name,
 )
-from finn.kernels.artifacts.requirements import MODULE_NAME_ARGUMENT
-from finn.kernels.artifacts.contributions import CopiedSource, DataSlot, GeneratedData
-from finn.kernels.artifacts.derivation import ProducerIdentity, Scalar
 from finn.kernels.physical.structure import (
     ConstantBits,
     ModuleInstance,
@@ -200,74 +201,52 @@ def nested(requirements: ModuleBuildRequirements) -> ModuleBuildRequirements:
     )
 
 
-def _flatten_contributions(
-    instances: Sequence[ModuleInstance],
-) -> tuple[Flattened, ...]:
+def _flatten_contributions(instances: Sequence[ModuleInstance]) -> tuple[Flattened, ...]:
+    """Every child's contributions, each once; conflicting ones are refused when emitted."""
     result: list[Flattened] = []
-    destinations: dict[tuple[str, str], Flattened] = {}
     for instance in instances:
         if instance.requirements.render_inputs:
             raise PhysicalStructureError(
                 "a composed child is nested first (finn.kernels.physical.lowering.nested)"
             )
         for contribution in instance.requirements.contributions:
-            if isinstance(contribution, DataSlot):
-                raise PhysicalStructureError("a composed structure cannot flatten a data slot")
-            if isinstance(contribution, RenderedSourceRequirement) and not contribution.values:
-                raise PhysicalStructureError(
-                    "a composed structure flattens a rendered source only with its own values"
-                )
-            if isinstance(contribution, CopiedSource):
-                coordinate = (contribution.library, contribution.path)
-            elif isinstance(contribution, GeneratedData):
-                coordinate = ("", contribution.path)
-            else:
-                assert isinstance(contribution.output, str)
-                coordinate = (contribution.library, contribution.output)
-            previous = destinations.get(coordinate)
-            if previous is not None:
-                if previous != contribution:
-                    raise PhysicalStructureError(
-                        f"child sources stage incompatible declarations at {coordinate!r}"
-                    )
-                continue
-            destinations[coordinate] = contribution
-            result.append(contribution)
+            if contribution not in result:
+                result.append(contribution)
     return tuple(result)
 
 
 def lower_module_structure(
-    structure: PhysicalStructure,
-    *,
-    producer: ProducerIdentity,
-    wrapper_template: RenderedSourceRequirement,
+    structure: PhysicalStructure, *, producer: ProducerIdentity
 ) -> ModuleBuildRequirements:
     """Lower one validated structure (``PhysicalStructure`` validates itself) to
-    model-free generated-module inputs."""
+    model-free generated-module inputs: the children's sources and the wrapper
+    that instantiates them, rendered from ``decomposed_wrapper.sv.j2``."""
 
     if not isinstance(structure.top_abi.entry_point, GeneratedModuleName):
         raise PhysicalStructureError("a composed module requires a generated top name")
-    if wrapper_template.renderer != SELF_CONTAINED_JINJA_RENDERER:
-        raise PhysicalStructureError("the composed wrapper uses the self-contained renderer")
-    if not isinstance(wrapper_template.output, EntryPointSourceName):
-        raise PhysicalStructureError("the composed wrapper output follows its generated name")
-    if not wrapper_template.provides_entry_point:
-        raise PhysicalStructureError("the composed wrapper provides the generated entry point")
-    expected_arguments = {PORT_DECLARATIONS, NET_DECLARATIONS, ASSIGNMENTS, INSTANCES}
-    if set(wrapper_template.arguments) != expected_arguments:
-        raise PhysicalStructureError("the composed wrapper declares the canonical fragment inputs")
     render_inputs: tuple[tuple[str, Scalar], ...] = (
         (PORT_DECLARATIONS, _sv_port_declarations(structure)),
         (NET_DECLARATIONS, _sv_net_declarations(structure)),
         (ASSIGNMENTS, _sv_assignments(structure)),
         (INSTANCES, _sv_instances(structure)),
     )
+    wrapper = RenderedSourceRequirement(
+        EntryPointSourceName(),
+        "decomposed_wrapper.sv.j2",
+        tuple(name for name, _ in render_inputs),
+        requires=tuple(
+            "module:" + instance.requirements.abi.entry_point.value
+            for instance in structure.instances
+            if isinstance(instance.requirements.abi.entry_point, FixedModuleName)
+        ),
+        provides_entry_point=True,
+    )
     return ModuleBuildRequirements(
         producer.producer_id,
         producer.contract_version,
         (),
         structure.top_abi,
-        (*_flatten_contributions(structure.instances), wrapper_template),
+        (*_flatten_contributions(structure.instances), wrapper),
         render_inputs,
     )
 

@@ -28,8 +28,8 @@ from finn.core.space import (
     view,
 )
 from finn.kernels.artifacts.abi import Endpoint
-from finn.kernels.artifacts.build import ModuleBuildRequirements
-from finn.kernels.artifacts.derivation import ProducerIdentity
+from finn.kernels.artifacts.requirements import ModuleBuildRequirements
+from finn.kernels.artifacts.requirements import ProducerIdentity
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.memstream import MemStreamKernel
 from finn.dataflow.traversal import LevelEnd, BeatSequence, vector_major

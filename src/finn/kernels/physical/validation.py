@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from types import MappingProxyType
 
 from finn.kernels.artifacts.abi import Bus, Clock, Data, Direction, Reset, Signal
-from finn.kernels.artifacts.build import FixedModuleName, ModuleABIRequirements
+from finn.kernels.artifacts.requirements import FixedModuleName, ModuleABIRequirements
 from finn.kernels.physical.structure import (
     PhysicalPin,
     PhysicalStructure,

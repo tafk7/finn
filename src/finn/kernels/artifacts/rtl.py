@@ -56,7 +56,7 @@ from typing import Union
 import pyslang
 from pyslang import ast, syntax
 
-from finn.kernels.artifacts.abi import ComponentABI, Direction, ObservedPort, check_against_rtl
+from finn.kernels.artifacts.abi import Direction, ObservedPort, Port, check_against_rtl
 
 #: Diagnostics that cannot bear on ports or parameters, and are therefore not
 #: grounds to decline.  Each entry is a decision with a reason, not a filter.
@@ -277,12 +277,12 @@ def extract(
 
 
 def check_abi(
-    abi: ComponentABI,
+    ports: Sequence[Port],
     files: Sequence[Path],
     top: str,
     parameters: Sequence[tuple[str, str]] = (),
 ) -> tuple[str, ...] | Declined:
-    """Refuse a declaration the source contradicts, or decline.
+    """Refuse declared ports the source contradicts, or decline.
 
     Returns the empty tuple when the declaration and the source agree, a
     non-empty tuple of refusals when they do not, and ``Declined`` when the
@@ -297,30 +297,7 @@ def check_abi(
     extracted = extract(files, top, parameters)
     if isinstance(extracted, Declined):
         return extracted
-    return check_against_rtl(abi, extracted.ports)
-
-
-def check_symbols(modules: Sequence[tuple[str, ExtractedModule]]) -> tuple[str, ...]:
-    """Two files defining one module name with different ports.
-
-    The source-level half of §5.2's rule.  ``sources.merge_closures`` catches
-    the declared case from ``provides``; this catches it where nobody declared
-    anything, which for checked-in third-party RTL is the normal situation.
-    """
-
-    seen: dict[str, tuple[str, ExtractedModule]] = {}
-    issues: list[str] = []
-    for origin, module in modules:
-        previous = seen.get(module.name)
-        if previous is None:
-            seen[module.name] = (origin, module)
-            continue
-        if previous[1].ports != module.ports:
-            issues.append(
-                f"{previous[0]} and {origin} both define {module.name!r} with different "
-                "ports; isolate them by library or refuse"
-            )
-    return tuple(issues)
+    return check_against_rtl(ports, extracted.ports)
 
 
 __all__ = [
@@ -330,6 +307,5 @@ __all__ = [
     "Extraction",
     "ExtractedModule",
     "check_abi",
-    "check_symbols",
     "extract",
 ]

@@ -22,7 +22,7 @@ from finn.kernels.eltwise import EltwiseKernel
 from finn.kernels.streams import Stream
 from finn.kernels.target import DspBlock
 from finn.kernels.artifacts.abi import Clock, Direction, Endpoint, Reset, Signal
-from finn.kernels.artifacts.build import (
+from finn.kernels.artifacts.requirements import (
     GeneratedModuleName,
     ModuleABIRequirements,
 )

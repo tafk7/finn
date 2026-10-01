@@ -18,7 +18,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from finn.kernels.artifacts.abi import Bus, Clock, Direction, Reset
-from finn.kernels.artifacts.build import ModuleABIRequirements, ModuleBuildRequirements
+from finn.kernels.artifacts.requirements import ModuleABIRequirements, ModuleBuildRequirements
 from finn.kernels.physical.contract import (
     Level,
     Mismatch,

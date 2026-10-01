@@ -23,12 +23,12 @@ from finn.util.resources import resource_path
 from finn.kernels.artifacts.abi import (
     Bus,
     Clock,
-    ComponentABI,
     Derived,
     Direction,
     Endpoint,
     Free,
     Member,
+    Port,
     Reset,
     Signal,
     StandardProtocol,
@@ -42,7 +42,6 @@ from finn.kernels.artifacts.rtl import (
     Declined,
     ExtractedModule,
     check_abi,
-    check_symbols,
     extract,
 )
 
@@ -232,20 +231,17 @@ def test_a_derived_localparam_is_evaluated_and_not_left_as_an_expression(
 def test_the_case_mismatch_is_caught_against_the_actual_source(replay: Path) -> None:
     """A3 reproduced it against a fixture copy.  Here it is against the file."""
 
-    wrong = ComponentABI(
-        entry_point="replay_buffer",
-        ports=(
-            Signal("CLK", Direction.IN, 1, Clock(Free())),
-            Signal("rst", Direction.IN, 1, Reset()),
-            Signal("idat", Direction.IN, 16),
-            Signal("ivld", Direction.IN, 1),
-            Signal("irdy", Direction.OUT, 1),
-            Signal("odat", Direction.OUT, 16),
-            Signal("olast", Direction.OUT, 1),
-            Signal("ofin", Direction.OUT, 1),
-            Signal("ovld", Direction.OUT, 1),
-            Signal("ordy", Direction.IN, 1),
-        ),
+    wrong = (
+        Signal("CLK", Direction.IN, 1, Clock(Free())),
+        Signal("rst", Direction.IN, 1, Reset()),
+        Signal("idat", Direction.IN, 16),
+        Signal("ivld", Direction.IN, 1),
+        Signal("irdy", Direction.OUT, 1),
+        Signal("odat", Direction.OUT, 16),
+        Signal("olast", Direction.OUT, 1),
+        Signal("ofin", Direction.OUT, 1),
+        Signal("ovld", Direction.OUT, 1),
+        Signal("ordy", Direction.IN, 1),
     )
     issues = check_abi(wrong, (replay,), "replay_buffer", REPLAY_PARAMETERS)
     assert not isinstance(issues, Declined)
@@ -253,39 +249,33 @@ def test_the_case_mismatch_is_caught_against_the_actual_source(replay: Path) -> 
 
 
 def test_a_correct_declaration_is_not_refused(replay: Path) -> None:
-    correct = ComponentABI(
-        entry_point="replay_buffer",
-        ports=(
-            Signal("clk", Direction.IN, 1, Clock(Free())),
-            Signal("rst", Direction.IN, 1, Reset(active_low=False)),
-            Signal("idat", Direction.IN, 16),
-            Signal("ivld", Direction.IN, 1),
-            Signal("irdy", Direction.OUT, 1),
-            Signal("odat", Direction.OUT, 16),
-            Signal("olast", Direction.OUT, 1),
-            Signal("ofin", Direction.OUT, 1),
-            Signal("ovld", Direction.OUT, 1),
-            Signal("ordy", Direction.IN, 1),
-        ),
+    correct = (
+        Signal("clk", Direction.IN, 1, Clock(Free())),
+        Signal("rst", Direction.IN, 1, Reset(active_low=False)),
+        Signal("idat", Direction.IN, 16),
+        Signal("ivld", Direction.IN, 1),
+        Signal("irdy", Direction.OUT, 1),
+        Signal("odat", Direction.OUT, 16),
+        Signal("olast", Direction.OUT, 1),
+        Signal("ofin", Direction.OUT, 1),
+        Signal("ovld", Direction.OUT, 1),
+        Signal("ordy", Direction.IN, 1),
     )
     assert check_abi(correct, (replay,), "replay_buffer", REPLAY_PARAMETERS) == ()
 
 
 def test_a_deliberately_wrong_width_is_refused_with_the_port_named(replay: Path) -> None:
-    wrong = ComponentABI(
-        entry_point="replay_buffer",
-        ports=(
-            Signal("clk", Direction.IN, 1, Clock(Free())),
-            Signal("rst", Direction.IN, 1),
-            Signal("idat", Direction.IN, 8),  # the source resolves this to 16
-            Signal("ivld", Direction.IN, 1),
-            Signal("irdy", Direction.OUT, 1),
-            Signal("odat", Direction.OUT, 16),
-            Signal("olast", Direction.OUT, 1),
-            Signal("ofin", Direction.OUT, 1),
-            Signal("ovld", Direction.OUT, 1),
-            Signal("ordy", Direction.IN, 1),
-        ),
+    wrong = (
+        Signal("clk", Direction.IN, 1, Clock(Free())),
+        Signal("rst", Direction.IN, 1),
+        Signal("idat", Direction.IN, 8),  # the source resolves this to 16
+        Signal("ivld", Direction.IN, 1),
+        Signal("irdy", Direction.OUT, 1),
+        Signal("odat", Direction.OUT, 16),
+        Signal("olast", Direction.OUT, 1),
+        Signal("ofin", Direction.OUT, 1),
+        Signal("ovld", Direction.OUT, 1),
+        Signal("ordy", Direction.IN, 1),
     )
     issues = check_abi(wrong, (replay,), "replay_buffer", REPLAY_PARAMETERS)
     assert not isinstance(issues, Declined)
@@ -297,22 +287,19 @@ def test_a_declared_stream_is_checked_through_its_flipped_signature(
 ) -> None:
     """The bus signature, checked against real resolved widths and directions."""
 
-    abi = ComponentABI(
-        entry_point="dotp_axi",
-        ports=(
-            Signal("ap_clk", Direction.IN, 1, Clock(Free())),
-            Signal("ap_clk2x", Direction.IN, 1, Clock(Derived("ap_clk", 2))),
-            Signal("ap_rst_n", Direction.IN, 1, Reset(active_low=True)),
-            Bus(
-                "s_axis_weights",
-                StandardProtocol.AXIS,
-                (
-                    Member("tdata", "s_axis_weights_tdata", 32),
-                    Member("tvalid", "s_axis_weights_tvalid"),
-                    Member("tready", "s_axis_weights_tready"),
-                ),
-                endpoint=Endpoint.TARGET,
+    abi = (
+        Signal("ap_clk", Direction.IN, 1, Clock(Free())),
+        Signal("ap_clk2x", Direction.IN, 1, Clock(Derived("ap_clk", 2))),
+        Signal("ap_rst_n", Direction.IN, 1, Reset(active_low=True)),
+        Bus(
+            "s_axis_weights",
+            StandardProtocol.AXIS,
+            (
+                Member("tdata", "s_axis_weights_tdata", 32),
+                Member("tvalid", "s_axis_weights_tvalid"),
+                Member("tready", "s_axis_weights_tready"),
             ),
+            endpoint=Endpoint.TARGET,
         ),
     )
     issues = check_abi(abi, finnlib, "dotp_axi", DOTP_PARAMETERS)
@@ -388,7 +375,7 @@ def test_a_value_that_is_not_an_integer_or_string_is_never_supplied(tmp_path: Pa
     assert {port.name: port.width for port in module.ports} == {"a": 8, "y": 8}
 
 
-def _thresholding_abi(data: str, width: int) -> ComponentABI:
+def _thresholding_abi(data: str, width: int) -> tuple[Port, ...]:
     """``thresholding_axi``'s pins at C = PE = 2, WI = WT = 4, N = 3; the input bus as given.
 
     Five address bits: ``$clog2(PE) + $clog2(N) + 2``.
@@ -405,22 +392,19 @@ def _thresholding_abi(data: str, width: int) -> ComponentABI:
         ("RREADY", Direction.IN, 1), ("RDATA", Direction.OUT, 32),
         ("RRESP", Direction.OUT, 2),
     )  # fmt: skip
-    return ComponentABI(
-        entry_point="thresholding_axi",
-        ports=(
-            Signal("ap_clk", Direction.IN, 1, Clock(Free())),
-            Signal("ap_rst_n", Direction.IN, 1, Reset(active_low=True)),
-            *(Signal(f"s_axilite_{name}", direction, bits) for name, direction, bits in axilite),
-            Signal("s_axis_set_tready", Direction.OUT, 1),
-            Signal("s_axis_set_tvalid", Direction.IN, 1),
-            Signal("s_axis_set_tdata", Direction.IN, 8),
-            Signal("s_axis_tready", Direction.OUT, 1),
-            Signal("s_axis_tvalid", Direction.IN, 1),
-            Signal(data, Direction.IN, width),
-            Signal("m_axis_tready", Direction.IN, 1),
-            Signal("m_axis_tvalid", Direction.OUT, 1),
-            Signal("m_axis_tdata", Direction.OUT, 8),
-        ),
+    return (
+        Signal("ap_clk", Direction.IN, 1, Clock(Free())),
+        Signal("ap_rst_n", Direction.IN, 1, Reset(active_low=True)),
+        *(Signal(f"s_axilite_{name}", direction, bits) for name, direction, bits in axilite),
+        Signal("s_axis_set_tready", Direction.OUT, 1),
+        Signal("s_axis_set_tvalid", Direction.IN, 1),
+        Signal("s_axis_set_tdata", Direction.IN, 8),
+        Signal("s_axis_tready", Direction.OUT, 1),
+        Signal("s_axis_tvalid", Direction.IN, 1),
+        Signal(data, Direction.IN, width),
+        Signal("m_axis_tready", Direction.IN, 1),
+        Signal("m_axis_tvalid", Direction.OUT, 1),
+        Signal("m_axis_tdata", Direction.OUT, 8),
     )
 
 
@@ -455,7 +439,7 @@ def test_a_wrong_pin_is_refused_beside_an_unestablished_value(
     assert any("s_axis_TDATA" in issue and "case sensitive" in issue for issue in misnamed)
 
     narrow = check_abi(
-        ComponentABI("eltwise", (Signal("adat", Direction.IN, 4),)),
+        (Signal("adat", Direction.IN, 4),),
         eltwise,
         "eltwise",
         ELTWISE_PARAMETERS,
@@ -638,35 +622,18 @@ def test_declining_is_distinguishable_from_agreeing(replay: Path) -> None:
     """Collapsing the two is how a guarantee quietly becomes a claim."""
 
     agreed = check_abi(
-        ComponentABI("replay_buffer", (Signal("clk", Direction.IN, 1),)),
+        (Signal("clk", Direction.IN, 1),),
         (replay,),
         "replay_buffer",
         REPLAY_PARAMETERS,
     )
     declined = check_abi(
-        ComponentABI("replay_buffer", (Signal("clk", Direction.IN, 1),)),
+        (Signal("clk", Direction.IN, 1),),
         (replay,),
         "replay_buffer",
     )
     assert isinstance(declined, Declined)
     assert not isinstance(agreed, Declined)
-
-
-# -- symbol collision at the source level ---------------------------------------
-
-
-def test_two_files_defining_one_module_differently_are_refused(
-    replay: Path, finnlib: tuple[Path, ...]
-) -> None:
-    left = _module(extract((replay,), "replay_buffer", REPLAY_PARAMETERS))
-    right = _module(extract((replay,), "replay_buffer", (("LEN", "2"), ("REP", "3"), ("W", "8"))))
-    issues = check_symbols((("finn", left), ("vendor", right)))
-    assert any("replay_buffer" in issue and "different" in issue for issue in issues)
-
-
-def test_one_module_seen_twice_at_one_revision_is_not_a_collision(replay: Path) -> None:
-    module = _module(extract((replay,), "replay_buffer", REPLAY_PARAMETERS))
-    assert check_symbols((("a", module), ("b", module))) == ()
 
 
 # -- the measurement -------------------------------------------------------------

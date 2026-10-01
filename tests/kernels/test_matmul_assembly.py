@@ -8,8 +8,7 @@ from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 
 from finn.core.space import Available, Rejected, Unresolved
 from finn.kernels.artifacts.abi import Bus
-from finn.kernels.artifacts.build import prepare_module_build, render_module_sources
-from finn.kernels.artifacts.store import ArtifactStore
+from finn.kernels.artifacts.build import emit_module
 from finn.kernels.configure import commit, settle
 from kernels.helpers import finnlib_root, point_for
 from finn.kernels.matmul import MatMulKernel, WeightDelivery, exact_result_dtype, matmul_assembly
@@ -17,7 +16,7 @@ from finn.kernels.dotp import DotpAxiKernel, PackedDotpKernel
 from finn.core.space import Decision, View, constraint, reject
 from finn.kernels.target import DspBlock
 from finn.kernels.physical.structure import ConstantBits, PhysicalPin, PinSlice
-from finn.kernels.resources import resource_root, template_root
+from finn.kernels.resources import template_root
 
 
 FACTS = dict(
@@ -219,30 +218,20 @@ def test_build_is_complete_and_initializer_changes_identity(tmp_path, delivery):
     if delivery is not WeightDelivery.EXTERNAL:
         options["weights"] = [[0] * 4] * 4
     built = assembly(**options)
-    store = ArtifactStore(tmp_path / "store")
-    prepared = prepare_module_build(
-        built.requirements,
-        roots={"kernels": resource_root(), "finnlib": finnlib_root()},
-        template_roots=(template_root(),),
-        blobs=store,
-    )
-    rendered = render_module_sources(prepared, store)
-    wrapper = dict(rendered.contents)[prepared.abi.entry_point + ".sv"].decode()
+    roots, templates = {"finnlib": finnlib_root()}, template_root()
+    emitted = emit_module(built.requirements, tmp_path / "a", roots=roots, templates=templates)
+    wrapper = (emitted.directory / (emitted.entry_point + ".sv")).read_text()
     assert ".ACCU_WIDTH(8)" in wrapper
     assert ".olst(n__u_activations_input_gen__olst)" in wrapper
-    assert prepared.slots == ()
     if delivery is WeightDelivery.MEMSTREAM:
         assert '.INIT_FILE("memstream_' in wrapper
     if delivery is not WeightDelivery.EXTERNAL:
         # The image is part of the identity: its content-named INIT_FILE.
         changed = assembly(weight_delivery=delivery, weights=[[1] * 4] * 4)
-        changed_prepared = prepare_module_build(
-            changed.requirements,
-            roots={"kernels": resource_root(), "finnlib": finnlib_root()},
-            template_roots=(template_root(),),
-            blobs=store,
+        renamed = emit_module(
+            changed.requirements, tmp_path / "b", roots=roots, templates=templates
         )
-        assert prepared.name != changed_prepared.name
+        assert emitted.entry_point != renamed.entry_point
 
 
 def test_matmul_honors_the_child_physical_view_not_just_its_raw_module(monkeypatch):

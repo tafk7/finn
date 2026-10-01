@@ -29,13 +29,11 @@ from finn.core.space import (
 )
 from finn.core.space.errors import ConfigurationError, RequestError
 from finn.kernels.artifacts.abi import Bus
-from finn.kernels.artifacts.build import ModuleBuildRequirements, prepare_module_build
-from finn.kernels.artifacts.store import ArtifactStore
+from finn.kernels.artifacts.requirements import ModuleBuildRequirements
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.dotp import DotpAxiKernel
 from finn.kernels.matmul import MatMulKernel, WeightDelivery, matmul_assembly
-from kernels.helpers import finnlib_root, settled
-from finn.kernels.resources import resource_root, template_root
+from kernels.helpers import settled
 from finn.kernels.target import DspBlock
 
 IMAGE = MemStreamKernel.image
@@ -452,21 +450,13 @@ def test_public_adapter_matches_the_space_path(delivery):
 
 
 @pytest.mark.parametrize("style", ("auto", "distributed", "block", "ultra"))
-def test_ram_style_reaches_the_prepared_build_without_data_slots(tmp_path, style):
+def test_ram_style_reaches_the_stored_memory(style):
     built = matmul_assembly(
         **{**FACTS, "pe": 2, "simd": 2},
         weight_delivery=WeightDelivery.MEMSTREAM,
         weights=WEIGHTS,
         ram_style=style,
     )
-    store = ArtifactStore(tmp_path / "store")
-    prepared = prepare_module_build(
-        built.requirements,
-        roots={"kernels": resource_root(), "finnlib": finnlib_root()},
-        template_roots=(template_root(),),
-        blobs=store,
-    )
-    assert prepared.slots == ()
     assert ("RAM_STYLE", f'"{style}"') in dict(
         (item.instance_id, item.requirements.parameters) for item in built.structure.instances
     )[STORED_INSTANCE]

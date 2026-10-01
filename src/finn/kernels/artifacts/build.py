@@ -1,1013 +1,215 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Immutable, model-free module preparation and source materialization.
+"""Emitting a module: its sources and data files, written to a directory in compile order.
 
-Preparation is the only filesystem-facing step.  It resolves declared copied
-sources and self-contained templates into content references, then erases root
-labels and locators.  Rendering consumes only that prepared value and a
-``ContentSource``; it cannot reach a model, Engine, design point, or checkout.
+The one step that touches the filesystem. Copied sources are read from named
+roots (``finnlib``), templates from one template directory, so requirements
+never carry a checkout path. A generated module (a composed one) is named
+``<stem>__<digest>`` from what it is built from: its implementation, pins,
+parameters and the bytes or rendering recipe of every source. Equal
+requirements emit the same module under the same name; a changed source
+renames it.
 """
 
 from __future__ import annotations
 
-import re
-import shutil
-from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, fields, is_dataclass
-from enum import Enum
+from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Union, cast
 
-from jinja2 import Environment, TemplateError, meta, nodes
-
-from finn.kernels.artifacts.abi import ClockAlignment, ComponentABI, Port
-from finn.kernels.artifacts.contributions import CopiedSource, DataSlot, GeneratedData
-from finn.kernels.artifacts.derivation import (
-    ArtifactRef,
-    ContentRef,
-    Derivation,
-    OutputLayout,
-    ProducerIdentity,
-    Scalar,
-    build_key,
-)
-from finn.kernels.artifacts.packaging import ContentSource, PortableComponent, Realization
-from finn.kernels.artifacts.projection import content_digest, digest, project
-from finn.kernels.artifacts.render import RenderError, render_template_bytes
-from finn.kernels.artifacts.sources import (
-    CompileOptions,
-    Language,
-    Role,
-    SourceDefinition,
-    SourceError,
-    SourceFile,
-    merge_closures,
-)
-from finn.kernels.artifacts.store import (
-    ArtifactStore,
-    StoredArtifact,
-    StoreError,
-    verify_stored_artifact,
-)
-
+from finn.kernels.artifacts.contributions import CopiedSource, GeneratedData
+from finn.kernels.artifacts.projection import content_digest, digest
+from finn.kernels.artifacts.render import RenderError, render_template_bytes, template_variables
 from finn.kernels.artifacts.requirements import (
-    _IDENTIFIER,
-    BuildError,
-    BlobSink,
-    FixedModuleName,
-    GeneratedModuleName,
-    ModuleNameRequirement,
-    ModuleABIRequirements,
-    EntryPointSourceName,
-    RenderedSourceRequirement,
-    RequirementContribution,
-    ModuleBuildRequirements,
-    ScalarTable,
-    GENERATED_MODULE_NAME_CONTRACT,
     MODULE_NAME_ARGUMENT,
-    _table,
-    _rtl_scalar,
-    _symbols,
-    _relative_path,
+    BuildError,
+    EntryPointSourceName,
+    FixedModuleName,
+    ModuleBuildRequirements,
+    RenderedSourceRequirement,
+    Scalar,
+    ScalarTable,
+    sanitize_stem,
+    typed_canonical,
 )
+from finn.kernels.artifacts.sources import SourceError, SourceFile, ordered
+
+_ENTRY = "__entry_point__"
 
 
-KERNEL_SOURCE_SCHEMA = "kernel-source-v1"
-MODULE_SOURCE_SCHEMA = "module-source-v2"
-SELF_CONTAINED_JINJA_RENDERER = ProducerIdentity("finn.render.jinja2", "self-contained-v1")
+@dataclass(frozen=True)
+class EmittedModule:
+    """A module written to ``directory``: its name, its sources in compile order and
+    its data files, each relative to ``directory``."""
 
-_DIGEST = re.compile(r"^[0-9a-f]{64}$")
-_ENTRY_PLACEHOLDER = "__finn_generated_entry_point__.sv"
-
-
-@dataclass(frozen=True, slots=True)
-class PreparedCopiedSource:
-    source: SourceFile
-
-    def __post_init__(self) -> None:
-        if not isinstance(self.source, SourceFile):
-            raise BuildError("a prepared copied source contains one SourceFile")
+    entry_point: str
+    directory: Path
+    sources: tuple[str, ...]
+    data: tuple[str, ...] = ()
 
 
-@dataclass(frozen=True, slots=True)
-class PreparedRenderedSource:
-    output_path: str
-    template: ContentRef
-    arguments: ScalarTable
-    renderer: ProducerIdentity
-    language: Language
-    library: str
-    role: Role
-    standard: str
-    options: CompileOptions
-    provides: tuple[str, ...]
-    requires: tuple[str, ...]
+@dataclass(frozen=True)
+class _Source:
+    """A source before the module is named: its bytes, or its template and arguments."""
 
-    def __post_init__(self) -> None:
-        _relative_path(self.output_path, label="module output tree")
-        arguments = _table(self.arguments, label="prepared render-argument table", renderable=True)
-        if not self.library:
-            raise BuildError("a prepared rendered source names its compilation library")
-        if not isinstance(self.renderer, ProducerIdentity):
-            raise BuildError("a prepared rendered source names its renderer contract")
-        object.__setattr__(self, "arguments", arguments)
-        object.__setattr__(self, "provides", _symbols(self.provides, label="provides"))
-        object.__setattr__(self, "requires", _symbols(self.requires, label="requires"))
+    file: SourceFile
+    data: bytes
+    arguments: ScalarTable | None = None
+    reads_name: bool = False
+    entry: RenderedSourceRequirement | None = None
 
 
-PreparedSource = Union[PreparedCopiedSource, PreparedRenderedSource]
-
-
-@dataclass(frozen=True, slots=True)
-class PreparedGeneratedModuleName:
-    stem: str
-    naming_contract: str
-    seed: str
-
-    def __post_init__(self) -> None:
-        if not _IDENTIFIER.fullmatch(self.stem) or len(self.stem) > 40:
-            raise BuildError("a prepared generated stem is a bounded ASCII RTL identifier")
-        if self.naming_contract != GENERATED_MODULE_NAME_CONTRACT:
-            raise BuildError(
-                f"unsupported generated module naming contract {self.naming_contract!r}"
-            )
-        if not _DIGEST.fullmatch(self.seed):
-            raise BuildError(f"{self.seed!r} is not a full generated-name seed")
-
-
-PreparedModuleName = Union[FixedModuleName, PreparedGeneratedModuleName]
-
-
-@dataclass(frozen=True, slots=True)
-class PreparedModuleBuild:
-    implementation_id: str
-    implementation_version: str
-    parameters: ScalarTable
-    name: PreparedModuleName
-    abi: ComponentABI
-    sources: tuple[PreparedSource, ...]
-    slots: tuple[DataSlot, ...] = ()
-
-    def __post_init__(self) -> None:
-        if not self.implementation_id or not self.implementation_version:
-            raise BuildError("a prepared module needs an implementation id and version")
-        parameters = _table(self.parameters, label="prepared module parameter table")
-        if not isinstance(self.name, (FixedModuleName, PreparedGeneratedModuleName)):
-            raise BuildError("a prepared module has a fixed or generated name")
-        if any(
-            not isinstance(source, (PreparedCopiedSource, PreparedRenderedSource))
-            for source in self.sources
-        ):
-            raise BuildError("a prepared module contains only prepared sources")
-        if not self.sources:
-            raise BuildError("a prepared module contains at least one source")
-        expected_parameters = tuple((name, _rtl_scalar(value)) for name, value in parameters)
-        if self.abi.parameters != expected_parameters:
-            raise BuildError("a prepared module ABI does not match its typed parameter table")
-        if isinstance(self.name, FixedModuleName):
-            if self.abi.entry_point != self.name.value:
-                raise BuildError(
-                    "a fixed prepared name does not match its concrete ABI entry point"
-                )
-        else:
-            expected = f"{self.name.stem}__{self.name.seed}"
-            if self.abi.entry_point != expected:
-                raise BuildError("a generated prepared name does not match its seed and ABI")
-            entry_sources = tuple(
-                source
-                for source in self.sources
-                if isinstance(source, PreparedRenderedSource)
-                and f"module:{expected}" in source.provides
-                and dict(source.arguments).get(MODULE_NAME_ARGUMENT) == expected
-            )
-            if len(entry_sources) != 1 or not entry_sources[0].output_path.startswith(expected):
-                raise BuildError(
-                    "a generated prepared module has exactly one coherent entry-point source"
-                )
-        paths = tuple(
-            source.source.path if isinstance(source, PreparedCopiedSource) else source.output_path
-            for source in self.sources
-        )
-        if len(paths) != len(set(paths)):
-            raise BuildError("a prepared module stages one output path twice")
-        slot_names = tuple(slot.name for slot in self.slots)
-        if len(slot_names) != len(set(slot_names)):
-            raise BuildError("a prepared module names one data slot twice")
-        object.__setattr__(self, "parameters", parameters)
-        object.__setattr__(self, "sources", tuple(self.sources))
-        object.__setattr__(self, "slots", tuple(self.slots))
-
-
-@dataclass(frozen=True, slots=True)
-class RenderedModuleSources:
-    definition: SourceDefinition
-    contents: tuple[tuple[str, bytes], ...]
-
-    def __post_init__(self) -> None:
-        if self.definition.origin:
-            raise BuildError("rendered reusable sources have no occurrence origin")
-        paths = tuple(source.path for source in self.definition.files)
-        if paths != tuple(path for path, _ in self.contents):
-            raise BuildError("rendered source metadata and output contents have different layouts")
-
-
-@dataclass(frozen=True, slots=True)
-class _RenderedDraft:
-    output: str | EntryPointSourceName
-    template: ContentRef
-    arguments: ScalarTable
-    renderer: ProducerIdentity
-    language: Language
-    library: str
-    role: Role
-    standard: str
-    options: CompileOptions
-    provides: tuple[str, ...]
-    requires: tuple[str, ...]
-    provides_entry_point: bool
-    uses_module_name: bool
-
-
-_Draft = Union[PreparedCopiedSource, _RenderedDraft]
-
-
-@dataclass(frozen=True, slots=True)
-class _NameSource:
-    kind: str
-    output: object
-    content: object
-    renderer: object
-    arguments: ScalarTable
-    language: Language
-    library: str
-    role: Role
-    standard: str
-    options: CompileOptions
-    provides: tuple[str, ...]
-    requires: tuple[str, ...]
-    provides_entry_point: bool
-
-
-@dataclass(frozen=True, slots=True)
-class _GeneratedNameSeed:
-    contract: str
-    stem: str
-    implementation_id: str
-    implementation_version: str
-    ports: tuple[Port, ...]
-    abi_parameters: tuple[tuple[str, str], ...]
-    clock_alignments: tuple[ClockAlignment, ...]
-    parameters: ScalarTable
-    sources: tuple[_NameSource, ...]
-
-
-def _typed_canonical(value: object) -> object:
-    if isinstance(value, Enum):
-        enum_type = type(value)
-        return (f"enum:{enum_type.__module__}.{enum_type.__qualname__}", value.name)
-    if is_dataclass(value) and not isinstance(value, type):
-        dataclass_type = type(value)
-        return (
-            f"dataclass:{dataclass_type.__module__}.{dataclass_type.__qualname__}",
-            tuple(
-                (field.name, _typed_canonical(getattr(value, field.name)))
-                for field in fields(value)
-            ),
-        )
-    if isinstance(value, Mapping):
-        return tuple((name, _typed_canonical(value[name])) for name in sorted(value))
-    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
-        return tuple(_typed_canonical(item) for item in value)
-    return value
-
-
-def module_build_fingerprint(requirements: ModuleBuildRequirements) -> str:
-    return digest(("module-requirements-v1", _typed_canonical(requirements)))
-
-
-def nested_module_name(requirements: ModuleBuildRequirements) -> str:
-    """The fixed name of a generated module nested in another: its stem and fingerprint.
-
-    A nested module is instantiated by name before any build is prepared, so
-    its name follows from its requirements alone; equal requirements share it.
-    """
-    entry = requirements.abi.entry_point
-    if not isinstance(entry, GeneratedModuleName):
-        raise BuildError("only a generated module is nested under a derived name")
-    return f"{_sanitize_stem(entry.stem)}__{module_build_fingerprint(requirements)[:16]}"
-
-
-def prepared_module_fingerprint(prepared: PreparedModuleBuild) -> str:
-    return digest(("prepared-module-v1", _typed_canonical(prepared)))
-
-
-def _put_checked(blobs: BlobSink, data: bytes, *, label: str) -> ContentRef:
-    reference = blobs.put_blob(data)
-    expected = content_digest(data)
-    if reference.digest != expected:
-        raise BuildError(
-            f"the blob sink returned {reference.digest[:12]} for {label}, which hashes to "
-            f"{expected[:12]}"
-        )
-    return reference
-
-
-def _read(path: Path, *, label: str) -> bytes:
+def _read(path: Path, label: str) -> bytes:
     try:
         return path.read_bytes()
     except OSError as error:
         raise BuildError(f"{label} {path} cannot be read") from error
 
 
-def _locate_template(roots: Sequence[Path], name: str) -> Path:
-    _relative_path(name, label="template root")
-    for root in roots:
-        candidate = Path(root) / name
-        if candidate.is_file():
-            return candidate
-    raise BuildError(f"template {name!r} is not under any declared template root")
-
-
-def _template_variables(data: bytes, *, name: str) -> frozenset[str]:
+def _rendered(
+    item: RenderedSourceRequirement, inputs: Mapping[str, Scalar], templates: Path
+) -> _Source:
+    template = _read(templates / item.template, "template")
     try:
-        text = data.decode("utf-8")
-    except UnicodeDecodeError as error:
-        raise BuildError(f"template {name!r} is not UTF-8 text") from error
-    environment = Environment(autoescape=False)
-    environment.globals.clear()
-    try:
-        syntax = environment.parse(text)
-    except TemplateError as error:
-        raise BuildError(f"template {name!r} cannot be parsed: {error}") from error
-    forbidden = tuple(
-        syntax.find_all((nodes.Include, nodes.Import, nodes.FromImport, nodes.Extends))
-    )
-    if forbidden:
-        kinds = sorted({type(node).__name__ for node in forbidden})
-        raise BuildError(f"template {name!r} has an unprepared template dependency: {kinds!r}")
-    dynamic = tuple(syntax.find_all((nodes.Call, nodes.Getattr, nodes.Getitem)))
-    if dynamic:
-        kinds = sorted({type(node).__name__ for node in dynamic})
-        raise BuildError(f"template {name!r} uses unsupported dynamic lookup: {kinds!r}")
-    operations = tuple(syntax.find_all((nodes.Filter, nodes.Test)))
-    if operations:
-        kinds = sorted({type(node).__name__ for node in operations})
-        raise BuildError(f"template {name!r} uses an unsupported filter or test: {kinds!r}")
-    return frozenset(meta.find_undeclared_variables(syntax))
-
-
-def _check_renderer(renderer: ProducerIdentity) -> None:
-    if renderer != SELF_CONTAINED_JINJA_RENDERER:
-        raise BuildError(
-            f"unsupported renderer {renderer.producer_id}@{renderer.contract_version}; "
-            f"expected {SELF_CONTAINED_JINJA_RENDERER.producer_id}@"
-            f"{SELF_CONTAINED_JINJA_RENDERER.contract_version}"
-        )
-
-
-def _sanitize_stem(stem: str) -> str:
-    sanitized = "".join(
-        character if (character.isascii() and character.isalnum()) or character == "_" else "_"
-        for character in stem
-    )
-    if not sanitized or sanitized[0].isdigit():
-        sanitized = "_" + sanitized
-    if len(sanitized) > 40:
-        raise BuildError("a generated module stem is at most 40 ASCII identifier characters")
-    if not _IDENTIFIER.fullmatch(sanitized):
-        raise BuildError(f"{stem!r} cannot be sanitized into an RTL module identifier")
-    return sanitized
-
-
-def _draft_source(draft: _Draft) -> SourceFile:
-    if isinstance(draft, PreparedCopiedSource):
-        return draft.source
-    output = draft.output if isinstance(draft.output, str) else _ENTRY_PLACEHOLDER
-    recipe = (
-        "prepared-render-recipe-v1",
-        draft.template,
-        draft.renderer,
-        draft.arguments,
-        draft.uses_module_name,
-    )
-    return SourceFile(
-        ContentRef(digest(recipe)),
-        output,
-        draft.language,
-        library=draft.library,
-        role=draft.role,
-        standard=draft.standard,
-        options=draft.options,
-        provides=draft.provides,
-        requires=draft.requires,
-    )
-
-
-def _normalize_drafts(drafts: Sequence[_Draft]) -> tuple[_Draft, ...]:
-    sources = tuple(_draft_source(draft) for draft in drafts)
-    try:
-        closure = merge_closures((SourceDefinition(sources),))
-    except SourceError as error:
+        variables = template_variables(template, name=item.template)
+    except RenderError as error:
         raise BuildError(str(error)) from error
-    available: list[tuple[SourceFile, _Draft]] = list(zip(sources, drafts))
-    normalized: list[_Draft] = []
-    for source in closure.files:
-        for candidate, draft in available:
-            if candidate == source:
-                normalized.append(draft)
-                break
-        else:  # pragma: no cover - merge_closures cannot manufacture a source
-            raise AssertionError("source closure returned an undeclared source")
-    return tuple(normalized)
-
-
-def _name_source(draft: _Draft) -> _NameSource:
-    if isinstance(draft, PreparedCopiedSource):
-        source = draft.source
-        return _NameSource(
-            "copied",
-            source.path,
-            source.content,
-            None,
-            (),
-            source.language,
-            source.library,
-            source.role,
-            source.standard,
-            source.options,
-            source.provides,
-            source.requires,
-            False,
+    reads_name = MODULE_NAME_ARGUMENT in variables
+    if variables != {*item.arguments, *((MODULE_NAME_ARGUMENT,) if reads_name else ())}:
+        raise BuildError(
+            f"template {item.template!r} reads {sorted(variables)!r}, while its declared "
+            f"arguments are {sorted(item.arguments)!r}"
         )
-    return _NameSource(
-        "rendered",
-        draft.output,
-        draft.template,
-        draft.renderer,
-        draft.arguments,
-        draft.language,
-        draft.library,
-        draft.role,
-        draft.standard,
-        draft.options,
-        draft.provides,
-        draft.requires,
-        draft.provides_entry_point,
+    if item.values:
+        # A nested module's wrapper: its own bindings, its own name among them.
+        own = dict(item.values)
+        arguments = tuple((name, own[name]) for name in sorted(variables))
+        reads_name = False
+    else:
+        arguments = tuple((name, inputs[name]) for name in item.arguments)
+    recipe = digest(("rendered-source-v1", content_digest(template), arguments, reads_name))
+    entry = isinstance(item.output, EntryPointSourceName)
+    path = (
+        _ENTRY + item.output.suffix
+        if isinstance(item.output, EntryPointSourceName)
+        else item.output
+    )
+    return _Source(
+        SourceFile(path, recipe, item.provides, item.requires),
+        template,
+        arguments,
+        reads_name,
+        item if entry or item.provides_entry_point else None,
     )
 
 
-def prepare_module_build(
-    requirements: ModuleBuildRequirements,
-    *,
-    roots: Mapping[str, Path],
-    template_roots: Sequence[Path],
-    blobs: BlobSink,
-) -> PreparedModuleBuild:
-    """Freeze all source/template bytes without rendering any output."""
-
-    render_values = dict(requirements.render_inputs)
-    drafts: list[_Draft] = []
-    slots: list[DataSlot] = []
-    for contribution in requirements.contributions:
-        if isinstance(contribution, DataSlot):
-            slots.append(contribution)
-            continue
-        if isinstance(contribution, GeneratedData):
-            path = _relative_path(contribution.path, label="module output tree")
-            reference = _put_checked(blobs, contribution.data, label=path)
-            try:
-                data_file = SourceFile(reference, path, Language.DATA, role=Role.DATA)
-            except SourceError as error:
-                raise BuildError(str(error)) from error
-            drafts.append(PreparedCopiedSource(data_file))
-            continue
-        if isinstance(contribution, CopiedSource):
-            root = roots.get(contribution.root)
-            if root is None:
-                raise BuildError(f"no declared source root resolves {contribution.root!r}")
-            relative = _relative_path(contribution.path, label="declared source root")
-            data = _read(Path(root) / relative, label="copied source")
-            reference = _put_checked(blobs, data, label=relative)
-            try:
-                source = SourceFile(
-                    reference,
-                    relative,
-                    contribution.language,
-                    library=contribution.library,
-                    role=contribution.role,
-                    standard=contribution.standard,
-                    options=contribution.options,
-                    provides=contribution.provides,
-                    requires=contribution.requires,
-                )
-            except SourceError as error:
-                raise BuildError(str(error)) from error
-            drafts.append(PreparedCopiedSource(source))
-            continue
-
-        _check_renderer(contribution.renderer)
-        located = _locate_template(template_roots, contribution.template)
-        template_data = _read(located, label="template")
-        template = _put_checked(blobs, template_data, label=contribution.template)
-        variables = _template_variables(template_data, name=contribution.template)
-        expected = set(contribution.arguments)
-        uses_module_name = MODULE_NAME_ARGUMENT in variables
-        if uses_module_name:
-            expected.add(MODULE_NAME_ARGUMENT)
-        if variables != expected:
-            raise BuildError(
-                f"template {contribution.template!r} reads {sorted(variables)!r}, while its "
-                f"declared arguments authorize {sorted(expected)!r}"
-            )
-        if contribution.values:
-            # A nested module's wrapper: its own bindings, its own module name.
-            own = dict(contribution.values)
-            selected = tuple((name, own[name]) for name in sorted(variables))
-            uses_module_name = False
-        else:
-            selected = tuple((name, render_values[name]) for name in contribution.arguments)
-        drafts.append(
-            _RenderedDraft(
-                contribution.output,
-                template,
-                selected,
-                contribution.renderer,
-                contribution.language,
-                contribution.library,
-                contribution.role,
-                contribution.standard,
-                contribution.options,
-                contribution.provides,
-                contribution.requires,
-                contribution.provides_entry_point,
-                uses_module_name,
-            )
+def _name(requirements: ModuleBuildRequirements, sources: tuple[_Source, ...]) -> str:
+    """The module's name: its own, or ``<stem>__<digest>`` for a generated one."""
+    entry_point = requirements.abi.entry_point
+    entries = [source for source in sources if source.entry is not None]
+    if isinstance(entry_point, FixedModuleName):
+        if entries:
+            raise BuildError("an entry-point source names a generated module")
+        return entry_point.value
+    if len(entries) != 1 or not (
+        isinstance(entries[0].entry, RenderedSourceRequirement)
+        and isinstance(entries[0].entry.output, EntryPointSourceName)
+        and entries[0].entry.provides_entry_point
+    ):
+        raise BuildError(
+            "a generated module has exactly one rendered EntryPointSourceName with "
+            "provides_entry_point=True"
         )
-
-    ordered = _normalize_drafts(drafts)
-    if not ordered:
-        raise BuildError("source preparation requires at least one source contribution")
-    if isinstance(requirements.abi.entry_point, FixedModuleName):
-        fixed_name = requirements.abi.entry_point
-        name: PreparedModuleName = fixed_name
-        entry_point = fixed_name.value
-        if any(
-            isinstance(draft, _RenderedDraft) and isinstance(draft.output, EntryPointSourceName)
-            for draft in ordered
-        ):
-            raise BuildError("EntryPointSourceName requires a generated module name")
-    else:
-        generated = requirements.abi.entry_point
-        if generated.naming_contract != GENERATED_MODULE_NAME_CONTRACT:
-            raise BuildError(
-                f"unsupported generated module naming contract {generated.naming_contract!r}"
-            )
-        entries = tuple(
-            draft
-            for draft in ordered
-            if isinstance(draft, _RenderedDraft)
-            and isinstance(draft.output, EntryPointSourceName)
-            and draft.provides_entry_point
-        )
-        if len(entries) != 1:
-            raise BuildError(
-                "a generated module has exactly one rendered EntryPointSourceName with "
-                "provides_entry_point=True"
-            )
-        if any(
-            isinstance(draft, _RenderedDraft)
-            and (isinstance(draft.output, EntryPointSourceName) or draft.provides_entry_point)
-            and draft is not entries[0]
-            for draft in ordered
-        ):
-            raise BuildError("only the generated entry source has a derived output or symbol")
-        entry = entries[0]
-        if not entry.uses_module_name:
-            raise BuildError(f"the generated entry template must read {MODULE_NAME_ARGUMENT}")
-        if any(symbol.startswith("module:") for symbol in entry.provides):
-            raise BuildError("the generated entry source cannot author its derived module symbol")
-        stem = _sanitize_stem(generated.stem)
-        seed_value = _GeneratedNameSeed(
-            generated.naming_contract,
+    if not entries[0].reads_name:
+        raise BuildError(f"the generated entry template must read {MODULE_NAME_ARGUMENT}")
+    if any(symbol.startswith("module:") for symbol in entries[0].file.provides):
+        raise BuildError("the generated entry source cannot author its derived module symbol")
+    stem = sanitize_stem(entry_point.stem)
+    abi = requirements.abi
+    seed = digest(
+        (
+            "generated-module-name-v2",
             stem,
             requirements.implementation_id,
             requirements.implementation_version,
-            requirements.abi.ports,
-            requirements.abi.parameters,
-            requirements.abi.clock_alignments,
-            requirements.parameters,
-            tuple(_name_source(draft) for draft in ordered),
+            typed_canonical((abi.ports, abi.parameters, abi.clock_alignments)),
+            typed_canonical(requirements.parameters),
+            typed_canonical(tuple(source.file for source in sources)),
         )
-        seed = digest((generated.naming_contract, _typed_canonical(seed_value)))
-        name = PreparedGeneratedModuleName(stem, generated.naming_contract, seed)
-        entry_point = f"{stem}__{seed}"
-        occupied = {
-            symbol
-            for draft in ordered
-            for symbol in (
-                draft.source.provides if isinstance(draft, PreparedCopiedSource) else draft.provides
-            )
-        }
-        if f"module:{entry_point}" in occupied:
-            raise BuildError(
-                f"generated module {entry_point!r} collides with a declared child symbol"
-            )
-
-    abi = ComponentABI(
-        entry_point,
-        requirements.abi.ports,
-        requirements.abi.parameters,
-        requirements.abi.clock_alignments,
     )
-    prepared_sources: list[PreparedSource] = []
-    for draft in ordered:
-        if isinstance(draft, PreparedCopiedSource):
-            prepared_sources.append(draft)
-            continue
-        output = (
-            f"{entry_point}{draft.output.suffix}"
-            if isinstance(draft.output, EntryPointSourceName)
-            else draft.output
-        )
-        arguments = draft.arguments
-        if draft.uses_module_name:
-            arguments += ((MODULE_NAME_ARGUMENT, entry_point),)
-        provides = draft.provides
-        if draft.provides_entry_point:
-            provides += (f"module:{entry_point}",)
-        prepared_sources.append(
-            PreparedRenderedSource(
-                output,
-                draft.template,
-                arguments,
-                draft.renderer,
-                draft.language,
-                draft.library,
-                draft.role,
-                draft.standard,
-                draft.options,
-                provides,
-                draft.requires,
-            )
-        )
-    prepared = PreparedModuleBuild(
-        requirements.implementation_id,
-        requirements.implementation_version,
-        requirements.parameters,
-        name,
-        abi,
-        tuple(prepared_sources),
-        tuple(slots),
-    )
-    # Re-run the closure checks with the concrete generated path/symbol.
-    _prepared_definition(prepared, recipe_references=True)
-    return prepared
+    name = f"{stem}__{seed}"
+    if any(f"module:{name}" in source.file.provides for source in sources):
+        raise BuildError(f"generated module {name!r} collides with a declared child symbol")
+    return name
 
 
-def _ordinal(prefix: str, values: Sequence[str]) -> tuple[tuple[str, Scalar], ...]:
-    return tuple((f"{prefix}.{index:03d}", value) for index, value in enumerate(values))
+def emit_module(
+    requirements: ModuleBuildRequirements,
+    directory: Path,
+    *,
+    roots: Mapping[str, Path],
+    templates: Path,
+) -> EmittedModule:
+    """Write the module's sources and data files into ``directory``.
 
+    ``roots`` resolves each copied source's root; ``templates`` holds every
+    rendered source's template.
+    """
 
-def _source_options(index: int, source: SourceFile) -> tuple[tuple[str, Scalar], ...]:
-    prefix = f"source.{index:03d}"
-    options: tuple[tuple[str, Scalar], ...] = (
-        (f"{prefix}.path", source.path),
-        (f"{prefix}.language", source.language.value),
-        (f"{prefix}.library", source.library),
-        (f"{prefix}.role", source.role.value),
-        (f"{prefix}.standard", source.standard),
-    )
-    options += tuple((f"{prefix}.define.{name}", value) for name, value in source.options.defines)
-    options += _ordinal(f"{prefix}.include", source.options.includes)
-    options += _ordinal(f"{prefix}.flag", source.options.flags)
-    options += _ordinal(f"{prefix}.provides", source.provides)
-    options += _ordinal(f"{prefix}.requires", source.requires)
-    return options
-
-
-def _slot_options(slots: Sequence[DataSlot]) -> tuple[tuple[str, Scalar], ...]:
-    options: tuple[tuple[str, Scalar], ...] = ()
-    for index, slot in enumerate(slots):
-        prefix = f"slot.{index:03d}"
-        options += (
-            (f"{prefix}.name", slot.name),
-            (f"{prefix}.width", slot.spec.width),
-            (f"{prefix}.depth", slot.spec.depth),
-            (f"{prefix}.packing", slot.spec.packing),
-            (f"{prefix}.referenced_as", slot.spec.referenced_as),
-        )
-    return options
-
-
-def _projected_options(prefix: str, value: object) -> tuple[tuple[str, Scalar], ...]:
-    canonical = cast(tuple[object, ...], _typed_canonical(value))
-    # Preserve the typed canonical value exactly through projection leaves,
-    # rather than hiding it behind a secondary recipe digest.
-    options: list[tuple[str, Scalar]] = []
-    for index, (path, tag, text) in enumerate(project(canonical)):
-        base = f"{prefix}.{index:04d}"
-        options.extend(((f"{base}.path", path), (f"{base}.tag", tag), (f"{base}.text", text)))
-    return tuple(options)
-
-
-def module_source_derivation(prepared: PreparedModuleBuild) -> Derivation:
-    """Return the complete lookup identity, available before rendering."""
-
-    if all(isinstance(source, PreparedCopiedSource) for source in prepared.sources):
-        copied = tuple(cast(PreparedCopiedSource, source).source for source in prepared.sources)
-        inputs = tuple(
-            (f"source.{index:03d}.{source.library}/{source.path}", source.content)
-            for index, source in enumerate(copied)
-        )
-        derivation_options: tuple[tuple[str, Scalar], ...] = ()
-        for index, source in enumerate(copied):
-            derivation_options += _source_options(index, source)
-        derivation_options += _slot_options(prepared.slots)
-        return Derivation(
-            kind="kernel-source",
-            schema_version=KERNEL_SOURCE_SCHEMA,
-            producer=ProducerIdentity(
-                f"finn.kernel.{prepared.implementation_id}",
-                prepared.implementation_version,
-            ),
-            inputs=inputs,
-            options=derivation_options,
-            outputs=OutputLayout(tuple(source.path for source in copied)),
-        )
-
-    templates = tuple(
-        source.template for source in prepared.sources if isinstance(source, PreparedRenderedSource)
-    )
-    inputs = tuple(
-        (f"source.{index:03d}.{source.source.library}/{source.source.path}", source.source.content)
-        for index, source in enumerate(prepared.sources)
-        if isinstance(source, PreparedCopiedSource)
-    )
-    derivation_options = (("entry_point", prepared.abi.entry_point),)
-    derivation_options += _projected_options("prepared", prepared)
-    return Derivation(
-        kind="module-source",
-        schema_version=MODULE_SOURCE_SCHEMA,
-        producer=ProducerIdentity(
-            f"finn.module.{prepared.implementation_id}",
-            prepared.implementation_version,
-        ),
-        templates=templates,
-        inputs=inputs,
-        options=derivation_options,
-        outputs=OutputLayout(
-            tuple(
-                source.source.path
-                if isinstance(source, PreparedCopiedSource)
-                else source.output_path
-                for source in prepared.sources
-            )
-        ),
-    )
-
-
-def _checked_blob(contents: ContentSource, reference: ContentRef, *, label: str) -> bytes:
-    try:
-        data = contents.get_blob(reference)
-    except Exception as error:
-        raise BuildError(f"required {label} blob {reference.digest[:12]} is unavailable") from error
-    actual = content_digest(data)
-    if actual != reference.digest:
-        raise BuildError(
-            f"{label} blob {reference.digest[:12]} returned bytes hashing to {actual[:12]}"
-        )
-    return data
-
-
-def _checked_render_template(source: PreparedRenderedSource, contents: ContentSource) -> bytes:
-    """Return one frozen template after applying the current renderer contract."""
-
-    _check_renderer(source.renderer)
-    template = _checked_blob(contents, source.template, label=source.output_path + " template")
-    variables = _template_variables(template, name=source.output_path)
-    argument_names = {name for name, _ in source.arguments}
-    if variables != argument_names:
-        raise BuildError(
-            f"prepared template for {source.output_path!r} reads {sorted(variables)!r}, "
-            f"but its frozen arguments are {sorted(argument_names)!r}"
-        )
-    return template
-
-
-def _check_prepared_templates(prepared: PreparedModuleBuild, contents: ContentSource) -> None:
-    for source in prepared.sources:
-        if isinstance(source, PreparedRenderedSource):
-            _checked_render_template(source, contents)
-
-
-def _stored_artifact_store(source: StoredArtifact) -> ArtifactStore:
-    """Recover the ArtifactStore that issued a verified stored-artifact path."""
-
-    directory = Path(source.directory)
-    try:
-        root = directory.parents[3]
-    except IndexError as error:
-        raise BuildError("stored source directory is not an ArtifactStore object path") from error
-    store = ArtifactStore(root)
-    if store.object_directory(source.artifact.kind, source.artifact.key) != directory:
-        raise BuildError("stored source directory is not an ArtifactStore object path")
-    return store
-
-
-def _prepared_definition(
-    prepared: PreparedModuleBuild, *, recipe_references: bool
-) -> SourceDefinition:
-    files: list[SourceFile] = []
-    for source in prepared.sources:
-        if isinstance(source, PreparedCopiedSource):
-            files.append(source.source)
-            continue
-        reference = (
-            ContentRef(
-                digest(
-                    (
-                        "prepared-render-recipe-v1",
-                        source.template,
-                        source.renderer,
-                        tuple(
-                            (name, value)
-                            for name, value in source.arguments
-                            if name != MODULE_NAME_ARGUMENT
-                        ),
-                        any(name == MODULE_NAME_ARGUMENT for name, _ in source.arguments),
-                    )
+    inputs = dict(requirements.render_inputs)
+    drafts: list[_Source] = []
+    data: dict[str, bytes] = {}
+    for item in requirements.contributions:
+        if isinstance(item, GeneratedData):
+            if data.setdefault(item.path, item.data) != item.data:
+                raise BuildError(f"two different data files are named {item.path}")
+        elif isinstance(item, CopiedSource):
+            root = roots.get(item.root)
+            if root is None:
+                raise BuildError(f"no source root resolves {item.root!r}")
+            content = _read(Path(root) / item.path, "copied source")
+            drafts.append(
+                _Source(
+                    SourceFile(item.path, content_digest(content), item.provides, item.requires),
+                    content,
                 )
             )
-            if recipe_references
-            else ContentRef("0" * 64)
-        )
-        files.append(
-            SourceFile(
-                reference,
-                source.output_path,
-                source.language,
-                library=source.library,
-                role=source.role,
-                standard=source.standard,
-                options=source.options,
-                provides=source.provides,
-                requires=source.requires,
-            )
-        )
+        else:
+            drafts.append(_rendered(item, inputs, templates))
+    if not drafts:
+        raise BuildError("a module has at least one source")
     try:
-        closure = merge_closures((SourceDefinition(tuple(files)),))
+        order = ordered([draft.file for draft in drafts])
     except SourceError as error:
         raise BuildError(str(error)) from error
-    if tuple(file.path for file in closure.files) != tuple(file.path for file in files):
-        raise BuildError("the prepared source list is not its own canonical source closure")
-    return SourceDefinition(tuple(files))
+    by_file = {draft.file: draft for draft in drafts}
+    sources = tuple(by_file[file] for file in order)
+    entry_point = _name(requirements, sources)
+
+    directory.mkdir(parents=True, exist_ok=True)
+    written: list[str] = []
+    for source in sources:
+        path, content = source.file.path, source.data
+        if source.arguments is not None:
+            arguments = dict(source.arguments)
+            if source.reads_name:
+                arguments[MODULE_NAME_ARGUMENT] = entry_point
+            if path.startswith(_ENTRY):
+                path = entry_point + path[len(_ENTRY) :]
+            try:
+                content = render_template_bytes(content, arguments, name=path).encode()
+            except RenderError as error:
+                raise BuildError(str(error)) from error
+        target = directory / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(content)
+        written.append(path)
+    for path, content in data.items():
+        if path in written:
+            raise BuildError(f"a data file and a source are both named {path}")
+        (directory / path).write_bytes(content)
+    return EmittedModule(entry_point, directory, tuple(written), tuple(data))
 
 
-def render_module_sources(
-    prepared: PreparedModuleBuild,
-    contents: ContentSource,
-) -> RenderedModuleSources:
-    """Render from the prepared content closure and nothing else."""
-
-    files: list[SourceFile] = []
-    emitted: list[tuple[str, bytes]] = []
-    for source in prepared.sources:
-        if isinstance(source, PreparedCopiedSource):
-            data = _checked_blob(contents, source.source.content, label=source.source.path)
-            files.append(source.source)
-            emitted.append((source.source.path, data))
-            continue
-        template = _checked_render_template(source, contents)
-        try:
-            data = render_template_bytes(
-                template, dict(source.arguments), name=source.output_path
-            ).encode()
-        except RenderError as error:
-            raise BuildError(str(error)) from error
-        files.append(
-            SourceFile(
-                ContentRef(content_digest(data)),
-                source.output_path,
-                source.language,
-                library=source.library,
-                role=source.role,
-                standard=source.standard,
-                options=source.options,
-                provides=source.provides,
-                requires=source.requires,
-            )
-        )
-        emitted.append((source.output_path, data))
-
-    definition = SourceDefinition(tuple(files))
-    try:
-        closure = merge_closures((definition,))
-    except SourceError as error:
-        raise BuildError(str(error)) from error
-    if closure.files != definition.files:
-        raise BuildError(
-            "rendered outputs collapse or reorder the prepared compilation units; "
-            "the declarations must expose that closure before cache lookup"
-        )
-    return RenderedModuleSources(definition, tuple(emitted))
-
-
-def materialize_module_sources(
-    prepared: PreparedModuleBuild, store: ArtifactStore
-) -> StoredArtifact:
-    """Lookup or atomically render and publish one prepared source artifact."""
-
-    derivation = module_source_derivation(prepared)
-    found = store.lookup(derivation)
-    if found is not None:
-        _check_prepared_templates(prepared, store)
-        return found
-    rendered = render_module_sources(prepared, store)
-    workspace = store.workspace(derivation)
-    try:
-        for name, data in rendered.contents:
-            target = workspace / name
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(data)
-        return store.publish(derivation, workspace, entry_points=(prepared.abi.entry_point,))
-    except BaseException:
-        if workspace.exists():
-            shutil.rmtree(workspace)
-        raise
-
-
-def portable_module_component(
-    prepared: PreparedModuleBuild,
-    source: StoredArtifact,
-) -> PortableComponent:
-    """Bind a prepared ABI only to its store-verified source manifest."""
-
-    derivation = module_source_derivation(prepared)
-    expected = ArtifactRef(derivation.kind, build_key(derivation))
-    if source.artifact != expected:
-        raise BuildError(
-            f"source artifact {source.artifact.kind}:{source.artifact.key} does not identify "
-            f"prepared module {prepared.implementation_id}; expected {expected.kind}:{expected.key}"
-        )
-    if derivation.outputs is None:  # pragma: no cover - source derivations always declare one
-        raise AssertionError("module source derivation has no output layout")
-    if source.files != derivation.outputs.entries:
-        raise BuildError("stored source manifest does not match the prepared output layout")
-    known_copies = {
-        item.source.path: item.source.content
-        for item in prepared.sources
-        if isinstance(item, PreparedCopiedSource)
-    }
-    for path, reference in source.contents:
-        expected_copy = known_copies.get(path)
-        if expected_copy is not None and reference != expected_copy:
-            raise BuildError(f"stored copied source {path!r} does not match its prepared blob")
-    try:
-        source = verify_stored_artifact(derivation, source)
-    except StoreError as error:
-        raise BuildError(f"stored source is not verified: {error}") from error
-    if any(isinstance(item, PreparedRenderedSource) for item in prepared.sources):
-        _check_prepared_templates(prepared, _stored_artifact_store(source))
-    return PortableComponent(
-        source.artifact,
-        prepared.abi,
-        Realization.SOURCE,
-        source.contents,
-        entry_point=prepared.abi.entry_point,
-    )
-
-
-__all__ = [
-    "GENERATED_MODULE_NAME_CONTRACT",
-    "KERNEL_SOURCE_SCHEMA",
-    "MODULE_NAME_ARGUMENT",
-    "MODULE_SOURCE_SCHEMA",
-    "SELF_CONTAINED_JINJA_RENDERER",
-    "BlobSink",
-    "BuildError",
-    "EntryPointSourceName",
-    "FixedModuleName",
-    "GeneratedModuleName",
-    "ModuleABIRequirements",
-    "ModuleBuildRequirements",
-    "ModuleNameRequirement",
-    "PreparedCopiedSource",
-    "PreparedGeneratedModuleName",
-    "PreparedModuleBuild",
-    "PreparedModuleName",
-    "PreparedRenderedSource",
-    "PreparedSource",
-    "RenderedModuleSources",
-    "RenderedSourceRequirement",
-    "RequirementContribution",
-    "ScalarTable",
-    "materialize_module_sources",
-    "module_build_fingerprint",
-    "nested_module_name",
-    "module_source_derivation",
-    "portable_module_component",
-    "prepare_module_build",
-    "prepared_module_fingerprint",
-    "render_module_sources",
-]
+__all__ = ["EmittedModule", "emit_module"]

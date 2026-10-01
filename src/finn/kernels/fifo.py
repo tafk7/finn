@@ -26,7 +26,7 @@ from finn.core.space import (
     view,
 )
 from finn.kernels.artifacts.abi import Endpoint
-from finn.kernels.artifacts.contribution_types import CopiedSource
+from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.base import NATIVE_CLOCKING, Clocking, Kernel
 from finn.kernels.port import WordPort
 

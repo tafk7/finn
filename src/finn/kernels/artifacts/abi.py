@@ -1,34 +1,19 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""``ComponentABI``: the portability boundary, and physical facts only.
+"""A module's pins: physical facts only.
 
-Packaging is married to one vendor today, and the reason is not the code -- it
-is that the *interface knowledge* lives only in the Tcl: ``infer_bus_interface``,
-``associate_bus_interfaces``, the abstraction VLNVs, the ``FREQ_HZ``
-workaround.  Declare it structurally and every format becomes a projection.
+Nothing here names a kernel, a stream or a port declaration path: two kernels
+binding the same module the same way present equal pins.
 
-Three rules hold the type down.
-
-**Physical facts only.**  Nothing here names a Region, a port declaration path,
-an Operation, or a source scope.  Two Operations binding the same memstream
-Kernel through different Region declaration paths must produce an ABI that
-compares *equal*, or cross-Operation reuse is lost -- and adding an exclusion
-list to ABI equality to recover it is the error this whole design is against.
-Semantic associations live outside, in the association index.
-
-**Direction is declared once and flipped.**  A bus signature gives its member
+**Direction is declared once and flipped.** A bus signature gives its member
 directions for the *initiator*; a target reuses the same signature flipped.
-A direction table written on both sides of a bus is one fact stated twice, and
-therefore a fact that will eventually disagree.
 
-**A name in an ABI is build ABI, not meaning.**  A module name is a symbol a
-linker resolves.  It carries no semantics and must never be read as any.
+**A name is build ABI, not meaning.** A module or pin name is a symbol a tool
+resolves; it carries no semantics.
 
-``Clock(Derived(of, ratio))`` earns its place against an observed failure: a
-doubled clock is not a free clock, its rate is not the component's to declare,
-and a packager that has to guess pins a ``FREQ_HZ`` the component was never
-told -- so any enclosing design at another rate fails validation.
+``Clock(Derived(of, ratio))`` says a doubled clock is not a free one: its rate
+is the reference clock's, and a consumer must not pin a frequency for it.
 """
 
 from __future__ import annotations
@@ -40,7 +25,7 @@ from typing import Union
 
 
 class AbiError(Exception):
-    """An ABI is not well formed, so it describes no component."""
+    """An ABI is not well formed, so it describes no module."""
 
 
 class Direction(Enum):
@@ -60,12 +45,7 @@ def flip(direction: Direction) -> Direction:
 
 
 class Endpoint(Enum):
-    """Which end of a bus this component is.
-
-    Not in the design's §4.1 field list, and it has to be: "declared for the
-    initiator and flipped for the target" is not a rule a value can follow
-    without saying which one it is.
-    """
+    """Which end of a bus or stream this module is."""
 
     INITIATOR = "initiator"
     TARGET = "target"
@@ -86,11 +66,7 @@ class Free:
 
 @dataclass(frozen=True)
 class Derived:
-    """A clock whose rate is a fixed multiple of another of this component's.
-
-    ``ap_clk2x`` is this, and the reason the type exists: a packager that
-    cannot express the relation pins a frequency the component never declared.
-    """
+    """A clock whose rate is a fixed multiple of another of this module's clocks."""
 
     of: str
     ratio: int
@@ -132,22 +108,7 @@ class Reset:
         object.__setattr__(self, "synchronous_to", domains)
 
 
-@dataclass(frozen=True)
-class Config:
-    """Static configuration driven from outside."""
-
-
-@dataclass(frozen=True)
-class Status:
-    """Observable state driven outward."""
-
-
-@dataclass(frozen=True)
-class Interrupt:
-    """An event line."""
-
-
-Role = Union[Data, Clock, Reset, Config, Status, Interrupt]
+Role = Union[Data, Clock, Reset]
 
 
 # -- protocols and their signatures --------------------------------------------
@@ -156,23 +117,7 @@ Role = Union[Data, Clock, Reset, Config, Status, Interrupt]
 class StandardProtocol(Enum):
     AXIS = "amba.axis"
     AXILITE = "amba.axilite"
-    AXI = "amba.axi"
-    BRAM = "bram"
 
-
-@dataclass(frozen=True)
-class CustomProtocol:
-    """A protocol we do not model, named so a packager can refuse it."""
-
-    protocol_id: str
-    spec_ref: str = ""
-
-    def __post_init__(self) -> None:
-        if not self.protocol_id:
-            raise AbiError("a custom protocol needs an id")
-
-
-Protocol = Union[StandardProtocol, CustomProtocol]
 
 #: Member directions **for the initiator**.  The target's are these flipped.
 SIGNATURES: Mapping[StandardProtocol, Mapping[str, Direction]] = {
@@ -181,11 +126,6 @@ SIGNATURES: Mapping[StandardProtocol, Mapping[str, Direction]] = {
         "tvalid": Direction.OUT,
         "tready": Direction.IN,
         "tlast": Direction.OUT,
-        "tkeep": Direction.OUT,
-        "tstrb": Direction.OUT,
-        "tuser": Direction.OUT,
-        "tid": Direction.OUT,
-        "tdest": Direction.OUT,
     },
     StandardProtocol.AXILITE: {
         "awaddr": Direction.OUT,
@@ -208,22 +148,7 @@ SIGNATURES: Mapping[StandardProtocol, Mapping[str, Direction]] = {
         "rvalid": Direction.IN,
         "rready": Direction.OUT,
     },
-    StandardProtocol.BRAM: {
-        "addr": Direction.OUT,
-        "din": Direction.OUT,
-        "dout": Direction.IN,
-        "en": Direction.OUT,
-        "we": Direction.OUT,
-        "clk": Direction.OUT,
-        "rst": Direction.OUT,
-    },
 }
-
-#: The members that make a group of loose signals recognisably one AXI-Stream.
-#: A packager infers exactly this, so declaring a different grouping publishes
-#: interfaces the unit does not have -- and the failure surfaces in a block
-#: design rather than at authoring.
-AXIS_REQUIRED = frozenset({"tdata", "tvalid", "tready"})
 
 
 # -- ports ---------------------------------------------------------------------
@@ -249,13 +174,7 @@ class Signal:
 class Member:
     """One logical bus member, the pin that carries it, and how wide it is.
 
-    The width is here rather than only on ``Signal`` because a declared
-    ``tdata`` width that disagrees with the RTL is the most likely real
-    mismatch, and the one a packager must get right.  A bus whose members
-    carried no width would be the one part of an ABI nothing could check.
-
-    One bit by default, which is right for every handshake member; only the
-    payload members are ever wider.
+    One bit by default, which is right for every handshake member.
     """
 
     logical: str
@@ -279,7 +198,7 @@ class Bus:
     """
 
     name: str
-    protocol: Protocol
+    protocol: StandardProtocol
     signals: tuple[Member, ...]
     endpoint: Endpoint = Endpoint.TARGET
     role: Role = Data()
@@ -289,7 +208,7 @@ class Bus:
     def __init__(
         self,
         name: str,
-        protocol: Protocol,
+        protocol: StandardProtocol,
         signals: Iterable[Member],
         endpoint: Endpoint = Endpoint.TARGET,
         role: Role = Data(),
@@ -302,23 +221,11 @@ class Bus:
         logical = [member.logical for member in members]
         if len(logical) != len(set(logical)):
             raise AbiError(f"bus {name!r} maps one logical member twice")
-        if isinstance(protocol, StandardProtocol):
-            if protocol not in SIGNATURES:
-                # Refused here rather than at member_directions().  A bus that
-                # constructs and then cannot say which way its pins point is a
-                # value that is only half a value, and the failure surfaces at
-                # whichever consumer happens to ask first.
-                raise AbiError(
-                    f"bus {name!r} speaks {protocol.value}, which this package has no "
-                    "declared signature for; declare one, or say CustomProtocol and be "
-                    "refused by the formats that publish interfaces"
-                )
-            known = SIGNATURES[protocol]
-            unknown = [member for member in logical if member not in known]
-            if unknown:
-                raise AbiError(
-                    f"bus {name!r} declares {unknown} which {protocol.value} has no member for"
-                )
+        unknown = [member for member in logical if member not in SIGNATURES[protocol]]
+        if unknown:
+            raise AbiError(
+                f"bus {name!r} declares {unknown} which {protocol.value} has no member for"
+            )
         object.__setattr__(self, "name", name)
         object.__setattr__(self, "protocol", protocol)
         object.__setattr__(self, "signals", members)
@@ -328,16 +235,8 @@ class Bus:
         object.__setattr__(self, "associated_reset", associated_reset)
 
     def member_directions(self) -> tuple[tuple[str, Direction], ...]:
-        """Each physical pin's direction, from the signature and the endpoint.
+        """Each physical pin's direction, from the signature and the endpoint."""
 
-        The one place bus directions come from.  Nobody writes them twice.
-        """
-
-        if not isinstance(self.protocol, StandardProtocol) or self.protocol not in SIGNATURES:
-            raise AbiError(
-                f"bus {self.name!r} speaks {self.protocol}, which has no declared signature; "
-                "a packager must refuse it rather than guess its directions"
-            )
         signature = SIGNATURES[self.protocol]
         return tuple(
             (
@@ -377,246 +276,109 @@ class ClockAlignment:
             raise AbiError("a clock cannot be aligned-2x to itself")
 
 
-@dataclass(frozen=True)
-class ComponentABI:
-    """Everything a packaging format may read besides a target and its options.
+def physical_names(ports: Sequence[Port]) -> tuple[str, ...]:
+    """Every pin the module actually has, in declared order."""
 
-    ``ports`` is ordered, because a port list is a declaration and reordering
-    it is a change to what was declared.  ``parameters`` is sorted: it is a
-    table.
-    """
+    names: list[str] = []
+    for port in ports:
+        if isinstance(port, Signal):
+            names.append(port.name)
+        else:
+            names.extend(member.physical for member in port.signals)
+    return tuple(names)
 
-    entry_point: str
-    ports: tuple[Port, ...]
-    parameters: tuple[tuple[str, str], ...] = ()
-    clock_alignments: tuple[ClockAlignment, ...] = ()
 
-    def __post_init__(self) -> None:
-        if not self.entry_point:
-            raise AbiError("an ABI needs an entry point")
-        names = [port.name for port in self.ports]
-        if len(names) != len(set(names)):
-            raise AbiError("an ABI names one port twice")
-        physical = list(self.physical_names())
-        if len(physical) != len(set(physical)):
-            raise AbiError("an ABI carries one physical pin in two places")
-        parameters = tuple(sorted(self.parameters, key=lambda item: item[0]))
-        if len({name for name, _ in parameters}) != len(parameters):
-            raise AbiError("an ABI names one parameter twice")
-        object.__setattr__(self, "parameters", parameters)
+def validate_ports(ports: Sequence[Port], clock_alignments: Sequence[ClockAlignment]) -> None:
+    """Refuse a port list that names a pin twice or whose clock relations do not hold."""
 
-        ports_by_name = {port.name: port for port in self.ports}
-        clocks = {clock.name: clock for clock in self.clocks()}
-        for port in self.ports:
-            if not isinstance(port, Signal) or not isinstance(port.role, Reset):
-                continue
-            domains = port.role.synchronous_to
-            if domains is None:
-                continue
-            missing = tuple(domain for domain in domains if domain not in clocks)
+    names = [port.name for port in ports]
+    if len(names) != len(set(names)):
+        raise AbiError("an ABI names one port twice")
+    physical = physical_names(ports)
+    if len(physical) != len(set(physical)):
+        raise AbiError("an ABI carries one physical pin in two places")
+
+    by_name = {port.name: port for port in ports}
+    clocks = {
+        port.name: port
+        for port in ports
+        if isinstance(port, Signal) and isinstance(port.role, Clock)
+    }
+    for port in ports:
+        if isinstance(port, Signal) and isinstance(port.role, Reset):
+            missing = tuple(d for d in port.role.synchronous_to or () if d not in clocks)
             if missing:
                 raise AbiError(
                     f"reset {port.name!r} is synchronous to clocks this ABI does not have: "
                     f"{missing!r}"
                 )
-
-        for port in self.ports:
-            if not isinstance(port, Bus):
-                continue
-            if port.associated_clock is not None:
-                associated = ports_by_name.get(port.associated_clock)
-                if associated is None:
-                    raise AbiError(
-                        f"bus {port.name!r} associated clock {port.associated_clock!r} "
-                        "does not name an ABI port"
-                    )
-                if not isinstance(associated, Signal) or not isinstance(associated.role, Clock):
-                    raise AbiError(
-                        f"bus {port.name!r} associated clock {port.associated_clock!r} "
-                        "does not name a clock signal"
-                    )
-            if port.associated_reset is not None:
-                associated = ports_by_name.get(port.associated_reset)
-                if associated is None:
-                    raise AbiError(
-                        f"bus {port.name!r} associated reset {port.associated_reset!r} "
-                        "does not name an ABI port"
-                    )
-                if not isinstance(associated, Signal) or not isinstance(associated.role, Reset):
-                    raise AbiError(
-                        f"bus {port.name!r} associated reset {port.associated_reset!r} "
-                        "does not name a reset signal"
-                    )
-                domains = associated.role.synchronous_to
-                if (
-                    associated.role.synchronous
-                    and domains is not None
-                    and port.associated_clock not in domains
-                ):
-                    raise AbiError(
-                        f"bus {port.name!r} uses clock {port.associated_clock!r}, but reset "
-                        f"{port.associated_reset!r} is synchronous to {domains!r}"
-                    )
-
-        alignments = tuple(self.clock_alignments)
-        if len(alignments) != len(set(alignments)):
-            raise AbiError("an ABI declares one clock alignment twice")
-        alignments = tuple(sorted(alignments))
-        for alignment in alignments:
-            reference = clocks.get(alignment.reference_clock)
-            aligned = clocks.get(alignment.aligned_clock)
-            if reference is None or aligned is None:
-                missing = tuple(
-                    name
-                    for name, clock in (
-                        (alignment.reference_clock, reference),
-                        (alignment.aligned_clock, aligned),
-                    )
-                    if clock is None
+        if not isinstance(port, Bus):
+            continue
+        if port.associated_clock is not None and port.associated_clock not in clocks:
+            raise AbiError(
+                f"bus {port.name!r} associated clock {port.associated_clock!r} "
+                "does not name a clock signal"
+            )
+        if port.associated_reset is not None:
+            reset = by_name.get(port.associated_reset)
+            if not isinstance(reset, Signal) or not isinstance(reset.role, Reset):
+                raise AbiError(
+                    f"bus {port.name!r} associated reset {port.associated_reset!r} "
+                    "does not name a reset signal"
                 )
-                raise AbiError(f"clock alignment names clocks this ABI does not have: {missing!r}")
-            if reference.direction is not Direction.IN or aligned.direction is not Direction.IN:
-                raise AbiError("aligned clocks are input signals supplied by the environment")
-            if not isinstance(aligned.role, Clock) or aligned.role.rate != Derived(
-                alignment.reference_clock, 2
+            domains = reset.role.synchronous_to
+            if (
+                reset.role.synchronous
+                and domains is not None
+                and port.associated_clock not in domains
             ):
                 raise AbiError(
-                    f"aligned clock {alignment.aligned_clock!r} must be "
-                    f"Derived({alignment.reference_clock!r}, 2)"
+                    f"bus {port.name!r} uses clock {port.associated_clock!r}, but reset "
+                    f"{port.associated_reset!r} is synchronous to {domains!r}"
                 )
-        object.__setattr__(self, "clock_alignments", alignments)
 
-    def physical_names(self) -> tuple[str, ...]:
-        """Every pin the module actually has, in declared order."""
+    if len(set(clock_alignments)) != len(clock_alignments):
+        raise AbiError("an ABI declares one clock alignment twice")
+    for alignment in clock_alignments:
+        reference = clocks.get(alignment.reference_clock)
+        aligned = clocks.get(alignment.aligned_clock)
+        if reference is None or aligned is None:
+            missing = tuple(
+                name
+                for name, clock in (
+                    (alignment.reference_clock, reference),
+                    (alignment.aligned_clock, aligned),
+                )
+                if clock is None
+            )
+            raise AbiError(f"clock alignment names clocks this ABI does not have: {missing!r}")
+        if reference.direction is not Direction.IN or aligned.direction is not Direction.IN:
+            raise AbiError("aligned clocks are input signals supplied by the environment")
+        if aligned.role != Clock(Derived(alignment.reference_clock, 2)):
+            raise AbiError(
+                f"aligned clock {alignment.aligned_clock!r} must be "
+                f"Derived({alignment.reference_clock!r}, 2)"
+            )
 
-        names: list[str] = []
-        for port in self.ports:
-            if isinstance(port, Signal):
-                names.append(port.name)
-            else:
-                names.extend(member.physical for member in port.signals)
-        return tuple(names)
 
-    def clocks(self) -> tuple[Signal, ...]:
-        return tuple(
-            port for port in self.ports if isinstance(port, Signal) and isinstance(port.role, Clock)
-        )
-
-
-# -- inference and the checks it makes possible --------------------------------
-
-
-def infer_buses(names: Sequence[str]) -> tuple[tuple[str, tuple[tuple[str, str], ...]], ...]:
-    """Group ``<prefix>_tdata``/``_tvalid``/``_tready`` into one interface.
-
-    This is the same inference a packager performs.  Running it over the
-    *declared* ABI is what catches a declared grouping the tool will not agree
-    with -- earlier than a block design would.
-    """
-
-    groups: dict[str, list[tuple[str, str]]] = {}
-    for name in names:
-        prefix, _, suffix = name.rpartition("_")
-        if prefix and suffix in SIGNATURES[StandardProtocol.AXIS]:
-            groups.setdefault(prefix, []).append((suffix, name))
-    return tuple(
-        (prefix, tuple(sorted(members)))
-        for prefix, members in sorted(groups.items())
-        if AXIS_REQUIRED <= {member for member, _ in members}
-    )
+# -- the RTL check -------------------------------------------------------------
 
 
 @dataclass(frozen=True)
 class ObservedPort:
-    """A port as the RTL actually declares it.
-
-    Supplied by whoever parsed the source.  This module does no parsing: the
-    checker is refusal-only and never supplies a value.
-    """
+    """A port as the RTL actually declares it, supplied by whoever parsed the source."""
 
     name: str
     direction: Direction
     width: int
 
 
-def _conventional_prefix(physical: str) -> str | None:
-    """The prefix suffix inference would file this pin under, if it would.
+def check_against_rtl(ports: Sequence[Port], observed: Sequence[ObservedPort]) -> tuple[str, ...]:
+    """Every way the source contradicts the declared ports; empty when they agree.
 
-    ``None`` means the name does not end in an AXI-Stream member suffix at all,
-    so inference never sees it.  That is not a disagreement -- it is the
-    ``Bus.signals`` map doing its job on RTL whose naming the ABI does not
-    control.
-    """
-
-    prefix, _, suffix = physical.rpartition("_")
-    if prefix and suffix in SIGNATURES[StandardProtocol.AXIS]:
-        return prefix
-    return None
-
-
-def check_declared_grouping(abi: ComponentABI) -> tuple[str, ...]:
-    """Where the declared bus grouping and the inferred one disagree.
-
-    A packager infers interfaces from suffixes.  If the declaration groups
-    differently, the component publishes interfaces the unit does not have.
-
-    A bus whose pins do not follow the suffix convention **at all** is not
-    reported.  Mapping a logical member onto an unconventional pin is the
-    feature ``Bus.signals`` exists for, and complaining about it would make the
-    feature unusable without an accompanying complaint.  What is reported is a
-    bus that is *partly* conventional: those pins do reach inference, and where
-    it puts them is then a fact that can disagree.
-    """
-
-    inferred = {
-        frozenset(physical for _, physical in members)
-        for _, members in infer_buses(abi.physical_names())
-    }
-    declared: set[frozenset[str]] = set()
-    issues: list[str] = []
-    for port in abi.ports:
-        if not isinstance(port, Bus) or port.protocol is not StandardProtocol.AXIS:
-            continue
-        pins = frozenset(member.physical for member in port.signals)
-        declared.add(pins)
-        prefixes = {physical: _conventional_prefix(physical) for physical in pins}
-        conventional = {name for name, prefix in prefixes.items() if prefix is not None}
-        if not conventional:
-            continue
-        if conventional != pins:
-            issues.append(
-                f"declared AXI-Stream {port.name!r} mixes {sorted(conventional)}, which suffix "
-                f"inference groups, with {sorted(pins - conventional)}, which it does not; a "
-                "packager would publish part of this interface and leave the rest loose"
-            )
-            continue
-        if pins not in inferred:
-            issues.append(
-                f"declared AXI-Stream {sorted(pins)} is not what suffix inference would "
-                "group; a packager would publish a different interface"
-            )
-    for group in sorted(inferred - declared, key=sorted):
-        issues.append(
-            f"{sorted(group)} infers as an AXI-Stream but is not declared as one; a "
-            "stitcher would see loose pins"
-        )
-    return tuple(issues)
-
-
-def check_against_rtl(abi: ComponentABI, observed: Sequence[ObservedPort]) -> tuple[str, ...]:
-    """Refuse a declaration the source contradicts.
-
-    Refusal-only, by contract.  The declaration stays authoritative -- generated
-    RTL is generated *from* the ABI, so parsing it back would be circular, and
-    the ABI is the packaging contract and must not move whenever the RTL does.
-    What a checker adds is that a declaration nothing checks is a second
-    authority waiting to disagree.
-
-    The live case: the physical model says ``in0_V_TDATA`` and the generated
-    wrapper says ``in0_V_tdata``.  SystemVerilog identifiers are case
-    sensitive, so a consumer taking the reported name into a ``connect_bd_net``
-    names a pin that does not exist.  Nothing compared the two authorities,
-    which is why it survived.
+    Refusal only: the declaration stays authoritative and nothing is read back
+    into it.  SystemVerilog identifiers are case sensitive, so a name the
+    source spells in another case is reported as such.
     """
 
     actual = {port.name: port for port in observed}
@@ -625,29 +387,28 @@ def check_against_rtl(abi: ComponentABI, observed: Sequence[ObservedPort]) -> tu
         folded.setdefault(name.casefold(), []).append(name)
 
     issues: list[str] = []
-    for declared in abi.physical_names():
+    declared_names = physical_names(ports)
+    for declared in declared_names:
         if declared in actual:
             continue
         near = folded.get(declared.casefold())
         if near:
             issues.append(
                 f"the ABI declares {declared!r} but the source spells it {near[0]!r}; "
-                "SystemVerilog identifiers are case sensitive, so a consumer connecting "
-                "the declared name would name a pin that does not exist"
+                "SystemVerilog identifiers are case sensitive"
             )
         else:
             issues.append(f"the ABI declares {declared!r}, which the source does not have")
-
-    declared_names = set(abi.physical_names())
     for name in actual:
         if name not in declared_names:
             issues.append(f"the source has {name!r}, which the ABI does not declare")
 
-    for port in abi.ports:
+    for port in ports:
         if isinstance(port, Signal):
             expected: tuple[tuple[str, Direction], ...] = ((port.name, port.direction),)
+            widths: tuple[tuple[str, int], ...] = ((port.name, port.width),)
         else:
-            expected = port.member_directions()
+            expected, widths = port.member_directions(), port.widths()
         for name, direction in expected:
             found = actual.get(name)
             if found is not None and found.direction is not direction:
@@ -655,16 +416,6 @@ def check_against_rtl(abi: ComponentABI, observed: Sequence[ObservedPort]) -> tu
                     f"the ABI declares {name!r} as {direction.value} and the source "
                     f"declares it {found.direction.value}"
                 )
-
-    # Bus members are checked here too, and that is the point of them carrying
-    # a width: a declared ``tdata`` that disagrees with the RTL is the most
-    # likely real mismatch, and it used to pass because only loose signals were
-    # compared.
-    for port in abi.ports:
-        if isinstance(port, Signal):
-            widths: tuple[tuple[str, int], ...] = ((port.name, port.width),)
-        else:
-            widths = port.widths()
         for name, width in widths:
             found = actual.get(name)
             if found is not None and found.width != width:
@@ -677,33 +428,26 @@ def check_against_rtl(abi: ComponentABI, observed: Sequence[ObservedPort]) -> tu
 
 
 __all__ = [
-    "AXIS_REQUIRED",
     "SIGNATURES",
     "AbiError",
     "Bus",
     "Clock",
     "ClockAlignment",
-    "ComponentABI",
-    "Config",
-    "CustomProtocol",
     "Data",
     "Derived",
     "Direction",
     "Endpoint",
     "Free",
-    "Interrupt",
     "Member",
     "ObservedPort",
     "Port",
-    "Protocol",
     "Rate",
     "Reset",
     "Role",
     "Signal",
     "StandardProtocol",
-    "Status",
     "check_against_rtl",
-    "check_declared_grouping",
     "flip",
-    "infer_buses",
+    "physical_names",
+    "validate_ports",
 ]

@@ -80,7 +80,7 @@ from finn.dataflow.datatypes import DatatypeError, ordinary_integer_bounds
 from finn.dataflow.plan import Step
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import Repetition, Traversal, pack, unreplayed, vector_major
-from finn.kernels.artifacts.abi import ComponentABI, check_against_rtl
+from finn.kernels.artifacts.abi import check_against_rtl
 from finn.kernels.artifacts.requirements import ModuleBuildRequirements
 from finn.kernels.artifacts.rtl import Declined, extract
 from finn.kernels.base import Kernel
@@ -416,7 +416,6 @@ def _check_rtl(
     """Refuse a module its sources contradict; the source's parameter names, unless declined."""
     top, sources, _ = materialize(requirements, directory)
     abi = requirements.abi
-    component = ComponentABI(top, abi.ports, abi.parameters, abi.clock_alignments)
     extracted = extract([Path(source) for source in sources], top, abi.parameters)
     if isinstance(extracted, Declined):
         message = f"{_where(family, sample)}: the RTL checker declined {top}: {extracted}"
@@ -425,7 +424,7 @@ def _check_rtl(
         warnings.warn(message, RtlDeclined, stacklevel=3)
         return None
     # check_abi's comparison, on the one extraction: the ports, never a parameter value.
-    issues = check_against_rtl(component, extracted.ports)
+    issues = check_against_rtl(abi.ports, extracted.ports)
     assert not issues, f"{_where(family, sample)}: {top} refuses its ABI: " + "; ".join(issues)
     # Every declared name, whether or not its value was established.
     return {name for name, _ in extracted.parameters}

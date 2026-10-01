@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from finn.kernels.artifacts.build import ModuleABIRequirements, ModuleBuildRequirements
+from finn.kernels.artifacts.requirements import ModuleABIRequirements, ModuleBuildRequirements
 
 
 class PhysicalStructureError(ValueError):

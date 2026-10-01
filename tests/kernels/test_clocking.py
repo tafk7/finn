@@ -22,8 +22,8 @@ from finn.kernels.artifacts.abi import (
     Reset,
     Signal,
 )
-from finn.kernels.artifacts.build import ModuleBuildRequirements
-from finn.kernels.artifacts.derivation import ProducerIdentity
+from finn.kernels.artifacts.requirements import ModuleBuildRequirements
+from finn.kernels.artifacts.requirements import ProducerIdentity
 from finn.kernels.artifacts.requirements import FixedModuleName, ModuleABIRequirements
 from finn.kernels.matmul import matmul_assembly
 from finn.kernels.physical.structure import ConstantBits, PinSlice

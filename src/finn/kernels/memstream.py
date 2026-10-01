@@ -50,7 +50,7 @@ from finn.dataflow.traversal import (
     vector_major,
 )
 from finn.kernels.artifacts.abi import Bus, Endpoint, Member, Signal, StandardProtocol
-from finn.kernels.artifacts.contribution_types import CopiedSource, GeneratedData
+from finn.kernels.artifacts.contributions import CopiedSource, GeneratedData
 from finn.kernels.artifacts.requirements import RequirementContribution
 from finn.kernels.base import Clocking, Kernel, Tieoffs
 from finn.kernels.control import CONTROL, Control, ControlBus, held_bus

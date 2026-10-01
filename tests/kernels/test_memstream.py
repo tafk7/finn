@@ -9,20 +9,17 @@ half-words, low first. Runtime-writable weights export the AXI-Lite port at
 the module boundary; several weight sets are selected per row through in2_V.
 """
 
-from pathlib import Path
-
 import pytest
 from qonnx.core.datatype import DataType
 
 from finn.core.space import Rejected, design_space, inspection
 from finn.kernels.artifacts.abi import Bus
-from finn.kernels.artifacts.build import materialize_module_sources, prepare_module_build
+from finn.kernels.artifacts.build import emit_module
 from finn.kernels.artifacts.contributions import ContributionError, GeneratedData
-from finn.kernels.artifacts.store import ArtifactStore
 from finn.kernels.matmul import MatMulKernel, WeightDelivery, matmul_assembly
 from finn.kernels.memstream import MemStreamKernel
 from finn.dataflow.traversal import tile
-from finn.kernels.resources import resource_root, template_root
+from finn.kernels.resources import template_root
 from finn.kernels.target import DspBlock
 from kernels.helpers import finnlib_root
 
@@ -101,16 +98,14 @@ def test_matmul_memstream_delivery_materializes_its_image(tmp_path):
     ]
     assert built.initializer == (0x22C, 0x6BE, 0xDD3, 0x941)
     assert "in1_V" not in {port.name for port in built.structure.top_abi.ports}
-    store = ArtifactStore(tmp_path / "store")
-    prepared = prepare_module_build(
+    emitted = emit_module(
         built.requirements,
-        roots={"kernels": resource_root(), "finnlib": finnlib_root()},
-        template_roots=(template_root(),),
-        blobs=store,
+        tmp_path,
+        roots={"finnlib": finnlib_root()},
+        templates=template_root(),
     )
-    materialized = materialize_module_sources(prepared, store)
-    (image,) = [name for name in materialized.files if name.endswith(".dat")]
-    assert (Path(materialized.directory) / image).read_bytes() == b"22c\n6be\ndd3\n941\n"
+    (image,) = emitted.data
+    assert (emitted.directory / image).read_bytes() == b"22c\n6be\ndd3\n941\n"
 
 
 def test_writable_weights_export_axilite_and_need_the_memstream():

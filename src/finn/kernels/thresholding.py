@@ -53,7 +53,7 @@ from finn.dataflow.datatypes import (
 from finn.dataflow.schedule import Index, Schedule
 from finn.dataflow.traversal import BeatSequence, vector_major
 from finn.kernels.artifacts.abi import Bus, Endpoint, Member, Signal, StandardProtocol
-from finn.kernels.artifacts.contribution_types import CopiedSource
+from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.base import Kernel, Tieoffs
 from finn.kernels.control import CONTROL, Control, ControlBus, held_bus
 from finn.kernels.datatypes.domains import Integer, set_index_dtype

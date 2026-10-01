@@ -38,7 +38,7 @@ import pytest
 #:
 #: The list is short on purpose.  Adding to it is a decision somebody makes;
 #: this test is what stops it being one nobody notices.
-APPROVED_DEPENDENCIES = frozenset({"msgspec", "jinja2", "markupsafe", "pyslang"})
+APPROVED_DEPENDENCIES = frozenset({"jinja2", "markupsafe", "pyslang"})
 
 #: The one package prefix inside FINN that ``artifacts`` may name.
 OWN_PACKAGE = "finn.kernels.artifacts"
@@ -74,14 +74,6 @@ SPAWNING_ATTRIBUTES = frozenset(
 )
 
 #: Names that are only ever an executable to invoke.
-#:
-#: ``vivado`` is a **named carve-out**, not an oversight.  It appears once as a
-#: literal, in ``DEFAULT_BUILDER = BuilderIdentity("vivado", "unspecified")``,
-#: where it is the declared toolchain *label* that §6's ``ToolRequirement``
-#: exists to carry.  Forbidding a tool's name would forbid what the design
-#: requires; forbidding its *invocation* is the actual claim, and the
-#: no-spawning test above is what holds it.  A carve-out that is named is a
-#: limitation; one discovered later is a wrong hit.
 VENDOR_EXECUTABLES = frozenset(
     {
         "vitis_hls",

@@ -30,7 +30,7 @@ from finn.core.space import (
 from finn.dataflow.datatypes import QONNXDataType, resolve_qonnx_datatype_name
 from finn.dataflow.schedule import Index, Schedule
 from finn.kernels.artifacts.abi import Endpoint
-from finn.kernels.artifacts.contribution_types import CopiedSource
+from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.base import NATIVE_CLOCKING, Clocking, Kernel, factor_domain
 from finn.kernels.datatypes.domains import Integer
 from finn.kernels.datatypes.semantics import QONNX_DATATYPE_VALUE_SEMANTICS

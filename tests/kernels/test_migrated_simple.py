@@ -10,7 +10,7 @@ from typing import TypeVar
 import pytest
 
 from finn.kernels.artifacts.abi import Direction, Signal
-from finn.kernels.artifacts.contribution_types import CopiedSource
+from finn.kernels.artifacts.contributions import CopiedSource
 from finn.dataflow.datatypes import resolve_qonnx_datatype_name
 from finn.kernels.eltwise import EltwiseKernel
 from finn.kernels.fifo import FifoKernel

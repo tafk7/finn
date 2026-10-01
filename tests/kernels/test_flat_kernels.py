@@ -18,11 +18,10 @@ from finn.kernels import (
     ThresholdingAxiKernel,
 )
 from finn.kernels.artifacts.abi import Bus
-from finn.kernels.artifacts.build import prepare_module_build, render_module_sources
-from finn.kernels.artifacts.contribution_types import CopiedSource
+from finn.kernels.artifacts.build import emit_module
+from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.artifacts.rtl import TOLERATED_DIAGNOSTICS
-from finn.kernels.artifacts.store import ArtifactStore
-from finn.kernels.resources import resource_root
+from finn.kernels.resources import template_root
 from finn.core.space import (
     DefinitionError,
     Rejected,
@@ -33,7 +32,7 @@ from kernels.xsim import requires_xsim, simulate
 
 ROOT = Path(__file__).resolve().parents[2]
 FINNLIB = finnlib_root()
-SOURCE_ROOTS = {"finnlib": FINNLIB, "kernels": resource_root()}
+SOURCE_ROOTS = {"finnlib": FINNLIB}
 
 
 def fifo(**changes):
@@ -158,14 +157,10 @@ def test_native_rtl_pin_names_directions_and_widths(factory, tmp_path):
         else:
             declared[port.name] = (port.direction.value, port.width)
     assert observed == declared
-    prepared = prepare_module_build(
-        requirements,
-        roots=SOURCE_ROOTS,
-        template_roots=(),
-        blobs=ArtifactStore(tmp_path / "store"),
+    emitted = emit_module(
+        requirements, tmp_path / "module", roots=SOURCE_ROOTS, templates=template_root()
     )
-    contents = dict(render_module_sources(prepared, ArtifactStore(tmp_path / "store")).contents)
-    assert set(contents) == {source.path for source in requirements.contributions}
+    assert set(emitted.sources) == {source.path for source in requirements.contributions}
 
 
 @pytest.mark.parametrize(

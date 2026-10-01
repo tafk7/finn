@@ -71,9 +71,9 @@ from finn.dataflow.datatypes import (
 from finn.dataflow.gemm import Form
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import Traversal, period
-from finn.kernels.artifacts.build import ModuleBuildRequirements
+from finn.kernels.artifacts.requirements import ModuleBuildRequirements
 from finn.kernels.base import PORT
-from finn.kernels.artifacts.derivation import ProducerIdentity
+from finn.kernels.artifacts.requirements import ProducerIdentity
 from finn.kernels.configure import admission, commit, describe, settle, undecided
 from finn.kernels.control import ControlBus
 from finn.kernels.datatypes.domains import set_index_dtype

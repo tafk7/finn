@@ -23,7 +23,6 @@ ROOT = Path(__file__).resolve().parents[2]
 INSTALLED_BUILD = r"""
 import importlib.abc
 import json
-from hashlib import sha256
 from pathlib import Path
 import sys
 
@@ -74,14 +73,11 @@ assert tile.shape == (3, 4)
 assert tile.field(Tiles.shape).get() == (3, 4)
 assert tile.inspect(Tiles.shape).accepted_result == Available((3, 4))
 assert tile.field(Tiles.cycles).get() == 4
-from finn.kernels.artifacts import build, contributions, contribution_types, requirements
-from finn.kernels.artifacts.manifest import decode
-from finn.kernels.artifacts.store import ArtifactStore
-from finn.kernels.resources import resource_root, template_root
+from finn.kernels.artifacts import build, contributions, requirements
+from finn.kernels.resources import template_root
 from qonnx.core.datatype import DataType
 
-resources = resource_root()
-assert resources == template_root()
+resources = template_root()
 assert resources.is_relative_to(installed)
 assert (installed / "finn/kernels/py.typed").is_file()
 assert not (installed / "finn/kernels/_engine").exists()
@@ -91,10 +87,6 @@ assert not (installed / "finn/parked").exists()
 assert "finn.dataflow.datatypes" in sys.modules
 assert not (installed / "finn/kernels/space").exists()
 assert not (resources / "dotp_axi.sv").exists()
-assert build.ModuleBuildRequirements is requirements.ModuleBuildRequirements
-assert contributions.CopiedSource is contribution_types.CopiedSource
-assert requirements.ModuleBuildRequirements.__module__ == "finn.kernels.artifacts.build"
-assert contribution_types.CopiedSource.__module__ == "finn.kernels.artifacts.contributions"
 
 class PlacedDotp(Space):
     x = Stream(tensor=Tensor((1, 2), ScalarEncoding(DataType["INT3"])), port="in0_V")
@@ -124,35 +116,25 @@ dotp_sources = {
     "rtl/arith/add_multi_pkg.sv", "rtl/arith/add_multi.sv",
     "rtl/linalg/dotp.sv", "rtl/linalg/dotp_axi.sv",
 }
-store = ArtifactStore(Path(config["store"]))
-roots = {"kernels": resources, "finnlib": Path(config["finnlib"])}
+roots = {"finnlib": Path(config["finnlib"])}
+emitted_count = 0
 
 def materialize(module, expected):
-    prepared = build.prepare_module_build(
-        module, roots=roots, template_roots=(template_root(),), blobs=store,
-    )
-    assert prepared.slots == (), "an initializer was left unresolved"
-    artifact = build.materialize_module_sources(prepared, store)
-    build.portable_module_component(prepared, artifact)
-    directory = Path(artifact.directory)
-    manifest = decode((directory / "artifact.json").read_bytes())
+    global emitted_count
+    emitted_count += 1
+    directory = Path(config["output"]) / str(emitted_count)
+    emitted = build.emit_module(module, directory, roots=roots, templates=template_root())
     expected = expected | (
-        {prepared.abi.entry_point + ".sv"} if prepared.abi.entry_point != "dotp_axi" else set()
+        {emitted.entry_point + ".sv"} if emitted.entry_point != "dotp_axi" else set()
     )
-    assert set(artifact.files) == expected, artifact.files
-    assert tuple(item.path for item in manifest.files) == artifact.files
-    assert manifest.entry_points == (prepared.abi.entry_point,)
+    assert set(emitted.sources) | set(emitted.data) == expected, emitted
     actual = {str(path.relative_to(directory)) for path in directory.rglob("*") if path.is_file()}
-    assert actual == expected | {"artifact.json"}
-    for item in manifest.files:
-        data = (directory / item.path).read_bytes()
-        assert len(data) == item.size
-        assert sha256(data).hexdigest() == item.digest
+    assert actual == expected
     for source in module.contributions:
         if isinstance(source, contributions.CopiedSource):
             original = (roots[source.root] / source.path).read_bytes()
             assert (directory / source.path).read_bytes() == original
-    return directory / (prepared.abi.entry_point + ".sv")
+    return directory / (emitted.entry_point + ".sv")
 
 materialize(answer, dotp_sources)
 for delivery in WeightDelivery:
@@ -194,7 +176,7 @@ for name, module in tuple(sys.modules.items()):
             assert Path(location).resolve().is_relative_to(installed), (name, location)
         for location in getattr(module, "__path__", ()):
             assert Path(location).resolve().is_relative_to(installed), (name, location)
-print("installed dotp, external, cyclic and memstream MatMul manifests verified")
+print("installed dotp, external, cyclic and memstream MatMul builds verified")
 """
 
 
@@ -258,7 +240,7 @@ def test_installed_wheel_materializes_independent_kernel_builds(tmp_path: Path) 
         metadata = BytesParser().parsebytes(archive.read(metadata_name))
         requirements = metadata.get_all("Requires-Dist", [])
         names = {value.split(";")[0].replace(" ", "") for value in requirements}
-        for dependency in ("greenlet", "jinja2", "msgspec", "pyslang"):
+        for dependency in ("greenlet", "jinja2", "pyslang"):
             assert any(name.startswith(dependency) for name in names), dependency
         assert not any(name.startswith("typing") for name in names)
     installed = tmp_path / "installed"
@@ -294,9 +276,7 @@ def test_installed_wheel_materializes_independent_kernel_builds(tmp_path: Path) 
         "installed": str(installed),
         "finnlib": str(finnlib),
         "site_packages": dependency_paths,
-        "store": str(tmp_path / "store"),
+        "output": str(tmp_path / "output"),
     }
     result = _run([sys.executable, "-I", "-S", "-c", INSTALLED_BUILD, json.dumps(config)], tmp_path)
-    assert (
-        "installed dotp, external, cyclic and memstream MatMul manifests verified" in result.stdout
-    )
+    assert "installed dotp, external, cyclic and memstream MatMul builds verified" in result.stdout

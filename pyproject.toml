@@ -26,9 +26,8 @@ dependencies = [
     "dataclasses-json>=0.5.7,<0.7",
     # finn.core.space evaluates computations on greenlets.
     "greenlet>=3.2.4,<4",
-    # finn.kernels.artifacts: templates, manifests and the RTL interface checker.
+    # finn.kernels.artifacts: templates and the RTL interface checker.
     "jinja2>=3.1.6,<4",
-    "msgspec>=0.21.1,<0.22",
     "numpy>=1.26.4,<2",
     "onnx>=1.22.0,<1.23",
     "onnx-ir>=1.0.0,<2",

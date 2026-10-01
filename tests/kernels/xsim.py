@@ -25,14 +25,10 @@ from pathlib import Path
 import pytest
 
 from finn.kernels.artifacts.abi import Clock, Direction, Reset
-from finn.kernels.artifacts.build import (
-    ModuleBuildRequirements,
-    materialize_module_sources,
-    prepare_module_build,
-)
-from finn.kernels.artifacts.store import ArtifactStore
+from finn.kernels.artifacts.build import emit_module
+from finn.kernels.artifacts.requirements import ModuleBuildRequirements
 from finn.kernels.physical.validation import abi_pins
-from finn.kernels.resources import resource_root, template_root
+from finn.kernels.resources import template_root
 from kernels.helpers import finnlib_root, vivado_simulator
 
 
@@ -58,19 +54,15 @@ def materialize(
 
     FinnLib is the ``finnlib`` resource (``FINN_RESOURCES_FINNLIB`` overrides it).
     """
-    store = ArtifactStore(directory / "store")
-    finnlib = finnlib_root()
-    prepared = prepare_module_build(
+    emitted = emit_module(
         requirements,
-        roots={"kernels": resource_root(), "finnlib": finnlib},
-        template_roots=(template_root(),),
-        blobs=store,
+        directory / "module",
+        roots={"finnlib": finnlib_root()},
+        templates=template_root(),
     )
-    materialized = materialize_module_sources(prepared, store)
-    files = [Path(materialized.directory) / path for path in materialized.files]
-    sources = [str(path) for path in files if path.suffix != ".dat"]
-    data = {path.name: path.read_text() for path in files if path.suffix == ".dat"}
-    return str(prepared.abi.entry_point), sources, data
+    sources = [str(emitted.directory / path) for path in emitted.sources]
+    data = {path: (emitted.directory / path).read_text() for path in emitted.data}
+    return emitted.entry_point, sources, data
 
 
 def simulate(sources: Sequence[str | Path], testbench: str, directory: Path) -> None:

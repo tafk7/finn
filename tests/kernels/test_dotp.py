@@ -23,12 +23,11 @@ from finn.core.space import (
 )
 from finn.dataflow.gemm import Form
 from finn.kernels.artifacts.abi import Clock, Data, Derived as DerivedClock
-from finn.kernels.artifacts.build import materialize_module_sources, prepare_module_build
-from finn.kernels.artifacts.store import ArtifactStore
+from finn.kernels.artifacts.build import emit_module
 from finn.kernels.base import Kernel
 from finn.kernels.dotp import DotpAxiKernel, Int8Dsp58DotpKernel, PackedDotpKernel
 from finn.kernels.port import AxiStreamPort
-from finn.kernels.resources import resource_root
+from finn.kernels.resources import template_root
 from finn.kernels.target import DspBlock
 from kernels import helpers
 
@@ -283,24 +282,19 @@ def test_supported_signed_and_unsigned_dsp_boundaries(target, activation, weight
 
 def test_sources_materialize_from_the_assessed_requirements(tmp_path):
     requirements = kernel(compute_pumping=True).build_requirements
-    store = ArtifactStore(tmp_path / "store")
     finnlib = helpers.finnlib_root()
     if not (finnlib / "rtl/linalg/dotp_axi.sv").is_file():
         pytest.skip("FinnLib sources are unavailable")
-    prepared = prepare_module_build(
-        requirements,
-        roots={"finnlib": finnlib, "kernels": resource_root()},
-        template_roots=(),
-        blobs=store,
+    emitted = emit_module(
+        requirements, tmp_path, roots={"finnlib": finnlib}, templates=template_root()
     )
-    materialized = materialize_module_sources(prepared, store)
     upstream = {
         "rtl/arith/add_multi_pkg.sv",
         "rtl/arith/add_multi.sv",
         "rtl/linalg/dotp.sv",
         "rtl/linalg/dotp_axi.sv",
     }
-    emitted = {Path(name).name: Path(materialized.directory) / name for name in materialized.files}
+    emitted = {Path(name).name: emitted.directory / name for name in emitted.sources}
     assert set(emitted) == {Path(name).name for name in upstream}
     for path in upstream:
         assert emitted[Path(path).name].read_bytes() == (finnlib / path).read_bytes()
