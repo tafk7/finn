@@ -81,9 +81,15 @@ finn_sync_and_mark() {
 # is a fresh volume (empty but for lost+found) or a clone in progress. Sync once
 # git has finished the checkout, in the background so the sandbox's own command
 # still starts at once.
+fresh_volume() {
+    for entry in "$1"/* "$1"/.[!.]* "$1"/..?*; do
+        [ -e "$entry" ] || continue
+        [ "$entry" = "$1/lost+found" ] || return 1
+    done
+}
 root="${FINN_ROOT:-}"
-if [ -n "$root" ] && [ ! -f "$root/uv.lock" ] && { [ -e "$root/.git" ] \
-   || [ -z "$(ls -A "$root" 2>/dev/null | grep -vx lost+found)" ]; }; then
+if [ -n "$root" ] && [ ! -f "$root/uv.lock" ] \
+   && { [ -e "$root/.git" ] || fresh_volume "$root"; }; then
     (
         for _ in $(seq 600); do
             if [ -f "$root/uv.lock" ] && [ -f "$root/.git/index" ] \
