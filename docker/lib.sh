@@ -232,6 +232,10 @@ finn_prepare_sbx () {
     docker save -o "$TAR" "$FINN_SBX_TEMPLATE" \
         || { recho "docker save failed"; exit 1; }
     sbx template load "$TAR" || { recho "sbx template load failed"; exit 1; }
+    # The manifest digest is what `sbx inspect` reports as the sandbox's image_digest.
+    FINN_SBX_DIGEST=$(tar -xOf "$TAR" index.json | python3 -c \
+        'import json, sys; print(json.load(sys.stdin)["manifests"][0]["digest"])') \
+        && gecho "sbx template $FINN_SBX_TEMPLATE, image_digest $FINN_SBX_DIGEST"
     rm -f "$TAR"
     trap - EXIT
 }
