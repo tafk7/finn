@@ -17,8 +17,9 @@
 # trees go to TMP (default OUT-tmp), which is scratch: they hold symlinks that
 # point outside it.
 #
-# Vivado: set FINN_XILINX_PATH and FINN_XILINX_VERSION (applied through
-# scripts/activate.sh), or have XILINX_VIVADO already selected.
+# Vivado: this machine's ~/.config/finn/xilinx.env, or FINN_XILINX_PATH and
+# FINN_XILINX_VERSION (applied through scripts/activate.sh; a variable wins over
+# the file), or XILINX_VIVADO already selected.
 
 set -u
 ROOT=$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)
@@ -28,12 +29,13 @@ OUT=$(readlink -f "${1:-/tmp/xsim-sweep-$SHA-$(basename "$ROOT")}")
 TMP=$(readlink -f "${2:-$OUT-tmp}")
 rm -rf "$OUT" "$TMP" && mkdir -p "$OUT/logs" "$TMP"
 
-if [ -n "${FINN_XILINX_PATH:-}" ] && [ -n "${FINN_XILINX_VERSION:-}" ]; then
+if [ -x "$ROOT/.venv/bin/python" ] \
+   && python3 "$ROOT/docker/xilinx_install.py" configured 2> "$OUT/activate.log"; then
     # shellcheck source=/dev/null
-    source "$ROOT/scripts/activate.sh" > "$OUT/activate.log" 2>&1
+    source "$ROOT/scripts/activate.sh" >> "$OUT/activate.log" 2>&1
 fi
 if [ -z "${XILINX_VIVADO:-}" ]; then
-    echo "no Vivado selected: set FINN_XILINX_PATH/FINN_XILINX_VERSION or XILINX_VIVADO" >&2
+    echo "no Vivado selected: configure ~/.config/finn/xilinx.env, or set XILINX_VIVADO" >&2
     exit 2
 fi
 # A selected but unapplied Vivado (an sbx sandbox, a bare shell): the sweeps load
