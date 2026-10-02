@@ -28,13 +28,16 @@ and the two would have to keep agreeing about flags they do not share.
 from __future__ import annotations
 
 import argparse
+import ctypes
 import json
+import os
+import signal
 import subprocess
 import sys
 import tempfile
 from collections.abc import Iterable, Mapping
 from pathlib import Path
-from typing import Any, cast
+from typing import IO, Any, cast
 
 import numpy as np
 
@@ -116,6 +119,49 @@ def _collect_with_backpressure(sim: object, stream: str, size: int, watchdog: ob
     return collector
 
 
+def _die_with_parent() -> None:
+    # Leading its own process group, the worker would outlive a parent that is
+    # killed outright (a stopped background task); PR_SET_PDEATHSIG ends it then.
+    # An xvlog/xelab it had started at that moment is orphaned and runs to its end.
+    ctypes.CDLL(None, use_errno=True).prctl(1, signal.SIGKILL)  # PR_SET_PDEATHSIG
+
+
+def _run_worker(top_module: str, request: Path, response: Path, log: IO[str] | None = None) -> int:
+    """Run one simulation process to completion or to its deadline; its exit status.
+
+    XSI's hang gives no diagnostic and fires no watchdog, so without a deadline
+    a hung load waits forever and takes the whole run with it. The worker leads
+    its own process group, as ``finn.util._toolchain.run_process`` runs tools,
+    so a deadline also ends the xvlog/xelab it started; unlike that, its output
+    streams as it runs. ``FINN_XSI_TIMEOUT`` (seconds, default 1200) covers
+    compile and simulation.
+    """
+    timeout = float(os.environ.get("FINN_XSI_TIMEOUT", "1200"))
+    worker = subprocess.Popen(
+        [sys.executable, __file__, "--simulate", str(request), "--out", str(response)],
+        stdout=log,
+        stderr=subprocess.STDOUT if log is not None else None,
+        start_new_session=True,
+        preexec_fn=_die_with_parent if sys.platform == "linux" else None,
+    )
+    try:
+        return worker.wait(timeout=timeout)
+    except BaseException as stopped:
+        # A deadline or an interruption: the whole group, even if its leader has
+        # exited while a descendant still runs.
+        try:
+            os.killpg(worker.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        worker.wait()
+        if isinstance(stopped, subprocess.TimeoutExpired):
+            raise AssertionError(
+                f"{top_module}: simulation timed out after {timeout:g} s (probable XSI hang; "
+                "FINN_XSI_TIMEOUT sets the deadline)"
+            ) from None
+        raise
+
+
 def drive(
     top_module: str,
     sources: list[str],
@@ -146,14 +192,9 @@ def drive(
                 }
             )
         )
-        completed = subprocess.run(
-            [sys.executable, __file__, "--simulate", str(request), "--out", str(response)],
-            check=False,
-        )
-        if completed.returncode != 0 or not response.is_file():
-            raise AssertionError(
-                f"{top_module}: simulation subprocess failed (exit {completed.returncode})"
-            )
+        returncode = _run_worker(top_module, request, response)
+        if returncode != 0 or not response.is_file():
+            raise AssertionError(f"{top_module}: simulation subprocess failed (exit {returncode})")
         payload = json.loads(response.read_text())
         if payload.get("error"):
             raise AssertionError(f"{top_module}: {payload['error']}")
@@ -210,17 +251,10 @@ def drive_observed(
         )
     )
     with (directory / "simulation.log").open("w") as log:
-        completed = subprocess.run(
-            [sys.executable, __file__, "--simulate", str(request), "--out", str(response)],
-            stdout=log,
-            stderr=subprocess.STDOUT,
-            check=False,
-        )
-    if completed.returncode != 0 or not response.is_file():
+        returncode = _run_worker(top_module, request, response, log=log)
+    if returncode != 0 or not response.is_file():
         detail = response.read_text() if response.is_file() else "no response"
-        raise AssertionError(
-            f"{top_module}: simulation subprocess exit {completed.returncode}: {detail}"
-        )
+        raise AssertionError(f"{top_module}: simulation subprocess exit {returncode}: {detail}")
     payload = json.loads(response.read_text())
     if payload.get("error"):
         raise AssertionError(f"{top_module}: {payload['error']}")

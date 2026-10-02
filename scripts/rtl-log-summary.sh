@@ -106,6 +106,7 @@ if ! grep -E \
   -e 'missing RTL source' \
   -e 'FinnLib RTL not found' \
   -e 'simulation subprocess (failed|exit)' \
+  -e 'simulation timed out after' \
   -e 'A valid license was not found' \
   -e 'SIGABRT|SIGSEGV|Fatal' \
   "$log" | head -40; then
