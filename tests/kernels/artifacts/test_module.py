@@ -24,7 +24,7 @@ from finn.kernels.artifacts.module import (
     BuildError,
     BusExport,
     Composed,
-    Endpoint,
+    LinkEnd,
     Fragment,
     Held,
     Leaf,
@@ -76,8 +76,8 @@ def stage(*, width: int = 8, data: bytes = b"00\n") -> Leaf:
 
 def link(source: str | None, sink: str | None, *, width: int = 8) -> Link:
     return Link(
-        Endpoint(source, "odat", width, "ovld", "ordy"),
-        Endpoint(sink, "idat", width, "ivld", "irdy"),
+        LinkEnd(source, "odat", width, "ovld", "ordy"),
+        LinkEnd(sink, "idat", width, "ivld", "irdy"),
         width,
         (0,),
     )
@@ -103,11 +103,11 @@ def test_a_leaf_spells_its_parameters_and_holds_only_its_own_pins() -> None:
 
 def test_a_link_carries_whole_lanes_of_its_words() -> None:
     with pytest.raises(BuildError, match="outside the source word"):
-        Link(Endpoint("a", "o", 8, "v", "r"), Endpoint("b", "i", 16, "v", "r"), 8, (0, 1))
+        Link(LinkEnd("a", "o", 8, "v", "r"), LinkEnd("b", "i", 16, "v", "r"), 8, (0, 1))
     with pytest.raises(BuildError, match="exceed the sink word"):
-        Link(Endpoint("a", "o", 16, "v", "r"), Endpoint("b", "i", 8, "v", "r"), 8, (1, 0))
+        Link(LinkEnd("a", "o", 16, "v", "r"), LinkEnd("b", "i", 8, "v", "r"), 8, (1, 0))
     with pytest.raises(BuildError, match="at least one bit"):
-        Endpoint("a", "o", 0, "v", "r")
+        LinkEnd("a", "o", 0, "v", "r")
 
 
 def test_a_fragment_placed_under_a_node_names_everything_below_it() -> None:
@@ -163,11 +163,14 @@ ROOT = Pins(
 
 
 def composed(*, data: bytes = b"00\n", stem: str = "top") -> Composed:
+    # The stage's output is read by nothing: its ready is held.
+    leaf = stage(data=data)
+    leaf = replace(leaf, held=Held((*leaf.held.inputs, ("ordy", 1)), leaf.held.unused))
     fragment = Fragment(
-        (("a", stage(data=data)),),
+        (("a", leaf),),
         (
             Link(
-                Endpoint(None, "in_tdata", 8, "in_tvalid", "in_tready"), link("", "a").sink, 8, (0,)
+                LinkEnd(None, "in_tdata", 8, "in_tvalid", "in_tready"), link("", "a").sink, 8, (0,)
             ),
         ),
     )
@@ -191,9 +194,20 @@ def test_a_composed_module_links_only_pins_that_exist() -> None:
     with pytest.raises(BuildError, match="does not place"):
         replace(module, fragment=unplaced)
     narrow = Link(
-        Endpoint(None, "in_tdata", 4, "in_tvalid", "in_tready"), link("", "a").sink, 4, (0,)
+        LinkEnd(None, "in_tdata", 4, "in_tvalid", "in_tready"), link("", "a").sink, 4, (0,)
     )
     with pytest.raises(BuildError, match="the root.in_tdata is not 4 bits"):
         replace(module, fragment=replace(module.fragment, links=(narrow,)))
     with pytest.raises(BuildError, match="not an instance label"):
         replace(module, fragment=Fragment((("^a", stage()),)))
+
+
+def test_every_instance_input_and_root_output_has_exactly_one_driver() -> None:
+    module = composed()
+    leaf = dict(module.fragment.instances)["a"]
+    open_ready = replace(leaf, held=Held((("cfg_awvalid", 0),), leaf.held.unused))
+    with pytest.raises(BuildError, match="nothing drives a.ordy"):
+        replace(module, fragment=replace(module.fragment, instances=(("a", open_ready),)))
+    twice = replace(leaf, held=Held((*leaf.held.inputs, ("ivld", 0)), leaf.held.unused))
+    with pytest.raises(BuildError, match="more than one driver drives a.ivld"):
+        replace(module, fragment=replace(module.fragment, instances=(("a", twice),)))

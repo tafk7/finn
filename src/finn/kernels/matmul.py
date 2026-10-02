@@ -351,7 +351,7 @@ class MatMulKernel(Kernel):
         return "finn_matmul_" + self.supplied
 
     def producer_identity(self) -> ProducerIdentity:
-        return ProducerIdentity("finn.matmul." + self.supplied, "1")
+        return ProducerIdentity("finn.matmul." + self.supplied, type(self).version)
 
 
 __all__ = ["FinnAttributes", "MatMulKernel", "exact_result_dtype"]

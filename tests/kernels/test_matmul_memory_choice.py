@@ -162,7 +162,8 @@ def test_families_share_typed_exports_but_keep_their_own_ports_and_components():
     assert [item.node for item in external.matmul.netlists] == ["compute.packed"]
     memory = instance_parameters(stored_, STORED_INSTANCE)
     assert memory["RAM_STYLE"] == '"block"'
-    assert external.matmul.module.implementation_id != matmul.module.implementation_id
+    # What derives a MatMul's netlist depends on its memory.
+    assert external.matmul.producer_identity() != matmul.producer_identity()
 
 
 def test_the_inactive_family_is_never_demanded():

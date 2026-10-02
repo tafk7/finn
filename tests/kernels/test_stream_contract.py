@@ -328,7 +328,7 @@ def test_the_delivery_kernel_serves_a_second_consumer_through_the_same_contract(
     assert (into.lanes, into.lane_bits) == ((0, 1), 4)
     # A delivery whose lanes carry other positions (0,2),(1,3) needs a lane regroup.
     strided = Traversal.over((CHANNELS,), ((0, 2, 1),), ((0, 2, 2),))
-    refused = eltwise_with_constant(strided).c.query(Stream.connection)
+    refused = eltwise_with_constant(strided).c.query(Stream.netlist)
     assert isinstance(refused, Rejected)
     (plan,) = [finding for finding in refused.findings if finding.code == "stream-plan"]
     assert "another lane axis" in plan.message

@@ -90,10 +90,10 @@ def test_each_stream_owns_its_refusal_and_independent_refusals_are_all_visible()
     assert isinstance(refusal, Rejected)
     assert {f.owner for f in refusal.findings} == {"first.well_formed", "second.well_formed"}
     assert {f.code for f in refusal.findings} == {"stream-tensor"}
-    # One stream refusing leaves the other stream's connection accepted.
+    # One stream refusing leaves the other stream's netlist accepted.
     mixed = constants(first=wide)
-    assert isinstance(mixed.first.query(Stream.connection), Rejected)
-    assert isinstance(mixed.second.query(Stream.connection), Available)
+    assert isinstance(mixed.first.query(Stream.netlist), Rejected)
+    assert isinstance(mixed.second.query(Stream.netlist), Available)
 
 
 def test_explain_shows_per_stream_and_per_member_evidence():
@@ -119,16 +119,16 @@ def test_a_stream_waits_for_its_own_endpoints_only():
         point.first_source.field(MemStreamKernel.pumped_memory).change(False),
     )
     # The ROM choice feeds only the module, not either stream's contracts.
-    assert isinstance(point.first.query(Stream.connection), Available)
-    assert isinstance(point.second.query(Stream.connection), Available)
+    assert isinstance(point.first.query(Stream.netlist), Available)
+    assert isinstance(point.second.query(Stream.netlist), Available)
     assert isinstance(point.query(Kernel.module), Unresolved)
     # A stream sees its users by declaration name and by the input that references it.
     (end,) = point.first.users
     assert (end.node, end.member) == ("first_source.output", "stream")
     assert end.value.transport.endpoint is Endpoint.INITIATOR  # the source produces
-    connection = point.first.connection
-    assert (connection.source_owner, connection.sink_owner) == ("first_source.output", None)
-    assert connection.sink.transport.name == "out0_V"
+    ends = point.first.endpoints
+    assert (ends.source_owner, ends.sink_owner) == ("first_source.output", None)
+    assert ends.sink.transport.name == "out0_V"
 
 
 def test_boundary_ports_are_axis_and_byte_aligned():
@@ -179,7 +179,7 @@ def test_two_producers_on_one_stream_are_refused_by_the_stream():
         )
 
     point = design_space(Clash(tensor=VECTOR))
-    refused = point.shared.query(Stream.connection)
+    refused = point.shared.query(Stream.netlist)
     assert isinstance(refused, Rejected)
     assert {f.code for f in refused.findings} == {"stream-users"}
     assert "a.output.stream, b.output.stream" in refused.findings[0].message
@@ -193,7 +193,7 @@ def test_a_boundary_stream_needs_its_port_name():
             dtype=DataType["INT4"], form=PRODUCED, contents=(1, 2, 3, 4), output_stream=out
         )
 
-    waiting = design_space(Unnamed(tensor=VECTOR)).out.query(Stream.connection)
+    waiting = design_space(Unnamed(tensor=VECTOR)).out.query(Stream.netlist)
     assert isinstance(waiting, Unresolved)
     assert {f.owner for f in waiting.findings} == {"out.port"}
 

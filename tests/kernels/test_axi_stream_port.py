@@ -188,7 +188,7 @@ def test_a_stated_element_is_the_ports_and_its_stream_refuses_another() -> None:
 
     point = commit(design_space(Stated()), {"kernel.pe": 4})
     assert point.kernel.y.element == ScalarEncoding(DataType["INT9"])
-    refused = point.y.query(KernelStream.connection)
+    refused = point.y.query(KernelStream.netlist)
     assert "stream-tensor" in {code for code, _ in codes(refused)}
 
 

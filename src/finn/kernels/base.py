@@ -367,14 +367,17 @@ class Kernel(Space):
 
     @derived
     def fragment(self) -> Fragment | Rejected:
-        """A leaf: itself, the empty label (its parent's ``under(node)`` names it ``node``).
-        A kernel with children: each member's netlist under its node, and the buses its
-        ``ControlBus`` nodes present."""
+        """A leaf: its accepted module, the empty label (its parent's ``under(node)`` names
+        it ``node``). A kernel with children: each member's netlist under its node, and the
+        buses its ``ControlBus`` nodes present; its own module is complete only as the
+        root, whose streams it declares, so a parent reads its netlist, not its module."""
         family = type(self)
         if family.rtl_module:
             if self.netlists:
                 return reject("kernel-children", "a kernel binds one module or has children")
-            return Fragment((("", self.codegen),))
+            leaf = self.module
+            assert isinstance(leaf, Leaf)
+            return Fragment((("", leaf),))
         if not self.netlists:
             return reject(
                 "kernel-module", f"{family.__qualname__} declares no module and places no kernel"
@@ -436,8 +439,9 @@ class Kernel(Space):
     module = View(
         built, requires=(admission, pins_accounted, clocked, netlists, presented, stream_buses)
     )
-    # A parent places a child's netlist only when the child's module is accepted.
-    netlist = View(fragment, requires=(module,))
+    netlist = View(
+        fragment, requires=(admission, pins_accounted, clocked, netlists, presented, stream_buses)
+    )
 
     # A kernel adding exports of its own extends these: ``{**Kernel.exports, KEY: ...}``.
     exports = {NETLIST: netlist, MODULE: module}

@@ -182,8 +182,11 @@ def test_the_space_settles_the_core_and_the_core_owns_its_folding_factors():
     assert matmul.compute.y.element.dtype == matmul.result_type
     _ = matmul.compute.module
     assert matmul.compute.y.presented.form.beats == 4
-    # The MatMul's own module is its children's netlist; the root's adds the streams.
-    assert labels(matmul.module) == ["compute.packed"]
+    # The MatMul contributes its children's netlist; the root's module adds the streams.
+    # Without them, MatMul alone is no complete module: its core's inputs are the root's.
+    assert [label for label, _ in matmul.netlist.instances] == ["compute.packed"]
+    alone = matmul.query(MatMulKernel.module)
+    assert isinstance(alone, Rejected) and "nothing drives" in alone.findings[0].message
     assert labels(point.module) == ["x.adapter.input_gen.input_gen", "matmul.compute.packed"]
     assert not hasattr(MatMulKernel, "contract") and not hasattr(MatMulKernel, "pe")
     refused = commit(

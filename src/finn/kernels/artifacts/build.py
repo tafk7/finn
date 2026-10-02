@@ -30,7 +30,6 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import cast
 
 from finn.kernels.artifacts.abi import (
     Bus,
@@ -45,11 +44,10 @@ from finn.kernels.artifacts.abi import (
 from finn.kernels.artifacts.module import (
     BuildError,
     Composed,
-    Endpoint,
+    LinkEnd,
     Leaf,
     Link,
     Module,
-    Scalar,
     module_name,
 )
 from finn.kernels.artifacts.projection import content_digest
@@ -147,14 +145,6 @@ def _constant(width: int, value: int) -> str:
     return f"{width}'h{value:x}"
 
 
-def _scalar(value: Scalar) -> str:
-    if isinstance(value, bool):
-        return str(int(value))
-    if hasattr(value, "value"):
-        return str(cast(object, value).value)  # type: ignore[attr-defined]
-    return str(value)
-
-
 def _instance(label: str) -> str:
     return "u_" + label.replace(".", "_")
 
@@ -221,7 +211,7 @@ class _Netlist:
                 self._marker(source, produced, produced_bit),
             )
 
-    def _marker(self, end: Endpoint, pin: str, bit: int | None) -> str:
+    def _marker(self, end: LinkEnd, pin: str, bit: int | None) -> str:
         width = self.width(end.instance, pin)
         return _bits(self.net(end.instance, pin), width, bit or 0, 1)
 
@@ -303,12 +293,10 @@ class _Netlist:
                     f"        .{pin}({f'n__{_instance(label)}__{pin}' if used else ''})"
                 )
             parameters = ""
-            if leaf.parameters:
+            if leaf.pins.parameters:
                 parameters = (
                     " #(\n"
-                    + ",\n".join(
-                        f"        .{key}({_scalar(value)})" for key, value in leaf.parameters
-                    )
+                    + ",\n".join(f"        .{key}({value})" for key, value in leaf.pins.parameters)
                     + "\n    )"
                 )
             blocks.append(

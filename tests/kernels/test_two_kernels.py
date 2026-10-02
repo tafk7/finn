@@ -104,7 +104,7 @@ def layered(*, adaptable: bool = True):
 def test_the_hidden_stream_plans_width_replay_and_frame_and_places_vpc_and_input_gen():
     point = layered()
     assert point.h.plan.steps == (Step.WIDTH, Step.REORDER, Step.MARKERS)
-    stages = point.h.connection.stages
+    stages = point.h.stages
     assert [stage.label for stage in stages] == [
         "adapter.vpc_input_gen.vpc",
         "adapter.vpc_input_gen.input_gen",
@@ -119,8 +119,8 @@ def test_the_hidden_stream_plans_width_replay_and_frame_and_places_vpc_and_input
         "h.adapter.vpc_input_gen.input_gen",
     } <= set(labels(point.module))
     # The ends belong to the layers' ports; the instances are the layers'.
-    connection = point.h.connection
-    assert (connection.source_owner, connection.sink_owner) == ("first.y", "second.x")
+    ends = point.h.endpoints
+    assert (ends.source_owner, ends.sink_owner) == ("first.y", "second.x")
     assert [(link.source.instance, link.sink.instance) for link in point.h.netlist.links] == [
         ("^first", "adapter.vpc_input_gen.vpc"),
         ("adapter.vpc_input_gen.vpc", "adapter.vpc_input_gen.input_gen"),
@@ -139,7 +139,7 @@ def test_the_hidden_stream_plans_width_replay_and_frame_and_places_vpc_and_input
 
 def test_a_hidden_stream_admitting_no_adapter_refuses_the_pair():
     point = layered(adaptable=False)
-    refused = point.h.query(Stream.connection)
+    refused = point.h.query(Stream.netlist)
     assert isinstance(refused, Rejected)
     plan = [finding for finding in refused.findings if finding.code == "stream-plan"]
     assert plan and "width_conversion -> reorder -> markers" in plan[0].message

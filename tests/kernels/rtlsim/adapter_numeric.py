@@ -69,7 +69,7 @@ def run_adapted(label, source, pe, modules, evidence):
     point = adapted(source, pe)
     kinds = tuple(
         "vpc" if stage.label.rsplit(".", 1)[-1].startswith("vpc") else "input_gen"
-        for stage in point.x.connection.stages
+        for stage in point.x.stages
     )
     assert kinds == modules, (label, kinds)
     levels = [value + 8 for row in values(*source.shape) for value in row]

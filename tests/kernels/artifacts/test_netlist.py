@@ -30,7 +30,7 @@ from finn.kernels.artifacts.module import (
     BuildError,
     BusExport,
     Composed,
-    Endpoint,
+    LinkEnd,
     Fragment,
     Held,
     Leaf,
@@ -81,16 +81,16 @@ CLOCK = Signal("ap_clk", Direction.IN, 1, Clock())
 RESET = Signal("ap_rst_n", Direction.IN, 1, Reset(True, True, ("ap_clk",)))
 
 
-def root_end(name: str, width: int) -> Endpoint:
-    return Endpoint(None, f"{name}_tdata", width, f"{name}_tvalid", f"{name}_tready")
+def root_end(name: str, width: int) -> LinkEnd:
+    return LinkEnd(None, f"{name}_tdata", width, f"{name}_tvalid", f"{name}_tready")
 
 
-def fifo_in(label: str, width: int) -> Endpoint:
-    return Endpoint(label, "idat", width, "ivld", "irdy")
+def fifo_in(label: str, width: int) -> LinkEnd:
+    return LinkEnd(label, "idat", width, "ivld", "irdy")
 
 
-def fifo_out(label: str, width: int) -> Endpoint:
-    return Endpoint(label, "odat", width, "ovld", "ordy")
+def fifo_out(label: str, width: int) -> LinkEnd:
+    return LinkEnd(label, "odat", width, "ovld", "ordy")
 
 
 def chain(*, width: int = 8, lanes: tuple[int, ...] = (0,), lane_bits: int = 8) -> Composed:
@@ -201,7 +201,7 @@ def test_a_marker_pair_a_held_input_and_open_outputs(fixture_root: Path) -> None
     )
     pins = Pins((CLOCK, RESET, axis("out0_V", 8, Side.INITIATOR, last=True)))
     link = Link(
-        Endpoint("m", "odat", 8, "ovld", "ordy"),
+        LinkEnd("m", "odat", 8, "ovld", "ordy"),
         root_end("out0_V", 8),
         8,
         (0,),
@@ -257,7 +257,8 @@ def test_a_presented_bus_is_wired_member_by_member(fixture_root: Path) -> None:
         associated_clock="clk",
         associated_reset="rst",
     )
-    leaf = fifo(8)
+    # A FIFO on no stream: its stream inputs are held.
+    leaf = replace(fifo(8), held=Held((("idat", 0), ("ivld", 0), ("ordy", 0))))
     controlled = replace(leaf, pins=replace(leaf.pins, ports=(*leaf.pins.ports, config)))
     top = Bus(
         "mm_s_axilite",

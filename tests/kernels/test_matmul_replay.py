@@ -109,7 +109,7 @@ def test_one_output_fold_and_one_beat_frames_close_every_beat():
 def test_the_adapter_s_memory_is_a_choice_of_the_stream():
     point = commit(matmul_point(**FACTS, target_period_ns=5.0), CHOICES)
     configured = settled(point, ram_style="distributed")
-    (generator,) = [stage for stage in configured.x.connection.stages]
+    (generator,) = [stage for stage in configured.x.stages]
     assert generator.module is not None
     assert dict(generator.module.parameters)["RAM_STYLE"] == '"distributed"'
 

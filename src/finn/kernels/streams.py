@@ -43,7 +43,8 @@ and ``fifo``, after its adapter. The FIFO candidate owns its ``depth`` and the
 FIFO's ``ram_style``; it is an identity stage presenting what arrives at it.
 The adapter and transport choices are keyed under the stream
 (``x.adapter``, ``w.transport``), so they belong to whoever owns the edge.
-Its ``connection`` view is the checked ``Connection``: its ends and stages.
+Its ``netlist`` view is accepted when the stream is: its ends, plan and every
+hop checked.
 
 Beside ``compatible``, each checked hop is resolved into wires (``wired``:
 lanes, valid, ready, marker bits), and the stream exports its netlist under
@@ -74,9 +75,8 @@ from finn.core.space import (
     view,
 )
 from finn.kernels.artifacts.abi import Bus, Endpoint
-from finn.kernels.artifacts.module import Endpoint as LinkEnd
-from finn.kernels.artifacts.module import Fragment, Leaf, Link
-from finn.kernels.base import BOUNDARY, CLOCK, CLOCK2X, NETLIST, PORT, RESET
+from finn.kernels.artifacts.module import BuildError, Fragment, Leaf, Link, LinkEnd
+from finn.kernels.base import BOUNDARY, CLOCK, NETLIST, PORT, RESET
 from finn.kernels.fifo import FifoKernel
 from finn.kernels.transport import (
     AxiStream,
@@ -173,21 +173,14 @@ class StreamFifo(Space):
 
 
 @dataclass(frozen=True)
-class Connection:
-    """One checked stream: each end's owner (the user's port node, None at the root's
-    boundary), its contract, and the stages between them.
-
-    ``source_input`` and ``sink_input`` name the reference input each owner
-    presents its end through (``stream``); empty at a boundary.
-    """
+class StreamEnds:
+    """A stream's two ends: each end's owner (the user's port node, None at the root's
+    boundary) and its contract."""
 
     source_owner: str | None
     source: StreamContract
     sink_owner: str | None
     sink: StreamContract
-    stages: tuple[Stage, ...] = ()
-    source_input: str = ""
-    sink_input: str = ""
 
 
 class Stream(LogicalStream):
@@ -205,14 +198,14 @@ class Stream(LogicalStream):
     users = Users(PORT)
 
     @derived
-    def endpoints(self) -> Connection | Rejected:
+    def endpoints(self) -> StreamEnds | Rejected:
         """The producing and consuming ends, without the stages between them."""
-        producers: list[tuple[str | None, StreamContract, str]] = []
-        consumers: list[tuple[str | None, StreamContract, str]] = []
+        producers: list[tuple[str | None, StreamContract]] = []
+        consumers: list[tuple[str | None, StreamContract]] = []
         for end in self.users:
             contract = end.value
             producing = contract.transport.endpoint is Endpoint.INITIATOR
-            (producers if producing else consumers).append((end.node, contract, end.member))
+            (producers if producing else consumers).append((end.node, contract))
         if len(producers) > 1 or len(consumers) > 1:
             named = ", ".join(f"{end.node}.{end.member}" for end in self.users)
             return reject(
@@ -226,17 +219,13 @@ class Stream(LogicalStream):
             # root's input is the AXIS target and its output the initiator.
             if not producers:
                 inside = consumers[0][1]
-                producers.append((None, self._boundary(inside, Endpoint.TARGET), ""))
+                producers.append((None, self._boundary(inside, Endpoint.TARGET)))
             if not consumers:
                 inside = producers[0][1]
-                consumers.append((None, self._boundary(inside, Endpoint.INITIATOR), ""))
+                consumers.append((None, self._boundary(inside, Endpoint.INITIATOR)))
         except ValueError as error:
             return reject("stream-boundary", str(error))
-        (source_owner, source, source_input) = producers[0]
-        (sink_owner, sink, sink_input) = consumers[0]
-        return Connection(
-            source_owner, source, sink_owner, sink, source_input=source_input, sink_input=sink_input
-        )
+        return StreamEnds(*producers[0], *consumers[0])
 
     def _boundary(self, inside: StreamContract, endpoint: Endpoint) -> StreamContract:
         form = unreplayed(inside.form) if endpoint is Endpoint.TARGET else inside.form
@@ -311,14 +300,6 @@ class Stream(LogicalStream):
         return _refusal([item for item in found if item.code != "stream-element"])
 
     @derived
-    def link(self) -> Connection:
-        return replace(self.endpoints, stages=self.stages)
-
-    connection = View(
-        link, requires=(LogicalStream.well_formed, LogicalStream.realizable, compatible)
-    )
-
-    @derived
     def hops(self) -> tuple[Link, ...] | Rejected:
         """Each hop, source through every stage to sink, as wires.
 
@@ -337,11 +318,16 @@ class Stream(LogicalStream):
             owners.append(None if kernel is None else "^" + kernel)
         links: list[Link] = []
         owner, current = owners[0], ends.source
-        for stage in self.stages:
-            assert stage.input is not None and stage.output is not None
-            links.append(wired(owner, current, stage.label, stage.input))
-            owner, current = stage.label, stage.output
-        links.append(wired(owner, current, owners[1], ends.sink))
+        try:
+            for stage in self.stages:
+                assert stage.input is not None and stage.output is not None
+                links.append(wired(owner, current, stage.label, stage.input))
+                owner, current = stage.label, stage.output
+            links.append(wired(owner, current, owners[1], ends.sink))
+        except BuildError as error:
+            # A hop that does not connect (another element, say) is refused by the
+            # stream's constraints; its wires do not exist.
+            return reject("stream-link", str(error))
         return tuple(links)
 
     @view(requires=(LogicalStream.well_formed, LogicalStream.realizable, compatible))
@@ -358,16 +344,6 @@ class Stream(LogicalStream):
         ends = self.endpoints
         sides = ((ends.source_owner, ends.source), (ends.sink_owner, ends.sink))
         return tuple(contract.transport.axis_bus() for owner, contract in sides if owner is None)
-
-    @view
-    def boundary(self) -> StreamContract | Rejected:
-        """The port the root presents for it: the side without a user."""
-        ends = self.endpoints
-        if ends.source_owner is None:
-            return ends.source
-        if ends.sink_owner is None:
-            return ends.sink
-        return reject("stream-internal", "both ends of this stream are its owner's children")
 
     exports = {NETLIST: netlist, BOUNDARY: boundary_bus}
 
@@ -399,13 +375,9 @@ class BufferedStream(Stream):
 
 __all__ = [
     "ADAPTER_RAM_STYLES",
-    "BOUNDARY",
     "BufferedStream",
-    "CLOCK",
-    "CLOCK2X",
-    "Connection",
-    "RESET",
     "Stream",
+    "StreamEnds",
     "StreamFifo",
     "boundary_contract",
     "wired",

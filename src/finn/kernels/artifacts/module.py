@@ -28,10 +28,12 @@ from typing import Union
 
 from finn.kernels.artifacts.abi import (
     Bus,
+    Clock,
     ClockAlignment,
     Direction,
     PinInfo,
     Port,
+    Reset,
     abi_pins,
     validate_ports,
 )
@@ -216,7 +218,7 @@ def _beside(prefix: str, label: str) -> str:
 
 
 @dataclass(frozen=True)
-class Endpoint:
+class LinkEnd:
     """One end of a link: an instance's ready/valid pins, or the root's own when
     ``instance`` is None. ``data_bits`` is the data pin's width."""
 
@@ -232,7 +234,7 @@ class Endpoint:
         if type(self.data_bits) is not int or self.data_bits < 1:
             raise BuildError(f"{self.data}: a data pin is at least one bit")
 
-    def under(self, prefix: str) -> Endpoint:
+    def under(self, prefix: str) -> LinkEnd:
         return (
             self
             if self.instance is None
@@ -250,8 +252,8 @@ class Link:
     significant, each ``lane_bits`` wide; valid forward, ready back, and each marker pair
     from source to sink."""
 
-    source: Endpoint
-    sink: Endpoint
+    source: LinkEnd
+    sink: LinkEnd
     lane_bits: int
     lanes: tuple[int, ...]
     markers: tuple[Marker, ...] = ()
@@ -338,7 +340,8 @@ def merge(*fragments: Fragment) -> Fragment:
 
 @dataclass(frozen=True)
 class Composed:
-    """A flat netlist with pins: one generated module."""
+    """A flat netlist with pins: one generated module. Well formed when its links name
+    pins that exist and every instance input and root output has exactly one driver."""
 
     implementation_id: str
     implementation_version: str
@@ -385,6 +388,58 @@ class Composed:
             outer = [f"{item.port}_{member.logical.upper()}" for member in item.bus.signals]
             if any(pin not in root for pin in outer):
                 raise BuildError(f"the root has no pins {outer} to present {item.bus.name} at")
+        self._driven_once(
+            root, {label: abi_pins(leaf.pins.ports) for label, leaf in leaves.items()}
+        )
+
+    def _driven_once(
+        self, root: Mapping[str, PinInfo], children: Mapping[str, Mapping[str, PinInfo]]
+    ) -> None:
+        """Every instance input and every root output bit has exactly one driver: a link,
+        a held value, a clock or reset by role, or a presented bus."""
+        drivers: dict[tuple[str | None, str, int], int] = {}
+
+        def drive(instance: str | None, pin: str, bits: range | None = None) -> None:
+            info = (root if instance is None else children[instance])[pin]
+            for bit in bits if bits is not None else range(info.width):
+                key = (instance, pin, bit)
+                drivers[key] = drivers.get(key, 0) + 1
+
+        for link in self.fragment.links:
+            drive(link.sink.instance, link.sink.data)
+            drive(link.sink.instance, link.sink.valid)
+            drive(link.source.instance, link.source.ready)
+            for _, _, pin, bit in link.markers:
+                drive(link.sink.instance, pin, None if bit is None else range(bit, bit + 1))
+        for label, leaf in self.fragment.instances:
+            held = {pin for pin, _ in leaf.held.inputs}
+            for pin in held:
+                drive(label, pin)
+            for pin, info in children[label].items():
+                by_role = isinstance(info.role, (Clock, Reset)) and info.bus is None
+                if info.direction is Direction.IN and by_role and pin not in held:
+                    drive(label, pin)
+        for item in self.fragment.exports:
+            directions = dict(item.bus.member_directions())
+            for member in item.bus.signals:
+                if directions[member.physical] is Direction.IN:
+                    drive(item.instance, member.physical)
+                else:
+                    drive(None, f"{item.port}_{member.logical.upper()}")
+        wanted = [
+            (None, pin, info) for pin, info in root.items() if info.direction is Direction.OUT
+        ] + [
+            (label, pin, info)
+            for label, pins in children.items()
+            for pin, info in pins.items()
+            if info.direction is Direction.IN
+        ]
+        for instance, pin, info in wanted:
+            counts = {drivers.get((instance, pin, bit), 0) for bit in range(info.width)}
+            if counts != {1}:
+                problem = "nothing drives" if 0 in counts else "more than one driver drives"
+                where = "the root" if instance is None else instance
+                raise BuildError(f"{problem} {where}.{pin}")
 
 
 Module = Union[Leaf, Composed]
@@ -406,11 +461,11 @@ __all__ = [
     "BuildError",
     "BusExport",
     "Composed",
-    "Endpoint",
     "Fragment",
     "Held",
     "Leaf",
     "Link",
+    "LinkEnd",
     "Marker",
     "Module",
     "Pins",

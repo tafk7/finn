@@ -14,7 +14,7 @@ selector of a single threshold set.
 import pytest
 from qonnx.core.datatype import DataType
 
-from finn.core.space import Rejected, Space, design_space
+from finn.core.space import Available, Rejected, Space, design_space
 from finn.kernels.artifacts.abi import Bus, Endpoint, StandardProtocol
 from finn.kernels.artifacts.build import netlist
 from finn.kernels.control import ControlBus
@@ -205,14 +205,14 @@ def test_several_threshold_sets_take_a_set_selector_stream():
     point = design_space(Selected()).with_choices(
         {Selected.activate.use_axilite: False, Selected.activate.deep_pipeline: False}
     )
-    connection = point.sets.query(Stream.connection)
-    assert connection.value.sink.transport.name == "s_axis_set"  # type: ignore[union-attr]
+    assert isinstance(point.sets.query(Stream.netlist), Available)
+    assert point.sets.endpoints.sink.transport.name == "s_axis_set"
     # One set index for every input beat: a shorter selector stream is refused.
     short = Tensor((HEIGHT,), ScalarEncoding(DataType["UINT1"]))
 
     class Short(Selected):
         sets = Stream(tensor=short, port="in1_V")
 
-    refused = design_space(Short()).sets.query(Stream.connection)
+    refused = design_space(Short()).sets.query(Stream.netlist)
     assert isinstance(refused, Rejected)
     assert {finding.code for finding in refused.findings} == {"threshold-set-stream"}

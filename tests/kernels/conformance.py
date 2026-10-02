@@ -436,13 +436,13 @@ def _ends(
     ports = _ports(family)
     found: dict[str, StreamContract] = {}
     for name in names:
-        connection = _value(getattr(point, name).query(Stream.endpoints), family, sample)
+        ends = _value(getattr(point, name).query(Stream.endpoints), family, sample)
         owner = f"{KERNEL}.{ports[name]}"
-        if connection.sink_owner == owner:
-            found[name] = connection.sink
+        if ends.sink_owner == owner:
+            found[name] = ends.sink
         else:
-            assert connection.source_owner == owner, f"{name} is not {owner}'s: {connection}"
-            found[name] = connection.source
+            assert ends.source_owner == owner, f"{name} is not {owner}'s: {ends}"
+            found[name] = ends.source
     return found
 
 
@@ -474,7 +474,8 @@ def _check_model(
                 f"{schedule.beat_count} less {dropped} dropped"
             )
         if name != fed:
-            boundary = _value(getattr(point, name).query(Stream.boundary), family, sample)
+            ends = _value(getattr(point, name).query(Stream.endpoints), family, sample)
+            boundary = ends.source if ends.source_owner is None else ends.sink
             presented = unreplayed(form) if name in inputs else form
             assert boundary.form == presented, (
                 f"{where}: {name}'s boundary presents {boundary.form}"

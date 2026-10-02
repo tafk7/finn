@@ -99,15 +99,14 @@ def transposed(rows: int, cols: int, simd: int, batches: int = 2):
 def stage_parameters(point):
     """Each stage of ``x``, by its name below its chain, and its module's parameters."""
     return [
-        (stage.label.rsplit(".", 1)[-1], dict(stage.module.parameters))
-        for stage in point.x.connection.stages
+        (stage.label.rsplit(".", 1)[-1], dict(stage.module.parameters)) for stage in point.x.stages
     ]
 
 
 def test_the_same_order_connects_directly():
     point = adapted(vector_major((ROWS, CHANNELS), 4), 4)
     assert not point.x.plan and not point.x.adapting
-    assert point.x.connection.stages == ()
+    assert point.x.stages == ()
     assert labels(point.module) == ["producer", "activate"]
 
 
@@ -168,7 +167,7 @@ def test_exactly_one_candidate_carries_out_each_plan():
 
 def test_a_stream_admitting_no_adapter_refuses_its_plan():
     point = adapted(vector_major((ROWS, CHANNELS), 4), 2, adaptable=False)
-    refused = point.x.query(Stream.connection)
+    refused = point.x.query(Stream.netlist)
     assert isinstance(refused, Rejected)
     plan = [finding for finding in refused.findings if finding.code == "stream-plan"]
     assert plan and "width_conversion" in plan[0].message
