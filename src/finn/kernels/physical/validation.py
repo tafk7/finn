@@ -6,10 +6,9 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
-from types import MappingProxyType
 
-from finn.kernels.artifacts.abi import Bus, Clock, Data, Direction, Reset, Signal
+from finn.kernels.artifacts.abi import Bus, Clock, Data, Direction, PinInfo, Reset, Signal
+from finn.kernels.artifacts.abi import abi_pins as pins_of
 from finn.kernels.artifacts.requirements import FixedModuleName, ModuleABIRequirements
 from finn.kernels.physical.structure import (
     PhysicalPin,
@@ -19,27 +18,8 @@ from finn.kernels.physical.structure import (
 )
 
 
-@dataclass(frozen=True, slots=True)
-class _PinInfo:
-    direction: Direction
-    width: int
-    role: object
-    bus_id: str | None = None
-    member: str | None = None
-
-
-def abi_pins(abi: ModuleABIRequirements) -> Mapping[str, _PinInfo]:
-    pins: dict[str, _PinInfo] = {}
-    for port in abi.ports:
-        if isinstance(port, Signal):
-            pins[port.name] = _PinInfo(port.direction, port.width, port.role)
-            continue
-        directions = dict(port.member_directions())
-        for member in port.signals:
-            pins[member.physical] = _PinInfo(
-                directions[member.physical], member.width, port.role, port.name, member.logical
-            )
-    return MappingProxyType(pins)
+def abi_pins(abi: ModuleABIRequirements) -> Mapping[str, PinInfo]:
+    return pins_of(abi.ports)
 
 
 def _validate_bus_domains(abi: ModuleABIRequirements) -> None:
@@ -58,7 +38,7 @@ def _validate_bus_domains(abi: ModuleABIRequirements) -> None:
             raise PhysicalStructureError(f"bus {port.name!r} has no declared associated reset")
 
 
-def slice_bits(value: PinSlice, info: _PinInfo) -> set[int]:
+def slice_bits(value: PinSlice, info: PinInfo) -> set[int]:
     end = value.bit_offset + value.bit_width
     if end > info.width:
         raise PhysicalStructureError(
@@ -71,9 +51,9 @@ def slice_bits(value: PinSlice, info: _PinInfo) -> set[int]:
 def pin_info(
     pin: PhysicalPin,
     *,
-    top: Mapping[str, _PinInfo],
-    children: Mapping[str, Mapping[str, _PinInfo]],
-) -> _PinInfo:
+    top: Mapping[str, PinInfo],
+    children: Mapping[str, Mapping[str, PinInfo]],
+) -> PinInfo:
     inventory = top if pin.instance_id is None else children.get(pin.instance_id)
     if inventory is None or pin.signal_id not in inventory:
         owner = "top" if pin.instance_id is None else pin.instance_id
@@ -81,15 +61,15 @@ def pin_info(
     return inventory[pin.signal_id]
 
 
-def _is_source(pin: PhysicalPin, info: _PinInfo) -> bool:
+def _is_source(pin: PhysicalPin, info: PinInfo) -> bool:
     return info.direction is (Direction.IN if pin.instance_id is None else Direction.OUT)
 
 
-def _is_destination(pin: PhysicalPin, info: _PinInfo) -> bool:
+def _is_destination(pin: PhysicalPin, info: PinInfo) -> bool:
     return info.direction is (Direction.OUT if pin.instance_id is None else Direction.IN)
 
 
-def _all_bits(pin: PhysicalPin, info: _PinInfo) -> set[tuple[PhysicalPin, int]]:
+def _all_bits(pin: PhysicalPin, info: PinInfo) -> set[tuple[PhysicalPin, int]]:
     return {(pin, bit) for bit in range(info.width)}
 
 

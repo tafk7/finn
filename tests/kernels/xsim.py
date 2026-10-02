@@ -125,7 +125,7 @@ def stream_through(
     streams = {**inputs, **outputs}
     lines: list[str] = []
     for name, info in abi_pins(requirements.abi).items():
-        if isinstance(info.role, (Clock, Reset)) or info.bus_id in streams:
+        if isinstance(info.role, (Clock, Reset)) or info.bus in streams:
             continue
         width = "" if info.width == 1 else f"[{info.width - 1}:0] "
         held = info.direction is Direction.IN

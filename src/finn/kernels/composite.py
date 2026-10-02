@@ -359,7 +359,7 @@ def _clock_roles(abi: ModuleABIRequirements) -> dict[str, list[str]]:
     """A child's clock and reset pins by the top pin their role binds them to."""
     roles: dict[str, list[str]] = {}
     for name, info in abi_pins(abi).items():
-        if info.bus_id is not None or info.direction is not Direction.IN:
+        if info.bus is not None or info.direction is not Direction.IN:
             continue
         if isinstance(info.role, Clock):
             rate = info.role.rate

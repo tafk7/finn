@@ -10,56 +10,27 @@ sources; ``module_build_fingerprint`` identifies it.
 
 from __future__ import annotations
 
-import re
-from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, fields, is_dataclass
-from enum import Enum
+from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import Union
 
 from finn.kernels.artifacts.abi import ClockAlignment, Port, validate_ports
 from finn.kernels.artifacts.contributions import CopiedSource, GeneratedData
+from finn.kernels.artifacts.module import (
+    _IDENTIFIER,
+    BuildError,
+    ProducerIdentity,
+    Scalar,
+    ScalarTable,
+    _rtl_scalar,
+    _table,
+    sanitize_stem,
+    typed_canonical,
+)
 from finn.kernels.artifacts.projection import digest
-
-#: A module parameter or render argument.
-Scalar = Union[bool, int, float, str, Enum]
-ScalarTable = tuple[tuple[str, Scalar], ...]
 
 #: The argument a composed module's wrapper template reads its own name from.
 MODULE_NAME_ARGUMENT = "MODULE_NAME"
-
-_IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_$]*$")
-
-
-class BuildError(Exception):
-    """A module's requirements are incomplete or inconsistent."""
-
-
-def _table(values: ScalarTable, *, label: str, renderable: bool = False) -> ScalarTable:
-    items = tuple(values)
-    names = tuple(name for name, _ in items)
-    if len(names) != len(set(names)):
-        raise BuildError(f"{label} names one value twice")
-    if any(not isinstance(name, str) or not name for name in names):
-        raise BuildError(f"{label} uses non-empty string names")
-    for name, value in items:
-        if not isinstance(value, (bool, int, float, str, Enum)):
-            raise BuildError(f"{label} value {name!r} is not a scalar")
-        if renderable and isinstance(value, Enum):
-            raise BuildError(f"render input {name!r} is not a flat renderable scalar")
-    return tuple(sorted(items, key=lambda item: item[0]))
-
-
-def _rtl_scalar(value: Scalar) -> str:
-    if isinstance(value, bool):
-        return str(int(value))
-    if isinstance(value, Enum):
-        raw = value.value
-        if isinstance(raw, bool):
-            return str(int(raw))
-        if isinstance(raw, (int, float, str)):
-            return str(raw)
-        raise BuildError(f"enum parameter {value!r} has no canonical RTL scalar spelling")
-    return str(value)
 
 
 def _symbols(values: Sequence[str], *, label: str) -> tuple[str, ...]:
@@ -72,18 +43,6 @@ def _relative_path(path: str, *, label: str) -> str:
     if not path or path.startswith("/") or ".." in path.split("/") or path == ".":
         raise BuildError(f"{path!r} is not a path relative to the {label}")
     return path
-
-
-@dataclass(frozen=True)
-class ProducerIdentity:
-    """Who derived a composed module, and the version of what it derives."""
-
-    producer_id: str
-    contract_version: str
-
-    def __post_init__(self) -> None:
-        if not self.producer_id or not self.contract_version:
-            raise BuildError("a producer needs an id and a version")
 
 
 @dataclass(frozen=True, slots=True)
@@ -239,41 +198,9 @@ class ModuleBuildRequirements:
         object.__setattr__(self, "contributions", contributions)
 
 
-def typed_canonical(value: object) -> object:
-    """``value`` with each enum and dataclass tagged by its type, for a digest."""
-    if isinstance(value, Enum):
-        return (f"enum:{type(value).__module__}.{type(value).__qualname__}", value.name)
-    if is_dataclass(value) and not isinstance(value, type):
-        tag = f"dataclass:{type(value).__module__}.{type(value).__qualname__}"
-        return (
-            tag,
-            tuple(
-                (item.name, typed_canonical(getattr(value, item.name))) for item in fields(value)
-            ),
-        )
-    if isinstance(value, Mapping):
-        return tuple((name, typed_canonical(value[name])) for name in sorted(value))
-    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
-        return tuple(typed_canonical(item) for item in value)
-    return value
-
-
 def module_build_fingerprint(requirements: ModuleBuildRequirements) -> str:
     """The digest of everything the requirements say; equal requirements share it."""
     return digest(("module-requirements-v1", typed_canonical(requirements)))
-
-
-def sanitize_stem(stem: str) -> str:
-    """``stem`` as an RTL identifier of at most 40 characters."""
-    sanitized = "".join(
-        character if (character.isascii() and character.isalnum()) or character == "_" else "_"
-        for character in stem
-    )
-    if not sanitized or sanitized[0].isdigit():
-        sanitized = "_" + sanitized
-    if len(sanitized) > 40 or not _IDENTIFIER.fullmatch(sanitized):
-        raise BuildError(f"{stem!r} is not a stem of at most 40 identifier characters")
-    return sanitized
 
 
 def nested_module_name(requirements: ModuleBuildRequirements) -> str:
