@@ -11,9 +11,14 @@ it in a ``Root``, the top of what is emitted, which declares them (as
 ``placed_dotp`` does for a dot-product core). ``placed_matmul`` places a
 MatMul (``matmul``) on the root's ``x`` (``in0_V``), ``w`` (``in1_V``,
 buffered), ``y`` (``out0_V``) and, with several weight sets, ``set``
-(``in2_V``); the edge choices are the root's (``x.adapter``, ``w.transport``),
-the MatMul's below it (``matmul.memory``, ``matmul.compute.packed.pe``).
-``matmul_assembly`` configures one from concrete facts and choices."""
+(``in2_V``). The root declares the streams and binds each one's tensor to
+MatMul's view of it (``activation_tensor``, ``weight_tensor``,
+``result_tensor``, ``set_tensor``), which reads only MatMul's facts and its
+``realization``: one root serves every realization, a depthwise MatMul's left
+open until committed. The edge choices are the root's (``x.adapter``,
+``w.transport``), the MatMul's below it (``matmul.memory``,
+``matmul.compute.packed.pe``). ``matmul_assembly`` configures one from
+concrete facts and choices."""
 
 import os
 import shutil
@@ -121,49 +126,13 @@ def rooted(name: str, members: Mapping[str, object]) -> Root:
     return root
 
 
-MATMUL_STREAMS = (
-    ("x", MatMulKernel.activation_tensor),
-    ("w", MatMulKernel.weight_tensor),
-    ("y", MatMulKernel.result_tensor),
-    ("set", MatMulKernel.set_tensor),
-)
-
-
-def matmul_tensors(
-    facts: Mapping[str, object], realization: str | None = None
-) -> dict[str, Tensor]:
-    """The tensors of the streams a MatMul sits on, read from the MatMul itself.
-
-    A depthwise MatMul's weights follow its ``realization``; several weight sets
-    add the set index.
-    """
-    point: Any = design_space(MatMulKernel(**facts))  # type: ignore[arg-type]
-    if facts.get("form", Form.DENSE) is Form.DEPTHWISE:
-        if realization is None:
-            raise ValueError("a depthwise MatMul's weight tensor follows its realization")
-        point = commit(point, {"realization": realization})
-    sets = facts.get("weight_sets", 1)
-    found: dict[str, Tensor] = {}
-    for stream, view in MATMUL_STREAMS:
-        if stream == "set" and not (isinstance(sets, int) and sets > 1):
-            continue
-        result = point.query(view)
-        if not isinstance(result, Available):
-            raise ValueError(f"MatMul is not accepted: {describe([result])}")
-        found[stream] = result.value
-    return found
-
-
 @cache
 def matmul_root(family: type[MatMulKernel]) -> type[Root]:
     """A root placing a MatMul of ``family`` (``matmul``) on the streams it declares, its
-    facts and the streams' tensors its own formals; see the module docstring."""
+    facts its own formals and the streams' tensors MatMul's views; see the module
+    docstring."""
 
     class MatMul(Root):
-        x_tensor: Tensor = Param()
-        w_tensor: Tensor = Param()
-        y_tensor: Tensor = Param()
-        set_tensor: Tensor = Param(required=False)
         m: int = Param()
         n: int = Param()
         k: int = Param()
@@ -179,6 +148,23 @@ def matmul_root(family: type[MatMulKernel]) -> type[Root]:
         @derived
         def several(self) -> bool:
             return self.weight_sets > 1
+
+        # Each stream's tensor is MatMul's view of it: its facts, never its ports.
+        @derived
+        def x_tensor(self) -> Tensor:
+            return self.matmul.activation_tensor
+
+        @derived
+        def w_tensor(self) -> Tensor:
+            return self.matmul.weight_tensor
+
+        @derived
+        def y_tensor(self) -> Tensor:
+            return self.matmul.result_tensor
+
+        @derived
+        def set_tensor(self) -> Tensor:
+            return self.matmul.set_tensor
 
         x = Stream(tensor=x_tensor, port="in0_V")
         w = BufferedStream(tensor=w_tensor, port="in1_V")
@@ -205,19 +191,16 @@ def matmul_root(family: type[MatMulKernel]) -> type[Root]:
     return MatMul
 
 
-def placed_matmul(*, realization: str | None = None, **facts: object) -> Root:
+def placed_matmul(**facts: object) -> Root:
     """A MatMul (``matmul``) in a root declaring its streams; see the module docstring."""
-    tensors = {
-        f"{name}_tensor": tensor for name, tensor in matmul_tensors(facts, realization).items()
-    }
     family: Any = matmul_root(MatMulKernel)
-    root: Root = family(**facts, **tensors)
+    root: Root = family(**facts)
     return root
 
 
 def matmul_point(*, realization: str | None = None, **facts: object) -> Any:
     """``placed_matmul`` as a design space, its ``realization`` committed when given."""
-    point = design_space(placed_matmul(realization=realization, **facts))
+    point = design_space(placed_matmul(**facts))
     return commit(point, {"matmul.realization": realization}) if realization else point
 
 
@@ -296,13 +279,11 @@ def _frozen(values: object) -> object:
     return values
 
 
-def _realizes(
-    facts: Mapping[str, object], realization: str, choices: dict[str, object]
-) -> QueryResult[bool]:
-    """Accepted when the choices commit on a root carrying the realization's weights, its
-    own rule holds, and some core can compute it."""
+def _realizes(point: Any, realization: str) -> QueryResult[bool]:
+    """Accepted when the realization commits on ``point``, its own rule holds, and some
+    core can compute it."""
     try:
-        point = commit(matmul_point(realization=realization, **facts), choices)
+        point = commit(point, {"matmul.realization": realization})
     except ValueError as error:
         return reject("matmul-realization", str(error))
     rule: QueryResult[bool] = point.matmul.inspect(MatMulKernel.realization_supported).result
@@ -379,19 +360,17 @@ def matmul_assembly(
     if buffered:
         choices["w.transport.fifo.buffer.depth"] = weight_fifo_depth
         choices["w.transport.fifo.buffer.ram_style"] = "auto"
+    point = commit(matmul_point(realization=realization, **facts), choices)
     if form is Form.DEPTHWISE and realization is None:
         # The realization sets the datapath's reduction, and so the weight stream's
-        # tensor: each is tried on a root of its own.
+        # tensor: each is tried on the one point.
         viable = [
-            case
-            for case in ("native", "dense")
-            if isinstance(_realizes(facts, case, choices), Available)
+            case for case in ("native", "dense") if isinstance(_realizes(point, case), Available)
         ]
         if len(viable) != 1:
             named = ", ".join(viable) or "none"
             raise ValueError(f"realizations compatible with this configuration: {named}")
-        realization = viable[0]
-    point = commit(matmul_point(realization=realization, **facts), choices)
+        point = commit(point, {"matmul.realization": viable[0]})
     if core is None:
         settlement = settle(point)
         if "matmul.compute" not in settlement.committed:

@@ -6,7 +6,8 @@
 A ``Stream`` is the physical form of the logical stream
 (``finn.dataflow.stream``): one real producer-to-consumer edge, a node of its
 own, declared in the kernel with children (or the root) that owns the edge,
-beside the kernels it joins, carrying one ``tensor`` its owner supplies. A
+beside the kernels it joins, carrying one ``tensor`` its owner supplies: stated,
+or read from a kernel's fact-level view (``MatMulKernel.weight_tensor``). A
 kernel has one reference input per stream it sits on (``output_stream:
 Stream = Param()``), bound to the ``stream`` of one of its ports
 (``finn.kernels.port``), which exports its contract under ``PORT``; a kernel

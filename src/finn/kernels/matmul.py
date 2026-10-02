@@ -19,11 +19,12 @@ reading its (M, K, N) activations as (M, K * N).
 ``MatMulKernel`` is a kernel with children: the kernels and Decisions over
 kernels that sit on the streams its parent supplies, ``x_stream`` (the
 activations), ``w_stream`` (the weights), ``y_stream`` (the results) and, with
-several weight sets, ``set_stream`` (the set index). Each supplied stream
-carries the tensor MatMul derives for it (``activation_tensor``,
-``weight_tensor``, ``result_tensor``, ``set_tensor``), or it is refused
-(``matmul-tensor``). Each stream, its adapter and its FIFO are its parent's:
-the parent (a test harness, the graph front end) declares them, and a
+several weight sets, ``set_stream`` (the set index). Each stream, its adapter
+and its FIFO are its parent's: the parent (a test harness, the graph front end)
+declares each stream and either binds its tensor to MatMul's view of it
+(``activation_tensor``, ``weight_tensor``, ``result_tensor``, ``set_tensor``),
+which reads only MatMul's facts and ``realization``, never a port, or states
+it; ``carried`` refuses a stated tensor that differs (``matmul-tensor``). A
 boundary stream there presents its ``port`` name (``in0_V``).
 
 - ``compute`` is a Decision over the dot-product cores. They share the facts

@@ -9,6 +9,10 @@ adapter sits on the edge that needs it (a replay before each MatMul's core,
 none inside a MatMul). The root's module is one netlist of every leaf; it
 computes ``thresholds(x @ W1) @ W2`` in XSim. Each MatMul's control bus is
 presented below its node (``first_s_axilite``).
+
+The root declares every stream: the tensor of a MatMul's weights and results is
+read from the MatMul's views (``weight_tensor``, ``result_tensor``); a tensor
+the root states instead must be the one MatMul derives (``carried``).
 """
 
 from __future__ import annotations
@@ -18,7 +22,7 @@ from typing import Any
 
 from qonnx.core.datatype import DataType
 
-from finn.core.space import Rejected, design_space
+from finn.core.space import Rejected, derived, design_space
 from finn.dataflow.plan import Step
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.artifacts.abi import Bus
@@ -62,12 +66,31 @@ def weights(k: int, n: int) -> BufferedStream:
 
 
 class Chain(Root):
+    # The input is the root's to state, and the thresholding's output too: a leaf
+    # binds its extents from its own ports, so its output tensor is not read from it.
+    # Each MatMul's weights and results are its views, which read only its facts.
+    @derived
+    def w1_tensor(self) -> Tensor:
+        return self.first.weight_tensor
+
+    @derived
+    def hidden_tensor(self) -> Tensor:
+        return self.first.result_tensor
+
+    @derived
+    def w2_tensor(self) -> Tensor:
+        return self.second.weight_tensor
+
+    @derived
+    def y_tensor(self) -> Tensor:
+        return self.second.result_tensor
+
     x = Stream(tensor=Tensor((ROWS, INPUTS), ScalarEncoding(A)), port="in0_V")
-    w1 = weights(INPUTS, HIDDEN)
-    hidden = Stream(tensor=Tensor((ROWS, HIDDEN), ScalarEncoding(H)))
+    w1 = BufferedStream(tensor=w1_tensor)
+    hidden = Stream(tensor=hidden_tensor)
     levels = Stream(tensor=Tensor((ROWS, HIDDEN), ScalarEncoding(T)))
-    w2 = weights(HIDDEN, OUTPUTS)
-    y = Stream(tensor=Tensor((ROWS, OUTPUTS), ScalarEncoding(Y)), port="out0_V")
+    w2 = BufferedStream(tensor=w2_tensor)
+    y = Stream(tensor=y_tensor, port="out0_V")
     first = matmul(INPUTS, HIDDEN, A, W1, x_stream=x, w_stream=w1, y_stream=hidden)
     activate = ThresholdingAxiKernel(
         input_dtype=H,
