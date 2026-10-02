@@ -3,28 +3,27 @@
 
 """Non-stream interfaces: exported control buses, tie-offs and child padding.
 
-dotp feeds thresholding inside one composite; the activation stream's adapter
-replays each row for dotp. dotp's padded AXIS result feeds
-a child: the padding bits stay unconnected and the consumer's padding is
-zero. Thresholding's AXI-Lite bus is exported through a ``ControlBus`` when
-its thresholds are runtime-writable and otherwise held idle by its tie-offs,
-as is the set selector of a single threshold set.
+dotp feeds thresholding in one root; the activation stream's adapter replays
+each row for dotp. dotp's padded AXIS result feeds a child: the padding bits
+stay unconnected and the consumer's padding is zero. Thresholding's AXI-Lite
+bus is presented through a ``ControlBus`` when its thresholds are
+runtime-writable and otherwise held idle by the module, as is the set
+selector of a single threshold set.
 """
 
 import pytest
 from qonnx.core.datatype import DataType
 
 from finn.core.space import Rejected, Space, design_space
-from finn.kernels.composite import Design
 from finn.kernels.artifacts.abi import Bus, Endpoint, StandardProtocol
+from finn.kernels.artifacts.build import netlist
 from finn.kernels.control import ControlBus
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.dotp import PackedDotpKernel
-from finn.kernels.physical.structure import ConstantBits, PinSlice
 from finn.kernels.streams import Stream
 from finn.kernels.target import DspBlock
 from finn.kernels.thresholding import ThresholdingAxiKernel
-from kernels.helpers import settled
+from kernels.helpers import Root, placed, settled
 from kernels.xsim import requires_xsim, stream_through
 
 REPETITIONS, WIDTH, HEIGHT, SIMD = 2, 4, 2, 2
@@ -37,7 +36,7 @@ RESULT_TENSOR = Tensor((REPETITIONS, HEIGHT), ScalarEncoding(R))
 LEVEL_TENSOR = Tensor((REPETITIONS, HEIGHT), ScalarEncoding(DataType["UINT2"]))
 
 
-class Activated(Design):
+class Activated(Root):
     """dotp, then thresholding: a padded child result feeding a child."""
 
     activations = Stream(tensor=X, port="in0_V")
@@ -83,61 +82,41 @@ def activated(*, writable: bool):
 
 def test_a_padded_child_result_feeds_a_child_and_its_padding_stays_unconnected():
     # Probe P3: one INT9 lane rides a 16-bit AXIS word into thresholding.
-    structure = activated(writable=False).structure.structure
-    (padding,) = [item for item in structure.unused_outputs if item.pin.instance_id == "u_compute"]
-    assert (padding.pin.signal_id, padding.offset, padding.width) == ("m_axis_output_tdata", 9, 7)
-    fed = {
-        (wire.destination.bit_offset, wire.destination.bit_width): wire.source
-        for wire in structure.wires
-        if wire.destination.pin.instance_id == "u_activate"
-        and wire.destination.pin.signal_id == "s_axis_tdata"
-    }
-    assert fed[(9, 7)] == ConstantBits(7, 0)
-    assert isinstance(fed[(0, 9)], PinSlice)
+    module = activated(writable=False).module
+    (fed,) = [link for link in module.fragment.links if link.sink.instance == "activate"]
+    assert (fed.source.instance, fed.source.data_bits, fed.payload_bits) == ("compute", 16, 9)
+    text = netlist(module, "top")
+    assert (
+        "assign n__u_activate__s_axis_tdata[8:0] = n__u_compute__m_axis_output_tdata[8:0];" in text
+    )
+    assert "assign n__u_activate__s_axis_tdata[15:9] = 7'h0;" in text
+    assert "n__u_compute__m_axis_output_tdata[15:9]" not in text
 
 
 def test_read_only_thresholds_tie_their_control_and_set_interfaces():
-    # Probe P4: every thresholding input is driven, and nothing is exported.
-    structure = activated(writable=False).structure.structure
-    assert [port.name for port in structure.top_abi.ports] == [
+    # Probe P4: every thresholding input is driven, and nothing is presented.
+    module = activated(writable=False).module
+    assert [port.name for port in module.pins.ports] == [
         "ap_clk",
         "ap_rst_n",
         "in0_V",
         "in1_V",
         "out0_V",
     ]
-    tied = {
-        wire.destination.pin.signal_id: wire.source.value
-        for wire in structure.wires
-        if wire.destination.pin.instance_id == "u_activate"
-        and isinstance(wire.source, ConstantBits)
-    }
+    held = placed(module, "activate").held
+    tied = dict(held.inputs)
     assert tied["s_axilite_AWVALID"] == tied["s_axis_set_tvalid"] == 0
-    unused = {
-        item.pin.signal_id
-        for item in structure.unused_outputs
-        if item.pin.instance_id == "u_activate"
-    }
-    assert {"s_axilite_AWREADY", "s_axilite_RDATA", "s_axis_set_tready"} <= unused
+    assert {"s_axilite_AWREADY", "s_axilite_RDATA", "s_axis_set_tready"} <= set(held.unused)
 
 
 def test_writable_thresholds_export_their_bus_through_the_control_node():
-    structure = activated(writable=True).structure.structure
+    module = activated(writable=True).module
     (bus,) = [
-        port
-        for port in structure.top_abi.ports
-        if isinstance(port, Bus) and port.name == "s_axilite"
+        port for port in module.pins.ports if isinstance(port, Bus) and port.name == "s_axilite"
     ]
     assert bus.protocol is StandardProtocol.AXILITE and bus.endpoint is Endpoint.TARGET
     assert (bus.associated_clock, bus.associated_reset) == ("ap_clk", "ap_rst_n")
-    wired = {
-        wire.destination.pin.signal_id: wire.source.pin.signal_id
-        for wire in structure.wires
-        if wire.destination.pin.instance_id == "u_activate"
-        and isinstance(wire.source, PinSlice)
-        and wire.source.pin.instance_id is None
-    }
-    assert wired["s_axilite_AWVALID"] == "s_axilite_AWVALID"
+    assert "assign n__u_activate__s_axilite_AWVALID = s_axilite_AWVALID;" in netlist(module, "top")
 
 
 def test_writable_thresholds_without_a_control_bus_are_refused():
@@ -161,7 +140,7 @@ def test_writable_thresholds_without_a_control_bus_are_refused():
             Unexported.activate.deep_pipeline: False,
         }
     )
-    refused = point.activate.query(ThresholdingAxiKernel.tieoffs)
+    refused = point.activate.query(ThresholdingAxiKernel.module)
     assert isinstance(refused, Rejected)
     assert {finding.code for finding in refused.findings} == {"threshold-control"}
 
@@ -171,7 +150,7 @@ def test_writable_thresholds_without_a_control_bus_are_refused():
 def test_the_composed_module_computes_thresholded_dot_products(tmp_path, writable):
     # Writable, the exported AXI-Lite bus is held idle (every other top input is
     # held at zero): the thresholds are still the initial table.
-    requirements = activated(writable=writable).structure.requirements
+    module = activated(writable=writable).module
     x = [[(3 * r + 5 * k) % 8 - 4 for k in range(WIDTH)] for r in range(REPETITIONS)]
     w = [[(7 * h + 3 * k) % 8 - 4 for k in range(WIDTH)] for h in range(HEIGHT)]
     levels = [
@@ -194,7 +173,7 @@ def test_the_composed_module_computes_thresholded_dot_products(tmp_path, writabl
         for f in range(FOLDS)
     ]
     stream_through(
-        requirements,
+        module,
         tmp_path,
         inputs={"in0_V": (activation_words, 3 * SIMD), "in1_V": (weight_words, 3 * SIMD)},
         outputs={"out0_V": (levels, 2)},

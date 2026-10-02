@@ -78,7 +78,7 @@ from finn.kernels.artifacts.abi import (
     Signal,
     abi_pins,
 )
-from finn.kernels.artifacts.contributions import CopiedSource, GeneratedData
+from finn.kernels.artifacts.contributions import Contribution, CopiedSource, GeneratedData
 from finn.kernels.artifacts.module import (
     BuildError,
     BusExport,
@@ -94,12 +94,6 @@ from finn.kernels.artifacts.module import (
 from finn.dataflow.schedule import Access, Index, Refused, Schedule, bind_extents
 from finn.kernels.control import EXPORTED, top_bus
 from finn.kernels.transport import STREAM_CONTRACT
-from finn.kernels.artifacts.requirements import (
-    FixedModuleName,
-    ModuleABIRequirements,
-    ModuleBuildRequirements,
-    RequirementContribution,
-)
 
 
 def _frozen(name: str, *kinds: type) -> ValueSemantics[object]:
@@ -123,8 +117,8 @@ NETLIST = ViewKey("netlist", NETLIST_SEMANTICS)
 relative to itself; its parent merges its members' under their nodes."""
 
 BOUNDARY = ViewKey("boundary", default_semantics(tuple))
-"""A stream's AXIS bus on its composite's boundary: one, or none when both of its ends
-are its composite's children."""
+"""A stream's AXIS bus on the root's boundary: one, or none when both of its ends are
+kernels."""
 
 PORT = ViewKey("port", STREAM_CONTRACT)
 """A kernel's port on one stream, exported per reference input."""
@@ -145,14 +139,6 @@ HELD = ViewKey("held", HELD_SEMANTICS)
 
 # The composed module's clocking pins: its interface convention, not a routing rule.
 CLOCK, CLOCK2X, RESET = "ap_clk", "ap_clk2x", "ap_rst_n"
-
-# -- the composite path's values, until it is retired ---------------------------------------
-
-MODULE_REQUIREMENTS = default_semantics(ModuleBuildRequirements)
-REQUIREMENTS = ViewKey("requirements", MODULE_REQUIREMENTS)
-"""A kernel's build requirements, collected by a ``Composite``."""
-TIEOFFS = ViewKey("tieoffs", HELD_SEMANTICS)
-"""What a kernel holds, collected by a ``Composite``."""
 
 
 @dataclass(frozen=True)
@@ -242,7 +228,7 @@ class Kernel(Space):
         """The module's parameters, read from the kernel's choices; refused when it has none."""
         return {}
 
-    def sources(self) -> tuple[RequirementContribution, ...]:
+    def sources(self) -> tuple[Contribution, ...]:
         """The source files that provide ``rtl_module``, and any data they read."""
         return ()
 
@@ -384,10 +370,15 @@ class Kernel(Space):
         """A leaf: itself, the empty label (its parent's ``under(node)`` names it ``node``).
         A kernel with children: each member's netlist under its node, and the buses its
         ``ControlBus`` nodes present."""
-        if type(self).rtl_module:
+        family = type(self)
+        if family.rtl_module:
             if self.netlists:
                 return reject("kernel-children", "a kernel binds one module or has children")
             return Fragment((("", self.codegen),))
+        if not self.netlists:
+            return reject(
+                "kernel-module", f"{family.__qualname__} declares no module and places no kernel"
+            )
         exports = tuple(
             BusExport(item.node, item.child, item.port)
             for located in self.presented
@@ -445,41 +436,11 @@ class Kernel(Space):
     module = View(
         built, requires=(admission, pins_accounted, clocked, netlists, presented, stream_buses)
     )
-    netlist = View(
-        fragment, requires=(admission, pins_accounted, clocked, netlists, presented, stream_buses)
-    )
-
-    # -- the composite path's values, until it is retired ---------------------------------
-
-    @derived
-    def requirements(self) -> ModuleBuildRequirements | Rejected:
-        family = type(self)
-        if not family.rtl_module:
-            return reject("kernel-module", f"{family.__qualname__} declares no module")
-        clocking = self.clocking
-        chosen = self.parameters()
-        if isinstance(chosen, Rejected):
-            return chosen
-        parameters = tuple(sorted(chosen.items()))
-        pins = tuple(pin for item in self.port_pins for pin in item.value)
-        abi = ModuleABIRequirements(
-            FixedModuleName(family.rtl_module),
-            (*clocking.signals(), *self.other_pins(), *pins),
-            tuple((name, str(value)) for name, value in parameters),
-            clocking.alignments(),
-        )
-        return ModuleBuildRequirements(family.id, family.version, parameters, abi, self.sources())
-
-    build_requirements = View(requirements, requires=(admission,))
-    tieoffs = View(holds)
+    # A parent places a child's netlist only when the child's module is accepted.
+    netlist = View(fragment, requires=(module,))
 
     # A kernel adding exports of its own extends these: ``{**Kernel.exports, KEY: ...}``.
-    exports = {
-        NETLIST: netlist,
-        MODULE: module,
-        REQUIREMENTS: build_requirements,
-        TIEOFFS: tieoffs,
-    }
+    exports = {NETLIST: netlist, MODULE: module}
 
 
 def extent_of(index: Index) -> int:
@@ -538,16 +499,13 @@ __all__ = [
     "HELD_SEMANTICS",
     "Kernel",
     "MODULE",
-    "MODULE_REQUIREMENTS",
     "MODULE_SEMANTICS",
     "NATIVE_CLOCKING",
     "NETLIST",
     "NETLIST_SEMANTICS",
     "PINS",
     "PORT",
-    "REQUIREMENTS",
     "RESET",
-    "TIEOFFS",
     "extent_of",
     "factor_domain",
 ]

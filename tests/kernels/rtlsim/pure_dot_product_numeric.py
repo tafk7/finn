@@ -151,7 +151,7 @@ def run(configuration: Configuration, evidence: Path, *, backpressure_ticks: int
         target_dsp=c.target,
         target_period_ns=c.period,
     )
-    module = point.build_requirements
+    module = point.module
     case = Case(
         c.label,
         c.target,
@@ -191,7 +191,7 @@ def run(configuration: Configuration, evidence: Path, *, backpressure_ticks: int
         stimulus[name] = [beat | (padding if j % 2 else 0) for j, beat in enumerate(stimulus[name])]
     roots = {"finnlib": finnlib_root()}
     sources = []
-    for source in module.contributions:
+    for source in module.sources:
         assert isinstance(source, CopiedSource)
         sources.append(str(roots[source.root] / source.path))
     case_directory = evidence / c.label

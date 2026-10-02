@@ -16,25 +16,29 @@ operation runs natively (one channel per PE lane, INT8 DSP58 only) or, by the
 ``realization`` Decision, on the dense datapath with block-diagonal weights,
 reading its (M, K, N) activations as (M, K * N).
 
-``MatMulKernel`` is a graph of design spaces: ``Stream`` nodes (activations,
-weights, results, and the set index with several weight sets) and the
-kernels that sit on them. A stream with a single user is a boundary of the
-kernel and presents its ``port`` name (``in0_V``, ``in1_V``, ``out0_V``,
-``in2_V``).
+``MatMulKernel`` is a kernel with children: the kernels and Decisions over
+kernels that sit on the streams its parent supplies, ``x_stream`` (the
+activations), ``w_stream`` (the weights), ``y_stream`` (the results) and, with
+several weight sets, ``set_stream`` (the set index). Each supplied stream
+carries the tensor MatMul derives for it (``activation_tensor``,
+``weight_tensor``, ``result_tensor``, ``set_tensor``), or it is refused
+(``matmul-tensor``). Each stream, its adapter and its FIFO are its parent's:
+the parent (a test harness, the graph front end) declares them, and a
+boundary stream there presents its ``port`` name (``in0_V``).
 
 - ``compute`` is a Decision over the dot-product cores. They share the facts
   and streams; the packed core also takes ``narrow_weights``. Each core owns its
   folding factors (``compute.<core>.pe``, ``.simd``, ``.compute_pumping``) and derives
   every stream's beat sequence from its schedule.
 - ``memory`` is an optional Decision over the weight memories: none (the
-  weight stream is the boundary ``in1_V``) or a ``memstream``, which stores
-  one period of the order the core reads, per weight set, read-only unless
-  the weights are writable.
+  weight stream's producer is its parent's, a boundary for instance) or a
+  ``memstream``, which drives the weight stream with one period of the order
+  the core reads, per weight set, read-only unless the weights are writable.
 - The activation stream's plan replays each dense row and frames each
-  reduction; its adapter carries that out.
+  reduction; the stream's adapter carries that out.
 
-``structure`` wires ``Members(MODULE)`` through ``Members(CONNECTION)``; the
-module has ``ap_clk2x`` only when compute is pumped.
+Its ``module`` (``finn.kernels.base``) merges its children's netlists; placed
+alone, without its streams, its interfaces are idle.
 """
 
 from __future__ import annotations
@@ -50,7 +54,6 @@ from finn.core.space import (
     derived,
     reject,
     selected,
-    View,
     view,
 )
 from finn.dataflow.datatypes import (
@@ -62,8 +65,8 @@ from finn.dataflow.datatypes import (
 from finn.dataflow.gemm import Form
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import Traversal, period
-from finn.kernels.base import PORT
-from finn.kernels.artifacts.requirements import ProducerIdentity
+from finn.kernels.artifacts.module import ProducerIdentity
+from finn.kernels.base import Kernel
 from finn.kernels.control import ControlBus
 from finn.kernels.datatypes.domains import set_index_dtype
 from finn.kernels.datatypes.semantics import (
@@ -74,12 +77,19 @@ from finn.kernels.datatypes.semantics import (
 )
 from finn.kernels.dotp import Int8Dsp58DotpKernel, PackedDotpKernel
 from finn.kernels.memstream import MemStreamKernel
-from finn.kernels.composite import Composite
-from finn.kernels.streams import BufferedStream, Stream
+from finn.kernels.streams import Stream
 from finn.kernels.target import DspBlock
 
 
 FinnAttributes = tuple[tuple[str, int | str | tuple[int, ...]], ...]
+
+_CARRIED = (
+    ("x_stream", "activation_tensor"),
+    ("w_stream", "weight_tensor"),
+    ("y_stream", "result_tensor"),
+    ("set_stream", "set_tensor"),
+)
+"""Each stream MatMul sits on, and the tensor it must carry."""
 
 
 def _positive(value: int, name: str) -> None:
@@ -100,7 +110,7 @@ def exact_result_dtype(
     return resolve_qonnx_datatype_name(f"INT{bits}")
 
 
-class MatMulKernel(Composite):
+class MatMulKernel(Kernel):
     """Operation facts, and the kernels and Decisions over kernels on its streams."""
 
     id = "finn.matmul"
@@ -195,50 +205,45 @@ class MatMulKernel(Composite):
         except ValueError as error:
             return reject("matmul-extents", str(error))
 
-    @derived
+    @view
     def activation_tensor(self) -> Tensor | Rejected:
         """(M, K), or (M, K, N) depthwise, however the datapath reads it."""
         shape = (self.m, self.k, self.n) if self.depthwise else (self.m, self.k)
         return self._tensor(shape, self.activation_dtype)
 
-    @derived
+    @view
     def weight_tensor(self) -> Tensor | Rejected:
         return self._tensor((self.datapath_k, self.n), self.weights_dtype)
 
-    @derived
+    @view
     def result_tensor(self) -> Tensor | Rejected:
         return self._tensor((self.m, self.n), self.result_type)
 
-    @derived
+    @view
     def set_tensor(self) -> Tensor | Rejected:
         """One set index per row, as wide as the memory's selector."""
         return self._tensor((self.m,), set_index_dtype(self.weight_sets))
 
-    # Streams: relations between the kernels that reference them. A stream with a
-    # single user is a boundary of the kernel and presents its ABI port name.
-    # The activations enter at in0_V, each row once; the stream's adapter
-    # replays them for the core and closes each reduction with a frame marker.
-    activations = Stream(tensor=activation_tensor, port="in0_V")
-    weight_stream = BufferedStream(tensor=weight_tensor, port="in1_V")
-    results = Stream(tensor=result_tensor, port="out0_V")
-    set_index = Stream(tensor=set_tensor, port="in2_V", when=multi_set)
-
-    # Placed in a parent, it sits on the parent's streams through these inputs,
-    # each the boundary stream of the same tensor (``finn.kernels.composite``).
+    # The streams it sits on, supplied by its parent.
     x_stream: Stream = Param(required=False)
     w_stream: Stream = Param(required=False)
     y_stream: Stream = Param(required=False)
     set_stream: Stream = Param(required=False)
-    boundaries = {
-        "x_stream": "activations",
-        "w_stream": "weight_stream",
-        "y_stream": "results",
-        "set_stream": "set_index",
-    }
-    x_port = View(activations.boundary, requires=(Composite.seated,))
-    w_port = View(weight_stream.boundary, requires=(Composite.seated,))
-    y_port = View(results.boundary, requires=(Composite.seated,))
-    set_port = View(set_index.boundary, requires=(Composite.seated,))
+
+    @constraint
+    def carried(self) -> bool | Rejected:
+        """Each supplied stream carries the tensor MatMul derives for it."""
+        for reference, tensor in _CARRIED:
+            if not self.present(getattr(MatMulKernel, reference)):
+                continue
+            supplied, derived_ = getattr(self, reference).tensor, getattr(self, tensor)
+            if supplied != derived_:
+                return reject(
+                    "matmul-tensor",
+                    f"{reference} carries {supplied.shape} {supplied.element.datatype_name}; "
+                    f"MatMul's {tensor} is {derived_.shape} {derived_.element.datatype_name}",
+                )
+        return True
 
     @derived
     def narrow_weights(self) -> bool:
@@ -260,9 +265,9 @@ class MatMulKernel(Composite):
         target_period_ns=target_period_ns,
         reshape_activations=dense_view,
         result_dtype=result_type,
-        x_stream=activations,
-        w_stream=weight_stream,
-        y_stream=results,
+        x_stream=x_stream,
+        w_stream=w_stream,
+        y_stream=y_stream,
     )
 
     @derived
@@ -270,19 +275,18 @@ class MatMulKernel(Composite):
         """One pass of the weights in the order the core reads them: what a memory stores."""
         return period(self.compute.w.presented.form)
 
-    # The weight memories. Each references weight_stream as its producer, so only
-    # when one is selected is the stream internal; a writable memstream exports
-    # its AXI-Lite port through ``config`` (s_axilite).
+    # The weight memories. Each drives w_stream; a writable memstream presents its
+    # AXI-Lite port through ``config`` (s_axilite).
     config = ControlBus(port="s_axilite")
     memory: MemStreamKernel | None = Decision(
-        {"memstream": MemStreamKernel(set_stream=set_index, control=config)},
+        {"memstream": MemStreamKernel(set_stream=set_stream, control=config)},
         optional=True,
         dtype=weights_dtype,
         form=weight_period,
         contents=datapath_weights,
         writable=writable_weights,
         sets=weight_sets,
-        output_stream=weight_stream,
+        output_stream=w_stream,
     )
     supplied = selected(memory)
 
@@ -304,7 +308,7 @@ class MatMulKernel(Composite):
             )
         return True
 
-    admission = ConstraintGroup(extents_supported, realization_supported, supply_supported)
+    admission = ConstraintGroup(extents_supported, realization_supported, supply_supported, carried)
 
     @view(requires=(admission,))
     def finn_attributes(self) -> FinnAttributes | Rejected:
@@ -348,11 +352,6 @@ class MatMulKernel(Composite):
 
     def producer_identity(self) -> ProducerIdentity:
         return ProducerIdentity("finn.matmul." + self.supplied, "1")
-
-    exports = {
-        **Composite.exports,
-        PORT: {x_stream: x_port, w_stream: w_port, y_stream: y_port, set_stream: set_port},
-    }
 
 
 __all__ = ["FinnAttributes", "MatMulKernel", "exact_result_dtype"]

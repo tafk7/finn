@@ -5,7 +5,7 @@
 
 Run with Vivado selected (FinnLib is the ``finnlib`` resource). The
 observation wrapper only exposes child pins; all arithmetic and transport RTL
-comes from the materialized ModuleBuildRequirements. Each simulation uses a
+comes from the materialized module (a MatMul in its test root). Each simulation uses a
 fresh process through the shared observed transport driver.
 """
 
@@ -24,7 +24,7 @@ from kernels.xsim import materialize
 from finn.dataflow.gemm import Form
 from kernels.helpers import WeightDelivery, matmul_assembly
 from finn.kernels.target import DspBlock
-from finn.kernels.physical.validation import abi_pins
+from finn.kernels.artifacts.abi import abi_pins
 
 
 @dataclass(frozen=True)
@@ -83,10 +83,10 @@ def _pack(values, bits):
 
 
 def _observation_wrapper(
-    abi, entry_point, directory, activation_bits, weight_bits, compute, replay, last
+    pins, entry_point, directory, activation_bits, weight_bits, compute, replay, last
 ):
     ports, connections = [], []
-    for name, info in abi_pins(abi).items():
+    for name, info in abi_pins(pins).items():
         width = f" [{info.width - 1}:0]" if info.width > 1 else ""
         ports.append(f"{info.direction.value} wire{width} {name}")
         connections.append(f".{name}({name})")
@@ -117,15 +117,21 @@ def _observation_wrapper(
     return top, path, observations
 
 
-def _replay_node(structure):
+def _instance(label):
+    """The instance an emitted netlist names for a label."""
+    return "u_" + label.replace(".", "_")
+
+
+def _replay_node(module):
     """The activation stream's adapter feeding dotp, and the frame-marker bit dotp reads."""
-    (source,) = [
-        wire.source
-        for wire in structure.wires
-        if (wire.destination.pin.instance_id or "").startswith("u_compute")
-        and wire.destination.pin.signal_id == "s_axis_input_tlast"
+    ((source, bit),) = [
+        (link.source.instance, f"{marker[0]}[{marker[1] or 0}]")
+        for link in module.fragment.links
+        if (link.sink.instance or "").startswith("matmul.compute")
+        for marker in link.markers
+        if marker[2] == "s_axis_input_tlast"
     ]
-    return source.pin.instance_id, f"{source.pin.signal_id}[{source.bit_offset}]"
+    return _instance(source), bit
 
 
 def run(
@@ -265,29 +271,30 @@ def run(
     directory = evidence / (c.label + "_" + delivery.value + suffix)
     directory.mkdir(parents=True, exist_ok=False)
     # Memory images (INIT_FILE) go where the simulation resolves them.
-    entry_point, sources, data_files = materialize(built.requirements, directory)
+    entry_point, sources, data_files = materialize(built.module, directory)
     writes = {}
     if writable:
         # Each word takes 2**ceil(log2(ceil(W/32))) 32-bit segments, low first.
         bits = c.pe * c.simd * w_type.bitwidth()
         segments = 1 << (-(-bits // 32) - 1).bit_length()
-        writes["s_axilite"] = [
+        # The MatMul's control bus, presented below its node in the root.
+        writes["matmul_s_axilite"] = [
             ((word * segments + segment) * 4, (value >> (32 * segment)) & 0xFFFFFFFF)
             for word, value in enumerate(weight_image)
             for segment in range(segments)
         ]
     top, wrapper, observations = _observation_wrapper(
-        built.structure.top_abi,
+        built.module.pins.ports,
         entry_point,
         directory,
         activation_bits,
         (c.pe * c.simd * w_type.bitwidth() + 7) // 8 * 8,
         next(
-            item.instance_id
-            for item in built.structure.instances
-            if item.instance_id.startswith("u_compute")
+            _instance(label)
+            for label, _ in built.module.fragment.instances
+            if label.startswith("matmul.compute")
         ),
-        *_replay_node(built.structure),
+        *_replay_node(built.module),
     )
     sources.append(str(wrapper))
     # Dense rows are replayed once per output fold; depthwise beats pass once.

@@ -3,15 +3,16 @@
 
 """Control buses as ordinary Spaces that kernels reference.
 
-A ``ControlBus`` is a node declared in the composite, named by the top-level
-port it presents (``port``). A kernel with a
-control interface (an AXI-Lite configuration bus, say) has a reference input
-for it (``control: ControlBus = Param(required=False)``) and exports, under
-``CONTROL``, the bus it presents there: ``exports = {CONTROL: {control:
-control_bus}}``. The node sees its kernel through ``Users(CONTROL)`` and
-exports an ``Exported`` bus under ``EXPORTED``; ``netlist`` renames the bus to
-the node's port, associates it with the module's clock and reset, and wires it
-through to the top. One kernel is controlled
+A ``ControlBus`` is a node declared in a kernel with children, named by the
+port it presents (``port``). A kernel with a control interface (an AXI-Lite
+configuration bus, say) has a reference input for it (``control: ControlBus =
+Param(required=False)``) and exports, under ``CONTROL``, the bus it presents
+there: ``exports = {CONTROL: {control: control_bus}}``. The node sees its
+kernel through ``Users(CONTROL)`` and exports an ``Exported`` bus under
+``EXPORTED``; the kernel that declares the node presents it in its netlist
+(``BusExport``), each parent prefixing its port with the child's node
+(``first_s_axilite``), and the root's module renames the bus to that port
+(``top_bus``), associated with its clock and reset. One kernel is controlled
 through one bus node.
 
 A kernel whose control interface is not referenced, or that exposes none in
@@ -94,7 +95,7 @@ def held_bus(bus: Bus) -> Held:
 
 
 class ControlBus(Space):
-    """A control interface of the composite: one kernel's bus, presented at ``port``."""
+    """A control interface of a kernel with children: one kernel's bus, presented at ``port``."""
 
     port: str = Param()
     users = Users(CONTROL)

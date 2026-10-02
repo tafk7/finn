@@ -20,6 +20,7 @@ from finn.core.space import (
     design_space,
 )
 from finn.kernels.thresholding import ThresholdingAxiKernel
+from kernels.helpers import controlled
 
 TABLE: ThresholdTable = (((-2, 0, 3), (-1, 1, 4)),)
 
@@ -79,6 +80,19 @@ def threshold(
         uram=uram,
     )
     factors = {} if pe is None else {"pe": pe}
+    if axilite:
+        # Runtime-writable thresholds present their bus through a control node.
+        facts = dict(
+            input_dtype=resolve_qonnx_datatype_name(input_dtype),
+            threshold_dtype=resolve_qonnx_datatype_name(threshold_dtype),
+            thresholds=table,
+            bias=bias,
+            depth_trigger_bram=bram,
+            depth_trigger_uram=uram,
+        )
+        return controlled(
+            ThresholdingAxiKernel, facts, use_axilite=True, deep_pipeline=deep, **factors
+        )
     report = base.try_with_choices(use_axilite=axilite, deep_pipeline=deep, **factors)
     assert report.accepted
     return report.instance
@@ -86,7 +100,7 @@ def threshold(
 
 def test_generator_preserves_zero_stride_replay_and_multibit_native_markers() -> None:
     point = generator()
-    requirements = point.build_requirements
+    requirements = point.module
     assert requirements.parameters == (
         ("COEFS", "'{0, 1}"),
         ("D", 2),
@@ -95,12 +109,12 @@ def test_generator_preserves_zero_stride_replay_and_multibit_native_markers() ->
         ("FM_SIZE", 6),
         ("RAM_STYLE", '"auto"'),
     )
-    widths = {port.name: port.width for port in requirements.abi.ports if isinstance(port, Signal)}
+    widths = {port.name: port.width for port in requirements.pins.ports if isinstance(port, Signal)}
     assert widths["idat"] == widths["odat"] == 13
     assert widths["olst"] == 2
-    assert all(isinstance(port, Signal) for port in requirements.abi.ports)
+    assert all(isinstance(port, Signal) for port in requirements.pins.ports)
     ranked = generator(frame=56, dims=(3, 4, 2, 3), strides=(16, 1, 16, 2))
-    ports = ranked.build_requirements.abi.ports
+    ports = ranked.module.pins.ports
     assert (
         next(port.width for port in ports if isinstance(port, Signal) and port.name == "olst") == 4
     )
@@ -114,9 +128,7 @@ def test_generator_refuses_invalid_loop_geometry(
     dims: IntegerVector, strides: IntegerVector
 ) -> None:
     assert isinstance(
-        generator(dims=dims, strides=strides)
-        .inspect(InputGeneratorKernel.build_requirements)
-        .accepted_result,
+        generator(dims=dims, strides=strides).inspect(InputGeneratorKernel.module).accepted_result,
         Rejected,
     )
 
@@ -130,7 +142,7 @@ def test_generator_requires_exact_immutable_integer_vectors(bad: object) -> None
 
 def test_threshold_output_initialization_and_configuration_profiles_are_preserved() -> None:
     point = threshold()
-    requirements = point.build_requirements
+    requirements = point.module
     assert point.result_dtype.name == "INT3"
     assert (
         dict(requirements.parameters)["THRESHOLDS"]
@@ -141,15 +153,15 @@ def test_threshold_output_initialization_and_configuration_profiles_are_preserve
     narrow_negative = threshold(bias=-5)
     assert narrow_negative.result_dtype.name == "INT33"
     assert isinstance(
-        narrow_negative.inspect(ThresholdingAxiKernel.build_requirements).accepted_result, Rejected
+        narrow_negative.inspect(ThresholdingAxiKernel.module).accepted_result, Rejected
     )
-    enabled = threshold(axilite=True, deep=True).build_requirements
+    enabled = threshold(axilite=True, deep=True).module
     assert dict(enabled.parameters)["USE_AXILITE"] == 1
     assert dict(enabled.parameters)["DEEP_PIPELINE"] == 1
-    assert dict(threshold(pe=2).build_requirements.parameters)["PE"] == 2
+    assert dict(threshold(pe=2).module.parameters)["PE"] == 2
     config = next(
         port
-        for port in requirements.abi.ports
+        for port in requirements.pins.ports
         if isinstance(port, Bus) and port.name == "s_axilite"
     )
     assert {
@@ -160,18 +172,16 @@ def test_threshold_output_initialization_and_configuration_profiles_are_preserve
 def test_threshold_multiple_sets_keep_selector_bus_and_refuse_axilite_addressing() -> None:
     table: ThresholdTable = (((-2, 0, 3), (-1, 1, 4)), ((-3, 0, 5), (-2, 0, 6)))
     point = threshold(table=table)
-    requirements = point.build_requirements
+    requirements = point.module
     assert dict(requirements.parameters)["SETS"] == 2
     selector = next(
         port
-        for port in requirements.abi.ports
+        for port in requirements.pins.ports
         if isinstance(port, Bus) and port.name == "s_axis_set"
     )
     assert next(signal.width for signal in selector.signals if signal.logical == "tdata") == 8
     assert isinstance(
-        threshold(table=table, axilite=True)
-        .inspect(ThresholdingAxiKernel.build_requirements)
-        .accepted_result,
+        threshold(table=table, axilite=True).inspect(ThresholdingAxiKernel.module).accepted_result,
         Rejected,
     )
 
@@ -181,9 +191,7 @@ def test_threshold_partial_dtype_query_does_not_adopt_implementation_decisions()
     assert base.result_dtype.name == "INT3"
     assert isinstance(base.query(ThresholdingAxiKernel.use_axilite), Unresolved)
     assert isinstance(base.query(ThresholdingAxiKernel.deep_pipeline), Unresolved)
-    assert isinstance(
-        base.inspect(ThresholdingAxiKernel.build_requirements).accepted_result, Unresolved
-    )
+    assert isinstance(base.inspect(ThresholdingAxiKernel.module).accepted_result, Unresolved)
 
 
 def test_threshold_rejects_existing_unsupported_profiles_and_malformed_tables() -> None:
@@ -198,9 +206,7 @@ def test_threshold_rejects_existing_unsupported_profiles_and_malformed_tables() 
         threshold(bram=-1),
     )
     assert all(
-        isinstance(
-            point.inspect(ThresholdingAxiKernel.build_requirements).accepted_result, Rejected
-        )
+        isinstance(point.inspect(ThresholdingAxiKernel.module).accepted_result, Rejected)
         for point in profiles
     )
     with pytest.raises(DefinitionError, match="threshold table"):

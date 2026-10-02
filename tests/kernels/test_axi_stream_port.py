@@ -114,14 +114,14 @@ def test_a_kernel_binds_its_extents_from_its_ports_and_its_folding_factors_divid
     point = commit(point, {"kernel.pe": 4})
     x, y = point.kernel.x.presented.form, point.kernel.y.presented.form
     assert (x.beats, x.lanes, y.beats, y.lanes) == (8, 4, 2, 4)
-    assert dict(point.kernel.build_requirements.parameters) == {"CHANNELS": 8, "PE": 4}
+    assert dict(point.kernel.module.parameters) == {"CHANNELS": 8, "PE": 4}
 
 
 def test_ports_that_disagree_on_an_extent_are_refused() -> None:
     point = pool(x_shape=(1, 4, 6))
     expected = {("kernel-extents", "c is 6 (x axis 2) and 8 (y axis 1)")}
     assert codes(point.kernel.query(Pool.extents)) == expected
-    assert codes(point.kernel.query(Pool.build_requirements)) == expected
+    assert codes(point.kernel.query(Pool.module)) == expected
 
 
 def test_an_idle_port_carries_the_lanes_of_its_folding_factors() -> None:

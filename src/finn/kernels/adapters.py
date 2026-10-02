@@ -31,8 +31,8 @@ Marker synthesis alone is an ``input_gen`` that passes its frames in order. A
 width conversion is a ``vpc`` over vectors of the two lane counts' least common
 multiple, which the stream must hold whole. Each candidate places its modules
 as kernel children (``InputGeneratorKernel``, ``VpcKernel``) named by stage,
-and each becomes a ``Stage``: the child's build requirements and the contracts
-of its two ports, which the stream checks like any other end.
+and each becomes a ``Stage``: the child's module and the contracts of its two
+ports, which the stream checks like any other end.
 
 FinnLib's ``replay_buffer`` is not wrapped: ``input_gen`` realizes every replay
 it could. FinnLib's ``inner_shuffle`` realizes one shape of lane regroup
@@ -62,7 +62,6 @@ from finn.dataflow.plan import Hop, Plan, Step, Unrealizable
 from finn.dataflow.tensor import Tensor
 from finn.dataflow.traversal import BeatSequence, LevelEnd, Reorder
 from finn.kernels.artifacts.module import Leaf
-from finn.kernels.artifacts.requirements import ModuleBuildRequirements
 from finn.kernels.datatypes.semantics import INTEGER_VECTOR, IntegerVector
 from finn.kernels.input_generator import InputGeneratorKernel
 from finn.kernels.transport import StreamContract
@@ -73,19 +72,14 @@ from finn.kernels.vpc import VpcKernel
 class Stage:
     """A module inside a stream, with the contracts of its two ports; none when direct.
 
-    ``module`` is its leaf, placed at ``label``, the node path of its kernel
-    relative to the stream that places it (``adapter.input_gen.input_gen``).
-    ``stream`` names the stream that places it when that is not the connection
-    it sits in: a stage of a flattened composite's stream, spliced into its
-    parent's connection (``finn.kernels.composite.netlist``).
+    ``module`` is its leaf, placed at ``label``: the node path of its kernel
+    below whatever places it (``input_gen.input_gen`` below an adapter
+    Decision; ``adapter.input_gen.input_gen`` below the stream).
     """
 
-    requirements: ModuleBuildRequirements | None = None
+    module: Leaf | None = None
     input: StreamContract | None = None
     output: StreamContract | None = None
-    name: str = ""
-    stream: str = ""
-    module: Leaf | None = None
     label: str = ""
 
 
@@ -324,15 +318,13 @@ class StreamAdapter(Space):
                 }
             found.append(
                 Stage(
-                    kernel.build_requirements,
+                    kernel.module,
                     StreamContract(kernel.input.transport, element, stage.source.form),
                     StreamContract(
                         kernel.output.transport, element, stage.sink.form, markers=offered
                     ),
-                    name,
-                    module=kernel.module,
                     # Below the adapter Decision: its candidate (the chain), then the stage.
-                    label=f"{'_'.join(type(self).modules)}.{name}",
+                    f"{'_'.join(type(self).modules)}.{name}",
                 )
             )
         return tuple(found)

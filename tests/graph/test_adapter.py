@@ -1,13 +1,13 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The graph adapter: a small ONNX model of two MatMuls as a Design.
+"""The graph adapter: a small ONNX model of two MatMuls as a root of kernels.
 
 The model's weights are initializers; the adapter reads them as the kernels'
-weights, stored ``(k, n)`` as ONNX stores them, and each MatMul's exact result
-type flows to the next. The configured Design computes what ONNX computes, in
-XSim, and the model rewritten for FINN carries each kernel's ``MVAU``
-attributes.
+weights, stored ``(k, n)`` as ONNX stores them, each streamed by its memory on
+a weight stream of the root, and each MatMul's exact result type flows to the
+next. The configured root computes what ONNX computes, in XSim, and the model
+rewritten for FINN carries each kernel's ``MVAU`` attributes.
 """
 
 from __future__ import annotations
@@ -63,14 +63,10 @@ def model(*, second_weights: bool = True, hidden_type: str = "FLOAT32") -> Model
     return wrapped
 
 
-def configured(wrapped: ModelWrapper, *, fused: bool = True) -> Any:
+def configured(wrapped: ModelWrapper) -> Any:
     design = graph_design(wrapped, target_dsp=DspBlock.DSP48E2, target_period_ns=5.0)
-    choices: dict[str, object] = {}
+    choices: dict[str, object] = {f"{stream}.transport": "direct" for _, stream in design.weights}
     for _, kernel in design.kernels:
-        choices |= {
-            f"{kernel}.fused": fused,
-            f"{kernel}.weight_stream.transport": "direct",
-        }
         if f"{kernel}.memory" not in dict(design.pinned):
             choices[f"{kernel}.memory"] = "memstream"
     point = settled(commit(design.point, choices))
@@ -100,14 +96,17 @@ def test_each_matmul_is_a_kernel_on_the_streams_of_its_tensors():
     assert point.t_h.tensor.element.datatype_name == H.name
     assert point.mm_second.activation_dtype == H
     assert point.mm_first.weights == tuple(tuple(int(v) for v in row) for row in W1)
-    top = {port.name for port in point.structure.structure.top_abi.ports}
+    # Each MatMul's weights stream from its memory on a stream of the root's.
+    assert design.weights == (("mm_first", "w_first"), ("mm_second", "w_second"))
+    top = {port.name for port in point.module.pins.ports}
     assert top == {"ap_clk", "ap_rst_n", "in0_V", "out0_V"}
 
 
 def test_weights_without_an_initializer_are_a_stream_and_need_no_memory():
     design, point = configured(model(second_weights=False))
     assert dict(design.pinned) == {"mm_second.memory": "none"}
-    top = {port.name for port in point.structure.structure.top_abi.ports}
+    assert dict(design.weights)["mm_second"] == "t_w2"
+    top = {port.name for port in point.module.pins.ports}
     assert "in1_V" in top
 
 
@@ -142,13 +141,12 @@ def test_the_finn_model_carries_each_kernels_mvau_attributes():
 
 
 @requires_xsim
-@pytest.mark.parametrize("fused", (True, False))
-def test_the_design_computes_what_onnx_computes(tmp_path, fused):
-    _, point = configured(model(), fused=fused)
+def test_the_design_computes_what_onnx_computes(tmp_path):
+    _, point = configured(model())
     y = execute_onnx(model(), {"x": X.reshape(1, ROWS, INPUTS).astype(np.float32)})["y"]
     y = y.reshape(ROWS, OUTPUTS).astype(int)
     stream_through(
-        point.structure.requirements,
+        point.module,
         tmp_path,
         inputs={
             "in0_V": (

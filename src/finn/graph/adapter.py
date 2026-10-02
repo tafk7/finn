@@ -1,16 +1,20 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""ONNX graphs as Designs: the graph adapter, for MatMul.
+"""ONNX graphs as kernels: the graph adapter, for MatMul.
 
-``graph_design`` reads a QONNX model once and declares a ``Design``: one
-stream per tensor its nodes exchange (a graph input or output is a boundary
-port, ``in0_V``, ``out0_V``, in graph order) and one ``MatMulKernel`` per
-``MatMul`` node, built from the node's facts. A node's weights are its second
-operand: an initializer becomes the kernel's ``weights`` (stored ``(k, n)``, as
-ONNX stores them), read from the model itself; without one, the weights are a
-stream, and the kernel's ``memory`` is pinned to ``none``. Leading activation
-axes are rows (``(1, M, K)`` is ``M`` rows of ``K``).
+``graph_design`` reads a QONNX model once and declares the root of its
+hardware, a ``Kernel`` (``finn.graph``) with children: one stream per tensor
+its nodes exchange (a graph input or output is a boundary port, ``in0_V``,
+``out0_V``, in graph order), one ``MatMulKernel`` per ``MatMul`` node, built
+from the node's facts, and each MatMul's weight stream. A node's weights are
+its second operand: an initializer becomes the kernel's ``weights`` (stored
+``(k, n)``, as ONNX stores them), read from the model itself, which its memory
+streams into a weight stream of its own (``w_<node>``); without one, the
+weights are the stream of that graph tensor, and the kernel's ``memory`` is
+pinned to ``none``. Each weight stream may buffer its words in a FIFO
+(``<stream>.transport``). Leading activation axes are rows (``(1, M, K)`` is
+``M`` rows of ``K``).
 
 A MatMul's result is the kernel's exact integer type, which flows to the
 stream it produces and to every consumer; the model's annotation of that
@@ -41,10 +45,10 @@ from finn.dataflow.datatypes import (
     ordinary_integer_bounds,
 )
 from finn.dataflow.tensor import ScalarEncoding, Tensor
-from finn.kernels.composite import Design
+from finn.kernels.base import Kernel
 from finn.kernels.configure import commit
 from finn.kernels.matmul import MatMulKernel, exact_result_dtype
-from finn.kernels.streams import Stream
+from finn.kernels.streams import BufferedStream, Stream
 from finn.kernels.target import DspBlock
 
 
@@ -52,16 +56,25 @@ FINN_DOMAIN = "finn.custom_op.fpgadataflow"
 
 
 class GraphError(ValueError):
-    """The graph cannot be read as a Design: an operator, operand or type it does not take."""
+    """The graph cannot be read as kernels: an operator, operand or type it does not take."""
+
+
+class Graph(Kernel):
+    """A graph's hardware: its streams and the kernels on them."""
+
+    id = "finn.graph"
+    version = "1"
 
 
 @dataclass(frozen=True)
 class GraphDesign:
-    """A Design of a graph: the kernel node of each graph node, and what the graph pins."""
+    """A graph's root, configured as far as the graph decides: the kernel node of each
+    graph node, its weight stream node, and what the graph pins."""
 
     point: Any
     kernels: tuple[tuple[str, str], ...]
     pinned: tuple[tuple[str, object], ...] = ()
+    weights: tuple[tuple[str, str], ...] = ()
 
 
 def _name(prefix: str, text: str) -> str:
@@ -92,7 +105,7 @@ def _rows(shape: tuple[int, ...], tensor: str) -> tuple[int, int]:
 def graph_design(
     model: ModelWrapper, *, target_dsp: DspBlock, target_period_ns: float
 ) -> GraphDesign:
-    """A Design of ``model``'s MatMul nodes on the streams between them."""
+    """The root of ``model``'s MatMul nodes on the streams between them."""
     graph = model.graph
     inputs = [item.name for item in graph.input]
     outputs = [item.name for item in graph.output]
@@ -101,9 +114,10 @@ def graph_design(
     members: dict[str, object] = {}
     streams: dict[str, Stream] = {}
     kernels: list[tuple[str, str]] = []
+    weights: list[tuple[str, str]] = []
     pins: dict[str, object] = {}
 
-    def stream(tensor: str) -> Stream:
+    def stream(tensor: str, kind: type[Stream] = Stream) -> Stream:
         if tensor not in streams:
             port = None
             if tensor in inputs:
@@ -111,7 +125,7 @@ def graph_design(
             elif tensor in outputs:
                 port = f"out{outputs.index(tensor)}_V"
             carried = Tensor(shapes[tensor], ScalarEncoding(element[tensor]))
-            declared = Stream(tensor=carried, port=port) if port else Stream(tensor=carried)
+            declared = kind(tensor=carried, port=port) if port else kind(tensor=carried)
             streams[tensor] = declared
             members[_name("t_", tensor)] = declared
         return streams[tensor]
@@ -157,26 +171,35 @@ def graph_design(
         initializer = model.get_initializer(b)
         if initializer is None:
             shapes[b], element[b] = (k, n), weights_dtype
-            facts["w_stream"] = stream(b)
+            facts["w_stream"] = stream(b, BufferedStream)
+            weights.append((name, _name("t_", b)))
             pins[f"{name}.memory"] = "none"
         else:
             values = initializer.reshape(k, n)
             if (values != values.round()).any():
                 raise GraphError(f"{label}: the weights {b} are not integers")
             facts["weights"] = tuple(tuple(int(v) for v in row) for row in values)
+            # The memory's own stream into the core: an edge of this kernel alone.
+            stored = BufferedStream(tensor=Tensor((k, n), ScalarEncoding(weights_dtype)))
+            members[_name("w_", label)] = stored
+            facts["w_stream"] = stored
+            weights.append((name, _name("w_", label)))
         members[name] = MatMulKernel(**facts)  # type: ignore[arg-type]
         kernels.append((label, name))
-    family = composite("Graph", members, base=Design)
+    family = composite("Graph", members, base=Graph)
     point = design_space(family())
     return GraphDesign(
-        commit(point, pins) if pins else point, tuple(kernels), tuple(sorted(pins.items()))
+        commit(point, pins) if pins else point,
+        tuple(kernels),
+        tuple(sorted(pins.items())),
+        tuple(weights),
     )
 
 
 def finn_model(model: ModelWrapper, point: Any, kernels: Sequence[tuple[str, str]]) -> ModelWrapper:
     """``model`` with each MatMul node an ``MVAU`` carrying its kernel's attributes.
 
-    ``point`` is the configured Design; ``kernels`` pairs each graph node with
+    ``point`` is the configured root; ``kernels`` pairs each graph node with
     its kernel node (``GraphDesign.kernels``).
     """
     result = _copy(model)
@@ -206,4 +229,4 @@ def _copy(model: ModelWrapper) -> ModelWrapper:
     return ModelWrapper(model.model.SerializeToString())
 
 
-__all__ = ["FINN_DOMAIN", "GraphDesign", "GraphError", "finn_model", "graph_design"]
+__all__ = ["FINN_DOMAIN", "Graph", "GraphDesign", "GraphError", "finn_model", "graph_design"]

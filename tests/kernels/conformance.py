@@ -6,7 +6,7 @@
 ``conformance`` checks one kernel family over sampled folding configurations. For
 each sample it
 
-1. places the kernel in a generated ``Design`` between boundary streams, one
+1. places the kernel in a generated ``Root`` between boundary streams, one
    per reference input, commits the sample's factors and the pinned ``choices``,
    and settles the adapter chains;
 2. checks the kernel's module against its materialized sources under the
@@ -81,16 +81,15 @@ from finn.dataflow.plan import Step
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import Repetition, Traversal, pack, unreplayed, vector_major
 from finn.kernels.artifacts.abi import check_against_rtl
-from finn.kernels.artifacts.requirements import ModuleBuildRequirements
+from finn.kernels.artifacts.module import Leaf
 from finn.kernels.artifacts.rtl import Declined, extract
 from finn.kernels.base import Kernel
-from finn.kernels.composite import Design
 from finn.kernels.configure import commit, describe, undecided
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.transport import StreamContract
 from finn.kernels.port import AxiStreamPort
 from finn.kernels.streams import Stream
-from kernels.helpers import settled
+from kernels.helpers import Root, settled
 from kernels.xsim import materialize, stream_through
 
 KERNEL, SOURCE = "kernel", "source"
@@ -149,10 +148,10 @@ def conformance(
         values = _values(family, sample, inputs)
         point = place(family, sample, inputs, outputs, choices=choices, facts=facts, values=values)
         kernel = getattr(point, KERNEL)
-        requirements = _value(kernel.query(type(kernel).build_requirements), family, sample)
+        leaf = _value(kernel.query(type(kernel).module), family, sample)
         with tempfile.TemporaryDirectory() as scratch:
-            names = _check_rtl(family, sample, requirements, Path(scratch))
-        _check_model(point, family, sample, inputs, outputs, requirements, names)
+            names = _check_rtl(family, sample, leaf, Path(scratch))
+        _check_model(point, family, sample, inputs, outputs, leaf, names)
         _check_unplaced_outputs(point, family, sample, inputs, outputs, choices, facts)
         if xsim is not None:
             directory = xsim / f"{index}-{re.sub(r'[^A-Za-z0-9_.=-]+', '_', sample.label)}"
@@ -286,7 +285,7 @@ def _design(
     facts: Mapping[str, object],
     fed: tuple[str, Traversal, object] | None = None,
 ) -> Any:
-    """A Design of the kernel on one stream per tensor; ``fed``'s stream from a memory."""
+    """A root of the kernel on one stream per tensor; ``fed``'s stream from a memory."""
     namespace: dict[str, object] = {}
     for name, tensor in tensors.items():
         inside = fed is not None and fed[0] == name
@@ -300,7 +299,7 @@ def _design(
             contents=contents,
             output_stream=namespace[name],
         )
-    return design_space(type(f"{family.__name__}Conformance", (Design,), namespace)())
+    return design_space(type(f"{family.__name__}Conformance", (Root,), namespace)())
 
 
 def _stated(
@@ -411,12 +410,12 @@ def _value(found: QueryResult[Any], family: type[Kernel], sample: Sample) -> Any
 
 
 def _check_rtl(
-    family: type[Kernel], sample: Sample, requirements: ModuleBuildRequirements, directory: Path
+    family: type[Kernel], sample: Sample, leaf: Leaf, directory: Path
 ) -> set[str] | None:
     """Refuse a module its sources contradict; the source's parameter names, unless declined."""
-    top, sources, _ = materialize(requirements, directory)
-    abi = requirements.abi
-    extracted = extract([Path(source) for source in sources], top, abi.parameters)
+    top, sources, _ = materialize(leaf, directory)
+    pins = leaf.pins
+    extracted = extract([Path(source) for source in sources], top, pins.parameters)
     if isinstance(extracted, Declined):
         message = f"{_where(family, sample)}: the RTL checker declined {top}: {extracted}"
         if STRICT_RTL:
@@ -424,7 +423,7 @@ def _check_rtl(
         warnings.warn(message, RtlDeclined, stacklevel=3)
         return None
     # check_abi's comparison, on the one extraction: the ports, never a parameter value.
-    issues = check_against_rtl(abi.ports, extracted.ports)
+    issues = check_against_rtl(pins.ports, extracted.ports)
     assert not issues, f"{_where(family, sample)}: {top} refuses its ABI: " + "; ".join(issues)
     # Every declared name, whether or not its value was established.
     return {name for name, _ in extracted.parameters}
@@ -457,11 +456,11 @@ def _check_model(
     sample: Sample,
     inputs: Mapping[str, Tensor],
     outputs: Outputs,
-    requirements: ModuleBuildRequirements,
+    leaf: Leaf,
     names: set[str] | None,
 ) -> None:
     where = _where(family, sample)
-    _value(point.query(type(point).structure), family, sample)
+    _value(point.query(type(point).module), family, sample)
     kernel, ports = getattr(point, KERNEL), _ports(family)
     fed = next(iter(inputs)) if sample.adapter else None
     for name, end in _ends(point, family, sample, [*inputs, *outputs]).items():
@@ -481,7 +480,7 @@ def _check_model(
                 f"{where}: {name}'s boundary presents {boundary.form}"
             )
     if names is not None:
-        declared = set(dict(requirements.parameters))
+        declared = set(dict(leaf.parameters))
         assert declared == names, (
             f"{where}: parameters() names {sorted(declared - names)} the module does not "
             f"declare, and omits {sorted(names - declared)}"
@@ -570,7 +569,7 @@ def _simulate(
             raise AssertionError(f"{name}: the harness streams integers only") from error
         assert low <= array.min() and array.max() <= high, f"{name} leaves {end.element}"
         checked[name] = _words(end.form, array.astype(np.int64), end.element)
-    requirements = point.structure.requirements
+    module = point.module
     # A cyclic source (the adapter sample's memory, or the kernel itself) never stops.
     repeating = sample.adapter or any(
         ends[name].repetition is Repetition.CYCLIC for name in produced
@@ -581,7 +580,7 @@ def _simulate(
         (directory / mode).mkdir(parents=True)
         try:
             stream_through(
-                requirements,
+                module,
                 directory / mode,
                 inputs=driven,
                 outputs=checked,

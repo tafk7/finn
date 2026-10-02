@@ -49,8 +49,9 @@ sys.meta_path.insert(0, RejectGraphDependencies())
 
 from finn.kernels import DspBlock, MatMulKernel, PackedDotpKernel
 from finn.dataflow.tensor import ScalarEncoding, Tensor
+from finn.kernels.base import Kernel
 from finn.kernels.configure import commit
-from finn.kernels.streams import Stream
+from finn.kernels.streams import BufferedStream, Stream
 from finn.core.space import (
     Available, Decision, Param, Space, design_space, derived, divisors_of, view,
 )
@@ -73,7 +74,7 @@ assert tile.shape == (3, 4)
 assert tile.field(Tiles.shape).get() == (3, 4)
 assert tile.inspect(Tiles.shape).accepted_result == Available((3, 4))
 assert tile.field(Tiles.cycles).get() == 4
-from finn.kernels.artifacts import build, contributions, requirements
+from finn.kernels.artifacts import build, module as built
 from finn.kernels.resources import template_root
 from qonnx.core.datatype import DataType
 
@@ -106,8 +107,8 @@ dotp = commit(
     design_space(PlacedDotp()),
     {"compute.pe": 2, "compute.simd": 2, "compute.compute_pumping": False},
 ).compute
-answer = dotp.build_requirements
-assert isinstance(answer, requirements.ModuleBuildRequirements), answer
+answer = dotp.module
+assert isinstance(answer, built.Leaf), answer
 assert dict(answer.parameters)["ACCU_WIDTH"] == 8
 assert dotp.x.element.dtype.name == "INT3"
 assert dotp.x.axis.payload_bits == 6
@@ -123,54 +124,71 @@ def materialize(module, expected):
     global emitted_count
     emitted_count += 1
     directory = Path(config["output"]) / str(emitted_count)
-    emitted = build.emit_module(module, directory, roots=roots, templates=template_root())
+    emitted = build.emit_module(module, directory, roots=roots)
     expected = expected | (
         {emitted.entry_point + ".sv"} if emitted.entry_point != "dotp_axi" else set()
     )
     assert set(emitted.sources) | set(emitted.data) == expected, emitted
     actual = {str(path.relative_to(directory)) for path in directory.rglob("*") if path.is_file()}
     assert actual == expected
-    for source in module.contributions:
-        if isinstance(source, contributions.CopiedSource):
+    leaves = (module,) if isinstance(module, built.Leaf) else (
+        leaf for _, leaf in module.fragment.instances
+    )
+    for leaf in leaves:
+        for source in leaf.sources:
             original = (roots[source.root] / source.path).read_bytes()
             assert (directory / source.path).read_bytes() == original
     return directory / (emitted.entry_point + ".sv")
 
 materialize(answer, dotp_sources)
+class Root(Kernel):
+    id = "test.root"
+
+INT3, INT8 = ScalarEncoding(DataType["INT3"]), ScalarEncoding(DataType["INT8"])
 for memory in ("none", "memstream"):
     facts = dict(
         m=3, k=4, n=4, activation_dtype=DataType["INT3"], weights_dtype=DataType["INT3"],
         target_dsp=DspBlock.DSP48E2, target_period_ns=5.0,
     )
-    choices = {"memory": memory, "weight_stream.transport": "direct", "compute": "packed"}
+    choices = {"matmul.memory": memory, "w.transport": "direct", "matmul.compute": "packed"}
     expected = dotp_sources | {"rtl/shape/input_gen.sv"}
     if memory == "memstream":
         # Stored (k, n): the columns of the by-output rows.
         facts["weights"] = ((-4, 0, 3, -1), (-3, 1, 2, -2), (-2, 2, 1, -3), (-1, 3, 0, -4))
-        choices |= {"memory.memstream.ram_style": "auto", "memory.memstream.pumped_memory": False}
+        choices |= {
+            "matmul.memory.memstream.ram_style": "auto",
+            "matmul.memory.memstream.pumped_memory": False,
+        }
         expected |= {"rtl/infra/axilite.sv", "rtl/infra/memstream.sv", "rtl/infra/memstream_axi.sv"}
-    matmul = commit(design_space(MatMulKernel(**facts)), choices)
-    matmul = commit(matmul, {
-        "compute.packed.pe": 2, "compute.packed.simd": 2, "compute.packed.compute_pumping": False,
-        "activations.adapter": "input_gen",
-        "activations.adapter.input_gen.input_gen.ram_style": "auto",
+
+    # The MatMul in a root that declares its streams.
+    class Placed(Root):
+        x = Stream(tensor=Tensor((3, 4), INT3), port="in0_V")
+        w = BufferedStream(tensor=Tensor((4, 4), INT3), port="in1_V")
+        y = Stream(tensor=Tensor((3, 4), INT8), port="out0_V")
+        matmul = MatMulKernel(**facts, x_stream=x, w_stream=w, y_stream=y)
+
+    root = commit(design_space(Placed()), choices)
+    root = commit(root, {
+        "matmul.compute.packed.pe": 2,
+        "matmul.compute.packed.simd": 2,
+        "matmul.compute.packed.compute_pumping": False,
+        "x.adapter": "input_gen",
+        "x.adapter.input_gen.input_gen.ram_style": "auto",
     })
+    matmul = root.matmul
     beats = (
-        matmul.activations.ends.source.sequence.form.beats,
+        root.x.ends.source.sequence.form.beats,
         matmul.compute.w.presented.form.beats,
         matmul.compute.y.presented.form.beats,
     )
     assert beats == (6, 12, 6), beats
-    requirements = matmul.build_requirements
+    composed = root.module
     # A memory image ships as generated data, named by its contents.
-    expected |= {
-        item.path
-        for item in requirements.contributions
-        if isinstance(item, contributions.GeneratedData)
-    }
-    wrapper = materialize(requirements, expected).read_text()
+    expected |= {item.path for _, leaf in composed.fragment.instances for item in leaf.data}
+    wrapper = materialize(composed, expected).read_text()
     assert ".ACCU_WIDTH(8)" in wrapper
-    assert ".olst(n__u_activations_input_gen__olst)" in wrapper
+    assert ".olst(n__u_x_adapter_input_gen_input_gen__olst)" in wrapper
     if memory == "memstream":
         assert '.INIT_FILE("memstream_' in wrapper
         assert matmul.memory.image == (0x22C, 0x6BE, 0xDD3, 0x941)

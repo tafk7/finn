@@ -168,10 +168,11 @@ sys.meta_path.insert(0, RejectParked())
 from finn.core.space import Space, design_space
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels import DspBlock, MatMulKernel, PackedDotpKernel
-from finn.kernels.artifacts.requirements import ModuleBuildRequirements
+from finn.kernels.artifacts.module import Composed, Leaf
+from finn.kernels.base import Kernel
 from finn.kernels.configure import commit
 from finn.kernels.transport import AxiStream
-from finn.kernels.streams import Stream
+from finn.kernels.streams import BufferedStream, Stream
 from qonnx.core.datatype import DataType
 
 
@@ -193,10 +194,15 @@ point = commit(
     design_space(Placed()),
     {"compute.pe": 2, "compute.simd": 2, "compute.compute_pumping": False},
 ).compute
-answer = point.build_requirements
-assert isinstance(answer, ModuleBuildRequirements)
+answer = point.module
+assert isinstance(answer, Leaf)
 assert isinstance(point.x.axis, AxiStream)
 assert point.x.axis.payload_bits == 6
+class Root(Kernel):
+    id = "test.root"
+
+
+INT3, INT8 = ScalarEncoding(DataType["INT3"]), ScalarEncoding(DataType["INT8"])
 for memory in ("none", "memstream"):
     facts = dict(
         m=2,
@@ -207,23 +213,34 @@ for memory in ("none", "memstream"):
         target_dsp=DspBlock.DSP48E2,
         target_period_ns=5.0,
     )
-    choices = {"memory": memory, "weight_stream.transport": "direct", "compute": "packed"}
     if memory == "memstream":
         facts["weights"] = ((1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (0, 0, 0, 1))
-        choices |= {"memory.memstream.ram_style": "auto", "memory.memstream.pumped_memory": False}
-    matmul = commit(design_space(MatMulKernel(**facts)), choices)
-    matmul = commit(
-        matmul,
+
+    class Placed(Root):
+        x = Stream(tensor=Tensor((2, 4), INT3), port="in0_V")
+        w = BufferedStream(tensor=Tensor((4, 4), INT3), port="in1_V")
+        y = Stream(tensor=Tensor((2, 4), INT8), port="out0_V")
+        matmul = MatMulKernel(**facts, x_stream=x, w_stream=w, y_stream=y)
+
+    choices = {"matmul.memory": memory, "w.transport": "direct", "matmul.compute": "packed"}
+    if memory == "memstream":
+        choices |= {
+            "matmul.memory.memstream.ram_style": "auto",
+            "matmul.memory.memstream.pumped_memory": False,
+        }
+    root = commit(design_space(Placed()), choices)
+    root = commit(
+        root,
         {
-            "compute.packed.pe": 2,
-            "compute.packed.simd": 2,
-            "compute.packed.compute_pumping": False,
-            "activations.adapter": "input_gen",
-            "activations.adapter.input_gen.input_gen.ram_style": "auto",
+            "matmul.compute.packed.pe": 2,
+            "matmul.compute.packed.simd": 2,
+            "matmul.compute.packed.compute_pumping": False,
+            "x.adapter": "input_gen",
+            "x.adapter.input_gen.input_gen.ram_style": "auto",
         },
     )
-    assert matmul.result_type == DataType["INT8"]
-    assert matmul.build_requirements.contributions
+    assert root.matmul.result_type == DataType["INT8"]
+    assert isinstance(root.module, Composed) and root.module.fragment.instances
 assert not any(
     name.startswith("finn.kernels.") and ("._engine" in name or "._next" in name)
     for name in sys.modules

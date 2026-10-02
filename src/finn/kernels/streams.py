@@ -4,22 +4,25 @@
 """Streams as ordinary Spaces that kernels reference.
 
 A ``Stream`` is the physical form of the logical stream
-(``finn.dataflow.stream``): a node of its own, declared in the composite
-beside the kernels it joins, carrying one ``tensor`` supplied by the
-composite. A kernel has one reference input per stream it sits on
-(``output_stream: Stream = Param()``) and exports, under ``PORT``, one
-contract per input: ``exports = {PORT: {output_stream: output_port}}``. Each
-end presents its own traversal of the tensor in that contract, reading only
-the stream's ``tensor``. The stream sees the kernels that reference it through
-``users = Users(PORT)``, each with only the port it presents on this stream,
-so a port's refusal stays on its own stream. The contract's transport
+(``finn.dataflow.stream``): one real producer-to-consumer edge, a node of its
+own, declared in the kernel with children (or the root) that owns the edge,
+beside the kernels it joins, carrying one ``tensor`` its owner supplies. A
+kernel has one reference input per stream it sits on (``output_stream:
+Stream = Param()``), bound to the ``stream`` of one of its ports
+(``finn.kernels.port``), which exports its contract under ``PORT``; a kernel
+with children passes the reference down to the child that uses it, so the
+stream's user is always a leaf's port, at any depth. Each end presents its own
+traversal of the tensor in that contract, reading only the stream's
+``tensor``. The stream sees the ports that reference it through ``users =
+Users(PORT)``, each with only the contract it presents on this stream, so a
+port's refusal stays on its own stream. The contract's transport
 endpoint says whether the kernel produces into the stream (initiator) or
 consumes from it (target). The one-producer-one-consumer rule, compatibility
 and the AXIS boundary belong to this family, not to the engine; the tensor
 each end must traverse and the plan are the logical stream's.
 
-A stream with a user on one side only is a boundary of its composite. Its
-``port`` input names the top-level AXIS port (``in0_V``): an ABI name is
+A stream with a user on one side only is a boundary of the root that declares
+it. Its ``port`` input names the top-level AXIS port (``in0_V``): an ABI name is
 design data of the stream, independent of the stream's node name, which is
 its identity and the prefix of its persisted decision keys. The boundary
 presents what its internal end presents, by one rule: an input boundary
@@ -38,16 +41,16 @@ each checked on both of its sides.
 A ``BufferedStream`` owns a ``transport`` Decision over two nodes, ``direct``
 and ``fifo``, after its adapter. The FIFO candidate owns its ``depth`` and the
 FIFO's ``ram_style``; it is an identity stage presenting what arrives at it.
-Each stream exports its checked ``Connection`` under ``CONNECTION``; its
-composite wires them (``finn.kernels.composite.netlist``), each stage as
-``u_<stream>_<stage>``.
+The adapter and transport choices are keyed under the stream
+(``x.adapter``, ``w.transport``), so they belong to whoever owns the edge.
+Each stream exports its checked ``Connection`` under ``CONNECTION``.
 
 Beside ``compatible``, each checked hop is resolved into wires (``wired``:
 lanes, valid, ready, marker bits), and the stream exports its netlist under
 ``NETLIST``: its stages' leaves at their labels below it
 (``adapter.input_gen.input_gen``, ``transport.fifo.buffer``) and its hops. A
 user's end belongs to the kernel whose ``Port`` it is, beside the stream
-(``^compute.packed``, at any depth below the stream's composite); a boundary
+(``^compute.packed``, at any depth below the stream's owner); a boundary
 end is the root's own pins. Under ``BOUNDARY`` it exports the AXIS bus its
 boundary side presents, if any.
 """
@@ -164,12 +167,10 @@ class StreamFifo(Space):
         module = buffer.module
         assert isinstance(module, Leaf)
         return Stage(
-            buffer.build_requirements,
+            module,
             StreamContract(buffer.input.transport, element, arriving.form, arriving.repetition),
             StreamContract(buffer.output.transport, element, arriving.form, arriving.repetition),
-            "fifo",
-            module=module,
-            label="fifo.buffer",
+            "fifo.buffer",
         )
 
 
@@ -199,7 +200,7 @@ class Stream(LogicalStream):
 
     ``users`` holds the port each present user presents on this stream,
     located by the user's name and the input it references this stream
-    through. A side without a user is the composite's boundary, presented as
+    through. A side without a user is the root's boundary, presented as
     the AXIS port ``port``: an input boundary without the replay its receiver
     realizes, an output boundary as produced, neither with markers and both
     as a single pass.
@@ -227,7 +228,7 @@ class Stream(LogicalStream):
             return reject("stream-unused", "no present kernel references this stream")
         try:
             # A side without a user is the boundary. Seen from inside, the
-            # composite's input is the AXIS target and its output the initiator.
+            # root's input is the AXIS target and its output the initiator.
             if not producers:
                 inside = consumers[0][1]
                 producers.append((None, self._boundary(inside, Endpoint.TARGET), ""))
@@ -328,7 +329,7 @@ class Stream(LogicalStream):
 
         A user's end belongs to its kernel beside the stream: the user is a
         kernel's ``Port`` (``compute.packed.x``, at any depth below the
-        stream's composite), its kernel the node above it (``^compute.packed``).
+        stream's owner), its kernel the node above it (``^compute.packed``).
         A stage sits below the stream at its label; a boundary end is the
         root's own pins (``None``).
         """
@@ -358,20 +359,20 @@ class Stream(LogicalStream):
 
     @view(requires=(LogicalStream.well_formed, LogicalStream.realizable, compatible))
     def boundary_bus(self) -> tuple[Bus, ...]:
-        """The AXIS bus its composite presents for it, when one side has no user."""
+        """The AXIS bus the root presents for it, when one side has no user."""
         ends = self.endpoints
         sides = ((ends.source_owner, ends.source), (ends.sink_owner, ends.sink))
         return tuple(contract.transport.axis_bus() for owner, contract in sides if owner is None)
 
     @view
     def boundary(self) -> StreamContract | Rejected:
-        """The port its composite presents for it: the side without a user."""
+        """The port the root presents for it: the side without a user."""
         ends = self.endpoints
         if ends.source_owner is None:
             return ends.source
         if ends.sink_owner is None:
             return ends.sink
-        return reject("stream-internal", "both ends of this stream are its composite's children")
+        return reject("stream-internal", "both ends of this stream are its owner's children")
 
     exports = {CONNECTION: connection, NETLIST: netlist, BOUNDARY: boundary_bus}
 
@@ -396,7 +397,7 @@ class BufferedStream(Stream):
     @view
     def stages(self) -> tuple[Stage, ...]:
         fifo = self.transport_stage
-        if fifo.requirements is None:
+        if fifo.module is None:
             return self.adapted
         return (*self.adapted, replace(fifo, label=f"transport.{fifo.label}"))
 

@@ -14,7 +14,6 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
-import pytest
 from qonnx.core.datatype import DataType
 
 from finn.core.space import Available, Param, Rejected, Space, derived, design_space
@@ -24,16 +23,9 @@ from finn.kernels.artifacts.abi import Bus, Direction, Endpoint, Signal
 from finn.kernels.artifacts.module import Held, Leaf
 from finn.kernels.base import Clocking, Kernel
 from finn.kernels.configure import commit
-from finn.kernels.dotp import PackedDotpKernel
-from finn.kernels.fifo import FifoKernel
-from finn.kernels.input_generator import InputGeneratorKernel
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.port import AxiStreamPort
 from finn.kernels.streams import Stream
-from finn.kernels.thresholding import ThresholdingAxiKernel
-from finn.kernels.target import DspBlock
-from finn.kernels.vpc import VpcKernel
-from kernels.helpers import placed_dotp
 
 INT4 = DataType["INT4"]
 TENSOR = Tensor((4,), ScalarEncoding(INT4))
@@ -107,60 +99,3 @@ def test_a_presented_bus_is_accounted_for_by_its_control_node() -> None:
     # Read-only: the bus is held; writable, it is presented, and refused without a node.
     assert memory(False).query(Kernel.pins_accounted) == Available(True)
     assert codes(memory(True).query(Kernel.module)) == {"memstream-control"}
-
-
-LEAVES = {
-    "fifo": lambda: commit(design_space(FifoKernel(word_bits=8, depth=4)), {"ram_style": "auto"}),
-    "vpc": lambda: design_space(VpcKernel(element_bits=4, lanes_in=2, lanes_out=3)),
-    "input_gen": lambda: commit(
-        design_space(InputGeneratorKernel(word_bits=8, frame_words=4, dims=(2, 2), strides=(0, 1))),
-        {"ram_style": "auto"},
-    ),
-    "memstream": lambda: commit(
-        design_space(
-            MemStreamKernel(dtype=INT4, form=vector_major((4,), 2), contents=(1, 2, 3, 4))
-        ),
-        {"ram_style": "auto", "pumped_memory": True},
-    ),
-    "thresholding": lambda: commit(
-        design_space(
-            ThresholdingAxiKernel(
-                input_dtype=INT4,
-                threshold_dtype=INT4,
-                thresholds=(((-2, 0, 2), (-1, 1, 3)),),
-                bias=0,
-                depth_trigger_bram=0,
-                depth_trigger_uram=0,
-            )
-        ),
-        {"pe": 1, "use_axilite": False, "deep_pipeline": False},
-    ),
-    "dotp": lambda: placed_dotp(
-        PackedDotpKernel,
-        activation_dtype=DataType["INT3"],
-        weights_dtype=DataType["INT3"],
-        result_dtype=DataType["INT8"],
-        pe=2,
-        simd=2,
-        target_dsp=DspBlock.DSP48E2,
-        target_period_ns=5.0,
-    ),
-}
-
-
-@pytest.mark.parametrize("name", sorted(LEAVES))
-def test_a_leafs_module_is_what_its_requirements_were(name: str) -> None:
-    point = LEAVES[name]()
-    leaf, requirements = point.module, point.build_requirements
-    assert isinstance(leaf, Leaf)
-    assert leaf.name == requirements.abi.entry_point.value
-    assert (leaf.implementation_id, leaf.implementation_version) == (
-        requirements.implementation_id,
-        requirements.implementation_version,
-    )
-    assert leaf.parameters == requirements.parameters
-    assert leaf.pins.ports == requirements.abi.ports
-    assert leaf.pins.parameters == requirements.abi.parameters
-    assert leaf.pins.clock_alignments == requirements.abi.clock_alignments
-    assert (*leaf.sources, *leaf.data) == requirements.contributions
-    assert (leaf.held.inputs, leaf.held.unused) == (point.tieoffs.inputs, point.tieoffs.unused)

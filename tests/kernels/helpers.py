@@ -5,7 +5,15 @@
 
 Facts are the root node's typed formals; a missing required one is refused at
 the node call. Choices use the stable decision keys ``inspection`` reports.
-``matmul_assembly`` configures a MatMul from concrete facts and choices."""
+
+A kernel with children sits on streams its parent supplies, so a test places
+it in a ``Root``, the top of what is emitted, which declares them (as
+``placed_dotp`` does for a dot-product core). ``placed_matmul`` places a
+MatMul (``matmul``) on the root's ``x`` (``in0_V``), ``w`` (``in1_V``,
+buffered), ``y`` (``out0_V``) and, with several weight sets, ``set``
+(``in2_V``); the edge choices are the root's (``x.adapter``, ``w.transport``),
+the MatMul's below it (``matmul.memory``, ``matmul.compute.packed.pe``).
+``matmul_assembly`` configures one from concrete facts and choices."""
 
 import os
 import shutil
@@ -13,21 +21,28 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
+from functools import cache
 from typing import Any, TypeVar
 
 from finn import resources
 
-from finn.core.space import Constraint, Space, design_space, reject
+from finn.core.space import Constraint, Param, Space, composite, derived, design_space, reject
 from finn.core.space.settling import compatible_cases
 from finn.dataflow.datatypes import QONNXDataType
 from finn.dataflow.gemm import Form
 from finn.dataflow.tensor import ScalarEncoding, Tensor
-from finn.kernels.streams import ADAPTER_RAM_STYLES, Stream
+from finn.kernels.artifacts.module import Composed, Leaf
+from finn.kernels.base import Kernel
+from finn.kernels.streams import ADAPTER_RAM_STYLES, BufferedStream, Stream
 from finn.core.space.results import Available, QueryResult
-from finn.kernels.artifacts.requirements import ModuleBuildRequirements
 from finn.kernels.configure import admission, commit, describe, settle, undecided
+from finn.kernels.control import ControlBus
 from finn.kernels.matmul import MatMulKernel
-from finn.kernels.physical.structure import PhysicalStructure
+from finn.kernels.datatypes.semantics import (
+    INTEGER_TENSOR,
+    QONNX_DATATYPE_VALUE_SEMANTICS,
+    IntegerTensor,
+)
 from finn.kernels.target import DspBlock
 
 T = TypeVar("T")
@@ -92,6 +107,147 @@ def placed_dotp(
     return placed.compute
 
 
+class Root(Kernel):
+    """The top of what a test emits: the streams it declares and the kernels on them."""
+
+    id = "test.root"
+    version = "1"
+
+
+def rooted(name: str, members: Mapping[str, object]) -> Root:
+    """A root named ``name`` (its module's stem ``finn_<name>``) of ``members``."""
+    family: Any = composite(name, dict(members), base=Root)
+    root: Root = family()
+    return root
+
+
+MATMUL_STREAMS = (
+    ("x", MatMulKernel.activation_tensor),
+    ("w", MatMulKernel.weight_tensor),
+    ("y", MatMulKernel.result_tensor),
+    ("set", MatMulKernel.set_tensor),
+)
+
+
+def matmul_tensors(
+    facts: Mapping[str, object], realization: str | None = None
+) -> dict[str, Tensor]:
+    """The tensors of the streams a MatMul sits on, read from the MatMul itself.
+
+    A depthwise MatMul's weights follow its ``realization``; several weight sets
+    add the set index.
+    """
+    point: Any = design_space(MatMulKernel(**facts))  # type: ignore[arg-type]
+    if facts.get("form", Form.DENSE) is Form.DEPTHWISE:
+        if realization is None:
+            raise ValueError("a depthwise MatMul's weight tensor follows its realization")
+        point = commit(point, {"realization": realization})
+    sets = facts.get("weight_sets", 1)
+    found: dict[str, Tensor] = {}
+    for stream, view in MATMUL_STREAMS:
+        if stream == "set" and not (isinstance(sets, int) and sets > 1):
+            continue
+        result = point.query(view)
+        if not isinstance(result, Available):
+            raise ValueError(f"MatMul is not accepted: {describe([result])}")
+        found[stream] = result.value
+    return found
+
+
+@cache
+def matmul_root(family: type[MatMulKernel]) -> type[Root]:
+    """A root placing a MatMul of ``family`` (``matmul``) on the streams it declares, its
+    facts and the streams' tensors its own formals; see the module docstring."""
+
+    class MatMul(Root):
+        x_tensor: Tensor = Param()
+        w_tensor: Tensor = Param()
+        y_tensor: Tensor = Param()
+        set_tensor: Tensor = Param(required=False)
+        m: int = Param()
+        n: int = Param()
+        k: int = Param()
+        form: Form = Param(default=Form.DENSE)
+        activation_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
+        weights_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
+        target_dsp: DspBlock = Param()
+        target_period_ns: float = Param()
+        weights: IntegerTensor = Param(semantics=INTEGER_TENSOR, required=False)
+        writable_weights: bool = Param(default=False)
+        weight_sets: int = Param(default=1)
+
+        @derived
+        def several(self) -> bool:
+            return self.weight_sets > 1
+
+        x = Stream(tensor=x_tensor, port="in0_V")
+        w = BufferedStream(tensor=w_tensor, port="in1_V")
+        y = Stream(tensor=y_tensor, port="out0_V")
+        set = Stream(tensor=set_tensor, port="in2_V", when=several)
+        matmul = family(
+            m=m,
+            n=n,
+            k=k,
+            form=form,
+            activation_dtype=activation_dtype,
+            weights_dtype=weights_dtype,
+            target_dsp=target_dsp,
+            target_period_ns=target_period_ns,
+            weights=weights,
+            writable_weights=writable_weights,
+            weight_sets=weight_sets,
+            x_stream=x,
+            w_stream=w,
+            y_stream=y,
+            set_stream=set,
+        )
+
+    return MatMul
+
+
+def placed_matmul(*, realization: str | None = None, **facts: object) -> Root:
+    """A MatMul (``matmul``) in a root declaring its streams; see the module docstring."""
+    tensors = {
+        f"{name}_tensor": tensor for name, tensor in matmul_tensors(facts, realization).items()
+    }
+    family: Any = matmul_root(MatMulKernel)
+    root: Root = family(**facts, **tensors)
+    return root
+
+
+def matmul_point(*, realization: str | None = None, **facts: object) -> Any:
+    """``placed_matmul`` as a design space, its ``realization`` committed when given."""
+    point = design_space(placed_matmul(realization=realization, **facts))
+    return commit(point, {"matmul.realization": realization}) if realization else point
+
+
+def controlled(family: Callable[..., S], facts: Mapping[str, object], **choices: object) -> S:
+    """A kernel (``kernel``) presenting its configuration bus through a ``ControlBus``, its
+    choices committed by their keys below it; as placed alone it holds the bus."""
+
+    class Controlled(Space):
+        config = ControlBus(port="s_axilite")
+        kernel = family(**facts, control=config)
+
+    point = commit(design_space(Controlled()), {f"kernel.{key}": v for key, v in choices.items()})
+    kernel: S = point.kernel
+    return kernel
+
+
+def labels(module: Composed) -> list[str]:
+    """A composed module's instance labels, in netlist order."""
+    return [label for label, _ in module.fragment.instances]
+
+
+def placed(module: Composed, label: str) -> Leaf:
+    """The leaf a composed module places at ``label``."""
+    return dict(module.fragment.instances)[label]
+
+
+def pin_names(module: Composed | Leaf) -> set[str]:
+    return {port.name for port in module.pins.ports}
+
+
 def settled(point: S, ram_style: str = "auto") -> S:
     """Settle every Decision over kernels; each adapter input_gen's memory takes ``ram_style``."""
     point = settle(point).point
@@ -128,9 +284,9 @@ class MatMulAssembly:
     result_beats: int
     result_dtype: QONNXDataType
     weight_delivery: WeightDelivery
-    structure: PhysicalStructure
-    requirements: ModuleBuildRequirements
+    module: Composed
     initializer: tuple[int, ...]
+    point: Any
 
 
 def _frozen(values: object) -> object:
@@ -140,17 +296,19 @@ def _frozen(values: object) -> object:
     return values
 
 
-def _realizes(base: MatMulKernel, choices: dict[str, object]) -> QueryResult[bool]:
-    """Accepted when the choices commit, the realization's own rule holds, and some
-    core can compute it."""
+def _realizes(
+    facts: Mapping[str, object], realization: str, choices: dict[str, object]
+) -> QueryResult[bool]:
+    """Accepted when the choices commit on a root carrying the realization's weights, its
+    own rule holds, and some core can compute it."""
     try:
-        point = commit(base, choices)
+        point = commit(matmul_point(realization=realization, **facts), choices)
     except ValueError as error:
         return reject("matmul-realization", str(error))
-    rule = point.inspect(MatMulKernel.realization_supported).result
+    rule: QueryResult[bool] = point.matmul.inspect(MatMulKernel.realization_supported).result
     if not isinstance(rule, Available):
         return rule
-    cores = compatible_cases(point, "compute", admission)
+    cores = compatible_cases(point, "matmul.compute", admission)
     return Available(True) if cores else reject("matmul-realization", "no core computes it")
 
 
@@ -212,67 +370,64 @@ def matmul_assembly(
     case = weight_delivery.value
     buffered = weight_fifo_depth is not None
     choices: dict[str, object] = {
-        "memory": case,
-        "weight_stream.transport": "fifo" if buffered else "direct",
+        "matmul.memory": case,
+        "w.transport": "fifo" if buffered else "direct",
     }
     if weight_delivery is WeightDelivery.MEMSTREAM:
-        choices["memory.memstream.ram_style"] = ram_style
-        choices["memory.memstream.pumped_memory"] = pumped_memory
+        choices["matmul.memory.memstream.ram_style"] = ram_style
+        choices["matmul.memory.memstream.pumped_memory"] = pumped_memory
     if buffered:
-        choices["weight_stream.transport.fifo.buffer.depth"] = weight_fifo_depth
-        choices["weight_stream.transport.fifo.buffer.ram_style"] = "auto"
-    base = design_space(MatMulKernel(**facts))
-    if form is Form.DEPTHWISE:
-        # The realization sets the datapath's reduction, so it is committed with
-        # the other choices before the core's folding factors.
-        if realization is None:
-            viable = [
-                case
-                for case in ("native", "dense")
-                if isinstance(_realizes(base, {**choices, "realization": case}), Available)
-            ]
-            if len(viable) != 1:
-                named = ", ".join(viable) or "none"
-                raise ValueError(f"realizations compatible with this configuration: {named}")
-            realization = viable[0]
-        choices["realization"] = realization
-    point = commit(base, choices)
+        choices["w.transport.fifo.buffer.depth"] = weight_fifo_depth
+        choices["w.transport.fifo.buffer.ram_style"] = "auto"
+    if form is Form.DEPTHWISE and realization is None:
+        # The realization sets the datapath's reduction, and so the weight stream's
+        # tensor: each is tried on a root of its own.
+        viable = [
+            case
+            for case in ("native", "dense")
+            if isinstance(_realizes(facts, case, choices), Available)
+        ]
+        if len(viable) != 1:
+            named = ", ".join(viable) or "none"
+            raise ValueError(f"realizations compatible with this configuration: {named}")
+        realization = viable[0]
+    point = commit(matmul_point(realization=realization, **facts), choices)
     if core is None:
         settlement = settle(point)
-        if "compute" not in settlement.committed:
-            cores = settlement.open.get("compute", ())
+        if "matmul.compute" not in settlement.committed:
+            cores = settlement.open.get("matmul.compute", ())
             if cores:
                 raise ValueError(f"compute cores {', '.join(cores)} are all compatible; choose one")
             refusals = (
-                admission(commit(point, {"compute": case}).compute)
+                admission(commit(point, {"matmul.compute": case}).matmul.compute)
                 for case in ("packed", "int8_dsp58")
             )
             found = describe(result for result in refusals if result is not None)
             raise ValueError(f"no compute core is compatible: {found}")
-        point, core = settlement.point, settlement.committed["compute"]
+        point, core = settlement.point, settlement.committed["matmul.compute"]
     else:
-        point = commit(point, {"compute": core})
+        point = commit(point, {"matmul.compute": core})
     point = commit(
         point,
         {
-            f"compute.{core}.pe": pe,
-            f"compute.{core}.simd": simd,
-            f"compute.{core}.compute_pumping": compute_pumping,
+            f"matmul.compute.{core}.pe": pe,
+            f"matmul.compute.{core}.simd": simd,
+            f"matmul.compute.{core}.compute_pumping": compute_pumping,
         },
     )
     # Each stream's one compatible adapter; an input_gen's memory is inferred.
     point = settled(point)
-    composed = point.query(MatMulKernel.structure)
-    if not isinstance(composed, Available):
-        raise ValueError(f"MatMul assembly is not accepted: {describe([composed])}")
-    compute = point.compute
+    built = point.query(Kernel.module)
+    if not isinstance(built, Available):
+        raise ValueError(f"MatMul assembly is not accepted: {describe([built])}")
+    matmul = point.matmul
     return MatMulAssembly(
-        point.activations.ends.source.sequence.form.beats,
-        compute.w.presented.form.beats,
-        compute.y.presented.form.beats,
-        point.result_type,
+        point.x.ends.source.sequence.form.beats,
+        matmul.compute.w.presented.form.beats,
+        matmul.compute.y.presented.form.beats,
+        matmul.result_type,
         weight_delivery,
-        composed.value.structure,
-        composed.value.requirements,
-        point.memory.image if point.memory is not None else (),
+        built.value,
+        matmul.memory.image if matmul.memory is not None else (),
+        point,
     )

@@ -37,12 +37,11 @@ from finn.dataflow.traversal import (
 from finn.kernels.configure import commit
 from finn.kernels.dotp import Int8Dsp58DotpKernel, PackedDotpKernel
 from finn.kernels.eltwise import EltwiseKernel
-from finn.kernels.matmul import MatMulKernel
 from finn.kernels.port import AxiStreamPort
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.streams import Stream
 from finn.kernels.target import DspBlock
-from kernels.helpers import settled
+from kernels.helpers import matmul_point, settled
 
 A, W, R = DataType["INT3"], DataType["INT3"], DataType["INT8"]
 ROWS, REDUCTION, OUTPUTS, PE, SIMD = 2, 4, 4, 2, 2
@@ -190,30 +189,28 @@ def test_one_kernel_refusal_reaches_only_its_own_stream():
     # Probe P2: unsigned weights are refused by dotp's weight port. The
     # activations and the results are untouched.
     point = commit(
-        design_space(
-            MatMulKernel(
-                m=3,
-                n=4,
-                k=4,
-                activation_dtype=DataType["INT3"],
-                weights_dtype=DataType["UINT3"],
-                target_dsp=DspBlock.DSP48E2,
-                target_period_ns=5.0,
-            )
+        matmul_point(
+            m=3,
+            n=4,
+            k=4,
+            activation_dtype=DataType["INT3"],
+            weights_dtype=DataType["UINT3"],
+            target_dsp=DspBlock.DSP48E2,
+            target_period_ns=5.0,
         ),
         {
-            "memory": "none",
-            "weight_stream.transport": "direct",
-            "compute": "packed",
-            "compute.packed.pe": 2,
-            "compute.packed.simd": 2,
-            "compute.packed.compute_pumping": False,
+            "matmul.memory": "none",
+            "w.transport": "direct",
+            "matmul.compute": "packed",
+            "matmul.compute.packed.pe": 2,
+            "matmul.compute.packed.simd": 2,
+            "matmul.compute.packed.compute_pumping": False,
         },
     )
     point = settled(point)
-    assert isinstance(point.activations.query(Stream.connection), Available)
-    assert isinstance(point.results.query(Stream.connection), Available)
-    assert codes(point.weight_stream.query(Stream.connection)) == {"dtype-family"}
+    assert isinstance(point.x.query(Stream.connection), Available)
+    assert isinstance(point.y.query(Stream.connection), Available)
+    assert codes(point.w.query(Stream.connection)) == {"dtype-family"}
 
 
 def eltwise_between(rhs_shape: tuple[int, ...], rhs_dtype: str = "INT4") -> Any:
@@ -247,7 +244,7 @@ def test_eltwise_broadcasts_a_channel_vector_once_per_pixel():
     assert point.add.rhs.presented.form == repeated
     assert point.rhs.connection.source.form == repeated
     assert all(stream.plan.steps == () for stream in (point.lhs, point.rhs, point.out))
-    assert dict(point.add.build_requirements.parameters)["PE"] == 2
+    assert dict(point.add.module.parameters)["PE"] == 2
 
 
 def test_eltwise_refuses_an_operand_it_cannot_broadcast_or_does_not_carry():
