@@ -21,12 +21,11 @@ from finn.kernels.artifacts.abi import Bus
 from finn.kernels.artifacts.build import emit_module
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.artifacts.rtl import TOLERATED_DIAGNOSTICS
-from finn.kernels.resources import template_root
 from finn.core.space import (
     DefinitionError,
     Rejected,
 )
-from kernels.helpers import finnlib_root, point_for
+from kernels.helpers import controlled, finnlib_root, point_for
 from finn.kernels.target import DspBlock
 from kernels.xsim import requires_xsim, simulate
 
@@ -74,7 +73,9 @@ def threshold(*, use_axilite=False, deep_pipeline=False, pe=1, **changes):
     )
     facts.update(changes)
     factors = {} if pe is None else {"pe": pe}
-    return point_for(
+    # Runtime-writable thresholds present their bus through a control node.
+    place = controlled if use_axilite else point_for
+    return place(
         ThresholdingAxiKernel,
         facts,
         use_axilite=use_axilite,
@@ -89,16 +90,14 @@ def native_ports(requirements, tmp_path):
     options.topModules = {"probe"}
     options.flags = ast.CompilationFlags.IgnoreUnknownModules
     compilation = ast.Compilation(pyslang.Bag([options]))
-    for contribution in requirements.contributions:
+    for contribution in (*requirements.sources, *requirements.data):
         assert isinstance(contribution, CopiedSource)
         compilation.addSyntaxTree(
             syntax.SyntaxTree.fromFile(str(SOURCE_ROOTS[contribution.root] / contribution.path))
         )
-    parameters = ", ".join(f".{name}({raw})" for name, raw in requirements.abi.parameters)
+    parameters = ", ".join(f".{name}({raw})" for name, raw in requirements.pins.parameters)
     wrapper = tmp_path / "probe.sv"
-    wrapper.write_text(
-        f"module probe; {requirements.abi.entry_point.value} #({parameters}) native(); endmodule\n"
-    )
+    wrapper.write_text(f"module probe; {requirements.name} #({parameters}) native(); endmodule\n")
     compilation.addSyntaxTree(syntax.SyntaxTree.fromFile(str(wrapper)))
     errors = [
         d
@@ -142,10 +141,10 @@ def native_ports(requirements, tmp_path):
 )
 def test_native_rtl_pin_names_directions_and_widths(factory, tmp_path):
     point = factory()
-    requirements = point.build_requirements
+    requirements = point.module
     observed = native_ports(requirements, tmp_path)
     declared = {}
-    for port in requirements.abi.ports:
+    for port in requirements.pins.ports:
         if isinstance(port, Bus):
             directions = dict(port.member_directions())
             declared.update(
@@ -157,10 +156,8 @@ def test_native_rtl_pin_names_directions_and_widths(factory, tmp_path):
         else:
             declared[port.name] = (port.direction.value, port.width)
     assert observed == declared
-    emitted = emit_module(
-        requirements, tmp_path / "module", roots=SOURCE_ROOTS, templates=template_root()
-    )
-    assert set(emitted.sources) == {source.path for source in requirements.contributions}
+    emitted = emit_module(requirements, tmp_path / "module", roots=SOURCE_ROOTS)
+    assert set(emitted.sources) == {source.path for source in requirements.sources}
 
 
 @pytest.mark.parametrize(
@@ -191,7 +188,7 @@ def test_native_rtl_pin_names_directions_and_widths(factory, tmp_path):
 )
 def test_unsupported_cases_are_refused_without_constructing_invalid_interfaces(factory):
     point = factory()
-    assessment = point.inspect(type(point).build_requirements)
+    assessment = point.inspect(type(point).module)
     assert isinstance(assessment.accepted_result, Rejected)
 
 
@@ -214,9 +211,7 @@ def test_a_folding_factor_outside_its_domain_is_refused_where_it_is_committed(fa
 def test_typed_integer_vectors_and_tables_reject_mutable_or_mistyped_payloads():
     invalid_scale = eltwise(b_scale=float("nan"))
     assert isinstance(invalid_scale.query(EltwiseKernel.native_scale), Rejected)
-    assert isinstance(
-        invalid_scale.inspect(EltwiseKernel.build_requirements).accepted_result, Rejected
-    )
+    assert isinstance(invalid_scale.inspect(EltwiseKernel.module).accepted_result, Rejected)
     # A mistyped formal is refused at the node call.
     for bad in ([3, 6], (3, True), (3, [6])):
         with pytest.raises(DefinitionError):
@@ -239,19 +234,19 @@ def test_typed_integer_vectors_and_tables_reject_mutable_or_mistyped_payloads():
 )
 def test_elementwise_output_encoding_follows_operation_and_operand_types(operation, a, b, result):
     point = eltwise(operation=operation, lhs_dtype=DataType[a], rhs_dtype=DataType[b])
-    _ = point.build_requirements
+    _ = point.module
     assert point.result_dtype == DataType[result]
 
 
 def test_rounding_of_scale_is_explicit_and_precedes_native_support_checks():
     point = eltwise(b_scale=1.0 + 2**-30)
     assert point.native_scale == 1.0
-    assert dict(point.build_requirements.parameters)["B_SCALE"] == "1.0"
+    assert dict(point.module.parameters)["B_SCALE"] == "1.0"
 
 
-def test_threshold_initialization_is_owned_and_changes_the_build_requirements():
-    a = threshold().build_requirements
-    b = threshold(thresholds=(((-2, 0, 2), (-1, 1, 4)),)).build_requirements
+def test_threshold_initialization_is_owned_and_changes_the_module():
+    a = threshold().module
+    b = threshold(thresholds=(((-2, 0, 2), (-1, 1, 4)),)).module
     assert dict(a.parameters)["THRESHOLDS"] == "'{'{'{5'h1e, 5'h0, 5'h3}, '{5'h1f, 5'h1, 5'h4}}}"
     assert a != b
     assert threshold().result_dtype == DataType["INT3"]
@@ -269,13 +264,13 @@ def test_required_root_bindings_and_explicit_optional_inputs_preserve_partial_qu
         with pytest.raises(DefinitionError, match="is not supplied"):
             point_for(kernel, {})
 
-    assert all(not isinstance(port, Bus) for port in fifo().build_requirements.abi.ports)
+    assert all(not isinstance(port, Bus) for port in fifo().module.pins.ports)
 
 
 def run(requirements, body, tmp_path):
-    parameters = ", ".join(f".{key}({raw})" for key, raw in requirements.abi.parameters)
-    dut = requirements.abi.entry_point.value + " #(" + parameters + ")"
-    sources = [SOURCE_ROOTS[source.root] / source.path for source in requirements.contributions]
+    parameters = ", ".join(f".{key}({raw})" for key, raw in requirements.pins.parameters)
+    dut = requirements.name + " #(" + parameters + ")"
+    sources = [SOURCE_ROOTS[source.root] / source.path for source in requirements.sources]
     simulate(sources, body.replace("@DUT@", dut), tmp_path)
 
 
@@ -369,7 +364,7 @@ def flow_case(case):
 @pytest.mark.parametrize("case", ("fifo", "generator", "threshold", "integer", "float"))
 def test_generated_rtl_preserves_values_sequences_and_backpressure(case, tmp_path):
     point, a_width, b_width, o_width, a, b, expected, extra, connections = flow_case(case)
-    requirements = point.build_requirements
+    requirements = point.module
 
     def array(values, width):
         return "'{" + ",".join(f"{width}'h{item:x}" for item in values) + "}"

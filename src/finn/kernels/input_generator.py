@@ -31,7 +31,7 @@ from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.base import NATIVE_CLOCKING, Clocking, Kernel
 from finn.kernels.datatypes.semantics import INTEGER_VECTOR, IntegerVector
-from finn.kernels.physical.stream import MarkerKind, StreamMarker
+from finn.kernels.transport import MarkerKind, StreamMarker
 from finn.kernels.port import WordPort
 
 INPUT_GEN_RAM_STYLES = ("auto", "distributed", "block", "ultra")
@@ -44,7 +44,7 @@ def _vector(values: IntegerVector) -> str:
 class InputGeneratorKernel(Kernel):
     id = "finnlib.input_generator"
     version = "1"
-    module = "input_gen"
+    rtl_module = "input_gen"
 
     word_bits: int = Param()
     frame_words: int = Param()

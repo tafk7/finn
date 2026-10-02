@@ -6,7 +6,7 @@
 import pytest
 from qonnx.core.datatype import DataType
 from finn.kernels.artifacts.abi import Direction, Endpoint
-from finn.kernels.physical.axi_stream import AxiStream
+from finn.kernels.transport import AxiStream
 
 
 @pytest.mark.parametrize("endpoint", tuple(Endpoint))

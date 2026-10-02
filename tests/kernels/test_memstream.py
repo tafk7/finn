@@ -5,8 +5,9 @@
 
 The memory image is packed in the consumer's order and shipped as a generated
 INIT_FILE named by its contents. A pumped memory stores each word as two
-half-words, low first. Runtime-writable weights export the AXI-Lite port at
-the module boundary; several weight sets are selected per row through in2_V.
+half-words, low first. Runtime-writable weights present the AXI-Lite port at
+the root, named below the MatMul's node (``matmul_s_axilite``); several weight
+sets are selected per row through in2_V.
 """
 
 import pytest
@@ -20,9 +21,8 @@ from finn.kernels.matmul import MatMulKernel
 from kernels.helpers import WeightDelivery, matmul_assembly
 from finn.kernels.memstream import MemStreamKernel
 from finn.dataflow.traversal import tile
-from finn.kernels.resources import template_root
 from finn.kernels.target import DspBlock
-from kernels.helpers import finnlib_root
+from kernels.helpers import finnlib_root, labels, pin_names, placed
 
 WEIGHTS = ((-4, -3, -2, -1), (0, 1, 2, 3), (3, 2, 1, 0), (-1, -2, -3, -4))
 # MatMul stores its weights (k, n): WEIGHTS read by output.
@@ -54,11 +54,11 @@ def test_the_image_is_the_consumers_order_in_a_content_named_init_file():
     init = point.init_file
     assert init.data == b"22c\n6be\ndd3\n941\n"
     assert init.path.startswith("memstream_") and init.path.endswith(".dat")
-    requirements = point.build_requirements
+    requirements = point.module
     parameters = dict(requirements.parameters)
     assert parameters["INIT_FILE"] == f'"{init.path}"'
     assert (parameters["DEPTH"], parameters["WIDTH"], parameters["SETS"]) == (4, 12, 1)
-    assert init in requirements.contributions
+    assert init in requirements.data
     # Other contents, another file and another identity.
     other = memory(contents=tuple(tuple(-value - 1 for value in row) for row in WEIGHTS))
     assert other.init_file.path != init.path
@@ -70,16 +70,16 @@ def test_a_pumped_memory_stores_half_words_low_first():
     ).with_choices(ram_style="auto", pumped_memory=True)
     # 12-bit words as 6-bit halves: 0x22C -> 0x2C, 0x08.
     assert point.init_file.data.split(b"\n")[:4] == [b"2c", b"08", b"3e", b"1a"]
-    ports = {port.name: port for port in point.build_requirements.abi.ports}
-    assert "clk2x" in ports and point.build_requirements.abi.clock_alignments
+    ports = {port.name: port for port in point.module.pins.ports}
+    assert "clk2x" in ports and point.module.pins.clock_alignments
 
 
 def test_idle_interfaces_are_tied_off():
-    tieoffs = memory().tieoffs
+    tieoffs = memory().module.held
     tied = dict(tieoffs.inputs)
     assert tied["awvalid"] == 0 and tied["s_axis_0_tvalid"] == 0 and tied["clk2x"] == 0
     assert "awready" in tieoffs.unused and "s_axis_0_tready" in tieoffs.unused
-    refused = memory(writable=True).query(MemStreamKernel.tieoffs)
+    refused = memory(writable=True).query(MemStreamKernel.module)
     assert isinstance(refused, Rejected)
     assert {finding.code for finding in refused.findings} == {"memstream-control"}
 
@@ -92,40 +92,34 @@ def test_generated_data_is_a_relative_name_with_bytes():
 
 def test_matmul_memstream_delivery_materializes_its_image(tmp_path):
     built = matmul_assembly(**MATMUL)
-    assert [item.instance_id for item in built.structure.instances] == [
-        "u_compute_packed",
-        "u_memory_memstream",
-        "u_activations_input_gen",
+    assert labels(built.module) == [
+        "x.adapter.input_gen.input_gen",
+        "matmul.compute.packed",
+        "matmul.memory.memstream",
     ]
     assert built.initializer == (0x22C, 0x6BE, 0xDD3, 0x941)
-    assert "in1_V" not in {port.name for port in built.structure.top_abi.ports}
-    emitted = emit_module(
-        built.requirements,
-        tmp_path,
-        roots={"finnlib": finnlib_root()},
-        templates=template_root(),
-    )
+    assert "in1_V" not in pin_names(built.module)
+    emitted = emit_module(built.module, tmp_path, roots={"finnlib": finnlib_root()})
     (image,) = emitted.data
     assert (emitted.directory / image).read_bytes() == b"22c\n6be\ndd3\n941\n"
 
 
 def test_writable_weights_export_axilite_and_need_the_memstream():
     built = matmul_assembly(**MATMUL, writable_weights=True)
-    (bus,) = [port for port in built.structure.top_abi.ports if isinstance(port, Bus)][-1:]
-    assert bus.name == "s_axilite"
-    assert {member.physical for member in bus.signals} >= {"s_axilite_AWADDR", "s_axilite_WDATA"}
+    (bus,) = [port for port in built.module.pins.ports if isinstance(port, Bus)][-1:]
+    # Presented through the MatMul's control node, below the MatMul's node in the root.
+    assert bus.name == "matmul_s_axilite"
+    assert {member.physical for member in bus.signals} >= {
+        "matmul_s_axilite_AWADDR",
+        "matmul_s_axilite_WDATA",
+    }
 
 
 def test_several_weight_sets_take_a_set_index_per_row():
     sets = (WEIGHTS, tuple(tuple(-value - 1 for value in row) for row in WEIGHTS))
     built = matmul_assembly(**{**MATMUL, "weights": sets}, weight_sets=2)
-    ports = {port.name: port for port in built.structure.top_abi.ports}
-    assert "in2_V" in ports
-    (memstream,) = (
-        dict(item.requirements.parameters)
-        for item in built.structure.instances
-        if item.instance_id == "u_memory_memstream"
-    )
+    assert "in2_V" in pin_names(built.module)
+    memstream = dict(placed(built.module, "matmul.memory.memstream").parameters)
     assert memstream["SETS"] == 2
     assert len(built.initializer) == 8  # both sets, set after set
     facts = {name: MATMUL[name] for name in ("m", "k", "n", "target_dsp")}

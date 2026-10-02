@@ -67,8 +67,8 @@ def test_kernel_identity_is_validated_at_class_creation() -> None:
     assert Empty.version == "1"
     # The protocol's views; a kernel that declares no module builds none.
     empty = design_space(Empty())
-    assert views(empty) == ["build_requirements", "tieoffs"]
-    refused = empty.query(Empty.build_requirements)
+    assert views(empty) == ["module", "netlist"]
+    refused = empty.query(Empty.module)
     assert isinstance(refused, Rejected)
     assert {finding.code for finding in refused.findings} == {"kernel-module"}
 

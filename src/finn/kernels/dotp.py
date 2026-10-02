@@ -79,7 +79,7 @@ class DotpAxiKernel(Kernel):
 
     id = "finnlib.dotp_axi"
     version = "1"
-    module = "dotp_axi"
+    rtl_module = "dotp_axi"
     # FinnLib's CORE parameter: the name of the compute core module.
     core: ClassVar[str] = ""
 

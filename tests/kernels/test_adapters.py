@@ -9,7 +9,7 @@ plan from the two presentations, and exactly one adapter candidate carries it
 out: nothing for the same order, a ``vpc`` for other lanes, an ``input_gen``
 for another beat order, and chains of both. A stream that admits no adapter
 refuses a non-empty plan. FinnLib's ``inner_shuffle`` is not a candidate; a
-composite places it explicitly (``TransposeKernel``).
+kernel with children places it explicitly (``TransposeKernel``).
 """
 
 from __future__ import annotations
@@ -22,12 +22,11 @@ from finn.core.space.settling import compatible_cases
 from finn.dataflow.plan import Step
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import Traversal, vector_major
-from finn.kernels.composite import Design
 from finn.kernels.configure import admission, commit
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.streams import Stream
 from finn.kernels.thresholding import ThresholdingAxiKernel
-from kernels.helpers import settled
+from kernels.helpers import Root, labels, settled
 from finn.kernels.transpose import TransposeKernel
 
 ELEMENT = ScalarEncoding(DataType["INT4"])
@@ -48,7 +47,7 @@ def adapted(source: Traversal, pe: int, *, adaptable: bool = True, commit_all: b
     """A cyclic producer presenting ``source``, thresholding ``pe`` channels a beat."""
     rows, channels = source.shape
 
-    class Adapted(Design):
+    class Adapted(Root):
         x = Stream(tensor=Tensor(source.shape, ELEMENT), adaptable=adaptable)
         y = Stream(tensor=Tensor(source.shape, ScalarEncoding(DataType["UINT4"])), port="out0_V")
         producer = MemStreamKernel(
@@ -89,7 +88,7 @@ def transposed(rows: int, cols: int, simd: int, batches: int = 2):
     """``inner_shuffle`` placed between two boundary streams: rows in, columns out."""
     shape = (batches, rows, cols)
 
-    class Transposed(Design):
+    class Transposed(Root):
         a = Stream(tensor=Tensor(shape, ELEMENT), port="in0_V")
         b = Stream(tensor=Tensor(shape, ELEMENT), port="out0_V")
         shuffle = TransposeKernel(input_stream=a, output_stream=b)
@@ -98,19 +97,17 @@ def transposed(rows: int, cols: int, simd: int, batches: int = 2):
 
 
 def stage_parameters(point):
+    """Each stage of ``x``, by its name below its chain, and its module's parameters."""
     return [
-        (stage.name, dict(stage.requirements.parameters)) for stage in point.x.connection.stages
+        (stage.label.rsplit(".", 1)[-1], dict(stage.module.parameters)) for stage in point.x.stages
     ]
 
 
 def test_the_same_order_connects_directly():
     point = adapted(vector_major((ROWS, CHANNELS), 4), 4)
     assert not point.x.plan and not point.x.adapting
-    assert point.x.connection.stages == ()
-    assert [item.instance_id for item in point.structure.structure.instances] == [
-        "u_producer",
-        "u_activate",
-    ]
+    assert point.x.stages == ()
+    assert labels(point.module) == ["producer", "activate"]
 
 
 @pytest.mark.parametrize("before,after,vector", [(2, 3, 6), (4, 2, 4), (3, 12, 12), (6, 4, 12)])
@@ -119,8 +116,8 @@ def test_other_lanes_are_a_vpc(before, after, vector):
     assert point.x.plan.steps == (Step.WIDTH,)
     ((name, vpc),) = stage_parameters(point)
     assert name == "vpc" and (vpc["PI"], vpc["PO"], vpc["N"]) == (before, after, vector)
-    instances = [item.instance_id for item in point.structure.structure.instances]
-    assert instances == ["u_producer", "u_activate", "u_x_vpc"]
+    # The stage sits below the stream, at its place in the root's netlist.
+    assert labels(point.module) == ["x.adapter.vpc.vpc", "producer", "activate"]
 
 
 def test_another_beat_order_is_an_input_gen():
@@ -140,8 +137,10 @@ def test_lanes_and_order_together_are_a_chain():
     point = adapted(columns_first(ROWS, CHANNELS, 4), 2)
     assert point.x.plan.steps == (Step.WIDTH, Step.REORDER)
     assert [name for name, _ in stage_parameters(point)] == ["vpc", "input_gen"]
-    instances = [item.instance_id for item in point.structure.structure.instances]
-    assert instances[-2:] == ["u_x_vpc", "u_x_input_gen"]
+    assert labels(point.module)[:2] == [
+        "x.adapter.vpc_input_gen.vpc",
+        "x.adapter.vpc_input_gen.input_gen",
+    ]
 
 
 def test_another_lane_axis_regroups_through_the_common_lane_count():
@@ -168,7 +167,7 @@ def test_exactly_one_candidate_carries_out_each_plan():
 
 def test_a_stream_admitting_no_adapter_refuses_its_plan():
     point = adapted(vector_major((ROWS, CHANNELS), 4), 2, adaptable=False)
-    refused = point.x.query(Stream.connection)
+    refused = point.x.query(Stream.netlist)
     assert isinstance(refused, Rejected)
     plan = [finding for finding in refused.findings if finding.code == "stream-plan"]
     assert plan and "width_conversion" in plan[0].message
@@ -178,12 +177,12 @@ def test_a_stream_admitting_no_adapter_refuses_its_plan():
 
 def test_a_transpose_turns_rows_into_columns():
     point = transposed(4, 6, 2)
-    shuffle = dict(point.shuffle.build_requirements.parameters)
+    shuffle = dict(point.shuffle.module.parameters)
     assert (shuffle["I"], shuffle["J"], shuffle["SIMD"]) == (4, 6, 2)
     assert point.shuffle.input.presented.form == vector_major((2, 4, 6), 2)
     first = next(point.shuffle.output.presented.form.positions())
     assert first == ((0, 0, 0), (0, 1, 0))  # column 0, rows 0 and 1
-    _ = point.structure
+    _ = point.module
 
 
 def test_a_transposes_simd_divides_both_sides():

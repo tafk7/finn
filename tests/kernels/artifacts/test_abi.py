@@ -28,15 +28,15 @@ from finn.kernels.artifacts.abi import (
     flip,
     physical_names,
 )
-from finn.kernels.artifacts.requirements import FixedModuleName, ModuleABIRequirements
+from finn.kernels.artifacts.module import Pins
 
 
 def abi(
     ports: Sequence[Port],
     parameters: tuple[tuple[str, str], ...] = (),
     clock_alignments: tuple[ClockAlignment, ...] = (),
-) -> ModuleABIRequirements:
-    return ModuleABIRequirements(FixedModuleName("m"), tuple(ports), parameters, clock_alignments)
+) -> Pins:
+    return Pins(tuple(ports), parameters, clock_alignments)
 
 
 def _stream(prefix: str, width: int, *, initiator: bool = False) -> Bus:

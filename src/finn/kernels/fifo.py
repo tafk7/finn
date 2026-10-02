@@ -43,7 +43,7 @@ class FifoStorage:
 class FifoKernel(Kernel):
     id = "finnlib.fifo"
     version = "2"
-    module = "fifo"
+    rtl_module = "fifo"
 
     word_bits: int = Param()
     depth: int = Param()

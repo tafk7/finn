@@ -4,7 +4,7 @@
 """A stream: one tensor from one producer to one consumer, and the plan between them.
 
 A ``Stream`` is a Space of its own, placed beside the kernels it joins. It
-carries one ``tensor``, supplied by its composite; each end presents its own
+carries one ``tensor``, supplied where it is declared; each end presents its own
 ``BeatSequence`` of that tensor. The stream reads its two ends (``ends``: the
 source and the sink, each with its element and sequence) and derives the
 ``plan`` between them (``finn.dataflow.plan``): nothing, when they connect
@@ -14,9 +14,9 @@ refused (``stream-plan``), as is any plan on a stream whose ``adaptable``
 input is False.
 
 How the ends are found is not logical: a physical stream finds them among the
-kernels that reference it, and presents a missing side as its composite's
-boundary. So ``ends`` is ``required``: this family cannot be placed, and the
-physical stream (``finn.kernels.streams``) defines it.
+kernels that reference it, and presents a missing side as a boundary of the
+root that declares it. So ``ends`` is ``required``: this family cannot be
+placed, and the physical stream (``finn.kernels.streams``) defines it.
 
 The tensor must not depend on the stream's users: kernels read it to build
 their ends, so a tensor derived from an end is a dependency cycle.
@@ -44,8 +44,7 @@ from finn.dataflow.traversal import BeatSequence
 class End:
     """What one end of a stream presents: its element and beat sequence.
 
-    ``owner`` names the kernel presenting it, or None for the composite's
-    boundary.
+    ``owner`` names the kernel presenting it, or None for the root's boundary.
     """
 
     owner: str | None

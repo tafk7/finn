@@ -3,13 +3,26 @@
 
 """Emitting a module: its sources and data files, written to a directory in compile order.
 
-The one step that touches the filesystem. Copied sources are read from named
-roots (``finnlib``), templates from one template directory, so requirements
-never carry a checkout path. A generated module (a composed one) is named
-``<stem>__<digest>`` from what it is built from: its implementation, pins,
-parameters and the bytes or rendering recipe of every source. Equal
-requirements emit the same module under the same name; a changed source
-renames it.
+The one step that touches the filesystem, in two parts:
+
+- **Codegen.** Every leaf's copied sources are read from named roots
+  (``finnlib``), so a module never carries a checkout path. Each path is
+  staged once and providers come first (``sources.ordered``); two different
+  files claiming one path or one symbol are refused. Each data file is written
+  once.
+- **Netlist.** A ``Composed`` module adds one SystemVerilog module, named
+  ``<stem>__<fingerprint>`` (``module.module_name``) and written here from its
+  value: its ports from its pins; one net per instance input and per output
+  something reads; per link, the data lanes (lane zero least significant), the
+  sink's padding driven zero (a root output carries the source's own padding),
+  valid forward, ready back and each marker bit; each leaf's held inputs tied
+  and its other outputs left open; each instance clock and reset pin driven by
+  its role (a free clock from the root's, a clock at twice it from the root's
+  doubled clock, a reset from the root's, inverted when the polarities differ);
+  each presented bus wired member by member to ``<port>_<MEMBER>``.
+
+Nothing here decides or checks what a configuration may be: a module arrives
+valid from the Space that derived it.
 """
 
 from __future__ import annotations
@@ -18,24 +31,27 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
-from finn.kernels.artifacts.contributions import CopiedSource, GeneratedData
-from finn.kernels.artifacts.projection import content_digest, digest
-from finn.kernels.artifacts.render import RenderError, render_template_bytes, template_variables
-from finn.kernels.artifacts.requirements import (
-    MODULE_NAME_ARGUMENT,
-    BuildError,
-    EntryPointSourceName,
-    FixedModuleName,
-    ModuleBuildRequirements,
-    RenderedSourceRequirement,
-    Scalar,
-    ScalarTable,
-    sanitize_stem,
-    typed_canonical,
+from finn.kernels.artifacts.abi import (
+    Bus,
+    Clock,
+    Derived,
+    Direction,
+    Free,
+    Reset,
+    Signal,
+    abi_pins,
 )
+from finn.kernels.artifacts.module import (
+    BuildError,
+    Composed,
+    LinkEnd,
+    Leaf,
+    Link,
+    Module,
+    module_name,
+)
+from finn.kernels.artifacts.projection import content_digest
 from finn.kernels.artifacts.sources import SourceError, SourceFile, ordered
-
-_ENTRY = "__entry_point__"
 
 
 @dataclass(frozen=True)
@@ -49,17 +65,6 @@ class EmittedModule:
     data: tuple[str, ...] = ()
 
 
-@dataclass(frozen=True)
-class _Source:
-    """A source before the module is named: its bytes, or its template and arguments."""
-
-    file: SourceFile
-    data: bytes
-    arguments: ScalarTable | None = None
-    reads_name: bool = False
-    entry: RenderedSourceRequirement | None = None
-
-
 def _read(path: Path, label: str) -> bytes:
     try:
         return path.read_bytes()
@@ -67,149 +72,250 @@ def _read(path: Path, label: str) -> bytes:
         raise BuildError(f"{label} {path} cannot be read") from error
 
 
-def _rendered(
-    item: RenderedSourceRequirement, inputs: Mapping[str, Scalar], templates: Path
-) -> _Source:
-    template = _read(templates / item.template, "template")
-    try:
-        variables = template_variables(template, name=item.template)
-    except RenderError as error:
-        raise BuildError(str(error)) from error
-    reads_name = MODULE_NAME_ARGUMENT in variables
-    if variables != {*item.arguments, *((MODULE_NAME_ARGUMENT,) if reads_name else ())}:
-        raise BuildError(
-            f"template {item.template!r} reads {sorted(variables)!r}, while its declared "
-            f"arguments are {sorted(item.arguments)!r}"
-        )
-    if item.values:
-        # A nested module's wrapper: its own bindings, its own name among them.
-        own = dict(item.values)
-        arguments = tuple((name, own[name]) for name in sorted(variables))
-        reads_name = False
-    else:
-        arguments = tuple((name, inputs[name]) for name in item.arguments)
-    recipe = digest(("rendered-source-v1", content_digest(template), arguments, reads_name))
-    entry = isinstance(item.output, EntryPointSourceName)
-    path = (
-        _ENTRY + item.output.suffix
-        if isinstance(item.output, EntryPointSourceName)
-        else item.output
-    )
-    return _Source(
-        SourceFile(path, recipe, item.provides, item.requires),
-        template,
-        arguments,
-        reads_name,
-        item if entry or item.provides_entry_point else None,
-    )
+def _leaves(module: Module) -> tuple[Leaf, ...]:
+    if isinstance(module, Leaf):
+        return (module,)
+    return tuple(leaf for _, leaf in module.fragment.instances)
 
 
-def _name(requirements: ModuleBuildRequirements, sources: tuple[_Source, ...]) -> str:
-    """The module's name: its own, or ``<stem>__<digest>`` for a generated one."""
-    entry_point = requirements.abi.entry_point
-    entries = [source for source in sources if source.entry is not None]
-    if isinstance(entry_point, FixedModuleName):
-        if entries:
-            raise BuildError("an entry-point source names a generated module")
-        return entry_point.value
-    if len(entries) != 1 or not (
-        isinstance(entries[0].entry, RenderedSourceRequirement)
-        and isinstance(entries[0].entry.output, EntryPointSourceName)
-        and entries[0].entry.provides_entry_point
-    ):
-        raise BuildError(
-            "a generated module has exactly one rendered EntryPointSourceName with "
-            "provides_entry_point=True"
-        )
-    if not entries[0].reads_name:
-        raise BuildError(f"the generated entry template must read {MODULE_NAME_ARGUMENT}")
-    if any(symbol.startswith("module:") for symbol in entries[0].file.provides):
-        raise BuildError("the generated entry source cannot author its derived module symbol")
-    stem = sanitize_stem(entry_point.stem)
-    abi = requirements.abi
-    seed = digest(
-        (
-            "generated-module-name-v2",
-            stem,
-            requirements.implementation_id,
-            requirements.implementation_version,
-            typed_canonical((abi.ports, abi.parameters, abi.clock_alignments)),
-            typed_canonical(requirements.parameters),
-            typed_canonical(tuple(source.file for source in sources)),
-        )
-    )
-    name = f"{stem}__{seed}"
-    if any(f"module:{name}" in source.file.provides for source in sources):
-        raise BuildError(f"generated module {name!r} collides with a declared child symbol")
-    return name
+def emit_module(module: Module, directory: Path, *, roots: Mapping[str, Path]) -> EmittedModule:
+    """Write the module's sources and data files into ``directory``; ``roots`` resolves
+    each copied source's root."""
 
-
-def emit_module(
-    requirements: ModuleBuildRequirements,
-    directory: Path,
-    *,
-    roots: Mapping[str, Path],
-    templates: Path,
-) -> EmittedModule:
-    """Write the module's sources and data files into ``directory``.
-
-    ``roots`` resolves each copied source's root; ``templates`` holds every
-    rendered source's template.
-    """
-
-    inputs = dict(requirements.render_inputs)
-    drafts: list[_Source] = []
+    drafts: list[tuple[SourceFile, bytes]] = []
     data: dict[str, bytes] = {}
-    for item in requirements.contributions:
-        if isinstance(item, GeneratedData):
-            if data.setdefault(item.path, item.data) != item.data:
-                raise BuildError(f"two different data files are named {item.path}")
-        elif isinstance(item, CopiedSource):
-            root = roots.get(item.root)
-            if root is None:
-                raise BuildError(f"no source root resolves {item.root!r}")
-            content = _read(Path(root) / item.path, "copied source")
-            drafts.append(
-                _Source(
-                    SourceFile(item.path, content_digest(content), item.provides, item.requires),
-                    content,
-                )
-            )
-        else:
-            drafts.append(_rendered(item, inputs, templates))
+    read: dict[tuple[str, str], bytes] = {}
+    for leaf in _leaves(module):
+        for item in leaf.sources:
+            key = (item.root, item.path)
+            if key not in read:
+                root = roots.get(item.root)
+                if root is None:
+                    raise BuildError(f"no source root resolves {item.root!r}")
+                read[key] = _read(Path(root) / item.path, "copied source")
+            content = read[key]
+            file = SourceFile(item.path, content_digest(content), item.provides, item.requires)
+            drafts.append((file, content))
+        for datum in leaf.data:
+            if data.setdefault(datum.path, datum.data) != datum.data:
+                raise BuildError(f"two different data files are named {datum.path}")
+    name = module_name(module)
+    if isinstance(module, Composed):
+        text = netlist(module, name).encode()
+        drafts.append((SourceFile(f"{name}.sv", content_digest(text), (f"module:{name}",)), text))
     if not drafts:
         raise BuildError("a module has at least one source")
     try:
-        order = ordered([draft.file for draft in drafts])
+        order = ordered([file for file, _ in drafts])
     except SourceError as error:
         raise BuildError(str(error)) from error
-    by_file = {draft.file: draft for draft in drafts}
-    sources = tuple(by_file[file] for file in order)
-    entry_point = _name(requirements, sources)
+    contents = dict(drafts)
 
     directory.mkdir(parents=True, exist_ok=True)
-    written: list[str] = []
-    for source in sources:
-        path, content = source.file.path, source.data
-        if source.arguments is not None:
-            arguments = dict(source.arguments)
-            if source.reads_name:
-                arguments[MODULE_NAME_ARGUMENT] = entry_point
-            if path.startswith(_ENTRY):
-                path = entry_point + path[len(_ENTRY) :]
-            try:
-                content = render_template_bytes(content, arguments, name=path).encode()
-            except RenderError as error:
-                raise BuildError(str(error)) from error
-        target = directory / path
+    for file in order:
+        target = directory / file.path
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(content)
-        written.append(path)
+        target.write_bytes(contents[file])
+    written = tuple(file.path for file in order)
     for path, content in data.items():
         if path in written:
             raise BuildError(f"a data file and a source are both named {path}")
         (directory / path).write_bytes(content)
-    return EmittedModule(entry_point, directory, tuple(written), tuple(data))
+    return EmittedModule(name, directory, written, tuple(data))
 
 
-__all__ = ["EmittedModule", "emit_module"]
+# -- the netlist ---------------------------------------------------------------------------
+
+
+def _width(width: int) -> str:
+    return "" if width == 1 else f" [{width - 1}:0]"
+
+
+def _bits(net: str, width: int, offset: int = 0, bits: int | None = None) -> str:
+    """``bits`` of ``net`` (``width`` wide) from ``offset``; the whole net by default."""
+    bits = width if bits is None else bits
+    if bits == width and offset == 0:
+        return net
+    if bits == 1:
+        return f"{net}[{offset}]"
+    return f"{net}[{offset + bits - 1}:{offset}]"
+
+
+def _constant(width: int, value: int) -> str:
+    return f"{width}'h{value:x}"
+
+
+def _instance(label: str) -> str:
+    return "u_" + label.replace(".", "_")
+
+
+class _Netlist:
+    """The text of one composed module, gathered section by section."""
+
+    def __init__(self, module: Composed) -> None:
+        self.module = module
+        self.root = abi_pins(module.pins.ports)
+        self.pins = {label: abi_pins(leaf.pins.ports) for label, leaf in module.fragment.instances}
+        self.read: set[tuple[str, str]] = set()
+        self.assigns: list[str] = []
+
+    def net(self, instance: str | None, pin: str) -> str:
+        if instance is None:
+            return pin
+        if self.pins[instance][pin].direction is Direction.OUT:
+            self.read.add((instance, pin))
+        return f"n__{_instance(instance)}__{pin}"
+
+    def width(self, instance: str | None, pin: str) -> int:
+        return (self.root if instance is None else self.pins[instance])[pin].width
+
+    def assign(self, destination: str, source: str) -> None:
+        self.assigns.append(f"    assign {destination} = {source};")
+
+    def link(self, link: Link) -> None:
+        source, sink, bits = link.source, link.sink, link.lane_bits
+        out, into = self.net(source.instance, source.data), self.net(sink.instance, sink.data)
+        lanes = link.lanes
+        lane = 0
+        while lane < len(lanes):
+            # A run of consecutive source lanes is one assignment.
+            run = 1
+            while lane + run < len(lanes) and lanes[lane + run] == lanes[lane] + run:
+                run += 1
+            self.assign(
+                _bits(into, sink.data_bits, lane * bits, run * bits),
+                _bits(out, source.data_bits, lanes[lane] * bits, run * bits),
+            )
+            lane += run
+        payload = link.payload_bits
+        if sink.data_bits > payload:
+            # A root output carries the source's own padding; an instance gets zeros.
+            carried = (
+                min(sink.data_bits, source.data_bits) - payload if sink.instance is None else 0
+            )
+            if carried:
+                self.assign(
+                    _bits(into, sink.data_bits, payload, carried),
+                    _bits(out, source.data_bits, payload, carried),
+                )
+            zeros = sink.data_bits - payload - carried
+            if zeros:
+                self.assign(
+                    _bits(into, sink.data_bits, payload + carried, zeros), _constant(zeros, 0)
+                )
+        self.assign(self.net(sink.instance, sink.valid), self.net(source.instance, source.valid))
+        self.assign(self.net(source.instance, source.ready), self.net(sink.instance, sink.ready))
+        for produced, produced_bit, consumed, consumed_bit in link.markers:
+            self.assign(
+                self._marker(sink, consumed, consumed_bit),
+                self._marker(source, produced, produced_bit),
+            )
+
+    def _marker(self, end: LinkEnd, pin: str, bit: int | None) -> str:
+        width = self.width(end.instance, pin)
+        return _bits(self.net(end.instance, pin), width, bit or 0, 1)
+
+    def roles(self) -> dict[str, tuple[str, bool]]:
+        """The root's clock, doubled clock and reset pins by role, and whether its reset
+        is active low."""
+        found: dict[str, tuple[str, bool]] = {}
+        for port in self.module.pins.ports:
+            if not isinstance(port, Signal) or port.direction is not Direction.IN:
+                continue
+            role = port.role
+            if isinstance(role, Clock):
+                key = "clock" if isinstance(role.rate, Free) else "doubled"
+                found.setdefault(key, (port.name, True))
+            elif isinstance(role, Reset):
+                found.setdefault("reset", (port.name, role.active_low))
+        return found
+
+    def drive(self, label: str, leaf: Leaf) -> None:
+        """Hold what the leaf holds; drive each clock and reset pin by its role."""
+        held = dict(leaf.held.inputs)
+        roles = self.roles()
+        for name, info in self.pins[label].items():
+            if info.direction is not Direction.IN:
+                continue
+            net = self.net(label, name)
+            if name in held:
+                self.assign(net, _constant(info.width, held[name]))
+                continue
+            if info.bus is not None:
+                continue
+            role = info.role
+            if isinstance(role, Clock):
+                rate = role.rate
+                key = "doubled" if isinstance(rate, Derived) else "clock"
+                if isinstance(rate, Derived) and rate.ratio != 2:
+                    raise BuildError(
+                        f"{label}.{name}: only a clock at twice the root's is supplied"
+                    )
+                if key not in roles:
+                    raise BuildError(f"{label}.{name}: the root has no {key} clock")
+                self.assign(net, roles[key][0])
+            elif isinstance(role, Reset):
+                if "reset" not in roles:
+                    raise BuildError(f"{label}.{name}: the root has no reset")
+                reset, active_low = roles["reset"]
+                self.assign(net, reset if active_low == role.active_low else f"!{reset}")
+
+    def present(self, instance: str, bus: Bus, port: str) -> None:
+        directions = dict(bus.member_directions())
+        for member in bus.signals:
+            inner, outer = self.net(instance, member.physical), f"{port}_{member.logical.upper()}"
+            if directions[member.physical] is Direction.IN:
+                self.assign(inner, outer)
+            else:
+                self.assign(outer, inner)
+
+    def text(self, name: str) -> str:
+        fragment = self.module.fragment
+        for item in fragment.links:
+            self.link(item)
+        for label, leaf in fragment.instances:
+            self.drive(label, leaf)
+        for export in fragment.exports:
+            self.present(export.instance, export.bus, export.port)
+        ports = ",\n".join(
+            f"    {info.direction.value} logic{_width(info.width)} {pin}"
+            for pin, info in self.root.items()
+        )
+        nets: list[str] = []
+        blocks: list[str] = []
+        for label, leaf in fragment.instances:
+            connections = []
+            for pin, info in self.pins[label].items():
+                used = info.direction is Direction.IN or (label, pin) in self.read
+                if used:
+                    nets.append(f"    logic{_width(info.width)} n__{_instance(label)}__{pin};")
+                connections.append(
+                    f"        .{pin}({f'n__{_instance(label)}__{pin}' if used else ''})"
+                )
+            parameters = ""
+            if leaf.pins.parameters:
+                parameters = (
+                    " #(\n"
+                    + ",\n".join(f"        .{key}({value})" for key, value in leaf.pins.parameters)
+                    + "\n    )"
+                )
+            blocks.append(
+                f"    {leaf.name}{parameters} {_instance(label)} (\n"
+                + ",\n".join(connections)
+                + "\n    );"
+            )
+        sections = ["\n".join(nets), "\n".join(self.assigns), "\n\n".join(blocks)]
+        body = "\n\n".join(section for section in sections if section)
+        return (
+            "// Generated by finn.kernels.artifacts.build -- do not edit.\n"
+            "// A flat netlist of FinnLib modules.\n"
+            f"module {name} (\n{ports}\n);\n{body}\nendmodule\n"
+        )
+
+
+def netlist(module: Composed, name: str) -> str:
+    """The SystemVerilog text of ``module`` under ``name``."""
+    return _Netlist(module).text(name)
+
+
+__all__ = ["EmittedModule", "emit_module", "netlist"]

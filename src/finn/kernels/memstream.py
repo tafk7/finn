@@ -50,9 +50,9 @@ from finn.dataflow.traversal import (
     vector_major,
 )
 from finn.kernels.artifacts.abi import Bus, Endpoint, Member, Signal, StandardProtocol
-from finn.kernels.artifacts.contributions import CopiedSource, GeneratedData
-from finn.kernels.artifacts.requirements import RequirementContribution
-from finn.kernels.base import Clocking, Kernel, Tieoffs
+from finn.kernels.artifacts.contributions import Contribution, CopiedSource, GeneratedData
+from finn.kernels.artifacts.module import Held
+from finn.kernels.base import Clocking, Kernel
 from finn.kernels.control import CONTROL, Control, ControlBus, held_bus
 from finn.kernels.datatypes.domains import Integer, set_index_dtype
 from finn.kernels.datatypes.semantics import (
@@ -75,7 +75,7 @@ MEMSTREAM_RAM_STYLES = ("auto", "distributed", "block", "ultra")
 class MemStreamKernel(Kernel):
     id = "finnlib.memstream_axi"
     version = "1"
-    module = "memstream_axi"
+    rtl_module = "memstream_axi"
 
     dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
     form: Traversal = Param()
@@ -264,7 +264,7 @@ class MemStreamKernel(Kernel):
             "WIDTH": self.word_bits,
         }
 
-    def sources(self) -> tuple[RequirementContribution, ...]:
+    def sources(self) -> tuple[Contribution, ...]:
         return (
             CopiedSource("finnlib", "rtl/infra/axilite.sv", provides=("module:axilite",)),
             CopiedSource("finnlib", "rtl/infra/memstream.sv", provides=("module:memstream",)),
@@ -280,17 +280,21 @@ class MemStreamKernel(Kernel):
     def other_pins(self) -> tuple[Signal | Bus, ...]:
         return (self.config_bus,)
 
-    def held(self) -> Tieoffs | Rejected:
+    def held(self) -> Held | Rejected:
         """AXI-Lite, unless writable."""
         if not self.writable:
             return held_bus(self.config_bus)
         if not self.present(MemStreamKernel.control):
             return reject("memstream-control", "a runtime-writable memory needs a control bus")
-        return Tieoffs()
+        return Held()
+
+    def controlled(self) -> tuple[Bus, ...]:
+        """AXI-Lite, when writable."""
+        return (self.config_bus,) if self.writable else ()
 
     @view
     def control_bus(self) -> Control:
-        return Control(self.config_bus if self.writable else None)
+        return Control(self.config_bus if self.controlled() else None)
 
     exports = {**Kernel.exports, CONTROL: {control: control_bus}}
 

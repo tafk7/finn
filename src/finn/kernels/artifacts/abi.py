@@ -21,6 +21,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum
+from types import MappingProxyType
 from typing import Union
 
 
@@ -288,6 +289,34 @@ def physical_names(ports: Sequence[Port]) -> tuple[str, ...]:
     return tuple(names)
 
 
+@dataclass(frozen=True, slots=True)
+class PinInfo:
+    """One physical pin: its direction, width and role, and the bus member it carries."""
+
+    direction: Direction
+    width: int
+    role: Role
+    bus: str | None = None
+    member: str | None = None
+
+
+def abi_pins(ports: Sequence[Port]) -> Mapping[str, PinInfo]:
+    """Every physical pin of ``ports`` by name, in declared order; a bus member takes
+    its bus's role."""
+
+    pins: dict[str, PinInfo] = {}
+    for port in ports:
+        if isinstance(port, Signal):
+            pins[port.name] = PinInfo(port.direction, port.width, port.role)
+            continue
+        directions = dict(port.member_directions())
+        for member in port.signals:
+            pins[member.physical] = PinInfo(
+                directions[member.physical], member.width, port.role, port.name, member.logical
+            )
+    return MappingProxyType(pins)
+
+
 def validate_ports(ports: Sequence[Port], clock_alignments: Sequence[ClockAlignment]) -> None:
     """Refuse a port list that names a pin twice or whose clock relations do not hold."""
 
@@ -440,12 +469,14 @@ __all__ = [
     "Free",
     "Member",
     "ObservedPort",
+    "PinInfo",
     "Port",
     "Rate",
     "Reset",
     "Role",
     "Signal",
     "StandardProtocol",
+    "abi_pins",
     "check_against_rtl",
     "flip",
     "physical_names",

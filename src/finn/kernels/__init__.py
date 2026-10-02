@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Physical kernels: FinnLib modules on design spaces, and the composites built from them.
+"""Physical kernels: FinnLib modules on design spaces, and kernels built from them.
 
 The public construction path needs no compiler node. Scalar datatype values
 and canonical logical values come from :mod:`finn.dataflow`, below this package.
@@ -11,7 +11,6 @@ from importlib import import_module
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from finn.kernels.composite import Composite, Design
     from finn.kernels.configure import commit
     from finn.kernels.dotp import (
         DotpAxiKernel,
@@ -30,8 +29,6 @@ if TYPE_CHECKING:
 _LAZY_EXPORTS = {
     "MemStreamKernel": ("finn.kernels.memstream", "MemStreamKernel"),
     "commit": ("finn.kernels.configure", "commit"),
-    "Composite": ("finn.kernels.composite", "Composite"),
-    "Design": ("finn.kernels.composite", "Design"),
     "DotpAxiKernel": ("finn.kernels.dotp", "DotpAxiKernel"),
     "Int8Dsp58DotpKernel": ("finn.kernels.dotp", "Int8Dsp58DotpKernel"),
     "PackedDotpKernel": ("finn.kernels.dotp", "PackedDotpKernel"),
@@ -58,8 +55,6 @@ def __getattr__(name: str) -> object:
 __all__ = [
     "MemStreamKernel",
     "commit",
-    "Composite",
-    "Design",
     "DotpAxiKernel",
     "Int8Dsp58DotpKernel",
     "PackedDotpKernel",

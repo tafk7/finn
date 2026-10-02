@@ -1,9 +1,17 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Stream contracts: what one stream end carries, and whether two ends may connect.
+"""Stream transport: native ready/valid pins, AXIS, and the contract of one stream end.
 
-A contract joins three levels, each owned elsewhere and checked here together:
+**Ready/valid.** A transfer occurs on the associated rising clock edge with
+valid and ready, outside reset. Valid data and sidebands are held while
+stalled. ``ReadyValidStream`` describes the native pins; ``AxiStream`` a
+homogeneous AXIS beat, lane zero lowest, with only the complete beat padded to a
+byte boundary. Scalar encodings keep their QONNX widths. A kernel's
+``AxiStreamPort`` (``finn.kernels.port``) builds one from its lanes.
+
+**Contracts.** A ``StreamContract`` joins three levels, each owned elsewhere
+and checked here together:
 
 - logical: element encoding, lanes, beat form, repetition and marker rules;
 - physical: packing of the lanes into the transport word, lane zero lowest;
@@ -11,11 +19,11 @@ A contract joins three levels, each owned elsewhere and checked here together:
 
 ``compatibility`` compares a producing and a consuming end. A logical mismatch
 can only be repaired by an adapter, which ``finn.dataflow.traversal.classify``
-names (reorder or replay, width conversion, lane regroup). A pure lane permutation,
-padding and reset polarity leave the sequence unchanged; they are properties of
-the connection, which ``Composition.connect`` realizes as wires: a producer's
-padding bits are left unconnected inside the composition, and a consumer's
-padding is driven with zeros.
+names (reorder or replay, width conversion, lane regroup). A pure lane
+permutation, padding and reset polarity leave the sequence unchanged; they are
+properties of the connection, realized as wires (``lane_permutation``,
+``marker_pairs``): a producer's padding bits are left unconnected, and a
+consumer's padding is driven with zeros.
 """
 
 from __future__ import annotations
@@ -27,18 +35,194 @@ from dataclasses import dataclass
 from enum import Enum
 
 from finn.core.space import ValueSemantics, default_semantics
-from finn.kernels.artifacts.abi import Endpoint
+from finn.dataflow.datatypes import (
+    QONNXDataType,
+    canonical_qonnx_datatype,
+    qonnx_datatype_width,
+    resolve_qonnx_datatype_name,
+)
 from finn.dataflow.plan import Unrealizable, presented
 from finn.dataflow.tensor import ScalarEncoding
 from finn.dataflow.traversal import (
     Adaptation,
-    LevelEnd,
     BeatSequence,
+    LevelEnd,
     Repetition,
     Traversal,
     classify,
 )
-from finn.kernels.physical.stream import ReadyValidStream
+from finn.kernels.artifacts.abi import Bus, Direction, Endpoint, Member, Signal, StandardProtocol
+
+
+# -- native ready/valid ------------------------------------------------------------------
+
+
+class MarkerKind(Enum):
+    LAST = "last"
+    LOOP_END = "loop_end"
+
+
+@dataclass(frozen=True)
+class StreamMarker:
+    signal: str
+    kind: MarkerKind
+    width: int = 1
+
+    def __post_init__(self) -> None:
+        if not self.signal or not isinstance(self.kind, MarkerKind):
+            raise ValueError("a stream marker names a signal and its meaning")
+        if type(self.width) is not int or self.width < 1:
+            raise ValueError("a stream marker has positive width")
+        if self.kind is not MarkerKind.LOOP_END and self.width != 1:
+            raise ValueError("a last marker is one bit")
+
+
+@dataclass(frozen=True)
+class ReadyValidStream:
+    """Unpadded native pins, optionally lowered to a byte-aligned AXI interface.
+
+    LAST only identifies a frame boundary; the kernel supplies its cross-port
+    meaning. LOOP_END carries the native nested-loop completion vector.
+    """
+
+    name: str
+    data_width: int
+    endpoint: Endpoint
+    data: str
+    valid: str
+    ready: str
+    clock: str | None = None
+    reset: str | None = None
+    markers: tuple[StreamMarker, ...] = ()
+
+    def __post_init__(self) -> None:
+        if not self.name or not isinstance(self.endpoint, Endpoint):
+            raise ValueError("a stream requires a name and endpoint")
+        if type(self.data_width) is not int or self.data_width < 1:
+            raise ValueError("stream data width must be positive")
+        object.__setattr__(self, "markers", tuple(self.markers))
+        names = (self.data, self.valid, self.ready, *(marker.signal for marker in self.markers))
+        if any(not isinstance(name, str) or not name for name in names) or len(set(names)) != len(
+            names
+        ):
+            raise ValueError("stream pins require distinct nonempty names")
+
+    def pins(self) -> tuple[Signal, ...]:
+        """Expose the native pins, without asserting an AXI protocol or changing widths."""
+        forward = Direction.OUT if self.endpoint is Endpoint.INITIATOR else Direction.IN
+        backward = Direction.IN if self.endpoint is Endpoint.INITIATOR else Direction.OUT
+        return (
+            Signal(self.data, forward, self.data_width),
+            Signal(self.valid, forward, 1),
+            *(Signal(marker.signal, forward, marker.width) for marker in self.markers),
+            Signal(self.ready, backward, 1),
+        )
+
+    def axis_bus(self) -> Bus:
+        """Map compatible native signals onto AXI; adapters must supply any padding."""
+        if self.data_width % 8:
+            raise ValueError("AXI stream data width must be byte aligned")
+        if len(self.markers) > 1 or any(
+            marker.kind is not MarkerKind.LAST for marker in self.markers
+        ):
+            raise ValueError("AXI lowering supports only a single LAST marker")
+        return Bus(
+            self.name,
+            StandardProtocol.AXIS,
+            (
+                Member("tdata", self.data, self.data_width),
+                Member("tvalid", self.valid),
+                Member("tready", self.ready),
+                *(Member("tlast", marker.signal) for marker in self.markers),
+            ),
+            endpoint=self.endpoint,
+            associated_clock=self.clock,
+            associated_reset=self.reset,
+        )
+
+
+# -- AXIS ----------------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, init=False)
+class AxiStream:
+    """A homogeneous beat with lane zero in the least-significant bits.
+
+    ``last`` declares the pin. Its workload-dependent meaning is supplied when
+    binding to a logical port. The canonical dtype name snapshots QONNX's mutable
+    datatype objects without reducing their identity to a bit width.
+    """
+
+    name: str
+    datatype_name: str
+    elements_per_beat: int
+    endpoint: Endpoint
+    last: bool
+
+    def __init__(
+        self,
+        name: str,
+        dtype: QONNXDataType,
+        elements_per_beat: int,
+        *,
+        endpoint: Endpoint,
+        last: bool = False,
+    ) -> None:
+        dtype = canonical_qonnx_datatype(dtype)
+        if not isinstance(name, str) or not name:
+            raise ValueError("an AXIS declaration requires a nonempty name")
+        if type(elements_per_beat) is not int or elements_per_beat <= 0:
+            raise ValueError("elements per beat must be a positive integer")
+        if not isinstance(endpoint, Endpoint) or type(last) is not bool:
+            raise ValueError("AXIS requires an Endpoint and a boolean last flag")
+        if qonnx_datatype_width(dtype) <= 0:
+            raise ValueError("AXIS scalar encodings must have positive width")
+        object.__setattr__(self, "name", name)
+        object.__setattr__(self, "datatype_name", dtype.name)
+        object.__setattr__(self, "elements_per_beat", elements_per_beat)
+        object.__setattr__(self, "endpoint", endpoint)
+        object.__setattr__(self, "last", last)
+
+    @property
+    def dtype(self) -> QONNXDataType:
+        return resolve_qonnx_datatype_name(self.datatype_name)
+
+    @property
+    def element_bits(self) -> int:
+        return qonnx_datatype_width(self.dtype)
+
+    @property
+    def payload_bits(self) -> int:
+        return self.element_bits * self.elements_per_beat
+
+    @property
+    def data_width(self) -> int:
+        return self.carrier_bits
+
+    @property
+    def carrier_bits(self) -> int:
+        return (self.payload_bits + 7) // 8 * 8
+
+    def bus(self, *, clock: str | None = None, reset: str | None = None) -> Bus:
+        """Lower to the existing, purely physical ABI representation."""
+        return self.native(clock=clock, reset=reset).axis_bus()
+
+    def native(self, *, clock: str | None = None, reset: str | None = None) -> ReadyValidStream:
+        """The native transport underlying this typed, padded AXI profile."""
+        return ReadyValidStream(
+            self.name,
+            self.data_width,
+            self.endpoint,
+            f"{self.name}_tdata",
+            f"{self.name}_tvalid",
+            f"{self.name}_tready",
+            clock,
+            reset,
+            (StreamMarker(f"{self.name}_tlast", MarkerKind.LAST),) if self.last else (),
+        )
+
+
+# -- the contract of one stream end --------------------------------------------------------
 
 
 class Level(Enum):
@@ -225,19 +409,15 @@ def marker_pairs(source: StreamContract, sink: StreamContract) -> tuple[tuple[st
     return tuple(pairs)
 
 
-class StreamMismatch(ValueError):
-    def __init__(self, source: str, sink: str, mismatches: tuple[Mismatch, ...]) -> None:
-        self.mismatches = mismatches
-        details = "; ".join(f"{item.code}: {item.message}" for item in mismatches)
-        super().__init__(f"{source} -> {sink}: {details}")
-
-
 __all__ = [
+    "AxiStream",
     "Level",
+    "MarkerKind",
     "Mismatch",
+    "ReadyValidStream",
     "STREAM_CONTRACT",
     "StreamContract",
-    "StreamMismatch",
+    "StreamMarker",
     "compatibility",
     "lane_permutation",
     "marker_bit",

@@ -15,7 +15,7 @@ marker alone. ``input_gen`` is the only replay hardware; FinnLib's
 import pytest
 from qonnx.core.datatype import DataType
 
-from finn.core.space import design_space, inspection
+from finn.core.space import inspection
 from finn.dataflow.plan import Step
 from finn.dataflow.tensor import ScalarEncoding
 from finn.dataflow.traversal import LevelEnd, vector_major
@@ -23,10 +23,8 @@ from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.configure import commit
 from finn.dataflow.gemm import Form
 from finn.kernels.matmul import MatMulKernel
-from kernels.helpers import matmul_assembly
-from finn.kernels.physical.contract import StreamContract
-from finn.kernels.physical.stream import MarkerKind, ReadyValidStream, StreamMarker
-from finn.kernels.physical.structure import PhysicalPin, PinSlice, UnusedOutput
+from kernels.helpers import matmul_assembly, matmul_point, placed
+from finn.kernels.transport import MarkerKind, ReadyValidStream, StreamContract, StreamMarker
 from kernels.helpers import settled
 from finn.kernels.target import DspBlock
 
@@ -42,12 +40,12 @@ FACTS = dict(
 
 def choices(core: str = "packed") -> dict[str, object]:
     return {
-        "memory": "none",
-        "weight_stream.transport": "direct",
-        "compute": core,
-        f"compute.{core}.pe": 2,
-        f"compute.{core}.simd": 2,
-        f"compute.{core}.compute_pumping": False,
+        "matmul.memory": "none",
+        "w.transport": "direct",
+        "matmul.compute": core,
+        f"matmul.compute.{core}.pe": 2,
+        f"matmul.compute.{core}.simd": 2,
+        f"matmul.compute.{core}.compute_pumping": False,
     }
 
 
@@ -55,8 +53,9 @@ CHOICES = choices()
 
 
 def test_the_activation_stream_plans_the_replay_and_its_frame():
-    point = commit(design_space(MatMulKernel(**FACTS, target_period_ns=5.0)), CHOICES)
-    stream = point.activations
+    point = commit(matmul_point(**FACTS, target_period_ns=5.0), CHOICES)
+    # The stream into the core is the root's: its plan and adapter are the edge's.
+    stream = point.x
     assert stream.plan.steps == (Step.REORDER, Step.MARKERS)
     (reorder, _) = stream.plan.hops
     assert reorder.reorder is not None
@@ -66,24 +65,21 @@ def test_the_activation_stream_plans_the_replay_and_its_frame():
         (0, 1),
     )
     keys = {item.key for item in inspection.decisions(point)}
-    assert {"activations.adapter", "activations.adapter.input_gen.input_gen.ram_style"} <= keys
+    assert {"x.adapter", "x.adapter.input_gen.input_gen.ram_style"} <= keys
     assert "replay" not in keys and not hasattr(MatMulKernel, "replayed")
     # A depthwise row passes once: the plan is the frame marker alone.
     facts = {**FACTS, "target_dsp": DspBlock.DSP58, "form": Form.DEPTHWISE}
     depthwise = commit(
-        design_space(MatMulKernel(**facts, target_period_ns=5.0)),
-        {**choices("int8_dsp58"), "realization": "native"},
+        matmul_point(realization="native", **facts, target_period_ns=5.0),
+        choices("int8_dsp58"),
     )
-    assert depthwise.activations.plan.steps == (Step.MARKERS,)
+    assert depthwise.x.plan.steps == (Step.MARKERS,)
 
 
 def test_the_input_gen_replays_each_row_and_closes_each_fold_group():
     built = matmul_assembly(**FACTS, pe=2, simd=2)
-    assert [item.instance_id for item in built.structure.instances] == [
-        "u_compute_packed",
-        "u_activations_input_gen",
-    ]
-    parameters = dict(built.structure.instances[1].requirements.parameters)
+    replay = "x.adapter.input_gen.input_gen"
+    parameters = dict(placed(built.module, replay).parameters)
     # Per row (a two-beat frame): each row twice, its folds in order.
     assert parameters == {
         "COEFS": "'{0, 1}",
@@ -93,36 +89,29 @@ def test_the_input_gen_replays_each_row_and_closes_each_fold_group():
         "FM_SIZE": 2,
         "RAM_STYLE": '"auto"',
     }
-    structure = built.structure
-    (last,) = [
-        wire.source
-        for wire in structure.wires
-        if wire.destination.pin == PhysicalPin("u_compute_packed", "s_axis_input_tlast")
+    (into,) = [
+        link
+        for link in built.module.fragment.links
+        if link.sink.instance == "matmul.compute.packed" and link.source.instance == replay
     ]
-    assert last == PinSlice(PhysicalPin("u_activations_input_gen", "olst"), 1, 1)
-    assert structure.unused_outputs == (
-        UnusedOutput(
-            PhysicalPin("u_activations_input_gen", "olst"),
-            "marker not required by u_compute_packed.s_axis_input",
-            0,
-            1,
-        ),
-    )
+    # olst[1] closes each fold group and frames the reduction; olst[0] is read by nothing.
+    assert into.markers == (("olst", 1, "s_axis_input_tlast", None),)
     assert (built.activation_beats, built.weight_beats, built.result_beats) == (6, 12, 6)
 
 
 def test_one_output_fold_and_one_beat_frames_close_every_beat():
     # PE = N: no replay; SIMD = K: a frame is one beat, closed by a level of one.
     built = matmul_assembly(**FACTS, pe=4, simd=4)
-    parameters = dict(built.structure.instances[1].requirements.parameters)
+    parameters = dict(placed(built.module, "x.adapter.input_gen.input_gen").parameters)
     assert (parameters["FM_SIZE"], parameters["DIMS"], parameters["COEFS"]) == (1, "'{1}", "'{1}")
 
 
 def test_the_adapter_s_memory_is_a_choice_of_the_stream():
-    point = commit(design_space(MatMulKernel(**FACTS, target_period_ns=5.0)), CHOICES)
+    point = commit(matmul_point(**FACTS, target_period_ns=5.0), CHOICES)
     configured = settled(point, ram_style="distributed")
-    (generator,) = [stage for stage in configured.activations.connection.stages]
-    assert dict(generator.requirements.parameters)["RAM_STYLE"] == '"distributed"'
+    (generator,) = [stage for stage in configured.x.stages]
+    assert generator.module is not None
+    assert dict(generator.module.parameters)["RAM_STYLE"] == '"distributed"'
 
 
 def test_a_marker_rule_names_a_whole_one_bit_marker_or_one_bit_of_a_wider_one():

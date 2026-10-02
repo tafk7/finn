@@ -146,6 +146,5 @@ if __name__ == "__main__":
             "finn.core.space": ["py.typed"],
             "finn.dataflow": ["py.typed"],
             "finn.kernels": ["py.typed"],
-            "finn.kernels.resources": ["*.sv", "*.j2"],
         },
     )

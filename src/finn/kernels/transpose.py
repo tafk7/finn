@@ -6,8 +6,8 @@
 A row-major ``(I, J)`` matrix, SIMD elements of a row a beat, becomes its
 columns, SIMD elements of a column a beat (``LANE_REGROUP``). It is not a
 candidate of a stream's ``adapter`` Decision (``finn.kernels.adapters``): a
-composite places it explicitly, and a stream realizes lane regroups through the
-common lane count instead. The defect that kept it out (see
+kernel with children places it explicitly, and a stream realizes lane regroups
+through the common lane count instead. The defect that kept it out (see
 ``TransposeKernel``) is fixed in FinnLib, which reopens that option.
 """
 
@@ -59,7 +59,7 @@ class TransposeKernel(Kernel):
 
     id = "finnlib.inner_shuffle"
     version = "1"
-    module = "inner_shuffle"
+    rtl_module = "inner_shuffle"
 
     input_stream: Stream = Param(required=False)
     output_stream: Stream = Param(required=False)

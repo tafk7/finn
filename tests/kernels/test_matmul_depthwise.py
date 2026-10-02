@@ -14,15 +14,14 @@ stored (k, n): window by channel.
 import pytest
 from qonnx.core.datatype import DataType
 
-from finn.core.space import Rejected, design_space
+from finn.core.space import Rejected
 from finn.dataflow.plan import Step
+from finn.kernels.base import Kernel
 from finn.kernels.configure import commit
-from kernels.helpers import settled
+from kernels.helpers import labels, matmul_point, placed, settled
 from finn.dataflow.gemm import Form
-from finn.kernels.matmul import MatMulKernel
 from kernels.helpers import WeightDelivery, matmul_assembly
 from finn.dataflow.traversal import Traversal
-from finn.kernels.physical.structure import PhysicalPin, PinSlice
 from finn.kernels.target import DspBlock
 
 FACTS = dict(
@@ -39,77 +38,71 @@ FACTS = dict(
 def point(core="int8_dsp58", **facts):
     facts = {**FACTS, "target_period_ns": 5.0, **facts}
     choices = {
-        "memory": "none",
-        "weight_stream.transport": "direct",
-        "compute": core,
-        f"compute.{core}.pe": 2,
-        f"compute.{core}.simd": 3,
-        f"compute.{core}.compute_pumping": False,
+        "matmul.memory": "none",
+        "w.transport": "direct",
+        "matmul.compute": core,
+        f"matmul.compute.{core}.pe": 2,
+        f"matmul.compute.{core}.simd": 3,
+        f"matmul.compute.{core}.compute_pumping": False,
     }
-    if facts["form"] is Form.DEPTHWISE:
-        choices["realization"] = "native"
-    return settled(commit(design_space(MatMulKernel(**facts)), choices))
+    native = "native" if facts["form"] is Form.DEPTHWISE else None
+    return settled(commit(matmul_point(realization=native, **facts), choices))
 
 
-def parameters(structure, instance):
-    (found,) = (
-        dict(item.requirements.parameters)
-        for item in structure.instances
-        if item.instance_id == instance
-    )
-    return found
+def parameters(module, label):
+    return dict(placed(module, label).parameters)
 
 
 def test_depthwise_rows_pass_once_with_a_frame_per_window():
     configured = point()
     # Nothing is replayed: the stream only closes each window's frame.
-    assert configured.activations.plan.steps == (Step.MARKERS,)
-    boundary = configured.activations.endpoints.source
+    assert configured.x.plan.steps == (Step.MARKERS,)
+    boundary = configured.x.endpoints.source
     # Rows, then channel folds, then window folds; lane s * PE + p is window
     # position s of channel p.
     channel_tile = Traversal.over(
         (2, 9, 4), ((0, 2, 1), (2, 2, 2), (1, 3, 3)), ((1, 3, 1), (2, 2, 1))
     )
     assert boundary.transport.name == "in0_V" and boundary.form == channel_tile
-    framed = configured.activations.endpoints.sink
+    framed = configured.x.endpoints.sink
     assert framed.form == boundary.form
     assert [level.beats for level in framed.rules.values()] == [3]
-    structure = configured.structure.structure
-    compute = parameters(structure, "u_compute_int8_dsp58")
+    module = configured.module
+    compute = parameters(module, "matmul.compute.int8_dsp58")
     # An input_gen passing three-beat frames in order, closing each.
-    markers = parameters(structure, "u_activations_input_gen")
+    markers = parameters(module, "x.adapter.input_gen.input_gen")
     assert (markers["FM_SIZE"], markers["DIMS"], markers["COEFS"]) == (3, "'{3}", "'{1}")
     assert compute["ACTIVATION_BROADCASTING"] == 0
     assert compute["CORE"] == '"dotp_8sx9_dsp58"'
     widths = {
         port.name: next(item.width for item in port.signals if item.logical == "tdata")
-        for port in structure.top_abi.ports
+        for port in module.pins.ports
         if port.name.endswith("_V")
     }
     # PE channels of SIMD window positions per activation beat; the result is exact.
     assert widths == {"in0_V": 24, "in1_V": 24, "out0_V": 24}
-    (last,) = [
-        wire.source
-        for wire in structure.wires
-        if wire.destination.pin == PhysicalPin("u_compute_int8_dsp58", "s_axis_input_tlast")
+    (framing,) = [
+        link.markers
+        for link in module.fragment.links
+        if link.sink.instance == "matmul.compute.int8_dsp58" and link.markers
     ]
-    assert last == PinSlice(PhysicalPin("u_activations_input_gen", "olst"), 0, 1)
+    assert framing == (("olst", 0, "s_axis_input_tlast", None),)
 
 
 def test_a_dense_form_replays_each_row_per_output_fold():
     dense = point(form=Form.DENSE)
-    assert dense.activations.plan.steps == (Step.REORDER, Step.MARKERS)
-    compute = parameters(dense.structure.structure, "u_compute_int8_dsp58")
+    assert dense.x.plan.steps == (Step.REORDER, Step.MARKERS)
+    compute = parameters(dense.module, "matmul.compute.int8_dsp58")
     assert compute["ACTIVATION_BROADCASTING"] == 1
 
 
 def test_only_the_int8_dsp58_core_reads_a_depthwise_form():
-    packed = point("packed").query(MatMulKernel.structure)
+    packed = point("packed").query(Kernel.module)
     assert isinstance(packed, Rejected)
     assert "dotp-form" in {finding.code for finding in packed.findings}
     facts = {**FACTS, "pe": 2, "simd": 3}
     # External weights exclude the dense realization; natively, one core fits.
-    assert matmul_assembly(**facts).requirements is not None
+    assert matmul_assembly(**facts).module is not None
     with pytest.raises(ValueError, match="realizations compatible with this configuration: none"):
         matmul_assembly(**{**facts, "target_dsp": DspBlock.DSP48E2})
 
@@ -124,7 +117,7 @@ def test_depthwise_cyclic_weights_are_the_channel_tile():
         weight_delivery=WeightDelivery.MEMSTREAM,
         weights=weights,
     )
-    assert "in1_V" not in {port.name for port in built.structure.top_abi.ports}
+    assert "in1_V" not in {port.name for port in built.module.pins.ports}
     # Channel folds, then window folds; PE channels of SIMD taps a beat, SIMD fastest.
     assert len(built.initializer) == 2 * 3
     assert (built.activation_beats, built.weight_beats, built.result_beats) == (12, 12, 4)
@@ -150,12 +143,12 @@ DENSE = dict(
 def test_a_dense_realization_reads_window_by_channel_rows_against_block_diagonal_weights():
     # On DSP48E2 only the dense realization computes it: the packed core.
     built = matmul_assembly(target_dsp=DspBlock.DSP48E2, **DENSE)
-    assert [item.instance_id for item in built.structure.instances] == [
-        "u_compute_packed",
-        "u_memory_memstream",
-        "u_activations_input_gen",
+    assert labels(built.module) == [
+        "x.adapter.input_gen.input_gen",
+        "matmul.compute.packed",
+        "matmul.memory.memstream",
     ]
-    compute = parameters(built.structure, "u_compute_packed")
+    compute = parameters(built.module, "matmul.compute.packed")
     assert compute["ACTIVATION_BROADCASTING"] == 1 and compute["SIMD"] == 4
     # Rows of 4 x 3 = 12 activations in three SIMD beats, replayed once (PE = C).
     assert (built.activation_beats, built.weight_beats, built.result_beats) == (6, 6, 2)
@@ -184,7 +177,7 @@ def test_the_dense_realization_needs_known_weights_and_either_may_be_chosen_on_d
         built = matmul_assembly(
             target_dsp=DspBlock.DSP58, realization=realization, core=core, **DENSE
         )
-        assert built.structure.instances[0].instance_id == f"u_compute_{core}"
+        assert f"matmul.compute.{core}" in labels(built.module)
 
 
 @pytest.mark.parametrize(
@@ -200,4 +193,4 @@ def test_narrow_weights_follow_known_weights(weights, delivery, narrow):
     built = matmul_assembly(
         target_dsp=DspBlock.DSP48E2, **{**facts, "weights": weights, "weight_delivery": delivery}
     )
-    assert parameters(built.structure, "u_compute_packed")["NARROW_WEIGHTS"] == narrow
+    assert parameters(built.module, "matmul.compute.packed")["NARROW_WEIGHTS"] == narrow

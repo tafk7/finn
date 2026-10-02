@@ -37,12 +37,11 @@ from finn.dataflow.traversal import (
 from finn.kernels.configure import commit
 from finn.kernels.dotp import Int8Dsp58DotpKernel, PackedDotpKernel
 from finn.kernels.eltwise import EltwiseKernel
-from finn.kernels.matmul import MatMulKernel
 from finn.kernels.port import AxiStreamPort
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.streams import Stream
 from finn.kernels.target import DspBlock
-from kernels.helpers import settled
+from kernels.helpers import matmul_point, settled
 
 A, W, R = DataType["INT3"], DataType["INT3"], DataType["INT8"]
 ROWS, REDUCTION, OUTPUTS, PE, SIMD = 2, 4, 4, 2, 2
@@ -127,8 +126,8 @@ def test_every_port_presents_what_the_schedule_derives():
     (end,) = point.r.users
     assert (end.node, end.member) == ("compute.y", "stream")
     # The cyclic weights and the results connect as derived.
-    assert codes(point.w_s.query(Stream.connection)) == set()
-    assert codes(point.r.query(Stream.connection)) == set()
+    assert codes(point.w_s.query(Stream.netlist)) == set()
+    assert codes(point.r.query(Stream.netlist)) == set()
 
 
 def test_depthwise_activations_carry_pe_channels_of_simd_window_positions():
@@ -137,7 +136,7 @@ def test_depthwise_activations_carry_pe_channels_of_simd_window_positions():
     assert form.lanes == PE * SIMD and form.shape == (ROWS, REDUCTION, OUTPUTS)
     # Lane s * PE + p is window position s of channel p (FinnLib's order).
     assert next(form.positions()) == ((0, 0, 0), (0, 0, 1), (0, 1, 0), (0, 1, 1))
-    assert codes(point.w_s.query(Stream.connection)) == set()
+    assert codes(point.w_s.query(Stream.netlist)) == set()
 
 
 def test_a_folding_factor_that_does_not_divide_its_extent_is_refused_where_it_is_committed():
@@ -154,7 +153,7 @@ def test_a_producer_presenting_another_order_is_a_plan_its_stream_adapts():
     )
     point = placed(weights_form=columns_first)
     assert point.w_s.plan.steps == (Step.REORDER,)
-    assert codes(settled(point).w_s.query(Stream.connection)) == set()
+    assert codes(settled(point).w_s.query(Stream.netlist)) == set()
     # Probe: the tile's own sequence, one weight a beat where dotp reads PE x SIMD.
     narrow = placed(weights_form=regrouped(weights_tile(), 1))
     assert narrow.w_s.plan.steps == (Step.WIDTH,)
@@ -165,7 +164,7 @@ def test_a_producer_presenting_another_order_is_a_plan_its_stream_adapts():
     assert isinstance(narrow.compute.w.query(AxiStreamPort.contract), Available)
     # A stream that admits no adapter refuses the plan, naming it.
     fixed = placed(weights_form=columns_first, adaptable=False)
-    refused = fixed.w_s.query(Stream.connection)
+    refused = fixed.w_s.query(Stream.netlist)
     assert "stream-plan" in codes(refused) and "reorder" in str(refused)
 
 
@@ -176,7 +175,7 @@ def test_a_producer_s_lane_order_is_wires():
         ((1, OUTPUTS // PE, PE), (0, REDUCTION // SIMD, SIMD)),
         ((0, SIMD, 1), (1, PE, 1)),
     )
-    assert codes(placed(weights_form=transposed).w_s.query(Stream.connection)) == set()
+    assert codes(placed(weights_form=transposed).w_s.query(Stream.netlist)) == set()
     # E-048: hlslib's per-channel order (window positions fastest) is likewise a
     # lane permutation of FinnLib's.
     finnlib = placed(Form.DEPTHWISE).compute.x.presented.form
@@ -190,30 +189,28 @@ def test_one_kernel_refusal_reaches_only_its_own_stream():
     # Probe P2: unsigned weights are refused by dotp's weight port. The
     # activations and the results are untouched.
     point = commit(
-        design_space(
-            MatMulKernel(
-                m=3,
-                n=4,
-                k=4,
-                activation_dtype=DataType["INT3"],
-                weights_dtype=DataType["UINT3"],
-                target_dsp=DspBlock.DSP48E2,
-                target_period_ns=5.0,
-            )
+        matmul_point(
+            m=3,
+            n=4,
+            k=4,
+            activation_dtype=DataType["INT3"],
+            weights_dtype=DataType["UINT3"],
+            target_dsp=DspBlock.DSP48E2,
+            target_period_ns=5.0,
         ),
         {
-            "memory": "none",
-            "weight_stream.transport": "direct",
-            "compute": "packed",
-            "compute.packed.pe": 2,
-            "compute.packed.simd": 2,
-            "compute.packed.compute_pumping": False,
+            "matmul.memory": "none",
+            "w.transport": "direct",
+            "matmul.compute": "packed",
+            "matmul.compute.packed.pe": 2,
+            "matmul.compute.packed.simd": 2,
+            "matmul.compute.packed.compute_pumping": False,
         },
     )
     point = settled(point)
-    assert isinstance(point.activations.query(Stream.connection), Available)
-    assert isinstance(point.results.query(Stream.connection), Available)
-    assert codes(point.weight_stream.query(Stream.connection)) == {"dtype-family"}
+    assert isinstance(point.x.query(Stream.netlist), Available)
+    assert isinstance(point.y.query(Stream.netlist), Available)
+    assert codes(point.w.query(Stream.netlist)) == {"dtype-family"}
 
 
 def eltwise_between(rhs_shape: tuple[int, ...], rhs_dtype: str = "INT4") -> Any:
@@ -245,9 +242,9 @@ def test_eltwise_broadcasts_a_channel_vector_once_per_pixel():
     # pass repeated, which a boundary presents as it is.
     repeated = vector_major((4,), 2).repeated(3)
     assert point.add.rhs.presented.form == repeated
-    assert point.rhs.connection.source.form == repeated
+    assert point.rhs.endpoints.source.form == repeated
     assert all(stream.plan.steps == () for stream in (point.lhs, point.rhs, point.out))
-    assert dict(point.add.build_requirements.parameters)["PE"] == 2
+    assert dict(point.add.module.parameters)["PE"] == 2
 
 
 def test_eltwise_refuses_an_operand_it_cannot_broadcast_or_does_not_carry():
@@ -259,6 +256,6 @@ def test_eltwise_refuses_an_operand_it_cannot_broadcast_or_does_not_carry():
         ("kernel-extents", "c is 4 (lhs axis 1) and 3 (rhs axis 0)")
     }
     # An operand stream of another element: the stream refuses the port's end.
-    other = eltwise_between((4,), rhs_dtype="INT3").rhs.query(Stream.connection)
+    other = eltwise_between((4,), rhs_dtype="INT3").rhs.query(Stream.netlist)
     assert isinstance(other, Rejected)
     assert "stream-tensor" in {finding.code for finding in other.findings}

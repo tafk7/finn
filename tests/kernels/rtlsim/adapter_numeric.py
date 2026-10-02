@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Explicit XSI conformance for the stream adapters, each in a composed module.
+"""Explicit XSI conformance for the stream adapters, each in a root's module.
 
 Every adapter kind a stream's plan takes (``vpc``, ``input_gen``, and chains of
 both) runs between a cyclic producer presenting a tensor in some order and
@@ -43,7 +43,7 @@ def _padded(words, bits):
 
 
 def _build(point, directory):
-    return materialize(point.structure.requirements, directory)
+    return materialize(point.module, directory)
 
 
 ROWS, CHANNELS = 3, 12
@@ -68,8 +68,8 @@ TRANSPOSES = ((4, 6, 2), (6, 6, 3), (4, 4, 2), (6, 9, 3), (4, 4, 4), (8, 4, 4), 
 def run_adapted(label, source, pe, modules, evidence):
     point = adapted(source, pe)
     kinds = tuple(
-        "vpc" if stage.name.startswith("vpc") else "input_gen"
-        for stage in point.x.connection.stages
+        "vpc" if stage.label.rsplit(".", 1)[-1].startswith("vpc") else "input_gen"
+        for stage in point.x.stages
     )
     assert kinds == modules, (label, kinds)
     levels = [value + 8 for row in values(*source.shape) for value in row]

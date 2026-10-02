@@ -1,28 +1,44 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The Kernel protocol: one generated module's choices, and the plumbing every kernel shares.
+"""The Kernel protocol: one module's choices, and the plumbing every kernel shares.
 
-A kernel is a Space whose choices configure one module. On the protocol it
-declares only what is its own:
+A kernel is a Space whose choices configure one module. It either binds one
+FinnLib module (a leaf) or places kernel children and the streams between
+them; never both. On the protocol a leaf declares only what is its own:
 
-- ``module``: the RTL module it instantiates, and ``sources()``, the source
-  files that provide it;
+- ``rtl_module``: the RTL module it instantiates, and ``sources()``, the
+  source files that provide it and any data they read;
 - one ``Port`` node per interface (``finn.kernels.port``): each exports its
-  pins, and what it holds while idle;
+  pins, its clock, and what it holds while idle;
 - ``parameters()``: the module's parameters, from its choices;
 - ``clocking``: its clock and reset pins, when not the plain ``ap_clk`` and
   ``ap_rst_n``;
 - ``admission``: the constraint group by which it refuses a configuration it
   cannot build;
-- ``other_pins()`` and ``held()``: pins that are no port's (an AXI-Lite bus)
-  and what it holds of them.
+- ``other_pins()``, ``held()`` and ``controlled()``: pins that are no port's (an
+  AXI-Lite bus), what it holds of them, and the buses among them it presents
+  through a ``ControlBus`` (``finn.kernels.control``).
 
-The base derives the rest: the module's ABI (clocking, other pins, then every
-port's pins), ``build_requirements`` (accepted under ``admission``), the
-``tieoffs`` (the doubled clock while unused, idle ports, and what it holds
-itself) and the exports ``MODULE`` and ``TIEOFFS``. A composite kernel wires
-its children's modules through streams instead (``finn.kernels.composite``).
+The base derives the rest. ``codegen`` is the leaf (``Leaf``): its pins
+(clocking, other pins, then every port's), parameters, sources and data, and
+what it holds (the doubled clock while unused, idle ports, and its own
+``held()``). Two constraints account for its pins at creation:
+``pins_accounted`` (every input among its other pins is held or presented) and
+``clocked`` (every port runs on its clock).
+
+A kernel with children merges its members' netlists (``NETLIST``: each
+child's and each stream's ``Fragment``, under its node) and the control buses
+its ``ControlBus`` nodes present. Its interface streams are reference inputs
+its parent supplies; the streams between its children are its own. Placed
+alone, as the root of what is emitted, it is one ``Composed`` module whose
+pins are ``ap_clk``, ``ap_clk2x`` when an instance takes a doubled clock,
+``ap_rst_n``, the AXIS bus of each boundary stream it declares (inputs, then
+outputs) and each presented bus.
+
+Every kernel exports its netlist (``NETLIST``) and its ``module`` (``MODULE``):
+the ``Leaf``, or the ``Composed`` module, accepted under ``admission``,
+``pins_accounted`` and ``clocked``.
 """
 
 from __future__ import annotations
@@ -37,14 +53,15 @@ from finn.core.space import (
     Members,
     Rejected,
     Space,
+    ValueSemantics,
     View,
     ViewKey,
+    constraint,
     default_semantics,
     derived,
     divisors_of,
     domain,
     reject,
-    view,
 )
 
 from finn.core.space.errors import DefinitionError
@@ -55,50 +72,73 @@ from finn.kernels.artifacts.abi import (
     Data,
     Derived,
     Direction,
+    Endpoint,
     Free,
     Reset,
     Signal,
+    abi_pins,
+)
+from finn.kernels.artifacts.contributions import Contribution, CopiedSource, GeneratedData
+from finn.kernels.artifacts.module import (
+    BuildError,
+    BusExport,
+    Composed,
+    Fragment,
+    Held,
+    Leaf,
+    Module,
+    Pins,
+    ProducerIdentity,
+    merge,
 )
 from finn.dataflow.schedule import Access, Index, Refused, Schedule, bind_extents
-from finn.kernels.physical.contract import STREAM_CONTRACT
-from finn.kernels.artifacts.requirements import (
-    FixedModuleName,
-    ModuleABIRequirements,
-    ModuleBuildRequirements,
-    RequirementContribution,
-)
+from finn.kernels.control import EXPORTED, top_bus
+from finn.kernels.transport import STREAM_CONTRACT
 
-MODULE_REQUIREMENTS = default_semantics(ModuleBuildRequirements)
-MODULE = ViewKey("module", MODULE_REQUIREMENTS)
-"""A kernel's generated module, collected by its composite."""
+
+def _frozen(name: str, *kinds: type) -> ValueSemantics[object]:
+    """A frozen build value: compared by value, shared without a copy."""
+    return ValueSemantics(
+        kinds[0],
+        name,
+        lambda value: isinstance(value, kinds),
+        lambda left, right: left == right,
+        lambda value: value,
+    )
+
+
+MODULE_SEMANTICS = cast("ValueSemantics[Module]", _frozen("module", Leaf, Composed))
+MODULE = ViewKey("module", MODULE_SEMANTICS)
+"""A kernel's module: its ``Leaf``, or its children's netlist as one ``Composed`` module."""
+
+NETLIST_SEMANTICS = cast("ValueSemantics[Fragment]", _frozen("netlist", Fragment))
+NETLIST = ViewKey("netlist", NETLIST_SEMANTICS)
+"""A kernel's or a stream's netlist (``finn.kernels.artifacts.module.Fragment``), labelled
+relative to itself; its parent merges its members' under their nodes."""
+
+BOUNDARY = ViewKey("boundary", default_semantics(tuple))
+"""A stream's AXIS bus on the root's boundary: one, or none when both of its ends are
+kernels."""
 
 PORT = ViewKey("port", STREAM_CONTRACT)
 """A kernel's port on one stream, exported per reference input."""
 
 PINS = ViewKey("pins", default_semantics(tuple))
-"""A port's pins (signals, or one bus), collected by its kernel into the module's ABI."""
+"""A port's pins (signals, or one bus), collected by its kernel into the module's pins."""
+
+CLOCKED = ViewKey("clocked", default_semantics(str))
+"""The clock pin a port runs on, collected by its kernel (``clocked``)."""
 
 ACCESS = ViewKey("access", default_semantics(Access))
 """A placed scheduled port's read of its stream's tensor, collected by its kernel to bind
 the extents of its indices (``finn.dataflow.schedule.bind_extents``)."""
 
+HELD_SEMANTICS = default_semantics(Held)
+HELD = ViewKey("held", HELD_SEMANTICS)
+"""What an idle port holds, collected by its kernel's leaf."""
 
-@dataclass(frozen=True)
-class Tieoffs:
-    """Pins a kernel leaves out of the composition in this configuration.
-
-    ``inputs`` are held constant, as (pin, value); ``unused`` outputs are left
-    unconnected.
-    """
-
-    inputs: tuple[tuple[str, int], ...] = ()
-    unused: tuple[str, ...] = ()
-
-
-TIEOFFS_SEMANTICS = default_semantics(Tieoffs)
-TIEOFFS = ViewKey("tieoffs", TIEOFFS_SEMANTICS)
-HELD = ViewKey("held", TIEOFFS_SEMANTICS)
-"""What an idle port holds, collected by its kernel's tie-offs."""
+# The composed module's clocking pins: its interface convention, not a routing rule.
+CLOCK, CLOCK2X, RESET = "ap_clk", "ap_clk2x", "ap_rst_n"
 
 
 @dataclass(frozen=True)
@@ -155,13 +195,19 @@ NATIVE_CLOCKING = Clocking(clock="clk", reset="rst", active_low=False)
 """FinnLib's native ``clk`` and synchronous active-high ``rst``."""
 
 
+def _inputs(pin: Signal | Bus) -> tuple[str, ...]:
+    if isinstance(pin, Signal):
+        return (pin.name,) if pin.direction is Direction.IN else ()
+    return tuple(name for name, direction in pin.member_directions() if direction is Direction.IN)
+
+
 class Kernel(Space):
     """A named family configuring one module; see the module docstring for the protocol."""
 
     id: ClassVar[str] = ""
     version: ClassVar[str] = "1"
-    # The RTL module it instantiates; empty for a composite, which generates its own.
-    module: ClassVar[str] = ""
+    # The RTL module it instantiates; empty for a kernel with children.
+    rtl_module: ClassVar[str] = ""
 
     def __init_subclass__(cls, **kwargs: object) -> None:
         super().__init_subclass__(**kwargs)
@@ -174,6 +220,7 @@ class Kernel(Space):
 
     port_pins = Members(PINS)
     port_holds = Members(HELD)
+    port_clocks = Members(CLOCKED)
     port_accesses = Members(ACCESS)
     admission = ConstraintGroup()
 
@@ -181,17 +228,30 @@ class Kernel(Space):
         """The module's parameters, read from the kernel's choices; refused when it has none."""
         return {}
 
-    def sources(self) -> tuple[RequirementContribution, ...]:
-        """The source files that provide ``module``, and any data they read."""
+    def sources(self) -> tuple[Contribution, ...]:
+        """The source files that provide ``rtl_module``, and any data they read."""
         return ()
 
     def other_pins(self) -> tuple[Signal | Bus, ...]:
         """Pins that are no port's, such as an AXI-Lite configuration bus."""
         return ()
 
-    def held(self) -> Tieoffs | Rejected:
+    def held(self) -> Held | Rejected:
         """What the kernel itself holds idle, beyond its idle ports and doubled clock."""
-        return Tieoffs()
+        return Held()
+
+    def controlled(self) -> tuple[Bus, ...]:
+        """The buses among its other pins it presents through a ``ControlBus``."""
+        return ()
+
+    def stem(self) -> str:
+        """A kernel with children: its composed module's name stem."""
+        return "finn_" + type(self).__name__.lower()
+
+    def producer_identity(self) -> ProducerIdentity:
+        """A kernel with children: what derives its composed module."""
+        family = type(self)
+        return ProducerIdentity(family.id, family.version)
 
     @derived
     def clocking(self) -> Clocking:
@@ -230,13 +290,26 @@ class Kernel(Space):
         except ValueError as error:
             return reject("kernel-schedule", str(error))
 
-    # -- derived plumbing ------------------------------------------------------------------
+    # -- a leaf: its module, and its pins accounted for -------------------------------------
 
     @derived
-    def codegen(self) -> ModuleBuildRequirements | Rejected:
-        """The module: clocking, its other pins, then every port's pins; and parameters."""
+    def holds(self) -> Held | Rejected:
+        """What the module holds: the doubled clock while unused, idle ports, its own."""
+        held = self.held()
+        if isinstance(held, Rejected):
+            return held
+        parts = (Held(self.clocking.held()), *(item.value for item in self.port_holds), held)
+        return Held(
+            tuple(pin for part in parts for pin in part.inputs),
+            tuple(pin for part in parts for pin in part.unused),
+        )
+
+    @derived
+    def codegen(self) -> Leaf | Rejected:
+        """The module: clocking, its other pins, then every port's pins; its parameters,
+        sources and data; and what it holds."""
         family = type(self)
-        if not family.module:
+        if not family.rtl_module:
             return reject("kernel-module", f"{family.__qualname__} declares no module")
         clocking = self.clocking
         chosen = self.parameters()
@@ -244,29 +317,134 @@ class Kernel(Space):
             return chosen
         parameters = tuple(sorted(chosen.items()))
         pins = tuple(pin for item in self.port_pins for pin in item.value)
-        abi = ModuleABIRequirements(
-            FixedModuleName(family.module),
-            (*clocking.signals(), *self.other_pins(), *pins),
-            tuple((name, str(value)) for name, value in parameters),
-            clocking.alignments(),
+        contributions = self.sources()
+        return Leaf(
+            family.id,
+            family.version,
+            family.rtl_module,
+            parameters,
+            Pins(
+                (*clocking.signals(), *self.other_pins(), *pins),
+                tuple((name, str(value)) for name, value in parameters),
+                clocking.alignments(),
+            ),
+            tuple(item for item in contributions if isinstance(item, CopiedSource)),
+            tuple(item for item in contributions if isinstance(item, GeneratedData)),
+            self.holds,
         )
-        return ModuleBuildRequirements(family.id, family.version, parameters, abi, self.sources())
 
-    build_requirements = View(codegen, requires=(admission,))
-
-    @view
-    def tieoffs(self) -> Tieoffs | Rejected:
+    @constraint
+    def pins_accounted(self) -> bool | Rejected:
+        """Every input among its other pins is held, or presented as a control bus."""
         held = self.held()
         if isinstance(held, Rejected):
             return held
-        parts = (Tieoffs(self.clocking.held()), *(item.value for item in self.port_holds), held)
-        return Tieoffs(
-            tuple(pin for part in parts for pin in part.inputs),
-            tuple(pin for part in parts for pin in part.unused),
+        accounted = {pin for pin, _ in held.inputs} | {
+            member.physical for bus in self.controlled() for member in bus.signals
+        }
+        loose = [pin for item in self.other_pins() for pin in _inputs(item) if pin not in accounted]
+        if loose:
+            return reject(
+                "kernel-pins",
+                f"{type(self).__qualname__}: the inputs {loose} are neither held nor presented",
+            )
+        return True
+
+    @constraint
+    def clocked(self) -> bool | Rejected:
+        """Every port runs on the module's clock."""
+        clock = self.clocking.clock
+        other = [f"{item.node} on {item.value}" for item in self.port_clocks if item.value != clock]
+        if other:
+            return reject("kernel-clock", f"ports run off the clock {clock}: {', '.join(other)}")
+        return True
+
+    # -- a kernel with children: their netlists, merged -------------------------------------
+
+    netlists = Members(NETLIST)
+    presented = Members(EXPORTED)
+    stream_buses = Members(BOUNDARY)
+
+    @derived
+    def fragment(self) -> Fragment | Rejected:
+        """A leaf: its accepted module, the empty label (its parent's ``under(node)`` names
+        it ``node``). A kernel with children: each member's netlist under its node, and the
+        buses its ``ControlBus`` nodes present; its own module is complete only as the
+        root, whose streams it declares, so a parent reads its netlist, not its module."""
+        family = type(self)
+        if family.rtl_module:
+            if self.netlists:
+                return reject("kernel-children", "a kernel binds one module or has children")
+            leaf = self.module
+            assert isinstance(leaf, Leaf)
+            return Fragment((("", leaf),))
+        if not self.netlists:
+            return reject(
+                "kernel-module", f"{family.__qualname__} declares no module and places no kernel"
+            )
+        exports = tuple(
+            BusExport(item.node, item.child, item.port)
+            for located in self.presented
+            for item in located.value
+        )
+        try:
+            return merge(
+                *(item.value.under(str(item.node)) for item in self.netlists),
+                Fragment(exports=exports),
+            )
+        except BuildError as error:
+            return reject("kernel-netlist", str(error))
+
+    @derived
+    def composed_pins(self) -> Pins:
+        """Its clocks and reset, each boundary stream's AXIS bus (inputs, then outputs), then
+        each presented bus."""
+        fragment = self.fragment
+        doubled = any(
+            isinstance(info.role, Clock) and isinstance(info.role.rate, Derived)
+            for _, leaf in fragment.instances
+            for info in abi_pins(leaf.pins.ports).values()
+        )
+        clocks = (CLOCK, CLOCK2X) if doubled else (CLOCK,)
+        buses = [bus for item in self.stream_buses for bus in item.value]
+        return Pins(
+            (
+                Signal(CLOCK, Direction.IN, 1, Clock(Free())),
+                *((Signal(CLOCK2X, Direction.IN, 1, Clock(Derived(CLOCK, 2))),) if doubled else ()),
+                Signal(RESET, Direction.IN, 1, Reset(True, True, clocks)),
+                *(bus for bus in buses if bus.endpoint is Endpoint.TARGET),
+                *(bus for bus in buses if bus.endpoint is not Endpoint.TARGET),
+                *(top_bus(item.bus, item.port, CLOCK, RESET) for item in fragment.exports),
+            ),
+            (),
+            (ClockAlignment(CLOCK, CLOCK2X),) if doubled else (),
         )
 
+    @derived(semantics=MODULE_SEMANTICS)
+    def built(self) -> Leaf | Composed | Rejected:
+        if type(self).rtl_module:
+            return self.codegen
+        producer = self.producer_identity()
+        try:
+            return Composed(
+                producer.producer_id,
+                producer.contract_version,
+                self.stem(),
+                self.composed_pins,
+                self.fragment,
+            )
+        except BuildError as error:
+            return reject("kernel-netlist", str(error))
+
+    module = View(
+        built, requires=(admission, pins_accounted, clocked, netlists, presented, stream_buses)
+    )
+    netlist = View(
+        fragment, requires=(admission, pins_accounted, clocked, netlists, presented, stream_buses)
+    )
+
     # A kernel adding exports of its own extends these: ``{**Kernel.exports, KEY: ...}``.
-    exports = {MODULE: build_requirements, TIEOFFS: tieoffs}
+    exports = {NETLIST: netlist, MODULE: module}
 
 
 def extent_of(index: Index) -> int:
@@ -316,17 +494,22 @@ def factor_domain(index: Index, bound: int = 1 << 32) -> Domain[int]:
 
 __all__ = [
     "ACCESS",
+    "BOUNDARY",
+    "CLOCK",
+    "CLOCK2X",
+    "CLOCKED",
     "Clocking",
     "HELD",
+    "HELD_SEMANTICS",
     "Kernel",
     "MODULE",
-    "MODULE_REQUIREMENTS",
+    "MODULE_SEMANTICS",
     "NATIVE_CLOCKING",
+    "NETLIST",
+    "NETLIST_SEMANTICS",
     "PINS",
     "PORT",
-    "TIEOFFS",
-    "TIEOFFS_SEMANTICS",
-    "Tieoffs",
+    "RESET",
     "extent_of",
     "factor_domain",
 ]

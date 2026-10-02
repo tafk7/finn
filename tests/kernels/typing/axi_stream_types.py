@@ -10,8 +10,7 @@ from finn.dataflow.traversal import BeatSequence
 from finn.dataflow.tensor import ScalarEncoding
 from finn.kernels.dotp import DotpAxiKernel
 from finn.kernels.eltwise import EltwiseKernel
-from finn.kernels.physical.axi_stream import AxiStream
-from finn.kernels.physical.stream import ReadyValidStream
+from finn.kernels.transport import AxiStream, ReadyValidStream
 from finn.kernels.port import AxiStreamPort
 
 

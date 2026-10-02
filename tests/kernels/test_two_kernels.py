@@ -9,7 +9,7 @@ output fold, framed by reduction. Neither kernel knows the other: each
 presents its own traversal of the hidden tensor, derived from its own schedule
 over its own folding factors.
 The stream between them plans a width conversion, a replay and the frame, and
-its adapter places a ``vpc`` and an ``input_gen``. The composed module computes
+its adapter places a ``vpc`` and an ``input_gen``. The root's module computes
 ``(x @ W1) @ W2`` in XSim, weights stored ``(k, n)``; a stream that admits no
 adapter refuses it.
 """
@@ -25,14 +25,14 @@ from finn.core.space import Rejected, derived, design_space
 from finn.dataflow.plan import Step
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import Traversal, period
-from finn.kernels.composite import Design
 from finn.kernels.configure import commit
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.dotp import PackedDotpKernel
 from finn.kernels.matmul import exact_result_dtype
 from finn.kernels.streams import Stream
+from finn.kernels.base import Kernel
 from finn.kernels.target import DspBlock
-from kernels.helpers import settled
+from kernels.helpers import Root, labels, settled
 from kernels.xsim import pack, requires_xsim, stream_through
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -47,7 +47,7 @@ X = tuple(tuple((5 * r + 3 * k) % 8 - 4 for k in range(INPUTS)) for r in range(R
 
 
 def layered(*, adaptable: bool = True):
-    class Layered(Design):
+    class Layered(Root):
         x = Stream(tensor=Tensor((ROWS, INPUTS), ScalarEncoding(A)), port="in0_V")
         w1 = Stream(tensor=Tensor((INPUTS, HIDDEN), ScalarEncoding(W)))
         h = Stream(tensor=Tensor((ROWS, HIDDEN), ScalarEncoding(H)), adaptable=adaptable)
@@ -104,17 +104,31 @@ def layered(*, adaptable: bool = True):
 def test_the_hidden_stream_plans_width_replay_and_frame_and_places_vpc_and_input_gen():
     point = layered()
     assert point.h.plan.steps == (Step.WIDTH, Step.REORDER, Step.MARKERS)
-    assert [stage.name for stage in point.h.connection.stages] == ["vpc", "input_gen"]
+    stages = point.h.stages
+    assert [stage.label for stage in stages] == [
+        "adapter.vpc_input_gen.vpc",
+        "adapter.vpc_input_gen.input_gen",
+    ]
     # The first layer's activations need only their frame closed.
     assert point.x.plan.steps == (Step.MARKERS,)
-    instances = [item.instance_id for item in point.structure.structure.instances]
-    assert {"u_first", "u_second", "u_x_input_gen", "u_h_vpc", "u_h_input_gen"} <= set(instances)
+    assert {
+        "first",
+        "second",
+        "x.adapter.input_gen.input_gen",
+        "h.adapter.vpc_input_gen.vpc",
+        "h.adapter.vpc_input_gen.input_gen",
+    } <= set(labels(point.module))
     # The ends belong to the layers' ports; the instances are the layers'.
-    connection = point.h.connection
-    assert (connection.source_owner, connection.sink_owner) == ("first.y", "second.x")
-    vpc = dict(point.h.connection.stages[0].requirements.parameters)
+    ends = point.h.endpoints
+    assert (ends.source_owner, ends.sink_owner) == ("first.y", "second.x")
+    assert [(link.source.instance, link.sink.instance) for link in point.h.netlist.links] == [
+        ("^first", "adapter.vpc_input_gen.vpc"),
+        ("adapter.vpc_input_gen.vpc", "adapter.vpc_input_gen.input_gen"),
+        ("adapter.vpc_input_gen.input_gen", "^second"),
+    ]
+    vpc = dict(stages[0].module.parameters)
     assert (vpc["PI"], vpc["PO"]) == (PE1, SIMD2)
-    generator = dict(point.h.connection.stages[1].requirements.parameters)
+    generator = dict(stages[1].module.parameters)
     # Per row (two beats of two hidden values), the row once per output fold.
     assert (generator["FM_SIZE"], generator["DIMS"], generator["COEFS"]) == (
         2,
@@ -125,11 +139,11 @@ def test_the_hidden_stream_plans_width_replay_and_frame_and_places_vpc_and_input
 
 def test_a_hidden_stream_admitting_no_adapter_refuses_the_pair():
     point = layered(adaptable=False)
-    refused = point.h.query(Stream.connection)
+    refused = point.h.query(Stream.netlist)
     assert isinstance(refused, Rejected)
     plan = [finding for finding in refused.findings if finding.code == "stream-plan"]
     assert plan and "width_conversion -> reorder -> markers" in plan[0].message
-    assert isinstance(point.query(type(point).structure), Rejected)
+    assert isinstance(point.query(Kernel.module), Rejected)
 
 
 @requires_xsim
@@ -144,7 +158,7 @@ def test_the_two_layers_compute_in_xsim(tmp_path, stalled):
     ]
     a_bits, y_bits = A.bitwidth(), Y.bitwidth()
     stream_through(
-        layered().structure.requirements,
+        layered().module,
         tmp_path,
         inputs={
             "in0_V": (

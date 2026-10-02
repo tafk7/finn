@@ -17,12 +17,12 @@ table's (``kernel-extents``). The set port indexes beats, which no index of a
 tensor expresses, so it presents a given sequence.
 
 All native pins remain present when AXI-Lite or set selection is disabled;
-disabled outputs may be unspecified. Placed in a composite, the kernel sits on
-an input, an output and (with several sets) a set-selector stream; its AXI-Lite
-bus is exported through a ``ControlBus`` when thresholds are runtime-writable,
-and otherwise held idle by its tie-offs, as is the set selector of a single
-set. Multi-set AXI-Lite access is refused: the pinned wrapper's configuration
-address width omits set bits. Static multi-set
+disabled outputs may be unspecified. Placed in a kernel with children, it sits
+on an input, an output and (with several sets) a set-selector stream; its
+AXI-Lite bus is presented through a ``ControlBus`` when thresholds are
+runtime-writable (``controlled``), and otherwise held idle by its module, as
+is the set selector of a single set. Multi-set AXI-Lite access is refused: the
+pinned wrapper's configuration address width omits set bits. Static multi-set
 selection remains supported. Floating-point threshold comparison is outside
 this first profile.
 Biases below -N-1 are refused: the native unsigned width expression creates a
@@ -54,7 +54,8 @@ from finn.dataflow.schedule import Index, Schedule
 from finn.dataflow.traversal import BeatSequence, vector_major
 from finn.kernels.artifacts.abi import Bus, Endpoint, Member, Signal, StandardProtocol
 from finn.kernels.artifacts.contributions import CopiedSource
-from finn.kernels.base import Kernel, Tieoffs
+from finn.kernels.artifacts.module import Held
+from finn.kernels.base import Kernel
 from finn.kernels.control import CONTROL, Control, ControlBus, held_bus
 from finn.kernels.datatypes.domains import Integer, set_index_dtype
 from finn.kernels.datatypes.semantics import (
@@ -71,7 +72,7 @@ c = Index("c")
 class ThresholdingAxiKernel(Kernel):
     id = "finnlib.thresholding_axi.integer"
     version = "1"
-    module = "thresholding_axi"
+    rtl_module = "thresholding_axi"
 
     input_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
     threshold_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
@@ -341,17 +342,21 @@ class ThresholdingAxiKernel(Kernel):
     def other_pins(self) -> tuple[Signal | Bus, ...]:
         return (self.config_bus,)
 
-    def held(self) -> Tieoffs | Rejected:
+    def held(self) -> Held | Rejected:
         """AXI-Lite, without runtime writes."""
         if not self.use_axilite:
             return held_bus(self.config_bus)
         if not self.present(ThresholdingAxiKernel.control):
             return reject("threshold-control", "runtime-writable thresholds need a control bus")
-        return Tieoffs()
+        return Held()
+
+    def controlled(self) -> tuple[Bus, ...]:
+        """AXI-Lite, with runtime writes."""
+        return (self.config_bus,) if self.use_axilite else ()
 
     @view
     def control_bus(self) -> Control:
-        return Control(self.config_bus if self.use_axilite else None)
+        return Control(self.config_bus if self.controlled() else None)
 
     exports = {**Kernel.exports, CONTROL: {control: control_bus}}
 

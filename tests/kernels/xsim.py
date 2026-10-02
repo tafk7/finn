@@ -1,12 +1,12 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""XSim harness: build a module's sources, run a testbench, stream words through a Design.
+"""XSim harness: build a module's sources, run a testbench, stream words through a module.
 
-``materialize`` builds ``requirements`` into a directory and places each
+``materialize`` builds a ``module`` into a directory and places each
 memory's INIT_FILE where ``$readmemh`` reads it. ``simulate`` elaborates a
 testbench module ``check`` against sources and requires it to display
-``PASS``. ``stream_through`` drives a composed module's AXIS inputs with
+``PASS``. ``stream_through`` drives a module's AXIS inputs with
 words (under stalls on both sides unless ``stalled`` is False) and checks
 that each AXIS output presents its words, compared on their payload bits (an
 AXIS word is padded to bytes); every other top input is held at zero. A
@@ -24,11 +24,9 @@ from pathlib import Path
 
 import pytest
 
-from finn.kernels.artifacts.abi import Clock, Direction, Reset
+from finn.kernels.artifacts.abi import Clock, Direction, Reset, abi_pins
 from finn.kernels.artifacts.build import emit_module
-from finn.kernels.artifacts.requirements import ModuleBuildRequirements
-from finn.kernels.physical.validation import abi_pins
-from finn.kernels.resources import template_root
+from finn.kernels.artifacts.module import Module
 from kernels.helpers import finnlib_root, vivado_simulator
 
 
@@ -47,19 +45,12 @@ def pack(values: Sequence[int], bits: int) -> int:
     return sum((value & mask) << (index * bits) for index, value in enumerate(values))
 
 
-def materialize(
-    requirements: ModuleBuildRequirements, directory: Path
-) -> tuple[str, list[str], dict[str, str]]:
+def materialize(module: Module, directory: Path) -> tuple[str, list[str], dict[str, str]]:
     """The top module, its HDL sources, and each INIT_FILE's name and contents.
 
     FinnLib is the ``finnlib`` resource (``FINN_RESOURCES_FINNLIB`` overrides it).
     """
-    emitted = emit_module(
-        requirements,
-        directory / "module",
-        roots={"finnlib": finnlib_root()},
-        templates=template_root(),
-    )
+    emitted = emit_module(module, directory / "module", roots={"finnlib": finnlib_root()})
     sources = [str(emitted.directory / path) for path in emitted.sources]
     data = {path: (emitted.directory / path).read_text() for path in emitted.data}
     return emitted.entry_point, sources, data
@@ -110,7 +101,7 @@ def _table(name: str, bits: int, words: Sequence[int]) -> str:
 
 
 def stream_through(
-    requirements: ModuleBuildRequirements,
+    module: Module,
     directory: Path,
     *,
     inputs: Mapping[str, Words],
@@ -118,14 +109,14 @@ def stream_through(
     stalled: bool = True,
     repeating: bool = False,
 ) -> None:
-    top, sources, data = materialize(requirements, directory)
+    top, sources, data = materialize(module, directory)
     for name, text in data.items():  # $readmemh reads an INIT_FILE from the simulator's directory
         (directory / name).write_text(text)
     valid, ready = ("cycle % 3 != 0", "cycle % 4 != 1") if stalled else ("1", "1")
     streams = {**inputs, **outputs}
     lines: list[str] = []
-    for name, info in abi_pins(requirements.abi).items():
-        if isinstance(info.role, (Clock, Reset)) or info.bus_id in streams:
+    for name, info in abi_pins(module.pins.ports).items():
+        if isinstance(info.role, (Clock, Reset)) or info.bus in streams:
             continue
         width = "" if info.width == 1 else f"[{info.width - 1}:0] "
         held = info.direction is Direction.IN

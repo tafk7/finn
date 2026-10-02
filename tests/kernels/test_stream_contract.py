@@ -16,22 +16,21 @@ import pytest
 from qonnx.core.datatype import DataType
 
 from finn.core.space import Rejected, Unresolved, design_space
-from finn.kernels.composite import Design
 from finn.kernels.configure import commit
 from finn.kernels.eltwise import EltwiseKernel
-from finn.kernels.streams import Stream
+from finn.kernels.streams import Stream, wired
 from finn.kernels.target import DspBlock
-from finn.kernels.artifacts.abi import Clock, Direction, Endpoint, Reset, Signal
-from finn.kernels.artifacts.requirements import (
-    GeneratedModuleName,
-    ModuleABIRequirements,
-)
+from finn.kernels.artifacts.abi import Endpoint
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.fifo import FifoKernel
-from finn.kernels.physical.axi_stream import AxiStream
-from finn.kernels.physical.composition import Composition, StreamEnd
-from finn.kernels.physical.contract import StreamContract, compatibility
+from finn.kernels.transport import (
+    MarkerKind,
+    ReadyValidStream,
+    StreamContract,
+    StreamMarker,
+    compatibility,
+)
 from finn.dataflow.traversal import (
     Adaptation,
     LevelEnd,
@@ -44,10 +43,10 @@ from finn.dataflow.traversal import (
     tile,
     vector_major,
 )
-from finn.kernels.physical.stream import MarkerKind, ReadyValidStream, StreamMarker
 from finn.transformation.fpgadataflow.transpose_decomposition import (
     shuffle_perfect_loopnest_coeffs,
 )
+from kernels.helpers import Root
 from kernels.xsim import pack as xsim_pack, requires_xsim, stream_through
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -253,18 +252,6 @@ def test_contracts_reject_lanes_wider_than_the_word_and_unknown_marker_rules():
 # -- the delivery kernel -----------------------------------------------------------------
 
 
-def hold(composition, instance, kernel):
-    """Tie off what an unplaced memory holds, but the output this test connects itself."""
-    connected = {pin.name for pin in kernel.output.contract.transport.pins()}
-    tieoffs = kernel.tieoffs
-    for pin, value in tieoffs.inputs:
-        if pin not in connected:
-            composition.tie(instance, pin, value)
-    for pin in tieoffs.unused:
-        if pin not in connected:
-            composition.dispose(instance, pin, "tied off")
-
-
 def delivery(form=None, values=(1, -2, 7, -8), **choices):
     form = vector_major((4,), 2) if form is None else form
     base = design_space(MemStreamKernel(dtype=DataType["INT4"], form=form, contents=values))
@@ -277,8 +264,8 @@ def test_delivery_publishes_a_cyclic_contract_and_waits_only_for_its_own_choice(
     assert output.repetition is Repetition.CYCLIC and output.form == vector_major((4,), 2)
     assert output.payload_bits == output.transport.data_width == 8
     assert base.image == (0xE1, 0x87)
-    assert isinstance(base.query(MemStreamKernel.build_requirements), Unresolved)
-    requirements = delivery(ram_style="block", pumped_memory=False).build_requirements
+    assert isinstance(base.query(MemStreamKernel.module), Unresolved)
+    requirements = delivery(ram_style="block", pumped_memory=False).module
     assert dict(requirements.parameters)["RAM_STYLE"] == '"block"'
 
 
@@ -294,9 +281,7 @@ def test_delivery_refuses_values_outside_the_operand_contract(values, dtype, mes
     point = design_space(
         MemStreamKernel(dtype=DataType[dtype], form=vector_major((4,), 2), contents=values)
     )
-    answer = point.with_choices(ram_style="auto", pumped_memory=False).query(
-        MemStreamKernel.build_requirements
-    )
+    answer = point.with_choices(ram_style="auto", pumped_memory=False).query(MemStreamKernel.module)
     assert isinstance(answer, Rejected)
     if message:
         assert any(message in finding.message for finding in answer.findings)
@@ -304,15 +289,6 @@ def test_delivery_refuses_values_outside_the_operand_contract(values, dtype, mes
 
 # -- a second consumer: cyclic channel parameters into eltwise ---------------------------
 
-CLOCKING = (
-    Signal("ap_clk", Direction.IN, 1, Clock()),
-    Signal(
-        "ap_rst_n",
-        Direction.IN,
-        1,
-        Reset(active_low=True, synchronous=True, synchronous_to=("ap_clk",)),
-    ),
-)
 CHANNELS, PE, PIXELS = 4, 2, 3
 PARAMETERS = (1, -2, 7, -8)
 
@@ -322,7 +298,7 @@ def eltwise_with_constant(form=None):
     form = vector_major((CHANNELS,), PE) if form is None else form
     int4, int5 = DataType["INT4"], DataType["INT5"]
 
-    class Constant(Design):
+    class Constant(Root):
         x = Stream(tensor=Tensor((PIXELS, CHANNELS), INT4), port="in0_V")
         c = Stream(tensor=Tensor((CHANNELS,), INT4), adaptable=False)
         y = Stream(tensor=Tensor((PIXELS, CHANNELS), ScalarEncoding(int5)), port="out0_V")
@@ -345,15 +321,14 @@ def eltwise_with_constant(form=None):
 
 
 def test_the_delivery_kernel_serves_a_second_consumer_through_the_same_contract():
-    structure = eltwise_with_constant().structure.structure
-    assert {
-        (wire.destination.bit_offset, wire.source.bit_offset)
-        for wire in structure.wires
-        if wire.destination.pin.signal_id == "bdat"
-    } == {(0, 0), (4, 4)}
+    module = eltwise_with_constant().module
+    (into,) = [link for link in module.fragment.links if link.sink.data == "bdat"]
+    # Lane for lane: the memory's channels are the ones eltwise reads.
+    assert (into.source.instance, into.sink.instance) == ("rhs", "add")
+    assert (into.lanes, into.lane_bits) == ((0, 1), 4)
     # A delivery whose lanes carry other positions (0,2),(1,3) needs a lane regroup.
     strided = Traversal.over((CHANNELS,), ((0, 2, 1),), ((0, 2, 2),))
-    refused = eltwise_with_constant(strided).c.query(Stream.connection)
+    refused = eltwise_with_constant(strided).c.query(Stream.netlist)
     assert isinstance(refused, Rejected)
     (plan,) = [finding for finding in refused.findings if finding.code == "stream-plan"]
     assert "another lane axis" in plan.message
@@ -370,52 +345,12 @@ def test_a_pure_lane_permutation_is_realized_as_free_wiring():
     values = (((1, 2), (3, 4)), ((5, 6), (7, -8)))
     source = design_space(MemStreamKernel(dtype=DataType["INT4"], form=produced, contents=values))
     fifo = design_space(FifoKernel(word_bits=16, depth=2)).with_choices(ram_style="auto")
-    fifo_in, fifo_out = fifo.input.transport, fifo.output.transport
-    out = AxiStream("out0_V", DataType["INT4"], 4, endpoint=Endpoint.INITIATOR)
-    top = StreamContract(
-        out.native(clock="ap_clk", reset="ap_rst_n"), INT4, wanted, Repetition.CYCLIC
-    )
-    composition = Composition(
-        ModuleABIRequirements(
-            GeneratedModuleName("t"), (*CLOCKING, out.bus(clock="ap_clk", reset="ap_rst_n")), ()
-        )
-    )
-    source = source.with_choices(ram_style="auto", pumped_memory=False)
-    composition.add("u_source", source.build_requirements)
-    composition.add("u_fifo", fifo.build_requirements)
-    for owner in ("u_source", "u_fifo"):
-        composition.drive(owner, "clk", "ap_clk")
-        composition.drive(owner, "rst", "ap_rst_n")
-    hold(composition, "u_source", source)
-    composition.connect(
-        StreamEnd("u_source", source.output.contract),
-        StreamEnd("u_fifo", StreamContract(fifo_in, INT4, wanted)),
-    )
-    composition.connect(
-        StreamEnd("u_fifo", StreamContract(fifo_out, INT4, wanted, Repetition.CYCLIC)),
-        StreamEnd(None, top),
-    )
-    structure = composition.finish()
-    crossed = {
-        (wire.destination.bit_offset, wire.source.bit_offset)
-        for wire in structure.wires
-        if wire.destination.pin.signal_id == "idat"
-    }
-    assert crossed == {(0, 0), (4, 8), (8, 4), (12, 12)}
-
-
-def test_clock_domains_must_be_attached_and_equal():
-    stream = native("o", 8, Endpoint.INITIATOR, clock="clk")
-    sink = native("i", 8, Endpoint.TARGET, clock="clk")
-    top_abi = ModuleABIRequirements(GeneratedModuleName("t"), CLOCKING, ())
-    composition = Composition(top_abi)
-    composition.add("a", delivery(ram_style="auto", pumped_memory=False).build_requirements)
-    composition.add("b", delivery(ram_style="auto", pumped_memory=False).build_requirements)
-    found = composition.check(
-        StreamEnd("a", StreamContract(stream, INT4, vector_major((4,), 2))),
-        StreamEnd("b", StreamContract(sink, INT4, vector_major((4,), 2))),
-    )
-    assert "stream-clock" in codes(found)
+    # The hop connects directly, and its link crosses the lanes: no adapter.
+    sink = StreamContract(fifo.input.transport, INT4, wanted)
+    assert compatibility(source.output.contract, sink, source_is_top=False, sink_is_top=False) == ()
+    link = wired("source", source.output.contract, "fifo", sink)
+    assert (link.source.data, link.sink.data) == ("m_axis_0_tdata", "idat")
+    assert (link.lanes, link.lane_bits) == ((0, 2, 1, 3), 4)
 
 
 @requires_xsim
@@ -425,7 +360,7 @@ def test_eltwise_with_cyclic_constant_computes_the_broadcast_sum(tmp_path):
     words_in = [xsim_pack(inputs[i : i + PE], 4) for i in range(0, len(inputs), PE)]
     words_out = [xsim_pack(expected[i : i + PE], 5) for i in range(0, len(expected), PE)]
     stream_through(
-        eltwise_with_constant().structure.requirements,
+        eltwise_with_constant().module,
         tmp_path,
         inputs={"in0_V": (words_in, 4 * PE)},
         outputs={"out0_V": (words_out, 5 * PE)},

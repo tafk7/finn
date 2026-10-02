@@ -3,7 +3,6 @@
 
 """What a kernel contributes to its module's sources: files it copies and data it generates.
 
-A rendered source (a composed module's wrapper) is ``requirements.RenderedSourceRequirement``.
 ``provides`` and ``requires`` name module symbols (``module:dotp``), from which a
 module's sources are ordered (``sources.ordered``).
 """
@@ -11,6 +10,7 @@ module's sources are ordered (``sources.ordered``).
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Union
 
 
 class ContributionError(Exception):
@@ -44,7 +44,7 @@ class CopiedSource:
 class GeneratedData:
     """A data file whose contents the kernel generates, such as a memory image.
 
-    The contents are part of the requirements, so they enter its fingerprint.
+    The contents are part of the module, so they enter its fingerprint.
     ``path`` is the name the RTL reads it under (an ``INIT_FILE``), beside the
     module's sources.
     """
@@ -58,4 +58,8 @@ class GeneratedData:
             raise ContributionError("generated data is bytes")
 
 
-__all__ = ["ContributionError", "CopiedSource", "GeneratedData"]
+Contribution = Union[CopiedSource, GeneratedData]
+"""What a kernel contributes: a file it copies, or data it generates."""
+
+
+__all__ = ["Contribution", "ContributionError", "CopiedSource", "GeneratedData"]

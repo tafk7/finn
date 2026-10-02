@@ -3,21 +3,22 @@
 
 """Control buses as ordinary Spaces that kernels reference.
 
-A ``ControlBus`` is a node declared in the composite, named by the top-level
-port it presents (``port``). A kernel with a
-control interface (an AXI-Lite configuration bus, say) has a reference input
-for it (``control: ControlBus = Param(required=False)``) and exports, under
-``CONTROL``, the bus it presents there: ``exports = {CONTROL: {control:
-control_bus}}``. The node sees its kernel through ``Users(CONTROL)`` and
-exports an ``Exported`` bus under ``EXPORTED``; ``netlist`` renames the bus to
-the node's port, associates it with the module's clock and reset, and wires it
-through to the top. One kernel is controlled
+A ``ControlBus`` is a node declared in a kernel with children, named by the
+port it presents (``port``). A kernel with a control interface (an AXI-Lite
+configuration bus, say) has a reference input for it (``control: ControlBus =
+Param(required=False)``) and exports, under ``CONTROL``, the bus it presents
+there: ``exports = {CONTROL: {control: control_bus}}``. The node sees its
+kernel through ``Users(CONTROL)`` and exports an ``Exported`` bus under
+``EXPORTED``; the kernel that declares the node presents it in its netlist
+(``BusExport``), each parent prefixing its port with the child's node
+(``first_s_axilite``), and the root's module renames the bus to that port
+(``top_bus``), associated with its clock and reset. One kernel is controlled
 through one bus node.
 
 A kernel whose control interface is not referenced, or that exposes none in
 its configuration (``Control(None)``), holds the bus inputs constant and
-leaves its outputs unconnected through its ``Tieoffs``: nothing about a bus is
-wired by name.
+leaves its outputs unconnected (``held_bus``), and presents it otherwise
+(``Kernel.controlled``): nothing about a bus is wired by name.
 """
 
 from __future__ import annotations
@@ -35,7 +36,7 @@ from finn.core.space import (
     view,
 )
 from finn.kernels.artifacts.abi import Bus, Direction, Endpoint, Member
-from finn.kernels.base import Tieoffs
+from finn.kernels.artifacts.module import Held
 
 
 @dataclass(frozen=True)
@@ -79,7 +80,7 @@ def top_bus(child: Bus, port: str, clock: str, reset: str) -> Bus:
     )
 
 
-def held_bus(bus: Bus) -> Tieoffs:
+def held_bus(bus: Bus) -> Held:
     """A bus left unexposed: its inputs held low, its outputs unconnected."""
     directions = dict(bus.member_directions())
     inputs = tuple(
@@ -90,11 +91,11 @@ def held_bus(bus: Bus) -> Tieoffs:
     unused = tuple(
         member.physical for member in bus.signals if directions[member.physical] is not Direction.IN
     )
-    return Tieoffs(inputs, unused)
+    return Held(inputs, unused)
 
 
 class ControlBus(Space):
-    """A control interface of the composite: one kernel's bus, presented at ``port``."""
+    """A control interface of a kernel with children: one kernel's bus, presented at ``port``."""
 
     port: str = Param()
     users = Users(CONTROL)
