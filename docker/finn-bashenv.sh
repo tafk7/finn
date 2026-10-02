@@ -9,4 +9,10 @@ fi
 if [ -z "${FINN_ROOT:-}" ] && [ -n "${WORKSPACE_DIR:-}" ]; then
     export FINN_ROOT="$WORKSPACE_DIR"
 fi
+# The xilinx kit passes the licence server as host and port (a kit argument
+# exports one whole value); FlexLM wants port@host.
+if [ -z "${XILINXD_LICENSE_FILE:-}" ] && [ -n "${FINN_LICENSE_HOST:-}" ] \
+   && [ -n "${FINN_LICENSE_PORT:-}" ]; then
+    export XILINXD_LICENSE_FILE="$FINN_LICENSE_PORT@$FINN_LICENSE_HOST"
+fi
 true

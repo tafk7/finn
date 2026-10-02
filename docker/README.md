@@ -4,14 +4,15 @@ FINN has two development setups: native (`setup-local.sh`), or the Docker-built
 environment described here. Both use the same `uv.lock`; see
 [installation](../docs/installation.md) and [the design](../docs/environment.md).
 
-The image is always built with Docker Buildx. Docker runs it directly, sbx
-imports a specialized image variant, and Apptainer consumes an exported SIF:
+The image is always built with Docker Buildx. Docker runs it directly,
+Apptainer consumes an exported SIF, and Docker Sandboxes builds its `sbx` stage
+as FINN's workload kit:
 
 ```text
-Docker image
+docker/Dockerfile.finn
 ├── Docker Compose              default
-├── sbx template import         agent isolation
-└── SIF export                  standard Apptainer/Singularity execution
+├── SIF export                  standard Apptainer/Singularity execution
+└── sbx workload kit (finn.yaml) agent isolation; built by sbx from the checkout
 ```
 
 ## Run
@@ -35,7 +36,6 @@ running anything. `-n NAME` and `--name NAME` assign the Docker container name;
 ```bash
 ./docker/build
 ./docker/build --runtime xrt
-./docker/build --sbx
 ./docker/build --release
 ./docker/build --export-sif ./finn.sif
 ./docker/build --runtime xrt --export-sif ./finn-xrt.sif
@@ -47,9 +47,8 @@ without using the BuildKit cache. Ordinary runs and SIF export reuse a prepared
 Docker image with the selected environment tag; explicit `docker/build` refreshes
 its cached build. SIF export always writes the requested path.
 
-No registry is assumed. Docker images remain in the local daemon, sbx images
-are transferred to the sbx image store, and SIF files are explicit build
-outputs. Run a SIF with the standard tool, for example:
+No registry is assumed. Docker images remain in the local daemon and SIF files
+are explicit build outputs. Run a SIF with the standard tool, for example:
 
 ```bash
 apptainer exec --cleanenv --bind "$PWD:$PWD" --pwd "$PWD" \
@@ -66,43 +65,34 @@ remains its Docker image digest or exported SIF checksum.
 
 ## Configuration
 
+The Xilinx installation and licence server are this machine's, in
+`~/.config/finn/xilinx.env` ([configure a machine](../docs/installation.md#configure-a-machine));
+`FINN_XILINX_VERSION=2026.1 ./docker/run --fpga …` selects another installed
+version for one container. `FINN_RESOURCES_*` directories are mounted at their
+own paths.
+
 `docker/config.py` is the single executable Python host resolver for Docker and
-native installation. It preserves path/layout probing, licence classification,
-UID/GID handling, shell output and Compose output:
+native installation. It reads the machine file (through `xilinx_install.py`,
+which the sbx workload shares) and preserves path/layout probing, licence
+classification, UID/GID handling, shell output and Compose output:
 
 ```bash
 ./docker/config.py inspect --tier dev
 ./docker/config.py inspect --tier build
 ./docker/config.py compose --tier build --service build
+./docker/config.py compose --tier auto --inputs-only --service dev   # the Dev Container's inputs
 ```
 
 Reported network requirements are declarative. Docker does not enforce them.
 
-## Native sandbox environments
+## Docker Sandboxes
 
-Prepare a template with `./docker/build --sbx`; obtain its reference with
-`./docker/build --sbx --print-tag`. Preparation only builds/imports an image.
-It does not create sandboxes, register credentials or configure machine policy.
-
-Follow [the native example guide](sbx/README.md) to copy the base, selected FPGA
-overlay and optional site kit together outside all mounted workspaces. Use
-native `sbx env plan / create / run / exec / rm` with the same files and arguments
-for every command. The base defaults to shell; `--env-arg agent=claude` selects
-a coding agent and composes with the explicit FPGA overlay. The generic image
-has no coding-agent executable; follow the guide's user-owned installation step
-before attaching, or provide your own prepared template. Lists concatenate
-under native composition. Personal agent settings and credentials remain in
-user-owned native configuration.
-
-FINN supplies images and examples. Users and sites own instantiated environments,
-mounts and network policy; sbx owns composition, approval and lifecycle. FINN has
-no Cardinal contract. The base environment (`sbxenv.yaml` at the repository root)
-has no FPGA mounts or network grants, and turns the shared skills store off. Effective networking still depends
-on machine/organization policy and the selected agent. Use a real licensed tool
-operation to validate FPGA licensing; policy readback or `lmstat` is insufficient.
-
-The environments require sbx 0.43 or later and were validated with 0.46.0. Native environment and kit interfaces are
-experimental.
+FINN ships a workload kit (`finn.yaml` at the repository root, building the
+`sbx` stage from this checkout) and a mixin for a mounted Xilinx installation
+and licence server (`docker/sbx/xilinx/`). Neither contains a coding agent,
+machine paths or credentials: those are kits and arguments of whoever creates
+the sandbox. See [the sbx guide](sbx/README.md). The sbx Bake targets build the
+same stage as a Docker image, for inspection and tests.
 
 `compose.yaml` and `docker-bake.hcl` remain usable directly for debugging and
 advanced workflows. A direct Bake invocation must set
@@ -112,15 +102,15 @@ from `docker/image-inputs.txt` automatically.
 ## Implementation boundaries
 
 ```text
-docker/build + Docker/sbx/SIF consumers
+docker/build + Docker/SIF consumers
     -> docker/lib.sh: finn_prepare_image
         -> docker-bake.hcl -> docker/Dockerfile.finn
 
 docker/config.py                            host only
     -> shell assignments / Compose overrides
 
-sbxenv.yaml + user-owned copies of the docker/sbx overlays
-    -> native sbx env composition / approval / lifecycle
+finn.yaml + docker/sbx/xilinx + the user's kits and mounts
+    -> sbx builds and composes the kits; sbx owns the sandbox lifecycle
 
 image                                      guest only
     -> Dockerfile tool list + toolchain-shim
@@ -155,10 +145,10 @@ hooks because those paths bypass normal startup.
 | Removed interface | Replacement |
 | --- | --- |
 | `docker/run-docker` | `docker/run -- COMMAND` |
-| `docker/run-sbx`, `docker/finn-sbx`, `docker/run --sbx` | Copied native examples and `sbx env` |
+| `docker/run-sbx`, `docker/finn-sbx`, `docker/run --sbx` | `sbx create` with FINN's kits ([sbx guide](sbx/README.md)) |
+| `docker/build --sbx`, `sbxenv.yaml`, `docker/sbx/*.sbxenv.yaml` | FINN's workload kit `finn.yaml` and the `docker/sbx/xilinx` kit |
 | `run-docker.sh` | Explicit CI image preparation, then `docker/run` |
 | `docker/export-sif PATH` | `docker/build --export-sif PATH` |
-| Internal `print-tag sbx-dev` | `docker/build --sbx --print-tag` |
 | `test` / `quicktest` launch shortcuts | Explicit `pytest` / `quicktest.sh` commands |
 | `build_custom` shortcut | Explicit directory mount, working directory, and Python command |
 | `build-xrt` grant/image spelling | `--fpga --runtime xrt` |
@@ -171,20 +161,6 @@ hooks because those paths bypass normal startup.
 The resolver's `sbx` subcommand and `inspect --sbx`, and the launcher's `--sbx`
 and `--remove`, now fail as unknown interfaces.
 
-Existing generated environment directories under
-`${XDG_STATE_HOME:-$HOME/.local/state}/finn/sbxenv` are left intact, since they
-may describe active sandboxes. Use their `finn.sbxenv.yaml` directly with native
-`sbx env` commands, retaining any original overlays and arguments. For example:
-
-```bash
-sbx env plan /existing/environment/finn.sbxenv.yaml
-sbx env exec /existing/environment/finn.sbxenv.yaml -- python -c 'import finn'
-sbx env rm /existing/environment/finn.sbxenv.yaml --force
-```
-
-Alternatively copy the new examples into a user-owned directory. No automatic
-state migration, sandbox removal or global policy/credential changes occur.
-
 ## Development environment
 
 The dev image runs the mounted checkout, not an installed FINN. At container start
@@ -192,14 +168,16 @@ the entrypoint runs `uv sync --frozen --inexact` against `FINN_ROOT`: FINN is
 installed editable, plus any difference between the checkout's `uv.lock` and the
 image, offline where possible. uv's cache
 is kept in `$FINN_BUILD_DIR/.uv-cache`, so later starts reuse the editable builds.
-`docker exec` and `sbx exec` skip the entrypoint but join a container where it has
-run; scripts that exec into a new container can wait for `/tmp/finn-ready`.
+`docker exec` skips the entrypoint but joins a container where it has run;
+scripts that exec into a new container can wait for `/tmp/finn-ready`. In a
+sandbox the same script runs as the workload's startup hook.
 
 The Dev Container uses the same image and entrypoint at the fixed path
 `/workspace/finn`; its interpreter is `/opt/venv/bin/python`.
 
 Generic images have no Bash activation hook. Only the sbx variant sources native
-persistent environment configuration. Site Tcl initialization uses explicit mounts
+persistent environment configuration and composes `XILINXD_LICENSE_FILE` from
+the xilinx kit's licence host and port. Site Tcl initialization uses explicit mounts
 into the chosen user's `.Xilinx` directory. Bare vendor shims and global libudev
 preload remain pending actual licensed/native validation; FINN vendor operations
 use scoped argv/cwd/environment execution.

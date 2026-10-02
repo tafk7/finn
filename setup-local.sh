@@ -57,7 +57,10 @@ print_usage() {
     echo "Environment variables:"
     echo "  FINN_VENV            Virtual environment path (default: .venv)"
     echo "  FINN_XILINX_PATH     Path to Xilinx tools (e.g., /opt/Xilinx)"
-    echo "  FINN_XILINX_VERSION  Xilinx tools version (e.g., 2024.2)"
+    echo "  FINN_XILINX_VERSION  Xilinx tools version (e.g., 2025.2)"
+    echo ""
+    echo "The Xilinx settings are normally kept in ~/.config/finn/xilinx.env"
+    echo "(docs/installation.md); a variable set here wins over the file."
 }
 
 while [[ $# -gt 0 ]]; do
@@ -138,7 +141,8 @@ echo ""
 
 gecho "Step 3: Checking Xilinx tools..."
 XILINX_AVAILABLE=0
-if [ -n "$FINN_XILINX_PATH" ] && [ -n "$FINN_XILINX_VERSION" ]; then
+if python3 "${FINN_ROOT}/docker/xilinx_install.py" configured; then
+    # From the environment or ~/.config/finn/xilinx.env, the variable winning.
     # docker/config.py locates the tools (both AMD install layouts);
     # docker/finn-toolchain.sh applies them, as it does in the image.
     eval "$("${FINN_ROOT}/docker/config.py" inspect --tier build --format sh 2>/dev/null | sed 's/^/export /')"
@@ -146,7 +150,7 @@ if [ -n "$FINN_XILINX_PATH" ] && [ -n "$FINN_XILINX_VERSION" ]; then
         gecho "  Found Vivado at $XILINX_VIVADO"
         XILINX_AVAILABLE=1
     else
-        yecho "Vivado not found under $FINN_XILINX_PATH for version $FINN_XILINX_VERSION"
+        yecho "Vivado not found for the configured FINN_XILINX_PATH and FINN_XILINX_VERSION"
     fi
     if [ -n "${XILINX_VITIS:-}" ]; then
         gecho "  Found Vitis at $XILINX_VITIS"
@@ -162,7 +166,7 @@ if [ -n "$FINN_XILINX_PATH" ] && [ -n "$FINN_XILINX_VERSION" ]; then
         . "${FINN_ROOT}/docker/finn-toolchain.sh"
     fi
 else
-    yecho "FINN_XILINX_PATH and/or FINN_XILINX_VERSION not set"
+    yecho "No Xilinx tools configured (~/.config/finn/xilinx.env or FINN_XILINX_PATH)"
     yecho "Vivado, Vitis, HLS and rtlsim are unavailable until they are."
 fi
 echo ""
@@ -197,8 +201,9 @@ echo "After pulling changes to uv.lock, update it with:"
 echo "  uv sync"
 echo ""
 if [ "$XILINX_AVAILABLE" -eq 0 ]; then
-    echo "Note: Xilinx tools not configured. For hardware flows, set:"
-    echo "  export FINN_XILINX_PATH=/opt/Xilinx"
-    echo "  export FINN_XILINX_VERSION=2024.2"
+    echo "Note: Xilinx tools not configured. For hardware flows, write"
+    echo "~/.config/finn/xilinx.env (see docs/installation.md), for example:"
+    echo "  FINN_XILINX_PATH=/opt/Xilinx"
+    echo "  FINN_XILINX_VERSION=2025.2"
     echo ""
 fi

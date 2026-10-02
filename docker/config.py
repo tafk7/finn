@@ -4,7 +4,8 @@
 This module is host-side only. It is the sole owner of workspace, toolchain,
 licence, mount and egress discovery for Docker/native callers. ``compose.yaml``
 holds static Docker behavior; this executable renders shell assignments and
-Compose overrides.
+Compose overrides. The machine file (``~/.config/finn/xilinx.env``) and AMD's
+install layouts are read by ``xilinx_install.py``, which the sbx workload shares.
 Network descriptions are declarative; Docker does not enforce these permissions.
 Diagnostics go to stderr because stdout is machine-readable data.
 """
@@ -14,6 +15,9 @@ import json
 import os
 import re
 import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import xilinx_install  # noqa: E402  (standard library only; docker/xilinx_install.py)
 
 # A tier is a host access profile, independent of the package artifact. What differs
 # is what the launcher mounts and which network requirements it reports.
@@ -71,47 +75,8 @@ def hostpath(value):
 
 
 def xilinx_layout(root, version):
-    """Locate Vivado / Vitis / HLS within a Xilinx install.
-
-    AMD reorganised the install tree after 2024.2:
-
-        <= 2024.2   $ROOT/Vivado/2022.2   $ROOT/Vitis_HLS/2022.2
-        >  2024.2   $ROOT/2025.1/Vivado   $ROOT/2025.1/Vitis
-
-    Returning both candidates and probing is deliberate. Deciding from the
-    version string alone means a site with a symlinked or non-standard tree gets
-    a confidently wrong answer; probing means an unusual layout is detected
-    rather than assumed. The version string only orders the candidates.
-    """
-    if not root or not version:
-        return {}
-
-    m = re.match(r"^(20\d\d)\.([12])$", version)
-    if not m:
-        warn(
-            "FINN_XILINX_VERSION %r is not YYYY.1 or YYYY.2; probing both layouts anyway" % version
-        )
-        new_first = False
-    else:
-        new_first = (int(m.group(1)), int(m.group(2))) > (2024, 2)
-
-    new = {
-        "XILINX_VIVADO": os.path.join(root, version, "Vivado"),
-        "XILINX_VITIS": os.path.join(root, version, "Vitis"),
-        "XILINX_HLS": os.path.join(root, version, "Vitis"),
-    }
-    old = {
-        "XILINX_VIVADO": os.path.join(root, "Vivado", version),
-        "XILINX_VITIS": os.path.join(root, "Vitis", version),
-        "XILINX_HLS": os.path.join(root, "Vitis_HLS", version),
-    }
-
-    found = {}
-    for candidate in (new, old) if new_first else (old, new):
-        for key, path in candidate.items():
-            if key not in found and os.path.isdir(path):
-                found[key] = path
-    return found
+    """Locate Vivado / Vitis / HLS within a Xilinx install (both AMD layouts)."""
+    return xilinx_install.layout(root, version)
 
 
 def vendor_daemon_port(files):
@@ -184,6 +149,27 @@ def classify_license(value):
     return servers, files
 
 
+def apply_machine_settings():
+    """Read the machine file into this process's environment, under the environment.
+
+    The toolchain and licence code below reads os.environ; filling it here, once,
+    keeps a variable set by the caller winning over the file without every reader
+    knowing about the file. A licence given as host and port becomes the FlexLM
+    form when no licence variable is set.
+    """
+    try:
+        values = xilinx_install.settings()
+    except xilinx_install.ConfigError as exc:
+        die(str(exc), 3)
+    for key, value in values.items():
+        os.environ.setdefault(key, value)
+    composed = xilinx_install.license_file(values)
+    if composed and not (
+        os.environ.get("XILINXD_LICENSE_FILE") or os.environ.get("LM_LICENSE_FILE")
+    ):
+        os.environ["XILINXD_LICENSE_FILE"] = composed
+
+
 def resolve_tier(tier):
     """Resolve `auto` to a real tier, here rather than in every launcher.
 
@@ -203,8 +189,9 @@ def resolve_tier(tier):
     if root and os.path.isdir(root):
         return "build"
     warn(
-        "no FINN_XILINX_PATH; resolving --tier auto to 'dev'. "
+        "no FINN_XILINX_PATH (environment or %s); resolving --tier auto to 'dev'. "
         "Vivado, Vitis, HLS and rtlsim will be unavailable."
+        % (xilinx_install.file_path() or "no machine file")
     )
     return "dev"
 
@@ -245,7 +232,11 @@ def add_toolchain(out):
     root = hostpath(os.environ.get("FINN_XILINX_PATH"))
     version = os.environ.get("FINN_XILINX_VERSION")
     if not root:
-        die("FINN_XILINX_PATH is unset; tier %r requires it" % out["tier"], 3)
+        die(
+            "FINN_XILINX_PATH is unset (environment or %s); tier %r requires it"
+            % (xilinx_install.file_path() or "no machine file", out["tier"]),
+            3,
+        )
     if not os.path.isdir(root):
         die("FINN_XILINX_PATH=%s is not a directory" % root, 3)
 
@@ -335,8 +326,52 @@ def add_optional_inputs(out):
         warn("IMAGENET_VAL_PATH=%s is not a directory; not mounted" % imagenet)
 
 
+RESOURCES = "FINN_RESOURCES_"
+# finn.resources settings that are not resource overrides. The system cache is
+# the image's own and is never replaced from the host.
+RESOURCE_SETTINGS = ("FILES", "DIR", "OFFLINE", "SYSTEM_CACHE")
+
+
+def add_resource_overrides(out):
+    """Make finn.resources' host-side settings work inside the container.
+
+    FINN_RESOURCES_<NAME> (and the FINN_HLSLIB_PATH alias) and FINN_RESOURCES_DIR
+    name host directories: each is mounted at its own path, writable, since it
+    is the user's checkout or cache. FINN_RESOURCES_FILES lists declaration files,
+    whose directories are mounted read-only. Paths are passed in absolute, so a
+    relative one means the same directory inside as on the host (relative to the
+    checkout, where docker/run runs). Source URLs and the offline switch pass
+    through unchanged.
+    """
+
+    def mount(path, mode, reason):
+        if not os.path.isdir(path):
+            warn("%s is not a directory; not mounted" % path)
+        elif not any(m["source"] == path for m in out["mounts"]):
+            out["mounts"].append({"source": path, "target": path, "mode": mode, "reason": reason})
+
+    for variable, value in sorted(os.environ.items()):
+        if not value or not (variable.startswith(RESOURCES) or variable == "FINN_HLSLIB_PATH"):
+            continue
+        setting = variable[len(RESOURCES) :]
+        if setting == "SYSTEM_CACHE":
+            continue
+        if setting == "OFFLINE" or variable.endswith("_URL"):
+            out["env"][variable] = value
+        elif setting == "FILES":
+            files = [hostpath(f) for f in value.split(os.pathsep) if f]
+            for path in files:
+                mount(os.path.dirname(path), "ro", "resource-declarations")
+            out["env"][variable] = os.pathsep.join(files)
+        else:
+            path = hostpath(value)
+            mount(path, "rw", "resource")
+            out["env"][variable] = path
+
+
 def resolve_host(tier, workspace_policy="auto"):
     """Everything a launcher needs, derived from the host exactly once."""
+    apply_machine_settings()
     tier = resolve_tier(tier)
     if tier not in TIERS:
         die("unknown tier %r; expected one of %s" % (tier, ", ".join(TIERS)), 2)
@@ -368,6 +403,7 @@ def resolve_host(tier, workspace_policy="auto"):
         if os.environ.get(variable):
             out["env"][variable] = os.environ[variable]
     add_optional_inputs(out)
+    add_resource_overrides(out)
 
     if tier == "dev":
         out["dev_contract"] = {
@@ -480,10 +516,20 @@ def cmd_inspect(args):
     return 0
 
 
+def inputs_override(data, services):
+    """Only the host inputs (toolchain, licence, resources), for a caller that
+    owns the workspace, build directory and user itself: the Dev Container."""
+    volumes = [compose_bind(m["source"], m["target"], m.get("mode", "rw")) for m in data["mounts"]]
+    environment = {k: v for k, v in data["env"].items() if k != "FINN_ROOT"}
+    service = {"environment": environment, "volumes": volumes}
+    return {"services": {name: dict(service) for name in services}}
+
+
 def cmd_compose(args):
     data = resolve_host(args.tier, args.workspace_policy)
     services = args.service or [data["tier"]]
-    json.dump(compose_override(data, services), sys.stdout, indent=2, sort_keys=True)
+    render = inputs_override if args.inputs_only else compose_override
+    json.dump(render(data, services), sys.stdout, indent=2, sort_keys=True)
     sys.stdout.write("\n")
     return 0
 
@@ -508,6 +554,11 @@ def main():
     add_resolution_arguments(p)
     p.add_argument(
         "--service", action="append", help="service to configure; repeat for multiple services"
+    )
+    p.add_argument(
+        "--inputs-only",
+        action="store_true",
+        help="render only the toolchain, licence and resource inputs (the Dev Container)",
     )
     p.set_defaults(func=cmd_compose)
 

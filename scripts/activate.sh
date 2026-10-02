@@ -77,7 +77,12 @@ fi
 #
 # It also duplicated the LD_LIBRARY_PATH additions (lib/lnx64.o, fpo_v7_1) and
 # the XRT sourcing, both of which docker/config.py now owns.
-if [ -n "$FINN_XILINX_PATH" ] && [ -n "$FINN_XILINX_VERSION" ]; then
+#
+# The selection comes from the environment or this machine's file
+# (~/.config/finn/xilinx.env, see docs/installation.md); a variable wins over the
+# file, so `FINN_XILINX_VERSION=2026.1 source scripts/activate.sh` selects
+# another installed version for this shell.
+if python3 "$FINN_ROOT/docker/xilinx_install.py" configured; then
     # Two steps, and the split is the point. docker/config.py probes the host and says
     # WHERE the tools are; finn-toolchain.sh takes that and applies it. The
     # image sources the same second file, so the bare host and the container
@@ -90,10 +95,10 @@ if [ -n "$FINN_XILINX_PATH" ] && [ -n "$FINN_XILINX_VERSION" ]; then
     if [ -n "${XILINX_VIVADO:-}" ]; then
         _finn_gecho "Xilinx toolchain configured: $XILINX_VIVADO"
     else
-        _finn_yecho "No Vivado found under $FINN_XILINX_PATH for $FINN_XILINX_VERSION"
+        _finn_yecho "No Vivado found for the configured FINN_XILINX_PATH and FINN_XILINX_VERSION"
     fi
 else
-    _finn_yecho "FINN_XILINX_PATH and/or FINN_XILINX_VERSION not set"
+    _finn_yecho "No Xilinx tools configured (~/.config/finn/xilinx.env or FINN_XILINX_PATH)"
     _finn_yecho "Vivado, Vitis, HLS and rtlsim are unavailable."
 fi
 

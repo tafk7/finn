@@ -1,0 +1,35 @@
+# syntax=docker/sandbox-kit:3
+# FINN's Docker Sandboxes (sbx) workload: FINN's environment, no coding agent.
+# Built from docker/Dockerfile.finn (its last stage, `sbx`) with this checkout
+# as the build context. Layer a harness, the Xilinx kit (docker/sbx/xilinx)
+# and your own kits onto it; see docker/sbx/README.md.
+schemaVersion: "3"
+kind: workload
+displayName: FINN
+description: >-
+  FINN's dataflow compiler environment on Ubuntu 24.04 / Python 3.12, with the
+  checkout installed editable at start. No coding agent; add one as a kit.
+sourceUrl: https://github.com/Xilinx/finn
+dockerfile: docker/Dockerfile.finn
+capabilities:
+  - type: com.docker.sandbox/sbx@1
+  - type: com.docker.sandbox/lifecycle@1
+    config:
+      startup:
+        - command: /usr/local/bin/finn_entrypoint.sh true
+          user: agent
+          env: [WORKSPACE_DIR, FINN_BUILD_DIR, FINN_XILINX_PATH, FINN_XILINX_VERSION, XILINX_VIVADO]
+          description: >-
+            Install the checkout editable into /opt/venv (after a clone-mode
+            clone lands); with the xilinx kit, record the selected installation
+            in sbx's persistent environment; then write /tmp/finn-ready
+  - type: com.docker.sandbox/agent-context@1
+    config:
+      filename: AGENTS.md
+      content: |
+        ## FINN sandbox
+        The workspace is a FINN checkout, installed editable into the active
+        /opt/venv when the sandbox starts; /tmp/finn-ready appears once that
+        is done. After a change to uv.lock, run `uv sync --inexact`.
+        Vivado, Vitis and the licence server are present only when the
+        sandbox mounts a Xilinx installation and adds FINN's xilinx kit.

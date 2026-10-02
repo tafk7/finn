@@ -22,6 +22,14 @@ DOCKER_DIR = REPO / "docker"
 FINN_ENV = DOCKER_DIR / "config.py"
 sys.path.insert(0, str(DOCKER_DIR))
 import config as finn_env  # noqa: E402
+import xilinx_install  # noqa: E402
+
+
+def xilinx_root():
+    """This machine's Xilinx root, from the environment or its machine file."""
+    root = xilinx_install.settings().get("FINN_XILINX_PATH", "")
+    return root if os.path.isdir(root) else None
+
 
 pytestmark = pytest.mark.container
 
@@ -227,7 +235,7 @@ def test_03_fresh_mirrored_docker_run(docker_daemon):
 def test_04_bare_docker_exec(docker_daemon):
     """docker exec reaches Python and vendor tools without running ENTRYPOINT."""
     name = "finn-conformance-%d" % os.getpid()
-    have_xilinx = os.path.isdir(os.environ.get("FINN_XILINX_PATH", ""))
+    have_xilinx = xilinx_root() is not None
     # Mirrored like docker/run, so FINN_ROOT names the mounted checkout.
     data = resolved("build" if have_xilinx else "dev", "mirror")
     tag = ensure_image("finn")
@@ -261,115 +269,89 @@ def test_04_bare_docker_exec(docker_daemon):
         run(["docker", "rm", "-f", name], timeout=60)
 
 
-@pytest.mark.parametrize("agent,fpga", [("shell", False), ("claude", False), ("claude", True)])
-def test_05_copied_native_examples(docker_daemon, tmp_path, agent, fpga):
-    """The root environment plus copied overlays compose and run from a checkout.
+@pytest.mark.parametrize("fpga", [False, True])
+def test_05_sbx_workload_and_xilinx_kit(tmp_path, fpga):
+    """FINN's workload kit builds from a checkout and runs it; the xilinx kit adds tools.
 
-    The template's own agent is selected without supplying credentials or asking a
-    model to change files. This does not verify authenticated inference.
-    Synthetic FPGA paths and policy readback do not prove licence checkout.
+    sbx builds the workload from the checkout (BuildKit with an OCI exporter:
+    Docker's containerd image store, or BUILDX_BUILDER naming a
+    docker-container builder). Set FINN_TEST_SBX_HARNESS_KIT to a harness mixin
+    (with FINN_TEST_SBX_HARNESS naming its command) to also compose an agent;
+    this does not verify authenticated inference. Synthetic FPGA paths and
+    policy readback do not prove licence checkout.
     """
     require_command("sbx")
     name = "finn-conformance-" + uuid.uuid4().hex[:12]
-    checkout = tmp_path / "checkout"
+    checkout = tmp_path / "finn"
     run(["git", "clone", "--shared", REPO, checkout], check=True)
-    config = tmp_path / "config"
-    shutil.copytree(REPO / "docker/sbx", config)
-    template = os.environ.get("FINN_TEST_SBX_TEMPLATE")
-    if not template:
-        run([REPO / "docker/build", "--sbx"], timeout=3600, check=True)
-        template = run([REPO / "docker/build", "--sbx", "--print-tag"], check=True).stdout.strip()
-    files = [checkout / "sbxenv.yaml"]
-    args = [
-        "--name",
-        name,
-        "--env-arg",
-        "template=" + template,
-        "--env-arg",
-        "agent=" + agent,
-    ]
+    args = ["--name", name, "--skills", "off"]
+    paths = [checkout, checkout]  # the workload kit, then the workspace
     if fpga:
         toolchain = tmp_path / "Xilinx"
-        for tool in ("Vivado", "Vitis", "Vitis_HLS"):
-            (toolchain / tool / "2022.2").mkdir(parents=True)
-        # Overlays and the licence kit are read from a copy outside the checkout.
-        files.extend([config / "fpga.sbxenv.yaml", config / "license.sbxenv.yaml"])
-        for key, value in {
-            "toolchain": toolchain,
-            "vivado": toolchain / "Vivado/2022.2",
-            "vitis": toolchain / "Vitis/2022.2",
-            "hls": toolchain / "Vitis_HLS/2022.2",
-            "license_host": "192.0.2.1",
-            "license_port": "2100",
-            "vendor_port": "2101",
-        }.items():
-            args.extend(["--env-arg", "%s=%s" % (key, value)])
-    args.extend(files)  # env exec requires flags before positional file paths.
-    plan = run(["sbx", "env", "plan", *args], check=True)
-    assert "agent: " + agent in plan.stdout
-    if not fpga:
-        assert "additionalWorkspaces:" not in plan.stdout
-        assert "site-license" not in plan.stdout
-        assert "XILINXD_LICENSE_FILE" not in plan.stdout
+        for tool in ("Vivado", "Vitis"):
+            (toolchain / "2025.2" / tool).mkdir(parents=True)
+        args += ["--kit", REPO / "docker/sbx/xilinx"]
+        # The machine file is the kit's argument file (docs/installation.md).
+        machine = tmp_path / "xilinx.env"
+        machine.write_text(
+            "FINN_XILINX_PATH=%s\nFINN_XILINX_VERSION=2024.2\n" % toolchain
+            + "FINN_LICENSE_HOST=192.0.2.1\nFINN_LICENSE_PORT=2100\n"
+            + "FINN_LICENSE_VENDOR_PORT=2101\n"
+        )
+        # --kit-arg overrides the file: one sandbox selects another version.
+        args += ["--kit-args-file", machine, "--kit-arg", "FINN_XILINX_VERSION=2025.2"]
+        paths.append("%s:ro" % toolchain)
+    harness = os.environ.get("FINN_TEST_SBX_HARNESS_KIT")
+    if harness:
+        args += ["--kit", harness]
+    exec_ = ["sbx", "exec", name, "--"]
     try:
-        run(["sbx", "env", "create", *args, "--auto-approve"], timeout=1200, check=True)
-        wait_ready(["sbx", "env", "exec", *args, "--"])
-        run(["sbx", "env", "exec", *args, "--", "python", "-c", "import finn"], check=True)
+        run(["sbx", "create", *args, *paths], timeout=3600, check=True)
+        wait_ready(exec_)
+        run([*exec_, "python", "-c", "import finn"], check=True)
         run(
-            [
-                "sbx",
-                "env",
-                "exec",
-                *args,
-                "--",
-                "sh",
-                "-c",
-                'test "$FINN_BUILD_DIR" = /tmp/finn_build && echo reused > native-marker',
-            ],
+            [*exec_, "sh", "-c", 'test "$FINN_BUILD_DIR" = /tmp/finn_build && echo seen > marker'],
             check=True,
         )
-        run(["sbx", "env", "run", *args, "--auto-approve", "--detached"], check=True)
-        run(
-            ["sbx", "env", "exec", *args, "--", "test", "-f", checkout / "native-marker"],
-            check=True,
-        )
-        assert (checkout / "native-marker").read_text().strip() == "reused"
-        inventory = json.loads(run(["sbx", "ls", "--json"], check=True).stdout)["sandboxes"]
-        sandbox = next(item for item in inventory if item["name"] == name)
-        assert sandbox["agent"] == agent
-        if agent != "shell":
-            version = run(["sbx", "env", "exec", *args, "--", agent, "--version"], check=True)
-            print("Native agent version:", version.stdout.strip())
+        assert (checkout / "marker").read_text().strip() == "seen"
+        if not harness:  # FINN ships no agent
+            assert run([*exec_, "sh", "-c", "command -v claude"]).returncode != 0
+        else:
+            command = os.environ.get("FINN_TEST_SBX_HARNESS", "claude")
+            version = run([*exec_, command, "--version"], check=True)
+            print("Harness version:", version.stdout.strip())
         if fpga:
             code = (
                 "import os; from pathlib import Path; "
-                "assert os.environ['XILINXD_LICENSE_FILE']=='2100@192.0.2.1'; "
-                "assert os.environ['XILINX_VIVADO']==os.environ['VIVADO_PATH']; "
-                "assert os.environ['XILINX_VITIS']==os.environ['VITIS_PATH']; "
-                "assert os.environ['XILINX_HLS']==os.environ['HLS_PATH']; "
+                "assert os.environ['XILINXD_LICENSE_FILE']=='2100@192.0.2.1', "
+                "os.environ.get('XILINXD_LICENSE_FILE'); "
                 "assert all(Path(os.environ[k]).is_dir() for k in "
-                "('VIVADO_PATH','VITIS_PATH','HLS_PATH'))"
+                "('XILINX_VIVADO','XILINX_VITIS','XILINX_HLS'))"
             )
-            run(["sbx", "env", "exec", *args, "--", "python", "-c", code], check=True)
-            write = run(["sbx", "env", "exec", *args, "--", "touch", toolchain / "must-not-write"])
+            # The toolchain is resolved into sbx's persistent environment and the
+            # licence composed in bash (BASH_ENV), where tools run.
+            run([*exec_, "bash", "-c", 'python -c "$0"', code], check=True)
+            vivado = run([*exec_, "bash", "-c", 'printf %s "$XILINX_VIVADO"'], check=True)
+            assert vivado.stdout == str(toolchain / "2025.2/Vivado")
+            write = run([*exec_, "touch", toolchain / "must-not-write"])
             assert write.returncode != 0
             assert not (toolchain / "must-not-write").exists()
             policy = run(["sbx", "policy", "ls", name, "--json"], check=True).stdout
             assert "192.0.2.1:2100" in policy
             assert "192.0.2.1:2101" in policy
     finally:
-        run(["sbx", "env", "rm", *args, "--force"], timeout=120, check=True)
+        run(["sbx", "rm", "--force", name], timeout=120)
     inventory = json.loads(run(["sbx", "ls", "--json"], check=True).stdout)["sandboxes"]
     assert not any(item["name"] == name for item in inventory)
 
 
-def test_05b_sbx_identity_ignores_mounted_source_commit(tmp_path):
+def test_05b_image_identity_ignores_mounted_source_commit(tmp_path):
     """Image preparation identity stays independent of mounted-source commits."""
     checkout = tmp_path / "checkout"
     run(["git", "clone", "--shared", REPO, checkout], check=True)
     # Compare two commits within the same isolated checkout; never set repository config.
     environment = {**os.environ, "FINN_SOURCE_ROOT": str(checkout)}
-    command = [REPO / "docker/build", "--sbx", "--print"]
+    command = [REPO / "docker/build", "--print"]
     before = run(command, env=environment, check=True)
     run(
         [
@@ -395,8 +377,8 @@ def test_05b_sbx_identity_ignores_mounted_source_commit(tmp_path):
 
 def test_06_resolved_toolchain_mounts_are_read_only(docker_daemon):
     """Every host capability mount is declared read-only and enforced as such."""
-    root = os.environ.get("FINN_XILINX_PATH")
-    if not root or not os.path.isdir(root):
+    root = xilinx_root()
+    if not root:
         pytest.skip("FINN_XILINX_PATH is not configured")
     data = resolved("build")
     assert data["mounts"]
@@ -423,13 +405,12 @@ def test_07_sbx_privilege_is_visible_in_the_image(docker_daemon):
     """Only the sbx image grants passwordless in-container root."""
     generic = ensure_image("finn")
     sbx = ensure_image("finn-sbx")
-    assert (
-        run(["docker", "run", "--rm", generic, "sh", "-c", "sudo -n true"], timeout=180).returncode
-        != 0
-    )
-    assert (
-        run(["docker", "run", "--rm", sbx, "sh", "-c", "sudo -n true"], timeout=180).returncode == 0
-    )
+    probe = ["--entrypoint", "sh"]
+    command = ["-c", "sudo -n true"]
+    generic_run = run(["docker", "run", "--rm", *probe, generic, *command], timeout=180)
+    sbx_run = run(["docker", "run", "--rm", *probe, sbx, *command], timeout=180)
+    assert generic_run.returncode != 0
+    assert sbx_run.returncode == 0
 
 
 @pytest.mark.parametrize("policy", ["fixed", "mirror"])
@@ -456,7 +437,7 @@ def test_08_compose_handles_awkward_workspace_paths(docker_daemon, tmp_path, pol
 
 def test_09_node_locked_licence_mount_is_used_by_compose(docker_daemon, tmp_path):
     """The Docker lane consumes the resolver's node-locked licence mount."""
-    root = os.environ.get("FINN_XILINX_PATH")
+    root = xilinx_root()
     value = os.environ.get("XILINXD_LICENSE_FILE") or os.environ.get("LM_LICENSE_FILE")
     _, files = finn_env.classify_license(value)
     licence = next((path for path in files if os.path.isfile(path)), None)
@@ -476,8 +457,8 @@ def test_09_node_locked_licence_mount_is_used_by_compose(docker_daemon, tmp_path
 
 def test_10_bare_host_toolchain_resolution():
     """The bare-host lane finds and applies the same resolved toolchain."""
-    root = os.environ.get("FINN_XILINX_PATH")
-    if not root or not os.path.isdir(root):
+    root = xilinx_root()
+    if not root:
         pytest.skip("FINN_XILINX_PATH is not configured")
     proc = run(
         [
