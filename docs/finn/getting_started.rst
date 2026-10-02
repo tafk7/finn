@@ -50,8 +50,8 @@ FINN has two setup paths:
     - ``./docker/run``
     - You need a portable dependency environment, agent isolation, or an HPC image
 
-``docker/run`` executes through Docker Compose. Prepare a native sandbox template
-with ``docker/build --sbx``, then use copied native examples. ``docker/build`` can also
+``docker/run`` executes through Docker Compose. Docker Sandboxes build FINN's
+workload kit (``finn.yaml``) from the checkout. ``docker/build`` can also
 export the image as a SIF for standard Apptainer or Singularity execution.
 
 For the native path, continue with ``./setup-local.sh`` and
@@ -113,8 +113,7 @@ default execution backend:
 
 Use ``-n NAME`` or ``--name NAME`` to assign the Docker container name. This
 is useful for finding parallel interactive sessions with ``docker ps`` and
-targeting one with standard commands such as ``docker exec``. The same option
-selects the persistent sandbox identity with ``--sbx``.
+targeting one with standard commands such as ``docker exec``.
 
 The run command prepares a missing artifact automatically. Preparation is also
 available separately:
@@ -123,7 +122,6 @@ available separately:
 
   ./docker/build
   ./docker/build --runtime xrt
-  ./docker/build --sbx
   ./docker/build --export-sif ./finn.sif
 
 The static ``compose.yaml`` can also be used directly. Supply the generated
@@ -282,20 +280,20 @@ machine/organization policy and the selected agent and kits.
 
 .. code-block:: bash
 
-  ./docker/build --sbx
-  sbx env run --env-arg template="$(./docker/build --sbx --print-tag)"
+  sbx create --name finn --skills off "$PWD" "$PWD"
+  sbx run --name finn
 
-This uses ``sbxenv.yaml`` at the repository root: the checkout as the workspace,
-FINN's image and no network grants. For FPGA tools, FinnLib and the licence
-server, copy the overlays in ``docker/sbx`` to a directory outside the checkout,
-put your site values in an arguments file there, and pass both; see
-``docker/sbx/README.md``. The FINN template contains Claude Code
-(``--env-arg agent=claude``); sbx injects its credential through the proxy.
+The first argument is FINN's workload kit (``finn.yaml`` in the checkout), which
+sbx builds from ``docker/Dockerfile.finn``; the second is the workspace. The
+workload has no coding agent and no network grants. Add Vivado and the licence
+server with the ``docker/sbx/xilinx`` kit and a read-only mount, FinnLib as a
+mount, and a harness (Claude Code, Codex, ...) as a kit of your choice; see
+``docker/sbx/README.md``. sbx injects credentials through its proxy.
 
 FINN needs no network in a sandbox except the licence server. Closing everything
 else is a machine or organization decision (``sbx policy init deny-all``); FINN's
-overlays only add grants. Requires sbx 0.43 or later, validated with 0.46.0;
-environments and kits are experimental in sbx.
+kits only add grants. Requires sbx 0.45 or later (v3 kits), validated with
+0.46.0; kits are experimental in sbx.
 
 This does not override existing machine policy or the selected agent's grants.
 sbx may separately use package-repository access while provisioning the microVM.

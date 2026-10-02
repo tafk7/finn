@@ -95,14 +95,6 @@ def test_release_image_is_selected_explicitly():
         assert data["runtimes"] == "xrt"
 
 
-def test_build_can_prepare_the_sbx_variant():
-    proc = invoke(BUILD, "--sbx", "--runtime", "slash", "--print")
-    assert proc.returncode == 0, proc.stderr
-    data = assignments(proc.stdout)
-    assert data["artifact"] == "sbx"
-    assert data["bake_target"] == "finn-sbx-runtime"
-
-
 def test_build_can_export_a_sif():
     proc = invoke(BUILD, "--runtime", "xrt", "--export-sif", "out/finn.sif", "--print")
     assert proc.returncode == 0, proc.stderr
@@ -111,13 +103,6 @@ def test_build_can_export_a_sif():
     assert data["bake_target"] == "finn-release"
     assert data["runtimes"] == "xrt"
     assert data["output"] == "out/finn.sif"
-
-
-def test_build_rejects_sbx_release_combinations():
-    for options in (["--export-sif", "finn.sif"], ["--release"]):
-        proc = invoke(BUILD, "--sbx", *options)
-        assert proc.returncode == 2
-        assert "cannot be combined" in proc.stderr
 
 
 def test_build_requires_a_sif_output_path():
@@ -254,10 +239,16 @@ Path(sys.argv[3]).write_text("sif")
 
 
 def test_public_image_reference_matches_bake():
-    proc = invoke(BUILD, "--sbx", "--runtime", "xrt", "--print-tag")
+    proc = invoke(BUILD, "--runtime", "xrt", "--print-tag")
     assert proc.returncode == 0, proc.stderr
-    assert proc.stdout.strip().startswith("xilinx/finn:sbx-img-")
+    assert proc.stdout.strip().startswith("xilinx/finn:img-")
     assert proc.stdout.strip().endswith(".xrt")
+
+
+def test_sbx_is_a_kit_not_a_build_option():
+    proc = invoke(BUILD, "--sbx", "--print")
+    assert proc.returncode == 2
+    assert "Unknown option: --sbx" in proc.stderr
 
 
 def test_removed_sbx_runtime_options_are_unknown():
@@ -273,48 +264,6 @@ def test_config_aliases_and_generation_are_removed():
     for args in (("sbx",), ("inspect", "--sbx")):
         proc = invoke(REPO / "docker/config.py", *args)
         assert proc.returncode == 2
-
-
-def test_explicit_sbx_preparation_only_builds_and_imports(tmp_path):
-    script = r"""
-set -euo pipefail
-. "$1/docker/lib.sh"
-finn_bake_target () { echo finn-sbx; }
-finn_prepare_image () {
-    [ "$*" = 'finn-sbx build' ]
-    FINN_IMAGE=xilinx/finn:test
-    printf 'build\n' >> "$CALLS"
-}
-docker () {
-    [ "$1" = save ]
-    printf archive > "$3"
-    printf 'save\n' >> "$CALLS"
-}
-sbx () {
-    [ "$1 $2" = 'template load' ]
-    [ "$(cat "$3")" = archive ]
-    printf 'load\n' >> "$CALLS"
-}
-finn_prepare_sbx
-finn_prepare_sbx
-"""
-    calls = tmp_path / "calls"
-    proc = subprocess.run(
-        ["bash", "-c", script, "test", str(REPO)],
-        capture_output=True,
-        text=True,
-        env={
-            "PATH": os.environ["PATH"],
-            "CALLS": str(calls),
-            "FINN_RUNTIMES": "",
-            "FINN_IMAGE_REVISION": "env-test",
-            "FINN_SOURCE_DESCRIBE": "test",
-            "FINN_CONTAINER_NO_BUILD": "1",
-            "FINN_XILINX_PATH": "/invalid/must-not-discover",
-        },
-    )
-    assert proc.returncode == 0, proc.stderr
-    assert calls.read_text() == "build\nsave\nload\n" * 2
 
 
 def test_removed_dependency_modes_are_actionable():

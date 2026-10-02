@@ -68,11 +68,13 @@ The container architecture has a deliberately small operational model:
 * ``compose.yaml`` contains only static service behavior. ``docker/config.py compose``
   renders the host-specific mounts, uid/gid and environment at launch.
 * ``docker/run`` runs the environment with Docker Compose.
-* ``docker/build`` prepares Docker images and sbx templates, or exports a
-  Docker-built image as an Apptainer SIF.
-* ``docker/sbx`` supplies copyable native examples. Users and sites own instantiated
-  configuration, agent selection, credentials, mounts and network policy. Native
-  sbx owns composition, approval, execution and lifecycle. FINN carries no Cardinal contract.
+* ``docker/build`` prepares Docker images, or exports a Docker-built image as an
+  Apptainer SIF.
+* ``finn.yaml`` (the sbx workload kit, built by sbx from the ``sbx`` stage) and
+  ``docker/sbx/xilinx`` (a mixin for a mounted Xilinx installation and licence
+  server) are FINN's sbx kits. Users and sites own harnesses, credentials, mounts
+  and network policy; sbx owns composition and lifecycle. FINN carries no
+  Cardinal contract.
 * Host discovery retains its Python implementation and shell/Compose behavior;
   configuration aliases and sbx generation have been removed.
 * CI prepares shared images explicitly before calling ``docker/run``.
@@ -91,7 +93,6 @@ To build without launching:
 
   ./docker/build
   ./docker/build --runtime xrt
-  ./docker/build --sbx
   ./docker/build --export-sif ./finn.sif
 
 Arbitrary runtime combinations use the parameterized ``finn-runtime`` and
@@ -140,8 +141,8 @@ Launch sequence
    in the image or included in the image-content hash.
 4. ``docker/config.py compose`` renders an ephemeral Compose override. The static
    Compose file does not rediscover host state.
-5. Docker runs the image through Compose. ``docker/build --sbx`` imports its
-   specialized template; users execute copied examples through native sbx.
+5. Docker runs the image through Compose; sbx builds the ``sbx`` stage as FINN's
+   workload kit and composes it with the user's kits.
    ``docker/build --export-sif`` is a separate artifact export,
    not another runtime backend. The entrypoint handles only runtime state. Python source resolution is
    installed in site-packages, toolchain application is shared by the

@@ -269,50 +269,39 @@ USER agent
 
 
 # --- sbx ---------------------------------------------------------------------
-# The sbx template contract. A separate target, not a build argument, so the
-# in-container privilege model (NOPASSWD sudo) is visible in the tag. This is
-# in-container root only: no devices, capabilities or privileged mode.
-# Reverse-engineered from sbx create failures, so an sbx release can break it.
+# The image of FINN's sbx workload kit (finn.yaml at the repository root builds
+# this stage). A separate target, not a build argument, so the in-container
+# privilege model (NOPASSWD sudo) is visible. This is in-container root only:
+# no devices, capabilities or privileged mode. No coding agent: a harness is a
+# kit layered on at sandbox creation.
 #
-#   NOPASSWD sudo    sbx kits run as `agent` and install software.
+#   NOPASSWD sudo    kits run as `agent` and install software.
 #   proxy env_keep   without it, commands under sudo lose the sandbox proxy.
-#   home layout      sbx setup writes into these directories and needs 0755 home.
+#   home layout      kits and agents write into the agent's home (0755).
 #   npm prefix       global npm installs land in a directory that is on PATH.
 #   /etc/sandbox-persistent.sh
 #                    sbx-managed; it must exist for BASH_ENV to source.
-#   Claude Code      sbx's built-in `claude` agent runs the template's `claude`;
-#                    pinned, auto-update off, session directories pre-created as
-#                    in docker/sandbox-templates:claude-code. Empty skips it.
+#   launch           sbx starts the agent with the image's command; the shell
+#                    is the default. Setup runs as the workload's startup hook.
 FROM dev AS sbx
-ARG CLAUDE_CODE_VERSION=2.1.284
 USER root
 COPY docker/finn-bashenv.sh /etc/finn-bashenv.sh
 ENV BASH_ENV=/etc/finn-bashenv.sh \
+    FINN_BUILD_DIR=/tmp/finn_build \
     NO_PROXY=localhost,127.0.0.1,::1,172.17.0.0/16 \
     no_proxy=localhost,127.0.0.1,::1,172.17.0.0/16 \
     NPM_CONFIG_PREFIX=/usr/local/share/npm-global \
-    CLAUDE_ENV_FILE=/etc/sandbox-persistent.sh \
-    DISABLE_AUTOUPDATER=1 \
     PATH=/home/agent/.local/bin:/usr/local/share/npm-global/bin:/opt/venv/bin:/usr/local/lib/finn/toolchain-bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 RUN set -eu; \
     usermod -aG sudo agent; \
     echo "agent ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/agent; \
     echo 'Defaults:%sudo env_keep += "http_proxy https_proxy ftp_proxy all_proxy no_proxy HTTP_PROXY HTTPS_PROXY NO_PROXY SSL_CERT_FILE NODE_EXTRA_CA_CERTS REQUESTS_CA_BUNDLE JAVA_TOOL_OPTIONS"' >> /etc/sudoers.d/agent; \
     chmod 0440 /etc/sudoers.d/agent; \
-    mkdir -p /home/agent/.claude /home/agent/.npm /home/agent/workspace \
-             /usr/local/share/npm-global/bin; \
+    mkdir -p /home/agent/.npm /home/agent/workspace /usr/local/share/npm-global/bin; \
     chown -R agent:agent /home/agent; \
     chmod -R a+rX /usr/local/share/npm-global; \
     touch /etc/sandbox-persistent.sh; \
     chmod 0644 /etc/sandbox-persistent.sh
 USER agent
-RUN set -eu; \
-    if [ -n "$CLAUDE_CODE_VERSION" ]; then \
-        mkdir -p /home/agent/.claude/projects /home/agent/.claude/sessions \
-                 /home/agent/.claude/todos /home/agent/.claude/shell-snapshots \
-                 /home/agent/.claude/statsig; \
-        wget -qO /tmp/claude-install.sh https://claude.ai/install.sh; \
-        bash /tmp/claude-install.sh "$CLAUDE_CODE_VERSION"; \
-        rm /tmp/claude-install.sh; \
-        claude --version; \
-    fi
+ENTRYPOINT ["bash"]
+CMD ["-l"]

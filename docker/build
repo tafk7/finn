@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build the FINN Docker image, its sbx variant, or the release image (optionally
+# Build the FINN Docker image or the release image (optionally
 # exported as a SIF).
 
 set -euo pipefail
@@ -51,7 +51,6 @@ usage () {
 Usage: docker/build [OPTIONS]
 
 Options:
-  --sbx              build/import the sbx template (no sandbox configuration)
   --release          build the release image: FINN installed from this checkout
   --export-sif PATH  build the release image and export it as an Apptainer SIF
   --runtime NAME     add image content such as xrt; repeatable
@@ -62,7 +61,6 @@ Options:
 EOF
 }
 
-SBX=0
 RELEASE=0
 SIF_OUTPUT=""
 SIF_REQUESTED=0
@@ -72,7 +70,6 @@ PRINT_TAG=0
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
-        --sbx) SBX=1; shift ;;
         --release) RELEASE=1; shift ;;
         --export-sif)
             [ "$#" -ge 2 ] || { echo "--export-sif needs a path" >&2; exit 2; }
@@ -98,10 +95,6 @@ done
     echo "--export-sif needs a path" >&2
     exit 2
 }
-[ "$SBX" != 1 ] || { [ "$SIF_REQUESTED" != 1 ] && [ "$RELEASE" != 1 ]; } || {
-    echo "--sbx cannot be combined with --release or --export-sif" >&2
-    exit 2
-}
 
 RUNTIMES=$(finn_normalize_runtimes "$RUNTIMES")
 export FINN_RUNTIMES="$RUNTIMES"
@@ -109,10 +102,7 @@ finn_set_provenance
 
 artifact=docker
 variant=""
-if [ "$SBX" = 1 ]; then
-    artifact=sbx
-    variant=sbx
-elif [ "$SIF_REQUESTED" = 1 ]; then
+if [ "$SIF_REQUESTED" = 1 ]; then
     artifact=sif
     variant=release
 elif [ "$RELEASE" = 1 ]; then
@@ -141,9 +131,6 @@ cd "$REPO"
 case "$artifact" in
     docker)
         finn_prepare_image "$target" build
-        ;;
-    sbx)
-        finn_prepare_sbx
         ;;
     sif)
         export_sif

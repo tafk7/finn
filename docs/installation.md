@@ -55,8 +55,9 @@ Editing FINN never requires a new image.
 interpreter is `/opt/venv/bin/python`; there is no setup step.
 
 **sbx:** see [the sbx guide](../docker/sbx/README.md). The same entrypoint installs
-the workspace checkout when the sandbox starts, or, in clone mode, once sbx has
-cloned it. The sbx template also contains Claude Code.
+the workspace checkout when the sandbox starts (as the workload kit's startup
+hook), or, in clone mode, once sbx has cloned it. FINN's workload has no coding
+agent; add one as a kit.
 
 `docker exec` and `sbx exec` do not wait for the entrypoint. A script that execs
 into a container it has just started can wait for `/tmp/finn-ready`.
@@ -153,8 +154,8 @@ does not redistribute: images built locally contain them, and the release image
 and `pip install finn` fetch them on first use.
 
 FinnLib changes together with FINN, so it is never baked into an image. Work
-against a clone: `FINN_RESOURCES_FINNLIB=../finnlib` (in sbx, see the `finnlib`
-overlay in [the sbx guide](../docker/sbx/README.md)). The pin records the commit
+against a clone: `FINN_RESOURCES_FINNLIB=../finnlib` (in sbx, mount the clone and set it with `-e`; see
+[the sbx guide](../docker/sbx/README.md)). The pin records the commit
 a FINN revision was validated against; fetching it needs SSH access, and
 `finn-resources update finnlib --ref BRANCH` moves it once that commit is pushed.
 

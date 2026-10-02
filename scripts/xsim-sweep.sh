@@ -11,7 +11,11 @@
 # with its own .venv (uv sync), or in a sandbox with the image's environment.
 # FinnLib is the `finnlib` resource, as in every run.
 #
-#   bash scripts/xsim-sweep.sh [OUT]      -> OUT/summary.log, exit 0 only if all pass
+#   bash scripts/xsim-sweep.sh [OUT [TMP]]  -> OUT/summary.log, exit 0 only if all pass
+#
+# OUT keeps the evidence: summary, logs, simulation stores. pytest's temporary
+# trees go to TMP (default OUT-tmp), which is scratch: they hold symlinks that
+# point outside it.
 #
 # Vivado: set FINN_XILINX_PATH and FINN_XILINX_VERSION (applied through
 # scripts/activate.sh), or have XILINX_VIVADO already selected.
@@ -21,7 +25,8 @@ ROOT=$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)
 cd "$ROOT" || exit 2
 SHA=$(git rev-parse --short HEAD)
 OUT=$(readlink -f "${1:-/tmp/xsim-sweep-$SHA-$(basename "$ROOT")}")
-rm -rf "$OUT" && mkdir -p "$OUT/logs" "$OUT/tmp"
+TMP=$(readlink -f "${2:-$OUT-tmp}")
+rm -rf "$OUT" "$TMP" && mkdir -p "$OUT/logs" "$TMP"
 
 if [ -n "${FINN_XILINX_PATH:-}" ] && [ -n "${FINN_XILINX_VERSION:-}" ]; then
     # shellcheck source=/dev/null
@@ -50,7 +55,7 @@ unset FORCE_COLOR
 pytest_run() {  # <log name> <pytest args...>
     local name=$1; shift
     "$PY" -m pytest -v -p no:cacheprovider --confcutdir=tests/kernels \
-        --basetemp="$OUT/tmp/$name" "$@" > "$OUT/logs/$name.log" 2>&1
+        --basetemp="$TMP/$name" "$@" > "$OUT/logs/$name.log" 2>&1
     echo "exit=$?" >> "$OUT/logs/$name.log"
 }
 sweep_run() {  # <log name> <module> [args...]

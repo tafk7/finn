@@ -46,7 +46,7 @@ history at commit `5dd9df9bc`.
  Native dev    │ host                 │ host; scripts/activate.sh  │ uv sync; scripts/activate.sh │
  Docker        │ image                │ mounted by docker/run      │ /opt/venv, always active;    │
  Dev Container │ image                │ (none, or a mount)         │ the entrypoint installs the  │
- sbx           │ image + sbx stage    │ sbx mount + licence policy │ checkout at container start  │
+ sbx           │ workload kit (sbx)   │ sbx mount + xilinx kit     │ checkout at sandbox start    │
  Release/SIF   │ image                │ mounted                    │ FINN wheel, installed        │
                └──────────────────────┴────────────────────────────┴──────────────────────────────┘
 ```
@@ -61,7 +61,7 @@ part ahead of time.
  apt,       uv; /opt/venv from uv.lock      XRT/SLASH          board files     NOPASSWD sudo,
  ncurses6,  (no FINN); active via ENV;      (FINN_RUNTIMES)    (not redistri-  BASH_ENV, npm,
  LSB,       finn-hlslib (redistributable        │              butable; local  proxy env_keep,
- libudev    resources); entrypoint              │              images only)    Claude Code (pinned)
+ libudev    resources); entrypoint              │              images only)    shell launch; no agent
                                                 └──► release: FINN wheel; board files on first use
 ```
 

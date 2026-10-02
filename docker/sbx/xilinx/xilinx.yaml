@@ -1,0 +1,56 @@
+# syntax=docker/sandbox-kit:3
+# Selects a mounted Xilinx installation and opens the licence server's two
+# ports. The installation itself is a read-only mount of the sandbox (a kit
+# cannot mount host paths).
+schemaVersion: "3"
+kind: mixin
+displayName: Xilinx tools for FINN
+description: >-
+  Vivado, Vitis and HLS from a read-only mounted installation, and network
+  access to a FlexLM licence server's manager and vendor-daemon ports only.
+args:
+  vivado:
+    required: true
+    description: Absolute Vivado installation path, as mounted
+    env: XILINX_VIVADO
+  vitis:
+    required: true
+    description: Absolute Vitis installation path, as mounted
+    env: XILINX_VITIS
+  hls:
+    required: true
+    description: Absolute HLS installation path (Vitis on 2024.2 and later)
+    env: XILINX_HLS
+  license_host:
+    required: true
+    pattern: '^[0-9]{1,3}(\.[0-9]{1,3}){3}$'
+    description: >-
+      The licence server's IPv4 address. FlexLM is plain TCP, matched by
+      address; a host name would also need DNS, which a closed policy blocks.
+    env: FINN_LICENSE_HOST
+  license_port:
+    required: true
+    pattern: '^[0-9]{1,5}$'
+    description: Licence manager (lmgrd) port, as in XILINXD_LICENSE_FILE=port@host
+    env: FINN_LICENSE_PORT
+  vendor_port:
+    required: true
+    pattern: '^[0-9]{1,5}$'
+    description: Vendor daemon (xilinxd) port; `sbx policy log` shows it when blocked
+capabilities:
+  - type: com.docker.sandbox/network-policy@1
+    config:
+      runtime:
+        allow:
+          - "${{ kit.args.license_host }}:${{ kit.args.license_port }}"
+          - "${{ kit.args.license_host }}:${{ kit.args.vendor_port }}"
+  - type: com.docker.sandbox/agent-context@1
+    config:
+      content: |
+        ## Xilinx tools
+        Vivado, Vitis and HLS come from a read-only mounted installation. The
+        licence server is reachable at ${{ kit.args.license_host }} (ports
+        ${{ kit.args.license_port }} and ${{ kit.args.vendor_port }}). If Vivado
+        reports that a valid licence was not found, or a download is blocked,
+        the cause is the network policy, not the design: report the host and
+        port rather than working around it or changing the design.

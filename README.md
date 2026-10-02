@@ -43,15 +43,15 @@ Container examples:
 
 ```bash
 ./docker/run -- quicktest.sh
-./docker/build --sbx  # prepare a template for direct native sbx use
 ./docker/build --export-sif ./finn.sif
 ```
 
 See [docker/README.md](docker/README.md) for runner and artifact details.
 
 `docker/run` provides Docker Compose execution. For agent isolation, use Docker
-Sandboxes: `sbxenv.yaml` at the root plus the overlays in
-[docker/sbx](docker/sbx/README.md) for FPGA tools, FinnLib and the licence server. Users and sites own those environments and credentials. Export a
+Sandboxes with FINN's kits: the workload `finn.yaml` (FINN's environment, no
+coding agent) and [docker/sbx/xilinx](docker/sbx/README.md) for Vivado and the
+licence server. Users add their own harness, mounts and credentials. Export a
 SIF for standard Apptainer/Singularity execution on HPC systems. Docker's `--fpga`
 option discovers your Xilinx installation and mounts it read-only.
 
