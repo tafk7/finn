@@ -72,7 +72,7 @@ from finn.kernels.artifacts.requirements import (
 from finn.kernels.base import MODULE, TIEOFFS, Kernel, Tieoffs
 from finn.kernels.control import EXPORTED, Exported, top_bus
 from finn.kernels.physical.composition import Composition, StreamEnd
-from finn.kernels.physical.contract import StreamContract
+from finn.kernels.transport import StreamContract
 from finn.kernels.physical.lowering import lower_module_structure, nested
 from finn.kernels.physical.structure import PhysicalStructure
 from finn.kernels.physical.validation import abi_pins

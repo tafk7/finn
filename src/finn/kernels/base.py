@@ -60,7 +60,7 @@ from finn.kernels.artifacts.abi import (
     Signal,
 )
 from finn.dataflow.schedule import Access, Index, Refused, Schedule, bind_extents
-from finn.kernels.physical.contract import STREAM_CONTRACT
+from finn.kernels.transport import STREAM_CONTRACT
 from finn.kernels.artifacts.requirements import (
     FixedModuleName,
     ModuleABIRequirements,

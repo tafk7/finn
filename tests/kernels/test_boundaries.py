@@ -170,7 +170,7 @@ from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels import DspBlock, MatMulKernel, PackedDotpKernel
 from finn.kernels.artifacts.requirements import ModuleBuildRequirements
 from finn.kernels.configure import commit
-from finn.kernels.physical.axi_stream import AxiStream
+from finn.kernels.transport import AxiStream
 from finn.kernels.streams import Stream
 from qonnx.core.datatype import DataType
 

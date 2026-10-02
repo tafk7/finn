@@ -87,7 +87,7 @@ from finn.kernels.base import Kernel
 from finn.kernels.composite import Design
 from finn.kernels.configure import commit, describe, undecided
 from finn.kernels.memstream import MemStreamKernel
-from finn.kernels.physical.contract import StreamContract
+from finn.kernels.transport import StreamContract
 from finn.kernels.port import AxiStreamPort
 from finn.kernels.streams import Stream
 from kernels.helpers import settled

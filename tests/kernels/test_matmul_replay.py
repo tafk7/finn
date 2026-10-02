@@ -24,8 +24,7 @@ from finn.kernels.configure import commit
 from finn.dataflow.gemm import Form
 from finn.kernels.matmul import MatMulKernel
 from kernels.helpers import matmul_assembly
-from finn.kernels.physical.contract import StreamContract
-from finn.kernels.physical.stream import MarkerKind, ReadyValidStream, StreamMarker
+from finn.kernels.transport import MarkerKind, ReadyValidStream, StreamContract, StreamMarker
 from finn.kernels.physical.structure import PhysicalPin, PinSlice, UnusedOutput
 from kernels.helpers import settled
 from finn.kernels.target import DspBlock

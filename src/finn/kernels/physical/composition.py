@@ -19,11 +19,10 @@ from dataclasses import dataclass
 
 from finn.kernels.artifacts.abi import Bus, Clock, Direction, Reset
 from finn.kernels.artifacts.requirements import ModuleABIRequirements, ModuleBuildRequirements
-from finn.kernels.physical.contract import (
+from finn.kernels.transport import (
     Level,
     Mismatch,
     StreamContract,
-    StreamMismatch,
     compatibility,
     lane_permutation,
     marker_bit,
@@ -40,6 +39,13 @@ from finn.kernels.physical.structure import (
     UnusedOutput,
 )
 from finn.kernels.physical.validation import abi_pins
+
+
+class StreamMismatch(ValueError):
+    def __init__(self, source: str, sink: str, mismatches: tuple[Mismatch, ...]) -> None:
+        self.mismatches = mismatches
+        details = "; ".join(f"{item.code}: {item.message}" for item in mismatches)
+        super().__init__(f"{source} -> {sink}: {details}")
 
 
 @dataclass(frozen=True)
@@ -247,4 +253,4 @@ class Composition:
         )
 
 
-__all__ = ["Composition", "StreamEnd"]
+__all__ = ["Composition", "StreamEnd", "StreamMismatch"]

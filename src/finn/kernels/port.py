@@ -57,9 +57,7 @@ from finn.kernels.artifacts.abi import Direction, Endpoint
 from finn.kernels.base import ACCESS, HELD, PINS, PORT, Tieoffs
 from finn.kernels.datatypes.domains import Integer
 from finn.kernels.datatypes.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
-from finn.kernels.physical.axi_stream import AxiStream
-from finn.kernels.physical.contract import StreamContract
-from finn.kernels.physical.stream import ReadyValidStream, StreamMarker
+from finn.kernels.transport import AxiStream, ReadyValidStream, StreamContract, StreamMarker
 
 T = TypeVar("T")
 

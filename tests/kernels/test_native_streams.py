@@ -8,7 +8,7 @@ from finn.core.space import Available, Rejected, design_space
 from finn.kernels.artifacts.abi import Direction, Endpoint
 from finn.kernels.eltwise import EltwiseKernel
 from finn.kernels.fifo import FifoKernel
-from finn.kernels.physical.stream import MarkerKind, ReadyValidStream, StreamMarker
+from finn.kernels.transport import MarkerKind, ReadyValidStream, StreamMarker
 from kernels.test_migrated_rich import generator
 from kernels.test_migrated_simple import eltwise
 from kernels.helpers import finnlib_root

@@ -33,8 +33,7 @@ from finn.kernels.artifacts.requirements import ProducerIdentity
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.memstream import MemStreamKernel
 from finn.dataflow.traversal import LevelEnd, BeatSequence, vector_major
-from finn.kernels.physical.axi_stream import AxiStream
-from finn.kernels.physical.contract import STREAM_CONTRACT, StreamContract
+from finn.kernels.transport import STREAM_CONTRACT, AxiStream, StreamContract
 from finn.kernels.base import MODULE, PORT, TIEOFFS
 from finn.kernels.composite import netlist
 from finn.kernels.streams import CONNECTION, Stream, boundary_contract

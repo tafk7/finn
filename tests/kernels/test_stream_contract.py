@@ -29,9 +29,15 @@ from finn.kernels.artifacts.requirements import (
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.fifo import FifoKernel
-from finn.kernels.physical.axi_stream import AxiStream
+from finn.kernels.transport import (
+    AxiStream,
+    MarkerKind,
+    ReadyValidStream,
+    StreamContract,
+    StreamMarker,
+    compatibility,
+)
 from finn.kernels.physical.composition import Composition, StreamEnd
-from finn.kernels.physical.contract import StreamContract, compatibility
 from finn.dataflow.traversal import (
     Adaptation,
     LevelEnd,
@@ -44,7 +50,6 @@ from finn.dataflow.traversal import (
     tile,
     vector_major,
 )
-from finn.kernels.physical.stream import MarkerKind, ReadyValidStream, StreamMarker
 from finn.transformation.fpgadataflow.transpose_decomposition import (
     shuffle_perfect_loopnest_coeffs,
 )

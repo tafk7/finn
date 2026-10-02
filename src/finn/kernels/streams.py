@@ -66,12 +66,7 @@ from finn.core.space import (
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.base import PORT
 from finn.kernels.fifo import FifoKernel
-from finn.kernels.physical.axi_stream import AxiStream
-from finn.kernels.physical.contract import (
-    Mismatch,
-    StreamContract,
-    compatibility,
-)
+from finn.kernels.transport import AxiStream, Mismatch, StreamContract, compatibility
 from finn.dataflow.stream import End, Ends
 from finn.dataflow.stream import Stream as LogicalStream
 from finn.dataflow.tensor import ScalarEncoding, Tensor
