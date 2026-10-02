@@ -67,6 +67,7 @@ def test_a_core_declares_ports_folding_factors_and_facts_and_the_base_derives_th
     ] == [
         "compute.build_requirements",
         "compute.module",
+        "compute.netlist",
         "compute.tieoffs",
     ]
     for port in (point.x, point.w, point.y):
@@ -223,7 +224,7 @@ def test_a_folding_factor_must_divide_its_extent(factor):
 
 def test_constraints_gate_acceptance_without_revalidating_raw_codegen():
     point = kernel(simd=1, compute_pumping=True)
-    physical = point.inspect(DotpAxiKernel.build_requirements)
+    physical = point.inspect(DotpAxiKernel.module)
     assert isinstance(physical.output_result, Available)
     assert point.query(DotpAxiKernel.codegen) == physical.output_result
     assert dict(physical.output_result.value.parameters)["PUMPED_COMPUTE"] == 1

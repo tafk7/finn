@@ -74,8 +74,8 @@ from finn.core.space import (
 )
 from finn.kernels.artifacts.abi import Bus, Endpoint
 from finn.kernels.artifacts.module import Endpoint as LinkEnd
-from finn.kernels.artifacts.module import Fragment, Link
-from finn.kernels.base import NETLIST, PORT
+from finn.kernels.artifacts.module import Fragment, Leaf, Link
+from finn.kernels.base import BOUNDARY, CLOCK, CLOCK2X, NETLIST, PORT, RESET
 from finn.kernels.fifo import FifoKernel
 from finn.kernels.transport import (
     AxiStream,
@@ -93,13 +93,6 @@ from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, unreplayed
 from finn.kernels.adapters import ADAPTERS, Stage, StreamAdapter
 
-
-# The composed module's clocking pins: its interface convention, not a routing rule.
-CLOCK, CLOCK2X, RESET = "ap_clk", "ap_clk2x", "ap_rst_n"
-
-BOUNDARY = ViewKey("boundary", default_semantics(tuple))
-"""A stream's AXIS bus on its composite's boundary: one, or none when both of its ends
-are its composite's children."""
 
 ADAPTER_RAM_STYLES = "*.adapter.*.ram_style"
 """The keys (``fnmatch``) of every adapter stage's memory choice, an ``input_gen``'s."""
@@ -168,12 +161,14 @@ class StreamFifo(Space):
     @view
     def stage(self) -> Stage:
         element, arriving, buffer = self.tensor.element, self.arriving, self.buffer
+        module = buffer.module
+        assert isinstance(module, Leaf)
         return Stage(
             buffer.build_requirements,
             StreamContract(buffer.input.transport, element, arriving.form, arriving.repetition),
             StreamContract(buffer.output.transport, element, arriving.form, arriving.repetition),
             "fifo",
-            module=buffer.module,
+            module=module,
             label="fifo.buffer",
         )
 

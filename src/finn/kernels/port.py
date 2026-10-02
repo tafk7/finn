@@ -6,7 +6,8 @@
 A kernel declares one ``Port`` per interface of its module. Every port has a
 ``transport`` (its ready/valid pins, required of each kind of port) and
 exports its pins under ``PINS``, which the kernel's module collects in
-declaration order (``finn.kernels.base``). A port its configuration leaves
+declaration order (``finn.kernels.base``), and the clock it runs on under
+``CLOCKED``, which must be its kernel's. A port its configuration leaves
 ``idle`` exports under ``HELD`` the pins it holds: its inputs low and its
 outputs unused.
 
@@ -54,7 +55,8 @@ from finn.dataflow.stream import Stream
 from finn.dataflow.tensor import ScalarEncoding
 from finn.dataflow.traversal import BeatSequence
 from finn.kernels.artifacts.abi import Direction, Endpoint
-from finn.kernels.base import ACCESS, HELD, PINS, PORT, Tieoffs
+from finn.kernels.artifacts.module import Held
+from finn.kernels.base import ACCESS, CLOCKED, HELD, PINS, PORT
 from finn.kernels.datatypes.domains import Integer
 from finn.kernels.datatypes.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
 from finn.kernels.transport import AxiStream, ReadyValidStream, StreamContract, StreamMarker
@@ -89,10 +91,14 @@ class Port(Space):
         return self.transport.pins()
 
     @view
-    def held(self) -> Tieoffs:
+    def clock_pin(self) -> str:
+        return self.clock
+
+    @view
+    def held(self) -> Held:
         """While idle: the forward pins of a target and the ready of an initiator held low."""
         if not self.idle:
-            return Tieoffs()
+            return Held()
         transport = self.transport
         inputs: list[tuple[str, int]] = []
         unused: list[str] = []
@@ -101,9 +107,9 @@ class Port(Space):
                 inputs.append((signal.name, 0))
             else:
                 unused.append(signal.name)
-        return Tieoffs(tuple(inputs), tuple(unused))
+        return Held(tuple(inputs), tuple(unused))
 
-    exports = {PINS: pins, HELD: held}
+    exports = {PINS: pins, HELD: held, CLOCKED: clock_pin}
 
 
 class WordPort(Port):
@@ -313,7 +319,13 @@ class AxiStreamPort(Port):
             transport, self.element, presented.form, presented.repetition, markers
         )
 
-    exports = {PORT: {stream: contract}, PINS: pins, HELD: Port.held, ACCESS: access}
+    exports = {
+        PORT: {stream: contract},
+        PINS: pins,
+        HELD: Port.held,
+        CLOCKED: Port.clock_pin,
+        ACCESS: access,
+    }
 
 
 __all__ = [

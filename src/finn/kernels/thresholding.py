@@ -54,7 +54,8 @@ from finn.dataflow.schedule import Index, Schedule
 from finn.dataflow.traversal import BeatSequence, vector_major
 from finn.kernels.artifacts.abi import Bus, Endpoint, Member, Signal, StandardProtocol
 from finn.kernels.artifacts.contributions import CopiedSource
-from finn.kernels.base import Kernel, Tieoffs
+from finn.kernels.artifacts.module import Held
+from finn.kernels.base import Kernel
 from finn.kernels.control import CONTROL, Control, ControlBus, held_bus
 from finn.kernels.datatypes.domains import Integer, set_index_dtype
 from finn.kernels.datatypes.semantics import (
@@ -341,17 +342,21 @@ class ThresholdingAxiKernel(Kernel):
     def other_pins(self) -> tuple[Signal | Bus, ...]:
         return (self.config_bus,)
 
-    def held(self) -> Tieoffs | Rejected:
+    def held(self) -> Held | Rejected:
         """AXI-Lite, without runtime writes."""
         if not self.use_axilite:
             return held_bus(self.config_bus)
         if not self.present(ThresholdingAxiKernel.control):
             return reject("threshold-control", "runtime-writable thresholds need a control bus")
-        return Tieoffs()
+        return Held()
+
+    def controlled(self) -> tuple[Bus, ...]:
+        """AXI-Lite, with runtime writes."""
+        return (self.config_bus,) if self.use_axilite else ()
 
     @view
     def control_bus(self) -> Control:
-        return Control(self.config_bus if self.use_axilite else None)
+        return Control(self.config_bus if self.controlled() else None)
 
     exports = {**Kernel.exports, CONTROL: {control: control_bus}}
 

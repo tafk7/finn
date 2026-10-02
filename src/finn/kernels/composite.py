@@ -22,7 +22,7 @@ and exports, under ``PORT``, that stream's boundary contract for each: the
 parent's stream plans and adapts to the composite as to any kernel. Its
 ``fused`` Decision says what it becomes in its parent:
 
-- fused, one module (``MODULE``), which the parent nests as a child; a fused
+- fused, one module (``REQUIREMENTS``), which the parent nests as a child; a fused
   composite exposing a control bus is refused (``composite-control``), as
   its parent does not export a child's bus yet;
 - otherwise its parts (``PARTS``): the parent places its modules, streams,
@@ -69,7 +69,8 @@ from finn.kernels.artifacts.requirements import (
     ModuleBuildRequirements,
     ProducerIdentity,
 )
-from finn.kernels.base import MODULE, TIEOFFS, Kernel, Tieoffs
+from finn.kernels.artifacts.module import Held
+from finn.kernels.base import REQUIREMENTS, TIEOFFS, Kernel
 from finn.kernels.control import EXPORTED, Exported, top_bus
 from finn.kernels.physical.composition import Composition, StreamEnd
 from finn.kernels.transport import StreamContract
@@ -96,7 +97,7 @@ class Parts:
 
     modules: tuple[Located[ModuleBuildRequirements], ...] = ()
     streams: tuple[Located[Connection], ...] = ()
-    tieoffs: tuple[Located[Tieoffs], ...] = ()
+    tieoffs: tuple[Located[Held], ...] = ()
     controls: tuple[Located[tuple[Exported, ...]], ...] = ()
     boundaries: tuple[tuple[str, str], ...] = ()
 
@@ -131,7 +132,7 @@ def _owner(node: str | None, modules: set[str]) -> str | None:
 def netlist(
     modules: Sequence[Located[ModuleBuildRequirements]],
     streams: Sequence[Located[Connection]],
-    tieoffs: Sequence[Located[Tieoffs]] = (),
+    tieoffs: Sequence[Located[Held]] = (),
     controls: Sequence[Located[tuple[Exported, ...]]] = (),
     parts: Sequence[Located[Parts]] = (),
     *,
@@ -148,7 +149,7 @@ def netlist(
     Every clock and reset pin is driven by its role (a free clock from
     ``ap_clk``, a clock at twice another from ``ap_clk2x``, a reset from
     ``ap_rst_n``), every exported control bus is wired through to its top port,
-    and every tied input is held by its kernel's ``Tieoffs``. An input nothing
+    and every tied input is held by its kernel's ``Held``. An input nothing
     drives is refused, as is a defect no single stream can see, such as a
     clock-domain conflict.
 
@@ -206,13 +207,13 @@ def _tagged(stages: Sequence[Stage], stream: str) -> tuple[Stage, ...]:
 def merge_parts(
     modules: list[Located[ModuleBuildRequirements]],
     streams: list[Located[Connection]],
-    tieoffs: list[Located[Tieoffs]],
+    tieoffs: list[Located[Held]],
     controls: list[Located[tuple[Exported, ...]]],
     parts: Sequence[Located[Parts]],
 ) -> tuple[
     list[Located[ModuleBuildRequirements]],
     list[Located[Connection]],
-    list[Located[Tieoffs]],
+    list[Located[Held]],
     list[Located[tuple[Exported, ...]]],
 ]:
     """Every child's parts named below it; each child boundary spliced with its stream here.
@@ -287,7 +288,7 @@ def merge_parts(
 def _wire(
     placed: dict[str, ModuleBuildRequirements],
     connections: list[tuple[str, Connection]],
-    tieoffs: dict[str, Tieoffs],
+    tieoffs: dict[str, Held],
     exported: list[Exported],
     module: str,
     producer: ProducerIdentity,
@@ -326,7 +327,7 @@ def _wire(
             name,
             requirements,
             stream_pins.get(name, set()),
-            tieoffs.get(name, Tieoffs()),
+            tieoffs.get(name, Held()),
         )
     for item in exported:
         composition.export(
@@ -336,7 +337,7 @@ def _wire(
         assert stage.requirements and stage.input and stage.output
         composition.add(instance, stage.requirements)
         pins = {p.name for p in (*stage.input.transport.pins(), *stage.output.transport.pins())}
-        _drive(composition, instance, stage.requirements, pins, Tieoffs())
+        _drive(composition, instance, stage.requirements, pins, Held())
     for name, c in connections:
         source = StreamEnd(c.source_owner, c.source)
         for stage in c.stages:
@@ -403,7 +404,7 @@ def _drive(
     instance: str,
     requirements: ModuleBuildRequirements,
     stream_pins: set[str],
-    tieoffs: Tieoffs,
+    tieoffs: Held,
 ) -> None:
     """Drive every input outside the instance's streams by its role or its tie-off."""
     clocking = {pin: top for top, pins in _clock_roles(requirements.abi).items() for pin in pins}
@@ -430,7 +431,7 @@ class Composite(Kernel):
     # Reference input -> the internal stream that is the composite's boundary on it.
     boundaries: ClassVar[Mapping[str, str]] = {}
 
-    modules = Members(MODULE)
+    modules = Members(REQUIREMENTS)
     streams = Members(CONNECTION)
     tied = Members(TIEOFFS)
     controls = Members(EXPORTED)
@@ -525,7 +526,7 @@ class Composite(Kernel):
             tuple(type(self).boundaries.items()),
         )
 
-    exports = {MODULE: module_export, PARTS: parts}
+    exports = {REQUIREMENTS: module_export, PARTS: parts}
 
 
 class Design(Composite):

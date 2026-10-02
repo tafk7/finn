@@ -244,7 +244,7 @@ def test_matmul_honors_the_child_physical_view_not_just_its_raw_module(monkeypat
             )
 
         build_requirements = View(
-            PackedDotpKernel.codegen, requires=(PackedDotpKernel.admission, view_only_rule)
+            PackedDotpKernel.requirements, requires=(PackedDotpKernel.admission, view_only_rule)
         )
 
     class RestrictedMatMul(MatMulKernel):

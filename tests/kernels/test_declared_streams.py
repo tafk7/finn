@@ -34,7 +34,7 @@ from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.memstream import MemStreamKernel
 from finn.dataflow.traversal import LevelEnd, BeatSequence, vector_major
 from finn.kernels.transport import STREAM_CONTRACT, AxiStream, StreamContract
-from finn.kernels.base import MODULE, PORT, TIEOFFS
+from finn.kernels.base import PORT, REQUIREMENTS, TIEOFFS
 from finn.kernels.composite import netlist
 from finn.kernels.streams import CONNECTION, Stream, boundary_contract
 
@@ -64,7 +64,7 @@ class Constants(Space):
         contents=(5, 6, 7, -8),
         output_stream=second,
     )
-    modules = Members(MODULE)
+    modules = Members(REQUIREMENTS)
     streams = Members(CONNECTION)
     tieoffs = Members(TIEOFFS)
 

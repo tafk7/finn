@@ -52,7 +52,8 @@ from finn.dataflow.traversal import (
 from finn.kernels.artifacts.abi import Bus, Endpoint, Member, Signal, StandardProtocol
 from finn.kernels.artifacts.contributions import CopiedSource, GeneratedData
 from finn.kernels.artifacts.requirements import RequirementContribution
-from finn.kernels.base import Clocking, Kernel, Tieoffs
+from finn.kernels.artifacts.module import Held
+from finn.kernels.base import Clocking, Kernel
 from finn.kernels.control import CONTROL, Control, ControlBus, held_bus
 from finn.kernels.datatypes.domains import Integer, set_index_dtype
 from finn.kernels.datatypes.semantics import (
@@ -280,17 +281,21 @@ class MemStreamKernel(Kernel):
     def other_pins(self) -> tuple[Signal | Bus, ...]:
         return (self.config_bus,)
 
-    def held(self) -> Tieoffs | Rejected:
+    def held(self) -> Held | Rejected:
         """AXI-Lite, unless writable."""
         if not self.writable:
             return held_bus(self.config_bus)
         if not self.present(MemStreamKernel.control):
             return reject("memstream-control", "a runtime-writable memory needs a control bus")
-        return Tieoffs()
+        return Held()
+
+    def controlled(self) -> tuple[Bus, ...]:
+        """AXI-Lite, when writable."""
+        return (self.config_bus,) if self.writable else ()
 
     @view
     def control_bus(self) -> Control:
-        return Control(self.config_bus if self.writable else None)
+        return Control(self.config_bus if self.controlled() else None)
 
     exports = {**Kernel.exports, CONTROL: {control: control_bus}}
 

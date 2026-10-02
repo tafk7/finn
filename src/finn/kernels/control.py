@@ -16,8 +16,8 @@ through one bus node.
 
 A kernel whose control interface is not referenced, or that exposes none in
 its configuration (``Control(None)``), holds the bus inputs constant and
-leaves its outputs unconnected through its ``Tieoffs``: nothing about a bus is
-wired by name.
+leaves its outputs unconnected (``held_bus``), and presents it otherwise
+(``Kernel.controlled``): nothing about a bus is wired by name.
 """
 
 from __future__ import annotations
@@ -35,7 +35,7 @@ from finn.core.space import (
     view,
 )
 from finn.kernels.artifacts.abi import Bus, Direction, Endpoint, Member
-from finn.kernels.base import Tieoffs
+from finn.kernels.artifacts.module import Held
 
 
 @dataclass(frozen=True)
@@ -79,7 +79,7 @@ def top_bus(child: Bus, port: str, clock: str, reset: str) -> Bus:
     )
 
 
-def held_bus(bus: Bus) -> Tieoffs:
+def held_bus(bus: Bus) -> Held:
     """A bus left unexposed: its inputs held low, its outputs unconnected."""
     directions = dict(bus.member_directions())
     inputs = tuple(
@@ -90,7 +90,7 @@ def held_bus(bus: Bus) -> Tieoffs:
     unused = tuple(
         member.physical for member in bus.signals if directions[member.physical] is not Direction.IN
     )
-    return Tieoffs(inputs, unused)
+    return Held(inputs, unused)
 
 
 class ControlBus(Space):
