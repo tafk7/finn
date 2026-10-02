@@ -41,6 +41,15 @@ FIFO's ``ram_style``; it is an identity stage presenting what arrives at it.
 Each stream exports its checked ``Connection`` under ``CONNECTION``; its
 composite wires them (``finn.kernels.composite.netlist``), each stage as
 ``u_<stream>_<stage>``.
+
+Beside ``compatible``, each checked hop is resolved into wires (``wired``:
+lanes, valid, ready, marker bits), and the stream exports its netlist under
+``NETLIST``: its stages' leaves at their labels below it
+(``adapter.input_gen.input_gen``, ``transport.fifo.buffer``) and its hops. A
+user's end belongs to the kernel whose ``Port`` it is, beside the stream
+(``^compute.packed``, at any depth below the stream's composite); a boundary
+end is the root's own pins. Under ``BOUNDARY`` it exports the AXIS bus its
+boundary side presents, if any.
 """
 
 from __future__ import annotations
@@ -63,10 +72,21 @@ from finn.core.space import (
     reject,
     view,
 )
-from finn.kernels.artifacts.abi import Endpoint
-from finn.kernels.base import PORT
+from finn.kernels.artifacts.abi import Bus, Endpoint
+from finn.kernels.artifacts.module import Endpoint as LinkEnd
+from finn.kernels.artifacts.module import Fragment, Link
+from finn.kernels.base import NETLIST, PORT
 from finn.kernels.fifo import FifoKernel
-from finn.kernels.transport import AxiStream, Mismatch, StreamContract, compatibility
+from finn.kernels.transport import (
+    AxiStream,
+    Level,
+    Mismatch,
+    StreamContract,
+    compatibility,
+    lane_permutation,
+    marker_bit,
+    marker_pairs,
+)
 from finn.dataflow.stream import End, Ends
 from finn.dataflow.stream import Stream as LogicalStream
 from finn.dataflow.tensor import ScalarEncoding, Tensor
@@ -76,6 +96,10 @@ from finn.kernels.adapters import ADAPTERS, Stage, StreamAdapter
 
 # The composed module's clocking pins: its interface convention, not a routing rule.
 CLOCK, CLOCK2X, RESET = "ap_clk", "ap_clk2x", "ap_rst_n"
+
+BOUNDARY = ViewKey("boundary", default_semantics(tuple))
+"""A stream's AXIS bus on its composite's boundary: one, or none when both of its ends
+are its composite's children."""
 
 ADAPTER_RAM_STYLES = "*.adapter.*.ram_style"
 """The keys (``fnmatch``) of every adapter stage's memory choice, an ``input_gen``'s."""
@@ -94,6 +118,30 @@ def boundary_contract(
     transport = stream.native(clock=CLOCK, reset=RESET)
     markers = {transport.markers[0].signal: sequence.markers[0]} if sequence.markers else {}
     return StreamContract(transport, element, form, sequence.repetition, markers)
+
+
+def _end(instance: str | None, contract: StreamContract) -> LinkEnd:
+    transport = contract.transport
+    return LinkEnd(instance, transport.data, transport.data_width, transport.valid, transport.ready)
+
+
+def wired(
+    source: str | None, produced: StreamContract, sink: str | None, consumed: StreamContract
+) -> Link:
+    """One hop that connects directly, as wires: each sink lane from its source lane
+    (``lane_permutation``), and each marker the sink requires from the source bit that
+    guarantees it (``marker_pairs``)."""
+    markers = []
+    for offered, required in marker_pairs(produced, consumed):
+        (signal, bit), (pin, position) = marker_bit(offered), marker_bit(required)
+        markers.append((signal, bit, pin, position))
+    return Link(
+        _end(source, produced),
+        _end(sink, consumed),
+        produced.element.bits,
+        lane_permutation(produced, consumed),
+        tuple(markers),
+    )
 
 
 class _Direct(Space):
@@ -125,6 +173,8 @@ class StreamFifo(Space):
             StreamContract(buffer.input.transport, element, arriving.form, arriving.repetition),
             StreamContract(buffer.output.transport, element, arriving.form, arriving.repetition),
             "fifo",
+            module=buffer.module,
+            label="fifo.buffer",
         )
 
 
@@ -220,8 +270,13 @@ class Stream(LogicalStream):
 
     @derived
     def adapted(self) -> tuple[Stage, ...]:
-        """The adapter's stages, in order; none when the ends connect directly."""
-        return self.adapter_stages if self.adapting else ()
+        """The adapter's stages, in order, labelled below the stream; none when the ends
+        connect directly."""
+        if not self.adapting:
+            return ()
+        return tuple(
+            replace(stage, label=f"adapter.{stage.label}") for stage in self.adapter_stages
+        )
 
     @derived
     def arriving(self) -> BeatSequence:
@@ -253,6 +308,15 @@ class Stream(LogicalStream):
         found += compatibility(
             current, ends.sink, source_is_top=current_top, sink_is_top=ends.sink_owner is None
         )
+        if ends.sink_owner is None and not current_top:
+            if current.transport.data_width > ends.sink.transport.data_width:
+                found.append(
+                    Mismatch(
+                        Level.PHYSICAL,
+                        "stream-padding",
+                        "a child's padding is wider than the top word that must carry it",
+                    )
+                )
         return _refusal([item for item in found if item.code != "stream-element"])
 
     @derived
@@ -262,6 +326,47 @@ class Stream(LogicalStream):
     connection = View(
         link, requires=(LogicalStream.well_formed, LogicalStream.realizable, compatible)
     )
+
+    @derived
+    def hops(self) -> tuple[Link, ...] | Rejected:
+        """Each hop, source through every stage to sink, as wires.
+
+        A user's end belongs to its kernel beside the stream: the user is a
+        kernel's ``Port`` (``compute.packed.x``, at any depth below the
+        stream's composite), its kernel the node above it (``^compute.packed``).
+        A stage sits below the stream at its label; a boundary end is the
+        root's own pins (``None``).
+        """
+        ends = self.endpoints
+        owners: list[str | None] = []
+        for node in (ends.source_owner, ends.sink_owner):
+            kernel = None if node is None else node.rpartition(".")[0]
+            if kernel == "":
+                return reject("stream-user", f"{node} presents an end, but is no kernel's port")
+            owners.append(None if kernel is None else "^" + kernel)
+        links: list[Link] = []
+        owner, current = owners[0], ends.source
+        for stage in self.stages:
+            assert stage.input is not None and stage.output is not None
+            links.append(wired(owner, current, stage.label, stage.input))
+            owner, current = stage.label, stage.output
+        links.append(wired(owner, current, owners[1], ends.sink))
+        return tuple(links)
+
+    @view(requires=(LogicalStream.well_formed, LogicalStream.realizable, compatible))
+    def netlist(self) -> Fragment:
+        """Its stages' leaves below it, and its hops."""
+        stages = tuple(
+            (stage.label, stage.module) for stage in self.stages if stage.module is not None
+        )
+        return Fragment(stages, self.hops)
+
+    @view(requires=(LogicalStream.well_formed, LogicalStream.realizable, compatible))
+    def boundary_bus(self) -> tuple[Bus, ...]:
+        """The AXIS bus its composite presents for it, when one side has no user."""
+        ends = self.endpoints
+        sides = ((ends.source_owner, ends.source), (ends.sink_owner, ends.sink))
+        return tuple(contract.transport.axis_bus() for owner, contract in sides if owner is None)
 
     @view
     def boundary(self) -> StreamContract | Rejected:
@@ -273,7 +378,7 @@ class Stream(LogicalStream):
             return ends.sink
         return reject("stream-internal", "both ends of this stream are its composite's children")
 
-    exports = {CONNECTION: connection}
+    exports = {CONNECTION: connection, NETLIST: netlist, BOUNDARY: boundary_bus}
 
 
 def _refusal(found: Sequence[Mismatch]) -> bool | Rejected:
@@ -296,11 +401,14 @@ class BufferedStream(Stream):
     @view
     def stages(self) -> tuple[Stage, ...]:
         fifo = self.transport_stage
-        return (*self.adapted, *((fifo,) if fifo.requirements is not None else ()))
+        if fifo.requirements is None:
+            return self.adapted
+        return (*self.adapted, replace(fifo, label=f"transport.{fifo.label}"))
 
 
 __all__ = [
     "ADAPTER_RAM_STYLES",
+    "BOUNDARY",
     "BufferedStream",
     "CLOCK",
     "CLOCK2X",
@@ -311,4 +419,5 @@ __all__ = [
     "Stream",
     "StreamFifo",
     "boundary_contract",
+    "wired",
 ]

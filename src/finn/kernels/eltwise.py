@@ -54,7 +54,7 @@ class EltwiseKernel(Kernel):
 
     id = "finnlib.eltwise"
     version = "1"
-    module = "eltwise"
+    rtl_module = "eltwise"
 
     operation: str = Param()
     # PE elements of the innermost axis a beat: its divisors placed, any the RTL takes flat.

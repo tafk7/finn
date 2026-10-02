@@ -44,7 +44,7 @@ def _vector(values: IntegerVector) -> str:
 class InputGeneratorKernel(Kernel):
     id = "finnlib.input_generator"
     version = "1"
-    module = "input_gen"
+    rtl_module = "input_gen"
 
     word_bits: int = Param()
     frame_words: int = Param()

@@ -71,7 +71,7 @@ c = Index("c")
 class ThresholdingAxiKernel(Kernel):
     id = "finnlib.thresholding_axi.integer"
     version = "1"
-    module = "thresholding_axi"
+    rtl_module = "thresholding_axi"
 
     input_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
     threshold_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)

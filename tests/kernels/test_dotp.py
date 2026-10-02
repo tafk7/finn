@@ -66,6 +66,7 @@ def test_a_core_declares_ports_folding_factors_and_facts_and_the_base_derives_th
         if item.kind == "view" and item.scope == "compute"
     ] == [
         "compute.build_requirements",
+        "compute.module",
         "compute.tieoffs",
     ]
     for port in (point.x, point.w, point.y):

@@ -75,7 +75,7 @@ MEMSTREAM_RAM_STYLES = ("auto", "distributed", "block", "ultra")
 class MemStreamKernel(Kernel):
     id = "finnlib.memstream_axi"
     version = "1"
-    module = "memstream_axi"
+    rtl_module = "memstream_axi"
 
     dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
     form: Traversal = Param()

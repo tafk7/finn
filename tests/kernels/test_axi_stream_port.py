@@ -49,7 +49,7 @@ class Pool(Kernel):
     """Global sum pooling, model only: Y[b, c] = sum_s X[b, s, c], PE channels a beat."""
 
     id = "test.accpool"
-    module = "accpool_axi"
+    rtl_module = "accpool_axi"
     x_stream: Stream = Param(required=False)
     y_stream: Stream = Param(required=False)
 

@@ -61,6 +61,7 @@ from finn.core.space import (
 from finn.dataflow.plan import Hop, Plan, Step, Unrealizable
 from finn.dataflow.tensor import Tensor
 from finn.dataflow.traversal import BeatSequence, LevelEnd, Reorder
+from finn.kernels.artifacts.module import Leaf
 from finn.kernels.artifacts.requirements import ModuleBuildRequirements
 from finn.kernels.datatypes.semantics import INTEGER_VECTOR, IntegerVector
 from finn.kernels.input_generator import InputGeneratorKernel
@@ -72,6 +73,8 @@ from finn.kernels.vpc import VpcKernel
 class Stage:
     """A module inside a stream, with the contracts of its two ports; none when direct.
 
+    ``module`` is its leaf, placed at ``label``, the node path of its kernel
+    relative to the stream that places it (``adapter.input_gen.input_gen``).
     ``stream`` names the stream that places it when that is not the connection
     it sits in: a stage of a flattened composite's stream, spliced into its
     parent's connection (``finn.kernels.composite.netlist``).
@@ -82,6 +85,8 @@ class Stage:
     output: StreamContract | None = None
     name: str = ""
     stream: str = ""
+    module: Leaf | None = None
+    label: str = ""
 
 
 # -- realizing a plan --------------------------------------------------------------------
@@ -325,6 +330,9 @@ class StreamAdapter(Space):
                         kernel.output.transport, element, stage.sink.form, markers=offered
                     ),
                     name,
+                    module=kernel.module,
+                    # Below the adapter Decision: its candidate (the chain), then the stage.
+                    label=f"{'_'.join(type(self).modules)}.{name}",
                 )
             )
         return tuple(found)

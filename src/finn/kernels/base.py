@@ -59,6 +59,8 @@ from finn.kernels.artifacts.abi import (
     Reset,
     Signal,
 )
+from finn.kernels.artifacts.contributions import CopiedSource, GeneratedData
+from finn.kernels.artifacts.module import Fragment, Held, Leaf, Pins
 from finn.dataflow.schedule import Access, Index, Refused, Schedule, bind_extents
 from finn.kernels.transport import STREAM_CONTRACT
 from finn.kernels.artifacts.requirements import (
@@ -71,6 +73,10 @@ from finn.kernels.artifacts.requirements import (
 MODULE_REQUIREMENTS = default_semantics(ModuleBuildRequirements)
 MODULE = ViewKey("module", MODULE_REQUIREMENTS)
 """A kernel's generated module, collected by its composite."""
+
+NETLIST = ViewKey("netlist", default_semantics(Fragment))
+"""A kernel's or a stream's netlist (``finn.kernels.artifacts.module.Fragment``), labelled
+relative to itself; its parent merges its members' under their nodes."""
 
 PORT = ViewKey("port", STREAM_CONTRACT)
 """A kernel's port on one stream, exported per reference input."""
@@ -161,7 +167,7 @@ class Kernel(Space):
     id: ClassVar[str] = ""
     version: ClassVar[str] = "1"
     # The RTL module it instantiates; empty for a composite, which generates its own.
-    module: ClassVar[str] = ""
+    rtl_module: ClassVar[str] = ""
 
     def __init_subclass__(cls, **kwargs: object) -> None:
         super().__init_subclass__(**kwargs)
@@ -236,7 +242,7 @@ class Kernel(Space):
     def codegen(self) -> ModuleBuildRequirements | Rejected:
         """The module: clocking, its other pins, then every port's pins; and parameters."""
         family = type(self)
-        if not family.module:
+        if not family.rtl_module:
             return reject("kernel-module", f"{family.__qualname__} declares no module")
         clocking = self.clocking
         chosen = self.parameters()
@@ -245,7 +251,7 @@ class Kernel(Space):
         parameters = tuple(sorted(chosen.items()))
         pins = tuple(pin for item in self.port_pins for pin in item.value)
         abi = ModuleABIRequirements(
-            FixedModuleName(family.module),
+            FixedModuleName(family.rtl_module),
             (*clocking.signals(), *self.other_pins(), *pins),
             tuple((name, str(value)) for name, value in parameters),
             clocking.alignments(),
@@ -253,6 +259,26 @@ class Kernel(Space):
         return ModuleBuildRequirements(family.id, family.version, parameters, abi, self.sources())
 
     build_requirements = View(codegen, requires=(admission,))
+
+    @derived
+    def leaf(self) -> Leaf | Rejected:
+        """The FinnLib module bound to this configuration: clocking, other pins, then every
+        port's pins; its parameters, sources and data; and what it holds."""
+        requirements, held = self.codegen, self.tieoffs
+        abi = requirements.abi
+        contributions = requirements.contributions
+        return Leaf(
+            requirements.implementation_id,
+            requirements.implementation_version,
+            type(self).rtl_module,
+            requirements.parameters,
+            Pins(abi.ports, abi.parameters, abi.clock_alignments),
+            tuple(item for item in contributions if isinstance(item, CopiedSource)),
+            tuple(item for item in contributions if isinstance(item, GeneratedData)),
+            Held(held.inputs, held.unused),
+        )
+
+    module = View(leaf, requires=(admission,))
 
     @view
     def tieoffs(self) -> Tieoffs | Rejected:
@@ -322,6 +348,7 @@ __all__ = [
     "MODULE",
     "MODULE_REQUIREMENTS",
     "NATIVE_CLOCKING",
+    "NETLIST",
     "PINS",
     "PORT",
     "TIEOFFS",
