@@ -50,7 +50,7 @@ class BuildError(Exception):
     """A module is not well formed, or cannot be emitted."""
 
 
-def _table(values: ScalarTable, *, label: str, renderable: bool = False) -> ScalarTable:
+def _table(values: ScalarTable, *, label: str) -> ScalarTable:
     items = tuple(values)
     names = tuple(name for name, _ in items)
     if len(names) != len(set(names)):
@@ -60,8 +60,6 @@ def _table(values: ScalarTable, *, label: str, renderable: bool = False) -> Scal
     for name, value in items:
         if not isinstance(value, (bool, int, float, str, Enum)):
             raise BuildError(f"{label} value {name!r} is not a scalar")
-        if renderable and isinstance(value, Enum):
-            raise BuildError(f"render input {name!r} is not a flat renderable scalar")
     return tuple(sorted(items, key=lambda item: item[0]))
 
 

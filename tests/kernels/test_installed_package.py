@@ -75,11 +75,8 @@ assert tile.field(Tiles.shape).get() == (3, 4)
 assert tile.inspect(Tiles.shape).accepted_result == Available((3, 4))
 assert tile.field(Tiles.cycles).get() == 4
 from finn.kernels.artifacts import build, module as built
-from finn.kernels.resources import template_root
 from qonnx.core.datatype import DataType
 
-resources = template_root()
-assert resources.is_relative_to(installed)
 assert (installed / "finn/kernels/py.typed").is_file()
 assert not (installed / "finn/kernels/_engine").exists()
 assert (installed / "finn/core/space/py.typed").is_file()
@@ -87,7 +84,7 @@ assert (installed / "finn/dataflow/py.typed").is_file()
 assert not (installed / "finn/parked").exists()
 assert "finn.dataflow.datatypes" in sys.modules
 assert not (installed / "finn/kernels/space").exists()
-assert not (resources / "dotp_axi.sv").exists()
+assert not (installed / "finn/kernels/resources").exists()
 
 class PlacedDotp(Space):
     x = Stream(tensor=Tensor((1, 2), ScalarEncoding(DataType["INT3"])), port="in0_V")
@@ -249,13 +246,15 @@ def test_installed_wheel_materializes_independent_kernel_builds(tmp_path: Path) 
             "finn/dataflow/py.typed",
             "finn/dataflow/datatypes.py",
             "finn/dataflow/traversal.py",
-            "finn/kernels/resources/decomposed_wrapper.sv.j2",
+            "finn/kernels/artifacts/module.py",
         } <= set(archive.namelist())
         assert not any(
             name.startswith("finn/kernels/_engine/")
             or name.startswith("finn/kernels/space/")
             or name.startswith("finn/parked/")
             or name.startswith("finn/custom_op/dataflow/")
+            or name.startswith("finn/kernels/resources/")
+            or name.startswith("finn/kernels/physical/")
             or any(part.startswith("_next") for part in name.split("/"))
             for name in archive.namelist()
         )
@@ -266,8 +265,9 @@ def test_installed_wheel_materializes_independent_kernel_builds(tmp_path: Path) 
         metadata = BytesParser().parsebytes(archive.read(metadata_name))
         requirements = metadata.get_all("Requires-Dist", [])
         names = {value.split(";")[0].replace(" ", "") for value in requirements}
-        for dependency in ("greenlet", "jinja2", "pyslang"):
+        for dependency in ("greenlet", "pyslang"):
             assert any(name.startswith(dependency) for name in names), dependency
+        assert not any(name.startswith("jinja2") for name in names)
         assert not any(name.startswith("typing") for name in names)
     installed = tmp_path / "installed"
     _run(

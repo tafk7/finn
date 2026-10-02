@@ -43,7 +43,7 @@ and ``fifo``, after its adapter. The FIFO candidate owns its ``depth`` and the
 FIFO's ``ram_style``; it is an identity stage presenting what arrives at it.
 The adapter and transport choices are keyed under the stream
 (``x.adapter``, ``w.transport``), so they belong to whoever owns the edge.
-Each stream exports its checked ``Connection`` under ``CONNECTION``.
+Its ``connection`` view is the checked ``Connection``: its ends and stages.
 
 Beside ``compatible``, each checked hop is resolved into wires (``wired``:
 lanes, valid, ready, marker bits), and the stream exports its netlist under
@@ -67,9 +67,7 @@ from finn.core.space import (
     Space,
     Users,
     View,
-    ViewKey,
     constraint,
-    default_semantics,
     derived,
     domain,
     reject,
@@ -176,10 +174,11 @@ class StreamFifo(Space):
 
 @dataclass(frozen=True)
 class Connection:
-    """One checked stream; an owner of None is the composed module itself.
+    """One checked stream: each end's owner (the user's port node, None at the root's
+    boundary), its contract, and the stages between them.
 
     ``source_input`` and ``sink_input`` name the reference input each owner
-    presents its end through (``y_stream``); empty at a boundary.
+    presents its end through (``stream``); empty at a boundary.
     """
 
     source_owner: str | None
@@ -189,10 +188,6 @@ class Connection:
     stages: tuple[Stage, ...] = ()
     source_input: str = ""
     sink_input: str = ""
-
-
-CONNECTION_SEMANTICS = default_semantics(Connection)
-CONNECTION = ViewKey("connection", CONNECTION_SEMANTICS)
 
 
 class Stream(LogicalStream):
@@ -374,7 +369,7 @@ class Stream(LogicalStream):
             return ends.sink
         return reject("stream-internal", "both ends of this stream are its owner's children")
 
-    exports = {CONNECTION: connection, NETLIST: netlist, BOUNDARY: boundary_bus}
+    exports = {NETLIST: netlist, BOUNDARY: boundary_bus}
 
 
 def _refusal(found: Sequence[Mismatch]) -> bool | Rejected:
@@ -408,8 +403,6 @@ __all__ = [
     "BufferedStream",
     "CLOCK",
     "CLOCK2X",
-    "CONNECTION",
-    "CONNECTION_SEMANTICS",
     "Connection",
     "RESET",
     "Stream",

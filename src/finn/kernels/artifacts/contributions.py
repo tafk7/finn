@@ -44,7 +44,7 @@ class CopiedSource:
 class GeneratedData:
     """A data file whose contents the kernel generates, such as a memory image.
 
-    The contents are part of the requirements, so they enter its fingerprint.
+    The contents are part of the module, so they enter its fingerprint.
     ``path`` is the name the RTL reads it under (an ``INIT_FILE``), beside the
     module's sources.
     """

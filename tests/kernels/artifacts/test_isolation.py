@@ -38,7 +38,7 @@ import pytest
 #:
 #: The list is short on purpose.  Adding to it is a decision somebody makes;
 #: this test is what stops it being one nobody notices.
-APPROVED_DEPENDENCIES = frozenset({"jinja2", "markupsafe", "pyslang"})
+APPROVED_DEPENDENCIES = frozenset({"pyslang"})
 
 #: The one package prefix inside FINN that ``artifacts`` may name.
 OWN_PACKAGE = "finn.kernels.artifacts"
@@ -276,7 +276,7 @@ def test_the_boundary_check_rejects_a_forbidden_import(source: str, expected: st
     assert not allowed
 
 
-@pytest.mark.parametrize("source", ("from . import build", "from .requirements import BuildError"))
+@pytest.mark.parametrize("source", ("from . import build", "from .module import BuildError"))
 def test_the_boundary_check_accepts_relative_artifact_imports(source: str) -> None:
     assert all(
         _allowed_import(name) for _, name in _resolved_imports(ast.parse(source), OWN_PACKAGE)
