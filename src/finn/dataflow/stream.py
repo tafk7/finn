@@ -18,8 +18,11 @@ kernels that reference it, and presents a missing side as a boundary of the
 root that declares it. So ``ends`` is ``required``: this family cannot be
 placed, and the physical stream (``finn.kernels.streams``) defines it.
 
-The tensor must not depend on the stream's users: kernels read it to build
-their ends, so a tensor derived from an end is a dependency cycle.
+The tensor must not depend on the stream's users, their port contracts:
+kernels read it to build their ends, so a tensor derived from an end is a
+dependency cycle. A kernel's fact-level view, reading its facts and value
+choices but no port, is not such a dependency, so the stream's declarer may
+bind the tensor to one.
 """
 
 from __future__ import annotations
