@@ -11,7 +11,8 @@ from finn.kernels.artifacts.abi import Bus
 from finn.kernels.artifacts.build import emit_module
 from finn.kernels.configure import commit, settle
 from kernels.helpers import finnlib_root, point_for
-from finn.kernels.matmul import MatMulKernel, WeightDelivery, exact_result_dtype, matmul_assembly
+from finn.kernels.matmul import MatMulKernel, exact_result_dtype
+from kernels.helpers import WeightDelivery, matmul_assembly
 from finn.kernels.dotp import DotpAxiKernel, PackedDotpKernel
 from finn.core.space import Decision, View, constraint, reject
 from finn.kernels.target import DspBlock
@@ -284,6 +285,6 @@ def test_matmul_honors_the_child_physical_view_not_just_its_raw_module(monkeypat
     assert "test-view-only" in {finding.code for finding in refused.findings}
     # Substitute a fully authored family to exercise the convenience entry
     # point through the same accepted-view path, without mutating declarations.
-    monkeypatch.setattr("finn.kernels.matmul.MatMulKernel", RestrictedMatMul)
+    monkeypatch.setattr("kernels.helpers.MatMulKernel", RestrictedMatMul)
     with pytest.raises(ValueError, match="test-view-only"):
         assembly()

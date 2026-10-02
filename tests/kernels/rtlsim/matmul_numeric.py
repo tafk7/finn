@@ -22,7 +22,7 @@ from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 from kernels.rtlsim.rtl_transport import drive_observed
 from kernels.xsim import materialize
 from finn.dataflow.gemm import Form
-from finn.kernels.matmul import WeightDelivery, matmul_assembly
+from kernels.helpers import WeightDelivery, matmul_assembly
 from finn.kernels.target import DspBlock
 from finn.kernels.physical.validation import abi_pins
 

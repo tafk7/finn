@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Physical components and the supported explicit MatMul assembly.
+"""Physical kernels: FinnLib modules on design spaces, and the composites built from them.
 
 The public construction path needs no compiler node. Scalar datatype values
 and canonical logical values come from :mod:`finn.dataflow`, below this package.
@@ -23,7 +23,7 @@ if TYPE_CHECKING:
     from finn.kernels.input_generator import InputGeneratorKernel
     from finn.kernels.memstream import MemStreamKernel
     from finn.kernels.thresholding import ThresholdingAxiKernel
-    from finn.kernels.matmul import MatMulAssembly, MatMulKernel, WeightDelivery, matmul_assembly
+    from finn.kernels.matmul import MatMulKernel
     from finn.kernels.target import DspBlock
     from finn.kernels.vpc import VpcKernel
 
@@ -40,9 +40,6 @@ _LAZY_EXPORTS = {
     "InputGeneratorKernel": ("finn.kernels.input_generator", "InputGeneratorKernel"),
     "ThresholdingAxiKernel": ("finn.kernels.thresholding", "ThresholdingAxiKernel"),
     "MatMulKernel": ("finn.kernels.matmul", "MatMulKernel"),
-    "MatMulAssembly": ("finn.kernels.matmul", "MatMulAssembly"),
-    "WeightDelivery": ("finn.kernels.matmul", "WeightDelivery"),
-    "matmul_assembly": ("finn.kernels.matmul", "matmul_assembly"),
     "VpcKernel": ("finn.kernels.vpc", "VpcKernel"),
     "DspBlock": ("finn.kernels.target", "DspBlock"),
 }
@@ -71,9 +68,6 @@ __all__ = [
     "InputGeneratorKernel",
     "ThresholdingAxiKernel",
     "MatMulKernel",
-    "MatMulAssembly",
-    "WeightDelivery",
-    "matmul_assembly",
     "VpcKernel",
     "DspBlock",
 ]

@@ -16,7 +16,8 @@ from finn.core.space import Rejected, design_space, inspection
 from finn.kernels.artifacts.abi import Bus
 from finn.kernels.artifacts.build import emit_module
 from finn.kernels.artifacts.contributions import ContributionError, GeneratedData
-from finn.kernels.matmul import MatMulKernel, WeightDelivery, matmul_assembly
+from finn.kernels.matmul import MatMulKernel
+from kernels.helpers import WeightDelivery, matmul_assembly
 from finn.kernels.memstream import MemStreamKernel
 from finn.dataflow.traversal import tile
 from finn.kernels.resources import template_root

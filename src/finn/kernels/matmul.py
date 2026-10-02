@@ -34,34 +34,25 @@ kernel and presents its ``port`` name (``in0_V``, ``in1_V``, ``out0_V``,
   reduction; its adapter carries that out.
 
 ``structure`` wires ``Members(MODULE)`` through ``Members(CONNECTION)``; the
-module has ``ap_clk2x`` only when compute is pumped. ``matmul_assembly`` is a
-convenience adapter: it configures concrete facts, commits the caller's
-choices, settles the rest and packs the views into a ``MatMulAssembly``.
+module has ``ap_clk2x`` only when compute is pumped.
 """
 
 from __future__ import annotations
 
-from collections.abc import Sequence
-from dataclasses import dataclass
-from enum import Enum
-from typing import Any, cast
+from typing import cast
 
 from finn.core.space import (
-    Available,
     ConstraintGroup,
     Decision,
     Param,
-    QueryResult,
     Rejected,
     constraint,
     derived,
-    design_space,
     reject,
     selected,
     View,
     view,
 )
-from finn.core.space.settling import compatible_cases
 from finn.dataflow.datatypes import (
     QONNXDataType,
     canonical_qonnx_datatype,
@@ -71,10 +62,8 @@ from finn.dataflow.datatypes import (
 from finn.dataflow.gemm import Form
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import Traversal, period
-from finn.kernels.artifacts.requirements import ModuleBuildRequirements
 from finn.kernels.base import PORT
 from finn.kernels.artifacts.requirements import ProducerIdentity
-from finn.kernels.configure import admission, commit, describe, settle, undecided
 from finn.kernels.control import ControlBus
 from finn.kernels.datatypes.domains import set_index_dtype
 from finn.kernels.datatypes.semantics import (
@@ -85,20 +74,12 @@ from finn.kernels.datatypes.semantics import (
 )
 from finn.kernels.dotp import Int8Dsp58DotpKernel, PackedDotpKernel
 from finn.kernels.memstream import MemStreamKernel
-from finn.kernels.physical.structure import PhysicalStructure
 from finn.kernels.composite import Composite
-from finn.kernels.streams import ADAPTER_RAM_STYLES, BufferedStream, Stream
+from finn.kernels.streams import BufferedStream, Stream
 from finn.kernels.target import DspBlock
 
 
 FinnAttributes = tuple[tuple[str, int | str | tuple[int, ...]], ...]
-
-
-class WeightDelivery(Enum):
-    """Where the weights come from: the ``memory`` Decision's case for each."""
-
-    EXTERNAL = "none"
-    MEMSTREAM = "memstream"
 
 
 def _positive(value: int, name: str) -> None:
@@ -117,18 +98,6 @@ def exact_result_dtype(
     lower, upper = vector_length * min(products), vector_length * max(products)
     bits = max(1, upper.bit_length() + 1, (~lower).bit_length() + 1 if lower < 0 else 1)
     return resolve_qonnx_datatype_name(f"INT{bits}")
-
-
-@dataclass(frozen=True, slots=True)
-class MatMulAssembly:
-    activation_beats: int
-    weight_beats: int
-    result_beats: int
-    result_dtype: QONNXDataType
-    weight_delivery: WeightDelivery
-    structure: PhysicalStructure
-    requirements: ModuleBuildRequirements
-    initializer: tuple[int, ...]
 
 
 class MatMulKernel(Composite):
@@ -275,7 +244,7 @@ class MatMulKernel(Composite):
     def narrow_weights(self) -> bool:
         """Known weights that avoid their type's most negative value let the packed core
         pack more lanes (NARROW_WEIGHTS). Provisional: the user means to revisit it."""
-        read_only = self.supplied != WeightDelivery.EXTERNAL.value and not self.writable_weights
+        read_only = self.supplied != "none" and not self.writable_weights
         if not read_only:
             return False  # weights arriving or rewritten at run time promise nothing
         low, _ = ordinary_integer_bounds(self.weights_dtype)
@@ -319,7 +288,7 @@ class MatMulKernel(Composite):
 
     @constraint
     def supply_supported(self) -> bool | Rejected:
-        if self.supplied == WeightDelivery.EXTERNAL.value:
+        if self.supplied == "none":
             if self.writable_weights:
                 return reject("matmul-writable", "runtime-writable weights need a memory")
             if self.multi_set:
@@ -328,7 +297,7 @@ class MatMulKernel(Composite):
 
     @constraint
     def realization_supported(self) -> bool | Rejected:
-        if self.dense_view and self.supplied == WeightDelivery.EXTERNAL.value:
+        if self.dense_view and self.supplied == "none":
             return reject(
                 "matmul-realization",
                 "a dense realization builds block-diagonal weights, so it needs known weights",
@@ -386,159 +355,4 @@ class MatMulKernel(Composite):
     }
 
 
-def _frozen(values: object) -> object:
-    """Nested sequences as nested tuples."""
-    if isinstance(values, Sequence):
-        return tuple(_frozen(item) for item in values)
-    return values
-
-
-def _realizes(base: MatMulKernel, choices: dict[str, object]) -> QueryResult[bool]:
-    """Accepted when the choices commit, the realization's own rule holds, and some
-    core can compute it."""
-    try:
-        point = commit(base, choices)
-    except ValueError as error:
-        return reject("matmul-realization", str(error))
-    rule = point.inspect(MatMulKernel.realization_supported).result
-    if not isinstance(rule, Available):
-        return rule
-    cores = compatible_cases(point, "compute", admission)
-    return Available(True) if cores else reject("matmul-realization", "no core computes it")
-
-
-def matmul_assembly(
-    *,
-    m: int,
-    n: int,
-    k: int,
-    activation_dtype: QONNXDataType,
-    weights_dtype: QONNXDataType,
-    pe: int,
-    simd: int,
-    target_dsp: DspBlock,
-    form: Form = Form.DENSE,
-    target_period_ns: float = 5.0,
-    compute_pumping: bool = False,
-    core: str | None = None,
-    realization: str | None = None,
-    weight_delivery: WeightDelivery = WeightDelivery.EXTERNAL,
-    weights: Sequence[object] | None = None,
-    ram_style: str = "auto",
-    pumped_memory: bool = False,
-    writable_weights: bool = False,
-    weight_sets: int = 1,
-    weight_fifo_depth: int | None = None,
-) -> MatMulAssembly:
-    """Bind operation facts, commit the caller's choices, settle the rest, then assemble.
-
-    ``m`` rows, ``n`` outputs and the reduction ``k``; for a depthwise ``form``,
-    ``k`` is the window and ``n`` the channels. ``weights`` is stored (K, N),
-    and is required by, and only accepted with, a memory. The ``auto``
-    ``ram_style`` default leaves memory inference to synthesis.
-    ``weight_fifo_depth`` places a FIFO on the weight stream; ``None`` connects
-    it directly. ``target_period_ns`` is the clock the module must meet (5 ns:
-    200 MHz); it sets dotp's DSP58 chain segmentation. ``core`` names the
-    compute core (``packed`` or ``int8_dsp58``); left out, the one core
-    compatible with the configuration is settled, and several compatible cores
-    must be chosen from. PE, SIMD and pumping are the core's.
-    """
-    if not isinstance(weight_delivery, WeightDelivery):
-        raise ValueError("weight_delivery must be a WeightDelivery value")
-    known = weight_delivery is not WeightDelivery.EXTERNAL
-    if known != (weights is not None):
-        raise ValueError("stored delivery requires weights; external delivery has no initializer")
-    facts: dict[str, Any] = dict(
-        m=m,
-        n=n,
-        k=k,
-        form=form,
-        activation_dtype=activation_dtype,
-        weights_dtype=weights_dtype,
-        target_dsp=target_dsp,
-        target_period_ns=target_period_ns,
-        writable_weights=writable_weights,
-        weight_sets=weight_sets,
-    )
-    if weights is not None:
-        facts["weights"] = _frozen(weights)
-    case = weight_delivery.value
-    buffered = weight_fifo_depth is not None
-    choices: dict[str, object] = {
-        "memory": case,
-        "weight_stream.transport": "fifo" if buffered else "direct",
-    }
-    if weight_delivery is WeightDelivery.MEMSTREAM:
-        choices["memory.memstream.ram_style"] = ram_style
-        choices["memory.memstream.pumped_memory"] = pumped_memory
-    if buffered:
-        choices["weight_stream.transport.fifo.buffer.depth"] = weight_fifo_depth
-        choices["weight_stream.transport.fifo.buffer.ram_style"] = "auto"
-    base = design_space(MatMulKernel(**facts))
-    if form is Form.DEPTHWISE:
-        # The realization sets the datapath's reduction, so it is committed with
-        # the other choices before the core's folding factors.
-        if realization is None:
-            viable = [
-                case
-                for case in ("native", "dense")
-                if isinstance(_realizes(base, {**choices, "realization": case}), Available)
-            ]
-            if len(viable) != 1:
-                named = ", ".join(viable) or "none"
-                raise ValueError(f"realizations compatible with this configuration: {named}")
-            realization = viable[0]
-        choices["realization"] = realization
-    point = commit(base, choices)
-    if core is None:
-        settled = settle(point)
-        if "compute" not in settled.committed:
-            cores = settled.open.get("compute", ())
-            if cores:
-                raise ValueError(f"compute cores {', '.join(cores)} are all compatible; choose one")
-            refusals = (
-                admission(commit(point, {"compute": case}).compute)
-                for case in ("packed", "int8_dsp58")
-            )
-            found = describe(result for result in refusals if result is not None)
-            raise ValueError(f"no compute core is compatible: {found}")
-        point, core = settled.point, settled.committed["compute"]
-    else:
-        point = commit(point, {"compute": core})
-    point = commit(
-        point,
-        {
-            f"compute.{core}.pe": pe,
-            f"compute.{core}.simd": simd,
-            f"compute.{core}.compute_pumping": compute_pumping,
-        },
-    )
-    # Each stream's one compatible adapter; an input_gen's memory is inferred.
-    point = settle(point).point
-    styles = undecided(point, ADAPTER_RAM_STYLES)
-    if styles:
-        point = commit(point, dict.fromkeys(styles, "auto"))
-    composed = point.query(MatMulKernel.structure)
-    if not isinstance(composed, Available):
-        raise ValueError(f"MatMul assembly is not accepted: {describe([composed])}")
-    compute = point.compute
-    return MatMulAssembly(
-        point.activations.ends.source.sequence.form.beats,
-        compute.w.presented.form.beats,
-        compute.y.presented.form.beats,
-        point.result_type,
-        weight_delivery,
-        composed.value.structure,
-        composed.value.requirements,
-        point.memory.image if point.memory is not None else (),
-    )
-
-
-__all__ = [
-    "FinnAttributes",
-    "MatMulAssembly",
-    "MatMulKernel",
-    "WeightDelivery",
-    "exact_result_dtype",
-    "matmul_assembly",
-]
+__all__ = ["FinnAttributes", "MatMulKernel", "exact_result_dtype"]

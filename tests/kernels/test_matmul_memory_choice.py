@@ -32,7 +32,8 @@ from finn.kernels.artifacts.abi import Bus
 from finn.kernels.artifacts.requirements import ModuleBuildRequirements
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.dotp import DotpAxiKernel
-from finn.kernels.matmul import MatMulKernel, WeightDelivery, matmul_assembly
+from finn.kernels.matmul import MatMulKernel
+from kernels.helpers import WeightDelivery, matmul_assembly
 from kernels.helpers import settled
 from finn.kernels.target import DspBlock
 

@@ -25,7 +25,7 @@ from finn.kernels.artifacts.abi import (
 from finn.kernels.artifacts.requirements import ModuleBuildRequirements
 from finn.kernels.artifacts.requirements import ProducerIdentity
 from finn.kernels.artifacts.requirements import FixedModuleName, ModuleABIRequirements
-from finn.kernels.matmul import matmul_assembly
+from kernels.helpers import matmul_assembly
 from finn.kernels.physical.structure import ConstantBits, PinSlice
 from finn.kernels.composite import Composed, netlist
 from finn.kernels.target import DspBlock

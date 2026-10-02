@@ -167,7 +167,7 @@ class RejectParked(importlib.abc.MetaPathFinder):
 sys.meta_path.insert(0, RejectParked())
 from finn.core.space import Space, design_space
 from finn.dataflow.tensor import ScalarEncoding, Tensor
-from finn.kernels import DspBlock, PackedDotpKernel, WeightDelivery, matmul_assembly
+from finn.kernels import DspBlock, MatMulKernel, PackedDotpKernel
 from finn.kernels.artifacts.requirements import ModuleBuildRequirements
 from finn.kernels.configure import commit
 from finn.kernels.physical.axi_stream import AxiStream
@@ -197,28 +197,33 @@ answer = point.build_requirements
 assert isinstance(answer, ModuleBuildRequirements)
 assert isinstance(point.x.axis, AxiStream)
 assert point.x.axis.payload_bits == 6
-for mode in WeightDelivery:
-    options = (
-        {"weights": [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]]}
-        if mode is not WeightDelivery.EXTERNAL
-        else {}
-    )
-    assembly = matmul_assembly(
+for memory in ("none", "memstream"):
+    facts = dict(
         m=2,
         k=4,
         n=4,
         activation_dtype=DataType["INT3"],
         weights_dtype=DataType["INT3"],
-        pe=2,
-        simd=2,
         target_dsp=DspBlock.DSP48E2,
         target_period_ns=5.0,
-        compute_pumping=False,
-        weight_delivery=mode,
-        **options,
     )
-    assert assembly.result_dtype == DataType["INT8"]
-    assert assembly.requirements.contributions
+    choices = {"memory": memory, "weight_stream.transport": "direct", "compute": "packed"}
+    if memory == "memstream":
+        facts["weights"] = ((1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (0, 0, 0, 1))
+        choices |= {"memory.memstream.ram_style": "auto", "memory.memstream.pumped_memory": False}
+    matmul = commit(design_space(MatMulKernel(**facts)), choices)
+    matmul = commit(
+        matmul,
+        {
+            "compute.packed.pe": 2,
+            "compute.packed.simd": 2,
+            "compute.packed.compute_pumping": False,
+            "activations.adapter": "input_gen",
+            "activations.adapter.input_gen.input_gen.ram_style": "auto",
+        },
+    )
+    assert matmul.result_type == DataType["INT8"]
+    assert matmul.build_requirements.contributions
 assert not any(
     name.startswith("finn.kernels.") and ("._engine" in name or "._next" in name)
     for name in sys.modules

@@ -22,7 +22,8 @@ from finn.dataflow.traversal import LevelEnd, vector_major
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.configure import commit
 from finn.dataflow.gemm import Form
-from finn.kernels.matmul import MatMulKernel, matmul_assembly
+from finn.kernels.matmul import MatMulKernel
+from kernels.helpers import matmul_assembly
 from finn.kernels.physical.contract import StreamContract
 from finn.kernels.physical.stream import MarkerKind, ReadyValidStream, StreamMarker
 from finn.kernels.physical.structure import PhysicalPin, PinSlice, UnusedOutput

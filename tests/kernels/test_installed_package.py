@@ -47,7 +47,7 @@ class RejectGraphDependencies(importlib.abc.MetaPathFinder):
 
 sys.meta_path.insert(0, RejectGraphDependencies())
 
-from finn.kernels import DspBlock, PackedDotpKernel, WeightDelivery, matmul_assembly
+from finn.kernels import DspBlock, MatMulKernel, PackedDotpKernel
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.configure import commit
 from finn.kernels.streams import Stream
@@ -137,35 +137,43 @@ def materialize(module, expected):
     return directory / (emitted.entry_point + ".sv")
 
 materialize(answer, dotp_sources)
-for delivery in WeightDelivery:
-    options = {}
-    expected = dotp_sources | {"rtl/shape/input_gen.sv"}
-    if delivery is not WeightDelivery.EXTERNAL:
-        # Stored (k, n): the columns of the by-output rows.
-        options["weights"] = [[-4, 0, 3, -1], [-3, 1, 2, -2], [-2, 2, 1, -3], [-1, 3, 0, -4]]
-    if delivery is WeightDelivery.MEMSTREAM:
-        expected |= {"rtl/infra/axilite.sv", "rtl/infra/memstream.sv", "rtl/infra/memstream_axi.sv"}
-    assembly = matmul_assembly(
-        m=3, k=4, n=4, pe=2, simd=2,
-        activation_dtype=DataType["INT3"], weights_dtype=DataType["INT3"],
-        target_dsp=DspBlock.DSP48E2, weight_delivery=delivery, **options,
+for memory in ("none", "memstream"):
+    facts = dict(
+        m=3, k=4, n=4, activation_dtype=DataType["INT3"], weights_dtype=DataType["INT3"],
+        target_dsp=DspBlock.DSP48E2, target_period_ns=5.0,
     )
-    assert (assembly.activation_beats, assembly.weight_beats, assembly.result_beats) == (6, 12, 6)
+    choices = {"memory": memory, "weight_stream.transport": "direct", "compute": "packed"}
+    expected = dotp_sources | {"rtl/shape/input_gen.sv"}
+    if memory == "memstream":
+        # Stored (k, n): the columns of the by-output rows.
+        facts["weights"] = ((-4, 0, 3, -1), (-3, 1, 2, -2), (-2, 2, 1, -3), (-1, 3, 0, -4))
+        choices |= {"memory.memstream.ram_style": "auto", "memory.memstream.pumped_memory": False}
+        expected |= {"rtl/infra/axilite.sv", "rtl/infra/memstream.sv", "rtl/infra/memstream_axi.sv"}
+    matmul = commit(design_space(MatMulKernel(**facts)), choices)
+    matmul = commit(matmul, {
+        "compute.packed.pe": 2, "compute.packed.simd": 2, "compute.packed.compute_pumping": False,
+        "activations.adapter": "input_gen",
+        "activations.adapter.input_gen.input_gen.ram_style": "auto",
+    })
+    beats = (
+        matmul.activations.ends.source.sequence.form.beats,
+        matmul.compute.w.presented.form.beats,
+        matmul.compute.y.presented.form.beats,
+    )
+    assert beats == (6, 12, 6), beats
+    requirements = matmul.build_requirements
     # A memory image ships as generated data, named by its contents.
     expected |= {
         item.path
-        for item in assembly.requirements.contributions
+        for item in requirements.contributions
         if isinstance(item, contributions.GeneratedData)
     }
-    wrapper = materialize(assembly.requirements, expected).read_text()
+    wrapper = materialize(requirements, expected).read_text()
     assert ".ACCU_WIDTH(8)" in wrapper
     assert ".olst(n__u_activations_input_gen__olst)" in wrapper
-    if delivery is WeightDelivery.MEMSTREAM:
+    if memory == "memstream":
         assert '.INIT_FILE("memstream_' in wrapper
-    if delivery is WeightDelivery.EXTERNAL:
-        assert assembly.initializer == ()
-    else:
-        assert assembly.initializer == (0x22C, 0x6BE, 0xDD3, 0x941)
+        assert matmul.memory.image == (0x22C, 0x6BE, 0xDD3, 0x941)
 
 # Catch namespace or editable-install leakage even if the import was permitted.
 for name, module in tuple(sys.modules.items()):
@@ -176,7 +184,7 @@ for name, module in tuple(sys.modules.items()):
             assert Path(location).resolve().is_relative_to(installed), (name, location)
         for location in getattr(module, "__path__", ()):
             assert Path(location).resolve().is_relative_to(installed), (name, location)
-print("installed dotp, external, cyclic and memstream MatMul builds verified")
+print("installed dotp, external and memstream MatMul builds verified")
 """
 
 
@@ -279,4 +287,4 @@ def test_installed_wheel_materializes_independent_kernel_builds(tmp_path: Path) 
         "output": str(tmp_path / "output"),
     }
     result = _run([sys.executable, "-I", "-S", "-c", INSTALLED_BUILD, json.dumps(config)], tmp_path)
-    assert "installed dotp, external, cyclic and memstream MatMul builds verified" in result.stdout
+    assert "installed dotp, external and memstream MatMul builds verified" in result.stdout

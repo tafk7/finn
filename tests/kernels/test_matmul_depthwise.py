@@ -19,7 +19,8 @@ from finn.dataflow.plan import Step
 from finn.kernels.configure import commit
 from kernels.helpers import settled
 from finn.dataflow.gemm import Form
-from finn.kernels.matmul import MatMulKernel, WeightDelivery, matmul_assembly
+from finn.kernels.matmul import MatMulKernel
+from kernels.helpers import WeightDelivery, matmul_assembly
 from finn.dataflow.traversal import Traversal
 from finn.kernels.physical.structure import PhysicalPin, PinSlice
 from finn.kernels.target import DspBlock
