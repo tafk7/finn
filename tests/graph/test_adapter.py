@@ -102,9 +102,18 @@ def test_each_matmul_is_a_kernel_on_the_streams_of_its_tensors():
     assert top == {"ap_clk", "ap_rst_n", "in0_V", "out0_V"}
 
 
+def test_stored_weights_are_streamed_by_their_memory():
+    # Streaming known weights from the host would lift the initializer to a graph
+    # input, a rewrite of the graph; it is not a memory choice.
+    design, point = configured(model())
+    assert dict(design.pinned) == {"mm_first.memory": "memstream", "mm_second.memory": "memstream"}
+    assert point.w_first.tensor == point.mm_first.weight_tensor
+    assert point.mm_first.supplied == point.mm_second.supplied == "memstream"
+
+
 def test_weights_without_an_initializer_are_a_stream_and_need_no_memory():
     design, point = configured(model(second_weights=False))
-    assert dict(design.pinned) == {"mm_second.memory": "none"}
+    assert dict(design.pinned) == {"mm_first.memory": "memstream", "mm_second.memory": "none"}
     assert dict(design.weights)["mm_second"] == "t_w2"
     top = {port.name for port in point.module.pins.ports}
     assert "in1_V" in top
@@ -113,6 +122,11 @@ def test_weights_without_an_initializer_are_a_stream_and_need_no_memory():
 def test_what_the_graph_cannot_be_is_refused():
     with pytest.raises(GraphError, match="narrower than the exact result"):
         graph_design(model(hidden_type="INT4"), target_dsp=DspBlock.DSP48E2, target_period_ns=5.0)
+    # A node the kernel refuses names the node and the kernel's refusal.
+    floating = model()
+    floating.set_tensor_datatype("x", DataType["FLOAT32"])
+    with pytest.raises(GraphError, match="first: result_type: matmul-arithmetic"):
+        graph_design(floating, target_dsp=DspBlock.DSP48E2, target_period_ns=5.0)
     wrapped = model()
     wrapped.graph.node[1].op_type = "Add"
     with pytest.raises(GraphError, match="Add has no kernel yet"):

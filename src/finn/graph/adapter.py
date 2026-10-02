@@ -10,16 +10,22 @@ its nodes exchange (a graph input or output is a boundary port, ``in0_V``,
 from the node's facts, and each MatMul's weight stream. A node's weights are
 its second operand: an initializer becomes the kernel's ``weights`` (stored
 ``(k, n)``, as ONNX stores them), read from the model itself, which its memory
-streams into a weight stream of its own (``w_<node>``); without one, the
-weights are the stream of that graph tensor, and the kernel's ``memory`` is
-pinned to ``none``. Each weight stream may buffer its words in a FIFO
-(``<stream>.transport``). Leading activation axes are rows (``(1, M, K)`` is
-``M`` rows of ``K``).
+streams into a weight stream of its own (``w_<node>``), and the kernel's
+``memory`` is pinned to ``memstream``; without one, the weights are the stream
+of that graph tensor, and ``memory`` is pinned to ``none``. Streaming known
+weights from the host is not a memory choice: it is a rewrite of the graph that
+lifts the initializer to a graph input. Each weight stream may buffer its words
+in a FIFO (``<stream>.transport``). Leading activation axes are rows
+(``(1, M, K)`` is ``M`` rows of ``K``).
 
-A MatMul's result is the kernel's exact integer type, which flows to the
-stream it produces and to every consumer; the model's annotation of that
+Each MatMul's result tensor is inferred node by node from the kernel's facts
+alone (``MatMulKernel.result_tensor``), before any stream exists, and so is a
+stored weight stream's (``weight_tensor``); a node the kernel refuses is a
+``GraphError``. The result is the kernel's exact integer type, which flows to
+the stream it produces and to every consumer; the model's annotation of that
 tensor must admit it (an unannotated ``FLOAT32`` admits anything). Every other
-operator is refused.
+operator is refused. Provisional: the kernel's own ONNX operator will infer
+this.
 
 ``finn_model`` rewrites each MatMul node as FINN's ``MVAU``, its attributes the
 kernel's ``finn_attributes`` from the configured design, and annotates each
@@ -38,7 +44,7 @@ from typing import Any
 from onnx import helper
 from qonnx.core.modelwrapper import ModelWrapper
 
-from finn.core.space import composite, design_space
+from finn.core.space import Available, composite, design_space
 from finn.dataflow.datatypes import (
     QONNXDataType,
     canonical_qonnx_datatype,
@@ -46,8 +52,8 @@ from finn.dataflow.datatypes import (
 )
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.base import Kernel
-from finn.kernels.configure import commit
-from finn.kernels.matmul import MatMulKernel, exact_result_dtype
+from finn.kernels.configure import commit, describe
+from finn.kernels.matmul import MatMulKernel
 from finn.kernels.streams import BufferedStream, Stream
 from finn.kernels.target import DspBlock
 
@@ -102,6 +108,19 @@ def _rows(shape: tuple[int, ...], tensor: str) -> tuple[int, int]:
     return prod(shape[:-1]), shape[-1]
 
 
+def _inferred(label: str, facts: dict[str, object]) -> tuple[Tensor, Tensor]:
+    """A MatMul node's result and weight tensors, from its facts alone: no stream is read."""
+    try:
+        point = design_space(MatMulKernel(**facts))  # type: ignore[arg-type]
+    except (ValueError, TypeError) as error:
+        raise GraphError(f"{label}: {error}") from error
+    answers = [point.query(MatMulKernel.result_tensor), point.query(MatMulKernel.weight_tensor)]
+    tensors = [answer.value for answer in answers if isinstance(answer, Available)]
+    if len(tensors) != len(answers):
+        raise GraphError(f"{label}: {describe(answers)}")
+    return tensors[0], tensors[1]
+
+
 def graph_design(
     model: ModelWrapper, *, target_dsp: DspBlock, target_period_ns: float
 ) -> GraphDesign:
@@ -110,7 +129,7 @@ def graph_design(
     inputs = [item.name for item in graph.input]
     outputs = [item.name for item in graph.output]
     element: dict[str, QONNXDataType] = {name: _dtype(model, name) for name in inputs}
-    shapes: dict[str, tuple[int, int]] = {}
+    shapes: dict[str, tuple[int, ...]] = {}
     members: dict[str, object] = {}
     streams: dict[str, Stream] = {}
     kernels: list[tuple[str, str]] = []
@@ -144,18 +163,8 @@ def graph_design(
         k_b, n = _rows(tuple(model.get_tensor_shape(b)), b)
         if k != k_b:
             raise GraphError(f"{label}: {a} has {k} columns, {b} {k_b} rows")
-        shapes[a], shapes[y] = (m, k), (m, n)
+        shapes[a] = (m, k)
         weights_dtype = _dtype(model, b)
-        try:
-            result = exact_result_dtype(k, element[a], weights_dtype)
-        except (ValueError, TypeError) as error:
-            raise GraphError(f"{label}: {error}") from error
-        if not _admits(_dtype(model, y), result):
-            raise GraphError(
-                f"{label}: {y} is annotated {_dtype(model, y).name}, narrower than the "
-                f"exact result {result.name}"
-            )
-        element[y] = result
         facts: dict[str, object] = dict(
             m=m,
             n=n,
@@ -164,26 +173,34 @@ def graph_design(
             weights_dtype=weights_dtype,
             target_dsp=target_dsp,
             target_period_ns=target_period_ns,
-            x_stream=stream(a),
-            y_stream=stream(y),
         )
-        name = _name("mm_", label)
         initializer = model.get_initializer(b)
+        if initializer is not None:
+            values = initializer.reshape(k, n)
+            if (values != values.round()).any():
+                raise GraphError(f"{label}: the weights {b} are not integers")
+            facts["weights"] = tuple(tuple(int(v) for v in row) for row in values)
+        # The node's inference, by hand until the kernel has its ONNX operator.
+        result, stored = _inferred(label, facts)
+        exact = result.element.dtype
+        if not _admits(_dtype(model, y), exact):
+            raise GraphError(
+                f"{label}: {y} is annotated {_dtype(model, y).name}, narrower than the "
+                f"exact result {exact.name}"
+            )
+        shapes[y], element[y] = result.shape, exact
+        name = _name("mm_", label)
+        facts |= dict(x_stream=stream(a), y_stream=stream(y))
         if initializer is None:
             shapes[b], element[b] = (k, n), weights_dtype
             facts["w_stream"] = stream(b, BufferedStream)
             weights.append((name, _name("t_", b)))
             pins[f"{name}.memory"] = "none"
         else:
-            values = initializer.reshape(k, n)
-            if (values != values.round()).any():
-                raise GraphError(f"{label}: the weights {b} are not integers")
-            facts["weights"] = tuple(tuple(int(v) for v in row) for row in values)
             # The memory's own stream into the core: an edge of this kernel alone.
-            stored = BufferedStream(tensor=Tensor((k, n), ScalarEncoding(weights_dtype)))
-            members[_name("w_", label)] = stored
-            facts["w_stream"] = stored
+            members[_name("w_", label)] = facts["w_stream"] = BufferedStream(tensor=stored)
             weights.append((name, _name("w_", label)))
+            pins[f"{name}.memory"] = "memstream"
         members[name] = MatMulKernel(**facts)  # type: ignore[arg-type]
         kernels.append((label, name))
     family = composite("Graph", members, base=Graph)
