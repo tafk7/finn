@@ -22,7 +22,7 @@ from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 from kernels.rtlsim.rtl_transport import drive_observed
 from kernels.xsim import materialize
 from finn.dataflow.gemm import Form
-from kernels.helpers import WeightDelivery, matmul_assembly
+from kernels.helpers import WeightDelivery, matmul_assembly, print_identity
 from finn.kernels.target import DspBlock
 from finn.kernels.artifacts.abi import abi_pins
 
@@ -389,6 +389,7 @@ def main() -> None:
     parser.add_argument("--sets", type=int, default=1, help="memstream weight sets")
     args = parser.parse_args()
     directory = args.output or Path(tempfile.mkdtemp(prefix="matmul-evidence-"))
+    print_identity()
     print(f"Evidence: {directory}", flush=True)
     for case in cases:
         if (args.case is None and case.depthwise is args.depthwise) or args.case == case.label:

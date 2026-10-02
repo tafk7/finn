@@ -4,30 +4,45 @@
 #
 # Every XSim check of the kernel layer, run from this checkout in parallel:
 #   - each conformance XSim test in its own pytest process,
-#   - the rest of the kernel suite with Vivado selected,
+#   - the rest of the kernel suite, and the graph adapters' XSim tests, with Vivado selected,
 #   - the numeric XSI sweeps (MatMul, dotp, adapters), one simulation per process.
 #
 # For "XSim from a commit", run it in a worktree or clone at that commit: natively
 # with its own .venv (uv sync), or in a sandbox with the image's environment.
 # FinnLib is the `finnlib` resource, as in every run.
 #
-#   bash scripts/xsim-sweep.sh [OUT [TMP]]  -> OUT/summary.log, exit 0 only if all pass
+#   bash scripts/xsim-sweep.sh [--smoke] [OUT [TMP]]   exit 0 only if every job passed
 #
-# OUT keeps the evidence: summary, logs, simulation stores. pytest's temporary
-# trees go to TMP (default OUT-tmp), which is scratch: they hold symlinks that
-# point outside it.
+# --smoke runs one conformance XSim test and one MatMul case: a few minutes, and
+# enough to tell a broken harness or toolchain from a design result before the
+# full sweep (~25 minutes) is spent on it.
+#
+# OUT keeps the evidence:
+#   events.log    one line as each job starts and ends; read it for progress
+#   summary.log   per-job exit and pass counts, written when every job has ended
+#   summary.json  the same, for tools
+#   logs/, sim-*  each job's log and simulation store
+# pytest's temporary trees go to TMP (default OUT-tmp), which is scratch: they hold
+# symlinks that point outside it.
 #
 # Vivado: this machine's ~/.config/finn/xilinx.env, or FINN_XILINX_PATH and
 # FINN_XILINX_VERSION (applied through scripts/activate.sh; a variable wins over
 # the file), or XILINX_VIVADO already selected.
 
 set -u
+SMOKE=0
+if [ "${1:-}" = --smoke ]; then
+    SMOKE=1
+    shift
+fi
 ROOT=$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)
 cd "$ROOT" || exit 2
 SHA=$(git rev-parse --short HEAD)
+DIRTY=$(git status --porcelain --untracked-files=no | head -1)
 OUT=$(readlink -f "${1:-/tmp/xsim-sweep-$SHA-$(basename "$ROOT")}")
 TMP=$(readlink -f "${2:-$OUT-tmp}")
 rm -rf "$OUT" "$TMP" && mkdir -p "$OUT/logs" "$TMP"
+EVENTS="$OUT/events.log"
 
 if [ -x "$ROOT/.venv/bin/python" ] \
    && python3 "$ROOT/docker/xilinx_install.py" configured 2> "$OUT/activate.log"; then
@@ -54,53 +69,97 @@ export PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$ROOT/src:$ROOT/tests" FINN_ROOT="$
 export FINN_XELAB_MT="${FINN_XELAB_MT:-2}"
 unset FORCE_COLOR
 
+FINNLIB=$("$PY" -c 'from finn import resources; print(resources.path("finnlib"))' 2> /dev/null)
+# A working clone by its commit; the cached pin, not a repository, by its verified digest.
+if FINNLIB_SHA=$(git -C "$FINNLIB" rev-parse --short HEAD 2> /dev/null); then
+    [ -z "$(git -C "$FINNLIB" status --porcelain --untracked-files=no | head -1)" ] \
+        || FINNLIB_SHA="$FINNLIB_SHA dirty"
+else
+    FINNLIB_SHA="pinned $(head -c 19 "$FINNLIB/.finn-resource" 2> /dev/null || echo unknown)"
+fi
+IDENTITY="finn $SHA${DIRTY:+ dirty}  finnlib $FINNLIB_SHA $FINNLIB"
+
+# Lines short enough that concurrent appends never interleave.
+event() { echo "$(date +%T) $*" >> "$EVENTS"; }
+
+job() {  # <log name> <command...>: run one job, its log ending in exit=N
+    local name=$1 log="$OUT/logs/$1.log" start code; shift
+    start=$(date +%s)
+    event "START $name"
+    "$@" > "$log" 2>&1
+    code=$?
+    echo "exit=$code" >> "$log"
+    event "DONE $name exit=$code $(($(date +%s) - start))s"
+}
 pytest_run() {  # <log name> <pytest args...>
     local name=$1; shift
-    "$PY" -m pytest -v -p no:cacheprovider --confcutdir=tests/kernels \
-        --basetemp="$TMP/$name" "$@" > "$OUT/logs/$name.log" 2>&1
-    echo "exit=$?" >> "$OUT/logs/$name.log"
+    job "$name" "$PY" -m pytest -v -p no:cacheprovider --basetemp="$TMP/$name" "$@"
 }
 sweep_run() {  # <log name> <module> [args...]
     local name=$1 module=$2; shift 2
-    "$PY" -m "$module" "$@" --output "$OUT/sim-$name" > "$OUT/logs/sweep-$name.log" 2>&1
-    echo "exit=$?" >> "$OUT/logs/sweep-$name.log"
+    job "sweep-$name" "$PY" -m "$module" "$@" --output "$OUT/sim-$name"
 }
 
+event "SWEEP $IDENTITY smoke=$SMOKE"
 mapfile -t ids < <("$PY" -m pytest -q --collect-only -p no:cacheprovider --confcutdir=tests/kernels \
-    tests/kernels/test_conformance.py -k xsim \
+    tests/kernels/test_conformance.py -m xsim \
     | sed -n 's#^ *<Function \(.*\)>$#tests/kernels/test_conformance.py::\1#p')
+[ "$SMOKE" = 0 ] || ids=("${ids[@]:0:1}")
 for id in "${ids[@]}"; do
-    pytest_run "conformance-$(echo "${id#*::}" | tr -c 'A-Za-z0-9_\n-' '_')" "$id" &
+    pytest_run "conformance-$(echo "${id#*::}" | tr -c 'A-Za-z0-9_\n-' '_')" \
+        --confcutdir=tests/kernels "$id" &
 done
-pytest_run kernels-rest tests/kernels --ignore=tests/kernels/test_conformance.py &
 
-sweep_run dense kernels.rtlsim.matmul_numeric &
-sweep_run fifo-packed kernels.rtlsim.matmul_numeric --case packed --weight-fifo-depth 2 &
-sweep_run fifo-int8-pumped kernels.rtlsim.matmul_numeric --case int8_pumped --weight-fifo-depth 2 &
-sweep_run depthwise kernels.rtlsim.matmul_numeric --depthwise &
-sweep_run memstream kernels.rtlsim.matmul_numeric --delivery memstream &
-sweep_run memstream-depthwise kernels.rtlsim.matmul_numeric --depthwise --delivery memstream &
-sweep_run pumped-memory kernels.rtlsim.matmul_numeric --pumped-memory &
-sweep_run writable kernels.rtlsim.matmul_numeric --writable &
-sweep_run sets kernels.rtlsim.matmul_numeric --sets 3 &
-sweep_run dotp kernels.rtlsim.pure_dot_product_numeric &
-sweep_run dotp-stress kernels.rtlsim.pure_dot_product_numeric --stress &
-sweep_run adapters kernels.rtlsim.adapter_numeric &
+if [ "$SMOKE" = 1 ]; then
+    sweep_run packed kernels.rtlsim.matmul_numeric --case packed &
+else
+    pytest_run kernels-rest --confcutdir=tests/kernels tests/kernels \
+        --ignore=tests/kernels/test_conformance.py &
+    pytest_run graph-xsim --confcutdir=tests/graph tests/graph -m xsim &
+
+    sweep_run dense kernels.rtlsim.matmul_numeric &
+    sweep_run fifo-packed kernels.rtlsim.matmul_numeric --case packed --weight-fifo-depth 2 &
+    sweep_run fifo-int8-pumped kernels.rtlsim.matmul_numeric --case int8_pumped --weight-fifo-depth 2 &
+    sweep_run depthwise kernels.rtlsim.matmul_numeric --depthwise &
+    sweep_run memstream kernels.rtlsim.matmul_numeric --delivery memstream &
+    sweep_run memstream-depthwise kernels.rtlsim.matmul_numeric --depthwise --delivery memstream &
+    sweep_run pumped-memory kernels.rtlsim.matmul_numeric --pumped-memory &
+    sweep_run writable kernels.rtlsim.matmul_numeric --writable &
+    sweep_run sets kernels.rtlsim.matmul_numeric --sets 3 &
+    sweep_run dotp kernels.rtlsim.pure_dot_product_numeric &
+    sweep_run dotp-stress kernels.rtlsim.pure_dot_product_numeric --stress &
+    sweep_run adapters kernels.rtlsim.adapter_numeric &
+fi
 wait
 
 status=0
+rows=()
 {
     echo "commit $(git rev-parse HEAD) checkout $ROOT"
+    echo "$IDENTITY"
     for log in "$OUT"/logs/*.log; do
+        name=$(basename "$log" .log)
         code=$(sed -n 's/^exit=//p' "$log" | tail -1)
         [ "$code" = 0 ] || status=1
-        case $(basename "$log") in
-            sweep-*) summary="passes=$(grep -c '^PASS' "$log") fails=$(grep -c '^FAIL' "$log")" ;;
-            *) summary=$(grep -E ' passed| failed' "$log" | tail -1) ;;
+        passes=$(grep -cE '^PASS|PASSED' "$log")
+        fails=$(grep -cE '^FAIL|FAILED|^Traceback' "$log")
+        skips=$(grep -c 'SKIPPED' "$log")
+        case $name in
+            sweep-*) summary="passes=$passes fails=$fails" ;;
+            *) summary=$(grep -E ' passed| failed| skipped' "$log" | tail -1) ;;
         esac
-        echo "$(basename "$log" .log) exit=$code $summary"
+        echo "$name exit=$code $summary"
+        rows+=("{\"job\": \"$name\", \"exit\": ${code:-null}, \"passes\": $passes, \"fails\": $fails, \"skips\": $skips}")
     done
     echo "overall exit=$status"
 } > "$OUT/summary.log"
+{
+    printf '{"commit": "%s", "dirty": %s, "smoke": %s, "exit": %s, "jobs": [\n  ' \
+        "$(git rev-parse HEAD)" "$([ -n "$DIRTY" ] && echo true || echo false)" \
+        "$([ "$SMOKE" = 1 ] && echo true || echo false)" "$status"
+    (IFS=$'\n'; echo "${rows[*]}") | paste -sd ',' | sed 's/},{/},\n  {/g'
+    printf ']}\n'
+} > "$OUT/summary.json"
+event "END overall exit=$status"
 cat "$OUT/summary.log"
 exit $status
