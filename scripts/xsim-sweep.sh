@@ -46,8 +46,12 @@ EVENTS="$OUT/events.log"
 
 if [ -x "$ROOT/.venv/bin/python" ] \
    && python3 "$ROOT/docker/xilinx_install.py" configured 2> "$OUT/activate.log"; then
+    # Not under set -u: activation applies AMD's settings scripts, which read unset
+    # variables, and an unset one would end this script silently.
+    set +u
     # shellcheck source=/dev/null
     source "$ROOT/scripts/activate.sh" >> "$OUT/activate.log" 2>&1
+    set -u
 fi
 if [ -z "${XILINX_VIVADO:-}" ]; then
     echo "no Vivado selected: configure ~/.config/finn/xilinx.env, or set XILINX_VIVADO" >&2
