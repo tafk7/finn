@@ -19,8 +19,9 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
+from typing import TypeVar
 
 import pytest
 
@@ -30,10 +31,20 @@ from finn.kernels.artifacts.module import Module
 from kernels.helpers import finnlib_root, vivado_simulator
 
 
-requires_xsim = pytest.mark.skipif(
-    not vivado_simulator(),
-    reason="Vivado simulator tools are unavailable",
-)
+_Test = TypeVar("_Test", bound=Callable[..., object])
+
+
+def requires_xsim(test: _Test) -> _Test:
+    """Marked ``xsim``, and skipped without a selected Vivado.
+
+    The marker is what keeps the fast gate fast: ``check-kernels.sh`` deselects
+    ``xsim`` whether or not Vivado is selected, and ``xsim-sweep.sh`` runs it.
+    """
+    skip = pytest.mark.skipif(
+        not vivado_simulator(), reason="Vivado simulator tools are unavailable"
+    )
+    return pytest.mark.xsim(skip(test))
+
 
 Words = tuple[Sequence[int], int]
 """A port's words, and the payload bits of each."""

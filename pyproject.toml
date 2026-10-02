@@ -167,6 +167,7 @@ addopts = "--verbose"
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
     "vivado: mark tests that require Vivado or Vivado HLS",
+    "xsim: kernel tests that run XSim (deselected by check-kernels.sh, run by xsim-sweep.sh)",
     "vitis: mark tests that require Vitis",
     "board: mark tests that require a PYNQ board",
     "brevitas_export : mark tests that test brevitas export functionality",

@@ -15,9 +15,12 @@ RUN_PYTHONPATH="$FINN_ROOT/src:$FINN_ROOT/tests"
 # These are independent Space/kernel gates. Parked dataflow/graph tests remain
 # outside this command; their compatibility is not claimed.
 PYTHON_BIN="$PYTHON_BIN" RUFF_BIN="$RUFF_BIN" MYPY_BIN="$MYPY_BIN" bash scripts/check-space.sh
-PYTHONPATH="$RUN_PYTHONPATH" "$PYTHON_BIN" -m pytest -q --confcutdir=tests/kernels tests/kernels
+# XSim tests are deselected even when Vivado is selected (a FINN checkout's
+# .envrc selects it): they take minutes each, and scripts/xsim-sweep.sh runs them.
+PYTHONPATH="$RUN_PYTHONPATH" "$PYTHON_BIN" -m pytest -q -m "not xsim" --confcutdir=tests/kernels \
+    tests/kernels
 # The graph adapters, the layer above finn.kernels.
-PYTHONPATH="$RUN_PYTHONPATH" "$PYTHON_BIN" -m pytest -q --confcutdir=tests/graph tests/graph
+PYTHONPATH="$RUN_PYTHONPATH" "$PYTHON_BIN" -m pytest -q -m "not xsim" --confcutdir=tests/graph tests/graph
 "$RUFF_BIN" format --check src/finn/kernels tests/kernels src/finn/graph tests/graph \
     scripts/benchmark-space.py
 "$RUFF_BIN" check src/finn/kernels tests/kernels src/finn/graph tests/graph \

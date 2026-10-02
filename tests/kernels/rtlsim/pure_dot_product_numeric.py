@@ -26,7 +26,7 @@ from kernels.rtlsim.dotp_support import (
     _weight_beats,
     _wrapper,
 )
-from kernels.helpers import placed_dotp
+from kernels.helpers import placed_dotp, print_identity
 from kernels.rtlsim.rtl_transport import drive_observed
 from kernels.helpers import finnlib_root
 from finn.kernels.artifacts.contributions import CopiedSource
@@ -227,6 +227,7 @@ def main() -> None:
     parser.add_argument("--output", type=Path)
     arguments = parser.parse_args()
     evidence = arguments.output or Path(tempfile.mkdtemp(prefix="pure-dotp-evidence-"))
+    print_identity()
     print(f"Evidence: {evidence}", flush=True)
     selected: tuple[Configuration, ...] = STRESS_CASES if arguments.stress else CASES
     if arguments.case is not None:
