@@ -41,6 +41,13 @@ SHA=$(git rev-parse --short HEAD)
 DIRTY=$(git status --porcelain --untracked-files=no | head -1)
 OUT=$(readlink -f "${1:-/tmp/xsim-sweep-$SHA-$(basename "$ROOT")}")
 TMP=$(readlink -f "${2:-$OUT-tmp}")
+# Two sweeps of one commit share the default OUT: never delete one in flight
+# (an events.log without END that moved in the last two hours).
+if [ -f "$OUT/events.log" ] && ! grep -q ' END overall' "$OUT/events.log" \
+   && [ -n "$(find "$OUT/events.log" -mmin -120)" ]; then
+    echo "a sweep is already running into $OUT; wait for it, or give another OUT" >&2
+    exit 2
+fi
 rm -rf "$OUT" "$TMP" && mkdir -p "$OUT/logs" "$TMP"
 EVENTS="$OUT/events.log"
 
