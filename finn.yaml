@@ -18,10 +18,11 @@ capabilities:
       startup:
         - command: /usr/local/bin/finn_entrypoint.sh true
           user: agent
-          env: [WORKSPACE_DIR, FINN_BUILD_DIR]
+          env: [WORKSPACE_DIR, FINN_BUILD_DIR, FINN_XILINX_PATH, FINN_XILINX_VERSION, XILINX_VIVADO]
           description: >-
             Install the checkout editable into /opt/venv (after a clone-mode
-            clone lands), then write /tmp/finn-ready
+            clone lands); with the xilinx kit, record the selected installation
+            in sbx's persistent environment; then write /tmp/finn-ready
   - type: com.docker.sandbox/agent-context@1
     config:
       filename: AGENTS.md

@@ -21,8 +21,9 @@ Quickstart
 4. Verify Python and FINN: run ``./scripts/quicktest-local.sh`` natively or
    ``./docker/run -- quicktest.sh`` with Docker. Warnings are normal; the
    environment is ready when the tests pass.
-5. Add FPGA tools only when needed. Set ``FINN_XILINX_PATH`` and
-   ``FINN_XILINX_VERSION``, configure any `Vivado/Vitis license`_, and rerun
+5. Add FPGA tools only when needed. Write this machine's Xilinx installation and
+   licence server to ``~/.config/finn/xilinx.env`` (see `Vivado/Vitis license`_
+   and "Configure a machine" in ``docs/installation.md``), and rerun
    ``source scripts/activate.sh`` for a native installation. Then verify with
    ``./scripts/quicktest-local.sh vivado`` or
    ``./docker/run --fpga -- vivado -version``.
@@ -216,12 +217,18 @@ The common choices are command-line options:
 * ``--rebuild`` rebuilds without the BuildKit cache.
 * ``--no-build`` requires an already prepared artifact.
 
-The underlying environment variables remain available for automation and
-legacy callers. The most relevant are:
+The Xilinx installation and licence server are this machine's, kept in
+``~/.config/finn/xilinx.env``; a variable of the same name overrides the file
+for one run, for example to select another installed version:
 
-* (required for ``build``) ``FINN_XILINX_PATH`` points to your Xilinx tools installation on the host (e.g. ``/opt/Xilinx``)
-* (required for ``build``) ``FINN_XILINX_VERSION`` sets the Xilinx tools version to be used (e.g. ``2024.2``)
+* (required for ``--fpga``) ``FINN_XILINX_PATH`` points to your Xilinx tools installation on the host (e.g. ``/opt/Xilinx``)
+* (required for ``--fpga``) ``FINN_XILINX_VERSION`` sets the Xilinx tools version to be used (e.g. ``2025.2``)
+* ``FINN_LICENSE_HOST`` and ``FINN_LICENSE_PORT`` name a floating licence server (``XILINXD_LICENSE_FILE``, if set, takes precedence); ``FINN_LICENSE_VENDOR_PORT`` its vendor daemon's port
 * (required for Vitis) ``PLATFORM_REPO_PATHS`` points to the Vitis platform files (DSA).
+* ``FINN_XILINX_ENV`` names another machine file (empty: none).
+
+Other variables are per run:
+
 * ``FINN_RUNTIMES`` selects image runtime packages such as ``xrt`` or ``xrt,slash``.
 * (optional) ``NUM_DEFAULT_WORKERS`` (default 4) specifies the degree of parallelization for the transformations that can be run in parallel, potentially reducing build time
 * (optional) ``FINN_XELAB_MT`` overrides the number of threads used by ``xelab`` when building XSI simulations. It defaults to ``NUM_DEFAULT_WORKERS`` or 8 if unset; set it to 1 to disable xelab multithreading.
@@ -234,7 +241,7 @@ legacy callers. The most relevant are:
 * (optional) ``FINN_DOCKER_RUN_AS_ROOT`` (default 0) if set to 1 then run Docker container as root, default is the current user.
 * (optional) ``FINN_DOCKER_EXTRA`` (default "") passes extra arguments to ``docker compose run``.
 * (optional) ``FINN_SYNC`` (default 1) set to 0 to skip installing the mounted checkout when a container starts.
-* (optional) ``FINN_RESOURCES_<NAME>`` overrides where an external resource is read from, for example ``FINN_RESOURCES_HLSLIB`` for the finn-hlslib headers (``FINN_HLSLIB_PATH`` is an alias) or ``FINN_RESOURCES_AVNET_BOARDS`` for one set of Vivado board files. By default they are fetched from their pinned sources on first use and cached; ``finn-resources list`` shows them. ``FINN_BOARD_FILES_PATH`` is no longer used.
+* (optional) ``FINN_RESOURCES_<NAME>`` overrides where an external resource is read from, for example ``FINN_RESOURCES_HLSLIB`` for the finn-hlslib headers (``FINN_HLSLIB_PATH`` is an alias) or ``FINN_RESOURCES_AVNET_BOARDS`` for one set of Vivado board files. ``docker/run`` mounts the directory it names. By default they are fetched from their pinned sources on first use and cached; ``finn-resources list`` shows them. ``FINN_BOARD_FILES_PATH`` is no longer used.
 
 General FINN Docker tips
 ************************
@@ -329,10 +336,10 @@ Quick Start
 
     sudo ./scripts/install-system-deps.sh
 
-2. Set up Xilinx tools environment variables::
+2. Describe this machine's Xilinx tools in ``~/.config/finn/xilinx.env``::
 
-    export FINN_XILINX_PATH=/opt/Xilinx
-    export FINN_XILINX_VERSION=2024.2
+    FINN_XILINX_PATH=/opt/Xilinx
+    FINN_XILINX_VERSION=2025.2
 
 3. Clone FINN and run the local setup script::
 
@@ -470,9 +477,9 @@ On the target side:
 
 On the build host:
 
-1. Install Vitis and set ``FINN_XILINX_PATH`` and ``FINN_XILINX_VERSION``.
+1. Install Vitis and set ``FINN_XILINX_PATH`` and ``FINN_XILINX_VERSION`` in ``~/.config/finn/xilinx.env``.
 2. Set ``FINN_RUNTIMES=xrt`` so the image includes XRT userspace.
-3. Install the Vitis platform files and set ``PLATFORM_REPO_PATHS``. This must be the same path as the target's platform files.
+3. Install the Vitis platform files and set ``PLATFORM_REPO_PATHS`` (in the same file). This must be the same path as the target's platform files.
 4. Configure ``FINN_SSH_KEY_DIR`` if FINN will deploy to a remote target.
 5. Launch with ``./docker/run --fpga --runtime xrt``.
 
@@ -507,9 +514,16 @@ On the host side:
 
 Vivado/Vitis license
 *********************
-Set the normal FLEXlm variable before launching FINN:
+For a floating licence server, add its address and ports to
+``~/.config/finn/xilinx.env``::
 
-::
+  FINN_LICENSE_HOST=10.0.0.5
+  FINN_LICENSE_PORT=2100
+  FINN_LICENSE_VENDOR_PORT=2101
+
+FINN composes ``XILINXD_LICENSE_FILE=2100@10.0.0.5`` from them; sbx needs the
+address (not a name) and both ports. Alternatively, set the normal FLEXlm
+variable, which takes precedence::
 
   export XILINXD_LICENSE_FILE=2100@licsrv.example
   # or
@@ -525,7 +539,7 @@ System Requirements
 * A Linux x86-64 host with ``bash``
 * Docker Engine with Compose and Buildx, configured `without root <https://docs.docker.com/engine/install/linux-postinstall/#manage-docker-as-a-non-root-user>`_
 * For FPGA build flows, a supported Vitis/Vivado installation
-* For FPGA build flows, ``FINN_XILINX_PATH`` and ``FINN_XILINX_VERSION`` set correctly
+* For FPGA build flows, ``FINN_XILINX_PATH`` and ``FINN_XILINX_VERSION`` set in ``~/.config/finn/xilinx.env`` (or the environment)
 * *(optional)* `Vivado/Vitis license`_ if targeting non-WebPack FPGA parts.
 * *(optional)* A PYNQ board with a network connection, see `PYNQ board first-time setup`_
 

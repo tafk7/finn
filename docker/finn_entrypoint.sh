@@ -76,10 +76,33 @@ finn_sync() {
         echo "finn: rebuild the image (docker/build), or run uv sync with network access." >&2
     }
 }
+# sbx: FINN's xilinx kit passes the installation as FINN_XILINX_PATH and
+# FINN_XILINX_VERSION, and a kit cannot compute XILINX_VIVADO & co. from them
+# (AMD's layout changed after 2024.2). Resolve them once, with the same code the
+# host uses, into sbx's persistent environment, which every bash and every agent
+# sbx starts reads. Docker needs none of this: docker/config.py resolved them on
+# the host. Idempotent: startup hooks run on every boot.
+PERSISTENT=/etc/sandbox-persistent.sh
+finn_select_toolchain() {
+    [ -z "${XILINX_VIVADO:-}" ] && [ -n "${FINN_XILINX_PATH:-}" ] || return 0
+    [ -f "$PERSISTENT" ] && [ -f "${FINN_ROOT:-}/docker/xilinx_install.py" ] || return 0
+    marker="# finn: the selected Xilinx installation"
+    ! grep -qxF "$marker" "$PERSISTENT" 2>/dev/null || return 0
+    exports=$(python3 "$FINN_ROOT/docker/xilinx_install.py" sh) && [ -n "$exports" ] || return 0
+    printf '%s\n%s\n' "$marker" "$exports" > /tmp/finn-toolchain.$$
+    if [ -w "$PERSISTENT" ]; then
+        cat /tmp/finn-toolchain.$$ >> "$PERSISTENT"
+    else
+        # shellcheck disable=SC2024  # only tee writes the file; the input is ours
+        sudo -n tee -a "$PERSISTENT" < /tmp/finn-toolchain.$$ > /dev/null
+    fi || echo "finn: could not record the Xilinx installation in $PERSISTENT" >&2
+    rm -f /tmp/finn-toolchain.$$
+}
 # Readiness marker: docker exec and sbx exec do not wait for the entrypoint, so
 # scripts that exec into a just-started container can wait for this file.
 finn_sync_and_mark() {
     finn_sync || true
+    finn_select_toolchain || true
     touch /tmp/finn-ready 2>/dev/null || true
 }
 # sbx clone mode clones into FINN_ROOT after the container starts, so here it

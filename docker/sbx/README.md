@@ -54,42 +54,56 @@ after `create` can wait for. After pulling a change to `uv.lock`, run
 
 ## Vivado and the licence server
 
-Mount the installation read-only and add the xilinx kit with this machine's
-values, kept in a file outside every repository:
+Mount the installation read-only and add the xilinx kit. Its arguments are this
+machine's file, `~/.config/finn/xilinx.env`, which native activation and
+`docker/run` read too ([configure a machine](../../docs/installation.md#configure-a-machine)):
 
 ```text
-# ~/.config/finn-sbx/xilinx.args
-vivado=/opt/Xilinx/2025.2/Vivado
-vitis=/opt/Xilinx/2025.2/Vitis
-hls=/opt/Xilinx/2025.2/Vitis
-license_host=10.0.0.5
-license_port=2100
-vendor_port=2101
+# ~/.config/finn/xilinx.env
+FINN_XILINX_PATH=/opt/Xilinx
+FINN_XILINX_VERSION=2025.2
+FINN_LICENSE_HOST=10.0.0.5
+FINN_LICENSE_PORT=2100
+FINN_LICENSE_VENDOR_PORT=2101
 ```
 
 ```bash
 sbx create --name finn --skills off -m 96g \
-    --kit "$PWD/docker/sbx/xilinx" --kit-args-file ~/.config/finn-sbx/xilinx.args \
+    --kit "$PWD/docker/sbx/xilinx" --kit-args-file ~/.config/finn/xilinx.env \
     "$PWD" "$PWD" /opt/Xilinx:ro
 ```
 
-Paths depend on the installation: older ones end in `Vivado/2024.2`, newer ones in
-`2025.1/Vivado`. `XILINXD_LICENSE_FILE` is set in Bash (`BASH_ENV`), where FINN
-runs its tools.
+`--kit-arg` overrides the file, so another sandbox can use another installed
+version at the same time:
 
-* **Use the server's IP address** for `license_host`. FlexLM connections are plain
+```bash
+sbx create --name finn-2026 … --kit-args-file ~/.config/finn/xilinx.env \
+    --kit-arg FINN_XILINX_VERSION=2026.1 "$PWD" "$PWD" /opt/Xilinx:ro
+```
+
+When the sandbox starts, the workload's startup hook finds Vivado, Vitis and HLS
+under the root (both AMD layouts, with the same code `docker/run` uses) and
+records `XILINX_VIVADO` & co. in sbx's persistent environment; the xilinx kit
+passes the licence server, from which `XILINXD_LICENSE_FILE` is composed. Both
+are set in Bash, where FINN runs its tools: run hardware flows and vendor tools
+through `bash` (`sbx exec finn bash -c '…'`), not as a bare `sbx exec finn
+python …`. If the startup log says no Vivado was found, the root is not mounted
+or the version is not installed.
+
+* **Use the server's IP address** for `FINN_LICENSE_HOST`. FlexLM connections are plain
   TCP, which sbx matches by address, and resolving a name needs DNS access,
   which a closed policy blocks. The kit refuses anything but an IPv4 address.
 * **Finding the vendor port.** Unless the licence file pins it (`VENDOR xilinxd
   port=...`), the server chooses the xilinxd port. Create the sandbox with any
   value, run a licensed operation, and `sbx policy log SANDBOX` lists the blocked
-  port; recreate with it.
+  port; put it in the file and recreate.
 * **Check** with `sbx policy check network --sandbox finn 10.0.0.5:2100` and a host
   that should be closed. Policy readback does not prove a checkout: validate with
   a licensed operation, such as synthesis for a Versal part.
 * A node-locked licence may depend on a host ID the microVM does not have.
-  Licence-file directories and platform repositories are further read-only
-  mounts plus variables (`-e XILINXD_LICENSE_FILE=…`, `-e PLATFORM_REPO_PATHS=…`).
+  Licence-file directories are further read-only mounts plus a variable
+  (`-e XILINXD_LICENSE_FILE=…`); a platform repository is a read-only mount plus
+  `PLATFORM_REPO_PATHS` in the file.
 
 ## FinnLib
 
@@ -103,6 +117,10 @@ point FINN at it:
 
 An agent can edit and commit there; push from the host. The mount is your real
 clone: keep uncommitted work of your own out of it while an agent runs.
+
+Any other resource override works the same way. Resources a closed policy keeps
+FINN from fetching can be fetched on the host and mounted; see
+[your own HLS or RTL sources](../../docs/installation.md#your-own-hls-or-rtl-sources).
 
 ## Coding agents
 

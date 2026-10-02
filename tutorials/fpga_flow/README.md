@@ -25,10 +25,10 @@ This demo was created using Vivado 2024.2.
 
 Prior to running, insure the following prerequisites have been met:
 - Install FINN and prerequisites.  The [Getting Started](https://finn.readthedocs.io/en/latest/getting_started.html#quickstart) section of the FINN documentation might be helpful for this.
-- Ensure you have the `FINN_XILINX_PATH` and `FINN_XILINX_VERSION` env variables set appropriately for your install.  For example:
+- Ensure your machine's Xilinx installation is described in `~/.config/finn/xilinx.env` (or the same variables are exported).  For example:
 ```shell
-export FINN_XILINX_PATH=/opt/Xilinx
-export FINN_XILINX_VERSION=2024.2
+FINN_XILINX_PATH=/opt/Xilinx
+FINN_XILINX_VERSION=2025.2
 ```
 
 - Set the env variable for your `finn` install top directory (where you cloned the FINN compiler repo):

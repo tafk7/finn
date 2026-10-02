@@ -14,8 +14,8 @@ history at commit `5dd9df9bc`.
  │            uv sync -> active venv: FINN editable,                         │
  │            everything else at uv.lock                    (developers)    │
  ├──────────────────────────────────────────────────────────────────────────┤
- │ 2 VIVADO   the user's, never installed by FINN; selected by environment  │
- │            (FINN_XILINX_PATH/VERSION or settings64.sh) plus a licence     │
+ │ 2 VIVADO   the user's, never installed by FINN; selected per machine     │
+ │            (~/.config/finn/xilinx.env; a variable overrides it)           │
  ├──────────────────────────────────────────────────────────────────────────┤
  │ 1 SYSTEM   OS packages and XRT/SLASH: the host, or the image              │
  └──────────────────────────────────────────────────────────────────────────┘
@@ -28,9 +28,13 @@ history at commit `5dd9df9bc`.
   unreleased commits; `uv.lock` is the exact environment for development, CI and
   the images. Build data FINN does not contain (finn-hlslib, board files) is not
   Python: it is declared as [external resources](#external-resources).
-* **Vivado** is always the user's. `docker/config.py` locates it on the host (both
-  AMD install layouts) and `docker/finn-toolchain.sh` applies it, natively
-  (`scripts/activate.sh`) and in the image (entrypoint and tool shims).
+* **Vivado** is always the user's, described once per machine in
+  `~/.config/finn/xilinx.env`. `docker/xilinx_install.py` locates it (both AMD
+  install layouts) for `docker/config.py` on the host and for the sbx workload's
+  startup hook, and `docker/finn-toolchain.sh` applies it, natively
+  (`scripts/activate.sh`) and in the image (entrypoint and tool shims). A
+  variable overrides the file for one shell, container or sandbox, so installed
+  versions run side by side from the same image.
 * **System** packages are what pip cannot provide: the libraries Xilinx tools need
   (ncurses 6, the LSB loader, the libudev preload for FLEXlm) and XRT/SLASH.
 * **Caches** are built or fetched by FINN when first needed, never installed:
@@ -45,7 +49,7 @@ history at commit `5dd9df9bc`.
  User          │ host (hw only)       │ host (hw only)             │ pip install finn             │
  Native dev    │ host                 │ host; scripts/activate.sh  │ uv sync; scripts/activate.sh │
  Docker        │ image                │ mounted by docker/run      │ /opt/venv, always active;    │
- Dev Container │ image                │ (none, or a mount)         │ the entrypoint installs the  │
+ Dev Container │ image                │ mounted, as by docker/run  │ the entrypoint installs the  │
  sbx           │ workload kit (sbx)   │ sbx mount + xilinx kit     │ checkout at sandbox start    │
  Release/SIF   │ image                │ mounted                    │ FINN wheel, installed        │
                └──────────────────────┴────────────────────────────┴──────────────────────────────┘

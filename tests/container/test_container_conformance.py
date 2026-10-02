@@ -22,6 +22,14 @@ DOCKER_DIR = REPO / "docker"
 FINN_ENV = DOCKER_DIR / "config.py"
 sys.path.insert(0, str(DOCKER_DIR))
 import config as finn_env  # noqa: E402
+import xilinx_install  # noqa: E402
+
+
+def xilinx_root():
+    """This machine's Xilinx root, from the environment or its machine file."""
+    root = xilinx_install.settings().get("FINN_XILINX_PATH", "")
+    return root if os.path.isdir(root) else None
+
 
 pytestmark = pytest.mark.container
 
@@ -227,7 +235,7 @@ def test_03_fresh_mirrored_docker_run(docker_daemon):
 def test_04_bare_docker_exec(docker_daemon):
     """docker exec reaches Python and vendor tools without running ENTRYPOINT."""
     name = "finn-conformance-%d" % os.getpid()
-    have_xilinx = os.path.isdir(os.environ.get("FINN_XILINX_PATH", ""))
+    have_xilinx = xilinx_root() is not None
     # Mirrored like docker/run, so FINN_ROOT names the mounted checkout.
     data = resolved("build" if have_xilinx else "dev", "mirror")
     tag = ensure_image("finn")
@@ -283,15 +291,15 @@ def test_05_sbx_workload_and_xilinx_kit(tmp_path, fpga):
         for tool in ("Vivado", "Vitis"):
             (toolchain / "2025.2" / tool).mkdir(parents=True)
         args += ["--kit", REPO / "docker/sbx/xilinx"]
-        for key, value in {
-            "vivado": toolchain / "2025.2/Vivado",
-            "vitis": toolchain / "2025.2/Vitis",
-            "hls": toolchain / "2025.2/Vitis",
-            "license_host": "192.0.2.1",
-            "license_port": "2100",
-            "vendor_port": "2101",
-        }.items():
-            args += ["--kit-arg", "%s=%s" % (key, value)]
+        # The machine file is the kit's argument file (docs/installation.md).
+        machine = tmp_path / "xilinx.env"
+        machine.write_text(
+            "FINN_XILINX_PATH=%s\nFINN_XILINX_VERSION=2024.2\n" % toolchain
+            + "FINN_LICENSE_HOST=192.0.2.1\nFINN_LICENSE_PORT=2100\n"
+            + "FINN_LICENSE_VENDOR_PORT=2101\n"
+        )
+        # --kit-arg overrides the file: one sandbox selects another version.
+        args += ["--kit-args-file", machine, "--kit-arg", "FINN_XILINX_VERSION=2025.2"]
         paths.append("%s:ro" % toolchain)
     harness = os.environ.get("FINN_TEST_SBX_HARNESS_KIT")
     if harness:
@@ -320,8 +328,11 @@ def test_05_sbx_workload_and_xilinx_kit(tmp_path, fpga):
                 "assert all(Path(os.environ[k]).is_dir() for k in "
                 "('XILINX_VIVADO','XILINX_VITIS','XILINX_HLS'))"
             )
-            # XILINXD_LICENSE_FILE is composed in bash (BASH_ENV), where tools run.
+            # The toolchain is resolved into sbx's persistent environment and the
+            # licence composed in bash (BASH_ENV), where tools run.
             run([*exec_, "bash", "-c", 'python -c "$0"', code], check=True)
+            vivado = run([*exec_, "bash", "-c", 'printf %s "$XILINX_VIVADO"'], check=True)
+            assert vivado.stdout == str(toolchain / "2025.2/Vivado")
             write = run([*exec_, "touch", toolchain / "must-not-write"])
             assert write.returncode != 0
             assert not (toolchain / "must-not-write").exists()
@@ -366,8 +377,8 @@ def test_05b_image_identity_ignores_mounted_source_commit(tmp_path):
 
 def test_06_resolved_toolchain_mounts_are_read_only(docker_daemon):
     """Every host capability mount is declared read-only and enforced as such."""
-    root = os.environ.get("FINN_XILINX_PATH")
-    if not root or not os.path.isdir(root):
+    root = xilinx_root()
+    if not root:
         pytest.skip("FINN_XILINX_PATH is not configured")
     data = resolved("build")
     assert data["mounts"]
@@ -426,7 +437,7 @@ def test_08_compose_handles_awkward_workspace_paths(docker_daemon, tmp_path, pol
 
 def test_09_node_locked_licence_mount_is_used_by_compose(docker_daemon, tmp_path):
     """The Docker lane consumes the resolver's node-locked licence mount."""
-    root = os.environ.get("FINN_XILINX_PATH")
+    root = xilinx_root()
     value = os.environ.get("XILINXD_LICENSE_FILE") or os.environ.get("LM_LICENSE_FILE")
     _, files = finn_env.classify_license(value)
     licence = next((path for path in files if os.path.isfile(path)), None)
@@ -446,8 +457,8 @@ def test_09_node_locked_licence_mount_is_used_by_compose(docker_daemon, tmp_path
 
 def test_10_bare_host_toolchain_resolution():
     """The bare-host lane finds and applies the same resolved toolchain."""
-    root = os.environ.get("FINN_XILINX_PATH")
-    if not root or not os.path.isdir(root):
+    root = xilinx_root()
+    if not root:
         pytest.skip("FINN_XILINX_PATH is not configured")
     proc = run(
         [

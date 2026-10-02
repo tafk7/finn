@@ -11,8 +11,9 @@ it, is in [environment.md](environment.md).
 pip install finn          # Python 3.11-3.12, Linux x86-64
 ```
 
-Hardware flows additionally need Vivado/Vitis (selected with `FINN_XILINX_PATH`
-and `FINN_XILINX_VERSION`, or by sourcing AMD's `settings64.sh`) and a licence.
+Hardware flows additionally need Vivado/Vitis (by sourcing AMD's `settings64.sh`)
+and a licence; in a checkout, [configure the machine](#configure-a-machine) once
+instead.
 The finn-hlslib HLS library and Vivado board files are fetched from their pinned
 upstream commits on first use and cached (see
 [external resources](#external-resources)); fetching them uses git, or GitHub's
@@ -41,7 +42,7 @@ can run offline. After pulling a change to `uv.lock`, run `uv sync` again.
 ```bash
 ./docker/run                           # shell; /opt/venv is active
 ./docker/run -- pytest -m util
-./docker/run --fpga -- vivado -version # with FINN_XILINX_PATH/VERSION set
+./docker/run --fpga -- vivado -version # with the machine configured (below)
 ```
 
 The image holds the locked dependencies in `/opt/venv`, active for every process.
@@ -52,7 +53,9 @@ difference, or `docker/run` builds a new image, since the lock is an image input
 Editing FINN never requires a new image.
 
 **Dev Container:** open the repository in VS Code and reopen in the container. The
-interpreter is `/opt/venv/bin/python`; there is no setup step.
+interpreter is `/opt/venv/bin/python`; there is no setup step. With the machine
+configured, the container also gets the Xilinx tools and licence, as with
+`docker/run --fpga`.
 
 **sbx:** see [the sbx guide](../docker/sbx/README.md). The same entrypoint installs
 the workspace checkout when the sandbox starts (as the workload kit's startup
@@ -61,6 +64,78 @@ agent; add one as a kit.
 
 `docker exec` and `sbx exec` do not wait for the entrypoint. A script that execs
 into a container it has just started can wait for `/tmp/finn-ready`.
+
+## Configure a machine
+
+What is specific to a machine is where its Xilinx tools are and how it reaches
+its licence server. Keep that in one file, outside every repository:
+
+```text
+# ~/.config/finn/xilinx.env
+FINN_XILINX_PATH=/opt/Xilinx
+FINN_XILINX_VERSION=2025.2
+FINN_LICENSE_HOST=10.0.0.5
+FINN_LICENSE_PORT=2100
+FINN_LICENSE_VENDOR_PORT=2101
+```
+
+| Setting | Meaning |
+|---|---|
+| `FINN_XILINX_PATH` | The installation root. Both AMD layouts are found under it (`Vivado/2024.2` up to 2024.2, `2025.1/Vivado` after) |
+| `FINN_XILINX_VERSION` | The version to use from that root |
+| `FINN_LICENSE_HOST`, `FINN_LICENSE_PORT` | The FlexLM server, as an IPv4 address (sbx matches licence traffic by address) and its port: `XILINXD_LICENSE_FILE=PORT@HOST` |
+| `FINN_LICENSE_VENDOR_PORT` | The vendor daemon's (xilinxd) port, which sbx must allow too; see [the sbx guide](../docker/sbx/README.md#vivado-and-the-licence-server) for finding it |
+| `PLATFORM_REPO_PATHS` | Vitis platforms (optional) |
+
+Native activation, `docker/run --fpga`, the Dev Container and FINN's sbx kit all
+read it. The format is that of an sbx argument file, since the file is one:
+`NAME=value` lines and `#` comment lines, absolute paths, no quotes, no trailing
+comments, and only the names above. `XILINXD_LICENSE_FILE` in your environment
+still takes precedence over the host and port, for licence files or several
+servers. `FINN_XILINX_ENV` names another file (empty: none).
+
+**One container, another version.** The file holds defaults. A variable of the
+same name overrides it for one shell, container or sandbox, so installed
+versions can run side by side:
+
+```bash
+FINN_XILINX_VERSION=2026.1 source scripts/activate.sh
+FINN_XILINX_VERSION=2026.1 ./docker/run --fpga -- vivado -version
+sbx create … --kit-args-file ~/.config/finn/xilinx.env \
+    --kit-arg FINN_XILINX_VERSION=2026.1 …
+```
+
+An installation under another root is `FINN_XILINX_PATH` the same way (and, in
+sbx, that root mounted). Combinations you use often can be further files, named
+with `FINN_XILINX_ENV` or passed to `--kit-args-file`. Nothing machine-wide
+changes: the image is the same for every version, and `finn_xsi` is built once
+per Vivado installation.
+
+Everything else is not machine configuration: the build directory, worker
+counts and ports are ordinary per-run variables (`FINN_HOST_BUILD_DIR`,
+`NUM_DEFAULT_WORKERS`, …; in sbx, `-m`/`--cpus`), and your own HLS/RTL sources
+belong to your project, below.
+
+## Your own HLS or RTL sources
+
+Libraries, board files and kernels your designs need are
+[external resources](#external-resources) declared in your project's
+`pyproject.toml` (or a file in `FINN_RESOURCES_FILES`): pinned, fetched and
+cached the same way in every modality. Working on one, point FINN at your
+checkout with `FINN_RESOURCES_<NAME>=/path` ([overrides](#overrides-and-co-development)).
+
+In containers:
+
+* `docker/run` and the Dev Container mount every directory these variables name
+  (`FINN_RESOURCES_<NAME>`, `FINN_RESOURCES_DIR` writable; the directories of
+  `FINN_RESOURCES_FILES` read-only) at the same path, and pass the variables in.
+  A relative path is taken from the checkout.
+* An sbx sandbox reaches only what it mounts and its network policy allows:
+  mount the directory and set the variable (`-e FINN_RESOURCES_<NAME>=/path`,
+  and the path as an extra workspace). Resources fetched from the network need
+  an allow rule, or fetch them on the host into a directory you mount:
+  `finn-resources fetch --all --dest DIR`, then `-e FINN_RESOURCES_DIR=DIR -e
+  FINN_RESOURCES_OFFLINE=1` (see [offline use](#offline-use)).
 
 ## Co-develop QONNX, Brevitas, finn-hlslib or another dependency
 

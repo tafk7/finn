@@ -65,14 +65,22 @@ remains its Docker image digest or exported SIF checksum.
 
 ## Configuration
 
+The Xilinx installation and licence server are this machine's, in
+`~/.config/finn/xilinx.env` ([configure a machine](../docs/installation.md#configure-a-machine));
+`FINN_XILINX_VERSION=2026.1 ./docker/run --fpga …` selects another installed
+version for one container. `FINN_RESOURCES_*` directories are mounted at their
+own paths.
+
 `docker/config.py` is the single executable Python host resolver for Docker and
-native installation. It preserves path/layout probing, licence classification,
-UID/GID handling, shell output and Compose output:
+native installation. It reads the machine file (through `xilinx_install.py`,
+which the sbx workload shares) and preserves path/layout probing, licence
+classification, UID/GID handling, shell output and Compose output:
 
 ```bash
 ./docker/config.py inspect --tier dev
 ./docker/config.py inspect --tier build
 ./docker/config.py compose --tier build --service build
+./docker/config.py compose --tier auto --inputs-only --service dev   # the Dev Container's inputs
 ```
 
 Reported network requirements are declarative. Docker does not enforce them.
