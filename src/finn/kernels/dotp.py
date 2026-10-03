@@ -78,7 +78,7 @@ class DotpAxiKernel(Kernel):
     """
 
     id = "finnlib.dotp_axi"
-    version = "1"
+    version = 1
     rtl_module = "dotp_axi"
     # FinnLib's CORE parameter: the name of the compute core module.
     core: ClassVar[str] = ""
@@ -265,7 +265,7 @@ class PackedDotpKernel(DotpAxiKernel):
     """
 
     id = "finnlib.dotp_axi.dotp"
-    version = "1"
+    version = 1
     core = "dotp"
 
     @derived
@@ -316,7 +316,7 @@ class Int8Dsp58DotpKernel(DotpAxiKernel):
     """
 
     id = "finnlib.dotp_axi.dotp_8sx9_dsp58"
-    version = "1"
+    version = 1
     core = "dotp_8sx9_dsp58"
 
     def _core_refusal(self) -> Rejected | None:

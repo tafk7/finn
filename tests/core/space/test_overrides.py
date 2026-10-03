@@ -14,7 +14,6 @@ Every supplied value records who set it. None of this is about hardware.
 from __future__ import annotations
 
 import re
-from typing import cast
 
 import pytest
 
@@ -41,12 +40,8 @@ from finn.core.space import (
     selections,
     view,
 )
-from finn.core.space.codecs import SelectionSchema, ValueCodec, codec_for, decode, encode
 
 COST = ViewKey("cost", int)
-INT_CODEC: ValueCodec[int] = ValueCodec(
-    "test.int", 1, lambda value: value, lambda raw: cast(int, raw)
-)
 
 
 def codes(result: object) -> set[str]:
@@ -148,7 +143,7 @@ def test_a_value_pins_a_decision_and_its_key_disappears() -> None:
     assert [item.key for item in inspection.decisions(design_space(Room(finish=3)))] == []
 
 
-def test_a_selection_holding_a_pinned_key_is_refused_as_stale() -> None:
+def test_a_pinned_key_leaves_the_selection_with_who_pinned_it() -> None:
     wing = design_space(Wing()).with_choices({Wing.study.finish: 3, Wing.kitchen.finish: 1})
     captured = selections.capture(wing)
     assert captured.keys == ("kitchen.finish", "study.finish")
@@ -160,33 +155,11 @@ def test_a_selection_holding_a_pinned_key_is_refused_as_stale() -> None:
         wing = Pinned()
         wing.study.finish = 2
 
-    schema = SelectionSchema(
-        Wing,
-        family="wing",
-        version=1,
-        bindings=(
-            codec_for(Wing.kitchen.finish, INT_CODEC),
-            codec_for(Wing.study.finish, INT_CODEC),
-        ),
-    )
-    document = encode(captured, schema)
-    assert selections.restore(design_space(Wing()), decode(document, schema)).accepted
-    # The same document against the pinned placement: its key is stale.
-    pinned_model = inspection.model(design_space(Holder()))
-    pinned_schema = SelectionSchema(
-        pinned_model,
-        family="wing",
-        version=1,
-        bindings=(codec_for(Holder.wing.kitchen.finish, INT_CODEC),),
-    )
-    entries = cast(list[dict[str, object]], document["entries"])
-    relocated = {
-        **document,
-        "entries": [{**entry, "key": f"wing.{entry['key']}"} for entry in entries],
-    }
-    with pytest.raises(RequestError, match=r"stale selection key 'wing\.study\.finish'") as caught:
-        decode(relocated, pinned_schema)
-    assert "wing.study.finish = 2 (set by Holder at test_overrides.py:" in str(caught.value)
+    assert selections.restore(design_space(Wing()), captured).accepted
+    # In the pinned placement the key is gone, and who pinned it is reported.
+    (pinned,) = inspection.pinned(design_space(Holder()))
+    assert pinned.key == "wing.study.finish"
+    assert "wing.study.finish = 2 (set by Holder at test_overrides.py:" in pinned.text()
     # A captured selection belongs to its model: restoring it elsewhere is refused.
     with pytest.raises(RequestError, match="different compiled model"):
         selections.restore(design_space(Holder()), captured)

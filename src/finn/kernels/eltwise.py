@@ -53,7 +53,7 @@ class EltwiseKernel(Kernel):
     """
 
     id = "finnlib.eltwise"
-    version = "1"
+    version = 1
     rtl_module = "eltwise"
 
     operation: str = Param()

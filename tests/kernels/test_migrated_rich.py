@@ -23,6 +23,7 @@ from finn.kernels.thresholding import ThresholdingAxiKernel
 from kernels.helpers import controlled
 
 TABLE: ThresholdTable = (((-2, 0, 3), (-1, 1, 4)),)
+AUTO_MEMORY: dict[str, object] = {"ram_style": "auto", "ultra_stages": 0}
 
 
 def generator(
@@ -43,8 +44,6 @@ def threshold_base(
     bias: int = -1,
     input_dtype: str = "INT8",
     threshold_dtype: str = "INT5",
-    bram: int = 0,
-    uram: int = 0,
 ) -> ThresholdingAxiKernel:
     return design_space(
         ThresholdingAxiKernel(
@@ -52,8 +51,6 @@ def threshold_base(
             threshold_dtype=resolve_qonnx_datatype_name(threshold_dtype),
             thresholds=table,
             bias=bias,
-            depth_trigger_bram=bram,
-            depth_trigger_uram=uram,
         )
     )
 
@@ -65,8 +62,7 @@ def threshold(
     bias: int = -1,
     input_dtype: str = "INT8",
     threshold_dtype: str = "INT5",
-    bram: int = 0,
-    uram: int = 0,
+    memory: dict[str, object] | None = None,
     axilite: bool = False,
     deep: bool = False,
 ) -> ThresholdingAxiKernel:
@@ -76,10 +72,11 @@ def threshold(
         bias=bias,
         input_dtype=input_dtype,
         threshold_dtype=threshold_dtype,
-        bram=bram,
-        uram=uram,
     )
-    factors = {} if pe is None else {"pe": pe}
+    factors: dict[str, object] = {} if pe is None else {"pe": pe}
+    if pe is not None:
+        # The memories, like PE, range over the table (its thresholds' stages).
+        factors |= AUTO_MEMORY if memory is None else memory
     if axilite:
         # Runtime-writable thresholds present their bus through a control node.
         facts = dict(
@@ -87,8 +84,6 @@ def threshold(
             threshold_dtype=resolve_qonnx_datatype_name(threshold_dtype),
             thresholds=table,
             bias=bias,
-            depth_trigger_bram=bram,
-            depth_trigger_uram=uram,
         )
         return controlled(
             ThresholdingAxiKernel, facts, use_axilite=True, deep_pipeline=deep, **factors
@@ -203,7 +198,7 @@ def test_threshold_rejects_existing_unsupported_profiles_and_malformed_tables() 
         threshold(threshold_dtype="UINT5"),
         threshold(bias=1 << 31),
         threshold(bias=-10),
-        threshold(bram=-1),
+        threshold(memory={"ram_style": "distributed", "block_stages": 2, "ultra_stages": 1}),
     )
     assert all(
         isinstance(point.inspect(ThresholdingAxiKernel.module).accepted_result, Rejected)

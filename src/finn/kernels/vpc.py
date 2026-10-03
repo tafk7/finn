@@ -29,7 +29,7 @@ from finn.kernels.port import WordPort
 
 class VpcKernel(Kernel):
     id = "finnlib.vpc"
-    version = "1"
+    version = 1
     rtl_module = "vpc"
 
     element_bits: int = Param()

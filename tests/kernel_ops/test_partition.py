@@ -1,0 +1,187 @@
+# Copyright (C) 2026, Advanced Micro Devices, Inc.
+# SPDX-License-Identifier: BSD-3-Clause
+
+"""The partition root: test_design's Chain built from KernelOp nodes.
+
+Each node's choices are saved on it; the root's adapter memories, left open by
+settling, are the flow's to choose and are saved on their consumers (D8). The
+rebuilt root is test_design's Chain, configured the same way: the same flat
+netlist and pins, and in XSim what ``execute_onnx`` computes on the source.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+import pytest
+from qonnx.core.modelwrapper import ModelWrapper
+from qonnx.core.onnx_exec import execute_onnx
+from qonnx.transformation.infer_shapes import InferShapes
+
+from finn.custom_op.kernels.base import KernelOpError
+from finn.custom_op.kernels.partition import PartitionRoot, partition_root, save_partition_choices
+from finn.kernels.configure import commit, settle, undecided
+from finn.kernels.streams import ADAPTER_RAM_STYLES
+from finn.kernels.target import DspBlock
+from finn.transformation.kernels import InferKernelTensors, ToKernelOps
+from kernel_ops.models import chain_source
+from kernels import test_design as chain
+from kernels.helpers import labels
+from kernels.xsim import pack, requires_xsim, stream_through
+
+MATMUL = {
+    "compute": "packed",
+    "compute.packed.pe": chain.PE,
+    "compute.packed.simd": chain.SIMD,
+    "compute.packed.compute_pumping": False,
+    "memory.memstream.ram_style": "auto",
+    "memory.memstream.pumped_memory": False,
+    "w.transport": "direct",
+}
+THRESHOLDING = {
+    "pe": chain.PE,
+    "use_axilite": False,
+    "deep_pipeline": False,
+    "ram_style": "auto",
+    "ultra_stages": 0,
+}
+
+
+def kernel_model(**options: bool) -> ModelWrapper:
+    """The Chain as KernelOps, each node's choices saved as test_design configures them."""
+    model = (
+        chain_source(**options)
+        .transform(InferShapes())
+        .transform(ToKernelOps(DspBlock.DSP48E2, 5.0))
+        .transform(InferKernelTensors())
+    )
+    for node in model.graph.node:
+        choices = MATMUL if node.op_type == "MatMul" else THRESHOLDING
+        if node.op_type == "MatMul" and model.get_initializer(node.input[1]) is None:
+            # Streamed weights: no memory, and the weight edge's transport is the root's.
+            choices = {k: v for k, v in choices.items() if not k.startswith("memory.")}
+        model.get_customop_wrapper(node).save(choices)
+    return model
+
+
+def settled(root: PartitionRoot) -> tuple[Any, list[str]]:
+    point = settle(root.point).point
+    return point, undecided(point, ADAPTER_RAM_STYLES)
+
+
+def configured(model: ModelWrapper) -> tuple[PartitionRoot, Any]:
+    """The root, its open adapter memories chosen and saved on their owners, rebuilt."""
+    root = partition_root(model, model.graph.node, name="chain")
+    _, styles = settled(root)
+    save_partition_choices(model, root, dict.fromkeys(styles, "auto"))
+    root = partition_root(model, model.graph.node, name="chain")
+    point, open_styles = settled(root)
+    assert open_styles == [] and root.dropped == ()
+    return root, point
+
+
+def test_the_root_of_the_chains_nodes_is_test_designs_chain() -> None:
+    model = kernel_model()
+    root, point = configured(model)
+    reference = chain.chain()
+    assert labels(point.module) == labels(reference.module)
+    assert point.module.fragment == reference.module.fragment
+    assert point.module.pins == reference.module.pins
+    assert root.boundary == (("x", "in0_V"), ("y", "out0_V"))
+
+
+def test_edge_choices_persist_on_their_consumers() -> None:
+    model = kernel_model()
+    configured(model)
+    ops = {node.name: model.get_customop_wrapper(node) for node in model.graph.node}
+    assert "x.adapter.input_gen.input_gen.ram_style" in ops["first"].choices()
+    assert "x.adapter.input_gen.input_gen.ram_style" in ops["second"].choices()  # levels
+
+
+def test_a_stale_edge_choice_is_dropped_and_settling_picks_again() -> None:
+    model = kernel_model()
+    configured(model)
+    second = model.get_customop_wrapper(model.graph.node[2])
+    second.save({"compute.packed.simd": 4})
+    root = partition_root(model, model.graph.node, name="chain")
+    # The levels edge now converts widths: its input_gen memory no longer applies.
+    assert root.dropped == ("levels.adapter.input_gen.input_gen.ram_style",)
+    point, _ = settled(root)
+    assert point.levels.query(type(point.levels).adapter).value.startswith("vpc")
+
+
+def test_a_partition_has_ports_for_its_onnx_inputs_and_outputs_only() -> None:
+    model = kernel_model()
+    front = partition_root(model, model.graph.node[:2], name="front")
+    assert front.boundary == (("x", "in0_V"), ("levels", "out0_V"))
+    point, styles = settled(front)
+    point = commit(point, dict.fromkeys(styles, "auto"))
+    assert sorted(port.name for port in point.module.pins.ports) == [
+        "ap_clk",
+        "ap_rst_n",
+        "in0_V",
+        "out0_V",
+    ]
+
+
+def test_streamed_weights_are_a_boundary_of_the_partition() -> None:
+    model = kernel_model(second_weights=False)
+    root = partition_root(model, model.graph.node, name="chain")
+    assert root.boundary == (("x", "in0_V"), ("w2", "in1_V"), ("y", "out0_V"))
+    assert root.owners["w2"] == ("second", "w.")
+
+
+def test_the_owner_map() -> None:
+    root = partition_root(kernel_model(), kernel_model().graph.node, name="chain")
+    assert dict(root.owners) == {
+        "first": ("first", ""),
+        "x": ("first", "x."),
+        "w1": ("first", "w."),
+        "activate": ("activate", ""),
+        "hidden": ("activate", "x."),
+        "second": ("second", ""),
+        "levels": ("second", "x."),
+        "w2": ("second", "w."),
+    }
+
+
+def test_a_node_named_like_a_tensor_is_refused() -> None:
+    model = kernel_model()
+    model.graph.node[1].name = "hidden"
+    with pytest.raises(KernelOpError, match="a node and a tensor are both named hidden"):
+        partition_root(model, model.graph.node)
+
+
+@requires_xsim
+def test_the_partition_computes_what_onnx_computes(tmp_path: Path) -> None:
+    model = kernel_model()
+    _, point = configured(model)
+    x = np.array(chain.X, dtype=np.float32)
+    y = execute_onnx(chain_source().transform(InferShapes()), {"x": x})["y"].astype(int)
+    a_bits, y_bits = chain.A.bitwidth(), chain.Y.bitwidth()
+    stream_through(
+        point.module,
+        tmp_path,
+        inputs={
+            "in0_V": (
+                [
+                    pack(chain.X[r][f : f + chain.SIMD], a_bits)
+                    for r in range(chain.ROWS)
+                    for f in range(0, chain.INPUTS, chain.SIMD)
+                ],
+                chain.SIMD * a_bits,
+            )
+        },
+        outputs={
+            "out0_V": (
+                [
+                    pack(y[r][f : f + chain.PE].tolist(), y_bits)
+                    for r in range(chain.ROWS)
+                    for f in range(0, chain.OUTPUTS, chain.PE)
+                ],
+                chain.PE * y_bits,
+            )
+        },
+    )

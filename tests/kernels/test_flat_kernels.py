@@ -62,17 +62,16 @@ def eltwise(pe=2, **changes):
 
 def threshold(*, use_axilite=False, deep_pipeline=False, pe=1, **changes):
     """Its PE's domain is the divisors of its table's channels, known flat; ``pe=None``
-    leaves it open (a table without channels has no PE to commit)."""
+    leaves it open with the memories (a table without channels has no PE to commit, and
+    one without thresholds no stages)."""
     facts = dict(
         input_dtype=DataType["INT8"],
         threshold_dtype=DataType["INT5"],
         thresholds=(((-2, 0, 3), (-1, 1, 4)),),
         bias=-1,
-        depth_trigger_bram=0,
-        depth_trigger_uram=0,
     )
     facts.update(changes)
-    factors = {} if pe is None else {"pe": pe}
+    factors = {} if pe is None else {"pe": pe, "ram_style": "auto", "ultra_stages": 0}
     # Runtime-writable thresholds present their bus through a control node.
     place = controlled if use_axilite else point_for
     return place(

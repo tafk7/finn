@@ -59,8 +59,8 @@ def adapted(source: Traversal, pe: int, *, adaptable: bool = True, commit_all: b
             thresholds=(tuple(LEVELS for _ in range(channels)),),
             bias=0,
             pe=pe,
-            depth_trigger_bram=0,
-            depth_trigger_uram=0,
+            ram_style="auto",
+            ultra_stages=0,
             input_stream=x,
             output_stream=y,
         )

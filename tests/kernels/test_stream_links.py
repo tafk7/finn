@@ -83,6 +83,33 @@ def test_a_buffered_stream_places_its_fifo_below_its_transport() -> None:
     ]
 
 
+def test_a_boundary_no_port_names_is_refused() -> None:
+    """A weight stream with one user and no port is a boundary nothing may cross: only an
+    ONNX input or output of a partition is one (D4)."""
+
+    class Unnamed(Space):
+        x = Stream(tensor=Tensor((3, 4), ScalarEncoding(INT3)), port="in0_V")
+        w = BufferedStream(tensor=Tensor((4, 4), ScalarEncoding(INT3)))
+        y = Stream(tensor=Tensor((3, 4), ScalarEncoding(INT8)), port="out0_V")
+        compute = PackedDotpKernel(
+            target_dsp=DspBlock.DSP48E2,
+            target_period_ns=5.0,
+            result_dtype=INT8,
+            x_stream=x,
+            w_stream=w,
+            y_stream=y,
+        )
+
+    folding = {"compute.pe": 2, "compute.simd": 2, "compute.compute_pumping": False}
+    refused = commit(design_space(Unnamed()), folding).w.query(Stream.endpoints)
+    assert isinstance(refused, Rejected)
+    assert {(item.code, item.owner) for item in refused.findings} == {
+        ("stream-boundary", "w.endpoints")
+    }
+    # The same root with the port named is accepted.
+    assert not isinstance(commit(design_space(Placed()), folding).w.endpoints, Rejected)
+
+
 class Reader(Space):
     """A consumer that exports its end itself, not through a kernel's port."""
 

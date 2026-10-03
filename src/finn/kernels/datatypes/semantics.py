@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Value semantics and optional codecs for scalar datatypes and immutable arrays."""
+"""Value semantics for scalar datatypes and immutable arrays."""
 
 from __future__ import annotations
 
@@ -11,12 +11,9 @@ from finn.dataflow.datatypes import (
     QONNX_DATATYPE_TOKEN,
     QONNXDataType,
     canonical_qonnx_datatype,
-    decode_datatype,
-    encode_datatype,
     is_qonnx_datatype,
 )
 from finn.core.space import ValueSemantics
-from finn.core.space.codecs import JSONValue, ValueCodec
 
 QONNX_DATATYPE_VALUE_SEMANTICS: ValueSemantics[QONNXDataType] = ValueSemantics(
     type_token=QONNX_DATATYPE_TOKEN,
@@ -26,15 +23,6 @@ QONNX_DATATYPE_VALUE_SEMANTICS: ValueSemantics[QONNXDataType] = ValueSemantics(
     snapshot=canonical_qonnx_datatype,
 )
 QONNX_DATATYPE_SEMANTICS = cast(ValueSemantics[object], QONNX_DATATYPE_VALUE_SEMANTICS)
-
-
-def _encode_datatype(value: QONNXDataType) -> JSONValue:
-    return {key: name for key, name in encode_datatype(value).items()}
-
-
-QONNX_DATATYPE_CODEC: ValueCodec[QONNXDataType] = ValueCodec(
-    "finn.kernels.qonnx_datatype", 1, _encode_datatype, decode_datatype
-)
 
 IntegerVector = tuple[int, ...]
 INTEGER_VECTOR: ValueSemantics[IntegerVector] = ValueSemantics(
@@ -106,7 +94,6 @@ __all__ = [
     "INTEGER_VECTOR",
     "IntegerTensor",
     "IntegerVector",
-    "QONNX_DATATYPE_CODEC",
     "QONNX_DATATYPE_SEMANTICS",
     "QONNX_DATATYPE_VALUE_SEMANTICS",
     "THRESHOLD_TABLE",

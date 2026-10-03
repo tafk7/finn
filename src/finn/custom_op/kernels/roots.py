@@ -1,0 +1,143 @@
+# Copyright (C) 2026, Advanced Micro Devices, Inc.
+# SPDX-License-Identifier: BSD-3-Clause
+
+"""Node roots: one kernel placed on boundary streams, the Space a KernelOp binds.
+
+A bare kernel cannot validate its choices: its cores bind their extents from
+the ports on its streams (``kernel-extents``). A node root places it on the
+streams of one ONNX node: the facts are its formals, an input stream's tensor
+is the graph's (``x_tensor``, a formal the kernel's ``carried`` checks), an
+output's and an owned parameter stream's the kernel's fact-level view. One
+class per op and graph-fixed case, compiled once per process, so every node of
+a class shares its compiled model and its decision keys.
+
+What the graph decides is a declaration here, never a choice: MatMul's
+``memory`` is pinned by key, ``memstream`` when the weights are an initializer
+the node owns, ``none`` when they arrive on a graph tensor like any edge, so
+the key has no attribute and can never be stale.
+"""
+
+from __future__ import annotations
+
+from typing import Any, cast
+
+from finn.core.space import Param, derived
+from finn.dataflow.datatypes import QONNXDataType
+from finn.dataflow.tensor import ScalarEncoding, Tensor
+from finn.kernels.base import Kernel
+from finn.kernels.datatypes.semantics import (
+    INTEGER_TENSOR,
+    QONNX_DATATYPE_VALUE_SEMANTICS,
+    THRESHOLD_TABLE,
+    IntegerTensor,
+    ThresholdTable,
+)
+from finn.kernels.matmul import MatMulKernel
+from finn.kernels.streams import BufferedStream, Stream
+from finn.kernels.target import DspBlock
+from finn.kernels.thresholding import ThresholdingAxiKernel
+
+
+class MatMulNode(Kernel):
+    """A MatMul node: its activations the graph's, its weights and results MatMul's views."""
+
+    id = "finn.custom_op.kernels.node.matmul"
+    version = 1
+
+    m: int = Param()
+    n: int = Param()
+    k: int = Param()
+    activation_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
+    weights_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
+    target_dsp: DspBlock = Param()
+    target_period_ns: float = Param()
+    x_tensor: Tensor = Param()
+
+    # Each case declares ``matmul``, its kernel with the graph's memory pinned.
+    @derived
+    def w_tensor(self) -> Tensor:
+        tensor: Tensor = cast(Any, self).matmul.weight_tensor
+        return tensor
+
+    @derived
+    def y_tensor(self) -> Tensor:
+        tensor: Tensor = cast(Any, self).matmul.result_tensor
+        return tensor
+
+    x = Stream(tensor=x_tensor, port="in0_V")
+    w = BufferedStream(tensor=w_tensor, port="in1_V")
+    y = Stream(tensor=y_tensor, port="out0_V")
+
+
+class StoredMatMulNode(MatMulNode):
+    """Weights an initializer: the node owns them, and its memory streams them (pinned)."""
+
+    id = "finn.custom_op.kernels.node.matmul.stored"
+    weights: IntegerTensor = Param(semantics=INTEGER_TENSOR)
+    matmul = MatMulKernel(
+        m=MatMulNode.m,
+        n=MatMulNode.n,
+        k=MatMulNode.k,
+        activation_dtype=MatMulNode.activation_dtype,
+        weights_dtype=MatMulNode.weights_dtype,
+        target_dsp=MatMulNode.target_dsp,
+        target_period_ns=MatMulNode.target_period_ns,
+        weights=weights,
+        # A pin by key, the selector's case (the keyword is typed as its candidate).
+        memory="memstream",  # type: ignore[arg-type]
+        x_stream=MatMulNode.x,
+        w_stream=MatMulNode.w,
+        y_stream=MatMulNode.y,
+    )
+
+
+class StreamedMatMulNode(MatMulNode):
+    """Weights a graph tensor: an edge like any other, and no memory (pinned)."""
+
+    id = "finn.custom_op.kernels.node.matmul.streamed"
+    matmul = MatMulKernel(
+        m=MatMulNode.m,
+        n=MatMulNode.n,
+        k=MatMulNode.k,
+        activation_dtype=MatMulNode.activation_dtype,
+        weights_dtype=MatMulNode.weights_dtype,
+        target_dsp=MatMulNode.target_dsp,
+        target_period_ns=MatMulNode.target_period_ns,
+        memory="none",  # type: ignore[arg-type]
+        x_stream=MatMulNode.x,
+        w_stream=MatMulNode.w,
+        y_stream=MatMulNode.y,
+    )
+
+
+class ThresholdingNode(Kernel):
+    """A thresholding node: elementwise, so its result has its input's shape and the
+    kernel's result type (a fact-level derived of the table and the bias). The
+    threshold memories are left to choose."""
+
+    id = "finn.custom_op.kernels.node.thresholding"
+    version = 1
+
+    input_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
+    threshold_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
+    thresholds: ThresholdTable = Param(semantics=THRESHOLD_TABLE)
+    bias: int = Param()
+    x_tensor: Tensor = Param()
+
+    @derived
+    def y_tensor(self) -> Tensor:
+        return Tensor(self.x_tensor.shape, ScalarEncoding(self.activate.result_dtype))
+
+    x = Stream(tensor=x_tensor, port="in0_V")
+    y = Stream(tensor=y_tensor, port="out0_V")
+    activate = ThresholdingAxiKernel(
+        input_dtype=input_dtype,
+        threshold_dtype=threshold_dtype,
+        thresholds=thresholds,
+        bias=bias,
+        input_stream=x,
+        output_stream=y,
+    )
+
+
+__all__ = ["MatMulNode", "StoredMatMulNode", "StreamedMatMulNode", "ThresholdingNode"]

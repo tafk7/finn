@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 """Typed design-space authoring, immutable specialization and public services."""
 
-from . import codecs, extensions, graph, inspection, selections, settling
+from . import extensions, graph, inspection, selections, settling
 from ._configuration import BoundDecision, BoundValue, Space
 from ._execution import (
     CleanupFailure,
@@ -10,7 +10,6 @@ from ._execution import (
     NativeEvaluationError,
     cancellation_details,
 )
-from .codecs import CodecBinding, JSONValue, SelectionSchema, ValueCodec, codec_for
 from .compiler import Model, design_space
 from .declarations import (
     Const,
@@ -127,11 +126,6 @@ __all__ = [
     "SelectionEntry",
     "Settlement",
     "settle",
-    "CodecBinding",
-    "JSONValue",
-    "SelectionSchema",
-    "ValueCodec",
-    "codec_for",
     # Errors and native cleanup diagnostics
     "DefinitionError",
     "RequestError",
@@ -144,7 +138,6 @@ __all__ = [
     "NativeCancellationDetails",
     "cancellation_details",
     # Public services
-    "codecs",
     "extensions",
     "graph",
     "inspection",

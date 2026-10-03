@@ -193,9 +193,9 @@ def test_a_boundary_stream_needs_its_port_name():
             dtype=DataType["INT4"], form=PRODUCED, contents=(1, 2, 3, 4), output_stream=out
         )
 
-    waiting = design_space(Unnamed(tensor=VECTOR)).out.query(Stream.netlist)
-    assert isinstance(waiting, Unresolved)
-    assert {f.owner for f in waiting.findings} == {"out.port"}
+    refused = design_space(Unnamed(tensor=VECTOR)).out.query(Stream.netlist)
+    assert isinstance(refused, Rejected)
+    assert {(f.code, f.owner) for f in refused.findings} == {("stream-boundary", "out.endpoints")}
 
 
 # -- the anchoring rule: a stream's tensor must not depend on its users ----------------

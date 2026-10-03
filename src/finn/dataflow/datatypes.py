@@ -11,8 +11,8 @@ sixteen-bit floating format reduces to ``("float", 16)``.
 What crosses it:
 
 - **Datatypes** come from the model's QONNX annotations
-  (``ModelWrapper.get_tensor_datatype``), read by the graph adapter
-  (``finn.graph``) and passed to kernels as facts. They travel as the same
+  (``ModelWrapper.get_tensor_datatype``), read by the KernelOps
+  (``finn.custom_op.kernels``) and passed to kernels as facts. They travel as the same
   QONNX datatype *value*; a kernel's result type goes back as an annotation.
 - **Persisted**, a datatype is its canonical name and nothing else
   (``encode_datatype``, ``decode_datatype``).
