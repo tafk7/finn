@@ -272,9 +272,9 @@ class PackedDotpKernel(DotpAxiKernel):
     def narrow_weights(self) -> bool:
         """No weight its stream carries is its type's minimum."""
         element = self.w.element
-        if element.range is None:
+        if element.value_range is None:
             return False  # not an integer encoding: the weight port refuses it
-        return element.range[0] > ordinary_integer_bounds(element.dtype)[0]
+        return element.value_range[0] > ordinary_integer_bounds(element.dtype)[0]
 
     def _core_refusal(self) -> Rejected | None:
         if self.form is not Form.DENSE:

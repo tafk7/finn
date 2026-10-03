@@ -7,7 +7,7 @@ The consumer supplies the operand ``contents`` and the beat ``form`` it reads
 them in; the kernel packs one image per set in that form into the memory, so
 the consumer's order needs no adapter. Initial contents go through INIT_FILE, a generated data file
 named by its contents, so they are part of the build identity. It owns the
-values it streams, so it states their ``range`` on its output: its element is
+values it streams, so it states their ``value_range`` on its output: its element is
 ``dtype`` over the minimum and maximum of every set's contents.
 
 - With one set, the image streams cyclically.
@@ -89,7 +89,7 @@ class MemStreamKernel(Kernel):
     pumped_memory: bool = Decision(values=(False, True))
 
     @derived
-    def range(self) -> tuple[int, ...] | Rejected:
+    def value_range(self) -> tuple[int, ...] | Rejected:
         """The minimum and maximum of its contents, every set."""
         values = integers(self.contents)
         low, high = ordinary_integer_bounds(self.dtype)
@@ -105,7 +105,7 @@ class MemStreamKernel(Kernel):
         admitted = Integer().check(self.dtype)
         if isinstance(admitted, Rejected):
             return admitted
-        low, high = self.range
+        low, high = self.value_range
         return ScalarEncoding.admit(self.dtype, (low, high))
 
     @derived
@@ -248,7 +248,7 @@ class MemStreamKernel(Kernel):
         stream=output_stream,
         sequence=output_sequence,
         dtype=dtype,
-        range=range,
+        value_range=value_range,
         lanes=(LANE,),
         factors=word_factors,
         clock="clk",

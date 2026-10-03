@@ -144,16 +144,16 @@ def test_a_tensor_does_not_retain_the_caller_s_datatype_instance() -> None:
 
 def test_an_element_is_a_datatype_and_the_range_of_its_values() -> None:
     plain = ScalarEncoding(DataType["INT8"])
-    assert plain.range == (-128, 127)
+    assert plain.value_range == (-128, 127)
     # Normalized: the datatype's own range stated is the plain element.
     full = ScalarEncoding(DataType["INT8"], (-128, 127))
     assert full == plain and hash(full) == hash(plain)
     narrow = ScalarEncoding(DataType["INT8"], (-127, 127))
     assert narrow != plain
     assert (str(plain), str(narrow)) == ("INT8", "INT8 over [-127, 127]")
-    assert ScalarEncoding(DataType["UINT2"]).range == (0, 3)
+    assert ScalarEncoding(DataType["UINT2"]).value_range == (0, 3)
     # A non-integer encoding carries its datatype alone.
-    assert ScalarEncoding(DataType["FLOAT32"]).range is None
+    assert ScalarEncoding(DataType["FLOAT32"]).value_range is None
     assert str(ScalarEncoding(DataType["BIPOLAR"])) == "BIPOLAR"
 
 

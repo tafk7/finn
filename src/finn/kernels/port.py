@@ -176,7 +176,7 @@ class AxiStreamPort(Port):
     it, from its kernel's facts, choices and input elements, never from its
     own output stream: a compiler asks a kernel for its output types before
     the downstream tensor exists. A producer that knows its values states
-    their ``range`` (minimum, maximum) with it; ``()`` is the datatype's own.
+    their ``value_range`` (minimum, maximum) with it; ``()`` is the datatype's own.
     ``admits`` is the integer policy its hardware takes. Idle (no stream), it
     carries the lanes of the ``factors`` of its ``lanes`` indices. It is an
     AXIS bus named ``name``, with a ``TLAST`` when what it presents carries a
@@ -195,7 +195,7 @@ class AxiStreamPort(Port):
     factors: dict[Index, int] = Param(default={})
     sequence: BeatSequence | None = Param(default=None, semantics=OPTIONAL_SEQUENCE)
     dtype: QONNXDataType | None = Param(default=None, semantics=OPTIONAL_DTYPE)
-    range: tuple[int, ...] = Param(default=())
+    value_range: tuple[int, ...] = Param(default=())
     admits: Integer | None = Param(default=None, semantics=INTEGER_POLICY)
     # Ready/valid pins (data, valid, ready) carrying the words instead of an AXIS bus.
     signals: tuple[str, ...] = Param(default=())
@@ -247,9 +247,9 @@ class AxiStreamPort(Port):
 
     @derived
     def element(self) -> ScalarEncoding | Rejected:
-        """``dtype`` over ``range`` when given, placed or idle (its stream refuses
+        """``dtype`` over ``value_range`` when given, placed or idle (its stream refuses
         another); else the stream's."""
-        dtype, bounds = self.dtype, self.range
+        dtype, bounds = self.dtype, self.value_range
         if dtype is not None:
             if bounds and len(bounds) != 2:
                 return reject("port-element", f"{self.name}: a range is (minimum, maximum)")

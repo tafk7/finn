@@ -34,15 +34,15 @@ from finn.dataflow.datatypes import (
 class ScalarEncoding:
     """Positive-width QONNX storage encoding and the range of its values.
 
-    ``range`` is the values' (minimum, maximum): the datatype's own unless
+    ``value_range`` is the values' (minimum, maximum): the datatype's own unless
     stated tighter, and None for an encoding that is not an ordinary integer.
     Normalized, so ``INT8`` and ``INT8`` over ``(-128, 127)`` are one value.
     """
 
     datatype_name: str
-    range: tuple[int, int] | None
+    value_range: tuple[int, int] | None
 
-    def __init__(self, dtype: QONNXDataType, range: tuple[int, int] | None = None) -> None:
+    def __init__(self, dtype: QONNXDataType, value_range: tuple[int, int] | None = None) -> None:
         canonical = canonical_qonnx_datatype(dtype)
         if qonnx_datatype_width(canonical) < 1:
             raise ValueError("a scalar storage encoding must have positive width")
@@ -50,22 +50,24 @@ class ScalarEncoding:
             full: tuple[int, int] | None = ordinary_integer_bounds(canonical)
         except DatatypeError:
             full = None
-        if range is not None:
+        if value_range is not None:
             if full is None:
                 raise ValueError(f"{canonical.name} carries its datatype alone, not a range")
-            low, high = range
+            low, high = value_range
             if not (type(low) is int and type(high) is int and full[0] <= low <= high <= full[1]):
-                raise ValueError(f"{list(range)} is not a range of {canonical.name} values")
+                raise ValueError(f"{list(value_range)} is not a range of {canonical.name} values")
         object.__setattr__(self, "datatype_name", canonical.name)
-        object.__setattr__(self, "range", full if range is None else (range[0], range[1]))
+        object.__setattr__(
+            self, "value_range", full if value_range is None else (value_range[0], value_range[1])
+        )
 
     @classmethod
     def admit(
-        cls, dtype: QONNXDataType, range: tuple[int, int] | None = None
+        cls, dtype: QONNXDataType, value_range: tuple[int, int] | None = None
     ) -> ScalarEncoding | Rejected:
         """The encoding, or a ``dtype-storage`` refusal (a zero width, a range it cannot hold)."""
         try:
-            return cls(dtype, range)
+            return cls(dtype, value_range)
         except ValueError as error:
             return reject("dtype-storage", str(error))
 
@@ -73,15 +75,16 @@ class ScalarEncoding:
         """Its values are values of ``other``: one datatype, the range within ``other``'s."""
         if self.datatype_name != other.datatype_name:
             return False
-        if self.range is None or other.range is None:
-            return self.range == other.range
-        return other.range[0] <= self.range[0] and self.range[1] <= other.range[1]
+        mine, theirs = self.value_range, other.value_range
+        if mine is None or theirs is None:
+            return mine == theirs
+        return theirs[0] <= mine[0] and mine[1] <= theirs[1]
 
     def __str__(self) -> str:
         """The datatype's name, and the range when it is tighter than the datatype's."""
-        if self.range is None or self.range == ordinary_integer_bounds(self.dtype):
+        if self.value_range is None or self.value_range == ordinary_integer_bounds(self.dtype):
             return self.datatype_name
-        return f"{self.datatype_name} over {list(self.range)}"
+        return f"{self.datatype_name} over {list(self.value_range)}"
 
     @property
     def dtype(self) -> QONNXDataType:
