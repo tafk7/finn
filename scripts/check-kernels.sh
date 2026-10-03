@@ -19,19 +19,17 @@ PYTHON_BIN="$PYTHON_BIN" RUFF_BIN="$RUFF_BIN" MYPY_BIN="$MYPY_BIN" bash scripts/
 # .envrc selects it): they take minutes each, and scripts/xsim-sweep.sh runs them.
 PYTHONPATH="$RUN_PYTHONPATH" "$PYTHON_BIN" -m pytest -q -m "not xsim" --confcutdir=tests/kernels \
     tests/kernels
-# The graph adapters, the layer above finn.kernels.
-PYTHONPATH="$RUN_PYTHONPATH" "$PYTHON_BIN" -m pytest -q -m "not xsim" --confcutdir=tests/graph tests/graph
-# The KernelOps (finn.custom_op.kernels), also above finn.kernels.
+# The KernelOps and their transformations, the layer above finn.kernels.
 PYTHONPATH="$RUN_PYTHONPATH" "$PYTHON_BIN" -m pytest -q -m "not xsim" --confcutdir=tests/kernel_ops \
     tests/kernel_ops
-"$RUFF_BIN" format --check src/finn/kernels tests/kernels src/finn/graph tests/graph \
+"$RUFF_BIN" format --check src/finn/kernels tests/kernels \
     src/finn/custom_op/kernels src/finn/transformation/kernels tests/kernel_ops \
     scripts/benchmark-space.py
-"$RUFF_BIN" check src/finn/kernels tests/kernels src/finn/graph tests/graph \
+"$RUFF_BIN" check src/finn/kernels tests/kernels \
     src/finn/custom_op/kernels src/finn/transformation/kernels tests/kernel_ops \
     scripts/benchmark-space.py
 env -u PYTHONPATH MYPYPATH=src:tests "$MYPY_BIN" \
-    --no-incremental --strict --explicit-package-bases -p finn.kernels -p finn.graph \
+    --no-incremental --strict --explicit-package-bases -p finn.kernels \
     -p finn.custom_op.kernels -p finn.transformation.kernels
 env -u PYTHONPATH MYPYPATH=src:tests "$MYPY_BIN" \
     --no-incremental --strict --explicit-package-bases \

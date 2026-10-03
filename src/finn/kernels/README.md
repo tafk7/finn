@@ -2,8 +2,8 @@
 
 Physical kernels: each binds one FinnLib RTL module, or places kernel children,
 in a design space in `finn.core.space`, with the stream order it presents on each
-port. The package never reads an ONNX graph; graph adapters live in
-`finn.graph`. Experimental: its design and authoring guide are maintained
+port. The package never reads an ONNX graph; the KernelOps, which do, live in
+`finn.custom_op.kernels`. Experimental: its design and authoring guide are maintained
 outside this repository until the package is final.
 
 | Module | Holds |

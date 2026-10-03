@@ -20,7 +20,7 @@ reading its (M, K, N) activations as (M, K * N).
 kernels that sit on the streams its parent supplies, ``x_stream`` (the
 activations), ``w_stream`` (the weights), ``y_stream`` (the results) and, with
 several weight sets, ``set_stream`` (the set index). Each stream, its adapter
-and its FIFO are its parent's: the parent (a test harness, the graph front end)
+and its FIFO are its parent's: the parent (a test harness, a KernelOp's node root, a partition root)
 declares each stream and either binds its tensor to MatMul's view of it
 (``activation_tensor``, ``weight_tensor``, ``result_tensor``, ``set_tensor``),
 which reads only MatMul's facts and ``realization``, never a port, or states
@@ -88,8 +88,6 @@ from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.streams import Stream
 from finn.kernels.target import DspBlock
 
-
-FinnAttributes = tuple[tuple[str, int | str | tuple[int, ...]], ...]
 
 _CARRIED = (
     ("x_stream", "activation_tensor"),
@@ -325,42 +323,6 @@ class MatMulKernel(Kernel):
 
     admission = ConstraintGroup(extents_supported, realization_supported, supply_supported, carried)
 
-    @view(requires=(admission,))
-    def finn_attributes(self) -> FinnAttributes | Rejected:
-        """FINN's ``MVAU`` node attributes, from this configuration alone.
-
-        The memory maps onto FINN's ``mem_mode``: none is ``external``,
-        memstream ``internal_decoupled`` (FINN's memstream); its memory style is
-        ``ram_style``. A depthwise MatMul is FINN's ``VVAU``, not mapped yet.
-        """
-        if self.depthwise:
-            return reject("finn-attributes", "a depthwise MatMul is FINN's VVAU, not mapped yet")
-        memory = self.memory
-        mode = {"none": "external", "memstream": "internal_decoupled"}
-        style = "auto" if memory is None else memory.ram_style
-        pumped = memory is not None and memory.pumped_memory
-        compute = self.compute
-        attributes: dict[str, int | str | tuple[int, ...]] = {
-            "MW": self.k,
-            "MH": self.n,
-            "SIMD": compute.simd,
-            "PE": compute.pe,
-            "numInputVectors": (self.m,),
-            "inputDataType": self.activation_dtype.name,
-            "weightDataType": self.weights_dtype.name,
-            "outputDataType": self.result_type.name,
-            "accDataType": self.result_type.name,
-            "mem_mode": mode[self.supplied],
-            "ram_style": style,
-            "pumpedMemory": int(pumped),
-            "resType": "dsp",
-            "noActivation": 1,
-            "binaryXnorMode": 0,
-            "backend": "fpgadataflow",
-            "preferred_impl_style": "rtl",
-        }
-        return tuple(sorted(attributes.items()))
-
     def stem(self) -> str:
         return "finn_matmul_" + self.supplied
 
@@ -368,4 +330,4 @@ class MatMulKernel(Kernel):
         return ProducerIdentity("finn.matmul." + self.supplied, str(type(self).version))
 
 
-__all__ = ["FinnAttributes", "MatMulKernel", "exact_result_dtype"]
+__all__ = ["MatMulKernel", "exact_result_dtype"]
