@@ -25,7 +25,10 @@ each end must traverse and the plan are the logical stream's.
 A stream with a user on one side only is a boundary of the root that declares
 it. Its ``port`` input names the top-level AXIS port (``in0_V``): an ABI name is
 design data of the stream, independent of the stream's node name, which is
-its identity and the prefix of its persisted decision keys. The boundary
+its identity and the prefix of its persisted decision keys. A boundary whose
+``port`` is not supplied is refused (``stream-boundary``): a root names a port
+only for what may cross it, an ONNX input or output of a partition, so an
+unnamed boundary is a stream that lost one of its users. The boundary
 presents what its internal end presents, by one rule: an input boundary
 without the replay its receiver realizes (``unreplayed``), an output boundary
 as produced, neither with markers and both as a single pass.
@@ -215,6 +218,12 @@ class Stream(LogicalStream):
             )
         if not producers and not consumers:
             return reject("stream-unused", "no present kernel references this stream")
+        if not (producers and consumers) and not self.present(Stream.port):
+            return reject(
+                "stream-boundary",
+                "a boundary of its root, but no port names it: only an ONNX input or output "
+                "of a partition crosses its boundary",
+            )
         try:
             # A side without a user is the boundary. Seen from inside, the
             # root's input is the AXIS target and its output the initiator.
