@@ -58,6 +58,41 @@ def matmul_model(
     return model
 
 
+THRESHOLDS = np.array([[-9 + c, 1 - c, 8 + 2 * c] for c in range(N)])
+H = DataType["INT8"]
+
+
+def thresholding_model(
+    *,
+    thresholds: Any = THRESHOLDS,
+    stored: bool = True,
+    bias: int = 0,
+    annotate: tuple[str, ...] = ("x", "t"),
+) -> ModelWrapper:
+    """x (3, 4) INT8 -> Thresholding ``activate`` with t (C, N) -> y."""
+    thresholds = np.asarray(thresholds, dtype=np.float32)
+    x = helper.make_tensor_value_info("x", TensorProto.FLOAT, [ROWS, N])
+    t = helper.make_tensor_value_info("t", TensorProto.FLOAT, list(thresholds.shape))
+    y = helper.make_tensor_value_info("y", TensorProto.FLOAT, None)
+    node = helper.make_node(
+        "Thresholding", ["x", "t"], ["y"], name="activate", domain=DOMAIN, bias=bias
+    )
+    graph = helper.make_graph([node], "thresholding", [x] if stored else [x, t], [y])
+    model = ModelWrapper(
+        qonnx_make_model(
+            graph,
+            producer_name="kernel-ops-test",
+            opset_imports=[helper.make_opsetid("", 13), helper.make_opsetid(DOMAIN, 1)],
+        )
+    )
+    if stored:
+        model.set_initializer("t", thresholds)
+    for name in annotate:
+        model.set_tensor_datatype(name, H)
+    write_target(model, DspBlock.DSP48E2, 5.0)
+    return model
+
+
 def lift(model: ModelWrapper, tensor: str) -> None:
     """Make an initializer a graph input (a stored node's weights become an edge)."""
     values = model.get_initializer(tensor)
@@ -70,4 +105,14 @@ def lift(model: ModelWrapper, tensor: str) -> None:
     )
 
 
-__all__ = ["DOMAIN", "INT3", "WEIGHTS", "X", "lift", "matmul_model"]
+__all__ = [
+    "DOMAIN",
+    "H",
+    "INT3",
+    "THRESHOLDS",
+    "WEIGHTS",
+    "X",
+    "lift",
+    "matmul_model",
+    "thresholding_model",
+]

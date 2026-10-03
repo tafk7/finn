@@ -17,7 +17,8 @@ domain at ``opset_version``, the version its op classes are written for.
 """
 
 from finn.custom_op.kernels.matmul import MatMul
+from finn.custom_op.kernels.thresholding import Thresholding
 
 opset_version = 1
 
-__all__ = ["MatMul"]
+__all__ = ["MatMul", "Thresholding"]

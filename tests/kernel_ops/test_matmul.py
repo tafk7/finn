@@ -244,7 +244,7 @@ def test_the_domain_resolves_at_its_version_without_a_fallback() -> None:
         MatMul.op_version,
     )
     assert MatMul.op_version == MatMulKernel.version
-    assert domain.__all__ == ["MatMul"]
+    assert domain.__all__ == ["MatMul", "Thresholding"]
     with pytest.raises(TypeError, match="op_type"):
 
         class Inherited(MatMul):
