@@ -280,7 +280,7 @@ def test_the_stored_family_needs_its_own_choices_and_refuses_bad_weights():
     refused = bad.query(Kernel.module)
     assert isinstance(refused, Rejected)
     assert keys(refused) == {"memstream-values"}
-    assert owners(refused) == {"matmul.memory.memstream.image"}
+    assert owners(refused) == {"matmul.memory.memstream.range"}
     # A shape error is refused the same way, and never demanded by external delivery.
     wrong = configured(base(weights=((0,),)), "memstream", style="auto").query(Kernel.module)
     assert isinstance(wrong, Rejected) and "shape" in wrong.findings[0].message

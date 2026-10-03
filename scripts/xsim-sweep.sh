@@ -135,7 +135,6 @@ else
     sweep_run memstream kernels.rtlsim.matmul_numeric --delivery memstream &
     sweep_run memstream-depthwise kernels.rtlsim.matmul_numeric --depthwise --delivery memstream &
     sweep_run pumped-memory kernels.rtlsim.matmul_numeric --pumped-memory &
-    sweep_run writable kernels.rtlsim.matmul_numeric --writable &
     sweep_run sets kernels.rtlsim.matmul_numeric --sets 3 &
     sweep_run dotp kernels.rtlsim.pure_dot_product_numeric &
     sweep_run dotp-stress kernels.rtlsim.pure_dot_product_numeric --stress &

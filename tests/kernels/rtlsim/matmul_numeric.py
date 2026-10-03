@@ -41,7 +41,7 @@ class Configuration:
     core: str | None = None
     depthwise: bool = False  # width is the window, height the channels
     realization: str | None = None  # depthwise only: "native" or "dense"
-    narrow: bool = False  # weights avoid their type's minimum (NARROW_WEIGHTS)
+    narrow: bool = False  # weights avoid their type's minimum: NARROW_WEIGHTS derives from them
 
 
 CASES = (
@@ -141,18 +141,14 @@ def run(
     ram_style: str = "auto",
     weight_fifo_depth: int | None = None,
     pumped_memory: bool = False,
-    writable: bool = False,
     sets: int = 1,
 ) -> None:
     """One configuration and delivery, free and stalled.
 
-    ``writable`` rewrites the memstream's weights through AXI-Lite before any
-    stream starts and checks the rows computed after the write took effect.
     ``sets`` stores several weight sets and selects one per row through in2_V.
     """
     c = configuration
-    # Writable: enough rows that some follow the words prefetched before the write.
-    rows = 20 if writable else 4
+    rows = 4
     a_type, w_type = DataType[c.activation], DataType[c.weight]
     rng = np.random.RandomState(83)
     shape = (rows, c.width, c.height) if c.depthwise else (rows, c.width)
@@ -164,10 +160,9 @@ def run(
     stored[:, 0, :] = lowest
     if c.height > 1:
         stored[:, 1, :] = int(w_type.max())
-    # The set each row selects, and (writable) the weights written at run time.
+    # The set each row selects.
     indices = [(3 * r + 1) % sets for r in range(rows)]
-    written = rng.randint(lowest, int(w_type.max()) + 1, (c.height, c.width))
-    weights = written if writable else stored[0]
+    weights = stored[0]
     selected = [weights if sets == 1 else stored[indices[r]] for r in range(rows)]
     if c.depthwise:
         # Y[r, c] = sum over k of X[r, k, c] * W[c, k]
@@ -196,7 +191,6 @@ def run(
         else (stored[0].T if sets == 1 else np.swapaxes(stored, 1, 2)).tolist(),
         ram_style=ram_style,
         pumped_memory=pumped_memory,
-        writable_weights=writable,
         weight_sets=sets,
         weight_fifo_depth=weight_fifo_depth,
     )
@@ -266,23 +260,11 @@ def run(
     suffix = "_" + ram_style if delivery is WeightDelivery.MEMSTREAM and ram_style != "auto" else ""
     suffix += f"_fifo{weight_fifo_depth}" if weight_fifo_depth else ""
     suffix += "_pumped_memory" if pumped_memory else ""
-    suffix += "_writable" if writable else ""
     suffix += f"_sets{sets}" if sets > 1 else ""
     directory = evidence / (c.label + "_" + delivery.value + suffix)
     directory.mkdir(parents=True, exist_ok=False)
     # Memory images (INIT_FILE) go where the simulation resolves them.
     entry_point, sources, data_files = materialize(built.module, directory)
-    writes = {}
-    if writable:
-        # Each word takes 2**ceil(log2(ceil(W/32))) 32-bit segments, low first.
-        bits = c.pe * c.simd * w_type.bitwidth()
-        segments = 1 << (-(-bits // 32) - 1).bit_length()
-        # The MatMul's control bus, presented below its node in the root.
-        writes["matmul_s_axilite"] = [
-            ((word * segments + segment) * 4, (value >> (32 * segment)) & 0xFFFFFFFF)
-            for word, value in enumerate(weight_image)
-            for segment in range(segments)
-        ]
     top, wrapper, observations = _observation_wrapper(
         built.module.pins.ports,
         entry_point,
@@ -327,7 +309,6 @@ def run(
             input_stalls=False,
             directory=directory / ("stalled" if stalled else "free"),
             data_files=data_files,
-            axilite_writes=writes,
         )
         actual = [word & result_mask for word in measured["outputs"]["out0_V"]]
         trace = measured["observations"]
@@ -335,24 +316,7 @@ def run(
         assert trace["replay"]["last"] == last_expected
         consumed_weights = trace["weights"]["words"]
         assert len(actual) == len(expected_words)
-        if writable:
-            # Words the memory prefetched before the write are the stored ones;
-            # every row read wholly after them uses the written weights.
-            period = len(weight_image)
-            stale = next(
-                start
-                for start in range(len(consumed_weights) + 1)
-                if all(
-                    word == weight_image[index % period]
-                    for index, word in enumerate(consumed_weights[start:], start)
-                )
-            )
-            # memstream holds at most FULL_CREDIT = 8 words in flight (memstream.sv).
-            assert stale <= 8, (c.label, "prefetched words", stale)
-            first = -(-stale // period)
-            assert first <= rows // 2, (c.label, "rows after the write", first)
-            assert actual[first * nf :] == expected_words[first * nf :], (c.label, stalled)
-        elif sets > 1:
+        if sets > 1:
             assert actual == expected_words, (c.label, delivery, stalled, actual, expected_words)
             selected_words = [word for index in indices for word in stored_images[index]]
             assert consumed_weights[: built.weight_beats] == selected_words
@@ -385,7 +349,6 @@ def main() -> None:
     )
     parser.add_argument("--weight-fifo-depth", type=int)
     parser.add_argument("--pumped-memory", action="store_true", help="memstream at ap_clk2x")
-    parser.add_argument("--writable", action="store_true", help="rewrite memstream weights")
     parser.add_argument("--sets", type=int, default=1, help="memstream weight sets")
     args = parser.parse_args()
     directory = args.output or Path(tempfile.mkdtemp(prefix="matmul-evidence-"))
@@ -398,7 +361,7 @@ def main() -> None:
                 known = delivery is not WeightDelivery.EXTERNAL
                 if (case.realization == "dense" or case.narrow) and not known:
                     continue
-                memory = args.pumped_memory or args.writable or args.sets > 1
+                memory = args.pumped_memory or args.sets > 1
                 if memory and delivery is not WeightDelivery.MEMSTREAM:
                     continue
                 if args.delivery is None or args.delivery == delivery.value:
@@ -409,7 +372,6 @@ def main() -> None:
                         args.ram_style,
                         args.weight_fifo_depth,
                         args.pumped_memory,
-                        args.writable,
                         args.sets,
                     )
 

@@ -34,7 +34,7 @@ boundary stream there presents its ``port`` name (``in0_V``).
 - ``memory`` is an optional Decision over the weight memories: none (the
   weight stream's producer is its parent's, a boundary for instance) or a
   ``memstream``, which drives the weight stream with one period of the order
-  the core reads, per weight set, read-only unless the weights are writable.
+  the core reads, per weight set, fixed at build time.
 - The activation stream's plan replays each dense row and frames each
   reduction; the stream's adapter carries that out.
 
@@ -68,7 +68,6 @@ from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import Traversal, period
 from finn.kernels.artifacts.module import ProducerIdentity
 from finn.kernels.base import Kernel
-from finn.kernels.control import ControlBus
 from finn.kernels.datatypes.domains import set_index_dtype
 from finn.kernels.datatypes.semantics import (
     INTEGER_TENSOR,
@@ -126,8 +125,6 @@ class MatMulKernel(Kernel):
     target_dsp: DspBlock = Param()
     target_period_ns: float = Param()
     weights: IntegerTensor = Param(semantics=INTEGER_TENSOR, required=False)
-    # Software rewrites the weights at run time through AXI-Lite.
-    writable_weights: bool = Param(default=False)
     # Several weight sets, one selected per row by an index on ``in2_V``;
     # ``weights`` then holds one operand per set.
     weight_sets: int = Param(default=1)
@@ -250,9 +247,8 @@ class MatMulKernel(Kernel):
     def narrow_weights(self) -> bool:
         """Known weights that avoid their type's most negative value let the packed core
         pack more lanes (NARROW_WEIGHTS). Provisional: the user means to revisit it."""
-        read_only = self.supplied != "none" and not self.writable_weights
-        if not read_only:
-            return False  # weights arriving or rewritten at run time promise nothing
+        if self.supplied == "none":
+            return False  # weights arriving at run time promise nothing
         low, _ = ordinary_integer_bounds(self.weights_dtype)
         return all(value > low for value in integers(self.weights))
 
@@ -276,16 +272,13 @@ class MatMulKernel(Kernel):
         """One pass of the weights in the order the core reads them: what a memory stores."""
         return period(self.compute.w.presented.form)
 
-    # The weight memories. Each drives w_stream; a writable memstream presents its
-    # AXI-Lite port through ``config`` (s_axilite).
-    config = ControlBus(port="s_axilite")
+    # The weight memories. Each drives w_stream.
     memory: MemStreamKernel | None = Decision(
-        {"memstream": MemStreamKernel(set_stream=set_stream, control=config)},
+        {"memstream": MemStreamKernel(set_stream=set_stream)},
         optional=True,
         dtype=weights_dtype,
         form=weight_period,
         contents=datapath_weights,
-        writable=writable_weights,
         sets=weight_sets,
         output_stream=w_stream,
     )
@@ -293,11 +286,8 @@ class MatMulKernel(Kernel):
 
     @constraint
     def supply_supported(self) -> bool | Rejected:
-        if self.supplied == "none":
-            if self.writable_weights:
-                return reject("matmul-writable", "runtime-writable weights need a memory")
-            if self.multi_set:
-                return reject("matmul-sets", "several weight sets need a memory")
+        if self.supplied == "none" and self.multi_set:
+            return reject("matmul-sets", "several weight sets need a memory")
         return True
 
     @constraint
@@ -338,7 +328,6 @@ class MatMulKernel(Kernel):
             "accDataType": self.result_type.name,
             "mem_mode": mode[self.supplied],
             "ram_style": style,
-            "runtime_writeable_weights": int(self.writable_weights),
             "pumpedMemory": int(pumped),
             "resType": "dsp",
             "noActivation": 1,

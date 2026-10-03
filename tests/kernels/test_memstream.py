@@ -5,21 +5,21 @@
 
 The memory image is packed in the consumer's order and shipped as a generated
 INIT_FILE named by its contents. A pumped memory stores each word as two
-half-words, low first. Runtime-writable weights present the AXI-Lite port at
-the root, named below the MatMul's node (``matmul_s_axilite``); several weight
-sets are selected per row through in2_V.
+half-words, low first. The memory states the range of its contents on its
+output; its AXI-Lite port is tied off. Several weight sets are selected per row
+through in2_V.
 """
 
 import pytest
 from qonnx.core.datatype import DataType
 
 from finn.core.space import Rejected, design_space, inspection
-from finn.kernels.artifacts.abi import Bus
 from finn.kernels.artifacts.build import emit_module
 from finn.kernels.artifacts.contributions import ContributionError, GeneratedData
 from finn.kernels.matmul import MatMulKernel
 from kernels.helpers import WeightDelivery, matmul_assembly
 from finn.kernels.memstream import MemStreamKernel
+from finn.dataflow.tensor import ScalarEncoding
 from finn.dataflow.traversal import tile
 from finn.kernels.target import DspBlock
 from kernels.helpers import finnlib_root, labels, pin_names, placed
@@ -79,9 +79,19 @@ def test_idle_interfaces_are_tied_off():
     tied = dict(tieoffs.inputs)
     assert tied["awvalid"] == 0 and tied["s_axis_0_tvalid"] == 0 and tied["clk2x"] == 0
     assert "awready" in tieoffs.unused and "s_axis_0_tready" in tieoffs.unused
-    refused = memory(writable=True).query(MemStreamKernel.module)
+
+
+def test_the_output_element_carries_the_range_of_every_set():
+    assert memory().element == ScalarEncoding(DataType["INT3"])  # -4 to 3: the datatype's own
+    narrow = tuple(tuple(max(value, -3) for value in row) for row in WEIGHTS)
+    assert str(memory(contents=narrow).element) == "INT3 over [-3, 3]"
+    # Several sets: the range spans them all.
+    sets = (narrow, tuple(tuple(min(value, 1) for value in row) for row in narrow))
+    several = memory(contents=sets, sets=2)
+    assert several.element == ScalarEncoding(DataType["INT3"], (-3, 3))
+    refused = memory(contents=((4,) * 4,) * 4).query(MemStreamKernel.element)
     assert isinstance(refused, Rejected)
-    assert {finding.code for finding in refused.findings} == {"memstream-control"}
+    assert {finding.code for finding in refused.findings} == {"memstream-values"}
 
 
 def test_generated_data_is_a_relative_name_with_bytes():
@@ -102,17 +112,6 @@ def test_matmul_memstream_delivery_materializes_its_image(tmp_path):
     emitted = emit_module(built.module, tmp_path, roots={"finnlib": finnlib_root()})
     (image,) = emitted.data
     assert (emitted.directory / image).read_bytes() == b"22c\n6be\ndd3\n941\n"
-
-
-def test_writable_weights_export_axilite_and_need_the_memstream():
-    built = matmul_assembly(**MATMUL, writable_weights=True)
-    (bus,) = [port for port in built.module.pins.ports if isinstance(port, Bus)][-1:]
-    # Presented through the MatMul's control node, below the MatMul's node in the root.
-    assert bus.name == "matmul_s_axilite"
-    assert {member.physical for member in bus.signals} >= {
-        "matmul_s_axilite_AWADDR",
-        "matmul_s_axilite_WDATA",
-    }
 
 
 def test_several_weight_sets_take_a_set_index_per_row():

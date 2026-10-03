@@ -87,15 +87,9 @@ def test_a_port_runs_on_its_kernels_clock() -> None:
     assert codes(probe(port_clock="ap_clk2x").query(Kernel.module)) == {"kernel-clock"}
 
 
-def test_a_presented_bus_is_accounted_for_by_its_control_node() -> None:
-    def memory(writable: bool) -> MemStreamKernel:
-        point = design_space(
-            MemStreamKernel(
-                dtype=INT4, form=vector_major((4,), 2), contents=(1, 2, 3, 4), writable=writable
-            )
-        )
-        return commit(point, {"ram_style": "auto", "pumped_memory": False})
-
-    # Read-only: the bus is held; writable, it is presented, and refused without a node.
-    assert memory(False).query(Kernel.pins_accounted) == Available(True)
-    assert codes(memory(True).query(Kernel.module)) == {"memstream-control"}
+def test_a_held_bus_is_accounted_for() -> None:
+    point = design_space(
+        MemStreamKernel(dtype=INT4, form=vector_major((4,), 2), contents=(1, 2, 3, 4))
+    )
+    memory = commit(point, {"ram_style": "auto", "pumped_memory": False})
+    assert memory.query(Kernel.pins_accounted) == Available(True)

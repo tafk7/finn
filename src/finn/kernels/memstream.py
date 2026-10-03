@@ -6,14 +6,15 @@
 The consumer supplies the operand ``contents`` and the beat ``form`` it reads
 them in; the kernel packs one image per set in that form into the memory, so
 the consumer's order needs no adapter. Initial contents go through INIT_FILE, a generated data file
-named by its contents, so they are part of the build identity.
+named by its contents, so they are part of the build identity. It owns the
+values it streams, so it states their ``range`` on its output: its element is
+``dtype`` over the minimum and maximum of every set's contents.
 
 - With one set, the image streams cyclically.
 - With ``sets`` > 1, ``contents`` holds one operand per set, and each index
   accepted on ``set_stream`` streams one whole set. The output presents one
   pass per index; the set stream is an ordinary stream reference input.
-- ``writable`` exports the AXI-Lite port through ``control``, so software can
-  rewrite the memory at run time; otherwise the port is tied off.
+- Its AXI-Lite port is tied off: the contents are fixed at build time.
 
 ``ram_style`` and ``pumped_memory`` are its choices. A pumped memory runs at
 ``ap_clk2x`` on half-width words and doubles the depth; its 2x clock pin is
@@ -34,7 +35,6 @@ from finn.core.space import (
     constraint,
     derived,
     reject,
-    view,
 )
 from finn.dataflow.datatypes import (
     QONNXDataType,
@@ -53,7 +53,7 @@ from finn.kernels.artifacts.abi import Bus, Endpoint, Member, Signal, StandardPr
 from finn.kernels.artifacts.contributions import Contribution, CopiedSource, GeneratedData
 from finn.kernels.artifacts.module import Held
 from finn.kernels.base import Clocking, Kernel
-from finn.kernels.control import CONTROL, Control, ControlBus, held_bus
+from finn.kernels.control import held_bus
 from finn.kernels.datatypes.domains import Integer, set_index_dtype
 from finn.kernels.datatypes.semantics import (
     INTEGER_TENSOR,
@@ -81,20 +81,32 @@ class MemStreamKernel(Kernel):
     form: Traversal = Param()
     contents: IntegerTensor = Param(semantics=INTEGER_TENSOR)
     sets: int = Param(default=1)
-    writable: bool = Param(default=False)
-    # Where a parent places it: the stream it drives, the set-index stream
-    # (several sets only), and the control bus that exports a writable memory.
+    # Where a parent places it: the stream it drives and the set-index stream
+    # (several sets only).
     output_stream: Stream = Param(required=False)
     set_stream: Stream = Param(required=False)
-    control: ControlBus = Param(required=False)
     ram_style: str = Decision(values=MEMSTREAM_RAM_STYLES)
     pumped_memory: bool = Decision(values=(False, True))
 
     @derived
+    def range(self) -> tuple[int, ...] | Rejected:
+        """The minimum and maximum of its contents, every set."""
+        values = integers(self.contents)
+        low, high = ordinary_integer_bounds(self.dtype)
+        if not low <= min(values) <= max(values) <= high:
+            return reject(
+                "memstream-values", f"every value must be an integer admitted by {self.dtype.name}"
+            )
+        return (min(values), max(values))
+
+    @derived
     def element(self) -> ScalarEncoding | Rejected:
-        """The stored element: an ordinary integer encoding."""
+        """The stored element: an ordinary integer encoding over its contents' range."""
         admitted = Integer().check(self.dtype)
-        return admitted if isinstance(admitted, Rejected) else ScalarEncoding.admit(self.dtype)
+        if isinstance(admitted, Rejected):
+            return admitted
+        low, high = self.range
+        return ScalarEncoding.admit(self.dtype, (low, high))
 
     @derived
     def word_bits(self) -> int:
@@ -138,7 +150,6 @@ class MemStreamKernel(Kernel):
     def image(self) -> IntegerVector | Rejected:
         """Packed words, set after set, each set in the consumer's ``form``."""
         encoding = self.element
-        low, high = ordinary_integer_bounds(encoding.dtype)
         values, sets = self.contents, self.sets
         groups = values if sets > 1 else (values,)
         if sets > 1 and (not isinstance(values, tuple) or len(values) != sets):
@@ -149,11 +160,6 @@ class MemStreamKernel(Kernel):
             )
         except ValueError as error:
             return reject("memstream-values", str(error))
-        if any(not low <= value <= high for value in integers(values)):
-            return reject(
-                "memstream-values",
-                f"every value must be an integer admitted by {encoding.datatype_name}",
-            )
         return words
 
     @derived
@@ -242,6 +248,7 @@ class MemStreamKernel(Kernel):
         stream=output_stream,
         sequence=output_sequence,
         dtype=dtype,
+        range=range,
         lanes=(LANE,),
         factors=word_factors,
         clock="clk",
@@ -280,23 +287,9 @@ class MemStreamKernel(Kernel):
     def other_pins(self) -> tuple[Signal | Bus, ...]:
         return (self.config_bus,)
 
-    def held(self) -> Held | Rejected:
-        """AXI-Lite, unless writable."""
-        if not self.writable:
-            return held_bus(self.config_bus)
-        if not self.present(MemStreamKernel.control):
-            return reject("memstream-control", "a runtime-writable memory needs a control bus")
-        return Held()
-
-    def controlled(self) -> tuple[Bus, ...]:
-        """AXI-Lite, when writable."""
-        return (self.config_bus,) if self.writable else ()
-
-    @view
-    def control_bus(self) -> Control:
-        return Control(self.config_bus if self.controlled() else None)
-
-    exports = {**Kernel.exports, CONTROL: {control: control_bus}}
+    def held(self) -> Held:
+        """AXI-Lite, always: the contents are fixed at build time."""
+        return held_bus(self.config_bus)
 
 
 __all__ = ["MEMSTREAM_RAM_STYLES", "MemStreamKernel"]

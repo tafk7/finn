@@ -7,8 +7,7 @@ Each MatMul sits on the root's streams through its reference inputs, which it
 passes to the kernels that use them: each stream is one real edge, so each
 adapter sits on the edge that needs it (a replay before each MatMul's core,
 none inside a MatMul). The root's module is one netlist of every leaf; it
-computes ``thresholds(x @ W1) @ W2`` in XSim. Each MatMul's control bus is
-presented below its node (``first_s_axilite``).
+computes ``thresholds(x @ W1) @ W2`` in XSim.
 
 The root declares every stream: the tensor of a MatMul's weights and results is
 read from the MatMul's views (``weight_tensor``, ``result_tensor``); a tensor
@@ -25,7 +24,6 @@ from qonnx.core.datatype import DataType
 from finn.core.space import Rejected, derived, design_space
 from finn.dataflow.plan import Step
 from finn.dataflow.tensor import ScalarEncoding, Tensor
-from finn.kernels.artifacts.abi import Bus
 from finn.kernels.configure import commit
 from finn.kernels.matmul import MatMulKernel, exact_result_dtype
 from finn.kernels.streams import BufferedStream, Stream
@@ -216,50 +214,3 @@ def test_the_chain_computes_in_xsim(tmp_path: Path) -> None:
             )
         },
     )
-
-
-def test_two_matmuls_present_their_control_buses_below_their_nodes():
-    class Rewritable(Root):
-        x = Stream(tensor=Tensor((ROWS, INPUTS), ScalarEncoding(A)), port="in0_V")
-        w1 = weights(INPUTS, HIDDEN)
-        hidden = Stream(tensor=Tensor((ROWS, HIDDEN), ScalarEncoding(H)), port="out0_V")
-        first = MatMulKernel(
-            m=ROWS,
-            n=HIDDEN,
-            k=INPUTS,
-            activation_dtype=A,
-            weights_dtype=W,
-            target_dsp=DspBlock.DSP48E2,
-            target_period_ns=5.0,
-            weights=W1,
-            writable_weights=True,
-            x_stream=x,
-            w_stream=w1,
-            y_stream=hidden,
-        )
-        z = Stream(tensor=Tensor((ROWS, INPUTS), ScalarEncoding(A)), port="in1_V")
-        w2 = weights(INPUTS, HIDDEN)
-        out = Stream(tensor=Tensor((ROWS, HIDDEN), ScalarEncoding(H)), port="out1_V")
-        second = MatMulKernel(
-            m=ROWS,
-            n=HIDDEN,
-            k=INPUTS,
-            activation_dtype=A,
-            weights_dtype=W,
-            target_dsp=DspBlock.DSP48E2,
-            target_period_ns=5.0,
-            weights=W1,
-            writable_weights=True,
-            x_stream=z,
-            w_stream=w2,
-            y_stream=out,
-        )
-
-    point = configured(Rewritable())
-    buses = [port.name for port in point.module.pins.ports if isinstance(port, Bus)]
-    assert buses[-2:] == ["first_s_axilite", "second_s_axilite"]
-    exported = [(item.instance, item.port) for item in point.module.fragment.exports]
-    assert exported == [
-        ("first.memory.memstream", "first_s_axilite"),
-        ("second.memory.memstream", "second_s_axilite"),
-    ]
