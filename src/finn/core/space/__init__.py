@@ -31,7 +31,7 @@ from .declarations import (
     selected,
     view,
 )
-from .domains import Domain, divisors_of, domain, finite
+from .domains import Domain, Requirement, divisors_of, domain, finite, requires, requiring
 from .edits import Change, ChangeOutcome, ChangeRequest, ConfigurationResult
 from .errors import (
     ConfigurationError,
@@ -101,6 +101,9 @@ __all__ = [
     "domain",
     "finite",
     "divisors_of",
+    "Requirement",
+    "requires",
+    "requiring",
     "ValueSemantics",
     "default_semantics",
     # Results and assessments

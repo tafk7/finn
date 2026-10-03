@@ -11,17 +11,23 @@ from enum import Enum
 
 @dataclass(frozen=True)
 class Platform:
-    """PROBE (stream source): the platform facts a weight source's candidates refuse on.
+    """PROBE (design/stream-source): the platform's capabilities, never its part name.
 
-    ``family`` (``"zynq_us+"``, ``"versal"``, or None: not stated), whether the device
-    has UltraRAM, and how many memory-mapped ports a fetcher may use. Its home is the
-    model's typed platform metadata (qonnx Q6); the default states nothing and so
-    refuses nothing a known platform would allow, URAM included.
+    What candidates and cases require: UltraRAM (``uram``), UltraRAM that takes
+    initial contents (``uram_init``: not on Zynq UltraScale+, where Vivado builds an
+    initialized ``ultra`` as block RAM), a doubled clock (``clk2x``), control
+    (AXI-Lite) ports and memory-mapped ports a shell offers, AI Engines (``aie``).
+    One table maps a part to its capabilities, resolved once into qonnx Q6's
+    ``finn.platform``; the default states nothing and so refuses nothing a stated
+    platform would allow (no memory port: the probe's stub fetcher has none).
     """
 
-    family: str | None = None
     uram: bool = True
+    uram_init: bool = True
+    clk2x: bool = True
+    control_ports: int = 1
     memory_ports: int = 0
+    aie: bool = False
 
 
 class DspBlock(str, Enum):

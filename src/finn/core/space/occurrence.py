@@ -8,7 +8,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import TypeVar, cast, overload
+from typing import Any, TypeVar, cast, overload
 
 from . import _execution, _runtime
 from ._configuration import BoundDecision, BoundValue, Space
@@ -198,6 +198,16 @@ def _supplied(point: Space, formal: Param[object]) -> bool:
     (``input-unsupplied``), it is not supplied.
     """
     index = state(point).model.resolve(point._scope, formal)
+    guard = _source_guard(state(point).linked, index)
+    if guard is not None:
+        # PROBE (design/stream-source): bound to a guarded view or derived value, it is
+        # supplied when that source applies, a fact read without computing the value.
+        held = _read_result(point, guard)
+        if isinstance(held, Available):
+            return held.value is True
+        if isinstance(held, Inapplicable):
+            return False
+        return bool(_read_index(point, guard))  # undecided: raises like any value read
     answer = _read_result(point, index)
     if isinstance(answer, Available):
         return True
@@ -207,6 +217,22 @@ def _supplied(point: Space, formal: Param[object]) -> bool:
         return False
     _read_index(point, index)  # undecided: raises like any value read
     return True
+
+
+def _source_guard(linked: Any, index: int) -> int | None:
+    """The guard of the view or derived value a value input is bound to, through its
+    aliases; None when the source is unguarded (or is not a computation)."""
+    seen: set[int] = set()
+    while index not in seen:
+        seen.add(index)
+        node = linked.nodes[index]
+        if node.kind == "alias" and node.output is not None:
+            index = node.output
+            continue
+        if node.kind in ("view", "derived") and node.guard is not None:
+            return cast(int, node.guard)
+        return None
+    return None
 
 
 def _read_result(point: Space, index: int) -> QueryResult[object]:

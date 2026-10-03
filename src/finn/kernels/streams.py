@@ -54,8 +54,11 @@ PROBE (stream source, design/stream-source): a stream whose tensor has a known
 value (``contents``, with ``sets`` sets and their ``index`` stream) carries a
 ``source`` Decision over the kernels that can drive it with that value
 (``memstream``; ``fetch``, a stub of a future fetcher). It applies only when the
-value is known (``valued``), has no ``none`` case, and each candidate refuses on
-its own facts and the ``platform``. The source is the stream's producer end,
+value is known (``valued``: whether the bound value applies, its guard, which a
+value owner states from its initializer's presence, not from the value itself),
+has no ``none`` case, and each candidate refuses on its own facts and the
+``platform``. The invariant: a stream with a value has its source as its only
+producer (``stream-users``). The source is the stream's producer end,
 placed by the stream (``staged``), its leaf below it at ``source.<case>``; it
 stores the value in the order the stream's consumer reads it (one ``period`` of
 the consumer's form). Its keys are the stream's (``w.source``,
@@ -292,9 +295,11 @@ class Stream(LogicalStream):
             (producers if producing else consumers).append((end.node, contract))
         if self.valued:
             if producers:
+                # The invariant: a stream with a value has its source as its only producer.
                 return reject(
                     "stream-users",
-                    f"a stream with a known value is driven by its source, not {producers[0][0]}",
+                    "a stream with a value has its source as its only producer, "
+                    f"not {producers[0][0]}",
                 )
             producers.append((self.source_label, self.source_contract))
         if len(producers) > 1 or len(consumers) > 1:

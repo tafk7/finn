@@ -481,7 +481,11 @@ class Param(ValueDecl[T], Generic[T]):
                 family = self.reference_family()
             except DefinitionError:
                 raise AttributeError(name) from None
-            if family is None or not _has_member(family, name):
+            if family is None:
+                # PROBE (design/stream-source): a value formal projects an attribute of
+                # its value, as a derived value does (``platform.uram``).
+                return project(self, name)
+            if not _has_member(family, name):
                 raise AttributeError(name)
             from ._nodes import path_proxy
 

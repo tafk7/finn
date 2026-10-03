@@ -99,7 +99,8 @@ class MatMul(KernelOp):
         return {
             self.onnx_node.input[1]: BufferedStream(
                 tensor=self.view("w_tensor"),
-                contents=self.view("w_contents"),  # type: ignore[arg-type]
+                # The value the node root's weight stream carries (MatMul's view of it).
+                contents=getattr(self.base(), self.member).weight_values,
             )
         }
 

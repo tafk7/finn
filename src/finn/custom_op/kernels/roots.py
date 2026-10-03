@@ -74,13 +74,7 @@ class StoredMatMulNode(MatMulNode):
 
     id = "finn.custom_op.kernels.node.matmul.stored"
     weights: IntegerTensor = Param(semantics=INTEGER_TENSOR)
-
-    @derived(semantics=INTEGER_TENSOR)
-    def w_contents(self) -> IntegerTensor:
-        values: IntegerTensor = cast(Any, self).matmul.weight_values
-        return values
-
-    w = BufferedStream(tensor=MatMulNode.w_tensor, contents=w_contents, port="in1_V")
+    w = BufferedStream(tensor=MatMulNode.w_tensor, port="in1_V")
     matmul = MatMulKernel(
         m=MatMulNode.m,
         n=MatMulNode.n,
@@ -94,6 +88,9 @@ class StoredMatMulNode(MatMulNode):
         w_stream=w,
         y_stream=MatMulNode.y,
     )
+    # The stream's value is MatMul's view of it; whether the stream has one (its
+    # source applies) is the view's guard, the weights' presence (PROBE).
+    w.contents = matmul.weight_values
 
 
 class StreamedMatMulNode(MatMulNode):

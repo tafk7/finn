@@ -13,10 +13,13 @@ A case of a Decision over nodes is **viable** when the candidate it places does
 not refuse the configuration through its ``admission`` member (a
 ``ConstraintGroup``, a constraint or a view; a group refuses as soon as one of
 its constraints does); an admission still waiting on an open choice does not
-refuse. Nothing else is consulted: the Decision's owner is not. A Decision over
-values is forced only when its domain has one candidate. With several viable
-cases the Decision stays open; with none it is refused (``decision-no-viable-case``),
-each case with its reason.
+refuse. Nothing else is consulted: the Decision's owner is not. A case of a
+Decision over values is viable when every requirement it states holds
+(``requiring``: each a named finding, read through the domain's membership);
+a domain without requirements has every candidate viable. With one viable case
+the Decision is forced, with several it stays open, with none it is refused
+(``decision-no-viable-case``), each case with its reason: the same for both
+kinds.
 
 A snapshot's forced Decisions are found once, on the first read of an open
 Decision, in rounds over the open Decisions in rank order, each forced value
@@ -34,6 +37,7 @@ from typing import cast
 from ._configuration import Space
 from ._runtime import Snapshot
 from .declarations import Constraint, ConstraintGroup, View
+from .domains import RequiringDomain
 from .occurrence import _attach, state
 from .references import DecisionHandle
 from .results import Available, Finding, FindingKind, QueryResult, Rejected
@@ -131,6 +135,24 @@ def _viable(point: Space, index: int) -> tuple[tuple[str, ...], dict[str, str]] 
     return tuple(viable), reasons
 
 
+def _required(
+    point: Space, index: int, candidates: tuple[object, ...]
+) -> tuple[tuple[object, ...], dict[str, str]]:
+    """A Decision over values' viable cases: those whose requirements hold (the domain's
+    membership, tried case by case), and each other case's finding."""
+    handle = DecisionHandle[object](state(point).linked, index)
+    viable: list[object] = []
+    reasons: dict[str, str] = {}
+    for case in candidates:
+        outcome = point.try_with_choices({handle: case})
+        if outcome.accepted:
+            viable.append(case)
+            continue
+        refused = [item.result for item in outcome.outcomes if isinstance(item.result, Rejected)]
+        reasons[repr(case)] = "; ".join(_describe(result) for result in refused) or "refused"
+    return tuple(viable), reasons
+
+
 def _find(snapshot: Snapshot) -> Found:
     linked = snapshot.linked
     values: dict[int, object] = {}
@@ -165,11 +187,14 @@ def _find(snapshot: Snapshot) -> Found:
                 if not isinstance(candidates, Available) or candidates.value is None:
                     continue
                 cases = tuple(candidates.value)
+                if isinstance(linked.nodes[index].domain, RequiringDomain):
+                    cases, why = _required(point, index, cases)
+                    reasons[index] = MappingProxyType(why)
             if len(cases) == 1:
                 values[index] = cases[0]
                 point = plain()
                 progressed = True
-            elif not cases and index in linked.selector_choices:
+            elif not cases and index in reasons:
                 detail = "; ".join(f"{case}: {why}" for case, why in reasons[index].items())
                 refused[index] = Rejected(
                     (

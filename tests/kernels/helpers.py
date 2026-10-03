@@ -172,15 +172,9 @@ def matmul_root(family: type[MatMulKernel]) -> type[Root]:
         def set_tensor(self) -> Tensor:
             return self.matmul.set_tensor
 
-        @derived(semantics=INTEGER_TENSOR)
-        def w_contents(self) -> IntegerTensor:
-            return self.matmul.weight_values
-
         x = Stream(tensor=x_tensor, port="in0_V")
         set = Stream(tensor=set_tensor, port="in2_V", when=several)
-        w = BufferedStream(
-            tensor=w_tensor, contents=w_contents, sets=weight_sets, index=set, port="in1_V"
-        )
+        w = BufferedStream(tensor=w_tensor, sets=weight_sets, index=set, port="in1_V")
         y = Stream(tensor=y_tensor, port="out0_V")
         matmul = family(
             m=m,
@@ -197,6 +191,7 @@ def matmul_root(family: type[MatMulKernel]) -> type[Root]:
             w_stream=w,
             y_stream=y,
         )
+        w.contents = matmul.weight_values
 
     return MatMul
 

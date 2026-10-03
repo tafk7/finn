@@ -198,4 +198,107 @@ def divisors_of(extent: object) -> Domain[int]:
     )
 
 
-__all__ = ["Domain", "divisors_of", "domain", "finite"]
+@dataclass(frozen=True)
+class Requirement:
+    """A fact a value Decision's cases need (PROBE: design/stream-source).
+
+    ``fact`` is a declaration reference (a Param, a derived value, a projected
+    attribute: ``platform.uram``) whose value must be truthy; ``finding`` is
+    ``"code: message"``; ``cases`` limits it to some cases (a tuple of values or a
+    predicate over the case), every case when None.
+    """
+
+    fact: object
+    code: str
+    message: str
+    cases: tuple[object, ...] | Callable[[object], bool] | None = None
+
+    def applies(self, candidate: object) -> bool:
+        if self.cases is None:
+            return True
+        if callable(self.cases):
+            return bool(self.cases(candidate))
+        return candidate in self.cases
+
+
+def requires(
+    fact: object,
+    finding: str,
+    *,
+    cases: tuple[object, ...] | Callable[[object], bool] | None = None,
+) -> Requirement:
+    """A requirement of a value Decision's cases: ``fact`` must hold, or the case is
+    refused with ``finding`` (``"code: message"``)."""
+    code, _, message = finding.partition(":")
+    if not code.strip() or not message.strip():
+        raise DefinitionError("a requirement's finding is 'code: message'")
+    return Requirement(fact, code.strip(), message.strip(), cases)
+
+
+@dataclass(frozen=True, slots=True)
+class RequiringDomain(Domain[T]):
+    """A domain whose cases state requirements: forcing reads each case's viability
+    (all its requirements hold) and each refusal's finding."""
+
+    requirements: tuple[Requirement, ...] = ()
+
+
+def requiring(
+    base: Iterable[T] | Domain[T],
+    *requirements: Requirement,
+    semantics: ValueSemantics[T] | None = None,
+) -> Domain[T]:
+    """``base`` (values, or a domain) with its cases' requirements (PROBE).
+
+    Membership is the base's and then every applicable requirement, refused with the
+    requirement's named finding; enumeration is the base's, unfiltered: the declared
+    cases stay the domain, and a case whose requirement fails is not viable.
+    """
+    if isinstance(base, Domain):
+        base_domain: Domain[T] = base
+        values: tuple[T, ...] | None = None
+    else:
+        values = tuple(base)
+        base_domain = domain(
+            accepts=lambda *, candidate: candidate in values,
+            candidates=lambda: values,
+            semantics=semantics,
+        )
+    base_names = tuple(name for name, _ in base_domain.dependencies)
+    facts = {f"required_{index}": item.fact for index, item in enumerate(requirements)}
+
+    def accepts(*, candidate: T, **found: object) -> bool | QueryResult[bool]:
+        inner = base_domain.accepts(
+            candidate=candidate, **{name: found[name] for name in base_names}
+        )
+        if inner is not True and not (isinstance(inner, Available) and inner.value is True):
+            return inner
+        for index, item in enumerate(requirements):
+            if item.applies(candidate) and not found[f"required_{index}"]:
+                return reject(item.code, f"{candidate!r}: {item.message}")
+        return True
+
+    def candidates(**found: object) -> Iterable[T] | QueryResult[Iterable[T]]:
+        assert base_domain.candidates is not None
+        return base_domain.candidates(**{name: found[name] for name in base_names})
+
+    return RequiringDomain(
+        (*base_domain.dependencies, *facts.items()),
+        accepts,
+        candidates if base_domain.candidates is not None else None,
+        semantics or base_domain.value_semantics,
+        None,
+        tuple(requirements),
+    )
+
+
+__all__ = [
+    "Domain",
+    "Requirement",
+    "RequiringDomain",
+    "divisors_of",
+    "domain",
+    "finite",
+    "requires",
+    "requiring",
+]

@@ -20,7 +20,9 @@ PROBE (stream source): it is a stream's ``source`` candidate (``finn.kernels.str
 placed by the stream with ``staged``: its output presents into that stream without a
 reference to it, and its set port references the stream's ``index``. Its ``ram_style``
 domain reads the ``platform``: no ``ultra`` without UltraRAM, nor on Zynq UltraScale+,
-where an initialized UltraRAM is built as block RAM (the packaging note's P6).
+where an initialized UltraRAM is built as block RAM (the packaging note's P6): its
+``ultra`` case requires ``platform.uram`` and ``platform.uram_init``, and a pumped memory
+``platform.clk2x``, each a named refusal.
 
 ``ram_style`` and ``pumped_memory`` are its choices. A pumped memory runs at
 ``ap_clk2x`` on half-width words and doubles the depth; its 2x clock pin is
@@ -36,14 +38,14 @@ from math import ceil
 from finn.core.space import (
     ConstraintGroup,
     Decision,
-    Domain,
     Param,
     Rejected,
     constraint,
     default_semantics,
     derived,
-    domain,
     reject,
+    requires,
+    requiring,
 )
 from finn.dataflow.datatypes import (
     QONNXDataType,
@@ -82,27 +84,6 @@ LANE = Index("lane")
 MEMSTREAM_RAM_STYLES = ("auto", "distributed", "block", "ultra")
 
 
-def ram_styles(platform: object) -> Domain[str]:
-    """The memory styles a platform offers an initialized memory (module docstring)."""
-
-    def offered(platform: Platform) -> tuple[str, ...]:
-        ultra = platform.uram and platform.family != "zynq_us+"
-        return tuple(style for style in MEMSTREAM_RAM_STYLES if style != "ultra" or ultra)
-
-    def accepts(*, candidate: str, platform: Platform) -> bool:
-        return candidate in offered(platform)
-
-    def candidates(*, platform: Platform) -> tuple[str, ...]:
-        return offered(platform)
-
-    return domain(
-        accepts=accepts,
-        candidates=candidates,
-        semantics=default_semantics(str),
-        platform=platform,
-    )
-
-
 class MemStreamKernel(Kernel):
     id = "finnlib.memstream_axi"
     version = 1
@@ -119,8 +100,27 @@ class MemStreamKernel(Kernel):
     # A stream's source: placed by the stream it drives (module docstring).
     staged: bool = Param(default=False)
     platform: Platform = Param(default=Platform())
-    ram_style: str = Decision(domain=ram_styles(platform))
-    pumped_memory: bool = Decision(values=(False, True))
+    ram_style: str = Decision(
+        domain=requiring(
+            MEMSTREAM_RAM_STYLES,
+            requires(platform.uram, "uram-absent: the platform has no UltraRAM", cases=("ultra",)),
+            requires(
+                platform.uram_init,
+                "uram-init: the platform's UltraRAM takes no initial contents",
+                cases=("ultra",),
+            ),
+            semantics=default_semantics(str),
+        )
+    )
+    pumped_memory: bool = Decision(
+        domain=requiring(
+            (False, True),
+            requires(
+                platform.clk2x, "clk2x-absent: the platform has no doubled clock", cases=(True,)
+            ),
+            semantics=default_semantics(bool),
+        )
+    )
 
     @derived
     def value_range(self) -> tuple[int, ...] | Rejected:
