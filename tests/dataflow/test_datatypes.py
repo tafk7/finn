@@ -56,34 +56,21 @@ class _ZeroWidth(_LyingWidth):
         return 0
 
 
-def test_element_width_is_read_from_the_canonical_value_not_the_caller_s() -> None:
-    """A ``ScalarEncoding`` measures what a tensor will hold.
-
-    Both subclasses name themselves ``INT8``, so under QONNX's identity rule
-    they *are* ``INT8``, and an encoding built from either holds the
-    registered eight-bit value -- not the instance handed in.  Asking the
-    caller's instance its width would answer a question about an object
-    already discarded: one of these raises, and the other makes a genuine
-    ``INT8`` look degenerate.
-
-    Reading the width from the canonicalized value settles both the same way,
-    and the way the tensor will actually behave.
-    """
+def test_a_subclass_naming_itself_int8_is_not_int8() -> None:
+    """A ``BaseDataType`` subclass defined outside qonnx is not one of its datatype
+    values, whatever it names itself: refused, and none of its methods run (one
+    of these raises from ``bitwidth``, the other reports zero)."""
 
     for rogue in (_LyingWidth(), _ZeroWidth()):
-        assert qonnx_datatype_width(rogue) == 8
-        held = ScalarEncoding(cast(QONNXDataType, rogue))
-        assert held.bits == 8 and held.dtype == DataType["INT8"]
-        assert held.dtype is not rogue
+        with pytest.raises(DatatypeError, match="not a QONNX datatype value"):
+            qonnx_datatype_width(rogue)
+        with pytest.raises(DatatypeError):
+            ScalarEncoding(cast(QONNXDataType, rogue))
 
 
 def test_a_degenerate_width_is_still_refused() -> None:
-    """The canonical read is not a way of ignoring the width test.
-
-    ``INT0`` resolves, and its width really is zero, so it cannot describe a
-    beat.  Measuring the canonical value keeps that refusal intact -- the change
-    above is about *which* object is measured, not about relaxing the condition.
-    """
+    """``INT0`` still resolves (qonnx warns until a later release refuses it), and
+    its width really is zero, so it cannot describe a beat: FINN refuses it."""
 
     assert qonnx_datatype_width(DataType["INT0"]) == 0
     with pytest.raises(ValueError, match="positive width"):

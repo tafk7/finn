@@ -182,19 +182,14 @@ class _Unregistered(BaseDataType):  # type: ignore[misc]
 
 
 def test_an_unregistered_subclass_is_refused_at_recognition() -> None:
-    """Not later, inside the snapshot.
-
-    ``isinstance`` alone would admit this and then raise ``KeyError`` while
-    freezing it -- from a path whose contract says the value was already
-    recognized.  Refusing here is what makes ``accepts`` implies ``snapshot``
-    succeeds true rather than aspirational.
-    """
+    """Not later, inside the snapshot: ``isinstance`` alone would admit it. A
+    subclass defined outside qonnx is not one of its datatype values."""
 
     rogue = _Unregistered()
     assert isinstance(rogue, BaseDataType)
     assert is_qonnx_datatype(rogue) is False
     assert QONNX_DATATYPE_SEMANTICS.accepts(rogue) is False
-    with pytest.raises(DatatypeError, match="cannot resolve"):
+    with pytest.raises(DatatypeError, match="not a QONNX datatype value"):
         canonical_qonnx_datatype(rogue)
 
 
@@ -209,14 +204,8 @@ def test_an_unregistered_subclass_is_refused_at_recognition() -> None:
     ],
 )
 def test_a_malformed_canonical_name_is_refused(name: str) -> None:
-    """One failure type out, whatever QONNX raises going in.
-
-    ``resolve_datatype`` dispatches on a prefix and then parses, so the
-    exception depends on how far a bad name gets: ``NOTATYPE`` is a
-    ``KeyError`` while ``INT8 but wrong`` reaches ``int()`` and is a
-    ``ValueError``.  A boundary that caught only the documented one would let
-    the others escape as unrelated exception types.
-    """
+    """One failure type out: qonnx raises ``KeyError`` for every name that denotes
+    no datatype, however far its parse got, and the boundary refuses it."""
 
     with pytest.raises(DatatypeError, match="no QONNX datatype is named"):
         resolve_qonnx_datatype_name(name)
@@ -263,14 +252,8 @@ class _ExplodingName(BaseDataType):  # type: ignore[misc]
 def test_recognition_is_total_over_arbitrary_failures() -> None:
     """``is_qonnx_datatype`` answers; it does not raise.
 
-    An earlier version caught an enumerated tuple of exception types, grown one
-    at a time as each new QONNX failure mode was found -- ``KeyError``, then
-    ``ValueError``, then ``AssertionError``. That is a fix for the case rather
-    than for the class of case: a ``BaseDataType`` subclass can raise anything
-    at all, and here it raises ``RuntimeError``, which no such tuple would have
-    contained.
-
-    Totality is the contract, so the boundary catches ``Exception``.
+    qonnx's ``is_datatype`` runs no method of the value it is asked about, so a
+    subclass whose methods raise is answered (False) without running them.
     """
 
     rogue = _ExplodingName()
@@ -278,78 +261,13 @@ def test_recognition_is_total_over_arbitrary_failures() -> None:
 
     assert is_qonnx_datatype(rogue) is False
     assert QONNX_DATATYPE_SEMANTICS.accepts(rogue) is False
-    with pytest.raises(DatatypeError, match="cannot name itself"):
+    with pytest.raises(DatatypeError, match="not a QONNX datatype value"):
         canonical_qonnx_datatype(rogue)
 
 
-def test_an_interrupt_is_not_swallowed_as_a_refusal() -> None:
-    """``BaseException`` still propagates.
-
-    The counterweight to catching ``Exception``: an interrupt is not the
-    datatype declining to be a datatype, and a boundary that swallowed one
-    would make the process unkillable at exactly the wrong moment.
-    """
-
-    class _Interrupted(_ExplodingName):
-        def get_canonical_name(self) -> str:
-            raise KeyboardInterrupt
-
-    with pytest.raises(KeyboardInterrupt):
-        is_qonnx_datatype(_Interrupted())
-
-
-class _ExhaustedName(_ExplodingName):
-    """Names itself once, then raises.
-
-    The first ``get_canonical_name()`` is not the only one.  The boundary asks
-    the value its name, resolves that name, and then compares the resolution
-    back against the value -- and QONNX's own ``__eq__`` implements that
-    comparison by calling ``other.get_canonical_name()``, which is this object's
-    method again.  So a value can pass the guarded read and still run
-    caller-controlled code afterwards.
-    """
-
-    def __init__(self) -> None:
-        self.calls = 0
-
-    def get_canonical_name(self) -> str:
-        self.calls += 1
-        if self.calls > 1:
-            raise RuntimeError("boom")
-        return "INT8"
-
-
-def test_recognition_survives_a_value_that_raises_on_the_second_naming() -> None:
-    """The comparison inside recognition is guarded, not just the read.
-
-    ``resolved != original`` looked like a comparison between two registered
-    QONNX values.  It is not: ``original`` is the caller's object, and
-    ``BaseDataType.__eq__`` reaches straight into its ``get_canonical_name()``.
-    Guarding only the first read left the second one bare, so a value that
-    names itself successfully and then fails escaped ``is_qonnx_datatype`` as a
-    ``RuntimeError`` -- from a predicate that promises to answer rather than to
-    raise.
-    """
-
-    rogue = _ExhaustedName()
-    assert rogue.name == "INT8"  # the first call, spent deliberately
-    assert rogue.calls == 1
-
-    assert is_qonnx_datatype(_ExhaustedName()) is False
-    assert QONNX_DATATYPE_SEMANTICS.accepts(_ExhaustedName()) is False
-    with pytest.raises(DatatypeError, match="could not be compared"):
-        canonical_qonnx_datatype(_ExhaustedName())
-
-
 def test_a_jointly_invalid_fixed_point_name_is_refused_not_raised() -> None:
-    """``FIXED<8,9>``: parts individually well formed, jointly invalid.
-
-    QONNX validates fixed-point construction with ``assert``, so this raises
-    ``AssertionError`` rather than a domain error.  That is not a name QONNX
-    can resolve, so the boundary has to turn it into a refusal like any other
-    -- otherwise a predicate whose whole contract is to *answer* the question
-    raises it instead.
-    """
+    """``FIXED<8,9>``: parts individually well formed, jointly invalid; a name
+    qonnx cannot resolve, refused like any other."""
 
     with pytest.raises(DatatypeError, match="no QONNX datatype is named"):
         resolve_qonnx_datatype_name("FIXED<8,9>")

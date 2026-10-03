@@ -19,7 +19,8 @@ QONNX_DATATYPE_VALUE_SEMANTICS: ValueSemantics[QONNXDataType] = ValueSemantics(
     type_token=QONNX_DATATYPE_TOKEN,
     name="QONNXDataType",
     recognizes=is_qonnx_datatype,
-    equal=lambda left, right: bool(left == right),
+    # One instance per canonical name: two datatypes are equal when they are the same.
+    equal=lambda left, right: left is right,
     snapshot=canonical_qonnx_datatype,
 )
 QONNX_DATATYPE_SEMANTICS = cast(ValueSemantics[object], QONNX_DATATYPE_VALUE_SEMANTICS)
