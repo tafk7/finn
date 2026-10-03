@@ -20,13 +20,15 @@ from onnx import helper
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.core.onnx_exec import execute_onnx
 from qonnx.custom_op.registry import getCustomOp
-from qonnx.custom_op.registry import _get_op_type_for_class, _get_op_version_for_class
+from qonnx.custom_op.registry import get_domain_opset_version, op_identity
 
 import finn.custom_op.kernels as domain
 from finn.custom_op.kernels.base import TARGET_DSP, KernelOp, KernelOpError
 from finn.custom_op.kernels.matmul import MatMul
 from finn.custom_op.kernels.roots import StoredMatMulNode, StreamedMatMulNode
+from finn.custom_op.kernels.thresholding import Thresholding
 from finn.kernels.matmul import MatMulKernel
+from finn.kernels.thresholding import ThresholdingAxiKernel
 from finn.transformation.general import ApplyConfig
 from kernel_ops.models import INT3, WEIGHTS, X, lift, matmul_model
 
@@ -237,13 +239,14 @@ def test_the_domain_resolves_at_its_version_without_a_fallback() -> None:
     with warnings.catch_warnings():
         warnings.simplefilter("error")
         assert isinstance(getCustomOp(model.graph.node[0], onnx_opset_version=1), MatMul)
-    # The stated identity is what the pinned registry derives from the class name.
-    assert "op_type" in MatMul.__dict__ and "op_version" in MatMul.__dict__
-    assert (_get_op_type_for_class(MatMul), _get_op_version_for_class(MatMul)) == (
-        MatMul.op_type,
-        MatMul.op_version,
-    )
-    assert MatMul.op_version == MatMulKernel.version
+    # Each op class states its identity in its own body (Q2): qonnx's rule reads it
+    # there, and the domain's opset version is the one the module states.
+    for op in (MatMul, Thresholding):
+        assert "op_type" in vars(op) and "op_version" in vars(op)
+        assert op_identity(op) == (op.op_type, op.op_version)
+    assert op_identity(MatMul) == ("MatMul", MatMulKernel.version)
+    assert op_identity(Thresholding) == ("Thresholding", ThresholdingAxiKernel.version)
+    assert get_domain_opset_version("finn.custom_op.kernels") == domain.opset_version
     assert domain.__all__ == ["MatMul", "Thresholding"]
     with pytest.raises(TypeError, match="op_type"):
 
