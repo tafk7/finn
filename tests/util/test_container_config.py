@@ -1134,6 +1134,28 @@ def test_environment_wins_over_the_machine_file(tmp_path):
     assert values == {"FINN_XILINX_PATH": "/opt/Xilinx", "FINN_XILINX_VERSION": "2026.1"}
 
 
+@pytest.mark.parametrize("licensed", (True, False))
+def test_the_machine_files_licence_reaches_activation(tmp_path, licensed):
+    """scripts/activate.sh evals `inspect --tier build --format sh`: a licence
+    server named in the machine file arrives as XILINXD_LICENSE_FILE (FlexLM's
+    port@host), and without one the variable is absent and nothing is said."""
+    root = _make_tree(str(tmp_path / "Xilinx"), "new", "2025.1")
+    lines = ["FINN_XILINX_PATH=%s" % root, "FINN_XILINX_VERSION=2025.1"]
+    if licensed:
+        lines += ["FINN_LICENSE_HOST=licsrv.example", "FINN_LICENSE_PORT=2100"]
+    path = _machine_file(tmp_path, "\n".join(lines) + "\n")
+    proc = subprocess.run(
+        [FINN_ENV, "inspect", "--tier", "build", "--format", "sh"],
+        capture_output=True,
+        text=True,
+        env={"PATH": os.environ["PATH"], "HOME": str(tmp_path), "FINN_XILINX_ENV": path},
+    )
+    assert proc.returncode == 0, proc.stderr
+    licence = [line for line in proc.stdout.splitlines() if "LICENSE" in line]
+    assert licence == (["XILINXD_LICENSE_FILE='2100@licsrv.example'"] if licensed else [])
+    assert "licen" not in proc.stderr.lower()
+
+
 def test_default_machine_file_location(tmp_path):
     config = tmp_path / "config" / "finn"
     config.mkdir(parents=True)
