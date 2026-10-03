@@ -84,10 +84,10 @@ class Chain(Root):
         return self.second.result_tensor
 
     x = Stream(tensor=Tensor((ROWS, INPUTS), ScalarEncoding(A)), port="in0_V")
-    w1 = BufferedStream(tensor=w1_tensor)
+    w1 = BufferedStream(tensor=w1_tensor, contents=W1)
     hidden = Stream(tensor=hidden_tensor)
     levels = Stream(tensor=Tensor((ROWS, HIDDEN), ScalarEncoding(T)))
-    w2 = BufferedStream(tensor=w2_tensor)
+    w2 = BufferedStream(tensor=w2_tensor, contents=W2)
     y = Stream(tensor=y_tensor, port="out0_V")
     first = matmul(INPUTS, HIDDEN, A, W1, x_stream=x, w_stream=w1, y_stream=hidden)
     activate = ThresholdingAxiKernel(
@@ -105,17 +105,17 @@ class Chain(Root):
 def configured(root: Root, layers: tuple[str, ...] = ("first", "second"), **extra: object) -> Any:
     choices: dict[str, object] = dict(extra)
     for layer, stream in zip(layers, ("w1", "w2")):
-        choices |= {f"{layer}.memory": "memstream", f"{stream}.transport": "direct"}
+        choices |= {f"{stream}.source": "memstream", f"{stream}.transport": "direct"}
     point = settled(commit(design_space(root), choices))
     # The Decisions inside the subspaces just selected, each keyed by its owner.
     nested: dict[str, object] = {}
-    for layer in layers:
+    for layer, stream in zip(layers, ("w1", "w2")):
         nested |= {
             f"{layer}.compute.packed.pe": PE,
             f"{layer}.compute.packed.simd": SIMD,
             f"{layer}.compute.packed.compute_pumping": False,
-            f"{layer}.memory.memstream.ram_style": "auto",
-            f"{layer}.memory.memstream.pumped_memory": False,
+            f"{stream}.source.memstream.ram_style": "auto",
+            f"{stream}.source.memstream.pumped_memory": False,
         }
     return settled(commit(point, nested))
 
@@ -142,10 +142,10 @@ def test_each_edge_carries_its_own_adapter_and_the_netlist_is_flat():
         "x.adapter.input_gen.input_gen",
         "levels.adapter.input_gen.input_gen",
         "first.compute.packed",
-        "first.memory.memstream",
+        "w1.source.memstream",
         "activate",
         "second.compute.packed",
-        "second.memory.memstream",
+        "w2.source.memstream",
     ]
     # The root's own ports are its boundary streams.
     assert {port.name for port in point.module.pins.ports} == {

@@ -39,7 +39,6 @@ FACTS = dict(
 def point(core="int8_dsp58", **facts):
     facts = {**FACTS, "target_period_ns": 5.0, **facts}
     choices = {
-        "matmul.memory": "none",
         "w.transport": "direct",
         "matmul.compute": core,
         f"matmul.compute.{core}.pe": 2,
@@ -129,7 +128,7 @@ def test_one_root_carries_the_weights_of_whichever_realization_is_committed():
     # follows the realization: open, the tensor waits on it.
     weights = tuple(tuple((c + k) % 7 - 3 for c in range(4)) for k in range(9))
     point = commit(
-        matmul_point(**FACTS, target_period_ns=5.0, weights=weights), {"matmul.memory": "memstream"}
+        matmul_point(**FACTS, target_period_ns=5.0, weights=weights), {"w.source": "memstream"}
     )
     pending = point.query(matmul_root(MatMulKernel).w.tensor)
     assert isinstance(pending, Unresolved)
@@ -149,8 +148,8 @@ def test_one_root_carries_the_weights_of_whichever_realization_is_committed():
                     f"matmul.compute.{core}.pe": 2,
                     f"matmul.compute.{core}.simd": 3,
                     f"matmul.compute.{core}.compute_pumping": False,
-                    "matmul.memory.memstream.ram_style": "auto",
-                    "matmul.memory.memstream.pumped_memory": False,
+                    "w.source.memstream.ram_style": "auto",
+                    "w.source.memstream.pumped_memory": False,
                 },
             )
         ).query(Kernel.module)
@@ -181,7 +180,7 @@ def test_a_dense_realization_reads_window_by_channel_rows_against_block_diagonal
     assert labels(built.module) == [
         "x.adapter.input_gen.input_gen",
         "matmul.compute.packed",
-        "matmul.memory.memstream",
+        "w.source.memstream",
     ]
     compute = parameters(built.module, "matmul.compute.packed")
     assert compute["ACTIVATION_BROADCASTING"] == 1 and compute["SIMD"] == 4

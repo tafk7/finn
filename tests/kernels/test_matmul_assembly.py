@@ -78,7 +78,7 @@ def test_stored_image_has_output_then_reduction_then_pe_simd_order():
     # Hand-packed INT3 lanes: p0/s0, p0/s1, p1/s0, p1/s1, low first.
     assert built.initializer == (0x22C, 0x6BE, 0xDD3, 0x941)
     assert "in1_V" not in {port.name for port in built.module.pins.ports}
-    memory = dict(placed(built.module, "matmul.memory.memstream").parameters)
+    memory = dict(placed(built.module, "w.source.memstream").parameters)
     assert {name: memory[name] for name in ("DEPTH", "WIDTH", "SETS", "RAM_STYLE")} == {
         "DEPTH": 4,
         "WIDTH": 12,
@@ -158,7 +158,7 @@ def test_invalid_configuration_fails_during_construction(changes, match):
 
 
 def test_the_space_settles_the_core_and_the_core_owns_its_folding_factors():
-    base = commit(matmul_point(**FACTS), {"matmul.memory": "none", "w.transport": "direct"})
+    base = commit(matmul_point(**FACTS), {"w.transport": "direct"})
     # On DSP48E2 only the packed core admits the configuration, before any folding factor.
     settled_core = settle(base)
     assert settled_core.committed == {"matmul.compute": "packed"}
@@ -257,7 +257,6 @@ def test_matmul_honors_the_child_physical_view_not_just_its_raw_module(monkeypat
     point = commit(
         matmul_point(**FACTS),
         {
-            "matmul.memory": "none",
             "matmul.compute": "packed",
             "matmul.compute.packed.pe": 2,
             "matmul.compute.packed.simd": 2,

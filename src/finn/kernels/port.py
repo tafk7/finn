@@ -199,10 +199,13 @@ class AxiStreamPort(Port):
     admits: Integer | None = Param(default=None, semantics=INTEGER_POLICY)
     # Ready/valid pins (data, valid, ready) carrying the words instead of an AXIS bus.
     signals: tuple[str, ...] = Param(default=())
+    # PROBE (stream source): a port of a stream's source, placed by the stream itself, so
+    # it presents its given sequence and dtype without a stream reference.
+    staged: bool = Param(default=False)
 
     @derived
     def idle(self) -> bool:
-        return not self.present(AxiStreamPort.stream)
+        return not self.present(AxiStreamPort.stream) and not self.staged
 
     @derived
     def presented(self) -> BeatSequence | Rejected:

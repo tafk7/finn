@@ -219,15 +219,20 @@ for memory in ("none", "memstream"):
 
     class Placed(Root):
         x = Stream(tensor=Tensor((2, 4), INT3), port="in0_V")
-        w = BufferedStream(tensor=Tensor((4, 4), INT3), port="in1_V")
+        w = BufferedStream(
+            tensor=Tensor((4, 4), INT3),
+            port="in1_V",
+            **({"contents": facts["weights"]} if "weights" in facts else {}),
+        )
         y = Stream(tensor=Tensor((2, 4), INT8), port="out0_V")
         matmul = MatMulKernel(**facts, x_stream=x, w_stream=w, y_stream=y)
 
-    choices = {"matmul.memory": memory, "w.transport": "direct", "matmul.compute": "packed"}
+    choices = {"w.transport": "direct", "matmul.compute": "packed"}
     if memory == "memstream":
         choices |= {
-            "matmul.memory.memstream.ram_style": "auto",
-            "matmul.memory.memstream.pumped_memory": False,
+            "w.source": "memstream",
+            "w.source.memstream.ram_style": "auto",
+            "w.source.memstream.pumped_memory": False,
         }
     root = commit(design_space(Placed()), choices)
     root = commit(

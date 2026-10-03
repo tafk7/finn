@@ -16,6 +16,12 @@ values it streams, so it states their ``value_range`` on its output: its element
   pass per index; the set stream is an ordinary stream reference input.
 - Its AXI-Lite port is tied off: the contents are fixed at build time.
 
+PROBE (stream source): it is a stream's ``source`` candidate (``finn.kernels.streams``),
+placed by the stream with ``staged``: its output presents into that stream without a
+reference to it, and its set port references the stream's ``index``. Its ``ram_style``
+domain reads the ``platform``: no ``ultra`` without UltraRAM, nor on Zynq UltraScale+,
+where an initialized UltraRAM is built as block RAM (the packaging note's P6).
+
 ``ram_style`` and ``pumped_memory`` are its choices. A pumped memory runs at
 ``ap_clk2x`` on half-width words and doubles the depth; its 2x clock pin is
 driven by role, and tied low when unpumped.
@@ -30,10 +36,13 @@ from math import ceil
 from finn.core.space import (
     ConstraintGroup,
     Decision,
+    Domain,
     Param,
     Rejected,
     constraint,
+    default_semantics,
     derived,
+    domain,
     reject,
 )
 from finn.dataflow.datatypes import (
@@ -63,13 +72,35 @@ from finn.kernels.datatypes.semantics import (
     IntegerVector,
     integer_range,
 )
+from finn.dataflow.stream import Stream
 from finn.kernels.port import AxiStreamPort
-from finn.kernels.streams import Stream
+from finn.kernels.target import Platform
 
 LANE = Index("lane")
 """The lanes of a stored word, one per lane of the consumer's form."""
 
 MEMSTREAM_RAM_STYLES = ("auto", "distributed", "block", "ultra")
+
+
+def ram_styles(platform: object) -> Domain[str]:
+    """The memory styles a platform offers an initialized memory (module docstring)."""
+
+    def offered(platform: Platform) -> tuple[str, ...]:
+        ultra = platform.uram and platform.family != "zynq_us+"
+        return tuple(style for style in MEMSTREAM_RAM_STYLES if style != "ultra" or ultra)
+
+    def accepts(*, candidate: str, platform: Platform) -> bool:
+        return candidate in offered(platform)
+
+    def candidates(*, platform: Platform) -> tuple[str, ...]:
+        return offered(platform)
+
+    return domain(
+        accepts=accepts,
+        candidates=candidates,
+        semantics=default_semantics(str),
+        platform=platform,
+    )
 
 
 class MemStreamKernel(Kernel):
@@ -85,7 +116,10 @@ class MemStreamKernel(Kernel):
     # (several sets only).
     output_stream: Stream = Param(required=False)
     set_stream: Stream = Param(required=False)
-    ram_style: str = Decision(values=MEMSTREAM_RAM_STYLES)
+    # A stream's source: placed by the stream it drives (module docstring).
+    staged: bool = Param(default=False)
+    platform: Platform = Param(default=Platform())
+    ram_style: str = Decision(domain=ram_styles(platform))
     pumped_memory: bool = Decision(values=(False, True))
 
     @derived
@@ -246,6 +280,7 @@ class MemStreamKernel(Kernel):
         name="m_axis_0",
         endpoint=Endpoint.INITIATOR,
         stream=output_stream,
+        staged=staged,
         sequence=output_sequence,
         dtype=dtype,
         value_range=value_range,

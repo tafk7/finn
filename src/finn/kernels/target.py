@@ -5,7 +5,23 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from enum import Enum
+
+
+@dataclass(frozen=True)
+class Platform:
+    """PROBE (stream source): the platform facts a weight source's candidates refuse on.
+
+    ``family`` (``"zynq_us+"``, ``"versal"``, or None: not stated), whether the device
+    has UltraRAM, and how many memory-mapped ports a fetcher may use. Its home is the
+    model's typed platform metadata (qonnx Q6); the default states nothing and so
+    refuses nothing a known platform would allow, URAM included.
+    """
+
+    family: str | None = None
+    uram: bool = True
+    memory_ports: int = 0
 
 
 class DspBlock(str, Enum):
@@ -33,4 +49,4 @@ def dsp_widths(target: object) -> tuple[int, int, int]:
         raise ValueError(f"unsupported target DSP {name!r}") from error
 
 
-__all__ = ["DspBlock", "dsp_widths"]
+__all__ = ["DspBlock", "Platform", "dsp_widths"]

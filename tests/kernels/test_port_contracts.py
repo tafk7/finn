@@ -199,7 +199,6 @@ def test_one_kernel_refusal_reaches_only_its_own_stream():
             target_period_ns=5.0,
         ),
         {
-            "matmul.memory": "none",
             "w.transport": "direct",
             "matmul.compute": "packed",
             "matmul.compute.packed.pe": 2,

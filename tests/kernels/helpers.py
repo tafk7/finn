@@ -15,9 +15,11 @@ buffered), ``y`` (``out0_V``) and, with several weight sets, ``set``
 MatMul's view of it (``activation_tensor``, ``weight_tensor``,
 ``result_tensor``, ``set_tensor``), which reads only MatMul's facts and its
 ``realization``: one root serves every realization, a depthwise MatMul's left
-open until committed. The edge choices are the root's (``x.adapter``,
-``w.transport``), the MatMul's below it (``matmul.memory``,
-``matmul.compute.packed.pe``). ``matmul_assembly`` configures one from
+open until committed. Known weights are the weight stream's ``contents``
+(MatMul's ``weight_values``), with ``set`` its ``index``, so the stream's
+``source`` stores them (PROBE: design/stream-source). The edge choices are the
+root's (``x.adapter``, ``w.transport``, ``w.source``), the MatMul's below it
+(``matmul.compute.packed.pe``). ``matmul_assembly`` configures one from
 concrete facts and choices."""
 
 import os
@@ -170,10 +172,16 @@ def matmul_root(family: type[MatMulKernel]) -> type[Root]:
         def set_tensor(self) -> Tensor:
             return self.matmul.set_tensor
 
+        @derived(semantics=INTEGER_TENSOR)
+        def w_contents(self) -> IntegerTensor:
+            return self.matmul.weight_values
+
         x = Stream(tensor=x_tensor, port="in0_V")
-        w = BufferedStream(tensor=w_tensor, port="in1_V")
-        y = Stream(tensor=y_tensor, port="out0_V")
         set = Stream(tensor=set_tensor, port="in2_V", when=several)
+        w = BufferedStream(
+            tensor=w_tensor, contents=w_contents, sets=weight_sets, index=set, port="in1_V"
+        )
+        y = Stream(tensor=y_tensor, port="out0_V")
         matmul = family(
             m=m,
             n=n,
@@ -188,7 +196,6 @@ def matmul_root(family: type[MatMulKernel]) -> type[Root]:
             x_stream=x,
             w_stream=w,
             y_stream=y,
-            set_stream=set,
         )
 
     return MatMul
@@ -284,7 +291,7 @@ def vivado_simulator() -> bool:
 
 
 class WeightDelivery(Enum):
-    """Where the weights come from: the ``memory`` Decision's case for each."""
+    """Where the weights come from: the weight stream's ``source`` case, or none (external)."""
 
     EXTERNAL = "none"
     MEMSTREAM = "memstream"
@@ -378,13 +385,14 @@ def matmul_assembly(
         facts["weights"] = _frozen(weights)
     case = weight_delivery.value
     buffered = weight_fifo_depth is not None
-    choices: dict[str, object] = {
-        "matmul.memory": case,
-        "w.transport": "fifo" if buffered else "direct",
-    }
+    choices: dict[str, object] = {"w.transport": "fifo" if buffered else "direct"}
+    # The weight stream's source applies once its value is known, which a depthwise
+    # MatMul's realization decides (block-diagonal or not): committed after it.
+    source: dict[str, object] = {}
     if weight_delivery is WeightDelivery.MEMSTREAM:
-        choices["matmul.memory.memstream.ram_style"] = ram_style
-        choices["matmul.memory.memstream.pumped_memory"] = pumped_memory
+        source["w.source"] = case
+        source["w.source.memstream.ram_style"] = ram_style
+        source["w.source.memstream.pumped_memory"] = pumped_memory
     if buffered:
         choices["w.transport.fifo.buffer.depth"] = weight_fifo_depth
         choices["w.transport.fifo.buffer.ram_style"] = "auto"
@@ -399,6 +407,7 @@ def matmul_assembly(
             named = ", ".join(viable) or "none"
             raise ValueError(f"realizations compatible with this configuration: {named}")
         point = commit(point, {"matmul.realization": viable[0]})
+    point = commit(point, source) if source else point
     if core is None:
         settlement = settle(point)
         if "matmul.compute" not in settlement.committed:
@@ -435,6 +444,6 @@ def matmul_assembly(
         matmul.result_type,
         weight_delivery,
         built.value,
-        matmul.memory.image if matmul.memory is not None else (),
+        point.w.source.image if point.w.valued else (),
         point,
     )

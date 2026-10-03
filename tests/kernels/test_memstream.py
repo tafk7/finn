@@ -105,7 +105,7 @@ def test_matmul_memstream_delivery_materializes_its_image(tmp_path):
     assert labels(built.module) == [
         "x.adapter.input_gen.input_gen",
         "matmul.compute.packed",
-        "matmul.memory.memstream",
+        "w.source.memstream",
     ]
     assert built.initializer == (0x22C, 0x6BE, 0xDD3, 0x941)
     assert "in1_V" not in pin_names(built.module)
@@ -118,7 +118,7 @@ def test_several_weight_sets_take_a_set_index_per_row():
     sets = (WEIGHTS, tuple(tuple(-value - 1 for value in row) for row in WEIGHTS))
     built = matmul_assembly(**{**MATMUL, "weights": sets}, weight_sets=2)
     assert "in2_V" in pin_names(built.module)
-    memstream = dict(placed(built.module, "matmul.memory.memstream").parameters)
+    memstream = dict(placed(built.module, "w.source.memstream").parameters)
     assert memstream["SETS"] == 2
     assert len(built.initializer) == 8  # both sets, set after set
     facts = {name: MATMUL[name] for name in ("m", "k", "n", "target_dsp")}
@@ -131,4 +131,4 @@ def test_several_weight_sets_take_a_set_index_per_row():
         )
     )
     keys = {item.key for item in inspection.decisions(base)}
-    assert {"memory.memstream.ram_style", "memory.memstream.pumped_memory"} <= keys
+    assert {"w.source.memstream.ram_style", "w.source.memstream.pumped_memory"} <= keys

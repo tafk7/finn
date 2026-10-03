@@ -36,8 +36,8 @@ MATMUL = {
     "compute.packed.pe": chain.PE,
     "compute.packed.simd": chain.SIMD,
     "compute.packed.compute_pumping": False,
-    "memory.memstream.ram_style": "auto",
-    "memory.memstream.pumped_memory": False,
+    "w.source.memstream.ram_style": "auto",
+    "w.source.memstream.pumped_memory": False,
     "w.transport": "direct",
 }
 THRESHOLDING = {

@@ -16,33 +16,32 @@ operation runs natively (one channel per PE lane, INT8 DSP58 only) or, by the
 ``realization`` Decision, on the dense datapath with block-diagonal weights,
 reading its (M, K, N) activations as (M, K * N).
 
-``MatMulKernel`` is a kernel with children: the kernels and Decisions over
-kernels that sit on the streams its parent supplies, ``x_stream`` (the
-activations), ``w_stream`` (the weights), ``y_stream`` (the results) and, with
-several weight sets, ``set_stream`` (the set index). Each stream, its adapter
-and its FIFO are its parent's: the parent (a test harness, a KernelOp's node root, a partition root)
-declares each stream and either binds its tensor to MatMul's view of it
-(``activation_tensor``, ``weight_tensor``, ``result_tensor``, ``set_tensor``),
-which reads only MatMul's facts and ``realization``, never a port, or states
-it; ``carried`` refuses a stated tensor of another shape, or whose values do
-not fit (``matmul-tensor``): MatMul's values must fit a stream it produces,
-and a stream's values must fit what MatMul consumes. A boundary stream there presents its
-``port`` name (``in0_V``).
+``MatMulKernel`` is a kernel with children: the compute cores that sit on the
+streams its parent supplies, ``x_stream`` (the activations), ``w_stream`` (the
+weights) and ``y_stream`` (the results). Each stream, its adapter, its FIFO
+and its source are its parent's: the parent (a test harness, a KernelOp's node
+root, a partition root) declares each stream and either binds its tensor to
+MatMul's view of it (``activation_tensor``, ``weight_tensor``,
+``result_tensor``, ``set_tensor``), which reads only MatMul's facts and
+``realization``, never a port, or states it; ``carried`` refuses a stated
+tensor of another shape, or whose values do not fit (``matmul-tensor``):
+MatMul's values must fit the stream it produces, and a stream's values must
+fit what MatMul consumes. A boundary stream there presents its ``port`` name
+(``in0_V``).
 
 Known ``weights`` are values MatMul owns: its ``weight_tensor`` states their
-range (``INT4 over [-7, 7]``), and so does the memory that streams them, from
-the same contents; a consumer derives from the range what it may (the packed
-core's ``NARROW_WEIGHTS``). Unknown weights carry the datatype's range.
+range (``INT4 over [-7, 7]``), and its ``weight_values`` view is the value the
+weight stream carries (block-diagonal when densely realized); the parent binds
+it to the stream's ``contents``, so the stream's ``source`` stores them
+(PROBE: design/stream-source; with several sets, the parent's set stream is
+the stream's ``index``). A consumer derives from the range what it may (the
+packed core's ``NARROW_WEIGHTS``). Unknown weights carry the datatype's range.
 
 - ``compute`` is a Decision over the dot-product cores. They share the facts
   and streams. Each core owns its folding factors (``compute.<core>.pe``,
   ``.simd``, ``.compute_pumping``) and derives every stream's beat sequence
   from its schedule.
-- ``memory`` is an optional Decision over the weight memories: none (the
-  weight stream's producer is its parent's, a boundary for instance) or a
-  ``memstream``, which drives the weight stream with one period of the order
-  the core reads, per weight set, fixed at build time. Known weights are
-  stored by a memory, and only they (``matmul-memory``).
+- Where the weights come from is the weight stream's ``source``, not MatMul's.
 - The activation stream's plan replays each dense row and frames each
   reduction; the stream's adapter carries that out.
 
@@ -62,7 +61,6 @@ from finn.core.space import (
     constraint,
     derived,
     reject,
-    selected,
     view,
 )
 from finn.dataflow.datatypes import (
@@ -73,7 +71,6 @@ from finn.dataflow.datatypes import (
 )
 from finn.dataflow.gemm import Form
 from finn.dataflow.tensor import ScalarEncoding, Tensor
-from finn.dataflow.traversal import Traversal, period
 from finn.kernels.artifacts.module import ProducerIdentity
 from finn.kernels.base import Kernel
 from finn.kernels.datatypes.domains import set_index_dtype
@@ -84,7 +81,6 @@ from finn.kernels.datatypes.semantics import (
     integer_range,
 )
 from finn.kernels.dotp import Int8Dsp58DotpKernel, PackedDotpKernel
-from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.streams import Stream
 from finn.kernels.target import DspBlock
 
@@ -93,7 +89,6 @@ _CARRIED = (
     ("x_stream", "activation_tensor"),
     ("w_stream", "weight_tensor"),
     ("y_stream", "result_tensor"),
-    ("set_stream", "set_tensor"),
 )
 """Each stream MatMul sits on, and its view of the tensor the stream carries."""
 
@@ -237,6 +232,15 @@ class MatMulKernel(Kernel):
     def result_tensor(self) -> Tensor | Rejected:
         return self._tensor((self.m, self.n), self.result_type)
 
+    @derived
+    def known(self) -> bool:
+        return self.present(MatMulKernel.weights)
+
+    @view(when=known, semantics=INTEGER_TENSOR)
+    def weight_values(self) -> IntegerTensor:
+        """The value the weight stream carries: the datapath's weights, one operand per set."""
+        return self.datapath_weights
+
     @view
     def set_tensor(self) -> Tensor | Rejected:
         """One set index per row, as wide as the memory's selector."""
@@ -246,22 +250,21 @@ class MatMulKernel(Kernel):
     x_stream: Stream = Param(required=False)
     w_stream: Stream = Param(required=False)
     y_stream: Stream = Param(required=False)
-    set_stream: Stream = Param(required=False)
 
     @constraint
     def carried(self) -> bool | Rejected:
         """Each supplied stream carries a tensor of the shape MatMul derives for it.
 
-        On a stream MatMul produces (the results, and the weights when they are
-        known: its memory streams them) MatMul's values fit the stream's
-        element; on a stream it consumes, the stream's values fit MatMul's.
+        On a stream that carries MatMul's own values (the results, and the
+        weights when known: MatMul owns them, the stream's source streams them)
+        MatMul's values fit the stream's element; on a stream it consumes, the
+        stream's values fit MatMul's.
         """
-        known = self.present(MatMulKernel.weights)
         for reference, tensor in _CARRIED:
             if not self.present(getattr(MatMulKernel, reference)):
                 continue
             supplied, derived_ = getattr(self, reference).tensor, getattr(self, tensor)
-            produced = reference == "y_stream" or (reference == "w_stream" and known)
+            produced = reference == "y_stream" or (reference == "w_stream" and self.known)
             inner, outer = (derived_, supplied) if produced else (supplied, derived_)
             if supplied.shape != derived_.shape or not inner.element.fits(outer.element):
                 return reject(
@@ -287,47 +290,22 @@ class MatMulKernel(Kernel):
         y_stream=y_stream,
     )
 
-    @derived
-    def weight_period(self) -> Traversal:
-        """One pass of the weights in the order the core reads them: what a memory stores."""
-        return period(self.compute.w.presented.form)
-
-    # The weight memories. Each drives w_stream.
-    memory: MemStreamKernel | None = Decision(
-        {"memstream": MemStreamKernel(set_stream=set_stream)},
-        optional=True,
-        dtype=weights_dtype,
-        form=weight_period,
-        contents=datapath_weights,
-        sets=weight_sets,
-        output_stream=w_stream,
-    )
-    supplied = selected(memory)
-
-    @constraint
-    def supply_supported(self) -> bool | Rejected:
-        if self.present(MatMulKernel.weights) != (self.supplied != "none"):
-            return reject("matmul-memory", "known weights are stored by a memory, and only they")
-        if self.supplied == "none" and self.multi_set:
-            return reject("matmul-sets", "several weight sets need a memory")
-        return True
-
     @constraint
     def realization_supported(self) -> bool | Rejected:
-        if self.dense_view and self.supplied == "none":
+        if self.dense_view and not self.known:
             return reject(
                 "matmul-realization",
                 "a dense realization builds block-diagonal weights, so it needs known weights",
             )
         return True
 
-    admission = ConstraintGroup(extents_supported, realization_supported, supply_supported, carried)
+    admission = ConstraintGroup(extents_supported, realization_supported, carried)
 
     def stem(self) -> str:
-        return "finn_matmul_" + self.supplied
+        return "finn_matmul"
 
     def producer_identity(self) -> ProducerIdentity:
-        return ProducerIdentity("finn.matmul." + self.supplied, str(type(self).version))
+        return ProducerIdentity("finn.matmul", str(type(self).version))
 
 
 __all__ = ["MatMulKernel", "exact_result_dtype"]

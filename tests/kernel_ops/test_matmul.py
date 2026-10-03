@@ -174,15 +174,15 @@ def test_a_choice_goes_stale_when_a_fact_changes() -> None:
 
 def test_a_lifted_initializer_drops_what_the_streamed_root_cannot_apply() -> None:
     model = matmul_model()
-    op(model).save({**FOLDING, "memory.memstream.ram_style": "block"})
+    op(model).save({**FOLDING, "w.source.memstream.ram_style": "block"})
     lift(model, "w")
     model.set_tensor_datatype("w", INT3)
     assert op(model).facts().root is StreamedMatMulNode
     with pytest.raises(KernelOpError) as error:
         op(model).point()
-    assert error.value.keys == ("memory.memstream.ram_style",)
-    assert op(model).drop_inapplicable() == ("memory.memstream.ram_style",)
-    assert "memory.memstream.ram_style" not in attributes(model)
+    assert error.value.keys == ("w.source.memstream.ram_style",)
+    assert op(model).drop_inapplicable() == ("w.source.memstream.ram_style",)
+    assert "w.source.memstream.ram_style" not in attributes(model)
     assert op(model).verify_node() == []
 
 
