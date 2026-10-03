@@ -22,9 +22,9 @@ Two kinds of attribute:
 
 Replay commits the node's choices atomically on its cached base point; a choice
 nested under a selector the interim rule leaves unpersisted (``compute.packed.pe``
-with ``compute`` settle's) is inapplicable until that selector is committed, so
-a refused replay settles and commits again. ``save`` takes choices, never a
-point, so settle's commitments never reach a node. A refusal names every
+with ``compute`` open) reads its selector's implied case (PROTOTYPE: implied
+decisions). ``save`` takes choices, never a point, so implied cases never reach
+a node. A refusal names every
 refused key, an inapplicable one too (it carries no finding of its own).
 """
 
@@ -51,7 +51,7 @@ from finn.dataflow.datatypes import (
 )
 from finn.dataflow.tensor import Tensor
 from finn.kernels.base import Kernel
-from finn.kernels.configure import describe, settle
+from finn.kernels.configure import describe
 from finn.kernels.streams import Stream
 from finn.kernels.target import DspBlock
 
@@ -175,16 +175,13 @@ def committed(point: S, choices: Mapping[str, object]) -> S | dict[str, str]:
 
 
 def replay(base: S, choices: Mapping[str, object]) -> S | dict[str, str]:
-    """Commit persisted ``choices`` on ``base``; if refused, settle and commit again.
+    """Commit persisted ``choices`` on ``base``.
 
-    A choice nested under a selector settle commits is inapplicable until it is,
-    and the interim rule persists no settled selector. Settle's own commitments
-    stay out of the node: only the point carries them.
+    A choice nested under a selector nobody committed (``compute.packed.pe`` with
+    ``compute`` open) is applicable when the selector is implied (its one viable
+    case); implied cases are never committed, so nothing settles here.
     """
-    first = committed(base, choices)
-    if not isinstance(first, dict):
-        return first
-    return committed(settle(base).point, choices)
+    return committed(base, choices)
 
 
 # -- the op ------------------------------------------------------------------------------

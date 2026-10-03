@@ -12,8 +12,8 @@
   inputs and outputs are boundaries, named ``in<i>_V`` and ``out<i>_V`` (D4): a
   stream refuses a boundary no port names (``stream-boundary``);
 - **kernels**, one per node, from its facts, the graph's pins as keywords;
-- **replay**: each node's kernel choices, then a settle, then the edge choices
-  (an edge's adapter selector is settle's, never persisted); an edge choice the
+- **replay**: each node's kernel choices, then the edge choices (an edge's
+  adapter selector is implied, never persisted); an edge choice the
   current graph refuses is stale, dropped and reported, and settling picks
   again;
 - **owners**: each member's node and attribute prefix, how a choice made in the
@@ -44,7 +44,6 @@ from finn.custom_op.kernels.base import (
 )
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.base import Kernel
-from finn.kernels.configure import settle
 from finn.kernels.streams import BufferedStream, Stream
 
 
@@ -157,7 +156,8 @@ def partition_root(model: Any, nodes: Iterable[Any], *, name: str = "partition")
         point = replayed
     dropped: list[str] = []
     if edge_choices:
-        point = settle(point).point
+        # PROTOTYPE (implied decisions): an edge's adapter selector is implied, so its
+        # nested choices apply without a settle.
         edges = _typed(point, edge_choices)
         together = committed(point, edges)
         if isinstance(together, dict):
