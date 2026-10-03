@@ -29,7 +29,7 @@ from qonnx.custom_op.registry import is_custom_op
 from qonnx.transformation.base import Transformation
 from qonnx.transformation.infer_datatypes import _infer_node_datatype
 
-from finn.custom_op.kernels.base import KernelOp, KernelOpError, annotated, datatype
+from finn.custom_op.kernels.base import KernelOp, KernelOpError, datatype
 from finn.dataflow.datatypes import DatatypeError, QONNXDataType, ordinary_integer_bounds
 
 
@@ -76,7 +76,7 @@ class InferKernelTensors(Transformation):  # type: ignore[misc]
                 op.infer_node_datatype(model)
                 continue
             for name, (dims, dtype) in op.infer_output_tensors(model).items():
-                if annotated(model, name):
+                if model.has_tensor_datatype(name):
                     stated = datatype(model, name, op.label)
                     if stated.name != "FLOAT32" and not _admits(stated, dtype):
                         raise KernelOpError(
