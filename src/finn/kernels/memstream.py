@@ -61,7 +61,7 @@ from finn.kernels.datatypes.semantics import (
     QONNX_DATATYPE_VALUE_SEMANTICS,
     IntegerTensor,
     IntegerVector,
-    integers,
+    integer_range,
 )
 from finn.kernels.port import AxiStreamPort
 from finn.kernels.streams import Stream
@@ -91,13 +91,13 @@ class MemStreamKernel(Kernel):
     @derived
     def value_range(self) -> tuple[int, ...] | Rejected:
         """The minimum and maximum of its contents, every set."""
-        values = integers(self.contents)
+        least, greatest = integer_range(self.contents)
         low, high = ordinary_integer_bounds(self.dtype)
-        if not low <= min(values) <= max(values) <= high:
+        if not low <= least <= greatest <= high:
             return reject(
                 "memstream-values", f"every value must be an integer admitted by {self.dtype.name}"
             )
-        return (min(values), max(values))
+        return (least, greatest)
 
     @derived
     def element(self) -> ScalarEncoding | Rejected:

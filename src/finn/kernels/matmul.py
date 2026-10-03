@@ -81,7 +81,7 @@ from finn.kernels.datatypes.semantics import (
     INTEGER_TENSOR,
     QONNX_DATATYPE_VALUE_SEMANTICS,
     IntegerTensor,
-    integers,
+    integer_range,
 )
 from finn.kernels.dotp import Int8Dsp58DotpKernel, PackedDotpKernel
 from finn.kernels.memstream import MemStreamKernel
@@ -221,14 +221,14 @@ class MatMulKernel(Kernel):
         shape = (self.datapath_k, self.n)
         if not self.present(MatMulKernel.weights):
             return self._tensor(shape, self.weights_dtype)
-        values = integers(self.datapath_weights)
+        least, greatest = integer_range(self.datapath_weights)
         low, high = ordinary_integer_bounds(self.weights_dtype)
-        if not low <= min(values) <= max(values) <= high:
+        if not low <= least <= greatest <= high:
             return reject(
                 "memstream-values",
                 f"every value must be an integer admitted by {self.weights_dtype.name}",
             )
-        element = ScalarEncoding.admit(self.weights_dtype, (min(values), max(values)))
+        element = ScalarEncoding.admit(self.weights_dtype, (least, greatest))
         if isinstance(element, Rejected):
             return element
         return Tensor(shape, element)
