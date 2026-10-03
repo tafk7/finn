@@ -257,15 +257,24 @@ def _dotp_axi(core: str) -> CopiedSource:
 class PackedDotpKernel(DotpAxiKernel):
     """FinnLib ``dotp``: activation and weight lanes packed into DSP48E1, DSP48E2 or DSP58.
 
-    Activations are broadcast (``DENSE`` only). ``narrow_weights`` promises that
-    no weight is the most negative value of its type, which packs more lanes
-    per DSP; the caller must keep that promise.
+    Activations are broadcast (``DENSE`` only). ``narrow_weights`` derives from
+    the weight stream's element: when its range excludes the type's most
+    negative value (a value owner stated it), a weight needs no sign guard bit,
+    which packs more lanes per DSP and admits weights as wide as the DSP's A
+    input. FinnLib stops simulation on a weight that breaks it.
     """
 
     id = "finnlib.dotp_axi.dotp"
     version = "1"
     core = "dotp"
-    narrow_weights: bool = Param(default=False)
+
+    @derived
+    def narrow_weights(self) -> bool:
+        """No weight its stream carries is its type's minimum."""
+        element = self.w.element
+        if element.range is None:
+            return False  # not an integer encoding: the weight port refuses it
+        return element.range[0] > ordinary_integer_bounds(element.dtype)[0]
 
     def _core_refusal(self) -> Rejected | None:
         if self.form is not Form.DENSE:
@@ -276,8 +285,11 @@ class PackedDotpKernel(DotpAxiKernel):
             return reject(
                 "dotp-activation-width", "activation values must fit the signed DSP B input"
             )
-        if weights.bits >= a_bits:
-            return reject("dotp-weight-width", "signed weights need room for a DSP sign guard")
+        if weights.bits + (not self.narrow_weights) > a_bits:
+            return reject(
+                "dotp-weight-width",
+                "weights must fit the DSP A input, with a sign guard bit unless narrow",
+            )
         return None
 
     def _narrow_weights(self) -> bool:

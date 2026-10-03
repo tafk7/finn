@@ -74,6 +74,7 @@ def placed_dotp(
     activation_dtype: QONNXDataType,
     weights_dtype: QONNXDataType,
     result_dtype: QONNXDataType,
+    weights_range: tuple[int, int] | None = None,
     pe: object = None,
     simd: object = None,
     compute_pumping: object = False,
@@ -86,7 +87,8 @@ def placed_dotp(
 
     The core takes its extents from the streams: ``outputs`` (N) defaults to PE
     and ``reduction`` (K) to SIMD, one fold each. A folding factor left ``None``
-    stays open.
+    stays open. ``weights_range`` is the range of values the weight stream
+    carries; the datatype's own by default.
     """
     form = facts.get("form", Form.DENSE)
     n = outputs if outputs is not None else (pe if isinstance(pe, int) and pe > 0 else 1)
@@ -95,7 +97,9 @@ def placed_dotp(
 
     class Placed(Space):
         x = Stream(tensor=Tensor(x_shape, ScalarEncoding(activation_dtype)), port="in0_V")
-        w = Stream(tensor=Tensor((k, n), ScalarEncoding(weights_dtype)), port="in1_V")
+        w = Stream(
+            tensor=Tensor((k, n), ScalarEncoding(weights_dtype, weights_range)), port="in1_V"
+        )
         y = Stream(tensor=Tensor((rows, n), ScalarEncoding(result_dtype)), port="out0_V")
         compute = family(x_stream=x, w_stream=w, y_stream=y, result_dtype=result_dtype, **facts)
 
