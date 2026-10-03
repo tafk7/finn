@@ -121,7 +121,7 @@ class Root(Kernel):
     """The top of what a test emits: the streams it declares and the kernels on them."""
 
     id = "test.root"
-    version = "1"
+    version = 1
 
 
 def rooted(name: str, members: Mapping[str, object]) -> Root:

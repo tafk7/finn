@@ -80,7 +80,7 @@ class Graph(Kernel):
     """A graph's hardware: its streams and the kernels on them."""
 
     id = "finn.graph"
-    version = "1"
+    version = 1
 
 
 @dataclass(frozen=True)

@@ -58,7 +58,7 @@ class TransposeKernel(Kernel):
     """
 
     id = "finnlib.inner_shuffle"
-    version = "1"
+    version = 1
     rtl_module = "inner_shuffle"
 
     input_stream: Stream = Param(required=False)

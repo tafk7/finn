@@ -56,15 +56,15 @@ class Pins:
 def test_kernel_identity_is_validated_at_class_creation() -> None:
     with pytest.raises(DefinitionError, match="id"):
         type("Unnamed", (Kernel,), {})
-    with pytest.raises(DefinitionError, match="version"):
-        type("Unversioned", (Kernel,), {"id": "test.empty", "version": ""})
-    with pytest.raises(DefinitionError, match="version"):
-        type("WrongVersion", (Kernel,), {"id": "test.wrong", "version": 1})
+    # The version is a positive int (an op's opset version); artifacts carry str(version).
+    for wrong in ("1", 0, True):
+        with pytest.raises(DefinitionError, match="version"):
+            type("WrongVersion", (Kernel,), {"id": "test.wrong", "version": wrong})
 
     class Empty(Kernel):
         id = "test.empty"
 
-    assert Empty.version == "1"
+    assert Empty.version == 1
     # The protocol's views; a kernel that declares no module builds none.
     empty = design_space(Empty())
     assert views(empty) == ["module", "netlist"]

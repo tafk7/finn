@@ -122,7 +122,7 @@ class MatMulKernel(Kernel):
     """Operation facts, and the kernels and Decisions over kernels on its streams."""
 
     id = "finn.matmul"
-    version = "1"
+    version = 1
 
     m: int = Param()
     n: int = Param()
@@ -365,7 +365,7 @@ class MatMulKernel(Kernel):
         return "finn_matmul_" + self.supplied
 
     def producer_identity(self) -> ProducerIdentity:
-        return ProducerIdentity("finn.matmul." + self.supplied, type(self).version)
+        return ProducerIdentity("finn.matmul." + self.supplied, str(type(self).version))
 
 
 __all__ = ["FinnAttributes", "MatMulKernel", "exact_result_dtype"]

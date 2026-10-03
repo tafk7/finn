@@ -205,16 +205,16 @@ class Kernel(Space):
     """A named family configuring one module; see the module docstring for the protocol."""
 
     id: ClassVar[str] = ""
-    version: ClassVar[str] = "1"
+    version: ClassVar[int] = 1
     # The RTL module it instantiates; empty for a kernel with children.
     rtl_module: ClassVar[str] = ""
 
     def __init_subclass__(cls, **kwargs: object) -> None:
         super().__init_subclass__(**kwargs)
-        for name in ("id", "version"):
-            value = getattr(cls, name)
-            if type(value) is not str or not value:
-                raise DefinitionError(f"{cls.__qualname__} must declare a nonempty string {name}")
+        if type(cls.id) is not str or not cls.id:
+            raise DefinitionError(f"{cls.__qualname__} must declare a nonempty string id")
+        if type(cls.version) is not int or cls.version < 1:
+            raise DefinitionError(f"{cls.__qualname__} must declare a positive int version")
 
     # -- the protocol: what a kernel declares ----------------------------------------------
 
@@ -251,7 +251,7 @@ class Kernel(Space):
     def producer_identity(self) -> ProducerIdentity:
         """A kernel with children: what derives its composed module."""
         family = type(self)
-        return ProducerIdentity(family.id, family.version)
+        return ProducerIdentity(family.id, str(family.version))
 
     @derived
     def clocking(self) -> Clocking:
@@ -320,7 +320,7 @@ class Kernel(Space):
         contributions = self.sources()
         return Leaf(
             family.id,
-            family.version,
+            str(family.version),
             family.rtl_module,
             parameters,
             Pins(
