@@ -227,6 +227,71 @@ def test_environment_and_selection_are_defensive_snapshots(tmp_path):
     assert tc.environment["CHOICE"] == "before"
 
 
+LICENCE = "2100@licsrv.example"
+
+
+def machine_file_with(tmp_path, monkeypatch, licensed):
+    """This process reads a synthetic machine file and names no licence itself."""
+    lines = ["FINN_XILINX_VERSION=2025.2"]
+    if licensed:
+        lines += ["FINN_LICENSE_HOST=licsrv.example", "FINN_LICENSE_PORT=2100"]
+    path = tmp_path / "xilinx.env"
+    path.write_text("\n".join(lines) + "\n")
+    monkeypatch.setenv("FINN_XILINX_ENV", str(path))
+    for name in (
+        "XILINXD_LICENSE_FILE",
+        "LM_LICENSE_FILE",
+        "FINN_LICENSE_HOST",
+        "FINN_LICENSE_PORT",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+
+@pytest.mark.parametrize("licensed", (True, False))
+def test_the_machine_files_licence_reaches_every_launch(tmp_path, monkeypatch, capfd, licensed):
+    """A process that never sourced activate.sh: every prepared environment, and
+    launch_process_helper's default one, carries the machine file's licence
+    server; without licence lines the variable stays unset and nothing is said."""
+    from finn.util.basic import launch_process_helper  # noqa: PLC0415
+
+    machine_file_with(tmp_path, monkeypatch, licensed)
+    settings = tmp_path / "settings64.sh"
+    settings.write_text("export CHOICE=selected\n")
+    expected = LICENCE if licensed else None
+    for toolchain in (
+        Selection().prepare(),
+        Selection(settings=(settings,)).prepare(),
+        Selection().prepare({"PATH": os.defpath}),
+    ):
+        assert toolchain.environment.get("XILINXD_LICENSE_FILE") == expected
+    out, _ = launch_process_helper(
+        [sys.executable, "-c", 'import os; print(os.environ.get("XILINXD_LICENSE_FILE"))']
+    )
+    assert out.strip() == str(expected)
+    assert "XILINXD_LICENSE_FILE" not in os.environ
+    # A site route owns its activation, licence included.
+    route = Selection(launcher=("site",)).prepare({})
+    assert "XILINXD_LICENSE_FILE" not in route.environment
+    assert "licen" not in capfd.readouterr().err.lower()
+
+
+@pytest.mark.parametrize("variable", ("XILINXD_LICENSE_FILE", "LM_LICENSE_FILE"))
+def test_a_licence_in_the_environment_wins_over_the_machine_file(tmp_path, monkeypatch, variable):
+    machine_file_with(tmp_path, monkeypatch, licensed=True)
+    monkeypatch.setenv(variable, "27000@lic.example")
+    settings = tmp_path / "settings64.sh"
+    settings.write_text(":\n")
+    for toolchain in (
+        Selection().prepare(),
+        Selection(settings=(settings,)).prepare(),
+        Selection().prepare({variable: "27000@lic.example"}),
+    ):
+        assert toolchain.environment[variable] == "27000@lic.example"
+        assert variable == "XILINXD_LICENSE_FILE" or "XILINXD_LICENSE_FILE" not in (
+            toolchain.environment
+        )
+
+
 def test_site_probe_preserves_override_remote_name_and_argv(tmp_path):
     log = tmp_path / "calls.jsonl"
     wrapper = executable(

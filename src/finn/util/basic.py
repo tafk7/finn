@@ -283,7 +283,13 @@ def launch_process_helper(args, proc_env=None, cwd=None, check=False, timeout=No
     captured strings. The write-through happens before the raise, so the tool
     log is still visible on failure. That is why the return code is checked by
     hand rather than relying on ``subprocess.run(check=True)``.
+
+    Without ``proc_env`` the process gets this process's environment as
+    ``Selection.prepare`` gives it: with the machine file's licence when the
+    environment names none.
     """
+    if proc_env is None:
+        proc_env = Selection().prepare().environment
     proc = run_process(args, env=proc_env, cwd=cwd, check=False, timeout=timeout, cancel=cancel)
     proc.stdout = proc.stdout.decode("utf-8", errors="replace")
     proc.stderr = proc.stderr.decode("utf-8", errors="replace")

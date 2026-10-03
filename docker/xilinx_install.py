@@ -1,28 +1,11 @@
 #!/usr/bin/env python3
 """Where this machine's Xilinx tools are: the machine file and AMD's two layouts.
 
-One file holds a machine's defaults, in the names every modality reads:
-
-    # ~/.config/finn/xilinx.env
-    FINN_XILINX_PATH=/opt/Xilinx
-    FINN_XILINX_VERSION=2025.2
-    FINN_LICENSE_HOST=10.0.0.5
-    FINN_LICENSE_PORT=2100
-    FINN_LICENSE_VENDOR_PORT=2101
-
-It is also the argument file of FINN's sbx xilinx kit (``--kit-args-file``),
-which is why its format is sbx's: ``NAME=value`` lines and ``#`` comment lines,
-nothing else -- no quotes, no expansion, no trailing comments -- and only the
-names the kit declares, since sbx refuses any other. An environment variable of
-the same name wins over the file, so one container can select another version
-or installation (``FINN_XILINX_VERSION=2026.1 ./docker/run --fpga ...``); in sbx,
-``--kit-arg`` wins over the file in the same way.
-
-``FINN_XILINX_ENV`` names another file; set it empty to use none.
-
-Standard library only. docker/config.py imports it on the host, and the sbx
-workload's startup hook runs it from the mounted checkout, where FINN may not be
-installed yet:
+The machine file (``~/.config/finn/xilinx.env``) is read by FINN's one reader,
+``src/finn/util/machine_file.py``, loaded here by path from this checkout
+(``machine_file``): this script runs where FINN may not be installed yet.
+docker/config.py imports this script on the host, and the sbx workload's
+startup hook runs it from the mounted checkout:
 
     python3 docker/xilinx_install.py sh     # export lines for the resolved layout
 
@@ -30,90 +13,32 @@ Native activation asks it whether a toolchain is configured at all
 (``configured``) before resolving one through docker/config.py.
 """
 
+import importlib.util
 import os
 import re
 import sys
 
-# The xilinx kit's arguments (docker/sbx/xilinx/xilinx.yaml), and nothing else.
-KEYS = (
-    "FINN_XILINX_PATH",
-    "FINN_XILINX_VERSION",
-    "FINN_LICENSE_HOST",
-    "FINN_LICENSE_PORT",
-    "FINN_LICENSE_VENDOR_PORT",
-    "PLATFORM_REPO_PATHS",
-)
-# Paths must be absolute: in a sandbox the kit receives them verbatim, and a
-# `~` or a relative path would name something else there.
-PATH_KEYS = ("FINN_XILINX_PATH", "PLATFORM_REPO_PATHS")
+
+def _load_machine_file():
+    path = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)),
+        os.pardir,
+        "src",
+        "finn",
+        "util",
+        "machine_file.py",
+    )
+    spec = importlib.util.spec_from_file_location("_finn_machine_file", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
-class ConfigError(ValueError):
-    """The machine file is missing where named, or is not in the kit's format."""
+machine_file = _load_machine_file()
 
 
 def warn(msg):
     print("finn: %s" % msg, file=sys.stderr)
-
-
-def file_path(environ=None):
-    """The machine file to read, or None."""
-    environ = os.environ if environ is None else environ
-    if "FINN_XILINX_ENV" in environ:
-        return environ["FINN_XILINX_ENV"] or None
-    config = environ.get("XDG_CONFIG_HOME") or os.path.join(
-        environ.get("HOME") or os.path.expanduser("~"), ".config"
-    )
-    return os.path.join(config, "finn", "xilinx.env")
-
-
-def read_file(path):
-    """Parse a machine file; raise ConfigError on anything sbx would read differently."""
-    values = {}
-    with open(path, "r") as handle:
-        for number, line in enumerate(handle, 1):
-            where = "%s:%d" % (path, number)
-            text = line.strip()
-            if not text or text.startswith("#"):
-                continue
-            name, sep, value = text.partition("=")
-            name = name.strip()
-            if not sep:
-                raise ConfigError("%s: expected NAME=value" % where)
-            if name not in KEYS:
-                raise ConfigError(
-                    "%s: %r is not a setting of FINN's xilinx kit (%s)"
-                    % (where, name, ", ".join(KEYS))
-                )
-            if value != value.strip() or value[:1] in ("'", '"') or " #" in value:
-                raise ConfigError(
-                    "%s: write %s=value with no spaces, quotes or trailing comment" % (where, name)
-                )
-            if name in PATH_KEYS and value and not value.startswith("/"):
-                raise ConfigError("%s: %s must be an absolute path" % (where, name))
-            values[name] = value
-    return values
-
-
-def settings(environ=None):
-    """The machine file's values, each overridden by an environment variable of its name."""
-    environ = os.environ if environ is None else environ
-    path = file_path(environ)
-    values = {}
-    if path and os.path.exists(path):
-        values = read_file(path)
-    elif path and "FINN_XILINX_ENV" in environ:
-        raise ConfigError("FINN_XILINX_ENV=%s does not exist" % path)
-    for key in KEYS:
-        if environ.get(key):
-            values[key] = environ[key]
-    return {key: value for key, value in values.items() if value}
-
-
-def license_file(values):
-    """XILINXD_LICENSE_FILE as FlexLM spells it, from a host and a port."""
-    host, port = values.get("FINN_LICENSE_HOST"), values.get("FINN_LICENSE_PORT")
-    return "%s@%s" % (port, host) if host and port else None
 
 
 def layout(root, version):
@@ -171,8 +96,8 @@ def main(argv):
         print("usage: xilinx_install.py configured|sh", file=sys.stderr)
         return 2
     try:
-        values = settings()
-    except ConfigError as exc:
+        values = machine_file.settings()
+    except machine_file.ConfigError as exc:
         warn(str(exc))
         return 2
     root, version = values.get("FINN_XILINX_PATH"), values.get("FINN_XILINX_VERSION")

@@ -27,7 +27,8 @@ DOCKER_DIR = os.path.join(REPO, "docker")
 FINN_ENV = os.path.join(DOCKER_DIR, "config.py")
 sys.path.insert(0, DOCKER_DIR)
 import config as finn_env  # noqa: E402
-import xilinx_install  # noqa: E402
+
+from finn.util import machine_file  # noqa: E402
 
 
 def _make_tree(base, layout, version):
@@ -1034,6 +1035,7 @@ def test_native_callers_execute_resolver_in_an_isolated_installation(tmp_path):
         "docker/config.py",
         "docker/xilinx_install.py",
         "docker/finn-toolchain.sh",
+        "src/finn/util/machine_file.py",
     ):
         destination = checkout / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -1096,7 +1098,7 @@ def test_machine_file_is_read_with_comments(tmp_path):
     path = _machine_file(
         tmp_path, "# this machine\n\nFINN_XILINX_PATH=/opt/Xilinx\nFINN_XILINX_VERSION=2025.2\n"
     )
-    assert xilinx_install.read_file(path) == {
+    assert machine_file.read_file(path) == {
         "FINN_XILINX_PATH": "/opt/Xilinx",
         "FINN_XILINX_VERSION": "2025.2",
     }
@@ -1117,20 +1119,20 @@ def test_machine_file_refuses_what_sbx_would_read_differently(tmp_path, line, co
     """The file is also sbx's --kit-args-file, which takes values verbatim and
     refuses undeclared names: anything else must fail here, not in a sandbox."""
     path = _machine_file(tmp_path, line + "\n")
-    with pytest.raises(xilinx_install.ConfigError, match=complaint):
-        xilinx_install.read_file(path)
+    with pytest.raises(machine_file.ConfigError, match=complaint):
+        machine_file.read_file(path)
 
 
 def test_machine_file_keys_are_the_kit_arguments():
     """The file and the kit's arguments are one vocabulary."""
     kit = (Path(REPO) / "docker/sbx/xilinx/xilinx.yaml").read_text()
     declared = re.findall(r"^  ([A-Z_]+):\n", kit, re.MULTILINE)
-    assert sorted(declared) == sorted(xilinx_install.KEYS)
+    assert sorted(declared) == sorted(machine_file.KEYS)
 
 
 def test_environment_wins_over_the_machine_file(tmp_path):
     path = _machine_file(tmp_path, "FINN_XILINX_PATH=/opt/Xilinx\nFINN_XILINX_VERSION=2025.2\n")
-    values = xilinx_install.settings({"FINN_XILINX_ENV": path, "FINN_XILINX_VERSION": "2026.1"})
+    values = machine_file.settings({"FINN_XILINX_ENV": path, "FINN_XILINX_VERSION": "2026.1"})
     assert values == {"FINN_XILINX_PATH": "/opt/Xilinx", "FINN_XILINX_VERSION": "2026.1"}
 
 
@@ -1160,18 +1162,18 @@ def test_default_machine_file_location(tmp_path):
     config = tmp_path / "config" / "finn"
     config.mkdir(parents=True)
     (config / "xilinx.env").write_text("FINN_XILINX_VERSION=2025.2\n")
-    assert xilinx_install.settings({"XDG_CONFIG_HOME": str(tmp_path / "config")}) == {
+    assert machine_file.settings({"XDG_CONFIG_HOME": str(tmp_path / "config")}) == {
         "FINN_XILINX_VERSION": "2025.2"
     }
     home = {"HOME": str(tmp_path / "nobody")}
-    assert xilinx_install.file_path(home) == str(tmp_path / "nobody/.config/finn/xilinx.env")
-    assert xilinx_install.settings(home) == {}  # no file: nothing configured
+    assert machine_file.file_path(home) == str(tmp_path / "nobody/.config/finn/xilinx.env")
+    assert machine_file.settings(home) == {}  # no file: nothing configured
 
 
 def test_a_named_machine_file_must_exist(tmp_path):
-    with pytest.raises(xilinx_install.ConfigError, match="does not exist"):
-        xilinx_install.settings({"FINN_XILINX_ENV": str(tmp_path / "missing.env")})
-    assert xilinx_install.settings({"FINN_XILINX_ENV": ""}) == {}
+    with pytest.raises(machine_file.ConfigError, match="does not exist"):
+        machine_file.settings({"FINN_XILINX_ENV": str(tmp_path / "missing.env")})
+    assert machine_file.settings({"FINN_XILINX_ENV": ""}) == {}
 
 
 def test_build_tier_from_the_machine_file_alone(tmp_path):
