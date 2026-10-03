@@ -12,6 +12,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
 
+from finn.util import machine_file
+
 _LOG = logging.getLogger(__name__)
 
 # Vendor tools start slowly (a JVM behind vitis-run), and much more slowly when a
@@ -160,6 +162,13 @@ class Selection:
                 for item in result.stdout.split(b"\0")
                 if item
             )
+        if not self.launcher:
+            # The machine file's licence server, so that a process which never
+            # sourced activate.sh still launches licensed tools. A licence
+            # variable already set wins; a site route owns its own.
+            licence = machine_file.license_for(environment, machine_file.settings())
+            if licence:
+                environment["XILINXD_LICENSE_FILE"] = licence
         return Toolchain(self, environment)
 
 

@@ -4,8 +4,10 @@
 This module is host-side only. It is the sole owner of workspace, toolchain,
 licence, mount and egress discovery for Docker/native callers. ``compose.yaml``
 holds static Docker behavior; this executable renders shell assignments and
-Compose overrides. The machine file (``~/.config/finn/xilinx.env``) and AMD's
-install layouts are read by ``xilinx_install.py``, which the sbx workload shares.
+Compose overrides. The machine file (``~/.config/finn/xilinx.env``) is read by
+FINN's one reader, ``src/finn/util/machine_file.py``, and AMD's install layouts
+by ``xilinx_install.py``, which loads the reader and which the sbx workload
+shares.
 Network descriptions are declarative; Docker does not enforce these permissions.
 Diagnostics go to stderr because stdout is machine-readable data.
 """
@@ -18,6 +20,8 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import xilinx_install  # noqa: E402  (standard library only; docker/xilinx_install.py)
+
+machine_file = xilinx_install.machine_file
 
 # A tier is a host access profile, independent of the package artifact. What differs
 # is what the launcher mounts and which network requirements it reports.
@@ -158,16 +162,14 @@ def apply_machine_settings():
     form when no licence variable is set.
     """
     try:
-        values = xilinx_install.settings()
-    except xilinx_install.ConfigError as exc:
+        values = machine_file.settings()
+    except machine_file.ConfigError as exc:
         die(str(exc), 3)
     for key, value in values.items():
         os.environ.setdefault(key, value)
-    composed = xilinx_install.license_file(values)
-    if composed and not (
-        os.environ.get("XILINXD_LICENSE_FILE") or os.environ.get("LM_LICENSE_FILE")
-    ):
-        os.environ["XILINXD_LICENSE_FILE"] = composed
+    licence = machine_file.license_for(os.environ, values)
+    if licence:
+        os.environ["XILINXD_LICENSE_FILE"] = licence
 
 
 def resolve_tier(tier):
@@ -191,7 +193,7 @@ def resolve_tier(tier):
     warn(
         "no FINN_XILINX_PATH (environment or %s); resolving --tier auto to 'dev'. "
         "Vivado, Vitis, HLS and rtlsim will be unavailable."
-        % (xilinx_install.file_path() or "no machine file")
+        % (machine_file.file_path() or "no machine file")
     )
     return "dev"
 
@@ -234,7 +236,7 @@ def add_toolchain(out):
     if not root:
         die(
             "FINN_XILINX_PATH is unset (environment or %s); tier %r requires it"
-            % (xilinx_install.file_path() or "no machine file", out["tier"]),
+            % (machine_file.file_path() or "no machine file", out["tier"]),
             3,
         )
     if not os.path.isdir(root):

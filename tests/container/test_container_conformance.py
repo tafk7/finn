@@ -22,12 +22,13 @@ DOCKER_DIR = REPO / "docker"
 FINN_ENV = DOCKER_DIR / "config.py"
 sys.path.insert(0, str(DOCKER_DIR))
 import config as finn_env  # noqa: E402
-import xilinx_install  # noqa: E402
+
+from finn.util import machine_file  # noqa: E402
 
 
 def xilinx_root():
     """This machine's Xilinx root, from the environment or its machine file."""
-    root = xilinx_install.settings().get("FINN_XILINX_PATH", "")
+    root = machine_file.settings().get("FINN_XILINX_PATH", "")
     return root if os.path.isdir(root) else None
 
 
