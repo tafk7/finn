@@ -83,12 +83,12 @@ class Chain(Root):
     def y_tensor(self) -> Tensor:
         return self.second.result_tensor
 
-    x = Stream(tensor=Tensor((ROWS, INPUTS), ScalarEncoding(A)), port="in0_V")
+    x = Stream(tensor=Tensor((ROWS, INPUTS), ScalarEncoding(A)), port="s_axis_0")
     w1 = BufferedStream(tensor=w1_tensor)
     hidden = Stream(tensor=hidden_tensor)
     levels = Stream(tensor=Tensor((ROWS, HIDDEN), ScalarEncoding(T)))
     w2 = BufferedStream(tensor=w2_tensor)
-    y = Stream(tensor=y_tensor, port="out0_V")
+    y = Stream(tensor=y_tensor, port="m_axis_0")
     first = matmul(INPUTS, HIDDEN, A, W1, x_stream=x, w_stream=w1, y_stream=hidden)
     activate = ThresholdingAxiKernel(
         input_dtype=H,
@@ -151,8 +151,8 @@ def test_each_edge_carries_its_own_adapter_and_the_netlist_is_flat():
     assert {port.name for port in point.module.pins.ports} == {
         "ap_clk",
         "ap_rst_n",
-        "in0_V",
-        "out0_V",
+        "s_axis_0",
+        "m_axis_0",
     }
     assert point.module.stem == "finn_chain"
 
@@ -247,7 +247,7 @@ def test_the_chain_computes_in_xsim(tmp_path: Path) -> None:
         chain().module,
         tmp_path,
         inputs={
-            "in0_V": (
+            "s_axis_0": (
                 [
                     pack(X[r][f : f + SIMD], a_bits)
                     for r in range(ROWS)
@@ -257,7 +257,7 @@ def test_the_chain_computes_in_xsim(tmp_path: Path) -> None:
             )
         },
         outputs={
-            "out0_V": (
+            "m_axis_0": (
                 [
                     pack(y[r][f : f + PE], y_bits)
                     for r in range(ROWS)

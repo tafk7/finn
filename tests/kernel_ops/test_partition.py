@@ -89,7 +89,7 @@ def test_the_root_of_the_chains_nodes_is_test_designs_chain() -> None:
     assert labels(point.module) == labels(reference.module)
     assert point.module.fragment == reference.module.fragment
     assert point.module.pins == reference.module.pins
-    assert root.boundary == (("x", "in0_V"), ("y", "out0_V"))
+    assert root.boundary == (("x", "s_axis_0"), ("y", "m_axis_0"))
 
 
 def test_edge_choices_persist_on_their_consumers() -> None:
@@ -115,21 +115,21 @@ def test_a_stale_edge_choice_is_dropped_and_settling_picks_again() -> None:
 def test_a_partition_has_ports_for_its_onnx_inputs_and_outputs_only() -> None:
     model = kernel_model()
     front = partition_root(model, model.graph.node[:2], name="front")
-    assert front.boundary == (("x", "in0_V"), ("levels", "out0_V"))
+    assert front.boundary == (("x", "s_axis_0"), ("levels", "m_axis_0"))
     point, styles = settled(front)
     point = commit(point, dict.fromkeys(styles, "auto"))
     assert sorted(port.name for port in point.module.pins.ports) == [
         "ap_clk",
         "ap_rst_n",
-        "in0_V",
-        "out0_V",
+        "m_axis_0",
+        "s_axis_0",
     ]
 
 
 def test_streamed_weights_are_a_boundary_of_the_partition() -> None:
     model = kernel_model(second_weights=False)
     root = partition_root(model, model.graph.node, name="chain")
-    assert root.boundary == (("x", "in0_V"), ("w2", "in1_V"), ("y", "out0_V"))
+    assert root.boundary == (("x", "s_axis_0"), ("w2", "s_axis_1"), ("y", "m_axis_0"))
     assert root.owners["w2"] == ("second", "w.")
 
 
@@ -165,7 +165,7 @@ def test_the_partition_computes_what_onnx_computes(tmp_path: Path) -> None:
         point.module,
         tmp_path,
         inputs={
-            "in0_V": (
+            "s_axis_0": (
                 [
                     pack(chain.X[r][f : f + chain.SIMD], a_bits)
                     for r in range(chain.ROWS)
@@ -175,7 +175,7 @@ def test_the_partition_computes_what_onnx_computes(tmp_path: Path) -> None:
             )
         },
         outputs={
-            "out0_V": (
+            "m_axis_0": (
                 [
                     pack(y[r][f : f + chain.PE].tolist(), y_bits)
                     for r in range(chain.ROWS)

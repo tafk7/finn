@@ -9,8 +9,9 @@
   parameter streams it owns (named after the initializer, the kernel's view),
   its outputs. A stream's tensor is the graph's value_info and annotation (D6),
   a MatMul's weight operand a ``BufferedStream``. Only the subgraph's ONNX
-  inputs and outputs are boundaries, named ``in<i>_V`` and ``out<i>_V`` (D4): a
-  stream refuses a boundary no port names (``stream-boundary``);
+  inputs and outputs are boundaries, named by the shell's convention
+  ``s_axis_<i>`` and ``m_axis_<i>`` (D4): a stream refuses a boundary no port
+  names (``stream-boundary``);
 - **kernels**, one per node, from its facts, the graph's pins as keywords;
 - **replay**: each node's kernel choices, then a settle, then the edge choices
   (an edge's adapter selector is settle's, never persisted); an edge choice the
@@ -97,8 +98,8 @@ def partition_root(model: Any, nodes: Iterable[Any], *, name: str = "partition")
         if tensor not in produced and tensor not in owned and model.get_initializer(tensor) is None
     ]
     outputs = [tensor for node in nodes for tensor in node.output if tensor in used_outside]
-    ports = {tensor: f"in{index}_V" for index, tensor in enumerate(inputs)}
-    ports |= {tensor: f"out{index}_V" for index, tensor in enumerate(outputs)}
+    ports = {tensor: f"s_axis_{index}" for index, tensor in enumerate(inputs)}
+    ports |= {tensor: f"m_axis_{index}" for index, tensor in enumerate(outputs)}
     weights = {node.input[1] for node, op in zip(nodes, ops) if op.op_type == "MatMul"}
 
     members: dict[str, object] = {}
