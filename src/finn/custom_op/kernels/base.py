@@ -77,22 +77,10 @@ class KernelOpError(ValueError):
 # -- facts -------------------------------------------------------------------------------
 
 
-def annotated(model: Any, tensor: str) -> bool:
-    """Whether ``tensor`` has a datatype annotation (a ``finn_datatype`` entry).
-
-    The one reader of this fact: an absent annotation is not FLOAT32, and qonnx's
-    ``get_tensor_datatype`` at FINN's pin answers FLOAT32 for both. Phase 0b swaps
-    this body for ``ModelWrapper.has_tensor_datatype``.
-    """
-    for item in model.graph.quantization_annotation:
-        if item.tensor_name == tensor:
-            return any(entry.key == "finn_datatype" for entry in item.quant_parameter_tensor_names)
-    return False
-
-
 def datatype(model: Any, tensor: str, label: str) -> QONNXDataType:
-    """The annotation of ``tensor``; an unannotated tensor is refused."""
-    if not annotated(model, tensor):
+    """The annotation of ``tensor``; an unannotated tensor is refused (qonnx reads it
+    as its container type, FLOAT32, which is not a statement)."""
+    if not model.has_tensor_datatype(tensor):
         produced = model.find_producer(tensor) is not None
         raise KernelOpError(
             f"{label}: {tensor} has no datatype annotation (absent is not FLOAT32"
@@ -476,7 +464,6 @@ __all__ = [
     "KernelOp",
     "KernelOpError",
     "admitted",
-    "annotated",
     "datatype",
     "replay",
     "rows",

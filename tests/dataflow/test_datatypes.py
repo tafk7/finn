@@ -11,9 +11,7 @@ import pytest
 from qonnx.core.datatype import BaseDataType, DataType
 from finn.dataflow.datatypes import (
     DatatypeError,
-    canonical_qonnx_datatype,
     QONNXDataType,
-    is_qonnx_datatype,
     qonnx_datatype_width,
 )
 from finn.dataflow.tensor import ScalarEncoding, Tensor
@@ -58,34 +56,21 @@ class _ZeroWidth(_LyingWidth):
         return 0
 
 
-def test_element_width_is_read_from_the_canonical_value_not_the_caller_s() -> None:
-    """A ``ScalarEncoding`` measures what a tensor will hold.
-
-    Both subclasses name themselves ``INT8``, so under QONNX's identity rule
-    they *are* ``INT8``, and an encoding built from either holds the
-    registered eight-bit value -- not the instance handed in.  Asking the
-    caller's instance its width would answer a question about an object
-    already discarded: one of these raises, and the other makes a genuine
-    ``INT8`` look degenerate.
-
-    Reading the width from the canonicalized value settles both the same way,
-    and the way the tensor will actually behave.
-    """
+def test_a_subclass_naming_itself_int8_is_not_int8() -> None:
+    """A ``BaseDataType`` subclass defined outside qonnx is not one of its datatype
+    values, whatever it names itself: refused, and none of its methods run (one
+    of these raises from ``bitwidth``, the other reports zero)."""
 
     for rogue in (_LyingWidth(), _ZeroWidth()):
-        assert qonnx_datatype_width(rogue) == 8
-        held = ScalarEncoding(cast(QONNXDataType, rogue))
-        assert held.bits == 8 and held.dtype == DataType["INT8"]
-        assert held.dtype is not rogue
+        with pytest.raises(DatatypeError, match="not a QONNX datatype value"):
+            qonnx_datatype_width(rogue)
+        with pytest.raises(DatatypeError):
+            ScalarEncoding(cast(QONNXDataType, rogue))
 
 
 def test_a_degenerate_width_is_still_refused() -> None:
-    """The canonical read is not a way of ignoring the width test.
-
-    ``INT0`` resolves, and its width really is zero, so it cannot describe a
-    beat.  Measuring the canonical value keeps that refusal intact -- the change
-    above is about *which* object is measured, not about relaxing the condition.
-    """
+    """``INT0`` still resolves (qonnx warns until a later release refuses it), and
+    its width really is zero, so it cannot describe a beat: FINN refuses it."""
 
     assert qonnx_datatype_width(DataType["INT0"]) == 0
     with pytest.raises(ValueError, match="positive width"):
@@ -103,42 +88,16 @@ def test_a_width_cannot_be_asked_of_a_non_datatype() -> None:
         ScalarEncoding(cast(QONNXDataType, "INT8"))
 
 
-def test_an_instance_mutated_into_an_invalid_state_is_refused_not_raised() -> None:
-    """The same failure reached through a live object rather than a name.
-
-    Mutating ``_intwidth`` past the total width renames the datatype to
-    ``FIXED<8,9>``, which QONNX then refuses to reconstruct.  Recognition must
-    stay total across that: ``is_qonnx_datatype`` returns ``False``, and the
-    encoding refuses at its own documented boundary rather than propagating an
-    ``AssertionError`` from three layers down.
-    """
-
-    mutated = DataType["FIXED<8,4>"]
-    mutated._intwidth = 9
-    assert mutated.name == "FIXED<8,9>"
-
-    assert is_qonnx_datatype(mutated) is False
-    with pytest.raises(DatatypeError):
-        canonical_qonnx_datatype(mutated)
-
-    with pytest.raises(DatatypeError):
-        ScalarEncoding(mutated)
-
-
-def test_a_tensor_does_not_retain_the_caller_s_datatype_instance() -> None:
-    """The value half of the ingestion discipline, tested where it matters.
-
-    The engine's snapshot protects the engine.  It does nothing for a tensor
-    holding a caller's object, which would be mutable in place.  So an
-    encoding keeps the canonical name only, and every read re-resolves it.
-    """
+def test_a_tensor_holds_the_one_immutable_datatype_value() -> None:
+    """A datatype is a value: one instance per canonical name, frozen, so a tensor
+    holding the caller's instance holds the datatype itself, and nothing can
+    rename it underneath the tensor."""
 
     supplied = DataType["INT8"]
     tensor = Tensor((4,), ScalarEncoding(supplied))
-    assert tensor.element.dtype is not supplied
-
-    supplied._bitwidth = 9
-    assert supplied.name == "INT9"
+    assert tensor.element.dtype is supplied
+    with pytest.raises(AttributeError, match="immutable datatype value"):
+        supplied._bitwidth = 9
     assert tensor.element.dtype.name == "INT8" and tensor.element.bits == 8
 
 
