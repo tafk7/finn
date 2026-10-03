@@ -1,0 +1,253 @@
+# Copyright (C) 2026, Advanced Micro Devices, Inc.
+# SPDX-License-Identifier: BSD-3-Clause
+
+"""The MatMul KernelOp: facts from the model, the choice schema, persistence and replay.
+
+A node's choice attributes are sparse, absent meaning open; ``save`` takes
+choices, never a point, so what settle commits is never written; replay
+settles before a nested choice whose selector settle commits.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import warnings
+from pathlib import Path
+
+import numpy as np
+import pytest
+from onnx import helper
+from qonnx.core.modelwrapper import ModelWrapper
+from qonnx.core.onnx_exec import execute_onnx
+from qonnx.custom_op.registry import getCustomOp
+from qonnx.custom_op.registry import _get_op_type_for_class, _get_op_version_for_class
+
+import finn.custom_op.kernels as domain
+from finn.custom_op.kernels.base import TARGET_DSP, KernelOp, KernelOpError
+from finn.custom_op.kernels.matmul import MatMul
+from finn.custom_op.kernels.roots import StoredMatMulNode, StreamedMatMulNode
+from finn.kernels.matmul import MatMulKernel
+from finn.transformation.general import ApplyConfig
+from kernel_ops.models import INT3, WEIGHTS, X, lift, matmul_model
+
+FOLDING = {
+    "compute": "packed",
+    "compute.packed.pe": 2,
+    "compute.packed.simd": 2,
+    "compute.packed.compute_pumping": False,
+}
+
+
+def op(model: ModelWrapper) -> MatMul:
+    found = model.get_customop_wrapper(model.graph.node[0])
+    assert isinstance(found, MatMul)
+    return found
+
+
+def attributes(model: ModelWrapper) -> list[str]:
+    return [attribute.name for attribute in model.graph.node[0].attribute]
+
+
+# -- facts ------------------------------------------------------------------------------
+
+
+def test_facts_come_from_the_model() -> None:
+    model = matmul_model()
+    facts = op(model).facts()
+    assert facts.root is StoredMatMulNode and facts.owned == ("w",)
+    formals = facts.formals()
+    assert (formals["m"], formals["k"], formals["n"]) == (3, 4, 4)
+    assert formals["weights"] == tuple(tuple(int(v) for v in row) for row in WEIGHTS)
+    # The output keeps the input's leading axes.
+    assert op(model).output_tensors() == {
+        "y": ((1, 3, 4), op(model).view("y_tensor").element.dtype)
+    }
+    streamed = matmul_model(stored=False)
+    assert op(streamed).facts().root is StreamedMatMulNode
+    assert op(streamed).facts().owned == ()
+
+
+def refusal(model: ModelWrapper) -> str:
+    with pytest.raises(KernelOpError) as error:
+        op(model).facts()
+    return str(error.value)
+
+
+def test_each_missing_or_refused_fact_is_named() -> None:
+    assert "x has no datatype annotation" in refusal(matmul_model(annotate=("w",)))
+    unknown = matmul_model()
+    unknown.graph.input[0].type.tensor_type.ClearField("shape")
+    assert "x has no shape yet (run InferKernelTensors)" in refusal(unknown)
+    assert "states no target" in refusal(matmul_model(target=False))
+    assert "not integers" in refusal(matmul_model(weights=WEIGHTS + 0.5))
+    assert "annotated INT3 and holds values over [-3, 9]" in refusal(
+        matmul_model(weights=np.where(WEIGHTS == 3, 9, WEIGHTS))
+    )
+    assert "x has 5 columns and w 4 rows" in refusal(matmul_model(x_shape=[1, 3, 5]))
+
+
+# -- the schema -------------------------------------------------------------------------
+
+
+def test_the_schema_is_the_node_roots_decision_keys() -> None:
+    schema = MatMul.schema()
+    assert len(schema) == 31
+    assert sum(kind == "s" for kind, _ in schema.values()) == 23
+    assert schema["compute"] == ("s", ("packed", "int8_dsp58"))
+    assert schema["compute.packed.pe"] == ("i", ())
+    assert schema["compute.packed.compute_pumping"] == ("i", ())
+    # Input and owned streams' keys under the op's port names; the output's are its consumer's.
+    assert "w.transport" in schema and any(name.startswith("x.adapter") for name in schema)
+    assert not any(name.startswith("y.") for name in schema)
+    # The graph pins the memory: it is no attribute.
+    assert "memory" not in schema and MatMul.pinned() == {"memory"}
+    types = op(matmul_model()).get_nodeattr_types()
+    assert types["compute"] == ("s", False, "", {"packed", "int8_dsp58"})
+
+
+def schema_digest(cls: type[KernelOp]) -> str:
+    rows = sorted((name, kind, cases) for name, (kind, cases) in cls.schema().items())
+    return hashlib.sha256(repr(rows).encode()).hexdigest()[:16]
+
+
+def test_the_schema_is_pinned_for_its_op_version() -> None:
+    """Changing a kernel's or a stream's keys changes the schema: bump the op version."""
+    assert (MatMul.op_version, schema_digest(MatMul)) == (1, "0dd948c79dd1073b")
+
+
+# -- persistence ------------------------------------------------------------------------
+
+
+def test_save_writes_choices_and_replay_reads_them() -> None:
+    model = matmul_model()
+    op(model).save({**FOLDING, "w.transport": "direct"})
+    assert attributes(model) == sorted([*FOLDING, "w.transport"])
+    assert op(model).choices()["compute.packed.pe"] == 2
+    point = op(model).point()
+    assert point.matmul.compute.pe == 2 and point.w.transport is not None
+    # A refused save writes nothing; the refusal names the key.
+    with pytest.raises(KernelOpError) as error:
+        op(model).save({"compute.packed.pe": 3})
+    assert error.value.keys == ("compute.packed.pe",)
+    assert op(model).choices()["compute.packed.pe"] == 2
+    # None clears a choice.
+    op(model).save({"compute.packed.simd": None})
+    assert "compute.packed.simd" not in attributes(model)
+    with pytest.raises(KernelOpError, match="not an 's' value"):
+        op(model).save({"compute": 1})
+    with pytest.raises(KernelOpError, match="among"):
+        op(model).save({"compute": "dense"})
+
+
+def test_settles_commitments_are_never_saved() -> None:
+    """The interim rule: on DSP48E2 settle commits compute = packed; only choices made on
+    purpose reach the node, so nothing goes stale on another target."""
+    model = matmul_model()
+    point = op(model).point({"compute.packed.pe": 2})
+    assert point.matmul.compute.pe == 2  # replayed by settling first
+    op(model).save({"compute.packed.pe": 2})
+    assert attributes(model) == ["compute.packed.pe"]
+
+
+def test_a_nested_choice_settling_cannot_make_applicable_is_refused_by_name() -> None:
+    model = matmul_model()
+    with pytest.raises(KernelOpError) as error:
+        op(model).save({"compute.int8_dsp58.pe": 2})
+    assert error.value.keys == ("compute.int8_dsp58.pe",)
+    assert "inapplicable" in str(error.value)
+
+
+def test_a_choice_goes_stale_when_a_fact_changes() -> None:
+    model = matmul_model()
+    op(model).save({**FOLDING, "compute.packed.pe": 4})
+    assert op(model).verify_node() == []
+    # The weights' columns change from 4 to 6: pe = 4 no longer divides them.
+    model.set_initializer("w", np.concatenate([WEIGHTS, WEIGHTS[:, :2]], axis=1).astype(np.float32))
+    problems = op(model).verify_node()
+    assert len(problems) == 1 and "compute.packed.pe: " in problems[0]
+    with pytest.raises(KernelOpError) as error:
+        op(model).point()
+    assert error.value.keys == ("compute.packed.pe",)
+
+
+def test_a_lifted_initializer_drops_what_the_streamed_root_cannot_apply() -> None:
+    model = matmul_model()
+    op(model).save({**FOLDING, "memory.memstream.ram_style": "block"})
+    lift(model, "w")
+    model.set_tensor_datatype("w", INT3)
+    assert op(model).facts().root is StreamedMatMulNode
+    with pytest.raises(KernelOpError) as error:
+        op(model).point()
+    assert error.value.keys == ("memory.memstream.ram_style",)
+    assert op(model).drop_inapplicable() == ("memory.memstream.ram_style",)
+    assert "memory.memstream.ram_style" not in attributes(model)
+    assert op(model).verify_node() == []
+
+
+def test_an_unknown_and_a_pinned_attribute_are_refused() -> None:
+    model = matmul_model()
+    node = model.graph.node[0]
+    node.attribute.append(helper.make_attribute("PE", 2))
+    with pytest.raises(KernelOpError, match="PE is not a choice of MatMul"):
+        op(model).choices()
+    node.attribute.pop()
+    node.attribute.append(helper.make_attribute("memory", "memstream"))
+    with pytest.raises(KernelOpError, match="memory is the graph's"):
+        op(model).choices()
+
+
+def test_apply_config_writes_choices_replay_checks() -> None:
+    model = matmul_model()
+    model = model.transform(
+        ApplyConfig({"first": {**FOLDING, "compute.packed.compute_pumping": 0}})
+    )
+    assert op(model).point().matmul.compute.pe == 2
+    # A folding config naming only the nested key replays by settling first.
+    alone = matmul_model().transform(ApplyConfig({"first": {"compute.packed.pe": 2}}))
+    assert op(alone).point().matmul.compute.pe == 2
+    refused = matmul_model().transform(ApplyConfig({"first": {"compute.packed.pe": 3}}))
+    assert "compute.packed.pe" in op(refused).verify_node()[0]
+
+
+def test_choices_survive_save_and_load(tmp_path: Path) -> None:
+    model = matmul_model()
+    op(model).save(FOLDING)
+    model.save(str(tmp_path / "model.onnx"))
+    loaded = ModelWrapper(str(tmp_path / "model.onnx"))
+    assert op(loaded).choices() == op(model).choices()
+    assert op(loaded).point().matmul.compute.pe == 2
+
+
+# -- execution and identity -------------------------------------------------------------
+
+
+@pytest.mark.parametrize("stored", (True, False))
+def test_execution_is_onnx_matmul(stored: bool) -> None:
+    model = matmul_model(stored=stored)
+    feed = {"x": X.astype(np.float32)}
+    if not stored:
+        feed["w"] = WEIGHTS.astype(np.float32)
+    produced = execute_onnx(model, feed)["y"]
+    assert np.array_equal(produced, X @ WEIGHTS)
+
+
+def test_the_domain_resolves_at_its_version_without_a_fallback() -> None:
+    model = matmul_model()
+    assert model.get_opset_imports()["finn.custom_op.kernels"] == domain.opset_version == 1
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        assert isinstance(getCustomOp(model.graph.node[0], onnx_opset_version=1), MatMul)
+    # The stated identity is what the pinned registry derives from the class name.
+    assert "op_type" in MatMul.__dict__ and "op_version" in MatMul.__dict__
+    assert (_get_op_type_for_class(MatMul), _get_op_version_for_class(MatMul)) == (
+        MatMul.op_type,
+        MatMul.op_version,
+    )
+    assert MatMul.op_version == MatMulKernel.version
+    assert domain.__all__ == ["MatMul"]
+    with pytest.raises(TypeError, match="op_type"):
+
+        class Inherited(MatMul):
+            roots = MatMul.roots
+
+    assert TARGET_DSP in {item.key for item in model.graph.metadata_props}

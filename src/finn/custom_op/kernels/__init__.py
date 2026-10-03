@@ -10,6 +10,14 @@ answers the compiler's queries from the configured point (``base``). qonnx
 resolves this domain by importing it and reads its op classes from ``__all__``,
 so this module exports op classes only; their mechanics live in its submodules,
 the graph transformations in ``finn.transformation.kernels``.
+
+Each op class states its ``op_type`` and ``op_version`` (its kernel's version)
+in its own body, and is named by its op type at version 1. A model imports the
+domain at ``opset_version``, the version its op classes are written for.
 """
 
-__all__: list[str] = []
+from finn.custom_op.kernels.matmul import MatMul
+
+opset_version = 1
+
+__all__ = ["MatMul"]
