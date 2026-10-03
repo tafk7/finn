@@ -24,8 +24,9 @@ and its FIFO are its parent's: the parent (a test harness, the graph front end)
 declares each stream and either binds its tensor to MatMul's view of it
 (``activation_tensor``, ``weight_tensor``, ``result_tensor``, ``set_tensor``),
 which reads only MatMul's facts and ``realization``, never a port, or states
-it; ``carried`` refuses a stated tensor of another shape, or one MatMul's
-values do not fit (``matmul-tensor``). A boundary stream there presents its
+it; ``carried`` refuses a stated tensor of another shape, or whose values do
+not fit (``matmul-tensor``): MatMul's values must fit a stream it produces,
+and a stream's values must fit what MatMul consumes. A boundary stream there presents its
 ``port`` name (``in0_V``).
 
 Known ``weights`` are values MatMul owns: its ``weight_tensor`` states their
@@ -96,7 +97,7 @@ _CARRIED = (
     ("y_stream", "result_tensor"),
     ("set_stream", "set_tensor"),
 )
-"""Each stream MatMul sits on, and the tensor it must carry."""
+"""Each stream MatMul sits on, and its view of the tensor the stream carries."""
 
 
 def _positive(value: int, name: str) -> None:
@@ -251,17 +252,25 @@ class MatMulKernel(Kernel):
 
     @constraint
     def carried(self) -> bool | Rejected:
-        """Each supplied stream carries a tensor of the shape MatMul derives for it, and
-        MatMul's values fit its element."""
+        """Each supplied stream carries a tensor of the shape MatMul derives for it.
+
+        On a stream MatMul produces (the results, and the weights when they are
+        known: its memory streams them) MatMul's values fit the stream's
+        element; on a stream it consumes, the stream's values fit MatMul's.
+        """
+        known = self.present(MatMulKernel.weights)
         for reference, tensor in _CARRIED:
             if not self.present(getattr(MatMulKernel, reference)):
                 continue
             supplied, derived_ = getattr(self, reference).tensor, getattr(self, tensor)
-            if supplied.shape != derived_.shape or not derived_.element.fits(supplied.element):
+            produced = reference == "y_stream" or (reference == "w_stream" and known)
+            inner, outer = (derived_, supplied) if produced else (supplied, derived_)
+            if supplied.shape != derived_.shape or not inner.element.fits(outer.element):
                 return reject(
                     "matmul-tensor",
                     f"{reference} carries {supplied.shape} {supplied.element}; "
-                    f"MatMul's {tensor} is {derived_.shape} {derived_.element}",
+                    f"MatMul's {tensor} is {derived_.shape} {derived_.element}, "
+                    f"which {'must fit it' if produced else 'it must fit'}",
                 )
         return True
 

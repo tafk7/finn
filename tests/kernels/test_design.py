@@ -21,7 +21,7 @@ from typing import Any
 
 from qonnx.core.datatype import DataType
 
-from finn.core.space import Rejected, derived, design_space
+from finn.core.space import Available, Rejected, derived, design_space
 from finn.dataflow.plan import Step
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.configure import commit
@@ -174,6 +174,52 @@ def test_a_matmul_on_a_stream_of_another_element_is_refused():
     refused = design_space(Widened()).first.query(MatMulKernel.carried)
     assert isinstance(refused, Rejected)
     assert {finding.code for finding in refused.findings} == {"matmul-tensor"}
+
+
+def carried(
+    x: ScalarEncoding, w: ScalarEncoding, y: ScalarEncoding, *, known: bool = True
+) -> object:
+    """MatMul's ``carried`` on streams stating these elements; weights known or not."""
+    facts = dict(
+        m=ROWS,
+        n=HIDDEN,
+        k=INPUTS,
+        activation_dtype=A,
+        weights_dtype=W,
+        target_dsp=DspBlock.DSP48E2,
+        target_period_ns=5.0,
+    )
+
+    class Stated(Root):
+        x_ = Stream(tensor=Tensor((ROWS, INPUTS), x), port="in0_V")
+        w_ = BufferedStream(tensor=Tensor((INPUTS, HIDDEN), w), port="in1_V")
+        y_ = Stream(tensor=Tensor((ROWS, HIDDEN), y), port="out0_V")
+        first = MatMulKernel(
+            **facts, **({"weights": W1} if known else {}), x_stream=x_, w_stream=w_, y_stream=y_
+        )
+
+    return design_space(Stated()).first.query(MatMulKernel.carried)
+
+
+def test_a_stream_s_values_fit_what_matmul_consumes_and_matmul_s_fit_what_it_produces():
+    plain_a, plain_w, plain_h = ScalarEncoding(A), ScalarEncoding(W), ScalarEncoding(H)
+    tight = ScalarEncoding(A, (-3, 3))  # INT3 without -4
+    accepted = Available(True)
+    # Consumed: an upstream with a tighter range feeds MatMul's activations.
+    assert carried(tight, plain_w, plain_h) == accepted
+    # Produced: MatMul's full result range fits a plainly stated stream, not a tighter one.
+    assert carried(plain_a, plain_w, plain_h) == accepted
+    narrow_y = ScalarEncoding(H, (0, 1))
+    refused = carried(plain_a, plain_w, narrow_y)
+    assert isinstance(refused, Rejected) and "y_stream" in str(refused)
+    # Known weights (W1 holds -3 to 3) are produced by MatMul's memory: they fit a plain
+    # stream (above), not a tighter one.
+    refused = carried(plain_a, ScalarEncoding(W, (-2, 2)), plain_h)
+    assert isinstance(refused, Rejected) and "w_stream" in str(refused)
+    # Unknown weights come from outside: a tighter stream fits MatMul's full range.
+    assert carried(plain_a, tight, plain_h, known=False) == accepted
+    refused = carried(plain_a, ScalarEncoding(DataType["INT4"]), plain_h, known=False)
+    assert isinstance(refused, Rejected) and "w_stream" in str(refused)
 
 
 @requires_xsim

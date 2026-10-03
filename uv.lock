@@ -2048,7 +2048,7 @@ wheels = [
 
 [[package]]
 name = "qonnx"
-version = "0.3.0.post1.dev556+ge41525f8c"
+version = "1.0.0.post1.dev12+ge41525f8c"
 source = { git = "https://github.com/tafk7/qonnx.git?rev=e41525f8c4f544d71051f6595bd2d0db5eda7699#e41525f8c4f544d71051f6595bd2d0db5eda7699" }
 dependencies = [
     { name = "attrs", marker = "python_full_version >= '3.12' and platform_machine == 'x86_64' and sys_platform == 'linux'" },
