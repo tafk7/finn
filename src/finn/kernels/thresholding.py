@@ -16,6 +16,18 @@ their tensors bind the extents, and the channel count must agree with the
 table's (``kernel-extents``). The set port indexes beats, which no index of a
 tensor expresses, so it presents a given sequence.
 
+The threshold memories are the kernel's choice of resource, by pipeline stage.
+The RTL compares through M = clog2(N + 1) stages; stage s keeps one memory per
+PE lane, of depth ``base * 2**s`` (``base`` the channel folds; with several sets,
+the sets times the folds rounded up to a power of two), and assigns each a
+resource monotone in depth from its two depth triggers. So the expressible assignments are: the
+deepest ``ultra_stages`` in UltraRAM, the ``block_stages`` above them in block
+RAM, and the rest ``ram_style``: ``distributed``, or Vivado's choice (``auto``,
+with no stage in block RAM). Counted in stages, not depths, the choices do not
+move with PE; ``parameters`` maps them to the triggers (the depth of the first
+stage in each resource, 0 for none). Whether a target offers UltraRAM is a
+platform fact the kernel does not have yet.
+
 All native pins remain present when AXI-Lite or set selection is disabled;
 disabled outputs may be unspecified. Placed in a kernel with children, it sits
 on an input, an output and (with several sets) a set-selector stream; its
@@ -36,11 +48,14 @@ from collections.abc import Mapping
 from finn.core.space import (
     ConstraintGroup,
     Decision,
+    Domain,
     Param,
     Rejected,
     constraint,
+    default_semantics,
     derived,
     divisors_of,
+    domain,
     reject,
     view,
 )
@@ -67,6 +82,23 @@ from finn.kernels.port import AxiStreamPort
 from finn.kernels.streams import Stream
 
 c = Index("c")
+
+
+def stage_counts(stages: object) -> Domain[int]:
+    """How many of the ``stages`` pipeline stages: 0 to all of them."""
+
+    def accepts(*, candidate: int, stages: int) -> bool:
+        return type(candidate) is int and 0 <= candidate <= stages
+
+    def candidates(*, stages: int) -> range:
+        return range(stages + 1)
+
+    return domain(
+        accepts=accepts,
+        candidates=candidates,
+        semantics=default_semantics(int),
+        stages=stages,
+    )
 
 
 class ThresholdingAxiKernel(Kernel):
@@ -116,8 +148,45 @@ class ThresholdingAxiKernel(Kernel):
     control: ControlBus = Param(required=False)
     use_axilite: bool = Decision(values=(False, True))
     deep_pipeline: bool = Decision(values=(False, True))
-    depth_trigger_bram: int = Param()
-    depth_trigger_uram: int = Param()
+
+    @derived
+    def stages(self) -> int:
+        """M, the RTL's pipeline stages: clog2(N + 1)."""
+        return self.shape[2].bit_length()
+
+    # The threshold memories (module docstring): the deepest ``ultra_stages`` in
+    # UltraRAM, the ``block_stages`` above them in block RAM, the rest ``ram_style``.
+    ram_style: str = Decision(values=("auto", "distributed"))
+
+    @derived
+    def distributed(self) -> bool:
+        return self.ram_style == "distributed"
+
+    block_stages: int = Decision(domain=stage_counts(stages), when=distributed)
+    ultra_stages: int = Decision(domain=stage_counts(stages))
+
+    def stage_depth(self, stage: int) -> int:
+        """The depth of a stage's memory, as the RTL computes it from SETS, C and PE."""
+        (sets, channels, _), pe = self.shape, self.pe
+        folds = 1 if pe >= channels else channels // pe
+        base = sets * (1 << (folds - 1).bit_length()) if sets > 1 else folds
+        return base << stage
+
+    @derived
+    def depth_triggers(self) -> tuple[int, int] | Rejected:
+        """DEPTH_TRIGGER_BRAM and DEPTH_TRIGGER_URAM: the depth of the first stage in
+        block RAM (past the deepest when none is) or UltraRAM; 0 leaves it unset."""
+        stages, ultra = self.stages, self.ultra_stages
+        block = self.block_stages if self.distributed else 0
+        if block + ultra > stages:
+            return reject(
+                "threshold-memory",
+                f"{block} block RAM and {ultra} UltraRAM stages exceed the {stages} stages",
+            )
+        uram = self.stage_depth(stages - ultra) if ultra else 0
+        if not self.distributed:
+            return 0, uram
+        return self.stage_depth(stages - ultra - block), uram
 
     @constraint
     def types_supported(self) -> bool | Rejected:
@@ -158,9 +227,7 @@ class ThresholdingAxiKernel(Kernel):
 
     @constraint
     def memory_supported(self) -> bool | Rejected:
-        if not all(
-            0 <= value <= 0xFFFFFFFF for value in (self.depth_trigger_bram, self.depth_trigger_uram)
-        ):
+        if not all(0 <= value <= 0xFFFFFFFF for value in self.depth_triggers):
             return reject("threshold-memory", "memory triggers must fit native unsigned int")
         return True
 
@@ -320,8 +387,8 @@ class ThresholdingAxiKernel(Kernel):
             "THRESHOLDS": image,
             "THRESHOLDS_FILE": '""',
             "USE_AXILITE": int(self.use_axilite),
-            "DEPTH_TRIGGER_BRAM": self.depth_trigger_bram,
-            "DEPTH_TRIGGER_URAM": self.depth_trigger_uram,
+            "DEPTH_TRIGGER_BRAM": self.depth_triggers[0],
+            "DEPTH_TRIGGER_URAM": self.depth_triggers[1],
             "DEEP_PIPELINE": int(self.deep_pipeline),
         }
 

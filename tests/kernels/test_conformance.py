@@ -119,10 +119,15 @@ THRESHOLDING_FACTS = dict(
     threshold_dtype=DataType["INT4"],
     thresholds=THRESHOLDS,
     bias=0,
-    depth_trigger_bram=0,
-    depth_trigger_uram=0,
 )
-THRESHOLDING_CHOICES = {"use_axilite": False, "deep_pipeline": False}
+# Its memories: of the two stages (N = 3), the deeper in block RAM, the other distributed.
+THRESHOLDING_CHOICES = {
+    "use_axilite": False,
+    "deep_pipeline": False,
+    "ram_style": "distributed",
+    "block_stages": 1,
+    "ultra_stages": 0,
+}
 PE_FACTORS = ({"pe": 1}, {"pe": 3}, {"pe": CHANNELS})
 
 

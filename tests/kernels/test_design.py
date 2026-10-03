@@ -96,8 +96,6 @@ class Chain(Root):
         thresholds=THRESHOLDS,
         bias=0,
         pe=PE,
-        depth_trigger_bram=0,
-        depth_trigger_uram=0,
         input_stream=hidden,
         output_stream=levels,
     )
@@ -122,8 +120,17 @@ def configured(root: Root, layers: tuple[str, ...] = ("first", "second"), **extr
     return settled(commit(point, nested))
 
 
+# The thresholding's choices: no AXI-Lite, no deep pipeline, memories Vivado's.
+ACTIVATE = {
+    "activate.use_axilite": False,
+    "activate.deep_pipeline": False,
+    "activate.ram_style": "auto",
+    "activate.ultra_stages": 0,
+}
+
+
 def chain() -> Any:
-    return configured(Chain(), **{"activate.use_axilite": False, "activate.deep_pipeline": False})
+    return configured(Chain(), **ACTIVATE)
 
 
 def test_each_edge_carries_its_own_adapter_and_the_netlist_is_flat():
