@@ -140,3 +140,39 @@ def test_a_tensor_does_not_retain_the_caller_s_datatype_instance() -> None:
     supplied._bitwidth = 9
     assert supplied.name == "INT9"
     assert tensor.element.dtype.name == "INT8" and tensor.element.bits == 8
+
+
+def test_an_element_is_a_datatype_and_the_range_of_its_values() -> None:
+    plain = ScalarEncoding(DataType["INT8"])
+    assert plain.range == (-128, 127)
+    # Normalized: the datatype's own range stated is the plain element.
+    full = ScalarEncoding(DataType["INT8"], (-128, 127))
+    assert full == plain and hash(full) == hash(plain)
+    narrow = ScalarEncoding(DataType["INT8"], (-127, 127))
+    assert narrow != plain
+    assert (str(plain), str(narrow)) == ("INT8", "INT8 over [-127, 127]")
+    assert ScalarEncoding(DataType["UINT2"]).range == (0, 3)
+    # A non-integer encoding carries its datatype alone.
+    assert ScalarEncoding(DataType["FLOAT32"]).range is None
+    assert str(ScalarEncoding(DataType["BIPOLAR"])) == "BIPOLAR"
+
+
+@pytest.mark.parametrize(
+    ("name", "bounds"),
+    (("INT3", (-5, 3)), ("INT3", (2, 1)), ("UINT4", (0, 16)), ("FLOAT32", (0, 1))),
+)
+def test_a_range_must_be_one_the_datatype_holds(name: str, bounds: tuple[int, int]) -> None:
+    with pytest.raises(ValueError):
+        ScalarEncoding(DataType[name], bounds)
+    refused = ScalarEncoding.admit(DataType[name], bounds)
+    assert not isinstance(refused, ScalarEncoding)
+    assert {finding.code for finding in refused.findings} == {"dtype-storage"}
+
+
+def test_an_element_fits_another_with_its_datatype_and_a_range_around_its_own() -> None:
+    int4, narrow = ScalarEncoding(DataType["INT4"]), ScalarEncoding(DataType["INT4"], (-7, 7))
+    assert narrow.fits(int4) and not int4.fits(narrow)
+    assert narrow.fits(narrow) and int4.fits(int4)
+    assert not ScalarEncoding(DataType["INT3"]).fits(int4)  # another datatype, whatever its range
+    floats = ScalarEncoding(DataType["FLOAT32"])
+    assert floats.fits(floats) and not floats.fits(int4)

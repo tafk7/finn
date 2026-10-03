@@ -175,11 +175,13 @@ class AxiStreamPort(Port):
     another), and otherwise its stream's. A producer (an initiator) must give
     it, from its kernel's facts, choices and input elements, never from its
     own output stream: a compiler asks a kernel for its output types before
-    the downstream tensor exists. ``admits`` is the integer policy its
-    hardware takes. Idle (no stream), it carries the lanes of the ``factors``
-    of its ``lanes`` indices. It is an AXIS bus named ``name``, with a ``TLAST``
-    when what it presents carries a marker; or, given ``signals`` (data, valid,
-    ready), those ready/valid pins, without a marker.
+    the downstream tensor exists. A producer that knows its values states
+    their ``range`` (minimum, maximum) with it; ``()`` is the datatype's own.
+    ``admits`` is the integer policy its hardware takes. Idle (no stream), it
+    carries the lanes of the ``factors`` of its ``lanes`` indices. It is an
+    AXIS bus named ``name``, with a ``TLAST`` when what it presents carries a
+    marker; or, given ``signals`` (data, valid, ready), those ready/valid pins,
+    without a marker.
     """
 
     stream: Stream = Param(required=False)
@@ -193,6 +195,7 @@ class AxiStreamPort(Port):
     factors: dict[Index, int] = Param(default={})
     sequence: BeatSequence | None = Param(default=None, semantics=OPTIONAL_SEQUENCE)
     dtype: QONNXDataType | None = Param(default=None, semantics=OPTIONAL_DTYPE)
+    range: tuple[int, ...] = Param(default=())
     admits: Integer | None = Param(default=None, semantics=INTEGER_POLICY)
     # Ready/valid pins (data, valid, ready) carrying the words instead of an AXIS bus.
     signals: tuple[str, ...] = Param(default=())
@@ -244,10 +247,13 @@ class AxiStreamPort(Port):
 
     @derived
     def element(self) -> ScalarEncoding | Rejected:
-        """``dtype`` when given, placed or idle (its stream refuses another); else the stream's."""
-        dtype = self.dtype
+        """``dtype`` over ``range`` when given, placed or idle (its stream refuses
+        another); else the stream's."""
+        dtype, bounds = self.dtype, self.range
         if dtype is not None:
-            return ScalarEncoding.admit(dtype)
+            if bounds and len(bounds) != 2:
+                return reject("port-element", f"{self.name}: a range is (minimum, maximum)")
+            return ScalarEncoding.admit(dtype, (bounds[0], bounds[1]) if bounds else None)
         if self.endpoint is Endpoint.INITIATOR:
             # From facts, choices and input elements only: an op asks before its output exists.
             return reject("port-element", f"{self.name}: a producer states its dtype")

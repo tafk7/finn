@@ -73,7 +73,8 @@ class Stream(Space):
 
     @constraint
     def well_formed(self) -> bool | Rejected:
-        """Each end traverses this stream's tensor, in its element encoding."""
+        """Each end traverses this stream's tensor; the source's values fit the tensor's
+        element, and the tensor's fit the sink's."""
         tensor, ends = self.tensor, self.ends
         for end in (ends.source, ends.sink):
             where = end.owner or "the boundary"
@@ -83,11 +84,15 @@ class Stream(Space):
                     f"{where} traverses a {end.sequence.form.shape} tensor; "
                     f"the stream carries {tensor.shape}",
                 )
-            if end.element != tensor.element:
+            inner, outer = (
+                (end.element, tensor.element)
+                if end is ends.source
+                else (tensor.element, end.element)
+            )
+            if not inner.fits(outer):
                 return reject(
                     "stream-tensor",
-                    f"{where} carries {end.element.datatype_name}; "
-                    f"the stream carries {tensor.element.datatype_name}",
+                    f"{where} carries {end.element}; the stream carries {tensor.element}",
                 )
         return True
 

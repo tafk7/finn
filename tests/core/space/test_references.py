@@ -41,6 +41,7 @@ from finn.core.space import (
     reject,
     view,
 )
+from finn.core.space.errors import RequestError
 
 SPEND = ViewKey("spend", int)
 
@@ -290,6 +291,43 @@ def test_a_reference_input_queries_as_the_referenced_node_and_has_a_typed_presen
     assert isinstance(unsupplied.query(Optional.budget), Unresolved)
     assert unsupplied.present(Optional.budget) is False
     assert unsupplied.funded is False
+
+
+def test_a_value_input_is_present_when_it_is_supplied() -> None:
+    class Rated(Space):
+        rate: int = Param(required=False)
+
+        @derived
+        def charged(self) -> int:
+            # Presence read inside a method: an omitted rate does not halt it.
+            return self.rate if self.present(Rated.rate) else 0
+
+    class Office(Space):
+        rate: int = Param(required=False)
+        forwarded = Rated(rate=rate)  # bound to the enclosing formal
+        literal = Rated(rate=3)
+        unbound = Rated()  # an optional formal nobody binds
+        level: int = Decision(values=(1, 2))
+        chosen = Rated(rate=level)
+
+    omitted = design_space(Office())
+    assert omitted.present(Office.rate) is False
+    assert omitted.forwarded.present(Rated.rate) is False
+    assert omitted.forwarded.charged == 0
+    assert omitted.literal.present(Rated.rate) is True and omitted.literal.charged == 3
+    assert omitted.unbound.present(Rated.rate) is False and omitted.unbound.charged == 0
+    supplied = design_space(Office(rate=5))
+    assert supplied.present(Office.rate) is True
+    assert supplied.forwarded.present(Rated.rate) is True and supplied.forwarded.charged == 5
+    assert design_space(Rated(rate=2)).charged == 2
+    # A source still undecided reads like its value: it raises, or halts the method.
+    with pytest.raises(ValueUnavailableError):
+        omitted.chosen.present(Rated.rate)
+    assert codes(omitted.chosen.query(Rated.charged)) == {"decision-unassigned"}
+    assert omitted.with_choices(level=2).chosen.charged == 2
+    # Anything else is neither a node nor a value input.
+    with pytest.raises(RequestError, match="or a value input"):
+        omitted.literal.present(Rated.charged)
 
 
 def test_a_read_through_a_reference_input_is_typed_in_the_class_body() -> None:

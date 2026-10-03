@@ -17,9 +17,11 @@ and checked here together:
 - physical: packing of the lanes into the transport word, lane zero lowest;
 - protocol: the ready/valid (or AXIS) pins, marker pins and clock/reset names.
 
-``compatibility`` compares a producing and a consuming end. A logical mismatch
-can only be repaired by an adapter, which ``finn.dataflow.traversal.classify``
-names (reorder or replay, width conversion, lane regroup). A pure lane
+``compatibility`` compares a producing and a consuming end: the producer's
+values must fit the consumer's element (``ScalarEncoding.fits``). A logical
+mismatch can only be repaired by an adapter, which
+``finn.dataflow.traversal.classify`` names (reorder or replay, width
+conversion, lane regroup). A pure lane
 permutation, padding and reset polarity leave the sequence unchanged; they are
 properties of the connection, realized as wires (``lane_permutation``,
 ``marker_pairs``): a producer's padding bits are left unconnected, and a
@@ -323,12 +325,8 @@ def compatibility(
     if source.transport.endpoint is not produces or sink.transport.endpoint is not consumes:
         refuse(Level.PROTOCOL, "stream-direction", "the source must produce and the sink consume")
 
-    if source.element != sink.element:
-        refuse(
-            Level.LOGICAL,
-            "stream-element",
-            f"{source.element.datatype_name} cannot feed {sink.element.datatype_name}",
-        )
+    if not source.element.fits(sink.element):
+        refuse(Level.LOGICAL, "stream-element", f"{source.element} cannot feed {sink.element}")
     if sink.repetition is Repetition.CYCLIC and source.repetition is not Repetition.CYCLIC:
         refuse(Level.LOGICAL, "stream-repetition", "a single pass cannot feed a cyclic consumer")
     produced = _presented(source, sink)

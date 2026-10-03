@@ -79,3 +79,35 @@ def test_every_end_traverses_the_stream_s_tensor() -> None:
     other = BeatSequence(vector_major((4, 6), 2))
     refused = given(BeatSequence(ROWS), other).inspect(Given.well_formed).result
     assert codes(refused) == {"stream-tensor"} and "consumer traverses" in str(refused)
+
+
+class Valued(Stream):
+    """A stream whose ends carry the given elements."""
+
+    produced: ScalarEncoding = Param()
+    consumed: ScalarEncoding = Param()
+
+    @derived
+    def ends(self) -> Ends:
+        rows = BeatSequence(ROWS)
+        return Ends(End("producer", self.produced, rows), End("consumer", self.consumed, rows))
+
+
+def test_a_producer_s_values_fit_the_tensor_and_the_tensor_s_the_consumer() -> None:
+    narrow = ScalarEncoding(resolve_qonnx_datatype_name("INT4"), (-7, 7))
+
+    def checked(produced: ScalarEncoding, carried: ScalarEncoding) -> object:
+        stream = design_space(
+            Valued(tensor=Tensor((3, 8), carried), produced=produced, consumed=INT4)
+        )
+        return stream.inspect(Valued.well_formed).result
+
+    # A producer tighter than a plainly stated tensor is accepted.
+    assert checked(narrow, INT4) == Available(True)
+    # A tensor tighter than its producer is refused, the range printed only when tightened.
+    refused = checked(INT4, narrow)
+    assert codes(refused) == {"stream-tensor"}
+    assert "producer carries INT4; the stream carries INT4 over [-7, 7]" in str(refused)
+    # The consumer's side is the same check: a tighter tensor fits a plain consumer.
+    plain = design_space(Valued(tensor=Tensor((3, 8), narrow), produced=narrow, consumed=INT4))
+    assert plain.inspect(Valued.well_formed).result == Available(True)
