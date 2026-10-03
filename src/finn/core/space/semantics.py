@@ -27,7 +27,7 @@ class ValueSemantics(Generic[T]):
     """Adapter-owned recognition, equality and snapshots for one value family.
 
     The token denotes compatibility; it is deliberately independent of a Python
-    class or any persistence codec. Custom snapshots must detach mutable state.
+    class or any persisted form. Custom snapshots must detach mutable state.
     """
 
     type_token: object

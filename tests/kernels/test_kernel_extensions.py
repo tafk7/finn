@@ -13,11 +13,8 @@ from finn.core.space import (
     Decision,
     Param,
     Rejected,
-    SelectionSchema,
     View,
     ViewKey,
-    codec_for,
-    codecs,
     composite,
     design_space,
     constraint,
@@ -30,15 +27,12 @@ from finn.kernels.base import Kernel
 from finn.kernels.datatypes.domains import Integer
 from finn.kernels.datatypes.semantics import (
     INTEGER_VECTOR,
-    QONNX_DATATYPE_CODEC,
     QONNX_DATATYPE_VALUE_SEMANTICS,
     THRESHOLD_TABLE,
 )
 from finn.dataflow.datatypes import (
     QONNX_DATATYPE_TOKEN,
     QONNXDataType,
-    decode_datatype,
-    encode_datatype,
     resolve_qonnx_datatype_name,
 )
 
@@ -98,14 +92,10 @@ def test_candidate_dtype_adapter_preserves_canonical_names_and_snapshots(name: s
     frozen = semantics.freeze(value)
     assert frozen == value
     assert frozen is not value
-    assert QONNX_DATATYPE_CODEC.encode(value) == encode_datatype(value)
-    assert QONNX_DATATYPE_CODEC.decode(QONNX_DATATYPE_CODEC.encode(value)) == decode_datatype(
-        encode_datatype(value)
-    )
     assert not semantics.accepts(name)
 
 
-def test_dtype_portable_selection_is_optional_and_uses_exact_canonical_encoding() -> None:
+def test_a_dtype_selection_restores_the_exact_datatype() -> None:
     class DtypeKernel(Kernel):
         id = "test.dtype"
         dtype: QONNXDataType = Decision(
@@ -115,14 +105,7 @@ def test_dtype_portable_selection_is_optional_and_uses_exact_canonical_encoding(
 
     base = design_space(DtypeKernel())
     point = base.with_choices(dtype=resolve_qonnx_datatype_name("TERNARY"))
-    schema = SelectionSchema(
-        DtypeKernel,
-        family=DtypeKernel.id,
-        version=1,
-        bindings=(codec_for(DtypeKernel.dtype, QONNX_DATATYPE_CODEC),),
-    )
-    stored = codecs.encode(selections.capture(point), schema)
-    restored = selections.restore(base, codecs.decode(stored, schema))
+    restored = selections.restore(base, selections.capture(point))
     assert restored.accepted
     assert restored.instance.dtype.name == "TERNARY"
     assert not QONNX_DATATYPE_VALUE_SEMANTICS.values_equal(

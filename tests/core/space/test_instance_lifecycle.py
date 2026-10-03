@@ -1,54 +1,31 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
-"""Plain-Python source freezing and sparse mapping replacement, without graph APIs."""
+"""Plain-Python source freezing, capture and restore, without graph APIs."""
 
 from __future__ import annotations
 
-import pytest
-
 from finn.core.space import (
     Decision,
-    JSONValue,
     Param,
-    SelectionSchema,
     Space,
-    ValueCodec,
-    codec_for,
-    codecs,
     design_space,
     divisors_of,
     selections,
 )
-from finn.core.space.errors import RequestError
 
 
-def _integer(value: JSONValue) -> int:
-    if type(value) is not int:
-        raise ValueError("expected integer")
-    return value
-
-
-def test_freeze_restore_explore_capture_rebind_and_replace_owned_sparse_keys() -> None:
+def test_freeze_restore_explore_capture_and_rebind() -> None:
     class Family(Space):
         extent: int = Param()
         factor: int = Decision(domain=divisors_of(extent))
         buffers: int = Decision(values=(1, 2))
 
-    integer = ValueCodec[int]("integer", 1, lambda value: value, _integer)
-    schema = SelectionSchema(
-        Family,
-        family="mapping-demo",
-        version=1,
-        bindings=(codec_for(Family.factor, integer), codec_for(Family.buffers, integer)),
-        owned_keys=("retired-choice",),
-    )
     facts = {"extent": 12}
     base = design_space(Family(extent=facts["extent"]))
     facts["extent"] = 10
     initial = base.with_choices(factor=3).with_choices(buffers=1)
     captured = selections.capture(initial)
-    encoded = codecs.encode(captured, schema)
-    checkpoint = selections.restore(base, codecs.decode(encoded, schema))
+    checkpoint = selections.restore(base, captured)
     assert checkpoint.accepted and checkpoint.instance.extent == 12
     revised = checkpoint.instance.with_choices(
         checkpoint.instance.field(Family.buffers).clear(),
@@ -62,25 +39,3 @@ def test_freeze_restore_explore_capture_rebind_and_replace_owned_sparse_keys() -
     refused = selections.restore(rebound, selections.capture(explored.instance))
     assert not refused.accepted and refused.instance is rebound
     assert selections.capture(rebound).keys == ()
-    stored: dict[str, object] = {
-        "factor": 3,
-        "buffers": 1,
-        "retired-choice": "old",
-        "display-name": "unchanged",
-    }
-    serialized_entries = codecs.encode(alternative, schema)["entries"]
-    assert isinstance(serialized_entries, list)
-    updates: dict[str, object] = {}
-    for entry in serialized_entries:
-        assert isinstance(entry, dict)
-        key = entry["key"]
-        assert isinstance(key, str)
-        updates[key] = entry
-    replacement = selections.replace_owned(stored, updates, owned_keys=schema.owned_keys)
-    assert replacement == {
-        "factor": {"key": "factor", "codec": "integer", "codec_version": 1, "value": 4},
-        "display-name": "unchanged",
-    }
-    assert stored["buffers"] == 1 and stored["retired-choice"] == "old"
-    with pytest.raises(RequestError, match="unowned"):
-        selections.replace_owned(stored, {"foreign": 9}, owned_keys=schema.owned_keys)

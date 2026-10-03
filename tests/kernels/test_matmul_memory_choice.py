@@ -17,13 +17,8 @@ from qonnx.core.datatype import DataType
 from finn.core.space import (
     Available,
     Inapplicable,
-    JSONValue,
     Rejected,
-    SelectionSchema,
     Unresolved,
-    ValueCodec,
-    codec_for,
-    codecs,
     inspection,
     selections,
 )
@@ -300,41 +295,6 @@ def test_known_refusals_remain_visible_while_the_family_is_unselected():
     }
 
 
-STRING: ValueCodec[str] = ValueCodec("string", 1, lambda value: value, str)
-INTEGER: ValueCodec[int] = ValueCodec("integer", 1, lambda value: value, int)
-
-
-def _boolean(value: JSONValue) -> bool:
-    if type(value) is not bool:
-        raise ValueError("expected a boolean")
-    return value
-
-
-BOOLEAN: ValueCodec[bool] = ValueCodec("boolean", 1, lambda value: value, _boolean)
-
-
-def schema(point):
-    family = type(point)
-    return SelectionSchema(
-        family,
-        family="finn.matmul",
-        version=1,
-        bindings=(
-            codec_for(selector(point), STRING),
-            codec_for(transport(point), STRING),
-            # A reference into the candidate is accepted as well as a handle.
-            codec_for(family.matmul.memory["memstream"].ram_style, STRING),  # type: ignore[index]
-            codec_for(family.matmul.memory["memstream"].pumped_memory, BOOLEAN),  # type: ignore[index]
-            codec_for(family.matmul.packed.pe, INTEGER),
-            codec_for(family.matmul.packed.simd, INTEGER),
-            codec_for(family.matmul.compute, STRING),
-            codec_for(family.x.adapter, STRING),
-            codec_for(family.x.adapter["input_gen"].input_gen.ram_style, STRING),
-            codec_for(family.matmul.packed.compute_pumping, BOOLEAN),
-        ),
-    )
-
-
 def test_selector_and_case_choices_round_trip_through_an_empty_root():
     point = configured(base(weights=WEIGHTS), "memstream", style="block")
     saved = selections.capture(point)
@@ -350,20 +310,17 @@ def test_selector_and_case_choices_round_trip_through_an_empty_root():
         "x.adapter",
         "x.adapter.input_gen.input_gen.ram_style",
     )
-    document = codecs.encode(saved, schema(point))
-    decoded = codecs.decode(document, schema(point))
-    assert decoded == saved
     fresh = base(weights=WEIGHTS)
-    replayed = selections.restore(fresh, decoded)
+    replayed = selections.restore(fresh, saved)
     assert replayed.accepted
     assert replayed.instance.module == point.module
     # Replay under different supplied facts: the same choices, a new image.
-    other = selections.restore(base(weights=tuple(row[::-1] for row in WEIGHTS)), decoded)
+    other = selections.restore(base(weights=tuple(row[::-1] for row in WEIGHTS)), saved)
     assert other.accepted
     assert other.instance.matmul.memory.image != point.matmul.memory.image
     # Without the family's optional fact the choices replay but stay unresolved,
     # and the memory is refused: no known weights to store.
-    unresolved = selections.restore(base(), decoded)
+    unresolved = selections.restore(base(), saved)
     assert unresolved.accepted
     assert isinstance(unresolved.instance.query(Kernel.module), Unresolved)
     assert keys(unresolved.instance.matmul.query(MatMulKernel.supply_supported)) == {
@@ -371,11 +328,11 @@ def test_selector_and_case_choices_round_trip_through_an_empty_root():
     }
     # Facts that invalidate a saved folding refuse replay atomically.
     changed = base(weights=WEIGHTS, n=5)
-    refused = selections.restore(changed, decoded)
+    refused = selections.restore(changed, saved)
     assert not refused.accepted and refused.instance is changed
     # A configured receiver is not a replay target.
     with pytest.raises(RequestError):
-        selections.restore(point, decoded)
+        selections.restore(point, saved)
 
 
 def test_switching_families_is_atomic_and_requires_clearing_stale_case_choices():

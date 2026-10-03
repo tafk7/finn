@@ -15,7 +15,6 @@ from typing import Any, cast
 
 import pytest
 from core.space._collapse_support import answers, open_space
-from core.space.test_codecs import INTEGER, STRING
 
 from finn.core.space import (
     Available,
@@ -27,14 +26,10 @@ from finn.core.space import (
     Param,
     QueryResult,
     Rejected,
-    RequestError,
-    SelectionSchema,
     Space,
     Users,
     View,
     ViewKey,
-    codec_for,
-    codecs,
     composite,
     constraint,
     derived,
@@ -444,44 +439,33 @@ def test_optional_adds_a_none_candidate_that_places_nothing() -> None:
 # -- selections --------------------------------------------------------------------------
 
 
-def schema_for(base: Any) -> SelectionSchema:
-    """Keys ending in ``compute`` are cases (strings); the folds are integers."""
-    handles: dict[str, Any] = {item.key: item.reference for item in inspection.decisions(base)}
-    return SelectionSchema(
-        base,
-        family="unit",
-        version=1,
-        bindings=tuple(
-            codec_for(handle, STRING) if key.endswith("compute") else codec_for(handle, INTEGER)
-            for key, handle in sorted(handles.items())
-        ),
-    )
+def refusal(point: Space, choices: dict[str, object]) -> set[tuple[str, str]]:
+    """Each refused key of ``choices`` and its finding codes."""
+    owned = {item.key: item.reference for item in inspection.decisions(point)}
+    report = point.try_with_choices({owned[key]: value for key, value in choices.items()})
+    assert not report.accepted
+    return {
+        (outcome.owner, finding.code)
+        for outcome in report.outcomes
+        if outcome.status == "refused"
+        for finding in getattr(outcome.result, "findings", ())
+    }
 
 
 def test_selections_capture_and_restore_by_key_and_refuse_unknown_and_narrowed_cases() -> None:
     base = design_space(Unit(width=8))
     point = commit(base, {"compute": "packed", "compute.packed.pe": 4, "compute.packed.simd": 2})
-    schema = schema_for(base)
-    document = codecs.encode(selections.capture(point), schema)
-    restored = selections.restore(design_space(Unit(width=8)), codecs.decode(document, schema))
+    restored = selections.restore(design_space(Unit(width=8)), selections.capture(point))
     assert restored.accepted and restored.instance.cycles == 2
-    entries = cast(list[dict[str, Any]], document["entries"])
-    bogus = {**document, "entries": [{**entries[0], "value": "bogus"}]}
-    with pytest.raises(RequestError, match="compute: unknown structural case 'bogus'"):
-        codecs.decode(bogus, schema)
+    assert refusal(base, {"compute": "bogus"}) == {("compute", "domain-membership")}
 
     class Narrowed(Space):
         unit = Unit(width=8)
         unit.compute = Decision(values=("stub",))  # type: ignore[assignment]
 
     narrowed = design_space(Narrowed())
-    narrowed_schema = schema_for(narrowed)
-    encoded = codecs.encode(
-        selections.capture(commit(narrowed, {"unit.compute": "stub"})), narrowed_schema
-    )
-    wrong = {**encoded, "entries": [{**cast(list[Any], encoded["entries"])[0], "value": "packed"}]}
-    with pytest.raises(RequestError, match="'packed' is narrowed out"):
-        codecs.decode(wrong, narrowed_schema)
+    assert commit(narrowed, {"unit.compute": "stub"}).unit.compute is not None
+    assert refusal(narrowed, {"unit.compute": "packed"}) == {("unit.compute", "domain-membership")}
 
 
 # -- programmatic declaration ------------------------------------------------------------

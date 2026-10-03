@@ -24,7 +24,6 @@ from finn.core.space import (
     BoundDecision,
     BoundValue,
     Change,
-    CodecBinding,
     ConfigurationResult,
     Const,
     ConstraintAssessment,
@@ -38,13 +37,11 @@ from finn.core.space import (
     QueryResult,
     Space,
     Users,
-    ValueCodec,
     ValueHandle,
     ValueSemantics,
     View,
     ViewAssessment,
     ViewKey,
-    codec_for,
     constraint,
     derived,
     design_space,
@@ -321,7 +318,7 @@ class Board(Space):
     stages = Room(area=lobby.cost)  # a view's accepted value supplies a formal
 
 
-def keys(board: Board, house: House, codec: ValueCodec[int]) -> None:
+def keys(board: Board, house: House) -> None:
     assert_type(Room(), Room)  # every member is optional at the call
     assert_type(Room(area=3, finish=2), Room)  # a Decision may be pinned at the call
     assert_type(Kernel.output, Wire)
@@ -333,7 +330,6 @@ def keys(board: Board, house: House, codec: ValueCodec[int]) -> None:
     assert_type(inspection.decision_handle(house, House.heating), DecisionHandle[str])
     assert_type(inspection.value_handle(board, Board.kernel.buffer.word_bits), ValueHandle[int])
     assert_type(inspection.provenance(board, Board.kernel.buffer.depth), Provenance | None)
-    assert_type(codec_for(Room.finish, codec), CodecBinding)
     assert_type(house.with_choices({House.kitchen.finish: 2}), House)
 
 

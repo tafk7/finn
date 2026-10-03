@@ -217,14 +217,13 @@ def test_capture_does_not_evaluate_unrelated_uncommitted_guard_callbacks() -> No
     assert selections.capture(point).keys == ("committed",)
 
 
-def test_selection_reads_replay_and_codec_bindings_have_strict_types(tmp_path: Path) -> None:
+def test_selection_reads_and_replay_have_strict_types(tmp_path: Path) -> None:
     mypy = shutil.which("mypy")
     assert mypy is not None
     project = Path(__file__).resolve().parents[3]
     common = """from typing import assert_type
 from finn.core.space import (
-    Decision, Param, Space, ValueCodec, JSONValue, codec_for, design_space,
-    selections, Selection, ConfigurationResult,
+    Decision, Param, Space, design_space, selections, Selection, ConfigurationResult,
 )
 
 class Family(Space):
@@ -232,12 +231,6 @@ class Family(Space):
     factor: int = Decision(values=(1, 2))
     style: str = Decision(values=("auto", "block"))
 
-def integer(value: JSONValue) -> int:
-    if type(value) is not int:
-        raise ValueError("integer required")
-    return value
-
-integer_codec: ValueCodec[int] = ValueCodec("integer", 1, lambda value: value, integer)
 base = design_space(Family(extent=4))
 selected = selections.capture(base)
 """
@@ -246,7 +239,6 @@ selected = selections.capture(base)
         + """assert_type(selections.capture(base), Selection)
 assert_type(selected.value(Family.factor), int)
 assert_type(selections.restore(base, selected), ConfigurationResult[Family])
-codec_for(Family.factor, integer_codec)
 """
     )
     negative = (
@@ -254,7 +246,6 @@ codec_for(Family.factor, integer_codec)
         + """selected.value(Family.extent)  # accepted: a reference is typed as its value
 selected.edit(Family.factor, 2)  # E
 selected.remove(Family.factor)  # E
-codec_for(Family.style, integer_codec)  # E
 selected.with_changes([])  # E
 
 """

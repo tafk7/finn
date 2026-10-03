@@ -4,7 +4,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Any, TypeVar, overload
 
@@ -206,25 +206,4 @@ def restore(base: S, selection: Selection) -> ConfigurationResult[S]:
     )
 
 
-def replace_owned(
-    mapping: Mapping[str, object], updates: Mapping[str, object], *, owned_keys: Iterable[str]
-) -> dict[str, object]:
-    """Return a mapping with exactly the current owned sparse entries replaced.
-
-    Callers supply both current and obsolete owned keys; unrelated entries keep
-    their values. This helper performs no persistence or external mutation.
-    """
-    owned = frozenset(owned_keys)
-    if any(type(key) is not str or not key for key in owned):
-        raise RequestError("owned mapping keys must be nonempty strings")
-    if any(type(key) is not str or not key for key in updates):
-        raise RequestError("updated mapping keys must be nonempty strings")
-    unknown = updates.keys() - owned
-    if unknown:
-        raise RequestError(f"updates contain unowned keys: {sorted(unknown)}")
-    result = {key: value for key, value in mapping.items() if key not in owned}
-    result.update(updates)
-    return result
-
-
-__all__ = ["Selection", "SelectionEntry", "capture", "replace_owned", "restore"]
+__all__ = ["Selection", "SelectionEntry", "capture", "restore"]
