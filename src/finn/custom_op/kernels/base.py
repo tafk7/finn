@@ -52,6 +52,7 @@ from finn.dataflow.datatypes import (
 from finn.dataflow.tensor import Tensor
 from finn.kernels.base import Kernel
 from finn.kernels.configure import describe, settle
+from finn.kernels.streams import Stream
 from finn.kernels.target import DspBlock
 
 S = TypeVar("S", bound=Space)
@@ -420,6 +421,18 @@ class KernelOp(CustomOp):  # type: ignore[misc]
         for name in dropped:
             self.onnx_node.attribute.remove(get_by_name(self.onnx_node.attribute, name))
         return dropped
+
+    # -- in a partition root ---------------------------------------------------------------
+
+    def owned_streams(self) -> dict[str, Stream]:
+        """The streams this node declares beside its outputs, by tensor: a stored
+        parameter's, its tensor the kernel's view (D5, D6)."""
+        return {}
+
+    def place(self, streams: Mapping[str, Stream]) -> tuple[Kernel, dict[str, str]]:
+        """This node's kernel on a partition's ``streams`` (by tensor), the graph's pins as
+        keywords; and the tensor of each of its input and owned streams, by port."""
+        raise NotImplementedError
 
     # -- inference ------------------------------------------------------------------------
 

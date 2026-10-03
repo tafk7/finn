@@ -13,6 +13,7 @@ result type, a fact-level derived of the table and the bias.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
 import numpy as np
@@ -29,6 +30,8 @@ from finn.custom_op.kernels.base import (
 from finn.custom_op.kernels.cache import Facts
 from finn.custom_op.kernels.roots import ThresholdingNode
 from finn.dataflow.tensor import ScalarEncoding, Tensor
+from finn.kernels.base import Kernel
+from finn.kernels.streams import Stream
 from finn.kernels.thresholding import ThresholdingAxiKernel
 
 
@@ -85,6 +88,15 @@ class Thresholding(KernelOp):
         result = self.view("y_tensor")
         dims = shape(self.model(), self.onnx_node.input[0], self.label)
         return {self.onnx_node.output[0]: (dims, result.element.dtype)}
+
+    def place(self, streams: Mapping[str, Stream]) -> tuple[Kernel, dict[str, str]]:
+        formals: dict[str, Any] = self.facts().formals()
+        del formals["x_tensor"]
+        x = self.onnx_node.input[0]
+        kernel = ThresholdingAxiKernel(
+            **formals, input_stream=streams[x], output_stream=streams[self.onnx_node.output[0]]
+        )
+        return kernel, {"x": x}
 
     def execute_node(self, context: dict[str, Any], graph: Any) -> None:
         x, thresholds = self.onnx_node.input

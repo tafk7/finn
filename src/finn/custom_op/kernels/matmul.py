@@ -13,6 +13,7 @@ rows; B is the (k, n) matrix ONNX stores. The output is A's leading axes and n.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
 import numpy as np
@@ -29,7 +30,9 @@ from finn.custom_op.kernels.base import (
 from finn.custom_op.kernels.cache import Facts
 from finn.custom_op.kernels.roots import StoredMatMulNode, StreamedMatMulNode
 from finn.dataflow.tensor import ScalarEncoding, Tensor
+from finn.kernels.base import Kernel
 from finn.kernels.matmul import MatMulKernel
+from finn.kernels.streams import BufferedStream, Stream
 
 
 class MatMul(KernelOp):
@@ -89,6 +92,26 @@ class MatMul(KernelOp):
         result = self.view("y_tensor")
         leading = shape(self.model(), self.onnx_node.input[0], self.label)[:-1]
         return {self.onnx_node.output[0]: ((*leading, result.shape[-1]), result.element.dtype)}
+
+    def owned_streams(self) -> dict[str, Stream]:
+        if self.facts().root is not StoredMatMulNode:
+            return {}
+        return {self.onnx_node.input[1]: BufferedStream(tensor=self.view("w_tensor"))}
+
+    def place(self, streams: Mapping[str, Stream]) -> tuple[Kernel, dict[str, str]]:
+        facts = self.facts()
+        formals: dict[str, Any] = facts.formals()
+        del formals["x_tensor"]
+        a, b = self.onnx_node.input
+        # The graph's pin, as the node root declares it: a selector's case by key.
+        formals["memory"] = "memstream" if facts.root is StoredMatMulNode else "none"
+        kernel = MatMulKernel(
+            **formals,
+            x_stream=streams[a],
+            w_stream=streams[b],
+            y_stream=streams[self.onnx_node.output[0]],
+        )
+        return kernel, {"x": a, "w": b}
 
     def execute_node(self, context: dict[str, Any], graph: Any) -> None:
         a, b = self.onnx_node.input
