@@ -25,12 +25,14 @@ PYTHONPATH="$RUN_PYTHONPATH" "$PYTHON_BIN" -m pytest -q -m "not xsim" --confcutd
 PYTHONPATH="$RUN_PYTHONPATH" "$PYTHON_BIN" -m pytest -q -m "not xsim" --confcutdir=tests/kernel_ops \
     tests/kernel_ops
 "$RUFF_BIN" format --check src/finn/kernels tests/kernels src/finn/graph tests/graph \
-    src/finn/custom_op/kernels tests/kernel_ops scripts/benchmark-space.py
+    src/finn/custom_op/kernels src/finn/transformation/kernels tests/kernel_ops \
+    scripts/benchmark-space.py
 "$RUFF_BIN" check src/finn/kernels tests/kernels src/finn/graph tests/graph \
-    src/finn/custom_op/kernels tests/kernel_ops scripts/benchmark-space.py
+    src/finn/custom_op/kernels src/finn/transformation/kernels tests/kernel_ops \
+    scripts/benchmark-space.py
 env -u PYTHONPATH MYPYPATH=src:tests "$MYPY_BIN" \
     --no-incremental --strict --explicit-package-bases -p finn.kernels -p finn.graph \
-    -p finn.custom_op.kernels
+    -p finn.custom_op.kernels -p finn.transformation.kernels
 env -u PYTHONPATH MYPYPATH=src:tests "$MYPY_BIN" \
     --no-incremental --strict --explicit-package-bases \
     tests/kernels/typing tests/kernels/helpers.py \

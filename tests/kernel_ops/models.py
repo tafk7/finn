@@ -15,6 +15,7 @@ from qonnx.util.basic import qonnx_make_model
 
 from finn.custom_op.kernels.base import write_target
 from finn.kernels.target import DspBlock
+from kernels import test_design as chain
 
 DOMAIN = "finn.custom_op.kernels"
 INT3 = DataType["INT3"]
@@ -93,6 +94,51 @@ def thresholding_model(
     return model
 
 
+def chain_source(*, annotate_input: bool = True, second_weights: bool = True) -> ModelWrapper:
+    """test_design's Chain as an ONNX model, before conversion: x -> MatMul ``first`` (w1)
+    -> hidden -> MultiThreshold ``activate`` -> levels -> MatMul ``second`` (w2) -> y.
+    Only x's shape is known (a fresh graph); w2 is a graph input unless ``second_weights``.
+    """
+    x = helper.make_tensor_value_info("x", TensorProto.FLOAT, [chain.ROWS, chain.INPUTS])
+    y = helper.make_tensor_value_info("y", TensorProto.FLOAT, None)
+    nodes = [
+        helper.make_node("MatMul", ["x", "w1"], ["hidden"], name="first"),
+        helper.make_node(
+            "MultiThreshold",
+            ["hidden", "thresholds"],
+            ["levels"],
+            name="activate",
+            domain="qonnx.custom_op.general",
+            out_dtype="UINT2",
+            out_bias=0.0,
+        ),
+        helper.make_node("MatMul", ["levels", "w2"], ["y"], name="second"),
+    ]
+    w2 = helper.make_tensor_value_info("w2", TensorProto.FLOAT, [chain.HIDDEN, chain.OUTPUTS])
+    inputs = [x] if second_weights else [x, w2]
+    graph = helper.make_graph(nodes, "chain", inputs, [y])
+    model = ModelWrapper(
+        qonnx_make_model(
+            graph,
+            producer_name="kernel-ops-test",
+            opset_imports=[
+                helper.make_opsetid("", 13),
+                helper.make_opsetid("qonnx.custom_op.general", 1),
+            ],
+        )
+    )
+    model.set_initializer("w1", np.array(chain.W1, dtype=np.float32))
+    if second_weights:
+        model.set_initializer("w2", np.array(chain.W2, dtype=np.float32))
+    model.set_initializer("thresholds", np.array(chain.THRESHOLDS[0], dtype=np.float32))
+    if annotate_input:
+        model.set_tensor_datatype("x", chain.A)
+    for name in ("w1", "w2"):
+        model.set_tensor_datatype(name, chain.W)
+    model.set_tensor_datatype("thresholds", chain.H)
+    return model
+
+
 def lift(model: ModelWrapper, tensor: str) -> None:
     """Make an initializer a graph input (a stored node's weights become an edge)."""
     values = model.get_initializer(tensor)
@@ -107,6 +153,7 @@ def lift(model: ModelWrapper, tensor: str) -> None:
 
 __all__ = [
     "DOMAIN",
+    "chain_source",
     "H",
     "INT3",
     "THRESHOLDS",

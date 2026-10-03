@@ -92,7 +92,11 @@ def annotated(model: Any, tensor: str) -> bool:
 def datatype(model: Any, tensor: str, label: str) -> QONNXDataType:
     """The annotation of ``tensor``; an unannotated tensor is refused."""
     if not annotated(model, tensor):
-        raise KernelOpError(f"{label}: {tensor} has no datatype annotation (absent is not FLOAT32)")
+        produced = model.find_producer(tensor) is not None
+        raise KernelOpError(
+            f"{label}: {tensor} has no datatype annotation (absent is not FLOAT32"
+            + ("; InferKernelTensors states each node's outputs in order)" if produced else ")")
+        )
     return canonical_qonnx_datatype(model.get_tensor_datatype(tensor))
 
 
