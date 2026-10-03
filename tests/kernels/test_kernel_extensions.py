@@ -89,9 +89,9 @@ def test_candidate_dtype_adapter_preserves_canonical_names_and_snapshots(name: s
     semantics = QONNX_DATATYPE_VALUE_SEMANTICS
     assert semantics.type_token is QONNX_DATATYPE_TOKEN
     assert semantics.accepts(value)
-    frozen = semantics.freeze(value)
-    assert frozen == value
-    assert frozen is not value
+    # A datatype is a value (one immutable instance per canonical name), so the
+    # snapshot is the value itself.
+    assert semantics.freeze(value) is value
     assert not semantics.accepts(name)
 
 
@@ -130,7 +130,7 @@ def test_tuple_adapters_preserve_exact_integer_structure_without_geometry_valida
     assert THRESHOLD_TABLE.freeze(table) is table
 
 
-def test_explicit_dtype_semantics_support_typed_protocol_results_and_detached_values() -> None:
+def test_explicit_dtype_semantics_support_typed_protocol_results_of_immutable_values() -> None:
     class Typed(Kernel):
         id = "test.typed"
         dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
@@ -143,13 +143,11 @@ def test_explicit_dtype_semantics_support_typed_protocol_results_and_detached_va
 
     original = resolve_qonnx_datatype_name("INT8")
     point = design_space(Typed(dtype=original))
-    setattr(original, "_bitwidth", 16)
-    assert point.dtype.name == "INT8"
-    returned = point.result
-    setattr(returned, "_bitwidth", 32)
-    assert point.result.name == "INT8"
-    result = point.physical
-    assert result.name == "INT8"
+    assert point.dtype is original
+    # Nothing to detach: a datatype value refuses mutation.
+    with pytest.raises(AttributeError, match="immutable datatype value"):
+        setattr(point.result, "_bitwidth", 32)
+    assert point.result is original and point.physical.name == "INT8"
 
 
 def test_composite_extends_kernel_with_typed_optional_views_and_independent_nodes() -> None:

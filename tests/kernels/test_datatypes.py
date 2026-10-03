@@ -358,17 +358,16 @@ def test_a_jointly_invalid_fixed_point_name_is_refused_not_raised() -> None:
 @pytest.mark.parametrize(
     ("stored", "resolves_to"),
     [
-        ("FLOAT<5,10,0>", "FLOAT<5,10,15>"),
+        ("FLOAT<5,10>", "FLOAT<5,10,15>"),
         ("UINT1", "BINARY"),
     ],
 )
 def test_decoding_refuses_a_noncanonical_persisted_name(stored: str, resolves_to: str) -> None:
     """Persistence is strict: canonical spelling or nothing.
 
-    ``FLOAT<5,10,0>`` is the one that matters. QONNX reads a zero exponent bias
-    as "unset" and substitutes its default, so a stored datatype comes back as a
-    numerically *different* one -- the same class of silent reinterpretation as
-    ``TERNARY`` arriving as ``INT2``, one layer out from where that was fixed.
+    ``FLOAT<5,10>`` omits its exponent bias, which QONNX fills with the default;
+    a persisted name states it (``FLOAT<5,10,15>``), so the short spelling did
+    not come from here.
 
     ``UINT1`` is benign in itself: it and ``BINARY`` are one value. It is
     refused anyway, because the rule is "canonical or nothing", and carving an
@@ -394,7 +393,9 @@ def test_source_facing_names_stay_permissive() -> None:
     """
 
     assert resolve_qonnx_datatype_name("UINT1") == DataType["BINARY"]
-    assert resolve_qonnx_datatype_name("FLOAT<5,10,0>") == DataType["FLOAT<5,10,15>"]
+    assert resolve_qonnx_datatype_name("FLOAT<5,10>") == DataType["FLOAT<5,10,15>"]
+    # An explicit zero exponent bias is a datatype of its own, not "unset".
+    assert resolve_qonnx_datatype_name("FLOAT<5,10,0>").name == "FLOAT<5,10,0>"
 
 
 def test_everything_encode_writes_decodes_back(  # noqa: D401 - reads as a statement
@@ -417,83 +418,33 @@ def test_the_previous_encoding_is_refused_rather_than_reinterpreted() -> None:
         decode_datatype({"numeric_element_type": ["int", 8]})
 
 
-# -- mutability --------------------------------------------------------------
+# -- immutability ------------------------------------------------------------
 
 
-def test_freezing_drops_the_caller_s_instance() -> None:
-    """The reason the snapshot re-resolves rather than returning its argument.
+def test_freezing_keeps_the_one_immutable_value() -> None:
+    """A datatype is a value: one instance per canonical name, frozen once built.
 
-    ``DataType[...]`` allocates a fresh object per call and its private fields
-    are writable, so a stored datatype that *is* the caller's object can be
-    renamed underneath the value that holds it.  Freezing must hand back a
-    different allocation.
+    The snapshot is the caller's instance itself, and no field of it can be
+    reassigned, so nothing can rename a datatype underneath a value holding it.
     """
 
     supplied = DataType["INT8"]
     frozen = cast(QONNXDataType, QONNX_DATATYPE_SEMANTICS.freeze(supplied))
-    assert frozen == supplied
-    assert frozen is not supplied
-
-    supplied._bitwidth = 9
-    assert supplied.name == "INT9"
+    assert frozen is supplied and supplied is DataType["INT8"]
+    with pytest.raises(AttributeError, match="immutable datatype value"):
+        setattr(supplied, "_bitwidth", 9)
     assert frozen.name == "INT8"
 
 
-def test_mutation_renames_a_datatype_and_loses_it_from_a_mapping() -> None:
-    """The hazard being defended against, stated once so it is not folklore.
+def test_a_datatype_keeps_its_key_in_a_mapping() -> None:
+    """The hazard the old defences guarded (a mutated key orphaned in a dict) is
+    gone: the mutation is refused, so the entry stays reachable under its key."""
 
-    Identity and hash are both derived from the canonical name, so mutating a
-    live datatype does not merely change what it means -- the entry it keys can
-    no longer be found by the datatype it was stored under, with no error
-    anywhere.
-
-    Both assertions below are deliberately seed-independent, which took two
-    attempts to get right and is worth recording. ``mutated not in holder``
-    and ``DataType["INT9"] in holder`` both *look* like the point and are both
-    decided by which bucket two randomized string hashes land in: ``dict``
-    probes one bucket and compares by identity before equality. Either would
-    pass or fail on the run's ``PYTHONHASHSEED``.
-
-    What is true regardless: the entry stays in the bucket computed from the
-    *old* hash, so a lookup by the key it was stored under probes that bucket
-    and finds a value that no longer compares equal to it -- while the entry
-    itself is still sitting in the mapping, now reporting a different name.
-    Orphaned rather than moved, and silently.
-    """
-
-    mutated = DataType["INT8"]
-    holder = {mutated: "eight"}
+    held = DataType["INT8"]
+    holder = {held: "eight"}
+    with pytest.raises(AttributeError, match="immutable datatype value"):
+        setattr(held, "_bitwidth", 9)
     assert holder[DataType["INT8"]] == "eight"
-
-    mutated._bitwidth = 9
-    assert mutated.name == "INT9"
-
-    # The key it was stored under no longer reaches it...
-    assert DataType["INT8"] not in holder
-    # ...but the entry is still there, under a key that now means something else.
-    assert len(holder) == 1
-    assert next(iter(holder)).name == "INT9"
-
-
-def test_a_mutated_instance_is_still_recognized_as_what_it_now_says_it_is() -> None:
-    """Being exact about what the boundary can and cannot detect.
-
-    A datatype mutated to ``INT9`` honestly presents as ``INT9`` and resolves,
-    so recognition admits it -- correctly, since QONNX identity is by canonical
-    name and there is nothing left to distinguish it from a genuine ``INT9``.
-
-    The protection is not detection but re-resolution: what gets stored is the
-    registered ``INT9``, and the mutated object is dropped.  That is why every
-    ingestion boundary must canonicalize rather than merely validate.
-    """
-
-    mutated = DataType["INT8"]
-    mutated._bitwidth = 9
-    assert is_qonnx_datatype(mutated) is True
-
-    frozen = QONNX_DATATYPE_SEMANTICS.freeze(mutated)
-    assert frozen == DataType["INT9"]
-    assert frozen is not mutated
 
 
 # -- one value domain --------------------------------------------------------
@@ -510,9 +461,9 @@ def test_every_datatype_field_shares_one_token() -> None:
     assert QONNX_DATATYPE_SEMANTICS.is_compatible_with(QONNX_DATATYPE_SEMANTICS)
 
 
-def test_equality_follows_canonical_identity_not_allocation() -> None:
+def test_equality_follows_canonical_identity() -> None:
     left = DataType["FIXED<8,4>"]
     right = DataType["FIXED<8,4>"]
-    assert left is not right
+    assert left is right  # one instance per canonical name
     assert QONNX_DATATYPE_SEMANTICS.values_equal(left, right) is True
     assert QONNX_DATATYPE_SEMANTICS.values_equal(left, DataType["FIXED<8,3>"]) is False

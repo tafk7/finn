@@ -22,11 +22,12 @@ def test_subbyte_scalars_pack_tightly_into_a_byte_and_directions_follow_the_endp
     )
 
 
-def test_dtype_is_a_snapshot_not_a_mutable_caller_reference():
+def test_dtype_is_the_immutable_value_the_caller_gave():
     dtype = DataType["INT3"]
     stream = AxiStream("data", dtype, 2, endpoint=Endpoint.TARGET)
-    dtype._bitwidth = 8
-    stream.dtype._bitwidth = 16
+    assert stream.dtype is dtype
+    with pytest.raises(AttributeError, match="immutable datatype value"):
+        dtype._bitwidth = 8
     assert stream.dtype == DataType["INT3"]
     assert stream.data_width == 8
 
