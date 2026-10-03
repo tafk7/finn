@@ -29,9 +29,11 @@ history at commit `5dd9df9bc`.
   the images. Build data FINN does not contain (finn-hlslib, board files) is not
   Python: it is declared as [external resources](#external-resources).
 * **Vivado** is always the user's, described once per machine in
-  `~/.config/finn/xilinx.env`. `docker/xilinx_install.py` locates it (both AMD
-  install layouts) for `docker/config.py` on the host and for the sbx workload's
-  startup hook, and `docker/finn-toolchain.sh` applies it, natively
+  `~/.config/finn/xilinx.env`, read by one reader, `finn.util.machine_file`.
+  `docker/xilinx_install.py` locates the installation (both AMD install layouts)
+  for `docker/config.py` on the host and for the sbx workload's startup hook,
+  FINN's tool launches take the licence from it, and `docker/finn-toolchain.sh`
+  applies it, natively
   (`scripts/activate.sh`) and in the image (entrypoint and tool shims). A
   variable overrides the file for one shell, container or sandbox, so installed
   versions run side by side from the same image.

@@ -72,8 +72,9 @@ version for one container. `FINN_RESOURCES_*` directories are mounted at their
 own paths.
 
 `docker/config.py` is the single executable Python host resolver for Docker and
-native installation. It reads the machine file (through `xilinx_install.py`,
-which the sbx workload shares) and preserves path/layout probing, licence
+native installation. It reads the machine file (through FINN's reader,
+`src/finn/util/machine_file.py`, which `xilinx_install.py` loads and the sbx
+workload shares) and preserves path/layout probing, licence
 classification, UID/GID handling, shell output and Compose output:
 
 ```bash

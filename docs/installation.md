@@ -88,7 +88,8 @@ FINN_LICENSE_VENDOR_PORT=2101
 | `PLATFORM_REPO_PATHS` | Vitis platforms (optional) |
 
 Native activation, `docker/run --fpga`, the Dev Container and FINN's sbx kit all
-read it. The format is that of an sbx argument file, since the file is one:
+read it, and so does FINN itself when it launches a Xilinx tool: a process that
+never sourced `scripts/activate.sh` still gets the licence. The format is that of an sbx argument file, since the file is one:
 `NAME=value` lines and `#` comment lines, absolute paths, no quotes, no trailing
 comments, and only the names above. `XILINXD_LICENSE_FILE` in your environment
 still takes precedence over the host and port, for licence files or several
@@ -410,7 +411,10 @@ launcher argv prefix. `Selection.prepare()` snapshots the mapping. With local
 settings and no base mapping, it uses system PATH plus HOME/user/locale/temp/display
 and licence inputs. To accept additional base variables, pass a mapping explicitly;
 FINN does not attempt to unsource a previously activated installation. Bash startup
-hooks and exported functions are removed in children.
+hooks and exported functions are removed in children. A prepared environment that
+names no licence gets the machine file's (`XILINXD_LICENSE_FILE=PORT@HOST`), except
+on a launcher route, whose site owns it; `launch_process_helper` without an
+environment launches in `Selection().prepare()`'s.
 
 HLS and stitched-IP Vivado commands execute with argv, child env and cwd. Probes
 use the identical route and a bounded timeout. `CallHLS(toolchain=...)` and
