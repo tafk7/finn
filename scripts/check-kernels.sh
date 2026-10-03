@@ -21,12 +21,16 @@ PYTHONPATH="$RUN_PYTHONPATH" "$PYTHON_BIN" -m pytest -q -m "not xsim" --confcutd
     tests/kernels
 # The graph adapters, the layer above finn.kernels.
 PYTHONPATH="$RUN_PYTHONPATH" "$PYTHON_BIN" -m pytest -q -m "not xsim" --confcutdir=tests/graph tests/graph
+# The KernelOps (finn.custom_op.kernels), also above finn.kernels.
+PYTHONPATH="$RUN_PYTHONPATH" "$PYTHON_BIN" -m pytest -q -m "not xsim" --confcutdir=tests/kernel_ops \
+    tests/kernel_ops
 "$RUFF_BIN" format --check src/finn/kernels tests/kernels src/finn/graph tests/graph \
-    scripts/benchmark-space.py
+    src/finn/custom_op/kernels tests/kernel_ops scripts/benchmark-space.py
 "$RUFF_BIN" check src/finn/kernels tests/kernels src/finn/graph tests/graph \
-    scripts/benchmark-space.py
+    src/finn/custom_op/kernels tests/kernel_ops scripts/benchmark-space.py
 env -u PYTHONPATH MYPYPATH=src:tests "$MYPY_BIN" \
-    --no-incremental --strict --explicit-package-bases -p finn.kernels -p finn.graph
+    --no-incremental --strict --explicit-package-bases -p finn.kernels -p finn.graph \
+    -p finn.custom_op.kernels
 env -u PYTHONPATH MYPYPATH=src:tests "$MYPY_BIN" \
     --no-incremental --strict --explicit-package-bases \
     tests/kernels/typing tests/kernels/helpers.py \
