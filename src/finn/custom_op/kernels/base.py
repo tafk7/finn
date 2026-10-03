@@ -22,8 +22,8 @@ Two kinds of attribute:
 
 Replay commits the node's choices atomically on its cached base point; a choice
 nested under a selector the interim rule leaves unpersisted (``compute.packed.pe``
-with ``compute`` open) reads its selector's implied case (PROTOTYPE: implied
-decisions). ``save`` takes choices, never a point, so implied cases never reach
+with ``compute`` open) reads its selector's forced case (PROTOTYPE: forced
+decisions). ``save`` takes choices, never a point, so forced cases never reach
 a node. A refusal names every
 refused key, an inapplicable one too (it carries no finding of its own).
 """
@@ -178,8 +178,8 @@ def replay(base: S, choices: Mapping[str, object]) -> S | dict[str, str]:
     """Commit persisted ``choices`` on ``base``.
 
     A choice nested under a selector nobody committed (``compute.packed.pe`` with
-    ``compute`` open) is applicable when the selector is implied (its one viable
-    case); implied cases are never committed, so nothing settles here.
+    ``compute`` open) is applicable when the selector is forced (its one viable
+    case); forced cases are never committed, so nothing settles here.
     """
     return committed(base, choices)
 

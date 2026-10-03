@@ -35,6 +35,7 @@ from .declarations import (
 from .errors import RequestError
 from .ir import Layer, LinkedModel, NodeKind, Provenance
 from .occurrence import candidate as _candidate
+from .forcing import Forced, report
 from .occurrence import state
 from .references import DecisionHandle, ValueHandle, _descend, decision_key
 from .results import (
@@ -385,6 +386,12 @@ def provenance(subject: Space | Model[S] | type[Space], reference: object) -> Pr
     return linked.provenance.get(compiled.resolve(scope, reference))
 
 
+def forced(point: Space) -> tuple[Forced, ...]:
+    """The open Decisions the configuration forces (one viable case each), with the
+    reason; derived at read time, never stored (PROBE: design/stream-source)."""
+    return report(point)
+
+
 def pinned(subject: Space | Model[S] | type[Space]) -> tuple[Provenance, ...]:
     """Every decision key an override removed by pinning its coordinate, with who pinned it."""
     compiled, scope = _context(subject)
@@ -580,6 +587,7 @@ __all__ = [
     "ChoiceInfo",
     "DecisionInfo",
     "EvidenceNode",
+    "Forced",
     "Layer",
     "NodeInfo",
     "Provenance",
@@ -595,6 +603,7 @@ __all__ = [
     "decisions",
     "dependencies",
     "explain",
+    "forced",
     "is_declaration",
     "members",
     "model",

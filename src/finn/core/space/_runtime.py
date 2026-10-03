@@ -59,12 +59,13 @@ class Snapshot:
     parameters: Mapping[int, object]
     assignments: Mapping[int, object] = field(default_factory=dict)
     lock: RLock = field(default_factory=RLock, repr=False)
-    # Whether an open Decision with one viable case reads as that case (implied).
-    implying: bool = True
+    # Whether an open Decision with one viable case reads as that case (forced): false
+    # only on the copies forcing evaluates candidate cases on.
+    forcing: bool = True
     cache: dict[int, Evaluation] = field(default_factory=dict, init=False, repr=False)
     work: _execution.Work = field(default_factory=_execution.Work, init=False, repr=False)
-    # The snapshot's implications, computed on the first read of an open Decision.
-    implication: dict[str, object] = field(default_factory=dict, init=False, repr=False)
+    # The snapshot's forced Decisions, found on the first read of an open Decision.
+    forced: dict[str, object] = field(default_factory=dict, init=False, repr=False)
 
     def __post_init__(self) -> None:
         if not isinstance(self.parameters, MappingProxyType):
@@ -92,7 +93,7 @@ class _TrialSnapshot(Snapshot):
 
     def __init__(self, base: Snapshot, candidates: Mapping[int, object]) -> None:
         pending: dict[int, object] = {}
-        super().__init__(base.model, base.parameters, {}, base.lock, base.implying)
+        super().__init__(base.model, base.parameters, {}, base.lock, base.forcing)
         object.__setattr__(self, "_base", base)
         object.__setattr__(self, "assignments", MappingProxyType(pending))
         object.__setattr__(self, "_pending", pending)
@@ -110,21 +111,21 @@ class _TrialSnapshot(Snapshot):
         if self._published:
             raise RuntimeError("a admission trial can only be published once")
         object.__setattr__(self, "_published", True)
-        return Snapshot(self.model, self.parameters, self._pending, implying=self.implying)
+        return Snapshot(self.model, self.parameters, self._pending, forcing=self.forcing)
 
 
-def _implied(snapshot: Snapshot, index: int) -> QueryResult[object] | None:
-    """An open Decision's implied value (its one viable case), its refusal (no viable
-    case), or None (several, or a snapshot that does not imply). A trial reads its
-    base's implications for the Decisions it does not change."""
-    from .implication import implications  # noqa: PLC0415 - runtime/implication cycle
+def _forced(snapshot: Snapshot, index: int) -> QueryResult[object] | None:
+    """An open Decision's forced value (its one viable case), its refusal (no viable
+    case), or None (several, or a snapshot that does not force). A trial reads its
+    base's for the Decisions it does not change."""
+    from .forcing import forced  # noqa: PLC0415 - runtime/forcing cycle
 
     source = snapshot._base if isinstance(snapshot, _TrialSnapshot) else snapshot
-    if not source.implying:
+    if not source.forcing:
         return None
-    found = implications(source)
-    if index in found.implied:
-        return Available(found.implied[index])
+    found = forced(source)
+    if index in found.values:
+        return Available(found.values[index])
     if index in found.refused:
         return found.refused[index]
     return None
@@ -296,9 +297,9 @@ def _frame(snapshot: Snapshot, node: Node) -> _execution.Frame:
                 snapshot.admit(node.index, candidate)
                 return Evaluation(Available(snapshot.assignments[node.index]))
             return Evaluation(admission.result)
-        implied = _implied(snapshot, node.index)
-        if implied is not None:
-            return Evaluation(implied)
+        found = _forced(snapshot, node.index)
+        if found is not None:
+            return Evaluation(found)
         return Evaluation(
             Unresolved(
                 (
@@ -569,10 +570,6 @@ def decision_state(snapshot: Snapshot, node_index: int) -> QueryResult[DecisionS
         if inactive is not None:
             return inactive
         if node_index not in snapshot.assignments:
-            implied = _implied(snapshot, node_index)
-            if isinstance(implied, Available):
-                value = _clone(node, implied.value, owner=node.owner, role="decision state")
-                return Available(DecisionState(node.owner, "implied", value))
             return Available(DecisionState(node.owner))
         value = _clone(
             node, snapshot.assignments[node_index], owner=node.owner, role="decision state"

@@ -204,12 +204,11 @@ def constraint_result(answer: bool | QueryResult[bool], owner: str) -> QueryResu
 @dataclass(frozen=True, slots=True)
 class DecisionState(Generic[T]):
     owner: str
-    # implied: not committed, the one viable case (or value) the configuration admits
-    status: Literal["unassigned", "committed", "implied"] = "unassigned"
+    status: Literal["unassigned", "committed"] = "unassigned"
     value: T | None = None
 
     def __post_init__(self) -> None:
-        if self.status not in {"unassigned", "committed", "implied"}:
+        if self.status not in {"unassigned", "committed"}:
             raise ValueError("unknown decision state")
         if self.status == "unassigned" and self.value is not None:
             raise ValueError("an unassigned decision has no value")
