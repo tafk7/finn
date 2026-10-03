@@ -29,7 +29,6 @@
 import pytest
 
 import numpy as np
-import os
 from onnx import TensorProto
 from onnx import helper as oh
 from os.path import join
@@ -146,9 +145,9 @@ transform_dict = {
     "identical_op",
     ["Transpose_0231", "Transpose_0312", "Mul", "Add", "Mul_channelwise", "Add_channelwise"],
 )
-def test_move_identical_op_past_join_concat(identical_op):
+def test_move_identical_op_past_join_concat(identical_op, tmp_path):
     model = create_concat_model(identical_op)
-    build_dir = os.environ["FINN_BUILD_DIR"]
+    build_dir = str(tmp_path)
     model.save(join(build_dir, "concat_pytest_model_{}.onnx".format(identical_op)))
 
     # Create input data
