@@ -133,6 +133,19 @@ def test_what_the_graph_cannot_be_is_refused():
         graph_design(wrapped, target_dsp=DspBlock.DSP48E2, target_period_ns=5.0)
 
 
+def test_an_initializer_is_admitted_against_its_annotation_by_its_value_summary():
+    outside = model()
+    outside.set_initializer("w1", np.full((INPUTS, HIDDEN), 4, dtype=np.float32))
+    with pytest.raises(
+        GraphError, match=r"first: the weights w1 are annotated INT3 and hold values over \[4, 4\]"
+    ):
+        graph_design(outside, target_dsp=DspBlock.DSP48E2, target_period_ns=5.0)
+    fractional = model()
+    fractional.set_initializer("w2", np.full((HIDDEN, OUTPUTS), 0.5, dtype=np.float32))
+    with pytest.raises(GraphError, match="second: the weights w2 are not integers"):
+        graph_design(fractional, target_dsp=DspBlock.DSP48E2, target_period_ns=5.0)
+
+
 def test_the_finn_model_carries_each_kernels_mvau_attributes():
     design, point = configured(model())
     rewritten = finn_model(model(), point, design.kernels)

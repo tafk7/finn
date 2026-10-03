@@ -1,29 +1,37 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""One datatype identity shared by kernels and dataflow models: QONNX's own.
+"""The QONNX-dataflow datatype boundary: one datatype identity, QONNX's own.
 
-The stack used to convert a QONNX datatype into a local ``(type_id, bit_width)``
-pair on the way in and reconstruct a QONNX name on the way out.  Two authorities
-for one fact, and the reduction is lossy: ``TERNARY`` and ``INT2`` reduce to the
-same pair despite different value domains, and every sixteen-bit floating format
-reduces to ``("float", 16)``.
+There is no intermediate representation. A local ``(type_id, bit_width)`` pair
+would be a second authority for one fact, and a lossy one: ``TERNARY`` and
+``INT2`` reduce to the same pair despite different value domains, and every
+sixteen-bit floating format reduces to ``("float", 16)``.
 
-So there is no intermediate value.  A tensor's datatype travels from the
-``ModelWrapper`` through the problem instance, the Region operand, Kernel
-coverage, and artifact metadata as the same QONNX datatype *value*, and its
-canonical name is the only thing ever persisted.
+What crosses it:
+
+- **Datatypes** come from the model's QONNX annotations
+  (``ModelWrapper.get_tensor_datatype``), read by the graph adapter
+  (``finn.graph``) and passed to kernels as facts. They travel as the same
+  QONNX datatype *value*; a kernel's result type goes back as an annotation.
+- **Persisted**, a datatype is its canonical name and nothing else
+  (``encode_datatype``, ``decode_datatype``).
+- **Value information** is not a datatype. An initializer's values are
+  admitted against its annotation from QONNX's value summary at the graph
+  boundary; the range of values a stream carries lives on its element
+  (``finn.dataflow.tensor.ScalarEncoding``), stated by the value owner and
+  derived again on every build. Kernels read neither annotations nor
+  summaries: they never read ONNX.
 
 "Value", not "object", is exact: every ingestion boundary re-resolves through
-the canonical name, so what a Region holds is a fresh allocation equal to what
-the caller supplied rather than the caller's own instance.  That is deliberate
--- see below.
+the canonical name, so what a tensor's element holds is a fresh allocation
+equal to what the caller supplied rather than the caller's own instance. That
+is deliberate -- see below.
 
-This module is the boundary that makes that safe.  It has **no FINN imports at
-all**, so ``region.py`` can depend on it without a cycle and without dragging
-the engine into the model layer -- a separation ``test_api_and_boundaries``
-enforces.  The engine-side ``ValueSemantics`` declaration therefore lives in
-``finn.kernels.datatypes.semantics``, built from the helpers here.
+This module has **no FINN imports at all**, so ``finn.dataflow`` builds on it
+without dragging the engine into its datatypes (``test_package_boundaries``
+holds the package directions). The engine-side ``ValueSemantics`` declaration
+lives in ``finn.kernels.datatypes.semantics``, built from the helpers here.
 
 Three hazards it exists to close, each verified against the pinned QONNX:
 
@@ -80,9 +88,8 @@ class QONNXDataType(Protocol):
     It is **not** a second value representation, a registry, or an engine value
     token: runtime values are real ``BaseDataType`` instances and the engine
     token is ``BaseDataType`` itself.  Adding a method here is a claim that the
-    dataflow stack needs it from every datatype -- check the caveats in
-    ``open/qonnx-datatype-adoption.md`` §13 before doing so, because several
-    QONNX methods are not total.
+    dataflow stack needs it from every datatype -- and several QONNX methods
+    are not total (see ``min`` below).
     """
 
     @property
@@ -97,12 +104,11 @@ class QONNXDataType(Protocol):
     def is_fixed_point(self) -> bool: ...
 
     # PARTIAL.  Unlike everything above it, this is not defined for every QONNX
-    # datatype: ``ScaledIntType`` raises.  It is declared because the stack does
-    # genuinely need a datatype's representable range -- the narrow-weight
-    # promise asks for the minimum, and the datatype-continuity audit compares
-    # both endpoints so a reduced representation cannot stand in for the live
-    # value. Hiding either call behind a cast would hide the dependency too.
-    # Every caller must guard partial uses. Do not add further partial methods
+    # datatype: ``ScaledIntType`` raises, and wide types may answer in floating
+    # point.  It is declared because a datatype's representable range is part
+    # of the surface; an ordinary integer's exact bounds come from
+    # ``ordinary_integer_bounds`` instead, which is what an element's range is
+    # checked against.  Every caller must guard partial uses. Do not add further partial methods
     # without the same treatment; ``get_hls_datatype_str`` in particular raises
     # a bare ``AssertionError`` for arbitrary float formats, which no ``except``
     # clause should be catching.

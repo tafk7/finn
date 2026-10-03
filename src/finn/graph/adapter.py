@@ -18,10 +18,16 @@ lifts the initializer to a graph input. Each weight stream may buffer its words
 in a FIFO (``<stream>.transport``). Leading activation axes are rows
 (``(1, M, K)`` is ``M`` rows of ``K``).
 
+Datatypes come from the model's annotations. An initializer is admitted
+against its annotation by QONNX's value summary of it
+(``initializer_value_summary``): every value integral and within the
+annotation's range, else a ``GraphError`` naming the tensor; the kernel then
+owns the values and states their range on its weight stream (``finn.dataflow.datatypes``).
+
 Each MatMul's result tensor is inferred node by node from the kernel's facts
 alone (``MatMulKernel.result_tensor``), before any stream exists, and so is a
-stored weight stream's (``weight_tensor``); a node the kernel refuses is a
-``GraphError``. The result is the kernel's exact integer type, which flows to
+stored weight stream's (``weight_tensor``, over the weights' range); a node the
+kernel refuses is a ``GraphError``. The result is the kernel's exact integer type, which flows to
 the stream it produces and to every consumer; the model's annotation of that
 tensor must admit it (an unannotated ``FLOAT32`` admits anything). Every other
 operator is refused. Provisional: the kernel's own ONNX operator will infer
@@ -42,10 +48,15 @@ from math import prod
 from typing import Any
 
 from onnx import helper
+from qonnx.analysis.tensor_value_summary import (
+    UnsupportedTensorValueError,
+    initializer_value_summary,
+)
 from qonnx.core.modelwrapper import ModelWrapper
 
 from finn.core.space import Available, composite, design_space
 from finn.dataflow.datatypes import (
+    DatatypeError,
     QONNXDataType,
     canonical_qonnx_datatype,
     ordinary_integer_bounds,
@@ -100,6 +111,26 @@ def _admits(annotated: QONNXDataType, exact: QONNXDataType) -> bool:
         return False
     need_low, need_high = ordinary_integer_bounds(exact)
     return low <= need_low and need_high <= high
+
+
+def _admitted(model: ModelWrapper, label: str, tensor: str, dtype: QONNXDataType) -> None:
+    """An initializer's values are integers its annotation holds, by its value summary."""
+    try:
+        summary = initializer_value_summary(model, tensor)
+    except UnsupportedTensorValueError as error:
+        raise GraphError(f"{label}: the weights {tensor}: {error}") from error
+    if not summary.is_integral:
+        raise GraphError(f"{label}: the weights {tensor} are not integers")
+    try:
+        low, high = ordinary_integer_bounds(dtype)
+    except DatatypeError:
+        return  # not an ordinary integer annotation: the kernel refuses its datatype
+    observed = (int(summary.minimum), int(summary.maximum))
+    if not low <= observed[0] <= observed[1] <= high:
+        raise GraphError(
+            f"{label}: the weights {tensor} are annotated {dtype.name} and hold values "
+            f"over {list(observed)}"
+        )
 
 
 def _rows(shape: tuple[int, ...], tensor: str) -> tuple[int, int]:
@@ -176,9 +207,8 @@ def graph_design(
         )
         initializer = model.get_initializer(b)
         if initializer is not None:
+            _admitted(model, label, b, weights_dtype)
             values = initializer.reshape(k, n)
-            if (values != values.round()).any():
-                raise GraphError(f"{label}: the weights {b} are not integers")
             facts["weights"] = tuple(tuple(int(v) for v in row) for row in values)
         # The node's inference, by hand until the kernel has its ONNX operator.
         result, stored = _inferred(label, facts)
