@@ -78,7 +78,6 @@ def test_a_core_declares_ports_folding_factors_and_facts_and_the_base_derives_th
         "compute.target_period_ns",
         "compute.reshape_activations",
         "compute.result_dtype",
-        "compute.narrow_weights",
         "compute.x_stream",
         "compute.w_stream",
         "compute.y_stream",
@@ -226,6 +225,26 @@ def test_constraints_gate_acceptance_without_revalidating_raw_codegen():
     assert point.query(DotpAxiKernel.codegen) == physical.output_result
     assert dict(physical.output_result.value.parameters)["PUMPED_COMPUTE"] == 1
     assert codes(physical.accepted_result) == {"dotp-pumping"}
+
+
+def test_narrow_weights_derive_from_the_weight_stream_s_range():
+    narrow = kernel(weights_dtype=DataType["INT4"], weights_range=(-7, 7))
+    assert narrow.narrow_weights and narrow.parameters()["NARROW_WEIGHTS"] == 1
+    plain = kernel(weights_dtype=DataType["INT4"])
+    assert not plain.narrow_weights and plain.parameters()["NARROW_WEIGHTS"] == 0
+    # A range that holds the minimum is not narrow, however tight its top.
+    assert not kernel(weights_dtype=DataType["INT4"], weights_range=(-8, 0)).narrow_weights
+
+
+def test_narrow_weights_may_be_as_wide_as_the_dsp_a_input():
+    # DSP48E1's A input is 25 bits: a sign guard bit leaves 24 for weights, unless narrow.
+    wide = dict(
+        target_dsp=DspBlock.DSP48E1, weights_dtype=DataType["INT25"], result_dtype=DataType["INT48"]
+    )
+    plain = kernel(**wide).inspect(DotpAxiKernel.core_supported).result
+    assert codes(plain) == {"dotp-weight-width"}
+    narrow = kernel(**wide, weights_range=(-(1 << 24) + 1, (1 << 24) - 1))
+    assert narrow.inspect(DotpAxiKernel.core_supported).result == Available(True)
 
 
 def test_the_core_refuses_before_its_folding_factors_are_chosen():

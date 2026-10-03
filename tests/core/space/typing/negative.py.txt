@@ -77,7 +77,7 @@ def bad(point: Child, parent: Parent) -> None:
     point.view(Child.physical)  # E
     point.inspect(Child.width)  # not an error: a key typed as its value (refused at runtime)
     point.try_with_choices('not a change')  # E
-    point.present(3)  # E
+    point.present(3)  # not an error: a value input types as its value (refused at runtime)
     wrong_query: QueryResult[int] = parent.producer.query(Producer.output)  # E
 
 @constraint  # E

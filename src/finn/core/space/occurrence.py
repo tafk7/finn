@@ -19,6 +19,7 @@ from .declarations import (
     Constraint,
     ConstraintGroup,
     Declaration,
+    Param,
     ValueRef,
     View,
     declared_path,
@@ -167,10 +168,15 @@ def query(point: Space, reference: object) -> QueryResult[object]:
 
 
 def present(point: Space, node: object) -> bool:
-    """Whether a node is present, read like a value (undecided presence raises)."""
+    """Whether a node, or a value input, is present, read like a value (undecided presence
+    raises)."""
     located = _node_scope(point, node)
     if located is None:
-        raise RequestError("present() takes a node: a child, a candidate or a reference input")
+        if isinstance(node, Param):
+            return _supplied(point, node)
+        raise RequestError(
+            "present() takes a node (a child, a candidate or a reference input) or a value input"
+        )
     holder, target = located
     last = cast(tuple[Declaration, ...], declared_path(node) or (node,))[-1]
     presence = _presence(point, holder, target, last)
@@ -182,6 +188,25 @@ def present(point: Space, node: object) -> bool:
     if isinstance(answer, Inapplicable) or (isinstance(answer, Unresolved) and _unsupplied(answer)):
         return False
     return bool(_read_index(point, presence))  # undecided: raises like any value read
+
+
+def _supplied(point: Space, formal: Param[object]) -> bool:
+    """Whether a value input is supplied: read without halting, its answer is available.
+
+    Bound to an enclosing formal, it answers as that one does. Omitted at start
+    (``input-missing``), or a formal no present source supplies
+    (``input-unsupplied``), it is not supplied.
+    """
+    index = state(point).model.resolve(point._scope, formal)
+    answer = _read_result(point, index)
+    if isinstance(answer, Available):
+        return True
+    if isinstance(answer, Inapplicable) or (
+        isinstance(answer, Unresolved) and _unsupplied(answer, "input-missing")
+    ):
+        return False
+    _read_index(point, index)  # undecided: raises like any value read
+    return True
 
 
 def _read_result(point: Space, index: int) -> QueryResult[object]:
@@ -200,10 +225,9 @@ def _read_result(point: Space, index: int) -> QueryResult[object]:
     return cast(_runtime.Evaluation, outcome).result
 
 
-def _unsupplied(answer: Unresolved) -> bool:
-    return bool(answer.findings) and all(
-        finding.code == "input-unsupplied" for finding in answer.findings
-    )
+def _unsupplied(answer: Unresolved, *also: str) -> bool:
+    codes = ("input-unsupplied", *also)
+    return bool(answer.findings) and all(finding.code in codes for finding in answer.findings)
 
 
 def read_value(point: Space, reference: ValueRef[T] | View[T]) -> T:

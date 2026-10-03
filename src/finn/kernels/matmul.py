@@ -24,17 +24,25 @@ and its FIFO are its parent's: the parent (a test harness, the graph front end)
 declares each stream and either binds its tensor to MatMul's view of it
 (``activation_tensor``, ``weight_tensor``, ``result_tensor``, ``set_tensor``),
 which reads only MatMul's facts and ``realization``, never a port, or states
-it; ``carried`` refuses a stated tensor that differs (``matmul-tensor``). A
-boundary stream there presents its ``port`` name (``in0_V``).
+it; ``carried`` refuses a stated tensor of another shape, or whose values do
+not fit (``matmul-tensor``): MatMul's values must fit a stream it produces,
+and a stream's values must fit what MatMul consumes. A boundary stream there presents its
+``port`` name (``in0_V``).
+
+Known ``weights`` are values MatMul owns: its ``weight_tensor`` states their
+range (``INT4 over [-7, 7]``), and so does the memory that streams them, from
+the same contents; a consumer derives from the range what it may (the packed
+core's ``NARROW_WEIGHTS``). Unknown weights carry the datatype's range.
 
 - ``compute`` is a Decision over the dot-product cores. They share the facts
-  and streams; the packed core also takes ``narrow_weights``. Each core owns its
-  folding factors (``compute.<core>.pe``, ``.simd``, ``.compute_pumping``) and derives
-  every stream's beat sequence from its schedule.
+  and streams. Each core owns its folding factors (``compute.<core>.pe``,
+  ``.simd``, ``.compute_pumping``) and derives every stream's beat sequence
+  from its schedule.
 - ``memory`` is an optional Decision over the weight memories: none (the
   weight stream's producer is its parent's, a boundary for instance) or a
   ``memstream``, which drives the weight stream with one period of the order
-  the core reads, per weight set, read-only unless the weights are writable.
+  the core reads, per weight set, fixed at build time. Known weights are
+  stored by a memory, and only they (``matmul-memory``).
 - The activation stream's plan replays each dense row and frames each
   reduction; the stream's adapter carries that out.
 
@@ -68,7 +76,6 @@ from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import Traversal, period
 from finn.kernels.artifacts.module import ProducerIdentity
 from finn.kernels.base import Kernel
-from finn.kernels.control import ControlBus
 from finn.kernels.datatypes.domains import set_index_dtype
 from finn.kernels.datatypes.semantics import (
     INTEGER_TENSOR,
@@ -90,7 +97,7 @@ _CARRIED = (
     ("y_stream", "result_tensor"),
     ("set_stream", "set_tensor"),
 )
-"""Each stream MatMul sits on, and the tensor it must carry."""
+"""Each stream MatMul sits on, and its view of the tensor the stream carries."""
 
 
 def _positive(value: int, name: str) -> None:
@@ -126,8 +133,6 @@ class MatMulKernel(Kernel):
     target_dsp: DspBlock = Param()
     target_period_ns: float = Param()
     weights: IntegerTensor = Param(semantics=INTEGER_TENSOR, required=False)
-    # Software rewrites the weights at run time through AXI-Lite.
-    writable_weights: bool = Param(default=False)
     # Several weight sets, one selected per row by an index on ``in2_V``;
     # ``weights`` then holds one operand per set.
     weight_sets: int = Param(default=1)
@@ -214,7 +219,21 @@ class MatMulKernel(Kernel):
 
     @view
     def weight_tensor(self) -> Tensor | Rejected:
-        return self._tensor((self.datapath_k, self.n), self.weights_dtype)
+        """(K, N) as the datapath reads it, over the range of known weights."""
+        shape = (self.datapath_k, self.n)
+        if not self.present(MatMulKernel.weights):
+            return self._tensor(shape, self.weights_dtype)
+        values = integers(self.datapath_weights)
+        low, high = ordinary_integer_bounds(self.weights_dtype)
+        if not low <= min(values) <= max(values) <= high:
+            return reject(
+                "memstream-values",
+                f"every value must be an integer admitted by {self.weights_dtype.name}",
+            )
+        element = ScalarEncoding.admit(self.weights_dtype, (min(values), max(values)))
+        if isinstance(element, Rejected):
+            return element
+        return Tensor(shape, element)
 
     @view
     def result_tensor(self) -> Tensor | Rejected:
@@ -233,32 +252,31 @@ class MatMulKernel(Kernel):
 
     @constraint
     def carried(self) -> bool | Rejected:
-        """Each supplied stream carries the tensor MatMul derives for it."""
+        """Each supplied stream carries a tensor of the shape MatMul derives for it.
+
+        On a stream MatMul produces (the results, and the weights when they are
+        known: its memory streams them) MatMul's values fit the stream's
+        element; on a stream it consumes, the stream's values fit MatMul's.
+        """
+        known = self.present(MatMulKernel.weights)
         for reference, tensor in _CARRIED:
             if not self.present(getattr(MatMulKernel, reference)):
                 continue
             supplied, derived_ = getattr(self, reference).tensor, getattr(self, tensor)
-            if supplied != derived_:
+            produced = reference == "y_stream" or (reference == "w_stream" and known)
+            inner, outer = (derived_, supplied) if produced else (supplied, derived_)
+            if supplied.shape != derived_.shape or not inner.element.fits(outer.element):
                 return reject(
                     "matmul-tensor",
-                    f"{reference} carries {supplied.shape} {supplied.element.datatype_name}; "
-                    f"MatMul's {tensor} is {derived_.shape} {derived_.element.datatype_name}",
+                    f"{reference} carries {supplied.shape} {supplied.element}; "
+                    f"MatMul's {tensor} is {derived_.shape} {derived_.element}, "
+                    f"which {'must fit it' if produced else 'it must fit'}",
                 )
         return True
 
-    @derived
-    def narrow_weights(self) -> bool:
-        """Known weights that avoid their type's most negative value let the packed core
-        pack more lanes (NARROW_WEIGHTS). Provisional: the user means to revisit it."""
-        read_only = self.supplied != "none" and not self.writable_weights
-        if not read_only:
-            return False  # weights arriving or rewritten at run time promise nothing
-        low, _ = ordinary_integer_bounds(self.weights_dtype)
-        return all(value > low for value in integers(self.weights))
-
     # The compute cores. Each refuses what its core cannot build and owns its
-    # folding factors; ``packed`` names the entry for its own binding.
-    packed = PackedDotpKernel(narrow_weights=narrow_weights)
+    # folding factors; ``packed`` names the entry, so references reach through it.
+    packed = PackedDotpKernel()
     compute: PackedDotpKernel | Int8Dsp58DotpKernel = Decision(
         {"packed": packed, "int8_dsp58": Int8Dsp58DotpKernel},
         form=datapath,
@@ -276,16 +294,13 @@ class MatMulKernel(Kernel):
         """One pass of the weights in the order the core reads them: what a memory stores."""
         return period(self.compute.w.presented.form)
 
-    # The weight memories. Each drives w_stream; a writable memstream presents its
-    # AXI-Lite port through ``config`` (s_axilite).
-    config = ControlBus(port="s_axilite")
+    # The weight memories. Each drives w_stream.
     memory: MemStreamKernel | None = Decision(
-        {"memstream": MemStreamKernel(set_stream=set_stream, control=config)},
+        {"memstream": MemStreamKernel(set_stream=set_stream)},
         optional=True,
         dtype=weights_dtype,
         form=weight_period,
         contents=datapath_weights,
-        writable=writable_weights,
         sets=weight_sets,
         output_stream=w_stream,
     )
@@ -293,11 +308,10 @@ class MatMulKernel(Kernel):
 
     @constraint
     def supply_supported(self) -> bool | Rejected:
-        if self.supplied == "none":
-            if self.writable_weights:
-                return reject("matmul-writable", "runtime-writable weights need a memory")
-            if self.multi_set:
-                return reject("matmul-sets", "several weight sets need a memory")
+        if self.present(MatMulKernel.weights) != (self.supplied != "none"):
+            return reject("matmul-memory", "known weights are stored by a memory, and only they")
+        if self.supplied == "none" and self.multi_set:
+            return reject("matmul-sets", "several weight sets need a memory")
         return True
 
     @constraint
@@ -338,7 +352,6 @@ class MatMulKernel(Kernel):
             "accDataType": self.result_type.name,
             "mem_mode": mode[self.supplied],
             "ram_style": style,
-            "runtime_writeable_weights": int(self.writable_weights),
             "pumpedMemory": int(pumped),
             "resType": "dsp",
             "noActivation": 1,

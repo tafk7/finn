@@ -74,6 +74,7 @@ def placed_dotp(
     activation_dtype: QONNXDataType,
     weights_dtype: QONNXDataType,
     result_dtype: QONNXDataType,
+    weights_range: tuple[int, int] | None = None,
     pe: object = None,
     simd: object = None,
     compute_pumping: object = False,
@@ -86,7 +87,8 @@ def placed_dotp(
 
     The core takes its extents from the streams: ``outputs`` (N) defaults to PE
     and ``reduction`` (K) to SIMD, one fold each. A folding factor left ``None``
-    stays open.
+    stays open. ``weights_range`` is the range of values the weight stream
+    carries; the datatype's own by default.
     """
     form = facts.get("form", Form.DENSE)
     n = outputs if outputs is not None else (pe if isinstance(pe, int) and pe > 0 else 1)
@@ -95,7 +97,9 @@ def placed_dotp(
 
     class Placed(Space):
         x = Stream(tensor=Tensor(x_shape, ScalarEncoding(activation_dtype)), port="in0_V")
-        w = Stream(tensor=Tensor((k, n), ScalarEncoding(weights_dtype)), port="in1_V")
+        w = Stream(
+            tensor=Tensor((k, n), ScalarEncoding(weights_dtype, weights_range)), port="in1_V"
+        )
         y = Stream(tensor=Tensor((rows, n), ScalarEncoding(result_dtype)), port="out0_V")
         compute = family(x_stream=x, w_stream=w, y_stream=y, result_dtype=result_dtype, **facts)
 
@@ -143,7 +147,6 @@ def matmul_root(family: type[MatMulKernel]) -> type[Root]:
         target_dsp: DspBlock = Param()
         target_period_ns: float = Param()
         weights: IntegerTensor = Param(semantics=INTEGER_TENSOR, required=False)
-        writable_weights: bool = Param(default=False)
         weight_sets: int = Param(default=1)
 
         @derived
@@ -181,7 +184,6 @@ def matmul_root(family: type[MatMulKernel]) -> type[Root]:
             target_dsp=target_dsp,
             target_period_ns=target_period_ns,
             weights=weights,
-            writable_weights=writable_weights,
             weight_sets=weight_sets,
             x_stream=x,
             w_stream=w,
@@ -340,7 +342,6 @@ def matmul_assembly(
     weights: Sequence[object] | None = None,
     ram_style: str = "auto",
     pumped_memory: bool = False,
-    writable_weights: bool = False,
     weight_sets: int = 1,
     weight_fifo_depth: int | None = None,
 ) -> MatMulAssembly:
@@ -371,7 +372,6 @@ def matmul_assembly(
         weights_dtype=weights_dtype,
         target_dsp=target_dsp,
         target_period_ns=target_period_ns,
-        writable_weights=writable_weights,
         weight_sets=weight_sets,
     )
     if weights is not None:

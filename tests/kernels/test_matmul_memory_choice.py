@@ -189,7 +189,8 @@ def test_the_inactive_family_is_never_demanded():
         for key, result in reached.items()
         if key != "matmul.memory.memstream.$selected"
     )
-    assert "weights" not in visited
+    # Whether weights are known is read (they decide the memory), never their values.
+    assert "weights" in visited and "datapath_weights" not in visited
     # The unselected candidate's configuration is still reachable, selected or not.
     inactive = stored(point)
     assert point.matmul.memory is None
@@ -250,41 +251,26 @@ def test_case_local_choices_are_owned_by_their_family():
     )
 
 
-def test_missing_stored_weights_leave_only_the_selected_family_unresolved():
+def test_known_weights_decide_the_memory():
     external = configured(base(), "none")
     assert isinstance(external.query(Kernel.module), Available)
-    stored_ = configured(base(), "memstream", style="distributed")
-    family = stored_.matmul.memory
-    assert family is not None and family.ram_style == "distributed"
-    assert isinstance(family.query(IMAGE), Unresolved)
-    assessment = stored_.matmul.inspect(MatMulKernel.module)
-    assert isinstance(assessment.accepted_result, Unresolved)
-    # Only the selected family's netlist waits; every stream is already accepted.
-    waiting = {
-        key
-        for key, result in assessment.constraints.results.items()
-        if not isinstance(result, (Available, Inapplicable))
-    }
-    # The packed core waits too: known weights decide its NARROW_WEIGHTS.
-    assert waiting == {"matmul.memory.memstream.netlist", "matmul.compute.packed.netlist"}
-    assert owners(stored_.matmul.compute.query(DotpAxiKernel.module)) == {"weights"}
-    evidence = inspection.explain(stored_, Kernel.module)
-    omitted = [node for node in evidence.nodes if node.input_presence == "omitted"]
-    assert [node.declaration.key for node in omitted] == ["weights"]
+    # A memory without known weights, and known weights without a memory, are refused.
+    for point, case in ((base(), "memstream"), (base(weights=WEIGHTS), "none")):
+        chosen = commit(point, {"matmul.memory": case}).matmul
+        assert keys(chosen.query(MatMulKernel.supply_supported)) == {"matmul-memory"}
 
 
 def test_the_stored_family_needs_its_own_choices_and_refuses_bad_weights():
     uncommitted = configured(base(weights=WEIGHTS), "memstream")
     assert isinstance(uncommitted.query(Kernel.module), Unresolved)
-    bad = configured(base(weights=((4,) * 4,) * 4), "memstream", style="auto")
-    refused = bad.query(Kernel.module)
+    # Weights outside their type are refused where MatMul states their range.
+    refused = base(weights=((4,) * 4,) * 4).matmul.query(MatMulKernel.weight_tensor)
     assert isinstance(refused, Rejected)
     assert keys(refused) == {"memstream-values"}
-    assert owners(refused) == {"matmul.memory.memstream.image"}
-    # A shape error is refused the same way, and never demanded by external delivery.
+    assert owners(refused) == {"matmul.weight_tensor"}
+    # A shape error is refused by the memory that packs them.
     wrong = configured(base(weights=((0,),)), "memstream", style="auto").query(Kernel.module)
     assert isinstance(wrong, Rejected) and "shape" in wrong.findings[0].message
-    assert isinstance(configured(base(weights=((0,),)), "none").query(Kernel.module), Available)
 
 
 def test_known_refusals_remain_visible_while_the_family_is_unselected():
@@ -299,10 +285,10 @@ def test_known_refusals_remain_visible_while_the_family_is_unselected():
     )
     assessment = point.inspect(Kernel.module)
     assert isinstance(assessment.accepted_result, Unresolved)
-    # The packed core waits only for the memory, which decides whether its
-    # weights are known (NARROW_WEIGHTS); its own refusals settle meanwhile.
+    # The packed core does not wait for the memory: its weights' range is MatMul's own.
     compute = point.matmul.compute.inspect(DotpAxiKernel.module)
-    assert owners(compute.accepted_result) == {"matmul.memory"}
+    assert isinstance(compute.accepted_result, Available)
+    assert point.matmul.compute.parameters()["NARROW_WEIGHTS"] == 0  # the weights hold -4
     assert point.matmul.compute.inspect(DotpAxiKernel.admission).result == Available(True)
     folding = commit(base(weights=WEIGHTS), {"matmul.compute": "packed"})
     folding = commit(folding, {"matmul.compute.packed.simd": 4})
@@ -375,10 +361,14 @@ def test_selector_and_case_choices_round_trip_through_an_empty_root():
     other = selections.restore(base(weights=tuple(row[::-1] for row in WEIGHTS)), decoded)
     assert other.accepted
     assert other.instance.matmul.memory.image != point.matmul.memory.image
-    # Without the family's optional fact the choices replay but stay unresolved.
+    # Without the family's optional fact the choices replay but stay unresolved,
+    # and the memory is refused: no known weights to store.
     unresolved = selections.restore(base(), decoded)
     assert unresolved.accepted
     assert isinstance(unresolved.instance.query(Kernel.module), Unresolved)
+    assert keys(unresolved.instance.matmul.query(MatMulKernel.supply_supported)) == {
+        "matmul-memory"
+    }
     # Facts that invalidate a saved folding refuse replay atomically.
     changed = base(weights=WEIGHTS, n=5)
     refused = selections.restore(changed, decoded)
@@ -404,7 +394,9 @@ def test_switching_families_is_atomic_and_requires_clearing_stale_case_choices()
         memory.field(ram_style(memory)).clear(),
         memory.field(pumped(memory)).clear(),
     )
-    assert delivery(switched) is WeightDelivery.EXTERNAL
+    # The switch commits; known weights without a memory are then refused.
+    assert switched.matmul.supplied == "none"
+    assert keys(switched.matmul.query(MatMulKernel.supply_supported)) == {"matmul-memory"}
     assert selections.capture(switched).keys == (
         "matmul.compute",
         "matmul.compute.packed.compute_pumping",
