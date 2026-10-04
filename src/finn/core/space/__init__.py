@@ -29,6 +29,7 @@ from .declarations import (
     derived,
     required,
     selected,
+    supplied,
     view,
 )
 from .domains import Domain, Requirement, divisors_of, domain, finite, requires, requiring
@@ -75,6 +76,7 @@ __all__ = [
     "Decision",
     "required",
     "selected",
+    "supplied",
     "Derived",
     "Constraint",
     "ConstraintGroup",

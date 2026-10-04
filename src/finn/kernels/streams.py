@@ -53,8 +53,9 @@ hop checked.
 A stream whose tensor has a known value (``contents``, one operand per set; with
 several ``sets``, its ``index`` stream selects one) carries a ``source``
 Decision over the kernels that can drive it with that value (``SOURCES``: a
-memory now). It applies only when the value is known (``valued``), and it has
-no ``none`` case: each candidate refuses on its own facts and on the
+memory now). It applies only when the value is known (``valued``, whether
+``contents`` is supplied: a stream whose declaration supplies none compiles no
+source), and it has no ``none`` case: each candidate refuses on its own facts and on the
 ``platform``'s capabilities, and one viable candidate is forced. The source is
 the stream's producer end, placed by the stream (``staged``), its leaf below
 the stream at ``source.<case>``; it stores one period of the value in the
@@ -90,6 +91,7 @@ from finn.core.space import (
     domain,
     reject,
     selected,
+    supplied,
     view,
 )
 from finn.kernels.artifacts.abi import Bus, Endpoint
@@ -231,11 +233,9 @@ class Stream(LogicalStream):
     sets: int = Param(default=1)
     index: LogicalStream = Param(required=False)
     platform: Platform = Param(default=Platform())
-
-    @derived
-    def valued(self) -> bool:
-        """Whether the stream carries a known value, which its source drives."""
-        return self.present(Stream.contents)
+    # Whether the stream carries a known value, which its source drives: where nothing
+    # supplies ``contents``, the source never applies and its candidates are not compiled.
+    valued = supplied(contents)
 
     @derived
     def consumed(self) -> StreamContract | Rejected:
