@@ -5,9 +5,10 @@
 partition of KernelOps between the host's flatten and label select, its root in XSim
 against ``execute_onnx`` of the source, and its packaging.
 
-The folding is the fixture's, by hand (``kernel_ops.tfc``). Both tests build the
-network from the trained weights (minutes): the one in XSim is marked ``xsim``,
-the packaging one ``vivado``; the fast gate runs neither.
+The folding is the fixture's, by hand (``kernel_ops.tfc``), for Ultra96 in the
+Zynq shell. Every test builds the network from the trained weights (half a
+minute): the one in XSim is marked ``xsim``, the packaging one ``vivado``; the
+fast gate runs the platform's.
 """
 
 from __future__ import annotations
@@ -22,10 +23,10 @@ import pytest
 from qonnx.core.onnx_exec import execute_onnx
 from qonnx.custom_op.registry import getCustomOp
 
-from finn.custom_op.kernels.partition import partition_root
-from finn.kernels.configure import undecided
+from finn.custom_op.kernels.partition import member, partition_root
+from finn.kernels.configure import commit, undecided
 from finn.transformation.kernels import PackagePartition
-from kernel_ops.tfc import SHAPE, partitioned
+from kernel_ops.tfc import SHAPE, ULTRA96, partitioned
 from kernels.xsim import pack, requires_xsim, stream_through
 
 LOGITS = "MatMul_3_out0"
@@ -88,3 +89,22 @@ def test_tfc_w2a2_packages_as_the_shells_ip(tmp_path: Path) -> None:
     }
     assert (widths["s_axis_0"], widths["m_axis_0"]) == ("16", "13")
     assert getCustomOp(sdp).get_nodeattr("slr") == -1
+
+
+def test_tfc_w2a2_binds_the_ultra96_platform(tmp_path: Path) -> None:
+    """Every KernelOp of the partition reads Ultra96's capabilities from the model: its
+    weight memories cannot be UltraRAM, and none is pumped (the shell drives no 2x clock)."""
+    _, _, body = partitioned(tmp_path)
+    root = partition_root(body, body.graph.node)
+    weights = [
+        member(node.input[1])
+        for node in body.graph.node
+        if node.op_type == "MatMul" and body.get_initializer(node.input[1]) is not None
+    ]
+    assert len(weights) == 4
+    for stream in weights:
+        assert getattr(root.point, stream).platform == ULTRA96.platform
+    with pytest.raises(ValueError, match="uram-absent"):
+        commit(root.point, {f"{weights[0]}.source.memstream.ram_style": "ultra"})
+    with pytest.raises(ValueError, match="clk2x-absent"):
+        commit(root.point, {f"{weights[0]}.source.memstream.pumped_memory": True})
