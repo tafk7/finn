@@ -79,7 +79,7 @@ def test_the_kernel_ops_become_one_partition_between_the_host_ops(tmp_path: obje
 def test_the_body_is_the_partition_packaging_takes(tmp_path: object) -> None:
     source, parent = partitioned(tmp_path)
     body = ModelWrapper(getCustomOp(parent.graph.node[1]).get_nodeattr("model"))
-    module = PackagePartition("xczu3eg-sbva484-1-e", 5.0, parent.graph.node[1].name).module(body)
+    module = PackagePartition(parent.graph.node[1].name).module(body)
     # The same module as the root of the KernelOps where they stood.
     kernel_ops = [node for node in source.graph.node if node.domain == "finn.custom_op.kernels"]
     reference = settle(partition_root(source, kernel_ops).point).point.module

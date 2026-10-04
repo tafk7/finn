@@ -37,6 +37,7 @@ from finn.transformation.kernels.package import (
     interface_names,
     interface_tcl,
     package_tcl,
+    partition_facts,
     vlnv,
 )
 from kernel_ops.test_partition import configured, kernel_model
@@ -162,7 +163,7 @@ def test_the_script_packages_sources_or_a_checkpoint() -> None:
 
 def test_the_partition_packages_its_nodes_choices_settled() -> None:
     _, point = configured(model := kernel_model())
-    module = PackagePartition("xczu3eg-sbva484-1-e", 5.0, "sdp_1").module(model)
+    module = PackagePartition("sdp_1").module(model)
     assert (module.fragment, module.pins) == (point.module.fragment, point.module.pins)
     assert module.stem == "finn_partition"
     assert [port.name for port in module.pins.ports] == [
@@ -175,7 +176,7 @@ def test_the_partition_packages_its_nodes_choices_settled() -> None:
 
 def test_an_open_decision_refuses_packaging_and_is_named() -> None:
     with pytest.raises(KernelOpError, match="open Decisions") as refused:
-        PackagePartition("xczu3eg-sbva484-1-e", 5.0, "sdp_1").module(kernel_model())
+        PackagePartition("sdp_1").module(kernel_model())
     assert refused.value.keys
     assert all(key.endswith("ram_style") for key in refused.value.keys)
 
@@ -183,7 +184,7 @@ def test_an_open_decision_refuses_packaging_and_is_named() -> None:
 def test_the_graphs_input_order_is_the_port_order() -> None:
     model = kernel_model(second_weights=False)
     configured(model)
-    package = PackagePartition("xczu3eg-sbva484-1-e", 5.0, "sdp_1")
+    package = PackagePartition("sdp_1")
     assert {port.name for port in package.module(model).pins.ports} >= {"s_axis_0", "s_axis_1"}
     model.graph.input.reverse()  # w2 first: the shells would feed it to s_axis_0
     with pytest.raises(KernelOpError, match="not its graph's inputs and outputs in order"):
@@ -195,9 +196,7 @@ def test_the_graphs_input_order_is_the_port_order() -> None:
 def test_the_chain_packages_as_the_shells_ip(tmp_path: Path) -> None:
     configured(model := kernel_model())
     project = tmp_path / "vivado_stitch_proj"
-    model = model.transform(
-        PackagePartition("xczu3eg-sbva484-1-e", 5.0, "sdp_1", directory=project)
-    )
+    model = model.transform(PackagePartition("sdp_1", directory=project))
     assert model.get_metadata_prop("vivado_stitch_proj") == str(project.resolve())
     assert model.get_metadata_prop("vivado_stitch_vlnv") == "xilinx_finn:finn:sdp_1:1.0"
     assert json.loads(model.get_metadata_prop("vivado_stitch_ifnames")) == {
@@ -209,6 +208,13 @@ def test_the_chain_packages_as_the_shells_ip(tmp_path: Path) -> None:
         "axilite": [],
         "ap_none": [],
     }
+    # The part and period are the model's target; the facts are the boundary's.
+    assert "-part xczu3eg-sbva484-1-e" in (project / "package.tcl").read_text()
+    inputs, outputs = partition_facts(model)
+    assert [(port["port"], port["tdata"], port["beats"]) for port in inputs + outputs] == [
+        ("s_axis_0", 8, 6),
+        ("m_axis_0", 16, 6),
+    ]
     spirit = "{http://www.spiritconsortium.org/XMLSchema/SPIRIT/1685-2009}"
     root = ET.parse(project / "ip" / "component.xml").getroot()
     assert [root.find(f"{spirit}{tag}").text for tag in ("vendor", "library", "name")] == [
