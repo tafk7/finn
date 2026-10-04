@@ -90,9 +90,10 @@ through `bash` (`sbx exec finn bash -c '…'`), not as a bare `sbx exec finn
 python …`. If the startup log says no Vivado was found, the root is not mounted
 or the version is not installed.
 
-* **Use the server's IP address** for `FINN_LICENSE_HOST`. FlexLM connections are plain
-  TCP, which sbx matches by address, and resolving a name needs DNS access,
-  which a closed policy blocks. The kit refuses anything but an IPv4 address.
+* **`FINN_LICENSE_HOST`** is the server's host name or IPv4 address. FlexLM
+  connections are plain TCP; sbx matches them by host name too (it recovers the
+  name from its own DNS resolver), and under a closed policy it still resolves a
+  name a rule allows. A name keeps working when the server's address changes.
 * **Finding the vendor port.** Unless the licence file pins it (`VENDOR xilinxd
   port=...`), the server chooses the xilinxd port. Create the sandbox with any
   value, run a licensed operation, and `sbx policy log SANDBOX` lists the blocked
