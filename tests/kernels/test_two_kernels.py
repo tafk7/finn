@@ -97,7 +97,7 @@ def layered(*, adaptable: bool = True):
             "second.compute_pumping": False,
         },
     )
-    # A stream admitting no adapter keeps its Decision closed; the others settle theirs.
+    # A stream admitting no adapter keeps its Decision closed; the others' are forced.
     return with_adapter_memories(point)
 
 

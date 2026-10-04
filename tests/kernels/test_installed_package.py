@@ -147,14 +147,14 @@ for memory in ("none", "memstream"):
         m=3, k=4, n=4, activation_dtype=DataType["INT3"], weights_dtype=DataType["INT3"],
         target_dsp=DspBlock.DSP48E2, target_period_ns=5.0,
     )
-    choices = {"matmul.memory": memory, "w.transport": "direct", "matmul.compute": "packed"}
+    choices = {"w.transport": "direct", "matmul.compute": "packed"}
     expected = dotp_sources | {"rtl/shape/input_gen.sv"}
     if memory == "memstream":
         # Stored (k, n): the columns of the by-output rows.
         facts["weights"] = ((-4, 0, 3, -1), (-3, 1, 2, -2), (-2, 2, 1, -3), (-1, 3, 0, -4))
         choices |= {
-            "matmul.memory.memstream.ram_style": "auto",
-            "matmul.memory.memstream.pumped_memory": False,
+            "w.source.memstream.ram_style": "auto",
+            "w.source.memstream.pumped_memory": False,
         }
         expected |= {"rtl/infra/axilite.sv", "rtl/infra/memstream.sv", "rtl/infra/memstream_axi.sv"}
 
@@ -164,6 +164,7 @@ for memory in ("none", "memstream"):
         w = BufferedStream(tensor=Tensor((4, 4), INT3), port="in1_V")
         y = Stream(tensor=Tensor((3, 4), INT8), port="out0_V")
         matmul = MatMulKernel(**facts, x_stream=x, w_stream=w, y_stream=y)
+        w.contents = matmul.weight_values
 
     root = commit(design_space(Placed()), choices)
     root = commit(root, {
@@ -188,7 +189,7 @@ for memory in ("none", "memstream"):
     assert ".olst(n__u_x_adapter_input_gen_input_gen__olst)" in wrapper
     if memory == "memstream":
         assert '.INIT_FILE("memstream_' in wrapper
-        assert matmul.memory.image == (0x22C, 0x6BE, 0xDD3, 0x941)
+        assert root.w.source.image == (0x22C, 0x6BE, 0xDD3, 0x941)
 
 # Catch namespace or editable-install leakage even if the import was permitted.
 for name, module in tuple(sys.modules.items()):

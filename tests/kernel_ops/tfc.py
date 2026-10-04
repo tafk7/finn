@@ -122,8 +122,8 @@ def fold_by_hand(model: ModelWrapper) -> None:
                     "compute.packed.pe": _lanes(n),
                     "compute.packed.simd": _lanes(k),
                     "compute.packed.compute_pumping": False,
-                    "memory.memstream.ram_style": "auto",
-                    "memory.memstream.pumped_memory": False,
+                    "w.source.memstream.ram_style": "auto",
+                    "w.source.memstream.pumped_memory": False,
                     "w.transport": "direct",
                 }
             )
