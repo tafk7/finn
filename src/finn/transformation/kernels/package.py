@@ -16,7 +16,13 @@ the shells (MakeZYNQProject; CreateVitisXO and VitisLink; SlashLink):
   presented AXI-Lite bus with a ``Reg0`` register map (the Zynq shell assigns
   ``Reg*``, SLASH maps a ``register`` block);
 - on the partition model, ``vivado_stitch_proj``, ``vivado_stitch_vlnv`` and
-  ``vivado_stitch_ifnames`` (``interface_names``), as the shells read them.
+  ``vivado_stitch_ifnames`` (``interface_names``), raw, as the shells read them
+  by name.
+
+The partition's boundary facts are typed metadata on the partition model, the
+``finn.partition`` namespace (``PARTITION``): per boundary port, in port order,
+its tensor, shape, datatype, lanes, beats, element bits and TDATA width.
+Packaging's next step (K2) writes them; InsertIODMA and the driver read them.
 
 The partition's choices are its nodes' (D8): the root is replayed from them and
 settled, and an open Decision or a stale choice refuses, named. The body's graph
@@ -34,6 +40,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
+from qonnx.core.metadata import JSON, Namespace
 from qonnx.transformation.base import Transformation
 
 from finn import resources
@@ -64,6 +71,41 @@ _INTERFACES = {
         "xilinx.com:interface:aximm_rtl:1.0",
     ),
 }
+
+
+PARTITION = Namespace("finn.partition", version=1)
+"""A partition model's boundary facts (typed graph metadata, ``qonnx.core.metadata``).
+They describe that partition only, so a body does not inherit them."""
+
+PORT_FACTS = ("port", "tensor", "shape", "datatype", "lanes", "beats", "element_bits", "tdata")
+"""One boundary port's facts, the fields of each object in ``inputs`` and ``outputs``."""
+
+
+def _port_facts(value: object) -> bool:
+    """A list of port facts: objects with exactly ``PORT_FACTS``, the port, tensor and
+    datatype named, the shape a list of positive ints, the counts and widths positive."""
+
+    def positive(item: object) -> bool:
+        return type(item) is int and item > 0
+
+    return isinstance(value, list) and all(
+        isinstance(port, dict)
+        and tuple(sorted(port)) == tuple(sorted(PORT_FACTS))
+        and all(
+            isinstance(port[name], str) and port[name] for name in ("port", "tensor", "datatype")
+        )
+        and isinstance(port["shape"], list)
+        and all(positive(dim) for dim in port["shape"])
+        and all(positive(port[name]) for name in ("lanes", "beats", "element_bits", "tdata"))
+        for port in value
+    )
+
+
+_PORTS = f"a list of port facts (objects of {', '.join(PORT_FACTS)})"
+PARTITION_INPUTS = PARTITION.key("inputs", JSON, check=_port_facts, expect=_PORTS)
+"""The boundary inputs' facts, in port order (``s_axis_<i>``)."""
+PARTITION_OUTPUTS = PARTITION.key("outputs", JSON, check=_port_facts, expect=_PORTS)
+"""The boundary outputs' facts, in port order (``m_axis_<j>``)."""
 
 
 def vlnv(ip_name: str) -> str:
@@ -398,4 +440,14 @@ class PackagePartition(Transformation):  # type: ignore[misc]
         return model, False
 
 
-__all__ = ["PackagePartition", "interface_names", "interface_tcl", "package_tcl", "vlnv"]
+__all__ = [
+    "PARTITION",
+    "PARTITION_INPUTS",
+    "PARTITION_OUTPUTS",
+    "PORT_FACTS",
+    "PackagePartition",
+    "interface_names",
+    "interface_tcl",
+    "package_tcl",
+    "vlnv",
+]
