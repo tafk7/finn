@@ -25,10 +25,39 @@ from qonnx.custom_op.registry import getCustomOp
 from finn.custom_op.kernels.partition import partition_root
 from finn.kernels.configure import undecided
 from finn.transformation.kernels import PackagePartition
+from finn.transformation.kernels.package import partition_facts, write_boundary_facts
 from kernel_ops.tfc import SHAPE, partitioned
 from kernels.xsim import pack, requires_xsim, stream_through
 
 LOGITS = "MatMul_3_out0"
+# The partition's boundary facts as the network survey's probe read them (io.txt):
+# 784 UINT8 pixels in 49 beats of 16 lanes; ten INT10 logits in one beat of 104 bits.
+FACTS = (
+    [
+        {
+            "port": "s_axis_0",
+            "tensor": "Reshape_0_out0",
+            "shape": [1, 784],
+            "datatype": "UINT8",
+            "lanes": 16,
+            "beats": 49,
+            "element_bits": 8,
+            "tdata": 128,
+        }
+    ],
+    [
+        {
+            "port": "m_axis_0",
+            "tensor": LOGITS,
+            "shape": [1, 10],
+            "datatype": "INT10",
+            "lanes": 10,
+            "beats": 1,
+            "element_bits": 10,
+            "tdata": 104,
+        }
+    ],
+)
 
 
 @requires_xsim
@@ -49,6 +78,8 @@ def test_tfc_w2a2_computes_its_logits_in_xsim(tmp_path: Path) -> None:
     root = partition_root(body, body.graph.node)
     assert undecided(root.point, "*") == [] and root.dropped == ()
     assert root.boundary == ((body.graph.input[0].name, "s_axis_0"), (LOGITS, "m_axis_0"))
+    write_boundary_facts(body)
+    assert partition_facts(body) == FACTS
     # Python ints: the packed words are wider than numpy's integers.
     pixels = [int(value) for value in image.reshape(-1)]  # the host's flatten
     logits = [int(value) for value in expected[LOGITS].reshape(-1)]
@@ -73,7 +104,7 @@ def test_tfc_w2a2_packages_as_the_shells_ip(tmp_path: Path) -> None:
     _, parent, body = partitioned(tmp_path)
     sdp = parent.graph.node[1]
     project = tmp_path / "vivado_stitch_proj"
-    body = body.transform(PackagePartition("xczu3eg-sbva484-1-e", 5.0, sdp.name, directory=project))
+    body = body.transform(PackagePartition(sdp.name, directory=project))
     assert body.get_metadata_prop("vivado_stitch_vlnv") == f"xilinx_finn:finn:{sdp.name}:1.0"
     names = json.loads(body.get_metadata_prop("vivado_stitch_ifnames"))
     assert (names["s_axis"], names["m_axis"]) == ([["s_axis_0", 128]], [["m_axis_0", 104]])
@@ -88,3 +119,5 @@ def test_tfc_w2a2_packages_as_the_shells_ip(tmp_path: Path) -> None:
     }
     assert (widths["s_axis_0"], widths["m_axis_0"]) == ("16", "13")
     assert getCustomOp(sdp).get_nodeattr("slr") == -1
+    assert partition_facts(body) == FACTS
+    assert "-part xczu3eg-sbva484-1-e" in (project / "package.tcl").read_text()
