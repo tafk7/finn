@@ -317,7 +317,7 @@ def test_programmer_failure_after_provisional_admission_never_publishes_a_succes
         raise RuntimeError("membership failed")
 
     class Trial(Space):
-        first: int = Decision(values=(1,))
+        first: int = Decision(values=(1, 2))
         second: int = Decision(domain=domain(accepts=broken))
 
     base = design_space(Trial())

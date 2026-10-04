@@ -65,7 +65,7 @@ from .declarations import (
     ViewKey,
     at,
 )
-from .domains import Domain, finite
+from .domains import Domain, finite, requirement_argument
 from .errors import DefinitionError, RequestError
 from .expressions import INTEGER_SEMANTICS, Expr, IntOperator, evaluator
 from .graph import LOCATED, Located
@@ -1475,6 +1475,17 @@ class _Linker:
                 )
             arguments.append(Argument(name, self.reference(scope, source, owner=owner)))
         supplied = dict.fromkeys(argument.name for argument in arguments)
+        for position, requirement in enumerate(domain.requirements):
+            if not isinstance(requirement.fact, ValueRef):
+                raise DefinitionError(
+                    f"{owner}: requirement {requirement.code}'s fact must be a value reference"
+                )
+            arguments.append(
+                Argument(
+                    requirement_argument(position),
+                    self.reference(scope, requirement.fact, owner=owner),
+                )
+            )
         for role, function, values in (
             ("membership", domain.accepts, {"candidate": None, **supplied}),
             ("enumeration", domain.candidates, supplied),

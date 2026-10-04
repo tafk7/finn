@@ -15,6 +15,7 @@ from typing import cast
 import pytest
 
 from finn.core.space import (
+    Available,
     Decision,
     Param,
     Selection,
@@ -122,6 +123,7 @@ def test_selector_change_requires_explicit_case_clearing_before_capture() -> Non
 def test_singleton_choices_persist_their_selector_like_any_decision() -> None:
     # Replaces "singleton choices do not create persisted selectors": a singleton
     # Decision over nodes is an ordinary Decision, committed and captured like any other.
+    # Uncommitted, its one case is forced: read, never captured.
     class Child(Space):
         lanes: int = Decision(values=(1,))
 
@@ -129,7 +131,8 @@ def test_singleton_choices_persist_their_selector_like_any_decision() -> None:
         implementation: Child = Decision({"only": Child()})
 
     base = design_space(Family())
-    assert isinstance(base.query(Family.implementation.lanes), Unresolved)
+    assert base.query(Family.implementation.lanes) == Available(1)
+    assert selections.capture(base).keys == ()
     point = base.with_choices({Family.implementation: "only", Family.implementation.lanes: 1})
     captured = selections.capture(point)
     assert captured.keys == ("implementation", "implementation.only.lanes")

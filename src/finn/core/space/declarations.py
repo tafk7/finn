@@ -38,7 +38,7 @@ from typing import (
     overload,
 )
 
-from .domains import Domain, finite
+from .domains import Domain, Requirement, finite, requiring
 from .errors import DefinitionError, ReferenceUseError
 from .graph import LOCATED, Located
 from .results import NonValue, QueryResult, marked_value_type
@@ -474,14 +474,18 @@ class Param(ValueDecl[T], Generic[T]):
 
         def __getattr__(self, name: str) -> Any:
             # ``output.spec`` in the class body that declares ``output: Stream``:
-            # a member of the node the reference input will name.
+            # a member of the node the reference input will name. A value formal
+            # projects an attribute of its value (``platform.uram``), as a derived
+            # value does.
             if name.startswith("_"):
                 raise AttributeError(name)
             try:
                 family = self.reference_family()
             except DefinitionError:
                 raise AttributeError(name) from None
-            if family is None or not _has_member(family, name):
+            if family is None:
+                return project(self, name)
+            if not _has_member(family, name):
                 raise AttributeError(name)
             from ._nodes import path_proxy
 
@@ -547,7 +551,10 @@ class Decision(ValueDecl[T], Generic[T]):
     bindings only that candidate takes; the keyword arguments are shared
     bindings, supplied to every candidate, each of which must declare them.
     ``optional=True`` adds a ``None`` candidate keyed ``"none"``, which places
-    nothing.
+    nothing. ``requires=`` states what a value Decision's cases need
+    (``requires(platform.uram, "uram-absent: ...", cases=("ultra",))``): a case
+    whose fact does not hold is refused with that finding, at a commitment and
+    when forcing reads its viability.
 
     ``heating.area`` reads a member every candidate declares;
     ``heating["pump"].cop`` reads one candidate's member, inapplicable while
@@ -591,6 +598,7 @@ class Decision(ValueDecl[T], Generic[T]):
         *,
         values: Iterable[T],
         semantics: ValueSemantics[T] | None = None,
+        requires: Iterable[Requirement] = (),
         when: Guard = None,
         name: str | None = None,
     ) -> T: ...
@@ -602,6 +610,7 @@ class Decision(ValueDecl[T], Generic[T]):
         *,
         domain: Domain[T],
         semantics: ValueSemantics[T] | None = None,
+        requires: Iterable[Requirement] = (),
         when: Guard = None,
         name: str | None = None,
     ) -> T: ...
@@ -614,6 +623,7 @@ class Decision(ValueDecl[T], Generic[T]):
         domain: object = None,
         values: object = None,
         semantics: object = None,
+        requires: object = None,
         when: object = None,
         name: object = None,
         optional: object = False,
@@ -626,6 +636,7 @@ class Decision(ValueDecl[T], Generic[T]):
                     ("domain", domain),
                     ("values", values),
                     ("semantics", semantics),
+                    ("requires", requires),
                     ("name", name),
                 )
                 if value is not None
@@ -668,6 +679,11 @@ class Decision(ValueDecl[T], Generic[T]):
             if domain is not None
             else finite(cast(Iterable[object], values), explicit)
         )
+        if requires is not None:
+            stated = tuple(cast(Iterable[object], requires))
+            if not all(isinstance(item, Requirement) for item in stated):
+                raise DefinitionError("requires= takes requirements, as built by requires()")
+            instance.domain = requiring(instance.domain, *cast(tuple[Requirement, ...], stated))
         instance.sites = []
         if name is not None:
             instance.name = local_name(cast(str, name), "decision name")
