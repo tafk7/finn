@@ -59,13 +59,14 @@ from .declarations import (
     Param,
     Present,
     Projection,
+    Supplied,
     Users,
     ValueRef,
     View,
     ViewKey,
     at,
 )
-from .domains import Domain, finite
+from .domains import Domain, finite, requirement_argument
 from .errors import DefinitionError, RequestError
 from .expressions import INTEGER_SEMANTICS, Expr, IntOperator, evaluator
 from .graph import LOCATED, Located
@@ -101,6 +102,8 @@ class _ScopeDraft:
     targets: dict[object, int | None] = field(default_factory=dict)
     # A per-input export: key -> (reference input name, view node) in declared order.
     input_exports: dict[ViewKey[object], tuple[tuple[str, int], ...]] = field(default_factory=dict)
+    # The value inputs nothing supplies here: a guard on their supply never holds.
+    unsupplied: set[str] = field(default_factory=set)
 
     def freeze(self) -> Scope:
         return Scope(
@@ -128,6 +131,10 @@ class _ChoiceDraft:
     selector: int
     cases: list[tuple[str, int | None]] = field(default_factory=list)
     members: dict[str, int] = field(default_factory=dict)
+    # Its guard never holds here: no candidate is placed, and it has no key; the
+    # families its candidates would place type what is read through it.
+    never: bool = False
+    families: dict[str, type[Space]] = field(default_factory=dict)
 
     def freeze(self) -> Choice:
         return Choice(
@@ -177,6 +184,13 @@ class _ExpressionTask:
     owner: str
     operator: IntOperator
     operands: tuple[int | ValueRef[int], ...]
+
+
+def _supply(formal: Param[object]) -> Callable[..., object]:
+    def supplied(point: Space) -> bool:
+        return point.present(formal)
+
+    return supplied
 
 
 def _key(scope: str, member: str) -> str:
@@ -516,11 +530,13 @@ class _Linker:
                     node_kind = "param"
                 else:
                     binding, node_kind = self.unsupplied(draft, member_name, declaration)
+                    if binding is None:
+                        draft.unsupplied.add(member_name)
             elif isinstance(declaration, Decision):
                 node_kind = "decision" if binding is None else _BINDING_KINDS[binding.kind]
             elif isinstance(declaration, Const):
                 node_kind = "const"
-            elif isinstance(declaration, (Derived, Expr)):
+            elif isinstance(declaration, (Derived, Expr, Supplied)):
                 node_kind = "derived"
             elif isinstance(declaration, Constraint):
                 node_kind = "constraint"
@@ -677,16 +693,23 @@ class _Linker:
         )
         if slot is not None and decision.when is not None:
             guard = self.guarded(source, guard, decision.when, key + ".$when", owner=key)
+        never = slot is None and self.never_holds(scope, scope.effective.guards.get(declared))
         pinned = selection is not None and selection.pin
         selector = self.reserve(
             scope.index,
             key,
-            "const" if pinned else "decision",
+            "const" if pinned or never else "decision",
             cast(ValueSemantics[object], _STRING),
             guard=guard,
             origin=decision.origin,
         )
-        if selection is None:
+        if never:
+            # It can never apply here: the selector reads inapplicable and has no key,
+            # and no candidate is compiled.
+            self.nodes[selector] = replace(
+                self.nodes[selector], value=next(iter(decision.candidates))
+            )
+        elif selection is None:
             self.nodes[selector] = replace(
                 self.nodes[selector],
                 domain=cast(Domain[object], finite(decision.candidates, _STRING)),
@@ -712,9 +735,12 @@ class _Linker:
         for alias in faces:
             scope.choices[alias] = choice.index
             scope.members[alias] = selector
+        choice.never = never
         for case, record in decision.candidates.items():
             case_key = _key(key, case)
-            if record is None:
+            if never and record is not None:
+                choice.families[case] = record.family
+            if record is None or never:
                 choice.cases.append((case, None))
                 continue
             case_guard = self.reserve(
@@ -752,6 +778,13 @@ class _Linker:
             )
             choice.cases.append((case, child))
         self.shared_members(scope, choice)
+
+    def never_holds(self, scope: _ScopeDraft, condition: ValueRef[bool] | None) -> bool:
+        """Whether a guard can never hold in ``scope``: the supply of a value input
+        that nothing supplies here (``supplied``)."""
+        if not isinstance(condition, Supplied):
+            return False
+        return scope.effective.aliases.get(condition.formal) in scope.unsupplied
 
     def shared_members(self, scope: _ScopeDraft, choice: _ChoiceDraft) -> None:
         """Link ``decision.member`` for every member name several candidates share.
@@ -1199,15 +1232,24 @@ class _Linker:
                     member=source.member,
                 )
             alternatives.append((case, member))
+        semantics = cast(ValueSemantics[object], LOCATED) if locate else None
         if not alternatives:
-            raise DefinitionError(
-                f"{owner}: no candidate of {choice.key} has a member {source.member}"
-            )
+            declared = [
+                effective.semantics.get(effective.members[source.member])
+                for effective in map(self.family, choice.families.values())
+                if source.member in effective.members
+            ]
+            if not choice.never or not declared:
+                raise DefinitionError(
+                    f"{owner}: no candidate of {choice.key} has a member {source.member}"
+                )
+            # Never applicable here: the selection reads inapplicable, typed as declared.
+            semantics = semantics or declared[0]
         node = self.reserve(
             target,
             f"{choice.key}.${'located' if locate else 'member'}.{source.member}",
             "select",
-            cast(ValueSemantics[object], LOCATED) if locate else None,
+            semantics,
             guard=choice.guard,
             source_owner=owner,
         )
@@ -1475,6 +1517,17 @@ class _Linker:
                 )
             arguments.append(Argument(name, self.reference(scope, source, owner=owner)))
         supplied = dict.fromkeys(argument.name for argument in arguments)
+        for position, requirement in enumerate(domain.requirements):
+            if not isinstance(requirement.fact, ValueRef):
+                raise DefinitionError(
+                    f"{owner}: requirement {requirement.code}'s fact must be a value reference"
+                )
+            arguments.append(
+                Argument(
+                    requirement_argument(position),
+                    self.reference(scope, requirement.fact, owner=owner),
+                )
+            )
         for role, function, values in (
             ("membership", domain.accepts, {"candidate": None, **supplied}),
             ("enumeration", domain.candidates, supplied),
@@ -1624,6 +1677,8 @@ class _Linker:
             self.expression(scope.index, declaration, owner=node.key, index=node.index)
         elif isinstance(declaration, (Derived, Constraint)):
             node = self.callback(node, scope.effective.functions[task.name])
+        elif isinstance(declaration, Supplied):
+            node = replace(node, function=_supply(declaration.formal), call_style="self")
         elif isinstance(declaration, ConstraintGroup):
             node = replace(
                 node,

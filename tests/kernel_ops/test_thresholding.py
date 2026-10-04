@@ -53,6 +53,8 @@ def test_the_schema_holds_the_memory_choices_and_bias_is_semantic() -> None:
     assert schema["ram_style"] == ("s", ())
     assert schema["ultra_stages"] == ("i", ())
     assert not any(name.startswith("y.") for name in schema)
+    # Its input never carries a value: no source keys (the table stays the kernel's).
+    assert not any(name.startswith("x.source") for name in schema)
     types = op(thresholding_model()).get_nodeattr_types()
     assert types["bias"] == ("i", True, 0)
     assert "bias" not in schema

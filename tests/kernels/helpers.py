@@ -15,9 +15,11 @@ buffered), ``y`` (``out0_V``) and, with several weight sets, ``set``
 MatMul's view of it (``activation_tensor``, ``weight_tensor``,
 ``result_tensor``, ``set_tensor``), which reads only MatMul's facts and its
 ``realization``: one root serves every realization, a depthwise MatMul's left
-open until committed. The edge choices are the root's (``x.adapter``,
-``w.transport``), the MatMul's below it (``matmul.memory``,
-``matmul.compute.packed.pe``). ``matmul_assembly`` configures one from
+open until committed. Known weights are the weight stream's ``contents``
+(MatMul's ``weight_values``), with ``set`` its ``index``, so the stream's
+``source`` stores them. The edge choices are the root's (``x.adapter``,
+``w.transport``, ``w.source.memstream.ram_style``), the MatMul's below it
+(``matmul.compute.packed.pe``). ``matmul_assembly`` configures one from
 concrete facts and choices."""
 
 import os
@@ -32,8 +34,17 @@ from typing import Any, TypeVar
 
 from finn import resources
 
-from finn.core.space import Constraint, Param, Space, composite, derived, design_space, reject
-from finn.core.space.settling import compatible_cases
+from finn.core.space import (
+    Constraint,
+    Param,
+    Rejected,
+    Space,
+    composite,
+    derived,
+    design_space,
+    inspection,
+    reject,
+)
 from finn.dataflow.datatypes import QONNXDataType
 from finn.dataflow.gemm import Form
 from finn.dataflow.tensor import ScalarEncoding, Tensor
@@ -41,7 +52,7 @@ from finn.kernels.artifacts.module import Composed, Leaf
 from finn.kernels.base import Kernel
 from finn.kernels.streams import ADAPTER_RAM_STYLES, BufferedStream, Stream
 from finn.core.space.results import Available, QueryResult
-from finn.kernels.configure import admission, commit, describe, settle, undecided
+from finn.kernels.configure import admission, commit, describe, undecided
 from finn.kernels.control import ControlBus
 from finn.kernels.matmul import MatMulKernel
 from finn.kernels.datatypes.semantics import (
@@ -171,9 +182,9 @@ def matmul_root(family: type[MatMulKernel]) -> type[Root]:
             return self.matmul.set_tensor
 
         x = Stream(tensor=x_tensor, port="in0_V")
-        w = BufferedStream(tensor=w_tensor, port="in1_V")
-        y = Stream(tensor=y_tensor, port="out0_V")
         set = Stream(tensor=set_tensor, port="in2_V", when=several)
+        w = BufferedStream(tensor=w_tensor, sets=weight_sets, index=set, port="in1_V")
+        y = Stream(tensor=y_tensor, port="out0_V")
         matmul = family(
             m=m,
             n=n,
@@ -188,8 +199,8 @@ def matmul_root(family: type[MatMulKernel]) -> type[Root]:
             x_stream=x,
             w_stream=w,
             y_stream=y,
-            set_stream=set,
         )
+        w.contents = matmul.weight_values
 
     return MatMul
 
@@ -234,9 +245,9 @@ def pin_names(module: Composed | Leaf) -> set[str]:
     return {port.name for port in module.pins.ports}
 
 
-def settled(point: S, ram_style: str = "auto") -> S:
-    """Settle every Decision over kernels; each adapter input_gen's memory takes ``ram_style``."""
-    point = settle(point).point
+def with_adapter_memories(point: S, ram_style: str = "auto") -> S:
+    """Each open adapter input_gen's memory takes ``ram_style``: the flow's choice. Each
+    stream's adapter, its one viable chain, is forced."""
     styles = undecided(point, ADAPTER_RAM_STYLES)
     return commit(point, dict.fromkeys(styles, ram_style)) if styles else point
 
@@ -284,7 +295,8 @@ def vivado_simulator() -> bool:
 
 
 class WeightDelivery(Enum):
-    """Where the weights come from: the ``memory`` Decision's case for each."""
+    """Where the weights come from: the weight stream's ``source`` case, or the
+    boundary (external)."""
 
     EXTERNAL = "none"
     MEMSTREAM = "memstream"
@@ -319,8 +331,10 @@ def _realizes(point: Any, realization: str) -> QueryResult[bool]:
     rule: QueryResult[bool] = point.matmul.inspect(MatMulKernel.realization_supported).result
     if not isinstance(rule, Available):
         return rule
-    cores = compatible_cases(point, "matmul.compute", admission)
-    return Available(True) if cores else reject("matmul-realization", "no core computes it")
+    cores = point.matmul.query(MatMulKernel.compute)  # refused when no core is viable
+    if isinstance(cores, Rejected):
+        return reject("matmul-realization", "no core computes it")
+    return Available(True)
 
 
 def matmul_assembly(
@@ -345,18 +359,21 @@ def matmul_assembly(
     weight_sets: int = 1,
     weight_fifo_depth: int | None = None,
 ) -> MatMulAssembly:
-    """Bind operation facts, commit the caller's choices, settle the rest, then assemble.
+    """Bind operation facts, commit the caller's choices and the flow's, then assemble.
 
     ``m`` rows, ``n`` outputs and the reduction ``k``; for a depthwise ``form``,
     ``k`` is the window and ``n`` the channels. ``weights`` is stored (K, N),
-    and is required by, and only accepted with, a memory. The ``auto``
+    and is required by, and only accepted with, a memory: the weight stream's
+    source, forced when its one candidate is viable. The ``auto``
     ``ram_style`` default leaves memory inference to synthesis.
     ``weight_fifo_depth`` places a FIFO on the weight stream; ``None`` connects
     it directly. ``target_period_ns`` is the clock the module must meet (5 ns:
     200 MHz); it sets dotp's DSP58 chain segmentation. ``core`` names the
     compute core (``packed`` or ``int8_dsp58``); left out, the one core
-    compatible with the configuration is settled, and several compatible cores
+    compatible with the configuration is forced, and several compatible cores
     must be chosen from. PE, SIMD and pumping are the core's.
+    Every Decision with one viable case (the source, the adapters, the core
+    on DSP48E2) is forced, not committed.
     """
     if not isinstance(weight_delivery, WeightDelivery):
         raise ValueError("weight_delivery must be a WeightDelivery value")
@@ -376,15 +393,11 @@ def matmul_assembly(
     )
     if weights is not None:
         facts["weights"] = _frozen(weights)
-    case = weight_delivery.value
     buffered = weight_fifo_depth is not None
-    choices: dict[str, object] = {
-        "matmul.memory": case,
-        "w.transport": "fifo" if buffered else "direct",
-    }
+    choices: dict[str, object] = {"w.transport": "fifo" if buffered else "direct"}
     if weight_delivery is WeightDelivery.MEMSTREAM:
-        choices["matmul.memory.memstream.ram_style"] = ram_style
-        choices["matmul.memory.memstream.pumped_memory"] = pumped_memory
+        choices["w.source.memstream.ram_style"] = ram_style
+        choices["w.source.memstream.pumped_memory"] = pumped_memory
     if buffered:
         choices["w.transport.fifo.buffer.depth"] = weight_fifo_depth
         choices["w.transport.fifo.buffer.ram_style"] = "auto"
@@ -400,18 +413,20 @@ def matmul_assembly(
             raise ValueError(f"realizations compatible with this configuration: {named}")
         point = commit(point, {"matmul.realization": viable[0]})
     if core is None:
-        settlement = settle(point)
-        if "matmul.compute" not in settlement.committed:
-            cores = settlement.open.get("matmul.compute", ())
+        forced = {item.key: item.value for item in inspection.forced(point)}
+        if "matmul.compute" not in forced:
+            refusals = {
+                case: admission(commit(point, {"matmul.compute": case}).matmul.compute)
+                for case in ("packed", "int8_dsp58")
+            }
+            cores = [
+                case for case, refusal in refusals.items() if not isinstance(refusal, Rejected)
+            ]
             if cores:
                 raise ValueError(f"compute cores {', '.join(cores)} are all compatible; choose one")
-            refusals = (
-                admission(commit(point, {"matmul.compute": case}).matmul.compute)
-                for case in ("packed", "int8_dsp58")
-            )
-            found = describe(result for result in refusals if result is not None)
+            found = describe(result for result in refusals.values() if result is not None)
             raise ValueError(f"no compute core is compatible: {found}")
-        point, core = settlement.point, settlement.committed["matmul.compute"]
+        core = str(forced["matmul.compute"])
     else:
         point = commit(point, {"matmul.compute": core})
     point = commit(
@@ -422,8 +437,8 @@ def matmul_assembly(
             f"matmul.compute.{core}.compute_pumping": compute_pumping,
         },
     )
-    # Each stream's one compatible adapter; an input_gen's memory is inferred.
-    point = settled(point)
+    # Each stream's adapter is forced; an input_gen's memory is inferred.
+    point = with_adapter_memories(point)
     built = point.query(Kernel.module)
     if not isinstance(built, Available):
         raise ValueError(f"MatMul assembly is not accepted: {describe([built])}")
@@ -435,6 +450,6 @@ def matmul_assembly(
         matmul.result_type,
         weight_delivery,
         built.value,
-        matmul.memory.image if matmul.memory is not None else (),
+        point.w.source.image if point.w.valued else (),
         point,
     )

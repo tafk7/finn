@@ -25,7 +25,7 @@ from finn.dataflow.gemm import Form
 from finn.kernels.matmul import MatMulKernel
 from kernels.helpers import matmul_assembly, matmul_point, placed
 from finn.kernels.transport import MarkerKind, ReadyValidStream, StreamContract, StreamMarker
-from kernels.helpers import settled
+from kernels.helpers import with_adapter_memories
 from finn.kernels.target import DspBlock
 
 FACTS = dict(
@@ -40,7 +40,6 @@ FACTS = dict(
 
 def choices(core: str = "packed") -> dict[str, object]:
     return {
-        "matmul.memory": "none",
         "w.transport": "direct",
         "matmul.compute": core,
         f"matmul.compute.{core}.pe": 2,
@@ -108,7 +107,7 @@ def test_one_output_fold_and_one_beat_frames_close_every_beat():
 
 def test_the_adapter_s_memory_is_a_choice_of_the_stream():
     point = commit(matmul_point(**FACTS, target_period_ns=5.0), CHOICES)
-    configured = settled(point, ram_style="distributed")
+    configured = with_adapter_memories(point, ram_style="distributed")
     (generator,) = [stage for stage in configured.x.stages]
     assert generator.module is not None
     assert dict(generator.module.parameters)["RAM_STYLE"] == '"distributed"'

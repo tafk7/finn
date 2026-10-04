@@ -53,14 +53,23 @@ class Evaluation:
 
 @dataclass(frozen=True, slots=True, eq=False)
 class Snapshot:
-    """One root binding and commitment set with a local evaluation cache."""
+    """One root binding and commitment set with a local evaluation cache.
+
+    An open Decision with one viable case reads as that case (``forcing``), false
+    only on the copies forcing evaluates on. ``found`` holds the snapshot's forced
+    Decisions once found; ``verdicts`` are the ones its base found, which forcing
+    reuses where the change did not reach (``finn.core.space.forcing``).
+    """
 
     model: Model[Space]
     parameters: Mapping[int, object]
     assignments: Mapping[int, object] = field(default_factory=dict)
     lock: RLock = field(default_factory=RLock, repr=False)
+    forcing: bool = True
+    verdicts: Mapping[int, object] = field(default_factory=dict, repr=False)
     cache: dict[int, Evaluation] = field(default_factory=dict, init=False, repr=False)
     work: _execution.Work = field(default_factory=_execution.Work, init=False, repr=False)
+    found: object = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
         if not isinstance(self.parameters, MappingProxyType):
@@ -76,18 +85,26 @@ class _TrialSnapshot(Snapshot):
     """Private complete candidates, admitted on demand before value publication.
 
     Every candidate, including retained assignments, must pass admission before
-    publication. The base contributes only its model, frozen facts, and lock.
+    publication. The base contributes its model, frozen facts and lock, its
+    verdicts, and the values it forces, which the trial reads for the Decisions it
+    does not change. A Decision the base does not force reads as the configuration
+    the trial would publish forces it (``successor``): found once, and that
+    configuration is the one published.
     """
 
-    __slots__ = ("_pending", "_published", "_candidates")
+    __slots__ = ("_pending", "_published", "_candidates", "_base", "_successor")
 
     _pending: dict[int, object]
     _published: bool
     _candidates: Mapping[int, object]
+    _base: Snapshot
+    _successor: Snapshot | None
 
     def __init__(self, base: Snapshot, candidates: Mapping[int, object]) -> None:
         pending: dict[int, object] = {}
-        super().__init__(base.model, base.parameters, {}, base.lock)
+        super().__init__(base.model, base.parameters, {}, base.lock, base.forcing)
+        object.__setattr__(self, "_base", base)
+        object.__setattr__(self, "_successor", None)
         object.__setattr__(self, "assignments", MappingProxyType(pending))
         object.__setattr__(self, "_pending", pending)
         object.__setattr__(self, "_candidates", MappingProxyType(dict(candidates)))
@@ -100,11 +117,48 @@ class _TrialSnapshot(Snapshot):
             raise RuntimeError("admission dependency order admitted a previously resolved decision")
         self._pending[node_index] = value
 
+    def successor(self) -> Snapshot:
+        """The configuration this trial would publish: every candidate committed."""
+        if self._successor is None:
+            from .forcing import inherited  # noqa: PLC0415 - runtime/forcing cycle
+
+            successor = Snapshot(
+                self.model,
+                self.parameters,
+                self._candidates,
+                forcing=self.forcing,
+                verdicts=inherited(self._base),
+            )
+            object.__setattr__(self, "_successor", successor)
+        assert self._successor is not None
+        return self._successor
+
     def publish(self) -> Snapshot:
         if self._published:
             raise RuntimeError("a admission trial can only be published once")
         object.__setattr__(self, "_published", True)
-        return Snapshot(self.model, self.parameters, self._pending)
+        # Every candidate was admitted: the successor's assignments are the pending ones.
+        return self.successor()
+
+
+def _forced(snapshot: Snapshot, index: int) -> QueryResult[object] | None:
+    """An open Decision's forced value (its one viable case), its refusal (no viable
+    case), or None (several, or a snapshot that does not force). A trial reads its
+    base's, and where the base forces nothing, the configuration's it would publish."""
+    from .forcing import forced  # noqa: PLC0415 - runtime/forcing cycle
+
+    if not snapshot.forcing:
+        return None
+    source = snapshot
+    if isinstance(snapshot, _TrialSnapshot):
+        base = forced(snapshot._base)
+        if index in base.values:
+            return Available(base.values[index])
+        source = snapshot.successor()
+    found = forced(source)
+    if index in found.values:
+        return Available(found.values[index])
+    return found.refused.get(index)
 
 
 def _blocked(answers: list[QueryResult[object]]) -> NonValue | None:
@@ -273,6 +327,9 @@ def _frame(snapshot: Snapshot, node: Node) -> _execution.Frame:
                 snapshot.admit(node.index, candidate)
                 return Evaluation(Available(snapshot.assignments[node.index]))
             return Evaluation(admission.result)
+        found = _forced(snapshot, node.index)
+        if found is not None:
+            return Evaluation(found)
         return Evaluation(
             Unresolved(
                 (
@@ -550,15 +607,30 @@ def decision_state(snapshot: Snapshot, node_index: int) -> QueryResult[DecisionS
         return Available(DecisionState(node.owner, "committed", value))
 
 
-def candidate_values(snapshot: Snapshot, node_index: int) -> QueryResult[tuple[object, ...]] | None:
+def enumeration(snapshot: Snapshot, node_index: int) -> Evaluation:
+    """A Decision's enumerated candidates (``Available(None)``: not enumerable), with
+    what the enumeration read."""
     with snapshot.lock:
         node = snapshot.linked.nodes[node_index]
         if node.domain is None or node.semantics is None:
             raise EvaluationError(node.owner, "domain enumeration", "reference has no domain")
-        result = _execution.run(snapshot, node_index, _enumeration_frame(snapshot, node)).result
-        if isinstance(result, Available) and result.value is None:
-            return None
-        return cast(QueryResult[tuple[object, ...]], result)
+        return _execution.run(snapshot, node_index, _enumeration_frame(snapshot, node))
+
+
+def candidate_values(snapshot: Snapshot, node_index: int) -> QueryResult[tuple[object, ...]] | None:
+    result = enumeration(snapshot, node_index).result
+    if isinstance(result, Available) and result.value is None:
+        return None
+    return cast(QueryResult[tuple[object, ...]], result)
+
+
+def membership(snapshot: Snapshot, node_index: int, value: object) -> Evaluation:
+    """Whether a Decision's domain admits ``value`` here (its requirements too), with
+    the refusal's finding and what membership read."""
+    with snapshot.lock:
+        node = snapshot.linked.nodes[node_index]
+        frame = _membership_frame(snapshot, node, value, check_guard=False)
+        return _execution.run(snapshot, node_index, frame)
 
 
 def copy_result(
@@ -623,5 +695,7 @@ __all__ = [
     "copy_result",
     "copy_assessment",
     "decision_state",
+    "enumeration",
     "evaluate",
+    "membership",
 ]

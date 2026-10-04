@@ -15,7 +15,8 @@ from __future__ import annotations
 import pytest
 from qonnx.core.datatype import DataType
 
-from finn.core.space import Rejected, design_space
+from finn.core.space import Rejected, design_space, inspection
+from finn.kernels.target import Platform
 from finn.kernels.thresholding import ThresholdingAxiKernel
 
 INT8 = DataType["INT8"]
@@ -127,3 +128,37 @@ def test_the_choices_do_not_move_with_pe() -> None:
         point = configured(pe=pe, **memory)
         assert triggers(point) == (bram, 0)
         assert styles(point) == ("distributed", "block")
+
+
+def test_the_platform_narrows_the_memories_and_the_control_port() -> None:
+    """An UltraRAM stage needs UltraRAM that takes initial contents, runtime-writable
+    thresholds a control port: on a platform without them, each case is refused by
+    name and its Decision forced to what remains."""
+
+    def point(platform: Platform) -> ThresholdingAxiKernel:
+        return design_space(
+            ThresholdingAxiKernel(
+                input_dtype=INT8,
+                threshold_dtype=INT8,
+                thresholds=table(3),
+                bias=0,
+                platform=platform,
+            )
+        )
+
+    forced = {item.key: item for item in inspection.forced(point(Platform()))}
+    assert "use_axilite" not in forced and "ultra_stages" not in forced
+    bare = {
+        item.key: item for item in inspection.forced(point(Platform(uram=False, control_ports=0)))
+    }
+    assert (
+        bare["use_axilite"].value is False
+        and "control-absent" in bare["use_axilite"].refused["True"]
+    )
+    assert bare["ultra_stages"].value == 0
+    assert {"1", "2"} == set(bare["ultra_stages"].refused)
+    assert all("uram-absent" in why for why in bare["ultra_stages"].refused.values())
+    zynq = point(Platform(uram_init=False))
+    report = zynq.try_with_choices(ultra_stages=1)
+    assert not report.accepted
+    assert {finding.code for finding in report.outcomes[0].result.findings} == {"uram-init"}

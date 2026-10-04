@@ -50,6 +50,20 @@ The adapter and transport choices are keyed under the stream
 Its ``netlist`` view is accepted when the stream is: its ends, plan and every
 hop checked.
 
+A stream whose tensor has a known value (``contents``, one operand per set; with
+several ``sets``, its ``index`` stream selects one) carries a ``source``
+Decision over the kernels that can drive it with that value (``SOURCES``: a
+memory now). It applies only when the value is known (``valued``, whether
+``contents`` is supplied: a stream whose declaration supplies none compiles no
+source), and it has no ``none`` case: each candidate refuses on its own facts and on the
+``platform``'s capabilities, and one viable candidate is forced. The source is
+the stream's producer end, placed by the stream (``staged``), its leaf below
+the stream at ``source.<case>``; it stores one period of the value in the
+order the stream's consumer reads it. The invariant: **a stream with a value
+has its source as its only producer** (``stream-users``). Its keys are the
+stream's (``w.source``, ``w.source.memstream.ram_style``), so they belong to
+whoever owns the edge, for an initializer the node that consumes it.
+
 Beside ``compatible``, each checked hop is resolved into wires (``wired``:
 lanes, valid, ready, marker bits), and the stream exports its netlist under
 ``NETLIST``: its stages' leaves at their labels below it
@@ -76,6 +90,8 @@ from finn.core.space import (
     derived,
     domain,
     reject,
+    selected,
+    supplied,
     view,
 )
 from finn.kernels.artifacts.abi import Bus, Endpoint
@@ -92,12 +108,24 @@ from finn.kernels.transport import (
     marker_bit,
     marker_pairs,
 )
+from finn.dataflow.datatypes import QONNXDataType
 from finn.dataflow.stream import End, Ends
 from finn.dataflow.stream import Stream as LogicalStream
 from finn.dataflow.tensor import ScalarEncoding, Tensor
-from finn.dataflow.traversal import BeatSequence, unreplayed
+from finn.dataflow.traversal import BeatSequence, Traversal, period, unreplayed
 from finn.kernels.adapters import ADAPTERS, Stage, StreamAdapter
+from finn.kernels.datatypes.semantics import (
+    INTEGER_TENSOR,
+    QONNX_DATATYPE_VALUE_SEMANTICS,
+    IntegerTensor,
+)
+from finn.kernels.memstream import MemStreamKernel
+from finn.kernels.target import Platform
 
+
+SOURCES: dict[str, type[Space] | Space] = {"memstream": MemStreamKernel}
+"""The kernels that can drive a stream with its known value: a memory; later a fetcher
+from memory-mapped memory, a loop's memory, a source reloadable over AXI-Lite."""
 
 ADAPTER_RAM_STYLES = "*.adapter.*.ram_style"
 """The keys (``fnmatch``) of every adapter stage's memory choice, an ``input_gen``'s."""
@@ -195,21 +223,82 @@ class Stream(LogicalStream):
     through. A side without a user is the root's boundary, presented as
     the AXIS port ``port``: an input boundary without the replay its receiver
     realizes, an output boundary as produced, neither with markers and both
-    as a single pass.
+    as a single pass. A stream with a known value has its ``source`` as its
+    producer.
     """
 
     port: str = Param(required=False)
     users = Users(PORT)
+    contents: IntegerTensor = Param(semantics=INTEGER_TENSOR, required=False)
+    sets: int = Param(default=1)
+    index: LogicalStream = Param(required=False)
+    platform: Platform = Param(default=Platform())
+    # Whether the stream carries a known value, which its source drives: where nothing
+    # supplies ``contents``, the source never applies and its candidates are not compiled.
+    valued = supplied(contents)
+
+    @derived
+    def consumed(self) -> StreamContract | Rejected:
+        """The consuming user's contract: the order a source stores the value in."""
+        consumers = [
+            end.value
+            for end in self.users
+            if end.value.transport.endpoint is not Endpoint.INITIATOR
+        ]
+        if len(consumers) != 1:
+            return reject("stream-source", "a known value streams to exactly one consumer")
+        return consumers[0]
+
+    @derived
+    def source_form(self) -> Traversal:
+        """One period of the value in the order its consumer reads it."""
+        return period(self.consumed.form)
+
+    @derived(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
+    def source_dtype(self) -> QONNXDataType:
+        return self.tensor.element.dtype
+
+    source: MemStreamKernel = Decision(
+        SOURCES,
+        when=valued,
+        dtype=source_dtype,
+        form=source_form,
+        contents=contents,
+        sets=sets,
+        set_stream=index,
+        platform=platform,
+        staged=True,
+    )
+    source_case = selected(source)
+    source_module = View(source.module)
+
+    @derived
+    def source_label(self) -> str:
+        return f"source.{self.source_case}"
+
+    @derived
+    def source_contract(self) -> StreamContract:
+        contract: StreamContract = self.source.output.contract
+        return contract
 
     @derived
     def endpoints(self) -> StreamEnds | Rejected:
-        """The producing and consuming ends, without the stages between them."""
+        """The producing and consuming ends, without the stages between them: with a
+        known value, the producer is the stream's source."""
         producers: list[tuple[str | None, StreamContract]] = []
         consumers: list[tuple[str | None, StreamContract]] = []
         for end in self.users:
             contract = end.value
             producing = contract.transport.endpoint is Endpoint.INITIATOR
             (producers if producing else consumers).append((end.node, contract))
+        if self.valued:
+            if producers:
+                return reject(
+                    "stream-users",
+                    "a stream with a value has its source as its only producer, "
+                    f"not {producers[0][0]}",
+                )
+            producers.append((self.source_label, self.source_contract))
         if len(producers) > 1 or len(consumers) > 1:
             named = ", ".join(f"{end.node}.{end.member}" for end in self.users)
             return reject(
@@ -316,12 +405,15 @@ class Stream(LogicalStream):
         A user's end belongs to its kernel beside the stream: the user is a
         kernel's ``Port`` (``compute.packed.x``, at any depth below the
         stream's owner), its kernel the node above it (``^compute.packed``).
-        A stage sits below the stream at its label; a boundary end is the
-        root's own pins (``None``).
+        A stage and the source sit below the stream at their labels; a
+        boundary end is the root's own pins (``None``).
         """
         ends = self.endpoints
         owners: list[str | None] = []
-        for node in (ends.source_owner, ends.sink_owner):
+        for side, node in enumerate((ends.source_owner, ends.sink_owner)):
+            if side == 0 and self.valued:
+                owners.append(node)  # the source, below the stream at its label
+                continue
             kernel = None if node is None else node.rpartition(".")[0]
             if kernel == "":
                 return reject("stream-user", f"{node} presents an end, but is no kernel's port")
@@ -342,10 +434,14 @@ class Stream(LogicalStream):
 
     @view(requires=(LogicalStream.well_formed, LogicalStream.realizable, compatible))
     def netlist(self) -> Fragment:
-        """Its stages' leaves below it, and its hops."""
+        """Its source's and stages' leaves below it, and its hops."""
         stages = tuple(
             (stage.label, stage.module) for stage in self.stages if stage.module is not None
         )
+        if self.valued:
+            module = self.source_module
+            assert isinstance(module, Leaf)
+            stages = ((self.source_label, module), *stages)
         return Fragment(stages, self.hops)
 
     @view(requires=(LogicalStream.well_formed, LogicalStream.realizable, compatible))
@@ -385,6 +481,7 @@ class BufferedStream(Stream):
 
 __all__ = [
     "ADAPTER_RAM_STYLES",
+    "SOURCES",
     "BufferedStream",
     "Stream",
     "StreamEnds",

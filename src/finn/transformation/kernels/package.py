@@ -24,8 +24,9 @@ The partition's boundary facts are typed metadata on the partition model, the
 its tensor, shape, datatype, lanes, beats, element bits and TDATA width.
 Packaging's next step (K2) writes them; InsertIODMA and the driver read them.
 
-The partition's choices are its nodes' (D8): the root is replayed from them and
-settled, and an open Decision or a stale choice refuses, named. The body's graph
+The partition's choices are its nodes' (D8): the root is replayed from them, a
+Decision with one viable case is forced, and an open Decision or a stale
+choice refuses, named. The body's graph
 inputs and outputs, in order, are the root's ``s_axis_<i>`` and ``m_axis_<j>``:
 the shells connect a partition's i-th input to ``s_axis_<i>``.
 
@@ -57,7 +58,7 @@ from finn.kernels.artifacts.abi import (
     StandardProtocol,
 )
 from finn.kernels.artifacts.build import EmittedModule, emit_module
-from finn.kernels.configure import settle, undecided
+from finn.kernels.configure import undecided
 from finn.util._toolchain import Selection
 from finn.util.basic import make_build_dir
 
@@ -376,7 +377,8 @@ class PackagePartition(Transformation):  # type: ignore[misc]
         self.toolchain = toolchain
 
     def module(self, model: Any) -> Any:
-        """The partition's module: its root replayed from the nodes, settled, all decided."""
+        """The partition's module: its root replayed from the nodes, every Decision
+        committed or forced."""
         root = partition_root(model, model.graph.node)
         if root.dropped:
             raise KernelOpError(
@@ -384,7 +386,7 @@ class PackagePartition(Transformation):  # type: ignore[misc]
                 + ", ".join(root.dropped),
                 root.dropped,
             )
-        point = settle(root.point).point
+        point = root.point
         open_keys = undecided(point, "*")
         if open_keys:
             raise KernelOpError(

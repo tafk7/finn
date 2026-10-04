@@ -38,7 +38,7 @@ from typing import (
     overload,
 )
 
-from .domains import Domain, finite
+from .domains import Domain, Requirement, finite, requiring
 from .errors import DefinitionError, ReferenceUseError
 from .graph import LOCATED, Located
 from .results import NonValue, QueryResult, marked_value_type
@@ -474,14 +474,18 @@ class Param(ValueDecl[T], Generic[T]):
 
         def __getattr__(self, name: str) -> Any:
             # ``output.spec`` in the class body that declares ``output: Stream``:
-            # a member of the node the reference input will name.
+            # a member of the node the reference input will name. A value formal
+            # projects an attribute of its value (``platform.uram``), as a derived
+            # value does.
             if name.startswith("_"):
                 raise AttributeError(name)
             try:
                 family = self.reference_family()
             except DefinitionError:
                 raise AttributeError(name) from None
-            if family is None or not _has_member(family, name):
+            if family is None:
+                return project(self, name)
+            if not _has_member(family, name):
                 raise AttributeError(name)
             from ._nodes import path_proxy
 
@@ -547,7 +551,10 @@ class Decision(ValueDecl[T], Generic[T]):
     bindings only that candidate takes; the keyword arguments are shared
     bindings, supplied to every candidate, each of which must declare them.
     ``optional=True`` adds a ``None`` candidate keyed ``"none"``, which places
-    nothing.
+    nothing. ``requires=`` states what a value Decision's cases need
+    (``requires(platform.uram, "uram-absent: ...", cases=("ultra",))``): a case
+    whose fact does not hold is refused with that finding, at a commitment and
+    when forcing reads its viability.
 
     ``heating.area`` reads a member every candidate declares;
     ``heating["pump"].cop`` reads one candidate's member, inapplicable while
@@ -591,6 +598,7 @@ class Decision(ValueDecl[T], Generic[T]):
         *,
         values: Iterable[T],
         semantics: ValueSemantics[T] | None = None,
+        requires: Iterable[Requirement] = (),
         when: Guard = None,
         name: str | None = None,
     ) -> T: ...
@@ -602,6 +610,7 @@ class Decision(ValueDecl[T], Generic[T]):
         *,
         domain: Domain[T],
         semantics: ValueSemantics[T] | None = None,
+        requires: Iterable[Requirement] = (),
         when: Guard = None,
         name: str | None = None,
     ) -> T: ...
@@ -614,6 +623,7 @@ class Decision(ValueDecl[T], Generic[T]):
         domain: object = None,
         values: object = None,
         semantics: object = None,
+        requires: object = None,
         when: object = None,
         name: object = None,
         optional: object = False,
@@ -626,6 +636,7 @@ class Decision(ValueDecl[T], Generic[T]):
                     ("domain", domain),
                     ("values", values),
                     ("semantics", semantics),
+                    ("requires", requires),
                     ("name", name),
                 )
                 if value is not None
@@ -668,6 +679,11 @@ class Decision(ValueDecl[T], Generic[T]):
             if domain is not None
             else finite(cast(Iterable[object], values), explicit)
         )
+        if requires is not None:
+            stated = tuple(cast(Iterable[object], requires))
+            if not all(isinstance(item, Requirement) for item in stated):
+                raise DefinitionError("requires= takes requirements, as built by requires()")
+            instance.domain = requiring(instance.domain, *cast(tuple[Requirement, ...], stated))
         instance.sites = []
         if name is not None:
             instance.name = local_name(cast(str, name), "decision name")
@@ -1373,6 +1389,28 @@ def selected(decision: object) -> str:
     return cast(str, CaseRef(decision._space_path))
 
 
+class Supplied(ValueDecl[bool]):
+    """Whether a value input of this family is supplied (see ``supplied``)."""
+
+    def __init__(self, formal: Param[object]) -> None:
+        self.formal = formal
+        self.semantics = cast("ValueSemantics[bool]", default_semantics(bool))
+
+
+def supplied(formal: object) -> bool:
+    """Whether the value input ``formal`` is supplied, as a declaration: what
+    ``present(formal)`` answers in a method (bound to a guarded view or derived
+    value, whether that source applies).
+
+    As a guard (``when=supplied(contents)``) the compiler reads it before
+    evaluation: where the declaration never supplies the input, a Decision over
+    nodes it guards can never apply, and its candidates are not compiled.
+    """
+    if not isinstance(formal, Param) or formal.reference_family() is not None:
+        raise DefinitionError("supplied() takes a value input (a Param) of this family")
+    return cast(bool, Supplied(cast("Param[object]", formal)))
+
+
 class Present(ValueDecl[T], Generic[T]):
     """The value of whichever one of ``sources`` is present (applicable).
 
@@ -1455,6 +1493,7 @@ __all__ = [
     "Present",
     "Projection",
     "Required",
+    "Supplied",
     "UNSUPPLIED",
     "Users",
     "ValueDecl",
@@ -1465,6 +1504,7 @@ __all__ = [
     "derived",
     "required",
     "selected",
+    "supplied",
     "unfinished",
     "unmet_required",
     "view",

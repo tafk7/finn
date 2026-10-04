@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 """Typed design-space authoring, immutable specialization and public services."""
 
-from . import extensions, graph, inspection, selections, settling
+from . import extensions, forcing, graph, inspection, selections
 from ._configuration import BoundDecision, BoundValue, Space
 from ._execution import (
     CleanupFailure,
@@ -29,9 +29,10 @@ from .declarations import (
     derived,
     required,
     selected,
+    supplied,
     view,
 )
-from .domains import Domain, divisors_of, domain, finite
+from .domains import Domain, Requirement, divisors_of, domain, finite, requires, requiring
 from .edits import Change, ChangeOutcome, ChangeRequest, ConfigurationResult
 from .errors import (
     ConfigurationError,
@@ -62,7 +63,6 @@ from .results import (
 )
 from .selections import Selection, SelectionEntry
 from .semantics import ValueSemantics, default_semantics
-from .settling import Settlement, settle
 
 __all__ = [
     # Families, node declarations and the compile step
@@ -76,6 +76,7 @@ __all__ = [
     "Decision",
     "required",
     "selected",
+    "supplied",
     "Derived",
     "Constraint",
     "ConstraintGroup",
@@ -101,6 +102,9 @@ __all__ = [
     "domain",
     "finite",
     "divisors_of",
+    "Requirement",
+    "requires",
+    "requiring",
     "ValueSemantics",
     "default_semantics",
     # Results and assessments
@@ -124,8 +128,6 @@ __all__ = [
     "ConfigurationResult",
     "Selection",
     "SelectionEntry",
-    "Settlement",
-    "settle",
     # Errors and native cleanup diagnostics
     "DefinitionError",
     "RequestError",
@@ -139,8 +141,8 @@ __all__ = [
     "cancellation_details",
     # Public services
     "extensions",
+    "forcing",
     "graph",
     "inspection",
     "selections",
-    "settling",
 ]
