@@ -36,12 +36,23 @@ from finn.transformation.fpgadataflow.externalize_params import ExternalizeParam
 from finn.util.basic import make_build_dir
 
 
+# KernelOps (finn.custom_op.kernels) form partitions of their own.
+KERNEL_OPS = "finn.custom_op.kernels"
+
+
 class CreateDataflowPartition(Transformation):
     """Split a graph into two graphs; one which contains non-FINN-dataflow nodes
     and a StreamingDataflowPartition node, and another which only contains
     FINN dataflow nodes. The StreamingDataflowPartition has a model attribute
     that indicates the filename for the second graph that only contains
-    dataflow nodes. No action is taken if there are no dataflow nodes."""
+    dataflow nodes. No action is taken if there are no dataflow nodes.
+
+    KernelOps form one partition of their own, never mixed with HW layers: a
+    model of KernelOps. Placement is the partition's, not its nodes': a
+    KernelOp has no ``slr`` or ``mem_port``, and its partition's
+    StreamingDataflowPartition takes ``slr`` -1 (none) and no ``mem_port``, for
+    whoever places partitions to set. The KernelOps must be contiguous: a graph
+    op between two of them refuses (a partition may not depend on itself)."""
 
     def __init__(self, partition_model_dir=None):
         super().__init__()
@@ -65,6 +76,8 @@ class CreateDataflowPartition(Transformation):
         def assign_partition_id(node):
             if node.op_type in ["GenericPartition", "StreamingDataflowPartition"]:
                 return -1
+            elif node.domain == KERNEL_OPS:
+                return "kernels"
             else:
                 backend = get_by_name(node.attribute, "backend")
                 if backend is not None and backend.s.decode("UTF-8") == "fpgadataflow":
@@ -89,6 +102,15 @@ class CreateDataflowPartition(Transformation):
             p_node_inst = getCustomOp(p_node)
             node_model_filename = p_node_inst.get_nodeattr("model")
             p_model = ModelWrapper(node_model_filename)
+            if all(node.domain == KERNEL_OPS for node in p_model.graph.node):
+                # KernelOps carry no placement: the partition's is unset
+                p_node.op_type = "StreamingDataflowPartition"
+                p_node.domain = "finn.custom_op.fpgadataflow"
+                new_p_node_inst = getCustomOp(p_node)
+                new_p_node_inst.set_nodeattr("partition_id", partition_ind)
+                new_p_node_inst.set_nodeattr("slr", -1)
+                new_p_node_inst.set_nodeattr("mem_port", "")
+                continue
             # check floorplan (SLR assignment per node)
             inst = getCustomOp(p_model.graph.node[0])
             slr = inst.get_nodeattr("slr")
