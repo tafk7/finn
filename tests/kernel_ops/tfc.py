@@ -32,7 +32,7 @@ from qonnx.transformation.infer_datatypes import InferDataTypes
 from qonnx.transformation.infer_shapes import InferShapes
 
 from finn.custom_op.kernels.partition import partition_root, save_partition_choices
-from finn.kernels.configure import settle, undecided
+from finn.kernels.configure import undecided
 from finn.kernels.streams import ADAPTER_RAM_STYLES
 from finn.transformation.fpgadataflow.create_dataflow_partition import CreateDataflowPartition
 from finn.transformation.kernels import InferKernelTensors, ToKernelOps
@@ -122,8 +122,8 @@ def fold_by_hand(model: ModelWrapper) -> None:
                     "compute.packed.pe": _lanes(n),
                     "compute.packed.simd": _lanes(k),
                     "compute.packed.compute_pumping": False,
-                    "memory.memstream.ram_style": "auto",
-                    "memory.memstream.pumped_memory": False,
+                    "w.source.memstream.ram_style": "auto",
+                    "w.source.memstream.pumped_memory": False,
                     "w.transport": "direct",
                 }
             )
@@ -143,8 +143,8 @@ def fold_by_hand(model: ModelWrapper) -> None:
 def choose_adapter_memories_by_hand(body: ModelWrapper) -> None:
     """Save every adapter memory the partition's root leaves open as ``auto``."""
     root = partition_root(body, body.graph.node)
-    point = settle(root.point).point
-    save_partition_choices(body, root, dict.fromkeys(undecided(point, ADAPTER_RAM_STYLES), "auto"))
+    open_ = undecided(root.point, ADAPTER_RAM_STYLES)
+    save_partition_choices(body, root, dict.fromkeys(open_, "auto"))
 
 
 def partitioned(directory: Path) -> tuple[ModelWrapper, ModelWrapper, ModelWrapper]:

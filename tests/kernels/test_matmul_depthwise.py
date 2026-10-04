@@ -14,12 +14,12 @@ stored (k, n): window by channel.
 import pytest
 from qonnx.core.datatype import DataType
 
-from finn.core.space import Available, Rejected, Unresolved
+from finn.core.space import Available, Rejected, Unresolved, inspection
 from finn.dataflow.plan import Step
 from finn.kernels.base import Kernel
 from finn.kernels.configure import commit
 from finn.kernels.matmul import MatMulKernel
-from kernels.helpers import labels, matmul_point, matmul_root, placed, settled
+from kernels.helpers import labels, matmul_point, matmul_root, placed, with_adapter_memories
 from finn.dataflow.gemm import Form
 from kernels.helpers import WeightDelivery, matmul_assembly
 from finn.dataflow.traversal import Traversal
@@ -39,7 +39,6 @@ FACTS = dict(
 def point(core="int8_dsp58", **facts):
     facts = {**FACTS, "target_period_ns": 5.0, **facts}
     choices = {
-        "matmul.memory": "none",
         "w.transport": "direct",
         "matmul.compute": core,
         f"matmul.compute.{core}.pe": 2,
@@ -47,7 +46,7 @@ def point(core="int8_dsp58", **facts):
         f"matmul.compute.{core}.compute_pumping": False,
     }
     native = "native" if facts["form"] is Form.DEPTHWISE else None
-    return settled(commit(matmul_point(realization=native, **facts), choices))
+    return with_adapter_memories(commit(matmul_point(realization=native, **facts), choices))
 
 
 def parameters(module, label):
@@ -128,29 +127,35 @@ def test_one_root_carries_the_weights_of_whichever_realization_is_committed():
     # The root binds its weight stream's tensor to MatMul's weight_tensor, which
     # follows the realization: open, the tensor waits on it.
     weights = tuple(tuple((c + k) % 7 - 3 for c in range(4)) for k in range(9))
-    point = commit(
-        matmul_point(**FACTS, target_period_ns=5.0, weights=weights), {"matmul.memory": "memstream"}
-    )
+    point = matmul_point(**FACTS, target_period_ns=5.0, weights=weights)
     pending = point.query(matmul_root(MatMulKernel).w.tensor)
     assert isinstance(pending, Unresolved)
     assert {finding.owner for finding in pending.findings} == {"matmul.realization"}
+    # Whether the weight stream has a value is the weights' presence, a fact: its
+    # source is forced while the value itself waits on the realization.
+    assert point.w.valued
+    assert ("w.source", "memstream") in {
+        (item.key, item.value) for item in inspection.forced(point)
+    }
     for realization, shape, core in (
         ("native", (9, 4), "int8_dsp58"),
         ("dense", (36, 4), "packed"),
     ):
         committed = commit(point, {"matmul.realization": realization})
         assert committed.w.tensor.shape == shape
-        built = settled(
+        # The realization and the source's choices commit in one batch.
+        built = with_adapter_memories(
             commit(
-                committed,
+                point,
                 {
+                    "matmul.realization": realization,
                     "w.transport": "direct",
                     "matmul.compute": core,
                     f"matmul.compute.{core}.pe": 2,
                     f"matmul.compute.{core}.simd": 3,
                     f"matmul.compute.{core}.compute_pumping": False,
-                    "matmul.memory.memstream.ram_style": "auto",
-                    "matmul.memory.memstream.pumped_memory": False,
+                    "w.source.memstream.ram_style": "auto",
+                    "w.source.memstream.pumped_memory": False,
                 },
             )
         ).query(Kernel.module)
@@ -180,8 +185,8 @@ def test_a_dense_realization_reads_window_by_channel_rows_against_block_diagonal
     built = matmul_assembly(target_dsp=DspBlock.DSP48E2, **DENSE)
     assert labels(built.module) == [
         "x.adapter.input_gen.input_gen",
+        "w.source.memstream",
         "matmul.compute.packed",
-        "matmul.memory.memstream",
     ]
     compute = parameters(built.module, "matmul.compute.packed")
     assert compute["ACTIVATION_BROADCASTING"] == 1 and compute["SIMD"] == 4

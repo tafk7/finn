@@ -161,7 +161,7 @@ def test_the_script_packages_sources_or_a_checkpoint() -> None:
     assert vlnv("sdp_1") == "xilinx_finn:finn:sdp_1:1.0"
 
 
-def test_the_partition_packages_its_nodes_choices_settled() -> None:
+def test_the_partition_packages_its_nodes_choices() -> None:
     _, point = configured(model := kernel_model())
     module = PackagePartition("sdp_1").module(model)
     assert (module.fragment, module.pins) == (point.module.fragment, point.module.pins)

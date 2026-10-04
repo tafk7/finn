@@ -29,7 +29,7 @@ from finn.kernels.matmul import MatMulKernel, exact_result_dtype
 from finn.kernels.streams import BufferedStream, Stream
 from finn.kernels.target import DspBlock
 from finn.kernels.thresholding import ThresholdingAxiKernel
-from kernels.helpers import Root, labels, settled
+from kernels.helpers import Root, labels, with_adapter_memories
 from kernels.xsim import pack, requires_xsim, stream_through
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -102,24 +102,27 @@ class Chain(Root):
         output_stream=levels,
     )
     second = matmul(HIDDEN, OUTPUTS, T, W2, x_stream=levels, w_stream=w2, y_stream=y)
+    # Each weight stream carries its MatMul's weights, which the stream's source stores.
+    w1.contents = first.weight_values
+    w2.contents = second.weight_values
 
 
 def configured(root: Root, layers: tuple[str, ...] = ("first", "second"), **extra: object) -> Any:
     choices: dict[str, object] = dict(extra)
-    for layer, stream in zip(layers, ("w1", "w2")):
-        choices |= {f"{layer}.memory": "memstream", f"{stream}.transport": "direct"}
-    point = settled(commit(design_space(root), choices))
+    for _, stream in zip(layers, ("w1", "w2")):
+        choices[f"{stream}.transport"] = "direct"
+    point = with_adapter_memories(commit(design_space(root), choices))
     # The Decisions inside the subspaces just selected, each keyed by its owner.
     nested: dict[str, object] = {}
-    for layer in layers:
+    for layer, stream in zip(layers, ("w1", "w2")):
         nested |= {
             f"{layer}.compute.packed.pe": PE,
             f"{layer}.compute.packed.simd": SIMD,
             f"{layer}.compute.packed.compute_pumping": False,
-            f"{layer}.memory.memstream.ram_style": "auto",
-            f"{layer}.memory.memstream.pumped_memory": False,
+            f"{stream}.source.memstream.ram_style": "auto",
+            f"{stream}.source.memstream.pumped_memory": False,
         }
-    return settled(commit(point, nested))
+    return with_adapter_memories(commit(point, nested))
 
 
 # The thresholding's choices: no AXI-Lite, no deep pipeline, memories Vivado's.
@@ -140,14 +143,15 @@ def test_each_edge_carries_its_own_adapter_and_the_netlist_is_flat():
     # A replay before each MatMul's core, on the root's edge into it; none inside a MatMul.
     assert point.x.plan.steps == point.levels.plan.steps == (Step.REORDER, Step.MARKERS)
     assert point.hidden.plan.steps == ()
+    # Each weight memory is its stream's source: a leaf below the stream, in member order.
     assert labels(point.module) == [
         "x.adapter.input_gen.input_gen",
+        "w1.source.memstream",
         "levels.adapter.input_gen.input_gen",
+        "w2.source.memstream",
         "first.compute.packed",
-        "first.memory.memstream",
         "activate",
         "second.compute.packed",
-        "second.memory.memstream",
     ]
     # The root's own ports are its boundary streams.
     assert {port.name for port in point.module.pins.ports} == {

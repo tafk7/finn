@@ -6,11 +6,11 @@
 import pytest
 from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 
-from finn.core.space import Available, Rejected, Unresolved
+from finn.core.space import Available, Rejected, Unresolved, inspection, selections
 from finn.kernels.artifacts.abi import Bus
 from finn.kernels.artifacts.build import emit_module
 from finn.kernels.base import Kernel
-from finn.kernels.configure import commit, settle
+from finn.kernels.configure import commit
 from kernels.helpers import finnlib_root, labels, matmul_point, placed
 from finn.kernels.matmul import MatMulKernel, exact_result_dtype
 from kernels.helpers import WeightDelivery, matmul_assembly
@@ -78,7 +78,7 @@ def test_stored_image_has_output_then_reduction_then_pe_simd_order():
     # Hand-packed INT3 lanes: p0/s0, p0/s1, p1/s0, p1/s1, low first.
     assert built.initializer == (0x22C, 0x6BE, 0xDD3, 0x941)
     assert "in1_V" not in {port.name for port in built.module.pins.ports}
-    memory = dict(placed(built.module, "matmul.memory.memstream").parameters)
+    memory = dict(placed(built.module, "w.source.memstream").parameters)
     assert {name: memory[name] for name in ("DEPTH", "WIDTH", "SETS", "RAM_STYLE")} == {
         "DEPTH": 4,
         "WIDTH": 12,
@@ -157,13 +157,16 @@ def test_invalid_configuration_fails_during_construction(changes, match):
         assembly(**changes)
 
 
-def test_the_space_settles_the_core_and_the_core_owns_its_folding_factors():
-    base = commit(matmul_point(**FACTS), {"matmul.memory": "none", "w.transport": "direct"})
-    # On DSP48E2 only the packed core admits the configuration, before any folding factor.
-    settled_core = settle(base)
-    assert settled_core.committed == {"matmul.compute": "packed"}
+def test_the_core_is_forced_and_owns_its_folding_factors():
+    base = commit(matmul_point(**FACTS), {"w.transport": "direct"})
+    # On DSP48E2 only the packed core admits the configuration, before any folding
+    # factor: it is forced, never committed.
+    assert ("matmul.compute", "packed") in {
+        (item.key, item.value) for item in inspection.forced(base)
+    }
+    assert selections.capture(base).keys == ("w.transport",)
     point = commit(
-        settled_core.point,
+        base,
         {"matmul.compute.packed.pe": 2, "matmul.compute.packed.simd": 2},
     )
     # The activation stream's adapter applies once its plan is known, which the
@@ -190,7 +193,7 @@ def test_the_space_settles_the_core_and_the_core_owns_its_folding_factors():
     assert labels(point.module) == ["x.adapter.input_gen.input_gen", "matmul.compute.packed"]
     assert not hasattr(MatMulKernel, "contract") and not hasattr(MatMulKernel, "pe")
     refused = commit(
-        settled_core.point,
+        base,
         {
             "matmul.compute.packed.pe": 2,
             "matmul.compute.packed.simd": 1,
@@ -199,10 +202,15 @@ def test_the_space_settles_the_core_and_the_core_owns_its_folding_factors():
             "x.adapter.input_gen.input_gen.ram_style": "auto",
         },
     )
-    assert isinstance(
-        refused.matmul.compute.inspect(DotpAxiKernel.module).accepted_result, Rejected
-    )
-    rejected = refused.query(Kernel.module)
+    # No core admits it: the core is no longer forced but refused, naming each reason.
+    answer = refused.matmul.query(MatMulKernel.compute)
+    assert isinstance(answer, Rejected)
+    assert [finding.code for finding in answer.findings] == ["decision-no-viable-case"]
+    assert "dotp-pumping" in answer.findings[0].message
+    # Committed on purpose, the core is placed and refuses the configuration itself.
+    chosen = commit(refused, {"matmul.compute": "packed"})
+    assert isinstance(chosen.matmul.compute.inspect(DotpAxiKernel.module).accepted_result, Rejected)
+    rejected = chosen.query(Kernel.module)
     assert isinstance(rejected, Rejected)
     assert "dotp-pumping" in {finding.code for finding in rejected.findings}
 
@@ -257,7 +265,6 @@ def test_matmul_honors_the_child_physical_view_not_just_its_raw_module(monkeypat
     point = commit(
         matmul_point(**FACTS),
         {
-            "matmul.memory": "none",
             "matmul.compute": "packed",
             "matmul.compute.packed.pe": 2,
             "matmul.compute.packed.simd": 2,

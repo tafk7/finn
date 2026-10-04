@@ -41,7 +41,6 @@ from finn.dataflow.datatypes import (
     QONNXDataType,
     canonical_qonnx_datatype,
     qonnx_datatype_width,
-    resolve_qonnx_datatype_name,
 )
 from finn.dataflow.plan import Unrealizable, presented
 from finn.dataflow.tensor import ScalarEncoding
@@ -151,12 +150,12 @@ class AxiStream:
     """A homogeneous beat with lane zero in the least-significant bits.
 
     ``last`` declares the pin. Its workload-dependent meaning is supplied when
-    binding to a logical port. The canonical dtype name snapshots QONNX's mutable
-    datatype objects without reducing their identity to a bit width.
+    binding to a logical port. ``dtype`` is the datatype value itself (qonnx's
+    are interned and frozen), not reduced to a bit width.
     """
 
     name: str
-    datatype_name: str
+    dtype: QONNXDataType
     elements_per_beat: int
     endpoint: Endpoint
     last: bool
@@ -180,14 +179,10 @@ class AxiStream:
         if qonnx_datatype_width(dtype) <= 0:
             raise ValueError("AXIS scalar encodings must have positive width")
         object.__setattr__(self, "name", name)
-        object.__setattr__(self, "datatype_name", dtype.name)
+        object.__setattr__(self, "dtype", dtype)
         object.__setattr__(self, "elements_per_beat", elements_per_beat)
         object.__setattr__(self, "endpoint", endpoint)
         object.__setattr__(self, "last", last)
-
-    @property
-    def dtype(self) -> QONNXDataType:
-        return resolve_qonnx_datatype_name(self.datatype_name)
 
     @property
     def element_bits(self) -> int:

@@ -26,7 +26,6 @@ from finn.dataflow.datatypes import (
     canonical_qonnx_datatype,
     ordinary_integer_bounds,
     qonnx_datatype_width,
-    resolve_qonnx_datatype_name,
 )
 
 
@@ -34,12 +33,14 @@ from finn.dataflow.datatypes import (
 class ScalarEncoding:
     """Positive-width QONNX storage encoding and the range of its values.
 
-    ``value_range`` is the values' (minimum, maximum): the datatype's own unless
-    stated tighter, and None for an encoding that is not an ordinary integer.
-    Normalized, so ``INT8`` and ``INT8`` over ``(-128, 127)`` are one value.
+    ``dtype`` is the datatype value itself (qonnx's are interned and frozen, so
+    equality, hashing and the repr are the datatype's). ``value_range`` is the
+    values' (minimum, maximum): the datatype's own unless stated tighter, and
+    None for an encoding that is not an ordinary integer. Normalized, so
+    ``INT8`` and ``INT8`` over ``(-128, 127)`` are one value.
     """
 
-    datatype_name: str
+    dtype: QONNXDataType
     value_range: tuple[int, int] | None
 
     def __init__(self, dtype: QONNXDataType, value_range: tuple[int, int] | None = None) -> None:
@@ -56,7 +57,7 @@ class ScalarEncoding:
             low, high = value_range
             if not (type(low) is int and type(high) is int and full[0] <= low <= high <= full[1]):
                 raise ValueError(f"{list(value_range)} is not a range of {canonical.name} values")
-        object.__setattr__(self, "datatype_name", canonical.name)
+        object.__setattr__(self, "dtype", canonical)
         object.__setattr__(
             self, "value_range", full if value_range is None else (value_range[0], value_range[1])
         )
@@ -73,7 +74,7 @@ class ScalarEncoding:
 
     def fits(self, other: ScalarEncoding) -> bool:
         """Its values are values of ``other``: one datatype, the range within ``other``'s."""
-        if self.datatype_name != other.datatype_name:
+        if self.dtype != other.dtype:
             return False
         mine, theirs = self.value_range, other.value_range
         if mine is None or theirs is None:
@@ -83,12 +84,8 @@ class ScalarEncoding:
     def __str__(self) -> str:
         """The datatype's name, and the range when it is tighter than the datatype's."""
         if self.value_range is None or self.value_range == ordinary_integer_bounds(self.dtype):
-            return self.datatype_name
-        return f"{self.datatype_name} over {list(self.value_range)}"
-
-    @property
-    def dtype(self) -> QONNXDataType:
-        return resolve_qonnx_datatype_name(self.datatype_name)
+            return self.dtype.name
+        return f"{self.dtype.name} over {list(self.value_range)}"
 
     @property
     def bits(self) -> int:

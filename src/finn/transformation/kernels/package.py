@@ -31,8 +31,9 @@ inference), a repetition the boundary keeps included.
 The part and the clock period are the model's build target (``target(model)``,
 ``finn.platform``), which a partition body carries from the graph it was cut from.
 
-The partition's choices are its nodes' (D8): the root is replayed from them and
-settled, and an open Decision or a stale choice refuses, named. The body's graph
+The partition's choices are its nodes' (D8): the root is replayed from them, a
+Decision with one viable case is forced, and an open Decision or a stale
+choice refuses, named. The body's graph
 inputs and outputs, in order, are the root's ``s_axis_<i>`` and ``m_axis_<j>``:
 the shells connect a partition's i-th input to ``s_axis_<i>``.
 
@@ -64,7 +65,7 @@ from finn.kernels.artifacts.abi import (
     StandardProtocol,
 )
 from finn.kernels.artifacts.build import EmittedModule, emit_module
-from finn.kernels.configure import settle, undecided
+from finn.kernels.configure import undecided
 from finn.util._toolchain import Selection
 from finn.util.basic import make_build_dir
 
@@ -357,16 +358,17 @@ def package_tcl(
 
 
 def configured_root(model: Any, label: str) -> tuple[Any, tuple[tuple[str, str], ...]]:
-    """A partition model's root point, replayed from its nodes and settled, and its
-    boundary (tensor, port). A stale choice, an open Decision, or graph inputs and
-    outputs out of port order refuse, named."""
+    """A partition model's root point, replayed from its nodes (a Decision with one
+    viable case is forced, nothing to commit), and its boundary (tensor, port). A
+    stale choice, an open Decision, or graph inputs and outputs out of port order
+    refuse, named."""
     root = partition_root(model, model.graph.node)
     if root.dropped:
         raise KernelOpError(
             f"{label}: stale choices, refused by the partition: " + ", ".join(root.dropped),
             root.dropped,
         )
-    point = settle(root.point).point
+    point = root.point
     open_keys = undecided(point, "*")
     if open_keys:
         raise KernelOpError(
@@ -453,7 +455,8 @@ class PackagePartition(Transformation):  # type: ignore[misc]
         self.toolchain = toolchain
 
     def module(self, model: Any) -> Any:
-        """The partition's module: its root replayed from the nodes, settled, all decided."""
+        """The partition's module: its root replayed from the nodes, every Decision
+        committed or forced."""
         point, _ = configured_root(model, self.ip_name)
         return point.module
 

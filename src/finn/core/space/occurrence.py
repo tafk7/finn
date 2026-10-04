@@ -12,7 +12,7 @@ from typing import TypeVar, cast, overload
 
 from . import _execution, _runtime
 from ._configuration import BoundDecision, BoundValue, Space
-from ._linker import guard_implies
+from ._linker import forwards, guard_implies
 from ._runtime import Snapshot
 from .compiler import Model
 from .declarations import (
@@ -195,9 +195,23 @@ def _supplied(point: Space, formal: Param[object]) -> bool:
 
     Bound to an enclosing formal, it answers as that one does. Omitted at start
     (``input-missing``), or a formal no present source supplies
-    (``input-unsupplied``), it is not supplied.
+    (``input-unsupplied``), it is not supplied. Bound to a guarded view or
+    derived value, it is supplied when that source applies: its guard is read,
+    a fact, and the value is not computed (whether a stream has a value is
+    known before the value is).
     """
     index = state(point).model.resolve(point._scope, formal)
+    guards = _source_guards(state(point).linked, index)
+    if guards is not None:
+        for guard in guards:
+            held = _read_result(point, guard)
+            if isinstance(held, Inapplicable) or (
+                isinstance(held, Available) and held.value is not True
+            ):
+                return False
+            if not isinstance(held, Available):
+                _read_index(point, guard)  # undecided: raises like any value read
+        return True
     answer = _read_result(point, index)
     if isinstance(answer, Available):
         return True
@@ -207,6 +221,20 @@ def _supplied(point: Space, formal: Param[object]) -> bool:
         return False
     _read_index(point, index)  # undecided: raises like any value read
     return True
+
+
+def _source_guards(linked: LinkedModel, index: int) -> tuple[int, ...] | None:
+    """The guards along a value input's forwarding chain to a guarded view or derived
+    value, ending with that source's; None when the source is no guarded computation."""
+    guards: list[int] = []
+    node = linked.nodes[index]
+    while forwards(node):
+        if node.guard is not None:
+            guards.append(node.guard)
+        node = linked.nodes[cast(int, node.output)]
+    if node.kind not in ("view", "derived") or node.guard is None:
+        return None
+    return (*guards, node.guard)
 
 
 def _read_result(point: Space, index: int) -> QueryResult[object]:

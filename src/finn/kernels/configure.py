@@ -1,39 +1,35 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Commit a configuration's choices named by their stable keys, and settle the rest.
+"""Commit a configuration's choices named by their stable keys; name the open ones.
 
 Facts are the root node's typed formals: ``design_space(MatMulKernel(m=..., ...))``. Keys
-are the ones ``inspection`` reports: a structural Decision such as ``"memory"``,
+are the ones ``inspection`` reports: a structural Decision such as ``"compute"``,
 or a candidate-local choice such as ``"compute.packed.pe"`` or
-``"memory.memstream.ram_style"``. All choices are committed in one atomic
+``"w.source.memstream.ram_style"``. All choices are committed in one atomic
 batch. Refusals are raised as ``ValueError`` with their findings.
 
-``settle`` commits every Decision over kernels that compatibility decides: the
-engine's ``settle`` with the kernels' convention for a candidate's refusal,
-its ``admission`` member (a constraint group, a constraint or a view).
+A Decision whose one viable case is forced needs no commitment (the engine's
+``finn.core.space.forcing``); ``admission`` is the engine's reading of a
+kernel's own refusal, its ``admission`` member. ``undecided`` names the open
+Decisions: neither committed nor forced.
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from fnmatch import fnmatchcase
-from typing import Any, TypeVar, cast
+from typing import Any, TypeVar
 
 from finn.core.space import (
     Available,
     ConfigurationError,
-    Constraint,
-    ConstraintGroup,
     QueryResult,
-    Rejected,
     RequestError,
-    Settlement,
     Space,
-    View,
     inspection,
 )
-from finn.core.space import settle as settle_space
+from finn.core.space.forcing import admission
 
 S = TypeVar("S", bound=Space)
 
@@ -74,10 +70,12 @@ def commit(point: S, choices: Mapping[str, object]) -> S:
 
 
 def undecided(point: Space, pattern: str) -> list[str]:
-    """Keys matching ``pattern`` (``fnmatch``) of applicable Decisions not yet committed."""
+    """Keys matching ``pattern`` (``fnmatch``) of applicable Decisions that are open:
+    neither committed nor forced."""
+    forced = {item.key for item in inspection.forced(point)}
     found = []
     for item in inspection.decisions(point):
-        if not fnmatchcase(item.key, pattern):
+        if not fnmatchcase(item.key, pattern) or item.key in forced:
             continue
         state = point.field(item.reference).state
         if isinstance(state, Available) and state.value.status != "committed":
@@ -85,35 +83,4 @@ def undecided(point: Space, pattern: str) -> list[str]:
     return found
 
 
-def admission(candidate: Space) -> QueryResult[object] | None:
-    """A kernel's own refusal of its configuration: its ``admission`` member, if any.
-
-    A group refuses as soon as one of its constraints does, even while another
-    still waits on an open choice: a core that cannot target the DSP is refused
-    before its folding factors are chosen.
-    """
-    member = getattr(type(candidate), "admission", None)
-    if isinstance(member, ConstraintGroup):
-        assessment = candidate.inspect(member)
-        refused = [result for result in assessment.results.values() if isinstance(result, Rejected)]
-        if refused:
-            return Rejected(tuple(finding for result in refused for finding in result.findings))
-        return cast("QueryResult[object]", assessment.result)
-    if isinstance(member, Constraint):
-        return cast("QueryResult[object]", candidate.inspect(member).result)
-    if isinstance(member, View):
-        return cast("QueryResult[object]", candidate.query(member))
-    return None
-
-
-def settle(point: S) -> Settlement[S]:
-    """Commit every Decision over kernels with exactly one compatible candidate.
-
-    A candidate is compatible when committing it is accepted and its
-    ``admission`` admits the configuration. Several compatible candidates are
-    a design choice, left open in the settlement.
-    """
-    return settle_space(point, admission=admission)
-
-
-__all__ = ["admission", "commit", "describe", "settle", "undecided"]
+__all__ = ["admission", "commit", "describe", "undecided"]

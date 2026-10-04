@@ -27,7 +27,7 @@ from finn.kernels.artifacts.build import emit_module
 from finn.kernels.base import Kernel
 from finn.kernels.dotp import DotpAxiKernel, Int8Dsp58DotpKernel, PackedDotpKernel
 from finn.kernels.port import AxiStreamPort
-from finn.kernels.target import DspBlock
+from finn.kernels.target import DspBlock, Platform
 from kernels import helpers
 
 
@@ -78,6 +78,7 @@ def test_a_core_declares_ports_folding_factors_and_facts_and_the_base_derives_th
         "compute.target_period_ns",
         "compute.reshape_activations",
         "compute.result_dtype",
+        "compute.platform",
         "compute.x_stream",
         "compute.w_stream",
         "compute.y_stream",
@@ -245,6 +246,16 @@ def test_narrow_weights_may_be_as_wide_as_the_dsp_a_input():
     assert codes(plain) == {"dotp-weight-width"}
     narrow = kernel(**wide, weights_range=(-(1 << 24) + 1, (1 << 24) - 1))
     assert narrow.inspect(DotpAxiKernel.core_supported).result == Available(True)
+
+
+def test_pumped_compute_needs_the_platforms_doubled_clock():
+    point = kernel(compute_pumping=None, platform=Platform(clk2x=False))
+    (item,) = [item for item in inspection.forced(point) if item.key.endswith("compute_pumping")]
+    assert item.value is False and "clk2x-absent" in item.refused["True"]
+    assert not any(
+        item.key.endswith("compute_pumping")
+        for item in inspection.forced(kernel(compute_pumping=None))
+    )
 
 
 def test_the_core_refuses_before_its_folding_factors_are_chosen():

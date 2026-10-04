@@ -23,7 +23,7 @@ from qonnx.core.onnx_exec import execute_onnx
 from qonnx.custom_op.registry import getCustomOp
 
 from finn.custom_op.kernels.partition import partition_root
-from finn.kernels.configure import settle, undecided
+from finn.kernels.configure import undecided
 from finn.transformation.kernels import PackagePartition
 from finn.transformation.kernels.package import partition_facts, write_boundary_facts
 from kernel_ops.tfc import SHAPE, partitioned
@@ -76,8 +76,7 @@ def test_tfc_w2a2_computes_its_logits_in_xsim(tmp_path: Path) -> None:
     for name in (LOGITS, source.graph.output[0].name):
         assert np.array_equal(produced[name], expected[name])
     root = partition_root(body, body.graph.node)
-    point = settle(root.point).point
-    assert undecided(point, "*") == [] and root.dropped == ()
+    assert undecided(root.point, "*") == [] and root.dropped == ()
     assert root.boundary == ((body.graph.input[0].name, "s_axis_0"), (LOGITS, "m_axis_0"))
     write_boundary_facts(body)
     assert partition_facts(body) == FACTS
@@ -87,7 +86,7 @@ def test_tfc_w2a2_computes_its_logits_in_xsim(tmp_path: Path) -> None:
     bits = body.get_tensor_datatype(LOGITS).bitwidth()
     lanes = 16
     stream_through(
-        point.module,
+        root.point.module,
         tmp_path / "xsim",
         inputs={
             "s_axis_0": (
