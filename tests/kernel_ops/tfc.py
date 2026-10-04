@@ -10,9 +10,9 @@ post-processing, streamline), then ``ToKernelOps``, ``InferKernelTensors`` and
 ``CreateDataflowPartition``: the input flatten (a Reshape) before the partition
 and the label select (TopK) after it, both on the host.
 
-The folding is chosen by hand (``fold_by_hand``), and so are the adapters'
-memories (``choose_adapter_memories_by_hand``): test fixtures standing in for
-the folding transformation and the DSE seam (survey G4), not library code.
+Every open kernel choice (folding, memories, adapters) is committed before
+partitioning by ``CommitKernelChoices(PlaceholderPolicy())``, the DSE seam's
+placeholder (G4): 16 lanes where they divide, the whole extent otherwise.
 """
 
 from __future__ import annotations
@@ -31,18 +31,18 @@ from qonnx.transformation.general import (
 from qonnx.transformation.infer_datatypes import InferDataTypes
 from qonnx.transformation.infer_shapes import InferShapes
 
-from finn.custom_op.kernels.partition import partition_root, save_partition_choices
-from finn.kernels.configure import undecided
-from finn.kernels.streams import ADAPTER_RAM_STYLES
 from finn.transformation.fpgadataflow.create_dataflow_partition import CreateDataflowPartition
-from finn.transformation.kernels import InferKernelTensors, ToKernelOps
+from finn.transformation.kernels import (
+    CommitKernelChoices,
+    InferKernelTensors,
+    PlaceholderPolicy,
+    ToKernelOps,
+)
 from finn.kernels.target import resolve_target
 
 SHAPE = (1, 1, 28, 28)
 ULTRA96 = resolve_target("xczu3eg-sbva484-1-e", 5.0, "vivado_zynq")
 """TFC's target: Ultra96 in the Zynq shell (no UltraRAM, no doubled clock)."""
-HAND_FOLDING_LANES = 16
-"""The hand folding: 16 lanes wherever 16 divides the extent, else the whole extent."""
 
 
 def _tidy(model: ModelWrapper) -> ModelWrapper:
@@ -106,58 +106,16 @@ def streamlined(directory: Path) -> ModelWrapper:
     return model.transform(RemoveUnusedTensors())
 
 
-def _lanes(extent: int) -> int:
-    return HAND_FOLDING_LANES if extent % HAND_FOLDING_LANES == 0 else extent
-
-
-def fold_by_hand(model: ModelWrapper) -> None:
-    """Save each KernelOp's folding and memories: the stand-in for G4's folding."""
-    for node in model.graph.node:
-        if node.domain != "finn.custom_op.kernels":
-            continue
-        op = model.get_customop_wrapper(node)
-        if op.op_type == "MatMul":
-            k, n = model.get_initializer(node.input[1]).shape
-            op.save(
-                {
-                    "compute": "packed",
-                    "compute.packed.pe": _lanes(n),
-                    "compute.packed.simd": _lanes(k),
-                    "compute.packed.compute_pumping": False,
-                    "w.source.memstream.ram_style": "auto",
-                    "w.source.memstream.pumped_memory": False,
-                    "w.transport": "direct",
-                }
-            )
-        else:
-            channels = model.get_tensor_shape(node.input[0])[-1]
-            op.save(
-                {
-                    "pe": _lanes(channels),
-                    "use_axilite": False,
-                    "deep_pipeline": False,
-                    "ram_style": "auto",
-                    "ultra_stages": 0,
-                }
-            )
-
-
-def choose_adapter_memories_by_hand(body: ModelWrapper) -> None:
-    """Save every adapter memory the partition's root leaves open as ``auto``."""
-    root = partition_root(body, body.graph.node)
-    open_ = undecided(root.point, ADAPTER_RAM_STYLES)
-    save_partition_choices(body, root, dict.fromkeys(open_, "auto"))
-
-
 def partitioned(directory: Path) -> tuple[ModelWrapper, ModelWrapper, ModelWrapper]:
     """The streamlined source, the parent graph (Reshape, the partition, TopK) and the
-    partition's body, folded and its adapter memories chosen by hand."""
+    partition's body, every choice committed by the placeholder policy."""
     source = streamlined(directory)
-    model = source.transform(ToKernelOps(ULTRA96)).transform(InferKernelTensors())
-    fold_by_hand(model)
+    model = (
+        source.transform(ToKernelOps(ULTRA96))
+        .transform(InferKernelTensors())
+        .transform(CommitKernelChoices(PlaceholderPolicy()))
+    )
     parent = model.transform(CreateDataflowPartition(partition_model_dir=str(directory)))
     sdp = getCustomOp(parent.graph.node[1])
     body: Any = ModelWrapper(sdp.get_nodeattr("model"))
-    choose_adapter_memories_by_hand(body)
-    body.save(sdp.get_nodeattr("model"))
     return source, parent, body

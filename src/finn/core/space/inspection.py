@@ -34,7 +34,7 @@ from .declarations import (
     declared_path,
 )
 from .errors import RequestError
-from .forcing import Forced
+from .forcing import Forced, Viable
 from .ir import Layer, LinkedModel, NodeKind, Provenance
 from .occurrence import candidate as _candidate
 from .occurrence import state
@@ -411,6 +411,41 @@ def forced(point: Space) -> tuple[Forced, ...]:
     return tuple(sorted(result, key=lambda item: item.key))
 
 
+def viable(point: Space) -> tuple[Viable, ...]:
+    """The open Decisions below this scope that the configuration leaves to choose:
+    applicable, neither committed nor forced, each with its viable cases and why every
+    other case is not viable, in rank order (an enclosing Decision before the ones it
+    guards). A Decision whose guard waits on an open choice, or whose cases are not
+    enumerable (a domain known by membership only), is not listed: ``forcing`` reads
+    no verdict for it. A refused Decision is listed with no case."""
+    _execution.driver_only("viable inspection")
+    current = state(point)
+    found = _forcing.forced(current) if current.forcing else _forcing.NOTHING
+    linked = current.linked
+    included = _scope_set(linked, point._scope)
+    with current.lock:
+        result = [
+            Viable(
+                decision_key(linked, index),
+                tuple(
+                    cast(
+                        Available[object], _runtime.copy_result(current, index, Available(case))
+                    ).value
+                    for case in verdict.cases
+                ),
+                verdict.reasons,
+            )
+            for index, verdict in sorted(
+                found.verdicts.items(), key=lambda item: linked.ranks[item[0]]
+            )
+            if verdict.cases is not None
+            and index not in current.assignments
+            and index not in found.values
+            and linked.nodes[index].scope in included
+        ]
+    return tuple(result)
+
+
 def pinned(subject: Space | Model[S] | type[Space]) -> tuple[Provenance, ...]:
     """Every decision key an override removed by pinning its coordinate, with who pinned it."""
     compiled, scope = _context(subject)
@@ -614,6 +649,7 @@ __all__ = [
     "QueryEvidence",
     "NodeDeclaration",
     "ReferenceInfo",
+    "Viable",
     "candidate",
     "choices",
     "declaration",
@@ -631,4 +667,5 @@ __all__ = [
     "reference",
     "statistics",
     "value_handle",
+    "viable",
 ]
