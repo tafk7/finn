@@ -40,7 +40,6 @@ FACTS = dict(
 
 def choices(core: str = "packed") -> dict[str, object]:
     return {
-        "matmul.memory": "none",
         "w.transport": "direct",
         "matmul.compute": core,
         f"matmul.compute.{core}.pe": 2,

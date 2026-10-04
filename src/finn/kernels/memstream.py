@@ -16,9 +16,16 @@ values it streams, so it states their ``value_range`` on its output: its element
   pass per index; the set stream is an ordinary stream reference input.
 - Its AXI-Lite port is tied off: the contents are fixed at build time.
 
+It is a stream's ``source`` candidate (``finn.kernels.streams``): placed by the
+stream it drives, ``staged``, its output presents into that stream without a
+reference to it, and its set port references the stream's ``index``.
+
 ``ram_style`` and ``pumped_memory`` are its choices. A pumped memory runs at
 ``ap_clk2x`` on half-width words and doubles the depth; its 2x clock pin is
-driven by role, and tied low when unpumped.
+driven by role, and tied low when unpumped. Each case states what it needs of
+the ``platform``: ``ultra`` UltraRAM that takes initial contents (on Zynq
+UltraScale+ an initialized UltraRAM is built as block RAM), a pumped memory the
+doubled clock.
 """
 
 from __future__ import annotations
@@ -35,12 +42,14 @@ from finn.core.space import (
     constraint,
     derived,
     reject,
+    requires,
 )
 from finn.dataflow.datatypes import (
     QONNXDataType,
     ordinary_integer_bounds,
 )
 from finn.dataflow.schedule import Index
+from finn.dataflow.stream import Stream
 from finn.dataflow.tensor import ScalarEncoding
 from finn.dataflow.traversal import (
     BeatSequence,
@@ -64,7 +73,7 @@ from finn.kernels.datatypes.semantics import (
     integer_range,
 )
 from finn.kernels.port import AxiStreamPort
-from finn.kernels.streams import Stream
+from finn.kernels.target import Platform
 
 LANE = Index("lane")
 """The lanes of a stored word, one per lane of the consumer's form."""
@@ -82,11 +91,30 @@ class MemStreamKernel(Kernel):
     contents: IntegerTensor = Param(semantics=INTEGER_TENSOR)
     sets: int = Param(default=1)
     # Where a parent places it: the stream it drives and the set-index stream
-    # (several sets only).
+    # (several sets only); or, as a stream's source, placed by the stream (staged).
     output_stream: Stream = Param(required=False)
     set_stream: Stream = Param(required=False)
-    ram_style: str = Decision(values=MEMSTREAM_RAM_STYLES)
-    pumped_memory: bool = Decision(values=(False, True))
+    staged: bool = Param(default=False)
+    platform: Platform = Param(default=Platform())
+    ram_style: str = Decision(
+        values=MEMSTREAM_RAM_STYLES,
+        requires=(
+            requires(platform.uram, "uram-absent: the platform has no UltraRAM", cases=("ultra",)),
+            requires(
+                platform.uram_init,
+                "uram-init: the platform's UltraRAM takes no initial contents",
+                cases=("ultra",),
+            ),
+        ),
+    )
+    pumped_memory: bool = Decision(
+        values=(False, True),
+        requires=(
+            requires(
+                platform.clk2x, "clk2x-absent: the platform has no doubled clock", cases=(True,)
+            ),
+        ),
+    )
 
     @derived
     def value_range(self) -> tuple[int, ...] | Rejected:
@@ -246,6 +274,7 @@ class MemStreamKernel(Kernel):
         name="m_axis_0",
         endpoint=Endpoint.INITIATOR,
         stream=output_stream,
+        staged=staged,
         sequence=output_sequence,
         dtype=dtype,
         value_range=value_range,

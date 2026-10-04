@@ -28,9 +28,10 @@ from finn.custom_op.kernels.matmul import MatMul
 from finn.custom_op.kernels.roots import StoredMatMulNode, StreamedMatMulNode
 from finn.custom_op.kernels.thresholding import Thresholding
 from finn.kernels.matmul import MatMulKernel
+from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.thresholding import ThresholdingAxiKernel
 from finn.transformation.general import ApplyConfig
-from kernel_ops.models import INT3, WEIGHTS, X, lift, matmul_model
+from kernel_ops.models import WEIGHTS, X, matmul_model
 
 FOLDING = {
     "compute": "packed",
@@ -93,16 +94,18 @@ def test_each_missing_or_refused_fact_is_named() -> None:
 
 def test_the_schema_is_the_node_roots_decision_keys() -> None:
     schema = MatMul.schema()
-    assert len(schema) == 31
-    assert sum(kind == "s" for kind, _ in schema.values()) == 23
+    assert len(schema) == 35
+    assert sum(kind == "s" for kind, _ in schema.values()) == 26
     assert schema["compute"] == ("s", ("packed", "int8_dsp58"))
     assert schema["compute.packed.pe"] == ("i", ())
     assert schema["compute.packed.compute_pumping"] == ("i", ())
     # Input and owned streams' keys under the op's port names; the output's are its consumer's.
     assert "w.transport" in schema and any(name.startswith("x.adapter") for name in schema)
     assert not any(name.startswith("y.") for name in schema)
-    # The graph pins the memory: it is no attribute.
-    assert "memory" not in schema and MatMul.pinned() == {"memory"}
+    # The weights' source is the weight stream's: its keys sit under the port name.
+    assert schema["w.source"] == ("s", ("memstream",))
+    assert schema["w.source.memstream.ram_style"] == ("s", ())
+    assert not any(name.startswith("memory") for name in schema)
     types = op(matmul_model()).get_nodeattr_types()
     assert types["compute"] == ("s", False, "", {"packed", "int8_dsp58"})
 
@@ -113,8 +116,9 @@ def schema_digest(cls: type[KernelOp]) -> str:
 
 
 def test_the_schema_is_pinned_for_its_op_version() -> None:
-    """Changing a kernel's or a stream's keys changes the schema: bump the op version."""
-    assert (MatMul.op_version, schema_digest(MatMul)) == (1, "0dd948c79dd1073b")
+    """Changing a kernel's or a stream's keys changes the schema. Unreleased, the digest
+    is re-pinned without an op-version bump (clean breaks)."""
+    assert (MatMul.op_version, schema_digest(MatMul)) == (1, "af3b28842ec92524")
 
 
 # -- persistence ------------------------------------------------------------------------
@@ -139,6 +143,19 @@ def test_save_writes_choices_and_replay_reads_them() -> None:
         op(model).save({"compute": 1})
     with pytest.raises(KernelOpError, match="among"):
         op(model).save({"compute": "dense"})
+
+
+def test_the_weight_sources_choices_persist_on_the_node_and_a_forced_source_is_not() -> None:
+    """The node owns its weight stream (D8): the source's keys are its attributes, under
+    the port name. The source, its one case forced, is written only when saved on
+    purpose."""
+    model = matmul_model()
+    op(model).save({"w.source.memstream.ram_style": "block", "w.transport": "direct"})
+    assert attributes(model) == ["w.source.memstream.ram_style", "w.transport"]
+    point = op(model).point()
+    assert point.w.source.ram_style == "block" and isinstance(point.w.source, MemStreamKernel)
+    op(model).save({"w.source": "memstream"})
+    assert "w.source" in attributes(model) and op(model).point().w.source.ram_style == "block"
 
 
 def test_a_forced_choice_is_never_saved() -> None:
@@ -172,30 +189,15 @@ def test_a_choice_goes_stale_when_a_fact_changes() -> None:
     assert error.value.keys == ("compute.packed.pe",)
 
 
-def test_a_lifted_initializer_drops_what_the_streamed_root_cannot_apply() -> None:
-    model = matmul_model()
-    op(model).save({**FOLDING, "memory.memstream.ram_style": "block"})
-    lift(model, "w")
-    model.set_tensor_datatype("w", INT3)
-    assert op(model).facts().root is StreamedMatMulNode
-    with pytest.raises(KernelOpError) as error:
-        op(model).point()
-    assert error.value.keys == ("memory.memstream.ram_style",)
-    assert op(model).drop_inapplicable() == ("memory.memstream.ram_style",)
-    assert "memory.memstream.ram_style" not in attributes(model)
-    assert op(model).verify_node() == []
-
-
-def test_an_unknown_and_a_pinned_attribute_are_refused() -> None:
+def test_an_unknown_attribute_is_refused() -> None:
     model = matmul_model()
     node = model.graph.node[0]
-    node.attribute.append(helper.make_attribute("PE", 2))
-    with pytest.raises(KernelOpError, match="PE is not a choice of MatMul"):
-        op(model).choices()
-    node.attribute.pop()
-    node.attribute.append(helper.make_attribute("memory", "memstream"))
-    with pytest.raises(KernelOpError, match="memory is the graph's"):
-        op(model).choices()
+    # MatMul's retired memory choice is no choice of it either: nothing is pinned.
+    for name, value in (("PE", 2), ("memory", "memstream")):
+        node.attribute.append(helper.make_attribute(name, value))
+        with pytest.raises(KernelOpError, match=f"{name} is not a choice of MatMul"):
+            op(model).choices()
+        node.attribute.pop()
 
 
 def test_apply_config_writes_choices_replay_checks() -> None:

@@ -181,7 +181,9 @@ class AxiStreamPort(Port):
     carries the lanes of the ``factors`` of its ``lanes`` indices. It is an
     AXIS bus named ``name``, with a ``TLAST`` when what it presents carries a
     marker; or, given ``signals`` (data, valid, ready), those ready/valid pins,
-    without a marker.
+    without a marker. ``staged``, a stream's source placed by the stream itself
+    (``finn.kernels.streams``), presents its given sequence and dtype without a
+    stream reference: it is not idle.
     """
 
     stream: Stream = Param(required=False)
@@ -199,10 +201,11 @@ class AxiStreamPort(Port):
     admits: Integer | None = Param(default=None, semantics=INTEGER_POLICY)
     # Ready/valid pins (data, valid, ready) carrying the words instead of an AXIS bus.
     signals: tuple[str, ...] = Param(default=())
+    staged: bool = Param(default=False)
 
     @derived
     def idle(self) -> bool:
-        return not self.present(AxiStreamPort.stream)
+        return not self.present(AxiStreamPort.stream) and not self.staged
 
     @derived
     def presented(self) -> BeatSequence | Rejected:

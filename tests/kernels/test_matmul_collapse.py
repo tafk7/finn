@@ -10,7 +10,7 @@ aliases are evaluated.
 """
 
 from core.space._collapse_support import answers, counts, open_space
-from kernels.test_matmul_memory_choice import FACTS, WEIGHTS
+from kernels.test_stream_source import FACTS, WEIGHTS
 
 from finn.core.space import inspection
 from finn.kernels.base import Kernel
@@ -19,7 +19,6 @@ from kernels.helpers import Root, placed_matmul
 
 CHOICES = {
     "none": {
-        "matmul.memory": "none",
         "w.transport": "direct",
         "matmul.compute": "packed",
         "x.adapter": "input_gen",
@@ -29,9 +28,8 @@ CHOICES = {
         "matmul.compute.packed.simd": 2,
     },
     "memstream-fifo": {
-        "matmul.memory": "memstream",
-        "matmul.memory.memstream.ram_style": "block",
-        "matmul.memory.memstream.pumped_memory": False,
+        "w.source.memstream.ram_style": "block",
+        "w.source.memstream.pumped_memory": False,
         "w.transport": "fifo",
         "w.transport.fifo.buffer.depth": 8,
         "w.transport.fifo.buffer.ram_style": "auto",

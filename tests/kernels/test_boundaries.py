@@ -222,12 +222,13 @@ for memory in ("none", "memstream"):
         w = BufferedStream(tensor=Tensor((4, 4), INT3), port="in1_V")
         y = Stream(tensor=Tensor((2, 4), INT8), port="out0_V")
         matmul = MatMulKernel(**facts, x_stream=x, w_stream=w, y_stream=y)
+        w.contents = matmul.weight_values
 
-    choices = {"matmul.memory": memory, "w.transport": "direct", "matmul.compute": "packed"}
+    choices = {"w.transport": "direct", "matmul.compute": "packed"}
     if memory == "memstream":
         choices |= {
-            "matmul.memory.memstream.ram_style": "auto",
-            "matmul.memory.memstream.pumped_memory": False,
+            "w.source.memstream.ram_style": "auto",
+            "w.source.memstream.pumped_memory": False,
         }
     root = commit(design_space(Placed()), choices)
     root = commit(

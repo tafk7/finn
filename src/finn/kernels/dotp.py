@@ -48,6 +48,7 @@ from finn.core.space import (
     derived,
     divisors_of,
     reject,
+    requires,
 )
 from finn.dataflow.datatypes import DatatypeError, ordinary_integer_bounds
 from finn.dataflow.gemm import Form, k, m, n
@@ -60,7 +61,7 @@ from finn.dataflow.datatypes import QONNXDataType
 from finn.kernels.datatypes.domains import Integer
 from finn.kernels.datatypes.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
 from finn.kernels.port import AxiStreamPort
-from finn.kernels.target import DspBlock, dsp_widths
+from finn.kernels.target import DspBlock, Platform, dsp_widths
 
 _DSP_VERSION = {DspBlock.DSP48E1: 1, DspBlock.DSP48E2: 2, DspBlock.DSP58: 3}
 # FINN's DSP58 chain timing model (rtl/matrixvectoractivation_rtl.py).
@@ -74,7 +75,8 @@ class DotpAxiKernel(Kernel):
     SEGMENTLEN, the DSP58 chain length between pipeline registers, by FINN's
     timing model: about 0.741 ns through the first DSP and 0.605 ns through each
     further one, against half the period when compute is pumped. Only the INT8
-    core reads SEGMENTLEN. Pumped compute requires a phase-aligned 2x clock.
+    core reads SEGMENTLEN. Pumped compute requires a phase-aligned 2x clock: the
+    ``platform``'s ``clk2x``.
     """
 
     id = "finnlib.dotp_axi"
@@ -90,6 +92,7 @@ class DotpAxiKernel(Kernel):
     # The accumulator encoding it produces: its parent's choice (MatMul binds its
     # result type), so that it is known before the results stream exists.
     result_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
+    platform: Platform = Param(default=Platform())
     # The streams dotp sits on: reference inputs, each a Stream placed beside it.
     x_stream: Stream = Param(required=False)
     w_stream: Stream = Param(required=False)
@@ -102,7 +105,14 @@ class DotpAxiKernel(Kernel):
 
     pe: int = Decision(domain=divisors_of(outputs))
     simd: int = Decision(domain=divisors_of(reduction))
-    compute_pumping: bool = Decision(values=(False, True))
+    compute_pumping: bool = Decision(
+        values=(False, True),
+        requires=(
+            requires(
+                platform.clk2x, "clk2x-absent: the platform has no doubled clock", cases=(True,)
+            ),
+        ),
+    )
 
     @derived
     def schedule(self) -> Schedule | Rejected:

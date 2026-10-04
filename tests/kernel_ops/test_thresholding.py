@@ -59,7 +59,7 @@ def test_the_schema_holds_the_memory_choices_and_bias_is_semantic() -> None:
 
 
 def test_the_schema_is_pinned_for_its_op_version() -> None:
-    assert (Thresholding.op_version, schema_digest(Thresholding)) == (1, "66f7f8f572179ad2")
+    assert (Thresholding.op_version, schema_digest(Thresholding)) == (1, "a0751b6428c1aadd")
     assert Thresholding.op_version == ThresholdingAxiKernel.version
 
 

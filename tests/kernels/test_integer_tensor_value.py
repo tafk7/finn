@@ -15,9 +15,10 @@ import copy
 import pickle
 
 import pytest
+from kernels.helpers import matmul_point
 from qonnx.core.datatype import DataType
 
-from finn.core.space import design_space, inspection
+from finn.core.space import inspection
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.datatypes import semantics
 from finn.kernels.datatypes.semantics import (
@@ -26,7 +27,6 @@ from finn.kernels.datatypes.semantics import (
     integer_range,
     integers,
 )
-from finn.kernels.matmul import MatMulKernel
 from finn.kernels.target import DspBlock
 
 WEIGHTS = ((1, -2, 3), (4, 5, -6))
@@ -60,25 +60,23 @@ def test_a_new_configuration_does_not_walk_the_weights(monkeypatch: pytest.Monke
     point, all of it recognizing the same weights again."""
     int3 = DataType["INT3"]
     weights = tuple(tuple((r + c) % 3 - 1 for c in range(4)) for r in range(4))
-    base = design_space(
-        MatMulKernel(
-            m=3,
-            n=4,
-            k=4,
-            activation_dtype=int3,
-            weights_dtype=int3,
-            target_dsp=DspBlock.DSP48E2,
-            target_period_ns=5.0,
-            weights=weights,
-        )
+    base = matmul_point(
+        m=3,
+        n=4,
+        k=4,
+        activation_dtype=int3,
+        weights_dtype=int3,
+        target_dsp=DspBlock.DSP48E2,
+        target_period_ns=5.0,
+        weights=weights,
     )
-    assert base.weight_tensor == Tensor((4, 4), ScalarEncoding(int3, (-1, 1)))
+    assert base.matmul.weight_tensor == Tensor((4, 4), ScalarEncoding(int3, (-1, 1)))
     handles = {item.key: item.reference for item in inspection.decisions(base)}
     walks: list[object] = []
     walk = semantics._shape
     monkeypatch.setattr(semantics, "_shape", lambda value: walks.append(value) or walk(value))
-    point = base.with_choices({handles["compute"]: "packed", handles["memory"]: "memstream"})
-    point = point.with_choices({handles["memory.memstream.ram_style"]: "block"})
-    assert point.weight_tensor.element.value_range == (-1, 1)
-    assert point.memory.value_range == (-1, 1)
+    point = base.with_choices({handles["matmul.compute"]: "packed"})
+    point = point.with_choices({handles["w.source.memstream.ram_style"]: "block"})
+    assert point.matmul.weight_tensor.element.value_range == (-1, 1)
+    assert point.w.source.value_range == (-1, 1)
     assert walks == []

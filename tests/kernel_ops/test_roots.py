@@ -17,7 +17,7 @@ import pytest
 
 from finn.core.space import Rejected, design_space, inspection
 from finn.custom_op.kernels.cache import BindCache, Facts
-from finn.custom_op.kernels.roots import StoredMatMulNode, StreamedMatMulNode, ThresholdingNode
+from finn.custom_op.kernels.roots import StoredMatMulNode, ThresholdingNode
 from finn.dataflow.datatypes import resolve_qonnx_datatype_name as dtype
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.configure import commit, describe
@@ -76,13 +76,6 @@ def test_the_views_answer_from_facts() -> None:
     keys = {item.key for item in inspection.decisions(activate)}
     # The threshold memories are left to choose (block_stages only once distributed).
     assert {"activate.ram_style", "activate.ultra_stages"} <= keys
-
-
-def test_the_graphs_pin_is_a_declaration() -> None:
-    assert [item.key for item in inspection.pinned(stored())] == ["matmul.memory"]
-    streamed = design_space(StreamedMatMulNode(**FACTS, x_tensor=X))
-    assert [item.key for item in inspection.pinned(streamed)] == ["matmul.memory"]
-    assert "matmul.memory" not in {item.key for item in inspection.decisions(streamed)}
 
 
 def test_a_graph_tensor_that_disagrees_with_the_facts_is_refused() -> None:

@@ -11,10 +11,11 @@ output's and an owned parameter stream's the kernel's fact-level view. One
 class per op and graph-fixed case, compiled once per process, so every node of
 a class shares its compiled model and its decision keys.
 
-What the graph decides is a declaration here, never a choice: MatMul's
-``memory`` is pinned by key, ``memstream`` when the weights are an initializer
-the node owns, ``none`` when they arrive on a graph tensor like any edge, so
-the key has no attribute and can never be stale.
+What the graph decides is a declaration here, never a choice: weights that are
+an initializer the node owns are the weight stream's known value (its
+``contents``, MatMul's ``weight_values``), so the stream's ``source`` applies
+and stores them; weights on a graph tensor arrive on the stream like any edge,
+and it has no source. Nothing is pinned.
 """
 
 from __future__ import annotations
@@ -53,7 +54,7 @@ class MatMulNode(Kernel):
     target_period_ns: float = Param()
     x_tensor: Tensor = Param()
 
-    # Each case declares ``matmul``, its kernel with the graph's memory pinned.
+    # Each case declares ``w`` and ``matmul``.
     @derived
     def w_tensor(self) -> Tensor:
         tensor: Tensor = cast(Any, self).matmul.weight_tensor
@@ -65,15 +66,15 @@ class MatMulNode(Kernel):
         return tensor
 
     x = Stream(tensor=x_tensor, port="in0_V")
-    w = BufferedStream(tensor=w_tensor, port="in1_V")
     y = Stream(tensor=y_tensor, port="out0_V")
 
 
 class StoredMatMulNode(MatMulNode):
-    """Weights an initializer: the node owns them, and its memory streams them (pinned)."""
+    """Weights an initializer: the node owns them, the weight stream's known value."""
 
     id = "finn.custom_op.kernels.node.matmul.stored"
     weights: IntegerTensor = Param(semantics=INTEGER_TENSOR)
+    w = BufferedStream(tensor=MatMulNode.w_tensor, port="in1_V")
     matmul = MatMulKernel(
         m=MatMulNode.m,
         n=MatMulNode.n,
@@ -83,18 +84,20 @@ class StoredMatMulNode(MatMulNode):
         target_dsp=MatMulNode.target_dsp,
         target_period_ns=MatMulNode.target_period_ns,
         weights=weights,
-        # A pin by key, the selector's case (the keyword is typed as its candidate).
-        memory="memstream",  # type: ignore[arg-type]
         x_stream=MatMulNode.x,
-        w_stream=MatMulNode.w,
+        w_stream=w,
         y_stream=MatMulNode.y,
     )
+    # The stream's value is MatMul's view of it; whether it has one (its source
+    # applies) is the view's guard, the weights' presence.
+    w.contents = matmul.weight_values
 
 
 class StreamedMatMulNode(MatMulNode):
-    """Weights a graph tensor: an edge like any other, and no memory (pinned)."""
+    """Weights a graph tensor: an edge like any other, so the weight stream has no source."""
 
     id = "finn.custom_op.kernels.node.matmul.streamed"
+    w = BufferedStream(tensor=MatMulNode.w_tensor, port="in1_V")
     matmul = MatMulKernel(
         m=MatMulNode.m,
         n=MatMulNode.n,
@@ -103,9 +106,8 @@ class StreamedMatMulNode(MatMulNode):
         weights_dtype=MatMulNode.weights_dtype,
         target_dsp=MatMulNode.target_dsp,
         target_period_ns=MatMulNode.target_period_ns,
-        memory="none",  # type: ignore[arg-type]
         x_stream=MatMulNode.x,
-        w_stream=MatMulNode.w,
+        w_stream=w,
         y_stream=MatMulNode.y,
     )
 
