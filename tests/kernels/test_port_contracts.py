@@ -41,7 +41,7 @@ from finn.kernels.port import AxiStreamPort
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.streams import Stream
 from finn.kernels.target import DspBlock
-from kernels.helpers import matmul_point, settled
+from kernels.helpers import matmul_point, with_adapter_memories
 
 A, W, R = DataType["INT3"], DataType["INT3"], DataType["INT8"]
 ROWS, REDUCTION, OUTPUTS, PE, SIMD = 2, 4, 4, 2, 2
@@ -153,7 +153,7 @@ def test_a_producer_presenting_another_order_is_a_plan_its_stream_adapts():
     )
     point = placed(weights_form=columns_first)
     assert point.w_s.plan.steps == (Step.REORDER,)
-    assert codes(settled(point).w_s.query(Stream.netlist)) == set()
+    assert codes(with_adapter_memories(point).w_s.query(Stream.netlist)) == set()
     # Probe: the tile's own sequence, one weight a beat where dotp reads PE x SIMD.
     narrow = placed(weights_form=regrouped(weights_tile(), 1))
     assert narrow.w_s.plan.steps == (Step.WIDTH,)
@@ -207,7 +207,7 @@ def test_one_kernel_refusal_reaches_only_its_own_stream():
             "matmul.compute.packed.compute_pumping": False,
         },
     )
-    point = settled(point)
+    point = with_adapter_memories(point)
     assert isinstance(point.x.query(Stream.netlist), Available)
     assert isinstance(point.y.query(Stream.netlist), Available)
     assert codes(point.w.query(Stream.netlist)) == {"dtype-family"}

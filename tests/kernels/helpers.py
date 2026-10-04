@@ -32,8 +32,17 @@ from typing import Any, TypeVar
 
 from finn import resources
 
-from finn.core.space import Constraint, Param, Space, composite, derived, design_space, reject
-from finn.core.space.settling import compatible_cases
+from finn.core.space import (
+    Constraint,
+    Param,
+    Rejected,
+    Space,
+    composite,
+    derived,
+    design_space,
+    inspection,
+    reject,
+)
 from finn.dataflow.datatypes import QONNXDataType
 from finn.dataflow.gemm import Form
 from finn.dataflow.tensor import ScalarEncoding, Tensor
@@ -41,7 +50,7 @@ from finn.kernels.artifacts.module import Composed, Leaf
 from finn.kernels.base import Kernel
 from finn.kernels.streams import ADAPTER_RAM_STYLES, BufferedStream, Stream
 from finn.core.space.results import Available, QueryResult
-from finn.kernels.configure import admission, commit, describe, settle, undecided
+from finn.kernels.configure import admission, commit, describe, undecided
 from finn.kernels.control import ControlBus
 from finn.kernels.matmul import MatMulKernel
 from finn.kernels.datatypes.semantics import (
@@ -234,9 +243,9 @@ def pin_names(module: Composed | Leaf) -> set[str]:
     return {port.name for port in module.pins.ports}
 
 
-def settled(point: S, ram_style: str = "auto") -> S:
-    """Settle every Decision over kernels; each adapter input_gen's memory takes ``ram_style``."""
-    point = settle(point).point
+def with_adapter_memories(point: S, ram_style: str = "auto") -> S:
+    """Each open adapter input_gen's memory takes ``ram_style``: the flow's choice. Each
+    stream's adapter, its one viable chain, is forced."""
     styles = undecided(point, ADAPTER_RAM_STYLES)
     return commit(point, dict.fromkeys(styles, ram_style)) if styles else point
 
@@ -319,8 +328,10 @@ def _realizes(point: Any, realization: str) -> QueryResult[bool]:
     rule: QueryResult[bool] = point.matmul.inspect(MatMulKernel.realization_supported).result
     if not isinstance(rule, Available):
         return rule
-    cores = compatible_cases(point, "matmul.compute", admission)
-    return Available(True) if cores else reject("matmul-realization", "no core computes it")
+    cores = point.matmul.query(MatMulKernel.compute)  # refused when no core is viable
+    if isinstance(cores, Rejected):
+        return reject("matmul-realization", "no core computes it")
+    return Available(True)
 
 
 def matmul_assembly(
@@ -357,6 +368,8 @@ def matmul_assembly(
     compute core (``packed`` or ``int8_dsp58``); left out, the one core
     compatible with the configuration is settled, and several compatible cores
     must be chosen from. PE, SIMD and pumping are the core's.
+    Every Decision with one viable case (the source, the adapters, the core
+    on DSP48E2) is forced, not committed.
     """
     if not isinstance(weight_delivery, WeightDelivery):
         raise ValueError("weight_delivery must be a WeightDelivery value")
@@ -400,18 +413,20 @@ def matmul_assembly(
             raise ValueError(f"realizations compatible with this configuration: {named}")
         point = commit(point, {"matmul.realization": viable[0]})
     if core is None:
-        settlement = settle(point)
-        if "matmul.compute" not in settlement.committed:
-            cores = settlement.open.get("matmul.compute", ())
+        forced = {item.key: item.value for item in inspection.forced(point)}
+        if "matmul.compute" not in forced:
+            refusals = {
+                case: admission(commit(point, {"matmul.compute": case}).matmul.compute)
+                for case in ("packed", "int8_dsp58")
+            }
+            cores = [
+                case for case, refusal in refusals.items() if not isinstance(refusal, Rejected)
+            ]
             if cores:
                 raise ValueError(f"compute cores {', '.join(cores)} are all compatible; choose one")
-            refusals = (
-                admission(commit(point, {"matmul.compute": case}).matmul.compute)
-                for case in ("packed", "int8_dsp58")
-            )
-            found = describe(result for result in refusals if result is not None)
+            found = describe(result for result in refusals.values() if result is not None)
             raise ValueError(f"no compute core is compatible: {found}")
-        point, core = settlement.point, settlement.committed["matmul.compute"]
+        core = str(forced["matmul.compute"])
     else:
         point = commit(point, {"matmul.compute": core})
     point = commit(
@@ -422,8 +437,8 @@ def matmul_assembly(
             f"matmul.compute.{core}.compute_pumping": compute_pumping,
         },
     )
-    # Each stream's one compatible adapter; an input_gen's memory is inferred.
-    point = settled(point)
+    # Each stream's adapter is forced; an input_gen's memory is inferred.
+    point = with_adapter_memories(point)
     built = point.query(Kernel.module)
     if not isinstance(built, Available):
         raise ValueError(f"MatMul assembly is not accepted: {describe([built])}")

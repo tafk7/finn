@@ -85,21 +85,26 @@ class _TrialSnapshot(Snapshot):
     """Private complete candidates, admitted on demand before value publication.
 
     Every candidate, including retained assignments, must pass admission before
-    publication. The base contributes its model, frozen facts and lock, and the
-    values it forces, which the trial reads for the Decisions it does not change.
+    publication. The base contributes its model, frozen facts and lock, its
+    verdicts, and the values it forces, which the trial reads for the Decisions it
+    does not change. A Decision the base does not force reads as the configuration
+    the trial would publish forces it (``successor``): found once, and that
+    configuration is the one published.
     """
 
-    __slots__ = ("_pending", "_published", "_candidates", "_base")
+    __slots__ = ("_pending", "_published", "_candidates", "_base", "_successor")
 
     _pending: dict[int, object]
     _published: bool
     _candidates: Mapping[int, object]
     _base: Snapshot
+    _successor: Snapshot | None
 
     def __init__(self, base: Snapshot, candidates: Mapping[int, object]) -> None:
         pending: dict[int, object] = {}
         super().__init__(base.model, base.parameters, {}, base.lock, base.forcing)
         object.__setattr__(self, "_base", base)
+        object.__setattr__(self, "_successor", None)
         object.__setattr__(self, "assignments", MappingProxyType(pending))
         object.__setattr__(self, "_pending", pending)
         object.__setattr__(self, "_candidates", MappingProxyType(dict(candidates)))
@@ -112,30 +117,44 @@ class _TrialSnapshot(Snapshot):
             raise RuntimeError("admission dependency order admitted a previously resolved decision")
         self._pending[node_index] = value
 
+    def successor(self) -> Snapshot:
+        """The configuration this trial would publish: every candidate committed."""
+        if self._successor is None:
+            from .forcing import inherited  # noqa: PLC0415 - runtime/forcing cycle
+
+            successor = Snapshot(
+                self.model,
+                self.parameters,
+                self._candidates,
+                forcing=self.forcing,
+                verdicts=inherited(self._base),
+            )
+            object.__setattr__(self, "_successor", successor)
+        assert self._successor is not None
+        return self._successor
+
     def publish(self) -> Snapshot:
         if self._published:
             raise RuntimeError("a admission trial can only be published once")
         object.__setattr__(self, "_published", True)
-        from .forcing import inherited  # noqa: PLC0415 - runtime/forcing cycle
-
-        return Snapshot(
-            self.model,
-            self.parameters,
-            self._pending,
-            forcing=self.forcing,
-            verdicts=inherited(self._base),
-        )
+        # Every candidate was admitted: the successor's assignments are the pending ones.
+        return self.successor()
 
 
 def _forced(snapshot: Snapshot, index: int) -> QueryResult[object] | None:
     """An open Decision's forced value (its one viable case), its refusal (no viable
     case), or None (several, or a snapshot that does not force). A trial reads its
-    base's."""
+    base's, and where the base forces nothing, the configuration's it would publish."""
     from .forcing import forced  # noqa: PLC0415 - runtime/forcing cycle
 
-    source = snapshot._base if isinstance(snapshot, _TrialSnapshot) else snapshot
-    if not source.forcing:
+    if not snapshot.forcing:
         return None
+    source = snapshot
+    if isinstance(snapshot, _TrialSnapshot):
+        base = forced(snapshot._base)
+        if index in base.values:
+            return Available(base.values[index])
+        source = snapshot.successor()
     found = forced(source)
     if index in found.values:
         return Available(found.values[index])

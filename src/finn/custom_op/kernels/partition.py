@@ -13,9 +13,9 @@
   ``s_axis_<i>`` and ``m_axis_<i>`` (D4): a stream refuses a boundary no port
   names (``stream-boundary``);
 - **kernels**, one per node, from its facts, the graph's pins as keywords;
-- **replay**: each node's kernel choices, then a settle, then the edge choices
-  (an edge's adapter selector is settle's, never persisted); an edge choice the
-  current graph refuses is stale, dropped and reported, and settling picks
+- **replay**: each node's kernel choices, then the edge choices (an edge's
+  adapter selector is forced, never persisted); an edge choice the current
+  graph refuses is stale, dropped and reported, and the forced case applies
   again;
 - **owners**: each member's node and attribute prefix, how a choice made in the
   root goes back to the node that persists it (D8): a kernel's on its node, an
@@ -38,14 +38,12 @@ from finn.custom_op.kernels.base import (
     KernelOpError,
     committed,
     datatype,
-    replay,
     rows,
     shape,
     value_type,
 )
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.base import Kernel
-from finn.kernels.configure import settle
 from finn.kernels.streams import BufferedStream, Stream
 
 
@@ -148,7 +146,7 @@ def partition_root(model: Any, nodes: Iterable[Any], *, name: str = "partition")
     root: Any = composite(name, members, base=Partition)
     point = design_space(root())
     if kernel_choices:
-        replayed = replay(point, _typed(point, kernel_choices))
+        replayed = committed(point, _typed(point, kernel_choices))
         if isinstance(replayed, dict):
             raise KernelOpError(
                 f"{name}: refused choices: "
@@ -158,7 +156,6 @@ def partition_root(model: Any, nodes: Iterable[Any], *, name: str = "partition")
         point = replayed
     dropped: list[str] = []
     if edge_choices:
-        point = settle(point).point
         edges = _typed(point, edge_choices)
         together = committed(point, edges)
         if isinstance(together, dict):

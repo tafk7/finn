@@ -4,8 +4,8 @@
 """The MatMul KernelOp: facts from the model, the choice schema, persistence and replay.
 
 A node's choice attributes are sparse, absent meaning open; ``save`` takes
-choices, never a point, so what settle commits is never written; replay
-settles before a nested choice whose selector settle commits.
+choices, never a point, and a forced Decision is never committed, so it is
+never written; a nested choice applies under its forced selector.
 """
 
 from __future__ import annotations
@@ -141,17 +141,17 @@ def test_save_writes_choices_and_replay_reads_them() -> None:
         op(model).save({"compute": "dense"})
 
 
-def test_settles_commitments_are_never_saved() -> None:
-    """The interim rule: on DSP48E2 settle commits compute = packed; only choices made on
-    purpose reach the node, so nothing goes stale on another target."""
+def test_a_forced_choice_is_never_saved() -> None:
+    """On DSP48E2 compute = packed is forced; only choices made on purpose reach the
+    node, so nothing goes stale on another target."""
     model = matmul_model()
     point = op(model).point({"compute.packed.pe": 2})
-    assert point.matmul.compute.pe == 2  # replayed by settling first
+    assert point.matmul.compute.pe == 2  # under the forced selector
     op(model).save({"compute.packed.pe": 2})
     assert attributes(model) == ["compute.packed.pe"]
 
 
-def test_a_nested_choice_settling_cannot_make_applicable_is_refused_by_name() -> None:
+def test_a_nested_choice_under_a_case_not_forced_is_refused_by_name() -> None:
     model = matmul_model()
     with pytest.raises(KernelOpError) as error:
         op(model).save({"compute.int8_dsp58.pe": 2})
@@ -204,7 +204,7 @@ def test_apply_config_writes_choices_replay_checks() -> None:
         ApplyConfig({"first": {**FOLDING, "compute.packed.compute_pumping": 0}})
     )
     assert op(model).point().matmul.compute.pe == 2
-    # A folding config naming only the nested key replays by settling first.
+    # A folding config naming only the nested key replays under the forced selector.
     alone = matmul_model().transform(ApplyConfig({"first": {"compute.packed.pe": 2}}))
     assert op(alone).point().matmul.compute.pe == 2
     refused = matmul_model().transform(ApplyConfig({"first": {"compute.packed.pe": 3}}))
