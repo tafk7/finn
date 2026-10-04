@@ -8,7 +8,7 @@ each sample it
 
 1. places the kernel in a generated ``Root`` between boundary streams, one
    per reference input, commits the sample's factors and the pinned ``choices``,
-   and settles the adapter chains;
+   and the memories of the adapter chains (each chain forced);
 2. checks the kernel's module against its materialized sources under the
    declared parameter binding (``artifacts.rtl.extract``, then the comparison
    ``check_abi`` makes, on the one extraction): a refusal fails; a decline is a
@@ -89,7 +89,7 @@ from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.transport import StreamContract
 from finn.kernels.port import AxiStreamPort
 from finn.kernels.streams import Stream
-from kernels.helpers import Root, settled
+from kernels.helpers import Root, with_adapter_memories
 from kernels.xsim import materialize, stream_through
 
 KERNEL, SOURCE = "kernel", "source"
@@ -368,12 +368,14 @@ def place(
     facts: Mapping[str, object] = EMPTY,
     values: Mapping[str, np.ndarray] | None = None,
 ) -> Any:
-    """The sample's settled design; the adapter sample's first input fed by a memory.
+    """The sample's design; the adapter sample's first input fed by a memory.
 
     The memory presents ``vector_major`` at the first lane count, of those
     dividing the innermost extent, that makes the stream convert widths.
     """
-    plain = settled(_committed(family, sample.factors, inputs, outputs, choices, facts))
+    plain = with_adapter_memories(
+        _committed(family, sample.factors, inputs, outputs, choices, facts)
+    )
     if not sample.adapter:
         return plain
     name = next(iter(inputs))
@@ -386,7 +388,9 @@ def place(
         if other == lanes:
             continue
         fed = (name, vector_major(tensor.shape, other), contents)
-        point = settled(_committed(family, sample.factors, inputs, outputs, choices, facts, fed))
+        point = with_adapter_memories(
+            _committed(family, sample.factors, inputs, outputs, choices, facts, fed)
+        )
         stream = getattr(point, name)
         found = stream.query(Stream.plan)
         if isinstance(found, Available) and Step.WIDTH in found.value.steps:

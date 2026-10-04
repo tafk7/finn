@@ -19,7 +19,7 @@ from finn.dataflow.plan import Step
 from finn.kernels.base import Kernel
 from finn.kernels.configure import commit
 from finn.kernels.matmul import MatMulKernel
-from kernels.helpers import labels, matmul_point, matmul_root, placed, settled
+from kernels.helpers import labels, matmul_point, matmul_root, placed, with_adapter_memories
 from finn.dataflow.gemm import Form
 from kernels.helpers import WeightDelivery, matmul_assembly
 from finn.dataflow.traversal import Traversal
@@ -47,7 +47,7 @@ def point(core="int8_dsp58", **facts):
         f"matmul.compute.{core}.compute_pumping": False,
     }
     native = "native" if facts["form"] is Form.DEPTHWISE else None
-    return settled(commit(matmul_point(realization=native, **facts), choices))
+    return with_adapter_memories(commit(matmul_point(realization=native, **facts), choices))
 
 
 def parameters(module, label):
@@ -140,7 +140,7 @@ def test_one_root_carries_the_weights_of_whichever_realization_is_committed():
     ):
         committed = commit(point, {"matmul.realization": realization})
         assert committed.w.tensor.shape == shape
-        built = settled(
+        built = with_adapter_memories(
             commit(
                 committed,
                 {

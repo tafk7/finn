@@ -17,8 +17,7 @@ from __future__ import annotations
 import pytest
 from qonnx.core.datatype import DataType
 
-from finn.core.space import Rejected, design_space
-from finn.core.space.settling import compatible_cases
+from finn.core.space import Rejected, design_space, inspection
 from finn.dataflow.plan import Step
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import Traversal, vector_major
@@ -26,7 +25,7 @@ from finn.kernels.configure import admission, commit
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.streams import Stream
 from finn.kernels.thresholding import ThresholdingAxiKernel
-from kernels.helpers import Root, labels, settled
+from kernels.helpers import Root, labels, with_adapter_memories
 from finn.kernels.transpose import TransposeKernel
 
 ELEMENT = ScalarEncoding(DataType["INT4"])
@@ -74,7 +73,7 @@ def adapted(source: Traversal, pe: int, *, adaptable: bool = True, commit_all: b
             "activate.deep_pipeline": False,
         },
     )
-    return settled(point) if commit_all else point
+    return with_adapter_memories(point) if commit_all else point
 
 
 def columns_first(rows: int, channels: int, lanes: int) -> Traversal:
@@ -158,7 +157,10 @@ def test_exactly_one_candidate_carries_out_each_plan():
         (columns_first(ROWS, CHANNELS, 4), 2, "vpc_input_gen"),
     ):
         point = adapted(source, pe, commit_all=False)
-        assert compatible_cases(point, "x.adapter", admission) == (case,)
+        # The one chain that carries out the plan is forced; every other refuses it.
+        forced = {item.key: item for item in inspection.forced(point)}
+        assert forced["x.adapter"].value == case
+        assert all("adapter-plan" in why for why in forced["x.adapter"].refused.values())
         chosen = commit(point, {"x.adapter": "vpc_input_gen_vpc"})
         refused = admission(chosen.x.adapter)
         assert isinstance(refused, Rejected)

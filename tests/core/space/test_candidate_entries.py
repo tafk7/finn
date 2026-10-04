@@ -1,6 +1,6 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
-"""A Decision over candidate entries: shared bindings once, reads, keys, required(), settle.
+"""A Decision over candidate entries: shared bindings once, reads, keys, required(), forcing.
 
 Two cores with disjoint choices share one fact (``width``); the packed core
 also takes a binding of its own (``narrow_weights``). The Decision names each
@@ -39,7 +39,6 @@ from finn.core.space import (
     reject,
     required,
     selections,
-    settle,
     view,
 )
 from finn.core.space._nodes import NodeChoice
@@ -485,47 +484,26 @@ def test_a_family_declared_at_run_time_has_the_class_bodys_stable_keys() -> None
     assert point.compute.cycles == 16
 
 
-# -- settle ------------------------------------------------------------------------------
+# -- forced cases ------------------------------------------------------------------------
 
 
-def test_settle_commits_exactly_one_compatible_candidate_and_leaves_the_rest_open() -> None:
-    assert settle(design_space(Unit(width=128)), admission=admission).committed == {
-        "compute": "stub"
-    }
-    assert settle(design_space(Unit(width=7)), admission=admission).committed == {
-        "compute": "packed"
-    }
-    both = settle(design_space(Unit(width=8)), admission=admission)
-    assert both.committed == {} and both.open == {"compute": ("packed", "stub")}
-    neither = settle(design_space(Unit(width=129)), admission=admission)
-    assert neither.committed == {} and neither.open == {"compute": ()}
-    # Without an admission, a case is compatible when its commit is accepted.
-    assert settle(design_space(Unit(width=128))).open == {"compute": ("packed", "stub")}
-    chosen = commit(design_space(Unit(width=8)), {"compute": "stub"})
-    settled = settle(chosen, admission=admission)
-    assert settled.committed == {} and settled.open == {}
+def forced(point: Any) -> dict[str, object]:
+    return {item.key: item.value for item in inspection.forced(point)}
 
 
-def test_settle_repeats_until_a_commitment_opens_nothing_new() -> None:
-    class Chain(Space):
-        width: int = Param()
-        compute: PackedCore | StubCore = Decision(
-            {"packed": PackedCore, "stub": StubCore}, width=width
-        )
-
-        @derived
-        def after_stub(self) -> bool:
-            return isinstance(self.compute, StubCore)
-
-        post: PackedCore | StubCore = Decision(
-            {"packed": PackedCore, "stub": StubCore}, width=width, when=after_stub
-        )
-
-    settled = settle(design_space(Chain(width=128)), admission=admission)
-    assert settled.committed == {"compute": "stub", "post": "stub"}
+def test_the_candidates_admissions_force_one_case_and_leave_several_open() -> None:
+    assert forced(design_space(Unit(width=128))) == {"compute": "stub"}
+    assert forced(design_space(Unit(width=7))) == {"compute": "packed"}
+    assert forced(design_space(Unit(width=8))) == {}
+    neither = design_space(Unit(width=129)).query(Unit.compute)
+    assert isinstance(neither, Rejected)
+    assert [finding.code for finding in neither.findings] == ["decision-no-viable-case"]
+    # Committed, the choice is no longer forced.
+    chosen = commit(design_space(Unit(width=128)), {"compute": "stub"})
+    assert "compute" not in forced(chosen)
 
 
-def test_settle_skips_a_pinned_choice_and_settles_a_narrowed_one() -> None:
+def test_a_pinned_choice_is_no_decision_and_a_narrowed_one_of_one_case_is_forced() -> None:
     class Pinned(Space):
         unit = Unit(width=8)
         unit.compute = "packed"  # type: ignore[assignment]
@@ -534,10 +512,8 @@ def test_settle_skips_a_pinned_choice_and_settles_a_narrowed_one() -> None:
         unit = Unit(width=8)
         unit.compute = Decision(values=("stub",))  # type: ignore[assignment]
 
-    assert settle(design_space(Pinned()), admission=admission).committed == {}
-    assert settle(design_space(Narrowed()), admission=admission).committed == {
-        "unit.compute": "stub"
-    }
+    assert "unit.compute" not in forced(design_space(Pinned()))
+    assert forced(design_space(Narrowed()))["unit.compute"] == "stub"
 
 
 # -- users through a forwarded input -----------------------------------------------------
