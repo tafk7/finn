@@ -15,7 +15,7 @@ from __future__ import annotations
 import pytest
 from qonnx.core.datatype import DataType
 
-from finn.core.space import Rejected, design_space, inspection
+from finn.core.space import Inapplicable, Rejected, design_space, inspection
 from finn.kernels.target import Platform
 from finn.kernels.thresholding import ThresholdingAxiKernel
 
@@ -119,6 +119,19 @@ def test_more_stages_than_the_rtl_has_are_refused() -> None:
 def test_block_stages_apply_only_to_distributed_memories() -> None:
     base = configured(ram_style="auto", ultra_stages=0)
     assert not base.try_with_choices(block_stages=1).accepted
+
+
+def test_every_stage_in_ultraram_has_one_spelling() -> None:
+    """With every stage in UltraRAM none is left: ``ram_style`` (and with it
+    ``block_stages``) does not apply, so the assignment is ``ultra_stages`` alone."""
+    point = configured(ultra_stages=2)
+    assert triggers(point) == (0, 4) and styles(point) == ("ultra", "ultra")
+    assert isinstance(point.query(ThresholdingAxiKernel.ram_style), Inapplicable)
+    for style in ("auto", "distributed"):
+        assert not point.try_with_choices(ram_style=style).accepted
+    # One stage left: it takes a ram_style.
+    left = configured(ram_style="distributed", block_stages=0, ultra_stages=1)
+    assert styles(left) == ("distributed", "ultra")
 
 
 def test_the_choices_do_not_move_with_pe() -> None:
