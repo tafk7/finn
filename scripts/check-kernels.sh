@@ -15,12 +15,13 @@ RUN_PYTHONPATH="$FINN_ROOT/src:$FINN_ROOT/tests"
 # These are independent Space/kernel gates. Parked dataflow/graph tests remain
 # outside this command; their compatibility is not claimed.
 PYTHON_BIN="$PYTHON_BIN" RUFF_BIN="$RUFF_BIN" MYPY_BIN="$MYPY_BIN" bash scripts/check-space.sh
-# XSim tests are deselected even when Vivado is selected (a FINN checkout's
-# .envrc selects it): they take minutes each, and scripts/xsim-sweep.sh runs them.
-PYTHONPATH="$RUN_PYTHONPATH" "$PYTHON_BIN" -m pytest -q -m "not xsim" --confcutdir=tests/kernels \
+# XSim and other Vivado tests (markers xsim, vivado) are deselected even when
+# Vivado is selected (a FINN checkout's .envrc selects it): they take minutes
+# each, and scripts/xsim-sweep.sh runs them.
+PYTHONPATH="$RUN_PYTHONPATH" "$PYTHON_BIN" -m pytest -q -m "not xsim and not vivado" --confcutdir=tests/kernels \
     tests/kernels
 # The KernelOps and their transformations, the layer above finn.kernels.
-PYTHONPATH="$RUN_PYTHONPATH" "$PYTHON_BIN" -m pytest -q -m "not xsim" --confcutdir=tests/kernel_ops \
+PYTHONPATH="$RUN_PYTHONPATH" "$PYTHON_BIN" -m pytest -q -m "not xsim and not vivado" --confcutdir=tests/kernel_ops \
     tests/kernel_ops
 "$RUFF_BIN" format --check src/finn/kernels tests/kernels \
     src/finn/custom_op/kernels src/finn/transformation/kernels tests/kernel_ops \

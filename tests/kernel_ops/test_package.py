@@ -5,7 +5,8 @@
 
 The Tcl and ``vivado_stitch_ifnames`` come from the module's ABI and are checked
 as text, without Vivado; the partition's module from its nodes' choices; and
-one Vivado-marked test packages test_design's Chain and reads the IP back.
+one test packages test_design's Chain and reads the IP back (marker ``vivado``:
+the fast gate deselects it, the XSim sweep's ``kernel-ops-vivado`` job runs it).
 """
 
 from __future__ import annotations
@@ -190,7 +191,6 @@ def test_the_graphs_input_order_is_the_port_order() -> None:
 
 
 @pytest.mark.vivado
-@pytest.mark.xsim
 @pytest.mark.skipif(shutil.which("vivado") is None, reason="Vivado is not selected")
 def test_the_chain_packages_as_the_shells_ip(tmp_path: Path) -> None:
     configured(model := kernel_model())
