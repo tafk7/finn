@@ -33,7 +33,7 @@ from finn.core.space.occurrence import state
 @pytest.mark.parametrize("field", ("caught", "finally_return", "blocked"))
 def test_caught_failure_and_nonvalue_cannot_publish_fallback(field: str) -> None:
     class Family(Space):
-        choice: int = Decision(values=(1,))
+        choice: int = Decision(values=(1, 2))
 
         @derived
         def broken(self) -> int:
@@ -93,7 +93,7 @@ def test_caught_failure_and_nonvalue_cannot_publish_fallback(field: str) -> None
 def test_driver_operations_remain_sticky_when_caught(operation: str) -> None:
     class Family(Space):
         fact: int = Param()
-        choice: int = Decision(values=(1,))
+        choice: int = Decision(values=(1, 2))
 
         @view
         def output(self) -> int:
@@ -250,7 +250,7 @@ def test_semantic_transformations_cannot_read_configuration_even_when_caught(hoo
 
 def test_blocked_self_constraint_keeps_its_inspectable_assessment() -> None:
     class Family(Space):
-        choice: int = Decision(values=(1,))
+        choice: int = Decision(values=(1, 2))
 
         @constraint
         def positive(self) -> bool:
@@ -264,7 +264,7 @@ def test_blocked_self_constraint_keeps_its_inspectable_assessment() -> None:
 def test_membership_only_domain_enumeration_keeps_applicability_and_blockers() -> None:
     class Family(Space):
         enabled: bool = Param()
-        prerequisite: int = Decision(values=(1,))
+        prerequisite: int = Decision(values=(1, 2))
         choice: int = Decision(
             domain=domain(accepts=lambda candidate, value: candidate == value, value=prerequisite),
             when=enabled,

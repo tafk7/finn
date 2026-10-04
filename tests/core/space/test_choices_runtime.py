@@ -148,8 +148,10 @@ def test_selected_view_preserves_direct_refusal_and_skips_other_alternatives() -
     assert calls == []
 
 
-def test_singleton_choice_needs_a_commitment_and_respects_its_outer_guard() -> None:
-    # A singleton choice is an ordinary Decision now: it needs a commitment.
+def test_singleton_choice_is_forced_and_respects_its_outer_guard() -> None:
+    # A singleton choice is an ordinary Decision whose one viable case reads as that
+    # case (forced), never committed: its state stays unassigned. Committing it is
+    # still a choice like any other.
     class Only(Space):
         output = Const(7)
         physical = View(output)
@@ -161,7 +163,12 @@ def test_singleton_choice_needs_a_commitment_and_respects_its_outer_guard() -> N
         accepted = View(implementation.physical)
 
     active = design_space(Root(enabled=True))
-    assert isinstance(active.query(Root.accepted), Unresolved)
+    assert active.query(Root.accepted) == Available(7)
+    state = active.field(Root.implementation).state
+    assert isinstance(state, Available) and state.value.status == "unassigned"
+    assert [(item.key, item.value) for item in inspection.forced(active)] == [
+        ("implementation", "only")
+    ]
     (choice,) = inspection.choices(active)
     assert [case.name for case in choice.cases] == ["only"]
     chosen = active.with_choices(implementation="only")

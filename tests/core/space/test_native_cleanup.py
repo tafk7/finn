@@ -96,7 +96,7 @@ def test_nonvalue_cleanup_preserves_primary_and_outer_cleanup(kind: str, warm: b
     class Family(Space):
         fact: int = Param()
         enabled: bool = Param()
-        unavailable: int = Decision(values=(1,))
+        unavailable: int = Decision(values=(1, 2))
         inapplicable: int = Decision(values=(1,), when=enabled)
 
         @constraint

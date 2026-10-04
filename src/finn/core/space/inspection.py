@@ -16,6 +16,7 @@ from types import MappingProxyType
 from typing import Any, Generic, Literal, TypeVar, cast, overload
 
 from . import _execution, _runtime
+from . import forcing as _forcing
 from ._configuration import Space
 from ._nodes import NodeChoice, NodeDecision, NodeDecl, node_record, unsupplied_formals
 from .collection import collect_space
@@ -33,6 +34,7 @@ from .declarations import (
     declared_path,
 )
 from .errors import RequestError
+from .forcing import Forced
 from .ir import Layer, LinkedModel, NodeKind, Provenance
 from .occurrence import candidate as _candidate
 from .occurrence import state
@@ -385,6 +387,30 @@ def provenance(subject: Space | Model[S] | type[Space], reference: object) -> Pr
     return linked.provenance.get(compiled.resolve(scope, reference))
 
 
+def forced(point: Space) -> tuple[Forced, ...]:
+    """The open Decisions below this scope that the configuration forces (one viable
+    case each), by key, each with why every other case is not viable. Derived at read
+    time and never stored: the Decision's state stays ``unassigned``."""
+    _execution.driver_only("forced inspection")
+    current = state(point)
+    found = _forcing.forced(current) if current.forcing else _forcing.NOTHING
+    linked = current.linked
+    included = _scope_set(linked, point._scope)
+    with current.lock:
+        result = [
+            Forced(
+                decision_key(linked, index),
+                cast(
+                    Available[object], _runtime.copy_result(current, index, Available(value))
+                ).value,
+                found.verdicts[index].reasons,
+            )
+            for index, value in found.values.items()
+            if linked.nodes[index].scope in included
+        ]
+    return tuple(sorted(result, key=lambda item: item.key))
+
+
 def pinned(subject: Space | Model[S] | type[Space]) -> tuple[Provenance, ...]:
     """Every decision key an override removed by pinning its coordinate, with who pinned it."""
     compiled, scope = _context(subject)
@@ -580,6 +606,7 @@ __all__ = [
     "ChoiceInfo",
     "DecisionInfo",
     "EvidenceNode",
+    "Forced",
     "Layer",
     "NodeInfo",
     "Provenance",
@@ -595,6 +622,7 @@ __all__ = [
     "decisions",
     "dependencies",
     "explain",
+    "forced",
     "is_declaration",
     "members",
     "model",

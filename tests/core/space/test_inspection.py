@@ -218,7 +218,11 @@ def test_singleton_choice_metadata_exposes_an_ordinary_editable_selector() -> No
         ("some", "optional.some", Child),
     ]
     point = design_space(Root())
-    assert isinstance(point.query(Root.implementation.value), Unresolved)
+    # Its one case is forced: read as that case, never committed.
+    assert point.query(Root.implementation.value) == Available(1)
+    assert [(item.key, item.value, item.refused) for item in inspection.forced(point)] == [
+        ("implementation", "only", {})
+    ]
     chosen = point.with_choices({implementation.selector: "only", optional.selector: "none"})
     assert isinstance(chosen.implementation, Child) and chosen.implementation.value == 1
     assert chosen.optional is None
