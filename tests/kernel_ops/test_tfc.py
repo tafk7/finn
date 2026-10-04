@@ -1,0 +1,91 @@
+# Copyright (C) 2026, Advanced Micro Devices, Inc.
+# SPDX-License-Identifier: BSD-3-Clause
+
+"""TFC_W2A2 through the kernel path: streamlined graph, KernelOps, the ordered inference, a
+partition of KernelOps between the host's flatten and label select, its root in XSim
+against ``execute_onnx`` of the source, and its packaging.
+
+The folding is the fixture's, by hand (``kernel_ops.tfc``). Both tests build the
+network from the trained weights (minutes): the one in XSim is marked ``xsim``,
+the packaging one ``vivado``; the fast gate runs neither.
+"""
+
+from __future__ import annotations
+
+import json
+import shutil
+import xml.etree.ElementTree as ET
+from pathlib import Path
+
+import numpy as np
+import pytest
+from qonnx.core.onnx_exec import execute_onnx
+from qonnx.custom_op.registry import getCustomOp
+
+from finn.custom_op.kernels.partition import partition_root
+from finn.kernels.configure import settle, undecided
+from finn.transformation.kernels import PackagePartition
+from kernel_ops.tfc import SHAPE, partitioned
+from kernels.xsim import pack, requires_xsim, stream_through
+
+LOGITS = "MatMul_3_out0"
+
+
+@requires_xsim
+def test_tfc_w2a2_computes_its_logits_in_xsim(tmp_path: Path) -> None:
+    source, parent, body = partitioned(tmp_path)
+    assert [node.op_type for node in parent.graph.node] == [
+        "Reshape",
+        "StreamingDataflowPartition",
+        "TopK",
+    ]
+    assert [node.op_type for node in body.graph.node] == ["Thresholding", "MatMul"] * 4
+    image = np.random.default_rng(3).integers(0, 256, size=SHAPE).astype(np.float32)
+    feed = {source.graph.input[0].name: image}
+    expected = execute_onnx(source, feed, return_full_exec_context=True)
+    produced = execute_onnx(parent, {parent.graph.input[0].name: image}, True)
+    for name in (LOGITS, source.graph.output[0].name):
+        assert np.array_equal(produced[name], expected[name])
+    root = partition_root(body, body.graph.node)
+    point = settle(root.point).point
+    assert undecided(point, "*") == [] and root.dropped == ()
+    assert root.boundary == ((body.graph.input[0].name, "s_axis_0"), (LOGITS, "m_axis_0"))
+    # Python ints: the packed words are wider than numpy's integers.
+    pixels = [int(value) for value in image.reshape(-1)]  # the host's flatten
+    logits = [int(value) for value in expected[LOGITS].reshape(-1)]
+    bits = body.get_tensor_datatype(LOGITS).bitwidth()
+    lanes = 16
+    stream_through(
+        point.module,
+        tmp_path / "xsim",
+        inputs={
+            "s_axis_0": (
+                [pack(pixels[i : i + lanes], 8) for i in range(0, len(pixels), lanes)],
+                8 * lanes,
+            )
+        },
+        outputs={"m_axis_0": ([pack(logits, bits)], bits * len(logits))},
+    )
+
+
+@pytest.mark.vivado
+@pytest.mark.skipif(shutil.which("vivado") is None, reason="Vivado is not selected")
+def test_tfc_w2a2_packages_as_the_shells_ip(tmp_path: Path) -> None:
+    _, parent, body = partitioned(tmp_path)
+    sdp = parent.graph.node[1]
+    project = tmp_path / "vivado_stitch_proj"
+    body = body.transform(PackagePartition("xczu3eg-sbva484-1-e", 5.0, sdp.name, directory=project))
+    assert body.get_metadata_prop("vivado_stitch_vlnv") == f"xilinx_finn:finn:{sdp.name}:1.0"
+    names = json.loads(body.get_metadata_prop("vivado_stitch_ifnames"))
+    assert (names["s_axis"], names["m_axis"]) == ([["s_axis_0", 128]], [["m_axis_0", 104]])
+    spirit = "{http://www.spiritconsortium.org/XMLSchema/SPIRIT/1685-2009}"
+    root = ET.parse(project / "ip" / "component.xml").getroot()
+    widths = {
+        bus.find(f"{spirit}name").text: {
+            item.find(f"{spirit}name").text: item.find(f"{spirit}value").text
+            for item in bus.iter(f"{spirit}parameter")
+        }.get("TDATA_NUM_BYTES")
+        for bus in root.iter(f"{spirit}busInterface")
+    }
+    assert (widths["s_axis_0"], widths["m_axis_0"]) == ("16", "13")
+    assert getCustomOp(sdp).get_nodeattr("slr") == -1
