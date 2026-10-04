@@ -34,9 +34,9 @@ from qonnx.transformation.infer_shapes import InferShapes
 from finn.custom_op.kernels.partition import partition_root, save_partition_choices
 from finn.kernels.configure import settle, undecided
 from finn.kernels.streams import ADAPTER_RAM_STYLES
-from finn.kernels.target import DspBlock
 from finn.transformation.fpgadataflow.create_dataflow_partition import CreateDataflowPartition
 from finn.transformation.kernels import InferKernelTensors, ToKernelOps
+from kernel_ops.models import TARGET
 
 SHAPE = (1, 1, 28, 28)
 HAND_FOLDING_LANES = 16
@@ -151,7 +151,7 @@ def partitioned(directory: Path) -> tuple[ModelWrapper, ModelWrapper, ModelWrapp
     """The streamlined source, the parent graph (Reshape, the partition, TopK) and the
     partition's body, folded and its adapter memories chosen by hand."""
     source = streamlined(directory)
-    model = source.transform(ToKernelOps(DspBlock.DSP48E2, 5.0)).transform(InferKernelTensors())
+    model = source.transform(ToKernelOps(TARGET)).transform(InferKernelTensors())
     fold_by_hand(model)
     parent = model.transform(CreateDataflowPartition(partition_model_dir=str(directory)))
     sdp = getCustomOp(parent.graph.node[1])
