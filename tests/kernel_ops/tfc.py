@@ -36,9 +36,11 @@ from finn.kernels.configure import undecided
 from finn.kernels.streams import ADAPTER_RAM_STYLES
 from finn.transformation.fpgadataflow.create_dataflow_partition import CreateDataflowPartition
 from finn.transformation.kernels import InferKernelTensors, ToKernelOps
-from kernel_ops.models import TARGET
+from finn.kernels.target import resolve_target
 
 SHAPE = (1, 1, 28, 28)
+ULTRA96 = resolve_target("xczu3eg-sbva484-1-e", 5.0, "vivado_zynq")
+"""TFC's target: Ultra96 in the Zynq shell (no UltraRAM, no doubled clock)."""
 HAND_FOLDING_LANES = 16
 """The hand folding: 16 lanes wherever 16 divides the extent, else the whole extent."""
 
@@ -151,7 +153,7 @@ def partitioned(directory: Path) -> tuple[ModelWrapper, ModelWrapper, ModelWrapp
     """The streamlined source, the parent graph (Reshape, the partition, TopK) and the
     partition's body, folded and its adapter memories chosen by hand."""
     source = streamlined(directory)
-    model = source.transform(ToKernelOps(TARGET)).transform(InferKernelTensors())
+    model = source.transform(ToKernelOps(ULTRA96)).transform(InferKernelTensors())
     fold_by_hand(model)
     parent = model.transform(CreateDataflowPartition(partition_model_dir=str(directory)))
     sdp = getCustomOp(parent.graph.node[1])
