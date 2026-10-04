@@ -39,6 +39,8 @@ H = exact_result_dtype(INPUTS, A, W)
 T = DataType["UINT2"]
 Y = exact_result_dtype(HIDDEN, T, W)
 THRESHOLDS = (tuple((-9 + c, 1 - c, 8 + 2 * c) for c in range(HIDDEN)),)
+# The smallest type of H's signedness holding THRESHOLDS: what the ordered pass annotates.
+THRESHOLD_DTYPE = DataType["INT5"]
 W1 = tuple(tuple((3 * n + 2 * k) % 7 - 3 for n in range(HIDDEN)) for k in range(INPUTS))
 W2 = tuple(tuple((2 * n + 5 * k) % 7 - 3 for n in range(OUTPUTS)) for k in range(HIDDEN))
 X = tuple(tuple((5 * r + 3 * k) % 8 - 4 for k in range(INPUTS)) for r in range(ROWS))
@@ -92,7 +94,7 @@ class Chain(Root):
     first = matmul(INPUTS, HIDDEN, A, W1, x_stream=x, w_stream=w1, y_stream=hidden)
     activate = ThresholdingAxiKernel(
         input_dtype=H,
-        threshold_dtype=H,
+        threshold_dtype=THRESHOLD_DTYPE,
         thresholds=THRESHOLDS,
         bias=0,
         pe=PE,

@@ -12,11 +12,13 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
+from onnx import TensorProto, helper, numpy_helper
 from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.core.onnx_exec import execute_onnx
 from qonnx.transformation.infer_datatypes import InferDataTypes
 from qonnx.transformation.infer_shapes import InferShapes
+from qonnx.util.basic import qonnx_make_model
 
 from finn.custom_op.kernels.base import TARGET_DSP, TARGET_PERIOD, KernelOpError, target
 from finn.kernels.target import DspBlock
@@ -124,3 +126,127 @@ def test_the_choices_round_trip_through_apply_config() -> None:
     }
     applied = inferred().transform(ApplyConfig(config))
     assert kernel_choices_config(applied) == config
+
+
+# -- the TFC path's input: a Reshape, then thresholds as streamlining leaves them ---------
+
+
+def tfc_input(
+    thresholds: object,
+    *,
+    dtype: str = "UINT8",
+    shared: bool = False,
+) -> ModelWrapper:
+    """TFC's input as finn-dev's streamlining leaves it: x (1, 1, 4, 4) -> Reshape to
+    (1, 16) by an INT64 shape initializer -> MultiThreshold with float thresholds,
+    FLOAT32 (no statement). ``shared``: a second MultiThreshold reads the same table
+    on another input type (INT4)."""
+    x = helper.make_tensor_value_info("x", TensorProto.FLOAT, [1, 1, 4, 4])
+    outputs = [helper.make_tensor_value_info("y", TensorProto.FLOAT, None)]
+    nodes = [
+        helper.make_node("Reshape", ["x", "shape"], ["flat"], name="flatten"),
+        helper.make_node(
+            "MultiThreshold",
+            ["flat", "thresholds"],
+            ["y"],
+            name="quantize",
+            domain="qonnx.custom_op.general",
+            out_dtype="UINT2",
+        ),
+    ]
+    inputs = [x]
+    if shared:
+        inputs.append(helper.make_tensor_value_info("z", TensorProto.FLOAT, [1, 16]))
+        outputs.append(helper.make_tensor_value_info("v", TensorProto.FLOAT, None))
+        nodes.append(
+            helper.make_node(
+                "MultiThreshold",
+                ["z", "thresholds"],
+                ["v"],
+                name="again",
+                domain="qonnx.custom_op.general",
+                out_dtype="UINT2",
+            )
+        )
+    model = ModelWrapper(
+        qonnx_make_model(
+            helper.make_graph(nodes, "tfc_input", inputs, outputs),
+            opset_imports=[
+                helper.make_opsetid("", 13),
+                helper.make_opsetid("qonnx.custom_op.general", 1),
+            ],
+        )
+    )
+    model.graph.initializer.append(
+        numpy_helper.from_array(np.array([1, 16], dtype=np.int64), "shape")
+    )
+    model.set_initializer("thresholds", np.asarray(thresholds, dtype=np.float32))
+    model.set_tensor_datatype("x", DataType[dtype])
+    if shared:
+        model.set_tensor_datatype("z", DataType["INT4"])
+    return model.transform(InferShapes())
+
+
+def through_the_kernel_path(source: ModelWrapper) -> ModelWrapper:
+    return source.transform(ToKernelOps(DspBlock.DSP48E2, 5.0)).transform(InferKernelTensors())
+
+
+def test_a_reshape_keeps_the_shape_its_initializer_states() -> None:
+    model = through_the_kernel_path(tfc_input([[63.75, 191.25]]))
+    assert [node.op_type for node in model.graph.node] == ["Reshape", "Thresholding"]
+    assert model.get_tensor_shape("flat") == [1, 16]
+    assert (model.get_tensor_shape("y"), model.get_tensor_datatype("y").name) == ([1, 16], "UINT2")
+
+
+def test_a_shape_the_inference_cannot_know_is_not_overwritten() -> None:
+    x = helper.make_tensor_value_info("x", TensorProto.FLOAT, [1, 1, 4, 4])
+    s = helper.make_tensor_value_info("s", TensorProto.INT64, [2])
+    flat = helper.make_tensor_value_info("flat", TensorProto.FLOAT, None)
+    node = helper.make_node("Reshape", ["x", "s"], ["flat"], name="flatten")
+    model = ModelWrapper(
+        qonnx_make_model(
+            helper.make_graph([node], "dynamic", [x, s], [flat]),
+            opset_imports=[helper.make_opsetid("", 13)],
+        )
+    )
+    model.set_tensor_shape("flat", [1, 16])
+    assert model.transform(InferKernelTensors()).get_tensor_shape("flat") == [1, 16]
+
+
+@pytest.mark.parametrize(
+    "thresholds, dtype, table, annotation",
+    [
+        # Rounded up; a broadcast row (one for every channel) becomes 16 rows.
+        ([[63.75, 191.25]], "UINT8", [64, 192], "UINT8"),
+        # Clipped to max + 1 of the input: annotated by what it holds, not by the input.
+        ([[0.5, 300.0]], "UINT8", [1, 256], "UINT9"),
+        # A signed input: clipped to its minimum, a signed annotation.
+        ([[-20.5, 3.2, 9.0]], "INT4", [-8, 4, 8], "INT5"),
+    ],
+)
+def test_the_thresholds_become_integers_against_the_input_type(
+    thresholds: list[list[float]], dtype: str, table: list[int], annotation: str
+) -> None:
+    source = tfc_input(thresholds, dtype=dtype)
+    model = through_the_kernel_path(source)
+    values = model.get_initializer("thresholds")
+    assert values.shape == (16, len(table))
+    assert (values == np.array(table, dtype=np.float32)).all()
+    assert model.get_tensor_datatype("thresholds").name == annotation
+    # Exact: every value of the input type, in both graphs.
+    low, high = int(DataType[dtype].min()), int(DataType[dtype].max())
+    for start in range(low, high + 1, 16):
+        image = np.clip(np.arange(start, start + 16), low, high).reshape(1, 1, 4, 4)
+        feed = {"x": image.astype(np.float32)}
+        assert np.array_equal(execute_onnx(model, feed)["y"], execute_onnx(source, feed)["y"])
+
+
+def test_a_shared_table_is_normalized_once_for_each_reader() -> None:
+    model = through_the_kernel_path(tfc_input([[-20.5, 3.2, 200.0]], shared=True))
+    nodes = {node.name: node for node in model.graph.node}
+    quantize, again = nodes["quantize"], nodes["again"]
+    assert quantize.input[1] != again.input[1]
+    assert model.get_initializer(quantize.input[1])[0].tolist() == [0, 4, 200]
+    assert model.get_tensor_datatype(quantize.input[1]).name == "UINT8"
+    assert model.get_initializer(again.input[1])[0].tolist() == [-8, 4, 8]
+    assert model.get_tensor_datatype(again.input[1]).name == "INT5"

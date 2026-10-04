@@ -424,6 +424,11 @@ class KernelOp(CustomOp):  # type: ignore[misc]
 
     # -- inference ------------------------------------------------------------------------
 
+    def normalize_inputs(self) -> None:
+        """Rewrite this node's value inputs into the form its facts read, from inputs
+        already inferred; ``InferKernelTensors`` calls it before the outputs. None by
+        default."""
+
     def output_tensors(self) -> Shapes:
         """Each output's ONNX shape and datatype, from the node root's views."""
         raise NotImplementedError

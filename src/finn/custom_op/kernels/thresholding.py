@@ -9,6 +9,15 @@ value owner): one set, admitted by its value summary, its digest in the key,
 its annotation the threshold datatype. ``bias`` is a semantic attribute, part
 of the operation. The output keeps the input's shape and takes the kernel's
 result type, a fact-level derived of the table and the bias.
+
+The ordered pass normalizes the thresholds first (``normalize_inputs``), against
+the input's exact type: a broadcast row ``(1, N)`` becomes one row per channel,
+and the values are rounded up and clipped to ``[min, max + 1]`` of the input
+type (finn-dev's ``RoundAndClipThresholds``), then annotated with the smallest
+type of the input's signedness that holds them (finn-dev's threshold
+``minimize_weight_bit_width``, which its flow runs after the rounding). Exact for
+integer inputs: ``x >= t`` and ``x >= ceil(t)`` agree, and a threshold outside
+the input's range counts the same at its bound.
 """
 
 from __future__ import annotations
@@ -29,6 +38,11 @@ from finn.custom_op.kernels.base import (
 )
 from finn.custom_op.kernels.cache import Facts
 from finn.custom_op.kernels.roots import ThresholdingNode
+from finn.dataflow.datatypes import (
+    DatatypeError,
+    ordinary_integer_bounds,
+    resolve_qonnx_datatype_name,
+)
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.base import Kernel
 from finn.kernels.streams import Stream
@@ -44,6 +58,33 @@ class Thresholding(KernelOp):
     member = "activate"
     ports = ("x", None)
     semantic = {"bias": ("i", True, 0)}
+
+    def normalize_inputs(self) -> None:
+        """The thresholds as integers against the input's exact type (module docstring)."""
+        model, label = self.model(), self.label
+        x, thresholds = self.onnx_node.input
+        table = model.get_initializer(thresholds)
+        try:
+            low, high = ordinary_integer_bounds(datatype(model, x, label))
+        except DatatypeError:
+            return  # not an integer input: the kernel refuses it
+        if table is None or table.ndim != 2:
+            return  # facts refuse it, naming the shape
+        _, channels = rows(shape(model, x, label))
+        if table.shape[0] == 1 and channels > 1:
+            table = np.tile(table, (channels, 1))
+        table = np.clip(np.ceil(table), low, high + 1).astype(np.float32)
+        least, most = int(table.min()), int(table.max())
+        if low < 0:
+            bits = max(max((-least - 1).bit_length() if least < 0 else 0, most.bit_length()) + 1, 2)
+            dtype = resolve_qonnx_datatype_name(f"INT{bits}")
+        else:
+            dtype = resolve_qonnx_datatype_name(f"UINT{max(most.bit_length(), 1)}")
+        if len(model.find_consumers(thresholds)) > 1:
+            thresholds = model.make_new_valueinfo_name()
+            self.onnx_node.input[1] = thresholds
+        model.set_initializer(thresholds, table)
+        model.set_tensor_datatype(thresholds, dtype)
 
     def facts(self) -> Facts:
         model, label = self.model(), self.label
