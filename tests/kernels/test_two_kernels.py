@@ -32,7 +32,7 @@ from finn.kernels.matmul import exact_result_dtype
 from finn.kernels.streams import Stream
 from finn.kernels.base import Kernel
 from finn.kernels.target import DspBlock
-from kernels.helpers import Root, labels, settled
+from kernels.helpers import Root, labels, with_adapter_memories
 from kernels.xsim import pack, requires_xsim, stream_through
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -98,7 +98,7 @@ def layered(*, adaptable: bool = True):
         },
     )
     # A stream admitting no adapter keeps its Decision closed; the others settle theirs.
-    return settled(point)
+    return with_adapter_memories(point)
 
 
 def test_the_hidden_stream_plans_width_replay_and_frame_and_places_vpc_and_input_gen():

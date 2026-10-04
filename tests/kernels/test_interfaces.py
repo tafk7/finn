@@ -23,7 +23,7 @@ from finn.kernels.dotp import PackedDotpKernel
 from finn.kernels.streams import Stream
 from finn.kernels.target import DspBlock
 from finn.kernels.thresholding import ThresholdingAxiKernel
-from kernels.helpers import Root, placed, settled
+from kernels.helpers import Root, placed, with_adapter_memories
 from kernels.xsim import requires_xsim, stream_through
 
 REPETITIONS, WIDTH, HEIGHT, SIMD = 2, 4, 2, 2
@@ -67,7 +67,7 @@ class Activated(Root):
 
 
 def activated(*, writable: bool):
-    return settled(
+    return with_adapter_memories(
         design_space(Activated()).with_choices(
             {
                 Activated.compute.pe: 1,

@@ -22,7 +22,11 @@ A snapshot finds its forced Decisions once, on the first read of an open
 Decision: rounds over the open Decisions in rank order, each forced value
 visible to the next (an adapter after the core it feeds is found in the same
 round), evaluated on copies that do not force themselves. A trial reads its
-base's (``_runtime``). Each Decision's **verdict** (its viable cases and why
+base's forced values for the Decisions it does not change; where the base
+forces nothing, the forced values of the configuration it would publish, found
+once and published with it, so a batch may commit a choice nested under a
+selector that another choice of the batch forces (``_runtime``). Each
+Decision's **verdict** (its viable cases and why
 the others are not) records the Decisions it read and the value it saw of
 each, and is reused while none of them changed: within the rounds, and by a
 successor from its base, so a change re-checks only the verdicts it reaches.

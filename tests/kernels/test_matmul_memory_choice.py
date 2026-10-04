@@ -31,7 +31,7 @@ from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.dotp import DotpAxiKernel
 from finn.kernels.matmul import MatMulKernel
 from kernels.helpers import WeightDelivery, labels, matmul_assembly, matmul_point, placed
-from kernels.helpers import settled
+from kernels.helpers import with_adapter_memories
 from finn.kernels.target import DspBlock
 
 IMAGE = MemStreamKernel.image
@@ -103,7 +103,7 @@ def configured(point, case, *, style=None, pe=2, simd=2):
         changes.append(point.field(pumped(point)).change(False))
     # The activation stream's adapter follows from the folding: settle the one that fits.
     point = point.with_choices(*changes)
-    return settled(
+    return with_adapter_memories(
         commit(
             point,
             {
@@ -307,7 +307,6 @@ def test_selector_and_case_choices_round_trip_through_an_empty_root():
         "matmul.memory.memstream.pumped_memory",
         "matmul.memory.memstream.ram_style",
         "w.transport",
-        "x.adapter",
         "x.adapter.input_gen.input_gen.ram_style",
     )
     fresh = base(weights=WEIGHTS)
@@ -361,7 +360,6 @@ def test_switching_families_is_atomic_and_requires_clearing_stale_case_choices()
         "matmul.compute.packed.simd",
         "matmul.memory",
         "w.transport",
-        "x.adapter",
         "x.adapter.input_gen.input_gen.ram_style",
     )
     # Switching back commits the case-local choices in the same batch.

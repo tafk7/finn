@@ -21,12 +21,12 @@ Two kinds of attribute:
   is the key's value semantics' (``int`` and ``bool``: ``i``, ``str``: ``s``),
   and a selector lists its cases. The node's attributes are the persisted form.
 
-Replay commits the node's choices atomically on its cached base point; a choice
-nested under a selector the interim rule leaves unpersisted (``compute.packed.pe``
-with ``compute`` settle's) is inapplicable until that selector is committed, so
-a refused replay settles and commits again. ``save`` takes choices, never a
-point, so settle's commitments never reach a node. A refusal names every
-refused key, an inapplicable one too (it carries no finding of its own).
+Replay commits the node's choices atomically on its cached base point. A choice
+nested under a selector nobody committed (``compute.packed.pe`` with
+``compute`` open) applies when the selector is forced (its one viable case),
+and forced cases are never committed, so nothing else happens at replay and
+nothing forced reaches a node. A refusal names every refused key, an
+inapplicable one too (it carries no finding of its own).
 """
 
 from __future__ import annotations
@@ -54,7 +54,7 @@ from finn.dataflow.datatypes import (
 )
 from finn.dataflow.tensor import Tensor
 from finn.kernels.base import Kernel
-from finn.kernels.configure import describe, settle
+from finn.kernels.configure import describe
 from finn.kernels.streams import Stream
 from finn.kernels.target import DspBlock, Platform, Target
 
@@ -227,19 +227,6 @@ def committed(point: S, choices: Mapping[str, object]) -> S | dict[str, str]:
     return found or dict.fromkeys(choices, "refused together")
 
 
-def replay(base: S, choices: Mapping[str, object]) -> S | dict[str, str]:
-    """Commit persisted ``choices`` on ``base``; if refused, settle and commit again.
-
-    A choice nested under a selector settle commits is inapplicable until it is,
-    and the interim rule persists no settled selector. Settle's own commitments
-    stay out of the node: only the point carries them.
-    """
-    first = committed(base, choices)
-    if not isinstance(first, dict):
-        return first
-    return committed(settle(base).point, choices)
-
-
 # -- the op ------------------------------------------------------------------------------
 
 
@@ -406,7 +393,7 @@ class KernelOp(CustomOp):  # type: ignore[misc]
         typed = self._typed(wanted)
 
         def build(base: Kernel) -> Kernel:
-            replayed = replay(base, typed)
+            replayed = committed(base, typed)
             if isinstance(replayed, dict):
                 names = {self.node_key(name): name for name in wanted}
                 refused = {names.get(key, key): why for key, why in replayed.items()}
@@ -454,7 +441,7 @@ class KernelOp(CustomOp):  # type: ignore[misc]
         to a graph input), as the upgrade rule does for one node."""
         facts = self.facts()
         mine = self.node_part(facts, self.choices())
-        found = replay(BIND_CACHE.point(facts), self._typed(mine)) if mine else {}
+        found = committed(BIND_CACHE.point(facts), self._typed(mine)) if mine else {}
         if not isinstance(found, dict):
             return ()
         names = {self.node_key(name): name for name in mine}
@@ -526,9 +513,9 @@ __all__ = [
     "KernelOp",
     "KernelOpError",
     "admitted",
+    "committed",
     "datatype",
     "refuse_phase1_target",
-    "replay",
     "rows",
     "shape",
     "target",

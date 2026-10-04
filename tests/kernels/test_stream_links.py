@@ -22,7 +22,7 @@ from finn.kernels.dotp import PackedDotpKernel
 from finn.kernels.streams import BufferedStream, Stream
 from finn.kernels.target import DspBlock
 from finn.kernels.transport import STREAM_CONTRACT, AxiStream, StreamContract
-from kernels.helpers import settled
+from kernels.helpers import with_adapter_memories
 
 INT3, INT8 = DataType["INT3"], DataType["INT8"]
 
@@ -45,7 +45,7 @@ class Placed(Space):
 
 def placed(**transport: object) -> Placed:
     choices = {"compute.pe": 2, "compute.simd": 2, "compute.compute_pumping": False, **transport}
-    return settled(commit(design_space(Placed()), choices))
+    return with_adapter_memories(commit(design_space(Placed()), choices))
 
 
 def test_an_adapted_stream_places_its_stage_and_wires_each_hop() -> None:

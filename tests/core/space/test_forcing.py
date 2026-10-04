@@ -112,6 +112,25 @@ def test_a_choice_nested_under_a_forced_selector_commits_without_it() -> None:
     assert point.compute.rows == 2 and forced(point) == {"compute": "stub"}
 
 
+def test_a_batch_commits_a_choice_under_a_selector_another_choice_of_it_forces() -> None:
+    class Batch(Space):
+        lanes: int = Decision(values=(2, 3))
+        compute: Packed | Stub = Decision(CORES, width=lanes)
+
+    base = design_space(Batch())
+    assert forced(base) == {}  # either core may take an open width
+    # Three lanes refuse the stub core, so packed is forced, and its PE applies.
+    point = commit(base, {"lanes": 3, "compute.packed.pe": 1})
+    assert forced(point) == {"compute": "packed"} and point.compute.pe == 1
+    refused = base.try_with_choices(commit_handles(base, {"lanes": 2, "compute.packed.pe": 1}))
+    assert not refused.accepted  # two lanes leave both cores open: pe is not applicable
+
+
+def commit_handles(point: Any, choices: dict[str, object]) -> dict[Any, object]:
+    owned = {item.key: item.reference for item in inspection.decisions(point)}
+    return {owned[key]: value for key, value in choices.items()}
+
+
 def test_an_admission_waiting_on_an_open_choice_does_not_refuse() -> None:
     class Waiting(Space):
         width: int = Param()
@@ -238,6 +257,7 @@ def test_adding_a_choice_never_switches_a_forced_case() -> None:
             assert forced(point) == {"compute": "limited"}
         else:
             assert isinstance(answer, Rejected) and limit == 1
+            assert [finding.code for finding in answer.findings] == ["decision-no-viable-case"]
 
 
 def test_a_successor_reuses_the_verdicts_its_change_does_not_reach(

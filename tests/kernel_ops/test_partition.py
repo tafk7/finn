@@ -3,8 +3,9 @@
 
 """The partition root: test_design's Chain built from KernelOp nodes.
 
-Each node's choices are saved on it; the root's adapter memories, left open by
-settling, are the flow's to choose and are saved on their consumers (D8). The
+Each node's choices are saved on it; the root's adapter memories, open (several
+viable), are the flow's to choose and are saved on their consumers (D8); each
+edge's adapter is forced. The
 rebuilt root is test_design's Chain, configured the same way: the same flat
 netlist and pins, and in XSim what ``execute_onnx`` computes on the source.
 """
@@ -22,7 +23,7 @@ from qonnx.transformation.infer_shapes import InferShapes
 
 from finn.custom_op.kernels.base import KernelOpError
 from finn.custom_op.kernels.partition import PartitionRoot, partition_root, save_partition_choices
-from finn.kernels.configure import commit, settle, undecided
+from finn.kernels.configure import commit, undecided
 from finn.kernels.streams import ADAPTER_RAM_STYLES
 from finn.transformation.kernels import InferKernelTensors, ToKernelOps
 from kernel_ops.models import TARGET, chain_source
@@ -65,18 +66,18 @@ def kernel_model(**options: bool) -> ModelWrapper:
     return model
 
 
-def settled(root: PartitionRoot) -> tuple[Any, list[str]]:
-    point = settle(root.point).point
-    return point, undecided(point, ADAPTER_RAM_STYLES)
+def open_memories(root: PartitionRoot) -> tuple[Any, list[str]]:
+    """The root's point and its open adapter memories."""
+    return root.point, undecided(root.point, ADAPTER_RAM_STYLES)
 
 
 def configured(model: ModelWrapper) -> tuple[PartitionRoot, Any]:
     """The root, its open adapter memories chosen and saved on their owners, rebuilt."""
     root = partition_root(model, model.graph.node, name="chain")
-    _, styles = settled(root)
+    _, styles = open_memories(root)
     save_partition_choices(model, root, dict.fromkeys(styles, "auto"))
     root = partition_root(model, model.graph.node, name="chain")
-    point, open_styles = settled(root)
+    point, open_styles = open_memories(root)
     assert open_styles == [] and root.dropped == ()
     return root, point
 
@@ -99,7 +100,7 @@ def test_edge_choices_persist_on_their_consumers() -> None:
     assert "x.adapter.input_gen.input_gen.ram_style" in ops["second"].choices()  # levels
 
 
-def test_a_stale_edge_choice_is_dropped_and_settling_picks_again() -> None:
+def test_a_stale_edge_choice_is_dropped_and_the_forced_adapter_applies() -> None:
     model = kernel_model()
     configured(model)
     second = model.get_customop_wrapper(model.graph.node[2])
@@ -107,7 +108,7 @@ def test_a_stale_edge_choice_is_dropped_and_settling_picks_again() -> None:
     root = partition_root(model, model.graph.node, name="chain")
     # The levels edge now converts widths: its input_gen memory no longer applies.
     assert root.dropped == ("levels.adapter.input_gen.input_gen.ram_style",)
-    point, _ = settled(root)
+    point, _ = open_memories(root)
     assert point.levels.query(type(point.levels).adapter).value.startswith("vpc")
 
 
@@ -115,7 +116,7 @@ def test_a_partition_has_ports_for_its_onnx_inputs_and_outputs_only() -> None:
     model = kernel_model()
     front = partition_root(model, model.graph.node[:2], name="front")
     assert front.boundary == (("x", "s_axis_0"), ("levels", "m_axis_0"))
-    point, styles = settled(front)
+    point, styles = open_memories(front)
     point = commit(point, dict.fromkeys(styles, "auto"))
     assert sorted(port.name for port in point.module.pins.ports) == [
         "ap_clk",

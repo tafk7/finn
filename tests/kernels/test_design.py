@@ -29,7 +29,7 @@ from finn.kernels.matmul import MatMulKernel, exact_result_dtype
 from finn.kernels.streams import BufferedStream, Stream
 from finn.kernels.target import DspBlock
 from finn.kernels.thresholding import ThresholdingAxiKernel
-from kernels.helpers import Root, labels, settled
+from kernels.helpers import Root, labels, with_adapter_memories
 from kernels.xsim import pack, requires_xsim, stream_through
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -108,7 +108,7 @@ def configured(root: Root, layers: tuple[str, ...] = ("first", "second"), **extr
     choices: dict[str, object] = dict(extra)
     for layer, stream in zip(layers, ("w1", "w2")):
         choices |= {f"{layer}.memory": "memstream", f"{stream}.transport": "direct"}
-    point = settled(commit(design_space(root), choices))
+    point = with_adapter_memories(commit(design_space(root), choices))
     # The Decisions inside the subspaces just selected, each keyed by its owner.
     nested: dict[str, object] = {}
     for layer in layers:
@@ -119,7 +119,7 @@ def configured(root: Root, layers: tuple[str, ...] = ("first", "second"), **extr
             f"{layer}.memory.memstream.ram_style": "auto",
             f"{layer}.memory.memstream.pumped_memory": False,
         }
-    return settled(commit(point, nested))
+    return with_adapter_memories(commit(point, nested))
 
 
 # The thresholding's choices: no AXI-Lite, no deep pipeline, memories Vivado's.
