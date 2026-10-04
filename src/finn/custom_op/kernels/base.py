@@ -414,22 +414,6 @@ class KernelOp(CustomOp):  # type: ignore[misc]
         for name, value in sorted(merged.items()):
             self.set_nodeattr(name, int(value) if isinstance(value, bool) else value)
 
-    def drop_inapplicable(self) -> tuple[str, ...]:
-        """Remove the node's choices its node root cannot apply, and name them: for a
-        transformation that changes the node's node-root class, as the upgrade rule
-        does for one node. An input edge's choices are the partition's, which drops
-        the stale ones (a lifted initializer's source)."""
-        facts = self.facts()
-        mine = self.node_part(facts, self.choices())
-        found = committed(BIND_CACHE.point(facts), self._typed(mine)) if mine else {}
-        if not isinstance(found, dict):
-            return ()
-        names = {self.node_key(name): name for name in mine}
-        dropped = tuple(sorted(names[key] for key, why in found.items() if why == "inapplicable"))
-        for name in dropped:
-            self.onnx_node.attribute.remove(get_by_name(self.onnx_node.attribute, name))
-        return dropped
-
     # -- in a partition root ---------------------------------------------------------------
 
     def owned_streams(self) -> dict[str, Stream]:
