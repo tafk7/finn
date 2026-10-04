@@ -5,7 +5,8 @@
 
 An op reads its facts from the attached model only (H-002, H-006's reading
 rule): input shapes and datatype annotations, initializers admitted by their
-value summary, and the build target from the model's metadata. It binds its
+value summary, and the build target from the model's ``finn.platform``
+metadata. It binds its
 node root (``finn.custom_op.kernels.roots``) through the bind cache, replays the
 choices its node holds, and answers the compiler's queries from the result.
 
@@ -31,6 +32,7 @@ refused key, an inapplicable one too (it carries no finding of its own).
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import fields
 from math import prod
 from typing import Any, ClassVar, TypeVar
 
@@ -38,6 +40,7 @@ from qonnx.analysis.tensor_value_summary import (
     UnsupportedTensorValueError,
     initializer_value_summary,
 )
+from qonnx.core.metadata import MetadataError, Namespace
 from qonnx.custom_op.base import CustomOp
 from qonnx.util.basic import get_by_name
 
@@ -53,12 +56,32 @@ from finn.dataflow.tensor import Tensor
 from finn.kernels.base import Kernel
 from finn.kernels.configure import describe, settle
 from finn.kernels.streams import Stream
-from finn.kernels.target import DspBlock
+from finn.kernels.target import DspBlock, Platform, Target
 
 S = TypeVar("S", bound=Space)
 
-TARGET_DSP, TARGET_PERIOD = "finn_target_dsp", "finn_target_period_ns"
-"""The model metadata that states the build target (phase 1's home for it)."""
+PLATFORM = Namespace("finn.platform", version=1, inherit=True)
+"""The build target, typed graph metadata (qonnx's ``qonnx.core.metadata``): the part,
+the clock period and the platform's capabilities (``finn.kernels.target.Platform``),
+every key stated. It inherits: a subgraph body reads its parent's."""
+
+PLATFORM_KEYS = dict(
+    part=PLATFORM.key("part", str),
+    period_ns=PLATFORM.key("period_ns", float, check=lambda v: v > 0, expect="a period > 0"),
+    dsp=PLATFORM.key("dsp", DspBlock),
+    uram=PLATFORM.key("uram", bool),
+    uram_init=PLATFORM.key("uram_init", bool),
+    clk2x=PLATFORM.key("clk2x", bool),
+    control_ports=PLATFORM.key("control_ports", int, check=lambda v: v >= 0, expect="a count"),
+    memory_ports=PLATFORM.key("memory_ports", int, check=lambda v: v >= 0, expect="a count"),
+    aie=PLATFORM.key("aie", bool),
+)
+
+CAPABILITIES = tuple(field.name for field in fields(Platform))
+"""The ``finn.platform`` keys that are the platform's capabilities (``Platform``'s fields)."""
+
+PHASE1_KEYS = ("finn_target_dsp", "finn_target_period_ns")
+"""Phase 1's untyped target keys: refused, never read."""
 
 ONNX_TYPES = {"int": "i", "bool": "i", "str": "s"}
 
@@ -102,26 +125,56 @@ def rows(dims: tuple[int, ...]) -> tuple[int, int]:
     return prod(dims[:-1]), dims[-1]
 
 
-def target(model: Any) -> tuple[DspBlock, float]:
-    """The build target: the DSP block and the clock period, from the model's metadata.
+def refuse_phase1_target(model: Any) -> None:
+    """A model stating phase 1's untyped target keys is refused: they are never read."""
+    stated = [key for key in PHASE1_KEYS if model.get_metadata_prop(key) is not None]
+    if stated:
+        raise KernelOpError(
+            f"the model states the target in phase 1's untyped keys {stated}, which are not "
+            "read: remove them and state it with ToKernelOps (finn.platform)"
+        )
 
-    The one reader of the target; ``write_target`` is the one writer. Its long-term
-    home is a typed platform field on the model (the qonnx track's Q6), which moves
-    these two functions only.
+
+def target(model: Any) -> Target:
+    """The build target, from the model's ``finn.platform`` metadata (a subgraph body
+    opened through its parent reads the parent's).
+
+    The one reader of the target; ``write_target`` is the one writer. A key missing
+    or malformed, or phase 1's untyped keys, are refused.
     """
-    dsp, period = model.get_metadata_prop(TARGET_DSP), model.get_metadata_prop(TARGET_PERIOD)
-    if dsp is None or period is None:
-        raise KernelOpError(f"the model states no target ({TARGET_DSP}, {TARGET_PERIOD})")
+    refuse_phase1_target(model)
     try:
-        return DspBlock[dsp], float(period)
-    except (KeyError, ValueError) as error:
-        raise KernelOpError(f"the model's target is not one: {dsp!r}, {period!r}") from error
+        stated = model.namespace(PLATFORM)
+    except MetadataError as error:
+        raise KernelOpError(f"the model's target is not one: {error}") from error
+    missing = [name for name in PLATFORM_KEYS if name not in stated]
+    if missing:
+        raise KernelOpError(
+            f"the model states no target (finn.platform: {', '.join(missing)} missing; "
+            "run ToKernelOps)"
+        )
+    capabilities = {name: stated[name] for name in CAPABILITIES}
+    return Target(stated["part"], stated["period_ns"], Platform(**capabilities))
 
 
-def write_target(model: Any, dsp: DspBlock, period_ns: float) -> None:
-    """State the build target in the model's metadata, where ``target`` reads it."""
-    model.set_metadata_prop(TARGET_DSP, dsp.name)
-    model.set_metadata_prop(TARGET_PERIOD, repr(float(period_ns)))
+def write_target(model: Any, target: Target) -> None:
+    """State the build target in the model's ``finn.platform`` metadata, every key,
+    where ``target`` reads it."""
+    platform = target.platform
+    if platform.dsp is None:
+        raise KernelOpError("a target states its DSP block (finn.kernels.target.resolve_target)")
+    values: dict[str, object] = dict(
+        part=target.part,
+        period_ns=target.period_ns,
+        **{name: getattr(platform, name) for name in CAPABILITIES},
+    )
+    try:
+        for name, key in PLATFORM_KEYS.items():
+            key.encode(values[name])  # every key checked before any is written
+    except MetadataError as error:
+        raise KernelOpError(f"the target is not one: {error}") from error
+    for name, key in PLATFORM_KEYS.items():
+        model.set(key, values[name])
 
 
 def admitted(model: Any, tensor: str, dtype: QONNXDataType, label: str) -> str:
@@ -289,7 +342,7 @@ class KernelOp(CustomOp):  # type: ignore[misc]
             raise KernelOpError(f"{self.label}: no model attached (use get_customop_wrapper)")
         return model
 
-    def target(self) -> tuple[DspBlock, float]:
+    def target(self) -> Target:
         try:
             return target(self.model())
         except KernelOpError as error:
@@ -466,10 +519,15 @@ class KernelOp(CustomOp):  # type: ignore[misc]
 
 
 __all__ = [
+    "CAPABILITIES",
+    "PHASE1_KEYS",
+    "PLATFORM",
+    "PLATFORM_KEYS",
     "KernelOp",
     "KernelOpError",
     "admitted",
     "datatype",
+    "refuse_phase1_target",
     "replay",
     "rows",
     "shape",

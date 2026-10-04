@@ -23,7 +23,7 @@ from qonnx.custom_op.registry import getCustomOp
 from qonnx.custom_op.registry import get_domain_opset_version, op_identity
 
 import finn.custom_op.kernels as domain
-from finn.custom_op.kernels.base import TARGET_DSP, KernelOp, KernelOpError
+from finn.custom_op.kernels.base import PLATFORM_KEYS, KernelOp, KernelOpError
 from finn.custom_op.kernels.matmul import MatMul
 from finn.custom_op.kernels.roots import StoredMatMulNode, StreamedMatMulNode
 from finn.custom_op.kernels.thresholding import Thresholding
@@ -253,4 +253,4 @@ def test_the_domain_resolves_at_its_version_without_a_fallback() -> None:
         class Inherited(MatMul):
             roots = MatMul.roots
 
-    assert TARGET_DSP in {item.key for item in model.graph.metadata_props}
+    assert PLATFORM_KEYS["dsp"].entry in {item.key for item in model.graph.metadata_props}

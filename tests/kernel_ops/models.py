@@ -14,7 +14,7 @@ from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.util.basic import qonnx_make_model
 
 from finn.custom_op.kernels.base import write_target
-from finn.kernels.target import DspBlock
+from finn.kernels.target import resolve_target
 from kernels import test_design as chain
 
 DOMAIN = "finn.custom_op.kernels"
@@ -22,6 +22,7 @@ INT3 = DataType["INT3"]
 ROWS, K, N = 3, 4, 4
 WEIGHTS = np.array([[(3 * n + 2 * k) % 7 - 3 for n in range(N)] for k in range(K)])
 X = np.array([[[(5 * r + 3 * k) % 8 - 4 for k in range(K)] for r in range(ROWS)]])
+TARGET = resolve_target("xczu3eg-sbva484-1-e", 5.0)  # Ultra96: DSP48E2, no shell
 
 
 def matmul_model(
@@ -55,7 +56,7 @@ def matmul_model(
     for name in annotate:
         model.set_tensor_datatype(name, INT3)
     if target:
-        write_target(model, DspBlock.DSP48E2, 5.0)
+        write_target(model, TARGET)
     return model
 
 
@@ -90,7 +91,7 @@ def thresholding_model(
         model.set_initializer("t", thresholds)
     for name in annotate:
         model.set_tensor_datatype(name, H)
-    write_target(model, DspBlock.DSP48E2, 5.0)
+    write_target(model, TARGET)
     return model
 
 

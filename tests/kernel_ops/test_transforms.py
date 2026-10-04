@@ -20,18 +20,17 @@ from qonnx.transformation.infer_datatypes import InferDataTypes
 from qonnx.transformation.infer_shapes import InferShapes
 from qonnx.util.basic import qonnx_make_model
 
-from finn.custom_op.kernels.base import TARGET_DSP, TARGET_PERIOD, KernelOpError, target
-from finn.kernels.target import DspBlock
+from finn.custom_op.kernels.base import PLATFORM_KEYS, KernelOpError, target
 from finn.transformation.general import ApplyConfig
 from finn.transformation.kernels import InferKernelTensors, ToKernelOps, kernel_choices_config
-from kernel_ops.models import DOMAIN, chain_source
+from kernel_ops.models import DOMAIN, TARGET, chain_source
 from kernels import test_design as chain
 
 
 def converted(**options: bool) -> ModelWrapper:
     """The Chain, its source shapes inferred (qonnx's passes run on the source), converted."""
     source = chain_source(**options).transform(InferShapes())
-    return source.transform(ToKernelOps(DspBlock.DSP48E2, 5.0))
+    return source.transform(ToKernelOps(TARGET))
 
 
 def inferred(**options: bool) -> ModelWrapper:
@@ -54,17 +53,19 @@ def test_conversion_rewrites_the_nodes_and_states_the_target() -> None:
     ]
     assert model.get_customop_wrapper(model.graph.node[1]).get_nodeattr("bias") == 0
     assert model.get_opset_imports()[DOMAIN] == 1
-    assert target(model) == (DspBlock.DSP48E2, 5.0)
-    assert {TARGET_DSP, TARGET_PERIOD} <= {item.key for item in model.graph.metadata_props}
+    assert target(model) == TARGET
+    assert {key.entry for key in PLATFORM_KEYS.values()} <= {
+        item.key for item in model.graph.metadata_props
+    }
     # A model that imports the domain keeps its version: inserting never raises it.
     again = chain_source().transform(InferShapes())
     again.set_opset_import(DOMAIN, 2)
-    assert again.transform(ToKernelOps(DspBlock.DSP48E2, 5.0)).get_opset_imports()[DOMAIN] == 2
+    assert again.transform(ToKernelOps(TARGET)).get_opset_imports()[DOMAIN] == 2
 
 
 def test_a_multithreshold_over_another_axis_is_left_alone() -> None:
     source = chain_source()  # hidden's shape is not known: its channel axis neither
-    nodes = source.transform(ToKernelOps(DspBlock.DSP48E2, 5.0)).graph.node
+    nodes = source.transform(ToKernelOps(TARGET)).graph.node
     assert [node.op_type for node in nodes] == ["MatMul", "MultiThreshold", "MatMul"]
 
 
@@ -188,7 +189,7 @@ def tfc_input(
 
 
 def through_the_kernel_path(source: ModelWrapper) -> ModelWrapper:
-    return source.transform(ToKernelOps(DspBlock.DSP48E2, 5.0)).transform(InferKernelTensors())
+    return source.transform(ToKernelOps(TARGET)).transform(InferKernelTensors())
 
 
 def test_a_reshape_keeps_the_shape_its_initializer_states() -> None:

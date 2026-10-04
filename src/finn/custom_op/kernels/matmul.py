@@ -55,7 +55,10 @@ class MatMul(KernelOp):
         if k != k_b:
             raise KernelOpError(f"{label}: {a} has {k} columns and {b} {k_b} rows")
         activation, weights_dtype = datatype(model, a, label), datatype(model, b, label)
-        dsp, period = self.target()
+        build = self.target()
+        dsp, period = build.platform.dsp, build.period_ns
+        if dsp is None:  # target() states every key; a Platform's default states none
+            raise KernelOpError(f"{label}: the target states no DSP block")
         common: dict[str, object] = dict(
             m=m,
             n=n,
