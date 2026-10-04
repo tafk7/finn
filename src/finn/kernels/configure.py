@@ -18,22 +18,19 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from fnmatch import fnmatchcase
-from typing import Any, TypeVar, cast
+from typing import Any, TypeVar
 
 from finn.core.space import (
     Available,
     ConfigurationError,
-    Constraint,
-    ConstraintGroup,
     QueryResult,
-    Rejected,
     RequestError,
     Settlement,
     Space,
-    View,
     inspection,
 )
 from finn.core.space import settle as settle_space
+from finn.core.space.forcing import admission
 
 S = TypeVar("S", bound=Space)
 
@@ -83,27 +80,6 @@ def undecided(point: Space, pattern: str) -> list[str]:
         if isinstance(state, Available) and state.value.status != "committed":
             found.append(item.key)
     return found
-
-
-def admission(candidate: Space) -> QueryResult[object] | None:
-    """A kernel's own refusal of its configuration: its ``admission`` member, if any.
-
-    A group refuses as soon as one of its constraints does, even while another
-    still waits on an open choice: a core that cannot target the DSP is refused
-    before its folding factors are chosen.
-    """
-    member = getattr(type(candidate), "admission", None)
-    if isinstance(member, ConstraintGroup):
-        assessment = candidate.inspect(member)
-        refused = [result for result in assessment.results.values() if isinstance(result, Rejected)]
-        if refused:
-            return Rejected(tuple(finding for result in refused for finding in result.findings))
-        return cast("QueryResult[object]", assessment.result)
-    if isinstance(member, Constraint):
-        return cast("QueryResult[object]", candidate.inspect(member).result)
-    if isinstance(member, View):
-        return cast("QueryResult[object]", candidate.query(member))
-    return None
 
 
 def settle(point: S) -> Settlement[S]:

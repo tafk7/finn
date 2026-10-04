@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 """Typed design-space authoring, immutable specialization and public services."""
 
-from . import extensions, graph, inspection, selections, settling
+from . import extensions, forcing, graph, inspection, selections, settling
 from ._configuration import BoundDecision, BoundValue, Space
 from ._execution import (
     CleanupFailure,
@@ -31,7 +31,7 @@ from .declarations import (
     selected,
     view,
 )
-from .domains import Domain, divisors_of, domain, finite
+from .domains import Domain, Requirement, divisors_of, domain, finite, requires, requiring
 from .edits import Change, ChangeOutcome, ChangeRequest, ConfigurationResult
 from .errors import (
     ConfigurationError,
@@ -101,6 +101,9 @@ __all__ = [
     "domain",
     "finite",
     "divisors_of",
+    "Requirement",
+    "requires",
+    "requiring",
     "ValueSemantics",
     "default_semantics",
     # Results and assessments
@@ -139,6 +142,7 @@ __all__ = [
     "cancellation_details",
     # Public services
     "extensions",
+    "forcing",
     "graph",
     "inspection",
     "selections",
