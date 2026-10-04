@@ -30,15 +30,40 @@ import math
 import numpy as np
 from onnx import TensorProto
 from onnx import helper as oh
+from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.registry import getCustomOp
 from qonnx.transformation.base import Transformation
 from qonnx.transformation.general import SortGraph
 from qonnx.util.basic import get_by_name
 
+KERNEL_OPS = "finn.custom_op.kernels"
+
+
+def kernel_partition_port(node, tensor):
+    """For a StreamingDataflowPartition of KernelOps (its body packaged), the boundary
+    facts of the port that carries ``tensor``; None for any other node. The body's
+    ports are in its graph's order, which is the partition node's."""
+    if node.op_type != "StreamingDataflowPartition":
+        return None
+    body = ModelWrapper(getCustomOp(node).get_nodeattr("model"))
+    if not body.graph.node or any(item.domain != KERNEL_OPS for item in body.graph.node):
+        return None
+    # The kernel path's packaging, imported only for a partition of KernelOps.
+    from finn.transformation.kernels.package import partition_facts  # noqa: PLC0415
+
+    inputs, outputs = partition_facts(body)
+    if tensor in node.input:
+        return inputs[list(node.input).index(tensor)]
+    return outputs[list(node.output).index(tensor)]
+
 
 class InsertIODMA(Transformation):
     """Insert DMA nodes on inputs and outputs, or as specified by filters in
-    the constructor."""
+    the constructor.
+
+    A graph input or output may also be a StreamingDataflowPartition of KernelOps:
+    its IODMA's vectors and stream width are the partition's boundary facts
+    (``finn.partition``, written by PackagePartition), not a HW node's answers."""
 
     def __init__(
         self,
@@ -98,7 +123,8 @@ class InsertIODMA(Transformation):
         # only makes sense for a pure fpgadataflow graph -- so we check!
         all_nodes = list(model.graph.node)
         assert all(
-            get_by_name(x.attribute, "backend").s.decode("UTF-8") == "fpgadataflow"
+            kernel_partition_port(x, (list(x.input) + list(x.output))[0]) is not None
+            or get_by_name(x.attribute, "backend").s.decode("UTF-8") == "fpgadataflow"
             for x in all_nodes
         )
         # insert IODMAs for graph inputs
@@ -112,12 +138,17 @@ class InsertIODMA(Transformation):
                 else:
                     in_shape = model.get_tensor_shape(graph_in_name)
                     in_dtype = model.get_tensor_datatype(graph_in_name)
-                    first_node_inst = getCustomOp(first_node)
-                    in_folded_shape = first_node_inst.get_folded_input_shape()
-                    # take advantage of AXI stream width padding for DMA alignment
-                    # (AXI streams are always padded to 8 bits)
-                    # this is the width of stream output expected from the DMA
-                    padded_instream_width = first_node_inst.get_instream_width_padded()
+                    port = kernel_partition_port(first_node, graph_in_name)
+                    if port is not None:
+                        in_folded_shape = [1, port["beats"], port["lanes"]]
+                        padded_instream_width = port["tdata"]
+                    else:
+                        first_node_inst = getCustomOp(first_node)
+                        in_folded_shape = first_node_inst.get_folded_input_shape()
+                        # take advantage of AXI stream width padding for DMA alignment
+                        # (AXI streams are always padded to 8 bits)
+                        # this is the width of stream output expected from the DMA
+                        padded_instream_width = first_node_inst.get_instream_width_padded()
                     padded_instream_bytes = padded_instream_width // 8
                     # determine the feasible interface width
                     transfer_bits = padded_instream_width * np.prod(in_folded_shape[:-1])
@@ -132,7 +163,9 @@ class InsertIODMA(Transformation):
                     # reroute first node input
                     # FIXME: currently always using 8-bit dtypes to work around the
                     # padding problems for i/o DMA
-                    first_node.input[0] = first_node_in.name
+                    first_node.input[
+                        list(first_node.input).index(graph_in_name)
+                    ] = first_node_in.name
                     dma_node = oh.make_node(
                         "IODMA_hls",
                         [graph_in_name],
@@ -158,12 +191,17 @@ class InsertIODMA(Transformation):
                 else:
                     out_shape = model.get_tensor_shape(graph_out_name)
                     out_dtype = model.get_tensor_datatype(graph_out_name)
-                    final_node_inst = getCustomOp(final_node)
-                    out_folded_shape = final_node_inst.get_folded_output_shape()
-                    # take advantage of AXI stream width padding for DMA alignment
-                    # (AXI streams are always padded to 8 bits)
-                    # this is the width of stream input to DMA
-                    padded_outstream_width = final_node_inst.get_outstream_width_padded()
+                    port = kernel_partition_port(final_node, graph_out_name)
+                    if port is not None:
+                        out_folded_shape = [1, port["beats"], port["lanes"]]
+                        padded_outstream_width = port["tdata"]
+                    else:
+                        final_node_inst = getCustomOp(final_node)
+                        out_folded_shape = final_node_inst.get_folded_output_shape()
+                        # take advantage of AXI stream width padding for DMA alignment
+                        # (AXI streams are always padded to 8 bits)
+                        # this is the width of stream input to DMA
+                        padded_outstream_width = final_node_inst.get_outstream_width_padded()
                     padded_outstream_bytes = padded_outstream_width // 8
                     # determine the feasible interface width
                     transfer_bits = padded_outstream_width * np.prod(out_folded_shape[:-1])
@@ -176,7 +214,9 @@ class InsertIODMA(Transformation):
                     model.graph.value_info.append(final_node_out)
                     model.set_tensor_datatype(final_node_out.name, out_dtype)
                     # reroute final node output to final_node_out_name
-                    final_node.output[0] = final_node_out.name
+                    final_node.output[
+                        list(final_node.output).index(graph_out_name)
+                    ] = final_node_out.name
                     # FIXME: currently always using 8-bit dtypes to work around the
                     # padding problems for i/o DMA
                     dma_node = oh.make_node(

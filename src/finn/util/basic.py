@@ -435,6 +435,14 @@ def get_dsp_datapath_limits(dsp_block):
 
 
 def get_driver_shapes(model: ModelWrapper) -> Dict:
+    """The driver's shapes per IODMA. A partition of KernelOps next to an IODMA gives
+    its folded shape from its boundary facts (``finn.partition``): ``(1, beats, lanes)``
+    of the port the IODMA feeds or drains."""
+    # The kernel path's facts reader, in the IODMA insertion it pairs with.
+    from finn.transformation.fpgadataflow.insert_iodma import (  # noqa: PLC0415
+        kernel_partition_port,
+    )
+
     idt = []
     idma_names = []
     ishape_normal = []
@@ -458,12 +466,16 @@ def get_driver_shapes(model: ModelWrapper) -> Dict:
         ), "First partition must hold input IODMA"
         successors = model.find_direct_successors(i_consumer)
         successor_input_num = list(successors[0].input).index(i_consumer.output[0])
-        successor_sdp = getCustomOp(successors[0])
-        successor_df_model = ModelWrapper(successor_sdp.get_nodeattr("model"))
-        first_node = successor_df_model.find_consumer(
-            successor_df_model.graph.input[successor_input_num].name
-        )
-        i_tensor_shape_folded = tuple(getCustomOp(first_node).get_folded_input_shape())
+        port = kernel_partition_port(successors[0], i_consumer.output[0])
+        if port is not None:
+            i_tensor_shape_folded = (1, port["beats"], port["lanes"])
+        else:
+            successor_sdp = getCustomOp(successors[0])
+            successor_df_model = ModelWrapper(successor_sdp.get_nodeattr("model"))
+            first_node = successor_df_model.find_consumer(
+                successor_df_model.graph.input[successor_input_num].name
+            )
+            i_tensor_shape_folded = tuple(getCustomOp(first_node).get_folded_input_shape())
         # generate dummy folded i/o tensors and their packed versions
         i_tensor_dummy_folded = gen_finn_dt_tensor(i_tensor_dt, i_tensor_shape_folded)
         i_tensor_dummy_packed = finnpy_to_packed_bytearray(i_tensor_dummy_folded, i_tensor_dt)
@@ -496,12 +508,16 @@ def get_driver_shapes(model: ModelWrapper) -> Dict:
         assert df_model.graph.node[-1].op_type == "IODMA_hls", "Partition must hold output IODMA"
         predecessors = model.find_direct_predecessors(o_producer)
         predecessor_output_num = list(predecessors[0].output).index(o_producer.input[0])
-        predecessor_sdp = getCustomOp(predecessors[0])
-        predecessor_df_model = ModelWrapper(predecessor_sdp.get_nodeattr("model"))
-        last_node = predecessor_df_model.find_producer(
-            predecessor_df_model.graph.output[predecessor_output_num].name
-        )
-        o_tensor_shape_folded = tuple(getCustomOp(last_node).get_folded_output_shape())
+        port = kernel_partition_port(predecessors[0], o_producer.input[0])
+        if port is not None:
+            o_tensor_shape_folded = (1, port["beats"], port["lanes"])
+        else:
+            predecessor_sdp = getCustomOp(predecessors[0])
+            predecessor_df_model = ModelWrapper(predecessor_sdp.get_nodeattr("model"))
+            last_node = predecessor_df_model.find_producer(
+                predecessor_df_model.graph.output[predecessor_output_num].name
+            )
+            o_tensor_shape_folded = tuple(getCustomOp(last_node).get_folded_output_shape())
         o_tensor_dummy_folded = gen_finn_dt_tensor(o_tensor_dt, o_tensor_shape_folded)
         o_tensor_dummy_packed = finnpy_to_packed_bytearray(o_tensor_dummy_folded, o_tensor_dt)
         o_tensor_shape_packed = o_tensor_dummy_packed.shape
