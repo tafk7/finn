@@ -5,8 +5,8 @@
 partition of KernelOps between the host's flatten and label select, its root in XSim
 against ``execute_onnx`` of the source, and its packaging.
 
-The folding is the fixture's, by hand (``kernel_ops.tfc``), for Ultra96 in the
-Zynq shell. Every test builds the network from the trained weights (half a
+The choices are the placeholder policy's (``kernel_ops.tfc``), for Ultra96 in
+the Zynq shell. Every test builds the network from the trained weights (half a
 minute): the one in XSim is marked ``xsim``, the packaging one ``vivado``; the
 fast gate runs the platform's.
 """

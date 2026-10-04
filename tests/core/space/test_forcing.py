@@ -282,3 +282,23 @@ def test_a_successor_reuses_the_verdicts_its_change_does_not_reach(
     assert forced(point) == {"left": "stub", "right": "stub"}
     # Neither selector read ``left.stub.rows``; only the rest of left's own open choices is new.
     assert not any(key.endswith(("left", "right")) for key in found)
+
+
+def test_viable_lists_each_open_decision_with_its_viable_cases_never_a_forced_one() -> None:
+    def viable(point: Any) -> dict[str, tuple[object, ...]]:
+        return {item.key: item.cases for item in inspection.viable(point)}
+
+    both = design_space(Unit(width=8))
+    assert viable(both) == {"compute": ("packed", "stub")}
+    packed = commit(both, {"compute": "packed"})
+    assert viable(packed) == {"compute.packed.pe": (1, 2, 4, 8)}
+    # A forced Decision is not open; the choices it guards are.
+    assert viable(design_space(Unit(width=128))) == {"compute.stub.rows": (1, 2, 4)}
+    # A refused case is not offered, and the case it leaves is forced.
+    narrow = design_space(Memory(capabilities=Capabilities(fast=False)))
+    assert viable(narrow) == {"writable": (False, True)}
+    (refused,) = inspection.viable(design_space(Memory(capabilities=Capabilities(ports=0))))
+    assert (refused.key, refused.cases) == ("style", ("auto", "fast"))
+    # A Decision with no viable case is listed with none, each case with its reason.
+    (none,) = inspection.viable(design_space(Unit(width=129)))
+    assert none.cases == () and set(none.refused) == {"packed", "stub"}

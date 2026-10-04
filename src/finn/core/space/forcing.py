@@ -83,6 +83,16 @@ NOTHING = Found()
 
 
 @dataclass(frozen=True)
+class Viable:
+    """An open Decision, for inspection: neither committed nor forced, its viable cases
+    (several, or none when the Decision is refused) and why each other case is not."""
+
+    key: str
+    cases: tuple[object, ...]
+    refused: Mapping[str, str]
+
+
+@dataclass(frozen=True)
 class Forced:
     """A forced Decision, for inspection: its value, and why every other case is not
     viable (empty for a Decision over values whose domain has one case)."""
@@ -312,4 +322,4 @@ def _find(snapshot: Snapshot) -> Found:
     )
 
 
-__all__ = ["Forced", "Found", "Verdict", "admission", "forced", "inherited"]
+__all__ = ["Forced", "Found", "Verdict", "Viable", "admission", "forced", "inherited"]
