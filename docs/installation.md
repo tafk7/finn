@@ -83,7 +83,7 @@ FINN_LICENSE_VENDOR_PORT=2101
 |---|---|
 | `FINN_XILINX_PATH` | The installation root. Both AMD layouts are found under it (`Vivado/2024.2` up to 2024.2, `2025.1/Vivado` after) |
 | `FINN_XILINX_VERSION` | The version to use from that root |
-| `FINN_LICENSE_HOST`, `FINN_LICENSE_PORT` | The FlexLM server, as an IPv4 address (sbx matches licence traffic by address) and its port: `XILINXD_LICENSE_FILE=PORT@HOST` |
+| `FINN_LICENSE_HOST`, `FINN_LICENSE_PORT` | The FlexLM server, by host name or IPv4 address, and its port: `XILINXD_LICENSE_FILE=PORT@HOST` |
 | `FINN_LICENSE_VENDOR_PORT` | The vendor daemon's (xilinxd) port, which sbx must allow too; see [the sbx guide](../docker/sbx/README.md#vivado-and-the-licence-server) for finding it |
 | `PLATFORM_REPO_PATHS` | Vitis platforms (optional) |
 

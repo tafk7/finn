@@ -1130,6 +1130,17 @@ def test_machine_file_keys_are_the_kit_arguments():
     assert sorted(declared) == sorted(machine_file.KEYS)
 
 
+def test_the_kit_takes_a_licence_server_by_name_or_address():
+    """sbx matches plain TCP (FlexLM) by host name as well as by address."""
+    kit = (Path(REPO) / "docker/sbx/xilinx/xilinx.yaml").read_text()
+    block = kit.split("  FINN_LICENSE_HOST:\n", 1)[1].split("\n  FINN_", 1)[0]
+    pattern = re.search(r"pattern: '([^']+)'", block).group(1)
+    for host in ("licsrv05.example.com", "licsrv05", "10.0.0.5"):
+        assert re.fullmatch(pattern, host), host
+    for host in ("", "-licsrv", "licsrv.", "10.0.0.5:2100", "licsrv example"):
+        assert not re.fullmatch(pattern, host), host
+
+
 def test_environment_wins_over_the_machine_file(tmp_path):
     path = _machine_file(tmp_path, "FINN_XILINX_PATH=/opt/Xilinx\nFINN_XILINX_VERSION=2025.2\n")
     values = machine_file.settings({"FINN_XILINX_ENV": path, "FINN_XILINX_VERSION": "2026.1"})
