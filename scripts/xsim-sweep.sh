@@ -4,7 +4,8 @@
 #
 # Every XSim check of the kernel layer, run from this checkout in parallel:
 #   - each conformance XSim test in its own pytest process,
-#   - the rest of the kernel suite, and the KernelOps' XSim tests, with Vivado selected,
+#   - the rest of the kernel suite, the KernelOps' XSim tests and their Vivado tests
+#     (packaging; marker vivado), with Vivado selected,
 #   - the numeric XSI sweeps (MatMul, dotp, adapters), one simulation per process.
 #
 # For "XSim from a commit", run it in a worktree or clone at that commit: natively
@@ -127,6 +128,7 @@ else
     pytest_run kernels-rest --confcutdir=tests/kernels tests/kernels \
         --ignore=tests/kernels/test_conformance.py &
     pytest_run kernel-ops-xsim --confcutdir=tests/kernel_ops tests/kernel_ops -m xsim &
+    pytest_run kernel-ops-vivado --confcutdir=tests/kernel_ops tests/kernel_ops -m vivado &
 
     sweep_run dense kernels.rtlsim.matmul_numeric &
     sweep_run fifo-packed kernels.rtlsim.matmul_numeric --case packed --weight-fifo-depth 2 &
