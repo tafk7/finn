@@ -94,8 +94,8 @@ def test_each_missing_or_refused_fact_is_named() -> None:
 
 def test_the_schema_is_the_node_roots_decision_keys() -> None:
     schema = MatMul.schema()
-    assert len(schema) == 35
-    assert sum(kind == "s" for kind, _ in schema.values()) == 26
+    assert len(schema) == 32
+    assert sum(kind == "s" for kind, _ in schema.values()) == 24
     assert schema["compute"] == ("s", ("packed", "int8_dsp58"))
     assert schema["compute.packed.pe"] == ("i", ())
     assert schema["compute.packed.compute_pumping"] == ("i", ())
@@ -106,6 +106,8 @@ def test_the_schema_is_the_node_roots_decision_keys() -> None:
     assert schema["w.source"] == ("s", ("memstream",))
     assert schema["w.source.memstream.ram_style"] == ("s", ())
     assert not any(name.startswith("memory") for name in schema)
+    # The activations never carry a value: their stream compiles no source, so no keys.
+    assert not any(name.startswith("x.source") for name in schema)
     types = op(matmul_model()).get_nodeattr_types()
     assert types["compute"] == ("s", False, "", {"packed", "int8_dsp58"})
 
@@ -118,7 +120,7 @@ def schema_digest(cls: type[KernelOp]) -> str:
 def test_the_schema_is_pinned_for_its_op_version() -> None:
     """Changing a kernel's or a stream's keys changes the schema. Unreleased, the digest
     is re-pinned without an op-version bump (clean breaks)."""
-    assert (MatMul.op_version, schema_digest(MatMul)) == (1, "af3b28842ec92524")
+    assert (MatMul.op_version, schema_digest(MatMul)) == (1, "2e2ea07041060a3c")
 
 
 # -- persistence ------------------------------------------------------------------------

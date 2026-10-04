@@ -1389,6 +1389,28 @@ def selected(decision: object) -> str:
     return cast(str, CaseRef(decision._space_path))
 
 
+class Supplied(ValueDecl[bool]):
+    """Whether a value input of this family is supplied (see ``supplied``)."""
+
+    def __init__(self, formal: Param[object]) -> None:
+        self.formal = formal
+        self.semantics = cast("ValueSemantics[bool]", default_semantics(bool))
+
+
+def supplied(formal: object) -> bool:
+    """Whether the value input ``formal`` is supplied, as a declaration: what
+    ``present(formal)`` answers in a method (bound to a guarded view or derived
+    value, whether that source applies).
+
+    As a guard (``when=supplied(contents)``) the compiler reads it before
+    evaluation: where the declaration never supplies the input, a Decision over
+    nodes it guards can never apply, and its candidates are not compiled.
+    """
+    if not isinstance(formal, Param) or formal.reference_family() is not None:
+        raise DefinitionError("supplied() takes a value input (a Param) of this family")
+    return cast(bool, Supplied(cast("Param[object]", formal)))
+
+
 class Present(ValueDecl[T], Generic[T]):
     """The value of whichever one of ``sources`` is present (applicable).
 
@@ -1471,6 +1493,7 @@ __all__ = [
     "Present",
     "Projection",
     "Required",
+    "Supplied",
     "UNSUPPLIED",
     "Users",
     "ValueDecl",
@@ -1481,6 +1504,7 @@ __all__ = [
     "derived",
     "required",
     "selected",
+    "supplied",
     "unfinished",
     "unmet_required",
     "view",
