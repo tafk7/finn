@@ -35,7 +35,7 @@ from types import MappingProxyType
 from typing import cast
 
 from ._configuration import Space
-from ._runtime import Snapshot
+from ._runtime import Snapshot, membership
 from .declarations import Constraint, ConstraintGroup, View
 from .domains import RequiringDomain
 from .occurrence import _attach, state
@@ -138,18 +138,19 @@ def _viable(point: Space, index: int) -> tuple[tuple[str, ...], dict[str, str]] 
 def _required(
     point: Space, index: int, candidates: tuple[object, ...]
 ) -> tuple[tuple[object, ...], dict[str, str]]:
-    """A Decision over values' viable cases: those whose requirements hold (the domain's
-    membership, tried case by case), and each other case's finding."""
-    handle = DecisionHandle[object](state(point).linked, index)
+    """A Decision over values' viable cases: those its domain's membership admits here
+    (every requirement holds), and each other case's finding."""
+    snapshot = state(point)
     viable: list[object] = []
     reasons: dict[str, str] = {}
     for case in candidates:
-        outcome = point.try_with_choices({handle: case})
-        if outcome.accepted:
+        result = membership(snapshot, index, case)
+        if isinstance(result, Available) and result.value is True:
             viable.append(case)
-            continue
-        refused = [item.result for item in outcome.outcomes if isinstance(item.result, Rejected)]
-        reasons[repr(case)] = "; ".join(_describe(result) for result in refused) or "refused"
+        elif isinstance(result, Rejected):
+            reasons[repr(case)] = _describe(result)
+        else:
+            viable.append(case)  # waiting on an open choice is not a refusal
     return tuple(viable), reasons
 
 

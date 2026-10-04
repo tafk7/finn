@@ -588,6 +588,15 @@ def candidate_values(snapshot: Snapshot, node_index: int) -> QueryResult[tuple[o
         return cast(QueryResult[tuple[object, ...]], result)
 
 
+def membership(snapshot: Snapshot, node_index: int, value: object) -> QueryResult[object]:
+    """Whether a Decision's domain admits ``value`` here, with its refusal (forcing's
+    reading of a value case's requirements; PROBE: design/stream-source)."""
+    with snapshot.lock:
+        node = snapshot.linked.nodes[node_index]
+        frame = _membership_frame(snapshot, node, value, check_guard=False)
+        return _execution.run(snapshot, node_index, frame).result
+
+
 def copy_result(
     snapshot: Snapshot, node_index: int, answer: QueryResult[object]
 ) -> QueryResult[object]:
