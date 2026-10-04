@@ -56,16 +56,14 @@ class MatMul(KernelOp):
             raise KernelOpError(f"{label}: {a} has {k} columns and {b} {k_b} rows")
         activation, weights_dtype = datatype(model, a, label), datatype(model, b, label)
         build = self.target()
-        dsp, period = build.platform.dsp, build.period_ns
-        if dsp is None:  # target() states every key; a Platform's default states none
-            raise KernelOpError(f"{label}: the target states no DSP block")
+        platform, period = build.platform, build.period_ns
         common: dict[str, object] = dict(
             m=m,
             n=n,
             k=k,
             activation_dtype=activation,
             weights_dtype=weights_dtype,
-            target_dsp=dsp,
+            platform=platform,
             target_period_ns=period,
             x_tensor=Tensor((m, k), ScalarEncoding(activation)),
         )
@@ -77,7 +75,7 @@ class MatMul(KernelOp):
             k,
             activation.name,
             weights_dtype.name,
-            dsp.name,
+            platform,
             period,
         )
         if model.get_initializer(b) is None:
@@ -102,7 +100,9 @@ class MatMul(KernelOp):
         base: Any = self.base()
         return {
             self.onnx_node.input[1]: BufferedStream(
-                tensor=self.view("w_tensor"), contents=base.matmul.weight_values
+                tensor=self.view("w_tensor"),
+                contents=base.matmul.weight_values,
+                platform=self.target().platform,
             )
         }
 
@@ -111,8 +111,12 @@ class MatMul(KernelOp):
         formals: dict[str, Any] = facts.formals()
         del formals["x_tensor"]
         a, b = self.onnx_node.input
+        platform = formals["platform"]
+        if platform.dsp is None:  # target() states every key; the root refuses it as well
+            raise KernelOpError(f"{self.label}: the platform states no DSP block")
         kernel = MatMulKernel(
             **formals,
+            target_dsp=platform.dsp,
             x_stream=streams[a],
             w_stream=streams[b],
             y_stream=streams[self.onnx_node.output[0]],

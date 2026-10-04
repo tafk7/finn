@@ -252,9 +252,4 @@ def test_the_domain_resolves_at_its_version_without_a_fallback() -> None:
     assert op_identity(Thresholding) == ("Thresholding", ThresholdingAxiKernel.version)
     assert get_domain_opset_version("finn.custom_op.kernels") == domain.opset_version
     assert domain.__all__ == ["MatMul", "Thresholding"]
-    with pytest.raises(TypeError, match="op_type"):
-
-        class Inherited(MatMul):
-            roots = MatMul.roots
-
     assert PLATFORM_KEYS["dsp"].entry in {item.key for item in model.graph.metadata_props}

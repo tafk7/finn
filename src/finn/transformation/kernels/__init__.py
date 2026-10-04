@@ -5,14 +5,24 @@
 
 ``ToKernelOps`` rewrites the nodes a KernelOp binds and states the build
 target; ``InferKernelTensors`` infers every tensor in graph order, the KernelOps
-answering from their node roots; ``kernel_choices_config`` exports the nodes'
+answering from their node roots; ``CommitKernelChoices`` commits their open
+choices by a policy (``PlaceholderPolicy``, the DSE seam's placeholder);
+``kernel_choices_config`` exports the nodes'
 choices, sparse, for ``ApplyConfig``; ``PackagePartition`` packages a partition
 of KernelOps as the IP the shells read (the stitched-IP contract).
 """
 
+from finn.transformation.kernels.choose import CommitKernelChoices, PlaceholderPolicy
 from finn.transformation.kernels.config import kernel_choices_config
 from finn.transformation.kernels.convert import ToKernelOps
 from finn.transformation.kernels.infer import InferKernelTensors
 from finn.transformation.kernels.package import PackagePartition
 
-__all__ = ["InferKernelTensors", "PackagePartition", "ToKernelOps", "kernel_choices_config"]
+__all__ = [
+    "CommitKernelChoices",
+    "InferKernelTensors",
+    "PackagePartition",
+    "PlaceholderPolicy",
+    "ToKernelOps",
+    "kernel_choices_config",
+]

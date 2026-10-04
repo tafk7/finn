@@ -16,13 +16,18 @@ an initializer the node owns are the weight stream's known value (its
 ``contents``, MatMul's ``weight_values``), so the stream's ``source`` applies
 and stores them; weights on a graph tensor arrive on the stream like any edge,
 and it has no source. Nothing is pinned.
+
+The platform is a fact too: the target's capabilities (``target(model)``), bound
+to the kernels and to a stream with a source, so the requirements of their value
+cases (``requires``) read the device the model is built for. The DSP block is
+the platform's (``target_dsp``), not a separate fact.
 """
 
 from __future__ import annotations
 
 from typing import Any, cast
 
-from finn.core.space import Param, derived
+from finn.core.space import Param, Rejected, derived, reject
 from finn.dataflow.datatypes import QONNXDataType
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.base import Kernel
@@ -35,7 +40,7 @@ from finn.kernels.datatypes.semantics import (
 )
 from finn.kernels.matmul import MatMulKernel
 from finn.kernels.streams import BufferedStream, Stream
-from finn.kernels.target import DspBlock
+from finn.kernels.target import DspBlock, Platform
 from finn.kernels.thresholding import ThresholdingAxiKernel
 
 
@@ -50,9 +55,16 @@ class MatMulNode(Kernel):
     k: int = Param()
     activation_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
     weights_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
-    target_dsp: DspBlock = Param()
+    platform: Platform = Param()
     target_period_ns: float = Param()
     x_tensor: Tensor = Param()
+
+    @derived
+    def target_dsp(self) -> DspBlock | Rejected:
+        """The platform's DSP block (a model's target states one)."""
+        if self.platform.dsp is None:
+            return reject("target-dsp", "the platform states no DSP block")
+        return self.platform.dsp
 
     # Each case declares ``w`` and ``matmul``.
     @derived
@@ -74,7 +86,7 @@ class StoredMatMulNode(MatMulNode):
 
     id = "finn.custom_op.kernels.node.matmul.stored"
     weights: IntegerTensor = Param(semantics=INTEGER_TENSOR)
-    w = BufferedStream(tensor=MatMulNode.w_tensor, port="in1_V")
+    w = BufferedStream(tensor=MatMulNode.w_tensor, port="in1_V", platform=MatMulNode.platform)
     matmul = MatMulKernel(
         m=MatMulNode.m,
         n=MatMulNode.n,
@@ -83,6 +95,7 @@ class StoredMatMulNode(MatMulNode):
         weights_dtype=MatMulNode.weights_dtype,
         target_dsp=MatMulNode.target_dsp,
         target_period_ns=MatMulNode.target_period_ns,
+        platform=MatMulNode.platform,
         weights=weights,
         x_stream=MatMulNode.x,
         w_stream=w,
@@ -106,6 +119,7 @@ class StreamedMatMulNode(MatMulNode):
         weights_dtype=MatMulNode.weights_dtype,
         target_dsp=MatMulNode.target_dsp,
         target_period_ns=MatMulNode.target_period_ns,
+        platform=MatMulNode.platform,
         x_stream=MatMulNode.x,
         w_stream=w,
         y_stream=MatMulNode.y,
@@ -124,6 +138,7 @@ class ThresholdingNode(Kernel):
     threshold_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
     thresholds: ThresholdTable = Param(semantics=THRESHOLD_TABLE)
     bias: int = Param()
+    platform: Platform = Param()
     x_tensor: Tensor = Param()
 
     @derived
@@ -137,6 +152,7 @@ class ThresholdingNode(Kernel):
         threshold_dtype=threshold_dtype,
         thresholds=thresholds,
         bias=bias,
+        platform=platform,
         input_stream=x,
         output_stream=y,
     )

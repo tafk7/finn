@@ -102,6 +102,7 @@ class Thresholding(KernelOp):
         threshold_dtype = datatype(model, thresholds, label)
         digest = admitted(model, thresholds, threshold_dtype, label)
         bias = int(self.get_nodeattr("bias"))
+        platform = self.target().platform
 
         def formals() -> dict[str, object]:
             values = model.get_initializer(thresholds)
@@ -110,6 +111,7 @@ class Thresholding(KernelOp):
                 threshold_dtype=threshold_dtype,
                 thresholds=(tuple(tuple(int(value) for value in row) for row in values),),
                 bias=bias,
+                platform=platform,
                 x_tensor=Tensor((m, channels), ScalarEncoding(input_dtype)),
             )
 
@@ -121,6 +123,7 @@ class Thresholding(KernelOp):
             input_dtype.name,
             threshold_dtype.name,
             bias,
+            platform,
             digest,
         )
         return Facts(ThresholdingNode, key, formals)

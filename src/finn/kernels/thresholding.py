@@ -23,9 +23,10 @@ the sets times the folds rounded up to a power of two), and assigns each a
 resource monotone in depth from its two depth triggers. So the expressible assignments are: the
 deepest ``ultra_stages`` in UltraRAM, the ``block_stages`` above them in block
 RAM, and the rest ``ram_style``: ``distributed``, or Vivado's choice (``auto``,
-with no stage in block RAM). Counted in stages, not depths, the choices do not
-move with PE; ``parameters`` maps them to the triggers (the depth of the first
-stage in each resource, 0 for none). An UltraRAM stage requires the
+with no stage in block RAM). Each assignment has one spelling: with every stage
+in UltraRAM none is left, and ``ram_style`` does not apply. Counted in stages,
+not depths, the choices do not move with PE; ``parameters`` maps them to the
+triggers (the depth of the first stage in each resource, 0 for none). An UltraRAM stage requires the
 ``platform``'s UltraRAM that takes initial contents (the table is the
 memories' initial contents), and runtime-writable thresholds its control port,
 each a named refusal of the case.
@@ -175,14 +176,8 @@ class ThresholdingAxiKernel(Kernel):
         return self.shape[2].bit_length()
 
     # The threshold memories (module docstring): the deepest ``ultra_stages`` in
-    # UltraRAM, the ``block_stages`` above them in block RAM, the rest ``ram_style``.
-    ram_style: str = Decision(values=("auto", "distributed"))
-
-    @derived
-    def distributed(self) -> bool:
-        return self.ram_style == "distributed"
-
-    block_stages: int = Decision(domain=stage_counts(stages), when=distributed)
+    # UltraRAM; when any stage is left above them, the ``block_stages`` in block RAM
+    # and the rest ``ram_style``.
     ultra_stages: int = Decision(
         domain=requiring(
             stage_counts(stages),
@@ -194,6 +189,19 @@ class ThresholdingAxiKernel(Kernel):
             ),
         )
     )
+
+    @derived
+    def left(self) -> bool:
+        """Whether any stage is left above the UltraRAM ones."""
+        return self.ultra_stages < self.stages
+
+    ram_style: str = Decision(values=("auto", "distributed"), when=left)
+
+    @derived
+    def distributed(self) -> bool:
+        return self.left and self.ram_style == "distributed"
+
+    block_stages: int = Decision(domain=stage_counts(stages), when=distributed)
 
     def stage_depth(self, stage: int) -> int:
         """The depth of a stage's memory, as the RTL computes it from SETS, C and PE."""

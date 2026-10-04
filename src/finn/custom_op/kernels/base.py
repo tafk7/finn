@@ -236,8 +236,9 @@ def value_type(item: inspection.DecisionInfo[object]) -> str:
 class KernelOp(CustomOp):  # type: ignore[misc]
     """One ONNX node's binding of one kernel point; see the module docstring.
 
-    An op class states ``op_type`` (its class name) and ``op_version`` (its kernel's
-    ``version``) in its own body, and names its node-root classes (``roots``), its
+    An op class states ``op_version`` (its kernel's ``version``) in its own body; its
+    ``op_type`` is qonnx's (stated in its own body, or the name its domain exports
+    it under). It names its node-root classes (``roots``), its
     kernel's member in them (``member``), and each ONNX input's stream (``ports``;
     ``None``: an input that is a fact, never a stream).
     """
@@ -255,10 +256,7 @@ class KernelOp(CustomOp):  # type: ignore[misc]
         super().__init_subclass__(**kwargs)
         if "roots" not in cls.__dict__:
             return  # an abstract base
-        stated = {name: cls.__dict__.get(name) for name in ("op_type", "op_version")}
-        if stated["op_type"] != cls.__name__:
-            raise TypeError(f"{cls.__qualname__} must state op_type = {cls.__name__!r}")
-        version = stated["op_version"]
+        version = cls.__dict__.get("op_version")
         if type(version) is not int or version < 1:
             raise TypeError(f"{cls.__qualname__} must state a positive int op_version")
 
