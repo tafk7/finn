@@ -3,8 +3,11 @@
 
 """Conversion: ONNX operators to KernelOps (``finn.custom_op.kernels``).
 
-``ToKernelOps`` states the build target once, in the one place ``target(model)``
-reads it, imports the domain at its ``opset_version`` when the model does not
+``ToKernelOps`` states the build target once (a ``Target``, from
+``finn.kernels.target.resolve_target``: the part, the clock period and the
+platform's capabilities), in the one place ``target(model)`` reads it, the
+model's ``finn.platform`` metadata (a model stating phase 1's untyped target
+keys is refused), imports the domain at its ``opset_version`` when the model does not
 import it yet (inserting a node never raises a model's import), and rewrites
 each node it can bind:
 
@@ -24,8 +27,8 @@ from onnx import helper
 from qonnx.transformation.base import Transformation
 
 import finn.custom_op.kernels as domain
-from finn.custom_op.kernels.base import write_target
-from finn.kernels.target import DspBlock
+from finn.custom_op.kernels.base import refuse_phase1_target, write_target
+from finn.kernels.target import Target
 
 DOMAIN = domain.__name__
 
@@ -60,13 +63,13 @@ def _thresholding(model: Any, node: Any) -> Any | None:
 class ToKernelOps(Transformation):  # type: ignore[misc]
     """Each node a KernelOp binds rewritten as one, the target stated in the model."""
 
-    def __init__(self, target_dsp: DspBlock, target_period_ns: float) -> None:
+    def __init__(self, target: Target) -> None:
         super().__init__()
-        self.target_dsp = target_dsp
-        self.target_period_ns = target_period_ns
+        self.target = target
 
     def apply(self, model: Any) -> tuple[Any, bool]:
-        write_target(model, self.target_dsp, self.target_period_ns)
+        refuse_phase1_target(model)
+        write_target(model, self.target)
         if DOMAIN not in model.get_opset_imports():
             model.set_opset_import(DOMAIN, domain.opset_version)
         graph = model.graph

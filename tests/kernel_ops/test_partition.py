@@ -24,9 +24,8 @@ from finn.custom_op.kernels.base import KernelOpError
 from finn.custom_op.kernels.partition import PartitionRoot, partition_root, save_partition_choices
 from finn.kernels.configure import commit, settle, undecided
 from finn.kernels.streams import ADAPTER_RAM_STYLES
-from finn.kernels.target import DspBlock
 from finn.transformation.kernels import InferKernelTensors, ToKernelOps
-from kernel_ops.models import chain_source
+from kernel_ops.models import TARGET, chain_source
 from kernels import test_design as chain
 from kernels.helpers import labels
 from kernels.xsim import pack, requires_xsim, stream_through
@@ -54,7 +53,7 @@ def kernel_model(**options: bool) -> ModelWrapper:
     model = (
         chain_source(**options)
         .transform(InferShapes())
-        .transform(ToKernelOps(DspBlock.DSP48E2, 5.0))
+        .transform(ToKernelOps(TARGET))
         .transform(InferKernelTensors())
     )
     for node in model.graph.node:
