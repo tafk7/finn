@@ -11,7 +11,9 @@ words (under stalls on both sides unless ``stalled`` is False) and checks
 that each AXIS output presents its words, compared on their payload bits (an
 AXIS word is padded to bytes); every other top input is held at zero. A
 ``repeating`` design (fed by a cyclic source) never stops producing: each
-output then takes exactly its words and holds its ready low after them.
+output then takes exactly its words and holds its ready low after them. A port
+name the module does not present on that side is refused, naming the ports it
+has: a stale name would otherwise leave the real port idle until the watchdog.
 """
 
 from __future__ import annotations
@@ -25,7 +27,15 @@ from typing import TypeVar
 
 import pytest
 
-from finn.kernels.artifacts.abi import Clock, Direction, Reset, abi_pins
+from finn.kernels.artifacts.abi import (
+    Bus,
+    Clock,
+    Direction,
+    Endpoint,
+    Reset,
+    StandardProtocol,
+    abi_pins,
+)
 from finn.kernels.artifacts.build import emit_module
 from finn.kernels.artifacts.module import Module
 from kernels.helpers import finnlib_root, vivado_simulator
@@ -120,6 +130,22 @@ def stream_through(
     stalled: bool = True,
     repeating: bool = False,
 ) -> None:
+    buses = [
+        port
+        for port in module.pins.ports
+        if isinstance(port, Bus) and port.protocol is StandardProtocol.AXIS
+    ]
+    for side, names, endpoint in (
+        ("input", inputs, Endpoint.TARGET),
+        ("output", outputs, Endpoint.INITIATOR),
+    ):
+        has = [bus.name for bus in buses if bus.endpoint is endpoint]
+        unknown = sorted(set(names) - set(has))
+        if unknown:
+            raise ValueError(
+                f"the module has no {side} stream {', '.join(unknown)}; its {side}s: "
+                + (", ".join(has) or "none")
+            )
     top, sources, data = materialize(module, directory)
     for name, text in data.items():  # $readmemh reads an INIT_FILE from the simulator's directory
         (directory / name).write_text(text)
