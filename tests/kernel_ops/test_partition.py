@@ -27,7 +27,8 @@ from finn.kernels.configure import commit, undecided
 from finn.kernels.streams import ADAPTER_RAM_STYLES
 from finn.kernels.target import DspBlock
 from finn.transformation.kernels import InferKernelTensors, ToKernelOps
-from kernel_ops.models import chain_source
+from finn.custom_op.kernels.roots import StreamedMatMulNode
+from kernel_ops.models import INT3, chain_source, lift, matmul_model
 from kernels import test_design as chain
 from kernels.helpers import labels
 from kernels.xsim import pack, requires_xsim, stream_through
@@ -37,8 +38,8 @@ MATMUL = {
     "compute.packed.pe": chain.PE,
     "compute.packed.simd": chain.SIMD,
     "compute.packed.compute_pumping": False,
-    "memory.memstream.ram_style": "auto",
-    "memory.memstream.pumped_memory": False,
+    "w.source.memstream.ram_style": "auto",
+    "w.source.memstream.pumped_memory": False,
     "w.transport": "direct",
 }
 THRESHOLDING = {
@@ -61,8 +62,9 @@ def kernel_model(**options: bool) -> ModelWrapper:
     for node in model.graph.node:
         choices = MATMUL if node.op_type == "MatMul" else THRESHOLDING
         if node.op_type == "MatMul" and model.get_initializer(node.input[1]) is None:
-            # Streamed weights: no memory, and the weight edge's transport is the root's.
-            choices = {k: v for k, v in choices.items() if not k.startswith("memory.")}
+            # Streamed weights: no value, so no source; the weight edge's transport is
+            # the root's.
+            choices = {k: v for k, v in choices.items() if not k.startswith("w.source.")}
         model.get_customop_wrapper(node).save(choices)
     return model
 
@@ -113,6 +115,23 @@ def test_a_stale_edge_choice_is_dropped_and_the_forced_adapter_applies() -> None
     assert point.levels.query(type(point.levels).adapter).value.startswith("vpc")
 
 
+def test_a_lifted_initializers_source_choices_are_stale_in_the_partition() -> None:
+    """Weights lifted to a graph input leave the node streamed: its weight stream has no
+    value, so no source, and the source's choices, now the weight edge's, are the
+    partition's to replay: it drops them as stale."""
+    model = matmul_model()
+    stored = model.get_customop_wrapper(model.graph.node[0])
+    stored.save({"compute.packed.pe": 2, "w.source.memstream.ram_style": "block"})
+    lift(model, "w")
+    model.set_tensor_datatype("w", INT3)
+    streamed = model.get_customop_wrapper(model.graph.node[0])
+    assert streamed.facts().root is StreamedMatMulNode
+    # The node replays its own choices only: the weight edge's are the partition's.
+    assert streamed.point().matmul.compute.pe == 2 and streamed.verify_node() == []
+    model = model.transform(InferKernelTensors())
+    assert partition_root(model, model.graph.node).dropped == ("w.source.memstream.ram_style",)
+
+
 def test_a_partition_has_ports_for_its_onnx_inputs_and_outputs_only() -> None:
     model = kernel_model()
     front = partition_root(model, model.graph.node[:2], name="front")
@@ -146,6 +165,17 @@ def test_the_owner_map() -> None:
         "levels": ("second", "x."),
         "w2": ("second", "w."),
     }
+
+
+def test_a_choice_in_the_root_persists_on_the_weight_streams_owner() -> None:
+    model = kernel_model()
+    root = partition_root(model, model.graph.node, name="chain")
+    written = save_partition_choices(model, root, {"w2.source.memstream.ram_style": "block"})
+    assert written == {"second": {"w.source.memstream.ram_style": "block"}}
+    second = model.get_customop_wrapper(model.graph.node[2])
+    assert second.choices()["w.source.memstream.ram_style"] == "block"
+    rebuilt = partition_root(model, model.graph.node, name="chain")
+    assert rebuilt.point.w2.source.ram_style == "block" and rebuilt.dropped == ()
 
 
 def test_a_node_named_like_a_tensor_is_refused() -> None:

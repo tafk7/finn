@@ -25,8 +25,10 @@ deepest ``ultra_stages`` in UltraRAM, the ``block_stages`` above them in block
 RAM, and the rest ``ram_style``: ``distributed``, or Vivado's choice (``auto``,
 with no stage in block RAM). Counted in stages, not depths, the choices do not
 move with PE; ``parameters`` maps them to the triggers (the depth of the first
-stage in each resource, 0 for none). Whether a target offers UltraRAM is a
-platform fact the kernel does not have yet.
+stage in each resource, 0 for none). An UltraRAM stage requires the
+``platform``'s UltraRAM that takes initial contents (the table is the
+memories' initial contents), and runtime-writable thresholds its control port,
+each a named refusal of the case.
 
 All native pins remain present when AXI-Lite or set selection is disabled;
 disabled outputs may be unspecified. Placed in a kernel with children, it sits
@@ -57,6 +59,8 @@ from finn.core.space import (
     divisors_of,
     domain,
     reject,
+    requires,
+    requiring,
     view,
 )
 from finn.dataflow.datatypes import (
@@ -80,8 +84,14 @@ from finn.kernels.datatypes.semantics import (
 )
 from finn.kernels.port import AxiStreamPort
 from finn.kernels.streams import Stream
+from finn.kernels.target import Platform
 
 c = Index("c")
+
+
+def _staged(count: object) -> bool:
+    """The cases that place a stage: a count above 0."""
+    return isinstance(count, int) and count > 0
 
 
 def stage_counts(stages: object) -> Domain[int]:
@@ -146,7 +156,17 @@ class ThresholdingAxiKernel(Kernel):
     output_stream: Stream = Param(required=False)
     set_stream: Stream = Param(required=False)
     control: ControlBus = Param(required=False)
-    use_axilite: bool = Decision(values=(False, True))
+    platform: Platform = Param(default=Platform())
+    use_axilite: bool = Decision(
+        values=(False, True),
+        requires=(
+            requires(
+                platform.control_ports,
+                "control-absent: the platform has no control port for runtime-writable thresholds",
+                cases=(True,),
+            ),
+        ),
+    )
     deep_pipeline: bool = Decision(values=(False, True))
 
     @derived
@@ -163,7 +183,17 @@ class ThresholdingAxiKernel(Kernel):
         return self.ram_style == "distributed"
 
     block_stages: int = Decision(domain=stage_counts(stages), when=distributed)
-    ultra_stages: int = Decision(domain=stage_counts(stages))
+    ultra_stages: int = Decision(
+        domain=requiring(
+            stage_counts(stages),
+            requires(platform.uram, "uram-absent: the platform has no UltraRAM", cases=_staged),
+            requires(
+                platform.uram_init,
+                "uram-init: the platform's UltraRAM takes no initial contents",
+                cases=_staged,
+            ),
+        )
+    )
 
     def stage_depth(self, stage: int) -> int:
         """The depth of a stage's memory, as the RTL computes it from SETS, C and PE."""

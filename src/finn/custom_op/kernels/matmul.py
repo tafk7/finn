@@ -4,11 +4,11 @@
 """The MatMul KernelOp: ONNX ``MatMul`` semantics, Y = A @ B, bound to ``MatMulKernel``.
 
 H-006's reading rule decides the node root from the graph: weights that are an
-initializer are the node's own, stored by its memory (``StoredMatMulNode``,
-``memory`` pinned ``memstream``) and keyed by their value summary's digest;
-weights on any other tensor arrive on a stream like any edge
-(``StreamedMatMulNode``, ``memory`` pinned ``none``). A's leading axes are
-rows; B is the (k, n) matrix ONNX stores. The output is A's leading axes and n.
+initializer are the node's own, the weight stream's known value, which its
+``source`` stores (``StoredMatMulNode``), keyed by their value summary's
+digest; weights on any other tensor arrive on a stream like any edge
+(``StreamedMatMulNode``). A's leading axes are rows; B is the (k, n) matrix
+ONNX stores. The output is A's leading axes and n.
 """
 
 from __future__ import annotations
@@ -96,15 +96,18 @@ class MatMul(KernelOp):
     def owned_streams(self) -> dict[str, Stream]:
         if self.facts().root is not StoredMatMulNode:
             return {}
-        return {self.onnx_node.input[1]: BufferedStream(tensor=self.view("w_tensor"))}
+        base: Any = self.base()
+        return {
+            self.onnx_node.input[1]: BufferedStream(
+                tensor=self.view("w_tensor"), contents=base.matmul.weight_values
+            )
+        }
 
     def place(self, streams: Mapping[str, Stream]) -> tuple[Kernel, dict[str, str]]:
         facts = self.facts()
         formals: dict[str, Any] = facts.formals()
         del formals["x_tensor"]
         a, b = self.onnx_node.input
-        # The graph's pin, as the node root declares it: a selector's case by key.
-        formals["memory"] = "memstream" if facts.root is StoredMatMulNode else "none"
         kernel = MatMulKernel(
             **formals,
             x_stream=streams[a],
