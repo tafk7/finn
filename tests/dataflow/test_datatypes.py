@@ -97,7 +97,10 @@ def test_a_tensor_holds_the_one_immutable_datatype_value() -> None:
     tensor = Tensor((4,), ScalarEncoding(supplied))
     assert tensor.element.dtype is supplied
     with pytest.raises(AttributeError, match="immutable datatype value"):
-        supplied._bitwidth = 9
+        setattr(supplied, "name", "INT9")  # the frozen value refuses any write
+    # The element holds the value itself, so its equality, hash and repr are the value's.
+    assert tensor.element == ScalarEncoding(DataType["INT8"])
+    assert repr(tensor.element) == "ScalarEncoding(dtype=INT8, value_range=(-128, 127))"
     assert tensor.element.dtype.name == "INT8" and tensor.element.bits == 8
 
 
