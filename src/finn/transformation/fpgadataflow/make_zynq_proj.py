@@ -55,9 +55,19 @@ from finn.util.resources import resource_path, tcl_quote
 
 from . import templates
 
+KERNEL_OPS = "finn.custom_op.kernels"
+
+
+def is_kernel_partition(model):
+    """Whether a partition model is a model of KernelOps (finn.custom_op.kernels)."""
+    return bool(model.graph.node) and all(node.domain == KERNEL_OPS for node in model.graph.node)
+
 
 def collect_ip_dirs(model, ipstitch_path):
     # collect list of all IP dirs
+    if is_kernel_partition(model):
+        # PackagePartition's IP is self-contained: its sources are imported into it
+        return [ipstitch_path + "/ip"]
     ip_dirs = []
     need_memstreamer = False
     for node in model.graph.node:
@@ -310,8 +320,13 @@ class MakeZYNQProject(Transformation):
 
 class ZynqBuild(Transformation):
     """Best-effort attempt at building the accelerator for Zynq.
-    It assumes the model has only fpgadataflow nodes
+    It assumes the model has only fpgadataflow nodes, or only KernelOps.
 
+    A model of KernelOps (the body of their StreamingDataflowPartition) is built
+    through the kernel path (``prepare_kernel_partitions``): its boundary facts
+    are stated, it becomes one partition, IODMAs are inserted from the facts and
+    get partitions of their own; the KernelOps' partition is packaged by
+    PackagePartition (the stitched-IP contract), the IODMAs' as always.
     """
 
     def __init__(
@@ -329,21 +344,49 @@ class ZynqBuild(Transformation):
         self.enable_debug = enable_debug
         self.partition_model_dir = partition_model_dir
 
+    def prepare_kernel_partitions(self, model):
+        """A model of KernelOps as the parent graph of its partitions: an IODMA
+        partition per input and output around the KernelOps' partition, whose
+        model states its boundary facts (finn.partition). No IP is built."""
+        # The kernel path's packaging, imported only for a model of KernelOps.
+        from finn.transformation.kernels.package import (  # noqa: PLC0415
+            write_boundary_facts,
+        )
+
+        write_boundary_facts(model, "the KernelOps' partition")
+        model = model.transform(
+            CreateDataflowPartition(partition_model_dir=self.partition_model_dir)
+        )
+        # InsertIODMA inserts IODMA_hls nodes, already specialized.
+        model = model.transform(InsertIODMA(self.axi_port_width))
+        # Each IODMA is a partition of its own (Floorplan's default, stated here).
+        dmas = [node for node in model.graph.node if node.op_type.startswith("IODMA")]
+        for index, node in enumerate(dmas):
+            getCustomOp(node).set_nodeattr("partition_id", index)
+        model = model.transform(
+            CreateDataflowPartition(partition_model_dir=self.partition_model_dir)
+        )
+        model = model.transform(GiveUniqueNodeNames())
+        return model.transform(GiveReadableTensorNames())
+
     def apply(self, model):
-        # first infer layouts
-        model = model.transform(InferDataLayouts())
-        # prepare at global level, then break up into kernels
-        prep_transforms = [
-            InsertIODMA(self.axi_port_width),
-            InsertDWC(),
-            SpecializeLayers(self.fpga_part),
-            Floorplan(),
-            CreateDataflowPartition(partition_model_dir=self.partition_model_dir),
-        ]
-        for trn in prep_transforms:
-            model = model.transform(trn)
-            model = model.transform(GiveUniqueNodeNames())
-            model = model.transform(GiveReadableTensorNames())
+        if is_kernel_partition(model):
+            model = self.prepare_kernel_partitions(model)
+        else:
+            # first infer layouts
+            model = model.transform(InferDataLayouts())
+            # prepare at global level, then break up into kernels
+            prep_transforms = [
+                InsertIODMA(self.axi_port_width),
+                InsertDWC(),
+                SpecializeLayers(self.fpga_part),
+                Floorplan(),
+                CreateDataflowPartition(partition_model_dir=self.partition_model_dir),
+            ]
+            for trn in prep_transforms:
+                model = model.transform(trn)
+                model = model.transform(GiveUniqueNodeNames())
+                model = model.transform(GiveReadableTensorNames())
         # Build each kernel individually
         sdp_nodes = model.get_nodes_by_op_type("StreamingDataflowPartition")
         for sdp_node in sdp_nodes:
@@ -351,6 +394,15 @@ class ZynqBuild(Transformation):
             sdp_node = getCustomOp(sdp_node)
             dataflow_model_filename = sdp_node.get_nodeattr("model")
             kernel_model = ModelWrapper(dataflow_model_filename)
+            if is_kernel_partition(kernel_model):
+                from finn.transformation.kernels.package import (  # noqa: PLC0415
+                    PackagePartition,
+                )
+
+                kernel_model = kernel_model.transform(PackagePartition(sdp_node.onnx_node.name))
+                kernel_model.set_metadata_prop("platform", "zynq-iodma")
+                kernel_model.save(dataflow_model_filename)
+                continue
             kernel_model = kernel_model.transform(InsertFIFO())
             kernel_model = kernel_model.transform(SpecializeLayers(self.fpga_part))
             kernel_model = kernel_model.transform(GiveUniqueNodeNames(prefix))
