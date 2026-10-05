@@ -34,7 +34,9 @@ def generator(
     strides: IntegerVector = (0, 1),
 ) -> InputGeneratorKernel:
     return design_space(
-        InputGeneratorKernel(word_bits=bits, frame_words=frame, dims=dims, strides=strides)
+        InputGeneratorKernel(
+            word_bits=bits, frame_words=frame, dims=dims, strides=strides, platform=FULL_DSP48E2
+        )
     ).with_choices(ram_style="auto")
 
 

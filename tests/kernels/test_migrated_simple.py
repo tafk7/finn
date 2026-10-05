@@ -25,7 +25,7 @@ from finn.core.space import (
 )
 from finn.core.space.errors import ValueUnavailableError
 from finn.kernels.target import DspBlock, Platform
-from kernels.helpers import full_platform
+from kernels.helpers import FULL_DSP48E2, full_platform
 
 T = TypeVar("T")
 
@@ -36,7 +36,7 @@ def decided(answer: QueryResult[T]) -> T:
 
 
 def test_fifo_start_commit_and_view_read_keep_opaque_word_geometry() -> None:
-    base = design_space(FifoKernel(word_bits=13, depth=8))
+    base = design_space(FifoKernel(word_bits=13, depth=8, platform=FULL_DSP48E2))
     assert isinstance(base.inspect(FifoKernel.module).accepted_result, Unresolved)
     with pytest.raises(ValueUnavailableError):
         _ = base.module
@@ -69,7 +69,9 @@ def test_fifo_start_commit_and_view_read_keep_opaque_word_geometry() -> None:
 
 @pytest.mark.parametrize("style", ("auto", "shift", "distributed", "block", "ultra"))
 def test_fifo_ram_styles_remain_explicit_and_preserve_native_parameter_values(style: str) -> None:
-    point = design_space(FifoKernel(word_bits=17, depth=64)).with_choices(ram_style=style)
+    point = design_space(FifoKernel(word_bits=17, depth=64, platform=FULL_DSP48E2)).with_choices(
+        ram_style=style
+    )
     assert dict(point.module.parameters)["RAM_STYLE"] == f'"{style}"'
 
 
@@ -77,7 +79,7 @@ def test_fifo_ram_styles_remain_explicit_and_preserve_native_parameter_values(st
 def test_fifo_geometry_refusal_remains_visible_before_and_after_ram_choice(
     bits: int, depth: int
 ) -> None:
-    base = design_space(FifoKernel(word_bits=bits, depth=depth))
+    base = design_space(FifoKernel(word_bits=bits, depth=depth, platform=FULL_DSP48E2))
     assert base.inspect(FifoKernel.module).constraints.refused == ("geometry_supported",)
     assert isinstance(base.inspect(FifoKernel.module).accepted_result, Unresolved)
     chosen = base.with_choices(ram_style="auto")

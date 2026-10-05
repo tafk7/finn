@@ -125,8 +125,9 @@ def test_tfc_w2a2_packages_as_the_shells_ip(tmp_path: Path) -> None:
 
 
 def test_tfc_w2a2_binds_the_ultra96_platform(tmp_path: Path) -> None:
-    """Every KernelOp of the partition reads Ultra96's capabilities from the model: its
-    weight memories cannot be UltraRAM, and none is pumped (the shell drives no 2x clock)."""
+    """Every KernelOp and stream of the partition reads Ultra96's capabilities from the
+    model: its weight and adapter memories cannot be UltraRAM, and none is pumped (the
+    shell drives no 2x clock)."""
     _, _, body = partitioned(tmp_path)
     root = partition_root(body, body.graph.node)
     weights = [
@@ -135,8 +136,20 @@ def test_tfc_w2a2_binds_the_ultra96_platform(tmp_path: Path) -> None:
         if node.op_type == "MatMul" and body.get_initializer(node.input[1]) is not None
     ]
     assert len(weights) == 4
-    for stream in weights:
+    streams = {member(tensor) for node in body.graph.node for tensor in node.input}
+    for stream in streams & set(dir(root.point)):
         assert getattr(root.point, stream).platform == ULTRA96.platform
+    # Each adapter memory the flow committed (``auto``), keyed under its edge.
+    adapters = [
+        f"{member(node.input[0])}.{attribute.removeprefix('x.')}"
+        for node in body.graph.node
+        for attribute in body.get_customop_wrapper(node).choices()
+        if attribute.startswith("x.adapter.") and attribute.endswith(".ram_style")
+    ]
+    assert len(adapters) == 4
+    for key in adapters:
+        with pytest.raises(ValueError, match="uram-absent"):
+            commit(root.point, {key: "ultra"})
     with pytest.raises(ValueError, match="uram-absent"):
         commit(root.point, {f"{weights[0]}.source.memstream.ram_style": "ultra"})
     with pytest.raises(ValueError, match="clk2x-absent"):

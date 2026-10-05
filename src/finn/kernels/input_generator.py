@@ -12,6 +12,8 @@ multi-bit marker, not AXI TLAST. Input and output words are opaque bits.
 
 On a stream, ``input_gen`` is a stage of the stream's adapter
 (``finn.kernels.adapters``), which derives these facts from the stream's plan.
+Its buffer's ``ram_style`` is its choice; ``ultra`` requires the ``platform``'s
+UltraRAM. The buffer starts empty, so no initial contents are asked of it.
 """
 
 from __future__ import annotations
@@ -26,6 +28,7 @@ from finn.core.space import (
     constraint,
     derived,
     reject,
+    requires,
 )
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.contributions import CopiedSource
@@ -33,6 +36,7 @@ from finn.kernels.base import NATIVE_CLOCKING, Clocking, Kernel
 from finn.kernels.datatypes.semantics import INTEGER_VECTOR, IntegerVector
 from finn.kernels.transport import MarkerKind, StreamMarker
 from finn.kernels.port import WordPort
+from finn.kernels.target import Platform
 
 INPUT_GEN_RAM_STYLES = ("auto", "distributed", "block", "ultra")
 
@@ -50,6 +54,7 @@ class InputGeneratorKernel(Kernel):
     frame_words: int = Param()
     dims: IntegerVector = Param(semantics=INTEGER_VECTOR)
     strides: IntegerVector = Param(semantics=INTEGER_VECTOR)
+    platform: Platform = Param()
 
     @constraint
     def traversal_supported(self) -> bool | Rejected:
@@ -77,7 +82,12 @@ class InputGeneratorKernel(Kernel):
         return True
 
     admission = ConstraintGroup(traversal_supported)
-    ram_style: str = Decision(values=INPUT_GEN_RAM_STYLES)
+    ram_style: str = Decision(
+        values=INPUT_GEN_RAM_STYLES,
+        requires=(
+            requires(platform.uram, "uram-absent: the platform has no UltraRAM", cases=("ultra",)),
+        ),
+    )
 
     @derived
     def loop_ends(self) -> tuple[StreamMarker, ...] | Rejected:

@@ -11,12 +11,12 @@ from finn.kernels.fifo import FifoKernel
 from finn.kernels.transport import MarkerKind, ReadyValidStream, StreamMarker
 from kernels.test_migrated_rich import generator
 from kernels.test_migrated_simple import eltwise
-from kernels.helpers import finnlib_root
+from kernels.helpers import finnlib_root, FULL_DSP48E2
 from kernels.xsim import requires_xsim, simulate
 
 
 def test_native_streams_are_inspectable_without_storage_choices():
-    base = design_space(FifoKernel(word_bits=13, depth=8))
+    base = design_space(FifoKernel(word_bits=13, depth=8, platform=FULL_DSP48E2))
     source, sink = base.input.transport, base.output.transport
     assert source.data_width == sink.data_width == 13
     assert [pin.direction for pin in source.pins()] == [Direction.IN, Direction.IN, Direction.OUT]
@@ -67,7 +67,9 @@ def test_fifo_capacity_and_effective_storage_agree_with_native_rtl(tmp_path):
     instances = []
     for index, (depth, style) in enumerate(cases):
         storage = (
-            design_space(FifoKernel(word_bits=9, depth=depth)).with_choices(ram_style=style).storage
+            design_space(FifoKernel(word_bits=9, depth=depth, platform=FULL_DSP48E2))
+            .with_choices(ram_style=style)
+            .storage
         )
         instances.append(
             f'fifo_capacity_case #(.DEPTH({depth}), .STYLE("{style}"), '

@@ -40,11 +40,13 @@ Decision over nodes, whose candidates are fixed chains of FinnLib modules
 (``finn.kernels.adapters``); each refuses a plan it does not carry out, so at
 most one survives. A stream whose ``adaptable`` input is False admits no
 adapter and refuses any plan. The adapter's modules are the stream's stages,
-each checked on both of its sides.
+each checked on both of its sides, on the stream's ``platform`` (an
+``input_gen``'s ``ultra`` memory requires its UltraRAM).
 
 A ``BufferedStream`` owns a ``transport`` Decision over two nodes, ``direct``
 and ``fifo``, after its adapter. The FIFO candidate owns its ``depth`` and the
-FIFO's ``ram_style``; it is an identity stage presenting what arrives at it.
+FIFO's ``ram_style`` (on the stream's ``platform``); it is an identity stage
+presenting what arrives at it.
 The adapter and transport choices are keyed under the stream
 (``x.adapter``, ``w.transport``), so they belong to whoever owns the edge.
 Its ``netlist`` view is accepted when the stream is: its ends, plan and every
@@ -180,6 +182,7 @@ class StreamFifo(Space):
 
     tensor: Tensor = Param()
     arriving: BeatSequence = Param()
+    platform: Platform = Param()
 
     @derived
     def word_bits(self) -> int:
@@ -188,6 +191,7 @@ class StreamFifo(Space):
     buffer = FifoKernel(
         word_bits=word_bits,
         depth=Decision(domain=domain(accepts=lambda *, candidate: 2 <= candidate < 2**32)),
+        platform=platform,
     )
 
     @view
@@ -224,7 +228,7 @@ class Stream(LogicalStream):
     realizes, an output boundary as produced, neither with markers and both
     as a single pass. A stream with a known value has its ``source`` as its
     producer. ``platform`` is the target's, stated by whoever declares the stream:
-    its source reads it.
+    its source, its adapter's stages and its FIFO read it.
     """
 
     port: str = Param(required=False)
@@ -344,6 +348,7 @@ class Stream(LogicalStream):
         when=LogicalStream.adapting,
         tensor=LogicalStream.tensor,
         plan=LogicalStream.plan,
+        platform=platform,
     )
     adapter_stages = View(adapter.stages)
 
@@ -466,7 +471,9 @@ class BufferedStream(Stream):
     transport: _Direct | StreamFifo = Decision(
         {
             "direct": _Direct,
-            "fifo": StreamFifo(tensor=Stream.tensor, arriving=Stream.arriving),
+            "fifo": StreamFifo(
+                tensor=Stream.tensor, arriving=Stream.arriving, platform=Stream.platform
+            ),
         }
     )
     transport_stage = View(transport.stage)

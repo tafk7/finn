@@ -552,7 +552,7 @@ def kernel_workload(api, name: str, trials: int) -> dict[str, object]:
         aie=False,
     )
     if name == "fifo":
-        base = design_space(FifoKernel(word_bits=16, depth=32))
+        base = design_space(FifoKernel(word_bits=16, depth=32, platform=capabilities))
 
         def design_space(point, index):
             return point.with_choices(ram_style=("block", "distributed")[index % 2])

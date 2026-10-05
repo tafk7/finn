@@ -89,6 +89,11 @@ def test_a_partitions_weight_stream_reads_the_platform() -> None:
     assert isinstance(stream.source, MemStreamKernel)
     with pytest.raises(ValueError, match="clk2x-absent"):
         commit(root.point, {"w.source.memstream.pumped_memory": True})
+    # Its transport FIFO reads it too: Ultra96 has no UltraRAM.
+    fifo = {"w.transport": "fifo", "w.transport.fifo.buffer.depth": 4096}
+    with pytest.raises(ValueError, match="uram-absent"):
+        commit(root.point, {**fifo, "w.transport.fifo.buffer.ram_style": "ultra"})
+    assert commit(root.point, {**fifo, "w.transport.fifo.buffer.ram_style": "block"})
 
 
 def test_a_bare_kernel_states_its_platform() -> None:
