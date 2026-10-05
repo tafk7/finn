@@ -9,12 +9,28 @@ different files claiming one path or one module symbol are refused rather than
 left to whichever the tool reads first. Declared order is kept wherever the
 symbol relations (``provides``, ``requires``) do not contradict it: a file
 that requires nothing keeps its place.
+
+A header (``.svh``, ``.vh``) is staged like any source but never compiled on
+its own: a tool reads it where a source `includes it, from its directory.
 """
 
 from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from pathlib import PurePath
+
+HEADER_SUFFIXES = (".svh", ".vh")
+
+
+def is_header(path: str | PurePath) -> bool:
+    """Whether a staged source is a header: included, never compiled on its own."""
+    return PurePath(path).suffix in HEADER_SUFFIXES
+
+
+def include_directories(paths: Sequence[str | PurePath]) -> tuple[PurePath, ...]:
+    """The directories of the headers among ``paths``, each once, in order."""
+    return tuple(dict.fromkeys(PurePath(path).parent for path in paths if is_header(path)))
 
 
 class SourceError(Exception):
@@ -78,4 +94,11 @@ def ordered(files: Sequence[SourceFile]) -> tuple[SourceFile, ...]:
     return tuple(result)
 
 
-__all__ = ["SourceError", "SourceFile", "ordered"]
+__all__ = [
+    "HEADER_SUFFIXES",
+    "SourceError",
+    "SourceFile",
+    "include_directories",
+    "is_header",
+    "ordered",
+]

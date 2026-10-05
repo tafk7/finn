@@ -7,7 +7,13 @@ from __future__ import annotations
 
 import pytest
 
-from finn.kernels.artifacts.sources import SourceError, SourceFile, ordered
+from finn.kernels.artifacts.sources import (
+    SourceError,
+    SourceFile,
+    include_directories,
+    is_header,
+    ordered,
+)
 
 ADD_MULTI = SourceFile("add_multi.sv", "a", provides=("module:add_multi",))
 DOTP = SourceFile("dotp.sv", "c", provides=("module:dotp",), requires=("module:add_multi",))
@@ -52,3 +58,14 @@ def test_two_different_files_on_one_path_or_one_symbol_are_refused() -> None:
 def test_an_unresolved_requirement_is_refused() -> None:
     with pytest.raises(SourceError, match="unresolved"):
         ordered((DOTP,))
+
+
+def test_a_header_is_known_by_its_suffix_and_its_directory_is_searched_once() -> None:
+    staged = ("arith/add_multi.sv", "arith/a.svh", "arith/b.svh", "lib/c.vh", "top.v")
+    assert [path for path in staged if is_header(path)] == [
+        "arith/a.svh",
+        "arith/b.svh",
+        "lib/c.vh",
+    ]
+    assert [str(directory) for directory in include_directories(staged)] == ["arith", "lib"]
+    assert include_directories(("a.sv", "b.v")) == ()

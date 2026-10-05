@@ -65,6 +65,7 @@ from finn.kernels.artifacts.abi import (
     StandardProtocol,
 )
 from finn.kernels.artifacts.build import EmittedModule, emit_module
+from finn.kernels.artifacts.sources import include_directories
 from finn.kernels.configure import undecided
 from finn.util._toolchain import Selection
 from finn.util.basic import make_build_dir
@@ -268,11 +269,14 @@ def package_tcl(
 ) -> str:
     """The Vivado batch script that packages ``emitted`` in ``emitted.directory``'s parent."""
     top = emitted.entry_point
+    # A header is found where its includers read it from.
+    includes = " ".join(f"$project/src/{d}" for d in include_directories(emitted.sources))
     tcl = [
         "set project [file normalize [file dirname [info script]]]",
         f"create_project -force {top} $project/project -part {part}",
         *(f"add_files -norecurse $project/src/{path}" for path in emitted.sources),
         *(f"add_files -norecurse $project/src/{path}" for path in emitted.data),
+        *([f"set_property include_dirs [list {includes}] [current_fileset]"] if includes else []),
         f"set_property top {top} [current_fileset]",
         "update_compile_order -fileset sources_1",
     ]

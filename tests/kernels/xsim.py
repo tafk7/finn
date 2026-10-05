@@ -38,6 +38,7 @@ from finn.kernels.artifacts.abi import (
 )
 from finn.kernels.artifacts.build import emit_module
 from finn.kernels.artifacts.module import Module
+from finn.kernels.artifacts.sources import include_directories, is_header
 from kernels.helpers import finnlib_root, vivado_simulator
 
 _Test = TypeVar("_Test", bound=Callable[..., object])
@@ -88,7 +89,8 @@ def simulate(sources: Sequence[str | Path], testbench: str, directory: Path) -> 
             "xvlog",
             "--sv",
             "--relax",
-            *map(str, sources),
+            *(f"--include={directory}" for directory in include_directories(sources)),
+            *(str(source) for source in sources if not is_header(source)),
             str(vivado / "data/verilog/src/glbl.v"),
             str(bench),
         ],

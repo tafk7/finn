@@ -41,6 +41,7 @@ from finn.kernels.artifacts.rtl import (
     check_abi,
     extract,
 )
+from finn.kernels.artifacts.sources import include_directories, is_header
 from finn.util.resources import resource_path
 
 REPLAY_PARAMETERS = (("LEN", "2"), ("REP", "3"), ("W", "16"))
@@ -469,9 +470,12 @@ def _diagnosed(
     options.flags = ast.CompilationFlags.IgnoreUnknownModules
     options.paramOverrides = [f"{name}={value}" for name, value in parameters]
     compilation = ast.Compilation(pyslang.Bag([options]))
+    manager = pyslang.SourceManager()
+    for directory in include_directories(files):
+        manager.addUserDirectories(str(directory))
     for path in files:
-        compilation.addSyntaxTree(syntax.SyntaxTree.fromFile(str(path)))
-    manager = compilation.sourceManager
+        if not is_header(path):
+            compilation.addSyntaxTree(syntax.SyntaxTree.fromFile(str(path), manager))
     return {
         (
             str(diagnostic.code),
@@ -576,6 +580,53 @@ def test_a_generate_block_function_is_tolerated_only_inside_generate_blocks(
     declined = extract((path,), top)
     assert isinstance(declined, Declined)
     assert "hierarchical name is not allowed in a constant expression" in str(declined)
+
+
+#: Headers calling a generate block's function in a constant: from inside the block,
+#: and from module level.
+CALL_HEADERS = {
+    "call_inside.svh": "localparam int L = f();\n",
+    "call_outside.svh": "localparam int Q = g.f();\n",
+}
+INCLUDED_INSIDE = """
+module included_inside #(parameter int N = 3) (input logic [N-1:0] x);
+  if (N > 1) begin : g
+    function automatic int f(); return N + 1; endfunction
+    `include "call_inside.svh"
+  end
+endmodule
+"""
+INCLUDED_OUTSIDE = """
+module included_outside #(parameter int N = 3) (input logic [N-1:0] x);
+  if (1) begin : g
+    function automatic int f(); return N + 1; endfunction
+  end
+  `include "call_outside.svh"
+endmodule
+"""
+
+
+def test_a_header_is_searched_and_confined_by_the_construct_around_its_include(
+    tmp_path: Path,
+) -> None:
+    """A header is never parsed alone; its directory is searched for every `include,
+    and a diagnostic in it is tolerated only where its `include is."""
+
+    (include := tmp_path / "include").mkdir()
+    headers = []
+    for name, text in CALL_HEADERS.items():
+        headers.append(include / name)
+        headers[-1].write_text(text)
+    (sources := tmp_path / "rtl").mkdir()
+
+    path, top = _source(sources, INCLUDED_INSIDE)
+    assert dict(_module(extract((*headers, path), top)).parameters) == {"N": 3}
+
+    path, top = _source(sources, INCLUDED_OUTSIDE)
+    declined = extract((*headers, path), top)
+    assert isinstance(declined, Declined)
+    assert "cannot call a function declared inside a generate block" in str(declined)
+    assert "call_outside.svh" in str(declined)
 
 
 def test_use_before_declaration_declines(tmp_path: Path) -> None:

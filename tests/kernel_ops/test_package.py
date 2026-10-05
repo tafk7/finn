@@ -161,6 +161,24 @@ def test_the_script_packages_sources_or_a_checkpoint() -> None:
     assert vlnv("sdp_1") == "xilinx_finn:finn:sdp_1:1.0"
 
 
+def test_the_script_searches_the_headers_directories_and_only_with_headers() -> None:
+    def script(sources: tuple[str, ...]) -> str:
+        emitted = EmittedModule("top__0", Path("/p/src"), sources, ())
+        return package_tcl(
+            emitted,
+            PORTS,
+            part="xczu3eg-sbva484-1-e",
+            clock_ns=5.0,
+            ip_name="sdp_1",
+            run_synth=False,
+        )
+
+    with_headers = script(("arith/s.svh", "arith/a.sv", "top__0.sv"))
+    assert "add_files -norecurse $project/src/arith/s.svh" in with_headers
+    assert "set_property include_dirs [list $project/src/arith] [current_fileset]" in with_headers
+    assert "include_dirs" not in script(("a.sv", "top__0.sv"))
+
+
 def test_the_partition_packages_its_nodes_choices() -> None:
     _, point = configured(model := kernel_model())
     module = PackagePartition("sdp_1").module(model)
