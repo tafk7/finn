@@ -77,17 +77,21 @@ def placed(
     tiled = weights_tile() if weights_form is None else weights_form
 
     class Placed(Space):
-        a = Stream(tensor=Tensor(x, ScalarEncoding(A)), port="in0_V")
-        w_s = Stream(tensor=Tensor(w, ScalarEncoding(W)), adaptable=adaptable)
-        r = Stream(tensor=Tensor(y, ScalarEncoding(R)), port="out0_V")
-        weights = MemStreamKernel(dtype=W, form=tiled, contents=weight_values(w), output_stream=w_s)
+        a = Stream(tensor=Tensor(x, ScalarEncoding(A)), port="in0_V", platform=FULL_DSP48E2)
+        w_s = Stream(
+            platform=FULL_DSP48E2, tensor=Tensor(w, ScalarEncoding(W)), adaptable=adaptable
+        )
+        r = Stream(tensor=Tensor(y, ScalarEncoding(R)), port="out0_V", platform=FULL_DSP48E2)
+        weights = MemStreamKernel(
+            platform=FULL_DSP48E2, dtype=W, form=tiled, contents=weight_values(w), output_stream=w_s
+        )
         compute = core(
-            platform=FULL_DSP58,
             form=form,
             result_dtype=R,
             x_stream=a,
             w_stream=w_s,
             y_stream=r,
+            platform=FULL_DSP58,
         )
 
     return commit(
@@ -214,9 +218,19 @@ def eltwise_between(rhs_shape: tuple[int, ...], rhs_dtype: str = "INT4") -> Any:
     int4 = DataType["INT4"]
 
     class Added(Space):
-        lhs = Stream(tensor=Tensor((3, 4), ScalarEncoding(int4)), port="in0_V")
-        rhs = Stream(tensor=Tensor(rhs_shape, ScalarEncoding(DataType[rhs_dtype])), port="in1_V")
-        out = Stream(tensor=Tensor((3, 4), ScalarEncoding(DataType["INT5"])), port="out0_V")
+        lhs = Stream(
+            platform=FULL_DSP48E2, tensor=Tensor((3, 4), ScalarEncoding(int4)), port="in0_V"
+        )
+        rhs = Stream(
+            tensor=Tensor(rhs_shape, ScalarEncoding(DataType[rhs_dtype])),
+            port="in1_V",
+            platform=FULL_DSP48E2,
+        )
+        out = Stream(
+            tensor=Tensor((3, 4), ScalarEncoding(DataType["INT5"])),
+            port="out0_V",
+            platform=FULL_DSP48E2,
+        )
         add = EltwiseKernel(
             operation="ADD",
             pe=2,

@@ -13,7 +13,7 @@ result (``finn.platform``, read by ``finn.custom_op.kernels.base.target``).
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from enum import Enum
 from fnmatch import fnmatch
 
@@ -45,12 +45,12 @@ def dsp_widths(target: object) -> tuple[int, int, int]:
 
 @dataclass(frozen=True, kw_only=True)
 class Platform:
-    """What the target supplies to kernels: its clock period and its capabilities. The
-    defaults refuse nothing (a kernel built without a stated platform, in a harness
-    or a test); a platform read from a model states every field.
+    """What the target supplies to kernels: its clock period and its capabilities,
+    every field stated. A kernel that reads it requires it: there is no default
+    platform, so a kernel built in a harness or a test states the one it means.
 
     - ``period_ns``: the clock period the kernels must meet (``ap_clk``);
-    - ``dsp``: the DSP block;
+    - ``dsp``: the DSP block (``None``: none stated, which a DSP core refuses);
     - ``uram``: the device has UltraRAM;
     - ``uram_init``: an UltraRAM takes initial contents (UltraScale+ ignores its
       INIT and builds block RAM: issue ``uram-initialization``);
@@ -60,14 +60,14 @@ class Platform:
     - ``aie``: the device has AI Engines.
     """
 
-    period_ns: float = 5.0
-    dsp: DspBlock | None = None
-    uram: bool = True
-    uram_init: bool = True
-    clk2x: bool = True
-    control_ports: int = 1
-    memory_ports: int = 0
-    aie: bool = False
+    period_ns: float
+    dsp: DspBlock | None
+    uram: bool
+    uram_init: bool
+    clk2x: bool
+    control_ports: int
+    memory_ports: int
+    aie: bool
 
 
 @dataclass(frozen=True)
@@ -106,8 +106,10 @@ DEVICES: tuple[tuple[str, DspBlock, bool, bool, bool], ...] = (
 # take no AXI-Lite on a compute partition (packaging P7, P8); the shells' memory
 # ports are their IODMAs', none a compute partition's. The Zynq shell's AXI
 # interconnect has at most 64 masters, two of them the IODMAs'. Without a shell (a
-# stitched IP, a harness) the defaults refuse nothing.
-SHELLS: dict[str, tuple[bool, int, int]] = {
+# stitched IP, a harness: ``None``) nothing is stated away: a doubled clock, one
+# AXI-Lite port, no memory port.
+SHELLS: dict[str | None, tuple[bool, int, int]] = {
+    None: (True, 1, 0),
     "vivado_zynq": (False, 62, 0),
     "vitis_alveo": (False, 0, 0),
     "slash_alveo": (False, 0, 0),
@@ -122,16 +124,20 @@ def resolve_target(part: str, period_ns: float, shell: str | None = None) -> Tar
             break
     else:
         raise ValueError(f"no capability row for part {part!r} (finn.kernels.target.DEVICES)")
+    if shell not in SHELLS:
+        named = sorted(name for name in SHELLS if name is not None)
+        raise ValueError(f"no capability row for shell {shell!r} (one of {named})")
+    clk2x, control_ports, memory_ports = SHELLS[shell]
     platform = Platform(
-        period_ns=float(period_ns), dsp=dsp, uram=uram, uram_init=uram_init, aie=aie
+        period_ns=float(period_ns),
+        dsp=dsp,
+        uram=uram,
+        uram_init=uram_init,
+        clk2x=clk2x,
+        control_ports=control_ports,
+        memory_ports=memory_ports,
+        aie=aie,
     )
-    if shell is not None:
-        if shell not in SHELLS:
-            raise ValueError(f"no capability row for shell {shell!r} (one of {sorted(SHELLS)})")
-        clk2x, control_ports, memory_ports = SHELLS[shell]
-        platform = replace(
-            platform, clk2x=clk2x, control_ports=control_ports, memory_ports=memory_ports
-        )
     return Target(part, platform)
 
 

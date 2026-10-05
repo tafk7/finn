@@ -177,19 +177,40 @@ from finn.kernels.transport import AxiStream
 from finn.kernels.streams import BufferedStream, Stream
 from qonnx.core.datatype import DataType
 
-PLATFORM = Platform(dsp=DspBlock.DSP48E2)
+PLATFORM = Platform(
+    period_ns=5.0,
+    dsp=DspBlock.DSP48E2,
+    uram=True,
+    uram_init=True,
+    clk2x=True,
+    control_ports=1,
+    memory_ports=0,
+    aie=False,
+)
 
 
 class Placed(Space):
-    x = Stream(tensor=Tensor((1, 2), ScalarEncoding(DataType["INT3"])), port="in0_V")
-    w = Stream(tensor=Tensor((2, 2), ScalarEncoding(DataType["INT3"])), port="in1_V")
-    y = Stream(tensor=Tensor((1, 2), ScalarEncoding(DataType["INT8"])), port="out0_V")
-    compute = PackedDotpKernel(
+    x = Stream(
+        tensor=Tensor((1, 2), ScalarEncoding(DataType["INT3"])),
+        port="in0_V",
         platform=PLATFORM,
+    )
+    w = Stream(
+        tensor=Tensor((2, 2), ScalarEncoding(DataType["INT3"])),
+        port="in1_V",
+        platform=PLATFORM,
+    )
+    y = Stream(
+        tensor=Tensor((1, 2), ScalarEncoding(DataType["INT8"])),
+        port="out0_V",
+        platform=PLATFORM,
+    )
+    compute = PackedDotpKernel(
         result_dtype=DataType["INT8"],
         x_stream=x,
         w_stream=w,
         y_stream=y,
+        platform=PLATFORM,
     )
 
 
@@ -219,9 +240,9 @@ for memory in ("none", "memstream"):
         facts["weights"] = ((1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (0, 0, 0, 1))
 
     class Placed(Root):
-        x = Stream(tensor=Tensor((2, 4), INT3), port="in0_V")
-        w = BufferedStream(tensor=Tensor((4, 4), INT3), port="in1_V")
-        y = Stream(tensor=Tensor((2, 4), INT8), port="out0_V")
+        x = Stream(tensor=Tensor((2, 4), INT3), port="in0_V", platform=PLATFORM)
+        w = BufferedStream(tensor=Tensor((4, 4), INT3), port="in1_V", platform=PLATFORM)
+        y = Stream(tensor=Tensor((2, 4), INT8), port="out0_V", platform=PLATFORM)
         matmul = MatMulKernel(**facts, x_stream=x, w_stream=w, y_stream=y)
         w.contents = matmul.weight_values
 

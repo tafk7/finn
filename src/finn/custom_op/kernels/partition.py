@@ -8,7 +8,8 @@
 - **streams**, one per ONNX tensor, in node order: a node's graph inputs, the
   parameter streams it owns (named after the initializer, the kernel's view),
   its outputs. A stream's tensor is the graph's value_info and annotation (D6),
-  a MatMul's weight operand a ``BufferedStream``. Only the subgraph's ONNX
+  its platform the model's target's, a MatMul's weight operand a
+  ``BufferedStream``. Only the subgraph's ONNX
   inputs and outputs are boundaries, named by the shell's convention
   ``s_axis_<i>`` and ``m_axis_<i>`` (D4): a stream refuses a boundary no port
   names (``stream-boundary``);
@@ -41,6 +42,7 @@ from finn.custom_op.kernels.base import (
     rows,
     shape,
     value_type,
+    target,
 )
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.base import Kernel
@@ -99,6 +101,7 @@ def partition_root(model: Any, nodes: Iterable[Any], *, name: str = "partition")
     ports = {tensor: f"s_axis_{index}" for index, tensor in enumerate(inputs)}
     ports |= {tensor: f"m_axis_{index}" for index, tensor in enumerate(outputs)}
     weights = {node.input[1] for node, op in zip(nodes, ops) if op.op_type == "MatMul"}
+    platform = target(model).platform
 
     members: dict[str, object] = {}
     streams: dict[str, Stream] = {}
@@ -113,7 +116,7 @@ def partition_root(model: Any, nodes: Iterable[Any], *, name: str = "partition")
         carried = Tensor(dims, ScalarEncoding(datatype(model, tensor, label)))
         kind = BufferedStream if tensor in weights else Stream
         port: dict[str, Any] = {"port": ports[tensor]} if tensor in ports else {}
-        add(tensor, kind(tensor=carried, **port))
+        add(tensor, kind(tensor=carried, platform=platform, **port))
 
     # Streams in node order: a node's graph inputs, the parameter streams it owns, its outputs.
     for node, op in zip(nodes, ops):

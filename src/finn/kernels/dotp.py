@@ -91,7 +91,7 @@ class DotpAxiKernel(Kernel):
     # The accumulator encoding it produces: its parent's choice (MatMul binds its
     # result type), so that it is known before the results stream exists.
     result_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
-    platform: Platform = Param(default=Platform())
+    platform: Platform = Param()
     # The streams dotp sits on: reference inputs, each a Stream placed beside it.
     x_stream: Stream = Param(required=False)
     w_stream: Stream = Param(required=False)

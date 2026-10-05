@@ -39,7 +39,13 @@ MATMUL = dict(
 
 
 def memory(**changes):
-    facts = {"dtype": DataType["INT3"], "form": tile(4, 4, 2, 2), "contents": WEIGHTS, **changes}
+    facts = {
+        "dtype": DataType["INT3"],
+        "form": tile(4, 4, 2, 2),
+        "contents": WEIGHTS,
+        "platform": FULL_DSP48E2,
+        **changes,
+    }
     return design_space(MemStreamKernel(**facts)).with_choices(
         ram_style="block", pumped_memory=False
     )
@@ -64,7 +70,9 @@ def test_the_image_is_the_consumers_order_in_a_content_named_init_file():
 
 def test_a_pumped_memory_stores_half_words_low_first():
     point = design_space(
-        MemStreamKernel(dtype=DataType["INT3"], form=tile(4, 4, 2, 2), contents=WEIGHTS)
+        MemStreamKernel(
+            platform=FULL_DSP48E2, dtype=DataType["INT3"], form=tile(4, 4, 2, 2), contents=WEIGHTS
+        )
     ).with_choices(ram_style="auto", pumped_memory=True)
     # 12-bit words as 6-bit halves: 0x22C -> 0x2C, 0x08.
     assert point.init_file.data.split(b"\n")[:4] == [b"2c", b"08", b"3e", b"1a"]

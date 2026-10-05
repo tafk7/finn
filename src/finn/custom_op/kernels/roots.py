@@ -19,8 +19,8 @@ and it has no source. Nothing is pinned.
 
 The platform is a fact too: the target's capabilities and its clock period
 (``target(model)``), bound
-to the kernels and to a stream with a source, so the requirements of their value
-cases (``requires``) read the device the model is built for. The DSP block is
+to the kernels and to every stream, so the requirements of their value cases
+(``requires``) read the device the model is built for. The DSP block is
 the platform's (``platform.dsp``), which the compute cores read.
 """
 
@@ -70,8 +70,8 @@ class MatMulNode(Kernel):
         tensor: Tensor = cast(Any, self).matmul.result_tensor
         return tensor
 
-    x = Stream(tensor=x_tensor, port="in0_V")
-    y = Stream(tensor=y_tensor, port="out0_V")
+    x = Stream(tensor=x_tensor, port="in0_V", platform=platform)
+    y = Stream(tensor=y_tensor, port="out0_V", platform=platform)
 
 
 class StoredMatMulNode(MatMulNode):
@@ -101,7 +101,7 @@ class StreamedMatMulNode(MatMulNode):
     """Weights a graph tensor: an edge like any other, so the weight stream has no source."""
 
     id = "finn.custom_op.kernels.node.matmul.streamed"
-    w = BufferedStream(tensor=MatMulNode.w_tensor, port="in1_V")
+    w = BufferedStream(tensor=MatMulNode.w_tensor, port="in1_V", platform=MatMulNode.platform)
     matmul = MatMulKernel(
         m=MatMulNode.m,
         n=MatMulNode.n,
@@ -134,8 +134,8 @@ class ThresholdingNode(Kernel):
     def y_tensor(self) -> Tensor:
         return Tensor(self.x_tensor.shape, ScalarEncoding(self.activate.result_dtype))
 
-    x = Stream(tensor=x_tensor, port="in0_V")
-    y = Stream(tensor=y_tensor, port="out0_V")
+    x = Stream(tensor=x_tensor, port="in0_V", platform=platform)
+    y = Stream(tensor=y_tensor, port="out0_V", platform=platform)
     activate = ThresholdingAxiKernel(
         input_dtype=input_dtype,
         threshold_dtype=threshold_dtype,

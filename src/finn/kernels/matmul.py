@@ -86,7 +86,6 @@ from finn.kernels.dotp import Int8Dsp58DotpKernel, PackedDotpKernel
 from finn.kernels.streams import Stream
 from finn.kernels.target import Platform
 
-
 _CARRIED = (
     ("x_stream", "activation_tensor"),
     ("w_stream", "weight_tensor"),
@@ -129,7 +128,7 @@ class MatMulKernel(Kernel):
     # Several weight sets, one selected per row by an index on ``in2_V``;
     # ``weights`` then holds one operand per set.
     weight_sets: int = Param(default=1)
-    platform: Platform = Param(default=Platform())
+    platform: Platform = Param()
 
     @derived
     def known(self) -> bool:

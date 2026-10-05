@@ -276,6 +276,14 @@ def test_the_core_refuses_before_its_folding_factors_are_chosen():
     assert open_factors.x.element.bits == 3
 
 
+def test_the_platform_is_a_required_fact():
+    facts = parameters()
+    facts.pop("platform")
+    # A bare call is legal; the missing formal is refused when design_space() prepares it.
+    with pytest.raises(DefinitionError, match="compute.platform is not supplied"):
+        helpers.placed_dotp(PackedDotpKernel, **facts)
+
+
 @pytest.mark.parametrize("bits", (4, 9, 12, 58))
 def test_the_results_stream_selects_accumulator_capacity(bits):
     point = kernel(result_dtype=DataType[f"INT{bits}"])

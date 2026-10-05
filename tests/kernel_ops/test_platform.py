@@ -17,21 +17,21 @@ from typing import Any
 import pytest
 from qonnx.core.modelwrapper import ModelWrapper
 
-from finn.core.space import Rejected, design_space, inspection
+from finn.core.space import DefinitionError, Rejected, design_space, inspection
 from finn.custom_op.kernels.base import KernelOpError, write_target
 from finn.custom_op.kernels.partition import partition_root
 from finn.custom_op.kernels.roots import StoredMatMulNode
 from finn.kernels.configure import commit
-from finn.kernels.dotp import PackedDotpKernel
 from finn.kernels.matmul import MatMulKernel
 from finn.kernels.memstream import MemStreamKernel
-from finn.kernels.target import DspBlock, Platform, Target, resolve_target
+from finn.kernels.target import DspBlock, Target, resolve_target
 from finn.transformation.kernels import InferKernelTensors
 from kernel_ops.models import matmul_model, thresholding_model
+from kernels.helpers import FULL_DSP58
 
 ZYNQ = resolve_target("xczu3eg-sbva484-1-e", 5.0, "vivado_zynq")  # Ultra96 in its shell
 ALVEO = resolve_target("xcu55c-fsvh2892-2L-e", 5.0, "vitis_alveo")
-URAM = Target("a part with UltraRAM it initializes", Platform(period_ns=5.0, dsp=DspBlock.DSP58))
+URAM = Target("a part with UltraRAM it initializes", FULL_DSP58)
 
 
 def targeted(model: ModelWrapper, target: Target) -> ModelWrapper:
@@ -91,14 +91,11 @@ def test_a_partitions_weight_stream_reads_the_platform() -> None:
         commit(root.point, {"w.source.memstream.pumped_memory": True})
 
 
-def test_a_bare_kernel_without_a_platform_has_no_dsp_block() -> None:
+def test_a_bare_kernel_states_its_platform() -> None:
     formals = op(matmul_model()).facts().formals()
     facts = {name: formals[name] for name in ("m", "n", "k", "activation_dtype", "weights_dtype")}
-    bare = design_space(MatMulKernel(**facts, weights=formals["weights"]))
-    assert bare.platform == Platform()
-    answer = commit(bare, {"compute": "packed"}).compute.query(PackedDotpKernel.dsp)
-    assert isinstance(answer, Rejected)
-    assert [finding.code for finding in answer.findings] == ["dotp-dsp"]
+    with pytest.raises(DefinitionError, match="platform is not supplied"):
+        design_space(MatMulKernel(**facts, weights=formals["weights"]))
 
 
 def test_a_platform_without_a_dsp_block_is_refused_by_the_cores() -> None:

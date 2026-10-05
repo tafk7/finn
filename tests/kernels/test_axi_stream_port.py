@@ -90,7 +90,9 @@ class Pool(Kernel):
 
 
 def stream(shape: tuple[int, ...], dtype: str, port: str) -> KernelStream:
-    return KernelStream(tensor=Tensor(shape, ScalarEncoding(DataType[dtype])), port=port)
+    return KernelStream(
+        tensor=Tensor(shape, ScalarEncoding(DataType[dtype])), port=port, platform=FULL_DSP58
+    )
 
 
 def pool(x_shape: tuple[int, ...] = (1, 4, 8), y_shape: tuple[int, ...] = (1, 8)) -> Space:

@@ -21,7 +21,7 @@ from finn.core.space import inspection
 from finn.custom_op.kernels.base import KernelOpError, write_target
 from finn.custom_op.kernels.partition import partition_root
 from finn.kernels.configure import undecided
-from finn.kernels.target import DspBlock, Platform, Target
+from finn.kernels.target import Target
 from finn.transformation.kernels import (
     CommitKernelChoices,
     InferKernelTensors,
@@ -29,8 +29,9 @@ from finn.transformation.kernels import (
     ToKernelOps,
 )
 from kernel_ops.models import TARGET, chain_source
+from kernels.helpers import FULL_DSP48E2
 
-URAM = Target("a part with UltraRAM it initializes", Platform(period_ns=5.0, dsp=DspBlock.DSP48E2))
+URAM = Target("a part with UltraRAM it initializes", FULL_DSP48E2)
 
 
 def kernel_model(target: Target = TARGET) -> ModelWrapper:

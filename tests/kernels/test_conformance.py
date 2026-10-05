@@ -61,7 +61,7 @@ from kernels.conformance import (
     samples,
 )
 from kernels.xsim import requires_xsim
-from kernels.helpers import FULL_DSP58, full_platform
+from kernels.helpers import FULL_DSP58, full_platform, FULL_DSP48E2
 
 
 def tensor(shape: tuple[int, ...], dtype: str) -> Tensor:
@@ -119,6 +119,7 @@ THRESHOLDING_FACTS = dict(
     threshold_dtype=DataType["INT4"],
     thresholds=THRESHOLDS,
     bias=0,
+    platform=FULL_DSP48E2,
 )
 # Its memories: of the two stages (N = 3), the deeper in block RAM, the other distributed.
 THRESHOLDING_CHOICES = {
@@ -296,7 +297,7 @@ def memstream() -> dict[str, Any]:
             {"form": tile(*STORED, 2, 3)},
         ),
         choices={"ram_style": "auto", "pumped_memory": False},
-        facts={"dtype": DataType["INT4"], "contents": CONTENTS},
+        facts={"dtype": DataType["INT4"], "contents": CONTENTS, "platform": FULL_DSP48E2},
     )
 
 

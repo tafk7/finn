@@ -30,7 +30,7 @@ from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from functools import cache
-from typing import Any, TypeVar
+from typing import Any, TypeVar, cast
 
 from finn import resources
 
@@ -68,8 +68,19 @@ S = TypeVar("S", bound=Space)
 
 def full_platform(dsp: DspBlock, *, period_ns: float = 5.0) -> Platform:
     """The platform a bare-kernel test means when it is not about the platform: ``dsp``
-    its DSP block, a ``period_ns`` clock (5 ns: 200 MHz), and every capability."""
-    return Platform(period_ns=period_ns, dsp=dsp)
+    its DSP block, a ``period_ns`` clock (5 ns: 200 MHz), and every capability (UltraRAM
+    that takes initial contents, a doubled clock, a control port; no memory port and
+    no AI Engine, which no kernel reads)."""
+    return Platform(
+        period_ns=period_ns,
+        dsp=dsp,
+        uram=True,
+        uram_init=True,
+        clk2x=True,
+        control_ports=1,
+        memory_ports=0,
+        aie=False,
+    )
 
 
 FULL_DSP48E2 = full_platform(DspBlock.DSP48E2)
@@ -115,13 +126,25 @@ def placed_dotp(
     n = outputs if outputs is not None else (pe if isinstance(pe, int) and pe > 0 else 1)
     k = reduction if reduction is not None else (simd if isinstance(simd, int) and simd > 0 else 1)
     x_shape = (rows, k, n) if form is Form.DEPTHWISE else (rows, k)
+    # The streams are on the core's platform; a test that omits it gets FULL_DSP48E2's.
+    platform = cast(Platform, facts.get("platform", FULL_DSP48E2))
 
     class Placed(Space):
-        x = Stream(tensor=Tensor(x_shape, ScalarEncoding(activation_dtype)), port="in0_V")
-        w = Stream(
-            tensor=Tensor((k, n), ScalarEncoding(weights_dtype, weights_range)), port="in1_V"
+        x = Stream(
+            tensor=Tensor(x_shape, ScalarEncoding(activation_dtype)),
+            port="in0_V",
+            platform=platform,
         )
-        y = Stream(tensor=Tensor((rows, n), ScalarEncoding(result_dtype)), port="out0_V")
+        w = Stream(
+            tensor=Tensor((k, n), ScalarEncoding(weights_dtype, weights_range)),
+            port="in1_V",
+            platform=platform,
+        )
+        y = Stream(
+            tensor=Tensor((rows, n), ScalarEncoding(result_dtype)),
+            port="out0_V",
+            platform=platform,
+        )
         compute = family(x_stream=x, w_stream=w, y_stream=y, result_dtype=result_dtype, **facts)
 
     choices = {
@@ -190,10 +213,12 @@ def matmul_root(family: type[MatMulKernel]) -> type[Root]:
         def set_tensor(self) -> Tensor:
             return self.matmul.set_tensor
 
-        x = Stream(tensor=x_tensor, port="in0_V")
-        set = Stream(tensor=set_tensor, port="in2_V", when=several)
-        w = BufferedStream(tensor=w_tensor, sets=weight_sets, index=set, port="in1_V")
-        y = Stream(tensor=y_tensor, port="out0_V")
+        x = Stream(tensor=x_tensor, port="in0_V", platform=platform)
+        set = Stream(tensor=set_tensor, port="in2_V", when=several, platform=platform)
+        w = BufferedStream(
+            tensor=w_tensor, sets=weight_sets, index=set, port="in1_V", platform=platform
+        )
+        y = Stream(tensor=y_tensor, port="out0_V", platform=platform)
         matmul = family(
             m=m,
             n=n,

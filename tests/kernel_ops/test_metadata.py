@@ -96,7 +96,7 @@ def test_a_malformed_key_is_refused() -> None:
 def test_a_target_that_is_not_one_writes_nothing() -> None:
     model = holder()
     with pytest.raises(KernelOpError, match="states its DSP block"):
-        write_target(model, Target("xczu3eg-sbva484-1-e", Platform(period_ns=5.0)))
+        write_target(model, Target("xczu3eg-sbva484-1-e", replace(TARGET.platform, dsp=None)))
     with pytest.raises(KernelOpError, match="period_ns: cannot store 0.0"):
         write_target(model, Target("xczu3eg-sbva484-1-e", replace(TARGET.platform, period_ns=0.0)))
     assert entries(model) == {}
@@ -110,7 +110,14 @@ def test_conversion_states_the_target_it_is_given() -> None:
 def test_the_capability_tables() -> None:
     ultra96 = resolve_target("xczu3eg-sbva484-1-e", 5.0)
     assert ultra96.platform == Platform(
-        period_ns=5.0, dsp=DspBlock.DSP48E2, uram=False, uram_init=False
+        period_ns=5.0,
+        dsp=DspBlock.DSP48E2,
+        uram=False,
+        uram_init=False,
+        clk2x=True,
+        control_ports=1,
+        memory_ports=0,
+        aie=False,
     )
     zcu104 = resolve_target("xczu7ev-ffvc1156-2-e", 5.0, "vivado_zynq").platform
     # UltraScale+ has UltraRAM here but ignores its INIT; the Zynq shell drives no 2x clock.

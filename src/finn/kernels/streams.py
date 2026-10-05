@@ -122,7 +122,6 @@ from finn.kernels.datatypes.semantics import (
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.target import Platform
 
-
 SOURCES: dict[str, type[Space] | Space] = {"memstream": MemStreamKernel}
 """The kernels that can drive a stream with its known value: a memory; later a fetcher
 from memory-mapped memory, a loop's memory, a source reloadable over AXI-Lite."""
@@ -224,7 +223,8 @@ class Stream(LogicalStream):
     the AXIS port ``port``: an input boundary without the replay its receiver
     realizes, an output boundary as produced, neither with markers and both
     as a single pass. A stream with a known value has its ``source`` as its
-    producer.
+    producer. ``platform`` is the target's, stated by whoever declares the stream:
+    its source reads it.
     """
 
     port: str = Param(required=False)
@@ -232,7 +232,7 @@ class Stream(LogicalStream):
     contents: IntegerTensor = Param(semantics=INTEGER_TENSOR, required=False)
     sets: int = Param(default=1)
     index: LogicalStream = Param(required=False)
-    platform: Platform = Param(default=Platform())
+    platform: Platform = Param()
     # Whether the stream carries a known value, which its source drives: where nothing
     # supplies ``contents``, the source never applies and its candidates are not compiled.
     valued = supplied(contents)

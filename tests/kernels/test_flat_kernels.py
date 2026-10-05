@@ -68,6 +68,7 @@ def threshold(*, use_axilite=False, deep_pipeline=False, pe=1, **changes):
         threshold_dtype=DataType["INT5"],
         thresholds=(((-2, 0, 3), (-1, 1, 4)),),
         bias=-1,
+        platform=FULL_DSP48E2,
     )
     facts.update(changes)
     factors = {} if pe is None else {"pe": pe, "ram_style": "auto", "ultra_stages": 0}

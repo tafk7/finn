@@ -32,7 +32,7 @@ from finn.dataflow.traversal import LevelEnd, BeatSequence, vector_major
 from finn.kernels.transport import STREAM_CONTRACT, AxiStream, StreamContract
 from finn.kernels.base import PORT, Kernel
 from finn.kernels.streams import Stream, boundary_contract
-from kernels.helpers import Root
+from kernels.helpers import FULL_DSP48E2, Root
 
 INT4 = ScalarEncoding(DataType["INT4"])
 PRODUCED = vector_major((4,), 2)
@@ -45,20 +45,22 @@ class Constants(Root):
     first_tensor: Tensor = Param()
     second_tensor: Tensor = Param()
     # Each stream has only its producer: it is a boundary, named by its port.
-    first = Stream(tensor=first_tensor, port="out0_V")
-    second = Stream(tensor=second_tensor, port="out1_V")
+    first = Stream(tensor=first_tensor, port="out0_V", platform=FULL_DSP48E2)
+    second = Stream(tensor=second_tensor, port="out1_V", platform=FULL_DSP48E2)
 
     first_source = MemStreamKernel(
         dtype=DataType["INT4"],
         form=PRODUCED,
         contents=(1, 2, 3, 4),
         output_stream=first,
+        platform=FULL_DSP48E2,
     )
     second_source = MemStreamKernel(
         dtype=DataType["INT4"],
         form=PRODUCED,
         contents=(5, 6, 7, -8),
         output_stream=second,
+        platform=FULL_DSP48E2,
     )
 
 
@@ -156,7 +158,7 @@ class Replaying(Space):
 
 def test_a_boundary_presents_its_internal_end_without_the_replay_the_receiver_realizes():
     class Receiver(Space):
-        edge = Stream(tensor=Tensor((2, 4), INT4), port="in0_V")
+        edge = Stream(tensor=Tensor((2, 4), INT4), port="in0_V", platform=FULL_DSP48E2)
         reader = Replaying(input_stream=edge)
 
     ends = design_space(Receiver()).edge.endpoints
@@ -170,12 +172,20 @@ def test_a_boundary_presents_its_internal_end_without_the_replay_the_receiver_re
 def test_two_producers_on_one_stream_are_refused_by_the_stream():
     class Clash(Space):
         tensor: Tensor = Param()
-        shared = Stream(tensor=tensor, port="out0_V")
+        shared = Stream(tensor=tensor, port="out0_V", platform=FULL_DSP48E2)
         a = MemStreamKernel(
-            dtype=DataType["INT4"], form=PRODUCED, contents=(1, 2, 3, 4), output_stream=shared
+            dtype=DataType["INT4"],
+            form=PRODUCED,
+            contents=(1, 2, 3, 4),
+            output_stream=shared,
+            platform=FULL_DSP48E2,
         )
         b = MemStreamKernel(
-            dtype=DataType["INT4"], form=PRODUCED, contents=(1, 2, 3, 4), output_stream=shared
+            dtype=DataType["INT4"],
+            form=PRODUCED,
+            contents=(1, 2, 3, 4),
+            output_stream=shared,
+            platform=FULL_DSP48E2,
         )
 
     point = design_space(Clash(tensor=VECTOR))
@@ -188,9 +198,13 @@ def test_two_producers_on_one_stream_are_refused_by_the_stream():
 def test_a_boundary_stream_needs_its_port_name():
     class Unnamed(Space):
         tensor: Tensor = Param()
-        out = Stream(tensor=tensor)
+        out = Stream(tensor=tensor, platform=FULL_DSP48E2)
         source = MemStreamKernel(
-            dtype=DataType["INT4"], form=PRODUCED, contents=(1, 2, 3, 4), output_stream=out
+            dtype=DataType["INT4"],
+            form=PRODUCED,
+            contents=(1, 2, 3, 4),
+            output_stream=out,
+            platform=FULL_DSP48E2,
         )
 
     refused = design_space(Unnamed(tensor=VECTOR)).out.query(Stream.netlist)
@@ -216,7 +230,9 @@ class TensorReadingProducer(Space):
     """Builds its port contract from the stream's tensor, as every kernel does."""
 
     output_stream: ProducerTensorStream = Param()
-    source = MemStreamKernel(dtype=DataType["INT4"], form=PRODUCED, contents=(1, 2, 3, 4))
+    source = MemStreamKernel(
+        platform=FULL_DSP48E2, dtype=DataType["INT4"], form=PRODUCED, contents=(1, 2, 3, 4)
+    )
 
     @view(semantics=STREAM_CONTRACT)
     def port(self) -> StreamContract:

@@ -47,24 +47,32 @@ X = tuple(tuple((5 * r + 3 * k) % 8 - 4 for k in range(INPUTS)) for r in range(R
 
 def layered(*, adaptable: bool = True):
     class Layered(Root):
-        x = Stream(tensor=Tensor((ROWS, INPUTS), ScalarEncoding(A)), port="in0_V")
-        w1 = Stream(tensor=Tensor((INPUTS, HIDDEN), ScalarEncoding(W)))
-        h = Stream(tensor=Tensor((ROWS, HIDDEN), ScalarEncoding(H)), adaptable=adaptable)
-        w2 = Stream(tensor=Tensor((HIDDEN, OUTPUTS), ScalarEncoding(W)))
-        y = Stream(tensor=Tensor((ROWS, OUTPUTS), ScalarEncoding(Y)), port="out0_V")
-        first = PackedDotpKernel(
+        x = Stream(
+            platform=FULL_DSP48E2, tensor=Tensor((ROWS, INPUTS), ScalarEncoding(A)), port="in0_V"
+        )
+        w1 = Stream(tensor=Tensor((INPUTS, HIDDEN), ScalarEncoding(W)), platform=FULL_DSP48E2)
+        h = Stream(
+            tensor=Tensor((ROWS, HIDDEN), ScalarEncoding(H)),
+            adaptable=adaptable,
             platform=FULL_DSP48E2,
+        )
+        w2 = Stream(tensor=Tensor((HIDDEN, OUTPUTS), ScalarEncoding(W)), platform=FULL_DSP48E2)
+        y = Stream(
+            platform=FULL_DSP48E2, tensor=Tensor((ROWS, OUTPUTS), ScalarEncoding(Y)), port="out0_V"
+        )
+        first = PackedDotpKernel(
             result_dtype=H,
             x_stream=x,
             w_stream=w1,
             y_stream=h,
+            platform=FULL_DSP48E2,
         )
         second = PackedDotpKernel(
-            platform=FULL_DSP48E2,
             result_dtype=Y,
             x_stream=h,
             w_stream=w2,
             y_stream=y,
+            platform=FULL_DSP48E2,
         )
 
         # One pass of each layer's weights, in the order that layer reads them.
@@ -76,8 +84,12 @@ def layered(*, adaptable: bool = True):
         def second_period(self) -> Traversal:
             return period(self.second.w.presented.form)
 
-        rom1 = MemStreamKernel(dtype=W, form=first_period, contents=W1, output_stream=w1)
-        rom2 = MemStreamKernel(dtype=W, form=second_period, contents=W2, output_stream=w2)
+        rom1 = MemStreamKernel(
+            platform=FULL_DSP48E2, dtype=W, form=first_period, contents=W1, output_stream=w1
+        )
+        rom2 = MemStreamKernel(
+            platform=FULL_DSP48E2, dtype=W, form=second_period, contents=W2, output_stream=w2
+        )
 
     point = commit(
         design_space(Layered()),

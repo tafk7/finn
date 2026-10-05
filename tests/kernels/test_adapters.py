@@ -25,7 +25,7 @@ from finn.kernels.configure import admission, commit
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.streams import Stream
 from finn.kernels.thresholding import ThresholdingAxiKernel
-from kernels.helpers import Root, labels, with_adapter_memories
+from kernels.helpers import FULL_DSP48E2, Root, labels, with_adapter_memories
 from finn.kernels.transpose import TransposeKernel
 
 ELEMENT = ScalarEncoding(DataType["INT4"])
@@ -47,10 +47,18 @@ def adapted(source: Traversal, pe: int, *, adaptable: bool = True, commit_all: b
     rows, channels = source.shape
 
     class Adapted(Root):
-        x = Stream(tensor=Tensor(source.shape, ELEMENT), adaptable=adaptable)
-        y = Stream(tensor=Tensor(source.shape, ScalarEncoding(DataType["UINT4"])), port="out0_V")
+        x = Stream(tensor=Tensor(source.shape, ELEMENT), adaptable=adaptable, platform=FULL_DSP48E2)
+        y = Stream(
+            tensor=Tensor(source.shape, ScalarEncoding(DataType["UINT4"])),
+            port="out0_V",
+            platform=FULL_DSP48E2,
+        )
         producer = MemStreamKernel(
-            dtype=DataType["INT4"], form=source, contents=values(rows, channels), output_stream=x
+            dtype=DataType["INT4"],
+            form=source,
+            contents=values(rows, channels),
+            output_stream=x,
+            platform=FULL_DSP48E2,
         )
         activate = ThresholdingAxiKernel(
             input_dtype=DataType["INT4"],
@@ -62,6 +70,7 @@ def adapted(source: Traversal, pe: int, *, adaptable: bool = True, commit_all: b
             ultra_stages=0,
             input_stream=x,
             output_stream=y,
+            platform=FULL_DSP48E2,
         )
 
     point = commit(
@@ -88,8 +97,8 @@ def transposed(rows: int, cols: int, simd: int, batches: int = 2):
     shape = (batches, rows, cols)
 
     class Transposed(Root):
-        a = Stream(tensor=Tensor(shape, ELEMENT), port="in0_V")
-        b = Stream(tensor=Tensor(shape, ELEMENT), port="out0_V")
+        a = Stream(tensor=Tensor(shape, ELEMENT), port="in0_V", platform=FULL_DSP48E2)
+        b = Stream(tensor=Tensor(shape, ELEMENT), port="out0_V", platform=FULL_DSP48E2)
         shuffle = TransposeKernel(input_stream=a, output_stream=b)
 
     return commit(design_space(Transposed()), {"shuffle.ram_style": "auto", "shuffle.simd": simd})

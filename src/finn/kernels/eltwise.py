@@ -91,7 +91,7 @@ class EltwiseKernel(Kernel):
             return reject("eltwise-scale", "B_SCALE must be finite binary32")
         return rounded
 
-    platform: Platform = Param(default=Platform())
+    platform: Platform = Param()
 
     @constraint
     def implementation_supported(self) -> bool | Rejected:
