@@ -1,16 +1,16 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""A stream with a known value carries a ``source``: MatMul's weights on its weight stream.
+"""A channel with a known value carries a ``source``: MatMul's weights on its weight channel.
 
 The MatMul sits in a test root (``kernels.helpers.placed_matmul``) that
-declares its streams and binds the weight stream's ``contents`` to MatMul's
-``weight_values``. Known weights give the stream a value, so its ``source``
+declares its channels and binds the weight channel's ``contents`` to MatMul's
+``weight_values``. Known weights give the channel a value, so its ``source``
 applies (``memstream``, its one candidate, forced) and stores them; unknown
-weights leave the stream without a source, and it is the boundary ``in1_V``.
+weights leave the channel without a source, and it is the boundary ``in1_V``.
 These tests cover the forced source, laziness, the memory's own choices,
-persistence, the platform's capabilities, the invariant that a stream with a
-value has its source as its only producer, and the weight stream's FIFO.
+persistence, the platform's capabilities, the invariant that a channel with a
+value has its source as its only producer, and the weight channel's FIFO.
 """
 
 from dataclasses import replace
@@ -81,7 +81,7 @@ def configured(point, *, style=None, pe=2, simd=2):
             "w.source.memstream.ram_style": style,
             "w.source.memstream.pumped_memory": False,
         }
-    # The activation stream's adapter is forced by the folding; its memory is the flow's.
+    # The activation channel's adapter is forced by the folding; its memory is the flow's.
     return with_direct_transports(
         with_adapter_memories(
             commit(
@@ -113,7 +113,7 @@ def owners(result):
     return {finding.owner for finding in result.findings}
 
 
-def test_known_weights_give_the_weight_stream_its_source():
+def test_known_weights_give_the_weight_channel_its_source():
     external = configured(base())
     stored = configured(base(weights=WEIGHTS), style="block")
     compute = "matmul.compute.packed"
@@ -125,16 +125,16 @@ def test_known_weights_give_the_weight_stream_its_source():
         assert isinstance(module, Composed)
         assert {p.name for p in module.pins.ports if isinstance(p, Bus)} == ports
         assert labels(module) == instances
-    # Known weights: the stream has a value, and its one source is forced, never committed.
+    # Known weights: the channel has a value, and its one source is forced, never committed.
     assert stored.w.valued and forced(stored)["w.source"] == "memstream"
     state = stored.field(handle(stored, "w.source")).state
     assert isinstance(state, Available) and state.value.status == "unassigned"
     assert isinstance(stored.w.source, MemStreamKernel)
     assert stored.w.source.image == (0x22C, 0x6BE, 0xDD3, 0x941)
-    # The weight stream's producer is its source, a leaf below the stream.
+    # The weight channel's producer is its source, a leaf below the channel.
     assert stored.w.endpoints.source_owner == "source.memstream"
     assert instance_parameters(stored, STORED_INSTANCE)["RAM_STYLE"] == '"block"'
-    # Unknown weights: no value, no source; the stream is the boundary in1_V.
+    # Unknown weights: no value, no source; the channel is the boundary in1_V.
     assert not external.w.valued
     assert isinstance(external.w.query(Channel.source), Inapplicable)
     assert external.w.endpoints.source_owner is None
@@ -143,11 +143,11 @@ def test_known_weights_give_the_weight_stream_its_source():
     assert external.matmul.producer_identity() == stored.matmul.producer_identity()
 
 
-def test_an_unvalued_stream_never_demands_its_source():
+def test_an_unvalued_channel_never_demands_its_source():
     point = configured(base())
     evidence = inspection.explain(point, Kernel.module)
     visited = {node.declaration.key for node in evidence.nodes}
-    # Whether the stream has a value is read (the weights' presence), never the value.
+    # Whether the channel has a value is read (the weights' presence), never the value.
     assert {"w.valued", "w.ends", "w.endpoints"} <= visited
     assert "matmul.datapath_weights" not in visited
     # Nothing of the source runs.
@@ -159,11 +159,11 @@ def test_an_unvalued_stream_never_demands_its_source():
     assert all(isinstance(result, Inapplicable) for result in reached.values())
 
 
-def test_the_stream_owns_its_source_and_its_choices():
+def test_the_channel_owns_its_source_and_its_choices():
     records = {item.key: item for item in inspection.decisions(base(weights=WEIGHTS))}
     assert records["w.source"].selector and records["w.source"].cases == ("memstream",)
     local = records["w.source.memstream.ram_style"]
-    # The choice belongs to the memory kernel the stream places as its source.
+    # The choice belongs to the memory kernel the channel places as its source.
     assert local.scope == "w.source.memstream" and not local.selector
     assert not any(key.startswith("matmul.memory") for key in records)
     # Its choices apply as soon as the source is forced.
@@ -246,7 +246,7 @@ def test_the_sources_choices_round_trip_through_an_empty_root():
     other = selections.restore(base(weights=tuple(row[::-1] for row in WEIGHTS)), saved)
     assert other.accepted
     assert other.instance.w.source.image != point.w.source.image
-    # Without known weights the stream has no source: its choices are stale, refused.
+    # Without known weights the channel has no source: its choices are stale, refused.
     assert not selections.restore(base(), saved).accepted
     # Facts that invalidate a saved folding refuse replay atomically.
     changed = base(weights=WEIGHTS, n=5)
@@ -293,7 +293,7 @@ def test_a_non_viable_source_is_refused_and_committed_is_refused_by_its_candidat
 
 
 def placed_with(platform: Platform):
-    """MatMul with known weights, its weight stream on ``platform``."""
+    """MatMul with known weights, its weight channel on ``platform``."""
 
     class OnPlatform(Root):
         x = Channel(tensor=Tensor((3, 4), INT3), port="in0_V", platform=platform)
@@ -327,7 +327,7 @@ def test_the_platform_narrows_the_source_memory(platform, refused):
     assert "clk2x-absent" in reasons["w.source.memstream.pumped_memory"]["True"]
 
 
-def test_a_stream_with_a_value_has_its_source_as_its_only_producer():
+def test_a_channel_with_a_value_has_its_source_as_its_only_producer():
     class Produced(Root):
         x = Channel(tensor=Tensor((3, 4), INT3), port="in0_V", platform=FULL_DSP48E2)
         w = Channel(tensor=Tensor((4, 4), INT3), port="in1_V", platform=FULL_DSP48E2)
@@ -372,7 +372,7 @@ def test_adapter_rejects_an_unknown_ram_style():
         )
 
 
-# -- the weight stream's transport slot --------------------------------------------------
+# -- the weight channel's transport slot --------------------------------------------------
 
 FIFO = "w.transport.fifo.buffer"
 FIFO_DEPTH = "w.transport.fifo.buffer.depth"
@@ -386,7 +386,7 @@ def buffered(point, depth=None):
     return commit(point, choices)
 
 
-def test_a_buffered_stream_places_a_fifo_between_its_producer_and_consumer():
+def test_a_buffered_channel_places_a_fifo_between_its_producer_and_consumer():
     for weights in (None, WEIGHTS):
         point = configured(
             base(weights=weights) if weights else base(), style=("auto" if weights else None)
@@ -400,7 +400,7 @@ def test_a_buffered_stream_places_a_fifo_between_its_producer_and_consumer():
         assert dict(placed(module, FIFO).parameters)["DEPTH"] == 32
 
 
-def test_fifo_depth_is_owned_by_the_stream_and_only_demanded_when_selected():
+def test_fifo_depth_is_owned_by_the_channel_and_only_demanded_when_selected():
     point = configured(base())
     records = {item.key: item for item in inspection.decisions(point)}
     assert records[FIFO_DEPTH].scope == FIFO

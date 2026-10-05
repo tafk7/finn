@@ -28,7 +28,7 @@ from finn.kernels.artifacts.abi import (
     Endpoint,
     Free,
     Member,
-    Port,
+    Pin,
     Reset,
     Signal,
     StandardProtocol,
@@ -384,7 +384,7 @@ def test_a_value_that_is_not_an_integer_or_string_is_never_supplied(tmp_path: Pa
     assert {port.name: port.width for port in module.ports} == {"a": 8, "y": 8}
 
 
-def _thresholding_abi(data: str, width: int) -> tuple[Port, ...]:
+def _thresholding_abi(data: str, width: int) -> tuple[Pin, ...]:
     """``thresholding_axi``'s pins at C = PE = 2, WI = WT = 4, N = 3; the input bus as given.
 
     Five address bits: ``$clog2(PE) + $clog2(N) + 2``.

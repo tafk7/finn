@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""A matrix-multiply unit on streams, with external or stored weights.
+"""A matrix-multiply unit on channels, with external or stored weights.
 
 The facts are the extents in canonical GEMM notation, ``m`` rows, ``n``
 outputs and the reduction ``k``, and the ``form`` (``finn.dataflow.gemm``):
@@ -17,38 +17,38 @@ operation runs natively (one channel per PE lane, INT8 DSP58 only) or, by the
 reading its (M, K, N) activations as (M, K * N).
 
 ``MatMulKernel`` is a kernel with children: the compute cores that sit on the
-streams its parent supplies, ``x_channel`` (the activations), ``w_channel`` (the
-weights) and ``y_channel`` (the results). Each stream, its adapter, its FIFO
+channels its parent supplies, ``x_channel`` (the activations), ``w_channel`` (the
+weights) and ``y_channel`` (the results). Each channel, its adapter, its FIFO
 and its source are its parent's: the parent (a test harness, a KernelOp's node
-root, a partition root) declares each stream and either binds its tensor to
+root, a partition root) declares each channel and either binds its tensor to
 MatMul's view of it (``activation_tensor``, ``weight_tensor``,
 ``result_tensor``, ``set_tensor``), which reads only MatMul's facts and
 ``realization``, never a port, or states it; ``carried`` refuses a stated
 tensor of another shape, or whose values do not fit (``matmul-tensor``):
-MatMul's values must fit a stream that carries them, and a stream's values
-must fit what MatMul consumes. A boundary stream there presents its ``port``
+MatMul's values must fit a channel that carries them, and a channel's values
+must fit what MatMul consumes. A boundary channel there presents its ``port``
 name (``in0_V``).
 
 Known ``weights`` are values MatMul owns: its ``weight_tensor`` states their
 range (``INT4 over [-7, 7]``), and its ``weight_values`` view is the value the
-weight stream carries (the datapath's weights, block-diagonal when densely
-realized), which the parent binds to the stream's ``contents``. Whether the
-weights are known is their presence, the view's guard, so the stream's
+weight channel carries (the datapath's weights, block-diagonal when densely
+realized), which the parent binds to the channel's ``contents``. Whether the
+weights are known is their presence, the view's guard, so the channel's
 ``source`` applies before the realization is chosen. With several weight
-sets, the parent's set channel (bound to ``set_tensor``) is the weight stream's
+sets, the parent's set channel (bound to ``set_tensor``) is the weight channel's
 ``index``. A consumer derives from the range what it may (the packed core's
 ``NARROW_WEIGHTS``). Unknown weights carry the datatype's range.
 
 - ``compute`` is a Decision over the dot-product cores. They share the facts
-  and streams. Each core owns its folding factors (``compute.<core>.pe``,
-  ``.simd``, ``.compute_pumping``) and derives every stream's beat sequence
+  and channels. Each core owns its folding factors (``compute.<core>.pe``,
+  ``.simd``, ``.compute_pumping``) and derives every channel's beat sequence
   from its schedule.
-- Where the weights come from is the weight stream's ``source``, not MatMul's.
-- The activation stream's plan replays each dense row and frames each
-  reduction; the stream's adapter carries that out.
+- Where the weights come from is the weight channel's ``source``, not MatMul's.
+- The activation channel's plan replays each dense row and frames each
+  reduction; the channel's adapter carries that out.
 
 Its ``module`` (``finn.kernels.base``) merges its children's netlists; placed
-alone, without its streams, its interfaces are idle.
+alone, without its channels, its interfaces are idle.
 """
 
 from __future__ import annotations
@@ -90,7 +90,7 @@ _CARRIED = (
     ("w_channel", "weight_tensor"),
     ("y_channel", "result_tensor"),
 )
-"""Each stream MatMul sits on, and its view of the tensor the stream carries."""
+"""Each channel MatMul sits on, and its view of the tensor the channel carries."""
 
 
 def _positive(value: int, name: str) -> None:
@@ -112,7 +112,7 @@ def exact_result_dtype(
 
 
 class MatMulKernel(Kernel):
-    """Operation facts, and the kernels and Decisions over kernels on its streams."""
+    """Operation facts, and the kernels and Decisions over kernels on its channels."""
 
     id = "finn.matmul"
     version = 1
@@ -131,7 +131,7 @@ class MatMulKernel(Kernel):
 
     @derived
     def known(self) -> bool:
-        """Whether the weights are known: MatMul owns them, and its weight stream's
+        """Whether the weights are known: MatMul owns them, and its weight channel's
         source stores them."""
         return self.present(MatMulKernel.weights)
 
@@ -198,7 +198,7 @@ class MatMulKernel(Kernel):
             return reject("matmul-extents", "the extents m, n and k must be positive integers")
         return True
 
-    # The tensors the streams carry.
+    # The tensors the channels carry.
 
     def _tensor(self, shape: tuple[int, ...], dtype: QONNXDataType) -> Tensor | Rejected:
         element = ScalarEncoding.admit(dtype)
@@ -239,7 +239,7 @@ class MatMulKernel(Kernel):
 
     @view(when=known, semantics=INTEGER_TENSOR)
     def weight_values(self) -> IntegerTensor:
-        """The value the weight stream carries: the datapath's weights, one operand a set."""
+        """The value the weight channel carries: the datapath's weights, one operand a set."""
         return self.datapath_weights
 
     @view
@@ -247,19 +247,19 @@ class MatMulKernel(Kernel):
         """One set index per row, as wide as the weight source's selector."""
         return self._tensor((self.m,), set_index_dtype(self.weight_sets))
 
-    # The streams it sits on, supplied by its parent.
+    # The channels it sits on, supplied by its parent.
     x_channel: Channel = Param(required=False)
     w_channel: Channel = Param(required=False)
     y_channel: Channel = Param(required=False)
 
     @constraint
     def carried(self) -> bool | Rejected:
-        """Each supplied stream carries a tensor of the shape MatMul derives for it.
+        """Each supplied channel carries a tensor of the shape MatMul derives for it.
 
-        On a stream that carries MatMul's own values (the results, and the
-        weights when known: MatMul owns them, the stream's source streams them)
-        MatMul's values fit the stream's element; on a stream it consumes, the
-        stream's values fit MatMul's.
+        On a channel that carries MatMul's own values (the results, and the
+        weights when known: MatMul owns them, the channel's source streams them)
+        MatMul's values fit the channel's element; on a channel it consumes, the
+        channel's values fit MatMul's.
         """
         for reference, tensor in _CARRIED:
             if not self.present(getattr(MatMulKernel, reference)):

@@ -4,9 +4,9 @@
 """Committing a model's open kernel choices by a policy: the seam where DSE belongs.
 
 ``CommitKernelChoices(policy)`` builds the partition root of the model's
-KernelOps (``partition_root``: their kernels and the streams between them) and
+KernelOps (``partition_root``: their kernels and the channels between them) and
 commits every Decision the configuration leaves open, the kernels' (folding,
-memories, compute cores), the streams' (a ``source`` when several are viable,
+memories, compute cores), the channels' (a ``source`` when several are viable,
 its memories, adapter memories), by asking the policy. It persists them on the
 nodes that own them (``save_partition_choices``, D8), so the model replays
 them.

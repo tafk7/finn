@@ -45,11 +45,11 @@ c = Index("c")
 class EltwiseKernel(Kernel):
     """PE results a beat of ``lhs`` and ``rhs``, element by element.
 
-    Placed on streams, each operand's tensor is walked row-major, PE elements
+    Placed on channels, each operand's tensor is walked row-major, PE elements
     of its innermost axis a beat, on one schedule over ``lhs``'s axes. An
     ``rhs`` whose shape is a trailing part of ``lhs``'s (a channel vector, say)
     reads the trailing indices, so it is broadcast: the port presents it once
-    per ``lhs`` element it meets, and its stream's adapter replays it. An
+    per ``lhs`` element it meets, and its channel's adapter replays it. An
     ``rhs`` of another shape disagrees on an extent (``kernel-extents``).
     """
 
@@ -62,7 +62,7 @@ class EltwiseKernel(Kernel):
     pe: int = Decision(domain=factor_domain(c))
     lhs_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
     rhs_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
-    # The streams it sits on, when a parent places it.
+    # The channels it sits on, when a parent places it.
     lhs_channel: Channel = Param(required=False)
     rhs_channel: Channel = Param(required=False)
     result_channel: Channel = Param(required=False)

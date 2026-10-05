@@ -5,7 +5,7 @@
 
 It regroups ``lanes_in`` elements a beat into ``lanes_out``, through vectors of
 their least common multiple. Words are opaque on FinnLib's native pins. On a
-stream, ``vpc`` is a stage of the stream's adapter (``finn.kernels.adapters``).
+channel, ``vpc`` is a stage of the channel's adapter (``finn.kernels.adapters``).
 """
 
 from __future__ import annotations

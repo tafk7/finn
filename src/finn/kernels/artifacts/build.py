@@ -219,15 +219,15 @@ class _Netlist:
         """The root's clock, doubled clock and reset pins by role, and whether its reset
         is active low."""
         found: dict[str, tuple[str, bool]] = {}
-        for port in self.module.pins.ports:
-            if not isinstance(port, Signal) or port.direction is not Direction.IN:
+        for pin in self.module.pins.ports:
+            if not isinstance(pin, Signal) or pin.direction is not Direction.IN:
                 continue
-            role = port.role
+            role = pin.role
             if isinstance(role, Clock):
                 key = "clock" if isinstance(role.rate, Free) else "doubled"
-                found.setdefault(key, (port.name, True))
+                found.setdefault(key, (pin.name, True))
             elif isinstance(role, Reset):
-                found.setdefault("reset", (port.name, role.active_low))
+                found.setdefault("reset", (pin.name, role.active_low))
         return found
 
     def drive(self, label: str, leaf: Leaf) -> None:

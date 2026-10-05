@@ -10,8 +10,8 @@ admits finite traversals wholly within each frame. olst[i] marks completion
 of loop i and all inner loops, aligned with the output transfer. It is a native
 multi-bit marker, not AXI TLAST. Input and output words are opaque bits.
 
-On a stream, ``input_gen`` is a stage of the stream's adapter
-(``finn.kernels.adapters``), which derives these facts from the stream's plan.
+On a channel, ``input_gen`` is a stage of the channel's adapter
+(``finn.kernels.adapters``), which derives these facts from the channel's plan.
 Its buffer's ``ram_style`` is its choice; ``ultra`` requires the ``platform``'s
 UltraRAM. The buffer starts empty, so no initial contents are asked of it.
 """

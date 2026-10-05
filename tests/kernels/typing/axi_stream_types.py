@@ -11,21 +11,21 @@ from finn.dataflow.traversal import BeatSequence
 from finn.kernels.dotp import DotpAxiKernel
 from finn.kernels.eltwise import EltwiseKernel
 from finn.kernels.port import AxiStreamPort
-from finn.kernels.transport import AxiStream, ReadyValidStream
+from finn.kernels.transport import AxisBeat, ReadyValidStream
 
 
 def check(point: DotpAxiKernel, eltwise: EltwiseKernel) -> None:
     # Class access: nodes typed as their Space classes, references typed as values.
     assert_type(DotpAxiKernel.x, AxiStreamPort)
     assert_type(DotpAxiKernel.x.element, ScalarEncoding)
-    assert_type(DotpAxiKernel.x.axis, AxiStream)
+    assert_type(DotpAxiKernel.x.axis, AxisBeat)
     assert_type(DotpAxiKernel.x.presented, BeatSequence)
     assert_type(AxiStreamPort.pins, View[tuple[object, ...]])
     assert_type(point.query(DotpAxiKernel.pe), QueryResult[int])
     # Configuration reads.
     assert_type(point.x, AxiStreamPort)
     assert_type(point.x.element, ScalarEncoding)
-    assert_type(point.x.axis, AxiStream)
+    assert_type(point.x.axis, AxisBeat)
     assert_type(point.x.pins, tuple[object, ...])
     assert_type(point.x.inspect(AxiStreamPort.pins), ViewAssessment[tuple[object, ...]])
     assert_type(point.x.query(AxiStreamPort.pins), QueryResult[tuple[object, ...]])

@@ -15,7 +15,7 @@ from finn.core.space import inspection
 from finn.kernels.base import Kernel
 from finn.kernels.configure import commit
 from kernels.helpers import Root, placed_matmul
-from kernels.test_stream_source import FACTS, WEIGHTS
+from kernels.test_channel_source import FACTS, WEIGHTS
 
 CHOICES = {
     "none": {

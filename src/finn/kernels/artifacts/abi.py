@@ -3,7 +3,7 @@
 
 """A module's pins: physical facts only.
 
-Nothing here names a kernel, a stream or a port declaration path: two kernels
+Nothing here names a kernel, a channel or a port declaration path: two kernels
 binding the same module the same way present equal pins.
 
 **Direction is declared once and flipped.** A bus signature gives its member
@@ -152,7 +152,7 @@ SIGNATURES: Mapping[StandardProtocol, Mapping[str, Direction]] = {
 }
 
 
-# -- ports ---------------------------------------------------------------------
+# -- pins ----------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
@@ -255,7 +255,8 @@ class Bus:
         return tuple((member.physical, member.width) for member in self.signals)
 
 
-Port = Union[Signal, Bus]
+#: One entry of a module's ABI: a loose pin, or a bus of them.
+Pin = Union[Signal, Bus]
 
 
 @dataclass(frozen=True, order=True)
@@ -277,15 +278,15 @@ class ClockAlignment:
             raise AbiError("a clock cannot be aligned-2x to itself")
 
 
-def physical_names(ports: Sequence[Port]) -> tuple[str, ...]:
+def physical_names(pins: Sequence[Pin]) -> tuple[str, ...]:
     """Every pin the module actually has, in declared order."""
 
     names: list[str] = []
-    for port in ports:
-        if isinstance(port, Signal):
-            names.append(port.name)
+    for pin in pins:
+        if isinstance(pin, Signal):
+            names.append(pin.name)
         else:
-            names.extend(member.physical for member in port.signals)
+            names.extend(member.physical for member in pin.signals)
     return tuple(names)
 
 
@@ -300,70 +301,68 @@ class PinInfo:
     member: str | None = None
 
 
-def abi_pins(ports: Sequence[Port]) -> Mapping[str, PinInfo]:
-    """Every physical pin of ``ports`` by name, in declared order; a bus member takes
+def abi_pins(pins: Sequence[Pin]) -> Mapping[str, PinInfo]:
+    """Every physical pin of ``pins`` by name, in declared order; a bus member takes
     its bus's role."""
 
-    pins: dict[str, PinInfo] = {}
-    for port in ports:
-        if isinstance(port, Signal):
-            pins[port.name] = PinInfo(port.direction, port.width, port.role)
+    physical: dict[str, PinInfo] = {}
+    for pin in pins:
+        if isinstance(pin, Signal):
+            physical[pin.name] = PinInfo(pin.direction, pin.width, pin.role)
             continue
-        directions = dict(port.member_directions())
-        for member in port.signals:
-            pins[member.physical] = PinInfo(
-                directions[member.physical], member.width, port.role, port.name, member.logical
+        directions = dict(pin.member_directions())
+        for member in pin.signals:
+            physical[member.physical] = PinInfo(
+                directions[member.physical], member.width, pin.role, pin.name, member.logical
             )
-    return MappingProxyType(pins)
+    return MappingProxyType(physical)
 
 
-def validate_ports(ports: Sequence[Port], clock_alignments: Sequence[ClockAlignment]) -> None:
-    """Refuse a port list that names a pin twice or whose clock relations do not hold."""
+def validate_pins(pins: Sequence[Pin], clock_alignments: Sequence[ClockAlignment]) -> None:
+    """Refuse pins that name one pin twice or whose clock relations do not hold."""
 
-    names = [port.name for port in ports]
+    names = [pin.name for pin in pins]
     if len(names) != len(set(names)):
-        raise AbiError("an ABI names one port twice")
-    physical = physical_names(ports)
+        raise AbiError("an ABI names one pin twice")
+    physical = physical_names(pins)
     if len(physical) != len(set(physical)):
         raise AbiError("an ABI carries one physical pin in two places")
 
-    by_name = {port.name: port for port in ports}
+    by_name = {pin.name: pin for pin in pins}
     clocks = {
-        port.name: port
-        for port in ports
-        if isinstance(port, Signal) and isinstance(port.role, Clock)
+        pin.name: pin for pin in pins if isinstance(pin, Signal) and isinstance(pin.role, Clock)
     }
-    for port in ports:
-        if isinstance(port, Signal) and isinstance(port.role, Reset):
-            missing = tuple(d for d in port.role.synchronous_to or () if d not in clocks)
+    for pin in pins:
+        if isinstance(pin, Signal) and isinstance(pin.role, Reset):
+            missing = tuple(d for d in pin.role.synchronous_to or () if d not in clocks)
             if missing:
                 raise AbiError(
-                    f"reset {port.name!r} is synchronous to clocks this ABI does not have: "
+                    f"reset {pin.name!r} is synchronous to clocks this ABI does not have: "
                     f"{missing!r}"
                 )
-        if not isinstance(port, Bus):
+        if not isinstance(pin, Bus):
             continue
-        if port.associated_clock is not None and port.associated_clock not in clocks:
+        if pin.associated_clock is not None and pin.associated_clock not in clocks:
             raise AbiError(
-                f"bus {port.name!r} associated clock {port.associated_clock!r} "
+                f"bus {pin.name!r} associated clock {pin.associated_clock!r} "
                 "does not name a clock signal"
             )
-        if port.associated_reset is not None:
-            reset = by_name.get(port.associated_reset)
+        if pin.associated_reset is not None:
+            reset = by_name.get(pin.associated_reset)
             if not isinstance(reset, Signal) or not isinstance(reset.role, Reset):
                 raise AbiError(
-                    f"bus {port.name!r} associated reset {port.associated_reset!r} "
+                    f"bus {pin.name!r} associated reset {pin.associated_reset!r} "
                     "does not name a reset signal"
                 )
             domains = reset.role.synchronous_to
             if (
                 reset.role.synchronous
                 and domains is not None
-                and port.associated_clock not in domains
+                and pin.associated_clock not in domains
             ):
                 raise AbiError(
-                    f"bus {port.name!r} uses clock {port.associated_clock!r}, but reset "
-                    f"{port.associated_reset!r} is synchronous to {domains!r}"
+                    f"bus {pin.name!r} uses clock {pin.associated_clock!r}, but reset "
+                    f"{pin.associated_reset!r} is synchronous to {domains!r}"
                 )
 
     if len(set(clock_alignments)) != len(clock_alignments):
@@ -402,8 +401,8 @@ class ObservedPort:
     width: int
 
 
-def check_against_rtl(ports: Sequence[Port], observed: Sequence[ObservedPort]) -> tuple[str, ...]:
-    """Every way the source contradicts the declared ports; empty when they agree.
+def check_against_rtl(pins: Sequence[Pin], observed: Sequence[ObservedPort]) -> tuple[str, ...]:
+    """Every way the source contradicts the declared pins; empty when they agree.
 
     Refusal only: the declaration stays authoritative and nothing is read back
     into it.  SystemVerilog identifiers are case sensitive, so a name the
@@ -416,7 +415,7 @@ def check_against_rtl(ports: Sequence[Port], observed: Sequence[ObservedPort]) -
         folded.setdefault(name.casefold(), []).append(name)
 
     issues: list[str] = []
-    declared_names = physical_names(ports)
+    declared_names = physical_names(pins)
     for declared in declared_names:
         if declared in actual:
             continue
@@ -432,12 +431,12 @@ def check_against_rtl(ports: Sequence[Port], observed: Sequence[ObservedPort]) -
         if name not in declared_names:
             issues.append(f"the source has {name!r}, which the ABI does not declare")
 
-    for port in ports:
-        if isinstance(port, Signal):
-            expected: tuple[tuple[str, Direction], ...] = ((port.name, port.direction),)
-            widths: tuple[tuple[str, int], ...] = ((port.name, port.width),)
+    for pin in pins:
+        if isinstance(pin, Signal):
+            expected: tuple[tuple[str, Direction], ...] = ((pin.name, pin.direction),)
+            widths: tuple[tuple[str, int], ...] = ((pin.name, pin.width),)
         else:
-            expected, widths = port.member_directions(), port.widths()
+            expected, widths = pin.member_directions(), pin.widths()
         for name, direction in expected:
             found = actual.get(name)
             if found is not None and found.direction is not direction:
@@ -469,8 +468,8 @@ __all__ = [
     "Free",
     "Member",
     "ObservedPort",
+    "Pin",
     "PinInfo",
-    "Port",
     "Rate",
     "Reset",
     "Role",
@@ -480,5 +479,5 @@ __all__ = [
     "check_against_rtl",
     "flip",
     "physical_names",
-    "validate_ports",
+    "validate_pins",
 ]

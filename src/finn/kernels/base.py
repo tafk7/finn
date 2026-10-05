@@ -4,7 +4,7 @@
 """The Kernel protocol: one module's choices, and the plumbing every kernel shares.
 
 A kernel is a Space whose choices configure one module. It either binds one
-FinnLib module (a leaf) or places kernel children and the streams between
+FinnLib module (a leaf) or places kernel children and the channels between
 them; never both. On the protocol a leaf declares only what is its own:
 
 - ``rtl_module``: the RTL module it instantiates, and ``sources()``, the
@@ -28,12 +28,12 @@ what it holds (the doubled clock while unused, idle ports, and its own
 ``clocked`` (every port runs on its clock).
 
 A kernel with children merges its members' netlists (``NETLIST``: each
-child's and each stream's ``Fragment``, under its node) and the control buses
-its ``ControlBus`` nodes present. Its interface streams are reference inputs
-its parent supplies; the streams between its children are its own. Placed
+child's and each channel's ``Fragment``, under its node) and the control buses
+its ``ControlBus`` nodes present. Its interface channels are reference inputs
+its parent supplies; the channels between its children are its own. Placed
 alone, as the root of what is emitted, it is one ``Composed`` module whose
 pins are ``ap_clk``, ``ap_clk2x`` when an instance takes a doubled clock,
-``ap_rst_n``, the AXIS bus of each boundary stream it declares (inputs, then
+``ap_rst_n``, the AXIS bus of each boundary channel it declares (inputs, then
 outputs) and each presented bus.
 
 Every kernel exports its netlist (``NETLIST``) and its ``module`` (``MODULE``):
@@ -74,6 +74,7 @@ from finn.kernels.artifacts.abi import (
     Direction,
     Endpoint,
     Free,
+    Pin,
     Reset,
     Signal,
     abi_pins,
@@ -112,15 +113,15 @@ MODULE = ViewKey("module", MODULE_SEMANTICS)
 
 NETLIST_SEMANTICS = cast("ValueSemantics[Fragment]", _frozen("netlist", Fragment))
 NETLIST = ViewKey("netlist", NETLIST_SEMANTICS)
-"""A kernel's or a stream's netlist (``finn.kernels.artifacts.module.Fragment``), labelled
+"""A kernel's or a channel's netlist (``finn.kernels.artifacts.module.Fragment``), labelled
 relative to itself; its parent merges its members' under their nodes."""
 
 BOUNDARY = ViewKey("boundary", default_semantics(tuple))
-"""A stream's AXIS bus on the root's boundary: one, or none when both of its ends are
+"""A channel's AXIS bus on the root's boundary: one, or none when both of its ends are
 kernels."""
 
 PORT = ViewKey("port", STREAM_CONTRACT)
-"""A kernel's port on one stream, exported per reference input."""
+"""A kernel's port on one channel, exported per reference input."""
 
 PINS = ViewKey("pins", default_semantics(tuple))
 """A port's pins (signals, or one bus), collected by its kernel into the module's pins."""
@@ -129,7 +130,7 @@ CLOCKED = ViewKey("clocked", default_semantics(str))
 """The clock pin a port runs on, collected by its kernel (``clocked``)."""
 
 ACCESS = ViewKey("access", default_semantics(Access))
-"""A placed scheduled port's read of its stream's tensor, collected by its kernel to bind
+"""A placed scheduled port's read of its channel's tensor, collected by its kernel to bind
 the extents of its indices (``finn.dataflow.schedule.bind_extents``)."""
 
 HELD_SEMANTICS = default_semantics(Held)
@@ -194,7 +195,7 @@ NATIVE_CLOCKING = Clocking(clock="clk", reset="rst", active_low=False)
 """FinnLib's native ``clk`` and synchronous active-high ``rst``."""
 
 
-def _inputs(pin: Signal | Bus) -> tuple[str, ...]:
+def _inputs(pin: Pin) -> tuple[str, ...]:
     if isinstance(pin, Signal):
         return (pin.name,) if pin.direction is Direction.IN else ()
     return tuple(name for name, direction in pin.member_directions() if direction is Direction.IN)
@@ -231,7 +232,7 @@ class Kernel(Space):
         """The source files that provide ``rtl_module``, and any data they read."""
         return ()
 
-    def other_pins(self) -> tuple[Signal | Bus, ...]:
+    def other_pins(self) -> tuple[Pin, ...]:
         """Pins that are no port's, such as an AXI-Lite configuration bus."""
         return ()
 
@@ -362,14 +363,14 @@ class Kernel(Space):
 
     netlists = Members(NETLIST)
     presented = Members(EXPORTED)
-    stream_buses = Members(BOUNDARY)
+    boundary_buses = Members(BOUNDARY)
 
     @derived
     def fragment(self) -> Fragment | Rejected:
         """A leaf: its accepted module, the empty label (its parent's ``under(node)`` names
         it ``node``). A kernel with children: each member's netlist under its node, and the
         buses its ``ControlBus`` nodes present; its own module is complete only as the
-        root, whose streams it declares, so a parent reads its netlist, not its module."""
+        root, whose channels it declares, so a parent reads its netlist, not its module."""
         space_type = type(self)
         if space_type.rtl_module:
             if self.netlists:
@@ -397,7 +398,7 @@ class Kernel(Space):
 
     @derived
     def composed_pins(self) -> Pins:
-        """Its clocks and reset, each boundary stream's AXIS bus (inputs, then outputs), then
+        """Its clocks and reset, each boundary channel's AXIS bus (inputs, then outputs), then
         each presented bus."""
         fragment = self.fragment
         doubled = any(
@@ -406,7 +407,7 @@ class Kernel(Space):
             for info in abi_pins(leaf.pins.ports).values()
         )
         clocks = (CLOCK, CLOCK2X) if doubled else (CLOCK,)
-        buses = [bus for item in self.stream_buses for bus in item.value]
+        buses = [bus for item in self.boundary_buses for bus in item.value]
         return Pins(
             (
                 Signal(CLOCK, Direction.IN, 1, Clock(Free())),
@@ -437,10 +438,10 @@ class Kernel(Space):
             return reject("kernel-netlist", str(error))
 
     module = View(
-        built, requires=(admission, pins_accounted, clocked, netlists, presented, stream_buses)
+        built, requires=(admission, pins_accounted, clocked, netlists, presented, boundary_buses)
     )
     netlist = View(
-        fragment, requires=(admission, pins_accounted, clocked, netlists, presented, stream_buses)
+        fragment, requires=(admission, pins_accounted, clocked, netlists, presented, boundary_buses)
     )
 
     # A kernel adding exports of its own extends these: ``{**Kernel.exports, KEY: ...}``.

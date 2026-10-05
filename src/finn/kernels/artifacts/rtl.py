@@ -56,7 +56,7 @@ from typing import Union
 import pyslang
 from pyslang import ast, syntax
 
-from finn.kernels.artifacts.abi import Direction, ObservedPort, Port, check_against_rtl
+from finn.kernels.artifacts.abi import Direction, ObservedPort, Pin, check_against_rtl
 from finn.kernels.artifacts.sources import include_directories, is_header
 
 #: Diagnostics that cannot bear on ports or parameters, and are therefore not
@@ -307,12 +307,12 @@ def extract(
 
 
 def check_abi(
-    ports: Sequence[Port],
+    pins: Sequence[Pin],
     files: Sequence[Path],
     top: str,
     parameters: Sequence[tuple[str, str]] = (),
 ) -> tuple[str, ...] | Declined:
-    """Refuse declared ports the source contradicts, or decline.
+    """Refuse declared pins the source contradicts, or decline.
 
     Returns the empty tuple when the declaration and the source agree, a
     non-empty tuple of refusals when they do not, and ``Declined`` when the
@@ -327,7 +327,7 @@ def check_abi(
     extracted = extract(files, top, parameters)
     if isinstance(extracted, Declined):
         return extracted
-    return check_against_rtl(ports, extracted.ports)
+    return check_against_rtl(pins, extracted.ports)
 
 
 __all__ = [
