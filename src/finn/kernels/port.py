@@ -66,9 +66,9 @@ from finn.kernels.base import (
     PORT,
     RESET,
 )
-from finn.kernels.datatypes.domains import Integer
-from finn.kernels.datatypes.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
 from finn.kernels.transport import AxisBeat, ReadyValidStream, StreamContract, StreamMarker
+from finn.kernels.values.domains import Integer
+from finn.kernels.values.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
 
 if TYPE_CHECKING:
     import finn.kernels.channels

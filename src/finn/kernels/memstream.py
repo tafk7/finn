@@ -63,8 +63,10 @@ from finn.kernels.artifacts.contributions import Contribution, CopiedSource, Gen
 from finn.kernels.artifacts.module import Held
 from finn.kernels.base import NATIVE_CLOCKING, Clocking, Kernel
 from finn.kernels.control import held_bus
-from finn.kernels.datatypes.domains import Integer, set_index_dtype
-from finn.kernels.datatypes.semantics import (
+from finn.kernels.port import AxiStreamPort
+from finn.kernels.target import Platform
+from finn.kernels.values.domains import Integer, set_index_dtype
+from finn.kernels.values.semantics import (
     INTEGER_TENSOR,
     INTEGER_VECTOR,
     QONNX_DATATYPE_VALUE_SEMANTICS,
@@ -72,8 +74,6 @@ from finn.kernels.datatypes.semantics import (
     IntegerVector,
     integer_range,
 )
-from finn.kernels.port import AxiStreamPort
-from finn.kernels.target import Platform
 
 LANE = Index("lane")
 """The lanes of a stored word, one per lane of the consumer's form."""

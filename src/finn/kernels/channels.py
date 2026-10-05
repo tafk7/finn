@@ -101,11 +101,6 @@ from finn.kernels.adapters import ADAPTERS, Stage, StreamAdapter
 from finn.kernels.artifacts.abi import Bus, Endpoint
 from finn.kernels.artifacts.module import BuildError, Fragment, Leaf, Link, LinkEnd
 from finn.kernels.base import BOUNDARY, CLOCK, NETLIST, PORT, RESET
-from finn.kernels.datatypes.semantics import (
-    INTEGER_TENSOR,
-    QONNX_DATATYPE_VALUE_SEMANTICS,
-    IntegerTensor,
-)
 from finn.kernels.fifo import FifoKernel
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.target import Platform
@@ -118,6 +113,11 @@ from finn.kernels.transport import (
     lane_permutation,
     marker_bit,
     marker_pairs,
+)
+from finn.kernels.values.semantics import (
+    INTEGER_TENSOR,
+    QONNX_DATATYPE_VALUE_SEMANTICS,
+    IntegerTensor,
 )
 
 SOURCES: dict[str, type[Space] | Space] = {"memstream": MemStreamKernel}

@@ -33,16 +33,16 @@ from finn.dataflow.datatypes import QONNXDataType
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.base import Kernel
 from finn.kernels.channels import Channel
-from finn.kernels.datatypes.semantics import (
+from finn.kernels.matmul import MatMulKernel
+from finn.kernels.target import Platform
+from finn.kernels.thresholding import ThresholdingAxiKernel
+from finn.kernels.values.semantics import (
     INTEGER_TENSOR,
     QONNX_DATATYPE_VALUE_SEMANTICS,
     THRESHOLD_TABLE,
     IntegerTensor,
     ThresholdTable,
 )
-from finn.kernels.matmul import MatMulKernel
-from finn.kernels.target import Platform
-from finn.kernels.thresholding import ThresholdingAxiKernel
 
 
 class MatMulNode(Kernel):

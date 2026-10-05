@@ -19,8 +19,8 @@ from qonnx.core.datatype import DataType
 
 from finn.core.space import inspection
 from finn.dataflow.tensor import ScalarEncoding, Tensor
-from finn.kernels.datatypes import semantics
-from finn.kernels.datatypes.semantics import (
+from finn.kernels.values import semantics
+from finn.kernels.values.semantics import (
     INTEGER_TENSOR,
     IntegerTensorValue,
     integer_range,

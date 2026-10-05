@@ -12,7 +12,7 @@ outside this repository until the package is final.
 | `dotp.py`, `matmul.py`, `thresholding.py`, `eltwise.py`, `fifo.py`, `memstream.py`, `input_generator.py`, `transpose.py`, `vpc.py` | the kernels |
 | `configure.py` | committing and settling choices by key |
 | `control.py`, `target.py` | control buses, and target DSP blocks |
-| `datatypes/` | scalar datatype domains and semantics |
+| `values/` | the values kernels hold and ports admit: the semantics of datatypes, integer vectors and tensors, and threshold tables; the `Integer` port policy |
 | `transport.py` | ready/valid and AXI-Stream transports, and stream contracts |
 | `artifacts/` | module values (`Leaf`, a flat `Composed` netlist), their emission and the RTL checker |
 

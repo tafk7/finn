@@ -33,10 +33,10 @@ from finn.core.space import (
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.base import NATIVE_CLOCKING, Clocking, Kernel
-from finn.kernels.datatypes.semantics import INTEGER_VECTOR, IntegerVector
 from finn.kernels.port import WordPort
 from finn.kernels.target import Platform
 from finn.kernels.transport import MarkerKind, StreamMarker
+from finn.kernels.values.semantics import INTEGER_VECTOR, IntegerVector
 
 _INPUT_GEN_RAM_STYLES = ("auto", "distributed", "block", "ultra")
 

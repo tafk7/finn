@@ -17,9 +17,9 @@ from finn.core.space import (
 )
 from finn.dataflow.datatypes import resolve_qonnx_datatype_name
 from finn.kernels.artifacts.abi import Bus, Signal
-from finn.kernels.datatypes.semantics import IntegerVector, ThresholdTable
 from finn.kernels.input_generator import InputGeneratorKernel
 from finn.kernels.thresholding import ThresholdingAxiKernel
+from finn.kernels.values.semantics import IntegerVector, ThresholdTable
 from kernels.helpers import FULL_DSP48E2, controlled
 
 TABLE: ThresholdTable = (((-2, 0, 3), (-1, 1, 4)),)

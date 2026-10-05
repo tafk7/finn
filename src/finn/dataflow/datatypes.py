@@ -30,7 +30,7 @@ refused.
 This module has **no FINN imports at all**, so ``finn.dataflow`` builds on it
 without dragging the engine into its datatypes (the layer table,
 ``tests/layering.py``, holds the package directions). The engine-side ``ValueSemantics`` declaration
-lives in ``finn.kernels.datatypes.semantics``, built from the helpers here.
+lives in ``finn.kernels.values.semantics``, built from the helpers here.
 
 Two rules it keeps, which qonnx leaves to its callers:
 
@@ -187,6 +187,6 @@ is_qonnx_datatype: Callable[[object], TypeGuard[QONNXDataType]] = is_datatype
 #: compared.
 #: The single object every datatype value-semantics declaration must use as its
 #: ``type_token``.  Exported so that the declaration -- which lives in
-#: ``finn.kernels.datatypes.semantics`` to keep this module engine-independent --
+#: ``finn.kernels.values.semantics`` to keep this module engine-independent --
 #: names the same object this module recognizes against.
 QONNX_DATATYPE_TOKEN = BaseDataType

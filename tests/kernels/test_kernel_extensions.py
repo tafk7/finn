@@ -29,8 +29,8 @@ from finn.dataflow.datatypes import (
     resolve_qonnx_datatype_name,
 )
 from finn.kernels.base import Kernel
-from finn.kernels.datatypes.domains import Integer
-from finn.kernels.datatypes.semantics import (
+from finn.kernels.values.domains import Integer
+from finn.kernels.values.semantics import (
     INTEGER_VECTOR,
     QONNX_DATATYPE_VALUE_SEMANTICS,
     THRESHOLD_TABLE,
