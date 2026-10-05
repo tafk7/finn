@@ -26,15 +26,18 @@ Other nodes are left alone. The nodes keep their names, inputs and outputs.
 from __future__ import annotations
 
 from fnmatch import fnmatch
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from onnx import helper
+from onnx import NodeProto, helper
 from qonnx.transformation.base import Transformation
 
 import finn.custom_op.kernels as domain
 from finn.custom_op.kernels.base import write_target
 from finn.kernels.target import DspBlock, Platform, Target
 from finn.transformation.fpgadataflow.kernel_partitions import KERNEL_OPS_DOMAIN
+
+if TYPE_CHECKING:
+    from qonnx.core.modelwrapper import ModelWrapper
 
 # Device capabilities by part pattern (fnmatch on the lower-case part), first match
 # wins: (pattern, dsp, uram, uram_init, aie). UltraScale+ ignores an UltraRAM's INIT
@@ -101,11 +104,11 @@ def resolve_target(part: str, period_ns: float, shell: str | None = None) -> Tar
     return Target(part, platform)
 
 
-def _attributes(node: Any) -> dict[str, Any]:
+def _attributes(node: NodeProto) -> dict[str, Any]:
     return {attribute.name: helper.get_attribute_value(attribute) for attribute in node.attribute}
 
 
-def _thresholding(model: Any, node: Any) -> Any | None:
+def _thresholding(model: ModelWrapper, node: NodeProto) -> NodeProto | None:
     """A Thresholding for an integer MultiThreshold over the input's last axis, if it is one."""
     attributes = _attributes(node)
     if float(attributes.get("out_scale", 1.0)) != 1.0:
@@ -135,13 +138,13 @@ class ToKernelOps(Transformation):  # type: ignore[misc]
         super().__init__()
         self.target = target
 
-    def apply(self, model: Any) -> tuple[Any, bool]:
+    def apply(self, model: ModelWrapper) -> tuple[ModelWrapper, bool]:
         write_target(model, self.target)
         if KERNEL_OPS_DOMAIN not in model.get_opset_imports():
             model.set_opset_import(KERNEL_OPS_DOMAIN, domain.opset_version)
         graph = model.graph
         for index, node in enumerate(list(graph.node)):
-            new: Any
+            new: NodeProto | None
             if node.op_type == "MatMul" and node.domain == "":
                 new = helper.make_node(
                     "MatMul",

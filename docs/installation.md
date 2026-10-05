@@ -405,7 +405,7 @@ XSI there must supply its loader environment before interpreter startup. Concurr
 in-process builds still share legacy configuration, stdout and logger state; use
 separate build processes. See [the compatibility ledger](legacy-build-env-ledger.md).
 
-The internal `_toolchain.Selection` supports explicit local settings scripts or
+`finn.util.toolchain.Selection` supports explicit local settings scripts or
 an explicitly accepted configured environment, a site command directory, and a
 launcher argv prefix. `Selection.prepare()` snapshots the mapping. With local
 settings and no base mapping, it uses system PATH plus HOME/user/locale/temp/display

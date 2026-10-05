@@ -28,6 +28,7 @@ from finn.custom_op.kernels.base import KernelOpError
 from finn.custom_op.kernels.partition import PartitionRoot, partition_root, save_partition_choices
 from finn.custom_op.kernels.roots import StreamedMatMulNode
 from finn.kernels.configure import commit, undecided
+from finn.kernels.streams import BufferedStream
 from finn.transformation.kernels import InferKernelTensors, ToKernelOps
 from kernel_ops.models import INT3, TARGET, chain_source, lift, matmul_model
 
@@ -150,6 +151,9 @@ def test_streamed_weights_are_a_boundary_of_the_partition() -> None:
     root = partition_root(model, model.graph.node, name="chain")
     assert root.boundary == (("x", "s_axis_0"), ("w2", "s_axis_1"), ("y", "m_axis_0"))
     assert root.owners["w2"] == ("second", "w.")
+    # MatMul names its weight port buffered: the weight edge, not x, has a transport.
+    assert isinstance(root.point.w2, BufferedStream)
+    assert not isinstance(root.point.x, BufferedStream)
 
 
 def test_the_owner_map() -> None:
@@ -182,6 +186,24 @@ def test_a_node_named_like_a_tensor_is_refused() -> None:
     model.graph.node[1].name = "hidden"
     with pytest.raises(KernelOpError, match="a node and a tensor are both named hidden"):
         partition_root(model, model.graph.node)
+
+
+def test_two_nodes_of_one_member_name_are_refused() -> None:
+    model = kernel_model()
+    model.graph.node[2].name = "first"
+    with pytest.raises(KernelOpError, match="a node and another node are both named first"):
+        partition_root(model, model.graph.node)
+
+
+def test_a_kernel_choice_the_root_refuses_is_named_by_member() -> None:
+    """A choice written past ``save`` reaches the root's replay, which names it."""
+    model = kernel_model()
+    model.get_customop_wrapper(model.graph.node[0]).set_nodeattr("compute.packed.pe", 3)
+    with pytest.raises(
+        KernelOpError, match="^chain: refused choices: first.compute.packed.pe: "
+    ) as error:
+        partition_root(model, model.graph.node, name="chain")
+    assert error.value.keys == ("first.compute.packed.pe",)
 
 
 @requires_xsim

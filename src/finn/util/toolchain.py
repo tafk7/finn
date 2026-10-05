@@ -1,4 +1,24 @@
-"""Internal AMD command execution. No discovery or activation occurs on import."""
+"""How FINN runs AMD's tools: a selected installation, its prepared environment, and
+the one way a tool process is started and reaped.
+
+- ``Selection`` names an installation and holds no environment, so a worker can
+  receive it: local settings scripts to source, or an already configured
+  environment accepted as it is; a site command directory; a launcher prefix
+  (a site route that owns activation remotely).
+- ``Selection.prepare()`` captures the environment once, as a ``Toolchain``. Each
+  tool launch then runs in that snapshot (``Toolchain.run``), never in the
+  parent's environment, and ``Toolchain.probe`` asks a tool its version through
+  exactly that route.
+- ``run_process`` is the process primitive under both: a new process group,
+  killed whole on timeout or cancellation.
+
+A transformation that runs a tool takes a prepared ``Toolchain`` (``toolchain=``),
+so that one build runs every tool through one route; ``finn.util._legacy_build_env``
+derives the default one from the legacy environment variables. Nothing is
+discovered or activated on import.
+"""
+
+from __future__ import annotations
 
 import logging
 import os
@@ -8,11 +28,15 @@ import shutil
 import signal
 import subprocess
 import time
+from collections.abc import Hashable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
+from typing import Protocol
 
 from finn.util import machine_file
+
+StrPath = str | os.PathLike[str]
 
 _LOG = logging.getLogger(__name__)
 
@@ -20,10 +44,18 @@ _LOG = logging.getLogger(__name__)
 # build launches many at once. Probe answers are cached per process, keyed by the
 # selection and the environment's PATH, so parallel HLS synthesis probes once.
 PROBE_TIMEOUT = 120
-_PROBES = {}
+_VERSIONS: dict[tuple[Hashable, ...], tuple[int, ...]] = {}
+_HLS_CAPABLE: set[tuple[Hashable, ...]] = set()
 
 
-def _child_environment(environment):
+class Cancel(Protocol):
+    """A cancellation flag (``threading.Event``, ``multiprocessing.Event``)."""
+
+    def is_set(self) -> bool:
+        ...
+
+
+def _child_environment(environment: Mapping[str, str]) -> dict[str, str]:
     # Bash reads BASH_ENV even with --noprofile --norc. Exported shell functions
     # and option variables can also change sourcing before our command runs.
     return {
@@ -33,20 +65,33 @@ def _child_environment(environment):
     }
 
 
-def run_process(argv, *, env=None, cwd=None, timeout=None, cancel=None, check=True):
+def run_process(
+    argv: Sequence[StrPath],
+    *,
+    env: Mapping[str, str] | None = None,
+    cwd: StrPath | None = None,
+    timeout: float | None = None,
+    cancel: Cancel | None = None,
+    check: bool = True,
+) -> subprocess.CompletedProcess[bytes]:
     """Run argv in a new local process group; reap it on timeout or cancellation.
 
-    A remote wrapper is responsible for cancelling its remote descendants.
-    Environment mappings are copied; neither cwd nor os.environ is changed.
+    ``env`` is the child's whole environment (the parent's when None), less Bash's
+    startup hooks; it is copied, and neither cwd nor os.environ is changed. Output
+    is captured as bytes. On a timeout, a cancellation (``InterruptedError``) or an
+    interrupt, the group is killed and the exception carries what the process
+    printed (``output``, ``stderr``); with ``check``, a non-zero exit raises
+    ``CalledProcessError``. A remote wrapper is responsible for cancelling its
+    remote descendants.
     """
-    argv = [os.fspath(arg) for arg in argv]
-    if not argv:
+    command = [os.fspath(arg) for arg in argv]
+    if not command:
         raise ValueError("Empty command")
     environment = _child_environment(os.environ if env is None else env)
     started = time.monotonic()
-    _LOG.info("command=%s cwd=%s", shlex.join(argv), cwd or os.getcwd())
+    _LOG.info("command=%s cwd=%s", shlex.join(command), cwd or os.getcwd())
     proc = subprocess.Popen(
-        argv,
+        command,
         cwd=cwd,
         env=environment,
         start_new_session=True,
@@ -56,16 +101,16 @@ def run_process(argv, *, env=None, cwd=None, timeout=None, cancel=None, check=Tr
     try:
         while True:
             if cancel is not None and cancel.is_set():
-                raise InterruptedError("Command cancelled: " + shlex.join(argv))
-            remaining = None if timeout is None else timeout - (time.monotonic() - started)
-            if remaining is not None and remaining <= 0:
-                raise subprocess.TimeoutExpired(argv, timeout)
+                raise InterruptedError("Command cancelled: " + shlex.join(command))
+            # Wake every 0.1 s to look at the deadline and the cancellation flag.
+            wait: float | None = 0.1 if cancel is not None else None
+            if timeout is not None:
+                remaining = timeout - (time.monotonic() - started)
+                if remaining <= 0:
+                    raise subprocess.TimeoutExpired(command, timeout)
+                wait = min(0.1, remaining)
             try:
-                out, err = proc.communicate(
-                    timeout=min(0.1, remaining)
-                    if remaining is not None
-                    else (0.1 if cancel is not None else None)
-                )
+                out, err = proc.communicate(timeout=wait)
                 break
             except subprocess.TimeoutExpired:
                 continue
@@ -78,14 +123,16 @@ def run_process(argv, *, env=None, cwd=None, timeout=None, cancel=None, check=Tr
             pass
         out, err = proc.communicate()
         if isinstance(exc, (subprocess.TimeoutExpired, InterruptedError, KeyboardInterrupt)):
-            exc.output, exc.stderr = out, err
+            # Only TimeoutExpired declares them; the others carry them for the same reader.
+            setattr(exc, "output", out)
+            setattr(exc, "stderr", err)
         _LOG.warning(
             "command stopped duration=%.3fs result=%s",
             time.monotonic() - started,
             type(exc).__name__,
         )
         raise
-    result = subprocess.CompletedProcess(argv, proc.returncode, out, err)
+    result = subprocess.CompletedProcess(command, proc.returncode, out, err)
     _LOG.info(
         "command finished duration=%.3fs result=%s", time.monotonic() - started, proc.returncode
     )
@@ -103,12 +150,12 @@ class Selection:
     Frontend is requested deliberately, never chosen from executable discovery.
     """
 
-    settings: tuple = ()
+    settings: tuple[str, ...] = ()
     command_dir: str = ""
-    launcher: tuple = ()
+    launcher: tuple[str, ...] = ()
     hls_frontend: str = "vitis_hls"
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         object.__setattr__(self, "settings", tuple(map(os.fspath, self.settings)))
         object.__setattr__(self, "launcher", tuple(map(os.fspath, self.launcher)))
         object.__setattr__(self, "command_dir", os.fspath(self.command_dir))
@@ -119,7 +166,15 @@ class Selection:
         if self.hls_frontend not in {"vivado_hls", "vitis_hls", "vitis-run"}:
             raise ValueError("Unknown HLS frontend: " + self.hls_frontend)
 
-    def prepare(self, base_env=None, timeout=30):
+    def prepare(self, base_env: Mapping[str, str] | None = None, timeout: float = 30) -> Toolchain:
+        """The selected installation's environment, captured once.
+
+        With settings scripts, they are sourced in Bash over ``base_env`` (by default
+        a clean base: the system PATH and the user, locale, display and licence
+        variables) and the resulting environment is kept; without, ``base_env``
+        (by default os.environ) is taken as configured. A local route that names no
+        licence gets the machine file's. Raises ``RuntimeError`` when a script fails.
+        """
         if base_env is None:
             if self.settings:
                 # A defined clean base, not an attempt to unsource another toolchain.
@@ -142,6 +197,8 @@ class Selection:
         if self.settings:
             scripts = [str(Path(path).resolve(strict=True)) for path in self.settings]
             bash = shutil.which("bash", path=os.defpath)
+            if bash is None:
+                raise RuntimeError("Could not capture vendor settings: no bash on " + os.defpath)
             command = [
                 bash,
                 "--noprofile",
@@ -174,15 +231,22 @@ class Selection:
 
 @dataclass(frozen=True)
 class Toolchain:
-    selection: Selection
-    environment: object = field(repr=False)
+    """A selection with its prepared environment, a read-only snapshot: every tool
+    this toolchain runs starts in it. Made by ``Selection.prepare``."""
 
-    def __post_init__(self):
+    selection: Selection
+    environment: Mapping[str, str] = field(repr=False)
+
+    def __post_init__(self) -> None:
         object.__setattr__(
             self, "environment", MappingProxyType(_child_environment(self.environment))
         )
 
-    def command(self, tool, *args):
+    def command(self, tool: str, *args: StrPath) -> list[str]:
+        """The argv that runs ``tool`` (a name, not a path) with ``args`` on this
+        route: under the command directory when one is selected, behind the
+        launcher when there is one. A local tool not on the environment's PATH is
+        ``FileNotFoundError``."""
         if Path(tool).name != tool:
             raise ValueError("Pass a tool name, not a local executable path")
         selection = self.selection
@@ -196,22 +260,25 @@ class Toolchain:
             raise FileNotFoundError(
                 f"{executable} not found (FINN_TOOL_DIR_OVERRIDE={selection.command_dir!r})"
             )
-        return [*selection.launcher, executable, *map(os.fspath, args)]
+        return [*selection.launcher, executable, *(os.fspath(arg) for arg in args)]
 
     def run(
         self,
-        tool,
-        args=(),
+        tool: str,
+        args: Iterable[StrPath] = (),
         *,
-        cwd=None,
-        env=None,
-        timeout=None,
-        cancel=None,
-        check=True,
-        replay=None,
-    ):
-        environment = dict(self.environment)
-        environment.update({} if env is None else dict(env))
+        cwd: StrPath | None = None,
+        env: Mapping[str, str] | None = None,
+        timeout: float | None = None,
+        cancel: Cancel | None = None,
+        check: bool = True,
+        replay: StrPath | None = None,
+    ) -> subprocess.CompletedProcess[bytes]:
+        """Run ``tool`` in the prepared environment, updated by ``env``
+        (``run_process``'s contract otherwise). ``replay`` names a script written
+        before the run that repeats the command by hand, beside which the run's
+        stdout and stderr are kept (``<replay>.stdout.log``, ``.stderr.log``)."""
+        environment = {**self.environment, **(env or {})}
         command = self.command(tool, *args)
         if replay is not None:
             # Replay in the same prepared environment; never persist its secrets.
@@ -242,14 +309,15 @@ class Toolchain:
             Path(str(replay) + ".stderr.log").write_bytes(result.stderr)
         return result
 
-    def _probe_key(self, *what):
+    def _probe_key(self, *what: Hashable) -> tuple[Hashable, ...]:
         return (*what, self.selection, self.environment.get("PATH", ""))
 
-    def probe(self, tool, timeout=PROBE_TIMEOUT):
-        """Query identity through exactly the execution route. Not a licence test."""
+    def probe(self, tool: str, timeout: float = PROBE_TIMEOUT) -> tuple[int, ...]:
+        """The tool's AMD release, (year, minor), asked through exactly the execution
+        route; once per selection and PATH in a process. Not a licence test."""
         key = self._probe_key("version", tool)
-        if key in _PROBES:
-            return _PROBES[key]
+        if key in _VERSIONS:
+            return _VERSIONS[key]
         try:
             result = self.run(
                 tool, ["--version" if tool == "vitis-run" else "-version"], timeout=timeout
@@ -265,10 +333,12 @@ class Toolchain:
             raise RuntimeError(f"{tool} did not report a recognizable AMD version")
         version = tuple(map(int, match.groups()))
         _LOG.info("identity tool=%s version=%s.%s", tool, *version)
-        _PROBES[key] = version
+        _VERSIONS[key] = version
         return version
 
-    def hls_command(self, script, timeout=PROBE_TIMEOUT):
+    def hls_command(self, script: str, timeout: float = PROBE_TIMEOUT) -> tuple[str, list[str]]:
+        """The selected HLS frontend and its arguments to run ``script``; refused
+        (``ValueError``) when the probed release does not match the frontend."""
         frontend = self.selection.hls_frontend
         version = self.probe(frontend, timeout)
         # These are FINN code-generation constraints, separate from whether a
@@ -284,12 +354,12 @@ class Toolchain:
                 "select the matching frontend explicitly"
             )
         capability = self._probe_key("hls-capability", frontend)
-        if frontend == "vitis-run" and capability not in _PROBES:
+        if frontend == "vitis-run" and capability not in _HLS_CAPABLE:
             help_result = self.run(frontend, ["--help"], timeout=timeout)
             help_text = (help_result.stdout + help_result.stderr).decode("utf-8", errors="replace")
             if "hls" not in help_text.lower():
                 raise RuntimeError("Selected vitis-run does not advertise HLS capability")
             _LOG.info("capability tool=vitis-run hls=advertised")
-            _PROBES[capability] = True
+            _HLS_CAPABLE.add(capability)
         args = ["--mode", "hls", "--tcl", script] if frontend == "vitis-run" else ["-f", script]
         return frontend, args

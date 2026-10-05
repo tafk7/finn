@@ -11,13 +11,16 @@ choices as its node holds them, absent ones absent.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING
 
 from finn.custom_op.kernels.base import KernelOp
 from finn.transformation.fpgadataflow.kernel_partitions import KERNEL_OPS_DOMAIN
 
+if TYPE_CHECKING:
+    from qonnx.core.modelwrapper import ModelWrapper
 
-def kernel_choices_config(model: Any) -> dict[str, dict[str, object]]:
+
+def kernel_choices_config(model: ModelWrapper) -> dict[str, dict[str, object]]:
     """Each KernelOp node's choices by node name, for ``ApplyConfig``; a node with none
     has no entry."""
     config: dict[str, dict[str, object]] = {}

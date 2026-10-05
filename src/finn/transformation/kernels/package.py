@@ -43,7 +43,7 @@ from __future__ import annotations
 import json
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from qonnx.transformation.base import Transformation
 
@@ -67,8 +67,11 @@ from finn.transformation.fpgadataflow.kernel_partitions import (
     PARTITION_INPUTS,
     PARTITION_OUTPUTS,
 )
-from finn.util._toolchain import Selection
 from finn.util.basic import make_build_dir
+from finn.util.toolchain import Selection, Toolchain
+
+if TYPE_CHECKING:
+    from qonnx.core.modelwrapper import ModelWrapper
 
 VENDOR, LIBRARY, VERSION = "xilinx_finn", "finn", "1.0"
 
@@ -326,7 +329,7 @@ def package_tcl(
     return "\n".join(tcl)
 
 
-def configured_root(model: Any, label: str) -> tuple[Any, tuple[tuple[str, str], ...]]:
+def configured_root(model: ModelWrapper, label: str) -> tuple[Any, tuple[tuple[str, str], ...]]:
     """A partition model's root point, replayed from its nodes (a Decision with one
     viable case is forced, nothing to commit), and its boundary (tensor, port). A
     stale choice, an open Decision, or graph inputs and outputs out of port order
@@ -358,7 +361,7 @@ def configured_root(model: Any, label: str) -> tuple[Any, tuple[tuple[str, str],
 
 
 def boundary_facts(
-    model: Any, point: Any, boundary: Sequence[tuple[str, str]], label: str
+    model: ModelWrapper, point: Any, boundary: Sequence[tuple[str, str]], label: str
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Each boundary port's facts (``kernel_partitions.PORT_FACTS``), inputs then
     outputs, in port order: the ONNX tensor's shape and annotation, and the stream's
@@ -381,7 +384,7 @@ def boundary_facts(
     return found
 
 
-def write_boundary_facts(model: Any, label: str = "partition") -> None:
+def write_boundary_facts(model: ModelWrapper, label: str = "partition") -> None:
     """State a partition model's boundary facts (``finn.partition``), from its root."""
     point, boundary = configured_root(model, label)
     inputs, outputs = boundary_facts(model, point, boundary, label)
@@ -394,8 +397,9 @@ class PackagePartition(Transformation):  # type: ignore[misc]
 
     ``ip_name`` is the partition node's name; the part and the clock period are the
     model's target. ``directory`` is the project (``vivado_stitch_proj``), a new
-    build directory by default; ``toolchain`` a prepared ``finn.util._toolchain``
-    toolchain, the selected one by default.
+    build directory by default; ``toolchain`` the prepared toolchain Vivado runs in
+    (a flow passes its own, so that one build runs Vivado by one route), by default
+    the configured environment's (``Selection().prepare()``).
     """
 
     def __init__(
@@ -404,7 +408,7 @@ class PackagePartition(Transformation):  # type: ignore[misc]
         *,
         run_synth: bool = False,
         directory: Path | None = None,
-        toolchain: Any = None,
+        toolchain: Toolchain | None = None,
     ) -> None:
         super().__init__()
         self.ip_name = ip_name
@@ -412,13 +416,13 @@ class PackagePartition(Transformation):  # type: ignore[misc]
         self.directory = directory
         self.toolchain = toolchain
 
-    def module(self, model: Any) -> Any:
+    def module(self, model: ModelWrapper) -> Any:
         """The partition's module: its root replayed from the nodes, every Decision
         committed or forced."""
         point, _ = configured_root(model, self.ip_name)
         return point.module
 
-    def apply(self, model: Any) -> tuple[Any, bool]:
+    def apply(self, model: ModelWrapper) -> tuple[ModelWrapper, bool]:
         built = target(model)
         point, boundary = configured_root(model, self.ip_name)
         module = point.module
@@ -441,7 +445,7 @@ class PackagePartition(Transformation):  # type: ignore[misc]
                 run_synth=self.run_synth,
             )
         )
-        toolchain = self.toolchain or Selection().prepare()  # type: ignore[no-untyped-call]
+        toolchain = self.toolchain or Selection().prepare()
         toolchain.run(
             "vivado",
             ["-mode", "batch", "-nojournal", "-log", "package.log", "-source", "package.tcl"],
