@@ -55,7 +55,7 @@ from finn.dataflow.gemm import Form, k, m, n
 from finn.dataflow.schedule import Index, Schedule
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.contributions import CopiedSource
-from finn.kernels.base import Clocking, Kernel, extent_of
+from finn.kernels.base import CLOCK2X, Clocking, Kernel, extent_of
 from finn.kernels.channels import Channel
 from finn.kernels.datatypes.domains import Integer
 from finn.kernels.datatypes.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
@@ -228,7 +228,7 @@ class DotpAxiKernel(Kernel):
     @derived
     def clocking(self) -> Clocking:
         # Unpumped, the RTL ignores its 2x clock input: it is held low.
-        return Clocking(doubled="ap_clk2x", doubling=self.compute_pumping)
+        return Clocking(doubled=CLOCK2X, doubling=self.compute_pumping)
 
     def _narrow_weights(self) -> bool:
         return False

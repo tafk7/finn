@@ -106,8 +106,8 @@ class TransposeKernel(Kernel):
         lanes=(j,),
         dtype=dtype,
         signals=("idat", "ivld", "irdy"),
-        clock="clk",
-        reset="rst",
+        clock=NATIVE_CLOCKING.clock,
+        reset=NATIVE_CLOCKING.reset,
     )
     output = AxiStreamPort(
         name="output",
@@ -118,8 +118,8 @@ class TransposeKernel(Kernel):
         lanes=(i,),
         dtype=dtype,
         signals=("odat", "ovld", "ordy"),
-        clock="clk",
-        reset="rst",
+        clock=NATIVE_CLOCKING.clock,
+        reset=NATIVE_CLOCKING.reset,
     )
 
     @derived

@@ -56,7 +56,16 @@ from finn.dataflow.tensor import ScalarEncoding
 from finn.dataflow.traversal import BeatSequence
 from finn.kernels.artifacts.abi import Direction, Endpoint
 from finn.kernels.artifacts.module import Held
-from finn.kernels.base import ACCESS, CLOCKED, HELD, PINS, PORT
+from finn.kernels.base import (
+    ACCESS,
+    CLOCK,
+    CLOCKED,
+    HELD,
+    NATIVE_CLOCKING,
+    PINS,
+    PORT,
+    RESET,
+)
 from finn.kernels.datatypes.domains import Integer
 from finn.kernels.datatypes.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
 from finn.kernels.transport import AxisBeat, ReadyValidStream, StreamContract, StreamMarker
@@ -81,8 +90,8 @@ class Port(Space):
 
     name: str = Param()
     endpoint: Endpoint = Param()
-    clock: str = Param(default="ap_clk")
-    reset: str = Param(default="ap_rst_n")
+    clock: str = Param(default=CLOCK)
+    reset: str = Param(default=RESET)
     transport = required(ReadyValidStream)
 
     @derived
@@ -120,8 +129,8 @@ class WordPort(Port):
 
     bits: int = Param()
     markers: tuple[StreamMarker, ...] = Param(default=())
-    clock: str = Param(default="clk")
-    reset: str = Param(default="rst")
+    clock: str = Param(default=NATIVE_CLOCKING.clock)
+    reset: str = Param(default=NATIVE_CLOCKING.reset)
 
     @derived
     def transport(self) -> ReadyValidStream | Rejected:

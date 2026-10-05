@@ -159,8 +159,8 @@ class EltwiseKernel(Kernel):
         lanes=(c,),
         dtype=lhs_dtype,
         signals=("adat", "avld", "ardy"),
-        clock="clk",
-        reset="rst",
+        clock=NATIVE_CLOCKING.clock,
+        reset=NATIVE_CLOCKING.reset,
     )
     rhs = AxiStreamPort(
         name="rhs",
@@ -172,8 +172,8 @@ class EltwiseKernel(Kernel):
         lanes=(c,),
         dtype=rhs_dtype,
         signals=("bdat", "bvld", "brdy"),
-        clock="clk",
-        reset="rst",
+        clock=NATIVE_CLOCKING.clock,
+        reset=NATIVE_CLOCKING.reset,
     )
     result = AxiStreamPort(
         name="result",
@@ -185,8 +185,8 @@ class EltwiseKernel(Kernel):
         lanes=(c,),
         dtype=result_dtype,
         signals=("odat", "ovld", "ordy"),
-        clock="clk",
-        reset="rst",
+        clock=NATIVE_CLOCKING.clock,
+        reset=NATIVE_CLOCKING.reset,
     )
 
     @derived

@@ -151,8 +151,8 @@ class Clocking:
     while ``doubling``, and otherwise an unused input held low.
     """
 
-    clock: str = "ap_clk"
-    reset: str = "ap_rst_n"
+    clock: str = CLOCK
+    reset: str = RESET
     doubled: str | None = None
     doubling: bool = False
     active_low: bool = True
@@ -406,19 +406,20 @@ class Kernel(Space):
             for _, leaf in fragment.instances
             for info in abi_pins(leaf.pins.ports).values()
         )
-        clocks = (CLOCK, CLOCK2X) if doubled else (CLOCK,)
+        clocking = Clocking(doubled=CLOCK2X if doubled else None, doubling=doubled)
         buses = [bus for item in self.boundary_buses for bus in item.value]
         return Pins(
             (
-                Signal(CLOCK, Direction.IN, 1, Clock(Free())),
-                *((Signal(CLOCK2X, Direction.IN, 1, Clock(Derived(CLOCK, 2))),) if doubled else ()),
-                Signal(RESET, Direction.IN, 1, Reset(True, True, clocks)),
+                *clocking.signals(),
                 *(bus for bus in buses if bus.endpoint is Endpoint.TARGET),
                 *(bus for bus in buses if bus.endpoint is not Endpoint.TARGET),
-                *(top_bus(item.bus, item.port, CLOCK, RESET) for item in fragment.exports),
+                *(
+                    top_bus(item.bus, item.port, clocking.clock, clocking.reset)
+                    for item in fragment.exports
+                ),
             ),
             (),
-            (ClockAlignment(CLOCK, CLOCK2X),) if doubled else (),
+            clocking.alignments(),
         )
 
     @derived(semantics=MODULE_SEMANTICS)
