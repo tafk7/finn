@@ -16,11 +16,10 @@ from qonnx.core.datatype import DataType
 from finn.core.space import Rejected, design_space, inspection
 from finn.kernels.artifacts.build import emit_module
 from finn.kernels.artifacts.contributions import ContributionError, GeneratedData
-from kernels.helpers import WeightDelivery, matmul_assembly
+from kernels.helpers import FULL_DSP48E2, matmul_assembly, WeightDelivery
 from finn.kernels.memstream import MemStreamKernel
 from finn.dataflow.tensor import ScalarEncoding
 from finn.dataflow.traversal import tile
-from finn.kernels.target import DspBlock
 from kernels.helpers import finnlib_root, labels, pin_names, placed
 
 WEIGHTS = ((-4, -3, -2, -1), (0, 1, 2, 3), (3, 2, 1, 0), (-1, -2, -3, -4))
@@ -33,7 +32,7 @@ MATMUL = dict(
     weights_dtype=DataType["INT3"],
     pe=2,
     simd=2,
-    target_dsp=DspBlock.DSP48E2,
+    platform=FULL_DSP48E2,
     weight_delivery=WeightDelivery.MEMSTREAM,
     weights=tuple(zip(*WEIGHTS)),
 )

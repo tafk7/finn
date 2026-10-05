@@ -25,8 +25,7 @@ from finn.core.space import (
     DefinitionError,
     Rejected,
 )
-from kernels.helpers import controlled, finnlib_root, point_for
-from finn.kernels.target import DspBlock
+from kernels.helpers import controlled, finnlib_root, FULL_DSP48E2, FULL_DSP58, point_for
 from kernels.xsim import requires_xsim, simulate
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -54,7 +53,7 @@ def eltwise(pe=2, **changes):
         lhs_dtype=DataType["INT3"],
         rhs_dtype=DataType["INT3"],
         b_scale=1.0,
-        target_dsp=DspBlock.DSP58,
+        platform=FULL_DSP58,
     )
     facts.update(changes)
     return point_for(EltwiseKernel, facts, pe=pe)
@@ -174,7 +173,7 @@ def test_native_rtl_pin_names_directions_and_widths(factory, tmp_path):
         lambda: eltwise(b_scale=1e100),
         lambda: eltwise(b_scale=0.5),
         lambda: eltwise(operation="MUL", lhs_dtype=DataType["FLOAT32"], b_scale=0.5),
-        lambda: eltwise(lhs_dtype=DataType["FLOAT32"], target_dsp=DspBlock.DSP48E2),
+        lambda: eltwise(lhs_dtype=DataType["FLOAT32"], platform=FULL_DSP48E2),
         lambda: threshold(thresholds=(), pe=None),
         lambda: threshold(thresholds=(((2, 1),),)),
         lambda: threshold(thresholds=(((0, 20),),)),

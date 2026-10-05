@@ -111,12 +111,8 @@ class MatMul(KernelOp):
         formals: dict[str, Any] = facts.formals()
         del formals["x_tensor"]
         a, b = self.onnx_node.input
-        platform = formals["platform"]
-        if platform.dsp is None:  # target() states every key; the root refuses it as well
-            raise KernelOpError(f"{self.label}: the platform states no DSP block")
         kernel = MatMulKernel(
             **formals,
-            target_dsp=platform.dsp,
             x_stream=streams[a],
             w_stream=streams[b],
             y_stream=streams[self.onnx_node.output[0]],

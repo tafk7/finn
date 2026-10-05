@@ -27,9 +27,8 @@ from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.configure import commit
 from finn.kernels.matmul import MatMulKernel, exact_result_dtype
 from finn.kernels.streams import BufferedStream, Stream
-from finn.kernels.target import DspBlock
 from finn.kernels.thresholding import ThresholdingAxiKernel
-from kernels.helpers import Root, labels, with_adapter_memories
+from kernels.helpers import FULL_DSP48E2, labels, Root, with_adapter_memories
 from kernels.xsim import pack, requires_xsim, stream_through
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -53,7 +52,7 @@ def matmul(k: int, n: int, dtype: Any, weights: Any, **streams: Stream) -> MatMu
         k=k,
         activation_dtype=dtype,
         weights_dtype=W,
-        target_dsp=DspBlock.DSP48E2,
+        platform=FULL_DSP48E2,
         target_period_ns=5.0,
         weights=weights,
         **streams,
@@ -199,7 +198,7 @@ def carried(
         k=INPUTS,
         activation_dtype=A,
         weights_dtype=W,
-        target_dsp=DspBlock.DSP48E2,
+        platform=FULL_DSP48E2,
         target_period_ns=5.0,
     )
 

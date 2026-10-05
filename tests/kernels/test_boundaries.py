@@ -169,6 +169,7 @@ sys.meta_path.insert(0, RejectParked())
 from finn.core.space import Space, design_space
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels import DspBlock, MatMulKernel, PackedDotpKernel
+from finn.kernels.target import Platform
 from finn.kernels.artifacts.module import Composed, Leaf
 from finn.kernels.base import Kernel
 from finn.kernels.configure import commit
@@ -176,13 +177,15 @@ from finn.kernels.transport import AxiStream
 from finn.kernels.streams import BufferedStream, Stream
 from qonnx.core.datatype import DataType
 
+PLATFORM = Platform(dsp=DspBlock.DSP48E2)
+
 
 class Placed(Space):
     x = Stream(tensor=Tensor((1, 2), ScalarEncoding(DataType["INT3"])), port="in0_V")
     w = Stream(tensor=Tensor((2, 2), ScalarEncoding(DataType["INT3"])), port="in1_V")
     y = Stream(tensor=Tensor((1, 2), ScalarEncoding(DataType["INT8"])), port="out0_V")
     compute = PackedDotpKernel(
-        target_dsp=DspBlock.DSP48E2,
+        platform=PLATFORM,
         target_period_ns=5.0,
         result_dtype=DataType["INT8"],
         x_stream=x,
@@ -211,7 +214,7 @@ for memory in ("none", "memstream"):
         n=4,
         activation_dtype=DataType["INT3"],
         weights_dtype=DataType["INT3"],
-        target_dsp=DspBlock.DSP48E2,
+        platform=PLATFORM,
         target_period_ns=5.0,
     )
     if memory == "memstream":

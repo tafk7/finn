@@ -11,12 +11,11 @@ from finn.kernels.artifacts.abi import Bus
 from finn.kernels.artifacts.build import emit_module
 from finn.kernels.base import Kernel
 from finn.kernels.configure import commit
-from kernels.helpers import finnlib_root, labels, matmul_point, placed
+from kernels.helpers import finnlib_root, FULL_DSP48E2, labels, matmul_point, placed
 from finn.kernels.matmul import MatMulKernel, exact_result_dtype
 from kernels.helpers import WeightDelivery, matmul_assembly
 from finn.kernels.dotp import DotpAxiKernel, PackedDotpKernel
 from finn.core.space import Decision, View, constraint, reject
-from finn.kernels.target import DspBlock
 
 
 FACTS = dict(
@@ -25,7 +24,7 @@ FACTS = dict(
     n=4,
     activation_dtype=DataType["INT3"],
     weights_dtype=DataType["INT3"],
-    target_dsp=DspBlock.DSP48E2,
+    platform=FULL_DSP48E2,
     target_period_ns=5.0,
 )
 
@@ -39,7 +38,7 @@ def assembly(**changes):
         weights_dtype=DataType["INT3"],
         pe=2,
         simd=2,
-        target_dsp=DspBlock.DSP48E2,
+        platform=FULL_DSP48E2,
     )
     values.update(changes)
     return matmul_assembly(**values)
@@ -251,8 +250,8 @@ def test_matmul_honors_the_child_physical_view_not_just_its_raw_module(monkeypat
         compute = Decision(
             {"packed": RestrictedDotp},
             form=MatMulKernel.datapath,
-            target_dsp=MatMulKernel.target_dsp,
             target_period_ns=MatMulKernel.target_period_ns,
+            platform=MatMulKernel.platform,
             reshape_activations=MatMulKernel.dense_view,
             result_dtype=MatMulKernel.result_type,
             x_stream=MatMulKernel.x_stream,

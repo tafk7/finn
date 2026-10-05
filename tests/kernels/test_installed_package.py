@@ -48,6 +48,7 @@ class RejectGraphDependencies(importlib.abc.MetaPathFinder):
 sys.meta_path.insert(0, RejectGraphDependencies())
 
 from finn.kernels import DspBlock, MatMulKernel, PackedDotpKernel
+from finn.kernels.target import Platform
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.base import Kernel
 from finn.kernels.configure import commit
@@ -85,13 +86,15 @@ assert not (installed / "finn/parked").exists()
 assert "finn.dataflow.datatypes" in sys.modules
 assert not (installed / "finn/kernels/space").exists()
 assert not (installed / "finn/kernels/resources").exists()
+PLATFORM = Platform(dsp=DspBlock.DSP48E2)
+
 
 class PlacedDotp(Space):
     x = Stream(tensor=Tensor((1, 2), ScalarEncoding(DataType["INT3"])), port="in0_V")
     w = Stream(tensor=Tensor((2, 2), ScalarEncoding(DataType["INT3"])), port="in1_V")
     y = Stream(tensor=Tensor((1, 2), ScalarEncoding(DataType["INT8"])), port="out0_V")
     compute = PackedDotpKernel(
-        target_dsp=DspBlock.DSP48E2,
+        platform=PLATFORM,
         target_period_ns=5.0,
         result_dtype=DataType["INT8"],
         x_stream=x,
@@ -145,7 +148,7 @@ INT3, INT8 = ScalarEncoding(DataType["INT3"]), ScalarEncoding(DataType["INT8"])
 for memory in ("none", "memstream"):
     facts = dict(
         m=3, k=4, n=4, activation_dtype=DataType["INT3"], weights_dtype=DataType["INT3"],
-        target_dsp=DspBlock.DSP48E2, target_period_ns=5.0,
+        platform=PLATFORM, target_period_ns=5.0,
     )
     choices = {"w.transport": "direct", "matmul.compute": "packed"}
     expected = dotp_sources | {"rtl/shape/input_gen.sv"}

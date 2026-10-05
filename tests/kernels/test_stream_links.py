@@ -20,9 +20,8 @@ from finn.kernels.base import PORT
 from finn.kernels.configure import commit
 from finn.kernels.dotp import PackedDotpKernel
 from finn.kernels.streams import BufferedStream, Stream
-from finn.kernels.target import DspBlock
 from finn.kernels.transport import STREAM_CONTRACT, AxiStream, StreamContract
-from kernels.helpers import with_adapter_memories
+from kernels.helpers import FULL_DSP48E2, with_adapter_memories
 
 INT3, INT8 = DataType["INT3"], DataType["INT8"]
 
@@ -34,7 +33,7 @@ class Placed(Space):
     w = BufferedStream(tensor=Tensor((4, 4), ScalarEncoding(INT3)), port="in1_V")
     y = Stream(tensor=Tensor((3, 4), ScalarEncoding(INT8)), port="out0_V")
     compute = PackedDotpKernel(
-        target_dsp=DspBlock.DSP48E2,
+        platform=FULL_DSP48E2,
         target_period_ns=5.0,
         result_dtype=INT8,
         x_stream=x,
@@ -92,7 +91,7 @@ def test_a_boundary_no_port_names_is_refused() -> None:
         w = BufferedStream(tensor=Tensor((4, 4), ScalarEncoding(INT3)))
         y = Stream(tensor=Tensor((3, 4), ScalarEncoding(INT8)), port="out0_V")
         compute = PackedDotpKernel(
-            target_dsp=DspBlock.DSP48E2,
+            platform=FULL_DSP48E2,
             target_period_ns=5.0,
             result_dtype=INT8,
             x_stream=x,

@@ -24,7 +24,8 @@ from finn.core.space import (
     design_space,
 )
 from finn.core.space.errors import ValueUnavailableError
-from finn.kernels.target import DspBlock
+from finn.kernels.target import DspBlock, Platform
+from kernels.helpers import full_platform
 
 T = TypeVar("T")
 
@@ -102,7 +103,7 @@ def eltwise(
             lhs_dtype=resolve_qonnx_datatype_name(lhs),
             rhs_dtype=resolve_qonnx_datatype_name(rhs),
             b_scale=scale,
-            target_dsp=target,
+            platform=full_platform(target),
         )
     )
 
@@ -173,21 +174,21 @@ def test_eltwise_retains_supported_profile_restrictions() -> None:
     )
 
 
-def test_eltwise_narrow_result_stays_known_with_optional_parent_target_omission() -> None:
+def test_eltwise_narrow_result_stays_known_with_optional_parent_platform_omission() -> None:
     # Replaces an inline exposed Param child binding: the optional formal is the
     # parent's own, bound to the child by name.
-    class OptionalTarget(Space):
-        target_dsp: DspBlock = Param(required=False)
+    class OptionalPlatform(Space):
+        platform: Platform = Param(required=False)
         arithmetic = EltwiseKernel(
             operation="ADD",
             pe=2,
             lhs_dtype=resolve_qonnx_datatype_name("INT3"),
             rhs_dtype=resolve_qonnx_datatype_name("INT3"),
             b_scale=1.0,
-            target_dsp=target_dsp,
+            platform=platform,
         )
 
-    point = design_space(OptionalTarget())
+    point = design_space(OptionalPlatform())
     assert point.arithmetic.result_dtype.name == "INT4"
     assessment = point.arithmetic.inspect(EltwiseKernel.module)
     assert isinstance(assessment.output_result, Available)

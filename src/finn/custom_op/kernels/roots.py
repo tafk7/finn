@@ -20,14 +20,14 @@ and it has no source. Nothing is pinned.
 The platform is a fact too: the target's capabilities (``target(model)``), bound
 to the kernels and to a stream with a source, so the requirements of their value
 cases (``requires``) read the device the model is built for. The DSP block is
-the platform's (``target_dsp``), not a separate fact.
+the platform's (``platform.dsp``), which the compute cores read.
 """
 
 from __future__ import annotations
 
 from typing import Any, cast
 
-from finn.core.space import Param, Rejected, derived, reject
+from finn.core.space import Param, derived
 from finn.dataflow.datatypes import QONNXDataType
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.base import Kernel
@@ -40,7 +40,7 @@ from finn.kernels.datatypes.semantics import (
 )
 from finn.kernels.matmul import MatMulKernel
 from finn.kernels.streams import BufferedStream, Stream
-from finn.kernels.target import DspBlock, Platform
+from finn.kernels.target import Platform
 from finn.kernels.thresholding import ThresholdingAxiKernel
 
 
@@ -58,13 +58,6 @@ class MatMulNode(Kernel):
     platform: Platform = Param()
     target_period_ns: float = Param()
     x_tensor: Tensor = Param()
-
-    @derived
-    def target_dsp(self) -> DspBlock | Rejected:
-        """The platform's DSP block (a model's target states one)."""
-        if self.platform.dsp is None:
-            return reject("target-dsp", "the platform states no DSP block")
-        return self.platform.dsp
 
     # Each case declares ``w`` and ``matmul``.
     @derived
@@ -93,7 +86,6 @@ class StoredMatMulNode(MatMulNode):
         k=MatMulNode.k,
         activation_dtype=MatMulNode.activation_dtype,
         weights_dtype=MatMulNode.weights_dtype,
-        target_dsp=MatMulNode.target_dsp,
         target_period_ns=MatMulNode.target_period_ns,
         platform=MatMulNode.platform,
         weights=weights,
@@ -117,7 +109,6 @@ class StreamedMatMulNode(MatMulNode):
         k=MatMulNode.k,
         activation_dtype=MatMulNode.activation_dtype,
         weights_dtype=MatMulNode.weights_dtype,
-        target_dsp=MatMulNode.target_dsp,
         target_period_ns=MatMulNode.target_period_ns,
         platform=MatMulNode.platform,
         x_stream=MatMulNode.x,

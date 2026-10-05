@@ -95,14 +95,13 @@ def test_a_malformed_key_is_refused() -> None:
 
 def test_phase_1s_untyped_keys_are_refused_not_read() -> None:
     stale = holder()
-    stale.set_metadata_prop("finn_target_dsp", "DSP48E2")
     stale.set_metadata_prop("finn_target_period_ns", "5.0")
     with pytest.raises(KernelOpError, match="phase 1's untyped keys"):
         target(stale)
     stated = holder()
     write_target(stated, TARGET)
-    stated.set_metadata_prop(PHASE1_KEYS[0], "DSP58")
-    with pytest.raises(KernelOpError, match="phase 1's untyped keys \\['finn_target_dsp'\\]"):
+    stated.set_metadata_prop(PHASE1_KEYS[0], "4.0")
+    with pytest.raises(KernelOpError, match="phase 1's untyped keys \\['finn_target_period_ns'\\]"):
         target(stated)
     with pytest.raises(KernelOpError, match="phase 1's untyped keys"):
         stale.transform(ToKernelOps(TARGET))

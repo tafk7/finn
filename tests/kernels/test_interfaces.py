@@ -21,9 +21,8 @@ from finn.kernels.control import ControlBus
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.dotp import PackedDotpKernel
 from finn.kernels.streams import Stream
-from finn.kernels.target import DspBlock
 from finn.kernels.thresholding import ThresholdingAxiKernel
-from kernels.helpers import Root, placed, with_adapter_memories
+from kernels.helpers import FULL_DSP48E2, placed, Root, with_adapter_memories
 from kernels.xsim import requires_xsim, stream_through
 
 REPETITIONS, WIDTH, HEIGHT, SIMD = 2, 4, 2, 2
@@ -45,7 +44,7 @@ class Activated(Root):
     levels = Stream(tensor=LEVEL_TENSOR, port="out0_V")
     config = ControlBus(port="s_axilite")
     compute = PackedDotpKernel(
-        target_dsp=DspBlock.DSP48E2,
+        platform=FULL_DSP48E2,
         target_period_ns=5.0,
         result_dtype=R,
         x_stream=activations,

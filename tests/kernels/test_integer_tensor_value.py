@@ -15,7 +15,7 @@ import copy
 import pickle
 
 import pytest
-from kernels.helpers import matmul_point
+from kernels.helpers import FULL_DSP48E2, matmul_point
 from qonnx.core.datatype import DataType
 
 from finn.core.space import inspection
@@ -27,7 +27,6 @@ from finn.kernels.datatypes.semantics import (
     integer_range,
     integers,
 )
-from finn.kernels.target import DspBlock
 
 WEIGHTS = ((1, -2, 3), (4, 5, -6))
 
@@ -66,7 +65,7 @@ def test_a_new_configuration_does_not_walk_the_weights(monkeypatch: pytest.Monke
         k=4,
         activation_dtype=int3,
         weights_dtype=int3,
-        target_dsp=DspBlock.DSP48E2,
+        platform=FULL_DSP48E2,
         target_period_ns=5.0,
         weights=weights,
     )

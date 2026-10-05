@@ -22,7 +22,7 @@ from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 from kernels.rtlsim.rtl_transport import drive_observed
 from kernels.xsim import materialize
 from finn.dataflow.gemm import Form
-from kernels.helpers import WeightDelivery, matmul_assembly, print_identity
+from kernels.helpers import full_platform, matmul_assembly, print_identity, WeightDelivery
 from finn.kernels.target import DspBlock
 from finn.kernels.artifacts.abi import abi_pins
 
@@ -179,7 +179,7 @@ def run(
         weights_dtype=w_type,
         pe=c.pe,
         simd=c.simd,
-        target_dsp=c.target,
+        platform=full_platform(c.target),
         form=Form.DEPTHWISE if c.depthwise else Form.DENSE,
         compute_pumping=c.pumping,
         core=c.core,

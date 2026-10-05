@@ -11,6 +11,7 @@ kernel, with no model, keeps the default platform, which refuses nothing.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Any
 
 import pytest
@@ -21,6 +22,7 @@ from finn.custom_op.kernels.base import KernelOpError, write_target
 from finn.custom_op.kernels.partition import partition_root
 from finn.custom_op.kernels.roots import StoredMatMulNode
 from finn.kernels.configure import commit
+from finn.kernels.dotp import PackedDotpKernel
 from finn.kernels.matmul import MatMulKernel
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.target import DspBlock, Platform, Target, resolve_target
@@ -44,8 +46,8 @@ def op(model: ModelWrapper) -> Any:
 def test_the_node_root_binds_the_models_platform_and_its_dsp_block() -> None:
     point = op(targeted(matmul_model(), URAM)).point()
     assert point.platform == URAM.platform
-    assert point.target_dsp is DspBlock.DSP58  # the platform's, not a separate fact
-    assert point.matmul.target_dsp is DspBlock.DSP58
+    assert point.matmul.platform.dsp is DspBlock.DSP58  # the platform's, read by the cores
+    assert commit(point, {"matmul.compute": "packed"}).matmul.compute.dsp is DspBlock.DSP58
     assert point.w.platform == URAM.platform and point.matmul.platform == URAM.platform
 
 
@@ -89,19 +91,21 @@ def test_a_partitions_weight_stream_reads_the_platform() -> None:
         commit(root.point, {"w.source.memstream.pumped_memory": True})
 
 
-def test_a_bare_kernel_keeps_the_default_platform() -> None:
+def test_a_bare_kernel_without_a_platform_has_no_dsp_block() -> None:
     formals = op(matmul_model()).facts().formals()
     facts = {name: formals[name] for name in ("m", "n", "k", "activation_dtype", "weights_dtype")}
-    bare = design_space(
-        MatMulKernel(
-            **facts, target_dsp=DspBlock.DSP48E2, target_period_ns=5.0, weights=formals["weights"]
-        )
-    )
-    assert bare.platform == Platform()  # refuses nothing: no model, no device
-
-
-def test_a_platform_without_a_dsp_block_is_refused_by_the_node_root() -> None:
-    formals = {**op(matmul_model()).facts().formals(), "platform": Platform()}
-    answer = design_space(StoredMatMulNode(**formals)).query(StoredMatMulNode.target_dsp)
+    bare = design_space(MatMulKernel(**facts, target_period_ns=5.0, weights=formals["weights"]))
+    assert bare.platform == Platform()
+    answer = commit(bare, {"compute": "packed"}).compute.query(PackedDotpKernel.dsp)
     assert isinstance(answer, Rejected)
-    assert [finding.code for finding in answer.findings] == ["target-dsp"]
+    assert [finding.code for finding in answer.findings] == ["dotp-dsp"]
+
+
+def test_a_platform_without_a_dsp_block_is_refused_by_the_cores() -> None:
+    platform = replace(URAM.platform, dsp=None)
+    formals = {**op(matmul_model()).facts().formals(), "platform": platform}
+    answer = design_space(StoredMatMulNode(**formals)).matmul.query(MatMulKernel.compute)
+    assert isinstance(answer, Rejected)
+    (finding,) = answer.findings  # no core is viable, each for the same reason
+    for core in ("packed", "int8_dsp58"):
+        assert f"{core}: matmul.compute.{core}.dsp: dotp-dsp" in finding.message

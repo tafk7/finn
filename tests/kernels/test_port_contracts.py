@@ -40,8 +40,7 @@ from finn.kernels.eltwise import EltwiseKernel
 from finn.kernels.port import AxiStreamPort
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.streams import Stream
-from finn.kernels.target import DspBlock
-from kernels.helpers import matmul_point, with_adapter_memories
+from kernels.helpers import FULL_DSP48E2, FULL_DSP58, matmul_point, with_adapter_memories
 
 A, W, R = DataType["INT3"], DataType["INT3"], DataType["INT8"]
 ROWS, REDUCTION, OUTPUTS, PE, SIMD = 2, 4, 4, 2, 2
@@ -83,7 +82,7 @@ def placed(
         r = Stream(tensor=Tensor(y, ScalarEncoding(R)), port="out0_V")
         weights = MemStreamKernel(dtype=W, form=tiled, contents=weight_values(w), output_stream=w_s)
         compute = core(
-            target_dsp=DspBlock.DSP58,
+            platform=FULL_DSP58,
             target_period_ns=5.0,
             form=form,
             result_dtype=R,
@@ -195,7 +194,7 @@ def test_one_kernel_refusal_reaches_only_its_own_stream():
             k=4,
             activation_dtype=DataType["INT3"],
             weights_dtype=DataType["UINT3"],
-            target_dsp=DspBlock.DSP48E2,
+            platform=FULL_DSP48E2,
             target_period_ns=5.0,
         ),
         {
@@ -226,7 +225,7 @@ def eltwise_between(rhs_shape: tuple[int, ...], rhs_dtype: str = "INT4") -> Any:
             lhs_dtype=int4,
             rhs_dtype=int4,
             b_scale=1.0,
-            target_dsp=DspBlock.DSP58,
+            platform=FULL_DSP58,
             lhs_stream=lhs,
             rhs_stream=rhs,
             result_stream=out,

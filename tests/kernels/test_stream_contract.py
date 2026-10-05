@@ -19,7 +19,6 @@ from finn.core.space import Rejected, Unresolved, design_space
 from finn.kernels.configure import commit
 from finn.kernels.eltwise import EltwiseKernel
 from finn.kernels.streams import Stream, wired
-from finn.kernels.target import DspBlock
 from finn.kernels.artifacts.abi import Endpoint
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.memstream import MemStreamKernel
@@ -46,7 +45,7 @@ from finn.dataflow.traversal import (
 from finn.transformation.fpgadataflow.transpose_decomposition import (
     shuffle_perfect_loopnest_coeffs,
 )
-from kernels.helpers import Root
+from kernels.helpers import FULL_DSP58, Root
 from kernels.xsim import pack as xsim_pack, requires_xsim, stream_through
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -329,7 +328,7 @@ def eltwise_with_constant(form=None):
             lhs_dtype=int4,
             rhs_dtype=int4,
             b_scale=1.0,
-            target_dsp=DspBlock.DSP58,
+            platform=FULL_DSP58,
             lhs_stream=x,
             rhs_stream=c,
             result_stream=y,

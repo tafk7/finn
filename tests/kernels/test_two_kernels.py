@@ -31,8 +31,7 @@ from finn.kernels.dotp import PackedDotpKernel
 from finn.kernels.matmul import exact_result_dtype
 from finn.kernels.streams import Stream
 from finn.kernels.base import Kernel
-from finn.kernels.target import DspBlock
-from kernels.helpers import Root, labels, with_adapter_memories
+from kernels.helpers import FULL_DSP48E2, labels, Root, with_adapter_memories
 from kernels.xsim import pack, requires_xsim, stream_through
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -54,7 +53,7 @@ def layered(*, adaptable: bool = True):
         w2 = Stream(tensor=Tensor((HIDDEN, OUTPUTS), ScalarEncoding(W)))
         y = Stream(tensor=Tensor((ROWS, OUTPUTS), ScalarEncoding(Y)), port="out0_V")
         first = PackedDotpKernel(
-            target_dsp=DspBlock.DSP48E2,
+            platform=FULL_DSP48E2,
             target_period_ns=5.0,
             result_dtype=H,
             x_stream=x,
@@ -62,7 +61,7 @@ def layered(*, adaptable: bool = True):
             y_stream=h,
         )
         second = PackedDotpKernel(
-            target_dsp=DspBlock.DSP48E2,
+            platform=FULL_DSP48E2,
             target_period_ns=5.0,
             result_dtype=Y,
             x_stream=h,

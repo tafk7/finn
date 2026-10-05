@@ -61,6 +61,7 @@ from kernels.conformance import (
     samples,
 )
 from kernels.xsim import requires_xsim
+from kernels.helpers import FULL_DSP58, full_platform
 
 
 def tensor(shape: tuple[int, ...], dtype: str) -> Tensor:
@@ -93,7 +94,7 @@ def dotp(family: type[Any], dsp: DspBlock, bits: int, form: Form = Form.DENSE) -
         reference=reference,
         choices={"compute_pumping": False},
         facts={
-            "target_dsp": dsp,
+            "platform": full_platform(dsp),
             "target_period_ns": 5.0,
             "form": form,
             "result_dtype": exact_result_dtype(reduction, a, w),
@@ -255,7 +256,7 @@ def eltwise() -> dict[str, Any]:
             lhs_dtype=DataType["INT4"],
             rhs_dtype=DataType["INT4"],
             b_scale=1.0,
-            target_dsp=DspBlock.DSP58,
+            platform=FULL_DSP58,
         ),
     )
 

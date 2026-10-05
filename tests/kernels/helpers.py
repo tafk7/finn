@@ -60,10 +60,20 @@ from finn.kernels.datatypes.semantics import (
     QONNX_DATATYPE_VALUE_SEMANTICS,
     IntegerTensor,
 )
-from finn.kernels.target import DspBlock
+from finn.kernels.target import DspBlock, Platform
 
 T = TypeVar("T")
 S = TypeVar("S", bound=Space)
+
+
+def full_platform(dsp: DspBlock) -> Platform:
+    """The platform a bare-kernel test means when it is not about the platform: ``dsp``
+    its DSP block, and every capability."""
+    return Platform(dsp=dsp)
+
+
+FULL_DSP48E2 = full_platform(DspBlock.DSP48E2)
+FULL_DSP58 = full_platform(DspBlock.DSP58)
 
 
 def point_for(kernel: Callable[..., S], facts: Mapping[str, object], **choices: object) -> S:
@@ -155,7 +165,7 @@ def matmul_root(family: type[MatMulKernel]) -> type[Root]:
         form: Form = Param(default=Form.DENSE)
         activation_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
         weights_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
-        target_dsp: DspBlock = Param()
+        platform: Platform = Param()
         target_period_ns: float = Param()
         weights: IntegerTensor = Param(semantics=INTEGER_TENSOR, required=False)
         weight_sets: int = Param(default=1)
@@ -192,7 +202,7 @@ def matmul_root(family: type[MatMulKernel]) -> type[Root]:
             form=form,
             activation_dtype=activation_dtype,
             weights_dtype=weights_dtype,
-            target_dsp=target_dsp,
+            platform=platform,
             target_period_ns=target_period_ns,
             weights=weights,
             weight_sets=weight_sets,
@@ -346,7 +356,7 @@ def matmul_assembly(
     weights_dtype: QONNXDataType,
     pe: int,
     simd: int,
-    target_dsp: DspBlock,
+    platform: Platform,
     form: Form = Form.DENSE,
     target_period_ns: float = 5.0,
     compute_pumping: bool = False,
@@ -387,7 +397,7 @@ def matmul_assembly(
         form=form,
         activation_dtype=activation_dtype,
         weights_dtype=weights_dtype,
-        target_dsp=target_dsp,
+        platform=platform,
         target_period_ns=target_period_ns,
         weight_sets=weight_sets,
     )

@@ -76,7 +76,8 @@ class DotpAxiKernel(Kernel):
     timing model: about 0.741 ns through the first DSP and 0.605 ns through each
     further one, against half the period when compute is pumped. Only the INT8
     core reads SEGMENTLEN. Pumped compute requires a phase-aligned 2x clock: the
-    ``platform``'s ``clk2x``.
+    ``platform``'s ``clk2x``. The DSP block is the ``platform``'s (``dsp``): a
+    platform that states none is refused (``dotp-dsp``).
     """
 
     id = "finnlib.dotp_axi"
@@ -86,7 +87,6 @@ class DotpAxiKernel(Kernel):
     core: ClassVar[str] = ""
 
     form: Form = Param(default=Form.DENSE)
-    target_dsp: DspBlock = Param()
     target_period_ns: float = Param()
     reshape_activations: bool = Param(default=False)
     # The accumulator encoding it produces: its parent's choice (MatMul binds its
@@ -160,6 +160,14 @@ class DotpAxiKernel(Kernel):
         dtype=result_dtype,
     )
 
+    @derived
+    def dsp(self) -> DspBlock | Rejected:
+        """The platform's DSP block, the slice the core is built in."""
+        dsp = self.platform.dsp
+        if dsp is None:
+            return reject("dotp-dsp", "the platform states no DSP block")
+        return dsp
+
     @constraint
     def core_supported(self) -> bool | Rejected:
         # The ports admit the encodings (integer family, signedness, two bits);
@@ -176,7 +184,7 @@ class DotpAxiKernel(Kernel):
 
     @constraint
     def accumulator_width_supported(self) -> bool | Rejected:
-        bits, maximum = self.y.element.bits, dsp_widths(self.target_dsp)[2]
+        bits, maximum = self.y.element.bits, dsp_widths(self.dsp)[2]
         if not 1 <= bits <= maximum:
             return reject(
                 "dotp-accumulator-width",
@@ -240,7 +248,7 @@ class DotpAxiKernel(Kernel):
             "NARROW_WEIGHTS": int(self._narrow_weights()),
             "PUMPED_COMPUTE": int(self.compute_pumping),
             "SEGMENTLEN": self.segment_length,
-            "VERSION": _DSP_VERSION[self.target_dsp],
+            "VERSION": _DSP_VERSION[self.dsp],
             "ACTIVATION_BROADCASTING": int(self.form is Form.DENSE),
             "FORCE_BEHAVIORAL": 0,
             "CORE": f'"{type(self).core}"',
@@ -289,7 +297,7 @@ class PackedDotpKernel(DotpAxiKernel):
     def _core_refusal(self) -> Rejected | None:
         if self.form is not Form.DENSE:
             return reject("dotp-form", "the packed core broadcasts activations to every PE lane")
-        a_bits, b_bits, _ = dsp_widths(self.target_dsp)
+        a_bits, b_bits, _ = dsp_widths(self.dsp)
         activation, weights = self.x.element, self.w.element
         if activation.bits + (not activation.signed) > b_bits:
             return reject(
@@ -330,7 +338,7 @@ class Int8Dsp58DotpKernel(DotpAxiKernel):
     core = "dotp_8sx9_dsp58"
 
     def _core_refusal(self) -> Rejected | None:
-        if self.target_dsp is not DspBlock.DSP58:
+        if self.dsp is not DspBlock.DSP58:
             return reject("dotp-target", "the INT8 core is a DSP58 mode")
         activation, weights = self.x.element, self.w.element
         if activation.bits + (not activation.signed) > 9:

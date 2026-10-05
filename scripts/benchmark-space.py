@@ -541,6 +541,7 @@ def kernel_workload(api, name: str, trials: int) -> dict[str, object]:
     )
     design_space = api.design_space
     dtype = importlib.import_module("finn.dataflow.datatypes").resolve_qonnx_datatype_name
+    capabilities = importlib.import_module("finn.kernels.target").Platform(dsp=DspBlock.DSP48E2)
     if name == "fifo":
         base = design_space(FifoKernel(word_bits=16, depth=32))
 
@@ -558,7 +559,7 @@ def kernel_workload(api, name: str, trials: int) -> dict[str, object]:
                 result_dtype=dtype("INT8"),
                 pe=2,
                 simd=2,
-                target_dsp=DspBlock.DSP48E2,
+                platform=capabilities,
                 target_period_ns=5.0,
             )
         )
@@ -578,7 +579,7 @@ def kernel_workload(api, name: str, trials: int) -> dict[str, object]:
                 outputs=4,
                 activation_dtype=dtype("INT3"),
                 weights_dtype=dtype("INT3"),
-                target_dsp=DspBlock.DSP48E2,
+                platform=capabilities,
                 target_period_ns=5.0,
             )
         )

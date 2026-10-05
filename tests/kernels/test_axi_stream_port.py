@@ -40,7 +40,7 @@ from finn.kernels.configure import commit
 from finn.kernels.dotp import PackedDotpKernel
 from finn.kernels.port import AxiStreamPort
 from finn.kernels.streams import Stream as KernelStream
-from finn.kernels.target import DspBlock
+from kernels.helpers import FULL_DSP58
 
 b, s, c = Index("b"), Index("s"), Index("c")
 
@@ -200,7 +200,7 @@ def test_dotp_binds_from_its_ports_through_the_dense_view() -> None:
         compute = PackedDotpKernel(
             form=Form.DENSE,
             reshape_activations=True,
-            target_dsp=DspBlock.DSP58,
+            platform=FULL_DSP58,
             target_period_ns=5.0,
             result_dtype=DataType["INT9"],
             x_stream=x,
@@ -215,7 +215,7 @@ def test_dotp_binds_from_its_ports_through_the_dense_view() -> None:
     class Wide(Placed):
         x = stream((2, 14), "INT3", "in0_V")
         compute = PackedDotpKernel(
-            target_dsp=DspBlock.DSP58,
+            platform=FULL_DSP58,
             target_period_ns=5.0,
             result_dtype=DataType["INT9"],
             x_stream=x,

@@ -22,7 +22,6 @@ from finn.dataflow.datatypes import resolve_qonnx_datatype_name as dtype
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.configure import commit, describe
 from finn.kernels.matmul import MatMulKernel
-from finn.kernels.target import DspBlock
 from kernel_ops.models import TARGET
 
 INT3 = dtype("INT3")
@@ -35,7 +34,7 @@ FACTS: dict[str, Any] = dict(
     platform=TARGET.platform,
     target_period_ns=5.0,
 )
-"""A node root's facts: the platform, whose DSP block is the root's ``target_dsp``."""
+"""A node root's facts: the platform (its DSP block the compute cores') and the clock."""
 WEIGHTS = tuple(tuple((r + c) % 3 - 1 for c in range(4)) for r in range(4))
 X = Tensor((3, 4), ScalarEncoding(INT3))
 
@@ -45,8 +44,7 @@ def stored(x: Tensor = X) -> StoredMatMulNode:
 
 
 def test_a_bare_kernel_cannot_commit_folding_but_its_node_root_can() -> None:
-    bare_facts = dict(FACTS, target_dsp=DspBlock.DSP48E2)
-    bare = design_space(MatMulKernel(**bare_facts, weights=WEIGHTS)).with_choices(
+    bare = design_space(MatMulKernel(**FACTS, weights=WEIGHTS)).with_choices(
         {MatMulKernel.compute: "packed"}
     )
     report = bare.try_with_choices({MatMulKernel.packed.pe: 2})

@@ -80,7 +80,7 @@ PLATFORM_KEYS = dict(
 CAPABILITIES = tuple(field.name for field in fields(Platform))
 """The ``finn.platform`` keys that are the platform's capabilities (``Platform``'s fields)."""
 
-PHASE1_KEYS = ("finn_target_dsp", "finn_target_period_ns")
+PHASE1_KEYS = ("finn_target_period_ns",)
 """Phase 1's untyped target keys: refused, never read."""
 
 ONNX_TYPES = {"int": "i", "bool": "i", "str": "s"}

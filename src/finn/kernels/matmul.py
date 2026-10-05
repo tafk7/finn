@@ -84,7 +84,7 @@ from finn.kernels.datatypes.semantics import (
 )
 from finn.kernels.dotp import Int8Dsp58DotpKernel, PackedDotpKernel
 from finn.kernels.streams import Stream
-from finn.kernels.target import DspBlock, Platform
+from finn.kernels.target import Platform
 
 
 _CARRIED = (
@@ -125,7 +125,6 @@ class MatMulKernel(Kernel):
     form: Form = Param(default=Form.DENSE)
     activation_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
     weights_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
-    target_dsp: DspBlock = Param()
     target_period_ns: float = Param()
     weights: IntegerTensor = Param(semantics=INTEGER_TENSOR, required=False)
     # Several weight sets, one selected per row by an index on ``in2_V``;
@@ -286,7 +285,6 @@ class MatMulKernel(Kernel):
     compute: PackedDotpKernel | Int8Dsp58DotpKernel = Decision(
         {"packed": packed, "int8_dsp58": Int8Dsp58DotpKernel},
         form=datapath,
-        target_dsp=target_dsp,
         target_period_ns=target_period_ns,
         reshape_activations=dense_view,
         result_dtype=result_type,

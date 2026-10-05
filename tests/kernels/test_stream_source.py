@@ -37,14 +37,15 @@ from finn.kernels.dotp import DotpAxiKernel
 from finn.kernels.matmul import MatMulKernel
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.streams import BufferedStream, Stream
-from finn.kernels.target import DspBlock, Platform
+from finn.kernels.target import Platform
 from kernels.helpers import (
-    Root,
-    WeightDelivery,
+    FULL_DSP48E2,
     labels,
     matmul_assembly,
     matmul_point,
     placed,
+    Root,
+    WeightDelivery,
     with_adapter_memories,
 )
 
@@ -59,7 +60,7 @@ FACTS = dict(
     n=4,
     activation_dtype=DataType["INT3"],
     weights_dtype=DataType["INT3"],
-    target_dsp=DspBlock.DSP48E2,
+    platform=FULL_DSP48E2,
     target_period_ns=5.0,
 )
 INT3, INT8 = ScalarEncoding(DataType["INT3"]), ScalarEncoding(DataType["INT8"])
