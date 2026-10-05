@@ -14,7 +14,7 @@ from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.util.basic import qonnx_make_model
 
 from finn.custom_op.kernels.base import write_target
-from finn.kernels.target import resolve_target
+from finn.transformation.kernels import resolve_target
 from kernels import test_design as chain
 
 DOMAIN = "finn.custom_op.kernels"

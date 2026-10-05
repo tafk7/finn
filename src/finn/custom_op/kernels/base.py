@@ -148,7 +148,9 @@ def write_target(model: Any, target: Target) -> None:
     where ``target`` reads it."""
     platform = target.platform
     if platform.dsp is None:
-        raise KernelOpError("a target states its DSP block (finn.kernels.target.resolve_target)")
+        raise KernelOpError(
+            "a target states its DSP block (finn.transformation.kernels.resolve_target)"
+        )
     values: dict[str, object] = dict(
         part=target.part, **{name: getattr(platform, name) for name in PLATFORM_FIELDS}
     )

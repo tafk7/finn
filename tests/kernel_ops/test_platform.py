@@ -24,8 +24,8 @@ from finn.custom_op.kernels.roots import StoredMatMulNode
 from finn.kernels.configure import commit
 from finn.kernels.matmul import MatMulKernel
 from finn.kernels.memstream import MemStreamKernel
-from finn.kernels.target import DspBlock, Target, resolve_target
-from finn.transformation.kernels import InferKernelTensors
+from finn.kernels.target import DspBlock, Target
+from finn.transformation.kernels import InferKernelTensors, resolve_target
 from kernel_ops.models import matmul_model, thresholding_model
 from kernels.helpers import FULL_DSP58
 

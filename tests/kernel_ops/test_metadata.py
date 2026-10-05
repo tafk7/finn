@@ -24,8 +24,8 @@ from finn.custom_op.kernels.base import (
     target,
     write_target,
 )
-from finn.kernels.target import DspBlock, Platform, Target, resolve_target
-from finn.transformation.kernels import ToKernelOps
+from finn.kernels.target import DspBlock, Platform, Target
+from finn.transformation.kernels import ToKernelOps, resolve_target
 from finn.transformation.kernels.package import (
     PARTITION,
     PARTITION_INPUTS,

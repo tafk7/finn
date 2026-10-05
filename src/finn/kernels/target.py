@@ -5,17 +5,16 @@
 
 Capabilities, never part names, reach kernels. ``Platform`` is the record of
 them and of the clock period the kernels must meet; ``Target`` adds what the
-flow states beside it, the part. One table maps a part to its device
-capabilities (``DEVICES``) and a shell to its interface capabilities
-(``SHELLS``); ``resolve_target`` reads both once, and the graph states the
-result (``finn.platform``, read by ``finn.custom_op.kernels.base.target``).
+flow states beside it, the part. Which part and shell have which capabilities
+is the flow's (``finn.transformation.kernels.resolve_target``); the graph
+states the result (``finn.platform``, read by
+``finn.custom_op.kernels.base.target``).
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from fnmatch import fnmatch
 
 
 class DspBlock(str, Enum):
@@ -78,67 +77,4 @@ class Target:
     platform: Platform
 
 
-# Device capabilities by part pattern (fnmatch on the lower-case part), first match
-# wins: (pattern, dsp, uram, uram_init, aie). UltraScale+ ignores an UltraRAM's INIT
-# (packaging probe 4); Versal is unverified and refused until a synthesis run says
-# otherwise (refusing is the side to reverse). A part matching no row is refused.
-DEVICES: tuple[tuple[str, DspBlock, bool, bool, bool], ...] = (
-    ("xc7*", DspBlock.DSP48E1, False, False, False),  # 7 series: no UltraRAM
-    ("xczu7ev-*", DspBlock.DSP48E2, True, False, False),  # ZCU104
-    ("xczu28dr-*", DspBlock.DSP48E2, True, False, False),  # ZCU111, RFSoC2x2
-    ("xczu48dr-*", DspBlock.DSP48E2, True, False, False),  # RFSoC4x2
-    ("xck26-*", DspBlock.DSP48E2, True, False, False),  # KV260
-    (
-        "xczu*",
-        DspBlock.DSP48E2,
-        False,
-        False,
-        False,
-    ),  # other Zynq UltraScale+ (ZU3EG, ZU9EG): none stated
-    ("xcu*", DspBlock.DSP48E2, True, False, False),  # Alveo (Virtex UltraScale+)
-    ("xcvc*", DspBlock.DSP58, True, False, True),  # Versal AI Core (VCK190)
-    ("xcve*", DspBlock.DSP58, True, False, True),  # Versal AI Edge (VEK280)
-    ("xcv80-*", DspBlock.DSP58, True, False, False),  # V80 (Versal HBM)
-)
-
-# Interface capabilities by shell (the builder's ``ShellFlowType`` values):
-# (clk2x, control_ports, memory_ports). No shell drives ap_clk2x yet; Vitis and SLASH
-# take no AXI-Lite on a compute partition (packaging P7, P8); the shells' memory
-# ports are their IODMAs', none a compute partition's. The Zynq shell's AXI
-# interconnect has at most 64 masters, two of them the IODMAs'. Without a shell (a
-# stitched IP, a harness: ``None``) nothing is stated away: a doubled clock, one
-# AXI-Lite port, no memory port.
-SHELLS: dict[str | None, tuple[bool, int, int]] = {
-    None: (True, 1, 0),
-    "vivado_zynq": (False, 62, 0),
-    "vitis_alveo": (False, 0, 0),
-    "slash_alveo": (False, 0, 0),
-}
-
-
-def resolve_target(part: str, period_ns: float, shell: str | None = None) -> Target:
-    """The target of a build for ``part`` at ``period_ns``, integrated by ``shell``
-    (none: a stitched IP), from the capability tables."""
-    for pattern, dsp, uram, uram_init, aie in DEVICES:
-        if fnmatch(part.lower(), pattern):
-            break
-    else:
-        raise ValueError(f"no capability row for part {part!r} (finn.kernels.target.DEVICES)")
-    if shell not in SHELLS:
-        named = sorted(name for name in SHELLS if name is not None)
-        raise ValueError(f"no capability row for shell {shell!r} (one of {named})")
-    clk2x, control_ports, memory_ports = SHELLS[shell]
-    platform = Platform(
-        period_ns=float(period_ns),
-        dsp=dsp,
-        uram=uram,
-        uram_init=uram_init,
-        clk2x=clk2x,
-        control_ports=control_ports,
-        memory_ports=memory_ports,
-        aie=aie,
-    )
-    return Target(part, platform)
-
-
-__all__ = ["DEVICES", "SHELLS", "DspBlock", "Platform", "Target", "dsp_widths", "resolve_target"]
+__all__ = ["DspBlock", "Platform", "Target", "dsp_widths"]
