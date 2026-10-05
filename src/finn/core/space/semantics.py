@@ -26,7 +26,7 @@ class NoTruthValue:
 
 @dataclass(frozen=True, slots=True)
 class ValueSemantics(Generic[T]):
-    """Adapter-owned recognition, equality and snapshots for one value family.
+    """Adapter-owned recognition, equality and snapshots for one value type.
 
     The token denotes compatibility; it is deliberately independent of a Python
     class or any persisted form. Custom snapshots must detach mutable state.

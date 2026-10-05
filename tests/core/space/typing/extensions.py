@@ -2,9 +2,9 @@
 # SPDX-License-Identifier: BSD-3-Clause
 """Composing nodes built in plain Python stays typed without generated stubs.
 
-A node keeps its family type wherever it travels (lists, dicts, function
+A node keeps its Space class wherever it travels (lists, dicts, function
 results); a reference through it is typed as its value; ``composite(...,
-base=B)`` is a ``type[B]``, so the base's formals type the new family's calls.
+base=B)`` is a ``type[B]``, so the base's formals type the new Space class's calls.
 """
 
 from typing import assert_type
@@ -55,7 +55,7 @@ assert_type(composite("Plain", {}), type[Space])
 
 
 def stage(lanes: int) -> Shape:
-    """A node factory: the node keeps its family type."""
+    """A node factory: the node keeps its Space class."""
     return Doubled(lanes=lanes)
 
 

@@ -36,7 +36,7 @@ if TYPE_CHECKING:
 def test_nested_finally_and_manager_finish_uncached_reads(warm: bool) -> None:
     events: list[tuple[str, int]] = []
 
-    class Family(Space):
+    class Example(Space):
         fact: int = Param()
 
         @derived
@@ -67,7 +67,7 @@ def test_nested_finally_and_manager_finish_uncached_reads(warm: bool) -> None:
                 events.append(("outer", self.fact))
 
     class Cleanup:
-        def __init__(self, point: Family) -> None:
+        def __init__(self, point: Example) -> None:
             self.point = point
 
         def __enter__(self) -> Cleanup:
@@ -76,7 +76,7 @@ def test_nested_finally_and_manager_finish_uncached_reads(warm: bool) -> None:
         def __exit__(self, *error: object) -> None:
             events.append(("manager", self.point.cleanup_two))
 
-    point = design_space(Family(fact=7))
+    point = design_space(Example(fact=7))
     if warm:
         assert point.cleanup_two == 9
     with pytest.raises(NativeEvaluationError) as caught:
@@ -93,7 +93,7 @@ def test_nested_finally_and_manager_finish_uncached_reads(warm: bool) -> None:
 def test_nonvalue_cleanup_preserves_primary_and_outer_cleanup(kind: str, warm: bool) -> None:
     events: list[object] = []
 
-    class Family(Space):
+    class Example(Space):
         fact: int = Param()
         enabled: bool = Param()
         unavailable: int = Decision(values=(1, 2))
@@ -130,12 +130,12 @@ def test_nonvalue_cleanup_preserves_primary_and_outer_cleanup(kind: str, warm: b
             finally:
                 events.append(self.fact)
 
-    point = design_space(Family(fact=7, enabled=False))
+    point = design_space(Example(fact=7, enabled=False))
     if warm:
         if kind == "rejected":
-            point.inspect(Family.rejected)
+            point.inspect(Example.rejected)
         else:
-            point.query(Family.unavailable if kind == "unavailable" else Family.inapplicable)
+            point.query(Example.unavailable if kind == "unavailable" else Example.inapplicable)
     with pytest.raises(NativeEvaluationError) as caught:
         _ = point.outer
     assert isinstance(caught.value.__cause__, LookupError)
@@ -151,7 +151,7 @@ def test_nonvalue_cleanup_preserves_primary_and_outer_cleanup(kind: str, warm: b
 def test_secondary_exceptions_keep_order_and_primary() -> None:
     events: list[int] = []
 
-    class Family(Space):
+    class Example(Space):
         fact: int = Param()
 
         @derived
@@ -174,7 +174,7 @@ def test_secondary_exceptions_keep_order_and_primary() -> None:
                 events.append(self.fact + 1)
                 raise ZeroDivisionError("outer cleanup")
 
-    point = design_space(Family(fact=7))
+    point = design_space(Example(fact=7))
     with pytest.raises(NativeEvaluationError) as caught:
         _ = point.outer
     assert caught.value.primary.owner == "broken"
@@ -188,7 +188,7 @@ def test_secondary_exceptions_keep_order_and_primary() -> None:
 
 
 def test_local_body_and_cleanup_exception_chain() -> None:
-    class Family(Space):
+    class Example(Space):
         @derived
         def value(self) -> int:
             try:
@@ -197,7 +197,7 @@ def test_local_body_and_cleanup_exception_chain() -> None:
                 raise ValueError("cleanup")
 
     with pytest.raises(NativeEvaluationError) as caught:
-        _ = design_space(Family()).value
+        _ = design_space(Example()).value
     assert isinstance(caught.value.__cause__, LookupError)
     assert len(caught.value.cleanup_failures) == 1
     secondary = caught.value.cleanup_failures[0].error
@@ -208,7 +208,7 @@ def test_failed_prerequisite_rereads_are_query_local() -> None:
     starts: list[int] = []
     events: list[object] = []
 
-    class Family(Space):
+    class Example(Space):
         fact: int = Param()
 
         @derived
@@ -228,7 +228,7 @@ def test_failed_prerequisite_rereads_are_query_local() -> None:
                         events.append("caught")
                 events.append(self.fact)
 
-    point = design_space(Family(fact=7))
+    point = design_space(Example(fact=7))
     with pytest.raises(NativeEvaluationError) as caught:
         _ = point.output
     assert starts == [1] and events == ["caught", "caught", "caught", 7]
@@ -241,7 +241,7 @@ def test_failed_prerequisite_rereads_are_query_local() -> None:
 def test_cleanup_cycle_keeps_primary_and_finishes_parent() -> None:
     events: list[int] = []
 
-    class Family(Space):
+    class Example(Space):
         fact: int = Param()
 
         @derived
@@ -266,7 +266,7 @@ def test_cleanup_cycle_keeps_primary_and_finishes_parent() -> None:
             finally:
                 events.append(self.fact)
 
-    point = design_space(Family(fact=7))
+    point = design_space(Example(fact=7))
     with pytest.raises(NativeEvaluationError) as caught:
         _ = point.outer
     assert isinstance(caught.value.__cause__, LookupError)
@@ -284,7 +284,7 @@ def test_cancellation_drains_and_retains_identity(
     events: list[object] = []
     original = cancellation("cancel")
 
-    class Family(Space):
+    class Example(Space):
         fact: int = Param()
 
         @derived
@@ -309,7 +309,7 @@ def test_cancellation_drains_and_retains_identity(
                 events.append(self.fact + 1)
                 raise ValueError("secondary cleanup")
 
-    point = design_space(Family(fact=7))
+    point = design_space(Example(fact=7))
     if warm:
         assert point.fact == 7
     with pytest.raises(cancellation) as caught:
@@ -326,7 +326,7 @@ def test_cancellation_drains_and_retains_identity(
 def test_cancellation_cleanup_keeps_earlier_programmer_failure() -> None:
     original = KeyboardInterrupt("cleanup cancellation")
 
-    class Family(Space):
+    class Example(Space):
         @derived
         def broken(self) -> int:
             raise LookupError("first")
@@ -343,7 +343,7 @@ def test_cancellation_cleanup_keeps_earlier_programmer_failure() -> None:
                 _ = self.cancelled
 
     with pytest.raises(KeyboardInterrupt) as caught:
-        _ = design_space(Family()).output
+        _ = design_space(Example()).output
     assert caught.value is original
     details = cancellation_details(caught.value)
     assert details is not None and isinstance(details.primary.__cause__, LookupError)
@@ -357,7 +357,7 @@ def test_driver_cancellation_respects_callback_start(boundary: str) -> None:
     events: list[object] = []
     original = KeyboardInterrupt("driver boundary")
 
-    class Family(Space):
+    class Example(Space):
         fact: int = Param()
         cleanup: int = Param()
 
@@ -389,7 +389,7 @@ def test_driver_cancellation_respects_callback_start(boundary: str) -> None:
             raise original
         return trace
 
-    point = design_space(Family(fact=7, cleanup=8))
+    point = design_space(Example(fact=7, cleanup=8))
     prior = sys.gettrace()
     try:
         sys.settrace(trace)
@@ -430,7 +430,7 @@ def test_interrupted_completion_drains_parent_and_preserves_failure(
     original = KeyboardInterrupt("completion boundary")
     first = LookupError("original callback failure")
 
-    class Family(Space):
+    class Example(Space):
         cleanup: int = Param()
 
         @derived
@@ -491,7 +491,7 @@ def test_interrupted_completion_drains_parent_and_preserves_failure(
             raise original
         return trace
 
-    point = design_space(Family(cleanup=8))
+    point = design_space(Example(cleanup=8))
     prior = sys.gettrace()
     try:
         sys.settrace(trace)
@@ -524,7 +524,7 @@ def test_interruption_before_failure_delivery_keeps_pending_primary() -> None:
     first = LookupError("provider failure")
     original = KeyboardInterrupt("before failure delivery")
 
-    class Family(Space):
+    class Example(Space):
         cleanup: int = Param()
 
         @view
@@ -556,7 +556,7 @@ def test_interruption_before_failure_delivery_keeps_pending_primary() -> None:
             raise original
         return trace
 
-    point = design_space(Family(cleanup=8))
+    point = design_space(Example(cleanup=8))
     prior = sys.gettrace()
     try:
         sys.settrace(trace)

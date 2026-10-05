@@ -45,7 +45,7 @@ def test_inspection_does_not_run_domains_or_evaluators() -> None:
         calls.append("candidates")
         return (1, 2, 4)
 
-    class Family(Space):
+    class Example(Space):
         lanes: int = Decision(domain=domain(accepts=membership, candidates=candidates))
 
         @derived
@@ -55,13 +55,13 @@ def test_inspection_does_not_run_domains_or_evaluators() -> None:
 
         physical = View(cost)
 
-    point = design_space(Family())
+    point = design_space(Example())
     model = inspection.model(point)
     decisions = inspection.decisions(point)
     assert [item.key for item in decisions] == ["lanes"]
     assert {item.key for item in inspection.members(model)} == {"lanes", "cost", "physical"}
     assert inspection.choices(model) == ()
-    assert inspection.dependencies(model, Family.physical)[0].key == "cost"
+    assert inspection.dependencies(model, Example.physical)[0].key == "cost"
     assert calls == []
 
     # The policy is ordinary external code. Discovery and queries never adopt
@@ -72,13 +72,13 @@ def test_inspection_does_not_run_domains_or_evaluators() -> None:
     scores: list[tuple[int, object]] = []
     for value in options.value:
         trial = point.with_choices({handle: value})
-        result = trial.inspect(Family.physical).accepted_result
+        result = trial.inspect(Example.physical).accepted_result
         assert isinstance(result, Available)
         scores.append((result.value, value))
     assert min(scores, key=lambda item: item[0]) == (3, 4)
     assert calls.count("membership") == 3
     assert calls.count("candidates") == 1
-    assert isinstance(point.query(Family.lanes), Unresolved)
+    assert isinstance(point.query(Example.lanes), Unresolved)
 
 
 def test_discovery_reports_owning_decisions_and_author_names_for_selectors() -> None:
@@ -122,25 +122,25 @@ def test_discovery_reports_owning_decisions_and_author_names_for_selectors() -> 
 
 
 def test_typed_handles_preserve_types_and_match_repeated_discovery() -> None:
-    class Family(Space):
+    class Example(Space):
         lanes: int = Decision(values=(1, 2))
 
         @view
         def physical(*, lanes: int) -> int:
             return lanes
 
-    model = inspection.model(Family)
-    point = design_space(Family())
-    decision = inspection.decision_handle(model, Family.lanes)
-    value = inspection.value_handle(model, Family.physical)
+    model = inspection.model(Example)
+    point = design_space(Example())
+    decision = inspection.decision_handle(model, Example.lanes)
+    value = inspection.value_handle(model, Example.physical)
     assert_type(decision, DecisionHandle[int])
     assert_type(value, ValueHandle[int])
-    assert_type(point.field(Family.lanes), BoundDecision[int])
+    assert_type(point.field(Example.lanes), BoundDecision[int])
     # DecisionRef is gone: a discovered handle is itself an edit key of the mapping form.
     trial = point.with_choices({decision: 2})
     assert trial.query(value) == Available(2)
     assert trial.query(decision) == Available(2)
-    assert decision == inspection.decision_info(point, Family.lanes).reference
+    assert decision == inspection.decision_info(point, Example.lanes).reference
     assert hash(decision) == hash(inspection.decisions(point)[0].reference)
     with pytest.raises(FrozenInstanceError):
         setattr(decision, "_node", 9)
@@ -156,15 +156,15 @@ def test_foreign_handles_fail_before_callbacks_and_aliases_cannot_be_upgraded() 
     class Child(Space):
         supplied: int = Param()
 
-    class Family(Space):
+    class Example(Space):
         choice: int = Decision(domain=domain(accepts=membership))
         child = Child(supplied=choice)
 
-    class OtherFamily(Family):
+    class OtherExample(Example):
         pass
 
-    first = design_space(Family())
-    foreign = inspection.decision_handle(OtherFamily, Family.choice)
+    first = design_space(Example())
+    foreign = inspection.decision_handle(OtherExample, Example.choice)
     with pytest.raises(RequestError, match="different compiled model"):
         first.with_choices({foreign: 1})
     with pytest.raises(RequestError, match="different compiled model"):
@@ -176,18 +176,18 @@ def test_foreign_handles_fail_before_callbacks_and_aliases_cannot_be_upgraded() 
     with pytest.raises(RequestError, match="not independently editable"):
         inspection.decision_handle(first.child, Child.supplied)
     with pytest.raises(RequestError, match="not independently editable"):
-        inspection.decision_handle(first, Family.child.supplied)
+        inspection.decision_handle(first, Example.child.supplied)
 
 
 def test_handles_follow_model_identity_across_starts_without_retaining_point_state() -> None:
-    class Family(Space):
+    class Example(Space):
         source: int = Param()
         lanes: int = Decision(values=(1, 2))
 
-    model = inspection.model(Family)
-    first, second = design_space(Family(source=4)), design_space(Family(source=8))
-    source = inspection.value_handle(model, Family.source)
-    decision = inspection.decision_handle(first, Family.lanes)
+    model = inspection.model(Example)
+    first, second = design_space(Example(source=4)), design_space(Example(source=8))
+    source = inspection.value_handle(model, Example.source)
+    decision = inspection.decision_handle(first, Example.lanes)
     assert first.query(source) == Available(4)
     assert second.query(source) == Available(8)
     assert second.with_choices({decision: 2}).query(decision) == Available(2)
@@ -197,7 +197,7 @@ def test_handles_follow_model_identity_across_starts_without_retaining_point_sta
 def test_singleton_choice_metadata_exposes_an_ordinary_editable_selector() -> None:
     # Replaces "a singleton choice exposes no editable selector": a Decision over
     # nodes is an ordinary Decision, so even one candidate is an owned, editable
-    # selector. A None candidate places nothing and has no scope or family.
+    # selector. A None candidate places nothing and has no scope or Space class.
     class Child(Space):
         value = Const(1)
 
@@ -234,8 +234,8 @@ def test_statistics_counts_instantiated_members_and_direct_structure() -> None:
         physical = View(value)
 
     def repeated(count: int) -> inspection.ModelStatistics:
-        family = composite("Repeated", {f"child{index}": Leaf() for index in range(count)})
-        return inspection.statistics(family)
+        space_type = composite("Repeated", {f"child{index}": Leaf() for index in range(count)})
+        return inspection.statistics(space_type)
 
     small, large = repeated(2), repeated(4)
     # Each placement contributes its two effective members and the placement

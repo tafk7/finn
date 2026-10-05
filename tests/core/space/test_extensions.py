@@ -1,10 +1,10 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
-"""Neutral extension bundles are ordinary declarations composed into a family.
+"""Neutral extension bundles are ordinary declarations composed into a Space class.
 
 ``ScopeBuilder`` is gone. Declarations and nodes are plain Python values, and
-``composite(name, members, base=B, exports=...)`` names them as a new family
-exactly as a class body would. The typed surface is the base family: formals a
+``composite(name, members, base=B, exports=...)`` names them as a new Space class
+exactly as a class body would. The typed surface is the base Space class: formals a
 caller binds are declared on ``B``; the members composite adds are reached by
 name (or through inspection handles).
 """
@@ -86,7 +86,7 @@ def _stream(*, dtype: Encoding, lanes: int, bits: int) -> StreamValue:
     return StreamValue(dtype, lanes, bits)
 
 
-def admitted_stream_family() -> type[AdmissionFormals]:
+def admitted_stream_type() -> type[AdmissionFormals]:
     """Admission checks and the accepted stream, built as data and named by composite."""
     minimum = Const(1)
     admission = constraint(
@@ -113,7 +113,7 @@ def admitted_stream_family() -> type[AdmissionFormals]:
     )
 
 
-ADMITTED_STREAM = admitted_stream_family()
+ADMITTED_STREAM = admitted_stream_type()
 
 
 def stream_shape(
@@ -123,7 +123,7 @@ def stream_shape(
     maximum_bits: int,
 ) -> AdmissionFormals:
     # Suppliers are typed as their values: a reference (``outer.lanes``) is an int.
-    """A fresh node of the admitted stream family for each call."""
+    """A fresh node of the admitted stream Space class for each call."""
     return ADMITTED_STREAM(dtype=dtype, lanes=lanes, maximum_bits=maximum_bits)
 
 
@@ -154,7 +154,7 @@ def test_stream_shape_places_independent_choices_and_keeps_narrow_fields_availab
         def balanced(*, a: int, b: int) -> bool:
             return a == b
 
-    # The bundle's own members stay inside its family.
+    # The bundle's own members stay inside its Space class.
     assert "maximum_bits" not in vars(Pair) and "minimum_lanes" not in vars(Pair)
     missing = design_space(Pair(left_dtype=Encoding(3), right_dtype=Encoding(6)))
     first = missing.with_choices({Pair.left.lanes: 2})
@@ -174,7 +174,7 @@ def test_stream_shape_places_independent_choices_and_keeps_narrow_fields_availab
     assert any("right" in finding.owner for finding in refused.findings)
 
 
-def test_composite_is_pure_and_nodes_share_only_the_family() -> None:
+def test_composite_is_pure_and_nodes_share_only_the_space_class() -> None:
     calls: list[int] = []
 
     class Scaled(Space):
@@ -193,7 +193,7 @@ def test_composite_is_pure_and_nodes_share_only_the_family() -> None:
         "Template", members, base=Scaled, annotations={"choice": int}, exports={key: exported}
     )
     assert calls == []
-    # A declaration belongs to one family: the same members cannot be named twice.
+    # A declaration belongs to one Space class: the same members cannot be named twice.
     with pytest.raises(DefinitionError, match="already belongs"):
         composite("Again", members, base=Scaled)
 
@@ -202,7 +202,7 @@ def test_composite_is_pure_and_nodes_share_only_the_family() -> None:
         second = template(value=3)
 
     first, second = inspection.declaration(Parent.first), inspection.declaration(Parent.second)
-    assert first.family is second.family is template
+    assert first.space_type is second.space_type is template
     assert first.bindings == second.bindings == {"value": 3}
     point = design_space(Parent())
     handles = {item.key: item.reference for item in inspection.decisions(point)}
@@ -225,19 +225,19 @@ def test_a_compiled_composite_rejects_structural_changes() -> None:
         int, "integer", lambda value: type(value) is int, int.__eq__, snapshot
     )
     value = Const(1)
-    family = composite("Sealed", {"value": value, "physical": View(value)})
-    assert design_space(family()).query(value) == Available(1)
-    # There is no builder to seal: the compiled family itself refuses changes.
+    space_type = composite("Sealed", {"value": value, "physical": View(value)})
+    assert design_space(space_type()).query(value) == Available(1)
+    # There is no builder to seal: the compiled Space class itself refuses changes.
     with pytest.raises(DefinitionError, match="finalized"):
-        setattr(family, "too_late", Const(1, semantics=semantics))
+        setattr(space_type, "too_late", Const(1, semantics=semantics))
     with pytest.raises(DefinitionError, match="finalized"):
-        setattr(family, "too_late", Decision(values=(1,), semantics=semantics))
+        setattr(space_type, "too_late", Decision(values=(1,), semantics=semantics))
     with pytest.raises(DefinitionError, match="finalized"):
-        delattr(family, "value")
+        delattr(space_type, "value")
     with pytest.raises(DefinitionError, match="finalized"):
-        setattr(family, "exports", {})
+        setattr(space_type, "exports", {})
     with pytest.raises(DefinitionError, match="finalized"):
-        setattr(family, "too_late", Const(1))
+        setattr(space_type, "too_late", Const(1))
     assert calls == [1, 1]
 
 
@@ -264,12 +264,12 @@ def test_duplicate_names_owned_declarations_and_foreign_exports_are_definition_e
     with pytest.raises(DefinitionError, match="name segment"):
         composite("Invalid", {"invalid.name": Const(1)})
     with pytest.raises(DefinitionError, match="name segment"):
-        composite("invalid.family", {})
+        composite("invalid.name", {})
 
 
 def test_missing_bindings_and_incompatible_exports_fail_without_descriptor_runtime_errors() -> None:
     # A formal left unsupplied is refused where it would have to be supplied: when
-    # the family placing the node is prepared.
+    # the Space class placing the node is prepared.
     holder = composite("Holder", {"shape": StreamShape(dtype=Encoding(3))})
     with pytest.raises(DefinitionError, match=r"shape\.lanes is not supplied"):
         design_space(holder())
@@ -278,7 +278,7 @@ def test_missing_bindings_and_incompatible_exports_fail_without_descriptor_runti
     members = {"value": integer, "complete": view}
     with pytest.raises(DefinitionError, match="incompatible semantics"):
         composite("Wrong", members, exports={ViewKey("value", str): view})
-    # The refused family still owns its declarations: they cannot be renamed silently.
+    # The refused Space class still owns its declarations: they cannot be renamed silently.
     with pytest.raises(DefinitionError, match="already belongs"):
         composite("Retry", members, exports={ViewKey("value", int): view})
 

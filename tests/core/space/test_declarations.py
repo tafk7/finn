@@ -303,7 +303,11 @@ def test_duplicate_declaration_reuse_is_attributable() -> None:
     value: int = Param()
     # Python 3.11 wraps a __set_name__ failure in RuntimeError; 3.12 raises it directly.
     with pytest.raises((RuntimeError, DefinitionError)) as exc:
-        type("Duplicate", (Space,), {"one": value, "two": value})
+        type(
+            "Duplicate",
+            (Space,),
+            {"__annotations__": {"one": int, "two": int}, "one": value, "two": value},
+        )
     error = exc.value.__cause__ if isinstance(exc.value, RuntimeError) else exc.value
     assert isinstance(error, DefinitionError)
     assert "Duplicate.two" in str(error)
@@ -350,7 +354,7 @@ def test_inferred_derived_override_cannot_change_value_type() -> None:
 
 def test_binding_forms_and_local_edit_ownership() -> None:
     # The exposed-param binding form is removed (see the inline Param test above);
-    # a family-typed formal is supplied by a node, and a root keeps its values as
+    # a reference input is supplied by a node, and a root keeps its values as
     # runtime parameters.
     class Child(Space):
         size: int = Param()
@@ -423,7 +427,7 @@ def test_child_omissions_and_incompatible_bindings_are_not_implicit_exposure() -
     assert linked.nodes[linked.keys["child.optional_width"]].kind == "present"
 
     # A required formal nobody supplies is legal at the call (an assignment may
-    # still supply it), and fails when a family containing the node is prepared.
+    # still supply it), and fails when a Space class containing the node is prepared.
     class Parent(Space):
         child = Child(optional_width=3)
 

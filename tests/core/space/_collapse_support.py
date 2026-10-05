@@ -39,11 +39,11 @@ def open_space(node: S, *, collapsed: bool) -> S:
     record = root_record(node)
     root = record if is_structural(record) else None
     if collapsed:
-        linked = _linker.link_space(record.family, root)
+        linked = _linker.link_space(record.space_type, root)
     else:
         with uncollapsed():
-            linked = _linker.link_space(record.family, root)
-    model = Model(record.family, linked)
+            linked = _linker.link_space(record.space_type, root)
+    model = Model(record.space_type, linked)
     return cast(S, bind(model, root_parameters(model, record)))
 
 

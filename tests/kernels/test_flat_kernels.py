@@ -48,14 +48,14 @@ def generator(**changes):
 
 
 @pytest.mark.parametrize(
-    "family,facts",
+    "space_type,facts",
     (
         (FifoKernel, dict(word_bits=13, depth=8)),
         (InputGeneratorKernel, dict(word_bits=13, frame_words=6, dims=(3, 6), strides=(0, 1))),
     ),
 )
-def test_an_ultra_memory_needs_the_platforms_ultraram(family, facts):
-    without = design_space(family(**facts, platform=replace(FULL_DSP48E2, uram=False)))
+def test_an_ultra_memory_needs_the_platforms_ultraram(space_type, facts):
+    without = design_space(space_type(**facts, platform=replace(FULL_DSP48E2, uram=False)))
     report = without.try_with_choices(ram_style="ultra")
     assert not report.accepted
     (outcome,) = report.outcomes
@@ -63,7 +63,7 @@ def test_an_ultra_memory_needs_the_platforms_ultraram(family, facts):
     # The memory starts empty: UltraRAM that takes no initial contents is enough.
     platform = replace(FULL_DSP48E2, uram_init=False)
     assert (
-        design_space(family(**facts, platform=platform))
+        design_space(space_type(**facts, platform=platform))
         .try_with_choices(ram_style="ultra")
         .accepted
     )

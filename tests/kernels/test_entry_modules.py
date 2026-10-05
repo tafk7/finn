@@ -2,12 +2,12 @@
 # SPDX-License-Identifier: BSD-3-Clause
 """Every module of ``finn.kernels`` can be imported first, and a root opens after it.
 
-Channels and memories are families that place each other: a channel's source is
+Channels and memories are Space classes that place each other: a channel's source is
 a ``MemStreamKernel``, whose ports reference channels. The modules import each
 other in one order only (``memstream`` imports ``channels`` last; ``port`` names
-the family by its full path), and the Space engine checks a supplier of a formal
+the Space class by its full path), and the Space engine checks a supplier of a formal
 whose annotation is still pending when it links. Whichever module a program
-imports first, the families must come out whole: each case imports one module in
+imports first, the Space classes must come out whole: each case imports one module in
 a fresh interpreter, then builds a MatMul root whose stored weights have two
 sets, so its weight channel's source places a memory whose set port references
 the channel's index channel, and reads the root's module.

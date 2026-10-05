@@ -145,10 +145,10 @@ def run(configuration: Configuration, evidence: Path, *, backpressure_ticks: int
     while min(endpoints) < -(1 << (result_bits - 1)) or max(endpoints) >= (1 << (result_bits - 1)):
         result_bits += 1
     result_type = DataType[f"INT{result_bits}"]
-    family = Int8Dsp58DotpKernel if c.int8 else PackedDotpKernel
+    space_type = Int8Dsp58DotpKernel if c.int8 else PackedDotpKernel
     # The core between three streams: its extents are the case's, its folding factors PE and SIMD.
     point = placed_dotp(
-        family,
+        space_type,
         activation_dtype=a_type,
         weights_dtype=w_type,
         result_dtype=result_type,

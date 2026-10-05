@@ -50,8 +50,8 @@ class Named(Protocol):
     def name(self) -> str: ...
 
 
-def semantics_of(family: type[Space], name: str) -> ValueSemantics[object]:
-    effective = collect_space(family)
+def semantics_of(space_type: type[Space], name: str) -> ValueSemantics[object]:
+    effective = collect_space(space_type)
     return effective.semantics[effective.members[name]]
 
 
@@ -131,9 +131,9 @@ def test_a_union_of_values_still_needs_semantics() -> None:
         def value(self) -> int | str | Rejected:
             return 1
 
-    for family in (Optional, Either):
+    for space_type in (Optional, Either):
         with pytest.raises(DefinitionError, match="needs explicit semantics="):
-            collect_space(family)
+            collect_space(space_type)
 
 
 class Projected(Space):

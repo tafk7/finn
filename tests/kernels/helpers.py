@@ -100,7 +100,7 @@ def assess(point: Space, condition: Constraint) -> QueryResult[bool]:
 
 
 def placed_dotp(
-    family: Callable[..., S],
+    space_type: Callable[..., S],
     *,
     activation_dtype: QONNXDataType,
     weights_dtype: QONNXDataType,
@@ -146,7 +146,7 @@ def placed_dotp(
             port="out0_V",
             platform=platform,
         )
-        compute = family(x_stream=x, w_stream=w, y_stream=y, result_dtype=result_dtype, **facts)
+        compute = space_type(x_stream=x, w_stream=w, y_stream=y, result_dtype=result_dtype, **facts)
 
     choices = {
         key: value
@@ -154,7 +154,7 @@ def placed_dotp(
             ("compute.pe", pe),
             ("compute.simd", simd),
             ("compute.compute_pumping", compute_pumping),
-            ("compute.reducer", reducer if hasattr(family, "reducer") else None),
+            ("compute.reducer", reducer if hasattr(space_type, "reducer") else None),
         )
         if value is not None
     }
@@ -172,14 +172,14 @@ class Root(Kernel):
 
 def rooted(name: str, members: Mapping[str, object]) -> Root:
     """A root named ``name`` (its module's stem ``finn_<name>``) of ``members``."""
-    family: Any = composite(name, dict(members), base=Root)
-    root: Root = family()
+    space_type: Any = composite(name, dict(members), base=Root)
+    root: Root = space_type()
     return root
 
 
 @cache
-def matmul_root(family: type[MatMulKernel]) -> type[Root]:
-    """A root placing a MatMul of ``family`` (``matmul``) on the streams it declares, its
+def matmul_root(space_type: type[MatMulKernel]) -> type[Root]:
+    """A root placing a MatMul of ``space_type`` (``matmul``) on the streams it declares, its
     facts its own formals and the streams' tensors MatMul's views; see the module
     docstring."""
 
@@ -219,7 +219,7 @@ def matmul_root(family: type[MatMulKernel]) -> type[Root]:
         set = Channel(tensor=set_tensor, port="in2_V", when=several, platform=platform)
         w = Channel(tensor=w_tensor, sets=weight_sets, index=set, port="in1_V", platform=platform)
         y = Channel(tensor=y_tensor, port="out0_V", platform=platform)
-        matmul = family(
+        matmul = space_type(
             m=m,
             n=n,
             k=k,
@@ -240,8 +240,8 @@ def matmul_root(family: type[MatMulKernel]) -> type[Root]:
 
 def placed_matmul(**facts: object) -> Root:
     """A MatMul (``matmul``) in a root declaring its streams; see the module docstring."""
-    family: Any = matmul_root(MatMulKernel)
-    root: Root = family(**facts)
+    space_type: Any = matmul_root(MatMulKernel)
+    root: Root = space_type(**facts)
     return root
 
 
@@ -251,13 +251,13 @@ def matmul_point(*, realization: str | None = None, **facts: object) -> Any:
     return commit(point, {"matmul.realization": realization}) if realization else point
 
 
-def controlled(family: Callable[..., S], facts: Mapping[str, object], **choices: object) -> S:
+def controlled(space_type: Callable[..., S], facts: Mapping[str, object], **choices: object) -> S:
     """A kernel (``kernel``) presenting its configuration bus through a ``ControlBus``, its
     choices committed by their keys below it; as placed alone it holds the bus."""
 
     class Controlled(Space):
         config = ControlBus(port="s_axilite")
-        kernel = family(**facts, control=config)
+        kernel = space_type(**facts, control=config)
 
     point = commit(design_space(Controlled()), {f"kernel.{key}": v for key, v in choices.items()})
     kernel: S = point.kernel

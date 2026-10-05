@@ -74,7 +74,7 @@ ROWS, REDUCTION, OUTPUTS = 2, 6, 4
 
 
 def dotp(
-    family: type[Any],
+    space_type: type[Any],
     dsp: DspBlock,
     bits: int,
     form: Form = Form.DENSE,
@@ -92,7 +92,7 @@ def dotp(
         return {"y_stream": y}
 
     return dict(
-        family=family,
+        space_type=space_type,
         inputs={
             "x_stream": Tensor(x_shape, ScalarEncoding(a)),
             "w_stream": Tensor((reduction, OUTPUTS), ScalarEncoding(w)),
@@ -141,7 +141,7 @@ PE_FACTORS = ({"pe": 1}, {"pe": 3}, {"pe": CHANNELS})
 
 def thresholding() -> dict[str, Any]:
     return dict(
-        family=ThresholdingAxiKernel,
+        space_type=ThresholdingAxiKernel,
         inputs={"input_stream": tensor((PIXELS, CHANNELS), "INT4")},
         outputs={"output_stream": (PIXELS, CHANNELS)},
         reference=lambda input_stream: {"output_stream": levels(input_stream)},
@@ -176,11 +176,11 @@ class ChannelsFirst(RowsFirst):
     channels_outer: ClassVar[bool] = True
 
 
-def scheduled(family: type[RowsFirst]) -> dict[str, Any]:
+def scheduled(space_type: type[RowsFirst]) -> dict[str, Any]:
     """Two channel folds or more, so the two orders differ in every sample."""
     return dict(
         thresholding(),
-        family=family,
+        space_type=space_type,
         outputs={"output_stream": tensor((PIXELS, CHANNELS), "UINT2")},
         factors=({"pe": 1}, {"pe": 2}, {"pe": 3}),
     )
@@ -235,10 +235,10 @@ class LanesReversed(LanesInOrder):
     input, output = split_ports(LanesInOrder.schedule, (ci, co))
 
 
-def split(family: type[LanesInOrder]) -> dict[str, Any]:
+def split(space_type: type[LanesInOrder]) -> dict[str, Any]:
     return dict(
         thresholding(),
-        family=family,
+        space_type=space_type,
         outputs={"output_stream": tensor((PIXELS, CHANNELS), "UINT2")},
         factors=({"pe": CHANNELS},),
     )
@@ -250,7 +250,7 @@ def split(family: type[LanesInOrder]) -> dict[str, Any]:
 def eltwise() -> dict[str, Any]:
     """lhs + rhs, rhs a channel vector broadcast over the rows."""
     return dict(
-        family=EltwiseKernel,
+        space_type=EltwiseKernel,
         inputs={
             "lhs_stream": tensor((PIXELS, CHANNELS), "INT4"),
             "rhs_stream": tensor((CHANNELS,), "INT4"),
@@ -279,7 +279,7 @@ def transpose() -> dict[str, Any]:
     FinnLib's ``inner_shuffle`` survives only with its page-guard fix.
     """
     return dict(
-        family=TransposeKernel,
+        space_type=TransposeKernel,
         inputs={"input_stream": tensor(MATRICES, "INT4")},
         outputs={"output_stream": MATRICES},
         reference=lambda input_stream: {"output_stream": input_stream},
@@ -295,7 +295,7 @@ CONTENTS = tuple(tuple((7 * row + 5 * col) % 16 - 8 for col in range(6)) for row
 def memstream() -> dict[str, Any]:
     """The stored operand streamed in each consumer form: identity against its contents."""
     return dict(
-        family=MemStreamKernel,
+        space_type=MemStreamKernel,
         inputs={},
         outputs={"output_stream": STORED},
         reference=lambda: {"output_stream": np.array(CONTENTS)},
@@ -373,11 +373,11 @@ def test_the_stimulus_tells_the_wrong_order_apart(wrong: str) -> None:
     would pass XSim and prove nothing.
     """
     case = WRONG[wrong]()
-    family, inputs, table = case["family"], case["inputs"], np.array(THRESHOLDS[0])
+    space_type, inputs, table = case["space_type"], case["inputs"], np.array(THRESHOLDS[0])
     for sample in samples(**{key: value for key, value in case.items() if key != "reference"}):
-        values = _values(family, sample, inputs)
+        values = _values(space_type, sample, inputs)
         placed = place(
-            family,
+            space_type,
             sample,
             inputs,
             case["outputs"],
@@ -474,11 +474,11 @@ class Unscaled(EltwiseKernel):
 
 def test_a_module_whose_sources_contradict_its_pins_is_refused() -> None:
     with pytest.raises(AssertionError, match="memstream_axi refuses its ABI: .*m_axis_1_tdata"):
-        conformance(**dict(memstream(), family=Misnamed))
+        conformance(**dict(memstream(), space_type=Misnamed))
 
 
 @pytest.mark.parametrize(
-    ("case", "family", "omitted"),
+    ("case", "space_type", "omitted"),
     [
         (memstream, Unbound, "RAM_STYLE"),
         # Modules with a parameter whose value the checker does not establish.
@@ -487,7 +487,7 @@ def test_a_module_whose_sources_contradict_its_pins_is_refused() -> None:
     ],
 )
 def test_parameters_must_name_every_module_parameter(
-    case: Any, family: type[Any], omitted: str
+    case: Any, space_type: type[Any], omitted: str
 ) -> None:
     with pytest.raises(AssertionError, match=rf"omits \['{omitted}'\]"):
-        conformance(**dict(case(), family=family))
+        conformance(**dict(case(), space_type=space_type))

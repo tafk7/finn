@@ -8,7 +8,7 @@ claims below are the ones a runtime test cannot make. A node declaration
 ``FixedImplementation(size=size)`` and the configuration ``pipeline.fixed``
 both *work* at runtime whatever the annotations say, so the thing worth
 pinning is that a contributor's editor and type checker see the authored
-family, references typed as the values they stand for, and views read as
+Space class, references typed as the values they stand for, and views read as
 their values, rather than ``Any`` or an internal declaration type.
 """
 
@@ -65,7 +65,7 @@ class SmallImplementation(Space):
 
 class Pipeline(Space):
     size: int = Param()
-    # Calling a family declares a node, typed as the family.
+    # Calling a Space class declares a node, typed as the class.
     fixed = FixedImplementation(size=size)
     assert_type(fixed, FixedImplementation)
     # A reference in a class body is typed as the value it stands for.
@@ -106,7 +106,7 @@ class Pipeline(Space):
         return self.case
 
 
-# Class access is the schema key; a node keeps its concrete family and every
+# Class access is the schema key; a node keeps its concrete Space class and every
 # member (formal, Decision, derived value) is typed as its value.
 assert_type(Pipeline.fixed, FixedImplementation)
 assert_type(Pipeline.fixed.result, int)
@@ -118,7 +118,7 @@ assert_type(FixedImplementation.result, int)
 assert_type(FixedImplementation.physical, View[int])
 assert_type(FixedImplementation.lanes, int)
 
-# The one compile step preserves the authored root family.
+# The one compile step preserves the authored root Space class.
 assert_type(design_space(Pipeline(size=8)), Pipeline)
 
 

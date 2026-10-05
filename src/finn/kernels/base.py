@@ -201,7 +201,7 @@ def _inputs(pin: Signal | Bus) -> tuple[str, ...]:
 
 
 class Kernel(Space):
-    """A named family configuring one module; see the module docstring for the protocol."""
+    """A named Space class configuring one module; see the module docstring for the protocol."""
 
     id: ClassVar[str] = ""
     version: ClassVar[int] = 1
@@ -249,8 +249,8 @@ class Kernel(Space):
 
     def producer_identity(self) -> ProducerIdentity:
         """A kernel with children: what derives its composed module."""
-        family = type(self)
-        return ProducerIdentity(family.id, str(family.version))
+        space_type = type(self)
+        return ProducerIdentity(space_type.id, str(space_type.version))
 
     @derived
     def clocking(self) -> Clocking:
@@ -307,9 +307,9 @@ class Kernel(Space):
     def codegen(self) -> Leaf | Rejected:
         """The module: clocking, its other pins, then every port's pins; its parameters,
         sources and data; and what it holds."""
-        family = type(self)
-        if not family.rtl_module:
-            return reject("kernel-module", f"{family.__qualname__} declares no module")
+        space_type = type(self)
+        if not space_type.rtl_module:
+            return reject("kernel-module", f"{space_type.__qualname__} declares no module")
         clocking = self.clocking
         chosen = self.parameters()
         if isinstance(chosen, Rejected):
@@ -318,9 +318,9 @@ class Kernel(Space):
         pins = tuple(pin for item in self.port_pins for pin in item.value)
         contributions = self.sources()
         return Leaf(
-            family.id,
-            str(family.version),
-            family.rtl_module,
+            space_type.id,
+            str(space_type.version),
+            space_type.rtl_module,
             parameters,
             Pins(
                 (*clocking.signals(), *self.other_pins(), *pins),
@@ -370,8 +370,8 @@ class Kernel(Space):
         it ``node``). A kernel with children: each member's netlist under its node, and the
         buses its ``ControlBus`` nodes present; its own module is complete only as the
         root, whose streams it declares, so a parent reads its netlist, not its module."""
-        family = type(self)
-        if family.rtl_module:
+        space_type = type(self)
+        if space_type.rtl_module:
             if self.netlists:
                 return reject("kernel-children", "a kernel binds one module or has children")
             leaf = self.module
@@ -379,7 +379,8 @@ class Kernel(Space):
             return Fragment((("", leaf),))
         if not self.netlists:
             return reject(
-                "kernel-module", f"{family.__qualname__} declares no module and places no kernel"
+                "kernel-module",
+                f"{space_type.__qualname__} declares no module and places no kernel",
             )
         exports = tuple(
             BusExport(item.node, item.child, item.port)

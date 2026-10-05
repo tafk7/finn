@@ -1,13 +1,13 @@
 from finn.core.space import Decision, Param, Space, design_space, selections
 
-class Family(Space):
+class Example(Space):
     extent: int = Param()
     factor: int = Decision(values=(1, 2))
     style: str = Decision(values=("auto", "block"))
 
-base = design_space(Family(extent=4))
+base = design_space(Example(extent=4))
 selected = selections.capture(base)
-selected.value(Family.extent)  # accepted: a reference is typed as its value
-selected.edit(Family.factor, 2)  # E
-selected.remove(Family.factor)  # E
+selected.value(Example.extent)  # accepted: a reference is typed as its value
+selected.edit(Example.factor, 2)  # E
+selected.remove(Example.factor)  # E
 selected.with_changes([])  # E
