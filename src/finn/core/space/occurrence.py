@@ -11,8 +11,8 @@ from collections.abc import Mapping
 from typing import TypeVar, cast, overload
 
 from . import _execution, _runtime
+from ._collapse import forwards, guard_implies
 from ._configuration import BoundDecision, BoundValue, Space
-from ._linker import forwards, guard_implies
 from ._runtime import Snapshot
 from .compiler import Model
 from .declarations import (
