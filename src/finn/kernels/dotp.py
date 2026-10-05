@@ -233,6 +233,11 @@ class DotpAxiKernel(Kernel):
     def _narrow_weights(self) -> bool:
         return False
 
+    def _reducer(self) -> str:
+        # dotp_axi declares REDUCER for every core and only its dotp core reads it;
+        # another core binds FinnLib's default, as it binds NARROW_WEIGHTS.
+        return "compressor"
+
     def parameters(self) -> Mapping[str, int | str]:
         x, w, y = self.x.element, self.w.element, self.y.element
         return {
@@ -249,18 +254,62 @@ class DotpAxiKernel(Kernel):
             "ACTIVATION_BROADCASTING": int(self.form is Form.DENSE),
             "FORCE_BEHAVIORAL": 0,
             "CORE": f'"{type(self).core}"',
+            "REDUCER": f'"{self._reducer()}"',
         }
 
 
+_COUNTERS = tuple(
+    f"module:{name}"
+    for name in (
+        "adder_bin",
+        "adder_quad",
+        "comp_fa",
+        "comp_five_two",
+        "comp_six_three",
+        "gate_lut2",
+        "ten_six",
+        "ternary_adder",
+    )
+)
+# add_multi and its compressor (FinnLib 637d4ed): the compressor's schedule is built at
+# elaboration by headers that add_multi.sv `includes; they are staged beside it and
+# never compiled on their own (``finn.kernels.artifacts.sources.is_header``).
 _ADD_MULTI = (
     CopiedSource("finnlib", "rtl/arith/add_multi_pkg.sv", provides=("package:add_multi_pkg",)),
+    CopiedSource("finnlib", "rtl/arith/compressor_pkg.sv", provides=("package:compressor_pkg",)),
+    CopiedSource("finnlib", "rtl/arith/compressor_counters.sv", provides=_COUNTERS),
+    CopiedSource(
+        "finnlib",
+        "rtl/arith/compress_core.sv",
+        provides=("module:compressor",),
+        requires=("package:compressor_pkg", *_COUNTERS),
+    ),
+    CopiedSource("finnlib", "rtl/arith/schedule_core.svh", provides=("include:schedule_core.svh",)),
+    CopiedSource("finnlib", "rtl/arith/sched_chunks.svh", provides=("include:sched_chunks.svh",)),
+    CopiedSource(
+        "finnlib",
+        "rtl/arith/add_multi_sched.svh",
+        provides=("include:add_multi_sched.svh",),
+        requires=(
+            "package:compressor_pkg",
+            "include:schedule_core.svh",
+            "include:sched_chunks.svh",
+        ),
+    ),
     CopiedSource(
         "finnlib",
         "rtl/arith/add_multi.sv",
         provides=("module:add_multi",),
-        requires=("package:add_multi_pkg",),
+        requires=("package:add_multi_pkg", "include:add_multi_sched.svh", "module:compressor"),
     ),
 )
+
+
+#: add_multi's two reductions of a lane's SIMD products (FinnLib dotp's ``REDUCER``): a
+#: compressor tree of LUT counters with its pipeline registers at its output, or a binary
+#: adder tree with them between its levels. Same latency and results; neither dominates
+#: in area, timing or synthesis cost.
+REDUCERS = ("compressor", "tree")
 
 
 def _dotp_axi(core: str) -> CopiedSource:
@@ -282,6 +331,10 @@ class PackedDotpKernel(DotpAxiKernel):
     id = "finnlib.dotp_axi.dotp"
     version = 1
     core = "dotp"
+
+    #: How add_multi reduces the SIMD products: a choice within this core. The order of
+    #: its cases states no preference; a policy ranks them (``CommitKernelChoices``).
+    reducer: str = Decision(values=REDUCERS)
 
     @derived
     def narrow_weights(self) -> bool:
@@ -309,6 +362,9 @@ class PackedDotpKernel(DotpAxiKernel):
 
     def _narrow_weights(self) -> bool:
         return self.narrow_weights
+
+    def _reducer(self) -> str:
+        return self.reducer
 
     def sources(self) -> tuple[CopiedSource, ...]:
         return (

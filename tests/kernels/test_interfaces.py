@@ -72,6 +72,7 @@ def activated(*, writable: bool):
                 Activated.compute.pe: 1,
                 Activated.compute.simd: SIMD,
                 Activated.compute.compute_pumping: False,
+                Activated.compute.reducer: "tree",
                 Activated.activate.use_axilite: writable,
                 Activated.activate.deep_pipeline: False,
             }
@@ -136,6 +137,7 @@ def test_writable_thresholds_without_a_control_bus_are_refused():
     point = design_space(Unexported()).with_choices(
         {
             Unexported.compute.compute_pumping: False,
+            Unexported.compute.reducer: "tree",
             Unexported.activate.use_axilite: True,
             Unexported.activate.deep_pipeline: False,
         }

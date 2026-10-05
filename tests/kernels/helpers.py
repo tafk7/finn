@@ -109,6 +109,7 @@ def placed_dotp(
     pe: object = None,
     simd: object = None,
     compute_pumping: object = False,
+    reducer: object = "tree",
     rows: int = 1,
     outputs: int | None = None,
     reduction: int | None = None,
@@ -118,8 +119,9 @@ def placed_dotp(
 
     The core takes its extents from the streams: ``outputs`` (N) defaults to PE
     and ``reduction`` (K) to SIMD, one fold each. A folding factor left ``None``
-    stays open. ``weights_range`` is the range of values the weight stream
-    carries; the datatype's own by default.
+    stays open, as does ``reducer``, which only a core that declares it commits.
+    ``weights_range`` is the range of values the weight stream carries; the
+    datatype's own by default.
     """
     form = facts.get("form", Form.DENSE)
     n = outputs if outputs is not None else (pe if isinstance(pe, int) and pe > 0 else 1)
@@ -152,6 +154,7 @@ def placed_dotp(
             ("compute.pe", pe),
             ("compute.simd", simd),
             ("compute.compute_pumping", compute_pumping),
+            ("compute.reducer", reducer if hasattr(family, "reducer") else None),
         )
         if value is not None
     }
@@ -385,6 +388,7 @@ def matmul_assembly(
     platform: Platform,
     form: Form = Form.DENSE,
     compute_pumping: bool = False,
+    reducer: str = "tree",
     core: str | None = None,
     realization: str | None = None,
     weight_delivery: WeightDelivery = WeightDelivery.EXTERNAL,
@@ -406,7 +410,8 @@ def matmul_assembly(
     meet; it sets dotp's DSP58 chain segmentation. ``core`` names the
     compute core (``packed`` or ``int8_dsp58``); left out, the one core
     compatible with the configuration is forced, and several compatible cores
-    must be chosen from. PE, SIMD and pumping are the core's.
+    must be chosen from. PE, SIMD and pumping are the core's, and the
+    packed core's ``reducer``.
     Every Decision with one viable case (the source, the adapters, the core
     on DSP48E2) is forced, not committed.
     """
@@ -469,6 +474,7 @@ def matmul_assembly(
             f"matmul.compute.{core}.pe": pe,
             f"matmul.compute.{core}.simd": simd,
             f"matmul.compute.{core}.compute_pumping": compute_pumping,
+            **({"matmul.compute.packed.reducer": reducer} if core == "packed" else {}),
         },
     )
     # Each stream's adapter is forced; an input_gen's memory is inferred.

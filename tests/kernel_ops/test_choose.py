@@ -81,6 +81,32 @@ def test_the_placeholder_folds_to_its_lanes_or_the_largest_factor() -> None:
     assert list(policy.rank(memory)) == ["auto", "block"]
 
 
+def test_the_placeholder_states_its_preference_by_key_not_by_domain_order() -> None:
+    policy = PlaceholderPolicy()
+    reducer = inspection.Viable("first.compute.packed.reducer", ("compressor", "tree"), {})
+    assert list(policy.rank(reducer)) == ["tree", "compressor"]
+    # A preferred case that is not viable is not offered; the rest keep their order.
+    assert list(
+        policy.rank(inspection.Viable("x.compute.packed.reducer", ("compressor",), {}))
+    ) == ["compressor"]
+    assert list(policy.rank(inspection.Viable("first.reducer", ("compressor", "tree"), {}))) == [
+        "compressor",
+        "tree",
+    ]
+
+
+def test_the_packed_reducer_is_offered_open_and_the_placeholder_commits_the_tree() -> None:
+    policy = Recording(PlaceholderPolicy())
+    model = kernel_model().transform(CommitKernelChoices(policy))
+    offered = {choice.key: choice.cases for choice in policy.offered}
+    reducers = {
+        key: cases for key, cases in offered.items() if key.endswith("compute.packed.reducer")
+    }
+    assert reducers and all(set(cases) == {"compressor", "tree"} for cases in reducers.values())
+    saved = choices(model)
+    assert saved["first"]["compute.packed.reducer"] == "tree"
+
+
 def test_every_open_choice_is_committed_and_the_model_replays_it(tmp_path: Path) -> None:
     model = kernel_model().transform(CommitKernelChoices(PlaceholderPolicy(lanes=2)))
     saved = choices(model)

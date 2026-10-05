@@ -57,6 +57,7 @@ import pyslang
 from pyslang import ast, syntax
 
 from finn.kernels.artifacts.abi import Direction, ObservedPort, Port, check_against_rtl
+from finn.kernels.artifacts.sources import include_directories, is_header
 
 #: Diagnostics that cannot bear on ports or parameters, and are therefore not
 #: grounds to decline.  Each entry is a decision with a reason, not a filter.
@@ -65,6 +66,9 @@ TOLERATED_DIAGNOSTICS = frozenset(
         # FinnLib writes `default_nettype between the port list and the body.
         # Illegal per LRM 22.8 and unable to change a port width either way.
         "DiagCode(DirectiveInsideDesignElement)",
+        # FinnLib's compressor sources (637d4ed) declare `timescale and the rest of
+        # FinnLib does not.  A time scale sets delay units, never a port or a parameter.
+        "DiagCode(MissingTimeScale)",
     }
 )
 
@@ -81,6 +85,8 @@ TOLERATED_WITHIN: Mapping[str, frozenset[str]] = MappingProxyType(
         # parameter is declared inside one, and a generate condition only
         # chooses which blocks exist.  Called from module level, the same
         # function raises this code outside any generate construct: declined.
+        # In an included header (add_multi's compressor schedule), the construct
+        # confining it is the one around the `include.
         "DiagCode(ConstEvalFunctionInsideGenerate)": frozenset(
             {"IfGenerate", "LoopGenerate", "CaseGenerate"}
         ),
@@ -163,16 +169,32 @@ def _confining(
     return found
 
 
-def _within(location: pyslang.SourceLocation, ranges: Sequence[pyslang.SourceRange]) -> bool:
-    return any(
-        location.buffer == area.start.buffer
-        and area.start.offset <= location.offset < area.end.offset
-        for area in ranges
-    )
+def _within(
+    sources: pyslang.SourceManager,
+    location: pyslang.SourceLocation,
+    ranges: Sequence[pyslang.SourceRange],
+) -> bool:
+    """Whether ``location``, or an `include that brought its text in, lies in ``ranges``.
+
+    A location in a macro expansion is taken where the macro was used.
+    """
+    while True:
+        location = sources.getFullyOriginalLoc(location)
+        if any(
+            location.buffer == area.start.buffer
+            and area.start.offset <= location.offset < area.end.offset
+            for area in ranges
+        ):
+            return True
+        if not sources.isIncludedFileLoc(location):
+            return False
+        location = sources.getIncludedFrom(location.buffer)
 
 
 def _errors(
-    compilation: ast.Compilation, trees: Sequence[syntax.SyntaxTree]
+    compilation: ast.Compilation,
+    trees: Sequence[syntax.SyntaxTree],
+    sources: pyslang.SourceManager,
 ) -> list[pyslang.Diagnostic]:
     """The errors that are grounds to decline: every one not tolerated where it arose."""
     errors = [
@@ -187,14 +209,16 @@ def _errors(
         diagnostic
         for diagnostic in errors
         if not any(
-            _within(diagnostic.location, ranges[kind])
+            _within(sources, diagnostic.location, ranges[kind])
             for kind in TOLERATED_WITHIN.get(str(diagnostic.code), ())
         )
     ]
 
 
-def _report(compilation: ast.Compilation, diagnostics: list[pyslang.Diagnostic]) -> tuple[str, ...]:
-    engine = pyslang.DiagnosticEngine(compilation.sourceManager)
+def _report(
+    sources: pyslang.SourceManager, diagnostics: list[pyslang.Diagnostic]
+) -> tuple[str, ...]:
+    engine = pyslang.DiagnosticEngine(sources)
     client = pyslang.TextDiagnosticClient()
     engine.addClient(client)
     for diagnostic in diagnostics:
@@ -211,7 +235,8 @@ def extract(
     module whose parameters have no defaults cannot be elaborated at all, and
     the checker declines rather than inventing widths.  A parameter value that
     is not an integer or a string is reported as ``None`` rather than declining
-    the module (``ExtractedModule``).
+    the module (``ExtractedModule``).  Headers among ``files`` are not parsed
+    on their own; their directories are searched for every `include.
     """
 
     options = ast.CompilationOptions()
@@ -223,13 +248,18 @@ def extract(
     options.paramOverrides = [f"{name}={value}" for name, value in parameters]
     compilation = ast.Compilation(pyslang.Bag([options]))
 
-    trees = [syntax.SyntaxTree.fromFile(str(path)) for path in files]
+    sources = pyslang.SourceManager()
+    for directory in include_directories(files):
+        sources.addUserDirectories(str(directory))
+    trees = [
+        syntax.SyntaxTree.fromFile(str(path), sources) for path in files if not is_header(path)
+    ]
     for tree in trees:
         compilation.addSyntaxTree(tree)
 
-    errors = _errors(compilation, trees)
+    errors = _errors(compilation, trees, sources)
     if errors:
-        return Declined("elaboration failed", _report(compilation, errors))
+        return Declined("elaboration failed", _report(sources, errors))
 
     instances = [
         instance for instance in compilation.getRoot().topInstances if instance.name == top

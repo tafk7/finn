@@ -27,7 +27,7 @@ from finn.kernels.artifacts.abi import Clock, Data
 from finn.kernels.artifacts.abi import Derived as DerivedClock
 from finn.kernels.artifacts.build import emit_module
 from finn.kernels.base import Kernel
-from finn.kernels.dotp import DotpAxiKernel, Int8Dsp58DotpKernel, PackedDotpKernel
+from finn.kernels.dotp import REDUCERS, DotpAxiKernel, Int8Dsp58DotpKernel, PackedDotpKernel
 from finn.kernels.port import AxiStreamPort
 from finn.kernels.target import DspBlock
 from kernels import helpers
@@ -88,6 +88,7 @@ def test_a_core_declares_ports_folding_factors_and_facts_and_the_base_derives_th
         "compute.pe",
         "compute.simd",
         "compute.compute_pumping",
+        "compute.reducer",
     }
     for name in ("activation_dtype", "activation_type", "activation", "iteration", "contraction"):
         assert not hasattr(DotpAxiKernel, name)
@@ -264,6 +265,21 @@ def test_pumped_compute_needs_the_platforms_doubled_clock():
     )
 
 
+def test_the_packed_core_states_its_reducer_to_finnlib():
+    for reducer in REDUCERS:
+        assert dict(kernel(reducer=reducer).module.parameters)["REDUCER"] == f'"{reducer}"'
+    # dotp_axi declares REDUCER for every core; the INT8 core binds FinnLib's default.
+    assert dict(kernel(Int8Dsp58DotpKernel).module.parameters)["REDUCER"] == '"compressor"'
+
+
+@pytest.mark.parametrize("dsp", list(DspBlock))
+def test_the_reducer_left_open_is_a_choice_no_platform_refuses(dsp):
+    point = kernel(reducer=None, platform=full_platform(dsp))
+    (choice,) = [item for item in inspection.viable(point) if item.key == "compute.reducer"]
+    assert set(choice.cases) == set(REDUCERS) and not choice.refused
+    assert not isinstance(point.inspect(DotpAxiKernel.module).accepted_result, Available)
+
+
 def test_the_core_refuses_before_its_folding_factors_are_chosen():
     point = kernel(weights_dtype=DataType["INT27"], pe=None, simd=None, compute_pumping=None)
     assert codes(point.inspect(DotpAxiKernel.core_supported).result) == {"dotp-weight-width"}
@@ -320,6 +336,12 @@ def test_sources_materialize_from_the_assessed_requirements(tmp_path):
     emitted = emit_module(requirements, tmp_path, roots={"finnlib": finnlib})
     upstream = {
         "rtl/arith/add_multi_pkg.sv",
+        "rtl/arith/compressor_pkg.sv",
+        "rtl/arith/compressor_counters.sv",
+        "rtl/arith/compress_core.sv",
+        "rtl/arith/schedule_core.svh",
+        "rtl/arith/sched_chunks.svh",
+        "rtl/arith/add_multi_sched.svh",
         "rtl/arith/add_multi.sv",
         "rtl/linalg/dotp.sv",
         "rtl/linalg/dotp_axi.sv",

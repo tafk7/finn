@@ -52,6 +52,7 @@ def point(core="int8_dsp58", **facts):
         f"matmul.compute.{core}.pe": 2,
         f"matmul.compute.{core}.simd": 3,
         f"matmul.compute.{core}.compute_pumping": False,
+        **({"matmul.compute.packed.reducer": "tree"} if core == "packed" else {}),
     }
     native = "native" if facts["form"] is Form.DEPTHWISE else None
     return with_adapter_memories(commit(matmul_point(realization=native, **facts), choices))
@@ -162,6 +163,7 @@ def test_one_root_carries_the_weights_of_whichever_realization_is_committed():
                     f"matmul.compute.{core}.pe": 2,
                     f"matmul.compute.{core}.simd": 3,
                     f"matmul.compute.{core}.compute_pumping": False,
+                    **({"matmul.compute.packed.reducer": "tree"} if core == "packed" else {}),
                     "w.source.memstream.ram_style": "auto",
                     "w.source.memstream.pumped_memory": False,
                 },

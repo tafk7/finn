@@ -121,7 +121,8 @@ class PlacedDotp(Space):
 
 dotp = commit(
     design_space(PlacedDotp()),
-    {"compute.pe": 2, "compute.simd": 2, "compute.compute_pumping": False},
+    {"compute.pe": 2, "compute.simd": 2, "compute.compute_pumping": False,
+     "compute.reducer": "tree"},
 ).compute
 answer = dotp.module
 assert isinstance(answer, built.Leaf), answer
@@ -130,7 +131,10 @@ assert dotp.x.element.dtype.name == "INT3"
 assert dotp.x.axis.payload_bits == 6
 
 dotp_sources = {
-    "rtl/arith/add_multi_pkg.sv", "rtl/arith/add_multi.sv",
+    "rtl/arith/add_multi_pkg.sv", "rtl/arith/compressor_pkg.sv",
+    "rtl/arith/compressor_counters.sv", "rtl/arith/compress_core.sv",
+    "rtl/arith/schedule_core.svh", "rtl/arith/sched_chunks.svh",
+    "rtl/arith/add_multi_sched.svh", "rtl/arith/add_multi.sv",
     "rtl/linalg/dotp.sv", "rtl/linalg/dotp_axi.sv",
 }
 roots = {"finnlib": Path(config["finnlib"])}
@@ -190,6 +194,7 @@ for memory in ("none", "memstream"):
         "matmul.compute.packed.pe": 2,
         "matmul.compute.packed.simd": 2,
         "matmul.compute.packed.compute_pumping": False,
+        "matmul.compute.packed.reducer": "tree",
         "x.adapter": "input_gen",
         "x.adapter.input_gen.input_gen.ram_style": "auto",
     })

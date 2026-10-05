@@ -19,14 +19,16 @@ viable cases in its order of preference; the first the configuration accepts
 is committed. A Decision with no viable case, or one whose cases the engine
 cannot enumerate, is refused, named.
 
-``PlaceholderPolicy`` is the only policy, and a placeholder: it stands where a
-design space exploration will rank by cost (gate A, G4), and nothing should
-come to rely on its choices.
+A preference between a Decision's cases is the policy's: the order of a
+kernel's domain states none. ``PlaceholderPolicy`` is the only policy, and a
+placeholder: it stands where a design space exploration will rank by cost
+(gate A, G4), and nothing should come to rely on its choices.
 """
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
+from types import MappingProxyType
 from typing import Any, Protocol
 
 from qonnx.transformation.base import Transformation
@@ -49,12 +51,23 @@ class PlaceholderPolicy:
     """The DSE seam's placeholder (gate A, G4): deterministic, and not a design.
 
     It folds every PE and SIMD to ``lanes`` where that is viable, otherwise to the
-    largest viable factor, and takes every other choice's first viable case in its
-    domain's order (``auto`` memories, nothing pumped, no AXI-Lite, a direct
-    transport). A design space exploration replaces it; it ranks no cost.
+    largest viable factor, ranks the cases it has a preference for first
+    (``PREFERRED``), and otherwise takes the first viable case in its domain's
+    order (``auto`` memories, nothing pumped, no AXI-Lite, a direct transport),
+    which states no preference and is only deterministic. A design space
+    exploration replaces it; it ranks no cost.
     """
 
     FOLDING = ("pe", "simd")
+    #: Cases preferred, most first, by a Decision's key within its node, each with its reason.
+    PREFERRED: Mapping[str, tuple[object, ...]] = MappingProxyType(
+        {
+            # The adder tree over the compressor: it meets timing with the larger margin,
+            # and one synthesis of a packed dotp takes about 3 GB of memory rather than
+            # about 37 GB. The compressor saves LUTs and registers at wide SIMD.
+            "compute.packed.reducer": ("tree",),
+        }
+    )
 
     def __init__(self, lanes: int = 16) -> None:
         self.lanes = lanes
@@ -63,7 +76,16 @@ class PlaceholderPolicy:
         if choice.key.rsplit(".", 1)[-1] in self.FOLDING:
             factors = sorted((case for case in choice.cases if isinstance(case, int)), reverse=True)
             return sorted(factors, key=lambda factor: factor != self.lanes)
-        return choice.cases
+        preferred = next(
+            (
+                cases
+                for key, cases in self.PREFERRED.items()
+                if choice.key == key or choice.key.endswith(f".{key}")
+            ),
+            (),
+        )
+        first = [case for case in preferred if case in choice.cases]
+        return [*first, *(case for case in choice.cases if case not in first)]
 
 
 class CommitKernelChoices(Transformation):  # type: ignore[misc]

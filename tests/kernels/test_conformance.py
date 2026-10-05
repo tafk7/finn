@@ -73,8 +73,15 @@ def tensor(shape: tuple[int, ...], dtype: str) -> Tensor:
 ROWS, REDUCTION, OUTPUTS = 2, 6, 4
 
 
-def dotp(family: type[Any], dsp: DspBlock, bits: int, form: Form = Form.DENSE) -> dict[str, Any]:
-    """Y = X @ W, or per channel (depthwise); the accumulator type is the parent's fact."""
+def dotp(
+    family: type[Any],
+    dsp: DspBlock,
+    bits: int,
+    form: Form = Form.DENSE,
+    reducer: str | None = None,
+) -> dict[str, Any]:
+    """Y = X @ W, or per channel (depthwise); the accumulator type is the parent's fact.
+    ``reducer`` is the packed core's, which only it declares."""
     a = w = DataType[f"INT{bits}"]
     depthwise = form is Form.DEPTHWISE
     reduction = 3 if depthwise else REDUCTION
@@ -92,7 +99,7 @@ def dotp(family: type[Any], dsp: DspBlock, bits: int, form: Form = Form.DENSE) -
         },
         outputs={"y_stream": (ROWS, OUTPUTS)},
         reference=reference,
-        choices={"compute_pumping": False},
+        choices={"compute_pumping": False, **({"reducer": reducer} if reducer else {})},
         facts={
             "platform": full_platform(dsp),
             "form": form,
@@ -302,7 +309,10 @@ def memstream() -> dict[str, Any]:
 
 
 CASES = {
-    "dotp-packed": lambda: dotp(PackedDotpKernel, DspBlock.DSP48E2, 4),
+    "dotp-packed": lambda: dotp(PackedDotpKernel, DspBlock.DSP48E2, 4, reducer="tree"),
+    "dotp-packed-compressor": lambda: dotp(
+        PackedDotpKernel, DspBlock.DSP48E2, 4, reducer="compressor"
+    ),
     "dotp-int8": lambda: dotp(Int8Dsp58DotpKernel, DspBlock.DSP58, 8),
     "dotp-int8-depthwise": lambda: dotp(Int8Dsp58DotpKernel, DspBlock.DSP58, 8, Form.DEPTHWISE),
     "thresholding": thresholding,
@@ -315,7 +325,7 @@ CASES = {
 
 
 def test_sampled_folding_factors_are_smallest_interior_largest_then_an_adapter() -> None:
-    case = dotp(PackedDotpKernel, DspBlock.DSP48E2, 4)
+    case = dotp(PackedDotpKernel, DspBlock.DSP48E2, 4, reducer="tree")
     del case["reference"]
     chosen = samples(**case)
     assert [(sample.label, dict(sample.factors), sample.adapter) for sample in chosen] == [

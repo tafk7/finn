@@ -37,6 +37,7 @@ FOLDING = {
     "compute.packed.pe": 2,
     "compute.packed.simd": 2,
     "compute.packed.compute_pumping": False,
+    "compute.packed.reducer": "tree",
 }
 
 
@@ -93,11 +94,12 @@ def test_each_missing_or_refused_fact_is_named() -> None:
 
 def test_the_schema_is_the_node_roots_decision_keys() -> None:
     schema = MatMul.schema()
-    assert len(schema) == 32
-    assert sum(kind == "s" for kind, _ in schema.values()) == 24
+    assert len(schema) == 33
+    assert sum(kind == "s" for kind, _ in schema.values()) == 25
     assert schema["compute"] == ("s", ("packed", "int8_dsp58"))
     assert schema["compute.packed.pe"] == ("i", ())
     assert schema["compute.packed.compute_pumping"] == ("i", ())
+    assert schema["compute.packed.reducer"] == ("s", ())
     # Input and owned streams' keys under the op's port names; the output's are its consumer's.
     assert "w.transport" in schema and any(name.startswith("x.adapter") for name in schema)
     assert not any(name.startswith("y.") for name in schema)
@@ -119,7 +121,7 @@ def schema_digest(cls: type[KernelOp]) -> str:
 def test_the_schema_is_pinned_for_its_op_version() -> None:
     """Changing a kernel's or a stream's keys changes the schema. Unreleased, the digest
     is re-pinned without an op-version bump (clean breaks)."""
-    assert (MatMul.op_version, schema_digest(MatMul)) == (1, "2e2ea07041060a3c")
+    assert (MatMul.op_version, schema_digest(MatMul)) == (1, "cabeb8d975ca6f2f")
 
 
 # -- persistence ------------------------------------------------------------------------
