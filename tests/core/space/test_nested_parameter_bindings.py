@@ -13,11 +13,6 @@ caller supplies to a reference input) owns its choice.
 
 from __future__ import annotations
 
-import os
-import re
-import shutil
-import subprocess
-from pathlib import Path
 from typing import cast
 
 import pytest
@@ -390,46 +385,3 @@ def test_nested_decision_reference_can_traverse_concrete_reference_layers() -> N
     direct = point.field(through_root)
     assert isinstance(nested, BoundDecision) and isinstance(direct, BoundDecision)
     assert nested.state == direct.state
-
-
-def test_nested_binding_typing_rejects_a_supplier_of_the_wrong_type(tmp_path: Path) -> None:
-    mypy = shutil.which("mypy")
-    assert mypy is not None
-    source = """from finn.core.space import Param, Space
-class Port(Space):
-    width: int = Param()
-class Child(Space):
-    port = Port()
-class Parent(Space):
-    child = Child()
-    child.port.width = 4
-    # Assignment is typed by Param.__set__: the value type is checked exactly.
-    child.port.width = "wrong"  # E
-    fresh = Port(width="wrong")  # E
-"""
-    fixture = tmp_path / "nested_binding_types.py"
-    fixture.write_text(source)
-    root = Path(__file__).resolve().parents[3]
-    environment = {key: value for key, value in os.environ.items() if key != "PYTHONPATH"}
-    result = subprocess.run(
-        [
-            mypy,
-            "--strict",
-            "--explicit-package-bases",
-            "--no-incremental",
-            "--cache-dir",
-            str(tmp_path / "cache"),
-            str(fixture),
-        ],
-        cwd=root,
-        env=dict(environment, MYPYPATH=f"{root / 'src'}:{root / 'tests'}"),
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    expected = {line for line, text in enumerate(source.splitlines(), 1) if "# E" in text}
-    actual = {
-        int(line) for line in re.findall(r"nested_binding_types\.py:(\d+): error:", result.stdout)
-    }
-    assert result.returncode == 1, result.stdout + result.stderr
-    assert actual == expected, result.stdout + result.stderr

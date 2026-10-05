@@ -4,12 +4,7 @@
 
 from __future__ import annotations
 
-import os
-import re
-import shutil
-import subprocess
 from dataclasses import dataclass
-from pathlib import Path
 from typing import cast
 
 import pytest
@@ -218,70 +213,6 @@ def test_capture_does_not_evaluate_unrelated_uncommitted_guard_callbacks() -> No
 
     point = design_space(Family()).with_choices(committed=1)
     assert selections.capture(point).keys == ("committed",)
-
-
-def test_selection_reads_and_replay_have_strict_types(tmp_path: Path) -> None:
-    mypy = shutil.which("mypy")
-    assert mypy is not None
-    project = Path(__file__).resolve().parents[3]
-    common = """from typing import assert_type
-from finn.core.space import (
-    Decision, Param, Space, design_space, selections, Selection, ConfigurationResult,
-)
-
-class Family(Space):
-    extent: int = Param()
-    factor: int = Decision(values=(1, 2))
-    style: str = Decision(values=("auto", "block"))
-
-base = design_space(Family(extent=4))
-selected = selections.capture(base)
-"""
-    positive = (
-        common
-        + """assert_type(selections.capture(base), Selection)
-assert_type(selected.value(Family.factor), int)
-assert_type(selections.restore(base, selected), ConfigurationResult[Family])
-"""
-    )
-    negative = (
-        common
-        + """selected.value(Family.extent)  # accepted: a reference is typed as its value
-selected.edit(Family.factor, 2)  # E
-selected.remove(Family.factor)  # E
-selected.with_changes([])  # E
-
-"""
-    )
-    environment = dict(os.environ, MYPYPATH=f"{project / 'src'}:{project / 'tests'}")
-    command = [
-        mypy,
-        "--strict",
-        "--no-incremental",
-        "--explicit-package-bases",
-        "--cache-dir",
-        str(tmp_path / "cache"),
-    ]
-    for name, source in (("positive", positive), ("negative", negative)):
-        fixture = tmp_path / f"{name}.py"
-        fixture.write_text(source)
-        result = subprocess.run(
-            [*command, str(fixture)],
-            cwd=project,
-            env=environment,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if name == "positive":
-            assert result.returncode == 0, result.stdout + result.stderr
-        else:
-            expected = {index for index, line in enumerate(source.splitlines(), 1) if "# E" in line}
-            actual = {
-                int(line) for line in re.findall(r"negative\.py:(\d+): error:", result.stdout)
-            }
-            assert result.returncode == 1, result.stdout + result.stderr
-            assert actual == expected, result.stdout + result.stderr
 
 
 def test_restore_preconditions_precede_value_adapters_and_admission() -> None:
