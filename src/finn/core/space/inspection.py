@@ -630,12 +630,6 @@ def candidate(point: Space, decision: object, case: str) -> Space | None:
     return _candidate(point, decision, case)
 
 
-def is_declaration(value: object) -> bool:
-    """Whether ``value`` is a node declaration or reference path rather than a configuration."""
-
-    return isinstance(value, Space) and declared_path(value) is not None
-
-
 __all__ = [
     "CaseInfo",
     "ChoiceInfo",
@@ -659,7 +653,6 @@ __all__ = [
     "dependencies",
     "explain",
     "forced",
-    "is_declaration",
     "members",
     "model",
     "pinned",

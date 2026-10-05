@@ -45,7 +45,7 @@ class Expr(ValueDecl[int]):
         self.semantics = INTEGER_SEMANTICS
 
 
-def apply_integer(operator: IntOperator, operands: tuple[int, ...]) -> int:
+def _apply_integer(operator: IntOperator, operands: tuple[int, ...]) -> int:
     """Evaluate the bounded integer vocabulary using ordinary Python arithmetic."""
 
     if any(type(value) is not int for value in operands):
@@ -71,12 +71,12 @@ def evaluator(operator: IntOperator) -> Callable[..., object]:
     if operator == "neg":
 
         def unary(*, operand: int) -> int:
-            return apply_integer(operator, (operand,))
+            return _apply_integer(operator, (operand,))
 
         return unary
 
     def binary(*, left: int, right: int) -> int:
-        return apply_integer(operator, (left, right))
+        return _apply_integer(operator, (left, right))
 
     return binary
 

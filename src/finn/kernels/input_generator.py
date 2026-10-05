@@ -38,7 +38,7 @@ from finn.kernels.port import WordPort
 from finn.kernels.target import Platform
 from finn.kernels.transport import MarkerKind, StreamMarker
 
-INPUT_GEN_RAM_STYLES = ("auto", "distributed", "block", "ultra")
+_INPUT_GEN_RAM_STYLES = ("auto", "distributed", "block", "ultra")
 
 
 def _vector(values: IntegerVector) -> str:
@@ -83,7 +83,7 @@ class InputGeneratorKernel(Kernel):
 
     admission = ConstraintGroup(traversal_supported)
     ram_style: str = Decision(
-        values=INPUT_GEN_RAM_STYLES,
+        values=_INPUT_GEN_RAM_STYLES,
         requires=(
             requires(platform.uram, "uram-absent: the platform has no UltraRAM", cases=("ultra",)),
         ),
@@ -118,4 +118,4 @@ class InputGeneratorKernel(Kernel):
         return (CopiedSource("finnlib", "rtl/shape/input_gen.sv", provides=("module:input_gen",)),)
 
 
-__all__ = ["INPUT_GEN_RAM_STYLES", "InputGeneratorKernel"]
+__all__ = ["InputGeneratorKernel"]

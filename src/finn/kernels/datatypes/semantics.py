@@ -25,7 +25,6 @@ QONNX_DATATYPE_VALUE_SEMANTICS: ValueSemantics[QONNXDataType] = ValueSemantics(
     equal=lambda left, right: left is right,
     snapshot=canonical_qonnx_datatype,
 )
-QONNX_DATATYPE_SEMANTICS = cast(ValueSemantics[object], QONNX_DATATYPE_VALUE_SEMANTICS)
 
 IntegerVector = tuple[int, ...]
 INTEGER_VECTOR: ValueSemantics[IntegerVector] = ValueSemantics(
@@ -170,7 +169,6 @@ __all__ = [
     "IntegerTensor",
     "IntegerTensorValue",
     "IntegerVector",
-    "QONNX_DATATYPE_SEMANTICS",
     "QONNX_DATATYPE_VALUE_SEMANTICS",
     "THRESHOLD_TABLE",
     "ThresholdTable",

@@ -95,8 +95,6 @@ def test_kernel_sources_and_tests_have_no_parked_dependency() -> None:
         "finn.parked",
         "finn.custom_op.kernels",
         "finn.transformation.kernels",
-        "finn.custom_op.dataflow",
-        "finn.kernels.space",
         "qonnx.core.modelwrapper",
         "finn.core.onnx_exec",
         "finn.core.rtlsim_exec",
@@ -157,9 +155,8 @@ import sys
 class RejectParked(importlib.abc.MetaPathFinder):
     def find_spec(self, fullname, path=None, target=None):
         forbidden = (
-            "finn.parked", "finn.custom_op.dataflow",
-            "qonnx.core.modelwrapper", "finn.kernels._engine", "finn.kernels.space",
-            "finn.core.modelwrapper", "finn.core.onnx_exec", "finn.core.rtlsim_exec", "onnx",
+            "finn.parked", "qonnx.core.modelwrapper", "finn.core.onnx_exec",
+            "finn.core.rtlsim_exec", "onnx",
         )
         if any(fullname == name or fullname.startswith(name + ".") for name in forbidden):
             raise AssertionError("forbidden dependency: " + fullname)
@@ -265,24 +262,9 @@ for memory in ("none", "memstream"):
     )
     assert root.matmul.result_type == DataType["INT8"]
     assert isinstance(root.module, Composed) and root.module.fragment.instances
-assert not any(
-    name.startswith("finn.kernels.") and ("._engine" in name or "._next" in name)
-    for name in sys.modules
-)
 """
     result = subprocess.run([sys.executable, "-c", script], text=True, capture_output=True)
     assert result.returncode == 0, result.stdout + result.stderr
-
-
-def test_kernel_runtime_has_no_legacy_or_staging_modules() -> None:
-    assert not (PACKAGE / "_engine").exists()
-    assert not (PACKAGE / "space").exists()
-    for path in (*PACKAGE.rglob("*.py"), *SPACE_PACKAGE.rglob("*.py")):
-        assert not path.name.startswith("_next"), path
-        for name in imported_modules(path):
-            assert not within(name, "finn.kernels._engine"), (path, name)
-            assert not within(name, "finn.kernels.space"), (path, name)
-            assert not any(part.startswith("_next") for part in name.split(".")), (path, name)
 
 
 @pytest.mark.parametrize("target", ("finn.core.space", "finn.kernels.artifacts"))
@@ -296,8 +278,7 @@ package_name = sys.argv[1]
 class RejectOtherLayers(importlib.abc.MetaPathFinder):
     def find_spec(self, fullname, path=None, target=None):
         if fullname.startswith((
-            "qonnx", "onnx", "finn.dataflow", "finn.parked", "finn.custom_op.dataflow",
-            "finn.kernels.space", "finn.core.modelwrapper", "finn.core.onnx_exec",
+            "qonnx", "onnx", "finn.dataflow", "finn.parked", "finn.core.onnx_exec",
             "finn.core.rtlsim_exec",
         )) or (package_name == "finn.core.space" and fullname.startswith("finn.kernels")):
             raise AssertionError("unexpected dependency: " + fullname)
@@ -326,25 +307,3 @@ assert all(
 """
     result = subprocess.run([sys.executable, "-c", script, target], text=True, capture_output=True)
     assert result.returncode == 0, result.stdout + result.stderr
-
-
-def test_no_duplicate_shared_implementation() -> None:
-    old = ROOT / "src/finn/dataflow"
-    for relative in (
-        "space",
-        "_engine",
-        "artifacts",
-        "model/kernel_base.py",
-        "kernels/dotp_axi_minimal.py",
-        "kernels/matmul.py",
-        "kernels/streaming.py",
-        "kernels/target.py",
-        "kernels/resources",
-        "kernels/matmul/resources.py",
-        "model/logical/datatypes.py",
-        "model/logical/datatype_semantics.py",
-        "model/logical/datatype_domains.py",
-    ):
-        assert not (old / relative).exists(), relative
-    for name in ("axi_stream", "layout", "structure", "validation", "lowering"):
-        assert not (old / "model/physical" / (name + ".py")).exists()

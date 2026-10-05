@@ -73,7 +73,6 @@ from finn.dataflow.datatypes import (
 )
 from finn.dataflow.gemm import Form
 from finn.dataflow.tensor import ScalarEncoding, Tensor
-from finn.kernels.artifacts.module import ProducerIdentity
 from finn.kernels.base import Kernel
 from finn.kernels.datatypes.domains import set_index_dtype
 from finn.kernels.datatypes.semantics import (
@@ -304,9 +303,6 @@ class MatMulKernel(Kernel):
 
     def stem(self) -> str:
         return "finn_matmul"
-
-    def producer_identity(self) -> ProducerIdentity:
-        return ProducerIdentity("finn.matmul", str(type(self).version))
 
 
 __all__ = ["MatMulKernel", "exact_result_dtype"]

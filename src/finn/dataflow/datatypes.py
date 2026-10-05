@@ -14,8 +14,6 @@ What crosses it:
   (``ModelWrapper.get_tensor_datatype``), read by the KernelOps
   (``finn.custom_op.kernels``) and passed to kernels as facts. They travel as the same
   QONNX datatype *value*; a kernel's result type goes back as an annotation.
-- **Persisted**, a datatype is its canonical name and nothing else
-  (``encode_datatype``, ``decode_datatype``).
 - **Value information** is not a datatype. An initializer's values are
   admitted against its annotation from QONNX's value summary at the graph
   boundary; the range of values a stream carries lives on its element
@@ -52,16 +50,13 @@ import re
 from collections.abc import Callable
 from typing import Protocol, TypeGuard, cast
 
-from qonnx.core.datatype import BaseDataType, DataType, is_datatype, resolve_datatype
+from qonnx.core.datatype import BaseDataType, DataType, is_datatype
 
 __all__ = [
-    "DATATYPE_PAYLOAD_KEY",
     "DatatypeError",
     "QONNXDataType",
     "QONNX_DATATYPE_TOKEN",
     "canonical_qonnx_datatype",
-    "decode_datatype",
-    "encode_datatype",
     "is_qonnx_datatype",
     "ordinary_integer_bounds",
     "qonnx_datatype_width",
@@ -136,7 +131,6 @@ def resolve_qonnx_datatype_name(name: str) -> QONNXDataType:
     another name -- ``UINT1`` resolves to ``BINARY``, and ``FLOAT<5,10>`` to
     ``FLOAT<5,10,15>``. This is right for *source-facing* names: a legacy node
     attribute like ``accDataType`` is whatever a human or an older FINN wrote.
-    Persistence uses :func:`decode_datatype`, which accepts canonical names only.
     """
 
     if not isinstance(name, str):
@@ -158,7 +152,7 @@ def canonical_qonnx_datatype(value: object) -> QONNXDataType:
     if isinstance(value, str):
         # Not merely unsupported -- actively dangerous.  A datatype compares and
         # hashes equal to its own canonical name, so admitting strings here
-        # would make the persisted form and the live value interchangeable and
+        # would make a name and the live value interchangeable and
         # let them collide as mapping keys without raising.
         raise DatatypeError(f"a canonical name is not a datatype value; resolve {value!r} first")
     if not is_datatype(value):
@@ -175,46 +169,6 @@ def qonnx_datatype_width(value: object) -> int:
 is_qonnx_datatype: Callable[[object], TypeGuard[QONNXDataType]] = is_datatype
 """Whether ``value`` is a QONNX datatype value: qonnx's ``is_datatype``, total
 (it runs no method of the value), and False for a ``str``."""
-
-
-#: The key a persisted datatype appears under.  Named rather than bare so a
-#: reader of a stored fingerprint can tell a datatype from a string that happens
-#: to look like one, and so the old ``numeric_element_type`` form is a visibly
-#: different shape rather than a silently reinterpreted one.
-DATATYPE_PAYLOAD_KEY = "qonnx_datatype"
-
-
-def encode_datatype(value: object) -> dict[str, str]:
-    """Encode a datatype for a fingerprint or a persisted selection.
-
-    The canonical name and nothing else.  Never the ``repr``, the class name,
-    or a family-and-width pair: the first two have no declared contract and the
-    third is the lossy reduction this module replaced -- it would give
-    ``TERNARY`` and ``INT2`` the same fingerprint.
-    """
-
-    return {DATATYPE_PAYLOAD_KEY: canonical_qonnx_datatype(value).name}
-
-
-def decode_datatype(payload: object) -> QONNXDataType:
-    """Hydrate what ``encode_datatype`` wrote -- **strictly**.
-
-    The persisted name must be canonical: ``encode_datatype`` only ever writes
-    canonical names, so a payload in another spelling (``UINT1`` for
-    ``BINARY``, ``FLOAT<5,10>`` for ``FLOAT<5,10,15>``) did not come from here
-    and is refused rather than reinterpreted. Source-facing names use
-    :func:`resolve_qonnx_datatype_name`, which is permissive on purpose.
-    """
-
-    if not isinstance(payload, dict) or set(payload) != {DATATYPE_PAYLOAD_KEY}:
-        raise DatatypeError(f"not an encoded datatype: {payload!r}")
-    stored = payload[DATATYPE_PAYLOAD_KEY]
-    if not isinstance(stored, str):
-        raise DatatypeError(f"a persisted datatype is a name, not {type(stored)}")
-    try:
-        return cast(QONNXDataType, resolve_datatype(stored, canonical=True))
-    except KeyError as error:
-        raise DatatypeError(f"persisted datatype {stored!r} is not canonical: {error}") from error
 
 
 #: The one engine value domain for datatypes.

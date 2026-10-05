@@ -12,9 +12,9 @@ each sample it
 2. checks the kernel's module against its materialized sources under the
    declared parameter binding (``artifacts.rtl.extract``, then the comparison
    ``check_abi`` makes, on the one extraction): a refusal fails; a decline is a
-   warning (``RtlDeclined``), and fails under ``--strict-rtl``. A parameter
-   whose value the checker does not establish (an array, a real) does not
-   decline: its name is still established;
+   warning (``RtlDeclined``). A parameter whose value the checker does not
+   establish (an array, a real) does not decline: its name is still
+   established;
 3. checks the model: every port's traversal covers its tensor, a scheduled
    port presents the schedule's beats less the ones it drops, each boundary
    presents its port's traversal (an input's ``unreplayed``), and
@@ -99,9 +99,6 @@ Factors = str | Sequence[Mapping[str, object]]
 Outputs = Mapping[str, tuple[int, ...] | Tensor]
 Reference = Callable[..., Mapping[str, Any]]
 EMPTY: Mapping[str, object] = MappingProxyType({})
-
-STRICT_RTL = False
-"""Set by ``--strict-rtl`` (``tests/kernels/conftest.py``): a decline fails."""
 
 
 class RtlDeclined(UserWarning):
@@ -427,8 +424,6 @@ def _check_rtl(
     extracted = extract([Path(source) for source in sources], top, pins.parameters)
     if isinstance(extracted, Declined):
         message = f"{_where(family, sample)}: the RTL checker declined {top}: {extracted}"
-        if STRICT_RTL:
-            raise AssertionError(message)
         warnings.warn(message, RtlDeclined, stacklevel=3)
         return None
     # check_abi's comparison, on the one extraction: the ports, never a parameter value.

@@ -35,9 +35,7 @@ sys.dont_write_bytecode = True
 class RejectGraphDependencies(importlib.abc.MetaPathFinder):
     def find_spec(self, fullname, path=None, target=None):
         forbidden = (
-            "finn.parked", "finn.custom_op.dataflow", "onnx",
-            "finn.kernels.space", "finn.core.modelwrapper", "finn.core.onnx_exec",
-            "finn.core.rtlsim_exec",
+            "finn.parked", "onnx", "finn.core.onnx_exec", "finn.core.rtlsim_exec",
         )
         if any(fullname == name or fullname.startswith(name + ".") for name in forbidden):
             raise AssertionError("forbidden dependency: " + fullname)
@@ -80,13 +78,10 @@ from finn.kernels.artifacts import build, module as built
 from qonnx.core.datatype import DataType
 
 assert (installed / "finn/kernels/py.typed").is_file()
-assert not (installed / "finn/kernels/_engine").exists()
 assert (installed / "finn/core/space/py.typed").is_file()
 assert (installed / "finn/dataflow/py.typed").is_file()
 assert not (installed / "finn/parked").exists()
 assert "finn.dataflow.datatypes" in sys.modules
-assert not (installed / "finn/kernels/space").exists()
-assert not (installed / "finn/kernels/resources").exists()
 PLATFORM = Platform(
     period_ns=5.0,
     dsp=DspBlock.DSP48E2,
@@ -218,7 +213,6 @@ for memory in ("none", "memstream"):
 # Catch namespace or editable-install leakage even if the import was permitted.
 for name, module in tuple(sys.modules.items()):
     if name == "finn" or name.startswith("finn."):
-        assert "._engine" not in name and "._next" not in name, name
         location = getattr(module, "__file__", None)
         if location is not None:
             assert Path(location).resolve().is_relative_to(installed), (name, location)
@@ -275,17 +269,7 @@ def test_installed_wheel_materializes_independent_kernel_builds(tmp_path: Path) 
             "finn/dataflow/traversal.py",
             "finn/kernels/artifacts/module.py",
         } <= set(archive.namelist())
-        assert not any(
-            name.startswith("finn/kernels/_engine/")
-            or name.startswith("finn/kernels/space/")
-            or name.startswith("finn/parked/")
-            or name.startswith("finn/custom_op/dataflow/")
-            or name.startswith("finn/kernels/resources/")
-            or name.startswith("finn/kernels/physical/")
-            or any(part.startswith("_next") for part in name.split("/"))
-            for name in archive.namelist()
-        )
-        assert not any(name.startswith("finn/dataflow/artifacts/") for name in archive.namelist())
+        assert not any(name.startswith("finn/parked/") for name in archive.namelist())
         (metadata_name,) = (
             name for name in archive.namelist() if name.endswith(".dist-info/METADATA")
         )

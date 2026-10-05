@@ -86,7 +86,7 @@ def _function(declaration: Declaration) -> Callable[..., object] | None:
     return None
 
 
-def member_declaration(value: object) -> Declaration | None:
+def _member_declaration(value: object) -> Declaration | None:
     """The declaration a class attribute contributes: a record for a node or choice."""
     return slot_declaration(value)
 
@@ -127,7 +127,7 @@ def _collect_members(
     inherited: dict[str, list[Declaration]] = {}
     for base in reversed(space_type.__mro__):
         for name, value in vars(base).items():
-            declaration = member_declaration(value)
+            declaration = _member_declaration(value)
             if declaration is not None:
                 local_name(name, "declaration name")
                 if name in _RESERVED or name.startswith("__"):
@@ -176,7 +176,7 @@ def _collect_semantics(
         providers = [
             base
             for base in space_type.__mro__
-            if member_declaration(vars(base).get(name)) is not None
+            if _member_declaration(vars(base).get(name)) is not None
         ]
         nearest = [
             base

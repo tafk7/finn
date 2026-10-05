@@ -9,9 +9,9 @@ recognition never promises more than the snapshot can deliver, and that a
 datatype and its own name never get confused for one another.
 
 The last is not a style point.  ``DataType["INT8"] == "INT8"`` is true and their
-hashes agree, so if a string were admitted to this value domain the persisted
-form and the live value would be interchangeable, hydration could silently do
-nothing, and the two would collide as mapping keys without raising.
+hashes agree, so if a string were admitted to this value domain a name and the
+live value would be interchangeable, and the two would collide as mapping keys
+without raising.
 """
 
 from __future__ import annotations
@@ -21,16 +21,18 @@ from typing import Any, cast
 import pytest
 from qonnx.core.datatype import BaseDataType, DataType
 
+from finn.core.space import ValueSemantics
 from finn.dataflow.datatypes import (
     DatatypeError,
     QONNXDataType,
     canonical_qonnx_datatype,
-    decode_datatype,
-    encode_datatype,
     is_qonnx_datatype,
     resolve_qonnx_datatype_name,
 )
-from finn.kernels.datatypes.semantics import QONNX_DATATYPE_SEMANTICS
+from finn.kernels.datatypes.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
+
+#: The datatype domain at ``object``, so a test can offer it values of any type.
+QONNX_DATATYPE_SEMANTICS = cast(ValueSemantics[object], QONNX_DATATYPE_VALUE_SEMANTICS)
 
 #: Every datatype family the stack could be handed, including the ones the
 #: previous representation could not express at all.
@@ -71,7 +73,6 @@ FORMERLY_COLLIDING = (
 @pytest.mark.parametrize(("left", "right"), FORMERLY_COLLIDING)
 def test_equal_width_types_with_different_meanings_stay_different(left: str, right: str) -> None:
     assert DataType[left] != DataType[right]
-    assert encode_datatype(DataType[left]) != encode_datatype(DataType[right])
 
 
 def test_uint1_and_binary_are_deliberately_the_same_value() -> None:
@@ -86,19 +87,6 @@ def test_uint1_and_binary_are_deliberately_the_same_value() -> None:
 
     assert DataType["UINT1"] == DataType["BINARY"]
     assert resolve_qonnx_datatype_name("UINT1").name == "BINARY"
-
-
-@pytest.mark.parametrize("name", REPRESENTATIVE)
-def test_a_datatype_round_trips_through_its_canonical_name(name: str) -> None:
-    datatype = DataType[name]
-    assert decode_datatype(encode_datatype(datatype)) == datatype
-
-
-@pytest.mark.parametrize("name", REPRESENTATIVE)
-def test_the_encoded_form_is_the_canonical_name_and_nothing_else(name: str) -> None:
-    """Not a ``repr``, not a class name, not a family and a width."""
-
-    assert encode_datatype(DataType[name]) == {"qonnx_datatype": DataType[name].name}
 
 
 # -- the string hazard -------------------------------------------------------
@@ -273,67 +261,18 @@ def test_a_jointly_invalid_fixed_point_name_is_refused_not_raised() -> None:
         resolve_qonnx_datatype_name("FIXED<8,9>")
 
 
-@pytest.mark.parametrize(
-    ("stored", "resolves_to"),
-    [
-        ("FLOAT<5,10>", "FLOAT<5,10,15>"),
-        ("UINT1", "BINARY"),
-    ],
-)
-def test_decoding_refuses_a_noncanonical_persisted_name(stored: str, resolves_to: str) -> None:
-    """Persistence is strict: canonical spelling or nothing.
-
-    ``FLOAT<5,10>`` omits its exponent bias, which QONNX fills with the default;
-    a persisted name states it (``FLOAT<5,10,15>``), so the short spelling did
-    not come from here.
-
-    ``UINT1`` is benign in itself: it and ``BINARY`` are one value. It is
-    refused anyway, because the rule is "canonical or nothing", and carving an
-    exception for the alias that happens to be harmless is how the general case
-    gets let back in.
-
-    The justification for strictness here is that a persisted name is not a
-    human's spelling: ``encode_datatype`` only ever writes canonical names, so a
-    payload that resolves to a different name did not come from this stack.
-    """
-
-    assert resolve_qonnx_datatype_name(stored).name == resolves_to
-    with pytest.raises(DatatypeError, match="not canonical"):
-        decode_datatype({"qonnx_datatype": stored})
-
-
 def test_source_facing_names_stay_permissive() -> None:
-    """The other half of the split, so strictness does not leak into projection.
+    """A source-facing name resolves as QONNX itself would read it.
 
     A legacy node attribute like ``accDataType`` is whatever a human or an older
-    FINN wrote. Adopting QONNX means adopting its reading of those spellings, so
-    the resolver used there accepts what the decoder refuses.
+    FINN wrote. Adopting QONNX means adopting its reading of those spellings,
+    including the ones it normalizes into another name.
     """
 
     assert resolve_qonnx_datatype_name("UINT1") == DataType["BINARY"]
     assert resolve_qonnx_datatype_name("FLOAT<5,10>") == DataType["FLOAT<5,10,15>"]
     # An explicit zero exponent bias is a datatype of its own, not "unset".
     assert resolve_qonnx_datatype_name("FLOAT<5,10,0>").name == "FLOAT<5,10,0>"
-
-
-def test_everything_encode_writes_decodes_back(  # noqa: D401 - reads as a statement
-) -> None:
-    """Strictness must not refuse the stack's own output.
-
-    The risk in tightening a decoder is refusing something the encoder emits.
-    Asserted over the full representative list rather than a sample.
-    """
-
-    for name in REPRESENTATIVE:
-        datatype = DataType[name]
-        assert decode_datatype(encode_datatype(datatype)) == datatype
-
-
-def test_the_previous_encoding_is_refused_rather_than_reinterpreted() -> None:
-    """A stored ``numeric_element_type`` must not be read as a datatype."""
-
-    with pytest.raises(DatatypeError, match="not an encoded datatype"):
-        decode_datatype({"numeric_element_type": ["int", 8]})
 
 
 # -- immutability ------------------------------------------------------------

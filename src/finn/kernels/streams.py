@@ -128,9 +128,6 @@ SOURCES: dict[str, type[Space] | Space] = {"memstream": MemStreamKernel}
 """The kernels that can drive a stream with its known value: a memory; later a fetcher
 from memory-mapped memory, a loop's memory, a source reloadable over AXI-Lite."""
 
-ADAPTER_RAM_STYLES = "*.adapter.*.ram_style"
-"""The keys (``fnmatch``) of every adapter stage's memory choice, an ``input_gen``'s."""
-
 
 def boundary_contract(
     name: str, element: ScalarEncoding, sequence: BeatSequence, endpoint: Endpoint
@@ -378,7 +375,7 @@ class Stream(LogicalStream):
         """Each hop, source through every stage to sink, connects directly.
 
         An element mismatch is ``well_formed``'s (``stream-tensor``: each end
-        against the tensor), so it is not reported here a second time.
+        against the tensor); ``compatibility`` does not compare elements.
         """
         ends = self.endpoints
         found: list[Mismatch] = []
@@ -401,7 +398,7 @@ class Stream(LogicalStream):
                         "a child's padding is wider than the top word that must carry it",
                     )
                 )
-        return _refusal([item for item in found if item.code != "stream-element"])
+        return _refusal(found)
 
     @derived
     def hops(self) -> tuple[Link, ...] | Rejected:
@@ -487,7 +484,6 @@ class BufferedStream(Stream):
 
 
 __all__ = [
-    "ADAPTER_RAM_STYLES",
     "SOURCES",
     "BufferedStream",
     "Stream",
