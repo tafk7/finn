@@ -20,13 +20,10 @@ the shells (MakeZYNQProject; CreateVitisXO and VitisLink; SlashLink):
   by name.
 
 The partition's boundary facts are typed metadata on the partition model, the
-``finn.partition`` namespace (``PARTITION``): per boundary port, in port order,
-its tensor, shape, datatype, lanes, beats, element bits and TDATA width, read
-from the partition root's boundary streams where the boundary presents them
-(``boundary_facts``). PackagePartition writes them (``write_boundary_facts``);
-InsertIODMA and ``get_driver_shapes`` read them (``partition_facts``) instead of
-asking a first or last HW node. ``beats`` counts the whole tensor (one
-inference), a repetition the boundary keeps included.
+``finn.partition`` namespace that ``finn.transformation.fpgadataflow.kernel_partitions``
+owns and the flow reads (InsertIODMA, ``get_driver_shapes``). They are read from
+the partition root's boundary streams where the boundary presents them
+(``boundary_facts``), and PackagePartition writes them (``write_boundary_facts``).
 
 The part and the clock period are the model's build target (``target(model)``,
 ``finn.platform``), which a partition body carries from the graph it was cut from.
@@ -48,7 +45,6 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
-from qonnx.core.metadata import JSON, Namespace
 from qonnx.transformation.base import Transformation
 
 from finn import resources
@@ -67,6 +63,10 @@ from finn.kernels.artifacts.abi import (
 from finn.kernels.artifacts.build import EmittedModule, emit_module
 from finn.kernels.artifacts.sources import include_directories
 from finn.kernels.configure import undecided
+from finn.transformation.fpgadataflow.kernel_partitions import (
+    PARTITION_INPUTS,
+    PARTITION_OUTPUTS,
+)
 from finn.util._toolchain import Selection
 from finn.util.basic import make_build_dir
 
@@ -80,41 +80,6 @@ _INTERFACES = {
         "xilinx.com:interface:aximm_rtl:1.0",
     ),
 }
-
-
-PARTITION = Namespace("finn.partition", version=1)
-"""A partition model's boundary facts (typed graph metadata, ``qonnx.core.metadata``).
-They describe that partition only, so a body does not inherit them."""
-
-PORT_FACTS = ("port", "tensor", "shape", "datatype", "lanes", "beats", "element_bits", "tdata")
-"""One boundary port's facts, the fields of each object in ``inputs`` and ``outputs``."""
-
-
-def _port_facts(value: object) -> bool:
-    """A list of port facts: objects with exactly ``PORT_FACTS``, the port, tensor and
-    datatype named, the shape a list of positive ints, the counts and widths positive."""
-
-    def positive(item: object) -> bool:
-        return type(item) is int and item > 0
-
-    return isinstance(value, list) and all(
-        isinstance(port, dict)
-        and tuple(sorted(port)) == tuple(sorted(PORT_FACTS))
-        and all(
-            isinstance(port[name], str) and port[name] for name in ("port", "tensor", "datatype")
-        )
-        and isinstance(port["shape"], list)
-        and all(positive(dim) for dim in port["shape"])
-        and all(positive(port[name]) for name in ("lanes", "beats", "element_bits", "tdata"))
-        for port in value
-    )
-
-
-_PORTS = f"a list of port facts (objects of {', '.join(PORT_FACTS)})"
-PARTITION_INPUTS = PARTITION.key("inputs", JSON, check=_port_facts, expect=_PORTS)
-"""The boundary inputs' facts, in port order (``s_axis_<i>``)."""
-PARTITION_OUTPUTS = PARTITION.key("outputs", JSON, check=_port_facts, expect=_PORTS)
-"""The boundary outputs' facts, in port order (``m_axis_<j>``)."""
 
 
 def vlnv(ip_name: str) -> str:
@@ -395,9 +360,9 @@ def configured_root(model: Any, label: str) -> tuple[Any, tuple[tuple[str, str],
 def boundary_facts(
     model: Any, point: Any, boundary: Sequence[tuple[str, str]], label: str
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Each boundary port's facts (``PORT_FACTS``), inputs then outputs, in port order:
-    the ONNX tensor's shape and annotation, and the stream's form and width at the
-    partition's own end (the end no kernel of the partition owns)."""
+    """Each boundary port's facts (``kernel_partitions.PORT_FACTS``), inputs then
+    outputs, in port order: the ONNX tensor's shape and annotation, and the stream's
+    form and width at the partition's own end (the end no kernel of the partition owns)."""
     found: tuple[list[dict[str, Any]], list[dict[str, Any]]] = ([], [])
     for tensor, port in boundary:
         ends = getattr(point, member(tensor)).endpoints
@@ -422,17 +387,6 @@ def write_boundary_facts(model: Any, label: str = "partition") -> None:
     inputs, outputs = boundary_facts(model, point, boundary, label)
     model.set(PARTITION_INPUTS, inputs)
     model.set(PARTITION_OUTPUTS, outputs)
-
-
-def partition_facts(model: Any) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """A packaged partition model's boundary facts, inputs and outputs; a model without
-    them is refused (PackagePartition writes them)."""
-    inputs, outputs = model.get(PARTITION_INPUTS), model.get(PARTITION_OUTPUTS)
-    if inputs is None or outputs is None:
-        raise KernelOpError(
-            "the partition model states no boundary facts (finn.partition); run PackagePartition"
-        )
-    return inputs, outputs
 
 
 class PackagePartition(Transformation):  # type: ignore[misc]
@@ -506,17 +460,12 @@ class PackagePartition(Transformation):  # type: ignore[misc]
 
 
 __all__ = [
-    "PARTITION",
-    "PARTITION_INPUTS",
-    "PARTITION_OUTPUTS",
-    "PORT_FACTS",
     "PackagePartition",
     "boundary_facts",
     "configured_root",
     "interface_names",
     "interface_tcl",
     "package_tcl",
-    "partition_facts",
     "vlnv",
     "write_boundary_facts",
 ]

@@ -40,19 +40,132 @@ import warnings
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.registry import getCustomOp
 from qonnx.transformation.base import Transformation
-from qonnx.util.basic import get_by_name, roundup_to_integer_multiple
+from qonnx.util.basic import (
+    gen_finn_dt_tensor,
+    get_by_name,
+    roundup_to_integer_multiple,
+)
 from string import Template
 from typing import Dict, Tuple
 
 import finn.util
 from finn import deploy
+from finn.transformation.fpgadataflow.kernel_partitions import (
+    KERNEL_OPS_DOMAIN,
+    kernel_partition_ports,
+)
 from finn.util._legacy_build_env import toolchain as legacy_toolchain
 from finn.util._toolchain import run_process
-from finn.util.basic import get_driver_shapes, make_build_dir
-from finn.util.data_packing import to_external_tensor
+from finn.util.basic import make_build_dir
+from finn.util.data_packing import finnpy_to_packed_bytearray, to_external_tensor
 from finn.util.rtlsim import dat_file_to_numpy_array
 
 from . import template_driver
+
+
+def get_driver_shapes(model: ModelWrapper) -> Dict:
+    """The driver's shapes per IODMA. A partition of KernelOps next to an IODMA gives
+    its folded shape from its boundary facts (``finn.partition``): ``(1, beats, lanes)``
+    of the port the IODMA feeds or drains."""
+    idt = []
+    idma_names = []
+    ishape_normal = []
+    ishape_folded = []
+    ishape_packed = []
+    for idma_ind, graph_in in enumerate(model.graph.input):
+        i_tensor_name = graph_in.name
+        # get inp tensor properties
+        i_tensor_dt = model.get_tensor_datatype(i_tensor_name)
+        i_tensor_shape_normal = tuple(model.get_tensor_shape(i_tensor_name))
+        # go down into dataflow partition to get folded shape info etc
+        # TODO consider setting these as attributes during dataflow partitioning
+        i_consumer = model.find_consumer(i_tensor_name)
+        assert (
+            i_consumer.op_type == "StreamingDataflowPartition"
+        ), """
+            Ensure CreateDataflowPartition called before driver creation."""
+        first_df_model = ModelWrapper(getCustomOp(i_consumer).get_nodeattr("model"))
+        assert (
+            first_df_model.graph.node[0].op_type == "IODMA_hls"
+        ), "First partition must hold input IODMA"
+        successors = model.find_direct_successors(i_consumer)
+        successor_input_num = list(successors[0].input).index(i_consumer.output[0])
+        ports = kernel_partition_ports(successors[0])
+        if ports is not None:
+            port = ports[i_consumer.output[0]]
+            i_tensor_shape_folded = (1, port["beats"], port["lanes"])
+        else:
+            successor_sdp = getCustomOp(successors[0])
+            successor_df_model = ModelWrapper(successor_sdp.get_nodeattr("model"))
+            first_node = successor_df_model.find_consumer(
+                successor_df_model.graph.input[successor_input_num].name
+            )
+            i_tensor_shape_folded = tuple(getCustomOp(first_node).get_folded_input_shape())
+        # generate dummy folded i/o tensors and their packed versions
+        i_tensor_dummy_folded = gen_finn_dt_tensor(i_tensor_dt, i_tensor_shape_folded)
+        i_tensor_dummy_packed = finnpy_to_packed_bytearray(i_tensor_dummy_folded, i_tensor_dt)
+        i_tensor_shape_packed = i_tensor_dummy_packed.shape
+        # append all input tensor info to relevant lists
+        idt.append("DataType['%s']" % i_tensor_dt.name)
+        ishape_normal.append(i_tensor_shape_normal)
+        ishape_folded.append(i_tensor_shape_folded)
+        ishape_packed.append(i_tensor_shape_packed)
+        idma_names.append(getCustomOp(i_consumer).get_nodeattr("instance_name"))
+
+    odt = []
+    odma_names = []
+    oshape_normal = []
+    oshape_folded = []
+    oshape_packed = []
+    for odma_ind, graph_out in enumerate(model.graph.output):
+        o_tensor_name = graph_out.name
+        # get inp tensor properties
+        o_tensor_dt = model.get_tensor_datatype(o_tensor_name)
+        o_tensor_shape_normal = tuple(model.get_tensor_shape(o_tensor_name))
+        # go down into IODMA partition to get folded shape info etc
+        # TODO consider setting these as attributes during dataflow partitioning
+        o_producer = model.find_producer(o_tensor_name)
+        assert (
+            o_producer.op_type == "StreamingDataflowPartition"
+        ), """
+            Ensure CreateDataflowPartition called before driver creation."""
+        df_model = ModelWrapper(getCustomOp(o_producer).get_nodeattr("model"))
+        assert df_model.graph.node[-1].op_type == "IODMA_hls", "Partition must hold output IODMA"
+        predecessors = model.find_direct_predecessors(o_producer)
+        predecessor_output_num = list(predecessors[0].output).index(o_producer.input[0])
+        ports = kernel_partition_ports(predecessors[0])
+        if ports is not None:
+            port = ports[o_producer.input[0]]
+            o_tensor_shape_folded = (1, port["beats"], port["lanes"])
+        else:
+            predecessor_sdp = getCustomOp(predecessors[0])
+            predecessor_df_model = ModelWrapper(predecessor_sdp.get_nodeattr("model"))
+            last_node = predecessor_df_model.find_producer(
+                predecessor_df_model.graph.output[predecessor_output_num].name
+            )
+            o_tensor_shape_folded = tuple(getCustomOp(last_node).get_folded_output_shape())
+        o_tensor_dummy_folded = gen_finn_dt_tensor(o_tensor_dt, o_tensor_shape_folded)
+        o_tensor_dummy_packed = finnpy_to_packed_bytearray(o_tensor_dummy_folded, o_tensor_dt)
+        o_tensor_shape_packed = o_tensor_dummy_packed.shape
+        # append all output tensor info to relevant lists
+        odt.append("DataType['%s']" % o_tensor_dt.name)
+        oshape_normal.append(o_tensor_shape_normal)
+        oshape_folded.append(o_tensor_shape_folded)
+        oshape_packed.append(o_tensor_shape_packed)
+        odma_names.append(getCustomOp(o_producer).get_nodeattr("instance_name"))
+
+    return {
+        "idt": idt,
+        "idma_names": idma_names,
+        "ishape_normal": ishape_normal,
+        "ishape_folded": ishape_folded,
+        "ishape_packed": ishape_packed,
+        "odt": odt,
+        "odma_names": odma_names,
+        "oshape_normal": oshape_normal,
+        "oshape_folded": oshape_folded,
+        "oshape_packed": oshape_packed,
+    }
 
 
 def _extract_license_header(source_module):
@@ -576,7 +689,7 @@ class MakePYNQDriver(Transformation):
             dataflow_model = ModelWrapper(dataflow_model_filename)
             rt_layer_ind = 0
             for node in dataflow_model.graph.node:
-                if node.domain == "finn.custom_op.kernels":
+                if node.domain == KERNEL_OPS_DOMAIN:
                     # KernelOps hold no runtime-writable weights (their writable
                     # sources are future work); their op types share prefixes
                     continue

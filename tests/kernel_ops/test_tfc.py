@@ -26,8 +26,9 @@ from qonnx.custom_op.registry import getCustomOp
 
 from finn.custom_op.kernels.partition import member, partition_root
 from finn.kernels.configure import commit, undecided
+from finn.transformation.fpgadataflow.kernel_partitions import partition_facts
 from finn.transformation.kernels import PackagePartition
-from finn.transformation.kernels.package import partition_facts, write_boundary_facts
+from finn.transformation.kernels.package import write_boundary_facts
 from kernel_ops.tfc import SHAPE, ULTRA96, partitioned
 
 LOGITS = "MatMul_3_out0"

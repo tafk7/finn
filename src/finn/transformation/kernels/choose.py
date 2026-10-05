@@ -37,8 +37,7 @@ from finn.core.space import inspection
 from finn.custom_op.kernels.base import KernelOpError
 from finn.custom_op.kernels.partition import partition_root, save_partition_choices
 from finn.kernels.configure import commit, undecided
-
-DOMAIN = "finn.custom_op.kernels"
+from finn.transformation.fpgadataflow.kernel_partitions import KERNEL_OPS_DOMAIN
 
 
 class KernelChoicePolicy(Protocol):
@@ -96,7 +95,7 @@ class CommitKernelChoices(Transformation):  # type: ignore[misc]
         self.policy = policy
 
     def apply(self, model: Any) -> tuple[Any, bool]:
-        nodes = [node for node in model.graph.node if node.domain == DOMAIN]
+        nodes = [node for node in model.graph.node if node.domain == KERNEL_OPS_DOMAIN]
         if not nodes:
             return model, False
         root = partition_root(model, nodes)

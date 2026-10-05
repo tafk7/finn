@@ -33,11 +33,11 @@ from qonnx.transformation.create_generic_partitions import PartitionFromLambda
 from qonnx.util.basic import get_by_name
 
 from finn.transformation.fpgadataflow.externalize_params import ExternalizeParams
+from finn.transformation.fpgadataflow.kernel_partitions import (
+    KERNEL_OPS_DOMAIN,
+    is_kernel_partition,
+)
 from finn.util.basic import make_build_dir
-
-
-# KernelOps (finn.custom_op.kernels) form partitions of their own.
-KERNEL_OPS = "finn.custom_op.kernels"
 
 
 class CreateDataflowPartition(Transformation):
@@ -76,7 +76,8 @@ class CreateDataflowPartition(Transformation):
         def assign_partition_id(node):
             if node.op_type in ["GenericPartition", "StreamingDataflowPartition"]:
                 return -1
-            elif node.domain == KERNEL_OPS:
+            elif node.domain == KERNEL_OPS_DOMAIN:
+                # KernelOps form partitions of their own
                 return "kernels"
             else:
                 backend = get_by_name(node.attribute, "backend")
@@ -102,7 +103,7 @@ class CreateDataflowPartition(Transformation):
             p_node_inst = getCustomOp(p_node)
             node_model_filename = p_node_inst.get_nodeattr("model")
             p_model = ModelWrapper(node_model_filename)
-            if all(node.domain == KERNEL_OPS for node in p_model.graph.node):
+            if is_kernel_partition(p_model):
                 # KernelOps carry no placement: the partition's is unset
                 p_node.op_type = "StreamingDataflowPartition"
                 p_node.domain = "finn.custom_op.fpgadataflow"

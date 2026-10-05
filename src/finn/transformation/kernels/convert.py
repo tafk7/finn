@@ -34,8 +34,7 @@ from qonnx.transformation.base import Transformation
 import finn.custom_op.kernels as domain
 from finn.custom_op.kernels.base import write_target
 from finn.kernels.target import DspBlock, Platform, Target
-
-DOMAIN = domain.__name__
+from finn.transformation.fpgadataflow.kernel_partitions import KERNEL_OPS_DOMAIN
 
 # Device capabilities by part pattern (fnmatch on the lower-case part), first match
 # wins: (pattern, dsp, uram, uram_init, aie). UltraScale+ ignores an UltraRAM's INIT
@@ -124,7 +123,7 @@ def _thresholding(model: Any, node: Any) -> Any | None:
         list(node.input),
         list(node.output),
         name=node.name,
-        domain=DOMAIN,
+        domain=KERNEL_OPS_DOMAIN,
         bias=int(bias),
     )
 
@@ -138,14 +137,18 @@ class ToKernelOps(Transformation):  # type: ignore[misc]
 
     def apply(self, model: Any) -> tuple[Any, bool]:
         write_target(model, self.target)
-        if DOMAIN not in model.get_opset_imports():
-            model.set_opset_import(DOMAIN, domain.opset_version)
+        if KERNEL_OPS_DOMAIN not in model.get_opset_imports():
+            model.set_opset_import(KERNEL_OPS_DOMAIN, domain.opset_version)
         graph = model.graph
         for index, node in enumerate(list(graph.node)):
             new: Any
             if node.op_type == "MatMul" and node.domain == "":
                 new = helper.make_node(
-                    "MatMul", list(node.input), list(node.output), name=node.name, domain=DOMAIN
+                    "MatMul",
+                    list(node.input),
+                    list(node.output),
+                    name=node.name,
+                    domain=KERNEL_OPS_DOMAIN,
                 )
             elif node.op_type == "MultiThreshold":
                 new = _thresholding(model, node)

@@ -13,8 +13,8 @@ from __future__ import annotations
 
 from typing import Any
 
-import finn.custom_op.kernels as domain
 from finn.custom_op.kernels.base import KernelOp
+from finn.transformation.fpgadataflow.kernel_partitions import KERNEL_OPS_DOMAIN
 
 
 def kernel_choices_config(model: Any) -> dict[str, dict[str, object]]:
@@ -22,7 +22,7 @@ def kernel_choices_config(model: Any) -> dict[str, dict[str, object]]:
     has no entry."""
     config: dict[str, dict[str, object]] = {}
     for node in model.graph.node:
-        if node.domain != domain.__name__:
+        if node.domain != KERNEL_OPS_DOMAIN:
             continue
         op = model.get_customop_wrapper(node)
         if isinstance(op, KernelOp) and (choices := op.choices()):

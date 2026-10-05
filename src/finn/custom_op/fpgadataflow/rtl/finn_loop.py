@@ -44,6 +44,7 @@ from finn.custom_op.fpgadataflow import templates
 from finn.custom_op.fpgadataflow.hwcustomop import HWCustomOp
 from finn.custom_op.fpgadataflow.rtlbackend import RTLBackend
 from finn.transformation.fpgadataflow.annotate_cycles import AnnotateCycles
+from finn.transformation.fpgadataflow.create_stitched_ip import collect_ip_dirs
 from finn.util._legacy_build_env import toolchain as legacy_toolchain
 from finn.util.basic import make_build_dir
 from finn.util.create import adjacency_list
@@ -52,28 +53,6 @@ from finn.util.resources import resource_path, tcl_quote
 from finn.util.rtlsim import dat_file_to_numpy_array, mlo_prehook_func_factory
 
 finnxsi = xsi  # Native prerequisites are checked when simulation is requested.
-
-
-def collect_ip_dirs(model, ipstitch_path):
-    # collect list of all IP dirs
-    ip_dirs = []
-    need_memstreamer = False
-    for node in model.graph.node:
-        node_inst = getCustomOp(node)
-        ip_dir_value = node_inst.get_nodeattr("ip_path")
-        assert os.path.isdir(
-            ip_dir_value
-        ), """The directory that should
-        contain the generated ip blocks doesn't exist."""
-        ip_dirs += [ip_dir_value]
-        if node.op_type.startswith("MVAU") or node.op_type == "Thresholding_hls":
-            if node_inst.get_nodeattr("mem_mode") == "internal_decoupled":
-                need_memstreamer = True
-    ip_dirs += [ipstitch_path + "/ip"]
-    if need_memstreamer:
-        # add RTL streamer IP
-        ip_dirs.append(resource_path("rtllib", "memstream"))
-    return ip_dirs
 
 
 class FINNLoop(HWCustomOp, RTLBackend):

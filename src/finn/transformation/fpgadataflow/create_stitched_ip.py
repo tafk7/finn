@@ -39,6 +39,7 @@ from qonnx.util.basic import get_num_default_workers
 from shutil import copytree
 
 from finn import deploy
+from finn.transformation.fpgadataflow.kernel_partitions import is_kernel_partition
 from finn.transformation.fpgadataflow.replace_verilog_relpaths import (
     ReplaceVerilogRelPaths,
 )
@@ -46,6 +47,41 @@ from finn.util._legacy_build_env import toolchain as legacy_toolchain
 from finn.util.basic import make_build_dir
 from finn.util.fpgadataflow import is_hls_node, is_rtl_node
 from finn.util.resources import resource_path, tcl_quote
+
+
+def collect_ip_dirs(model, ipstitch_path):
+    """The IP repositories a design that instantiates the stitched IP of ``model``
+    (at ``ipstitch_path``, CreateStitchedIP's or PackagePartition's project) needs:
+    each node's IP, the bodies' of its FINNLoops, the memstreamer when a node
+    streams its weights, and the stitched IP itself."""
+    if is_kernel_partition(model):
+        # PackagePartition's IP is self-contained: its sources are imported into it
+        return [ipstitch_path + "/ip"]
+    ip_dirs = []
+    need_memstreamer = False
+    for node in model.graph.node:
+        node_inst = getCustomOp(node)
+        ip_dir_value = node_inst.get_nodeattr("ip_path")
+        assert os.path.isdir(
+            ip_dir_value
+        ), """The directory that should
+        contain the generated ip blocks doesn't exist."""
+        ip_dirs += [ip_dir_value]
+        if node.op_type.startswith("MVAU") or node.op_type == "Thresholding_hls":
+            if node_inst.get_nodeattr("mem_mode") == "internal_decoupled":
+                need_memstreamer = True
+        if node.op_type == "FINNLoop":
+            loop_body = node_inst.get_nodeattr("body")
+            loop_body_ipstitch_path = loop_body.get_metadata_prop("vivado_stitch_proj")
+            assert loop_body_ipstitch_path is not None, (
+                "No stitched IPI design found for the body of %s, " % node.name
+            )
+            ip_dirs += collect_ip_dirs(loop_body, loop_body_ipstitch_path)
+    ip_dirs += [ipstitch_path + "/ip"]
+    if need_memstreamer:
+        # add RTL streamer IP
+        ip_dirs.append(resource_path("rtllib", "memstream"))
+    return ip_dirs
 
 
 def is_external_input(model, node, i):

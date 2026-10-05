@@ -32,12 +32,12 @@ from finn.kernels.artifacts.abi import (
     StandardProtocol,
 )
 from finn.kernels.artifacts.build import EmittedModule
+from finn.transformation.fpgadataflow.kernel_partitions import partition_facts
 from finn.transformation.kernels import PackagePartition
 from finn.transformation.kernels.package import (
     interface_names,
     interface_tcl,
     package_tcl,
-    partition_facts,
     vlnv,
 )
 from kernel_ops.test_partition import configured, kernel_model
