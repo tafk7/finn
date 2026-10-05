@@ -9,7 +9,7 @@ bound and every choice open; a *configuration* is a design space after some
 choices, and a *design point* one complete for the question asked.
 
 ``design_space(node)`` is the one step from a declaration to a design space.
-A root whose bindings are all plain values reuses its family's model and binds
+A root whose bindings are all plain values reuses its Space class's model and binds
 the values as runtime inputs; a root that supplies structure (a node, a
 reference, a fresh Decision, an override below it) is compiled for that
 declaration. Preparing a model freezes every node declaration it instantiates,
@@ -28,11 +28,11 @@ from ._configuration import Space
 from ._linker import link_space
 from ._nodes import (
     NodeDecl,
-    family_formals,
     is_reference_input,
     is_structural,
     missing_formal,
     node_record,
+    space_formals,
     unsupplied_formals,
 )
 from .declarations import MISSING, UNSUPPLIED
@@ -83,8 +83,8 @@ class Model(Generic[S]):
 _PREPARATION_LOCK = RLock()
 
 
-def _constructor_families(space_type: type[Space]) -> tuple[type[object], ...]:
-    """Return every class whose constructor protocol affects this family."""
+def _constructor_classes(space_type: type[Space]) -> tuple[type[object], ...]:
+    """Return every class whose constructor protocol affects this Space class."""
 
     result: list[type[object]] = []
     for base in space_type.__mro__:
@@ -97,7 +97,7 @@ def _constructor_families(space_type: type[Space]) -> tuple[type[object], ...]:
 def _validate_constructors(space_types: tuple[type[Space], ...]) -> None:
     checked: set[type[object]] = set()
     for space_type in space_types:
-        for base in _constructor_families(space_type):
+        for base in _constructor_classes(space_type):
             if base in checked:
                 continue
             checked.add(base)
@@ -112,8 +112,8 @@ def _validate_constructors(space_types: tuple[type[Space], ...]) -> None:
                 )
 
 
-def _definition_families(space_types: tuple[type[Space], ...]) -> tuple[type[Space], ...]:
-    """Include concrete families and Space bases contributing effective declarations."""
+def _definition_classes(space_types: tuple[type[Space], ...]) -> tuple[type[Space], ...]:
+    """Include concrete Space classes and Space bases contributing effective declarations."""
 
     result: list[type[Space]] = []
     seen: set[type[Space]] = set()
@@ -132,8 +132,8 @@ def _publish(space_type: type[S], linked: LinkedModel) -> Model[S]:
     _validate_constructors(scope_types)
     model = Model(space_type, linked)
     # Publication happens only after the complete definition linked successfully.
-    for family in _definition_families(scope_types):
-        type.__setattr__(family, "_space_definition_finalized", True)
+    for definition in _definition_classes(scope_types):
+        type.__setattr__(definition, "_space_definition_finalized", True)
     reason = f"{space_type.__name__} was prepared"
     for scope in linked.scopes:
         if isinstance(scope.record, NodeDecl):
@@ -142,7 +142,7 @@ def _publish(space_type: type[S], linked: LinkedModel) -> Model[S]:
 
 
 def compile_model(space_type: type[S]) -> Model[S]:
-    """The canonical model of a family whose formals are all runtime inputs."""
+    """The canonical model of a Space class whose formals are all runtime inputs."""
 
     if not isinstance(space_type, type) or not issubclass(space_type, Space):
         raise DefinitionError("compile_model requires a Space subclass")
@@ -150,7 +150,7 @@ def compile_model(space_type: type[S]) -> Model[S]:
         cached = space_type.__dict__.get("_space_prepared_model")
         if cached is not None:
             if not isinstance(cached, Model) or cached.space_type is not space_type:
-                raise DefinitionError("invalid prepared-model cache on Space family")
+                raise DefinitionError("invalid prepared-model cache on Space class")
             return cached
         model = _publish(space_type, link_space(space_type))
         type.__setattr__(space_type, "_space_prepared_model", model)
@@ -162,11 +162,11 @@ def _compile_node(record: NodeDecl) -> Model[Space]:
 
     with _PREPARATION_LOCK:
         if not is_structural(record):
-            return cast(Model[Space], compile_model(record.family))
+            return cast(Model[Space], compile_model(record.space_type))
         cached = record.model
         if isinstance(cached, Model):
             return cached
-        model: Model[Space] = _publish(record.family, link_space(record.family, record))
+        model: Model[Space] = _publish(record.space_type, link_space(record.space_type, record))
         record.model = model
         return model
 
@@ -192,7 +192,7 @@ def root_parameters(model: Model[Space], record: NodeDecl) -> dict[int, object]:
     values: dict[int, object] = {}
     root = model.linked.scopes[0]
     own = record.bindings
-    for name, formal in family_formals(record.family).items():
+    for name, formal in space_formals(record.space_type).items():
         index = root.named_members.get(name)
         if index is None or model.linked.nodes[index].kind != "param":
             continue
@@ -222,9 +222,9 @@ def design_space(node: S) -> S:
     from .occurrence import bind  # noqa: PLC0415 - keep compilation evaluator-independent
 
     record = root_record(node)
-    formals = family_formals(record.family)
+    formals = space_formals(record.space_type)
     missing = [
-        missing_formal(name, formals[name], None, record.family.__qualname__)
+        missing_formal(name, formals[name], None, record.space_type.__qualname__)
         for name in unsupplied_formals(record)
     ]
     if missing:

@@ -7,7 +7,8 @@
 Example after installing the checkout or setting PYTHONPATH=src:
     python scripts/benchmark-space.py --output /tmp/space-performance.json
 
-Families are declared as nodes and their design spaces opened with ``design_space(Family(...))``.
+Space classes are called to declare nodes, and their design spaces opened with
+``design_space(Root(...))``.
 Compilation itself is measured through ``finn.core.space.compiler.compile_model``.
 Native self-read and real-kernel workloads run in fresh subprocesses; the kernels
 are built and configured through ``finn.kernels``' public construction path.
@@ -68,70 +69,72 @@ def repository_state(root: Path) -> dict[str, object]:
         return {"revision": None, "dirty": None}
 
 
-def compile_model(api, family):
-    """The canonical model of a family; imported here because it measures compilation."""
-    return importlib.import_module(f"{api.__name__}.compiler").compile_model(family)
+def compile_model(api, space_type):
+    """The canonical model of a Space class; imported here because it measures compilation."""
+    return importlib.import_module(f"{api.__name__}.compiler").compile_model(space_type)
 
 
-def flat_family(api, count: int):
+def flat_space(api, count: int):
     source = api.Param(semantics=api.default_semantics(int))
     members = {"source": source}
     for index in range(count):
         members[f"item{index}"] = api.Derived(increment, aliases={"value": source})
-    return api.composite("FlatFamily", members)
+    return api.composite("FlatSpace", members)
 
 
-def repeated_family(api, count: int):
+def repeated_space(api, count: int):
     class Child(api.Space):
         extent: int = api.Param()
         lanes: int = api.Decision(values=(1, 2, 4))
         width = extent * lanes
         physical = api.View(width)
 
-    # Each child is a node declaration: calling the family places it once.
+    # Each child is a node declaration: calling the Space class places it once.
     return api.composite(
-        "RepeatedFamily", {f"child{index}": Child(extent=16) for index in range(count)}
+        "RepeatedSpace", {f"child{index}": Child(extent=16) for index in range(count)}
     )
 
 
-def deep_family(api, count: int):
+def deep_space(api, count: int):
     class Leaf(api.Space):
         value = api.Const(1)
 
-    family = Leaf
+    space_type = Leaf
     for index in range(count):
         enabled = api.Const(True)
-        family = api.composite(f"Level{index}", {"enabled": enabled, "child": family(when=enabled)})
-    return family
+        space_type = api.composite(
+            f"Level{index}", {"enabled": enabled, "child": space_type(when=enabled)}
+        )
+    return space_type
 
 
 def compilation(api, label: str, count: int, factory) -> dict[str, object]:
     started = time.perf_counter()
-    family = factory(api, count)
+    space_type = factory(api, count)
     author_seconds = time.perf_counter() - started
     gc.collect()
     started = time.perf_counter()
-    timed_model = compile_model(api, family)
+    timed_model = compile_model(api, space_type)
     compile_seconds = time.perf_counter() - started
     counts = asdict(api.inspection.statistics(timed_model))
     del timed_model
-    del family
+    del space_type
     gc.collect()
 
     # Measure a separate compile, so tracemalloc overhead does not contaminate
     # the reported ordinary compile time. Keep the model alive through GC.
-    retained_family = factory(api, count)
+    retained_space_type = factory(api, count)
     tracemalloc.start()
     before = tracemalloc.get_traced_memory()[0]
     started = time.perf_counter()
-    retained_model = compile_model(api, retained_family)
+    retained_model = compile_model(api, retained_space_type)
     memory_compile_seconds = time.perf_counter() - started
     gc.collect()
     current, peak = tracemalloc.get_traced_memory()
     tracemalloc.stop()
     assert asdict(api.inspection.statistics(retained_model)) == counts
     started = time.perf_counter()
-    reused_model = compile_model(api, retained_family)
+    reused_model = compile_model(api, retained_space_type)
     reuse_seconds = time.perf_counter() - started
     assert reused_model is retained_model
     return {
@@ -156,7 +159,7 @@ def constant_expressions(api, terms: int, trials: int) -> dict[str, object]:
     def total(self) -> int:
         return sum(getattr(self, name) for name in names)
 
-    family = api.composite(
+    space_type = api.composite(
         "ConstantExpressions",
         {
             "base": base,
@@ -165,18 +168,18 @@ def constant_expressions(api, terms: int, trials: int) -> dict[str, object]:
         },
     )
     started = time.perf_counter()
-    model = compile_model(api, family)
+    model = compile_model(api, space_type)
     prepare_seconds = time.perf_counter() - started
     expected = 7 * terms + terms * (terms - 1) // 2
     # A formal-free root reuses the prepared model: each design_space only binds.
-    points = [api.design_space(family()) for _ in range(trials)]
+    points = [api.design_space(space_type()) for _ in range(trials)]
     started = time.perf_counter()
     assert all(point.total == expected for point in points)
     cold_seconds = time.perf_counter() - started
     started = time.perf_counter()
     assert all(point.total == expected for point in points)
     warm_seconds = time.perf_counter() - started
-    evidence = api.inspection.explain(points[0], family.total)
+    evidence = api.inspection.explain(points[0], space_type.total)
     assert evidence.result == api.Available(expected)
     return {
         "terms": terms,
@@ -216,9 +219,9 @@ def batch_updates(api, count: int, *, dependent: bool) -> dict[str, object]:
         requests.append((decision, index + 1 if dependent else 1))
         if dependent:
             previous = decision
-    family = api.composite("DependentBatch" if dependent else "IndependentBatch", members)
-    model = compile_model(api, family)
-    base = api.design_space(family())
+    space_type = api.composite("DependentBatch" if dependent else "IndependentBatch", members)
+    model = compile_model(api, space_type)
+    base = api.design_space(space_type())
     changes = [base.field(reference).change(value) for reference, value in reversed(requests)]
     started = time.perf_counter()
     report = base.try_with_choices(*changes)
@@ -257,8 +260,8 @@ def replacement_validation(api, count: int) -> dict[str, object]:
         )
         for index in range(count)
     }
-    family = api.composite("ReplacementValidation", members)
-    base = api.design_space(family())
+    space_type = api.composite("ReplacementValidation", members)
+    base = api.design_space(space_type())
     configured = base.with_choices(
         *(base.field(reference).change(0) for reference in members.values())
     )
@@ -302,13 +305,13 @@ def narrow_query(api, branches: int) -> dict[str, object]:
         choice = api.Decision({"selected": Selected(value=source), "inactive": Inactive()})
         members[f"branch{index}"] = choice
         members[f"output{index}"] = api.View(choice.physical)
-    family = api.composite("NarrowQuery", members)
-    model = compile_model(api, family)
+    space_type = api.composite("NarrowQuery", members)
+    model = compile_model(api, space_type)
     assert work == Counter()
-    base = api.design_space(family(source=7))
+    base = api.design_space(space_type(source=7))
     selector = api.inspection.choices(model)[0].selector
     point = base.with_choices(base.field(selector).change("selected"))
-    output = family.output0
+    output = space_type.output0
     started = time.perf_counter()
     answer = point.query(output)
     miss_seconds = time.perf_counter() - started
@@ -341,16 +344,16 @@ def wide_choice(api, alternatives: int, trials: int = 30) -> dict[str, object]:
             return 1
 
     choice = api.Decision({f"case{index}": Leaf() for index in range(alternatives)})
-    family = api.composite(
+    space_type = api.composite(
         "WideChoice", {"implementation": choice, "physical": api.View(choice.physical)}
     )
-    model = compile_model(api, family)
+    model = compile_model(api, space_type)
     # A Decision over nodes always has a selector, even with one candidate.
     selector = api.inspection.choices(model)[0].selector
-    output = family.physical
+    output = space_type.physical
     measurements = []
     for _ in range(trials):
-        base = api.design_space(family())
+        base = api.design_space(space_type())
         point = base.with_choices(base.field(selector).change(f"case{alternatives - 1}"))
         started = time.perf_counter()
         answer = point.query(output)
@@ -378,7 +381,7 @@ def cache_reclamation(api, population: int) -> dict[str, object]:
     def member(*, candidate: int) -> bool:
         return candidate >= 0
 
-    class Family(api.Space):
+    class Example(api.Space):
         choice: int = api.Decision(domain=api.domain(accepts=member))
 
         @api.derived(semantics=payload_semantics)
@@ -388,12 +391,12 @@ def cache_reclamation(api, population: int) -> dict[str, object]:
             created.append(weakref.ref(payload))
             return payload
 
-    base = api.design_space(Family())
+    base = api.design_space(Example())
     configurations = []
     started = time.perf_counter()
     for candidate in range(population):
         point = base.with_choices(choice=candidate)
-        point.query(Family.output)
+        point.query(Example.output)
         configurations.append(point)
     creation_seconds = time.perf_counter() - started
     del point
@@ -407,7 +410,7 @@ def cache_reclamation(api, population: int) -> dict[str, object]:
     after_release = sum(reference() is not None for reference in created)
     assert after_release == 0
     # Both compilation and the original choice-free root are still alive here.
-    assert isinstance(base.field(Family.choice).state, api.Available)
+    assert isinstance(base.field(Example.choice).state, api.Available)
     return {
         "population": population,
         "payload_bytes_per_object": 1024,
@@ -467,16 +470,16 @@ def self_workload(api, shape: str, depth: int, width: int) -> dict[str, object]:
         return total + (getattr(self, f"step{depth - 1}") if shape != "fan_in" else 0)
 
     members["output"] = api.view(output)
-    family = api.composite("Self" + shape.title(), members)
+    space_type = api.composite("Self" + shape.title(), members)
     started = time.perf_counter()
-    compile_model(api, family)
+    compile_model(api, space_type)
     prepare_seconds = time.perf_counter() - started
     expected = (2 * width if shape != "chain" else 0) + (depth + 1 if shape != "fan_in" else 0)
     callback_count = 1 + (width if shape != "chain" else 0) + (depth if shape != "fan_in" else 0)
 
     def prepare_point():
         work.clear()
-        point = api.design_space(family())
+        point = api.design_space(space_type())
         if shape == "mixed":
             for index in range(width):
                 assert getattr(point, f"leaf{index}") == 2
@@ -771,7 +774,7 @@ def markdown(report: dict[str, object]) -> str:
             "preparation with declarations already allocated and the prepared definition held. "
             "Traced Python allocation excludes native continuation stacks and RSS.",
             "",
-            "| Family | Size | Nodes | Known edges | Prepare s | Reuse µs | "
+            "| Fixture | Size | Nodes | Known edges | Prepare s | Reuse µs | "
             "Retained MiB | Peak MiB |",
             "|---|---:|---:|---:|---:|---:|---:|---:|",
         ]
@@ -994,9 +997,9 @@ def main() -> None:
         report.update(
             {
                 "compilation": [
-                    compilation(api, "flat", arguments.flat, flat_family),
-                    compilation(api, "repeated children", arguments.children, repeated_family),
-                    compilation(api, "guarded scope depth", arguments.depth, deep_family),
+                    compilation(api, "flat", arguments.flat, flat_space),
+                    compilation(api, "repeated children", arguments.children, repeated_space),
+                    compilation(api, "guarded scope depth", arguments.depth, deep_space),
                 ],
                 "constant_expressions": constant_expressions(
                     api, arguments.batch, arguments.population

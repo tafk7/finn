@@ -36,7 +36,7 @@ class Fifo(Space):
     word_bits: int = Param()
     depth: int = Param()
     ram_style: str = Decision(values=("auto", "block", "shift"))
-    family = Const("fifo")
+    space_type = Const("fifo")
 
     @constraint
     def supported(self) -> bool:
@@ -49,10 +49,10 @@ class Fifo(Space):
 
 def test_fifo_configure_replace_and_inspect_is_immutable() -> None:
     base = design_space(Fifo(word_bits=13, depth=8))
-    # Plain values are runtime inputs: every such root shares the family's one model.
+    # Plain values are runtime inputs: every such root shares the Space class's one model.
     model = inspection.model(Fifo)
     assert inspection.model(base) is model
-    assert base.family == "fifo"
+    assert base.space_type == "fifo"
     assert isinstance(base.inspect(Fifo.physical).accepted_result, Unresolved)
     state = base.field(Fifo.ram_style).state
     assert isinstance(state, Available)

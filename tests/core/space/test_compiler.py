@@ -33,7 +33,7 @@ from finn.core.space.semantics import ValueSemantics
 def test_compile_links_forward_dependencies_without_executing_callbacks() -> None:
     calls: list[str] = []
 
-    class Family(Space):
+    class Example(Space):
         @derived
         def cycles(*, extent: int, lanes: int) -> int:
             calls.append("cycles")
@@ -41,7 +41,7 @@ def test_compile_links_forward_dependencies_without_executing_callbacks() -> Non
 
         extent: int = Param()
         lanes: int = Decision(domain=divisors_of(extent))
-        label = Const("flat family")
+        label = Const("flat space")
 
         @constraint
         def supported(*, extent: int) -> bool:
@@ -51,10 +51,10 @@ def test_compile_links_forward_dependencies_without_executing_callbacks() -> Non
         admitted = ConstraintGroup(supported)
         result = View(cycles, requires=(admitted,))
 
-    model = compile_model(Family)
+    model = compile_model(Example)
     assert calls == []
     nodes = model.linked.nodes
-    cycles = nodes[model.resolve(0, Family.cycles)]
+    cycles = nodes[model.resolve(0, Example.cycles)]
     assert {argument.name for argument in cycles.arguments} == {"extent", "lanes"}
     position = {index: offset for offset, index in enumerate(model.linked.order)}
     assert all(
@@ -62,9 +62,9 @@ def test_compile_links_forward_dependencies_without_executing_callbacks() -> Non
         for node in nodes
         for dependency in node.dependencies
     )
-    assert model.linked.parameters == (model.resolve(0, Family.extent),)
-    assert model.linked.decisions == (model.resolve(0, Family.lanes),)
-    assert nodes[model.resolve(0, Family.result)].semantics is not None
+    assert model.linked.parameters == (model.resolve(0, Example.extent),)
+    assert model.linked.decisions == (model.resolve(0, Example.lanes),)
+    assert nodes[model.resolve(0, Example.result)].semantics is not None
 
 
 def test_placement_literals_are_frozen_once_per_declaration_and_reads_stay_detached() -> None:
@@ -157,7 +157,7 @@ def test_self_invocation_is_preserved_for_nested_functions_and_view_outputs() ->
 
 
 def test_function_and_value_views_have_an_explicit_raw_output() -> None:
-    class Family(Space):
+    class Example(Space):
         size: int = Param()
 
         @derived
@@ -170,8 +170,8 @@ def test_function_and_value_views_have_an_explicit_raw_output() -> None:
         def function_view(*, size: int) -> int:
             return size * 2
 
-    model = compile_model(Family)
-    for declaration in (Family.value_view, Family.function_view):
+    model = compile_model(Example)
+    for declaration in (Example.value_view, Example.function_view):
         node = model.linked.nodes[model.resolve(0, declaration)]
         assert node.kind == "view"
         assert node.output is not None
@@ -229,27 +229,27 @@ def test_twenty_thousand_dependencies_compile_and_evaluate_iteratively() -> None
         members[f"value{number}"] = Derived(
             step, aliases={"previous": members[f"value{number - 1}"]}
         )
-    family = cast(type[Space], type("Deep", (Space,), members))
-    model = compile_model(family)
+    space_type = cast(type[Space], type("Deep", (Space,), members))
+    model = compile_model(space_type)
     assert len(model.linked.order) == 20_001
     assert len(model.linked.nodes[-1].dependencies) == 1
     assert model.linked.order[-1] == model.resolve(0, members["value20000"])
-    assert design_space(family()).query(cast(Derived[int], members["value20000"])) == Available(
+    assert design_space(space_type()).query(cast(Derived[int], members["value20000"])) == Available(
         20_000
     )
 
 
 def test_compiled_handles_do_not_follow_later_class_rebinding() -> None:
-    class Family(Space):
+    class Example(Space):
         value: int = Param()
 
-    original = Family.value
-    old = compile_model(Family)
-    replacement = cast(Param[str], Param(semantics=default_semantics(str)))
-    replacement.__set_name__(Family, "value")
+    original = Example.value
+    old = compile_model(Example)
+    replacement = cast(Param[int], Param(semantics=default_semantics(int)))
+    replacement.__set_name__(Example, "value")
     with pytest.raises(DefinitionError, match="finalized"):
-        Family.value = replacement  # type: ignore[assignment]
-    new = compile_model(Family)
+        Example.value = replacement  # type: ignore[assignment]
+    new = compile_model(Example)
 
     old_semantics = old.linked.nodes[old.resolve(0, original)].semantics
     assert old_semantics is not None and old_semantics.type_token is int
@@ -290,28 +290,28 @@ def test_compile_snapshots_values_domains_and_callback_references() -> None:
     def second(*, value: int) -> int:
         return value + 2
 
-    class Family(Space):
+    class Example(Space):
         value: int = Param()
         constant = Const([1])
         choice: list[int] = Decision(values=values)
         calculated = Derived(first)
 
-    old = compile_model(Family)
-    Family.constant.value.append(2)
-    finite_values = cast(Decision[list[int]], Family.choice).domain._finite_values
+    old = compile_model(Example)
+    Example.constant.value.append(2)
+    finite_values = cast(Decision[list[int]], Example.choice).domain._finite_values
     assert finite_values is not None
     finite_values[0].append(3)
-    Family.calculated.function = second
-    new = compile_model(Family)
-    old_constant = old.linked.nodes[old.resolve(0, Family.constant)]
-    old_choice = old.linked.nodes[old.resolve(0, Family.choice)]
-    old_function = old.linked.nodes[old.resolve(0, Family.calculated)]
+    Example.calculated.function = second
+    new = compile_model(Example)
+    old_constant = old.linked.nodes[old.resolve(0, Example.constant)]
+    old_choice = old.linked.nodes[old.resolve(0, Example.choice)]
+    old_function = old.linked.nodes[old.resolve(0, Example.calculated)]
     assert old_constant.value == [1]
     assert old_choice.domain is not None
     assert old_choice.domain._finite_values == ([1], [2])
     assert old_function.function is first
     assert new is old
-    assert new.linked.nodes[new.resolve(0, Family.calculated)].function is first
+    assert new.linked.nodes[new.resolve(0, Example.calculated)].function is first
 
 
 def test_foreign_value_and_obligation_references_are_definition_errors() -> None:
@@ -333,9 +333,9 @@ def test_foreign_value_and_obligation_references_are_definition_errors() -> None
         own = Const(1)
         result = View(own, requires=(cast(Constraint, own),))
 
-    for family in (ForeignView, ForeignConstraint, WrongKind):
+    for space_type in (ForeignView, ForeignConstraint, WrongKind):
         with pytest.raises(DefinitionError):
-            compile_model(family)
+            compile_model(space_type)
 
 
 def test_domain_binding_is_validated_without_invocation() -> None:
@@ -345,15 +345,15 @@ def test_domain_binding_is_validated_without_invocation() -> None:
         calls.append("membership")
         return candidate <= maximum
 
-    class Family(Space):
+    class Example(Space):
         maximum: int = Param()
         choice: int = Decision(domain=domain(accepts=membership, maximum=maximum))
 
-    model = compile_model(Family)
+    model = compile_model(Example)
     assert calls == []
-    assert model.linked.nodes[model.resolve(0, Family.choice)].domain_arguments[
+    assert model.linked.nodes[model.resolve(0, Example.choice)].domain_arguments[
         0
-    ].node == model.resolve(0, Family.maximum)
+    ].node == model.resolve(0, Example.maximum)
 
     class WrongSignature(Space):
         maximum: int = Param()
@@ -363,7 +363,7 @@ def test_domain_binding_is_validated_without_invocation() -> None:
         compile_model(WrongSignature)
 
     class ForeignDomain(Space):
-        choice: int = Decision(domain=domain(accepts=membership, maximum=Family.maximum))
+        choice: int = Decision(domain=domain(accepts=membership, maximum=Example.maximum))
 
     with pytest.raises(DefinitionError, match="not a member"):
         compile_model(ForeignDomain)
@@ -394,11 +394,11 @@ def test_missing_binding_names_fail_before_any_callback() -> None:
     def invalid(*, unknown: int) -> int:
         raise AssertionError("a compiler must never discover dependencies by execution")
 
-    class Family(Space):
+    class Example(Space):
         result = Derived(invalid)
 
     with pytest.raises(DefinitionError, match="no declaration"):
-        compile_model(Family)
+        compile_model(Example)
 
 
 def test_generic_alias_adapter_tokens_keep_identity_for_input_and_output_annotations() -> None:
@@ -411,16 +411,16 @@ def test_generic_alias_adapter_tokens_keep_identity_for_input_and_output_annotat
         lambda value: value,
     )
 
-    class Family(Space):
+    class Example(Space):
         source: tuple[int, ...] = Param(semantics=vector)
 
         @derived(semantics=vector)
         def result(*, source: tuple[int, ...]) -> tuple[int, ...]:
             return source + (3,)
 
-    model = compile_model(Family)
-    point = design_space(Family(source=(1, 2)))
+    model = compile_model(Example)
+    point = design_space(Example(source=(1, 2)))
     assert inspection.model(point) is model  # plain root values stay runtime inputs
     assert point.result == (1, 2, 3)
-    semantics = model.linked.nodes[model.resolve(0, Family.result)].semantics
+    semantics = model.linked.nodes[model.resolve(0, Example.result)].semantics
     assert semantics is not None and semantics.type_token is token

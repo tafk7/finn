@@ -31,7 +31,7 @@ PAYLOAD = ValueSemantics.immutable_nominal(Payload)
 def test_discarded_candidate_snapshots_release_the_actual_cached_callback_outputs() -> None:
     produced: list[ReferenceType[Payload]] = []
 
-    class Family(Space):
+    class Example(Space):
         factor: int = Decision(values=range(16))
 
         @derived(semantics=PAYLOAD)
@@ -40,14 +40,14 @@ def test_discarded_candidate_snapshots_release_the_actual_cached_callback_output
             produced.append(ref(payload))
             return payload
 
-    model = inspection.model(Family)
-    base = design_space(Family())
-    assert inspection.model(base) is model  # a plain root reuses the family's model
+    model = inspection.model(Example)
+    base = design_space(Example())
+    assert inspection.model(base) is model  # a plain root reuses the Space class's model
 
-    def population() -> list[Family]:
+    def population() -> list[Example]:
         points = [base.with_choices(factor=value) for value in range(16)]
         for point in points:
-            point.query(Family.output)
+            point.query(Example.output)
         return points
 
     candidates = population()
@@ -59,13 +59,13 @@ def test_discarded_candidate_snapshots_release_the_actual_cached_callback_output
     del candidates
     gc.collect()
     assert all(reference() is None for reference in produced)
-    assert design_space(Family()).try_with_choices().accepted
+    assert design_space(Example()).try_with_choices().accepted
 
 
 def test_successor_does_not_retain_its_predecessors_output_cache() -> None:
     produced: list[ReferenceType[Payload]] = []
 
-    class Family(Space):
+    class Example(Space):
         factor: int = Decision(values=(1, 2))
         extra: int = Decision(values=(3, 4))
 
@@ -75,14 +75,14 @@ def test_successor_does_not_retain_its_predecessors_output_cache() -> None:
             produced.append(ref(payload))
             return payload
 
-    earlier = design_space(Family()).with_choices(factor=1)
-    earlier.query(Family.output)
+    earlier = design_space(Example()).with_choices(factor=1)
+    earlier.query(Example.output)
     later = earlier.with_choices(extra=3)
     assert produced[0]() is not None
     del earlier
     gc.collect()
     assert produced[0]() is None
-    assert later.query(Family.output) == Available(Payload(1))
+    assert later.query(Example.output) == Available(Payload(1))
     assert len(produced) == 2
     assert produced[1]() is not None
 
@@ -90,7 +90,7 @@ def test_successor_does_not_retain_its_predecessors_output_cache() -> None:
 def test_concurrent_reads_evaluate_one_cached_output_per_snapshot() -> None:
     produced: list[ReferenceType[Payload]] = []
 
-    class Family(Space):
+    class Example(Space):
         source: int = Param()
 
         @derived(semantics=PAYLOAD)
@@ -99,8 +99,8 @@ def test_concurrent_reads_evaluate_one_cached_output_per_snapshot() -> None:
             produced.append(ref(payload))
             return payload
 
-    first = design_space(Family(source=1))
-    second = design_space(Family(source=2))
+    first = design_space(Example(source=1))
+    second = design_space(Example(source=2))
     assert inspection.model(first) is inspection.model(second)
 
     def read_first(_: int) -> Payload:
@@ -118,7 +118,7 @@ def test_concurrent_reads_evaluate_one_cached_output_per_snapshot() -> None:
 def test_concurrent_successors_keep_independent_commitments_and_caches() -> None:
     produced: list[ReferenceType[Payload]] = []
 
-    class Family(Space):
+    class Example(Space):
         factor: int = Decision(values=range(16))
 
         @derived(semantics=PAYLOAD)
@@ -127,9 +127,9 @@ def test_concurrent_successors_keep_independent_commitments_and_caches() -> None
             produced.append(ref(payload))
             return payload
 
-    base = design_space(Family())
+    base = design_space(Example())
 
-    def explore(value: int) -> Family:
+    def explore(value: int) -> Example:
         point = base.with_choices(factor=value)
         assert point.output == Payload(value)
         return point
@@ -138,7 +138,7 @@ def test_concurrent_successors_keep_independent_commitments_and_caches() -> None
         candidates = list(pool.map(explore, range(16)))
     assert [point.output.value for point in candidates] == list(range(16))
     assert len(produced) == 16
-    state = base.field(Family.factor).state
+    state = base.field(Example.factor).state
     assert isinstance(state, Available)
     assert state.value.status == "unassigned"
 
@@ -146,7 +146,7 @@ def test_concurrent_successors_keep_independent_commitments_and_caches() -> None
 def test_independent_root_bindings_remain_frozen_when_model_is_reused() -> None:
     calls: list[tuple[int, ...]] = []
 
-    class Family(Space):
+    class Example(Space):
         values: list[int] = Param()
 
         @derived
@@ -155,9 +155,9 @@ def test_independent_root_bindings_remain_frozen_when_model_is_reused() -> None:
             return sum(values)
 
     original = [1, 2]
-    first = design_space(Family(values=original))
+    first = design_space(Example(values=original))
     original.append(3)
-    second = design_space(Family(values=original))
+    second = design_space(Example(values=original))
     original.clear()
     assert inspection.model(first) is inspection.model(second)
     assert first.total == 3

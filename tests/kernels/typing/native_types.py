@@ -11,7 +11,7 @@ from kernels.helpers import FULL_DSP48E2
 
 
 def declare() -> None:
-    # A family call is a node declaration typed as the family; configure keeps it.
+    # A call on a Space class is a node declaration typed as the class; configure keeps it.
     node = FifoKernel(word_bits=8, depth=4, platform=FULL_DSP48E2)
     assert_type(node, FifoKernel)
     assert_type(node.input, WordPort)

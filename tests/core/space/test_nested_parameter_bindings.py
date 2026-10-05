@@ -5,8 +5,8 @@
 
 The nested ``bindings={...}`` map is gone. Its roles are played by assignment:
 a nested formal left unsupplied is assigned through a path by an enclosing
-family (``kernel.port.dtype = dtype``), which binds it for that placement only;
-a formal that should be exposed is declared on the enclosing family and bound
+Space class (``kernel.port.dtype = dtype``), which binds it for that placement only;
+a formal that should be exposed is declared on the enclosing Space class and bound
 by name; and a fresh inline ``Decision`` at a node call (also on a node the
 caller supplies to a reference input) owns its choice.
 """
@@ -101,8 +101,8 @@ def test_fresh_nested_decision_uses_outer_domain_and_guard_sources() -> None:
     class Parent(Space):
         extent: int = Param()
         enabled: bool = Param()
-        # A fresh Decision at the call of the node supplied to a family-typed
-        # formal: its domain and guard read the enclosing family.
+        # A fresh Decision at the call of the node supplied to a reference
+        # formal: its domain and guard read the enclosing Space class.
         kernel = Kernel(
             count=9,
             port=Port(dtype="INT4", lanes=Decision(domain=divisors_of(extent), when=enabled)),
@@ -195,7 +195,7 @@ def test_a_decision_name_is_checked_where_it_becomes_a_key() -> None:
         design_space(Clash())
 
 
-def test_unbound_exposure_is_a_formal_declared_on_the_enclosing_family() -> None:
+def test_unbound_exposure_is_a_formal_declared_on_the_enclosing_space_class() -> None:
     # An exposed inline Param is gone: declare the formal here, bind it by name.
     class Parent(Space):
         lanes: int = Param(required=False)
@@ -226,7 +226,7 @@ def test_reexposed_nested_slot_can_be_bound_again_by_an_outer_placement() -> Non
     with pytest.raises(DefinitionError, match=r"kernel\.port\.dtype is not supplied"):
         design_space(Middle())
 
-    # Re-exposing by name: the enclosing family declares the formal and binds it.
+    # Re-exposing by name: the enclosing Space class declares the formal and binds it.
     class Named(Space):
         dtype: str = Param()
         kernel = Reusable(count=1)
@@ -303,7 +303,7 @@ def test_assignment_targets_are_checked() -> None:
             child.port.dtype = "INT8"
             child.port.dtype = "INT4"
 
-    with pytest.raises(DefinitionError, match="behaviour belongs to the family"):
+    with pytest.raises(DefinitionError, match="behaviour belongs to the Space class"):
 
         class NonParameter(Space):
             child = Reusable(count=1)
@@ -355,8 +355,8 @@ def test_a_graph_built_as_data_binds_nested_formals_and_keeps_their_types() -> N
     assert dict(declaration.bindings) == {"count": 1}
     assert dict(declaration.nested) == {"port.dtype": "INT8", "port.lanes": 2}
     assert declaration.unsupplied == () and declaration.frozen is None
-    family = composite("Parent", {"child": child})
-    point = design_space(family())
+    space_type = composite("Parent", {"child": child})
+    point = design_space(space_type())
     placed = getattr(point, "child")
     assert isinstance(placed, Reusable)
     assert placed.port.physical == ("INT8", 2)

@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 """How each member of one placed node is supplied, layer by layer.
 
-A member may be set by the family's declaration (a Param default, a Decision,
+A member may be set by its Space class's declaration (a Param default, a Decision,
 a child node), by the body that declared the node (at the call or by
 assignment), and by every enclosing body through a path. The outermost setting
 wins; the others are kept as its provenance.
@@ -80,7 +80,7 @@ class Slot:
 def supply_text(value: object) -> str:
     """A supplier as provenance text: a literal, a reference path, a node or a Decision."""
     if isinstance(value, NodeDecl):
-        return f"{value.family.__qualname__} node"
+        return f"{value.space_type.__qualname__} node"
     if isinstance(value, NodeDecision):
         return f"Decision over {sorted(value.candidates)}"
     if isinstance(value, Decision):
@@ -111,7 +111,7 @@ def decision_text(decision: Decision[object]) -> str:
 
 
 def declared_layer(declaration: Declaration) -> Layer | None:
-    """The family's own setting of a member, if it has one."""
+    """The Space class's own setting of a member, if it has one."""
     body = declaration.owner.__name__ if declaration.owner is not None else "?"
     if isinstance(declaration, Param):
         default = declaration.default
@@ -137,14 +137,14 @@ def classify(
     if isinstance(value, Param) and value.owner is None:
         raise DefinitionError(
             f"{slot.provenance.key}: an inline Param cannot supply a member; declare the "
-            "formal on the enclosing family and bind it"
+            "formal on the enclosing Space class and bind it"
         )
     if isinstance(value, NodeDecl):
         raise DefinitionError(
             f"{slot.provenance.key}: a node or a Decision over nodes is not a value; bind one "
             "of its members"
         )
-    if isinstance(value, Param) and value.reference_family() is not None:
+    if isinstance(value, Param) and value.reference_space_type() is not None:
         raise DefinitionError(
             f"{slot.provenance.key}: forwards the reference input {value.name}"
             f"{at(value.origin)}, but the formal takes a value"

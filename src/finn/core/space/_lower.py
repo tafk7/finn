@@ -4,7 +4,7 @@
 """Lower each allocated member into its node's payload.
 
 A supplied member becomes its binding (a literal, an alias of what it
-references, a pin checked against the declared domain); a family's own member
+references, a pin checked against the declared domain); a Space class's own member
 becomes its kind's payload: a formal's requirement, a constant, a Decision's
 domain and its arguments, a callback with its arguments, a view's output and
 obligations, ``Members``, ``Users`` and ``Present`` alternatives. Guards and
@@ -173,7 +173,7 @@ class _Lowering:
                     dict.fromkeys(target for *_, target in self.names.users_candidates(scope, key))
                 )
             elif isinstance(source, Members):
-                # A member family obliges each member's acceptance separately.
+                # A Members group obliges each member's acceptance separately.
                 indices = [
                     target
                     for *_, target in self.names.members_candidates(
@@ -241,7 +241,7 @@ class _Lowering:
     def contract(
         self, scope: ScopeDraft, decision: Decision[object], node: Node
     ) -> tuple[Domain[object], tuple[Argument, ...]]:
-        """The declared domain of an overridden Decision, read in its family's body."""
+        """The declared domain of an overridden Decision, read in its Space class's body."""
         semantics = scope.effective.semantics.get(decision, node.semantics)
         if semantics is None:
             raise DefinitionError(f"{node.key}: the declared Decision has no value semantics")
@@ -316,7 +316,7 @@ class _Lowering:
             )
         if binding.contract is not None:
             # A pinned coordinate keeps its declared guard and domain: the
-            # family's contract checks whatever an enclosing body supplies.
+            # Space class's contract checks whatever an enclosing body supplies.
             changes["guard"] = self.table.guarded(
                 scope.index,
                 scope.guard,
@@ -333,7 +333,7 @@ class _Lowering:
     def declared(
         self, task: MemberTask, scope: ScopeDraft, node: Node, written: int
     ) -> dict[str, Any]:
-        """A family's own member, or a fresh Decision supplied for it: guard and payload."""
+        """A Space class's own member, or a fresh Decision supplied for it: guard and payload."""
         declaration = task.declaration
         binding = task.binding
         source_scope = scope.index

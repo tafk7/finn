@@ -187,21 +187,21 @@ def test_nested_choice_selection_retains_its_owning_scope() -> None:
     class B(Space):
         value = Const(2)
 
-    class Family(Space):
+    class Example(Space):
         implementation: A | B = Decision({"a": A(), "b": B()})
 
     class Root(Space):
-        first = Family()
-        second = Family()
+        first = Example()
+        second = Example()
 
-    def alternative(point: Family, case: str) -> Space:
-        candidate = inspection.candidate(point, Family.implementation, case)
+    def alternative(point: Example, case: str) -> Space:
+        candidate = inspection.candidate(point, Example.implementation, case)
         assert candidate is not None
         return candidate
 
     base = design_space(Root())
     selected = base.first.with_choices(implementation="a")
-    assert isinstance(selected, Family)
+    assert isinstance(selected, Example)
     assert alternative(selected, "a").query(A.value) == Available(1)
     assert isinstance(selected.implementation, A)
     successor = cast(Root, selected.root)
@@ -221,7 +221,7 @@ def test_choice_metadata_and_handles_retain_the_compiled_definition() -> None:
 
     base = design_space(Root())
     (saved,) = inspection.choices(base)
-    # The compiled choice cannot be retargeted: neither the Decision nor the family.
+    # The compiled choice cannot be retargeted: neither the Decision nor the Space class.
     with pytest.raises(AttributeError, match="immutable"):
         setattr(Root.implementation, "candidates", {"renamed": A()})
     with pytest.raises(DefinitionError, match="finalized"):

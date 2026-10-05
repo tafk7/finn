@@ -111,7 +111,7 @@ def test_local_decision_domain_uses_parent_suppliers_and_exposure_is_explicit() 
     class Root(Space):
         extent: int = Param()
         # An inline exposed Param is gone: the formal is declared on the enclosing
-        # family and bound by name.
+        # Space class and bound by name.
         exposed_value: int = Param(required=False)
         owned = Child(value=Decision(domain=divisors_of(extent)))
         exposed = Child(value=exposed_value)
@@ -170,13 +170,15 @@ def test_two_thousand_guarded_scopes_compile_and_query_iteratively() -> None:
     class Leaf(Space):
         value = Const(9)
 
-    family: type[Space] = Leaf
+    space_type: type[Space] = Leaf
     for depth in range(2_000):
         enabled = Const(True)
-        family = composite(f"Layer{depth}", {"enabled": enabled, "inner": family(when=enabled)})
-    model = inspection.model(family)
+        space_type = composite(
+            f"Layer{depth}", {"enabled": enabled, "inner": space_type(when=enabled)}
+        )
+    model = inspection.model(space_type)
     assert len(model.linked.scopes) == 2_001
-    leaf = design_space(family())
+    leaf = design_space(space_type())
     for _ in range(2_000):
         leaf = cast(Space, getattr(leaf, "inner"))
     assert leaf.query(Leaf.value) == Available(9)

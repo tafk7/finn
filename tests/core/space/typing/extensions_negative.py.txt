@@ -15,10 +15,10 @@ Doubled(width=4)  # E
 Doubled(1)  # E
 Plain = composite("Plain", {})
 Plain(lanes=1)  # E
-composite("NotAFamily", {}, base=int)  # E
+composite("NotASpace", {}, base=int)  # E
 composite("NotAMapping", [("lanes", Param(int))])  # E
 composite("BadExports", {}, exports={"complete": View(Shape.lanes)})  # E
-wrong_family: Other = design_space(Doubled(lanes=1))  # E
+wrong_class: Other = design_space(Doubled(lanes=1))  # E
 wrong_node: Other = Doubled(lanes=1)  # E
 
 node = Doubled()

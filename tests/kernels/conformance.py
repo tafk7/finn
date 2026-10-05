@@ -3,7 +3,7 @@
 
 """Conformance: a kernel placed between boundary streams, checked against its RTL.
 
-``conformance`` checks one kernel family over sampled folding configurations. For
+``conformance`` checks one kernel over sampled folding configurations. For
 each sample it
 
 1. places the kernel in a generated ``Root`` between boundary streams, one
@@ -125,7 +125,7 @@ class NonConformance(AssertionError):
 
 
 def conformance(
-    family: type[Kernel],
+    space_type: type[Kernel],
     *,
     inputs: Mapping[str, Tensor],
     outputs: Outputs,
@@ -136,24 +136,26 @@ def conformance(
     xsim: Path | None = None,
     known: Mapping[tuple[str, str], str] | None = None,
 ) -> tuple[Sample, ...]:
-    """Check ``family`` over its samples, simulating each under ``xsim`` when given."""
+    """Check ``space_type`` over its samples, simulating each under ``xsim`` when given."""
     chosen = samples(
-        family, inputs=inputs, outputs=outputs, factors=factors, choices=choices, facts=facts
+        space_type, inputs=inputs, outputs=outputs, factors=factors, choices=choices, facts=facts
     )
     failures: list[tuple[Sample, str, str]] = []
     for index, sample in enumerate(chosen):
-        values = _values(family, sample, inputs)
-        point = place(family, sample, inputs, outputs, choices=choices, facts=facts, values=values)
+        values = _values(space_type, sample, inputs)
+        point = place(
+            space_type, sample, inputs, outputs, choices=choices, facts=facts, values=values
+        )
         kernel = getattr(point, KERNEL)
-        leaf = _value(kernel.query(type(kernel).module), family, sample)
+        leaf = _value(kernel.query(type(kernel).module), space_type, sample)
         with tempfile.TemporaryDirectory() as scratch:
-            names = _check_rtl(family, sample, leaf, Path(scratch))
-        _check_model(point, family, sample, inputs, outputs, leaf, names)
-        _check_unplaced_outputs(point, family, sample, inputs, outputs, choices, facts)
+            names = _check_rtl(space_type, sample, leaf, Path(scratch))
+        _check_model(point, space_type, sample, inputs, outputs, leaf, names)
+        _check_unplaced_outputs(point, space_type, sample, inputs, outputs, choices, facts)
         if xsim is not None:
             directory = xsim / f"{index}-{re.sub(r'[^A-Za-z0-9_.=-]+', '_', sample.label)}"
             failures += _simulate(
-                point, family, sample, values, reference, inputs, outputs, directory
+                point, space_type, sample, values, reference, inputs, outputs, directory
             )
     if xsim is not None:
         _settle_known(chosen, failures, known or {})
@@ -184,7 +186,7 @@ def _settle_known(
 
 
 def samples(
-    family: type[Kernel],
+    space_type: type[Kernel],
     *,
     inputs: Mapping[str, Tensor],
     outputs: Outputs,
@@ -196,7 +198,7 @@ def samples(
     if isinstance(factors, str):
         if factors not in (SAMPLED, ALL):
             raise ValueError(f"factors are SAMPLED, ALL or configurations, not {factors!r}")
-        base = _committed(family, EMPTY, inputs, outputs, choices, facts)
+        base = _committed(space_type, EMPTY, inputs, outputs, choices, facts)
         configurations = _enumerated(base, factors)
     else:
         configurations = [(_label(config), dict(config)) for config in factors]
@@ -205,7 +207,7 @@ def samples(
         if all(sample.factors != config for sample in plain):
             plain.append(Sample(label, config))
     if not plain:
-        raise ValueError(f"{family.__name__}: no folding configuration to sample")
+        raise ValueError(f"{space_type.__name__}: no folding configuration to sample")
     middle = plain[len(plain) // 2]
     adapter = (Sample(f"adapter, {middle.label}", middle.factors, adapter=True),) if inputs else ()
     return (*plain, *adapter)
@@ -261,23 +263,23 @@ def _enumerated(base: Space, factors: str) -> list[tuple[str, dict[str, object]]
 # -- placement -----------------------------------------------------------------------------
 
 
-def _ports(family: type[Kernel]) -> dict[str, str]:
+def _ports(space_type: type[Kernel]) -> dict[str, str]:
     """Each reference input's port: the member whose ``stream`` it binds."""
     found: dict[str, str] = {}
-    for owner in reversed(family.__mro__):
+    for owner in reversed(space_type.__mro__):
         for name, member in vars(owner).items():
             try:
                 declared = inspection.declaration(member)
             except RequestError:
                 continue
             stream = declared.bindings.get("stream")
-            if issubclass(declared.family, AxiStreamPort) and isinstance(stream, Param):
+            if issubclass(declared.space_type, AxiStreamPort) and isinstance(stream, Param):
                 found[str(stream.name)] = name
     return found
 
 
 def _design(
-    family: type[Kernel],
+    space_type: type[Kernel],
     tensors: Mapping[str, Tensor],
     facts: Mapping[str, object],
     fed: tuple[str, Traversal, object] | None = None,
@@ -291,7 +293,7 @@ def _design(
             if inside
             else Channel(tensor=tensor, port=name, platform=FULL_DSP48E2)
         )
-    namespace[KERNEL] = family(**facts, **{name: namespace[name] for name in tensors})
+    namespace[KERNEL] = space_type(**facts, **{name: namespace[name] for name in tensors})
     if fed is not None:
         name, form, contents = fed
         namespace[SOURCE] = MemStreamKernel(
@@ -301,28 +303,30 @@ def _design(
             output_stream=namespace[name],
             platform=FULL_DSP48E2,
         )
-    return design_space(type(f"{family.__name__}Conformance", (Root,), namespace)())
+    return design_space(type(f"{space_type.__name__}Conformance", (Root,), namespace)())
 
 
 def _stated(
-    family: type[Kernel], name: str, inputs: Mapping[str, Tensor], facts: Mapping[str, object]
+    space_type: type[Kernel], name: str, inputs: Mapping[str, Tensor], facts: Mapping[str, object]
 ) -> ScalarEncoding:
     """The element the kernel states on output ``name`` with that output unplaced."""
-    port, hint = _ports(family)[name], f"give {name} a Tensor"
+    port, hint = _ports(space_type)[name], f"give {name} a Tensor"
     try:
-        probe = _design(family, inputs, facts)
+        probe = _design(space_type, inputs, facts)
     except DefinitionError as error:
-        raise ValueError(f"{family.__name__} is not built without {name}; {hint}") from error
+        raise ValueError(f"{space_type.__name__} is not built without {name}; {hint}") from error
     node = getattr(getattr(probe, KERNEL), port)
     found = node.query(type(node).element)
     if not isinstance(found, Available):
-        raise ValueError(f"{family.__name__}.{port} states no element unplaced; {hint}: {found}")
+        raise ValueError(
+            f"{space_type.__name__}.{port} states no element unplaced; {hint}: {found}"
+        )
     assert isinstance(found.value, ScalarEncoding)
     return found.value
 
 
 def _tensors(
-    family: type[Kernel],
+    space_type: type[Kernel],
     inputs: Mapping[str, Tensor],
     outputs: Outputs,
     facts: Mapping[str, object],
@@ -332,12 +336,12 @@ def _tensors(
         if isinstance(given, Tensor):
             found[name] = given
         else:
-            found[name] = Tensor(tuple(given), _stated(family, name, inputs, facts))
+            found[name] = Tensor(tuple(given), _stated(space_type, name, inputs, facts))
     return found
 
 
 def _committed(
-    family: type[Kernel],
+    space_type: type[Kernel],
     config: Mapping[str, object],
     inputs: Mapping[str, Tensor],
     outputs: Outputs,
@@ -346,9 +350,11 @@ def _committed(
     fed: tuple[str, Traversal, object] | None = None,
 ) -> Any:
     """Placed, with the configuration's Params given and its Decisions and ``choices`` committed."""
-    given = {key: value for key, value in config.items() if isinstance(getattr(family, key), Param)}
+    given = {
+        key: value for key, value in config.items() if isinstance(getattr(space_type, key), Param)
+    }
     known = {**facts, **given}
-    point = _design(family, _tensors(family, inputs, outputs, known), known, fed)
+    point = _design(space_type, _tensors(space_type, inputs, outputs, known), known, fed)
     chosen = {**choices, **{key: value for key, value in config.items() if key not in given}}
     keys = {f"{KERNEL}.{key}": value for key, value in chosen.items()}
     if fed is not None:
@@ -361,7 +367,7 @@ def _nested(values: object) -> object:
 
 
 def place(
-    family: type[Kernel],
+    space_type: type[Kernel],
     sample: Sample,
     inputs: Mapping[str, Tensor],
     outputs: Outputs,
@@ -376,13 +382,15 @@ def place(
     dividing the innermost extent, that makes the stream convert widths.
     """
     plain = with_adapter_memories(
-        _committed(family, sample.factors, inputs, outputs, choices, facts)
+        _committed(space_type, sample.factors, inputs, outputs, choices, facts)
     )
     if not sample.adapter:
         return plain
     name = next(iter(inputs))
-    tensor, port = inputs[name], _ports(family)[name]
-    lanes = _value(getattr(plain, name).query(Channel.endpoints), family, sample).sink.form.lanes
+    tensor, port = inputs[name], _ports(space_type)[name]
+    lanes = _value(
+        getattr(plain, name).query(Channel.endpoints), space_type, sample
+    ).sink.form.lanes
     assert values is not None, "the adapter sample streams the first input's values"
     contents = _nested(values[name].tolist())
     innermost = tensor.shape[-1]
@@ -391,14 +399,14 @@ def place(
             continue
         fed = (name, vector_major(tensor.shape, other), contents)
         point = with_adapter_memories(
-            _committed(family, sample.factors, inputs, outputs, choices, facts, fed)
+            _committed(space_type, sample.factors, inputs, outputs, choices, facts, fed)
         )
         stream = getattr(point, name)
         found = stream.query(Channel.plan)
         if isinstance(found, Available) and Step.WIDTH in found.value.steps:
             return point
     raise AssertionError(
-        f"{family.__name__} [{sample.label}]: no lane count of {tensor.shape} other than "
+        f"{space_type.__name__} [{sample.label}]: no lane count of {tensor.shape} other than "
         f"{port}'s {lanes} makes {name} convert widths"
     )
 
@@ -406,41 +414,41 @@ def place(
 # -- checks --------------------------------------------------------------------------------
 
 
-def _where(family: type[Kernel], sample: Sample) -> str:
-    return f"{family.__name__} [{sample.label}]"
+def _where(space_type: type[Kernel], sample: Sample) -> str:
+    return f"{space_type.__name__} [{sample.label}]"
 
 
-def _value(found: QueryResult[Any], family: type[Kernel], sample: Sample) -> Any:
-    assert isinstance(found, Available), f"{_where(family, sample)}: {describe((found,))}"
+def _value(found: QueryResult[Any], space_type: type[Kernel], sample: Sample) -> Any:
+    assert isinstance(found, Available), f"{_where(space_type, sample)}: {describe((found,))}"
     return found.value
 
 
 def _check_rtl(
-    family: type[Kernel], sample: Sample, leaf: Leaf, directory: Path
+    space_type: type[Kernel], sample: Sample, leaf: Leaf, directory: Path
 ) -> set[str] | None:
     """Refuse a module its sources contradict; the source's parameter names, unless declined."""
     top, sources, _ = materialize(leaf, directory)
     pins = leaf.pins
     extracted = extract([Path(source) for source in sources], top, pins.parameters)
     if isinstance(extracted, Declined):
-        message = f"{_where(family, sample)}: the RTL checker declined {top}: {extracted}"
+        message = f"{_where(space_type, sample)}: the RTL checker declined {top}: {extracted}"
         warnings.warn(message, RtlDeclined, stacklevel=3)
         return None
     # check_abi's comparison, on the one extraction: the ports, never a parameter value.
     issues = check_against_rtl(pins.ports, extracted.ports)
-    assert not issues, f"{_where(family, sample)}: {top} refuses its ABI: " + "; ".join(issues)
+    assert not issues, f"{_where(space_type, sample)}: {top} refuses its ABI: " + "; ".join(issues)
     # Every declared name, whether or not its value was established.
     return {name for name, _ in extracted.parameters}
 
 
 def _ends(
-    point: Any, family: type[Kernel], sample: Sample, names: Sequence[str]
+    point: Any, space_type: type[Kernel], sample: Sample, names: Sequence[str]
 ) -> dict[str, StreamContract]:
     """The contract the kernel presents on each stream."""
-    ports = _ports(family)
+    ports = _ports(space_type)
     found: dict[str, StreamContract] = {}
     for name in names:
-        ends = _value(getattr(point, name).query(Channel.endpoints), family, sample)
+        ends = _value(getattr(point, name).query(Channel.endpoints), space_type, sample)
         owner = f"{KERNEL}.{ports[name]}"
         if ends.sink_owner == owner:
             found[name] = ends.sink
@@ -456,18 +464,18 @@ def _covers(form: Traversal) -> bool:
 
 def _check_model(
     point: Any,
-    family: type[Kernel],
+    space_type: type[Kernel],
     sample: Sample,
     inputs: Mapping[str, Tensor],
     outputs: Outputs,
     leaf: Leaf,
     names: set[str] | None,
 ) -> None:
-    where = _where(family, sample)
-    _value(point.query(type(point).module), family, sample)
-    kernel, ports = getattr(point, KERNEL), _ports(family)
+    where = _where(space_type, sample)
+    _value(point.query(type(point).module), space_type, sample)
+    kernel, ports = getattr(point, KERNEL), _ports(space_type)
     fed = next(iter(inputs)) if sample.adapter else None
-    for name, end in _ends(point, family, sample, [*inputs, *outputs]).items():
+    for name, end in _ends(point, space_type, sample, [*inputs, *outputs]).items():
         form, port = end.form, getattr(kernel, ports[name])
         assert _covers(form), f"{where}: {ports[name]} does not cover its {form.shape} tensor"
         if port.schedule is not None:
@@ -478,7 +486,7 @@ def _check_model(
                 f"{schedule.beat_count} less {dropped} dropped"
             )
         if name != fed:
-            ends = _value(getattr(point, name).query(Channel.endpoints), family, sample)
+            ends = _value(getattr(point, name).query(Channel.endpoints), space_type, sample)
             boundary = ends.source if ends.source_owner is None else ends.sink
             presented = unreplayed(form) if name in inputs else form
             assert boundary.form == presented, (
@@ -494,7 +502,7 @@ def _check_model(
 
 def _check_unplaced_outputs(
     point: Any,
-    family: type[Kernel],
+    space_type: type[Kernel],
     sample: Sample,
     inputs: Mapping[str, Tensor],
     outputs: Outputs,
@@ -506,9 +514,9 @@ def _check_unplaced_outputs(
     A producer's element reads its kernel's facts, choices and input elements,
     never its own output stream: a compiler infers output types node by node.
     """
-    where, ports = _where(family, sample), _ports(family)
-    probe = getattr(_committed(family, sample.factors, inputs, EMPTY, choices, facts), KERNEL)
-    placed = _ends(point, family, sample, list(outputs))
+    where, ports = _where(space_type, sample), _ports(space_type)
+    probe = getattr(_committed(space_type, sample.factors, inputs, EMPTY, choices, facts), KERNEL)
+    placed = _ends(point, space_type, sample, list(outputs))
     for name in outputs:
         port = getattr(probe, ports[name])
         stated = port.query(type(port).element)
@@ -524,10 +532,10 @@ def _check_unplaced_outputs(
 
 
 def _values(
-    family: type[Kernel], sample: Sample, inputs: Mapping[str, Tensor]
+    space_type: type[Kernel], sample: Sample, inputs: Mapping[str, Tensor]
 ) -> dict[str, np.ndarray]:
     """Random integers in each input's range, seeded by the kernel and the sample."""
-    rng = np.random.default_rng(zlib.crc32(f"{family.id}|{sample.label}".encode()))
+    rng = np.random.default_rng(zlib.crc32(f"{space_type.id}|{sample.label}".encode()))
     found = {}
     for name, tensor in inputs.items():
         low, high = ordinary_integer_bounds(tensor.element.dtype)
@@ -548,7 +556,7 @@ def _brief(message: str) -> str:
 
 def _simulate(
     point: Any,
-    family: type[Kernel],
+    space_type: type[Kernel],
     sample: Sample,
     values: Mapping[str, np.ndarray],
     reference: Reference,
@@ -556,7 +564,7 @@ def _simulate(
     outputs: Outputs,
     directory: Path,
 ) -> list[tuple[Sample, str, str]]:
-    ends = _ends(point, family, sample, [*inputs, *outputs])
+    ends = _ends(point, space_type, sample, [*inputs, *outputs])
     expected = reference(**{name: array.copy() for name, array in values.items()})
     produced = set(ends) - set(inputs)
     assert set(expected) == produced, f"the reference returns {sorted(expected)}, not {produced}"

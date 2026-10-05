@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 """The house toy: a graph of design spaces in the declarative form.
 
-Calling a family declares a node; ``kitchen.finish`` is a reference to that
+Calling a Space class declares a node; ``kitchen.finish`` is a reference to that
 node's member; a Decision over nodes is the structural choice; ``design_space``
 is the one compile step. A view reads as its accepted value (``point.total``);
 its assessment is ``point.inspect(House.total)``. Nothing here is about hardware.
@@ -233,7 +233,7 @@ class Estate(Space):
     home.kitchen.area = 14  # overrides House's 12
     home.kitchen.finish = 2  # pins a Decision: its key disappears
     home.heating = Decision({"heat_pump": HeatPump(kw=6)})  # narrows the choice
-    home.garage = Room(area=24, finish=1)  # replaces a child node (same family)
+    home.garage = Room(area=24, finish=1)  # replaces a child node (same Space class)
 
 
 def test_an_estate_overrides_the_house_it_contains() -> None:

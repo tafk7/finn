@@ -1,13 +1,13 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
-"""Graphs as data: name nodes built in plain Python as one composite family.
+"""Graphs as data: name nodes built in plain Python as one composite Space class.
 
 Nodes are ordinary values: build them in loops, keep them in lists, and join
 them by assigning their formals (``current.width_in = previous.width_out``).
-``composite`` names them as the members of a new family, exactly as a class
+``composite`` names them as the members of a new Space class, exactly as a class
 body would; Python's class construction places each node (``__set_name__``)
-and the family is collected once to report definition errors early. There is
-no builder state to seal: the nodes stay assignable until the family is prepared.
+and the Space class is collected once to report definition errors early. There is
+no builder state to seal: the nodes stay assignable until the Space class is prepared.
 """
 
 from __future__ import annotations
@@ -53,7 +53,7 @@ def composite(
     annotations: Mapping[str, object] | None = None,
     exports: Mapping[ViewKey[Any], object] | None = None,
 ) -> type[Space]:
-    """A new family whose members are ``members``: nodes and declarations.
+    """A new Space class whose members are ``members``: nodes and declarations.
 
     Equivalent to a class statement with those attributes, so every rule of
     a class body applies: each node is placed once, and names are one segment.
@@ -61,9 +61,9 @@ def composite(
     Param and Decision member (``{"choice": int}``).
     """
 
-    local_name(name, "composite family name")
+    local_name(name, "composite Space class name")
     if not isinstance(base, type) or not issubclass(base, Space):
-        raise DefinitionError(f"{name}: composite requires a Space base family")
+        raise DefinitionError(f"{name}: composite requires a Space base class")
     for member in members:
         local_name(member, f"{name} member name")
     frame = sys._getframe(1)
@@ -77,15 +77,15 @@ def composite(
     if exports is not None:
         namespace["exports"] = dict(exports)
     try:
-        family = type(name, (base,), namespace)
+        space_type = type(name, (base,), namespace)
     except DefinitionError:
         raise
     except RuntimeError as cause:  # __set_name__ failures are wrapped by type()
         if isinstance(cause.__cause__, DefinitionError):
             raise cause.__cause__ from None
         raise
-    collect_space(family)
-    return family
+    collect_space(space_type)
+    return space_type
 
 
 __all__ = ["composite"]

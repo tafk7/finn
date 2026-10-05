@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: BSD-3-Clause
 """Typed declarations for the Space language.
 
-A family's class body declares members (formals, decisions, computations,
-views) and nodes. Calling a family, ``Room(area=12)``, declares a node: a
+A Space class's body declares members (formals, decisions, computations,
+views) and nodes. Calling a Space class, ``Room(area=12)``, declares a node: a
 template with bindings, compiled only by ``design_space``. Attribute access on a
 node declaration, ``kitchen.finish``, is a symbolic reference to that node's
 member. It is typed as the member's value (option A); at runtime it refuses
@@ -242,7 +242,7 @@ def _class_body() -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]] | Non
     """The globals, namespace and enclosing locals of the class body declaring a member.
 
     Annotations are strings under ``from __future__ import annotations``; a
-    family declared inside a function names that function's local classes, so
+    Space class declared inside a function names that function's local classes, so
     the enclosing frame's locals are kept to resolve them.
     """
     frame = sys._getframe(2)
@@ -314,7 +314,7 @@ def declared_annotation(declaration: Declaration, kind: str) -> object:
 
 
 class PendingAnnotation(DefinitionError):
-    """An annotation that does not resolve yet: it names a family still being defined
+    """An annotation that does not resolve yet: it names a Space class still being defined
     (across an import cycle), or a name that does not exist, which collection reports."""
 
 
@@ -331,7 +331,7 @@ def _annotation_semantics(
 ) -> ValueSemantics[Any]:
     """Value semantics for an annotated value type; ``semantics=`` overrides the default."""
     if annotation is MISSING:
-        # Declared outside a class body (a family built as data) with no
+        # Declared outside a class body (a Space class built as data) with no
         # annotation: its explicit semantics carry the value type.
         assert explicit is not None
         return explicit
@@ -364,7 +364,7 @@ def _annotation_semantics(
     return default_semantics(nominal)
 
 
-def _space_family(annotation: object) -> type[Space] | None:
+def _annotated_space_type(annotation: object) -> type[Space] | None:
     from ._configuration import Space
 
     if isinstance(annotation, type) and issubclass(annotation, Space):
@@ -373,7 +373,7 @@ def _space_family(annotation: object) -> type[Space] | None:
 
 
 class Param(ValueDecl[T], Generic[T]):
-    """A formal input of a family, supplied where a node of the family is declared.
+    """A formal input of a Space class, supplied where a node of the class is declared.
 
     Annotate it with its value type: ``area: int = Param()``. The annotation is
     the single source of the value type; ``semantics=`` gives custom value
@@ -381,9 +381,9 @@ class Param(ValueDecl[T], Generic[T]):
     assignment (``hall.area = kitchen.area``); an enclosing body may override
     what an inner one supplied, and the outermost assignment wins.
 
-    ``Param()`` is required: preparing a family in which nothing supplies it is
+    ``Param()`` is required: preparing a Space class in which nothing supplies it is
     a definition error. ``default=`` makes it optional, and ``required=False``
-    leaves it unsupplied when nobody binds it. A formal annotated with a family
+    leaves it unsupplied when nobody binds it. A formal annotated with a Space class
     (``output: Stream = Param()``) is a reference input: the caller supplies a
     node, placed there if it is fresh and referenced if it is placed elsewhere.
     """
@@ -391,7 +391,7 @@ class Param(ValueDecl[T], Generic[T]):
     default: object
     required: bool
     explicit: ValueSemantics[T] | None
-    family: type[Space] | None
+    space_type: type[Space] | None
     resolved: bool
 
     @overload
@@ -417,7 +417,7 @@ class Param(ValueDecl[T], Generic[T]):
         object.__setattr__(instance, "_body", _class_body())
         instance.explicit = cast("ValueSemantics[object] | None", semantics)
         instance.semantics = instance.explicit
-        instance.family = None
+        instance.space_type = None
         instance.resolved = False
         instance.required = default is MISSING and required is not False
         instance.default = default if default is not MISSING or instance.required else UNSUPPLIED
@@ -427,25 +427,25 @@ class Param(ValueDecl[T], Generic[T]):
         super().__set_name__(owner, name)
         try:
             self.resolve()
-        except DefinitionError:
-            pass  # a forward reference: resolved again when the family is collected
+        except PendingAnnotation:
+            pass  # a forward reference: resolved again when the Space class is collected
 
     def resolve(self) -> Param[T]:
-        """Read the annotation: a value type (with its semantics) or a family (a reference)."""
+        """Read the annotation: a value type (with its semantics) or a Space class (a reference)."""
         if self.resolved:
             return self
         annotation = declared_annotation(self, "Param")
         if annotation is MISSING and self.explicit is None:
             raise _unannotated(self, "Param")
         label = _describe_formal(self, "Param")
-        family = _space_family(annotation)
-        if family is not None:
+        space_type = _annotated_space_type(annotation)
+        if space_type is not None:
             if self.explicit is not None or self.default not in (MISSING, UNSUPPLIED):
                 raise DefinitionError(
                     f"{label}: a reference input has no value default or semantics; "
                     "required=False makes it optional"
                 )
-            self.family, self.semantics = family, None
+            self.space_type, self.semantics = space_type, None
         else:
             semantics = _annotation_semantics(annotation, self.explicit, label)
             if self.default not in (MISSING, UNSUPPLIED):
@@ -460,9 +460,9 @@ class Param(ValueDecl[T], Generic[T]):
         self.resolved = True
         return self
 
-    def reference_family(self) -> type[Space] | None:
-        """The family of a reference input, or None for a value formal."""
-        return self.resolve().family
+    def reference_space_type(self) -> type[Space] | None:
+        """The Space class of a reference input, or None for a value formal."""
+        return self.resolve().space_type
 
     @overload
     def __get__(self, instance: None, owner: type[object] | None = None) -> Self: ...
@@ -473,14 +473,14 @@ class Param(ValueDecl[T], Generic[T]):
     def __get__(self, instance: Space | None, owner: type[object] | None = None) -> Any:
         if instance is None:
             return self
-        family = self.reference_family()
-        if family is None:
+        space_type = self.reference_space_type()
+        if space_type is None:
             return ValueDecl.__get__(self, instance, owner)
         path = declared_path(instance)
         if path is not None:
             from ._nodes import path_proxy
 
-            return path_proxy(family, (*path, self))
+            return path_proxy(space_type, (*path, self))
         from .occurrence import child
 
         return child(instance, self)
@@ -495,27 +495,27 @@ class Param(ValueDecl[T], Generic[T]):
             if name.startswith("_"):
                 raise AttributeError(name)
             try:
-                family = self.reference_family()
+                space_type = self.reference_space_type()
             except PendingAnnotation:
                 raise AttributeError(
-                    f"{name}: the reference's annotation does not resolve yet (its family is "
+                    f"{name}: the reference's annotation does not resolve yet (its Space class is "
                     "still being defined); read the member in a method"
                 ) from None
             except DefinitionError:
                 raise AttributeError(name) from None
-            if family is None:
+            if space_type is None:
                 return project(self, name)
-            if not _has_member(family, name):
+            if not _has_member(space_type, name):
                 raise AttributeError(name)
             from ._nodes import path_proxy
 
-            return getattr(path_proxy(family, (self,)), name)
+            return getattr(path_proxy(space_type, (self,)), name)
 
 
-def _has_member(family: type[Space], name: str) -> bool:
+def _has_member(space_type: type[Space], name: str) -> bool:
     from ._nodes import slot_declaration
 
-    return any(slot_declaration(vars(base).get(name)) is not None for base in family.__mro__)
+    return any(slot_declaration(vars(base).get(name)) is not None for base in space_type.__mro__)
 
 
 class LocatedParam(Param[Located[T]], Generic[T]):
@@ -532,7 +532,7 @@ class LocatedParam(Param[Located[T]], Generic[T]):
         object.__setattr__(instance, "_body", None)
         instance.explicit = cast("ValueSemantics[Located[T]]", LOCATED)
         instance.semantics = instance.explicit
-        instance.family = None
+        instance.space_type = None
         instance.resolved = True
         instance.required = required
         instance.default = MISSING if required else UNSUPPLIED
@@ -570,7 +570,7 @@ class Decision(ValueDecl[T], Generic[T]):
     ``heating: Boiler | HeatPump = Decision({"boiler": Boiler, "pump": HeatPump(cop=4)},
     area=area)`` chooses a node: the persisted value is the key; each candidate
     is a node named ``<decision>.<key>`` whose presence derives from the
-    decision. An entry is a family (a fresh node) or a call on one carrying the
+    decision. An entry is a Space class (a fresh node) or a call on one carrying the
     bindings only that candidate takes; the keyword arguments are shared
     bindings, supplied to every candidate, each of which must declare them.
     ``optional=True`` adds a ``None`` candidate keyed ``"none"``, which places
@@ -676,12 +676,12 @@ class Decision(ValueDecl[T], Generic[T]):
         if shared or optional is not False:
             raise DefinitionError(
                 "optional= and shared bindings apply to a Decision over candidate entries: "
-                'Decision({"key": Family, ...}, ...)'
+                'Decision({"key": Room, ...}, ...)'
             )
         if domain is None and isinstance(values, Mapping):
             raise DefinitionError(
                 f"Decision{at(source_origin())}: a Decision over nodes lists its candidates as "
-                'entries, Decision({"key": Family, "other": Family(...)}); optional=True adds '
+                'entries, Decision({"key": Room, "other": Room(...)}); optional=True adds '
                 'the None candidate "none"'
             )
         if (domain is None) == (values is None):
@@ -721,8 +721,8 @@ class Decision(ValueDecl[T], Generic[T]):
         super().__set_name__(owner, name)
         try:
             self.resolve()
-        except DefinitionError:
-            pass  # a forward reference: resolved again when the family is collected
+        except PendingAnnotation:
+            pass  # a forward reference: resolved again when the Space class is collected
 
     def resolve(self) -> Decision[T]:
         """A class attribute reads its annotation; an inline one waits for its formal."""
@@ -745,7 +745,7 @@ class Required:
 
     It is not a member itself: collection ignores it. A subclass defines the
     member with any attribute (a Param, a derived value, a view, a method). A
-    family whose effective attribute is still this marker is unfinished: it
+    Space class whose effective attribute is still this marker is unfinished: it
     cannot be placed, and naming it as a candidate is a definition error.
     """
 
@@ -767,20 +767,20 @@ class Required:
 def required(kind: type[T]) -> T:
     """Declare a member of type ``kind`` that every subclass must define.
 
-    It is typed as its value, like a derived member, so the family's own
+    It is typed as its value, like a derived member, so the Space class's own
     methods read ``self.schedule`` as a ``Schedule``; it is not a formal, so it
-    is never a keyword of the family call.
+    is never a keyword of the class's call.
     """
     if not isinstance(kind, type):
         raise DefinitionError("required() takes the member's value type, as in required(int)")
     return cast(T, Required(kind))
 
 
-def unmet_required(family: type[object]) -> tuple[str, ...]:
-    """``family.X`` for every member whose effective attribute is still ``required()``."""
+def unmet_required(space_type: type[object]) -> tuple[str, ...]:
+    """``space_type.X`` for every member whose effective attribute is still ``required()``."""
     unmet: list[str] = []
     seen: set[str] = set()
-    for base in family.__mro__:
+    for base in space_type.__mro__:
         for name, value in vars(base).items():
             if name in seen:
                 continue
@@ -790,14 +790,14 @@ def unmet_required(family: type[object]) -> tuple[str, ...]:
     return tuple(unmet)
 
 
-def unfinished(family: type[object], where: str) -> DefinitionError | None:
-    """The error for placing ``family`` while it leaves required members unmet."""
-    unmet = unmet_required(family)
+def unfinished(space_type: type[object], where: str) -> DefinitionError | None:
+    """The error for placing ``space_type`` while it leaves required members unmet."""
+    unmet = unmet_required(space_type)
     if not unmet:
         return None
     return DefinitionError(
-        f"{family.__qualname__}{where} leaves required members unmet: {', '.join(unmet)}; a "
-        "family with an unmet required() member cannot be placed (define them in a subclass)"
+        f"{space_type.__qualname__}{where} leaves required members unmet: {', '.join(unmet)}; a "
+        "Space class with an unmet required() member cannot be placed (define them in a subclass)"
     )
 
 
@@ -946,7 +946,7 @@ class ConstraintGroup(_MemberOfNode, Declaration):
 
 
 # What a view may require: constraints, groups, other views (their acceptance),
-# references to views or constraints through a node, and member families (each
+# references to views or constraints through a node, and Members groups (each
 # member's acceptance). A reference through a node (``kitchen.cost``) is typed
 # as the value it stands for, so statically an obligation is any object; the
 # linker refuses anything else with a DefinitionError.
@@ -1107,7 +1107,7 @@ def view(
 
 
 class ViewKey(Generic[T_co]):
-    """A typed export contract independent of a concrete family: see ``Members``."""
+    """A typed export contract independent of a concrete Space class: see ``Members``."""
 
     def __init__(self, name: str, value_type: type[T_co] | ValueSemantics[T_co]) -> None:
         self.name, self.semantics = local_name(name, "export name"), semantics_for(value_type)
@@ -1271,8 +1271,8 @@ class MemberRef(_Symbolic, ValueRef[T], Generic[T]):
     """``node.member``: one member of the node at ``path``.
 
     ``path`` holds node declarations, outermost first; each one after the
-    first is a node of the previous one's family. ``member`` is a declaration
-    of the last node's family (or an inherited one it overrides).
+    first is a node of the previous one's Space class. ``member`` is a declaration
+    of the last node's Space class (or an inherited one it overrides).
     """
 
     def __init__(self, path: tuple[Declaration, ...], member: Declaration) -> None:
@@ -1424,7 +1424,7 @@ def selected(decision: object) -> str:
 
 
 class Supplied(ValueDecl[bool]):
-    """Whether a value input of this family is supplied (see ``supplied``)."""
+    """Whether a value input of this Space class is supplied (see ``supplied``)."""
 
     def __init__(self, formal: Param[object]) -> None:
         self.formal = formal
@@ -1440,8 +1440,8 @@ def supplied(formal: object) -> bool:
     evaluation: where the declaration never supplies the input, a Decision over
     nodes it guards can never apply, and its candidates are not compiled.
     """
-    if not isinstance(formal, Param) or formal.reference_family() is not None:
-        raise DefinitionError("supplied() takes a value input (a Param) of this family")
+    if not isinstance(formal, Param) or formal.reference_space_type() is not None:
+        raise DefinitionError("supplied() takes a value input (a Param) of this Space class")
     return cast(bool, Supplied(cast("Param[object]", formal)))
 
 

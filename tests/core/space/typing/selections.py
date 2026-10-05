@@ -15,14 +15,14 @@ from finn.core.space import (
 )
 
 
-class Family(Space):
+class Example(Space):
     extent: int = Param()
     factor: int = Decision(values=(1, 2))
     style: str = Decision(values=("auto", "block"))
 
 
-base = design_space(Family(extent=4))
+base = design_space(Example(extent=4))
 selected = selections.capture(base)
 assert_type(selections.capture(base), Selection)
-assert_type(selected.value(Family.factor), int)
-assert_type(selections.restore(base, selected), ConfigurationResult[Family])
+assert_type(selected.value(Example.factor), int)
+assert_type(selections.restore(base, selected), ConfigurationResult[Example])

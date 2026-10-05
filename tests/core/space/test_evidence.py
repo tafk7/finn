@@ -123,7 +123,7 @@ def test_inactive_parameter_evidence_does_not_expose_unused_bound_value() -> Non
         value: int = Param()
 
     # Formerly an inline exposed Param(int) child binding: now the enclosing
-    # family declares the formal and binds it by name (``Forwarded``); a plain
+    # Space class declares the formal and binds it by name (``Forwarded``); a plain
     # literal binding (``Literal``) is covered alongside it.
     class Forwarded(Space):
         value: int = Param()
@@ -146,7 +146,7 @@ def test_inactive_parameter_evidence_does_not_expose_unused_bound_value() -> Non
 
 
 def test_refusal_causes_stay_visible_while_another_obligation_is_unresolved() -> None:
-    class Family(Space):
+    class Example(Space):
         chosen: int = Decision(values=(1, 2))
         value = Const(3)
 
@@ -160,8 +160,8 @@ def test_refusal_causes_stay_visible_while_another_obligation_is_unresolved() ->
 
         physical = View(selected, requires=(supported,))
 
-    point = design_space(Family())
-    evidence = inspection.explain(point, Family.physical)
+    point = design_space(Example())
+    evidence = inspection.explain(point, Example.physical)
     assert isinstance(evidence.result, Unresolved)
     assert evidence.assessment is not None
     refused = next(node for node in evidence.nodes if node.declaration.key == "supported")
@@ -170,35 +170,35 @@ def test_refusal_causes_stay_visible_while_another_obligation_is_unresolved() ->
     choice = next(node for node in evidence.nodes if node.declaration.key == "chosen")
     assert isinstance(choice.decision_state, Available)
     assert choice.decision_state.value.status == "unassigned"
-    assert inspection.explain(point, Family.physical) == evidence
+    assert inspection.explain(point, Example.physical) == evidence
 
 
 def test_evidence_values_are_detached_from_frozen_inputs_and_caches() -> None:
-    class Family(Space):
+    class Example(Space):
         source: list[int] = Param()
         physical = View(source)
 
     source = [1, 2]
-    point = design_space(Family(source=source))
+    point = design_space(Example(source=source))
     source.append(99)
-    first = inspection.explain(point, Family.physical)
+    first = inspection.explain(point, Example.physical)
     assert isinstance(first.result, Available)
     first.result.value.append(3)
     node = next(node for node in first.nodes if node.declaration.key == "source")
     assert isinstance(node.result, Available)
     cast(list[int], node.result.value).append(4)
-    second = inspection.explain(point, Family.physical)
+    second = inspection.explain(point, Example.physical)
     assert second.result == Available([1, 2])
     assert point.source == [1, 2]
 
 
 def test_evidence_retains_no_occurrence_or_snapshot_lifetime() -> None:
-    class Family(Space):
+    class Example(Space):
         value = Const(2)
 
-    point = design_space(Family())
+    point = design_space(Example())
     reference = weakref.ref(point)
-    evidence = inspection.explain(point, Family.value)
+    evidence = inspection.explain(point, Example.value)
     del point
     gc.collect()
     assert reference() is None

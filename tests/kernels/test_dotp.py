@@ -48,8 +48,8 @@ def parameters(**updates):
     return result
 
 
-def kernel(family=PackedDotpKernel, **updates):
-    return helpers.placed_dotp(family, **parameters(**updates))
+def kernel(space_type=PackedDotpKernel, **updates):
+    return helpers.placed_dotp(space_type, **parameters(**updates))
 
 
 def codes(result):
@@ -378,9 +378,9 @@ def test_a_subbyte_result_is_padded_to_a_byte():
 
 
 def test_each_core_kernel_names_its_core_and_the_shared_base_places_none():
-    for family, core in ((PackedDotpKernel, "dotp"), (Int8Dsp58DotpKernel, "dotp_8sx9_dsp58")):
-        requirements = kernel(family).module
-        assert requirements.implementation_id == family.id
+    for space_type, core in ((PackedDotpKernel, "dotp"), (Int8Dsp58DotpKernel, "dotp_8sx9_dsp58")):
+        requirements = kernel(space_type).module
+        assert requirements.implementation_id == space_type.id
         assert dict(requirements.parameters)["CORE"] == f'"{core}"'
     refused = kernel(DotpAxiKernel).inspect(DotpAxiKernel.module).accepted_result
     assert codes(refused) == {"dotp-core"}

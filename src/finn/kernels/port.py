@@ -190,8 +190,8 @@ class AxiStreamPort(Port):
     """
 
     # By its full path, and not imported: channels imports this module (a channel's source
-    # has a port), and the engine resolves the annotation when it collects the family. A
-    # kernel that places a port on a channel names that family itself, so it is loaded.
+    # has a port), and the engine resolves the annotation when it collects the Space class. A
+    # kernel that places a port on a channel names that Space class itself, so it is loaded.
     stream: finn.kernels.channels.Channel = Param(required=False)
     schedule: Schedule | None = Param(default=None, semantics=OPTIONAL_SCHEDULE)
     index: tuple[Index | Affine, ...] = Param(default=())

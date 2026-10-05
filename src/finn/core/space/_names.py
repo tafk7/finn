@@ -281,7 +281,7 @@ class Names:
         if not alternatives:
             declared = [
                 effective.semantics.get(effective.members[source.member])
-                for effective in map(self.table.family, choice.families.values())
+                for effective in map(self.table.collected, choice.space_types.values())
                 if source.member in effective.members
             ]
             if not choice.never or not declared:

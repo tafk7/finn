@@ -199,13 +199,13 @@ def test_independent_batch_reuses_trial_dependencies_and_publishes_only_once() -
     members: list[int] = [
         Decision(domain=domain(accepts=membership, limit=limit)) for _ in range(64)
     ]
-    family = composite(
+    space_type = composite(
         "IndependentBatch",
         {f"choice_{index}": member for index, member in enumerate(members)},
         annotations={f"choice_{index}": int for index in range(len(members))},
         base=Seeded,
     )
-    base = design_space(family(seed=100))
+    base = design_space(space_type(seed=100))
     report = base.try_with_choices(
         *(
             base.field(member).change(index + 1)
@@ -242,12 +242,12 @@ def test_dependent_batch_is_order_independent_without_precommitting_candidates()
     members: list[int] = [Decision(values=(1,))]
     for _ in range(31):
         members.append(Decision(domain=domain(accepts=membership, previous=members[-1])))
-    family = composite(
+    space_type = composite(
         "DependentBatch",
         {f"step_{i}": member for i, member in enumerate(members)},
         annotations={f"step_{i}": int for i in range(len(members))},
     )
-    base = design_space(family())
+    base = design_space(space_type())
     edits = [base.field(member).change(index + 1) for index, member in enumerate(members)]
     report = base.try_with_choices(*reversed(edits))
     assert report.accepted

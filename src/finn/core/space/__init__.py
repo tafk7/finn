@@ -65,7 +65,7 @@ from .selections import Selection, SelectionEntry
 from .semantics import ValueSemantics, default_semantics
 
 __all__ = [
-    # Families, node declarations and the compile step
+    # Space classes, node declarations and the compile step
     "Space",
     "design_space",
     "Model",
