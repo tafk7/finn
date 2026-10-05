@@ -242,6 +242,11 @@ class Toolchain:
             self, "environment", MappingProxyType(_child_environment(self.environment))
         )
 
+    def __reduce__(self) -> tuple[type[Toolchain], tuple[Selection, dict[str, str]]]:
+        # A read-only mapping does not pickle; a toolchain crosses into worker
+        # processes with the transformation that holds it (NodeLocalTransformation).
+        return (Toolchain, (self.selection, dict(self.environment)))
+
     def command(self, tool: str, *args: StrPath) -> list[str]:
         """The argv that runs ``tool`` (a name, not a path) with ``args`` on this
         route: under the command directory when one is selected, behind the

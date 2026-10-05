@@ -295,10 +295,9 @@ class ZynqBuild(Transformation):
     PackagePartition (the stitched-IP contract), the IODMAs' as always.
 
     ``toolchain`` is the prepared ``finn.util.toolchain.Toolchain`` that every
-    Vivado run of the build goes through (PackagePartition, CreateStitchedIP,
-    MakeZYNQProject); by default the legacy environment's, prepared once. HLS
-    synthesis (HLSSynthIP) takes no toolchain and still runs in the legacy
-    environment's.
+    Vivado and Vitis HLS run of the build goes through (PackagePartition,
+    HLSSynthIP, CreateStitchedIP, MakeZYNQProject); by default the legacy
+    environment's, prepared once.
     """
 
     def __init__(
@@ -376,7 +375,7 @@ class ZynqBuild(Transformation):
             kernel_model = kernel_model.transform(GiveUniqueNodeNames(prefix))
             kernel_model.save(dataflow_model_filename)
             kernel_model = kernel_model.transform(PrepareIP(self.fpga_part, self.period_ns))
-            kernel_model = kernel_model.transform(HLSSynthIP())
+            kernel_model = kernel_model.transform(HLSSynthIP(toolchain=toolchain))
             kernel_model = kernel_model.transform(
                 CreateStitchedIP(
                     self.fpga_part, self.period_ns, sdp_node.onnx_node.name, toolchain=toolchain

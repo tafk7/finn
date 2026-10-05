@@ -5,6 +5,7 @@ import concurrent.futures
 import dataclasses
 import json
 import os
+import pickle
 import shlex
 import subprocess
 import sys
@@ -225,6 +226,17 @@ def test_environment_and_selection_are_defensive_snapshots(tmp_path):
     tc = Toolchain(Selection(command_dir=str(tmp_path)), dict(tc.environment))
     assert tc.run("vivado", env={"CHOICE": "child"}).stdout == b"child\n"
     assert tc.environment["CHOICE"] == "before"
+
+
+def test_a_toolchain_pickles_as_the_same_read_only_snapshot():
+    # NodeLocalTransformation's workers receive the transformation, and the
+    # toolchain it holds, pickled.
+    tc = Toolchain(Selection(command_dir="/site", launcher=("ssh", "host")), {"PATH": "/bin"})
+    copied = pickle.loads(pickle.dumps(tc))
+    assert copied == tc
+    assert copied.environment == {"PATH": "/bin"}
+    with pytest.raises(TypeError):
+        copied.environment["PATH"] = "/usr/bin"
 
 
 LICENCE = "2100@licsrv.example"
