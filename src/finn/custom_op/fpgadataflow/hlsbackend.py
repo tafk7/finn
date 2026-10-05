@@ -40,7 +40,7 @@ from finn.util.basic import CppBuilder, make_build_dir
 from finn.util.data_packing import npy_to_rtlsim_input, rtlsim_output_to_npy
 from finn.util.hls import CallHLS
 from finn.util.resources import resource_path, tcl_quote
-from finn.util.toolchain import run_process
+from finn.util.toolchain import Toolchain, run_process
 
 finnxsi = xsi  # Native prerequisites are checked when simulation is requested.
 
@@ -193,11 +193,12 @@ class HLSBackend(ABC):
         "Return a list of extra tcl directives for HLS synthesis."
         return []
 
-    def ipgen_singlenode_code(self, fpgapart=None):
-        """Builds the bash script for IP generation using the CallHLS utility."""
+    def ipgen_singlenode_code(self, fpgapart=None, toolchain: Toolchain | None = None):
+        """Builds the bash script for IP generation using the CallHLS utility, and runs
+        it in ``toolchain`` (by default the legacy environment's)."""
         node = self.onnx_node
         code_gen_dir = self.get_nodeattr("code_gen_dir_ipgen")
-        builder = CallHLS()
+        builder = CallHLS(toolchain=toolchain)
         builder.append_tcl(code_gen_dir + "/hls_syn_{}.tcl".format(node.name))
         builder.set_ipgen_path(code_gen_dir + "/project_{}".format(node.name))
         builder.build(code_gen_dir)

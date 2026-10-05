@@ -33,6 +33,7 @@ import warnings
 from qonnx.transformation.base import NodeLocalTransformation
 
 from finn.util.fpgadataflow import is_hls_node
+from finn.util.toolchain import Toolchain
 
 
 class HLSSynthIP(NodeLocalTransformation):
@@ -48,10 +49,14 @@ class HLSSynthIP(NodeLocalTransformation):
 
     * num_workers (int or None) number of parallel workers, see documentation in
       NodeLocalTransformation for more details.
+    * toolchain (finn.util.toolchain.Toolchain or None) the prepared toolchain each
+      node's synthesis runs in (a flow passes its own, so that one build runs its
+      tools by one route); by default the legacy environment's.
     """
 
-    def __init__(self, fpgapart=None, num_workers=None):
+    def __init__(self, fpgapart=None, num_workers=None, toolchain: Toolchain | None = None):
         self.fpgapart = fpgapart
+        self.toolchain = toolchain
         super().__init__(num_workers=num_workers)
 
     def applyNodeLocal(self, node):
@@ -71,7 +76,7 @@ class HLSSynthIP(NodeLocalTransformation):
                     or os.path.isfile(inst.get_nodeattr("ipgen_path"))
                 ) or inst.get_nodeattr("code_gen_dir_ipgen") not in inst.get_nodeattr("ipgen_path"):
                     # call the compilation function for this node
-                    inst.ipgen_singlenode_code(self.fpgapart)
+                    inst.ipgen_singlenode_code(self.fpgapart, toolchain=self.toolchain)
                 else:
                     warnings.warn("Using pre-existing IP for %s" % node.name)
                 # ensure that executable path is now set

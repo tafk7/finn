@@ -33,12 +33,14 @@ import sys
 from pathlib import Path
 
 from finn.util._legacy_build_env import toolchain as legacy_toolchain
+from finn.util.toolchain import Toolchain
 
 
 class CallHLS:
-    """Execute a deliberately selected HLS frontend with child-scoped settings."""
+    """Execute a deliberately selected HLS frontend with child-scoped settings:
+    ``toolchain``'s, by default the legacy environment's."""
 
-    def __init__(self, toolchain=None):
+    def __init__(self, toolchain: Toolchain | None = None):
         self.toolchain = toolchain
         self.tcl_script = ""
         self.ipgen_path = ""

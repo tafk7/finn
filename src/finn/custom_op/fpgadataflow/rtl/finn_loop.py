@@ -51,6 +51,7 @@ from finn.util.create import adjacency_list
 from finn.util.data_packing import npy_to_rtlsim_input, rtlsim_output_to_npy
 from finn.util.resources import resource_path, tcl_quote
 from finn.util.rtlsim import dat_file_to_numpy_array, mlo_prehook_func_factory
+from finn.util.toolchain import Toolchain
 
 finnxsi = xsi  # Native prerequisites are checked when simulation is requested.
 
@@ -684,7 +685,9 @@ class FINNLoop(HWCustomOp, RTLBackend):
                     ) as f:
                         f.write(template_wrapper)
 
-    def ipgen_singlenode_code(self, fpgapart=None):
+    def ipgen_singlenode_code(self, fpgapart=None, toolchain: Toolchain | None = None):
+        """Packages the loop as an IP with Vivado, run in ``toolchain`` (by default the
+        legacy environment's)."""
         prjname = "MakeLoopIP"
         block_name = self.onnx_node.name
         vivado_stitch_proj_dir = self.get_nodeattr("code_gen_dir_ipgen")
@@ -1285,7 +1288,7 @@ class FINNLoop(HWCustomOp, RTLBackend):
 
         # create a shell script and call Vivado
         make_project_sh = vivado_stitch_proj_dir + "/make_loop_ip.sh"
-        legacy_toolchain().run(
+        (toolchain or legacy_toolchain()).run(
             "vivado",
             ["-mode", "batch", "-source", "make_loop_ip.tcl"],
             cwd=vivado_stitch_proj_dir,
