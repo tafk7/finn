@@ -305,6 +305,9 @@ def compatibility(
 ) -> tuple[Mismatch, ...]:
     """Every reason ``source`` may not drive ``sink``; empty when they connect.
 
+    Elements are not compared: a stream's ``well_formed`` holds each end against
+    its tensor's element, and every stage between carries that element.
+
     ``*_is_top`` marks an end on the composed module's own boundary, whose
     endpoint direction is seen from outside (a top input is a source inside).
     """
@@ -318,8 +321,6 @@ def compatibility(
     if source.transport.endpoint is not produces or sink.transport.endpoint is not consumes:
         refuse(Level.PROTOCOL, "stream-direction", "the source must produce and the sink consume")
 
-    if not source.element.fits(sink.element):
-        refuse(Level.LOGICAL, "stream-element", f"{source.element} cannot feed {sink.element}")
     if sink.repetition is Repetition.CYCLIC and source.repetition is not Repetition.CYCLIC:
         refuse(Level.LOGICAL, "stream-repetition", "a single pass cannot feed a cyclic consumer")
     produced = _presented(source, sink)

@@ -210,13 +210,9 @@ def test_mismatches_name_the_adapter_that_would_repair_them():
     assert "lane_regroup" in next(iter(found)).message
 
 
-def test_element_repetition_direction_and_marker_rules_are_checked():
+def test_repetition_direction_and_marker_rules_are_checked():
     form = vector_major((4,), 2)
     ok = contract(form, Endpoint.INITIATOR)
-    wider = contract(form, Endpoint.TARGET, element=INT4, width=8)
-    assert "stream-element" in codes(
-        compatibility(ok, wider, source_is_top=False, sink_is_top=False)
-    )
     cyclic_sink = contract(form, Endpoint.TARGET, repetition=Repetition.CYCLIC)
     assert "stream-repetition" in codes(
         compatibility(ok, cyclic_sink, source_is_top=False, sink_is_top=False)
@@ -235,26 +231,6 @@ def test_element_repetition_direction_and_marker_rules_are_checked():
     assert "stream-marker" in codes(
         compatibility(produced, required, source_is_top=False, sink_is_top=False)
     )
-
-
-def test_a_hop_s_source_values_must_fit_its_sink():
-    form = vector_major((4,), 2)
-    narrow = ScalarEncoding(DataType["INT3"], (-3, 3))
-    tight = contract(form, Endpoint.INITIATOR, element=narrow)
-    assert (
-        compatibility(
-            tight, contract(form, Endpoint.TARGET), source_is_top=False, sink_is_top=False
-        )
-        == ()
-    )
-    found = compatibility(
-        contract(form, Endpoint.INITIATOR),
-        contract(form, Endpoint.TARGET, element=narrow),
-        source_is_top=False,
-        sink_is_top=False,
-    )
-    assert codes(found) == {"stream-element"}
-    assert next(iter(found)).message == "INT3 cannot feed INT3 over [-3, 3]"
 
 
 def test_contracts_reject_lanes_wider_than_the_word_and_unknown_marker_rules():

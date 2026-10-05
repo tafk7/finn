@@ -375,7 +375,7 @@ class Stream(LogicalStream):
         """Each hop, source through every stage to sink, connects directly.
 
         An element mismatch is ``well_formed``'s (``stream-tensor``: each end
-        against the tensor), so it is not reported here a second time.
+        against the tensor); ``compatibility`` does not compare elements.
         """
         ends = self.endpoints
         found: list[Mismatch] = []
@@ -398,7 +398,7 @@ class Stream(LogicalStream):
                         "a child's padding is wider than the top word that must carry it",
                     )
                 )
-        return _refusal([item for item in found if item.code != "stream-element"])
+        return _refusal(found)
 
     @derived
     def hops(self) -> tuple[Link, ...] | Rejected:
