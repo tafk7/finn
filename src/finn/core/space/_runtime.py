@@ -59,7 +59,7 @@ class Snapshot:
     An open Decision with one viable case reads as that case (``forcing``), false
     only on the copies forcing evaluates on. ``found`` holds the snapshot's forced
     Decisions once found; ``verdicts`` are the ones its base found, which forcing
-    reuses where the change did not reach (``finn.core.space.forcing``).
+    reuses where the change did not reach (``finn.core.space._forcing``).
     """
 
     model: Model[Space]
@@ -121,7 +121,7 @@ class _TrialSnapshot(Snapshot):
     def successor(self) -> Snapshot:
         """The configuration this trial would publish: every candidate committed."""
         if self._successor is None:
-            from .forcing import inherited  # noqa: PLC0415 - runtime/forcing cycle
+            from ._forcing import inherited  # noqa: PLC0415 - runtime/forcing cycle
 
             successor = Snapshot(
                 self.model,
@@ -146,7 +146,7 @@ def _forced(snapshot: Snapshot, index: int) -> QueryResult[object] | None:
     """An open Decision's forced value (its one viable case), its refusal (no viable
     case), or None (several, or a snapshot that does not force). A trial reads its
     base's, and where the base forces nothing, the configuration's it would publish."""
-    from .forcing import forced  # noqa: PLC0415 - runtime/forcing cycle
+    from ._forcing import forced  # noqa: PLC0415 - runtime/forcing cycle
 
     if not snapshot.forcing:
         return None

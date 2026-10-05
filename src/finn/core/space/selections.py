@@ -14,10 +14,10 @@ from ._configuration import Space
 from .compiler import Model
 from .declarations import Decision
 from .edits import Change, ConfigurationResult
-from .errors import EvaluationError, RequestError
+from .errors import RequestError
 from .occurrence import state
 from .references import DecisionHandle, decision_key
-from .semantics import ValueSemantics, recognize, snapshot, unrecognized
+from .semantics import ValueSemantics, equal, recognize, snapshot, unrecognized
 
 T = TypeVar("T")
 S = TypeVar("S", bound=Space)
@@ -89,18 +89,14 @@ class Selection:
         ):
             return False
         for left, right in zip(self._entries, other._entries):
-            try:
-                equal = _semantics(self._model, left.node).values_equal(
-                    _snapshot(self._model, left.node, left.value),
-                    _snapshot(self._model, right.node, right.value),
-                )
-            except EvaluationError:
-                raise
-            except Exception as cause:
-                raise EvaluationError(
-                    self._model.linked.nodes[left.node].owner, "selection equality", str(cause)
-                ) from cause
-            if not equal:
+            owner = self._model.linked.nodes[left.node].owner
+            if not equal(
+                _semantics(self._model, left.node),
+                _snapshot(self._model, left.node, left.value),
+                _snapshot(self._model, right.node, right.value),
+                owner=owner,
+                role="selection equality",
+            ):
                 return False
         return True
 
