@@ -33,10 +33,10 @@ from finn.dataflow.schedule import Index, Schedule
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.base import NATIVE_CLOCKING, Clocking, Kernel, factor_domain
+from finn.kernels.channels import Channel
 from finn.kernels.datatypes.domains import Integer
 from finn.kernels.datatypes.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
 from finn.kernels.port import AxiStreamPort
-from finn.kernels.streams import Stream
 from finn.kernels.target import DspBlock, Platform
 
 c = Index("c")
@@ -63,9 +63,9 @@ class EltwiseKernel(Kernel):
     lhs_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
     rhs_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
     # The streams it sits on, when a parent places it.
-    lhs_stream: Stream = Param(required=False)
-    rhs_stream: Stream = Param(required=False)
-    result_stream: Stream = Param(required=False)
+    lhs_stream: Channel = Param(required=False)
+    rhs_stream: Channel = Param(required=False)
+    result_stream: Channel = Param(required=False)
 
     @derived(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
     def result_dtype(self) -> QONNXDataType:

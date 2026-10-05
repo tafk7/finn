@@ -84,12 +84,12 @@ from finn.kernels.artifacts.abi import check_against_rtl
 from finn.kernels.artifacts.module import Leaf
 from finn.kernels.artifacts.rtl import Declined, extract
 from finn.kernels.base import Kernel
+from finn.kernels.channels import Channel
 from finn.kernels.configure import commit, describe, undecided
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.port import AxiStreamPort
-from finn.kernels.streams import Stream
 from finn.kernels.transport import StreamContract
-from kernels.helpers import FULL_DSP48E2, Root, with_adapter_memories
+from kernels.helpers import FULL_DSP48E2, Root, with_adapter_memories, with_direct_transports
 from kernels.xsim import materialize, stream_through
 
 KERNEL, SOURCE = "kernel", "source"
@@ -287,9 +287,9 @@ def _design(
     for name, tensor in tensors.items():
         inside = fed is not None and fed[0] == name
         namespace[name] = (
-            Stream(tensor=tensor, platform=FULL_DSP48E2)
+            Channel(tensor=tensor, platform=FULL_DSP48E2)
             if inside
-            else Stream(tensor=tensor, port=name, platform=FULL_DSP48E2)
+            else Channel(tensor=tensor, port=name, platform=FULL_DSP48E2)
         )
     namespace[KERNEL] = family(**facts, **{name: namespace[name] for name in tensors})
     if fed is not None:
@@ -353,7 +353,7 @@ def _committed(
     keys = {f"{KERNEL}.{key}": value for key, value in chosen.items()}
     if fed is not None:
         keys |= {f"{SOURCE}.ram_style": "auto", f"{SOURCE}.pumped_memory": False}
-    return commit(point, keys)
+    return with_direct_transports(commit(point, keys))
 
 
 def _nested(values: object) -> object:
@@ -382,7 +382,7 @@ def place(
         return plain
     name = next(iter(inputs))
     tensor, port = inputs[name], _ports(family)[name]
-    lanes = _value(getattr(plain, name).query(Stream.endpoints), family, sample).sink.form.lanes
+    lanes = _value(getattr(plain, name).query(Channel.endpoints), family, sample).sink.form.lanes
     assert values is not None, "the adapter sample streams the first input's values"
     contents = _nested(values[name].tolist())
     innermost = tensor.shape[-1]
@@ -394,7 +394,7 @@ def place(
             _committed(family, sample.factors, inputs, outputs, choices, facts, fed)
         )
         stream = getattr(point, name)
-        found = stream.query(Stream.plan)
+        found = stream.query(Channel.plan)
         if isinstance(found, Available) and Step.WIDTH in found.value.steps:
             return point
     raise AssertionError(
@@ -440,7 +440,7 @@ def _ends(
     ports = _ports(family)
     found: dict[str, StreamContract] = {}
     for name in names:
-        ends = _value(getattr(point, name).query(Stream.endpoints), family, sample)
+        ends = _value(getattr(point, name).query(Channel.endpoints), family, sample)
         owner = f"{KERNEL}.{ports[name]}"
         if ends.sink_owner == owner:
             found[name] = ends.sink
@@ -478,7 +478,7 @@ def _check_model(
                 f"{schedule.beat_count} less {dropped} dropped"
             )
         if name != fed:
-            ends = _value(getattr(point, name).query(Stream.endpoints), family, sample)
+            ends = _value(getattr(point, name).query(Channel.endpoints), family, sample)
             boundary = ends.source if ends.source_owner is None else ends.sink
             presented = unreplayed(form) if name in inputs else form
             assert boundary.form == presented, (

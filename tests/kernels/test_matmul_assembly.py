@@ -171,13 +171,16 @@ def test_invalid_configuration_fails_during_construction(changes, match):
 
 
 def test_the_core_is_forced_and_owns_its_folding_factors():
-    base = commit(matmul_point(**FACTS), {"w.transport": "direct"})
+    base = commit(
+        matmul_point(**FACTS),
+        {"x.transport": "direct", "w.transport": "direct", "y.transport": "direct"},
+    )
     # On DSP48E2 only the packed core admits the configuration, before any folding
     # factor: it is forced, never committed.
     assert ("matmul.compute", "packed") in {
         (item.key, item.value) for item in inspection.forced(base)
     }
-    assert selections.capture(base).keys == ("w.transport",)
+    assert selections.capture(base).keys == ("w.transport", "x.transport", "y.transport")
     point = commit(
         base,
         {"matmul.compute.packed.pe": 2, "matmul.compute.packed.simd": 2},
@@ -288,7 +291,9 @@ def test_matmul_honors_the_child_physical_view_not_just_its_raw_module(monkeypat
             "matmul.compute.packed.reducer": "tree",
             "x.adapter": "input_gen",
             "x.adapter.input_gen.input_gen.ram_style": "auto",
+            "x.transport": "direct",
             "w.transport": "direct",
+            "y.transport": "direct",
         },
     )
     compute = point.matmul.compute

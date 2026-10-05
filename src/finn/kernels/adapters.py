@@ -71,17 +71,17 @@ from finn.kernels.vpc import VpcKernel
 
 @dataclass(frozen=True)
 class Stage:
-    """A module inside a stream, with the contracts of its two ports; none when direct.
+    """A module inside a channel, with the contracts of its two ports.
 
     ``module`` is its leaf, placed at ``label``: the node path of its kernel
     below whatever places it (``input_gen.input_gen`` below an adapter
-    Decision; ``adapter.input_gen.input_gen`` below the stream).
+    Decision; ``adapter.input_gen.input_gen`` below the channel).
     """
 
-    module: Leaf | None = None
-    input: StreamContract | None = None
-    output: StreamContract | None = None
-    label: str = ""
+    module: Leaf
+    input: StreamContract
+    output: StreamContract
+    label: str
 
 
 # -- realizing a plan --------------------------------------------------------------------

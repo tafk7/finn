@@ -26,12 +26,18 @@ from finn.dataflow.plan import Step
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import Traversal, period
 from finn.kernels.base import Kernel
+from finn.kernels.channels import Channel
 from finn.kernels.configure import commit
 from finn.kernels.dotp import PackedDotpKernel
 from finn.kernels.matmul import exact_result_dtype
 from finn.kernels.memstream import MemStreamKernel
-from finn.kernels.streams import Stream
-from kernels.helpers import FULL_DSP48E2, Root, labels, with_adapter_memories
+from kernels.helpers import (
+    FULL_DSP48E2,
+    Root,
+    labels,
+    with_adapter_memories,
+    with_direct_transports,
+)
 from kernels.xsim import pack, requires_xsim, stream_through
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -47,17 +53,17 @@ X = tuple(tuple((5 * r + 3 * k) % 8 - 4 for k in range(INPUTS)) for r in range(R
 
 def layered(*, adaptable: bool = True):
     class Layered(Root):
-        x = Stream(
+        x = Channel(
             platform=FULL_DSP48E2, tensor=Tensor((ROWS, INPUTS), ScalarEncoding(A)), port="in0_V"
         )
-        w1 = Stream(tensor=Tensor((INPUTS, HIDDEN), ScalarEncoding(W)), platform=FULL_DSP48E2)
-        h = Stream(
+        w1 = Channel(tensor=Tensor((INPUTS, HIDDEN), ScalarEncoding(W)), platform=FULL_DSP48E2)
+        h = Channel(
             tensor=Tensor((ROWS, HIDDEN), ScalarEncoding(H)),
             adaptable=adaptable,
             platform=FULL_DSP48E2,
         )
-        w2 = Stream(tensor=Tensor((HIDDEN, OUTPUTS), ScalarEncoding(W)), platform=FULL_DSP48E2)
-        y = Stream(
+        w2 = Channel(tensor=Tensor((HIDDEN, OUTPUTS), ScalarEncoding(W)), platform=FULL_DSP48E2)
+        y = Channel(
             platform=FULL_DSP48E2, tensor=Tensor((ROWS, OUTPUTS), ScalarEncoding(Y)), port="out0_V"
         )
         first = PackedDotpKernel(
@@ -92,7 +98,7 @@ def layered(*, adaptable: bool = True):
         )
 
     point = commit(
-        design_space(Layered()),
+        with_direct_transports(design_space(Layered())),
         {
             "rom1.ram_style": "auto",
             "rom1.pumped_memory": False,
@@ -150,7 +156,7 @@ def test_the_hidden_stream_plans_width_replay_and_frame_and_places_vpc_and_input
 
 def test_a_hidden_stream_admitting_no_adapter_refuses_the_pair():
     point = layered(adaptable=False)
-    refused = point.h.query(Stream.netlist)
+    refused = point.h.query(Channel.netlist)
     assert isinstance(refused, Rejected)
     plan = [finding for finding in refused.findings if finding.code == "stream-plan"]
     assert plan and "width_conversion -> reorder -> markers" in plan[0].message

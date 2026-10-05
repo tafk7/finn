@@ -18,11 +18,17 @@ from finn.core.space import Available, Rejected, Space, design_space
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.artifacts.abi import Bus, Endpoint, StandardProtocol
 from finn.kernels.artifacts.build import netlist
+from finn.kernels.channels import Channel
 from finn.kernels.control import ControlBus
 from finn.kernels.dotp import PackedDotpKernel
-from finn.kernels.streams import Stream
 from finn.kernels.thresholding import ThresholdingAxiKernel
-from kernels.helpers import FULL_DSP48E2, Root, placed, with_adapter_memories
+from kernels.helpers import (
+    FULL_DSP48E2,
+    Root,
+    placed,
+    with_adapter_memories,
+    with_direct_transports,
+)
 from kernels.xsim import requires_xsim, stream_through
 
 REPETITIONS, WIDTH, HEIGHT, SIMD = 2, 4, 2, 2
@@ -38,10 +44,10 @@ LEVEL_TENSOR = Tensor((REPETITIONS, HEIGHT), ScalarEncoding(DataType["UINT2"]))
 class Activated(Root):
     """dotp, then thresholding: a padded child result feeding a child."""
 
-    activations = Stream(tensor=X, port="in0_V", platform=FULL_DSP48E2)
-    weights = Stream(tensor=WEIGHT_TENSOR, port="in1_V", platform=FULL_DSP48E2)
-    results = Stream(tensor=RESULT_TENSOR, platform=FULL_DSP48E2)
-    levels = Stream(tensor=LEVEL_TENSOR, port="out0_V", platform=FULL_DSP48E2)
+    activations = Channel(tensor=X, port="in0_V", platform=FULL_DSP48E2)
+    weights = Channel(tensor=WEIGHT_TENSOR, port="in1_V", platform=FULL_DSP48E2)
+    results = Channel(tensor=RESULT_TENSOR, platform=FULL_DSP48E2)
+    levels = Channel(tensor=LEVEL_TENSOR, port="out0_V", platform=FULL_DSP48E2)
     config = ControlBus(port="s_axilite")
     compute = PackedDotpKernel(
         result_dtype=R,
@@ -67,7 +73,7 @@ class Activated(Root):
 
 def activated(*, writable: bool):
     return with_adapter_memories(
-        design_space(Activated()).with_choices(
+        with_direct_transports(design_space(Activated())).with_choices(
             {
                 Activated.compute.pe: 1,
                 Activated.compute.simd: SIMD,
@@ -188,9 +194,9 @@ def test_several_threshold_sets_take_a_set_selector_stream():
     two_sets = (THRESHOLDS[0], ((-4, 1, 8), (-3, 2, 9)))
 
     class Selected(Space):
-        values = Stream(tensor=RESULT_TENSOR, port="in0_V", platform=FULL_DSP48E2)
-        sets = Stream(tensor=selectors, port="in1_V", platform=FULL_DSP48E2)
-        levels = Stream(tensor=LEVEL_TENSOR, port="out0_V", platform=FULL_DSP48E2)
+        values = Channel(tensor=RESULT_TENSOR, port="in0_V", platform=FULL_DSP48E2)
+        sets = Channel(tensor=selectors, port="in1_V", platform=FULL_DSP48E2)
+        levels = Channel(tensor=LEVEL_TENSOR, port="out0_V", platform=FULL_DSP48E2)
         activate = ThresholdingAxiKernel(
             input_dtype=R,
             threshold_dtype=R,
@@ -205,17 +211,17 @@ def test_several_threshold_sets_take_a_set_selector_stream():
             platform=FULL_DSP48E2,
         )
 
-    point = design_space(Selected()).with_choices(
+    point = with_direct_transports(design_space(Selected())).with_choices(
         {Selected.activate.use_axilite: False, Selected.activate.deep_pipeline: False}
     )
-    assert isinstance(point.sets.query(Stream.netlist), Available)
+    assert isinstance(point.sets.query(Channel.netlist), Available)
     assert point.sets.endpoints.sink.transport.name == "s_axis_set"
     # One set index for every input beat: a shorter selector stream is refused.
     short = Tensor((HEIGHT,), ScalarEncoding(DataType["UINT1"]))
 
     class Short(Selected):
-        sets = Stream(tensor=short, port="in1_V", platform=FULL_DSP48E2)
+        sets = Channel(tensor=short, port="in1_V", platform=FULL_DSP48E2)
 
-    refused = design_space(Short()).sets.query(Stream.netlist)
+    refused = with_direct_transports(design_space(Short())).sets.query(Channel.netlist)
     assert isinstance(refused, Rejected)
     assert {finding.code for finding in refused.findings} == {"threshold-set-stream"}

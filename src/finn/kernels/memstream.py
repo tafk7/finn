@@ -16,7 +16,7 @@ values it streams, so it states their ``value_range`` on its output: its element
   pass per index; the set stream is an ordinary stream reference input.
 - Its AXI-Lite port is tied off: the contents are fixed at build time.
 
-It is a stream's ``source`` candidate (``finn.kernels.streams``): placed by the
+It is a stream's ``source`` candidate (``finn.kernels.channels``): placed by the
 stream it drives, ``staged``, its output presents into that stream without a
 reference to it, and its set port references the stream's ``index``.
 
@@ -49,7 +49,6 @@ from finn.dataflow.datatypes import (
     ordinary_integer_bounds,
 )
 from finn.dataflow.schedule import Index
-from finn.dataflow.stream import Stream
 from finn.dataflow.tensor import ScalarEncoding
 from finn.dataflow.traversal import (
     BeatSequence,
@@ -92,8 +91,10 @@ class MemStreamKernel(Kernel):
     sets: int = Param(default=1)
     # Where a parent places it: the stream it drives and the set-index stream
     # (several sets only); or, as a stream's source, placed by the stream (staged).
-    output_stream: Stream = Param(required=False)
-    set_stream: Stream = Param(required=False)
+    # channels imports this module (a memory is a channel's source), so it is imported last;
+    # the engine resolves these annotations when it collects the family.
+    output_stream: channels.Channel = Param(required=False)
+    set_stream: channels.Channel = Param(required=False)
     staged: bool = Param(default=False)
     platform: Platform = Param()
     ram_style: str = Decision(
@@ -320,5 +321,8 @@ class MemStreamKernel(Kernel):
         """AXI-Lite, always: the contents are fixed at build time."""
         return held_bus(self.config_bus)
 
+
+# Last: channels imports this module (see the annotations above).
+from finn.kernels import channels  # noqa: E402
 
 __all__ = ["MemStreamKernel"]

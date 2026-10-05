@@ -40,6 +40,7 @@ MATMUL = {
     "w.source.memstream.ram_style": "auto",
     "w.source.memstream.pumped_memory": False,
     "w.transport": "direct",
+    "x.transport": "direct",
 }
 THRESHOLDING = {
     "pe": chain.PE,
@@ -47,6 +48,7 @@ THRESHOLDING = {
     "deep_pipeline": False,
     "ram_style": "auto",
     "ultra_stages": 0,
+    "x.transport": "direct",
 }
 
 
@@ -64,6 +66,9 @@ def kernel_model(**options: bool) -> ModelWrapper:
             # Streamed weights: no value, so no source; the weight edge's transport is
             # the root's.
             choices = {k: v for k, v in choices.items() if not k.startswith("w.source.")}
+        if node.output[0] in {output.name for output in model.graph.output}:
+            # A graph output: no KernelOp consumes it, so its producer owns its transport.
+            choices = {**choices, "y.transport": "direct"}
         model.get_customop_wrapper(node).save(choices)
     return model
 
@@ -145,6 +150,29 @@ def test_a_partition_has_ports_for_its_onnx_inputs_and_outputs_only() -> None:
     ]
 
 
+def test_an_edge_between_partitions_has_one_transport_its_consumers() -> None:
+    """``levels`` leaves the front partition for a KernelOp of the back one (D8, case 3):
+    the back partition's input boundary, its transport its consumer's; the front pins it
+    ``direct``, owns nothing of it, and drops a producer's transport set while the edge
+    left the graph."""
+    model = kernel_model()
+    front = partition_root(model, model.graph.node[:2], name="front")
+    back = partition_root(model, model.graph.node[2:], name="back")
+    assert ("levels", "m_axis_0") in front.boundary and ("levels", "s_axis_0") in back.boundary
+    point = front.point
+    assert point.levels.query(type(point.levels).transport).value == "direct"
+    assert "levels" not in front.owners and back.owners["levels"] == ("second", "x.")
+    with pytest.raises(KernelOpError, match="no node of the partition owns levels"):
+        save_partition_choices(model, front, {"levels.transport": "fifo"})
+    written = save_partition_choices(model, back, {"levels.transport": "fifo"})
+    assert written == {"second": {"x.transport": "fifo"}}
+
+    model.get_customop_wrapper(model.graph.node[1]).save({"y.transport": "fifo"})
+    assert partition_root(model, model.graph.node[:2], name="front").dropped == (
+        "levels.transport",
+    )
+
+
 def test_streamed_weights_are_a_boundary_of_the_partition() -> None:
     model = kernel_model(second_weights=False)
     root = partition_root(model, model.graph.node, name="chain")
@@ -163,6 +191,7 @@ def test_the_owner_map() -> None:
         "second": ("second", ""),
         "levels": ("second", "x."),
         "w2": ("second", "w."),
+        "y": ("second", "y."),
     }
 
 

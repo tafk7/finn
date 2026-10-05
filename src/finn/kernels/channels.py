@@ -1,79 +1,75 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Streams as ordinary Spaces that kernels reference.
+"""Channels: one tensor from one producer to one consumer, an ordinary Space kernels reference.
 
-A ``Stream`` is the physical form of the logical stream
-(``finn.dataflow.stream``): one real producer-to-consumer edge, a node of its
-own, declared in the kernel with children (or the root) that owns the edge,
-beside the kernels it joins, carrying one ``tensor`` its owner supplies: stated,
-or read from a kernel's fact-level view (``MatMulKernel.weight_tensor``). A
-kernel has one reference input per stream it sits on (``output_stream:
-Stream = Param()``), bound to the ``stream`` of one of its ports
+A ``Channel`` is one real producer-to-consumer edge, a node of its own,
+declared in the kernel with children (or the root) that owns the edge, beside
+the kernels it joins, carrying one ``tensor`` its owner supplies: stated, or
+read from a kernel's fact-level view (``MatMulKernel.weight_tensor``). A kernel
+has one reference input per channel it sits on (``output_stream: Channel =
+Param()``), bound to the ``stream`` of one of its ports
 (``finn.kernels.port``), which exports its contract under ``PORT``; a kernel
 with children passes the reference down to the child that uses it, so the
-stream's user is always a leaf's port, at any depth. Each end presents its own
-traversal of the tensor in that contract, reading only the stream's
-``tensor``. The stream sees the ports that reference it through ``users =
-Users(PORT)``, each with only the contract it presents on this stream, so a
-port's refusal stays on its own stream. The contract's transport
-endpoint says whether the kernel produces into the stream (initiator) or
-consumes from it (target). The one-producer-one-consumer rule, compatibility
-and the AXIS boundary belong to this family, not to the engine; the tensor
-each end must traverse and the plan are the logical stream's.
+channel's user is always a leaf's port, at any depth. Each end presents its
+own traversal of the tensor in that contract, reading only the channel's
+``tensor``: a tensor derived from an end is a dependency cycle, but a kernel's
+fact-level view (its facts and value choices, no port) is not one. The
+channel sees the ports that reference it through ``users = Users(PORT)``,
+each with only the contract it presents on this channel, so a port's refusal
+stays on its own channel. The contract's transport endpoint says whether the
+kernel produces into the channel (initiator) or consumes from it (target).
 
-A stream with a user on one side only is a boundary of the root that declares
-it. Its ``port`` input names the top-level AXIS port (``in0_V``): an ABI name is
-design data of the stream, independent of the stream's node name, which is
-its identity and the prefix of its persisted decision keys. A boundary whose
-``port`` is not supplied is refused (``stream-boundary``): a root names a port
-only for what may cross it, an ONNX input or output of a partition, so an
-unnamed boundary is a stream that lost one of its users. The boundary
-presents what its internal end presents, by one rule: an input boundary
-without the replay its receiver realizes (``unreplayed``), an output boundary
-as produced, neither with markers and both as a single pass.
+Its ``ends`` are the contracts' logical part (``finn.dataflow.ends``): each
+must traverse the tensor (``well_formed``, ``stream-tensor``), and the
+``plan`` between their beat sequences (``finn.dataflow.plan``) must be one a
+chain of steps carries out (``stream-plan``). A non-empty plan opens the
+channel's ``adapter`` Decision over nodes, whose candidates are fixed chains
+of FinnLib modules (``finn.kernels.adapters``); each refuses a plan it does
+not carry out, so at most one survives. A channel whose ``adaptable`` input is
+False admits no adapter and refuses any plan.
 
-The logical stream derives the ``plan`` between the two ends' beat
-sequences and refuses one it cannot carry out (``stream-plan``); ``ends`` is
-the contracts' logical part. A non-empty plan opens the stream's ``adapter``
-Decision over nodes, whose candidates are fixed chains of FinnLib modules
-(``finn.kernels.adapters``); each refuses a plan it does not carry out, so at
-most one survives. A stream whose ``adaptable`` input is False admits no
-adapter and refuses any plan. The adapter's modules are the stream's stages,
-each checked on both of its sides, on the stream's ``platform`` (an
-``input_gen``'s ``ultra`` memory requires its UltraRAM).
+A channel with a user on one side only is a boundary of the root that
+declares it. Its ``port`` input names the top-level AXIS port (``in0_V``): an
+ABI name is design data of the channel, independent of its node name, which
+is its identity and the prefix of its persisted decision keys. A boundary
+whose ``port`` is not supplied is refused (``stream-boundary``): a root names
+a port only for what may cross it, an ONNX input or output of a partition.
+The boundary presents what its internal end presents, by one rule: an input
+boundary without the replay its receiver realizes (``unreplayed``), an output
+boundary as produced, neither with markers and both as a single pass.
 
-A ``BufferedStream`` owns a ``transport`` Decision over two nodes, ``direct``
-and ``fifo``, after its adapter. The FIFO candidate owns its ``depth`` and the
-FIFO's ``ram_style`` (on the stream's ``platform``); it is an identity stage
-presenting what arrives at it.
-The adapter and transport choices are keyed under the stream
-(``x.adapter``, ``w.transport``), so they belong to whoever owns the edge.
-Its ``netlist`` view is accepted when the stream is: its ends, plan and every
-hop checked.
+Every channel, boundaries included, owns a ``transport`` Decision over two
+nodes after its adapter: ``direct`` or ``fifo``. The FIFO candidate owns its
+``depth``, left open for the DSE seam, and the FIFO's ``ram_style``; it is an
+identity stage presenting what arrives at it, inside the root that declares
+the channel (on a boundary, between the root's pins and its user). The
+adapter's and transport's stages are checked on both sides, on the channel's
+``platform``. Their keys are the channel's (``x.adapter``, ``x.transport``),
+so they belong to whoever owns the edge.
 
-A stream whose tensor has a known value (``contents``, one operand per set; with
-several ``sets``, its ``index`` stream selects one) carries a ``source``
-Decision over the kernels that can drive it with that value (``SOURCES``: a
-memory now). It applies only when the value is known (``valued``, whether
-``contents`` is supplied: a stream whose declaration supplies none compiles no
-source), and it has no ``none`` case: each candidate refuses on its own facts and on the
-``platform``'s capabilities, and one viable candidate is forced. The source is
-the stream's producer end, placed by the stream (``staged``), its leaf below
-the stream at ``source.<case>``; it stores one period of the value in the
-order the stream's consumer reads it. The invariant: **a stream with a value
-has its source as its only producer** (``stream-users``). Its keys are the
-stream's (``w.source``, ``w.source.memstream.ram_style``), so they belong to
-whoever owns the edge, for an initializer the node that consumes it.
+A channel whose tensor has a known value (``contents``, one operand per set;
+with several ``sets``, its ``index`` channel selects one) carries a
+``source`` Decision over the kernels that can drive it with that value
+(``SOURCES``: a memory now). It applies only when the value is known
+(``valued``), and it has no ``none`` case: one viable candidate is forced. The
+source is the channel's producer end, placed by the channel (``staged``), its
+leaf below the channel at ``source.<case>``; it stores one period of the value
+in the order the channel's consumer reads it. The invariant: **a channel with
+a value has its source as its only producer** (``stream-users``).
 
-Beside ``compatible``, each checked hop is resolved into wires (``wired``:
-lanes, valid, ready, marker bits), and the stream exports its netlist under
-``NETLIST``: its stages' leaves at their labels below it
-(``adapter.input_gen.input_gen``, ``transport.fifo.buffer``) and its hops. A
-user's end belongs to the kernel whose ``Port`` it is, beside the stream
-(``^compute.packed``, at any depth below the stream's owner); a boundary
-end is the root's own pins. Under ``BOUNDARY`` it exports the AXIS bus its
+Beside ``compatible``, each checked hop is resolved into wires (``wired``),
+and the channel exports its netlist under ``NETLIST``: its stages' leaves at
+their labels below it (``adapter.input_gen.input_gen``,
+``transport.fifo.buffer``) and its hops. A user's end belongs to the kernel
+whose ``Port`` it is, beside the channel (``^compute.packed``); a boundary end
+is the root's own pins. Under ``BOUNDARY`` it exports the AXIS bus its
 boundary side presents, if any.
+
+The family refers to itself (``index``) and, through its source's port, is
+referred to by ``finn.kernels.port`` and ``finn.kernels.memstream``, which
+this module imports: those annotate with ``channels.Channel`` and the Space
+engine resolves the reference when it collects the family.
 """
 
 from __future__ import annotations
@@ -97,8 +93,8 @@ from finn.core.space import (
     view,
 )
 from finn.dataflow.datatypes import QONNXDataType
-from finn.dataflow.stream import End, Ends
-from finn.dataflow.stream import Stream as LogicalStream
+from finn.dataflow.ends import End, Ends, misfit
+from finn.dataflow.plan import Plan, Unrealizable, plan
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, Traversal, period, unreplayed
 from finn.kernels.adapters import ADAPTERS, Stage, StreamAdapter
@@ -125,14 +121,14 @@ from finn.kernels.transport import (
 )
 
 SOURCES: dict[str, type[Space] | Space] = {"memstream": MemStreamKernel}
-"""The kernels that can drive a stream with its known value: a memory; later a fetcher
+"""The kernels that can drive a channel with its known value: a memory; later a fetcher
 from memory-mapped memory, a loop's memory, a source reloadable over AXI-Lite."""
 
 
 def boundary_contract(
     name: str, element: ScalarEncoding, sequence: BeatSequence, endpoint: Endpoint
 ) -> StreamContract:
-    """The AXIS port a composed module presents for one of its own streams."""
+    """The AXIS port a composed module presents for one of its own channels."""
     if len(sequence.markers) > 1:
         raise ValueError("an AXIS boundary carries at most one marker")
     form = sequence.form
@@ -169,13 +165,15 @@ def wired(
 
 
 class _Direct(Space):
+    """No stage: the hop after the adapter connects directly."""
+
     @view
-    def stage(self) -> Stage:
-        return Stage()
+    def stages(self) -> tuple[Stage, ...]:
+        return ()
 
 
-class StreamFifo(Space):
-    """An identity adapter: what arrives at it, presented on both sides of a native FIFO."""
+class ChannelFifo(Space):
+    """An identity stage: what arrives at it, presented on both sides of a native FIFO."""
 
     tensor: Tensor = Param()
     arriving: BeatSequence = Param()
@@ -192,21 +190,25 @@ class StreamFifo(Space):
     )
 
     @view
-    def stage(self) -> Stage:
+    def stages(self) -> tuple[Stage, ...]:
         element, arriving, buffer = self.tensor.element, self.arriving, self.buffer
         module = buffer.module
         assert isinstance(module, Leaf)
-        return Stage(
-            module,
-            StreamContract(buffer.input.transport, element, arriving.form, arriving.repetition),
-            StreamContract(buffer.output.transport, element, arriving.form, arriving.repetition),
-            "fifo.buffer",
+        return (
+            Stage(
+                module,
+                StreamContract(buffer.input.transport, element, arriving.form, arriving.repetition),
+                StreamContract(
+                    buffer.output.transport, element, arriving.form, arriving.repetition
+                ),
+                "fifo.buffer",
+            ),
         )
 
 
 @dataclass(frozen=True)
-class StreamEnds:
-    """A stream's two ends: each end's owner (the user's port node, None at the root's
+class ChannelEnds:
+    """A channel's two ends: each end's owner (the user's port node, None at the root's
     boundary) and its contract."""
 
     source_owner: str | None
@@ -215,26 +217,27 @@ class StreamEnds:
     sink: StreamContract
 
 
-class Stream(LogicalStream):
-    """A relation between the kernels that reference it: one producer, one consumer.
+class Channel(Space):
+    """One tensor between the kernels that reference it: one producer, one consumer.
 
-    ``users`` holds the port each present user presents on this stream,
-    located by the user's name and the input it references this stream
-    through. A side without a user is the root's boundary, presented as
-    the AXIS port ``port``: an input boundary without the replay its receiver
-    realizes, an output boundary as produced, neither with markers and both
-    as a single pass. A stream with a known value has its ``source`` as its
-    producer. ``platform`` is the target's, stated by whoever declares the stream:
-    its source, its adapter's stages and its FIFO read it.
+    ``users`` holds the port each present user presents on this channel,
+    located by the user's name and the input it references this channel
+    through. A side without a user is the root's boundary, presented as the
+    AXIS port ``port``. A channel with a known value has its ``source`` as its
+    producer. ``platform`` is the target's, stated by whoever declares the
+    channel: its source, its adapter's stages and its FIFO read it.
     """
 
+    tensor: Tensor = Param()
+    # False admits no adapter: the ends must connect directly.
+    adaptable: bool = Param(default=True)
     port: str = Param(required=False)
     users = Users(PORT)
     contents: IntegerTensor = Param(semantics=INTEGER_TENSOR, required=False)
     sets: int = Param(default=1)
-    index: LogicalStream = Param(required=False)
+    index: Channel = Param(required=False)
     platform: Platform = Param()
-    # Whether the stream carries a known value, which its source drives: where nothing
+    # Whether the channel carries a known value, which its source drives: where nothing
     # supplies ``contents``, the source never applies and its candidates are not compiled.
     valued = supplied(contents)
 
@@ -283,9 +286,9 @@ class Stream(LogicalStream):
         return contract
 
     @derived
-    def endpoints(self) -> StreamEnds | Rejected:
+    def endpoints(self) -> ChannelEnds | Rejected:
         """The producing and consuming ends, without the stages between them: with a
-        known value, the producer is the stream's source."""
+        known value, the producer is the channel's source."""
         producers: list[tuple[str | None, StreamContract]] = []
         consumers: list[tuple[str | None, StreamContract]] = []
         for end in self.users:
@@ -296,7 +299,7 @@ class Stream(LogicalStream):
             if producers:
                 return reject(
                     "stream-users",
-                    "a stream with a value has its source as its only producer, "
+                    "a channel with a value has its source as its only producer, "
                     f"not {producers[0][0]}",
                 )
             producers.append((self.source_label, self.source_contract))
@@ -304,11 +307,11 @@ class Stream(LogicalStream):
             named = ", ".join(f"{end.node}.{end.member}" for end in self.users)
             return reject(
                 "stream-users",
-                f"a stream has at most one producer and one consumer; referenced by {named}",
+                f"a channel has at most one producer and one consumer; referenced by {named}",
             )
         if not producers and not consumers:
-            return reject("stream-unused", "no present kernel references this stream")
-        if not (producers and consumers) and not self.present(Stream.port):
+            return reject("stream-unused", "no present kernel references this channel")
+        if not (producers and consumers) and not self.present(Channel.port):
             return reject(
                 "stream-boundary",
                 "a boundary of its root, but no port names it: only an ONNX input or output "
@@ -325,7 +328,7 @@ class Stream(LogicalStream):
                 consumers.append((None, self._boundary(inside, Endpoint.INITIATOR)))
         except ValueError as error:
             return reject("stream-boundary", str(error))
-        return StreamEnds(*producers[0], *consumers[0])
+        return ChannelEnds(*producers[0], *consumers[0])
 
     def _boundary(self, inside: StreamContract, endpoint: Endpoint) -> StreamContract:
         form = unreplayed(inside.form) if endpoint is Endpoint.TARGET else inside.form
@@ -340,18 +343,43 @@ class Stream(LogicalStream):
             End(found.sink_owner, found.sink.element, found.sink.sequence),
         )
 
+    @constraint
+    def well_formed(self) -> bool | Rejected:
+        """Each end traverses this channel's tensor (``finn.dataflow.ends.misfit``)."""
+        why = misfit(self.tensor, self.ends)
+        return True if why is None else reject("stream-tensor", why)
+
+    @derived
+    def plan(self) -> Plan | Rejected:
+        """What must happen between the source's beat sequence and the sink's."""
+        ends = self.ends
+        try:
+            return plan(ends.source.sequence, ends.sink.sequence)
+        except Unrealizable as error:
+            return reject("stream-plan", f"no adapter can join the ends: {error}")
+
+    @derived
+    def adapting(self) -> bool:
+        return self.adaptable and bool(self.plan)
+
+    @constraint
+    def realizable(self) -> bool | Rejected:
+        found = self.plan
+        if found and not self.adaptable:
+            return reject(
+                "stream-plan",
+                f"the ends need {found.describe()}, and this channel admits no adapter",
+            )
+        return True
+
     adapter: StreamAdapter = Decision(
-        ADAPTERS,
-        when=LogicalStream.adapting,
-        tensor=LogicalStream.tensor,
-        plan=LogicalStream.plan,
-        platform=platform,
+        ADAPTERS, when=adapting, tensor=tensor, plan=plan, platform=platform
     )
     adapter_stages = View(adapter.stages)
 
     @derived
     def adapted(self) -> tuple[Stage, ...]:
-        """The adapter's stages, in order, labelled below the stream; none when the ends
+        """The adapter's stages, in order, labelled below the channel; none when the ends
         connect directly."""
         if not self.adapting:
             return ()
@@ -366,9 +394,21 @@ class Stream(LogicalStream):
         output = adapted[-1].output if adapted else None
         return self.endpoints.source.sequence if output is None else output.sequence
 
+    transport: _Direct | ChannelFifo = Decision(
+        {
+            "direct": _Direct,
+            "fifo": ChannelFifo(tensor=tensor, arriving=arriving, platform=platform),
+        }
+    )
+    transport_stages = View(transport.stages)
+
     @view
     def stages(self) -> tuple[Stage, ...]:
-        return self.adapted
+        """The adapter's stages, then the transport's FIFO, if any."""
+        transported = tuple(
+            replace(stage, label=f"transport.{stage.label}") for stage in self.transport_stages
+        )
+        return (*self.adapted, *transported)
 
     @constraint
     def compatible(self) -> bool | Rejected:
@@ -381,7 +421,6 @@ class Stream(LogicalStream):
         found: list[Mismatch] = []
         current, current_top = ends.source, ends.source_owner is None
         for stage in self.stages:
-            assert stage.input is not None and stage.output is not None
             found += compatibility(
                 current, stage.input, source_is_top=current_top, sink_is_top=False
             )
@@ -404,17 +443,17 @@ class Stream(LogicalStream):
     def hops(self) -> tuple[Link, ...] | Rejected:
         """Each hop, source through every stage to sink, as wires.
 
-        A user's end belongs to its kernel beside the stream: the user is a
+        A user's end belongs to its kernel beside the channel: the user is a
         kernel's ``Port`` (``compute.packed.x``, at any depth below the
-        stream's owner), its kernel the node above it (``^compute.packed``).
-        A stage and the source sit below the stream at their labels; a
+        channel's owner), its kernel the node above it (``^compute.packed``).
+        A stage and the source sit below the channel at their labels; a
         boundary end is the root's own pins (``None``).
         """
         ends = self.endpoints
         owners: list[str | None] = []
         for side, node in enumerate((ends.source_owner, ends.sink_owner)):
             if side == 0 and self.valued:
-                owners.append(node)  # the source, below the stream at its label
+                owners.append(node)  # the source, below the channel at its label
                 continue
             kernel = None if node is None else node.rpartition(".")[0]
             if kernel == "":
@@ -424,29 +463,26 @@ class Stream(LogicalStream):
         owner, current = owners[0], ends.source
         try:
             for stage in self.stages:
-                assert stage.input is not None and stage.output is not None
                 links.append(wired(owner, current, stage.label, stage.input))
                 owner, current = stage.label, stage.output
             links.append(wired(owner, current, owners[1], ends.sink))
         except BuildError as error:
             # A hop that does not connect (another element, say) is refused by the
-            # stream's constraints; its wires do not exist.
+            # channel's constraints; its wires do not exist.
             return reject("stream-link", str(error))
         return tuple(links)
 
-    @view(requires=(LogicalStream.well_formed, LogicalStream.realizable, compatible))
+    @view(requires=(well_formed, realizable, compatible))
     def netlist(self) -> Fragment:
         """Its source's and stages' leaves below it, and its hops."""
-        stages = tuple(
-            (stage.label, stage.module) for stage in self.stages if stage.module is not None
-        )
+        stages = tuple((stage.label, stage.module) for stage in self.stages)
         if self.valued:
             module = self.source_module
             assert isinstance(module, Leaf)
             stages = ((self.source_label, module), *stages)
         return Fragment(stages, self.hops)
 
-    @view(requires=(LogicalStream.well_formed, LogicalStream.realizable, compatible))
+    @view(requires=(well_formed, realizable, compatible))
     def boundary_bus(self) -> tuple[Bus, ...]:
         """The AXIS bus the root presents for it, when one side has no user."""
         ends = self.endpoints
@@ -462,33 +498,11 @@ def _refusal(found: Sequence[Mismatch]) -> bool | Rejected:
     return reject(found[0].code, "; ".join(f"{item.code}: {item.message}" for item in found))
 
 
-class BufferedStream(Stream):
-    """A stream whose ``transport`` after its adapter is direct or a FIFO."""
-
-    transport: _Direct | StreamFifo = Decision(
-        {
-            "direct": _Direct,
-            "fifo": StreamFifo(
-                tensor=Stream.tensor, arriving=Stream.arriving, platform=Stream.platform
-            ),
-        }
-    )
-    transport_stage = View(transport.stage)
-
-    @view
-    def stages(self) -> tuple[Stage, ...]:
-        fifo = self.transport_stage
-        if fifo.module is None:
-            return self.adapted
-        return (*self.adapted, replace(fifo, label=f"transport.{fifo.label}"))
-
-
 __all__ = [
     "SOURCES",
-    "BufferedStream",
-    "Stream",
-    "StreamEnds",
-    "StreamFifo",
+    "Channel",
+    "ChannelEnds",
+    "ChannelFifo",
     "boundary_contract",
     "wired",
 ]

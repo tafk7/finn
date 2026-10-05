@@ -22,10 +22,10 @@ from finn.dataflow.traversal import BeatSequence, vector_major
 from finn.kernels.artifacts.abi import Bus, Direction, Endpoint, Signal
 from finn.kernels.artifacts.module import Held, Leaf
 from finn.kernels.base import Clocking, Kernel
+from finn.kernels.channels import Channel
 from finn.kernels.configure import commit
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.port import AxiStreamPort
-from finn.kernels.streams import Stream
 from kernels.helpers import FULL_DSP48E2
 
 INT4 = DataType["INT4"]
@@ -43,7 +43,7 @@ class Probe(Kernel):
     id = "test.probe"
     rtl_module = "probe"
 
-    stream: Stream = Param(required=False)
+    stream: Channel = Param(required=False)
     hold_mode: bool = Param(default=True)
     port_clock: str = Param(default="ap_clk")
 
@@ -71,7 +71,7 @@ class Probe(Kernel):
 
 def probe(**facts: object) -> Probe:
     class Placed(Space):
-        edge = Stream(tensor=TENSOR, port="in0_V", platform=FULL_DSP48E2)
+        edge = Channel(tensor=TENSOR, port="in0_V", platform=FULL_DSP48E2)
         kernel = Probe(stream=edge, **facts)  # type: ignore[arg-type]
 
     return design_space(Placed()).kernel

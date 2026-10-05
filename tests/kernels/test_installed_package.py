@@ -51,7 +51,7 @@ from finn.kernels.target import Platform
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.base import Kernel
 from finn.kernels.configure import commit
-from finn.kernels.streams import BufferedStream, Stream
+from finn.kernels.channels import Channel
 from finn.core.space import (
     Available, Decision, Param, Space, design_space, derived, divisors_of, view,
 )
@@ -95,17 +95,17 @@ PLATFORM = Platform(
 
 
 class PlacedDotp(Space):
-    x = Stream(
+    x = Channel(
         tensor=Tensor((1, 2), ScalarEncoding(DataType["INT3"])),
         port="in0_V",
         platform=PLATFORM,
     )
-    w = Stream(
+    w = Channel(
         tensor=Tensor((2, 2), ScalarEncoding(DataType["INT3"])),
         port="in1_V",
         platform=PLATFORM,
     )
-    y = Stream(
+    y = Channel(
         tensor=Tensor((1, 2), ScalarEncoding(DataType["INT8"])),
         port="out0_V",
         platform=PLATFORM,
@@ -170,7 +170,12 @@ for memory in ("none", "memstream"):
         m=3, k=4, n=4, activation_dtype=DataType["INT3"], weights_dtype=DataType["INT3"],
         platform=PLATFORM,
     )
-    choices = {"w.transport": "direct", "matmul.compute": "packed"}
+    choices = {
+        "x.transport": "direct",
+        "w.transport": "direct",
+        "y.transport": "direct",
+        "matmul.compute": "packed",
+    }
     expected = dotp_sources | {"rtl/shape/input_gen.sv"}
     if memory == "memstream":
         # Stored (k, n): the columns of the by-output rows.
@@ -183,9 +188,9 @@ for memory in ("none", "memstream"):
 
     # The MatMul in a root that declares its streams.
     class Placed(Root):
-        x = Stream(tensor=Tensor((3, 4), INT3), port="in0_V", platform=PLATFORM)
-        w = BufferedStream(tensor=Tensor((4, 4), INT3), port="in1_V", platform=PLATFORM)
-        y = Stream(tensor=Tensor((3, 4), INT8), port="out0_V", platform=PLATFORM)
+        x = Channel(tensor=Tensor((3, 4), INT3), port="in0_V", platform=PLATFORM)
+        w = Channel(tensor=Tensor((4, 4), INT3), port="in1_V", platform=PLATFORM)
+        y = Channel(tensor=Tensor((3, 4), INT8), port="out0_V", platform=PLATFORM)
         matmul = MatMulKernel(**facts, x_stream=x, w_stream=w, y_stream=y)
         w.contents = matmul.weight_values
 

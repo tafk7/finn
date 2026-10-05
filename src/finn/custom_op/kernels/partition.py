@@ -5,14 +5,13 @@
 
 ``partition_root(model, nodes)`` builds, and changes no graph:
 
-- **streams**, one per ONNX tensor, in node order: a node's graph inputs, the
-  parameter streams it owns (named after the initializer, the kernel's view),
-  its outputs. A stream's tensor is the graph's value_info and annotation (D6),
-  its platform the model's target's, a MatMul's weight operand a
-  ``BufferedStream``. Only the subgraph's ONNX
-  inputs and outputs are boundaries, named by the shell's convention
-  ``s_axis_<i>`` and ``m_axis_<i>`` (D4): a stream refuses a boundary no port
-  names (``stream-boundary``);
+- **channels**, one per ONNX tensor, in node order: a node's graph inputs, the
+  parameter channels it owns (named after the initializer, the kernel's view),
+  its outputs. A channel's tensor is the graph's value_info and annotation
+  (D6), its platform the model's target's. Only the subgraph's ONNX inputs and
+  outputs are boundaries, named by the shell's convention ``s_axis_<i>`` and
+  ``m_axis_<i>`` (D4): a channel refuses a boundary no port names
+  (``stream-boundary``);
 - **kernels**, one per node, from its facts, the graph's pins as keywords;
 - **replay**: each node's kernel choices, then the edge choices (an edge's
   adapter selector is forced, never persisted); an edge choice the current
@@ -20,7 +19,11 @@
   again;
 - **owners**: each member's node and attribute prefix, how a choice made in the
   root goes back to the node that persists it (D8): a kernel's on its node, an
-  edge's on its consumer, a parameter stream's on its value owner.
+  edge's on its consumer, a parameter channel's on its value owner. An output
+  boundary consumed by no KernelOp (a graph output) is its producer's, under
+  its output port; one a KernelOp outside the partition consumes is that
+  node's, applied in its own partition as an input boundary, so here its
+  ``transport`` is pinned ``direct``: one FIFO per edge, on the consumer's side.
 
 Members are named as the graph: streams by tensor and kernels by node
 (``\\W`` as ``_``); a node and a tensor of one name are refused, not renamed.
@@ -46,7 +49,9 @@ from finn.custom_op.kernels.base import (
 )
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.base import Kernel
-from finn.kernels.streams import BufferedStream, Stream
+from finn.kernels.channels import Channel
+
+KERNEL_OPS = "finn.custom_op.kernels"
 
 
 class Partition(Kernel):
@@ -98,15 +103,20 @@ def partition_root(model: Any, nodes: Iterable[Any], *, name: str = "partition")
         if tensor not in produced and tensor not in owned and model.get_initializer(tensor) is None
     ]
     outputs = [tensor for node in nodes for tensor in node.output if tensor in used_outside]
+    consumed = {
+        tensor
+        for node in model.graph.node
+        if node.domain == KERNEL_OPS and id(node) not in inside
+        for tensor in node.input
+    }
     ports = {tensor: f"s_axis_{index}" for index, tensor in enumerate(inputs)}
     ports |= {tensor: f"m_axis_{index}" for index, tensor in enumerate(outputs)}
-    weights = {node.input[1] for node, op in zip(nodes, ops) if op.op_type == "MatMul"}
     platform = target(model).platform
 
     members: dict[str, object] = {}
-    streams: dict[str, Stream] = {}
+    streams: dict[str, Channel] = {}
 
-    def add(tensor: str, stream: Stream) -> None:
+    def add(tensor: str, stream: Channel) -> None:
         streams[tensor] = members[member(tensor)] = stream
 
     def declare(tensor: str, label: str) -> None:
@@ -114,9 +124,10 @@ def partition_root(model: Any, nodes: Iterable[Any], *, name: str = "partition")
             return
         dims = rows(shape(model, tensor, label))
         carried = Tensor(dims, ScalarEncoding(datatype(model, tensor, label)))
-        kind = BufferedStream if tensor in weights else Stream
         port: dict[str, Any] = {"port": ports[tensor]} if tensor in ports else {}
-        add(tensor, kind(tensor=carried, platform=platform, **port))
+        if tensor in outputs and tensor in consumed:
+            port["transport"] = "direct"  # its consumer's choice, in the consumer's partition
+        add(tensor, Channel(tensor=carried, platform=platform, **port))
 
     # Streams in node order: a node's graph inputs, the parameter streams it owns, its outputs.
     for node, op in zip(nodes, ops):
@@ -129,6 +140,7 @@ def partition_root(model: Any, nodes: Iterable[Any], *, name: str = "partition")
             declare(tensor, op.label)
 
     owners: dict[str, tuple[str, str]] = {}
+    stale: list[str] = []
     kernel_choices: dict[str, object] = {}
     edge_choices: dict[str, object] = {}
     for node, op in zip(nodes, ops):
@@ -136,6 +148,11 @@ def partition_root(model: Any, nodes: Iterable[Any], *, name: str = "partition")
         if kernel in members:
             raise KernelOpError(f"{node.name}: a node and a tensor are both named {kernel}")
         members[kernel], by_port = op.place(streams)
+        by_port |= {
+            name: tensor
+            for name, tensor in zip(op.outputs, node.output)
+            if tensor in outputs and tensor not in consumed
+        }
         owners[kernel] = (node.name, "")
         for port, tensor in by_port.items():
             owners[member(tensor)] = (node.name, f"{port}.")
@@ -143,6 +160,9 @@ def partition_root(model: Any, nodes: Iterable[Any], *, name: str = "partition")
             head, _, rest = attribute.partition(".")
             if head in by_port:
                 edge_choices[f"{member(by_port[head])}.{rest}"] = value
+            elif head in op.outputs:
+                # An output's choice, set while it left the graph; its consumer owns it now.
+                stale.append(f"{member(node.output[op.outputs.index(head)])}.{rest}")
             else:
                 kernel_choices[f"{kernel}.{attribute}"] = value
 
@@ -170,7 +190,7 @@ def partition_root(model: Any, nodes: Iterable[Any], *, name: str = "partition")
                     point = alone
         else:
             point = together
-    return PartitionRoot(point, owners, tuple(dropped), tuple(ports.items()))
+    return PartitionRoot(point, owners, (*stale, *dropped), tuple(ports.items()))
 
 
 def save_partition_choices(

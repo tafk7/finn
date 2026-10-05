@@ -31,8 +31,8 @@ from finn.custom_op.kernels.cache import Facts
 from finn.custom_op.kernels.roots import StoredMatMulNode, StreamedMatMulNode
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.base import Kernel
+from finn.kernels.channels import Channel
 from finn.kernels.matmul import MatMulKernel
-from finn.kernels.streams import BufferedStream, Stream
 
 
 class MatMul(KernelOp):
@@ -91,19 +91,19 @@ class MatMul(KernelOp):
         leading = shape(self.model(), self.onnx_node.input[0], self.label)[:-1]
         return {self.onnx_node.output[0]: ((*leading, result.shape[-1]), result.element.dtype)}
 
-    def owned_streams(self) -> dict[str, Stream]:
+    def owned_streams(self) -> dict[str, Channel]:
         if self.facts().root is not StoredMatMulNode:
             return {}
         base: Any = self.base()
         return {
-            self.onnx_node.input[1]: BufferedStream(
+            self.onnx_node.input[1]: Channel(
                 tensor=self.view("w_tensor"),
                 contents=base.matmul.weight_values,
                 platform=self.target().platform,
             )
         }
 
-    def place(self, streams: Mapping[str, Stream]) -> tuple[Kernel, dict[str, str]]:
+    def place(self, streams: Mapping[str, Channel]) -> tuple[Kernel, dict[str, str]]:
         facts = self.facts()
         formals: dict[str, Any] = facts.formals()
         del formals["x_tensor"]

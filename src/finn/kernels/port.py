@@ -35,8 +35,9 @@ outputs unused.
 from __future__ import annotations
 
 from math import prod
-from typing import TypeVar
+from typing import TYPE_CHECKING, TypeVar
 
+import finn.kernels
 from finn.core.space import (
     Param,
     Rejected,
@@ -51,7 +52,6 @@ from finn.core.space import (
 )
 from finn.dataflow.datatypes import QONNXDataType
 from finn.dataflow.schedule import Access, Affine, Index, Refused, Schedule
-from finn.dataflow.stream import Stream
 from finn.dataflow.tensor import ScalarEncoding
 from finn.dataflow.traversal import BeatSequence
 from finn.kernels.artifacts.abi import Direction, Endpoint
@@ -60,6 +60,9 @@ from finn.kernels.base import ACCESS, CLOCKED, HELD, PINS, PORT
 from finn.kernels.datatypes.domains import Integer
 from finn.kernels.datatypes.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
 from finn.kernels.transport import AxiStream, ReadyValidStream, StreamContract, StreamMarker
+
+if TYPE_CHECKING:
+    import finn.kernels.channels
 
 T = TypeVar("T")
 
@@ -182,11 +185,14 @@ class AxiStreamPort(Port):
     AXIS bus named ``name``, with a ``TLAST`` when what it presents carries a
     marker; or, given ``signals`` (data, valid, ready), those ready/valid pins,
     without a marker. ``staged``, a stream's source placed by the stream itself
-    (``finn.kernels.streams``), presents its given sequence and dtype without a
+    (``finn.kernels.channels``), presents its given sequence and dtype without a
     stream reference: it is not idle.
     """
 
-    stream: Stream = Param(required=False)
+    # By its full path, and not imported: channels imports this module (a channel's source
+    # has a port), and the engine resolves the annotation when it collects the family. A
+    # kernel that places a port on a channel names that family itself, so it is loaded.
+    stream: finn.kernels.channels.Channel = Param(required=False)
     schedule: Schedule | None = Param(default=None, semantics=OPTIONAL_SCHEDULE)
     index: tuple[Index | Affine, ...] = Param(default=())
     lanes: tuple[Index, ...] = Param(default=())

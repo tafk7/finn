@@ -94,15 +94,16 @@ def test_each_missing_or_refused_fact_is_named() -> None:
 
 def test_the_schema_is_the_node_roots_decision_keys() -> None:
     schema = MatMul.schema()
-    assert len(schema) == 33
-    assert sum(kind == "s" for kind, _ in schema.values()) == 25
+    assert len(schema) == 39
+    assert sum(kind == "s" for kind, _ in schema.values()) == 29
     assert schema["compute"] == ("s", ("packed", "int8_dsp58"))
     assert schema["compute.packed.pe"] == ("i", ())
     assert schema["compute.packed.compute_pumping"] == ("i", ())
     assert schema["compute.packed.reducer"] == ("s", ())
-    # Input and owned streams' keys under the op's port names; the output's are its consumer's.
+    # Each channel's keys under the op's port names: the output's are its producer's where
+    # no KernelOp consumes it (a graph output).
     assert "w.transport" in schema and any(name.startswith("x.adapter") for name in schema)
-    assert not any(name.startswith("y.") for name in schema)
+    assert {"x.transport", "y.transport"} <= set(schema)
     # The weights' source is the weight stream's: its keys sit under the port name.
     assert schema["w.source"] == ("s", ("memstream",))
     assert schema["w.source.memstream.ram_style"] == ("s", ())
@@ -121,7 +122,7 @@ def schema_digest(cls: type[KernelOp]) -> str:
 def test_the_schema_is_pinned_for_its_op_version() -> None:
     """Changing a kernel's or a stream's keys changes the schema. Unreleased, the digest
     is re-pinned without an op-version bump (clean breaks)."""
-    assert (MatMul.op_version, schema_digest(MatMul)) == (1, "cabeb8d975ca6f2f")
+    assert (MatMul.op_version, schema_digest(MatMul)) == (1, "f7fe5ce3d719625e")
 
 
 # -- persistence ------------------------------------------------------------------------

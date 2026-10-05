@@ -53,10 +53,10 @@ from finn.core.space import (
 from finn.dataflow.datatypes import DatatypeError, QONNXDataType, ordinary_integer_bounds
 from finn.dataflow.gemm import Form, k, m, n
 from finn.dataflow.schedule import Index, Schedule
-from finn.dataflow.stream import Stream
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.base import Clocking, Kernel, extent_of
+from finn.kernels.channels import Channel
 from finn.kernels.datatypes.domains import Integer
 from finn.kernels.datatypes.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
 from finn.kernels.port import AxiStreamPort
@@ -91,10 +91,10 @@ class DotpAxiKernel(Kernel):
     # result type), so that it is known before the results stream exists.
     result_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
     platform: Platform = Param()
-    # The streams dotp sits on: reference inputs, each a Stream placed beside it.
-    x_stream: Stream = Param(required=False)
-    w_stream: Stream = Param(required=False)
-    y_stream: Stream = Param(required=False)
+    # The streams dotp sits on: reference inputs, each a Channel placed beside it.
+    x_stream: Channel = Param(required=False)
+    w_stream: Channel = Param(required=False)
+    y_stream: Channel = Param(required=False)
 
     # Each extent bound from the tensors the ports read (``Kernel.extents``).
     rows = extent_of(m)  # M: the results' rows
