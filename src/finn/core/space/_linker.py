@@ -27,6 +27,7 @@ from ._bindings import (
     declared_layer,
     supply_text,
 )
+from ._check import check
 from ._collapse import collapse
 from ._configuration import Space
 from ._graph import dependency_order
@@ -41,7 +42,7 @@ from ._nodes import (
     slot_kind,
     unwrap,
 )
-from ._signatures import BoundFunction, validate_argument
+from ._signatures import BoundFunction
 from ._table import (
     BOOL,
     STRING,
@@ -1270,16 +1271,6 @@ class _Linker:
                 function=evaluator(task.operator),
             )
 
-    def check_expression_semantics(self) -> None:
-        """Resolve integer operand types after linked aliases have their semantics."""
-        for task in self.table.expression_tasks:
-            node = self.table.nodes[task.index]
-            operands = (self.table.nodes[arg.node].semantics for arg in node.arguments)
-            if any(semantics is None or semantics.type_token is not int for semantics in operands):
-                raise DefinitionError(
-                    f"{node.owner}: integer expression operands require int value semantics"
-                )
-
     # -- members ------------------------------------------------------------------------
 
     def arguments(self, scope: int, function: BoundFunction, *, owner: str) -> tuple[Argument, ...]:
@@ -1561,82 +1552,6 @@ class _Linker:
             node = replace(node, output=self.reference(scope.index, anonymous, owner=node.key))
         self.table.nodes[node.index] = node
 
-    # -- validation -----------------------------------------------------------------------
-
-    def check_semantics(self, order: tuple[int, ...]) -> None:
-        for index in order:
-            node = self.table.nodes[index]
-            if node.kind in {"view", "alias"} and node.output is not None:
-                output = self.table.nodes[node.output].semantics
-                if output is None:
-                    raise DefinitionError(f"{node.key}: output has no value semantics")
-                if node.semantics is not None and not node.semantics.is_compatible_with(output):
-                    raise DefinitionError(f"{node.key}: output has incompatible value semantics")
-                if node.semantics is None:
-                    self.table.nodes[index] = node = replace(node, semantics=output)
-            if node.kind in {"present", "select"} and node.semantics is None and node.alternatives:
-                # Like an alias, these take their sources' linked semantics.
-                self.table.nodes[index] = node = replace(
-                    node, semantics=self.table.nodes[node.alternatives[0][1]].semantics
-                )
-            if node.kind in {"select", "present"}:
-                for _, target in node.alternatives:
-                    semantics = self.table.nodes[target].semantics
-                    if (
-                        node.semantics is None
-                        or semantics is None
-                        or not node.semantics.is_compatible_with(semantics)
-                    ):
-                        if index in self.table.shared and self.drop_shared(index):
-                            break
-                        raise DefinitionError(
-                            f"{node.key}: alternatives have incompatible value semantics"
-                        )
-            if node.guard is not None:
-                semantics = self.table.nodes[node.guard].semantics
-                if semantics is None or not semantics.is_compatible_with(BOOL):
-                    raise DefinitionError(
-                        f"{node.key}: applicability requires Boolean value semantics"
-                    )
-            if node.kind == "guard" and node.output is not None:
-                semantics = self.table.nodes[node.output].semantics
-                if semantics is None or not semantics.is_compatible_with(BOOL):
-                    raise DefinitionError(
-                        f"{node.key}: applicability requires Boolean value semantics"
-                    )
-        for dependency, target, owner in self.table.argument_checks:
-            semantics = self.table.nodes[target].semantics
-            if semantics is None:
-                raise DefinitionError(f"{owner}: dependency has no value semantics")
-            validate_argument(dependency, semantics, owner=owner)
-        for draft in self.table.drafts:
-            exported = [
-                (export, draft.members[declaration])
-                for export, declaration in draft.effective.exports.items()
-            ]
-            exported += [
-                (export, target)
-                for export, entries in draft.input_exports.items()
-                for _, target in entries
-            ]
-            for export, target in exported:
-                semantics = self.table.nodes[target].semantics
-                if semantics is None or not export.semantics.is_compatible_with(semantics):
-                    raise DefinitionError(
-                        f"{draft.name}: export {export.name} has incompatible semantics"
-                    )
-
-    def drop_shared(self, index: int) -> bool:
-        """An unreferenced shared member whose candidates disagree on its type."""
-        choice, member = self.table.shared.pop(index)
-        if any(index in node.dependencies for node in self.table.nodes):
-            return False  # a declaration reads it: the disagreement is an error
-        del self.table.choice_drafts[choice].members[member]
-        self.table.nodes[index] = replace(
-            self.table.nodes[index], alternatives=(), semantics=STRING
-        )
-        return True
-
     def build(self) -> LinkedModel:
         """Prepare templates, allocate occurrences, lower edges, then validate/freeze."""
         self.check_recursion()
@@ -1656,8 +1571,7 @@ class _Linker:
             tuple(node.dependencies for node in self.table.nodes),
             tuple(node.key for node in self.table.nodes),
         )
-        self.check_semantics(order)
-        self.check_expression_semantics()
+        check(self.table, order)
         forward = collapse(self.table.nodes, order)
         choices = tuple(choice.freeze() for choice in self.table.choice_drafts)
         nodes = tuple(self.table.nodes)
