@@ -42,7 +42,14 @@ from .domains import Domain, Requirement, finite, requiring
 from .errors import DefinitionError, ReferenceUseError
 from .graph import LOCATED, Located
 from .results import NonValue, QueryResult, marked_value_type
-from .semantics import ValueSemantics, default_semantics, semantics_for
+from .semantics import (
+    ValueSemantics,
+    default_semantics,
+    recognize,
+    semantics_for,
+    snapshot,
+    unrecognized,
+)
 
 if TYPE_CHECKING:
     from ._configuration import Space
@@ -437,10 +444,13 @@ class Param(ValueDecl[T], Generic[T]):
         else:
             semantics = annotation_semantics(annotation, self.explicit, label)
             if self.default not in (MISSING, UNSUPPLIED):
-                try:
-                    self.default = semantics.freeze(self.default)
-                except (TypeError, ValueError) as error:
-                    raise DefinitionError(f"{label}: invalid formal default: {error}") from error
+                if not recognize(semantics, self.default, owner=label, role="default recognition"):
+                    raise DefinitionError(
+                        f"{label}: invalid formal default: {unrecognized(semantics)}"
+                    )
+                self.default = snapshot(
+                    semantics, self.default, owner=label, role="default snapshot"
+                )
             self.semantics = semantics
         self.resolved = True
         return self
@@ -533,7 +543,10 @@ class Const(ValueDecl[T], Generic[T]):
 
     def __init__(self, value: T, *, semantics: ValueSemantics[T] | None = None) -> None:
         self.semantics = semantics if semantics is not None else semantics_for(type(value))
-        self.value = self.semantics.freeze(value)
+        label = f"Const{at(self.origin)}"
+        if not recognize(self.semantics, value, owner=label, role="constant recognition"):
+            raise DefinitionError(f"{label}: {unrecognized(self.semantics)}")
+        self.value = snapshot(self.semantics, value, owner=label, role="constant snapshot")
 
 
 Guard: TypeAlias = "ValueRef[bool] | bool | None"
@@ -1276,22 +1289,31 @@ def _attribute_type(owner: object, name: str) -> object:
         return MISSING
     # A dataclass field without a default is annotated but no class attribute.
     attribute = inspect.getattr_static(owner, name, None)
-    try:
-        if isinstance(attribute, property) and attribute.fget is not None:
-            return get_type_hints(attribute.fget, include_extras=True).get("return", MISSING)
-        return get_type_hints(owner, include_extras=True).get(name, MISSING)
-    except Exception:
-        return MISSING
+    if isinstance(attribute, property) and attribute.fget is not None:
+        return _hints(attribute.fget, name, include_extras=True).get("return", MISSING)
+    return _hints(owner, name, include_extras=True).get(name, MISSING)
 
 
-def _returned_type(function: Callable[..., object]) -> object:
-    """``T`` of a ``T`` or ``T | Rejected`` return annotation; None when unresolvable."""
-    try:
-        annotation = get_type_hints(function).get("return")
-    except Exception:
-        return None
+def _returned_type(function: Callable[..., object], name: str) -> object:
+    """``T`` of a ``T`` or ``T | Rejected`` return annotation."""
+    annotation = _hints(function, name, include_extras=False).get("return")
     marked = marked_value_type(annotation)
     return marked if marked is not None else annotation
+
+
+def _hints(annotated: object, name: str, *, include_extras: bool) -> dict[str, object]:
+    """``annotated``'s resolved annotations; unresolvable ones leave ``name`` unprojectable.
+
+    The failure stays an ``AttributeError`` (introspection is unaffected) that
+    names the annotations and why they do not resolve.
+    """
+    try:
+        return get_type_hints(annotated, include_extras=include_extras)
+    except (NameError, SyntaxError, TypeError) as cause:
+        label = getattr(annotated, "__qualname__", repr(annotated))
+        raise AttributeError(
+            f"{name}: cannot resolve the annotations of {label}: {cause}"
+        ) from cause
 
 
 def project(source: ValueRef[Any], name: str) -> Projection[Any]:
@@ -1300,13 +1322,15 @@ def project(source: ValueRef[Any], name: str) -> Projection[Any]:
     Only an attribute the value's type annotates projects; anything else is
     the ordinary ``AttributeError``, so introspection stays unaffected.
     """
+    if name.startswith("_"):
+        raise AttributeError(name)
     semantics = source.semantics
     token = None if semantics is None else semantics.type_token
     if token is None and isinstance(source, Derived) and source.function is not None:
         # No semantics= yet: the value type the return annotation names (``T | Rejected``).
-        token = _returned_type(source.function)
+        token = _returned_type(source.function, name)
     token = get_origin(token) or token
-    if name.startswith("_") or not isinstance(token, type):
+    if not isinstance(token, type):
         raise AttributeError(name)
     annotation = _attribute_type(token, name)
     if annotation is MISSING:

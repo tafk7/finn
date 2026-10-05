@@ -62,6 +62,18 @@ def _supply(formal: Param[object]) -> Callable[..., object]:
     return supplied
 
 
+def _constant(semantics: ValueSemantics[object], constant: Const[object], *, owner: str) -> object:
+    """The model's own snapshot of a constant, detached from its declaration.
+
+    ``Const`` snapshots its value when declared; a compiled model takes another,
+    so a later change to the declaration's value never reaches it.
+    """
+    try:
+        return semantics.freeze(constant.value)
+    except Exception as cause:
+        raise DefinitionError(f"{owner}: constant snapshot failed") from cause
+
+
 class _Lowering:
     def __init__(self, table: Table) -> None:
         self.table = table
@@ -113,11 +125,10 @@ class _Lowering:
                         semantics,
                         source_owner=task.owner,
                     )
-                    try:
-                        value = semantics.freeze(operand.value)
-                    except Exception as cause:
-                        raise DefinitionError(f"{task.owner}: constant snapshot failed") from cause
-                    self.table.nodes[target] = replace(self.table.nodes[target], value=value)
+                    self.table.nodes[target] = replace(
+                        self.table.nodes[target],
+                        value=_constant(semantics, operand, owner=task.owner),
+                    )
                 elif isinstance(operand, ValueRef):
                     target = self.names.reference(task.scope, operand, owner=task.owner)
                 else:
@@ -340,10 +351,7 @@ class _Lowering:
             changes["required"] = declaration.required
         elif isinstance(declaration, Const):
             assert node.semantics is not None
-            try:
-                changes["value"] = node.semantics.freeze(declaration.value)
-            except Exception as cause:
-                raise DefinitionError(f"{node.key}: constant snapshot failed") from cause
+            changes["value"] = _constant(node.semantics, declaration, owner=node.key)
         elif isinstance(declaration, Decision):
             assert node.semantics is not None
             changes["domain"], changes["domain_arguments"] = self.domain(
