@@ -307,10 +307,15 @@ def declared_annotation(declaration: Declaration, kind: str) -> object:
     try:
         return eval(annotation, dict(globals_), dict(locals_))  # noqa: S307 - authored annotation
     except Exception as cause:
-        raise DefinitionError(
+        raise PendingAnnotation(
             f"{_describe_formal(declaration, kind)}: cannot resolve the annotation "
             f"{annotation!r}: {cause}"
         ) from cause
+
+
+class PendingAnnotation(DefinitionError):
+    """An annotation that does not resolve yet: it names a family still being defined
+    (across an import cycle), or a name that does not exist, which collection reports."""
 
 
 def _unannotated(declaration: Declaration, kind: str) -> DefinitionError:
@@ -491,6 +496,11 @@ class Param(ValueDecl[T], Generic[T]):
                 raise AttributeError(name)
             try:
                 family = self.reference_family()
+            except PendingAnnotation:
+                raise AttributeError(
+                    f"{name}: the reference's annotation does not resolve yet (its family is "
+                    "still being defined); read the member in a method"
+                ) from None
             except DefinitionError:
                 raise AttributeError(name) from None
             if family is None:

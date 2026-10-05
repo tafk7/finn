@@ -31,6 +31,7 @@ from kernels.helpers import (
     matmul_root,
     placed,
     with_adapter_memories,
+    with_direct_transports,
 )
 
 FACTS = dict(
@@ -55,7 +56,9 @@ def point(core="int8_dsp58", **facts):
         **({"matmul.compute.packed.reducer": "tree"} if core == "packed" else {}),
     }
     native = "native" if facts["form"] is Form.DEPTHWISE else None
-    return with_adapter_memories(commit(matmul_point(realization=native, **facts), choices))
+    return with_direct_transports(
+        with_adapter_memories(commit(matmul_point(realization=native, **facts), choices))
+    )
 
 
 def parameters(module, label):
@@ -153,20 +156,22 @@ def test_one_root_carries_the_weights_of_whichever_realization_is_committed():
         committed = commit(point, {"matmul.realization": realization})
         assert committed.w.tensor.shape == shape
         # The realization and the source's choices commit in one batch.
-        built = with_adapter_memories(
-            commit(
-                point,
-                {
-                    "matmul.realization": realization,
-                    "w.transport": "direct",
-                    "matmul.compute": core,
-                    f"matmul.compute.{core}.pe": 2,
-                    f"matmul.compute.{core}.simd": 3,
-                    f"matmul.compute.{core}.compute_pumping": False,
-                    **({"matmul.compute.packed.reducer": "tree"} if core == "packed" else {}),
-                    "w.source.memstream.ram_style": "auto",
-                    "w.source.memstream.pumped_memory": False,
-                },
+        built = with_direct_transports(
+            with_adapter_memories(
+                commit(
+                    point,
+                    {
+                        "matmul.realization": realization,
+                        "w.transport": "direct",
+                        "matmul.compute": core,
+                        f"matmul.compute.{core}.pe": 2,
+                        f"matmul.compute.{core}.simd": 3,
+                        f"matmul.compute.{core}.compute_pumping": False,
+                        **({"matmul.compute.packed.reducer": "tree"} if core == "packed" else {}),
+                        "w.source.memstream.ram_style": "auto",
+                        "w.source.memstream.pumped_memory": False,
+                    },
+                )
             )
         ).query(Kernel.module)
         assert isinstance(built, Available), built

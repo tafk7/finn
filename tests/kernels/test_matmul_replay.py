@@ -31,6 +31,7 @@ from kernels.helpers import (
     matmul_point,
     placed,
     with_adapter_memories,
+    with_direct_transports,
 )
 
 FACTS = dict(
@@ -113,7 +114,7 @@ def test_one_output_fold_and_one_beat_frames_close_every_beat():
 
 def test_the_adapter_s_memory_is_a_choice_of_the_stream():
     point = commit(matmul_point(**FACTS), CHOICES)
-    configured = with_adapter_memories(point, ram_style="distributed")
+    configured = with_direct_transports(with_adapter_memories(point, ram_style="distributed"))
     (generator,) = [stage for stage in configured.x.stages]
     assert generator.module is not None
     assert dict(generator.module.parameters)["RAM_STYLE"] == '"distributed"'

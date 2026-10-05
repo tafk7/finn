@@ -17,11 +17,11 @@ from finn.dataflow.traversal import vector_major
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.module import Leaf
 from finn.kernels.base import PORT
+from finn.kernels.channels import Channel
 from finn.kernels.configure import commit
 from finn.kernels.dotp import PackedDotpKernel
-from finn.kernels.streams import BufferedStream, Stream
 from finn.kernels.transport import STREAM_CONTRACT, AxiStream, StreamContract
-from kernels.helpers import FULL_DSP48E2, with_adapter_memories
+from kernels.helpers import FULL_DSP48E2, with_adapter_memories, with_direct_transports
 
 INT3, INT8 = DataType["INT3"], DataType["INT8"]
 
@@ -29,11 +29,9 @@ INT3, INT8 = DataType["INT3"], DataType["INT8"]
 class Placed(Space):
     """dotp between boundary streams: three rows of four, four outputs, PE = SIMD = 2."""
 
-    x = Stream(tensor=Tensor((3, 4), ScalarEncoding(INT3)), port="in0_V", platform=FULL_DSP48E2)
-    w = BufferedStream(
-        platform=FULL_DSP48E2, tensor=Tensor((4, 4), ScalarEncoding(INT3)), port="in1_V"
-    )
-    y = Stream(tensor=Tensor((3, 4), ScalarEncoding(INT8)), port="out0_V", platform=FULL_DSP48E2)
+    x = Channel(tensor=Tensor((3, 4), ScalarEncoding(INT3)), port="in0_V", platform=FULL_DSP48E2)
+    w = Channel(platform=FULL_DSP48E2, tensor=Tensor((4, 4), ScalarEncoding(INT3)), port="in1_V")
+    y = Channel(tensor=Tensor((3, 4), ScalarEncoding(INT8)), port="out0_V", platform=FULL_DSP48E2)
     compute = PackedDotpKernel(
         result_dtype=INT8,
         x_stream=x,
@@ -51,7 +49,7 @@ def placed(**transport: object) -> Placed:
         "compute.reducer": "tree",
         **transport,
     }
-    return with_adapter_memories(commit(design_space(Placed()), choices))
+    return with_adapter_memories(commit(with_direct_transports(design_space(Placed())), choices))
 
 
 def test_an_adapted_stream_places_its_stage_and_wires_each_hop() -> None:
@@ -94,9 +92,11 @@ def test_a_boundary_no_port_names_is_refused() -> None:
     ONNX input or output of a partition is one (D4)."""
 
     class Unnamed(Space):
-        x = Stream(tensor=Tensor((3, 4), ScalarEncoding(INT3)), port="in0_V", platform=FULL_DSP48E2)
-        w = BufferedStream(tensor=Tensor((4, 4), ScalarEncoding(INT3)), platform=FULL_DSP48E2)
-        y = Stream(
+        x = Channel(
+            tensor=Tensor((3, 4), ScalarEncoding(INT3)), port="in0_V", platform=FULL_DSP48E2
+        )
+        w = Channel(tensor=Tensor((4, 4), ScalarEncoding(INT3)), platform=FULL_DSP48E2)
+        y = Channel(
             platform=FULL_DSP48E2, tensor=Tensor((3, 4), ScalarEncoding(INT8)), port="out0_V"
         )
         compute = PackedDotpKernel(
@@ -113,7 +113,7 @@ def test_a_boundary_no_port_names_is_refused() -> None:
         "compute.compute_pumping": False,
         "compute.reducer": "tree",
     }
-    refused = commit(design_space(Unnamed()), folding).w.query(Stream.endpoints)
+    refused = commit(design_space(Unnamed()), folding).w.query(Channel.endpoints)
     assert isinstance(refused, Rejected)
     assert {(item.code, item.owner) for item in refused.findings} == {
         ("stream-boundary", "w.endpoints")
@@ -125,7 +125,7 @@ def test_a_boundary_no_port_names_is_refused() -> None:
 class Reader(Space):
     """A consumer that exports its end itself, not through a kernel's port."""
 
-    input_stream: Stream = Param()
+    input_stream: Channel = Param()
 
     @view(semantics=STREAM_CONTRACT)
     def port(self) -> StreamContract:
@@ -138,13 +138,13 @@ class Reader(Space):
 
 def test_a_user_that_is_no_kernels_port_has_no_netlist() -> None:
     class Bare(Space):
-        edge = Stream(
+        edge = Channel(
             platform=FULL_DSP48E2, tensor=Tensor((3, 4), ScalarEncoding(INT3)), port="in0_V"
         )
         reader = Reader(input_stream=edge)
 
-    point = design_space(Bare())
+    point = with_direct_transports(design_space(Bare()))
     assert point.edge.users[0].node == "reader"
-    refused = point.edge.query(Stream.netlist)
+    refused = point.edge.query(Channel.netlist)
     assert isinstance(refused, Rejected)
     assert {finding.code for finding in refused.findings} == {"stream-user"}

@@ -8,7 +8,7 @@ outside this repository until the package is final.
 
 | Module | Holds |
 |---|---|
-| `base.py`, `port.py`, `streams.py`, `adapters.py` | the kernel base (a leaf, or a kernel with children; its clocking), `AxiStreamPort`, streams and the adapters planned between them |
+| `base.py`, `port.py`, `channels.py`, `adapters.py` | the kernel base (a leaf, or a kernel with children; its clocking), `AxiStreamPort`, the `Channel` (one Space per edge: its plan, adapter, transport and source) and the adapters planned between them |
 | `dotp.py`, `matmul.py`, `thresholding.py`, `eltwise.py`, `fifo.py`, `memstream.py`, `input_generator.py`, `transpose.py`, `vpc.py` | the kernels |
 | `configure.py` | committing and settling choices by key |
 | `control.py`, `target.py` | control buses, and target DSP blocks |

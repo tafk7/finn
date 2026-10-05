@@ -45,7 +45,7 @@ from finn.dataflow.datatypes import (
 )
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.base import Kernel
-from finn.kernels.streams import Stream
+from finn.kernels.channels import Channel
 from finn.kernels.thresholding import ThresholdingAxiKernel
 
 
@@ -133,7 +133,7 @@ class Thresholding(KernelOp):
         dims = shape(self.model(), self.onnx_node.input[0], self.label)
         return {self.onnx_node.output[0]: (dims, result.element.dtype)}
 
-    def place(self, streams: Mapping[str, Stream]) -> tuple[Kernel, dict[str, str]]:
+    def place(self, streams: Mapping[str, Channel]) -> tuple[Kernel, dict[str, str]]:
         formals: dict[str, Any] = self.facts().formals()
         del formals["x_tensor"]
         x = self.onnx_node.input[0]

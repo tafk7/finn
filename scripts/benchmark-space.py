@@ -545,7 +545,7 @@ def kernel_fixtures(api):
         kernels.PackedDotpKernel,
         kernels.commit,
     )
-    Stream = importlib.import_module("finn.kernels.streams").Stream
+    Channel = importlib.import_module("finn.kernels.channels").Channel
     tensor = importlib.import_module("finn.dataflow.tensor")
     Tensor, ScalarEncoding = tensor.Tensor, tensor.ScalarEncoding
     dtype = importlib.import_module("finn.dataflow.datatypes").resolve_qonnx_datatype_name
@@ -563,9 +563,9 @@ def kernel_fixtures(api):
 
     def streams(x, w, y):
         return {
-            "x": Stream(tensor=x, port="in0_V", platform=platform),
-            "w": Stream(tensor=w, port="in1_V", platform=platform),
-            "y": Stream(tensor=y, port="out0_V", platform=platform),
+            "x": Channel(tensor=x, port="in0_V", platform=platform),
+            "w": Channel(tensor=w, port="in1_V", platform=platform),
+            "y": Channel(tensor=y, port="out0_V", platform=platform),
         }
 
     # A dot-product core between three boundary streams.

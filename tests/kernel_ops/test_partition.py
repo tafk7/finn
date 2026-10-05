@@ -24,11 +24,11 @@ from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.core.onnx_exec import execute_onnx
 from qonnx.transformation.infer_shapes import InferShapes
 
+from finn.core.space import inspection
 from finn.custom_op.kernels.base import KernelOpError
 from finn.custom_op.kernels.partition import PartitionRoot, partition_root, save_partition_choices
 from finn.custom_op.kernels.roots import StreamedMatMulNode
 from finn.kernels.configure import commit, undecided
-from finn.kernels.streams import BufferedStream
 from finn.transformation.kernels import InferKernelTensors, ToKernelOps
 from kernel_ops.models import INT3, TARGET, chain_source, lift, matmul_model
 
@@ -41,6 +41,7 @@ MATMUL = {
     "w.source.memstream.ram_style": "auto",
     "w.source.memstream.pumped_memory": False,
     "w.transport": "direct",
+    "x.transport": "direct",
 }
 THRESHOLDING = {
     "pe": chain.PE,
@@ -48,6 +49,7 @@ THRESHOLDING = {
     "deep_pipeline": False,
     "ram_style": "auto",
     "ultra_stages": 0,
+    "x.transport": "direct",
 }
 
 
@@ -65,6 +67,9 @@ def kernel_model(**options: bool) -> ModelWrapper:
             # Streamed weights: no value, so no source; the weight edge's transport is
             # the root's.
             choices = {k: v for k, v in choices.items() if not k.startswith("w.source.")}
+        if node.output[0] in {output.name for output in model.graph.output}:
+            # A graph output: no KernelOp consumes it, so its producer owns its transport.
+            choices = {**choices, "y.transport": "direct"}
         model.get_customop_wrapper(node).save(choices)
     return model
 
@@ -146,14 +151,37 @@ def test_a_partition_has_ports_for_its_onnx_inputs_and_outputs_only() -> None:
     ]
 
 
+def test_an_edge_between_partitions_has_one_transport_its_consumers() -> None:
+    """``levels`` leaves the front partition for a KernelOp of the back one (D8, case 3):
+    the back partition's input boundary, its transport its consumer's; the front pins it
+    ``direct``, owns nothing of it, and drops a producer's transport set while the edge
+    left the graph."""
+    model = kernel_model()
+    front = partition_root(model, model.graph.node[:2], name="front")
+    back = partition_root(model, model.graph.node[2:], name="back")
+    assert ("levels", "m_axis_0") in front.boundary and ("levels", "s_axis_0") in back.boundary
+    point = front.point
+    assert point.levels.query(type(point.levels).transport).value == "direct"
+    assert "levels" not in front.owners and back.owners["levels"] == ("second", "x.")
+    with pytest.raises(KernelOpError, match="no node of the partition owns levels"):
+        save_partition_choices(model, front, {"levels.transport": "fifo"})
+    written = save_partition_choices(model, back, {"levels.transport": "fifo"})
+    assert written == {"second": {"x.transport": "fifo"}}
+
+    model.get_customop_wrapper(model.graph.node[1]).save({"y.transport": "fifo"})
+    assert partition_root(model, model.graph.node[:2], name="front").dropped == (
+        "levels.transport",
+    )
+
+
 def test_streamed_weights_are_a_boundary_of_the_partition() -> None:
     model = kernel_model(second_weights=False)
     root = partition_root(model, model.graph.node, name="chain")
     assert root.boundary == (("x", "s_axis_0"), ("w2", "s_axis_1"), ("y", "m_axis_0"))
     assert root.owners["w2"] == ("second", "w.")
-    # MatMul names its weight port buffered: the weight edge, not x, has a transport.
-    assert isinstance(root.point.w2, BufferedStream)
-    assert not isinstance(root.point.x, BufferedStream)
+    # Every channel has a transport, the weight edge's as x's: each its consumer's.
+    keys = {decision.key for decision in inspection.decisions(root.point)}
+    assert {"w2.transport", "x.transport"} <= keys
 
 
 def test_the_owner_map() -> None:
@@ -167,6 +195,7 @@ def test_the_owner_map() -> None:
         "second": ("second", ""),
         "levels": ("second", "x."),
         "w2": ("second", "w."),
+        "y": ("second", "y."),
     }
 
 

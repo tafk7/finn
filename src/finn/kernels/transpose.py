@@ -28,9 +28,9 @@ from finn.dataflow.schedule import Index, Schedule
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.base import NATIVE_CLOCKING, Clocking, Kernel, extent_of
+from finn.kernels.channels import Channel
 from finn.kernels.datatypes.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
 from finn.kernels.port import AxiStreamPort
-from finn.kernels.streams import Stream
 
 i, j = Index("i"), Index("j")
 
@@ -61,8 +61,8 @@ class TransposeKernel(Kernel):
     version = 1
     rtl_module = "inner_shuffle"
 
-    input_stream: Stream = Param(required=False)
-    output_stream: Stream = Param(required=False)
+    input_stream: Channel = Param(required=False)
+    output_stream: Channel = Param(required=False)
     ram_style: str = Decision(values=("auto", "distributed", "block", "ultra"))
 
     rows = extent_of(i)  # I

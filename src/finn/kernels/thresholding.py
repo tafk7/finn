@@ -76,6 +76,7 @@ from finn.kernels.artifacts.abi import Bus, Endpoint, Member, Signal, StandardPr
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.artifacts.module import Held
 from finn.kernels.base import Kernel
+from finn.kernels.channels import Channel
 from finn.kernels.control import CONTROL, Control, ControlBus, held_bus
 from finn.kernels.datatypes.domains import Integer, set_index_dtype
 from finn.kernels.datatypes.semantics import (
@@ -84,7 +85,6 @@ from finn.kernels.datatypes.semantics import (
     ThresholdTable,
 )
 from finn.kernels.port import AxiStreamPort
-from finn.kernels.streams import Stream
 from finn.kernels.target import Platform
 
 c = Index("c")
@@ -153,9 +153,9 @@ class ThresholdingAxiKernel(Kernel):
     pe: int = Decision(domain=divisors_of(channels))
     # Where a parent places it: its streams, and the control
     # bus that exports its AXI-Lite interface when thresholds are runtime-writable.
-    input_stream: Stream = Param(required=False)
-    output_stream: Stream = Param(required=False)
-    set_stream: Stream = Param(required=False)
+    input_stream: Channel = Param(required=False)
+    output_stream: Channel = Param(required=False)
+    set_stream: Channel = Param(required=False)
     control: ControlBus = Param(required=False)
     platform: Platform = Param()
     use_axilite: bool = Decision(

@@ -21,12 +21,18 @@ from finn.core.space import Rejected, design_space, inspection
 from finn.dataflow.plan import Step
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import Traversal, vector_major
+from finn.kernels.channels import Channel
 from finn.kernels.configure import commit
 from finn.kernels.memstream import MemStreamKernel
-from finn.kernels.streams import Stream
 from finn.kernels.thresholding import ThresholdingAxiKernel
 from finn.kernels.transpose import TransposeKernel
-from kernels.helpers import FULL_DSP48E2, Root, labels, with_adapter_memories
+from kernels.helpers import (
+    FULL_DSP48E2,
+    Root,
+    labels,
+    with_adapter_memories,
+    with_direct_transports,
+)
 
 ELEMENT = ScalarEncoding(DataType["INT4"])
 ROWS, CHANNELS = 3, 12
@@ -47,8 +53,10 @@ def adapted(source: Traversal, pe: int, *, adaptable: bool = True, commit_all: b
     rows, channels = source.shape
 
     class Adapted(Root):
-        x = Stream(tensor=Tensor(source.shape, ELEMENT), adaptable=adaptable, platform=FULL_DSP48E2)
-        y = Stream(
+        x = Channel(
+            tensor=Tensor(source.shape, ELEMENT), adaptable=adaptable, platform=FULL_DSP48E2
+        )
+        y = Channel(
             tensor=Tensor(source.shape, ScalarEncoding(DataType["UINT4"])),
             port="out0_V",
             platform=FULL_DSP48E2,
@@ -74,7 +82,7 @@ def adapted(source: Traversal, pe: int, *, adaptable: bool = True, commit_all: b
         )
 
     point = commit(
-        design_space(Adapted()),
+        with_direct_transports(design_space(Adapted())),
         {
             "producer.ram_style": "distributed",
             "producer.pumped_memory": False,
@@ -97,11 +105,12 @@ def transposed(rows: int, cols: int, simd: int, batches: int = 2):
     shape = (batches, rows, cols)
 
     class Transposed(Root):
-        a = Stream(tensor=Tensor(shape, ELEMENT), port="in0_V", platform=FULL_DSP48E2)
-        b = Stream(tensor=Tensor(shape, ELEMENT), port="out0_V", platform=FULL_DSP48E2)
+        a = Channel(tensor=Tensor(shape, ELEMENT), port="in0_V", platform=FULL_DSP48E2)
+        b = Channel(tensor=Tensor(shape, ELEMENT), port="out0_V", platform=FULL_DSP48E2)
         shuffle = TransposeKernel(input_stream=a, output_stream=b)
 
-    return commit(design_space(Transposed()), {"shuffle.ram_style": "auto", "shuffle.simd": simd})
+    point = with_direct_transports(design_space(Transposed()))
+    return commit(point, {"shuffle.ram_style": "auto", "shuffle.simd": simd})
 
 
 def stage_parameters(point):
@@ -178,7 +187,7 @@ def test_exactly_one_candidate_carries_out_each_plan():
 
 def test_a_stream_admitting_no_adapter_refuses_its_plan():
     point = adapted(vector_major((ROWS, CHANNELS), 4), 2, adaptable=False)
-    refused = point.x.query(Stream.netlist)
+    refused = point.x.query(Channel.netlist)
     assert isinstance(refused, Rejected)
     plan = [finding for finding in refused.findings if finding.code == "stream-plan"]
     assert plan and "width_conversion" in plan[0].message

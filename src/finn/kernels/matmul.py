@@ -74,6 +74,7 @@ from finn.dataflow.datatypes import (
 from finn.dataflow.gemm import Form
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.base import Kernel
+from finn.kernels.channels import Channel
 from finn.kernels.datatypes.domains import set_index_dtype
 from finn.kernels.datatypes.semantics import (
     INTEGER_TENSOR,
@@ -82,7 +83,6 @@ from finn.kernels.datatypes.semantics import (
     integer_range,
 )
 from finn.kernels.dotp import Int8Dsp58DotpKernel, PackedDotpKernel
-from finn.kernels.streams import Stream
 from finn.kernels.target import Platform
 
 _CARRIED = (
@@ -248,9 +248,9 @@ class MatMulKernel(Kernel):
         return self._tensor((self.m,), set_index_dtype(self.weight_sets))
 
     # The streams it sits on, supplied by its parent.
-    x_stream: Stream = Param(required=False)
-    w_stream: Stream = Param(required=False)
-    y_stream: Stream = Param(required=False)
+    x_stream: Channel = Param(required=False)
+    w_stream: Channel = Param(required=False)
+    y_stream: Channel = Param(required=False)
 
     @constraint
     def carried(self) -> bool | Rejected:

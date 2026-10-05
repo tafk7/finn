@@ -29,10 +29,10 @@ from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, LevelEnd, vector_major
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.base import PORT, Kernel
+from finn.kernels.channels import Channel, boundary_contract
 from finn.kernels.memstream import MemStreamKernel
-from finn.kernels.streams import Stream, boundary_contract
 from finn.kernels.transport import STREAM_CONTRACT, AxiStream, StreamContract
-from kernels.helpers import FULL_DSP48E2, Root
+from kernels.helpers import FULL_DSP48E2, Root, with_direct_transports
 
 INT4 = ScalarEncoding(DataType["INT4"])
 PRODUCED = vector_major((4,), 2)
@@ -45,8 +45,8 @@ class Constants(Root):
     first_tensor: Tensor = Param()
     second_tensor: Tensor = Param()
     # Each stream has only its producer: it is a boundary, named by its port.
-    first = Stream(tensor=first_tensor, port="out0_V", platform=FULL_DSP48E2)
-    second = Stream(tensor=second_tensor, port="out1_V", platform=FULL_DSP48E2)
+    first = Channel(tensor=first_tensor, port="out0_V", platform=FULL_DSP48E2)
+    second = Channel(tensor=second_tensor, port="out1_V", platform=FULL_DSP48E2)
 
     first_source = MemStreamKernel(
         dtype=DataType["INT4"],
@@ -65,7 +65,9 @@ class Constants(Root):
 
 
 def constants(first=VECTOR, second=VECTOR):
-    point = design_space(Constants(first_tensor=first, second_tensor=second))
+    point = with_direct_transports(
+        design_space(Constants(first_tensor=first, second_tensor=second))
+    )
     return point.with_choices(
         point.first_source.field(MemStreamKernel.ram_style).change("auto"),
         point.first_source.field(MemStreamKernel.pumped_memory).change(False),
@@ -94,8 +96,8 @@ def test_each_stream_owns_its_refusal_and_independent_refusals_are_all_visible()
     assert {f.code for f in refusal.findings} == {"stream-tensor"}
     # One stream refusing leaves the other stream's netlist accepted.
     mixed = constants(first=wide)
-    assert isinstance(mixed.first.query(Stream.netlist), Rejected)
-    assert isinstance(mixed.second.query(Stream.netlist), Available)
+    assert isinstance(mixed.first.query(Channel.netlist), Rejected)
+    assert isinstance(mixed.second.query(Channel.netlist), Available)
 
 
 def test_explain_shows_per_stream_and_per_member_evidence():
@@ -115,14 +117,16 @@ def test_explain_shows_per_stream_and_per_member_evidence():
 
 
 def test_a_stream_waits_for_its_own_endpoints_only():
-    point = design_space(Constants(first_tensor=VECTOR, second_tensor=VECTOR))
+    point = with_direct_transports(
+        design_space(Constants(first_tensor=VECTOR, second_tensor=VECTOR))
+    )
     point = point.with_choices(
         point.first_source.field(MemStreamKernel.ram_style).change("auto"),
         point.first_source.field(MemStreamKernel.pumped_memory).change(False),
     )
     # The ROM choice feeds only the module, not either stream's contracts.
-    assert isinstance(point.first.query(Stream.netlist), Available)
-    assert isinstance(point.second.query(Stream.netlist), Available)
+    assert isinstance(point.first.query(Channel.netlist), Available)
+    assert isinstance(point.second.query(Channel.netlist), Available)
     assert isinstance(point.query(Kernel.module), Unresolved)
     # A stream sees its users by declaration name and by the input that references it.
     (end,) = point.first.users
@@ -144,7 +148,7 @@ def test_boundary_ports_are_axis_and_byte_aligned():
 class Replaying(Space):
     """A consumer reading each two-beat group of its input three times, framed."""
 
-    input_stream: Stream = Param()
+    input_stream: Channel = Param()
 
     @view(semantics=STREAM_CONTRACT)
     def port(self) -> StreamContract:
@@ -158,7 +162,7 @@ class Replaying(Space):
 
 def test_a_boundary_presents_its_internal_end_without_the_replay_the_receiver_realizes():
     class Receiver(Space):
-        edge = Stream(tensor=Tensor((2, 4), INT4), port="in0_V", platform=FULL_DSP48E2)
+        edge = Channel(tensor=Tensor((2, 4), INT4), port="in0_V", platform=FULL_DSP48E2)
         reader = Replaying(input_stream=edge)
 
     ends = design_space(Receiver()).edge.endpoints
@@ -172,7 +176,7 @@ def test_a_boundary_presents_its_internal_end_without_the_replay_the_receiver_re
 def test_two_producers_on_one_stream_are_refused_by_the_stream():
     class Clash(Space):
         tensor: Tensor = Param()
-        shared = Stream(tensor=tensor, port="out0_V", platform=FULL_DSP48E2)
+        shared = Channel(tensor=tensor, port="out0_V", platform=FULL_DSP48E2)
         a = MemStreamKernel(
             dtype=DataType["INT4"],
             form=PRODUCED,
@@ -188,8 +192,8 @@ def test_two_producers_on_one_stream_are_refused_by_the_stream():
             platform=FULL_DSP48E2,
         )
 
-    point = design_space(Clash(tensor=VECTOR))
-    refused = point.shared.query(Stream.netlist)
+    point = with_direct_transports(design_space(Clash(tensor=VECTOR)))
+    refused = point.shared.query(Channel.netlist)
     assert isinstance(refused, Rejected)
     assert {f.code for f in refused.findings} == {"stream-users"}
     assert "a.output.stream, b.output.stream" in refused.findings[0].message
@@ -198,7 +202,7 @@ def test_two_producers_on_one_stream_are_refused_by_the_stream():
 def test_a_boundary_stream_needs_its_port_name():
     class Unnamed(Space):
         tensor: Tensor = Param()
-        out = Stream(tensor=tensor, platform=FULL_DSP48E2)
+        out = Channel(tensor=tensor, platform=FULL_DSP48E2)
         source = MemStreamKernel(
             dtype=DataType["INT4"],
             form=PRODUCED,
@@ -207,7 +211,9 @@ def test_a_boundary_stream_needs_its_port_name():
             platform=FULL_DSP48E2,
         )
 
-    refused = design_space(Unnamed(tensor=VECTOR)).out.query(Stream.netlist)
+    refused = with_direct_transports(design_space(Unnamed(tensor=VECTOR))).out.query(
+        Channel.netlist
+    )
     assert isinstance(refused, Rejected)
     assert {(f.code, f.owner) for f in refused.findings} == {("stream-boundary", "out.endpoints")}
 

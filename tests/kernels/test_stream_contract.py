@@ -30,11 +30,11 @@ from finn.dataflow.traversal import (
     vector_major,
 )
 from finn.kernels.artifacts.abi import Endpoint
+from finn.kernels.channels import Channel, wired
 from finn.kernels.configure import commit
 from finn.kernels.eltwise import EltwiseKernel
 from finn.kernels.fifo import FifoKernel
 from finn.kernels.memstream import MemStreamKernel
-from finn.kernels.streams import Stream, wired
 from finn.kernels.transport import (
     MarkerKind,
     ReadyValidStream,
@@ -45,7 +45,7 @@ from finn.kernels.transport import (
 from finn.transformation.fpgadataflow.transpose_decomposition import (
     shuffle_perfect_loopnest_coeffs,
 )
-from kernels.helpers import FULL_DSP48E2, FULL_DSP58, Root
+from kernels.helpers import FULL_DSP48E2, FULL_DSP58, Root, with_direct_transports
 from kernels.xsim import pack as xsim_pack
 from kernels.xsim import requires_xsim, stream_through
 
@@ -306,9 +306,9 @@ def eltwise_with_constant(form=None):
     int4, int5 = DataType["INT4"], DataType["INT5"]
 
     class Constant(Root):
-        x = Stream(tensor=Tensor((PIXELS, CHANNELS), INT4), port="in0_V", platform=FULL_DSP48E2)
-        c = Stream(tensor=Tensor((CHANNELS,), INT4), adaptable=False, platform=FULL_DSP48E2)
-        y = Stream(
+        x = Channel(tensor=Tensor((PIXELS, CHANNELS), INT4), port="in0_V", platform=FULL_DSP48E2)
+        c = Channel(tensor=Tensor((CHANNELS,), INT4), adaptable=False, platform=FULL_DSP48E2)
+        y = Channel(
             tensor=Tensor((PIXELS, CHANNELS), ScalarEncoding(int5)),
             port="out0_V",
             platform=FULL_DSP48E2,
@@ -329,7 +329,8 @@ def eltwise_with_constant(form=None):
         )
 
     return commit(
-        design_space(Constant()), {"rhs.ram_style": "distributed", "rhs.pumped_memory": False}
+        with_direct_transports(design_space(Constant())),
+        {"rhs.ram_style": "distributed", "rhs.pumped_memory": False},
     )
 
 
@@ -341,7 +342,7 @@ def test_the_delivery_kernel_serves_a_second_consumer_through_the_same_contract(
     assert (into.lanes, into.lane_bits) == ((0, 1), 4)
     # A delivery whose lanes carry other positions (0,2),(1,3) needs a lane regroup.
     strided = Traversal.over((CHANNELS,), ((0, 2, 1),), ((0, 2, 2),))
-    refused = eltwise_with_constant(strided).c.query(Stream.netlist)
+    refused = eltwise_with_constant(strided).c.query(Channel.netlist)
     assert isinstance(refused, Rejected)
     (plan,) = [finding for finding in refused.findings if finding.code == "stream-plan"]
     assert "another lane axis" in plan.message

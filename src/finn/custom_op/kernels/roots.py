@@ -32,6 +32,7 @@ from finn.core.space import Param, derived
 from finn.dataflow.datatypes import QONNXDataType
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.base import Kernel
+from finn.kernels.channels import Channel
 from finn.kernels.datatypes.semantics import (
     INTEGER_TENSOR,
     QONNX_DATATYPE_VALUE_SEMANTICS,
@@ -40,7 +41,6 @@ from finn.kernels.datatypes.semantics import (
     ThresholdTable,
 )
 from finn.kernels.matmul import MatMulKernel
-from finn.kernels.streams import BufferedStream, Stream
 from finn.kernels.target import Platform
 from finn.kernels.thresholding import ThresholdingAxiKernel
 
@@ -70,8 +70,8 @@ class MatMulNode(Kernel):
         tensor: Tensor = cast(Any, self).matmul.result_tensor
         return tensor
 
-    x = Stream(tensor=x_tensor, port="in0_V", platform=platform)
-    y = Stream(tensor=y_tensor, port="out0_V", platform=platform)
+    x = Channel(tensor=x_tensor, port="in0_V", platform=platform)
+    y = Channel(tensor=y_tensor, port="out0_V", platform=platform)
 
 
 class StoredMatMulNode(MatMulNode):
@@ -79,7 +79,7 @@ class StoredMatMulNode(MatMulNode):
 
     id = "finn.custom_op.kernels.node.matmul.stored"
     weights: IntegerTensor = Param(semantics=INTEGER_TENSOR)
-    w = BufferedStream(tensor=MatMulNode.w_tensor, port="in1_V", platform=MatMulNode.platform)
+    w = Channel(tensor=MatMulNode.w_tensor, port="in1_V", platform=MatMulNode.platform)
     matmul = MatMulKernel(
         m=MatMulNode.m,
         n=MatMulNode.n,
@@ -101,7 +101,7 @@ class StreamedMatMulNode(MatMulNode):
     """Weights a graph tensor: an edge like any other, so the weight stream has no source."""
 
     id = "finn.custom_op.kernels.node.matmul.streamed"
-    w = BufferedStream(tensor=MatMulNode.w_tensor, port="in1_V", platform=MatMulNode.platform)
+    w = Channel(tensor=MatMulNode.w_tensor, port="in1_V", platform=MatMulNode.platform)
     matmul = MatMulKernel(
         m=MatMulNode.m,
         n=MatMulNode.n,
@@ -134,8 +134,8 @@ class ThresholdingNode(Kernel):
     def y_tensor(self) -> Tensor:
         return Tensor(self.x_tensor.shape, ScalarEncoding(self.activate.result_dtype))
 
-    x = Stream(tensor=x_tensor, port="in0_V", platform=platform)
-    y = Stream(tensor=y_tensor, port="out0_V", platform=platform)
+    x = Channel(tensor=x_tensor, port="in0_V", platform=platform)
+    y = Channel(tensor=y_tensor, port="out0_V", platform=platform)
     activate = ThresholdingAxiKernel(
         input_dtype=input_dtype,
         threshold_dtype=threshold_dtype,

@@ -15,9 +15,11 @@ Two kinds of attribute:
 - **semantic**: part of the operation, stated by the graph (Thresholding's
   ``bias``); required, never a choice;
 - **choice**: one per decision key of the op's node roots, sparse, absent
-  meaning open. The kernel's keys are unprefixed (``compute.packed.pe``), an
-  input or owned stream's sit under the op's port name (``x.adapter…``,
-  ``w.transport``), and an output stream's belong to its consumer. The ONNX type
+  meaning open. The kernel's keys are unprefixed (``compute.packed.pe``), a
+  channel's sit under the op's port name (``x.adapter…``, ``w.transport``,
+  ``y.transport``). A channel's choices are its consumer's; an output
+  channel's are its producer's only where no KernelOp consumes it (a graph
+  output), so ``y.*`` is set on a node whose output leaves the graph. The ONNX type
   is the key's value semantics' (``int`` and ``bool``: ``i``, ``str``: ``s``),
   and a selector lists its cases. The node's attributes are the persisted form.
 
@@ -54,8 +56,8 @@ from finn.dataflow.datatypes import (
 )
 from finn.dataflow.tensor import Tensor
 from finn.kernels.base import Kernel
+from finn.kernels.channels import Channel
 from finn.kernels.configure import describe
-from finn.kernels.streams import Stream
 from finn.kernels.target import DspBlock, Platform, Target
 
 if TYPE_CHECKING:
@@ -248,10 +250,9 @@ class KernelOp(CustomOp):  # type: ignore[misc]
     An op class states ``op_version`` (its kernel's ``version``) in its own body; its
     ``op_type`` is qonnx's (stated in its own body, or the name its domain exports
     it under). It names its node-root classes (``roots``), its
-    kernel's member in them (``member``), each ONNX input's stream (``ports``;
-    ``None``: an input that is a fact, never a stream), and the ports whose stream a
-    partition root declares as a ``BufferedStream`` (``buffered``: a stream with a
-    ``transport`` choice, direct or a FIFO, such as a MatMul's weights on an edge).
+    kernel's member in them (``member``), each ONNX input's channel (``ports``;
+    ``None``: an input that is a fact, never a channel) and each ONNX output's
+    (``outputs``).
     """
 
     wants_model = True
@@ -260,7 +261,7 @@ class KernelOp(CustomOp):  # type: ignore[misc]
     roots: ClassVar[tuple[type[Kernel], ...]]
     member: ClassVar[str]
     ports: ClassVar[tuple[str | None, ...]]
-    buffered: ClassVar[tuple[str, ...]] = ()
+    outputs: ClassVar[tuple[str, ...]] = ("y",)
     semantic: ClassVar[dict[str, tuple[str, bool, object]]] = {}
     _schemas: ClassVar[dict[type[KernelOp], dict[str, tuple[str, tuple[str, ...]]]]] = {}
 
@@ -282,17 +283,22 @@ class KernelOp(CustomOp):  # type: ignore[misc]
     @classmethod
     def attribute(cls, key: str) -> str | None:
         """A node-root key's attribute: the kernel's unprefixed, an input or owned
-        stream's as it is; ``None`` for an output stream's (its consumer's)."""
+        channel's as it is, an output channel's transport as it is. An output presents
+        what is produced, so it opens no adapter of its own."""
         head, _, rest = key.partition(".")
         if head == cls.member:
             return rest
+        if head in cls.outputs:
+            return key if rest.partition(".")[0] == "transport" else None
         return key if head in cls.ports else None
 
     @classmethod
     def node_key(cls, attribute: str) -> str:
         """An attribute's node-root key."""
         head = attribute.partition(".")[0]
-        return attribute if head in cls.ports else f"{cls.member}.{attribute}"
+        return (
+            attribute if head in cls.ports or head in cls.outputs else f"{cls.member}.{attribute}"
+        )
 
     @classmethod
     def schema(cls) -> dict[str, tuple[str, tuple[str, ...]]]:
@@ -355,9 +361,9 @@ class KernelOp(CustomOp):  # type: ignore[misc]
         return found
 
     def node_part(self, facts: Facts, choices: Mapping[str, object]) -> dict[str, object]:
-        """The choices a node root replays: its kernel's and its owned streams'. An input
-        edge's belong to the partition root that declares the edge."""
-        edges = {port for port in self.ports if port} - set(facts.owned)
+        """The choices a node root replays: its kernel's and its owned channels'. An
+        edge's, input or output, belong to the partition root that declares the edge."""
+        edges = ({port for port in self.ports if port} - set(facts.owned)) | set(self.outputs)
         return {
             name: value for name, value in choices.items() if name.partition(".")[0] not in edges
         }
@@ -414,12 +420,12 @@ class KernelOp(CustomOp):  # type: ignore[misc]
 
     # -- in a partition root ---------------------------------------------------------------
 
-    def owned_streams(self) -> dict[str, Stream]:
+    def owned_streams(self) -> dict[str, Channel]:
         """The streams this node declares beside its outputs, by tensor: a stored
         parameter's, its tensor the kernel's view (D5, D6)."""
         return {}
 
-    def place(self, streams: Mapping[str, Stream]) -> tuple[Kernel, dict[str, str]]:
+    def place(self, streams: Mapping[str, Channel]) -> tuple[Kernel, dict[str, str]]:
         """This node's kernel on a partition's ``streams`` (by tensor), the graph's pins as
         keywords; and the tensor of each of its input and owned streams, by port."""
         raise NotImplementedError

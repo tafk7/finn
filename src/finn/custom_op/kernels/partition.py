@@ -5,14 +5,13 @@
 
 ``partition_root(model, nodes)`` builds, and changes no graph:
 
-- **streams**, one per ONNX tensor, in node order: a node's graph inputs, the
-  parameter streams it owns (named after the initializer, the kernel's view),
-  its outputs. A stream's tensor is the graph's value_info and annotation (D6),
-  its platform the model's target's; an input on a port its op names
-  ``buffered`` (a MatMul's weights on an edge) is a ``BufferedStream``. Only the
-  subgraph's ONNX inputs and outputs are boundaries, named by the shell's
-  convention ``s_axis_<i>`` and ``m_axis_<i>`` (D4): a stream refuses a boundary
-  no port names (``stream-boundary``);
+- **channels**, one per ONNX tensor, in node order: a node's graph inputs, the
+  parameter channels it owns (named after the initializer, the kernel's view),
+  its outputs. A channel's tensor is the graph's value_info and annotation
+  (D6), its platform the model's target's. Only the subgraph's ONNX inputs and
+  outputs are boundaries, named by the shell's convention ``s_axis_<i>`` and
+  ``m_axis_<i>`` (D4): a channel refuses a boundary no port names
+  (``stream-boundary``);
 - **kernels**, one per node, from its facts, the graph's pins as keywords;
 - **replay**: each node's kernel choices, then the edge choices (an edge's
   adapter selector is forced, never persisted); an edge choice the current
@@ -20,7 +19,13 @@
   again;
 - **owners**: each member's node and attribute prefix, how a choice made in the
   root goes back to the node that persists it (D8): a kernel's on its node, an
-  edge's on its consumer, a parameter stream's on its value owner.
+  edge's on its consumer, a parameter channel's on its value owner. An output
+  boundary consumed by no KernelOp (a graph output) is its producer's, under
+  its output port; one a KernelOp outside the partition consumes is that
+  node's, applied in its own partition as an input boundary, so here its
+  ``transport`` is pinned ``direct``: one FIFO per edge, on the consumer's side.
+  A choice a node holds under an output port whose channel a KernelOp now
+  consumes is stale, dropped and reported.
 
 Members are named as the graph: streams by tensor and kernels by node
 (``\\W`` as ``_``); two members of one name (a node and a tensor, or two nodes) are
@@ -50,12 +55,14 @@ from finn.custom_op.kernels.base import (
 )
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.base import Kernel
-from finn.kernels.streams import BufferedStream, Stream
+from finn.kernels.channels import Channel
 
 if TYPE_CHECKING:
     from qonnx.core.modelwrapper import ModelWrapper
 
 S = TypeVar("S", bound=Space)
+
+KERNEL_OPS = "finn.custom_op.kernels"
 
 
 class Partition(Kernel):
@@ -100,34 +107,43 @@ def _boundary(model: ModelWrapper, nodes: list[NodeProto], owned: set[str]) -> d
     return ports | {tensor: f"m_axis_{index}" for index, tensor in enumerate(outputs)}
 
 
+def _handed_on(model: ModelWrapper, nodes: list[NodeProto]) -> set[str]:
+    """The outputs of ``nodes`` a KernelOp outside them consumes: their transport is that
+    consumer's, chosen in its own partition (D8)."""
+    inside = {id(node) for node in nodes}
+    consumed = {
+        tensor
+        for node in model.graph.node
+        if node.domain == KERNEL_OPS and id(node) not in inside
+        for tensor in node.input
+    }
+    return {tensor for node in nodes for tensor in node.output if tensor in consumed}
+
+
 def _streams(
     model: ModelWrapper,
     nodes: list[NodeProto],
     ops: list[KernelOp],
-    owned: list[dict[str, Stream]],
+    owned: list[dict[str, Channel]],
     ports: Mapping[str, str],
-) -> dict[str, Stream]:
-    """The partition's streams by tensor, in node order: a node's inputs on an edge or
-    the boundary, the parameter streams it owns, its outputs. An input on a port its op
-    names ``buffered`` is a ``BufferedStream``."""
+    handed_on: set[str],
+) -> dict[str, Channel]:
+    """The partition's channels by tensor, in node order: a node's inputs on an edge or
+    the boundary, the parameter channels it owns, its outputs. An output handed on to a
+    KernelOp outside is pinned ``direct``: its FIFO, if any, is the consumer's."""
     platform = target(model).platform
-    buffered = {
-        tensor
-        for node, op in zip(nodes, ops)
-        for port, tensor in zip(op.ports, node.input)
-        if port in op.buffered
-    }
     parameters = {tensor for streams in owned for tensor in streams}
-    streams: dict[str, Stream] = {}
+    streams: dict[str, Channel] = {}
 
     def declare(tensor: str, label: str) -> None:
         if tensor in streams:
             return
         dims = rows(shape(model, tensor, label))
         carried = Tensor(dims, ScalarEncoding(datatype(model, tensor, label)))
-        kind = BufferedStream if tensor in buffered else Stream
         port: dict[str, Any] = {"port": ports[tensor]} if tensor in ports else {}
-        streams[tensor] = kind(tensor=carried, platform=platform, **port)
+        if tensor in handed_on:
+            port["transport"] = "direct"
+        streams[tensor] = Channel(tensor=carried, platform=platform, **port)
 
     for node, op, parameter_streams in zip(nodes, ops, owned):
         for tensor in node.input:
@@ -141,19 +157,28 @@ def _streams(
 
 @dataclass
 class _Placed:
-    """The kernels placed on the streams, by member; each member's owner (node,
-    attribute prefix); the nodes' choices split by what declares them."""
+    """The kernels placed on the channels, by member; each member's owner (node,
+    attribute prefix); the nodes' choices split by what declares them, and those stale
+    before replay (an output's, now an edge another KernelOp owns)."""
 
     kernels: dict[str, Kernel]
     owners: dict[str, tuple[str, str]]
     kernel_choices: dict[str, object]
     edge_choices: dict[str, object]
+    stale: list[str]
 
 
-def _place(nodes: list[NodeProto], ops: list[KernelOp], streams: Mapping[str, Stream]) -> _Placed:
+def _place(
+    nodes: list[NodeProto],
+    ops: list[KernelOp],
+    streams: Mapping[str, Channel],
+    produced: set[str],
+) -> _Placed:
     """Each node's kernel on ``streams``, and its choices as root keys: a kernel's under
-    the kernel's member, an input or owned stream's under the stream's."""
-    placed = _Placed({}, {}, {}, {})
+    the kernel's member, an input or owned channel's under the channel's, and an output's
+    under the channel's where its node is the producer that owns it (``produced``: graph
+    outputs no KernelOp consumes)."""
+    placed = _Placed({}, {}, {}, {}, [])
     stream_members = {member(tensor) for tensor in streams}
     for node, op in zip(nodes, ops):
         kernel = member(node.name)
@@ -161,6 +186,9 @@ def _place(nodes: list[NodeProto], ops: list[KernelOp], streams: Mapping[str, St
             other = "a tensor" if kernel in stream_members else "another node"
             raise KernelOpError(f"{node.name}: a node and {other} are both named {kernel}")
         placed.kernels[kernel], by_port = op.place(streams)
+        by_port |= {
+            port: tensor for port, tensor in zip(op.outputs, node.output) if tensor in produced
+        }
         placed.owners[kernel] = (node.name, "")
         for port, tensor in by_port.items():
             placed.owners[member(tensor)] = (node.name, f"{port}.")
@@ -168,6 +196,9 @@ def _place(nodes: list[NodeProto], ops: list[KernelOp], streams: Mapping[str, St
             head, _, rest = attribute.partition(".")
             if head in by_port:
                 placed.edge_choices[f"{member(by_port[head])}.{rest}"] = value
+            elif head in op.outputs:
+                tensor = node.output[op.outputs.index(head)]
+                placed.stale.append(f"{member(tensor)}.{rest}")
             else:
                 placed.kernel_choices[f"{kernel}.{attribute}"] = value
     return placed
@@ -201,8 +232,10 @@ def partition_root(
             raise KernelOpError(f"{node.name}: a partition root places KernelOps only")
     owned = [op.owned_streams() for op in ops]
     ports = _boundary(model, nodes, {tensor for streams in owned for tensor in streams})
-    streams = _streams(model, nodes, ops, owned, ports)
-    placed = _place(nodes, ops, streams)
+    handed_on = _handed_on(model, nodes)
+    streams = _streams(model, nodes, ops, owned, ports, handed_on)
+    outputs = {tensor for node in nodes for tensor in node.output if tensor in ports}
+    placed = _place(nodes, ops, streams, outputs - handed_on)
 
     members = {member(tensor): stream for tensor, stream in streams.items()} | placed.kernels
     root: Any = composite(name, members, base=Partition)
@@ -215,7 +248,7 @@ def partition_root(
     dropped: tuple[str, ...] = ()
     if placed.edge_choices:
         point, dropped = _replay_edges(point, placed.edge_choices)
-    return PartitionRoot(point, placed.owners, dropped, tuple(ports.items()))
+    return PartitionRoot(point, placed.owners, (*placed.stale, *dropped), tuple(ports.items()))
 
 
 def save_partition_choices(

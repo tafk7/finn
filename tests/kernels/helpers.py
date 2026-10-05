@@ -50,6 +50,7 @@ from finn.dataflow.gemm import Form
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.artifacts.module import Composed, Leaf
 from finn.kernels.base import Kernel
+from finn.kernels.channels import Channel
 from finn.kernels.configure import commit, describe, undecided
 from finn.kernels.control import ControlBus
 from finn.kernels.datatypes.semantics import (
@@ -58,7 +59,6 @@ from finn.kernels.datatypes.semantics import (
     IntegerTensor,
 )
 from finn.kernels.matmul import MatMulKernel
-from finn.kernels.streams import BufferedStream, Stream
 from finn.kernels.target import DspBlock, Platform
 
 T = TypeVar("T")
@@ -131,17 +131,17 @@ def placed_dotp(
     platform = cast(Platform, facts.get("platform", FULL_DSP48E2))
 
     class Placed(Space):
-        x = Stream(
+        x = Channel(
             tensor=Tensor(x_shape, ScalarEncoding(activation_dtype)),
             port="in0_V",
             platform=platform,
         )
-        w = Stream(
+        w = Channel(
             tensor=Tensor((k, n), ScalarEncoding(weights_dtype, weights_range)),
             port="in1_V",
             platform=platform,
         )
-        y = Stream(
+        y = Channel(
             tensor=Tensor((rows, n), ScalarEncoding(result_dtype)),
             port="out0_V",
             platform=platform,
@@ -215,12 +215,10 @@ def matmul_root(family: type[MatMulKernel]) -> type[Root]:
         def set_tensor(self) -> Tensor:
             return self.matmul.set_tensor
 
-        x = Stream(tensor=x_tensor, port="in0_V", platform=platform)
-        set = Stream(tensor=set_tensor, port="in2_V", when=several, platform=platform)
-        w = BufferedStream(
-            tensor=w_tensor, sets=weight_sets, index=set, port="in1_V", platform=platform
-        )
-        y = Stream(tensor=y_tensor, port="out0_V", platform=platform)
+        x = Channel(tensor=x_tensor, port="in0_V", platform=platform)
+        set = Channel(tensor=set_tensor, port="in2_V", when=several, platform=platform)
+        w = Channel(tensor=w_tensor, sets=weight_sets, index=set, port="in1_V", platform=platform)
+        y = Channel(tensor=y_tensor, port="out0_V", platform=platform)
         matmul = family(
             m=m,
             n=n,
@@ -289,6 +287,16 @@ def with_adapter_memories(point: S, ram_style: str = "auto") -> S:
     stream's adapter, its one viable chain, is forced."""
     styles = undecided(point, ADAPTER_RAM_STYLES)
     return commit(point, dict.fromkeys(styles, ram_style)) if styles else point
+
+
+TRANSPORTS = "*.transport"
+"""The keys (``fnmatch``) of every channel's transport choice."""
+
+
+def with_direct_transports(point: S) -> S:
+    """Each channel's open transport direct: the placeholder policy's choice."""
+    open_ = undecided(point, TRANSPORTS)
+    return commit(point, dict.fromkeys(open_, "direct")) if open_ else point
 
 
 def finnlib_root() -> Path:
@@ -477,8 +485,9 @@ def matmul_assembly(
             **({"matmul.compute.packed.reducer": reducer} if core == "packed" else {}),
         },
     )
-    # Each stream's adapter is forced; an input_gen's memory is inferred.
-    point = with_adapter_memories(point)
+    # Each stream's adapter is forced; an input_gen's memory is inferred; the other
+    # streams connect directly.
+    point = with_direct_transports(with_adapter_memories(point))
     built = point.query(Kernel.module)
     if not isinstance(built, Available):
         raise ValueError(f"MatMul assembly is not accepted: {describe([built])}")

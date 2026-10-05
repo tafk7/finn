@@ -32,11 +32,11 @@ from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.artifacts.abi import Bus
 from finn.kernels.artifacts.module import Composed
 from finn.kernels.base import Kernel
+from finn.kernels.channels import Channel
 from finn.kernels.configure import commit
 from finn.kernels.dotp import DotpAxiKernel
 from finn.kernels.matmul import MatMulKernel
 from finn.kernels.memstream import MemStreamKernel
-from finn.kernels.streams import BufferedStream, Stream
 from finn.kernels.target import Platform
 from kernels.helpers import (
     FULL_DSP48E2,
@@ -47,6 +47,7 @@ from kernels.helpers import (
     matmul_point,
     placed,
     with_adapter_memories,
+    with_direct_transports,
 )
 
 STORED_INSTANCE = "w.source.memstream"
@@ -81,15 +82,17 @@ def configured(point, *, style=None, pe=2, simd=2):
             "w.source.memstream.pumped_memory": False,
         }
     # The activation stream's adapter is forced by the folding; its memory is the flow's.
-    return with_adapter_memories(
-        commit(
-            commit(point, choices),
-            {
-                "matmul.compute.packed.pe": pe,
-                "matmul.compute.packed.simd": simd,
-                "matmul.compute.packed.compute_pumping": False,
-                "matmul.compute.packed.reducer": "tree",
-            },
+    return with_direct_transports(
+        with_adapter_memories(
+            commit(
+                commit(point, choices),
+                {
+                    "matmul.compute.packed.pe": pe,
+                    "matmul.compute.packed.simd": simd,
+                    "matmul.compute.packed.compute_pumping": False,
+                    "matmul.compute.packed.reducer": "tree",
+                },
+            )
         )
     )
 
@@ -133,7 +136,7 @@ def test_known_weights_give_the_weight_stream_its_source():
     assert instance_parameters(stored, STORED_INSTANCE)["RAM_STYLE"] == '"block"'
     # Unknown weights: no value, no source; the stream is the boundary in1_V.
     assert not external.w.valued
-    assert isinstance(external.w.query(Stream.source), Inapplicable)
+    assert isinstance(external.w.query(Channel.source), Inapplicable)
     assert external.w.endpoints.source_owner is None
     # MatMul's netlist is its cores' alone, and it derives the same either way.
     assert [item.node for item in stored.matmul.netlists] == ["compute.packed"]
@@ -233,6 +236,8 @@ def test_the_sources_choices_round_trip_through_an_empty_root():
         "w.source.memstream.ram_style",
         "w.transport",
         "x.adapter.input_gen.input_gen.ram_style",
+        "x.transport",
+        "y.transport",
     )
     replayed = selections.restore(base(weights=WEIGHTS), saved)
     assert replayed.accepted
@@ -263,16 +268,16 @@ def test_several_weight_sets_without_known_weights_leave_the_set_stream_unused()
 def test_a_non_viable_source_is_refused_and_committed_is_refused_by_its_candidate():
     # Several sets need the set stream; a memory without one refuses itself.
     class Unindexed(Root):
-        x = Stream(tensor=Tensor((3, 4), INT3), port="in0_V", platform=FULL_DSP48E2)
-        w = BufferedStream(tensor=Tensor((4, 4), INT3), sets=2, platform=FULL_DSP48E2)
-        y = Stream(tensor=Tensor((3, 4), INT8), port="out0_V", platform=FULL_DSP48E2)
+        x = Channel(tensor=Tensor((3, 4), INT3), port="in0_V", platform=FULL_DSP48E2)
+        w = Channel(tensor=Tensor((4, 4), INT3), sets=2, platform=FULL_DSP48E2)
+        y = Channel(tensor=Tensor((3, 4), INT8), port="out0_V", platform=FULL_DSP48E2)
         matmul = MatMulKernel(
             **FACTS, weights=(WEIGHTS, WEIGHTS), weight_sets=2, x_stream=x, w_stream=w, y_stream=y
         )
         w.contents = matmul.weight_values
 
     point = design_space(Unindexed())
-    answer = point.w.query(Stream.source)
+    answer = point.w.query(Channel.source)
     assert isinstance(answer, Rejected) and keys(answer) == {"decision-no-viable-case"}
     assert "memstream-set-stream" in answer.findings[0].message
     # Committed on purpose, the case is accepted (committing never checks a kernel
@@ -286,9 +291,9 @@ def placed_with(platform: Platform):
     """MatMul with known weights, its weight stream on ``platform``."""
 
     class OnPlatform(Root):
-        x = Stream(tensor=Tensor((3, 4), INT3), port="in0_V", platform=platform)
-        w = BufferedStream(tensor=Tensor((4, 4), INT3), platform=platform)
-        y = Stream(tensor=Tensor((3, 4), INT8), port="out0_V", platform=platform)
+        x = Channel(tensor=Tensor((3, 4), INT3), port="in0_V", platform=platform)
+        w = Channel(tensor=Tensor((4, 4), INT3), platform=platform)
+        y = Channel(tensor=Tensor((3, 4), INT8), port="out0_V", platform=platform)
         matmul = MatMulKernel(**FACTS, weights=WEIGHTS, x_stream=x, w_stream=w, y_stream=y)
         w.contents = matmul.weight_values
 
@@ -319,12 +324,12 @@ def test_the_platform_narrows_the_source_memory(platform, refused):
 
 def test_a_stream_with_a_value_has_its_source_as_its_only_producer():
     class Produced(Root):
-        x = Stream(tensor=Tensor((3, 4), INT3), port="in0_V", platform=FULL_DSP48E2)
-        w = BufferedStream(tensor=Tensor((4, 4), INT3), port="in1_V", platform=FULL_DSP48E2)
-        y = Stream(tensor=Tensor((3, 4), INT8), contents=((0,) * 4,) * 3, platform=FULL_DSP48E2)
+        x = Channel(tensor=Tensor((3, 4), INT3), port="in0_V", platform=FULL_DSP48E2)
+        w = Channel(tensor=Tensor((4, 4), INT3), port="in1_V", platform=FULL_DSP48E2)
+        y = Channel(tensor=Tensor((3, 4), INT8), contents=((0,) * 4,) * 3, platform=FULL_DSP48E2)
         matmul = MatMulKernel(**FACTS, x_stream=x, w_stream=w, y_stream=y)
 
-    answer = configured(design_space(Produced())).y.query(Stream.endpoints)
+    answer = configured(design_space(Produced())).y.query(Channel.endpoints)
     assert isinstance(answer, Rejected) and keys(answer) == {"stream-users"}
     assert "only producer" in answer.findings[0].message
 

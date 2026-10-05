@@ -31,16 +31,15 @@ from finn.core.space import (
 )
 from finn.dataflow.gemm import Form
 from finn.dataflow.schedule import Index, Schedule
-from finn.dataflow.stream import Stream
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, vector_major
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.base import Kernel, extent_of
+from finn.kernels.channels import Channel
 from finn.kernels.configure import commit
 from finn.kernels.dotp import PackedDotpKernel
 from finn.kernels.port import AxiStreamPort
-from finn.kernels.streams import Stream as KernelStream
-from kernels.helpers import FULL_DSP58
+from kernels.helpers import FULL_DSP58, with_direct_transports
 
 b, s, c = Index("b"), Index("s"), Index("c")
 
@@ -50,8 +49,8 @@ class Pool(Kernel):
 
     id = "test.accpool"
     rtl_module = "accpool_axi"
-    x_stream: Stream = Param(required=False)
-    y_stream: Stream = Param(required=False)
+    x_stream: Channel = Param(required=False)
+    y_stream: Channel = Param(required=False)
 
     channels = extent_of(c)
     pe: int = Decision(domain=divisors_of(channels))
@@ -89,8 +88,8 @@ class Pool(Kernel):
         return {"CHANNELS": self.channels, "PE": self.pe}
 
 
-def stream(shape: tuple[int, ...], dtype: str, port: str) -> KernelStream:
-    return KernelStream(
+def stream(shape: tuple[int, ...], dtype: str, port: str) -> Channel:
+    return Channel(
         tensor=Tensor(shape, ScalarEncoding(DataType[dtype])), port=port, platform=FULL_DSP58
     )
 
@@ -188,9 +187,9 @@ def test_a_stated_element_is_the_ports_and_its_stream_refuses_another() -> None:
         kernel = Pool(x_stream=x, y_stream=y)
         kernel.y.dtype = DataType["INT9"]  # a parent may pin what the producer states
 
-    point = commit(design_space(Stated()), {"kernel.pe": 4})
+    point = commit(with_direct_transports(design_space(Stated())), {"kernel.pe": 4})
     assert point.kernel.y.element == ScalarEncoding(DataType["INT9"])
-    refused = point.y.query(KernelStream.netlist)
+    refused = point.y.query(Channel.netlist)
     assert "stream-tensor" in {code for code, _ in codes(refused)}
 
 

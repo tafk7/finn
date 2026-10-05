@@ -671,6 +671,15 @@ class _Allocation:
             return
         self.table.provenance[presence] = slot.provenance
         supplier = cast("NodeDecl | Param[object]", slot.supplier)
+        if isinstance(supplier, NodeDecl):
+            expected = cast("type[Space]", formal.reference_family())
+            if not issubclass(supplier.family, expected):
+                raise DefinitionError(
+                    f"{key}: expected a {expected.__qualname__} node, got "
+                    f"{supplier.family.__qualname__}{at(supplier.origin)}"
+                )
+        elif not isinstance(supplier, Param):
+            raise DefinitionError(f"{key}: a reference input takes a node declaration")
         if isinstance(supplier, Param) or not is_fresh(supplier):
             self.pending.append(_ReferenceTask(scope.index, name, supplier, slot.scope, presence))
             return
@@ -722,6 +731,17 @@ class _Allocation:
                         f"{key}: forwards {supplier.name or 'a formal'}{at(supplier.origin)}, "
                         "which is not a reference input of "
                         f"{source.effective.space_type.__qualname__}"
+                    )
+                formal = cast(Param[object], draft.effective.members[task.name])
+                expected = cast("type[Space]", formal.reference_family())
+                given = cast("type[Space]", supplier.reference_family())
+                if not issubclass(given, expected):
+                    raise DefinitionError(
+                        f"{key}: forwards {supplier.name}{at(supplier.origin)}, a "
+                        f"{given.__qualname__} input of "
+                        f"{source.effective.space_type.__qualname__}; "
+                        f"{draft.effective.space_type.__qualname__}.{task.name} takes a "
+                        f"{expected.__qualname__}"
                     )
                 target = source.targets[supplier]
                 if target is not None:

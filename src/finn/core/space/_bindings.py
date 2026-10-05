@@ -28,6 +28,7 @@ from .declarations import (
     ValueRef,
     View,
     _path_text,
+    at,
 )
 from .domains import Domain
 from .errors import DefinitionError
@@ -137,6 +138,16 @@ def classify(
         raise DefinitionError(
             f"{slot.provenance.key}: an inline Param cannot supply a member; declare the "
             "formal on the enclosing family and bind it"
+        )
+    if isinstance(value, NodeDecl):
+        raise DefinitionError(
+            f"{slot.provenance.key}: a node or a Decision over nodes is not a value; bind one "
+            "of its members"
+        )
+    if isinstance(value, Param) and value.reference_family() is not None:
+        raise DefinitionError(
+            f"{slot.provenance.key}: forwards the reference input {value.name}"
+            f"{at(value.origin)}, but the formal takes a value"
         )
     fresh_decision = (
         isinstance(value, Decision) and value.owner is None and not isinstance(value, NodeDecision)
