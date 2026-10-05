@@ -13,6 +13,8 @@ import zipfile
 from email.parser import BytesParser
 from pathlib import Path
 
+import pytest
+
 from finn import resources as finn_resources
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -232,6 +234,8 @@ def _run(command: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
     return result
 
 
+# Builds a wheel and installs it, about 12 s.
+@pytest.mark.slow
 def test_installed_wheel_materializes_independent_kernel_builds(tmp_path: Path) -> None:
     finnlib = Path(finn_resources.path("finnlib")).resolve()
     # Build from a clean temporary source snapshot: setuptools must neither

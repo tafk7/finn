@@ -10,14 +10,15 @@ source "$(dirname "$(readlink -f "$0")")/_gate-common.sh"
 # The layers below, in order: finn.core.space, then finn.dataflow. Parked
 # dataflow/graph tests remain outside this command; their compatibility is not
 # claimed.
-bash scripts/check-space.sh
-bash scripts/check-dataflow-design.sh
+bash scripts/check-space.sh "${GATE_ARGS[@]}"
+bash scripts/check-dataflow-design.sh "${GATE_ARGS[@]}"
 # XSim and other Vivado tests (markers xsim, vivado) are deselected even when
 # Vivado is selected (a FINN checkout's .envrc selects it): they take minutes
-# each, and scripts/xsim-sweep.sh runs them.
-gate_pytest tests/kernels -m "not xsim and not vivado"
+# each, and scripts/xsim-sweep.sh runs them. --fast deselects the slow tests too:
+# the TFC platform binding and the wheel build.
+gate_pytest tests/kernels xsim vivado
 # The KernelOps and their transformations, the layer above finn.kernels.
-gate_pytest tests/kernel_ops -m "not xsim and not vivado"
+gate_pytest tests/kernel_ops xsim vivado
 gate_ruff src/finn/kernels tests/kernels \
     src/finn/custom_op/kernels src/finn/transformation/kernels tests/kernel_ops \
     scripts/benchmark-space.py

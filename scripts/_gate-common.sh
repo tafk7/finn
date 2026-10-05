@@ -2,8 +2,12 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 # The environment and checks shared by the code gates (scripts/check-*.sh),
-# sourced by each; not run on its own. A gate takes no arguments: what it
-# checks is fixed, so its pass means the same thing for every caller.
+# sourced by each; not run on its own. What a gate checks is fixed, so its pass
+# means the same thing for every caller, with one exception a caller states:
+#
+#   --fast   also deselect the tests marked slow (tens of seconds each), which
+#            the default mode runs. A gate prints its mode, and a gate that runs
+#            another passes its mode on.
 #
 #   PYTHON_BIN, RUFF_BIN, MYPY_BIN   the tools (default python3, ruff, mypy)
 #
@@ -15,10 +19,18 @@
 
 set -euo pipefail
 
+GATE_MODE=default
+if [ "${1:-}" = --fast ]; then
+    GATE_MODE=fast
+    shift
+fi
 if [ "$#" -ne 0 ]; then
-    printf '%s: unexpected argument: %s\n' "$(basename "$0")" "$1" >&2
+    printf '%s: unexpected argument: %s (the only option is --fast)\n' "$(basename "$0")" "$1" >&2
     exit 2
 fi
+# The arguments that select this mode, for a gate that runs another.
+GATE_ARGS=()
+[ "$GATE_MODE" = default ] || GATE_ARGS=(--fast)
 
 FINN_ROOT=$(dirname "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")")
 PYTHON_BIN=${PYTHON_BIN:-python3}
@@ -27,22 +39,28 @@ MYPY_BIN=${MYPY_BIN:-mypy}
 export FINN_ROOT PYTHON_BIN RUFF_BIN MYPY_BIN
 export PYTHONDONTWRITEBYTECODE=1
 export PYTHONPATH="$FINN_ROOT/src:$FINN_ROOT/tests"
-# The typing tests parse the output of the mypy they run; a caller's FORCE_COLOR
-# would colour it and fail them.
-unset FORCE_COLOR
 cd "$FINN_ROOT"
 
 printf '== %s\n' "$(basename "$0")"
 printf 'finn     %s  %s\n' "$(git rev-parse HEAD)" "$FINN_ROOT"
+printf 'mode     %s\n' "$GATE_MODE"
 "$PYTHON_BIN" --version
 "$PYTHON_BIN" -m pytest --version
 "$RUFF_BIN" --version
 "$MYPY_BIN" --version
 
-# gate_pytest <dir> [pytest args...]: the tests under <dir>, its conftest the outermost.
+# gate_pytest <dir> [marker...]: the tests under <dir>, its conftest the
+# outermost, less those carrying any of the markers, and in fast mode less the
+# slow ones.
 gate_pytest() {
-    local dir=$1; shift
-    "$PYTHON_BIN" -m pytest -q --confcutdir="$dir" "$dir" "$@"
+    local dir=$1 marker expression= selection=(); shift
+    local deselected=("$@")
+    [ "$GATE_MODE" = default ] || deselected+=(slow)
+    for marker in "${deselected[@]}"; do
+        expression+="${expression:+ and }not $marker"
+    done
+    [ -z "$expression" ] || selection=(-m "$expression")
+    "$PYTHON_BIN" -m pytest -q --confcutdir="$dir" "$dir" "${selection[@]}"
 }
 
 # gate_ruff <path...>: formatting, and the lint selection every gate uses
