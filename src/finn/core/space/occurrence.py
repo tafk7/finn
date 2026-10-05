@@ -11,7 +11,7 @@ from collections.abc import Mapping
 from typing import TypeVar, cast, overload
 
 from . import _execution, _runtime
-from ._collapse import forwards, guard_implies
+from ._collapse import guard_implies
 from ._configuration import BoundDecision, BoundValue, Space
 from ._runtime import Snapshot
 from .compiler import Model
@@ -179,50 +179,56 @@ def present(point: Space, node: object) -> bool:
 
 
 def _supplied(point: Space, formal: Param[object]) -> bool:
-    """Whether a value input is supplied: read without halting, its answer is available.
+    """Whether a value input is supplied: a source applies. The value is never evaluated.
 
-    Bound to an enclosing formal, it answers as that one does. Omitted at start
-    (``input-missing``), or a formal no present source supplies
-    (``input-unsupplied``), it is not supplied. Bound to a guarded view or
-    derived value, it is supplied when that source applies: its guard is read,
-    a fact, and the value is not computed (whether a stream has a value is
-    known before the value is).
+    Presence is known before the value is: the walk follows the edges a read
+    of the value would follow, reading only facts (guards, the choices that
+    select a candidate's member, whether an input was given at start) and
+    never a computation (a derived value, a view's callback, a pinned domain
+    check). Omitted at start, or a formal no present source supplies, it is
+    not supplied. A source that applies is supplied whatever its value then
+    answers: a refusal surfaces where the value is read, with its findings.
+    Undecided presence raises like any value read.
     """
-    index = state(point).model.resolve(point._scope, formal)
-    guards = _source_guards(state(point).linked, index)
-    if guards is not None:
-        for guard in guards:
-            held = _read_result(point, guard)
-            if isinstance(held, Inapplicable) or (
-                isinstance(held, Available) and held.value is not True
-            ):
-                return False
-            if not isinstance(held, Available):
-                _read_index(point, guard)  # undecided: raises like any value read
-        return True
-    answer = _read_result(point, index)
+    applies = _source_applies(point, state(point).model.resolve(point._scope, formal))
+    if isinstance(applies, bool):
+        return applies
+    _read_index(point, applies)  # undecided: raises like any value read
+    raise AssertionError("an undecided presence read halts")
+
+
+def _source_applies(point: Space, index: int) -> bool | int:
+    """Whether a source applies at ``index``, or the presence node still undecided."""
+    node = state(point).linked.nodes[index]
+    if node.guard is not None:
+        holds = _holds(point, node.guard)
+        if holds is not True:
+            return holds
+    if node.kind == "param":
+        return isinstance(_read_result(point, index), Available)  # given at start
+    if node.kind in ("alias", "guard", "locate", "view"):
+        return _source_applies(point, cast(int, node.output))
+    if node.kind == "select":
+        selector = cast(int, node.selector)
+        case = _read_result(point, selector)
+        if not isinstance(case, Available):
+            return False if isinstance(case, Inapplicable) else selector
+        target = cast(Mapping[str, int], node.selection_index).get(cast(str, case.value))
+        return False if target is None else _source_applies(point, target)
+    if node.kind == "present":
+        answers = [_source_applies(point, target) for _, target in node.alternatives]
+        if any(answer is True for answer in answers):  # an index may equal 1
+            return True
+        return next((answer for answer in answers if answer is not False), False)
+    return True  # a const, a decision, a computation: the source itself
+
+
+def _holds(point: Space, guard: int) -> bool | int:
+    """Whether a guard holds (inapplicable: it does not), or its index while undecided."""
+    answer = _read_result(point, guard)
     if isinstance(answer, Available):
-        return True
-    if isinstance(answer, Inapplicable) or (
-        isinstance(answer, Unresolved) and _unsupplied(answer, "input-missing")
-    ):
-        return False
-    _read_index(point, index)  # undecided: raises like any value read
-    return True
-
-
-def _source_guards(linked: LinkedModel, index: int) -> tuple[int, ...] | None:
-    """The guards along a value input's forwarding chain to a guarded view or derived
-    value, ending with that source's; None when the source is no guarded computation."""
-    guards: list[int] = []
-    node = linked.nodes[index]
-    while forwards(node):
-        if node.guard is not None:
-            guards.append(node.guard)
-        node = linked.nodes[cast(int, node.output)]
-    if node.kind not in ("view", "derived") or node.guard is None:
-        return None
-    return (*guards, node.guard)
+        return answer.value is True
+    return False if isinstance(answer, Inapplicable) else guard
 
 
 def _read_result(point: Space, index: int) -> QueryResult[object]:
@@ -241,9 +247,9 @@ def _read_result(point: Space, index: int) -> QueryResult[object]:
     return cast(_runtime.Evaluation, outcome).result
 
 
-def _unsupplied(answer: Unresolved, *also: str) -> bool:
-    codes = ("input-unsupplied", *also)
-    return bool(answer.findings) and all(finding.code in codes for finding in answer.findings)
+def _unsupplied(answer: Unresolved) -> bool:
+    findings = answer.findings
+    return bool(findings) and all(finding.code == "input-unsupplied" for finding in findings)
 
 
 def read_value(point: Space, reference: ValueRef[T] | View[T]) -> T:

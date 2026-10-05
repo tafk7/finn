@@ -1423,8 +1423,8 @@ class Supplied(ValueDecl[bool]):
 
 def supplied(formal: object) -> bool:
     """Whether the value input ``formal`` is supplied, as a declaration: what
-    ``present(formal)`` answers in a method (bound to a guarded view or derived
-    value, whether that source applies).
+    ``present(formal)`` answers in a method (whether a source applies; its value
+    is not evaluated).
 
     As a guard (``when=supplied(contents)``) the compiler reads it before
     evaluation: where the declaration never supplies the input, a Decision over
