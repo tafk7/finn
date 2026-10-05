@@ -41,58 +41,24 @@ from finn import resources
 from finn.transformation.fpgadataflow.create_dataflow_partition import (
     CreateDataflowPartition,
 )
-from finn.transformation.fpgadataflow.create_stitched_ip import CreateStitchedIP
+from finn.transformation.fpgadataflow.create_stitched_ip import (
+    CreateStitchedIP,
+    collect_ip_dirs,
+)
 from finn.transformation.fpgadataflow.floorplan import Floorplan
 from finn.transformation.fpgadataflow.hlssynth_ip import HLSSynthIP
 from finn.transformation.fpgadataflow.insert_dwc import InsertDWC
 from finn.transformation.fpgadataflow.insert_fifo import InsertFIFO
 from finn.transformation.fpgadataflow.insert_iodma import InsertIODMA
+from finn.transformation.fpgadataflow.kernel_partitions import is_kernel_partition
 from finn.transformation.fpgadataflow.prepare_ip import PrepareIP
 from finn.transformation.fpgadataflow.specialize_layers import SpecializeLayers
+from finn.transformation.kernels.package import PackagePartition, write_boundary_facts
 from finn.util._legacy_build_env import toolchain as legacy_toolchain
 from finn.util.basic import make_build_dir, pynq_native_port_width, pynq_part_map
-from finn.util.resources import resource_path, tcl_quote
+from finn.util.resources import tcl_quote
 
 from . import templates
-
-KERNEL_OPS = "finn.custom_op.kernels"
-
-
-def is_kernel_partition(model):
-    """Whether a partition model is a model of KernelOps (finn.custom_op.kernels)."""
-    return bool(model.graph.node) and all(node.domain == KERNEL_OPS for node in model.graph.node)
-
-
-def collect_ip_dirs(model, ipstitch_path):
-    # collect list of all IP dirs
-    if is_kernel_partition(model):
-        # PackagePartition's IP is self-contained: its sources are imported into it
-        return [ipstitch_path + "/ip"]
-    ip_dirs = []
-    need_memstreamer = False
-    for node in model.graph.node:
-        node_inst = getCustomOp(node)
-        ip_dir_value = node_inst.get_nodeattr("ip_path")
-        assert os.path.isdir(
-            ip_dir_value
-        ), """The directory that should
-        contain the generated ip blocks doesn't exist."""
-        ip_dirs += [ip_dir_value]
-        if node.op_type.startswith("MVAU") or node.op_type == "Thresholding_hls":
-            if node_inst.get_nodeattr("mem_mode") == "internal_decoupled":
-                need_memstreamer = True
-        if node.op_type == "FINNLoop":
-            loop_body = node_inst.get_nodeattr("body")
-            loop_body_ipstitch_path = loop_body.get_metadata_prop("vivado_stitch_proj")
-            assert loop_body_ipstitch_path is not None, (
-                "No stitched IPI design found for the body of %s, " % node.name
-            )
-            ip_dirs += collect_ip_dirs(loop_body, loop_body_ipstitch_path)
-    ip_dirs += [ipstitch_path + "/ip"]
-    if need_memstreamer:
-        # add RTL streamer IP
-        ip_dirs.append(resource_path("rtllib", "memstream"))
-    return ip_dirs
 
 
 class MakeZYNQProject(Transformation):
@@ -348,11 +314,6 @@ class ZynqBuild(Transformation):
         """A model of KernelOps as the parent graph of its partitions: an IODMA
         partition per input and output around the KernelOps' partition, whose
         model states its boundary facts (finn.partition). No IP is built."""
-        # The kernel path's packaging, imported only for a model of KernelOps.
-        from finn.transformation.kernels.package import (  # noqa: PLC0415
-            write_boundary_facts,
-        )
-
         write_boundary_facts(model, "the KernelOps' partition")
         model = model.transform(
             CreateDataflowPartition(partition_model_dir=self.partition_model_dir)
@@ -395,10 +356,6 @@ class ZynqBuild(Transformation):
             dataflow_model_filename = sdp_node.get_nodeattr("model")
             kernel_model = ModelWrapper(dataflow_model_filename)
             if is_kernel_partition(kernel_model):
-                from finn.transformation.kernels.package import (  # noqa: PLC0415
-                    PackagePartition,
-                )
-
                 kernel_model = kernel_model.transform(PackagePartition(sdp_node.onnx_node.name))
                 kernel_model.set_metadata_prop("platform", "zynq-iodma")
                 kernel_model.save(dataflow_model_filename)

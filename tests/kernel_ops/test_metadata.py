@@ -25,12 +25,12 @@ from finn.custom_op.kernels.base import (
     write_target,
 )
 from finn.kernels.target import DspBlock, Platform, Target
-from finn.transformation.kernels import ToKernelOps, resolve_target
-from finn.transformation.kernels.package import (
+from finn.transformation.fpgadataflow.kernel_partitions import (
     PARTITION,
     PARTITION_INPUTS,
     PARTITION_OUTPUTS,
 )
+from finn.transformation.kernels import ToKernelOps, resolve_target
 from finn.util.basic import get_dsp_block, part_map
 from kernel_ops.models import TARGET, chain_source
 

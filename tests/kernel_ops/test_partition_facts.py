@@ -15,19 +15,26 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from onnx import TensorProto, helper
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.registry import getCustomOp
+from qonnx.util.basic import qonnx_make_model
 
+import finn.custom_op.kernels as kernel_ops_package
 from finn.custom_op.kernels.base import PLATFORM_KEYS, KernelOpError
-from finn.transformation.fpgadataflow.create_dataflow_partition import CreateDataflowPartition
-from finn.transformation.fpgadataflow.insert_iodma import InsertIODMA
-from finn.transformation.kernels import PackagePartition
-from finn.transformation.kernels.package import (
-    PARTITION_INPUTS,
-    partition_facts,
-    write_boundary_facts,
+from finn.transformation.fpgadataflow.create_dataflow_partition import (
+    CreateDataflowPartition,
 )
-from finn.util.basic import get_driver_shapes
+from finn.transformation.fpgadataflow.insert_iodma import InsertIODMA
+from finn.transformation.fpgadataflow.kernel_partitions import (
+    KERNEL_OPS_DOMAIN,
+    PARTITION_INPUTS,
+    is_kernel_partition_node,
+    partition_facts,
+)
+from finn.transformation.fpgadataflow.make_driver import get_driver_shapes
+from finn.transformation.kernels import PackagePartition
+from finn.transformation.kernels.package import write_boundary_facts
 from kernel_ops.test_partition import configured, kernel_model
 
 
@@ -60,7 +67,7 @@ def test_the_facts_are_the_boundary_streams_at_the_partitions_end() -> None:
 
 
 def test_a_model_without_facts_is_refused() -> None:
-    with pytest.raises(KernelOpError, match="no boundary facts.*run PackagePartition"):
+    with pytest.raises(ValueError, match="no boundary facts.*run PackagePartition"):
         partition_facts(kernel_model())
 
 
@@ -113,8 +120,36 @@ def test_a_partition_without_facts_refuses_iodma_insertion(tmp_path: Path) -> No
     model = kernel_model()
     configured(model)
     parent = model.transform(CreateDataflowPartition(partition_model_dir=str(tmp_path)))
-    with pytest.raises(KernelOpError, match="no boundary facts"):
+    with pytest.raises(ValueError, match="no boundary facts"):
         parent.transform(InsertIODMA(32))
+
+
+def test_only_a_partition_of_kernel_ops_is_a_kernel_partition_node(tmp_path: Path) -> None:
+    parent = packaged_parent(tmp_path).transform(InsertIODMA(32))
+    assert [is_kernel_partition_node(node) for node in parent.graph.node] == [
+        False,  # IODMA_hls
+        True,
+        False,  # IODMA_hls
+    ]
+
+
+def test_iodma_insertion_refuses_a_node_outside_the_dataflow_by_name() -> None:
+    model = ModelWrapper(
+        qonnx_make_model(
+            helper.make_graph(
+                [helper.make_node("Relu", ["x"], ["y"], name="relu_0")],
+                "foreign",
+                [helper.make_tensor_value_info("x", TensorProto.FLOAT, [1, 4])],
+                [helper.make_tensor_value_info("y", TensorProto.FLOAT, [1, 4])],
+            )
+        )
+    )
+    with pytest.raises(ValueError, match="KernelOps; not: relu_0"):
+        model.transform(InsertIODMA(32))
+
+
+def test_the_kernel_ops_domain_is_the_registering_package() -> None:
+    assert KERNEL_OPS_DOMAIN == kernel_ops_package.__name__
 
 
 def test_the_driver_shapes_come_from_the_facts(tmp_path: Path) -> None:

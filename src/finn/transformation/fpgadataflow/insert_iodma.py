@@ -30,31 +30,16 @@ import math
 import numpy as np
 from onnx import TensorProto
 from onnx import helper as oh
-from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.registry import getCustomOp
 from qonnx.transformation.base import Transformation
 from qonnx.transformation.general import SortGraph
 from qonnx.util.basic import get_by_name
 
-KERNEL_OPS = "finn.custom_op.kernels"
-
-
-def kernel_partition_port(node, tensor):
-    """For a StreamingDataflowPartition of KernelOps (its body packaged), the boundary
-    facts of the port that carries ``tensor``; None for any other node. The body's
-    ports are in its graph's order, which is the partition node's."""
-    if node.op_type != "StreamingDataflowPartition":
-        return None
-    body = ModelWrapper(getCustomOp(node).get_nodeattr("model"))
-    if not body.graph.node or any(item.domain != KERNEL_OPS for item in body.graph.node):
-        return None
-    # The kernel path's packaging, imported only for a partition of KernelOps.
-    from finn.transformation.kernels.package import partition_facts  # noqa: PLC0415
-
-    inputs, outputs = partition_facts(body)
-    if tensor in node.input:
-        return inputs[list(node.input).index(tensor)]
-    return outputs[list(node.output).index(tensor)]
+from finn.transformation.fpgadataflow.kernel_partitions import (
+    is_kernel_partition_node,
+    kernel_partition_port,
+)
+from finn.util.fpgadataflow import is_fpgadataflow_node
 
 
 class InsertIODMA(Transformation):
@@ -122,11 +107,16 @@ class InsertIODMA(Transformation):
         modified = False
         # only makes sense for a pure fpgadataflow graph -- so we check!
         all_nodes = list(model.graph.node)
-        assert all(
-            kernel_partition_port(x, (list(x.input) + list(x.output))[0]) is not None
-            or get_by_name(x.attribute, "backend").s.decode("UTF-8") == "fpgadataflow"
-            for x in all_nodes
-        )
+        foreign = [
+            node.name or node.op_type
+            for node in all_nodes
+            if not is_fpgadataflow_node(node) and not is_kernel_partition_node(node)
+        ]
+        if foreign:
+            raise ValueError(
+                "InsertIODMA needs a graph of fpgadataflow nodes and partitions of KernelOps; "
+                f"not: {', '.join(foreign)}"
+            )
         # insert IODMAs for graph inputs
         if self.insert_input:
             graph_in_names = [x.name for x in model.graph.input]

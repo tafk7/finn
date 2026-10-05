@@ -15,9 +15,10 @@ from pathlib import Path
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.registry import getCustomOp
 
-from finn.transformation.fpgadataflow.make_zynq_proj import ZynqBuild, collect_ip_dirs
-from finn.transformation.kernels.package import partition_facts
-from finn.util.basic import get_driver_shapes
+from finn.transformation.fpgadataflow.create_stitched_ip import collect_ip_dirs
+from finn.transformation.fpgadataflow.kernel_partitions import partition_facts
+from finn.transformation.fpgadataflow.make_driver import get_driver_shapes
+from finn.transformation.fpgadataflow.make_zynq_proj import ZynqBuild
 from kernel_ops.test_partition import configured, kernel_model
 
 
