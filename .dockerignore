@@ -8,7 +8,6 @@
 !pyproject.toml
 !uv.lock
 !setup.py
-!setup.cfg
 !MANIFEST.in
 !VERSION
 !README.md

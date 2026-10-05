@@ -44,7 +44,6 @@ def snapshot(destination):
     for name in (
         "pyproject.toml",
         "setup.py",
-        "setup.cfg",
         "MANIFEST.in",
         "VERSION",
         "LICENSE.txt",

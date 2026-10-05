@@ -64,8 +64,10 @@ gate_pytest() {
 }
 
 # gate_ruff <path...>: formatting, and the lint selection every gate uses
-# (.ruff.toml's, plus I: sorted imports).
+# (.ruff.toml's, plus I: sorted imports); and that pre-commit formats the paths
+# the same way (.pre-commit-config.yaml gives them to ruff, not isort and black).
 gate_ruff() {
+    "$PYTHON_BIN" scripts/_gate_precommit.py "$@"
     "$RUFF_BIN" format --check "$@"
     "$RUFF_BIN" check --extend-select I "$@"
 }
