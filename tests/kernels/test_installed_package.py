@@ -46,8 +46,9 @@ class RejectGraphDependencies(importlib.abc.MetaPathFinder):
 
 sys.meta_path.insert(0, RejectGraphDependencies())
 
-from finn.kernels import DspBlock, MatMulKernel, PackedDotpKernel
-from finn.kernels.target import Platform
+from finn.kernels.dotp import PackedDotpKernel
+from finn.kernels.matmul import MatMulKernel
+from finn.kernels.target import DspBlock, Platform
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.base import Kernel
 from finn.kernels.configure import commit

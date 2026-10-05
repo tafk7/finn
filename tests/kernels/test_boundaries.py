@@ -34,8 +34,9 @@ class RejectParked(importlib.abc.MetaPathFinder):
 sys.meta_path.insert(0, RejectParked())
 from finn.core.space import Space, design_space
 from finn.dataflow.tensor import ScalarEncoding, Tensor
-from finn.kernels import DspBlock, MatMulKernel, PackedDotpKernel
-from finn.kernels.target import Platform
+from finn.kernels.dotp import PackedDotpKernel
+from finn.kernels.matmul import MatMulKernel
+from finn.kernels.target import DspBlock, Platform
 from finn.kernels.artifacts.module import Composed, Leaf
 from finn.kernels.base import Kernel
 from finn.kernels.configure import commit

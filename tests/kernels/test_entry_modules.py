@@ -61,6 +61,15 @@ print(" ".join(labels(built.value)))
 """
 
 
+def test_the_root_re_exports_nothing() -> None:
+    """One import path per concept: owning modules, not the package root."""
+
+    assert not hasattr(finn.kernels, "__all__")
+    assert not hasattr(finn.kernels, "__getattr__")
+    for value in ("MatMulKernel", "DspBlock", "commit", "Kernel"):
+        assert not hasattr(finn.kernels, value), value
+
+
 def test_the_walk_finds_the_cycles_modules() -> None:
     assert {"finn.kernels.channels", "finn.kernels.memstream", "finn.kernels.port"} <= set(MODULES)
 

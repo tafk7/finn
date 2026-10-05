@@ -539,22 +539,20 @@ def kernel_fixtures(api):
 
     A leaf (the FIFO) is its own root; a kernel on streams (the packed Dotp core,
     MatMul) sits in a root that declares them beside it. Choices are committed as a
-    flow commits them, by their stable decision keys (``finn.kernels.commit``).
+    flow commits them, by their stable decision keys (``finn.kernels.configure.commit``).
     """
-    kernels = importlib.import_module("finn.kernels")
-    FifoKernel, MatMulKernel, PackedDotpKernel, commit = (
-        kernels.FifoKernel,
-        kernels.MatMulKernel,
-        kernels.PackedDotpKernel,
-        kernels.commit,
-    )
+    FifoKernel = importlib.import_module("finn.kernels.fifo").FifoKernel
+    MatMulKernel = importlib.import_module("finn.kernels.matmul").MatMulKernel
+    PackedDotpKernel = importlib.import_module("finn.kernels.dotp").PackedDotpKernel
+    commit = importlib.import_module("finn.kernels.configure").commit
+    target = importlib.import_module("finn.kernels.target")
     Channel = importlib.import_module("finn.kernels.channels").Channel
     tensor = importlib.import_module("finn.dataflow.tensor")
     Tensor, ScalarEncoding = tensor.Tensor, tensor.ScalarEncoding
     dtype = importlib.import_module("finn.dataflow.datatypes").resolve_qonnx_datatype_name
-    platform = importlib.import_module("finn.kernels.target").Platform(
+    platform = target.Platform(
         period_ns=5.0,
-        dsp=kernels.DspBlock.DSP48E2,
+        dsp=target.DspBlock.DSP48E2,
         uram=True,
         uram_init=True,
         clk2x=True,
