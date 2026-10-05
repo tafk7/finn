@@ -81,12 +81,12 @@ LAYERS: tuple[Layer, ...] = (
         ("qonnx.core.datatype", "pyslang"),
         "tests/kernels",
     ),
-    # The KernelOps: qonnx custom ops that each bind one kernel point.
+    # The KernelOps: qonnx custom ops that each bind one kernel point, on ONNX nodes.
     Layer(
         "custom_op.kernels",
         ("finn.custom_op.kernels",),
         _KERNEL_STACK,
-        ("numpy", "qonnx"),
+        ("numpy", "onnx", "qonnx"),
         "tests/kernel_ops",
     ),
     # The kernel-partition facts. The module sits in the flow's package but below
