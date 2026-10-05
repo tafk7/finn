@@ -38,7 +38,6 @@ from ._nodes import (
     is_fresh,
     is_reference_input,
     missing_formal,
-    slot_kind,
 )
 from ._table import (
     BOOL,
@@ -302,8 +301,9 @@ class _Allocation:
         )
         self.table.drafts.append(draft)
         draft.slots = self.layered_slots(draft)
+        kinds = self.table.kinds[draft.effective.space_type]
         for member_name, declaration in draft.effective.members.items():
-            kind = slot_kind(declaration)
+            kind = kinds[member_name]
             if kind in ("node", "choice", "reference"):
                 continue  # structure (and reference inputs): allocated below
             slot = draft.slots.get(member_name)
@@ -748,8 +748,9 @@ class _Allocation:
         while cursor < len(self.table.drafts):
             scope = self.table.drafts[cursor]
             cursor += 1
+            kinds = self.table.kinds[scope.effective.space_type]
             for name, declaration in scope.effective.members.items():
-                kind = slot_kind(declaration)
+                kind = kinds[name]
                 if kind == "reference":
                     self.reference_input(scope, name, cast(Param[object], declaration))
                 elif kind == "node":

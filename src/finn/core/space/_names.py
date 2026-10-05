@@ -58,6 +58,7 @@ class Names:
         self.present_nodes: dict[tuple[int, Present[object], bool], int] = {}
         self.projections: dict[tuple[int, Projection[object]], int] = {}
         self.choice_member_nodes: dict[tuple[int, str, bool], int] = {}
+        self.placed_scopes: dict[int, tuple[int, ...]] = {}
 
     def located_name(self, scope: int, path: tuple[Declaration, ...]) -> str:
         """The node name of a path, relative to the scope that reads it."""
@@ -86,29 +87,35 @@ class Names:
         export one entry per input, named by the input.
         """
 
-        draft = self.table.drafts[scope]
         result: list[tuple[str, str, int]] = []
+        for child in self.placed(scope):
+            name = self.table.local_name(scope, child)
+            target = self.table.drafts[child].members.get(key)
+            if target is not None:
+                self.check_view(child, key, target)
+                result.append((name, key.name, target))
+            for member, target in self.table.drafts[child].input_exports.get(key, ()):
+                result.append((name, member, target))
+        return result
+
+    def placed(self, scope: int) -> tuple[int, ...]:
+        """The scopes placed by a scope's members, in member order (candidates in case order)."""
+        placed = self.placed_scopes.get(scope)
+        if placed is not None:
+            return placed
+        draft = self.table.drafts[scope]
+        children: list[int] = []
         for name, declaration in draft.effective.members.items():
             if isinstance(declaration, NodeDecl):
-                children = [draft.named_children[name]]
+                children.append(draft.named_children[name])
             elif is_reference_input(declaration):
-                if name not in draft.named_children:
-                    continue  # a referenced node belongs where it is placed
-                children = [draft.named_children[name]]
+                if name in draft.named_children:  # a referenced node belongs where it is placed
+                    children.append(draft.named_children[name])
             elif isinstance(declaration, NodeDecision):
                 cases = self.table.choice_drafts[draft.choices[declaration]].cases
-                children = [child for _, child in cases if child is not None]
-            else:
-                continue
-            for child in children:
-                name = self.table.local_name(scope, child)
-                target = self.table.drafts[child].members.get(key)
-                if target is not None:
-                    self.check_view(child, key, target)
-                    result.append((name, key.name, target))
-                for member, target in self.table.drafts[child].input_exports.get(key, ()):
-                    result.append((name, member, target))
-        return result
+                children.extend(child for _, child in cases if child is not None)
+        placed = self.placed_scopes[scope] = tuple(children)
+        return placed
 
     def check_view(self, scope: int, key: ViewKey[object], target: int) -> None:
         if self.table.nodes[target].kind != "view":

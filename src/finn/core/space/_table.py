@@ -19,7 +19,7 @@ from typing import cast
 
 from ._bindings import PlacementBinding, Slot
 from ._configuration import Space
-from ._nodes import NodeDecl
+from ._nodes import NodeDecl, SlotKind, slot_kind
 from ._signatures import BoundArgument
 from .collection import EffectiveSpace, collect_space
 from .declarations import Declaration, ValueRef, ViewKey
@@ -141,9 +141,11 @@ class Table:
     nodes: list[Node] = field(default_factory=list)
     drafts: list[ScopeDraft] = field(default_factory=list)
     choice_drafts: list[ChoiceDraft] = field(default_factory=list)
-    # Each family collected once, and the declarations each member name stands for.
+    # Each family collected once: the declarations each member name stands for, and
+    # each member's slot kind.
     effective: dict[type[Space], EffectiveSpace] = field(default_factory=dict)
     aliases: dict[type[Space], dict[str, list[Declaration]]] = field(default_factory=dict)
+    kinds: dict[type[Space], dict[str, SlotKind]] = field(default_factory=dict)
     # Allocation -> lowering: every member to lower, every guard to link.
     members: list[MemberTask] = field(default_factory=list)
     guards: list[GuardTask] = field(default_factory=list)
@@ -174,6 +176,9 @@ class Table:
             for declaration, name in effective.aliases.items():
                 aliases.setdefault(name, []).append(declaration)
             self.aliases[space_type] = aliases
+            self.kinds[space_type] = {
+                name: slot_kind(declaration) for name, declaration in effective.members.items()
+            }
         return effective
 
     def reserve(

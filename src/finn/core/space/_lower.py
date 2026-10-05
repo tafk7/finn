@@ -17,7 +17,7 @@ from __future__ import annotations
 import inspect
 from collections.abc import Callable, Iterable
 from dataclasses import replace
-from typing import cast
+from typing import Any, cast
 
 from ._configuration import Space
 from ._names import Names
@@ -235,15 +235,17 @@ class _Lowering:
             raise DefinitionError(f"{node.key}: the declared Decision has no value semantics")
         return self.domain(scope.index, decision, semantics, owner=node.key)
 
-    def callback(self, node: Node, function: BoundFunction) -> Node:
-        return replace(
-            node,
-            function=function.function,
-            call_style=function.call_style,
-            arguments=self.arguments(node.scope, function, owner=node.owner),
-        )
+    def callback(self, node: Node, function: BoundFunction) -> dict[str, Any]:
+        """A callback's payload: its function, call style and resolved arguments."""
+        return {
+            "function": function.function,
+            "call_style": function.call_style,
+            "arguments": self.arguments(node.scope, function, owner=node.owner),
+        }
 
-    def view_output(self, node: Node, declaration: View[object], name: str) -> int:
+    def view_output(
+        self, node: Node, guard: int | None, declaration: View[object], name: str
+    ) -> int:
         """Both view forms lower to one accepted node with an explicit raw output."""
         if declaration.source is not None:
             return self.names.reference(node.scope, declaration.source, owner=node.key)
@@ -253,17 +255,20 @@ class _Lowering:
             node.key + ".$output",
             "derived",
             function.semantics,
-            guard=node.guard,
+            guard=guard,
             source_owner=node.key,
         )
-        self.table.nodes[output] = self.callback(self.table.nodes[output], function)
+        nodes = self.table.nodes
+        nodes[output] = replace(nodes[output], **self.callback(nodes[output], function))
         return output
 
     def link_member(self, task: MemberTask) -> None:
+        """Lower one member: every field its node gains, replaced in one step."""
         scope = self.table.drafts[task.scope]
         node = self.table.nodes[task.index]
         declaration = task.declaration
         binding = task.binding
+        changes: dict[str, Any] = {}
         # A supplier is read in the body that wrote it: the node's own source
         # scope, or the enclosing node's for a binding assigned through a path.
         written = (
@@ -273,36 +278,31 @@ class _Lowering:
         )
         if binding is not None and binding.kind in {"literal", "reference", "pin", "pin-reference"}:
             if binding.kind in {"literal", "pin"}:
-                node = replace(node, value=binding.supplier)
+                changes["value"] = binding.supplier
             elif type(binding.supplier) is int and task.index in self.table.editable_aliases:
-                node = replace(node, output=binding.supplier)
+                changes["output"] = binding.supplier
             else:
                 located = isinstance(declaration, LocatedParam)
-                node = replace(
-                    node,
-                    output=self.names.supply(
-                        written, binding.supplier, owner=node.key, locate=located
-                    ),
+                changes["output"] = self.names.supply(
+                    written, binding.supplier, owner=node.key, locate=located
                 )
             if binding.contract is not None:
                 # A pinned coordinate keeps its declared guard and domain: the
                 # family's contract checks whatever an enclosing body supplies.
-                node = replace(
-                    node,
-                    guard=self.table.guarded(
-                        scope.index,
-                        scope.guard,
-                        scope.effective.guards.get(binding.contract),
-                        node.key + ".$guard",
-                        owner=node.key,
-                    ),
+                changes["guard"] = self.table.guarded(
+                    scope.index,
+                    scope.guard,
+                    scope.effective.guards.get(binding.contract),
+                    node.key + ".$guard",
+                    owner=node.key,
                 )
-                domain, arguments = self.contract(
+                changes["domain"], changes["domain_arguments"] = self.contract(
                     scope, cast(Decision[object], binding.contract), node
                 )
-                note = binding.provenance.text() if binding.provenance is not None else None
-                node = replace(node, domain=domain, domain_arguments=arguments, note=note)
-            self.table.nodes[node.index] = node
+                changes["note"] = (
+                    binding.provenance.text() if binding.provenance is not None else None
+                )
+            self.table.nodes[node.index] = replace(node, **changes)
             return
         source_scope = scope.index
         condition: ValueRef[bool] | None = scope.effective.guards.get(declaration)
@@ -335,93 +335,75 @@ class _Lowering:
             node.key + ".$guard",
             owner=node.key,
         )
-        node = replace(node, guard=guard)
+        changes["guard"] = guard
         if isinstance(declaration, Param):
-            node = replace(node, required=declaration.required)
+            changes["required"] = declaration.required
         elif isinstance(declaration, Const):
             assert node.semantics is not None
             try:
-                node = replace(node, value=node.semantics.freeze(declaration.value))
+                changes["value"] = node.semantics.freeze(declaration.value)
             except Exception as cause:
                 raise DefinitionError(f"{node.key}: constant snapshot failed") from cause
         elif isinstance(declaration, Decision):
             assert node.semantics is not None
-            domain, arguments = self.domain(
+            changes["domain"], changes["domain_arguments"] = self.domain(
                 source_scope, declaration, node.semantics, owner=node.key
             )
-            node = replace(node, domain=domain, domain_arguments=arguments)
             if replaced is not None:
-                contract, contract_arguments = self.contract(scope, replaced, node)
-                node = replace(
-                    node,
-                    contract=contract,
-                    contract_arguments=contract_arguments,
-                    note=binding.provenance.text()
+                changes["contract"], changes["contract_arguments"] = self.contract(
+                    scope, replaced, node
+                )
+                changes["note"] = (
+                    binding.provenance.text()
                     if binding is not None and binding.provenance is not None
-                    else None,
+                    else None
                 )
         elif isinstance(declaration, Expr):
             self.names.expression(scope.index, declaration, owner=node.key, index=node.index)
         elif isinstance(declaration, (Derived, Constraint)):
-            node = self.callback(node, scope.effective.functions[task.name])
+            changes.update(self.callback(node, scope.effective.functions[task.name]))
         elif isinstance(declaration, Supplied):
-            node = replace(node, function=_supply(declaration.formal), call_style="self")
+            changes["function"] = _supply(declaration.formal)
+            changes["call_style"] = "self"
         elif isinstance(declaration, ConstraintGroup):
-            node = replace(
-                node,
-                constraints=self.obligations(
-                    scope.index,
-                    declaration.constraints,
-                    (Constraint,),
-                    owner=node.key,
-                ),
+            changes["constraints"] = self.obligations(
+                scope.index,
+                declaration.constraints,
+                (Constraint,),
+                owner=node.key,
             )
         elif isinstance(declaration, View):
-            node = replace(
-                node,
-                output=self.view_output(node, declaration, task.name),
-                constraints=self.obligations(
-                    scope.index,
-                    declaration.requires,
-                    (Constraint, ConstraintGroup, View, ValueRef, Members),
-                    owner=node.key,
-                ),
+            changes["output"] = self.view_output(node, guard, declaration, task.name)
+            changes["constraints"] = self.obligations(
+                scope.index,
+                declaration.requires,
+                (Constraint, ConstraintGroup, View, ValueRef, Members),
+                owner=node.key,
             )
         elif isinstance(declaration, Users):
             entries = self.names.users_candidates(
                 scope.index, cast(ViewKey[object], declaration.key)
             )
-            node = replace(
-                node,
-                alternatives=tuple((name, target) for name, _, target in entries),
-                value=tuple(member for _, member, _ in entries),
-            )
+            changes["alternatives"] = tuple((name, target) for name, _, target in entries)
+            changes["value"] = tuple(member for _, member, _ in entries)
         elif isinstance(declaration, Present):
-            node = replace(
-                node,
-                alternatives=tuple(
-                    (
-                        f"{node.key}.{position}",
-                        self.names.reference(scope.index, item, owner=node.key),
-                    )
-                    for position, item in enumerate(declaration.sources)
-                ),
+            changes["alternatives"] = tuple(
+                (
+                    f"{node.key}.{position}",
+                    self.names.reference(scope.index, item, owner=node.key),
+                )
+                for position, item in enumerate(declaration.sources)
             )
         elif isinstance(declaration, Members):
             entries = self.names.members_candidates(
                 scope.index, cast(ViewKey[object], declaration.key)
             )
-            node = replace(
-                node,
-                alternatives=tuple((name, target) for name, _, target in entries),
-                value=tuple(member for _, member, _ in entries),
-            )
+            changes["alternatives"] = tuple((name, target) for name, _, target in entries)
+            changes["value"] = tuple(member for _, member, _ in entries)
         elif isinstance(declaration, (MemberRef, ChoiceMemberRef, CaseRef)):
             anonymous = replace_owner(declaration)
-            node = replace(
-                node, output=self.names.reference(scope.index, anonymous, owner=node.key)
-            )
-        self.table.nodes[node.index] = node
+            changes["output"] = self.names.reference(scope.index, anonymous, owner=node.key)
+        self.table.nodes[node.index] = replace(node, **changes)
 
 
 def replace_owner(reference: Declaration) -> Declaration:
