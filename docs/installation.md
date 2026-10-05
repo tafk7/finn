@@ -418,7 +418,11 @@ environment launches in `Selection().prepare()`'s.
 
 HLS and stitched-IP Vivado commands execute with argv, child env and cwd. Probes
 use the identical route and a bounded timeout. `CallHLS(toolchain=...)` and
-`CreateStitchedIP(..., toolchain=...)` accept prepared internal selections.
+`CreateStitchedIP(..., toolchain=...)` accept prepared internal selections. A
+dataflow build prepares one toolchain (the legacy environment's, on the first step
+that runs a tool) and passes it to every HLS synthesis, stitching, FIFO-sizing,
+shell-build, link and driver step; `ZynqBuild`, `PrepareForLinking` and
+`InsertAndSetFIFODepths` likewise pass theirs to the tool steps they run.
 `FINN_TOOL_DIR_OVERRIDE` continues to select site wrappers; launcher prefixes
 preserve those names and do not substitute local absolute vendor executables.
 The site owns remote activation, path visibility and remote cancellation.

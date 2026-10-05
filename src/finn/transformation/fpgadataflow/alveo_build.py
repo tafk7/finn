@@ -54,6 +54,7 @@ from finn.transformation.fpgadataflow.specialize_layers import SpecializeLayers
 from finn.util._legacy_build_env import toolchain as legacy_toolchain
 from finn.util.basic import make_build_dir
 from finn.util.resources import tcl_quote
+from finn.util.toolchain import Toolchain
 
 from . import templates
 
@@ -208,6 +209,10 @@ class PrepareForLinking(Transformation):
     :parameter floorplan_file: path to a JSON containing a dictionary with
         SLR assignments for each node in the ONNX graph.
         Must be parse-able by the ApplyConfig transform.
+    :parameter toolchain: the prepared ``finn.util.toolchain.Toolchain`` that every
+        Vivado and Vitis HLS run of the preparation goes through (HLSSynthIP,
+        CreateStitchedIP, CreateVitisXO); by default the legacy environment's,
+        prepared once.
     """
 
     def __init__(
@@ -217,8 +222,10 @@ class PrepareForLinking(Transformation):
         platform,
         floorplan_file=None,
         partition_model_dir=None,
+        toolchain: Toolchain | None = None,
     ):
         super().__init__()
+        self.toolchain = toolchain
         self.fpga_part = fpga_part
         self.period_ns = period_ns
         self.platform = platform
@@ -228,6 +235,7 @@ class PrepareForLinking(Transformation):
     def apply(self, model):
         if self.platform not in ["vitis-xrt", "slash-vrt"]:
             raise Exception(f"Unknown platform {self.platform}")
+        toolchain = self.toolchain or legacy_toolchain()
 
         # prepare at global level, then break up into kernels
         prep_transforms = [InsertIODMA(512), InsertDWC(), SpecializeLayers(self.fpga_part)]
@@ -257,14 +265,20 @@ class PrepareForLinking(Transformation):
             kernel_model = kernel_model.transform(GiveUniqueNodeNames(prefix))
             kernel_model.save(dataflow_model_filename)
             kernel_model = kernel_model.transform(PrepareIP(self.fpga_part, self.period_ns))
-            kernel_model = kernel_model.transform(HLSSynthIP())
+            kernel_model = kernel_model.transform(HLSSynthIP(toolchain=toolchain))
             kernel_model = kernel_model.transform(
                 CreateStitchedIP(
-                    self.fpga_part, self.period_ns, sdp_node.onnx_node.name, run_synth=True
+                    self.fpga_part,
+                    self.period_ns,
+                    sdp_node.onnx_node.name,
+                    run_synth=True,
+                    toolchain=toolchain,
                 )
             )
             if self.platform == "vitis-xrt":
-                kernel_model = kernel_model.transform(CreateVitisXO(sdp_node.onnx_node.name))
+                kernel_model = kernel_model.transform(
+                    CreateVitisXO(sdp_node.onnx_node.name, toolchain=toolchain)
+                )
             kernel_model.set_metadata_prop("platform", self.platform)
             kernel_model.save(dataflow_model_filename)
         model.set_metadata_prop("platform", self.platform)

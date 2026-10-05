@@ -879,7 +879,9 @@ def step_hw_codegen(model: ModelWrapper, cfg: DataflowBuildConfig):
 def step_hw_ipgen(model: ModelWrapper, cfg: DataflowBuildConfig):
     """Run Vitis HLS synthesis on generated code for HLSBackend nodes,
     in order to generate IP blocks. For RTL nodes this step does not do anything."""
-    model = model.transform(HLSSynthIP(cfg._resolve_fpga_part()))
+    model = model.transform(
+        HLSSynthIP(cfg._resolve_fpga_part(), toolchain=cfg._resolve_toolchain())
+    )
     model = model.transform(ReplaceVerilogRelPaths())
     report_dir = cfg.output_dir + "/report"
     os.makedirs(report_dir, exist_ok=True)
@@ -955,7 +957,9 @@ def step_set_fifo_depths(model: ModelWrapper, cfg: DataflowBuildConfig):
             model = model.transform(
                 PrepareIP(cfg._resolve_fpga_part(), cfg._resolve_hls_clk_period())
             )
-            model = model.transform(HLSSynthIP(cfg._resolve_fpga_part()))
+            model = model.transform(
+                HLSSynthIP(cfg._resolve_fpga_part(), toolchain=cfg._resolve_toolchain())
+            )
             if cfg.fifosim_save_waveform:
                 report_dir = cfg.output_dir + "/report"
                 os.makedirs(report_dir, exist_ok=True)
@@ -1015,6 +1019,7 @@ def step_set_fifo_depths(model: ModelWrapper, cfg: DataflowBuildConfig):
                     fifosim_input_throttle=cfg.fifosim_input_throttle,
                     cfg_n_inferences=cfg.fifosim_n_inferences,
                     debug_log_dir=(_fifo_debug_live_dir(cfg) if cfg.debug_fifo else None),
+                    toolchain=cfg._resolve_toolchain(),
                 )
             )
             snapshot_fifo_logs(cfg, "fifo_sizing")
@@ -1077,7 +1082,9 @@ def step_set_fifo_depths(model: ModelWrapper, cfg: DataflowBuildConfig):
     # after FIFOs are ready to go, call PrepareIP and HLSSynthIP again
     # this will only run for the new nodes (e.g. FIFOs and DWCs)
     model = model.transform(PrepareIP(cfg._resolve_fpga_part(), cfg._resolve_hls_clk_period()))
-    model = model.transform(HLSSynthIP(cfg._resolve_fpga_part()))
+    model = model.transform(
+        HLSSynthIP(cfg._resolve_fpga_part(), toolchain=cfg._resolve_toolchain())
+    )
     return model
 
 
@@ -1096,6 +1103,7 @@ def step_create_stitched_ip(model: ModelWrapper, cfg: DataflowBuildConfig):
                 run_synth=cfg.stitched_ip_gen_dcp or run_pnr,
                 run_pnr=run_pnr,
                 signature=cfg.signature,
+                toolchain=cfg._resolve_toolchain(),
             )
         )
         # If P&R was run, parse the OOC results and store in model metadata + write report
@@ -1197,6 +1205,7 @@ def step_export_portable_rtl(model: ModelWrapper, cfg: DataflowBuildConfig):
                     run_synth=False,
                     run_pnr=False,
                     signature=cfg.signature,
+                    toolchain=cfg._resolve_toolchain(),
                 )
             )
 
@@ -1281,6 +1290,7 @@ def step_make_driver(model: ModelWrapper, cfg: DataflowBuildConfig):
             MakeCPPDriver(
                 cfg._resolve_driver_platform(),
                 version=cfg.cpp_driver_version,
+                toolchain=cfg._resolve_toolchain(),
             )
         )
         shutil.copytree(
@@ -1315,6 +1325,7 @@ def step_synthesize_bitfile(model: ModelWrapper, cfg: DataflowBuildConfig):
                     cfg.synth_clk_period_ns,
                     cfg.enable_hw_debug,
                     partition_model_dir=partition_model_dir,
+                    toolchain=cfg._resolve_toolchain(),
                 )
             )
             copy(model.get_metadata_prop("bitfile"), bitfile_dir + "/finn-accel.bit")
@@ -1343,6 +1354,7 @@ def step_synthesize_bitfile(model: ModelWrapper, cfg: DataflowBuildConfig):
                     "vitis-xrt",
                     floorplan_file=cfg.vitis_floorplan_file,
                     partition_model_dir=partition_model_dir,
+                    toolchain=cfg._resolve_toolchain(),
                 )
             )
             model = model.transform(
@@ -1351,6 +1363,7 @@ def step_synthesize_bitfile(model: ModelWrapper, cfg: DataflowBuildConfig):
                     cfg.synth_clk_period_ns,
                     strategy=cfg._resolve_vitis_opt_strategy(),
                     enable_debug=cfg.enable_hw_debug,
+                    toolchain=cfg._resolve_toolchain(),
                 )
             )
             copy(model.get_metadata_prop("bitfile"), bitfile_dir + "/finn-accel.xclbin")
@@ -1364,9 +1377,16 @@ def step_synthesize_bitfile(model: ModelWrapper, cfg: DataflowBuildConfig):
                 json.dump(post_synth_resources, f, indent=2)
         elif cfg.shell_flow_type == ShellFlowType.SLASH_ALVEO:
             model = model.transform(
-                PrepareForLinking(cfg._resolve_fpga_part(), cfg.synth_clk_period_ns, "slash-vrt")
+                PrepareForLinking(
+                    cfg._resolve_fpga_part(),
+                    cfg.synth_clk_period_ns,
+                    "slash-vrt",
+                    toolchain=cfg._resolve_toolchain(),
+                )
             )
-            model = model.transform(SlashLink(not cfg.enable_hw_sim))
+            model = model.transform(
+                SlashLink(not cfg.enable_hw_sim, toolchain=cfg._resolve_toolchain())
+            )
             copy(model.get_metadata_prop("bitfile"), bitfile_dir + "/finn-accel.vbin")
             if not cfg.enable_hw_sim:
                 copy(model.get_metadata_prop("slash_report"), bitfile_dir + "/slash_report.xml")
@@ -1458,7 +1478,9 @@ def step_loop_body_set_fifo_depths(model: ModelWrapper, cfg: DataflowBuildConfig
     loop_context = model.get_metadata_prop("loop_context")
     # Prepare and synthesize IP for FIFO characterization
     model = model.transform(PrepareIP(cfg._resolve_fpga_part(), cfg._resolve_hls_clk_period()))
-    model = model.transform(HLSSynthIP(cfg._resolve_fpga_part()))
+    model = model.transform(
+        HLSSynthIP(cfg._resolve_fpga_part(), toolchain=cfg._resolve_toolchain())
+    )
     model = model.transform(ReplaceVerilogRelPaths())
 
     # Set waveform trace if configured
@@ -1477,6 +1499,7 @@ def step_loop_body_set_fifo_depths(model: ModelWrapper, cfg: DataflowBuildConfig
             fifosim_input_throttle=cfg.fifosim_input_throttle,
             debug_log_dir=(_fifo_debug_live_dir(cfg) if cfg.debug_fifo else None),
             debug_log_prefix=(loop_context + "_") if loop_context else "",
+            toolchain=cfg._resolve_toolchain(),
         )
     )
     # snapshot per-FIFO debug logs for this loop body before the live dir is reused
@@ -1509,13 +1532,16 @@ def step_loop_body_ipgen_and_stitch(model: ModelWrapper, cfg: DataflowBuildConfi
         Loop body ModelWrapper with synthesized IP and stitched IP created
     """
     # HLS synthesis for this loop body
-    model = model.transform(HLSSynthIP(cfg._resolve_fpga_part()))
+    model = model.transform(
+        HLSSynthIP(cfg._resolve_fpga_part(), toolchain=cfg._resolve_toolchain())
+    )
 
     # Create stitched IP for this loop body
     model = model.transform(
         CreateStitchedIP(
             cfg._resolve_fpga_part(),
             cfg.synth_clk_period_ns,
+            toolchain=cfg._resolve_toolchain(),
         )
     )
 

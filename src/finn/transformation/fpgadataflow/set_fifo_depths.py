@@ -45,7 +45,9 @@ from finn.transformation.fpgadataflow.insert_dwc import InsertDWC
 from finn.transformation.fpgadataflow.insert_fifo import InsertFIFO
 from finn.transformation.fpgadataflow.prepare_ip import PrepareIP
 from finn.transformation.fpgadataflow.specialize_layers import SpecializeLayers
+from finn.util._legacy_build_env import toolchain as legacy_toolchain
 from finn.util.fpgadataflow import is_hls_node, is_rtl_node
+from finn.util.toolchain import Toolchain
 
 
 def check_fifo_gauge_overflow(node_name, observed):
@@ -224,6 +226,9 @@ class InsertAndSetFIFODepths(Transformation):
         smaller where appropriate
     :parameter fifosim_input_throttle: use input throttling based on dataflow analysis
         while doing simulation-based FIFO sizing
+    :parameter toolchain: the prepared ``finn.util.toolchain.Toolchain`` the sizing's
+        HLS synthesis and stitched IP run in (HLSSynthIP, CreateStitchedIP); by
+        default the legacy environment's, prepared once
 
     Assumed input graph properties:
 
@@ -260,8 +265,10 @@ class InsertAndSetFIFODepths(Transformation):
         cfg_n_inferences=2,
         debug_log_dir=None,
         debug_log_prefix="",
+        toolchain: Toolchain | None = None,
     ):
         super().__init__()
+        self.toolchain = toolchain
         self.fpgapart = fpgapart
         self.clk_ns = clk_ns
         self.max_depth = max_depth
@@ -435,8 +442,9 @@ class InsertAndSetFIFODepths(Transformation):
         latency = perf["critical_path_cycles"]
         max_cycles = perf["max_cycles"]
         model = model.transform(PrepareIP(self.fpgapart, self.clk_ns))
-        model = model.transform(HLSSynthIP())
-        model = model.transform(CreateStitchedIP(self.fpgapart, self.clk_ns))
+        toolchain = self.toolchain or legacy_toolchain()
+        model = model.transform(HLSSynthIP(toolchain=toolchain))
+        model = model.transform(CreateStitchedIP(self.fpgapart, self.clk_ns, toolchain=toolchain))
         model.set_metadata_prop("exec_mode", "rtlsim")
 
         # do rtlsim in C++ for FIFO sizing

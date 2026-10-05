@@ -35,7 +35,9 @@ from enum import Enum
 from typing import Any, Callable, Dict, List, Optional
 
 from finn.transformation.fpgadataflow.alveo_build import VitisOptStrategy
+from finn.util._legacy_build_env import toolchain as legacy_toolchain
 from finn.util.basic import hbm_boards, part_map, vitis_default_platform
+from finn.util.toolchain import Toolchain
 
 
 class AutoFIFOSizingMethod(str, Enum):
@@ -426,6 +428,16 @@ class DataflowBuildConfig:
             return self.synth_clk_period_ns
         else:
             return self.hls_clk_period_ns
+
+    def _resolve_toolchain(self) -> Toolchain:
+        """The prepared toolchain every tool step of this build runs in: the legacy
+        environment's, prepared by the first step that asks and then the same object
+        for every later step. Kept on the instance, not a field: it is prepared, not
+        configured, and is not serialized with the build configuration."""
+        toolchain = getattr(self, "_toolchain", None)
+        if toolchain is None:
+            toolchain = self._toolchain = legacy_toolchain()
+        return toolchain
 
     def _resolve_driver_platform(self):
         if self.shell_flow_type == ShellFlowType.VIVADO_ZYNQ:

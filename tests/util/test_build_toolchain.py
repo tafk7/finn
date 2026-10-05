@@ -1,0 +1,387 @@
+# Copyright (C) 2026, Advanced Micro Devices, Inc.
+# SPDX-License-Identifier: BSD-3-Clause
+
+"""One toolchain per flow: the dataflow builder, PrepareForLinking and FIFO sizing
+hand the toolchain they are given (or the one they prepare) to each
+transformation that runs a vendor tool.
+
+The tool steps are replaced by recorders, each checking its call against the
+real constructor; where a real run is needed, the only Vitis HLS on the
+toolchain's PATH is a fake one. No Vivado and no Vitis HLS. ZynqBuild's own
+threading is tests/kernel_ops/test_zynq_build.py.
+"""
+
+from __future__ import annotations
+
+import pytest
+
+import inspect
+import numpy as np
+import os
+import sys
+from onnx import TensorProto, helper
+from pathlib import Path
+from qonnx.core.datatype import DataType
+from qonnx.core.modelwrapper import ModelWrapper
+from qonnx.custom_op.registry import getCustomOp
+from qonnx.transformation.base import Transformation
+from qonnx.util.basic import qonnx_make_model
+
+from finn.builder import build_dataflow_config, build_dataflow_steps
+from finn.builder.build_dataflow_config import (
+    AutoFIFOSizingMethod,
+    DataflowBuildConfig,
+    DataflowOutputType,
+    ShellFlowType,
+)
+from finn.transformation.fpgadataflow import alveo_build, set_fifo_depths
+from finn.transformation.fpgadataflow.alveo_build import PrepareForLinking
+from finn.transformation.fpgadataflow.specialize_layers import SpecializeLayers
+from finn.util import hls
+from finn.util.toolchain import Selection, Toolchain
+
+pytestmark = pytest.mark.util
+
+ALVEO_PART = "xcu250-figd2104-2L-e"
+
+
+def recorder(module, name, seen, tmp_path):
+    """A stand-in for ``module.name`` that checks its arguments against the real
+    constructor, records the toolchain it is given, and leaves the metadata the
+    builder reads after it (a stitched-IP project, a driver directory)."""
+    signature = inspect.signature(getattr(module, name).__init__)
+
+    class Recorded(Transformation):
+        def __init__(self, *args, **kwargs):
+            super().__init__()
+            bound = signature.bind(None, *args, **kwargs)
+            seen.append((name, bound.arguments.get("toolchain")))
+
+        def apply(self, model):
+            if name in ("CreateStitchedIP", "MakeCPPDriver"):
+                directory = tmp_path / name
+                directory.mkdir(exist_ok=True)
+                key = "vivado_stitch_proj" if name == "CreateStitchedIP" else "cpp_driver_dir"
+                model.set_metadata_prop(key, str(directory))
+            return model, False
+
+    return Recorded
+
+
+class Passed(Transformation):
+    """A step that changes nothing (code generation, the export after stitching)."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__()
+
+    def apply(self, model):
+        return model, False
+
+
+def identity_model():
+    """A model with no hardware nodes: every step runs, only the tool steps act."""
+    inp = helper.make_tensor_value_info("inp", TensorProto.FLOAT, [1, 4])
+    outp = helper.make_tensor_value_info("outp", TensorProto.FLOAT, [1, 4])
+    node = helper.make_node("Identity", ["inp"], ["outp"], name="Identity_0")
+    return ModelWrapper(qonnx_make_model(helper.make_graph([node], "identity", [inp], [outp])))
+
+
+def mvau_model():
+    """One MVAU, 8 inputs to 4 outputs, INT2 weights and inputs, no activation."""
+    inp = helper.make_tensor_value_info("inp", TensorProto.FLOAT, [1, 8])
+    outp = helper.make_tensor_value_info("outp", TensorProto.FLOAT, [1, 4])
+    node = helper.make_node(
+        "MVAU",
+        ["inp", "weights"],
+        ["outp"],
+        name="MVAU_0",
+        domain="finn.custom_op.fpgadataflow",
+        backend="fpgadataflow",
+        MW=8,
+        MH=4,
+        SIMD=2,
+        PE=2,
+        inputDataType="INT2",
+        weightDataType="INT2",
+        outputDataType="INT32",
+        ActVal=0,
+        binaryXnorMode=0,
+        noActivation=1,
+        preferred_impl_style="hls",
+        mem_mode="internal_embedded",
+    )
+    model = ModelWrapper(qonnx_make_model(helper.make_graph([node], "mvau", [inp], [outp])))
+    model.set_tensor_datatype("inp", DataType["INT2"])
+    model.set_tensor_datatype("outp", DataType["INT32"])
+    model.set_initializer("weights", np.ones((8, 4), dtype=np.float32))
+    model.set_tensor_datatype("weights", DataType["INT2"])
+    return model
+
+
+def builder_config(tmp_path, **settings):
+    return DataflowBuildConfig(
+        **{
+            "output_dir": str(tmp_path / "output"),
+            "synth_clk_period_ns": 5.0,
+            "board": "U250",
+            "shell_flow_type": ShellFlowType.VITIS_ALVEO,
+            "generate_outputs": [],
+            **settings,
+        }
+    )
+
+
+#: The builder's transformations that run a vendor tool.
+BUILDER_TOOL_STEPS = (
+    "HLSSynthIP",
+    "InsertAndSetFIFODepths",
+    "CreateStitchedIP",
+    "ZynqBuild",
+    "PrepareForLinking",
+    "VitisLink",
+    "SlashLink",
+    "MakeCPPDriver",
+)
+
+#: The tool steps the builder run below reaches, in order.
+BUILDER_ORDER = [
+    "HLSSynthIP",  # step_hw_ipgen
+    "HLSSynthIP",  # step_set_fifo_depths, characterized
+    "HLSSynthIP",
+    "HLSSynthIP",  # step_set_fifo_depths, sizes from the folding config
+    "InsertAndSetFIFODepths",  # step_set_fifo_depths, by simulation
+    "HLSSynthIP",
+    "CreateStitchedIP",  # step_create_stitched_ip
+    "CreateStitchedIP",  # step_export_portable_rtl
+    "MakeCPPDriver",  # step_make_driver
+    "ZynqBuild",  # step_synthesize_bitfile: Zynq
+    "PrepareForLinking",  # Vitis
+    "VitisLink",
+    "PrepareForLinking",  # SLASH
+    "SlashLink",
+    "HLSSynthIP",  # step_loop_body_set_fifo_depths
+    "InsertAndSetFIFODepths",
+    "HLSSynthIP",  # step_loop_body_ipgen_and_stitch
+    "CreateStitchedIP",
+]
+
+
+def test_a_build_prepares_one_toolchain_and_runs_every_tool_step_by_it(monkeypatch, tmp_path):
+    """Every builder step that runs a tool, in each branch that runs one, over one
+    build configuration: each tool step receives the configuration's toolchain,
+    prepared once."""
+    seen = []
+    for name in BUILDER_TOOL_STEPS:
+        monkeypatch.setattr(
+            build_dataflow_steps, name, recorder(build_dataflow_steps, name, seen, tmp_path)
+        )
+    # Code generation, and the characterization and FIFO insertion around HLS
+    # synthesis (which a model without hardware nodes cannot run).
+    for name in (
+        "PrepareIP",
+        "ExportPortableRTL",
+        "PrepareRTLSim",
+        "DeriveCharacteristic",
+        "DeriveFIFOSizes",
+        "InsertFIFO",
+    ):
+        monkeypatch.setattr(build_dataflow_steps, name, Passed)
+    monkeypatch.setattr(
+        build_dataflow_steps, "dataflow_performance", lambda model: {"max_cycles": 0}
+    )
+    # The bitfile step's reports, copied from where the shell build left them.
+    monkeypatch.setattr(build_dataflow_steps, "copy", lambda *args: None)
+    monkeypatch.setattr(build_dataflow_steps, "post_synth_res", lambda model: {})
+    toolchain = object()
+    prepared = []
+
+    def legacy_toolchain():
+        prepared.append(toolchain)
+        return toolchain
+
+    monkeypatch.setattr(build_dataflow_config, "legacy_toolchain", legacy_toolchain)
+    steps = build_dataflow_steps
+    cfg = builder_config(tmp_path)
+
+    def run(step, **settings):
+        for key, value in settings.items():
+            setattr(cfg, key, value)
+        step(identity_model(), cfg)
+
+    run(steps.step_hw_ipgen)
+    run(
+        steps.step_set_fifo_depths,
+        auto_fifo_depths=True,
+        auto_fifo_strategy=AutoFIFOSizingMethod.CHARACTERIZE,
+    )
+    run(steps.step_set_fifo_depths, auto_fifo_depths=False)
+    run(
+        steps.step_set_fifo_depths,
+        auto_fifo_depths=True,
+        auto_fifo_strategy=AutoFIFOSizingMethod.LARGEFIFO_RTLSIM,
+    )
+    run(steps.step_create_stitched_ip, generate_outputs=[DataflowOutputType.STITCHED_IP])
+    run(steps.step_export_portable_rtl, generate_outputs=[DataflowOutputType.PORTABLE_RTL])
+    run(steps.step_make_driver, generate_outputs=[DataflowOutputType.CPP_DRIVER])
+    for flow, board in (
+        (ShellFlowType.VIVADO_ZYNQ, "Pynq-Z1"),
+        (ShellFlowType.VITIS_ALVEO, "U250"),
+        (ShellFlowType.SLASH_ALVEO, "U250"),
+    ):
+        run(
+            steps.step_synthesize_bitfile,
+            generate_outputs=[DataflowOutputType.BITFILE],
+            shell_flow_type=flow,
+            board=board,
+            enable_hw_sim=True,
+        )
+    run(steps.step_loop_body_set_fifo_depths)
+    run(steps.step_loop_body_ipgen_and_stitch)
+    assert [name for name, _ in seen] == BUILDER_ORDER
+    assert all(given is toolchain for _, given in seen)
+    assert prepared == [toolchain]
+
+
+def test_the_toolchain_is_prepared_on_first_use_and_not_configured(monkeypatch):
+    prepared = []
+    monkeypatch.setattr(
+        build_dataflow_config, "legacy_toolchain", lambda: prepared.append(object()) or prepared[-1]
+    )
+    cfg = DataflowBuildConfig(output_dir="out", synth_clk_period_ns=5.0, generate_outputs=[])
+    assert prepared == []
+    assert cfg._resolve_toolchain() is cfg._resolve_toolchain() is prepared[0]
+    assert len(prepared) == 1
+    # The serialized build configuration does not carry it.
+    assert "_toolchain" not in cfg.to_json()
+    assert DataflowBuildConfig.from_json(cfg.to_json()) == cfg
+
+
+#: A Vitis HLS that reports 2024.2 and, given a node's script, makes the IP
+#: directory HLSBackend checks for and notes that it ran.
+FAKE_VITIS_HLS = """
+import os, sys
+if sys.argv[1] == "-version":
+    print("Vitis HLS - High-Level Synthesis from C, C++ and OpenCL v2024.2 (64-bit)")
+    sys.exit()
+name = os.path.basename(sys.argv[2])[len("hls_syn_") : -len(".tcl")]
+os.makedirs(f"project_{name}/sol1/impl/ip")
+open("synthesized_here", "w").close()
+"""
+
+
+def legacy_refused():
+    # An Exception, not pytest.fail: it is raised in a pool worker, which passes
+    # an Exception back to the parent and dies on a BaseException.
+    raise AssertionError("the legacy toolchain was prepared")
+
+
+def test_the_builder_runs_hls_synthesis_in_its_prepared_toolchain(monkeypatch, tmp_path):
+    """step_hw_codegen and step_hw_ipgen for real on an MVAU, in two workers (the
+    toolchain reaches them pickled): its synthesis runs in the toolchain the build
+    configuration prepared, whose PATH holds only a fake Vitis HLS."""
+    tools = tmp_path / "tools"
+    tools.mkdir()
+    vitis_hls = tools / "vitis_hls"
+    vitis_hls.write_text("#!" + sys.executable + "\n" + FAKE_VITIS_HLS)
+    vitis_hls.chmod(0o755)
+    toolchain = Toolchain(Selection(), {"PATH": f"{tools}:{os.defpath}"})
+    monkeypatch.setenv("NUM_DEFAULT_WORKERS", "2")
+    monkeypatch.setenv("FINN_BUILD_DIR", str(tmp_path / "build"))
+    monkeypatch.setattr(build_dataflow_config, "legacy_toolchain", lambda: toolchain)
+    monkeypatch.setattr(hls, "legacy_toolchain", legacy_refused)
+    cfg = builder_config(tmp_path, fpga_part=ALVEO_PART)
+    model = mvau_model().transform(SpecializeLayers(ALVEO_PART))
+    model = build_dataflow_steps.step_hw_codegen(model, cfg)
+    model = build_dataflow_steps.step_hw_ipgen(model, cfg)
+    (node,) = model.graph.node
+    mvau = getCustomOp(node)
+    code = Path(mvau.get_nodeattr("code_gen_dir_ipgen"))
+    assert (code / "synthesized_here").is_file()
+    assert mvau.get_nodeattr("ipgen_path") == f"{code}/project_{node.name}"
+
+
+#: PrepareForLinking's tool steps, per partition (an IODMA, the MVAU, an IODMA):
+#: HLS synthesis, the stitched IP, and for Vitis its object file.
+LINKING_ORDER = {
+    "vitis-xrt": ["HLSSynthIP", "CreateStitchedIP", "CreateVitisXO"] * 3,
+    "slash-vrt": ["HLSSynthIP", "CreateStitchedIP"] * 3,
+}
+
+
+def prepared_for_linking(monkeypatch, tmp_path, platform, toolchain):
+    """PrepareForLinking over one MVAU for ``platform``, its tool steps recorded:
+    the order and toolchain of each."""
+    monkeypatch.setenv("FINN_BUILD_DIR", str(tmp_path / "build"))
+    seen = []
+    for name in ("HLSSynthIP", "CreateStitchedIP", "CreateVitisXO"):
+        monkeypatch.setattr(alveo_build, name, recorder(alveo_build, name, seen, tmp_path))
+    monkeypatch.setattr(alveo_build, "PrepareIP", Passed)
+    preparation = PrepareForLinking(
+        ALVEO_PART,
+        5.0,
+        platform,
+        partition_model_dir=str(tmp_path / "partitions"),
+        toolchain=toolchain,
+    )
+    mvau_model().transform(preparation)
+    return seen
+
+
+@pytest.mark.parametrize("platform", sorted(LINKING_ORDER))
+def test_linking_runs_its_tools_through_the_toolchain_it_is_given(monkeypatch, tmp_path, platform):
+    given = object()
+    monkeypatch.setattr(alveo_build, "legacy_toolchain", lambda: pytest.fail("prepared"))
+    seen = prepared_for_linking(monkeypatch, tmp_path, platform, given)
+    assert seen == [(name, given) for name in LINKING_ORDER[platform]]
+
+
+@pytest.mark.parametrize("platform", sorted(LINKING_ORDER))
+def test_linking_prepares_its_default_toolchain_once(monkeypatch, tmp_path, platform):
+    prepared = []
+
+    def legacy_toolchain():
+        prepared.append(object())
+        return prepared[-1]
+
+    monkeypatch.setattr(alveo_build, "legacy_toolchain", legacy_toolchain)
+    seen = prepared_for_linking(monkeypatch, tmp_path, platform, None)
+    assert len(prepared) == 1
+    assert [name for name, _ in seen] == LINKING_ORDER[platform]
+    assert all(toolchain is prepared[0] for _, toolchain in seen)
+
+
+class Simulated(Exception):
+    pass
+
+
+@pytest.mark.parametrize("given", [True, False], ids=["given", "default"])
+def test_fifo_sizing_synthesizes_and_stitches_in_one_toolchain(monkeypatch, tmp_path, given):
+    """InsertAndSetFIFODepths up to its simulation: its HLS synthesis and its
+    stitched IP receive the toolchain it is given, or the one it prepares. The
+    simulation (finn.xsi, which prepares its own) is not reached."""
+    seen = []
+    for name in ("HLSSynthIP", "CreateStitchedIP"):
+        monkeypatch.setattr(set_fifo_depths, name, recorder(set_fifo_depths, name, seen, tmp_path))
+    monkeypatch.setattr(set_fifo_depths, "PrepareIP", Passed)
+
+    def xsi_fifosim(*args, **kwargs):
+        raise Simulated
+
+    monkeypatch.setattr(set_fifo_depths, "xsi_fifosim", xsi_fifosim)
+    prepared = []
+
+    def legacy_toolchain():
+        prepared.append(object())
+        return prepared[-1]
+
+    monkeypatch.setattr(set_fifo_depths, "legacy_toolchain", legacy_toolchain)
+    monkeypatch.setenv("FINN_BUILD_DIR", str(tmp_path / "build"))
+    model = mvau_model().transform(SpecializeLayers(ALVEO_PART))
+    toolchain = object() if given else None
+    with pytest.raises(Simulated):
+        model.transform(
+            set_fifo_depths.InsertAndSetFIFODepths(ALVEO_PART, 5.0, toolchain=toolchain)
+        )
+    expected = toolchain if given else prepared[0]
+    assert len(prepared) == (0 if given else 1)
+    assert seen == [("HLSSynthIP", expected), ("CreateStitchedIP", expected)]
