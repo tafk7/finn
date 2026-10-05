@@ -23,7 +23,8 @@ from finn.core.space import (
     inspection,
 )
 from finn.dataflow.gemm import Form
-from finn.kernels.artifacts.abi import Clock, Data, Derived as DerivedClock
+from finn.kernels.artifacts.abi import Clock, Data
+from finn.kernels.artifacts.abi import Derived as DerivedClock
 from finn.kernels.artifacts.build import emit_module
 from finn.kernels.base import Kernel
 from finn.kernels.dotp import DotpAxiKernel, Int8Dsp58DotpKernel, PackedDotpKernel

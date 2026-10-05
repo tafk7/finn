@@ -37,8 +37,8 @@ from finn.dataflow.traversal import (
 from finn.kernels.configure import commit
 from finn.kernels.dotp import Int8Dsp58DotpKernel, PackedDotpKernel
 from finn.kernels.eltwise import EltwiseKernel
-from finn.kernels.port import AxiStreamPort
 from finn.kernels.memstream import MemStreamKernel
+from finn.kernels.port import AxiStreamPort
 from finn.kernels.streams import Stream
 from kernels.helpers import FULL_DSP48E2, FULL_DSP58, matmul_point, with_adapter_memories
 

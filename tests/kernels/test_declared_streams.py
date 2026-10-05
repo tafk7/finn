@@ -20,18 +20,18 @@ from finn.core.space import (
     Space,
     Unresolved,
     Users,
-    design_space,
     derived,
+    design_space,
     inspection,
     view,
 )
-from finn.kernels.artifacts.abi import Endpoint
 from finn.dataflow.tensor import ScalarEncoding, Tensor
-from finn.kernels.memstream import MemStreamKernel
-from finn.dataflow.traversal import LevelEnd, BeatSequence, vector_major
-from finn.kernels.transport import STREAM_CONTRACT, AxiStream, StreamContract
+from finn.dataflow.traversal import BeatSequence, LevelEnd, vector_major
+from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.base import PORT, Kernel
+from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.streams import Stream, boundary_contract
+from finn.kernels.transport import STREAM_CONTRACT, AxiStream, StreamContract
 from kernels.helpers import FULL_DSP48E2, Root
 
 INT4 = ScalarEncoding(DataType["INT4"])

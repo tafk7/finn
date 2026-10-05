@@ -40,7 +40,6 @@ from finn.kernels.artifacts.build import emit_module
 from finn.kernels.artifacts.module import Module
 from kernels.helpers import finnlib_root, vivado_simulator
 
-
 _Test = TypeVar("_Test", bound=Callable[..., object])
 
 

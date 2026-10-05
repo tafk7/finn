@@ -40,12 +40,12 @@ from finn.kernels.streams import BufferedStream, Stream
 from finn.kernels.target import Platform
 from kernels.helpers import (
     FULL_DSP48E2,
+    Root,
+    WeightDelivery,
     labels,
     matmul_assembly,
     matmul_point,
     placed,
-    Root,
-    WeightDelivery,
     with_adapter_memories,
 )
 

@@ -5,6 +5,7 @@
 
 import pytest
 from qonnx.core.datatype import DataType
+
 from finn.kernels.artifacts.abi import Direction, Endpoint
 from finn.kernels.transport import AxiStream
 

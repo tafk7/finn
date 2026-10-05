@@ -135,8 +135,71 @@ url = "https://download.pytorch.org/whl/cpu"
 explicit = true
 
 [tool.mypy]
-# The strict gates (scripts/check-*.sh) pass --strict and their file lists on the
-# command line; this section only carries the overrides below.
+# The strict gates (scripts/check-*.sh) pass --strict and the packages and test
+# directories they check on the command line; this section carries the
+# exclusions from those directories and the overrides below.
+#
+# Kernel tests not yet strictly typed (2026-10-05: 587 errors, 480 of them
+# missing annotations). Each file leaves this list once it passes; a new file
+# is checked from the start. exclude only stops a file being found under a
+# directory: the helpers among them, which checked tests import, are also
+# silenced as imports in the override below.
+exclude = [
+    '^tests/kernel_ops/test_matmul\.py$',
+    '^tests/kernel_ops/test_metadata\.py$',
+    '^tests/kernel_ops/test_package\.py$',
+    '^tests/kernel_ops/test_partition_facts\.py$',
+    '^tests/kernel_ops/test_partition_formation\.py$',
+    '^tests/kernel_ops/test_roots\.py$',
+    '^tests/kernel_ops/test_tfc\.py$',
+    '^tests/kernel_ops/test_thresholding\.py$',
+    '^tests/kernel_ops/test_transforms\.py$',
+    '^tests/kernel_ops/test_zynq_build\.py$',
+    '^tests/kernel_ops/tfc\.py$',
+    '^tests/kernels/conformance\.py$',
+    '^tests/kernels/rtlsim/adapter_numeric\.py$',
+    '^tests/kernels/rtlsim/dotp_support\.py$',
+    '^tests/kernels/rtlsim/matmul_numeric\.py$',
+    '^tests/kernels/rtlsim/pure_dot_product_numeric\.py$',
+    '^tests/kernels/rtlsim/rtl_transport\.py$',
+    '^tests/kernels/rtlsim/test_observed_transport\.py$',
+    '^tests/kernels/test_adapters\.py$',
+    '^tests/kernels/test_axi_stream_port\.py$',
+    '^tests/kernels/test_axi_stream\.py$',
+    '^tests/kernels/test_clocking\.py$',
+    '^tests/kernels/test_conformance\.py$',
+    '^tests/kernels/test_declared_streams\.py$',
+    '^tests/kernels/test_design\.py$',
+    '^tests/kernels/test_dotp\.py$',
+    '^tests/kernels/test_flat_kernels\.py$',
+    '^tests/kernels/test_integer_tensor_value\.py$',
+    '^tests/kernels/test_interfaces\.py$',
+    '^tests/kernels/test_kernel_extensions\.py$',
+    '^tests/kernels/test_kernel_module\.py$',
+    '^tests/kernels/test_matmul_assembly\.py$',
+    '^tests/kernels/test_matmul_depthwise\.py$',
+    '^tests/kernels/test_matmul_replay\.py$',
+    '^tests/kernels/test_memstream\.py$',
+    '^tests/kernels/test_migrated_rich\.py$',
+    '^tests/kernels/test_migrated_simple\.py$',
+    '^tests/kernels/test_native_streams\.py$',
+    '^tests/kernels/test_port_contracts\.py$',
+    '^tests/kernels/test_scalar_policies\.py$',
+    '^tests/kernels/test_stream_contract\.py$',
+    '^tests/kernels/test_stream_plans\.py$',
+    '^tests/kernels/test_stream_source\.py$',
+    '^tests/kernels/test_threshold_memory\.py$',
+    '^tests/kernels/test_two_kernels\.py$',
+    '^tests/kernels/test_xsim_harness\.py$',
+    '^tests/kernels/xsim\.py$',
+]
+
+[[tool.mypy.overrides]]
+# The excluded kernel test modules that checked tests import (see exclude above).
+# follow_imports rather than ignore_errors, as for finn.xsi below: they stay
+# checkable when named on the command line.
+module = ["kernels.conformance", "kernels.test_design", "kernels.test_stream_source", "kernels.xsim"]
+follow_imports = "silent"
 
 [[tool.mypy.overrides]]
 # finn.xsi loads Vivado's simulation extension by manipulating sys.path at call

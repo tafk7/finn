@@ -14,6 +14,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
+from kernels.helpers import FULL_DSP48E2
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.transformation.infer_shapes import InferShapes
 
@@ -29,7 +30,6 @@ from finn.transformation.kernels import (
     ToKernelOps,
 )
 from kernel_ops.models import TARGET, chain_source
-from kernels.helpers import FULL_DSP48E2
 
 URAM = Target("a part with UltraRAM it initializes", FULL_DSP48E2)
 

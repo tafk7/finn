@@ -21,16 +21,16 @@ from typing import Any, cast
 import pytest
 from qonnx.core.datatype import BaseDataType, DataType
 
-from finn.kernels.datatypes.semantics import QONNX_DATATYPE_SEMANTICS
 from finn.dataflow.datatypes import (
     DatatypeError,
     QONNXDataType,
     canonical_qonnx_datatype,
-    resolve_qonnx_datatype_name,
     decode_datatype,
     encode_datatype,
     is_qonnx_datatype,
+    resolve_qonnx_datatype_name,
 )
+from finn.kernels.datatypes.semantics import QONNX_DATATYPE_SEMANTICS
 
 #: Every datatype family the stack could be handed, including the ones the
 #: previous representation could not express at all.

@@ -49,10 +49,10 @@ from typing import Annotated, ClassVar
 
 from finn.core.space import (
     ConstraintGroup,
-    composite,
     Param,
     Rejected,
     Space,
+    composite,
     constraint,
     derived,
     reject,

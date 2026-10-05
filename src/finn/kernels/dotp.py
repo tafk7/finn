@@ -50,14 +50,13 @@ from finn.core.space import (
     reject,
     requires,
 )
-from finn.dataflow.datatypes import DatatypeError, ordinary_integer_bounds
+from finn.dataflow.datatypes import DatatypeError, QONNXDataType, ordinary_integer_bounds
 from finn.dataflow.gemm import Form, k, m, n
 from finn.dataflow.schedule import Index, Schedule
 from finn.dataflow.stream import Stream
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.base import Clocking, Kernel, extent_of
-from finn.dataflow.datatypes import QONNXDataType
 from finn.kernels.datatypes.domains import Integer
 from finn.kernels.datatypes.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
 from finn.kernels.port import AxiStreamPort

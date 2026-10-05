@@ -12,19 +12,19 @@ fresh process through the shared observed transport driver.
 from __future__ import annotations
 
 import argparse
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-import tempfile
 
 import numpy as np  # type: ignore[import-not-found]
 from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 
+from finn.dataflow.gemm import Form
+from finn.kernels.artifacts.abi import abi_pins
+from finn.kernels.target import DspBlock
+from kernels.helpers import WeightDelivery, full_platform, matmul_assembly, print_identity
 from kernels.rtlsim.rtl_transport import drive_observed
 from kernels.xsim import materialize
-from finn.dataflow.gemm import Form
-from kernels.helpers import full_platform, matmul_assembly, print_identity, WeightDelivery
-from finn.kernels.target import DspBlock
-from finn.kernels.artifacts.abi import abi_pins
 
 
 @dataclass(frozen=True)

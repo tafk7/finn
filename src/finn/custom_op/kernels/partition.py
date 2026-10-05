@@ -41,8 +41,8 @@ from finn.custom_op.kernels.base import (
     datatype,
     rows,
     shape,
-    value_type,
     target,
+    value_type,
 )
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.base import Kernel

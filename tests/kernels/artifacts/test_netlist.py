@@ -17,12 +17,14 @@ from finn.kernels.artifacts.abi import (
     ClockAlignment,
     Derived,
     Direction,
-    Endpoint as Side,
     Member,
     Reset,
     Signal,
     StandardProtocol,
     abi_pins,
+)
+from finn.kernels.artifacts.abi import (
+    Endpoint as Side,
 )
 from finn.kernels.artifacts.build import emit_module
 from finn.kernels.artifacts.contributions import CopiedSource, GeneratedData
@@ -30,11 +32,11 @@ from finn.kernels.artifacts.module import (
     BuildError,
     BusExport,
     Composed,
-    LinkEnd,
     Fragment,
     Held,
     Leaf,
     Link,
+    LinkEnd,
     Pins,
     module_name,
 )

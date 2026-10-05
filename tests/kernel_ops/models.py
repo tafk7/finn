@@ -8,6 +8,7 @@ from __future__ import annotations
 from typing import Any
 
 import numpy as np
+from kernels import test_design as chain
 from onnx import TensorProto, helper
 from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
@@ -15,7 +16,6 @@ from qonnx.util.basic import qonnx_make_model
 
 from finn.custom_op.kernels.base import write_target
 from finn.transformation.kernels import resolve_target
-from kernels import test_design as chain
 
 DOMAIN = "finn.custom_op.kernels"
 INT3 = DataType["INT3"]

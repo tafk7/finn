@@ -9,27 +9,14 @@ parameters are derived here from traversals alone and compared with the
 hard-coded values in ``finn-rtllib`` and ``transpose_decomposition``.
 """
 
-from pathlib import Path
 import random
+from pathlib import Path
 
 import pytest
 from qonnx.core.datatype import DataType
 
 from finn.core.space import Rejected, Unresolved, design_space
-from finn.kernels.configure import commit
-from finn.kernels.eltwise import EltwiseKernel
-from finn.kernels.streams import Stream, wired
-from finn.kernels.artifacts.abi import Endpoint
 from finn.dataflow.tensor import ScalarEncoding, Tensor
-from finn.kernels.memstream import MemStreamKernel
-from finn.kernels.fifo import FifoKernel
-from finn.kernels.transport import (
-    MarkerKind,
-    ReadyValidStream,
-    StreamContract,
-    StreamMarker,
-    compatibility,
-)
 from finn.dataflow.traversal import (
     Adaptation,
     LevelEnd,
@@ -42,11 +29,25 @@ from finn.dataflow.traversal import (
     tile,
     vector_major,
 )
+from finn.kernels.artifacts.abi import Endpoint
+from finn.kernels.configure import commit
+from finn.kernels.eltwise import EltwiseKernel
+from finn.kernels.fifo import FifoKernel
+from finn.kernels.memstream import MemStreamKernel
+from finn.kernels.streams import Stream, wired
+from finn.kernels.transport import (
+    MarkerKind,
+    ReadyValidStream,
+    StreamContract,
+    StreamMarker,
+    compatibility,
+)
 from finn.transformation.fpgadataflow.transpose_decomposition import (
     shuffle_perfect_loopnest_coeffs,
 )
 from kernels.helpers import FULL_DSP48E2, FULL_DSP58, Root
-from kernels.xsim import pack as xsim_pack, requires_xsim, stream_through
+from kernels.xsim import pack as xsim_pack
+from kernels.xsim import requires_xsim, stream_through
 
 ROOT = Path(__file__).resolve().parents[2]
 INT3 = ScalarEncoding(DataType["INT3"])

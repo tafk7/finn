@@ -12,13 +12,17 @@ that dtype to the physical component. No logical kernel or contract is needed.
 from __future__ import annotations
 
 import argparse
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-import tempfile
 
 import numpy as np
 from qonnx.core.datatype import DataType
 
+from finn.kernels.artifacts.contributions import CopiedSource
+from finn.kernels.dotp import Int8Dsp58DotpKernel, PackedDotpKernel
+from finn.kernels.target import DspBlock
+from kernels.helpers import finnlib_root, full_platform, placed_dotp, print_identity
 from kernels.rtlsim.dotp_support import (
     Case,
     _activation_beats,
@@ -26,12 +30,7 @@ from kernels.rtlsim.dotp_support import (
     _weight_beats,
     _wrapper,
 )
-from kernels.helpers import full_platform, placed_dotp, print_identity
 from kernels.rtlsim.rtl_transport import drive_observed
-from kernels.helpers import finnlib_root
-from finn.kernels.artifacts.contributions import CopiedSource
-from finn.kernels.dotp import Int8Dsp58DotpKernel, PackedDotpKernel
-from finn.kernels.target import DspBlock
 
 
 @dataclass(frozen=True)

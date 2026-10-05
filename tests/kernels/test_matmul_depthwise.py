@@ -15,22 +15,23 @@ import pytest
 from qonnx.core.datatype import DataType
 
 from finn.core.space import Available, Rejected, Unresolved, inspection
+from finn.dataflow.gemm import Form
 from finn.dataflow.plan import Step
+from finn.dataflow.traversal import Traversal
 from finn.kernels.base import Kernel
 from finn.kernels.configure import commit
 from finn.kernels.matmul import MatMulKernel
 from kernels.helpers import (
     FULL_DSP48E2,
     FULL_DSP58,
+    WeightDelivery,
     labels,
+    matmul_assembly,
     matmul_point,
     matmul_root,
     placed,
     with_adapter_memories,
 )
-from finn.dataflow.gemm import Form
-from kernels.helpers import WeightDelivery, matmul_assembly
-from finn.dataflow.traversal import Traversal
 
 FACTS = dict(
     m=2,

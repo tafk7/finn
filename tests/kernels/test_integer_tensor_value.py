@@ -15,7 +15,6 @@ import copy
 import pickle
 
 import pytest
-from kernels.helpers import FULL_DSP48E2, matmul_point
 from qonnx.core.datatype import DataType
 
 from finn.core.space import inspection
@@ -27,6 +26,7 @@ from finn.kernels.datatypes.semantics import (
     integer_range,
     integers,
 )
+from kernels.helpers import FULL_DSP48E2, matmul_point
 
 WEIGHTS = ((1, -2, 3), (4, 5, -6))
 

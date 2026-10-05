@@ -6,17 +6,32 @@
 import pytest
 from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
 
-from finn.core.space import Available, Rejected, Unresolved, inspection, selections
+from finn.core.space import (
+    Available,
+    Decision,
+    Rejected,
+    Unresolved,
+    View,
+    constraint,
+    inspection,
+    reject,
+    selections,
+)
 from finn.kernels.artifacts.abi import Bus
 from finn.kernels.artifacts.build import emit_module
 from finn.kernels.base import Kernel
 from finn.kernels.configure import commit
-from kernels.helpers import finnlib_root, FULL_DSP48E2, labels, matmul_point, placed
-from finn.kernels.matmul import MatMulKernel, exact_result_dtype
-from kernels.helpers import WeightDelivery, matmul_assembly
 from finn.kernels.dotp import DotpAxiKernel, PackedDotpKernel
-from finn.core.space import Decision, View, constraint, reject
-
+from finn.kernels.matmul import MatMulKernel, exact_result_dtype
+from kernels.helpers import (
+    FULL_DSP48E2,
+    WeightDelivery,
+    finnlib_root,
+    labels,
+    matmul_assembly,
+    matmul_point,
+    placed,
+)
 
 FACTS = dict(
     m=2,

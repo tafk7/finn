@@ -6,12 +6,12 @@ from typing import assert_type
 
 from finn.core.space import BoundValue, QueryResult, View, ViewAssessment
 from finn.dataflow.schedule import Schedule
-from finn.dataflow.traversal import BeatSequence
 from finn.dataflow.tensor import ScalarEncoding
+from finn.dataflow.traversal import BeatSequence
 from finn.kernels.dotp import DotpAxiKernel
 from finn.kernels.eltwise import EltwiseKernel
-from finn.kernels.transport import AxiStream, ReadyValidStream
 from finn.kernels.port import AxiStreamPort
+from finn.kernels.transport import AxiStream, ReadyValidStream
 
 
 def check(point: DotpAxiKernel, eltwise: EltwiseKernel) -> None:

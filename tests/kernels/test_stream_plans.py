@@ -25,10 +25,10 @@ import pytest
 
 from finn.dataflow.plan import Unrealizable, plan
 from finn.dataflow.traversal import (
+    BeatSequence,
     LevelEnd,
     Loop,
     Position,
-    BeatSequence,
     Traversal,
     axis_strides,
     tile,

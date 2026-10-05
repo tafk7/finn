@@ -16,24 +16,24 @@ from finn.core.space import (
     View,
     ViewKey,
     composite,
-    design_space,
     constraint,
     derived,
+    design_space,
     inspection,
     selections,
 )
 from finn.core.space.errors import DefinitionError, RequestError
+from finn.dataflow.datatypes import (
+    QONNX_DATATYPE_TOKEN,
+    QONNXDataType,
+    resolve_qonnx_datatype_name,
+)
 from finn.kernels.base import Kernel
 from finn.kernels.datatypes.domains import Integer
 from finn.kernels.datatypes.semantics import (
     INTEGER_VECTOR,
     QONNX_DATATYPE_VALUE_SEMANTICS,
     THRESHOLD_TABLE,
-)
-from finn.dataflow.datatypes import (
-    QONNX_DATATYPE_TOKEN,
-    QONNXDataType,
-    resolve_qonnx_datatype_name,
 )
 
 

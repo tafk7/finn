@@ -31,7 +31,6 @@ consumer's padding is driven with zeros.
 from __future__ import annotations
 
 import re
-
 from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
@@ -53,7 +52,6 @@ from finn.dataflow.traversal import (
     classify,
 )
 from finn.kernels.artifacts.abi import Bus, Direction, Endpoint, Member, Signal, StandardProtocol
-
 
 # -- native ready/valid ------------------------------------------------------------------
 

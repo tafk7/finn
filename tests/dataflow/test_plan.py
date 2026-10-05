@@ -9,8 +9,8 @@ import pytest
 
 from finn.dataflow.plan import Step, Unrealizable, plan, presented
 from finn.dataflow.traversal import (
-    LevelEnd,
     BeatSequence,
+    LevelEnd,
     Repetition,
     Traversal,
     regrouped,
