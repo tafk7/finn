@@ -5,11 +5,6 @@
 
 from __future__ import annotations
 
-import os
-import re
-import shutil
-import subprocess
-from pathlib import Path
 from typing import cast
 
 import pytest
@@ -264,38 +259,3 @@ def test_shared_expression_prefix_is_not_duplicated_across_consumers() -> None:
         for node in evidence.nodes
     )
     assert not any(node.declaration.key == "consumer0" for node in evidence.nodes)
-
-
-def test_strict_expression_types(tmp_path: Path) -> None:
-    mypy = shutil.which("mypy")
-    assert mypy is not None
-    root = Path(__file__).resolve().parents[3]
-    fixtures = Path(__file__).with_name("typing")
-    source = (fixtures / "expressions_negative.py.txt").read_text()
-    negative = tmp_path / "expressions_negative.py"
-    negative.write_text(source)
-    environment = dict(os.environ, MYPYPATH=f"{root / 'src'}:{root / 'tests'}")
-    result = subprocess.run(
-        [
-            mypy,
-            "--strict",
-            "--explicit-package-bases",
-            "--no-incremental",
-            "--cache-dir",
-            str(tmp_path / "cache"),
-            str(fixtures / "expressions_positive.py"),
-            str(negative),
-        ],
-        cwd=root,
-        env=environment,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    expected = {line for line, value in enumerate(source.splitlines(), 1) if "# E" in value}
-    actual = {
-        int(line) for line in re.findall(r"expressions_negative\.py:(\d+): error:", result.stdout)
-    }
-    assert result.returncode == 1, result.stdout + result.stderr
-    assert actual == expected, result.stdout + result.stderr
-    assert "expressions_positive.py:" not in result.stdout, result.stdout

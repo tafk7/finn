@@ -1,0 +1,11 @@
+from finn.core.space import Param, Space
+class Port(Space):
+    width: int = Param()
+class Child(Space):
+    port = Port()
+class Parent(Space):
+    child = Child()
+    child.port.width = 4
+    # Assignment is typed by Param.__set__: the value type is checked exactly.
+    child.port.width = "wrong"  # E
+    fresh = Port(width="wrong")  # E

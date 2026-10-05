@@ -124,6 +124,8 @@ def test_tfc_w2a2_packages_as_the_shells_ip(tmp_path: Path) -> None:
     assert "-part xczu3eg-sbva484-1-e" in (project / "package.tcl").read_text()
 
 
+# Builds and partitions the whole network, about 20 s.
+@pytest.mark.slow
 def test_tfc_w2a2_binds_the_ultra96_platform(tmp_path: Path) -> None:
     """Every KernelOp and stream of the partition reads Ultra96's capabilities from the
     model: its weight and adapter memories cannot be UltraRAM, and none is pumped (the

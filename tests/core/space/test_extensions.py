@@ -11,12 +11,7 @@ name (or through inspection handles).
 
 from __future__ import annotations
 
-import os
-import re
-import shutil
-import subprocess
 from dataclasses import dataclass
-from pathlib import Path
 from typing import cast
 
 import pytest
@@ -313,44 +308,3 @@ def test_literal_bindings_snapshot_at_the_node_call() -> None:
         vector = node
 
     assert design_space(Parent()).vector.values == [1, 2]
-
-
-def test_extension_typing_fixture(tmp_path: Path) -> None:
-    mypy = shutil.which("mypy")
-    assert mypy is not None
-    project = Path(__file__).resolve().parents[3]
-    fixtures = Path(__file__).with_name("typing")
-    base_environment = {key: value for key, value in os.environ.items() if key != "PYTHONPATH"}
-    environment = dict(base_environment, MYPYPATH=f"{project / 'src'}:{project / 'tests'}")
-    command = [
-        mypy,
-        "--strict",
-        "--no-incremental",
-        "--explicit-package-bases",
-        "--cache-dir",
-        str(tmp_path / "cache"),
-    ]
-    positive = subprocess.run(
-        [*command, str(fixtures / "extensions.py")],
-        cwd=project,
-        env=environment,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert positive.returncode == 0, positive.stdout + positive.stderr
-    source = (fixtures / "extensions_negative.py.txt").read_text()
-    negative_path = tmp_path / "negative.py"
-    negative_path.write_text(source)
-    negative = subprocess.run(
-        [*command, str(negative_path)],
-        cwd=project,
-        env=environment,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    expected = {index for index, line in enumerate(source.splitlines(), 1) if "# E" in line}
-    actual = {int(line) for line in re.findall(r"negative\.py:(\d+): error:", negative.stdout)}
-    assert negative.returncode == 1, negative.stdout + negative.stderr
-    assert actual == expected, negative.stdout + negative.stderr
