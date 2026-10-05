@@ -131,7 +131,7 @@ def _run_worker(top_module: str, request: Path, response: Path, log: IO[str] | N
 
     XSI's hang gives no diagnostic and fires no watchdog, so without a deadline
     a hung load waits forever and takes the whole run with it. The worker leads
-    its own process group, as ``finn.util._toolchain.run_process`` runs tools,
+    its own process group, as ``finn.util.toolchain.run_process`` runs tools,
     so a deadline also ends the xvlog/xelab it started; unlike that, its output
     streams as it runs. ``FINN_XSI_TIMEOUT`` (seconds, default 1200) covers
     compile and simulation.

@@ -100,16 +100,35 @@ def unrecognized(semantics: ValueSemantics[T]) -> str:
 
 def recognize(semantics: ValueSemantics[T], value: object, *, owner: str, role: str) -> bool:
     """Whether ``semantics`` recognizes ``value``; an adapter that raises fails ``owner``."""
-    try:
-        return semantics.accepts(value)
-    except Exception as cause:
-        raise EvaluationError(owner, role, str(cause)) from cause
+    return _owned(lambda: semantics.accepts(value), owner, role)
 
 
 def snapshot(semantics: ValueSemantics[T], value: object, *, owner: str, role: str) -> T:
     """``semantics``' detached snapshot of ``value``; any failure fails ``owner``."""
+    return _owned(lambda: semantics.freeze(value), owner, role)
+
+
+def equal(
+    semantics: ValueSemantics[T], left: object, right: object, *, owner: str, role: str
+) -> bool:
+    """Whether ``semantics`` holds ``left`` and ``right`` equal; an adapter that raises
+    fails ``owner``."""
+    return _owned(lambda: semantics.values_equal(left, right), owner, role)
+
+
+R = TypeVar("R")
+
+
+def _owned(call: Callable[[], R], owner: str, role: str) -> R:
+    """``call``'s result; a failure of the adapter it runs is ``owner``'s, in ``role``.
+
+    An ``EvaluationError`` passes unchanged: the adapter read a configuration
+    (``_execution.transformation``), and that error already names who and where.
+    """
     try:
-        return semantics.freeze(value)
+        return call()
+    except EvaluationError:
+        raise
     except Exception as cause:
         raise EvaluationError(owner, role, str(cause)) from cause
 

@@ -14,9 +14,9 @@ from pathlib import Path
 
 from finn import resources
 from finn.util._legacy_build_env import build_environment
-from finn.util._toolchain import Selection, Toolchain, run_process
 from finn.util.hls import CallHLS
 from finn.util.resources import tcl_quote
+from finn.util.toolchain import Selection, Toolchain, run_process
 
 
 def executable(path, body):

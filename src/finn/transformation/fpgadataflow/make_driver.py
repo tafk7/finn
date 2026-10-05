@@ -55,10 +55,10 @@ from finn.transformation.fpgadataflow.kernel_partitions import (
     kernel_partition_ports,
 )
 from finn.util._legacy_build_env import toolchain as legacy_toolchain
-from finn.util._toolchain import run_process
 from finn.util.basic import make_build_dir
 from finn.util.data_packing import finnpy_to_packed_bytearray, to_external_tensor
 from finn.util.rtlsim import dat_file_to_numpy_array
+from finn.util.toolchain import run_process
 
 from . import template_driver
 

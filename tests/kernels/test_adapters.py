@@ -22,7 +22,7 @@ from finn.dataflow.plan import Step
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import Traversal, vector_major
 from finn.kernels.channels import Channel
-from finn.kernels.configure import admission, commit
+from finn.kernels.configure import commit
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.thresholding import ThresholdingAxiKernel
 from finn.kernels.transpose import TransposeKernel
@@ -180,7 +180,7 @@ def test_exactly_one_candidate_carries_out_each_plan():
         assert forced["x.adapter"].value == case
         assert all("adapter-plan" in why for why in forced["x.adapter"].refused.values())
         chosen = commit(point, {"x.adapter": "vpc_input_gen_vpc"})
-        refused = admission(chosen.x.adapter)
+        refused = inspection.admission(chosen.x.adapter)
         assert isinstance(refused, Rejected)
         assert {finding.code for finding in refused.findings} == {"adapter-plan"}
 

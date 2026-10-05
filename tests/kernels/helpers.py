@@ -51,7 +51,7 @@ from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.artifacts.module import Composed, Leaf
 from finn.kernels.base import Kernel
 from finn.kernels.channels import Channel
-from finn.kernels.configure import admission, commit, describe, undecided
+from finn.kernels.configure import commit, describe, undecided
 from finn.kernels.control import ControlBus
 from finn.kernels.datatypes.semantics import (
     INTEGER_TENSOR,
@@ -463,7 +463,7 @@ def matmul_assembly(
         forced = {item.key: item.value for item in inspection.forced(point)}
         if "matmul.compute" not in forced:
             refusals = {
-                case: admission(commit(point, {"matmul.compute": case}).matmul.compute)
+                case: inspection.admission(commit(point, {"matmul.compute": case}).matmul.compute)
                 for case in ("packed", "int8_dsp58")
             }
             cores = [

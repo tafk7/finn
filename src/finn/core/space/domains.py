@@ -7,7 +7,7 @@ A domain's cases may state requirements (``requires``, ``requiring``): facts a
 case needs, each refused with its own named finding. Membership is the base's
 and then every applicable requirement; enumeration stays the declared cases,
 so the domain does not move with the facts. A case whose requirement fails is
-not viable, which forcing reads (``finn.core.space.forcing``).
+not viable, which forcing reads (``finn.core.space._forcing``).
 """
 
 from __future__ import annotations

@@ -94,7 +94,7 @@ fold = num_channels // pe
 
 ### Import Organization
 
-**Use isort** (configured in pre-commit):
+**Use isort** (configured in pre-commit; ruff's `I` rule on the paths the gates check):
 
 1. Standard library imports
 2. Third-party imports (numpy, onnx, qonnx, brevitas)
@@ -404,7 +404,7 @@ def my_analysis(model: ModelWrapper) -> Dict[str, Any]:
 
 **Pytest markers**:
 
-See `setup.cfg` under `[tool:pytest]` markers section for the complete list of available markers.
+See `markers` in `.pytest.ini` for the complete list of available markers.
 
 **Example**:
 ```python
@@ -476,7 +476,7 @@ simd = 8  # Limit parallelism to match BRAM port constraints
 
 ## Enforcement
 
-- **Pre-commit hooks** enforce black, flake8, isort (see `.pre-commit-config.yaml`)
+- **Pre-commit hooks** enforce ruff on the paths the gates check (`scripts/check-*.sh`) and black and isort elsewhere, with ruff's lint everywhere (see `.pre-commit-config.yaml`)
 - **Manual code review** for FINN-specific patterns
 
 When in doubt, follow existing patterns in the codebase and consult with maintainers during PR review.

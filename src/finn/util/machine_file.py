@@ -19,12 +19,15 @@ or installation (``FINN_XILINX_VERSION=2026.1 ./docker/run --fpga ...``); in sbx
 
 ``FINN_XILINX_ENV`` names another file; set it empty to use none.
 
-This is the one reader. ``finn.util._toolchain`` imports it; the host scripts
+This is the one reader. ``finn.util.toolchain`` imports it; the host scripts
 (``docker/xilinx_install.py``, ``docker/config.py``) load it by path from their
 checkout, where FINN may not be installed yet. Standard library only.
 """
 
+from __future__ import annotations
+
 import os
+from collections.abc import Mapping
 
 # The xilinx kit's arguments (docker/sbx/xilinx/xilinx.yaml), and nothing else.
 KEYS = (
@@ -46,7 +49,7 @@ class ConfigError(ValueError):
     """The machine file is missing where named, or is not in the kit's format."""
 
 
-def file_path(environ=None):
+def file_path(environ: Mapping[str, str] | None = None) -> str | None:
     """The machine file to read, or None."""
     environ = os.environ if environ is None else environ
     if "FINN_XILINX_ENV" in environ:
@@ -57,9 +60,9 @@ def file_path(environ=None):
     return os.path.join(config, "finn", "xilinx.env")
 
 
-def read_file(path):
+def read_file(path: str) -> dict[str, str]:
     """Parse a machine file; raise ConfigError on anything sbx would read differently."""
-    values = {}
+    values: dict[str, str] = {}
     with open(path, "r") as handle:
         for number, line in enumerate(handle, 1):
             where = "%s:%d" % (path, number)
@@ -85,11 +88,11 @@ def read_file(path):
     return values
 
 
-def settings(environ=None):
+def settings(environ: Mapping[str, str] | None = None) -> dict[str, str]:
     """The machine file's values, each overridden by an environment variable of its name."""
     environ = os.environ if environ is None else environ
     path = file_path(environ)
-    values = {}
+    values: dict[str, str] = {}
     if path and os.path.exists(path):
         values = read_file(path)
     elif path and "FINN_XILINX_ENV" in environ:
@@ -100,13 +103,13 @@ def settings(environ=None):
     return {key: value for key, value in values.items() if value}
 
 
-def license_file(values):
+def license_file(values: Mapping[str, str]) -> str | None:
     """XILINXD_LICENSE_FILE as FlexLM spells it, from a host and a port."""
     host, port = values.get("FINN_LICENSE_HOST"), values.get("FINN_LICENSE_PORT")
     return "%s@%s" % (port, host) if host and port else None
 
 
-def license_for(environment, values):
+def license_for(environment: Mapping[str, str], values: Mapping[str, str]) -> str | None:
     """The XILINXD_LICENSE_FILE that ``environment`` lacks, from ``values``, or None.
 
     None when the environment already names a licence (it wins) or the values

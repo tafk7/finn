@@ -160,7 +160,7 @@ choice quantization -> rows ['Quantization - Brevitas']
 
 ### Adding a new BNN board
 
-1. Add the marker `bnn_<board>` to `setup.cfg` under `[tool:pytest]`.
+1. Add the marker `bnn_<board>` to `markers` in `.pytest.ini`.
 2. In [finn_ci/config.py](./finn_ci/config.py), add a `BOARDS` entry, plus a `STAGES` row that references the board in its `zipArtifacts.boards`. `tests/end2end/test_end2end_bnn_pynq.py` reads `BOARDS[board]["bnnMarker"]`, so the board's scenarios are parametrised automatically.
 3. Nothing else is needed. `validate_config()` sanity-checks each `STAGES`/`BOARDS` row, and `Jenkinsfile_HW` derives `HW_SHARDS`, the HW test types, and their labels from `BOARDS`/`STAGES` through a single `PYTHONPATH=ci python3 -m finn_ci hw-config-json` call.
 

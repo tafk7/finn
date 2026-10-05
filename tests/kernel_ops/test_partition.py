@@ -24,6 +24,7 @@ from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.core.onnx_exec import execute_onnx
 from qonnx.transformation.infer_shapes import InferShapes
 
+from finn.core.space import inspection
 from finn.custom_op.kernels.base import KernelOpError
 from finn.custom_op.kernels.partition import PartitionRoot, partition_root, save_partition_choices
 from finn.custom_op.kernels.roots import StreamedMatMulNode
@@ -178,6 +179,9 @@ def test_streamed_weights_are_a_boundary_of_the_partition() -> None:
     root = partition_root(model, model.graph.node, name="chain")
     assert root.boundary == (("x", "s_axis_0"), ("w2", "s_axis_1"), ("y", "m_axis_0"))
     assert root.owners["w2"] == ("second", "w.")
+    # Every channel has a transport, the weight edge's as x's: each its consumer's.
+    keys = {decision.key for decision in inspection.decisions(root.point)}
+    assert {"w2.transport", "x.transport"} <= keys
 
 
 def test_the_owner_map() -> None:
@@ -211,6 +215,24 @@ def test_a_node_named_like_a_tensor_is_refused() -> None:
     model.graph.node[1].name = "hidden"
     with pytest.raises(KernelOpError, match="a node and a tensor are both named hidden"):
         partition_root(model, model.graph.node)
+
+
+def test_two_nodes_of_one_member_name_are_refused() -> None:
+    model = kernel_model()
+    model.graph.node[2].name = "first"
+    with pytest.raises(KernelOpError, match="a node and another node are both named first"):
+        partition_root(model, model.graph.node)
+
+
+def test_a_kernel_choice_the_root_refuses_is_named_by_member() -> None:
+    """A choice written past ``save`` reaches the root's replay, which names it."""
+    model = kernel_model()
+    model.get_customop_wrapper(model.graph.node[0]).set_nodeattr("compute.packed.pe", 3)
+    with pytest.raises(
+        KernelOpError, match="^chain: refused choices: first.compute.packed.pe: "
+    ) as error:
+        partition_root(model, model.graph.node, name="chain")
+    assert error.value.keys == ("first.compute.packed.pe",)
 
 
 @requires_xsim

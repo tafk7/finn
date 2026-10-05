@@ -51,13 +51,29 @@ repos:
   - id: mixed-line-ending
     args: ['--fix=no']
 
+# Two formatters, split by path. The code the gates check (scripts/check-*.sh,
+# gate_ruff) is ruff's, formatted and linted as the gates do: .ruff.toml's
+# selection plus I (sorted imports). FINN's upstream-era code keeps upstream's
+# isort and black, so a merge from upstream is not buried under a reformat; ruff
+# only lints it, with .ruff.toml's selection. The gates check that every file
+# they format is in &gate_ruff (scripts/_gate_precommit.py).
+- repo: https://github.com/astral-sh/ruff-pre-commit
+  rev: v0.16.4
+  hooks:
+  - id: ruff-check
+    name: ruff check (gate paths)
+    args: [--extend-select, I, --fix]
+    files: &gate_ruff '^(src/finn/(core/space|dataflow|kernels|custom_op/kernels|transformation/kernels)/|tests/(core/space|dataflow|kernels|kernel_ops)/|tests/layering\.py$|scripts/(benchmark-space|_gate_precommit)\.py$)'
+  - id: ruff-format
+    files: *gate_ruff
+  - id: ruff-check
+    exclude: *gate_ruff
+
 - repo: https://github.com/PyCQA/isort
   rev: 5.12.0
   hooks:
   - id: isort
-    # The Space, dataflow and kernel packages, their tests and the layer table
-    # (tests/layering.py) are formatted by ruff (below).
-    exclude: '^(src/finn/(core/space|dataflow|kernels)/|tests/(core/space|dataflow|kernels)/|tests/layering\.py$)'
+    exclude: *gate_ruff
 
 - repo: https://github.com/psf/black
   rev: 23.3.0
@@ -65,11 +81,4 @@ repos:
   - id: black
     language_version: python3
     args: [--line-length=100]
-    exclude: '^(src/finn/(core/space|dataflow|kernels)/|tests/(core/space|dataflow|kernels)/|tests/layering\.py$)'
-
-- repo: https://github.com/astral-sh/ruff-pre-commit
-  rev: v0.16.4
-  hooks:
-    - id: ruff-check
-    - id: ruff-format
-      files: '^(src/finn/(core/space|dataflow|kernels)/|tests/(core/space|dataflow|kernels)/|tests/layering\.py$)'
+    exclude: *gate_ruff

@@ -33,7 +33,7 @@ from finn.kernels.artifacts.abi import Bus
 from finn.kernels.artifacts.module import Composed
 from finn.kernels.base import Kernel
 from finn.kernels.channels import Channel
-from finn.kernels.configure import admission, commit
+from finn.kernels.configure import commit
 from finn.kernels.dotp import DotpAxiKernel
 from finn.kernels.matmul import MatMulKernel
 from finn.kernels.memstream import MemStreamKernel
@@ -283,7 +283,7 @@ def test_a_non_viable_source_is_refused_and_committed_is_refused_by_its_candidat
     # Committed on purpose, the case is accepted (committing never checks a kernel
     # case's admission), and the candidate then refuses the configuration.
     chosen = commit(point, {"w.source": "memstream"})
-    refusal = admission(chosen.w.source)
+    refusal = inspection.admission(chosen.w.source)
     assert isinstance(refusal, Rejected) and "memstream-set-stream" in keys(refusal)
 
 

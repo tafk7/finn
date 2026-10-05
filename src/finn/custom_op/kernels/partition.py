@@ -24,9 +24,12 @@
   its output port; one a KernelOp outside the partition consumes is that
   node's, applied in its own partition as an input boundary, so here its
   ``transport`` is pinned ``direct``: one FIFO per edge, on the consumer's side.
+  A choice a node holds under an output port whose channel a KernelOp now
+  consumes is stale, dropped and reported.
 
 Members are named as the graph: streams by tensor and kernels by node
-(``\\W`` as ``_``); a node and a tensor of one name are refused, not renamed.
+(``\\W`` as ``_``); two members of one name (a node and a tensor, or two nodes) are
+refused, not renamed.
 """
 
 from __future__ import annotations
@@ -34,22 +37,30 @@ from __future__ import annotations
 import re
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any, TypeVar
 
-from finn.core.space import composite, design_space, inspection
+from onnx import NodeProto
+
+from finn.core.space import Space, composite, design_space
 from finn.custom_op.kernels.base import (
     KernelOp,
     KernelOpError,
     committed,
     datatype,
+    refusal,
     rows,
     shape,
     target,
-    value_type,
+    typed_choices,
 )
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.base import Kernel
 from finn.kernels.channels import Channel
+
+if TYPE_CHECKING:
+    from qonnx.core.modelwrapper import ModelWrapper
+
+S = TypeVar("S", bound=Space)
 
 KERNEL_OPS = "finn.custom_op.kernels"
 
@@ -77,47 +88,52 @@ def member(name: str) -> str:
     return re.sub(r"\W", "_", name)
 
 
-def _typed(point: Any, choices: Mapping[str, object]) -> dict[str, object]:
-    kinds = {item.key: value_type(item) for item in inspection.decisions(point)}
-    return {
-        key: bool(value) if kinds.get(key) == "bool" else value for key, value in choices.items()
-    }
-
-
-def partition_root(model: Any, nodes: Iterable[Any], *, name: str = "partition") -> PartitionRoot:
-    """The root of ``nodes``, KernelOp nodes of ``model``; see the module docstring."""
-    nodes = list(nodes)
-    ops = [model.get_customop_wrapper(node) for node in nodes]
-    for node, op in zip(nodes, ops):
-        if not isinstance(op, KernelOp):
-            raise KernelOpError(f"{node.name}: a partition root places KernelOps only")
+def _boundary(model: ModelWrapper, nodes: list[NodeProto], owned: set[str]) -> dict[str, str]:
+    """The port of each boundary tensor, inputs then outputs, in node order: an input
+    no node produces (and not a parameter: owned, or an initializer the op reads as a
+    fact) is ``s_axis_<i>``; an output read outside ``nodes`` is ``m_axis_<j>``."""
     produced = {tensor for node in nodes for tensor in node.output}
     inside = {id(node) for node in nodes}
     used_outside = {
         tensor for node in model.graph.node if id(node) not in inside for tensor in node.input
     } | {output.name for output in model.graph.output}
-    owned = {tensor for op in ops for tensor in op.owned_streams()}
     inputs = [
         tensor
         for tensor in dict.fromkeys(t for node in nodes for t in node.input)
         if tensor not in produced and tensor not in owned and model.get_initializer(tensor) is None
     ]
     outputs = [tensor for node in nodes for tensor in node.output if tensor in used_outside]
+    ports = {tensor: f"s_axis_{index}" for index, tensor in enumerate(inputs)}
+    return ports | {tensor: f"m_axis_{index}" for index, tensor in enumerate(outputs)}
+
+
+def _handed_on(model: ModelWrapper, nodes: list[NodeProto]) -> set[str]:
+    """The outputs of ``nodes`` a KernelOp outside them consumes: their transport is that
+    consumer's, chosen in its own partition (D8)."""
+    inside = {id(node) for node in nodes}
     consumed = {
         tensor
         for node in model.graph.node
         if node.domain == KERNEL_OPS and id(node) not in inside
         for tensor in node.input
     }
-    ports = {tensor: f"s_axis_{index}" for index, tensor in enumerate(inputs)}
-    ports |= {tensor: f"m_axis_{index}" for index, tensor in enumerate(outputs)}
+    return {tensor for node in nodes for tensor in node.output if tensor in consumed}
+
+
+def _streams(
+    model: ModelWrapper,
+    nodes: list[NodeProto],
+    ops: list[KernelOp],
+    owned: list[dict[str, Channel]],
+    ports: Mapping[str, str],
+    handed_on: set[str],
+) -> dict[str, Channel]:
+    """The partition's channels by tensor, in node order: a node's inputs on an edge or
+    the boundary, the parameter channels it owns, its outputs. An output handed on to a
+    KernelOp outside is pinned ``direct``: its FIFO, if any, is the consumer's."""
     platform = target(model).platform
-
-    members: dict[str, object] = {}
+    parameters = {tensor for streams in owned for tensor in streams}
     streams: dict[str, Channel] = {}
-
-    def add(tensor: str, stream: Channel) -> None:
-        streams[tensor] = members[member(tensor)] = stream
 
     def declare(tensor: str, label: str) -> None:
         if tensor in streams:
@@ -125,76 +141,118 @@ def partition_root(model: Any, nodes: Iterable[Any], *, name: str = "partition")
         dims = rows(shape(model, tensor, label))
         carried = Tensor(dims, ScalarEncoding(datatype(model, tensor, label)))
         port: dict[str, Any] = {"port": ports[tensor]} if tensor in ports else {}
-        if tensor in outputs and tensor in consumed:
-            port["transport"] = "direct"  # its consumer's choice, in the consumer's partition
-        add(tensor, Channel(tensor=carried, platform=platform, **port))
+        if tensor in handed_on:
+            port["transport"] = "direct"
+        streams[tensor] = Channel(tensor=carried, platform=platform, **port)
 
-    # Streams in node order: a node's graph inputs, the parameter streams it owns, its outputs.
-    for node, op in zip(nodes, ops):
+    for node, op, parameter_streams in zip(nodes, ops, owned):
         for tensor in node.input:
-            if tensor in inputs or tensor in produced:
+            if tensor not in parameters and model.get_initializer(tensor) is None:
                 declare(tensor, op.label)
-        for tensor, stream in op.owned_streams().items():
-            add(tensor, stream)
+        streams |= parameter_streams
         for tensor in node.output:
             declare(tensor, op.label)
+    return streams
 
-    owners: dict[str, tuple[str, str]] = {}
-    stale: list[str] = []
-    kernel_choices: dict[str, object] = {}
-    edge_choices: dict[str, object] = {}
+
+@dataclass
+class _Placed:
+    """The kernels placed on the channels, by member; each member's owner (node,
+    attribute prefix); the nodes' choices split by what declares them, and those stale
+    before replay (an output's, now an edge another KernelOp owns)."""
+
+    kernels: dict[str, Kernel]
+    owners: dict[str, tuple[str, str]]
+    kernel_choices: dict[str, object]
+    edge_choices: dict[str, object]
+    stale: list[str]
+
+
+def _place(
+    nodes: list[NodeProto],
+    ops: list[KernelOp],
+    streams: Mapping[str, Channel],
+    produced: set[str],
+) -> _Placed:
+    """Each node's kernel on ``streams``, and its choices as root keys: a kernel's under
+    the kernel's member, an input or owned channel's under the channel's, and an output's
+    under the channel's where its node is the producer that owns it (``produced``: graph
+    outputs no KernelOp consumes)."""
+    placed = _Placed({}, {}, {}, {}, [])
+    stream_members = {member(tensor) for tensor in streams}
     for node, op in zip(nodes, ops):
         kernel = member(node.name)
-        if kernel in members:
-            raise KernelOpError(f"{node.name}: a node and a tensor are both named {kernel}")
-        members[kernel], by_port = op.place(streams)
+        if kernel in stream_members or kernel in placed.kernels:
+            other = "a tensor" if kernel in stream_members else "another node"
+            raise KernelOpError(f"{node.name}: a node and {other} are both named {kernel}")
+        placed.kernels[kernel], by_port = op.place(streams)
         by_port |= {
-            name: tensor
-            for name, tensor in zip(op.outputs, node.output)
-            if tensor in outputs and tensor not in consumed
+            port: tensor for port, tensor in zip(op.outputs, node.output) if tensor in produced
         }
-        owners[kernel] = (node.name, "")
+        placed.owners[kernel] = (node.name, "")
         for port, tensor in by_port.items():
-            owners[member(tensor)] = (node.name, f"{port}.")
+            placed.owners[member(tensor)] = (node.name, f"{port}.")
         for attribute, value in op.choices().items():
             head, _, rest = attribute.partition(".")
             if head in by_port:
-                edge_choices[f"{member(by_port[head])}.{rest}"] = value
+                placed.edge_choices[f"{member(by_port[head])}.{rest}"] = value
             elif head in op.outputs:
-                # An output's choice, set while it left the graph; its consumer owns it now.
-                stale.append(f"{member(node.output[op.outputs.index(head)])}.{rest}")
+                tensor = node.output[op.outputs.index(head)]
+                placed.stale.append(f"{member(tensor)}.{rest}")
             else:
-                kernel_choices[f"{kernel}.{attribute}"] = value
+                placed.kernel_choices[f"{kernel}.{attribute}"] = value
+    return placed
 
+
+def _replay_edges(point: S, choices: Mapping[str, object]) -> tuple[S, tuple[str, ...]]:
+    """``choices`` replayed on ``point``: together when the graph accepts them all,
+    otherwise one by one, each refused one dropped as stale (its forced case applies)."""
+    edges = typed_choices([point], choices)
+    together = committed(point, edges)
+    if not isinstance(together, dict):
+        return together, ()
+    dropped: list[str] = []
+    for key, value in edges.items():
+        alone = committed(point, {key: value})
+        if isinstance(alone, dict):
+            dropped.append(key)
+        else:
+            point = alone
+    return point, tuple(dropped)
+
+
+def partition_root(
+    model: ModelWrapper, nodes: Iterable[NodeProto], *, name: str = "partition"
+) -> PartitionRoot:
+    """The root of ``nodes``, KernelOp nodes of ``model``; see the module docstring."""
+    nodes = list(nodes)
+    ops = [model.get_customop_wrapper(node) for node in nodes]
+    for node, op in zip(nodes, ops):
+        if not isinstance(op, KernelOp):
+            raise KernelOpError(f"{node.name}: a partition root places KernelOps only")
+    owned = [op.owned_streams() for op in ops]
+    ports = _boundary(model, nodes, {tensor for streams in owned for tensor in streams})
+    handed_on = _handed_on(model, nodes)
+    streams = _streams(model, nodes, ops, owned, ports, handed_on)
+    outputs = {tensor for node in nodes for tensor in node.output if tensor in ports}
+    placed = _place(nodes, ops, streams, outputs - handed_on)
+
+    members = {member(tensor): stream for tensor, stream in streams.items()} | placed.kernels
     root: Any = composite(name, members, base=Partition)
     point = design_space(root())
-    if kernel_choices:
-        replayed = committed(point, _typed(point, kernel_choices))
+    if placed.kernel_choices:
+        replayed = committed(point, typed_choices([point], placed.kernel_choices))
         if isinstance(replayed, dict):
-            raise KernelOpError(
-                f"{name}: refused choices: "
-                + "; ".join(f"{key}: {why}" for key, why in sorted(replayed.items())),
-                tuple(sorted(replayed)),
-            )
+            raise refusal(name, replayed)
         point = replayed
-    dropped: list[str] = []
-    if edge_choices:
-        edges = _typed(point, edge_choices)
-        together = committed(point, edges)
-        if isinstance(together, dict):
-            for key, value in edges.items():
-                alone = committed(point, {key: value})
-                if isinstance(alone, dict):
-                    dropped.append(key)
-                else:
-                    point = alone
-        else:
-            point = together
-    return PartitionRoot(point, owners, (*stale, *dropped), tuple(ports.items()))
+    dropped: tuple[str, ...] = ()
+    if placed.edge_choices:
+        point, dropped = _replay_edges(point, placed.edge_choices)
+    return PartitionRoot(point, placed.owners, (*placed.stale, *dropped), tuple(ports.items()))
 
 
 def save_partition_choices(
-    model: Any, root: PartitionRoot, choices: Mapping[str, object]
+    model: ModelWrapper, root: PartitionRoot, choices: Mapping[str, object]
 ) -> dict[str, dict[str, object]]:
     """Persist choices made on purpose in a partition root, each on its owning node (D8)."""
     per_node: dict[str, dict[str, object]] = {}

@@ -39,8 +39,8 @@ from qonnx.util.basic import roundup_to_integer_multiple
 from typing import Optional, Tuple
 
 from finn.util._legacy_build_env import build_directory, checkout_root
-from finn.util._toolchain import Selection, run_process
 from finn.util.resources import resource_path
+from finn.util.toolchain import Selection, run_process
 
 # mapping from PYNQ board names to FPGA part names
 pynq_part_map = dict()

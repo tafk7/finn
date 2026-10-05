@@ -33,10 +33,10 @@ inapplicable one too (it carries no finding of its own).
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import fields
 from math import prod
-from typing import Any, ClassVar, TypeVar
+from typing import TYPE_CHECKING, Any, ClassVar, TypeVar
 
 from qonnx.analysis.tensor_value_summary import (
     UnsupportedTensorValueError,
@@ -59,6 +59,9 @@ from finn.kernels.base import Kernel
 from finn.kernels.channels import Channel
 from finn.kernels.configure import describe
 from finn.kernels.target import DspBlock, Platform, Target
+
+if TYPE_CHECKING:
+    from qonnx.core.modelwrapper import ModelWrapper
 
 S = TypeVar("S", bound=Space)
 
@@ -99,7 +102,7 @@ class KernelOpError(ValueError):
 # -- facts -------------------------------------------------------------------------------
 
 
-def datatype(model: Any, tensor: str, label: str) -> QONNXDataType:
+def datatype(model: ModelWrapper, tensor: str, label: str) -> QONNXDataType:
     """The annotation of ``tensor``; an unannotated tensor is refused (qonnx reads it
     as its container type, FLOAT32, which is not a statement)."""
     if not model.has_tensor_datatype(tensor):
@@ -111,7 +114,7 @@ def datatype(model: Any, tensor: str, label: str) -> QONNXDataType:
     return canonical_qonnx_datatype(model.get_tensor_datatype(tensor))
 
 
-def shape(model: Any, tensor: str, label: str) -> tuple[int, ...]:
+def shape(model: ModelWrapper, tensor: str, label: str) -> tuple[int, ...]:
     """The shape of ``tensor``; one not known yet is refused."""
     found = model.get_tensor_shape(tensor)
     if not found or any(type(dim) is not int or dim < 1 for dim in found):
@@ -124,7 +127,7 @@ def rows(dims: tuple[int, ...]) -> tuple[int, int]:
     return prod(dims[:-1]), dims[-1]
 
 
-def target(model: Any) -> Target:
+def target(model: ModelWrapper) -> Target:
     """The build target, from the model's ``finn.platform`` metadata (a subgraph body
     opened through its parent reads the parent's).
 
@@ -145,7 +148,7 @@ def target(model: Any) -> Target:
     return Target(stated["part"], platform)
 
 
-def write_target(model: Any, target: Target) -> None:
+def write_target(model: ModelWrapper, target: Target) -> None:
     """State the build target in the model's ``finn.platform`` metadata, every key,
     where ``target`` reads it."""
     platform = target.platform
@@ -165,7 +168,7 @@ def write_target(model: Any, target: Target) -> None:
         model.set(key, values[name])
 
 
-def admitted(model: Any, tensor: str, dtype: QONNXDataType, label: str) -> str:
+def admitted(model: ModelWrapper, tensor: str, dtype: QONNXDataType, label: str) -> str:
     """An initializer holds integers its annotation admits, by its value summary; the
     summary's ``content_digest``, which keys the node's binding."""
     try:
@@ -191,6 +194,34 @@ def admitted(model: Any, tensor: str, dtype: QONNXDataType, label: str) -> str:
 # -- replay ------------------------------------------------------------------------------
 
 
+def value_type(item: inspection.DecisionInfo[object]) -> str:
+    """A decision's value type by its semantics' name (``int``, ``bool``, ``str``)."""
+    semantics = item.reference.semantics
+    if semantics is None:
+        raise KernelOpError(f"{item.key} has no value semantics")
+    return semantics.name
+
+
+def typed_choices(
+    subjects: Iterable[Space | type[Space]], choices: Mapping[str, object]
+) -> dict[str, object]:
+    """``choices``, by decision key of ``subjects`` (spaces or space classes), as replay
+    takes them: an ONNX ``i`` attribute of a ``bool`` decision becomes a bool."""
+    kinds = {item.key: value_type(item) for each in subjects for item in inspection.decisions(each)}
+    return {
+        key: bool(value) if kinds.get(key) == "bool" else value for key, value in choices.items()
+    }
+
+
+def refusal(label: str, found: Mapping[str, str]) -> KernelOpError:
+    """The error for choices replay refused: each one, by name, with why."""
+    return KernelOpError(
+        f"{label}: refused choices: "
+        + "; ".join(f"{name}: {why}" for name, why in sorted(found.items())),
+        tuple(sorted(found)),
+    )
+
+
 def committed(point: S, choices: Mapping[str, object]) -> S | dict[str, str]:
     """``choices`` committed on ``point`` atomically, or each refused key with why. An
     inapplicable key carries no finding of its own, so it is named here."""
@@ -211,14 +242,6 @@ def committed(point: S, choices: Mapping[str, object]) -> S | dict[str, str]:
 
 
 # -- the op ------------------------------------------------------------------------------
-
-
-def value_type(item: inspection.DecisionInfo[object]) -> str:
-    """A decision's value type by its semantics' name (``int``, ``bool``, ``str``)."""
-    semantics = item.reference.semantics
-    if semantics is None:
-        raise KernelOpError(f"{item.key} has no value semantics")
-    return semantics.name
 
 
 class KernelOp(CustomOp):  # type: ignore[misc]
@@ -301,7 +324,7 @@ class KernelOp(CustomOp):  # type: ignore[misc]
 
     # -- facts and binding ----------------------------------------------------------------
 
-    def model(self) -> Any:
+    def model(self) -> ModelWrapper:
         model = getattr(self, "_model", None)
         if model is None:
             raise KernelOpError(f"{self.label}: no model attached (use get_customop_wrapper)")
@@ -337,17 +360,6 @@ class KernelOp(CustomOp):  # type: ignore[misc]
             found[name] = attribute.s.decode() if schema[name][0] == "s" else int(attribute.i)
         return found
 
-    def _typed(self, choices: Mapping[str, object]) -> dict[str, object]:
-        """Node-root keys and values: an ``i`` attribute of a ``bool`` decision is a bool."""
-        kinds = {
-            item.key: value_type(item) for root in self.roots for item in inspection.decisions(root)
-        }
-        typed: dict[str, object] = {}
-        for name, value in choices.items():
-            key = self.node_key(name)
-            typed[key] = bool(value) if kinds.get(key) == "bool" else value
-        return typed
-
     def node_part(self, facts: Facts, choices: Mapping[str, object]) -> dict[str, object]:
         """The choices a node root replays: its kernel's and its owned channels'. An
         edge's, input or output, belong to the partition root that declares the edge."""
@@ -362,17 +374,16 @@ class KernelOp(CustomOp):  # type: ignore[misc]
         wanted = self.node_part(facts, {**self.choices(), **(extra or {})})
         if not wanted:
             return BIND_CACHE.point(facts)
-        typed = self._typed(wanted)
+        names = {self.node_key(name): name for name in wanted}
+        typed = typed_choices(
+            self.roots, {self.node_key(name): value for name, value in wanted.items()}
+        )
 
         def build(base: Kernel) -> Kernel:
             replayed = committed(base, typed)
             if isinstance(replayed, dict):
-                names = {self.node_key(name): name for name in wanted}
-                refused = {names.get(key, key): why for key, why in replayed.items()}
-                raise KernelOpError(
-                    f"{self.label}: refused choices: "
-                    + "; ".join(f"{name}: {why}" for name, why in sorted(refused.items())),
-                    tuple(sorted(refused)),
+                raise refusal(
+                    self.label, {names.get(key, key): why for key, why in replayed.items()}
                 )
             return replayed
 
@@ -430,15 +441,15 @@ class KernelOp(CustomOp):  # type: ignore[misc]
         """Each output's ONNX shape and datatype, from the node root's views."""
         raise NotImplementedError
 
-    def infer_output_tensors(self, model: Any) -> Shapes:
+    def infer_output_tensors(self, model: ModelWrapper) -> Shapes:
         self.attach_model(model)
         return self.output_tensors()
 
-    def make_shape_compatible_op(self, model: Any) -> Any:
+    def make_shape_compatible_op(self, model: ModelWrapper) -> Any:
         ((dims, _),) = self.infer_output_tensors(model).values()
         return self.make_const_shape_op(list(dims))
 
-    def infer_node_datatype(self, model: Any) -> None:
+    def infer_node_datatype(self, model: ModelWrapper) -> None:
         for name, (_, dtype) in self.infer_output_tensors(model).items():
             model.set_tensor_datatype(name, dtype)
 
@@ -471,8 +482,10 @@ __all__ = [
     "admitted",
     "committed",
     "datatype",
+    "refusal",
     "rows",
     "shape",
     "target",
+    "typed_choices",
     "write_target",
 ]

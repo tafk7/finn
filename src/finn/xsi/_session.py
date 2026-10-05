@@ -12,7 +12,7 @@ import tempfile
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
-from finn.util._toolchain import run_process
+from finn.util.toolchain import run_process
 from finn.xsi._artifacts import digest, validate_record
 
 
