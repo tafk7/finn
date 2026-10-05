@@ -27,7 +27,7 @@ from .results import (
     owned_result,
     reject,
 )
-from .semantics import ValueSemantics, default_semantics
+from .semantics import ValueSemantics, default_semantics, unrecognized
 
 T = TypeVar("T")
 
@@ -125,7 +125,7 @@ class Domain(Generic[T]):
 
         try:
             if not semantics.accepts(candidate):
-                raise TypeError(f"expected candidate of nominal type {semantics.name}")
+                raise TypeError(unrecognized(semantics))
             if self._finite_values is not None:
                 result: bool | QueryResult[bool] = _contains(
                     self._finite_values, candidate, semantics

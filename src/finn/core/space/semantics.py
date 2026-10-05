@@ -10,6 +10,8 @@ from copy import deepcopy
 from dataclasses import dataclass
 from typing import Generic, NoReturn, TypeVar, cast
 
+from .errors import EvaluationError
+
 T = TypeVar("T")
 
 
@@ -61,7 +63,7 @@ class ValueSemantics(Generic[T]):
 
         with _execution.transformation("value snapshot"):
             if not self.accepts(value):
-                raise TypeError(f"expected value of nominal type {self.name}")
+                raise TypeError(unrecognized(self))
             frozen = self.snapshot(cast(T, value))
             if not self.accepts(frozen):
                 raise TypeError(f"snapshot for {self.name} changed its nominal value type")
@@ -89,6 +91,27 @@ def default_semantics(value_type: type[T]) -> ValueSemantics[T]:
         equal=lambda left, right: left == right,
         snapshot=deepcopy,
     )
+
+
+def unrecognized(semantics: ValueSemantics[T]) -> str:
+    """The one wording for a value ``semantics`` does not recognize."""
+    return f"expected value of nominal type {semantics.name}"
+
+
+def recognize(semantics: ValueSemantics[T], value: object, *, owner: str, role: str) -> bool:
+    """Whether ``semantics`` recognizes ``value``; an adapter that raises fails ``owner``."""
+    try:
+        return semantics.accepts(value)
+    except Exception as cause:
+        raise EvaluationError(owner, role, str(cause)) from cause
+
+
+def snapshot(semantics: ValueSemantics[T], value: object, *, owner: str, role: str) -> T:
+    """``semantics``' detached snapshot of ``value``; any failure fails ``owner``."""
+    try:
+        return semantics.freeze(value)
+    except Exception as cause:
+        raise EvaluationError(owner, role, str(cause)) from cause
 
 
 def semantics_for(value_type: type[T] | ValueSemantics[T]) -> ValueSemantics[T]:

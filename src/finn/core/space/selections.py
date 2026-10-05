@@ -17,7 +17,7 @@ from .edits import Change, ConfigurationResult
 from .errors import EvaluationError, RequestError
 from .occurrence import state
 from .references import DecisionHandle, decision_key
-from .semantics import ValueSemantics
+from .semantics import ValueSemantics, recognize, snapshot, unrecognized
 
 T = TypeVar("T")
 S = TypeVar("S", bound=Space)
@@ -45,25 +45,14 @@ def _semantics(model: Model[Space], index: int) -> ValueSemantics[object]:
 
 def _recognize(model: Model[Space], index: int, value: object) -> None:
     semantics = _semantics(model, index)
-    node = model.linked.nodes[index]
-    try:
-        accepted = semantics.accepts(value)
-    except Exception as cause:
-        raise EvaluationError(node.owner, "selection recognition", str(cause)) from cause
-    if not accepted:
-        raise RequestError(
-            f"{decision_key(model.linked, index)}: "
-            f"expected selection value of type {semantics.name}"
-        )
+    owner = model.linked.nodes[index].owner
+    if not recognize(semantics, value, owner=owner, role="selection recognition"):
+        raise RequestError(f"{decision_key(model.linked, index)}: {unrecognized(semantics)}")
 
 
 def _snapshot(model: Model[Space], index: int, value: object) -> object:
-    try:
-        return _semantics(model, index).freeze(value)
-    except Exception as cause:
-        raise EvaluationError(
-            model.linked.nodes[index].owner, "selection snapshot", str(cause)
-        ) from cause
+    owner = model.linked.nodes[index].owner
+    return snapshot(_semantics(model, index), value, owner=owner, role="selection snapshot")
 
 
 @dataclass(frozen=True, slots=True)

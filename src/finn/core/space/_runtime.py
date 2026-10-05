@@ -34,6 +34,7 @@ from .results import (
     owned_result,
     reject,
 )
+from .semantics import snapshot
 
 if TYPE_CHECKING:
     from ._configuration import Space
@@ -174,10 +175,7 @@ def _blocked(answers: list[QueryResult[object]]) -> NonValue | None:
 def _clone(node: Node, value: object, *, owner: str, role: str) -> object:
     if node.semantics is None:
         raise EvaluationError(owner, role, f"{node.key} has no value semantics")
-    try:
-        return node.semantics.freeze(value)
-    except Exception as cause:
-        raise EvaluationError(owner, role, str(cause)) from cause
+    return snapshot(node.semantics, value, owner=owner, role=role)
 
 
 def _arguments(

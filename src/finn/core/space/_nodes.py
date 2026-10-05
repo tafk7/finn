@@ -42,8 +42,8 @@ from .declarations import (
     unfinished,
 )
 from .domains import finite
-from .errors import DefinitionError, EvaluationError
-from .semantics import ValueSemantics, default_semantics
+from .errors import DefinitionError
+from .semantics import ValueSemantics, default_semantics, recognize, snapshot, unrecognized
 
 if TYPE_CHECKING:
     from ._configuration import Space
@@ -274,16 +274,9 @@ def _freeze_literal(
     """
     if semantics is None:
         raise DefinitionError(f"{label}: the member's value type is not known yet")
-    try:
-        recognized = semantics.accepts(value)
-    except Exception as cause:
-        raise EvaluationError(name, "parameter recognition", str(cause)) from cause
-    if not recognized:
-        raise DefinitionError(f"{label}: expected value of nominal type {semantics.name}")
-    try:
-        return semantics.freeze(value)
-    except Exception as cause:
-        raise EvaluationError(name, "parameter snapshot", str(cause)) from cause
+    if not recognize(semantics, value, owner=name, role="parameter recognition"):
+        raise DefinitionError(f"{label}: {unrecognized(semantics)}")
+    return snapshot(semantics, value, owner=name, role="parameter snapshot")
 
 
 def _value_supplier(
