@@ -31,6 +31,7 @@ from .declarations import (
     Declaration,
     LocatedParam,
     Param,
+    PendingAnnotation,
     ValueRef,
     View,
     _guard,
@@ -431,6 +432,12 @@ def check_supplier(
     family: type[Space], name: str, member: Declaration, value: object, label: str
 ) -> object:
     """Validate one supplier of a member, as far as it can be checked before linking."""
+    if (
+        isinstance(member, Param)
+        and not isinstance(member, LocatedParam)
+        and not _annotated_yet(member)
+    ):
+        return _pending_supplier(member, value, label)
     kind = slot_kind(member)
     if kind == "behaviour":
         what = type(member).__name__
@@ -455,6 +462,42 @@ def check_supplier(
             return value
         return _freeze_literal(semantics, name, label, value)
     return _value_supplier(semantics, name, value, label)
+
+
+def _pending_supplier(member: Param[object], value: object, label: str) -> object:
+    """A supplier of a formal whose annotation does not resolve yet (its family is being
+    defined, across an import cycle): checked when linking, where every annotation
+    resolves. A forward, a node or a reference waits; a literal needs its value type now."""
+    from ._configuration import Space
+
+    if isinstance(value, NodeChoice):
+        raise DefinitionError(f"{label}: a Decision over nodes is not a supplier; bind a member")
+    if isinstance(value, (ValueRef, View)):
+        return value  # a forward (a Param), a member reference or an expression
+    if isinstance(value, Space):
+        record = node_record(value)
+        if record is None:
+            raise DefinitionError(
+                f"{label}: a node reached through another node is not a supplier; a reference "
+                "input names a node placed beside it"
+            )
+        record.sites.append(label)
+        return record
+    raise DefinitionError(
+        f"{label}: the annotation of {member.name} does not resolve yet, so a literal "
+        "cannot be recognized here; bind a member, or assign the value where the family "
+        "is defined"
+    )
+
+
+def _annotated_yet(member: Param[object]) -> bool:
+    """Whether a formal's annotation resolves now; a forward reference resolves when its
+    family is collected."""
+    try:
+        member.resolve()
+    except PendingAnnotation:
+        return False
+    return True
 
 
 def _record(head: NodeDecl, key: str, supplier: object, origin: str | None, label: str) -> None:
@@ -792,7 +835,10 @@ def _check_shared(
         lacking = []
         for key, family in families.items():
             member = family_members(family)[0].get(name)
-            if member is None or slot_kind(member) == "behaviour":
+            # A formal is never behaviour; its annotation may not resolve yet (a forward).
+            if member is None or (
+                not isinstance(member, Param) and slot_kind(member) == "behaviour"
+            ):
                 lacking.append(f"{key} ({family.__qualname__})")
         if lacking:
             problems.append(f"shared binding {name!r} is not declared by candidates {lacking}")
