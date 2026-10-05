@@ -33,6 +33,7 @@ from ._nodes import (
     KeySelection,
     NodeDecision,
     NodeDecl,
+    SlotKind,
     fallback,
     is_fresh,
     is_reference_input,
@@ -57,6 +58,7 @@ from .declarations import (
     Constraint,
     ConstraintGroup,
     Decision,
+    Declaration,
     Derived,
     MemberRef,
     Members,
@@ -107,6 +109,27 @@ def allocate(space_type: type[Space], root: NodeDecl | None) -> Table:
     allocation.check_recursion()
     allocation.allocate()
     return allocation.table
+
+
+def _declared_kind(declaration: Declaration) -> NodeKind | None:
+    """The node kind of a family's own member that is neither a formal nor a Decision."""
+    if isinstance(declaration, Const):
+        return "const"
+    if isinstance(declaration, (Derived, Expr, Supplied)):
+        return "derived"
+    if isinstance(declaration, Constraint):
+        return "constraint"
+    if isinstance(declaration, View):
+        return "view"
+    if isinstance(declaration, ConstraintGroup):
+        return "group"
+    if isinstance(declaration, (MemberRef, ChoiceMemberRef, CaseRef)):
+        return "alias"
+    if isinstance(declaration, Present):
+        return "present"
+    if isinstance(declaration, Members):
+        return "members"
+    return None
 
 
 class _Allocation:
@@ -304,73 +327,9 @@ class _Allocation:
         kinds = self.table.kinds[draft.effective.space_type]
         for member_name, declaration in draft.effective.members.items():
             kind = kinds[member_name]
-            if kind in ("node", "choice", "reference"):
-                continue  # structure (and reference inputs): allocated below
-            slot = draft.slots.get(member_name)
-            binding: PlacementBinding | None = None
-            if slot is not None:
-                if kind == "behaviour":
-                    raise DefinitionError(
-                        f"{slot.provenance.key}: behaviour belongs to the family; subclass it "
-                        "to change it"
-                    )
-                binding_kind, supplier, contract = classify(
-                    declaration, slot, root_own=root and slot.writer == ROOT_WRITER
-                )
-                binding = PlacementBinding(
-                    supplier, binding_kind, slot.scope, slot.origin, contract, slot.provenance
-                )
-            node_kind: NodeKind
-            if isinstance(declaration, Param):
-                if binding is not None:
-                    node_kind = _BINDING_KINDS[binding.kind]
-                elif root:
-                    node_kind = "param"
-                else:
-                    binding, node_kind = self.unsupplied(draft, member_name, declaration)
-                    if binding is None:
-                        draft.unsupplied.add(member_name)
-            elif isinstance(declaration, Decision):
-                node_kind = "decision" if binding is None else _BINDING_KINDS[binding.kind]
-            elif isinstance(declaration, Const):
-                node_kind = "const"
-            elif isinstance(declaration, (Derived, Expr, Supplied)):
-                node_kind = "derived"
-            elif isinstance(declaration, Constraint):
-                node_kind = "constraint"
-            elif isinstance(declaration, View):
-                node_kind = "view"
-            elif isinstance(declaration, ConstraintGroup):
-                node_kind = "group"
-            elif isinstance(declaration, (MemberRef, ChoiceMemberRef, CaseRef)):
-                node_kind = "alias"
-            elif isinstance(declaration, Present):
-                node_kind = "present"
-            elif isinstance(declaration, Members):
-                node_kind = "members"
-            else:
-                raise DefinitionError(f"{member_key(name, member_name)}: unsupported declaration")
-            node = self.table.reserve(
-                index,
-                member_key(name, member_name),
-                node_kind,
-                draft.effective.semantics.get(declaration),
-                guard=guard,
-                origin=declaration.origin,
-            )
-            draft.named_members[member_name] = node
-            if binding is not None and binding.provenance is not None:
-                if binding.kind != "parameter":
-                    self.table.provenance[node] = binding.provenance
-                if binding.kind in ("pin", "pin-reference") or (
-                    binding.kind != "local-decision" and slot is not None and slot.opened
-                ):
-                    # The coordinate an inner layer opened is gone: its key disappears.
-                    self.table.pinned[member_key(name, member_name)] = binding.provenance
-            if binding is not None and binding.kind == "local-decision":
-                self.local_decision(draft, node, binding)
-            self.member_positions[node] = len(self.table.members)
-            self.table.members.append(MemberTask(node, index, member_name, declaration, binding))
+            # Structure (nodes, choices and reference inputs) is allocated below.
+            if kind not in ("node", "choice", "reference"):
+                self.member(draft, member_name, declaration, kind)
         for declaration, member_name in draft.effective.aliases.items():
             if member_name in draft.named_members:
                 draft.members[declaration] = draft.named_members[member_name]
@@ -381,6 +340,64 @@ class _Allocation:
                 (name, draft.members[view]) for name, view in entries
             )
         return index
+
+    def member(
+        self, draft: ScopeDraft, member_name: str, declaration: Declaration, kind: SlotKind
+    ) -> None:
+        """Reserve a value member's node, bound by the setting that wins for it."""
+        key = member_key(draft.name, member_name)
+        root = draft.parent is None
+        slot = draft.slots.get(member_name)
+        binding: PlacementBinding | None = None
+        if slot is not None:
+            if kind == "behaviour":
+                raise DefinitionError(
+                    f"{slot.provenance.key}: behaviour belongs to the family; subclass it "
+                    "to change it"
+                )
+            binding_kind, supplier, contract = classify(
+                declaration, slot, root_own=root and slot.writer == ROOT_WRITER
+            )
+            binding = PlacementBinding(
+                supplier, binding_kind, slot.scope, slot.origin, contract, slot.provenance
+            )
+        node_kind: NodeKind | None
+        if isinstance(declaration, Param):
+            if binding is not None:
+                node_kind = _BINDING_KINDS[binding.kind]
+            elif root:
+                node_kind = "param"
+            else:
+                binding, node_kind = self.unsupplied(draft, member_name, declaration)
+                if binding is None:
+                    draft.unsupplied.add(member_name)
+        elif isinstance(declaration, Decision):
+            node_kind = "decision" if binding is None else _BINDING_KINDS[binding.kind]
+        else:
+            node_kind = _declared_kind(declaration)
+            if node_kind is None:
+                raise DefinitionError(f"{key}: unsupported declaration")
+        node = self.table.reserve(
+            draft.index,
+            key,
+            node_kind,
+            draft.effective.semantics.get(declaration),
+            guard=draft.guard,
+            origin=declaration.origin,
+        )
+        draft.named_members[member_name] = node
+        if binding is not None and binding.provenance is not None:
+            if binding.kind != "parameter":
+                self.table.provenance[node] = binding.provenance
+            if binding.kind in ("pin", "pin-reference") or (
+                binding.kind != "local-decision" and slot is not None and slot.opened
+            ):
+                # The coordinate an inner layer opened is gone: its key disappears.
+                self.table.pinned[key] = binding.provenance
+        if binding is not None and binding.kind == "local-decision":
+            self.local_decision(draft, node, binding)
+        self.member_positions[node] = len(self.table.members)
+        self.table.members.append(MemberTask(node, draft.index, member_name, declaration, binding))
 
     def unsupplied(
         self, draft: ScopeDraft, name: str, formal: Param[object]
