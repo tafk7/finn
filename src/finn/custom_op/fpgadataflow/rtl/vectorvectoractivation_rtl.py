@@ -160,7 +160,7 @@ class VVAU_rtl(VVAU, RTLBackend):
         sourcefiles = [
             os.path.join(code_gen_dir, self.get_nodeattr("gen_top_module") + "_wrapper.v")
         ] + [rtllib_dir + _ for _ in sourcefiles]
-        sourcefiles.insert(2, finnlib_source("rtl", "replay_buffer.sv"))
+        sourcefiles.insert(2, finnlib_source("rtl", "infra", "replay_buffer.sv"))
 
         for f in sourcefiles:
             cmd.append("add_files -norecurse %s" % tcl_quote(f))
@@ -308,7 +308,7 @@ class VVAU_rtl(VVAU, RTLBackend):
             os.path.join(code_gen_dir, self.get_nodeattr("gen_top_module") + "_wrapper.v")
         ] + [rtllib_dir + _ for _ in verilog_files]
         if abspath:
-            verilog_files[3] = finnlib_source("rtl", "replay_buffer.sv")
+            verilog_files[3] = finnlib_source("rtl", "infra", "replay_buffer.sv")
 
         return verilog_files
 
