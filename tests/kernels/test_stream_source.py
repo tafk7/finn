@@ -37,14 +37,15 @@ from finn.kernels.dotp import DotpAxiKernel
 from finn.kernels.matmul import MatMulKernel
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.streams import BufferedStream, Stream
-from finn.kernels.target import DspBlock, Platform
+from finn.kernels.target import Platform
 from kernels.helpers import (
-    Root,
-    WeightDelivery,
+    FULL_DSP48E2,
     labels,
     matmul_assembly,
     matmul_point,
     placed,
+    Root,
+    WeightDelivery,
     with_adapter_memories,
 )
 
@@ -59,8 +60,7 @@ FACTS = dict(
     n=4,
     activation_dtype=DataType["INT3"],
     weights_dtype=DataType["INT3"],
-    target_dsp=DspBlock.DSP48E2,
-    target_period_ns=5.0,
+    platform=FULL_DSP48E2,
 )
 INT3, INT8 = ScalarEncoding(DataType["INT3"]), ScalarEncoding(DataType["INT8"])
 
@@ -260,9 +260,9 @@ def test_several_weight_sets_without_known_weights_leave_the_set_stream_unused()
 def test_a_non_viable_source_is_refused_and_committed_is_refused_by_its_candidate():
     # Several sets need the set stream; a memory without one refuses itself.
     class Unindexed(Root):
-        x = Stream(tensor=Tensor((3, 4), INT3), port="in0_V")
-        w = BufferedStream(tensor=Tensor((4, 4), INT3), sets=2)
-        y = Stream(tensor=Tensor((3, 4), INT8), port="out0_V")
+        x = Stream(tensor=Tensor((3, 4), INT3), port="in0_V", platform=FULL_DSP48E2)
+        w = BufferedStream(tensor=Tensor((4, 4), INT3), sets=2, platform=FULL_DSP48E2)
+        y = Stream(tensor=Tensor((3, 4), INT8), port="out0_V", platform=FULL_DSP48E2)
         matmul = MatMulKernel(
             **FACTS, weights=(WEIGHTS, WEIGHTS), weight_sets=2, x_stream=x, w_stream=w, y_stream=y
         )
@@ -283,9 +283,9 @@ def placed_with(platform: Platform):
     """MatMul with known weights, its weight stream on ``platform``."""
 
     class OnPlatform(Root):
-        x = Stream(tensor=Tensor((3, 4), INT3), port="in0_V")
+        x = Stream(tensor=Tensor((3, 4), INT3), port="in0_V", platform=platform)
         w = BufferedStream(tensor=Tensor((4, 4), INT3), platform=platform)
-        y = Stream(tensor=Tensor((3, 4), INT8), port="out0_V")
+        y = Stream(tensor=Tensor((3, 4), INT8), port="out0_V", platform=platform)
         matmul = MatMulKernel(**FACTS, weights=WEIGHTS, x_stream=x, w_stream=w, y_stream=y)
         w.contents = matmul.weight_values
 
@@ -295,9 +295,9 @@ def placed_with(platform: Platform):
 @pytest.mark.parametrize(
     ("platform", "refused"),
     (
-        (Platform(), set()),
-        (Platform(uram=False), {"uram-absent"}),
-        (Platform(uram_init=False), {"uram-init"}),
+        (FULL_DSP48E2, set()),
+        (replace(FULL_DSP48E2, uram=False), {"uram-absent"}),
+        (replace(FULL_DSP48E2, uram_init=False), {"uram-init"}),
     ),
 )
 def test_the_platform_narrows_the_source_memory(platform, refused):
@@ -316,9 +316,9 @@ def test_the_platform_narrows_the_source_memory(platform, refused):
 
 def test_a_stream_with_a_value_has_its_source_as_its_only_producer():
     class Produced(Root):
-        x = Stream(tensor=Tensor((3, 4), INT3), port="in0_V")
-        w = BufferedStream(tensor=Tensor((4, 4), INT3), port="in1_V")
-        y = Stream(tensor=Tensor((3, 4), INT8), contents=((0,) * 4,) * 3)
+        x = Stream(tensor=Tensor((3, 4), INT3), port="in0_V", platform=FULL_DSP48E2)
+        w = BufferedStream(tensor=Tensor((4, 4), INT3), port="in1_V", platform=FULL_DSP48E2)
+        y = Stream(tensor=Tensor((3, 4), INT8), contents=((0,) * 4,) * 3, platform=FULL_DSP48E2)
         matmul = MatMulKernel(**FACTS, x_stream=x, w_stream=w, y_stream=y)
 
     answer = configured(design_space(Produced())).y.query(Stream.endpoints)

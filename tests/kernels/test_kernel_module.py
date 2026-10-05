@@ -26,6 +26,7 @@ from finn.kernels.configure import commit
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.port import AxiStreamPort
 from finn.kernels.streams import Stream
+from kernels.helpers import FULL_DSP48E2
 
 INT4 = DataType["INT4"]
 TENSOR = Tensor((4,), ScalarEncoding(INT4))
@@ -70,7 +71,7 @@ class Probe(Kernel):
 
 def probe(**facts: object) -> Probe:
     class Placed(Space):
-        edge = Stream(tensor=TENSOR, port="in0_V")
+        edge = Stream(tensor=TENSOR, port="in0_V", platform=FULL_DSP48E2)
         kernel = Probe(stream=edge, **facts)  # type: ignore[arg-type]
 
     return design_space(Placed()).kernel
@@ -89,7 +90,9 @@ def test_a_port_runs_on_its_kernels_clock() -> None:
 
 def test_a_held_bus_is_accounted_for() -> None:
     point = design_space(
-        MemStreamKernel(dtype=INT4, form=vector_major((4,), 2), contents=(1, 2, 3, 4))
+        MemStreamKernel(
+            platform=FULL_DSP48E2, dtype=INT4, form=vector_major((4,), 2), contents=(1, 2, 3, 4)
+        )
     )
     memory = commit(point, {"ram_style": "auto", "pumped_memory": False})
     assert memory.query(Kernel.pins_accounted) == Available(True)

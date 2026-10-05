@@ -71,12 +71,13 @@ _FIRST_DSP_NS, _NEXT_DSP_NS = 0.741, 0.605
 class DotpAxiKernel(Kernel):
     """The ``dotp_axi`` space shared by its core kernels; it places no core itself.
 
-    ``target_period_ns`` is the clock period the module must meet. It sets
+    The ``platform``'s ``period_ns`` is the clock period the module must meet. It sets
     SEGMENTLEN, the DSP58 chain length between pipeline registers, by FINN's
     timing model: about 0.741 ns through the first DSP and 0.605 ns through each
     further one, against half the period when compute is pumped. Only the INT8
     core reads SEGMENTLEN. Pumped compute requires a phase-aligned 2x clock: the
-    ``platform``'s ``clk2x``.
+    ``platform``'s ``clk2x``. The DSP block is the ``platform``'s (``dsp``): a
+    platform that states none is refused (``dotp-dsp``).
     """
 
     id = "finnlib.dotp_axi"
@@ -86,13 +87,11 @@ class DotpAxiKernel(Kernel):
     core: ClassVar[str] = ""
 
     form: Form = Param(default=Form.DENSE)
-    target_dsp: DspBlock = Param()
-    target_period_ns: float = Param()
     reshape_activations: bool = Param(default=False)
     # The accumulator encoding it produces: its parent's choice (MatMul binds its
     # result type), so that it is known before the results stream exists.
     result_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
-    platform: Platform = Param(default=Platform())
+    platform: Platform = Param()
     # The streams dotp sits on: reference inputs, each a Stream placed beside it.
     x_stream: Stream = Param(required=False)
     w_stream: Stream = Param(required=False)
@@ -160,6 +159,14 @@ class DotpAxiKernel(Kernel):
         dtype=result_dtype,
     )
 
+    @derived
+    def dsp(self) -> DspBlock | Rejected:
+        """The platform's DSP block, the slice the core is built in."""
+        dsp = self.platform.dsp
+        if dsp is None:
+            return reject("dotp-dsp", "the platform states no DSP block")
+        return dsp
+
     @constraint
     def core_supported(self) -> bool | Rejected:
         # The ports admit the encodings (integer family, signedness, two bits);
@@ -176,7 +183,7 @@ class DotpAxiKernel(Kernel):
 
     @constraint
     def accumulator_width_supported(self) -> bool | Rejected:
-        bits, maximum = self.y.element.bits, dsp_widths(self.target_dsp)[2]
+        bits, maximum = self.y.element.bits, dsp_widths(self.dsp)[2]
         if not 1 <= bits <= maximum:
             return reject(
                 "dotp-accumulator-width",
@@ -202,12 +209,11 @@ class DotpAxiKernel(Kernel):
     @derived
     def segment_length(self) -> int | Rejected:
         """The longest DSP58 chain segment that meets the target period, at most the chain."""
-        pumping = self.compute_pumping
-        period = self.target_period_ns / 2 if pumping else self.target_period_ns
+        pumping, target = self.compute_pumping, self.platform.period_ns
+        period = target / 2 if pumping else target
         if not period > _FIRST_DSP_NS:
             return reject(
-                "dotp-clock-period",
-                f"a {self.target_period_ns} ns target leaves no time for one DSP stage",
+                "dotp-clock-period", f"a {target} ns target leaves no time for one DSP stage"
             )
         meets = floor((period - _FIRST_DSP_NS) / _NEXT_DSP_NS + 1)
         chain = ceil(self.simd / (6 if pumping else 3))
@@ -240,7 +246,7 @@ class DotpAxiKernel(Kernel):
             "NARROW_WEIGHTS": int(self._narrow_weights()),
             "PUMPED_COMPUTE": int(self.compute_pumping),
             "SEGMENTLEN": self.segment_length,
-            "VERSION": _DSP_VERSION[self.target_dsp],
+            "VERSION": _DSP_VERSION[self.dsp],
             "ACTIVATION_BROADCASTING": int(self.form is Form.DENSE),
             "FORCE_BEHAVIORAL": 0,
             "CORE": f'"{type(self).core}"',
@@ -289,7 +295,7 @@ class PackedDotpKernel(DotpAxiKernel):
     def _core_refusal(self) -> Rejected | None:
         if self.form is not Form.DENSE:
             return reject("dotp-form", "the packed core broadcasts activations to every PE lane")
-        a_bits, b_bits, _ = dsp_widths(self.target_dsp)
+        a_bits, b_bits, _ = dsp_widths(self.dsp)
         activation, weights = self.x.element, self.w.element
         if activation.bits + (not activation.signed) > b_bits:
             return reject(
@@ -330,7 +336,7 @@ class Int8Dsp58DotpKernel(DotpAxiKernel):
     core = "dotp_8sx9_dsp58"
 
     def _core_refusal(self) -> Rejected | None:
-        if self.target_dsp is not DspBlock.DSP58:
+        if self.dsp is not DspBlock.DSP58:
             return reject("dotp-target", "the INT8 core is a DSP58 mode")
         activation, weights = self.x.element, self.w.element
         if activation.bits + (not activation.signed) > 9:

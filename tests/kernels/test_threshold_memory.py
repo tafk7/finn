@@ -18,6 +18,8 @@ from qonnx.core.datatype import DataType
 from finn.core.space import Inapplicable, Rejected, design_space, inspection
 from finn.kernels.target import Platform
 from finn.kernels.thresholding import ThresholdingAxiKernel
+from dataclasses import replace
+from kernels.helpers import FULL_DSP48E2
 
 INT8 = DataType["INT8"]
 
@@ -29,7 +31,11 @@ def table(count: int, channels: int = 4) -> tuple[tuple[tuple[int, ...], ...], .
 def configured(count: int = 3, pe: int = 1, **memory: object) -> ThresholdingAxiKernel:
     base = design_space(
         ThresholdingAxiKernel(
-            input_dtype=INT8, threshold_dtype=INT8, thresholds=table(count), bias=0
+            input_dtype=INT8,
+            threshold_dtype=INT8,
+            thresholds=table(count),
+            bias=0,
+            platform=FULL_DSP48E2,
         )
     )
     report = base.try_with_choices(use_axilite=False, deep_pipeline=False, pe=pe, **memory)
@@ -63,7 +69,11 @@ def test_the_stage_counts_range_over_the_rtl_stages(count: int, stages: int) -> 
     assert point.stages == stages
     base = design_space(
         ThresholdingAxiKernel(
-            input_dtype=INT8, threshold_dtype=INT8, thresholds=table(count), bias=0
+            input_dtype=INT8,
+            threshold_dtype=INT8,
+            thresholds=table(count),
+            bias=0,
+            platform=FULL_DSP48E2,
         )
     )
     for ultra in range(stages + 1):
@@ -159,10 +169,11 @@ def test_the_platform_narrows_the_memories_and_the_control_port() -> None:
             )
         )
 
-    forced = {item.key: item for item in inspection.forced(point(Platform()))}
+    forced = {item.key: item for item in inspection.forced(point(FULL_DSP48E2))}
     assert "use_axilite" not in forced and "ultra_stages" not in forced
     bare = {
-        item.key: item for item in inspection.forced(point(Platform(uram=False, control_ports=0)))
+        item.key: item
+        for item in inspection.forced(point(replace(FULL_DSP48E2, uram=False, control_ports=0)))
     }
     assert (
         bare["use_axilite"].value is False
@@ -171,7 +182,7 @@ def test_the_platform_narrows_the_memories_and_the_control_port() -> None:
     assert bare["ultra_stages"].value == 0
     assert {"1", "2"} == set(bare["ultra_stages"].refused)
     assert all("uram-absent" in why for why in bare["ultra_stages"].refused.values())
-    zynq = point(Platform(uram_init=False))
+    zynq = point(replace(FULL_DSP48E2, uram_init=False))
     report = zynq.try_with_choices(ultra_stages=1)
     assert not report.accepted
     assert {finding.code for finding in report.outcomes[0].result.findings} == {"uram-init"}

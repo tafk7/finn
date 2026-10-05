@@ -89,7 +89,7 @@ from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.transport import StreamContract
 from finn.kernels.port import AxiStreamPort
 from finn.kernels.streams import Stream
-from kernels.helpers import Root, with_adapter_memories
+from kernels.helpers import FULL_DSP48E2, Root, with_adapter_memories
 from kernels.xsim import materialize, stream_through
 
 KERNEL, SOURCE = "kernel", "source"
@@ -289,7 +289,11 @@ def _design(
     namespace: dict[str, object] = {}
     for name, tensor in tensors.items():
         inside = fed is not None and fed[0] == name
-        namespace[name] = Stream(tensor=tensor) if inside else Stream(tensor=tensor, port=name)
+        namespace[name] = (
+            Stream(tensor=tensor, platform=FULL_DSP48E2)
+            if inside
+            else Stream(tensor=tensor, port=name, platform=FULL_DSP48E2)
+        )
     namespace[KERNEL] = family(**facts, **{name: namespace[name] for name in tensors})
     if fed is not None:
         name, form, contents = fed
@@ -298,6 +302,7 @@ def _design(
             form=form,
             contents=contents,
             output_stream=namespace[name],
+            platform=FULL_DSP48E2,
         )
     return design_space(type(f"{family.__name__}Conformance", (Root,), namespace)())
 

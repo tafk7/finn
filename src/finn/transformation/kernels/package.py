@@ -478,7 +478,7 @@ class PackagePartition(Transformation):  # type: ignore[misc]
                 emitted,
                 ports,
                 part=built.part,
-                clock_ns=built.period_ns,
+                clock_ns=built.platform.period_ns,
                 ip_name=self.ip_name,
                 run_synth=self.run_synth,
             )

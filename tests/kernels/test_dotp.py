@@ -9,6 +9,7 @@ A core sits between three streams (``helpers.placed_dotp``): its elements and
 extents come from their tensors, and PE, SIMD and pumping are its Decisions.
 """
 
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -27,8 +28,9 @@ from finn.kernels.artifacts.build import emit_module
 from finn.kernels.base import Kernel
 from finn.kernels.dotp import DotpAxiKernel, Int8Dsp58DotpKernel, PackedDotpKernel
 from finn.kernels.port import AxiStreamPort
-from finn.kernels.target import DspBlock, Platform
+from finn.kernels.target import DspBlock
 from kernels import helpers
+from kernels.helpers import FULL_DSP48E2, FULL_DSP58, full_platform
 
 
 def parameters(**updates):
@@ -38,8 +40,7 @@ def parameters(**updates):
         activation_dtype=DataType["INT3"],
         weights_dtype=DataType["INT3"],
         result_dtype=DataType["INT9"],
-        target_dsp=DspBlock.DSP58,
-        target_period_ns=5.0,
+        platform=FULL_DSP58,
         compute_pumping=False,
     )
     result.update(updates)
@@ -74,8 +75,6 @@ def test_a_core_declares_ports_folding_factors_and_facts_and_the_base_derives_th
     facts = {key for key, kind in found.items() if kind == "const" and key.count(".") == 1}
     assert facts == {
         "compute.form",
-        "compute.target_dsp",
-        "compute.target_period_ns",
         "compute.reshape_activations",
         "compute.result_dtype",
         "compute.platform",
@@ -96,7 +95,7 @@ def test_a_core_declares_ports_folding_factors_and_facts_and_the_base_derives_th
 @pytest.mark.parametrize("target", tuple(DspBlock))
 @pytest.mark.parametrize("pumping", (False, True))
 def test_assessed_view_preserves_geometry_and_clocks(target, pumping):
-    point = kernel(target_dsp=target, compute_pumping=pumping)
+    point = kernel(platform=full_platform(target), compute_pumping=pumping)
     requirements = point.module
     rtl = dict(requirements.parameters)
     assert rtl["ACCU_WIDTH"] == 9
@@ -147,13 +146,14 @@ def test_the_schedule_splits_n_by_pe_and_k_by_simd():
     ],
 )
 def test_segment_length_follows_the_target_period(period, pumping, segment):
-    point = kernel(simd=7, target_period_ns=period, compute_pumping=pumping)
+    platform = full_platform(DspBlock.DSP58, period_ns=period)
+    point = kernel(simd=7, platform=platform, compute_pumping=pumping)
     assert point.segment_length == segment
     assert dict(point.module.pins.parameters)["SEGMENTLEN"] == str(segment)
 
 
 def test_dsp48_carries_the_segment_length_the_rtl_ignores():
-    requirements = kernel(target_dsp=DspBlock.DSP48E2, simd=7).module
+    requirements = kernel(platform=FULL_DSP48E2, simd=7).module
     assert dict(requirements.parameters)["SEGMENTLEN"] == 3
 
 
@@ -168,7 +168,7 @@ def test_dsp48_carries_the_segment_length_the_rtl_ignores():
         ({"activation_dtype": DataType["INT32"]}, "dotp-activation-width"),
         ({"activation_dtype": DataType["UINT24"]}, "dotp-activation-width"),
         (
-            {"activation_dtype": DataType["UINT18"], "target_dsp": DspBlock.DSP48E2},
+            {"activation_dtype": DataType["UINT18"], "platform": FULL_DSP48E2},
             "dotp-activation-width",
         ),
         ({"weights_dtype": DataType["INT27"]}, "dotp-weight-width"),
@@ -176,11 +176,15 @@ def test_dsp48_carries_the_segment_length_the_rtl_ignores():
         ({"result_dtype": DataType["FLOAT32"]}, "dtype-family"),
         ({"result_dtype": DataType["INT59"]}, "dotp-accumulator-width"),
         (
-            {"result_dtype": DataType["INT49"], "target_dsp": DspBlock.DSP48E2},
+            {"result_dtype": DataType["INT49"], "platform": FULL_DSP48E2},
             "dotp-accumulator-width",
         ),
-        ({"target_period_ns": 0.7}, "dotp-clock-period"),
-        ({"target_period_ns": 1.4, "compute_pumping": True}, "dotp-clock-period"),
+        ({"platform": replace(FULL_DSP58, dsp=None)}, "dotp-dsp"),
+        ({"platform": full_platform(DspBlock.DSP58, period_ns=0.7)}, "dotp-clock-period"),
+        (
+            {"platform": full_platform(DspBlock.DSP58, period_ns=1.4), "compute_pumping": True},
+            "dotp-clock-period",
+        ),
         ({"simd": 1, "compute_pumping": True}, "dotp-pumping"),
     ],
 )
@@ -199,8 +203,7 @@ def test_physical_view_reports_each_refusal_once(updates, code):
     "updates,error",
     [
         # A mistyped fact is refused at the node call; a mistyped folding factor at commit.
-        ({"target_period_ns": "5"}, DefinitionError),
-        ({"target_dsp": "DSP58"}, DefinitionError),
+        ({"platform": "DSP58"}, DefinitionError),
         ({"form": "dense"}, DefinitionError),
         ({"pe": True}, ValueError),
         ({"simd": 2.5}, ValueError),
@@ -240,7 +243,9 @@ def test_narrow_weights_derive_from_the_weight_stream_s_range():
 def test_narrow_weights_may_be_as_wide_as_the_dsp_a_input():
     # DSP48E1's A input is 25 bits: a sign guard bit leaves 24 for weights, unless narrow.
     wide = dict(
-        target_dsp=DspBlock.DSP48E1, weights_dtype=DataType["INT25"], result_dtype=DataType["INT48"]
+        platform=full_platform(DspBlock.DSP48E1),
+        weights_dtype=DataType["INT25"],
+        result_dtype=DataType["INT48"],
     )
     plain = kernel(**wide).inspect(DotpAxiKernel.core_supported).result
     assert codes(plain) == {"dotp-weight-width"}
@@ -249,7 +254,7 @@ def test_narrow_weights_may_be_as_wide_as_the_dsp_a_input():
 
 
 def test_pumped_compute_needs_the_platforms_doubled_clock():
-    point = kernel(compute_pumping=None, platform=Platform(clk2x=False))
+    point = kernel(compute_pumping=None, platform=replace(FULL_DSP58, clk2x=False))
     (item,) = [item for item in inspection.forced(point) if item.key.endswith("compute_pumping")]
     assert item.value is False and "clk2x-absent" in item.refused["True"]
     assert not any(
@@ -271,12 +276,11 @@ def test_the_core_refuses_before_its_folding_factors_are_chosen():
     assert open_factors.x.element.bits == 3
 
 
-@pytest.mark.parametrize("missing", ("target_dsp", "target_period_ns"))
-def test_required_physical_facts_reject_omission(missing):
+def test_the_platform_is_a_required_fact():
     facts = parameters()
-    facts.pop(missing)
+    facts.pop("platform")
     # A bare call is legal; the missing formal is refused when design_space() prepares it.
-    with pytest.raises(DefinitionError, match=f"compute.{missing} is not supplied"):
+    with pytest.raises(DefinitionError, match="compute.platform is not supplied"):
         helpers.placed_dotp(PackedDotpKernel, **facts)
 
 
@@ -299,7 +303,7 @@ def test_the_results_stream_selects_accumulator_capacity(bits):
 )
 def test_supported_signed_and_unsigned_dsp_boundaries(target, activation, weight):
     requirements = kernel(
-        target_dsp=target,
+        platform=full_platform(target),
         activation_dtype=DataType[activation],
         weights_dtype=DataType[weight],
         result_dtype=DataType["INT48"],
@@ -362,7 +366,7 @@ def test_each_core_kernel_names_its_core_and_the_shared_base_places_none():
 @pytest.mark.parametrize(
     "updates,code",
     [
-        ({"target_dsp": DspBlock.DSP48E2}, "dotp-target"),
+        ({"platform": FULL_DSP48E2}, "dotp-target"),
         (
             {"activation_dtype": DataType["UINT9"], "weights_dtype": DataType["INT8"]},
             "dotp-activation-width",

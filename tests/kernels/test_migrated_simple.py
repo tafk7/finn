@@ -24,7 +24,8 @@ from finn.core.space import (
     design_space,
 )
 from finn.core.space.errors import ValueUnavailableError
-from finn.kernels.target import DspBlock
+from finn.kernels.target import DspBlock, Platform
+from kernels.helpers import FULL_DSP48E2, full_platform
 
 T = TypeVar("T")
 
@@ -35,7 +36,7 @@ def decided(answer: QueryResult[T]) -> T:
 
 
 def test_fifo_start_commit_and_view_read_keep_opaque_word_geometry() -> None:
-    base = design_space(FifoKernel(word_bits=13, depth=8))
+    base = design_space(FifoKernel(word_bits=13, depth=8, platform=FULL_DSP48E2))
     assert isinstance(base.inspect(FifoKernel.module).accepted_result, Unresolved)
     with pytest.raises(ValueUnavailableError):
         _ = base.module
@@ -68,7 +69,9 @@ def test_fifo_start_commit_and_view_read_keep_opaque_word_geometry() -> None:
 
 @pytest.mark.parametrize("style", ("auto", "shift", "distributed", "block", "ultra"))
 def test_fifo_ram_styles_remain_explicit_and_preserve_native_parameter_values(style: str) -> None:
-    point = design_space(FifoKernel(word_bits=17, depth=64)).with_choices(ram_style=style)
+    point = design_space(FifoKernel(word_bits=17, depth=64, platform=FULL_DSP48E2)).with_choices(
+        ram_style=style
+    )
     assert dict(point.module.parameters)["RAM_STYLE"] == f'"{style}"'
 
 
@@ -76,7 +79,7 @@ def test_fifo_ram_styles_remain_explicit_and_preserve_native_parameter_values(st
 def test_fifo_geometry_refusal_remains_visible_before_and_after_ram_choice(
     bits: int, depth: int
 ) -> None:
-    base = design_space(FifoKernel(word_bits=bits, depth=depth))
+    base = design_space(FifoKernel(word_bits=bits, depth=depth, platform=FULL_DSP48E2))
     assert base.inspect(FifoKernel.module).constraints.refused == ("geometry_supported",)
     assert isinstance(base.inspect(FifoKernel.module).accepted_result, Unresolved)
     chosen = base.with_choices(ram_style="auto")
@@ -102,7 +105,7 @@ def eltwise(
             lhs_dtype=resolve_qonnx_datatype_name(lhs),
             rhs_dtype=resolve_qonnx_datatype_name(rhs),
             b_scale=scale,
-            target_dsp=target,
+            platform=full_platform(target),
         )
     )
 
@@ -173,21 +176,21 @@ def test_eltwise_retains_supported_profile_restrictions() -> None:
     )
 
 
-def test_eltwise_narrow_result_stays_known_with_optional_parent_target_omission() -> None:
+def test_eltwise_narrow_result_stays_known_with_optional_parent_platform_omission() -> None:
     # Replaces an inline exposed Param child binding: the optional formal is the
     # parent's own, bound to the child by name.
-    class OptionalTarget(Space):
-        target_dsp: DspBlock = Param(required=False)
+    class OptionalPlatform(Space):
+        platform: Platform = Param(required=False)
         arithmetic = EltwiseKernel(
             operation="ADD",
             pe=2,
             lhs_dtype=resolve_qonnx_datatype_name("INT3"),
             rhs_dtype=resolve_qonnx_datatype_name("INT3"),
             b_scale=1.0,
-            target_dsp=target_dsp,
+            platform=platform,
         )
 
-    point = design_space(OptionalTarget())
+    point = design_space(OptionalPlatform())
     assert point.arithmetic.result_dtype.name == "INT4"
     assessment = point.arithmetic.inspect(EltwiseKernel.module)
     assert isinstance(assessment.output_result, Available)

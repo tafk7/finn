@@ -95,7 +95,7 @@ class MemStreamKernel(Kernel):
     output_stream: Stream = Param(required=False)
     set_stream: Stream = Param(required=False)
     staged: bool = Param(default=False)
-    platform: Platform = Param(default=Platform())
+    platform: Platform = Param()
     ram_style: str = Decision(
         values=MEMSTREAM_RAM_STYLES,
         requires=(

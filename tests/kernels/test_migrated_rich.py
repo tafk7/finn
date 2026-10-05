@@ -20,7 +20,7 @@ from finn.core.space import (
     design_space,
 )
 from finn.kernels.thresholding import ThresholdingAxiKernel
-from kernels.helpers import controlled
+from kernels.helpers import FULL_DSP48E2, controlled
 
 TABLE: ThresholdTable = (((-2, 0, 3), (-1, 1, 4)),)
 AUTO_MEMORY: dict[str, object] = {"ram_style": "auto", "ultra_stages": 0}
@@ -34,7 +34,9 @@ def generator(
     strides: IntegerVector = (0, 1),
 ) -> InputGeneratorKernel:
     return design_space(
-        InputGeneratorKernel(word_bits=bits, frame_words=frame, dims=dims, strides=strides)
+        InputGeneratorKernel(
+            word_bits=bits, frame_words=frame, dims=dims, strides=strides, platform=FULL_DSP48E2
+        )
     ).with_choices(ram_style="auto")
 
 
@@ -51,6 +53,7 @@ def threshold_base(
             threshold_dtype=resolve_qonnx_datatype_name(threshold_dtype),
             thresholds=table,
             bias=bias,
+            platform=FULL_DSP48E2,
         )
     )
 
@@ -84,6 +87,7 @@ def threshold(
             threshold_dtype=resolve_qonnx_datatype_name(threshold_dtype),
             thresholds=table,
             bias=bias,
+            platform=FULL_DSP48E2,
         )
         return controlled(
             ThresholdingAxiKernel, facts, use_axilite=True, deep_pipeline=deep, **factors

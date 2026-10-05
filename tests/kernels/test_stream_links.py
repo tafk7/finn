@@ -20,9 +20,8 @@ from finn.kernels.base import PORT
 from finn.kernels.configure import commit
 from finn.kernels.dotp import PackedDotpKernel
 from finn.kernels.streams import BufferedStream, Stream
-from finn.kernels.target import DspBlock
 from finn.kernels.transport import STREAM_CONTRACT, AxiStream, StreamContract
-from kernels.helpers import with_adapter_memories
+from kernels.helpers import FULL_DSP48E2, with_adapter_memories
 
 INT3, INT8 = DataType["INT3"], DataType["INT8"]
 
@@ -30,16 +29,17 @@ INT3, INT8 = DataType["INT3"], DataType["INT8"]
 class Placed(Space):
     """dotp between boundary streams: three rows of four, four outputs, PE = SIMD = 2."""
 
-    x = Stream(tensor=Tensor((3, 4), ScalarEncoding(INT3)), port="in0_V")
-    w = BufferedStream(tensor=Tensor((4, 4), ScalarEncoding(INT3)), port="in1_V")
-    y = Stream(tensor=Tensor((3, 4), ScalarEncoding(INT8)), port="out0_V")
+    x = Stream(tensor=Tensor((3, 4), ScalarEncoding(INT3)), port="in0_V", platform=FULL_DSP48E2)
+    w = BufferedStream(
+        platform=FULL_DSP48E2, tensor=Tensor((4, 4), ScalarEncoding(INT3)), port="in1_V"
+    )
+    y = Stream(tensor=Tensor((3, 4), ScalarEncoding(INT8)), port="out0_V", platform=FULL_DSP48E2)
     compute = PackedDotpKernel(
-        target_dsp=DspBlock.DSP48E2,
-        target_period_ns=5.0,
         result_dtype=INT8,
         x_stream=x,
         w_stream=w,
         y_stream=y,
+        platform=FULL_DSP48E2,
     )
 
 
@@ -88,16 +88,17 @@ def test_a_boundary_no_port_names_is_refused() -> None:
     ONNX input or output of a partition is one (D4)."""
 
     class Unnamed(Space):
-        x = Stream(tensor=Tensor((3, 4), ScalarEncoding(INT3)), port="in0_V")
-        w = BufferedStream(tensor=Tensor((4, 4), ScalarEncoding(INT3)))
-        y = Stream(tensor=Tensor((3, 4), ScalarEncoding(INT8)), port="out0_V")
+        x = Stream(tensor=Tensor((3, 4), ScalarEncoding(INT3)), port="in0_V", platform=FULL_DSP48E2)
+        w = BufferedStream(tensor=Tensor((4, 4), ScalarEncoding(INT3)), platform=FULL_DSP48E2)
+        y = Stream(
+            platform=FULL_DSP48E2, tensor=Tensor((3, 4), ScalarEncoding(INT8)), port="out0_V"
+        )
         compute = PackedDotpKernel(
-            target_dsp=DspBlock.DSP48E2,
-            target_period_ns=5.0,
             result_dtype=INT8,
             x_stream=x,
             w_stream=w,
             y_stream=y,
+            platform=FULL_DSP48E2,
         )
 
     folding = {"compute.pe": 2, "compute.simd": 2, "compute.compute_pumping": False}
@@ -126,7 +127,9 @@ class Reader(Space):
 
 def test_a_user_that_is_no_kernels_port_has_no_netlist() -> None:
     class Bare(Space):
-        edge = Stream(tensor=Tensor((3, 4), ScalarEncoding(INT3)), port="in0_V")
+        edge = Stream(
+            platform=FULL_DSP48E2, tensor=Tensor((3, 4), ScalarEncoding(INT3)), port="in0_V"
+        )
         reader = Reader(input_stream=edge)
 
     point = design_space(Bare())

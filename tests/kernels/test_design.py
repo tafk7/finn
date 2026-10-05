@@ -27,9 +27,8 @@ from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.configure import commit
 from finn.kernels.matmul import MatMulKernel, exact_result_dtype
 from finn.kernels.streams import BufferedStream, Stream
-from finn.kernels.target import DspBlock
 from finn.kernels.thresholding import ThresholdingAxiKernel
-from kernels.helpers import Root, labels, with_adapter_memories
+from kernels.helpers import FULL_DSP48E2, labels, Root, with_adapter_memories
 from kernels.xsim import pack, requires_xsim, stream_through
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -53,8 +52,7 @@ def matmul(k: int, n: int, dtype: Any, weights: Any, **streams: Stream) -> MatMu
         k=k,
         activation_dtype=dtype,
         weights_dtype=W,
-        target_dsp=DspBlock.DSP48E2,
-        target_period_ns=5.0,
+        platform=FULL_DSP48E2,
         weights=weights,
         **streams,
     )
@@ -62,7 +60,7 @@ def matmul(k: int, n: int, dtype: Any, weights: Any, **streams: Stream) -> MatMu
 
 def weights(k: int, n: int) -> BufferedStream:
     """A MatMul's weight stream: from its memory to its core."""
-    return BufferedStream(tensor=Tensor((k, n), ScalarEncoding(W)))
+    return BufferedStream(tensor=Tensor((k, n), ScalarEncoding(W)), platform=FULL_DSP48E2)
 
 
 class Chain(Root):
@@ -85,12 +83,14 @@ class Chain(Root):
     def y_tensor(self) -> Tensor:
         return self.second.result_tensor
 
-    x = Stream(tensor=Tensor((ROWS, INPUTS), ScalarEncoding(A)), port="s_axis_0")
-    w1 = BufferedStream(tensor=w1_tensor)
-    hidden = Stream(tensor=hidden_tensor)
-    levels = Stream(tensor=Tensor((ROWS, HIDDEN), ScalarEncoding(T)))
-    w2 = BufferedStream(tensor=w2_tensor)
-    y = Stream(tensor=y_tensor, port="m_axis_0")
+    x = Stream(
+        platform=FULL_DSP48E2, tensor=Tensor((ROWS, INPUTS), ScalarEncoding(A)), port="s_axis_0"
+    )
+    w1 = BufferedStream(tensor=w1_tensor, platform=FULL_DSP48E2)
+    hidden = Stream(tensor=hidden_tensor, platform=FULL_DSP48E2)
+    levels = Stream(tensor=Tensor((ROWS, HIDDEN), ScalarEncoding(T)), platform=FULL_DSP48E2)
+    w2 = BufferedStream(tensor=w2_tensor, platform=FULL_DSP48E2)
+    y = Stream(tensor=y_tensor, port="m_axis_0", platform=FULL_DSP48E2)
     first = matmul(INPUTS, HIDDEN, A, W1, x_stream=x, w_stream=w1, y_stream=hidden)
     activate = ThresholdingAxiKernel(
         input_dtype=H,
@@ -100,6 +100,7 @@ class Chain(Root):
         pe=PE,
         input_stream=hidden,
         output_stream=levels,
+        platform=FULL_DSP48E2,
     )
     second = matmul(HIDDEN, OUTPUTS, T, W2, x_stream=levels, w_stream=w2, y_stream=y)
     # Each weight stream carries its MatMul's weights, which the stream's source stores.
@@ -165,9 +166,15 @@ def test_each_edge_carries_its_own_adapter_and_the_netlist_is_flat():
 
 def test_a_matmul_on_a_stream_of_another_tensor_is_refused():
     class Misplaced(Root):
-        x = Stream(tensor=Tensor((ROWS, INPUTS + 2), ScalarEncoding(A)), port="in0_V")
+        x = Stream(
+            tensor=Tensor((ROWS, INPUTS + 2), ScalarEncoding(A)),
+            port="in0_V",
+            platform=FULL_DSP48E2,
+        )
         w = weights(INPUTS, HIDDEN)
-        y = Stream(tensor=Tensor((ROWS, HIDDEN), ScalarEncoding(H)), port="out0_V")
+        y = Stream(
+            platform=FULL_DSP48E2, tensor=Tensor((ROWS, HIDDEN), ScalarEncoding(H)), port="out0_V"
+        )
         first = matmul(INPUTS, HIDDEN, A, W1, x_stream=x, w_stream=w, y_stream=y)
 
     refused = design_space(Misplaced()).first.query(MatMulKernel.carried)
@@ -179,9 +186,15 @@ def test_a_matmul_on_a_stream_of_another_element_is_refused():
     """The result type MatMul states (its core's ``result_dtype``) meets the stream's."""
 
     class Widened(Root):
-        x = Stream(tensor=Tensor((ROWS, INPUTS), ScalarEncoding(A)), port="in0_V")
+        x = Stream(
+            platform=FULL_DSP48E2, tensor=Tensor((ROWS, INPUTS), ScalarEncoding(A)), port="in0_V"
+        )
         w = weights(INPUTS, HIDDEN)
-        y = Stream(tensor=Tensor((ROWS, HIDDEN), ScalarEncoding(DataType["INT32"])), port="out0_V")
+        y = Stream(
+            tensor=Tensor((ROWS, HIDDEN), ScalarEncoding(DataType["INT32"])),
+            port="out0_V",
+            platform=FULL_DSP48E2,
+        )
         first = matmul(INPUTS, HIDDEN, A, W1, x_stream=x, w_stream=w, y_stream=y)
 
     refused = design_space(Widened()).first.query(MatMulKernel.carried)
@@ -199,14 +212,13 @@ def carried(
         k=INPUTS,
         activation_dtype=A,
         weights_dtype=W,
-        target_dsp=DspBlock.DSP48E2,
-        target_period_ns=5.0,
+        platform=FULL_DSP48E2,
     )
 
     class Stated(Root):
-        x_ = Stream(tensor=Tensor((ROWS, INPUTS), x), port="in0_V")
-        w_ = BufferedStream(tensor=Tensor((INPUTS, HIDDEN), w), port="in1_V")
-        y_ = Stream(tensor=Tensor((ROWS, HIDDEN), y), port="out0_V")
+        x_ = Stream(tensor=Tensor((ROWS, INPUTS), x), port="in0_V", platform=FULL_DSP48E2)
+        w_ = BufferedStream(tensor=Tensor((INPUTS, HIDDEN), w), port="in1_V", platform=FULL_DSP48E2)
+        y_ = Stream(tensor=Tensor((ROWS, HIDDEN), y), port="out0_V", platform=FULL_DSP48E2)
         first = MatMulKernel(
             **facts, **({"weights": W1} if known else {}), x_stream=x_, w_stream=w_, y_stream=y_
         )

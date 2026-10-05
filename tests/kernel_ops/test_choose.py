@@ -21,7 +21,7 @@ from finn.core.space import inspection
 from finn.custom_op.kernels.base import KernelOpError, write_target
 from finn.custom_op.kernels.partition import partition_root
 from finn.kernels.configure import undecided
-from finn.kernels.target import DspBlock, Platform, Target
+from finn.kernels.target import Target
 from finn.transformation.kernels import (
     CommitKernelChoices,
     InferKernelTensors,
@@ -29,8 +29,9 @@ from finn.transformation.kernels import (
     ToKernelOps,
 )
 from kernel_ops.models import TARGET, chain_source
+from kernels.helpers import FULL_DSP48E2
 
-URAM = Target("a part with UltraRAM it initializes", 5.0, Platform(dsp=DspBlock.DSP48E2))
+URAM = Target("a part with UltraRAM it initializes", FULL_DSP48E2)
 
 
 def kernel_model(target: Target = TARGET) -> ModelWrapper:
@@ -131,3 +132,34 @@ def test_a_policy_ranking_a_case_that_is_not_viable_is_refused() -> None:
 
     with pytest.raises(KernelOpError, match="ram_style: the policy ranked \\['ultra'\\]"):
         kernel_model().transform(CommitKernelChoices(Ultra()))
+
+
+class PreferUltra:
+    """The placeholder's ranking, with ``ultra`` first wherever it is viable."""
+
+    def rank(self, choice: inspection.Viable) -> Sequence[object]:
+        return sorted(PlaceholderPolicy().rank(choice), key=lambda case: case != "ultra")
+
+
+def adapter_memories(model: ModelWrapper) -> dict[str, object]:
+    return {
+        f"{node}.{key}": value
+        for node, saved in choices(model).items()
+        for key, value in saved.items()
+        if ".adapter." in key and key.endswith(".ram_style")
+    }
+
+
+def test_an_adapter_memory_is_never_ultra_without_ultraram() -> None:
+    # Ultra96 has no UltraRAM: an adapter's input_gen is never offered ultra, so a
+    # policy that prefers it does not get it.
+    policy = Recording(PreferUltra())
+    ultra96 = kernel_model().transform(CommitKernelChoices(policy))
+    offered = {choice.key: choice.cases for choice in policy.offered}
+    adapters = [cases for key, cases in offered.items() if ".adapter." in key]
+    assert adapters and all("ultra" not in cases for cases in adapters)
+    memories = adapter_memories(ultra96)
+    assert memories and "ultra" not in memories.values()
+    # With UltraRAM it is viable, and the policy gets what it prefers.
+    uram = kernel_model(URAM).transform(CommitKernelChoices(PreferUltra()))
+    assert set(adapter_memories(uram).values()) == {"ultra"}

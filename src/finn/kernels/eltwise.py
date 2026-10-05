@@ -6,8 +6,9 @@
 Integer pairs require equal widths and signedness. Integer results grow by one
 bit for add/subtract and double for multiply; unsigned subtraction has a signed
 result. Mixed inputs convert integers to FLOAT32 toward zero before arithmetic.
-Float arithmetic uses the native DSP58 implementation. b_scale is rounded to
-binary32 before checking its native restrictions and emitting the parameter.
+Float arithmetic uses the native DSP58 implementation, so it needs a ``platform``
+whose DSP block is DSP58. b_scale is rounded to binary32 before checking its
+native restrictions and emitting the parameter.
 Operation and scale describe the computation; they are supplied inputs, not
 interchangeable implementation choices.
 """
@@ -36,7 +37,7 @@ from finn.kernels.datatypes.domains import Integer
 from finn.kernels.datatypes.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
 from finn.kernels.port import AxiStreamPort
 from finn.kernels.streams import Stream
-from finn.kernels.target import DspBlock
+from finn.kernels.target import DspBlock, Platform
 
 c = Index("c")
 
@@ -90,7 +91,7 @@ class EltwiseKernel(Kernel):
             return reject("eltwise-scale", "B_SCALE must be finite binary32")
         return rounded
 
-    target_dsp: DspBlock = Param()
+    platform: Platform = Param()
 
     @constraint
     def implementation_supported(self) -> bool | Rejected:
@@ -99,7 +100,7 @@ class EltwiseKernel(Kernel):
         a = self.lhs_dtype
         b = self.rhs_dtype
         scale = self.native_scale
-        target = self.target_dsp
+        target = self.platform.dsp
         if operation not in ("ADD", "SUB", "SBR", "MUL") or not 1 <= pe <= 0xFFFFFFFF:
             return reject("eltwise-operation", "positive PE and ADD, SUB, SBR or MUL are required")
         both_int = a.name != "FLOAT32" and b.name != "FLOAT32"

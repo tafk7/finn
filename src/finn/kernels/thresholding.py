@@ -157,7 +157,7 @@ class ThresholdingAxiKernel(Kernel):
     output_stream: Stream = Param(required=False)
     set_stream: Stream = Param(required=False)
     control: ControlBus = Param(required=False)
-    platform: Platform = Param(default=Platform())
+    platform: Platform = Param()
     use_axilite: bool = Decision(
         values=(False, True),
         requires=(
