@@ -32,7 +32,6 @@ FACTS: dict[str, Any] = dict(
     activation_dtype=INT3,
     weights_dtype=INT3,
     platform=TARGET.platform,
-    target_period_ns=5.0,
 )
 """A node root's facts: the platform (its DSP block the compute cores') and the clock."""
 WEIGHTS = tuple(tuple((r + c) % 3 - 1 for c in range(4)) for r in range(4))

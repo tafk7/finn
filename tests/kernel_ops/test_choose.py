@@ -30,7 +30,7 @@ from finn.transformation.kernels import (
 )
 from kernel_ops.models import TARGET, chain_source
 
-URAM = Target("a part with UltraRAM it initializes", 5.0, Platform(dsp=DspBlock.DSP48E2))
+URAM = Target("a part with UltraRAM it initializes", Platform(period_ns=5.0, dsp=DspBlock.DSP48E2))
 
 
 def kernel_model(target: Target = TARGET) -> ModelWrapper:

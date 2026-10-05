@@ -4,12 +4,11 @@
 """Conversion: ONNX operators to KernelOps (``finn.custom_op.kernels``).
 
 ``ToKernelOps`` states the build target once (a ``Target``, from
-``finn.kernels.target.resolve_target``: the part, the clock period and the
-platform's capabilities), in the one place ``target(model)`` reads it, the
-model's ``finn.platform`` metadata (a model stating phase 1's untyped target
-keys is refused), imports the domain at its ``opset_version`` when the model does not
-import it yet (inserting a node never raises a model's import), and rewrites
-each node it can bind:
+``finn.kernels.target.resolve_target``: the part and the platform, its clock
+period and capabilities), in the one place ``target(model)`` reads it, the
+model's ``finn.platform`` metadata, imports the domain at its ``opset_version``
+when the model does not import it yet (inserting a node never raises a model's
+import), and rewrites each node it can bind:
 
 - ``MatMul`` (the ONNX operator) into a ``MatMul`` KernelOp;
 - ``MultiThreshold`` with ``out_scale`` 1, an integral ``out_bias`` and its
@@ -27,7 +26,7 @@ from onnx import helper
 from qonnx.transformation.base import Transformation
 
 import finn.custom_op.kernels as domain
-from finn.custom_op.kernels.base import refuse_phase1_target, write_target
+from finn.custom_op.kernels.base import write_target
 from finn.kernels.target import Target
 
 DOMAIN = domain.__name__
@@ -68,7 +67,6 @@ class ToKernelOps(Transformation):  # type: ignore[misc]
         self.target = target
 
     def apply(self, model: Any) -> tuple[Any, bool]:
-        refuse_phase1_target(model)
         write_target(model, self.target)
         if DOMAIN not in model.get_opset_imports():
             model.set_opset_import(DOMAIN, domain.opset_version)

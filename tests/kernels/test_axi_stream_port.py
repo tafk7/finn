@@ -201,7 +201,6 @@ def test_dotp_binds_from_its_ports_through_the_dense_view() -> None:
             form=Form.DENSE,
             reshape_activations=True,
             platform=FULL_DSP58,
-            target_period_ns=5.0,
             result_dtype=DataType["INT9"],
             x_stream=x,
             w_stream=w,
@@ -216,7 +215,6 @@ def test_dotp_binds_from_its_ports_through_the_dense_view() -> None:
         x = stream((2, 14), "INT3", "in0_V")
         compute = PackedDotpKernel(
             platform=FULL_DSP58,
-            target_period_ns=5.0,
             result_dtype=DataType["INT9"],
             x_stream=x,
             w_stream=Placed.w,

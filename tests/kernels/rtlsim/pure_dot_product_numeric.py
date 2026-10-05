@@ -148,8 +148,7 @@ def run(configuration: Configuration, evidence: Path, *, backpressure_ticks: int
         rows=c.repetitions,
         outputs=4,
         reduction=c.width,
-        platform=full_platform(c.target),
-        target_period_ns=c.period,
+        platform=full_platform(c.target, period_ns=c.period),
     )
     module = point.module
     case = Case(

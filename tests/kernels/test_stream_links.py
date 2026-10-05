@@ -34,7 +34,6 @@ class Placed(Space):
     y = Stream(tensor=Tensor((3, 4), ScalarEncoding(INT8)), port="out0_V")
     compute = PackedDotpKernel(
         platform=FULL_DSP48E2,
-        target_period_ns=5.0,
         result_dtype=INT8,
         x_stream=x,
         w_stream=w,
@@ -92,7 +91,6 @@ def test_a_boundary_no_port_names_is_refused() -> None:
         y = Stream(tensor=Tensor((3, 4), ScalarEncoding(INT8)), port="out0_V")
         compute = PackedDotpKernel(
             platform=FULL_DSP48E2,
-            target_period_ns=5.0,
             result_dtype=INT8,
             x_stream=x,
             w_stream=w,

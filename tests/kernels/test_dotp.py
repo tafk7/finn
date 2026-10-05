@@ -41,7 +41,6 @@ def parameters(**updates):
         weights_dtype=DataType["INT3"],
         result_dtype=DataType["INT9"],
         platform=FULL_DSP58,
-        target_period_ns=5.0,
         compute_pumping=False,
     )
     result.update(updates)
@@ -76,7 +75,6 @@ def test_a_core_declares_ports_folding_factors_and_facts_and_the_base_derives_th
     facts = {key for key, kind in found.items() if kind == "const" and key.count(".") == 1}
     assert facts == {
         "compute.form",
-        "compute.target_period_ns",
         "compute.reshape_activations",
         "compute.result_dtype",
         "compute.platform",
@@ -148,7 +146,8 @@ def test_the_schedule_splits_n_by_pe_and_k_by_simd():
     ],
 )
 def test_segment_length_follows_the_target_period(period, pumping, segment):
-    point = kernel(simd=7, target_period_ns=period, compute_pumping=pumping)
+    platform = full_platform(DspBlock.DSP58, period_ns=period)
+    point = kernel(simd=7, platform=platform, compute_pumping=pumping)
     assert point.segment_length == segment
     assert dict(point.module.pins.parameters)["SEGMENTLEN"] == str(segment)
 
@@ -181,8 +180,11 @@ def test_dsp48_carries_the_segment_length_the_rtl_ignores():
             "dotp-accumulator-width",
         ),
         ({"platform": replace(FULL_DSP58, dsp=None)}, "dotp-dsp"),
-        ({"target_period_ns": 0.7}, "dotp-clock-period"),
-        ({"target_period_ns": 1.4, "compute_pumping": True}, "dotp-clock-period"),
+        ({"platform": full_platform(DspBlock.DSP58, period_ns=0.7)}, "dotp-clock-period"),
+        (
+            {"platform": full_platform(DspBlock.DSP58, period_ns=1.4), "compute_pumping": True},
+            "dotp-clock-period",
+        ),
         ({"simd": 1, "compute_pumping": True}, "dotp-pumping"),
     ],
 )
@@ -201,7 +203,6 @@ def test_physical_view_reports_each_refusal_once(updates, code):
     "updates,error",
     [
         # A mistyped fact is refused at the node call; a mistyped folding factor at commit.
-        ({"target_period_ns": "5"}, DefinitionError),
         ({"platform": "DSP58"}, DefinitionError),
         ({"form": "dense"}, DefinitionError),
         ({"pe": True}, ValueError),
@@ -273,15 +274,6 @@ def test_the_core_refuses_before_its_folding_factors_are_chosen():
     assert isinstance(open_factors.inspect(DotpAxiKernel.core_supported).result, Available)
     assert isinstance(open_factors.inspect(DotpAxiKernel.module).accepted_result, Unresolved)
     assert open_factors.x.element.bits == 3
-
-
-@pytest.mark.parametrize("missing", ("target_period_ns",))
-def test_required_physical_facts_reject_omission(missing):
-    facts = parameters()
-    facts.pop(missing)
-    # A bare call is legal; the missing formal is refused when design_space() prepares it.
-    with pytest.raises(DefinitionError, match=f"compute.{missing} is not supplied"):
-        helpers.placed_dotp(PackedDotpKernel, **facts)
 
 
 @pytest.mark.parametrize("bits", (4, 9, 12, 58))

@@ -186,7 +186,6 @@ class Placed(Space):
     y = Stream(tensor=Tensor((1, 2), ScalarEncoding(DataType["INT8"])), port="out0_V")
     compute = PackedDotpKernel(
         platform=PLATFORM,
-        target_period_ns=5.0,
         result_dtype=DataType["INT8"],
         x_stream=x,
         w_stream=w,
@@ -215,7 +214,6 @@ for memory in ("none", "memstream"):
         activation_dtype=DataType["INT3"],
         weights_dtype=DataType["INT3"],
         platform=PLATFORM,
-        target_period_ns=5.0,
     )
     if memory == "memstream":
         facts["weights"] = ((1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (0, 0, 0, 1))

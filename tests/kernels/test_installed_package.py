@@ -95,7 +95,6 @@ class PlacedDotp(Space):
     y = Stream(tensor=Tensor((1, 2), ScalarEncoding(DataType["INT8"])), port="out0_V")
     compute = PackedDotpKernel(
         platform=PLATFORM,
-        target_period_ns=5.0,
         result_dtype=DataType["INT8"],
         x_stream=x,
         w_stream=w,
@@ -148,7 +147,7 @@ INT3, INT8 = ScalarEncoding(DataType["INT3"]), ScalarEncoding(DataType["INT8"])
 for memory in ("none", "memstream"):
     facts = dict(
         m=3, k=4, n=4, activation_dtype=DataType["INT3"], weights_dtype=DataType["INT3"],
-        platform=PLATFORM, target_period_ns=5.0,
+        platform=PLATFORM,
     )
     choices = {"w.transport": "direct", "matmul.compute": "packed"}
     expected = dotp_sources | {"rtl/shape/input_gen.sv"}

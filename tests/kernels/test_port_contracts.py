@@ -83,7 +83,6 @@ def placed(
         weights = MemStreamKernel(dtype=W, form=tiled, contents=weight_values(w), output_stream=w_s)
         compute = core(
             platform=FULL_DSP58,
-            target_period_ns=5.0,
             form=form,
             result_dtype=R,
             x_stream=a,
@@ -195,7 +194,6 @@ def test_one_kernel_refusal_reaches_only_its_own_stream():
             activation_dtype=DataType["INT3"],
             weights_dtype=DataType["UINT3"],
             platform=FULL_DSP48E2,
-            target_period_ns=5.0,
         ),
         {
             "w.transport": "direct",

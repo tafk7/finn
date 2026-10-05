@@ -51,7 +51,7 @@ CHOICES = choices()
 
 
 def test_the_activation_stream_plans_the_replay_and_its_frame():
-    point = commit(matmul_point(**FACTS, target_period_ns=5.0), CHOICES)
+    point = commit(matmul_point(**FACTS), CHOICES)
     # The stream into the core is the root's: its plan and adapter are the edge's.
     stream = point.x
     assert stream.plan.steps == (Step.REORDER, Step.MARKERS)
@@ -68,7 +68,7 @@ def test_the_activation_stream_plans_the_replay_and_its_frame():
     # A depthwise row passes once: the plan is the frame marker alone.
     facts = {**FACTS, "platform": FULL_DSP58, "form": Form.DEPTHWISE}
     depthwise = commit(
-        matmul_point(realization="native", **facts, target_period_ns=5.0),
+        matmul_point(realization="native", **facts),
         choices("int8_dsp58"),
     )
     assert depthwise.x.plan.steps == (Step.MARKERS,)
@@ -105,7 +105,7 @@ def test_one_output_fold_and_one_beat_frames_close_every_beat():
 
 
 def test_the_adapter_s_memory_is_a_choice_of_the_stream():
-    point = commit(matmul_point(**FACTS, target_period_ns=5.0), CHOICES)
+    point = commit(matmul_point(**FACTS), CHOICES)
     configured = with_adapter_memories(point, ram_style="distributed")
     (generator,) = [stage for stage in configured.x.stages]
     assert generator.module is not None

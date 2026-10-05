@@ -71,7 +71,7 @@ _FIRST_DSP_NS, _NEXT_DSP_NS = 0.741, 0.605
 class DotpAxiKernel(Kernel):
     """The ``dotp_axi`` space shared by its core kernels; it places no core itself.
 
-    ``target_period_ns`` is the clock period the module must meet. It sets
+    The ``platform``'s ``period_ns`` is the clock period the module must meet. It sets
     SEGMENTLEN, the DSP58 chain length between pipeline registers, by FINN's
     timing model: about 0.741 ns through the first DSP and 0.605 ns through each
     further one, against half the period when compute is pumped. Only the INT8
@@ -87,7 +87,6 @@ class DotpAxiKernel(Kernel):
     core: ClassVar[str] = ""
 
     form: Form = Param(default=Form.DENSE)
-    target_period_ns: float = Param()
     reshape_activations: bool = Param(default=False)
     # The accumulator encoding it produces: its parent's choice (MatMul binds its
     # result type), so that it is known before the results stream exists.
@@ -210,12 +209,11 @@ class DotpAxiKernel(Kernel):
     @derived
     def segment_length(self) -> int | Rejected:
         """The longest DSP58 chain segment that meets the target period, at most the chain."""
-        pumping = self.compute_pumping
-        period = self.target_period_ns / 2 if pumping else self.target_period_ns
+        pumping, target = self.compute_pumping, self.platform.period_ns
+        period = target / 2 if pumping else target
         if not period > _FIRST_DSP_NS:
             return reject(
-                "dotp-clock-period",
-                f"a {self.target_period_ns} ns target leaves no time for one DSP stage",
+                "dotp-clock-period", f"a {target} ns target leaves no time for one DSP stage"
             )
         meets = floor((period - _FIRST_DSP_NS) / _NEXT_DSP_NS + 1)
         chain = ceil(self.simd / (6 if pumping else 3))

@@ -54,7 +54,6 @@ def layered(*, adaptable: bool = True):
         y = Stream(tensor=Tensor((ROWS, OUTPUTS), ScalarEncoding(Y)), port="out0_V")
         first = PackedDotpKernel(
             platform=FULL_DSP48E2,
-            target_period_ns=5.0,
             result_dtype=H,
             x_stream=x,
             w_stream=w1,
@@ -62,7 +61,6 @@ def layered(*, adaptable: bool = True):
         )
         second = PackedDotpKernel(
             platform=FULL_DSP48E2,
-            target_period_ns=5.0,
             result_dtype=Y,
             x_stream=h,
             w_stream=w2,

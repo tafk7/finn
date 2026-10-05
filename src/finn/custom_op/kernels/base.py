@@ -61,9 +61,9 @@ from finn.kernels.target import DspBlock, Platform, Target
 S = TypeVar("S", bound=Space)
 
 PLATFORM = Namespace("finn.platform", version=1, inherit=True)
-"""The build target, typed graph metadata (qonnx's ``qonnx.core.metadata``): the part,
-the clock period and the platform's capabilities (``finn.kernels.target.Platform``),
-every key stated. It inherits: a subgraph body reads its parent's."""
+"""The build target, typed graph metadata (qonnx's ``qonnx.core.metadata``): the part
+and the platform (``finn.kernels.target.Platform``: the clock period and the
+capabilities), every key stated. It inherits: a subgraph body reads its parent's."""
 
 PLATFORM_KEYS = dict(
     part=PLATFORM.key("part", str),
@@ -77,11 +77,8 @@ PLATFORM_KEYS = dict(
     aie=PLATFORM.key("aie", bool),
 )
 
-CAPABILITIES = tuple(field.name for field in fields(Platform))
-"""The ``finn.platform`` keys that are the platform's capabilities (``Platform``'s fields)."""
-
-PHASE1_KEYS = ("finn_target_period_ns",)
-"""Phase 1's untyped target keys: refused, never read."""
+PLATFORM_FIELDS = tuple(field.name for field in fields(Platform))
+"""The ``finn.platform`` keys that are ``Platform``'s fields: all but the part."""
 
 ONNX_TYPES = {"int": "i", "bool": "i", "str": "s"}
 
@@ -125,24 +122,13 @@ def rows(dims: tuple[int, ...]) -> tuple[int, int]:
     return prod(dims[:-1]), dims[-1]
 
 
-def refuse_phase1_target(model: Any) -> None:
-    """A model stating phase 1's untyped target keys is refused: they are never read."""
-    stated = [key for key in PHASE1_KEYS if model.get_metadata_prop(key) is not None]
-    if stated:
-        raise KernelOpError(
-            f"the model states the target in phase 1's untyped keys {stated}, which are not "
-            "read: remove them and state it with ToKernelOps (finn.platform)"
-        )
-
-
 def target(model: Any) -> Target:
     """The build target, from the model's ``finn.platform`` metadata (a subgraph body
     opened through its parent reads the parent's).
 
     The one reader of the target; ``write_target`` is the one writer. A key missing
-    or malformed, or phase 1's untyped keys, are refused.
+    or malformed is refused.
     """
-    refuse_phase1_target(model)
     try:
         stated = model.namespace(PLATFORM)
     except MetadataError as error:
@@ -153,8 +139,8 @@ def target(model: Any) -> Target:
             f"the model states no target (finn.platform: {', '.join(missing)} missing; "
             "run ToKernelOps)"
         )
-    capabilities = {name: stated[name] for name in CAPABILITIES}
-    return Target(stated["part"], stated["period_ns"], Platform(**capabilities))
+    platform = Platform(**{name: stated[name] for name in PLATFORM_FIELDS})
+    return Target(stated["part"], platform)
 
 
 def write_target(model: Any, target: Target) -> None:
@@ -164,9 +150,7 @@ def write_target(model: Any, target: Target) -> None:
     if platform.dsp is None:
         raise KernelOpError("a target states its DSP block (finn.kernels.target.resolve_target)")
     values: dict[str, object] = dict(
-        part=target.part,
-        period_ns=target.period_ns,
-        **{name: getattr(platform, name) for name in CAPABILITIES},
+        part=target.part, **{name: getattr(platform, name) for name in PLATFORM_FIELDS}
     )
     try:
         for name, key in PLATFORM_KEYS.items():
@@ -468,16 +452,14 @@ class KernelOp(CustomOp):  # type: ignore[misc]
 
 
 __all__ = [
-    "CAPABILITIES",
-    "PHASE1_KEYS",
     "PLATFORM",
+    "PLATFORM_FIELDS",
     "PLATFORM_KEYS",
     "KernelOp",
     "KernelOpError",
     "admitted",
     "committed",
     "datatype",
-    "refuse_phase1_target",
     "rows",
     "shape",
     "target",

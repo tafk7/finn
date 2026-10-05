@@ -45,7 +45,6 @@ class Activated(Root):
     config = ControlBus(port="s_axilite")
     compute = PackedDotpKernel(
         platform=FULL_DSP48E2,
-        target_period_ns=5.0,
         result_dtype=R,
         x_stream=activations,
         w_stream=weights,

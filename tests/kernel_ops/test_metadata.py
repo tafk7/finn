@@ -7,6 +7,7 @@ facts in ``finn.partition``."""
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Any
 
 import pytest
@@ -16,9 +17,8 @@ from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.util.basic import qonnx_make_model
 
 from finn.custom_op.kernels.base import (
-    CAPABILITIES,
-    PHASE1_KEYS,
     PLATFORM,
+    PLATFORM_FIELDS,
     PLATFORM_KEYS,
     KernelOpError,
     target,
@@ -55,7 +55,7 @@ def test_the_target_is_stated_typed_every_key_and_read_back() -> None:
     model = holder()
     write_target(model, TARGET)
     assert target(model) == TARGET
-    assert set(PLATFORM_KEYS) == {"part", "period_ns", *CAPABILITIES}
+    assert set(PLATFORM_KEYS) == {"part", *PLATFORM_FIELDS}
     stated = entries(model)
     assert stated["finn.platform/@version"] == "1"
     assert stated["finn.platform/part"] == "xczu3eg-sbva484-1-e"
@@ -93,26 +93,12 @@ def test_a_malformed_key_is_refused() -> None:
         target(model)
 
 
-def test_phase_1s_untyped_keys_are_refused_not_read() -> None:
-    stale = holder()
-    stale.set_metadata_prop("finn_target_period_ns", "5.0")
-    with pytest.raises(KernelOpError, match="phase 1's untyped keys"):
-        target(stale)
-    stated = holder()
-    write_target(stated, TARGET)
-    stated.set_metadata_prop(PHASE1_KEYS[0], "4.0")
-    with pytest.raises(KernelOpError, match="phase 1's untyped keys \\['finn_target_period_ns'\\]"):
-        target(stated)
-    with pytest.raises(KernelOpError, match="phase 1's untyped keys"):
-        stale.transform(ToKernelOps(TARGET))
-
-
 def test_a_target_that_is_not_one_writes_nothing() -> None:
     model = holder()
     with pytest.raises(KernelOpError, match="states its DSP block"):
-        write_target(model, Target("xczu3eg-sbva484-1-e", 5.0, Platform()))
+        write_target(model, Target("xczu3eg-sbva484-1-e", Platform(period_ns=5.0)))
     with pytest.raises(KernelOpError, match="period_ns: cannot store 0.0"):
-        write_target(model, Target("xczu3eg-sbva484-1-e", 0.0, TARGET.platform))
+        write_target(model, Target("xczu3eg-sbva484-1-e", replace(TARGET.platform, period_ns=0.0)))
     assert entries(model) == {}
 
 
@@ -123,7 +109,9 @@ def test_conversion_states_the_target_it_is_given() -> None:
 
 def test_the_capability_tables() -> None:
     ultra96 = resolve_target("xczu3eg-sbva484-1-e", 5.0)
-    assert ultra96.platform == Platform(dsp=DspBlock.DSP48E2, uram=False, uram_init=False)
+    assert ultra96.platform == Platform(
+        period_ns=5.0, dsp=DspBlock.DSP48E2, uram=False, uram_init=False
+    )
     zcu104 = resolve_target("xczu7ev-ffvc1156-2-e", 5.0, "vivado_zynq").platform
     # UltraScale+ has UltraRAM here but ignores its INIT; the Zynq shell drives no 2x clock.
     assert (zcu104.uram, zcu104.uram_init, zcu104.clk2x, zcu104.control_ports) == (

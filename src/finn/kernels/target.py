@@ -1,14 +1,14 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The build target as kernels see it: the DSP block and the platform's capabilities.
+"""The build target as kernels see it: the platform's capabilities and its clock.
 
 Capabilities, never part names, reach kernels. ``Platform`` is the record of
-them; ``Target`` adds what the flow states beside it (the part, the clock
-period). One table maps a part to its device capabilities (``DEVICES``) and a
-shell to its interface capabilities (``SHELLS``); ``resolve_target`` reads both
-once, and the graph states the result (``finn.platform``, read by
-``finn.custom_op.kernels.base.target``).
+them and of the clock period the kernels must meet; ``Target`` adds what the
+flow states beside it, the part. One table maps a part to its device
+capabilities (``DEVICES``) and a shell to its interface capabilities
+(``SHELLS``); ``resolve_target`` reads both once, and the graph states the
+result (``finn.platform``, read by ``finn.custom_op.kernels.base.target``).
 """
 
 from __future__ import annotations
@@ -43,12 +43,13 @@ def dsp_widths(target: object) -> tuple[int, int, int]:
         raise ValueError(f"unsupported target DSP {name!r}") from error
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, kw_only=True)
 class Platform:
-    """A platform's capabilities. The defaults refuse nothing (a kernel built without
-    a stated platform, in a harness or a test); a platform read from a model states
-    every field.
+    """What the target supplies to kernels: its clock period and its capabilities. The
+    defaults refuse nothing (a kernel built without a stated platform, in a harness
+    or a test); a platform read from a model states every field.
 
+    - ``period_ns``: the clock period the kernels must meet (``ap_clk``);
     - ``dsp``: the DSP block;
     - ``uram``: the device has UltraRAM;
     - ``uram_init``: an UltraRAM takes initial contents (UltraScale+ ignores its
@@ -59,6 +60,7 @@ class Platform:
     - ``aie``: the device has AI Engines.
     """
 
+    period_ns: float = 5.0
     dsp: DspBlock | None = None
     uram: bool = True
     uram_init: bool = True
@@ -70,10 +72,9 @@ class Platform:
 
 @dataclass(frozen=True)
 class Target:
-    """The build target: the part, the clock period and the platform's capabilities."""
+    """The build target: the part, and the platform its kernels are built for."""
 
     part: str
-    period_ns: float
     platform: Platform
 
 
@@ -121,7 +122,9 @@ def resolve_target(part: str, period_ns: float, shell: str | None = None) -> Tar
             break
     else:
         raise ValueError(f"no capability row for part {part!r} (finn.kernels.target.DEVICES)")
-    platform = Platform(dsp=dsp, uram=uram, uram_init=uram_init, aie=aie)
+    platform = Platform(
+        period_ns=float(period_ns), dsp=dsp, uram=uram, uram_init=uram_init, aie=aie
+    )
     if shell is not None:
         if shell not in SHELLS:
             raise ValueError(f"no capability row for shell {shell!r} (one of {sorted(SHELLS)})")
@@ -129,7 +132,7 @@ def resolve_target(part: str, period_ns: float, shell: str | None = None) -> Tar
         platform = replace(
             platform, clk2x=clk2x, control_ports=control_ports, memory_ports=memory_ports
         )
-    return Target(part, float(period_ns), platform)
+    return Target(part, platform)
 
 
 __all__ = ["DEVICES", "SHELLS", "DspBlock", "Platform", "Target", "dsp_widths", "resolve_target"]

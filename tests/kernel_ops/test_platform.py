@@ -31,7 +31,7 @@ from kernel_ops.models import matmul_model, thresholding_model
 
 ZYNQ = resolve_target("xczu3eg-sbva484-1-e", 5.0, "vivado_zynq")  # Ultra96 in its shell
 ALVEO = resolve_target("xcu55c-fsvh2892-2L-e", 5.0, "vitis_alveo")
-URAM = Target("a part with UltraRAM it initializes", 5.0, Platform(dsp=DspBlock.DSP58))
+URAM = Target("a part with UltraRAM it initializes", Platform(period_ns=5.0, dsp=DspBlock.DSP58))
 
 
 def targeted(model: ModelWrapper, target: Target) -> ModelWrapper:
@@ -94,7 +94,7 @@ def test_a_partitions_weight_stream_reads_the_platform() -> None:
 def test_a_bare_kernel_without_a_platform_has_no_dsp_block() -> None:
     formals = op(matmul_model()).facts().formals()
     facts = {name: formals[name] for name in ("m", "n", "k", "activation_dtype", "weights_dtype")}
-    bare = design_space(MatMulKernel(**facts, target_period_ns=5.0, weights=formals["weights"]))
+    bare = design_space(MatMulKernel(**facts, weights=formals["weights"]))
     assert bare.platform == Platform()
     answer = commit(bare, {"compute": "packed"}).compute.query(PackedDotpKernel.dsp)
     assert isinstance(answer, Rejected)

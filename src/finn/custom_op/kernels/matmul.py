@@ -55,8 +55,7 @@ class MatMul(KernelOp):
         if k != k_b:
             raise KernelOpError(f"{label}: {a} has {k} columns and {b} {k_b} rows")
         activation, weights_dtype = datatype(model, a, label), datatype(model, b, label)
-        build = self.target()
-        platform, period = build.platform, build.period_ns
+        platform = self.target().platform
         common: dict[str, object] = dict(
             m=m,
             n=n,
@@ -64,7 +63,6 @@ class MatMul(KernelOp):
             activation_dtype=activation,
             weights_dtype=weights_dtype,
             platform=platform,
-            target_period_ns=period,
             x_tensor=Tensor((m, k), ScalarEncoding(activation)),
         )
         key = (
@@ -76,7 +74,6 @@ class MatMul(KernelOp):
             activation.name,
             weights_dtype.name,
             platform,
-            period,
         )
         if model.get_initializer(b) is None:
             return Facts(StreamedMatMulNode, (*key, None), lambda: common)

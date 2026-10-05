@@ -560,7 +560,6 @@ def kernel_workload(api, name: str, trials: int) -> dict[str, object]:
                 pe=2,
                 simd=2,
                 platform=capabilities,
-                target_period_ns=5.0,
             )
         )
 
@@ -580,7 +579,6 @@ def kernel_workload(api, name: str, trials: int) -> dict[str, object]:
                 activation_dtype=dtype("INT3"),
                 weights_dtype=dtype("INT3"),
                 platform=capabilities,
-                target_period_ns=5.0,
             )
         )
 

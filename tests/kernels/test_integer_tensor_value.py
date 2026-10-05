@@ -66,7 +66,6 @@ def test_a_new_configuration_does_not_walk_the_weights(monkeypatch: pytest.Monke
         activation_dtype=int3,
         weights_dtype=int3,
         platform=FULL_DSP48E2,
-        target_period_ns=5.0,
         weights=weights,
     )
     assert base.matmul.weight_tensor == Tensor((4, 4), ScalarEncoding(int3, (-1, 1)))

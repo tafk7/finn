@@ -61,7 +61,6 @@ FACTS = dict(
     activation_dtype=DataType["INT3"],
     weights_dtype=DataType["INT3"],
     platform=FULL_DSP48E2,
-    target_period_ns=5.0,
 )
 INT3, INT8 = ScalarEncoding(DataType["INT3"]), ScalarEncoding(DataType["INT8"])
 

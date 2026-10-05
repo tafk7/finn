@@ -25,7 +25,6 @@ FACTS = dict(
     activation_dtype=DataType["INT3"],
     weights_dtype=DataType["INT3"],
     platform=FULL_DSP48E2,
-    target_period_ns=5.0,
 )
 
 
@@ -250,7 +249,6 @@ def test_matmul_honors_the_child_physical_view_not_just_its_raw_module(monkeypat
         compute = Decision(
             {"packed": RestrictedDotp},
             form=MatMulKernel.datapath,
-            target_period_ns=MatMulKernel.target_period_ns,
             platform=MatMulKernel.platform,
             reshape_activations=MatMulKernel.dense_view,
             result_dtype=MatMulKernel.result_type,

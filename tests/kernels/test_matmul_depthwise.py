@@ -44,7 +44,7 @@ FACTS = dict(
 
 
 def point(core="int8_dsp58", **facts):
-    facts = {**FACTS, "target_period_ns": 5.0, **facts}
+    facts = {**FACTS, **facts}
     choices = {
         "w.transport": "direct",
         "matmul.compute": core,
@@ -134,7 +134,7 @@ def test_one_root_carries_the_weights_of_whichever_realization_is_committed():
     # The root binds its weight stream's tensor to MatMul's weight_tensor, which
     # follows the realization: open, the tensor waits on it.
     weights = tuple(tuple((c + k) % 7 - 3 for c in range(4)) for k in range(9))
-    point = matmul_point(**FACTS, target_period_ns=5.0, weights=weights)
+    point = matmul_point(**FACTS, weights=weights)
     pending = point.query(matmul_root(MatMulKernel).w.tensor)
     assert isinstance(pending, Unresolved)
     assert {finding.owner for finding in pending.findings} == {"matmul.realization"}

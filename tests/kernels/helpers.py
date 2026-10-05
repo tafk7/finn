@@ -66,10 +66,10 @@ T = TypeVar("T")
 S = TypeVar("S", bound=Space)
 
 
-def full_platform(dsp: DspBlock) -> Platform:
+def full_platform(dsp: DspBlock, *, period_ns: float = 5.0) -> Platform:
     """The platform a bare-kernel test means when it is not about the platform: ``dsp``
-    its DSP block, and every capability."""
-    return Platform(dsp=dsp)
+    its DSP block, a ``period_ns`` clock (5 ns: 200 MHz), and every capability."""
+    return Platform(period_ns=period_ns, dsp=dsp)
 
 
 FULL_DSP48E2 = full_platform(DspBlock.DSP48E2)
@@ -166,7 +166,6 @@ def matmul_root(family: type[MatMulKernel]) -> type[Root]:
         activation_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
         weights_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
         platform: Platform = Param()
-        target_period_ns: float = Param()
         weights: IntegerTensor = Param(semantics=INTEGER_TENSOR, required=False)
         weight_sets: int = Param(default=1)
 
@@ -203,7 +202,6 @@ def matmul_root(family: type[MatMulKernel]) -> type[Root]:
             activation_dtype=activation_dtype,
             weights_dtype=weights_dtype,
             platform=platform,
-            target_period_ns=target_period_ns,
             weights=weights,
             weight_sets=weight_sets,
             x_stream=x,
@@ -358,7 +356,6 @@ def matmul_assembly(
     simd: int,
     platform: Platform,
     form: Form = Form.DENSE,
-    target_period_ns: float = 5.0,
     compute_pumping: bool = False,
     core: str | None = None,
     realization: str | None = None,
@@ -377,8 +374,8 @@ def matmul_assembly(
     source, forced when its one candidate is viable. The ``auto``
     ``ram_style`` default leaves memory inference to synthesis.
     ``weight_fifo_depth`` places a FIFO on the weight stream; ``None`` connects
-    it directly. ``target_period_ns`` is the clock the module must meet (5 ns:
-    200 MHz); it sets dotp's DSP58 chain segmentation. ``core`` names the
+    it directly. The ``platform``'s clock period is the clock the module must
+    meet; it sets dotp's DSP58 chain segmentation. ``core`` names the
     compute core (``packed`` or ``int8_dsp58``); left out, the one core
     compatible with the configuration is forced, and several compatible cores
     must be chosen from. PE, SIMD and pumping are the core's.
@@ -398,7 +395,6 @@ def matmul_assembly(
         activation_dtype=activation_dtype,
         weights_dtype=weights_dtype,
         platform=platform,
-        target_period_ns=target_period_ns,
         weight_sets=weight_sets,
     )
     if weights is not None:

@@ -95,7 +95,6 @@ def dotp(family: type[Any], dsp: DspBlock, bits: int, form: Form = Form.DENSE) -
         choices={"compute_pumping": False},
         facts={
             "platform": full_platform(dsp),
-            "target_period_ns": 5.0,
             "form": form,
             "result_dtype": exact_result_dtype(reduction, a, w),
         },

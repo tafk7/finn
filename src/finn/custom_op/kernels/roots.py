@@ -17,7 +17,8 @@ an initializer the node owns are the weight stream's known value (its
 and stores them; weights on a graph tensor arrive on the stream like any edge,
 and it has no source. Nothing is pinned.
 
-The platform is a fact too: the target's capabilities (``target(model)``), bound
+The platform is a fact too: the target's capabilities and its clock period
+(``target(model)``), bound
 to the kernels and to a stream with a source, so the requirements of their value
 cases (``requires``) read the device the model is built for. The DSP block is
 the platform's (``platform.dsp``), which the compute cores read.
@@ -56,7 +57,6 @@ class MatMulNode(Kernel):
     activation_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
     weights_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
     platform: Platform = Param()
-    target_period_ns: float = Param()
     x_tensor: Tensor = Param()
 
     # Each case declares ``w`` and ``matmul``.
@@ -86,7 +86,6 @@ class StoredMatMulNode(MatMulNode):
         k=MatMulNode.k,
         activation_dtype=MatMulNode.activation_dtype,
         weights_dtype=MatMulNode.weights_dtype,
-        target_period_ns=MatMulNode.target_period_ns,
         platform=MatMulNode.platform,
         weights=weights,
         x_stream=MatMulNode.x,
@@ -109,7 +108,6 @@ class StreamedMatMulNode(MatMulNode):
         k=MatMulNode.k,
         activation_dtype=MatMulNode.activation_dtype,
         weights_dtype=MatMulNode.weights_dtype,
-        target_period_ns=MatMulNode.target_period_ns,
         platform=MatMulNode.platform,
         x_stream=MatMulNode.x,
         w_stream=w,

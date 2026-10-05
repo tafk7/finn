@@ -53,7 +53,6 @@ def matmul(k: int, n: int, dtype: Any, weights: Any, **streams: Stream) -> MatMu
         activation_dtype=dtype,
         weights_dtype=W,
         platform=FULL_DSP48E2,
-        target_period_ns=5.0,
         weights=weights,
         **streams,
     )
@@ -199,7 +198,6 @@ def carried(
         activation_dtype=A,
         weights_dtype=W,
         platform=FULL_DSP48E2,
-        target_period_ns=5.0,
     )
 
     class Stated(Root):
