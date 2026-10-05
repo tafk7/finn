@@ -15,11 +15,11 @@ from typing import Any, Literal, TypeVar, cast
 from . import _execution, _runtime
 from ._configuration import Space
 from .edits import Change, ChangeOutcome, ChangeRequest, ConfigurationResult
-from .errors import ConfigurationError, EvaluationError, RequestError
+from .errors import ConfigurationError, RequestError
 from .ir import Node
 from .occurrence import _attach, _prepare_values, decision_index, state
 from .results import Available, QueryResult
-from .semantics import snapshot
+from .semantics import equal, snapshot
 
 T = TypeVar("T")
 S = TypeVar("S", bound=Space)
@@ -96,10 +96,7 @@ def _values_equal(node: Node, left: object, right: object) -> bool:
     role = "configuration equality"
     left = snapshot(semantics, left, owner=node.owner, role=role)
     right = snapshot(semantics, right, owner=node.owner, role=role)
-    try:
-        return semantics.values_equal(left, right)
-    except Exception as cause:
-        raise EvaluationError(node.owner, role, str(cause)) from cause
+    return equal(semantics, left, right, owner=node.owner, role=role)
 
 
 def _admission(trial: _runtime.Snapshot, index: int) -> QueryResult[bool]:

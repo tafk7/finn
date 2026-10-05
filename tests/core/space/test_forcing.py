@@ -24,11 +24,11 @@ from finn.core.space import (
     Rejected,
     Space,
     Unresolved,
+    _forcing,
     constraint,
     derived,
     design_space,
     divisors_of,
-    forcing,
     inspection,
     reject,
     requires,
@@ -152,7 +152,7 @@ def test_an_admission_waiting_on_an_open_choice_does_not_refuse() -> None:
     point = design_space(Root(width=7))  # odd: stub refuses; waiting waits on its pe
     assert forced(point) == {"compute": "waiting"}
     candidate = inspection.candidate(point, Root.compute, "waiting")
-    assert candidate is not None and isinstance(forcing.admission(candidate), Unresolved)
+    assert candidate is not None and isinstance(inspection.admission(candidate), Unresolved)
 
 
 def test_forcing_cascades_through_a_choice_the_forced_case_opens() -> None:
@@ -271,13 +271,13 @@ def test_a_successor_reuses_the_verdicts_its_change_does_not_reach(
     base = design_space(Two(width=128))
     assert forced(base) == {"left": "stub", "right": "stub"}
     found: list[str] = []
-    verdict = forcing._verdict
+    verdict = _forcing._verdict
 
     def counted(current: Any, index: int) -> Any:
         found.append(current.linked.nodes[index].key)
         return verdict(current, index)
 
-    monkeypatch.setattr(forcing, "_verdict", counted)
+    monkeypatch.setattr(_forcing, "_verdict", counted)
     point = commit(base, {"left.stub.rows": 4})
     assert forced(point) == {"left": "stub", "right": "stub"}
     # Neither selector read ``left.stub.rows``; only the rest of left's own open choices is new.

@@ -4,8 +4,9 @@
 
 A forced Decision is derived at read time and never stored. It stays
 unassigned (``DecisionState`` has no other status), ``selections.capture``
-holds only commitments, and each snapshot finds its own; ``inspection.forced``
-reports each with why every other case is not viable.
+holds only commitments, and each snapshot finds its own. The public reads are
+in ``inspection``: ``forced`` and ``viable`` report the verdicts, ``admission``
+a candidate's own refusal.
 
 A case of a Decision over nodes is **viable** when the candidate it places does
 not refuse the configuration through its ``admission`` member (a
@@ -39,13 +40,12 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import cast
 
-from . import _execution, _runtime
-from ._configuration import Space
+from . import _runtime
 from ._runtime import Snapshot
 from .declarations import Constraint, ConstraintGroup, View
 from .ir import Choice, LinkedModel
-from .occurrence import state
 from .results import Available, ConstraintAssessment, Finding, FindingKind, QueryResult, Rejected
+from .semantics import equal
 
 
 class _Open:
@@ -127,20 +127,7 @@ def inherited(base: Snapshot) -> Mapping[int, object]:
     return found.verdicts if isinstance(found, Found) else base.verdicts
 
 
-def admission(candidate: Space) -> QueryResult[object] | None:
-    """A candidate's own refusal of its configuration: its ``admission`` member, if any.
-
-    A group refuses as soon as one of its constraints does, even while another
-    still waits on an open choice: a core that cannot target the DSP is refused
-    before its folding factors are chosen.
-    """
-    _execution.driver_only("admission")
-    snapshot = state(candidate)
-    with snapshot.lock:
-        return _admitted(snapshot, candidate._scope)[0]
-
-
-def _admitted(snapshot: Snapshot, scope: int) -> tuple[QueryResult[object] | None, int | None]:
+def admitted(snapshot: Snapshot, scope: int) -> tuple[QueryResult[object] | None, int | None]:
     """A scope's ``admission`` answer and the node that gave it, read in ``snapshot``."""
     member = getattr(snapshot.linked.scopes[scope].space_type, "admission", None)
     if not isinstance(member, (ConstraintGroup, Constraint, View)):
@@ -189,7 +176,9 @@ def _unchanged(linked: LinkedModel, verdict: Verdict, values: Mapping[int, objec
             return False
         semantics = linked.nodes[index].semantics
         assert semantics is not None
-        if not semantics.values_equal(seen, now):
+        if not equal(
+            semantics, seen, now, owner=linked.nodes[index].owner, role="forcing equality"
+        ):
             return False
     return True
 
@@ -216,7 +205,7 @@ def _nodes(
             {**current.assignments, index: case},
             forcing=False,
         )
-        verdict, node = _admitted(trial, scope)
+        verdict, node = admitted(trial, scope)
         if node is not None:
             reads.update(_reads(trial, (node,), index))
         if isinstance(verdict, Rejected):
@@ -322,4 +311,4 @@ def _find(snapshot: Snapshot) -> Found:
     )
 
 
-__all__ = ["Forced", "Found", "Verdict", "Viable", "admission", "forced", "inherited"]
+__all__ = ["NOTHING", "Forced", "Found", "Verdict", "Viable", "admitted", "forced", "inherited"]

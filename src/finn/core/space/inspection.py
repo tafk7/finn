@@ -15,9 +15,9 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any, Generic, Literal, TypeVar, cast, overload
 
-from . import _execution, _runtime
-from . import forcing as _forcing
+from . import _execution, _forcing, _runtime
 from ._configuration import Space
+from ._forcing import Forced, Viable
 from ._nodes import NodeChoice, NodeDecision, NodeDecl, node_record, unsupplied_formals
 from .collection import collect_space
 from .compiler import Model, compile_model
@@ -34,7 +34,6 @@ from .declarations import (
     declared_path,
 )
 from .errors import RequestError
-from .forcing import Forced, Viable
 from .ir import Layer, LinkedModel, NodeKind, Provenance
 from .occurrence import candidate as _candidate
 from .occurrence import state
@@ -387,6 +386,19 @@ def provenance(subject: Space | Model[S] | type[Space], reference: object) -> Pr
     return linked.provenance.get(compiled.resolve(scope, reference))
 
 
+def admission(candidate: Space) -> QueryResult[object] | None:
+    """A candidate's own refusal of its configuration: its ``admission`` member, if any.
+
+    A group refuses as soon as one of its constraints does, even while another
+    still waits on an open choice: a core that cannot target the DSP is refused
+    before its folding factors are chosen.
+    """
+    _execution.driver_only("admission")
+    current = state(candidate)
+    with current.lock:
+        return _forcing.admitted(current, candidate._scope)[0]
+
+
 def forced(point: Space) -> tuple[Forced, ...]:
     """The open Decisions below this scope that the configuration forces (one viable
     case each), by key, each with why every other case is not viable. Derived at read
@@ -416,7 +428,7 @@ def viable(point: Space) -> tuple[Viable, ...]:
     applicable, neither committed nor forced, each with its viable cases and why every
     other case is not viable, in rank order (an enclosing Decision before the ones it
     guards). A Decision whose guard waits on an open choice, or whose cases are not
-    enumerable (a domain known by membership only), is not listed: ``forcing`` reads
+    enumerable (a domain known by membership only), is not listed: forcing reads
     no verdict for it. A refused Decision is listed with no case."""
     _execution.driver_only("viable inspection")
     current = state(point)
@@ -644,6 +656,7 @@ __all__ = [
     "NodeDeclaration",
     "ReferenceInfo",
     "Viable",
+    "admission",
     "candidate",
     "choices",
     "declaration",

@@ -10,9 +10,9 @@ or a candidate-local choice such as ``"compute.packed.pe"`` or
 batch. Refusals are raised as ``ValueError`` with their findings.
 
 A Decision whose one viable case is forced needs no commitment (the engine's
-``finn.core.space.forcing``); ``admission`` is the engine's reading of a
-kernel's own refusal, its ``admission`` member. ``undecided`` names the open
-Decisions: neither committed nor forced.
+``inspection.forced``); ``inspection.admission`` reads a kernel's own refusal,
+its ``admission`` member. ``undecided`` names the open Decisions: neither
+committed nor forced.
 """
 
 from __future__ import annotations
@@ -29,7 +29,6 @@ from finn.core.space import (
     Space,
     inspection,
 )
-from finn.core.space.forcing import admission
 
 S = TypeVar("S", bound=Space)
 
@@ -83,4 +82,4 @@ def undecided(point: Space, pattern: str) -> list[str]:
     return found
 
 
-__all__ = ["admission", "commit", "describe", "undecided"]
+__all__ = ["commit", "describe", "undecided"]
