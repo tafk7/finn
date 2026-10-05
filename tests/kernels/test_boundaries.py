@@ -1,149 +1,18 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Enforce the independent physical library and its internal dependency layers."""
+"""Cold imports: the kernel stack loads and builds without parked or graph code.
+
+The import statements of each layer are checked against the layer table
+(``tests/layering.py``); these tests check what an import loads at runtime.
+"""
 
 from __future__ import annotations
 
-import ast
-import importlib.util
 import subprocess
 import sys
-from pathlib import Path
 
 import pytest
-
-ROOT = Path(__file__).resolve().parents[2]
-PACKAGE = ROOT / "src/finn/kernels"
-SPACE_PACKAGE = ROOT / "src/finn/core/space"
-
-
-def imported_modules(path: Path) -> set[str]:
-    """Resolve absolute, relative and literal dynamic imports for source checks."""
-    relative = path.relative_to(ROOT / "src").with_suffix("")
-    module = ".".join(relative.parts)
-    package = (
-        module.removesuffix(".__init__") if path.name == "__init__.py" else module.rsplit(".", 1)[0]
-    )
-    names: set[str] = set()
-    for node in ast.walk(ast.parse(path.read_text())):
-        if isinstance(node, ast.Import):
-            names.update(alias.name for alias in node.names)
-        elif isinstance(node, ast.ImportFrom):
-            name = node.module or ""
-            if node.level:
-                name = importlib.util.resolve_name("." * node.level + name, package)
-            names.add(name)
-            names.update(name + "." + alias.name for alias in node.names)
-        elif isinstance(node, ast.Call) and node.args:
-            function = node.func
-            call = (
-                function.id
-                if isinstance(function, ast.Name)
-                else function.attr
-                if isinstance(function, ast.Attribute)
-                else ""
-            )
-            argument = node.args[0]
-            if (
-                call in ("import_module", "__import__")
-                and isinstance(argument, ast.Constant)
-                and isinstance(argument.value, str)
-            ):
-                name = argument.value
-                if call == "import_module" and name.startswith("."):
-                    package_argument = next(
-                        (item.value for item in node.keywords if item.arg == "package"),
-                        node.args[1] if len(node.args) > 1 else None,
-                    )
-                    base = (
-                        package_argument.value
-                        if isinstance(package_argument, ast.Constant)
-                        and isinstance(package_argument.value, str)
-                        else package
-                    )
-                    name = importlib.util.resolve_name(name, base)
-                names.add(name)
-    return names
-
-
-@pytest.mark.parametrize(
-    "source",
-    (
-        'importlib.import_module("..artifacts", __package__)',
-        'importlib.import_module("..artifacts", "finn.core.space")',
-        'import_module("..artifacts", package="finn.core.space")',
-    ),
-)
-def test_relative_dynamic_imports_cannot_escape_layer_checks(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, source: str
-) -> None:
-    monkeypatch.setattr(sys.modules[__name__], "ROOT", tmp_path)
-    path = tmp_path / "src/finn/core/space/example.py"
-    path.parent.mkdir(parents=True)
-    path.write_text(source)
-    assert "finn.core.artifacts" in imported_modules(path)
-
-
-def within(name: str, prefix: str) -> bool:
-    return name == prefix or name.startswith(prefix + ".")
-
-
-def test_kernel_sources_and_tests_have_no_parked_dependency() -> None:
-    """``finn.kernels`` builds on ``finn.dataflow``, never on parked code or on a graph."""
-    forbidden = (
-        "finn.parked",
-        "finn.custom_op.kernels",
-        "finn.transformation.kernels",
-        "qonnx.core.modelwrapper",
-        "finn.core.onnx_exec",
-        "finn.core.rtlsim_exec",
-    )
-    for path in PACKAGE.rglob("*.py"):
-        assert not any(
-            within(name, prefix) for name in imported_modules(path) for prefix in forbidden
-        ), path
-    for path in (ROOT / "tests/kernels").rglob("*.py"):
-        for node in ast.walk(ast.parse(path.read_text())):
-            if isinstance(node, ast.Import):
-                names = [alias.name for alias in node.names]
-            elif isinstance(node, ast.ImportFrom):
-                names = [node.module or ""]
-            else:
-                continue
-            assert not any(
-                within(name, prefix) for name in names for prefix in (*forbidden, "parked")
-            ), path
-
-
-@pytest.mark.parametrize(
-    "directory,allowed",
-    [
-        (SPACE_PACKAGE, ("finn.core.space",)),
-        (PACKAGE / "artifacts", ("finn.kernels.artifacts",)),
-    ],
-)
-def test_internal_layers_are_independent(directory: Path, allowed: tuple[str, ...]) -> None:
-    paths = tuple(directory.rglob("*.py"))
-    assert paths
-    for path in paths:
-        invalid = {
-            name
-            for name in imported_modules(path)
-            if within(name, "finn") and not any(within(name, prefix) for prefix in allowed)
-        }
-        assert not invalid, (path, invalid)
-
-
-def test_generic_space_imports_only_generic_dependencies() -> None:
-    allowed = {*sys.stdlib_module_names, "greenlet"}
-    for path in SPACE_PACKAGE.rglob("*.py"):
-        invalid = {
-            name
-            for name in imported_modules(path)
-            if not within(name, "finn.core.space") and name.split(".")[0] not in allowed
-        }
-        assert not invalid, (path, invalid)
 
 
 def test_cold_import_and_construction_with_parked_code_unavailable() -> None:

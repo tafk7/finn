@@ -28,8 +28,8 @@ holds is the caller's own instance and nothing can rename it in place. A
 refused.
 
 This module has **no FINN imports at all**, so ``finn.dataflow`` builds on it
-without dragging the engine into its datatypes (``test_package_boundaries``
-holds the package directions). The engine-side ``ValueSemantics`` declaration
+without dragging the engine into its datatypes (the layer table,
+``tests/layering.py``, holds the package directions). The engine-side ``ValueSemantics`` declaration
 lives in ``finn.kernels.datatypes.semantics``, built from the helpers here.
 
 Two rules it keeps, which qonnx leaves to its callers:

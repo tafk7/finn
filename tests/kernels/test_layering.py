@@ -1,0 +1,173 @@
+# Copyright (C) 2026, Advanced Micro Devices, Inc.
+# SPDX-License-Identifier: BSD-3-Clause
+
+"""The rows of the layer table (``tests/layering.py``) that this tree checks.
+
+Also the table's and the walker's own tests: a check that has never rejected
+anything is a check nobody has tested.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+from layering import (
+    BY_NAME,
+    LAYERS,
+    ROOT,
+    Layer,
+    checked_by,
+    imported_modules,
+    layer_of,
+    permits,
+    sources,
+    violations,
+    within,
+)
+
+
+@pytest.mark.parametrize("layer", checked_by(Path(__file__).parent), ids=lambda layer: layer.name)
+def test_imports_follow_the_layer_table(layer: Layer) -> None:
+    assert sources(layer), layer.name
+    assert not violations(layer)
+
+
+def test_rows_name_only_earlier_rows() -> None:
+    """Declared lowest first, so the order has no cycle."""
+
+    for index, layer in enumerate(LAYERS):
+        earlier = {row.name for row in LAYERS[:index]}
+        assert set(layer.imports) <= earlier, layer.name
+    assert len(BY_NAME) == len(LAYERS)
+
+
+def test_every_row_but_parked_is_checked_by_a_tree() -> None:
+    for layer in LAYERS:
+        if layer.name == "parked":
+            assert layer.tree is None
+            assert not any("parked" in row.imports for row in LAYERS)
+        else:
+            assert layer.tree is not None, layer.name
+            assert (ROOT / layer.tree / "test_layering.py").is_file(), layer.name
+
+
+@pytest.mark.parametrize(
+    ("name", "layer"),
+    [
+        ("finn.core.space.declarations", "space"),
+        ("finn.kernels.artifacts.module.Leaf", "kernels.artifacts"),
+        ("finn.kernels.dotp", "kernels"),
+        ("finn.transformation.fpgadataflow.kernel_partitions.partition_facts", "kernel_partitions"),
+        ("finn.transformation.fpgadataflow.insert_iodma", "flow"),
+        ("finn.util.basic", "util"),
+        ("finn.xsi.setup", "util"),
+        ("finn.util.torch_hw_modules", "flow"),
+        ("finn.builder.build_dataflow", "flow"),
+        ("finn.parked.custom_op", "parked"),
+        ("kernels.helpers", "tests.kernels"),
+    ],
+)
+def test_a_module_belongs_to_its_longest_prefix(name: str, layer: str) -> None:
+    owner = layer_of(name)
+    assert owner is not None and owner.name == layer
+
+
+@pytest.mark.parametrize("name", ["numpy", "qonnx.core.modelwrapper", "finn_xsi.adapter"])
+def test_a_name_outside_every_prefix_is_third_party(name: str) -> None:
+    assert layer_of(name) is None
+
+
+@pytest.mark.parametrize(
+    ("layer", "name"),
+    [
+        # What the kernels' old denylist could not see (review A3).
+        ("kernels", "finn.transformation.fpgadataflow.insert_iodma.InsertIODMA"),
+        ("kernels", "finn.util.basic.make_build_dir"),
+        ("kernels", "finn.builder.build_dataflow"),
+        ("kernels", "qonnx.core.modelwrapper.ModelWrapper"),
+        ("kernels", "finn.custom_op.kernels.base"),
+        ("kernels", "finn.parked.custom_op"),
+        ("dataflow", "finn.kernels.base.Kernel"),
+        ("dataflow", "qonnx.util.basic"),
+        ("space", "finn.dataflow.tensor"),
+        ("space", "numpy"),
+        # util below the flow (review A1).
+        ("util", "finn.transformation.fpgadataflow.make_zynq_proj.ZynqBuild"),
+        ("util", "finn.core.onnx_exec.execute_onnx"),
+        ("util", "finn.util.torch_hw_modules"),
+        # The flow imports anything live, but no parked code.
+        ("flow", "finn.parked.custom_op"),
+        ("tests.kernels", "finn.custom_op.kernels.base"),
+        ("tests.kernels", "finn.core.onnx_exec"),
+    ],
+)
+def test_the_table_rejects_an_import_across_its_order(layer: str, name: str) -> None:
+    assert not permits(BY_NAME[layer], name)
+
+
+@pytest.mark.parametrize(
+    ("layer", "name"),
+    [
+        ("space", "greenlet"),
+        ("space", "collections.abc.Mapping"),
+        ("dataflow", "qonnx.core.datatype.DataType"),
+        ("kernels", "finn.kernels.artifacts.module.Leaf"),
+        ("transformation.kernels", "finn.transformation.fpgadataflow.kernel_partitions"),
+        ("transformation.kernels", "finn.util.basic.make_build_dir"),
+        ("flow", "finn.transformation.kernels.package.PackagePartition"),
+        ("util", "finn_xsi.adapter"),
+    ],
+)
+def test_the_table_accepts_an_import_down_its_order(layer: str, name: str) -> None:
+    assert permits(BY_NAME[layer], name)
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        ("from finn.dataflow.hardware import ArtifactKey\n", "finn.dataflow.hardware"),
+        ("import finn.dataflow.ops.mvau\n", "finn.dataflow.ops.mvau"),
+        ("from finn.dataflow import region\n", "finn.dataflow"),
+        ("from finn.core.space import Space\n", "finn.core.space"),
+        ("from finn.kernels.dotp import DotpAxiKernel\n", "finn.kernels.dotp"),
+        ("from ..space import Space\n", "finn.kernels.space"),
+        ("from .. import physical\n", "finn.kernels.physical"),
+        ("from ...dataflow import model\n", "finn.dataflow"),
+        ("import onnx\n", "onnx"),
+        ("def build():\n    import onnx\n", "onnx"),
+        ("from typing import TYPE_CHECKING\nif TYPE_CHECKING:\n    import onnx\n", "onnx"),
+    ],
+)
+def test_the_walker_finds_a_forbidden_import(source: str, expected: str) -> None:
+    names = [name for _, name in imported_modules(source, "finn.kernels.artifacts.example")]
+    assert any(within(name, expected) for name in names), names
+    assert not all(permits(BY_NAME["kernels.artifacts"], name) for name in names)
+
+
+@pytest.mark.parametrize(
+    "source", ("from . import build", "from .module import BuildError", "import pyslang")
+)
+def test_the_walker_resolves_relative_artifact_imports(source: str) -> None:
+    names = [name for _, name in imported_modules(source, "finn.kernels.artifacts.example")]
+    assert names and all(permits(BY_NAME["kernels.artifacts"], name) for name in names)
+
+
+@pytest.mark.parametrize(
+    "source",
+    (
+        'importlib.import_module("..artifacts", __package__)',
+        'importlib.import_module("..artifacts", "finn.core.space")',
+        'import_module("..artifacts", package="finn.core.space")',
+        '__import__("finn.core.artifacts")',
+    ),
+)
+def test_relative_dynamic_imports_cannot_escape_the_check(source: str) -> None:
+    names = [name for _, name in imported_modules(source, "finn.core.space.example")]
+    assert names == ["finn.core.artifacts"]
+    assert not permits(BY_NAME["space"], names[0])
+
+
+def test_a_package_resolves_relative_imports_against_itself() -> None:
+    names = [name for _, name in imported_modules("from . import base", "finn.kernels", True)]
+    assert names == ["finn.kernels.base"]

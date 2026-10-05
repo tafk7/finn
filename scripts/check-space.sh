@@ -9,6 +9,8 @@ source "$(dirname "$(readlink -f "$0")")/_gate-common.sh"
 
 gate_pytest tests/core/space
 # Documentation examples are checked separately in scratchpad/space/.
-gate_ruff src/finn/core/space tests/core/space
+# The layer table (tests/layering.py), which every layer's tests use, is
+# checked with the lowest layer.
+gate_ruff src/finn/core/space tests/core/space tests/layering.py
 gate_mypy -p finn.core.space
-gate_mypy tests/core/space
+gate_mypy tests/core/space tests/layering.py
