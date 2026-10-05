@@ -35,18 +35,8 @@ import warnings
 from importlib import resources as importlib
 from pkgutil import get_data
 from qonnx.core.modelwrapper import ModelWrapper
-from qonnx.custom_op.registry import getCustomOp
 
-from finn.core.onnx_exec import execute_onnx
-from finn.transformation.fpgadataflow.alveo_build import VitisLink, VitisOptStrategy
-from finn.transformation.fpgadataflow.make_zynq_proj import ZynqBuild
-from finn.util.basic import (
-    make_build_dir,
-    pynq_part_map,
-    robust_rmtree,
-    vitis_default_platform,
-    vitis_part_map,
-)
+from finn.util.basic import make_build_dir, robust_rmtree
 
 
 def get_test_model(netname, wbits, abits, pretrained):
@@ -122,27 +112,6 @@ def make_runtime_weight_stream(op_inst, weights):
     return weight_stream
 
 
-def get_build_env(board, target_clk_ns):
-    """Get board-related build environment for testing. Only relevant for bnn_pynq tests
-    - board = any from pynq_part_map, vitis_part_map
-    """
-    ret = {}
-    if board in pynq_part_map:
-        ret["toolchain"] = "pynq"
-        ret["part"] = pynq_part_map[board]
-        ret["build_fxn"] = ZynqBuild(board, target_clk_ns)
-    elif board in vitis_part_map:
-        ret["toolchain"] = "vitis-xrt"
-        ret["part"] = vitis_part_map[board]
-        ret["vitis_platform"] = vitis_default_platform[board]
-        ret["build_fxn"] = VitisLink(
-            vitis_default_platform[board], target_clk_ns, strategy=VitisOptStrategy.BUILD_SPEED
-        )
-    else:
-        raise Exception("Unknown board specified")
-    return ret
-
-
 def get_example_input(topology):
     "Get example numpy input tensor for given topology."
 
@@ -170,24 +139,6 @@ def get_trained_network_and_ishape(topology, wbits, abits):
     ishape = topology_to_ishape[topology]
     model = get_test_model_trained(topology.upper(), wbits, abits)
     return (model, ishape)
-
-
-def execute_parent(parent_path, child_path, input_tensor_npy, return_full_ctx=False):
-    """Execute parent model containing a single StreamingDataflowPartition by
-    replacing it with the model at child_path and return result."""
-
-    parent_model = load_test_checkpoint_or_skip(parent_path)
-    iname = parent_model.get_first_global_in()
-    oname = parent_model.get_first_global_out()
-    sdp_node = parent_model.get_nodes_by_op_type("StreamingDataflowPartition")[0]
-    sdp_node = getCustomOp(sdp_node)
-    sdp_node.set_nodeattr("model", child_path)
-    sdp_node.set_nodeattr("return_full_exec_context", 1 if return_full_ctx else 0)
-    ret = execute_onnx(parent_model, {iname: input_tensor_npy}, True)
-    if return_full_ctx:
-        return ret
-    else:
-        return ret[oname]
 
 
 def resize_smaller_side(target_pixels, img):

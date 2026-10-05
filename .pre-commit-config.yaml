@@ -55,8 +55,9 @@ repos:
   rev: 5.12.0
   hooks:
   - id: isort
-    # The Space, dataflow and kernel packages are formatted by ruff (below).
-    exclude: '^(src/finn/(core/space|dataflow|kernels)/|tests/(core/space|dataflow|kernels)/)'
+    # The Space, dataflow and kernel packages, their tests and the layer table
+    # (tests/layering.py) are formatted by ruff (below).
+    exclude: '^(src/finn/(core/space|dataflow|kernels)/|tests/(core/space|dataflow|kernels)/|tests/layering\.py$)'
 
 - repo: https://github.com/psf/black
   rev: 23.3.0
@@ -64,11 +65,11 @@ repos:
   - id: black
     language_version: python3
     args: [--line-length=100]
-    exclude: '^(src/finn/(core/space|dataflow|kernels)/|tests/(core/space|dataflow|kernels)/)'
+    exclude: '^(src/finn/(core/space|dataflow|kernels)/|tests/(core/space|dataflow|kernels)/|tests/layering\.py$)'
 
 - repo: https://github.com/astral-sh/ruff-pre-commit
   rev: v0.16.4
   hooks:
     - id: ruff-check
     - id: ruff-format
-      files: '^(src/finn/(core/space|dataflow|kernels)/|tests/(core/space|dataflow|kernels)/)'
+      files: '^(src/finn/(core/space|dataflow|kernels)/|tests/(core/space|dataflow|kernels)/|tests/layering\.py$)'

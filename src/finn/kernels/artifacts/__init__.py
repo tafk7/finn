@@ -7,7 +7,7 @@
 of them (``Composed``), with its pins (``abi``) and files (``contributions``).
 ``build`` writes a module's sources (ordered by ``sources``) and, for a
 composed module, its netlist; ``rtl`` checks declared pins against the RTL.
-A one-way import rule, tested in ``tests/kernels/artifacts/test_isolation.py``:
+A one-way import rule, a row of the layer table in ``tests/layering.py``:
 ``artifacts`` imports the standard library and its approved dependencies;
 kernels import ``artifacts``, never the reverse. What crosses into it is a
 detached ``Module``.

@@ -91,7 +91,7 @@ from finn.builder.build_dataflow_config import (
     ShellFlowType,
     VerificationStepType,
 )
-from finn.core.onnx_exec import execute_onnx
+from finn.core.onnx_exec import execute_onnx, execute_parent
 from finn.transformation.fpgadataflow.absorb_into_requant import (
     AbsorbElementwiseOpsIntoRequant,
 )
@@ -161,7 +161,6 @@ from finn.util.config import (
 )
 from finn.util.fpgadataflow import is_mlo, warn_hls_rtl_dsp_conflict
 from finn.util.rtlsim import annotate_rtlsim_performance
-from finn.util.test import execute_parent
 from finn.util.vivado import parse_ooc_synth_results
 
 

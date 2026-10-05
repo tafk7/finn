@@ -29,10 +29,3 @@ def production_source_root(request: pytest.FixtureRequest) -> Path:
     """Both planning packages remain independent of tool execution."""
 
     return FINN_ROOT / "src" / "finn" / str(request.param)
-
-
-@pytest.fixture(scope="session")
-def artifacts_source_root() -> Path:
-    """The package this effort owns."""
-
-    return FINN_ROOT / "src" / "finn" / "kernels" / "artifacts"

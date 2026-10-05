@@ -64,8 +64,12 @@ from shutil import copy, copytree
 import finn.transformation.fpgadataflow.convert_to_hw_layers as to_hw
 import finn.transformation.streamline.absorb as absorb
 from finn.analysis.fpgadataflow.dataflow_performance import dataflow_performance
-from finn.core.onnx_exec import execute_onnx
-from finn.transformation.fpgadataflow.alveo_build import PrepareForLinking
+from finn.core.onnx_exec import execute_onnx, execute_parent
+from finn.transformation.fpgadataflow.alveo_build import (
+    PrepareForLinking,
+    VitisLink,
+    VitisOptStrategy,
+)
 from finn.transformation.fpgadataflow.annotate_cycles import AnnotateCycles
 from finn.transformation.fpgadataflow.annotate_resources import AnnotateResources
 from finn.transformation.fpgadataflow.compile_cppsim import CompileCppSim
@@ -76,6 +80,7 @@ from finn.transformation.fpgadataflow.create_stitched_ip import CreateStitchedIP
 from finn.transformation.fpgadataflow.hlssynth_ip import HLSSynthIP
 from finn.transformation.fpgadataflow.insert_dwc import InsertDWC
 from finn.transformation.fpgadataflow.make_driver import MakeCPPDriver, MakePYNQDriver
+from finn.transformation.fpgadataflow.make_zynq_proj import ZynqBuild
 from finn.transformation.fpgadataflow.minimize_accumulator_width import (
     MinimizeAccumulatorWidth,
 )
@@ -98,12 +103,16 @@ from finn.transformation.streamline.reorder import (
     MoveScalarLinearPastInvariants,
 )
 from finn.transformation.streamline.round_thresholds import RoundAndClipThresholds
-from finn.util.basic import get_finn_root, make_build_dir
+from finn.util.basic import (
+    get_finn_root,
+    make_build_dir,
+    pynq_part_map,
+    vitis_default_platform,
+    vitis_part_map,
+)
 from finn.util.pytorch import ToTensor
 from finn.util.rtlsim import annotate_rtlsim_performance
 from finn.util.test import (
-    execute_parent,
-    get_build_env,
     get_example_input,
     get_topk,
     get_trained_network_and_ishape,
@@ -114,6 +123,27 @@ build_dir = os.environ["FINN_BUILD_DIR"]
 target_clk_ns = 20
 mem_mode = "internal_decoupled"
 rtlsim_trace = False
+
+
+def get_build_env(board, target_clk_ns):
+    """Get board-related build environment for testing. Only relevant for bnn_pynq tests
+    - board = any from pynq_part_map, vitis_part_map
+    """
+    ret = {}
+    if board in pynq_part_map:
+        ret["toolchain"] = "pynq"
+        ret["part"] = pynq_part_map[board]
+        ret["build_fxn"] = ZynqBuild(board, target_clk_ns)
+    elif board in vitis_part_map:
+        ret["toolchain"] = "vitis-xrt"
+        ret["part"] = vitis_part_map[board]
+        ret["vitis_platform"] = vitis_default_platform[board]
+        ret["build_fxn"] = VitisLink(
+            vitis_default_platform[board], target_clk_ns, strategy=VitisOptStrategy.BUILD_SPEED
+        )
+    else:
+        raise Exception("Unknown board specified")
+    return ret
 
 
 def get_checkpoint_name(board, topology, wbits, abits, step):
