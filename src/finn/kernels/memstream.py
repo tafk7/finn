@@ -92,7 +92,7 @@ class MemStreamKernel(Kernel):
     # Where a parent places it: the stream it drives and the set-index stream
     # (several sets only); or, as a stream's source, placed by the stream (staged).
     # channels imports this module (a memory is a channel's source), so it is imported last;
-    # the engine resolves these annotations when it collects the family.
+    # the engine resolves these annotations when it collects the Space class.
     output_channel: channels.Channel = Param(required=False)
     set_channel: channels.Channel = Param(required=False)
     staged: bool = Param(default=False)

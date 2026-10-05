@@ -44,7 +44,7 @@ class Layer:
     body: str
     origin: str | None
     value: str
-    # The family's own declaration (a Param default, a Decision, a child node).
+    # The Space class's own declaration (a Param default, a Decision, a child node).
     declared: bool = False
 
     def describe(self) -> str:
@@ -58,7 +58,7 @@ class Layer:
 class Provenance:
     """Who set a member's effective value, and what it overrides.
 
-    ``layers`` runs from the family's declaration outwards; the last layer is
+    ``layers`` runs from the Space class's declaration outwards; the last layer is
     the effective one (the outermost body that set it wins).
     """
 
@@ -168,7 +168,7 @@ class Scope:
     named_children: Mapping[str, int] = field(default_factory=dict)
     guard: int | None = None
     choices: Mapping[object, int] = field(default_factory=dict)
-    # The node declaration instantiated here (None for a family compiled alone).
+    # The node declaration instantiated here (None for a Space class compiled alone).
     record: object = None
     # Reference inputs: the formal's declaration -> the scope of the node it
     # references, which is placed elsewhere (not a child of this scope).

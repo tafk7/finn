@@ -1,6 +1,6 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
-"""Node declarations: calling a family, assigning members, and placing each node once.
+"""Node declarations: calling a Space class, assigning members, and placing each node once.
 
 ``Room(area=12)`` returns a declaration-mode ``Room`` object carrying a
 ``NodeDecl`` record; ``hall.area = kitchen.area`` supplies a formal later.
@@ -67,7 +67,7 @@ SlotKind = Literal["param", "reference", "decision", "choice", "node", "behaviou
 
 
 class NodeDecl(Declaration):
-    """One declared node of ``family``: its assignments, guard and placement.
+    """One declared node of ``space_type``: its assignments, guard and placement.
 
     ``overrides`` maps a member path below this node (``"area"``, or
     ``"port.dtype"`` through a child) to its supplier and the line that wrote
@@ -78,10 +78,10 @@ class NodeDecl(Declaration):
 
     _record_origin = False
 
-    def _init(self, family: type[Space], origin: str | None) -> None:
+    def _init(self, space_type: type[Space], origin: str | None) -> None:
         # Instance attributes: a class-level annotation of a descriptor type
         # (a Space node, a Decision) would read through its __get__ in mypy.
-        self.family: type[Space] = family
+        self.space_type: type[Space] = space_type
         self.origin = origin
         self.overrides: dict[str, tuple[object, str | None]] = {}
         self.instance: object = None
@@ -105,7 +105,7 @@ class NodeDecl(Declaration):
 
     def describe(self) -> str:
         where = f" placed at {self.placement}" if self.placement else ""
-        return f"{self.family.__qualname__} node{where}{at(self.origin)}"
+        return f"{self.space_type.__qualname__} node{where}{at(self.origin)}"
 
     def freeze(self, reason: str) -> None:
         if self.frozen is None:
@@ -176,15 +176,15 @@ def node_record(value: object) -> NodeDecl | None:
     return path[0]
 
 
-def _declaration_object(family: type[Space], path: tuple[Declaration, ...]) -> Space:
-    node = object.__new__(family)
+def _declaration_object(space_type: type[Space], path: tuple[Declaration, ...]) -> Space:
+    node = object.__new__(space_type)
     object.__setattr__(node, "_space_path", path)
     return node
 
 
-def path_proxy(family: type[Space], path: tuple[Declaration, ...]) -> Space:
+def path_proxy(space_type: type[Space], path: tuple[Declaration, ...]) -> Space:
     """A child reached through a node declaration: ``house.kitchen``."""
-    return _declaration_object(family, path)
+    return _declaration_object(space_type, path)
 
 
 def slot_declaration(value: object) -> Declaration | None:
@@ -205,7 +205,7 @@ def is_reference_input(declaration: object) -> bool:
     return (
         isinstance(declaration, Param)
         and not isinstance(declaration, LocatedParam)
-        and cast(Param[object], declaration).reference_family() is not None
+        and cast(Param[object], declaration).reference_space_type() is not None
     )
 
 
@@ -221,11 +221,11 @@ def slot_kind(declaration: Declaration) -> SlotKind:
     return "behaviour"
 
 
-def family_members(family: type[Space]) -> tuple[dict[str, Declaration], set[str]]:
-    """Every named member of ``family`` (most-derived last), and its candidate handles."""
+def space_members(space_type: type[Space]) -> tuple[dict[str, Declaration], set[str]]:
+    """Every named member of ``space_type`` (most-derived last), and its candidate handles."""
     members: dict[str, Declaration] = {}
     handles: set[str] = set()
-    for base in reversed(family.__mro__):
+    for base in reversed(space_type.__mro__):
         for name, value in vars(base).items():
             declaration = slot_declaration(value)
             if declaration is None:
@@ -241,9 +241,9 @@ def family_members(family: type[Space]) -> tuple[dict[str, Declaration], set[str
     return members, handles
 
 
-def family_formals(family: type[Space]) -> dict[str, Param[object]]:
-    """Every formal (value or reference input) of ``family`` by name."""
-    members, _ = family_members(family)
+def space_formals(space_type: type[Space]) -> dict[str, Param[object]]:
+    """Every formal (value or reference input) of ``space_type`` by name."""
+    members, _ = space_members(space_type)
     return {
         name: cast(Param[object], member)
         for name, member in members.items()
@@ -308,20 +308,21 @@ def _reference_supplier(formal: Param[object], value: object, label: str) -> obj
     from ._configuration import Space
 
     if isinstance(value, Param):
-        return value  # forwards an input of the enclosing family; checked when linking
+        return value  # forwards an input of the enclosing Space class; checked when linking
     supplied = node_record(value)
     path = declared_path(value) if isinstance(value, Space) else None
     if supplied is None and path is not None and len(path) > 1:
         raise DefinitionError(
             f"{label}: {_path_text(path)} reaches into another node; a reference input "
-            "names a node placed beside it, or forwards an input of the enclosing family"
+            "names a node placed beside it, or forwards an input of the enclosing Space class"
         )
     if supplied is None:
         raise DefinitionError(f"{label}: a reference input takes a node declaration")
-    family = cast("type[Space]", formal.reference_family())
-    if not issubclass(supplied.family, family):
+    expected = cast("type[Space]", formal.reference_space_type())
+    if not issubclass(supplied.space_type, expected):
         raise DefinitionError(
-            f"{label}: expected a {family.__qualname__} node, got {supplied.family.__qualname__}"
+            f"{label}: expected a {expected.__qualname__} node, got "
+            f"{supplied.space_type.__qualname__}"
         )
     supplied.sites.append(label)
     return supplied
@@ -396,9 +397,9 @@ def _choice_supplier(
         if (record is None) != (previous is None) or (
             record is not None
             and previous is not None
-            and not issubclass(record.family, previous.family)
+            and not issubclass(record.space_type, previous.space_type)
         ):
-            expected = "None" if previous is None else f"a {previous.family.__qualname__} node"
+            expected = "None" if previous is None else f"a {previous.space_type.__qualname__} node"
             raise DefinitionError(f"{label}: case {key!r} must be {expected}")
     decision.replaces = label
     for key, record in decision.candidates.items():
@@ -408,14 +409,14 @@ def _choice_supplier(
 
 
 def _node_supplier(original: NodeDecl, value: object, label: str) -> NodeDecl:
-    """A child node may be replaced by a fresh node of its family or a subclass."""
+    """A child node may be replaced by a fresh node of its Space class or a subclass."""
     record = node_record(value)
     if record is None:
         raise DefinitionError(f"{label}: a child node is replaced by a node declaration")
-    if not issubclass(record.family, original.family):
+    if not issubclass(record.space_type, original.space_type):
         raise DefinitionError(
-            f"{label}: expected a {original.family.__qualname__} node (or a subclass), got "
-            f"{record.family.__qualname__}; a replacement must keep every member the "
+            f"{label}: expected a {original.space_type.__qualname__} node (or a subclass), got "
+            f"{record.space_type.__qualname__}; a replacement must keep every member the "
             "enclosing bodies can name"
         )
     if record.when is not None:
@@ -429,7 +430,7 @@ def _node_supplier(original: NodeDecl, value: object, label: str) -> NodeDecl:
 
 
 def check_supplier(
-    family: type[Space], name: str, member: Declaration, value: object, label: str
+    space_type: type[Space], name: str, member: Declaration, value: object, label: str
 ) -> object:
     """Validate one supplier of a member, as far as it can be checked before linking."""
     if (
@@ -442,8 +443,8 @@ def check_supplier(
     if kind == "behaviour":
         what = type(member).__name__
         raise DefinitionError(
-            f"{label}: {family.__qualname__}.{name} is a {what}: behaviour belongs to the "
-            "family; subclass it to change it (only Params, Decisions and child nodes are "
+            f"{label}: {space_type.__qualname__}.{name} is a {what}: behaviour belongs to the "
+            "Space class; subclass it to change it (only Params, Decisions and child nodes are "
             "assigned)"
         )
     if kind == "reference":
@@ -465,7 +466,7 @@ def check_supplier(
 
 
 def _pending_supplier(member: Param[object], value: object, label: str) -> object:
-    """A supplier of a formal whose annotation does not resolve yet (its family is being
+    """A supplier of a formal whose annotation does not resolve yet (its Space class is being
     defined, across an import cycle): checked when linking, where every annotation
     resolves. A forward, a node or a reference waits; a literal needs its value type now."""
     from ._configuration import Space
@@ -485,14 +486,14 @@ def _pending_supplier(member: Param[object], value: object, label: str) -> objec
         return record
     raise DefinitionError(
         f"{label}: the annotation of {member.name} does not resolve yet, so a literal "
-        "cannot be recognized here; bind a member, or assign the value where the family "
+        "cannot be recognized here; bind a member, or assign the value where the Space class "
         "is defined"
     )
 
 
 def _annotated_yet(member: Param[object]) -> bool:
     """Whether a formal's annotation resolves now; a forward reference resolves when its
-    family is collected."""
+    Space class is collected."""
     try:
         member.resolve()
     except PendingAnnotation:
@@ -511,31 +512,34 @@ def _record(head: NodeDecl, key: str, supplier: object, origin: str | None, labe
     head.overrides[key] = (supplier, origin)
 
 
-def declare_node(family: type[Space], keywords: Mapping[str, object]) -> Space:
-    """``family(**keywords)``: validate the bindings eagerly and return the node.
+def declare_node(space_type: type[Space], keywords: Mapping[str, object]) -> Space:
+    """``space_type(**keywords)``: validate the bindings eagerly and return the node.
 
     A keyword is exactly an assignment by the calling body. Members left out
     may be supplied later by assignment; a required formal that nothing
-    supplies is reported when a family containing the node is prepared.
+    supplies is reported when a Space class containing the node is prepared.
     """
 
     origin = source_origin()
-    error = unfinished(family, at(origin))
+    error = unfinished(space_type, at(origin))
     if error is not None:
         raise error
     keywords = dict(keywords)
     when = _guard(keywords.pop("when", None))
-    members, handles = family_members(family)
+    members, handles = space_members(space_type)
     unknown = sorted(keywords.keys() - members.keys())
     if unknown:
-        raise DefinitionError(f"{family.__qualname__}{at(origin)}: unknown members {unknown}")
+        raise DefinitionError(f"{space_type.__qualname__}{at(origin)}: unknown members {unknown}")
     record = Declaration.__new__(NodeDecl)
-    record._init(family, origin)
+    record._init(space_type, origin)
     record.when = when
     for name, value in keywords.items():
-        label = f"{family.__qualname__}.{name}{at(origin)}"
-        record.overrides[name] = (check_supplier(family, name, members[name], value, label), origin)
-    node = _declaration_object(family, (record,))
+        label = f"{space_type.__qualname__}.{name}{at(origin)}"
+        record.overrides[name] = (
+            check_supplier(space_type, name, members[name], value, label),
+            origin,
+        )
+    node = _declaration_object(space_type, (record,))
     record.instance = node
     return node
 
@@ -550,7 +554,7 @@ def _path_label(path: tuple[Declaration, ...], name: str) -> str:
     # Inside a class body a node has no name yet: identify it by its call line.
     names = [
         record.name
-        or f"<{getattr(record, 'family', type(record)).__qualname__} node{at(record.origin)}>"
+        or f"<{getattr(record, 'space_type', type(record)).__qualname__} node{at(record.origin)}>"
         for record in path
     ]
     return ".".join((*names, name))
@@ -577,22 +581,22 @@ def assign(instance: object, name: str, value: object) -> None:
         )
     records = cast(tuple[NodeDecl, ...], path)
     head, target = records[0], records[-1]
-    members, handles = family_members(target.family)
+    members, handles = space_members(target.space_type)
     if name in handles:
         raise DefinitionError(
             f"{label}: {name} names a candidate of a Decision; override the Decision instead"
         )
     if name not in members:
         raise DefinitionError(
-            f"{label}: {target.family.__qualname__} has no member {name!r} to assign"
+            f"{label}: {target.space_type.__qualname__} has no member {name!r} to assign"
         )
     if head.frozen is not None:
         raise DefinitionError(
             f"{label}: {head.describe()} is frozen ({head.frozen}); a declaration can be "
-            "assigned only until its family is prepared or design_space() takes it"
+            "assigned only until its Space class is prepared or design_space() takes it"
         )
     key = ".".join((*(segment for record in records[1:] for segment in _segments(record)), name))
-    supplier = check_supplier(target.family, name, members[name], value, label)
+    supplier = check_supplier(target.space_type, name, members[name], value, label)
     _record(head, key, supplier, origin, label)
 
 
@@ -601,14 +605,14 @@ def unsupplied_formals(record: NodeDecl) -> list[str]:
     own = record.bindings
     return [
         name
-        for name, formal in family_formals(record.family).items()
+        for name, formal in space_formals(record.space_type).items()
         if name not in own and is_required(formal)
     ]
 
 
 def is_structural(record: NodeDecl) -> bool:
     """Whether a root supplies structure: anything but plain values for its own formals."""
-    formals = family_formals(record.family)
+    formals = space_formals(record.space_type)
     for key, (value, _) in record.overrides.items():
         formal = formals.get(key)
         if formal is None or is_reference_input(formal):
@@ -618,7 +622,7 @@ def is_structural(record: NodeDecl) -> bool:
     return False
 
 
-def missing_formal(key: str, formal: Declaration, record: NodeDecl | None, family: str) -> str:
+def missing_formal(key: str, formal: Declaration, record: NodeDecl | None, space_name: str) -> str:
     """The definition error for a required formal that nothing supplies."""
     node, _, member = key.rpartition(".")
     declared = f"{formal.owner.__qualname__}.{member}" if formal.owner is not None else member
@@ -629,7 +633,7 @@ def missing_formal(key: str, formal: Declaration, record: NodeDecl | None, famil
         )
     return (
         f"{key} is not supplied: {declared}{at(formal.origin)} is required, and nothing "
-        f"supplies it for the node {node}{at(record.origin)} before {family} is prepared; "
+        f"supplies it for the node {node}{at(record.origin)} before {space_name} is prepared; "
         f"supply it at the call or assign it ({key} = ...)"
     )
 
@@ -702,7 +706,7 @@ class NodeChoice:
         record = decision.candidates[case]
         if record is None:
             raise DefinitionError(f"{decision.describe()}: candidate {case!r} places nothing")
-        return path_proxy(record.family, (*self._space_path[:-1], record))
+        return path_proxy(record.space_type, (*self._space_path[:-1], record))
 
     def __setattr__(self, name: str, value: object) -> None:
         raise AttributeError("a Decision over nodes is immutable")
@@ -769,7 +773,7 @@ def entry_choice(
 ) -> NodeChoice:
     """``Decision({"a": A, "b": B(own=...)}, shared=..., optional=...)``: a Decision over nodes.
 
-    Each entry becomes a candidate node: a family is called with no bindings,
+    Each entry becomes a candidate node: a Space class is called with no bindings,
     a call keeps its own. Every shared binding is supplied to every candidate,
     each of which must declare it, and none of which may bind it already.
     ``optional=True`` adds a ``None`` candidate keyed ``"none"``, first.
@@ -778,7 +782,7 @@ def entry_choice(
     where = at(origin)
     if not isinstance(entries, Mapping):
         raise DefinitionError(
-            f"Decision{where}: candidate entries map keys to families or calls on them"
+            f"Decision{where}: candidate entries map keys to Space classes or calls on them"
         )
     if not entries:
         raise DefinitionError(
@@ -787,7 +791,7 @@ def entry_choice(
     if type(optional) is not bool:
         raise DefinitionError(f"Decision{where}: optional= is True or False")
     space = _space()
-    families: dict[str, type[Space]] = {}
+    space_types: dict[str, type[Space]] = {}
     records: dict[str, NodeDecl] = {}
     for key, entry in entries.items():
         local_name(key, "candidate key")
@@ -797,24 +801,24 @@ def entry_choice(
             error = unfinished(entry, f" (candidate {key!r} of a Decision{where})")
             if error is not None:
                 raise error
-            families[key] = entry
+            space_types[key] = entry
             continue
         record = node_record(entry)
         if record is None:
             raise DefinitionError(
-                f"Decision{where}: candidate {key!r} must be a family or a call on one"
+                f"Decision{where}: candidate {key!r} must be a Space class or a call on one"
             )
-        families[key], records[key] = record.family, record
-    _check_shared(families, records, shared, where)
+        space_types[key], records[key] = record.space_type, record
+    _check_shared(space_types, records, shared, where)
     values: dict[object, object] = {NONE_CASE: None} if optional else {}
-    for key, family in families.items():
-        node = records[key].instance if key in records else family()
+    for key, space_type in space_types.items():
+        node = records[key].instance if key in records else space_type()
         record = cast(NodeDecl, node_record(node))
-        members, _ = family_members(family)
+        members, _ = space_members(space_type)
         for name, value in shared.items():
-            label = f"{family.__qualname__}.{name} (shared binding of candidate {key!r}{where})"
+            label = f"{space_type.__qualname__}.{name} (shared binding of candidate {key!r}{where})"
             record.overrides[name] = (
-                check_supplier(family, name, members[name], value, label),
+                check_supplier(space_type, name, members[name], value, label),
                 origin,
             )
         values[key] = node
@@ -824,7 +828,7 @@ def entry_choice(
 
 
 def _check_shared(
-    families: Mapping[str, type[Space]],
+    space_types: Mapping[str, type[Space]],
     records: Mapping[str, NodeDecl],
     shared: Mapping[str, object],
     where: str,
@@ -833,13 +837,13 @@ def _check_shared(
     problems: list[str] = []
     for name in shared:
         lacking = []
-        for key, family in families.items():
-            member = family_members(family)[0].get(name)
+        for key, space_type in space_types.items():
+            member = space_members(space_type)[0].get(name)
             # A formal is never behaviour; its annotation may not resolve yet (a forward).
             if member is None or (
                 not isinstance(member, Param) and slot_kind(member) == "behaviour"
             ):
-                lacking.append(f"{key} ({family.__qualname__})")
+                lacking.append(f"{key} ({space_type.__qualname__})")
         if lacking:
             problems.append(f"shared binding {name!r} is not declared by candidates {lacking}")
     if problems:
@@ -866,7 +870,7 @@ def _check_direct_read(decision: NodeDecision, name: str) -> None:
     for case, record in decision.candidates.items():
         if record is None:
             continue  # reading through the None candidate is inapplicable, not a lack
-        member = family_members(record.family)[0].get(name)
+        member = space_members(record.space_type)[0].get(name)
         if member is None:
             lacking.append(case)
         else:
@@ -883,9 +887,9 @@ def _check_direct_read(decision: NodeDecision, name: str) -> None:
 
     known: list[tuple[str, ValueSemantics[object]]] = []
     for case, member in having.items():
-        family = cast(NodeDecl, decision.candidates[case]).family
+        space_type = cast(NodeDecl, decision.candidates[case]).space_type
         try:
-            semantics = collect_space(family).semantics.get(member)
+            semantics = collect_space(space_type).semantics.get(member)
         except DefinitionError:
             semantics = None  # known only when linking: checked there
         if semantics is None:
@@ -921,8 +925,8 @@ __all__ = [
     "declare_node",
     "entry_choice",
     "fallback",
-    "family_formals",
-    "family_members",
+    "space_formals",
+    "space_members",
     "is_fresh",
     "is_reference_input",
     "is_required",

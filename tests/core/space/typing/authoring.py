@@ -241,7 +241,7 @@ def check(point: Fifo, house: House, eltwise: Eltwise) -> None:
     assert_type(Fifo.physical, View[int])
     assert_type(House.kitchen, Room)
     assert_type(House.kitchen.finish, int)
-    # The compile step is typed as the family.
+    # The compile step is typed as the Space class.
     assert_type(design_space(House(budget=100)), House)
     assert_type(design_space(Estate(home=House(budget=1))), Estate)
     assert_type(design_space(Room()), Room)  # a bare call type-checks
@@ -300,7 +300,7 @@ class Buffer(Space):
 
 
 class Kernel(Space):
-    output: Wire = Param()  # a reference input, annotated with its family
+    output: Wire = Param()  # a reference input, annotated with its Space class
     buffer = Buffer(word_bits=output.spec.payload_bits)  # typed in the class body
     assert_type(output, Wire)
     assert_type(output.spec, Spec)
@@ -313,7 +313,7 @@ class Board(Space):
     kernel.buffer.depth = 4  # pin a Decision of a descendant
     spare = Kernel(output=wire)
     spare.buffer.depth = Decision(values=(2, 4))  # narrow it: same key
-    spare.buffer = Buffer(word_bits=16)  # replace a child node (same family)
+    spare.buffer = Buffer(word_bits=16)  # replace a child node (same Space class)
     lobby = Room(area=1)
     stages = Room(area=lobby.cost)  # a view's accepted value supplies a formal
 

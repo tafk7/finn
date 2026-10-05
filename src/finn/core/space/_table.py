@@ -90,9 +90,9 @@ class ChoiceDraft:
     cases: list[tuple[str, int | None]] = field(default_factory=list)
     members: dict[str, int] = field(default_factory=dict)
     # Its guard never holds here: no candidate is placed, and it has no key; the
-    # families its candidates would place type what is read through it.
+    # Space classes its candidates would place type what is read through it.
     never: bool = False
-    families: dict[str, type[Space]] = field(default_factory=dict)
+    space_types: dict[str, type[Space]] = field(default_factory=dict)
 
     def freeze(self) -> Choice:
         return Choice(
@@ -135,13 +135,13 @@ class ExpressionTask:
 
 @dataclass
 class Table:
-    """The nodes and scopes of one linked family, and what each phase passes on."""
+    """The nodes and scopes of one linked Space class, and what each phase passes on."""
 
     space_type: type[Space]
     nodes: list[Node] = field(default_factory=list)
     drafts: list[ScopeDraft] = field(default_factory=list)
     choice_drafts: list[ChoiceDraft] = field(default_factory=list)
-    # Each family collected once: the declarations each member name stands for, and
+    # Each Space class collected once: the declarations each member name stands for, and
     # each member's slot kind.
     effective: dict[type[Space], EffectiveSpace] = field(default_factory=dict)
     aliases: dict[type[Space], dict[str, list[Declaration]]] = field(default_factory=dict)
@@ -167,7 +167,7 @@ class Table:
     scope_provenance: dict[int, Provenance] = field(default_factory=dict)
     pinned: dict[str, Provenance] = field(default_factory=dict)
 
-    def family(self, space_type: type[Space]) -> EffectiveSpace:
+    def collected(self, space_type: type[Space]) -> EffectiveSpace:
         effective = self.effective.get(space_type)
         if effective is None:
             effective = collect_space(space_type)

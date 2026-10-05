@@ -15,7 +15,7 @@ from finn.kernels.transport import AxiStream, ReadyValidStream
 
 
 def check(point: DotpAxiKernel, eltwise: EltwiseKernel) -> None:
-    # Class access: nodes typed as their families, references typed as values.
+    # Class access: nodes typed as their Space classes, references typed as values.
     assert_type(DotpAxiKernel.x, AxiStreamPort)
     assert_type(DotpAxiKernel.x.element, ScalarEncoding)
     assert_type(DotpAxiKernel.x.axis, AxiStream)

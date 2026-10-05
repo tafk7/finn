@@ -74,7 +74,7 @@ class EffectiveSpace:
 
 
 def _annotation_namespace(space_type: type[Space]) -> dict[str, object]:
-    """Resolve local family/base annotations without adding structural members."""
+    """Resolve local class and base annotations without adding structural members."""
     namespace: dict[str, object] = {base.__name__: base for base in reversed(space_type.__mro__)}
     namespace.update(class_namespace(space_type))
     return namespace
@@ -106,10 +106,10 @@ def _check_choice_annotation(decision: NodeDecision) -> None:
                     f"{label}: candidate {key!r} is None, so the annotation must include None"
                 )
         elif not any(
-            isinstance(option, type) and issubclass(record.family, option) for option in options
+            isinstance(option, type) and issubclass(record.space_type, option) for option in options
         ):
             raise DefinitionError(
-                f"{label}: candidate {key!r} is a {record.family.__qualname__} node, which the "
+                f"{label}: candidate {key!r} is a {record.space_type.__qualname__} node, which the "
                 f"annotation {annotation!r} does not admit"
             )
 

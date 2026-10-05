@@ -279,7 +279,7 @@ def test_matmul_honors_the_child_physical_view_not_just_its_raw_module(monkeypat
             y_channel=MatMulKernel.y_channel,
         )
 
-    # Substitute a fully authored family, without mutating declarations.
+    # Substitute a fully authored Space class, without mutating declarations.
     monkeypatch.setattr("kernels.helpers.MatMulKernel", RestrictedMatMul)
     point = commit(
         matmul_point(**FACTS),

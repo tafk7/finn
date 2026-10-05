@@ -55,7 +55,7 @@ def test_integer_and_reflected_operators_preserve_python_integer_results() -> No
 def test_an_inferred_derived_integer_remains_an_ordinary_callback() -> None:
     calls: list[str] = []
 
-    class Family(Space):
+    class Example(Space):
         extent: int = Param()
 
         @derived
@@ -65,32 +65,32 @@ def test_an_inferred_derived_integer_remains_an_ordinary_callback() -> None:
 
         result = doubled + 3
 
-    model = inspection.model(Family)
+    model = inspection.model(Example)
     assert calls == []
-    point = design_space(Family(extent=4))
+    point = design_space(Example(extent=4))
     assert inspection.model(point) is model
     assert point.result == 11
     assert calls == ["doubled"]
     assert point.result == 11
     assert calls == ["doubled"]
-    dependencies = inspection.dependencies(model, Family.result)
+    dependencies = inspection.dependencies(model, Example.result)
     assert any(item.key == "doubled" for item in dependencies)
 
 
 def test_literal_expressions_evaluate_lazily_and_preserve_owned_dependencies() -> None:
-    class Family(Space):
+    class Example(Space):
         base = Const(4)
         folded = (base + 3) * 2
         anonymous = Const(8) // 2
 
-    model = inspection.model(Family)
+    model = inspection.model(Example)
     metadata = {item.key: item for item in inspection.members(model)}
     assert metadata["folded"].kind == "derived"
     assert metadata["anonymous"].kind == "derived"
-    point = design_space(Family())
+    point = design_space(Example())
     assert (point.folded, point.anonymous) == (14, 4)
-    assert inspection.dependencies(model, Family.folded)
-    evidence = inspection.explain(point, Family.folded)
+    assert inspection.dependencies(model, Example.folded)
+    evidence = inspection.explain(point, Example.folded)
     assert evidence.result == Available(14)
     assert {node.declaration.owner for node in evidence.nodes} == {"base", "folded"}
     assert len(evidence.nodes) > 1
@@ -121,16 +121,16 @@ def test_anonymous_expressions_work_in_aliases_domains_and_child_bindings() -> N
 
 
 def test_arithmetic_errors_are_deferred_until_guarded_expression_is_demanded() -> None:
-    class Family(Space):
+    class Example(Space):
         enabled: bool = Param()
         physical = View(Const(1) // 0, when=enabled)
 
-    inactive = design_space(Family(enabled=False))
-    assert isinstance(inactive.inspect(Family.physical).accepted_result, Inapplicable)
-    evidence = inspection.explain(inactive, Family.physical)
+    inactive = design_space(Example(enabled=False))
+    assert isinstance(inactive.inspect(Example.physical).accepted_result, Inapplicable)
+    evidence = inspection.explain(inactive, Example.physical)
     assert not any(".$expr." in node.declaration.key for node in evidence.nodes)
     with pytest.raises(EvaluationError) as error:
-        design_space(Family(enabled=True)).physical
+        design_space(Example(enabled=True)).physical
     assert error.value.owner == "physical"
     assert isinstance(error.value.__cause__, ZeroDivisionError)
 
@@ -171,7 +171,7 @@ def test_expression_truthiness_and_non_integer_operands_are_rejected() -> None:
 def test_inferred_non_integer_operands_fail_before_their_callbacks_run() -> None:
     calls: list[str] = []
 
-    class Family(Space):
+    class Example(Space):
         @derived
         def text() -> str:
             calls.append("text")
@@ -180,7 +180,7 @@ def test_inferred_non_integer_operands_fail_before_their_callbacks_run() -> None
         invalid = cast(ValueRef[int], text) + 1
 
     with pytest.raises(DefinitionError, match="int value semantics"):
-        design_space(Family())
+        design_space(Example())
     assert calls == []
 
 
@@ -194,7 +194,7 @@ def test_a_reference_to_a_non_integer_member_is_refused_as_an_operand() -> None:
 
 
 class Source(Space):
-    """A typed base for families whose expressions are built as data."""
+    """A typed base for Space classes whose expressions are built as data."""
 
     source: int = Param()
 
@@ -203,8 +203,8 @@ def test_expression_dags_and_deep_chains_are_linked_iteratively() -> None:
     value: int = Source.source
     for _ in range(1_500):
         value = value + 1
-    family = composite("DeepExpression", {"value": value}, base=Source)
-    assert design_space(family(source=2)).query(value) == Available(1_502)
+    space_type = composite("DeepExpression", {"value": value}, base=Source)
+    assert design_space(space_type(source=2)).query(value) == Available(1_502)
 
     value = Source.source
     for _ in range(20):
@@ -215,20 +215,20 @@ def test_expression_dags_and_deep_chains_are_linked_iteratively() -> None:
 
 
 def test_a_compiled_expression_keeps_its_operator_after_declaration_mutation() -> None:
-    class Family(Space):
+    class Example(Space):
         source: int = Param()
         value = source + 1
 
-    old = design_space(Family(source=3))
-    cast(Expr, Family.value).operator = "mul"
-    new = design_space(Family(source=3))
+    old = design_space(Example(source=3))
+    cast(Expr, Example.value).operator = "mul"
+    new = design_space(Example(source=3))
     assert old.value == 4
     assert inspection.model(new) is inspection.model(old)
     assert new.value == 4
 
 
 def test_shared_expression_prefix_is_not_duplicated_across_consumers() -> None:
-    def family(consumers: int) -> type[Source]:
+    def shared_consumers(consumers: int) -> type[Source]:
         prefix: int = Source.source
         for _ in range(200):
             prefix = prefix + 1
@@ -238,7 +238,7 @@ def test_shared_expression_prefix_is_not_duplicated_across_consumers() -> None:
             members[f"consumer{index}"] = View(prefix, when=disabled if index == 0 else None)
         return composite("SharedConsumers", members, base=Source)
 
-    small_type, large_type = family(2), family(40)
+    small_type, large_type = shared_consumers(2), shared_consumers(40)
     small_counts = inspection.statistics(small_type)
     large_counts = inspection.statistics(large_type)
     # Only the additional public view declarations and their output edges grow;

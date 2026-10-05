@@ -1,12 +1,12 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
-"""Suppliers of a formal whose annotation does not resolve yet, and forwards' families.
+"""Suppliers of a formal whose annotation does not resolve yet, and forwards' Space classes.
 
-Two families that place each other across an import cycle (a channel whose
+Two Space classes that place each other across an import cycle (a channel whose
 source is a memory kernel, whose ports reference channels) leave a formal's
 annotation unresolved while the other module's class bodies run. A supplier of
 such a formal is checked when linking, where every annotation resolves: the
-formal's kind, its family (a forward's too) and its value semantics. A literal
+formal's kind, its Space class (a forward's too) and its value semantics. A literal
 still needs its type at the call.
 
 The cycle is a toy package written to ``tmp_path``. Each (variant, entry
@@ -25,11 +25,11 @@ from pathlib import Path
 
 import pytest
 
-from finn.core.space import DefinitionError, Param, Space, derived, design_space
+from finn.core.space import Decision, DefinitionError, Param, Space, derived, design_space
 
 SRC = Path(__file__).resolve().parents[3] / "src"
 
-# The port names the channel family by its full path, without importing it: the
+# The port names the channel Space class by its full path, without importing it: the
 # channel module imports the port (as finn.kernels.channels does through its FIFO).
 PORT = """
 from __future__ import annotations
@@ -47,7 +47,7 @@ class Port(Space):
         return self.stream.width
 """
 
-# The memory kernel imports the channel module last: its families come first.
+# The memory kernel imports the channel module last: its Space classes come first.
 MEM = """
 from __future__ import annotations
 from finn.core.space import Decision, Param, Space
@@ -174,7 +174,7 @@ REFUSED = {
         "c.source.mem.set_port.stream: forwards count (declared at mem.py:12), which is "
         "not a reference input of Mem",
     ),
-    "a reference of another family forwarded into a pending formal": (
+    "a reference of another Space class forwarded into a pending formal": (
         {"set_port_supplier": "other"},
         "design_space",
         "c.source.mem.set_port.stream: forwards other (declared at mem.py:13), a Other "
@@ -186,7 +186,7 @@ REFUSED = {
         "k.p.stream: forwards the reference input x (declared at entry.py:13), but the "
         "formal takes a value",
     ),
-    "a node of another family supplied to a pending formal": (
+    "a node of another Space class supplied to a pending formal": (
         {"mem_extra": "    extra = Port(stream=Other())"},
         "design_space",
         "c.source.mem.extra.stream: expected a Chan node, got Other (declared at mem.py:16)",
@@ -201,7 +201,7 @@ REFUSED = {
         {"mem_extra": "    extra = Port(stream=3)"},
         "import",
         "the annotation of stream does not resolve yet, so a literal cannot be recognized "
-        "here; bind a member, or assign the value where the family is defined",
+        "here; bind a member, or assign the value where the Space class is defined",
     ),
     "a Decision over nodes supplied to a pending formal": (
         {"mem_extra": '    extra = Port(stream=Decision({"o": Other}))'},
@@ -211,7 +211,7 @@ REFUSED = {
     "a reach through a pending reference in a class body": (
         {"mem_extra": "    width_seen = output.width"},
         "import",
-        "width: the reference's annotation does not resolve yet (its family is still being "
+        "width: the reference's annotation does not resolve yet (its Space class is still being "
         "defined); read the member in a method",
     ),
 }
@@ -247,8 +247,8 @@ class Port(Space):
         return self.stream.width
 
 
-def test_a_forward_of_another_family_is_refused_when_linking() -> None:
-    """Every annotation resolves; the forward's family is still checked when linking."""
+def test_a_forward_of_another_space_class_is_refused_when_linking() -> None:
+    """Every annotation resolves; the forward's Space class is still checked when linking."""
 
     class Kernel(Space):
         x: Other = Param()
@@ -266,7 +266,7 @@ def test_a_forward_of_another_family_is_refused_when_linking() -> None:
         design_space(Root())
 
 
-def test_a_forward_of_a_subfamily_is_accepted() -> None:
+def test_a_forward_of_a_subclass_is_accepted() -> None:
     class Wide(Chan):
         pass
 
@@ -281,7 +281,7 @@ def test_a_forward_of_a_subfamily_is_accepted() -> None:
     assert design_space(Root()).k.port.width == 5
 
 
-def test_a_node_of_another_family_is_still_refused_at_the_call() -> None:
+def test_a_node_of_another_space_class_is_still_refused_at_the_call() -> None:
     with pytest.raises(DefinitionError, match="expected a Chan node, got Other"):
         Port(stream=Other())  # type: ignore[arg-type]
 
@@ -294,11 +294,14 @@ def test_a_value_forward_of_another_type_is_still_refused_in_the_class_body() ->
             child = Chan(width=label)  # type: ignore[arg-type]
 
 
-def test_only_an_unresolved_annotation_defers_a_supplier() -> None:
-    """Any other error of the formal is reported where the formal is supplied."""
-
-    class Holder(Space):
-        c: Chan = Param(default=None)  # type: ignore[assignment]
-
+def test_only_an_unresolved_annotation_is_deferred() -> None:
+    """Any other error of a formal or Decision is reported where its class is defined."""
     with pytest.raises(DefinitionError, match="a reference input has no value default"):
-        Holder(c=Chan(width=1))
+
+        class Holder(Space):
+            c: Chan = Param(default=None)  # type: ignore[assignment]
+
+    with pytest.raises(DefinitionError, match="Bare.choice .*annotate the decision"):
+
+        class Bare(Space):
+            choice = Decision(values=(1, 2))

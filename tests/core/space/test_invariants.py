@@ -18,7 +18,7 @@ from finn.core.space import (
 def test_settled_values_and_acceptance_survive_unrelated_added_choices() -> None:
     calls: list[int] = []
 
-    class Family(Space):
+    class Example(Space):
         extent: int = Param()
         lanes: int = Decision(values=(1, 2))
         style: str = Decision(values=("small", "fast"))
@@ -37,15 +37,15 @@ def test_settled_values_and_acceptance_survive_unrelated_added_choices() -> None
         def physical(self) -> int:
             return self.cycles
 
-    base = design_space(Family(extent=8))
-    assert isinstance(base.query(Family.cycles), Unresolved)
+    base = design_space(Example(extent=8))
+    assert isinstance(base.query(Example.cycles), Unresolved)
     assert calls == []
     first = base.with_choices(lanes=2)
-    before = first.inspect(Family.physical)
+    before = first.inspect(Example.physical)
     second = first.with_choices(style="fast")
-    assert second.query(Family.cycles) == Available(4)
-    assert second.inspect(Family.physical) == before
+    assert second.query(Example.cycles) == Available(4)
+    assert second.inspect(Example.physical) == before
     assert first.cycles == 4 and calls == [4, 4]
-    assert isinstance(first.query(Family.style), Unresolved)
+    assert isinstance(first.query(Example.style), Unresolved)
     # Replacement is allowed to change an already-settled computation.
     assert second.with_choices(lanes=1).cycles == 8

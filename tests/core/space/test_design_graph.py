@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 """A graph of design spaces, stated only in terms of Space.
 
-Calling a family declares a node; ``node.member`` is a reference to one of its
+Calling a Space class declares a node; ``node.member`` is a reference to one of its
 members. Edges are bindings at the call, or assignments to a formal after the
 node is declared (``adder.back = register.q``: forward, around a cycle, or
 built as data), and ``Present`` for whichever source is present. A
@@ -194,11 +194,11 @@ def pipeline(count: int) -> type[Space]:
 
 
 def test_a_pipeline_is_built_as_data_and_its_edges_are_declarations() -> None:
-    family = pipeline(5)
-    point = design_space(family())
+    space_type = pipeline(5)
+    point = design_space(space_type())
     handles = {item.key: item.reference for item in inspection.decisions(point)}
     point = point.with_choices({handles[f"s{i}.growth"]: 1 for i in range(5)})
-    members = cast("Members[int]", getattr(family, "widths"))
+    members = cast("Members[int]", getattr(space_type, "widths"))
     widths = point.query(members)
     assert isinstance(widths, Available)
     assert [(item.node, item.value) for item in widths.value] == [
@@ -405,22 +405,22 @@ class WithPrimitives(Space):
     physical = View(Present(fixed.physical, tuned.physical))
 
 
-@pytest.mark.parametrize("family", (WithChoice, WithPrimitives))
+@pytest.mark.parametrize("space_type", (WithChoice, WithPrimitives))
 def test_a_structural_choice_reduces_to_primitives(
-    family: type[WithChoice] | type[WithPrimitives],
+    space_type: type[WithChoice] | type[WithPrimitives],
 ) -> None:
-    start = design_space(family(base=4))
-    physical = family.physical
-    extra = family.tuned.extra
+    start = design_space(space_type(base=4))
+    physical = space_type.physical
+    extra = space_type.tuned.extra
     assert isinstance(start.query(physical), Unresolved)
-    tuned = start.with_choices({family.choice: "tuned", extra: 2})
+    tuned = start.with_choices({space_type.choice: "tuned", extra: 2})
     assert tuned.query(physical) == Available(6)
     # A candidate-local choice of an inactive candidate is refused, not stored.
-    assert not tuned.try_with_choices({family.choice: "fixed"}).accepted
-    fixed = tuned.with_choices({family.choice: "fixed"}, tuned.tuned.field(Tuned.extra).clear())
+    assert not tuned.try_with_choices({space_type.choice: "fixed"}).accepted
+    fixed = tuned.with_choices({space_type.choice: "fixed"}, tuned.tuned.field(Tuned.extra).clear())
     assert fixed.query(physical) == Available(8)
     assert isinstance(fixed.query(extra), Inapplicable)
-    replayed = selections.restore(design_space(family(base=4)), selections.capture(tuned))
+    replayed = selections.restore(design_space(space_type(base=4)), selections.capture(tuned))
     assert replayed.accepted and replayed.instance.query(physical) == Available(6)
 
 

@@ -149,8 +149,8 @@ def test_a_pipeline_built_as_data_answers_the_same() -> None:
     stages = [Stage(width_in=4), *(Stage() for _ in range(9))]
     for previous, current in zip(stages, stages[1:]):
         current.width_in = previous.width_out
-    family = composite("Pipeline", {f"s{index}": stage for index, stage in enumerate(stages)})
+    space_type = composite("Pipeline", {f"s{index}": stage for index, stage in enumerate(stages)})
     choices = {f"s{index}.growth": 1 for index in range(10)}
-    collapsed = _choices(open_space(family(), collapsed=True), **choices)
-    plain = _choices(open_space(family(), collapsed=False), **choices)
+    collapsed = _choices(open_space(space_type(), collapsed=True), **choices)
+    plain = _choices(open_space(space_type(), collapsed=False), **choices)
     assert answers(collapsed) == answers(plain)

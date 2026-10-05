@@ -128,7 +128,7 @@ class QueryEvidence(Generic[T]):
 
 @dataclass(frozen=True, slots=True)
 class ModelStatistics:
-    """Structural counts for one compiled family, independent of runtime state.
+    """Structural counts for one compiled Space class, independent of runtime state.
 
     Authored declarations count effective members once in every instantiated
     scope (a Decision over nodes is one member), plus each placed node
@@ -171,11 +171,11 @@ def _context(subject: Space | Model[S] | type[Space]) -> tuple[Model[Space], int
     if isinstance(subject, Space):
         current = state(subject)
         return current.model, subject._scope
-    raise RequestError("inspection requires a configuration, a compiled model or a family")
+    raise RequestError("inspection requires a configuration, a compiled model or a Space class")
 
 
 def model(subject: Space | Model[S] | type[Space]) -> Model[Space]:
-    """The compiled model of a configuration, or of a family compiled alone."""
+    """The compiled model of a configuration, or of a Space class compiled alone."""
     return _context(subject)[0]
 
 
@@ -567,7 +567,7 @@ class NodeDeclaration:
     ``frozen`` says why assignment is closed.
     """
 
-    family: type[Space]
+    space_type: type[Space]
     name: str | None
     placement: str | None
     members: tuple[str, ...]
@@ -595,7 +595,9 @@ def declaration(node: object) -> NodeDeclaration:
     if record is None and isinstance(node, NodeDecl):
         record = node
     if record is None:
-        raise RequestError("declaration() takes a node declaration, as returned by a family call")
+        raise RequestError(
+            "declaration() takes a node declaration, as returned by calling a Space class"
+        )
 
     def public(value: object) -> object:
         if isinstance(value, NodeDecl):
@@ -610,10 +612,10 @@ def declaration(node: object) -> NodeDeclaration:
     bindings = {name: public(value) for name, value in record.bindings.items()}
     nested = {path: public(value) for path, value in record.nested.items()}
     return NodeDeclaration(
-        record.family,
+        record.space_type,
         record.name,
         record.placement,
-        tuple(collect_space(record.family).members),
+        tuple(collect_space(record.space_type).members),
         MappingProxyType(bindings),
         MappingProxyType(nested),
         tuple(sorted(unsupplied_formals(record))),

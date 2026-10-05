@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Allocate a family's occurrences: every placed node a scope, every member a node.
+"""Allocate a Space class's occurrences: every placed node a scope, every member a node.
 
 The root scope comes from the root record; scopes are then walked
 breadth-first. A child node, a Decision over nodes' candidates and a fresh
@@ -112,7 +112,7 @@ def allocate(space_type: type[Space], root: NodeDecl | None) -> Table:
 
 
 def _declared_kind(declaration: Declaration) -> NodeKind | None:
-    """The node kind of a family's own member that is neither a formal nor a Decision."""
+    """The node kind of a Space class's own member that is neither a formal nor a Decision."""
     if isinstance(declaration, Const):
         return "const"
     if isinstance(declaration, (Derived, Expr, Supplied)):
@@ -148,38 +148,40 @@ class _Allocation:
         self.override_indices: dict[int, dict[str, dict[str, tuple[str, object, str | None]]]] = {}
         self.consumed: set[tuple[int, str]] = set()
 
-    # -- families -----------------------------------------------------------------------
+    # -- Space classes -------------------------------------------------------------------
 
     def check_recursion(self) -> None:
-        """Reject a family that places itself, before allocating occurrences."""
+        """Reject a Space class that places itself, before allocating occurrences."""
 
         pending = [self.table.space_type]
-        families: dict[type[Space], tuple[type[Space], ...]] = {}
+        children_of: dict[type[Space], tuple[type[Space], ...]] = {}
         cursor = 0
         while cursor < len(pending):
             space_type = pending[cursor]
             cursor += 1
-            if space_type in families:
+            if space_type in children_of:
                 continue
-            effective = self.table.family(space_type)
+            effective = self.table.collected(space_type)
             children: list[type[Space]] = []
             for declaration in effective.members.values():
                 if isinstance(declaration, NodeDecl):
-                    children.append(declaration.family)
+                    children.append(declaration.space_type)
                 elif isinstance(declaration, NodeDecision):
                     children.extend(
-                        record.family
+                        record.space_type
                         for record in declaration.candidates.values()
                         if record is not None
                     )
-            families[space_type] = tuple(children)
-            pending.extend(child for child in children if child not in families)
-        indices = {space_type: index for index, space_type in enumerate(families)}
+            children_of[space_type] = tuple(children)
+            pending.extend(child for child in children if child not in children_of)
+        indices = {space_type: index for index, space_type in enumerate(children_of)}
         structure = tuple(
-            tuple(indices[child] for child in families[space_type]) for space_type in families
+            tuple(indices[child] for child in children_of[space_type]) for space_type in children_of
         )
         try:
-            dependency_order(structure, tuple(family.__qualname__ for family in families))
+            dependency_order(
+                structure, tuple(space_type.__qualname__ for space_type in children_of)
+            )
         except DefinitionError as cause:
             raise DefinitionError("recursive Space placement", findings=cause.findings) from cause
 
@@ -315,7 +317,7 @@ class _Allocation:
             index,
             parent,
             name,
-            self.table.family(space_type),
+            self.table.collected(space_type),
             guard,
             index if root else source_scope,
             record,
@@ -352,7 +354,7 @@ class _Allocation:
         if slot is not None:
             if kind == "behaviour":
                 raise DefinitionError(
-                    f"{slot.provenance.key}: behaviour belongs to the family; subclass it "
+                    f"{slot.provenance.key}: behaviour belongs to the Space class; subclass it "
                     "to change it"
                 )
             binding_kind, supplier, contract = classify(
@@ -445,7 +447,7 @@ class _Allocation:
         keys: Iterable[object],
     ) -> int:
         child = self.new_scope(
-            record.family,
+            record.space_type,
             scope.index,
             member_key(scope.name, name),
             guard,
@@ -559,7 +561,7 @@ class _Allocation:
         for case, record in decision.candidates.items():
             case_key = member_key(key, case)
             if never and record is not None:
-                choice.families[case] = record.family
+                choice.space_types[case] = record.space_type
             if record is None or never:
                 choice.cases.append((case, None))
                 continue
@@ -672,11 +674,11 @@ class _Allocation:
         self.table.provenance[presence] = slot.provenance
         supplier = cast("NodeDecl | Param[object]", slot.supplier)
         if isinstance(supplier, NodeDecl):
-            expected = cast("type[Space]", formal.reference_family())
-            if not issubclass(supplier.family, expected):
+            expected = cast("type[Space]", formal.reference_space_type())
+            if not issubclass(supplier.space_type, expected):
                 raise DefinitionError(
                     f"{key}: expected a {expected.__qualname__} node, got "
-                    f"{supplier.family.__qualname__}{at(supplier.origin)}"
+                    f"{supplier.space_type.__qualname__}{at(supplier.origin)}"
                 )
         elif not isinstance(supplier, Param):
             raise DefinitionError(f"{key}: a reference input takes a node declaration")
@@ -712,7 +714,7 @@ class _Allocation:
 
         A reference names a node placed in that body (a sibling, a candidate)
         or forwards one of that body's own reference inputs. Nothing else is
-        visible: a family reaches an ancestor's node only through its inputs.
+        visible: a Space class reaches an ancestor's node only through its inputs.
         A forwarded input resolves to the node it finally references, so no
         chain of forwarding composites is walked when reading it. The
         forwarding node is a user of that node too, represented by the nodes
@@ -733,8 +735,8 @@ class _Allocation:
                         f"{source.effective.space_type.__qualname__}"
                     )
                 formal = cast(Param[object], draft.effective.members[task.name])
-                expected = cast("type[Space]", formal.reference_family())
-                given = cast("type[Space]", supplier.reference_family())
+                expected = cast("type[Space]", formal.reference_space_type())
+                given = cast("type[Space]", supplier.reference_space_type())
                 if not issubclass(given, expected):
                     raise DefinitionError(
                         f"{key}: forwards {supplier.name}{at(supplier.origin)}, a "
@@ -756,7 +758,7 @@ class _Allocation:
                     raise DefinitionError(
                         f"{key}: references {supplier.describe()}, which is not placed in "
                         f"{source.name or '<root>'}: a reference input names a node placed "
-                        "beside it, or forwards an input of the enclosing family"
+                        "beside it, or forwards an input of the enclosing Space class"
                     )
                 self.table.users.setdefault(target, []).append((task.scope, task.name))
             for alias in self.table.aliases[draft.effective.space_type][task.name]:

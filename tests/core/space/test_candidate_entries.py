@@ -4,7 +4,7 @@
 
 Two cores with disjoint choices share one fact (``width``); the packed core
 also takes a binding of its own (``narrow_weights``). The Decision names each
-candidate once, as a family or a call carrying its own bindings, and supplies
+candidate once, as a Space class or a call carrying its own bindings, and supplies
 the shared bindings to every candidate. An enclosing body pins it by a key or
 narrows it by a Decision over keys, keeping the declared candidates.
 """
@@ -117,7 +117,7 @@ class Unfinished(ProtoKernel):
 
 
 class Narrow(Space):
-    """A family without ``width``: it cannot take the shared binding."""
+    """A Space class without ``width``: it cannot take the shared binding."""
 
     depth: int = Param(default=2)
 
@@ -224,7 +224,7 @@ def test_shared_bindings_named_like_the_decisions_own_arguments_are_refused() ->
     for name in ("values", "domain", "semantics", "name"):
         with pytest.raises(DefinitionError, match=rf"shared bindings \['{name}'\]"):
             Decision({"packed": PackedCore}, **{name: 1})  # type: ignore[call-overload]
-    with pytest.raises(DefinitionError, match="must be a family or a call"):
+    with pytest.raises(DefinitionError, match="must be a Space class or a call"):
         Decision({"packed": 3})  # type: ignore[dict-item]
     with pytest.raises(DefinitionError, match="apply to a Decision over candidate entries"):
         Decision(values=(1, 2), optional=True)  # type: ignore[call-overload]
@@ -403,15 +403,17 @@ def test_a_pinned_or_narrowed_choice_answers_the_same_with_and_without_collapse(
         unit = Unit(width=8)
         unit.compute = Decision(values=("stub",))  # type: ignore[assignment]
 
-    for family, choices in (
+    for space_type, choices in (
         (Unit, {}),
         (Unit, {"compute": "packed", "compute.packed.pe": 2, "compute.packed.simd": 1}),
         (Pinned, {"unit.compute.packed.pe": 4}),
         (Narrowed, {"unit.compute": "stub", "unit.compute.stub.rows": 2}),
     ):
-        root = family(width=8) if family is Unit else family()
+        root = space_type(width=8) if space_type is Unit else space_type()
         collapsed = open_space(root, collapsed=True)
-        plain = open_space(family(width=8) if family is Unit else family(), collapsed=False)
+        plain = open_space(
+            space_type(width=8) if space_type is Unit else space_type(), collapsed=False
+        )
         if choices:
             collapsed, plain = commit(collapsed, dict(choices)), commit(plain, dict(choices))
         assert answers(collapsed) == answers(plain)
@@ -471,13 +473,13 @@ def test_selections_capture_and_restore_by_key_and_refuse_unknown_and_narrowed_c
 
 
 def build_unit(name: str, cores: dict[str, type[ProtoKernel]]) -> type[Space]:
-    """As a graph adapter would: a family built at run time from facts."""
+    """As a graph adapter would: a Space class built at run time from facts."""
     width = Param[int]()
     members: dict[str, object] = {"width": width, "compute": Decision(dict(cores), width=width)}
     return composite(name, members, annotations={"width": int})
 
 
-def test_a_family_declared_at_run_time_has_the_class_bodys_stable_keys() -> None:
+def test_a_space_class_declared_at_run_time_has_the_class_bodys_stable_keys() -> None:
     first = build_unit("UnitA", {"packed": PackedCore, "stub": StubCore})
     assert keys(design_space(first(width=8))) == keys(design_space(Unit(width=8)))  # type: ignore[call-arg]
     point = commit(design_space(first(width=8)), {"compute": "stub", "compute.stub.rows": 2})  # type: ignore[call-arg]

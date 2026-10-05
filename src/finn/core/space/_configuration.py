@@ -1,14 +1,14 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
-"""The Space family type, its node declarations, and bound value accessors.
+"""The Space base class, its node declarations, and bound value accessors.
 
-A ``Space`` object is one of two things. Calling a family, ``Room(area=12)``,
+A ``Space`` object is one of two things. Calling a Space class, ``Room(area=12)``,
 returns a *declaration*: a template with bindings that reads its members as
 symbolic references. ``design_space(node)`` returns a *configuration* (at
 first the whole design space, every choice open) whose members read values.
-Both are typed as the family. Every value-like member follows this rule,
+Both are typed as the Space class. Every value-like member follows this rule,
 views included: a view reads as its accepted value, and its assessment is
-``point.inspect(Family.view)``.
+``point.inspect(Room.view)``.
 """
 
 # Local dispatch imports keep configuration types independent of their operations.
@@ -97,15 +97,15 @@ class BoundDecision(BoundValue[T], Generic[T]):
 
 
 class _When:
-    """Typing surface of the reserved ``when=`` keyword of every family call."""
+    """Typing surface of the reserved ``when=`` keyword of every call on a Space class."""
 
     def __get__(self, instance: object, owner: type[object] | None = None) -> _When:
         if instance is not None:
-            raise AttributeError("when is the reserved guard keyword of a family call")
+            raise AttributeError("when is the reserved guard keyword of a call on a Space class")
         return self
 
     def __set__(self, instance: object, value: ValueRef[bool] | bool | None) -> None:
-        raise AttributeError("when is the reserved guard keyword of a family call")
+        raise AttributeError("when is the reserved guard keyword of a call on a Space class")
 
 
 def _when_field(*, default: None = None, kw_only: bool = True) -> Any:
@@ -120,7 +120,7 @@ def _when_field(*, default: None = None, kw_only: bool = True) -> Any:
 class SpaceMeta(type):
     """Declare nodes, and protect prepared declaration structure.
 
-    ``dataclass_transform`` types each family's call from its annotated
+    ``dataclass_transform`` types each Space class's call from its annotated
     formals and Decisions (``area: int = Param()``) plus the ``when`` guard.
     Param and Decision are deliberately not field specifiers: their call is
     then a default, so every member is optional at the call and a bare
@@ -183,7 +183,11 @@ def _check_configuration_mutation(point: Space, name: str) -> None:
 
 
 class Space(metaclass=SpaceMeta):
-    """A family of design spaces: calling it declares a node, ``design_space`` opens one."""
+    """The base of every Space class.
+
+    A Space class describes a design space: calling it declares a node, and
+    ``design_space`` opens one.
+    """
 
     when: _When = _when_field(default=None, kw_only=True)
     _state: ClassVar[object]
@@ -197,7 +201,8 @@ class Space(metaclass=SpaceMeta):
         path = declared_path(self)
         if path is None or len(path) != 1:
             raise DefinitionError(
-                f"{owner.__qualname__}.{name}: only a node declaration can be placed in a family"
+                f"{owner.__qualname__}.{name}: only a node declaration can be placed in a Space "
+                "class"
             )
         from ._nodes import NodeDecl, place_in_class
 

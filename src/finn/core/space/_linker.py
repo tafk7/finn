@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Link a family into one owned node table, phase by phase.
+"""Link a Space class into one owned node table, phase by phase.
 
 Every declared node becomes a scope; every member a node of the evaluation
 graph. A Decision over nodes becomes a selector decision, one guarded scope

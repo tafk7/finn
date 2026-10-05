@@ -66,10 +66,10 @@ whose ``Port`` it is, beside the channel (``^compute.packed``); a boundary end
 is the root's own pins. Under ``BOUNDARY`` it exports the AXIS bus its
 boundary side presents, if any.
 
-The family refers to itself (``index``) and, through its source's port, is
+The Space class refers to itself (``index``) and, through its source's port, is
 referred to by ``finn.kernels.port`` and ``finn.kernels.memstream``, which
 this module imports: those annotate with ``channels.Channel`` and the Space
-engine resolves the reference when it collects the family.
+engine resolves the reference when it collects the Space class.
 """
 
 from __future__ import annotations

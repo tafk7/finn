@@ -1,13 +1,13 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
-"""Parents override the data of any descendant; behaviour stays the family's.
+"""Parents override the data of any descendant; behaviour stays the Space class's.
 
 Params and Decisions are template fields exposed for customization. Any body
 may assign one of any descendant, at any depth: the outermost assignment wins,
 one body assigning a target twice is a definition error, and the child's own
 constraints and domains still check whatever is supplied. A value pins a
 Decision (its key disappears); another Decision replaces it under the same
-key. A child node may be replaced by a fresh node of its family or a subclass.
+key. A child node may be replaced by a fresh node of its Space class or a subclass.
 Every supplied value records who set it. None of this is about hardware.
 """
 
@@ -180,7 +180,7 @@ def test_a_narrower_decision_keeps_its_key_and_the_declared_domain_still_checks(
     assert narrow.with_choices({Narrow.room.finish: 2}).room.cost == 24
     with pytest.raises(ConfigurationError):
         narrow.with_choices({Narrow.room.finish: 3})
-    # Widening is refused by the family's declared domain, with who supplied the Decision.
+    # Widening is refused by the Space class's declared domain, with who supplied the Decision.
     widened = design_space(Widened())
     assert widened.room.field(Room.finish).candidates() == Available((1, 2))
     report = widened.try_with_choices({Widened.room.finish: 5})
@@ -256,7 +256,7 @@ def test_one_body_assigning_a_target_twice_is_a_definition_error() -> None:
 @pytest.mark.parametrize("member", ["fits", "cost", "costs"])
 def test_behaviour_is_not_overridable(member: str) -> None:
     target = Wing() if member == "costs" else Room()
-    with pytest.raises(DefinitionError, match="behaviour belongs to the family; subclass it"):
+    with pytest.raises(DefinitionError, match="behaviour belongs to the Space class; subclass it"):
         setattr(target, member, 1)
 
     class Budget(Space):
@@ -267,11 +267,11 @@ def test_behaviour_is_not_overridable(member: str) -> None:
             return len(self.claims)
 
     for name in ("claims", "claimed"):
-        with pytest.raises(DefinitionError, match="behaviour belongs to the family"):
+        with pytest.raises(DefinitionError, match="behaviour belongs to the Space class"):
             setattr(Budget(), name, 1)
 
 
-def test_a_child_node_is_replaced_by_a_node_of_its_family_or_a_subclass() -> None:
+def test_a_child_node_is_replaced_by_a_node_of_its_class_or_a_subclass() -> None:
     class Renovated(Space):
         home = House()
         home.wing.kitchen = LargeRoom(area=19)  # replaces House's (and Wing's) settings
