@@ -320,9 +320,9 @@ def test_a_value_input_is_present_when_it_is_supplied() -> None:
     assert supplied.present(Office.rate) is True
     assert supplied.forwarded.present(Rated.rate) is True and supplied.forwarded.charged == 5
     assert design_space(Rated(rate=2)).charged == 2
-    # A source still undecided reads like its value: it raises, or halts the method.
-    with pytest.raises(ValueUnavailableError):
-        omitted.chosen.present(Rated.rate)
+    # Presence before value: a source that applies is present while its value is
+    # undecided, and the undecided value halts the method that reads it.
+    assert omitted.chosen.present(Rated.rate) is True
     assert codes(omitted.chosen.query(Rated.charged)) == {"decision-unassigned"}
     assert omitted.with_choices(level=2).chosen.charged == 2
     # Anything else is neither a node nor a value input.

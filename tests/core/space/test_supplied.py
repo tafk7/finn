@@ -12,16 +12,22 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
+
 from finn.core.space import (
     Available,
     Decision,
+    EvaluationError,
     Inapplicable,
     Param,
+    Rejected,
     Space,
+    ValueUnavailableError,
     View,
     derived,
     design_space,
     inspection,
+    reject,
     supplied,
     view,
 )
@@ -113,3 +119,105 @@ def test_an_unsupplied_input_guard_is_unsupplied_inside_a_method_too() -> None:
             return self.edge.valued
 
     assert design_space(Reader()).has_value is False
+
+
+# Presence before value: present() on a value input answers whether a source
+# applies and never evaluates the source; a refusing source is present, and its
+# refusal surfaces where the value is read.
+
+CALLS: list[str] = []
+
+
+class Refusing(Space):
+    on: bool = Param()
+
+    @view(when=on)
+    def guarded(self) -> int | Rejected:
+        return reject("refused", "the guarded source refuses")
+
+    @view
+    def unguarded(self) -> int | Rejected:
+        return reject("refused", "the unguarded source refuses")
+
+    @derived
+    def loud(self) -> int:
+        CALLS.append("loud")
+        raise RuntimeError("presence evaluated the source")
+
+
+class Reader(Space):
+    x: int = Param(required=False)
+    has_x = supplied(x)
+
+    @derived
+    def present_x(self) -> bool:
+        return self.present(Reader.x)
+
+
+class Refusals(Space):
+    source = Refusing(on=True)
+    guarded = Reader(x=source.guarded)
+    unguarded = Reader(x=source.unguarded)
+    loud = Reader(x=source.loud)
+    absent = Reader()
+
+
+@pytest.mark.parametrize("name", ["guarded", "unguarded"])
+def test_a_refusing_source_is_present_and_refuses_where_read(name: str) -> None:
+    reader = getattr(design_space(Refusals()), name)
+    assert reader.present(Reader.x) is True
+    assert reader.has_x is True and reader.present_x is True
+    with pytest.raises(ValueUnavailableError) as raised:
+        reader.x
+    assert isinstance(raised.value.result, Rejected)
+    assert [finding.code for finding in raised.value.result.findings] == ["refused"]
+
+
+def test_presence_does_not_evaluate_the_source() -> None:
+    CALLS.clear()
+    point = design_space(Refusals())
+    assert point.loud.present(Reader.x) is True
+    assert point.loud.has_x is True and point.loud.present_x is True
+    assert point.absent.present(Reader.x) is False and point.absent.has_x is False
+    assert CALLS == []
+    with pytest.raises(EvaluationError):
+        point.loud.x
+    assert CALLS == ["loud"]
+
+
+class Through(Space):
+    """A value input bound through a selection: present when the chosen candidate
+    has the member, undecided while the choice is."""
+
+    stored = Edge(contents=4)
+    streamed = Edge()
+    chosen = Reader(x=stored.words)
+    nothing = Reader(x=streamed.words)
+
+
+def test_presence_through_a_selection_reads_the_choice_not_the_value() -> None:
+    point = design_space(Through())
+    assert point.nothing.present(Reader.x) is False
+    with pytest.raises(ValueUnavailableError):
+        point.chosen.present(Reader.x)
+    chosen = point.with_choices({Through.stored.source: "memory"})
+    assert chosen.chosen.present(Reader.x) is True and chosen.chosen.x == 8
+
+
+class Echo(Space):
+    x: int = Param(required=False)
+
+    @derived
+    def doubled(self) -> int:
+        return 2 if self.present(Echo.x) else 0
+
+
+def test_a_source_may_read_whether_it_supplies_its_reader() -> None:
+    # Evaluating the source to answer presence would make this a dependency cycle.
+    class Outer(Space):
+        echo = Echo()
+        echo.x = echo.doubled
+
+    point = design_space(Outer())
+    assert point.echo.present(Echo.x) is True
+    assert point.echo.x == 2

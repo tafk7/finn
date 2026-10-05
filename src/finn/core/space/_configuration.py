@@ -281,10 +281,12 @@ class Space(metaclass=SpaceMeta):
         Read like a value: undecided presence raises ``ValueUnavailableError``
         (inside a method it halts the method as unresolved). An unsupplied
         optional reference input is not present. A value input (a ``Param``) is
-        present when it is supplied: given a literal, or bound to a source
-        whose answer is available; an optional input omitted at start, or one
-        that no present source supplies, is not. A supplied input whose source
-        is still undecided raises like the read of its value.
+        present when it is supplied: given a literal, or bound to a source that
+        applies (its guards hold and the choices it is read through select it);
+        an optional input omitted at start, or one that no present source
+        supplies, is not. The value is not evaluated: a source that refuses is
+        present, and its refusal surfaces where the value is read, with its
+        findings. A source whose presence is still undecided raises.
         """
         from .occurrence import present
 
