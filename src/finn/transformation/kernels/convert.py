@@ -10,7 +10,7 @@ capabilities (``SHELLS``). Part and shell names stop here: kernels see
 capabilities only (``finn.kernels.target``).
 
 ``ToKernelOps`` states the build target once, in the one place
-``target(model)`` reads it, the model's ``finn.platform`` metadata, imports the
+``read_target(model)`` reads it, the model's ``finn.platform`` metadata, imports the
 domain at its ``opset_version`` when the model does not import it yet
 (inserting a node never raises a model's import), and rewrites each node it
 can bind:

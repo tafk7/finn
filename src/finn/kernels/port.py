@@ -227,7 +227,9 @@ class AxiStreamPort(Port):
         """What the port presents of its channel's tensor: its schedule's projection, or given."""
         schedule, given = self.schedule, self.sequence
         if (schedule is None) == (given is None):
-            return reject("port-presentation", f"{self.name}: a schedule or a sequence, not both")
+            return reject(
+                "port-presentation", f"{self.name}: exactly one of a schedule or a sequence"
+            )
         if given is not None:
             return given
         assert schedule is not None

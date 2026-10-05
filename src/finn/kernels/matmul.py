@@ -221,7 +221,7 @@ class MatMulKernel(Kernel):
         low, high = ordinary_integer_bounds(self.weights_dtype)
         if not low <= least <= greatest <= high:
             return reject(
-                "memstream-values",
+                "matmul-weights",
                 f"every value must be an integer admitted by {self.weights_dtype.name}",
             )
         element = ScalarEncoding.admit(self.weights_dtype, (least, greatest))

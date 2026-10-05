@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The platform a KernelOp binds: its model's target (``target(model).platform``).
+"""The platform a KernelOp binds: its model's target (``read_target(model).platform``).
 
 The node roots bind it to their kernels and to a stream with a source, so a value
 case that requires a capability (``requires``) is refused, by name, on a device

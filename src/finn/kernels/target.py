@@ -8,7 +8,7 @@ them and of the clock period the kernels must meet; ``Target`` adds what the
 flow states beside it, the part. Which part and shell have which capabilities
 is the flow's (``finn.transformation.kernels.resolve_target``); the graph
 states the result (``finn.platform``, read by
-``finn.custom_op.kernels.base.target``).
+``finn.custom_op.kernels.base.read_target``).
 """
 
 from __future__ import annotations

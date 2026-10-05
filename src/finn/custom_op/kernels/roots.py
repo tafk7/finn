@@ -18,7 +18,7 @@ and stores them; weights on a graph tensor arrive on the channel like any edge,
 and it has no source. Nothing is pinned.
 
 The platform is a fact too: the target's capabilities and its clock period
-(``target(model)``), bound
+(``read_target(model)``), bound
 to the kernels and to every channel, so the requirements of their value cases
 (``requires``) read the device the model is built for. The DSP block is
 the platform's (``platform.dsp``), which the compute cores read.

@@ -28,7 +28,7 @@ owns and the flow reads (InsertIODMA, ``get_driver_shapes``). They are read from
 the partition root's boundary channels where the boundary presents them
 (``boundary_facts``), and PackagePartition writes them (``write_boundary_facts``).
 
-The part and the clock period are the model's build target (``target(model)``,
+The part and the clock period are the model's build target (``read_target(model)``,
 ``finn.platform``), which a partition body carries from the graph it was cut from.
 
 The partition's choices are its nodes' (D8): the root is replayed from them, a
@@ -51,7 +51,7 @@ from typing import TYPE_CHECKING, Any
 from qonnx.transformation.base import Transformation
 
 from finn import resources
-from finn.custom_op.kernels.base import KernelOpError, datatype, shape, target
+from finn.custom_op.kernels.base import KernelOpError, datatype, read_target, shape
 from finn.custom_op.kernels.partition import member, partition_root
 from finn.kernels.artifacts.build import emit_module
 from finn.kernels.artifacts.ipxact import interface_names, package_tcl, vlnv
@@ -161,7 +161,7 @@ class PackagePartition(Transformation):  # type: ignore[misc]
         return point.module
 
     def apply(self, model: ModelWrapper) -> tuple[ModelWrapper, bool]:
-        built = target(model)
+        built = read_target(model)
         point, boundary = configured_root(model, self.ip_name)
         module = point.module
         project = Path(

@@ -187,7 +187,7 @@ def test_the_stored_memory_needs_its_own_choices_and_refuses_bad_weights():
     # Weights outside their type are refused where MatMul states their range.
     refused = base(weights=((4,) * 4,) * 4).matmul.query(MatMulKernel.weight_tensor)
     assert isinstance(refused, Rejected)
-    assert keys(refused) == {"memstream-values"}
+    assert keys(refused) == {"matmul-weights"}
     assert owners(refused) == {"matmul.weight_tensor"}
     # A shape error is refused by the memory that packs them.
     wrong = configured(base(weights=((0,),)), style="auto").query(Kernel.module)
