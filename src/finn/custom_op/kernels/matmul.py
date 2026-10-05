@@ -91,7 +91,7 @@ class MatMul(KernelOp):
         leading = shape(self.model(), self.onnx_node.input[0], self.label)[:-1]
         return {self.onnx_node.output[0]: ((*leading, result.shape[-1]), result.element.dtype)}
 
-    def owned_streams(self) -> dict[str, Channel]:
+    def owned_channels(self) -> dict[str, Channel]:
         if self.facts().root is not StoredMatMulNode:
             return {}
         base: Any = self.base()
@@ -103,16 +103,16 @@ class MatMul(KernelOp):
             )
         }
 
-    def place(self, streams: Mapping[str, Channel]) -> tuple[Kernel, dict[str, str]]:
+    def place(self, channels: Mapping[str, Channel]) -> tuple[Kernel, dict[str, str]]:
         facts = self.facts()
         formals: dict[str, Any] = facts.formals()
         del formals["x_tensor"]
         a, b = self.onnx_node.input
         kernel = MatMulKernel(
             **formals,
-            x_stream=streams[a],
-            w_stream=streams[b],
-            y_stream=streams[self.onnx_node.output[0]],
+            x_channel=channels[a],
+            w_channel=channels[b],
+            y_channel=channels[self.onnx_node.output[0]],
         )
         return kernel, {"x": a, "w": b}
 

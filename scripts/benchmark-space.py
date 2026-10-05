@@ -579,9 +579,9 @@ def kernel_fixtures(api):
         {
             **dotp_streams,
             "compute": PackedDotpKernel(
-                x_stream=dotp_streams["x"],
-                w_stream=dotp_streams["w"],
-                y_stream=dotp_streams["y"],
+                x_channel=dotp_streams["x"],
+                w_channel=dotp_streams["w"],
+                y_channel=dotp_streams["y"],
                 result_dtype=int8,
                 platform=platform,
             ),
@@ -606,9 +606,9 @@ def kernel_fixtures(api):
                 activation_dtype=int3,
                 weights_dtype=int3,
                 platform=platform,
-                x_stream=matmul_streams["x"],
-                w_stream=matmul_streams["w"],
-                y_stream=matmul_streams["y"],
+                x_channel=matmul_streams["x"],
+                w_channel=matmul_streams["w"],
+                y_channel=matmul_streams["y"],
             ),
         },
     )

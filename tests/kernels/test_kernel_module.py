@@ -43,14 +43,14 @@ class Probe(Kernel):
     id = "test.probe"
     rtl_module = "probe"
 
-    stream: Channel = Param(required=False)
+    channel: Channel = Param(required=False)
     hold_mode: bool = Param(default=True)
     port_clock: str = Param(default="ap_clk")
 
     x = AxiStreamPort(
         name="s_axis",
         endpoint=Endpoint.TARGET,
-        stream=stream,
+        channel=channel,
         sequence=BeatSequence(vector_major((4,), 1)),
         clock=port_clock,
     )
@@ -72,7 +72,7 @@ class Probe(Kernel):
 def probe(**facts: object) -> Probe:
     class Placed(Space):
         edge = Channel(tensor=TENSOR, port="in0_V", platform=FULL_DSP48E2)
-        kernel = Probe(stream=edge, **facts)  # type: ignore[arg-type]
+        kernel = Probe(channel=edge, **facts)  # type: ignore[arg-type]
 
     return design_space(Placed()).kernel
 

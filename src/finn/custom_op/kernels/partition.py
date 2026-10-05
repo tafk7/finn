@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The partition root: one Kernel of a set of KernelOp nodes, its streams the graph's tensors.
+"""The partition root: one Kernel of a set of KernelOp nodes, its channels the graph's tensors.
 
 ``partition_root(model, nodes)`` builds, and changes no graph:
 
@@ -11,7 +11,7 @@
   (D6), its platform the model's target's. Only the subgraph's ONNX inputs and
   outputs are boundaries, named by the shell's convention ``s_axis_<i>`` and
   ``m_axis_<i>`` (D4): a channel refuses a boundary no port names
-  (``stream-boundary``);
+  (``channel-boundary``);
 - **kernels**, one per node, from its facts, the graph's pins as keywords;
 - **replay**: each node's kernel choices, then the edge choices (an edge's
   adapter selector is forced, never persisted); an edge choice the current
@@ -27,7 +27,7 @@
   A choice a node holds under an output port whose channel a KernelOp now
   consumes is stale, dropped and reported.
 
-Members are named as the graph: streams by tensor and kernels by node
+Members are named as the graph: channels by tensor and kernels by node
 (``\\W`` as ``_``); two members of one name (a node and a tensor, or two nodes) are
 refused, not renamed.
 """
@@ -66,7 +66,7 @@ KERNEL_OPS = "finn.custom_op.kernels"
 
 
 class Partition(Kernel):
-    """A partition's hardware: one stream per ONNX tensor, one kernel per node."""
+    """A partition's hardware: one channel per ONNX tensor, one kernel per node."""
 
     id = "finn.custom_op.kernels.partition"
     version = 1
@@ -120,7 +120,7 @@ def _handed_on(model: ModelWrapper, nodes: list[NodeProto]) -> set[str]:
     return {tensor for node in nodes for tensor in node.output if tensor in consumed}
 
 
-def _streams(
+def _channels(
     model: ModelWrapper,
     nodes: list[NodeProto],
     ops: list[KernelOp],
@@ -132,27 +132,27 @@ def _streams(
     the boundary, the parameter channels it owns, its outputs. An output handed on to a
     KernelOp outside is pinned ``direct``: its FIFO, if any, is the consumer's."""
     platform = target(model).platform
-    parameters = {tensor for streams in owned for tensor in streams}
-    streams: dict[str, Channel] = {}
+    parameters = {tensor for channels in owned for tensor in channels}
+    channels: dict[str, Channel] = {}
 
     def declare(tensor: str, label: str) -> None:
-        if tensor in streams:
+        if tensor in channels:
             return
         dims = rows(shape(model, tensor, label))
         carried = Tensor(dims, ScalarEncoding(datatype(model, tensor, label)))
         port: dict[str, Any] = {"port": ports[tensor]} if tensor in ports else {}
         if tensor in handed_on:
             port["transport"] = "direct"
-        streams[tensor] = Channel(tensor=carried, platform=platform, **port)
+        channels[tensor] = Channel(tensor=carried, platform=platform, **port)
 
-    for node, op, parameter_streams in zip(nodes, ops, owned):
+    for node, op, parameter_channels in zip(nodes, ops, owned):
         for tensor in node.input:
             if tensor not in parameters and model.get_initializer(tensor) is None:
                 declare(tensor, op.label)
-        streams |= parameter_streams
+        channels |= parameter_channels
         for tensor in node.output:
             declare(tensor, op.label)
-    return streams
+    return channels
 
 
 @dataclass
@@ -171,21 +171,21 @@ class _Placed:
 def _place(
     nodes: list[NodeProto],
     ops: list[KernelOp],
-    streams: Mapping[str, Channel],
+    channels: Mapping[str, Channel],
     produced: set[str],
 ) -> _Placed:
-    """Each node's kernel on ``streams``, and its choices as root keys: a kernel's under
+    """Each node's kernel on ``channels``, and its choices as root keys: a kernel's under
     the kernel's member, an input or owned channel's under the channel's, and an output's
     under the channel's where its node is the producer that owns it (``produced``: graph
     outputs no KernelOp consumes)."""
     placed = _Placed({}, {}, {}, {}, [])
-    stream_members = {member(tensor) for tensor in streams}
+    channel_members = {member(tensor) for tensor in channels}
     for node, op in zip(nodes, ops):
         kernel = member(node.name)
-        if kernel in stream_members or kernel in placed.kernels:
-            other = "a tensor" if kernel in stream_members else "another node"
+        if kernel in channel_members or kernel in placed.kernels:
+            other = "a tensor" if kernel in channel_members else "another node"
             raise KernelOpError(f"{node.name}: a node and {other} are both named {kernel}")
-        placed.kernels[kernel], by_port = op.place(streams)
+        placed.kernels[kernel], by_port = op.place(channels)
         by_port |= {
             port: tensor for port, tensor in zip(op.outputs, node.output) if tensor in produced
         }
@@ -230,14 +230,14 @@ def partition_root(
     for node, op in zip(nodes, ops):
         if not isinstance(op, KernelOp):
             raise KernelOpError(f"{node.name}: a partition root places KernelOps only")
-    owned = [op.owned_streams() for op in ops]
-    ports = _boundary(model, nodes, {tensor for streams in owned for tensor in streams})
+    owned = [op.owned_channels() for op in ops]
+    ports = _boundary(model, nodes, {tensor for channels in owned for tensor in channels})
     handed_on = _handed_on(model, nodes)
-    streams = _streams(model, nodes, ops, owned, ports, handed_on)
+    channels = _channels(model, nodes, ops, owned, ports, handed_on)
     outputs = {tensor for node in nodes for tensor in node.output if tensor in ports}
-    placed = _place(nodes, ops, streams, outputs - handed_on)
+    placed = _place(nodes, ops, channels, outputs - handed_on)
 
-    members = {member(tensor): stream for tensor, stream in streams.items()} | placed.kernels
+    members = {member(tensor): channel for tensor, channel in channels.items()} | placed.kernels
     root: Any = composite(name, members, base=Partition)
     point = design_space(root())
     if placed.kernel_choices:

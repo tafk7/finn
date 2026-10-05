@@ -61,8 +61,8 @@ class TransposeKernel(Kernel):
     version = 1
     rtl_module = "inner_shuffle"
 
-    input_stream: Channel = Param(required=False)
-    output_stream: Channel = Param(required=False)
+    input_channel: Channel = Param(required=False)
+    output_channel: Channel = Param(required=False)
     ram_style: str = Decision(values=("auto", "distributed", "block", "ultra"))
 
     rows = extent_of(i)  # I
@@ -78,7 +78,7 @@ class TransposeKernel(Kernel):
     @derived
     def indices(self) -> tuple[Index, ...]:
         """The input's axes: any leading ones (a sequence of matrices), then ``i`` and ``j``."""
-        rank = len(self.input_stream.tensor.shape)
+        rank = len(self.input_channel.tensor.shape)
         return (*(Index(f"a{axis}") for axis in range(rank - 2)), i, j)
 
     @derived
@@ -95,12 +95,12 @@ class TransposeKernel(Kernel):
     @derived(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
     def dtype(self) -> QONNXDataType:
         """The element it moves: the input's, unchanged."""
-        return self.input_stream.tensor.element.dtype
+        return self.input_channel.tensor.element.dtype
 
     input = AxiStreamPort(
         name="input",
         endpoint=Endpoint.TARGET,
-        stream=input_stream,
+        channel=input_channel,
         schedule=rows_in,
         index=indices,
         lanes=(j,),
@@ -112,7 +112,7 @@ class TransposeKernel(Kernel):
     output = AxiStreamPort(
         name="output",
         endpoint=Endpoint.INITIATOR,
-        stream=output_stream,
+        channel=output_channel,
         schedule=columns_out,
         index=indices,
         lanes=(i,),
@@ -128,7 +128,7 @@ class TransposeKernel(Kernel):
 
     def parameters(self) -> Mapping[str, int | str]:
         return {
-            "BITS": self.input_stream.tensor.element.bits,
+            "BITS": self.input_channel.tensor.element.bits,
             "I": self.rows,
             "J": self.cols,
             "RAM_STYLE": f'"{self.ram_style}"',

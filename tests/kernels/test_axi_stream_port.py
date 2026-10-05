@@ -49,8 +49,8 @@ class Pool(Kernel):
 
     id = "test.accpool"
     rtl_module = "accpool_axi"
-    x_stream: Channel = Param(required=False)
-    y_stream: Channel = Param(required=False)
+    x_channel: Channel = Param(required=False)
+    y_channel: Channel = Param(required=False)
 
     channels = extent_of(c)
     pe: int = Decision(domain=divisors_of(channels))
@@ -66,7 +66,7 @@ class Pool(Kernel):
     x = AxiStreamPort(
         name="s_axis_input",
         endpoint=Endpoint.TARGET,
-        stream=x_stream,
+        channel=x_channel,
         schedule=schedule,
         factors=factors,
         index=(b, s, c),
@@ -75,7 +75,7 @@ class Pool(Kernel):
     y = AxiStreamPort(
         name="m_axis_output",
         endpoint=Endpoint.INITIATOR,
-        stream=y_stream,
+        channel=y_channel,
         schedule=schedule,
         factors=factors,
         index=(b, c),
@@ -98,7 +98,7 @@ def pool(x_shape: tuple[int, ...] = (1, 4, 8), y_shape: tuple[int, ...] = (1, 8)
     class Placed(Space):
         x = stream(x_shape, "INT4", "in0_V")
         y = stream(y_shape, "INT8", "out0_V")
-        kernel = Pool(x_stream=x, y_stream=y)
+        kernel = Pool(x_channel=x, y_channel=y)
 
     return design_space(Placed())
 
@@ -128,7 +128,7 @@ def test_ports_that_disagree_on_an_extent_are_refused() -> None:
 def test_an_idle_port_carries_the_lanes_of_its_folding_factors() -> None:
     class Half(Space):
         x = stream((1, 4, 8), "INT4", "in0_V")
-        kernel = Pool(x_stream=x)
+        kernel = Pool(x_channel=x)
 
     point = commit(design_space(Half()), {"kernel.pe": 2})
     assert point.kernel.y.idle and point.kernel.y.lane_count == 2
@@ -150,7 +150,7 @@ def test_extent_of_is_a_named_member() -> None:
     class Placed(Space):
         x = stream((1, 4, 8), "INT4", "in0_V")
         y = stream((1, 8), "INT8", "out0_V")
-        kernel = Inline(x_stream=x, y_stream=y)
+        kernel = Inline(x_channel=x, y_channel=y)
 
     with pytest.raises(DefinitionError, match="is not a member of this scope"):
         design_space(Placed())
@@ -162,7 +162,7 @@ def test_a_port_presents_a_schedule_or_a_sequence_not_both() -> None:
         x = AxiStreamPort(
             name="s_axis_input",
             endpoint=Endpoint.TARGET,
-            stream=Pool.x_stream,
+            channel=Pool.x_channel,
             schedule=Pool.schedule,
             sequence=BeatSequence(vector_major((1, 4, 8), 8)),
             index=(b, s, c),
@@ -172,7 +172,7 @@ def test_a_port_presents_a_schedule_or_a_sequence_not_both() -> None:
     class Placed(Space):
         x = stream((1, 4, 8), "INT4", "in0_V")
         y = stream((1, 8), "INT8", "out0_V")
-        kernel = Both(x_stream=x, y_stream=y)
+        kernel = Both(x_channel=x, y_channel=y)
 
     point = commit(design_space(Placed()), {"kernel.pe": 8})
     ((code, message),) = codes(point.kernel.x.query(AxiStreamPort.presented))
@@ -184,13 +184,13 @@ def test_a_stated_element_is_the_ports_and_its_stream_refuses_another() -> None:
     class Stated(Space):
         x = stream((1, 4, 8), "INT4", "in0_V")
         y = stream((1, 8), "INT8", "out0_V")
-        kernel = Pool(x_stream=x, y_stream=y)
+        kernel = Pool(x_channel=x, y_channel=y)
         kernel.y.dtype = DataType["INT9"]  # a parent may pin what the producer states
 
     point = commit(with_direct_transports(design_space(Stated())), {"kernel.pe": 4})
     assert point.kernel.y.element == ScalarEncoding(DataType["INT9"])
     refused = point.y.query(Channel.netlist)
-    assert "stream-tensor" in {code for code, _ in codes(refused)}
+    assert "channel-tensor" in {code for code, _ in codes(refused)}
 
 
 def test_dotp_binds_from_its_ports_through_the_dense_view() -> None:
@@ -203,9 +203,9 @@ def test_dotp_binds_from_its_ports_through_the_dense_view() -> None:
             reshape_activations=True,
             platform=FULL_DSP58,
             result_dtype=DataType["INT9"],
-            x_stream=x,
-            w_stream=w,
-            y_stream=y,
+            x_channel=x,
+            w_channel=w,
+            y_channel=y,
         )
 
     point = design_space(Placed()).compute
@@ -217,9 +217,9 @@ def test_dotp_binds_from_its_ports_through_the_dense_view() -> None:
         compute = PackedDotpKernel(
             platform=FULL_DSP58,
             result_dtype=DataType["INT9"],
-            x_stream=x,
-            w_stream=Placed.w,
-            y_stream=Placed.y,
+            x_channel=x,
+            w_channel=Placed.w,
+            y_channel=Placed.y,
         )
 
     wide = design_space(Wide()).compute
@@ -234,7 +234,7 @@ def test_a_producer_states_its_element() -> None:
         y = AxiStreamPort(
             name="m_axis_output",
             endpoint=Endpoint.INITIATOR,
-            stream=Pool.y_stream,
+            channel=Pool.y_channel,
             schedule=Pool.schedule,
             index=(b, c),
             lanes=(c,),
@@ -244,7 +244,7 @@ def test_a_producer_states_its_element() -> None:
     class Placed(Space):
         x = stream((1, 4, 8), "INT4", "in0_V")
         y = stream((1, 8), "INT8", "out0_V")
-        kernel = Silent(x_stream=x, y_stream=y)
+        kernel = Silent(x_channel=x, y_channel=y)
 
     point = commit(design_space(Placed()), {"kernel.pe": 4})
     ((code, message),) = codes(point.kernel.y.query(AxiStreamPort.element))

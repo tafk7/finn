@@ -52,14 +52,14 @@ class Constants(Root):
         dtype=DataType["INT4"],
         form=PRODUCED,
         contents=(1, 2, 3, 4),
-        output_stream=first,
+        output_channel=first,
         platform=FULL_DSP48E2,
     )
     second_source = MemStreamKernel(
         dtype=DataType["INT4"],
         form=PRODUCED,
         contents=(5, 6, 7, -8),
-        output_stream=second,
+        output_channel=second,
         platform=FULL_DSP48E2,
     )
 
@@ -93,7 +93,7 @@ def test_each_stream_owns_its_refusal_and_independent_refusals_are_all_visible()
     refusal = assessment.accepted_result
     assert isinstance(refusal, Rejected)
     assert {f.owner for f in refusal.findings} == {"first.well_formed", "second.well_formed"}
-    assert {f.code for f in refusal.findings} == {"stream-tensor"}
+    assert {f.code for f in refusal.findings} == {"channel-tensor"}
     # One stream refusing leaves the other stream's netlist accepted.
     mixed = constants(first=wide)
     assert isinstance(mixed.first.query(Channel.netlist), Rejected)
@@ -130,7 +130,7 @@ def test_a_stream_waits_for_its_own_endpoints_only():
     assert isinstance(point.query(Kernel.module), Unresolved)
     # A stream sees its users by declaration name and by the input that references it.
     (end,) = point.first.users
-    assert (end.node, end.member) == ("first_source.output", "stream")
+    assert (end.node, end.member) == ("first_source.output", "channel")
     assert end.value.transport.endpoint is Endpoint.INITIATOR  # the source produces
     ends = point.first.endpoints
     assert (ends.source_owner, ends.sink_owner) == ("first_source.output", None)
@@ -148,7 +148,7 @@ def test_boundary_ports_are_axis_and_byte_aligned():
 class Replaying(Space):
     """A consumer reading each two-beat group of its input three times, framed."""
 
-    input_stream: Channel = Param()
+    input_channel: Channel = Param()
 
     @view(semantics=STREAM_CONTRACT)
     def port(self) -> StreamContract:
@@ -157,13 +157,13 @@ class Replaying(Space):
         form = vector_major((2, 4), 2).replayed(3, inner_beats=2)
         return StreamContract(transport, INT4, form, markers={"s_axis_tlast": LevelEnd(2)})
 
-    exports = {PORT: {input_stream: port}}
+    exports = {PORT: {input_channel: port}}
 
 
 def test_a_boundary_presents_its_internal_end_without_the_replay_the_receiver_realizes():
     class Receiver(Space):
         edge = Channel(tensor=Tensor((2, 4), INT4), port="in0_V", platform=FULL_DSP48E2)
-        reader = Replaying(input_stream=edge)
+        reader = Replaying(input_channel=edge)
 
     ends = design_space(Receiver()).edge.endpoints
     assert ends.source_owner is None and ends.sink_owner == "reader"
@@ -181,22 +181,22 @@ def test_two_producers_on_one_stream_are_refused_by_the_stream():
             dtype=DataType["INT4"],
             form=PRODUCED,
             contents=(1, 2, 3, 4),
-            output_stream=shared,
+            output_channel=shared,
             platform=FULL_DSP48E2,
         )
         b = MemStreamKernel(
             dtype=DataType["INT4"],
             form=PRODUCED,
             contents=(1, 2, 3, 4),
-            output_stream=shared,
+            output_channel=shared,
             platform=FULL_DSP48E2,
         )
 
     point = with_direct_transports(design_space(Clash(tensor=VECTOR)))
     refused = point.shared.query(Channel.netlist)
     assert isinstance(refused, Rejected)
-    assert {f.code for f in refused.findings} == {"stream-users"}
-    assert "a.output.stream, b.output.stream" in refused.findings[0].message
+    assert {f.code for f in refused.findings} == {"channel-users"}
+    assert "a.output.channel, b.output.channel" in refused.findings[0].message
 
 
 def test_a_boundary_stream_needs_its_port_name():
@@ -207,7 +207,7 @@ def test_a_boundary_stream_needs_its_port_name():
             dtype=DataType["INT4"],
             form=PRODUCED,
             contents=(1, 2, 3, 4),
-            output_stream=out,
+            output_channel=out,
             platform=FULL_DSP48E2,
         )
 
@@ -215,7 +215,7 @@ def test_a_boundary_stream_needs_its_port_name():
         Channel.netlist
     )
     assert isinstance(refused, Rejected)
-    assert {(f.code, f.owner) for f in refused.findings} == {("stream-boundary", "out.endpoints")}
+    assert {(f.code, f.owner) for f in refused.findings} == {("channel-boundary", "out.endpoints")}
 
 
 # -- the anchoring rule: a stream's tensor must not depend on its users ----------------
@@ -235,7 +235,7 @@ class ProducerTensorStream(Space):
 class TensorReadingProducer(Space):
     """Builds its port contract from the stream's tensor, as every kernel does."""
 
-    output_stream: ProducerTensorStream = Param()
+    output_channel: ProducerTensorStream = Param()
     source = MemStreamKernel(
         platform=FULL_DSP48E2, dtype=DataType["INT4"], form=PRODUCED, contents=(1, 2, 3, 4)
     )
@@ -243,16 +243,16 @@ class TensorReadingProducer(Space):
     @view(semantics=STREAM_CONTRACT)
     def port(self) -> StreamContract:
         contract = self.source.output.contract
-        tensor = self.output_stream.tensor  # the stream's tensor shapes the port
+        tensor = self.output_channel.tensor  # the stream's tensor shapes the port
         return StreamContract(contract.transport, tensor.element, vector_major(tensor.shape, 2))
 
-    exports = {PORT: {output_stream: port}}
+    exports = {PORT: {output_channel: port}}
 
 
 def test_a_tensor_derived_from_its_users_is_refused_with_the_cycle_path():
     class Unanchored(Space):
         edge = ProducerTensorStream()
-        producer = TensorReadingProducer(output_stream=edge)
+        producer = TensorReadingProducer(output_channel=edge)
 
     point = design_space(Unanchored())
     with pytest.raises(EvaluationError, match="dependency cycle") as caught:

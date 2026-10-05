@@ -63,9 +63,9 @@ class EltwiseKernel(Kernel):
     lhs_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
     rhs_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
     # The streams it sits on, when a parent places it.
-    lhs_stream: Channel = Param(required=False)
-    rhs_stream: Channel = Param(required=False)
-    result_stream: Channel = Param(required=False)
+    lhs_channel: Channel = Param(required=False)
+    rhs_channel: Channel = Param(required=False)
+    result_channel: Channel = Param(required=False)
 
     @derived(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
     def result_dtype(self) -> QONNXDataType:
@@ -131,13 +131,13 @@ class EltwiseKernel(Kernel):
     @derived
     def indices(self) -> tuple[Index, ...]:
         """lhs's axes, ``c`` innermost; the result keeps lhs's shape."""
-        rank = len(self.lhs_stream.tensor.shape)
+        rank = len(self.lhs_channel.tensor.shape)
         return (*(Index(f"a{axis}") for axis in range(rank - 1)), c)
 
     @derived
     def rhs_indices(self) -> tuple[Index, ...]:
         """rhs reads the trailing axes of lhs: a broadcast it presents once per element it meets."""
-        indices, rank = self.indices, len(self.rhs_stream.tensor.shape)
+        indices, rank = self.indices, len(self.rhs_channel.tensor.shape)
         return indices[max(0, len(indices) - rank) :]  # a longer rhs is refused by rank
 
     @derived
@@ -152,7 +152,7 @@ class EltwiseKernel(Kernel):
     lhs = AxiStreamPort(
         name="lhs",
         endpoint=Endpoint.TARGET,
-        stream=lhs_stream,
+        channel=lhs_channel,
         schedule=schedule,
         factors=factors,
         index=indices,
@@ -165,7 +165,7 @@ class EltwiseKernel(Kernel):
     rhs = AxiStreamPort(
         name="rhs",
         endpoint=Endpoint.TARGET,
-        stream=rhs_stream,
+        channel=rhs_channel,
         schedule=schedule,
         factors=factors,
         index=rhs_indices,
@@ -178,7 +178,7 @@ class EltwiseKernel(Kernel):
     result = AxiStreamPort(
         name="result",
         endpoint=Endpoint.INITIATOR,
-        stream=result_stream,
+        channel=result_channel,
         schedule=schedule,
         factors=factors,
         index=indices,

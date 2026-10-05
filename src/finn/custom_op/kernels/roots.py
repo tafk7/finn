@@ -88,9 +88,9 @@ class StoredMatMulNode(MatMulNode):
         weights_dtype=MatMulNode.weights_dtype,
         platform=MatMulNode.platform,
         weights=weights,
-        x_stream=MatMulNode.x,
-        w_stream=w,
-        y_stream=MatMulNode.y,
+        x_channel=MatMulNode.x,
+        w_channel=w,
+        y_channel=MatMulNode.y,
     )
     # The stream's value is MatMul's view of it; whether it has one (its source
     # applies) is the view's guard, the weights' presence.
@@ -109,9 +109,9 @@ class StreamedMatMulNode(MatMulNode):
         activation_dtype=MatMulNode.activation_dtype,
         weights_dtype=MatMulNode.weights_dtype,
         platform=MatMulNode.platform,
-        x_stream=MatMulNode.x,
-        w_stream=w,
-        y_stream=MatMulNode.y,
+        x_channel=MatMulNode.x,
+        w_channel=w,
+        y_channel=MatMulNode.y,
     )
 
 
@@ -142,8 +142,8 @@ class ThresholdingNode(Kernel):
         thresholds=thresholds,
         bias=bias,
         platform=platform,
-        input_stream=x,
-        output_stream=y,
+        input_channel=x,
+        output_channel=y,
     )
 
 

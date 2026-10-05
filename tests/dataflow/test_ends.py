@@ -4,7 +4,7 @@
 """A channel's ends traverse its tensor: each end its shape, the elements in order.
 
 The plan between the ends is ``test_plan``'s; a channel's refusals
-(``stream-tensor``, ``stream-plan``) are ``tests/kernels``'.
+(``channel-tensor``, ``channel-plan``) are ``tests/kernels``'.
 """
 
 from __future__ import annotations

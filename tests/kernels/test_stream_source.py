@@ -257,34 +257,39 @@ def test_the_sources_choices_round_trip_through_an_empty_root():
         selections.restore(point, saved)
 
 
-def test_several_weight_sets_without_known_weights_leave_the_set_stream_unused():
+def test_several_weight_sets_without_known_weights_leave_the_set_channel_unused():
     # No value, no source: nothing consumes the set index, which refuses itself.
     point = configured(base(weight_sets=2))
     answer = point.query(Kernel.module)
     assert isinstance(answer, Rejected)
-    assert "stream-unused" in keys(answer)
+    assert "channel-unused" in keys(answer)
 
 
 def test_a_non_viable_source_is_refused_and_committed_is_refused_by_its_candidate():
-    # Several sets need the set stream; a memory without one refuses itself.
+    # Several sets need the set channel; a memory without one refuses itself.
     class Unindexed(Root):
         x = Channel(tensor=Tensor((3, 4), INT3), port="in0_V", platform=FULL_DSP48E2)
         w = Channel(tensor=Tensor((4, 4), INT3), sets=2, platform=FULL_DSP48E2)
         y = Channel(tensor=Tensor((3, 4), INT8), port="out0_V", platform=FULL_DSP48E2)
         matmul = MatMulKernel(
-            **FACTS, weights=(WEIGHTS, WEIGHTS), weight_sets=2, x_stream=x, w_stream=w, y_stream=y
+            **FACTS,
+            weights=(WEIGHTS, WEIGHTS),
+            weight_sets=2,
+            x_channel=x,
+            w_channel=w,
+            y_channel=y,
         )
         w.contents = matmul.weight_values
 
     point = design_space(Unindexed())
     answer = point.w.query(Channel.source)
     assert isinstance(answer, Rejected) and keys(answer) == {"decision-no-viable-case"}
-    assert "memstream-set-stream" in answer.findings[0].message
+    assert "memstream-set-channel" in answer.findings[0].message
     # Committed on purpose, the case is accepted (committing never checks a kernel
     # case's admission), and the candidate then refuses the configuration.
     chosen = commit(point, {"w.source": "memstream"})
     refusal = inspection.admission(chosen.w.source)
-    assert isinstance(refusal, Rejected) and "memstream-set-stream" in keys(refusal)
+    assert isinstance(refusal, Rejected) and "memstream-set-channel" in keys(refusal)
 
 
 def placed_with(platform: Platform):
@@ -294,7 +299,7 @@ def placed_with(platform: Platform):
         x = Channel(tensor=Tensor((3, 4), INT3), port="in0_V", platform=platform)
         w = Channel(tensor=Tensor((4, 4), INT3), platform=platform)
         y = Channel(tensor=Tensor((3, 4), INT8), port="out0_V", platform=platform)
-        matmul = MatMulKernel(**FACTS, weights=WEIGHTS, x_stream=x, w_stream=w, y_stream=y)
+        matmul = MatMulKernel(**FACTS, weights=WEIGHTS, x_channel=x, w_channel=w, y_channel=y)
         w.contents = matmul.weight_values
 
     return design_space(OnPlatform())
@@ -327,10 +332,10 @@ def test_a_stream_with_a_value_has_its_source_as_its_only_producer():
         x = Channel(tensor=Tensor((3, 4), INT3), port="in0_V", platform=FULL_DSP48E2)
         w = Channel(tensor=Tensor((4, 4), INT3), port="in1_V", platform=FULL_DSP48E2)
         y = Channel(tensor=Tensor((3, 4), INT8), contents=((0,) * 4,) * 3, platform=FULL_DSP48E2)
-        matmul = MatMulKernel(**FACTS, x_stream=x, w_stream=w, y_stream=y)
+        matmul = MatMulKernel(**FACTS, x_channel=x, w_channel=w, y_channel=y)
 
     answer = configured(design_space(Produced())).y.query(Channel.endpoints)
-    assert isinstance(answer, Rejected) and keys(answer) == {"stream-users"}
+    assert isinstance(answer, Rejected) and keys(answer) == {"channel-users"}
     assert "only producer" in answer.findings[0].message
 
 

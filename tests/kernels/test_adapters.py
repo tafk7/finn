@@ -65,7 +65,7 @@ def adapted(source: Traversal, pe: int, *, adaptable: bool = True, commit_all: b
             dtype=DataType["INT4"],
             form=source,
             contents=values(rows, channels),
-            output_stream=x,
+            output_channel=x,
             platform=FULL_DSP48E2,
         )
         activate = ThresholdingAxiKernel(
@@ -76,8 +76,8 @@ def adapted(source: Traversal, pe: int, *, adaptable: bool = True, commit_all: b
             pe=pe,
             ram_style="auto",
             ultra_stages=0,
-            input_stream=x,
-            output_stream=y,
+            input_channel=x,
+            output_channel=y,
             platform=FULL_DSP48E2,
         )
 
@@ -107,7 +107,7 @@ def transposed(rows: int, cols: int, simd: int, batches: int = 2):
     class Transposed(Root):
         a = Channel(tensor=Tensor(shape, ELEMENT), port="in0_V", platform=FULL_DSP48E2)
         b = Channel(tensor=Tensor(shape, ELEMENT), port="out0_V", platform=FULL_DSP48E2)
-        shuffle = TransposeKernel(input_stream=a, output_stream=b)
+        shuffle = TransposeKernel(input_channel=a, output_channel=b)
 
     point = with_direct_transports(design_space(Transposed()))
     return commit(point, {"shuffle.ram_style": "auto", "shuffle.simd": simd})
@@ -189,7 +189,7 @@ def test_a_stream_admitting_no_adapter_refuses_its_plan():
     point = adapted(vector_major((ROWS, CHANNELS), 4), 2, adaptable=False)
     refused = point.x.query(Channel.netlist)
     assert isinstance(refused, Rejected)
-    plan = [finding for finding in refused.findings if finding.code == "stream-plan"]
+    plan = [finding for finding in refused.findings if finding.code == "channel-plan"]
     assert plan and "width_conversion" in plan[0].message
     # Its adapter Decision does not apply.
     assert not point.x.adapting

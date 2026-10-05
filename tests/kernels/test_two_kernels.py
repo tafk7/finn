@@ -68,16 +68,16 @@ def layered(*, adaptable: bool = True):
         )
         first = PackedDotpKernel(
             result_dtype=H,
-            x_stream=x,
-            w_stream=w1,
-            y_stream=h,
+            x_channel=x,
+            w_channel=w1,
+            y_channel=h,
             platform=FULL_DSP48E2,
         )
         second = PackedDotpKernel(
             result_dtype=Y,
-            x_stream=h,
-            w_stream=w2,
-            y_stream=y,
+            x_channel=h,
+            w_channel=w2,
+            y_channel=y,
             platform=FULL_DSP48E2,
         )
 
@@ -91,10 +91,10 @@ def layered(*, adaptable: bool = True):
             return period(self.second.w.presented.form)
 
         rom1 = MemStreamKernel(
-            platform=FULL_DSP48E2, dtype=W, form=first_period, contents=W1, output_stream=w1
+            platform=FULL_DSP48E2, dtype=W, form=first_period, contents=W1, output_channel=w1
         )
         rom2 = MemStreamKernel(
-            platform=FULL_DSP48E2, dtype=W, form=second_period, contents=W2, output_stream=w2
+            platform=FULL_DSP48E2, dtype=W, form=second_period, contents=W2, output_channel=w2
         )
 
     point = commit(
@@ -158,7 +158,7 @@ def test_a_hidden_stream_admitting_no_adapter_refuses_the_pair():
     point = layered(adaptable=False)
     refused = point.h.query(Channel.netlist)
     assert isinstance(refused, Rejected)
-    plan = [finding for finding in refused.findings if finding.code == "stream-plan"]
+    plan = [finding for finding in refused.findings if finding.code == "channel-plan"]
     assert plan and "width_conversion -> reorder -> markers" in plan[0].message
     assert isinstance(point.query(Kernel.module), Rejected)
 

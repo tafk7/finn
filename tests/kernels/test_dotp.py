@@ -79,9 +79,9 @@ def test_a_core_declares_ports_folding_factors_and_facts_and_the_base_derives_th
         "compute.reshape_activations",
         "compute.result_dtype",
         "compute.platform",
-        "compute.x_stream",
-        "compute.w_stream",
-        "compute.y_stream",
+        "compute.x_channel",
+        "compute.w_channel",
+        "compute.y_channel",
     }
     # The core's own choices.
     assert {item.key for item in inspection.decisions(point)} == {

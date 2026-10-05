@@ -89,14 +89,18 @@ def placed(
         )
         r = Channel(tensor=Tensor(y, ScalarEncoding(R)), port="out0_V", platform=FULL_DSP48E2)
         weights = MemStreamKernel(
-            platform=FULL_DSP48E2, dtype=W, form=tiled, contents=weight_values(w), output_stream=w_s
+            platform=FULL_DSP48E2,
+            dtype=W,
+            form=tiled,
+            contents=weight_values(w),
+            output_channel=w_s,
         )
         compute = core(
             form=form,
             result_dtype=R,
-            x_stream=a,
-            w_stream=w_s,
-            y_stream=r,
+            x_channel=a,
+            w_channel=w_s,
+            y_channel=r,
             platform=FULL_DSP58,
         )
 
@@ -133,7 +137,7 @@ def test_every_port_presents_what_the_schedule_derives():
     assert [rule.beats for rule in x.markers] == [REDUCTION // SIMD]
     # Each end is presented by a port node, named after it on the stream.
     (end,) = point.r.users
-    assert (end.node, end.member) == ("compute.y", "stream")
+    assert (end.node, end.member) == ("compute.y", "channel")
     # The cyclic weights and the results connect as derived.
     assert codes(point.w_s.query(Channel.netlist)) == set()
     assert codes(point.r.query(Channel.netlist)) == set()
@@ -174,7 +178,7 @@ def test_a_producer_presenting_another_order_is_a_plan_its_stream_adapts():
     # A stream that admits no adapter refuses the plan, naming it.
     fixed = placed(weights_form=columns_first, adaptable=False)
     refused = fixed.w_s.query(Channel.netlist)
-    assert "stream-plan" in codes(refused) and "reorder" in str(refused)
+    assert "channel-plan" in codes(refused) and "reorder" in str(refused)
 
 
 def test_a_producer_s_lane_order_is_wires():
@@ -246,9 +250,9 @@ def eltwise_between(rhs_shape: tuple[int, ...], rhs_dtype: str = "INT4") -> Any:
             rhs_dtype=int4,
             b_scale=1.0,
             platform=FULL_DSP58,
-            lhs_stream=lhs,
-            rhs_stream=rhs,
-            result_stream=out,
+            lhs_channel=lhs,
+            rhs_channel=rhs,
+            result_channel=out,
         )
 
     return with_direct_transports(design_space(Added()))
@@ -276,4 +280,4 @@ def test_eltwise_refuses_an_operand_it_cannot_broadcast_or_does_not_carry():
     # An operand stream of another element: the stream refuses the port's end.
     other = eltwise_between((4,), rhs_dtype="INT3").rhs.query(Channel.netlist)
     assert isinstance(other, Rejected)
-    assert "stream-tensor" in {finding.code for finding in other.findings}
+    assert "channel-tensor" in {finding.code for finding in other.findings}

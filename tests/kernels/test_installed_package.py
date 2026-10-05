@@ -112,9 +112,9 @@ class PlacedDotp(Space):
     )
     compute = PackedDotpKernel(
         result_dtype=DataType["INT8"],
-        x_stream=x,
-        w_stream=w,
-        y_stream=y,
+        x_channel=x,
+        w_channel=w,
+        y_channel=y,
         platform=PLATFORM,
     )
 
@@ -191,7 +191,7 @@ for memory in ("none", "memstream"):
         x = Channel(tensor=Tensor((3, 4), INT3), port="in0_V", platform=PLATFORM)
         w = Channel(tensor=Tensor((4, 4), INT3), port="in1_V", platform=PLATFORM)
         y = Channel(tensor=Tensor((3, 4), INT8), port="out0_V", platform=PLATFORM)
-        matmul = MatMulKernel(**facts, x_stream=x, w_stream=w, y_stream=y)
+        matmul = MatMulKernel(**facts, x_channel=x, w_channel=w, y_channel=y)
         w.contents = matmul.weight_values
 
     root = commit(design_space(Placed()), choices)
