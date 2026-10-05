@@ -73,6 +73,7 @@ from finn.dataflow.datatypes import (
 )
 from finn.dataflow.gemm import Form
 from finn.dataflow.tensor import ScalarEncoding, Tensor
+from finn.dataflow.traversal import require_positive
 from finn.kernels.base import Kernel
 from finn.kernels.channels import Channel
 from finn.kernels.datatypes.domains import set_index_dtype
@@ -93,16 +94,11 @@ _CARRIED = (
 """Each channel MatMul sits on, and its view of the tensor the channel carries."""
 
 
-def _positive(value: int, name: str) -> None:
-    if type(value) is not int or value < 1:
-        raise ValueError(f"{name} must be a positive integer")
-
-
 def exact_result_dtype(
     vector_length: int, activation_dtype: QONNXDataType, weights_dtype: QONNXDataType
 ) -> QONNXDataType:
     """Smallest signed INT covering every full-range integer dot product."""
-    _positive(vector_length, "vector_length")
+    require_positive(vector_length, "vector_length")
     activation = ordinary_integer_bounds(canonical_qonnx_datatype(activation_dtype))
     weights = ordinary_integer_bounds(canonical_qonnx_datatype(weights_dtype))
     products = tuple(a * w for a in activation for w in weights)

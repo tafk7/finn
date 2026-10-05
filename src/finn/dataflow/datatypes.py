@@ -57,6 +57,7 @@ __all__ = [
     "QONNXDataType",
     "QONNX_DATATYPE_TOKEN",
     "canonical_qonnx_datatype",
+    "is_ordinary_integer",
     "is_qonnx_datatype",
     "ordinary_integer_bounds",
     "qonnx_datatype_width",
@@ -108,13 +109,19 @@ class DatatypeError(ValueError):
     """A value was offered as a datatype and is not one this stack can hold."""
 
 
+def is_ordinary_integer(value: QONNXDataType) -> bool:
+    """Whether ``value`` is an ordinary INT/UINT encoding: ``INT<n>``, ``UINT<n>``, or
+    ``BINARY`` (QONNX's canonical name for ``UINT1``)."""
+    return value.name == "BINARY" or re.fullmatch(r"U?INT\d+", value.name) is not None
+
+
 def ordinary_integer_bounds(value: QONNXDataType) -> tuple[int, int]:
     """Exact INT/UINT bounds; special integer-valued encodings are distinct.
 
     Compute from the ordinary encoding instead of third-party range methods,
     which may use floating point for very wide types. No datatype is converted.
     """
-    if value.name != "BINARY" and re.fullmatch(r"U?INT\d+", value.name) is None:
+    if not is_ordinary_integer(value):
         raise DatatypeError(f"{value.name} is not an ordinary INT/UINT encoding")
     bits = qonnx_datatype_width(value)
     if bits < 1:

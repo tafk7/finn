@@ -62,12 +62,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from math import prod
 
-from finn.dataflow.traversal import LevelEnd, Loop, Traversal, axis_strides
-
-
-def _positive(value: int, name: str) -> None:
-    if type(value) is not int or value < 1:
-        raise ValueError(f"{name} must be a positive integer")
+from finn.dataflow.traversal import LevelEnd, Loop, Traversal, axis_strides, require_positive
 
 
 class Refused(ValueError):
@@ -167,8 +162,8 @@ class Schedule:
                 raise ValueError(f"{index!r} has a folding factor but no extent")
         for index in order:
             extent, factor = extents[index], given.get(index, 1)
-            _positive(extent, f"{index!r}'s extent")
-            _positive(factor, f"{index!r}'s folding factor")
+            require_positive(extent, f"{index!r}'s extent")
+            require_positive(factor, f"{index!r}'s folding factor")
             if extent % factor:
                 raise ValueError(
                     f"a folding factor of {factor} does not divide {index!r}'s extent {extent}"
@@ -224,7 +219,7 @@ class Schedule:
         shape = tuple(shape)
         viewed = shape if view is None else tuple(view)
         for extent in (*shape, *viewed):
-            _positive(extent, "tensor extent")
+            require_positive(extent, "tensor extent")
         if prod(viewed) != prod(shape):
             raise Refused(f"a {shape} tensor cannot be viewed as {viewed}")
         axes = tuple(Affine.of(axis) for axis in index)
@@ -288,7 +283,7 @@ class Access:
             raise ValueError("an access has a nonempty name")
         shape, index = tuple(self.shape), tuple(self.index)
         for extent in shape:
-            _positive(extent, f"{self.name}'s tensor extent")
+            require_positive(extent, f"{self.name}'s tensor extent")
         for axis in index:
             if not isinstance(axis, (Index, Affine)):
                 raise TypeError("an access's index is built from Index values")

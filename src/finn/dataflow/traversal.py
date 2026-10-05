@@ -35,7 +35,8 @@ from math import prod
 Position = tuple[int, ...]
 
 
-def _positive(value: int, name: str) -> None:
+def require_positive(value: int, name: str) -> None:
+    """Raise ``ValueError`` unless ``value``, named ``name``, is a positive ``int``."""
     if type(value) is not int or value < 1:
         raise ValueError(f"{name} must be a positive integer")
 
@@ -46,7 +47,7 @@ class Loop:
     stride: int
 
     def __post_init__(self) -> None:
-        _positive(self.extent, "loop extent")
+        require_positive(self.extent, "loop extent")
         if type(self.stride) is not int or self.stride < 0:
             raise ValueError("a loop stride is a nonnegative number of elements")
 
@@ -97,7 +98,7 @@ class Traversal:
         if not shape:
             raise ValueError("a traversal walks an operand of rank at least one")
         for extent in shape:
-            _positive(extent, "operand extent")
+            require_positive(extent, "operand extent")
         size = prod(shape)
         for loop in (*beat_loops, *lane_loops):
             if not isinstance(loop, Loop):
@@ -154,12 +155,12 @@ class Traversal:
 
     def repeated(self, count: int) -> Traversal:
         """The whole pass presented ``count`` times."""
-        _positive(count, "count")
+        require_positive(count, "count")
         return Traversal(self.shape, (Loop(count, 0), *self.beat_loops), self.lane_loops)
 
     def replayed(self, count: int, *, inner_beats: int) -> Traversal:
         """Present every consecutive group of ``inner_beats`` beats ``count`` times."""
-        _positive(count, "count")
+        require_positive(count, "count")
         outer, inner = _split_at(self.beat_loops, inner_beats)
         return Traversal(self.shape, (*outer, Loop(count, 0), *inner), self.lane_loops)
 
@@ -167,7 +168,7 @@ class Traversal:
 def vector_major(shape: Sequence[int], lanes: int) -> Traversal:
     """FINN's default order: row-major, the innermost axis split into ``lanes`` lanes."""
     shape = tuple(shape)
-    _positive(lanes, "lanes")
+    require_positive(lanes, "lanes")
     if shape[-1] % lanes:
         raise ValueError("lanes must divide the innermost extent")
     last = len(shape) - 1
@@ -234,7 +235,7 @@ def regrouped(form: Traversal, lanes: int) -> Traversal:
 
 
 def _split_at(loops: Sequence[Loop], inner_beats: int) -> tuple[tuple[Loop, ...], tuple[Loop, ...]]:
-    _positive(inner_beats, "inner_beats")
+    require_positive(inner_beats, "inner_beats")
     outer: list[Loop] = list(loops)
     inner: list[Loop] = []
     remaining = inner_beats
@@ -361,7 +362,7 @@ class LevelEnd:
     beats: int
 
     def __post_init__(self) -> None:
-        _positive(self.beats, "a marker's level")
+        require_positive(self.beats, "a marker's level")
 
     def asserted(self, beat: int) -> bool:
         return (beat + 1) % self.beats == 0
@@ -427,7 +428,7 @@ def period(form: Traversal) -> Traversal:
 
 def pack(form: Traversal, values: object, bits: int) -> tuple[int, ...]:
     """Pack an integer operand of ``form.shape`` into one raw word per beat, lane zero lowest."""
-    _positive(bits, "bits")
+    require_positive(bits, "bits")
     _check_shape(values, form.shape)
     mask = (1 << bits) - 1
 
@@ -471,6 +472,7 @@ __all__ = [
     "pack",
     "period",
     "regrouped",
+    "require_positive",
     "tile",
     "unreplayed",
     "vector_major",
