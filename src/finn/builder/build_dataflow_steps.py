@@ -1348,7 +1348,7 @@ def step_synthesize_bitfile(model: ModelWrapper, cfg: DataflowBuildConfig):
             model = model.transform(
                 VitisLink(
                     cfg._resolve_vitis_platform(),
-                    cfg.synth_clk_period_ns(),
+                    cfg.synth_clk_period_ns,
                     strategy=cfg._resolve_vitis_opt_strategy(),
                     enable_debug=cfg.enable_hw_debug,
                 )
@@ -1458,7 +1458,7 @@ def step_loop_body_set_fifo_depths(model: ModelWrapper, cfg: DataflowBuildConfig
     loop_context = model.get_metadata_prop("loop_context")
     # Prepare and synthesize IP for FIFO characterization
     model = model.transform(PrepareIP(cfg._resolve_fpga_part(), cfg._resolve_hls_clk_period()))
-    model = model.transform(HLSSynthIP(cfg._resolve_hls_clk_period()))
+    model = model.transform(HLSSynthIP(cfg._resolve_fpga_part()))
     model = model.transform(ReplaceVerilogRelPaths())
 
     # Set waveform trace if configured
@@ -1509,7 +1509,7 @@ def step_loop_body_ipgen_and_stitch(model: ModelWrapper, cfg: DataflowBuildConfi
         Loop body ModelWrapper with synthesized IP and stitched IP created
     """
     # HLS synthesis for this loop body
-    model = model.transform(HLSSynthIP(cfg._resolve_hls_clk_period()))
+    model = model.transform(HLSSynthIP(cfg._resolve_fpga_part()))
 
     # Create stitched IP for this loop body
     model = model.transform(
