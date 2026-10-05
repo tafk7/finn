@@ -18,6 +18,8 @@ on:
       - "pyproject.toml"
       - "uv.lock"
       - ".ruff.toml"
+      - ".mypy.ini"
+      - ".pytest.ini"
       - ".github/workflows/gates.yml"
   push:
     branches: [main, dev]

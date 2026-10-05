@@ -75,7 +75,9 @@ part ahead of time.
   `uv.lock`, the pins of the resources the image bakes in (from
   `finn/resources.toml`; FinnLib's is never baked, so moving it changes
   nothing) and `finn.resources`, which fetches them, the container scripts and the
-  runtime manifests. FINN's other sources are not an input.
+  runtime manifests. FINN's other sources are not an input, nor is the tool
+  configuration (`.ruff.toml`, `.mypy.ini`, `.pytest.ini`), kept out of
+  `pyproject.toml` so that editing it leaves the image as it is.
 * `dev` is the default target and the base of `sbx`. Only images built locally
   contain third-party board files; `release` builds on `runtime`, so it carries
   only resources declared `redistributable`.

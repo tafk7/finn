@@ -5,7 +5,10 @@
 # RUN --mount sources in docker/Dockerfile.finn. FINN's own sources are not
 # listed: containers install the mounted checkout, so editing FINN never needs
 # a new image. (The release target also builds from them; it is tagged by
-# source revision.)
+# source revision.) pyproject.toml keeps the package metadata and what uv sync
+# builds the venv from (project, dependency groups, [tool.uv]); tool
+# configuration has its own files (.ruff.toml, .mypy.ini, .pytest.ini,
+# .coveragerc), which are not inputs, so editing it never changes the image.
 
 .dockerignore
 docker-bake.hcl

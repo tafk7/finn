@@ -155,7 +155,7 @@ finish() {
 event "SWEEP $IDENTITY smoke=$SMOKE"
 # The conformance jobs, one per test id. Collected in an explicit mode: with the
 # project's addopts cleared and one -q, pytest prints one path::id line per test,
-# whatever pyproject.toml sets. A collection that fails or finds nothing ends the
+# whatever .pytest.ini sets. A collection that fails or finds nothing ends the
 # sweep: an empty list would run no conformance job and could still pass.
 "$PY" -m pytest -o addopts= -q --collect-only -p no:cacheprovider --confcutdir=tests/kernels \
     tests/kernels/test_conformance.py -m xsim > "$OUT/collect.log" 2>&1

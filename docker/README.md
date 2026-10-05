@@ -57,7 +57,9 @@ apptainer exec --cleanenv --bind "$PWD:$PWD" --pwd "$PWD" \
 
 Image tags are ``img-<hash>`` of the files in ``docker/image-inputs.txt``, which
 include ``pyproject.toml`` and ``uv.lock`` but not FINN's sources: a change to the
-lock produces a new image, an edit to FINN does not. The release image (and the
+lock produces a new image, an edit to FINN does not, nor does one to the tool
+configuration (``.ruff.toml``, ``.mypy.ini``, ``.pytest.ini``), which is kept out
+of ``pyproject.toml`` for that reason. The release image (and the
 SIF exported from it) installs FINN from wheels and is tagged by source revision.
 The mounted checkout's commit, description and dirty state are passed separately
 as ``FINN_SOURCE_*`` runtime provenance. The immutable identity of a concrete build

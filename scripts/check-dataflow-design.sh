@@ -15,6 +15,6 @@ source "$(dirname "$(readlink -f "$0")")/_gate-common.sh"
 gate_pytest tests/dataflow
 gate_ruff src/finn/dataflow tests/dataflow
 # QONNX, which ships no type information, is covered by an override in
-# pyproject.toml. The canonical tests are strictly typed too.
+# .mypy.ini. The canonical tests are strictly typed too.
 gate_mypy -p finn.dataflow
 gate_mypy tests/dataflow

@@ -20,6 +20,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -894,6 +895,15 @@ def test_image_input_manifest_covers_dockerfile_sources():
     assert not any(p.startswith("src/") and p not in resources for p in patterns)
     for launcher in ("docker/config.py", "docker/run", "docs/finn/getting_started.rst"):
         assert launcher not in patterns
+
+
+def test_image_inputs_carry_no_tool_configuration():
+    # pyproject.toml is an image input, hashed whole; of its tool tables the image
+    # reads only uv's. Linters, type checkers and test runners keep their
+    # configuration in their own files, so editing it does not change the image.
+    with open(Path(REPO) / "pyproject.toml", "rb") as file:
+        tools = set(tomllib.load(file).get("tool", {}))
+    assert tools <= {"uv"}, tools
 
 
 def test_shell_inspection_never_allocates_scratch(tmp_path):
