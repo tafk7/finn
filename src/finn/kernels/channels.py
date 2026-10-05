@@ -7,8 +7,8 @@ A ``Channel`` is one real producer-to-consumer edge, a node of its own,
 declared in the kernel with children (or the root) that owns the edge, beside
 the kernels it joins, carrying one ``tensor`` its owner supplies: stated, or
 read from a kernel's fact-level view (``MatMulKernel.weight_tensor``). A kernel
-has one reference input per channel it sits on (``output_stream: Channel =
-Param()``), bound to the ``stream`` of one of its ports
+has one reference input per channel it sits on (``output_channel: Channel =
+Param()``), bound to the ``channel`` of one of its ports
 (``finn.kernels.port``), which exports its contract under ``PORT``; a kernel
 with children passes the reference down to the child that uses it, so the
 channel's user is always a leaf's port, at any depth. Each end presents its
@@ -21,9 +21,9 @@ stays on its own channel. The contract's transport endpoint says whether the
 kernel produces into the channel (initiator) or consumes from it (target).
 
 Its ``ends`` are the contracts' logical part (``finn.dataflow.ends``): each
-must traverse the tensor (``well_formed``, ``stream-tensor``), and the
+must traverse the tensor (``well_formed``, ``channel-tensor``), and the
 ``plan`` between their beat sequences (``finn.dataflow.plan``) must be one a
-chain of steps carries out (``stream-plan``). A non-empty plan opens the
+chain of steps carries out (``channel-plan``). A non-empty plan opens the
 channel's ``adapter`` Decision over nodes, whose candidates are fixed chains
 of FinnLib modules (``finn.kernels.adapters``); each refuses a plan it does
 not carry out, so at most one survives. A channel whose ``adaptable`` input is
@@ -33,7 +33,7 @@ A channel with a user on one side only is a boundary of the root that
 declares it. Its ``port`` input names the top-level AXIS port (``in0_V``): an
 ABI name is design data of the channel, independent of its node name, which
 is its identity and the prefix of its persisted decision keys. A boundary
-whose ``port`` is not supplied is refused (``stream-boundary``): a root names
+whose ``port`` is not supplied is refused (``channel-boundary``): a root names
 a port only for what may cross it, an ONNX input or output of a partition.
 The boundary presents what its internal end presents, by one rule: an input
 boundary without the replay its receiver realizes (``unreplayed``), an output
@@ -56,7 +56,7 @@ with several ``sets``, its ``index`` channel selects one) carries a
 source is the channel's producer end, placed by the channel (``staged``), its
 leaf below the channel at ``source.<case>``; it stores one period of the value
 in the order the channel's consumer reads it. The invariant: **a channel with
-a value has its source as its only producer** (``stream-users``).
+a value has its source as its only producer** (``channel-users``).
 
 Beside ``compatible``, each checked hop is resolved into wires (``wired``),
 and the channel exports its netlist under ``NETLIST``: its stages' leaves at
@@ -250,7 +250,7 @@ class Channel(Space):
             if end.value.transport.endpoint is not Endpoint.INITIATOR
         ]
         if len(consumers) != 1:
-            return reject("stream-source", "a known value streams to exactly one consumer")
+            return reject("channel-source", "a known value streams to exactly one consumer")
         return consumers[0]
 
     @derived
@@ -269,7 +269,7 @@ class Channel(Space):
         form=source_form,
         contents=contents,
         sets=sets,
-        set_stream=index,
+        set_channel=index,
         platform=platform,
         staged=True,
     )
@@ -298,7 +298,7 @@ class Channel(Space):
         if self.valued:
             if producers:
                 return reject(
-                    "stream-users",
+                    "channel-users",
                     "a channel with a value has its source as its only producer, "
                     f"not {producers[0][0]}",
                 )
@@ -306,14 +306,14 @@ class Channel(Space):
         if len(producers) > 1 or len(consumers) > 1:
             named = ", ".join(f"{end.node}.{end.member}" for end in self.users)
             return reject(
-                "stream-users",
+                "channel-users",
                 f"a channel has at most one producer and one consumer; referenced by {named}",
             )
         if not producers and not consumers:
-            return reject("stream-unused", "no present kernel references this channel")
+            return reject("channel-unused", "no present kernel references this channel")
         if not (producers and consumers) and not self.present(Channel.port):
             return reject(
-                "stream-boundary",
+                "channel-boundary",
                 "a boundary of its root, but no port names it: only an ONNX input or output "
                 "of a partition crosses its boundary",
             )
@@ -327,7 +327,7 @@ class Channel(Space):
                 inside = producers[0][1]
                 consumers.append((None, self._boundary(inside, Endpoint.INITIATOR)))
         except ValueError as error:
-            return reject("stream-boundary", str(error))
+            return reject("channel-boundary", str(error))
         return ChannelEnds(*producers[0], *consumers[0])
 
     def _boundary(self, inside: StreamContract, endpoint: Endpoint) -> StreamContract:
@@ -347,7 +347,7 @@ class Channel(Space):
     def well_formed(self) -> bool | Rejected:
         """Each end traverses this channel's tensor (``finn.dataflow.ends.misfit``)."""
         why = misfit(self.tensor, self.ends)
-        return True if why is None else reject("stream-tensor", why)
+        return True if why is None else reject("channel-tensor", why)
 
     @derived
     def plan(self) -> Plan | Rejected:
@@ -356,7 +356,7 @@ class Channel(Space):
         try:
             return plan(ends.source.sequence, ends.sink.sequence)
         except Unrealizable as error:
-            return reject("stream-plan", f"no adapter can join the ends: {error}")
+            return reject("channel-plan", f"no adapter can join the ends: {error}")
 
     @derived
     def adapting(self) -> bool:
@@ -367,7 +367,7 @@ class Channel(Space):
         found = self.plan
         if found and not self.adaptable:
             return reject(
-                "stream-plan",
+                "channel-plan",
                 f"the ends need {found.describe()}, and this channel admits no adapter",
             )
         return True
@@ -414,7 +414,7 @@ class Channel(Space):
     def compatible(self) -> bool | Rejected:
         """Each hop, source through every stage to sink, connects directly.
 
-        An element mismatch is ``well_formed``'s (``stream-tensor``: each end
+        An element mismatch is ``well_formed``'s (``channel-tensor``: each end
         against the tensor); ``compatibility`` does not compare elements.
         """
         ends = self.endpoints
@@ -433,7 +433,7 @@ class Channel(Space):
                 found.append(
                     Mismatch(
                         Level.PHYSICAL,
-                        "stream-padding",
+                        "channel-padding",
                         "a child's padding is wider than the top word that must carry it",
                     )
                 )
@@ -457,7 +457,7 @@ class Channel(Space):
                 continue
             kernel = None if node is None else node.rpartition(".")[0]
             if kernel == "":
-                return reject("stream-user", f"{node} presents an end, but is no kernel's port")
+                return reject("channel-user", f"{node} presents an end, but is no kernel's port")
             owners.append(None if kernel is None else "^" + kernel)
         links: list[Link] = []
         owner, current = owners[0], ends.source
@@ -469,7 +469,7 @@ class Channel(Space):
         except BuildError as error:
             # A hop that does not connect (another element, say) is refused by the
             # channel's constraints; its wires do not exist.
-            return reject("stream-link", str(error))
+            return reject("channel-link", str(error))
         return tuple(links)
 
     @view(requires=(well_formed, realizable, compatible))

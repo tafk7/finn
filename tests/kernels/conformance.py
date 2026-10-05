@@ -264,7 +264,7 @@ def _enumerated(base: Space, factors: str) -> list[tuple[str, dict[str, object]]
 
 
 def _ports(space_type: type[Kernel]) -> dict[str, str]:
-    """Each reference input's port: the member whose ``stream`` it binds."""
+    """Each reference input's port: the member whose ``channel`` it binds."""
     found: dict[str, str] = {}
     for owner in reversed(space_type.__mro__):
         for name, member in vars(owner).items():
@@ -272,9 +272,9 @@ def _ports(space_type: type[Kernel]) -> dict[str, str]:
                 declared = inspection.declaration(member)
             except RequestError:
                 continue
-            stream = declared.bindings.get("stream")
-            if issubclass(declared.space_type, AxiStreamPort) and isinstance(stream, Param):
-                found[str(stream.name)] = name
+            channel = declared.bindings.get("channel")
+            if issubclass(declared.space_type, AxiStreamPort) and isinstance(channel, Param):
+                found[str(channel.name)] = name
     return found
 
 
@@ -300,7 +300,7 @@ def _design(
             dtype=tensors[name].element.dtype,
             form=form,
             contents=contents,
-            output_stream=namespace[name],
+            output_channel=namespace[name],
             platform=FULL_DSP48E2,
         )
     return design_space(type(f"{space_type.__name__}Conformance", (Root,), namespace)())

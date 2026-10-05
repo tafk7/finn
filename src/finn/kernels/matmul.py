@@ -17,8 +17,8 @@ operation runs natively (one channel per PE lane, INT8 DSP58 only) or, by the
 reading its (M, K, N) activations as (M, K * N).
 
 ``MatMulKernel`` is a kernel with children: the compute cores that sit on the
-streams its parent supplies, ``x_stream`` (the activations), ``w_stream`` (the
-weights) and ``y_stream`` (the results). Each stream, its adapter, its FIFO
+streams its parent supplies, ``x_channel`` (the activations), ``w_channel`` (the
+weights) and ``y_channel`` (the results). Each stream, its adapter, its FIFO
 and its source are its parent's: the parent (a test harness, a KernelOp's node
 root, a partition root) declares each stream and either binds its tensor to
 MatMul's view of it (``activation_tensor``, ``weight_tensor``,
@@ -35,7 +35,7 @@ weight stream carries (the datapath's weights, block-diagonal when densely
 realized), which the parent binds to the stream's ``contents``. Whether the
 weights are known is their presence, the view's guard, so the stream's
 ``source`` applies before the realization is chosen. With several weight
-sets, the parent's set stream (bound to ``set_tensor``) is the weight stream's
+sets, the parent's set channel (bound to ``set_tensor``) is the weight stream's
 ``index``. A consumer derives from the range what it may (the packed core's
 ``NARROW_WEIGHTS``). Unknown weights carry the datatype's range.
 
@@ -86,9 +86,9 @@ from finn.kernels.dotp import Int8Dsp58DotpKernel, PackedDotpKernel
 from finn.kernels.target import Platform
 
 _CARRIED = (
-    ("x_stream", "activation_tensor"),
-    ("w_stream", "weight_tensor"),
-    ("y_stream", "result_tensor"),
+    ("x_channel", "activation_tensor"),
+    ("w_channel", "weight_tensor"),
+    ("y_channel", "result_tensor"),
 )
 """Each stream MatMul sits on, and its view of the tensor the stream carries."""
 
@@ -248,9 +248,9 @@ class MatMulKernel(Kernel):
         return self._tensor((self.m,), set_index_dtype(self.weight_sets))
 
     # The streams it sits on, supplied by its parent.
-    x_stream: Channel = Param(required=False)
-    w_stream: Channel = Param(required=False)
-    y_stream: Channel = Param(required=False)
+    x_channel: Channel = Param(required=False)
+    w_channel: Channel = Param(required=False)
+    y_channel: Channel = Param(required=False)
 
     @constraint
     def carried(self) -> bool | Rejected:
@@ -265,7 +265,7 @@ class MatMulKernel(Kernel):
             if not self.present(getattr(MatMulKernel, reference)):
                 continue
             supplied, derived_ = getattr(self, reference).tensor, getattr(self, tensor)
-            produced = reference == "y_stream" or (reference == "w_stream" and self.known)
+            produced = reference == "y_channel" or (reference == "w_channel" and self.known)
             inner, outer = (derived_, supplied) if produced else (supplied, derived_)
             if supplied.shape != derived_.shape or not inner.element.fits(outer.element):
                 return reject(
@@ -285,9 +285,9 @@ class MatMulKernel(Kernel):
         reshape_activations=dense_view,
         result_dtype=result_type,
         platform=platform,
-        x_stream=x_stream,
-        w_stream=w_stream,
-        y_stream=y_stream,
+        x_channel=x_channel,
+        w_channel=w_channel,
+        y_channel=y_channel,
     )
 
     @constraint

@@ -12,8 +12,8 @@ values it streams, so it states their ``value_range`` on its output: its element
 
 - With one set, the image streams cyclically.
 - With ``sets`` > 1, ``contents`` holds one operand per set, and each index
-  accepted on ``set_stream`` streams one whole set. The output presents one
-  pass per index; the set stream is an ordinary stream reference input.
+  accepted on ``set_channel`` streams one whole set. The output presents one
+  pass per index; the set channel is an ordinary channel reference input.
 - Its AXI-Lite port is tied off: the contents are fixed at build time.
 
 It is a stream's ``source`` candidate (``finn.kernels.channels``): placed by the
@@ -93,8 +93,8 @@ class MemStreamKernel(Kernel):
     # (several sets only); or, as a stream's source, placed by the stream (staged).
     # channels imports this module (a memory is a channel's source), so it is imported last;
     # the engine resolves these annotations when it collects the Space class.
-    output_stream: channels.Channel = Param(required=False)
-    set_stream: channels.Channel = Param(required=False)
+    output_channel: channels.Channel = Param(required=False)
+    set_channel: channels.Channel = Param(required=False)
     staged: bool = Param(default=False)
     platform: Platform = Param()
     ram_style: str = Decision(
@@ -161,16 +161,16 @@ class MemStreamKernel(Kernel):
 
     @constraint
     def selected(self) -> bool | Rejected:
-        """Several sets take a set stream of indices, one a beat; a single set none."""
-        placed = self.present(MemStreamKernel.set_stream)
+        """Several sets take a set channel of indices, one a beat; a single set none."""
+        placed = self.present(MemStreamKernel.set_channel)
         if self.sets < 2:
             if placed:
-                return reject("memstream-set-stream", "a single set takes no set stream")
+                return reject("memstream-set-channel", "a single set takes no set channel")
             return True
         if not placed:
-            return reject("memstream-set-stream", "several sets take a set stream")
-        if len(self.set_stream.tensor.shape) != 1:
-            return reject("memstream-set-stream", "the set stream carries a vector of indices")
+            return reject("memstream-set-channel", "several sets take a set channel")
+        if len(self.set_channel.tensor.shape) != 1:
+            return reject("memstream-set-channel", "the set channel carries a vector of indices")
         return True
 
     admission = ConstraintGroup(geometry_supported, selected)
@@ -247,13 +247,13 @@ class MemStreamKernel(Kernel):
     @derived
     def set_sequence(self) -> BeatSequence:
         """One index a beat, one beat per pass of the weights."""
-        return BeatSequence(vector_major(self.set_stream.tensor.shape, 1))
+        return BeatSequence(vector_major(self.set_channel.tensor.shape, 1))
 
     @derived
     def output_sequence(self) -> BeatSequence:
         """One set streams cyclically; several stream one pass per accepted index."""
         if self.sets > 1:
-            return BeatSequence(self.form.repeated(self.set_stream.tensor.size))
+            return BeatSequence(self.form.repeated(self.set_channel.tensor.size))
         return BeatSequence(self.form, Repetition.CYCLIC)
 
     @derived
@@ -264,7 +264,7 @@ class MemStreamKernel(Kernel):
     set = AxiStreamPort(
         name="set",
         endpoint=Endpoint.TARGET,
-        stream=set_stream,
+        channel=set_channel,
         sequence=set_sequence,
         dtype=set_dtype,
         signals=("s_axis_0_tdata", "s_axis_0_tvalid", "s_axis_0_tready"),
@@ -274,7 +274,7 @@ class MemStreamKernel(Kernel):
     output = AxiStreamPort(
         name="m_axis_0",
         endpoint=Endpoint.INITIATOR,
-        stream=output_stream,
+        channel=output_channel,
         staged=staged,
         sequence=output_sequence,
         dtype=dtype,

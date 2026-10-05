@@ -133,12 +133,12 @@ class Thresholding(KernelOp):
         dims = shape(self.model(), self.onnx_node.input[0], self.label)
         return {self.onnx_node.output[0]: (dims, result.element.dtype)}
 
-    def place(self, streams: Mapping[str, Channel]) -> tuple[Kernel, dict[str, str]]:
+    def place(self, channels: Mapping[str, Channel]) -> tuple[Kernel, dict[str, str]]:
         formals: dict[str, Any] = self.facts().formals()
         del formals["x_tensor"]
         x = self.onnx_node.input[0]
         kernel = ThresholdingAxiKernel(
-            **formals, input_stream=streams[x], output_stream=streams[self.onnx_node.output[0]]
+            **formals, input_channel=channels[x], output_channel=channels[self.onnx_node.output[0]]
         )
         return kernel, {"x": x}
 

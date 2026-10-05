@@ -153,9 +153,9 @@ class ThresholdingAxiKernel(Kernel):
     pe: int = Decision(domain=divisors_of(channels))
     # Where a parent places it: its streams, and the control
     # bus that exports its AXI-Lite interface when thresholds are runtime-writable.
-    input_stream: Channel = Param(required=False)
-    output_stream: Channel = Param(required=False)
-    set_stream: Channel = Param(required=False)
+    input_channel: Channel = Param(required=False)
+    output_channel: Channel = Param(required=False)
+    set_channel: Channel = Param(required=False)
     control: ControlBus = Param(required=False)
     platform: Platform = Param()
     use_axilite: bool = Decision(
@@ -343,7 +343,7 @@ class ThresholdingAxiKernel(Kernel):
     @derived
     def indices(self) -> tuple[Index, ...]:
         """The input's axes: any leading ones, then the channels ``c``, innermost."""
-        rank = len(self.input_stream.tensor.shape)
+        rank = len(self.input_channel.tensor.shape)
         return (*(Index(f"a{axis}") for axis in range(rank - 1)), c)
 
     @derived
@@ -359,17 +359,17 @@ class ThresholdingAxiKernel(Kernel):
     @derived
     def set_sequence(self) -> BeatSequence | Rejected:
         """One set index for each input beat."""
-        shape = self.set_stream.tensor.shape
+        shape = self.set_channel.tensor.shape
         if self.shape[0] < 2:
-            return reject("threshold-set-stream", "a single threshold set takes no set stream")
+            return reject("threshold-set-channel", "a single threshold set takes no set channel")
         if shape != (self.input.presented.form.beats,):
-            return reject("threshold-set-stream", "each input beat needs one set index")
+            return reject("threshold-set-channel", "each input beat needs one set index")
         return BeatSequence(vector_major(shape, 1))
 
     input = AxiStreamPort(
         name="s_axis",
         endpoint=Endpoint.TARGET,
-        stream=input_stream,
+        channel=input_channel,
         schedule=schedule,
         factors=factors,
         index=indices,
@@ -379,7 +379,7 @@ class ThresholdingAxiKernel(Kernel):
     output = AxiStreamPort(
         name="m_axis",
         endpoint=Endpoint.INITIATOR,
-        stream=output_stream,
+        channel=output_channel,
         schedule=schedule,
         factors=factors,
         index=indices,
@@ -390,7 +390,7 @@ class ThresholdingAxiKernel(Kernel):
     set = AxiStreamPort(
         name="s_axis_set",
         endpoint=Endpoint.TARGET,
-        stream=set_stream,
+        channel=set_channel,
         sequence=set_sequence,
         dtype=selector_dtype,
     )

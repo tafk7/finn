@@ -319,15 +319,15 @@ def compatibility(
     produces = Endpoint.TARGET if source_is_top else Endpoint.INITIATOR
     consumes = Endpoint.INITIATOR if sink_is_top else Endpoint.TARGET
     if source.transport.endpoint is not produces or sink.transport.endpoint is not consumes:
-        refuse(Level.PROTOCOL, "stream-direction", "the source must produce and the sink consume")
+        refuse(Level.PROTOCOL, "channel-direction", "the source must produce and the sink consume")
 
     if sink.repetition is Repetition.CYCLIC and source.repetition is not Repetition.CYCLIC:
-        refuse(Level.LOGICAL, "stream-repetition", "a single pass cannot feed a cyclic consumer")
+        refuse(Level.LOGICAL, "channel-repetition", "a single pass cannot feed a cyclic consumer")
     produced = _presented(source, sink)
     if produced is None:
         refuse(
             Level.LOGICAL,
-            "stream-form",
+            "channel-form",
             "the consumer's pass is not whole repetitions of the cyclic source",
         )
     else:
@@ -336,7 +336,7 @@ def compatibility(
             detail = f": {verdict.reorder}" if verdict.reorder else ""
             refuse(
                 Level.LOGICAL,
-                "stream-form",
+                "channel-form",
                 f"needs a {verdict.adaptation.value} adapter ({verdict.detail}){detail}",
             )
 
@@ -345,7 +345,7 @@ def compatibility(
         if rule not in offered.values():
             refuse(
                 Level.LOGICAL,
-                "stream-marker",
+                "channel-marker",
                 f"{signal} requires a marker every {rule.beats} beats; none is produced",
             )
 
@@ -355,14 +355,14 @@ def compatibility(
         if unused:
             refuse(
                 Level.PROTOCOL,
-                "stream-top-marker",
+                "channel-top-marker",
                 f"top input markers {unused} would be left unconsumed",
             )
     if sink_is_top and sink.transport.markers:
         ruled = {marker_bit(key)[0] for key in sink.rules}
         missing = [m.signal for m in sink.transport.markers if m.signal not in ruled]
         if missing:
-            refuse(Level.PROTOCOL, "stream-top-marker", f"top output markers {missing} lack rules")
+            refuse(Level.PROTOCOL, "channel-top-marker", f"top output markers {missing} lack rules")
     return tuple(found)
 
 

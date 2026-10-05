@@ -87,17 +87,17 @@ def dotp(
     reduction = 3 if depthwise else REDUCTION
     x_shape = (ROWS, reduction, OUTPUTS) if depthwise else (ROWS, reduction)
 
-    def reference(x_stream: np.ndarray, w_stream: np.ndarray) -> dict[str, np.ndarray]:
-        y = (x_stream * w_stream).sum(axis=1) if depthwise else x_stream @ w_stream
-        return {"y_stream": y}
+    def reference(x_channel: np.ndarray, w_channel: np.ndarray) -> dict[str, np.ndarray]:
+        y = (x_channel * w_channel).sum(axis=1) if depthwise else x_channel @ w_channel
+        return {"y_channel": y}
 
     return dict(
         space_type=space_type,
         inputs={
-            "x_stream": Tensor(x_shape, ScalarEncoding(a)),
-            "w_stream": Tensor((reduction, OUTPUTS), ScalarEncoding(w)),
+            "x_channel": Tensor(x_shape, ScalarEncoding(a)),
+            "w_channel": Tensor((reduction, OUTPUTS), ScalarEncoding(w)),
         },
-        outputs={"y_stream": (ROWS, OUTPUTS)},
+        outputs={"y_channel": (ROWS, OUTPUTS)},
         reference=reference,
         choices={"compute_pumping": False, **({"reducer": reducer} if reducer else {})},
         facts={
@@ -142,9 +142,9 @@ PE_FACTORS = ({"pe": 1}, {"pe": 3}, {"pe": CHANNELS})
 def thresholding() -> dict[str, Any]:
     return dict(
         space_type=ThresholdingAxiKernel,
-        inputs={"input_stream": tensor((PIXELS, CHANNELS), "INT4")},
-        outputs={"output_stream": (PIXELS, CHANNELS)},
-        reference=lambda input_stream: {"output_stream": levels(input_stream)},
+        inputs={"input_channel": tensor((PIXELS, CHANNELS), "INT4")},
+        outputs={"output_channel": (PIXELS, CHANNELS)},
+        reference=lambda input_channel: {"output_channel": levels(input_channel)},
         factors=PE_FACTORS,
         choices=THRESHOLDING_CHOICES,
         facts=THRESHOLDING_FACTS,
@@ -181,7 +181,7 @@ def scheduled(space_type: type[RowsFirst]) -> dict[str, Any]:
     return dict(
         thresholding(),
         space_type=space_type,
-        outputs={"output_stream": tensor((PIXELS, CHANNELS), "UINT2")},
+        outputs={"output_channel": tensor((PIXELS, CHANNELS), "UINT2")},
         factors=({"pe": 1}, {"pe": 2}, {"pe": 3}),
     )
 
@@ -196,7 +196,7 @@ def split_ports(schedule: Any, lanes: tuple[Index, ...]) -> tuple[AxiStreamPort,
     input = AxiStreamPort(
         name="s_axis",
         endpoint=Endpoint.TARGET,
-        stream=ThresholdingAxiKernel.input_stream,
+        channel=ThresholdingAxiKernel.input_channel,
         schedule=schedule,
         index=(r, co * 3 + ci),
         lanes=lanes,
@@ -205,7 +205,7 @@ def split_ports(schedule: Any, lanes: tuple[Index, ...]) -> tuple[AxiStreamPort,
     output = AxiStreamPort(
         name="m_axis",
         endpoint=Endpoint.INITIATOR,
-        stream=ThresholdingAxiKernel.output_stream,
+        channel=ThresholdingAxiKernel.output_channel,
         schedule=schedule,
         index=(r, co * 3 + ci),
         lanes=lanes,
@@ -239,7 +239,7 @@ def split(space_type: type[LanesInOrder]) -> dict[str, Any]:
     return dict(
         thresholding(),
         space_type=space_type,
-        outputs={"output_stream": tensor((PIXELS, CHANNELS), "UINT2")},
+        outputs={"output_channel": tensor((PIXELS, CHANNELS), "UINT2")},
         factors=({"pe": CHANNELS},),
     )
 
@@ -252,11 +252,11 @@ def eltwise() -> dict[str, Any]:
     return dict(
         space_type=EltwiseKernel,
         inputs={
-            "lhs_stream": tensor((PIXELS, CHANNELS), "INT4"),
-            "rhs_stream": tensor((CHANNELS,), "INT4"),
+            "lhs_channel": tensor((PIXELS, CHANNELS), "INT4"),
+            "rhs_channel": tensor((CHANNELS,), "INT4"),
         },
-        outputs={"result_stream": (PIXELS, CHANNELS)},
-        reference=lambda lhs_stream, rhs_stream: {"result_stream": lhs_stream + rhs_stream},
+        outputs={"result_channel": (PIXELS, CHANNELS)},
+        reference=lambda lhs_channel, rhs_channel: {"result_channel": lhs_channel + rhs_channel},
         factors=PE_FACTORS,
         facts=dict(
             operation="ADD",
@@ -280,9 +280,9 @@ def transpose() -> dict[str, Any]:
     """
     return dict(
         space_type=TransposeKernel,
-        inputs={"input_stream": tensor(MATRICES, "INT4")},
-        outputs={"output_stream": MATRICES},
-        reference=lambda input_stream: {"output_stream": input_stream},
+        inputs={"input_channel": tensor(MATRICES, "INT4")},
+        outputs={"output_channel": MATRICES},
+        reference=lambda input_channel: {"output_channel": input_channel},
         factors=tuple({"simd": simd} for simd in (1, 3, 6)),
         choices={"ram_style": "auto"},
     )
@@ -297,8 +297,8 @@ def memstream() -> dict[str, Any]:
     return dict(
         space_type=MemStreamKernel,
         inputs={},
-        outputs={"output_stream": STORED},
-        reference=lambda: {"output_stream": np.array(CONTENTS)},
+        outputs={"output_channel": STORED},
+        reference=lambda: {"output_channel": np.array(CONTENTS)},
         factors=(
             *({"form": vector_major(STORED, lanes)} for lanes in (1, 3, 6)),
             {"form": tile(*STORED, 2, 3)},
@@ -385,8 +385,8 @@ def test_the_stimulus_tells_the_wrong_order_apart(wrong: str) -> None:
             facts=case["facts"],
             values=values,
         )
-        x = values["input_stream"]
-        declared = placed.input_stream.endpoints.sink.form
+        x = values["input_channel"]
+        declared = placed.input_channel.endpoints.sink.form
         walked = vector_major(declared.shape, sample.factors["pe"])
         arrive = [p for beat in declared.positions() for p in beat]
         applied = [p[1] for beat in walked.positions() for p in beat]
@@ -405,7 +405,7 @@ def test_a_wrong_order_fails_in_xsim(wrong: str, tmp_path: Path) -> None:
         conformance(**case, xsim=tmp_path)
     failed = {(sample.label, mode) for sample, mode, _ in caught.value.failures}
     # Every failure is an output word the RTL computed differently, not a build error.
-    assert all("output_stream word" in message for _, _, message in caught.value.failures)
+    assert all("output_channel word" in message for _, _, message in caught.value.failures)
     chosen = samples(**{key: value for key, value in case.items() if key != "reference"})
     assert failed == {(sample.label, mode) for sample in chosen for mode in MODES}
 
@@ -431,7 +431,7 @@ class Misnamed(MemStreamKernel):
     output = AxiStreamPort(
         name="m_axis_1",
         endpoint=Endpoint.INITIATOR,
-        stream=MemStreamKernel.output_stream,
+        channel=MemStreamKernel.output_channel,
         sequence=MemStreamKernel.output_sequence,
         dtype=MemStreamKernel.dtype,
         clock="clk",

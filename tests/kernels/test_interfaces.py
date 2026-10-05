@@ -51,9 +51,9 @@ class Activated(Root):
     config = ControlBus(port="s_axilite")
     compute = PackedDotpKernel(
         result_dtype=R,
-        x_stream=activations,
-        w_stream=weights,
-        y_stream=results,
+        x_channel=activations,
+        w_channel=weights,
+        y_channel=results,
         platform=FULL_DSP48E2,
     )
     activate = ThresholdingAxiKernel(
@@ -64,8 +64,8 @@ class Activated(Root):
         pe=1,
         ram_style="auto",
         ultra_stages=0,
-        input_stream=results,
-        output_stream=levels,
+        input_channel=results,
+        output_channel=levels,
         control=config,
         platform=FULL_DSP48E2,
     )
@@ -135,8 +135,8 @@ def test_writable_thresholds_without_a_control_bus_are_refused():
             pe=1,
             ram_style="auto",
             ultra_stages=0,
-            input_stream=Activated.results,
-            output_stream=Activated.levels,
+            input_channel=Activated.results,
+            output_channel=Activated.levels,
             platform=FULL_DSP48E2,
         )
 
@@ -205,9 +205,9 @@ def test_several_threshold_sets_take_a_set_selector_stream():
             pe=1,
             ram_style="auto",
             ultra_stages=0,
-            input_stream=values,
-            output_stream=levels,
-            set_stream=sets,
+            input_channel=values,
+            output_channel=levels,
+            set_channel=sets,
             platform=FULL_DSP48E2,
         )
 
@@ -224,4 +224,4 @@ def test_several_threshold_sets_take_a_set_selector_stream():
 
     refused = with_direct_transports(design_space(Short())).sets.query(Channel.netlist)
     assert isinstance(refused, Rejected)
-    assert {finding.code for finding in refused.findings} == {"threshold-set-stream"}
+    assert {finding.code for finding in refused.findings} == {"threshold-set-channel"}

@@ -420,14 +420,14 @@ class KernelOp(CustomOp):  # type: ignore[misc]
 
     # -- in a partition root ---------------------------------------------------------------
 
-    def owned_streams(self) -> dict[str, Channel]:
-        """The streams this node declares beside its outputs, by tensor: a stored
+    def owned_channels(self) -> dict[str, Channel]:
+        """The channels this node declares beside its outputs, by tensor: a stored
         parameter's, its tensor the kernel's view (D5, D6)."""
         return {}
 
-    def place(self, streams: Mapping[str, Channel]) -> tuple[Kernel, dict[str, str]]:
-        """This node's kernel on a partition's ``streams`` (by tensor), the graph's pins as
-        keywords; and the tensor of each of its input and owned streams, by port."""
+    def place(self, channels: Mapping[str, Channel]) -> tuple[Kernel, dict[str, str]]:
+        """This node's kernel on a partition's ``channels`` (by tensor), the graph's pins as
+        keywords; and the tensor of each of its input and owned channels, by port."""
         raise NotImplementedError
 
     # -- inference ------------------------------------------------------------------------

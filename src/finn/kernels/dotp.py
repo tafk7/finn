@@ -19,7 +19,7 @@ packed low first; only the complete beat is padded to a byte boundary.
 Activation TLAST closes each reduction and produces one result beat.
 
 Its three ports (``x``, ``w``, ``y``) sit on the streams its parent supplies
-(``x_stream``, ``w_stream``, ``y_stream``). The extents are bound from the
+(``x_channel``, ``w_channel``, ``y_channel``). The extents are bound from the
 tensors the ports read, which must agree (``kernel-extents``): x reads
 ``(m, k)`` (``(m, k, n)`` depthwise), w ``(k, n)`` (weights stored ``(k, n)``)
 and y ``(m, n)``. PE and SIMD are dotp's own Decisions, the folding factors of ``n`` and ``k``,
@@ -92,9 +92,9 @@ class DotpAxiKernel(Kernel):
     result_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
     platform: Platform = Param()
     # The streams dotp sits on: reference inputs, each a Channel placed beside it.
-    x_stream: Channel = Param(required=False)
-    w_stream: Channel = Param(required=False)
-    y_stream: Channel = Param(required=False)
+    x_channel: Channel = Param(required=False)
+    w_channel: Channel = Param(required=False)
+    y_channel: Channel = Param(required=False)
 
     # Each extent bound from the tensors the ports read (``Kernel.extents``).
     rows = extent_of(m)  # M: the results' rows
@@ -129,7 +129,7 @@ class DotpAxiKernel(Kernel):
     x = AxiStreamPort(
         name="s_axis_input",
         endpoint=Endpoint.TARGET,
-        stream=x_stream,
+        channel=x_channel,
         admits=Integer(min_bits=2),
         schedule=schedule,
         index=x_index,
@@ -140,7 +140,7 @@ class DotpAxiKernel(Kernel):
     w = AxiStreamPort(
         name="s_axis_weights",
         endpoint=Endpoint.TARGET,
-        stream=w_stream,
+        channel=w_channel,
         admits=Integer(min_bits=2, signed=True),
         schedule=schedule,
         index=(k, n),
@@ -149,7 +149,7 @@ class DotpAxiKernel(Kernel):
     y = AxiStreamPort(
         name="m_axis_output",
         endpoint=Endpoint.INITIATOR,
-        stream=y_stream,
+        channel=y_channel,
         admits=Integer(signed=True),
         schedule=schedule,
         index=(m, n),

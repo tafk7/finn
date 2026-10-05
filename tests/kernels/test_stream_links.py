@@ -34,9 +34,9 @@ class Placed(Space):
     y = Channel(tensor=Tensor((3, 4), ScalarEncoding(INT8)), port="out0_V", platform=FULL_DSP48E2)
     compute = PackedDotpKernel(
         result_dtype=INT8,
-        x_stream=x,
-        w_stream=w,
-        y_stream=y,
+        x_channel=x,
+        w_channel=w,
+        y_channel=y,
         platform=FULL_DSP48E2,
     )
 
@@ -101,9 +101,9 @@ def test_a_boundary_no_port_names_is_refused() -> None:
         )
         compute = PackedDotpKernel(
             result_dtype=INT8,
-            x_stream=x,
-            w_stream=w,
-            y_stream=y,
+            x_channel=x,
+            w_channel=w,
+            y_channel=y,
             platform=FULL_DSP48E2,
         )
 
@@ -116,7 +116,7 @@ def test_a_boundary_no_port_names_is_refused() -> None:
     refused = commit(design_space(Unnamed()), folding).w.query(Channel.endpoints)
     assert isinstance(refused, Rejected)
     assert {(item.code, item.owner) for item in refused.findings} == {
-        ("stream-boundary", "w.endpoints")
+        ("channel-boundary", "w.endpoints")
     }
     # The same root with the port named is accepted.
     assert not isinstance(commit(design_space(Placed()), folding).w.endpoints, Rejected)
@@ -125,7 +125,7 @@ def test_a_boundary_no_port_names_is_refused() -> None:
 class Reader(Space):
     """A consumer that exports its end itself, not through a kernel's port."""
 
-    input_stream: Channel = Param()
+    input_channel: Channel = Param()
 
     @view(semantics=STREAM_CONTRACT)
     def port(self) -> StreamContract:
@@ -133,7 +133,7 @@ class Reader(Space):
         transport = stream.native(clock="ap_clk", reset="ap_rst_n")
         return StreamContract(transport, ScalarEncoding(INT3), vector_major((3, 4), 4))
 
-    exports = {PORT: {input_stream: port}}
+    exports = {PORT: {input_channel: port}}
 
 
 def test_a_user_that_is_no_kernels_port_has_no_netlist() -> None:
@@ -141,10 +141,10 @@ def test_a_user_that_is_no_kernels_port_has_no_netlist() -> None:
         edge = Channel(
             platform=FULL_DSP48E2, tensor=Tensor((3, 4), ScalarEncoding(INT3)), port="in0_V"
         )
-        reader = Reader(input_stream=edge)
+        reader = Reader(input_channel=edge)
 
     point = with_direct_transports(design_space(Bare()))
     assert point.edge.users[0].node == "reader"
     refused = point.edge.query(Channel.netlist)
     assert isinstance(refused, Rejected)
-    assert {finding.code for finding in refused.findings} == {"stream-user"}
+    assert {finding.code for finding in refused.findings} == {"channel-user"}

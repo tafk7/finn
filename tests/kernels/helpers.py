@@ -146,7 +146,9 @@ def placed_dotp(
             port="out0_V",
             platform=platform,
         )
-        compute = space_type(x_stream=x, w_stream=w, y_stream=y, result_dtype=result_dtype, **facts)
+        compute = space_type(
+            x_channel=x, w_channel=w, y_channel=y, result_dtype=result_dtype, **facts
+        )
 
     choices = {
         key: value
@@ -229,9 +231,9 @@ def matmul_root(space_type: type[MatMulKernel]) -> type[Root]:
             platform=platform,
             weights=weights,
             weight_sets=weight_sets,
-            x_stream=x,
-            w_stream=w,
-            y_stream=y,
+            x_channel=x,
+            w_channel=w,
+            y_channel=y,
         )
         w.contents = matmul.weight_values
 

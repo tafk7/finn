@@ -14,21 +14,21 @@ outputs unused.
 - A ``WordPort`` carries opaque words on FinnLib's native pins (``idat``,
   ``ivld``, ``irdy`` for a target, ``odat``, ``ovld``, ``ordy`` for an
   initiator, on ``clk`` and ``rst``), with any loop-completion ``markers``: a
-  stream stage's port (``input_gen``, ``vpc``, ``fifo``).
-- An ``AxiStreamPort`` sits on a stream (``stream``) and presents what it
-  carries of the stream's tensor (``presented``): its kernel's ``Schedule``
+  channel stage's port (``input_gen``, ``vpc``, ``fifo``).
+- An ``AxiStreamPort`` sits on a channel (``channel``) and presents what it
+  carries of the channel's tensor (``presented``): its kernel's ``Schedule``
   projected through the indices it reads (``index``), its lane order
   (``lanes``, outer first), the indices it is presented after (``reduces``)
   or before (``holds``) and the reduction its marker closes (``closes``),
   through a row-major view when ``reshaped``; or, for a traversal no schedule
   derives, a given ``sequence``. Its element is its ``dtype`` when given
-  (its stream refuses another; a producer must give it) and otherwise its
-  stream's; ``admits`` is the
+  (its channel refuses another; a producer must give it) and otherwise its
+  channel's; ``admits`` is the
   integer policy its hardware takes. It is an AXIS bus named ``name``, with a
   ``TLAST`` when what it presents carries a marker; or, given ``signals``
   (data, valid, ready), those ready/valid pins, without a marker. Placed with
   a schedule, it exports its read of the tensor under ``ACCESS``, from which
-  its kernel binds its indices' extents. Left without a stream it is idle,
+  its kernel binds its indices' extents. Left without a channel it is idle,
   with the pins of its ``dtype`` and of the ``factors`` of its ``lanes``.
 """
 
@@ -164,7 +164,7 @@ OPTIONAL_DTYPE = or_none(QONNX_DATATYPE_VALUE_SEMANTICS)
 
 
 class AxiStreamPort(Port):
-    """One stream interface: what it presents of its stream's tensor, its element, its pins.
+    """One stream interface: what it presents of its channel's tensor, its element, its pins.
 
     It presents either its kernel's ``schedule``, projected through the indices
     it reads (``index``), its lane order (``lanes``, outer first), the indices
@@ -174,25 +174,25 @@ class AxiStreamPort(Port):
     Exactly one of the two. Placed with a schedule, it exports its read of the
     tensor (``ACCESS``), from which its kernel binds its indices' extents.
 
-    Its element is ``dtype`` when given, placed or idle (its stream refuses
-    another), and otherwise its stream's. A producer (an initiator) must give
+    Its element is ``dtype`` when given, placed or idle (its channel refuses
+    another), and otherwise its channel's. A producer (an initiator) must give
     it, from its kernel's facts, choices and input elements, never from its
-    own output stream: a compiler asks a kernel for its output types before
+    own output channel: a compiler asks a kernel for its output types before
     the downstream tensor exists. A producer that knows its values states
     their ``value_range`` (minimum, maximum) with it; ``()`` is the datatype's own.
-    ``admits`` is the integer policy its hardware takes. Idle (no stream), it
+    ``admits`` is the integer policy its hardware takes. Idle (no channel), it
     carries the lanes of the ``factors`` of its ``lanes`` indices. It is an
     AXIS bus named ``name``, with a ``TLAST`` when what it presents carries a
     marker; or, given ``signals`` (data, valid, ready), those ready/valid pins,
-    without a marker. ``staged``, a stream's source placed by the stream itself
+    without a marker. ``staged``, a channel's source placed by the channel itself
     (``finn.kernels.channels``), presents its given sequence and dtype without a
-    stream reference: it is not idle.
+    channel reference: it is not idle.
     """
 
     # By its full path, and not imported: channels imports this module (a channel's source
     # has a port), and the engine resolves the annotation when it collects the Space class. A
     # kernel that places a port on a channel names that Space class itself, so it is loaded.
-    stream: finn.kernels.channels.Channel = Param(required=False)
+    channel: finn.kernels.channels.Channel = Param(required=False)
     schedule: Schedule | None = Param(default=None, semantics=OPTIONAL_SCHEDULE)
     index: tuple[Index | Affine, ...] = Param(default=())
     lanes: tuple[Index, ...] = Param(default=())
@@ -211,11 +211,11 @@ class AxiStreamPort(Port):
 
     @derived
     def idle(self) -> bool:
-        return not self.present(AxiStreamPort.stream) and not self.staged
+        return not self.present(AxiStreamPort.channel) and not self.staged
 
     @derived
     def presented(self) -> BeatSequence | Rejected:
-        """What the port presents of its stream's tensor: its schedule's projection, or given."""
+        """What the port presents of its channel's tensor: its schedule's projection, or given."""
         schedule, given = self.schedule, self.sequence
         if (schedule is None) == (given is None):
             return reject("port-presentation", f"{self.name}: a schedule or a sequence, not both")
@@ -230,7 +230,7 @@ class AxiStreamPort(Port):
                     raise Refused("a reshaped port reads plain indices")
                 view = tuple(schedule.extent(axis) for axis in index)  # type: ignore[arg-type]
             form = schedule.present(
-                self.stream.tensor.shape,
+                self.channel.tensor.shape,
                 index,
                 lanes=self.lanes,
                 reduces=self.reduces,
@@ -252,12 +252,12 @@ class AxiStreamPort(Port):
 
     @view(when=binds)
     def access(self) -> Access:
-        return Access(self.name, self.stream.tensor.shape, self.index, self.reshaped)
+        return Access(self.name, self.channel.tensor.shape, self.index, self.reshaped)
 
     @derived
     def element(self) -> ScalarEncoding | Rejected:
-        """``dtype`` over ``value_range`` when given, placed or idle (its stream refuses
-        another); else the stream's."""
+        """``dtype`` over ``value_range`` when given, placed or idle (its channel refuses
+        another); else the channel's."""
         dtype, bounds = self.dtype, self.value_range
         if dtype is not None:
             if bounds and len(bounds) != 2:
@@ -268,7 +268,7 @@ class AxiStreamPort(Port):
             return reject("port-element", f"{self.name}: a producer states its dtype")
         if self.idle:
             return reject("port-element", f"{self.name}: an idle port states its dtype")
-        return self.stream.tensor.element
+        return self.channel.tensor.element
 
     @constraint
     def admitted(self) -> bool | Rejected:
@@ -335,7 +335,7 @@ class AxiStreamPort(Port):
         )
 
     exports = {
-        PORT: {stream: contract},
+        PORT: {channel: contract},
         PINS: pins,
         HELD: Port.held,
         CLOCKED: Port.clock_pin,

@@ -97,18 +97,18 @@ class Chain(Root):
     levels = Channel(tensor=Tensor((ROWS, HIDDEN), ScalarEncoding(T)), platform=FULL_DSP48E2)
     w2 = Channel(tensor=w2_tensor, platform=FULL_DSP48E2)
     y = Channel(tensor=y_tensor, port="m_axis_0", platform=FULL_DSP48E2)
-    first = matmul(INPUTS, HIDDEN, A, W1, x_stream=x, w_stream=w1, y_stream=hidden)
+    first = matmul(INPUTS, HIDDEN, A, W1, x_channel=x, w_channel=w1, y_channel=hidden)
     activate = ThresholdingAxiKernel(
         input_dtype=H,
         threshold_dtype=THRESHOLD_DTYPE,
         thresholds=THRESHOLDS,
         bias=0,
         pe=PE,
-        input_stream=hidden,
-        output_stream=levels,
+        input_channel=hidden,
+        output_channel=levels,
         platform=FULL_DSP48E2,
     )
-    second = matmul(HIDDEN, OUTPUTS, T, W2, x_stream=levels, w_stream=w2, y_stream=y)
+    second = matmul(HIDDEN, OUTPUTS, T, W2, x_channel=levels, w_channel=w2, y_channel=y)
     # Each weight stream carries its MatMul's weights, which the stream's source stores.
     w1.contents = first.weight_values
     w2.contents = second.weight_values
@@ -182,7 +182,7 @@ def test_a_matmul_on_a_stream_of_another_tensor_is_refused():
         y = Channel(
             platform=FULL_DSP48E2, tensor=Tensor((ROWS, HIDDEN), ScalarEncoding(H)), port="out0_V"
         )
-        first = matmul(INPUTS, HIDDEN, A, W1, x_stream=x, w_stream=w, y_stream=y)
+        first = matmul(INPUTS, HIDDEN, A, W1, x_channel=x, w_channel=w, y_channel=y)
 
     refused = design_space(Misplaced()).first.query(MatMulKernel.carried)
     assert isinstance(refused, Rejected)
@@ -202,7 +202,7 @@ def test_a_matmul_on_a_stream_of_another_element_is_refused():
             port="out0_V",
             platform=FULL_DSP48E2,
         )
-        first = matmul(INPUTS, HIDDEN, A, W1, x_stream=x, w_stream=w, y_stream=y)
+        first = matmul(INPUTS, HIDDEN, A, W1, x_channel=x, w_channel=w, y_channel=y)
 
     refused = design_space(Widened()).first.query(MatMulKernel.carried)
     assert isinstance(refused, Rejected)
@@ -227,7 +227,7 @@ def carried(
         w_ = Channel(tensor=Tensor((INPUTS, HIDDEN), w), port="in1_V", platform=FULL_DSP48E2)
         y_ = Channel(tensor=Tensor((ROWS, HIDDEN), y), port="out0_V", platform=FULL_DSP48E2)
         first = MatMulKernel(
-            **facts, **({"weights": W1} if known else {}), x_stream=x_, w_stream=w_, y_stream=y_
+            **facts, **({"weights": W1} if known else {}), x_channel=x_, w_channel=w_, y_channel=y_
         )
 
     return design_space(Stated()).first.query(MatMulKernel.carried)
@@ -243,15 +243,15 @@ def test_a_stream_s_values_fit_what_matmul_consumes_and_matmul_s_fit_what_it_pro
     assert carried(plain_a, plain_w, plain_h) == accepted
     narrow_y = ScalarEncoding(H, (0, 1))
     refused = carried(plain_a, plain_w, narrow_y)
-    assert isinstance(refused, Rejected) and "y_stream" in str(refused)
+    assert isinstance(refused, Rejected) and "y_channel" in str(refused)
     # Known weights (W1 holds -3 to 3) are produced by MatMul's memory: they fit a plain
     # stream (above), not a tighter one.
     refused = carried(plain_a, ScalarEncoding(W, (-2, 2)), plain_h)
-    assert isinstance(refused, Rejected) and "w_stream" in str(refused)
+    assert isinstance(refused, Rejected) and "w_channel" in str(refused)
     # Unknown weights come from outside: a tighter stream fits MatMul's full range.
     assert carried(plain_a, tight, plain_h, known=False) == accepted
     refused = carried(plain_a, ScalarEncoding(DataType["INT4"]), plain_h, known=False)
-    assert isinstance(refused, Rejected) and "w_stream" in str(refused)
+    assert isinstance(refused, Rejected) and "w_channel" in str(refused)
 
 
 @requires_xsim

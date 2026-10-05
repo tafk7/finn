@@ -274,9 +274,9 @@ def test_matmul_honors_the_child_physical_view_not_just_its_raw_module(monkeypat
             platform=MatMulKernel.platform,
             reshape_activations=MatMulKernel.dense_view,
             result_dtype=MatMulKernel.result_type,
-            x_stream=MatMulKernel.x_stream,
-            w_stream=MatMulKernel.w_stream,
-            y_stream=MatMulKernel.y_stream,
+            x_channel=MatMulKernel.x_channel,
+            w_channel=MatMulKernel.w_channel,
+            y_channel=MatMulKernel.y_channel,
         )
 
     # Substitute a fully authored Space class, without mutating declarations.

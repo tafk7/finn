@@ -206,7 +206,7 @@ def test_mismatches_name_the_adapter_that_would_repair_them():
         sink_is_top=False,
     )
     # Equal lanes and widths, different positions per beat.
-    assert codes(found) == {"stream-form"}
+    assert codes(found) == {"channel-form"}
     assert "lane_regroup" in next(iter(found)).message
 
 
@@ -214,11 +214,11 @@ def test_repetition_direction_and_marker_rules_are_checked():
     form = vector_major((4,), 2)
     ok = contract(form, Endpoint.INITIATOR)
     cyclic_sink = contract(form, Endpoint.TARGET, repetition=Repetition.CYCLIC)
-    assert "stream-repetition" in codes(
+    assert "channel-repetition" in codes(
         compatibility(ok, cyclic_sink, source_is_top=False, sink_is_top=False)
     )
     backwards = contract(form, Endpoint.INITIATOR)
-    assert "stream-direction" in codes(
+    assert "channel-direction" in codes(
         compatibility(ok, backwards, source_is_top=False, sink_is_top=False)
     )
     last = (StreamMarker("s_m", MarkerKind.LAST),)
@@ -228,7 +228,7 @@ def test_repetition_direction_and_marker_rules_are_checked():
     required = StreamContract(
         native("s", 6, Endpoint.TARGET, markers=last), INT3, form, markers={"s_m": LevelEnd(1)}
     )
-    assert "stream-marker" in codes(
+    assert "channel-marker" in codes(
         compatibility(produced, required, source_is_top=False, sink_is_top=False)
     )
 
@@ -314,7 +314,7 @@ def eltwise_with_constant(form=None):
             platform=FULL_DSP48E2,
         )
         rhs = MemStreamKernel(
-            platform=FULL_DSP48E2, dtype=int4, form=form, contents=PARAMETERS, output_stream=c
+            platform=FULL_DSP48E2, dtype=int4, form=form, contents=PARAMETERS, output_channel=c
         )
         add = EltwiseKernel(
             operation="ADD",
@@ -323,9 +323,9 @@ def eltwise_with_constant(form=None):
             rhs_dtype=int4,
             b_scale=1.0,
             platform=FULL_DSP58,
-            lhs_stream=x,
-            rhs_stream=c,
-            result_stream=y,
+            lhs_channel=x,
+            rhs_channel=c,
+            result_channel=y,
         )
 
     return commit(
@@ -344,7 +344,7 @@ def test_the_delivery_kernel_serves_a_second_consumer_through_the_same_contract(
     strided = Traversal.over((CHANNELS,), ((0, 2, 1),), ((0, 2, 2),))
     refused = eltwise_with_constant(strided).c.query(Channel.netlist)
     assert isinstance(refused, Rejected)
-    (plan,) = [finding for finding in refused.findings if finding.code == "stream-plan"]
+    (plan,) = [finding for finding in refused.findings if finding.code == "channel-plan"]
     assert "another lane axis" in plan.message
 
 
