@@ -1,9 +1,9 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Stream adapters: the hardware a stream places to carry out its plan.
+"""Stream adapters: the hardware a channel places to carry out its plan.
 
-A stream compares what its source presents with what its sink requires and
+A channel compares what its source presents with what its sink requires and
 derives a plan (``finn.dataflow.plan``): reorders, width conversions and marker
 synthesis. Its ``adapter`` Decision chooses the hardware that carries the plan
 out. Each candidate is a fixed chain of FinnLib modules and refuses every plan
@@ -29,10 +29,10 @@ it merges into the same module, whose ``olst[d]`` bits close the levels
 ``DIMS[d:]``, split or grouped until every required level is one of them.
 Marker synthesis alone is an ``input_gen`` that passes its frames in order. A
 width conversion is a ``vpc`` over vectors of the two lane counts' least common
-multiple, which the stream must hold whole. Each candidate places its modules
+multiple, which the channel must hold whole. Each candidate places its modules
 as kernel children (``InputGeneratorKernel``, ``VpcKernel``) named by stage,
 and each becomes a ``Stage``: the child's module and the contracts of its two
-ports, which the stream checks like any other end.
+ports, which the channel checks like any other end.
 
 FinnLib's ``replay_buffer`` is not wrapped: ``input_gen`` realizes every replay
 it could. FinnLib's ``inner_shuffle`` realizes one shape of lane regroup
@@ -201,7 +201,7 @@ def _stage_name(kinds: Sequence[str], index: int) -> str:
     return kind if not earlier else f"{kind}_{earlier}"
 
 
-# -- the candidates of a stream's adapter Decision ---------------------------------------
+# -- the candidates of a channel's adapter Decision --------------------------------------
 
 
 @dataclass(frozen=True)
@@ -224,12 +224,12 @@ class VpcFacts:
 
 
 class StreamAdapter(Space):
-    """A fixed chain of FinnLib modules carrying out a stream's plan, or refusing it.
+    """A fixed chain of FinnLib modules carrying out a channel's plan, or refusing it.
 
     Each candidate places its modules as kernel children named by stage
     (``input_gen``, ``vpc``, then ``input_gen_1``, ``vpc_1``), their facts
     derived from the realization. An ``input_gen`` child owns its memory's
-    ``ram_style``, on the stream's ``platform``.
+    ``ram_style``, on the channel's ``platform``.
     """
 
     modules: ClassVar[tuple[str, ...]] = ()
@@ -357,7 +357,7 @@ CHAINS: tuple[tuple[str, ...], ...] = (
     ("vpc", "input_gen", "vpc"),
     ("vpc", "input_gen", "vpc", "input_gen"),
 )
-"""Every chain a plan can take, each a candidate of a stream's ``adapter`` Decision."""
+"""Every chain a plan can take, each a candidate of a channel's ``adapter`` Decision."""
 
 
 def _chain(modules: tuple[str, ...]) -> type[StreamAdapter]:

@@ -1,20 +1,20 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Detached AXI stream packing and scalar datatype snapshots."""
+"""Detached AXIS beat packing and scalar datatype snapshots."""
 
 import pytest
 from qonnx.core.datatype import DataType
 
 from finn.kernels.artifacts.abi import Direction, Endpoint
-from finn.kernels.transport import AxiStream
+from finn.kernels.transport import AxisBeat
 
 
 @pytest.mark.parametrize("endpoint", tuple(Endpoint))
 def test_subbyte_scalars_pack_tightly_into_a_byte_and_directions_follow_the_endpoint(endpoint):
-    stream = AxiStream("data", DataType["INT3"], 2, endpoint=endpoint)
-    assert stream.payload_bits == 6 and stream.data_width == 8
-    directions = dict(stream.bus().member_directions())
+    beat = AxisBeat("data", DataType["INT3"], 2, endpoint=endpoint)
+    assert beat.payload_bits == 6 and beat.data_width == 8
+    directions = dict(beat.bus().member_directions())
     assert directions["data_tdata"] is (
         Direction.IN if endpoint is Endpoint.TARGET else Direction.OUT
     )
@@ -25,15 +25,15 @@ def test_subbyte_scalars_pack_tightly_into_a_byte_and_directions_follow_the_endp
 
 def test_dtype_is_the_immutable_value_the_caller_gave():
     dtype = DataType["INT3"]
-    stream = AxiStream("data", dtype, 2, endpoint=Endpoint.TARGET)
-    assert stream.dtype is dtype
+    beat = AxisBeat("data", dtype, 2, endpoint=Endpoint.TARGET)
+    assert beat.dtype is dtype
     with pytest.raises(AttributeError, match="immutable datatype value"):
         dtype._bitwidth = 8
-    assert stream.dtype == DataType["INT3"]
-    assert stream.data_width == 8
+    assert beat.dtype == DataType["INT3"]
+    assert beat.data_width == 8
 
 
 @pytest.mark.parametrize("lanes", (0, -1, True))
 def test_invalid_beat_size_refuses(lanes):
     with pytest.raises(ValueError, match="positive integer"):
-        AxiStream("data", DataType["INT3"], lanes, endpoint=Endpoint.TARGET)
+        AxisBeat("data", DataType["INT3"], lanes, endpoint=Endpoint.TARGET)

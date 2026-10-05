@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Physical FinnLib ``dotp_axi`` around one compute core, on three streams.
+"""Physical FinnLib ``dotp_axi`` around one compute core, on three channels.
 
 Each compute core is its own kernel: ``PackedDotpKernel`` (FinnLib ``dotp``,
 lanes packed into DSP48E1, DSP48E2 or DSP58 slices) and
@@ -18,7 +18,7 @@ SIMD lanes, SIMD varying fastest; each result beat PE lanes. Lanes are
 packed low first; only the complete beat is padded to a byte boundary.
 Activation TLAST closes each reduction and produces one result beat.
 
-Its three ports (``x``, ``w``, ``y``) sit on the streams its parent supplies
+Its three ports (``x``, ``w``, ``y``) sit on the channels its parent supplies
 (``x_channel``, ``w_channel``, ``y_channel``). The extents are bound from the
 tensors the ports read, which must agree (``kernel-extents``): x reads
 ``(m, k)`` (``(m, k, n)`` depthwise), w ``(k, n)`` (weights stored ``(k, n)``)
@@ -28,7 +28,7 @@ port's beat sequence derives from it. ``reshape_activations`` reads (M, K, N)
 activations as (M, K * N): a densely realized depthwise operation.
 
 The result's element is ``result_dtype``, the accumulator encoding its parent
-chooses (its stream refuses another), not a proof that an arbitrary frame fits
+chooses (its channel refuses another), not a proof that an arbitrary frame fits
 it: the parent must bound each frame's accumulation to it (including
 intermediate sums).
 """
@@ -88,10 +88,10 @@ class DotpAxiKernel(Kernel):
     form: Form = Param(default=Form.DENSE)
     reshape_activations: bool = Param(default=False)
     # The accumulator encoding it produces: its parent's choice (MatMul binds its
-    # result type), so that it is known before the results stream exists.
+    # result type), so that it is known before the results channel exists.
     result_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
     platform: Platform = Param()
-    # The streams dotp sits on: reference inputs, each a Channel placed beside it.
+    # The channels dotp sits on: reference inputs, each a Channel placed beside it.
     x_channel: Channel = Param(required=False)
     w_channel: Channel = Param(required=False)
     y_channel: Channel = Param(required=False)
@@ -322,7 +322,7 @@ class PackedDotpKernel(DotpAxiKernel):
     """FinnLib ``dotp``: activation and weight lanes packed into DSP48E1, DSP48E2 or DSP58.
 
     Activations are broadcast (``DENSE`` only). ``narrow_weights`` derives from
-    the weight stream's element: when its range excludes the type's most
+    the weight channel's element: when its range excludes the type's most
     negative value (a value owner stated it), a weight needs no sign guard bit,
     which packs more lanes per DSP and admits weights as wide as the DSP's A
     input. FinnLib stops simulation on a weight that breaks it.
@@ -338,7 +338,7 @@ class PackedDotpKernel(DotpAxiKernel):
 
     @derived
     def narrow_weights(self) -> bool:
-        """No weight its stream carries is its type's minimum."""
+        """No weight its channel carries is its type's minimum."""
         element = self.w.element
         if element.value_range is None:
             return False  # not an integer encoding: the weight port refuses it

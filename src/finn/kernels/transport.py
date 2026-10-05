@@ -5,7 +5,7 @@
 
 **Ready/valid.** A transfer occurs on the associated rising clock edge with
 valid and ready, outside reset. Valid data and sidebands are held while
-stalled. ``ReadyValidStream`` describes the native pins; ``AxiStream`` a
+stalled. ``ReadyValidStream`` describes the native pins; ``AxisBeat`` a
 homogeneous AXIS beat, lane zero lowest, with only the complete beat padded to a
 byte boundary. Scalar encodings keep their QONNX widths. A kernel's
 ``AxiStreamPort`` (``finn.kernels.port``) builds one from its lanes.
@@ -144,7 +144,7 @@ class ReadyValidStream:
 
 
 @dataclass(frozen=True, init=False)
-class AxiStream:
+class AxisBeat:
     """A homogeneous beat with lane zero in the least-significant bits.
 
     ``last`` declares the pin. Its workload-dependent meaning is supplied when
@@ -402,7 +402,7 @@ def marker_pairs(source: StreamContract, sink: StreamContract) -> tuple[tuple[st
 
 
 __all__ = [
-    "AxiStream",
+    "AxisBeat",
     "Level",
     "MarkerKind",
     "Mismatch",

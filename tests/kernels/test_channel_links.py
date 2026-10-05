@@ -1,10 +1,10 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""A stream's netlist: its stages below it, and each checked hop resolved into wires.
+"""A channel's netlist: its stages below it, and each checked hop resolved into wires.
 
-A user's end belongs to the kernel whose port it is, beside the stream
-(``^compute``); a stage sits at its label below the stream
+A user's end belongs to the kernel whose port it is, beside the channel
+(``^compute``); a stage sits at its label below the channel
 (``adapter.input_gen.input_gen``, ``transport.fifo.buffer``); a boundary end is
 the root's own pins (``None``).
 """
@@ -20,14 +20,14 @@ from finn.kernels.base import PORT
 from finn.kernels.channels import Channel
 from finn.kernels.configure import commit
 from finn.kernels.dotp import PackedDotpKernel
-from finn.kernels.transport import STREAM_CONTRACT, AxiStream, StreamContract
+from finn.kernels.transport import STREAM_CONTRACT, AxisBeat, StreamContract
 from kernels.helpers import FULL_DSP48E2, with_adapter_memories, with_direct_transports
 
 INT3, INT8 = DataType["INT3"], DataType["INT8"]
 
 
 class Placed(Space):
-    """dotp between boundary streams: three rows of four, four outputs, PE = SIMD = 2."""
+    """dotp between boundary channels: three rows of four, four outputs, PE = SIMD = 2."""
 
     x = Channel(tensor=Tensor((3, 4), ScalarEncoding(INT3)), port="in0_V", platform=FULL_DSP48E2)
     w = Channel(platform=FULL_DSP48E2, tensor=Tensor((4, 4), ScalarEncoding(INT3)), port="in1_V")
@@ -52,7 +52,7 @@ def placed(**transport: object) -> Placed:
     return with_adapter_memories(commit(with_direct_transports(design_space(Placed())), choices))
 
 
-def test_an_adapted_stream_places_its_stage_and_wires_each_hop() -> None:
+def test_an_adapted_channel_places_its_stage_and_wires_each_hop() -> None:
     point = placed(**{"w.transport": "direct"})
     fragment = point.x.netlist
     ((label, leaf),) = fragment.instances
@@ -65,13 +65,13 @@ def test_an_adapted_stream_places_its_stage_and_wires_each_hop() -> None:
     assert out.sink.data == "s_axis_input_tdata" and out.lanes == (0, 1) and out.lane_bits == 3
     # The frame marker: the input_gen's olst bit closing each reduction drives TLAST.
     assert out.markers == (("olst", 1, "s_axis_input_tlast", None),)
-    # A direct stream is one hop, and only a boundary stream presents a bus.
+    # A direct channel is one hop, and only a boundary channel presents a bus.
     (direct,) = point.y.netlist.links
     assert (direct.source.instance, direct.sink.instance) == ("^compute", None)
     assert [bus.name for bus in point.y.boundary_bus] == ["out0_V"]
 
 
-def test_a_buffered_stream_places_its_fifo_below_its_transport() -> None:
+def test_a_buffered_channel_places_its_fifo_below_its_transport() -> None:
     point = placed(
         **{
             "w.transport": "fifo",
@@ -88,7 +88,7 @@ def test_a_buffered_stream_places_its_fifo_below_its_transport() -> None:
 
 
 def test_a_boundary_no_port_names_is_refused() -> None:
-    """A weight stream with one user and no port is a boundary nothing may cross: only an
+    """A weight channel with one user and no port is a boundary nothing may cross: only an
     ONNX input or output of a partition is one (D4)."""
 
     class Unnamed(Space):
@@ -129,8 +129,8 @@ class Reader(Space):
 
     @view(semantics=STREAM_CONTRACT)
     def port(self) -> StreamContract:
-        stream = AxiStream("s_axis", INT3, 4, endpoint=Endpoint.TARGET)
-        transport = stream.native(clock="ap_clk", reset="ap_rst_n")
+        beat = AxisBeat("s_axis", INT3, 4, endpoint=Endpoint.TARGET)
+        transport = beat.native(clock="ap_clk", reset="ap_rst_n")
         return StreamContract(transport, ScalarEncoding(INT3), vector_major((3, 4), 4))
 
     exports = {PORT: {input_channel: port}}

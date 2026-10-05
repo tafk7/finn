@@ -39,7 +39,7 @@ from finn.kernels.target import Platform
 from finn.kernels.artifacts.module import Composed, Leaf
 from finn.kernels.base import Kernel
 from finn.kernels.configure import commit
-from finn.kernels.transport import AxiStream
+from finn.kernels.transport import AxisBeat
 from finn.kernels.channels import Channel
 from qonnx.core.datatype import DataType
 
@@ -91,7 +91,7 @@ point = commit(
 ).compute
 answer = point.module
 assert isinstance(answer, Leaf)
-assert isinstance(point.x.axis, AxiStream)
+assert isinstance(point.x.axis, AxisBeat)
 assert point.x.axis.payload_bits == 6
 class Root(Kernel):
     id = "test.root"

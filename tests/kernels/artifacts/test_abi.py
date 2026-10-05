@@ -20,7 +20,7 @@ from finn.kernels.artifacts.abi import (
     Free,
     Member,
     ObservedPort,
-    Port,
+    Pin,
     Reset,
     Signal,
     StandardProtocol,
@@ -32,11 +32,11 @@ from finn.kernels.artifacts.module import Pins
 
 
 def abi(
-    ports: Sequence[Port],
+    pins: Sequence[Pin],
     parameters: tuple[tuple[str, str], ...] = (),
     clock_alignments: tuple[ClockAlignment, ...] = (),
 ) -> Pins:
-    return Pins(tuple(ports), parameters, clock_alignments)
+    return Pins(tuple(pins), parameters, clock_alignments)
 
 
 def _stream(prefix: str, width: int, *, initiator: bool = False) -> Bus:
@@ -59,7 +59,7 @@ CLOCKING = (
     Signal("ap_clk2x", Direction.IN, 1, Clock(Derived("ap_clk", 2))),
     Signal("ap_rst_n", Direction.IN, 1, Reset(active_low=True)),
 )
-PORTS = (*CLOCKING, _stream("in0_V", 16), _stream("out0_V", 32, initiator=True))
+PINS = (*CLOCKING, _stream("in0_V", 16), _stream("out0_V", 32, initiator=True))
 
 #: The module as a parser reports it.
 OBSERVED = (
@@ -78,9 +78,9 @@ OBSERVED = (
 # -- the RTL check -------------------------------------------------------------
 
 
-def test_declared_ports_that_match_the_source_are_not_refused() -> None:
-    assert set(physical_names(PORTS)) == {port.name for port in OBSERVED}
-    assert check_against_rtl(PORTS, OBSERVED) == ()
+def test_declared_pins_that_match_the_source_are_not_refused() -> None:
+    assert set(physical_names(PINS)) == {port.name for port in OBSERVED}
+    assert check_against_rtl(PINS, OBSERVED) == ()
 
 
 def test_a_name_spelled_in_another_case_is_reported_as_such() -> None:
@@ -128,7 +128,7 @@ def test_a_pin_is_at_least_one_bit() -> None:
         Member("tdata", "a", 0)
 
 
-# -- the module's port list ----------------------------------------------------
+# -- the module's pin list -----------------------------------------------------
 
 
 def test_a_derived_clock_is_not_a_free_clock_and_names_its_reference() -> None:
@@ -144,11 +144,11 @@ def test_one_pin_is_carried_in_one_place() -> None:
         abi((*CLOCKING, Signal("in0_V_tdata", Direction.IN, 16), _stream("in0_V", 16)))
 
 
-def test_parameters_are_a_table_and_ports_a_declaration() -> None:
-    port = (Signal("a", Direction.IN, 1),)
-    assert abi(port, (("B", "1"), ("A", "0"))) == abi(port, (("A", "0"), ("B", "1")))
-    ports = (Signal("a", Direction.IN, 1), Signal("b", Direction.IN, 1))
-    assert abi(ports) != abi(tuple(reversed(ports)))
+def test_parameters_are_a_table_and_pins_a_declaration() -> None:
+    single = (Signal("a", Direction.IN, 1),)
+    assert abi(single, (("B", "1"), ("A", "0"))) == abi(single, (("A", "0"), ("B", "1")))
+    pins = (Signal("a", Direction.IN, 1), Signal("b", Direction.IN, 1))
+    assert abi(pins) != abi(tuple(reversed(pins)))
 
 
 def _associated(clock: str, reset: str) -> Bus:
@@ -195,18 +195,18 @@ def test_qualified_reset_domains_are_sorted_match_their_mode_and_name_clocks() -
 
 
 def test_an_aligned_2x_relation_is_sorted_and_validated() -> None:
-    ports = (
+    pins = (
         Signal("a", Direction.IN, 1, Clock(Free())),
         Signal("a2x", Direction.IN, 1, Clock(Derived("a", 2))),
         Signal("b", Direction.IN, 1, Clock(Free())),
         Signal("b2x", Direction.IN, 1, Clock(Derived("b", 2))),
     )
-    aligned = abi(ports, clock_alignments=(ClockAlignment("b", "b2x"), ClockAlignment("a", "a2x")))
+    aligned = abi(pins, clock_alignments=(ClockAlignment("b", "b2x"), ClockAlignment("a", "a2x")))
     assert aligned.clock_alignments == (ClockAlignment("a", "a2x"), ClockAlignment("b", "b2x"))
     with pytest.raises(AbiError, match="twice"):
-        abi(ports, clock_alignments=(ClockAlignment("a", "a2x"), ClockAlignment("a", "a2x")))
+        abi(pins, clock_alignments=(ClockAlignment("a", "a2x"), ClockAlignment("a", "a2x")))
     with pytest.raises(AbiError, match="Derived"):
         abi(
-            (ports[0], Signal("a2x", Direction.IN, 1, Clock(Derived("a", 3)))),
+            (pins[0], Signal("a2x", Direction.IN, 1, Clock(Derived("a", 3)))),
             clock_alignments=(ClockAlignment("a", "a2x"),),
         )

@@ -1,12 +1,12 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""FinnLib ``inner_shuffle`` as a node between two streams: a banked matrix transpose.
+"""FinnLib ``inner_shuffle`` as a node between two channels: a banked matrix transpose.
 
 A row-major ``(I, J)`` matrix, SIMD elements of a row a beat, becomes its
 columns, SIMD elements of a column a beat (``LANE_REGROUP``). It is not a
-candidate of a stream's ``adapter`` Decision (``finn.kernels.adapters``): a
-kernel with children places it explicitly, and a stream realizes lane regroups
+candidate of a channel's ``adapter`` Decision (``finn.kernels.adapters``): a
+kernel with children places it explicitly, and a channel realizes lane regroups
 through the common lane count instead. The defect that kept it out (see
 ``TransposeKernel``) is fixed in FinnLib, which reopens that option.
 """

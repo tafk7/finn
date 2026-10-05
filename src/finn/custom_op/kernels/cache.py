@@ -31,7 +31,7 @@ from finn.kernels.base import Kernel
 class Facts:
     """What binding a node reads: its node-root class, the key that identifies its facts by
     value, its formals (a thunk: the weights become integers only on a miss), and the
-    streams the node owns beside its outputs (a stored parameter's, by port name)."""
+    channels the node owns beside its outputs (a stored parameter's, by port name)."""
 
     root: type[Kernel]
     key: tuple[Hashable, ...]

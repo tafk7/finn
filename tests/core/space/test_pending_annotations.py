@@ -40,11 +40,11 @@ if TYPE_CHECKING:
     import toy.chan
 
 class Port(Space):
-    stream: {port_annotation} = Param(required=False)
+    channel: {port_annotation} = Param(required=False)
 
     @derived
     def width(self) -> int:
-        return self.stream.width
+        return self.channel.width
 """
 
 # The memory kernel imports the channel module last: its Space classes come first.
@@ -61,8 +61,8 @@ class Mem(Space):
     index: chan.Chan = Param(required=False)
     count: int = Param(default=1)
     other: Other = Param(required=False)
-    out_port = Port(stream=output)
-    set_port = Port(stream={set_port_supplier})
+    out_port = Port(channel=output)
+    set_port = Port(channel={set_port_supplier})
 {mem_extra}
 from toy import chan  # noqa: E402
 """
@@ -98,7 +98,7 @@ try:
 
     class Consumer(Space):
         x: Chan = Param()
-        p = Port(stream=x)
+        p = Port(channel=x)
 
     class Root(Space):
         idx = Chan(width=2)
@@ -151,7 +151,7 @@ def run_cycle(tmp_path: Path, entry: str, **variant: str) -> dict[str, object]:
 ACCEPTED = {
     "a forward into a pending reference formal": {},
     "a node supplied to a pending formal, in the cycle's module": {
-        "chan_extra": "class Pair(Space):\n    c = Chan(width=1)\n    p = Port(stream=c)"
+        "chan_extra": "class Pair(Space):\n    c = Chan(width=1)\n    p = Port(channel=c)"
     },
 }
 
@@ -171,40 +171,40 @@ REFUSED = {
     "a value formal forwarded into a pending reference formal": (
         {"set_port_supplier": "count"},
         "design_space",
-        "c.source.mem.set_port.stream: forwards count (declared at mem.py:12), which is "
+        "c.source.mem.set_port.channel: forwards count (declared at mem.py:12), which is "
         "not a reference input of Mem",
     ),
     "a reference of another Space class forwarded into a pending formal": (
         {"set_port_supplier": "other"},
         "design_space",
-        "c.source.mem.set_port.stream: forwards other (declared at mem.py:13), a Other "
-        "input of Mem; Port.stream takes a Chan",
+        "c.source.mem.set_port.channel: forwards other (declared at mem.py:13), a Other "
+        "input of Mem; Port.channel takes a Chan",
     ),
     "a reference forwarded into a pending formal that takes a value": (
         {"port_annotation": "toy.chan.Width"},
         "design_space",
-        "k.p.stream: forwards the reference input x (declared at entry.py:13), but the "
+        "k.p.channel: forwards the reference input x (declared at entry.py:13), but the "
         "formal takes a value",
     ),
     "a node of another Space class supplied to a pending formal": (
-        {"mem_extra": "    extra = Port(stream=Other())"},
+        {"mem_extra": "    extra = Port(channel=Other())"},
         "design_space",
-        "c.source.mem.extra.stream: expected a Chan node, got Other (declared at mem.py:16)",
+        "c.source.mem.extra.channel: expected a Chan node, got Other (declared at mem.py:16)",
     ),
     "a typo in a pending annotation": (
         {"port_annotation": "toy.chan.Chann"},
         "design_space",
-        "Port.stream (declared at port.py:10): cannot resolve the annotation "
+        "Port.channel (declared at port.py:10): cannot resolve the annotation "
         "'toy.chan.Chann': module 'toy.chan' has no attribute 'Chann'",
     ),
     "a literal supplied to a pending formal": (
-        {"mem_extra": "    extra = Port(stream=3)"},
+        {"mem_extra": "    extra = Port(channel=3)"},
         "import",
-        "the annotation of stream does not resolve yet, so a literal cannot be recognized "
+        "the annotation of channel does not resolve yet, so a literal cannot be recognized "
         "here; bind a member, or assign the value where the Space class is defined",
     ),
     "a Decision over nodes supplied to a pending formal": (
-        {"mem_extra": '    extra = Port(stream=Decision({"o": Other}))'},
+        {"mem_extra": '    extra = Port(channel=Decision({"o": Other}))'},
         "import",
         "a Decision over nodes is not a supplier; bind a member",
     ),
@@ -240,11 +240,11 @@ class Other(Space):
 
 
 class Port(Space):
-    stream: Chan = Param()
+    channel: Chan = Param()
 
     @derived
     def width(self) -> int:
-        return self.stream.width
+        return self.channel.width
 
 
 def test_a_forward_of_another_space_class_is_refused_when_linking() -> None:
@@ -252,7 +252,7 @@ def test_a_forward_of_another_space_class_is_refused_when_linking() -> None:
 
     class Kernel(Space):
         x: Other = Param()
-        port = Port(stream=x)  # type: ignore[arg-type]
+        port = Port(channel=x)  # type: ignore[arg-type]
 
     class Root(Space):
         o = Other()
@@ -260,7 +260,7 @@ def test_a_forward_of_another_space_class_is_refused_when_linking() -> None:
 
     with pytest.raises(
         DefinitionError,
-        match=r"k\.port\.stream: forwards x .*, a Other input of .*Kernel; Port\.stream "
+        match=r"k\.port\.channel: forwards x .*, a Other input of .*Kernel; Port\.channel "
         r"takes a Chan",
     ):
         design_space(Root())
@@ -272,7 +272,7 @@ def test_a_forward_of_a_subclass_is_accepted() -> None:
 
     class Kernel(Space):
         x: Wide = Param()
-        port = Port(stream=x)
+        port = Port(channel=x)
 
     class Root(Space):
         w = Wide(width=5)
@@ -283,7 +283,7 @@ def test_a_forward_of_a_subclass_is_accepted() -> None:
 
 def test_a_node_of_another_space_class_is_still_refused_at_the_call() -> None:
     with pytest.raises(DefinitionError, match="expected a Chan node, got Other"):
-        Port(stream=Other())  # type: ignore[arg-type]
+        Port(channel=Other())  # type: ignore[arg-type]
 
 
 def test_a_value_forward_of_another_type_is_still_refused_in_the_class_body() -> None:

@@ -97,7 +97,7 @@ def test_a_leaf_spells_its_parameters_and_holds_only_its_own_pins() -> None:
         replace(leaf, held=Held((("ivld", 2),)))
     with pytest.raises(BuildError, match="not an RTL module identifier"):
         replace(leaf, name="two words")
-    with pytest.raises(AbiError, match="names one port twice"):
+    with pytest.raises(AbiError, match="names one pin twice"):
         Pins((*CLOCKS, CLOCKS[0]))
 
 

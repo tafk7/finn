@@ -110,7 +110,7 @@ from finn.kernels.fifo import FifoKernel
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.target import Platform
 from finn.kernels.transport import (
-    AxiStream,
+    AxisBeat,
     Level,
     Mismatch,
     StreamContract,
@@ -132,10 +132,8 @@ def boundary_contract(
     if len(sequence.markers) > 1:
         raise ValueError("an AXIS boundary carries at most one marker")
     form = sequence.form
-    stream = AxiStream(
-        name, element.dtype, form.lanes, endpoint=endpoint, last=bool(sequence.markers)
-    )
-    transport = stream.native(clock=CLOCK, reset=RESET)
+    beat = AxisBeat(name, element.dtype, form.lanes, endpoint=endpoint, last=bool(sequence.markers))
+    transport = beat.native(clock=CLOCK, reset=RESET)
     markers = {transport.markers[0].signal: sequence.markers[0]} if sequence.markers else {}
     return StreamContract(transport, element, form, sequence.repetition, markers)
 

@@ -19,7 +19,7 @@ from qonnx.core.datatype import DataType
 from finn.core.space import Available, Param, Rejected, Space, derived, design_space
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, vector_major
-from finn.kernels.artifacts.abi import Bus, Direction, Endpoint, Signal
+from finn.kernels.artifacts.abi import Direction, Endpoint, Pin, Signal
 from finn.kernels.artifacts.module import Held, Leaf
 from finn.kernels.base import Clocking, Kernel
 from finn.kernels.channels import Channel
@@ -59,7 +59,7 @@ class Probe(Kernel):
     def clocking(self) -> Clocking:
         return Clocking(doubled="ap_clk2x", doubling=True)
 
-    def other_pins(self) -> tuple[Signal | Bus, ...]:
+    def other_pins(self) -> tuple[Pin, ...]:
         return (Signal("mode", Direction.IN, 2), Signal("busy", Direction.OUT, 1))
 
     def held(self) -> Held:

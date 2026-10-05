@@ -59,7 +59,7 @@ from finn.kernels.artifacts.module import Held
 from finn.kernels.base import ACCESS, CLOCKED, HELD, PINS, PORT
 from finn.kernels.datatypes.domains import Integer
 from finn.kernels.datatypes.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
-from finn.kernels.transport import AxiStream, ReadyValidStream, StreamContract, StreamMarker
+from finn.kernels.transport import AxisBeat, ReadyValidStream, StreamContract, StreamMarker
 
 if TYPE_CHECKING:
     import finn.kernels.channels
@@ -288,11 +288,11 @@ class AxiStreamPort(Port):
         return 0 if self.idle else len(self.presented.markers)
 
     @derived
-    def axis(self) -> AxiStream | Rejected:
+    def axis(self) -> AxisBeat | Rejected:
         if self.marker_count > 1:
             return reject("port-markers", f"{self.name} has one TLAST; the sequence needs more")
         try:
-            return AxiStream(
+            return AxisBeat(
                 self.name,
                 self.element.dtype,
                 self.lane_count,

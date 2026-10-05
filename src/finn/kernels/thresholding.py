@@ -10,7 +10,7 @@ Output is the threshold count plus bias. Runtime writes must preserve sorted
 rows. With multiple sets, each input beat requires a matching set-selector beat.
 
 PE, the channels a beat, is a Decision over the divisors of the table's C,
-known without a stream, so a flat build commits it as a choice. Placed, the
+known before placement, so a flat build commits it as a choice. Placed, the
 input and output walk one schedule row-major, ``c`` split by PE innermost;
 their tensors bind the extents, and the channel count must agree with the
 table's (``kernel-extents``). The set port indexes beats, which no index of a
@@ -33,7 +33,7 @@ each a named refusal of the case.
 
 All native pins remain present when AXI-Lite or set selection is disabled;
 disabled outputs may be unspecified. Placed in a kernel with children, it sits
-on an input, an output and (with several sets) a set-selector stream; its
+on an input, an output and (with several sets) a set-selector channel; its
 AXI-Lite bus is presented through a ``ControlBus`` when thresholds are
 runtime-writable (``controlled``), and otherwise held idle by its module, as
 is the set selector of a single set. Multi-set AXI-Lite access is refused: the
@@ -72,7 +72,7 @@ from finn.dataflow.datatypes import (
 )
 from finn.dataflow.schedule import Index, Schedule
 from finn.dataflow.traversal import BeatSequence, vector_major
-from finn.kernels.artifacts.abi import Bus, Endpoint, Member, Signal, StandardProtocol
+from finn.kernels.artifacts.abi import Bus, Endpoint, Member, Pin, StandardProtocol
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.artifacts.module import Held
 from finn.kernels.base import Kernel
@@ -146,12 +146,12 @@ class ThresholdingAxiKernel(Kernel):
 
     @derived
     def channels(self) -> int:
-        """C, the table's: known without a stream, so a flat build has its factor domain."""
+        """C, the table's: known before placement, so a flat build has its factor domain."""
         return self.shape[1]
 
     # PE channels a beat; PE above C would carry rows in the lanes, not modelled yet.
     pe: int = Decision(domain=divisors_of(channels))
-    # Where a parent places it: its streams, and the control
+    # Where a parent places it: the channels it sits on, and the control
     # bus that exports its AXI-Lite interface when thresholds are runtime-writable.
     input_channel: Channel = Param(required=False)
     output_channel: Channel = Param(required=False)
@@ -444,7 +444,7 @@ class ThresholdingAxiKernel(Kernel):
             ),
         )
 
-    def other_pins(self) -> tuple[Signal | Bus, ...]:
+    def other_pins(self) -> tuple[Pin, ...]:
         return (self.config_bus,)
 
     def held(self) -> Held | Rejected:

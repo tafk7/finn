@@ -13,8 +13,8 @@ netlist is flat, and grouping it into modules is a later decision of the flow.
 A fragment names its instances by labels relative to its owner (``compute.packed``);
 its parent places it with ``under(node)`` and joins its children's with
 ``merge``. A link end names its instance by such a label, ``None`` for the
-root's own pins, or ``^label`` for a node beside the owner (a stream's user,
-beside the stream). Constructors check only that a value is well formed; what
+root's own pins, or ``^label`` for a node beside the owner (a channel's user,
+beside the channel). Constructors check only that a value is well formed; what
 a configuration may be is decided in the Spaces that derive it.
 """
 
@@ -31,11 +31,11 @@ from finn.kernels.artifacts.abi import (
     Clock,
     ClockAlignment,
     Direction,
+    Pin,
     PinInfo,
-    Port,
     Reset,
     abi_pins,
-    validate_ports,
+    validate_pins,
 )
 from finn.kernels.artifacts.contributions import CopiedSource, GeneratedData
 from finn.kernels.artifacts.projection import digest
@@ -128,9 +128,13 @@ class ProducerIdentity:
 @dataclass(frozen=True, slots=True)
 class Pins:
     """A module's pins in declared order, its parameters as RTL spells them, and its
-    aligned clocks."""
+    aligned clocks.
 
-    ports: tuple[Port, ...]
+    ``ports`` keeps its name although it holds ``Pin`` values: a composed module's name
+    carries the digest of its typed fields (``fingerprint``), field names included, so
+    renaming the field would rename every composed module."""
+
+    ports: tuple[Pin, ...]
     parameters: tuple[tuple[str, str], ...] = ()
     clock_alignments: tuple[ClockAlignment, ...] = ()
 
@@ -138,9 +142,9 @@ class Pins:
         parameters = tuple(sorted(self.parameters, key=lambda item: item[0]))
         if len(parameters) != len({name for name, _ in parameters}):
             raise BuildError("a module's pins name one parameter twice")
-        ports, alignments = tuple(self.ports), tuple(sorted(self.clock_alignments))
-        validate_ports(ports, alignments)
-        object.__setattr__(self, "ports", ports)
+        pins, alignments = tuple(self.ports), tuple(sorted(self.clock_alignments))
+        validate_pins(pins, alignments)
+        object.__setattr__(self, "ports", pins)
         object.__setattr__(self, "parameters", parameters)
         object.__setattr__(self, "clock_alignments", alignments)
 

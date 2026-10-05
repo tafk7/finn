@@ -19,13 +19,13 @@ the shells (MakeZYNQProject; CreateVitisXO and VitisLink; SlashLink):
   ``vivado_stitch_ifnames``, raw, as the shells read them by name.
 
 The Tcl, the VLNV and the interface names are emitted by
-``finn.kernels.artifacts.ipxact`` from the module's ports; this module supplies
+``finn.kernels.artifacts.ipxact`` from the module's pins; this module supplies
 the partition: its module, part, clock and name, and the toolchain Vivado runs in.
 
 The partition's boundary facts are typed metadata on the partition model, the
 ``finn.partition`` namespace that ``finn.transformation.fpgadataflow.kernel_partitions``
 owns and the flow reads (InsertIODMA, ``get_driver_shapes``). They are read from
-the partition root's boundary streams where the boundary presents them
+the partition root's boundary channels where the boundary presents them
 (``boundary_facts``), and PackagePartition writes them (``write_boundary_facts``).
 
 The part and the clock period are the model's build target (``target(model)``,
@@ -102,7 +102,7 @@ def boundary_facts(
     model: ModelWrapper, point: Any, boundary: Sequence[tuple[str, str]], label: str
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Each boundary port's facts (``kernel_partitions.PORT_FACTS``), inputs then
-    outputs, in port order: the ONNX tensor's shape and annotation, and the stream's
+    outputs, in port order: the ONNX tensor's shape and annotation, and the channel's
     form and width at the partition's own end (the end no kernel of the partition owns)."""
     found: tuple[list[dict[str, Any]], list[dict[str, Any]]] = ([], [])
     for tensor, port in boundary:
@@ -171,12 +171,12 @@ class PackagePartition(Transformation):  # type: ignore[misc]
         emitted = emit_module(
             module, project / "src", roots={"finnlib": Path(resources.path("finnlib"))}
         )
-        ports = module.pins.ports
+        pins = module.pins.ports
         script = project / "package.tcl"
         script.write_text(
             package_tcl(
                 emitted,
-                ports,
+                pins,
                 part=built.part,
                 clock_ns=built.platform.period_ns,
                 ip_name=self.ip_name,
@@ -194,7 +194,7 @@ class PackagePartition(Transformation):  # type: ignore[misc]
             raise KernelOpError(f"{self.ip_name}: no IP packaged; see {project}/package.log")
         model.set_metadata_prop("vivado_stitch_proj", str(project))
         model.set_metadata_prop("vivado_stitch_vlnv", vlnv(self.ip_name))
-        model.set_metadata_prop("vivado_stitch_ifnames", json.dumps(interface_names(ports)))
+        model.set_metadata_prop("vivado_stitch_ifnames", json.dumps(interface_names(pins)))
         inputs, outputs = boundary_facts(model, point, boundary, self.ip_name)
         model.set(PARTITION_INPUTS, inputs)
         model.set(PARTITION_OUTPUTS, outputs)

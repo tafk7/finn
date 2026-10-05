@@ -1,25 +1,25 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Node roots: one kernel placed on boundary streams, the Space a KernelOp binds.
+"""Node roots: one kernel placed on boundary channels, the Space a KernelOp binds.
 
 A bare kernel cannot validate its choices: its cores bind their extents from
-the ports on its streams (``kernel-extents``). A node root places it on the
-streams of one ONNX node: the facts are its formals, an input stream's tensor
+the ports on its channels (``kernel-extents``). A node root places it on the
+channels of one ONNX node: the facts are its formals, an input channel's tensor
 is the graph's (``x_tensor``, a formal the kernel's ``carried`` checks), an
-output's and an owned parameter stream's the kernel's fact-level view. One
+output's and an owned parameter channel's the kernel's fact-level view. One
 class per op and graph-fixed case, compiled once per process, so every node of
 a class shares its compiled model and its decision keys.
 
 What the graph decides is a declaration here, never a choice: weights that are
-an initializer the node owns are the weight stream's known value (its
-``contents``, MatMul's ``weight_values``), so the stream's ``source`` applies
-and stores them; weights on a graph tensor arrive on the stream like any edge,
+an initializer the node owns are the weight channel's known value (its
+``contents``, MatMul's ``weight_values``), so the channel's ``source`` applies
+and stores them; weights on a graph tensor arrive on the channel like any edge,
 and it has no source. Nothing is pinned.
 
 The platform is a fact too: the target's capabilities and its clock period
 (``target(model)``), bound
-to the kernels and to every stream, so the requirements of their value cases
+to the kernels and to every channel, so the requirements of their value cases
 (``requires``) read the device the model is built for. The DSP block is
 the platform's (``platform.dsp``), which the compute cores read.
 """
@@ -75,7 +75,7 @@ class MatMulNode(Kernel):
 
 
 class StoredMatMulNode(MatMulNode):
-    """Weights an initializer: the node owns them, the weight stream's known value."""
+    """Weights an initializer: the node owns them, the weight channel's known value."""
 
     id = "finn.custom_op.kernels.node.matmul.stored"
     weights: IntegerTensor = Param(semantics=INTEGER_TENSOR)
@@ -92,13 +92,13 @@ class StoredMatMulNode(MatMulNode):
         w_channel=w,
         y_channel=MatMulNode.y,
     )
-    # The stream's value is MatMul's view of it; whether it has one (its source
+    # The channel's value is MatMul's view of it; whether it has one (its source
     # applies) is the view's guard, the weights' presence.
     w.contents = matmul.weight_values
 
 
 class StreamedMatMulNode(MatMulNode):
-    """Weights a graph tensor: an edge like any other, so the weight stream has no source."""
+    """Weights a graph tensor: an edge like any other, so the weight channel has no source."""
 
     id = "finn.custom_op.kernels.node.matmul.streamed"
     w = Channel(tensor=MatMulNode.w_tensor, port="in1_V", platform=MatMulNode.platform)

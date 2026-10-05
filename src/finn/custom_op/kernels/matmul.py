@@ -4,9 +4,9 @@
 """The MatMul KernelOp: ONNX ``MatMul`` semantics, Y = A @ B, bound to ``MatMulKernel``.
 
 H-006's reading rule decides the node root from the graph: weights that are an
-initializer are the node's own, the weight stream's known value, which its
+initializer are the node's own, the weight channel's known value, which its
 ``source`` stores (``StoredMatMulNode``), keyed by their value summary's
-digest; weights on any other tensor arrive on a stream like any edge
+digest; weights on any other tensor arrive on a channel like any edge
 (``StreamedMatMulNode``). A's leading axes are rows; B is the (k, n) matrix
 ONNX stores. The output is A's leading axes and n.
 """

@@ -3,11 +3,11 @@
 
 """IP-XACT packaging of an emitted module: the Vivado Tcl and the interface names.
 
-Text only, over a module's ABI ports (``abi``) and its emitted files
+Text only, over a module's ABI pins (``abi``) and its emitted files
 (``build.EmittedModule``); nothing here runs Vivado. ``package_tcl`` is the
 batch script that packages a module as an IP (from its sources, or from an
 out-of-context checkpoint with ``run_synth``); ``interface_tcl`` declares every
-bus interface from the ports, none left to Vivado's inference; ``interface_names``
+bus interface from the pins, none left to Vivado's inference; ``interface_names``
 is the ``vivado_stitch_ifnames`` metadata CreateStitchedIP writes; ``vlnv`` is a
 packaged IP's VLNV. ``finn.transformation.kernels.package`` (PackagePartition)
 packages a partition with them.
@@ -23,7 +23,7 @@ from finn.kernels.artifacts.abi import (
     Clock,
     Derived,
     Endpoint,
-    Port,
+    Pin,
     Reset,
     Signal,
     StandardProtocol,
@@ -33,7 +33,7 @@ from finn.kernels.artifacts.sources import include_directories
 
 
 class IpxactError(Exception):
-    """A port the IP-XACT packaging cannot declare."""
+    """A pin the IP-XACT packaging cannot declare."""
 
 
 VENDOR, LIBRARY, VERSION = "xilinx_finn", "finn", "1.0"
@@ -57,16 +57,16 @@ def _width(bus: Bus, logical: str) -> int:
     return next(member.width for member in bus.signals if member.logical == logical)
 
 
-def _frequency(port: Signal, clock_ns: float, ports: Sequence[Port]) -> int:
-    rate = port.role.rate if isinstance(port.role, Clock) else None
+def _frequency(pin: Signal, clock_ns: float, pins: Sequence[Pin]) -> int:
+    rate = pin.role.rate if isinstance(pin.role, Clock) else None
     if isinstance(rate, Derived):
-        reference = next(p for p in ports if isinstance(p, Signal) and p.name == rate.of)
-        return rate.ratio * _frequency(reference, clock_ns, ports)
+        reference = next(p for p in pins if isinstance(p, Signal) and p.name == rate.of)
+        return rate.ratio * _frequency(reference, clock_ns, pins)
     return round(1e9 / clock_ns)
 
 
-def interface_tcl(ports: Sequence[Port], clock_ns: float) -> list[str]:
-    """Tcl that declares every bus interface of ``ports`` on ``[ipx::current_core]``.
+def interface_tcl(pins: Sequence[Pin], clock_ns: float) -> list[str]:
+    """Tcl that declares every bus interface of ``pins`` on ``[ipx::current_core]``.
 
     It first removes what ``ipx::package_project`` inferred (interfaces and memory
     maps). A clock's ``FREQ_HZ`` is its rate at ``clock_ns`` (a derived clock's a
@@ -82,19 +82,19 @@ def interface_tcl(ports: Sequence[Port], clock_ns: float) -> list[str]:
         "    ipx::remove_memory_map [get_property NAME $item] $core",
         "}",
     ]
-    buses = [port for port in ports if isinstance(port, Bus)]
-    for port in ports:
-        if isinstance(port, Signal) and isinstance(port.role, Clock):
+    buses = [pin for pin in pins if isinstance(pin, Bus)]
+    for pin in pins:
+        if isinstance(pin, Signal) and isinstance(pin.role, Clock):
             tcl += [
-                f"set bus [ipx::add_bus_interface {port.name} $core]",
+                f"set bus [ipx::add_bus_interface {pin.name} $core]",
                 "set_property abstraction_type_vlnv xilinx.com:signal:clock_rtl:1.0 $bus",
                 "set_property bus_type_vlnv xilinx.com:signal:clock:1.0 $bus",
                 "set_property interface_mode slave $bus",
-                f"set_property physical_name {port.name} [ipx::add_port_map CLK $bus]",
-                f"set_property value {_frequency(port, clock_ns, ports)}"
+                f"set_property physical_name {pin.name} [ipx::add_port_map CLK $bus]",
+                f"set_property value {_frequency(pin, clock_ns, pins)}"
                 " [ipx::add_bus_parameter FREQ_HZ $bus]",
             ]
-            associated = [bus.name for bus in buses if bus.associated_clock == port.name]
+            associated = [bus.name for bus in buses if bus.associated_clock == pin.name]
             if associated:
                 tcl.append(
                     f"set_property value {':'.join(associated)}"
@@ -102,58 +102,58 @@ def interface_tcl(ports: Sequence[Port], clock_ns: float) -> list[str]:
                 )
             resets = [
                 reset.name
-                for reset in ports
+                for reset in pins
                 if isinstance(reset, Signal)
                 and isinstance(reset.role, Reset)
-                and port.name in (reset.role.synchronous_to or ())
+                and pin.name in (reset.role.synchronous_to or ())
             ]
-            if resets and not isinstance(port.role.rate, Derived):
+            if resets and not isinstance(pin.role.rate, Derived):
                 tcl.append(
                     f"set_property value {':'.join(resets)}"
                     " [ipx::add_bus_parameter ASSOCIATED_RESET $bus]"
                 )
-        elif isinstance(port, Signal) and isinstance(port.role, Reset):
-            polarity = "ACTIVE_LOW" if port.role.active_low else "ACTIVE_HIGH"
+        elif isinstance(pin, Signal) and isinstance(pin.role, Reset):
+            polarity = "ACTIVE_LOW" if pin.role.active_low else "ACTIVE_HIGH"
             tcl += [
-                f"set bus [ipx::add_bus_interface {port.name} $core]",
+                f"set bus [ipx::add_bus_interface {pin.name} $core]",
                 "set_property abstraction_type_vlnv xilinx.com:signal:reset_rtl:1.0 $bus",
                 "set_property bus_type_vlnv xilinx.com:signal:reset:1.0 $bus",
                 "set_property interface_mode slave $bus",
-                f"set_property physical_name {port.name} [ipx::add_port_map RST $bus]",
+                f"set_property physical_name {pin.name} [ipx::add_port_map RST $bus]",
                 f"set_property value {polarity} [ipx::add_bus_parameter POLARITY $bus]",
             ]
-        elif isinstance(port, Bus):
-            bus_type, abstraction = _INTERFACES[port.protocol]
-            mode = "slave" if port.endpoint is Endpoint.TARGET else "master"
+        elif isinstance(pin, Bus):
+            bus_type, abstraction = _INTERFACES[pin.protocol]
+            mode = "slave" if pin.endpoint is Endpoint.TARGET else "master"
             tcl += [
-                f"set bus [ipx::add_bus_interface {port.name} $core]",
+                f"set bus [ipx::add_bus_interface {pin.name} $core]",
                 f"set_property abstraction_type_vlnv {abstraction} $bus",
                 f"set_property bus_type_vlnv {bus_type} $bus",
                 f"set_property interface_mode {mode} $bus",
                 *(
                     f"set_property physical_name {member.physical}"
                     f" [ipx::add_port_map {member.logical.upper()} $bus]"
-                    for member in port.signals
+                    for member in pin.signals
                 ),
             ]
-            if port.protocol is StandardProtocol.AXIS:
-                data_bytes = -(-_width(port, "tdata") // 8)
+            if pin.protocol is StandardProtocol.AXIS:
+                data_bytes = -(-_width(pin, "tdata") // 8)
                 tcl.append(
                     f"set_property value {data_bytes} [ipx::add_bus_parameter TDATA_NUM_BYTES $bus]"
                 )
             else:
-                window = max(2 ** _width(port, "awaddr"), 4096)
+                window = max(2 ** _width(pin, "awaddr"), 4096)
                 tcl += [
                     "set_property value AXI4LITE [ipx::add_bus_parameter PROTOCOL $bus]",
-                    f"set map [ipx::add_memory_map {port.name} $core]",
+                    f"set map [ipx::add_memory_map {pin.name} $core]",
                     "set block [ipx::add_address_block Reg0 $map]",
                     f"set_property range {window} $block",
                     "set_property width 32 $block",
                     "set_property usage register $block",
-                    f"set_property slave_memory_map_ref {port.name} $bus",
+                    f"set_property slave_memory_map_ref {pin.name} $bus",
                 ]
         else:
-            raise IpxactError(f"{port.name}: a pin outside every bus interface")
+            raise IpxactError(f"{pin.name}: a pin outside every bus interface")
     tcl.append(
         "set_property value_resolve_type user"
         " [ipx::get_bus_parameters -of_objects [ipx::get_bus_interfaces -of_objects $core]]"
@@ -161,7 +161,7 @@ def interface_tcl(ports: Sequence[Port], clock_ns: float) -> list[str]:
     return tcl
 
 
-def interface_names(ports: Sequence[Port]) -> dict[str, list[Any]]:
+def interface_names(pins: Sequence[Pin]) -> dict[str, list[Any]]:
     """``vivado_stitch_ifnames`` as CreateStitchedIP writes it: each stream with its tdata
     width, ``clk2x`` only when a clock is derived."""
     names: dict[str, list[Any]] = {
@@ -173,25 +173,25 @@ def interface_names(ports: Sequence[Port]) -> dict[str, list[Any]]:
         "axilite": [],
         "ap_none": [],
     }
-    for port in ports:
-        if isinstance(port, Signal) and isinstance(port.role, Clock):
-            key = "clk2x" if isinstance(port.role.rate, Derived) else "clk"
-            names.setdefault(key, []).append(port.name)
-        elif isinstance(port, Signal) and isinstance(port.role, Reset):
-            names["rst"].append(port.name)
-        elif isinstance(port, Bus) and port.protocol is StandardProtocol.AXIS:
-            key = "s_axis" if port.endpoint is Endpoint.TARGET else "m_axis"
-            names[key].append([port.name, _width(port, "tdata")])
-        elif isinstance(port, Bus):
-            names["axilite"].append(port.name)
+    for pin in pins:
+        if isinstance(pin, Signal) and isinstance(pin.role, Clock):
+            key = "clk2x" if isinstance(pin.role.rate, Derived) else "clk"
+            names.setdefault(key, []).append(pin.name)
+        elif isinstance(pin, Signal) and isinstance(pin.role, Reset):
+            names["rst"].append(pin.name)
+        elif isinstance(pin, Bus) and pin.protocol is StandardProtocol.AXIS:
+            key = "s_axis" if pin.endpoint is Endpoint.TARGET else "m_axis"
+            names[key].append([pin.name, _width(pin, "tdata")])
+        elif isinstance(pin, Bus):
+            names["axilite"].append(pin.name)
         else:
-            raise IpxactError(f"{port.name}: a pin outside every bus interface")
+            raise IpxactError(f"{pin.name}: a pin outside every bus interface")
     return names
 
 
 def package_tcl(
     emitted: EmittedModule,
-    ports: Sequence[Port],
+    pins: Sequence[Pin],
     *,
     part: str,
     clock_ns: float,
@@ -213,11 +213,11 @@ def package_tcl(
     ]
     if run_synth:
         doubled = [
-            port.name
-            for port in ports
-            if isinstance(port, Signal)
-            and isinstance(port.role, Clock)
-            and isinstance(port.role.rate, Derived)
+            pin.name
+            for pin in pins
+            if isinstance(pin, Signal)
+            and isinstance(pin.role, Clock)
+            and isinstance(pin.role.rate, Derived)
         ]
         tcl += [
             "set xdc [open $project/clocks.xdc w]",
@@ -248,7 +248,7 @@ def package_tcl(
     tcl += [
         f"ipx::package_project -root_dir $project/ip -vendor {VENDOR} -library {LIBRARY}"
         " -taxonomy /UserIP -import_files -set_current true",
-        *interface_tcl(ports, clock_ns),
+        *interface_tcl(pins, clock_ns),
         f"set_property name {ip_name} $core",
         f"set_property display_name {ip_name} $core",
         f"set_property description {{FINN partition {ip_name} ({top})}} $core",

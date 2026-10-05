@@ -16,9 +16,9 @@ values it streams, so it states their ``value_range`` on its output: its element
   pass per index; the set channel is an ordinary channel reference input.
 - Its AXI-Lite port is tied off: the contents are fixed at build time.
 
-It is a stream's ``source`` candidate (``finn.kernels.channels``): placed by the
-stream it drives, ``staged``, its output presents into that stream without a
-reference to it, and its set port references the stream's ``index``.
+It is a channel's ``source`` candidate (``finn.kernels.channels``): placed by the
+channel it drives, ``staged``, its output presents into that channel without a
+reference to it, and its set port references the channel's ``index``.
 
 ``ram_style`` and ``pumped_memory`` are its choices. A pumped memory runs at
 ``ap_clk2x`` on half-width words and doubles the depth; its 2x clock pin is
@@ -57,7 +57,7 @@ from finn.dataflow.traversal import (
     pack,
     vector_major,
 )
-from finn.kernels.artifacts.abi import Bus, Endpoint, Member, Signal, StandardProtocol
+from finn.kernels.artifacts.abi import Bus, Endpoint, Member, Pin, StandardProtocol
 from finn.kernels.artifacts.contributions import Contribution, CopiedSource, GeneratedData
 from finn.kernels.artifacts.module import Held
 from finn.kernels.base import Clocking, Kernel
@@ -89,8 +89,8 @@ class MemStreamKernel(Kernel):
     form: Traversal = Param()
     contents: IntegerTensor = Param(semantics=INTEGER_TENSOR)
     sets: int = Param(default=1)
-    # Where a parent places it: the stream it drives and the set-index stream
-    # (several sets only); or, as a stream's source, placed by the stream (staged).
+    # Where a parent places it: the channel it drives and the set-index channel
+    # (several sets only); or, as a channel's source, placed by the channel (staged).
     # channels imports this module (a memory is a channel's source), so it is imported last;
     # the engine resolves these annotations when it collects the Space class.
     output_channel: channels.Channel = Param(required=False)
@@ -314,7 +314,7 @@ class MemStreamKernel(Kernel):
             self.init_file,
         )
 
-    def other_pins(self) -> tuple[Signal | Bus, ...]:
+    def other_pins(self) -> tuple[Pin, ...]:
         return (self.config_bus,)
 
     def held(self) -> Held:
