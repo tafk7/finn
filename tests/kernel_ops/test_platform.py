@@ -15,6 +15,7 @@ from dataclasses import replace
 from typing import Any
 
 import pytest
+from kernels.helpers import FULL_DSP58
 from qonnx.core.modelwrapper import ModelWrapper
 
 from finn.core.space import DefinitionError, Rejected, design_space, inspection
@@ -27,7 +28,6 @@ from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.target import DspBlock, Target
 from finn.transformation.kernels import InferKernelTensors, resolve_target
 from kernel_ops.models import matmul_model, thresholding_model
-from kernels.helpers import FULL_DSP58
 
 ZYNQ = resolve_target("xczu3eg-sbva484-1-e", 5.0, "vivado_zynq")  # Ultra96 in its shell
 ALVEO = resolve_target("xcu55c-fsvh2892-2L-e", 5.0, "vitis_alveo")

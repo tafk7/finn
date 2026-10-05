@@ -44,9 +44,9 @@ from finn.kernels.artifacts.abi import (
 from finn.kernels.artifacts.module import (
     BuildError,
     Composed,
-    LinkEnd,
     Leaf,
     Link,
+    LinkEnd,
     Module,
     module_name,
 )

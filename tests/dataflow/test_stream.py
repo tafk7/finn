@@ -10,7 +10,6 @@ test stream supplies them as inputs.
 from __future__ import annotations
 
 import pytest
-from finn.dataflow.datatypes import resolve_qonnx_datatype_name
 
 from finn.core.space import (
     Available,
@@ -21,6 +20,7 @@ from finn.core.space import (
     derived,
     design_space,
 )
+from finn.dataflow.datatypes import resolve_qonnx_datatype_name
 from finn.dataflow.plan import Step
 from finn.dataflow.stream import End, Ends, Stream
 from finn.dataflow.tensor import ScalarEncoding, Tensor

@@ -3,15 +3,20 @@
 
 """Authoring examples assessed against native modules, not copied width formulas."""
 
+import struct
 from dataclasses import replace
 from pathlib import Path
-import struct
 
-import pytest
-from qonnx.core.datatype import DataType
 import pyslang
+import pytest
 from pyslang import ast, syntax
+from qonnx.core.datatype import DataType
 
+from finn.core.space import (
+    DefinitionError,
+    Rejected,
+    design_space,
+)
 from finn.kernels import (
     EltwiseKernel,
     FifoKernel,
@@ -22,12 +27,7 @@ from finn.kernels.artifacts.abi import Bus
 from finn.kernels.artifacts.build import emit_module
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.artifacts.rtl import TOLERATED_DIAGNOSTICS
-from finn.core.space import (
-    DefinitionError,
-    Rejected,
-    design_space,
-)
-from kernels.helpers import controlled, finnlib_root, FULL_DSP48E2, FULL_DSP58, point_for
+from kernels.helpers import FULL_DSP48E2, FULL_DSP58, controlled, finnlib_root, point_for
 from kernels.xsim import requires_xsim, simulate
 
 ROOT = Path(__file__).resolve().parents[2]

@@ -10,12 +10,12 @@ aliases are evaluated.
 """
 
 from core.space._collapse_support import answers, counts, open_space
-from kernels.test_stream_source import FACTS, WEIGHTS
 
 from finn.core.space import inspection
 from finn.kernels.base import Kernel
 from finn.kernels.configure import commit
 from kernels.helpers import Root, placed_matmul
+from kernels.test_stream_source import FACTS, WEIGHTS
 
 CHOICES = {
     "none": {

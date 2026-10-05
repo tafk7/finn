@@ -25,8 +25,8 @@ from finn.kernels.configure import admission, commit
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.streams import Stream
 from finn.kernels.thresholding import ThresholdingAxiKernel
-from kernels.helpers import FULL_DSP48E2, Root, labels, with_adapter_memories
 from finn.kernels.transpose import TransposeKernel
+from kernels.helpers import FULL_DSP48E2, Root, labels, with_adapter_memories
 
 ELEMENT = ScalarEncoding(DataType["INT4"])
 ROWS, CHANNELS = 3, 12

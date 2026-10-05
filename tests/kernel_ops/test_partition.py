@@ -17,20 +17,20 @@ from typing import Any
 
 import numpy as np
 import pytest
+from kernels import test_design as chain
+from kernels.helpers import labels
+from kernels.xsim import pack, requires_xsim, stream_through
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.core.onnx_exec import execute_onnx
 from qonnx.transformation.infer_shapes import InferShapes
 
 from finn.custom_op.kernels.base import KernelOpError
 from finn.custom_op.kernels.partition import PartitionRoot, partition_root, save_partition_choices
+from finn.custom_op.kernels.roots import StreamedMatMulNode
 from finn.kernels.configure import commit, undecided
 from finn.kernels.streams import ADAPTER_RAM_STYLES
 from finn.transformation.kernels import InferKernelTensors, ToKernelOps
-from finn.custom_op.kernels.roots import StreamedMatMulNode
 from kernel_ops.models import INT3, TARGET, chain_source, lift, matmul_model
-from kernels import test_design as chain
-from kernels.helpers import labels
-from kernels.xsim import pack, requires_xsim, stream_through
 
 MATMUL = {
     "compute": "packed",

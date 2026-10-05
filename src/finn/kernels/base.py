@@ -64,7 +64,7 @@ from finn.core.space import (
     domain,
     reject,
 )
-
+from finn.dataflow.schedule import Access, Index, Refused, Schedule, bind_extents
 from finn.kernels.artifacts.abi import (
     Bus,
     Clock,
@@ -91,7 +91,6 @@ from finn.kernels.artifacts.module import (
     ProducerIdentity,
     merge,
 )
-from finn.dataflow.schedule import Access, Index, Refused, Schedule, bind_extents
 from finn.kernels.control import EXPORTED, top_bus
 from finn.kernels.transport import STREAM_CONTRACT
 

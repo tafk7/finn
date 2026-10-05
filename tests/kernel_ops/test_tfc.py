@@ -20,6 +20,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from kernels.xsim import pack, requires_xsim, stream_through
 from qonnx.core.onnx_exec import execute_onnx
 from qonnx.custom_op.registry import getCustomOp
 
@@ -28,7 +29,6 @@ from finn.kernels.configure import commit, undecided
 from finn.transformation.kernels import PackagePartition
 from finn.transformation.kernels.package import partition_facts, write_boundary_facts
 from kernel_ops.tfc import SHAPE, ULTRA96, partitioned
-from kernels.xsim import pack, requires_xsim, stream_through
 
 LOGITS = "MatMul_3_out0"
 # The partition's boundary facts as the network survey's probe read them (io.txt):

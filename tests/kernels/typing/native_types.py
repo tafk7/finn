@@ -5,8 +5,8 @@ from typing import assert_type
 
 from finn.core.space import BoundValue, ViewAssessment, design_space
 from finn.kernels.fifo import FifoKernel, FifoStorage
-from finn.kernels.transport import ReadyValidStream
 from finn.kernels.port import WordPort
+from finn.kernels.transport import ReadyValidStream
 from kernels.helpers import FULL_DSP48E2
 
 

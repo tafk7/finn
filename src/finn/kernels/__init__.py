@@ -20,10 +20,10 @@ if TYPE_CHECKING:
     from finn.kernels.eltwise import EltwiseKernel
     from finn.kernels.fifo import FifoKernel
     from finn.kernels.input_generator import InputGeneratorKernel
-    from finn.kernels.memstream import MemStreamKernel
-    from finn.kernels.thresholding import ThresholdingAxiKernel
     from finn.kernels.matmul import MatMulKernel
+    from finn.kernels.memstream import MemStreamKernel
     from finn.kernels.target import DspBlock
+    from finn.kernels.thresholding import ThresholdingAxiKernel
     from finn.kernels.vpc import VpcKernel
 
 _LAZY_EXPORTS = {

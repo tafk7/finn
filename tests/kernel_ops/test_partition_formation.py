@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
+from kernels import test_design as chain
 from onnx import TensorProto, helper
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.registry import getCustomOp
@@ -21,7 +22,6 @@ from finn.custom_op.kernels.partition import partition_root
 from finn.transformation.fpgadataflow.create_dataflow_partition import CreateDataflowPartition
 from finn.transformation.kernels import PackagePartition
 from kernel_ops.test_partition import configured, kernel_model
-from kernels import test_design as chain
 
 
 def on_the_host(model: ModelWrapper, *, between: bool = False) -> ModelWrapper:

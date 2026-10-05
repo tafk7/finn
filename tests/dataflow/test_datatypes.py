@@ -7,8 +7,10 @@ Datatype Space semantics are covered in tests/kernels.
 """
 
 from typing import Any, cast
+
 import pytest
 from qonnx.core.datatype import BaseDataType, DataType
+
 from finn.dataflow.datatypes import (
     DatatypeError,
     QONNXDataType,

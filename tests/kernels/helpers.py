@@ -28,12 +28,11 @@ import subprocess
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum
-from pathlib import Path
 from functools import cache
+from pathlib import Path
 from typing import Any, TypeVar, cast
 
 from finn import resources
-
 from finn.core.space import (
     Constraint,
     Param,
@@ -45,21 +44,21 @@ from finn.core.space import (
     inspection,
     reject,
 )
+from finn.core.space.results import Available, QueryResult
 from finn.dataflow.datatypes import QONNXDataType
 from finn.dataflow.gemm import Form
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.artifacts.module import Composed, Leaf
 from finn.kernels.base import Kernel
-from finn.kernels.streams import ADAPTER_RAM_STYLES, BufferedStream, Stream
-from finn.core.space.results import Available, QueryResult
 from finn.kernels.configure import admission, commit, describe, undecided
 from finn.kernels.control import ControlBus
-from finn.kernels.matmul import MatMulKernel
 from finn.kernels.datatypes.semantics import (
     INTEGER_TENSOR,
     QONNX_DATATYPE_VALUE_SEMANTICS,
     IntegerTensor,
 )
+from finn.kernels.matmul import MatMulKernel
+from finn.kernels.streams import ADAPTER_RAM_STYLES, BufferedStream, Stream
 from finn.kernels.target import DspBlock, Platform
 
 T = TypeVar("T")

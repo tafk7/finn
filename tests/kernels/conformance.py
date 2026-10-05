@@ -86,9 +86,9 @@ from finn.kernels.artifacts.rtl import Declined, extract
 from finn.kernels.base import Kernel
 from finn.kernels.configure import commit, describe, undecided
 from finn.kernels.memstream import MemStreamKernel
-from finn.kernels.transport import StreamContract
 from finn.kernels.port import AxiStreamPort
 from finn.kernels.streams import Stream
+from finn.kernels.transport import StreamContract
 from kernels.helpers import FULL_DSP48E2, Root, with_adapter_memories
 from kernels.xsim import materialize, stream_through
 

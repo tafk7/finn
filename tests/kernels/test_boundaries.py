@@ -7,9 +7,9 @@ from __future__ import annotations
 
 import ast
 import importlib.util
-from pathlib import Path
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 

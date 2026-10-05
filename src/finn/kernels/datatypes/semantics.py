@@ -9,13 +9,13 @@ from functools import cached_property
 from itertools import chain
 from typing import cast
 
+from finn.core.space import ValueSemantics
 from finn.dataflow.datatypes import (
     QONNX_DATATYPE_TOKEN,
     QONNXDataType,
     canonical_qonnx_datatype,
     is_qonnx_datatype,
 )
-from finn.core.space import ValueSemantics
 
 QONNX_DATATYPE_VALUE_SEMANTICS: ValueSemantics[QONNXDataType] = ValueSemantics(
     type_token=QONNX_DATATYPE_TOKEN,

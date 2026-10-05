@@ -16,16 +16,22 @@ import pytest
 from qonnx.core.datatype import DataType
 
 from finn.core.space import inspection
+from finn.dataflow.gemm import Form
 from finn.dataflow.plan import Step
 from finn.dataflow.tensor import ScalarEncoding
 from finn.dataflow.traversal import LevelEnd, vector_major
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.configure import commit
-from finn.dataflow.gemm import Form
 from finn.kernels.matmul import MatMulKernel
-from kernels.helpers import FULL_DSP48E2, FULL_DSP58, matmul_assembly, matmul_point, placed
 from finn.kernels.transport import MarkerKind, ReadyValidStream, StreamContract, StreamMarker
-from kernels.helpers import with_adapter_memories
+from kernels.helpers import (
+    FULL_DSP48E2,
+    FULL_DSP58,
+    matmul_assembly,
+    matmul_point,
+    placed,
+    with_adapter_memories,
+)
 
 FACTS = dict(
     m=3,

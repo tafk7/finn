@@ -32,7 +32,6 @@ from dataclasses import dataclass
 from enum import Enum
 from math import prod
 
-
 Position = tuple[int, ...]
 
 

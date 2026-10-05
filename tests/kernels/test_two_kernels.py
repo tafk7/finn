@@ -25,13 +25,13 @@ from finn.core.space import Rejected, derived, design_space
 from finn.dataflow.plan import Step
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import Traversal, period
+from finn.kernels.base import Kernel
 from finn.kernels.configure import commit
-from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.dotp import PackedDotpKernel
 from finn.kernels.matmul import exact_result_dtype
+from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.streams import Stream
-from finn.kernels.base import Kernel
-from kernels.helpers import FULL_DSP48E2, labels, Root, with_adapter_memories
+from kernels.helpers import FULL_DSP48E2, Root, labels, with_adapter_memories
 from kernels.xsim import pack, requires_xsim, stream_through
 
 ROOT = Path(__file__).resolve().parents[2]

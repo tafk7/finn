@@ -19,8 +19,7 @@ import pytest
 from onnx import helper
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.core.onnx_exec import execute_onnx
-from qonnx.custom_op.registry import getCustomOp
-from qonnx.custom_op.registry import get_domain_opset_version, op_identity
+from qonnx.custom_op.registry import get_domain_opset_version, getCustomOp, op_identity
 
 import finn.custom_op.kernels as domain
 from finn.custom_op.kernels.base import PLATFORM_KEYS, KernelOp, KernelOpError

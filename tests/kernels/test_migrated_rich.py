@@ -9,16 +9,16 @@ from typing import cast
 
 import pytest
 
-from finn.kernels.artifacts.abi import Bus, Signal
-from finn.kernels.datatypes.semantics import IntegerVector, ThresholdTable
-from finn.dataflow.datatypes import resolve_qonnx_datatype_name
-from finn.kernels.input_generator import InputGeneratorKernel
 from finn.core.space import (
     DefinitionError,
     Rejected,
     Unresolved,
     design_space,
 )
+from finn.dataflow.datatypes import resolve_qonnx_datatype_name
+from finn.kernels.artifacts.abi import Bus, Signal
+from finn.kernels.datatypes.semantics import IntegerVector, ThresholdTable
+from finn.kernels.input_generator import InputGeneratorKernel
 from finn.kernels.thresholding import ThresholdingAxiKernel
 from kernels.helpers import FULL_DSP48E2, controlled
 

@@ -22,9 +22,9 @@ from pathlib import Path
 
 import numpy as np  # type: ignore[import-not-found]
 
+from finn.dataflow.traversal import Traversal, vector_major
 from kernels.helpers import print_identity
 from kernels.rtlsim.rtl_transport import drive
-from finn.dataflow.traversal import Traversal, vector_major
 from kernels.test_adapters import ELEMENT, adapted, columns_first, transposed, values
 from kernels.xsim import materialize
 

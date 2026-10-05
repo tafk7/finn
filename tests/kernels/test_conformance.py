@@ -60,8 +60,8 @@ from kernels.conformance import (
     place,
     samples,
 )
+from kernels.helpers import FULL_DSP48E2, FULL_DSP58, full_platform
 from kernels.xsim import requires_xsim
-from kernels.helpers import FULL_DSP58, full_platform, FULL_DSP48E2
 
 
 def tensor(shape: tuple[int, ...], dtype: str) -> Tensor:

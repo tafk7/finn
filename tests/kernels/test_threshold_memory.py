@@ -12,13 +12,14 @@ RTL would assign it.
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 from qonnx.core.datatype import DataType
 
 from finn.core.space import Inapplicable, Rejected, design_space, inspection
 from finn.kernels.target import Platform
 from finn.kernels.thresholding import ThresholdingAxiKernel
-from dataclasses import replace
 from kernels.helpers import FULL_DSP48E2
 
 INT8 = DataType["INT8"]

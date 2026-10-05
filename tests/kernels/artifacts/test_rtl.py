@@ -15,11 +15,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pyslang
 import pytest
+from pyslang import ast, syntax
 
 from finn import resources
-from finn.util.resources import resource_path
-
 from finn.kernels.artifacts.abi import (
     Bus,
     Clock,
@@ -33,9 +33,6 @@ from finn.kernels.artifacts.abi import (
     Signal,
     StandardProtocol,
 )
-import pyslang
-from pyslang import ast, syntax
-
 from finn.kernels.artifacts.rtl import (
     TOLERATED_DIAGNOSTICS,
     TOLERATED_WITHIN,
@@ -44,6 +41,7 @@ from finn.kernels.artifacts.rtl import (
     check_abi,
     extract,
 )
+from finn.util.resources import resource_path
 
 REPLAY_PARAMETERS = (("LEN", "2"), ("REP", "3"), ("W", "16"))
 DOTP_PARAMETERS = (

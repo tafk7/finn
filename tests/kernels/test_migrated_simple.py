@@ -9,11 +9,6 @@ from typing import TypeVar
 
 import pytest
 
-from finn.kernels.artifacts.abi import Direction, Signal
-from finn.kernels.artifacts.contributions import CopiedSource
-from finn.dataflow.datatypes import resolve_qonnx_datatype_name
-from finn.kernels.eltwise import EltwiseKernel
-from finn.kernels.fifo import FifoKernel
 from finn.core.space import (
     Available,
     Param,
@@ -24,6 +19,11 @@ from finn.core.space import (
     design_space,
 )
 from finn.core.space.errors import ValueUnavailableError
+from finn.dataflow.datatypes import resolve_qonnx_datatype_name
+from finn.kernels.artifacts.abi import Direction, Signal
+from finn.kernels.artifacts.contributions import CopiedSource
+from finn.kernels.eltwise import EltwiseKernel
+from finn.kernels.fifo import FifoKernel
 from finn.kernels.target import DspBlock, Platform
 from kernels.helpers import FULL_DSP48E2, full_platform
 

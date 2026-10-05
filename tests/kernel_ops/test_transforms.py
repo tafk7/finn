@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
+from kernels import test_design as chain
 from onnx import TensorProto, helper, numpy_helper
 from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
@@ -24,7 +25,6 @@ from finn.custom_op.kernels.base import PLATFORM_KEYS, KernelOpError, target
 from finn.transformation.general import ApplyConfig
 from finn.transformation.kernels import InferKernelTensors, ToKernelOps, kernel_choices_config
 from kernel_ops.models import DOMAIN, TARGET, chain_source
-from kernels import test_design as chain
 
 
 def converted(**options: bool) -> ModelWrapper:

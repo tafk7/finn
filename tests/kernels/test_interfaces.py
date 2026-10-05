@@ -15,14 +15,14 @@ import pytest
 from qonnx.core.datatype import DataType
 
 from finn.core.space import Available, Rejected, Space, design_space
+from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.artifacts.abi import Bus, Endpoint, StandardProtocol
 from finn.kernels.artifacts.build import netlist
 from finn.kernels.control import ControlBus
-from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.dotp import PackedDotpKernel
 from finn.kernels.streams import Stream
 from finn.kernels.thresholding import ThresholdingAxiKernel
-from kernels.helpers import FULL_DSP48E2, placed, Root, with_adapter_memories
+from kernels.helpers import FULL_DSP48E2, Root, placed, with_adapter_memories
 from kernels.xsim import requires_xsim, stream_through
 
 REPETITIONS, WIDTH, HEIGHT, SIMD = 2, 4, 2, 2

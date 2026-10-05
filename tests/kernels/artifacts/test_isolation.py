@@ -21,8 +21,8 @@ because moving a package must not remove it from the execution boundary check.
 from __future__ import annotations
 
 import ast
-from importlib.util import resolve_name
 import sys
+from importlib.util import resolve_name
 from pathlib import Path
 
 import pytest
