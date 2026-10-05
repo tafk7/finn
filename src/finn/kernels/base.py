@@ -49,6 +49,7 @@ from typing import ClassVar, cast
 
 from finn.core.space import (
     ConstraintGroup,
+    DefinitionError,
     Domain,
     Members,
     Rejected,
@@ -64,7 +65,6 @@ from finn.core.space import (
     reject,
 )
 
-from finn.core.space.errors import DefinitionError
 from finn.kernels.artifacts.abi import (
     Bus,
     Clock,

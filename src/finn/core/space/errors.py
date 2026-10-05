@@ -16,20 +16,20 @@ class SpaceError(Exception):
     """Base class for failures at Space boundaries."""
 
 
-class DefinitionError(SpaceError, ValueError):
+class _WithFindings(SpaceError, ValueError):
+    """A failure found before evaluation, with the findings that explain it."""
+
+    def __init__(self, detail: str, *, findings: Iterable[Finding] = ()) -> None:
+        self.findings = tuple(findings)
+        super().__init__(detail)
+
+
+class DefinitionError(_WithFindings):
     """An authored definition cannot be compiled into a valid model."""
 
-    def __init__(self, detail: str, *, findings: Iterable[Finding] = ()) -> None:
-        self.findings = tuple(findings)
-        super().__init__(detail)
 
-
-class RequestError(SpaceError, ValueError):
+class RequestError(_WithFindings):
     """A binding or configuration request is malformed, before evaluation."""
-
-    def __init__(self, detail: str, *, findings: Iterable[Finding] = ()) -> None:
-        self.findings = tuple(findings)
-        super().__init__(detail)
 
 
 class EvaluationError(SpaceError):
@@ -76,6 +76,5 @@ __all__ = [
     "ConfigurationError",
     "ReferenceUseError",
     "RequestError",
-    "SpaceError",
     "ValueUnavailableError",
 ]
