@@ -54,7 +54,7 @@ gate_ruff() {
 
 # gate_mypy <mypy targets...>: strict, resolving finn and the test helpers from
 # this checkout and installed packages from the environment. Overrides and
-# excludes live in pyproject.toml.
+# excludes live in .mypy.ini.
 gate_mypy() {
     env -u PYTHONPATH MYPYPATH=src:tests "$MYPY_BIN" \
         --no-incremental --strict --explicit-package-bases "$@"

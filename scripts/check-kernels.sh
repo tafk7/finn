@@ -22,5 +22,5 @@ gate_ruff src/finn/kernels tests/kernels \
     src/finn/custom_op/kernels src/finn/transformation/kernels tests/kernel_ops \
     scripts/benchmark-space.py
 gate_mypy -p finn.kernels -p finn.custom_op.kernels -p finn.transformation.kernels
-# Whole directories; the files not yet strictly typed are listed in pyproject.toml.
+# Whole directories; the files not yet strictly typed are listed in .mypy.ini.
 gate_mypy tests/kernels tests/kernel_ops
