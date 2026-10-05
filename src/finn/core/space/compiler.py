@@ -157,7 +157,7 @@ def compile_model(space_type: type[S]) -> Model[S]:
         return model
 
 
-def compile_node(record: NodeDecl) -> Model[Space]:
+def _compile_node(record: NodeDecl) -> Model[Space]:
     """The model of one root declaration; plain values stay runtime inputs."""
 
     with _PREPARATION_LOCK:
@@ -232,7 +232,7 @@ def design_space(node: S) -> S:
             f"{'; '.join(missing)}; while opening the design space of {record.describe()}"
         )
     try:
-        model = compile_node(record)
+        model = _compile_node(record)
     except DefinitionError as error:
         raise DefinitionError(
             f"{error}; while opening the design space of {record.describe()}",

@@ -78,7 +78,7 @@ from finn.kernels.target import Platform
 LANE = Index("lane")
 """The lanes of a stored word, one per lane of the consumer's form."""
 
-MEMSTREAM_RAM_STYLES = ("auto", "distributed", "block", "ultra")
+_MEMSTREAM_RAM_STYLES = ("auto", "distributed", "block", "ultra")
 
 
 class MemStreamKernel(Kernel):
@@ -97,7 +97,7 @@ class MemStreamKernel(Kernel):
     staged: bool = Param(default=False)
     platform: Platform = Param()
     ram_style: str = Decision(
-        values=MEMSTREAM_RAM_STYLES,
+        values=_MEMSTREAM_RAM_STYLES,
         requires=(
             requires(platform.uram, "uram-absent: the platform has no UltraRAM", cases=("ultra",)),
             requires(
@@ -321,4 +321,4 @@ class MemStreamKernel(Kernel):
         return held_bus(self.config_bus)
 
 
-__all__ = ["MEMSTREAM_RAM_STYLES", "MemStreamKernel"]
+__all__ = ["MemStreamKernel"]

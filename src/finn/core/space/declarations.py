@@ -321,7 +321,7 @@ def _unannotated(declaration: Declaration, kind: str) -> DefinitionError:
     )
 
 
-def annotation_semantics(
+def _annotation_semantics(
     annotation: object, explicit: ValueSemantics[Any] | None, label: str
 ) -> ValueSemantics[Any]:
     """Value semantics for an annotated value type; ``semantics=`` overrides the default."""
@@ -442,7 +442,7 @@ class Param(ValueDecl[T], Generic[T]):
                 )
             self.family, self.semantics = family, None
         else:
-            semantics = annotation_semantics(annotation, self.explicit, label)
+            semantics = _annotation_semantics(annotation, self.explicit, label)
             if self.default not in (MISSING, UNSUPPLIED):
                 if not recognize(semantics, self.default, owner=label, role="default recognition"):
                     raise DefinitionError(
@@ -723,7 +723,7 @@ class Decision(ValueDecl[T], Generic[T]):
             return self  # inline: typed by the formal it supplies
         if annotation is MISSING and self.explicit is None:
             raise _unannotated(self, "Decision")
-        self.semantics = annotation_semantics(
+        self.semantics = _annotation_semantics(
             annotation, self.explicit, _describe_formal(self, "Decision")
         )
         self.resolved = True

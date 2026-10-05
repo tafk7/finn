@@ -78,19 +78,19 @@ class Finding:
         object.__setattr__(self, "causes", ordered_findings(self.causes))
 
 
-def finding_sort_key(finding: Finding) -> tuple[object, ...]:
+def _finding_sort_key(finding: Finding) -> tuple[object, ...]:
     return (
         finding.owner,
         finding.kind.value,
         finding.code,
         finding.message,
         tuple((key, _detail_key(value)) for key, value in finding.details),
-        tuple(finding_sort_key(cause) for cause in finding.causes),
+        tuple(_finding_sort_key(cause) for cause in finding.causes),
     )
 
 
 def ordered_findings(findings: Iterable[Finding]) -> tuple[Finding, ...]:
-    return tuple(sorted(findings, key=finding_sort_key))
+    return tuple(sorted(findings, key=_finding_sort_key))
 
 
 def merged_findings(answers: Iterable[NonValue]) -> tuple[Finding, ...]:
@@ -359,7 +359,6 @@ __all__ = [
     "assess_constraints",
     "assess_view",
     "constraint_result",
-    "finding_sort_key",
     "merged_findings",
     "ordered_findings",
     "owned_result",

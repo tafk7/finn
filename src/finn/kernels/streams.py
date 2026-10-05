@@ -128,9 +128,6 @@ SOURCES: dict[str, type[Space] | Space] = {"memstream": MemStreamKernel}
 """The kernels that can drive a stream with its known value: a memory; later a fetcher
 from memory-mapped memory, a loop's memory, a source reloadable over AXI-Lite."""
 
-ADAPTER_RAM_STYLES = "*.adapter.*.ram_style"
-"""The keys (``fnmatch``) of every adapter stage's memory choice, an ``input_gen``'s."""
-
 
 def boundary_contract(
     name: str, element: ScalarEncoding, sequence: BeatSequence, endpoint: Endpoint
@@ -487,7 +484,6 @@ class BufferedStream(Stream):
 
 
 __all__ = [
-    "ADAPTER_RAM_STYLES",
     "SOURCES",
     "BufferedStream",
     "Stream",

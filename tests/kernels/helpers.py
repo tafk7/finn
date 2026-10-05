@@ -58,7 +58,7 @@ from finn.kernels.datatypes.semantics import (
     IntegerTensor,
 )
 from finn.kernels.matmul import MatMulKernel
-from finn.kernels.streams import ADAPTER_RAM_STYLES, BufferedStream, Stream
+from finn.kernels.streams import BufferedStream, Stream
 from finn.kernels.target import DspBlock, Platform
 
 T = TypeVar("T")
@@ -275,6 +275,10 @@ def placed(module: Composed, label: str) -> Leaf:
 
 def pin_names(module: Composed | Leaf) -> set[str]:
     return {port.name for port in module.pins.ports}
+
+
+ADAPTER_RAM_STYLES = "*.adapter.*.ram_style"
+"""The keys (``fnmatch``) of every adapter stage's memory choice, an ``input_gen``'s."""
 
 
 def with_adapter_memories(point: S, ram_style: str = "auto") -> S:
