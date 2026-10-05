@@ -11,8 +11,8 @@ from collections.abc import Mapping
 from typing import TypeVar, cast, overload
 
 from . import _execution, _runtime
+from ._collapse import forwards, guard_implies
 from ._configuration import BoundDecision, BoundValue, Space
-from ._linker import forwards, guard_implies
 from ._runtime import Snapshot
 from .compiler import Model
 from .declarations import (
@@ -25,7 +25,7 @@ from .declarations import (
     declared_path,
 )
 from .errors import EvaluationError, RequestError
-from .ir import LinkedModel, Node
+from .ir import LinkedModel
 from .results import (
     Available,
     ConstraintAssessment,
@@ -36,6 +36,7 @@ from .results import (
     ViewAssessment,
     require_value,
 )
+from .semantics import recognize, snapshot, unrecognized
 
 T = TypeVar("T")
 S = TypeVar("S", bound=Space)
@@ -61,24 +62,6 @@ def _attach(current: Snapshot, scope: int) -> Space:
     return instance
 
 
-def _recognize_request_value(node: Node, value: object, role: str) -> None:
-    assert node.semantics is not None
-    try:
-        recognized = node.semantics.accepts(value)
-    except Exception as cause:
-        raise EvaluationError(node.owner, f"{role} recognition", str(cause)) from cause
-    if not recognized:
-        raise RequestError(f"{node.key}: expected value of nominal type {node.semantics.name}")
-
-
-def _snapshot_request_value(node: Node, value: object, role: str) -> object:
-    assert node.semantics is not None
-    try:
-        return node.semantics.freeze(value)
-    except Exception as cause:
-        raise EvaluationError(node.owner, f"{role} snapshot", str(cause)) from cause
-
-
 def _prepare_values(
     linked: LinkedModel,
     pending: Mapping[int, object],
@@ -86,11 +69,16 @@ def _prepare_values(
 ) -> dict[int, object]:
     """Recognize the entire request before any snapshot adapter is invoked."""
     for index, value in pending.items():
-        _recognize_request_value(linked.nodes[index], value, role)
-    return {
-        index: _snapshot_request_value(linked.nodes[index], value, role)
-        for index, value in pending.items()
-    }
+        node = linked.nodes[index]
+        assert node.semantics is not None
+        if not recognize(node.semantics, value, owner=node.owner, role=f"{role} recognition"):
+            raise RequestError(f"{node.key}: {unrecognized(node.semantics)}")
+    prepared: dict[int, object] = {}
+    for index, value in pending.items():
+        node = linked.nodes[index]
+        assert node.semantics is not None
+        prepared[index] = snapshot(node.semantics, value, owner=node.owner, role=f"{role} snapshot")
+    return prepared
 
 
 def bind(model: Model[S], parameters: Mapping[int, object]) -> S:

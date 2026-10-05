@@ -19,6 +19,7 @@ from .errors import ConfigurationError, EvaluationError, RequestError
 from .ir import Node
 from .occurrence import _attach, _prepare_values, decision_index, state
 from .results import Available, QueryResult
+from .semantics import snapshot
 
 T = TypeVar("T")
 S = TypeVar("S", bound=Space)
@@ -90,13 +91,15 @@ def _requests(
 
 
 def _values_equal(node: Node, left: object, right: object) -> bool:
-    assert node.semantics is not None
+    semantics = node.semantics
+    assert semantics is not None
+    role = "configuration equality"
+    left = snapshot(semantics, left, owner=node.owner, role=role)
+    right = snapshot(semantics, right, owner=node.owner, role=role)
     try:
-        return node.semantics.values_equal(
-            node.semantics.freeze(left), node.semantics.freeze(right)
-        )
+        return semantics.values_equal(left, right)
     except Exception as cause:
-        raise EvaluationError(node.owner, "configuration equality", str(cause)) from cause
+        raise EvaluationError(node.owner, role, str(cause)) from cause
 
 
 def _admission(trial: _runtime.Snapshot, index: int) -> QueryResult[bool]:

@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Generator, Mapping
+from collections.abc import Callable, Generator, Mapping
 from dataclasses import dataclass, field, replace
 from threading import RLock
 from types import MappingProxyType
@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, TypeAlias, cast
 
 from . import _execution
 from .errors import EvaluationError
-from .ir import Argument, LinkedModel, Node
+from .ir import Argument, LinkedModel, Node, NodeKind
 from .results import (
     Available,
     ConstraintAssessment,
@@ -34,6 +34,7 @@ from .results import (
     owned_result,
     reject,
 )
+from .semantics import snapshot as snapshot_value
 
 if TYPE_CHECKING:
     from ._configuration import Space
@@ -174,10 +175,7 @@ def _blocked(answers: list[QueryResult[object]]) -> NonValue | None:
 def _clone(node: Node, value: object, *, owner: str, role: str) -> object:
     if node.semantics is None:
         raise EvaluationError(owner, role, f"{node.key} has no value semantics")
-    try:
-        return node.semantics.freeze(value)
-    except Exception as cause:
-        raise EvaluationError(owner, role, str(cause)) from cause
+    return snapshot_value(node.semantics, value, owner=owner, role=role)
 
 
 def _arguments(
@@ -290,96 +288,119 @@ def _graph_frame(snapshot: Snapshot, node: Node) -> _execution.Frame:
 
 
 def _frame(snapshot: Snapshot, node: Node) -> _execution.Frame:
+    """A node's evaluation: inapplicable while its guard does not hold, else its kind's."""
     if node.guard is not None:
         guard = cast(QueryResult[object], (yield node.guard))
         inactive = _guard_result(node, guard)
         if inactive is not None:
             return Evaluation(inactive, assessment=_guard_assessment(node, inactive))
+    return (yield from _FRAMES[node.kind](snapshot, node))
 
-    if node.kind == "param":
-        if node.index in snapshot.parameters:
-            return Evaluation(Available(snapshot.parameters[node.index]))
-        return Evaluation(
-            Unresolved(
-                (
-                    Finding(
-                        FindingKind.LIMITATION,
-                        "input-missing",
-                        node.owner,
-                        "optional input was omitted at start",
-                    ),
-                )
+
+def _param_frame(snapshot: Snapshot, node: Node) -> _execution.Frame:
+    yield from ()  # answers at once
+    if node.index in snapshot.parameters:
+        return Evaluation(Available(snapshot.parameters[node.index]))
+    return Evaluation(
+        Unresolved(
+            (
+                Finding(
+                    FindingKind.LIMITATION,
+                    "input-missing",
+                    node.owner,
+                    "optional input was omitted at start",
+                ),
             )
         )
-    if node.kind == "const":
-        if node.domain is not None:
-            return (yield from _pinned(snapshot, node, Available(node.value)))
-        return Evaluation(Available(node.value))
-    if node.kind in {"present", "locate", "members"}:
-        return (yield from _graph_frame(snapshot, node))
-    if node.kind == "decision":
-        if node.index in snapshot.assignments:
+    )
+
+
+def _const_frame(snapshot: Snapshot, node: Node) -> _execution.Frame:
+    if node.domain is not None:
+        return (yield from _pinned(snapshot, node, Available(node.value)))
+    return Evaluation(Available(node.value))
+
+
+def _decision_frame(snapshot: Snapshot, node: Node) -> _execution.Frame:
+    if node.index in snapshot.assignments:
+        return Evaluation(Available(snapshot.assignments[node.index]))
+    if isinstance(snapshot, _TrialSnapshot) and node.index in snapshot._candidates:
+        candidate = snapshot._candidates[node.index]
+        admission = yield from _membership_frame(snapshot, node, candidate, check_guard=False)
+        if isinstance(admission.result, Available) and admission.result.value is True:
+            snapshot.admit(node.index, candidate)
             return Evaluation(Available(snapshot.assignments[node.index]))
-        if isinstance(snapshot, _TrialSnapshot) and node.index in snapshot._candidates:
-            candidate = snapshot._candidates[node.index]
-            admission = yield from _membership_frame(snapshot, node, candidate, check_guard=False)
-            if isinstance(admission.result, Available) and admission.result.value is True:
-                snapshot.admit(node.index, candidate)
-                return Evaluation(Available(snapshot.assignments[node.index]))
-            return Evaluation(admission.result)
-        found = _forced(snapshot, node.index)
-        if found is not None:
-            return Evaluation(found)
-        return Evaluation(
-            Unresolved(
-                (
-                    Finding(
-                        FindingKind.BLOCKER,
-                        "decision-unassigned",
-                        node.owner,
-                        "decision requires a commitment",
-                    ),
-                )
+        return Evaluation(admission.result)
+    found = _forced(snapshot, node.index)
+    if found is not None:
+        return Evaluation(found)
+    return Evaluation(
+        Unresolved(
+            (
+                Finding(
+                    FindingKind.BLOCKER,
+                    "decision-unassigned",
+                    node.owner,
+                    "decision requires a commitment",
+                ),
             )
         )
-    if node.kind in {"alias", "guard"}:
-        if node.output is None:
-            raise EvaluationError(node.owner, node.kind, "missing output reference")
-        answer = cast(QueryResult[object], (yield node.output))
-        if node.domain is not None:
-            return (yield from _pinned(snapshot, node, answer))
-        return Evaluation(answer)
-    if node.kind == "select":
-        if node.selector is None or node.selection_index is None:
-            raise EvaluationError(node.owner, "selection", "missing selector")
-        selector = cast(QueryResult[object], (yield node.selector))
-        if not isinstance(selector, Available):
-            return Evaluation(selector)
-        case = selector.value
-        if type(case) is not str:
-            raise EvaluationError(node.owner, "selection", "selector is not a declared case")
-        target = node.selection_index.get(case)
-        if target is None:
-            # The selected candidate is None, or has no such member: absent.
-            return Evaluation(Inapplicable())
-        return Evaluation(cast(QueryResult[object], (yield target)))
-    if node.kind == "view":
-        if node.output is None:
-            raise EvaluationError(node.owner, "view", "missing output reference")
-        output = cast(QueryResult[object], (yield node.output))
-        constraints: dict[str, QueryResult[bool]] = {}
-        for reference in node.constraints:
-            answer = _obligation(snapshot, reference, cast(QueryResult[object], (yield reference)))
-            constraints.update(_constraint_members(snapshot, reference, answer))
-        view = assess_view(output, owner=node.key, constraints=constraints)
-        return Evaluation(view.accepted_result, assessment=view)
-    if node.kind == "group":
-        answers: dict[str, QueryResult[bool]] = {}
-        for reference in node.constraints:
-            answer = cast(QueryResult[object], (yield reference))
-            answers.update(_constraint_members(snapshot, reference, answer))
-        group = assess_constraints(answers)
-        return Evaluation(cast(QueryResult[object], group.result), assessment=group)
+    )
+
+
+def _forward_frame(snapshot: Snapshot, node: Node) -> _execution.Frame:
+    """An alias or a guard: its output's answer, a pinned one checked against its domain."""
+    if node.output is None:
+        raise EvaluationError(node.owner, node.kind, "missing output reference")
+    answer = cast(QueryResult[object], (yield node.output))
+    if node.domain is not None:
+        return (yield from _pinned(snapshot, node, answer))
+    return Evaluation(answer)
+
+
+def _select_frame(snapshot: Snapshot, node: Node) -> _execution.Frame:
+    if node.selector is None or node.selection_index is None:
+        raise EvaluationError(node.owner, "selection", "missing selector")
+    selector = cast(QueryResult[object], (yield node.selector))
+    if not isinstance(selector, Available):
+        return Evaluation(selector)
+    case = selector.value
+    if type(case) is not str:
+        raise EvaluationError(node.owner, "selection", "selector is not a declared case")
+    target = node.selection_index.get(case)
+    if target is None:
+        # The selected candidate is None, or has no such member: absent.
+        return Evaluation(Inapplicable())
+    return Evaluation(cast(QueryResult[object], (yield target)))
+
+
+def _view_frame(snapshot: Snapshot, node: Node) -> _execution.Frame:
+    if node.output is None:
+        raise EvaluationError(node.owner, "view", "missing output reference")
+    output = cast(QueryResult[object], (yield node.output))
+    constraints: dict[str, QueryResult[bool]] = {}
+    for reference in node.constraints:
+        answer = _obligation(snapshot, reference, cast(QueryResult[object], (yield reference)))
+        constraints.update(_constraint_members(snapshot, reference, answer))
+    view = assess_view(output, owner=node.key, constraints=constraints)
+    return Evaluation(view.accepted_result, assessment=view)
+
+
+def _group_frame(snapshot: Snapshot, node: Node) -> _execution.Frame:
+    answers: dict[str, QueryResult[bool]] = {}
+    for reference in node.constraints:
+        answer = cast(QueryResult[object], (yield reference))
+        answers.update(_constraint_members(snapshot, reference, answer))
+    group = assess_constraints(answers)
+    return Evaluation(cast(QueryResult[object], group.result), assessment=group)
+
+
+def _callback_frame(snapshot: Snapshot, node: Node) -> _execution.Frame:
+    """A derived value or a constraint: its authored callback, called on its arguments.
+
+    What the callback raises, or a result it returns that fails to snapshot, is
+    the owner's failure; an engine invariant is raised as itself.
+    """
     arguments, failure = yield from _arguments(snapshot.linked, node.arguments, node.owner)
     if failure is not None:
         return Evaluation(failure, assessment=_guard_assessment(node, failure))
@@ -400,12 +421,30 @@ def _frame(snapshot: Snapshot, node: Node) -> _execution.Frame:
             return Evaluation(cast(QueryResult[object], normalized), assessment=assessment)
         if isinstance(result, (Inapplicable, Rejected, Unresolved)):
             return Evaluation(owned_result(result, node.owner))
-        value = result.value if isinstance(result, Available) else result
-        if node.semantics is None:
-            raise TypeError("derived output has no value semantics")
-        return Evaluation(Available(node.semantics.freeze(value)))
     except Exception as cause:
         raise EvaluationError(node.owner, node.kind, str(cause)) from cause
+    if node.semantics is None:
+        raise EvaluationError(node.owner, node.kind, "derived output has no value semantics")
+    value = result.value if isinstance(result, Available) else result
+    frozen = snapshot_value(node.semantics, value, owner=node.owner, role=node.kind)
+    return Evaluation(Available(frozen))
+
+
+_FRAMES: Mapping[NodeKind, Callable[[Snapshot, Node], _execution.Frame]] = {
+    "param": _param_frame,
+    "const": _const_frame,
+    "present": _graph_frame,
+    "locate": _graph_frame,
+    "members": _graph_frame,
+    "decision": _decision_frame,
+    "alias": _forward_frame,
+    "guard": _forward_frame,
+    "select": _select_frame,
+    "view": _view_frame,
+    "group": _group_frame,
+    "derived": _callback_frame,
+    "constraint": _callback_frame,
+}
 
 
 def _refused(node: Node, value: object, answer: QueryResult[object]) -> QueryResult[object]:
