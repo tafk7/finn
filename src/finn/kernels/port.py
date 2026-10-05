@@ -248,7 +248,7 @@ class AxiStreamPort(Port):
             )
             markers = (schedule.closing(self.closes),) if self.closes else ()
             return BeatSequence(form, markers=markers)
-        except (Refused, KeyError) as error:
+        except Refused as error:
             return reject("port-schedule", f"{self.name}: {error}")
 
     @derived

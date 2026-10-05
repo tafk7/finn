@@ -184,12 +184,18 @@ class Schedule:
         return tuple(index for index, _ in self.extents)
 
     def extent(self, index: Index) -> int:
-        return dict(self.extents)[index]
+        """``index``'s extent; ``Refused`` when it is not an index of the schedule."""
+        extents = dict(self.extents)
+        if index not in extents:
+            raise Refused(f"{index!r} is not an index of the schedule")
+        return extents[index]
 
     def factor(self, index: Index) -> int:
-        """The lanes ``index`` spreads over each beat, its folding factor; one when it has none."""
+        """The lanes ``index`` spreads over each beat, its folding factor; one when it has none.
+
+        ``Refused`` when ``index`` is not an index of the schedule."""
         if index not in dict(self.extents):
-            raise KeyError(index)
+            raise Refused(f"{index!r} is not an index of the schedule")
         return dict(self.factors).get(index, 1)
 
     def steps(self, index: Index) -> int:
