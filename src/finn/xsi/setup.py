@@ -33,7 +33,7 @@ import sysconfig
 from pathlib import Path
 from typing import List, Tuple
 
-from finn.util._toolchain import Selection, run_process
+from finn.util.toolchain import Selection, run_process
 from finn.xsi._artifacts import validate_record, write_record
 from finn.xsi.paths import find_xsi_so, xsi_artifact_dir, xsi_source_dir
 

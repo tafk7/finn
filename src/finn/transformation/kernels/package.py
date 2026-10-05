@@ -67,8 +67,8 @@ from finn.transformation.fpgadataflow.kernel_partitions import (
     PARTITION_INPUTS,
     PARTITION_OUTPUTS,
 )
-from finn.util._toolchain import Selection
 from finn.util.basic import make_build_dir
+from finn.util.toolchain import Selection, Toolchain
 
 VENDOR, LIBRARY, VERSION = "xilinx_finn", "finn", "1.0"
 
@@ -394,8 +394,9 @@ class PackagePartition(Transformation):  # type: ignore[misc]
 
     ``ip_name`` is the partition node's name; the part and the clock period are the
     model's target. ``directory`` is the project (``vivado_stitch_proj``), a new
-    build directory by default; ``toolchain`` a prepared ``finn.util._toolchain``
-    toolchain, the selected one by default.
+    build directory by default; ``toolchain`` the prepared toolchain Vivado runs in
+    (a flow passes its own, so that one build runs Vivado by one route), by default
+    the configured environment's (``Selection().prepare()``).
     """
 
     def __init__(
@@ -404,7 +405,7 @@ class PackagePartition(Transformation):  # type: ignore[misc]
         *,
         run_synth: bool = False,
         directory: Path | None = None,
-        toolchain: Any = None,
+        toolchain: Toolchain | None = None,
     ) -> None:
         super().__init__()
         self.ip_name = ip_name
@@ -441,7 +442,7 @@ class PackagePartition(Transformation):  # type: ignore[misc]
                 run_synth=self.run_synth,
             )
         )
-        toolchain = self.toolchain or Selection().prepare()  # type: ignore[no-untyped-call]
+        toolchain = self.toolchain or Selection().prepare()
         toolchain.run(
             "vivado",
             ["-mode", "batch", "-nojournal", "-log", "package.log", "-source", "package.tcl"],

@@ -11,7 +11,7 @@ from finn.transformation.fpgadataflow.alveo_build import (
     _slash_link_argv,
     _slash_link_command,
 )
-from finn.util._toolchain import Selection
+from finn.util.toolchain import Selection
 
 
 @pytest.mark.util

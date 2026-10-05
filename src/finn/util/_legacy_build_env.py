@@ -7,7 +7,7 @@ import re
 from pathlib import Path
 
 from finn import resources
-from finn.util._toolchain import Selection
+from finn.util.toolchain import Selection
 
 
 def checkout_root(root=None, environ=None):

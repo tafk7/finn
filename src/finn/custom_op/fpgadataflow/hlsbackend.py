@@ -36,11 +36,11 @@ from qonnx.core.datatype import DataType
 from finn import resources, xsi
 from finn.custom_op.fpgadataflow import templates
 from finn.util._legacy_build_env import toolchain as legacy_toolchain
-from finn.util._toolchain import run_process
 from finn.util.basic import CppBuilder, make_build_dir
 from finn.util.data_packing import npy_to_rtlsim_input, rtlsim_output_to_npy
 from finn.util.hls import CallHLS
 from finn.util.resources import resource_path, tcl_quote
+from finn.util.toolchain import run_process
 
 finnxsi = xsi  # Native prerequisites are checked when simulation is requested.
 
