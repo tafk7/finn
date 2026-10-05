@@ -9,7 +9,8 @@ Example after installing the checkout or setting PYTHONPATH=src:
 
 Families are declared as nodes and their design spaces opened with ``design_space(Family(...))``.
 Compilation itself is measured through ``finn.core.space.compiler.compile_model``.
-Native self-read and real-kernel workloads run in fresh subprocesses.
+Native self-read and real-kernel workloads run in fresh subprocesses; the kernels
+are built and configured through ``finn.kernels``' public construction path.
 Time and memory are observations, not CI thresholds. Semantic work assertions
 check what was evaluated and that discarded point populations release caches.
 """
@@ -298,7 +299,7 @@ def narrow_query(api, branches: int) -> dict[str, object]:
     for index in range(branches):
         # The structural choice is a Decision over nodes; ``choice.physical`` is
         # the selected candidate's member by name (replaces the accepted export).
-        choice = api.Decision(values={"selected": Selected(value=source), "inactive": Inactive()})
+        choice = api.Decision({"selected": Selected(value=source), "inactive": Inactive()})
         members[f"branch{index}"] = choice
         members[f"output{index}"] = api.View(choice.physical)
     family = api.composite("NarrowQuery", members)
@@ -339,7 +340,7 @@ def wide_choice(api, alternatives: int, trials: int = 30) -> dict[str, object]:
             work["leaf"] += 1
             return 1
 
-    choice = api.Decision(values={f"case{index}": Leaf() for index in range(alternatives)})
+    choice = api.Decision({f"case{index}": Leaf() for index in range(alternatives)})
     family = api.composite(
         "WideChoice", {"implementation": choice, "physical": api.View(choice.physical)}
     )
@@ -529,21 +530,28 @@ def self_workload(api, shape: str, depth: int, width: int) -> dict[str, object]:
     }
 
 
-def kernel_workload(api, name: str, trials: int) -> dict[str, object]:
-    """Measure repeated replacement, cold/cached accepted views and retention."""
+def kernel_fixtures(api):
+    """Each kernel workload by name: its root node, the step that configures a point of
+    it, and the member path of the module view measured.
+
+    A leaf (the FIFO) is its own root; a kernel on streams (the packed Dotp core,
+    MatMul) sits in a root that declares them beside it. Choices are committed as a
+    flow commits them, by their stable decision keys (``finn.kernels.commit``).
+    """
     kernels = importlib.import_module("finn.kernels")
-    DotpAxiKernel, DspBlock, FifoKernel, MatMulKernel, WeightDelivery = (
-        kernels.DotpAxiKernel,
-        kernels.DspBlock,
+    FifoKernel, MatMulKernel, PackedDotpKernel, commit = (
         kernels.FifoKernel,
         kernels.MatMulKernel,
-        kernels.WeightDelivery,
+        kernels.PackedDotpKernel,
+        kernels.commit,
     )
-    design_space = api.design_space
+    Stream = importlib.import_module("finn.kernels.streams").Stream
+    tensor = importlib.import_module("finn.dataflow.tensor")
+    Tensor, ScalarEncoding = tensor.Tensor, tensor.ScalarEncoding
     dtype = importlib.import_module("finn.dataflow.datatypes").resolve_qonnx_datatype_name
-    capabilities = importlib.import_module("finn.kernels.target").Platform(
+    platform = importlib.import_module("finn.kernels.target").Platform(
         period_ns=5.0,
-        dsp=DspBlock.DSP48E2,
+        dsp=kernels.DspBlock.DSP48E2,
         uram=True,
         uram_init=True,
         clk2x=True,
@@ -551,60 +559,111 @@ def kernel_workload(api, name: str, trials: int) -> dict[str, object]:
         memory_ports=0,
         aie=False,
     )
-    if name == "fifo":
-        base = design_space(FifoKernel(word_bits=16, depth=32, platform=capabilities))
+    int3, int8 = dtype("INT3"), dtype("INT8")
 
-        def design_space(point, index):
-            return point.with_choices(ram_style=("block", "distributed")[index % 2])
+    def streams(x, w, y):
+        return {
+            "x": Stream(tensor=x, port="in0_V", platform=platform),
+            "w": Stream(tensor=w, port="in1_V", platform=platform),
+            "y": Stream(tensor=y, port="out0_V", platform=platform),
+        }
 
-        def accepted(point):
-            return point.build_requirements
+    # A dot-product core between three boundary streams.
+    dotp_streams = streams(
+        Tensor((1, 4), ScalarEncoding(int3)),
+        Tensor((4, 4), ScalarEncoding(int3)),
+        Tensor((1, 4), ScalarEncoding(int8)),
+    )
+    dotp_root = api.composite(
+        "PlacedDotp",
+        {
+            **dotp_streams,
+            "compute": PackedDotpKernel(
+                x_stream=dotp_streams["x"],
+                w_stream=dotp_streams["w"],
+                y_stream=dotp_streams["y"],
+                result_dtype=int8,
+                platform=platform,
+            ),
+        },
+    )
 
-    elif name == "dotp":
-        base = design_space(
-            DotpAxiKernel(
-                activation_dtype=dtype("INT3"),
-                weights_dtype=dtype("INT3"),
-                result_dtype=dtype("INT8"),
-                pe=2,
-                simd=2,
-                platform=capabilities,
-            )
-        )
+    # A MatMul (M=2, K=4, N=4) on streams that carry the tensors it derives.
+    exact_result_dtype = importlib.import_module("finn.kernels.matmul").exact_result_dtype
+    matmul_streams = streams(
+        Tensor((2, 4), ScalarEncoding(int3)),
+        Tensor((4, 4), ScalarEncoding(int3)),
+        Tensor((2, 4), ScalarEncoding(exact_result_dtype(4, int3, int3))),
+    )
+    matmul_root = api.composite(
+        "PlacedMatMul",
+        {
+            **matmul_streams,
+            "matmul": MatMulKernel(
+                m=2,
+                n=4,
+                k=4,
+                activation_dtype=int3,
+                weights_dtype=int3,
+                platform=platform,
+                x_stream=matmul_streams["x"],
+                w_stream=matmul_streams["w"],
+                y_stream=matmul_streams["y"],
+            ),
+        },
+    )
 
-        def design_space(point, index):
-            return point.with_choices(compute_pumping=bool(index % 2))
+    return {
+        "fifo": (
+            FifoKernel(word_bits=16, depth=32, platform=platform),
+            lambda point, index: point.with_choices(ram_style=("block", "distributed")[index % 2]),
+            "module",
+        ),
+        "dotp": (
+            dotp_root(),
+            lambda point, index: commit(
+                point,
+                {
+                    "compute.pe": 2,
+                    "compute.simd": 2,
+                    "compute.reducer": "tree",
+                    "compute.compute_pumping": bool(index % 2),
+                },
+            ),
+            "compute.module",
+        ),
+        # The compute core is a Decision over kernels; ``packed`` is its entry.
+        "matmul": (
+            matmul_root(),
+            lambda point, index: commit(
+                point,
+                {
+                    "matmul.compute": "packed",
+                    "matmul.compute.packed.pe": (1, 2)[index % 2],
+                    "matmul.compute.packed.simd": 2,
+                    "matmul.compute.packed.compute_pumping": False,
+                    "matmul.compute.packed.reducer": "tree",
+                },
+            ),
+            "matmul.compute.module",
+        ),
+    }
 
-        def accepted(point):
-            return point.build_requirements
 
-    else:
-        assert name == "matmul"
-        base = design_space(
-            MatMulKernel(
-                rows=2,
-                reduction=4,
-                outputs=4,
-                activation_dtype=dtype("INT3"),
-                weights_dtype=dtype("INT3"),
-                platform=capabilities,
-            )
-        )
+def kernel_workload(api, name: str, trials: int) -> dict[str, object]:
+    """Measure repeated replacement, cold/cached accepted module views and retention."""
+    node, configure, view = kernel_fixtures(api)[name]
+    base = api.design_space(node)
 
-        def design_space(point, index):
-            # The weight-delivery choice is the ``delivery`` Decision over nodes.
-            return point.with_choices(
-                {MatMulKernel.compute.compute_pumping: False},
-                pe=(1, 2)[index % 2],
-                simd=2,
-                delivery=WeightDelivery.EXTERNAL.value,
-            )
-
-        def accepted(point):
-            return point.compute.build_requirements
+    def accepted(point):
+        # The view is a member path below the root: the module the kernel builds.
+        target = point
+        for part in view.split("."):
+            target = getattr(target, part)
+        return target
 
     # Warm compilation/import allocations before reporting exploration costs.
-    warm = design_space(base, 0)
+    warm = configure(base, 0)
     accepted(warm)
     del warm
     gc.collect()
@@ -614,13 +673,13 @@ def kernel_workload(api, name: str, trials: int) -> dict[str, object]:
     point = base
     for index in range(trials):
         started = time.perf_counter()
-        point = design_space(point, index)
+        point = configure(point, index)
         times["replacement"].append(time.perf_counter() - started)
         root_refs.append(weakref.ref(point))
         started = time.perf_counter()
         result = accepted(point)
         times["cold_view"].append(time.perf_counter() - started)
-        assert result.contributions
+        assert result.sources
         started = time.perf_counter()
         cached = accepted(point)
         times["cached_view"].append(time.perf_counter() - started)
@@ -635,7 +694,7 @@ def kernel_workload(api, name: str, trials: int) -> dict[str, object]:
     tracemalloc.start()
     population = []
     for index in range(trials):
-        point = design_space(base, index)
+        point = configure(base, index)
         accepted(point)
         population.append(point)
     del point
@@ -652,7 +711,7 @@ def kernel_workload(api, name: str, trials: int) -> dict[str, object]:
     return {
         "kernel": name,
         "trials": trials,
-        "view": "compute.build_requirements" if name == "matmul" else "build_requirements",
+        "view": view,
         "seconds": {
             label: {"median": statistics.median(values), "min": min(values), "max": max(values)}
             for label, values in times.items()
@@ -804,9 +863,10 @@ def markdown(report: dict[str, object]) -> str:
         lines += [
             "## Repeated kernel configurations",
             "",
-            "Choices alternate on each immutable replacement. MatMul measures its accepted "
-            "compute child requirements; FIFO and Dotp measure their direct requirements "
-            "views. Timings exclude source rendering and hardware execution. A separate "
+            "Choices alternate on each immutable replacement, committed by their decision "
+            "keys. Each measures the module view of the kernel it configures: the FIFO's own, "
+            "the packed Dotp core's on its streams, and MatMul's selected compute core's. "
+            "Timings exclude source rendering and hardware execution. A separate "
             "allocation run holds an independent population and then releases it.",
             "",
             "| Kernel | Trials | Replacement µs | Cold view µs | Cached view µs | Configs/s | "
