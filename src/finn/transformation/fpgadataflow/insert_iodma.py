@@ -35,10 +35,7 @@ from qonnx.transformation.base import Transformation
 from qonnx.transformation.general import SortGraph
 from qonnx.util.basic import get_by_name
 
-from finn.transformation.fpgadataflow.kernel_partitions import (
-    is_kernel_partition_node,
-    kernel_partition_port,
-)
+from finn.transformation.fpgadataflow.kernel_partitions import kernel_partition_ports
 from finn.util.fpgadataflow import is_fpgadataflow_node
 
 
@@ -106,12 +103,18 @@ class InsertIODMA(Transformation):
     def apply(self, model):
         modified = False
         # only makes sense for a pure fpgadataflow graph -- so we check!
+        # A partition of KernelOps is read once here: its ports' facts, by tensor.
         all_nodes = list(model.graph.node)
-        foreign = [
-            node.name or node.op_type
-            for node in all_nodes
-            if not is_fpgadataflow_node(node) and not is_kernel_partition_node(node)
-        ]
+        kernel_ports = {}
+        foreign = []
+        for node in all_nodes:
+            if is_fpgadataflow_node(node):
+                continue
+            ports = kernel_partition_ports(node)
+            if ports is None:
+                foreign.append(node.name or node.op_type)
+            else:
+                kernel_ports.update(ports)
         if foreign:
             raise ValueError(
                 "InsertIODMA needs a graph of fpgadataflow nodes and partitions of KernelOps; "
@@ -128,7 +131,7 @@ class InsertIODMA(Transformation):
                 else:
                     in_shape = model.get_tensor_shape(graph_in_name)
                     in_dtype = model.get_tensor_datatype(graph_in_name)
-                    port = kernel_partition_port(first_node, graph_in_name)
+                    port = kernel_ports.get(graph_in_name)
                     if port is not None:
                         in_folded_shape = [1, port["beats"], port["lanes"]]
                         padded_instream_width = port["tdata"]
@@ -181,7 +184,7 @@ class InsertIODMA(Transformation):
                 else:
                     out_shape = model.get_tensor_shape(graph_out_name)
                     out_dtype = model.get_tensor_datatype(graph_out_name)
-                    port = kernel_partition_port(final_node, graph_out_name)
+                    port = kernel_ports.get(graph_out_name)
                     if port is not None:
                         out_folded_shape = [1, port["beats"], port["lanes"]]
                         padded_outstream_width = port["tdata"]

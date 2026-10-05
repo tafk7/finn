@@ -29,7 +29,7 @@ from finn.transformation.fpgadataflow.insert_iodma import InsertIODMA
 from finn.transformation.fpgadataflow.kernel_partitions import (
     KERNEL_OPS_DOMAIN,
     PARTITION_INPUTS,
-    is_kernel_partition_node,
+    kernel_partition_ports,
     partition_facts,
 )
 from finn.transformation.fpgadataflow.make_driver import get_driver_shapes
@@ -124,13 +124,18 @@ def test_a_partition_without_facts_refuses_iodma_insertion(tmp_path: Path) -> No
         parent.transform(InsertIODMA(32))
 
 
-def test_only_a_partition_of_kernel_ops_is_a_kernel_partition_node(tmp_path: Path) -> None:
+def test_only_a_partition_of_kernel_ops_has_kernel_partition_ports(tmp_path: Path) -> None:
     parent = packaged_parent(tmp_path).transform(InsertIODMA(32))
-    assert [is_kernel_partition_node(node) for node in parent.graph.node] == [
-        False,  # IODMA_hls
-        True,
-        False,  # IODMA_hls
-    ]
+    dma_in, partition, dma_out = parent.graph.node
+    assert kernel_partition_ports(dma_in) is None
+    assert kernel_partition_ports(dma_out) is None
+    ports = kernel_partition_ports(partition)
+    assert ports is not None
+    # By the partition node's tensors, in port order: x in, y out (the body's names).
+    assert {tensor: (port["port"], port["tensor"]) for tensor, port in ports.items()} == {
+        partition.input[0]: ("s_axis_0", "x"),
+        partition.output[0]: ("m_axis_0", "y"),
+    }
 
 
 def test_iodma_insertion_refuses_a_node_outside_the_dataflow_by_name() -> None:

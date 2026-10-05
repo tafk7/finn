@@ -52,7 +52,7 @@ import finn.util
 from finn import deploy
 from finn.transformation.fpgadataflow.kernel_partitions import (
     KERNEL_OPS_DOMAIN,
-    kernel_partition_port,
+    kernel_partition_ports,
 )
 from finn.util._legacy_build_env import toolchain as legacy_toolchain
 from finn.util._toolchain import run_process
@@ -90,8 +90,9 @@ def get_driver_shapes(model: ModelWrapper) -> Dict:
         ), "First partition must hold input IODMA"
         successors = model.find_direct_successors(i_consumer)
         successor_input_num = list(successors[0].input).index(i_consumer.output[0])
-        port = kernel_partition_port(successors[0], i_consumer.output[0])
-        if port is not None:
+        ports = kernel_partition_ports(successors[0])
+        if ports is not None:
+            port = ports[i_consumer.output[0]]
             i_tensor_shape_folded = (1, port["beats"], port["lanes"])
         else:
             successor_sdp = getCustomOp(successors[0])
@@ -132,8 +133,9 @@ def get_driver_shapes(model: ModelWrapper) -> Dict:
         assert df_model.graph.node[-1].op_type == "IODMA_hls", "Partition must hold output IODMA"
         predecessors = model.find_direct_predecessors(o_producer)
         predecessor_output_num = list(predecessors[0].output).index(o_producer.input[0])
-        port = kernel_partition_port(predecessors[0], o_producer.input[0])
-        if port is not None:
+        ports = kernel_partition_ports(predecessors[0])
+        if ports is not None:
+            port = ports[o_producer.input[0]]
             o_tensor_shape_folded = (1, port["beats"], port["lanes"])
         else:
             predecessor_sdp = getCustomOp(predecessors[0])

@@ -10,7 +10,7 @@ metadata on the partition model, the ``finn.partition`` namespace (``PARTITION``
 per boundary port, in port order, its tensor, shape, datatype, lanes, beats,
 element bits and TDATA width. PackagePartition writes them
 (``finn.transformation.kernels.package``); InsertIODMA and the driver read them
-here (``partition_facts``, ``kernel_partition_port``) instead of asking a first or
+here (``partition_facts``, ``kernel_partition_ports``) instead of asking a first or
 last HW node. ``beats`` counts the whole tensor (one inference), a repetition the
 boundary keeps included.
 
@@ -70,20 +70,6 @@ def is_kernel_partition(model: Any) -> bool:
     )
 
 
-def _kernel_partition_body(node: Any) -> Any:
-    """The body of a StreamingDataflowPartition of KernelOps, loaded; None for any
-    other node."""
-    if node.op_type != "StreamingDataflowPartition":
-        return None
-    body = ModelWrapper(getCustomOp(node).get_nodeattr("model"))
-    return body if is_kernel_partition(body) else None
-
-
-def is_kernel_partition_node(node: Any) -> bool:
-    """Whether a node is a StreamingDataflowPartition whose body is a model of KernelOps."""
-    return _kernel_partition_body(node) is not None
-
-
 def partition_facts(model: Any) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """A packaged partition model's boundary facts, inputs and outputs; a model without
     them is refused (PackagePartition writes them)."""
@@ -95,17 +81,18 @@ def partition_facts(model: Any) -> tuple[list[dict[str, Any]], list[dict[str, An
     return inputs, outputs
 
 
-def kernel_partition_port(node: Any, tensor: str) -> dict[str, Any] | None:
-    """For a StreamingDataflowPartition of KernelOps (its body packaged), the boundary
-    facts of the port that carries ``tensor``; None for any other node. The body is
-    loaded once; its ports are in its graph's order, which is the partition node's."""
-    body = _kernel_partition_body(node)
-    if body is None:
+def kernel_partition_ports(node: Any) -> dict[str, dict[str, Any]] | None:
+    """For a StreamingDataflowPartition of KernelOps (its body packaged), each boundary
+    port's facts by the partition node's tensor that the port carries; None for any
+    other node, so it also tells a partition of KernelOps apart. The body is loaded
+    once; its ports are in its graph's order, which is the partition node's."""
+    if node.op_type != "StreamingDataflowPartition":
+        return None
+    body = ModelWrapper(getCustomOp(node).get_nodeattr("model"))
+    if not is_kernel_partition(body):
         return None
     inputs, outputs = partition_facts(body)
-    if tensor in node.input:
-        return inputs[list(node.input).index(tensor)]
-    return outputs[list(node.output).index(tensor)]
+    return dict(zip(node.input, inputs, strict=True)) | dict(zip(node.output, outputs, strict=True))
 
 
 __all__ = [
@@ -115,7 +102,6 @@ __all__ = [
     "PARTITION_OUTPUTS",
     "PORT_FACTS",
     "is_kernel_partition",
-    "is_kernel_partition_node",
-    "kernel_partition_port",
+    "kernel_partition_ports",
     "partition_facts",
 ]
