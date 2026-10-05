@@ -44,7 +44,13 @@ class Placed(Space):
 
 
 def placed(**transport: object) -> Placed:
-    choices = {"compute.pe": 2, "compute.simd": 2, "compute.compute_pumping": False, **transport}
+    choices = {
+        "compute.pe": 2,
+        "compute.simd": 2,
+        "compute.compute_pumping": False,
+        "compute.reducer": "tree",
+        **transport,
+    }
     return with_adapter_memories(commit(design_space(Placed()), choices))
 
 
@@ -101,7 +107,12 @@ def test_a_boundary_no_port_names_is_refused() -> None:
             platform=FULL_DSP48E2,
         )
 
-    folding = {"compute.pe": 2, "compute.simd": 2, "compute.compute_pumping": False}
+    folding = {
+        "compute.pe": 2,
+        "compute.simd": 2,
+        "compute.compute_pumping": False,
+        "compute.reducer": "tree",
+    }
     refused = commit(design_space(Unnamed()), folding).w.query(Stream.endpoints)
     assert isinstance(refused, Rejected)
     assert {(item.code, item.owner) for item in refused.findings} == {

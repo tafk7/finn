@@ -100,6 +100,7 @@ def placed(
             "compute.pe": pe,
             "compute.simd": SIMD,
             "compute.compute_pumping": False,
+            **({"compute.reducer": "tree"} if core is PackedDotpKernel else {}),
             "weights.ram_style": "auto",
             "weights.pumped_memory": False,
         },
@@ -205,6 +206,7 @@ def test_one_kernel_refusal_reaches_only_its_own_stream():
             "matmul.compute.packed.pe": 2,
             "matmul.compute.packed.simd": 2,
             "matmul.compute.packed.compute_pumping": False,
+            "matmul.compute.packed.reducer": "tree",
         },
     )
     point = with_adapter_memories(point)

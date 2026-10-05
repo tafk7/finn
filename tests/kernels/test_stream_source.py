@@ -88,6 +88,7 @@ def configured(point, *, style=None, pe=2, simd=2):
                 "matmul.compute.packed.pe": pe,
                 "matmul.compute.packed.simd": simd,
                 "matmul.compute.packed.compute_pumping": False,
+                "matmul.compute.packed.reducer": "tree",
             },
         )
     )
@@ -198,6 +199,7 @@ def test_the_cores_do_not_wait_on_the_source():
             "matmul.compute.packed.pe": 4,
             "matmul.compute.packed.simd": 2,
             "matmul.compute.packed.compute_pumping": True,
+            "matmul.compute.packed.reducer": "tree",
         },
     )
     assessment = point.inspect(Kernel.module)
@@ -225,6 +227,7 @@ def test_the_sources_choices_round_trip_through_an_empty_root():
         "matmul.compute",
         "matmul.compute.packed.compute_pumping",
         "matmul.compute.packed.pe",
+        "matmul.compute.packed.reducer",
         "matmul.compute.packed.simd",
         "w.source.memstream.pumped_memory",
         "w.source.memstream.ram_style",

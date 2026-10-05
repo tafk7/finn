@@ -191,7 +191,10 @@ def test_the_core_is_forced_and_owns_its_folding_factors():
     compute = point.matmul.compute
     assert isinstance(compute.inspect(DotpAxiKernel.module).accepted_result, Unresolved)
     assert isinstance(point.inspect(Kernel.module).accepted_result, Unresolved)
-    point = commit(point, {"matmul.compute.packed.compute_pumping": False})
+    point = commit(
+        point,
+        {"matmul.compute.packed.compute_pumping": False, "matmul.compute.packed.reducer": "tree"},
+    )
     matmul = point.matmul
     assert matmul.result_type == DataType["INT8"]
     assert matmul.inspect(MatMulKernel.admission).result == Available(True)
@@ -211,6 +214,7 @@ def test_the_core_is_forced_and_owns_its_folding_factors():
             "matmul.compute.packed.pe": 2,
             "matmul.compute.packed.simd": 1,
             "matmul.compute.packed.compute_pumping": True,
+            "matmul.compute.packed.reducer": "tree",
             "x.adapter": "input_gen",
             "x.adapter.input_gen.input_gen.ram_style": "auto",
         },
@@ -281,6 +285,7 @@ def test_matmul_honors_the_child_physical_view_not_just_its_raw_module(monkeypat
             "matmul.compute.packed.pe": 2,
             "matmul.compute.packed.simd": 2,
             "matmul.compute.packed.compute_pumping": False,
+            "matmul.compute.packed.reducer": "tree",
             "x.adapter": "input_gen",
             "x.adapter.input_gen.input_gen.ram_style": "auto",
             "w.transport": "direct",

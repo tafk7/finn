@@ -36,6 +36,7 @@ MATMUL = {
     "compute.packed.pe": chain.PE,
     "compute.packed.simd": chain.SIMD,
     "compute.packed.compute_pumping": False,
+    "compute.packed.reducer": "tree",
     "w.source.memstream.ram_style": "auto",
     "w.source.memstream.pumped_memory": False,
     "w.transport": "direct",

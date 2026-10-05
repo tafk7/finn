@@ -120,6 +120,7 @@ def configured(root: Root, layers: tuple[str, ...] = ("first", "second"), **extr
             f"{layer}.compute.packed.pe": PE,
             f"{layer}.compute.packed.simd": SIMD,
             f"{layer}.compute.packed.compute_pumping": False,
+            f"{layer}.compute.packed.reducer": "tree",
             f"{stream}.source.memstream.ram_style": "auto",
             f"{stream}.source.memstream.pumped_memory": False,
         }

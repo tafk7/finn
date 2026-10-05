@@ -46,13 +46,14 @@ class Configuration:
     period: float = 5.0  # target clock period (ns); sets the DSP58 segmentation
     repetitions: int = 4
     int8: bool = False  # the INT8 DSP58 core, else the packed core
+    reducer: str = "tree"  # the packed core's reduction across SIMD
 
 
 CASES = (
     Configuration("tiny", DspBlock.DSP48E1, 1, 1, 1, "INT2", "INT2"),
-    Configuration("packed_e1", DspBlock.DSP48E1, 8, 2, 4, "INT3", "INT3"),
+    Configuration("packed_e1", DspBlock.DSP48E1, 8, 2, 4, "INT3", "INT3", reducer="compressor"),
     Configuration("packed_e2_pumped", DspBlock.DSP48E2, 6, 2, 3, "UINT3", "INT3", True),
-    Configuration("packed_dsp58", DspBlock.DSP58, 8, 2, 4, "INT3", "INT3"),
+    Configuration("packed_dsp58", DspBlock.DSP58, 8, 2, 4, "INT3", "INT3", reducer="compressor"),
     Configuration("int8_signed", DspBlock.DSP58, 8, 2, 4, "INT8", "INT8", int8=True),
     Configuration("int8_unsigned", DspBlock.DSP58, 8, 4, 4, "UINT8", "INT8", int8=True),
     Configuration("int8_odd_pumped", DspBlock.DSP58, 6, 2, 3, "UINT8", "INT8", True, int8=True),
@@ -72,7 +73,17 @@ CASES = (
 STRESS_CASES = (
     Configuration("single_e1", DspBlock.DSP48E1, 1, 1, 1, "INT2", "INT2", repetitions=32),
     Configuration("one_beat_e1", DspBlock.DSP48E1, 4, 2, 4, "INT3", "INT3", repetitions=32),
-    Configuration("one_beat_dsp58", DspBlock.DSP58, 4, 2, 4, "INT3", "INT3", repetitions=32),
+    Configuration(
+        "one_beat_dsp58",
+        DspBlock.DSP58,
+        4,
+        2,
+        4,
+        "INT3",
+        "INT3",
+        repetitions=32,
+        reducer="compressor",
+    ),
     Configuration(
         "one_beat_softvec_pumped", DspBlock.DSP58, 2, 2, 2, "INT3", "INT3", True, repetitions=32
     ),
@@ -144,6 +155,7 @@ def run(configuration: Configuration, evidence: Path, *, backpressure_ticks: int
         pe=c.pe,
         simd=c.simd,
         compute_pumping=c.pumping,
+        reducer=c.reducer,
         rows=c.repetitions,
         outputs=4,
         reduction=c.width,

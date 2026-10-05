@@ -101,9 +101,11 @@ def layered(*, adaptable: bool = True):
             "first.pe": PE1,
             "first.simd": SIMD1,
             "first.compute_pumping": False,
+            "first.reducer": "tree",
             "second.pe": PE2,
             "second.simd": SIMD2,
             "second.compute_pumping": False,
+            "second.reducer": "tree",
         },
     )
     # A stream admitting no adapter keeps its Decision closed; the others' are forced.

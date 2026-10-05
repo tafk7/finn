@@ -42,16 +42,39 @@ class Configuration:
     depthwise: bool = False  # width is the window, height the channels
     realization: str | None = None  # depthwise only: "native" or "dense"
     narrow: bool = False  # weights avoid their type's minimum: NARROW_WEIGHTS derives from them
+    reducer: str = "tree"  # the packed core's reduction across SIMD
 
 
 CASES = (
     Configuration("single", DspBlock.DSP48E1, 1, 1, 1, 1, "INT2", "INT2"),
     Configuration("packed", DspBlock.DSP48E2, 6, 6, 3, 2, "INT3", "INT3"),
-    Configuration("one_beat_reductions", DspBlock.DSP58, 4, 8, 2, 4, "INT3", "INT3", core="packed"),
+    Configuration(
+        "one_beat_reductions",
+        DspBlock.DSP58,
+        4,
+        8,
+        2,
+        4,
+        "INT3",
+        "INT3",
+        core="packed",
+        reducer="compressor",
+    ),
     Configuration("padded_output", DspBlock.DSP48E2, 2, 3, 1, 2, "UINT3", "INT3"),
     Configuration("int8_pumped", DspBlock.DSP58, 6, 4, 2, 3, "UINT8", "INT8", True, "int8_dsp58"),
     Configuration("int8_narrow", DspBlock.DSP58, 4, 8, 2, 4, "INT3", "INT3", core="int8_dsp58"),
-    Configuration("narrow_weights", DspBlock.DSP48E2, 6, 4, 2, 3, "INT4", "INT4", narrow=True),
+    Configuration(
+        "narrow_weights",
+        DspBlock.DSP48E2,
+        6,
+        4,
+        2,
+        3,
+        "INT4",
+        "INT4",
+        narrow=True,
+        reducer="compressor",
+    ),
 )
 
 # Depthwise: the INT8 DSP58 core, one channel per PE lane. width = window, height = channels.
@@ -182,6 +205,7 @@ def run(
         platform=full_platform(c.target),
         form=Form.DEPTHWISE if c.depthwise else Form.DENSE,
         compute_pumping=c.pumping,
+        reducer=c.reducer,
         core=c.core,
         realization=c.realization or ("native" if c.depthwise else None),
         weight_delivery=delivery,

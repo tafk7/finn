@@ -60,10 +60,21 @@ DOTP_PARAMETERS = (
     ("FORCE_BEHAVIORAL", "0"),
 )
 
+#: ``add_multi`` with its compressor, headers included.
+ADD_MULTI_CLOSURE = (
+    "rtl/arith/add_multi_pkg.sv",
+    "rtl/arith/compressor_pkg.sv",
+    "rtl/arith/compressor_counters.sv",
+    "rtl/arith/compress_core.sv",
+    "rtl/arith/schedule_core.svh",
+    "rtl/arith/sched_chunks.svh",
+    "rtl/arith/add_multi_sched.svh",
+    "rtl/arith/add_multi.sv",
+)
+
 #: The declared FinnLib closure for ``dotp_axi``, in its declared order.
 FINNLIB_CLOSURE = (
-    "rtl/arith/add_multi_pkg.sv",
-    "rtl/arith/add_multi.sv",
+    *ADD_MULTI_CLOSURE,
     "rtl/linalg/dotp_8sx9_dsp58.sv",
     "rtl/linalg/dotp.sv",
     "rtl/linalg/dotp_axi.sv",
@@ -105,10 +116,9 @@ ELTWISE_PARAMETERS = (
     ("B_SIGNED", "1"),
 )
 
-#: The packed ``dotp`` core at SIMD 3: ``add_multi`` builds an adder tree.
+#: The packed ``dotp`` core at SIMD 3, with ``add_multi``'s two reducers.
 PACKED_DOTP_CLOSURE = (
-    "rtl/arith/add_multi_pkg.sv",
-    "rtl/arith/add_multi.sv",
+    *ADD_MULTI_CLOSURE,
     "rtl/linalg/dotp.sv",
     "rtl/linalg/dotp_axi.sv",
 )
@@ -493,16 +503,25 @@ def test_every_confining_construct_is_a_syntax_kind() -> None:
             assert isinstance(getattr(syntax.SyntaxKind, kind), syntax.SyntaxKind)
 
 
+@pytest.mark.parametrize(
+    ("reducer", "diagnosed_in"),
+    [
+        ("tree", {"add_multi.sv"}),
+        ("compressor", {"add_multi_sched.svh", "schedule_core.svh", "sched_chunks.svh"}),
+    ],
+)
 def test_packed_dotp_above_simd_one_binds_through_its_generate_block_function(
-    finn_root: Path,
+    finn_root: Path, reducer: str, diagnosed_in: set[str]
 ) -> None:
-    """``add_multi`` calls a function of its generate block in a constant: slang's only error."""
+    """``add_multi`` calls functions of its generate blocks in constants, the compressor's
+    in the schedule headers it includes there: slang's only errors, all tolerated."""
 
     files = _finnlib_files(finn_root, PACKED_DOTP_CLOSURE)
-    assert _diagnosed(files, "dotp_axi", PACKED_DOTP_PARAMETERS) == {
-        ("DiagCode(ConstEvalFunctionInsideGenerate)", "add_multi.sv", 45)
-    }
-    module = _module(extract(files, "dotp_axi", PACKED_DOTP_PARAMETERS))
+    parameters = (*PACKED_DOTP_PARAMETERS, ("REDUCER", f'"{reducer}"'))
+    diagnosed = _diagnosed(files, "dotp_axi", parameters)
+    assert {code for code, _, _ in diagnosed} == {"DiagCode(ConstEvalFunctionInsideGenerate)"}
+    assert {name for _, name, _ in diagnosed} == diagnosed_in
+    module = _module(extract(files, "dotp_axi", parameters))
     widths = {port.name: port.width for port in module.ports}
     # Byte-padded: PE * SIMD * WEIGHT_WIDTH = 24, SIMD * ACTIVATION_WIDTH = 12 -> 16.
     assert widths["s_axis_weights_tdata"] == 24

@@ -213,7 +213,12 @@ class Placed(Space):
 
 point = commit(
     design_space(Placed()),
-    {"compute.pe": 2, "compute.simd": 2, "compute.compute_pumping": False},
+    {
+        "compute.pe": 2,
+        "compute.simd": 2,
+        "compute.compute_pumping": False,
+        "compute.reducer": "tree",
+    },
 ).compute
 answer = point.module
 assert isinstance(answer, Leaf)
@@ -256,6 +261,7 @@ for memory in ("none", "memstream"):
             "matmul.compute.packed.pe": 2,
             "matmul.compute.packed.simd": 2,
             "matmul.compute.packed.compute_pumping": False,
+            "matmul.compute.packed.reducer": "tree",
             "x.adapter": "input_gen",
             "x.adapter.input_gen.input_gen.ram_style": "auto",
         },
