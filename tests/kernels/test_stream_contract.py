@@ -19,7 +19,6 @@ from finn.core.space import Rejected, Unresolved, design_space
 from finn.kernels.configure import commit
 from finn.kernels.eltwise import EltwiseKernel
 from finn.kernels.streams import Stream, wired
-from finn.kernels.target import DspBlock
 from finn.kernels.artifacts.abi import Endpoint
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.memstream import MemStreamKernel
@@ -46,7 +45,7 @@ from finn.dataflow.traversal import (
 from finn.transformation.fpgadataflow.transpose_decomposition import (
     shuffle_perfect_loopnest_coeffs,
 )
-from kernels.helpers import Root
+from kernels.helpers import FULL_DSP48E2, FULL_DSP58, Root
 from kernels.xsim import pack as xsim_pack, requires_xsim, stream_through
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -153,7 +152,11 @@ def test_tiled_mvu_weight_chunks_are_a_width_conversion_a_delivery_can_avoid():
     assert classify(tile(MH, MW, PE_T, SIMD_T), chunked).adaptation is Adaptation.WIDTH_CONVERSION
     # A memory can simply produce the chunked order: no adapter at all.
     values = tuple(tuple((row * MW + col) % 7 - 3 for col in range(MW)) for row in range(MH))
-    source = design_space(MemStreamKernel(dtype=DataType["INT3"], form=chunked, contents=values))
+    source = design_space(
+        MemStreamKernel(
+            platform=FULL_DSP48E2, dtype=DataType["INT3"], form=chunked, contents=values
+        )
+    )
     sink = contract(chunked.repeated(R // T), Endpoint.TARGET)
     produced = source.output.contract
     assert compatibility(produced, sink, source_is_top=False, sink_is_top=False) == ()
@@ -274,7 +277,9 @@ def test_contracts_reject_lanes_wider_than_the_word_and_unknown_marker_rules():
 
 def delivery(form=None, values=(1, -2, 7, -8), **choices):
     form = vector_major((4,), 2) if form is None else form
-    base = design_space(MemStreamKernel(dtype=DataType["INT4"], form=form, contents=values))
+    base = design_space(
+        MemStreamKernel(dtype=DataType["INT4"], form=form, contents=values, platform=FULL_DSP48E2)
+    )
     return base.with_choices(**choices) if choices else base
 
 
@@ -299,7 +304,12 @@ def test_delivery_publishes_a_cyclic_contract_and_waits_only_for_its_own_choice(
 )
 def test_delivery_refuses_values_outside_the_operand_contract(values, dtype, message):
     point = design_space(
-        MemStreamKernel(dtype=DataType[dtype], form=vector_major((4,), 2), contents=values)
+        MemStreamKernel(
+            dtype=DataType[dtype],
+            form=vector_major((4,), 2),
+            contents=values,
+            platform=FULL_DSP48E2,
+        )
     )
     answer = point.with_choices(ram_style="auto", pumped_memory=False).query(MemStreamKernel.module)
     assert isinstance(answer, Rejected)
@@ -319,17 +329,23 @@ def eltwise_with_constant(form=None):
     int4, int5 = DataType["INT4"], DataType["INT5"]
 
     class Constant(Root):
-        x = Stream(tensor=Tensor((PIXELS, CHANNELS), INT4), port="in0_V")
-        c = Stream(tensor=Tensor((CHANNELS,), INT4), adaptable=False)
-        y = Stream(tensor=Tensor((PIXELS, CHANNELS), ScalarEncoding(int5)), port="out0_V")
-        rhs = MemStreamKernel(dtype=int4, form=form, contents=PARAMETERS, output_stream=c)
+        x = Stream(tensor=Tensor((PIXELS, CHANNELS), INT4), port="in0_V", platform=FULL_DSP48E2)
+        c = Stream(tensor=Tensor((CHANNELS,), INT4), adaptable=False, platform=FULL_DSP48E2)
+        y = Stream(
+            tensor=Tensor((PIXELS, CHANNELS), ScalarEncoding(int5)),
+            port="out0_V",
+            platform=FULL_DSP48E2,
+        )
+        rhs = MemStreamKernel(
+            platform=FULL_DSP48E2, dtype=int4, form=form, contents=PARAMETERS, output_stream=c
+        )
         add = EltwiseKernel(
             operation="ADD",
             pe=PE,
             lhs_dtype=int4,
             rhs_dtype=int4,
             b_scale=1.0,
-            target_dsp=DspBlock.DSP58,
+            platform=FULL_DSP58,
             lhs_stream=x,
             rhs_stream=c,
             result_stream=y,
@@ -363,8 +379,14 @@ def test_a_pure_lane_permutation_is_realized_as_free_wiring():
     assert verdict.adaptation is Adaptation.LANE_PERMUTATION
     assert verdict.lane_permutation == (0, 2, 1, 3)
     values = (((1, 2), (3, 4)), ((5, 6), (7, -8)))
-    source = design_space(MemStreamKernel(dtype=DataType["INT4"], form=produced, contents=values))
-    fifo = design_space(FifoKernel(word_bits=16, depth=2)).with_choices(ram_style="auto")
+    source = design_space(
+        MemStreamKernel(
+            platform=FULL_DSP48E2, dtype=DataType["INT4"], form=produced, contents=values
+        )
+    )
+    fifo = design_space(FifoKernel(word_bits=16, depth=2, platform=FULL_DSP48E2)).with_choices(
+        ram_style="auto"
+    )
     # The hop connects directly, and its link crosses the lanes: no adapter.
     sink = StreamContract(fifo.input.transport, INT4, wanted)
     assert compatibility(source.output.contract, sink, source_is_top=False, sink_is_top=False) == ()

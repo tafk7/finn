@@ -64,6 +64,7 @@ from finn.dataflow.traversal import BeatSequence, LevelEnd, Reorder
 from finn.kernels.artifacts.module import Leaf
 from finn.kernels.datatypes.semantics import INTEGER_VECTOR, IntegerVector
 from finn.kernels.input_generator import InputGeneratorKernel
+from finn.kernels.target import Platform
 from finn.kernels.transport import StreamContract
 from finn.kernels.vpc import VpcKernel
 
@@ -228,13 +229,14 @@ class StreamAdapter(Space):
     Each candidate places its modules as kernel children named by stage
     (``input_gen``, ``vpc``, then ``input_gen_1``, ``vpc_1``), their facts
     derived from the realization. An ``input_gen`` child owns its memory's
-    ``ram_style``.
+    ``ram_style``, on the stream's ``platform``.
     """
 
     modules: ClassVar[tuple[str, ...]] = ()
 
     tensor: Tensor = Param()
     plan: Plan = Param()
+    platform: Platform = Param()
 
     @derived
     def realization(self) -> tuple[RealizedStage, ...] | Rejected:
@@ -336,6 +338,7 @@ def _input_gen(facts: InputGenFacts) -> InputGeneratorKernel:
         frame_words=facts.frame,
         dims=facts.dims,
         strides=facts.coefs,
+        platform=StreamAdapter.platform,
     )
 
 

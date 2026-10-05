@@ -21,9 +21,8 @@ from finn.kernels.control import ControlBus
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.dotp import PackedDotpKernel
 from finn.kernels.streams import Stream
-from finn.kernels.target import DspBlock
 from finn.kernels.thresholding import ThresholdingAxiKernel
-from kernels.helpers import Root, placed, with_adapter_memories
+from kernels.helpers import FULL_DSP48E2, placed, Root, with_adapter_memories
 from kernels.xsim import requires_xsim, stream_through
 
 REPETITIONS, WIDTH, HEIGHT, SIMD = 2, 4, 2, 2
@@ -39,18 +38,17 @@ LEVEL_TENSOR = Tensor((REPETITIONS, HEIGHT), ScalarEncoding(DataType["UINT2"]))
 class Activated(Root):
     """dotp, then thresholding: a padded child result feeding a child."""
 
-    activations = Stream(tensor=X, port="in0_V")
-    weights = Stream(tensor=WEIGHT_TENSOR, port="in1_V")
-    results = Stream(tensor=RESULT_TENSOR)
-    levels = Stream(tensor=LEVEL_TENSOR, port="out0_V")
+    activations = Stream(tensor=X, port="in0_V", platform=FULL_DSP48E2)
+    weights = Stream(tensor=WEIGHT_TENSOR, port="in1_V", platform=FULL_DSP48E2)
+    results = Stream(tensor=RESULT_TENSOR, platform=FULL_DSP48E2)
+    levels = Stream(tensor=LEVEL_TENSOR, port="out0_V", platform=FULL_DSP48E2)
     config = ControlBus(port="s_axilite")
     compute = PackedDotpKernel(
-        target_dsp=DspBlock.DSP48E2,
-        target_period_ns=5.0,
         result_dtype=R,
         x_stream=activations,
         w_stream=weights,
         y_stream=results,
+        platform=FULL_DSP48E2,
     )
     activate = ThresholdingAxiKernel(
         input_dtype=R,
@@ -63,6 +61,7 @@ class Activated(Root):
         input_stream=results,
         output_stream=levels,
         control=config,
+        platform=FULL_DSP48E2,
     )
 
 
@@ -131,6 +130,7 @@ def test_writable_thresholds_without_a_control_bus_are_refused():
             ultra_stages=0,
             input_stream=Activated.results,
             output_stream=Activated.levels,
+            platform=FULL_DSP48E2,
         )
 
     point = design_space(Unexported()).with_choices(
@@ -186,9 +186,9 @@ def test_several_threshold_sets_take_a_set_selector_stream():
     two_sets = (THRESHOLDS[0], ((-4, 1, 8), (-3, 2, 9)))
 
     class Selected(Space):
-        values = Stream(tensor=RESULT_TENSOR, port="in0_V")
-        sets = Stream(tensor=selectors, port="in1_V")
-        levels = Stream(tensor=LEVEL_TENSOR, port="out0_V")
+        values = Stream(tensor=RESULT_TENSOR, port="in0_V", platform=FULL_DSP48E2)
+        sets = Stream(tensor=selectors, port="in1_V", platform=FULL_DSP48E2)
+        levels = Stream(tensor=LEVEL_TENSOR, port="out0_V", platform=FULL_DSP48E2)
         activate = ThresholdingAxiKernel(
             input_dtype=R,
             threshold_dtype=R,
@@ -200,6 +200,7 @@ def test_several_threshold_sets_take_a_set_selector_stream():
             input_stream=values,
             output_stream=levels,
             set_stream=sets,
+            platform=FULL_DSP48E2,
         )
 
     point = design_space(Selected()).with_choices(
@@ -211,7 +212,7 @@ def test_several_threshold_sets_take_a_set_selector_stream():
     short = Tensor((HEIGHT,), ScalarEncoding(DataType["UINT1"]))
 
     class Short(Selected):
-        sets = Stream(tensor=short, port="in1_V")
+        sets = Stream(tensor=short, port="in1_V", platform=FULL_DSP48E2)
 
     refused = design_space(Short()).sets.query(Stream.netlist)
     assert isinstance(refused, Rejected)

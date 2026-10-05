@@ -3,6 +3,7 @@
 
 """Authoring examples assessed against native modules, not copied width formulas."""
 
+from dataclasses import replace
 from pathlib import Path
 import struct
 
@@ -24,9 +25,9 @@ from finn.kernels.artifacts.rtl import TOLERATED_DIAGNOSTICS
 from finn.core.space import (
     DefinitionError,
     Rejected,
+    design_space,
 )
-from kernels.helpers import controlled, finnlib_root, point_for
-from finn.kernels.target import DspBlock
+from kernels.helpers import controlled, finnlib_root, FULL_DSP48E2, FULL_DSP58, point_for
 from kernels.xsim import requires_xsim, simulate
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -35,15 +36,37 @@ SOURCE_ROOTS = {"finnlib": FINNLIB}
 
 
 def fifo(**changes):
-    facts = dict(word_bits=13, depth=8)
+    facts = dict(word_bits=13, depth=8, platform=FULL_DSP48E2)
     facts.update(changes)
     return point_for(FifoKernel, facts, ram_style="auto")
 
 
 def generator(**changes):
-    facts = dict(word_bits=13, frame_words=6, dims=(3, 6), strides=(0, 1))
+    facts = dict(word_bits=13, frame_words=6, dims=(3, 6), strides=(0, 1), platform=FULL_DSP48E2)
     facts.update(changes)
     return point_for(InputGeneratorKernel, facts, ram_style="auto")
+
+
+@pytest.mark.parametrize(
+    "family,facts",
+    (
+        (FifoKernel, dict(word_bits=13, depth=8)),
+        (InputGeneratorKernel, dict(word_bits=13, frame_words=6, dims=(3, 6), strides=(0, 1))),
+    ),
+)
+def test_an_ultra_memory_needs_the_platforms_ultraram(family, facts):
+    without = design_space(family(**facts, platform=replace(FULL_DSP48E2, uram=False)))
+    report = without.try_with_choices(ram_style="ultra")
+    assert not report.accepted
+    (outcome,) = report.outcomes
+    assert {finding.code for finding in outcome.result.findings} == {"uram-absent"}
+    # The memory starts empty: UltraRAM that takes no initial contents is enough.
+    platform = replace(FULL_DSP48E2, uram_init=False)
+    assert (
+        design_space(family(**facts, platform=platform))
+        .try_with_choices(ram_style="ultra")
+        .accepted
+    )
 
 
 def eltwise(pe=2, **changes):
@@ -54,7 +77,7 @@ def eltwise(pe=2, **changes):
         lhs_dtype=DataType["INT3"],
         rhs_dtype=DataType["INT3"],
         b_scale=1.0,
-        target_dsp=DspBlock.DSP58,
+        platform=FULL_DSP58,
     )
     facts.update(changes)
     return point_for(EltwiseKernel, facts, pe=pe)
@@ -69,6 +92,7 @@ def threshold(*, use_axilite=False, deep_pipeline=False, pe=1, **changes):
         threshold_dtype=DataType["INT5"],
         thresholds=(((-2, 0, 3), (-1, 1, 4)),),
         bias=-1,
+        platform=FULL_DSP48E2,
     )
     facts.update(changes)
     factors = {} if pe is None else {"pe": pe, "ram_style": "auto", "ultra_stages": 0}
@@ -174,7 +198,7 @@ def test_native_rtl_pin_names_directions_and_widths(factory, tmp_path):
         lambda: eltwise(b_scale=1e100),
         lambda: eltwise(b_scale=0.5),
         lambda: eltwise(operation="MUL", lhs_dtype=DataType["FLOAT32"], b_scale=0.5),
-        lambda: eltwise(lhs_dtype=DataType["FLOAT32"], target_dsp=DspBlock.DSP48E2),
+        lambda: eltwise(lhs_dtype=DataType["FLOAT32"], platform=FULL_DSP48E2),
         lambda: threshold(thresholds=(), pe=None),
         lambda: threshold(thresholds=(((2, 1),),)),
         lambda: threshold(thresholds=(((0, 20),),)),

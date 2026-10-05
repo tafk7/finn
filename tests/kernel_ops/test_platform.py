@@ -11,25 +11,27 @@ kernel, with no model, keeps the default platform, which refuses nothing.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Any
 
 import pytest
 from qonnx.core.modelwrapper import ModelWrapper
 
-from finn.core.space import Rejected, design_space, inspection
+from finn.core.space import DefinitionError, Rejected, design_space, inspection
 from finn.custom_op.kernels.base import KernelOpError, write_target
 from finn.custom_op.kernels.partition import partition_root
 from finn.custom_op.kernels.roots import StoredMatMulNode
 from finn.kernels.configure import commit
 from finn.kernels.matmul import MatMulKernel
 from finn.kernels.memstream import MemStreamKernel
-from finn.kernels.target import DspBlock, Platform, Target, resolve_target
-from finn.transformation.kernels import InferKernelTensors
+from finn.kernels.target import DspBlock, Target
+from finn.transformation.kernels import InferKernelTensors, resolve_target
 from kernel_ops.models import matmul_model, thresholding_model
+from kernels.helpers import FULL_DSP58
 
 ZYNQ = resolve_target("xczu3eg-sbva484-1-e", 5.0, "vivado_zynq")  # Ultra96 in its shell
 ALVEO = resolve_target("xcu55c-fsvh2892-2L-e", 5.0, "vitis_alveo")
-URAM = Target("a part with UltraRAM it initializes", 5.0, Platform(dsp=DspBlock.DSP58))
+URAM = Target("a part with UltraRAM it initializes", FULL_DSP58)
 
 
 def targeted(model: ModelWrapper, target: Target) -> ModelWrapper:
@@ -44,8 +46,8 @@ def op(model: ModelWrapper) -> Any:
 def test_the_node_root_binds_the_models_platform_and_its_dsp_block() -> None:
     point = op(targeted(matmul_model(), URAM)).point()
     assert point.platform == URAM.platform
-    assert point.target_dsp is DspBlock.DSP58  # the platform's, not a separate fact
-    assert point.matmul.target_dsp is DspBlock.DSP58
+    assert point.matmul.platform.dsp is DspBlock.DSP58  # the platform's, read by the cores
+    assert commit(point, {"matmul.compute": "packed"}).matmul.compute.dsp is DspBlock.DSP58
     assert point.w.platform == URAM.platform and point.matmul.platform == URAM.platform
 
 
@@ -87,21 +89,25 @@ def test_a_partitions_weight_stream_reads_the_platform() -> None:
     assert isinstance(stream.source, MemStreamKernel)
     with pytest.raises(ValueError, match="clk2x-absent"):
         commit(root.point, {"w.source.memstream.pumped_memory": True})
+    # Its transport FIFO reads it too: Ultra96 has no UltraRAM.
+    fifo = {"w.transport": "fifo", "w.transport.fifo.buffer.depth": 4096}
+    with pytest.raises(ValueError, match="uram-absent"):
+        commit(root.point, {**fifo, "w.transport.fifo.buffer.ram_style": "ultra"})
+    assert commit(root.point, {**fifo, "w.transport.fifo.buffer.ram_style": "block"})
 
 
-def test_a_bare_kernel_keeps_the_default_platform() -> None:
+def test_a_bare_kernel_states_its_platform() -> None:
     formals = op(matmul_model()).facts().formals()
     facts = {name: formals[name] for name in ("m", "n", "k", "activation_dtype", "weights_dtype")}
-    bare = design_space(
-        MatMulKernel(
-            **facts, target_dsp=DspBlock.DSP48E2, target_period_ns=5.0, weights=formals["weights"]
-        )
-    )
-    assert bare.platform == Platform()  # refuses nothing: no model, no device
+    with pytest.raises(DefinitionError, match="platform is not supplied"):
+        design_space(MatMulKernel(**facts, weights=formals["weights"]))
 
 
-def test_a_platform_without_a_dsp_block_is_refused_by_the_node_root() -> None:
-    formals = {**op(matmul_model()).facts().formals(), "platform": Platform()}
-    answer = design_space(StoredMatMulNode(**formals)).query(StoredMatMulNode.target_dsp)
+def test_a_platform_without_a_dsp_block_is_refused_by_the_cores() -> None:
+    platform = replace(URAM.platform, dsp=None)
+    formals = {**op(matmul_model()).facts().formals(), "platform": platform}
+    answer = design_space(StoredMatMulNode(**formals)).matmul.query(MatMulKernel.compute)
     assert isinstance(answer, Rejected)
-    assert [finding.code for finding in answer.findings] == ["target-dsp"]
+    (finding,) = answer.findings  # no core is viable, each for the same reason
+    for core in ("packed", "int8_dsp58"):
+        assert f"{core}: matmul.compute.{core}.dsp: dotp-dsp" in finding.message

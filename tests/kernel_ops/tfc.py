@@ -37,8 +37,8 @@ from finn.transformation.kernels import (
     InferKernelTensors,
     PlaceholderPolicy,
     ToKernelOps,
+    resolve_target,
 )
-from finn.kernels.target import resolve_target
 
 SHAPE = (1, 1, 28, 28)
 ULTRA96 = resolve_target("xczu3eg-sbva484-1-e", 5.0, "vivado_zynq")

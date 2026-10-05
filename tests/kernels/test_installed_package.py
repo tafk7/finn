@@ -15,7 +15,6 @@ import zipfile
 
 from finn import resources as finn_resources
 
-
 ROOT = Path(__file__).resolve().parents[2]
 # -I -S ignores PYTHONPATH, the current directory, user packages and .pth files.
 # Only the wheel target and ordinary dependency site-packages (which provide
@@ -48,6 +47,7 @@ class RejectGraphDependencies(importlib.abc.MetaPathFinder):
 sys.meta_path.insert(0, RejectGraphDependencies())
 
 from finn.kernels import DspBlock, MatMulKernel, PackedDotpKernel
+from finn.kernels.target import Platform
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.base import Kernel
 from finn.kernels.configure import commit
@@ -85,18 +85,40 @@ assert not (installed / "finn/parked").exists()
 assert "finn.dataflow.datatypes" in sys.modules
 assert not (installed / "finn/kernels/space").exists()
 assert not (installed / "finn/kernels/resources").exists()
+PLATFORM = Platform(
+    period_ns=5.0,
+    dsp=DspBlock.DSP48E2,
+    uram=True,
+    uram_init=True,
+    clk2x=True,
+    control_ports=1,
+    memory_ports=0,
+    aie=False,
+)
+
 
 class PlacedDotp(Space):
-    x = Stream(tensor=Tensor((1, 2), ScalarEncoding(DataType["INT3"])), port="in0_V")
-    w = Stream(tensor=Tensor((2, 2), ScalarEncoding(DataType["INT3"])), port="in1_V")
-    y = Stream(tensor=Tensor((1, 2), ScalarEncoding(DataType["INT8"])), port="out0_V")
+    x = Stream(
+        tensor=Tensor((1, 2), ScalarEncoding(DataType["INT3"])),
+        port="in0_V",
+        platform=PLATFORM,
+    )
+    w = Stream(
+        tensor=Tensor((2, 2), ScalarEncoding(DataType["INT3"])),
+        port="in1_V",
+        platform=PLATFORM,
+    )
+    y = Stream(
+        tensor=Tensor((1, 2), ScalarEncoding(DataType["INT8"])),
+        port="out0_V",
+        platform=PLATFORM,
+    )
     compute = PackedDotpKernel(
-        target_dsp=DspBlock.DSP48E2,
-        target_period_ns=5.0,
         result_dtype=DataType["INT8"],
         x_stream=x,
         w_stream=w,
         y_stream=y,
+        platform=PLATFORM,
     )
 
 
@@ -145,7 +167,7 @@ INT3, INT8 = ScalarEncoding(DataType["INT3"]), ScalarEncoding(DataType["INT8"])
 for memory in ("none", "memstream"):
     facts = dict(
         m=3, k=4, n=4, activation_dtype=DataType["INT3"], weights_dtype=DataType["INT3"],
-        target_dsp=DspBlock.DSP48E2, target_period_ns=5.0,
+        platform=PLATFORM,
     )
     choices = {"w.transport": "direct", "matmul.compute": "packed"}
     expected = dotp_sources | {"rtl/shape/input_gen.sv"}
@@ -160,9 +182,9 @@ for memory in ("none", "memstream"):
 
     # The MatMul in a root that declares its streams.
     class Placed(Root):
-        x = Stream(tensor=Tensor((3, 4), INT3), port="in0_V")
-        w = BufferedStream(tensor=Tensor((4, 4), INT3), port="in1_V")
-        y = Stream(tensor=Tensor((3, 4), INT8), port="out0_V")
+        x = Stream(tensor=Tensor((3, 4), INT3), port="in0_V", platform=PLATFORM)
+        w = BufferedStream(tensor=Tensor((4, 4), INT3), port="in1_V", platform=PLATFORM)
+        y = Stream(tensor=Tensor((3, 4), INT8), port="out0_V", platform=PLATFORM)
         matmul = MatMulKernel(**facts, x_stream=x, w_stream=w, y_stream=y)
         w.contents = matmul.weight_values
 

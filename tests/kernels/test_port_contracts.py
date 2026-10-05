@@ -40,8 +40,7 @@ from finn.kernels.eltwise import EltwiseKernel
 from finn.kernels.port import AxiStreamPort
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.streams import Stream
-from finn.kernels.target import DspBlock
-from kernels.helpers import matmul_point, with_adapter_memories
+from kernels.helpers import FULL_DSP48E2, FULL_DSP58, matmul_point, with_adapter_memories
 
 A, W, R = DataType["INT3"], DataType["INT3"], DataType["INT8"]
 ROWS, REDUCTION, OUTPUTS, PE, SIMD = 2, 4, 4, 2, 2
@@ -78,18 +77,21 @@ def placed(
     tiled = weights_tile() if weights_form is None else weights_form
 
     class Placed(Space):
-        a = Stream(tensor=Tensor(x, ScalarEncoding(A)), port="in0_V")
-        w_s = Stream(tensor=Tensor(w, ScalarEncoding(W)), adaptable=adaptable)
-        r = Stream(tensor=Tensor(y, ScalarEncoding(R)), port="out0_V")
-        weights = MemStreamKernel(dtype=W, form=tiled, contents=weight_values(w), output_stream=w_s)
+        a = Stream(tensor=Tensor(x, ScalarEncoding(A)), port="in0_V", platform=FULL_DSP48E2)
+        w_s = Stream(
+            platform=FULL_DSP48E2, tensor=Tensor(w, ScalarEncoding(W)), adaptable=adaptable
+        )
+        r = Stream(tensor=Tensor(y, ScalarEncoding(R)), port="out0_V", platform=FULL_DSP48E2)
+        weights = MemStreamKernel(
+            platform=FULL_DSP48E2, dtype=W, form=tiled, contents=weight_values(w), output_stream=w_s
+        )
         compute = core(
-            target_dsp=DspBlock.DSP58,
-            target_period_ns=5.0,
             form=form,
             result_dtype=R,
             x_stream=a,
             w_stream=w_s,
             y_stream=r,
+            platform=FULL_DSP58,
         )
 
     return commit(
@@ -195,8 +197,7 @@ def test_one_kernel_refusal_reaches_only_its_own_stream():
             k=4,
             activation_dtype=DataType["INT3"],
             weights_dtype=DataType["UINT3"],
-            target_dsp=DspBlock.DSP48E2,
-            target_period_ns=5.0,
+            platform=FULL_DSP48E2,
         ),
         {
             "w.transport": "direct",
@@ -217,16 +218,26 @@ def eltwise_between(rhs_shape: tuple[int, ...], rhs_dtype: str = "INT4") -> Any:
     int4 = DataType["INT4"]
 
     class Added(Space):
-        lhs = Stream(tensor=Tensor((3, 4), ScalarEncoding(int4)), port="in0_V")
-        rhs = Stream(tensor=Tensor(rhs_shape, ScalarEncoding(DataType[rhs_dtype])), port="in1_V")
-        out = Stream(tensor=Tensor((3, 4), ScalarEncoding(DataType["INT5"])), port="out0_V")
+        lhs = Stream(
+            platform=FULL_DSP48E2, tensor=Tensor((3, 4), ScalarEncoding(int4)), port="in0_V"
+        )
+        rhs = Stream(
+            tensor=Tensor(rhs_shape, ScalarEncoding(DataType[rhs_dtype])),
+            port="in1_V",
+            platform=FULL_DSP48E2,
+        )
+        out = Stream(
+            tensor=Tensor((3, 4), ScalarEncoding(DataType["INT5"])),
+            port="out0_V",
+            platform=FULL_DSP48E2,
+        )
         add = EltwiseKernel(
             operation="ADD",
             pe=2,
             lhs_dtype=int4,
             rhs_dtype=int4,
             b_scale=1.0,
-            target_dsp=DspBlock.DSP58,
+            platform=FULL_DSP58,
             lhs_stream=lhs,
             rhs_stream=rhs,
             result_stream=out,

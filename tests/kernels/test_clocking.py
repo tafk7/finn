@@ -23,8 +23,7 @@ from finn.kernels.artifacts.abi import (
     Signal,
 )
 from finn.kernels.artifacts.build import netlist
-from kernels.helpers import matmul_assembly, placed
-from finn.kernels.target import DspBlock
+from kernels.helpers import FULL_DSP58, matmul_assembly, placed
 
 MATMUL_FACTS = dict(
     m=2,
@@ -34,7 +33,7 @@ MATMUL_FACTS = dict(
     weights_dtype=DataType["INT3"],
     pe=2,
     simd=2,
-    target_dsp=DspBlock.DSP58,
+    platform=FULL_DSP58,
     core="packed",
 )
 

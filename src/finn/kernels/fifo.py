@@ -7,7 +7,9 @@ Words have no numerical datatype. DEPTH is the requested capacity; the native
 implementation may round its storage up and forces a shift FIFO for shallow
 depths. ``auto`` selects by depth and word width: a shift register up to 64
 words narrower than 12 bits, LUTRAM up to 257 words, then block and UltraRAM.
-Reset is synchronous, active-high, and discards pending words.
+Reset is synchronous, active-high, and discards pending words. ``ultra``
+requires the ``platform``'s UltraRAM; the FIFO starts empty, so no initial
+contents are asked of it.
 """
 
 from __future__ import annotations
@@ -23,12 +25,14 @@ from finn.core.space import (
     constraint,
     derived,
     reject,
+    requires,
     view,
 )
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.base import NATIVE_CLOCKING, Clocking, Kernel
 from finn.kernels.port import WordPort
+from finn.kernels.target import Platform
 
 
 @dataclass(frozen=True)
@@ -47,6 +51,7 @@ class FifoKernel(Kernel):
 
     word_bits: int = Param()
     depth: int = Param()
+    platform: Platform = Param()
 
     @constraint
     def geometry_supported(self) -> bool | Rejected:
@@ -56,7 +61,12 @@ class FifoKernel(Kernel):
             return reject("fifo-geometry", "word_bits must be positive and depth at least two")
         return True
 
-    ram_style: str = Decision(values=("auto", "shift", "distributed", "block", "ultra"))
+    ram_style: str = Decision(
+        values=("auto", "shift", "distributed", "block", "ultra"),
+        requires=(
+            requires(platform.uram, "uram-absent: the platform has no UltraRAM", cases=("ultra",)),
+        ),
+    )
 
     @view(requires=(geometry_supported,))
     def storage(self) -> FifoStorage | Rejected:

@@ -23,10 +23,9 @@ from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.configure import commit
 from finn.dataflow.gemm import Form
 from finn.kernels.matmul import MatMulKernel
-from kernels.helpers import matmul_assembly, matmul_point, placed
+from kernels.helpers import FULL_DSP48E2, FULL_DSP58, matmul_assembly, matmul_point, placed
 from finn.kernels.transport import MarkerKind, ReadyValidStream, StreamContract, StreamMarker
 from kernels.helpers import with_adapter_memories
-from finn.kernels.target import DspBlock
 
 FACTS = dict(
     m=3,
@@ -34,7 +33,7 @@ FACTS = dict(
     n=4,
     activation_dtype=DataType["INT3"],
     weights_dtype=DataType["INT3"],
-    target_dsp=DspBlock.DSP48E2,
+    platform=FULL_DSP48E2,
 )
 
 
@@ -52,7 +51,7 @@ CHOICES = choices()
 
 
 def test_the_activation_stream_plans_the_replay_and_its_frame():
-    point = commit(matmul_point(**FACTS, target_period_ns=5.0), CHOICES)
+    point = commit(matmul_point(**FACTS), CHOICES)
     # The stream into the core is the root's: its plan and adapter are the edge's.
     stream = point.x
     assert stream.plan.steps == (Step.REORDER, Step.MARKERS)
@@ -67,9 +66,9 @@ def test_the_activation_stream_plans_the_replay_and_its_frame():
     assert {"x.adapter", "x.adapter.input_gen.input_gen.ram_style"} <= keys
     assert "replay" not in keys and not hasattr(MatMulKernel, "replayed")
     # A depthwise row passes once: the plan is the frame marker alone.
-    facts = {**FACTS, "target_dsp": DspBlock.DSP58, "form": Form.DEPTHWISE}
+    facts = {**FACTS, "platform": FULL_DSP58, "form": Form.DEPTHWISE}
     depthwise = commit(
-        matmul_point(realization="native", **facts, target_period_ns=5.0),
+        matmul_point(realization="native", **facts),
         choices("int8_dsp58"),
     )
     assert depthwise.x.plan.steps == (Step.MARKERS,)
@@ -106,7 +105,7 @@ def test_one_output_fold_and_one_beat_frames_close_every_beat():
 
 
 def test_the_adapter_s_memory_is_a_choice_of_the_stream():
-    point = commit(matmul_point(**FACTS, target_period_ns=5.0), CHOICES)
+    point = commit(matmul_point(**FACTS), CHOICES)
     configured = with_adapter_memories(point, ram_style="distributed")
     (generator,) = [stage for stage in configured.x.stages]
     assert generator.module is not None

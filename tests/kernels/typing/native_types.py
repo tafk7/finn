@@ -7,11 +7,12 @@ from finn.core.space import BoundValue, ViewAssessment, design_space
 from finn.kernels.fifo import FifoKernel, FifoStorage
 from finn.kernels.transport import ReadyValidStream
 from finn.kernels.port import WordPort
+from kernels.helpers import FULL_DSP48E2
 
 
 def declare() -> None:
     # A family call is a node declaration typed as the family; configure keeps it.
-    node = FifoKernel(word_bits=8, depth=4)
+    node = FifoKernel(word_bits=8, depth=4, platform=FULL_DSP48E2)
     assert_type(node, FifoKernel)
     assert_type(node.input, WordPort)
     assert_type(node.word_bits, int)

@@ -26,7 +26,7 @@ from kernels.rtlsim.dotp_support import (
     _weight_beats,
     _wrapper,
 )
-from kernels.helpers import placed_dotp, print_identity
+from kernels.helpers import full_platform, placed_dotp, print_identity
 from kernels.rtlsim.rtl_transport import drive_observed
 from kernels.helpers import finnlib_root
 from finn.kernels.artifacts.contributions import CopiedSource
@@ -148,8 +148,7 @@ def run(configuration: Configuration, evidence: Path, *, backpressure_ticks: int
         rows=c.repetitions,
         outputs=4,
         reduction=c.width,
-        target_dsp=c.target,
-        target_period_ns=c.period,
+        platform=full_platform(c.target, period_ns=c.period),
     )
     module = point.module
     case = Case(

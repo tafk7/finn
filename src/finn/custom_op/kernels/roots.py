@@ -17,17 +17,18 @@ an initializer the node owns are the weight stream's known value (its
 and stores them; weights on a graph tensor arrive on the stream like any edge,
 and it has no source. Nothing is pinned.
 
-The platform is a fact too: the target's capabilities (``target(model)``), bound
-to the kernels and to a stream with a source, so the requirements of their value
-cases (``requires``) read the device the model is built for. The DSP block is
-the platform's (``target_dsp``), not a separate fact.
+The platform is a fact too: the target's capabilities and its clock period
+(``target(model)``), bound
+to the kernels and to every stream, so the requirements of their value cases
+(``requires``) read the device the model is built for. The DSP block is
+the platform's (``platform.dsp``), which the compute cores read.
 """
 
 from __future__ import annotations
 
 from typing import Any, cast
 
-from finn.core.space import Param, Rejected, derived, reject
+from finn.core.space import Param, derived
 from finn.dataflow.datatypes import QONNXDataType
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.base import Kernel
@@ -40,7 +41,7 @@ from finn.kernels.datatypes.semantics import (
 )
 from finn.kernels.matmul import MatMulKernel
 from finn.kernels.streams import BufferedStream, Stream
-from finn.kernels.target import DspBlock, Platform
+from finn.kernels.target import Platform
 from finn.kernels.thresholding import ThresholdingAxiKernel
 
 
@@ -56,15 +57,7 @@ class MatMulNode(Kernel):
     activation_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
     weights_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
     platform: Platform = Param()
-    target_period_ns: float = Param()
     x_tensor: Tensor = Param()
-
-    @derived
-    def target_dsp(self) -> DspBlock | Rejected:
-        """The platform's DSP block (a model's target states one)."""
-        if self.platform.dsp is None:
-            return reject("target-dsp", "the platform states no DSP block")
-        return self.platform.dsp
 
     # Each case declares ``w`` and ``matmul``.
     @derived
@@ -77,8 +70,8 @@ class MatMulNode(Kernel):
         tensor: Tensor = cast(Any, self).matmul.result_tensor
         return tensor
 
-    x = Stream(tensor=x_tensor, port="in0_V")
-    y = Stream(tensor=y_tensor, port="out0_V")
+    x = Stream(tensor=x_tensor, port="in0_V", platform=platform)
+    y = Stream(tensor=y_tensor, port="out0_V", platform=platform)
 
 
 class StoredMatMulNode(MatMulNode):
@@ -93,8 +86,6 @@ class StoredMatMulNode(MatMulNode):
         k=MatMulNode.k,
         activation_dtype=MatMulNode.activation_dtype,
         weights_dtype=MatMulNode.weights_dtype,
-        target_dsp=MatMulNode.target_dsp,
-        target_period_ns=MatMulNode.target_period_ns,
         platform=MatMulNode.platform,
         weights=weights,
         x_stream=MatMulNode.x,
@@ -110,15 +101,13 @@ class StreamedMatMulNode(MatMulNode):
     """Weights a graph tensor: an edge like any other, so the weight stream has no source."""
 
     id = "finn.custom_op.kernels.node.matmul.streamed"
-    w = BufferedStream(tensor=MatMulNode.w_tensor, port="in1_V")
+    w = BufferedStream(tensor=MatMulNode.w_tensor, port="in1_V", platform=MatMulNode.platform)
     matmul = MatMulKernel(
         m=MatMulNode.m,
         n=MatMulNode.n,
         k=MatMulNode.k,
         activation_dtype=MatMulNode.activation_dtype,
         weights_dtype=MatMulNode.weights_dtype,
-        target_dsp=MatMulNode.target_dsp,
-        target_period_ns=MatMulNode.target_period_ns,
         platform=MatMulNode.platform,
         x_stream=MatMulNode.x,
         w_stream=w,
@@ -145,8 +134,8 @@ class ThresholdingNode(Kernel):
     def y_tensor(self) -> Tensor:
         return Tensor(self.x_tensor.shape, ScalarEncoding(self.activate.result_dtype))
 
-    x = Stream(tensor=x_tensor, port="in0_V")
-    y = Stream(tensor=y_tensor, port="out0_V")
+    x = Stream(tensor=x_tensor, port="in0_V", platform=platform)
+    y = Stream(tensor=y_tensor, port="out0_V", platform=platform)
     activate = ThresholdingAxiKernel(
         input_dtype=input_dtype,
         threshold_dtype=threshold_dtype,

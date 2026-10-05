@@ -16,11 +16,10 @@ from qonnx.core.datatype import DataType
 from finn.core.space import Rejected, design_space, inspection
 from finn.kernels.artifacts.build import emit_module
 from finn.kernels.artifacts.contributions import ContributionError, GeneratedData
-from kernels.helpers import WeightDelivery, matmul_assembly
+from kernels.helpers import FULL_DSP48E2, matmul_assembly, WeightDelivery
 from finn.kernels.memstream import MemStreamKernel
 from finn.dataflow.tensor import ScalarEncoding
 from finn.dataflow.traversal import tile
-from finn.kernels.target import DspBlock
 from kernels.helpers import finnlib_root, labels, pin_names, placed
 
 WEIGHTS = ((-4, -3, -2, -1), (0, 1, 2, 3), (3, 2, 1, 0), (-1, -2, -3, -4))
@@ -33,14 +32,20 @@ MATMUL = dict(
     weights_dtype=DataType["INT3"],
     pe=2,
     simd=2,
-    target_dsp=DspBlock.DSP48E2,
+    platform=FULL_DSP48E2,
     weight_delivery=WeightDelivery.MEMSTREAM,
     weights=tuple(zip(*WEIGHTS)),
 )
 
 
 def memory(**changes):
-    facts = {"dtype": DataType["INT3"], "form": tile(4, 4, 2, 2), "contents": WEIGHTS, **changes}
+    facts = {
+        "dtype": DataType["INT3"],
+        "form": tile(4, 4, 2, 2),
+        "contents": WEIGHTS,
+        "platform": FULL_DSP48E2,
+        **changes,
+    }
     return design_space(MemStreamKernel(**facts)).with_choices(
         ram_style="block", pumped_memory=False
     )
@@ -65,7 +70,9 @@ def test_the_image_is_the_consumers_order_in_a_content_named_init_file():
 
 def test_a_pumped_memory_stores_half_words_low_first():
     point = design_space(
-        MemStreamKernel(dtype=DataType["INT3"], form=tile(4, 4, 2, 2), contents=WEIGHTS)
+        MemStreamKernel(
+            platform=FULL_DSP48E2, dtype=DataType["INT3"], form=tile(4, 4, 2, 2), contents=WEIGHTS
+        )
     ).with_choices(ram_style="auto", pumped_memory=True)
     # 12-bit words as 6-bit halves: 0x22C -> 0x2C, 0x08.
     assert point.init_file.data.split(b"\n")[:4] == [b"2c", b"08", b"3e", b"1a"]

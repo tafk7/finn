@@ -19,11 +19,18 @@ from finn.dataflow.plan import Step
 from finn.kernels.base import Kernel
 from finn.kernels.configure import commit
 from finn.kernels.matmul import MatMulKernel
-from kernels.helpers import labels, matmul_point, matmul_root, placed, with_adapter_memories
+from kernels.helpers import (
+    FULL_DSP48E2,
+    FULL_DSP58,
+    labels,
+    matmul_point,
+    matmul_root,
+    placed,
+    with_adapter_memories,
+)
 from finn.dataflow.gemm import Form
 from kernels.helpers import WeightDelivery, matmul_assembly
 from finn.dataflow.traversal import Traversal
-from finn.kernels.target import DspBlock
 
 FACTS = dict(
     m=2,
@@ -32,12 +39,12 @@ FACTS = dict(
     form=Form.DEPTHWISE,
     activation_dtype=DataType["INT4"],
     weights_dtype=DataType["INT4"],
-    target_dsp=DspBlock.DSP58,
+    platform=FULL_DSP58,
 )
 
 
 def point(core="int8_dsp58", **facts):
-    facts = {**FACTS, "target_period_ns": 5.0, **facts}
+    facts = {**FACTS, **facts}
     choices = {
         "w.transport": "direct",
         "matmul.compute": core,
@@ -104,7 +111,7 @@ def test_only_the_int8_dsp58_core_reads_a_depthwise_form():
     # External weights exclude the dense realization; natively, one core fits.
     assert matmul_assembly(**facts).module is not None
     with pytest.raises(ValueError, match="realizations compatible with this configuration: none"):
-        matmul_assembly(**{**facts, "target_dsp": DspBlock.DSP48E2})
+        matmul_assembly(**{**facts, "platform": FULL_DSP48E2})
 
 
 def test_depthwise_cyclic_weights_are_the_channel_tile():
@@ -127,7 +134,7 @@ def test_one_root_carries_the_weights_of_whichever_realization_is_committed():
     # The root binds its weight stream's tensor to MatMul's weight_tensor, which
     # follows the realization: open, the tensor waits on it.
     weights = tuple(tuple((c + k) % 7 - 3 for c in range(4)) for k in range(9))
-    point = matmul_point(**FACTS, target_period_ns=5.0, weights=weights)
+    point = matmul_point(**FACTS, weights=weights)
     pending = point.query(matmul_root(MatMulKernel).w.tensor)
     assert isinstance(pending, Unresolved)
     assert {finding.owner for finding in pending.findings} == {"matmul.realization"}
@@ -182,7 +189,7 @@ DENSE = dict(
 
 def test_a_dense_realization_reads_window_by_channel_rows_against_block_diagonal_weights():
     # On DSP48E2 only the dense realization computes it: the packed core.
-    built = matmul_assembly(target_dsp=DspBlock.DSP48E2, **DENSE)
+    built = matmul_assembly(platform=FULL_DSP48E2, **DENSE)
     assert labels(built.module) == [
         "x.adapter.input_gen.input_gen",
         "w.source.memstream",
@@ -210,13 +217,11 @@ def test_a_dense_realization_reads_window_by_channel_rows_against_block_diagonal
 def test_the_dense_realization_needs_known_weights_and_either_may_be_chosen_on_dsp58():
     external = {**DENSE, "weight_delivery": WeightDelivery.EXTERNAL, "weights": None}
     with pytest.raises(ValueError, match="matmul-realization"):
-        matmul_assembly(target_dsp=DspBlock.DSP48E2, realization="dense", **external)
+        matmul_assembly(platform=FULL_DSP48E2, realization="dense", **external)
     with pytest.raises(ValueError, match="native, dense"):
-        matmul_assembly(target_dsp=DspBlock.DSP58, **DENSE)
+        matmul_assembly(platform=FULL_DSP58, **DENSE)
     for realization, core in (("native", "int8_dsp58"), ("dense", "packed")):
-        built = matmul_assembly(
-            target_dsp=DspBlock.DSP58, realization=realization, core=core, **DENSE
-        )
+        built = matmul_assembly(platform=FULL_DSP58, realization=realization, core=core, **DENSE)
         assert f"matmul.compute.{core}" in labels(built.module)
 
 
@@ -231,6 +236,6 @@ def test_the_dense_realization_needs_known_weights_and_either_may_be_chosen_on_d
 def test_narrow_weights_follow_known_weights(weights, delivery, narrow):
     facts = {**DENSE, "form": Form.DENSE, "n": 3, "pe": 3}
     built = matmul_assembly(
-        target_dsp=DspBlock.DSP48E2, **{**facts, "weights": weights, "weight_delivery": delivery}
+        platform=FULL_DSP48E2, **{**facts, "weights": weights, "weight_delivery": delivery}
     )
     assert parameters(built.module, "matmul.compute.packed")["NARROW_WEIGHTS"] == narrow
