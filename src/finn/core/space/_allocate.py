@@ -29,7 +29,6 @@ from ._bindings import (
     supply_text,
 )
 from ._configuration import Space
-from ._graph import dependency_order
 from ._nodes import (
     KeySelection,
     NodeDecision,
@@ -39,6 +38,7 @@ from ._nodes import (
     is_reference_input,
     missing_formal,
 )
+from ._ordering import dependency_order
 from ._table import (
     BOOL,
     STRING,

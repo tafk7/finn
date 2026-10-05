@@ -23,9 +23,9 @@ from ._allocate import allocate
 from ._check import check
 from ._collapse import collapse
 from ._configuration import Space
-from ._graph import dependency_order
 from ._lower import lower
 from ._nodes import NodeDecl
+from ._ordering import dependency_order
 from .errors import DefinitionError
 from .ir import LinkedModel
 
