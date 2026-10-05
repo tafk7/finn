@@ -12,6 +12,7 @@ on:
       - "src/finn/dataflow/**"
       - "tests/core/space/**"
       - "tests/dataflow/**"
+      - "scripts/_gate-common.sh"
       - "scripts/check-space.sh"
       - "scripts/check-dataflow-design.sh"
       - "pyproject.toml"
