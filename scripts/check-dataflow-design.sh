@@ -5,8 +5,8 @@
 # Gate for the canonical logical values in finn.dataflow and their tests.
 #
 # finn.dataflow sits directly on finn.core.space and below finn.kernels, so this
-# gate checks only the value layer. Run scripts/check-kernels.sh as well for a
-# change that can reach the kernels built on it. Parked code under finn.parked
+# gate checks only the value layer; scripts/check-kernels.sh runs it, and checks
+# the kernels built on it too. Parked code under finn.parked
 # is reference only and outside every gate.
 
 # shellcheck source=scripts/_gate-common.sh
