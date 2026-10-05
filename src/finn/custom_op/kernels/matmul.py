@@ -43,6 +43,7 @@ class MatMul(KernelOp):
     roots = (StoredMatMulNode, StreamedMatMulNode)
     member = "matmul"
     ports = ("x", "w")
+    buffered = ("w",)
 
     def facts(self) -> Facts:
         model, label = self.model(), self.label

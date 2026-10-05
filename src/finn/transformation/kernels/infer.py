@@ -25,16 +25,19 @@ agree once this one has run.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING
 
 import onnx.shape_inference as shape_inference
-from onnx import defs, helper
+from onnx import NodeProto, defs, helper
 from qonnx.custom_op.registry import is_custom_op
 from qonnx.transformation.base import Transformation
 from qonnx.transformation.infer_datatypes import _infer_node_datatype
 
 from finn.custom_op.kernels.base import KernelOp, KernelOpError, datatype
 from finn.dataflow.datatypes import DatatypeError, QONNXDataType, ordinary_integer_bounds
+
+if TYPE_CHECKING:
+    from qonnx.core.modelwrapper import ModelWrapper
 
 
 def _admits(stated: QONNXDataType, exact: QONNXDataType) -> bool:
@@ -47,7 +50,7 @@ def _admits(stated: QONNXDataType, exact: QONNXDataType) -> bool:
     return low <= need_low and need_high <= high
 
 
-def _standard(model: Any, node: Any) -> None:
+def _standard(model: ModelWrapper, node: NodeProto) -> None:
     """ONNX's inference for one standard node, its outputs' shapes written.
 
     An initializer input is given with its value (a Reshape's target shape is
@@ -79,7 +82,7 @@ def _standard(model: Any, node: Any) -> None:
 class InferKernelTensors(Transformation):  # type: ignore[misc]
     """One pass in graph order; see the module docstring."""
 
-    def apply(self, model: Any) -> tuple[Any, bool]:
+    def apply(self, model: ModelWrapper) -> tuple[ModelWrapper, bool]:
         for node in model.graph.node:
             if not is_custom_op(node.domain):
                 _standard(model, node)

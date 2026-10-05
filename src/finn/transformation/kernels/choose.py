@@ -29,7 +29,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from types import MappingProxyType
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 from qonnx.transformation.base import Transformation
 
@@ -38,6 +38,9 @@ from finn.custom_op.kernels.base import KernelOpError
 from finn.custom_op.kernels.partition import partition_root, save_partition_choices
 from finn.kernels.configure import commit, undecided
 from finn.transformation.fpgadataflow.kernel_partitions import KERNEL_OPS_DOMAIN
+
+if TYPE_CHECKING:
+    from qonnx.core.modelwrapper import ModelWrapper
 
 
 class KernelChoicePolicy(Protocol):
@@ -94,7 +97,7 @@ class CommitKernelChoices(Transformation):  # type: ignore[misc]
         super().__init__()
         self.policy = policy
 
-    def apply(self, model: Any) -> tuple[Any, bool]:
+    def apply(self, model: ModelWrapper) -> tuple[ModelWrapper, bool]:
         nodes = [node for node in model.graph.node if node.domain == KERNEL_OPS_DOMAIN]
         if not nodes:
             return model, False
