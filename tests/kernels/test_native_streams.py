@@ -9,7 +9,8 @@ from finn.kernels.artifacts.abi import Direction, Endpoint
 from finn.kernels.eltwise import EltwiseKernel
 from finn.kernels.fifo import FifoKernel
 from finn.kernels.transport import MarkerKind, ReadyValidStream, StreamMarker
-from kernels.helpers import FULL_DSP48E2, eltwise, finnlib_root, generator
+from kernels.helpers import FULL_DSP48E2, eltwise, generator
+from kernels.toolchain import finnlib_root
 from kernels.xsim import requires_xsim, simulate
 
 

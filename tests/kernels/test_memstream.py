@@ -22,12 +22,12 @@ from finn.kernels.memstream import MemStreamKernel
 from kernels.helpers import (
     FULL_DSP48E2,
     WeightDelivery,
-    finnlib_root,
     labels,
     matmul_assembly,
     pin_names,
     placed,
 )
+from kernels.toolchain import finnlib_root
 
 WEIGHTS = ((-4, -3, -2, -1), (0, 1, 2, 3), (3, 2, 1, 0), (-1, -2, -3, -4))
 # MatMul stores its weights (k, n): WEIGHTS read by output.

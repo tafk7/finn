@@ -38,20 +38,33 @@ by ``diff -r`` on what changed beside the hash.
 
 A job's key is a digest of everything its simulation consumes: the captured
 designs, the files of the test tree the job imports (harness, stimulus and
-reference code), the simulator runtime (``finn.xsi``, ``finn_xsi`` and the
-modules they load) when the job drives XSI, the sweep's own scripts, the pytest
+reference code) except construction modules, a numeric sweep's construction
+results, the simulator runtime (``finn.xsi``, ``finn_xsi`` and the modules they
+load) when the job drives XSI, the sweep's own scripts, the pytest
 configuration, the Python environment, the selected Vivado and this tool. The
 three pytest groups (``kernels-rest``, ``kernel-ops-xsim``,
 ``kernel-ops-vivado``) simulate from inside test bodies that no single stub
 reaches, and ``kernels-rest`` also runs Python-only tests: their key is the
 digest of every tracked file under src/, tests/ and scripts/ and of the whole
 FinnLib tree, so any change to FINN's code or tests runs them.
+
+A construction module (one that declares ``XSIM_KEY = "construction"``, as
+tests/kernels/helpers.py does) builds kernels, configurations and samples. Its
+code is not an input: what it builds reaches a simulation through the captured
+designs, and what a numeric sweep reads from it besides (a MatMul assembly's beat
+counts and result type, after its simulation) is recorded as the job's
+construction results: each call the sweep makes to it and the plain data it
+returned. So a rename in construction code changes no key unless what it builds
+changes. A module without the declaration (any module of an older checkout) is
+keyed by its code.
 """
 
 from __future__ import annotations
 
 import argparse
 import ast
+import dataclasses
+import enum
 import hashlib
 import importlib
 import inspect
@@ -343,14 +356,79 @@ class _Captured(BaseException):
     """A numeric run's first simulation request is captured: end the run there."""
 
 
-def _imported(root: Path) -> list[str]:
-    """The files under ``root`` the process imported, relative to it."""
+CONSTRUCTION = "construction"
+"""A module's ``XSIM_KEY`` when it only constructs (see the module docstring)."""
+
+
+def _imported(root: Path, construction: bool = False) -> list[str]:
+    """The files under ``root`` the process imported, relative to it; with
+    ``construction``, only the construction modules'."""
     found = set()
     for module in list(sys.modules.values()):
         name = getattr(module, "__file__", None)
-        if name and Path(name).resolve().is_relative_to(root) and Path(name).resolve() != TOOL:
+        if (
+            not name
+            or Path(name).resolve() == TOOL
+            or not Path(name).resolve().is_relative_to(root)
+        ):
+            continue
+        if not construction or getattr(module, "XSIM_KEY", None) == CONSTRUCTION:
             found.add(str(Path(name).resolve().relative_to(root)))
     return sorted(found)
+
+
+_OPAQUE = object()
+"""What ``_plain`` returns for a value that is not plain data."""
+
+
+def _plain(value: Any) -> Any:
+    """``value`` as JSON when it is plain data (a scalar, an enum member, a QONNX
+    datatype, a sequence of those); otherwise ``_OPAQUE``."""
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    if isinstance(value, enum.Enum):
+        return f"{type(value).__name__}.{value.name}"
+    canonical = getattr(value, "get_canonical_name", None)  # a QONNX datatype
+    if callable(canonical):
+        return f"datatype {canonical()}"
+    if isinstance(value, (tuple, list)):
+        items = [_plain(item) for item in value]
+        return _OPAQUE if any(item is _OPAQUE for item in items) else items
+    return _OPAQUE
+
+
+def _result(value: Any) -> Any:
+    """A construction call's result as recorded: plain data as such; a dataclass by its
+    fields, each one that is not plain data by its type (a module reaches the
+    designs); anything else by its type."""
+    plain = _plain(value)
+    if plain is not _OPAQUE:
+        return plain
+    if dataclasses.is_dataclass(value) and not isinstance(value, type):
+        recorded = {}
+        for field in dataclasses.fields(value):
+            item = getattr(value, field.name)
+            found = _plain(item)
+            recorded[field.name] = type(item).__name__ if found is _OPAQUE else found
+        return {"type": type(value).__name__, "fields": recorded}
+    return {"type": type(value).__name__}
+
+
+def _record_construction(module: Any, calls: list[dict[str, Any]]) -> None:
+    """Each construction function ``module`` names records its result into ``calls``."""
+
+    def recorded(function: Callable[..., Any]) -> Callable[..., Any]:
+        def run(*args: Any, **kwargs: Any) -> Any:
+            result = function(*args, **kwargs)
+            calls.append({"call": function.__name__, "result": _result(result)})
+            return result
+
+        return run
+
+    for name, value in list(vars(module).items()):
+        owner = sys.modules.get(getattr(value, "__module__", ""))
+        if inspect.isfunction(value) and getattr(owner, "XSIM_KEY", None) == CONSTRUCTION:
+            setattr(module, name, recorded(value))
 
 
 def _copy_tree(source: Path, target: Path) -> None:
@@ -445,6 +523,7 @@ def capture_test(dest: Path, root: Path, pytest_args: Sequence[str], ipxact: Pat
         "simulations": state["simulations"],
         "conformance_calls": [state["started"], state["completed"]],
         "imported": _imported(root),
+        "construction": _imported(root, construction=True),
     }
     (dest / "meta.json").write_text(json.dumps(meta, indent=1) + "\n")
     complete = state["started"] == state["completed"] >= 1 and state["simulations"] >= 1
@@ -501,6 +580,8 @@ def capture_sweep(dest: Path, root: Path, module_name: str, args: Sequence[str])
     transport = importlib.import_module(module_name.rpartition(".")[0] + ".rtl_transport")
     transport._run_worker = run_worker
     module = importlib.import_module(module_name)
+    calls: list[dict[str, Any]] = []
+    _record_construction(module, calls)
     depth = [0]
 
     def guarded(function: Callable[..., Any]) -> Callable[..., Any]:
@@ -528,8 +609,13 @@ def capture_sweep(dest: Path, root: Path, module_name: str, args: Sequence[str])
     except _Captured:
         print(f"{module_name}: main simulates outside a run; not captured", file=sys.stderr)
         return 1
-    meta = {"simulations": len(captured), "imported": _imported(root)}
+    meta = {
+        "simulations": len(captured),
+        "imported": _imported(root),
+        "construction": _imported(root, construction=True),
+    }
     (dest / "meta.json").write_text(json.dumps(meta, indent=1) + "\n")
+    (dest / "construction.json").write_text(json.dumps(calls, indent=1) + "\n")
     return 0 if captured else 1
 
 
@@ -677,9 +763,12 @@ def compute_keys(
         meta = json.loads((dest / "meta.json").read_text())
         inputs["designs"] = tree_digest(dest / "designs")
         imported = meta["imported"]
+        construction = set(meta["construction"])
         for name in imported:
-            if name.startswith("tests/"):
+            if name.startswith("tests/") and name not in construction:
                 inputs[f"harness:{name}"] = code_digest(root / name)
+        if (dest / "construction.json").is_file():
+            inputs["construction"] = file_digest(dest / "construction.json")
         if any(name.startswith(("src/finn/xsi/", "src/finn_xsi/")) for name in imported):
             for name in simulator_files():
                 inputs[f"simulator:{name}"] = code_digest(root / name)

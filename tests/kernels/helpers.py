@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Test harness: configure a kernel node from its formals, then commit choices by key.
+"""Test construction: configure a kernel node from its formals, then commit choices by key.
 
 Facts are the root node's typed formals; a missing required one is refused at
 the node call. Choices use the stable decision keys ``inspection`` reports.
@@ -20,19 +20,17 @@ open until committed. Known weights are the weight channel's ``contents``
 ``source`` stores them. The edge choices are the root's (``x.adapter``,
 ``w.transport``, ``w.source.memstream.ram_style``), the MatMul's below it
 (``matmul.compute.packed.pe``). ``matmul_assembly`` configures one from
-concrete facts and choices."""
+concrete facts and choices.
 
-import os
-import shutil
-import subprocess
+What a simulation runs on (FinnLib, Vivado, the run's identity) is
+``kernels.toolchain``'s: this module only constructs."""
+
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum
 from functools import cache
-from pathlib import Path
 from typing import Any, TypeVar, cast
 
-from finn import resources
 from finn.core.space import (
     Constraint,
     Param,
@@ -68,6 +66,13 @@ from finn.kernels.values.semantics import (
 
 T = TypeVar("T")
 S = TypeVar("S", bound=Space)
+
+XSIM_KEY = "construction"
+"""How ``scripts/emitted_text.py`` keys an XSim job that imports this module: by what
+it constructs, not by its code. What it builds reaches a simulation only through the
+captured designs and, for a numeric sweep, the results of the calls the sweep makes
+here, which the capture records. Code whose effect reaches a verdict otherwise is
+harness (``kernels.toolchain``)."""
 
 
 def full_platform(dsp: DspBlock, *, period_ns: float = 5.0) -> Platform:
@@ -370,48 +375,6 @@ def with_direct_transports(point: S) -> S:
     """Each channel's open transport direct: the placeholder policy's choice."""
     open_ = undecided(point, TRANSPORTS)
     return commit(point, dict.fromkeys(open_, "direct")) if open_ else point
-
-
-def finnlib_root() -> Path:
-    """FinnLib as FINN resolves it: FINN_RESOURCES_FINNLIB, a cached copy, or a fetch."""
-    return Path(resources.path("finnlib"))
-
-
-def print_identity() -> None:
-    """Print the FINN and FinnLib revisions a run compiles, first in its log.
-
-    ``finn <sha>[ dirty]`` and ``finnlib <revision> <path>``: a log that does not
-    say what it compiled is not evidence about a commit. A working clone of
-    FinnLib is named by its commit; the cached pin, which is not a repository,
-    by the digest it was verified against.
-    """
-
-    def revision(directory: Path) -> str:
-        def git(*args: str) -> str:
-            done = subprocess.run(
-                ["git", "-C", str(directory), *args], capture_output=True, text=True
-            )
-            return done.stdout.strip() if done.returncode == 0 else ""
-
-        sha = git("rev-parse", "--short", "HEAD")
-        if not sha:
-            marker = directory / ".finn-resource"
-            return f"pinned {marker.read_text().strip()[:19]}" if marker.exists() else "unknown"
-        return f"{sha} dirty" if git("status", "--porcelain", "--untracked-files=no") else sha
-
-    finnlib = finnlib_root()
-    print(f"finn {revision(Path(__file__).resolve().parent)}", flush=True)
-    print(f"finnlib {revision(finnlib)} {finnlib}", flush=True)
-
-
-def vivado_simulator() -> bool:
-    """Whether a selected Vivado provides xvlog, xelab and xsim.
-
-    FINN images put tool shims on PATH, so a command being found does not mean
-    a Vivado installation is selected.
-    """
-    tools = ("xvlog", "xelab", "xsim")
-    return bool(os.environ.get("XILINX_VIVADO")) and all(shutil.which(tool) for tool in tools)
 
 
 class WeightDelivery(Enum):

@@ -26,12 +26,12 @@ from finn.kernels.matmul import MatMulKernel, exact_result_dtype
 from kernels.helpers import (
     FULL_DSP48E2,
     WeightDelivery,
-    finnlib_root,
     labels,
     matmul_assembly,
     matmul_point,
     placed,
 )
+from kernels.toolchain import finnlib_root
 
 FACTS = dict(
     m=2,

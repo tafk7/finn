@@ -40,7 +40,7 @@ from finn.kernels.artifacts.module import (
     module_name,
 )
 from finn.kernels.artifacts.rtl import ExtractedModule, extract
-from kernels.helpers import finnlib_root
+from kernels.toolchain import finnlib_root
 
 ACTIVE_HIGH = Reset(False, True, ("clk",))
 
