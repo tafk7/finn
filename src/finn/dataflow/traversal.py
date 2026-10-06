@@ -426,34 +426,28 @@ def period(form: Traversal) -> Traversal:
     return Traversal(form.shape, loops[moving:], form.lane_loops)
 
 
-def pack(form: Traversal, values: object, bits: int) -> tuple[int, ...]:
-    """Pack an integer operand of ``form.shape`` into one raw word per beat, lane zero lowest."""
+def pack(form: Traversal, integers: Sequence[int], bits: int) -> tuple[int, ...]:
+    """Pack an integer operand of ``form.shape``, given as its row-major ``integers``, into
+    one raw word per beat, lane zero lowest.
+
+    Each beat's lanes are read at their flat offsets (``position`` before it is
+    unravelled), so no position is formed and no nested operand walked.
+    """
     require_positive(bits, "bits")
-    _check_shape(values, form.shape)
+    size = prod(form.shape)
+    if len(integers) != size:
+        raise ValueError(
+            f"an operand of shape {form.shape} has {size} integers, not {len(integers)}"
+        )
     mask = (1 << bits) - 1
-
-    def lookup(position: Position) -> int:
-        item = values
-        for index in position:
-            assert isinstance(item, Sequence)
-            item = item[index]
-        if type(item) is not int:
-            raise ValueError(f"operand position {position} is not an integer")
-        return item
-
-    return tuple(
-        sum((lookup(position) & mask) << (lane * bits) for lane, position in enumerate(beat))
-        for beat in form.positions()
-    )
-
-
-def _check_shape(values: object, shape: tuple[int, ...]) -> None:
-    if not shape:
-        return
-    if not isinstance(values, Sequence) or len(values) != shape[0]:
-        raise ValueError(f"operand must have shape {shape}")
-    for item in values:
-        _check_shape(item, shape[1:])
+    lanes = tuple(zip(_offsets(form.lane_loops), range(0, form.lanes * bits, bits)))
+    words = []
+    for beat in _offsets(form.beat_loops):
+        word = 0
+        for lane, shift in lanes:
+            word |= (integers[beat + lane] & mask) << shift
+        words.append(word)
+    return tuple(words)
 
 
 __all__ = [

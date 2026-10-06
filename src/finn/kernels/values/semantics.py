@@ -118,6 +118,14 @@ def integers(values: object) -> tuple[int, ...]:
     return _integers(values)
 
 
+def integer_shape(values: object) -> tuple[int, ...] | None:
+    """The shape of a nested operand (an integer tensor value's, stated); ``None`` for
+    anything that is no integer tensor."""
+    if type(values) is IntegerTensorValue:
+        return values.shape
+    return _shape(values)
+
+
 def integer_range(values: object) -> tuple[int, int]:
     """The least and the greatest integer of a nested operand (an integer tensor
     value's, once)."""
@@ -173,5 +181,6 @@ __all__ = [
     "THRESHOLD_TABLE",
     "ThresholdTable",
     "integer_range",
+    "integer_shape",
     "integers",
 ]

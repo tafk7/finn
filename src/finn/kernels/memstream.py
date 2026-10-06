@@ -33,7 +33,7 @@ from __future__ import annotations
 import hashlib
 from collections.abc import Mapping
 from dataclasses import replace
-from math import ceil
+from math import ceil, prod
 
 from finn.core.space import (
     ConstraintGroup,
@@ -73,6 +73,8 @@ from finn.kernels.values.semantics import (
     IntegerTensor,
     IntegerVector,
     integer_range,
+    integer_shape,
+    integers,
 )
 
 LANE = Index("lane")
@@ -179,18 +181,21 @@ class MemStreamKernel(Kernel):
     @derived(semantics=INTEGER_VECTOR)
     def image(self) -> IntegerVector | Rejected:
         """Packed words, set after set, each set in the consumer's ``form``."""
-        encoding = self.element
-        values, sets = self.contents, self.sets
-        groups = values if sets > 1 else (values,)
-        if sets > 1 and (not isinstance(values, tuple) or len(values) != sets):
-            return reject("memstream-values", f"contents must hold one operand per set ({sets})")
-        try:
-            words = tuple(
-                word for group in groups for word in pack(self.form, group, encoding.bits)
+        encoding, sets, form = self.element, self.sets, self.form
+        shape = (sets, *form.shape) if sets > 1 else form.shape
+        if integer_shape(self.contents) != shape:
+            return reject(
+                "memstream-values",
+                f"contents must be {shape}: "
+                + (f"one operand per set ({sets}), each " if sets > 1 else "")
+                + f"of the form's shape {form.shape}",
             )
-        except ValueError as error:
-            return reject("memstream-values", str(error))
-        return words
+        flat, size = integers(self.contents), prod(form.shape)
+        return tuple(
+            word
+            for start in range(0, sets * size, size)
+            for word in pack(form, flat[start : start + size], encoding.bits)
+        )
 
     @derived
     def init_file(self) -> GeneratedData:
