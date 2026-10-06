@@ -47,8 +47,7 @@ Two rules it keeps, which qonnx leaves to its callers:
 from __future__ import annotations
 
 import re
-from collections.abc import Callable
-from typing import Protocol, TypeGuard, cast
+from typing import TypeAlias
 
 from qonnx.core.datatype import BaseDataType, DataType, is_datatype
 
@@ -65,44 +64,18 @@ __all__ = [
 ]
 
 
-class QONNXDataType(Protocol):
-    """The datatype surface kernels and dataflow models depend on.
+QONNXDataType: TypeAlias = BaseDataType
+"""The datatype surface kernels and dataflow models depend on: QONNX's own
+``BaseDataType``, as qonnx types it (it ships ``py.typed``). A name for the
+boundary, not a second representation: runtime values are the interned
+instances ``is_datatype`` recognizes, and the engine token is ``BaseDataType``
+itself.
 
-    A typing aid only.  QONNX ships no ``py.typed``, and the gate deliberately
-    hides it from mypy (see ``scripts/check-kernels.sh``), so annotating
-    against ``BaseDataType`` would annotate against ``Any``.  This names what is
-    actually used instead.
-
-    It is **not** a second value representation, a registry, or an engine value
-    token: runtime values are real ``BaseDataType`` instances and the engine
-    token is ``BaseDataType`` itself.  Adding a method here is a claim that the
-    dataflow stack needs it from every datatype -- and several QONNX methods
-    are not total (see ``min`` below).
-    """
-
-    @property
-    def name(self) -> str: ...
-
-    def bitwidth(self) -> int: ...
-
-    def signed(self) -> bool: ...
-
-    def is_integer(self) -> bool: ...
-
-    def is_fixed_point(self) -> bool: ...
-
-    # PARTIAL.  Unlike everything above it, this is not defined for every QONNX
-    # datatype: ``ScaledIntType`` raises, and wide types may answer in floating
-    # point.  It is declared because a datatype's representable range is part
-    # of the surface; an ordinary integer's exact bounds come from
-    # ``ordinary_integer_bounds`` instead, which is what an element's range is
-    # checked against.  Every caller must guard partial uses. Do not add further partial methods
-    # without the same treatment; ``get_hls_datatype_str`` in particular raises
-    # a bare ``AssertionError`` for arbitrary float formats, which no ``except``
-    # clause should be catching.
-    def min(self) -> int | float: ...
-
-    def max(self) -> int | float: ...
+Not every method is total. ``min`` and ``max`` are partial (``ScaledIntType``
+raises, and wide types may answer in floating point): an ordinary integer's
+exact bounds come from ``ordinary_integer_bounds``, and every caller guards
+partial uses. ``get_hls_datatype_str`` raises a bare ``AssertionError`` for
+arbitrary float formats, which no ``except`` clause should be catching."""
 
 
 class DatatypeError(ValueError):
@@ -143,7 +116,7 @@ def resolve_qonnx_datatype_name(name: str) -> QONNXDataType:
     if not isinstance(name, str):
         raise DatatypeError(f"a datatype name must be a string, not {type(name)}")
     try:
-        return cast(QONNXDataType, DataType[name])
+        return DataType[name]
     except KeyError as error:
         raise DatatypeError(f"no QONNX datatype is named {name!r}") from error
 
@@ -164,7 +137,7 @@ def canonical_qonnx_datatype(value: object) -> QONNXDataType:
         raise DatatypeError(f"a canonical name is not a datatype value; resolve {value!r} first")
     if not is_datatype(value):
         raise DatatypeError(f"not a QONNX datatype value: a {type(value).__name__}")
-    return cast(QONNXDataType, value)
+    return value
 
 
 def qonnx_datatype_width(value: object) -> int:
@@ -173,7 +146,7 @@ def qonnx_datatype_width(value: object) -> int:
     return canonical_qonnx_datatype(value).bitwidth()
 
 
-is_qonnx_datatype: Callable[[object], TypeGuard[QONNXDataType]] = is_datatype
+is_qonnx_datatype = is_datatype
 """Whether ``value`` is a QONNX datatype value: qonnx's ``is_datatype``, total
 (it runs no method of the value), and False for a ``str``."""
 
@@ -182,7 +155,7 @@ is_qonnx_datatype: Callable[[object], TypeGuard[QONNXDataType]] = is_datatype
 #:
 #: ``type_token`` is ``BaseDataType`` and must stay that single object:
 #: ``ValueSemantics.is_compatible_with`` compares tokens by identity, not by
-#: subtyping, so a second token -- the protocol above, say -- would silently
+#: subtyping, so a second token -- a subclass, say -- would silently
 #: partition the domain and make two datatype fields report that they cannot be
 #: compared.
 #: The single object every datatype value-semantics declaration must use as its

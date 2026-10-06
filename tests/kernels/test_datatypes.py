@@ -309,7 +309,7 @@ def test_a_datatype_keeps_its_key_in_a_mapping() -> None:
 def test_every_datatype_field_shares_one_token() -> None:
     """``is_compatible_with`` is token identity, not subtyping.
 
-    A second token -- the ``QONNXDataType`` protocol, say -- would partition the
+    A second token -- a ``BaseDataType`` subclass, say -- would partition the
     domain and make two datatype fields report that they cannot be compared.
     """
 
