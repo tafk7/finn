@@ -3,9 +3,9 @@
 
 """Reading a DataflowBuildConfig refuses the keys it does not declare, naming them.
 
-A dropped key is a silent change of build: after ``kernel_choices`` was renamed
-``kernel_strategies``, a configuration that still said ``kernel_choices`` would have
-built with the default strategy chain."""
+A dropped key is a silent change of build: after the strategy list was renamed
+(``kernel_choices``, then ``kernel_exploration``), a configuration that still said an
+old name would have built with the default exploration."""
 
 import pytest
 
@@ -40,11 +40,11 @@ def test_an_undeclared_toolchain_key_is_refused_naming_it():
 def test_declared_keys_are_read():
     stated = {
         **STATED,
-        "kernel_strategies": ["placeholder"],
+        "kernel_exploration": [{"strategy": "placeholder"}],
         "toolchain": {"settings": ["/tools/settings64.sh"], "hls_frontend": "vitis-run"},
     }
     cfg = DataflowBuildConfig.from_json(json.dumps(stated))
-    assert cfg.kernel_strategies == ["placeholder"]
+    assert cfg.kernel_exploration == [{"strategy": "placeholder"}]
     assert cfg.toolchain == Selection(settings=("/tools/settings64.sh",), hls_frontend="vitis-run")
 
 
