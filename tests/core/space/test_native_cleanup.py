@@ -15,17 +15,18 @@ from finn.core.space import (
     Decision,
     EvaluationError,
     Inapplicable,
+    NativeEvaluationError,
     Param,
     Rejected,
     Space,
     Unresolved,
     _execution,
+    cancellation_details,
     constraint,
     derived,
     design_space,
     view,
 )
-from finn.core.space._execution import NativeEvaluationError, cancellation_details
 from finn.core.space.occurrence import state
 
 if TYPE_CHECKING:

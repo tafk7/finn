@@ -298,17 +298,18 @@ def test_compile_snapshots_values_domains_and_callback_references() -> None:
 
     old = compile_model(Example)
     Example.constant.value.append(2)
-    finite_values = cast(Decision[list[int]], Example.choice).domain._finite_values
-    assert finite_values is not None
-    finite_values[0].append(3)
+    values[0].append(3)  # the Decision's domain enumerates this very list
+    declared = cast(Decision[list[int]], Example.choice).domain
+    assert declared is not None and declared.candidates is not None
+    assert declared.candidates() == ([1, 3], [2])
     Example.calculated.function = second
     new = compile_model(Example)
     old_constant = old.linked.nodes[old.resolve(0, Example.constant)]
     old_choice = old.linked.nodes[old.resolve(0, Example.choice)]
     old_function = old.linked.nodes[old.resolve(0, Example.calculated)]
     assert old_constant.value == [1]
-    assert old_choice.domain is not None
-    assert old_choice.domain._finite_values == ([1], [2])
+    assert old_choice.domain is not None and old_choice.domain.candidates is not None
+    assert old_choice.domain.candidates() == ([1], [2])
     assert old_function.function is first
     assert new is old
     assert new.linked.nodes[new.resolve(0, Example.calculated)].function is first
