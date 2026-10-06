@@ -5,10 +5,20 @@
 
 Each case places one kernel between boundary channels over sampled folding factors
 (``kernels.conformance``): dotp on both cores (packed; INT8, dense and
-depthwise), thresholding, eltwise with a broadcast operand, transpose, and
-memstream with an identity reference. Every folding factor is a Decision (dotp's PE and
-SIMD sampled; thresholding's and eltwise's PE and transpose's SIMD given as
-configurations); memstream's ``form``, a fact of its consumer, is given.
+depthwise), thresholding, eltwise with a broadcast operand, transpose,
+memstream with an identity reference, the channel stages (fifo, vpc and
+input_gen) and MatMul, a kernel with children. Every folding factor is a
+Decision (dotp's and MatMul's PE and SIMD sampled; thresholding's and eltwise's
+PE and transpose's SIMD given as configurations); memstream's ``form``, a fact
+of its consumer, is given.
+
+A channel stage's ports are opaque words, and the channel's adapter states what
+they carry (``finn.kernels.adapters.realize``). Its case places the stage on
+two channels (``StagedFifo``, ``StagedVpc``, ``StagedInputGenerator``: its
+module, its native pins, ports presenting what its realization gives them), so
+XSim checks that the RTL walks the realization: a FIFO in each storage its RTL
+implements, width conversions, and input_gen's reorders (a transpose, and a
+replay). MatMul's activations are replayed and framed by its channel's adapter.
 
 The harness's reason to exist: a thresholding kernel that declares an order
 its RTL does not walk passes every Python check and fails in XSim, for the
@@ -35,20 +45,31 @@ import numpy as np
 import pytest
 from qonnx.core.datatype import DataType
 
-from finn.core.space import Rejected, derived
+from finn.core.space import Param, Rejected, derived, design_space
+from finn.dataflow.datatypes import QONNXDataType
 from finn.dataflow.gemm import Form
+from finn.dataflow.plan import plan
 from finn.dataflow.schedule import Index, Schedule
 from finn.dataflow.tensor import ScalarEncoding, Tensor
-from finn.dataflow.traversal import tile, vector_major
-from finn.kernels.artifacts.abi import Endpoint
+from finn.dataflow.traversal import BeatSequence, Traversal, tile, vector_major
+from finn.kernels.adapters import Convert, Generate, RealizedStage, realize
+from finn.kernels.artifacts.abi import Direction, Endpoint, Signal
+from finn.kernels.artifacts.module import Held
+from finn.kernels.base import NATIVE_CLOCKING
+from finn.kernels.channels import Channel
 from finn.kernels.dotp import Int8Dsp58DotpKernel, PackedDotpKernel
 from finn.kernels.eltwise import EltwiseKernel
-from finn.kernels.matmul import exact_result_dtype
+from finn.kernels.fifo import FifoKernel
+from finn.kernels.input_generator import InputGeneratorKernel
+from finn.kernels.matmul import MatMulKernel, exact_result_dtype
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.port import AxiStreamPort
 from finn.kernels.target import DspBlock
 from finn.kernels.thresholding import ThresholdingAxiKernel
 from finn.kernels.transpose import TransposeKernel
+from finn.kernels.values.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
+from finn.kernels.vpc import VpcKernel
+from kernels.adapted import columns_first
 from kernels.conformance import (
     MODES,
     NonConformance,
@@ -308,6 +329,222 @@ def memstream() -> dict[str, Any]:
     )
 
 
+# -- the channel stages: fifo, vpc, input_gen ------------------------------------------------
+
+
+def stage_ports(
+    input_channel: Any, output_channel: Any, arriving: Any, leaving: Any, moved: Any
+) -> tuple[AxiStreamPort, AxiStreamPort]:
+    """A channel stage's native pins on the two channels the harness places, presenting the
+    beat sequences its realization gives them (``arriving``, ``leaving``).
+
+    On a channel a stage's ports are opaque words (``WordPort``) and its adapter states
+    what they carry (``finn.kernels.adapters.realize``); here the ports sit on channels
+    and present exactly that, so XSim checks that the RTL walks it.
+    """
+    input = AxiStreamPort(
+        name="input",
+        endpoint=Endpoint.TARGET,
+        channel=input_channel,
+        sequence=arriving,
+        signals=("idat", "ivld", "irdy"),
+        clock=NATIVE_CLOCKING.clock,
+        reset=NATIVE_CLOCKING.reset,
+    )
+    output = AxiStreamPort(
+        name="output",
+        endpoint=Endpoint.INITIATOR,
+        channel=output_channel,
+        sequence=leaving,
+        dtype=moved,
+        signals=("odat", "ovld", "ordy"),
+        clock=NATIVE_CLOCKING.clock,
+        reset=NATIVE_CLOCKING.reset,
+    )
+    return input, output
+
+
+class StagedFifo(FifoKernel):
+    """FifoKernel between two channels: what arrives leaves unchanged."""
+
+    id = "test.staged.fifo"
+    input_channel: Channel = Param(required=False)
+    output_channel: Channel = Param(required=False)
+    arriving: BeatSequence = Param()
+    leaving: BeatSequence = Param()
+
+    @derived(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
+    def moved(self) -> QONNXDataType:
+        return self.input_channel.tensor.element.dtype
+
+    input, output = stage_ports(input_channel, output_channel, arriving, leaving, moved)
+
+
+class StagedVpc(VpcKernel):
+    """VpcKernel between two channels: a width conversion."""
+
+    id = "test.staged.vpc"
+    input_channel: Channel = Param(required=False)
+    output_channel: Channel = Param(required=False)
+    arriving: BeatSequence = Param()
+    leaving: BeatSequence = Param()
+
+    @derived(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
+    def moved(self) -> QONNXDataType:
+        return self.input_channel.tensor.element.dtype
+
+    input, output = stage_ports(input_channel, output_channel, arriving, leaving, moved)
+
+
+class StagedInputGenerator(InputGeneratorKernel):
+    """InputGeneratorKernel between two channels: a reorder. ``olst``, its loop-completion
+    marker, is left unused: the harness's boundaries carry no marker. The dotp and MatMul
+    cases check it, as the TLAST that frames their activations."""
+
+    id = "test.staged.input_generator"
+    input_channel: Channel = Param(required=False)
+    output_channel: Channel = Param(required=False)
+    arriving: BeatSequence = Param()
+    leaving: BeatSequence = Param()
+
+    @derived(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
+    def moved(self) -> QONNXDataType:
+        return self.input_channel.tensor.element.dtype
+
+    input, output = stage_ports(input_channel, output_channel, arriving, leaving, moved)
+
+    def other_pins(self) -> tuple[Signal, ...]:
+        return (Signal("olst", Direction.OUT, len(self.dims)),)
+
+    def held(self) -> Held:
+        return Held((), ("olst",))
+
+
+STAGED = (4, 6)
+
+
+def realized(source: Traversal, sink: Traversal) -> RealizedStage:
+    """The one stage a channel's adapter realizes between ``source`` and ``sink``."""
+    (stage,) = realize(plan(BeatSequence(source), BeatSequence(sink)))
+    return stage
+
+
+def staged(stage: RealizedStage) -> dict[str, object]:
+    """Its two sequences; the markers its output guarantees are left unused here."""
+    return {"arriving": stage.source, "leaving": BeatSequence(stage.sink.form)}
+
+
+def fifo() -> dict[str, Any]:
+    """The identity in each storage the RTL implements: shift, LUTRAM, block and UltraRAM."""
+
+    def storing(lanes: int, depth: int, ram_style: str) -> dict[str, object]:
+        same = BeatSequence(vector_major(STAGED, lanes))
+        return {
+            "word_bits": 4 * lanes,
+            "depth": depth,
+            "ram_style": ram_style,
+            "arriving": same,
+            "leaving": same,
+        }
+
+    return dict(
+        space_type=StagedFifo,
+        inputs={"input_channel": tensor(STAGED, "INT4")},
+        outputs={"output_channel": STAGED},
+        reference=lambda input_channel: {"output_channel": input_channel},
+        factors=(
+            storing(1, 2, "auto"),
+            storing(3, 100, "auto"),
+            storing(6, 600, "auto"),
+            storing(2, 64, "ultra"),
+        ),
+        facts={"platform": FULL_DSP48E2},
+    )
+
+
+def vpc() -> dict[str, Any]:
+    """The same elements in the same order, at another lane count."""
+
+    def converting(lanes_in: int, lanes_out: int) -> dict[str, object]:
+        stage = realized(vector_major(STAGED, lanes_in), vector_major(STAGED, lanes_out))
+        assert stage.module == Convert(lanes_in, lanes_out)
+        return {"lanes_in": lanes_in, "lanes_out": lanes_out, **staged(stage)}
+
+    return dict(
+        space_type=StagedVpc,
+        inputs={"input_channel": tensor(STAGED, "INT4")},
+        outputs={"output_channel": STAGED},
+        reference=lambda input_channel: {"output_channel": input_channel},
+        factors=(converting(1, 3), converting(2, 3), converting(3, 2), converting(6, 1)),
+        facts={"element_bits": 4},
+    )
+
+
+def input_gen() -> dict[str, Any]:
+    """A reorder as the channel's adapter realizes it: a transpose, word by word and two
+    lanes a word, and each row replayed."""
+
+    def generating(source: Traversal, sink: Traversal) -> dict[str, object]:
+        stage = realized(source, sink)
+        module = stage.module
+        assert isinstance(module, Generate)
+        return {
+            "word_bits": 4 * source.lanes,
+            "frame_words": module.frame,
+            "dims": module.dims,
+            "strides": module.coefs,
+            **staged(stage),
+        }
+
+    rows, cols = STAGED
+    return dict(
+        space_type=StagedInputGenerator,
+        inputs={"input_channel": tensor(STAGED, "INT4")},
+        outputs={"output_channel": STAGED},
+        reference=lambda input_channel: {"output_channel": input_channel},
+        factors=(
+            generating(vector_major(STAGED, 1), columns_first(rows, cols, 1)),
+            generating(vector_major(STAGED, 2), columns_first(rows, cols, 2)),
+            generating(vector_major(STAGED, 3), vector_major(STAGED, 3).replayed(2, inner_beats=2)),
+        ),
+        choices={"ram_style": "auto"},
+        facts={"platform": FULL_DSP48E2},
+    )
+
+
+# -- MatMul: a kernel with children --------------------------------------------------------
+
+MATMUL_FACTS = dict(
+    m=ROWS,
+    n=OUTPUTS,
+    k=REDUCTION,
+    activation_dtype=DataType["INT4"],
+    weights_dtype=DataType["INT4"],
+    platform=FULL_DSP48E2,
+)
+
+
+def matmul() -> dict[str, Any]:
+    """Y = X @ W on the packed core, its weights streamed: its activations replayed and framed
+    by the channel's adapter, as its core's port states; its result element its own view."""
+    result = design_space(MatMulKernel(**MATMUL_FACTS)).result_tensor
+    return dict(
+        space_type=MatMulKernel,
+        inputs={
+            "x_channel": tensor((ROWS, REDUCTION), "INT4"),
+            "w_channel": tensor((REDUCTION, OUTPUTS), "INT4"),
+        },
+        outputs={"y_channel": result},
+        reference=lambda x_channel, w_channel: {"y_channel": x_channel @ w_channel},
+        choices={
+            "compute": "packed",
+            "compute.packed.compute_pumping": False,
+            "compute.packed.reducer": "tree",
+        },
+        facts=MATMUL_FACTS,
+    )
+
+
 CASES = {
     "dotp-packed": lambda: dotp(PackedDotpKernel, DspBlock.DSP48E2, 4, reducer="tree"),
     "dotp-packed-compressor": lambda: dotp(
@@ -321,6 +558,10 @@ CASES = {
     "eltwise": eltwise,
     "transpose": transpose,
     "memstream": memstream,
+    "fifo": fifo,
+    "vpc": vpc,
+    "input_gen": input_gen,
+    "matmul": matmul,
 }
 
 
