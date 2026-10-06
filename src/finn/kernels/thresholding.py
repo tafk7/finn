@@ -28,8 +28,8 @@ in UltraRAM none is left, and ``ram_style`` does not apply. Counted in stages,
 not depths, the choices do not move with PE; ``parameters`` maps them to the
 triggers (the depth of the first stage in each resource, 0 for none). An UltraRAM stage requires the
 ``platform``'s UltraRAM that takes initial contents (the table is the
-memories' initial contents), and runtime-writable thresholds its control port,
-each a named refusal of the case.
+memories' initial contents), and runtime-writable thresholds its control port
+and a ``control`` bus to be placed on, each a named refusal of the case.
 
 All native pins remain present when AXI-Lite or set selection is disabled;
 disabled outputs may be unspecified. Placed in a kernel with children, it sits
@@ -158,12 +158,25 @@ class ThresholdingAxiKernel(Kernel):
     set_channel: Channel = Param(required=False)
     control: ControlBus = Param(required=False)
     platform: Platform = Param()
+
+    @derived
+    def controllable(self) -> bool:
+        """Whether a parent placed it on a control bus, which runtime writes reach it by."""
+        return self.present(ThresholdingAxiKernel.control)
+
+    # Runtime-writable thresholds need the platform's control port and a control bus
+    # to export their AXI-Lite interface through.
     use_axilite: bool = Decision(
         values=(False, True),
         requires=(
             requires(
                 platform.control_ports,
                 "control-absent: the platform has no control port for runtime-writable thresholds",
+                cases=(True,),
+            ),
+            requires(
+                controllable,
+                "threshold-control: runtime-writable thresholds need a control bus",
                 cases=(True,),
             ),
         ),
@@ -447,13 +460,10 @@ class ThresholdingAxiKernel(Kernel):
     def other_pins(self) -> tuple[Pin, ...]:
         return (self.config_bus,)
 
-    def held(self) -> Held | Rejected:
-        """AXI-Lite, without runtime writes."""
-        if not self.use_axilite:
-            return held_bus(self.config_bus)
-        if not self.present(ThresholdingAxiKernel.control):
-            return reject("threshold-control", "runtime-writable thresholds need a control bus")
-        return Held()
+    def held(self) -> Held:
+        """AXI-Lite, without runtime writes (with them, ``use_axilite`` requires a control
+        bus, which presents it)."""
+        return Held() if self.use_axilite else held_bus(self.config_bus)
 
     def controlled(self) -> tuple[Bus, ...]:
         """AXI-Lite, with runtime writes."""

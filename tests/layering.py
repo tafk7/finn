@@ -4,9 +4,9 @@
 """FINN's layers, what each may import, and the one import walker that checks them.
 
 ```text
-finn.core.space  <-  finn.dataflow  <-  finn.kernels  <-  finn.custom_op.kernels
-                                                     <-  finn.transformation.kernels
-                                                     <-  the flow (all other finn)
+finn.core.space  <-  finn.kernels  <-  finn.custom_op.kernels
+finn.dataflow    <-                <-  finn.transformation.kernels
+                                   <-  the flow (all other finn)
 finn.util (with finn.xsi, finn.resources)  <-  finn.transformation.kernels, the flow
 finn.parked: imported by nothing
 ```
@@ -63,13 +63,15 @@ class Layer:
 
 
 # The kernel stack: the engine, the values, the module build values, the kernels.
+# The engine and the values are independent: the kernels are the first layer to
+# use both.
 _KERNEL_STACK = ("space", "dataflow", "kernels.artifacts", "kernels")
 
 LAYERS: tuple[Layer, ...] = (
     # The generic Space engine: the standard library and its native dependency.
     Layer("space", ("finn.core.space",), (), ("greenlet",), "tests/core/space"),
-    # Canonical logical values: the engine and QONNX's datatypes.
-    Layer("dataflow", ("finn.dataflow",), ("space",), ("qonnx.core.datatype",), "tests/dataflow"),
+    # Canonical logical values: QONNX's datatypes, no engine.
+    Layer("dataflow", ("finn.dataflow",), (), ("qonnx.core.datatype",), "tests/dataflow"),
     # Module build values and their emission, below every Space; pyslang checks
     # declared pins against the RTL.
     Layer("kernels.artifacts", ("finn.kernels.artifacts",), (), ("pyslang",), "tests/kernels"),
@@ -146,7 +148,7 @@ LAYERS: tuple[Layer, ...] = (
     Layer(
         "tests.dataflow",
         ("dataflow",),
-        ("space", "dataflow", "tests.layering"),
+        ("dataflow", "tests.layering"),
         ("pytest", "qonnx.core.datatype"),
         "tests/dataflow",
     ),

@@ -63,6 +63,7 @@ from finn.core.space import (
     constraint,
     derived,
     reject,
+    requires,
     view,
 )
 from finn.dataflow.datatypes import (
@@ -72,13 +73,13 @@ from finn.dataflow.datatypes import (
     resolve_qonnx_datatype_name,
 )
 from finn.dataflow.gemm import Form
-from finn.dataflow.tensor import ScalarEncoding, Tensor
+from finn.dataflow.tensor import Tensor
 from finn.dataflow.traversal import require_positive
 from finn.kernels.base import Kernel
 from finn.kernels.channels import Channel
 from finn.kernels.dotp import Int8Dsp58DotpKernel, PackedDotpKernel
 from finn.kernels.target import Platform
-from finn.kernels.values.domains import set_index_dtype
+from finn.kernels.values.domains import admit_element, set_index_dtype
 from finn.kernels.values.semantics import (
     INTEGER_TENSOR,
     QONNX_DATATYPE_VALUE_SEMANTICS,
@@ -139,9 +140,31 @@ class MatMulKernel(Kernel):
     def multi_set(self) -> bool:
         return self.weight_sets > 1
 
-    # A depthwise operation runs natively (one channel per PE lane, INT8 DSP58
-    # only) or on the dense datapath with block-diagonal weights, on any core.
-    realization: str = Decision(values=("native", "dense"), when=depthwise)
+    @derived
+    def reads_depthwise(self) -> bool:
+        """Whether a core reads depthwise operands natively: only the INT8 DSP58 core
+        does, within its own bounds on the platform's DSP and the datatypes."""
+        return (
+            Int8Dsp58DotpKernel.operand_refusal(
+                self.platform.dsp, self.activation_dtype, self.weights_dtype
+            )
+            is None
+        )
+
+    # A depthwise operation runs natively (one channel per PE lane, a core that reads
+    # it) or on the dense datapath with block-diagonal weights, on any core.
+    realization: str = Decision(
+        values=("native", "dense"),
+        when=depthwise,
+        requires=(
+            requires(
+                reads_depthwise,
+                "matmul-native: no core reads these depthwise operands natively "
+                "(the INT8 DSP58 core alone does, within its bounds)",
+                cases=("native",),
+            ),
+        ),
+    )
 
     @derived
     def datapath(self) -> Form:
@@ -197,7 +220,7 @@ class MatMulKernel(Kernel):
     # The tensors the channels carry.
 
     def _tensor(self, shape: tuple[int, ...], dtype: QONNXDataType) -> Tensor | Rejected:
-        element = ScalarEncoding.admit(dtype)
+        element = admit_element(dtype)
         if isinstance(element, Rejected):
             return element
         try:
@@ -224,7 +247,7 @@ class MatMulKernel(Kernel):
                 "matmul-weights",
                 f"every value must be an integer admitted by {self.weights_dtype.name}",
             )
-        element = ScalarEncoding.admit(self.weights_dtype, (least, greatest))
+        element = admit_element(self.weights_dtype, (least, greatest))
         if isinstance(element, Rejected):
             return element
         return Tensor(shape, element)

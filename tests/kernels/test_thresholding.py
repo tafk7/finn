@@ -105,7 +105,6 @@ def test_threshold_sets_present_a_selector_bus_and_refuse_axilite_addressing() -
 def test_threshold_partial_dtype_query_does_not_adopt_implementation_decisions() -> None:
     base = threshold_base()
     assert base.result_dtype.name == "INT3"
-    assert isinstance(base.query(ThresholdingAxiKernel.use_axilite), Unresolved)
     assert isinstance(base.query(ThresholdingAxiKernel.deep_pipeline), Unresolved)
     assert isinstance(base.inspect(ThresholdingAxiKernel.module).accepted_result, Unresolved)
 

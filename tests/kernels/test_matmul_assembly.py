@@ -211,28 +211,16 @@ def test_the_core_is_forced_and_owns_its_folding_factors():
     assert isinstance(alone, Rejected) and "nothing drives" in alone.findings[0].message
     assert labels(point.module) == ["x.adapter.input_gen.input_gen", "matmul.compute.packed"]
     assert not hasattr(MatMulKernel, "contract") and not hasattr(MatMulKernel, "pe")
-    refused = commit(
-        base,
-        {
-            "matmul.compute.packed.pe": 2,
-            "matmul.compute.packed.simd": 1,
-            "matmul.compute.packed.compute_pumping": True,
-            "matmul.compute.packed.reducer": "tree",
-            "x.adapter": "input_gen",
-            "x.adapter.input_gen.input_gen.ram_style": "auto",
-        },
-    )
-    # No core admits it: the core is no longer forced but refused, naming each reason.
-    answer = refused.matmul.query(MatMulKernel.compute)
-    assert isinstance(answer, Rejected)
-    assert [finding.code for finding in answer.findings] == ["decision-no-viable-case"]
-    assert "dotp-pumping" in answer.findings[0].message
-    # Committed on purpose, the core is placed and refuses the configuration itself.
-    chosen = commit(refused, {"matmul.compute": "packed"})
-    assert isinstance(chosen.matmul.compute.inspect(DotpAxiKernel.module).accepted_result, Rejected)
-    rejected = chosen.query(Kernel.module)
-    assert isinstance(rejected, Rejected)
-    assert "dotp-pumping" in {finding.code for finding in rejected.findings}
+    # Pumping with one SIMD lane is refused where its case is declared: with SIMD 1 it
+    # is forced off, and committing it is refused, so the core stays forced.
+    one = commit(base, {"matmul.compute.packed.pe": 2, "matmul.compute.packed.simd": 1})
+    forced = {(item.key, item.value) for item in inspection.forced(one)}
+    assert {
+        ("matmul.compute", "packed"),
+        ("matmul.compute.packed.compute_pumping", False),
+    } <= forced
+    with pytest.raises(ValueError, match="dotp-pumping"):
+        commit(one, {"matmul.compute.packed.compute_pumping": True})
 
 
 @pytest.mark.parametrize("delivery", tuple(WeightDelivery))

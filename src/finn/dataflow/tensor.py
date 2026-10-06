@@ -19,7 +19,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from math import prod
 
-from finn.core.space import Rejected, reject
 from finn.dataflow.datatypes import (
     DatatypeError,
     QONNXDataType,
@@ -61,16 +60,6 @@ class ScalarEncoding:
         object.__setattr__(
             self, "value_range", full if value_range is None else (value_range[0], value_range[1])
         )
-
-    @classmethod
-    def admit(
-        cls, dtype: QONNXDataType, value_range: tuple[int, int] | None = None
-    ) -> ScalarEncoding | Rejected:
-        """The encoding, or a ``dtype-storage`` refusal (a zero width, a range it cannot hold)."""
-        try:
-            return cls(dtype, value_range)
-        except ValueError as error:
-            return reject("dtype-storage", str(error))
 
     def fits(self, other: ScalarEncoding) -> bool:
         """Its values are values of ``other``: one datatype, the range within ``other``'s."""

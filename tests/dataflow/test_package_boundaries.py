@@ -4,8 +4,8 @@
 """The value layer at runtime: what importing it loads, and its package root.
 
 ``finn.dataflow`` holds canonical logical values. Its import statements are
-checked against the layer table (``tests/layering.py``): the engine, QONNX's
-datatype module and the standard library.
+checked against the layer table (``tests/layering.py``): QONNX's datatype
+module and the standard library, no engine.
 """
 
 from __future__ import annotations
@@ -16,8 +16,9 @@ import sys
 from importlib import import_module
 
 
-def test_dataflow_loads_neither_kernels_nor_parked_code_at_runtime() -> None:
-    """Importing every canonical module pulls in nothing above the value layer."""
+def test_dataflow_loads_no_engine_kernels_or_parked_code_at_runtime() -> None:
+    """Importing every canonical module pulls in neither the engine nor anything
+    above the value layer."""
 
     script = "\n".join(
         (
@@ -27,7 +28,10 @@ def test_dataflow_loads_neither_kernels_nor_parked_code_at_runtime() -> None:
             "    importlib.import_module(info.name)",
             "bad = sorted(",
             "    name for name in sys.modules",
-            "    if name.startswith(('finn.kernels', 'finn.parked', 'finn.custom_op', 'onnx'))",
+            "    if name.startswith(",
+            "        ('finn.core', 'finn.kernels', 'finn.parked', 'finn.custom_op',",
+            "         'onnx', 'greenlet')",
+            "    )",
             "    or (",
             "        name.startswith('qonnx.')",
             "        and name not in ('qonnx.core', 'qonnx.core.datatype')",

@@ -14,7 +14,7 @@ selector of a single threshold set.
 import pytest
 from qonnx.core.datatype import DataType
 
-from finn.core.space import Available, Rejected, Space, design_space
+from finn.core.space import Available, Rejected, Space, design_space, inspection
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.artifacts.abi import Bus, Endpoint, StandardProtocol
 from finn.kernels.artifacts.build import netlist
@@ -125,7 +125,7 @@ def test_writable_thresholds_export_their_bus_through_the_control_node():
     assert "assign n__u_activate__s_axilite_AWVALID = s_axilite_AWVALID;" in netlist(module, "top")
 
 
-def test_writable_thresholds_without_a_control_bus_are_refused():
+def test_writable_thresholds_without_a_control_bus_are_not_offered():
     class Unexported(Activated):
         activate = ThresholdingAxiKernel(
             input_dtype=R,
@@ -140,17 +140,16 @@ def test_writable_thresholds_without_a_control_bus_are_refused():
             platform=FULL_DSP48E2,
         )
 
-    point = design_space(Unexported()).with_choices(
-        {
-            Unexported.compute.compute_pumping: False,
-            Unexported.compute.reducer: "tree",
-            Unexported.activate.use_axilite: True,
-            Unexported.activate.deep_pipeline: False,
-        }
-    )
-    refused = point.activate.query(ThresholdingAxiKernel.module)
-    assert isinstance(refused, Rejected)
-    assert {finding.code for finding in refused.findings} == {"threshold-control"}
+    # The platform has a control port, but nothing presents the bus: the case is
+    # refused where it is declared, so the Decision is forced and a commit refused.
+    point = design_space(Unexported())
+    (forced,) = [item for item in inspection.forced(point) if item.key == "activate.use_axilite"]
+    assert forced.value is False and "threshold-control" in forced.refused["True"]
+    report = point.try_with_choices({Unexported.activate.use_axilite: True})
+    assert not report.accepted
+    assert {finding.code for outcome in report.outcomes for finding in outcome.result.findings} == {
+        "threshold-control"
+    }
 
 
 @requires_xsim

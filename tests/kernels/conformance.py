@@ -198,8 +198,8 @@ def samples(
     if isinstance(factors, str):
         if factors not in (SAMPLED, ALL):
             raise ValueError(f"factors are SAMPLED, ALL or configurations, not {factors!r}")
-        base = _committed(space_type, EMPTY, inputs, outputs, choices, facts)
-        configurations = _enumerated(base, factors)
+        base = _committed(space_type, EMPTY, inputs, outputs, EMPTY, facts)
+        configurations = _enumerated(base, factors, choices)
     else:
         configurations = [(_label(config), dict(config)) for config in factors]
     plain: list[Sample] = []
@@ -227,18 +227,31 @@ def _candidates(point: Space, key: str) -> tuple[object, ...]:
     return tuple(found.value)
 
 
-def _enumerated(base: Space, factors: str) -> list[tuple[str, dict[str, object]]]:
-    """Configurations of the kernel's open scalar Decisions, each committed in turn."""
+def _enumerated(
+    base: Space, factors: str, choices: Mapping[str, object]
+) -> list[tuple[str, dict[str, object]]]:
+    """Configurations of the kernel's open scalar Decisions, each committed in turn.
+
+    They are committed in rank order, a pinned choice in its turn too (a Decision whose
+    cases read another, as pumping reads SIMD, is committed after it); a pinned choice is
+    not part of a configuration.
+    """
     selectors = {info.key for info in inspection.decisions(base) if info.selector}
-    keys = [key for key in undecided(base, f"{KERNEL}.*") if key not in selectors]
+    ranked = [item.key for item in inspection.viable(base)]
+    keys = sorted(
+        (key for key in undecided(base, f"{KERNEL}.*") if key not in selectors),
+        key=lambda key: ranked.index(key) if key in ranked else len(ranked),
+    )
     local = len(KERNEL) + 1
 
     def pick(choose: Callable[[tuple[object, ...]], object]) -> dict[str, object]:
         point, config = base, {}
         for key in keys:
-            value = choose(_candidates(point, key))
+            pinned = key[local:] in choices
+            value = choices[key[local:]] if pinned else choose(_candidates(point, key))
             point = commit(point, {key: value})
-            config[key[local:]] = value
+            if not pinned:
+                config[key[local:]] = value
         return config
 
     if factors == SAMPLED:
@@ -253,8 +266,12 @@ def _enumerated(base: Space, factors: str) -> list[tuple[str, dict[str, object]]
         if not rest:
             every.append(config)
             return
+        key = rest[0][local:]
+        if key in choices:
+            walk(commit(point, {rest[0]: choices[key]}), config, rest[1:])
+            return
         for value in _candidates(point, rest[0]):
-            walk(commit(point, {rest[0]: value}), {**config, rest[0][local:]: value}, rest[1:])
+            walk(commit(point, {rest[0]: value}), {**config, key: value}, rest[1:])
 
     walk(base, {}, keys)
     return [(_label(config), config) for config in every]

@@ -65,7 +65,7 @@ from finn.kernels.base import NATIVE_CLOCKING, Clocking, Kernel
 from finn.kernels.control import held_bus
 from finn.kernels.port import AxiStreamPort
 from finn.kernels.target import Platform
-from finn.kernels.values.domains import Integer, set_index_dtype
+from finn.kernels.values.domains import Integer, admit_element, set_index_dtype
 from finn.kernels.values.semantics import (
     INTEGER_TENSOR,
     INTEGER_VECTOR,
@@ -136,7 +136,7 @@ class MemStreamKernel(Kernel):
         if isinstance(admitted, Rejected):
             return admitted
         low, high = self.value_range
-        return ScalarEncoding.admit(self.dtype, (low, high))
+        return admit_element(self.dtype, (low, high))
 
     @derived
     def word_bits(self) -> int:
