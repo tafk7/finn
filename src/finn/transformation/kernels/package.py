@@ -39,6 +39,12 @@ the shells connect a partition's i-th input to ``s_axis_<i>``.
 
 ``run_synth`` synthesizes the module out of context and packages the checkpoint
 instead of the sources, as CreateStitchedIP does for Vitis and SLASH.
+
+``ElaboratePartition`` is a check, not a build step: it emits the same module and
+compiles and elaborates it in XSim (``xvlog``, ``xelab``), so that RTL which does
+not compile, or a top whose instances do not elaborate (a port width, a parameter
+out of range, a missing source), is refused before a shell spends its run on it.
+It simulates nothing: it says nothing about the values the RTL computes.
 """
 
 from __future__ import annotations
@@ -55,6 +61,7 @@ from finn.custom_op.kernels.base import KernelOpError, datatype, read_target, sh
 from finn.custom_op.kernels.partition import member, partition_root
 from finn.kernels.artifacts.build import emit_module
 from finn.kernels.artifacts.ipxact import interface_names, package_tcl, vlnv
+from finn.kernels.artifacts.sources import include_directories, is_header
 from finn.kernels.configure import undecided
 from finn.transformation.fpgadataflow.kernel_partitions import (
     PARTITION_INPUTS,
@@ -201,7 +208,69 @@ class PackagePartition(Transformation):
         return model, False
 
 
+class ElaboratePartition(Transformation):
+    """Compile and elaborate a partition model's emitted RTL in XSim; the model is
+    unchanged. See the module docstring for what it checks.
+
+    ``directory`` holds the emitted sources and the simulator's logs (``xvlog.log``,
+    ``elaborate.log``), a new build directory by default; ``toolchain`` is the
+    prepared toolchain the simulator runs in, by default the configured
+    environment's (``Selection().prepare()``). A failed compilation or elaboration
+    raises ``KernelOpError``, naming the log.
+    """
+
+    def __init__(self, *, directory: Path | None = None, toolchain: Toolchain | None = None):
+        super().__init__()
+        self.directory = directory
+        self.toolchain = toolchain
+
+    def apply(self, model: ModelWrapper) -> tuple[ModelWrapper, bool]:
+        point, _ = configured_root(model, "the partition")
+        directory = Path(
+            self.directory or make_build_dir(prefix="elaborate_partition_")  # type: ignore[no-untyped-call]
+        ).resolve()
+        directory.mkdir(parents=True, exist_ok=True)
+        emitted = emit_module(
+            point.module, directory / "src", roots={"finnlib": Path(resources.path("finnlib"))}
+        )
+        toolchain = self.toolchain or Selection().prepare()
+        vivado = toolchain.environment.get("XILINX_VIVADO")
+        if not vivado:
+            raise KernelOpError("the toolchain names no Vivado (XILINX_VIVADO) for glbl.v")
+        sources = [str(emitted.directory / path) for path in emitted.sources]
+        # Relaxed, as FINN's own flow elaborates (finn.xsi: ``xelab -relax``).
+        commands = {
+            "xvlog": [
+                "--sv",
+                "--relax",
+                "--log",
+                "xvlog.log",
+                *(f"--include={include}" for include in include_directories(sources)),
+                *(source for source in sources if not is_header(source)),
+                str(Path(vivado) / "data/verilog/src/glbl.v"),
+            ],
+            "xelab": [
+                f"work.{emitted.entry_point}",
+                "work.glbl",
+                "--relax",
+                "-L",
+                "unisims_ver",
+                "--log",
+                "elaborate.log",
+                "--snapshot",
+                "partition",
+            ],
+        }
+        for tool, args in commands.items():
+            result = toolchain.run(tool, args, cwd=directory, check=False)
+            if result.returncode != 0:
+                log = directory / ("xvlog.log" if tool == "xvlog" else "elaborate.log")
+                raise KernelOpError(f"{emitted.entry_point}: {tool} failed; see {log}")
+        return model, False
+
+
 __all__ = [
+    "ElaboratePartition",
     "PackagePartition",
     "boundary_facts",
     "configured_root",

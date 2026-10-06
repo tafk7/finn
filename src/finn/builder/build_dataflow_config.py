@@ -35,9 +35,8 @@ from enum import Enum
 from typing import Any, Callable, Dict, List, Optional
 
 from finn.transformation.fpgadataflow.alveo_build import VitisOptStrategy
-from finn.util._legacy_build_env import toolchain as legacy_toolchain
 from finn.util.basic import hbm_boards, part_map, vitis_default_platform
-from finn.util.toolchain import Toolchain
+from finn.util.toolchain import Selection, Toolchain
 
 
 class AutoFIFOSizingMethod(str, Enum):
@@ -96,6 +95,12 @@ class VerificationStepType(str, Enum):
     NODE_BY_NODE_RTLSIM = "node_by_node_rtlsim"
     #: verify after step_create_stitched_ip, using stitched-ip Verilog
     STITCHED_IP_RTLSIM = "stitched_ip_rtlsim"
+    #: verify the kernel path's partition (step_verify_kernel_partition): the parent
+    #: graph with the partition of KernelOps, using Python execution
+    KERNEL_PARTITION_PYTHON = "kernel_partition_python"
+    #: verify the kernel path's partition (step_verify_kernel_partition): its emitted
+    #: RTL compiles and elaborates in XSim (xvlog, xelab); needs Vivado
+    KERNEL_PARTITION_ELABORATION = "kernel_partition_elaboration"
 
 
 #: Maps each VerificationStepType to the (phase, step) it depends on.
@@ -114,6 +119,14 @@ verify_step_prereqs = {
     VerificationStepType.STITCHED_IP_RTLSIM: (
         "phase_generate_outputs",
         "step_create_stitched_ip",
+    ),
+    VerificationStepType.KERNEL_PARTITION_PYTHON: (
+        "phase_kernel_path",
+        "step_verify_kernel_partition",
+    ),
+    VerificationStepType.KERNEL_PARTITION_ELABORATION: (
+        "phase_kernel_path",
+        "step_verify_kernel_partition",
     ),
 }
 
@@ -141,6 +154,11 @@ estimate_only_dataflow_steps = [
 #: List of steps to run for a dataflow build including HW code generation, but
 #: without any synthesis.
 hw_codegen_dataflow_steps = estimate_only_dataflow_steps + ["step_hw_codegen"]
+
+#: List of steps for a build through the kernel path (KernelOps, finn.custom_op.kernels),
+#: from a streamlined model: the kernel-path phase (the target, KernelOps, their
+#: choices, the partition, its verification), then the outputs (the shell build).
+kernel_path_dataflow_steps = ["phase_kernel_path", "phase_generate_outputs"]
 
 
 @dataclass_json
@@ -422,6 +440,23 @@ class DataflowBuildConfig:
     #: Example (step):  inject_steps_before={"step_convert_to_hw": [my_custom_analysis]}
     inject_steps_before: Dict[str, List[Callable]] = field(default_factory=dict)
 
+    #: The AMD tool installation every tool step of the build runs in, and the
+    #: environment of build_dataflow_directory's build process (see
+    #: :py:class:`finn.util.toolchain.Selection`): ``settings``, the installation's
+    #: settings scripts to source (none: the environment is already configured, as
+    #: by ``scripts/activate.sh``); ``command_dir``, a site command directory;
+    #: ``launcher``, a site launcher prefix; ``hls_frontend``, ``vitis_hls`` (up to
+    #: 2024.2) or ``vitis-run`` (2025.1 on). The legacy environment variables
+    #: (``XILINX_*``, ``FINN_HLS_FRONTEND``, ``FINN_TOOL_DIR_OVERRIDE``) select nothing.
+    #: In JSON: {"settings": [...], "command_dir": "", "launcher": [], "hls_frontend": "..."}.
+    toolchain: Selection = field(default_factory=Selection)
+
+    #: The kernel path's choice step (step_kernel_choices): the strategies that commit
+    #: the KernelOps' open choices, by name (``kernel_choice_strategies`` in
+    #: build_dataflow_steps), run in order. ``placeholder`` is the DSE seam's
+    #: placeholder policy (CommitKernelChoices(PlaceholderPolicy())).
+    kernel_choices: List[str] = field(default_factory=lambda: ["placeholder"])
+
     def _resolve_hls_clk_period(self):
         if self.hls_clk_period_ns is None:
             # use same clk for synth and hls if not explicitly specified
@@ -430,13 +465,13 @@ class DataflowBuildConfig:
             return self.hls_clk_period_ns
 
     def _resolve_toolchain(self) -> Toolchain:
-        """The prepared toolchain every tool step of this build runs in: the legacy
-        environment's, prepared by the first step that asks and then the same object
-        for every later step. Kept on the instance, not a field: it is prepared, not
-        configured, and is not serialized with the build configuration."""
+        """The prepared toolchain every tool step of this build runs in: the selection
+        ``toolchain`` names, prepared by the first step that asks and then the same
+        object for every later step. Kept on the instance, not a field: it is
+        prepared, not configured, and is not serialized with the build configuration."""
         toolchain = getattr(self, "_toolchain", None)
         if toolchain is None:
-            toolchain = self._toolchain = legacy_toolchain()
+            toolchain = self._toolchain = self.toolchain.prepare()
         return toolchain
 
     def _resolve_driver_platform(self):

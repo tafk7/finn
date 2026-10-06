@@ -63,8 +63,11 @@ def toolchain(environ=None):
     return selection.prepare(env)
 
 
-def build_environment(environ=None, *, root=None, build_dir=None):
-    """Prepare the child tree of an explicit legacy build entry point."""
+def build_environment(selection, environ=None, *, root=None, build_dir=None):
+    """Prepare the child tree of an explicit build entry point: the parent's
+    environment, FINN_ROOT and FINN_BUILD_DIR resolved, with the toolchain
+    ``selection`` (a ``finn.util.toolchain.Selection``, the build configuration's)
+    prepared over it, and the loader paths of its simulator libraries."""
     env = dict(os.environ if environ is None else environ)
     if root is not None:
         env["FINN_ROOT"] = checkout_root(root)
@@ -72,7 +75,9 @@ def build_environment(environ=None, *, root=None, build_dir=None):
     Path(env["FINN_BUILD_DIR"]).mkdir(parents=True, exist_ok=True)
     # Loader paths must exist BEFORE Python starts. Retain the XSI limitation
     # here; ordinary imports and resource operations never call this function.
-    env = dict(toolchain(env).environment)
+    # Prepared over the parent's environment, not a clean base: the child keeps
+    # FINN's own variables (resources, build directory) beside the tools'.
+    env = dict(selection.prepare(env).environment)
     # The aliases again, for the child's remaining readers of the legacy names
     # (build_dataflow_checks requires VITIS_PATH for an Alveo bitfile).
     for primary, alias in _ROOT_ALIASES:

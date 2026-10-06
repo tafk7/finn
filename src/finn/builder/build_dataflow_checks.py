@@ -64,6 +64,26 @@ def run_all_config_checks(cfg: DataflowBuildConfig) -> Report:
     checks = []
 
     has_bitfile = cfg.generate_outputs and DataflowOutputType.BITFILE in cfg.generate_outputs
+    try:
+        # imported lazily via importlib (rather than a top-level import) since
+        # build_dataflow imports this module, and a top-level import back
+        # would be circular
+        build_dataflow_mod = importlib.import_module("finn.builder.build_dataflow")
+        resolved_names = {
+            fn.__name__ for fn in build_dataflow_mod.resolve_build_steps(cfg, partial=True)
+        }
+        all_names = {
+            fn.__name__ for fn in build_dataflow_mod.resolve_build_steps(cfg, partial=False)
+        }
+    except (ValueError, AttributeError):
+        # steps/start_step/stop_step can't be resolved; that will fail on its
+        # own once the build actually starts, nothing more to check here
+        resolved_names = all_names = None
+    # A build through the kernel path (KernelOps) runs none of the HWCustomOp
+    # path's conversion, folding or specialization: their checks do not apply.
+    kernel_path = all_names is not None and bool(
+        all_names & {"phase_kernel_path", "step_kernel_ops"}
+    )
     alveo_boards = set(vitis_part_map.keys())
     pynq_boards = set(pynq_part_map.keys())
 
@@ -271,7 +291,12 @@ def run_all_config_checks(cfg: DataflowBuildConfig) -> Report:
     needs_folding = cfg.generate_outputs and any(
         o != DataflowOutputType.ESTIMATE_REPORTS for o in cfg.generate_outputs
     )
-    if needs_folding and cfg.target_fps is None and cfg.folding_config_file is None:
+    if (
+        needs_folding
+        and not kernel_path
+        and cfg.target_fps is None
+        and cfg.folding_config_file is None
+    ):
         checks.append(
             _check(
                 "folding_missing",
@@ -284,6 +309,19 @@ def run_all_config_checks(cfg: DataflowBuildConfig) -> Report:
                 "Set target_fps for automatic folding, or provide folding_config_file "
                 "for manual PE/SIMD settings, so a slow build isn't mistaken for "
                 "a deliberate choice",
+            )
+        )
+
+    if kernel_path and has_bitfile and cfg.shell_flow_type != ShellFlowType.VIVADO_ZYNQ:
+        checks.append(
+            _check(
+                "kernel_path_shell",
+                Severity.ERROR,
+                False,
+                f"The kernel path builds a bitfile in the Zynq shell only, not in "
+                f"{cfg.shell_flow_type}: step_synthesize_bitfile's other shells build "
+                "HWCustomOp partitions",
+                "Set shell_flow_type to VIVADO_ZYNQ, or remove BITFILE from generate_outputs",
             )
         )
 
@@ -352,19 +390,6 @@ def run_all_config_checks(cfg: DataflowBuildConfig) -> Report:
         #
         # The (phase, step) prerequisite for each VerificationStepType is defined
         # next to the enum itself, in build_dataflow_config.verify_step_prereqs.
-        try:
-            # imported lazily via importlib (rather than a top-level import) since
-            # build_dataflow imports this module, and a top-level import back
-            # would be circular
-            build_dataflow_mod = importlib.import_module("finn.builder.build_dataflow")
-            resolved_names = {
-                fn.__name__ for fn in build_dataflow_mod.resolve_build_steps(cfg, partial=True)
-            }
-        except (ValueError, AttributeError):
-            # steps/start_step/stop_step can't be resolved; that will fail on its
-            # own once the build actually starts, nothing more to check here
-            resolved_names = None
-
         if resolved_names is not None:
             for vstep in cfg._resolve_verification_steps():
                 phase_name, step_name = verify_step_prereqs.get(vstep, (None, None))
@@ -399,7 +424,7 @@ def run_all_config_checks(cfg: DataflowBuildConfig) -> Report:
             )
         )
 
-    if not cfg.standalone_thresholds:
+    if not cfg.standalone_thresholds and not kernel_path:
         checks.append(
             _check(
                 "standalone_thresholds",

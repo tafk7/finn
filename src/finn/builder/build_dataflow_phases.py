@@ -31,6 +31,10 @@ from finn.builder.build_dataflow_steps import (
     step_generate_estimate_reports,
     step_hw_codegen,
     step_hw_ipgen,
+    step_infer_kernel_tensors,
+    step_kernel_choices,
+    step_kernel_ops,
+    step_kernel_partition,
     step_loop_body_ipgen_and_stitch,
     step_loop_body_set_fifo_depths,
     step_loop_rolling,
@@ -46,6 +50,7 @@ from finn.builder.build_dataflow_steps import (
     step_target_fps_parallelization,
     step_tidy_up,
     step_transpose_decomposition,
+    step_verify_kernel_partition,
 )
 from finn.util.fpgadataflow import is_mlo
 
@@ -173,6 +178,37 @@ def phase_convert_to_hardware(model: ModelWrapper, cfg: DataflowBuildConfig):
     model = _execute_step(step_specialize_layers, model, cfg)
     model = _execute_step(step_loop_rolling, model, cfg)
 
+    return model
+
+
+def phase_kernel_path(model: ModelWrapper, cfg: DataflowBuildConfig):
+    """Phase: the kernel path, from a streamlined model to a partition of KernelOps.
+
+    Instead of phase_convert_to_hardware, phase_optimize_hardware and
+    phase_build_hardware: the KernelOps (finn.custom_op.kernels) bind kernels to
+    RTL from the model's facts and the build target, so there is no specialization,
+    folding config or per-node IP generation. phase_generate_outputs then builds
+    the partition in the shell (step_synthesize_bitfile; the Zynq shell only).
+
+    Internal steps:
+    - step_kernel_ops: State the build target in the model, rewrite to KernelOps
+    - step_infer_kernel_tensors: Infer every tensor from the kernels
+    - step_kernel_choices: Commit the open choices by the configured strategies
+    - step_kernel_partition: The KernelOps as one partition, the rest on the host
+    - step_verify_kernel_partition: Check the partition (and what verify_steps asks)
+
+    Args:
+        model: Streamlined ModelWrapper
+        cfg: Build configuration
+
+    Returns:
+        The partition's model of KernelOps, its choices committed
+    """
+    model = _execute_step(step_kernel_ops, model, cfg)
+    model = _execute_step(step_infer_kernel_tensors, model, cfg)
+    model = _execute_step(step_kernel_choices, model, cfg)
+    model = _execute_step(step_kernel_partition, model, cfg)
+    model = _execute_step(step_verify_kernel_partition, model, cfg)
     return model
 
 
@@ -376,6 +412,7 @@ build_dataflow_phase_lookup = {
     "phase_prepare_model": phase_prepare_model,
     "phase_optimize_model": phase_optimize_model,
     "phase_convert_to_hardware": phase_convert_to_hardware,
+    "phase_kernel_path": phase_kernel_path,
     "phase_optimize_hardware": phase_optimize_hardware,
     "phase_build_hardware": phase_build_hardware,
     "phase_generate_outputs": phase_generate_outputs,

@@ -50,8 +50,10 @@ import os
 import shutil
 from copy import deepcopy
 from functools import partial
+from pathlib import Path
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.registry import getCustomOp
+from qonnx.transformation.base import Transformation
 from qonnx.transformation.bipolar_to_xnor import ConvertBipolarMatMulToXnorPopcount
 from qonnx.transformation.fold_constants import FoldConstants
 from qonnx.transformation.general import (
@@ -67,6 +69,7 @@ from qonnx.transformation.lower_convs_to_matmul import LowerConvsToMatMul
 from qonnx.util.basic import get_by_name
 from qonnx.util.cleanup import cleanup_model
 from shutil import copy
+from typing import Callable, Dict
 
 import finn.transformation.fpgadataflow.convert_to_hw_layers as to_hw
 import finn.transformation.streamline.absorb as absorb
@@ -146,6 +149,16 @@ from finn.transformation.fpgadataflow.transpose_decomposition import (
     ShuffleDecomposition,
 )
 from finn.transformation.general import ApplyConfig
+from finn.transformation.kernels import (
+    CommitKernelChoices,
+    InferKernelTensors,
+    PlaceholderPolicy,
+    ToKernelOps,
+    kernel_choices_config,
+    resolve_target,
+    shell_target,
+)
+from finn.transformation.kernels.package import ElaboratePartition, configured_root
 from finn.transformation.move_reshape import RemoveCNVtoFCFlatten
 from finn.transformation.qonnx.convert_qonnx_to_finn import ConvertQONNXtoFINN
 from finn.transformation.qonnx.quant_act_to_multithreshold import (
@@ -590,11 +603,9 @@ def step_convert_to_hw(model: ModelWrapper, cfg: DataflowBuildConfig):
     return model
 
 
-def step_create_dataflow_partition(model: ModelWrapper, cfg: DataflowBuildConfig):
-    """Separate consecutive groups of HWCustomOp nodes into StreamingDataflowPartition
-    nodes, which point to a separate ONNX file. Dataflow accelerator synthesis
-    can only be performed on those HWCustomOp sub-graphs."""
-
+def _dataflow_partition(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
+    """The body of the model's one StreamingDataflowPartition; the parent graph is
+    saved as dataflow_parent.onnx when intermediate models are."""
     parent_model = model.transform(
         CreateDataflowPartition(
             partition_model_dir=cfg.output_dir + "/intermediate_models/supported_op_partitions"
@@ -607,7 +618,15 @@ def step_create_dataflow_partition(model: ModelWrapper, cfg: DataflowBuildConfig
     dataflow_model_filename = sdp_node.get_nodeattr("model")
     if cfg.save_intermediate_models:
         parent_model.save(cfg.output_dir + "/intermediate_models/dataflow_parent.onnx")
-    model = ModelWrapper(dataflow_model_filename)
+    return ModelWrapper(dataflow_model_filename)
+
+
+def step_create_dataflow_partition(model: ModelWrapper, cfg: DataflowBuildConfig):
+    """Separate consecutive groups of HWCustomOp nodes into StreamingDataflowPartition
+    nodes, which point to a separate ONNX file. Dataflow accelerator synthesis
+    can only be performed on those HWCustomOp sub-graphs."""
+
+    model = _dataflow_partition(model, cfg)
 
     # create a configuration json file that can be used to set the specialize layer config
     attrs = [
@@ -617,6 +636,88 @@ def step_create_dataflow_partition(model: ModelWrapper, cfg: DataflowBuildConfig
         model, cfg.output_dir + "/template_specialize_layers_config.json", attrs
     )
 
+    return model
+
+
+def _kernel_shell(cfg: DataflowBuildConfig):
+    """The shell the kernel path's target states: the shell flow's, none without one
+    (a stitched IP)."""
+    return None if cfg.shell_flow_type is None else ShellFlowType(cfg.shell_flow_type).value
+
+
+def kernel_target(cfg: DataflowBuildConfig):
+    """The kernel path's build target, from the build configuration: the part (the
+    board's, unless fpga_part names one), the synthesis clock period, and the shell
+    flow's capabilities. The one place a build states its target: step_kernel_ops
+    writes it into the model, and the shell build reads it from there
+    (finn.transformation.kernels.shell_target), refusing a disagreement."""
+    return resolve_target(cfg._resolve_fpga_part(), cfg.synth_clk_period_ns, _kernel_shell(cfg))
+
+
+def step_kernel_ops(model: ModelWrapper, cfg: DataflowBuildConfig):
+    """State the build target in the model (kernel_target) and rewrite each node a
+    KernelOp binds (MatMul, MultiThreshold) as one: ToKernelOps."""
+    return model.transform(ToKernelOps(kernel_target(cfg)))
+
+
+def step_infer_kernel_tensors(model: ModelWrapper, cfg: DataflowBuildConfig):
+    """Infer every tensor in graph order, the KernelOps answering from their kernels."""
+    return model.transform(InferKernelTensors())
+
+
+#: The strategies the kernel path's choice step can run, by the name a build
+#: configuration's ``kernel_choices`` lists: each makes, from the configuration, the
+#: transformation that commits (and saves on the nodes) the KernelOps' open
+#: choices. The DSE seam's strategies are registered here as they come.
+kernel_choice_strategies: Dict[str, Callable[[DataflowBuildConfig], Transformation]] = {
+    "placeholder": lambda cfg: CommitKernelChoices(PlaceholderPolicy()),
+}
+
+
+def step_kernel_choices(model: ModelWrapper, cfg: DataflowBuildConfig):
+    """Commit the KernelOps' open choices by the strategies ``cfg.kernel_choices``
+    names, in order (``kernel_choice_strategies``); the committed choices, as the
+    nodes hold them, are written to kernel_choices.json (ApplyConfig's form)."""
+    unknown = [name for name in cfg.kernel_choices if name not in kernel_choice_strategies]
+    if unknown:
+        raise ValueError(
+            f"kernel_choices names no strategy: {unknown} "
+            f"(one of {sorted(kernel_choice_strategies)})"
+        )
+    for name in cfg.kernel_choices:
+        model = model.transform(kernel_choice_strategies[name](cfg))
+    os.makedirs(cfg.output_dir, exist_ok=True)
+    with open(cfg.output_dir + "/kernel_choices.json", "w") as f:
+        json.dump(kernel_choices_config(model), f, indent=2)
+    return model
+
+
+def step_kernel_partition(model: ModelWrapper, cfg: DataflowBuildConfig):
+    """The KernelOps as one StreamingDataflowPartition, the nodes before and after it
+    on the host: the partition's body, which carries the target."""
+    return _dataflow_partition(model, cfg)
+
+
+def step_verify_kernel_partition(model: ModelWrapper, cfg: DataflowBuildConfig):
+    """Check the kernel path's partition before a shell builds it.
+
+    Always: its choices replay to a configured root (none stale, none open, its
+    ports its graph's inputs and outputs in order; configured_root), and it states
+    the configuration's target. As ``verify_steps`` asks:
+    KERNEL_PARTITION_PYTHON executes the parent graph with the partition against
+    the expected output; KERNEL_PARTITION_ELABORATION compiles and elaborates the
+    partition's emitted RTL in XSim, through the build's toolchain."""
+    configured_root(model, "the kernel path's partition")
+    shell_target(model, cfg._resolve_fpga_part(), _kernel_shell(cfg), cfg.synth_clk_period_ns)
+    verify_steps = cfg._resolve_verification_steps()
+    if VerificationStepType.KERNEL_PARTITION_PYTHON in verify_steps:
+        verify_step(model, cfg, "kernel_partition_python", need_parent=True)
+    if VerificationStepType.KERNEL_PARTITION_ELABORATION in verify_steps:
+        directory = cfg.output_dir + "/verification_output/kernel_partition_elaboration"
+        model.transform(
+            ElaboratePartition(directory=Path(directory), toolchain=cfg._resolve_toolchain())
+        )
+        print("Verification for kernel_partition_elaboration : SUCCESS")
     return model
 
 
@@ -1585,6 +1686,11 @@ build_dataflow_step_lookup = {
     "step_convert_to_hw": step_convert_to_hw,
     "step_specialize_layers": step_specialize_layers,
     "step_create_dataflow_partition": step_create_dataflow_partition,
+    "step_kernel_ops": step_kernel_ops,
+    "step_infer_kernel_tensors": step_infer_kernel_tensors,
+    "step_kernel_choices": step_kernel_choices,
+    "step_kernel_partition": step_kernel_partition,
+    "step_verify_kernel_partition": step_verify_kernel_partition,
     "step_target_fps_parallelization": step_target_fps_parallelization,
     "step_apply_folding_config": step_apply_folding_config,
     "step_minimize_bit_width": step_minimize_bit_width,
