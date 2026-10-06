@@ -25,6 +25,10 @@ def test_the_array_states_the_value_of_its_integers(dtype: type) -> None:
     nested = IntegerTensorValue.of(tuple(tuple(int(v) for v in row) for row in values))
     assert stated == nested and stated.digest == nested.digest
     assert stated.shape == (5, 3) and stated.range == nested.range
+    # A memory image reads them as an int64 array: no Python int is made.
+    array = stated.row_major
+    assert isinstance(array, np.ndarray) and array.tolist() == list(nested.integers)
+    assert stated._integers is None
     assert stated.integers == nested.integers
 
 

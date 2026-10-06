@@ -9,13 +9,17 @@ parameters are derived here from traversals alone and compared with the
 hard-coded values in ``finn-rtllib`` and ``transpose_decomposition``.
 """
 
+import operator
 import random
+from math import prod
 from pathlib import Path
 
+import numpy as np
 import pytest
 from qonnx.core.datatype import DataType
 
 from finn.core.space import Rejected, Unresolved, design_space
+from finn.dataflow import traversal
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import (
     Adaptation,
@@ -24,6 +28,7 @@ from finn.dataflow.traversal import (
     Reorder,
     Repetition,
     Traversal,
+    axis_strides,
     classify,
     pack,
     tile,
@@ -96,6 +101,86 @@ def test_repetition_and_replay_are_stride_zero_loops():
     with pytest.raises(ValueError, match="has 4 integers, not 3"):
         pack(vector, (1, 2, 3), 4)
     assert LevelEnd(3).asserted(2) and not LevelEnd(3).asserted(3)
+
+
+def _packed_by_position(form, integers, bits):
+    """``pack`` by its definition: each beat's positions, raveled row-major, low bits first."""
+    strides, mask = axis_strides(form.shape), (1 << bits) - 1
+    return tuple(
+        sum(
+            (integers[sum(map(operator.mul, position, strides))] & mask) << (lane * bits)
+            for lane, position in enumerate(beat)
+        )
+        for beat in form.positions()
+    )
+
+
+def _random_form(rng):
+    """A traversal of a random operand: vector-major, tiled, or loops of random extents
+    along random axes, replay loops (stride 0) among them."""
+    shape = tuple(rng.randint(1, 6) for _ in range(rng.randint(1, 3)))
+    kind = rng.choice(("vector", "tile", "loops", "loops"))
+    if kind == "vector":
+        return vector_major(
+            shape, rng.choice([d for d in range(1, shape[-1] + 1) if not shape[-1] % d])
+        )
+    if kind == "tile" and len(shape) == 2:
+        rows, cols = shape
+        pe = rng.choice([d for d in range(1, rows + 1) if not rows % d])
+        return tile(rows, cols, pe, rng.choice([d for d in range(1, cols + 1) if not cols % d]))
+    strides = (0, *axis_strides(shape))
+    while True:
+        loops = [Loop(rng.randint(1, 4), rng.choice(strides)) for _ in range(rng.randint(1, 5))]
+        split = rng.randint(0, len(loops))
+        try:
+            return Traversal(shape, loops[:split], loops[split:])
+        except ValueError:
+            continue
+
+
+def test_pack_is_its_definition_at_every_width_signedness_and_lane_count():
+    """The words are each beat's lanes at their positions, the low ``bits`` of each
+    integer's two's complement, lane zero lowest: for lanes 1..8 bits wide and wider
+    than an int64, integers narrower or wider than their lanes, signed or not, and as a
+    tuple or an int64 array (packed with numpy) or beyond 64 bits (one at a time)."""
+    rng = random.Random(7)
+    for _ in range(600):
+        form = _random_form(rng)
+        bits = rng.choice((*range(1, 18), 31, 32, 33, 63, 64, 65, 100, 128))
+        width = rng.choice((1, 2, 3, 4, 7, 8, 9, 16, 32, 62, 63, 64, 65, 80))
+        signed = rng.random() < 0.5
+        low, high = (
+            (-(1 << (width - 1)), (1 << (width - 1)) - 1) if signed else (0, (1 << width) - 1)
+        )
+        integers = tuple(rng.randint(low, high) for _ in range(prod(form.shape)))
+        expected = _packed_by_position(form, integers, bits)
+        assert len(expected) == form.beats
+        assert pack(form, integers, bits) == expected, (form, bits, width, signed)
+        if -(2**63) <= low and high < 2**63:
+            array = np.array(integers, dtype=np.int64)
+            assert pack(form, array, bits) == expected, (form, bits, width, signed)
+
+
+@pytest.mark.parametrize("bits", (1, 63, 64, 65, 128))
+def test_pack_uses_numpy_exactly_up_to_int64_and_python_ints_beyond(bits, monkeypatch):
+    """At the int64 bounds pack stays with numpy (an exact-path call fails the test);
+    one integer beyond them takes the exact path. Both give the words by definition."""
+    form = vector_major((2, 4), 2)
+
+    def refused(*args):
+        raise AssertionError("integers within int64 took the exact path")
+
+    edges = (2**63 - 1, -(2**63), -1, 0, 1, 2**62, -(2**62) - 1, 5)
+    with monkeypatch.context() as patched:
+        patched.setattr(traversal, "_pack_exact", refused)
+        assert pack(form, edges, bits) == _packed_by_position(form, edges, bits)
+    taken = []
+    exact = traversal._pack_exact
+    monkeypatch.setattr(traversal, "_pack_exact", lambda *args: taken.append(1) or exact(*args))
+    for beyond in (2**63, -(2**63) - 1, 2**64 + 3, -(2**100)):
+        found = (*edges[:-1], beyond)
+        assert pack(form, found, bits) == _packed_by_position(form, found, bits)
+    assert len(taken) == 4
 
 
 def _random_traversal(rng):
