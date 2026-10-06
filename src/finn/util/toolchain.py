@@ -267,6 +267,19 @@ class Toolchain:
             )
         return [*selection.launcher, executable, *(os.fspath(arg) for arg in args)]
 
+    def hls_installation(self) -> Path:
+        """The local installation whose HLS C++ headers (``include/``) and C
+        simulation libraries (``lnx64/``) code compiled by ``g++`` uses: the
+        environment's ``XILINX_HLS``, else ``XILINX_VITIS`` (whose installation
+        carries HLS from 2025.1). ``LookupError`` when it names neither."""
+        for variable in ("XILINX_HLS", "XILINX_VITIS"):
+            if self.environment.get(variable):
+                return Path(self.environment[variable])
+        raise LookupError(
+            "This toolchain names no HLS installation (XILINX_HLS or XILINX_VITIS) "
+            "for HLS C++ headers and C simulation libraries"
+        )
+
     def run(
         self,
         tool: str,

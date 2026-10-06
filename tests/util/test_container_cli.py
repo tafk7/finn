@@ -1,6 +1,9 @@
 """Tests for the repository-local Docker environment entry points."""
 
+import pytest
+
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -238,6 +241,10 @@ Path(sys.argv[3]).write_text("sif")
     assert (tmp_path / "output with spaces/finn.sif").read_text() == "sif"
 
 
+@pytest.mark.skipif(
+    shutil.which("docker") is None,
+    reason="--print-tag asks `docker buildx bake` for the tag; no docker on PATH",
+)
 def test_public_image_reference_matches_bake():
     proc = invoke(BUILD, "--runtime", "xrt", "--print-tag")
     assert proc.returncode == 0, proc.stderr
