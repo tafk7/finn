@@ -17,7 +17,7 @@ from typing import Any, Generic, Literal, TypeVar, cast, overload
 
 from . import _execution, _forcing, _runtime
 from ._configuration import Space
-from ._forcing import Forced, Viable
+from ._forcing import Forced, Open, Viable
 from ._nodes import NodeChoice, NodeDecision, NodeDecl, node_record, unsupplied_formals
 from .collection import collect_space
 from .compiler import Model, compile_model
@@ -68,7 +68,12 @@ class NodeInfo:
 
 @dataclass(frozen=True, slots=True)
 class DecisionInfo(Generic[T]):
-    """An owning choice. Its stable key never exposes internal selector names."""
+    """An owning choice. Its stable key never exposes internal selector names.
+
+    ``space_type`` is the Space class whose scope declares it (a candidate's, for a
+    choice nested under a Decision over nodes); ``ordered``, whether its domain
+    states an order of its cases (``Domain.ordered``).
+    """
 
     reference: DecisionHandle[T]
     key: str
@@ -76,6 +81,8 @@ class DecisionInfo(Generic[T]):
     owner: str
     selector: bool
     cases: tuple[str, ...] = ()
+    space_type: type[Space] | None = None
+    ordered: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -225,6 +232,8 @@ def _decision_info(
         node.owner,
         choice is not None,
         () if choice is None else tuple(name for name, _ in choice.cases),
+        linked.scopes[node.scope].space_type,
+        choice is None and node.domain is not None and node.domain.ordered,
     )
 
 
@@ -458,6 +467,27 @@ def viable(point: Space) -> tuple[Viable, ...]:
     return tuple(result)
 
 
+def open(point: Space) -> tuple[Open, ...]:  # noqa: A001 - the inspection's name
+    """The open Decisions below this scope whose cases the engine cannot enumerate (a
+    domain known by membership only, a FIFO's depth): applicable, neither committed
+    nor forced, in rank order. A policy proposes values for them, which a commitment
+    checks against the domain like any other (``domain-membership``)."""
+    _execution.driver_only("open inspection")
+    current = state(point)
+    found = _forcing.forced(current) if current.forcing else _forcing.NOTHING
+    linked = current.linked
+    included = _scope_set(linked, point._scope)
+    return tuple(
+        Open(decision_key(linked, index), bool(domain and domain.ordered))
+        for index, verdict in sorted(found.verdicts.items(), key=lambda item: linked.ranks[item[0]])
+        if verdict.membership
+        and index not in current.assignments
+        and index not in found.values
+        and linked.nodes[index].scope in included
+        for domain in (linked.nodes[index].domain,)
+    )
+
+
 def pinned(subject: Space | Model[S] | type[Space]) -> tuple[Provenance, ...]:
     """Every decision key an override removed by pinning its coordinate, with who pinned it."""
     compiled, scope = _context(subject)
@@ -654,6 +684,7 @@ __all__ = [
     "NodeInfo",
     "Provenance",
     "ModelStatistics",
+    "Open",
     "QueryEvidence",
     "NodeDeclaration",
     "ReferenceInfo",
@@ -670,6 +701,7 @@ __all__ = [
     "forced",
     "members",
     "model",
+    "open",
     "pinned",
     "provenance",
     "reference",
