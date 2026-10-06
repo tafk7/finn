@@ -336,7 +336,9 @@ class PackedDotpKernel(DotpAxiKernel):
     the weight channel's element: when its range excludes the type's most
     negative value (a value owner stated it), a weight needs no sign guard bit,
     which packs more lanes per DSP and admits weights as wide as the DSP's A
-    input. FinnLib stops simulation on a weight that breaks it.
+    input. FinnLib stops simulation on a weight that breaks it. Its accumulator holds
+    at least one product (FinnLib's elaboration refuses a narrower ``ACCU_WIDTH``),
+    whatever range its results span.
     """
 
     id = "finnlib.dotp_axi.dotp"
@@ -368,6 +370,12 @@ class PackedDotpKernel(DotpAxiKernel):
             return reject(
                 "dotp-weight-width",
                 "weights must fit the DSP A input, with a sign guard bit unless narrow",
+            )
+        if self.y.element.bits < weights.bits + activation.bits - activation.signed:
+            return reject(
+                "dotp-accumulator-width",
+                "the accumulator must hold one product: ACCU_WIDTH >= WEIGHT_WIDTH + "
+                "ACTIVATION_WIDTH - SIGNED_ACTIVATIONS",
             )
         return None
 

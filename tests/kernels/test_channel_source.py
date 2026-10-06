@@ -209,6 +209,25 @@ def test_the_result_range_follows_what_the_weight_channel_carries():
     assert core.parameters()["ACCU_WIDTH"] == 7
 
 
+@pytest.mark.parametrize(
+    "weights,value_range",
+    [
+        (((1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (0, 0, 0, 1)), (-4, 3)),  # the identity
+        (((0,) * 4,) * 4, (0, 0)),  # zeros
+    ],
+)
+def test_a_narrow_result_range_keeps_an_accumulator_one_product_wide(weights, value_range):
+    """The columns' range stays exact on the result element; the accumulator holding it
+    is at least one INT3 x INT3 product wide (3 + 3 - 1 bits), which FinnLib's packed
+    dotp needs to elaborate."""
+    point = configured(base(weights=weights), style="block")
+    assert point.matmul.result_range == value_range
+    assert point.matmul.result_type == DataType["INT5"]
+    assert point.matmul.compute.y.element == ScalarEncoding(DataType["INT5"], value_range)
+    assert point.matmul.compute.parameters()["ACCU_WIDTH"] == 5
+    assert isinstance(point.query(Kernel.module), Available)
+
+
 def test_the_cores_do_not_wait_on_the_source():
     point = commit(base(weights=WEIGHTS), {"matmul.compute": "packed"})
     point = commit(

@@ -42,8 +42,10 @@ The result's range is derived from what the weight channel carries: with a
 value, the exact range of each output column's dot products over the
 activation datatype (``column_range``), unioned over the columns; without one,
 every dot product of the two datatypes' values. The accumulator is the
-smallest signed INT holding it (``result_type``), and the result element states
-the range (``result_tensor``, the core's ``result_range``).
+smallest signed INT holding it, and never narrower than one product of the
+operands' encodings, which the packed core needs (``accumulator_dtype``,
+``result_type``); the result element states the range (``result_tensor``, the
+core's ``result_range``).
 
 - ``compute`` is a Decision over the dot-product cores. They share the facts
   and channels. Each core owns its folding factors (``compute.<core>.pe``,
@@ -74,6 +76,7 @@ from finn.dataflow.datatypes import (
     QONNXDataType,
     canonical_qonnx_datatype,
     ordinary_integer_bounds,
+    qonnx_datatype_width,
     resolve_qonnx_datatype_name,
 )
 from finn.dataflow.gemm import Form
@@ -123,6 +126,29 @@ def exact_result_dtype(
 ) -> QONNXDataType:
     """Smallest signed INT covering every full-range integer dot product."""
     return signed_integer_dtype(*datatype_range(vector_length, activation_dtype, weights_dtype))
+
+
+def accumulator_dtype(
+    activation_dtype: QONNXDataType, weights_dtype: QONNXDataType, value_range: tuple[int, int]
+) -> QONNXDataType:
+    """The accumulator of dot products over ``value_range``: the smallest signed INT
+    holding it, widened to one product of the operands' encodings when narrower.
+
+    FinnLib's packed dotp elaborates only ACCU_WIDTH >= WEIGHT_WIDTH +
+    ACTIVATION_WIDTH - SIGNED_ACTIVATIONS (its lanes hold a whole product), so
+    small or zero weights, whose columns' range is narrow, still take that width.
+    The datatypes' range (``datatype_range``) is never narrower.
+    """
+    activation = canonical_qonnx_datatype(activation_dtype)
+    product = (
+        qonnx_datatype_width(weights_dtype)
+        + qonnx_datatype_width(activation)
+        - int(activation.signed())
+    )
+    exact = signed_integer_dtype(*value_range)
+    if qonnx_datatype_width(exact) >= product:
+        return exact
+    return resolve_qonnx_datatype_name(f"INT{product}")
 
 
 def column_range(activation_dtype: QONNXDataType, weights: IntegerTensor) -> tuple[int, int]:
@@ -238,9 +264,10 @@ class MatMulKernel(Kernel):
 
     @derived(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
     def result_type(self) -> QONNXDataType:
-        """The accumulator: the smallest signed INT holding the result range."""
+        """The accumulator: the smallest signed INT holding the result range, at least one
+        product wide (``accumulator_dtype``)."""
         least, greatest = self.result_range
-        return signed_integer_dtype(least, greatest)
+        return accumulator_dtype(self.activation_dtype, self.weights_dtype, (least, greatest))
 
     @constraint
     def extents_supported(self) -> bool | Rejected:
@@ -347,6 +374,7 @@ class MatMulKernel(Kernel):
 
 __all__ = [
     "MatMulKernel",
+    "accumulator_dtype",
     "block_diagonal",
     "column_range",
     "datatype_range",

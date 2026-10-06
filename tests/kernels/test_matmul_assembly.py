@@ -232,8 +232,9 @@ def test_build_is_complete_and_initializer_changes_identity(tmp_path, delivery):
     roots = {"finnlib": finnlib_root()}
     emitted = emit_module(built.module, tmp_path / "a", roots=roots)
     wrapper = (emitted.directory / (emitted.entry_point + ".sv")).read_text()
-    # Unknown weights: the datatypes' range, INT8; known zero weights: [0, 0], INT1.
-    assert f".ACCU_WIDTH({1 if 'weights' in options else 8})" in wrapper
+    # Unknown weights: the datatypes' range, INT8; known zero weights: [0, 0], at least
+    # one INT3 x INT3 product wide (FinnLib's dotp elaborates no narrower): INT5.
+    assert f".ACCU_WIDTH({5 if 'weights' in options else 8})" in wrapper
     assert ".olst(n__u_x_adapter_input_gen_input_gen__olst)" in wrapper
     if delivery is WeightDelivery.MEMSTREAM:
         assert '.INIT_FILE("memstream_' in wrapper

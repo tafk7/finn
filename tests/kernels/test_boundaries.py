@@ -109,11 +109,12 @@ for memory in ("none", "memstream"):
         platform=PLATFORM,
     )
     # Stored weights are the weight channel's value, which its source stores; the
-    # result is their columns' (the identity's: INT3), or the datatypes' (INT8).
+    # result is their columns' (the identity's, [-4, 3], at least one product wide:
+    # INT5), or the datatypes' (INT8).
     stored, result = {}, INT8
     if memory == "memstream":
         stored["contents"] = ((1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (0, 0, 0, 1))
-        result = INT3
+        result = ScalarEncoding(DataType["INT5"])
 
     class Placed(Root):
         x = Channel(tensor=Tensor((2, 4), INT3), port="in0_V", platform=PLATFORM)
