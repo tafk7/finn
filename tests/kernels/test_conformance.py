@@ -61,7 +61,7 @@ from finn.kernels.dotp import Int8Dsp58DotpKernel, PackedDotpKernel
 from finn.kernels.eltwise import EltwiseKernel
 from finn.kernels.fifo import FifoKernel
 from finn.kernels.input_generator import InputGeneratorKernel
-from finn.kernels.matmul import MatMulKernel, exact_result_dtype
+from finn.kernels.matmul import MatMulKernel, datatype_range
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.port import AxiStreamPort
 from finn.kernels.target import DspBlock
@@ -123,7 +123,7 @@ def dotp(
         facts={
             "platform": full_platform(dsp),
             "form": form,
-            "result_dtype": exact_result_dtype(reduction, a, w),
+            "result_range": datatype_range(reduction, a, w),
         },
     )
 

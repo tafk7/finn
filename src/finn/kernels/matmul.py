@@ -33,19 +33,21 @@ channel's value: its ``contents``, which its ``source`` stores, bound by
 whoever declares the channel (the value's owner), who states on the channel's
 tensor the range it promises (``INT4 over [-7, 7]``). With several weight sets
 the channel's ``sets`` and ``index`` select one per row. A consumer derives
-from what the channel carries what it may (the packed core's
-``NARROW_WEIGHTS``); a channel without a value carries the datatype's range. A
-dense realization of a depthwise operation reads block-diagonal weights, so it
-needs a value on its weight channel (``matmul-realization``).
+from what the channel carries what it may (every core's weight width, the
+packed core's ``NARROW_WEIGHTS``); the owner states known weights narrowed to
+their values (``stored_element``: INT8-typed ternary weights are ``INT2``); a
+channel without a value carries the datatype's range. A dense realization of a
+depthwise operation reads block-diagonal weights, so it needs a value on its
+weight channel (``matmul-realization``).
 
 The result's range is derived from what the weight channel carries: with a
 value, the exact range of each output column's dot products over the
 activation datatype (``column_range``), unioned over the columns; without one,
-every dot product of the two datatypes' values. The accumulator is the
-smallest signed INT holding it, and never narrower than one product of the
-operands' encodings, which the packed core needs (``accumulator_dtype``,
-``result_type``); the result element states the range (``result_tensor``, the
-core's ``result_range``).
+every dot product of the two datatypes' values. The result's type is the
+range's smallest encoding, ``UINT`` when no value is negative (``range_dtype``,
+``result_type``), whatever core computes it; the result element states the
+range (``result_tensor``). Each core derives its accumulator from the range
+(the core's ``result_range``).
 
 - ``compute`` is a Decision over the dot-product cores. They share the facts
   and channels. Each core owns its folding factors (``compute.<core>.pe``,
@@ -76,8 +78,6 @@ from finn.dataflow.datatypes import (
     QONNXDataType,
     canonical_qonnx_datatype,
     ordinary_integer_bounds,
-    qonnx_datatype_width,
-    resolve_qonnx_datatype_name,
 )
 from finn.dataflow.gemm import Form
 from finn.dataflow.tensor import Tensor
@@ -86,7 +86,7 @@ from finn.kernels.base import Kernel
 from finn.kernels.channels import Channel
 from finn.kernels.dotp import Int8Dsp58DotpKernel, PackedDotpKernel
 from finn.kernels.target import Platform
-from finn.kernels.values.domains import admit_element
+from finn.kernels.values.domains import admit_element, range_dtype, values_within
 from finn.kernels.values.semantics import (
     QONNX_DATATYPE_VALUE_SEMANTICS,
     IntegerTensor,
@@ -104,12 +104,6 @@ _CARRIED = (
 """Each channel MatMul sits on, and its view of the tensor the channel carries."""
 
 
-def signed_integer_dtype(least: int, greatest: int) -> QONNXDataType:
-    """The smallest signed INT holding every integer of ``[least, greatest]``."""
-    bits = max(1, greatest.bit_length() + 1, (~least).bit_length() + 1 if least < 0 else 1)
-    return resolve_qonnx_datatype_name(f"INT{bits}")
-
-
 def datatype_range(
     vector_length: int, activation_dtype: QONNXDataType, weights_dtype: QONNXDataType
 ) -> tuple[int, int]:
@@ -124,31 +118,8 @@ def datatype_range(
 def exact_result_dtype(
     vector_length: int, activation_dtype: QONNXDataType, weights_dtype: QONNXDataType
 ) -> QONNXDataType:
-    """Smallest signed INT covering every full-range integer dot product."""
-    return signed_integer_dtype(*datatype_range(vector_length, activation_dtype, weights_dtype))
-
-
-def accumulator_dtype(
-    activation_dtype: QONNXDataType, weights_dtype: QONNXDataType, value_range: tuple[int, int]
-) -> QONNXDataType:
-    """The accumulator of dot products over ``value_range``: the smallest signed INT
-    holding it, widened to one product of the operands' encodings when narrower.
-
-    FinnLib's packed dotp elaborates only ACCU_WIDTH >= WEIGHT_WIDTH +
-    ACTIVATION_WIDTH - SIGNED_ACTIVATIONS (its lanes hold a whole product), so
-    small or zero weights, whose columns' range is narrow, still take that width.
-    The datatypes' range (``datatype_range``) is never narrower.
-    """
-    activation = canonical_qonnx_datatype(activation_dtype)
-    product = (
-        qonnx_datatype_width(weights_dtype)
-        + qonnx_datatype_width(activation)
-        - int(activation.signed())
-    )
-    exact = signed_integer_dtype(*value_range)
-    if qonnx_datatype_width(exact) >= product:
-        return exact
-    return resolve_qonnx_datatype_name(f"INT{product}")
+    """The smallest encoding of every full-range integer dot product (``range_dtype``)."""
+    return range_dtype(*datatype_range(vector_length, activation_dtype, weights_dtype))
 
 
 def column_range(activation_dtype: QONNXDataType, weights: IntegerTensor) -> tuple[int, int]:
@@ -264,10 +235,10 @@ class MatMulKernel(Kernel):
 
     @derived(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
     def result_type(self) -> QONNXDataType:
-        """The accumulator: the smallest signed INT holding the result range, at least one
-        product wide (``accumulator_dtype``)."""
+        """The result range's smallest encoding: ``INT<b>``, or ``UINT<b>`` when no result
+        is negative (``range_dtype``). No core's accumulator enters it."""
         least, greatest = self.result_range
-        return accumulator_dtype(self.activation_dtype, self.weights_dtype, (least, greatest))
+        return range_dtype(least, greatest)
 
     @constraint
     def extents_supported(self) -> bool | Rejected:
@@ -300,12 +271,12 @@ class MatMulKernel(Kernel):
     @view
     def weight_tensor(self) -> Tensor | Rejected:
         """(K, N) as the datapath reads it, in the weights' datatype: the weight channel's
-        values must fit it."""
+        values must be values of it, in whatever encoding its owner states."""
         return self._tensor((self.datapath_k, self.n), self.weights_dtype)
 
     @view
     def result_tensor(self) -> Tensor | Rejected:
-        """(M, N), the accumulator over the result range."""
+        """(M, N), the result type over the result range."""
         return self._tensor((self.m, self.n), self.result_type, self.result_range)
 
     # The channels it sits on, supplied by its parent.
@@ -323,16 +294,20 @@ class MatMulKernel(Kernel):
         """Each supplied channel carries a tensor of the shape MatMul derives for it.
 
         On the results channel MatMul's values fit the channel's element; on a
-        channel it consumes, activations or weights, the channel's values fit
-        MatMul's.
+        channel it consumes, activations or weights, the channel's values are
+        values of MatMul's, in any integer encoding (``values_within``): the owner of
+        known weights states them narrowed to their values.
         """
         for reference, tensor in _CARRIED:
             if not self.present(getattr(MatMulKernel, reference)):
                 continue
             supplied, derived_ = getattr(self, reference).tensor, getattr(self, tensor)
             produced = reference == "y_channel"
-            inner, outer = (derived_, supplied) if produced else (supplied, derived_)
-            if supplied.shape != derived_.shape or not inner.element.fits(outer.element):
+            if produced:
+                fits = derived_.element.fits(supplied.element)
+            else:
+                fits = values_within(supplied.element, derived_.element)
+            if supplied.shape != derived_.shape or not fits:
                 return reject(
                     "matmul-tensor",
                     f"{reference} carries {supplied.shape} {supplied.element}; "
@@ -348,7 +323,6 @@ class MatMulKernel(Kernel):
         {"packed": packed, "int8_dsp58": Int8Dsp58DotpKernel},
         form=datapath,
         reshape_activations=dense_view,
-        result_dtype=result_type,
         result_range=result_range,
         platform=platform,
         x_channel=x_channel,
@@ -374,10 +348,8 @@ class MatMulKernel(Kernel):
 
 __all__ = [
     "MatMulKernel",
-    "accumulator_dtype",
     "block_diagonal",
     "column_range",
     "datatype_range",
     "exact_result_dtype",
-    "signed_integer_dtype",
 ]

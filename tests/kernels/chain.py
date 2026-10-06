@@ -22,8 +22,9 @@ from finn.core.space import derived, design_space
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.channels import Channel
 from finn.kernels.configure import commit
-from finn.kernels.matmul import MatMulKernel, accumulator_dtype, column_range
+from finn.kernels.matmul import MatMulKernel, column_range
 from finn.kernels.thresholding import ThresholdingAxiKernel
+from finn.kernels.values.domains import range_dtype, stored_element
 from kernels.helpers import FULL_DSP48E2, Root, with_adapter_memories, with_direct_transports
 
 ROWS, INPUTS, HIDDEN, OUTPUTS, PE, SIMD = 3, 4, 4, 4, 2, 2
@@ -35,10 +36,10 @@ THRESHOLD_DTYPE = DataType["INT5"]
 W1 = tuple(tuple((3 * n + 2 * k) % 7 - 3 for n in range(HIDDEN)) for k in range(INPUTS))
 W2 = tuple(tuple((2 * n + 5 * k) % 7 - 3 for n in range(OUTPUTS)) for k in range(HIDDEN))
 X = tuple(tuple((5 * r + 3 * k) % 8 - 4 for k in range(INPUTS)) for r in range(ROWS))
-# Each MatMul's result: its weights' columns over its activations' datatype (K7):
-# INT6 over [-28, 28] and INT5 over [-15, 12] (the second at its product floor, 3 + 2 bits).
-H = accumulator_dtype(A, W, column_range(A, W1))
-Y = accumulator_dtype(T, W, column_range(T, W2))
+# Each MatMul's result: its weights' columns over its activations' datatype (K7), in
+# the range's smallest encoding: INT6 over [-28, 28] and INT5 over [-15, 12].
+H = range_dtype(*column_range(A, W1))
+Y = range_dtype(*column_range(T, W2))
 
 
 def matmul(
@@ -65,10 +66,10 @@ def matmul(
 
 def weights(values: Any) -> Channel:
     """A MatMul's weight channel, carrying ``values``: from its memory to its core, its
-    tensor over their range."""
+    tensor over their range, in the encoding they need (``stored_element``)."""
     k, n = len(values), len(values[0])
     least, greatest = min(map(min, values)), max(map(max, values))
-    tensor = Tensor((k, n), ScalarEncoding(W, (least, greatest)))
+    tensor = Tensor((k, n), stored_element(W, (least, greatest)))
     return Channel(tensor=tensor, contents=values, platform=FULL_DSP48E2)
 
 

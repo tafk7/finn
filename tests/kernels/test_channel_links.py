@@ -12,6 +12,7 @@ the root's own pins (``None``).
 from qonnx.core.datatype import DataType
 
 from finn.core.space import Param, Rejected, Space, design_space, view
+from finn.dataflow.datatypes import ordinary_integer_bounds
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import vector_major
 from finn.kernels.artifacts.abi import Endpoint
@@ -33,7 +34,7 @@ class Placed(Space):
     w = Channel(platform=FULL_DSP48E2, tensor=Tensor((4, 4), ScalarEncoding(INT3)), port="in1_V")
     y = Channel(tensor=Tensor((3, 4), ScalarEncoding(INT8)), port="out0_V", platform=FULL_DSP48E2)
     compute = PackedDotpKernel(
-        result_dtype=INT8,
+        result_range=ordinary_integer_bounds(INT8),
         x_channel=x,
         w_channel=w,
         y_channel=y,
@@ -100,7 +101,7 @@ def test_a_boundary_no_port_names_is_refused() -> None:
             platform=FULL_DSP48E2, tensor=Tensor((3, 4), ScalarEncoding(INT8)), port="out0_V"
         )
         compute = PackedDotpKernel(
-            result_dtype=INT8,
+            result_range=ordinary_integer_bounds(INT8),
             x_channel=x,
             w_channel=w,
             y_channel=y,

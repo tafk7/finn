@@ -15,6 +15,7 @@ import pytest
 from qonnx.core.datatype import DataType
 
 from finn.core.space import Available, Rejected, Space, design_space, inspection
+from finn.dataflow.datatypes import ordinary_integer_bounds
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.artifacts.abi import Bus, Endpoint, StandardProtocol
 from finn.kernels.artifacts.build import netlist
@@ -50,7 +51,7 @@ class Activated(Root):
     levels = Channel(tensor=LEVEL_TENSOR, port="out0_V", platform=FULL_DSP48E2)
     config = ControlBus(port="s_axilite")
     compute = PackedDotpKernel(
-        result_dtype=R,
+        result_range=ordinary_integer_bounds(R),
         x_channel=activations,
         w_channel=weights,
         y_channel=results,

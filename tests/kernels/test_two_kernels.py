@@ -22,6 +22,7 @@ import pytest
 from qonnx.core.datatype import DataType
 
 from finn.core.space import Rejected, derived, design_space
+from finn.dataflow.datatypes import ordinary_integer_bounds
 from finn.dataflow.plan import Step
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import Traversal, period
@@ -67,14 +68,14 @@ def layered(*, adaptable: bool = True):
             platform=FULL_DSP48E2, tensor=Tensor((ROWS, OUTPUTS), ScalarEncoding(Y)), port="out0_V"
         )
         first = PackedDotpKernel(
-            result_dtype=H,
+            result_range=ordinary_integer_bounds(H),
             x_channel=x,
             w_channel=w1,
             y_channel=h,
             platform=FULL_DSP48E2,
         )
         second = PackedDotpKernel(
-            result_dtype=Y,
+            result_range=ordinary_integer_bounds(Y),
             x_channel=h,
             w_channel=w2,
             y_channel=y,

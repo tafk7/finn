@@ -62,7 +62,7 @@ from finn.kernels.input_generator import InputGeneratorKernel
 from finn.kernels.matmul import MatMulKernel, block_diagonal
 from finn.kernels.target import DspBlock, Platform
 from finn.kernels.thresholding import ThresholdingAxiKernel
-from finn.kernels.values.domains import admit_element, set_index_dtype
+from finn.kernels.values.domains import set_index_dtype, stored_element
 from finn.kernels.values.semantics import (
     INTEGER_TENSOR,
     QONNX_DATATYPE_VALUE_SEMANTICS,
@@ -123,6 +123,7 @@ def placed_dotp(
     activation_dtype: QONNXDataType,
     weights_dtype: QONNXDataType,
     result_dtype: QONNXDataType,
+    result_range: tuple[int, int] | None = None,
     weights_range: tuple[int, int] | None = None,
     pe: object = None,
     simd: object = None,
@@ -139,7 +140,9 @@ def placed_dotp(
     and ``reduction`` (K) to SIMD, one fold each. A folding factor left ``None``
     stays open, as does ``reducer``, which only a core that declares it commits.
     ``weights_range`` is the range of values the weight channel carries; the
-    datatype's own by default.
+    datatype's own by default. ``result_range`` is the results' range, from which the core
+    derives its accumulator; ``result_dtype``'s own by default. The results channel
+    carries ``result_dtype`` over it.
     """
     form = facts.get("form", Form.DENSE)
     n = outputs if outputs is not None else (pe if isinstance(pe, int) and pe > 0 else 1)
@@ -160,12 +163,16 @@ def placed_dotp(
             platform=platform,
         )
         y = Channel(
-            tensor=Tensor((rows, n), ScalarEncoding(result_dtype)),
+            tensor=Tensor((rows, n), ScalarEncoding(result_dtype, result_range)),
             port="out0_V",
             platform=platform,
         )
         compute = space_type(
-            x_channel=x, w_channel=w, y_channel=y, result_dtype=result_dtype, **facts
+            x_channel=x,
+            w_channel=w,
+            y_channel=y,
+            result_range=result_range or ordinary_integer_bounds(result_dtype),
+            **facts,
         )
 
     choices = {
@@ -199,14 +206,14 @@ def rooted(name: str, members: Mapping[str, object]) -> Root:
 
 def stated(tensor: Tensor, value: IntegerTensor) -> Tensor | Rejected:
     """``tensor`` as the owner of ``value`` states it for the channel carrying it: over the
-    value's range, which its datatype must admit."""
+    value's range, in the encoding it needs (``stored_element``), which its datatype must
+    admit."""
     dtype = tensor.element.dtype
     low, high = ordinary_integer_bounds(dtype)
     least, greatest = integer_range(value)
     if not low <= least <= greatest <= high:
         return reject("dtype-storage", f"every value must be an integer admitted by {dtype.name}")
-    element = admit_element(dtype, (least, greatest))
-    return element if isinstance(element, Rejected) else Tensor(tensor.shape, element)
+    return Tensor(tensor.shape, stored_element(dtype, (least, greatest)))
 
 
 @cache

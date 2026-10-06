@@ -49,6 +49,7 @@ sys.meta_path.insert(0, RejectGraphDependencies())
 from finn.kernels.dotp import PackedDotpKernel
 from finn.kernels.matmul import MatMulKernel
 from finn.kernels.target import DspBlock, Platform
+from finn.dataflow.datatypes import ordinary_integer_bounds
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.base import Kernel
 from finn.kernels.configure import commit
@@ -112,7 +113,7 @@ class PlacedDotp(Space):
         platform=PLATFORM,
     )
     compute = PackedDotpKernel(
-        result_dtype=DataType["INT8"],
+        result_range=ordinary_integer_bounds(DataType["INT8"]),
         x_channel=x,
         w_channel=w,
         y_channel=y,

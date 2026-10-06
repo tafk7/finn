@@ -238,9 +238,10 @@ def test_a_dense_realization_reads_window_by_channel_rows_against_block_diagonal
         [BY_CHANNEL[c][k] if other == c else 0 for k in range(4) for other in range(3)]
         for c in range(3)
     ]
-    mask = 0xF
+    # Their owner states the INT4-typed weights in [-4, 3] as INT3: three bits a weight.
+    mask = 0x7
     expected = tuple(
-        sum((blocks[p][start + s] & mask) << (4 * (p * 4 + s)) for p in range(3) for s in range(4))
+        sum((blocks[p][start + s] & mask) << (3 * (p * 4 + s)) for p in range(3) for s in range(4))
         for start in range(0, 12, 4)
     )
     assert built.initializer == expected
@@ -263,7 +264,10 @@ def test_the_dense_realization_needs_known_weights_and_either_may_be_chosen_on_d
 @pytest.mark.parametrize(
     "weights,delivery,narrow",
     [
-        (WEIGHTS, WeightDelivery.MEMSTREAM, 1),  # no weight is INT4's -8
+        # Stated as INT3, whose minimum -4 they hold: not narrow.
+        (WEIGHTS, WeightDelivery.MEMSTREAM, 0),
+        # Stated as INT3, without its -4: narrow.
+        (((-3, 0, 0), (0, 3, 0), (0,) * 3, (0,) * 3), WeightDelivery.MEMSTREAM, 1),
         (((-8, 0, 0), (0,) * 3, (0,) * 3, (0,) * 3), WeightDelivery.MEMSTREAM, 0),
         (None, WeightDelivery.EXTERNAL, 0),  # weights at run time promise nothing
     ],

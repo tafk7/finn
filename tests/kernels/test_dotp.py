@@ -23,6 +23,7 @@ from finn.core.space import (
     inspection,
 )
 from finn.dataflow.gemm import Form
+from finn.dataflow.tensor import ScalarEncoding
 from finn.kernels.artifacts.abi import Clock, Data
 from finn.kernels.artifacts.abi import Derived as DerivedClock
 from finn.kernels.artifacts.build import emit_module
@@ -73,7 +74,6 @@ def test_a_core_declares_ports_folding_factors_and_facts_and_the_base_derives_th
     assert facts == {
         "compute.form",
         "compute.reshape_activations",
-        "compute.result_dtype",
         "compute.result_range",
         "compute.platform",
         "compute.x_channel",
@@ -171,11 +171,7 @@ def test_dsp48_carries_the_segment_length_the_rtl_ignores():
             "dotp-activation-width",
         ),
         ({"weights_dtype": DataType["INT27"]}, "dotp-weight-width"),
-        ({"result_dtype": DataType["UINT9"]}, "dtype-family"),
-        ({"result_dtype": DataType["FLOAT32"]}, "dtype-family"),
         ({"result_dtype": DataType["INT59"]}, "dotp-accumulator-width"),
-        # Narrower than one INT3 x INT3 product (3 + 3 - 1 bits): FinnLib's dotp refuses it.
-        ({"result_dtype": DataType["INT4"]}, "dotp-accumulator-width"),
         (
             {"result_dtype": DataType["INT49"], "platform": FULL_DSP48E2},
             "dotp-accumulator-width",
@@ -321,6 +317,33 @@ def test_the_results_stream_selects_accumulator_capacity(bits):
     point = kernel(result_dtype=DataType[f"INT{bits}"])
     assert point.y.element.dtype == DataType[f"INT{bits}"]
     assert dict(point.module.parameters)["ACCU_WIDTH"] == bits
+
+
+@pytest.mark.parametrize("space_type", (PackedDotpKernel, Int8Dsp58DotpKernel))
+@pytest.mark.parametrize(
+    "result_range,accumulator",
+    [
+        # INT3 x INT3 products need 5 bits (FinnLib's old floor); a narrow range does not.
+        ((-8, 7), "INT4"),
+        ((-1, 0), "INT1"),
+        # No negative result: UINT, one bit narrower than INT.
+        ((0, 511), "UINT9"),
+        ((0, 3), "UINT2"),
+        ((0, 0), "BINARY"),
+    ],
+)
+def test_each_core_accumulates_in_the_ranges_own_encoding(space_type, result_range, accumulator):
+    """A core derives its accumulator from the range its parent states: both cores compute
+    at the range's smallest encoding, UINT when no result is negative, below one product's
+    width (FinnLib 229b35f admits any ACCU_WIDTH >= 1)."""
+    facts = parameters()
+    facts.pop("result_dtype")
+    point = helpers.placed_dotp(
+        space_type, **facts, result_dtype=DataType[accumulator], result_range=result_range
+    )
+    assert point.result_dtype == DataType[accumulator]
+    assert point.y.element == ScalarEncoding(DataType[accumulator], result_range)
+    assert dict(point.module.parameters)["ACCU_WIDTH"] == DataType[accumulator].bitwidth()
 
 
 @pytest.mark.parametrize(

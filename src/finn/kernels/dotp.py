@@ -27,11 +27,13 @@ and its ``schedule`` walks ``m``, then ``n``, then ``k`` innermost; every
 port's beat sequence derives from it. ``reshape_activations`` reads (M, K, N)
 activations as (M, K * N): a densely realized depthwise operation.
 
-The result's element is ``result_dtype`` over ``result_range`` (the datatype's
-own by default), the accumulator encoding and the range its parent states (its
-channel refuses another), not a proof that an arbitrary frame fits it: the
-parent must bound each frame's accumulation to it (including intermediate
-sums).
+The results' range, ``result_range``, is its parent's statement (MatMul's);
+each core derives from it its accumulator (``result_dtype``, ``ACCU_WIDTH``),
+the encoding the ``y`` port presents over that range: both current cores
+compute exactly at the range's own encoding, ``INT<b>`` or ``UINT<b>`` (FinnLib's
+``p`` is the sum modulo ``2**ACCU_WIDTH``, read in either signedness). The range
+is not a proof that an arbitrary frame fits it: the parent must bound each
+frame's accumulation to it, every partial sum included.
 """
 
 from __future__ import annotations
@@ -65,7 +67,7 @@ from finn.kernels.base import CLOCK2X, Clocking, Kernel, extent_of
 from finn.kernels.channels import Channel
 from finn.kernels.port import AxiStreamPort
 from finn.kernels.target import DspBlock, Platform, dsp_widths
-from finn.kernels.values.domains import Integer
+from finn.kernels.values.domains import Integer, range_dtype
 from finn.kernels.values.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
 
 _DSP_VERSION = {DspBlock.DSP48E1: 1, DspBlock.DSP48E2: 2, DspBlock.DSP58: 3}
@@ -93,11 +95,9 @@ class DotpAxiKernel(Kernel):
 
     form: Form = Param(default=Form.DENSE)
     reshape_activations: bool = Param(default=False)
-    # The accumulator encoding it produces and the range of its results: its parent's
-    # statement (MatMul binds its result type and range), so that they are known before
-    # the results channel exists. ``()`` is the datatype's own range.
-    result_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
-    result_range: tuple[int, ...] = Param(default=())
+    # The range of its results: its parent's statement (MatMul binds its result range),
+    # so that it is known before the results channel exists.
+    result_range: tuple[int, int] = Param()
     platform: Platform = Param()
     # The channels dotp sits on: reference inputs, each a Channel placed beside it.
     x_channel: Channel = Param(required=False)
@@ -134,6 +134,16 @@ class DotpAxiKernel(Kernel):
         """``n`` split by PE and ``k`` by SIMD; ``m``, then ``n``, then the reduction."""
         return self.bound_schedule(order=(m, n, k), factors={n: self.pe, k: self.simd})
 
+    @derived(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
+    def result_dtype(self) -> QONNXDataType | Rejected:
+        """The accumulator: the encoding the core computes and presents its results in,
+        its own rule over the range it must hold (``_accumulator``)."""
+        least, greatest = self.result_range
+        return self._accumulator(least, greatest)
+
+    def _accumulator(self, least: int, greatest: int) -> QONNXDataType | Rejected:
+        return reject("dotp-core", "dotp_axi is placed through one of its core kernels")
+
     @derived
     def x_index(self) -> tuple[Index, ...]:
         return self.form.x
@@ -167,7 +177,7 @@ class DotpAxiKernel(Kernel):
         name="m_axis_output",
         endpoint=Endpoint.INITIATOR,
         channel=y_channel,
-        admits=Integer(signed=True),
+        admits=Integer(),
         schedule=schedule,
         index=(m, n),
         lanes=(n,),
@@ -336,9 +346,14 @@ class PackedDotpKernel(DotpAxiKernel):
     the weight channel's element: when its range excludes the type's most
     negative value (a value owner stated it), a weight needs no sign guard bit,
     which packs more lanes per DSP and admits weights as wide as the DSP's A
-    input. FinnLib stops simulation on a weight that breaks it. Its accumulator holds
-    at least one product (FinnLib's elaboration refuses a narrower ``ACCU_WIDTH``),
-    whatever range its results span.
+    input. FinnLib stops simulation on a weight that breaks it.
+
+    Its accumulator is the range's own encoding: FinnLib's packed lanes resolve the sum
+    modulo ``2**ACCU_WIDTH``, exact when the sum and every partial sum fit, which
+    the range bounds (FinnLib ``229b35f``: ``ACCU_WIDTH >= 1``), so one product's width
+    is no floor. It refuses an accumulator wider than the DSP's P path (48 bits, 58 on
+    DSP58): FinnLib counts the top lane's wraps past P, but a single lane wider than
+    P is not verified.
     """
 
     id = "finnlib.dotp_axi.dotp"
@@ -371,13 +386,10 @@ class PackedDotpKernel(DotpAxiKernel):
                 "dotp-weight-width",
                 "weights must fit the DSP A input, with a sign guard bit unless narrow",
             )
-        if self.y.element.bits < weights.bits + activation.bits - activation.signed:
-            return reject(
-                "dotp-accumulator-width",
-                "the accumulator must hold one product: ACCU_WIDTH >= WEIGHT_WIDTH + "
-                "ACTIVATION_WIDTH - SIGNED_ACTIVATIONS",
-            )
         return None
+
+    def _accumulator(self, least: int, greatest: int) -> QONNXDataType | Rejected:
+        return range_dtype(least, greatest)
 
     def _narrow_weights(self) -> bool:
         return self.narrow_weights
@@ -403,6 +415,10 @@ class Int8Dsp58DotpKernel(DotpAxiKernel):
 
     It takes signed weights of at most 8 bits and activations that fit 9 signed
     bits, broadcast (``DENSE``) or one channel per lane (``DEPTHWISE``).
+
+    Its accumulator is the range's own encoding: it sums in the DSP58's 58 bits and
+    presents the low ``ACCU_WIDTH``, exact when the sum fits, in either signedness:
+    ``ACCU_WIDTH`` in ``[1, 58]`` (FinnLib refuses any other), the DSP58's P path.
     """
 
     id = "finnlib.dotp_axi.dotp_8sx9_dsp58"
@@ -427,6 +443,9 @@ class Int8Dsp58DotpKernel(DotpAxiKernel):
 
     def _core_refusal(self) -> Rejected | None:
         return self.operand_refusal(self.dsp, self.x.element.dtype, self.w.element.dtype)
+
+    def _accumulator(self, least: int, greatest: int) -> QONNXDataType | Rejected:
+        return range_dtype(least, greatest)
 
     def sources(self) -> tuple[CopiedSource, ...]:
         return (
