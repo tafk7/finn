@@ -1,12 +1,14 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""An integer tensor is a value: walked once when it is made, not per configuration.
+"""An integer tensor is a value its producer states: shape, range and digest; its
+integers are loaded when first read.
 
-``INTEGER_TENSOR`` snapshots nested int tuples into an ``IntegerTensorValue``,
-whose shape is checked at construction and whose integers and range are
-computed once; recognizing it again is a type check. So configuring a point
-that holds weights does not re-walk them.
+``INTEGER_TENSOR`` snapshots nested int tuples into an ``IntegerTensorValue`` by
+one walk; a producer holding the integers in another form states the facts and
+how to load them. Recognizing a value again is a type check, equality compares
+digests, and configuring a point that holds weights reads only the stated facts:
+the integers are loaded when a memory image is packed.
 """
 
 from __future__ import annotations
@@ -19,10 +21,11 @@ from qonnx.core.datatype import DataType
 
 from finn.core.space import inspection
 from finn.dataflow.tensor import ScalarEncoding, Tensor
-from finn.kernels.values import semantics
 from finn.kernels.values.semantics import (
     INTEGER_TENSOR,
     IntegerTensorValue,
+    integer_bytes,
+    integer_digest,
     integer_range,
     integers,
 )
@@ -33,32 +36,67 @@ WEIGHTS = ((1, -2, 3), (4, 5, -6))
 
 def test_the_snapshot_is_a_value_made_once() -> None:
     value = INTEGER_TENSOR.freeze(WEIGHTS)
-    assert type(value) is IntegerTensorValue and value == WEIGHTS
+    assert type(value) is IntegerTensorValue and value == IntegerTensorValue.of(WEIGHTS)
     assert value.shape == (2, 3)
     assert value.integers == (1, -2, 3, 4, 5, -6) and integers(value) is value.integers
     assert value.range == (-6, 5) and integer_range(value) == (-6, 5)
+    assert value.digest == integer_digest((2, 3), integer_bytes((1, -2, 3, 4, 5, -6)))
     # Freezing the value again, copying or deep-copying it, is the value itself.
     assert INTEGER_TENSOR.freeze(value) is value
     assert copy.copy(value) is value and copy.deepcopy(value) is value
     restored = pickle.loads(pickle.dumps(value))
     assert type(restored) is IntegerTensorValue and restored == value
     assert INTEGER_TENSOR.values_equal(value, WEIGHTS)
+    assert not INTEGER_TENSOR.values_equal(value, ((1, -2, 3), (4, 5, -7)))
     with pytest.raises(AttributeError, match="immutable"):
         value.shape = (6,)
+
+
+def test_the_digest_is_of_shape_and_integers() -> None:
+    assert IntegerTensorValue.of(((1, 2),)) != IntegerTensorValue.of(((1,), (2,)))
+    assert IntegerTensorValue.flat((2, 1), (1, 2)) == IntegerTensorValue.of(((1,), (2,)))
+    # Beyond 64 bits the integers are digested as text: still a value.
+    wide = IntegerTensorValue.of(((2**70, -(2**70)),))
+    assert wide.range == (-(2**70), 2**70) and wide.integers == (2**70, -(2**70))
 
 
 @pytest.mark.parametrize("wrong", ((), ((1, 2), (3,)), [[1]], ((True,),), ((1.0,),), 3))
 def test_what_is_no_integer_tensor_is_refused(wrong: object) -> None:
     assert not INTEGER_TENSOR.accepts(wrong)
     with pytest.raises(TypeError):
-        IntegerTensorValue(wrong)
+        IntegerTensorValue.of(wrong)
 
 
-def test_a_new_configuration_does_not_walk_the_weights(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A new configuration does not recognize the same weights again: at 512 x 512
-    that walk costs about 700 ms a configuration."""
+def test_a_stated_value_loads_its_integers_once_and_checks_them() -> None:
+    loads: list[int] = []
+
+    def load() -> tuple[int, ...]:
+        loads.append(1)
+        return (1, -2, 3, 4, 5, -6)
+
+    digest = integer_digest((2, 3), integer_bytes((1, -2, 3, 4, 5, -6)))
+    stated = IntegerTensorValue((2, 3), (-6, 5), digest, load)
+    assert stated == IntegerTensorValue.of(WEIGHTS) and loads == []
+    assert stated.integers == (1, -2, 3, 4, 5, -6) and stated.integers and loads == [1]
+    wrong = IntegerTensorValue((2, 3), (-6, 6), digest, load)
+    with pytest.raises(ValueError, match="loaded other integers"):
+        wrong.integers
+
+
+def test_a_new_configuration_reads_only_the_stated_facts() -> None:
+    """Configuring a point reads the weights' shape and range, and only the memory image
+    their integers: at 512 x 512, recognizing the same weights again cost about 700 ms a
+    configuration."""
     int3 = DataType["INT3"]
-    weights = tuple(tuple((r + c) % 3 - 1 for c in range(4)) for r in range(4))
+    nested = tuple(tuple((r + c) % 3 - 1 for c in range(4)) for r in range(4))
+    loads: list[int] = []
+    flat = IntegerTensorValue.of(nested).integers
+
+    def load() -> tuple[int, ...]:
+        loads.append(1)
+        return flat
+
+    weights = IntegerTensorValue((4, 4), (-1, 1), integer_digest((4, 4), integer_bytes(flat)), load)
     base = matmul_point(
         m=3,
         n=4,
@@ -70,11 +108,12 @@ def test_a_new_configuration_does_not_walk_the_weights(monkeypatch: pytest.Monke
     )
     assert base.matmul.weight_tensor == Tensor((4, 4), ScalarEncoding(int3, (-1, 1)))
     handles = {item.key: item.reference for item in inspection.decisions(base)}
-    walks: list[object] = []
-    walk = semantics._shape
-    monkeypatch.setattr(semantics, "_shape", lambda value: walks.append(value) or walk(value))
     point = base.with_choices({handles["matmul.compute"]: "packed"})
     point = point.with_choices({handles["w.source.memstream.ram_style"]: "block"})
     assert point.matmul.weight_tensor.element.value_range == (-1, 1)
     assert point.w.source.value_range == (-1, 1)
-    assert walks == []
+    assert loads == []
+    folded = point.with_choices(
+        {handles["matmul.compute.packed.pe"]: 2, handles["matmul.compute.packed.simd"]: 2}
+    )
+    assert folded.w.source.image and loads == [1]

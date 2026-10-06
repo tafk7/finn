@@ -284,6 +284,32 @@ def test_a_successor_reuses_the_verdicts_its_change_does_not_reach(
     assert not any(key.endswith(("left", "right")) for key in found)
 
 
+def test_a_cases_trial_keeps_what_the_case_does_not_reach() -> None:
+    """Forcing's copies extend the configuration they are made from by one Decision and
+    start from its evaluations that did not read that Decision: a value the cases share
+    is derived once, not again in every case's trial."""
+    derivations: list[int] = []
+
+    class Shared(Space):
+        lanes: int = Param()
+
+        @derived
+        def width(self) -> int:
+            derivations.append(self.lanes)
+            return self.lanes
+
+        # Read first, on the configuration itself: the requirement's fact is ``width``.
+        wide: bool = Decision(
+            values=(False, True),
+            requires=(requires(width, "width-absent: no lanes", cases=(True,)),),
+        )
+        compute: Packed | Stub = Decision(CORES, width=width)
+
+    point = design_space(Shared(lanes=128))
+    assert forced(point) == {"compute": "stub"}
+    assert derivations == [128]
+
+
 def test_viable_lists_each_open_decision_with_its_viable_cases_never_a_forced_one() -> None:
     def viable(point: Any) -> dict[str, tuple[object, ...]]:
         return {item.key: item.cases for item in inspection.viable(point)}

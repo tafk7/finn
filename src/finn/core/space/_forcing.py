@@ -22,7 +22,10 @@ for both kinds.
 A snapshot finds its forced Decisions once, on the first read of an open
 Decision: rounds over the open Decisions in rank order, each forced value
 visible to the next (an adapter after the core it feeds is found in the same
-round), evaluated on copies that do not force themselves. A trial reads its
+round), evaluated on copies that do not force themselves. Each copy (one per
+forced value, one per case of a Decision over nodes) extends the one before it by
+one Decision and starts from that one's evaluations that did not read it, so a
+case's trial re-derives only what the case reaches. A trial reads its
 base's forced values for the Decisions it does not change; where the base
 forces nothing, the forced values of the configuration it would publish, found
 once and published with it, so a batch may commit a choice nested under a
@@ -166,6 +169,25 @@ def _reads(snapshot: Snapshot, roots: Iterable[int], own: int) -> dict[int, obje
     return found
 
 
+def _extended(base: Snapshot, assignments: Mapping[int, object], added: int) -> Snapshot:
+    """A copy of ``base`` (one that does not force) with ``assignments``: ``base``'s and the
+    Decision ``added``. It starts from every evaluation of ``base`` that did not read
+    ``added``, directly or through another: those answer the same in the copy."""
+    copy = Snapshot(base.model, base.parameters, assignments, forcing=False)
+    readers: dict[int, list[int]] = {}
+    for index, entry in base.cache.items():
+        for read in (*entry.dependencies, *(node for pair in entry.via for node in pair)):
+            readers.setdefault(read, []).append(index)
+    stale, pending = {added}, [added]
+    while pending:
+        for reader in readers.get(pending.pop(), ()):
+            if reader not in stale:
+                stale.add(reader)
+                pending.append(reader)
+    copy.cache.update((index, entry) for index, entry in base.cache.items() if index not in stale)
+    return copy
+
+
 def _unchanged(linked: LinkedModel, verdict: Verdict, values: Mapping[int, object]) -> bool:
     """Whether every Decision a verdict read still has the value it saw."""
     for index, seen in verdict.reads.items():
@@ -199,12 +221,7 @@ def _nodes(
             continue
         # The configuration plus the case, without revalidating the rest: a committed
         # choice nested under a selector not forced yet is not this case's refusal.
-        trial = Snapshot(
-            current.model,
-            current.parameters,
-            {**current.assignments, index: case},
-            forcing=False,
-        )
+        trial = _extended(current, {**current.assignments, index: case}, index)
         verdict, node = admitted(trial, scope)
         if node is not None:
             reads.update(_reads(trial, (node,), index))
@@ -268,11 +285,7 @@ def _find(snapshot: Snapshot) -> Found:
     }
     values: dict[int, object] = {}
 
-    def plain() -> Snapshot:
-        assignments = {**snapshot.assignments, **values}
-        return Snapshot(snapshot.model, snapshot.parameters, assignments, forcing=False)
-
-    current = plain()
+    current = Snapshot(snapshot.model, snapshot.parameters, snapshot.assignments, forcing=False)
     open_ = sorted(
         (index for index in linked.decisions if index not in snapshot.assignments),
         key=linked.ranks.__getitem__,
@@ -292,7 +305,7 @@ def _find(snapshot: Snapshot) -> Found:
                 continue
             if len(verdict.cases) == 1:
                 values[index] = verdict.cases[0]
-                current = plain()
+                current = _extended(current, {**snapshot.assignments, **values}, index)
                 progressed = True
             elif not verdict.cases and verdict.reasons:
                 detail = "; ".join(f"{case}: {why}" for case, why in verdict.reasons.items())

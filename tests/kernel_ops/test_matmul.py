@@ -27,6 +27,7 @@ from finn.custom_op.kernels.thresholding import Thresholding
 from finn.kernels.matmul import MatMulKernel
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.thresholding import ThresholdingAxiKernel
+from finn.kernels.values.semantics import IntegerTensorValue
 from finn.transformation.general import ApplyConfig
 from finn.transformation.kernels import InferKernelTensors
 from kernel_ops.models import WEIGHTS, X, matmul_model, schema_digest
@@ -61,7 +62,9 @@ def test_facts_come_from_the_model() -> None:
     assert facts.root is MatMul.root() and facts.owned == ("w",)
     formals = facts.formals()
     assert (formals["m"], formals["k"], formals["n"]) == (3, 4, 4)
-    assert formals["weights"] == tuple(tuple(int(v) for v in row) for row in WEIGHTS)
+    assert formals["weights"] == IntegerTensorValue.of(
+        tuple(tuple(int(v) for v in row) for row in WEIGHTS)
+    )
     # The output keeps the input's leading axes.
     assert op(model).output_tensors() == {
         "y": ((1, 3, 4), op(model).view("result_tensor").element.dtype)

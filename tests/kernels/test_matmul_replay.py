@@ -164,8 +164,8 @@ def test_a_marker_rule_names_a_whole_one_bit_marker_or_one_bit_of_a_wider_one():
         (StreamMarker("olst", MarkerKind.LOOP_END, 2),),
     )
     element, form = ScalarEncoding(DataType["INT3"]), vector_major((3, 4), 2)
-    contract = StreamContract(transport, element, form, markers={"olst[1]": LevelEnd(2)})
+    contract = StreamContract(transport, element, form, markers=(("olst[1]", LevelEnd(2)),))
     assert contract.rules == {"olst[1]": LevelEnd(2)}
     for key in ("olst[2]", "olst"):
         with pytest.raises(ValueError, match="marker bit"):
-            StreamContract(transport, element, form, markers={key: LevelEnd(2)})
+            StreamContract(transport, element, form, markers=((key, LevelEnd(2)),))

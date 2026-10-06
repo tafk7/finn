@@ -24,6 +24,7 @@ from finn.custom_op.kernels.base import (
     Shapes,
     admitted,
     datatype,
+    integer_tensor,
     rows,
     shape,
 )
@@ -82,8 +83,7 @@ class MatMul(KernelOp):
             values = model.get_initializer(b)
             if values is None:
                 raise KernelOpError(f"{label}: {b} is not an initializer")
-            weights = tuple(tuple(int(value) for value in row) for row in values)
-            return {**common, "weights": weights}
+            return {**common, "weights": integer_tensor(values)}
 
         return Facts(root, MatMulKernel, (*key, digest), formals, self.edges, ("w",))
 

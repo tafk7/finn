@@ -81,9 +81,26 @@ def test_nominal_semantics_distinguish_bool_and_snapshot_mutable_values() -> Non
     assert frozen == [1, 2]
 
 
+@dataclass(frozen=True)
+class Pair:
+    left: int
+    right: tuple[int, ...]
+
+
 @dataclass
 class Bag:
     values: list[int]
+
+
+def test_a_frozen_dataclass_is_its_own_snapshot_and_anything_else_is_copied() -> None:
+    """The default snapshot's contract: a frozen value class holds immutable values, so
+    its instance is shared; a mutable class, even one holding the same fields, is not."""
+
+    pair = Pair(1, (2, 3))
+    assert default_semantics(Pair).freeze(pair) is pair
+    bag = Bag([1, 2])
+    frozen = default_semantics(Bag).freeze(bag)
+    assert frozen is not bag and frozen.values is not bag.values and frozen == bag
 
 
 def test_declared_equality_is_independent_of_python_equality() -> None:

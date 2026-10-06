@@ -340,7 +340,9 @@ class AxiStreamPort(Port):
     def contract(self) -> StreamContract:
         presented = self.presented
         transport = self.transport
-        markers = {transport.markers[0].signal: presented.markers[0]} if transport.markers else {}
+        markers = (
+            ((transport.markers[0].signal, presented.markers[0]),) if transport.markers else ()
+        )
         return StreamContract(
             transport, self.element, presented.form, presented.repetition, markers
         )

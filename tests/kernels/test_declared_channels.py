@@ -155,7 +155,7 @@ class Replaying(Space):
         beat = AxisBeat("s_axis", DataType["INT4"], 2, endpoint=Endpoint.TARGET, last=True)
         transport = beat.native(clock="ap_clk", reset="ap_rst_n")
         form = vector_major((2, 4), 2).replayed(3, inner_beats=2)
-        return StreamContract(transport, INT4, form, markers={"s_axis_tlast": LevelEnd(2)})
+        return StreamContract(transport, INT4, form, markers=(("s_axis_tlast", LevelEnd(2)),))
 
     exports = {PORT: {input_channel: port}}
 

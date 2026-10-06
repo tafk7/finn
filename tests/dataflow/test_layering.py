@@ -22,4 +22,16 @@ def test_the_values_import_no_other_layer() -> None:
     ``finn.core.space`` (or any other FINN layer) is a violation."""
 
     assert BY_NAME["dataflow"].imports == ()
-    assert BY_NAME["tests.dataflow"].imports == ("dataflow", "tests.layering")
+    assert BY_NAME["tests.dataflow"].imports == (
+        "dataflow",
+        "tests.layering",
+        "tests.value_classes",
+    )
+
+
+def test_the_values_and_the_kernels_may_import_numpy_and_nothing_else() -> None:
+    """numpy is the one third-party package beside QONNX's datatypes (and pyslang, for
+    the kernels' pin checks) that the values and the kernels may import."""
+
+    assert BY_NAME["dataflow"].packages == ("qonnx.core.datatype", "numpy")
+    assert BY_NAME["kernels"].packages == ("qonnx.core.datatype", "numpy", "pyslang")

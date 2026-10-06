@@ -3,16 +3,17 @@
 
 """The bind cache: kernel and node-root points keyed by the facts they were bound from, by value.
 
-qonnx builds a fresh op instance for every query, and binding reads the weights
-into integers (hundreds of milliseconds for 512 x 512). So an op binds through
-one process-wide cache, three kinds of point:
+qonnx builds a fresh op instance for every query, and a point answers each query
+from what it has evaluated (its views, its forced Decisions), which a fresh
+binding would derive again. So an op binds through one process-wide cache,
+three kinds of point:
 
 - its **kernel** alone, from the kernel's formals: what inference reads (the
   fact-level views, ``result_tensor``), before any output of the node is known;
 - its **node root**, nothing chosen, from the same formals and the tensor of
   each edge the graph states (``x_tensor``, ``y_tensor``);
-- a node root with **choices** replayed, because replay re-derives the weights'
-  values for every new configuration and costs as much as a bind.
+- a node root with **choices** replayed, because replay evaluates a new
+  configuration from its facts again.
 
 A key is the facts by value, an initializer by its value summary's
 ``content_digest``, beside the class it binds.
@@ -38,10 +39,10 @@ from finn.kernels.base import Kernel
 @dataclass(frozen=True)
 class Facts:
     """What binding a node reads: its op's node root and kernel classes; the key that
-    identifies the kernel's formals by value; the formals (a thunk: the weights become
-    integers only on a miss); the tensor of each edge, by port, as the graph states it
-    (a thunk: an output's is known only once inference wrote it); and the parameter
-    ports whose value the node owns (an initializer's)."""
+    identifies the kernel's formals by value; the formals (a thunk, called only on a miss);
+    the tensor of each edge, by port, as the graph states it (a thunk: an output's is known
+    only once inference wrote it); and the parameter ports whose value the node owns (an
+    initializer's)."""
 
     root: type[Kernel]
     kernel: type[Kernel]

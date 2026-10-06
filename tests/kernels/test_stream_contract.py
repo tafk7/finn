@@ -81,7 +81,7 @@ def test_tile_is_the_mvau_weight_order_and_packs_the_known_image():
     assert second == ((0, 2), (0, 3), (1, 2), (1, 3))
     matrix = ((-4, -3, -2, -1), (0, 1, 2, 3), (3, 2, 1, 0), (-1, -2, -3, -4))
     # Hand-packed INT3 lanes: p0/s0, p0/s1, p1/s0, p1/s1, low first.
-    assert pack(weights, matrix, 3) == (0x22C, 0x6BE, 0xDD3, 0x941)
+    assert pack(weights, sum(matrix, ()), 3) == (0x22C, 0x6BE, 0xDD3, 0x941)
 
 
 def test_repetition_and_replay_are_stride_zero_loops():
@@ -93,7 +93,7 @@ def test_repetition_and_replay_are_stride_zero_loops():
     assert [beat[0] for beat in replayed.positions()][:6] == [(0, 0), (0, 2)] * 3
     with pytest.raises(ValueError, match="divide"):
         vector_major((5,), 2)
-    with pytest.raises(ValueError, match="shape"):
+    with pytest.raises(ValueError, match="has 4 integers, not 3"):
         pack(vector, (1, 2, 3), 4)
     assert LevelEnd(3).asserted(2) and not LevelEnd(3).asserted(3)
 
@@ -224,10 +224,13 @@ def test_repetition_direction_and_marker_rules_are_checked():
     )
     last = (StreamMarker("s_m", MarkerKind.LAST),)
     produced = StreamContract(
-        native("s", 6, Endpoint.INITIATOR, markers=last), INT3, form, markers={"s_m": LevelEnd(1)}
+        native("s", 6, Endpoint.INITIATOR, markers=last),
+        INT3,
+        form,
+        markers=(("s_m", LevelEnd(1)),),
     )
     required = StreamContract(
-        native("s", 6, Endpoint.TARGET, markers=last), INT3, form, markers={"s_m": LevelEnd(2)}
+        native("s", 6, Endpoint.TARGET, markers=last), INT3, form, markers=(("s_m", LevelEnd(2)),)
     )
     assert "channel-marker" in mismatch_codes(
         compatibility(produced, required, source_is_top=False, sink_is_top=False)
@@ -235,7 +238,7 @@ def test_repetition_direction_and_marker_rules_are_checked():
     # A marker closing every beat is a constant: met by any producer, from the producer's
     # own marker where it offers one, otherwise tied high.
     every = StreamContract(
-        native("s", 6, Endpoint.TARGET, markers=last), INT3, form, markers={"s_m": LevelEnd(1)}
+        native("s", 6, Endpoint.TARGET, markers=last), INT3, form, markers=(("s_m", LevelEnd(1)),)
     )
     unmarked = contract(form, Endpoint.INITIATOR)
     assert compatibility(unmarked, every, source_is_top=False, sink_is_top=False) == ()
@@ -247,7 +250,7 @@ def test_contracts_reject_lanes_wider_than_the_word_and_unknown_marker_rules():
     with pytest.raises(ValueError, match="exceed"):
         contract(vector_major((4,), 4), Endpoint.TARGET, width=8)
     with pytest.raises(ValueError, match="marker"):
-        contract(vector_major((4,), 2), Endpoint.TARGET, markers={"missing": LevelEnd(2)})
+        contract(vector_major((4,), 2), Endpoint.TARGET, markers=(("missing", LevelEnd(2)),))
     # A marker closes a loop level of its form: three beats close none of two.
     last = (StreamMarker("s_m", MarkerKind.LAST),)
     with pytest.raises(ValueError, match="closes no loop level"):
@@ -255,7 +258,7 @@ def test_contracts_reject_lanes_wider_than_the_word_and_unknown_marker_rules():
             native("s", 6, Endpoint.TARGET, markers=last),
             INT3,
             vector_major((4,), 2),
-            markers={"s_m": LevelEnd(3)},
+            markers=(("s_m", LevelEnd(3)),),
         )
 
 

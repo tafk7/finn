@@ -53,8 +53,6 @@ alone, without its channels, its interfaces are idle.
 
 from __future__ import annotations
 
-from typing import cast
-
 from finn.core.space import (
     ConstraintGroup,
     Decision,
@@ -84,7 +82,9 @@ from finn.kernels.values.semantics import (
     INTEGER_TENSOR,
     QONNX_DATATYPE_VALUE_SEMANTICS,
     IntegerTensor,
+    IntegerTensorValue,
     integer_range,
+    integers,
 )
 
 _CARRIED = (
@@ -193,16 +193,19 @@ class MatMulKernel(Kernel):
         weights = self.weights
         if not self.dense_view:
             return weights
-        channels = self.n
-
-        def blocks(operand: object) -> IntegerTensor:
-            return tuple(
-                tuple(value if channel == output else 0 for output, value in enumerate(row))
-                for row in cast("tuple[tuple[int, ...], ...]", operand)
-                for channel in range(channels)
-            )
-
-        return tuple(blocks(item) for item in weights) if self.multi_set else blocks(weights)
+        # Densifying reads the integers: the dense realization of a depthwise operation
+        # builds its weights when it is chosen.
+        channels, flat = self.n, integers(weights)
+        dense = [
+            value if channel == output else 0
+            for row in range(0, len(flat), channels)
+            for channel in range(channels)
+            for output, value in enumerate(flat[row : row + channels])
+        ]
+        shape = (self.k * channels, channels)
+        return IntegerTensorValue.flat(
+            (self.weight_sets, *shape) if self.multi_set else shape, dense
+        )
 
     @derived(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
     def result_type(self) -> QONNXDataType | Rejected:

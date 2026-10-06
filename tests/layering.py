@@ -70,8 +70,8 @@ _KERNEL_STACK = ("space", "dataflow", "kernels.artifacts", "kernels")
 LAYERS: tuple[Layer, ...] = (
     # The generic Space engine: the standard library and its native dependency.
     Layer("space", ("finn.core.space",), (), ("greenlet",), "tests/core/space"),
-    # Canonical logical values: QONNX's datatypes, no engine.
-    Layer("dataflow", ("finn.dataflow",), (), ("qonnx.core.datatype",), "tests/dataflow"),
+    # Canonical logical values: QONNX's datatypes and numpy, no engine.
+    Layer("dataflow", ("finn.dataflow",), (), ("qonnx.core.datatype", "numpy"), "tests/dataflow"),
     # Module build values and their emission, below every Space; pyslang checks
     # declared pins against the RTL.
     Layer("kernels.artifacts", ("finn.kernels.artifacts",), (), ("pyslang",), "tests/kernels"),
@@ -80,7 +80,7 @@ LAYERS: tuple[Layer, ...] = (
         "kernels",
         ("finn.kernels",),
         ("space", "dataflow", "kernels.artifacts"),
-        ("qonnx.core.datatype", "pyslang"),
+        ("qonnx.core.datatype", "numpy", "pyslang"),
         "tests/kernels",
     ),
     # The KernelOps: qonnx custom ops that each bind one kernel point, on ONNX nodes.
@@ -136,19 +136,22 @@ LAYERS: tuple[Layer, ...] = (
     Layer("parked", ("finn.parked",), (), ANY, None),
     # This table: the standard library only. Every tree's tests import it.
     Layer("tests.layering", ("layering",), (), (), "tests/core/space"),
+    # The default snapshot's contract on value classes: the standard library only.
+    # The engine, dataflow and kernel trees check their own classes with it.
+    Layer("tests.value_classes", ("value_classes",), (), (), "tests/core/space"),
     # The tests of the lower layers use only those layers and this table
     # (_typeshed: stubs named under TYPE_CHECKING).
     Layer(
         "tests.core.space",
         ("core.space",),
-        ("space", "tests.layering"),
+        ("space", "tests.layering", "tests.value_classes"),
         ("pytest", "_typeshed"),
         "tests/core/space",
     ),
     Layer(
         "tests.dataflow",
         ("dataflow",),
-        ("dataflow", "tests.layering"),
+        ("dataflow", "tests.layering", "tests.value_classes"),
         ("pytest", "qonnx.core.datatype"),
         "tests/dataflow",
     ),
@@ -159,7 +162,7 @@ LAYERS: tuple[Layer, ...] = (
     Layer(
         "tests.kernels",
         ("kernels",),
-        (*_KERNEL_STACK, "util", "tests.layering", "tests.core.space"),
+        (*_KERNEL_STACK, "util", "tests.layering", "tests.value_classes", "tests.core.space"),
         ("pytest", "numpy", "pyslang", "qonnx.core.datatype"),
         "tests/kernels",
         also=("finn.transformation.fpgadataflow.transpose_decomposition",),

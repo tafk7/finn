@@ -82,15 +82,27 @@ class ValueSemantics(Generic[T]):
 
 
 def default_semantics(value_type: type[T]) -> ValueSemantics[T]:
-    """Nominal Python values with detached snapshots and structural equality."""
+    """Nominal Python values with detached snapshots and structural equality.
 
+    An instance of a frozen dataclass is its own snapshot, shared by every read:
+    its fields cannot be rebound, and the contract is that a frozen value class
+    holds immutable values; one that holds a mutable field states its own
+    semantics. Anything else is deep-copied.
+    """
+
+    params = getattr(value_type, "__dataclass_params__", None)
+    frozen = params is not None and params.frozen
     return ValueSemantics(
         type_token=value_type,
         name=value_type.__qualname__,
         recognizes=lambda value: type(value) is value_type,
         equal=lambda left, right: left == right,
-        snapshot=deepcopy,
+        snapshot=_itself if frozen else deepcopy,
     )
+
+
+def _itself(value: T) -> T:
+    return value
 
 
 def unrecognized(semantics: ValueSemantics[T]) -> str:

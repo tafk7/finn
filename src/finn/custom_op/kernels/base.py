@@ -35,11 +35,14 @@ inapplicable one too (it carries no finding of its own).
 
 from __future__ import annotations
 
+from array import array
 from collections.abc import Iterable, Mapping
 from dataclasses import fields
 from math import prod
 from typing import TYPE_CHECKING, Any, ClassVar, TypeGuard, TypeVar
 
+import numpy as np
+import numpy.typing as npt
 from qonnx.analysis.tensor_value_summary import (
     UnsupportedTensorValueError,
     initializer_value_summary,
@@ -62,6 +65,7 @@ from finn.kernels.base import Kernel
 from finn.kernels.channels import Channel
 from finn.kernels.configure import describe
 from finn.kernels.target import DspBlock, Platform, Target
+from finn.kernels.values.semantics import IntegerTensorValue, integer_bytes, integer_digest
 
 if TYPE_CHECKING:
     from onnx import NodeProto
@@ -201,6 +205,21 @@ def admitted(model: ModelWrapper, tensor: str, dtype: QONNXDataType, label: str)
             f"{label}: {tensor} is annotated {dtype.name} and holds values over {list(observed)}"
         )
     return str(summary.content_digest)
+
+
+def integer_tensor(values: npt.NDArray[Any]) -> IntegerTensorValue:
+    """An initializer of integers (``admitted``) as an integer tensor value: its shape,
+    range and digest read from the array, its integers loaded only when first read (a
+    memory image packs them)."""
+    found = np.asarray(values)
+    shape = tuple(int(extent) for extent in found.shape)
+    least, greatest = int(found.min()), int(found.max())
+    if not -(2**63) <= least <= greatest < 2**63:
+        return IntegerTensorValue.flat(shape, [int(value) for value in found.ravel()])
+    stored = array("q")
+    stored.frombytes(found.astype("=i8").tobytes())
+    digest = integer_digest(shape, integer_bytes(stored))
+    return IntegerTensorValue(shape, (least, greatest), digest, lambda: stored)
 
 
 # -- replay ------------------------------------------------------------------------------
@@ -545,6 +564,7 @@ __all__ = [
     "committed",
     "datatype",
     "edge_tensor",
+    "integer_tensor",
     "kernel_op",
     "read_target",
     "refusal",

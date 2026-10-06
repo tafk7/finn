@@ -7,8 +7,8 @@ The package sits below the physical kernels (``finn.kernels``) built on its
 values, beside the generic Space engine (``finn.core.space``) and independent
 of it: it states values, and a refusal in the engine's terms is the kernels'
 (``finn.kernels.values.domains``). The layer table, ``tests/layering.py``,
-states the whole order. ``finn.dataflow`` imports only ``qonnx.core.datatype``
-and the standard library.
+states the whole order. ``finn.dataflow`` imports only ``qonnx.core.datatype``,
+numpy and the standard library.
 
 - ``datatypes``: the QONNX scalar datatype value boundary.
 - ``tensor``: the fact a channel carries, a ``Tensor`` of one ``ScalarEncoding``.
