@@ -81,7 +81,7 @@ def _standard(model: ModelWrapper, node: NodeProto) -> None:
             model.set_tensor_shape(name, dims)
 
 
-class InferKernelTensors(Transformation):  # type: ignore[misc]
+class InferKernelTensors(Transformation):
     """One pass in graph order; see the module docstring."""
 
     def apply(self, model: ModelWrapper) -> tuple[ModelWrapper, bool]:

@@ -77,7 +77,7 @@ def recorded_build(
     seen: list[tuple[str, object]] = []
 
     def recorder(name: str) -> type[Transformation]:
-        class Recorded(Transformation):  # type: ignore[misc]
+        class Recorded(Transformation):
             def __init__(self, *args: object, toolchain: object = None, **kwargs: object):
                 super().__init__()
                 if name in TOOL_STEPS:

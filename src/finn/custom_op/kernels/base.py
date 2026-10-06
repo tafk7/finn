@@ -193,7 +193,10 @@ def admitted(model: ModelWrapper, tensor: str, dtype: QONNXDataType, label: str)
         low, high = ordinary_integer_bounds(dtype)
     except DatatypeError:
         return str(summary.content_digest)  # not an ordinary integer: the kernel refuses it
-    observed = (int(summary.minimum), int(summary.maximum))
+    # Known defect, fixed on another lane (delete this ignore with it): minimum and
+    # maximum are None for an empty initializer, which is_integral admits, so this
+    # raises TypeError rather than KernelOpError.
+    observed = (int(summary.minimum), int(summary.maximum))  # type: ignore[arg-type]
     if not low <= observed[0] <= observed[1] <= high:
         raise KernelOpError(
             f"{label}: {tensor} is annotated {dtype.name} and holds values over {list(observed)}"

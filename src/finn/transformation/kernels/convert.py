@@ -131,7 +131,7 @@ def _thresholding(model: ModelWrapper, node: NodeProto) -> NodeProto | None:
     )
 
 
-class ToKernelOps(Transformation):  # type: ignore[misc]
+class ToKernelOps(Transformation):
     """Each node a KernelOp binds rewritten as one, the target stated in the model."""
 
     def __init__(self, target: Target) -> None:
