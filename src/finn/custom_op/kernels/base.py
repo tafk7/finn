@@ -40,6 +40,7 @@ from math import prod
 from typing import TYPE_CHECKING, Any, ClassVar, TypeVar
 
 import numpy as np
+import numpy.typing as npt
 from qonnx.analysis.tensor_value_summary import (
     UnsupportedTensorValueError,
     initializer_value_summary,
@@ -194,7 +195,7 @@ def admitted(model: ModelWrapper, tensor: str, dtype: QONNXDataType, label: str)
     return str(summary.content_digest)
 
 
-def integer_tensor(values: np.ndarray) -> IntegerTensorValue:
+def integer_tensor(values: npt.NDArray[Any]) -> IntegerTensorValue:
     """An initializer of integers (``admitted``) as an integer tensor value: its shape,
     range and digest read from the array, its integers loaded only when first read (a
     memory image packs them)."""

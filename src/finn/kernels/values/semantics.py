@@ -104,6 +104,8 @@ class IntegerTensorValue:
     shape: tuple[int, ...]
     range: tuple[int, int]
     digest: str
+    _load: Callable[[], Sequence[int]]
+    _integers: tuple[int, ...] | None
 
     def __init__(
         self,
@@ -134,7 +136,7 @@ class IntegerTensorValue:
         flat = cast(tuple[object, ...], values)
         for _ in shape[1:]:
             flat = tuple(chain.from_iterable(cast(tuple[tuple[object, ...], ...], flat)))
-        return cls.flat(shape, cast(tuple[int, ...], flat))
+        return cls._made(shape, cast(tuple[int, ...], flat))
 
     @classmethod
     def flat(cls, shape: tuple[int, ...], integers: Sequence[int]) -> IntegerTensorValue:
@@ -142,6 +144,10 @@ class IntegerTensorValue:
         found = tuple(integers)
         if len(found) != prod(shape) or any(type(value) is not int for value in found):
             raise TypeError(f"an integer tensor of shape {tuple(shape)} holds {prod(shape)} ints")
+        return cls._made(shape, found)
+
+    @classmethod
+    def _made(cls, shape: tuple[int, ...], found: tuple[int, ...]) -> IntegerTensorValue:
         made = cls(
             shape, (min(found), max(found)), integer_digest(shape, integer_bytes(found)), tuple
         )
