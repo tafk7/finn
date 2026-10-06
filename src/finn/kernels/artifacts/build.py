@@ -150,6 +150,13 @@ def _instance(label: str) -> str:
     return "u_" + label.replace(".", "_")
 
 
+def instance_net(label: str, pin: str) -> str:
+    """The net of instance ``label``'s ``pin`` in the netlist: what a testbench reads, by
+    hierarchical name, to observe a link at that end. Present for every input pin and for
+    every output pin something reads."""
+    return f"n__{_instance(label)}__{pin}"
+
+
 class _Netlist:
     """The text of one composed module, gathered section by section."""
 
@@ -165,7 +172,7 @@ class _Netlist:
             return pin
         if self.pins[instance][pin].direction is Direction.OUT:
             self.read.add((instance, pin))
-        return f"n__{_instance(instance)}__{pin}"
+        return instance_net(instance, pin)
 
     def width(self, instance: str | None, pin: str) -> int:
         return (self.root if instance is None else self.pins[instance])[pin].width
@@ -291,10 +298,8 @@ class _Netlist:
             for pin, info in self.pins[label].items():
                 used = info.direction is Direction.IN or (label, pin) in self.read
                 if used:
-                    nets.append(f"    logic{_width(info.width)} n__{_instance(label)}__{pin};")
-                connections.append(
-                    f"        .{pin}({f'n__{_instance(label)}__{pin}' if used else ''})"
-                )
+                    nets.append(f"    logic{_width(info.width)} {instance_net(label, pin)};")
+                connections.append(f"        .{pin}({instance_net(label, pin) if used else ''})")
             parameters = ""
             if leaf.abi.parameters:
                 parameters = (
@@ -321,4 +326,4 @@ def netlist(module: Composed, name: str) -> str:
     return _Netlist(module).text(name)
 
 
-__all__ = ["EmittedModule", "emit_module", "netlist"]
+__all__ = ["EmittedModule", "emit_module", "instance_net", "netlist"]
