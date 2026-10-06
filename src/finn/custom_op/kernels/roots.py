@@ -36,7 +36,7 @@ cases (``requires``) read the device the model is built for.
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
-from typing import TYPE_CHECKING, Any, get_type_hints
+from typing import TYPE_CHECKING, Any, cast, get_type_hints
 
 from finn.core.space import Param, composite
 from finn.core.space.declarations import UNSUPPLIED
@@ -59,12 +59,13 @@ def placed(
     references = {
         reference: channels[port] for port, reference in op.references.items() if port in channels
     }
-    kernel: Any = op.kernel(**formals, **references)
+    kernel: Any = cast(Any, op.kernel)(**formals, **references)
     for port in valued:
         tensor, value = op.parameters[port]
         channels[port].tensor = getattr(kernel, tensor)
         channels[port].contents = getattr(kernel, value)
-    return kernel
+    placement: Kernel = kernel
+    return placement
 
 
 def _formal(declared: Any) -> Any:
@@ -81,7 +82,7 @@ def _formal(declared: Any) -> Any:
 def node_root(op: type[KernelOp]) -> type[Kernel]:
     """``op``'s node root class; see the module docstring."""
     hints = get_type_hints(op.kernel)
-    members: dict[str, object] = {}
+    members: dict[str, Any] = {}
     annotations: dict[str, object] = {}
     for name in op.formals:
         members[name], annotations[name] = _formal(getattr(op.kernel, name)), hints[name]
@@ -95,7 +96,8 @@ def node_root(op: type[KernelOp]) -> type[Kernel]:
             if port in op.parameters:
                 channels[port] = Channel(port=f"{side}{index}_V", platform=platform)
                 continue
-            tensor = members[f"{port}_tensor"] = Param()
+            tensor: Tensor = Param()
+            members[f"{port}_tensor"] = tensor
             annotations[f"{port}_tensor"] = Tensor
             channels[port] = Channel(tensor=tensor, port=f"{side}{index}_V", platform=platform)
     formals = {name: members[name] for name in op.formals}
