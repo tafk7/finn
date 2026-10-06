@@ -40,13 +40,13 @@ from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.partition import partition_root
 from finn.dataflow.tensor import ScalarEncoding
 from finn.kernels.configure import undecided
+from finn.kernels.explore import Placeholder
 from finn.kernels.matmul import column_range
 from finn.kernels.values.domains import range_dtype
 from finn.transformation.fpgadataflow.kernel_partitions import partition_facts
 from finn.transformation.kernels import (
-    CommitKernelChoices,
+    ExploreKernelChoices,
     InferKernelTensors,
-    PlaceholderPolicy,
     ToKernelOps,
     resolve_target,
 )
@@ -175,7 +175,7 @@ def kernel_ops(case: Case, target: Any = ULTRA96, compute: str | None = None) ->
         for node in model.graph.node:
             if node.op_type == "MatMul":
                 kernel_op(model, node).save({"compute": compute})
-    return model.transform(CommitKernelChoices(PlaceholderPolicy(lanes=2)))
+    return model.transform(ExploreKernelChoices([Placeholder(lanes=2)]))
 
 
 def _matmuls(model: ModelWrapper) -> list[Any]:
