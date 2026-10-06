@@ -348,7 +348,7 @@ def placed(module: Composed, label: str) -> Leaf:
 
 
 def pin_names(module: Composed | Leaf) -> set[str]:
-    return {port.name for port in module.pins.pins}
+    return {port.name for port in module.abi.pins}
 
 
 ADAPTER_RAM_STYLES = "*.adapter.*.ram_style"

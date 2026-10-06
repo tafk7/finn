@@ -4,10 +4,11 @@
 """A module to build: one FinnLib module (``Leaf``), or a flat netlist of them (``Composed``).
 
 A ``Leaf`` is a FinnLib module bound to a configuration: its name, parameters
-and pins, the files that provide it, the data it reads, and what it holds while
-part of it is idle (``Held``). A ``Composed`` module is a ``Fragment`` with
-pins: leaf instances, the ``Link`` of each stream hop between their pins and
-the control buses it presents (``BusExport``). Every instance is a leaf: the
+and ABI (``Abi``: its pins, parameters as RTL spells them and aligned clocks),
+the files that provide it, the data it reads, and what it holds while part of
+it is idle (``Held``). A ``Composed`` module is a ``Fragment`` with an ABI:
+leaf instances, the ``Link`` of each stream hop between their pins and the
+control buses it presents (``BusExport``). Every instance is a leaf: the
 netlist is flat, and grouping it into modules is a later decision of the flow.
 
 A fragment names its instances by labels relative to its owner (``compute.packed``);
@@ -122,13 +123,13 @@ class ProducerIdentity:
             raise BuildError("a producer needs an id and a version")
 
 
-# -- one module's pins and what it holds ---------------------------------------------------
+# -- one module's ABI and what it holds ----------------------------------------------------
 
 
 @dataclass(frozen=True, slots=True)
-class Pins:
-    """A module's pins in declared order, its parameters as RTL spells them, and its
-    aligned clocks."""
+class Abi:
+    """A module's ABI: its pins in declared order, its parameters as RTL spells them,
+    and its aligned clocks."""
 
     pins: tuple[Pin, ...]
     parameters: tuple[tuple[str, str], ...] = ()
@@ -167,7 +168,7 @@ class Leaf:
     implementation_version: str
     name: str
     parameters: ScalarTable
-    pins: Pins
+    abi: Abi
     sources: tuple[CopiedSource, ...] = ()
     data: tuple[GeneratedData, ...] = ()
     held: Held = Held()
@@ -179,7 +180,7 @@ class Leaf:
             raise BuildError(f"{self.name!r} is not an RTL module identifier")
         parameters = _table(self.parameters, label="module parameter table")
         spelled = tuple((name, _rtl_scalar(value)) for name, value in parameters)
-        if self.pins.parameters != spelled:
+        if self.abi.parameters != spelled:
             raise BuildError(
                 "the pins' parameter strings must be the canonical RTL spellings of the "
                 "typed module parameter table"
@@ -189,7 +190,7 @@ class Leaf:
             raise BuildError("a module's sources are copied sources")
         if any(not isinstance(item, GeneratedData) for item in data):
             raise BuildError("a module's data files are generated data")
-        pins = abi_pins(self.pins.pins)
+        pins = abi_pins(self.abi.pins)
         for pin, value in self.held.inputs:
             info = pins.get(pin)
             if info is None or info.direction is not Direction.IN:
@@ -340,20 +341,20 @@ def merge(*fragments: Fragment) -> Fragment:
 
 @dataclass(frozen=True)
 class Composed:
-    """A flat netlist with pins: one generated module. Well formed when its links name
+    """A flat netlist with an ABI: one generated module. Well formed when its links name
     pins that exist and every instance input and root output has exactly one driver."""
 
     implementation_id: str
     implementation_version: str
     stem: str
-    pins: Pins
+    abi: Abi
     fragment: Fragment
 
     def __post_init__(self) -> None:
         if not self.implementation_id or not self.implementation_version:
             raise BuildError("a module needs an implementation id and version")
         sanitize_stem(self.stem)
-        root = abi_pins(self.pins.pins)
+        root = abi_pins(self.abi.pins)
         leaves = dict(self.fragment.instances)
         for label in leaves:
             if not _LABEL.fullmatch(label):
@@ -365,7 +366,7 @@ class Composed:
             leaf = leaves.get(instance)
             if leaf is None:
                 raise BuildError(f"{what} names {instance!r}, which the netlist does not place")
-            return abi_pins(leaf.pins.pins)
+            return abi_pins(leaf.abi.pins)
 
         for link in self.fragment.links:
             for end in (link.source, link.sink):
@@ -388,7 +389,7 @@ class Composed:
             outer = [f"{item.port}_{member.logical.upper()}" for member in item.bus.signals]
             if any(pin not in root for pin in outer):
                 raise BuildError(f"the root has no pins {outer} to present {item.bus.name} at")
-        self._driven_once(root, {label: abi_pins(leaf.pins.pins) for label, leaf in leaves.items()})
+        self._driven_once(root, {label: abi_pins(leaf.abi.pins) for label, leaf in leaves.items()})
 
     def _driven_once(
         self, root: Mapping[str, PinInfo], children: Mapping[str, Mapping[str, PinInfo]]
@@ -466,7 +467,7 @@ __all__ = [
     "LinkEnd",
     "Marker",
     "Module",
-    "Pins",
+    "Abi",
     "ProducerIdentity",
     "Scalar",
     "ScalarTable",

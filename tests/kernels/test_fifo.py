@@ -36,7 +36,7 @@ def test_fifo_states_its_word_geometry_once_its_ram_style_is_chosen() -> None:
     assert requirements.parameters == (("DATA_WIDTH", 13), ("DEPTH", 8), ("RAM_STYLE", '"auto"'))
     assert [
         (port.name, port.direction, port.width)
-        for port in requirements.pins.pins
+        for port in requirements.abi.pins
         if isinstance(port, Signal)
     ] == [
         ("clk", Direction.IN, 1),

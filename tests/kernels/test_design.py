@@ -61,7 +61,7 @@ def test_each_edge_carries_its_own_adapter_and_the_netlist_is_flat():
         "second.compute.packed",
     ]
     # The root's own ports are its boundary streams.
-    assert {port.name for port in point.module.pins.pins} == {
+    assert {port.name for port in point.module.abi.pins} == {
         "ap_clk",
         "ap_rst_n",
         "s_axis_0",

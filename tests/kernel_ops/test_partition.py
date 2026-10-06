@@ -45,7 +45,7 @@ def test_the_root_of_the_chains_nodes_is_the_chain() -> None:
     reference = chain.chain()
     assert labels(point.module) == labels(reference.module)
     assert point.module.fragment == reference.module.fragment
-    assert point.module.pins == reference.module.pins
+    assert point.module.abi == reference.module.abi
     assert root.boundary == (("x", "s_axis_0"), ("y", "m_axis_0"))
 
 
@@ -92,7 +92,7 @@ def test_a_partition_has_ports_for_its_onnx_inputs_and_outputs_only() -> None:
     assert front.boundary == (("x", "s_axis_0"), ("levels", "m_axis_0"))
     point, styles = open_memories(front)
     point = commit(point, dict.fromkeys(styles, "auto"))
-    assert sorted(port.name for port in point.module.pins.pins) == [
+    assert sorted(port.name for port in point.module.abi.pins) == [
         "ap_clk",
         "ap_rst_n",
         "m_axis_0",

@@ -99,9 +99,9 @@ def test_assessed_view_preserves_geometry_and_clocks(target, pumping):
     assert rtl["PE"] == 2 and rtl["SIMD"] == 4
     assert rtl["NARROW_WEIGHTS"] == 0
     assert rtl["SIGNED_ACTIVATIONS"] == 1
-    ports = {port.name: port for port in requirements.pins.pins}
+    ports = {port.name: port for port in requirements.abi.pins}
     assert ports["ap_clk2x"].role == (Clock(DerivedClock("ap_clk", 2)) if pumping else Data())
-    assert bool(requirements.pins.clock_alignments) is pumping
+    assert bool(requirements.abi.clock_alignments) is pumping
     assert ports["ap_rst_n"].role.synchronous_to == (
         ("ap_clk", "ap_clk2x") if pumping else ("ap_clk",)
     )
@@ -146,7 +146,7 @@ def test_segment_length_follows_the_target_period(period, pumping, segment):
     platform = full_platform(DspBlock.DSP58, period_ns=period)
     point = kernel(simd=7, platform=platform, compute_pumping=pumping)
     assert point.segment_length == segment
-    assert dict(point.module.pins.parameters)["SEGMENTLEN"] == str(segment)
+    assert dict(point.module.abi.parameters)["SEGMENTLEN"] == str(segment)
 
 
 def test_dsp48_carries_the_segment_length_the_rtl_ignores():

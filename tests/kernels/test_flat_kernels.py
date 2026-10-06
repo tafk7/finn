@@ -116,7 +116,7 @@ def native_ports(requirements, tmp_path):
         compilation.addSyntaxTree(
             syntax.SyntaxTree.fromFile(str(SOURCE_ROOTS[contribution.root] / contribution.path))
         )
-    parameters = ", ".join(f".{name}({raw})" for name, raw in requirements.pins.parameters)
+    parameters = ", ".join(f".{name}({raw})" for name, raw in requirements.abi.parameters)
     wrapper = tmp_path / "probe.sv"
     wrapper.write_text(f"module probe; {requirements.name} #({parameters}) native(); endmodule\n")
     compilation.addSyntaxTree(syntax.SyntaxTree.fromFile(str(wrapper)))
@@ -165,7 +165,7 @@ def test_native_rtl_pin_names_directions_and_widths(factory, tmp_path):
     requirements = point.module
     observed = native_ports(requirements, tmp_path)
     declared = {}
-    for port in requirements.pins.pins:
+    for port in requirements.abi.pins:
         if isinstance(port, Bus):
             directions = dict(port.member_directions())
             declared.update(
@@ -285,11 +285,11 @@ def test_required_root_bindings_and_explicit_optional_inputs_preserve_partial_qu
         with pytest.raises(DefinitionError, match="is not supplied"):
             point_for(kernel, {})
 
-    assert all(not isinstance(port, Bus) for port in fifo().module.pins.pins)
+    assert all(not isinstance(port, Bus) for port in fifo().module.abi.pins)
 
 
 def run(requirements, body, tmp_path):
-    parameters = ", ".join(f".{key}({raw})" for key, raw in requirements.pins.parameters)
+    parameters = ", ".join(f".{key}({raw})" for key, raw in requirements.abi.parameters)
     dut = requirements.name + " #(" + parameters + ")"
     sources = [SOURCE_ROOTS[source.root] / source.path for source in requirements.sources]
     simulate(sources, body.replace("@DUT@", dut), tmp_path)

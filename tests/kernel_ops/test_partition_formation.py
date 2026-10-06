@@ -82,8 +82,8 @@ def test_the_body_is_the_partition_packaging_takes(tmp_path: object) -> None:
     # The same module as the root of the KernelOps where they stood.
     kernel_ops = [node for node in source.graph.node if node.domain == "finn.custom_op.kernels"]
     reference = partition_root(source, kernel_ops).point.module
-    assert (module.fragment, module.pins) == (reference.fragment, reference.pins)
-    assert [port.name for port in module.pins.pins] == [
+    assert (module.fragment, module.abi) == (reference.fragment, reference.abi)
+    assert [port.name for port in module.abi.pins] == [
         "ap_clk",
         "ap_rst_n",
         "s_axis_0",

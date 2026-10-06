@@ -28,6 +28,7 @@ from finn.kernels.artifacts.abi import (
 from finn.kernels.artifacts.build import emit_module
 from finn.kernels.artifacts.contributions import CopiedSource, GeneratedData
 from finn.kernels.artifacts.module import (
+    Abi,
     BuildError,
     BusExport,
     Composed,
@@ -36,7 +37,6 @@ from finn.kernels.artifacts.module import (
     Leaf,
     Link,
     LinkEnd,
-    Pins,
     module_name,
 )
 from finn.kernels.artifacts.rtl import ExtractedModule, extract
@@ -52,7 +52,7 @@ def fifo(width: int, *, depth: int = 4, reset: Reset = ACTIVE_HIGH) -> Leaf:
         "2",
         "fifo",
         (("DATA_WIDTH", width), ("DEPTH", depth), ("RAM_STYLE", '"auto"')),
-        Pins(
+        Abi(
             (
                 Signal("clk", Direction.IN, 1, Clock()),
                 Signal("rst", Direction.IN, 1, reset),
@@ -97,7 +97,7 @@ def fifo_out(label: str, width: int) -> LinkEnd:
 
 def chain(*, width: int = 8, lanes: tuple[int, ...] = (0,), lane_bits: int = 8) -> Composed:
     """in0_V -> a -> b -> out0_V, every hop one word."""
-    pins = Pins(
+    abi = Abi(
         (
             CLOCK,
             RESET,
@@ -113,7 +113,7 @@ def chain(*, width: int = 8, lanes: tuple[int, ...] = (0,), lane_bits: int = 8) 
             Link(fifo_out("stage.b", width), root_end("out0_V", width), width, (0,)),
         ),
     )
-    return Composed("test.chain", "1", "chain", pins, fragment)
+    return Composed("test.chain", "1", "chain", abi, fragment)
 
 
 def text(module: Composed, root: Path, out: str = "out") -> str:
@@ -186,7 +186,7 @@ def test_a_marker_pair_a_held_input_and_open_outputs(fixture_root: Path) -> None
         "1",
         "marked",
         (),
-        Pins(
+        Abi(
             (
                 Signal("clk", Direction.IN, 1, Clock()),
                 Signal("rst", Direction.IN, 1, ACTIVE_HIGH),
@@ -201,7 +201,7 @@ def test_a_marker_pair_a_held_input_and_open_outputs(fixture_root: Path) -> None
         (CopiedSource("finnlib", "rtl/infra/fifo.sv"),),
         held=Held((("mode", 2),), ("debug",)),
     )
-    pins = Pins((CLOCK, RESET, axis("out0_V", 8, Side.INITIATOR, last=True)))
+    abi = Abi((CLOCK, RESET, axis("out0_V", 8, Side.INITIATOR, last=True)))
     link = Link(
         LinkEnd("m", "odat", 8, "ovld", "ordy"),
         root_end("out0_V", 8),
@@ -209,7 +209,7 @@ def test_a_marker_pair_a_held_input_and_open_outputs(fixture_root: Path) -> None
         (0,),
         (("olst", 1, "out0_V_tlast", None),),
     )
-    module = Composed("test.marked", "1", "marked", pins, Fragment((("m", marked),), (link,)))
+    module = Composed("test.marked", "1", "marked", abi, Fragment((("m", marked),), (link,)))
     source = text(module, fixture_root)
     assert {
         "assign out0_V_tlast = n__u_m__olst[1];",
@@ -226,7 +226,7 @@ def test_clocks_and_resets_are_driven_by_role_whatever_their_names(fixture_root:
         "1",
         "pumped",
         (),
-        Pins(
+        Abi(
             (
                 Signal("tick", Direction.IN, 1, Clock()),
                 Signal("tock", Direction.IN, 1, Clock(Derived("tick", 2))),
@@ -239,8 +239,8 @@ def test_clocks_and_resets_are_driven_by_role_whatever_their_names(fixture_root:
     )
     doubled = Signal("ap_clk2x", Direction.IN, 1, Clock(Derived("ap_clk", 2)))
     reset = Signal("ap_rst_n", Direction.IN, 1, Reset(True, True, ("ap_clk", "ap_clk2x")))
-    pins = Pins((CLOCK, doubled, reset), (), (ClockAlignment("ap_clk", "ap_clk2x"),))
-    module = Composed("test.pumped", "1", "pumped", pins, Fragment((("p", pumped),)))
+    abi = Abi((CLOCK, doubled, reset), (), (ClockAlignment("ap_clk", "ap_clk2x"),))
+    module = Composed("test.pumped", "1", "pumped", abi, Fragment((("p", pumped),)))
     assert {
         "assign n__u_p__tick = ap_clk;",
         "assign n__u_p__tock = ap_clk2x;",
@@ -248,7 +248,7 @@ def test_clocks_and_resets_are_driven_by_role_whatever_their_names(fixture_root:
     } <= assigns(text(module, fixture_root, "a"))
     # A root without the doubled clock cannot drive it.
     with pytest.raises(BuildError, match="no doubled clock"):
-        text(replace(module, pins=Pins((CLOCK, RESET))), fixture_root, "b")
+        text(replace(module, abi=Abi((CLOCK, RESET))), fixture_root, "b")
 
 
 def test_a_presented_bus_is_wired_member_by_member(fixture_root: Path) -> None:
@@ -261,7 +261,7 @@ def test_a_presented_bus_is_wired_member_by_member(fixture_root: Path) -> None:
     )
     # A FIFO on no stream: its stream inputs are held.
     leaf = replace(fifo(8), held=Held((("idat", 0), ("ivld", 0), ("ordy", 0))))
-    controlled = replace(leaf, pins=replace(leaf.pins, pins=(*leaf.pins.pins, config)))
+    controlled = replace(leaf, abi=replace(leaf.abi, pins=(*leaf.abi.pins, config)))
     top = Bus(
         "mm_s_axilite",
         StandardProtocol.AXILITE,
@@ -273,13 +273,13 @@ def test_a_presented_bus_is_wired_member_by_member(fixture_root: Path) -> None:
         (("mm", controlled),),
         exports=(BusExport("mm", config, "mm_s_axilite"),),
     )
-    module = Composed("test.bus", "1", "bus", Pins((CLOCK, RESET, top)), fragment)
+    module = Composed("test.bus", "1", "bus", Abi((CLOCK, RESET, top)), fragment)
     assert {
         "assign n__u_mm__s_axilite_awvalid = mm_s_axilite_AWVALID;",
         "assign mm_s_axilite_AWREADY = n__u_mm__s_axilite_awready;",
     } <= assigns(text(module, fixture_root))
     with pytest.raises(BuildError, match="the root has no pins"):
-        replace(module, pins=Pins((CLOCK, RESET)))
+        replace(module, abi=Abi((CLOCK, RESET)))
 
 
 def test_codegen_writes_each_source_and_data_file_once(fixture_root: Path) -> None:
@@ -319,6 +319,6 @@ def test_an_emitted_top_elaborates_with_its_declared_ports(tmp_path: Path) -> No
     extracted = extract(files, emitted.entry_point)
     assert isinstance(extracted, ExtractedModule), extracted
     declared = [
-        (name, info.direction, info.width) for name, info in abi_pins(module.pins.pins).items()
+        (name, info.direction, info.width) for name, info in abi_pins(module.abi.pins).items()
     ]
     assert [(port.name, port.direction, port.width) for port in extracted.ports] == declared

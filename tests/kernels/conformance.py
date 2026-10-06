@@ -428,14 +428,14 @@ def _check_rtl(
 ) -> set[str] | None:
     """Refuse a module its sources contradict; the source's parameter names, unless declined."""
     top, sources, _ = materialize(leaf, directory)
-    pins = leaf.pins
-    extracted = extract([Path(source) for source in sources], top, pins.parameters)
+    abi = leaf.abi
+    extracted = extract([Path(source) for source in sources], top, abi.parameters)
     if isinstance(extracted, Declined):
         message = f"{_where(space_type, sample)}: the RTL checker declined {top}: {extracted}"
         warnings.warn(message, RtlDeclined, stacklevel=3)
         return None
     # check_abi's comparison, on the one extraction: the ports, never a parameter value.
-    issues = check_against_rtl(pins.pins, extracted.ports)
+    issues = check_against_rtl(abi.pins, extracted.ports)
     assert not issues, f"{_where(space_type, sample)}: {top} refuses its ABI: " + "; ".join(issues)
     # Every declared name, whether or not its value was established.
     return {name for name, _ in extracted.parameters}
