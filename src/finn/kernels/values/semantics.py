@@ -5,8 +5,12 @@
 
 from __future__ import annotations
 
-from functools import cached_property
+import hashlib
+import sys
+from array import array
+from collections.abc import Callable, Sequence
 from itertools import chain
+from math import prod
 from typing import cast
 
 from finn.core.space import ValueSemantics
@@ -35,8 +39,6 @@ INTEGER_VECTOR: ValueSemantics[IntegerVector] = ValueSemantics(
     lambda value: value,
 )
 
-IntegerTensor = tuple[object, ...]
-
 
 def _shape(value: object) -> tuple[int, ...] | None:
     """The shape of a nonempty rectangular nest of tuples with int leaves, rank at
@@ -45,7 +47,7 @@ def _shape(value: object) -> tuple[int, ...] | None:
     def shape(item: object) -> tuple[int, ...] | None:
         if type(item) is int:
             return ()
-        if type(item) not in (tuple, IntegerTensorValue) or not item:
+        if type(item) is not tuple or not item:
             return None
         inner = {shape(element) for element in cast(tuple[object, ...], item)}
         if len(inner) != 1 or None in inner:
@@ -57,31 +59,128 @@ def _shape(value: object) -> tuple[int, ...] | None:
     return found if found else None
 
 
-class IntegerTensorValue(tuple[object, ...]):
-    """An integer tensor as a value: the nested tuples, its shape checked once when
-    it is made, its integers and their range computed once, when first read.
+INTEGER_DIGEST = b"finn.integer-tensor/1\0"
+"""The domain of an integer tensor's digest: bump it when the preimage changes."""
 
-    ``INTEGER_TENSOR`` snapshots a tensor into one, so every later recognition is
-    a type check: a weights value is walked once per value, not once per
-    configuration of every point that holds it. Immutable like the tuples it
-    wraps; a copy is the value itself.
+
+def integer_bytes(integers: Sequence[int]) -> bytes:
+    """Row-major integers as ``integer_digest`` reads them: eight little-endian
+    two's-complement bytes each, or, when one needs more than 64 bits, their decimal
+    text (each form tagged, so the two never meet)."""
+    try:
+        data = array("q", integers)
+    except OverflowError:
+        return b"text:" + ",".join(map(str, integers)).encode()
+    if sys.byteorder != "little":
+        data.byteswap()
+    return b"q:" + data.tobytes()
+
+
+def integer_digest(shape: tuple[int, ...], data: bytes) -> str:
+    """The digest of an integer tensor: its shape and its integers as ``integer_bytes``
+    writes them. A producer that holds them in another form (an array) writes the same
+    bytes."""
+    hasher = hashlib.sha256(INTEGER_DIGEST)
+    hasher.update(repr(tuple(shape)).encode())
+    hasher.update(data)
+    return hasher.hexdigest()
+
+
+class IntegerTensorValue:
+    """An integer tensor as a value: its ``shape``, the least and greatest of its
+    integers (``range``) and a ``digest`` of them, stated when it is made; the integers
+    themselves, row-major, loaded when first read (``integers``). Two are equal when
+    their digests are.
+
+    Its producer states it. Nested int tuples make one by a single walk (``of``); a
+    producer that holds the integers in another form states the facts and how to load
+    them (a KernelOp's initializer, an array: loaded only when a memory image is
+    packed). Loading checks the stated shape and range. Immutable; a copy is the value
+    itself.
     """
 
-    shape: tuple[int, ...]
+    __slots__ = ("shape", "range", "digest", "_load", "_integers")
 
-    def __new__(cls, values: object) -> IntegerTensorValue:
+    shape: tuple[int, ...]
+    range: tuple[int, int]
+    digest: str
+
+    def __init__(
+        self,
+        shape: tuple[int, ...],
+        range: tuple[int, int],
+        digest: str,
+        load: Callable[[], Sequence[int]],
+    ) -> None:
+        shape = tuple(shape)
+        if not shape or any(type(extent) is not int or extent < 1 for extent in shape):
+            raise TypeError("an integer tensor has positive extents, rank at least one")
+        least, greatest = range
+        if type(least) is not int or type(greatest) is not int or least > greatest:
+            raise TypeError("an integer tensor's range is its least and greatest integer")
+        object.__setattr__(self, "shape", shape)
+        object.__setattr__(self, "range", (least, greatest))
+        object.__setattr__(self, "digest", digest)
+        object.__setattr__(self, "_load", load)
+        object.__setattr__(self, "_integers", None)
+
+    @classmethod
+    def of(cls, values: object) -> IntegerTensorValue:
+        """The value of nested int tuples: a nonempty rectangular nest, rank at least
+        one, walked once."""
         shape = _shape(values)
         if shape is None:
             raise TypeError("an integer tensor is a nonempty rectangular nest of int tuples")
-        made = super().__new__(cls, cast(tuple[object, ...], values))
-        made.__dict__["shape"] = shape
+        flat = cast(tuple[object, ...], values)
+        for _ in shape[1:]:
+            flat = tuple(chain.from_iterable(cast(tuple[tuple[object, ...], ...], flat)))
+        return cls.flat(shape, cast(tuple[int, ...], flat))
+
+    @classmethod
+    def flat(cls, shape: tuple[int, ...], integers: Sequence[int]) -> IntegerTensorValue:
+        """The value of ``shape`` whose row-major integers are ``integers``."""
+        found = tuple(integers)
+        if len(found) != prod(shape) or any(type(value) is not int for value in found):
+            raise TypeError(f"an integer tensor of shape {tuple(shape)} holds {prod(shape)} ints")
+        made = cls(
+            shape, (min(found), max(found)), integer_digest(shape, integer_bytes(found)), tuple
+        )
+        object.__setattr__(made, "_integers", found)
         return made
+
+    @property
+    def integers(self) -> tuple[int, ...]:
+        """Every integer, row-major: loaded on first read, checked against the stated
+        shape and range."""
+        found = self._integers
+        if found is None:
+            found = tuple(self._load())
+            if len(found) != prod(self.shape) or (min(found), max(found)) != self.range:
+                raise ValueError(
+                    f"an integer tensor stated as {self.shape} over {list(self.range)} "
+                    "loaded other integers"
+                )
+            object.__setattr__(self, "_integers", found)
+        return found
 
     def __setattr__(self, name: str, value: object) -> None:
         raise AttributeError(f"an integer tensor value is immutable; cannot set {name}")
 
-    def __reduce__(self) -> tuple[type[IntegerTensorValue], tuple[tuple[object, ...]]]:
-        return (IntegerTensorValue, (tuple(self),))
+    def __eq__(self, other: object) -> bool:
+        if type(other) is not IntegerTensorValue:
+            return NotImplemented
+        return self.digest == other.digest
+
+    def __hash__(self) -> int:
+        return hash(self.digest)
+
+    def __repr__(self) -> str:
+        return (
+            f"IntegerTensorValue(shape={self.shape}, range={self.range}, digest={self.digest[:16]})"
+        )
+
+    def __reduce__(self) -> tuple[object, ...]:
+        return (IntegerTensorValue.flat, (self.shape, self.integers))
 
     def __copy__(self) -> IntegerTensorValue:
         return self
@@ -89,50 +188,32 @@ class IntegerTensorValue(tuple[object, ...]):
     def __deepcopy__(self, memo: dict[int, object]) -> IntegerTensorValue:
         return self
 
-    @cached_property
-    def integers(self) -> tuple[int, ...]:
-        """Every integer, in order: the leading axes flattened, one level at a time."""
-        values: tuple[object, ...] = self
-        for _ in self.shape[1:]:
-            values = tuple(chain.from_iterable(cast(tuple[tuple[object, ...], ...], values)))
-        return cast(tuple[int, ...], tuple(values))
 
-    @cached_property
-    def range(self) -> tuple[int, int]:
-        """The least and the greatest integer."""
-        values = self.integers
-        return min(values), max(values)
-
-
-def _integers(values: object) -> tuple[int, ...]:
-    if type(values) is int:
-        return (values,)
-    assert isinstance(values, tuple)
-    return tuple(leaf for item in values for leaf in _integers(item))
+IntegerTensor = IntegerTensorValue | tuple[object, ...]
+"""What an integer tensor input takes: the value, or nested int tuples that
+``INTEGER_TENSOR`` snapshots into one."""
 
 
 def integers(values: object) -> tuple[int, ...]:
-    """Every integer of a nested operand, in order (an integer tensor value's, once)."""
-    if type(values) is IntegerTensorValue:
-        return values.integers
-    return _integers(values)
+    """Every integer of an integer tensor, row-major."""
+    return _value(values).integers
 
 
 def integer_shape(values: object) -> tuple[int, ...] | None:
-    """The shape of a nested operand (an integer tensor value's, stated); ``None`` for
-    anything that is no integer tensor."""
+    """The shape of an integer tensor (a value's, stated); ``None`` for anything that is
+    no integer tensor."""
     if type(values) is IntegerTensorValue:
         return values.shape
     return _shape(values)
 
 
 def integer_range(values: object) -> tuple[int, int]:
-    """The least and the greatest integer of a nested operand (an integer tensor
-    value's, once)."""
-    if type(values) is IntegerTensorValue:
-        return values.range
-    found = _integers(values)
-    return min(found), max(found)
+    """The least and the greatest integer of an integer tensor (a value's, stated)."""
+    return _value(values).range
+
+
+def _value(values: object) -> IntegerTensorValue:
+    return values if type(values) is IntegerTensorValue else IntegerTensorValue.of(values)
 
 
 def _recognized(value: object) -> bool:
@@ -140,14 +221,14 @@ def _recognized(value: object) -> bool:
 
 
 def _snapshot(value: IntegerTensor) -> IntegerTensor:
-    return value if type(value) is IntegerTensorValue else IntegerTensorValue(value)
+    return _value(value)
 
 
 INTEGER_TENSOR: ValueSemantics[IntegerTensor] = ValueSemantics(
     IntegerTensor,
     "integer tensor",
     _recognized,
-    lambda left, right: left is right or left == right,
+    lambda left, right: left is right or _value(left) == _value(right),
     _snapshot,
 )
 
@@ -172,6 +253,7 @@ THRESHOLD_TABLE: ValueSemantics[ThresholdTable] = ValueSemantics(
 
 
 __all__ = [
+    "INTEGER_DIGEST",
     "INTEGER_TENSOR",
     "INTEGER_VECTOR",
     "IntegerTensor",
@@ -180,6 +262,8 @@ __all__ = [
     "QONNX_DATATYPE_VALUE_SEMANTICS",
     "THRESHOLD_TABLE",
     "ThresholdTable",
+    "integer_bytes",
+    "integer_digest",
     "integer_range",
     "integer_shape",
     "integers",

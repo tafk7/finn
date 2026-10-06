@@ -3,12 +3,12 @@
 
 """The bind cache: node-root points keyed by the facts they were bound from, by value.
 
-qonnx builds a fresh op instance for every query, and binding a node root reads
-the weights into integers (hundreds of milliseconds for 512 x 512). So an op
-binds through one process-wide cache. A base point is keyed by its node-root
-class and its facts, an initializer by its value summary's ``content_digest``;
-a replayed point by the same and its choices, because replay re-derives the
-weights' values for every new configuration and costs as much as a bind.
+qonnx builds a fresh op instance for every query, and a point answers each query
+from what it has evaluated (its views, its forced Decisions), which a fresh
+binding would derive again. So an op binds through one process-wide cache. A
+base point is keyed by its node-root class and its facts, an initializer by its
+value summary's ``content_digest``; a replayed point by the same and its
+choices.
 
 Points are immutable (replay returns successors), so sharing one across op
 instances and models is sound, and keys are values, so nothing is ever
@@ -30,8 +30,8 @@ from finn.kernels.base import Kernel
 @dataclass(frozen=True)
 class Facts:
     """What binding a node reads: its node-root class, the key that identifies its facts by
-    value, its formals (a thunk: the weights become integers only on a miss), and the
-    channels the node owns beside its outputs (a stored parameter's, by port name)."""
+    value, its formals (a thunk, called only on a miss), and the channels the node owns
+    beside its outputs (a stored parameter's, by port name)."""
 
     root: type[Kernel]
     key: tuple[Hashable, ...]

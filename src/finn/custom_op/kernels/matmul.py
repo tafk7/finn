@@ -24,6 +24,7 @@ from finn.custom_op.kernels.base import (
     Shapes,
     admitted,
     datatype,
+    integer_tensor,
     rows,
     shape,
 )
@@ -80,9 +81,7 @@ class MatMul(KernelOp):
         digest = admitted(model, b, weights_dtype, label)
 
         def formals() -> dict[str, object]:
-            values = model.get_initializer(b)
-            weights = tuple(tuple(int(value) for value in row) for row in values)
-            return {**common, "weights": weights}
+            return {**common, "weights": integer_tensor(model.get_initializer(b))}
 
         return Facts(StoredMatMulNode, (*key, digest), formals, ("w",))
 
